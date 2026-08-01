@@ -27,6 +27,7 @@ import {
   GHOST_ERRAND_MAX_RESULT_CHARS,
   GHOST_ERRAND_MAX_TASK_CHARS,
   GHOST_ERRAND_MIN_INTERVAL_MS,
+  GHOST_ERRAND_SESSION_KEY_RE,
   GHOST_PIPE_CALL_MAX_TOTAL_MS,
   type GhostAgentErrandErrorCode,
   type GhostPipeAgentErrandResult,
@@ -45,8 +46,13 @@ export interface GhostErrandRunRequest {
   ghostVersion: string;
   /** 已组装的最终任务消息(task + 结构化上下文;本层组装,runner 原样投递)。 */
   message: string;
-  /** 首次创建 errand 会话时的标题提示。 */
+  /** 首次创建对应 errand 会话时的标题提示。 */
   title?: string;
+  /**
+   * 分会话钥匙(形状已由本层按 GHOST_ERRAND_SESSION_KEY_RE 校验)。缺省 =
+   * 插件共用一间;传了 = 同钥匙同间、异钥匙各间(映射按 ghostId+key 存取)。
+   */
+  sessionKey?: string;
   /**
    * 插件转述的期望工作目录(仅形状校验;是否真是用户亲选目录由 runner
    * 对 pick 台账把关——授权对账需要归一化,归一化实现在 runner 侧)。
@@ -181,6 +187,15 @@ export class GhostErrandSlot {
       return fail('INVALID_REQUEST', "mode 只支持 'wait'(同步等待)或不传(异步受理 + query 轮询)");
     }
     if (
+      payload.sessionKey !== undefined &&
+      (typeof payload.sessionKey !== 'string' || !GHOST_ERRAND_SESSION_KEY_RE.test(payload.sessionKey))
+    ) {
+      return fail(
+        'INVALID_REQUEST',
+        'sessionKey 只能是 1–64 位的字母/数字/./_/-(不传 = 插件共用一间 errand 会话)',
+      );
+    }
+    if (
       payload.workingDir !== undefined &&
       (typeof payload.workingDir !== 'string' ||
         payload.workingDir.trim().length === 0 ||
@@ -252,6 +267,7 @@ export class GhostErrandSlot {
             message,
             ...(typeof payload.title === 'string' ? { title: payload.title.trim() } : {}),
             ...(typeof payload.workingDir === 'string' ? { workingDir: payload.workingDir } : {}),
+            ...(typeof payload.sessionKey === 'string' ? { sessionKey: payload.sessionKey } : {}),
           },
           {
             onSession: (sessionId) => {

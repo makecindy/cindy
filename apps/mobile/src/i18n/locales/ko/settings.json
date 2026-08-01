@@ -31,6 +31,7 @@
     "upToDate": "이미 최신 버전입니다",
     "bundleUpToDateNoOta": "앱 패키지는 최신입니다. 현재 버전은 OTA 업데이트를 지원하지 않습니다",
     "downloadedRestarting": "업데이트를 다운로드했습니다. 다시 시작하는 중",
+    "downloadedRestartRequired": "업데이트를 다운로드했습니다. 앱을 완전히 종료한 뒤 다시 열면 적용됩니다.",
     "bundleCheckFailed": "앱 패키지 업데이트를 확인할 수 없습니다. 잠시 후 다시 시도해 주세요.",
     "checkFailedDetail": "업데이트 확인에 실패했습니다: {{detail}}",
     "checkFailed": "업데이트 확인에 실패했습니다. 잠시 후 다시 시도해 주세요."
@@ -76,15 +77,19 @@
   },
   "updateInfo": {
     "embedded": "앱 패키지 포함",
+    "embeddedFallback": "앱 패키지 포함 (OTA 미적용)",
     "unknown": "알 수 없음",
     "source": "실행 소스",
     "sourceEmbedded": "내장 버전 (패키지 포함)",
+    "sourceEmergencyFallback": "내장 버전 (긴급 실행, OTA 미적용)",
     "sourceOta": "OTA 업데이트",
     "updateId": "업데이트 ID",
     "updatedAt": "업데이트 시간",
     "channel": "Channel",
     "runtime": "Runtime",
-    "otaMarker": "OTA 마커"
+    "otaMarker": "OTA 마커",
+    "emergencyLaunch": "긴급 실행",
+    "emergencyLaunchYes": "예 (이번 실행에서는 OTA를 적용할 수 없음)"
   },
   "legal": {
     "sectionTitle": "법적 정보",

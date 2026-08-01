@@ -47,7 +47,13 @@ import {
   composeResponseObservers,
   createClaudeRateLimitHeadersObserver,
 } from './claude-rate-limit-headers-observer.js';
-import { recordClaudeSessionRoute } from './claude-session-route-registry.js';
+import {
+  noteClaudeSessionRequest,
+  recordClaudeRequestRoute,
+  recordClaudeSessionRoute,
+  type ClaudeSessionBillingRoute,
+} from './claude-session-route-registry.js';
+import { createClaudeGatewayErrorObserver } from './claude-gateway-error-observer.js';
 import { getSessionProvider } from './session-provider-store.js';
 import {
   gatewayDefaultRouteDecision,
@@ -154,13 +160,17 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 按 content-type 门控),GET / 非 JSON 请求不经过这里 —— 它们由响应侧的
     // createClaudeSessionActivityResponseObserver 覆盖(观察器对所有响应生效)。
     // 开销 = 一次 header 读 + 一次活跃会话表反解 + Map.set,非 per-token 路径。
-    const activitySdkSessionId = ctx.headers['x-claude-code-session-id'];
-    if (activitySdkSessionId) {
+    const sdkSessionId = ctx.headers['x-claude-code-session-id'];
+    const sessionId = sdkSessionId && _resolveCcSessionId
+      ? _resolveCcSessionId(sdkSessionId)
+      : null;
+    if (sdkSessionId) {
       recordClaudeApiActivity(
-        activitySdkSessionId,
-        _resolveCcSessionId ? _resolveCcSessionId(activitySdkSessionId) : null,
+        sdkSessionId,
+        sessionId,
       );
     }
+    if (sessionId) noteClaudeSessionRequest(sessionId, ctx.reqId);
     if (!isPlainObject(body)) return null;
     const wireModel = typeof body.model === 'string' ? body.model : '';
 
@@ -180,10 +190,8 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
       // 会话态(思维深度 / Fast)在决策点解析后**闭包**进 handler —— CC 不会把 bridge 模型的
       // effort / fast 放进请求体,而引擎保持零会话概念,不走任何伪 header。
-      const sdkSessionId = ctx.headers['x-claude-code-session-id'];
-      const xdtSessionId = sdkSessionId && _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null;
-      const effort = xdtSessionId ? getSessionEffort(xdtSessionId) : null;
-      const fast = xdtSessionId ? getSessionFastMode(xdtSessionId) : false;
+      const effort = sessionId ? getSessionEffort(sessionId) : null;
+      const fast = sessionId ? getSessionFastMode(sessionId) : false;
       return {
         localHandler: (args) =>
           bridgeHandler.handle({ ...args, prefs: { reasoningEffort: effort ?? undefined, fast } }),
@@ -191,19 +199,27 @@ export function createModelRoutingTransform(): RoutingTransform {
     }
 
     const gatewayKey = _readGatewayKey();
+    const selectedProviderId = sessionId ? getSessionProvider(sessionId) : null;
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。
     //    x-claude-code-session-id = cc sdkSessionId,经注入的 resolver 反解成 xdt sessionId。
-    const sdkSessionId = ctx.headers['x-claude-code-session-id'];
-    const sessionId = sdkSessionId && _resolveCcSessionId
-      ? _resolveCcSessionId(sdkSessionId)
-      : null;
     if (sessionId) {
       // wireModel 传给 scope 门:cc 内部辅助调用(权限 auto 分类器等 claude-* 小模型请求)
       // 不在订阅直连供应商(xai / openai-cc)声明的 modelPrefixes 范围内 → 返回 null,
       // 落到下方 ② 段 spawn 默认路由,分类器照常走网关/直连(issue #886)。
       const perSession = resolveSessionRouteDecision(sessionId, 'claude-code', gatewayKey, wireModel);
-      if (perSession) return perSession;
+      const recordSelectedRoute = <T extends object | null>(route: T): T => {
+        if (route && (selectedProviderId === 'xd' || selectedProviderId === 'anthropic')) {
+          recordClaudeRequestRoute(
+            ctx.reqId,
+            sessionId,
+            selectedProviderId === 'xd' ? 'gateway' : 'subscription',
+          );
+        }
+        return route;
+      };
+      if (perSession instanceof Promise) return perSession.then(recordSelectedRoute);
+      if (perSession) return recordSelectedRoute(perSession);
     }
 
     // ② 未显式选供应商 → 据请求凭证判定 spawn 形态(见上方注释)。
@@ -211,6 +227,11 @@ export function createModelRoutingTransform(): RoutingTransform {
     // providerId=null 时读)——显式选了供应商但被 scope 门放下来的辅助请求(如 xai 会话
     // 的 claude-* 分类器调用)不该往表里写死记录。
     const recordDefaultRoute = sessionId !== null && getSessionProvider(sessionId) == null;
+    const recordResolvedDefaultRoute = (route: ClaudeSessionBillingRoute): void => {
+      if (!recordDefaultRoute) return;
+      recordClaudeSessionRoute(sessionId, route);
+      recordClaudeRequestRoute(ctx.reqId, sessionId, route);
+    };
     // provider-oauth spawn 的占位 key **不是可用凭证**:scope 门放下来的辅助请求
     // (如 openai / xai 来源 cc 会话里 CLI 自发的 claude-* 权限分类器调用)带着它
     // passthrough 会在网关吃确定性 401 → 误触发 auto→ask 降级(#831)。与 codex
@@ -221,13 +242,19 @@ export function createModelRoutingTransform(): RoutingTransform {
       apiKeyHeader !== null && apiKeyHeader !== CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY;
     if (hasUsableApiKey) {
       // gateway-spawn:自带网关 key,passthrough。
-      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
+      if (sessionId && selectedProviderId === 'xd') {
+        // 显式 XD 会话在 live gateway key 被清除后,仍可能携带 spawn 时冻结的 x-api-key。
+        // resolveSessionRouteDecision 会因缺 key 返回 null,但这条 passthrough 仍实际进入 XD Gateway。
+        recordClaudeRequestRoute(ctx.reqId, sessionId, 'gateway');
+      } else {
+        recordResolvedDefaultRoute('gateway');
+      }
       return null;
     }
     const decision = gatewayDefaultRouteDecision('claude-code', gatewayKey);
     if (decision) {
       // oauth-spawn 默认:全量换网关 key(防订阅 token 泄漏到网关)。
-      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'gateway');
+      recordResolvedDefaultRoute('gateway');
       return decision;
     }
     if (apiKeyHeader !== null) {
@@ -239,7 +266,7 @@ export function createModelRoutingTransform(): RoutingTransform {
     // 没网关 key:Anthropic 模型只能直连(唯一出路),其余 passthrough + 记一条诊断。
     // 判据 = 前缀地板 ∪ 目录 anthropic 供应商模型集合(新家族改 OSS 目录即可,无需发版)。
     if (isAnthropicWireModel(wireModel, anthropicCatalogModelIds(getActiveCatalog()))) {
-      if (recordDefaultRoute) recordClaudeSessionRoute(sessionId, 'subscription');
+      recordResolvedDefaultRoute('subscription');
       return { upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM };
     }
     if (wireModel) {
@@ -282,6 +309,7 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createClaudeSubagentUsageResponseObserver(),
         createClaudeFastModeResponseObserver(log),
         createClaudeRateLimitHeadersObserver(),
+        createClaudeGatewayErrorObserver(),
         // 后台活动检测:响应流按节流刷新活动时刻(覆盖长 SSE 跨过 turn 结束点仍在吐字的场景)。
         createClaudeSessionActivityResponseObserver((sdkSessionId) =>
           _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null,

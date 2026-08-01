@@ -48,6 +48,8 @@ export interface ProjectedToolActivity<
 export interface ProjectedThinkingActivity {
   kind: 'thinking';
   key: string;
+  /** Original trimmed content, retained for an expanded live-preview row. */
+  rawContent: string;
   content: string;
 }
 
@@ -207,8 +209,11 @@ function projectThinkingMessage<TMessage extends WorkActivityMessageLike>(
   message: TMessage,
 ): ProjectedThinkingActivity | null {
   if (message.thinkingRedacted) return null;
-  const content = message.content.replace(/\s+/g, ' ').trim();
-  return content ? { kind: 'thinking', key: message.clientId, content } : null;
+  const rawContent = message.content.trim();
+  const content = rawContent.replace(/\s+/g, ' ');
+  return content
+    ? { kind: 'thinking', key: message.clientId, rawContent, content }
+    : null;
 }
 
 /** Reverse hot path used by the running latest-N preview. */

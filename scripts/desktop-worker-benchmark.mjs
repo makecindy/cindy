@@ -6,10 +6,10 @@ import { performance } from 'node:perf_hooks';
 import { fileURLToPath } from 'node:url';
 
 import manifest from './test-workspaces.config.mjs';
+import { resolvePnpmInvocation } from './shared/pnpm-invocation.mjs';
 import {
   buildPnpmArgs,
   normalizeRelPath,
-  resolvePnpmInvocation,
   runCommand,
 } from './test-workspaces.mjs';
 
@@ -187,7 +187,9 @@ async function runSample({ workers, iteration, top }) {
   try {
     const result = await runCommand(invocation.command, invocation.args, {
       cwd,
+      env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
       shell: invocation.shell,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       stdout: null,
       stderr: null,
     });

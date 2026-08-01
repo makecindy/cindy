@@ -26,6 +26,22 @@ export interface MessageToolResultPairing<
    * （running/done）必须计入，否则这类行会永久显示进行中。
    */
   hasResultFor(message: TMessage, tool: MessageNormalizeToolUse): boolean;
+  /**
+   * 配对 tool_result 的落库时刻(ISO),即这次工具调用的**结束**时刻;未到达时 undefined。
+   *
+   * 两条刻意的口径:
+   *  - **不过 `shouldHideToolResult` 滤网**:结束时间与内容是否展示无关(桌面 MessageStream 的
+   *    resultTsMap 同款)。渲染层用它做历史空洞判定的锚点 —— 只看调用发起时刻会把「一次跑了
+   *    半小时以上的调用」之后的下一个动作误判成空洞。
+   *  - **只认 `toolUseId` 精确配对,不吃邻接兜底**(与 `resultContentFor` 的差别)。邻接兜底是按
+   *    "紧邻的下一条 tool_result"猜归属,在稀疏窗口里会猜错:孤岛窗口的旧段末尾 tool_use 恰好
+   *    与新段开头某条不相关的 tool_result 相邻时,兜底会把新段结果的时刻当成旧工具的结束时刻,
+   *    于是 `tool_group` 的结束锚点被推到几小时后,真实的窗口空洞**不再触发切组** —— 渲染兜底
+   *    正好在最需要它的场景失效(#1210 review)。内容可以猜错(最坏是显示串了,live 中 result 按
+   *    id 到达即自愈),归属不确定的**时刻**不能进判据。缺失时上游退回调用发起时刻,代价只是
+   *    可能多切一个折叠条。
+   */
+  resultCreatedAtFor(message: TMessage, tool: MessageNormalizeToolUse): string | undefined;
 }
 
 export interface MessageToolResultPairingOptions {
@@ -79,12 +95,17 @@ export function buildMessageToolResultPairing<
 
   // settled 集合独立于内容 map：即使结果被 shouldHideToolResult 隐藏，工具也已完成。
   const settledToolUseIds = new Set<string>();
+  // 结束时刻同样独立于内容 map（隐藏的结果也是结束信号，见 resultCreatedAtFor）。
+  const resultCreatedAtByToolUseId = new Map<string, string>();
 
   for (const message of sortedMessages) {
     if (message.role !== 'tool_result') continue;
     const toolUseId = readToolResultUseId(message);
     if (!toolUseId) continue;
     settledToolUseIds.add(toolUseId);
+    const resultCreatedAt = readNonEmptyString(message.createdAt);
+    // 同一 toolUseId 多条结果时取最晚一条:sortedMessages 已按时间升序,后写覆盖即最晚。
+    if (resultCreatedAt) resultCreatedAtByToolUseId.set(toolUseId, resultCreatedAt);
     const content = contentToPreview(message.content);
     if (shouldHideToolResult(toolNameByUseId.get(toolUseId) ?? '', content)) continue;
     resultByToolUseId.set(toolUseId, content);
@@ -127,6 +148,12 @@ export function buildMessageToolResultPairing<
     hasResultFor(message, tool) {
       if (tool.toolUseId && settledToolUseIds.has(tool.toolUseId)) return true;
       return settledAdjacencyMessageKeys.has(messageNormalizeKey(message));
+    },
+    resultCreatedAtFor(_message, tool) {
+      // 只按 toolUseId 精确配对 —— 邻接兜底猜出来的归属不足以支撑"结束时刻"这个判据,理由见
+      // 接口上的说明。
+      if (!tool.toolUseId) return undefined;
+      return resultCreatedAtByToolUseId.get(tool.toolUseId);
     },
   };
 }

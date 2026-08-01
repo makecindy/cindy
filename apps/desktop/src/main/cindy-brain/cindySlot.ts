@@ -55,12 +55,16 @@ import {
   GHOST_ONESHOT_TEXT_TIMEOUT_MS,
   GHOST_VIDEO_MAX_DURATION_SECONDS,
   GHOST_VIDEO_MAX_FPS,
+  GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,
   GHOST_VIDEO_RATIOS,
+  GHOST_VIDEO_REF_MODE_DEFAULT,
+  GHOST_VIDEO_REF_MODES,
   GHOST_VIDEO_RESOLUTIONS,
   type GhostImageAspectRatio,
   type GhostModelTier,
   type GhostPipeModelResult,
   type GhostVideoRatio,
+  type GhostVideoRefMode,
   type GhostVideoResolution,
   type GhostVideoResultParams,
   type InstalledGhost,
@@ -94,10 +98,24 @@ export interface CindyVideoCapabilities {
   resolutions: readonly string[];
   ratios: readonly string[];
   fps: readonly number[];
+  /**
+   * 逐参考图用法的张数上限。缺席某个 refMode 键 = 该型号不支持这种用法。
+   * 整个字段缺席(老注入实现)= 跳过按型号校验,只剩协议层粗筛。
+   */
+  maxImagesByRefMode?: Readonly<Partial<Record<GhostVideoRefMode, number>>>;
+}
+
+/** 某个图像型号的 provider 实际编辑能力，用于通用 1–4 图契约的二次校验。 */
+export interface CindyImageCapabilities {
+  maxEditImages?: number;
 }
 
 export interface CindySlotDeps {
   getGhost(id: string): InstalledGhost | null;
+  /** 当前账号作用域；跨 await 的媒体任务必须捕获并持续复核。 */
+  getOwnerScopeKey(): string;
+  /** true 表示账号运行时正在 teardown / replacement，所有新旧任务均 fail closed。 */
+  isOwnerBoundaryPending(): boolean;
   /** 主机统一图片通道(art 底层客户端);返回图片字节与 mime。
    *  aspectRatio 是意识的画幅意图,注入实现负责翻译成后端具体尺寸。 */
   generateImage(params: {
@@ -114,6 +132,11 @@ export interface CindySlotDeps {
     aspectRatio?: GhostImageAspectRatio;
   }): Promise<{ buffer: Uint8Array; mimeType: string }>;
   /**
+   * 该图像型号的 provider 实际能力。缺席/查无 = 只执行通用 1–4 图粗筛；
+   * provider 上限更低时，slot 在读源图与出网前给出型号级明确拒绝。
+   */
+  imageCapabilities?(model: string): CindyImageCapabilities | null;
+  /**
    * 主机统一视频通道·文生视频(art 视频 provider 层复用,submit→
    * 轮询→下载一条龙在注入实现里完成);返回视频字节与 mime,外加实际
    * 生效的画面参数回执(上游上报值优先,缺项回落提交值)。长任务:
@@ -122,9 +145,19 @@ export interface CindySlotDeps {
   generateVideo(
     params: { prompt: string; model: string } & CindyVideoParams,
   ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
-  /** 主机统一视频通道·参考图生视频(1 张=首帧,2 张=首尾帧;源图以磁盘路径注入)。 */
+  /**
+   * 主机统一视频通道·参考图生视频(源图以磁盘路径注入)。`refMode` 决定这
+   * 几张图怎么用:`first_and_last_frame` = 1 张首帧 / 2 张首尾帧,
+   * `reference_image` = 多张参考图锁主体。imagePaths 顺序有意义,注入实现
+   * 不得重排。
+   */
   editVideo(
-    params: { prompt: string; model: string; imagePaths: string[] } & CindyVideoParams,
+    params: {
+      prompt: string;
+      model: string;
+      imagePaths: string[];
+      refMode: GhostVideoRefMode;
+    } & CindyVideoParams,
   ): Promise<{ buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams }>;
   /**
    * 该视频型号的画面参数支持集(provider capabilities;registry 缺席或查无
@@ -135,8 +168,10 @@ export interface CindySlotDeps {
   /**
    * 指纹 → 磁盘路径,且仅当该媒体在此意识名下(出生或画廊,查账本);
    * 不属于它 / 查无此账 / 文件缺失一律 null(不区分,不给探测空间)。
+   * ownerScopeKey 是任务受理时捕获的稳定作用域；宿主须锁定同一 DB，并在
+   * 每个查询 await 边界复核，禁止通过动态 defaultDb 跨到新账号。
    */
-  resolveOwnedMedia(ghostId: string, hash: string): Promise<string | null>;
+  resolveOwnedMedia(ghostId: string, hash: string, ownerScopeKey: string): Promise<string | null>;
   /**
    * 意识专属后端覆盖(解析表第②层,用户在意识详情页钉的);无覆盖返回
    * null。capability 为能力键(image.generate / video.edit …);返回值仍过
@@ -162,6 +197,8 @@ export interface CindySlotDeps {
     ghostId: string;
     buffer: Uint8Array;
     mimeType: string;
+    /** 任务受理时捕获的账号作用域；宿主须在每个持久化 await 边界复核。 */
+    ownerScopeKey: string;
     /** 人类可读备注(记进账本 label,画廊 caption 用)。 */
     label?: string;
     /** tool-call callId(记入 ghostMediaLedger 供 ghost_call 收口带回)。 */
@@ -230,8 +267,12 @@ const MAX_PROMPT_LEN = 4000;
 /** 改图单次源图上限(沿用原 lizi_art 多图融合的常用量级)。 */
 const MAX_EDIT_SOURCES = 4;
 
-/** 图生视频参考图上限(1 张=首帧动画,2 张=首尾帧过渡;provider 层同上限)。 */
-const MAX_VIDEO_SOURCES = 2;
+/**
+ * 图生视频参考图上限的**兜底值**(首尾帧用法的上界)。edit_video 实际用的是
+ * 随 refMode 变化的 GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE,见请求解析处;这里
+ * 留着只为 KIND_INFO 表形状统一。
+ */
+const MAX_VIDEO_SOURCES = GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE.first_and_last_frame;
 
 /** 归因号长度上限(tool-call 配对号量级;超长视为沙箱乱填,拒单防日志注水)。 */
 const MAX_CALL_ID_LEN = 128;
@@ -362,6 +403,12 @@ export function stripJsonFences(text: string): string {
 
 export class GhostCindySlot {
   private readonly inflight = new Map<string, number>();
+  /**
+   * 寄存 / 撤回寄存(deposit_media / release_media)的在途条数。与 inflight 分开记:那个是
+   * 代办限流账(getInflightLimit),这个只回答「重启会打断什么」—— 理由见 handleModelRequest
+   * 里那两个分支的注释。
+   */
+  private mediaOps = 0;
   /** 异步代办任务表(jobId → 记录;惰性 sweep,过期即清)。 */
   private readonly jobs = new Map<string, CindyAsyncJob>();
   /**
@@ -390,6 +437,7 @@ export class GhostCindySlot {
       duration?: unknown;
       fps?: unknown;
       hashes?: unknown;
+      refMode?: unknown;
       callId?: unknown;
       mode?: unknown;
       jobId?: unknown;
@@ -406,6 +454,12 @@ export class GhostCindySlot {
     // 而"永不 reject"是本类对沙箱的硬承诺(注入的嗅探/账本抛错也不许穿透)。
     if (p?.kind === 'deposit_media' || p?.kind === 'release_media') {
       const verb = p.kind === 'deposit_media' ? '寄存' : '撤回寄存';
+      // 寄存 / 撤回也要登记在途 —— 它们在这一行就 return 了,走不到下面代办链的 inflight
+      // 记账,而 ingestMedia 落盘与账本挂引用之间被 forceQuit() 打断会留下孤儿 blob。
+      // 刻意用独立计数而不并入 inflight:那个是**代办限流账**(getInflightLimit),
+      // 把面板里删素材 / 粘贴图算进去会让它们撞上「同时进行的代办已达上限」——
+      // 那是行为变更,不是本改动该做的事。这里只服务于「重启会打断什么」的判定。
+      this.mediaOps += 1;
       try {
         return p.kind === 'deposit_media'
           ? await this.handleDepositMedia(ghostId, p)
@@ -417,6 +471,8 @@ export class GhostCindySlot {
           error: message,
         });
         return { ok: false, message: `${verb}失败:${message}` };
+      } finally {
+        this.mediaOps -= 1;
       }
     }
     // 快问快答(text.oneshot):不经媒体生成链、不选型、秒级同步——单独
@@ -516,6 +572,22 @@ export class GhostCindySlot {
       ...(p.fps !== undefined ? { fps: p.fps as number } : {}),
     };
 
+    // 参考图用法(可选,仅 edit_video):协议层做值域粗筛,该型号支不支持这种
+    // 用法在选型解析之后二次校验。不传 = 首尾帧,与本字段出现之前同形。
+    if (p.refMode !== undefined && kind !== 'edit_video') {
+      return {
+        ok: false,
+        message: 'refMode 仅支持 edit_video(它描述参考图怎么用;文生视频没有参考图)',
+      };
+    }
+    if (
+      p.refMode !== undefined &&
+      !(GHOST_VIDEO_REF_MODES as readonly unknown[]).includes(p.refMode)
+    ) {
+      return { ok: false, message: `未知参考图用法(可用:${GHOST_VIDEO_REF_MODES.join(' / ')})` };
+    }
+    const refMode = (p.refMode as GhostVideoRefMode | undefined) ?? GHOST_VIDEO_REF_MODE_DEFAULT;
+
     const ghost = this.deps.getGhost(ghostId);
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
@@ -598,11 +670,15 @@ export class GhostCindySlot {
     // 归属查账在下面占名额后做。
     let hashes: string[] = [];
     if (info.usesSources) {
+      // edit_video 的上限随 refMode 走(首尾帧 2 / 参考图 9),其余代办用
+      // KIND_INFO 的静态值。型号实际上限更低的情况在下面按型号二次校验。
+      const maxSources =
+        kind === 'edit_video' ? GHOST_VIDEO_MAX_SOURCES_BY_REF_MODE[refMode] : info.maxSources;
       if (!Array.isArray(p.hashes) || p.hashes.length === 0) {
         return { ok: false, message: `${info.verb}需要至少 1 张源图指纹(hashes)` };
       }
-      if (p.hashes.length > info.maxSources) {
-        return { ok: false, message: `源图过多(上限 ${info.maxSources} 张)` };
+      if (p.hashes.length > maxSources) {
+        return { ok: false, message: `源图过多(上限 ${maxSources} 张)` };
       }
       for (const h of p.hashes) {
         if (typeof h !== 'string' || !HASH_RE.test(h)) {
@@ -610,6 +686,42 @@ export class GhostCindySlot {
         }
       }
       hashes = p.hashes as string[];
+    }
+
+    if (kind === 'edit_image') {
+      const perModelMax = this.deps.imageCapabilities?.(model)?.maxEditImages;
+      if (perModelMax !== undefined && hashes.length > perModelMax) {
+        const label = cfg.models.find((m) => m.id === model)?.label ?? model;
+        return {
+          ok: false,
+          message: `模型「${label}」最多支持 ${perModelMax} 张源图(本次 ${hashes.length} 张)`,
+        };
+      }
+    }
+
+    // 参考图用法与张数按**解析出的型号**二次校验:两种用法在不同型号上是
+    // 不同的上游模型(如 happyhorse 首尾帧走 i2v、参考图走 r2v),支持集和
+    // 张数上限都不一样。不支持即明拒,不降级成另一种用法——降级会出一条
+    // 用户没要的片子,还照样计费。
+    if (kind === 'edit_video') {
+      const caps = this.deps.videoCapabilities?.(model) ?? null;
+      const perModelMax = caps?.maxImagesByRefMode?.[refMode];
+      if (caps?.maxImagesByRefMode !== undefined) {
+        const label = cfg.models.find((m) => m.id === model)?.label ?? model;
+        if (perModelMax === undefined) {
+          const supported = Object.keys(caps.maxImagesByRefMode);
+          return {
+            ok: false,
+            message: `模型「${label}」不支持参考图用法 ${refMode}(可用:${supported.join(' / ') || '无'})`,
+          };
+        }
+        if (hashes.length > perModelMax) {
+          return {
+            ok: false,
+            message: `模型「${label}」在 ${refMode} 用法下最多 ${perModelMax} 张参考图(本次 ${hashes.length} 张)`,
+          };
+        }
+      }
     }
 
     // 在途并发闸:默认不限;用户给该意识配了上限才拦(计数始终在记,
@@ -624,6 +736,18 @@ export class GhostCindySlot {
     // 异步受理成功后名额转交后台任务,由它的收尾释放;其余路径 finally 释放。
     let backgrounded = false;
     try {
+      if (this.deps.isOwnerBoundaryPending()) {
+        throw new Error('媒体任务期间账号正在切换,请稍后重试');
+      }
+      const ownerScopeKey = this.deps.getOwnerScopeKey();
+      const assertOwnerScopeCurrent = (): void => {
+        if (
+          this.deps.isOwnerBoundaryPending() ||
+          this.deps.getOwnerScopeKey() !== ownerScopeKey
+        ) {
+          throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+        }
+      };
       // 日志口径:发生的事件是"一单 cindy 代办"(kind = 代办类型),槽只是
       // 资格概念不进文案;归因三件套 ghostId / kind / callId 三处日志一致。
       this.deps.log?.info(`ghost cindy-request ${kind} start`, {
@@ -637,7 +761,8 @@ export class GhostCindySlot {
       // (统一话术不泄露细节)。异步模式也在受理期同步校验,拒绝立即可见。
       const imagePaths: string[] = [];
       for (const hash of hashes) {
-        const abs = await this.deps.resolveOwnedMedia(ghostId, hash);
+        const abs = await this.deps.resolveOwnedMedia(ghostId, hash, ownerScopeKey);
+        assertOwnerScopeCurrent();
         if (!abs) {
           return { ok: false, message: '源图不在本意识名下(仅能改自己生成或画廊里的媒体)' };
         }
@@ -656,6 +781,7 @@ export class GhostCindySlot {
         height?: number;
         videoParams?: GhostVideoResultParams;
       }> => {
+        assertOwnerScopeCurrent();
         // 可选参数一律条件展开:不传时载荷里连键都没有,与老协议逐字节同形
         // (videoParams 本身就是按此规则组装的,直接摊开即可)。
         let generated: { buffer: Uint8Array; mimeType: string; videoParams?: GhostVideoResultParams };
@@ -673,20 +799,23 @@ export class GhostCindySlot {
             ...(aspectRatio !== undefined ? { aspectRatio } : {}),
           });
         } else if (kind === 'edit_video') {
-          generated = await this.deps.editVideo({ prompt, model, imagePaths, ...videoParams });
+          generated = await this.deps.editVideo({ prompt, model, imagePaths, refMode, ...videoParams });
         } else {
           generated = await this.deps.generateVideo({ prompt, model, ...videoParams });
         }
+        assertOwnerScopeCurrent();
 
         const saved = await this.deps.saveGhostMedia({
           ghostId,
           buffer: generated.buffer,
           mimeType: generated.mimeType,
+          ownerScopeKey,
           label: prompt.slice(0, 200),
           // 模型代办产物记账(ghostMediaLedger),随 ghost_call 收口带回;
           // 未署名('unattributed')不记,与 networkSlot 同契约防并发串账
           ...(callId !== 'unattributed' ? { callId } : {}),
         });
+        assertOwnerScopeCurrent();
         this.deps.log?.info(`ghost cindy-request ${kind} done`, {
           ghostId,
           model,
@@ -806,6 +935,32 @@ export class GhostCindySlot {
    * 在途 running(含本单即将占用的名额)都会落成完成记录,一并计入预留,
    * 上限在任何并发时序下都不被突破。
    */
+  /**
+   * 是否有**任意**在途的 Cindy 工作。
+   *
+   * 给「这个破坏性动作会打断什么」这类全局判定用(更新重启前的阻断探针)。三处状态各自独立
+   * 维护,只查一部分就等于漏一部分:
+   *  - `jobs`:mode:'submit' 的**异步视频**代办(异步提交只对视频开放,图像秒级完成走同步)。
+   *    由 `void runExec()` 脱离调用链跑,发起它的 turn 结束后就没有任何 turn 级信号还亮着。
+   *  - `inflight`:**同步**代办的 per-ghost 在途计数(gen_image / gen_video / edit_* 的同步
+   *    等待、明确不进会话的 oneshot_text)。插件面板发起的请求不一定伴随 turn 或 card-action,
+   *    所以同样可能所有其它探针都不命中。
+   *  - `mediaOps`:寄存 / 撤回寄存(deposit_media / release_media)。这两个分支在进入代办链
+   *    之前就 return 了、走不到 inflight 记账;被打断会卡在 blob 落盘与账本挂引用之间。
+   *
+   * 三者都会被 forceQuit() 连着 Ghost Node runtime 一起 destroyAll —— 正在生成的付费结果
+   * 直接丢掉。所以这里给的是「所有 Cindy slot 在途工作」的统一快照,而不是某一种。
+   */
+  anyInflightWork(): boolean {
+    for (const job of this.jobs.values()) {
+      if (job.status === 'running') return true;
+    }
+    for (const count of this.inflight.values()) {
+      if (count > 0) return true;
+    }
+    return this.mediaOps > 0;
+  }
+
   private evictSettledJobs(ghostId: string): void {
     const entries = [...this.jobs.entries()].filter(([, j]) => j.ghostId === ghostId);
     const running = entries.filter(([, j]) => j.status === 'running').length;

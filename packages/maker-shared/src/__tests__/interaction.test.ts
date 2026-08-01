@@ -106,7 +106,7 @@ describe('interaction shared model', () => {
       riskSummary: null,
       canAlwaysAllow: true,
     })).toEqual({
-      title: '可以只允许一次，也可以本会话总是允许',
+      title: '可以只允许一次，也可以本任务总是允许',
       detail: '工具: Bash',
     });
     expect(buildPermissionDecisionSummary({

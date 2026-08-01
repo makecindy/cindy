@@ -29,6 +29,11 @@ export interface InteractionRoute {
 
 export type InteractionHandler = (request: InteractionRequest) => Promise<InteractionDecision>;
 
+export interface InteractionLifecycleObserver {
+  onStart(request: InteractionRequest, route?: InteractionRoute): void;
+  onEnd(request: InteractionRequest, route?: InteractionRoute): void;
+}
+
 export interface InteractionSession {
   readonly id: string;
   setInteractionListener(listener: InteractionHandler | null): void;
@@ -63,6 +68,14 @@ export interface InteractionRouteLease {
   release(reason?: string): void;
 }
 
+function callSafely<T>(callback: () => T): T | undefined {
+  try {
+    return callback();
+  } catch {
+    return undefined;
+  }
+}
+
 function safeDecision(
   request: InteractionRequest,
   reason: string,
@@ -83,6 +96,7 @@ function safeDecision(
 
 class SessionInteractionRouter {
   private desktopHandler: InteractionHandler | null = null;
+  private lifecycleObserver: InteractionLifecycleObserver | null = null;
   private activeRoute: ActiveRoute | null = null;
   private readonly pending = new Map<string, PendingRequest>();
 
@@ -92,6 +106,22 @@ class SessionInteractionRouter {
 
   setDesktopHandler(handler: InteractionHandler): void {
     this.desktopHandler = handler;
+  }
+
+  setLifecycleObserver(observer: InteractionLifecycleObserver | null): void {
+    this.lifecycleObserver = observer;
+  }
+
+  private notifyState(route: InteractionRoute | undefined, state: InteractionRouteState): void {
+    callSafely(() => route?.onStateChange?.(state));
+  }
+
+  private notifyLifecycle(
+    phase: keyof InteractionLifecycleObserver,
+    request: InteractionRequest,
+    route?: InteractionRoute,
+  ): void {
+    callSafely(() => this.lifecycleObserver?.[phase](request, route));
   }
 
   begin(registration: RouteRegistration): InteractionRouteLease {
@@ -121,7 +151,9 @@ class SessionInteractionRouter {
         for (const [requestId, pending] of this.pending) {
           if (pending.routeToken !== active.token) continue;
           const decision = safeDecision(pending.request, reason);
-          const handledBySurface = active.onCancel?.(requestId, decision) === true;
+          const handledBySurface = callSafely(
+            () => active.onCancel?.(requestId, decision) === true,
+          ) === true;
           if (!handledBySurface) pending.cancel(decision);
         }
       },
@@ -153,32 +185,36 @@ class SessionInteractionRouter {
       request,
       cancel,
     });
-    active?.route.onStateChange?.('waiting');
+    this.notifyLifecycle('onStart', request, active?.route);
+    this.notifyState(active?.route, 'waiting');
     const timeoutMs = active?.route.timeoutMs;
     const timeout =
       timeoutMs && timeoutMs > 0
         ? setTimeout(() => {
             const decision = safeDecision(request, 'interaction_timeout');
-            const handledBySurface =
-              active?.onCancel?.(request.requestId, decision) === true;
+            const handledBySurface = callSafely(
+              () => active?.onCancel?.(request.requestId, decision) === true,
+            ) === true;
             if (!handledBySurface) cancel(decision);
           }, timeoutMs)
         : null;
 
     try {
       const decision = await Promise.race([handler(request), cancelled]);
-      active?.route.onStateChange?.(
+      this.notifyState(
+        active?.route,
         !cancelledByRouter && this.activeRoute?.token === active?.token
           ? 'resolved'
           : 'cancelled',
       );
       return decision;
     } catch {
-      active?.route.onStateChange?.('cancelled');
+      this.notifyState(active?.route, 'cancelled');
       return safeDecision(request, 'interaction_handler_failed');
     } finally {
       if (timeout) clearTimeout(timeout);
       this.pending.delete(request.requestId);
+      this.notifyLifecycle('onEnd', request, active?.route);
     }
   }
 }
@@ -201,6 +237,13 @@ export function installDesktopInteractionHandler(
   handler: InteractionHandler,
 ): void {
   routerFor(session).setDesktopHandler(handler);
+}
+
+export function installInteractionLifecycleObserver(
+  session: InteractionSession,
+  observer: InteractionLifecycleObserver | null,
+): void {
+  routerFor(session).setLifecycleObserver(observer);
 }
 
 /**

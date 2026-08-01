@@ -44,6 +44,7 @@ export interface MobileScheduleDraft {
   useWorktree: boolean;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
+  notifyWecomGroup?: boolean;
   targetSessionId: string;
   persistentSession: boolean;
   silentWhenIdle: boolean;
@@ -106,6 +107,7 @@ export function createMobileScheduleDraft(
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
     notifyDesktop: schedule.notify?.desktop !== false,
     notifyFeishu: schedule.notify?.feishu === true,
+    ...(schedule.notify?.wecomGroup === true ? { notifyWecomGroup: true } : {}),
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
     silentWhenIdle: !!schedule.silentWhenIdle,
@@ -150,6 +152,9 @@ export function applyTemplateToMobileScheduleDraft(
     persistentSession: template.persistentSession ?? draft.persistentSession,
     notifyDesktop: template.notify?.desktop ?? draft.notifyDesktop,
     notifyFeishu: template.notify?.feishu ?? draft.notifyFeishu,
+    ...((template.notify?.wecomGroup ?? draft.notifyWecomGroup) !== undefined
+      ? { notifyWecomGroup: template.notify?.wecomGroup ?? draft.notifyWecomGroup }
+      : {}),
   };
 }
 
@@ -203,7 +208,7 @@ export function validateMobileScheduleDraft(
   }
   if (!draft.timezone.trim()) return { field: 'timezone', message: '请输入时区' };
   if (draft.targetSessionId.trim() === MOBILE_SCHEDULE_PENDING_SESSION_ID) {
-    return { field: 'targetSessionId', message: '请选择要绑定的会话' };
+    return { field: 'targetSessionId', message: '请选择要绑定的任务' };
   }
   if (draft.runMode === 'recurring') {
     if (!draft.cronExpr.trim()) return { field: 'cronExpr', message: '请输入 cron 表达式' };
@@ -253,6 +258,7 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     notify: {
       desktop: draft.notifyDesktop,
       feishu: draft.notifyFeishu,
+      wecomGroup: draft.notifyWecomGroup === true,
     },
   };
 

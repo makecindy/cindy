@@ -647,7 +647,7 @@ describe('Agent Island display state', () => {
     // review 曾担心 priorityCompactTitle 会把原始哨兵带给 native(Swift 侧的 compactTitle
     // 优先读这个字段)。事实是取值链第一步 meaningfulSessionTitle 就按大小写无关过滤掉
     // 'new maker' / 'untitled' / 'codex' 等泛化串,pill 因此回落到项目名 —— 小尺寸胶囊里
-    // 项目名本来也比「未命名对话」有信息量。这条断言把该事实钉住,免得日后有人放宽过滤
+    // 项目名本来也比「未命名任务」有信息量。这条断言把该事实钉住,免得日后有人放宽过滤
     // 又把哨兵漏给 native(PR #1031 review 第 13 轮)。
     const state = createAgentIslandState();
 

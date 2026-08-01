@@ -36,6 +36,8 @@ const deviceLinkProjectsHookSource = readSource('hooks', 'useDeviceLinkProjects.
 
 const remoteSessionHandoffSource = readSource('features', 'cc-agent', 'remoteSessionHandoff.ts');
 
+const remoteCollabHandoffSource = readSource('features', 'cc-agent', 'remoteCollabHandoff.ts');
+
 const deviceSwitcherPillSource = readSource('components', 'new-chat', 'DeviceSwitcherPill.tsx');
 
 const controllableDevicesHookSource = readSource('hooks', 'useControllableDevices.ts');
@@ -45,6 +47,8 @@ const deviceLinkRemoteProjectsSource = readSource(
   'device-link',
   'useDeviceLinkRemoteProjects.ts',
 );
+
+const branchPickSource = readSource('components', 'new-chat', 'branchPick.ts');
 
 const deviceProvidersHookSource = readSource('hooks', 'useDeviceProviders.ts');
 
@@ -87,9 +91,10 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).not.toContain(
       'getProjectPickerEmptyLabelKey(workspacePrompt)',
     );
-    // 2026-07-19 恢复 worktree 高级入口(用户裁决,488cb33 误删回归;详见
+    // 2026-07-19 恢复 worktree 入口(用户裁决,488cb33 误删回归;详见
     // newMakerCreateAgentVisualContract):路由允许且仅允许一个 advancedOnly
-    // 齿轮变体的 WorktreeChipsRow(folderPickerMode="project" 仅为其 advancedHidden
+    // 变体的 WorktreeChipsRow(2026-07-28 起渲染 [分支 chip][worktree 勾选 chip],
+    // 齿轮 popover 已移除;folderPickerMode="project" 仅为其 advancedHidden
     // 语义服务),不回退 folder chip 版;项目选择仍由 mode pill 独占。
     expect(newMakerDraftRouteSource).toMatch(/<WorktreeChipsRow[\s\S]*?variant="advancedOnly"/);
     expect((newMakerDraftRouteSource.match(/<WorktreeChipsRow/g) ?? []).length).toBe(1);
@@ -144,26 +149,88 @@ describe('Shared create project picker', () => {
     );
   });
 
-  it('hides Advanced worktree controls for pure-dialogue drafts without a selected project', () => {
+  it('hides worktree controls for pure-dialogue drafts without a selected project', () => {
     // advancedHidden 把 "project 模式 + 无 cwd" 归到 dialogue 上下文,
-    // 让齿轮按钮 / worktree state effect / effectiveWorktreeEnabled 用同一个 flag 拦掉。
+    // 让联合控件 / effectiveWorktreeEnabled 用同一个 flag 拦掉。
     expect(worktreeChipsSource).toContain(
       "const advancedHidden = folderPickerMode === 'project' && !cwd",
     );
-    expect(worktreeChipsSource).toContain('if (advancedHidden && enabled) onEnabledChange(false)');
-    expect(worktreeChipsSource).toContain('{!advancedHidden && (');
     expect(worktreeChipsSource).toContain(
       'const effectiveWorktreeEnabled = enabled && !advancedHidden && !worktreeDisabled',
     );
+  });
+
+  it('keeps the worktree checkbox owned by the user alone (2026-07-29 invariant, v2)', () => {
+    // 用户裁决(实测后第二版):勾选状态只属于用户——
+    //  1) 组件内不存在任何 useEffect 自动改写 enabled 的路径(资格变化只禁用、
+    //     不改状态;旧 handleAutoDisable 机制不得复活);
+    //  2) 用户点击 checkbox(source='chip')→ 写穿工作端记忆(本地专用单字段 setter /
+    //     device-link 远程 apply-new-maker-worktree-pref);
+    //  3) 用户选分支(source='branch-pick')→ 勾选双向联动但仅本次草稿、不落记忆
+    //     (route 侧 source !== 'chip' 直接 return);
+    //  4) checkbox 原样直出记忆(播种无 baseRepo 点亮门槛),发送侧按
+    //     「勾选 && baseRepo 就绪」静默降级,不报错拦截。
+    expect(worktreeChipsSource).not.toContain('handleAutoDisable');
+    expect(worktreeChipsSource).not.toMatch(/useEffect\([^)]*onEnabledChange/s);
+    expect(worktreeChipsSource).toContain("onToggle={(v) => onEnabledChange(v, 'chip')}");
+    expect(worktreeChipsSource).toContain("onEnabledChange(true, 'branch-pick')");
+    expect(worktreeChipsSource).toContain("onEnabledChange(false, 'branch-pick')");
+    expect(branchPickSource).toContain("kind: 'disable-worktree'");
+    expect(newMakerDraftRouteSource).toContain("if (source !== 'chip') return;");
+    expect(newMakerDraftRouteSource).toContain("'maker:apply-new-maker-worktree-pref'");
+    expect(newMakerDraftRouteSource).toContain('setWorktreePreference(enabled)');
+    expect(newMakerDraftRouteSource).toContain('setWtEnabled(worktreePref)');
+    expect(newMakerDraftRouteSource).toContain('wt.enabled && wt.baseRepo');
+    expect(newMakerDraftRouteSource).not.toContain('worktreeMissingRepo');
+  });
+
+  it('merges branch and worktree into a single joined pill (Claude Code style)', () => {
+    // 2026-07-29 用户裁决:[⎇ 分支 │ ☑ worktree] 是一个 pill、两个点击区;
+    // 分支菜单永远可点(worktree 开不了的仓库除外);悬停任一半区时分隔线隐去。
+    expect(worktreeChipsSource).toContain('function BranchWorktreeChip');
+    expect(worktreeChipsSource).toContain('data-testid="create-agent-branch-worktree"');
+    expect(worktreeChipsSource).toContain(
+      'const branchInteractive = !disabled && (effectiveWorktreeEnabled || !switchDisabled)',
+    );
+    expect(worktreeChipsSource).toContain('group-hover:opacity-0');
+    expect(worktreeChipsSource).not.toContain('function BranchChip');
+    expect(worktreeChipsSource).not.toContain('function WorktreeChip(');
   });
 
   it('keeps remote project drafts out of local workspace probes', () => {
     expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft)');
     // device-link 草稿的 git 探测经隧道在被控端执行(本机 git 对远程路径必然误报);
     // SSH(worktreeDisabled)仍不探测。
-    expect(worktreeChipsSource).toContain(
-      'useDetectCwd(worktreeDisabled ? null : (cwd ?? null), deviceLinkDeviceId)',
+    expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch,');
+    expect(newMakerDraftRouteSource).toContain(
+      'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',
     );
+    expect(worktreeChipsSource).toContain(
+      "sourceBranch || branches.current || 'HEAD'",
+    );
+    expect(worktreeChipsSource).not.toContain(
+      "sourceBranch || branches.current || 'main'",
+    );
+  });
+
+  it('invalidates worktree probe-derived fields when the selected project changes', () => {
+    const start = newMakerDraftRouteSource.indexOf('const handleWorkingDirChange');
+    const end = newMakerDraftRouteSource.indexOf(
+      '// ─── 新草稿入场',
+      start,
+    );
+    const handler = newMakerDraftRouteSource.slice(start, end);
+    const actionStart = newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback(');
+    const actionEnd = newMakerDraftRouteSource.indexOf(
+      '// 弹窗确认添加后的落点',
+      actionStart,
+    );
+    const action = newMakerDraftRouteSource.slice(actionStart, actionEnd);
+
+    expect(handler).toContain('applyDraftTarget({');
+    expect(action).toContain('if (deviceChanged || workingDirChanged)');
+    expect(action).toContain('setWtBaseRepo(null)');
+    expect(action).toContain("setWtSourceBranch('')");
   });
 
   it('wires the remote project entry into the CREATE AGENT mode-pill picker', () => {
@@ -224,7 +291,15 @@ describe('Shared create project picker', () => {
       'if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {',
     );
     // 远程纯对话没有 repo:即使 wtEnabled 残留 true 也必须跳过 worktree 分支。
-    expect(newMakerDraftRouteSource).toContain('if (effectiveWorkingDir && wt.enabled) {');
+    expect(newMakerDraftRouteSource).toContain(
+      '&& wt.supportsRecoveryKeyDiscard === true',
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      'onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}',
+    );
+    expect(worktreeChipsSource).toContain(
+      'detect.data.supportsRecoveryKeyDiscard === true',
+    );
   });
 
   // #807 review 修复:新建目标必须与普通发送同口径 —— 远程纯对话下不能因为缺 workingDir 就抛错。
@@ -390,20 +465,18 @@ describe('Shared create project picker', () => {
     expect(bareSet.length).toBe(0);
   });
 
-  // #807 review 第十五轮:picker 换项目也必须作废 worktree 三态。baseRepo 由 WorktreeChipsRow
-  // 经 detect-cwd 异步回填(远程还要走隧道),回填前发送会把 worktree 建到上一个 repo;
-  // sourceBranch 只在为空时才自动填充,用户在 A 上显式选的分支会一直跟到 B。浏览器路径早就重置
-  // 了,picker 路径漏了 —— 而 picker 才是 #807 之后换项目的主路径。
+  // #807 review 第十五轮:picker 换项目必须作废 worktree 的 repo/branch 探测结果。baseRepo
+  // 由 WorktreeChipsRow 经 detect-cwd 异步回填(远程还要走隧道),回填前发送不能把 worktree 建到
+  // 上一个 repo;sourceBranch 只在为空时才自动填充,用户在 A 上显式选的分支不能跟到 B。
   it('invalidates worktree state when the project picker switches workspaces', () => {
-    // 换工作区 = 换 repo,worktree 三态必须一起作废;但只在路径真的变了时 —— 重选当前项目不该
-    // 把用户刚打开的 worktree 开关又关掉。这条判据原先只补进了工作区 picker,设备域浏览器那条
-    // 路径漏了(它无条件重置);收敛之后两条都由同一个条件驱动。
+    // 换工作区 = 换 repo,只清掉 repo/branch 探测态;worktreeEnabled 是工作端拥有的用户偏好,
+    // 不能因换项目被静默抹掉。
     const action = newMakerDraftRouteSource.slice(
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     const wt = action.slice(action.indexOf('if (deviceChanged || workingDirChanged) {'));
     const block = wt.slice(0, wt.indexOf('      }'));
-    expect(block).toContain('setWtEnabled(false);');
+    expect(block).not.toContain('setWtEnabled(false);');
     expect(block).toContain('setWtBaseRepo(null);');
     expect(block).toContain("setWtSourceBranch('');");
   });
@@ -438,8 +511,9 @@ describe('Shared create project picker', () => {
     expect(action).toContain(
       '...(deviceChanged || req.workingDir == null ? { extraDirs: [] } : {}),',
     );
-    // 但 worktree 三态照常重置 —— 换项目就是换 repo。
+    // 但 worktree 的 repo/branch 探测态照常重置 —— 换项目就是换 repo；用户偏好保留。
     expect(action).toContain('if (deviceChanged || workingDirChanged) {');
+    expect(action).not.toContain('setWtEnabled(false);');
   });
 
   // #807 review 第十二轮:in-flight 保护要覆盖**工作区** pill,不只是设备 pill —— 否则用户点了
@@ -701,8 +775,11 @@ describe('Shared create project picker', () => {
     // 手写回流必须彻底消失,否则提交点后仍有可抛的一步。
     expect(newMakerDraftRouteSource).not.toContain("'local-db:sessions:list'");
     expect(newMakerDraftRouteSource).not.toContain('setDeviceSessions(');
-    // 组件也不该再自己 import 回流函数 —— 它只经 handoff 使用。
+    // 组件也不该再自己 import 回流函数 —— 它只经共享 helper 使用。issue #1170 之后
+    // 有第二个回流触发点(device-link 开协同后要把被控端刚建的 worker session 拉进
+    // 镜像),它住在 remoteCollabHandoff 里,同样是 fire-and-forget、同样不在组件内联。
     expect(newMakerDraftRouteSource).not.toContain('refreshRemoteDeviceSessions');
+    expect(remoteCollabHandoffSource).toContain('void refreshRemoteDeviceSessions(p.deviceId)');
   });
 
   // #807 review 第十七轮:归属必须在**回流之前**登记。回流失败(gave-up / superseded)时镜像里
@@ -729,7 +806,7 @@ describe('Shared create project picker', () => {
    *
    * refreshRemoteDeviceSessions 对瞬态错误退避重试,窗口最长约 6.75 秒。原来 handoff `await` 它才
    * 返回,于是这段时间里应用被关掉 → 对端**已经**有了新会话,而用户的首条消息(或目标弹窗里刚写的
-   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个会话,第一个空着
+   * 内容)还没被 setPending / setPendingGoal 记录下来 → 重开再试就在对端建出第二个任务,第一个空着
    * 滞留;建目标那条还会连同只存在于弹窗内存里的编辑一起丢。
    *
    * 交接本来就不需要等权威快照 —— 临时行(带对端真正分配的 workDir)已经足够让 SessionView 的
@@ -850,11 +927,10 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: deviceId,');
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: target.deviceId,');
     expect(newMakerDraftRouteSource).not.toContain('deviceLinkDeviceId: null,');
-    // worktree 三态与三个 evict 只能出现在那个动作里(各 1 处)。
+    // worktree repo/branch 探测态与三个 evict 只能出现在那个动作里(各 1 处)。
     // 注:`setRemoteDraftState({ loaded: false, … })` 不在此列 —— defaults effect 自己的早返回与
     // 重拉前重置也用它,那是它自身的正常逻辑,不是转移路径的重复实现。
     for (const marker of [
-      'setWtEnabled(false);',
       'setWtBaseRepo(null);',
       'evictDeviceCapabilities(',
       'evictDeviceProviders(',

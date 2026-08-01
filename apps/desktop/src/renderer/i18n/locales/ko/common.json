@@ -52,8 +52,8 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "새 대화",
-      "newConversationHint": "새 대화 시작",
+      "newConversationTitle": "새 세션",
+      "newConversationHint": "새 세션 시작",
       "muteSound": "Agent Island 소리 끄기",
       "enableSound": "Agent Island 소리 켜기",
       "settings": "Agent Island 설정",
@@ -464,10 +464,26 @@
       "sessionDoneLabel": "세션 완료 시 데스크톱 알림 표시",
       "sessionDoneHint": "창이 비활성 상태일 때만 표시되어 포그라운드 방해를 방지합니다.",
       "sessionDoneAria": "세션 완료 데스크톱 알림 전환",
-      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu 메시지 전송",
-      "feishuHint": "연동된 Feishu 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
-      "feishuDisabledHint": "먼저 \"Feishu 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
-      "feishuAria": "세션 완료 Feishu 알림 전환"
+      "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
+      "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
+      "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
+      "feishuAria": "세션 완료 Feishu 알림 전환",
+      "wecomGroupLabel": "WeCom 그룹 알림",
+      "wecomGroupHint": "자동 작업 완료 알림에 사용됩니다. WeCom 그룹 봇 Webhook URL을 붙여넣으면 이 기기에 암호화되어 저장됩니다.",
+      "wecomGroupConfiguredHint": "설정됨(키 {{maskedKey}}). 전체 스위치를 켠 후 각 자동 작업에서 필요할 때 전송할 수 있습니다.",
+      "wecomGroupAria": "WeCom 그룹 알림 전체 스위치 전환",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
+      "wecomGroupSaveAndTest": "저장 및 테스트",
+      "wecomGroupSaveSuccess": "Webhook을 저장하고 테스트 메시지를 보냈습니다",
+      "wecomGroupSaveFailed": "Webhook 저장 또는 테스트에 실패했습니다",
+      "wecomGroupTest": "테스트 전송",
+      "wecomGroupTestMessage": "Cindy WeCom 그룹 알림 테스트에 성공했습니다",
+      "wecomGroupTestSuccess": "테스트 메시지를 보냈습니다",
+      "wecomGroupTestFailed": "테스트 메시지 전송에 실패했습니다",
+      "wecomGroupToggleFailed": "WeCom 그룹 알림 설정을 업데이트하지 못했습니다",
+      "wecomGroupClear": "삭제",
+      "wecomGroupCleared": "Webhook을 삭제했습니다",
+      "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
       "title": "앱 동작",
@@ -659,7 +675,7 @@
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
-      "qnaPlaceholder": "예: Codex 대화를 어떻게 가져오나요?",
+      "qnaPlaceholder": "예: Codex 세션을 어떻게 가져오나요?",
       "qnaSend": "보내기",
       "qnaPending": "답변을 준비하는 중…",
       "qnaNoAnswer": "아직 확실한 답을 찾지 못했습니다. 표현을 바꿔 다시 물어보세요.",
@@ -678,7 +694,7 @@
       "openAssistant": "바로 질문하기",
       "panelTitle": "도움말 어시스턴트",
       "panelAriaLabel": "도움말 어시스턴트 패널",
-      "newSession": "새 대화",
+      "newSession": "새 세션",
       "threadEmptyTitle": "무엇이든 물어보세요",
       "threadEmptyHint": "자주 묻는 질문에 빠르게 답하고, 이어서 질문해 바로잡을 수 있어요"
     },
@@ -1195,7 +1211,7 @@
     },
     "providers": {
       "title": "모델 제공자",
-      "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 대화별로 전환할 수 있습니다.",
+      "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
       "pill": {
         "connected": "연결됨",
         "suspended": "비활성화됨"
@@ -1404,7 +1420,29 @@
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
         "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
         "disabledGroup": "비활성화됨",
-        "enableAllModels": "모두 활성화"
+        "enableAllModels": "모두 활성화",
+        "priceOverride": {
+          "menu": "API 가격 추정치 편집",
+          "title": "{{model}} API 가격 추정치",
+          "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
+          "currency": "통화",
+          "input": "입력",
+          "output": "출력",
+          "cacheRead": "캐시 읽기",
+          "cacheWrite": "캐시 쓰기",
+          "unit": "100만 토큰당 가격입니다. 캐시가 별도로 과금되지 않으면 비워 두세요.",
+          "registryDate": "참고 가격 업데이트 {{date}}",
+          "conflict": "원격 참고 가격이 변경되었습니다. 로컬 추정치는 계속 우선 적용됩니다. 검토하거나 새 참고 가격으로 재설정하세요.",
+          "reset": "현재 참고 가격으로 재설정",
+          "resetDone": "현재 참고 가격으로 복원했습니다",
+          "save": "저장",
+          "cancel": "취소",
+          "close": "닫기",
+          "saved": "API 가격 추정치를 저장했습니다",
+          "invalid": "0 이상의 올바른 입력 및 출력 가격을 입력하세요",
+          "loadFailed": "가격 추정치를 불러오지 못했습니다. 다시 시도하세요.",
+          "saveFailed": "가격 추정치를 저장하지 못했습니다. 다시 시도하세요."
+        }
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",
@@ -1580,9 +1618,15 @@
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
     "feishuBot": {
-      "title": "Feishu 봇",
-      "description": "Feishu 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
-      "statusAria": "Feishu 봇 상태: {{status}}",
+      "title": "Feishu / Lark 봇",
+      "description": "Feishu 또는 Lark 봇을 통해 언제 어디서나 {{appName}}에 연결하여 작업하세요.",
+      "statusAria": "Feishu / Lark 봇 상태: {{status}}",
+      "serviceLabel": "서비스",
+      "serviceAria": "IM 서비스 선택",
+      "services": {
+        "feishu": "Feishu",
+        "lark": "Lark"
+      },
       "status": {
         "needsConfig": "구성 필요",
         "connecting": "연결 중…",
@@ -1592,16 +1636,17 @@
         "error": "연결 실패"
       },
       "connected": {
-        "heading": "Feishu 봇이 연결됨",
+        "heading": "{{service}} 봇이 연결됨",
         "note": "현재 QR 스캔 사용자에 바인딩되어 있으며, 다른 사람의 개인 메시지는 자동으로 무시됩니다.",
+        "serviceLabel": "서비스",
         "appIdLabel": "App ID",
         "ownerLabel": "Owner",
         "ownerWaiting": "첫 개인 메시지 바인딩 대기 중",
-        "reconnect": "Feishu 봇 다시 연결",
+        "reconnect": "{{service}} 봇 다시 연결",
         "clear": "연동 해제"
       },
       "saved": {
-        "heading": "Feishu 봇이 연동됨",
+        "heading": "{{service}} 봇이 연동됨",
         "connectingNote": "봇 자격 증명이 저장되어 있습니다. 연결하는 중입니다.",
         "reconnectingNote": "봇 자격 증명이 저장되어 있습니다. 연결을 복구하는 중입니다.",
         "conflictNote": "봇 자격 증명이 저장되어 있지만 이 App ID는 다른 기기에서 사용 중입니다.",
@@ -1614,11 +1659,11 @@
       "appSecretPlaceholder": "sec_xxxxxxxxxxxxxxxxxx",
       "showSecret": "시크릿 표시",
       "hideSecret": "시크릿 숨기기",
-      "createLink": "여기를 클릭해 생성 ↗",
+      "createLink": "{{service}} 오픈 플랫폼에서 생성 ↗",
       "createLinkSuffix": ", 생성 후 자격 증명을 입력하세요",
-      "clearAria": "Feishu 봇 연동 해제",
+      "clearAria": "IM 봇 연동 해제",
       "clearConfirm": {
-        "title": "Feishu 봇 연동을 해제하시겠습니까?",
+        "title": "IM 봇 연동을 해제하시겠습니까?",
         "description": "연동을 해제하면 WebSocket 연결이 끊기고, 로컬에 저장된 App ID / App Secret / 소유자 openId가 삭제됩니다. 다시 사용하려면 재생성하거나 자격 증명을 다시 입력해야 합니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
@@ -1646,7 +1691,7 @@
       },
       "intro": "연결하면 이 WeChat 연결로 보낸 개인 메시지가 이 컴퓨터의 Cindy로 전달됩니다. 인증 페이지는 Tencent가 제공하며 OpenClaw로 표시될 수 있습니다.",
       "errorNote": "연결이 완료되지 않았습니다. 네트워크를 확인하고 다시 스캔하세요. 연결 실패 시 Cindy는 인증 정보를 평문으로 저장하지 않습니다.",
-      "disabledNote": "호환성 정책에 따라 이 버전에서는 개인 WeChat 연결이 일시 중지되었습니다. 저장된 대화와 설정은 삭제되지 않습니다.",
+      "disabledNote": "호환성 정책에 따라 이 버전에서는 개인 WeChat 연결이 일시 중지되었습니다. 저장된 세션과 설정은 삭제되지 않습니다.",
       "permission": {
         "label": "권한 모드",
         "hint": "/new 이후의 새 컨텍스트에 적용됩니다. 위험한 작업은 계속 Cindy Desktop에서 확인해야 합니다.",
@@ -1682,7 +1727,7 @@
           "connected": "WeChat 개인 메시지는 이 컴퓨터의 Cindy로 직접 전달되며 Cindy 서버를 경유하지 않습니다.",
           "reconnecting": "WeChat 연결을 복구하고 있습니다. 다시 스캔할 필요가 없습니다.",
           "needs_reauth": "WeChat 인증이 만료되었거나 다른 연결로 교체되었습니다. 다시 스캔하세요.",
-          "disabled_by_policy": "호환성 정책으로 연결이 일시 중지되었습니다. 인증 정보와 대화는 유지됩니다.",
+          "disabled_by_policy": "호환성 정책으로 연결이 일시 중지되었습니다. 인증 정보와 세션은 유지됩니다.",
           "error": "연결을 일시적으로 사용할 수 없습니다. 다시 스캔하거나 연동 해제 후 나중에 다시 시도하세요."
         }
       },
@@ -1700,7 +1745,7 @@
       },
       "unbind": {
         "title": "개인 WeChat 연동을 해제하시겠습니까?",
-        "description": "연동을 해제하면 메시지 송수신을 중지하고 로컬 WeChat 인증 정보와 미완료 작업을 삭제합니다. 기존 Cindy 대화, 기록, 저장된 첨부 파일은 유지됩니다.",
+        "description": "연동을 해제하면 메시지 송수신을 중지하고 로컬 WeChat 인증 정보와 미완료 작업을 삭제합니다. 기존 Cindy 세션, 기록, 저장된 첨부 파일은 유지됩니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
       },
@@ -1783,6 +1828,48 @@
         }
       }
     },
+    "wecomBot": {
+      "title": "WeCom 지능형 봇",
+      "description": "WeCom 지능형 봇을 연결하고 DM과 그룹 채팅에서 {{appName}}를 사용하세요.",
+      "status": {
+        "needsConfig": "설정되지 않음",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "conflict": "연결이 대체됨",
+        "error": "연결 실패"
+      },
+      "fieldsRequired": "Bot ID와 Secret을 모두 입력하세요",
+      "botIdLabel": "Bot ID",
+      "botIdPlaceholder": "WeCom 관리 화면의 Bot ID",
+      "secretLabel": "Secret",
+      "secretPlaceholder": "WeCom 관리 화면의 Secret",
+      "showSecret": "Secret 표시",
+      "hideSecret": "Secret 숨기기",
+      "setupHint": "WeCom 관리 화면에서 지능형 봇을 만들고 장기 연결을 활성화한 다음 Bot ID와 Secret을 입력하세요.",
+      "ownerHint": "연결 후 봇에 처음 DM을 보낸 구성원이 이 컴퓨터의 owner로 연결됩니다. 해당 구성원만 Agent를 실행할 수 있습니다.",
+      "connect": "저장하고 연결",
+      "reconnect": "다시 연결",
+      "connectingAction": "연결 중…",
+      "disconnect": "연결 해제",
+      "configSaved": "WeCom 봇 설정을 저장했습니다",
+      "connectFailed": "WeCom 봇 연결에 실패했습니다. 자격 증명과 네트워크를 확인하세요",
+      "reconnecting": "WeCom 봇에 다시 연결하는 중입니다",
+      "reconnectFailed": "다시 연결하지 못했습니다: {{message}}",
+      "saveFailed": "저장 실패: {{message}}",
+      "disconnected": "WeCom 봇 연결을 해제했습니다",
+      "disconnectFailed": "연결 해제 실패: {{message}}",
+      "connected": {
+        "heading": "WeCom 봇 연결됨",
+        "awaitingOwner": "WeCom 계정에서 봇으로 DM을 보내 owner를 연결하세요.",
+        "ownerBound": "이 컴퓨터의 owner: {{ownerUserId}}"
+      },
+      "disconnectConfirm": {
+        "title": "WeCom 봇 연결을 해제할까요?",
+        "description": "저장된 Bot ID, Secret 및 owner 연결이 이 컴퓨터에서 삭제됩니다.",
+        "confirm": "연결 해제",
+        "cancel": "취소"
+      }
+    },
     "telegramBot": {
       "title": "Telegram 봇",
       "description": "직접 만든 Telegram 봇을 연결하세요. 데스크톱이 Telegram에 직접 연결되어 DM과 그룹 채팅에서 {{appName}}를 사용할 수 있습니다.",
@@ -1844,7 +1931,7 @@
       },
       "commandMenu": {
         "start": "환영 메시지와 사용법 보기",
-        "new": "새 세션 시작",
+        "new": "새 대화 시작",
         "help": "명령어 도움말 보기",
         "stop": "현재 작업 중지",
         "session": "최근 세션 목록에서 이어서 대화",
@@ -1882,6 +1969,11 @@
         "dmQuoteHint": {
           "off": "DM 답변은 인용 없이 보냅니다(기본).",
           "first": "첫 답장이 보낸 메시지를 인용합니다."
+        },
+        "error": {
+          "load": "Telegram 동작 설정을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
+          "save": "Telegram 동작 설정을 저장하지 못했습니다. 마지막으로 확인된 설정으로 복원했습니다.",
+          "retry": "다시 불러오기"
         }
       },
       "persona": {
@@ -1905,10 +1997,58 @@
         "contactsOn": "그룹에서 말한 사람은 스마트 연락처에 자동 등록됩니다(마스터 스위치 켜짐).",
         "contactsOff": "스마트 연락처가 꺼져 있어 그룹에서 말한 사람이 자동으로 기억되지 않습니다.",
         "contactsEnable": "켜기",
+        "error": {
+          "load": "Telegram 그룹을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
+          "save": "그룹 참여 모드를 저장하지 못했습니다. 마지막으로 확인된 모드로 복원했습니다.",
+          "retry": "다시 불러오기"
+        },
         "mode": {
           "mention": "@만",
           "always": "활성"
         }
+      }
+    },
+    "dingtalkBot": {
+      "title": "DingTalk 봇",
+      "description": "직접 만든 DingTalk 봇을 연결하고 Stream 모드로 DM과 그룹에서 {{appName}}를 사용합니다.",
+      "status": {
+        "needsConfig": "설정 필요",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "error": "연결 실패"
+      },
+      "connected": {
+        "heading": "DingTalk 봇 연결됨",
+        "ownerBound": "소유자가 연결되었습니다. DM을 보내거나 그룹에서 멘션해 시작하세요.",
+        "waitingOwner": "먼저 봇에게 DM을 보내세요. 첫 번째 발신자가 소유자로 안전하게 연결됩니다.",
+        "ownerLabel": "소유자 사용자 ID",
+        "notBound": "첫 DM 대기 중"
+      },
+      "appKeyLabel": "Client ID",
+      "appKeyPlaceholder": "봇 애플리케이션의 Client ID 붙여넣기",
+      "appSecretLabel": "Client Secret",
+      "appSecretPlaceholder": "봇 애플리케이션의 Client Secret 붙여넣기",
+      "appSecretSavedPlaceholder": "안전하게 저장됨. 비워 두고 다시 연결할 수 있습니다",
+      "showSecret": "Client Secret 표시",
+      "hideSecret": "Client Secret 숨기기",
+      "formHint": "자격 증명은 로컬에 암호화됩니다. 연결 후 첫 DM으로 소유자를 연결합니다.",
+      "errorHint": "연결 실패. 자격 증명, Stream 모드, 네트워크를 확인한 후 다시 시도하세요.",
+      "connect": "연결",
+      "reconnect": "다시 연결",
+      "disconnect": "연동 해제",
+      "disconnectConfirm": {
+        "title": "DingTalk 봇 연동을 해제하시겠습니까?",
+        "description": "연결을 끊고 저장된 Client ID, Client Secret, 소유자 연결을 삭제합니다.",
+        "confirm": "연동 해제",
+        "cancel": "취소"
+      },
+      "guide": {
+        "title": "설정 가이드",
+        "step1": "DingTalk 개발자 포털에서 내부 앱을 만들고 봇 기능을 추가합니다.",
+        "step2": "봇의 Stream 모드를 활성화하고 앱 버전을 게시합니다.",
+        "step3": "앱 자격 증명에서 Client ID와 Client Secret을 복사해 입력합니다.",
+        "step4": "연결 후 봇에게 먼저 DM을 보내 소유자를 연결합니다. 그룹에서는 멘션하세요.",
+        "openPortal": "DingTalk 개발자 포털 열기 ↗"
       }
     },
     "logout": {
@@ -1917,7 +2057,7 @@
     },
     "memory": {
       "title": "메모리",
-      "description": "워크스페이스 단위 메모리를 구현합니다. 설정 변경 후에는 일반적으로 새 Session을 시작해야 적용됩니다. 메모리에 문제가 있다면 Reset하거나 끄세요.",
+      "description": "워크스페이스 단위 메모리를 구현합니다. 설정 변경 후에는 일반적으로 새 Agent 세션을 시작해야 적용됩니다. 메모리에 문제가 있다면 Reset하거나 끄세요.",
       "maker": {
         "label": "Cindy",
         "description": "메모리는 개별 모델이 아니라 Agent 진입점별로 관리됩니다. 동일한 작업 디렉터리에서 Claude Code와 Codex 진입점으로 시작한 Session은 메모리를 공유합니다",
@@ -1955,7 +2095,7 @@
         "toast": {
           "enabled": "{{label}} 메모리가 활성화되었습니다",
           "disabled": "{{label}} 메모리가 비활성화되었습니다",
-          "takesEffectSuffix": " — 새 채팅에서 적용됩니다",
+          "takesEffectSuffix": " — 다음 Agent 세션부터 적용됩니다",
           "toggleFailed": "메모리 설정 업데이트 실패",
           "resetSuccess_one": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
           "resetSuccess_other": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
@@ -2125,7 +2265,7 @@
         "title": "자동 조작 브라우저",
         "description": "에이전트 전용 독립 브라우저 — 평소 쓰는 Chrome과 분리됩니다",
         "toggleAria": "브라우저 자동화 전환",
-        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 브라우저 자동화를 전환할 수 있습니다.",
         "detected": "{{browser}} 감지됨",
         "notDetected": "로컬 브라우저를 찾을 수 없습니다. Chrome을 설치하면 브라우저 자동화를 사용할 수 있습니다.",
@@ -2160,7 +2300,7 @@
         "description": "에이전트가 ADB를 통해 연결된 Android 기기를 검사하고 조작할 수 있습니다",
         "toggleAria": "Android 자동화 전환",
         "refresh": "다시 확인",
-        "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "status": {
           "checking": "ADB 상태 확인 중…",
           "preparing": "ADB 준비 중…",
@@ -2297,7 +2437,7 @@
           "windowsHint": "Windows에서는 추가 시스템 권한이 필요하지 않습니다. 에이전트가 작업하는 동안 대상 앱을 현재 활성 데스크톱에 보이도록 유지하세요.",
           "linuxHint": "Linux에서는 macOS TCC 권한을 사용하지 않습니다. 현재 데스크톱 세션에서 창 검사와 입력 자동화가 허용되는지 확인하세요."
         },
-        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 컴퓨터 직접 제어를 전환할 수 있습니다.",
         "update": {
           "available": "새 버전 v{{version}}을(를) 사용할 수 있습니다. 업데이트 후 시스템 권한을 다시 허용해야 할 수 있습니다.",
@@ -2326,21 +2466,21 @@
     },
     "builtinTools": {
       "title": "기본 제공 도구",
-      "description": "새 대화의 기본값을 설정하거나 프로젝트별로 재정의합니다. 프로젝트 설정이 우선합니다.",
+      "description": "새 세션의 기본값을 설정하거나 프로젝트별로 재정의합니다. 프로젝트 설정이 우선합니다.",
       "empty": "사용 가능한 도구가 없습니다.",
       "toggleAria": "{{name}} 도구 전환",
       "toggleHint": "변경 사항은 새로 만들거나 다시 시작한 Agent 세션에만 적용되며, 실행 중인 세션에는 영향을 주지 않습니다.",
       "loadFailed": "도구 목록을 불러오지 못했습니다",
       "scopePicker": {
         "ariaLabel": "기본 제공 도구 설정 범위 전환",
-        "userDefault": "새 대화 기본값",
+        "userDefault": "새 세션 기본값",
         "userDefaultDescription": "프로젝트 재정의가 없는 새 세션에 적용"
       },
       "source": {
         "project": "프로젝트",
         "projectTooltip": "프로젝트 설정으로 재정의됨 ({{dir}})",
         "user": "사용자 기본값",
-        "userTooltip": "새 대화 기본값을 따름",
+        "userTooltip": "새 세션 기본값을 따름",
         "product": "제품 기본값",
         "productTooltip": "Cindy 제품 기본값을 따름"
       },
@@ -2426,6 +2566,11 @@
         "slackDescription": "Slack 워크스페이스를 연결하고 Slack에서 Cindy에게 작업을 맡기세요.",
         "slackDisabledHint": "스위치를 켜면 Slack 인증이 시작됩니다. 연결이 완료되면 Slack에서 작업을 맡길 수 있습니다.",
         "slackBoundHint": "연결이 완료되었습니다. 스위치를 끄면 연결이 해제되며 다시 켜려면 재인증이 필요합니다.",
+        "lifecycleAnnouncement": {
+          "label": "온라인/오프라인 알림",
+          "cellLabel": "메시지 알림",
+          "hint": "이 기기가 온라인 또는 오프라인 상태가 되면 Slack Bot이 알림 메시지를 보냅니다"
+        },
         "toggleAria": "Slack 연결 활성 상태 전환",
         "installApp": "Slack 앱 설치",
         "status": {
@@ -2443,7 +2588,9 @@
           "aliasPlaceholder": "별칭, 예: my-server",
           "addWorkspace": "작업 디렉터리 추가",
           "removeWorkspace": "이 작업 디렉터리 삭제",
-          "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)"
+          "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)",
+          "defaultWorkspaceChip": "기본값: {{name}}",
+          "defaultWorkspaceAria": "X에서 보낸 작업에 사용할 기본 작업 디렉터리 선택"
         },
         "binding": {
           "copyLink": "링크 복사",
@@ -2501,7 +2648,7 @@
           "disabledHint": "스위치를 켠 뒤 Telegram의 안내에 따라 계정 연결을 완료하세요.",
           "toggleAria": "Telegram 연결 전환",
           "connect": "Telegram 연결",
-          "openTelegram": "Telegram 열기",
+          "openApp": "Telegram 열기",
           "cancel": "연결 취소",
           "retry": "연결 다시 시도",
           "openBot": "봇 열기",
@@ -2522,6 +2669,74 @@
             "failed": "연결 실패",
             "revoked": "연결 해제됨",
             "superseded": "다른 기기에 연결됨"
+          },
+          "behavior": {
+            "title": "리액션과 인용",
+            "emojiLabel": "이모지 리액션",
+            "emojiOption": { "off": "끄기", "minimal": "기본", "expressive": "생동감" },
+            "emojiHint": {
+              "off": "이모지 리액션을 달지 않습니다.",
+              "minimal": "수신 시 👀, 성공 👍, 실패 👎.",
+              "expressive": "성공과 실패로 나눈 리액션 풀에서 무작위로 선택합니다."
+            },
+            "groupQuoteLabel": "그룹에서 질문 인용해 답장",
+            "quoteOption": { "off": "안 함", "first": "첫 답장만", "all": "매번" },
+            "groupQuoteHint": {
+              "off": "그룹 답변을 질문에 연결하지 않습니다.",
+              "first": "각 답변의 첫 메시지가 질문을 인용합니다(권장).",
+              "all": "답변의 모든 메시지가 질문을 인용합니다."
+            },
+            "dmQuoteLabel": "DM에서 메시지 인용해 답장",
+            "dmQuoteHint": {
+              "off": "DM 답변은 인용 없이 보냅니다(기본).",
+              "first": "첫 답장이 보낸 메시지를 인용합니다."
+            },
+            "error": {
+              "load": "Telegram 동작 설정을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
+              "save": "Telegram 동작 설정을 저장하지 못했습니다. 마지막으로 확인된 설정으로 복원했습니다.",
+              "retry": "다시 불러오기"
+            }
+          },
+          "groups": {
+            "title": "그룹 참여 모드",
+            "hint": "공식 봇이 본 그룹이 표시됩니다. 활성 모드는 연결된 계정의 모든 발언에만 적용되며, 다른 멤버의 발언은 로컬 문맥에만 추가되고 작업을 시작할 수 없습니다.",
+            "empty": "아직 그룹이 없습니다. 봇을 추가하고 연결된 계정으로 메시지를 보내세요.",
+            "contactsOn": "그룹의 다른 발언자는 스마트 연락처에 자동 등록됩니다.",
+            "contactsOff": "스마트 연락처가 꺼져 있어 다른 멤버가 자동 등록되지 않습니다.",
+            "contactsEnable": "켜기",
+            "error": {
+              "load": "Telegram 그룹을 불러오지 못했습니다. 연결을 확인하고 다시 시도하세요.",
+              "save": "그룹 참여 모드를 저장하지 못했습니다. 마지막으로 확인된 모드로 복원했습니다.",
+              "retry": "다시 불러오기"
+            },
+            "mode": { "mention": "@만", "always": "활성" }
+          }
+        },
+        "x": {
+          "description": "X (Twitter) 계정을 연결하고 X에서 Cindy bot을 멘션해 작업을 요청하세요.",
+          "disabledHint": "스위치를 켠 뒤 안내에 따라 X 계정 인증을 완료하세요.",
+          "toggleAria": "X 연결 전환",
+          "connect": "X 연결",
+          "openApp": "X 열어 인증하기",
+          "cancel": "연결 취소",
+          "retry": "다시 연결",
+          "openBot": "X에서 bot 보기",
+          "unlink": "X 연결 해제",
+          "unlinkConfirmTitle": "X 연결을 해제할까요?",
+          "unlinkConfirmDescription": "해제하면 X에서 이 기기로 작업을 보낼 수 없습니다. 로컬 프로젝트와 다른 채널 연결에는 영향이 없습니다.",
+          "status": {
+            "checking": "서버 지원 확인 중…",
+            "unavailable": "이 서버에서는 아직 사용할 수 없습니다",
+            "disabled": "비활성화됨",
+            "none": "연결되지 않음",
+            "pending": "X를 열어 계정 인증을 완료하세요",
+            "awaiting_confirmation": "X에서 인증을 확인하세요",
+            "confirmed": "{{user}} 님이 {{bot}} 과 연결됨",
+            "denied": "인증이 거부되었습니다",
+            "expired": "인증 링크가 만료되었습니다",
+            "failed": "연결에 실패했습니다",
+            "revoked": "연결이 해제되었습니다",
+            "superseded": "다른 기기에서 연결됨"
           }
         }
       },
@@ -2541,7 +2756,7 @@
     "tina": {
       "chat": {
         "title": "대화",
-        "description": "저장소에 연결되지 않은 대화입니다. Slack 또는 Telegram에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
+        "description": "저장소에 연결되지 않은 대화입니다. Slack, Telegram 또는 X에서 \"chat\"을 선택하면 대화 lane마다 세션을 사용할 수 있습니다."
       },
       "prefs": {
         "agentLabel": "Agent",
@@ -2550,6 +2765,7 @@
         "permissionLabel": "권한 모드",
         "providerSlack": "Slack",
         "providerTelegram": "Telegram",
+        "providerX": "X",
         "requireConnected": "{{provider}} 연결 후 편집할 수 있습니다(위의 스위치를 켜고 연결을 기다려 주세요).",
         "requireBinding": "먼저 {{provider}} 계정 연결을 완료해 주세요.",
         "serverUnsupported": "서버 버전이 오래되었거나 응답이 없어 설정을 불러올 수 없습니다.",
@@ -2626,9 +2842,8 @@
         "personal": "개인"
       },
       "tips": {
-        "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
-        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "cindy": "Cindy가 제공하고 관리합니다. 봇을 직접 만들거나 인증 정보를 준비할 필요 없이 안내에 따라 연결하면 바로 사용할 수 있습니다.",
+        "personal": "본인의 계정이나 봇을 연결하고 필요한 인증 정보를 직접 관리합니다. 계정, 권한 및 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
@@ -2637,7 +2852,9 @@
           "slack": "새 Slack 스레드는 이 Agent와 모델을 사용합니다.",
           "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
-          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
+          "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
+          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
+          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -2674,8 +2891,8 @@
           "description": "설정 페이지를 엽니다"
         },
         "new-maker": {
-          "label": "새 대화",
-          "description": "새 대화를 시작합니다"
+          "label": "새 세션",
+          "description": "새 세션을 시작합니다"
         },
         "close-tab-or-window": {
           "label": "탭 또는 창 닫기",
@@ -2736,6 +2953,42 @@
         "open-terminal": {
           "label": "터미널 열기",
           "description": "오른쪽 사이드바에서 터미널을 엽니다(이미 열려 있으면 포커스)"
+        },
+        "switch-session-1": {
+          "label": "1번째 세션으로 이동",
+          "description": "사이드바에 표시된 1번째 세션으로 이동합니다"
+        },
+        "switch-session-2": {
+          "label": "2번째 세션으로 이동",
+          "description": "사이드바에 표시된 2번째 세션으로 이동합니다"
+        },
+        "switch-session-3": {
+          "label": "3번째 세션으로 이동",
+          "description": "사이드바에 표시된 3번째 세션으로 이동합니다"
+        },
+        "switch-session-4": {
+          "label": "4번째 세션으로 이동",
+          "description": "사이드바에 표시된 4번째 세션으로 이동합니다"
+        },
+        "switch-session-5": {
+          "label": "5번째 세션으로 이동",
+          "description": "사이드바에 표시된 5번째 세션으로 이동합니다"
+        },
+        "switch-session-6": {
+          "label": "6번째 세션으로 이동",
+          "description": "사이드바에 표시된 6번째 세션으로 이동합니다"
+        },
+        "switch-session-7": {
+          "label": "7번째 세션으로 이동",
+          "description": "사이드바에 표시된 7번째 세션으로 이동합니다"
+        },
+        "switch-session-8": {
+          "label": "8번째 세션으로 이동",
+          "description": "사이드바에 표시된 8번째 세션으로 이동합니다"
+        },
+        "switch-session-9": {
+          "label": "9번째 세션으로 이동",
+          "description": "사이드바에 표시된 9번째 세션으로 이동합니다"
         }
       },
       "none": "설정 안 됨",
@@ -2763,7 +3016,8 @@
         "origin": {
           "public": "공개",
           "organization": "팀 공유",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
         "useAction": "사용",
@@ -2776,7 +3030,8 @@
           "public": "공개",
           "organization": "조직",
           "personal": "개인",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "install": "설치",
         "details": "상세",
@@ -2802,10 +3057,69 @@
         },
         "securityTitle": "설치 및 권한",
         "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
+        "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증합니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
         "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
         "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 설치합니다. 설치가 완료되면 자동으로 활성화되며, 언제든지 비활성화하거나 설정을 변경할 수 있습니다.",
-        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다."
+        "customInstallConfirmDescription": "사용자 지정 마켓의 플러그인으로 서버 무결성 검증을 거치지 않았으며, 설치 전에 매니페스트를 검증합니다. 설치 후 플러그인이 자동으로 활성화되며 언제든 비활성화하거나 설정을 변경할 수 있습니다.",
+        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다.",
+        "sources": {
+          "addMarketplace": "플러그인 마켓 추가…",
+          "dialogTitle": "플러그인 마켓 추가",
+          "dialogDescription": "GitHub 리포지토리, Git URL 또는 로컬 폴더에서 플러그인 마켓을 추가합니다.",
+          "learnMore": "자세히 알아보기",
+          "sourceLabel": "소스",
+          "sourcePlaceholder": "openai/plugins 또는 git@github.com:org/repo.git",
+          "refLabel": "Git 참조",
+          "refPlaceholder": "기본 브랜치",
+          "sparseLabel": "스파스 경로",
+          "sparsePlaceholder": "한 줄에 하나의 경로(예: plugins/codex)",
+          "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만입니다. Git 소스는 사용할 수 없으며 로컬 폴더 소스는 계속 사용할 수 있습니다.",
+          "listTitle": "추가된 마켓",
+          "pluginCount": "플러그인 {{count}}개",
+          "sourceError": "읽기 실패",
+          "localBadge": "로컬",
+          "defaultRef": "기본 브랜치",
+          "neverSynced": "동기화되지 않음",
+          "refresh": "새로고침",
+          "remove": "제거",
+          "removeConfirmTitle": "마켓 \"{{name}}\"을(를) 제거할까요?",
+          "removeConfirmDescription": "제거하면 이 마켓의 플러그인이 더 이상 표시되지 않습니다. 설치된 플러그인은 유지됩니다.",
+          "close": "닫기",
+          "add": "마켓 추가",
+          "errors": {
+            "invalidSource": "소스 형식이 올바르지 않습니다. GitHub owner/repo, Git URL 또는 로컬 폴더 경로를 사용하세요.",
+            "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만이므로 Git 소스를 추가할 수 없습니다.",
+            "cloneAuthFailed": "이 리포지토리에 접근할 수 없습니다. 비공개 리포지토리의 경우 먼저 시스템에 Git 인증(credential helper 또는 SSH key)을 구성하세요.",
+            "credentialsNotAllowed": "소스 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다. 시스템 Git 인증(credential helper 또는 SSH key)을 사용하세요.",
+            "cloneFailed": "리포지토리를 클론하지 못했습니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
+            "refNotFound": "지정한 Git 참조를 찾을 수 없습니다. 브랜치 또는 태그 이름을 확인하세요.",
+            "manifestMissing": "이 소스에서 지원되는 marketplace.json 매니페스트를 찾을 수 없습니다.",
+            "duplicate": "이 마켓은 이미 추가되어 있습니다.",
+            "notFound": "이 마켓이 존재하지 않거나 이미 제거되었습니다."
+          },
+          "guide": {
+            "title": "사용자 지정 플러그인 마켓 가이드",
+            "intro": "플러그인 마켓은 매니페스트 파일을 포함하는 Git 리포지토리 또는 로컬 폴더로, Cindy 플러그인 세트를 배포하는 데 사용됩니다.",
+            "structureTitle": "디렉터리 구조",
+            "structureBody": "마켓에는 매니페스트 파일 하나와 플러그인별 디렉터리가 필요합니다. 각 플러그인 디렉터리에는 유효한 ghost.json(플러그인 신원 카드)이 있어야 합니다.",
+            "structureLabelManifest": "매니페스트",
+            "structureLabelGhostCard": "플러그인 카드",
+            "structureLabelEntry": "플러그인 진입점",
+            "structureNote": "매니페스트는 다음 위치 중 하나에 둘 수 있습니다:",
+            "manifestTitle": "매니페스트 형식",
+            "manifestBody": "name은 마켓의 고유 식별자입니다(추가 후 이 이름으로 관리합니다). plugins 배열의 source는 리포지토리 내 플러그인 디렉터리를 상대 경로로 가리킵니다. {\"source\": \"local\", \"path\": \"…\"} 객체 형식도 지원합니다.",
+            "sourceTitle": "소스 형식",
+            "sourceBody": "GitHub 약칭 owner/repo, 전체 Git URL(https / ssh / git@), 로컬 폴더 경로(~ 지원)를 사용할 수 있습니다. Git 참조에는 브랜치, 태그 또는 commit을 입력하고, 비우면 기본 브랜치를 사용합니다. 스파스 경로는 한 줄에 하나씩 입력하며 리포지토리의 지정된 하위 디렉터리만 체크아웃합니다(대형 리포지토리에 유용).",
+            "authTitle": "비공개 리포지토리",
+            "authBody": "인증은 전적으로 시스템 Git 구성에 의존하며 Cindy는 Git 자격 증명을 저장하지 않습니다. SSH: 이 머신에 사용 가능한 key가 구성되어 있어야 합니다. 조직이 SAML SSO를 강제하는 경우 GitHub SSH key 설정에서 Configure SSO로 해당 조직에 key를 승인해야 합니다. HTTPS: Personal Access Token을 사용하고 시스템 credential helper에 저장합니다.",
+            "rulesTitle": "설치 규칙",
+            "rulesBody": "플러그인 id는 전역적으로 고유하며 선착순입니다. 설치된 플러그인과의 충돌은 명확히 표시됩니다. cindy- 같은 공식 예약 접두사를 사용하는 플러그인은 사용자 지정 마켓에서 설치할 수 없습니다. 설치 전에 플러그인이 선언한 권한을 모두 보여주며, 확인하면 설치가 완료되고 자동으로 활성화됩니다.",
+            "copy": "가이드 복사",
+            "copied": "가이드를 클립보드에 복사했습니다.",
+            "copyFailed": "복사에 실패했습니다. 다시 시도하세요."
+          }
+        }
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
@@ -2832,7 +3146,7 @@
       "projectSwitchLockedTip": "이 플러그인은 전역에서 비활성 상태입니다. 먼저 '전역' 보기에서 활성화해 주세요",
       "projectBanner": {
         "title": "프로젝트 \"{{name}}\" 설정 중",
-        "desc": "여기 스위치는 이 프로젝트에만 적용됩니다. 끈 플러그인은 새 세션에 나타나지 않습니다",
+        "desc": "여기 스위치는 이 프로젝트에만 적용됩니다. 끈 플러그인은 이 프로젝트에서 사용할 수 없습니다",
         "backToGlobal": "전역으로 돌아가기"
       },
       "scopePicker": {
@@ -2863,7 +3177,7 @@
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
-        "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다(새 세션부터 적용)",
+        "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
         "projectEnabled": "\"{{name}}\"이(가) 이 프로젝트에서 전역 설정을 따릅니다"
       },
       "panelError": {
@@ -2932,6 +3246,8 @@
         "resident": "상주 실행(활성화하면 시작되며 호출이 없어도 백그라운드 프로세스 유지)",
         "residentDetail": "대기 중에도 소량의 메모리를 사용합니다. 비활성화하거나 제거하면 프로세스가 즉시 종료됩니다.",
         "subscribeTopics": "세션 활동을 수신(턴 및 세션 이벤트, 메시지 내용 제외)",
+        "subscribeActivity": "AI가 언제 생각하고 언제 사용자를 기다리는지 수신",
+        "subscribeActivityDetail": "시점만 알 수 있습니다. 생각이 언제 시작되고 끝나는지, 그리고 AI가 언제 사용자의 승인이나 답변을 기다리는지만 파악합니다. 생각의 내용, 승인 대기 중인 작업, 관련된 명령과 파일, 계획 본문, 질문, 사용자의 답변은 전혀 볼 수 없으며 사용자를 대신해 승인할 수도 없습니다.",
         "subscribeHooks": "보내는 메시지를 읽고 차단하거나 고쳐 쓸 수 있음",
         "subscribeHooksDetail": "전송 전에 각 메시지를 검토합니다. 차단하거나 본문을 고쳐 쓴 뒤 전송할 수 있으며, 차단된 메시지는 수정 후 다시 보낼 수 있습니다.",
         "subscribeAssistantReply": "AI의 답변을 읽고 다시 쓸 수 있음",
@@ -2941,6 +3257,8 @@
         "cardExternalLinkDetail": "카드의 링크를 클릭하면 확인 대화 상자가 표시되며, 승인 후에만 시스템 브라우저에서 열립니다. http/https 주소만 허용됩니다.",
         "notify": "시스템 알림 표시 가능(화면 상단의 가벼운 알림)",
         "notifyDetail": "알림 내용은 이 플러그인이 제공하며 알림에는 이름이 표시됩니다. 자동으로 사라지며 작업을 방해하지 않습니다.",
+        "confirm": "확인 대화상자로 동의를 요청할 수 있음",
+        "confirmDetail": "작업 전에 Cindy 자체와 동일한 확인 대화상자를 열어 물어볼 수 있습니다. 질문 내용은 플러그인이 제공하며 대화상자에는 그 이름이 표시됩니다. 확인이든 취소든 직접 클릭해야 하고 플러그인은 스스로 누를 수 없습니다. 동시에 하나만 열 수 있으며 너무 자주 요청하면 차단됩니다.",
         "fsWrite": "파일을 쓸 수 있음(생성/수정)",
         "fsWriteDetail": "전용 데이터 폴더에는 언제든지 쓸 수 있습니다. 현재 세션의 작업 디렉터리 쓰기는 세션의 권한 모드를 따릅니다(자동 승인 모드에서는 바로 쓰고, 개별 확인 모드에서는 먼저 승인을 요청합니다). 그 외 폴더에 쓰려면 매번 확인이 필요합니다. 파일은 항상 호스트가 대신 기록하며 플러그인 자체는 파일 시스템에 직접 접근할 수 없습니다.",
         "networkHost": "네트워크 도메인 {{host}}에 접근",
@@ -3087,6 +3405,9 @@
         "dialogTitle": "폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 폴더 선택을 요청합니다"
       },
+      "confirm": {
+        "dialogTitle": "플러그인 \"{{name}}\"이(가) 확인을 요청합니다"
+      },
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 사이드바에 세션을 만들기 위해 프로젝트 폴더 선택을 요청합니다"
@@ -3144,11 +3465,40 @@
     },
     "contacts": {
       "title": "스마트 연락처",
-      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 이 기기에만 저장되며, 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
+      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 기본적으로 이 기기에만 저장되며 필요할 때 기기 간 동기화를 켤 수 있습니다. 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
       "enable": {
         "label": "스마트 연락처 사용",
         "description": "켜면 에이전트가 연락처 정보를 조회하고 자동으로 수집할 수 있습니다(불확실한 항목은 확인 대기로 이동). 꺼도 여기에서 기존 데이터를 보고 관리하는 데는 영향이 없습니다.",
         "toggleAria": "스마트 연락처 전환"
+      },
+      "sync": {
+        "label": "내 기기 간 동기화",
+        "description": "참여할 각 데스크톱에서 한 번 켜세요. 온라인 기기는 자동으로 동기화하며, 같은 로컬 네트워크에서는 직접 연결을 우선합니다. 그 외에는 종단 간 암호화된 릴레이 데이터를 사용합니다. 비교는 프로그램으로만 처리되어 모델이나 token을 사용하지 않습니다.",
+        "toggleAria": "연락처 기기 동기화 전환",
+        "syncNow": "지금 동기화",
+        "onlineDevices_other": "다른 기기 {{count}}대 온라인",
+        "route": {
+          "lan": "로컬 네트워크",
+          "relay": "암호화 릴레이"
+        },
+        "status": {
+          "loading": "동기화 상태 확인 중…",
+          "signInRequired": "기기 간 동기화를 사용하려면 Cindy 계정에 로그인하세요",
+          "off": "동기화 꺼짐",
+          "waiting": "동기화를 켠 다른 데스크톱 기기가 온라인이 되기를 기다리는 중",
+          "syncing": "안전하게 동기화 중…",
+          "ready": "준비됨 — 기기가 온라인이 되면 자동으로 동기화합니다",
+          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        },
+        "error": {
+          "secure-storage-unavailable": "시스템 보안 저장소를 사용할 수 없어 기기 비밀 키를 보호할 수 없습니다",
+          "peer-identity-changed": "기기 식별 정보가 변경되어 데이터 보호를 위해 동기화를 중지했습니다",
+          "sync-failed": "동기화에 실패했습니다. 다음에 기기가 온라인이 되면 다시 시도합니다"
+        },
+        "toast": {
+          "enabled": "기기 동기화를 켰습니다",
+          "disabled": "기기 동기화를 껐습니다"
+        }
       },
       "stats": "{{people}}명 / 조직 {{orgs}}개 / 그룹 {{groups}}개",
       "kind": {
@@ -3299,6 +3649,12 @@
         "mailPrompt": "이메일에서 스마트 연락처를 만들어 주세요: 먼저 연결된 메일 도구를 확인하고(없다면 연결 방법을 알려 주세요), 최근 6개월간의 주고받은 메일을 스캔해 실제로 왕래하는 연락처를 등록해 주세요 — 빈도가 높고 신원이 명확한 사람은 바로 확정, 불확실한 사람은 pending으로. 마케팅 메일, 알림 봇, 일회성 발신자는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요.",
         "imPrompt": "채팅 도구에서 스마트 연락처를 만들어 주세요: 먼저 연결된 IM(Feishu / Slack / WeChat 등)을 확인하고(없다면 연결 방법을 알려 주세요), 최근 자주 대화하는 사람들을 연락처로 정리해 주세요. 불확실한 사람은 pending으로, 그룹 봇과 일회성 대화는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요."
       }
+    },
+    "remotePermission": {
+      "label": "권한 모드",
+      "hint": "원격 IM은 승인이 필요한 작업의 확인 절차를 유지합니다.",
+      "fullAccessDisabled": "안전하게 확인할 수 없는 작업이 직접 실행되지 않도록 원격 IM에서는 Full Access를 사용할 수 없습니다.",
+      "permissionModeDisabled": "원격 IM은 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드를 사용할 수 없습니다."
     }
   },
   "remoteDevice": {
@@ -3628,6 +3984,7 @@
     "costBreakdownHeader": "모델별:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "제안: {{suggestion}}",
+    "noBilledCost": "이번 턴의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
     "suggestion": {
       "lowCache": "캐시 적중률이 낮아 이번 턴에서 더 많은 컨텍스트가 다시 과금되었습니다"
     }
@@ -4158,14 +4515,13 @@
       "preparingButton": "준비 중",
       "preparingTooltip": "새 버전 준비 중…",
       "preparingAria": "새 버전 준비 중입니다. 잠시만 기다려 주세요",
-      "confirmTitle": "재시작하여 업데이트?",
-      "confirmHint": "앱이 자동으로 재시작됩니다",
-      "confirmBusyHint": "아직 실행 중인 작업이 있습니다. 재시작하면 작업이 중단됩니다",
-      "confirmButton": "재시작",
+      "confirmTitle": "아직 실행 중인 작업이 있습니다",
+      "confirmBusyHint": "재시작하면 작업이 중단됩니다",
+      "confirmButton": "그래도 앱 재시작",
       "cancel": "취소",
-      "confirmTooltip": "재시작하여 업데이트 적용",
+      "confirmTooltip": "아직 실행 중인 작업이 있습니다 — 재시작하면 중단됩니다",
       "cancelTooltip": "취소",
-      "confirmAria": "재시작하여 업데이트 적용",
+      "confirmAria": "그래도 재시작하여 업데이트를 적용하고 실행 중인 작업을 중단",
       "cancelAria": "업데이트 취소",
       "dismiss": "나중에",
       "dismissAria": "업데이트 알림 일시 숨김"
@@ -4277,12 +4633,12 @@
   },
   "imBot": {
     "conflictDialog": {
-      "title": "이 Feishu Bot App은 이미 사용 중입니다",
+      "title": "이 {{service}} Bot App은 이미 사용 중입니다",
       "bodyPrefix": "현재 App",
       "bodyMain": "은 다른 기기에서 이미 장시간 연결을 시작했습니다. 동료가 동일한 App ID를 사용 중일 수 있습니다. 하나의 App은 한 기기에만 바인딩될 수 있으므로 충돌을 피하기 위해 본 기기에서 자동으로 연결이 해제되었습니다.",
       "suggestionsHeading": "두 가지 처리 방법:",
       "suggestion1": "1. 상대방과 협의해 시간대를 분리해 사용하고, 상대방이 자신의 기기에서 인증 정보를 먼저 지운 뒤 본 기기에서 재연결합니다.",
-      "suggestion2": "2. Feishu 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
+      "suggestion2": "2. {{service}} 오픈 플랫폼에서 자신만의 별도 App을 만들어 동료와 각자 사용합니다.",
       "dismiss": "무시",
       "createOwnApp": "내 App 만들기 ↗"
     }
@@ -4397,7 +4753,7 @@
         "search": "검색",
         "local": "로컬",
         "projects": "프로젝트",
-        "conversations": "대화"
+        "conversations": "세션"
       }
     },
     "addRemoteProject": {
@@ -4572,7 +4928,9 @@
       "detecting": "환경 감지 중…",
       "gitMissing": "git이 감지되지 않습니다. 먼저 설치하세요",
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
-      "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다"
+      "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",
+      "toggleAria": "worktree 격리 사용",
+      "chipTooltip": "독립된 worktree에서 이 대화를 시작하며 현재 브랜치에는 영향을 주지 않습니다"
     },
     "branchChip": {
       "label": "브랜치",
@@ -4580,7 +4938,8 @@
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
       "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작됩니다"
+      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
+      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -4644,6 +5003,10 @@
       "openHint": "Worker 를 불러 함께 작업",
       "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
       "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
+      "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
+      "remoteContinueNotice": " 이 메시지는 단일 세션으로 계속 전송됩니다.",
+      "handoffRecoveredMessage": "지난번 협업 시작이 중단되었습니다. 전송되지 않은 메시지를 입력창에 복원했습니다.",
+      "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
       "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
       "stopHint": "협업 중지",
       "stopAria": "협업 중지",
@@ -4913,8 +5276,11 @@
       "lastTool": "최근 도구: {{tool}}",
       "outputFile": "출력: {{path}}"
     },
+    "planPill": {
+      "step": "단계 {{current}} / {{total}}"
+    },
     "forkOrigin": {
-      "label": "원래 대화에서 생성됨"
+      "label": "원래 세션에서 생성됨"
     },
     "imageMissing": {
       "title": "이미지가 손실되었습니다"
@@ -4924,17 +5290,25 @@
       "label_one": "새 메시지 {{count}}개",
       "label_other": "새 메시지 {{count}}개"
     },
+    "messageNavRail": {
+      "aria": "질문 탐색",
+      "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
+      "attachmentOnly_one": "첨부파일 {{count}}개",
+      "attachmentOnly_other": "첨부파일 {{count}}개",
+      "hiddenEarlier_one": "이전 질문 {{count}}개",
+      "hiddenEarlier_other": "이전 질문 {{count}}개"
+    },
     "messageActionBar": {
       "copy": "메시지 복사",
       "linkCopied": "링크가 복사되었습니다",
       "moreActions": "메시지 추가 작업",
-      "copyLink": "현재 대화 링크 복사",
+      "copyLink": "현재 메시지 링크 복사",
       "copyLinkFailed": "링크를 복사하지 못했습니다",
       "rewind": "여기로 돌아가기",
-      "fork": "새 대화에서 계속하기",
-      "forkConfirmTitle": "여기서 새 대화를 시작할까요?",
-      "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 대화를 만듭니다. 원래 대화는 변경되지 않으며, 이후 두 대화의 메시지는 서로에게 영향을 주지 않습니다.",
-      "forkConfirm": "새 대화 시작",
+      "fork": "새 세션에서 계속하기",
+      "forkConfirmTitle": "여기서 새 세션을 시작할까요?",
+      "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 세션을 만듭니다. 원래 세션은 변경되지 않으며, 이후 두 세션의 메시지는 서로에게 영향을 주지 않습니다.",
+      "forkConfirm": "새 세션 시작",
       "forkCancel": "취소",
       "delete": "이 메시지 삭제",
       "deleteConfirmTitle": "이 메시지를 삭제할까요?",
@@ -4947,6 +5321,7 @@
       "turnCost": "이번 턴 비용",
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "이번 사용자 턴 합계: {{cost}}",
       "userTurnCostDetailsTitle": "마지막 SDK 세그먼트"
     },
@@ -4954,11 +5329,18 @@
       "retryTitle": "마지막 메시지 다시 보내기",
       "cancelTitle": "오류 알림 닫기",
       "retry": "다시 시도",
-      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
-      "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
+      "continueAfterReset": "재설정 후 계속",
+      "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
+      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
+      "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
+      "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
+      "switchClaudeSubscription": "Claude.ai로 전환 후 재시도",
+      "switchClaudeSubscriptionTitle": "이 세션을 Claude.ai 구독으로 전환하고 다시 시도",
+      "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
+      "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 대화를 시작하세요.",
+      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexSessionExpiredDialog": {
         "title": "OpenAI 연결 업데이트 필요",
@@ -5303,7 +5685,7 @@
         "detail": {
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
-          "sessionTotal": "이 대화에서 재연결 {{count}}회"
+          "sessionTotal": "이 세션에서 재연결 {{count}}회"
         }
       },
       "autoResumeSeparator": {
@@ -5384,7 +5766,7 @@
         "messageCount_other": "메시지 {{count}}개",
         "truncated": "일부 생략"
       },
-      "forkBusy": "현재 응답이 종료된 후 여기서 새 대화를 시작해 주세요",
+      "forkBusy": "현재 응답이 종료된 후 여기서 새 세션을 시작해 주세요",
       "editStopTimeout": "작업 중지 대기 시간이 초과되었습니다. 다시 시도하세요",
       "editQueueNotEmpty": "이 세션에 대기 중인 메시지가 있습니다. 먼저 전송하거나 제거한 후 편집하세요",
       "editNotLast": "세션에 더 새로운 메시지가 있어 이 메시지는 더 이상 최신이 아니므로 편집하여 재전송할 수 없습니다",
@@ -5393,11 +5775,11 @@
       "editSend": "전송",
       "editRollbackHint": "전송하면 이전 턴에서 변경된 파일 {{count}}개가 되돌려집니다",
       "forkErrors": {
-        "unsupportedHistory": "이 지점에 해당하는 이전 에이전트 세션을 사용할 수 없어 여기서 새 대화를 시작할 수 없습니다",
-        "noPriorAssistant": "AI 응답 뒤의 메시지에서 새 대화를 시작해 주세요",
-        "sourceNeverRan": "원래 대화가 아직 실행되지 않아 새 대화를 시작할 수 없습니다",
-        "codexStateUnavailable": "Codex 대화 상태를 사용할 수 없어 새 대화를 시작할 수 없습니다. {{detail}}",
-        "generic": "새 대화를 시작하지 못했습니다. 다시 시도해 주세요"
+        "unsupportedHistory": "이 지점에 해당하는 이전 에이전트 세션을 사용할 수 없어 여기서 새 세션을 시작할 수 없습니다",
+        "noPriorAssistant": "AI 응답 뒤의 메시지에서 새 세션을 시작해 주세요",
+        "sourceNeverRan": "원래 세션이 아직 실행되지 않아 새 세션을 시작할 수 없습니다",
+        "codexStateUnavailable": "Codex 세션 상태를 사용할 수 없어 새 세션을 시작할 수 없습니다. {{detail}}",
+        "generic": "새 세션을 시작하지 못했습니다. 다시 시도해 주세요"
       }
     },
     "threadContext": {
@@ -5656,12 +6038,13 @@
     },
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
+      "remoteWorktreeCleanupPending": "이전 원격 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
       "remoteProviderUpdating": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
       "remoteNativeOauthUnavailable": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
-      "worktreeMissingRepo": "worktree를 만들 수 없음: 현재 디렉터리의 리포지토리 루트가 없습니다",
-      "worktreeRepoHint": "작업 디렉터리를 다시 선택하고 우측 하단의 폴더 표시가 갱신된 후 다시 시도하세요",
+      "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
+      "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",
       "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)"
@@ -5698,11 +6081,11 @@
       },
       "showAllSessions": "모두 표시 {{count}}개",
       "dialogues": "대화",
-      "newDialogue": "새 대화",
+      "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
       "dialoguesToggleCollapse": "대화 접기",
       "loadingDialogues": "불러오는 중…",
-      "noDialogues": "대화 없음",
+      "noDialogues": "세션 없음",
       "dialogueSettings": "대화 정리",
       "dialogueSettingsAria": "대화 정리(정렬: {{sortBy}})",
       "dialogueSortHeading": "정렬",
@@ -5902,7 +6285,7 @@
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
         "openInNewWindow": "새 창에서 열기",
         "exportShare": "세션 내보내기…",
-        "copySessionLink": "대화 링크 복사"
+        "copySessionLink": "세션 링크 복사"
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
@@ -6137,11 +6520,11 @@
       "open": "검색",
       "placeholder": "제목 또는 내용 검색…",
       "clear": "검색 지우기",
-      "empty": "키워드를 입력해 대화 제목과 내용을 검색하세요",
+      "empty": "키워드를 입력해 세션 제목과 내용을 검색하세요",
       "searching": "검색 중…",
       "failed": "검색 실패",
-      "noResults": "일치하는 대화가 없습니다",
-      "jumpFailed": "대화를 열었지만 일치한 메시지로 이동하지 못했습니다",
+      "noResults": "일치하는 세션이 없습니다",
+      "jumpFailed": "세션을 열었지만 일치한 메시지로 이동하지 못했습니다",
       "moreHits": "관련 {{count}}곳 더 있음",
       "kind": {
         "title": "제목",
@@ -6189,6 +6572,10 @@
     "empty": {
       "promptHeading": "자동화가 아직 없습니다",
       "promptDescription": "cron 자동화를 만들어 Claude Code 또는 Codex로 프롬프트를 일정에 따라 실행하세요."
+    },
+    "usageLimitRecovery": {
+      "name": "사용량 제한 재설정 후 작업 계속",
+      "prompt": "중단된 지점부터 현재 작업을 계속하세요."
     },
     "template": {
       "useTemplate": "초보자 도움말",
@@ -6415,6 +6802,8 @@
         "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
         "silentRunInfoAria": "조용히 실행 규칙 보기",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
+        "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
+        "configWecomGroup": "WeCom 그룹 알림 설정",
         "configFeishu": "Feishu Bot 설정"
       },
       "runSession": {
@@ -6500,6 +6889,7 @@
     },
     "chips": {
       "selectProject": "프로젝트 선택",
+      "chooseTime": "시간 선택",
       "recent": "최근",
       "browseFolder": "다른 폴더 선택",
       "advanced": "고급",
@@ -6582,28 +6972,28 @@
     "deleteDialog": {
       "title": "자동화 \"{{name}}\"을(를) 삭제하시겠습니까?",
       "titleFallback": "자동화를 삭제하시겠습니까?",
-      "description": "향후 트리거가 중지됩니다. 이 자동화가 이미 생성한 대화를 어떻게 처리할지 선택하세요.",
-      "sessionCountPending": "생성된 대화를 확인하는 중…",
-      "sessionCount": "생성된 대화 {{count}}개",
+      "description": "향후 트리거가 중지됩니다. 이 자동화가 이미 생성한 세션을 어떻게 처리할지 선택하세요.",
+      "sessionCountPending": "생성된 세션을 확인하는 중…",
+      "sessionCount": "생성된 세션 {{count}}개",
       "inflightCount": "현재 {{count}}건의 실행이 진행 중이며 삭제하면 중지됩니다",
-      "optionAria": "생성된 대화 처리 방식 선택",
+      "optionAria": "생성된 세션 처리 방식 선택",
       "option": {
         "keep": {
-          "title": "대화 유지",
-          "description": "자동화 작업만 삭제하고 대화는 사이드바에 유지합니다."
+          "title": "세션 유지",
+          "description": "자동화 작업만 삭제하고 세션은 사이드바에 유지합니다."
         },
         "archive": {
-          "title": "대화 보관",
-          "description": "자동화 작업을 삭제하고 생성된 대화를 보관함으로 이동합니다."
+          "title": "세션 보관",
+          "description": "자동화 작업을 삭제하고 생성된 세션을 보관함으로 이동합니다."
         },
         "delete": {
-          "title": "대화 삭제",
-          "description": "자동화 작업과 생성된 대화를 삭제합니다. 이 작업은 되돌릴 수 없습니다."
+          "title": "세션 삭제",
+          "description": "자동화 작업과 생성된 세션을 삭제합니다. 이 작업은 되돌릴 수 없습니다."
         }
       },
       "confirm": "자동화 삭제",
-      "confirmDeleteSessions": "자동화와 대화 삭제",
-      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 대화를 처리하지 못했습니다"
+      "confirmDeleteSessions": "자동화와 세션 삭제",
+      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 세션을 처리하지 못했습니다"
     },
     "confirm": {
       "delete": {
@@ -6702,7 +7092,8 @@
     "mine": {
       "refresh": "새로 고침",
       "emptyTitle": "아직 제출한 이슈가 없습니다",
-      "startIssueChat": "/issue 로 새 채팅 시작",
+      "emptyTitleUnverified": "현재 이슈를 가져올 수 없습니다",
+      "startIssueChat": "/issue 로 새 세션 시작",
       "statusUnknown": "상태 알 수 없음",
       "sourceCindy": "Cindy에서 제출",
       "sourceGithub": "GitHub 계정",
@@ -6714,6 +7105,8 @@
       "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
       "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시하므로 목록이 완전하지 않을 수 있습니다.",
       "fetchFailedPartialHint": "최신 상태를 가져오지 못했습니다. 일부 이슈의 상태가 완전하지 않을 수 있습니다.",
+      "enhancementFailedHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. Cindy GitHub 플러그인의 액세스 토큰 권한이 부족할 수 있습니다. 플러그인 페이지에서 확인해 주세요.",
+      "enhancementFailedGenericHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. 네트워크 문제이거나 GitHub 요청 제한일 수 있습니다. 잠시 후 다시 시도해 주세요.",
       "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
     },
     "redirect": {
@@ -6980,7 +7373,13 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "로컬"
+      "sourceLocal": "로컬",
+      "import": "스킬 가져오기",
+      "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "importPickerTitle": "가져오기 위치 선택",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
+      "importFailed": "스킬 가져오기 실패"
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
@@ -7517,16 +7916,16 @@
     "toasts": {
       "googleConnected": "Google에 연결됨",
       "codexConnected": "ChatGPT 계정 연결됨",
-      "feishuBotConnected": "Feishu 봇에 연결됨",
-      "feishuBotReconnected": "Feishu 봇이 다시 연결됨",
-      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. Feishu 구성을 확인한 후 다시 시도하세요",
+      "feishuBotConnected": "IM 봇에 연결됨",
+      "feishuBotReconnected": "IM 봇이 다시 연결됨",
+      "feishuBotReconnectFailed": "다시 연결하지 못했습니다. IM 봇 구성을 확인한 후 다시 시도하세요",
       "feishuBotConflict": "이 App은 이미 사용 중입니다. 동료가 같은 App ID를 사용하고 있을 수 있습니다",
       "feishuBotConnectFailed": "연결 실패. App ID / Secret을 확인하세요",
       "feishuBotSaveFailed": "저장 실패: {{message}}",
-      "feishuBotCleared": "Feishu 봇 자격 증명이 삭제됨",
+      "feishuBotCleared": "IM 봇 자격 증명이 삭제됨",
       "feishuBotClearFailed": "삭제 실패: {{message}}",
-      "feishuBotCreatedConnected": "Feishu 봇이 생성되어 연결됨",
-      "feishuBotCreatedCheck": "Feishu 봇이 생성됨. 연결 상태를 확인하세요",
+      "feishuBotCreatedConnected": "IM 봇이 생성되어 연결됨",
+      "feishuBotCreatedCheck": "IM 봇이 생성됨. 연결 상태를 확인하세요",
       "discordBotConnected": "Discord 봇 구성이 저장됨",
       "discordBotConnectFailed": "Discord 봇 연결 실패. Token과 권한을 확인하세요",
       "discordBotSaveFailed": "저장 실패: {{message}}",
@@ -7543,13 +7942,20 @@
       "migrationPartial": "마이그레이션 완료: 성공 {{success}} / 건너뜀 {{skipped}} / 실패 {{failed}} (총 {{total}})",
       "migrationFailed": "마이그레이션 실패. 잠시 후 다시 시도하세요",
       "fetchUpdateNoticeFailed": "업데이트 알림 가져오기 실패",
-      "corruptionRestored": "{{time}}의 스냅샷에서 데이터베이스가 복원됨. 그 사이의 채팅이 손실되었을 수 있습니다",
+      "corruptionRestored": "{{time}}의 스냅샷에서 데이터베이스가 복원됨. 그 사이의 대화 기록이 손실되었을 수 있습니다",
       "schemaDriftWarning": "로컬 데이터베이스 버전 기록이 일치하지 않습니다. 최신 버전으로 업데이트한 뒤에도 이 경고가 계속 표시되면 지원팀에 문의해 주세요. 앱은 로컬 데이터를 자동으로 삭제하지 않습니다.",
       "telegramBotConnected": "Telegram 봇 구성이 저장됨",
       "telegramBotConnectFailed": "Telegram 봇 연결 실패. Token과 네트워크를 확인하세요",
       "telegramBotSaveFailed": "저장 실패: {{message}}",
       "telegramBotDisconnected": "Telegram 봇 연동이 해제됨",
-      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}"
+      "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}",
+      "dingtalkBotConnected": "DingTalk 봇이 연결됨",
+      "dingtalkBotConnectFailed": "DingTalk 봇 연결 실패. 자격 증명, Stream 모드, 네트워크를 확인하세요",
+      "dingtalkBotAuthFailed": "DingTalk에서 자격 증명을 거부했습니다. Client ID와 Client Secret이 동일한 앱의 것인지 확인하세요",
+      "dingtalkBotNetworkFailed": "DingTalk 오픈 플랫폼에 연결할 수 없습니다. 네트워크 또는 프록시를 확인한 후 다시 시도하세요",
+      "dingtalkBotStreamFailed": "자격 증명은 유효하지만 Stream 연결이 설정되지 않았습니다. 봇을 활성화하고 Stream 모드를 선택한 뒤 앱 버전을 게시하세요",
+      "dingtalkBotDisconnected": "DingTalk 봇 연동이 해제됨",
+      "dingtalkBotDisconnectFailed": "DingTalk 봇 연동 해제 실패"
     },
     "errors": {
       "openFileFailed": "시스템에서 파일을 열 수 없습니다",
@@ -7574,7 +7980,8 @@
       "discordOwnerUserIdFormat": "Discord 사용자 ID는 17-20자리 숫자여야 합니다",
       "telegramFieldsRequired": "Bot Token과 Telegram 사용자 ID 둘 다 입력해야 합니다",
       "telegramTokenFormat": "Token 형식이 잘못되었습니다. BotFather가 생성한 \"숫자:시크릿\" 형태여야 합니다",
-      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다"
+      "telegramOwnerUserIdFormat": "Telegram 사용자 ID는 숫자여야 합니다",
+      "dingtalkFieldsRequired": "Client ID와 Client Secret을 모두 입력해야 합니다"
     },
     "confirm": {
       "logoutTitle": "로그아웃",
@@ -7753,7 +8160,7 @@
     },
     "toast": {
       "usage": "사용법: /goal <목표 조건>",
-      "noSession": "목표를 설정하려면 먼저 대화를 열거나 시작하세요",
+      "noSession": "목표를 설정하려면 먼저 세션을 열거나 시작하세요",
       "failed": "목표 설정에 실패했습니다",
       "set": "목표를 설정했습니다 — 자동으로 진행합니다",
       "cleared": "목표를 지웠습니다"
@@ -7776,7 +8183,7 @@
       "failed": "학습에 실패했습니다",
       "cancel": "취소",
       "review": "제안 검토",
-      "fromConversation": "현재 대화에서 증류",
+      "fromConversation": "현재 세션에서 증류",
       "openSession": "학습 세션 열기",
       "continueHint": "이 세션에서 계속 대화하면 제안을 수정할 수 있습니다. 만족하면 \"제안 검토\"로 적용하세요"
     },

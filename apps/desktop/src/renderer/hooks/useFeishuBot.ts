@@ -24,14 +24,13 @@ import { setFeishuNotificationsEnabled } from '@/hooks/useFeishuNotificationSett
 const log = createLogger('useFeishuBot');
 
 export type FeishuBotStatus =
-  | 'idle'
-  | 'testing'
-  | 'connected'
-  | 'reconnecting'
-  | 'conflict'
-  | 'error';
+  'idle' | 'testing' | 'connected' | 'reconnecting' | 'conflict' | 'error';
+
+export type FeishuBotService = 'feishu' | 'lark';
 
 export interface UseFeishuBotReturn {
+  service: FeishuBotService;
+  setService: (service: FeishuBotService) => void;
   /** 当前 input 框里的 appId（可能未保存） */
   appId: string;
   setAppId: (v: string) => void;
@@ -70,6 +69,7 @@ const APP_ID_PATTERN = /^cli_[A-Za-z0-9]{10,30}$/;
 // Module-level cache so re-mounting (e.g. switching settings tabs) doesn't
 // flash the default `idle` state for one frame before IPC getState() resolves.
 interface FeishuBotCache {
+  service: FeishuBotService;
   appId: string;
   appSecret: string;
   status: FeishuBotStatus;
@@ -82,13 +82,22 @@ let cachedState: FeishuBotCache | null = null;
 
 export function useFeishuBot(): UseFeishuBotReturn {
   const { t } = useTranslation();
+  const [service, setServiceState] = useState<FeishuBotService>(
+    () => cachedState?.service ?? 'feishu',
+  );
   const [appId, setAppIdState] = useState(() => cachedState?.appId ?? '');
   const [appSecret, setAppSecret] = useState(() => cachedState?.appSecret ?? '');
   const [status, setStatus] = useState<FeishuBotStatus>(() => cachedState?.status ?? 'idle');
-  const [errorMessage, setErrorMessage] = useState<string | null>(() => cachedState?.errorMessage ?? null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(
+    () => cachedState?.errorMessage ?? null,
+  );
   const [hasSavedCreds, setHasSavedCreds] = useState(() => cachedState?.hasSavedCreds ?? false);
-  const [ownerOpenId, setOwnerOpenId] = useState<string | null>(() => cachedState?.ownerOpenId ?? null);
-  const [lifecycleAnnouncement, setLifecycleAnnouncementState] = useState(() => cachedState?.lifecycleAnnouncement ?? true);
+  const [ownerOpenId, setOwnerOpenId] = useState<string | null>(
+    () => cachedState?.ownerOpenId ?? null,
+  );
+  const [lifecycleAnnouncement, setLifecycleAnnouncementState] = useState(
+    () => cachedState?.lifecycleAnnouncement ?? true,
+  );
 
   const [validationError, setValidationError] = useState<string | null>(null);
   const [isSaving, setIsSaving] = useState(false);
@@ -116,6 +125,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
       if (reloadRequestVersion !== reloadRequestVersionRef.current) return;
       const nextAppId = state.appId ?? '';
       const nextAppSecret = state.appSecret ?? '';
+      const nextService: FeishuBotService = state.service === 'lark' ? 'lark' : 'feishu';
       const newerStatusPush =
         statusPushVersionRef.current !== statusPushVersion ? latestStatusPushRef.current : null;
       const nextStatus = newerStatusPush?.status ?? state.status;
@@ -124,6 +134,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
         : (state.error ?? null);
       const nextOwnerOpenId = newerStatusPush ? newerStatusPush.ownerOpenId : state.ownerOpenId;
       setStatus(nextStatus);
+      setServiceState(nextService);
       setHasSavedCreds(state.hasSecret);
       setOwnerOpenId(nextOwnerOpenId);
       setErrorMessage(nextErrorMessage);
@@ -135,6 +146,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
         setAppSecret(state.appSecret);
       }
       cachedState = {
+        service: nextService,
         appId: nextAppId || cachedState?.appId || '',
         appSecret: nextAppSecret || cachedState?.appSecret || '',
         status: nextStatus,
@@ -208,11 +220,14 @@ export function useFeishuBot(): UseFeishuBotReturn {
   }, [reloadState]);
 
   // ── setters with validation ──────────────────────────────────────────────
-  const setAppId = useCallback((v: string) => {
-    setAppIdState(v);
-    setValidationError(null);
-    if (saveSuccess) setSaveSuccess(false);
-  }, [saveSuccess]);
+  const setAppId = useCallback(
+    (v: string) => {
+      setAppIdState(v);
+      setValidationError(null);
+      if (saveSuccess) setSaveSuccess(false);
+    },
+    [saveSuccess],
+  );
 
   // ── actions ──────────────────────────────────────────────────────────────
   const save = useCallback(async () => {
@@ -236,6 +251,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
       const { verdict } = await window.electronAPI.feishuBot.save({
         appId: trimmedAppId,
         appSecret: trimmedSecret,
+        service,
       });
 
       // A non-connected verdict can still coexist with persisted credentials.
@@ -250,6 +266,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
         setHasSavedCreds(true);
         setSaveSuccess(true);
         cachedState = {
+          service,
           appId: trimmedAppId,
           appSecret: trimmedSecret,
           status: 'connected',
@@ -283,7 +300,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     } finally {
       setIsSaving(false);
     }
-  }, [appId, appSecret, isSaving, reloadState, t]);
+  }, [appId, appSecret, isSaving, reloadState, service, t]);
 
   const clear = useCallback(async () => {
     if (isClearing) return;
@@ -297,6 +314,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
       setStatus('idle');
       setErrorMessage(null);
       cachedState = {
+        service,
         appId: '',
         appSecret: '',
         status: 'idle',
@@ -319,7 +337,7 @@ export function useFeishuBot(): UseFeishuBotReturn {
     } finally {
       setIsClearing(false);
     }
-  }, [isClearing, t]);
+  }, [isClearing, service, t]);
 
   const reconnect = useCallback(async () => {
     if (isReconnecting) return false;
@@ -362,7 +380,18 @@ export function useFeishuBot(): UseFeishuBotReturn {
     });
   }, []);
 
+  const setService = useCallback(
+    (nextService: FeishuBotService) => {
+      setServiceState(nextService);
+      setValidationError(null);
+      if (saveSuccess) setSaveSuccess(false);
+    },
+    [saveSuccess],
+  );
+
   return {
+    service,
+    setService,
     appId,
     setAppId,
     appSecret,

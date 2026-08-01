@@ -4,7 +4,13 @@
  * 保证两处金额口径 / 文案形态一致。
  */
 
+import { formatCompactTokens } from '@cindy/maker-shared/usage-format';
+
 import type { RegionalMoney } from '../../shared/regionalMoney';
+
+// token 紧凑口径由 maker-shared 提供(mobile 消息动作行同源复用),这里只再导出,
+// 现有 import 路径不变。
+export { formatCompactTokens };
 
 /**
  * 软日限额系数: 月度配额 / 30 * 4.5 = 月度配额 * 0.15。
@@ -86,12 +92,4 @@ export function formatModelShort(id: string): string {
   }
   if (/^gpt-/i.test(s)) return s.toUpperCase();
   return s || id;
-}
-
-/** 紧凑 token 数: ≥1B 用 X.XB, ≥1M 用 X.XM, ≥1k 用 X.Xk, 否则原值。 */
-export function formatCompactTokens(n: number): string {
-  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(1)}B`;
-  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
-  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`;
-  return String(n);
 }

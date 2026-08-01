@@ -423,6 +423,23 @@ describe('mobile native app config', () => {
     expect(eas.build['production-global'].extends).toBe('store-global-base');
   });
 
+  it('keeps iOS status bar appearance view-controller based (iOS 27 requirement)', () => {
+    const appJson = JSON.parse(
+      readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),
+    );
+    const buildConfig = require(resolve(process.cwd(), 'app.config.js'));
+
+    // iOS 27 起 RN StatusBar 的废弃全局链路失效,状态栏样式依赖 VC-based 通道
+    // (react-native-screens screen options)。该键被误删/翻回 false 时,浅色模式
+    // 状态栏会停在白字且无法 JS 热修(冷更锁定),必须由本断言挡住。
+    expect(
+      appJson.expo.ios.infoPlist.UIViewControllerBasedStatusBarAppearance,
+    ).toBe(true);
+    // app.config.js 不得剥离该键:以 resolved config 为准再断言一次。
+    const cn = buildConfig({ config: appJson.expo });
+    expect(cn.ios.infoPlist.UIViewControllerBasedStatusBarAppearance).toBe(true);
+  });
+
   it('keeps audio capture foreground-only in native builds', () => {
     const appJson = JSON.parse(
       readFileSync(resolve(process.cwd(), 'app.json'), 'utf8'),

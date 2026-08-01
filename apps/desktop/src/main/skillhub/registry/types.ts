@@ -17,13 +17,14 @@ export interface StoredInstall {
   /** unix seconds。update / publish 同步时刷新。 */
   updatedAt: number;
   /** 本地来源：'installed' = 从市场安装,'published' = 本地创建后发布,
-   *  'learned' = /learn 蒸馏产物(经 diff 审查确认后落盘)。
-   *  影响 UI 是否显示"卸载"按钮（只有 installed 才有卸载概念）。
+   *  'learned' = /learn 蒸馏产物(经 diff 审查确认后落盘),
+   *  'imported' = 用户从本地 zip / SKILL.md 导入。
+   *  影响 UI 是否显示"卸载"按钮（installed / imported 可卸载）。
    *  历史遗留数据可能缺此字段；读取层不强制补默认值。
    *  renderer 会结合 server isMine 做保守推断：明确是别人的历史 registry 才视作
    *  installed，自己的会通过 reconcile 回填为 published，本地手写 / 市场不存在的 skill
    *  不因此显示卸载。 */
-  origin?: 'installed' | 'published' | 'learned';
+  origin?: 'installed' | 'published' | 'learned' | 'imported';
   /** 是否由产品自动同步流程安装。用于区分普通市场安装与用户可 opt-out 的自动同步安装。 */
   autoSynced?: boolean;
   /** /learn 蒸馏产物的溯源(仅 origin='learned' 时存在)。

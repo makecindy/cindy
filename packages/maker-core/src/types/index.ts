@@ -1,5 +1,6 @@
 export * from './common.js';
 export * from './capabilities.js';
+export * from './capability-routing.js';
 export * from './events.js';
 export * from './permissions.js';
 export * from './palette.js';

@@ -244,7 +244,7 @@ describe('checkImRouteAuth', () => {
 describe('resolveEffectiveProvider', () => {
   // issue #882 第 3 点(2026-07 review):同一 model id 在不同来源上 mode 不一致时,
   // 鉴权解析不能只看"这个来源提供这个 id",还要看这个来源上这个 id 是不是聊天模型
-  // ——否则会去校验一个非聊天来源的凭证,校验"通过"也不代表这个会话真能发聊天请求。
+  // ——否则会去校验一个非聊天来源的凭证,校验"通过"也不代表这个任务真能发聊天请求。
   it('rejects an explicit providerId whose copy of the model is non-chat, even though the id exists there', () => {
     const nonChat = provider({
       id: 'xd',

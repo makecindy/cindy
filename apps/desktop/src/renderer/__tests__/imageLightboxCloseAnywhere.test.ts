@@ -49,6 +49,17 @@ describe('ImageLightbox — backdrop click closes, image click does not', () => 
 });
 
 describe('ImageLightbox — <img> stays click-transparent', () => {
+  it('gives viewBox-only SVGs an explicit fitted box after load', () => {
+    expect(source).toContain('containImageSize(');
+    expect(source).toContain('width: fittedImageSize?.width');
+    expect(source).toContain('height: fittedImageSize?.height');
+  });
+
+  it('does not reuse the previous gallery image dimensions before the new source loads', () => {
+    expect(source).toContain('naturalSize?.src === currentSrc');
+    expect(source).toMatch(/setNaturalSize\(\{[\s\S]*?src:\s*currentSrc,/);
+  });
+
   it('image element does NOT register its own onClick', () => {
     // 用 ref={imgRef} 锚定真正的 JSX 标签,避免匹配到行注释里的 "<img>" 字样。
     const imageElement =

@@ -24,10 +24,11 @@
  *    折叠到 0,等 300ms 圆圈渐显、幽灵再跳进来;点子气泡展开 → 幽灵先跳走、
  *    圆圈再渐隐,计时器到点(260ms)才真正 restore,面板宽度展开回停靠位
  *    (编排见 globals.css;面板侧提交时序在 ghostPanels.tsx,减弱动效自动停);
- *  - 幽灵球可拖,落点独立持久化,重启保留;没拖过默认停右上角;渲染时
- *    clamp 到视口,y 下限避开顶部 46px 拖动带(视觉习惯位;可点性本身由
- *    no-drag 挖洞保证);展开期间拖球,子气泡跟着实时走(同一条零 React
- *    热路径直改子气泡 DOM,排布算式 stackChildPos 与渲染共用)。
+ *  - 幽灵球可拖,落点独立持久化,重启保留;没拖过默认停右上角(默认位让开
+ *    顶部拖动带);渲染时 clamp 到视口,四边同 EDGE_MARGIN、顶部无额外下限 ——
+ *    手拖可停窗内任意位置(2026-08-01 Lizi 定案);展开期间拖球,子气泡跟着
+ *    实时走(同一条零 React 热路径直改子气泡 DOM,排布算式 stackChildPos
+ *    与渲染共用)。
  */
 
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react';
@@ -45,8 +46,9 @@ const BUBBLE_SIZE = 48;
 const EDGE_MARGIN = 12;
 const STACK_GAP = 8;
 const DRAG_THRESHOLD_PX = 4;
-/** 顶部 46px 是窗口拖动带(§6 规则 3),气泡默认不进去。 */
-const TOP_FLOOR = 46 + EDGE_MARGIN;
+/** 没拖过的球的默认顶部偏移:顶部 46px 是窗口拖动带(§6 规则 3),默认位不占它。
+ *  仅作用于默认位 —— 用户手拖不受此限,见 clampToViewport。 */
+const DEFAULT_TOP = 46 + EDGE_MARGIN;
 /** 点子气泡展开:幽灵跳走(160ms)+ 圆圈渐隐(120ms 延迟 + 140ms)的总时长,
  *  到点才真正 restore(与 globals.css 的 exit 编排对齐)。 */
 const EXIT_MS = 260;
@@ -75,20 +77,24 @@ function saveStackPos(x: number, y: number): void {
   }
 }
 
-/** 视口 clamp(渲染与落点共用;存储里不 clamp,换屏不破坏存值)。 */
+/** 视口 clamp(渲染与落点共用;存储里不 clamp,换屏不破坏存值)。
+ *  四边同一条 EDGE_MARGIN,顶部不再额外设下限 —— 幽灵球可停在窗内任意位置,
+ *  只要四边不出窗(2026-08-01 Lizi 定案,取代此前"y 下限 = 顶部拖动带下沿");
+ *  停进顶部拖动带时,可点性由气泡自身的 no-drag 挖洞保证(见文件头),代价是
+ *  被盖住的那 48px 不再能拖窗。 */
 function clampToViewport(x: number, y: number): { x: number; y: number } {
   const maxX = Math.max(EDGE_MARGIN, window.innerWidth - BUBBLE_SIZE - EDGE_MARGIN);
-  const maxY = Math.max(TOP_FLOOR, window.innerHeight - BUBBLE_SIZE - EDGE_MARGIN);
+  const maxY = Math.max(EDGE_MARGIN, window.innerHeight - BUBBLE_SIZE - EDGE_MARGIN);
   return {
     x: Math.min(maxX, Math.max(EDGE_MARGIN, x)),
-    y: Math.min(maxY, Math.max(TOP_FLOOR, y)),
+    y: Math.min(maxY, Math.max(EDGE_MARGIN, y)),
   };
 }
 
 /** 没拖过的幽灵球默认位:右上角(2026-07-31 Lizi 定案由右下角改到右上角,
- *  TOP_FLOOR 已避开窗口拖动带)。 */
+ *  DEFAULT_TOP 让开窗口拖动带 —— 只是默认位的取值,不构成拖动下限)。 */
 function defaultPosition(): { x: number; y: number } {
-  return { x: window.innerWidth - BUBBLE_SIZE - EDGE_MARGIN, y: TOP_FLOOR };
+  return { x: window.innerWidth - BUBBLE_SIZE - EDGE_MARGIN, y: DEFAULT_TOP };
 }
 
 /** 直改 DOM 落位(拖拽热路径与基准位回写共用):left/top 而非 transform ——

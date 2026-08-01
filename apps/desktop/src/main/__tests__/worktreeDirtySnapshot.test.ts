@@ -3,6 +3,9 @@
  * stash 栈条目保留为冗余备份,避免按 stash index drop 时被进程外 stash 操作干扰。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 
 const gitExecMock = vi.fn();
 
@@ -16,6 +19,7 @@ import {
   getAutoStashSha,
   getRestorableAutoStashSha,
   getSnapshotSha,
+  listNonReproducibleIgnoredFiles,
   restoreAutoStashToPreservedWorktree,
   snapshotRefForSession,
 } from '../worktree/dirty';
@@ -55,6 +59,37 @@ function refDeletes(calls: string[][]): string[][] {
 function consumedRefDeletes(calls: string[][]): string[][] {
   return calls.filter((a) => a[0] === 'update-ref' && a[1] === '-d' && a[2] === CONSUMED_REF);
 }
+
+describe('ignored file protection', () => {
+  beforeEach(() => {
+    gitExecMock.mockReset();
+  });
+
+  it('allows an exact base copy but reports unique or changed ignored files', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-ignored-worktree-'));
+    const baseRepo = path.join(root, 'base');
+    const worktree = path.join(root, 'worktree');
+    fs.mkdirSync(baseRepo);
+    fs.mkdirSync(worktree);
+    fs.writeFileSync(path.join(baseRepo, '.env'), 'same');
+    fs.writeFileSync(path.join(worktree, '.env'), 'same');
+    fs.writeFileSync(path.join(baseRepo, '.settings'), 'base');
+    fs.writeFileSync(path.join(worktree, '.settings'), 'changed');
+    fs.writeFileSync(path.join(worktree, '.secret'), 'unique');
+    gitExecMock.mockResolvedValue({
+      stdout: '.env\0.settings\0.secret\0',
+      stderr: '',
+    });
+
+    try {
+      await expect(
+        listNonReproducibleIgnoredFiles(baseRepo, worktree),
+      ).resolves.toEqual(['.settings', '.secret']);
+    } finally {
+      fs.rmSync(root, { recursive: true, force: true });
+    }
+  });
+});
 
 describe('autoStashDirtyWorktree snapshot transfer', () => {
   beforeEach(() => {

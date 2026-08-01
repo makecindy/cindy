@@ -9,38 +9,38 @@
   },
   "list": {
     "thisComputer": "이 기기",
-    "allConversations": "모든 대화",
+    "allConversations": "모든 세션",
     "syncFailed": "동기화 실패",
     "requestFailed": "요청 실패",
     "loading": "제어 가능한 기기를 불러오는 중",
-    "untitled": "제목 없는 대화",
+    "untitled": "제목 없는 세션",
     "connection": {
       "connecting": "연결 중",
       "disconnected": "연결 끊김"
     },
     "error": {
-      "sessionDeviceNotFound": "이 대화가 속한 기기를 찾을 수 없습니다. 다시 동기화한 후 시도하세요.",
+      "sessionDeviceNotFound": "이 세션이 속한 기기를 찾을 수 없습니다. 다시 동기화한 후 시도하세요.",
       "taskDeviceNotFound": "이 작업이 속한 기기를 찾을 수 없습니다. 다시 동기화한 후 시도하세요.",
       "noDevice": "사용할 수 있는 기기가 없습니다. 데스크톱에서 원격 제어를 켠 후 다시 동기화하세요."
     },
     "alert": {
       "actionFailed": "작업 실패",
       "renameFailed": "이름 변경 실패",
-      "deleteTitle": "대화를 삭제할까요?",
+      "deleteTitle": "세션을 삭제할까요?",
       "deleteMessage": "「{{title}}」을(를) 삭제합니다. 삭제하면 복구할 수 없습니다."
     },
     "a11y": {
-      "selectScope": "대화 범위 선택",
+      "selectScope": "세션 범위 선택",
       "openSettings": "설정 열기",
       "syncing": "다시 동기화하는 중",
       "sync": "다시 동기화",
-      "pinnedConversations": "고정된 대화 {{count}}개",
-      "newRemoteConversation": "새 원격 대화",
+      "pinnedConversations": "고정된 세션 {{count}}개",
+      "newRemoteConversation": "새 원격 세션",
       "renameDevice": "{{label}} 이름 변경",
       "project": "프로젝트 {{title}}",
       "openAutomationLatest": "자동화 작업 {{title}}의 최근 세션 열기",
       "automationTask": "자동화 작업 {{title}}",
-      "openConversation": "대화 {{title}} 열기",
+      "openConversation": "세션 {{title}} 열기",
       "collapse": "{{title}} 접기",
       "expand": "{{title}} 펼치기",
       "taskError": "작업 오류",
@@ -60,17 +60,17 @@
       "saveA11y": "기기 이름 저장"
     },
     "renameSession": {
-      "title": "대화 이름 변경",
-      "placeholder": "대화 제목",
-      "savingA11y": "대화 제목 저장 중",
-      "saveA11y": "대화 제목 저장"
+      "title": "세션 이름 변경",
+      "placeholder": "세션 제목",
+      "savingA11y": "세션 제목 저장 중",
+      "saveA11y": "세션 제목 저장"
     },
     "revoked": {
       "title": "액세스 권한이 취소됨",
       "body": "「{{deviceName}}」이(가) 이 기기의 원격 액세스를 취소했습니다. 해당 컴퓨터의 {{appName}} 설정에서 이 기기를 다시 승인한 후 「다시 시도」를 누르세요.",
       "retry": "다시 시도"
     },
-    "viewAllConversations": "대화 {{count}}개 모두 보기",
+    "viewAllConversations": "세션 {{count}}개 모두 보기",
     "viewAllRuns": "실행 {{count}}회 모두 보기",
     "preview": {
       "needAttention": "확인 필요 {{count}}개",
@@ -86,7 +86,7 @@
       "automation": "자동화",
       "archived": "보관됨",
       "all": "전체",
-      "a11y": "{{label}} 대화로 필터링"
+      "a11y": "{{label}} 세션으로 필터링"
     },
     "group": {
       "project": "프로젝트",
@@ -98,15 +98,15 @@
       "active": "활동",
       "waiting": "대기 중",
       "automation": "자동화",
-      "activeA11y": "활동 중인 대화로 필터링",
-      "waitingA11y": "대기 중인 대화로 필터링",
-      "automationA11y": "자동화 대화로 필터링"
+      "activeA11y": "활동 중인 세션으로 필터링",
+      "waitingA11y": "대기 중인 세션으로 필터링",
+      "automationA11y": "자동화 세션으로 필터링"
     },
     "plan": "스케줄",
     "automationsButtonA11y": "원격 자동화 열기",
     "search": {
-      "openA11y": "원격 대화 검색",
-      "closeA11y": "원격 대화 검색 닫기",
+      "openA11y": "원격 세션 검색",
+      "closeA11y": "원격 세션 검색 닫기",
       "label": "검색",
       "placeholder": "제목, 프로젝트, 모델, 메시지 검색",
       "clearA11y": "검색 지우기",
@@ -115,15 +115,15 @@
       "close": "닫기"
     },
     "filters": {
-      "collapseA11y": "대화 필터 접기",
-      "expandA11y": "대화 필터 펼치기",
+      "collapseA11y": "세션 필터 접기",
+      "expandA11y": "세션 필터 펼치기",
       "label": "필터"
     },
     "selection": {
-      "count": "대화 {{count}}개 선택됨",
+      "count": "세션 {{count}}개 선택됨",
       "canAct": "실행 가능한 작업 있음",
       "cannotAct": "실행 가능한 작업 없음",
-      "clearA11y": "대화 선택 해제"
+      "clearA11y": "세션 선택 해제"
     },
     "bulk": {
       "pinning": "고정 중",
@@ -131,19 +131,19 @@
       "archiving": "보관 중",
       "restoring": "복원 중",
       "deleting": "삭제 중",
-      "pinA11y": "선택한 대화 일괄 고정",
-      "unpinA11y": "선택한 대화 고정 일괄 해제",
-      "archiveA11y": "선택한 대화 일괄 보관",
-      "restoreA11y": "선택한 대화 일괄 복원",
-      "deleteA11y": "선택한 대화 일괄 삭제",
+      "pinA11y": "선택한 세션 일괄 고정",
+      "unpinA11y": "선택한 세션 고정 일괄 해제",
+      "archiveA11y": "선택한 세션 일괄 보관",
+      "restoreA11y": "선택한 세션 일괄 복원",
+      "deleteA11y": "선택한 세션 일괄 삭제",
       "cancelA11y": "일괄 작업 취소",
       "partialFailure": "{{done}}개를 처리했고 {{failed}}개가 실패했습니다(복원됨, 다시 시도할 수 있습니다).",
-      "noArchivable": "선택 항목에 보관할 수 있는 활성 대화가 없습니다.",
-      "noPinnable": "선택 항목에 고정할 수 있는 활성 대화가 없습니다.",
-      "noRestorable": "선택 항목에 복원할 수 있는 보관된 대화가 없습니다.",
-      "noUnpinnable": "선택 항목에 고정된 대화가 없습니다.",
-      "noDeletable": "선택 항목에 삭제할 수 있는 대화가 없습니다.",
-      "noneModifiable": "선택한 대화는 모두 변경할 수 없습니다."
+      "noArchivable": "선택 항목에 보관할 수 있는 활성 세션이 없습니다.",
+      "noPinnable": "선택 항목에 고정할 수 있는 활성 세션이 없습니다.",
+      "noRestorable": "선택 항목에 복원할 수 있는 보관된 세션이 없습니다.",
+      "noUnpinnable": "선택 항목에 고정된 세션이 없습니다.",
+      "noDeletable": "선택 항목에 삭제할 수 있는 세션이 없습니다.",
+      "noneModifiable": "선택한 세션은 모두 변경할 수 없습니다."
     },
     "automationScope": {
       "eyebrow": "자동화 작업",
@@ -153,16 +153,16 @@
     },
     "projectScope": {
       "eyebrow": "프로젝트",
-      "emptyCopy": "이 프로젝트에서 새 대화를 시작하세요.",
-      "emptyTitle": "이 프로젝트에는 아직 대화가 없습니다"
+      "emptyCopy": "이 프로젝트에서 새 세션을 시작하세요.",
+      "emptyTitle": "이 프로젝트에는 아직 세션이 없습니다"
     },
     "subtitle": {
-      "deviceActive": "{{deviceName}} · 활동 중인 대화 {{count}}개",
-      "activeAndProjects": "활동 중인 대화 {{count}}개 · 프로젝트 {{projects}}개"
+      "deviceActive": "{{deviceName}} · 활동 중인 세션 {{count}}개",
+      "activeAndProjects": "활동 중인 세션 {{count}}개 · 프로젝트 {{projects}}개"
     },
     "row": {
       "a11yAutomationGroup": "자동화 대화 그룹 {{title}}",
-      "a11ySession": "대화 {{title}}",
+      "a11ySession": "세션 {{title}}",
       "a11yCollapse": "{{title}} 접기",
       "a11yExpand": "{{title}} 펼치기",
       "collapse": "접기",
@@ -171,20 +171,20 @@
     "badge": {
       "waiting": "대기 중 {{count}}",
       "automationPrefix": "자동화",
-      "sessionCount": "대화 {{count}}개",
+      "sessionCount": "세션 {{count}}개",
       "aggregate": "집계",
       "running": "실행 중",
       "unread": "읽지 않음 {{count}}"
     },
     "child": {
-      "openA11y": "자동화 대화 {{title}} 열기"
+      "openA11y": "자동화 세션 {{title}} 열기"
     },
     "viewAllRuns": "실행 {{count}}회 모두 보기"
   },
   "automations": {
     "error": {
       "projectMissingConfig": "프로젝트 자동화에 projectConfigId가 없습니다. 데스크톱에서 삭제하세요.",
-      "deletePartial": "자동화를 삭제했지만 생성된 대화 {{count}}개의 상태를 업데이트하지 못했습니다. 데스크톱에서 이 대화들을 확인하세요."
+      "deletePartial": "자동화를 삭제했지만 생성된 세션 {{count}}개의 상태를 업데이트하지 못했습니다. 데스크톱에서 이 세션들을 확인하세요."
     },
     "subtitle": "실행 중 {{active}}개 · 작업 {{total}}개",
     "metric": {
@@ -257,19 +257,19 @@
       "cancelA11y": "자동화 편집 취소"
     },
     "delete": {
-      "counting": "이 자동화가 생성한 대화를 집계하는 중…",
-      "confirmDeleteBoth": "작업과 대화 삭제",
-      "confirmArchive": "작업 삭제 후 대화 보관",
+      "counting": "이 자동화가 생성한 세션을 집계하는 중…",
+      "confirmDeleteBoth": "작업과 세션 삭제",
+      "confirmArchive": "작업 삭제 후 세션 보관",
       "confirmTaskOnly": "작업만 삭제",
       "title": "{{name}} 삭제",
-      "copy": "자동화 작업을 삭제해도 이미 시작된 실행은 중단되지 않습니다. 생성된 대화는 아래 옵션에 따라 처리되며 데스크톱과 동일하게 동작합니다.",
-      "optionsA11y": "생성된 대화 처리 방식 선택",
-      "keepDesc": "이 자동화 작업만 삭제하고, 이전 대화는 원래 목록에 그대로 둡니다.",
-      "keepLabel": "생성된 대화 유지",
-      "archiveDesc": "작업을 삭제한 후 생성된 대화를 보관함으로 옮깁니다. 이후에도 검색할 수 있습니다.",
-      "archiveLabel": "생성된 대화 보관",
-      "deleteDesc": "작업을 삭제한 후 생성된 대화도 삭제됨으로 표시합니다. 이 작업은 휴대폰에서 되돌릴 수 없습니다.",
-      "deleteLabel": "생성된 대화 삭제",
+      "copy": "자동화 작업을 삭제해도 이미 시작된 실행은 중단되지 않습니다. 생성된 세션은 아래 옵션에 따라 처리되며 데스크톱과 동일하게 동작합니다.",
+      "optionsA11y": "생성된 세션 처리 방식 선택",
+      "keepDesc": "이 자동화 작업만 삭제하고, 이전 세션은 원래 목록에 그대로 둡니다.",
+      "keepLabel": "생성된 세션 유지",
+      "archiveDesc": "작업을 삭제한 후 생성된 세션을 보관함으로 옮깁니다. 이후에도 검색할 수 있습니다.",
+      "archiveLabel": "생성된 세션 보관",
+      "deleteDesc": "작업을 삭제한 후 생성된 세션도 삭제됨으로 표시합니다. 이 작업은 휴대폰에서 되돌릴 수 없습니다.",
+      "deleteLabel": "생성된 세션 삭제",
       "cancelA11y": "자동화 삭제 취소",
       "confirmA11y": "자동화 삭제 확인"
     },
@@ -284,7 +284,7 @@
     },
     "runDelete": {
       "title": "이 실행 기록 삭제",
-      "copy": "이 자동화 실행 기록만 삭제합니다. 열었던 대화는 삭제되지 않으며 이후 자동 트리거에도 영향을 주지 않습니다.",
+      "copy": "이 자동화 실행 기록만 삭제합니다. 열었던 세션은 삭제되지 않으며 이후 자동 트리거에도 영향을 주지 않습니다.",
       "confirmA11y": "실행 기록 삭제 확인",
       "confirm": "기록 삭제",
       "cancelA11y": "실행 기록 삭제 취소"

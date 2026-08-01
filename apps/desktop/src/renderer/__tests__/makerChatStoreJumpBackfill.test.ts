@@ -119,6 +119,22 @@ function serverMessage(over: Partial<Message>): Message {
   } as Message;
 }
 
+function planToolMessage(over: Partial<Message>): Message {
+  const toolUseId = over.toolUseId ?? over.id ?? over.clientId ?? 'plan-tool';
+  return serverMessage({
+    role: 'tool_use',
+    content: {
+      toolName: 'update_plan',
+      toolUseId,
+      input: {
+        plan: [{ content: 'Preserve current plan after trim', status: 'in_progress' }],
+      },
+    },
+    toolUseId,
+    ...over,
+  } as Partial<Message>);
+}
+
 /** 让挂起的 store 异步链推进若干轮微任务(store 内部多层 await)。 */
 async function flushMicrotasks(rounds = 8): Promise<void> {
   for (let i = 0; i < rounds; i++) await Promise.resolve();
@@ -138,6 +154,10 @@ function fullPageNewestFirst(): Message[] {
 
 describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
   beforeEach(() => {
+    vi.mocked(listMessagesFor).mockReset();
+    vi.mocked(listMessagesFor).mockResolvedValue([]);
+    vi.mocked(aroundMessagesByClientIdFor).mockReset();
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValue([]);
     (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
     makerChatStore.initGlobalListeners();
   });
@@ -1318,6 +1338,39 @@ describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
     expect(makerChatStore.getSnapshot(SID).messages).toHaveLength(200);
     // 关键:裁剪不清标记 —— 保留的 200 行未必连续。
     expect(makerChatStore.getSnapshot(SID).historyWindowHasIsland).toBe(true);
+  });
+
+  it('Y2. 超长裁剪丢掉当前计划边界时,允许重入重新首拉补回计划', async () => {
+    const oldPlan = planToolMessage({
+      id: 'trimmed-plan',
+      clientId: 'trimmed-plan',
+      createdAt: '2026-07-24T00:00:00.000Z',
+    });
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValueOnce([oldPlan]);
+    let page = 0;
+    vi.mocked(listMessagesFor).mockImplementation(async () => {
+      const base = page++;
+      return Array.from({ length: 100 }, (_, i) =>
+        serverMessage({
+          id: `post-plan-${base}-${i}`,
+          clientId: `post-plan-${base}-${i}`,
+          createdAt: new Date(
+            Date.UTC(2026, 6, 25, 12, 0, 0) - (base * 100 + i) * 60_000,
+          ).toISOString(),
+        }),
+      );
+    });
+    await makerChatStore.loadAroundMessageClientId(SID, 'trimmed-plan', { radius: 60 });
+    expect(makerChatStore.getSnapshot(SID).messages.length).toBeGreaterThan(300);
+    expect(makerChatStore.getSnapshot(SID).historyLoaded).toBe(true);
+
+    const leave = makerChatStore.enterView(SID);
+    leave();
+
+    const snapshot = makerChatStore.getSnapshot(SID);
+    expect(snapshot.messages).toHaveLength(200);
+    expect(snapshot.messages.some((message) => message.clientId === 'trimmed-plan')).toBe(false);
+    expect(snapshot.historyLoaded).toBe(false);
   });
 
   it('X. /clear 清空窗口时一并清掉孤岛标记,不把会话永久钉在"不连续"', async () => {

@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkConnectionIssue,
@@ -53,7 +54,9 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  forgetControllerInvokeState,
   handleControllerOffline,
+  purgeRevokedController,
 } from './dispatch';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import {
@@ -74,6 +77,16 @@ import {
   type MobileSessionEventKind,
 } from './mobileNotify';
 import { getClientEndpoint } from '../clientEndpointsService';
+import {
+  handleContactsDeviceLinkStatusChanged,
+  handleContactsPeerPresenceChanged,
+  handleIncomingContactsRelayFrame,
+  initContactsDeviceSync,
+  pollContactsDeviceSyncCrossProcessState,
+  pollContactsDeviceSyncDataChange,
+  pollContactsDeviceSyncSettingChange,
+  setContactsDeviceLinkOwnerActive,
+} from '../contacts-sync/driver';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
 export { setBusyProbe };
@@ -102,8 +115,10 @@ let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
  * settings 文件(被动实例的设置页也能改授权,见 settings-store 多实例语义):持有者
  * 每 5s 对比快照,变化则补发 presence / 踢断新撤销的控制端。非持有者恒为 null。
  */
-let appliedSettingsSnapshot: { remoteControlEnabled: boolean; revokedControllers: string[] } | null =
-  null;
+let appliedSettingsSnapshot: {
+  remoteControlEnabled: boolean;
+  revokedControllers: string[];
+} | null = null;
 /**
  * 「保持电脑唤醒」已应用基线。与被控授权不同:keepAwake 是**每个进程各自持有**一个
  * blocker、与 relay 持有权无关,故所有实例(含被动实例)都要跟随共享 settings 的改写
@@ -121,6 +136,7 @@ const presenceAvailableByDevice = new Map<string, boolean>();
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
 const presencePlatformByDevice = new Map<string, string>();
+const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
 /**
@@ -273,6 +289,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
     if (status !== 'online') presenceOnlineByDevice.clear();
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
+    handleContactsDeviceLinkStatusChanged(status === 'online');
     if (status === 'online') replayActiveSubscriptions('ws-online');
   });
   // 连接问题(鉴权失效/被顶号/超限/版本不符)→ 推给 renderer,让设置页与
@@ -294,10 +311,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
     presencePlatformByDevice.set(snap.deviceId, snap.platform);
+    presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
     // 被控端兜底:对等控制端下线 → 清掉它在本机的订阅 registry(防僵尸订阅持续 sendPush)。
     if (!snap.online) handleControllerOffline(snap.deviceId);
+    handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
     if (available && wasAvailable === false) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
@@ -305,8 +324,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 流动),但撤销过的设备必须排除 —— 判定统一走 shouldExchangeDictionaryWith,
     // 三个入口共用一份条件。
     if (
-      wasOnline !== true
-      && shouldExchangeDictionaryWith({
+      wasOnline !== true &&
+      shouldExchangeDictionaryWith({
         online: snap.online,
         platform: snap.platform,
         revoked: isDeviceRevoked(snap.deviceId),
@@ -360,12 +379,26 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 入站与出站走同一份准入判定:这条通道承载的是可写 CRDT 状态,只接受电脑
       // 对端。手机在这套设计里是只读消费者(走 invoke 拉快照),不该能推状态过来
       // 改桌面词典 —— 出站已经这么把关了,入站漏掉就等于白设。
-      if (shouldExchangeDictionaryWith({
-        online: true,
-        platform: presencePlatformByDevice.get(env.src),
-        revoked: isDeviceRevoked(env.src),
-      })) {
+      if (
+        shouldExchangeDictionaryWith({
+          online: true,
+          platform: presencePlatformByDevice.get(env.src),
+          revoked: isDeviceRevoked(env.src),
+        })
+      ) {
         handleIncomingDictionaryState(env.src, p.payload);
+      }
+      return;
+    }
+    if (p?.channel === DL_CONTACTS_SYNC_CHANNEL) {
+      if (
+        shouldExchangeDictionaryWith({
+          online: true,
+          platform: presencePlatformByDevice.get(env.src),
+          revoked: isDeviceRevoked(env.src),
+        })
+      ) {
+        handleIncomingContactsRelayFrame(env.src, p.payload);
       }
       return;
     }
@@ -383,12 +416,42 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     },
     listOnlineDesktopDevices: () =>
       [...presenceOnlineByDevice.entries()]
-        .filter(([deviceId, online]) => shouldExchangeDictionaryWith({
-          online,
-          platform: presencePlatformByDevice.get(deviceId),
-          revoked: isDeviceRevoked(deviceId),
-        }))
+        .filter(([deviceId, online]) =>
+          shouldExchangeDictionaryWith({
+            online,
+            platform: presencePlatformByDevice.get(deviceId),
+            revoked: isDeviceRevoked(deviceId),
+          }),
+        )
         .map(([deviceId]) => deviceId),
+  });
+  initContactsDeviceSync({
+    getSelfDeviceId: () => client?.getSelfDeviceId() ?? null,
+    listOnlineDesktopDevices: () =>
+      [...presenceOnlineByDevice.entries()]
+        .filter(
+          ([deviceId, online]) =>
+            deviceId !== client?.getSelfDeviceId() &&
+            shouldExchangeDictionaryWith({
+              online,
+              platform: presencePlatformByDevice.get(deviceId),
+              revoked: isDeviceRevoked(deviceId),
+            }),
+        )
+        .map(([deviceId]) => ({
+          deviceId,
+          deviceName: presenceNameByDevice.get(deviceId) ?? deviceId.slice(0, 8),
+        })),
+    isPeerAllowed: (deviceId) =>
+      deviceId !== client?.getSelfDeviceId() &&
+      shouldExchangeDictionaryWith({
+        online: presenceOnlineByDevice.get(deviceId) === true,
+        platform: presencePlatformByDevice.get(deviceId),
+        revoked: isDeviceRevoked(deviceId),
+      }),
+    sendRelayFrame: (deviceId, frame) => {
+      client?.sendPush(deviceId, DL_CONTACTS_SYNC_CHANNEL, frame);
+    },
   });
   if (unsubscribeDictionaryChanged) unsubscribeDictionaryChanged();
   unsubscribeDictionaryChanged = onVoiceInputDictionaryChanged((options) => {
@@ -422,9 +485,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
+      setContactsDeviceLinkOwnerActive(true);
       refreshAppliedSettingsSnapshot();
+      pollContactsDeviceSyncSettingChange();
+      pollContactsDeviceSyncDataChange();
+      pollContactsDeviceSyncCrossProcessState();
     },
     onDemote: () => {
+      setContactsDeviceLinkOwnerActive(false);
       appliedSettingsSnapshot = null;
       teardownActiveLink();
     },
@@ -586,6 +654,7 @@ function teardownActiveLink(): void {
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
   presencePlatformByDevice.clear();
+  presenceNameByDevice.clear();
   resetSubscriptionRefs();
   resetBusyDedupe(); // 重置 busy dedupe,避免重连后首个真实 busy 状态被旧值压掉
   client.stop();
@@ -663,9 +732,15 @@ export async function revokeController(deviceId: string): Promise<void> {
     latest.includes(deviceId) ? latest : [...latest, deviceId],
   );
   // 在线连着的:发 link-close('revoked'),控制端据此立即移除本机项目/对话 + 标记「已撤销」。
-  client?.closeLink(deviceId, 'revoked');
+  try {
+    client?.closeLink(deviceId, 'revoked');
+  } catch (err) {
+    log.warn(`closeLink failed while revoking ${deviceId.slice(0, 8)}: ${String(err)}`);
+  }
+  forgetControllerInvokeState(deviceId);
   // 踢掉它的订阅 registry + 重算转发/横幅(复用对等下线的单设备清理路径)。
   handleControllerOffline(deviceId);
+  purgeRevokedController(deviceId);
   // 末尾再 poll 一次(而非仅刷新基线):写锁释放到这里之间,别的实例可能已插入
   // 新授权变更,仅刷新基线会把它静默记为已生效、永不 enforce;poll 是幂等的,
   // 本地刚做过的动作重复 enforce 无害,同时能捕获这条竞态窗口里的外部变更。
@@ -733,6 +808,9 @@ function refreshAppliedSettingsSnapshot(): void {
  */
 function pollExternalSettingsChange(): void {
   if (!client || !arbiter?.isOwner()) return;
+  pollContactsDeviceSyncSettingChange();
+  pollContactsDeviceSyncDataChange();
+  pollContactsDeviceSyncCrossProcessState();
   const prev = appliedSettingsSnapshot;
   const { remoteControlEnabled, revokedControllers } = readDeviceLinkSettings();
   appliedSettingsSnapshot = { remoteControlEnabled, revokedControllers: [...revokedControllers] };
@@ -748,8 +826,16 @@ function pollExternalSettingsChange(): void {
 
   const newlyRevoked = revokedControllers.filter((id) => !prev.revokedControllers.includes(id));
   for (const deviceId of newlyRevoked) {
-    client.closeLink(deviceId, 'revoked');
+    try {
+      client.closeLink(deviceId, 'revoked');
+    } catch (err) {
+      log.warn(
+        `closeLink failed while applying external revoke for ${deviceId.slice(0, 8)}: ${String(err)}`,
+      );
+    }
+    forgetControllerInvokeState(deviceId);
     handleControllerOffline(deviceId);
+    purgeRevokedController(deviceId);
     log.info(`access revoked for controller ${deviceId.slice(0, 8)} (external settings change)`);
   }
 
@@ -848,11 +934,13 @@ export async function remoteSubscribe(
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   return client.invoke(deviceId, {
     channel: DL_SUBSCRIBE_CHANNEL,
-    args: [{
-      topics,
-      controllerName: deviceName(),
-      capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-    }],
+    args: [
+      {
+        topics,
+        controllerName: deviceName(),
+        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+      },
+    ],
   });
 }
 

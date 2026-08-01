@@ -31,6 +31,7 @@
     "upToDate": "すでに最新の状態です",
     "bundleUpToDateNoOta": "アプリ本体は最新です。このバージョンは OTA 更新に対応していません",
     "downloadedRestarting": "更新をダウンロードしました。再起動しています",
+    "downloadedRestartRequired": "更新をダウンロードしました。アプリを完全に終了して再度開くと適用されます。",
     "bundleCheckFailed": "アプリ本体の更新を確認できませんでした。しばらくしてからもう一度お試しください。",
     "checkFailedDetail": "更新の確認に失敗しました：{{detail}}",
     "checkFailed": "更新の確認に失敗しました。しばらくしてからもう一度お試しください。"
@@ -76,15 +77,19 @@
   },
   "updateInfo": {
     "embedded": "アプリ本体と同梱",
+    "embeddedFallback": "アプリ本体と同梱（OTA 未適用）",
     "unknown": "不明",
     "source": "実行ソース",
     "sourceEmbedded": "内蔵バージョン (同梱)",
+    "sourceEmergencyFallback": "内蔵バージョン (緊急起動・OTA 未適用)",
     "sourceOta": "OTA 更新",
     "updateId": "更新 ID",
     "updatedAt": "更新日時",
     "channel": "Channel",
     "runtime": "Runtime",
-    "otaMarker": "OTA マーカー"
+    "otaMarker": "OTA マーカー",
+    "emergencyLaunch": "緊急起動",
+    "emergencyLaunchYes": "はい（この起動では OTA を適用できません）"
   },
   "legal": {
     "sectionTitle": "法的情報",

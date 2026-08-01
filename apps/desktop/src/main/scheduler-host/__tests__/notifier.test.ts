@@ -37,13 +37,16 @@ function run(status: ScheduleRun['status']): ScheduleRun {
 function createNotifier(opts?: {
   sendMarkdownText?: ReturnType<typeof vi.fn>;
   shouldNotifyDesktop?: () => boolean;
+  publishMarkdown?: ReturnType<typeof vi.fn>;
 }): {
   notifier: DesktopNotifier;
   sendMarkdownText: ReturnType<typeof vi.fn>;
   warn: ReturnType<typeof vi.fn>;
+  publishMarkdown: ReturnType<typeof vi.fn>;
 } {
   const sendMarkdownText = opts?.sendMarkdownText ?? vi.fn(async () => ({ messageId: 'msg-1' }));
   const warn = vi.fn();
+  const publishMarkdown = opts?.publishMarkdown ?? vi.fn(async () => undefined);
   const notifier = new DesktopNotifier({
     getMainWindow: () => null as BrowserWindow | null,
     feishuIm: {
@@ -52,8 +55,9 @@ function createNotifier(opts?: {
     } as unknown as FeishuIM,
     logger: { warn },
     shouldNotifyDesktop: opts?.shouldNotifyDesktop ?? (() => true),
+    wecomGroupPublisher: { publishMarkdown },
   });
-  return { notifier, sendMarkdownText, warn };
+  return { notifier, sendMarkdownText, warn, publishMarkdown };
 }
 
 describe('DesktopNotifier desktop status mapping', () => {
@@ -171,5 +175,49 @@ describe('DesktopNotifier desktop status mapping', () => {
       expect.stringContaining('❌ **每日检查**'),
     );
     expect(warn).toHaveBeenCalledWith('feishu notify failed', sendError);
+  });
+
+  it('sends a WeCom group notification and keeps failures non-fatal', async () => {
+    const sendError = new Error('Webhook unavailable');
+    const publishMarkdown = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(sendError);
+    const { notifier, warn } = createNotifier({ publishMarkdown });
+    const groupSchedule = {
+      ...schedule,
+      notify: { desktop: false, feishu: false, wecomGroup: true },
+    } as Schedule;
+
+    await notifier.notify(groupSchedule, { ...run('success'), resultText: '检查通过' });
+    expect(publishMarkdown).toHaveBeenCalledWith(expect.stringContaining('检查通过'));
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+
+    await expect(notifier.notify(groupSchedule, run('failed'))).resolves.toBeUndefined();
+    expect(warn).toHaveBeenCalledWith('WeCom group notify failed', sendError);
+    expect(sendMobileSessionNotify).not.toHaveBeenCalled();
+  });
+
+  it('does not expose local attachment references in WeCom group notifications', async () => {
+    const { notifier, publishMarkdown } = createNotifier();
+    const groupSchedule = {
+      ...schedule,
+      notify: { desktop: false, feishu: false, wecomGroup: true },
+    } as Schedule;
+
+    await notifier.notify(groupSchedule, {
+      ...run('success'),
+      resultText: [
+        '检查完成',
+        '[报告](xdt-file:///C:/private/report.txt)',
+        '![截图](cindy-media://blobs/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa.png)',
+      ].join('\n'),
+    });
+
+    const published = String(publishMarkdown.mock.calls[0]?.[0]);
+    expect(published).toContain('检查完成');
+    expect(published).not.toContain('xdt-file://');
+    expect(published).not.toContain('cindy-media://');
+    expect(published).not.toContain('C:/private/report.txt');
   });
 });

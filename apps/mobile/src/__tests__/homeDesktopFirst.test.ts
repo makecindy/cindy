@@ -166,6 +166,8 @@ describe('mobile home desktop-first surface', () => {
     const scheduleIndexSource = readSource('src/session/scheduleIndex.ts');
 
     expect(source).toContain('const [scheduleIndex, setScheduleIndex]');
+    expect(source).toContain('useRemoteScheduleMirrorInvalidations()');
+    expect(source).toContain('invalidateRunningSessionScheduleEntries(current, sessionIds)');
     expect(source).toContain('const [deviceIdentityCacheReady, setDeviceIdentityCacheReady]');
     expect(source).toContain('loadDeviceIdentityCache()');
     expect(source).toContain('reconcileDeviceIdentities(');

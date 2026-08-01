@@ -69,7 +69,11 @@ describe('CCAgentSessionView 接线不变式', () => {
   it('断线缓存的远程 session 可打开查看,但禁用 composer 并拦截发送', () => {
     expect(sessionViewSrc).toContain("const remoteSessionUnavailable = remoteConn === 'reconnecting' || remoteConn === 'host-offline'");
     expect(sessionViewSrc).toContain('if (remoteSessionUnavailable) return false');
-    expect(sessionViewSrc).toContain('disabled={remoteSessionUnavailable}');
+    // device-link 远程交接期间也要禁用(见 remoteHandoffPreparing):那几段 await
+    // 可能数十秒,不禁用的话用户补发的消息会插到草稿提交的首条之前。断线这一档不变。
+    expect(sessionViewSrc).toContain(
+      'disabled={remoteSessionUnavailable || remoteHandoffPreparing}',
+    );
   });
   it('断线缓存的远程 session 可查看,但生命周期/元数据写操作必须走统一 gate', () => {
     expect(sessionHeaderSrc).toContain('remoteSessionUnavailable || isRemoteSessionWriteBlocked(session)');

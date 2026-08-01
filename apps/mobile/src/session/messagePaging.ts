@@ -3,6 +3,15 @@ import type { RemoteMessage, RemoteSession } from '@/session/types';
 export const MESSAGE_PAGE_SIZE = 80;
 export const MESSAGE_PAGE_RETRY_LIMITS = [80, 40, 20, 10, 5, 1] as const;
 
+export function latestMessageCursor(messages: readonly RemoteMessage[]): string | null {
+  let latest: RemoteMessage | null = null;
+  for (const message of messages) {
+    if (!message.id || message.id.startsWith('mobile-system-')) continue;
+    if (!latest || compareMessageOrder(message, latest) > 0) latest = message;
+  }
+  return latest?.id ?? null;
+}
+
 export function oldestMessageCursor(messages: readonly RemoteMessage[]): string | null {
   let oldest: RemoteMessage | null = null;
   for (const message of messages) {
@@ -125,8 +134,147 @@ export function isPayloadTooLargeError(error: unknown): boolean {
   return code === 'PAYLOAD_TOO_LARGE' || message.includes('PAYLOAD_TOO_LARGE') || /frame exceeds \d+ bytes/i.test(message);
 }
 
-function compareMessageOrder(a: RemoteMessage, b: RemoteMessage): number {
+export function incrementalMessagePageNeedsFallback(input: {
+  page: MessagePageRetryResult;
+  totalCount?: number;
+  previousTotalCount?: number;
+  afterMessage?: RemoteMessage | null;
+}): boolean {
+  const { page, totalCount, previousTotalCount, afterMessage } = input;
+  if (page.reducedByPayloadTooLarge) return true;
+  if (
+    afterMessage
+    && page.messages.some((message) => compareMessageOrder(message, afterMessage) <= 0)
+  ) {
+    // An old host may ignore `after` and return the latest page. A row at or before
+    // the client cursor proves this is not a contiguous incremental page.
+    return true;
+  }
+  if (page.messages.length >= page.limit) return true;
+  if (
+    typeof totalCount === 'number'
+    && Number.isFinite(totalCount)
+    && typeof previousTotalCount === 'number'
+    && Number.isFinite(previousTotalCount)
+  ) {
+    const expectedNewRows = totalCount - previousTotalCount;
+    return expectedNewRows < 0 || page.messages.length !== expectedNewRows;
+  }
+  return false;
+}
+
+export interface CompleteIncrementalMessageCollectionInput {
+  initialPage: MessagePageRetryResult;
+  afterMessage: RemoteMessage;
+  fetchAfter: (after: string) => Promise<MessagePageRetryResult>;
+  fetchLatest: () => Promise<MessagePageRetryResult>;
+  fetchBefore: (before: string) => Promise<MessagePageRetryResult>;
+  maxPages?: number;
+}
+
+/**
+ * Collect every row after a reopen cursor before marking the cached window synced.
+ * The first `after` page is intentionally capped, so a large offline delta needs
+ * cursor pagination; an old host that ignores `after` is handled by walking back
+ * from the latest window until the original cursor is reached.
+ */
+export async function collectCompleteIncrementalMessages(
+  input: CompleteIncrementalMessageCollectionInput,
+): Promise<RemoteMessage[] | null> {
+  const maxPages = input.maxPages ?? 256;
+  const anchor = input.afterMessage;
+  const collected = new Map<string, RemoteMessage>();
+  const addRowsAfterAnchor = (rows: readonly RemoteMessage[]): boolean => {
+    let valid = true;
+    for (const message of rows) {
+      if (compareMessageOrder(message, anchor) <= 0) {
+        valid = false;
+        continue;
+      }
+      const key = message.id || message.clientId;
+      if (key) collected.set(key, message);
+    }
+    return valid;
+  };
+  const anchorKey = anchor.id || anchor.clientId;
+  const containsAnchor = (rows: readonly RemoteMessage[]): boolean =>
+    Boolean(anchorKey) && rows.some((message) =>
+      (message.id || message.clientId) === anchorKey);
+  const ordered = (): RemoteMessage[] => [...collected.values()].sort(compareMessageOrder);
+  const hasTrimmedRows = (page: MessagePageRetryResult): boolean =>
+    page.messages.some((message) => message.agentMeta?.remoteRowsTrimmed === true);
+  // New hosts support cursor pagination. Every subsequent page must be strictly
+  // after the last cursor; otherwise the host is treated as legacy and we switch
+  // to the authoritative tail walk below.
+  let page = input.initialPage;
+  let forwardValid = addRowsAfterAnchor(page.messages);
+  let cursor = latestMessageCursor(page.messages);
+  let forwardComplete = false;
+  for (let pageIndex = 0; forwardValid && pageIndex < maxPages; pageIndex += 1) {
+    if (!cursor) break;
+    if (
+      page.messages.length < page.limit
+      && !page.reducedByPayloadTooLarge
+      && !hasTrimmedRows(page)
+    ) {
+      forwardComplete = true;
+      break;
+    }
+
+    const next = await input.fetchAfter(cursor);
+    if (next.messages.length === 0) {
+      // Empty continuation after more than one page proves a progressing forward
+      // walk reached the tail. After only the initial full/reduced page it can also
+      // mean the host ignored an unknown cursor and returned the latest window.
+      if (pageIndex > 0) forwardComplete = true;
+      else forwardValid = false;
+      break;
+    }
+    const nextCursor = latestMessageCursor(next.messages);
+    if (!nextCursor || nextCursor === cursor) {
+      forwardValid = false;
+      break;
+    }
+    forwardValid = addRowsAfterAnchor(next.messages);
+    page = next;
+    cursor = nextCursor;
+  }
+  if (forwardValid && forwardComplete) return ordered();
+  if (forwardValid) return null;
+
+  // A latest-window fallback must be paged backwards; using only its tail can
+  // silently omit the middle of a delta larger than the window size.
+  collected.clear();
+  page = await input.fetchLatest();
+  for (let pageIndex = 0; pageIndex < maxPages; pageIndex += 1) {
+    const reachedAnchor = containsAnchor(page.messages);
+    const crossedAnchor = !addRowsAfterAnchor(page.messages);
+    if (reachedAnchor) return ordered();
+    if (crossedAnchor) return null;
+    if (
+      page.messages.length < page.limit
+      && !page.reducedByPayloadTooLarge
+      && !hasTrimmedRows(page)
+    ) return null;
+    const before = oldestMessageCursor(page.messages);
+    if (!before) return null;
+    page = await input.fetchBefore(before);
+    if (page.messages.length === 0) return null;
+  }
+  return null;
+}
+
+export function compareMessageOrder(a: RemoteMessage, b: RemoteMessage): number {
   const byTime = a.createdAt.localeCompare(b.createdAt);
   if (byTime !== 0) return byTime;
-  return (a.id || a.clientId).localeCompare(b.id || b.clientId);
+  if (
+    typeof a.rowid === 'number'
+    && Number.isFinite(a.rowid)
+    && typeof b.rowid === 'number'
+    && Number.isFinite(b.rowid)
+    && a.rowid !== b.rowid
+  ) return a.rowid - b.rowid;
+  // Older hosts and live push frames may not carry rowid. Their same-timestamp
+  // arrival order is meaningful; message ids are not insertion ordered.
+  return 0;
 }

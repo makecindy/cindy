@@ -52,6 +52,7 @@ import {
   FolderOpen,
   FolderPlus,
   FolderTree,
+  Eye,
   PanelRight,
   Pencil,
   Trash2,
@@ -59,6 +60,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { Spinner } from '@/components/ui/spinner';
+import { Tip } from '@/components/ui/tooltip';
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -71,6 +73,7 @@ import {
 } from '@/lib/composerMentionDrag';
 import { isBrowserOpenablePath } from '../../../../shared/browserOpenableExts';
 import { pickFileIcon, pickFolderIcon } from './lib/fileIcon';
+import { isLightboxImagePath } from './lib/imageExt';
 import type { DirEntry, UseFileTreeReturn } from './hooks/useFileTree';
 import { useDelayedFlag } from './hooks/useDelayedFlag';
 
@@ -101,6 +104,8 @@ export interface FileTreeViewProps {
   selectedPath: string | null;
   /** Click on a file row → caller updates URL search param. */
   onSelectFile: (relPath: string) => void;
+  /** 图片文件行的小眼睛操作；仅传入该能力的宿主显示。 */
+  onPreviewImage?: (entry: DirEntry) => void;
   /** Right-click 文件夹 → 新建文件。parentRel 是被点中文件夹的 relPath。 */
   onNewFile?: (parentRel: string) => void;
   /** Right-click 文件夹 → 新建子文件夹。 */
@@ -202,6 +207,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
     tree,
     selectedPath,
     onSelectFile,
+    onPreviewImage,
     onNewFile,
     onNewFolder,
     onDeleteFile,
@@ -341,6 +347,7 @@ export const FileTreeView = forwardRef<FileTreeViewHandle, FileTreeViewProps>(fu
             loading={tree.loadingPaths.has(entry.relPath)}
             onToggleFolder={tree.toggleFolder}
             onSelectFile={onSelectFile}
+            onPreviewImage={onPreviewImage}
             onContextMenu={(e) => {
               e.preventDefault();
               e.stopPropagation();
@@ -552,6 +559,7 @@ interface FileTreeRowProps {
   loading?: boolean;
   onToggleFolder: (relPath: string) => void;
   onSelectFile: (relPath: string) => void;
+  onPreviewImage?: (entry: DirEntry) => void;
   onContextMenu: (e: React.MouseEvent) => void;
 }
 
@@ -563,9 +571,13 @@ function FileTreeRow({
   loading = false,
   onToggleFolder,
   onSelectFile,
+  onPreviewImage,
   onContextMenu,
 }: FileTreeRowProps) {
+  const { t } = useTranslation();
   const isFolder = entry.type === 'directory';
+  const canPreviewImage =
+    !isFolder && Boolean(onPreviewImage) && isLightboxImagePath(entry.relPath);
   // 展开慢时 chevron 原位换 spinner(同尺寸,行几何零变化);门控见 useDelayedFlag。
   const showLoadingChevron = useDelayedFlag(loading && isFolder);
   const Chev = expanded ? ChevronDown : ChevronRight;
@@ -574,7 +586,6 @@ function FileTreeRow({
   // Indent: 16 px per depth + 8 px base padding.
   const paddingLeft = depth * 16 + 8;
   const rowStyle = {
-    paddingLeft,
     WebkitUserDrag: 'element',
   } as CSSProperties & {
     WebkitUserDrag: 'element';
@@ -583,13 +594,6 @@ function FileTreeRow({
   const handleClick = () => {
     if (isFolder) onToggleFolder(entry.relPath);
     else onSelectFile(entry.relPath);
-  };
-
-  const handleKey = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' || e.key === ' ') {
-      e.preventDefault();
-      handleClick();
-    }
   };
 
   const handleDragStart = (e: React.DragEvent<HTMLDivElement>) => {
@@ -607,12 +611,10 @@ function FileTreeRow({
   };
 
   return (
+    // biome-ignore lint/a11y/noStaticElementInteractions: 行内主按钮承载键盘语义；外层 click 只补回 padding 死区，眼睛按钮会阻止冒泡。
     <div
-      role="button"
-      tabIndex={0}
       draggable
       onClick={handleClick}
-      onKeyDown={handleKey}
       onContextMenu={onContextMenu}
       onDragStart={handleDragStart}
       style={rowStyle}
@@ -621,39 +623,73 @@ function FileTreeRow({
       // 未来要"展开到某个文件夹"也能直接复用。
       data-relpath={entry.relPath}
       className={cn(
-        'flex h-7 w-full shrink-0 items-center gap-1.5 rounded-md pr-2',
+        'group/file-row flex h-7 w-full shrink-0 items-center rounded-md pr-2',
         'cursor-pointer text-[13px] transition-colors',
         selected
           ? 'bg-sidebar-item-active font-medium text-sidebar-item-active-foreground'
           : 'text-foreground hover:bg-sidebar-item-hover',
       )}
     >
-      {isFolder ? (
-        showLoadingChevron ? (
-          <Spinner size={12} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+      <button
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          handleClick();
+        }}
+        style={{ paddingLeft }}
+        className="flex h-full min-w-0 flex-1 items-center gap-1.5 bg-transparent p-0 text-left text-inherit focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring)]"
+      >
+        {isFolder ? (
+          showLoadingChevron ? (
+            <Spinner size={12} strokeWidth={2} className="text-[var(--cmd-palette-item-meta)]" />
+          ) : (
+            <Chev
+              size={12}
+              strokeWidth={2}
+              className="shrink-0 text-[var(--cmd-palette-item-meta)]"
+            />
+          )
         ) : (
-          <Chev
-            size={12}
-            strokeWidth={2}
-            className="shrink-0 text-[var(--cmd-palette-item-meta)]"
-          />
-        )
-      ) : (
-        // Phantom 12 px slot so file icons line up with folder icons at the
-        // same depth. Same trick as VSCode.
-        <span aria-hidden className="inline-block w-3 shrink-0" />
-      )}
-      <Icon
-        size={14}
-        strokeWidth={1.75}
-        className={cn(
-          'shrink-0',
-          selected
-            ? 'text-sidebar-item-active-foreground'
-            : 'text-[var(--cmd-palette-item-meta)]',
+          // Phantom 12 px slot so file icons line up with folder icons at the
+          // same depth. Same trick as VSCode.
+          <span aria-hidden className="inline-block w-3 shrink-0" />
         )}
-      />
-      <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+        <Icon
+          size={14}
+          strokeWidth={1.75}
+          className={cn(
+            'shrink-0',
+            selected
+              ? 'text-sidebar-item-active-foreground'
+              : 'text-[var(--cmd-palette-item-meta)]',
+          )}
+        />
+        <span className="min-w-0 flex-1 truncate">{entry.name}</span>
+      </button>
+      {canPreviewImage ? (
+        <Tip text={t('ccAgent.workdirBrowse.imagePreview.viewLarge')} side="left">
+          <button
+            type="button"
+            aria-label={t('ccAgent.workdirBrowse.imagePreview.viewLarge')}
+            onClick={(event) => {
+              event.stopPropagation();
+              onPreviewImage?.(entry);
+            }}
+            className={cn(
+              'pointer-events-none flex size-5 shrink-0 select-none items-center justify-center rounded-full opacity-0',
+              'transition-[color,background-color,opacity] duration-[var(--motion-fast)] active:scale-[0.98]',
+              'group-hover/file-row:pointer-events-auto group-hover/file-row:opacity-100',
+              'group-focus-within/file-row:pointer-events-auto group-focus-within/file-row:opacity-100',
+              'focus-visible:pointer-events-auto focus-visible:opacity-100 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-[var(--focus-ring)]',
+              selected
+                ? 'text-sidebar-item-active-foreground'
+                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            )}
+          >
+            <Eye size={14} strokeWidth={1.75} />
+          </button>
+        </Tip>
+      ) : null}
     </div>
   );
 }

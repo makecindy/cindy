@@ -34,9 +34,11 @@ describe('auth weak-network bootstrap', () => {
       'activateMobileSessionRealm(storedSession.realm);',
     );
     const publishUserAt = restoreBody.indexOf('setUser(cachedUser);');
+    const publishOwnerAt = restoreBody.indexOf('setMobileAuthOwner(cachedUser.id);');
     expect(loadRealmAt).toBeGreaterThanOrEqual(0);
     expect(activateRealmAt).toBeGreaterThan(loadRealmAt);
-    expect(publishUserAt).toBeGreaterThan(activateRealmAt);
+    expect(publishOwnerAt).toBeGreaterThan(activateRealmAt);
+    expect(publishUserAt).toBeGreaterThan(publishOwnerAt);
     expect(restoreBody).toContain('setDeferredSessionRecovery(true);');
     // bootstrap 里的 refresh 失败必须是"保留降级会话",不许再出现坍缩式 .catch(() => null)。
     expect(authSource).not.toContain('await refresh(did).catch(() => null)');
@@ -46,6 +48,22 @@ describe('auth weak-network bootstrap', () => {
     expect(authSource).toContain(
       'without aborting a rotating refresh-token request',
     );
+  });
+
+  it('publishes the auth-owner generation before every user snapshot change', () => {
+    const applyUserStart = authSource.indexOf('const applyUser = useCallback');
+    const applyUserEnd = authSource.indexOf('\n  );', applyUserStart);
+    const applyUserBody = authSource.slice(applyUserStart, applyUserEnd);
+    expect(applyUserBody.indexOf('setMobileAuthOwner(next?.id);'))
+      .toBeLessThan(applyUserBody.indexOf('setUser(next);'));
+
+    const initializeFailure = authSource.indexOf(
+      "console.warn('[auth] initialize failed; normalized to signed-out'",
+    );
+    const failureOwner = authSource.indexOf('setMobileAuthOwner(null);', initializeFailure);
+    const failureUser = authSource.indexOf('setUser(null);', initializeFailure);
+    expect(failureOwner).toBeGreaterThan(initializeFailure);
+    expect(failureUser).toBeGreaterThan(failureOwner);
   });
 
   it('isAuthenticated 以 user 为准,token 未刷到时不闪回登录页', () => {

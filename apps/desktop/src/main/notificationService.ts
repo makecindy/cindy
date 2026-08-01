@@ -79,9 +79,9 @@ interface ShowSessionEventPayload {
 }
 
 /**
- * Toast 文案分两层：title 同时标识 Cindy 与会话，body 放结构化终态。
+ * Toast 文案分两层：title 同时标识 Cindy 与任务，body 放结构化终态。
  * 不能只依赖 Windows AUMID / macOS bundle 元数据标识来源：不同系统和通知中心
- * 展示的 app 元数据并不一致，只显示会话名时容易被误认成同名插件主动发出的通知。
+ * 展示的 app 元数据并不一致，只显示任务名时容易被误认成同名插件主动发出的通知。
  */
 function buildBody(kind: SessionEventKind): string {
   switch (kind) {
@@ -96,16 +96,16 @@ function buildBody(kind: SessionEventKind): string {
 }
 
 /**
- * 飞书私聊文案 — 单行纯文本(lark_md 渲染),保持极简,与桌面 toast 信息一致。
- * 标题 + 状态合并到一行,避免飞书消息列表里显得空荡。
+ * 外部通知通用文案 — 单行纯文本，保持极简并与桌面 toast 信息一致。
+ * 标题 + 状态合并到一行，适用于飞书私聊和企微群消息列表。
  */
-function buildFeishuText(title: string, kind: SessionEventKind): string {
+function buildExternalNotificationText(title: string, kind: SessionEventKind): string {
   const status = kind === 'needs-reply'
     ? '需要你回复'
     : kind === 'error'
       ? '执行失败'
       : '已完成 ✓';
-  return `${CLIENT_NOTIFICATION_NAME} · 会话「${title}」${status}`;
+  return `${CLIENT_NOTIFICATION_NAME} · 任务「${title}」${status}`;
 }
 
 // 防 GC：Electron Notification 实例如果不持引用，JS 引擎可能在 toast 还在显示
@@ -147,7 +147,7 @@ export function showDesktopSessionEvent(
 ): void {
   const { sessionId, title, kind } = payload;
   if (sessionId) markSessionNeedsAttention(sessionId);
-  const safeTitle = title?.trim() || sessionId.slice(0, 8) || '会话';
+  const safeTitle = title?.trim() || sessionId.slice(0, 8) || '任务';
   showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId));
 }
 
@@ -309,7 +309,7 @@ async function sendFeishuMessage(
     return;
   }
   try {
-    await feishuIm.sendMarkdownText(ownerOpenId, buildFeishuText(safeTitle, kind));
+    await feishuIm.sendMarkdownText(ownerOpenId, buildExternalNotificationText(safeTitle, kind));
   } catch (err) {
     // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data 里,
     // 显式拆出来 log。与 scheduler-host/notifier.ts 的 catch 写法对齐。

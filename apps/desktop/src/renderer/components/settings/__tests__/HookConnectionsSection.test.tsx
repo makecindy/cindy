@@ -9,16 +9,19 @@ const ipc = vi.hoisted(() => ({
   get: vi.fn(),
   onStatusChanged: vi.fn<(listener: (view: SlackHookView) => void) => () => void>(() => () => {}),
   setEnabled: vi.fn(),
+  setLifecycleAnnouncement: vi.fn(),
   providerBindStart: vi.fn(),
   providerBindCancel: vi.fn(),
   providerBindRevoke: vi.fn(),
   cancelPendingBind: vi.fn(),
   revokeTeam: vi.fn(),
-  openTelegramAction: vi.fn(),
+  openProviderAction: vi.fn(),
   openExternal: vi.fn(),
+  setXDefaultWorkspace: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
+const toast = vi.hoisted(() => ({ error: vi.fn() }));
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -26,6 +29,10 @@ vi.mock('react-i18next', () => ({
 
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: dialog.confirm }),
+}));
+
+vi.mock('@/lib/toast', () => ({
+  toast,
 }));
 
 vi.mock('@/components/ui/switch', () => ({
@@ -73,6 +80,21 @@ vi.mock('../HookWorkspacePrefsEditor', () => ({
   },
 }));
 
+vi.mock('../ImDefaultSettingsSection', () => ({
+  ImDefaultSettingsSection: ({ channel }: { channel?: string }) => (
+    <div data-testid={`im-defaults-${channel ?? 'global'}`} />
+  ),
+}));
+
+vi.mock('../TelegramBehaviorSettings', () => ({
+  TelegramBehaviorSettings: ({ bindingId }: { bindingId?: string }) => (
+    <div data-testid="telegram-behavior" data-binding-id={bindingId} />
+  ),
+  TelegramGroupActivationSettings: ({ bindingId }: { bindingId?: string }) => (
+    <div data-testid="telegram-groups" data-binding-id={bindingId} />
+  ),
+}));
+
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
@@ -81,9 +103,11 @@ async function expandChannelCard(titleKey: RegExp) {
 }
 const SLACK_CARD = /settings\.tina\.prefs\.providerSlack/;
 const TELEGRAM_CARD = /settings\.tina\.prefs\.providerTelegram/;
+const X_CARD = /settings\.tina\.prefs\.providerX/;
 
 const BASE_HOOK: SlackHookView = {
   enabled: false,
+  lifecycleAnnouncement: false,
   url: 'wss://im.example.test',
   workspaces: {},
   status: 'disabled',
@@ -99,6 +123,17 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
+  x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
 };
@@ -108,21 +143,24 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     vi.clearAllMocks();
     ipc.onStatusChanged.mockReturnValue(() => {});
     ipc.setEnabled.mockResolvedValue({ hook: BASE_HOOK });
+    ipc.setLifecycleAnnouncement.mockResolvedValue({ hook: BASE_HOOK });
     ipc.providerBindRevoke.mockResolvedValue({ hook: BASE_HOOK });
     ipc.revokeTeam.mockResolvedValue({ hook: BASE_HOOK });
-    ipc.openTelegramAction.mockResolvedValue(undefined);
+    ipc.openProviderAction.mockResolvedValue(undefined);
     dialog.confirm.mockResolvedValue(true);
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       hookControl: {
         get: ipc.get,
         onStatusChanged: ipc.onStatusChanged,
         setEnabled: ipc.setEnabled,
+        setLifecycleAnnouncement: ipc.setLifecycleAnnouncement,
         providerBindStart: ipc.providerBindStart,
         providerBindCancel: ipc.providerBindCancel,
         providerBindRevoke: ipc.providerBindRevoke,
         cancelPendingBind: ipc.cancelPendingBind,
         revokeTeam: ipc.revokeTeam,
-        openTelegramAction: ipc.openTelegramAction,
+        openProviderAction: ipc.openProviderAction,
+        setXDefaultWorkspace: ipc.setXDefaultWorkspace,
       },
       openExternal: ipc.openExternal,
     };
@@ -180,6 +218,73 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     );
   });
 
+  it('shows the lifecycle notification switch only after Slack is bound and persists changes', async () => {
+    const boundHook: SlackHookView = {
+      ...BASE_HOOK,
+      enabled: true,
+      status: 'connected',
+      binding: {
+        state: 'confirmed',
+        slackUserId: 'U1',
+        slackUserName: 'alice',
+        message: null,
+        authorizeUrl: null,
+        reason: null,
+        installUrl: null,
+        teamName: 'Acme',
+      },
+    };
+    ipc.get.mockResolvedValue({ hook: boundHook });
+    ipc.setLifecycleAnnouncement.mockResolvedValue({
+      hook: { ...boundHook, lifecycleAnnouncement: true },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+
+    fireEvent.click(
+      await screen.findByRole('switch', {
+        name: 'settings.remoteControl.hook.lifecycleAnnouncement.label',
+      }),
+    );
+
+    await waitFor(() => expect(ipc.setLifecycleAnnouncement).toHaveBeenCalledWith(true));
+  });
+
+  it('uses a localized fallback when persisting the lifecycle preference fails', async () => {
+    const boundHook: SlackHookView = {
+      ...BASE_HOOK,
+      enabled: true,
+      status: 'connected',
+      binding: {
+        state: 'confirmed',
+        slackUserId: 'U1',
+        slackUserName: 'alice',
+        message: null,
+        authorizeUrl: null,
+        reason: null,
+        installUrl: null,
+        teamName: 'Acme',
+      },
+    };
+    ipc.get.mockResolvedValue({ hook: boundHook });
+    ipc.setLifecycleAnnouncement.mockRejectedValue(
+      new Error('[INTERNAL] failed to persist Slack lifecycle notification preference'),
+    );
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(SLACK_CARD);
+    fireEvent.click(
+      await screen.findByRole('switch', {
+        name: 'settings.remoteControl.hook.lifecycleAnnouncement.label',
+      }),
+    );
+
+    await waitFor(() =>
+      expect(toast.error).toHaveBeenCalledWith('settings.remoteControl.hook.toast.actionFailed'),
+    );
+  });
+
   it('offers an explicit link action when Telegram is enabled but unbound', async () => {
     ipc.get.mockResolvedValue({ hook: BASE_HOOK });
     ipc.providerBindStart.mockResolvedValue({ hook: BASE_HOOK });
@@ -224,7 +329,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     await expandChannelCard(TELEGRAM_CARD);
 
     const openButton = await screen.findByRole('button', {
-      name: 'settings.remoteControl.hook.telegram.openTelegram',
+      name: 'settings.remoteControl.hook.telegram.openApp',
     });
     expect(
       screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
@@ -234,7 +339,113 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ).toBeTruthy();
 
     fireEvent.click(openButton);
-    await waitFor(() => expect(ipc.openTelegramAction).toHaveBeenCalledWith('connect'));
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('telegram', 'connect'));
+  });
+
+  it('hides the X card entirely while the endpoint manifest leaves xHookWsUrl empty', async () => {
+    // BASE_HOOK 的 x.url 为空且未启用/不可用 —— 端点清单缺失即灰度关闭,
+    // 设置页不得出现 X 入口(providerCardState.visible 语义)。
+    ipc.get.mockResolvedValue({ hook: BASE_HOOK });
+
+    render(<HookConnectionsSection />);
+    await screen.findByRole('button', { name: TELEGRAM_CARD });
+
+    expect(screen.queryByRole('button', { name: X_CARD })).toBeNull();
+  });
+
+  it('keeps the OAuth deep-link actions visible while X binding is pending', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      x: {
+        enabled: true,
+        url: 'wss://x-hook.example.test',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: {
+          provider: 'x',
+          state: 'pending',
+          attemptId: 'attempt-x1',
+          bindingId: null,
+          principalId: null,
+          principalName: null,
+          scopeId: 'bot-x',
+          scopeName: 'CindyBot',
+          connectUrl:
+            'https://x.com/i/oauth2/authorize?response_type=code&client_id=c1&redirect_uri=r&scope=s&state=st&code_challenge=cc&code_challenge_method=S256',
+          expiresAt: Date.now() + 60_000,
+          reason: null,
+          remediationUrl: null,
+          actions: ['open_connect_url', 'copy_connect_url', 'cancel'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+
+    const openButton = await screen.findByRole('button', {
+      name: 'settings.remoteControl.hook.x.openApp',
+    });
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.binding.copyLink' }),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.x.cancel' }),
+    ).toBeTruthy();
+
+    fireEvent.click(openButton);
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('x', 'connect'));
+  });
+
+  it('renders confirmed X actions from the wire action list and never a group action', async () => {
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      x: {
+        enabled: true,
+        url: 'wss://x-hook.example.test',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: {
+          provider: 'x',
+          state: 'confirmed',
+          attemptId: null,
+          bindingId: 'x-binding-1',
+          principalId: 'x-user-1',
+          principalName: '@dash',
+          scopeId: 'bot-x',
+          scopeName: 'CindyBot',
+          connectUrl: null,
+          expiresAt: null,
+          reason: null,
+          remediationUrl: 'https://x.com/CindyBot',
+          actions: ['open_provider', 'revoke'],
+        },
+      },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+
+    fireEvent.click(
+      await screen.findByRole('button', { name: 'settings.remoteControl.hook.x.openBot' }),
+    );
+    await waitFor(() => expect(ipc.openProviderAction).toHaveBeenCalledWith('x', 'provider'));
+
+    // X 无群概念: server 不会下发 add_to_group, 按钮为数据驱动, 不得凭空渲染。
+    expect(
+      screen.queryByRole('button', { name: 'settings.remoteControl.hook.x.addToGroup' }),
+    ).toBeNull();
+    expect(
+      screen.getByRole('button', { name: 'settings.remoteControl.hook.x.unlink' }),
+    ).toBeTruthy();
   });
 
   it('uses the latest Slack install URL after an async confirmation', async () => {
@@ -603,6 +814,76 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     expect(ipc.providerBindRevoke).not.toHaveBeenCalled();
   });
 
+  it('shows global official Telegram defaults, behavior, and group settings only after linking', async () => {
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...BASE_HOOK,
+        telegram: {
+          ...BASE_HOOK.telegram,
+          behaviorAvailable: true,
+          binding: {
+            provider: 'telegram',
+            state: 'confirmed',
+            attemptId: null,
+            bindingId: 'binding-settings',
+            principalId: '12345',
+            principalName: 'Cindy User',
+            scopeId: 'bot-1',
+            scopeName: 'cindy_example_bot',
+            connectUrl: null,
+            expiresAt: null,
+            reason: null,
+            remediationUrl: 'https://t.me/cindy_example_bot',
+            actions: ['revoke'],
+          },
+        },
+      },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
+    expect(screen.getByTestId('telegram-behavior').getAttribute('data-binding-id')).toBe(
+      'binding-settings',
+    );
+    expect(screen.getByTestId('telegram-groups').getAttribute('data-binding-id')).toBe(
+      'binding-settings',
+    );
+  });
+
+  it('keeps local Telegram defaults visible when the linked server lacks behavior capability', async () => {
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...BASE_HOOK,
+        telegram: {
+          ...BASE_HOOK.telegram,
+          behaviorAvailable: false,
+          binding: {
+            provider: 'telegram',
+            state: 'confirmed',
+            attemptId: null,
+            bindingId: 'legacy-binding',
+            principalId: '12345',
+            principalName: 'Cindy User',
+            scopeId: 'bot-1',
+            scopeName: 'cindy_example_bot',
+            connectUrl: null,
+            expiresAt: null,
+            reason: null,
+            remediationUrl: 'https://t.me/cindy_example_bot',
+            actions: ['revoke'],
+          },
+        },
+      },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
+    expect(screen.queryByTestId('telegram-behavior')).toBeNull();
+    expect(screen.queryByTestId('telegram-groups')).toBeNull();
+  });
+
   it('does not remove a changed Slack binding from a stale confirmation', async () => {
     let pushStatus: ((view: SlackHookView) => void) | undefined;
     let resolveConfirm: ((value: boolean) => void) | undefined;
@@ -650,5 +931,44 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     });
 
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
+  });
+
+  it('默认工作目录控件只出现在 X 卡, 且展示当前生效的目录名', async () => {
+    // X 一次交互只有一条公开推文, 没有目录选择面板的位置 —— 不预设就只能永远
+    // 落在「对话」上、碰不到本地仓库, 所以这个入口是 X 的唯一目录来源。
+    // 注: 下拉展开后的写入路径没在这里覆盖(Radix 菜单在 jsdom 下不展开, 本仓
+    // 同款 team chip 也没测); 写入语义由 store 层的默认目录用例保证。
+    const xView = {
+      enabled: true,
+      url: 'wss://x-hook.example.test',
+      status: 'connected' as const,
+      lastError: null,
+      available: true,
+      capabilityPending: false,
+      defaultWorkspace: 'cindy',
+      binding: null,
+    };
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      workspaces: { cindy: '/Users/dash/Code/cindy' },
+      x: xView,
+      telegram: { ...xView, url: 'wss://tg-hook.example.test', defaultWorkspace: null },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    expect(
+      await screen.findByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+    ).toBeTruthy();
+
+    // Telegram 能在会话里当场选目录, 不该出现这个预设控件。
+    cleanup();
+    ipc.get.mockResolvedValue({ hook });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(
+      screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+    ).toBeNull();
   });
 });

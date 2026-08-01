@@ -114,10 +114,17 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
-    // 权限选择已合并进模型浮窗(ModelPickerSheet 二级视图);composer 底排只剩 [+][模型]。
+    expect(source).toContain('|| permissionSheetOpen');
+    // 2026-07-29 用户裁决(对齐 Codex):权限入口是 composer 左侧图标钮 + 独立浮窗
+    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface),模型药丸右对齐;
+    // 浮窗打开时仍属于 composer 激活态,不能因输入框失焦把底排收起。
+    // ModelPickerSheet 的 header 权限入口隐藏(hidePermissionTrigger),不再双入口。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
-    expect(source).not.toContain('<MobilePermissionPickerList');
-    // 展开态 toolbar / 收起态 leading 共用 renderComposerModelPill(testID)(#900)。
+    expect(source).toContain('testID="session.permissionIndicator"');
+    expect(source).toContain('<MobilePermissionPickerList');
+    expect(source).toContain('hidePermissionTrigger');
+    expect(source).toContain('setPermissionSheetOpen(false)');
+    // 展开态 toolbar(spacer 右侧) / 收起态 leading 共用 renderComposerModelPill(testID)(#900)。
     expect(source).toContain("renderComposerModelPill('session.composerModelButton')");
     // 收起态封顶 200 + 输入区 minWidth 120:长/自定义 label 不得挤没 TextInput。
     expect(source).toContain("renderComposerModelPill('session.composerCollapsedModelButton', 200)");

@@ -5,6 +5,7 @@ import {
   type AppShortcutId,
   type AppShortcutOverrides,
 } from '../../shared/appShortcuts';
+import { voiceInputShortcutToAppShortcutCombo } from '../voice-input/appShortcutConflict';
 
 /**
  * renderer 侧应用级快捷键状态单例。
@@ -14,14 +15,35 @@ import {
  * 与 main 消费端跑同一份 registry 代码, 判定不漂移。之后订阅
  * app-shortcuts:changed 广播热更新, 设置页改绑立即对所有监听生效。
  *
+ * 语音输入的键盘快捷键是 registry 之外的用户键位: 历史设置可能占着
+ * mod+1..9 等隐藏槽位默认组合, 这里把它作为 yieldToCombos 传入合并
+ * (隐藏槽位让位, 语音快捷键获胜), 并订阅语音设置变更热更新。registry
+ * 消费端全部走本 store, 让位对 useAppShortcut 监听与序号徽标同时生效。
+ *
  * 非 Electron 环境 (单测 jsdom) 下退化为纯默认值。
  */
 
 let platform = 'darwin';
 let effective = new Map<AppShortcutId, AppShortcutCombo[]>();
 let overridesSnapshot: AppShortcutOverrides = {};
+let voiceYieldCombos: AppShortcutCombo[] = [];
 const listeners = new Set<() => void>();
 let initialized = false;
+
+function recomputeEffective(): void {
+  effective = getEffectiveAppShortcuts(overridesSnapshot, platform, voiceYieldCombos);
+}
+
+function readVoiceYieldCombos(): AppShortcutCombo[] {
+  try {
+    const shortcut = window.electronAPI?.voiceInput?.getDataSnapshot()?.settings?.shortcut;
+    if (!shortcut) return [];
+    const combo = voiceInputShortcutToAppShortcutCombo(shortcut);
+    return combo ? [combo] : [];
+  } catch {
+    return [];
+  }
+}
 
 function ensureInitialized(): void {
   if (initialized) return;
@@ -37,13 +59,23 @@ function ensureInitialized(): void {
     }
     api.onChanged((payload) => {
       overridesSnapshot = normalizeAppShortcutOverrides(payload?.overrides, platform);
-      effective = getEffectiveAppShortcuts(overridesSnapshot, platform);
+      recomputeEffective();
       listeners.forEach((cb) => cb());
     });
+    voiceYieldCombos = readVoiceYieldCombos();
+    try {
+      window.electronAPI?.voiceInput?.onDataChanged(() => {
+        voiceYieldCombos = readVoiceYieldCombos();
+        recomputeEffective();
+        listeners.forEach((cb) => cb());
+      });
+    } catch {
+      // 语音订阅不可用时保持启动快照, 不影响其余快捷键。
+    }
   } else if (typeof navigator !== 'undefined' && !/Mac|iPhone|iPad/.test(navigator.platform)) {
     platform = 'win32';
   }
-  effective = getEffectiveAppShortcuts(overridesSnapshot, platform);
+  recomputeEffective();
 }
 
 /** 某 id 当前生效的组合列表; 平台不可用返回空数组 (消费端据此不挂监听)。 */

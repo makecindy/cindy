@@ -154,6 +154,485 @@ describe('SessionRegistry', () => {
     expect(controlCalls[2].args).toEqual([{ effortLevel: 'high' }]);
   });
 
+  it('enforces remote tool guards before permission rules while preserving explicit selection', async () => {
+    const { factory: baseFactory } = buildFakeFactory();
+    let captured: SdkQueryFactoryOptions | undefined;
+    const registry = new SessionRegistry({
+      sdkQueryFactory: (opts) => {
+        captured = opts;
+        return baseFactory(opts);
+      },
+    });
+    const events: Array<{ kind: string; payload: unknown }> = [];
+    registry.create({
+      sessionId: 's-guard',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix:
+            'mcp__plugin_feishu-delegate_feishu-delegate__',
+          sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
+          invocation: 'explicit-only',
+          explicitSelectors: [
+            '$feishu-delegate:message-feishu-coworkers',
+            '/feishu-delegate:message-feishu-coworkers',
+          ],
+          denialMessage: 'Use the Cindy Feishu source.',
+        },
+      ],
+      // A serialized caller cannot replace the daemon-owned guard.
+      extraOptions: { hooks: { PreToolUse: [] } },
+    });
+    registry.attach('s-guard', (kind, payload) =>
+      events.push({ kind, payload }),
+    );
+    await waitFor(() => events.length >= 1);
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+
+    registry.sendMessage('s-guard', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content: '不要使用 Feishu Delegate，查一下消息',
+      },
+      parent_tool_use_id: null,
+    });
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: {
+        permissionDecision: 'deny',
+        permissionDecisionReason: 'Use the Cindy Feishu source.',
+      },
+    });
+    // A user MCP with the ordinary server name is a different source.
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name: 'mcp__feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toEqual({ continue: true });
+
+    await waitFor(() => events.length >= 3);
+    registry.sendMessage('s-guard', {
+      type: 'user',
+      message: {
+        role: 'user',
+        content:
+          '/feishu-delegate:message-feishu-coworkers 查一下康康',
+      },
+      parent_tool_use_id: null,
+    });
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        session_id: 'sdk-session',
+        tool_name:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        tool_input: {},
+      }),
+    ).resolves.toEqual({ continue: true });
+  });
+
+  it('keeps explicit selection across accepted same-turn steering inputs', async () => {
+    let captured: SdkQueryFactoryOptions | undefined;
+    const factory: SdkQueryFactory = (opts) => {
+      captured = opts;
+      async function* generate(): AsyncGenerator<unknown> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sdk-guard-steer',
+        };
+        for await (const message of opts.inputStream) {
+          void message;
+          yield { type: 'assistant', message: { content: [] } };
+        }
+      }
+      const gen = generate();
+      return {
+        [Symbol.asyncIterator]: () => gen,
+        async interrupt() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        async applyFlagSettings() {},
+      };
+    };
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({
+      sessionId: 's-steer',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix: 'mcp__plugin_guard__',
+          invocation: 'explicit-only',
+          explicitSelectors: ['$plugin:guard'],
+        },
+      ],
+    });
+    registry.sendMessage('s-steer', {
+      type: 'user',
+      message: { role: 'user', content: '$plugin:guard 开始' },
+    });
+    registry.sendMessage('s-steer', {
+      type: 'user',
+      message: { role: 'user', content: '再补充一点' },
+    });
+
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__plugin_guard__call',
+      }),
+    ).resolves.toEqual({ continue: true });
+  });
+
+  it('merges plan-review edits and user feedback into remote guard selection', async () => {
+    const cases = [
+      {
+        label: 'edited-plan',
+        expectedGuardResult: { continue: true },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'allow' as const,
+          editedPlan: '1. use $plugin:guard',
+        },
+      },
+      {
+        label: 'revision-feedback',
+        expectedGuardResult: { continue: true },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'deny' as const,
+          reason: 'please use $plugin:guard instead',
+        },
+      },
+      {
+        label: 'system-dismissal',
+        expectedGuardResult: {
+          hookSpecificOutput: {
+            hookEventName: 'PreToolUse',
+            permissionDecision: 'deny',
+          },
+        },
+        decision: {
+          kind: 'plan_review' as const,
+          behavior: 'deny' as const,
+          reason: 'system dismissed $plugin:guard',
+          dismissed: true,
+        },
+      },
+    ];
+
+    for (const testCase of cases) {
+      const { factory: baseFactory } = buildFakeFactory();
+      let captured: SdkQueryFactoryOptions | undefined;
+      const registry = new SessionRegistry({
+        sdkQueryFactory: (opts) => {
+          captured = opts;
+          return baseFactory(opts);
+        },
+        onApprovalRequest: async (_sessionId, request) =>
+          request.kind === 'plan_review'
+            ? testCase.decision
+            : { kind: 'permission', behavior: 'allow' },
+      });
+      const events: Array<{ kind: string; payload: unknown }> = [];
+      const sessionId = `s-plan-${testCase.label}`;
+      registry.create({
+        sessionId,
+        cwd: '/x',
+        model: 'm',
+        env: {},
+        toolGuards: [
+          {
+            toolNamePrefix: 'mcp__plugin_guard__',
+            invocation: 'explicit-only',
+            explicitSelectors: ['$plugin:guard'],
+          },
+        ],
+      });
+      registry.attach(sessionId, (kind, payload) =>
+        events.push({ kind, payload }),
+      );
+      await waitFor(() => events.length >= 1);
+      registry.sendMessage(sessionId, {
+        type: 'user',
+        message: { role: 'user', content: 'make a plan' },
+      });
+
+      const canUseTool = captured?.canUseTool;
+      const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+      expect(canUseTool).toBeDefined();
+      expect(preToolUse).toBeDefined();
+      await canUseTool!(
+        'ExitPlanMode',
+        { plan: '1. call the capability' },
+        { toolUseID: `plan-${testCase.label}` },
+      );
+      await expect(
+        preToolUse!({
+          hook_event_name: 'PreToolUse',
+          tool_name: 'mcp__plugin_guard__call',
+        }),
+      ).resolves.toMatchObject(testCase.expectedGuardResult);
+    }
+  });
+
+  it('does not guard a connected settings MCP with an exact or normalized plugin id', async () => {
+    for (const [label, connectedNames] of [
+      ['exact', ['plugin:feishu-delegate:feishu-delegate']],
+      [
+        'normalized',
+        [
+          'plugin:feishu-delegate:feishu-delegate',
+          'plugin_feishu-delegate_feishu-delegate',
+        ],
+      ],
+    ] as const) {
+      let captured: SdkQueryFactoryOptions | undefined;
+      const forwardedApproval = vi.fn(async () => ({
+        kind: 'permission' as const,
+        behavior: 'allow' as const,
+      }));
+      const factory: SdkQueryFactory = (opts) => {
+        captured = opts;
+        async function* generate(): AsyncGenerator<unknown> {
+          yield {
+            type: 'system',
+            subtype: 'init',
+            session_id: `sdk-settings-collision-${label}`,
+            mcp_servers: connectedNames.map((name) => ({
+              name,
+              status: 'connected',
+            })),
+          };
+          for await (const message of opts.inputStream) void message;
+        }
+        const query = generate();
+        return {
+          [Symbol.asyncIterator]: () => query,
+          async interrupt() {},
+          async setModel() {},
+          async setPermissionMode() {},
+          async applyFlagSettings() {},
+          async mcpServerStatus() {
+            return connectedNames.map((name) => ({
+              name,
+              status: 'connected',
+              scope:
+                name === 'plugin:feishu-delegate:feishu-delegate' &&
+                label === 'normalized'
+                  ? 'dynamic'
+                  : 'project',
+            }));
+          },
+        };
+      };
+      const registry = new SessionRegistry({
+        sdkQueryFactory: factory,
+        onApprovalRequest: forwardedApproval,
+      });
+      registry.create({
+        sessionId: `s-settings-collision-${label}`,
+        cwd: '/x',
+        model: 'm',
+        env: {},
+        toolGuards: [
+          {
+            toolNamePrefix: 'mcp__plugin_feishu-delegate_feishu-delegate__',
+            sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
+            invocation: 'explicit-only',
+            explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
+          },
+        ],
+      });
+      registry.attach(`s-settings-collision-${label}`, () => undefined);
+      await waitFor(
+        () =>
+          registry.list()[0]?.sdkSessionId ===
+          `sdk-settings-collision-${label}`,
+      );
+      const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+      expect(preToolUse).toBeDefined();
+      await expect(
+        preToolUse!({
+          hook_event_name: 'PreToolUse',
+          tool_name:
+            'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        }),
+      ).resolves.toEqual({ continue: true });
+      const canUseTool = captured?.canUseTool;
+      expect(canUseTool).toBeDefined();
+      await expect(
+        canUseTool!(
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+          {},
+          { toolUseID: `tool-settings-collision-${label}` },
+        ),
+      ).resolves.toMatchObject({ behavior: 'allow' });
+      expect(forwardedApproval).toHaveBeenCalledWith(
+        `s-settings-collision-${label}`,
+        expect.objectContaining({
+          metadata: expect.objectContaining({
+            capabilityRoutingChecked: true,
+          }),
+        }),
+      );
+    }
+  });
+
+  it('keeps the guard for the harness plugin MCP itself', async () => {
+    let captured: SdkQueryFactoryOptions | undefined;
+    const sourceServerId = 'plugin:feishu-delegate:feishu-delegate';
+    const forwardedApproval = vi.fn(async () => ({
+      kind: 'permission' as const,
+      behavior: 'allow' as const,
+    }));
+    const factory: SdkQueryFactory = (opts) => {
+      captured = opts;
+      async function* generate(): AsyncGenerator<unknown> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sdk-harness-plugin-source',
+          mcp_servers: [{ name: sourceServerId, status: 'connected' }],
+        };
+        for await (const message of opts.inputStream) void message;
+      }
+      const query = generate();
+      return {
+        [Symbol.asyncIterator]: () => query,
+        async interrupt() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        async applyFlagSettings() {},
+        async mcpServerStatus() {
+          return [{
+            name: sourceServerId,
+            status: 'connected',
+            scope: 'dynamic',
+          }];
+        },
+      };
+    };
+    const registry = new SessionRegistry({
+      sdkQueryFactory: factory,
+      onApprovalRequest: forwardedApproval,
+    });
+    registry.create({
+      sessionId: 's-harness-plugin-source',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [{
+        toolNamePrefix: 'mcp__plugin_feishu-delegate_feishu-delegate__',
+        sourceServerId,
+        invocation: 'explicit-only',
+      }],
+    });
+    registry.attach('s-harness-plugin-source', () => undefined);
+    await waitFor(
+      () => registry.list()[0]?.sdkSessionId === 'sdk-harness-plugin-source',
+    );
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name:
+          'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+      }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+    const canUseTool = captured?.canUseTool;
+    expect(canUseTool).toBeDefined();
+    await expect(
+      canUseTool!(
+        'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+        {},
+        { toolUseID: 'tool-harness-plugin-source' },
+      ),
+    ).resolves.toMatchObject({ behavior: 'deny' });
+    expect(forwardedApproval).not.toHaveBeenCalled();
+  });
+
+  it('keeps the guard when the only colliding settings MCP failed to connect', async () => {
+    let captured: SdkQueryFactoryOptions | undefined;
+    const factory: SdkQueryFactory = (opts) => {
+      captured = opts;
+      async function* generate(): AsyncGenerator<unknown> {
+        yield {
+          type: 'system',
+          subtype: 'init',
+          session_id: 'sdk-failed-settings-collision',
+          mcp_servers: [
+            { name: 'plugin_feishu-delegate_feishu-delegate', status: 'failed' },
+          ],
+        };
+        for await (const message of opts.inputStream) void message;
+      }
+      const query = generate();
+      return {
+        [Symbol.asyncIterator]: () => query,
+        async interrupt() {},
+        async setModel() {},
+        async setPermissionMode() {},
+        async applyFlagSettings() {},
+        async mcpServerStatus() {
+          return [{
+            name: 'plugin_feishu-delegate_feishu-delegate',
+            status: 'failed',
+            scope: 'project',
+          }];
+        },
+      };
+    };
+    const registry = new SessionRegistry({ sdkQueryFactory: factory });
+    registry.create({
+      sessionId: 's-failed-settings-collision',
+      cwd: '/x',
+      model: 'm',
+      env: {},
+      toolGuards: [
+        {
+          toolNamePrefix: 'mcp__plugin_feishu-delegate_feishu-delegate__',
+          sourceServerId: 'plugin:feishu-delegate:feishu-delegate',
+          invocation: 'explicit-only',
+          explicitSelectors: ['/feishu-delegate:message-feishu-coworkers'],
+        },
+      ],
+    });
+    await waitFor(
+      () => registry.list()[0]?.sdkSessionId === 'sdk-failed-settings-collision',
+    );
+    const preToolUse = captured?.hooks?.PreToolUse?.[0]?.hooks[0];
+    expect(preToolUse).toBeDefined();
+    await expect(
+      preToolUse!({
+        hook_event_name: 'PreToolUse',
+        tool_name: 'mcp__plugin_feishu-delegate_feishu-delegate__read_messages',
+      }),
+    ).resolves.toMatchObject({
+      hookSpecificOutput: { permissionDecision: 'deny' },
+    });
+  });
+
   it('attach with second client replaces first, notifies the old one', async () => {
     const { factory } = buildFakeFactory();
     const eventsA: Array<{ kind: string; payload: unknown }> = [];

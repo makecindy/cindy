@@ -3,7 +3,7 @@
 import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-import type { SlackHookView } from '../../../../shared/hookControlIpc';
+import type { ProviderPrefsView, SlackHookView } from '../../../../shared/hookControlIpc';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -16,6 +16,7 @@ import { useHookWorkspacePrefs } from '../HookWorkspacePrefsEditor';
 
 const BASE_HOOK: SlackHookView = {
   enabled: true,
+  lifecycleAnnouncement: false,
   url: 'wss://im.example.test',
   workspaces: { cindy: '/repos/cindy' },
   status: 'connected',
@@ -31,6 +32,17 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
+    binding: null,
+  },
+  x: {
+    enabled: false,
+    url: '',
+    status: 'disabled',
+    lastError: null,
+    available: false,
+    capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
 };
@@ -44,6 +56,7 @@ const TELEGRAM_CONFIRMED: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: {
       provider: 'telegram',
       state: 'confirmed',
@@ -57,6 +70,34 @@ const TELEGRAM_CONFIRMED: SlackHookView = {
       expiresAt: null,
       reason: null,
       remediationUrl: 'https://t.me/cindy_example_bot',
+      actions: ['revoke'],
+    },
+  },
+};
+
+const X_CONFIRMED: SlackHookView = {
+  ...BASE_HOOK,
+  x: {
+    enabled: true,
+    url: 'wss://x-hook.example.test',
+    status: 'connected',
+    lastError: null,
+    available: true,
+    capabilityPending: false,
+    defaultWorkspace: null,
+    binding: {
+      provider: 'x',
+      state: 'confirmed',
+      attemptId: null,
+      bindingId: 'x-binding-1',
+      principalId: 'x-user-1',
+      principalName: '@dash',
+      scopeId: 'bot-x',
+      scopeName: 'CindyBot',
+      connectUrl: null,
+      expiresAt: null,
+      reason: null,
+      remediationUrl: 'https://x.com/CindyBot',
       actions: ['revoke'],
     },
   },
@@ -76,7 +117,9 @@ const TELEGRAM_REBOUND: SlackHookView = {
 };
 
 describe('useHookWorkspacePrefs provider isolation', () => {
-  const getProviderWorkspacePrefs = vi.fn(async () => ({
+  const getProviderWorkspacePrefs = vi.fn<
+    (provider: 'telegram' | 'x') => Promise<{ prefs: ProviderPrefsView }>
+  >(async () => ({
     prefs: {
       provider: 'telegram' as const,
       bindingId: 'binding-1',
@@ -256,5 +299,60 @@ describe('useHookWorkspacePrefs provider isolation', () => {
     });
     expect(result.current.prefsFor('cindy').model).toBe('pushed-model');
     expect(result.current.pendingWs).toBeNull();
+  });
+
+  it('X 绑定确认后按 provider=x 拉取偏好，跨 provider 或跨 binding 的推送不落进 X', async () => {
+    getProviderWorkspacePrefs.mockResolvedValue({
+      prefs: { provider: 'x', bindingId: 'x-binding-1', scopeId: null, bound: true, prefs: [] },
+    });
+    let pushProviderPrefs!: (view: ProviderPrefsView) => void;
+    vi.mocked(window.electronAPI.hookControl.onProviderPrefsChanged).mockImplementation(
+      (listener) => {
+        pushProviderPrefs = listener;
+        return () => {};
+      },
+    );
+
+    const { result } = renderHook(() => useHookWorkspacePrefs(X_CONFIRMED, 'x'));
+    await waitFor(() => expect(getProviderWorkspacePrefs).toHaveBeenCalledWith('x'));
+    await waitFor(() => expect(result.current.editable).toBe(true));
+    expect(getWorkspacePrefs).not.toHaveBeenCalled();
+
+    const entry = (model: string) => [
+      { workspace: 'cindy', model, effort: null, agentKind: null, permissionMode: null },
+    ];
+    // 同 bindingId 但 provider=telegram: 订阅层按 provider 过滤, 不得写进 X 线。
+    act(() => {
+      pushProviderPrefs({
+        provider: 'telegram',
+        bindingId: 'x-binding-1',
+        scopeId: null,
+        bound: true,
+        prefs: entry('telegram-model'),
+      });
+    });
+    expect(result.current.prefsFor('cindy').model).toBeNull();
+    // provider=x 但 bindingId 不匹配: applyIncoming 按 binding 围栏丢弃。
+    act(() => {
+      pushProviderPrefs({
+        provider: 'x',
+        bindingId: 'x-binding-2',
+        scopeId: null,
+        bound: true,
+        prefs: entry('other-binding-model'),
+      });
+    });
+    expect(result.current.prefsFor('cindy').model).toBeNull();
+    // 完全匹配的 X 推送正常生效。
+    act(() => {
+      pushProviderPrefs({
+        provider: 'x',
+        bindingId: 'x-binding-1',
+        scopeId: null,
+        bound: true,
+        prefs: entry('x-model'),
+      });
+    });
+    expect(result.current.prefsFor('cindy').model).toBe('x-model');
   });
 });

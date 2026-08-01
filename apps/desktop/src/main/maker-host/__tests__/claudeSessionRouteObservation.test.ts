@@ -10,7 +10,12 @@
  *   - 请求无 session header → 正常路由, 不记录
  */
 
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import type { RequestTransformCtx, RoutingDecision } from '@cindy/anthropic-compat-proxy';
+
+const routeMocks = vi.hoisted(() => ({
+  resolveSessionRouteDecision: vi.fn<() => RoutingDecision | null>(() => null),
+}));
 
 vi.mock('../logger-adapter', () => ({
   createMakerLogger: () => ({
@@ -34,7 +39,7 @@ vi.mock('../claude-fast-mode-log', () => ({
 }));
 vi.mock('../provider-route', () => ({
   // 默认路由会话: 显式供应商解析恒 null; 网关默认决策 = 有 key 才换。
-  resolveSessionRouteDecision: vi.fn(() => null),
+  resolveSessionRouteDecision: routeMocks.resolveSessionRouteDecision,
   gatewayDefaultRouteDecision: vi.fn((_agent: string, gatewayKey: string | null) =>
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
 }));
@@ -44,15 +49,17 @@ import {
   setClaudeProxyGatewayKeyReader,
   setClaudeProxySessionIdResolver,
 } from '../anthropic-compat-proxy-host';
+import { setSessionProvider, clearSessionProvider } from '../session-provider-store';
 import {
   readClaudeSessionRoute,
+  takeClaudeRequestRoute,
   resetClaudeSessionRouteRegistryForTest,
 } from '../claude-session-route-registry';
 
 const SESSION_HEADER = { 'x-claude-code-session-id': 'sdk-abc' };
 
-function ctxWith(headers: Record<string, string>) {
-  return { reqId: 1, method: 'POST', url: '/v1/messages', headers } as never;
+function ctxWith(headers: Record<string, string>, reqId = 1): RequestTransformCtx {
+  return { reqId, method: 'POST', url: '/v1/messages', headers };
 }
 
 describe('claude session route observation (routing transform ② 段)', () => {
@@ -61,8 +68,14 @@ describe('claude session route observation (routing transform ② 段)', () => {
   beforeEach(() => {
     resetClaudeSessionRouteRegistryForTest();
     gatewayKey = null;
+    routeMocks.resolveSessionRouteDecision.mockReset();
+    routeMocks.resolveSessionRouteDecision.mockReturnValue(null);
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-abc' ? 'sess-1' : null));
+  });
+
+  afterEach(() => {
+    clearSessionProvider('sess-1');
   });
 
   it('records gateway for x-api-key (gateway-spawn) passthrough even when the live key is gone', () => {
@@ -74,6 +87,7 @@ describe('claude session route observation (routing transform ② 段)', () => {
     );
     expect(decision).toBeNull();  // passthrough
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
+    expect(takeClaudeRequestRoute(1)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
   });
 
   it('records gateway for oauth-spawn requests swapped onto the gateway key', () => {
@@ -95,6 +109,42 @@ describe('claude session route observation (routing transform ② 段)', () => {
     );
     expect(decision).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
     expect(readClaudeSessionRoute('sess-1')).toBe('subscription');
+  });
+
+  it('records exact routes for explicitly selected XD and Anthropic providers', () => {
+    setSessionProvider('sess-1', 'xd');
+    routeMocks.resolveSessionRouteDecision.mockReturnValueOnce({
+      headerOverride: { 'x-api-key': 'sk-gw' },
+    });
+    expect(
+      createModelRoutingTransform()(
+        { model: 'claude-opus-4-8[1m]' },
+        { ...ctxWith(SESSION_HEADER), reqId: 21 } as never,
+      ),
+    ).toEqual({ headerOverride: { 'x-api-key': 'sk-gw' } });
+    expect(takeClaudeRequestRoute(21)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
+
+    setSessionProvider('sess-1', 'anthropic');
+    routeMocks.resolveSessionRouteDecision.mockReturnValueOnce({
+      upstreamOverride: 'https://api.anthropic.com',
+    });
+    expect(
+      createModelRoutingTransform()(
+        { model: 'claude-opus-4-8[1m]' },
+        { ...ctxWith(SESSION_HEADER), reqId: 22 } as never,
+      ),
+    ).toEqual({ upstreamOverride: 'https://api.anthropic.com' });
+    expect(takeClaudeRequestRoute(22)).toEqual({ sessionId: 'sess-1', route: 'subscription' });
+  });
+
+  it('records gateway for an explicitly selected XD passthrough with a frozen child key', () => {
+    setSessionProvider('sess-1', 'xd');
+    const decision = createModelRoutingTransform()(
+      { model: 'claude-opus-4-8[1m]' },
+      ctxWith({ ...SESSION_HEADER, 'x-api-key': 'sk-frozen' }, 23),
+    );
+    expect(decision).toBeNull();
+    expect(takeClaudeRequestRoute(23)).toEqual({ sessionId: 'sess-1', route: 'gateway' });
   });
 
   it('does not record ambiguous no-key non-anthropic passthroughs', () => {

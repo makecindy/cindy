@@ -53,6 +53,12 @@ export interface ImageChannel {
   /** 执行凭证是否就绪。false ⇒ 该来源整段不进 cindy 白名单。 */
   ready(): boolean;
   /**
+   * 单次图像编辑可接收的源图上限。省略 = 沿用 cindy slot 的通用上限；
+   * provider 上限更低时在这里声明，让 slot 在读文件、取凭证、出网前按
+   * 已选模型明拒，而不是等深层客户端报错。
+   */
+  maxEditImages?: number;
+  /**
    * 该来源是否支持图像编辑(editImage)。
    * 省略视为 true;仅生成来源(xAI 等)显式设为 false 以从编辑清单排除,
    * 改图派发路径在出网前早失效。

@@ -112,6 +112,11 @@ export interface ModelPickerSheetProps {
   /** 选权限(调用方落草稿/写穿);浮窗内部自动回一级,不关浮窗。 */
   onSelectPermissionMode(mode: string): void;
   permissionDisabled?: boolean;
+  /**
+   * 隐藏 header 右侧权限入口(新建页已把权限提为 composer 独立选择器,浮窗只留模型;
+   * 默认 false —— 会话页行为不变)。
+   */
+  hidePermissionTrigger?: boolean;
   keyboardAvoidingBehavior: 'height' | 'padding' | undefined;
   testID?: string;
 }
@@ -145,6 +150,7 @@ export function ModelPickerSheet({
   activePermissionMode,
   onSelectPermissionMode,
   permissionDisabled = false,
+  hidePermissionTrigger = false,
   keyboardAvoidingBehavior,
   testID = 'modelSheet',
 }: ModelPickerSheetProps) {
@@ -411,7 +417,7 @@ export function ModelPickerSheet({
     >
       <SheetSurface
         bottomInset={insets.bottom}
-        headerTrailing={permissionTrigger}
+        headerTrailing={hidePermissionTrigger ? undefined : permissionTrigger}
         heights={heights}
         onClose={onClose}
         onSnapChange={handlePrimarySnapChange}

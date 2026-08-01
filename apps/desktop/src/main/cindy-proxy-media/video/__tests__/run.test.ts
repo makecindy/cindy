@@ -20,7 +20,7 @@ function makeProvider(opts: {
   submitted: VideoGenerationRequest[];
   /** succeeded 时上游上报的 meta(留空 = 上游什么都没报)。 */
   meta?: VideoResultMeta;
-  maxImages?: 0 | 1 | 2;
+  maxImagesByRefMode?: Partial<Record<'first_and_last_frame' | 'reference_image', number>>;
 }): VideoProvider {
   return {
     id: 'fake',
@@ -30,7 +30,10 @@ function makeProvider(opts: {
       supportedResolutions: ['480p', '720p', '1080p'],
       supportedRatios: ['16:9', '9:16'],
       supportedFps: [24],
-      maxImages: opts.maxImages ?? 2,
+      maxImagesByRefMode: opts.maxImagesByRefMode ?? {
+        first_and_last_frame: 2,
+        reference_image: 9,
+      },
       expectedSecondsByAlias: { 'fake-fast': 1 },
       defaults: { duration: 4, resolution: '720p', ratio: '16:9', fps: 24 },
     },
@@ -129,7 +132,7 @@ describe('submitAndAwaitVideo · 画面参数', () => {
 
   it('参考图超出型号上限 → 抛错且不提交', async () => {
     const submitted: VideoGenerationRequest[] = [];
-    const registry = makeRegistry(makeProvider({ submitted, maxImages: 1 }));
+    const registry = makeRegistry(makeProvider({ submitted, maxImagesByRefMode: { first_and_last_frame: 1 } }));
     await expect(
       submitAndAwaitVideo(registry, {
         alias: 'fake-fast',
@@ -138,6 +141,66 @@ describe('submitAndAwaitVideo · 画面参数', () => {
       }),
     ).rejects.toThrow(/at most 1 reference image/);
     expect(submitted).toHaveLength(0);
+  });
+
+  it('张数上限按 refMode 分别算:首尾帧 2 张拒,同一型号参考图 2 张放行', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(
+      makeProvider({
+        submitted,
+        maxImagesByRefMode: { first_and_last_frame: 1, reference_image: 9 },
+      }),
+    );
+    const twoImages = ['data:image/png;base64,a', 'data:image/png;base64,b'];
+    await expect(
+      submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p', imageDataUris: twoImages }),
+    ).rejects.toThrow(/at most 1 reference image/);
+    expect(submitted).toHaveLength(0);
+
+    await submitAndAwaitVideo(registry, {
+      alias: 'fake-fast',
+      prompt: 'p',
+      imageDataUris: twoImages,
+      refMode: 'reference_image',
+    });
+    expect(submitted).toHaveLength(1);
+    expect(submitted[0].refMode).toBe('reference_image');
+  });
+
+  it('型号不支持该 refMode → 抛错且不提交(不降级成另一种用法)', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(
+      makeProvider({ submitted, maxImagesByRefMode: { first_and_last_frame: 2 } }),
+    );
+    await expect(
+      submitAndAwaitVideo(registry, {
+        alias: 'fake-fast',
+        prompt: 'p',
+        imageDataUris: ['data:image/png;base64,a'],
+        refMode: 'reference_image',
+      }),
+    ).rejects.toThrow(/does not support refMode 'reference_image'/);
+    expect(submitted).toHaveLength(0);
+  });
+
+  it('不传 refMode → 落首尾帧(存量调用方行为不变)', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(makeProvider({ submitted }));
+    await submitAndAwaitVideo(registry, {
+      alias: 'fake-fast',
+      prompt: 'p',
+      imageDataUris: ['data:image/png;base64,a'],
+    });
+    expect(submitted[0].refMode).toBe('first_and_last_frame');
+  });
+
+  it('文生视频不查 refMode 支持性(无图 = 与参考图用法无关)', async () => {
+    const submitted: VideoGenerationRequest[] = [];
+    const registry = makeRegistry(
+      makeProvider({ submitted, maxImagesByRefMode: { reference_image: 9 } }),
+    );
+    await submitAndAwaitVideo(registry, { alias: 'fake-fast', prompt: 'p' });
+    expect(submitted).toHaveLength(1);
   });
 
   it('参考图为空时不塞 images 键(与老载荷同形)', async () => {

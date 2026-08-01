@@ -18,7 +18,7 @@ function makeFakeProvider(opts: {
   resolutions?: string[];
   ratios?: string[];
   fps?: number[];
-  maxImages?: 0 | 1 | 2;
+  maxImagesByRefMode?: Partial<Record<'first_and_last_frame' | 'reference_image', number>>;
   expectedSeconds?: number;
 }): VideoProvider {
   return {
@@ -33,7 +33,7 @@ function makeFakeProvider(opts: {
       supportedResolutions: opts.resolutions ?? ['720p'],
       supportedRatios: opts.ratios ?? ['16:9'],
       supportedFps: opts.fps ?? [24],
-      maxImages: opts.maxImages ?? 0,
+      maxImagesByRefMode: opts.maxImagesByRefMode ?? {},
       expectedSecondsByAlias: Object.fromEntries(
         opts.aliases.map((a) => [a.alias, opts.expectedSeconds ?? 60]),
       ),
@@ -141,7 +141,7 @@ describe('VideoProviderRegistry', () => {
         durations: [4, 6],
         resolutions: ['480p', '720p'],
         ratios: ['16:9'],
-        maxImages: 1,
+        maxImagesByRefMode: { first_and_last_frame: 1 },
       }),
     );
     r.register(
@@ -151,13 +151,16 @@ describe('VideoProviderRegistry', () => {
         durations: [6, 8, 10],
         resolutions: ['720p', '1080p'],
         ratios: ['16:9', '9:16'],
-        maxImages: 2,
+        maxImagesByRefMode: { first_and_last_frame: 2, reference_image: 9 },
       }),
     );
     const u = r.collectUnionParams();
     expect(u.durations).toEqual([4, 6, 8, 10]);
     expect(u.resolutions.sort()).toEqual(['1080p', '480p', '720p']);
     expect(u.ratios.sort()).toEqual(['16:9', '9:16']);
-    expect(u.maxImagesUpperBound).toBe(2);
+    expect(u.maxImagesUpperBoundByRefMode).toEqual({
+      first_and_last_frame: 2,
+      reference_image: 9,
+    });
   });
 });

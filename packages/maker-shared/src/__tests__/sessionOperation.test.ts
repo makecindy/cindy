@@ -12,7 +12,7 @@ describe('shared session operation model', () => {
       hasActivePendingInteraction: true,
     })).toEqual({
       canUseComposer: false,
-      composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReason: '当前任务还没有同步完成。',
       composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
@@ -282,7 +282,7 @@ describe('shared session composer action model', () => {
       label: '停止',
       visible: true,
     });
-    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前会话设置执行。');
+    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
   });
 
   it('keeps the send slot present and usable through the whole voice lifecycle', () => {

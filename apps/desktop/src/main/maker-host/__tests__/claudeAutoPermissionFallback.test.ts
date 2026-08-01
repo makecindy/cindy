@@ -268,7 +268,7 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       { now: () => t },
     );
 
-    // 两个会话各自累计 2 段,交错到达 —— 谁都不该被对方推过阈值。
+    // 两个任务各自累计 2 段,交错到达 —— 谁都不该被对方推过阈值。
     for (let i = 0; i < 2; i += 1) {
       observer(ctx({ status: 429 }));
       observer(ctx({ status: 429, requestHeaders: { 'x-claude-code-session-id': 'sdk-2' } }));

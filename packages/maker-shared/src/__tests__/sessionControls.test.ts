@@ -20,13 +20,13 @@ describe('shared session usage summaries', () => {
       totalTokenUsage: 42000,
     })).toEqual({
       available: true,
-      detail: '本会话 $0.02 · 42k tokens · 上下文 16k / 200k · 8%',
+      detail: '本任务 $0.02 · 42k tokens · 上下文 16k / 200k · 8%',
       title: 'Session spend',
     });
 
     expect(summarizeSessionSpend(null)).toEqual({
       available: false,
-      detail: '暂无会话用量',
+      detail: '暂无任务用量',
       title: 'Session spend',
     });
   });

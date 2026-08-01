@@ -112,6 +112,60 @@ describe('Session interaction fallback', () => {
 });
 
 describe('Session per-turn origin 打标', () => {
+  it('host turn lease serializes a new send across a vendor idle edge', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    let releaseLease!: () => void;
+
+    await session.send('first', {
+      afterTurnReserved: () => {
+        releaseLease = session.acquireTurnLease();
+      },
+    });
+    await emit({ type: 'done', data: {} });
+
+    let secondSettled = false;
+    const second = session.send('second').then(() => {
+      secondSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondSettled).toBe(false);
+    expect(session.isTurnRunning()).toBe(true);
+
+    releaseLease();
+    await second;
+    expect(secondSettled).toBe(true);
+  });
+
+  it('already-aborted send does not wait for a host turn lease', async () => {
+    const { handle } = createControllableHandle();
+    const session = makeSession(handle);
+    const releaseLease = session.acquireTurnLease();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(session.send('cancelled', { signal: controller.signal })).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    releaseLease();
+  });
+
+  it('send cancelled while waiting for a host turn lease settles before release', async () => {
+    const { handle } = createControllableHandle();
+    const session = makeSession(handle);
+    const releaseLease = session.acquireTurnLease();
+    const controller = new AbortController();
+    const pending = session.send('cancelled', { signal: controller.signal });
+
+    controller.abort();
+    await expect(pending).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    releaseLease();
+  });
+
   it('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);

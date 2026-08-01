@@ -4,6 +4,8 @@
  * per-turn 费用挂载(MessageActionBar"本轮消耗")的 main 侧业务体:
  *   - recordTurnCostOnMessage:patch 成功才广播;patch false(行不存在)不广播;
  *     costUsd 非法 / 极小直接跳过(绝不写 $0);patch 抛错只吞不传播。
+ *   - recordTurnUsageOnMessage:算不出报价的轮次只落 turnUsageDetails,不碰任何
+ *     金额字段与 scheduler 账本(UI 据此退回显示本轮 token)。
  *   - codexUsageToTokens:done.data.usage → computeGatewayTurnCost 入参映射
  *     (reasoning 算 output,与 daily_model_usage 口径一致)。
  *
@@ -37,6 +39,7 @@ vi.mock('../messagePersistBroadcaster.js', () => ({
 import {
   recordTurnCostOnMessage,
   recordSchedulerTurnCost,
+  recordTurnUsageOnMessage,
   codexUsageToTokens,
   type TurnCostDeps,
   type MessageTurnCostPayload,
@@ -326,6 +329,137 @@ describe('recordTurnCostOnMessage', () => {
   it('读取累计失败 → 不写入错误的单段展示值，也不广播', async () => {
     const { deps, broadcasts, patchCalls } = makeDeps(true, new Error('db locked'));
     await expect(recordTurnCostOnMessage(ARGS, deps)).resolves.toBe(false);
+    expect(patchCalls).toHaveLength(0);
+    expect(broadcasts).toHaveLength(0);
+  });
+});
+
+describe('recordTurnUsageOnMessage', () => {
+  const USAGE_ARGS = { sessionId: 's1', clientId: 'm1', turnUsageDetails: DETAILS };
+
+  it('只落 token 明细，不写任何金额字段', async () => {
+    const { deps, broadcasts, patchCalls, runCostCalls } = makeDeps(true);
+    await expect(recordTurnUsageOnMessage(USAGE_ARGS, deps)).resolves.toBe(true);
+    // 账本口径:没有钱就不碰钱。patch 里只能有 turnUsageDetails 一个键。
+    expect(patchCalls).toEqual([
+      {
+        sessionId: 's1',
+        clientId: 'm1',
+        patch: { turnUsageDetails: DETAILS },
+      },
+    ]);
+    // scheduler 费用账本不参与(它只接受真实计费)。
+    expect(runCostCalls).toHaveLength(0);
+    expect(broadcasts).toEqual([
+      { sessionId: 's1', clientId: 'm1', turnUsageDetails: DETAILS },
+    ]);
+  });
+
+  it('广播 payload 不带金额字段 —— 消费方据此走 token 回退', async () => {
+    const { deps, broadcasts } = makeDeps(true);
+    await recordTurnUsageOnMessage(USAGE_ARGS, deps);
+    const [payload] = broadcasts;
+    expect(payload.turnMoney).toBeUndefined();
+    expect(payload.turnCostUsd).toBeUndefined();
+    expect(payload.userTurnMoney).toBeUndefined();
+    expect(payload.userTurnCostUsd).toBeUndefined();
+  });
+
+  it('明细缺省(整轮 0 token)→ 不落库不广播，绝不写空对象', async () => {
+    const { deps, broadcasts, patchCalls } = makeDeps(true);
+    await expect(
+      recordTurnUsageOnMessage({ sessionId: 's1', clientId: 'm1' }, deps),
+    ).resolves.toBe(false);
+    expect(patchCalls).toHaveLength(0);
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  it('sessionId / clientId 缺失 → 直接跳过', async () => {
+    const { deps, patchCalls } = makeDeps(true);
+    await expect(
+      recordTurnUsageOnMessage({ sessionId: '', clientId: 'm1', turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(false);
+    await expect(
+      recordTurnUsageOnMessage({ sessionId: 's1', clientId: '', turnUsageDetails: DETAILS }, deps),
+    ).resolves.toBe(false);
+    expect(patchCalls).toHaveLength(0);
+  });
+
+  it('patch 返回 null(行已被 rewind 删)→ 不广播', async () => {
+    const { deps, broadcasts } = makeDeps(false);
+    await expect(recordTurnUsageOnMessage(USAGE_ARGS, deps)).resolves.toBe(false);
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  it('patch 抛错 → 只吞不传播(调用方 fire-and-forget)', async () => {
+    const { deps, broadcasts } = makeDeps(new Error('db locked'));
+    await expect(recordTurnUsageOnMessage(USAGE_ARGS, deps)).resolves.toBe(false);
+    expect(broadcasts).toHaveLength(0);
+  });
+
+  // 一次用户请求可能含多个 SDK segment(自动续跑):前面的有真实费用、最后一个缺报价
+  // 走 usage-only 时,若只写明细,收尾消息会退回显示 token,把这一轮已经花掉的钱藏起来。
+  it('本轮此前已有费用 → 收尾消息带上用户轮累计,而不是退回 token', async () => {
+    const { deps, broadcasts, patchCalls, runCostCalls } = makeDeps(true, {
+      money: usdMoney(0.31),
+      costUsd: 0.31,
+      hasEstimatedValue: false,
+    });
+    await expect(recordTurnUsageOnMessage(USAGE_ARGS, deps)).resolves.toBe(true);
+
+    expect(patchCalls[0].patch).toEqual({
+      turnUsageDetails: DETAILS,
+      userTurnCost: usdMoney(0.31),
+      userTurnCostUsd: 0.31,
+      userTurnCostIsEstimate: false,
+    });
+    // 当前这个无价 segment 依然不记账:没有 turnCost / turnCostUsd,也不碰 scheduler 账本。
+    expect(patchCalls[0].patch).not.toHaveProperty('turnCost');
+    expect(patchCalls[0].patch).not.toHaveProperty('turnCostUsd');
+    expect(runCostCalls).toHaveLength(0);
+
+    expect(broadcasts[0]).toMatchObject({
+      userTurnMoney: usdMoney(0.31),
+      userTurnCostUsd: 0.31,
+      userTurnCostIsEstimate: false,
+      turnUsageDetails: DETAILS,
+    });
+    expect(broadcasts[0].turnMoney).toBeUndefined();
+  });
+
+  it('本轮此前的费用是订阅价值估算 → 估算标记一并带上', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true, {
+      money: usdMoney(0.2, 'value-estimate'),
+      costUsd: 0.2,
+      hasEstimatedValue: true,
+    });
+    await recordTurnUsageOnMessage(USAGE_ARGS, deps);
+    expect(patchCalls[0].patch).toMatchObject({ userTurnCostIsEstimate: true });
+    expect(broadcasts[0]).toMatchObject({ userTurnCostIsEstimate: true });
+  });
+
+  it('本轮此前没有费用 → 只写明细(不写 0 值累计)', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true);
+    await recordTurnUsageOnMessage(USAGE_ARGS, deps);
+    expect(patchCalls[0].patch).toEqual({ turnUsageDetails: DETAILS });
+    expect(broadcasts[0].userTurnMoney).toBeUndefined();
+  });
+
+  it('CNY 累计不写 userTurnCostUsd 字段', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true, {
+      money: cnyMoney(2.5),
+      costUsd: 0,
+      hasEstimatedValue: false,
+    });
+    await recordTurnUsageOnMessage(USAGE_ARGS, deps);
+    expect(patchCalls[0].patch).not.toHaveProperty('userTurnCostUsd');
+    expect(broadcasts[0].userTurnCostUsd).toBeUndefined();
+    expect(broadcasts[0].userTurnMoney).toEqual(cnyMoney(2.5));
+  });
+
+  it('读取往轮累计失败 → 不落库不广播(不猜金额)', async () => {
+    const { deps, patchCalls, broadcasts } = makeDeps(true, new Error('db locked'));
+    await expect(recordTurnUsageOnMessage(USAGE_ARGS, deps)).resolves.toBe(false);
     expect(patchCalls).toHaveLength(0);
     expect(broadcasts).toHaveLength(0);
   });

@@ -9,38 +9,38 @@
   },
   "list": {
     "thisComputer": "This device",
-    "allConversations": "All Conversations",
+    "allConversations": "All Sessions",
     "syncFailed": "Sync failed",
     "requestFailed": "Request failed",
     "loading": "Loading available devices",
-    "untitled": "Untitled conversation",
+    "untitled": "Untitled session",
     "connection": {
       "connecting": "Connecting",
       "disconnected": "Disconnected"
     },
     "error": {
-      "sessionDeviceNotFound": "Can't find the device this conversation belongs to. Sync again and retry.",
+      "sessionDeviceNotFound": "Can't find the device this session belongs to. Sync again and retry.",
       "taskDeviceNotFound": "Can't find the device this task belongs to. Sync again and retry.",
       "noDevice": "No device available. Turn on remote control on the desktop, then sync again."
     },
     "alert": {
       "actionFailed": "Action failed",
       "renameFailed": "Rename failed",
-      "deleteTitle": "Delete conversation?",
+      "deleteTitle": "Delete session?",
       "deleteMessage": "This deletes \"{{title}}\" and can't be undone."
     },
     "a11y": {
-      "selectScope": "Select conversation scope",
+      "selectScope": "Select session scope",
       "openSettings": "Open settings",
       "syncing": "Syncing",
       "sync": "Sync again",
-      "pinnedConversations": "{{count}} pinned conversations",
-      "newRemoteConversation": "New remote conversation",
+      "pinnedConversations": "{{count}} pinned sessions",
+      "newRemoteConversation": "New remote session",
       "renameDevice": "Rename {{label}}",
       "project": "Project {{title}}",
       "openAutomationLatest": "Open the latest session of automation {{title}}",
       "automationTask": "Automation {{title}}",
-      "openConversation": "Open conversation {{title}}",
+      "openConversation": "Open session {{title}}",
       "collapse": "Collapse {{title}}",
       "expand": "Expand {{title}}",
       "taskError": "Task failed",
@@ -60,17 +60,17 @@
       "saveA11y": "Save device name"
     },
     "renameSession": {
-      "title": "Rename Conversation",
-      "placeholder": "Conversation title",
-      "savingA11y": "Saving conversation title",
-      "saveA11y": "Save conversation title"
+      "title": "Rename Session",
+      "placeholder": "Session title",
+      "savingA11y": "Saving session title",
+      "saveA11y": "Save session title"
     },
     "revoked": {
       "title": "Access revoked",
       "body": "\"{{deviceName}}\" revoked this device's remote access. Re-authorize this device in {{appName}} settings on that computer, then tap \"Retry Access.\"",
       "retry": "Retry Access"
     },
-    "viewAllConversations": "View all {{count}} conversations",
+    "viewAllConversations": "View all {{count}} sessions",
     "viewAllRuns": "View all {{count}} runs",
     "preview": {
       "needAttention": "{{count}} need attention",
@@ -86,7 +86,7 @@
       "automation": "Automation",
       "archived": "Archived",
       "all": "All",
-      "a11y": "Filter {{label}} conversations"
+      "a11y": "Filter {{label}} sessions"
     },
     "group": {
       "project": "Project",
@@ -98,15 +98,15 @@
       "active": "Active",
       "waiting": "Pending",
       "automation": "Automation",
-      "activeA11y": "Filter active conversations",
-      "waitingA11y": "Filter pending conversations",
-      "automationA11y": "Filter automation conversations"
+      "activeA11y": "Filter active sessions",
+      "waitingA11y": "Filter pending sessions",
+      "automationA11y": "Filter automation sessions"
     },
     "plan": "Schedule",
     "automationsButtonA11y": "Open remote automations",
     "search": {
-      "openA11y": "Search remote conversations",
-      "closeA11y": "Close remote conversation search",
+      "openA11y": "Search remote sessions",
+      "closeA11y": "Close remote session search",
       "label": "Search",
       "placeholder": "Search titles, projects, models, messages",
       "clearA11y": "Clear search",
@@ -115,15 +115,15 @@
       "close": "Close"
     },
     "filters": {
-      "collapseA11y": "Collapse conversation filters",
-      "expandA11y": "Expand conversation filters",
+      "collapseA11y": "Collapse session filters",
+      "expandA11y": "Expand session filters",
       "label": "Filter"
     },
     "selection": {
-      "count": "{{count}} conversations selected",
+      "count": "{{count}} sessions selected",
       "canAct": "Actions available",
       "cannotAct": "No actions available",
-      "clearA11y": "Clear conversation selection"
+      "clearA11y": "Clear session selection"
     },
     "bulk": {
       "pinning": "Pinning",
@@ -131,19 +131,19 @@
       "archiving": "Archiving",
       "restoring": "Restoring",
       "deleting": "Deleting",
-      "pinA11y": "Pin selected conversations",
-      "unpinA11y": "Unpin selected conversations",
-      "archiveA11y": "Archive selected conversations",
-      "restoreA11y": "Restore selected conversations",
-      "deleteA11y": "Delete selected conversations",
+      "pinA11y": "Pin selected sessions",
+      "unpinA11y": "Unpin selected sessions",
+      "archiveA11y": "Archive selected sessions",
+      "restoreA11y": "Restore selected sessions",
+      "deleteA11y": "Delete selected sessions",
       "cancelA11y": "Cancel bulk action",
       "partialFailure": "Processed {{done}}, {{failed}} failed (restored, you can retry).",
-      "noArchivable": "No archivable active conversations in the selection.",
-      "noPinnable": "No pinnable active conversations in the selection.",
-      "noRestorable": "No restorable archived conversations in the selection.",
-      "noUnpinnable": "No pinned conversations in the selection.",
-      "noDeletable": "No deletable conversations in the selection.",
-      "noneModifiable": "None of the selected conversations can be changed."
+      "noArchivable": "No archivable active sessions in the selection.",
+      "noPinnable": "No pinnable active sessions in the selection.",
+      "noRestorable": "No restorable archived sessions in the selection.",
+      "noUnpinnable": "No pinned sessions in the selection.",
+      "noDeletable": "No deletable sessions in the selection.",
+      "noneModifiable": "None of the selected sessions can be changed."
     },
     "automationScope": {
       "eyebrow": "Automation",
@@ -153,16 +153,16 @@
     },
     "projectScope": {
       "eyebrow": "Project",
-      "emptyCopy": "Start a new conversation in this project.",
-      "emptyTitle": "This project has no conversations yet"
+      "emptyCopy": "Start a new session in this project.",
+      "emptyTitle": "This project has no sessions yet"
     },
     "subtitle": {
-      "deviceActive": "{{deviceName}} · {{count}} active conversations",
-      "activeAndProjects": "{{count}} active conversations · {{projects}} projects"
+      "deviceActive": "{{deviceName}} · {{count}} active sessions",
+      "activeAndProjects": "{{count}} active sessions · {{projects}} projects"
     },
     "row": {
       "a11yAutomationGroup": "Automation group {{title}}",
-      "a11ySession": "Conversation {{title}}",
+      "a11ySession": "Session {{title}}",
       "a11yCollapse": "Collapse {{title}}",
       "a11yExpand": "Expand {{title}}",
       "collapse": "Collapse",
@@ -171,20 +171,20 @@
     "badge": {
       "waiting": "Pending {{count}}",
       "automationPrefix": "Automation",
-      "sessionCount": "{{count}} conversations",
+      "sessionCount": "{{count}} sessions",
       "aggregate": "Grouped",
       "running": "Running",
       "unread": "Unread {{count}}"
     },
     "child": {
-      "openA11y": "Open automation conversation {{title}}"
+      "openA11y": "Open automation session {{title}}"
     },
     "viewAllRuns": "View all {{count}} runs"
   },
   "automations": {
     "error": {
       "projectMissingConfig": "This project automation is missing projectConfigId. Delete it on the desktop.",
-      "deletePartial": "Automation deleted, but {{count}} generated conversations couldn't be updated. Check them on the desktop."
+      "deletePartial": "Automation deleted, but {{count}} generated sessions couldn't be updated. Check them on the desktop."
     },
     "subtitle": "{{active}} running · {{total}} tasks",
     "metric": {
@@ -245,7 +245,7 @@
       "intervalPlaceholder": "Leave empty to use cron",
       "workspace": {
         "project": "Project",
-        "dialogue": "Conversation"
+        "dialogue": "Chat"
       },
       "useWorktree": "Use worktree",
       "modelPlaceholderBound": "Follow session",
@@ -257,19 +257,19 @@
       "cancelA11y": "Cancel editing automation"
     },
     "delete": {
-      "counting": "Counting the conversations this automation generated…",
-      "confirmDeleteBoth": "Delete Task and Conversations",
-      "confirmArchive": "Delete Task and Archive Conversations",
+      "counting": "Counting the sessions this automation generated…",
+      "confirmDeleteBoth": "Delete Task and Sessions",
+      "confirmArchive": "Delete Task and Archive Sessions",
       "confirmTaskOnly": "Delete Task Only",
       "title": "Delete {{name}}",
-      "copy": "Deleting an automation task doesn't interrupt runs already in progress. Generated conversations are handled by the option below, matching the desktop.",
-      "optionsA11y": "Choose how to handle generated conversations",
-      "keepDesc": "Delete only this automation task; past conversations stay in their original list.",
-      "keepLabel": "Keep Generated Conversations",
-      "archiveDesc": "After deleting the task, move its generated conversations to the archive, still searchable later.",
-      "archiveLabel": "Archive Generated Conversations",
-      "deleteDesc": "After deleting the task, also mark its generated conversations as deleted. This can't be undone from your phone.",
-      "deleteLabel": "Delete Generated Conversations",
+      "copy": "Deleting an automation task doesn't interrupt runs already in progress. Generated sessions are handled by the option below, matching the desktop.",
+      "optionsA11y": "Choose how to handle generated sessions",
+      "keepDesc": "Delete only this automation task; past sessions stay in their original list.",
+      "keepLabel": "Keep Generated Sessions",
+      "archiveDesc": "After deleting the task, move its generated sessions to the archive, still searchable later.",
+      "archiveLabel": "Archive Generated Sessions",
+      "deleteDesc": "After deleting the task, also mark its generated sessions as deleted. This can't be undone from your phone.",
+      "deleteLabel": "Delete Generated Sessions",
       "cancelA11y": "Cancel deleting automation",
       "confirmA11y": "Confirm deleting automation"
     },
@@ -284,7 +284,7 @@
     },
     "runDelete": {
       "title": "Delete this run record",
-      "copy": "This deletes only this automation run record. It won't delete the conversations it opened, and it won't affect future automatic triggers.",
+      "copy": "This deletes only this automation run record. It won't delete the sessions it opened, and it won't affect future automatic triggers.",
       "confirmA11y": "Confirm deleting run record",
       "confirm": "Delete Record",
       "cancelA11y": "Cancel deleting run record"

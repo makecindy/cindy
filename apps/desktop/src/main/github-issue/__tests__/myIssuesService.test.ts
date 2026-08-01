@@ -10,6 +10,9 @@ import { describe, expect, it, vi } from 'vitest';
 import type { SubmittedIssueRecord } from '../../../shared/myIssues';
 import {
   MyIssuesService,
+  SEARCH_PAGE_SIZE,
+  isSnapshotWorthy,
+  type ChannelHealth,
   isStaleAccountScopeError,
   issueTypeFromLabels,
   mergeIssues,
@@ -60,6 +63,38 @@ function makeDeps(over: Partial<MyIssuesServiceDeps> = {}): MyIssuesServiceDeps 
     ...over,
   };
 }
+
+describe('isSnapshotWorthy', () => {
+  /**
+   * 判据矩阵直接钉一遍。两侧都会有人想「顺手收紧 / 顺手放宽」:把 absent 也算成丢内容,
+   * 会当场废掉全部用户的首屏快照(接口未上线是常态);把 unknown 当成正常放行,
+   * 缩水的列表就会覆盖完整快照。
+   */
+  const ok: ChannelHealth = { platform: 'ok', ledger: 'ok', enhancement: 'ok' };
+
+  it('三路都 ok ⇒ 配写', () => {
+    expect(isSnapshotWorthy(ok)).toBe(true);
+  });
+
+  it('absent 放行 —— 没配 / 那边压根没这份数据,不是丢内容', () => {
+    expect(isSnapshotWorthy({ ...ok, platform: 'absent' })).toBe(true);
+    expect(isSnapshotWorthy({ ...ok, enhancement: 'absent' })).toBe(true);
+    // 当前所有用户的真实形态:接口未上线 + 没配增强。这条要是 false,快照永远写不出来。
+    expect(isSnapshotWorthy({ platform: 'absent', ledger: 'ok', enhancement: 'absent' })).toBe(true);
+  });
+
+  it('任一路 failed ⇒ 拒写(逐路都要拦,漏一路就是一次永久数据丢失)', () => {
+    for (const key of ['platform', 'ledger', 'enhancement'] as const) {
+      expect(isSnapshotWorthy({ ...ok, [key]: 'failed' }), key).toBe(false);
+    }
+  });
+
+  it('任一路 unknown ⇒ 拒写 —— 不确定时保守,别覆盖上一份完整快照', () => {
+    for (const key of ['platform', 'ledger', 'enhancement'] as const) {
+      expect(isSnapshotWorthy({ ...ok, [key]: 'unknown' }), key).toBe(false);
+    }
+  });
+});
 
 describe('mergeIssues', () => {
   it('账本 only 的条目状态标 unknown,标题用账本记的那一版', () => {
@@ -326,6 +361,466 @@ describe('MyIssuesService.list', () => {
     // 身份查到了就如实回传,只是这一次没并进内容。
     expect(result.githubEnhancement).toEqual({ login: 'octocat', source: 'ghost' });
     expect(result.items).toEqual([]);
+    // 没有兜底通道可用 ⇒ 这一路算「配了却没用上」,UI 要能据此说明。
+    expect(result.githubEnhancementFailed).toBe(true);
+  });
+
+  /**
+   * 身份解析的约定:**返回 null = 没配(静默),失败一律抛出 = 配了却用不上(要提示)**。
+   * 上一版 runtime 把 gh 身份查询的异常咽成 null,于是两者不可区分 —— token 过期 /
+   * 被撤销 / GitHub 限流时,用户直接在 GitHub 提的那些 issue 静静消失,页面一个字都不说,
+   * 而缩水的结果还会覆盖首屏快照。
+   */
+  it('身份解析抛错 = 配了却用不上:算 failed,且不许覆盖快照', async () => {
+    const writeSnapshot = vi.fn();
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => [ledgerRecord()],
+        resolveGithubEnhancement: async () => {
+          throw new Error('HTTP 401 Bad credentials');
+        },
+        writeSnapshot,
+      }),
+    );
+
+    const result = await service.list();
+    // 主列表照常出来 —— 这一路失败从不打挂整页。
+    expect(result.items.map((i) => i.number)).toEqual([1001]);
+    expect(result.githubEnhancementFailed).toBe(true);
+    // 连来源都不知道,所以身份为 null;UI 据此选不提插件的那版提示。
+    expect(result.githubEnhancement).toBeNull();
+    expect(writeSnapshot).not.toHaveBeenCalled();
+  });
+
+  it('身份解析返回 null = 没配:正常状态,不算 failed,照常写快照', async () => {
+    const writeSnapshot = vi.fn();
+    const service = new MyIssuesService(
+      makeDeps({
+        readLedger: () => [ledgerRecord()],
+        resolveGithubEnhancement: async () => null,
+        writeSnapshot,
+      }),
+    );
+
+    const result = await service.list();
+    expect(result.githubEnhancementFailed).toBe(false);
+    expect(writeSnapshot).toHaveBeenCalledTimes(1);
+  });
+
+  describe('首屏快照写入', () => {
+    it('落地成功后写快照,只带 items 与身份', async () => {
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          now: () => Date.parse('2026-07-31T12:00:00.000Z'),
+          readLedger: () => [ledgerRecord()],
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => ({ issues: [remoteIssue({ number: 7 })], totalCount: 1 }),
+          writeSnapshot,
+        }),
+      );
+
+      await service.list();
+      expect(writeSnapshot).toHaveBeenCalledTimes(1);
+      const snapshot = writeSnapshot.mock.calls[0]![0];
+      expect(snapshot.items.map((i: { number: number }) => i.number)).toEqual([7, 1001]);
+      expect(snapshot.githubEnhancement).toEqual({ login: 'octocat', source: 'ghost' });
+      expect(snapshot.cachedAt).toBe('2026-07-31T12:00:00.000Z');
+      // 「这一次查得怎么样」不进快照 —— 否则用户进页面就看到一条过期的错误提示。
+      expect(snapshot).not.toHaveProperty('degraded');
+      expect(snapshot).not.toHaveProperty('githubEnhancementFailed');
+      expect(snapshot).not.toHaveProperty('truncated');
+    });
+
+    it('落地时账号已切换 → 不写快照(结果本身也被拒绝交付)', async () => {
+      let scope = 'owner-a:1';
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          readScope: () => scope,
+          fetchPlatformIssues: async () => {
+            scope = 'owner-b:2';
+            return { ok: true as const, page: { issues: [remoteIssue()], totalCount: 1 } };
+          },
+          writeSnapshot,
+        }),
+      );
+
+      await expect(service.list()).rejects.toSatisfy(isStaleAccountScopeError);
+      // 快照按 owner 路径落盘,写进去就等于把 A 的 issue 塞进 B 的首屏。
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    /**
+     * 快照跨进程活到下一次冷启动,又刻意不带健康状况 —— 一次离线刷新把完整快照覆盖成
+     * 残缺列表后,用户冷启动会看到缩水的内容加零提示;若他仍然离线,那份完整列表就永久没了。
+     *
+     * 判据是「有没有丢内容」而非「有没有降级」,两个方向都要钉住:下面第一组必须**照常写**
+     * (否则整个首屏快照当场废掉),第二组必须**不写**。
+     */
+    it('平台接口还没上线(platform-unavailable)→ 照常写快照,这是当前所有用户的常态', async () => {
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          fetchPlatformIssues: async () => ({ ok: false as const, reason: 'platform-unavailable' }),
+          writeSnapshot,
+        }),
+      );
+
+      await service.list();
+      // 平台侧根本还没有这份数据可给 —— 账本 + 增强就是当下能拿到的全部,不算丢内容。
+      // 把它当成「不配写」等于让快照永远写不出来,首屏加速整个失效。
+      expect(writeSnapshot).toHaveBeenCalledTimes(1);
+      expect(writeSnapshot.mock.calls[0]![0].items.map((i: { number: number }) => i.number)).toEqual(
+        [1001],
+      );
+    });
+
+    it('结果被截断 → 照常写快照(「还有更多」不等于「这些不对」)', async () => {
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          fetchPlatformIssues: async () => ({
+            ok: true as const,
+            page: {
+              issues: Array.from({ length: SEARCH_PAGE_SIZE }, (_, i) =>
+                remoteIssue({ number: i + 1 }),
+              ),
+              totalCount: SEARCH_PAGE_SIZE + 40,
+            },
+          }),
+          writeSnapshot,
+        }),
+      );
+
+      await expect(service.list()).resolves.toMatchObject({ truncated: true });
+      expect(writeSnapshot).toHaveBeenCalledTimes(1);
+    });
+
+    it('这一次丢了内容 → 不写快照,保留上一份完整的', async () => {
+      for (const [label, over] of [
+        // 平台本该有却没拿到:网络 / 服务端异常。
+        [
+          'fetch-failed',
+          { fetchPlatformIssues: async () => Promise.reject(new Error('ECONNRESET')) },
+        ],
+        // 登录态不可用,平台那部分同样缺了。
+        [
+          'not-signed-in',
+          {
+            fetchPlatformIssues: async () => ({ ok: false as const, reason: 'not-signed-in' as const }),
+          },
+        ],
+        // 配了增强却没用上:少掉的正是用户直接在 GitHub 上提的那些。
+        [
+          'githubEnhancementFailed',
+          {
+            resolveGithubEnhancement: async () => GHOST_VIEWER,
+            searchAuthoredIssues: async () => {
+              throw new Error('HTTP 422 Validation Failed');
+            },
+          },
+        ],
+      ] as const) {
+        const writeSnapshot = vi.fn();
+        const service = new MyIssuesService(
+          makeDeps({ readLedger: () => [ledgerRecord()], writeSnapshot, ...over }),
+        );
+
+        // 结果照常交付(降级不是错误),只是不许覆盖快照。
+        await expect(service.list()).resolves.toMatchObject({
+          items: [expect.objectContaining({ number: 1001 })],
+        });
+        expect(writeSnapshot, label).not.toHaveBeenCalled();
+      }
+    });
+
+    it('账本读取失败 → 不写快照(丢的是只有本机才有的那些记录)', async () => {
+      // readLedgerSafely 会把失败静默换成空数组 —— 那是刻意的(不能拖累另两路),
+      // 但**不能不记录**:否则「丢了全部本机记录」和「本来就没有记录」长得一模一样,
+      // 缩水的列表照样覆盖完整快照,用户下次冷启动就永久少掉平台还没上线时唯一的来源。
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => {
+            throw new Error('EACCES: permission denied');
+          },
+          fetchPlatformIssues: async () => ({
+            ok: true as const,
+            page: { issues: [remoteIssue({ number: 7 })], totalCount: 1 },
+          }),
+          writeSnapshot,
+        }),
+      );
+
+      // 主列表照常出(账本失败不拖累另两路)。
+      await expect(service.list()).resolves.toMatchObject({
+        items: [expect.objectContaining({ number: 7 })],
+      });
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('身份解析还在飞就整体超时 → 不写快照,但也不提示(连配没配都不知道)', async () => {
+      // 这条钉住两个方向相反的结论来自同一个 unknown:
+      //  - 快照侧保守拒写 —— 可能真丢了内容,不能覆盖上一份完整的;
+      //  - 提示侧保守静默 —— 对没配增强的用户说「增强没用上」是在断言我们不知道的事。
+      // 只标记「已 reject」的实现会把这里当成「没配」,两条都判错。
+      const writeSnapshot = vi.fn();
+      const service = new MyIssuesService(
+        makeDeps({
+          enhancementTimeoutMs: 5,
+          readLedger: () => [ledgerRecord()],
+          resolveGithubEnhancement: () => new Promise(() => {}),
+          writeSnapshot,
+        }),
+      );
+
+      const result = await service.list();
+      expect(result.items.map((i) => i.number)).toEqual([1001]);
+      expect(result.githubEnhancementFailed).toBe(false);
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('期间有提交成功(epoch 变了)→ 不写快照,与内存缓存同一判据', async () => {
+      const writeSnapshot = vi.fn();
+      let release: (() => void) | null = null;
+      const gate = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const service = new MyIssuesService(
+        makeDeps({
+          fetchPlatformIssues: async () => {
+            await gate;
+            return { ok: true as const, page: { issues: [remoteIssue()], totalCount: 1 } };
+          },
+          writeSnapshot,
+        }),
+      );
+
+      const pending = service.list();
+      service.invalidate(); // 提交成功 → 账本变了
+      release!();
+      await pending;
+
+      // 落一份已知过时的首屏镜像没有收益(下次进页面反正要查)。
+      expect(writeSnapshot).not.toHaveBeenCalled();
+    });
+
+    it('写快照抛错不影响这一次查询的结果', async () => {
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          writeSnapshot: () => {
+            throw new Error('ENOSPC: no space left on device');
+          },
+        }),
+      );
+
+      await expect(service.list()).resolves.toMatchObject({
+        items: [expect.objectContaining({ number: 1001 })],
+      });
+    });
+
+    it('没注入 writeSnapshot 时照常工作(快照是可选加速)', async () => {
+      const service = new MyIssuesService(makeDeps({ readLedger: () => [ledgerRecord()] }));
+      const result = await service.list();
+      expect(result.items.map((i) => i.number)).toEqual([1001]);
+    });
+  });
+
+  describe('主通道搜不到时的兜底', () => {
+    /**
+     * 现实成因(实测):插件 PAT 是 fine-grained token,`get_current_user` 正常、搜本仓
+     * 却被 GitHub 以 422 拒绝(未显式授权的仓库即使公开也搜不到)。上一版就此整路放弃,
+     * 而本机 gh CLI 明明有权限 —— 用户于是在页面上看到「还没有提交过 Issue」,
+     * 而他 GitHub 名下有 34 条。
+     */
+    it('主通道失败 → 换兜底通道,拿到的内容照常并入,且不算失败', async () => {
+      const searchAuthoredIssues = vi.fn(async () => {
+        throw new Error('HTTP 422 Validation Failed');
+      });
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 34 })],
+        totalCount: 1,
+      }));
+      const service = new MyIssuesService(
+        makeDeps({
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues,
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).toHaveBeenCalledWith('octocat');
+      expect(result.items.map((i) => i.number)).toEqual([34]);
+      expect(result.items[0]!.sources).toEqual(['github-account']);
+      // 回退成功 = 用户拿到了数据,没有可见损失,不该提示。
+      expect(result.githubEnhancementFailed).toBe(false);
+      expect(result.degraded).toBeNull();
+    });
+
+    it('兜底通道不可用(没装 / 没登录 gh)→ 标记失败,主列表照常', async () => {
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback: async () => null,
+        }),
+      );
+
+      const result = await service.list();
+      expect(result.githubEnhancementFailed).toBe(true);
+      // 账本那一半照常出 —— 增强失败绝不拖累主列表。
+      expect(result.items.map((i) => i.number)).toEqual([1001]);
+      expect(result.degraded).toBeNull();
+    });
+
+    it('兜底通道自己也抛错 → 标记失败,不把整页打挂', async () => {
+      const service = new MyIssuesService(
+        makeDeps({
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback: async () => {
+            throw new Error('gh exploded');
+          },
+        }),
+      );
+
+      await expect(service.list()).resolves.toMatchObject({
+        githubEnhancementFailed: true,
+        degraded: null,
+        items: [],
+      });
+    });
+
+    it('gh-cli 主通道失败时不调兜底 —— 它自己就是兜底,没有下一条可换', async () => {
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 99 })],
+        totalCount: 1,
+      }));
+      const service = new MyIssuesService(
+        makeDeps({
+          resolveGithubEnhancement: async () => ({ source: 'gh-cli', login: 'octocat', token: 't' }),
+          searchAuthoredIssues: async () => {
+            throw new Error('network down');
+          },
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).not.toHaveBeenCalled();
+      expect(result.githubEnhancementFailed).toBe(true);
+    });
+
+    it('剩余预算不足时不启动兜底 —— 那次请求注定被丢弃又取消不掉', async () => {
+      // withDeadline 只停止等待,GithubClient 不支持 AbortSignal;主通道耗掉大半预算
+      // 才失败时启动兜底 = 白耗一次 GitHub 额度。宁可直接判失败,让 UI 如实说。
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 34 })],
+        totalCount: 1,
+      }));
+      let clock = 0;
+      const service = new MyIssuesService(
+        makeDeps({
+          now: () => clock,
+          enhancementTimeoutMs: 2_000,
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            clock = 1_900; // 只剩 100ms,低于 MIN_FALLBACK_BUDGET_MS
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).not.toHaveBeenCalled();
+      expect(result.githubEnhancementFailed).toBe(true);
+    });
+
+    it('剩余预算充足时照常启动兜底', async () => {
+      const searchAuthoredIssuesFallback = vi.fn(async () => ({
+        issues: [remoteIssue({ number: 34 })],
+        totalCount: 1,
+      }));
+      let clock = 0;
+      const service = new MyIssuesService(
+        makeDeps({
+          now: () => clock,
+          enhancementTimeoutMs: 8_000,
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            clock = 500; // 还剩 7.5s
+            throw new Error('HTTP 422');
+          },
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).toHaveBeenCalledTimes(1);
+      expect(result.items.map((i) => i.number)).toEqual([34]);
+      expect(result.githubEnhancementFailed).toBe(false);
+    });
+
+    it('主通道成功时不碰兜底通道', async () => {
+      const searchAuthoredIssuesFallback = vi.fn(async () => null);
+      const service = new MyIssuesService(
+        makeDeps({
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => ({ issues: [remoteIssue()], totalCount: 1 }),
+          searchAuthoredIssuesFallback,
+        }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).not.toHaveBeenCalled();
+      expect(result.githubEnhancementFailed).toBe(false);
+    });
+
+    it('没配增强时既不搜也不算失败 —— 没配是正常状态', async () => {
+      const searchAuthoredIssuesFallback = vi.fn(async () => null);
+      const service = new MyIssuesService(
+        makeDeps({ resolveGithubEnhancement: async () => null, searchAuthoredIssuesFallback }),
+      );
+
+      const result = await service.list();
+      expect(searchAuthoredIssuesFallback).not.toHaveBeenCalled();
+      expect(result.githubEnhancement).toBeNull();
+      expect(result.githubEnhancementFailed).toBe(false);
+    });
+
+    it('兜底也算在同一次总 deadline 内,不给增强第二份预算', async () => {
+      // 两段各起计时器的写法会让页面最坏等两倍时长(#1103 review 里出现过)。
+      const service = new MyIssuesService(
+        makeDeps({
+          readLedger: () => [ledgerRecord()],
+          enhancementTimeoutMs: 40,
+          resolveGithubEnhancement: async () => GHOST_VIEWER,
+          searchAuthoredIssues: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 30));
+            throw new Error('HTTP 422');
+          },
+          // 主通道已用掉 30ms,兜底再要 60ms —— 合计必须被 40ms 的总预算切断。
+          searchAuthoredIssuesFallback: async () => {
+            await new Promise((resolve) => setTimeout(resolve, 60));
+            return { issues: [remoteIssue({ number: 34 })], totalCount: 1 };
+          },
+        }),
+      );
+
+      const result = await service.list();
+      expect(result.items.map((i) => i.number)).toEqual([1001]);
+      expect(result.githubEnhancementFailed).toBe(true);
+    });
   });
 
   it('任一路远端总数多于返回条数时标 truncated', async () => {
