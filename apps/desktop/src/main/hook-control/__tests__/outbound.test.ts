@@ -44,6 +44,18 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[X 回复格式]');
   });
 
+  it('X 提示词陈述取文机制, 而不是要求模型自律(与 turnTextsFor 同一约定)', () => {
+    const x = buildHookPromptNote('x');
+    // 机制侧: session-runner 的 turnTextsFor 对 X 取 observer.finalSegment() 当
+    // 公开正文。提示词必须把这条规则告诉模型 —— 否则它会把结论拆在多条消息里,
+    // 而只有最后一条会被发出。
+    expect(x).toContain('只有你的最后一条消息会被发出');
+    expect(x).toContain('最终结论必须完整地放进最后');
+    // 反面: 不得退回"要求模型不要写过程叙述"的纯软约束写法 —— 模型不听就直接
+    // 穿透到公开时间线(2026-08-01 实踩)。
+    expect(x).not.toContain('不要写「我先看看');
+  });
+
   it('两个平台都在开头声明「不是用户消息」,防止模型把渠道说明当成用户请求(2026-07 实踩)', () => {
     for (const im of ['telegram', 'slack', 'x'] as const) {
       const note = buildHookPromptNote(im);
@@ -141,6 +153,32 @@ describe('collectOutboundAttachments', () => {
     expect(r.text).toContain('🖼️ _a_');
     expect(r.text).toContain('b');
     expect(r.text).toContain('Attachment delivery incomplete: 2 items');
+  });
+
+  it('refScanText: 引用范围可宽于正文, 正文变换仍只作用于正文', async () => {
+    // X 只发最后一条助手消息, 而图常贴在中间那条。两者绑在一起的话那些图会
+    // 静默丢失(PR #1272 review 指出) —— 所以扫描范围与正文范围分开。
+    const turnText = '先看图 ![图](xdt-image://chart.png)\n\n结论: 趋势向上。';
+    const publicText = '结论: 趋势向上。';
+    const r = await collectOutboundAttachments(publicText, [], {
+      ...deps({ '/cache/chart.png': Buffer.from('png') }),
+      refScanText: turnText,
+    });
+    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
+    // 正文不该被扩回整轮 —— 扩大的只是"哪些引用要收"。
+    expect(r.text).toBe(publicText);
+    expect(r.text).not.toContain('先看图');
+    expect(r.skipped).toBe(0);
+  });
+
+  it('refScanText 省略时按 finalText 扫描(既有行为不变)', async () => {
+    const r = await collectOutboundAttachments(
+      '成果 ![图](xdt-image://chart.png)',
+      [],
+      deps({ '/cache/chart.png': Buffer.from('png') }),
+    );
+    expect(r.attachments.map((a) => a.name)).toEqual(['chart.png']);
+    expect(r.text).toContain('🖼️ _图(已作为附件发送)_');
   });
 
   it('同一路径重复引用只收一份', async () => {

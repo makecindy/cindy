@@ -17,9 +17,10 @@
  * 本包零运行时依赖：`AgentKind` / `Effort` 在此就地定义（与 maker-core 的同名
  * 联合保持一致），不 import maker-core，保证可作为独立能力复用。
  */
+import type { ModelRegistry } from '@cindy/model-access-protocol';
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
-export type AgentKind = 'claude-code' | 'codex';
+export type AgentKind = 'claude-code' | 'codex' | 'pi';
 
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
@@ -503,17 +504,11 @@ export interface Catalog {
    */
   presets?: ProviderPreset[];
   /**
-   * model-access-server 的网关模型元数据远程覆盖表（`{ version: 1, models: {...} }`
-   * 信封，schema 归服务端所有故此处不建型）。消费方：
-   *   - 服务端热加载（XD 网关模型元数据权威）；
-   *   - 客户端 **anthropic 动态发现的元数据基线**（active-catalog 合并时用
-   *     name/group/sortOrder/description/defaultEnabled 覆盖发现条目；动态通道未下发
-   *     capability 时，efforts/defaultEffort 作为能力基线；上游显式能力始终优先；
-   *     version !== 1 整段忽略）；
-   *   - dev 模式下本地覆盖服务端下发的 XD 模型元数据以便自测
-   *     （apps/desktop model-access devMetaOverlay，packaged 不走该覆盖）。
+   * Cindy 公共模型注册表：统一承载 canonical id、runtime 路由别名、能力元数据与
+   * 厂商公开参考价。它不决定某个账号实际可用哪些模型，也不覆盖 Cindy AI Gateway
+   * 的实时售卖价；动态发现与 `/api/model-access/models` 仍分别是两类事实的权威。
    */
-  cindyModelMeta?: unknown;
+  modelRegistry?: ModelRegistry;
 }
 
 /**
@@ -531,7 +526,10 @@ export interface CustomProviderRuntimeConfig {
   requestPath?: string;
   /** 用户模型；contextWindow 可由预设带入，缺省时由 `buildUserProvider` 补保守默认。 */
   models: ProviderRuntimeModelConfig[];
-  /** 可选自定义请求头（非密钥鉴权头可放这里；API key 走 safeStorage，不放这里）。 */
+  /**
+   * 可选自定义请求头。运行时配置会从 main-only safeStorage 临时 hydrate；值不写
+   * custom_providers SQLite，也不通过非可信 / 远程 provider:list 返回。
+   */
   headers?: Record<string, string>;
   /**
    * 可选的「列模型」端点（「获取模型列表」按钮用；缺省由 baseUrl 推导 `…/v1/models`）。
@@ -541,7 +539,8 @@ export interface CustomProviderRuntimeConfig {
 }
 
 /**
- * 用户自定义供应商的**持久化配置**（不含密钥）。
+ * 用户自定义供应商配置。runtime headers 仅在可信 main 运行期 hydrate，持久化时值在
+ * safeStorage；其余字段写 localDb。
  *
  * 由 host 持久化（desktop: localDb `custom_providers` 表，按账号隔离），加载时经
  * `buildUserProvider`（见 user-provider.ts）展开成标准 `Provider`，与内置厂商同形状、
@@ -550,9 +549,9 @@ export interface CustomProviderRuntimeConfig {
  * **per-runtime 独立配置**：`runtimes` 按 agent 索引，每个 runtime 各有独立的 baseUrl /
  * 模型 / headers；用户在表单 Tab 里只配需要的那个，也可两个都配（该来源同时供两端）。至少一个。
  *
- * API key **不在本结构里**：按 runtime 单独存 safeStorage（`provider_key_<id>_<agent>`，机制同
- * 内置 XD 网关 key），host 路由 resolve 时按 (id, agent) 读出注入鉴权头，绝不进 catalog /
- * 绝不回传 renderer 明文。
+ * API key 与 headers 值都不进 SQLite：按 runtime 分别存 safeStorage。host 路由 resolve
+ * 时按 (id, agent) hydrate；只有可信本机设置页可拿到 headers 以便编辑，远程和不可信
+ * renderer 投影一律剥离。
  */
 export interface CustomProviderConfig {
   /** 供应商 id，小写 slug（/^[a-z0-9_-]+$/），同账号内唯一，不撞内置 `anthropic|openai|xd`。 */

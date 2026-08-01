@@ -80,7 +80,7 @@ describe('maker-memory toggle rebuilds the codex MCP bridge (R1 P2)', () => {
     expect(handler).toBeGreaterThan(-1);
     const guard = source.indexOf('if (wasEnabled !== enabled) {', handler);
     expect(guard).toBeGreaterThan(handler);
-    const shutdown = source.indexOf('await shutdownCodexEnvironmentBestEffort(', guard);
+    const shutdown = source.indexOf('await shutdownAgentMcpEnvironmentsBestEffort(', guard);
     expect(shutdown).toBeGreaterThan(guard);
     // 同值调用 (无翻转) 不得白杀 bridge — shutdown 必须在翻转守卫之内。
     const wasEnabledSnapshot = source.indexOf('const wasEnabled = makerMemory.isEnabled();', handler);
@@ -93,7 +93,7 @@ describe('maker-memory toggle rebuilds the codex MCP bridge (R1 P2)', () => {
     expect(handler).toBeGreaterThan(-1);
     const guard = source.indexOf('if (wasMakerEnabled !== resetSettings_.maker) {', handler);
     expect(guard).toBeGreaterThan(handler);
-    const shutdown = source.indexOf('await shutdownCodexEnvironmentBestEffort(', guard);
+    const shutdown = source.indexOf('await shutdownAgentMcpEnvironmentsBestEffort(', guard);
     expect(shutdown).toBeGreaterThan(guard);
   });
 });

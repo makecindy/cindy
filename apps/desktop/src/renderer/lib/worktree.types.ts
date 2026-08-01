@@ -20,6 +20,8 @@ export interface WorktreeMeta {
   sourceBranch: string;
   /** ISO 8601 时间字符串。 */
   createdAt: string;
+  /** 隔离回收期间的实际路径；正常 worktree 不设置。 */
+  quarantinePath?: string;
 }
 
 /**
@@ -63,6 +65,8 @@ export interface DetectCwdResp {
   currentBranch?: string;
   /** 仓库根（可能与传入 cwd 不同）。 */
   repoRoot?: string;
+  /** 被控端是否支持 recoveryKey 预创建回收；旧端省略该字段。 */
+  supportsRecoveryKeyDiscard?: boolean;
 }
 
 export interface ListBranchesResp {

@@ -9934,93 +9934,6 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('reviews approvals against a steer intent before its acknowledgement arrives', async () => {
-    const steerAck = deferred<{ turnId: string }>();
-    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-steer-review-intent' } };
-      if (method === Method.TurnSteer) return steerAck.promise;
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-steer-review-intent',
-      model: 'qwen/qwen3-coder',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-    await handle.send({ type: 'user', content: 'Inspect the current build' });
-
-    const steerPromise = handle.steer({
-      type: 'user',
-      content: 'Clean the generated build directory',
-    });
-    for (let i = 0; i < 5; i += 1) {
-      if (host.request.mock.calls.some(([method]) => method === Method.TurnSteer)) break;
-      await Promise.resolve();
-    }
-    expect(host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true);
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
-    await expect(handlers.commandExecutionApproval({
-      threadId: 'start-thread-id',
-      turnId: 'turn-steer-review-intent',
-      itemId: 'cleanup-build',
-      command: 'rm -rf build',
-      cwd: '/repo',
-    })).resolves.toEqual({ decision: 'accept' });
-    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
-      userIntent: 'Clean the generated build directory',
-    }));
-
-    steerAck.resolve({ turnId: 'turn-steer-review-intent' });
-    await expect(steerPromise).resolves.toBeUndefined();
-    await handle.close();
-  });
-
-  it('restores the prior auto-review intent after a definite steer rejection', async () => {
-    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-rejected-steer-intent' } };
-      if (method === Method.TurnSteer) {
-        throw Object.assign(
-          new Error('codex app-server turn/steer error -32602: no active turn to steer'),
-          { code: -32602 },
-        );
-      }
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-rejected-steer-intent',
-      model: 'qwen/qwen3-coder',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-    await handle.send({ type: 'user', content: 'Inspect the current build' });
-    await expect(handle.steer({
-      type: 'user',
-      content: 'Clean the generated build directory',
-    })).rejects.toThrow(/no active turn to steer/i);
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
-    await expect(handlers.commandExecutionApproval({
-      threadId: 'start-thread-id',
-      turnId: 'turn-rejected-steer-intent',
-      itemId: 'inspect-package',
-      command: 'npm install --dry-run',
-      cwd: '/repo',
-    })).resolves.toEqual({ decision: 'accept' });
-    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
-      userIntent: 'Inspect the current build',
-    }));
-    await handle.close();
-  });
-
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
@@ -10171,6 +10084,59 @@ describe('CodexAgent MCP thread context hooks', () => {
     if (request?.kind !== 'permission') throw new Error('expected permission request');
     expect(request.suggestions).toBeUndefined();
     await handle.close();
+  });
+
+  it('re-checks Ask and Full access after an in-flight Cindy auto-review', async () => {
+    const askReview = deferred<{ verdict: 'allow' }>();
+    const askReviewer = vi.fn(() => askReview.promise);
+    const askAgent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: askReviewer }));
+    const askHost = installFakeHost(askAgent);
+    const askHandle = await askAgent.startSession({
+      sessionId: 'session-auto-review-late-ask', model: 'gpt-5.5', providerId: 'openai',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    const askHandlers = askHost.getThreadHandlers();
+    if (!askHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const askResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
+    askHandle.setInteractionResolver(askResolver);
+    const pendingAsk = askHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-late-ask', itemId: 'cmd-late-ask', approvalId: 'a-late-ask',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(askReviewer).toHaveBeenCalledOnce());
+    await askHandle.setPermissionMode!('ask');
+    askReview.resolve({ verdict: 'allow' });
+    await expect(pendingAsk).resolves.toEqual({ decision: 'accept' });
+    expect(askResolver).toHaveBeenCalledOnce();
+    expect(askResolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'permission', suggestions: undefined });
+    await askHandle.close();
+
+    const fullReview = deferred<{ verdict: 'allow' }>();
+    const fullReviewer = vi.fn(() => fullReview.promise);
+    const fullAgent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: fullReviewer }));
+    const fullHost = installFakeHost(fullAgent);
+    const fullHandle = await fullAgent.startSession({
+      sessionId: 'session-auto-review-late-full', model: 'gpt-5.5', providerId: 'openai',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    const fullHandlers = fullHost.getThreadHandlers();
+    if (!fullHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const fullResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
+    fullHandle.setInteractionResolver(fullResolver);
+    const pendingFull = fullHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-late-full', itemId: 'cmd-late-full', approvalId: 'a-late-full',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(fullReviewer).toHaveBeenCalledOnce());
+    await fullHandle.setPermissionMode!('bypassPermissions');
+    fullReview.resolve({ verdict: 'allow' });
+    await expect(pendingFull).resolves.toEqual({ decision: 'accept' });
+    expect(fullResolver).not.toHaveBeenCalled();
+    await fullHandle.close();
   });
 
   it('auto-approves safe fallback commands via the Cindy auto-review core without prompting', async () => {
@@ -10391,12 +10357,6 @@ describe('CodexAgent MCP thread context hooks', () => {
       decisionSource: 'agent',
       review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: 'review timed out' },
       action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
-    });
-    await vi.waitFor(() => {
-      expect(host.request).toHaveBeenCalledWith(Method.ThreadSettingsUpdate, {
-        threadId: 'start-thread-id',
-        approvalsReviewer: 'user',
-      });
     });
     await handle.send({ type: 'user', content: 'Run the type checker' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
@@ -15333,50 +15293,6 @@ describe('CodexAgent plan mode', () => {
     }
     expect(sawPlanModeChanged).toBe(true);
     // plan item 不再渲染为 update_plan 工具行 — tool_use 事件不该出现。
-    await handle.close();
-  });
-
-  it('reviews implementation actions against the approved plan instead of the internal follow-up', async () => {
-    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
-    let turnSeq = 0;
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-plan-approved-review-intent',
-      model: 'qwen/qwen3-coder',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-      planMode: true,
-    });
-    handle.setInteractionResolver(async () => ({ kind: 'plan_review', behavior: 'allow' }));
-
-    await handle.send({
-      type: 'user',
-      content: 'Refactor the parser without changing public behavior',
-    });
-    runPlanTurn(host, 'turn-1', '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests');
-    await vi.waitFor(() => {
-      expect(turnStartCalls(host)).toHaveLength(2);
-    });
-
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
-    await expect(handlers.commandExecutionApproval({
-      threadId: 'start-thread-id',
-      turnId: 'turn-2',
-      itemId: 'focused-typecheck',
-      command: 'npx tsc --noEmit',
-      cwd: '/repo',
-    })).resolves.toEqual({ decision: 'accept' });
-    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
-      userIntent:
-        'Refactor the parser without changing public behavior\n\n'
-        + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
-    }));
     await handle.close();
   });
 

@@ -120,6 +120,8 @@ export interface ImFinalOutput {
   errorCode?: string;
   /** Managed local media discovered in the terminal assistant output. */
   mediaAbsPaths?: string[];
+  /** Host-approved roots for model-authored local file attachment links. */
+  allowedFileRoots?: string[];
 }
 
 /**
@@ -134,5 +136,10 @@ export type ImOutputDriver =
   | {
       kind: 'chunked-text';
       im: TextChannelIM;
+      /**
+       * Reserve an inbound reply context before a potentially long turn.
+       * Transports with callback deadlines may emit a non-terminal placeholder.
+       */
+      beginReply?(userId: string): Promise<void>;
       commitFinal(output: ImFinalOutput): Promise<void>;
     };

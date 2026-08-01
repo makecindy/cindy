@@ -47,7 +47,7 @@ export interface ProjectScheduleConfig {
   recurring?: boolean;
   manual?: boolean;
   intervalMs?: number;
-  agentKind?: 'claude-code' | 'codex';
+  agentKind?: 'claude-code' | 'codex' | 'pi';
   model?: string;
   /** 可选：显式来源(供应商)id。省略 → 走原生默认来源（与旧配置字节级一致）。详见 Schedule.providerId。 */
   providerId?: string;
@@ -62,7 +62,7 @@ export interface ProjectScheduleConfig {
    * 删掉即清空 DB 里的 hook。与 renderer projectAutomationConfig.ts 同形。
    */
   preRunHook?: { command: string; timeoutMs?: number };
-  notify?: { desktop?: boolean; feishu?: boolean };
+  notify?: { desktop?: boolean; feishu?: boolean; wecomGroup?: boolean };
 }
 
 export interface ReconcileResult {
@@ -505,7 +505,8 @@ export function schedulesDiffer(
     (schedule.preRunHook?.command ?? '') !== (expected.preRunHook?.command ?? '') ||
     (schedule.preRunHook?.timeoutMs ?? undefined) !== (expected.preRunHook?.timeoutMs ?? undefined) ||
     schedule.notify.desktop !== expected.notify?.desktop ||
-    schedule.notify.feishu !== expected.notify?.feishu
+    schedule.notify.feishu !== expected.notify?.feishu ||
+    !!schedule.notify.wecomGroup !== !!expected.notify?.wecomGroup
   );
 }
 
@@ -515,8 +516,13 @@ function normalizeNotify(
   return {
     desktop: notify?.desktop ?? true,
     feishu: notify?.feishu ?? false,
+    wecomGroup: notify?.wecomGroup ?? false,
   };
 }
+
+export const __testing = {
+  scheduleConfigToUpdateInput,
+};
 
 function sameWorkingDir(a: string | undefined, b: string): boolean {
   if (!a) return false;
@@ -591,14 +597,18 @@ function optionalNumber(value: unknown): boolean {
 }
 
 function optionalAgentKind(value: unknown): boolean {
-  return value === undefined || value === 'claude-code' || value === 'codex';
+  return value === undefined || value === 'claude-code' || value === 'codex' || value === 'pi';
 }
 
 function optionalNotify(value: unknown): boolean {
   if (value === undefined) return true;
   if (!value || typeof value !== 'object') return false;
-  const notify = value as { desktop?: unknown; feishu?: unknown };
-  return optionalBoolean(notify.desktop) && optionalBoolean(notify.feishu);
+  const notify = value as { desktop?: unknown; feishu?: unknown; wecomGroup?: unknown };
+  return (
+    optionalBoolean(notify.desktop) &&
+    optionalBoolean(notify.feishu) &&
+    optionalBoolean(notify.wecomGroup)
+  );
 }
 
 function isNodeError(err: unknown): err is NodeJS.ErrnoException {

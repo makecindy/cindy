@@ -7,6 +7,10 @@
 本文只治理 Desktop 的 Drizzle／SQLite。本仓不包含服务端数据库；服务端 migration 以
 对应服务端仓规则为准。
 
+多账号场景下的 Profile、Machine Registry、Runtime Lease 与表级 ownership 约束见
+[`multi-account-database-architecture.md`](multi-account-database-architecture.md)。该文档
+是架构基线；在它的所有权边界确认前，不要通过批量增加 `owner_id` 来改造存量业务表。
+
 > **增量适用原则**：本规则约束新数据库改动，不要求为统一形式专项改造存量代码。
 > 不得借普通功能修改重写历史 migration 或批量迁移旧数据库访问方式。
 

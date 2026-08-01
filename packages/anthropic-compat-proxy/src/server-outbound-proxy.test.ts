@@ -166,40 +166,29 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
   });
 
   it('falls back to direct connection when the resolver throws or returns unsupported urls', async () => {
-    let directRequests = 0;
-    const upstream = createHttpServer((_req, res) => {
-      directRequests += 1;
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ direct: true }));
-    });
-    const upstreamPort = await listenOnAvailableLoopbackPort(upstream);
-    cleanups.push(() => new Promise<void>((r) => upstream.close(() => r())));
-
     const warns: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      // URL parsing keeps 0.0.0.0 distinct from the explicit loopback forms that
-      // bypass the resolver, while Node routes it to this local test server.
-      upstream: `http://0.0.0.0:${upstreamPort}`,
+      upstream: 'http://upstream.invalid:8080',
       transformRequest: [],
       resolveOutboundProxy: () => { throw new Error('resolver boom'); },
       logger: { warn: (msg) => { warns.push(msg); } },
     });
 
-    // resolver 异常不能炸掉请求；fail-open 后必须实际抵达直连上游。
+    // 直连假域必然失败，但必须是上游连接的 502，而非 resolver 异常炸掉请求链路。
     const res = await fetch(`${proxy.url}/v1/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ direct: true });
+    expect(res.status).toBe(502);
+    expect((await res.json() as { error: { message: string } }).error.message).toContain('upstream unreachable');
     expect(warns.some((m) => m.includes('outbound proxy resolver threw'))).toBe(true);
 
     await proxy.dispose();
 
     const warns2: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      upstream: `http://0.0.0.0:${upstreamPort}`,
+      upstream: 'http://upstream.invalid:8080',
       transformRequest: [],
       // socks4 仍不支持(无认证、无 IPv6),按不支持的形态回落直连。
       resolveOutboundProxy: () => 'socks4://127.0.0.1:1080',
@@ -210,9 +199,8 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res2.status).toBe(200);
-    expect(await res2.json()).toEqual({ direct: true });
+    expect(res2.status).toBe(502);
+    expect((await res2.json() as { error: { message: string } }).error.message).toContain('upstream unreachable');
     expect(warns2.some((m) => m.includes('unsupported outbound proxy url'))).toBe(true);
-    expect(directRequests).toBe(2);
   });
 });

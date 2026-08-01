@@ -23,6 +23,7 @@ import type { FeishuIM } from '@cindy/im';
 
 import { dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace';
 import {
+  resolveDefaultScheduleRoute,
   resolveRouteCopyCapabilities,
   verdictForModelRoute,
 } from '../maker-host/model-route-guard-live.js';
@@ -31,10 +32,13 @@ import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
+  cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   hasQueuedSchedulerPrompt,
+  isSchedulerAutoResumePending,
   isSchedulerPromptTracked,
   isSchedulerTargetSessionBusy,
+  onSchedulerAutoResumeFailed,
   removeQueuedSchedulerPrompt,
 } from '../maker-ipc/register.js';
 import { DrizzleScheduleStorage, type SchedulerDrizzleDb } from './storage';
@@ -45,6 +49,7 @@ import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
 import { withScheduleLock } from './scheduleLock';
+import { wecomGroupNotificationService } from '../wecomGroupNotification';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -71,6 +76,7 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     logger: deps.logger,
     shouldNotifyDesktop: () =>
       getDesktopNotificationsEnabled() && !(getAgentIslandService()?.isEnabled() ?? false),
+    wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({
     maker: deps.maker,
@@ -85,6 +91,7 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     checkModelRoute: verdictForModelRoute,
     // 隐式改道后按落地拷贝 reconcile effort/Fast(见 runner deps 注释,R27)。
     resolveRouteCopyCapabilities,
+    resolveDefaultModelRoute: resolveDefaultScheduleRoute,
     // 心跳撞忙排队桥:实现挂在 maker-ipc/register.ts 的 coordinator 装配处
     // (holder 未就绪时 isSessionBusy 返回 false → runner 走原直发路径)。
     schedulerQueue: {
@@ -93,10 +100,15 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
       enqueuePrompt: enqueueSchedulerPrompt,
       removeQueuedPrompt: removeQueuedSchedulerPrompt,
       isPromptTracked: isSchedulerPromptTracked,
+      isAutoResumePending: isSchedulerAutoResumePending,
+      onAutoResumeFailed: onSchedulerAutoResumeFailed,
+      cancelAutoResume: cancelSchedulerAutoResume,
     },
   });
   const scriptRunner = new ScriptScheduleRunner({
-    broker: new SchedulerScriptCapabilityBroker(),
+    broker: new SchedulerScriptCapabilityBroker({
+      resolveDefaultModelRoute: resolveDefaultScheduleRoute,
+    }),
     logger: deps.logger,
     notifier,
     getDb: deps.getDb,

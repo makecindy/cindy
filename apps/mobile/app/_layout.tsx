@@ -7,8 +7,8 @@ import {
   useSegments,
 } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { useEffect, useMemo, type ReactElement } from 'react';
-import { Alert, Platform, Pressable, StyleSheet, View } from 'react-native';
+import { useCallback, useEffect, useMemo, useRef, type ReactElement } from 'react';
+import { Alert, AppState, Platform, Pressable, StyleSheet, View } from 'react-native';
 import { Text } from '@/components/AppText';
 import {
   fontWeight,
@@ -27,7 +27,10 @@ import {
   MobileLoginHandoffProvider,
   useLoginHandoff,
 } from '@/auth/MobileLoginHandoffContext';
-import { DeviceLinkProvider } from '@/device-link/DeviceLinkContext';
+import {
+  DeviceLinkProvider,
+  useDeviceLink,
+} from '@/device-link/DeviceLinkContext';
 import { PushNotificationsBridge } from '@/notifications/PushNotificationsBridge';
 import { GestureHandlerRootView } from '@/platform/gestureHandler';
 // import 即同步完成 i18next init;必须先于任何 t() 消费方挂载。
@@ -52,6 +55,11 @@ import {
 import { useCanaryChannelGate } from '@/update/useCanaryChannelGate';
 import { useStartupEndpointGate } from '@/config/useStartupEndpointGate';
 import { IS_OTA_SELFHOST } from '@/config/env';
+import { getNewSessionCreationTask } from '@/session/newSessionCreation';
+import {
+  isPrecreatedWorktreeRegistrationInFlight,
+  recoverPendingPrecreatedWorktrees,
+} from '@/session/precreatedWorktreeRecovery';
 
 function NavigationGate() {
   const auth = useAuth();
@@ -172,6 +180,119 @@ function AuthHandoffBridge() {
   return null;
 }
 
+/**
+ * 预创建 worktree 恢复桥：
+ * 手机在 worktree:create 前已持久化 recoveryKey reservation；进程可能在 create
+ * 或 create-session 回包前被系统杀掉，这时页面 task 已不存在，不能等用户再次
+ * 进入新建页才补偿。根部在同账号链路上线 / 回前台时读取小型恢复账本；当前
+ * 进程仍有创建 task 的记录先跳过，避免与正常管线竞争，冷启动后再由被控端的
+ * 登记匹配与 ownership guard 做最后裁决。
+ */
+function PrecreatedWorktreeRecoveryBridge() {
+  const auth = useAuth();
+  const {
+    status: deviceLinkStatus,
+    connectionEpoch,
+    openLink,
+    invoke,
+  } = useDeviceLink();
+  const inFlightRef = useRef<{
+    accountId: string;
+    promise: Promise<void>;
+  } | null>(null);
+  const accountId = auth.user?.id?.trim() ?? '';
+  const ownerGenerationRef = useRef({ accountId: '', generation: 0 });
+  if (ownerGenerationRef.current.accountId !== accountId) {
+    ownerGenerationRef.current = {
+      accountId,
+      generation: ownerGenerationRef.current.generation + 1,
+    };
+  }
+  const ownerGeneration = ownerGenerationRef.current.generation;
+
+  const runRecovery = useCallback(async () => {
+    if (
+      !auth.initialized
+      || !auth.isAuthenticated
+      || !accountId
+      || deviceLinkStatus !== 'online'
+    ) {
+      return;
+    }
+    // 连接重建与账号切换可能在同一时间触发多个恢复请求。相同账号复用
+    // 当前运行；切换账号则等待旧账本完成后再处理新账号，不能因为一次
+    // 竞态把新账号的恢复永久跳过。
+    while (inFlightRef.current) {
+      const previous = inFlightRef.current;
+      await previous.promise;
+      if (previous.accountId === accountId) return;
+      if (inFlightRef.current === previous) {
+        inFlightRef.current = null;
+      }
+    }
+    const run = recoverPendingPrecreatedWorktrees(accountId, {
+      openLink,
+      discardPrecreated: (deviceId, input) => invoke(
+        deviceId,
+        'worktree:discard-precreated',
+        [input],
+      ),
+      isSessionClaimed: async (deviceId, sessionId) => {
+        try {
+          const session = await invoke(deviceId, 'local-db:sessions:get', [sessionId]);
+          return !!session;
+        } catch (error) {
+          const code = typeof error === 'object' && error && 'code' in error
+            ? String((error as { code?: unknown }).code ?? '')
+            : '';
+          const message = error instanceof Error ? error.message : String(error);
+          if (`${code} ${message}`.toUpperCase().includes('NOT_FOUND')) return false;
+          throw error;
+        }
+      },
+      shouldDefer: (record) => (
+        getNewSessionCreationTask(record.sessionId) !== null
+        || isPrecreatedWorktreeRegistrationInFlight(record.sessionId)
+      ),
+      // Account selection updates user/token while the AuthProvider stays mounted.
+      // Fence this run against that owner generation so stable Device Link callbacks
+      // cannot retarget an old account's recovery to the new client.
+      isCurrent: () => (
+        ownerGenerationRef.current.accountId === accountId
+        && ownerGenerationRef.current.generation === ownerGeneration
+      ),
+    });
+    const tracked = {
+      accountId,
+      promise: run.then(() => undefined, () => undefined),
+    };
+    inFlightRef.current = tracked;
+    await tracked.promise;
+    if (inFlightRef.current === tracked) {
+      inFlightRef.current = null;
+    }
+  }, [
+    accountId,
+    auth.initialized,
+    auth.isAuthenticated,
+    connectionEpoch,
+    deviceLinkStatus,
+    invoke,
+    openLink,
+    ownerGeneration,
+  ]);
+
+  useEffect(() => {
+    void runRecovery();
+    const subscription = AppState.addEventListener('change', (nextState) => {
+      if (nextState === 'active') void runRecovery();
+    });
+    return () => subscription.remove();
+  }, [runRecovery]);
+
+  return null;
+}
+
 function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
   // 自建变体:启动即生效的 JS 热更门(冷启动 check→fetch→reload,本次启动就跑上最新 JS)。
   // 内部 gate 自建 + 非 dev + updates 可用,其余直接 ready=true 不阻塞。见 useStartupOtaGate。
@@ -199,6 +320,7 @@ function RootAfterUpdateChannel({ isCanary }: { isCanary: boolean }) {
       {/* 任务完成推送:注册同步 + 通知点击路由 + 前台横幅压制(不渲染 UI) */}
       <PushNotificationsBridge />
       <DeviceLinkProvider>
+        <PrecreatedWorktreeRecoveryBridge />
         <NavigationGate />
       </DeviceLinkProvider>
     </AuthProvider>

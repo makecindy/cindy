@@ -507,6 +507,9 @@ describe('classifyShellCommand — procfs / 短选项绕过 / 反斜杠 / git RC
     expect(classifyShellCommand('cat /proc/self/environ', roots)).toBe('prompt-each-time');
     expect(classifyShellCommand("cat /proc/self/environ | tr '\\0' '\\n'", roots)).toBe('prompt-each-time');
     expect(reviewAction({ kind: 'read', path: '/proc/1234/environ' }, roots)).toBe('prompt-each-time');
+    // task/<tid>/environ 读同一份进程环境 —— [^/\s]* 曾漏判,应同样拦下
+    expect(classifyShellCommand('cat /proc/self/task/1/environ', roots)).toBe('prompt-each-time');
+    expect(reviewAction({ kind: 'read', path: '/proc/1234/task/5678/environ' }, roots)).toBe('prompt-each-time');
   });
   it('curl 贴合/捆绑短选项(上传 -sdsecret、凭证 -uuser:pass/-Kcfg/-bck/-xproxy)→ prompt', () => {
     for (const c of [
@@ -617,6 +620,7 @@ describe('classifyShellCommand — 第二轮 bot 护栏(curl --json / sort 外�
   });
   it('find 引号拼接 -ex\'ec\' / -de\'lete\' 绕过被去引号后命中', () => {
     expect(classifyShellCommand("find . -ex'ec' sh -c 'x' {} +", roots)).toBe('prompt');
+    // 本支分类器:`find . -delete` 的遍历根就是工作区根,等于清空整个 workspace → 确定性同意。
     expect(classifyShellCommand("find . -de'lete'", roots)).toBe('prompt-each-time');
   });
   it('贴合式重定向 echo x>file → prompt;引号内的 > 是数据不算重定向', () => {

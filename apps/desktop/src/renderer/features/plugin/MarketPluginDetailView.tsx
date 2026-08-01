@@ -27,6 +27,8 @@ export function MarketPluginDetailView({
   const { scrolled, onScroll } = usePluginDetailScrolled();
   const permissions = ghostPermissionItems(detail.manifest);
   const presentationOrigin = pluginPresentationOrigin(detail);
+  // 自定义市场（Git/本地源）的包字节未经服务端校验，安全说明必须如实区分。
+  const isCustomSource = detail.sourceType !== 'server';
   const actionKey =
     detail.installState === 'update-available'
       ? 'settings.ghosts.market.update'
@@ -109,7 +111,11 @@ export function MarketPluginDetailView({
               aria-hidden="true"
             />
             <p className="text-13 leading-5 text-[var(--text-secondary)]">
-              {t('settings.ghosts.market.securityDescription')}
+              {t(
+                isCustomSource
+                  ? 'settings.ghosts.market.customSecurityDescription'
+                  : 'settings.ghosts.market.securityDescription',
+              )}
             </p>
           </div>
         </section>

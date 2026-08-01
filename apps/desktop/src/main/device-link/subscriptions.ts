@@ -35,6 +35,13 @@ export interface ActiveController {
 }
 
 const registry = new Map<string, ControllerEntry>();
+/** 当前进程曾成功建立过 link 的控制端；短时断线 push 队列据此按设备隔离补发。 */
+const knownControllerIds = new Set<string>();
+/**
+ * 普通断线会清掉 active registry，但保留最后明确持有的 topic，避免离线期间的
+ * session push 被错误地补发给只订阅 sessions 或其它 session 的控制端。
+ */
+const rememberedTopicsByController = new Map<string, Set<StoredTopic>>();
 
 /**
  * topic 生命周期监听(fs-watch 档消费:订阅驱动被控端文件 watch 启停)。
@@ -105,11 +112,16 @@ export function subscribe(
 ): void {
   // Empty/fully-filtered subscribe frames must not create a phantom remote viewer.
   if (topics.length === 0) return;
+  knownControllerIds.add(deviceId);
   const e = getOrCreate(deviceId, name);
   if (capabilities) {
     e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
   }
   for (const t of topics) e.topics.add(t as StoredTopic);
+  // Remember the topic contract across ordinary disconnects, but not across explicit revocation.
+  const remembered = rememberedTopicsByController.get(deviceId) ?? new Set<StoredTopic>();
+  for (const t of topics) remembered.add(t as StoredTopic);
+  rememberedTopicsByController.set(deviceId, remembered);
   // 幂等重放也通知(控制端断链重连后 replay subscribe → 消费方按幂等语义恢复 watch)。
   notifySubscribed(topics);
 }
@@ -128,12 +140,26 @@ export function updateControllerMetadata(
   }
 }
 
+export function controllerHasTopic(deviceId: string, topic: string): boolean {
+  return registry.get(deviceId)?.topics.has(topic as StoredTopic) === true;
+}
+
 /** 取消订阅指定 topics;该控制端 topic 清空后整条移除。空 topics 为 no-op。 */
 export function unsubscribe(deviceId: string, topics: readonly string[]): void {
   const e = registry.get(deviceId);
-  if (!e) return;
-  for (const t of topics) e.topics.delete(t as StoredTopic);
-  if (e.topics.size === 0) registry.delete(deviceId);
+  const remembered = rememberedTopicsByController.get(deviceId);
+  if (!e && !remembered) return;
+  if (e) {
+    for (const t of topics) e.topics.delete(t as StoredTopic);
+  }
+  if (remembered) {
+    for (const t of topics) remembered.delete(t as StoredTopic);
+    if (remembered.size === 0) {
+      rememberedTopicsByController.delete(deviceId);
+      knownControllerIds.delete(deviceId);
+    }
+  }
+  if (e?.topics.size === 0) registry.delete(deviceId);
   notifyReleased(topics.filter((t) => !topicStillHeld(t as StoredTopic)));
 }
 
@@ -147,11 +173,20 @@ export function clearController(deviceId: string): boolean {
   return true;
 }
 
+/** 显式撤销/账号边界使用：释放 active topics，并删除断线恢复状态。 */
+export function forgetKnownController(deviceId: string): void {
+  clearController(deviceId);
+  knownControllerIds.delete(deviceId);
+  rememberedTopicsByController.delete(deviceId);
+}
+
 /** 清空所有订阅(登出 / 关被控 / 退出)。 */
 export function clearAll(): void {
   const held = new Set<StoredTopic>();
   for (const e of registry.values()) for (const t of e.topics) held.add(t);
   registry.clear();
+  knownControllerIds.clear();
+  rememberedTopicsByController.clear();
   held.delete(LEGACY_TOPIC);
   notifyReleased([...held]);
 }
@@ -160,9 +195,34 @@ export function isEmpty(): boolean {
   return registry.size === 0;
 }
 
+/** 普通断线后是否仍有可用于离线队列精确路由的 remembered topic。 */
+export function hasRememberedTopics(): boolean {
+  return rememberedTopicsByController.size > 0;
+}
+
 /** 当前所有订阅控制端 deviceId(dropAllControllers 逐个 closeLink 用)。 */
 export function getControllerIds(): string[] {
   return [...registry.keys()];
+}
+
+/** 当前进程曾成功建立 link 的控制端；登出/停服务时由 clearAll 一起清空。 */
+export function getKnownControllerIds(): string[] {
+  return [...knownControllerIds];
+}
+
+/** 断线前曾持有该 topic(或 legacy `'*'`)的控制端。 */
+export function getKnownControllersForTopic(topic: Topic): string[] {
+  const out: string[] = [];
+  for (const [deviceId, topics] of rememberedTopicsByController) {
+    if (topics.has(LEGACY_TOPIC) || topics.has(topic)) out.push(deviceId);
+  }
+  return out;
+}
+
+/** 该控制端曾切换到现代 topic 订阅协议(而非 legacy wildcard)。 */
+export function hasRememberedModernTopics(deviceId: string): boolean {
+  const topics = rememberedTopicsByController.get(deviceId);
+  return topics !== undefined && [...topics].some((topic) => topic !== LEGACY_TOPIC);
 }
 
 /** 持有该 topic(或 legacy `'*'`)的控制端 deviceId 列表 —— topic-scoped fan-out 依据。 */
@@ -212,6 +272,8 @@ export function getUpdateRelaunchControllers(): ActiveController[] {
 export const __testing = {
   reset(): void {
     registry.clear();
+    knownControllerIds.clear();
+    rememberedTopicsByController.clear();
   },
   /** 测试用:查某控制端当前订阅的 topic 集合。 */
   topicsOf(deviceId: string): string[] {

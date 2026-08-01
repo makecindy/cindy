@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 
-export type SkillUsageAgentKind = 'claude-code' | 'codex';
+export type SkillUsageAgentKind = 'claude-code' | 'codex' | 'pi';
 
 export type SkillUsageExposureSource =
   | 'claude_skill_tool'
@@ -140,7 +140,7 @@ export function analyzeSkillUsageTranscript(input: SkillUsageTranscriptInput): S
         pendingSkillReads,
         repeatedToolSignaturesByExposureId: () => activeRepeatedToolSignatures,
       });
-    } else {
+    } else if (input.agentKind === 'codex') {
       handleCodexRecord(obj, lineNo, timestamp, {
         addExposure,
         activeExposures: () => activeExposures,
@@ -149,6 +149,10 @@ export function analyzeSkillUsageTranscript(input: SkillUsageTranscriptInput): S
         repeatedToolSignaturesByExposureId: () => activeRepeatedToolSignatures,
       });
     }
+    // Pi 原生转录用 `type:'message'` + `message.role` 的 entry 格式,与 Codex 的
+    // `event_msg`/payload 完全不同;没有专用解析器时**显式跳过**,而不是回落
+    // handleCodexRecord 误当 Codex 解析(会静默产出错误归属的 exposure)。Pi 使用分析
+    // (发现 pi-agent-home/sessions + 按 Pi 格式解析)是独立的后续工作。
   }
 
   return { exposures };

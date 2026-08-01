@@ -66,6 +66,7 @@ import { toDeviceListItems } from '@/device-link/devices';
 import {
   collectFreshPresenceDeviceIds,
   createPresenceFreshnessTracker,
+  deviceMirrorCleanupDisposition,
   markPresenceFresh,
   mergeDeviceViewsWithFreshPresence,
   patchDeviceViewsWithPresence,
@@ -80,7 +81,10 @@ import {
 import { withTransientRemoteRetry } from '@/device-link/remoteRetry';
 import { revokedDevicesStore, useRevokedDevices } from '@/device-link/revokedDevicesStore';
 import { useUnresponsiveDevices } from '@/device-link/unresponsiveDevicesStore';
-import { remoteScheduleEventStore } from '@/scheduler/remoteScheduleEvents';
+import {
+  remoteScheduleEventStore,
+  useRemoteScheduleMirrorInvalidations,
+} from '@/scheduler/remoteScheduleEvents';
 import {
   buildMobileHomePresentation,
   excludeOrcaWorkerSessions,
@@ -119,6 +123,10 @@ import { dataPropsEqual, mapContentEqual } from '@/utils/valueEquality';
 import { useStableValue } from '@/utils/useStableValue';
 import { useMinuteNow } from '@/utils/useMinuteNow';
 import {
+  getScheduleIndexInvalidationVersion,
+  invalidateOfflineScheduleIndexFailureFor,
+  invalidateRunningSessionScheduleEntries,
+  invalidateScheduleIndexForDevice,
   loadDeviceSessionScheduleIndex,
   loadSessionScheduleIndexThrottled,
   replaceSessionScheduleIndexEntries,
@@ -250,6 +258,7 @@ export default function HomeScreen() {
     return merged;
   }, [rawDeviceConnectionStates, unresponsiveDevices]);
   const [scheduleIndex, setScheduleIndex] = useState<Map<string, RemoteSessionScheduleInfo>>(() => new Map());
+  const scheduleMirrorInvalidations = useRemoteScheduleMirrorInvalidations();
 
   const updateDeviceConnectionState = useCallback((deviceId: string, state: HomeDeviceConnectionState) => {
     setDeviceConnectionStates((current) => updateHomeDeviceConnectionState(current, deviceId, state));
@@ -262,14 +271,26 @@ export default function HomeScreen() {
     return result;
   }, []);
 
+  const softInvalidateDeviceMirror = useCallback((deviceId: string) => {
+    const sessionIds = remoteSessionStore.getSessions()
+      .filter((session) => session.deviceLinkDeviceId === deviceId)
+      .map((session) => session.id);
+    invalidateScheduleIndexForDevice(deviceId);
+    remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
+    remoteSessionStore.markDeviceOffline(deviceId);
+    setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(current, sessionIds));
+  }, []);
+
   const markDeviceOffline = useCallback((deviceId: string) => {
-    remoteSessionStore.removeDevice(deviceId);
+    // 普通离线是可恢复的传输状态:保留 session/messages,只清 live 投影并失效
+    // message marker。恢复后会话立即显示 last-known 内容,后台 reopen 再补最新窗口。
+    softInvalidateDeviceMirror(deviceId);
     setDevices((current) => {
       const next = reconcileDeviceViews(markDeviceViewsOffline(current, new Set([deviceId]))).devices;
       devicesRef.current = next;
       return next;
     });
-  }, [reconcileDeviceViews]);
+  }, [reconcileDeviceViews, softInvalidateDeviceMirror]);
 
   const refreshDeviceScheduleIndex = useCallback((
     deviceId: string,
@@ -280,12 +301,14 @@ export default function HomeScreen() {
     // 重放 1+N×listRuns 会拥塞 device-link 管道、拖慢会话打开的关键读(见 scheduleIndex 注释)。
     // force = 已读类权威信号(read / all-read 推送),必须绕过 TTL 立即重拉——否则「看完
     // 返回首页」这个最常见路径永远命中 30s 内的陈旧缓存,未读徽标清不掉(review P1)。
+    const invalidationVersion = getScheduleIndexInvalidationVersion(deviceId);
     void loadSessionScheduleIndexThrottled(
       deviceId,
       () => loadDeviceSessionScheduleIndex(deviceId, invoke),
       { force: options?.force },
     )
       .then((nextIndex) => {
+        if (getScheduleIndexInvalidationVersion(deviceId) !== invalidationVersion) return;
         setScheduleIndex((current) => replaceSessionScheduleIndexEntries(
           current,
           sessionIds,
@@ -400,25 +423,48 @@ export default function HomeScreen() {
         current,
         new Set(availableRows.map((item) => item.device.deviceId)),
       ));
-      const unavailableDeviceIds = new Set(deviceRows.filter((item) => !item.canOpen).map((item) => item.device.deviceId));
-      for (const deviceId of unavailableDeviceIds) remoteSessionStore.removeDevice(deviceId);
-      // 整表对账:REST 全量清单是权威。unavailableDeviceIds 只覆盖「在清单里但不可用」,
-      // 冷启动从缓存种入、随后被解绑(完全不在清单里)的设备不会出现在其中,不对账
-      // 就成了无法消除的幽灵项;快照回写也会把它一直续进缓存。按差集清 shard。
+      // 单次 REST 快照里的 offline 只是可恢复状态,不能硬删刚同步的会话/消息;
+      // 显式关闭远控或撤权才是权限终态,继续清敏感镜像。
+      for (const item of deviceRows) {
+        const disposition = deviceMirrorCleanupDisposition(item.state);
+        if (disposition === 'soft') softInvalidateDeviceMirror(item.device.deviceId);
+        if (disposition === 'hard') {
+          invalidateScheduleIndexForDevice(item.device.deviceId);
+          remoteScheduleEventStore.clearDevice(item.device.deviceId);
+          remoteScheduleEventStore.clearDeviceMirrorInvalidation(item.device.deviceId);
+          remoteSessionStore.removeDevice(item.device.deviceId);
+        }
+      }
+      // 整表对账:REST 全量清单对“设备是否仍绑定”是权威。冷启动从缓存种入、
+      // 随后被解绑(完全不在清单里)的设备不会出现在状态分类里,按差集硬清 shard;
+      // 这与短暂 offline 不同,否则幽灵项会被快照回写无限续存。
       const knownDeviceIds = new Set(deviceRows.map((item) => item.device.deviceId));
       const ghostDeviceIds = new Set<string>();
       for (const session of remoteSessionStore.getSessions()) {
         const shardId = session.deviceLinkDeviceId;
         if (shardId && !knownDeviceIds.has(shardId)) ghostDeviceIds.add(shardId);
       }
-      for (const deviceId of ghostDeviceIds) remoteSessionStore.removeDevice(deviceId);
+      for (const deviceId of ghostDeviceIds) {
+        invalidateScheduleIndexForDevice(deviceId);
+        remoteScheduleEventStore.clearDevice(deviceId);
+        remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+        remoteSessionStore.removeDevice(deviceId);
+      }
 
       const failures: string[] = [];
       const offlineDeviceIds = new Set<string>();
       await Promise.all(availableRows.map(async (item) => {
         const result = await hydrateDeviceSessions(item.device);
         if (result.failure) failures.push(result.failure);
-        if (result.offline) offlineDeviceIds.add(item.device.deviceId);
+        if (result.offline) {
+          offlineDeviceIds.add(item.device.deviceId);
+        } else if (!result.failure) {
+          // REST + hydrate success is authoritative reachability evidence even when relay
+          // presence was not replayed on this connection. Retire any prior offline marker
+          // so unrelated device invalidations cannot re-clear this device's running badges.
+          remoteScheduleEventStore.clearDeviceMirrorInvalidation(item.device.deviceId);
+          invalidateOfflineScheduleIndexFailureFor(item.device.deviceId);
+        }
       }));
 
       // 收尾再合并一次:hydrate 阶段(可能持续数秒)里新到的 presence 补丁同样不能被覆盖掉。
@@ -447,7 +493,7 @@ export default function HomeScreen() {
     return task.finally(() => {
       if (visible) setRefreshing(false);
     });
-  }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, revokedDevices]);
+  }, [apiFetch, deviceIdentityCacheReady, homeCacheUserId, hydrateDeviceSessions, reconcileDeviceViews, revokedDevices, softInvalidateDeviceMirror]);
 
   // 冷启动先画缓存:上次 loadHome 成功的设备+会话快照种入 store,先把列表画出来(消除首屏强制
   // spinner);loadHome 返回后由 setDeviceSessions / removeDevice 正常覆盖收敛。缓存为空时列表
@@ -516,6 +562,15 @@ export default function HomeScreen() {
       registry.cancelAll();
     };
   }, []);
+
+  useEffect(() => {
+    if (scheduleMirrorInvalidations.size === 0) return;
+    const invalidatedDeviceIds = new Set(scheduleMirrorInvalidations.keys());
+    const sessionIds = remoteSessionStore.getSessions()
+      .filter((session) => !!session.deviceLinkDeviceId && invalidatedDeviceIds.has(session.deviceLinkDeviceId))
+      .map((session) => session.id);
+    setScheduleIndex((current) => invalidateRunningSessionScheduleEntries(current, sessionIds));
+  }, [scheduleMirrorInvalidations]);
 
   useEffect(() => remoteScheduleEventStore.subscribe(() => {
     const deviceIds = new Set<string>();
@@ -2693,7 +2748,7 @@ function readBooleanField(value: unknown, key: string): boolean {
 }
 
 function isClaudeCodeAgentKind(agentKind: string): boolean {
-  return agentKind !== 'codex';
+  return agentKind === 'cc' || agentKind === 'claude-code';
 }
 
 function homeConnectionTitle(status: 'online' | 'connecting' | 'stopped', t: TFunction): string {

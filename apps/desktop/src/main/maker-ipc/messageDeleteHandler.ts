@@ -22,12 +22,16 @@ interface MessageDeleteSessionRow {
   agentKind: string;
 }
 
+/**
+ * 不含 messageCount:删除对 `_count.messages` 权威口径(全部 messages 行数)的影响只有
+ * 0 或 +1(见 commitMessageDeletion 的注释),不值得为此每次删除多跑一次全表 count,故
+ * 删除路径不 patch 该字段,由 sessions:list / reseed 提供权威值。见 issue #1282。
+ */
 interface MessageDeleteCommittedPayload {
   sessionId: string;
   deletedClientIds: string[];
   updatedAt: number;
   preview: string | null;
-  messageCount: number;
 }
 
 export interface MessageDeleteHandlerDeps {
@@ -64,7 +68,7 @@ export interface MessageDeleteHandlerDeps {
 }
 
 function engineLabel(agentKind: string): string {
-  return agentKind === 'codex' ? 'Codex' : 'Claude Code';
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
 }
 
 export async function performMessageDeletion(

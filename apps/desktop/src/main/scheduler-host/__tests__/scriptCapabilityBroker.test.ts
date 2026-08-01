@@ -25,7 +25,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   tryGetOrcaCollabService: () => ({ sendToSession: sendToSessionMock }),
 }));
 
-function schedule(): Schedule {
+function schedule(overrides: Partial<Schedule> = {}): Schedule {
   return {
     id: 'script-schedule',
     name: 'script schedule',
@@ -54,6 +54,7 @@ function schedule(): Schedule {
     status: 'active',
     createdAt: 1,
     updatedAt: 1,
+    ...overrides,
   };
 }
 
@@ -254,6 +255,50 @@ describe('SchedulerScriptCapabilityBroker', () => {
       },
     });
     expect(result).toMatchObject({ target_session_id: 'session-1', wake_kind: 'created' });
+  });
+
+  it('resolves blank Pi script-dispatch defaults as one model/provider route', async () => {
+    sendToSessionMock.mockResolvedValue({
+      ok: true,
+      targetSessionId: 'session-pi',
+      agentKind: 'pi',
+      wakeKind: 'created',
+      targetTitle: 'Pi task',
+      targetLastUserSendAt: null,
+    });
+    const resolveDefaultModelRoute = vi.fn(async () => ({
+      model: 'byom/qwen3-coder',
+      providerId: 'local-byom',
+    }));
+    const broker = new SchedulerScriptCapabilityBroker({ resolveDefaultModelRoute });
+
+    await broker.call(
+      { method: 'sessions.dispatch', params: { message: 'run Pi task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'pi', model: undefined, providerId: 'local-byom' }) },
+    );
+
+    expect(resolveDefaultModelRoute).toHaveBeenCalledWith('pi', 'local-byom');
+    expect(sendToSessionMock).toHaveBeenCalledWith(expect.objectContaining({
+      createDefaults: expect.objectContaining({
+        agentKind: 'pi',
+        model: 'byom/qwen3-coder',
+        providerId: 'local-byom',
+      }),
+    }));
+  });
+
+  it('rejects blank Pi script-dispatch defaults before opening a session when no source is connected', async () => {
+    const broker = new SchedulerScriptCapabilityBroker({
+      resolveDefaultModelRoute: vi.fn(async () => null),
+    });
+
+    await expect(broker.call(
+      { method: 'sessions.dispatch', params: { message: 'run Pi task' } },
+      new Set(['sessions.dispatch']),
+      { schedule: schedule({ agentKind: 'pi', model: undefined, providerId: undefined }) },
+    )).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(sendToSessionMock).not.toHaveBeenCalled();
   });
 
   it('rejects host-owned session dispatch fields from scripts', async () => {

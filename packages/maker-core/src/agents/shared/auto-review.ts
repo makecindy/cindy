@@ -37,6 +37,13 @@
  *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
+import {
+  isSensitiveCredentialPath,
+  SENSITIVE_CREDENTIAL_PATH_PATTERNS,
+} from './sensitive-credential-paths.js';
+
+export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
+
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
@@ -56,7 +63,7 @@ export type ReviewableAction =
   // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
   | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
   | { kind: 'network'; target?: string; operation?: string }
-  | { kind: 'other' };
+  | { kind: 'other'; description?: string };
 
 /**
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
@@ -170,24 +177,6 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
 // 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`。全部大小写不敏感(`i`):
 // Windows FS 大小写不敏感,`.AWS` 等同 `.aws`;Linux 上少量混合大小写误升级也是 fail-closed 方向。
 // 与 apps/desktop/src/main/filePathPolicy.ts 的 CREDENTIAL_HOME_DIRS/FILES 保持一致(codex 报的缺口)。
-const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|azure|claude|codex)\b/i, // 凭证/密钥 + 云/agent 配置目录(含 OAuth 凭证)
-  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc|git-credentials)\b/i,   // 含 token 的凭证配置文件
-  /[\\/]\.cargo[\\/]credentials(?:\.toml)?\b/i,           // cargo registry 凭证(新旧命名)
-  /[\\/]\.m2[\\/]settings(?:-security)?\.xml\b/i,         // Maven settings(可含 server 密码)
-  /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
-  /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
-  /[\\/](?:codex|claude|gcloud|containers)[\\/]auth\.json\b/i, // agent/registry 认证文件(~/.config/codex|containers/auth.json 等)
-  /[\\/]\.config[\\/](?:gh|hub|glab|op|gcloud)\b/i,           // GitHub/GitLab/Op/gcloud CLI 的 OAuth/Token 凭证目录(~/.config/gh/hosts.yml、~/.config/gcloud/credentials.db 等)
-  /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
-  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
-];
-
-/** 路径是否触碰已知凭证/密钥位置(shell 命令与内置 Read 工具共用同一判定)。 */
-export function isSensitiveCredentialPath(target: string): boolean {
-  return typeof target === 'string' && CREDENTIAL_PATH_PATTERNS.some((re) => re.test(target));
-}
-
 /**
  * 系统 / 受保护目录:写入是高影响系统级操作,不能交给灰区模型 reviewer 静默 allow(copilot 报:
  * 新语义下 `prompt` 可被 reviewer allow,写 /etc/passwd、/System/… 会绕过用户同意)。命中即确定性
@@ -537,7 +526,7 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
-  ...CREDENTIAL_PATH_PATTERNS,                            // 凭证/密钥路径(见上)
+  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
   /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
   /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
 ];
@@ -550,6 +539,7 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
 const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
   /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
+
   // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
   /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推

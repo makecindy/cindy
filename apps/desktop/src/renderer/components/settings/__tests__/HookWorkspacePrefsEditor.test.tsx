@@ -32,6 +32,7 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
   x: {
@@ -41,6 +42,7 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: false,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
 };
@@ -54,6 +56,7 @@ const TELEGRAM_CONFIRMED: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: {
       provider: 'telegram',
       state: 'confirmed',
@@ -81,6 +84,7 @@ const X_CONFIRMED: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: {
       provider: 'x',
       state: 'confirmed',

@@ -127,6 +127,16 @@ export const MAKER_INVOKE = {
    * 入参 = { agent:'claude-code'|'codex', providerId, modelId, effort?, fast?, active? }。
    */
   APPLY_NEW_MAKER_DRAFT_PREF: 'maker:apply-new-maker-draft-pref',
+  /**
+   * device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端)。worktree 勾选记忆
+   * 是 vendor 无关的 newMakerDraft 根字段,校验形状与模型 pref 完全不同(无 modelId/providerId),
+   * 硬塞进 APPLY_NEW_MAKER_DRAFT_PREF 会破坏其形状校验语义,故独立窄 channel。
+   * 被控端 handler 校验布尔后转发给**自身 renderer**(WORKTREE_PREF_APPLY),renderer
+   * setWorktreePreference 按字段写真实草稿;变更经既有 SYNC_NEW_MAKER_DRAFT re-mirror +
+   * NEW_MAKER_DRAFT_CHANGED 广播回控制端。入参 = { worktreeEnabled: boolean }。
+   * 旧被控端无此 channel → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+   */
+  APPLY_NEW_MAKER_WORKTREE_PREF: 'maker:apply-new-maker-worktree-pref',
   LIST_AVAILABLE_AGENTS: 'maker:list-available-agents',
   /**
    * Palette `/` 命令三源 (palette refactor):
@@ -175,6 +185,14 @@ export const MAKER_INVOKE = {
   SET_FAST_MODE: 'maker:set-fast-mode',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
+  EXPORT_SESSION_HTML: 'maker:export-session-html',
+  /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
+  COMPACT_SESSION: 'maker:compact-session',
+  /** 读取当前 live agent 的同会话原生分支树(pi get_tree)。 */
+  GET_SESSION_TREE: 'maker:get-session-tree',
+  /** 切换同会话原生分支并原子重建 Cindy 可见消息时间线。 */
+  NAVIGATE_SESSION_TREE: 'maker:navigate-session-tree',
   /**
    * 旧控制端的会话模型预设写穿兼容 channel。新控制端统一经 APPLY_NEW_MAKER_DRAFT_PREF 写被控端
    * providerModelMemory 全局预设;旧控制端仍发此 invoke 时,被控端 renderer 也会将其收敛到同一
@@ -197,6 +215,10 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
+  MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
+  MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
+  MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',
@@ -771,6 +793,12 @@ export const MAKER_PUSH = {
    * 控制端进程因从不收到此 channel,带着同名监听也不会误触发。payload = APPLY_NEW_MAKER_DRAFT_PREF 入参。
    */
   DRAFT_PREF_APPLY: 'maker:draft-pref:apply',
+  /**
+   * 被控端本地 main → 自身 renderer:把控制端写穿的「新建会话默认启用 worktree」交给 renderer
+   * 写真实草稿(patchDraft)。仅本地窗口消费(**不**在 PUSH_FORWARD_ALLOWLIST,不转发回控制端)。
+   * payload = { worktreeEnabled: boolean }(APPLY_NEW_MAKER_WORKTREE_PREF 入参)。
+   */
+  WORKTREE_PREF_APPLY: 'maker:worktree-pref:apply',
   /**
    * 被控端本地 main → 自身 renderer:把控制端写穿的会话 pref 交给 renderer,renderer 调它原来的
    * 本地 setter 写真实会话记忆。仅本地窗口消费(不转发)。payload = SET_SESSION_MODEL_PREF 入参。

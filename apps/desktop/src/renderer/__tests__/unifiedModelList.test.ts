@@ -52,6 +52,28 @@ describe('buildUnionRows', () => {
     expect(rows[1].avail).toEqual(['claude-code']);
     expect(rows[2].avail).toEqual(['codex']);
   });
+
+  it('三 Agent 同模型合并为一行并保留独立 PI 开关维度', () => {
+    const threeAgent = {
+      ...provider,
+      agents: ['claude-code', 'codex', 'pi'],
+      models: {
+        ...provider.models,
+        pi: [model('shared', 500_000), model('pi-only')],
+      },
+    } as ProviderView;
+    const rows = buildUnionRows(threeAgent);
+    expect(rows.find((row) => row.id === 'shared')?.avail).toEqual([
+      'claude-code',
+      'codex',
+      'pi',
+    ]);
+    expect(countModelsByAgent(threeAgent)).toEqual([
+      { agent: 'claude-code', on: 2, total: 2 },
+      { agent: 'codex', on: 2, total: 2 },
+      { agent: 'pi', on: 2, total: 2 },
+    ]);
+  });
 });
 
 describe('buildUnionRows — 桥接命名空间归一', () => {

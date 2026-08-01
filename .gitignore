@@ -46,6 +46,7 @@ apps/desktop/resources/cindy-updater.exe
 # 实体文件按 tools/<kind>/latest.json 的 pin 下载，不进 Git/LFS。
 apps/claude-code-bin/
 apps/codex-bin/
+apps/pi-bin/
 apps/ripgrep-bin/
 # Android platform-tools 的二进制同理：Windows 打包前按 source.properties 的 pin
 # 版本下载并校验 sha256（apps/desktop/scripts/ensure-android-platform-tools.mjs）。
@@ -58,6 +59,7 @@ apps/android-platform-tools-bin/win32-x64/AdbWinUsbApi.dll
 tools/claude/updates/
 tools/codex/updates/
 tools/ripgrep/updates/
+tools/pi/updates/
 
 # ── 日志 / 下载 / 本地运行态 ─────────────────────────────────
 logs/

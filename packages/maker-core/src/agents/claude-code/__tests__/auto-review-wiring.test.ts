@@ -1,6 +1,6 @@
 /**
- * Auto-review 接线集成测试:所有 Claude 路由都映射到 SDK default，保留 canUseTool
- * 中的产品级审批语义，并由 Cindy 当前模型做轻量灰区审查。
+ * Auto-review 接线集成测试:官方 Claude OAuth 保留原生 Auto classifier；第三方路由
+ * 映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
  *
  * 覆盖(靶心是接线,而非策略本身 —— 策略逐规则由 auto-review-policy.test.ts 覆盖):
  *   - auto + 安全内置(只读 / 区内写 / 只读 shell)→ 静默 allow,不惊动 resolver
@@ -91,6 +91,7 @@ async function startSession(
     providerId?: string;
     authSource?: 'oauth' | 'api-key';
     reviewVerdict?: 'allow' | 'block' | 'ask';
+    reviewer?: AgentDeps['reviewAutoPermissionAction'];
     attachResolver?: boolean;
   } = {},
 ) {
@@ -100,7 +101,7 @@ async function startSession(
   const fakeQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(fakeQuery);
 
-  const reviewAutoPermissionAction = vi.fn(async () => ({
+  const reviewAutoPermissionAction = options.reviewer ?? vi.fn(async () => ({
     verdict: options.reviewVerdict ?? 'allow',
     reason: 'reviewed',
   }));
@@ -155,29 +156,14 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
-describe('Auto-review wiring: preserve host approval callbacks', () => {
-  it('uses SDK default for official Claude OAuth so canUseTool remains mandatory', async () => {
-    const {
-      handle,
-      canUseTool,
-      queryPermissionMode,
-      reviewAutoPermissionAction,
-      seen,
-    } = await startSession('auto', {
+describe('Auto-review wiring: native first, Cindy fallback', () => {
+  it('keeps SDK auto for official Claude OAuth', async () => {
+    const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
       providerId: 'anthropic',
       authSource: 'oauth',
-      reviewVerdict: 'ask',
     });
-    expect(queryPermissionMode).toBe('default');
-    await canUseTool(
-      'Bash',
-      { command: 'npm install left-pad' },
-      { toolUseID: 'official-oauth-gray-action', suggestions: SESSION_SUGGESTION },
-    );
-    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
-    const reqs = permissionRequests(seen);
-    expect(reqs).toHaveLength(1);
-    expect(reqs[0]?.suggestions).toBeUndefined();
+    expect(queryPermissionMode).toBe('auto');
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
     await handle.close();
   });
 
@@ -204,7 +190,7 @@ describe('Auto-review wiring: preserve host approval callbacks', () => {
     await handle.close();
   });
 
-  it('keeps the product mode on Auto when the host reports a native-reviewer failure', async () => {
+  it('keeps the product mode on Auto and switches only the runtime reviewer after native failure', async () => {
     const {
       handle,
       canUseTool,
@@ -218,7 +204,7 @@ describe('Auto-review wiring: preserve host approval callbacks', () => {
     });
 
     await handle.useCindyAutoReviewFallback?.();
-    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
     const result = await canUseTool(
       'Bash',
       { command: 'npx tsc --noEmit' },
@@ -258,13 +244,45 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
 });
 
 describe('Auto-review wiring: lightweight reviewer controls gray actions', () => {
+  it('re-checks the latest permission mode after an in-flight review', async () => {
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, canUseTool, seen } = await startSession('auto', { reviewer });
+
+    const pending = canUseTool('Write', { file_path: '/tmp/late-mode.conf' }, { toolUseID: 'late-ask' });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setPermissionMode!('ask');
+    resolveReview!({ verdict: 'allow', reason: 'reviewed' });
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    // allow 来自用户确认而非旧 reviewer verdict，且 session grant 已被剥离。
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+
+    let resolveFull: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const fullReviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveFull = resolve;
+    }));
+    // 新建一个 auto 会话，避免上一段 Ask 的本地状态影响断言。
+    await handle.close();
+    const next = await startSession('auto', { reviewer: fullReviewer });
+    const fullPending = next.canUseTool('Write', { file_path: '/tmp/late-full.conf' }, { toolUseID: 'late-full' });
+    await vi.waitFor(() => expect(fullReviewer).toHaveBeenCalledOnce());
+    await next.handle.setPermissionMode!('bypassPermissions');
+    resolveFull!({ verdict: 'allow', reason: 'reviewed' });
+    await expect(fullPending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(next.seen)).toHaveLength(0);
+    await next.handle.close();
+  });
+
   it('reviewer allow → proceeds silently without hitting the resolver', async () => {
     const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
       reviewVerdict: 'allow',
     });
     const r = await canUseTool(
       'Write',
-      { file_path: '/tmp/out.txt' },
+      { file_path: '/tmp/gray-write.conf' },
       { toolUseID: 't4', suggestions: SESSION_SUGGESTION },
     );
     expect(r.behavior).toBe('allow');

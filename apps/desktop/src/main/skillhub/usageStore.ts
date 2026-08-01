@@ -285,7 +285,7 @@ export function listSkillUsageSourcesWithRecentExposures(
   `).all(analyzerVersion, recentSince) as Array<Record<string, unknown>>;
 
   return rows.map((row) => {
-    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : 'codex';
+    const agentKind: SkillUsageAgentKind = stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex';
     return {
       rawFilePath: stringValue(row.rawFilePath),
       agentKind,
@@ -575,7 +575,7 @@ function readEvidenceCandidates(
     rawLineNo: numberValue(row.rawLineNo),
     sessionId: stringValue(row.sessionId),
     sdkSessionId: stringValue(row.sdkSessionId),
-    agentKind: stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : 'codex',
+    agentKind: stringValue(row.agentKind) === 'claude-code' ? 'claude-code' : stringValue(row.agentKind) === 'pi' ? 'pi' : 'codex',
     skillName: stringValue(row.skillName),
     skillPath: stringValue(row.skillPath) || null,
     skillDocumentHash: stringValue(row.skillDocumentHash) || null,

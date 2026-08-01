@@ -112,7 +112,10 @@ import {
   type AutoReviewDecision,
 } from '../shared/auto-review-decision.js';
 import type { ReviewableAction } from '../shared/auto-review.js';
-import { resolveAgentCredentialMode } from '../credential-mode.js';
+import {
+  resolveAgentCredentialMode,
+  resolveEffectiveCredentialModeFromAuthSource,
+} from '../credential-mode.js';
 import { repairForkedClaudeSessionJsonl, type RepairForkedClaudeJsonlResult } from './fork-jsonl-repair.js';
 import { ensureClaudeTranscriptInWorkingDir } from './transcript-relocation.js';
 import { isClaudeResumeSessionNotFound } from './invalid-resume.js';
@@ -884,6 +887,11 @@ export class ClaudeCodeAgent extends BaseAgent {
         `claude-code not authenticated: ${authState.errorReason ?? 'no_key'}`,
       );
     }
+    const effectiveCredentialMode = resolveEffectiveCredentialModeFromAuthSource(
+      credentialMode,
+      authState.authSource,
+    );
+
     // 箭头别名捕获 this —— 下方 replayRuntimeDrift(普通 function)与 handle 对象
     // 字面量方法里没有类实例 this,统一经它取 wire 串。
     const sdkModelFor = (model: string): string => this.sdkModelFor(model);
@@ -1504,6 +1512,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 空 plan 直接放过(老链路 agentManager.ts:1118-1120 同样处理)
           return { behavior: 'allow', updatedInput: input };
         }
+        // 计划审批期间用户可能继续发消息(currentAutoReviewIntent 会被覆盖);实施阶段的审查意图
+        // 必须是"发起计划时的原始请求 + 最终获批计划",不能掺进审批期间的内部跟进消息(codex 报)。
         const planRequestAutoReviewIntent = currentAutoReviewIntent;
         const decision = await dispatchInteraction({
           kind: 'plan_review',
@@ -1546,6 +1556,8 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
         }
         const finalPlan = decision.editedPlan ?? plan;
+        // 计划获批后,后续实施动作要按"原始意图 + 获批计划"审查 —— 否则轻量 reviewer 仍按批准前的
+        // 过期意图裁决,计划里明确授权的动作会被误 block(或反之)。
         setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
           planRequestAutoReviewIntent,
           finalPlan,
@@ -1606,17 +1618,29 @@ export class ClaudeCodeAgent extends BaseAgent {
           workspaceRoots,
           opts.remoteHostId ? 'linux' : process.platform,
         );
-        if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+        // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)
+        // 或放宽(→Full)。必须按**最新**档位决策,否则进入审查前的旧 auto 档 allow 会绕过用户
+        // 刚通过 setPermissionMode 要求的确认(codex review P1;与已修复的 Pi 线程同口径)。
+        // cast 破 TS 收窄:TS 不建模 await 期间经 setPermissionMode 闭包的重赋值,会把此处
+        // mutablePermissionMode 仍视为 'auto';运行期它确实可能已变,故按 union 类型现读。
+        const modeAfterReview = mutablePermissionMode as PermissionMode;
+        if (modeAfterReview === 'bypassPermissions') {
           return { behavior: 'allow', updatedInput: input };
         }
-        if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
+        if (modeAfterReview !== 'auto') {
+          // 已收紧到 Ask/更严:不吃 auto 裁决,强制走用户确认(下方 forcePrompt 流程)。
+          forcePrompt = true;
+        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'allow') {
+          return { behavior: 'allow', updatedInput: input };
+        } else if (!turnPolicyForcePrompt && autoDecision.verdict === 'block') {
           return {
             behavior: 'deny',
             message: autoDecision.reason ?? 'Cindy Auto Review blocked this action. Choose a safer alternative.',
           };
+        } else {
+          // AI `ask` and deterministic red-line verdicts are never persisted.
+          forcePrompt = true;
         }
-        // AI `ask` and deterministic red-line verdicts are never persisted.
-        forcePrompt = true;
       } else {
         if (mcpApprovalPolicy === 'auto-approve' && !turnPolicyForcePrompt) {
           return { behavior: 'allow', updatedInput: input };
@@ -1720,8 +1744,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 必须在 buildQuery / forward loop 之前声明, 否则 ctx getter 会捕获到 TDZ。
     let mutableModel = opts.model;
     let mutableProviderId = opts.providerId ?? null;
+    let mutableAutoReviewCredentialMode = effectiveCredentialMode;
+    let nativeAutoReviewUnavailable = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const usesNativeClaudeAutoReview = (): boolean =>
+      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -1768,12 +1796,12 @@ export class ClaudeCodeAgent extends BaseAgent {
     let sdkInPlanMode = false;
     // SDK PermissionMode union 没有 'ask' (我们对 ChatInput 暴露的统一名字), SDK 侧当 default。
     type SdkPermissionMode = 'default' | 'acceptEdits' | 'plan' | 'auto' | 'bypassPermissions';
-    // Claude SDK 的 auto 会完全绕过 canUseTool。宿主在该回调里承载的不只是通用审查，
-    // 还有 MCP 产品策略、prompt-each-time、turn 强制确认和 AskUserQuestion 交互；这些
-    // 语义无法与 SDK 原生 classifier 组合。因此 Cindy 的 Auto 必须映射到 SDK default，
-    // 再由 canUseTool 做确定性策略 + 当前会话模型的轻量灰区审查。
-    const toSdkPermissionMode = (mode: PermissionMode): SdkPermissionMode =>
-      (mode === 'ask' || mode === 'auto' ? 'default' : mode) as SdkPermissionMode;
+    // 官方 Claude OAuth 路由保留 CC 原生 Auto classifier。第三方/网关路由及原生
+    // classifier 故障后的会话映射到 default，使 canUseTool 回调进入 Cindy 轻量 fallback。
+    const toSdkPermissionMode = (mode: PermissionMode): SdkPermissionMode => {
+      if (mode === 'auto') return usesNativeClaudeAutoReview() ? 'auto' : 'default';
+      return (mode === 'ask' ? 'default' : mode) as SdkPermissionMode;
+    };
     /**
      * SDK 实际起 turn 时应用的权限档: 计划模式武装中(下一 turn arm)或本轮 plan turn
      * 进行中都恒为 plan, 否则跟随底层权限档。**含 arm 态**, 用于 buildQuery 起 turn。
@@ -2379,7 +2407,7 @@ export class ClaudeCodeAgent extends BaseAgent {
               }
               // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
               // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
-              // 越界操作可能被静默允许(codex 报:这里只为 plan_review 更新了意图)。
+              // 越界操作可能被静默允许(codex 报)。
               setAutoReviewIntent(composeAutoReviewIntentWithClarification(
                 currentAutoReviewIntent,
                 Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
@@ -2407,8 +2435,8 @@ export class ClaudeCodeAgent extends BaseAgent {
                     decision.editedPlan,
                   ),
                 );
-                // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支一致,
-                // 否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
+                // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支
+                // 一致,否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
                 setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
                   currentAutoReviewIntent,
                   decision.editedPlan ?? plan,
@@ -3997,8 +4025,8 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw new Error('Claude input queue is closed');
           }
           userInputAccepted = true;
-          setAutoReviewIntent(message.content);
           activeCapabilitySelectionText = userMessageTextForCapabilityRouting(message.content);
+          setAutoReviewIntent(message.content);
           replayableUserInput = sdkInput;
           // upstream-response-idle watchdog 起表 — 放在 inputQueue.push 之后, 避免把
           // client 端的 toClaudeSdkContent (多模态 image-resizer 同步等几秒) 算进上游
@@ -4068,10 +4096,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           // received it.
           throw new Error('No active Claude turn to steer: input queue is closed');
         }
-        setAutoReviewIntent(message.content);
         appendActiveCapabilitySelectionText(
           userMessageTextForCapabilityRouting(message.content),
         );
+        setAutoReviewIntent(message.content);
         armUpstreamResponseIdle();
       },
 
@@ -4352,9 +4380,36 @@ export class ClaudeCodeAgent extends BaseAgent {
         if (!isControlBlocked) {
           await q.setModel(sdkModel);
         }
+        const usedNativeAutoReview = usesNativeClaudeAutoReview();
         mutableProviderId = targetProviderId ?? null;
+        mutableAutoReviewCredentialMode = resolveEffectiveCredentialModeFromAuthSource(
+          resolveAgentCredentialMode({
+            agentKind: 'claude-code',
+            providerId: mutableProviderId,
+            model: newModel,
+          }),
+          authState.authSource,
+        );
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
+        if (
+          !isControlBlocked
+          && mutablePermissionMode === 'auto'
+          && usedNativeAutoReview !== usesNativeClaudeAutoReview()
+        ) {
+          // 切模(主操作)已生效、mutableModel/mutableProviderId/credentialMode 已同步为新值。
+          // 这里的 auto 审查重配是附带的二次 apply:若它因 transport/SDK 失败仍抛,会把整个
+          // setModel 报成失败、上层保留旧持久配置,而运行态其实已在新模型/路由 → 计费/凭证
+          // 路由错配。与其它 post-hoc setPermissionMode 调用点(plan 审批后 / plan turn 结束)
+          // 同款 best-effort:失败只 warn,不回退已成功的切模,让持久配置与运行态保持一致
+          // (codex review)。
+          await q.setPermissionMode(toSdkPermissionMode('auto')).catch((e) => {
+            log.warn('setModel: auto-review permission-mode reapply failed; model switch kept', {
+              model: newModel,
+              error: String(e),
+            });
+          });
+        }
         const newContextWindow = modelContextWindows.get(mutableModel);
         if (newContextWindow === undefined) {
           // setContextWindow(0) 是 no-op —— tracker 会静默沿用旧模型窗口直到下一个
@@ -4451,10 +4506,18 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async useCindyAutoReviewFallback() {
-        // 兼容 host 的跨 harness fallback 协议。Claude Auto 已恒走 canUseTool + Cindy
-        // reviewer，无需切换 SDK 档位；清掉缓存即可避免复用故障前的挂起判定。
+        if (nativeAutoReviewUnavailable) return;
+        nativeAutoReviewUnavailable = true;
         autoReviewDecisionCache.clear();
-        log.debug('Claude Auto already uses the Cindy reviewer through canUseTool', {
+        if (
+          mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+          && !controlRequestsBlocked()
+        ) {
+          await q.setPermissionMode('default');
+        }
+        log.warn('Claude native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           providerId: mutableProviderId,
           model: mutableModel,
         });

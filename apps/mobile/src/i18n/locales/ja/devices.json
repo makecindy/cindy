@@ -249,6 +249,7 @@
       },
       "useWorktree": "worktree を使用",
       "modelPlaceholderBound": "セッションに従う",
+      "modelPlaceholderPiDefault": "空欄でデフォルトモデル",
       "fastMode": "Fast モード",
       "notifyDesktop": "デスクトップ通知",
       "notifyFeishu": "Feishu 通知",

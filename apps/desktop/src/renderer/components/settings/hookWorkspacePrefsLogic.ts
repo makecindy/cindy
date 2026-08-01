@@ -24,7 +24,7 @@ import type { HookPrefsPatch, HookWorkspacePrefs } from '../../../shared/hookCon
  * renderer 侧合法 agentKind 的单一来源(编辑器 UI 与本文件的归一化共用;与 main 侧
  * 派发 defaults.ts 的 AGENT_KINDS 同口径 —— 进程边界两侧各持一份,新增 agent 时同步)。
  */
-export const AGENT_KINDS = ['claude-code', 'codex'] as const;
+export const AGENT_KINDS = ['claude-code', 'codex', 'pi'] as const;
 export type KnownAgent = (typeof AGENT_KINDS)[number];
 
 export function isKnownAgent(value: string | null): value is KnownAgent {

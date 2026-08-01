@@ -189,7 +189,9 @@ export function SessionShareImportWizard({
         // 导入语义 = 用本地草稿默认值新建会话(只有 agent 跟随分享包):把 New Maker
         // 草稿里该 vendor 的偏好随 commit 传给 main,替代分享包 snapshot 的会话配置
         // (导出方的模型/供应商在导入端不一定存在)。
-        const vendor = preview?.agentKind === 'codex' ? 'codex' : 'cc';
+        const vendor = preview?.agentKind === 'codex' || preview?.agentKind === 'pi'
+          ? preview.agentKind
+          : 'cc';
         const prefs = getDraft().lastByVendor[vendor];
         const res = await window.electronAPI.localDb.sessionShare.commit({
           draftId,
@@ -320,7 +322,11 @@ export function SessionShareImportWizard({
                 <p className="font-medium truncate">{preview.title}</p>
                 <p className="mt-1 text-xs text-[var(--text-tertiary)]">
                   {t('sessionShare.import.previewMeta', {
-                    agent: preview.agentKind === 'cc' ? 'Claude Code' : 'Codex',
+                    agent: preview.agentKind === 'cc'
+                      ? 'Claude Code'
+                      : preview.agentKind === 'pi'
+                        ? 'Pi'
+                        : 'Codex',
                     count: preview.messageCount,
                     exportedAt: new Date(preview.exportedAt).toLocaleString(),
                   })}

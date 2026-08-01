@@ -216,7 +216,7 @@ function overviewActionCopy(input: {
 }
 
 function agentLabel(agentKind: SessionActionStripSessionLike['agentKind']): string {
-  return agentKind === 'codex' ? 'Codex' : 'Claude Code';
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
 }
 
 function sessionStatusLabel(status: SessionActionStripSessionLike['status']): string {

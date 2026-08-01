@@ -9,7 +9,9 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  resolveLastUserMessageObservation,
   resolveNearBottomOnScroll,
+  resolveRenderPinDecision,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
   UNPIN_MIN_SCROLLABLE_PX,
@@ -163,5 +165,64 @@ describe('resolveNearBottomOnScroll', () => {
         scrollDelta: 400,
       }),
     ).toBe(true);
+  });
+});
+
+describe('resolveRenderPinDecision', () => {
+  it('explicit tail send takes ownership from a restored history anchor', () => {
+    expect(resolveRenderPinDecision({
+      restoring: true,
+      newUserSend: true,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: true, pinToBottom: true });
+  });
+
+  it('restored history remains anchored until an explicit user send', () => {
+    expect(resolveRenderPinDecision({
+      restoring: true,
+      newUserSend: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+
+  it('keeps ordinary near-bottom auto-follow behavior', () => {
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: false,
+      nearBottom: true,
+    })).toEqual({ clearRestoring: false, pinToBottom: true });
+    expect(resolveRenderPinDecision({
+      restoring: false,
+      newUserSend: false,
+      nearBottom: false,
+    })).toEqual({ clearRestoring: false, pinToBottom: false });
+  });
+});
+
+describe('resolveLastUserMessageObservation', () => {
+  it('seeds a restored user tail hydrated after mount without treating it as a send', () => {
+    expect(
+      resolveLastUserMessageObservation({
+        restoring: true,
+        tailUserMessageId: 'historical-user',
+        previousTailUserMessageId: null,
+      }),
+    ).toEqual({
+      baselineUserMessageId: 'historical-user',
+      isNewUserSend: false,
+    });
+  });
+
+  it('still detects a later user send after the restored baseline', () => {
+    expect(
+      resolveLastUserMessageObservation({
+        restoring: true,
+        tailUserMessageId: 'new-user',
+        previousTailUserMessageId: 'historical-user',
+      }),
+    ).toEqual({
+      baselineUserMessageId: 'historical-user',
+      isNewUserSend: true,
+    });
   });
 });

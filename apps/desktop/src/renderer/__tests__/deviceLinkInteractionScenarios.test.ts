@@ -857,18 +857,18 @@ describe('远程交互接线不变式', () => {
     expect(body.slice(activeBranch, elseBranch)).not.toContain('modelMemory?.setFast');
   });
 
-  it('ChatInput 远程切模型先尝试静默恢复 Fast,失败仍同步已落盘 model/effort', () => {
+  it('ChatInput 远程切模型优先原子提交 model/effort/fast,旧 host 才走兼容链', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sourceRemoteDeviceId) {');
     expect(start).toBeGreaterThan(-1);
     const body = src.slice(start, start + 2800);
-    const persist = body.indexOf(
-      'const fastPersisted = await persistFastModeChange(restoredFast, {',
-    );
+    const atomic = body.indexOf('? { effort: newEffort, fastMode: restoredFast }');
+    const fallback = body.indexOf('if (!useAtomicSelection) {');
+    const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
-    expect(persist).toBeGreaterThan(
-      body.indexOf('await remoteMaker.setEffort(sessionId, newEffort);'),
-    );
+    expect(atomic).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(atomic);
+    expect(persist).toBeGreaterThan(body.indexOf('await remoteMaker.setEffort(sessionId, newEffort);'));
     expect(persist).toBeGreaterThan(-1);
     expect(sync).toBeGreaterThan(-1);
     expect(persist).toBeLessThan(sync);
@@ -877,21 +877,21 @@ describe('远程交互接线不变式', () => {
     expect(body.slice(sync, sync + 300)).toContain('fast: fastPersisted ? restoredFast : fastMode');
   });
 
-  it('ChatInput 远程切来源先尝试静默恢复 Fast,失败仍同步已落盘 model/effort/provider', () => {
+  it('ChatInput 远程切来源优先原子提交选择快照,旧 host 才走兼容链', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('if (sessionId && sourceRemoteDeviceId)');
     const end = src.indexOf('// 把这次切换后落定的 (model, effort)', start);
     expect(start).toBeGreaterThan(-1);
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
-    const persist = body.indexOf(
-      'const fastPersisted = await persistFastModeChange(restoredFast, {',
-    );
+    const atomic = body.indexOf('? { effort: targetEffort, fastMode: restoredFast }');
+    const fallback = body.indexOf('if (!useAtomicSelection) {');
+    const persist = body.indexOf('fastPersisted = await persistFastModeChange(restoredFast, {');
     const sync = body.indexOf('syncSessionDraftModelPrefs(');
     const finalize = body.indexOf('onModelDidChange?.(targetModel);');
-    expect(persist).toBeGreaterThan(
-      body.indexOf('await remoteMaker.setEffort(sessionId, targetEffort);'),
-    );
+    expect(atomic).toBeGreaterThan(-1);
+    expect(fallback).toBeGreaterThan(atomic);
+    expect(persist).toBeGreaterThan(body.indexOf('await remoteMaker.setEffort(sessionId, targetEffort);'));
     expect(persist).toBeGreaterThan(-1);
     expect(sync).toBeGreaterThan(-1);
     expect(body.slice(persist, sync)).not.toContain('return;');
@@ -1065,6 +1065,13 @@ describe('远程交互接线不变式', () => {
     expect(body).toContain('if (shouldPatchActiveModel) {');
   });
 
+  it('跨窗口 worktree 写穿只合并目标字段，main 镜像读取共享持久快照', () => {
+    const src = read('App.tsx');
+    expect(src).toContain('const draft = getDraftForPreferenceSync();');
+    expect(src).toContain('setWorktreePreference(worktreeEnabled === true);');
+    expect(src).not.toContain('patchDraft({ worktreeEnabled: worktreeEnabled === true });');
+  });
+
   it('本地切来源恢复 Fast 时必须写入目标 provider 的 session memory', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const handleStart = src.indexOf('const handleFastModeChange');
@@ -1078,12 +1085,11 @@ describe('远程交互接线不变式', () => {
     const applyStart = src.indexOf('const applyModelAndEffort = async');
     expect(applyStart).toBeGreaterThan(-1);
     const applyBody = src.slice(applyStart, applyStart + 3200);
-    expect(applyBody).toContain(
-      'handleFastModeChange(restoredFast, modelId, eff, false, newProviderId)',
-    );
+    expect(applyBody).toContain('modelMemory?.setFast(');
+    expect(applyBody).toContain('newProviderId,\n              modelId,\n              restoredFast,');
   });
 
-  it('ChatInput 本地切来源先过 main credential gate,再写 DB / UI', () => {
+  it('ChatInput 本地切来源把完整选择交给 main 原子落定后再更新 UI', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('const applyModelAndEffort = async (modelId: string, eff: Effort)');
     expect(start).toBeGreaterThan(-1);
@@ -1093,16 +1099,16 @@ describe('远程交互接线不变式', () => {
     const runtimeGate = body.indexOf(
       'const setModelResult = await window.electronAPI.maker.setModel(',
     );
-    const persist = body.indexOf('await sessionService.update(sessionId, {');
+    const atomicSelection = body.indexOf('{ effort: eff, fastMode: restoredFast }');
     const applyUi = body.indexOf('applyProviderSelection();');
     expect(runtimeGate).toBeGreaterThan(-1);
-    expect(persist).toBeGreaterThan(-1);
+    expect(atomicSelection).toBeGreaterThan(runtimeGate);
     expect(applyUi).toBeGreaterThan(-1);
-    expect(runtimeGate).toBeLessThan(persist);
-    expect(persist).toBeLessThan(applyUi);
+    expect(atomicSelection).toBeLessThan(applyUi);
+    expect(body).not.toContain('await sessionService.update(sessionId, {');
   });
 
-  it('ChatInput 本地只切模型先过 main credential gate,再写 DB / UI', () => {
+  it('ChatInput 本地只切模型把完整选择交给 main 原子落定后再更新 UI', () => {
     const src = read('components/new-chat/ChatInput.tsx');
     const start = src.indexOf('const performModelChange = useCallback(');
     const end = src.indexOf('const handleModelChange = useCallback(', start);
@@ -1110,15 +1116,18 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(sessionId, newModelId)',
+      'const setModelResult = await window.electronAPI.maker.setModel(',
     );
-    const persist = body.indexOf('await sessionService.update(sessionId, {');
+    const atomicSelection = body.indexOf(
+      '{ effort: newEffort, fastMode: restoredFast }',
+      runtimeGate,
+    );
     const applyUi = body.indexOf('onModelDidChange?.(newModelId)');
     expect(runtimeGate).toBeGreaterThan(-1);
-    expect(persist).toBeGreaterThan(-1);
+    expect(atomicSelection).toBeGreaterThan(runtimeGate);
     expect(applyUi).toBeGreaterThan(-1);
-    expect(runtimeGate).toBeLessThan(persist);
-    expect(persist).toBeLessThan(applyUi);
+    expect(atomicSelection).toBeLessThan(applyUi);
+    expect(body).not.toContain('await sessionService.update(sessionId, {');
   });
 
   // 多端收敛核心:resolve interaction 必须广播 INTERACTION_DISMISSED,否则其它 renderer

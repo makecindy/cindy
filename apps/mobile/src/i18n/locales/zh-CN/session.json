@@ -159,7 +159,16 @@
     "previewAttachments": "附件：{{num}} 个",
     "previewReadyTitle": "准备创建并发送",
     "previewNotReadyTitle": "还不能创建",
-    "previewReadySubtitle": "确认后会在被控设备创建任务，并把首条消息加入队列。"
+    "previewReadySubtitle": "确认后会在被控设备创建任务，并把首条消息加入队列。",
+    "useWorktree": "使用 worktree",
+    "worktreeDetecting": "检测环境中…",
+    "worktreeGitMissing": "未检测到 git，请先安装",
+    "worktreeNotGitRepo": "当前目录不是 git 仓库",
+    "worktreeAlreadyInWorktree": "已在 worktree 中，禁止嵌套",
+    "worktreeDetectFailed": "无法检测目录环境，可稍后重选目录再试",
+    "worktreeCreateFailed": "worktree 创建失败：{{message}}",
+    "worktreeRecoveryStateFailed": "无法保存 worktree 恢复状态，请重试。",
+    "worktreeCleanupPending": "上一次 worktree 仍待回收，请重新连接设备后再试。"
   },
   "menu": {
     "chipPinned": "已置顶",
@@ -194,6 +203,20 @@
     "viewUsageDetail": "查看任务用量详情",
     "linkCopied": "链接已复制",
     "sessionInfo": "任务信息",
+    "branches": "任务分支",
+    "branchCurrent": "当前",
+    "branchEmpty": "当前任务还没有可切换的分支。",
+    "branchEmptyEntry": "空节点",
+    "branchLoadFailed": "读取任务分支失败。",
+    "branchSwitchFailed": "切换任务分支失败。",
+    "branchRunningBlocked": "任务运行中，结束后才能切换分支。",
+    "branchRole": {
+      "user": "用户",
+      "assistant": "助手",
+      "tool": "工具",
+      "summary": "摘要",
+      "system": "系统"
+    },
     "usageSection": "用量",
     "refreshContextUsage": "刷新上下文用量",
     "currentSessionSpend": "本次任务",

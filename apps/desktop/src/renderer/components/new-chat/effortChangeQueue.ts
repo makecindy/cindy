@@ -16,7 +16,7 @@ export function isSessionScopeCurrent(
  * 晚完成时会重放当前 revision 的目标 effort，修复 Claude Code runtime 的迟到覆盖。
  */
 export interface EffortChangeCoordinator {
-  enqueue(sessionId: string, task: () => Promise<void>): Promise<void>;
+  enqueue<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   getCommittedEffort(sessionId: string): Effort | undefined;
   setCommittedEffort(sessionId: string, effort: Effort): void;
   adoptExternalEffort(sessionId: string, effort: Effort, applyRuntime: ApplyRuntimeEffort): void;
@@ -88,7 +88,10 @@ export function createEffortChangeCoordinator(): EffortChangeCoordinator {
     enqueue(sessionId, task) {
       const lane = getLane(sessionId);
       const result = lane.commitTail.then(task, task);
-      lane.commitTail = result.catch(() => undefined);
+      lane.commitTail = result.then(
+        () => undefined,
+        () => undefined,
+      );
       return result;
     },
     getCommittedEffort(sessionId) {

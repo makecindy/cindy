@@ -63,9 +63,10 @@ describe('buildDeviceLinkCreateArgs', () => {
     expect(args.workingDir).toBe('/host/proj');
   });
 
-  it('agentKind 归一到 maker-core 形态:cc → claude-code,codex → codex', () => {
+  it('agentKind 归一到 maker-core 形态:cc → claude-code,codex/pi 保持原值', () => {
     expect(buildDeviceLinkCreateArgs({ agentKind: 'cc', workingDir: '/p', model: 'm', effort: 'medium', permissionMode: 'acceptEdits', fastMode: false }).agentKind).toBe('claude-code');
     expect(buildDeviceLinkCreateArgs({ agentKind: 'codex', workingDir: '/p', model: 'm', effort: 'high', permissionMode: 'auto', fastMode: false }).agentKind).toBe('codex');
+    expect(buildDeviceLinkCreateArgs({ agentKind: 'pi', workingDir: '/p', model: 'm', effort: 'high', permissionMode: 'auto', fastMode: false }).agentKind).toBe('pi');
   });
 
   it('其余字段原样透传(model/effort/permissionMode/fastMode)', () => {
@@ -258,6 +259,13 @@ describe('buildProvisionalRemoteSession', () => {
       buildProvisionalRemoteSession({ sessionId: 's', workDir: '/w', args: dialogue, nowIso: NOW })
         .agentKind,
     ).toBe('cc');
+    const pi = buildDeviceLinkCreateArgs({
+      agentKind: 'pi', model: 'gpt-5.4', effort: 'high', permissionMode: 'auto', fastMode: true,
+    });
+    expect(
+      buildProvisionalRemoteSession({ sessionId: 's', workDir: '/w', args: pi, nowIso: NOW })
+        .agentKind,
+    ).toBe('pi');
   });
 
   it('新会话的确定初值:active / 未置顶 / 计数为 0 / 标题与被控端 create 的默认值一致', () => {

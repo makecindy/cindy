@@ -159,7 +159,16 @@
     "previewAttachments": "Attachments: {{num}}",
     "previewReadyTitle": "Ready to create and send",
     "previewNotReadyTitle": "Not ready to create yet",
-    "previewReadySubtitle": "Confirming creates the session on the controlled device and queues the first message."
+    "previewReadySubtitle": "Confirming creates the session on the controlled device and queues the first message.",
+    "useWorktree": "Use worktree",
+    "worktreeDetecting": "Detecting environment…",
+    "worktreeGitMissing": "git not detected — install it first",
+    "worktreeNotGitRepo": "Current directory is not a git repository",
+    "worktreeAlreadyInWorktree": "Already inside a worktree, nesting is not allowed",
+    "worktreeDetectFailed": "Could not check this directory — reselect it later and try again",
+    "worktreeCreateFailed": "Failed to create worktree: {{message}}",
+    "worktreeRecoveryStateFailed": "Could not save the worktree recovery state. Try again.",
+    "worktreeCleanupPending": "The previous worktree is still awaiting cleanup. Reconnect the device and try again."
   },
   "menu": {
     "chipPinned": "Pinned",
@@ -194,6 +203,20 @@
     "viewUsageDetail": "View session usage details",
     "linkCopied": "Link copied",
     "sessionInfo": "Session Info",
+    "branches": "Session Branches",
+    "branchCurrent": "Current",
+    "branchEmpty": "This session has no branches to switch to yet.",
+    "branchEmptyEntry": "Empty entry",
+    "branchLoadFailed": "Could not load session branches.",
+    "branchSwitchFailed": "Could not switch session branch.",
+    "branchRunningBlocked": "Wait for the running task to finish before switching branches.",
+    "branchRole": {
+      "user": "User",
+      "assistant": "Assistant",
+      "tool": "Tool",
+      "summary": "Summary",
+      "system": "System"
+    },
     "usageSection": "Usage",
     "refreshContextUsage": "Refresh context usage",
     "currentSessionSpend": "This session",

@@ -269,4 +269,39 @@ describe('buildUserProvider (per-runtime)', () => {
     expect(p.routing).toEqual({});
     expect(p.models).toEqual({});
   });
+
+  it('derives a pi runtime (BYOM): pi in agents + models with efforts', () => {
+    const p = buildUserProvider({
+      id: 'localollama',
+      name: 'Local Ollama',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          wireProtocol: 'openai-chat',
+          models: [{ id: 'qwen3:8b', name: 'Qwen3 8B' }],
+        },
+      },
+    });
+    expect(p.agents).toEqual(['pi']);
+    expect(p.auth).toEqual({ method: 'none' });
+    expect((p.models.pi ?? []).map((m) => m.id)).toEqual(['qwen3:8b']);
+    // pi 自定义模型给 effort 档(与 claude 同档,默认 high)。
+    expect((p.models.pi ?? [])[0]?.efforts).toEqual(['minimal', 'low', 'medium', 'high', 'xhigh', 'max']);
+    expect((p.models.pi ?? [])[0]?.defaultEffort).toBe('high');
+    expect((p.models.pi ?? [])[0]?.group).toBe('custom:localollama');
+  });
+
+  it('orders pi after claude-code and codex (AGENT_ORDER)', () => {
+    const p = buildUserProvider({
+      id: 'multi',
+      name: 'Multi',
+      runtimes: {
+        pi: { baseUrl: 'http://127.0.0.1:8000/v1', models: [{ id: 'pi-m', name: 'Pi M' }] },
+        codex: { baseUrl: 'https://v.ai/openai/v1', models: [{ id: 'cx-m', name: 'Cx M' }] },
+        'claude-code': { baseUrl: 'https://v.ai/anthropic', models: [{ id: 'cc-m', name: 'Cc M' }] },
+      },
+    });
+    expect(p.agents).toEqual(['claude-code', 'codex', 'pi']);
+  });
 });

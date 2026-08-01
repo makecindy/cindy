@@ -34,6 +34,61 @@ function deferred(): {
 }
 
 describe('provider model auto-refresh coordinator', () => {
+  it('refreshes the shared Catalog after cooldown even when xAI is disconnected', async () => {
+    let now = 1_000;
+    const refreshCatalog = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [
+        view('openai', true),
+        view('xai', false),
+      ],
+      refreshProvider: vi.fn(async () => undefined),
+      refreshCatalog,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // Splash 已取过公共 Catalog；startup 不重复请求，并给失败恢复留 5 分钟宽限。
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshCatalog).not.toHaveBeenCalled();
+    await coordinator.requestAutoRefresh('providers-open');
+    expect(refreshCatalog).not.toHaveBeenCalled();
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('model-selector-open');
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+  });
+
+  it('does not repeat the shared Catalog refresh through the connected xAI provider hook', async () => {
+    let now = 1_000;
+    const refreshCatalog = vi.fn(async () => undefined);
+    const refreshProvider = vi.fn(async () => undefined);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('xai', true)],
+      refreshProvider,
+      refreshCatalog,
+      now: () => now,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    // Splash already loaded the public Catalog; startup must not immediately fetch it again via
+    // xAI's provider-level hook.
+    await coordinator.requestAutoRefresh('startup');
+    expect(refreshCatalog).not.toHaveBeenCalled();
+    expect(refreshProvider).not.toHaveBeenCalled();
+
+    now += PROVIDER_MODEL_AUTO_REFRESH_FAILURE_COOLDOWN_MS;
+    await coordinator.requestAutoRefresh('foreground');
+    expect(refreshCatalog).toHaveBeenCalledOnce();
+    expect(refreshProvider).not.toHaveBeenCalled();
+
+    // An explicit manual refresh remains available and executes the provider hook once.
+    await coordinator.refreshManually('xai');
+    expect(refreshProvider).toHaveBeenCalledOnce();
+  });
+
   it('refreshes only connected built-ins and applies a per-provider cooldown', async () => {
     let now = 1_000;
     const refreshProvider =
@@ -68,6 +123,27 @@ describe('provider model auto-refresh coordinator', () => {
       'xd',
       'anthropic',
     ]);
+  });
+
+  it('applies the shared Catalog before provider discovery derives model capabilities', async () => {
+    const catalog = deferred();
+    const refreshProvider = vi.fn(async () => undefined);
+    const refreshCatalog = vi.fn(() => catalog.promise);
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [view('anthropic', true)],
+      refreshProvider,
+      refreshCatalog,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    const refresh = coordinator.requestAutoRefresh('providers-open');
+    await vi.waitFor(() => expect(refreshCatalog).toHaveBeenCalledOnce());
+    expect(refreshProvider).not.toHaveBeenCalled();
+
+    catalog.resolve();
+    await refresh;
+    expect(refreshProvider).toHaveBeenCalledOnce();
   });
 
   it('honors an explicit provider filter without waiting on unrelated sources', async () => {

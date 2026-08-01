@@ -37,6 +37,7 @@ export interface MobileScheduleDraft {
   intervalMinutes: string;
   agentKind: RemoteScheduleAgentKind;
   model: string;
+  providerId: string;
   effort: string;
   fastMode: boolean;
   workspaceKind: RemoteScheduleWorkspaceKind;
@@ -44,6 +45,7 @@ export interface MobileScheduleDraft {
   useWorktree: boolean;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
+  notifyWecomGroup?: boolean;
   targetSessionId: string;
   persistentSession: boolean;
   silentWhenIdle: boolean;
@@ -75,6 +77,7 @@ export function createMobileScheduleDraft(
       intervalMinutes: '',
       agentKind: 'claude-code',
       model: DEFAULT_CLAUDE_MODEL,
+      providerId: '',
       effort: '',
       fastMode: false,
       workspaceKind: workingDir ? 'project' : 'dialogue',
@@ -99,6 +102,7 @@ export function createMobileScheduleDraft(
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
     agentKind: schedule.agentKind ?? 'claude-code',
     model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
+    providerId: schedule.providerId ?? '',
     effort: schedule.effort ?? '',
     fastMode: !!schedule.fastMode,
     workspaceKind,
@@ -106,6 +110,7 @@ export function createMobileScheduleDraft(
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
     notifyDesktop: schedule.notify?.desktop !== false,
     notifyFeishu: schedule.notify?.feishu === true,
+    ...(schedule.notify?.wecomGroup === true ? { notifyWecomGroup: true } : {}),
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
     silentWhenIdle: !!schedule.silentWhenIdle,
@@ -138,6 +143,9 @@ export function applyTemplateToMobileScheduleDraft(
     intervalMinutes: '',
     agentKind,
     model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
+    // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
+    // host 侧按错误的默认来源解析。模板未指定时才保留同 agent 的用户选择。
+    providerId: template.providerId ?? (draft.agentKind === agentKind ? draft.providerId : ''),
     effort: template.effort ?? '',
     fastMode: template.fastMode === true,
     useWorktree: template.useWorktree ?? draft.useWorktree,
@@ -150,6 +158,9 @@ export function applyTemplateToMobileScheduleDraft(
     persistentSession: template.persistentSession ?? draft.persistentSession,
     notifyDesktop: template.notify?.desktop ?? draft.notifyDesktop,
     notifyFeishu: template.notify?.feishu ?? draft.notifyFeishu,
+    ...((template.notify?.wecomGroup ?? draft.notifyWecomGroup) !== undefined
+      ? { notifyWecomGroup: template.notify?.wecomGroup ?? draft.notifyWecomGroup }
+      : {}),
   };
 }
 
@@ -253,9 +264,9 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     notify: {
       desktop: draft.notifyDesktop,
       feishu: draft.notifyFeishu,
+      wecomGroup: draft.notifyWecomGroup === true,
     },
   };
-
   if (draft.executionMode === 'script') {
     // 仅运行脚本任务:引擎合并态校验对 script 模式拒绝 worktree/绑定/持续会话/
     // silentWhenIdle 与非 project 工作区——表单残留或误操作的这些 agent-only
@@ -281,6 +292,9 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     return input;
   }
 
+  const providerId = draft.providerId.trim();
+  if (providerId) input.providerId = providerId;
+
   if (draft.workspaceKind === 'project' && !input.targetSessionId) {
     input.workingDir = draft.workingDir.trim();
   }
@@ -288,7 +302,9 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
   if (model) input.model = model;
   const effort = draft.effort.trim();
   if (isMobileScheduleEffort(effort)) input.effort = effort;
-  if (draft.agentKind === 'codex') input.fastMode = draft.fastMode;
+  // Fast 对 Codex 与 Pi 都生效(runner 对 claude-code 忽略此字段,并按模型 supportsFastMode
+  // 收口);只序列化 codex 会让 Pi 任务里开的 Fast 被静默丢弃。
+  if (draft.agentKind === 'codex' || draft.agentKind === 'pi') input.fastMode = draft.fastMode;
   return input;
 }
 
@@ -301,6 +317,7 @@ export function updateDraftAgentKind(
     ...draft,
     agentKind,
     model: defaultModelFor(agentKind),
+    providerId: '',
     effort: '',
     fastMode: false,
   };
@@ -407,7 +424,11 @@ function hasTemplateParam(params: Record<string, string>, key: string): boolean 
 }
 
 function defaultModelFor(agentKind: RemoteScheduleAgentKind): string {
-  return agentKind === 'codex' ? DEFAULT_CODEX_MODEL : DEFAULT_CLAUDE_MODEL;
+  if (agentKind === 'codex') return DEFAULT_CODEX_MODEL;
+  // Pi 模型来自动态 BYOM 供应商目录,没有固定默认 id;留空 → 序列化时省略 → host 解析
+  // 该 Pi agent 的当前默认模型(用户仍可在自由文本模型框里显式指定)。
+  if (agentKind === 'pi') return '';
+  return DEFAULT_CLAUDE_MODEL;
 }
 
 function validateIntervalMinutes(value: string): string | null {

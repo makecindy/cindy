@@ -762,17 +762,6 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
   return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
-function isDefiniteTurnSteerRejection(error: unknown): boolean {
-  const code =
-    typeof error === 'object' && error !== null && 'code' in error
-      ? (error as { code?: unknown }).code
-      : undefined;
-  // A numeric JSON-RPC error came back from app-server: the request was
-  // processed and rejected. Transport/timeout failures have no numeric RPC
-  // code and remain delivery-uncertain.
-  return typeof code === 'number' && Number.isInteger(code);
-}
-
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -870,6 +859,8 @@ function codexPermissionStrictnessRank(mode: PermissionMode): number {
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
 const PLAN_IMPLEMENTATION_MESSAGE = 'Implement the plan.';
 const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySelection');
+// 计划实施/修订 turn 的**审查意图**:这些 turn 的 message 是固定内部串('Implement the plan.'),
+// 直接拿它当 review intent 会让灰区 reviewer 完全看不到用户原始请求与获批计划(codex 报)。
 const CODEX_AUTO_REVIEW_INTENT = Symbol('codexAutoReviewIntent');
 type CodexInternalSendOptions = SendOptions & {
   [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
@@ -2732,39 +2723,9 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
     let currentAutoReviewIntent = '';
-    type AutoReviewIntentMutation = {
-      intent: string;
-      previous: AutoReviewIntentMutation | null;
-      rejected: boolean;
-    };
-    let currentAutoReviewIntentMutation: AutoReviewIntentMutation = {
-      intent: '',
-      previous: null,
-      rejected: false,
-    };
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: UserMessage['content']): AutoReviewIntentMutation => {
-      const mutation: AutoReviewIntentMutation = {
-        intent: extractAutoReviewUserIntent(content),
-        previous: currentAutoReviewIntentMutation,
-        rejected: false,
-      };
-      currentAutoReviewIntentMutation = mutation;
-      currentAutoReviewIntent = mutation.intent;
-      autoReviewDecisionCache.clear();
-      return mutation;
-    };
-    const rejectAutoReviewIntent = (mutation: AutoReviewIntentMutation): void => {
-      mutation.rejected = true;
-      // A later send/steer owns the current intent. If it is also rejected
-      // later, the linked history skips every rejected predecessor instead of
-      // resurrecting an older rejected steer.
-      if (currentAutoReviewIntentMutation !== mutation) return;
-      let restored = mutation.previous;
-      while (restored?.rejected) restored = restored.previous;
-      if (!restored) return;
-      currentAutoReviewIntentMutation = restored;
-      currentAutoReviewIntent = restored.intent;
+    const setAutoReviewIntent = (content: UserMessage['content']): void => {
+      currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
     };
     /**
@@ -3361,7 +3322,7 @@ export class CodexAgent extends BaseAgent {
     let codexProductPromptDelivery: AgentSessionHandle['codexProductPromptDelivery'];
 
     /**
-     * 会话中途把单个设置 (serviceTier / model / effort / approvalsReviewer) 立即推给 app-server,
+     * 会话中途把单个设置 (serviceTier / model / effort) 立即推给 app-server,
      * 写入后续 turn 的 sticky context — 不必等下一个 turn/start 携带 (与官方
      * Codex Desktop 的 thread/settings/update 通道对齐; experimentalApi 已恒开,
      * 0.142.0 实测支持)。
@@ -3878,6 +3839,8 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
+      // 计划审批期间用户可能继续发消息(currentAutoReviewIntent 会被覆盖):实施/修订 turn 的审查
+      // 意图必须锚在**发起计划时**的原始请求上(codex 报)。
       const planRequestAutoReviewIntent = currentAutoReviewIntent;
       const planFollowUpSendOptions = (
         additionalSelectionText = '',
@@ -4047,10 +4010,22 @@ export class CodexAgent extends BaseAgent {
         opts?.autoReviewAction
       ) {
         const decision = await reviewAutoAction(opts.autoReviewAction);
-        if (decision.verdict === 'allow') return 'accept';
-        if (decision.verdict === 'block') return 'decline';
-        // Only red-line decisions reach the user and they cannot be remembered.
-        forcePrompt = true;
+        // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
+        // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
+        // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
+        // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
+        const modeAfterReview = mutablePermissionMode as PermissionMode;
+        if (modeAfterReview === 'bypassPermissions') return 'accept';
+        if (modeAfterReview !== 'auto') {
+          forcePrompt = true;
+        } else if (decision.verdict === 'allow') {
+          return 'accept';
+        } else if (decision.verdict === 'block') {
+          return 'decline';
+        } else {
+          // Only red-line decisions reach the user and they cannot be remembered.
+          forcePrompt = true;
+        }
       }
       const routedRequest =
         forcePrompt && req.kind === 'permission'
@@ -6647,10 +6622,10 @@ export class CodexAgent extends BaseAgent {
         nativeAutoReviewUnavailable = true;
         nativeApprovalsReviewerRouteSupported = false;
         approvalsReviewerRouteSupported = false;
-        // approvalsReviewer 是 thread sticky setting；只改本地布尔值只会影响下一次
-        // turn/start，当前 turn 后续审批仍会继续撞已经失效的 Guardian。立即把当前
-        // thread 的后续审批切到 user protocol，使同一 turn 从下一次审批起进入 Cindy
-        // 当前模型 fallback。RPC 失败仍由下一 turn 的显式字段兜底。
+        // approvalsReviewer 是 thread sticky setting:只改本地布尔值只会影响下一次 turn/start,
+        // 当前 turn 后续审批仍会继续撞已经失效的 Guardian。立即把当前 thread 的后续审批切到
+        // user protocol,使同一 turn 从下一次审批起进入 Cindy 当前模型 fallback;RPC 失败仍由
+        // 下一 turn 的显式字段兜底(codex 报)。
         void pushThreadSettings({ approvalsReviewer: 'user' });
         log.warn('Codex native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           reviewId: params.reviewId,
@@ -7997,12 +7972,6 @@ export class CodexAgent extends BaseAgent {
           steeredTurnId,
           capabilitySelectionText,
         );
-        // Approval callbacks can arrive after the server accepts this request
-        // but before its ACK reaches us. Publish the new intent before dispatch
-        // so those callbacks never review against the previous user message.
-        // Timeout/abort is delivery-uncertain and therefore keeps this intent;
-        // only a provable pre-accept rejection rolls it back.
-        const steerAutoReviewIntentMutation = setAutoReviewIntent(message.content);
         let steerRpc: Promise<unknown>;
         try {
           steerRpc = host.request(Method.TurnSteer, {
@@ -8011,7 +7980,6 @@ export class CodexAgent extends BaseAgent {
             expectedTurnId: steeredTurnId,
           });
         } catch (error) {
-          rejectAutoReviewIntent(steerAutoReviewIntentMutation);
           settleCapabilitySteer(false);
           throw error;
         }
@@ -8059,13 +8027,10 @@ export class CodexAgent extends BaseAgent {
           ackSettled = true;
           capabilitySteerAccepted = true;
         } catch (error) {
-          if (isDefiniteTurnSteerRejection(error)) {
-            ackSettled = true;
-            rejectAutoReviewIntent(steerAutoReviewIntentMutation);
-          }
           if (isExpectedTurnIdMismatchError(error)) {
             // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
             // 标记 RPC 已 settle,避免把这类确定性拒绝误当成 timeout/abort 在飞请求。
+            ackSettled = true;
             throw new Error('No active Codex turn to steer', { cause: error });
           }
           throw error;
@@ -8092,11 +8057,7 @@ export class CodexAgent extends BaseAgent {
                   turnId: steeredTurnId,
                 });
               },
-              (error) => {
-                if (isDefiniteTurnSteerRejection(error)) {
-                  rejectAutoReviewIntent(steerAutoReviewIntentMutation);
-                }
-              },
+              () => {},
             );
           }
         }
@@ -8112,6 +8073,7 @@ export class CodexAgent extends BaseAgent {
             turnId: steeredTurnId,
           });
         }
+        setAutoReviewIntent(message.content);
       },
 
       async abort() {
@@ -8219,21 +8181,6 @@ export class CodexAgent extends BaseAgent {
           if (mutableProviderId !== prevProviderId) {
             autoReviewDecisionCache.clear();
             refreshCodexAutoReviewerRoute(threadId);
-            // approvalsReviewer 是 thread sticky setting:只刷本地标志不够,必须把重算后的
-            // reviewer 推给 app-server,否则同一 thread 换路由后仍沿用旧 reviewer(如从 OpenAI
-            // OAuth 切第三方仍留着 auto_review),与"第三方路由必须走 host reviewer"相悖(copilot 报)。
-            if (approvalsReviewerProtocolSupported) {
-              const { approvalsReviewer } = mapPermissionToCodex(
-                mutablePermissionMode,
-                approvalsReviewerProtocolSupported,
-                approvalsReviewerRouteSupported,
-              );
-              if (approvalsReviewer) {
-                await pushThreadSettings({ approvalsReviewer }).catch((e) => {
-                  log.warn('push approvalsReviewer after provider switch failed', { error: String(e) });
-                });
-              }
-            }
           }
           return;
         }
@@ -8242,11 +8189,8 @@ export class CodexAgent extends BaseAgent {
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
-        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。但 'gpt-5' 是 server 默认哨兵、非可解析目录 id,
-        // 它会被 host 侧轻量 reviewer 当 request.model(及 activeTurnModel/窗口查找)用 —— 哨兵模式下 turn/start
-        // 不回带真实模型,写进去会让 reviewer 拿到不可解析 model → 静默失败 → 灰区一律被 block(copilot 报)。
-        // 切哨兵时保留上一次可解析的目录 model,由后续 thread/start/resume 的 resp.model 更新回真实值。
-        if (newModel !== 'gpt-5') mutableCatalogModel = newModel;
+        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
+        mutableCatalogModel = newModel;
         try {
           refreshCodexAutoReviewerRoute(threadId);
           // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由

@@ -23,6 +23,23 @@ vi.mock('../../localDb/client/current', () => ({
 vi.mock('../modelPricing', () => ({
   getModelPricing: vi.fn(),
   isModelPricingRefreshInFlight: vi.fn(() => false),
+  readModelPriceOverridesSnapshot: vi.fn(() => ({})),
+  getClaudeSubscriptionValuePrice: (
+    model: string,
+    pricing: Record<string, Record<string, unknown>> | null | undefined,
+    at?: string | Date,
+  ) =>
+    model === 'claude-sonnet-5'
+      ? {
+          providerId: 'anthropic',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: String(at).slice(0, 10) < '2026-09-01' ? 2 : 3,
+          outputPerMtok: String(at).slice(0, 10) < '2026-09-01' ? 10 : 15,
+        }
+      : pricing?.anthropic?.[model],
   getCodexSubscriptionValuePrice: (
     model: string,
     pricing: Record<string, Record<string, unknown>> | null | undefined,
@@ -39,6 +56,21 @@ vi.mock('../modelPricing', () => ({
           outputPerMtok: 8,
         }
       : undefined),
+  getCodexProviderSubscriptionValuePrice: (
+    providerId: string,
+    model: string,
+  ) =>
+    providerId === 'anthropic' && model === 'claude-sonnet-5'
+      ? {
+          providerId: 'anthropic',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        }
+      : undefined,
   getSubscriptionDirectValuePrice: (model: string) =>
     model === 'xai/grok-4.3'
       ? {
@@ -74,6 +106,7 @@ import {
   computeAnomaly,
   computeStreaks,
   emptyUsageHistoryPayload,
+  piSubscriptionUsageModelKey,
   prevDayKey,
   readUsageHistory,
   readUsageHistoryWith,
@@ -132,7 +165,7 @@ function subscriptionQuote(
 
 function modelRow(
   day: string,
-  agentKind: 'claude-code' | 'codex',
+  agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   money: RegionalMoney,
   tokens: {
@@ -159,6 +192,7 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
     getAllSpendDays: async () => [],
     getModelUsageSince: async () => [],
     getModelPricing: async () => null,
+    getModelPriceOverridesSnapshot: () => ({}),
     isModelPricingRefreshInFlight: () => false,
     todayKey: () => TODAY,
     ...overrides,
@@ -245,6 +279,9 @@ describe('billing model keys', () => {
     expect(claudeSubscriptionUsageModelKey('claude-opus-4-8')).toBe(
       'claude-opus-4-8#billing=subscription',
     );
+    expect(piSubscriptionUsageModelKey('chatgpt/gpt-5.6-sol')).toBe(
+      'chatgpt/gpt-5.6-sol#billing=subscription',
+    );
   });
 });
 
@@ -253,8 +290,8 @@ describe('readUsageHistoryWith', () => {
     const estimateAmount = regionalUsdAmount(2);
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
-        { day: '2026-06-10', money: actual(3) },
-        { day: TODAY, money: actual(5) },
+        { day: '2026-06-10', monies: [actual(3)] },
+        { day: TODAY, monies: [actual(5)] },
       ],
       getModelUsageSince: async () => [
         modelRow(
@@ -318,6 +355,37 @@ describe('readUsageHistoryWith', () => {
     expect(api?.subscriptionEstimateMoney.amount).toBe(0);
   });
 
+  it('resolves subscription reference prices for each usage day', async () => {
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        todayKey: () => '2026-09-02',
+        getModelUsageSince: async () => [
+          modelRow(
+            '2026-08-31',
+            'claude-code',
+            claudeSubscriptionUsageModelKey('claude-sonnet-5'),
+            actual(0),
+            { inputTokens: 1_000_000 },
+          ),
+          modelRow(
+            '2026-09-01',
+            'claude-code',
+            claudeSubscriptionUsageModelKey('claude-sonnet-5'),
+            actual(0),
+            { inputTokens: 1_000_000 },
+          ),
+        ],
+      }),
+    );
+
+    expect(result.modelDaily.map((row) => row.subscriptionEstimateMoney.amount)).toEqual([
+      regionalUsdAmount(2),
+      regionalUsdAmount(3),
+    ]);
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(5));
+    expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
+  });
+
   it('keeps current-region subscription estimates when history uses another currency', async () => {
     const historicalCurrency = DEFAULT_USAGE_CURRENCY === 'CNY' ? 'USD' : 'CNY';
     const estimateAmount = regionalUsdAmount(2);
@@ -326,12 +394,12 @@ describe('readUsageHistoryWith', () => {
         getAllSpendDays: async () => [
           {
             day: TODAY,
-            money: {
+            monies: [{
               amount: 5,
               currency: historicalCurrency,
               approximate: false,
               kind: 'actual-cost',
-            },
+            }],
           },
         ],
         getModelUsageSince: async () => [
@@ -407,8 +475,8 @@ describe('readUsageHistoryWith', () => {
     const result = await readUsageHistoryWith(
       makeDeps({
         getAllSpendDays: async () => [
-          { day: '2026-06-10', money: usdRow(3) },
-          { day: TODAY, money: usdRow(5) },
+          { day: '2026-06-10', monies: [usdRow(3)] },
+          { day: TODAY, monies: [usdRow(5)] },
         ],
         getModelUsageSince: async () => [],
         getModelPricing: async () => ({
@@ -462,6 +530,29 @@ describe('readUsageHistoryWith', () => {
     expect(result.models[0].estimatedMoney?.amount).toBe(expected);
   });
 
+  it('keeps Pi cache usage as a distinct subscription row', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(
+          TODAY,
+          'pi',
+          piSubscriptionUsageModelKey('gpt-5.5'),
+          actual(0),
+          { inputTokens: 100_000, outputTokens: 2_000, cacheReadTokens: 900_000 },
+        ),
+      ],
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'pi',
+      model: 'gpt-5.5',
+      inputTokens: 100_000,
+      cacheReadTokens: 900_000,
+    });
+    expect(result.models[0].estimatedMoney?.amount).toBeGreaterThan(0);
+    expect(result.totals.todayTokens).toBe(1_002_000);
+  });
+
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {
     const row = modelRow(
       TODAY,
@@ -486,12 +577,12 @@ describe('readUsageHistoryWith', () => {
   it('propagates approximate legacy history into anomaly and totals', async () => {
     const trailing = Array.from({ length: 7 }, (_, index) => ({
       day: shiftDayKey(TODAY, -(index + 1)),
-      money: actual(1, true),
+      monies: [actual(1, true)],
     }));
     const result = await readUsageHistoryWith(makeDeps({
       getAllSpendDays: async () => [
         ...trailing,
-        { day: TODAY, money: actual(7, true) },
+        { day: TODAY, monies: [actual(7, true)] },
       ],
     }));
     expect(result.anomaly).toMatchObject({
@@ -508,7 +599,7 @@ describe('readUsageHistoryWith', () => {
 describe('production cache and empty payload', () => {
   it('writes a structured fresh payload and serves it from memory', async () => {
     vi.mocked(getAllSpendDays).mockResolvedValue([
-      { day: TODAY, money: actual(2) },
+      { day: TODAY, monies: [actual(2)] },
     ]);
     const first = await readUsageHistory({ days: 30 });
     const second = await readUsageHistory({ days: 30 });
@@ -524,7 +615,9 @@ describe('production cache and empty payload', () => {
         ),
       );
       expect(raw).toMatchObject({
-        version: 4,
+        // 日账改为按币种分行、折叠推迟到读侧之后升到 5:v4 快照是用「按区域猜出来的
+        // 账本币种」折叠出来的聚合值，不能沿用。改折叠口径时同步这里。
+        version: 5,
         optsKey: 'user=user-a|days=30',
         payload: {
           totals: {

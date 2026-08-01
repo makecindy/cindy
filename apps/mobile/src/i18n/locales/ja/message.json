@@ -12,6 +12,7 @@
     "sentTime": "送信時刻 {{time}}",
     "linkCopied": "リンクをコピーしました",
     "turnCostEstimate": "今回 {{cost}}",
+    "turnTokens": "今回の消費 {{tokens}}",
     "turnCost": "今回の消費 {{cost}}",
     "messageGenerating": "メッセージを生成中",
     "generating": "生成中",
@@ -121,7 +122,8 @@
     "justNow": "たった今",
     "minutesAgo": "{{n}} 分前",
     "hoursAgo": "{{n}} 時間前",
-    "turnCostValue": "概算 {{value}}"
+    "turnCostValue": "概算 {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "注釈をキャンセル",

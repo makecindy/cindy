@@ -83,6 +83,7 @@ import {
   refreshCatalogDerivedModels,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
+import { buildPiAgent } from './pi-host.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -1302,10 +1303,29 @@ export function getMaker(): Maker {
     // codex-home 生成进仓库),现改为装配 maker 时显式预热,import 保持零副作用。
     desktopCodexAuthAdapter.warmUp();
 
+    // pi(实验性,个人分支):二进制在位才注册;缺失时 agents map 不含 pi,
+    // 既有环境零影响。模型清单走目录 pi 投影(xd 网关模型经 active-catalog 按
+    // claude-code 可达面镜像给 pi);登录后目录刷新经 refreshCatalogDerivedModels
+    // 原地 splice 同步进 capabilities(PiAgent 每次 startSession 现读)。
+    const piMcpProviders = [
+      ...createDesktopMcpProviders(makerMemoryProviderDeps),
+      orcaWorkerBridgeProvider,
+    ];
+    const piAgent = buildPiAgent({
+      logger: desktopMakerLogger,
+      reviewAutoPermissionAction,
+      capabilityAdditions: {
+        availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
+      },
+      mcpProviders: piMcpProviders,
+      makerMemory: makerMemoryManager,
+    });
+
     _maker = new Maker({
       agents: {
         'claude-code': claudeAgent,
         codex: codexAgent,
+        ...(piAgent ? { pi: piAgent } : {}),
       },
       storage: desktopSessionStorage,
       logger: desktopMakerLogger,

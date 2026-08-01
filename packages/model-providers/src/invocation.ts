@@ -137,7 +137,7 @@ function availableModelsFor(
 }
 
 function isKnownAgent(v: string | null | undefined): v is AgentKind {
-  return v === 'claude-code' || v === 'codex';
+  return v === 'claude-code' || v === 'codex' || v === 'pi';
 }
 
 /**

@@ -3,6 +3,7 @@ import type { AgentKind, ProviderView } from '@cindy/model-providers';
 const AGENT_DISPLAY_LABELS: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  pi: 'Pi',
 };
 
 export function providerAgentSupportLabel(provider?: Pick<ProviderView, 'agents'> | null): string {

@@ -15,6 +15,7 @@
  */
 
 import { ipcMain } from 'electron';
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion.js';
 import { eq } from 'drizzle-orm';
 
 import { connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
@@ -158,7 +159,7 @@ async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind 
     .where(eq(sessions.id, sessionId))
     .limit(1);
   if (!row) return null;
-  return row.agentKind === 'codex' ? 'codex' : 'claude-code';
+  return dbToMakerAgentKind(row.agentKind);
 }
 
 const defaultRegenerateDeps: RegenerateTitleDeps = {
@@ -240,7 +241,7 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
   if (typeof text !== 'string') {
     throwIpcError('INVALID_PARAMS', 'invalid text');
   }
-  if (agentKind !== 'claude-code' && agentKind !== 'codex') {
+  if (agentKind !== 'claude-code' && agentKind !== 'codex' && agentKind !== 'pi') {
     throwIpcError('INVALID_PARAMS', 'invalid agentKind');
   }
   if (isUserText !== undefined && typeof isUserText !== 'boolean') {

@@ -24,7 +24,10 @@ import {
   verifyGhostZipSignatures,
   type GhostTrustRegistry,
 } from './ghostSignature.js';
-import { isPathInsideDir } from './dirDeposit.js';
+import {
+  readBoundedFileFollowLinks,
+  readBoundedFileNoFollowSync,
+} from '../utils/readBoundedFile.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 普通沙箱插件维持小包上限；随包 Node/CLI 允许更大的预打包产物。 */
@@ -114,7 +117,11 @@ export class GhostManager {
       const manifestPath = path.join(dir, GHOST_MANIFEST_FILE);
       let raw: unknown;
       try {
-        raw = JSON.parse(fs.readFileSync(manifestPath, 'utf-8'));
+        // 已安装目录也可能被外部进程/同步盘改动,且 list() 每次市场快照都会
+        // 执行:单句柄限量闸(拒链接),不让无界字节进 main。
+        const bytes = readBoundedFileNoFollowSync(manifestPath, MAX_GHOST_MANIFEST_BYTES);
+        if (bytes === null) throw new Error('manifest is not a bounded regular file');
+        raw = JSON.parse(bytes.toString('utf-8'));
       } catch (err) {
         this.options.log?.warn('ghost dir skipped: unreadable manifest', {
           dir,
@@ -164,16 +171,15 @@ export class GhostManager {
     for (const candidatePath of candidates) {
       try {
         const absPath = path.join(dir, ...candidatePath.split('/'));
-        const stat = fs.lstatSync(absPath);
-        if (!stat.isFile() || stat.size > GHOST_LOCALE_MAX_BYTES) {
-          throw new Error(`locale 文件缺失或超过 ${GHOST_LOCALE_MAX_BYTES} 字节`);
+        // lstat 判完再按路径 readFileSync 是三次独立打开,期间可被换成超大
+        // 文件或根外链接。单句柄限量闸 + containWithin 一次完成全部校验。
+        const bytes = readBoundedFileNoFollowSync(absPath, GHOST_LOCALE_MAX_BYTES, {
+          containWithin: fs.realpathSync(dir),
+        });
+        if (bytes === null) {
+          throw new Error(`locale 文件缺失、超过 ${GHOST_LOCALE_MAX_BYTES} 字节或位于插件目录之外`);
         }
-        const realDir = fs.realpathSync.native(dir);
-        const realLocalePath = fs.realpathSync.native(absPath);
-        if (!isPathInsideDir(realDir, realLocalePath)) {
-          throw new Error('locale 文件经软链解析后位于插件目录之外');
-        }
-        const raw = JSON.parse(fs.readFileSync(realLocalePath, 'utf8'));
+        const raw = JSON.parse(bytes.toString('utf8'));
         const validated = validateGhostManifestLocaleResource(raw, manifest);
         if (!validated.ok) throw new Error(validated.reason);
         return resolveGhostManifestLocale(runtimeManifest, validated.resource);
@@ -227,12 +233,17 @@ export class GhostManager {
     if (manifest.icon === undefined) return null;
     const iconPath = path.join(dir, ...manifest.icon.split('/'));
     try {
-      const stat = fs.statSync(iconPath);
-      if (!stat.isFile() || stat.size > MAX_GHOST_ICON_BYTES) {
+      // statSync 后再 readFileSync 是两次独立打开:并发方可在其间把 icon 换成
+      // 指向宿主任意文件的链接,字节会被包成 dataURL 经 IPC 送进 Renderer。
+      // 单句柄限量闸拒链接、限大小;containWithin 堵中间目录链接。
+      const bytes = readBoundedFileNoFollowSync(iconPath, MAX_GHOST_ICON_BYTES, {
+        containWithin: fs.realpathSync(dir),
+      });
+      if (bytes === null) {
         this.options.log?.warn('ghost icon skipped: missing or oversize', { dir, icon: manifest.icon });
         return null;
       }
-      return buildIconDataUrl(manifest.icon, fs.readFileSync(iconPath));
+      return buildIconDataUrl(manifest.icon, bytes);
     } catch {
       this.options.log?.warn('ghost icon skipped: unreadable', { dir, icon: manifest.icon });
       return null;
@@ -242,7 +253,9 @@ export class GhostManager {
   /** 读取主机安装时写下的签名验证快照；坏文件只降级未显示，不信作者自报。 */
   private readInstalledTrust(dir: string): GhostTrustInfo | null {
     try {
-      const raw = JSON.parse(fs.readFileSync(path.join(dir, TRUST_METADATA_FILE), 'utf8')) as GhostTrustInfo;
+      const bytes = readBoundedFileNoFollowSync(path.join(dir, TRUST_METADATA_FILE), 64 * 1024);
+      if (bytes === null) return null;
+      const raw = JSON.parse(bytes.toString('utf8')) as GhostTrustInfo;
       if (
         !raw ||
         typeof raw !== 'object' ||
@@ -297,19 +310,21 @@ export class GhostManager {
       }
     | { rejection: InstallRejection }
   > {
-    // 1) 读源文件(带体积上限)
+    // 1) 读源文件(带体积上限)。stat 后再 readFile 是两次独立打开,期间文件
+    // 可被换成超大文件绕过上限——单句柄限量读。允许跟随链接:用户拖入的
+    // .cindy 本身可以是链接,防篡改由 expectedPackageSha256 对账负责。
     let buf: Buffer;
     try {
-      const stat = await fs.promises.stat(lizFilePath);
-      if (!stat.isFile()) {
-        return { rejection: { code: 'source-not-found', reason: '路径不是文件' } };
-      }
-      if (stat.size > MAX_NODE_CINDY_FILE_BYTES) {
+      const bytes = await readBoundedFileFollowLinks(lizFilePath, MAX_NODE_CINDY_FILE_BYTES);
+      if (bytes === null) {
         return {
-          rejection: { code: 'file-invalid', reason: `文件过大:${stat.size} 字节(上限 ${MAX_NODE_CINDY_FILE_BYTES})` },
+          rejection: {
+            code: 'file-invalid',
+            reason: `不是普通文件或超过体积上限(${MAX_NODE_CINDY_FILE_BYTES} 字节)`,
+          },
         };
       }
-      buf = await fs.promises.readFile(lizFilePath);
+      buf = bytes;
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
         return { rejection: { code: 'source-not-found', reason: '文件不存在' } };

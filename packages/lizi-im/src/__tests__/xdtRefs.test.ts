@@ -8,8 +8,12 @@ import { describe, it, expect } from 'vitest';
 
 import {
   classifyXdtOnly,
+  collectXdtFileLinks,
+  collectXdtImageRefs,
   collectXdtImageUrls,
+  stripXdtFileLinks,
   stripXdtForStreaming,
+  stripXdtImageLinks,
   xdtFileUrlToAbsPath,
 } from '../xdtRefs.js';
 
@@ -43,5 +47,42 @@ describe('xdtFileUrlToAbsPath(Windows 盘符,规则 15)', () => {
     expect(xdtFileUrlToAbsPath('xdt-file:///C:\\Users\\x\\f.txt')).toBe('C:\\Users\\x\\f.txt');
     expect(xdtFileUrlToAbsPath('xdt-file:///C:/Users/x/f.txt')).toBe('C:/Users/x/f.txt');
     expect(xdtFileUrlToAbsPath('xdt-file:///home/u/f.txt')).toBe('/home/u/f.txt');
+  });
+});
+
+describe('linear managed-media parser', () => {
+  it('preserves source offsets while parsing image and file refs', () => {
+    const file = 'xdt-file:///tmp/report.txt';
+    const text = `before ![chart](${BLOB}) [report](${file}) after`;
+
+    expect(collectXdtImageRefs(text)).toEqual([
+      {
+        alt: 'chart',
+        url: BLOB,
+        start: text.indexOf('!['),
+        end: text.indexOf(')') + 1,
+      },
+    ]);
+    expect(collectXdtFileLinks(text)).toEqual([
+      { alt: 'report', absPath: '/tmp/report.txt' },
+    ]);
+    expect(stripXdtFileLinks(stripXdtImageLinks(text))).toBe('before   after');
+  });
+
+  it('handles long near-matches without regex backtracking', () => {
+    const nearImage = `![${'![\\\\'.repeat(20_000)}`;
+    const nearUrl = `![](xdt-image://${'![](xdt-image://'.repeat(20_000)}`;
+
+    expect(collectXdtImageUrls(nearImage)).toEqual([]);
+    expect(collectXdtImageUrls(nearUrl)).toEqual([]);
+    expect(stripXdtForStreaming(nearImage)).toBe(nearImage);
+    expect(stripXdtForStreaming(nearUrl)).toBe(nearUrl);
+  });
+
+  it('still finds a valid ref after malformed Markdown', () => {
+    const text = `broken [ prefix ![chart](${BLOB})`;
+
+    expect(collectXdtImageUrls(text)).toEqual([BLOB]);
+    expect(stripXdtImageLinks(text)).toBe('broken [ prefix ');
   });
 });

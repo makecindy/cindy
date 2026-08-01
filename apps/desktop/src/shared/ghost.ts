@@ -439,11 +439,12 @@ export interface GhostCindyNeeds {
 /**
  * 订阅槽 did- 旁听主题(卡槽①,2026-07-12 开闸)。v1 全部是**元数据级**:
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
+ * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
  * 也要另分一档。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -1704,8 +1705,30 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
     if (slot === 'subscribe') {
       // 订阅两档分列:旁听(元数据)常规位;拦截是全部槽里权限最重的一档,
       // unshift 排到清单最顶(敏感项排最上)。
-      if (manifest.subscribe?.topics?.length) {
-        items.push({ key: 'subscribe:topics', kind: 'subscribe', labelKey: 'subscribeTopics' });
+      const topics = manifest.subscribe?.topics;
+      if (topics?.length) {
+        // 旧 key 只在真订了 turn / session 时产出:纯 activity 插件不该在确认框里
+        // 多出一行"旁听轮次与会话事件"——网关根本不给它投 turn / session,那行是凭空
+        // 多报的能力,用户可能据此误拒。存量已批准插件必然含 turn 或 session(activity
+        // 是本版新增),所以旧 key 对它们照旧产出,批准状态不 churn。
+        if (topics.includes('turn') || topics.includes('session')) {
+          items.push({ key: 'subscribe:topics', kind: 'subscribe', labelKey: 'subscribeTopics' });
+        }
+        // activity 单列一项(不并进 subscribe:topics):它暴露的是"用户此刻正被要求
+        // 批准某个操作 / 正被问问题"的行为时序,比 turn / session 的统计元数据敏感
+        // 一档,文案也要另讲。更要紧的是权限扩张检测——diffGhostPermissionItems 按
+        // key + detail 比对,若 activity 并进固定的 subscribe:topics,已装插件从
+        // topics:["turn"] 更新到 ["turn","activity"] 时 added 为空,plugin-market
+        // 的复核就不会拦,用户会在毫不知情的情况下多给出审批时序。旧 key 保持原样,
+        // 只声明 turn / session 的存量插件权限清单逐字不变(批准状态不 churn)。
+        if (topics.includes('activity')) {
+          items.push({
+            key: 'subscribe:topics:activity',
+            kind: 'subscribe',
+            labelKey: 'subscribeActivity',
+            detailKey: 'subscribeActivityDetail',
+          });
+        }
       }
       if (manifest.subscribe?.hooks?.length) {
         // 拦截钩按点分列(入口=改用户消息、出口=读并重渲 AI 回复,后者更敏感);
@@ -5353,13 +5376,23 @@ export const GHOST_HOOK_FUSE_THRESHOLD = 3;
  *  撑爆消息;提示词优化产物通常远小于此。 */
 export const GHOST_HOOK_REWRITE_MAX_CHARS = 16_000;
 
-/** did- 旁听事件名(topic 归属:turn / session)。 */
+/** activity topic 的旁听事件名。 */
+export type GhostActivityEventName =
+  | 'did-thinking-start'
+  | 'did-thinking-end'
+  | 'did-approval-start'
+  | 'did-approval-end'
+  | 'did-user-input-start'
+  | 'did-user-input-end';
+
+/** did- 旁听事件名(topic 归属:turn / session / activity)。 */
 export type GhostDidEventName =
   | 'did-turn-start'
   | 'did-turn-end'
   | 'did-session-created'
   | 'did-session-archived'
-  | 'did-session-switched';
+  | 'did-session-switched'
+  | GhostActivityEventName;
 
 /** did-turn-start 载荷(全元数据,无消息内容)。 */
 export interface GhostEventTurnStartData {
@@ -5389,6 +5422,41 @@ export interface GhostEventSessionData {
 }
 
 /**
+ * thinking 活动边界；只暴露 blockId，不暴露 reasoning 正文。
+ *
+ * `blockId` 是**主机生成的不透明配对键**（见 `ghostActivityId`），不是 provider 侧原值：
+ * 只保证同一段 thinking 的 start / end 拿到同一个值、不同会话不同值，不承载任何语义，
+ * 也不能用来关联主机或 provider 的任何其他标识。
+ */
+export interface GhostEventThinkingData {
+  sessionId: string;
+  blockId: string;
+}
+
+/**
+ * 审批/用户输入活动边界；只暴露 requestId，不暴露请求或回答内容。
+ *
+ * `requestId` 同样是**主机生成的不透明配对键**（见 `ghostActivityId`），不是 provider 侧
+ * 原值——provider 的 id 不保证语义中立（codex 的 MCP elicitation 会把服务名拼进去），
+ * 原样转发会越过"只知道时机"的隐私边界。只保证 start / end 配对。
+ */
+export interface GhostEventInteractionActivityData {
+  sessionId: string;
+  requestId: string;
+}
+
+export type GhostEventActivityData =
+  | GhostEventThinkingData
+  | GhostEventInteractionActivityData;
+
+/** 所有 did- 旁听事件共享的安全元数据载荷。 */
+export type GhostDidEventData =
+  | GhostEventTurnStartData
+  | GhostEventTurnEndData
+  | GhostEventSessionData
+  | GhostEventActivityData;
+
+/**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
  * 熄灯期溢出丢弃数);will- 分支带 hookId,意识须在超时窗内回
@@ -5402,7 +5470,7 @@ export type GhostPipeEventPush =
       seq: number;
       ts: number;
       dropped?: number;
-      data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData;
+      data: GhostDidEventData;
     }
   | {
       type: 'event';

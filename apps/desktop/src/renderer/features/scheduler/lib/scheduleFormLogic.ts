@@ -88,7 +88,7 @@ export interface ScheduleFormState {
   recurring: boolean;
   /** 手动模式:true → 创建后永不自动 fire,只能 Run now。UI 上需要 recurring=false 才能勾。 */
   manual: boolean;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   /**
    * 显式选定的来源(供应商)id。'' = 跟随该 agent 原生默认来源（no-break，与未升级
@@ -120,6 +120,7 @@ export interface ScheduleFormState {
   preRunHookTimeoutSec: string;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
+  notifyWecomGroup?: boolean;
 }
 
 /** bound 态"已选绑定但尚未挑会话"的占位 id;validate 用 selectThread 拦截。 */
@@ -263,9 +264,11 @@ export function applyRunMode(
 
 /** renderer Session.agentKind('cc'|'codex')→ schedule agentKind 映射。 */
 export function sessionAgentKindToScheduleAgentKind(
-  kind: 'cc' | 'codex',
+  kind: 'cc' | 'codex' | 'pi',
 ): ScheduleFormState['agentKind'] {
-  return kind === 'codex' ? 'codex' : 'claude-code';
+  if (kind === 'codex') return 'codex';
+  if (kind === 'pi') return 'pi';
+  return 'claude-code';
 }
 
 interface TemplateAgentDefaults {
@@ -432,7 +435,11 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
     silentWhenIdle: !isScript && form.silentWhenIdle,
     targetSessionId: !isScript ? (form.targetSessionId.trim() || undefined) : undefined,
     preRunHook: buildPreRunHook(form),
-    notify: { desktop: form.notifyDesktop, feishu: form.notifyFeishu },
+    notify: {
+      desktop: form.notifyDesktop,
+      feishu: form.notifyFeishu,
+      wecomGroup: form.notifyWecomGroup === true,
+    },
   };
 
   if (isScript) {
@@ -457,6 +464,9 @@ export function buildScheduleInput(form: ScheduleFormState): CreateScheduleInput
   if (form.model.trim()) base.model = form.model.trim();
   if (form.providerId.trim()) base.providerId = form.providerId.trim();
   if (form.effort && isEffortValue(form.effort)) base.effort = form.effort;
-  if (form.agentKind === 'codex') base.fastMode = form.fastMode;
+  // fastMode 对 Codex / Pi 都生效(runner.ts:665 明确 claude-code 忽略此字段);只序列化
+  // codex 会让用户在 Pi 任务里开的 Fast 被静默丢弃(codex review)。表单侧 Fast 开关已按
+  // capability × 模型 supportsFastMode 门控,Pi 只有真支持时才可能为 true。
+  if (form.agentKind === 'codex' || form.agentKind === 'pi') base.fastMode = form.fastMode;
   return base;
 }

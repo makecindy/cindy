@@ -35,10 +35,13 @@ describe('device-link shared contract', () => {
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:input:compact');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('local-db:messages:around-client-id');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:message:delete');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:get-session-tree');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:navigate-session-tree');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:create-from-template');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:schedule:delete-run');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limits');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('maker:usage:codex-rate-limit-reset');
+    expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('worktree:discard-precreated');
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).not.toContain(DEVICE_LINK_VOICE_CREDENTIAL_SYNC_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain(DEVICE_LINK_VOICE_DICTIONARY_LEARNING_CHANNEL);
     expect(MOBILE_REMOTE_INVOKE_CHANNELS).toContain('text-file:read-preview');
@@ -88,6 +91,9 @@ describe('device-link shared contract', () => {
     expect(describeAgentAuthError('claude-code not authenticated: no_key')).toContain('Claude');
     expect(describeAgentAuthError('codex not authenticated: no_credentials'))
       .toContain('尚未登录 Codex');
+    // Pi 也走同一模板与映射(codex review):按 reason 引导,标签显示 Pi。
+    expect(describeAgentAuthError('pi not authenticated: no_key')).toContain('API Key');
+    expect(describeAgentAuthError('pi not authenticated: no_key')).toContain('Pi');
     expect(describeAgentAuthError('claude-code not authenticated: no_oauth')).toContain('账号授权');
     expect(describeAgentAuthError('claude-code not authenticated: no_encryption')).toContain('安全存储');
     expect(describeAgentAuthError('claude-code not authenticated: proxy_not_ready')).toContain('稍候重试');

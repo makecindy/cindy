@@ -38,8 +38,9 @@ export interface ImOrchestrator {
 const registry = new Map<ImChannelName, ImOrchestrator>();
 
 /**
- * 创建并接线一个渠道编排器:订阅 im.onMessage / im.onCardAction, 注册进
- * registry。每个渠道只允许调一次(重复调说明 wiring 层 bug, 直接抛)。
+ * 创建并接线一个渠道编排器:所有渠道订阅 im.onMessage；只有 rich-card
+ * 渠道订阅 onCardAction。每个渠道只允许调一次(重复调说明 wiring 层 bug,
+ * 直接抛)。
  */
 export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator {
   if (registry.has(adapter.channel)) {
@@ -47,7 +48,12 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
   }
   // threadScoped 渠道的能力配对断言 — thread 文案组与 messageId→threadKey
   // 提取能力缺一不可, 接线期 fail-fast 好过运行时静默坏掉。
-  if (adapter.threadScoped && (!adapter.ui.thread || !adapter.im.threadKeyForMessage)) {
+  if (
+    adapter.threadScoped &&
+    (adapter.output.kind !== 'rich-card' ||
+      !adapter.ui.thread ||
+      !adapter.output.im.threadKeyForMessage)
+  ) {
     throw new Error(
       `im orchestrator channel=${adapter.channel}: threadScoped requires ui.thread + im.threadKeyForMessage`,
     );
@@ -67,10 +73,12 @@ export function createImOrchestrator(adapter: ImChannelAdapter): ImOrchestrator 
   });
   const slash = createSlashHandlers(adapter, repo, cards, turnRunner);
   const attachMessageHandler = createMessageHandler(adapter, slash, turnRunner);
-  const attachCardActionHandler = createCardActionHandler(adapter, cards, turnRunner);
 
   attachMessageHandler(adapter.im);
-  attachCardActionHandler(adapter.im);
+  if (adapter.output.kind === 'rich-card') {
+    const attachCardActionHandler = createCardActionHandler(adapter, cards, turnRunner);
+    attachCardActionHandler(adapter.output.im);
+  }
 
   const orchestrator: ImOrchestrator = {
     channel: adapter.channel,

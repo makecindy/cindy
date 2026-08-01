@@ -72,6 +72,40 @@ describe('SystemCard auto-resume 行', () => {
     expect(screen.queryByRole('separator')).toBeNull();
   });
 
+  // 一次中断的"进行中"跨两种载体:退避那几秒是 ephemeral 行,续跑发出后交棒给落库的这一行。
+  // 交棒之后任务确实在跑(只是还没吐出第一个可见字符),此时必须继续显示成重连中 —— 否则用户
+  // 看到一个静止的「重新连接」不知道是不是还在跑(实测截图)。
+  it('未回填 + 正在飞 → 「重新连接中 N/5」,文案与退避那段连续', () => {
+    render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{ error: 'API Error: Connection closed mid-response.', attempt: 1, maxAttempts: 5 }}
+        autoResumeInFlight
+      />,
+    );
+    expect(
+      screen.getByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":1,"total":5})'),
+    ).toBeTruthy();
+    expect(
+      screen.queryByText('chat.systemCard.autoResume.labelNeutral'),
+      '正在飞的时候不该显示中性静态文案',
+    ).toBeNull();
+  });
+
+  it('已回填时 inFlight 不参与:终态优先,仍定格 ✓ / ✗', () => {
+    render(
+      <SystemCard
+        cardType="auto-resume"
+        data={{ error: 'boom', attempt: 2, maxAttempts: 5, outcome: 'succeeded' }}
+        autoResumeInFlight
+      />,
+    );
+    expect(screen.getByText('chat.systemCard.autoResume.label')).toBeTruthy();
+    expect(
+      screen.queryByText('chat.systemCard.autoResumePending.labelWithProgress({"attempt":2,"total":5})'),
+    ).toBeNull();
+  });
+
   it('带中断信息但 outcome 未回填 → 中性文案(落库记录永不显示"进行中",不变量 I6)', () => {
     render(
       <SystemCard cardType="auto-resume" data={{ error: 'socket hang up', attempt: 1, maxAttempts: 5 }} />,

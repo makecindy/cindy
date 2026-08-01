@@ -20,6 +20,7 @@ import { cn } from '@/lib/utils';
 import type { MakerVendor } from '@/lib/ccAgent.types';
 import { CodexMark } from '@/components/icons/CodexMark';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
+import { PiMark } from '@/components/icons/PiMark';
 
 interface VendorSegmentedSwitcherProps {
   value: MakerVendor;
@@ -50,6 +51,12 @@ interface VendorSegmentedSwitcherProps {
    * 的名字,否则读屏用户听到的全是同一个英文兜底,行与行无法分辨。
    */
   ariaLabel?: string;
+  /**
+   * 从选择器里**隐藏**的 vendor(如 runtime 未注册的 Pi、SSH 远程草稿下的 Pi)。
+   * 创建入口据 `maker:list-available-agents` 计算,避免用户创建出最终 `Agent 'pi' is not
+   * registered` 的会话(codex review P2)。调用方需保证 `value` 不在此列表(或自行 coerce)。
+   */
+  hiddenVendors?: readonly MakerVendor[];
 }
 
 interface SegmentOption {
@@ -62,6 +69,7 @@ interface SegmentOption {
 const OPTIONS: readonly SegmentOption[] = [
   { vendor: 'cc', label: 'Claude', Mark: ClaudeMark },
   { vendor: 'codex', label: 'Codex', Mark: CodexMark },
+  { vendor: 'pi', label: 'Pi', Mark: PiMark },
 ] as const;
 
 export function VendorSegmentedSwitcher({
@@ -69,14 +77,20 @@ export function VendorSegmentedSwitcher({
   onChange,
   disabled,
   className,
-  width = 220,
+  width = 300,
   dense = false,
   iconOnly = false,
   visualVariant = 'default',
   reselectEmitsChange = false,
   ariaLabel,
+  hiddenVendors,
 }: VendorSegmentedSwitcherProps) {
   const isCreateAgentVariant = visualVariant === 'create-agent';
+  // 隐藏 runtime 未注册 / 当前上下文不支持的 vendor;当前选中值即便被隐藏也保留一段(调用方
+  // coerce 前的过渡帧),避免 tablist 出现"无选中段"。
+  const visibleOptions = hiddenVendors && hiddenVendors.length > 0
+    ? OPTIONS.filter((opt) => opt.vendor === value || !hiddenVendors.includes(opt.vendor))
+    : OPTIONS;
   return (
     <div
       className={cn(
@@ -99,7 +113,7 @@ export function VendorSegmentedSwitcher({
       role="tablist"
       aria-label={ariaLabel ?? 'Vendor switcher'}
     >
-      {OPTIONS.map((opt) => {
+      {visibleOptions.map((opt) => {
         const isActive = value === opt.vendor;
         return (
           <button

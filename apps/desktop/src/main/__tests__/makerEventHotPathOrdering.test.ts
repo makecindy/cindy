@@ -31,6 +31,15 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain(
       'registration.disposers.push(session.onStatusChange((status) => {',
     );
+    // #1286:拆线(实例替换 / 会话关闭)必须给插件补 did-turn-end,否则订阅方的
+    // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。同一个 disposer 里
+    // 摘 interaction observer(#1283),不摘会让 activity 的审批边界发给已拆线的 tap。
+    const tapDisposerIndex = wireSessionSource.indexOf('ghostSessionTap.dispose();');
+    expect(tapDisposerIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.lastIndexOf('registration.disposers.push(', tapDisposerIndex),
+    ).toBeGreaterThanOrEqual(0);
+    expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {
@@ -221,7 +230,7 @@ describe('maker:event hot path ordering', () => {
     expect(coordinatorAbortEnd).toBeGreaterThan(coordinatorAbortStart);
     expectOrder(
       coordinatorAbortSource,
-      'const sess = maker.getSession(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
       'if (!sess) return;',
     );
     expectOrder(
@@ -238,9 +247,10 @@ describe('maker:event hot path ordering', () => {
     expect(directAbortEnd).toBeGreaterThan(directAbortStart);
     expectOrder(
       directAbortSource,
-      'const sess = maker.getSession(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
       'if (!sess) return;',
     );
+    expect(directAbortSource).not.toContain('const sess = maker.getSession(sessionId);');
     expectOrder(
       directAbortSource,
       'if (!sess) return;',
@@ -250,6 +260,24 @@ describe('maker:event hot path ordering', () => {
       directAbortSource,
       'handleAgentIslandSessionStopped(sess);',
       'await sess.abort();',
+    );
+    expect(directAbortSource).toContain(
+      'const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);',
+    );
+    expectOrder(
+      directAbortSource,
+      'const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);',
+      'await sess.abort();',
+    );
+    expect(directAbortSource).toContain(
+      "reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');",
+    );
+    expect(directAbortSource).not.toContain("reconcileSessionTurnIdle(sessionId, 'direct-abort');");
+    expect(directAbortSource).not.toContain('if (!sess.isTurnRunning())');
+    expectOrder(
+      directAbortSource,
+      "reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');",
+      "cleanupPendingInteractionsForSession(sessionId, 'session_aborted');",
     );
     expect(hookAbortStart).toBeGreaterThanOrEqual(0);
     expect(hookAbortEnd).toBeGreaterThan(hookAbortStart);
@@ -271,6 +299,45 @@ describe('maker:event hot path ordering', () => {
       'getAgentIslandService()?.handleSessionStopped(',
       'await session.abort();',
     );
+  });
+
+  it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {
+    const stableLookupStart = source.indexOf('const getStableSessionForTurnBoundary =');
+    const stableLookupEnd = source.indexOf('\n  const reconcileSessionTurnIdle =', stableLookupStart);
+    const stableLookupSource = source.slice(stableLookupStart, stableLookupEnd);
+    const reconcileStart = stableLookupEnd;
+    const reconcileEnd = source.indexOf('\n\n  const inputCoordinator:', reconcileStart);
+    const reconcileSource = source.slice(reconcileStart, reconcileEnd);
+
+    expect(stableLookupStart).toBeGreaterThanOrEqual(0);
+    expect(stableLookupEnd).toBeGreaterThan(stableLookupStart);
+    expect(stableLookupSource).toContain('wiredSessionsById.get(sessionId)?.session');
+    expectOrder(stableLookupSource, 'if (wired) return wired;', 'return maker.getSession(sessionId) ?? null;');
+    expect(stableLookupSource).toContain('return null;');
+
+    expect(reconcileStart).toBeGreaterThanOrEqual(0);
+    expect(reconcileEnd).toBeGreaterThan(reconcileStart);
+    expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
+    expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
+    expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
+  });
+
+  it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
+    const helperStart = source.indexOf('const readDirectAbortTurnId =');
+    const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
+    const helperSource = source.slice(helperStart, helperEnd);
+    const wireSessionSource = extractWireSessionSource();
+    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+
+    expect(source).toContain('const sessionTurnBoundaryGenerationById = new Map<string, number>();');
+    expect(source).toContain('const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();');
+    expect(helperSource).toContain('wiredSessionsById.get(sessionId)?.session !== boundary.session');
+    expect(helperSource).toContain('currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation');
+    expect(helperSource).toContain('direct-abort-retry');
+    expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
+    expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
+    expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
+    expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {
@@ -308,24 +375,40 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain('? codexSubscriptionUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain(': codexApiUsageModelKey(pricingModel)');
     expect(codexDoneSource).toContain('const price = isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain('? getSubscriptionDirectValuePrice(pricingModel)');
-    expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
+    expect(codexDoneSource).toContain(
+      "? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)",
+    );
+    // 订阅估值按显式来源取各自 registry 日期定价:内置 anthropic(access.kind=subscription)
+    // 不再被记成 #billing=api;默认/openai 仍走 OpenAI 价表。
+    expect(codexDoneSource).toContain("sessionProviderAccessKind === 'subscription'");
+    expect(codexDoneSource).toContain('isCodexSubscriptionAccessRoute ||');
+    expect(codexDoneSource).toMatch(
+      /\? getCodexProviderSubscriptionValuePrice\(\s*subscriptionValueProviderId,\s*pricingModel,\s*pricing,\s*\)/,
+    );
     expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");
-    expect(codexDoneSource).toContain('const pricing = isSubscriptionValue && !isCodexXaiProviderRoute');
+    expect(codexDoneSource).toContain(
+      "? getModelPriceQuote(pricing, sessionProvider, pricingModel, 'codex')",
+    );
+    expect(codexDoneSource).toContain('const pricing = isSubscriptionValue');
+    expect(codexDoneSource).not.toContain('isSubscriptionValue && !isCodexXaiProviderRoute');
     expect(codexDoneSource).toContain('? await getModelPricing()');
     expect(codexDoneSource).toContain("? await getModelPricingForModel('xd', pricingModel)");
     expect(codexDoneSource).toContain('price ?? undefined');
-    expect(codexDoneSource).toContain('if (!isSubscriptionValue && money)');
+    expect(codexDoneSource).toContain(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     expect(codexDoneSource).toContain('void recordTurnSpend(money);');
     expect(codexDoneSource).toContain('void recordSessionTurnSpend(session.id, money);');
     expect(codexDoneSource).toMatch(
-      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue && !isCodexXaiProviderRoute/,
+      /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*inputTokensDelta: promptTokens,\s*outputTokensDelta: completionTokens,\s*cacheReadTokensDelta: cachedTokens,\s*cacheCreateTokensDelta: 0,\s*\}\)\.finally\(\(\) => rebroadcastCodexTodayUsage\(\)\);[\s\S]*?const pricing = isSubscriptionValue/,
     );
     expect(codexDoneSource).toMatch(
       /await recordModelTurnUsage\(\{\s*agentKind: 'codex',\s*model: modelUsageKey,\s*money,\s*inputTokensDelta: 0,\s*outputTokensDelta: 0,\s*cacheReadTokensDelta: 0,\s*cacheCreateTokensDelta: 0,\s*\}\);/,
     );
     const costRecordIndex = codexDoneSource.indexOf('void recordTurnSpend(money);');
-    const modelCostRecordIndex = codexDoneSource.indexOf('if (!isSubscriptionValue && money)');
+    const modelCostRecordIndex = codexDoneSource.indexOf(
+      "if (!isSubscriptionValue && money && price?.source === 'gateway')",
+    );
     const schedulerCostRecordIndex = codexDoneSource.indexOf('await recordSchedulerTurnCost({');
     expect(costRecordIndex).toBeGreaterThanOrEqual(0);
     expect(modelCostRecordIndex).toBeGreaterThanOrEqual(0);
@@ -357,12 +440,16 @@ describe('maker:event hot path ordering', () => {
     expect(claudeDoneSource).toContain("'xd',");
     expect(claudeDoneSource).toContain('normalizeModelIdForPricing(deltas[0]?.model)');
     expect(claudeDoneSource).toContain(': await getModelPricing();');
-    expect(claudeDoneSource).toContain('const { turnMoney, perModel } = resolveClaudeTurnCostSinks(');
+    expect(claudeDoneSource).toContain(
+      'const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
+    );
     expect(claudeDoneSource).toContain('providerId: sessionProviderForBilling');
     expect(claudeDoneSource).toContain('billingRoute,');
     expect(claudeDoneSource).toContain('recordTurnSpend(turnMoney);');
     expect(claudeDoneSource).toContain('recordSessionTurnSpend(session.id, turnMoney);');
-    expect(claudeDoneSource).toContain('money: m.money,');
+    expect(claudeDoneSource).toContain(
+      "money: m.money?.kind === 'actual-cost' ? m.money : null,",
+    );
     // 订阅轮 (Claude Anthropic 订阅或 bridge 订阅直连) 打 #billing=subscription 标记,
     // 仪表盘按订阅估算价折算; 其余轮仍写归一化裸 id。
     expect(claudeDoneSource).toContain(

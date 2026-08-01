@@ -13,7 +13,7 @@ import {
   DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
-import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { Session } from '@/lib/ccAgent.types';
 import type { AutomationScheduleAction, AutomationSessionGroup } from '../lib/automationSidebarGrouping';
 import {
@@ -337,8 +337,8 @@ export function AutomationSessionGroupItem({
                 'cc'。isRunning 只看最新那条,与其子行一致。 */}
             <span className="flex w-[15px] shrink-0 items-center justify-center">
               <VendorIcon
-                vendor={latestSession?.agentKind === 'codex' ? 'codex' : 'cc'}
-                size={latestSession?.agentKind === 'codex' ? 12 : 13}
+                vendor={agentKindToVendor(latestSession?.agentKind)}
+                size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}
                 running={isRunning}
                 colorClassName={hasActiveHidden ? 'text-[var(--sidebar-item-active-foreground)]' : undefined}
               />

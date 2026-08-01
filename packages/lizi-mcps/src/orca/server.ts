@@ -168,6 +168,7 @@ export interface OrcaMcpDeps {
     ControlResult<{
       codex?: Array<{ id: string; label: string }>;
       claude_code?: Array<{ id: string; label: string }>;
+      pi?: Array<{ id: string; label: string }>;
     }>
   >;
   /** 只读诊断：列出当前 Orca workflow 与 worker sessions。 */
