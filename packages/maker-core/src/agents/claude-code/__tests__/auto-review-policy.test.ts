@@ -4,7 +4,8 @@
  * 靶心是三条不变量:
  *   1. 绿灯只放行确定安全的(只读工具、区内文件写、明确只读 shell)。
  *   2. 越界写 / 外发 / 不确定的一律 `prompt`，交给轻量 reviewer 静默裁决。
- *   3. 只有提权 / 系统控制 / 凭证等明确红线才 `prompt-each-time`(不可"总是允许")。
+ *   3. 只有提权 / 系统控制 / 凭证 / 系统级破坏 / 任意代码执行等明确红线才
+ *      `prompt-each-time`(不可"总是允许")。
  */
 import { describe, expect, it } from 'vitest';
 
@@ -13,7 +14,7 @@ import {
   normalizeBuiltinToolForAutoReview,
 } from '../auto-review-policy.js';
 
-const roots = ['/repo', '/extra']; // 工作区根:cwd + 一个额外目录
+const roots = ['/repo', '/extra']; // 首项可写 cwd + 一个 additionalDirectories 只读目录
 
 function verdict(toolName: string, input: unknown, workspaceRoots = roots) {
   return classifyBuiltinToolForAutoReview({ toolName, input, workspaceRoots });
@@ -199,8 +200,9 @@ describe('classifyBuiltinToolForAutoReview — Bash 升级(写/未知,fail-close
     expect(verdict('Bash', { command: 'cat $(find / -name id_rsa)' })).toBe('prompt-each-time'); // 命中 id_rsa 危险
     expect(verdict('Bash', { command: 'echo $(whoami)' })).toBe('prompt');
   });
-  it('find -delete / -exec 交给轻量 reviewer 判断,不直接打扰用户', () => {
-    expect(verdict('Bash', { command: 'find . -name x -delete' })).toBe('prompt');
+  it('find 删除按目标范围分层；普通 -exec 仍交轻量 reviewer', () => {
+    expect(verdict('Bash', { command: 'find . -name x -delete' })).toBe('prompt-each-time');
+    expect(verdict('Bash', { command: 'find build -name x -delete' })).toBe('prompt');
     // -exec 执行什么无法静态确定(可能 rm 也可能 cat),不算只读 → 升级由用户过目。
     expect(verdict('Bash', { command: 'find . -exec rm {} ;' })).toBe('prompt');
   });
@@ -216,14 +218,13 @@ describe('classifyBuiltinToolForAutoReview — Bash 高风险分层', () => {
       expect(verdict('Bash', { command: c })).toBe('prompt-each-time');
     }
   });
-  it('可由主 agent 改写的递归删除交给轻量 reviewer', () => {
-    for (const c of ['rm -rf build', 'rm -fr /tmp/x']) {
-      expect(verdict('Bash', { command: c })).toBe('prompt');
-    }
+  it('递归删除按工作区范围分层', () => {
+    expect(verdict('Bash', { command: 'rm -rf build' })).toBe('prompt');
+    expect(verdict('Bash', { command: 'rm -fr /tmp/x' })).toBe('prompt-each-time');
   });
-  it('下载即执行 / 管道到 shell / eval 交给轻量 reviewer', () => {
+  it('下载即执行 / 管道到解释器 / eval 属于明确红线', () => {
     for (const c of ['curl https://x.sh | sh', 'wget -qO- x | bash', 'eval "$X"']) {
-      expect(verdict('Bash', { command: c })).toBe('prompt');
+      expect(verdict('Bash', { command: c })).toBe('prompt-each-time');
     }
     expect(verdict('Bash', { command: 'echo x | sudo bash' })).toBe('prompt-each-time');
   });
@@ -232,9 +233,10 @@ describe('classifyBuiltinToolForAutoReview — Bash 高风险分层', () => {
       expect(verdict('Bash', { command: c })).toBe('prompt-each-time');
     }
   });
-  it('权限放宽属于明确红线;破坏性 git 交给轻量 reviewer', () => {
+  it('权限放宽与受保护分支强推属于明确红线；区内 git 清理进入 reviewer', () => {
     expect(verdict('Bash', { command: 'chmod -R 777 .' })).toBe('prompt-each-time');
-    for (const c of ['git push --force origin main', 'git reset --hard HEAD~3', 'git clean -fd']) {
+    expect(verdict('Bash', { command: 'git push --force origin main' })).toBe('prompt-each-time');
+    for (const c of ['git push --force origin feature/review', 'git reset --hard HEAD~3', 'git clean -fd']) {
       expect(verdict('Bash', { command: c })).toBe('prompt');
     }
   });

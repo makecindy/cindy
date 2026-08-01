@@ -58,7 +58,8 @@ export type ReviewableAction =
 
 /**
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots = cwd + 额外可写目录,绝对路径。
+ * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
+ * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
  */
 export function reviewAction(
   action: ReviewableAction,
@@ -93,15 +94,20 @@ export function reviewAction(
         ? 'auto-approve'
         : 'prompt';
     }
-    case 'exec':
-      // Harness 提供了实际执行目录时，区外 cwd 不能沿用工作区内的静默放行假设。
-      // 例如同一条 `pwd` / `rm -rf build` 在 /repo 与用户主目录的影响完全不同；
-      // 升级到轻量 reviewer，并把 cwd 保留在 action 中供其判断相对路径语义。
+    case 'exec': {
+      const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
+        cwd: action.cwd,
+        platform: opts?.platform,
+      });
+      // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
+      // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
+      const writableRoots = workspaceRoots.slice(0, 1);
       if (action.cwd
-        && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), workspaceRoots, aliasFirmlinks)) {
-        return 'prompt';
+        && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
+        return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
       }
-      return classifyShellCommand(action.command, workspaceRoots);
+      return shellVerdict;
+    }
     case 'network':
       return 'prompt';
     case 'other':
@@ -186,9 +192,6 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
 const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
   /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
   /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
-  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/, // 下载 | sh
-  /\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/,                       // 任意 | sh / | bash
-  /\beval\b/,                                            // eval 动态执行
   // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
   /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
@@ -358,6 +361,205 @@ function baseName(p: string): string {
   const cleaned = p.replace(/\/+$/, '');
   const idx = cleaned.lastIndexOf('/');
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
+}
+
+type ExecutableSegment = { text: string; fromPipe: boolean };
+
+/** 仅供高影响执行判定：识别引号外的 shell 分隔符，避免把 `echo 'x | sh'` 误当执行。 */
+function splitExecutableSegments(command: string): ExecutableSegment[] {
+  const out: ExecutableSegment[] = [];
+  let start = 0;
+  let fromPipe = false;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && !singleQuoted) { escaped = true; continue; }
+    if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
+    if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
+    if (singleQuoted || doubleQuoted) continue;
+    let separatorLength = 0;
+    let nextFromPipe = false;
+    if (char === '|') {
+      separatorLength = command[i + 1] === '|' || command[i + 1] === '&' ? 2 : 1;
+      nextFromPipe = command[i + 1] !== '|';
+    } else if (char === '&' && command[i - 1] !== '>' && command[i + 1] !== '>') {
+      separatorLength = command[i + 1] === '&' ? 2 : 1;
+    } else if (char === ';' || char === '\n') {
+      separatorLength = 1;
+    }
+    if (separatorLength === 0) continue;
+    const text = command.slice(start, i).trim();
+    if (text) out.push({ text, fromPipe });
+    fromPipe = nextFromPipe;
+    i += separatorLength - 1;
+    start = i + 1;
+  }
+  const text = command.slice(start).trim();
+  if (text) out.push({ text, fromPipe });
+  return out;
+}
+
+const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
+  'python', 'python2', 'python3', 'node', 'ruby', 'perl', 'php', 'pwsh', 'powershell',
+]);
+
+/** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
+function highImpactExecutionNeedsConsent(command: string): boolean {
+  for (const { text, fromPipe } of splitExecutableSegments(command)) {
+    const normalized = text.replace(/['"\\]/g, '');
+    const tokens = unwrapWrappers(tokenize(normalized));
+    const bin = baseName(tokens[0] ?? '');
+    if (fromPipe && PIPE_EXECUTORS.has(bin)) return true;
+    if (bin === 'eval') return true;
+    if (/^(?:ba|z|da|k)?sh$/.test(bin)) {
+      const commandIndex = tokens.indexOf('-c');
+      const payload = commandIndex >= 0 ? tokens.slice(commandIndex + 1).join(' ') : '';
+      if (/\$\(\s*(?:curl|wget)\b/.test(payload)) return true;
+    }
+    if ((bin === 'source' || bin === '.' || /^(?:ba|z|da|k)?sh$/.test(bin))
+      && /<\(\s*(?:curl|wget)\b/.test(normalized)) return true;
+  }
+  return false;
+}
+
+type ShellReviewOptions = {
+  cwd?: string;
+  platform?: NodeJS.Platform;
+};
+
+/** 提取普通位置参数；`--` 后即使以 `-` 开头也按目标处理。 */
+function positionalOperands(tokens: string[]): string[] {
+  const out: string[] = [];
+  let optionsEnded = false;
+  for (const token of tokens) {
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && token.startsWith('-')) continue;
+    out.push(token);
+  }
+  return out;
+}
+
+/** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+function destructiveTargetNeedsConsent(
+  target: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  const writableRoot = workspaceRoots[0];
+  if (!writableRoot) return true;
+  // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
+  if (/[$`{}]/.test(target) || /^~(?:[\\/]|$)/.test(target)) return true;
+  // glob 可保留，只用首个 glob 前的静态前缀证明作用域。前缀落在可写根本身仍是“清空整个
+  // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
+  const globIndex = target.search(/[*?[\]]/);
+  const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
+  const cwd = opts.cwd ?? writableRoot;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
+  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
+  const normalizedTarget = normalizeTarget(staticTarget, [cwd]);
+  if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
+  return canonicalPath(normalizedTarget, aliasFirmlinks)
+    === normalizedRoot;
+}
+
+function findDeleteRoots(tokens: string[]): string[] {
+  let i = 1;
+  // find 的遍历选项先于路径；-D 额外消费一个 debug 参数。
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === '-D') { i += 2; continue; }
+    if (/^-(?:[HLP]|O\d*)$/.test(token)) { i++; continue; }
+    if (token === '--') { i++; break; }
+    break;
+  }
+  const roots: string[] = [];
+  for (; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith('-') || token === '!' || token === '(') break;
+    roots.push(token);
+  }
+  return roots.length > 0 ? roots : ['.'];
+}
+
+function forcePushNeedsConsent(tokens: string[]): boolean {
+  if (baseName(tokens[0] ?? '') !== 'git') return false;
+  const pushIndex = tokens.indexOf('push');
+  if (pushIndex < 0) return false;
+  const args = tokens.slice(pushIndex + 1);
+  const forced = args.some((token) =>
+    /^(?:--force(?:-with-lease|-if-includes)?)(?:=|$)/.test(token)
+    || /^-[^-]*f/.test(token)
+    || token.startsWith('+'));
+  if (!forced) return false;
+  if (args.some((token) => /^(?:--all|--mirror|--tags)$/.test(token))) return true;
+  const operands = positionalOperands(args);
+  const refspecs = operands.length >= 2 ? operands.slice(1) : [];
+  if (refspecs.length === 0) return true; // 隐含当前分支，无法证明不是受保护分支。
+  return refspecs.some((refspec) => {
+    const withoutForce = refspec.replace(/^\+/, '');
+    const destination = (withoutForce.includes(':')
+      ? withoutForce.slice(withoutForce.lastIndexOf(':') + 1)
+      : withoutForce).replace(/^refs\/heads\//, '');
+    if (!destination || /[$`*?[\]{}]/.test(destination)) return true;
+    if (/^(?:HEAD|@|refs\/tags\/)/i.test(destination)) return true;
+    return /^(?:main|master|trunk|develop(?:ment)?|prod(?:uction)?|staging|release(?:[/_-].*)?|hotfix(?:[/_-].*)?)$/i.test(destination);
+  });
+}
+
+/** destructive rm 的显式目标；不是递归/强制 rm 时返回 null。 */
+function destructiveRmTargets(tokens: string[]): string[] | null {
+  if (baseName(tokens[0] ?? '') !== 'rm') return null;
+  const args = tokens.slice(1);
+  const destructive = args.some((token) =>
+    /^-[^-]*[rRfF]/.test(token) || /^--(?:recursive|force|dir)(?:=|$)/.test(token));
+  return destructive ? positionalOperands(args) : null;
+}
+
+/** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
+function scopedDestructionNeedsConsent(
+  command: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+  depth = 0,
+): boolean {
+  for (const segment of splitTopLevelSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(segment));
+    const bin = baseName(tokens[0] ?? '');
+    const rmTargets = destructiveRmTargets(tokens);
+    if (rmTargets?.some((target) =>
+      destructiveTargetNeedsConsent(target, workspaceRoots, opts))) return true;
+    // shell -c 内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠，按高影响边界处理。
+    if (/^(?:ba|z|da|k)?sh$/.test(bin)) {
+      const commandIndex = tokens.indexOf('-c');
+      if (commandIndex >= 0 && tokens[commandIndex + 1]) {
+        if (depth >= 3 || scopedDestructionNeedsConsent(
+          tokens[commandIndex + 1], workspaceRoots, opts, depth + 1)) return true;
+      }
+    }
+    if (bin === 'find') {
+      const findRoots = findDeleteRoots(tokens);
+      const deletes = tokens.some((token) => token === '-delete');
+      const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
+      const execsDestructiveRm = nestedRm >= 0
+        && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
+      if ((deletes || execsDestructiveRm) && findRoots.some((target) =>
+        destructiveTargetNeedsConsent(target, workspaceRoots, opts))) return true;
+    }
+    // xargs 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意。
+    const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
+    if (bin === 'xargs' && nestedRm >= 0
+      && destructiveRmTargets(tokens.slice(nestedRm)) !== null) return true;
+    if (forcePushNeedsConsent(tokens)) return true;
+  }
+  return false;
 }
 
 function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): boolean {
@@ -599,12 +801,25 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
 function classifyShellSegment(segment: string): ReviewVerdict {
   const rawTokens = tokenize(segment);
   const tokens = unwrapWrappers(rawTokens);
-  // 裸 env / printenv 会输出整个进程环境(含 provider API key)，不能交给 reviewer
-  // 自行静默 allow。`env FOO=bar cmd` 仍按内层命令分类；`printenv PATH` 只读单个
-  // 具名变量，继续留在灰区。
+  // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
+  // reviewer 自行静默 allow。`-0` / `--null` 只改分隔符，不缩小输出范围；只有存在非选项
+  // VARIABLE 参数时才算具名读取并留在灰区。`env FOO=bar cmd` 仍按内层命令分类。
+  const printenvArgs = baseName(tokens[0] ?? '') === 'printenv' ? tokens.slice(1) : [];
+  let printenvHasVariable = false;
+  let printenvOptionsEnded = false;
+  for (const token of printenvArgs) {
+    if (!printenvOptionsEnded && token === '--') {
+      printenvOptionsEnded = true;
+      continue;
+    }
+    if (printenvOptionsEnded || !token.startsWith('-')) {
+      printenvHasVariable = true;
+      break;
+    }
+  }
   const dumpsFullEnvironment =
     (tokens.length === 0 && rawTokens.some((token) => baseName(token) === 'env'))
-    || (tokens.length === 1 && baseName(tokens[0]) === 'printenv');
+    || (baseName(tokens[0] ?? '') === 'printenv' && !printenvHasVariable);
   if (dumpsFullEnvironment) return 'prompt-each-time';
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
@@ -657,7 +872,11 @@ function classifyShellSegment(segment: string): ReviewVerdict {
  * 再拆顶层段,每段都要过 —— 任一段明确红线→prompt-each-time;任一段需 reviewer→prompt;
  * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
-export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
+export function classifyShellCommand(
+  command: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions = {},
+): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
   // 两档风险模式都跑以下变体；明确红线优先，命中才 prompt-each-time：
   //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
@@ -679,9 +898,21 @@ export function classifyShellCommand(command: string, _workspaceRoots: string[])
   const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
   // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
   const deSubstituted = substituteDefaults(deEscaped);
+  // 仅按引号外的真实执行结构识别 pipe→解释器 / eval / 下载即执行，避免把打印示例文本误升级。
+  if ([command, stripExpansions(command), substituteDefaults(command)]
+    .some(highImpactExecutionNeedsConsent)) return 'prompt-each-time';
   for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
   }
+  // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
+  // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
+  // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。
+  const scopedVariants = [command, quotesOnly, stripExpansions(quotesOnly), substituteDefaults(quotesOnly)];
+  if ((opts.platform ?? process.platform) !== 'win32') {
+    scopedVariants.push(deEscaped, deExpanded, deSubstituted);
+  }
+  if (scopedVariants.some((variant) =>
+    scopedDestructionNeedsConsent(variant, workspaceRoots, opts))) return 'prompt-each-time';
   for (const re of REVIEW_REQUIRED_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt';
   }
