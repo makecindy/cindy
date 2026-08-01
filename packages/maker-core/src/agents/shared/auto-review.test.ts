@@ -1637,3 +1637,39 @@ describe('超深包装器链 fail-closed / ionice 命名 class(第三十二批�
     expect(classifyShellCommand('ionice -c idle ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('字符类穿越 / 重定向拼接引号 / prlimit 包装器(第三十三批评审)', () => {
+  it('删除目标含能匹配 ./ 的字符类(可展开出 ..)→ 必问', () => {
+    for (const c of [
+      'rm -rf sub/[.-x][.-x]/etc/passwd',
+      'rm -rf [.]./secrets',
+      'rm -rf build/[!a]/x',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:不含 ./ 的普通字符类(不可穿越)仍按静态前缀判定,区内 → 灰区。
+    expect(classifyShellCommand('rm -rf build/[abc]/tmp', roots)).toBe('prompt');
+    expect(classifyShellCommand('rm -rf logs/[0-9]*.log', roots)).toBe('prompt');
+  });
+
+  it('重定向目标的拼接引号归一后命中系统路径红线', () => {
+    for (const c of [
+      "cat payload > /e'tc'/hosts",
+      'cat p > /et"c"/passwd',
+      "echo x > '/etc'/hosts",
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('prlimit 执行的命令被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'prlimit --nofile=1024 rm -rf /outside',
+      'prlimit --nproc=10 --nofile=1024 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:prlimit 跑只读命令 → 放行。
+    expect(classifyShellCommand('prlimit --nofile=1024 ls', roots)).toBe('auto-approve');
+  });
+});

@@ -2392,6 +2392,12 @@ export class ClaudeCodeAgent extends BaseAgent {
                     decision.editedPlan,
                   ),
                 );
+                // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支一致,
+                // 否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
+                setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
+                  currentAutoReviewIntent,
+                  decision.editedPlan ?? plan,
+                ));
               } else if (!decision.dismissed) {
                 appendActiveCapabilitySelectionText(decision.reason);
               }

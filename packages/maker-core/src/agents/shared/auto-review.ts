@@ -143,7 +143,7 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
-  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset',
+  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset', 'prlimit',
 ]);
 
 /**
@@ -193,8 +193,9 @@ function redirectionTargets(command: string): string[] {
   const out: string[] = [];
   const re = /(?:^|[\s;&|()])(?:\d*|&)>{1,2}\|?\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|<>()]+)/g;
   for (const m of command.matchAll(re)) {
-    let t = m[1];
-    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1);
+    // shell 词拼接:相邻引号/裸片段拼成一个词(`/e'tc'/hosts` → `/etc/hosts`,codex 报)→ 去掉所有引号字符。
+    // **保留反斜杠**(Windows 路径分隔符);POSIX `\` 转义形态由调用点额外查去转义变体覆盖。
+    const t = m[1].replace(/['"]/g, '');
     if (t) out.push(t);
   }
   return out;
@@ -627,6 +628,13 @@ function unwrapCommand(
       }
       if (!cpuListGiven && i < toks.length) i++; // 无 -c 时首个非选项是 mask 操作数,跳过
       toks = toks.slice(i);
+    } else if (head === 'prlimit') {
+      // prlimit [options] [--<resource>=<limit>] COMMAND(codex 报 `prlimit --nofile=1024 rm -rf /outside`)。
+      // 资源限额多为 `--nofile=1024` 附加形态;-p/--pid 是改已有进程、不跑命令 → 不解包(fail-closed 留壳)。
+      if (toks.slice(1).some((t) => /^(?:-p|--pid)$/.test(t) || /^--pid=/.test(t))) break;
+      let i = 1;
+      while (i < toks.length && toks[i].startsWith('-')) i++;
+      toks = toks.slice(i);
     } else {
       // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
       toks = toks.slice(1);
@@ -1047,6 +1055,23 @@ function positionalOperands(tokens: string[]): string[] {
 }
 
 /** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+/**
+ * 破坏目标里的字符类 `[…]` 能否展开出路径穿越字符 `.`(0x2E)或 `/`(0x2F)——能则运行期可拼出 `..`/额外
+ * 分隔符逃出静态前缀(greptile 报 `rm -rf sub/[.-x][.-x]/etc/passwd`,`[.-x]` 范围含 `.`/`/`)。
+ * 含字面 `.`/`/`、跨越它们的范围(如 `[.-x]`)、或取反类(`[!…]`/`[^…]` 几乎匹配任意字符)都算。
+ */
+function charClassCanTraverse(target: string): boolean {
+  for (const m of target.matchAll(/\[([^\]]*)\]/g)) {
+    const body = m[1];
+    if (/^[!^]/.test(body)) return true;               // 取反类可匹配 . / 等
+    if (body.includes('.') || body.includes('/')) return true;
+    for (const rm of body.matchAll(/(.)-(.)/g)) {
+      if (rm[1].charCodeAt(0) <= 0x2f && rm[2].charCodeAt(0) >= 0x2e) return true; // 范围覆盖 . 或 /
+    }
+  }
+  return false;
+}
+
 function destructiveTargetNeedsConsent(
   target: string,
   workspaceRoots: string[],
@@ -1056,6 +1081,8 @@ function destructiveTargetNeedsConsent(
   if (!writableRoot) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
+  // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
+  if (charClassCanTraverse(target)) return true;
   if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
   // glob 可保留，只用首个 glob 前的静态前缀证明作用域。前缀落在可写根本身仍是“清空整个
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
@@ -1727,8 +1754,9 @@ export function classifyShellCommand(
   // 输出重定向目标落系统/受保护目录(`cat x > /etc/hosts`、`> C:\Windows\...`)= 高影响系统写,复用
   // file-write 的系统红线,不能只当灰区重定向(codex 报)。canonical(darwin 抹平 /private)后判。
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  if (redirectionTargets(command).some((t) =>
-    isProtectedSystemPath(canonicalPath(normalizeTarget(t, workspaceRoots), aliasFirmlinks)))) return 'prompt-each-time';
+  // 每个重定向目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`),任一命中即升级。
+  if (redirectionTargets(command).some((t) => [t, t.replace(/\\(.)/g, '$1')].some((v) =>
+    isProtectedSystemPath(canonicalPath(normalizeTarget(v, workspaceRoots), aliasFirmlinks))))) return 'prompt-each-time';
   // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
   // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
   // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。
