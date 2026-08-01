@@ -228,6 +228,104 @@ describe('model price override sparse persistence', () => {
     });
   });
 
+  it('keeps saved long-context bands when a same-currency remote update drops them', () => {
+    const savedBase = {
+      currency: 'USD' as const,
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      cacheCreatePerMtok: null,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 12,
+        },
+      ],
+    };
+    expect(
+      __testing.mergedQuote(
+        { providerId: 'custom', agent: 'codex', modelId: 'model' },
+        {
+          providerId: 'custom',
+          modelId: 'model',
+          source: 'provider-reference',
+          approximate: true,
+          currency: 'USD',
+          inputPerMtok: 3,
+          outputPerMtok: 9,
+        },
+        { inputPerMtok: 4 },
+        savedBase,
+      ),
+    ).toMatchObject({
+      source: 'user-override',
+      currency: 'USD',
+      inputPerMtok: 4,
+      outputPerMtok: 6,
+      cacheReadPerMtok: 0.2,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 8,
+          outputPerMtok: 12,
+        },
+      ],
+    });
+  });
+
+  it('follows a same-currency remote update that keeps its long-context bands', () => {
+    const savedBase = {
+      currency: 'USD' as const,
+      inputPerMtok: 2,
+      outputPerMtok: 6,
+      cacheReadPerMtok: null,
+      cacheCreatePerMtok: null,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 4,
+          outputPerMtok: 12,
+        },
+      ],
+    };
+    expect(
+      __testing.mergedQuote(
+        { providerId: 'custom', agent: 'codex', modelId: 'model' },
+        {
+          providerId: 'custom',
+          modelId: 'model',
+          source: 'provider-reference',
+          approximate: true,
+          currency: 'USD',
+          inputPerMtok: 3,
+          outputPerMtok: 9,
+          inputTokenPriceBands: [
+            {
+              minInputTokens: 200_001,
+              inputPerMtok: 6,
+              outputPerMtok: 18,
+            },
+          ],
+        },
+        { inputPerMtok: 4 },
+        savedBase,
+      ),
+    ).toMatchObject({
+      source: 'user-override',
+      currency: 'USD',
+      inputPerMtok: 4,
+      outputPerMtok: 9,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 200_001,
+          inputPerMtok: 8,
+          outputPerMtok: 18,
+        },
+      ],
+    });
+  });
+
   it('keeps sparse overrides when the remote reference price disappears', () => {
     const savedBase = {
       currency: 'USD' as const,

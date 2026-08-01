@@ -268,12 +268,19 @@ function mergedQuote(
     : undefined;
   // A sparse numeric patch was entered in the saved base currency. If the remote
   // route later changes currency or loses its reference price, merging it into the
-  // new/empty quote would silently relabel or discard the user's number. Keep using
-  // the saved reference as the merge base until the user accepts/reset the conflict.
+  // new/empty quote would silently relabel or discard the user's number. The same
+  // holds when a same-currency update drops the long-context bands the patch was
+  // saved against (typical of a fidelity downgrade to a band-less fallback catalog):
+  // bands belong to their own snapshot, so keep the whole saved reference as the
+  // merge base — never graft saved bands onto a newer baseline — until the user
+  // accepts/resets the conflict.
   const mergeReference =
     savedBaseQuote &&
     (!reference ||
-      (values.currency === undefined && savedBaseQuote.currency !== reference.currency))
+      (values.currency === undefined &&
+        (savedBaseQuote.currency !== reference.currency ||
+          (savedBaseQuote.inputTokenPriceBands !== undefined &&
+            reference.inputTokenPriceBands === undefined))))
       ? savedBaseQuote
       : reference;
   const currency = values.currency ?? mergeReference?.currency;
