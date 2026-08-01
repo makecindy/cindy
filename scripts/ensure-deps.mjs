@@ -327,7 +327,7 @@ function createElectronInstallEnv() {
 
 export function resolvePnpmInstallInvocation(args, env = process.env, exists = fs.existsSync, options = {}) {
   // npm_execpath 只保证是路径：JS 入口能交给 node，原生二进制发行版必须直接执行，
-  // Windows 的命令包装还得过 shell——判定统一收敛在 resolvePnpmInvocation。
+  // Windows 命令包装通过 cmd.exe/ComSpec 解析 PATH/PATHEXT——判定统一收敛在 resolvePnpmInvocation。
   const invocation = resolvePnpmInvocation(args, {
     npmExecPath: usablePnpmExecPath(env.npm_execpath, exists),
     execPath: options.execPath,
