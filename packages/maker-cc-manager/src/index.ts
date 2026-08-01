@@ -41,6 +41,7 @@ export type {
   HelloParams,
   HelloResult,
   QueryStartParams,
+  QueryToolGuard,
   QueryStartResult,
   QuerySendParams,
   QuerySetModelParams,

@@ -12,13 +12,14 @@
 
 import type { BrowserWindow } from 'electron';
 import type { Notifier, Schedule, ScheduleRun } from '@cindy/maker-scheduler';
-import type { FeishuIM } from '@cindy/im';
+import { stripXdtFileLinks, stripXdtImageLinks, type FeishuIM } from '@cindy/im';
 
 import type { Logger } from '@cindy/maker-scheduler';
 
 import { stripTrailingPathSeparators } from '../../shared/pathText';
 import { showDesktopSessionEvent } from '../notificationService';
 import { getMobileNotifyGeneration, sendMobileSessionNotify } from '../device-link';
+import type { WecomGroupNotificationPublisher } from '../wecomGroupNotification';
 
 export interface DesktopNotifierDeps {
   getMainWindow: () => BrowserWindow | null;
@@ -26,6 +27,7 @@ export interface DesktopNotifierDeps {
   logger: Logger;
   /** Global desktop preference and Agent Island arbitration, evaluated at send time. */
   shouldNotifyDesktop: () => boolean;
+  wecomGroupPublisher?: WecomGroupNotificationPublisher;
 }
 
 export class DesktopNotifier implements Notifier {
@@ -49,10 +51,15 @@ export class DesktopNotifier implements Notifier {
         this.deps.logger.warn?.('feishu notify failed', err);
       }
     }
-    // 手机推送随 schedule 的通知意愿走:desktop / feishu 全关表示用户不想被这个
-    // 调度打扰,mobile 不得绕过(schedule 级暂无独立 mobile 开关,任一通道开启即
-    // 视为允许提醒);是否真的收到仍由手机端注册 token 决定,发送侧防打扰在
-    // device-link 模块收口,失败静默。
+    if (schedule.notify.wecomGroup && this.deps.wecomGroupPublisher) {
+      try {
+        await this.deps.wecomGroupPublisher.publishMarkdown(renderExternalMessage(schedule, run));
+      } catch (err) {
+        this.deps.logger.warn?.('WeCom group notify failed', err);
+      }
+    }
+    // 手机推送只跟随个人通知通道:desktop / feishu 全关表示用户不想被这个调度
+    // 单独打扰。wecomGroup 是共享群通知,不能隐式开启个人移动推送。
     if (run.sessionId && (schedule.notify.desktop || schedule.notify.feishu)) {
       try {
         // 正文带运行结果摘要(与飞书卡片同源素材):成功给 resultText,失败给
@@ -92,7 +99,7 @@ export class DesktopNotifier implements Notifier {
       );
       return;
     }
-    const text = renderFeishuMessage(schedule, run);
+    const text = renderExternalMessage(schedule, run);
     try {
       await this.deps.feishuIm.sendMarkdownText(ownerOpenId, text);
     } catch (err) {
@@ -109,7 +116,7 @@ export class DesktopNotifier implements Notifier {
 }
 
 /**
- * 把 ScheduleRun 渲染成飞书 lark_md 卡片文案。
+ * 把 ScheduleRun 渲染成外部通知通用文案。
  *
  * 视觉布局（从上到下）:
  *   1. 状态标题 — `<emoji> <schedule name>` 加粗,emoji 据 status 区分
@@ -117,11 +124,11 @@ export class DesktopNotifier implements Notifier {
  *   3. 元信息 — 时间 · 耗时 · agent · 工作目录(短)
  *
  * 格式约束:
- *   - 用 `**bold**`、列表、emoji,这些 lark_md(div tag) 都支持
- *   - URL 直接写,飞书自动识别成可点击链接
- *   - 不要带 `code` (cards.ts 里 stripInlineCode 会把 backtick 整对剥掉)
+ *   - 仅使用飞书与企微群消息共同支持的 Markdown 子集：`**bold**`、列表、emoji
+ *   - URL 直接写，由各渠道按自身能力识别
+ *   - 不使用行内 code，避免渠道渲染与清洗规则产生差异
  */
-function renderFeishuMessage(schedule: Schedule, run: ScheduleRun): string {
+function renderExternalMessage(schedule: Schedule, run: ScheduleRun): string {
   const lines: string[] = [`${statusEmoji(run.status)} **${schedule.name}**`];
 
   if (run.status === 'failed' && run.errorMsg) {
@@ -132,7 +139,8 @@ function renderFeishuMessage(schedule: Schedule, run: ScheduleRun): string {
     // 完整内容用户可点 "Open session" 看。上限 6000:多 PR 审查汇总这类逐行带
     // markdown 链接的正文 1500 会拦腰截断;6000 即使全 CJK(~18KB UTF-8)也在
     // 飞书互动卡片 30KB 体积上限内。
-    lines.push('', truncate(run.resultText, 6000));
+    const safeResultText = stripXdtFileLinks(stripXdtImageLinks(run.resultText)).trim();
+    if (safeResultText) lines.push('', truncate(safeResultText, 6000));
   }
 
   // ── 元信息行（时间 / 耗时 / agent / cwd）────────────────────────────────

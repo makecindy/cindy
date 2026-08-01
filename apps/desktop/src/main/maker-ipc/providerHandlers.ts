@@ -26,6 +26,12 @@ import {
 
 import type { LocalCliDetection } from '../../shared/localCliDetect.js';
 import { isIpcError } from '../../shared/ipc-errors.js';
+import type {
+  ModelPriceOverrideDesiredQuote,
+  ModelPriceOverrideTarget,
+  ModelPriceOverrideView,
+} from '../../shared/modelPriceOverride.js';
+import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
@@ -279,6 +285,16 @@ export interface ProviderHandlerDeps {
    * 可选:未注入(单测最小桩)= 不做归属校验。
    */
   currentOwnerId?(): string | null;
+  /** Active account ledger currency; used to reject unsupported reverse-FX overrides. */
+  getLedgerCurrency(): MoneyCurrency;
+  readModelPriceOverride(target: ModelPriceOverrideTarget): ModelPriceOverrideView;
+  writeModelPriceOverride(
+    target: ModelPriceOverrideTarget,
+    desired: ModelPriceOverrideDesiredQuote,
+  ): void;
+  clearModelPriceOverride(target: ModelPriceOverrideTarget): void;
+  stageClearProviderModelPriceOverrides?(providerId: string): () => boolean;
+  broadcastPricingChanged(): void;
 }
 
 /** 校验 PROVIDER_TEST_CONNECTION 入参形状（确定性代码校验，非法直接 INVALID_PARAMS）。 */
@@ -802,6 +818,146 @@ export function registerProviderHandlers(
     return enqueueDisableWrite(run);
   });
 
+  const parsePriceTarget = (value: unknown): ModelPriceOverrideTarget => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', 'price override target must be an object');
+    }
+    const target = value as Record<string, unknown>;
+    if (
+      typeof target.providerId !== 'string' ||
+      target.providerId.length === 0 ||
+      target.providerId.length > MAX_DISABLE_ID_LENGTH ||
+      !VALID_AGENTS.includes(String(target.agent)) ||
+      typeof target.modelId !== 'string' ||
+      target.modelId.length === 0 ||
+      target.modelId.length > MAX_DISABLE_ID_LENGTH
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid price override target');
+    }
+    return {
+      providerId: target.providerId,
+      agent: target.agent as AgentKind,
+      modelId: target.modelId,
+    };
+  };
+  const parseDesiredPrice = (value: unknown): ModelPriceOverrideDesiredQuote => {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) {
+      throwIpcError('INVALID_PARAMS', 'price override quote must be an object');
+    }
+    const quote = value as Record<string, unknown>;
+    const validNumber = (candidate: unknown): candidate is number =>
+      typeof candidate === 'number' && Number.isFinite(candidate) && candidate >= 0;
+    const validNullableNumber = (candidate: unknown): boolean =>
+      candidate === undefined || candidate === null || validNumber(candidate);
+    if (
+      (quote.currency !== 'USD' && quote.currency !== 'CNY') ||
+      !validNumber(quote.inputPerMtok) ||
+      !validNumber(quote.outputPerMtok) ||
+      !validNullableNumber(quote.cacheReadPerMtok) ||
+      !validNullableNumber(quote.cacheCreatePerMtok)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'invalid price override quote');
+    }
+    return {
+      currency: quote.currency,
+      inputPerMtok: quote.inputPerMtok,
+      outputPerMtok: quote.outputPerMtok,
+      ...(quote.cacheReadPerMtok === null || validNumber(quote.cacheReadPerMtok)
+        ? { cacheReadPerMtok: quote.cacheReadPerMtok }
+        : {}),
+      ...(quote.cacheCreatePerMtok === null || validNumber(quote.cacheCreatePerMtok)
+        ? { cacheCreatePerMtok: quote.cacheCreatePerMtok }
+        : {}),
+    };
+  };
+  const requirePriceTargetModel = async (
+    target: ModelPriceOverrideTarget,
+  ): Promise<ProviderView> => {
+    const provider = (await deps.listProviders({ allowSideEffects: false }))
+      .find((candidate) => candidate.id === target.providerId);
+    const known = provider?.models[target.agent]?.some((model) => model.id === target.modelId);
+    if (!provider || !known) {
+      throwIpcError('INVALID_PARAMS', 'price override target is not in the active catalog');
+    }
+    return provider;
+  };
+  let priceMutationTail: Promise<unknown> = Promise.resolve();
+  const enqueuePriceMutation = <T,>(run: () => T | Promise<T>): Promise<T> => {
+    const result = priceMutationTail.catch(() => undefined).then(run);
+    priceMutationTail = result.then(
+      () => undefined,
+      () => undefined,
+    );
+    return result;
+  };
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_GET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(input);
+    await requirePriceTargetModel(target);
+    return deps.readModelPriceOverride(target);
+  });
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_SET, async (event, targetInput: unknown, quoteInput: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(targetInput);
+    const desired = parseDesiredPrice(quoteInput);
+    if (target.providerId === 'xd') {
+      throwIpcError('INVALID_PARAMS', 'Cindy AI Gateway pricing is server-controlled');
+    }
+    if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
+      throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
+    }
+    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    return withProviderConfigMutation(target.providerId, () =>
+      enqueuePriceMutation(async () => {
+        await requirePriceTargetModel(target);
+        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
+          throwIpcError('INTERNAL', 'active account changed before persisting price override');
+        }
+        try {
+          deps.writeModelPriceOverride(target, desired);
+        } catch (err) {
+          log.warn('model price override persist failed', {
+            providerId: target.providerId,
+            agent: target.agent,
+            modelId: target.modelId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError('INTERNAL', 'failed to persist model price override');
+        }
+        deps.broadcastPricingChanged();
+        return deps.readModelPriceOverride(target);
+      }),
+    );
+  });
+
+  registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    const target = parsePriceTarget(input);
+    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    return withProviderConfigMutation(target.providerId, () =>
+      enqueuePriceMutation(async () => {
+        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
+          throwIpcError('INTERNAL', 'active account changed before resetting price override');
+        }
+        try {
+          deps.clearModelPriceOverride(target);
+        } catch (err) {
+          log.warn('model price override reset failed', {
+            providerId: target.providerId,
+            agent: target.agent,
+            modelId: target.modelId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError('INTERNAL', 'failed to reset model price override');
+        }
+        deps.broadcastPricingChanged();
+        return deps.readModelPriceOverride(target);
+      }),
+    );
+  });
+
   registry.handle(MAKER_INVOKE.PROVIDER_CUSTOM_CREATE, async (event, input: unknown, keyInput?: unknown) => {
     assertTrustedProviderMutationSender(event);
     const v = validateCustomProviderConfig(input);
@@ -921,6 +1077,7 @@ export function registerProviderHandlers(
         // OAuth 形态自定义供应商的凭证 blob 一并清掉（apiKey 形态无 blob，幂等无害）。
         let restoreOAuthCredentials: (() => boolean) | null = null;
         let restoreDisableOverrides: (() => boolean) | null = null;
+        let restorePriceOverrides: (() => boolean) | null = null;
         // 整个删除事务(清 override → 删凭证 → 删配置 → 刷目录)在 disable 写队列**内**
         // 执行,持队列直到 afterChange 刷完 active-catalog:只把清理入队的话,清理落盘
         // 后队列即释放,「删除完成前」的窗口里并发 MODEL_DISABLE_SET 仍能从未刷新的
@@ -935,6 +1092,8 @@ export function registerProviderHandlers(
             // 不再出现「配置删了、override 残留」让同 id 重建复活旧停用状态。
             restoreDisableOverrides =
               deps.stageClearProviderDisableOverrides?.(providerId) ?? null;
+            restorePriceOverrides =
+              deps.stageClearProviderModelPriceOverrides?.(providerId) ?? null;
             restoreOAuthCredentials = deps.removeOAuthCredentials(providerId);
             if (!restoreOAuthCredentials) {
               throwIpcError('INTERNAL', 'failed to remove existing OAuth credentials');
@@ -942,9 +1101,10 @@ export function registerProviderHandlers(
             await deleteCustomProvider(providerId);
           } catch (err) {
             const overridesRestored = !restoreDisableOverrides || restoreDisableOverrides();
+            const pricesRestored = !restorePriceOverrides || restorePriceOverrides();
             const oauthRestored = !restoreOAuthCredentials || restoreOAuthCredentials();
             const keysRestored = restoreProviderKeys(providerId, keySnapshots);
-            if (!oauthRestored || !keysRestored || !overridesRestored) {
+            if (!oauthRestored || !keysRestored || !overridesRestored || !pricesRestored) {
               throwIpcError(
                 'INTERNAL',
                 'provider deletion failed and existing credentials could not be restored',
@@ -956,6 +1116,7 @@ export function registerProviderHandlers(
           // provider。afterChange 失败时配置已删,凭证/override 不回写(与改动前
           // 语义一致 —— 恢复只覆盖删除本身失败的场景)。
           await afterChange();
+          deps.broadcastPricingChanged();
         });
         return { ok: true };
       } finally {

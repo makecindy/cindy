@@ -18,6 +18,12 @@
 import { BrowserWindow, ipcMain } from 'electron';
 
 import { createLogger } from '../logger.js';
+import {
+  broadcastContactsNow,
+  getContactsDeviceSyncStatus,
+  onContactsDeviceSyncStatusChanged,
+  setContactsDeviceSyncEnabled,
+} from '../contacts-sync/driver.js';
 
 import {
   ContactsError,
@@ -35,16 +41,22 @@ import {
   readContactsSettingsState,
   writeContactsEnabled,
 } from '../maker-host/contacts-settings-store.js';
+import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { isIpcError, type IpcErrorCode } from '../../shared/ipc-errors.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 
-export const CONTACTS_CHANGED_CHANNEL = 'maker:contacts:changed';
+export {
+  CONTACTS_CHANGED_CHANNEL,
+  broadcastContactsChanged,
+} from '../maker-host/contacts-change-broadcast.js';
+export const CONTACTS_SYNC_STATUS_CHANGED_CHANNEL = 'maker:contacts:sync:status-changed';
 
 const log = createLogger('contactsIpc');
 
 export interface ContactsIpcDeps {
   getManager: () => MakerContactsManager;
   readSettingsState: () => { value: { enabled: boolean }; isCustomized: boolean };
-  writeEnabled: (enabled: boolean) => void;
+  writeEnabled: (enabled: boolean) => void | Promise<void>;
   broadcastChanged: () => void;
   /**
    * 开关值变化后失效 Codex 本地 app-server(可选, 生产注入; 测试可省略)。
@@ -59,6 +71,9 @@ export interface ContactsIpcDeps {
    * 返回给 renderer 提示"对 Codex 延迟生效", 静默成功会掩盖开关与 Codex 实际状态失同步。
    */
   invalidateCodexMcp?: () => Promise<void>;
+  readDeviceSyncStatus?: () => unknown | Promise<unknown>;
+  setDeviceSyncEnabled?: (enabled: boolean) => Promise<void>;
+  syncNow?: () => Promise<void>;
 }
 
 /**
@@ -110,7 +125,8 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       return { enabled: state.value.enabled, isCustomized: state.isCustomized };
     },
     [MAKER_INVOKE.CONTACTS_SETTINGS_SET]: async (enabled) => {
-      if (typeof enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
+      if (typeof enabled !== 'boolean')
+        throwIpcError('INVALID_PARAMS', 'enabled required (boolean)');
       const changed = deps.readSettingsState().value.enabled !== enabled;
       // Claude 侧生效点在下次 session start(mcp provider isEnabled 现读); Codex 的
       // MCP flags 冻在 codexEnvironment 的 cached spawn 配置里, 值真变化时还要失效
@@ -118,7 +134,7 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       // 不回滚开关(Claude 侧已即时生效), 但必须把 deferred 状态浮给 renderer —
       // 静默报成功会让用户以为 Codex 也已生效, 实际旧注册要等重启才消失。
       try {
-        deps.writeEnabled(enabled);
+        await deps.writeEnabled(enabled);
       } catch (err) {
         // 落盘失败(userData 只读/磁盘满)按规则 13 走 [CODE] 协议 — 裸 Error 会让
         // renderer 的 extractIpcError 解不出码, 只能给 generic 文案
@@ -134,21 +150,59 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       }
       return { enabled, codexMcpRefreshed };
     },
+    [MAKER_INVOKE.CONTACTS_SYNC_STATUS_GET]: async () => {
+      if (!deps.readDeviceSyncStatus) throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      return await deps.readDeviceSyncStatus();
+    },
+    [MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]: async (enabled) => {
+      if (typeof enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'device sync enabled required (boolean)');
+      }
+      if (!deps.setDeviceSyncEnabled || !deps.readDeviceSyncStatus) {
+        throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      }
+      try {
+        await deps.setDeviceSyncEnabled(enabled);
+        return await deps.readDeviceSyncStatus();
+      } catch (err) {
+        rethrowAsIpcError(err);
+      }
+    },
+    [MAKER_INVOKE.CONTACTS_SYNC_NOW]: async () => {
+      if (!deps.syncNow || !deps.readDeviceSyncStatus) {
+        throwIpcError('INTERNAL', 'contacts sync is unavailable');
+      }
+      try {
+        await deps.syncNow();
+        return await deps.readDeviceSyncStatus();
+      } catch (err) {
+        rethrowAsIpcError(err);
+      }
+    },
 
     [MAKER_INVOKE.CONTACTS_LIST]: async (opts) =>
-      query(() => store().listContacts((opts ?? {}) as Parameters<ReturnType<typeof store>['listContacts']>[0])),
-    [MAKER_INVOKE.CONTACTS_GET]: async (id) => query(() => store().getContact(requireString(id, 'id'))),
+      query(() =>
+        store().listContacts(
+          (opts ?? {}) as Parameters<ReturnType<typeof store>['listContacts']>[0],
+        ),
+      ),
+    [MAKER_INVOKE.CONTACTS_GET]: async (id) =>
+      query(() => store().getContact(requireString(id, 'id'))),
     [MAKER_INVOKE.CONTACTS_CREATE]: async (input) =>
       mutate(() =>
         store().createContact(
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['createContact']>[0],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['createContact']
+          >[0],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_UPDATE]: async (id, patch) =>
       mutate(() =>
         store().updateContact(
           requireString(id, 'id'),
-          requireObject(patch, 'patch') as unknown as Parameters<ReturnType<typeof store>['updateContact']>[1],
+          requireObject(patch, 'patch') as unknown as Parameters<
+            ReturnType<typeof store>['updateContact']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_DELETE]: async (id) =>
@@ -157,7 +211,9 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
         return { deleted: true };
       }),
     [MAKER_INVOKE.CONTACTS_MERGE]: async (targetId, sourceId) =>
-      mutate(() => store().merge(requireString(targetId, 'targetId'), requireString(sourceId, 'sourceId'))),
+      mutate(() =>
+        store().merge(requireString(targetId, 'targetId'), requireString(sourceId, 'sourceId')),
+      ),
     [MAKER_INVOKE.CONTACTS_RESOLVE]: async (value, opts) =>
       query(() =>
         store().resolve(
@@ -178,7 +234,9 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() =>
         store().addIdentity(
           requireString(contactId, 'contactId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['addIdentity']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['addIdentity']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_REMOVE_IDENTITY]: async (identityId) =>
@@ -190,14 +248,18 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() =>
         store().appendEvent(
           requireString(contactId, 'contactId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['appendEvent']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['appendEvent']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_ADD_RELATION]: async (fromId, input) =>
       mutate(() =>
         store().addRelation(
           requireString(fromId, 'fromId'),
-          requireObject(input, 'input') as unknown as Parameters<ReturnType<typeof store>['addRelation']>[1],
+          requireObject(input, 'input') as unknown as Parameters<
+            ReturnType<typeof store>['addRelation']
+          >[1],
         ),
       ),
     [MAKER_INVOKE.CONTACTS_REMOVE_RELATION]: async (relationId) =>
@@ -235,8 +297,12 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
       mutate(() => {
         const gid = requireString(groupId, 'groupId');
         const p = requireObject(payload, 'payload') as { add?: unknown; remove?: unknown };
-        const add = Array.isArray(p.add) ? p.add.filter((x): x is string => typeof x === 'string') : [];
-        const remove = Array.isArray(p.remove) ? p.remove.filter((x): x is string => typeof x === 'string') : [];
+        const add = Array.isArray(p.add)
+          ? p.add.filter((x): x is string => typeof x === 'string')
+          : [];
+        const remove = Array.isArray(p.remove)
+          ? p.remove.filter((x): x is string => typeof x === 'string')
+          : [];
         if (add.length > 0) store().addToGroup(gid, add);
         if (remove.length > 0) store().removeFromGroup(gid, remove);
         return { added: add.length, removed: remove.length };
@@ -263,10 +329,11 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
   };
 }
 
-/** 向所有窗口广播通讯录变更(IPC mutate 与 MCP 写类工具共用 — agent 直写 store 不经 IPC 层) */
-export function broadcastContactsChanged(): void {
+function broadcastContactsSyncStatus(status: unknown): void {
   for (const win of BrowserWindow.getAllWindows()) {
-    if (!win.isDestroyed()) win.webContents.send(CONTACTS_CHANGED_CHANNEL);
+    if (!win.isDestroyed()) {
+      win.webContents.send(CONTACTS_SYNC_STATUS_CHANGED_CHANNEL, status);
+    }
   }
 }
 
@@ -277,6 +344,13 @@ export function registerContactsIpc(): void {
     readSettingsState: readContactsSettingsState,
     writeEnabled: writeContactsEnabled,
     broadcastChanged: broadcastContactsChanged,
+    readDeviceSyncStatus: async () => getContactsDeviceSyncStatus(),
+    setDeviceSyncEnabled: async (enabled) => {
+      await setContactsDeviceSyncEnabled(enabled);
+    },
+    syncNow: async () => {
+      await broadcastContactsNow(true);
+    },
     // 与 register.ts 自定义 MCP CRUD 的 invalidateCodex 同款语义与顺序: 先 dispose
     // app-server(含 busy 检查), 成功后再关 bridge/清 cache —— 若先关 bridge 而 dispose
     // 失败(busy), running 会话的 mcp_servers URL 会指向已停的 bridge。
@@ -290,23 +364,34 @@ export function registerContactsIpc(): void {
         const { restartCodexAfterAuthModeChange } = await import('../maker-host/index.js');
         await restartCodexAfterAuthModeChange();
       } catch (err) {
-        log.warn('restartCodexAfterAuthModeChange on contacts toggle failed — codex keeps stale MCP config until app restart or re-toggle', {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        log.warn(
+          'restartCodexAfterAuthModeChange on contacts toggle failed — codex keeps stale MCP config until app restart or re-toggle',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
         throw err;
       }
       try {
-        const { shutdownCodexEnvironment } = await import('../mcp-integrations/codexEnvironment.js');
+        const { shutdownCodexEnvironment } =
+          await import('../mcp-integrations/codexEnvironment.js');
         await shutdownCodexEnvironment();
       } catch (err) {
-        log.warn('shutdownCodexEnvironment on contacts toggle failed — cached spawn config still stale', {
-          error: err instanceof Error ? err.message : String(err),
-        });
+        log.warn(
+          'shutdownCodexEnvironment on contacts toggle failed — cached spawn config still stale',
+          {
+            error: err instanceof Error ? err.message : String(err),
+          },
+        );
         throw err;
       }
     },
   });
   for (const [channel, handler] of Object.entries(handlers)) {
-    ipcMain.handle(channel, (_e, ...args) => handler(...args));
+    ipcMain.handle(channel, (event, ...args) => {
+      assertTrustedAppRendererEvent(event);
+      return handler(...args);
+    });
   }
+  onContactsDeviceSyncStatusChanged(broadcastContactsSyncStatus);
 }

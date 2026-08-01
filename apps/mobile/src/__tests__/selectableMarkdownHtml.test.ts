@@ -121,3 +121,87 @@ describe('buildSelectableMarkdownHtml 代码块内不套行内 code 装饰', () 
     expect(html).toContain('<code>');
   });
 });
+
+describe('buildSelectableMarkdownHtml 本地路径不出死链', () => {
+  // 本模块只服务文件阅读器 WebView,而 MarkdownFileReader 的 interceptNavigation
+  // 只放行 http(s)、其余一律拦下 —— 本地路径若渲染成 <a> 就是「蓝色但点不动」的死链。
+  // 阅读器里没有 chip / 远端 stat 基础设施,所以按纯文本呈现(与原生侧「未点亮 →
+  // 纯文本」同语义)。
+
+  it('markdown 形态的本地路径链接渲染成纯文本,不出 <a>', () => {
+    const html = buildSelectableMarkdownHtml('见 [README.md](/Users/me/proj/README.md:17) 补充');
+    expect(html).toContain('README.md');
+    expect(html).not.toContain('<a href="/Users/me/proj/README.md:17"');
+    expect(html).not.toContain('/Users/me/proj/README.md');
+  });
+
+  it('正文裸写的本地路径同样是纯文本', () => {
+    const html = buildSelectableMarkdownHtml('见 src/App.tsx 第 20 行');
+    expect(html).toContain('src/App.tsx');
+    expect(html).not.toContain('<a href="src/App.tsx"');
+  });
+
+  it('http(s) 链接仍是可点 <a>(阅读器会交给系统浏览器)', () => {
+    const html = buildSelectableMarkdownHtml('见 [站点](https://example.com/a.ts)');
+    expect(html).toContain('<a href="https://example.com/a.ts">站点</a>');
+  });
+
+  it('会话深链渲染成不可点的 chip:保留 chip 观感,但不是 <a>、也不带 href', () => {
+    const html = buildSelectableMarkdownHtml('[某会话](cindy://session/abc123)');
+    expect(html).toContain('xdt-session-chip');
+    expect(html).toContain('某会话');
+    // 阅读器无 bridge、interceptNavigation 只放行 http(s) → 会话 chip 点不动,
+    // 不该是锚点,更不该把 cindy:// 暴露成 href(PR #1144 review 实捉)。
+    expect(html).not.toContain('cindy://session/abc123');
+    expect(html).not.toMatch(/<a[^>]*xdt-session-chip/);
+  });
+});
+
+describe('阅读器里「有下划线 = 可点」不得出现反例(DESIGN.md §14.5 规则 1)', () => {
+  // 这个面唯一真的可点的是 http(s):MarkdownFileReader.interceptNavigation 只把
+  // http(s) 交给 Linking.openURL,其余导航一律 return false;而且它没有任何
+  // postMessage bridge,所以 chip 类元素的点击也无处可去。
+  // 于是规则在这里的落地是反过来的:**只有 http(s) 能带下划线**。
+  const css = (): string => buildSelectableMarkdownHtml(DOC);
+  const ruleBody = (selector: string): string => {
+    const escaped = selector.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const block = new RegExp(`(?:^|\\n)\\s*${escaped}\\s*\\{([^}]*)\\}`).exec(css());
+    expect(block, `未找到 ${selector} 的样式规则`).not.toBeNull();
+    return block![1];
+  };
+
+  it('外链 a 带常显下划线(它是这个面唯一真能点的东西)', () => {
+    expect(ruleBody('a')).toMatch(/text-decoration:\s*underline/);
+  });
+
+  it('外链 a 必须显式 color: inherit —— 留空会掉回 UA 蓝', () => {
+    // 本文件是手写 CSS 模板,没有 Tailwind preflight 的 `a { color: inherit }` 复位。
+    // 留空时 UA 样式表 `a:link { color: -webkit-link }` 会盖过从 body 继承的颜色,
+    // 外链渲染成浏览器默认蓝 —— 既违反「可点态只多一条下划线」,又不随 light/dark
+    // 适配(PR #1144 review 实捉)。桌面靠 preflight、RN Text 靠天然继承,唯独这里
+    // 需要显式声明。
+    const body = ruleBody('a');
+    expect(body, 'a 缺少显式 color: inherit').toMatch(/color:\s*inherit/);
+    // 也不能写死某个具体色值(那是「除下划线之外还变色」的另一种形式)。
+    expect(body, 'a 不得写死具体颜色').not.toMatch(/color:\s*(#|rgb|hsl)/i);
+  });
+
+  it('点不动的元素一律不带下划线,也不带 pointer', () => {
+    // `img` 是直连图片(![图](https://...)):这个面没有 postMessage bridge、生成的
+    // <img> 也不在链接内,点它毫无响应。上一轮只清了两个 chip、漏了这对称的另一半
+    // (PR #1144 review 实捉),所以它必须和 chip 同列在这个循环里。
+    for (const selector of ['img', '.xdt-image-chip', '.xdt-session-chip']) {
+      const body = ruleBody(selector);
+      expect(body, `${selector} 点不动却带了下划线 —— 会成为「有下划线 = 可点」的反例`)
+        .not.toMatch(/text-decoration:\s*underline/);
+      expect(body, `${selector} 点不动却带了 pointer`).not.toMatch(/cursor:\s*pointer/);
+    }
+  });
+
+  it('本地路径 / mailto 等非 http(s) 目标不出 <a>(不可点就不该是锚点)', () => {
+    expect(buildSelectableMarkdownHtml('见 [README.md](/abs/README.md) 补充'))
+      .not.toMatch(/<a[^>]*README/);
+    expect(buildSelectableMarkdownHtml('[联系](mailto:a@b.com)'))
+      .not.toContain('<a href="mailto:');
+  });
+});

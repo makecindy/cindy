@@ -43,6 +43,7 @@ import { rewriteOutboundMedia } from './outboundMedia';
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
+  stripOutboundSessionReferenceSideChannels,
 } from './outboundSessionReferences';
 import {
   isPlaceholderDeviceName,
@@ -155,21 +156,26 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
+  BACKPRESSURE: 'DEVICE_LINK_NOT_CONNECTED',
 };
 
 /**
  * unsubscribe 失败后是否应**恢复引用重试**。判据是「失败后远端订阅是否仍存活」:
- *  - 仅当链路仍在、只是这一帧 unsubscribe 丢了/超时(INVOKE_TIMEOUT)→ 远端订阅还在 → 恢复,让
+ *  - 链路仍在但这一帧 unsubscribe 丢了/超时(INVOKE_TIMEOUT)，或本地背压在发送前拒绝
+ *    (BACKPRESSURE)→ 远端订阅还在 → 恢复,让
  *    后续 unsubscribe / 窗口销毁重试把它清掉。
  *  - 其它失败(NOT_CONNECTED / LINK_NOT_OPEN / DEVICE_OFFLINE 链路断;ACCESS_REVOKED / REMOTE_DISABLED
  *    被控端已 clearController 清掉本控制端订阅表;CHANNEL_NOT_ALLOWED 老被控端根本不支持该 channel)→
  *    远端无存活订阅可清 → **不恢复**:恢复只会留下永不释放的 phantom ref(阻断别窗口的真实退订 →
  *    被控端对已无 UI 订阅者的 topic 持续推送)。
  * 注:抛出的 DeviceLinkError 只覆盖链路/超时类码;ACCESS_REVOKED / REMOTE_DISABLED 等终态走的是
- * `!result.ok` 结果分支(那里一律不恢复),故本函数只需放行 INVOKE_TIMEOUT。
+ * `!result.ok` 结果分支(那里一律不恢复),故本函数只需放行发送状态不确定/未发送的两类错误。
  */
 function isRetryableUnsubscribeError(err: unknown): boolean {
-  return err instanceof DeviceLinkError && err.code === 'INVOKE_TIMEOUT';
+  return (
+    err instanceof DeviceLinkError
+    && (err.code === 'INVOKE_TIMEOUT' || err.code === 'BACKPRESSURE')
+  );
 }
 
 function rethrowDeviceLinkError(err: unknown): never {
@@ -438,6 +444,22 @@ export async function handleInvoke(
   }
   let callArgs = Array.isArray(args) ? args : [];
 
+  // Resolve controller-relative references first. If the source session is
+  // foreign or unavailable, the rewrite drops only the optional reference
+  // side channel and preserves the raw link text. Recompute the capability
+  // need afterwards so that plain-link fallback also works with older targets.
+  if (deps.rewriteOutboundSessionReferences) {
+    try {
+      callArgs = await deps.rewriteOutboundSessionReferences(channel, callArgs);
+    } catch (err) {
+      throwIpcError(
+        'SESSION_REFERENCE_UNAVAILABLE',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    assertControlTargetEnabled(deps, normalizedDeviceId);
+  }
+
   if (outboundSessionReferencesRequested(channel, callArgs)) {
     let capability: InvokeResultPayload;
     try {
@@ -451,55 +473,43 @@ export async function handleInvoke(
     }
     if (!capability.ok) {
       if (capability.error.code === 'CHANNEL_NOT_ALLOWED') {
-        throwIpcError(
-          'SESSION_REFERENCE_UNSUPPORTED',
-          '目标设备版本不支持会话引用，请升级目标设备后重试',
-        );
-      }
-      if (capability.error.code === 'IPC_ERROR') {
+        log.warn('target does not support session references; sending raw link text', {
+          channel,
+        });
+        callArgs = stripOutboundSessionReferenceSideChannels(channel, callArgs);
+      } else if (capability.error.code === 'IPC_ERROR') {
         throwIpcError(
           'SESSION_REFERENCE_UNAVAILABLE',
-          '目标设备仍在启动，会话引用暂不可用，请稍后重试',
+          '目标设备仍在启动，任务引用暂不可用，请稍后重试',
+        );
+      } else {
+        throwIpcError(
+          DEVICE_LINK_CODE_MAP[capability.error.code] ?? 'INTERNAL',
+          capability.error.message,
         );
       }
-      throwIpcError(
-        DEVICE_LINK_CODE_MAP[capability.error.code] ?? 'INTERNAL',
-        capability.error.message,
-      );
+    } else {
+      const capabilityVersion =
+        capability.result &&
+        typeof capability.result === 'object' &&
+        !Array.isArray(capability.result)
+          ? (capability.result as { version?: unknown }).version
+          : undefined;
+      if (
+        !capability.result ||
+        typeof capability.result !== 'object' ||
+        Array.isArray(capability.result) ||
+        (capability.result as { supported?: unknown }).supported !== true ||
+        typeof capabilityVersion !== 'number' ||
+        !Number.isFinite(capabilityVersion) ||
+        capabilityVersion < 1
+      ) {
+        log.warn('target does not support session references; sending raw link text', {
+          channel,
+        });
+        callArgs = stripOutboundSessionReferenceSideChannels(channel, callArgs);
+      }
     }
-    const capabilityVersion =
-      capability.result &&
-      typeof capability.result === 'object' &&
-      !Array.isArray(capability.result)
-        ? (capability.result as { version?: unknown }).version
-        : undefined;
-    if (
-      !capability.result ||
-      typeof capability.result !== 'object' ||
-      Array.isArray(capability.result) ||
-      (capability.result as { supported?: unknown }).supported !== true ||
-      typeof capabilityVersion !== 'number' ||
-      !Number.isFinite(capabilityVersion) ||
-      capabilityVersion < 1
-    ) {
-      throwIpcError(
-        'SESSION_REFERENCE_UNSUPPORTED',
-        '目标设备版本不支持会话引用，请升级目标设备后重试',
-      );
-    }
-  }
-
-  // 会话引用必须在控制端坐标系解析；放在附件上传前，引用失败时不产生无用 OSS 写入。
-  if (deps.rewriteOutboundSessionReferences) {
-    try {
-      callArgs = await deps.rewriteOutboundSessionReferences(channel, callArgs);
-    } catch (err) {
-      throwIpcError(
-        'SESSION_REFERENCE_UNAVAILABLE',
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    assertControlTargetEnabled(deps, normalizedDeviceId);
   }
 
   // 出方向附件:发往远程前先把本机附件上传 OSS、替换成引用串(bytes 不内联进 relay)。
@@ -607,7 +617,8 @@ export async function handleUnsubscribe(
   try {
     result = await deps.unsubscribe(deviceId, toUnsub);
   } catch (err) {
-    // 仅链路仍在、单帧丢失(INVOKE_TIMEOUT)才恢复引用重试;链路断等其它异常不恢复(见 isRetryableUnsubscribeError)。
+    // 链路仍在但单帧丢失(INVOKE_TIMEOUT)，或发送前被本地背压拒绝(BACKPRESSURE)时，
+    // 恢复引用等待重试；链路断开等其它异常不恢复(见 isRetryableUnsubscribeError)。
     if (isRetryableUnsubscribeError(err)) recordSubscribe(windowId, deviceId, toUnsub);
     rethrowDeviceLinkError(err);
   }

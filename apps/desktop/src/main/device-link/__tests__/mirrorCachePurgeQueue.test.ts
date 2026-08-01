@@ -339,7 +339,7 @@ describe('文件级条目(clearDevice 删不掉时用)', () => {
     const pending = path.join(`${root}.control`, 'pending');
     await fsp.mkdir(cleared, { recursive: true });
     await fsp.mkdir(pending, { recursive: true });
-    // 20 个会话计数 + 20 个墓碑,远超单条目的 key 上限(16)。
+    // 20 个任务计数 + 20 个墓碑,远超单条目的 key 上限(16)。
     for (let i = 0; i < 20; i += 1) {
       await fsp.writeFile(path.join(cleared, `sess-${i}`), '1', 'utf8');
       await fsp.writeFile(path.join(pending, `sess-${i}`), '1', 'utf8');

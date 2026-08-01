@@ -9,6 +9,7 @@
  * 决定（见 draftModelCalibration.test.ts），这里拿不到连接态与来源。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import type { ModelRegistry } from '@cindy/model-providers';
 
 beforeEach(() => {
   vi.resetModules();
@@ -132,8 +133,8 @@ describe('getDefaultModelForVendor', () => {
     // 占位不是「另一份产品默认」，只是目录还没到位时的同值影子。两者漂移就会出现首帧一个
     // 模型、清单到位后换成另一个的跳变。
     //
-    // 只锁 cc：anthropic 的动态发现清单会被 overlayCindyMeta 用目录 sortOrder 覆盖，
-    // 所以 meta 就是 cc tab 排序的权威。codex 侧不能这么锁，理由见下一条。
+    // 只锁 cc：anthropic 的动态发现清单会被 registry 用目录 sortOrder 覆盖，
+    // 所以 registry 就是 cc tab 排序的权威。codex 侧不能这么锁，理由见下一条。
     //
     // 展示名一起锁住：renderer 刻意不 import BUNDLED_CATALOG（会把整份目录 JSON 打进
     // bundle，为一个瞬态 label 不值得），所以 label 只能写在代码里 —— 那就由这条断言保证
@@ -156,7 +157,7 @@ describe('getDefaultModelForVendor', () => {
   it('codex 冷启动占位必须是目录里属 codex tab、默认可见、非折扣组的模型', async () => {
     // 这里刻意**不锁「排序第一」**：codex tab 的 sortOrder 有两个互相矛盾的来源 ——
     //   · ChatGPT 订阅清单来自动态发现，按上游 priority 算（Sol→17、Terra→18、Luna→19）；
-    //   · Cindy AI 网关清单按目录 meta 的静态值（Luna=17、Sol=18、Terra=19）。
+    //   · Cindy AI 网关清单按 registry 的静态值（Luna=17、Sol=18、Terra=19）。
     // 两套顺序对 GPT-5.6 三兄弟正好相反，于是「排序第一」会随用户连的是订阅还是网关而不同。
     // 占位按订阅口径取（校准规则优先订阅供应商），锁死目录静态序会锁成另一个模型。
     // 这个不一致本身是目录数据问题，待产品裁决后再收紧本条断言。
@@ -176,13 +177,26 @@ describe('getDefaultModelForVendor', () => {
 });
 
 interface BundledMetaEntry {
-  agents?: string[];
+  agents?: readonly string[];
   group?: string;
   name?: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
 }
 
-function bundledMeta(catalog: { cindyModelMeta?: unknown }): Record<string, BundledMetaEntry> {
-  return (catalog.cindyModelMeta as { models: Record<string, BundledMetaEntry> }).models;
+function bundledMeta(catalog: { modelRegistry?: ModelRegistry }): Record<string, BundledMetaEntry> {
+  const models: Record<string, BundledMetaEntry> = {};
+  for (const entry of catalog.modelRegistry?.models ?? []) {
+    for (const route of entry.routes) {
+      if (route.providerId !== 'xd') continue;
+      models[route.modelId] = {
+        agents: route.agents,
+        group: entry.group,
+        name: entry.name,
+        sortOrder: entry.sortOrder,
+        defaultEnabled: entry.defaultEnabled,
+      };
+    }
+  }
+  return models;
 }

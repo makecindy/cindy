@@ -7,7 +7,8 @@
  *        - release：优先从区域化 Model Access 公共接口加载，失败时回退旧 OSS 目录。
  *        - dev：关闭联网（与 manifestService 一致），可由 XDT_MODELS_PATH 指向本地文件即时生效。
  *        - env 兜底：XDT_MODELS_URL（完整覆盖 URL）/ XDT_DISABLE_MODELS_FETCH（强制不联网）。
- *      **每进程拉一次、存内存、无 TTL、无磁盘缓存**：远端目录是运行时真源，bundled 是最终兜底。
+ *      **每进程拉一次、存内存、无 TTL**：启动总是先拉远端；失败时才读按端点隔离的
+ *      last-known-good 快照，最后回退 bundled。
  *      启动期（splash）由 bootstrap-electron 在构造 Maker 前 await 一次（见 registerMakerIpcsAfterSplash）。
  *   2. `getDesktopProviderService`：把 active-catalog + 连接状态读取器注入 provider-service。
  *      连接状态直接复用现有凭证存储——XD = 托管 gateway key 是否存在、
@@ -16,6 +17,7 @@
  */
 
 import { app, net } from 'electron';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
@@ -25,6 +27,7 @@ import {
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
+  parseCatalog,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
@@ -38,6 +41,7 @@ import {
   setActiveCatalog,
   setCustomProviders,
   setDiscoveredCodexModels,
+  setModelRegistryFromCatalog,
   setProviderModelsFromCatalog,
 } from './active-catalog.js';
 import {
@@ -89,6 +93,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
+import { broadcastEffectiveModelPricing } from '../usage/modelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -143,9 +148,168 @@ function fetchText(url: string, timeoutMs: number): Promise<string> {
   });
 }
 
-/** 桌面端 CatalogIO —— net + fs 落地（无磁盘缓存：目录每进程拉一次存内存，无需落盘）。 */
+const CATALOG_LKG_VERSION = 2;
+
+interface CatalogLkgEnvelope {
+  version: typeof CATALOG_LKG_VERSION;
+  scopeHash: string;
+  catalog: string;
+}
+
+interface CatalogLkgFileIo {
+  rename(from: string, to: string): Promise<void>;
+  rm(target: string, options: { force: boolean }): Promise<void>;
+}
+
+const catalogLkgWriteTails = new Map<string, Promise<void>>();
+
+function catalogScopeHash(scope: string): string {
+  return createHash('sha256').update(scope).digest('hex');
+}
+
+function catalogLkgPath(scope: string): string {
+  return path.join(
+    app.getPath('userData'),
+    'cache',
+    'model-catalog',
+    `${catalogScopeHash(scope).slice(0, 24)}.json`,
+  );
+}
+
+function catalogLkgEnvelope(scope: string, catalog: string): CatalogLkgEnvelope {
+  return {
+    version: CATALOG_LKG_VERSION,
+    scopeHash: catalogScopeHash(scope),
+    catalog,
+  };
+}
+
+async function readCatalogLkg(scope: string): Promise<string | null> {
+  const file = catalogLkgPath(scope);
+  for (const candidate of [file, `${file}.bak`]) {
+    try {
+      const envelope = JSON.parse(
+        await fsp.readFile(candidate, 'utf8'),
+      ) as Partial<CatalogLkgEnvelope>;
+      return envelope.version === CATALOG_LKG_VERSION &&
+        envelope.scopeHash === catalogScopeHash(scope) &&
+        typeof envelope.catalog === 'string'
+        ? envelope.catalog
+        : null;
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') continue;
+      throw err;
+    }
+  }
+  return null;
+}
+
+/**
+ * Replace an existing LKG without depending on POSIX rename-overwrite semantics. Windows may
+ * reject that operation while the destination exists, so preserve the prior snapshot until the
+ * new file is in place and restore it if the second rename fails.
+ */
+async function replaceCatalogLkgFile(
+  temporary: string,
+  file: string,
+  fileIo: CatalogLkgFileIo = fsp,
+): Promise<void> {
+  try {
+    await fileIo.rename(temporary, file);
+    await fileIo.rm(`${file}.bak`, { force: true }).catch(() => undefined);
+    return;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY' && code !== 'EEXIST') throw err;
+  }
+
+  const backup = `${file}.bak`;
+  await fileIo.rm(backup, { force: true }).catch(() => undefined);
+  let preservedExisting = false;
+  try {
+    await fileIo.rename(file, backup);
+    preservedExisting = true;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+  }
+  try {
+    await fileIo.rename(temporary, file);
+  } catch (err) {
+    if (preservedExisting) {
+      await fileIo.rename(backup, file).catch(() => undefined);
+    }
+    throw err;
+  }
+  if (preservedExisting) {
+    await fileIo.rm(backup, { force: true }).catch(() => undefined);
+  }
+}
+
+function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
+  return `${file}.${process.pid}.${nonce}.tmp`;
+}
+
+/** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
+async function serializeCatalogLkgWrite<T>(
+  file: string,
+  write: () => Promise<T>,
+): Promise<T> {
+  const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(write);
+  const tail = current.then(
+    () => undefined,
+    () => undefined,
+  );
+  catalogLkgWriteTails.set(file, tail);
+  try {
+    return await current;
+  } finally {
+    if (catalogLkgWriteTails.get(file) === tail) catalogLkgWriteTails.delete(file);
+  }
+}
+
+function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
+  if (current === null) return incoming;
+  try {
+    const incomingUpdatedAt = parseCatalog(incoming).modelRegistry?.updatedAt;
+    const currentUpdatedAt = parseCatalog(current).modelRegistry?.updatedAt;
+    const incomingRevision = incomingUpdatedAt ? Date.parse(incomingUpdatedAt) : Number.NaN;
+    const currentRevision = currentUpdatedAt ? Date.parse(currentUpdatedAt) : Number.NaN;
+    if (
+      Number.isFinite(currentRevision) &&
+      (!Number.isFinite(incomingRevision) || currentRevision > incomingRevision)
+    ) {
+      return current;
+    }
+  } catch {
+    // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
+  }
+  return incoming;
+}
+
+async function writeCatalogLkg(scope: string, catalog: string): Promise<string> {
+  const file = catalogLkgPath(scope);
+  return serializeCatalogLkgWrite(file, async () => {
+    const selected = selectCatalogLkgSnapshot(catalog, await readCatalogLkg(scope));
+    if (selected !== catalog) return selected;
+    const temporary = catalogLkgTemporaryPath(file);
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const envelope = catalogLkgEnvelope(scope, selected);
+    await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
+    try {
+      await replaceCatalogLkgFile(temporary, file);
+    } finally {
+      await fsp.rm(temporary, { force: true }).catch(() => undefined);
+    }
+    return selected;
+  });
+}
+
+/** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
 const io: CatalogIO = {
   fetchText,
+  readCache: readCatalogLkg,
+  writeCache: writeCatalogLkg,
   async readFile(p) {
     try {
       return await fsp.readFile(p, 'utf-8');
@@ -166,16 +330,30 @@ const io: CatalogIO = {
  */
 function buildSource(): CatalogSourceConfig {
   const dev = isDev();
+  const explicitUrl = process.env.XDT_MODELS_URL;
   const baseUrl = dev ? undefined : getClientEndpoint('modelAccessApiBaseUrl');
   const usesBuildRealm = !dev && baseUrl === getBuildClientEndpoint('modelAccessApiBaseUrl');
   return {
-    url: process.env.XDT_MODELS_URL,
+    url: explicitUrl,
     localPath: process.env.XDT_MODELS_PATH,
     baseUrl,
     fallbackBaseUrl: dev || !usesBuildRealm ? undefined : getBaseUrl(),
     remoteBudgetMs: DEFAULT_REMOTE_CATALOG_BUDGET_MS,
-    disableFetch: dev || process.env.XDT_DISABLE_MODELS_FETCH === '1',
+    disableFetch: shouldDisableCatalogFetch(
+      dev,
+      explicitUrl,
+      process.env.XDT_DISABLE_MODELS_FETCH === '1',
+    ),
   };
+}
+
+/** dev 缺省禁网；显式 URL 是唯一远端调试入口，强制禁网始终拥有最高优先级。 */
+export function shouldDisableCatalogFetch(
+  dev: boolean,
+  explicitUrl: string | undefined,
+  forcedDisabled: boolean,
+): boolean {
+  return forcedDisabled || (dev && !explicitUrl?.trim());
 }
 
 function catalogSourceKey(source: CatalogSourceConfig): string {
@@ -189,8 +367,8 @@ function catalogSourceKey(source: CatalogSourceConfig): string {
 }
 
 /**
- * 一次性清理旧版本遗留的目录磁盘缓存（provider-catalog-cache.json + .tmp）。
- * 现版本目录每进程拉一次存内存、不落盘，这两个文件不再被读写，纯属历史孤儿。
+ * 一次性清理旧版本遗留的未分 scope 目录缓存（provider-catalog-cache.json + .tmp）。
+ * 新版 LKG 使用 cache/model-catalog/<scope-hash>.json，不读取这两个历史文件。
  * best-effort：不存在 / 删除失败都静默忽略（fsp.rm force 不因 ENOENT 抛），绝不阻塞或抛。
  */
 async function cleanupLegacyCatalogCache(): Promise<void> {
@@ -206,7 +384,10 @@ async function cleanupLegacyCatalogCache(): Promise<void> {
 
 let activeLoaded = false;
 let activeInflight: Promise<Catalog> | null = null;
-let catalogRefreshInflight: Promise<Catalog> | null = null;
+let catalogRefreshInflight: {
+  sourceKey: string;
+  promise: Promise<Catalog>;
+} | null = null;
 let activeCatalogSourceKey: string | null = null;
 let endpointReloadGeneration = 0;
 let endpointReloadInflight: {
@@ -273,6 +454,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
         setActiveCatalog(catalog);
+        broadcastEffectiveModelPricing();
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
         try {
@@ -319,6 +501,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
   setActiveCatalog(BUNDLED_CATALOG);
+  broadcastEffectiveModelPricing();
 
   const flight = loadCatalog(source, io)
     .then((catalog) => {
@@ -330,6 +513,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
       }
       activeCatalogSourceKey = sourceKey;
       setActiveCatalog(catalog);
+      broadcastEffectiveModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {
@@ -342,25 +526,53 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 }
 
 /**
- * 手动重载 xAI 模型目录。先确保启动期动态发现已完成，再复用同一 `loadCatalog`
- * 源选择与 bundled fallback；只投影 xAI 的静态模型列表，当前 routing/auth 以及其它
- * provider 全部保持不变，避免活跃 turn 中途被整份远端目录切换路由。
+ * 手动重载 xAI 模型目录与统一 modelRegistry。先确保启动期动态发现已完成，再复用同一
+ * `loadCatalog` 源选择与 bundled fallback；xAI 只投影静态模型列表，当前 routing/auth
+ * 以及其它 provider 保持不变；modelRegistry 仅接受不旧于当前版本的快照。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
-  if (catalogRefreshInflight) return catalogRefreshInflight;
-  const flight = loadCatalogWithSource(buildSource(), io)
+  const sourceConfig = buildSource();
+  const sourceKey = catalogSourceKey(sourceConfig);
+  if (catalogRefreshInflight?.sourceKey === sourceKey) {
+    return catalogRefreshInflight.promise;
+  }
+  const generation = endpointReloadGeneration;
+  const flight = loadCatalogWithSource(sourceConfig, io)
     .then(({ catalog, source }) => {
       if (source === 'bundled') {
         throw new Error('catalog refresh exhausted configured sources; keeping current snapshot');
       }
+      if (
+        endpointReloadGeneration !== generation ||
+        activeCatalogSourceKey !== sourceKey ||
+        catalogSourceKey(buildSource()) !== sourceKey
+      ) {
+        return getActiveCatalog();
+      }
+      const currentRegistry = getActiveCatalog().modelRegistry;
+      const incomingRegistry = catalog.modelRegistry;
+      if (
+        currentRegistry &&
+        incomingRegistry &&
+        incomingRegistry.updatedAt < currentRegistry.updatedAt
+      ) {
+        return getActiveCatalog();
+      }
       setProviderModelsFromCatalog('xai', catalog);
+      if (
+        incomingRegistry &&
+        (!currentRegistry || incomingRegistry.updatedAt >= currentRegistry.updatedAt)
+      ) {
+        setModelRegistryFromCatalog(catalog);
+      }
+      broadcastEffectiveModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {
-      if (catalogRefreshInflight === flight) catalogRefreshInflight = null;
+      if (catalogRefreshInflight?.promise === flight) catalogRefreshInflight = null;
     });
-  catalogRefreshInflight = flight;
+  catalogRefreshInflight = { sourceKey, promise: flight };
   return flight;
 }
 
@@ -544,3 +756,14 @@ export function getDesktopProviderService(): ProviderService {
   });
   return singleton;
 }
+
+export const __testing = {
+  catalogLkgEnvelope,
+  catalogLkgPath,
+  catalogLkgTemporaryPath,
+  readCatalogLkg,
+  replaceCatalogLkgFile,
+  selectCatalogLkgSnapshot,
+  serializeCatalogLkgWrite,
+  writeCatalogLkg,
+};

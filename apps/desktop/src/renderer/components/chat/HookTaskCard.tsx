@@ -15,6 +15,7 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 import { Collapse } from '@/components/ui/collapse';
 import SlackIcon from './SlackIcon';
+import XIcon from './XIcon';
 
 interface ThreadContextEntry {
   author: string;
@@ -35,6 +36,8 @@ function ImIcon({ im }: { im: string }) {
       return <SlackIcon className="w-[14px] h-[14px] shrink-0 text-[var(--text-primary)]" />;
     case 'telegram':
       return <Send size={14} strokeWidth={1.75} className="shrink-0 text-[var(--text-primary)]" />;
+    case 'x':
+      return <XIcon className="w-[14px] h-[14px] shrink-0 text-[var(--text-primary)]" />;
     default:
       return <MessageSquare size={14} strokeWidth={1.75} className="shrink-0 text-[var(--text-primary)]" />;
   }
@@ -46,6 +49,8 @@ function imLabel(im: string): string {
       return 'Slack';
     case 'telegram':
       return 'Telegram';
+    case 'x':
+      return 'X';
     case 'feishu':
       return 'Feishu';
     default:

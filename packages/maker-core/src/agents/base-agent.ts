@@ -28,6 +28,7 @@ import {
 } from '../types/permissions.js';
 import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
 import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
+import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
 import type { ContactsPromptState } from '../contacts/system-prompt.js';
@@ -61,6 +62,7 @@ import type {
   ListCustomizationsResult,
 } from '../types/customizations.js';
 import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
+import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -189,6 +191,17 @@ export interface AgentDeps {
   capabilityAdditions?: AgentCapabilityAdditions;
 
   /**
+   * Host-owned arbitration for capabilities that overlap with harness-native
+   * plugins, skills, MCP servers, apps, or tools.
+   *
+   * Each harness adapter translates the neutral directives it understands and
+   * leaves unsupported directives untouched. Keeping this out of AgentKind
+   * conditionals lets a future harness add one adapter without changing the
+   * product policy.
+   */
+  capabilityRouting?: CapabilityRoutingPolicy;
+
+  /**
    * 解析某条**具体路由**上该模型已核实的上下文窗口上限（host 注入）；没有则返回 null。
    *
    * 用于把上游上报的窗口收敛到真实上限：app-server 对网关路由的模型常报**基础模型**的窗口
@@ -259,18 +272,19 @@ export interface AgentDeps {
     models: readonly CodexModelListItem[],
   ) => void | Promise<void>;
 
-  /**
-   * Host-owned Auto permission fallback. A vendor reviewer timeout/unavailable
-   * result has already blocked the current action; the host persists this session
-   * from Auto to Ask and broadcasts the selector/toast update. Fire-and-forget:
-   * classifier failure handling must never hold the vendor notification loop.
-   */
+  /** @deprecated Kept until the Auto-review routing PR removes the persisted Auto→Ask fallback. */
   onAutoPermissionClassifierUnavailable?: (args: {
     sessionId: string;
     agentKind: 'claude-code' | 'codex';
-    /** HTTP status when available; Codex reviewer timeout/failure use synthetic 408/500. */
     status: number;
   }) => void;
+
+  /**
+   * Host-owned lightweight reviewer for routes without a healthy vendor-native
+   * reviewer. The host must use this session's selected provider + model and pass
+   * only the request supplied here; null/throw is treated as a silent block.
+   */
+  reviewAutoPermissionAction?: AutoReviewDelegate;
 
   /**
    * Codex-only: bind app-server thread ids back to xdt-maker session context
@@ -398,6 +412,21 @@ export interface AgentDeps {
   }) => void;
 
   /**
+   * Codex 专用：WS turn 命中仅 HTTP proxy 能处理的请求体恢复错误时，通知宿主把
+   * 该 thread 的后续 WS upgrade 导回 HTTP。
+   *
+   * 宿主负责按自己的 recovery rules 识别错误并登记 transport policy；返回稳定
+   * reason 表示已登记，null 表示不匹配。调用必须同步、纯内存且不得抛错。
+   * maker-core 只在零产出 turn 上据此自动重投一次，不解析供应商错误协议。
+   */
+  armCodexHttpRecovery?: (args: {
+    sessionId: string;
+    threadId: string;
+    message: string;
+    additionalDetails?: string | null;
+  }) => string | null;
+
+  /**
    * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
    *
    * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
@@ -437,8 +466,9 @@ export interface AgentDeps {
    * in-process JS 回调; ClaudeCodeAgent.startSession 透传给 SDK options.hooks。
    *
    * 设计说明:
-   *  - maker-core 自己**不持有任何 hook 实现** —— 这里只是注入点, 具体业务逻辑
-   *    (例: 图片 read 检测、Bash 命令白名单、敏感路径拦截) 都在 host 层。
+   *  - 这里只是 host hook 注入点；图片 read、Bash 并发等产品逻辑都在 host 层。
+   *    maker-core 的 Claude adapter 会在必要时把窄范围协议闸门（例如能力来源路由）
+   *    放在这些 host hooks 之前。
    *  - 类型直接复用 Claude SDK 的 HookCallbackMatcher (含 matcher / hooks / timeout),
    *    host 直接 import @anthropic-ai/claude-agent-sdk 的类型即可, 与 mcpProviders
    *    用 McpServerConfig 同模式。
@@ -806,7 +836,11 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram'; taskId?: string }
+  | {
+      kind: 'im';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      taskId?: string;
+    }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 
@@ -873,7 +907,8 @@ export interface AgentSessionHandle {
 
   /**
    * Synchronous provider preflight called by Session after reserving the turn
-   * but before any product `beforeProviderStart` / `onAccepted` side effect.
+   * and the optional `afterTurnReserved` state-preparation hook, but before any
+   * durable `beforeProviderStart` / `onAccepted` side effect.
    * Direct handle callers are still validated again inside send().
    */
   validateSendOptions?(opts: SendOptions): void;
@@ -943,6 +978,12 @@ export interface AgentSessionHandle {
 
   /** 运行时切换 permission mode */
   setPermissionMode?(mode: PermissionMode): Promise<void>;
+
+  /**
+   * Vendor-native Auto reviewer became unavailable. Keep the product mode at
+   * Auto, but route subsequent approvals through Cindy's lightweight reviewer.
+   */
+  useCindyAutoReviewFallback?(): Promise<void>;
 
   /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。

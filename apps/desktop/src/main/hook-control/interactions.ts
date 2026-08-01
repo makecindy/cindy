@@ -71,7 +71,7 @@ export interface ComposedInteractionCard {
  * InteractionRequest -> 卡片 + 决策映射。
  * 返回 null 表示该 kind 不出卡(未来未知 kind), 由调用方按 kind 安全默认
  * 就地自决。permission 自 Slack 按目录权限偏好上线起出卡: 非 bypass 会话的
- * 权限请求渲染成「允许一次 / 本对话总是允许 / 拒绝」三按钮卡, 超时安全默认
+ * 权限请求渲染成「允许一次 / 本任务总是允许 / 拒绝」三按钮卡, 超时安全默认
  * **拒绝**(用户显式选了收紧档, 放行才是意外)。
  */
 export function composeInteractionCard(req: InteractionRequest): ComposedInteractionCard | null {
@@ -180,7 +180,7 @@ export function composeInteractionCard(req: InteractionRequest): ComposedInterac
         body,
         buttons: [
           { id: 'perm:allow', label: '允许一次', style: 'primary' },
-          { id: 'perm:always', label: '本对话总是允许', style: 'default' },
+          { id: 'perm:always', label: '本任务总是允许', style: 'default' },
           { id: 'perm:deny', label: '拒绝', style: 'danger' },
         ],
       },

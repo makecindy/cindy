@@ -12,6 +12,7 @@
     "sentTime": "送信時刻 {{time}}",
     "linkCopied": "リンクをコピーしました",
     "turnCostEstimate": "今回 {{cost}}",
+    "turnTokens": "今回の消費 {{tokens}}",
     "turnCost": "今回の消費 {{cost}}",
     "messageGenerating": "メッセージを生成中",
     "generating": "生成中",
@@ -110,7 +111,7 @@
     "mediaDeviceLinkHint": "モバイルは device-link 経由でリモートデバイスにメディアのアップロードを要求してから開きます。",
     "controlDelete": "メッセージを削除",
     "controlRewind": "ここまで戻す",
-    "controlFork": "会話を分岐",
+    "controlFork": "セッションを分岐",
     "markdownDocAriaLabel": "メッセージ本文",
     "toolOutputTitle": "{{label}} の出力",
     "mermaidEmpty": "空の Mermaid 図。",
@@ -121,7 +122,8 @@
     "justNow": "たった今",
     "minutesAgo": "{{n}} 分前",
     "hoursAgo": "{{n}} 時間前",
-    "turnCostValue": "概算 {{value}}"
+    "turnCostValue": "概算 {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "注釈をキャンセル",
@@ -178,7 +180,7 @@
       "neutral": "再接続",
       "pending": "再接続中…",
       "pendingWithProgress": "再接続中 {{attempt}}/{{total}}…",
-      "details": "今回の再試行 {{attempt}}/{{total}} · この会話での再接続 {{count}} 回"
+      "details": "今回の再試行 {{attempt}}/{{total}} · このセッションでの再接続 {{count}} 回"
     },
     "modelLabel": "モデル",
     "sessionLabel": "セッション",

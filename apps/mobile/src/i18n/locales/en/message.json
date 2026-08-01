@@ -12,6 +12,7 @@
     "sentTime": "Sent at {{time}}",
     "linkCopied": "Link copied",
     "turnCostEstimate": "This turn {{cost}}",
+    "turnTokens": "This turn used {{tokens}}",
     "turnCost": "This turn cost {{cost}}",
     "messageGenerating": "Message is generating",
     "generating": "Generating",
@@ -110,7 +111,7 @@
     "mediaDeviceLinkHint": "The mobile app will request the remote device to upload the media via device-link before opening it.",
     "controlDelete": "Delete message",
     "controlRewind": "Rewind to here",
-    "controlFork": "Fork conversation",
+    "controlFork": "Fork session",
     "markdownDocAriaLabel": "Message body",
     "toolOutputTitle": "{{label}} output",
     "mermaidEmpty": "Empty Mermaid diagram.",
@@ -121,7 +122,8 @@
     "justNow": "Just now",
     "minutesAgo": "{{n}} min ago",
     "hoursAgo": "{{n}} h ago",
-    "turnCostValue": "Est. {{value}}"
+    "turnCostValue": "Est. {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "Cancel annotation",
@@ -178,7 +180,7 @@
       "neutral": "Reconnect",
       "pending": "Reconnecting…",
       "pendingWithProgress": "Reconnecting {{attempt}}/{{total}}…",
-      "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this conversation"
+      "details": "Attempt {{attempt}}/{{total}} · {{count}} reconnects in this session"
     },
     "modelLabel": "Model",
     "sessionLabel": "Session",

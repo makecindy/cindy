@@ -1,4 +1,5 @@
 import { randomUUID } from 'node:crypto';
+import fs from 'node:fs/promises';
 import path from 'node:path';
 
 import { gitExec } from './gitExec';
@@ -14,6 +15,73 @@ export async function isWorktreeDirty(worktreePath: string): Promise<boolean> {
   } catch {
     return true;
   }
+}
+
+async function hasEquivalentFileAtBase(
+  baseRepo: string,
+  worktreePath: string,
+  relpath: string,
+): Promise<boolean> {
+  const baseRoot = path.resolve(baseRepo);
+  const worktreeRoot = path.resolve(worktreePath);
+  const basePath = path.resolve(baseRoot, relpath);
+  const worktreeFile = path.resolve(worktreeRoot, relpath);
+  if (
+    !basePath.startsWith(`${baseRoot}${path.sep}`)
+    || !worktreeFile.startsWith(`${worktreeRoot}${path.sep}`)
+  ) {
+    return false;
+  }
+
+  try {
+    const [baseStat, worktreeStat] = await Promise.all([
+      fs.lstat(basePath),
+      fs.lstat(worktreeFile),
+    ]);
+    if (baseStat.isSymbolicLink() || worktreeStat.isSymbolicLink()) {
+      if (!baseStat.isSymbolicLink() || !worktreeStat.isSymbolicLink()) return false;
+      const [baseTarget, worktreeTarget] = await Promise.all([
+        fs.readlink(basePath),
+        fs.readlink(worktreeFile),
+      ]);
+      return baseTarget === worktreeTarget;
+    }
+    if (!baseStat.isFile() || !worktreeStat.isFile()) return false;
+    if (baseStat.size !== worktreeStat.size) return false;
+    const [baseContent, worktreeContent] = await Promise.all([
+      fs.readFile(basePath),
+      fs.readFile(worktreeFile),
+    ]);
+    return baseContent.equals(worktreeContent);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * 列出 worktree 中 Git 忽略、且 base checkout 没有同路径同内容副本的文件。
+ *
+ * `git status --porcelain` 与非强制 `git worktree remove` 都不会保护 ignored 文件；
+ * 预创建补偿回收必须显式探测。`.xdtworktreeinclude` 从 base 复制来的未变化 `.env`
+ * 仍可安全回收，因为 base 中保留着逐字节等价副本；独有或已变化的 ignored 内容
+ * 一律返回给调用方保留整个 worktree。Git/文件读取失败会抛出，由调用方 fail closed。
+ */
+export async function listNonReproducibleIgnoredFiles(
+  baseRepo: string,
+  worktreePath: string,
+): Promise<string[]> {
+  const { stdout } = await gitExec(
+    ['ls-files', '--others', '--ignored', '--exclude-standard', '-z'],
+    worktreePath,
+  );
+  const ignored = stdout.split('\0').filter(Boolean);
+  const nonReproducible: string[] = [];
+  for (const relpath of ignored) {
+    if (!(await hasEquivalentFileAtBase(baseRepo, worktreePath, relpath))) {
+      nonReproducible.push(relpath);
+    }
+  }
+  return nonReproducible;
 }
 
 /**

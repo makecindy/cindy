@@ -55,6 +55,7 @@ function catalog(): Catalog {
     draft: 'happyhorse',
     best: 'seedance-pro',
   };
+  xd.models.codex = undefined;
   return {
     version: 'test',
     providers: [
@@ -114,12 +115,13 @@ describe('provider access policy', () => {
         'seedance-fast',
         'seedance-pro',
       ]);
+      expect(xd?.models.codex).toEqual([]);
     },
   );
 });
 
-describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', () => {
-  it('非 global 区域对所有供应商清空图像清单/默认,新来源不绕地区闸', () => {
+describe('projectProviderCatalogForBuildRegion — 用户自有媒体来源', () => {
+  it('非 global 区域只投影 Cindy AI,保留用户连接的图像来源', () => {
     const gemini: Provider = {
       id: 'gemini',
       name: 'Google Gemini',
@@ -139,7 +141,7 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
       routing: {},
       models: { 'claude-code': [] },
       imageModels: [{ id: 'openai/gpt-image-2', name: 'GPT Image 2' }],
-      // 防御对象:即使有人违反"只有 xd 声明 defaults"的契约,大陆闸也要剥掉。
+      // 防御对象:即使未来用户来源声明 defaults,区域投影也不应改写它。
       imageDefaults: { standard: 'openai/gpt-image-2' },
     };
     const base = catalog();
@@ -147,40 +149,54 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
       { ...base, providers: [...base.providers, gemini, openai] },
       'cn',
     );
-    for (const p of projected.providers) {
-      expect(p.imageModels ?? []).toEqual([]);
-      expect(p.imageDefaults).toBeUndefined();
-    }
-    // 视频白名单维持 xd 专属:非 xd 供应商声明的视频清单一并清空。
+    expect(projected.providers.find((p) => p.id === 'gemini')).toBe(gemini);
+    expect(projected.providers.find((p) => p.id === 'openai')).toBe(openai);
     const xd = projected.providers.find((p) => p.id === 'xd');
+    expect(xd?.imageModels).toEqual([]);
+    expect(xd?.imageDefaults).toBeUndefined();
     expect(xd?.videoModels?.map((m) => m.id)).toEqual(['seedance-fast', 'seedance-pro']);
   });
 
-  it('非 xd 供应商 models dict 中的 mainland video 型号在 cn 区域同样被剥离', () => {
-    const thirdParty: Provider = {
-      id: 'third',
-      name: 'Third Party',
-      source: 'builtin',
-      agents: ['claude-code'],
-      auth: { method: 'oauth' },
-      routing: {},
-      models: {
-        'claude-code': [
-          { ...model('seedance-fast'), group: 'video' },
-          model('chat-model'),
-        ],
-      },
-    };
-    const base = catalog();
-    const projected = projectProviderCatalogForBuildRegion(
-      { ...base, providers: [...base.providers, thirdParty] },
-      'cn',
-    );
-    const third = projected.providers.find((p) => p.id === 'third');
-    expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['chat-model']);
-  });
+  it.each(['cn', 'dev'] as const)(
+    '非 xd 供应商在 %s 保留图像与聊天能力,暂不暴露视频能力',
+    (region) => {
+      const thirdParty: Provider = {
+        id: 'third',
+        name: 'Third Party',
+        source: 'builtin',
+        agents: ['claude-code'],
+        auth: { method: 'oauth' },
+        routing: {},
+        models: {
+          'claude-code': [
+            { ...model('seedance-fast'), group: 'video' },
+            { ...model('third/image'), group: 'image' },
+            model('chat-model'),
+          ],
+          codex: undefined,
+        },
+        imageModels: [{ id: 'third/image', name: 'Third Image' }],
+        imageDefaults: { standard: 'third/image' },
+        videoModels: [{ id: 'seedance-fast', name: 'Seedance Fast' }],
+        videoDefaults: { standard: 'seedance-fast' },
+      };
+      const base = catalog();
+      const projected = projectProviderCatalogForBuildRegion(
+        { ...base, providers: [...base.providers, thirdParty] },
+        region,
+      );
+      const third = projected.providers.find((p) => p.id === 'third');
+      expect(third).not.toBe(thirdParty);
+      expect(third?.models['claude-code']?.map((m) => m.id)).toEqual(['third/image', 'chat-model']);
+      expect(third?.models.codex).toEqual([]);
+      expect(third?.imageModels).toBe(thirdParty.imageModels);
+      expect(third?.imageDefaults).toBe(thirdParty.imageDefaults);
+      expect(third?.videoModels).toEqual([]);
+      expect(third?.videoDefaults).toBeUndefined();
+    },
+  );
 
-  it('mode: image_generation 的模型在 cn 区域被剥离(classifyModel 权威分类,不依赖 id 关键词)', () => {
+  it('mode: image_generation 的用户模型在 cn 区域保持可用', () => {
     const modeOnly: Provider = {
       id: 'xai',
       name: 'xAI',
@@ -201,7 +217,11 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
       'cn',
     );
     const xai = projected.providers.find((p) => p.id === 'xai');
-    expect(xai?.models['claude-code']?.map((m) => m.id)).toEqual(['xai/grok-chat']);
+    expect(xai).toBe(modeOnly);
+    expect(xai?.models['claude-code']?.map((m) => m.id)).toEqual([
+      'xai/aurora',
+      'xai/grok-chat',
+    ]);
   });
 
   it('global 区域原样返回(含新来源的媒体清单)', () => {
@@ -219,5 +239,10 @@ describe('projectProviderCatalogForBuildRegion — 图像多来源(2026-07)', ()
     const input = { ...base, providers: [...base.providers, gemini] };
     const projected = projectProviderCatalogForBuildRegion(input, 'global');
     expect(projected).toBe(input);
+  });
+
+  it('目录没有 Cindy AI 时非 global 也保持原对象', () => {
+    const input: Catalog = { version: 'test', providers: [] };
+    expect(projectProviderCatalogForBuildRegion(input, 'cn')).toBe(input);
   });
 });

@@ -4,7 +4,7 @@ import { semverCompare } from '../versionUtils';
  * deriveDetailState — 从 entry + server info 派生三个独立维度的 UI 状态。
  *
  * 三维度模型:
- *   D1 origin     — 本地来源（installed/published/learned），决定是否显示卸载
+ *   D1 origin     — 本地来源（installed/published/learned/imported），决定是否显示卸载
  *   D2 isMine     — 管理权（server 权威），决定发布相关操作
  *   D3 version    — 远程版本状态，决定已安装/更新按钮
  *
@@ -13,8 +13,8 @@ import { semverCompare } from '../versionUtils';
 
 export interface DetailState {
   /** null = 无 registryEntry（纯本地手写 skill）。'learned' = /learn 蒸馏产物,
-   *  按钮语义同本地创建(无卸载概念,不可发布由 provenance.personal 另行拦截)。 */
-  origin: 'installed' | 'published' | 'learned' | null;
+   *  'imported' = 本地 zip/SKILL.md 导入。按钮语义见 deriveDetailActionState。 */
+  origin: 'installed' | 'published' | 'learned' | 'imported' | null;
   /** server 确认的管理权。null = server 不可用（404/error/loading） */
   isMine: boolean | null;
   /** registryEntry 里记录的本地版本。null = 无 registryEntry */
@@ -154,18 +154,18 @@ export function deriveDetailActionState(
     localChanged
   ) {
     status = { kind: 'publish-new-version' };
-  } else if (isOutdated && detailState.latestVersion !== null && detailState.origin !== 'learned') {
-    // learned 不进市场更新路径(Codex review):/learn hub:<slug> 的产物与市场
-    // skill 同名,「更新到 v…」会用市场包覆盖掉用户的个人蒸馏版 —— learned 是
-    // 本地创作,版本号与市场无对应关系,isOutdated 对它无意义。
+  } else if (isOutdated && detailState.latestVersion !== null && detailState.origin !== 'learned' && detailState.origin !== 'imported') {
+    // learned / imported 不进市场更新路径:用市场包覆盖会丢掉本地创作 / 导入内容。
     status = { kind: 'update', latestVersion: detailState.latestVersion };
   } else if (detailState.latestVersion !== null) {
     // Server confirms the skill exists; never offer first-publish in this branch.
-    if (detailState.origin === 'learned' && detailState.isMine === true) {
-      // learned 的 registry hash 对应本地蒸馏结果,不是 server 已发布版本。
+    if (
+      (detailState.origin === 'learned' || detailState.origin === 'imported') &&
+      detailState.isMine === true
+    ) {
+      // learned / imported 的 registry hash 对应本地内容,不是 server 已发布版本。
       // 即使 localChanged=false 也不能显示 published-tag;若用户确实拥有同名
-      // 市场 skill,应走发布新版本路径。(个人上下文产物的发布语义 —— 发布前
-      // 泛化 —— 按产品 review 方向另行独立 PR,不在本系列做硬拦截。)
+      // 市场 skill,应走发布新版本路径。
       status = { kind: 'publish-new-version' };
     } else if (detailState.isMine === true) {
       status = isMineDirty
@@ -183,7 +183,7 @@ export function deriveDetailActionState(
   }
 
   return {
-    showUninstall: detailState.origin === 'installed',
+    showUninstall: detailState.origin === 'installed' || detailState.origin === 'imported',
     status,
     isOutdated,
     isMineDirty,

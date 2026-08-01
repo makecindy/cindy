@@ -26,7 +26,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Plus, Timer } from 'lucide-react';
-import { useLocation } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -59,6 +59,11 @@ import {
   projectAutomationConfigPath,
   scheduleToProjectConfig,
 } from './lib/projectAutomationConfig';
+import type { ScheduleFormState } from './lib/scheduleFormLogic';
+import {
+  buildUsageLimitScheduleFormOverrides,
+  readUsageLimitScheduleCreateIntent,
+} from './lib/usageLimitScheduleCreateIntent';
 
 function scheduleToUserCreateInput(
   schedule: Schedule,
@@ -130,6 +135,7 @@ export function SchedulerPage() {
     onDeleted: () => refresh(),
   });
   const location = useLocation();
+  const navigate = useNavigate();
 
   // 跨 pane 共享的 runNow「派发窗口」busy 守卫：TaskListCell(行按钮) 与 RunHistoryPane
   // (detail 按钮)共用同一份,防止同一 schedule 在派发窗口内被双发。守卫只覆盖"点击 →
@@ -143,6 +149,8 @@ export function SchedulerPage() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Schedule | null>(null);
   const [createInitialTemplate, setCreateInitialTemplate] = useState<ScheduleTemplate | null>(null);
+  const [createInitialValues, setCreateInitialValues] =
+    useState<Partial<ScheduleFormState> | null>(null);
   // 项目分组"+"按钮的预填 workingDir：用户级 schedule，仅省去选项目目录这一步，
   // 不强制写 schedules.json（要"提升为项目自动化"走右键菜单 promoteToProject）。
   const [createPrefillWorkingDir, setCreatePrefillWorkingDir] = useState<string | null>(null);
@@ -156,6 +164,7 @@ export function SchedulerPage() {
   const pendingSelectIdRef = useRef<string | null>(null);
   const statusSyncedFocusIdRef = useRef<string | null>(null);
   const handledEditTokenRef = useRef<string | null>(null);
+  const handledScheduleCreateRequestRef = useRef<string | null>(null);
 
   // 左侧任务列表 pane 拖拽 resize（与主侧边栏同套机制 → useHorizontalResize）
   // 默认 300，min 240（保证 cell 标题不太早被截），max 480（与主侧边栏对齐）
@@ -203,9 +212,30 @@ export function SchedulerPage() {
     handledEditTokenRef.current = editToken;
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
+    setCreateInitialValues(null);
     setEditing(focused);
     setFormOpen(true);
   }, [editToken, focusId, schedules]);
+
+  useEffect(() => {
+    const intent = readUsageLimitScheduleCreateIntent(location.state);
+    if (!intent || handledScheduleCreateRequestRef.current === intent.requestId) return;
+    handledScheduleCreateRequestRef.current = intent.requestId;
+    setCreatePrefillWorkingDir(null);
+    setCreateInitialTemplate(null);
+    setEditing(null);
+    setCreateInitialValues(
+      buildUsageLimitScheduleFormOverrides(intent, {
+        name: t('scheduler.usageLimitRecovery.name'),
+        prompt: t('scheduler.usageLimitRecovery.prompt'),
+      }),
+    );
+    setFormOpen(true);
+    // Consume the one-shot navigation intent so revisiting Automations does not
+    // reopen the modal. Creation still happens only after the user submits.
+    const path = `${location.pathname || '/cc-agent/scheduled'}${location.search}`;
+    navigate(path, { replace: true, state: null });
+  }, [location.pathname, location.search, location.state, navigate, t]);
 
   // workingDir filter（URL ?workingDir=...）
   const scopedByDir = useMemo(() => {
@@ -268,6 +298,7 @@ export function SchedulerPage() {
   const handleCreate = useCallback(() => {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
+    setCreateInitialValues(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -275,6 +306,7 @@ export function SchedulerPage() {
   const handleCreateFromTemplate = useCallback((template: ScheduleTemplate) => {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(template);
+    setCreateInitialValues(null);
     setEditing(null);
     setFormOpen(true);
   }, []);
@@ -282,6 +314,7 @@ export function SchedulerPage() {
   const handleEdit = useCallback((s: Schedule) => {
     setCreatePrefillWorkingDir(null);
     setCreateInitialTemplate(null);
+    setCreateInitialValues(null);
     setEditing(s);
     setFormOpen(true);
   }, []);
@@ -289,6 +322,7 @@ export function SchedulerPage() {
   const handleCreateProjectSchedule = useCallback((workingDir: string) => {
     setEditing(null);
     setCreateInitialTemplate(null);
+    setCreateInitialValues(null);
     setCreatePrefillWorkingDir(workingDir);
     setFormOpen(true);
   }, []);
@@ -603,10 +637,12 @@ export function SchedulerPage() {
           if (!open) {
             setCreatePrefillWorkingDir(null);
             setCreateInitialTemplate(null);
+            setCreateInitialValues(null);
           }
         }}
         initial={editing}
         initialTemplate={createInitialTemplate}
+        initialValues={createInitialValues}
         initialWorkingDir={createPrefillWorkingDir}
         editProjectSchedule={editing?.source === 'project'}
         onSubmit={handleSubmit}

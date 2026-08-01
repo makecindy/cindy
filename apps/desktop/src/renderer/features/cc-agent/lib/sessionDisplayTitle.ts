@@ -85,7 +85,7 @@ export function toStoredSessionTitle(session: Session, editedTitle: string): str
  * 就会错位、把高亮画到别的字上。两种情况必须关掉高亮:
  *
  *   - `[Schedule] xxx` 前缀被剥掉(既有 case);
- *   - 哨兵标题被换成本地化的「未命名对话」(本次新增,同一个坑)。
+ *   - 哨兵标题被换成本地化的「未命名任务」(本次新增,同一个坑)。
  */
 export function canHighlightSessionDisplayTitle(session: Session): boolean {
   return !isScheduledSession(session) && !isDefaultDraftSessionTitle(session.title);

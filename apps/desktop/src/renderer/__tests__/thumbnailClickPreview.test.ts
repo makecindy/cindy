@@ -43,6 +43,17 @@ describe('Attachment thumbnail — click opens lightbox (attachment-thumb-click)
     );
   });
 
+  it('uses the shared image hover preview so composer and message chips stay identical', () => {
+    expect(chatInput).toContain(
+      "import { ImageHoverPreview } from '@/components/chat/ImageHoverPreview';",
+    );
+    const startIdx = chatInput.indexOf('function ThumbnailItem');
+    const block = chatInput.slice(startIdx);
+    expect(block).toContain('<ImageHoverPreview');
+    expect(block).toContain('open={isHovered}');
+    expect(block).toContain('anchorRef={thumbRef}');
+  });
+
   it('ThumbnailItem preview button uses cursor-pointer (hand) and an onClick handler', () => {
     // Slice the ThumbnailItem function body so we don't accidentally match
     // some other unrelated `cursor-pointer` token elsewhere in the file.

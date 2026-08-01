@@ -268,6 +268,7 @@ import { reapClaudeOrphansSync } from './claude-orphan-reaper';
 import { startAgentProcessPriorityWatcher } from './agent-process-priority';
 import { initAppBadgeService, clearAllSessionAttention } from './appBadgeService';
 import { initNotificationService } from './notificationService';
+import { initWecomGroupNotificationIpc } from './wecomGroupNotification';
 import { getAgentIslandService, initAgentIslandService } from './agent-island/service.js';
 import {
   isAppContentWindow,
@@ -305,6 +306,7 @@ import {
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewIpc } from './git-review';
 import { registerSidebarSettingsIpc } from './sidebarSettingsStore';
+import { registerRemotePrecreatedWorktreeLedgerIpc } from './remotePrecreatedWorktreeLedger';
 import { registerTerminalHandlers } from './maker-ipc/terminal-handlers';
 import { registerLocalThemesIpc } from './local-themes/register';
 import {
@@ -415,9 +417,11 @@ import {
   requestProviderModelAutoRefresh,
   resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
+import { refreshProviderModelsAfterAccountReady } from './maker-host/account-provider-model-refresh.js';
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
@@ -431,6 +435,10 @@ import {
   hasGrokOAuthLogin,
 } from './maker-host/grok-oauth-login.js';
 import { setXaiAuthInvalidatedHandler } from './maker-host/xai-auth-invalidation-host.js';
+import {
+  getChatgptBridgeAuth,
+  invalidateChatgptBridgeAuth,
+} from './maker-host/anthropic-responses-bridge-host.js';
 import {
   readSilentEncryptedRetrySettingsState,
   resetSilentEncryptedRetrySettings,
@@ -553,7 +561,6 @@ import {
   isImDefaultEffort,
   isImDefaultPermissionMode,
   isImDefaultSettingsChannel,
-  isWechatUnsupportedPermissionMode,
   type ImDefaultAgentKind,
   type ImDefaultAgentSettings,
   type ImDefaultSettingsChannel,
@@ -610,7 +617,9 @@ import {
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
+  getGhostCindySlot,
   getGhostManager,
+  getGhostSessionActivityTracker,
   isGhostAvailableForActiveSession,
   refreshGhostLocalization,
   registerGhostIpc,
@@ -618,6 +627,9 @@ import {
   suspendAllGhosts,
   waitForGhostMutations,
 } from './cindy-brain/index.js';
+import { setCodexImageAuthBinding } from './cindy-brain/codexImageAuthBinding.js';
+import { listActiveClaudeBackgroundActivitySessions } from './maker-host/claude-session-background-activity.js';
+import { registerRelaunchBusyActivityIpc } from './relaunchBusyActivityIpc.js';
 import { getGhostSetupChangeBus } from './cindy-brain/ghostSetupChangeBus.js';
 import { getGhostSetupInteractionBridge } from './cindy-brain/ghostSetupInteractionBridge.js';
 import { registerPluginMarketIpc } from './plugin-market/registerIpc.js';
@@ -1218,6 +1230,12 @@ registerLayoutIpc();
 // ── 意识仓库 IPC──────────────────────────────────────────────────────
 // renderer 首帧 sendSync 拉已装意识清单(意识面板与内置面板同帧注册,规则 7
 // 无跳变)、install/uninstall 写路径、changed 广播。见 main/cindy-brain/。
+// 图片通道的 ChatGPT 鉴权必须由 Main 静态装配；禁止在请求时 import maker-host
+// 生成延迟 chunk（Main bundle 反向 require 会重复执行启动副作用）。
+setCodexImageAuthBinding({
+  getAuth: getChatgptBridgeAuth,
+  onAuthFailure: invalidateChatgptBridgeAuth,
+});
 registerGhostIpc();
 registerPluginMarketIpc();
 
@@ -1255,6 +1273,7 @@ protocol.registerSchemesAsPrivileged([
 import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
+import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
 
 if (started) {
   app.quit();
@@ -1508,6 +1527,16 @@ function installApplicationMenu(
         {
           label: labels.issues,
           click: () => dispatchApplicationMenuCommand(mainWindow, 'open-issues'),
+        },
+        { type: 'separator' },
+        {
+          // 命令名随 edition 品牌(installCli 文案里的 {{cmd}} 占位符)。
+          label: labels.installCli.replaceAll('{{cmd}}', CLI_COMMAND_NAME),
+          // 特权动作(写 PATH 目录 / 可能弹管理员授权)整段在 main 执行,
+          // 不经 renderer,也不新增 IPC 面。见 installCliCommand.ts。
+          click: () => {
+            void installCindyCliCommand(mainWindow, locale);
+          },
         },
       ],
     },
@@ -2542,6 +2571,7 @@ const registerIpcHandlers = () => {
     getWindow: () => getWindow() ?? null,
     feishuIm,
   });
+  initWecomGroupNotificationIpc();
   initAgentIslandService({
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
@@ -2659,9 +2689,6 @@ const registerIpcHandlers = () => {
     async (_e, patch: unknown, rawChannel: unknown) => {
       const channel = parseImDefaultSettingsChannel(rawChannel);
       const parsedPatch = parseImDefaultSettingsPatch(patch);
-      if (channel === 'wechat' && isWechatUnsupportedPermissionMode(parsedPatch.permissionMode)) {
-        throwIpcError('INVALID_PARAMS', 'personal WeChat does not support this permission mode');
-      }
       writeImDefaultSettingsPatch(parsedPatch, channel);
       return imDefaultSettingsWire(channel);
     },
@@ -2671,7 +2698,7 @@ const registerIpcHandlers = () => {
     if (channel) {
       resetImDefaultSettingsChannel(channel);
     } else {
-      resetImDefaultSettings();
+      resetImDefaultSettingsGlobal();
     }
     return imDefaultSettingsWire(channel);
   });
@@ -3811,6 +3838,30 @@ const registerIpcHandlers = () => {
           readScheduleBusy: () => readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
         });
       });
+      // 手动更新重启(侧栏 UpdateBanner)的阻断判定。与上面那个**无人值守**探针刻意分开:
+      // 无人值守要连「有远程设备在看会话」都让路,手动重启是用户主动发起的,只该关心
+      // 「这一下会打断哪些正在跑的活」。四个活动来源的聚合与 fail-closed 口径见
+      // relaunchBusyActivity.ts,handler 与 sender 断言见 relaunchBusyActivityIpc.ts;
+      // 这里只提供来源 —— 本进程唯一能同时看到 maker、cindy-brain 与 scheduler 三侧的位置。
+      //
+      // 不进 device-link allowlist:updater 类 channel 按 allowlist 顶部注释属「永不放行」,
+      // 且远程控制端不会代替用户点被控端的更新重启。
+      registerRelaunchBusyActivityIpc(() => ({
+        anySessionInTurn: () => anySessionInTurn(getMakerCore()),
+        listClaudeBackgroundSessions: () => listActiveClaudeBackgroundActivitySessions(),
+        anyGhostSessionBusy: () => getGhostSessionActivityTracker().anySessionBusy(),
+        // run_in_background 的 Bash 不调模型、也不折算 running,前两个来源都看不到它。
+        anyBackgroundBashRunning: () =>
+          getMakerCore()
+            .listActiveSessions()
+            .some((session) => session.listBackgroundTasks().length > 0),
+        // Cindy slot 的全部在途工作:异步(mode:'submit' 的图 / 视频)与同步代办各自独立记账,
+        // 都可能不伴随任何 turn 或 card-action,只查一半就漏一半。
+        anyCindySlotJobRunning: () => getGhostCindySlot().anyInflightWork(),
+        // script 模式 / pre-run hook 阶段的 run 不创建 session,内存来源看不到它们。
+        anySchedulerRunRunning: () =>
+          readUpdateRelaunchScheduleBusy(getScheduleStorageIfInitialized()),
+      }));
       // getMakerCore() 首次调用触发 Maker 构造，同时发起自定义 MCP 初始加载。
       // await 确保第一个会话的 mcpProviders 数组已填入已保存的自定义 MCP（P2 冷启动竞态修复）。
       getMakerCore();
@@ -5772,37 +5823,20 @@ app.on('ready', async () => {
       // 自定义供应商配置在按 userId 切片的 localDb 里：DB ready / 换账号后重新加载并
       // 注入 active-catalog（让路由 / 来源栏 / 模型选择器跟随当前账号）。best-effort，不阻塞。
       void refreshCustomProvidersIntoCatalog();
-      // 自定义 MCP：provider 数组已在上方刷新完成，fire-and-forget 失效 Codex cached
-      // spawn 配置，使下一会话按新数组重建。
-      // 顺序约束：先 dispose app-server（含 busy 检查），成功后再关 bridge（与 mcpHandlers
-      // invalidateCodex 同款模式）。best-effort，不阻塞 DB-ready 其余初始化。
-      void (async () => {
-        let codexRestarted = false;
-        try {
-          await restartCodexAfterAuthModeChange();
-          codexRestarted = true;
-        } catch (err) {
-          accountSwitchLog.warn('restartCodexAfterAuthModeChange on account switch failed', {
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
-        if (codexRestarted) {
-          try {
-            await shutdownCodexEnvironment();
-          } catch (err) {
-            accountSwitchLog.warn('shutdownCodexEnvironment on account switch failed', {
-              error: err instanceof Error ? err.message : String(err),
-            });
-          }
-        }
-        // 账号数据就绪 = 启动链路上最早能确定「owner 绑定已认领、网关凭证已下发」的时机，
-        // 也是模型清单该被刷新到最新的时机。在这里强制跑一遍（无视冷却），别再等用户去打开
-        // 设置页或模型选择器把清单逼出来 —— 那是全新机器首启只看到少数模型的直接原因。
-        //
-        // 必须排在上面 codex 重启序列**之后**：那条序列末尾会按 auth 边界重读
-        // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
-        void requestProviderModelAutoRefresh('startup');
-      })();
+      // 自定义 MCP：provider 数组已在上方刷新完成，失效 Codex cached spawn 配置，
+      // 使下一会话按新数组重建。
+      // 顺序约束与模型发现都保持 best-effort，但这里必须 await 到 settle：LocalDbGate
+      // 只有随后才放行主界面。否则用户能在 Anthropic 清单尚未回来时发送 Opus，
+      // 草稿会按 XD 默认路由建成 provider_id=NULL（issue #1196）。
+      //
+      // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
+      // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
+      await refreshProviderModelsAfterAccountReady({
+        restartCodex: restartCodexAfterAuthModeChange,
+        shutdownCodexEnvironment,
+        refreshProviderModels: requestProviderModelAutoRefresh,
+        log: accountSwitchLog,
+      });
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
         processStartedAtMs: PROCESS_STARTED_AT_MS,
@@ -5840,6 +5874,7 @@ app.on('ready', async () => {
     },
   });
   registerSidebarSettingsIpc();
+  registerRemotePrecreatedWorktreeLedgerIpc();
   // RSB terminal tab: PTY backend + 8 个 terminal:* IPC channels(create/write/resize/dispose/restart
   // + listAvailableShells / get|setDefaultShellPref)。owner WebContents destroyed 时:
   //   - RSB 独立子窗口销毁(收起 / 合并回主窗)→ PTY 转移给主窗保活,输出 sink 改推主窗,

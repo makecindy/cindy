@@ -398,6 +398,7 @@ function skillLockBusyMessage(skillName: string): string {
   const owner = getSkillInstallLockOwner(skillName);
   if (owner === 'learn-apply') return `${skillName} 正在被 learn 提案应用，请等待当前任务完成`;
   if (owner === 'market-uninstall') return `${skillName} 正在卸载中，请等待当前任务完成`;
+  if (owner === 'local-import') return `${skillName} 正在导入中，请等待当前任务完成`;
   return `${skillName} 正在安装中，请等待当前任务完成`;
 }
 
@@ -904,23 +905,14 @@ export async function install(
  *
  * 防御：absolutePath 必须落在受支持的 skill discovery root 下 —— 拒绝删除任意路径。
  * UI 层（F-UI-4）在按钮分流时已确保"未注册的本地技能"不显示卸载按钮，这层是双保险。
+ *
+ * 鉴权：
+ *   - origin=imported / learned → 本地产物（导入 / 蒸馏），不要求登录 / SkillHub 云能力
+ *   - 其它（市场 installed 等）→ 仍要求数据空间 + canUseSkillHubCloud
  */
 export async function uninstall(
   absolutePath: string,
 ): Promise<UninstallResult> {
-  const ownerId = getCurrentDataOwnerId();
-  if (!ownerId) {
-    return { success: false, errorCode: 'AUTH_REQUIRED', message: '无可用数据空间' };
-  }
-  if (!getAppCapabilities().canUseSkillHubCloud) {
-    return {
-      success: false,
-      errorCode: 'AUTH_REQUIRED',
-      message: 'SkillHub 卸载需要 Cindy 云端账号',
-    };
-  }
-  const cloudUserId = getCurrentUserId();
-
   // 防御：resolve 后验证路径是精确的 skill 根目录（只允许一层 slug，防 traversal）
   let resolved: string;
   try {
@@ -944,7 +936,36 @@ export async function uninstall(
     return { success: false, errorCode: 'INTERNAL', message: skillLockBusyMessage(skillName) };
   }
   try {
-    return await uninstallLocked(absolutePath, resolved, skillName, cloudUserId);
+    // 先读 registry 再判鉴权：本地导入 / 蒸馏产物允许离线卸载。
+    const registryMatch = await findRegistryInstallForPath(skillName, absolutePath, resolved);
+    if (!registryMatch) {
+      return { success: false, errorCode: 'INTERNAL', message: '该 skill 无安装记录，拒绝删除' };
+    }
+
+    const origin = registryMatch.entry.origin;
+    const isOfflineLocalOrigin = origin === 'imported' || origin === 'learned';
+    if (!isOfflineLocalOrigin) {
+      const ownerId = getCurrentDataOwnerId();
+      if (!ownerId) {
+        return { success: false, errorCode: 'AUTH_REQUIRED', message: '无可用数据空间' };
+      }
+      if (!getAppCapabilities().canUseSkillHubCloud) {
+        return {
+          success: false,
+          errorCode: 'AUTH_REQUIRED',
+          message: 'SkillHub 卸载需要 Cindy 云端账号',
+        };
+      }
+    }
+
+    const cloudUserId = getCurrentUserId();
+    return await uninstallLocked(
+      absolutePath,
+      resolved,
+      skillName,
+      cloudUserId,
+      registryMatch,
+    );
   } finally {
     releaseLock();
   }
@@ -966,8 +987,18 @@ async function findRegistryInstallForPath(
   absolutePath: string,
   resolved: string,
 ): Promise<RegistryInstallMatch | null> {
-  const directPaths = Array.from(new Set([resolved, absolutePath].map((candidate) => path.normalize(candidate))));
-  for (const installPath of directPaths) {
+  const candidatePaths = uniqueNormalizedPaths([
+    resolved,
+    absolutePath,
+    ...[resolved, absolutePath].flatMap((candidate) => {
+      try {
+        return [fs.realpathSync(candidate)];
+      } catch {
+        return [];
+      }
+    }),
+  ]);
+  for (const installPath of candidatePaths) {
     const entry = await registryService.getInstall(skillName, installPath).catch(() => null);
     if (entry) return { installPath, entry };
   }
@@ -979,9 +1010,13 @@ async function findRegistryInstallForPath(
     try {
       realInstallPath = fs.realpathSync(installPath);
     } catch {
+      // 目录已删时仍允许用规范化路径与候选路径直接比对
+      if (candidatePaths.some((candidate) => pathTextEquals(path.normalize(installPath), candidate))) {
+        return { installPath, entry };
+      }
       continue;
     }
-    if (resolvedPathEquals(realInstallPath, resolved)) {
+    if (candidatePaths.some((candidate) => resolvedPathEquals(realInstallPath, candidate))) {
       return { installPath, entry };
     }
   }
@@ -994,12 +1029,8 @@ async function uninstallLocked(
   resolved: string,
   skillName: string,
   cloudUserId: string | null,
+  registryMatch: RegistryInstallMatch,
 ): Promise<UninstallResult> {
-  // 额外校验：registry 中必须有匹配记录，防止删除未注册的用户手写目录
-  const registryMatch = await findRegistryInstallForPath(skillName, absolutePath, resolved);
-  if (!registryMatch) {
-    return { success: false, errorCode: 'INTERNAL', message: '该 skill 无安装记录，拒绝删除' };
-  }
   const { installPath: registryInstallPath, entry: registryEntry } = registryMatch;
 
   if (!(await pathExists(resolved))) {

@@ -26,13 +26,7 @@ function getQrColors(): { dark: string; light: string } {
 }
 
 export type FeishuBotRegistrationPhase =
-  | 'idle'
-  | 'starting'
-  | 'qr'
-  | 'success'
-  | 'expired'
-  | 'cancelled'
-  | 'error';
+  'idle' | 'starting' | 'qr' | 'success' | 'expired' | 'cancelled' | 'error';
 
 interface UseFeishuBotRegistrationReturn {
   phase: FeishuBotRegistrationPhase;
@@ -46,7 +40,9 @@ interface UseFeishuBotRegistrationReturn {
   cancelRegistration: () => Promise<void>;
 }
 
-export function useFeishuBotRegistration(): UseFeishuBotRegistrationReturn {
+export function useFeishuBotRegistration(
+  service: 'feishu' | 'lark' = 'feishu',
+): UseFeishuBotRegistrationReturn {
   const { t } = useTranslation();
   const [phase, setPhase] = useState<FeishuBotRegistrationPhase>('idle');
   const [verificationUrl, setVerificationUrl] = useState<string | null>(null);
@@ -113,7 +109,7 @@ export function useFeishuBotRegistration(): UseFeishuBotRegistrationReturn {
     setQrDataUrl(null);
 
     try {
-      const result = await window.electronAPI.feishuBot.registrationBegin();
+      const result = await window.electronAPI.feishuBot.registrationBegin(service);
       if (!result.ok || !result.verificationUrl || !result.expiresIn) {
         setPhase('error');
         setErrorMessage(result.error ?? t('logic.errors.registrationFailed'));
@@ -138,7 +134,7 @@ export function useFeishuBotRegistration(): UseFeishuBotRegistrationReturn {
       setPhase('error');
       setErrorMessage(msg);
     }
-  }, [phase, t]);
+  }, [phase, service, t]);
 
   const cancelRegistration = useCallback(async () => {
     await window.electronAPI.feishuBot.registrationCancel();

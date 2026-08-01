@@ -48,6 +48,7 @@ describe('shared device list presentation model', () => {
     expect(deviceAccessState(device({ busy: true }))).toBe('busy');
     expect(deviceAccessState(device({ deviceId: 'revoked' }), new Set(['revoked']))).toBe('access_revoked');
     expect(deviceAccessState(device({ online: false }))).toBe('offline');
+    expect(deviceAccessState(device({ online: false, remoteControlEnabled: false }))).toBe('offline');
     expect(deviceAccessState(device({ remoteControlEnabled: false }))).toBe('remote_disabled');
     expect(deviceAccessState(device({ isSelf: true }))).toBe('self');
   });
@@ -73,7 +74,7 @@ describe('shared device list presentation model', () => {
       ['offline', 'offline', false],
     ]);
     expect(items.find((item) => item.device.deviceId === 'ready')?.statusDetail).toBe('已允许远程控制');
-    expect(items.find((item) => item.device.deviceId === 'busy')?.statusDetail).toBe('电脑端正在处理会话');
+    expect(items.find((item) => item.device.deviceId === 'busy')?.statusDetail).toBe('电脑端正在处理任务');
     expect(items.find((item) => item.device.deviceId === 'revoked')?.statusDetail).toContain('恢复');
     expect(items.find((item) => item.device.deviceId === 'disabled')?.statusDetail).toContain('打开允许远程控制');
     expect(items.find((item) => item.device.deviceId === 'offline')?.statusDetail).toContain('10 分钟前在线');

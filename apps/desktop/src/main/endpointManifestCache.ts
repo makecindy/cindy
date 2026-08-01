@@ -234,14 +234,15 @@ export const REGION_ENDPOINT_DOMAIN: Readonly<Record<'cn' | 'global', string>> =
 };
 
 /**
- * 跨区共享的 hook 服务:两份清单(含 CN)都指向 cindy.app,所以只有这两个 key 允许
- * 落在 Global 域。**别往这里加 key** —— 每加一个就等于允许该端点跨区,而这个集合之外
+ * 跨区共享的 hook 服务:两份清单(含 CN)都指向 cindy.app,所以只有这几个 hook key
+ * 允许落在 Global 域。**别往这里加 key** —— 每加一个就等于允许该端点跨区,而这个集合之外
  * 的所有端点(尤其 auth / device-link / oauth-broker / model-access / voice)必须锁在
  * 本构建区域,否则就回到上面说的跨区 token 误发。
  */
 export const CROSS_REGION_ENDPOINT_KEYS: ReadonlySet<string> = new Set([
   'slackHookWsUrl',
   'telegramHookWsUrl',
+  'xHookWsUrl',
 ]);
 
 /** 缓存端点的来源策略:按 key 决定它允许落在哪个域。 */

@@ -51,6 +51,10 @@ describe('IssueConfirmBridge', () => {
       },
     });
     expect((payload as { request: { requestId: string } }).request.requestId).toBeTruthy();
+    expect(bridge.pendingSnapshots('other-session')).toEqual([]);
+    expect(bridge.pendingSnapshots('sess-1')).toEqual([
+      { sessionId: 'sess-1', request: (payload as { request: unknown }).request },
+    ]);
   });
 
   it('resolve 确认 decision → promise settle 为 confirmed,值取卡片当前版', async () => {
@@ -184,12 +188,25 @@ describe('IssueConfirmBridge', () => {
     const requestId = lastRequestId(broadcast);
     vi.advanceTimersByTime(1001);
     await expect(promise).resolves.toEqual({ confirmed: false, reason: 'timeout' });
+    expect(bridge.pendingSnapshots()).toEqual([]);
     expect(broadcast).toHaveBeenCalledWith(MAKER_PUSH.INTERACTION_DISMISSED, {
       sessionId: 'sess-1',
       requestId,
       reason: 'timeout',
       resolvedAs: 'deny',
     });
+  });
+
+  it('默认确认超时早于 600 秒 MCP deadline', async () => {
+    const bridge = new IssueConfirmBridge({ broadcast: vi.fn() });
+    const promise = bridge.request('sess-1', DRAFT, ENV, IDENTITY);
+
+    vi.advanceTimersByTime(9 * 60 * 1000 - 1);
+    expect(bridge.pendingSnapshots('sess-1')).toHaveLength(1);
+    vi.advanceTimersByTime(1);
+
+    await expect(promise).resolves.toEqual({ confirmed: false, reason: 'timeout' });
+    expect(bridge.pendingSnapshots()).toEqual([]);
   });
 
   it('cleanupForSession 只清目标会话的 pending,并广播收卡', async () => {
@@ -199,6 +216,8 @@ describe('IssueConfirmBridge', () => {
     const p2 = bridge.request('sess-2', DRAFT, ENV, IDENTITY);
     bridge.cleanupForSession('sess-1', 'session_aborted');
     await expect(p1).resolves.toEqual({ confirmed: false, reason: 'session_aborted' });
+    expect(bridge.pendingSnapshots('sess-1')).toEqual([]);
+    expect(bridge.pendingSnapshots('sess-2')).toHaveLength(1);
     const dismissed = broadcast.mock.calls.filter(
       ([channel]) => channel === MAKER_PUSH.INTERACTION_DISMISSED,
     );

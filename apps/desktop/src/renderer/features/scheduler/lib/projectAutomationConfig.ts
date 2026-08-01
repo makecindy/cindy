@@ -28,7 +28,7 @@ export interface ProjectScheduleConfig {
    * ⚠️ 与 main 侧 project-automation-loader.ts 的 ProjectScheduleConfig 保持同形。
    */
   preRunHook?: { command: string; timeoutMs?: number };
-  notify?: { desktop?: boolean; feishu?: boolean };
+  notify?: { desktop?: boolean; feishu?: boolean; wecomGroup?: boolean };
 }
 
 export function generateProjectScheduleId(): string {
@@ -93,6 +93,10 @@ export function formToProjectConfig(
     // 与 buildScheduleInput 同源:未启用为 undefined(JSON 序列化时省略该字段;
     // 类型上抹掉 null——那是 update patch 的清空语义,config 文件里用"字段缺席"表达)
     preRunHook: buildPreRunHook(form) ?? undefined,
-    notify: { desktop: form.notifyDesktop, feishu: form.notifyFeishu },
+    notify: {
+      desktop: form.notifyDesktop,
+      feishu: form.notifyFeishu,
+      wecomGroup: form.notifyWecomGroup === true,
+    },
   };
 }

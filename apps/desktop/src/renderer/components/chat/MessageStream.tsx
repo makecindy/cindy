@@ -32,12 +32,15 @@ import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
 import {
-  findMessageTodoInsertions,
   isAgentPlanToolName,
   isDeliveryProseText,
 } from '@cindy/maker-shared/message-render';
 
-import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import type {
+  AgentTaskUpdate,
+  ChatMessage,
+  ContinuationInFlightProjectionCapability,
+} from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -143,7 +146,6 @@ import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
 import { ToolCallCard, getToolSummary } from './ToolCallCard';
-import { TodoListCard, type TodoItem } from './TodoListCard';
 import { SystemCard } from './SystemCard';
 import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
@@ -190,6 +192,8 @@ import {
 } from './viewportFillDetect';
 import {
   resolveNearBottomOnScroll,
+  resolveLastUserMessageObservation,
+  resolveRenderPinDecision,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -222,6 +226,10 @@ interface MessageStreamProps {
    *  state via useExpandedBlockMemory). The session-level "is streaming"
    *  state lives on each ChatMessage's own `isStreaming` field instead. */
   isSessionStreaming?: boolean;
+  /** 当前 vendor turn 的续跑发起项 clientId；steer 顶替 activeTurn 后仍保持。 */
+  continuationTurnClientId?: string | null;
+  /** 旧被控端缺省该字段时才启用兼容兜底；unknown 在首个投影前 fail closed。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** F-SYNC-2: callback to load older messages */
   onLoadMore?: () => void;
   isLoadingMore?: boolean;
@@ -260,15 +268,6 @@ interface MessageStreamProps {
 // 引用这两个成员(WorkChildItem),让「children 只含这两类」由类型系统保证,
 // 渲染处无需 as 强转;其余成员保持内联。
 type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
-type AgentPlanRenderItem = {
-  type: 'agent_plan';
-  key: string;
-  todos: TodoItem[];
-  /** 派生自哪条 TodoWrite / update_plan 调用(该调用的行被卡片取代,不再单独渲染)。
-   *  空洞判定与工作组锚定需要它:卡片是这次调用在流里的**唯一**呈现,没有时间戳的
-   *  item 会被间隔判定跳过,于是"空洞后的第一个动作恰好是计划卡"时切不开(#676 review)。 */
-  createdAt?: string;
-};
 type ToolSegmentRenderItem = {
   /** A run of consecutive tool_use messages between text segments,
    *  rendered as a single AgentActionsBlock. v2 — no isStreaming
@@ -331,7 +330,6 @@ interface WorkGroupRenderItem {
 
 export type RenderItem =
   | MessageRenderItem
-  | AgentPlanRenderItem
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
@@ -383,7 +381,7 @@ function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
 }
 
 // export 仅供 render-window 集成单测使用。窗口默认/扩窗时如果刚好切在
-// agent_plan / work_group / assistant 中间,顶部会出现无上下文的 Task/Todo 卡。
+// agent_task / work_group / assistant 中间,顶部会出现无上下文的卡片。
 // 向前吸收同一 user turn 的开头,但限制 lookback 防止单个超长 turn 破坏首屏预算。
 export function snapRenderWindowStartIdx(
   items: readonly RenderItem[],
@@ -563,6 +561,51 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
   return null;
 }
 
+/**
+ * 最后一条「用户侧输入」的 clientId —— **含**合成行（自动续跑指令本身）。
+ *
+ * 与上面的 `findLastUserMessageClientId` 的区别就在这里：那份服务于「编辑最后一条消息」
+ * 这个**可见** affordance，刻意跳过渲染成 null 的合成行；本份要回答的是「此刻正在跑的
+ * 这个 turn 是不是自动续跑发起的」——合成行恰恰是那个 turn 的发起者，跳过就答不了。
+ *
+ * 用途：自愈重连行判断自己是不是"仍在飞"。用户在续跑之后又自己发了消息时，最后一条用户
+ * 侧输入就换成他那条，旧的重连行随之停转（正在跑的已经是另一个 turn 了）。
+ */
+export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    // **插话（`delivery === 'steer'`）不算新 turn 的发起者** —— 它是同一个正在跑的 turn 内
+    // 的追加输入。算进来的话，用户在自愈 turn 里插一句，正在跑的重连行会立刻被"夺走归属"、
+    // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
+    // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
+    //
+    // 首选判据直接使用 main 投影的 vendor-turn owner；旧被控端缺省 owner 字段时，
+    // 才由下面的兼容分支按最后一条非 steer 用户输入兜底。
+    if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
+      return messages[i].clientId;
+    }
+  }
+  return null;
+}
+
+/**
+ * 自愈落库行是否仍属于当前运行中的续跑 turn。
+ *
+ * 新端以 main 持有的 vendor-turn owner 做精确关联；只有 wire 上确实缺省 owner 字段的旧
+ * 被控端才恢复历史启发式。旧端无法区分自动续跑与不落 user 行的 Goal turn，这是协议信息
+ * 不足时的兼容降级，不能扩散到 supported / unknown 两种状态。
+ */
+export function isAutoResumeRowInFlight(args: {
+  isContinuationTurnOwner: boolean;
+  sessionRunning: boolean;
+  isLastUserInput: boolean;
+  projectionCapability: ContinuationInFlightProjectionCapability;
+}): boolean {
+  return (
+    args.isContinuationTurnOwner ||
+    (args.projectionCapability === 'legacy' && args.sessionRunning && args.isLastUserInput)
+  );
+}
+
 export function shouldBlockAssistantFork(
   isSessionStreaming: boolean,
   message: ChatMessage,
@@ -588,7 +631,10 @@ export function shouldBlockAssistantFork(
 function isCompletedAssistantMessage(message: ChatMessage): boolean {
   return message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
-    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0);
+    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
+    // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),
+    // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
+    message.turnUsageDetails !== undefined;
 }
 
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
@@ -631,17 +677,13 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * their own per-block expand state via useExpandedBlockMemory (default
  * collapsed; user click → persisted).
  *
- * Agent plan handling (two-pass):
- *   Pass 1 — Pre-scan all messages to group TodoWrite / update_plan /
- *     TaskCreate/TaskUpdate/TaskList calls into logical "sessions".
- *     A session is one logical task list. A new session starts after the
- *     previous one's items are all completed. Within a session every
- *     plan update refreshes the same card; only the LAST update's position
- *     and state are kept (the card "moves down" as updates arrive).
- *   Pass 2 — Linear build. Plan tool_use messages are skipped, but at the
- *     position of each session's last update an `agent_plan` RenderItem is injected.
- *     Pending tool_segment is flushed before the plan card so order is
- *     preserved.
+ * Agent plan handling:
+ *   Plan tool calls (TodoWrite / update_plan / TaskCreate…) are swallowed
+ *   entirely — same treatment as F7's AskUserQuestion / ExitPlanMode: the
+ *   call and its tool_results produce no render item and do NOT cut the
+ *   surrounding tool_segment. 计划的唯一呈现是 composer 上方的常驻面板
+ *   (PinnedPlanPanel,Codex IDE 扩展式钉住交互),它直接从 messages 派生
+ *   最新 plan session 快照,与本函数无关。
  */
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
@@ -654,7 +696,7 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * 扫描 allRenderItems 找哪个 item **现在覆盖**这个 clientId:
  *   - message: msg.clientId 严格匹配
  *   - tool_segment: toolCalls.*.clientId 任一匹配(段合并后老 toolCall 仍在新段内)
- *   - tool_media / agent_plan: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
+ *   - tool_media / ghost_card: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
  *
  * 找到即返回该 index,visible slice 从这里继续;找不到才退回默认窗口。
  *
@@ -684,7 +726,7 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
       if (renderItemContainsClientId(it, lostCid)) return i;
     } else if (it.type !== 'fork_origin') {
-      // tool_media / agent_plan:其 key 派生自 stable message clientId,精确后缀匹配
+      // tool_media / ghost_card:其 key 派生自 stable message clientId,精确后缀匹配
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
     }
   }
@@ -865,12 +907,6 @@ export function buildRenderItems(
     }
   }
 
-  // ── Pass 1: pre-scan agent plan sessions ──
-  // Shared groups TodoWrite / update_plan / Task* into logical sessions.
-  // Desktop keeps the existing `agent_plan` render item and `plan-*` keys,
-  // while mobile can consume the same shared logic through buildMessageRenderItems.
-  const planInsertAt = findMessageTodoInsertions(messages, { keyPrefix: 'plan' });
-
   const isOrcaCommunicationTool = (toolName: string): boolean => {
     const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
     return (
@@ -1016,19 +1052,10 @@ export function buildRenderItems(
         continue;
       }
 
-      // Todo/plan updates — break the segment so the plan card doesn't get buried
-      // inside the tool block.
+      // Plan tools (TodoWrite / update_plan / Task*) — swallowed like F7:
+      // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(钉住式常驻面板),
+      // 流内不再插卡;也不切段,周围工具保持聚组,如同调用不存在。
       if (isAgentPlanToolName(toolName)) {
-        const sessionTodos = planInsertAt.get(i);
-        if (sessionTodos) {
-          flushSegment();
-          items.push({
-            type: 'agent_plan',
-            key: sessionTodos.key,
-            todos: sessionTodos.todos,
-            createdAt: msg.createdAt,
-          });
-        }
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
         i = j;
@@ -1512,15 +1539,11 @@ function renderItemStartMs(item: RenderItem): number | null {
     const ms = Date.parse(item.toolCall?.createdAt ?? item.update?.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
-  // ghost_card / agent_plan 是各自那次调用在流里的**唯一**呈现(工具行被卡片取代),
-  // 所以它们必须报出调用时间。漏掉的后果是间隔判定把它们当"无时间戳"跳过:空洞后的
-  // 第一个动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
+  // ghost_card 是那次调用在流里的**唯一**呈现(工具行被卡片取代),所以它必须
+  // 报出调用时间。漏掉的后果是间隔判定把它当"无时间戳"跳过:空洞后的第一个
+  // 动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
   if (item.type === 'ghost_card') {
     const ms = Date.parse(item.toolCall.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  if (item.type === 'agent_plan') {
-    const ms = Date.parse(item.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
   if (item.type === 'work_group') {
@@ -1579,11 +1602,18 @@ function renderItemEndMs(item: RenderItem): number | null {
     return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
   }
   if (item.type === 'work_group') {
-    for (let i = item.children.length - 1; i >= 0; i--) {
-      const childMs = renderItemEndMs(item.children[i]);
-      if (childMs !== null) return childMs;
+    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行的 Agent/Task 乱序完成时
+    // 真正的结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束
+    // 时间,于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开 —— 与本函数 tool_segment
+    // 分支、以及 groupWorkRuns 里 prevEndMs 的 Math.max 是同一条理由(#676 review codex P1)。
+    // 手机端同款函数(maker-shared 的 itemEndTimestamp)已按此收敛,#1210 review 指出这里镜像存在。
+    let latest: number | null = null;
+    for (const child of item.children) {
+      const childMs = renderItemEndMs(child);
+      if (childMs === null) continue;
+      latest = latest === null ? childMs : Math.max(latest, childMs);
     }
-    return null;
+    return latest;
   }
   // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
   // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,
@@ -1840,7 +1870,7 @@ function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = n
  *
  * 没有最终正文(被中断 / 停在工具)或最终正文后仍有已完成动作时返回
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
- * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
+ * 运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
  */
 function groupAnsweredTurnItems(
   turnItems: RenderItem[],
@@ -2022,6 +2052,12 @@ function renderWorkGroupChild(
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
+    /** 含合成行的最后一条用户侧输入(自愈重连行判断"仍在飞"的兜底判据)。 */
+    lastUserInputClientId: string | null;
+    /** 当前 vendor turn 的续跑 owner clientId。 */
+    continuationTurnClientId: string | null;
+    /** 旧端缺省 owner 字段时才启用兼容兜底。 */
+    continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
     localFileRefs: readonly KnownLocalFileRef[];
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
@@ -2063,6 +2099,9 @@ function renderWorkGroupChild(
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
+      isLastUserInput={item.message.clientId === props.lastUserInputClientId}
+      isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
+      continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
       localFileRefs={props.localFileRefs}
     />
   );
@@ -2162,6 +2201,8 @@ export function MessageStream({
   messages,
   taskUpdates,
   isSessionStreaming = false,
+  continuationTurnClientId = null,
+  continuationInFlightProjectionCapability = 'unknown',
   onLoadMore,
   isLoadingMore,
   hasMoreMessages,
@@ -2221,7 +2262,10 @@ export function MessageStream({
   const prevScrollTopRef = useRef(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
-  const lastUserMsgIdRef = useRef<string | null>(null);
+  const lastUserMsg = messages[messages.length - 1];
+  const lastUserMsgIdRef = useRef<string | null>(
+    lastUserMsg?.role === 'user' ? lastUserMsg.clientId : null,
+  );
 
   // ── render-window state ──
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
@@ -2322,7 +2366,7 @@ export function MessageStream({
    * 末尾、**没有上界**。这是 #676 review 反复指向的根因:补齐 / 跳转让 messages 变长后,
    * 深跳会一次挂载"锚点 → 末尾"的全部 item。因为它无界,store 侧只能靠"跳转补齐预算"
    * 间接限制挂载量,而那个预算必须逐一追平 buildRenderItems 的每种 item 展开规则
-   * (agent_task 卡、空洞切段、ghost_card、agent_plan、tool_media…),review 中已发现 5 种
+   * (agent_task 卡、空洞切段、ghost_card、tool_media…),review 中已发现 5 种
    * 被低估的路径 —— 是一条追不完的线。
    *
    * 决定:把锚定窗口做成双向有界 + 配套向下扩窗,作为紧随其后的独立改动(不塞进本 PR ——
@@ -3007,12 +3051,6 @@ export function MessageStream({
   // result land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    // 还原中:跳过一切 auto-follow,位置由下面的还原 effect / ResizeObserver 接管。
-    if (restoringRef.current) {
-      const el = scrollRef.current;
-      if (el) prevScrollTopRef.current = el.scrollTop;
-      return;
-    }
     // tail item 在 visibleRenderItems 与 allRenderItems 末尾完全一致(window 始终
     // 包含最新的一段),用 visibleRenderItems 避免扩窗时多触发一次。
     // 用户消息总是产出独立的 message item(不进 segment / 不被丢弃),所以这里
@@ -3020,15 +3058,26 @@ export function MessageStream({
     const lastItem = visibleRenderItems[visibleRenderItems.length - 1];
     const lastUserMsg =
       lastItem?.type === 'message' && lastItem.message.role === 'user' ? lastItem.message : null;
-    const isNewUserSend = lastUserMsg !== null && lastUserMsg.clientId !== lastUserMsgIdRef.current;
+    const userMessageObservation = resolveLastUserMessageObservation({
+      restoring: restoringRef.current,
+      tailUserMessageId: lastUserMsg?.clientId ?? null,
+      previousTailUserMessageId: lastUserMsgIdRef.current,
+    });
+    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    const decision = resolveRenderPinDecision({
+      restoring: restoringRef.current,
+      newUserSend: userMessageObservation.isNewUserSend,
+      nearBottom: isNearBottomRef.current,
+    });
 
-    if (isNewUserSend) {
+    if (userMessageObservation.isNewUserSend && lastUserMsg) {
       lastUserMsgIdRef.current = lastUserMsg.clientId;
-      isNearBottomRef.current = true;
-      pinToBottom();
-    } else if (isNearBottomRef.current) {
-      pinToBottom();
     }
+    if (decision.clearRestoring) {
+      restoringRef.current = false;
+      isNearBottomRef.current = true;
+    }
+    if (decision.pinToBottom) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
@@ -3383,6 +3432,8 @@ export function MessageStream({
   // + 重发,更早的消息会连带丢弃后续轮次,v1 不开放)。与 first 同理用全量
   // messages 判定,不受窗口分页影响。
   const lastUserMessageClientId = useMemo(() => findLastUserMessageClientId(messages), [messages]);
+  // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
+  const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。
@@ -3469,16 +3520,6 @@ export function MessageStream({
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
                     }
 
-                    if (item.type === 'agent_plan') {
-                      return (
-                        <TodoListCard
-                          key={item.key}
-                          todos={item.todos}
-                          animated={isSessionStreaming}
-                        />
-                      );
-                    }
-
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
@@ -3548,6 +3589,9 @@ export function MessageStream({
                               isSessionStreaming,
                               firstUserMessageClientId,
                               lastUserMessageClientId,
+                              lastUserInputClientId,
+                              continuationTurnClientId,
+                              continuationInFlightProjectionCapability,
                               localFileRefs,
                               singleResultMap,
                               assistantsWithFollowingUserBoundary,
@@ -3667,6 +3711,11 @@ export function MessageStream({
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
+                          isLastUserInput={msg.clientId === lastUserInputClientId}
+                          isContinuationTurnOwner={msg.clientId === continuationTurnClientId}
+                          continuationInFlightProjectionCapability={
+                            continuationInFlightProjectionCapability
+                          }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
                         />
@@ -3738,6 +3787,9 @@ const MessageItem = memo(function MessageItem({
   assistantIsTurnFinal,
   isFirstUserMessage,
   isLastUserMessage,
+  isLastUserInput,
+  isContinuationTurnOwner,
+  continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
 }: {
@@ -3770,6 +3822,16 @@ const MessageItem = memo(function MessageItem({
   /** True iff this message is the last user message in the full list —
    *  edit-last-message: gates the Edit (pencil) entry in UserMessage. */
   isLastUserMessage?: boolean;
+  /**
+   * True iff this message is the last **user-side input** in the full list, synthetic rows
+   * included（见 `findLastUserInputClientId`）。自愈重连行用它 + `sessionRunning` 判断
+   * 「此刻正在跑的 turn 是不是我发起的」，从而决定要不要显示成"重新连接中"。
+   */
+  isLastUserInput?: boolean;
+  /** 当前 vendor turn 的续跑 owner 是否就是这条消息。 */
+  isContinuationTurnOwner?: boolean;
+  /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** True iff this message is the last message in the full list —
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
@@ -3784,6 +3846,14 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        // 「这条自愈记录此刻真的在飞吗」：main 持有 vendor-turn owner，只有旧端缺省该字段时
+        // 才回落到兼容启发式；supported / unknown 不再依赖 Renderer 的 sticky memory。
+        autoResumeInFlight={isAutoResumeRowInFlight({
+          isContinuationTurnOwner: isContinuationTurnOwner === true,
+          sessionRunning: sessionRunning === true,
+          isLastUserInput: isLastUserInput === true,
+          projectionCapability: continuationInFlightProjectionCapability ?? 'unknown',
+        })}
       />
     );
   }

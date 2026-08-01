@@ -115,6 +115,16 @@ const MIGRATIONS: string[] = [
     tokenize='porter unicode61'
   );
   `,
+  // v3: 设备间同步的状态式 CRDT + 上次本地投影。absent row = 从未开启过同步；
+  // 开关关闭后保留 row，继续记录本地变化，重新开启时不会漏掉离线编辑。
+  `
+  CREATE TABLE contacts_sync_state (
+    singleton INTEGER PRIMARY KEY CHECK (singleton = 1),
+    node_id TEXT NOT NULL,
+    state_json TEXT NOT NULL,
+    projection_json TEXT NOT NULL
+  );
+  `,
 ];
 
 /**

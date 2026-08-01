@@ -13,7 +13,7 @@
  *       onXxxDidChange 上抛，由父组件 merge 精确值让 props 重新流下来——单一可信源。
  *
  * 二、draft-effort-server-coupling(2026-07-17):
- * 现象：登录令牌失效(401)后,草稿(未创建会话)里推理强度点了没反应。
+ * 现象：登录令牌失效(401)后,草稿(未创建任务)里推理强度点了没反应。
  * 根因：草稿分支 `await updatePreferences(服务端 PATCH)` 成功后才调 onEffortDidChange,
  *       服务端失败被 catch 静默吞掉 → UI 永不刷新。
  * 修复：默认模型/档位偏好全量本地化(newMakerDraft.lastByVendor 按 agent 分槽 +

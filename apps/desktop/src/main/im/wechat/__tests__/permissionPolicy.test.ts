@@ -3,6 +3,7 @@ import type { Capabilities } from '@cindy/maker-core';
 
 import {
   createWechatTurnPermissionPolicy,
+  createWechatTurnPermissionPolicyForMode,
   supportsWechatTurnPermissionMode,
 } from '../permissionPolicy';
 
@@ -64,5 +65,17 @@ describe('personal WeChat turn permission policy', () => {
     expect(
       supportsWechatTurnPermissionMode({} as Capabilities, 'ask'),
     ).toBe(false);
+
+    expect(() =>
+      createWechatTurnPermissionPolicyForMode('task-3', capabilities, 'bypassPermissions'),
+    ).toThrow('TURN_PERMISSION_POLICY_UNSUPPORTED:bypassPermissions');
+    expect(() =>
+      createWechatTurnPermissionPolicyForMode('task-4', {} as Capabilities, 'ask'),
+    ).toThrow('TURN_PERMISSION_POLICY_UNSUPPORTED:ask');
+    expect(createWechatTurnPermissionPolicyForMode('task-5', capabilities, 'auto').origin).toEqual({
+      kind: 'im',
+      channel: 'wechat',
+      taskId: 'task-5',
+    });
   });
 });

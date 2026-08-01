@@ -521,6 +521,740 @@ describe('CodexAgent permissions', () => {
   });
 });
 
+describe('CodexAgent capability routing', () => {
+  const capabilityRouting = {
+    overrides: [
+      {
+        capabilityId: 'feishu',
+        source: {
+          kind: 'harness-plugin',
+          harness: 'codex',
+          surface: 'mcp',
+          id: 'cindy-routed-feishu-delegate',
+          artifactId: 'feishu-delegate',
+          containerId: 'feishu-delegate@personal',
+        },
+        invocation: 'explicit-only',
+        explicitSelectors: [
+          '$feishu-delegate:message-feishu-coworkers',
+          '/feishu-delegate:message-feishu-coworkers',
+        ],
+        replacement: {
+          kind: 'cindy-plugin',
+          id: 'xd-feishu',
+        },
+      },
+      {
+        capabilityId: 'computer-use',
+        source: {
+          kind: 'harness-plugin',
+          harness: 'codex',
+          surface: 'plugin',
+          id: 'computer-use@openai-bundled',
+        },
+        invocation: 'disabled',
+        replacement: {
+          kind: 'cindy-host',
+          id: 'cindy_computer',
+        },
+      },
+    ],
+  } as const;
+
+  it('applies host-owned plugin policy to new and resumed Codex 0.145 threads', async () => {
+    const startAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    const startHost = installFakeHost(startAgent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+    const startHandle = await startAgent.startSession({
+      sessionId: 'session-capability-routing-start',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const startParams = startHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(startParams.config).toMatchObject({
+      'plugins."computer-use@openai-bundled".enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+        'prompt',
+    });
+
+    const resumeAgent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    const resumeHost = installFakeHost(resumeAgent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+    const resumeHandle = await resumeAgent.startSession({
+      sessionId: 'session-capability-routing-resume',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+    });
+    const resumeParams = resumeHost.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { config?: Record<string, unknown> };
+    expect(resumeParams.config).toMatchObject({
+      'plugins."computer-use@openai-bundled".enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers."feishu-delegate".enabled': false,
+      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode':
+        'prompt',
+    });
+
+    await startHandle.close();
+    await resumeHandle.close();
+  });
+
+  it('fails closed for older Codex daemons that cannot apply plugin overrides', async () => {
+    const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.144.6',
+    });
+    await expect(
+      agent.startSession({
+        sessionId: 'session-capability-routing-legacy',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        remoteHostId: 'legacy-remote',
+      }),
+    ).rejects.toThrow('requires Codex app-server 0.145.0 or newer');
+  });
+
+  it('disables an explicit-only plugin on remote Codex where the local overlay is unavailable', async () => {
+    const agent = new CodexAgent(createDeps({}, { capabilityRouting }));
+    const host = installFakeHost(agent, undefined, {
+      userAgent: 'mock-codex/0.145.0',
+    });
+    const handle = await agent.startSession({
+      sessionId: 'session-capability-routing-remote',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+      remoteHostId: 'remote-host',
+    });
+    const params = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { config?: Record<string, unknown> };
+
+    expect(params.config).toMatchObject({
+      'plugins."feishu-delegate@personal".enabled': false,
+      'plugins."computer-use@openai-bundled".enabled': false,
+    });
+    expect(params.config).not.toHaveProperty(
+      'plugins."feishu-delegate@personal".mcp_servers."cindy-routed-feishu-delegate".default_tools_approval_mode',
+    );
+
+    await handle.close();
+  });
+
+  it('declines an explicit-only downstream MCP unless the user chose that source', async () => {
+    const makeAgent = () =>
+      new CodexAgent(
+        createDeps(
+          {},
+          {
+            capabilityRouting,
+            getMcpToolApprovalPolicy: () => 'auto-approve',
+          },
+        ),
+      );
+    const install = (agent: CodexAgent, turnId: string) =>
+      installFakeHost(
+        agent,
+        (method) => {
+          if (method === Method.TurnStart) return { turn: { id: turnId } };
+          return undefined;
+        },
+        { userAgent: 'mock-codex/0.145.0' },
+      );
+    const request = (turnId: string) => ({
+      threadId: 'start-thread-id',
+      turnId,
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form' as const,
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    });
+
+    const implicitAgent = makeAgent();
+    const implicitHost = install(implicitAgent, 'turn-implicit-feishu');
+    const implicitHandle = await implicitAgent.startSession({
+      sessionId: 'session-implicit-feishu',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await implicitHandle.send({
+      type: 'user',
+      content: '查一下我和康康的飞书消息',
+    });
+    const implicitHandlers = implicitHost.getThreadHandlers();
+    if (!implicitHandlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    await expect(
+      implicitHandlers.mcpServerElicitation(request('turn-implicit-feishu')),
+    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+    implicitHandlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-implicit-feishu',
+      item: {
+        id: 'user-owned-colliding-mcp',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: null,
+      },
+    });
+    await expect(
+      implicitHandlers.mcpServerElicitation(request('turn-implicit-feishu')),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    await expect(
+      implicitHandlers.mcpServerElicitation({
+        ...request('turn-implicit-feishu'),
+        serverName: 'feishu-delegate',
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    const explicitAgent = makeAgent();
+    const explicitHost = install(explicitAgent, 'turn-explicit-feishu');
+    const explicitHandle = await explicitAgent.startSession({
+      sessionId: 'session-explicit-feishu',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await explicitHandle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+    const explicitHandlers = explicitHost.getThreadHandlers();
+    if (!explicitHandlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    // The routed runtime name alone is not enough: without app-server
+    // provenance we cannot distinguish the plugin overlay from another source.
+    await expect(
+      explicitHandlers.mcpServerElicitation(request('turn-explicit-feishu')),
+    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+    explicitHandlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-explicit-feishu',
+      item: {
+        id: 'routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    await expect(
+      explicitHandlers.mcpServerElicitation(request('turn-explicit-feishu')),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+    explicitHandlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-explicit-feishu',
+      item: {
+        id: 'colliding-user-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'other_tool',
+        pluginId: null,
+      },
+    });
+    await expect(
+      explicitHandlers.mcpServerElicitation({
+        ...request('turn-explicit-feishu'),
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+        },
+      }),
+    ).resolves.toEqual({ action: 'decline', content: null, _meta: null });
+
+    await implicitHandle.close();
+    await explicitHandle.close();
+  });
+
+  it('merges inherited and newly added capability selectors into plan follow-up turns', async () => {
+    const cases = [
+      {
+        label: 'inherited-implementation',
+        initialPrompt: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+        plan: '1. 查询消息',
+        decision: { kind: 'plan_review', behavior: 'allow' } as const,
+      },
+      {
+        label: 'inherited-revision',
+        initialPrompt: '用 $feishu-delegate:message-feishu-coworkers 制定查询计划',
+        plan: '1. 查询消息',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason: '再补充消息范围',
+        } as const,
+      },
+      {
+        label: 'edited-implementation',
+        initialPrompt: '制定一个查询消息的计划',
+        plan: '1. 查询消息',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'allow',
+          editedPlan:
+            '1. 用 $feishu-delegate:message-feishu-coworkers 查询消息',
+        } as const,
+      },
+      {
+        label: 'feedback-revision',
+        initialPrompt: '制定一个查询消息的计划',
+        plan: '1. 查询消息',
+        decision: {
+          kind: 'plan_review',
+          behavior: 'deny',
+          reason:
+            '请改用 $feishu-delegate:message-feishu-coworkers 并补充消息范围',
+        } as const,
+      },
+    ];
+
+    for (const testCase of cases) {
+      let turnSeq = 0;
+      const agent = new CodexAgent(
+        createDeps(
+          {},
+          {
+            capabilityRouting,
+            getMcpToolApprovalPolicy: () => 'auto-approve',
+          },
+        ),
+      );
+      const host = installFakeHost(
+        agent,
+        (method) => {
+          if (method === Method.TurnStart) {
+            turnSeq += 1;
+            return { turn: { id: `${testCase.label}-turn-${turnSeq}` } };
+          }
+          return undefined;
+        },
+        { userAgent: 'mock-codex/0.145.0' },
+      );
+      const handle = await agent.startSession({
+        sessionId: `session-plan-${testCase.label}-capability-routing`,
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+        planMode: true,
+      });
+      handle.setInteractionResolver(async () => testCase.decision);
+      await handle.send({
+        type: 'user',
+        content: testCase.initialPrompt,
+      });
+
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.mcpServerElicitation) {
+        throw new Error('expected mcpServerElicitation handler');
+      }
+      const planTurnId = `${testCase.label}-turn-1`;
+      handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: planTurnId } });
+      handlers.itemCompleted?.({
+        threadId: 'start-thread-id',
+        turnId: planTurnId,
+        item: { type: 'plan', id: `${planTurnId}-plan`, text: testCase.plan },
+      } as never);
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: planTurnId, status: 'completed' },
+      });
+
+      await vi.waitFor(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+      });
+      const followUpTurnId = `${testCase.label}-turn-2`;
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: followUpTurnId,
+        item: {
+          id: `${testCase.label}-routed-feishu-call`,
+          type: 'mcpToolCall',
+          server: 'cindy-routed-feishu-delegate',
+          tool: 'feishu_read_messages',
+          pluginId: 'feishu-delegate@personal',
+        },
+      });
+      await expect(
+        handlers.mcpServerElicitation({
+          threadId: 'start-thread-id',
+          turnId: followUpTurnId,
+          serverName: 'cindy-routed-feishu-delegate',
+          mode: 'form',
+          _meta: {
+            codex_approval_kind: 'mcp_tool_call',
+            tool_name: 'feishu_read_messages',
+          },
+          message: 'Allow tool call',
+          requestedSchema: {},
+        }),
+      ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+      await handle.close();
+    }
+  });
+
+  it('binds explicit capability selection before a pending turn/start response', async () => {
+    const pendingTurnStart = deferred<{ turn: { id: string } }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) return pendingTurnStart.promise;
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-started-before-response-capability-routing',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const sendPromise = handle.send({
+      type: 'user',
+      content: '请用 $feishu-delegate:message-feishu-coworkers 查消息',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    handlers.turnStarted?.({
+      threadId: 'start-thread-id',
+      turn: { id: 'early-capability-turn' },
+    });
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'early-capability-turn',
+      item: {
+        id: 'early-routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    await expect(
+      handlers.mcpServerElicitation({
+        threadId: 'start-thread-id',
+        turnId: 'early-capability-turn',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      }),
+    ).resolves.toEqual({ action: 'accept', content: null, _meta: null });
+
+    pendingTurnStart.resolve({ turn: { id: 'early-capability-turn' } });
+    await sendPromise;
+    await handle.close();
+  });
+
+  it('does not unlock a downstream MCP when an explicit steering message is rejected', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) {
+          return { turn: { id: 'turn-rejected-capability-steer' } };
+        }
+        if (method === Method.TurnSteer) {
+          return steerAck.promise;
+        }
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-rejected-capability-steer',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '查一下我和康康的飞书消息',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-rejected-capability-steer',
+      item: {
+        id: 'rejected-steer-routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    const steerPromise = handle.steer({
+      type: 'user',
+      content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnSteer),
+      ).toHaveLength(1);
+    });
+    let elicitationSettled = false;
+    const elicitationPromise = handlers.mcpServerElicitation({
+        threadId: 'start-thread-id',
+        turnId: 'turn-rejected-capability-steer',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      }).then((result) => {
+        elicitationSettled = true;
+        return result;
+      });
+    await Promise.resolve();
+    expect(elicitationSettled).toBe(false);
+
+    const serverError = Object.assign(
+      new Error(
+        'expected active turn id turn-rejected-capability-steer but found another-turn',
+      ),
+      { code: -32600 },
+    );
+    const steerAssertion = expect(steerPromise).rejects.toThrow(
+      'No active Codex turn to steer',
+    );
+    steerAck.reject(serverError);
+    await steerAssertion;
+    await expect(elicitationPromise).resolves.toEqual({
+      action: 'decline',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
+  it('waits for a steer acknowledgement before applying its explicit capability selection', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) {
+          return { turn: { id: 'turn-pending-capability-steer' } };
+        }
+        if (method === Method.TurnSteer) return steerAck.promise;
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-pending-capability-steer',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '查一下我和康康的飞书消息',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    handlers.itemStarted?.({
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-capability-steer',
+      item: {
+        id: 'pending-steer-routed-feishu-call',
+        type: 'mcpToolCall',
+        server: 'cindy-routed-feishu-delegate',
+        tool: 'feishu_read_messages',
+        pluginId: 'feishu-delegate@personal',
+      },
+    });
+    const steerPromise = handle.steer({
+      type: 'user',
+      content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+    });
+    await vi.waitFor(() => {
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnSteer),
+      ).toHaveLength(1);
+    });
+    let elicitationSettled = false;
+    const elicitationPromise = handlers.mcpServerElicitation({
+      threadId: 'start-thread-id',
+      turnId: 'turn-pending-capability-steer',
+      serverName: 'cindy-routed-feishu-delegate',
+      mode: 'form',
+      _meta: {
+        codex_approval_kind: 'mcp_tool_call',
+        tool_name: 'feishu_read_messages',
+      },
+      message: 'Allow tool call',
+      requestedSchema: {},
+    }).then((result) => {
+      elicitationSettled = true;
+      return result;
+    });
+    await Promise.resolve();
+    expect(elicitationSettled).toBe(false);
+
+    steerAck.resolve({ turnId: 'turn-pending-capability-steer' });
+    await steerPromise;
+    await expect(elicitationPromise).resolves.toEqual({
+      action: 'accept',
+      content: null,
+      _meta: null,
+    });
+
+    await handle.close();
+  });
+
+  it('records explicit capability selection after a late steer acknowledgement', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const agent = new CodexAgent(
+      createDeps(
+        {},
+        {
+          capabilityRouting,
+          getMcpToolApprovalPolicy: () => 'auto-approve',
+        },
+      ),
+    );
+    const host = installFakeHost(
+      agent,
+      (method) => {
+        if (method === Method.TurnStart) {
+          return { turn: { id: 'turn-late-capability-steer' } };
+        }
+        if (method === Method.TurnSteer) return steerAck.promise;
+        return undefined;
+      },
+      { userAgent: 'mock-codex/0.145.0' },
+    );
+    const handle = await agent.startSession({
+      sessionId: 'session-late-capability-steer',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    await handle.send({
+      type: 'user',
+      content: '查一下飞书消息',
+    });
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.mcpServerElicitation) {
+      throw new Error('expected mcpServerElicitation handler');
+    }
+    const invokeRoutedTool = async (itemId: string) => {
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-late-capability-steer',
+        item: {
+          id: itemId,
+          type: 'mcpToolCall',
+          server: 'cindy-routed-feishu-delegate',
+          tool: 'feishu_read_messages',
+          pluginId: 'feishu-delegate@personal',
+        },
+      });
+      return handlers.mcpServerElicitation!({
+        threadId: 'start-thread-id',
+        turnId: 'turn-late-capability-steer',
+        serverName: 'cindy-routed-feishu-delegate',
+        mode: 'form',
+        _meta: {
+          codex_approval_kind: 'mcp_tool_call',
+          tool_name: 'feishu_read_messages',
+        },
+        message: 'Allow tool call',
+        requestedSchema: {},
+      });
+    };
+
+    vi.useFakeTimers();
+    try {
+      const steerPromise = handle.steer({
+        type: 'user',
+        content: '/feishu-delegate:message-feishu-coworkers 查一下康康',
+      });
+      for (let i = 0; i < 5; i += 1) {
+        if (host.request.mock.calls.some(([method]) => method === Method.TurnSteer)) break;
+        await Promise.resolve();
+      }
+      const timeoutAssertion = expect(steerPromise).rejects.toThrow(
+        /did not acknowledge/i,
+      );
+      await vi.advanceTimersByTimeAsync(10_000);
+      await timeoutAssertion;
+
+      await expect(invokeRoutedTool('before-late-ack')).resolves.toEqual({
+        action: 'decline',
+        content: null,
+        _meta: null,
+      });
+      steerAck.resolve({ turnId: 'turn-late-capability-steer' });
+      await Promise.resolve();
+      await Promise.resolve();
+      await expect(invokeRoutedTool('after-late-ack')).resolves.toEqual({
+        action: 'accept',
+        content: null,
+        _meta: null,
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+    await handle.close();
+  });
+});
+
 describe('CodexAgent reference directories', () => {
   const profileName = 'cindy-readonly-references';
 
@@ -1943,6 +2677,90 @@ describe('CodexAgent.startSession developerInstructions', () => {
     expect(unregisterCodexMcpThreadContext).toHaveBeenCalledWith('grandchild-thread-id');
   });
 
+  it('keeps thread/start developerInstructions on the websocket provider and skips proxy registration', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-start',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'start-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
+  });
+
+  it('reinjects websocket developerInstructions when daemon recovery resumes the thread', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    let turnStarts = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) {
+        turnStarts += 1;
+        if (turnStarts === 1) throw new Error('thread not found');
+        return { turn: { id: `turn-${turnStarts}` } };
+      }
+      if (method === Method.ThreadResume) {
+        return {
+          thread: { id: 'start-thread-id' },
+          model: 'gpt-5.4',
+          modelProvider: 'cindy_openai',
+          cwd: '/repo',
+        };
+      }
+      return undefined;
+    }, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-daemon-recovery',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      userPrompt: 'USER PROMPT',
+    });
+    await handle.send({ type: 'user', content: 'hello' });
+
+    const startParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadStart,
+    )?.[1] as { developerInstructions?: string };
+    const resumeParams = host.request.mock.calls.find(
+      ([method]) => method === Method.ThreadResume,
+    )?.[1] as { developerInstructions?: string; modelProvider?: string };
+    expect(resumeParams.modelProvider).toBe('cindy_openai');
+    expect(resumeParams.developerInstructions).toBe(startParams.developerInstructions);
+    expect(resumeParams.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(resumeParams.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
   it('omits thread/resume developerInstructions and registers prompt when codex proxy is active', async () => {
     const runtimeConfig = { systemPrompt: 'HOST PRODUCT PROMPT' };
     const userPrompt = [
@@ -1997,6 +2815,78 @@ describe('CodexAgent.startSession developerInstructions', () => {
 
     await startBaselineHandle.close();
     await proxyHandle.close();
+  });
+
+  it('keeps thread/resume developerInstructions on the websocket provider when history lacks them', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-resume',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      codexHistoryHasProductPrompt: false,
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'resume-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
+  });
+
+  it('keeps thread/resume developerInstructions on the websocket provider when history already contains them', async () => {
+    const registerCodexSystemPromptForThread = vi.fn();
+    const agent = new CodexAgent(createDeps(
+      { systemPrompt: 'HOST PRODUCT PROMPT' },
+      { registerCodexSystemPromptForThread },
+    ));
+    const host = installFakeHost(agent, undefined, {
+      codexProxyActive: true,
+      remoteCompactionProviderId: 'cindy_openai',
+    });
+
+    const handle = await agent.startSession({
+      sessionId: 'session-websocket-resume-existing-prompt',
+      model: 'gpt-5.4',
+      providerId: 'openai',
+      workingDir: '/repo',
+      resumeSessionId: '123e4567-e89b-12d3-a456-426614174000',
+      codexHistoryHasProductPrompt: true,
+      userPrompt: 'USER PROMPT',
+    });
+    const params = host.request.mock.calls.find(([method]) => method === Method.ThreadResume)?.[1] as {
+      developerInstructions?: string;
+      modelProvider?: string;
+    };
+
+    expect(params.modelProvider).toBe('cindy_openai');
+    expect(params.developerInstructions).toContain('HOST PRODUCT PROMPT');
+    expect(params.developerInstructions).toContain('USER PROMPT');
+    expect(registerCodexSystemPromptForThread).not.toHaveBeenCalled();
+    expect(handle.codexProductPromptDelivery).toEqual({
+      threadId: 'resume-thread-id',
+      historyHasProductPrompt: true,
+    });
+    await handle.close();
   });
 
   it('omits developerInstructions from thread/resume params when codex proxy is inactive and history already has product prompt', async () => {
@@ -4339,6 +5229,482 @@ describe('CodexAgent MCP thread context hooks', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  describe('websocket body recovery auto-retry', () => {
+    const ENCRYPTED_ERROR =
+      'Encrypted content could not be decrypted or parsed. code=invalid_encrypted_content';
+
+    function installRecoveryHost(agent: CodexAgent): ReturnType<typeof installFakeHost> {
+      let turnSeq = 0;
+      return installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) {
+          turnSeq += 1;
+          return { turn: { id: `turn-${turnSeq}` } };
+        }
+        return undefined;
+      });
+    }
+
+    it('arms HTTP fallback and retries the same zero-output turn once', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+      });
+      expect(armCodexHttpRecovery).toHaveBeenCalledWith({
+        sessionId: 'session-ws-body-recovery',
+        threadId: 'start-thread-id',
+        message: 'Bad request',
+        additionalDetails: ENCRYPTED_ERROR,
+      });
+      expect(
+        events.some(
+          (event) =>
+            event.type === 'error' &&
+            (event.data as { isTerminal?: boolean }).isTerminal === true,
+        ),
+      ).toBe(false);
+
+      // 原 WS turn 的迟到终态已落墓碑，不得把 HTTP 重投收口掉。
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-2', status: 'completed' },
+      });
+      await waitForExpectation(() => {
+        expect(events.some((event) => event.type === 'done')).toBe(true);
+      });
+      await handle.close();
+    });
+
+    it.each([false, true])(
+      'defers HTTP fallback until an early recovery error gets turn/start ownership (started=%s)',
+      async (startedBeforeError) => {
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+        const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          turnStarts += 1;
+          if (turnStarts === 1) return firstStart.promise;
+          return { turn: { id: `turn-${turnStarts}` } };
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-ws-body-recovery-before-start-response',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => expect(turnStarts).toBe(1));
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.turnStarted || !handlers.turnCompleted) {
+          throw new Error('expected handlers');
+        }
+        if (startedBeforeError) {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-1' },
+          });
+        }
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: {
+            message: 'Bad request',
+            additionalDetails: ENCRYPTED_ERROR,
+            codexErrorInfo: 'badRequest',
+          },
+        });
+
+        await Promise.resolve();
+        expect(turnStarts).toBe(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: {
+            id: 'turn-1',
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+        expect(turnStarts).toBe(1);
+
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sendPromise;
+        await waitForExpectation(() => {
+          expect(turnStarts).toBe(2);
+          expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        });
+        expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        await handle.close();
+      },
+    );
+
+    it.each([false, true])(
+      'defers HTTP fallback until an early failed turn/completed gets turn/start ownership (started=%s)',
+      async (startedBeforeCompletion) => {
+        const firstStart = deferred<{ turn: { id: string } }>();
+        let turnStarts = 0;
+        const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+        const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+        const host = installFakeHost(agent, (method) => {
+          if (method !== Method.TurnStart) return undefined;
+          turnStarts += 1;
+          if (turnStarts === 1) return firstStart.promise;
+          return { turn: { id: `turn-${turnStarts}` } };
+        });
+        const handle = await agent.startSession({
+          sessionId: 'session-ws-body-recovery-completed-before-start-response',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        const sendPromise = handle.send({ type: 'user', content: 'hello' });
+        await waitForExpectation(() => expect(turnStarts).toBe(1));
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.turnCompleted || !handlers.turnStarted) throw new Error('expected handlers');
+        if (startedBeforeCompletion) {
+          handlers.turnStarted({
+            threadId: 'start-thread-id',
+            turn: { id: 'turn-1' },
+          });
+        }
+        handlers.turnCompleted({
+          threadId: 'start-thread-id',
+          turn: {
+            id: 'turn-1',
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+
+        await Promise.resolve();
+        expect(turnStarts).toBe(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+
+        firstStart.resolve({ turn: { id: 'turn-1' } });
+        await sendPromise;
+        await waitForExpectation(() => {
+          expect(turnStarts).toBe(2);
+          expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+        });
+        expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(false);
+        await handle.close();
+      },
+    );
+
+    it('surfaces one terminal failure when recovery completes before turn/start rejects', async () => {
+      const firstStart = deferred<{ turn: { id: string } }>();
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installFakeHost(agent, (method) => {
+        if (method === Method.TurnStart) return firstStart.promise;
+        return undefined;
+      });
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-start-rejects',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      const sendPromise = handle.send({ type: 'user', content: 'hello' });
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(1);
+      });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      firstStart.reject(new Error('turn/start transport failed'));
+      await sendPromise;
+
+      await waitForExpectation(() => {
+        expect(events.filter(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toHaveLength(1);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      await handle.close();
+    });
+
+    it('cancels a recorded recovery intent without replaying the turn', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-cancelled',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Bad request',
+          additionalDetails: ENCRYPTED_ERROR,
+          codexErrorInfo: 'badRequest',
+        },
+      });
+
+      await handle.abort();
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+      await Promise.resolve();
+
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('does not replay a recovery error after the turn has produced output', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'image_generation_id');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-output',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.reasoningTextDelta) throw new Error('expected handlers');
+
+      handlers.reasoningTextDelta({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        itemId: 'reasoning-1',
+        contentIndex: 0,
+        delta: 'already produced output',
+      });
+      handlers.error({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        willRetry: false,
+        error: {
+          message: 'Image generation items without `id` are not supported for this request.',
+          codexErrorInfo: 'badRequest',
+        },
+      });
+      await Promise.resolve();
+
+      expect(armCodexHttpRecovery).not.toHaveBeenCalled();
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(1);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('does not retry the same logical send again when the HTTP retry also fails', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-once',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+      const events: AgentEvent[] = [];
+      void (async () => {
+        for await (const event of handle.events()) events.push(event);
+      })();
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.error || !handlers.turnCompleted) throw new Error('expected handlers');
+
+      const failTurn = (turnId: string) => {
+        handlers.error?.({
+          threadId: 'start-thread-id',
+          turnId,
+          willRetry: false,
+          error: {
+            message: 'Bad request',
+            additionalDetails: ENCRYPTED_ERROR,
+            codexErrorInfo: 'badRequest',
+          },
+        });
+        handlers.turnCompleted?.({
+          threadId: 'start-thread-id',
+          turn: {
+            id: turnId,
+            status: 'failed',
+            error: { message: ENCRYPTED_ERROR },
+          },
+        });
+      };
+      failTurn('turn-1');
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+      });
+
+      failTurn('turn-2');
+      await waitForExpectation(() => {
+        expect(events.some(
+          (event) =>
+            event.type === 'error'
+            && (event.data as { isTerminal?: boolean }).isTerminal === true,
+        )).toBe(true);
+      });
+      expect(
+        host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+      ).toHaveLength(2);
+      expect(handle.isTurnRunning?.()).toBe(false);
+      await handle.close();
+    });
+
+    it('recovers from a failed turn/completed when no error notification was delivered', async () => {
+      const armCodexHttpRecovery = vi.fn(() => 'encrypted_content');
+      const agent = new CodexAgent(createDeps({}, { armCodexHttpRecovery }));
+      const host = installRecoveryHost(agent);
+      const handle = await agent.startSession({
+        sessionId: 'session-ws-body-recovery-completed-only',
+        model: 'gpt-5.4',
+        workingDir: '/repo',
+      });
+
+      await handle.send({ type: 'user', content: 'hello' });
+      const handlers = host.getThreadHandlers();
+      if (!handlers?.turnCompleted) throw new Error('expected turnCompleted handler');
+      handlers.turnCompleted({
+        threadId: 'start-thread-id',
+        turn: {
+          id: 'turn-1',
+          status: 'failed',
+          error: { message: ENCRYPTED_ERROR },
+        },
+      });
+
+      await waitForExpectation(() => {
+        expect(
+          host.request.mock.calls.filter(([method]) => method === Method.TurnStart),
+        ).toHaveLength(2);
+        expect(handle.getCurrentTurnId?.()).toBe('turn-2');
+      });
+      expect(armCodexHttpRecovery).toHaveBeenCalledTimes(1);
+      await handle.close();
+    });
   });
 
   // ── 服务过载（模型容量不足）退避重投 ──────────────────────────────────────

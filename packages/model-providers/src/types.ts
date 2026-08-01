@@ -17,6 +17,7 @@
  * 本包零运行时依赖：`AgentKind` / `Effort` 在此就地定义（与 maker-core 的同名
  * 联合保持一致），不 import maker-core，保证可作为独立能力复用。
  */
+import type { ModelRegistry } from '@cindy/model-access-protocol';
 
 /** 承载模型的 agent runtime —— 与 maker-core AgentKind 对齐。 */
 export type AgentKind = 'claude-code' | 'codex';
@@ -503,17 +504,11 @@ export interface Catalog {
    */
   presets?: ProviderPreset[];
   /**
-   * model-access-server 的网关模型元数据远程覆盖表（`{ version: 1, models: {...} }`
-   * 信封，schema 归服务端所有故此处不建型）。消费方：
-   *   - 服务端热加载（XD 网关模型元数据权威）；
-   *   - 客户端 **anthropic 动态发现的元数据基线**（active-catalog 合并时用
-   *     name/group/sortOrder/description/defaultEnabled 覆盖发现条目；动态通道未下发
-   *     capability 时，efforts/defaultEffort 作为能力基线；上游显式能力始终优先；
-   *     version !== 1 整段忽略）；
-   *   - dev 模式下本地覆盖服务端下发的 XD 模型元数据以便自测
-   *     （apps/desktop model-access devMetaOverlay，packaged 不走该覆盖）。
+   * Cindy 公共模型注册表：统一承载 canonical id、runtime 路由别名、能力元数据与
+   * 厂商公开参考价。它不决定某个账号实际可用哪些模型，也不覆盖 Cindy AI Gateway
+   * 的实时售卖价；动态发现与 `/api/model-access/models` 仍分别是两类事实的权威。
    */
-  cindyModelMeta?: unknown;
+  modelRegistry?: ModelRegistry;
 }
 
 /**

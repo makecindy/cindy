@@ -23,11 +23,13 @@ import {
   type GhostManifest,
   type GhostSetupAllowedAction,
   type GhostSetupAssessment,
+  type GhostVideoRefMode,
   type GhostVideoResultParams,
   type InstalledGhost,
 } from '../../shared/ghost.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import {
+  activeOwnerScopeKey,
   getActiveAppSession,
   isAppSessionBoundaryPending,
   ownerScopedUserDataPath,
@@ -52,6 +54,7 @@ import { getAccessToken, getAuthState, onAuthStateChange } from '../authManager.
 import { serverApiFetch } from '../serverApiClient.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createGhostOauthBrokerClient } from './ghostOauthBroker.js';
+import { readRefImagesWithinBudget } from './refImageBudget.js';
 import { resolveGhostRepoRoot } from './repoRoot.js';
 import { takePendingCindyInstall } from './openFileInstall.js';
 import { GhostRuntime } from './runtime/GhostRuntime.js';
@@ -135,6 +138,7 @@ import { submitAndAwaitVideo } from '../cindy-proxy-media/video/run.js';
 import { deriveCindyMediaConfig, type CindyMediaCatalogConfig } from './cindyMediaCatalog.js';
 import {
   GhostCindySlot,
+  type CindyImageCapabilities,
   type CindyVideoCapabilities,
   type CindyVideoParams,
 } from './cindySlot.js';
@@ -148,6 +152,11 @@ import { GhostPreviewSlot } from './previewSlot.js';
 import { GhostWorkspaceSlot, type WorkspaceSessionService } from './workspaceSlot.js';
 import type { GhostTrustRegistry } from './ghostSignature.js';
 import { GhostNotifySlot, sanitizeGhostNoticeText } from './notifySlot.js';
+import { GhostConfirmSlot } from './confirmSlot.js';
+import {
+  getGhostConfirmDialogBridge,
+  initGhostConfirmDialogBridge,
+} from './ghostConfirmDialogBridge.js';
 import { GhostNetworkSlot } from './networkSlot.js';
 import { GhostFsSlot } from './fsSlot.js';
 import { getGhostGrantConfirmBridge } from './ghostGrantConfirmBridge.js';
@@ -155,9 +164,13 @@ import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import {
   GhostSubscriptionGateway,
+  GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  GhostTapPendingQueue,
+  GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
+  type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
 } from './subscriptionGateway.js';
@@ -173,9 +186,12 @@ import {
 } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
 import { projectProviderCatalogForBuildRegion } from '../maker-host/provider-access-policy.js';
+import { getGrokAccessToken, hasGrokOAuthLogin } from '../maker-host/grok-oauth-login.js';
+import { invalidateXaiBridgeAuth } from '../maker-host/xai-auth-invalidation-host.js';
 import { isModelDisabled, isProviderDisabled } from '@cindy/model-providers';
 import { readModelDisableOverrides } from '../maker-host/model-disable-store.js';
 import { outboundFetch } from '../maker-host/outbound-fetch.js';
+import { hasCodexOAuthLoginReadOnly } from '../maker-host/codex-oauth-readiness.js';
 import { getUtilityModelChainProfiles } from '../utility-model/UtilityModelSelection.js';
 import { utilityModelPinOptions } from '../../shared/utilityModelProfiles.js';
 import {
@@ -195,9 +211,12 @@ import {
   loadGhostRecentIds,
   markGhostRecentlyUsed,
 } from './ghostRecentUsageStore.js';
+import { createXaiImageChannel } from './xaiImageClient.js';
 import { getCindyProxyMediaService } from '../mcp-integrations/cindyProxyMedia.js';
 import { ImageChannelRegistry, decodeImageResponse } from './imageChannelRegistry.js';
 import { createGeminiImageChannel } from './geminiImageClient.js';
+import { createCodexImageChannel } from './codexImageClient.js';
+import { getCodexImageAuthBinding } from './codexImageAuthBinding.js';
 import { createGatewayImageClient } from '../cindy-proxy-media/api/gatewayImageClient.js';
 import * as blobStore from '../cindy-media/blobStore.js';
 import * as ledger from '../cindy-media/ledger.js';
@@ -1171,70 +1190,192 @@ async function isGhostEligibleSession(
   }
 }
 
+type PendingActivityRequest = {
+  kind: GhostInteractionActivityKind;
+  requestId: string;
+};
+
 /**
  * 会话事件 tap 工厂(register.ts wireSessionToIpc 对每个新会话叠加一个
  * onEvent 监听):把 AgentEvent 折叠成 did-turn-* 发进网关。
  * - 只投用户主会话(desktop、非 orca;资格 DB 现查,判定期事件小缓冲回放);
- * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除。
+ * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除;
+ * - interaction 侧同样只投用户 Desktop 面(见 GhostTurnOriginTracker):非 desktop
+ *   route 直接挡掉,route 缺省时按事件流上记下的轮次来源挡掉 goal / scheduler。
+ *
+ * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
+ * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
+  interactionObserver: {
+    onStart(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+    onEnd(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+  };
+  dispose(): void;
 } {
   let translator: GhostTurnTranslator | null = null;
+  let activity: GhostActivityTracker | null = null;
+  /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
+  let disposed = false;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
   let state: 'unknown' | 'resolving' | 'eligible' | 'ineligible' = 'unknown';
+  // 轮次来源:interaction 侧只靠 route 判断不住 goal / scheduler(它们没 route),
+  // 得从事件流上记。语义与理由见 GhostTurnOriginTracker。资格无关,恒记。
+  const origin = new GhostTurnOriginTracker();
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
-  const pending: MinimalAgentEvent[] = [];
+  const MAX_PENDING = 32;
+  // 有界缓冲,溢出丢最旧(留下的是到达序后缀,不留孤儿 start),语义见 GhostTapPendingQueue。
+  const pending = new GhostTapPendingQueue(MAX_PENDING, () => {
+    log.warn('ghost session tap pending overflow while resolving eligibility', {
+      sessionId,
+      cap: MAX_PENDING,
+    });
+  });
+
+  const applyActivity = (
+    phase: 'start' | 'end',
+    request: PendingActivityRequest,
+  ): void => {
+    if (!activity) {
+      pending.push({ type: 'activity', phase, request });
+      return;
+    }
+    if (phase === 'start') activity.startInteraction(request.kind, request.requestId);
+    else activity.endInteraction(request.kind, request.requestId);
+  };
 
   const kickResolve = (): void => {
     if (state !== 'unknown') return;
     if (attempts >= MAX_ATTEMPTS) {
       state = 'ineligible';
-      pending.length = 0;
+      pending.clear();
       return;
     }
     state = 'resolving';
     attempts += 1;
     void isGhostEligibleSession(sessionId).then((info) => {
+      // 判定期间会话已拆线:不建 translator、不回放,否则会向已经没人配对的
+      // topic 发出一条永远等不到 end 的 did-turn-start。
+      if (disposed) return;
       if (info.outcome === 'retry') {
         state = 'unknown'; // 暂时态:留着 pending,下个事件再试
         return;
       }
       if (info.outcome === 'ineligible') {
         state = 'ineligible';
-        pending.length = 0;
+        pending.clear();
         return;
       }
       const gw = getGhostSubscriptionGateway();
+      activity = new GhostActivityTracker({
+        sessionId,
+        sink: { activity: (name, data) => gw.publish('activity', name, data) },
+      });
       translator = new GhostTurnTranslator({
         sessionId,
         agent: info.agentKind ?? 'unknown',
         now: () => Date.now(),
         sink: {
-          turnStart: (d) => gw.publish('turn', 'did-turn-start', d),
-          turnEnd: (d) => gw.publish('turn', 'did-turn-end', d),
+          turnStart: (d) => {
+            gw.publish('turn', 'did-turn-start', d);
+            activity?.beginTurn();
+          },
+          turnEnd: (d) => {
+            activity?.finishTurn();
+            gw.publish('turn', 'did-turn-end', d);
+          },
         },
       });
       state = 'eligible';
-      log.debug('ghost session tap eligible', { sessionId, replay: pending.length });
-      for (const ev of pending) translator.handleEvent(ev);
-      pending.length = 0;
+      // 先取快照再回放:applyActivity 在 activity 已就绪后直投,不会再回队。
+      const replay = pending.drain();
+      log.debug('ghost session tap eligible', {
+        sessionId,
+        replay: replay.length,
+        ...(pending.dropped > 0 ? { droppedPending: pending.dropped } : {}),
+      });
+      for (const item of replay) {
+        if (item.type === 'event') {
+          activity.handleEvent(item.event);
+          translator.handleEvent(item.event);
+        } else {
+          applyActivity(item.phase, item.request);
+        }
+      }
     });
   };
 
   return {
     handleEvent(ev) {
+      if (disposed) return;
+      // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
+      origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
       if (state === 'eligible') {
+        activity?.handleEvent(ev);
         translator?.handleEvent(ev);
         return;
       }
       if (state === 'ineligible') return;
-      if (pending.length < 32) pending.push({ type: ev.type, data: ev.data, source: ev.source });
+      pending.push({
+        type: 'event',
+        event: { type: ev.type, data: ev.data, source: ev.source },
+      });
       kickResolve();
+    },
+    interactionObserver: {
+      onStart(request, route) {
+        if (state === 'ineligible') return;
+        if (!origin.acceptsInteraction(route)) return;
+        applyActivity('start', request);
+        if (state !== 'eligible') kickResolve();
+      },
+      onEnd(request, route) {
+        if (state === 'ineligible') return;
+        void route; // 见 acceptsInteraction 注释:end 只按 requestId 配对,不过滤来源
+        applyActivity('end', request);
+        if (state !== 'eligible') kickResolve();
+      },
+    },
+    dispose() {
+      if (disposed) return; // 两条 disposer 路径都可能跑到,补发只做一次
+      disposed = true;
+      // 补发都会走插件分发链路,它们的异常不能打断 register.ts 的 disposer 队列
+      // (实例替换路径是裸调用,后面还排着 onEvent 退订),也不能让 activity 侧的
+      // 失败吃掉 turn 侧的补发,所以两段各自兜住。
+      const guard = (stage: string, fn: () => void): void => {
+        try {
+          fn();
+        } catch (err) {
+          log.warn('ghost session tap dispose failed', {
+            sessionId,
+            stage,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      // 先收口 activity 再收口 turn:会话关闭 / Session 实例替换时,router 里可能还有
+      // interaction 等在 finally 前,而 observer 马上就会被摘掉——不补发 end 插件就会
+      // 永久停在"等待审批 / 等待用户输入"。顺序也是契约:未收口的 thinking end 必须
+      // 排在 did-turn-end 之前(回合边界只收口 thinking——审批可以跨回合终态,
+      // 见 GhostActivityTracker)。
+      guard('activity', () => activity?.finishAll());
+      guard('turn', () => translator?.dispose());
+      activity?.reset();
+      translator = null;
+      activity = null;
+      pending.clear();
+      state = 'ineligible';
     },
   };
 }
@@ -1554,6 +1695,50 @@ export function getGhostNotifySlot(): GhostNotifySlot {
   return notifySlotSingleton;
 }
 
+let confirmSlotSingleton: GhostConfirmSlot | null = null;
+
+/** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
+export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
+
+/**
+ * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
+ * 超时兜底在 GhostConfirmDialogBridge,这里只组装"投给哪个窗口"。
+ *
+ * 只投**一个**窗口(focused ?? 第一个),不像 notify 那样广播:模态确认框广播
+ * 出去会在每个窗口各弹一个、收回多份答案。没有可投窗口时 sendToWindow 回
+ * false → 桥 reject → 槽回 UNAVAILABLE(明确区别于"用户拒绝")。
+ */
+export function getGhostConfirmSlot(): GhostConfirmSlot {
+  if (!confirmSlotSingleton) {
+    const bridge =
+      getGhostConfirmDialogBridge() ??
+      initGhostConfirmDialogBridge({
+        sendToWindow: (payload) => {
+          const win = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+          if (!win || win.isDestroyed()) return false;
+          win.webContents.send(GHOST_CONFIRM_CHANNEL, payload);
+          return true;
+        },
+        log,
+      });
+    confirmSlotSingleton = new GhostConfirmSlot({
+      getGhost: findAvailableGhost,
+      showConfirm: (params) =>
+        bridge.request({
+          ghostId: params.ghostId,
+          ghostName: params.ghostName,
+          ...(params.iconDataUrl ? { iconDataUrl: params.iconDataUrl } : {}),
+          body: params.body,
+          confirmText: params.confirmText,
+          cancelText: params.cancelText,
+          danger: params.danger,
+        }),
+      log,
+    });
+  }
+  return confirmSlotSingleton;
+}
+
 let pickSlotSingleton: GhostPickSlot | null = null;
 
 /**
@@ -1811,6 +1996,8 @@ async function runGhostVideo(
     alias: string;
     prompt: string;
     imageDataUris?: string[];
+    /** 参考图用法(仅图生视频有);不传 = 执行器缺省的首尾帧。 */
+    refMode?: GhostVideoRefMode;
   } & CindyVideoParams,
 ): Promise<{ buffer: Buffer; mimeType: string; videoParams: GhostVideoResultParams }> {
   const registry = getCindyProxyMediaService().backend.videoRegistry;
@@ -1847,7 +2034,17 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
       resolutions: caps.supportedResolutions,
       ratios: caps.supportedRatios,
       fps: caps.supportedFps,
+      maxImagesByRefMode: caps.maxImagesByRefMode,
     };
+  } catch {
+    return null;
+  }
+}
+
+/** 图像 provider 的型号级编辑上限；slot 用它在文件 IO / 凭证读取前早拒。 */
+function getGhostImageCapabilities(model: string): CindyImageCapabilities | null {
+  try {
+    return { maxEditImages: resolveImageChannelForModel(model, 'edit').maxEditImages };
   } catch {
     return null;
   }
@@ -1893,6 +2090,15 @@ function getImageChannelRegistry(): ImageChannelRegistry {
           ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
         }),
     });
+    registry.register('xai', createXaiImageChannel({
+      hasOAuthLogin: () => hasGrokOAuthLogin(),
+      getAccessToken: () => getGrokAccessToken(),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+      onAuthRejected: (failure) => invalidateXaiBridgeAuth(failure),
+    }));
     // Gemini(BYO API key,generateContent wire):ready = key 已配置。停用轴
     // 派发前重查经 beforeDispatch 注入(与 xd 通道的 cindyProxyMedia beforeDispatch
     // 同语义 —— xd 的挂在网关客户端装配处,gemini 的挂在这里)。
@@ -1903,10 +2109,9 @@ function getImageChannelRegistry(): ImageChannelRegistry {
       fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
       beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
     }));
-    // OpenAI 平台 images API(BYO 平台 key;ChatGPT 订阅 OAuth 调不了平台面,实测
-    // 401/403 缺 scope):与 xd 网关同 wire(OpenAI-images 兼容面),整个客户端复用,
-    // 只换 baseUrl/品牌话术/凭证读取。目录 id 带 openai/ 前缀(跨供应商契约),
-    // 上游只认裸 id,适配层剥前缀。
+    // OpenAI public Images API(BYO 平台 key):与 xd 网关同 wire,整个客户端复用,
+    // 只换 baseUrl/品牌话术/凭证读取。ChatGPT/Codex 订阅走下方独立的 hosted-tool
+    // 通道;目录 id 带 openai/ 前缀,public API 适配层剥前缀。
     const openaiImagesClient = createGatewayImageClient({
       getApiKey: () => getProviderSecretStore().get('openai-images'),
       // 境外端点吃系统代理(outboundFetch):main 的裸 fetch 不读系统代理设置,
@@ -1925,22 +2130,38 @@ function getImageChannelRegistry(): ImageChannelRegistry {
     });
     const stripOpenaiPrefix = (id: string) =>
       id.startsWith('openai/') ? id.slice('openai/'.length) : id;
+    const hasOpenaiPlatformKey = () =>
+      (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '';
+    const codexImagesClient = createCodexImageChannel({
+      hasOAuthLogin: hasCodexOAuthLoginReadOnly,
+      getAuth: () => getCodexImageAuthBinding().getAuth(),
+      onAuthFailure: async (failure) => {
+        await getCodexImageAuthBinding().onAuthFailure(failure);
+      },
+      fetchImplementation: ((url, init) => outboundFetch(url as string, init)) as typeof fetch,
+      beforeDispatch: (model) => assertMediaModelStillEnabled('image', model),
+    });
     registry.register('openai', {
-      // trim-nonempty 与 gemini 通道同口径:空白 key 不算就绪。
-      ready: () => (getProviderSecretStore().get('openai-images')?.trim() ?? '') !== '',
-      generateImage: ({ model, prompt, aspectRatio }) =>
-        openaiImagesClient.generateImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
-      editImage: ({ model, prompt, imagePaths, aspectRatio }) =>
-        openaiImagesClient.editImage({
-          model: stripOpenaiPrefix(model),
-          prompt,
-          imagePaths,
-          ...(aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[aspectRatio] } : {}),
-        }),
+      // 用户明确配置 Platform key 时优先走确定性的 public Images API；否则复用
+      // 已连接的 ChatGPT/Codex 订阅 OAuth hosted tool，不要求再付一份 API 费。
+      ready: () => hasOpenaiPlatformKey() || codexImagesClient.ready(),
+      generateImage: (params) =>
+        hasOpenaiPlatformKey()
+          ? openaiImagesClient.generateImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.generateImage(params),
+      editImage: (params) =>
+        hasOpenaiPlatformKey()
+          ? openaiImagesClient.editImage({
+              model: stripOpenaiPrefix(params.model),
+              prompt: params.prompt,
+              imagePaths: params.imagePaths,
+              ...(params.aspectRatio ? { size: GHOST_ASPECT_TO_GATEWAY_SIZE[params.aspectRatio] } : {}),
+            })
+          : codexImagesClient.editImage(params),
     });
     imageChannelRegistrySingleton = registry;
   }
@@ -1969,6 +2190,8 @@ export function getGhostCindySlot(): GhostCindySlot {
   if (!cindySlotSingleton) {
     cindySlotSingleton = new GhostCindySlot({
       getGhost: (id) => findAvailableGhost(id),
+      getOwnerScopeKey: () => activeOwnerScopeKey(),
+      isOwnerBoundaryPending: () => isAppSessionBoundaryPending(),
       // model 已在 modelSlot 按白名单校验;归属来源(providerId)按白名单条目
       // 定位,经 imageChannelRegistry 取对应执行通道(2026-07 图像多来源)。
       generateImage: async ({ prompt, model, aspectRatio }) => {
@@ -2010,16 +2233,24 @@ export function getGhostCindySlot(): GhostCindySlot {
           humanizeImageChannelError(err);
         }
       },
-      editVideo: async ({ prompt, model, imagePaths, ...videoParams }) => {
+      editVideo: async ({ prompt, model, imagePaths, refMode, ...videoParams }) => {
         try {
           assertMediaModelStillEnabled('video', model);
-          const imageDataUris = await Promise.all(imagePaths.map(readImageFileAsDataUri));
-          return await runGhostVideo({ alias: model, prompt, imageDataUris, ...videoParams });
+          // 先算总量再读(闸按 refMode 分档:存量首尾帧不设闸,原样)。闸与
+          // 读取绑在一个入口里,顺序是那边的结构保证、不是这里的约定;结果
+          // 保序——顺序即语义:首/尾帧,或提示词里 [Image 1]… 的序号。
+          const imageDataUris = await readRefImagesWithinBudget(
+            imagePaths,
+            readImageFileAsDataUri,
+            refMode,
+          );
+          return await runGhostVideo({ alias: model, prompt, imageDataUris, refMode, ...videoParams });
         } catch (err) {
           humanizeImageChannelError(err);
         }
       },
       // 画面参数按型号二次校验的数据源(registry capabilities)。
+      imageCapabilities: getGhostImageCapabilities,
       videoCapabilities: getGhostVideoCapabilities,
       getOverride: (ghostId, capability) => {
         return readGhostCindyOverrides(ghostId)[capability as CindyCapabilityKey] ?? null;
@@ -2079,38 +2310,68 @@ export function getGhostCindySlot(): GhostCindySlot {
           return null;
         }
       },
-      resolveOwnedMedia: async (ghostId, hash) => {
+      resolveOwnedMedia: async (ghostId, hash, ownerScopeKey) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
         // 归属(账本)→ 落盘元数据(账本)→ 磁盘路径(指纹仓校验),
-        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。
-        if (!(await ledger.ghostCanRead(hash, ghostId))) return null;
-        const info = await ledger.getBlobInfo(hash);
+        // 任一环查无即 null;modelSlot 对外统一话术不泄露差异。defaultDb
+        // 会随账号动态变化，因此先在稳定 scope 下捕获一次 DB，并让两次查询
+        // 始终复用它；每个 await 后再 fail closed，绝不读取新账号账本。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const canRead = await ledger.ghostCanRead(hash, ghostId, db);
+        assertOwnerScopeCurrent();
+        if (!canRead) return null;
+        const info = await ledger.getBlobInfo(hash, db);
+        assertOwnerScopeCurrent();
         if (!info) return null;
+        let absPath: string;
         try {
-          return blobStore.resolveHashRef(hash, info.ext).absPath;
+          absPath = blobStore.resolveHashRef(hash, info.ext).absPath;
         } catch {
           return null;
         }
+        assertOwnerScopeCurrent();
+        return absPath;
       },
-      saveGhostMedia: async ({ ghostId, buffer, mimeType, label, callId }) => {
-        const written = await blobStore.writeBlob({ buffer, mimeType });
-        await ledger.recordBlob({
-          hash: written.hash,
-          ext: written.ext,
-          mimeType: written.mimeType,
-          bytes: written.bytes,
-          isCache: false,
-        });
-        // 意识产物挂自己画廊 ref(出生=该意识)——面板归属校验与
-        // "不被回收"同时成立;消息级引用由消息落库链路维护,
-        // 配额上限由权限策略负责。
-        await ledger.addRef({
-          hash: written.hash,
-          refKind: 'ghost-gallery',
-          refId: ghostId,
-          originKind: 'ghost',
-          originId: ghostId,
-          ...(label ? { label } : {}),
-        });
+      saveGhostMedia: async ({ ghostId, buffer, mimeType, ownerScopeKey, label, callId }) => {
+        const assertOwnerScopeCurrent = (): void => {
+          if (
+            isAppSessionBoundaryPending() ||
+            activeOwnerScopeKey() !== ownerScopeKey
+          ) {
+            throw new Error('媒体任务期间账号已切换,本次结果已丢弃');
+          }
+        };
+        // defaultDb 会在每次 ledger 调用时现取当前账号 DB。先在稳定 scope 下
+        // 捕获同一个句柄，再把失效断言交给统一入库助手覆盖所有 await 边界，
+        // 防止旧账号产物在切号窗口被登记到新账号画廊。
+        assertOwnerScopeCurrent();
+        const db = getDbClient().drizzle;
+        const written = await ingestMedia(
+          {
+            buffer,
+            mimeType,
+            isCache: false,
+            refs: [
+              {
+                refKind: 'ghost-gallery',
+                refId: ghostId,
+                originKind: 'ghost',
+                originId: ghostId,
+                ...(label ? { label } : {}),
+              },
+            ],
+            assertStillValid: assertOwnerScopeCurrent,
+          },
+          db,
+        );
         recordGhostCallMedia(ghostId, callId, written.url);
         return { url: written.url, hash: written.hash, ext: written.ext };
       },
@@ -3413,7 +3674,28 @@ export function registerGhostIpc(): void {
     if (type === 'notify') {
       return getGhostNotifySlot().handleNotify(id, payload);
     }
+    // confirm-request = 确认弹窗(confirm 槽):资格审/净化/限速/单飞在
+    // confirmSlot,往返与超时兜底在 ghostConfirmDialogBridge。invoke 返回值即
+    // 结构化结果:ok:true 只代表问到了,答案看 confirmed。
+    if (type === 'confirm-request') {
+      return getGhostConfirmSlot().handleRequest(id, payload);
+    }
     throwIpcError('INVALID_PARAMS', '未知的管子消息类型');
+  });
+
+  // ── 确认弹窗回包(confirm 槽)────────────────────────────────────────
+  // renderer 上的确认框被用户点掉之后,把答案送回 main 结算那条挂起的管子请求。
+  // 不校验 sender 归属:requestId 是 main 自己铸的 randomUUID,只在本机 renderer
+  // 手里;陌生/重复的 id 由桥直接忽略(返回 handled:false),没有可利用面。
+  // 非布尔的 confirmed 在桥里一律按"没同意"兜底,不给靠畸形回包骗到同意的路。
+  ipcMain.handle('ghosts:confirm:resolve', async (_event, raw: unknown) => {
+    const p = raw as { requestId?: unknown; confirmed?: unknown } | null;
+    if (!p || typeof p.requestId !== 'string' || p.requestId.length === 0 || p.requestId.length > 128) {
+      throwIpcError('INVALID_PARAMS', 'requestId must be a non-empty string');
+    }
+    const bridge = getGhostConfirmDialogBridge();
+    if (!bridge) return { handled: false };
+    return { handled: bridge.resolve(p.requestId, p.confirmed) };
   });
 
   // ── 意识聊天卡片取件(卡槽③;宿主 renderer 历史回放用)──────────────

@@ -35,7 +35,7 @@ describe('topicForPush', () => {
     );
   });
 
-  it('learn:event → sessions(账号级:run 关联触发/蒸馏两个会话,单 sessionId 路由会漏)', () => {
+  it('learn:event → sessions(账号级:run 关联触发/蒸馏两个任务,单 sessionId 路由会漏)', () => {
     expect(
       topicForPush('learn:event', { type: 'state-changed', run: { runId: 'r1', status: 'distilling' } }),
     ).toBe('sessions');

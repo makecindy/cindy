@@ -3854,3 +3854,198 @@ describe('Scheduler: 排队不占槽与卡死守卫', () => {
     }
   });
 });
+
+// ── #1016:attempt 生命周期状态机(转移统一入口 + 单一出口清单) ──────────────
+describe('Scheduler: attempt 生命周期状态机(#1016)', () => {
+  function spyLogger(): { logger: Logger; warns: unknown[][] } {
+    const warns: unknown[][] = [];
+    const logger = {
+      info: vi.fn(),
+      warn: vi.fn((...args: unknown[]) => warns.push(args)),
+      error: vi.fn(),
+      debug: vi.fn(),
+    } as unknown as Logger;
+    return { logger, warns };
+  }
+
+  it('完整生命周期(含排队往返)合法收口:零非法转移、出口零残留告警', async () => {
+    const { logger, warns } = spyLogger();
+    let ctxRef: FireContext | undefined;
+    let release: (() => void) | undefined;
+    const h = makeHarness({
+      logger,
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>((resolve) => {
+          ctxRef = ctx;
+          ctx.onQueueWaitStart?.();
+          release = () => {
+            // 排队 → 回收槽位 → 正常完成:覆盖 running→queued→running→finalizing 全链。
+            expect(ctx.endQueueWait?.(true)).toBe(true);
+            resolve({ sessionId: 'sess-full-lifecycle' });
+          };
+        }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    const p = h.scheduler.runNow(sch.id);
+    await vi.waitFor(() => expect(ctxRef).toBeDefined());
+    expect(h.scheduler.getRuntimeSnapshot().inFlightRuns[0]?.phase).toBe('queued');
+    release?.();
+    await p;
+    const snap = h.scheduler.getRuntimeSnapshot();
+    expect(snap.inFlight).toBe(0);
+    expect(snap.slotsInUse).toBe(0);
+    // 单一出口清单未发现任何残留登记(残留 = 某条路径漏了收口,响亮告警)。
+    expect(
+      warns.some((args) => String(args[0]).includes('unreaped registrations')),
+    ).toBe(false);
+    await h.scheduler.stop();
+  });
+
+  it('排队中 runner 直接抛错(不经过 endQueueWait)→ queued→finalizing 合法收口为 failed', async () => {
+    const { logger, warns } = spyLogger();
+    let reject: ((err: Error) => void) | undefined;
+    const h = makeHarness({
+      logger,
+      runnerImpl: (_s, ctx) =>
+        new Promise<FireResult>((_resolve, rej) => {
+          ctx.onQueueWaitStart?.();
+          reject = rej;
+        }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, manual: true });
+    const p = h.scheduler.runNow(sch.id);
+    await vi.waitFor(() => expect(reject).toBeDefined());
+    reject?.(new Error('queued turn interrupted'));
+    await p;
+    const runs = await h.storage.listRuns(sch.id);
+    expect(runs[0]?.status).toBe('failed');
+    expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0);
+    expect(
+      warns.some((args) => String(args[0]).includes('unreaped registrations')),
+    ).toBe(false);
+    await h.scheduler.stop();
+  });
+
+  it('强制收口后 runner 迟到调用 onQueueWaitStart → no-op,不抛非法转移(#1016 review)', async () => {
+    vi.useFakeTimers();
+    try {
+      let ctxRef: FireContext | undefined;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctxRef = ctx;
+          }),
+      });
+      await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0));
+      // 强制收口已完成,runner 的 continuation 迟到调排队回调:必须是安静的 no-op。
+      expect(() => ctxRef?.onQueueWaitStart?.()).not.toThrow();
+      expect(() => ctxRef?.endQueueWait?.(true)).not.toThrow();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('强制收口后迟到的 onTurnActive/onSessionBound 不留悬挂登记(#1016 review)', async () => {
+    vi.useFakeTimers();
+    try {
+      let ctxRef: FireContext | undefined;
+      const h = makeHarness({
+        runStallMs: 60_000,
+        runStallAbortGraceMs: 30_000,
+        runnerImpl: (_s, ctx) =>
+          new Promise<FireResult>(() => {
+            ctxRef = ctx;
+          }),
+      });
+      const sch = await h.scheduler.create({ ...baseInput, intervalMs: 3_600_000 });
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      h.clock.advance(60_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      h.clock.advance(30_001);
+      await vi.advanceTimersByTimeAsync(RUN_HEARTBEAT_INTERVAL_MS);
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(0));
+      // attempt 已删并 reap:迟到的 turn-active / session-bound 上报必须整体 no-op,
+      // 不写 session 映射 / 绑定映射(悬挂登记会让下一次 begin 的不变量断言抛错)。
+      expect(() => ctxRef?.onTurnActive?.('sess-late-turn')).not.toThrow();
+      await ctxRef?.onSessionBound?.('sess-late-bind');
+      expect(h.scheduler.resolveInflightRunForSession('sess-late-turn')).toBeUndefined();
+      // 下一轮 fire 的 beginInflightAttempt 会跑 assertAttemptRegistryInvariants
+      // (含 bound-session / silenced 覆盖)——迟到写入若真落了账,这里会响亮抛错。
+      h.clock.advance(3_600_000);
+      void h.scheduler.tick();
+      await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().slotsInUse).toBe(1));
+      expect(sch.id).toBeTruthy();
+      await h.scheduler.stop();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('stop() 清 silencedRuns:静默 run 执行中停机后再 runNow 不被不变量断言误杀(#1016 review)', async () => {
+    const h = makeHarness({
+      runnerImpl: () => new Promise<FireResult>(() => {}),
+    });
+    const sch = await h.scheduler.create({ ...baseInput, silentWhenIdle: true });
+    const first = h.scheduler.runNow(sch.id);
+    first.catch(() => {});
+    await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(1));
+    const [running] = await h.scheduler.listRuns(sch.id);
+    expect(h.scheduler.isRunSilenced(running.id)).toBe(true);
+    await h.scheduler.stop();
+    // stop 清空 attempts 的同时必须一并清 silencedRuns:留着的话,同实例后续第一次
+    // beginInflightAttempt 的不变量断言会把它当悬挂登记抛错(codex review P1)。
+    expect(h.scheduler.isRunSilenced(running.id)).toBe(false);
+    const second = h.scheduler.runNow(sch.id);
+    second.catch(() => {});
+    await vi.waitFor(() => expect(h.scheduler.getRuntimeSnapshot().inFlight).toBe(1));
+    await h.scheduler.stop();
+  });
+
+  it('stop() 打在前置 await 期间:恢复的 continuation 不登记悬挂 controller(#1016 review)', async () => {
+    // stop() 清 attempt 时 continuation 还没有 controller,无从 abort;恢复后若照常
+    // registerInflight,controller/索引就成了没有 attempt 的悬挂登记,此后同实例每次
+    // begin 都被不变量断言拦下(codex review P1)。守卫应放弃本轮并(runNow 契约)抛错。
+    const storage = new InMemoryStorage();
+    let releaseInsert: (() => void) | null = null;
+    let gated = true;
+    const realInsertRun = storage.insertRun.bind(storage);
+    storage.insertRun = (run: ScheduleRun) => {
+      if (!gated) return realInsertRun(run);
+      return new Promise<ScheduleRun>((resolve) => {
+        releaseInsert = () => resolve(realInsertRun(run));
+      });
+    };
+    const h = makeHarness({
+      storage,
+      runnerImpl: async () => ({ sessionId: 'sess-after-stop' }),
+    });
+    const sch = await h.scheduler.create({ ...baseInput });
+    const first = h.scheduler.runNow(sch.id);
+    const firstOutcome = first.then(
+      () => 'resolved',
+      (e) => String(e),
+    );
+    await vi.waitFor(() => expect(releaseInsert).not.toBeNull());
+    await h.scheduler.stop();
+    gated = false;
+    releaseInsert!();
+    expect(await firstOutcome).toMatch(/stopped while starting runNow/);
+    // 无悬挂登记:同实例再 runNow,begin 的不变量断言不抛,run 正常收尾。
+    const second = await h.scheduler.runNow(sch.id);
+    expect(second.runId).toBeTruthy();
+    await h.scheduler.stop();
+  });
+});

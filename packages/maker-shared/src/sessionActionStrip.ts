@@ -127,10 +127,12 @@ function buildActionStripActions(
 ): SessionActionStripAction[] {
   const queueDisabledReason = queueActionDisabledReason(input);
   const searchDisabledReason = input.messageCount > 0 ? null : '当前没有可搜索的消息。';
-  const filesDisabledReason = filesEnabled ? null : 'Dialogue 会话没有远程工作目录，不能浏览文件。';
+  // 判据只是 `!!session.workingDir`(见 filesEnabled) —— 不绑项目的任务是最常见的
+  // 命中场景, 但旧数据/异常行同样会缺 workingDir, 所以文案只陈述状态、不断言原因。
+  const filesDisabledReason = filesEnabled ? null : '这个任务没有远程工作目录，不能浏览文件。';
   return [
     {
-      accessibilityLabel: '打开会话设置',
+      accessibilityLabel: '打开任务设置',
       active: false,
       attention: !!input.readOnlyReason,
       disabled: false,
@@ -140,7 +142,7 @@ function buildActionStripActions(
       testID: 'session.controlsToggle',
     },
     {
-      accessibilityLabel: '查看会话用量',
+      accessibilityLabel: '查看任务用量',
       active: false,
       attention: false,
       disabled: false,
@@ -207,8 +209,8 @@ function overviewActionCopy(input: {
   if (input.remoteUnavailableReason) return input.remoteUnavailableReason;
   if (input.pendingCount > 0) return '先处理待处理请求，处理后输入区会恢复。';
   if (input.readOnlyReason) return input.readOnlyReason;
-  if (input.sessionStatus === 'archived') return '会话已归档，恢复后才能继续发送。';
-  if (input.sessionStatus === 'deleted') return '会话已删除，不能继续操作。';
+  if (input.sessionStatus === 'archived') return '任务已归档，恢复后才能继续发送。';
+  if (input.sessionStatus === 'deleted') return '任务已删除，不能继续操作。';
   if (input.queuePaused) return '队列已暂停，可在队列面板继续执行。';
   return null;
 }

@@ -7,23 +7,16 @@
  *
  * 「提供商 ID」内部句柄由显示名自动 slug 派生 + 去重,对用户隐藏(密钥名/文件名不能含 . 或 /)。
  * 配置经 maker IPC 入 localDb；密钥按 runtime 经 safeStorage 存(见 lib/customProviders)。
- * 编辑态密钥遮罩、留空 = 不改；id 不可改。颜色全走主题 token。
+ * 编辑态回填已存密钥(默认遮罩,eye 可显形核对)、留空 = 不改；id 不可改。颜色全走主题 token。
+ *
+ * 本弹窗的输入统一传 `surface="ivory"`：面板是白色(`--surface-elevated`),ivory 底给出 fill
+ * 抬升,这是收敛进 SettingsTextInput 之前就有的底色,原样保留。共享组件的默认底色是
+ * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import {
-  Check,
-  ChevronDown,
-  Eye,
-  EyeOff,
-  Plug,
-  Plus,
-  RefreshCw,
-  Sparkles,
-  Trash2,
-  X,
-} from 'lucide-react';
+import { Check, ChevronDown, Plug, Plus, RefreshCw, Sparkles, Trash2, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -65,6 +58,7 @@ import type {
   ProviderRuntimeModelConfig,
   ProviderWireProtocol,
 } from '@cindy/model-providers';
+import { SettingsTextInput } from './SettingsTextInput';
 
 const AGENTS: AgentKind[] = ['claude-code', 'codex'];
 
@@ -190,43 +184,6 @@ function isCommittableWindowText(text: string): boolean {
   return parsed > 0n && parsed <= BigInt(Number.MAX_SAFE_INTEGER);
 }
 
-function TextInput({
-  value,
-  onChange,
-  onBlur,
-  placeholder,
-  type = 'text',
-  trailing,
-}: {
-  value: string;
-  onChange: (v: string) => void;
-  onBlur?: () => void;
-  placeholder?: string;
-  type?: string;
-  trailing?: React.ReactNode;
-}) {
-  return (
-    <div className="relative">
-      <input
-        type={type}
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onBlur={onBlur}
-        placeholder={placeholder}
-        className={cn(
-          // 单行输入按设计规范走药丸圆角(DESIGN.md §4-5:9999px,明令禁止 10px)。
-          'h-[40px] w-full rounded-full pl-[12px] text-14 outline-none transition-colors',
-          trailing ? 'pr-9' : 'pr-[12px]',
-          'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-          'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
-        )}
-        style={{ userSelect: 'text', WebkitUserSelect: 'text' }}
-      />
-      {trailing}
-    </div>
-  );
-}
-
 /**
  * 预设模板下拉——统一的 Popover 菜单(与外观设置 FamilyDropdown 同款样式)。
  * 不用原生 <select>:其展开菜单由系统绘制,不吃主题 token,视觉与应用内其它下拉不一致。
@@ -336,7 +293,6 @@ export function CustomProviderDialog({
   const [activeTab, setActiveTab] = useState<AgentKind>(
     () => (initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code',
   );
-  const [showKey, setShowKey] = useState(false);
   const [hasKey, setHasKey] = useState<Record<AgentKind, boolean>>({
     'claude-code': false,
     codex: false,
@@ -1042,7 +998,8 @@ export function CustomProviderDialog({
           {/* 显示名称（共享） */}
           <div className="flex flex-col gap-[7px]">
             <FieldLabel>{t('settings.providers.custom.fields.name')}</FieldLabel>
-            <TextInput
+            <SettingsTextInput
+              surface="ivory"
               value={name}
               onChange={setName}
               placeholder={t('settings.providers.custom.fields.namePlaceholder')}
@@ -1122,7 +1079,8 @@ export function CustomProviderDialog({
                     <FieldLabel>
                       {t(`settings.providers.custom.authMode.fields.${field}`)}
                     </FieldLabel>
-                    <TextInput
+                    <SettingsTextInput
+                      surface="ivory"
                       value={oauthFields[field]}
                       onChange={(v) => setOauthFields((prev) => ({ ...prev, [field]: v }))}
                       placeholder={ph}
@@ -1231,7 +1189,8 @@ export function CustomProviderDialog({
             {/* 基础 URL */}
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
-              <TextInput
+              <SettingsTextInput
+                surface="ivory"
                 value={f.baseUrl}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
                 onBlur={() => {
@@ -1246,10 +1205,15 @@ export function CustomProviderDialog({
             {showAdvanced && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
-                <TextInput
+                <SettingsTextInput
+                  surface="ivory"
                   value={f.requestPath}
                   onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                  placeholder={t('settings.providers.custom.fields.requestPathPlaceholder')}
+                  placeholder={
+                    activeTab === 'claude-code'
+                      ? '/v1/messages'
+                      : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
+                  }
                 />
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t('settings.providers.custom.fields.requestPathHelp')}
@@ -1276,23 +1240,13 @@ export function CustomProviderDialog({
                     </span>
                   )}
                 </div>
-                <TextInput
+                <SettingsTextInput
+                  surface="ivory"
                   value={f.apiKey}
                   onChange={(v) => patch(activeTab, (x) => ({ ...x, apiKey: v }))}
                   placeholder={keyPlaceholder}
-                  type={showKey ? 'text' : 'password'}
-                  trailing={
-                    <button
-                      type="button"
-                      onClick={() => setShowKey((v) => !v)}
-                      className="absolute right-[12px] top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]"
-                      aria-label={
-                        showKey ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')
-                      }
-                    >
-                      {showKey ? <Eye size={16} /> : <EyeOff size={16} />}
-                    </button>
-                  }
+                  mono
+                  secret
                 />
                 <span className="text-12 text-[var(--text-tertiary)]">
                   {t('settings.providers.custom.fields.apiKeyHelp')}
@@ -1329,7 +1283,8 @@ export function CustomProviderDialog({
                   {f.models.map((m, i) => (
                     <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
-                        <TextInput
+                        <SettingsTextInput
+                          surface="ivory"
                           value={m.id}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1343,7 +1298,8 @@ export function CustomProviderDialog({
                         />
                       </div>
                       <div className="flex-1">
-                        <TextInput
+                        <SettingsTextInput
+                          surface="ivory"
                           value={m.name}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1362,7 +1318,8 @@ export function CustomProviderDialog({
                             只接受正整数(允许逗号/下划线/空格做分隔),其它字符直接
                             拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
                             262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
-                        <TextInput
+                        <SettingsTextInput
+                          surface="ivory"
                           value={
                             windowDrafts[`${activeTab}:${i}`]
                             ?? (m.contextWindow != null ? String(m.contextWindow) : '')
@@ -1467,7 +1424,8 @@ export function CustomProviderDialog({
                     {f.headers.map((h, i) => (
                       <div key={i} className="flex items-center gap-2">
                         <div className="flex-1">
-                          <TextInput
+                          <SettingsTextInput
+                            surface="ivory"
                             value={h.name}
                             onChange={(v) =>
                               patch(activeTab, (x) => ({
@@ -1481,7 +1439,8 @@ export function CustomProviderDialog({
                           />
                         </div>
                         <div className="flex-1">
-                          <TextInput
+                          <SettingsTextInput
+                            surface="ivory"
                             value={h.value}
                             onChange={(v) =>
                               patch(activeTab, (x) => ({

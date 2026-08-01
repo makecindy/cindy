@@ -72,7 +72,15 @@ const CAPABILITIES: VideoProviderCapabilities = {
   supportedResolutions: ['480p', '720p', '1080p'],
   supportedRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
   supportedFps: [24],
-  maxImages: 2,
+  // 首尾帧与参考图是同一个 seedance-2.0 模型的两种 role,不换模型。
+  // 参考图上限 9 的出处:方舟官方 role 枚举里有 reference_image,但官方页
+  // 正文是 SPA 抓不到,9 图/3 视频/3 音频的数字来自 fal、Replicate、接口AI
+  // 等多家聚合平台的一致口径,**未实测**。真实上限更低时上游会在提交期拒,
+  // 错误原样透传给调用方,不会静默出片。
+  maxImagesByRefMode: {
+    first_and_last_frame: 2,
+    reference_image: 9,
+  },
   expectedSecondsByAlias: {
     'seedance-fast': 120,
     'seedance-pro': 300,
@@ -118,14 +126,32 @@ interface SeedanceContentItem {
   type: 'text' | 'image_url';
   text?: string;
   image_url?: { url: string };
-  role?: 'first_frame' | 'last_frame';
+  role?: 'first_frame' | 'last_frame' | 'reference_image';
 }
 
+/**
+ * 参考图 → content 数组。role 由 refMode 决定:
+ *   - first_and_last_frame:第 1 张 first_frame,第 2 张 last_frame(老行为)。
+ *   - reference_image:每张都是 reference_image,顺序即提示词里的
+ *     「图片1 / 图片2 / …」序号,所以**不能重排**。
+ * 两种 role 不混用:方舟文档只是并列列出,没说能否共存,混发等于赌未定义
+ * 行为。
+ */
 function buildSeedanceContent(req: VideoGenerationRequest): SeedanceContentItem[] {
   const content: SeedanceContentItem[] = [
     { type: 'text', text: buildSeedancePromptText(req) },
   ];
   const images = req.images ?? [];
+  if (req.refMode === 'reference_image') {
+    for (const url of images) {
+      content.push({
+        type: 'image_url',
+        image_url: { url },
+        role: 'reference_image',
+      });
+    }
+    return content;
+  }
   if (images.length > 0) {
     content.push({
       type: 'image_url',

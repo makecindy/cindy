@@ -168,6 +168,38 @@ describe('ingestMedia(崩溃语义:先字节后记账)', () => {
     ).rejects.toThrow();
     expect(fs.existsSync(blobPathOf(hash, '.png'))).toBe(true);
   });
+
+  it('作用域断言在记账后失效时停止挂引用', async () => {
+    let checks = 0;
+    await expect(
+      ingest.ingestMedia(
+        {
+          buffer: PNG_BYTES,
+          mimeType: 'image/png',
+          refs: [{ refKind: 'ghost-gallery', refId: 'art' }],
+          assertStillValid: () => {
+            checks += 1;
+            if (checks === 3) throw new Error('owner scope changed');
+          },
+        },
+        db,
+      ),
+    ).rejects.toThrow('owner scope changed');
+
+    expect(db.select().from(schema.mediaBlobs).all()).toHaveLength(1);
+    expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
+  });
+
+  it('启用作用域断言时必须显式捕获数据库句柄', async () => {
+    await expect(
+      ingest.ingestMedia({
+        buffer: PNG_BYTES,
+        mimeType: 'image/png',
+        refs: [],
+        assertStillValid: () => undefined,
+      }),
+    ).rejects.toThrow('requires an explicit database');
+  });
 });
 
 describe('ingestMedia(白名单外拒绝)', () => {

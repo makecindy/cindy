@@ -11,7 +11,13 @@ import type { MyIssuesResult } from '../../../shared/myIssues';
 import { handleMyIssuesList } from '../my-issues';
 
 function emptyResult(): MyIssuesResult {
-  return { items: [], githubEnhancement: null, degraded: null, truncated: false };
+  return {
+    items: [],
+    githubEnhancement: null,
+    githubEnhancementFailed: false,
+    degraded: null,
+    truncated: false,
+  };
 }
 
 describe('handleMyIssuesList', () => {
@@ -61,6 +67,7 @@ describe('handleMyIssuesList', () => {
       error: 'unexpected',
       items: [],
       githubEnhancement: null,
+      githubEnhancementFailed: false,
       degraded: null,
       truncated: false,
     });
