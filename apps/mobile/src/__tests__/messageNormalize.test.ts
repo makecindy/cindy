@@ -79,7 +79,10 @@ describe('normalizeRemoteMessages', () => {
     expect(items[0]).toMatchObject({
       kind: 'assistant',
       turnCostUsd: 0.05,
-      turnCostIsEstimate: true,
+      turnMoney: {
+        approximate: true,
+        kind: 'value-estimate',
+      },
     });
     expect(items[1].turnCostUsd).toBeUndefined();
     expect(items[2].turnCostUsd).toBeUndefined();
@@ -87,9 +90,9 @@ describe('normalizeRemoteMessages', () => {
       turnMoney: {
         amount: 0.29,
         currency: 'CNY',
+        approximate: false,
         kind: 'actual-cost',
       },
-      turnCostIsEstimate: false,
     });
     expect(items[3].turnCostUsd).toBeUndefined();
   });
@@ -181,11 +184,15 @@ describe('normalizeRemoteMessages', () => {
     // 无当前分段金额,但整轮已经花过钱 → 显示金额,不回退 token。
     expect(items[0]).toMatchObject({
       turnCostUsd: 1.25,
-      turnCostIsEstimate: true,
       turnTotalTokens: 2_100_000,
       turnCompleted: true,
     });
-    expect(items[0].turnMoney).toMatchObject({ amount: 1.25, currency: 'USD' });
+    expect(items[0].turnMoney).toMatchObject({
+      amount: 1.25,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
     // 两者都有时取整轮累计(与桌面 displayedMoney 同口径)。
     expect(items[1].turnCostUsd).toBe(1.8);
   });

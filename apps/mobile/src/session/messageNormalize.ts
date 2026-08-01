@@ -83,7 +83,6 @@ export interface NormalizedRemoteMessage {
   turnMoney?: RemoteMoney;
   /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
-  turnCostIsEstimate?: boolean;
   /**
    * 本轮 token 总量(agentMeta.turnUsageDetails.totalTokens)。桌面算不出模型报价时
    * 只落这一份用量事实,操作行据此退回显示 token 而不是空着一格。
@@ -712,14 +711,19 @@ function projectTurnMoney(
   money: unknown,
   legacyUsd: unknown,
   isEstimateFlag: boolean,
-): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd' | 'turnCostIsEstimate'> | null {
+): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd'> | null {
   const normalized = normalizeRemoteMoney(money);
   if (normalized && normalized.amount > 0) {
     const isEstimate = isEstimateFlag || normalized.kind === 'value-estimate';
+    // NormalizedRemoteMessage is a display projection, not the accounting record. Fold the
+    // separate wire flag into turnMoney so visible text and accessibility cannot choose
+    // different estimate semantics for mixed actual-cost + value-estimate user-turn totals.
+    const displayMoney: RemoteMoney = isEstimate
+      ? { ...normalized, approximate: true, kind: 'value-estimate' }
+      : normalized;
     return {
-      turnMoney: normalized,
-      ...(normalized.currency === 'USD' ? { turnCostUsd: normalized.amount } : {}),
-      turnCostIsEstimate: isEstimate,
+      turnMoney: displayMoney,
+      ...(displayMoney.currency === 'USD' ? { turnCostUsd: displayMoney.amount } : {}),
     };
   }
   const cost = readNumber(legacyUsd);
@@ -732,7 +736,6 @@ function projectTurnMoney(
       kind: isEstimateFlag ? 'value-estimate' : 'actual-cost',
     },
     turnCostUsd: cost,
-    turnCostIsEstimate: isEstimateFlag,
   };
 }
 
@@ -740,7 +743,7 @@ function readTurnCost(
   message: RemoteMessage,
 ): Pick<
   NormalizedRemoteMessage,
-  'turnMoney' | 'turnCostUsd' | 'turnCostIsEstimate' | 'turnTotalTokens'
+  'turnMoney' | 'turnCostUsd' | 'turnTotalTokens'
 > {
   if (message.role !== 'assistant') return {};
   // 用量与金额分开读:桌面算不出报价的轮次只落 turnUsageDetails,操作行退回显示 token。

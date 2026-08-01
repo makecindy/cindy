@@ -1750,7 +1750,9 @@ function MessageBubble({
   ) : null;
   const costText = turnCost ? (
     <Text
-      accessibilityLabel={item.message.turnCostIsEstimate ? t('message.renderer.turnCostEstimate', { cost: turnCost }) : t('message.renderer.turnCost', { cost: turnCost })}
+      accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
+        ? t('message.renderer.turnCostEstimate', { cost: turnCost })
+        : t('message.renderer.turnCost', { cost: turnCost })}
       key="cost"
       style={styles.messageActionMeta}
       testID="message.turnCostText"
