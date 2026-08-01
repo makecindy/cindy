@@ -30,6 +30,7 @@ import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { SettingsTextInput } from './SettingsTextInput';
 
 import {
   isLoopbackProviderUrl,
@@ -1231,18 +1232,7 @@ export function AddProviderWizard({
                 <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                   {t('settings.providers.custom.fields.apiKey')}
                 </label>
-                <input
-                  type="password"
-                  value={apiKey}
-                  onChange={(e) => setApiKey(e.target.value)}
-                  autoComplete="off"
-                  className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-                  style={{
-                    borderColor: 'var(--border-default)',
-                    backgroundColor: 'var(--surface-elevated)',
-                    color: 'var(--settings-section-title)',
-                  }}
-                />
+                <SettingsTextInput value={apiKey} onChange={setApiKey} size="md" mono secret />
               </div>
             </div>
           )}
@@ -1270,18 +1260,13 @@ export function AddProviderWizard({
                   <label className="text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
                     {t('settings.providers.custom.fields.apiKey')}
                   </label>
-                  <input
-                    type="password"
+                  <SettingsTextInput
                     value={apiKey}
-                    onChange={(e) => setApiKey(e.target.value)}
+                    onChange={setApiKey}
                     placeholder="sk-…"
-                    autoComplete="off"
-                    className="h-9 rounded-full border px-4 font-mono text-13 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-                    style={{
-                      borderColor: 'var(--border-default)',
-                      backgroundColor: 'var(--surface-elevated)',
-                      color: 'var(--settings-section-title)',
-                    }}
+                    size="md"
+                    mono
+                    secret
                   />
                 </div>
               ) : (

@@ -54,6 +54,7 @@ import {
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
@@ -604,18 +605,14 @@ function ImageApiKeyRow({
         </>
       ) : (
         <>
-          <input
-            type="password"
+          <SettingsTextInput
             value={draftKey}
-            onChange={(e) => setDraftKey(e.target.value)}
-            autoComplete="off"
+            onChange={setDraftKey}
             placeholder={t('settings.providers.imagesKey.placeholder')}
-            className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-            style={{
-              borderColor: 'var(--border-default)',
-              backgroundColor: 'var(--surface-elevated)',
-              color: 'var(--settings-section-title)',
-            }}
+            size="sm"
+            mono
+            secret
+            className="min-w-0 flex-1"
           />
           <PillButton
             label={t('settings.providers.imagesKey.save')}
@@ -836,7 +833,9 @@ function GenericOAuthHeader({
  * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
  * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
  * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
- * key 全程掩码,不回显明文。
+ * **已存 key 永不回显**:它是 MAIN_ONLY 键,renderer 只能查存在性/写/删(见
+ * ImageApiKeyRow 注释),架构上拿不到明文。输入框的明文切换只显形用户本次输入的
+ * 草稿(草稿本就在 renderer state 里),不构成凭证下放。
  */
 function BuiltinApiKeyHeader({
   provider,
@@ -922,18 +921,14 @@ function BuiltinApiKeyHeader({
 
   const detail = editing ? (
     <div className="flex items-center gap-2 pt-2">
-      <input
-        type="password"
+      <SettingsTextInput
         value={draftKey}
-        onChange={(e) => setDraftKey(e.target.value)}
-        autoComplete="off"
+        onChange={setDraftKey}
         placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
-        className="h-8 min-w-0 flex-1 rounded-full border px-3 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
-        style={{
-          borderColor: 'var(--border-default)',
-          backgroundColor: 'var(--surface-elevated)',
-          color: 'var(--settings-section-title)',
-        }}
+        size="sm"
+        mono
+        secret
+        className="min-w-0 flex-1"
       />
       <PillButton
         label={t('settings.providers.builtinApiKey.saveKey')}

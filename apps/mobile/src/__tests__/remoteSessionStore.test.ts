@@ -132,6 +132,32 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
 
+  it('normalizes same-timestamp messages by host rowid', () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...message('a-newer', 's1'), createdAt, rowid: 5 },
+      { ...message('z-older', 's1'), createdAt, rowid: 4 },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'z-older',
+      'a-newer',
+    ]);
+  });
+
+  it('preserves arrival order for same-timestamp messages without host rowid', () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...message('z-first', 's1'), createdAt },
+      { ...message('a-second', 's1'), createdAt },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'z-first',
+      'a-second',
+    ]);
+  });
+
   it('stamps sessions with device-link origin and indexes session ids', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
 
@@ -1249,6 +1275,56 @@ describe('remoteSessionStore', () => {
       'latest-2',
       'live-1',
     ]);
+  });
+
+  it('keeps a same-timestamp live tail with a larger host rowid', () => {
+    const createdAt = '2026-01-01T10:00:02.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...messageAt('old-1', 's1', '2026-01-01T00:00:01.000Z'), rowid: 1 },
+      { ...messageAt('live-3', 's1', createdAt), rowid: 3 },
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      { ...messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'), rowid: 1 },
+      { ...messageAt('latest-2', 's1', createdAt), rowid: 2 },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-1',
+      'latest-2',
+      'live-3',
+    ]);
+  });
+
+  it('keeps a same-timestamp pending live assistant during latest-window reconciliation', () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = '2026-01-01T10:00:02.000Z';
+      pushMakerText('s1', 'live-3', 'still streaming', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.setMessages('s1', remoteSessionStore.getMessages('s1').map((item) => ({
+        ...item,
+        createdAt,
+      })));
+
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        { ...messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'), rowid: 1 },
+        { ...messageAt('latest-2', 's1', createdAt), rowid: 2 },
+      ]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.id)).toEqual([
+        'latest-1',
+        'live-3',
+        'latest-2',
+      ]);
+      expect(rows.find((item) => item.clientId === 'live-3')).toMatchObject({
+        content: 'still streaming',
+        agentMeta: { isStreaming: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('丢弃无法确认相接的更早缓存段：本页上沿之外服务端还有历史时（#1222）', () => {

@@ -1273,6 +1273,7 @@ protocol.registerSchemesAsPrivileged([
 import started from 'electron-squirrel-startup';
 
 import { APPLICATION_MENU_LABELS, type ApplicationMenuLocale } from './applicationMenuLabels.js';
+import { installCindyCliCommand, CLI_COMMAND_NAME } from './installCliCommand.js';
 
 if (started) {
   app.quit();
@@ -1526,6 +1527,16 @@ function installApplicationMenu(
         {
           label: labels.issues,
           click: () => dispatchApplicationMenuCommand(mainWindow, 'open-issues'),
+        },
+        { type: 'separator' },
+        {
+          // 命令名随 edition 品牌(installCli 文案里的 {{cmd}} 占位符)。
+          label: labels.installCli.replaceAll('{{cmd}}', CLI_COMMAND_NAME),
+          // 特权动作(写 PATH 目录 / 可能弹管理员授权)整段在 main 执行,
+          // 不经 renderer,也不新增 IPC 面。见 installCliCommand.ts。
+          click: () => {
+            void installCindyCliCommand(mainWindow, locale);
+          },
         },
       ],
     },

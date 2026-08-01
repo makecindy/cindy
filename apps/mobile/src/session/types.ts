@@ -87,6 +87,8 @@ export interface RemoteMessage {
   id: string;
   clientId: string;
   sessionId: string;
+  /** SQLite insertion order from the host; absent on legacy/synthetic rows. */
+  rowid?: number;
   role: RemoteMessageRole;
   content: unknown;
   toolUseId: string | null;

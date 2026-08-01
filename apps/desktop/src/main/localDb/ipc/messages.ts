@@ -87,6 +87,7 @@ export function registerMessageIpc(): void {
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
+    const after = (opts as { after?: string } | undefined)?.after;
     const db = getDbClient().drizzle;
 
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
@@ -96,11 +97,12 @@ export function registerMessageIpc(): void {
       sid,
       {},
       {
-        deviceLinkFirstPage: !before && beforeTs == null,
+        deviceLinkFirstPage: !before && beforeTs == null && !after,
       },
     );
 
     let beforeCursor: { createdAt: number; rowid: number } | null = null;
+    let afterCursor: { createdAt: number; rowid: number } | null = null;
     let beforeMs: number | null = null;
     if (typeof before === 'string' && before) {
       const beforeRow = await db
@@ -113,6 +115,14 @@ export function registerMessageIpc(): void {
       }
     } else if (typeof beforeTs === 'number' && Number.isFinite(beforeTs)) {
       beforeMs = beforeTs;
+    }
+    if (!beforeCursor && beforeMs === null && typeof after === 'string' && after) {
+      const afterRow = await db
+        .select({ createdAt: messages.createdAt, rowid: messageRowid })
+        .from(messages)
+        .where(and(eq(messages.id, after), eq(messages.sessionId, sid)))
+        .limit(1);
+      if (afterRow.length > 0) afterCursor = afterRow[0];
     }
 
     // /clear：过滤 createdAt > session.clearedAt，本地 DB 旧消息也遵守 clearedAt 边界
@@ -137,6 +147,13 @@ export function registerMessageIpc(): void {
       );
     } else if (beforeMs !== null) {
       conds.push(lt(messages.createdAt, beforeMs));
+    } else if (afterCursor) {
+      conds.push(
+        or(
+          gt(messages.createdAt, afterCursor.createdAt),
+          and(eq(messages.createdAt, afterCursor.createdAt), gt(messageRowid, afterCursor.rowid)),
+        ),
+      );
     }
     if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
     const whereExpr = and(...conds);
@@ -148,9 +165,13 @@ export function registerMessageIpc(): void {
       })
       .from(messages)
       .where(whereExpr)
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .orderBy(
+        afterCursor ? asc(messages.createdAt) : desc(messages.createdAt),
+        afterCursor ? asc(messageRowid) : desc(messageRowid),
+      )
       .limit(limit);
-    return hydrateLegacyUserTurnCosts(rows.map(messageToCamelWithRowid));
+    const orderedRows = afterCursor ? rows.slice().reverse() : rows;
+    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
   });
 
   ipcMain.handle(

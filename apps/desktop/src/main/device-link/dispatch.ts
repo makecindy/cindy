@@ -63,6 +63,7 @@ import { transcribeRemoteVoiceInput } from './voiceTranscribe';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
 import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
 import { setBroadcastTapListener } from './broadcast-tap';
+import { createOfflinePushQueue } from './offlinePushQueue';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
@@ -115,6 +116,22 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:list',
 ]);
 const textEncoder = new TextEncoder();
+const offlinePushQueue = createOfflinePushQueue();
+
+/** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
+const OFFLINE_QUEUEABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:messages:created',
+  'local-db:messages:deleted',
+  'local-db:session:error-persisted',
+  'maker:event',
+  'maker:status-changed',
+  'maker:interaction-request',
+  'maker:interaction-dismissed',
+  'maker:input:projection',
+  'maker:goal:status-changed',
+  'usage:message-turn-cost',
+  'usage:message-model-mismatch',
+]);
 
 /** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */
 function sanitizeControllerCapabilities(value: unknown): string[] {
@@ -405,8 +422,10 @@ let remoteInvokeResultOutboxBytes = 0;
 let remoteInvokeResultOutboxTimer: ReturnType<typeof setTimeout> | null = null;
 /** 显式 link-close/撤权世代；旧世代仍在执行的 IPC 完成后不得把结果送进新链路。 */
 const remoteInvokeLinkEpoch = new Map<string, number>();
-/** Controllers that have successfully demonstrated topic-subscription support on this link. */
+/** Controllers that have demonstrated topic-subscription support in this process/account epoch. */
 const topicSubscriptionControllers = new Set<string>();
+/** 已成功 accept、尚未显式 close 的控制端；可无 active topic(现代重连等待 subscribe)。 */
+const acceptedLinkControllers = new Set<string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -507,7 +526,24 @@ function forwardPush(channel: string, payload: unknown): void {
     remotePayload = { ...payload, request };
   }
   const dsts = subscriptions.getControllersForTopic(topic);
-  for (const dst of dsts) {
+  // The active registry describes peer topic intent, not whether this host can
+  // currently write to the relay. During host-side reconnects sendPush is a
+  // silent no-op, so route queueable pushes through the offline backlog instead.
+  const relayOnline = activeClient.getStatus() === 'online';
+  const liveTargets = relayOnline ? dsts : [];
+  const offlineTargets = subscriptions
+    .getKnownControllersForTopic(topic)
+    .filter((dst) => !liveTargets.includes(dst));
+  for (const dst of offlineTargets) {
+    if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel)) {
+      offlinePushQueue.enqueue(dst, {
+        channel,
+        payload: remotePayload,
+        topic,
+      });
+    }
+  }
+  for (const dst of liveTargets) {
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
@@ -628,12 +664,17 @@ function truncateRemoteString(value: string, state: TruncationState): string {
 
 /**
  * 同步「转发 tap 开关」与「被控横幅」到当前 registry 状态。任何 registry 变更后调用:
- *  - registry 非空 → 注册 forwardPush tap(无监听时 broadcast-tap 是 O(1) no-op);空 → 注销。
+ *  - active registry 或 remembered topic 非空 → 注册 forwardPush tap；两者均为空 → 注销。
+ *    remembered topic 让普通断线期间的广播仍可进入离线队列。
  *  - UI 活跃控制端集 = 持 session:<id> / legacy '*' 的订阅者。
  *  - 更新重启阻塞集额外包含 fs-watch:<workdir>，但不扩大 UI 被控横幅语义。
  */
 function syncForwarding(): void {
-  setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
+  setBroadcastTapListener(
+    subscriptions.isEmpty() && !subscriptions.hasRememberedTopics()
+      ? null
+      : forwardPush,
+  );
   onControllersChanged?.(
     subscriptions.getControlControllers(),
     subscriptions.getUpdateRelaunchControllers(),
@@ -648,6 +689,7 @@ export function dropAllControllers(
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
+    ...acceptedLinkControllers,
   ]);
   for (const dst of controllerIds) {
     try {
@@ -660,6 +702,8 @@ export function dropAllControllers(
   clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
+  acceptedLinkControllers.clear();
+  offlinePushQueue.clear();
   syncForwarding();
 }
 
@@ -670,7 +714,7 @@ export function dropAllControllers(
  * 不清 invoke result/outbox：presence offline 可能只是弱网重连，控制端可靠请求仍在等回包。
  */
 export function handleControllerOffline(deviceId: string): void {
-  topicSubscriptionControllers.delete(deviceId);
+  acceptedLinkControllers.delete(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -679,6 +723,15 @@ export function handleControllerOffline(deviceId: string): void {
 /** 显式解链/撤权才丢弃该控制端的去重缓存与待发送结果。 */
 export function forgetControllerInvokeState(deviceId: string): void {
   clearRemoteInvokeStateFor(deviceId);
+}
+
+/** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
+export function purgeRevokedController(deviceId: string): void {
+  offlinePushQueue.clear(deviceId);
+  subscriptions.forgetKnownController(deviceId);
+  topicSubscriptionControllers.delete(deviceId);
+  acceptedLinkControllers.delete(deviceId);
+  syncForwarding();
 }
 
 /**
@@ -707,10 +760,14 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
     case 'link-close':
       if (!src) return;
       clearRemoteInvokeStateFor(src);
-      topicSubscriptionControllers.delete(src);
-      if (subscriptions.clearController(src)) {
-        syncForwarding();
-      }
+      offlinePushQueue.clear(src);
+      acceptedLinkControllers.delete(src);
+      // Keep the protocol-capability marker, but discard all remembered routing.
+      // A modern controller must reconnect and explicitly subscribe; restoring the
+      // legacy wildcard here would silently re-enable broad delivery.
+      subscriptions.clearController(src);
+      subscriptions.forgetKnownController(src);
+      syncForwarding();
       log.info(`control link closed by ${shortId(src)}`);
       return;
     case 'invoke':
@@ -744,6 +801,7 @@ function handleLinkOpen(
   // (legacy openLink 仍会超时,但控制端据此 link-close 标记「已撤销」),不接受其 link-open。
   if (isControllerRevoked(src)) {
     log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+    purgeRevokedController(src);
     client.closeLink(src, 'revoked');
     return;
   }
@@ -754,19 +812,29 @@ function handleLinkOpen(
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
   const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
+  const rememberedModernTopics = subscriptions.hasRememberedModernTopics(src);
+  const knownModernController =
+    topicSubscriptionControllers.has(src)
+    || rememberedModernTopics;
   // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
   // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
   client.sendLinkAccept(src, requestId, {
     appVersion: app.getVersion(),
     allowlistHash: computeAllowlistHash(),
   });
-  if (topicSubscriptionControllers.has(src)) {
+  acceptedLinkControllers.add(src);
+  if (knownModernController) {
     subscriptions.updateControllerMetadata(src, name, capabilities);
   } else {
     subscriptions.subscribe(src, [LEGACY_TOPIC], name, capabilities);
   }
   syncForwarding();
   flushRemoteInvokeResultOutbox(src);
+  if (!knownModernController) {
+    for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
+      sendPushBestEffort(src, queued.channel, queued.payload);
+    }
+  }
   log.info(`control link opened by ${shortId(src)} (${name})`);
 }
 
@@ -1614,10 +1682,11 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // until disconnect. Empty/fully-filtered frames leave legacy compatibility intact.
     // Add the modern topics first so replacing the last legacy topic does not discard the
     // controller metadata (including negotiated capabilities) with the registry entry.
+    const hadLegacyTopic = subscriptions.controllerHasTopic(src, LEGACY_TOPIC);
     subscriptions.subscribe(src, topics, name, optionalControllerCapabilities(o));
     if (topics.length > 0) {
       topicSubscriptionControllers.add(src);
-      subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
+      if (hadLegacyTopic) subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
     }
   } else {
     subscriptions.unsubscribe(src, topics);
@@ -1625,6 +1694,11 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
     notifySessionsSubscribed(src);
+  }
+  if (isSub && topics.length > 0) {
+    for (const queued of offlinePushQueue.drain(src, topics)) {
+      sendPushBestEffort(src, queued.channel, queued.payload);
+    }
   }
   return { ok: true, result: { ok: true } };
 }
@@ -1865,8 +1939,10 @@ export const __testing = {
     clearRemoteInvokeResultOutboxTimer();
     remoteInvokeLinkEpoch.clear();
     topicSubscriptionControllers.clear();
+    acceptedLinkControllers.clear();
     onSessionsSubscribed = null;
     activeClient = null;
+    offlinePushQueue.clear();
     setBroadcastTapListener(null);
   },
   getActiveControllers,
@@ -1884,6 +1960,12 @@ export const __testing = {
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,
   flushRemoteInvokeResultOutbox,
   forwardPush,
+  queuedPushesFor(deviceId: string) {
+    return offlinePushQueue.snapshot(deviceId);
+  },
+  handleLinkOpen,
+  handleSubscriptionFrame,
+  purgeRevokedController,
   setActiveClient(c: DeviceLinkClient | null): void {
     activeClient = c;
   },

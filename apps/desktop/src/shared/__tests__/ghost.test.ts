@@ -1339,9 +1339,9 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
   });
 
   it('topics 合法值放行并归一化进清单', () => {
-    const r = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    const r = validateGhostManifest(withSub({ topics: ['turn', 'session', 'activity'] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session'] });
+    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session', 'activity'] });
   });
 
   it('hooks 必须搭配 launch:"resident",否则拒装', () => {
@@ -1386,6 +1386,57 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     const bare = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'subscribe'] });
     if (bare.ok) {
       expect(ghostPermissionItems(bare.manifest).some((i) => i.kind === 'subscribe')).toBe(false);
+    }
+  });
+
+  it('activity 单列一项权限,从 turn 加订阅 activity 计入扩张;turn/session 清单逐字不变', () => {
+    const turnOnly = validateGhostManifest(withSub({ topics: ['turn'] }));
+    const withActivity = validateGhostManifest(withSub({ topics: ['turn', 'activity'] }));
+    const turnAndSession = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    expect(turnOnly.ok && withActivity.ok && turnAndSession.ok).toBe(true);
+    if (!turnOnly.ok || !withActivity.ok || !turnAndSession.ok) return;
+
+    // activity 是独立一项(带自己的 label/detail),不并进固定的 subscribe:topics。
+    expect(ghostPermissionItems(withActivity.manifest).map((i) => i.key)).toContain(
+      'subscribe:topics:activity',
+    );
+    expect(
+      ghostPermissionItems(withActivity.manifest).find((i) => i.key === 'subscribe:topics:activity'),
+    ).toMatchObject({ labelKey: 'subscribeActivity', detailKey: 'subscribeActivityDetail' });
+
+    // 存量插件更新时新增 activity 必须被权限扩张检测抓到(plugin-market 要求复核)。
+    const added = diffGhostPermissionItems(turnOnly.manifest, withActivity.manifest).added;
+    expect(added.map((i) => i.key)).toEqual(['subscribe:topics:activity']);
+
+    // 只动 turn / session 的存量插件权限清单不 churn(批准状态不受影响)。
+    expect(diffGhostPermissionItems(turnOnly.manifest, turnAndSession.manifest).added).toEqual([]);
+    expect(ghostPermissionItems(turnAndSession.manifest).filter((i) => i.kind === 'subscribe')).toEqual(
+      ghostPermissionItems(turnOnly.manifest).filter((i) => i.kind === 'subscribe'),
+    );
+
+    // 取消订阅 activity 应报为 removed。
+    expect(
+      diffGhostPermissionItems(withActivity.manifest, turnOnly.manifest).removed.map((i) => i.key),
+    ).toEqual(['subscribe:topics:activity']);
+  });
+
+  it('纯 activity 订阅不显示 turn/session 那行:确认框不凭空多报能力', () => {
+    const activityOnly = validateGhostManifest(withSub({ topics: ['activity'] }));
+    expect(activityOnly.ok).toBe(true);
+    if (!activityOnly.ok) return;
+    const keys = ghostPermissionItems(activityOnly.manifest)
+      .filter((i) => i.kind === 'subscribe')
+      .map((i) => i.key);
+    // 网关不会给它投 turn / session,所以固定的 subscribe:topics 一行不该出现。
+    expect(keys).toEqual(['subscribe:topics:activity']);
+  });
+
+  it('订阅 session 或 turn 任一都产出旧 subscribe:topics(存量批准状态不 churn)', () => {
+    for (const topics of [['turn'], ['session'], ['turn', 'session'], ['session', 'activity']]) {
+      const v = validateGhostManifest(withSub({ topics }));
+      expect(v.ok).toBe(true);
+      if (!v.ok) return;
+      expect(ghostPermissionItems(v.manifest).map((i) => i.key)).toContain('subscribe:topics');
     }
   });
 

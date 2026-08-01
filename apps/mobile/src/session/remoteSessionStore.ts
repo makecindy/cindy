@@ -22,6 +22,7 @@ import { cacheSessionMessages, getCachedSessionMessages } from '@/session/mobile
 import { contentToPreview } from '@/utils/contentPreview';
 import type { MobileSystemCardType } from '@/session/systemCard';
 import type { InputProjection, PendingInteraction, RemoteMessage, RemoteSession } from '@/session/types';
+import { compareMessageOrder } from '@/session/messagePaging';
 import { normalizeRemoteMoney } from '@/session/remoteMoney';
 
 interface DeviceShard {
@@ -556,7 +557,7 @@ function preserveSessionRuntimeFields(fresh: RemoteSession, local: RemoteSession
 }
 
 function normalizeMessages(list: readonly RemoteMessage[]): RemoteMessage[] {
-  return [...list].sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+  return [...list].sort(compareMessageOrder);
 }
 
 function messageKey(message: RemoteMessage): string {
@@ -1077,12 +1078,19 @@ function flushAndFinalizeRemoteStreamingMessages(
 }
 
 function hasLiveAssistantMessage(sessionId: string): boolean {
-  const pendingLiveIds = pendingLiveAssistantClientIds.get(sessionId);
-  if (!pendingLiveIds || pendingLiveIds.size === 0) return false;
   return (messages.get(sessionId) ?? []).some((message) => (
-    message.role === 'assistant'
-      && (pendingLiveIds.has(message.clientId) || pendingLiveIds.has(message.id))
+    isPendingLiveAssistantMessage(sessionId, message)
   ));
+}
+
+function isPendingLiveAssistantMessage(
+  sessionId: string,
+  message: RemoteMessage,
+): boolean {
+  const pendingLiveIds = pendingLiveAssistantClientIds.get(sessionId);
+  return message.role === 'assistant'
+    && pendingLiveIds !== undefined
+    && (pendingLiveIds.has(message.clientId) || pendingLiveIds.has(message.id));
 }
 
 function flushPendingTextDeltas(): void {
@@ -1466,7 +1474,13 @@ export const remoteSessionStore = {
       // 本地系统卡(/learn、/context 等)没有服务端对应行:不管时序落在窗口哪里都
       // 不会出现在 latestKeys 里,若不单独保留会被 window 刷新时静默丢弃。
       const isLocalSystemCard = messageKey(item).startsWith('mobile-system-');
-      if (isNewerThanLatestPage || isOlderLoadedPage || isLocalSystemCard) {
+      const isPendingLiveAssistant = isPendingLiveAssistantMessage(sessionId, item);
+      if (
+        isNewerThanLatestPage
+        || isOlderLoadedPage
+        || isLocalSystemCard
+        || isPendingLiveAssistant
+      ) {
         byKey.set(messageKey(item), item);
       }
     }

@@ -18,7 +18,7 @@
  * 依赖注入(规则 14):意识清单/运行态/唤醒/投递全经 deps,单测直喂。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   GHOST_ASSISTANT_HOOK_TIMEOUT_MS,
@@ -26,8 +26,12 @@ import {
   GHOST_HOOK_REWRITE_MAX_CHARS,
   GHOST_HOOK_TIMEOUT_MS,
   GHOST_SUB_QUEUE_MAX,
+  type GhostActivityEventName,
+  type GhostDidEventData,
   type GhostDidEventName,
-  type GhostEventSessionData,
+  type GhostEventActivityData,
+  type GhostEventInteractionActivityData,
+  type GhostEventThinkingData,
   type GhostEventTurnEndData,
   type GhostEventTurnStartData,
   type GhostPipeEventPush,
@@ -124,7 +128,7 @@ export class GhostSubscriptionGateway {
   publish(
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
-    data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData,
+    data: GhostDidEventData,
   ): void {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
@@ -147,7 +151,7 @@ export class GhostSubscriptionGateway {
     ghost: InstalledGhost,
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
-    data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData,
+    data: GhostDidEventData,
   ): void {
     const ghostId = ghost.manifest.id;
     const e = this.entry(ghostId);
@@ -491,6 +495,317 @@ export interface TurnEventSink {
   turnEnd(data: GhostEventTurnEndData): void;
 }
 
+/**
+ * 读 status 事件的 isRunning。非 status 事件返回 null(供"这是不是轮次起点"判断);
+ * status 但 data 形状不对按 false —— 拿不准就不算在跑。
+ */
+export function readStatusIsRunning(ev: MinimalAgentEvent): boolean | null {
+  if (ev.type !== 'status') return null;
+  if (typeof ev.data !== 'object' || ev.data === null) return false;
+  return (ev.data as { isRunning?: unknown }).isRunning === true;
+}
+
+export type GhostTapPendingItem =
+  | { type: 'event'; event: MinimalAgentEvent }
+  | {
+      type: 'activity';
+      phase: 'start' | 'end';
+      request: { kind: GhostInteractionActivityKind; requestId: string };
+    };
+
+/**
+ * 资格判定期的有界缓冲。DB 未就绪时判定要重试,这段时间的事件先攒着,判定通过后
+ * 按序回放;封顶防怪会话把内存吃干。
+ *
+ * 溢出策略:**丢最旧**(与网关缓冲一致)。要护住的不变量是"回放出去的流里不留孤儿
+ * start" —— 没有 end 的 start 会让插件永久停在"在忙 / 在等审批",要等会话销毁才被
+ * finishAll 兜底。丢最旧天然满足它:留下的永远是到达序的一个**后缀**,某个 start 还在
+ * 队里就意味着它之后的一切都还在,它的 end 也在。
+ *
+ * 反过来落单的 end 无害 —— 三个下游状态机对它一律 no-op:translator 在 idle 收到
+ * done/error 直接 return、非 running 收到 status(false) 不动;endThinking 认 blockId、
+ * endInteraction 认在场 requestId。极端情况下连 status(true) 一起被挤掉,turnActive
+ * 压根不置起,那一轮连 thinking 都整体静默 —— 是"少一段情节",不是"半段情节"。
+ *
+ * 所以这里不需要按事件类型做配对压缩:丢最新才需要(收口事件本就排在最后,首当其冲),
+ * 而那要求队列认识 thinking / turn / interaction 各自的语义。
+ */
+export class GhostTapPendingQueue {
+  private readonly items: GhostTapPendingItem[] = [];
+  private droppedCount = 0;
+
+  constructor(
+    private readonly cap: number,
+    /** 首次溢出回调(只回一次,避免怪会话刷爆日志)。 */
+    private readonly onFirstOverflow?: () => void,
+  ) {}
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  get dropped(): number {
+    return this.droppedCount;
+  }
+
+  push(item: GhostTapPendingItem): void {
+    if (this.items.length >= this.cap) {
+      this.items.shift();
+      this.noteDropped(1);
+    }
+    this.items.push(item);
+  }
+
+  /** 取快照并清空(回放用:先清再放,回放中新到的事件不会被本轮吞掉)。 */
+  drain(): GhostTapPendingItem[] {
+    return this.items.splice(0, this.items.length);
+  }
+
+  clear(): void {
+    this.items.length = 0;
+  }
+
+  private noteDropped(count: number): void {
+    const wasEmpty = this.droppedCount === 0;
+    this.droppedCount += count;
+    if (wasEmpty) this.onFirstOverflow?.();
+  }
+}
+
+/**
+ * activity 标识的对外投影:把上游 id 换成**主机域内的不透明配对键**。
+ *
+ * 为什么必须投影 —— provider 侧的 id 不保证语义中立。codex 的 MCP elicitation 会把
+ * 服务名拼进 requestId(`mcp-elicitation:<serverName>:…`,`codex/index.ts:4699`),
+ * 计划审批带 `codex-plan-review:` 前缀(`:3838`);原样转发就等于告诉插件"正在请求
+ * 哪个 MCP 服务 / 这是计划审批",与权限确认框宣称的"只知道时机、看不到待批准的操作"
+ * 不符。thinking 的 blockId 今天是时间戳 / 随机 / provider item id,并不泄露,但一起
+ * 投影才能让这个协议**结构上**不透传任何 provider 值 —— 上游以后往 id 里塞东西也伤
+ * 不到我们,而不是依赖"我们审计过今天的形态"。
+ *
+ * 为什么是确定性哈希而不是分配式 ID —— 同一个上游 id 恒定映射到同一个 token,所以
+ * start/end 的配对契约逐字不变,不需要映射表、不需要清理、不新增任何状态。
+ * 掺 sessionId 是为了让同一个上游 id 在不同会话里得到不同 token(不给跨会话关联留口)。
+ * 截 16 位十六进制 = 64 bit:单会话内标识量级 ≤ 10³,碰撞概率约 10⁻¹⁴,可忽略。
+ *
+ * 注意 `sessionId` 本身不投影 —— 它是 turn / session / activity 三个 topic 共用的关联键,
+ * 换掉会断掉插件"把 activity 关联回哪个会话"的能力,而它本来就在 turn / session 里明文投。
+ */
+export function ghostActivityId(sessionId: string, upstreamId: string): string {
+  // 带长度前缀拼接:两段都可能含任意分隔符,前缀保证拼接无歧义
+  // (不同的 (sessionId, upstreamId) 组合不可能拼出同一个串)。
+  return createHash('sha256')
+    .update(`${sessionId.length}:${sessionId}:${upstreamId}`)
+    .digest('hex')
+    .slice(0, 16);
+}
+
+/**
+ * 轮次来源跟踪:回答"这条 interaction 该不该投给插件"。
+ *
+ * 为什么需要它 —— interaction router 给 observer 的 `route.origin` 是另一套取值
+ * (TurnPermissionOrigin: desktop / im / scheduler / hook),而且只有 hook-control 与
+ * IM turnRunner 会 beginInteractionRoute。goal 续跑与 scheduler 定时任务都是直发
+ * session.send,压根没有 route,光看 route 会把它们的审批 / 提问放行;而事件侧
+ * (turnOrigin 非 user)又把它们的轮次事件滤掉了,插件就会收到"没有对应轮次的审批",
+ * 违反作者手册"不投后台自动化"的契约。所以来源要从事件流上自己记。
+ */
+export class GhostTurnOriginTracker {
+  /** 缺省 user:接线发生在任何轮次之前,首个轮次起点到达前按用户会话处理。 */
+  private kind = 'user';
+
+  /**
+   * 只在轮次起点(status isRunning:true)更新:Session 越过 dispatch 边界后才装
+   * currentTurnOrigin,provider 的 status(true) 必然带上本轮 origin;而轮次终态之后
+   * origin 会被清空,逐事件更新会被 undefined 抹回 user。
+   *
+   * 也**不在轮次结束时复位** —— codex 计划审批就发生在轮次终态之后,复位会把它
+   * 误判成用户轮次。下一个轮次起点自然会覆盖。
+   */
+  noteEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void {
+    if (readStatusIsRunning(ev) === true) this.kind = ev.turnOrigin?.kind ?? 'user';
+  }
+
+  /**
+   * 两道独立的门:route 存在时必须是 desktop 面(IM / hook 注册的是 channel-card /
+   * headless);route 缺省即 Desktop 面,此时再看当前轮次来源挡掉 goal / scheduler。
+   *
+   * **只该用在 start 侧**:end 由 GhostActivityTracker 按 requestId 配对,没登记过的
+   * requestId 本就是 no-op。若 end 也过滤,一旦来源在等待期间翻转(理论上被 Session
+   * busy 守卫挡住,但不该依赖它),start 就会永远等不到 end。
+   */
+  acceptsInteraction(route?: { origin?: { kind?: string } }): boolean {
+    if (route?.origin?.kind && route.origin.kind !== 'desktop') return false;
+    return this.kind === 'user';
+  }
+}
+
+export type GhostInteractionActivityKind =
+  | 'permission'
+  | 'plan_review'
+  | 'ask_user_question';
+
+export interface ActivityEventSink {
+  activity(
+    name: GhostActivityEventName,
+    data: GhostEventActivityData,
+  ): void;
+}
+
+/** interaction kind → 对插件暴露的活动类型(等待用户回答 vs 等待用户批准)。 */
+function activityTypeOf(kind: GhostInteractionActivityKind): 'approval' | 'user-input' {
+  return kind === 'ask_user_question' ? 'user-input' : 'approval';
+}
+
+/**
+ * activity 边界状态机：同步、O(1)、不读取正文。两类活动的生命周期主人不同:
+ *
+ * - **thinking 归回合**:是单活跃 block 模型(vendor 的 reasoning block 串行产出,
+ *   新 block 开始即代表上一个已收口),只在回合内有意义,turn 收口时强制结束。
+ * - **approval / user-input 归 router,可跨回合终态**:codex 计划模式里
+ *   runPlanReviewFlow 是在计划 turn 把 status(false) 与 done **入队之后**才发起
+ *   plan_review(见 agents/codex/index.ts 的 "放在 done 之后 (AsyncQueue FIFO)"),
+ *   即 done 必然先被消费。若拿 turnActive 当门控,这个审批的 start 会被直接丢掉,
+ *   插件根本不知道用户正在批计划;若靠 turn 收口去补 end,又会在用户还在审批时
+ *   谎报"审批结束"。所以这两类只认 SessionInteractionRouter 的 dispatch/finally
+ *   ——finally 保证每个 requestId 一定收口,回合边界不插手。
+ *
+ * 两类都按 id 集合跟踪:同一轮的并行工具调用会让多个 permission 同时等在 router
+ * 里(见 SessionInteractionRouter.pending),用单值覆盖会在第二个请求开始时提前给
+ * 第一个发 end。每个 id 各配一对 start/end,插件按集合非空判断是否仍在等待。
+ */
+export class GhostActivityTracker {
+  private turnActive = false;
+  private thinkingBlockId: string | null = null;
+  private lastEndedThinkingBlockId: string | null = null;
+  private readonly interactionRequestIds: Record<'approval' | 'user-input', Set<string>> = {
+    approval: new Set(),
+    'user-input': new Set(),
+  };
+
+  constructor(private readonly opts: { sessionId: string; sink: ActivityEventSink }) {}
+
+  beginTurn(): void {
+    if (this.turnActive) this.finishTurn();
+    this.turnActive = true;
+    this.lastEndedThinkingBlockId = null;
+  }
+
+  handleEvent(ev: MinimalAgentEvent): void {
+    if (!this.turnActive) return;
+    if (ev.type !== 'thinking' || typeof ev.data !== 'object' || ev.data === null) return;
+    const data = ev.data as { stage?: unknown; blockId?: unknown };
+    if (typeof data.blockId !== 'string' || data.blockId.length === 0) return;
+    if (
+      data.stage !== 'start' &&
+      data.stage !== 'delta' &&
+      data.stage !== 'final' &&
+      data.stage !== 'redacted'
+    ) return;
+    if (data.stage === 'start' || data.stage === 'delta') {
+      this.startThinking(data.blockId);
+      return;
+    }
+    if (this.thinkingBlockId !== data.blockId) {
+      if (this.lastEndedThinkingBlockId === data.blockId) return;
+      this.startThinking(data.blockId);
+    }
+    this.endThinking(data.blockId);
+  }
+
+  /** 不看 turnActive:审批可以在回合终态之后才开始(codex 计划模式),见类注释。 */
+  startInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
+    if (!requestId) return;
+    const type = activityTypeOf(kind);
+    // 同一 requestId 重复进入(路由重投)不重复发 start。
+    if (this.interactionRequestIds[type].has(requestId)) return;
+    this.interactionRequestIds[type].add(requestId);
+    this.emitInteraction(type, 'start', requestId);
+  }
+
+  endInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
+    const type = activityTypeOf(kind);
+    // delete 返回 false = 这个 requestId 没在场(已收口或从未开始),不重复发 end。
+    if (!this.interactionRequestIds[type].delete(requestId)) return;
+    this.emitInteraction(type, 'end', requestId);
+  }
+
+  /** 回合收口:只结束 thinking。在场的审批交给 router 的 finally,不在这里谎报结束。 */
+  finishTurn(): void {
+    if (!this.turnActive) return;
+    if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
+    this.lastEndedThinkingBlockId = null;
+    this.turnActive = false;
+  }
+
+  /**
+   * 会话级收口(tap dispose):observer 即将被摘掉,router 的 finally 再也到不了
+   * 这里,所以此刻必须把仍在场的审批 / 等待输入逐个补 end,否则插件永久停在等待态。
+   */
+  finishAll(): void {
+    this.finishTurn();
+    this.finishInteraction('approval');
+    this.finishInteraction('user-input');
+  }
+
+  reset(): void {
+    this.turnActive = false;
+    this.thinkingBlockId = null;
+    this.lastEndedThinkingBlockId = null;
+    this.interactionRequestIds.approval.clear();
+    this.interactionRequestIds['user-input'].clear();
+  }
+
+  private startThinking(blockId: string): void {
+    if (this.thinkingBlockId === blockId) return;
+    if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
+    this.thinkingBlockId = blockId;
+    this.lastEndedThinkingBlockId = null;
+    this.opts.sink.activity('did-thinking-start', this.thinkingData(blockId));
+  }
+
+  private endThinking(blockId: string): void {
+    if (this.thinkingBlockId !== blockId) return;
+    this.opts.sink.activity('did-thinking-end', this.thinkingData(blockId));
+    this.thinkingBlockId = null;
+    this.lastEndedThinkingBlockId = blockId;
+  }
+
+  /** 给所有仍在场的 requestId 各补一条 end(仅会话级收口调用,见 finishAll)。 */
+  private finishInteraction(type: 'approval' | 'user-input'): void {
+    const ids = this.interactionRequestIds[type];
+    if (ids.size === 0) return;
+    // 先取快照再清:emit 是同步回调,清空后再遍历可避免被回调内的再入改动影响。
+    const pending = [...ids];
+    ids.clear();
+    for (const requestId of pending) this.emitInteraction(type, 'end', requestId);
+  }
+
+  /** 内部状态一律用上游原值配对,只在**出网关那一刻**投影(见 ghostActivityId)。 */
+  private thinkingData(blockId: string): GhostEventThinkingData {
+    return {
+      sessionId: this.opts.sessionId,
+      blockId: ghostActivityId(this.opts.sessionId, blockId),
+    };
+  }
+
+  private emitInteraction(
+    type: 'approval' | 'user-input',
+    edge: 'start' | 'end',
+    requestId: string,
+  ): void {
+    const data: GhostEventInteractionActivityData = {
+      sessionId: this.opts.sessionId,
+      requestId: ghostActivityId(this.opts.sessionId, requestId),
+    };
+    if (type === 'approval') {
+      this.opts.sink.activity(edge === 'start' ? 'did-approval-start' : 'did-approval-end', data);
+    } else {
+      this.opts.sink.activity(edge === 'start' ? 'did-user-input-start' : 'did-user-input-end', data);
+    }
+  }
+}
+
 /** 从 done 事件的 usage 里尽力抽 token 数。三种真实形态都认:
  *  cc snake_case(input_tokens/cache_read_input_tokens…)、通用 camelCase、
  *  codex translator 形态(promptTokens/completionTokens/cachedTokens);
@@ -562,10 +877,7 @@ export class GhostTurnTranslator {
     };
 
     if (ev.type === 'status') {
-      const isRunning =
-        typeof ev.data === 'object' && ev.data !== null
-          ? (ev.data as { isRunning?: unknown }).isRunning === true
-          : false;
+      const isRunning = readStatusIsRunning(ev) === true;
       if (isRunning) {
         // closing 期间就开新 turn:上一轮确实没等到定性事件,按中断收口。
         if (this.state === 'closing') this.finish(base, 'interrupted', undefined);

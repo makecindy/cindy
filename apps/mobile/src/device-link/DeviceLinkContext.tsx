@@ -41,6 +41,10 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
+import {
+  handlePeerLinkCloseFrame,
+  invalidatePeerLinkState,
+} from '@/device-link/linkClose';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import {
   classifySnapshotBatchFailure,
@@ -249,7 +253,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     isConfirmationInFlight: (deviceId: string) =>
-      openLinkInFlightRef.current.has(deviceId),
+      openLinkInFlightRef.current.get(deviceId)?.pending === true,
   }), []);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
@@ -276,6 +280,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteResponseEvidenceEpochs,
       deviceId,
       () => sendOpenLinkWithAccessHandling(client, deviceId),
+      { retainSuccessful: true },
     );
   }, []);
 
@@ -651,6 +656,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offPresence = client.onPresenceChanged((snap) => {
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
+      // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
+      // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
+      openLinkInFlightRef.current.delete(snap.deviceId);
       setLastPresenceSnapshot(snap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
@@ -711,6 +719,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
+      onLinkClosed: (deviceId) => invalidatePeerLinkState(
+        deviceId,
+        openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current,
+        noteSessionLiveStreamsInterrupted,
+      ),
       onProviderChanged: (deviceId) => {
         // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
@@ -951,14 +965,20 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
-function routeFrame(env: Envelope, handlers: {
+export function routeFrame(env: Envelope, handlers: {
   onAccessRevoked?: (deviceId: string) => void;
+  onLinkClosed?: (deviceId: string) => void;
   onProviderChanged?: (deviceId: string) => void;
 } = {}): void {
+  const peerLinkClosed = handlePeerLinkCloseFrame(
+    env,
+    (deviceId) => handlers.onLinkClosed?.(deviceId),
+  );
   if (applyAccessRevokedFrame(env)) {
     if (env.src) handlers.onAccessRevoked?.(env.src);
     return;
   }
+  if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
   if (push.channel === 'maker:provider:changed') {

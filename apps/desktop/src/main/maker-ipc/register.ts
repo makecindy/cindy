@@ -364,7 +364,10 @@ import {
   readOrcaWorkerOutputReadOnly,
 } from './orcaDiagnostics.js';
 import { createMakerSendTransaction } from './makerSendTransaction.js';
-import { installDesktopInteractionHandler } from './interactionRouter.js';
+import {
+  installDesktopInteractionHandler,
+  installInteractionLifecycleObserver,
+} from './interactionRouter.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
 import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
@@ -2729,9 +2732,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
   const ghostSessionTap = createGhostSessionTap(session.id);
   // 拆线收口:实例替换(上面的 existing.disposers)与会话关闭(下面 closed 的
-  // finally)两条路径都要给插件补上缺失的 did-turn-end,否则订阅方的「AI 在忙」
-  // 外层状态永久卡在 working。
-  registration.disposers.push(() => ghostSessionTap.dispose());
+  // finally)两条路径都要给插件补上缺失的 did-turn-end 与在场审批的 end,否则订阅方
+  // 的「AI 在忙 / 在等审批」外层状态永久卡住。observer 也在这里摘掉。
+  registration.disposers.push(() => {
+    ghostSessionTap.dispose();
+    installInteractionLifecycleObserver(session, null);
+  });
   registration.disposers.push(session.onEvent((event: AgentEvent) => {
     ghostSessionTap.handleEvent(
       event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
@@ -3802,6 +3808,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
   installDesktopInteractionListener(session);
+  installInteractionLifecycleObserver(session, ghostSessionTap.interactionObserver);
 }
 
 /**
