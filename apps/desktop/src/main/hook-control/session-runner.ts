@@ -571,10 +571,11 @@ export function createMakerHookSessionRunner(deps: {
 
       // maker.createSession({ id }) may return an already-active instance and
       // ignore create options. The safe mode is applied inside
-      // beforeProviderStart, after Session.send has atomically reserved this
-      // turn. A busy Desktop turn therefore rejects before we mutate its live
-      // permission state. Every terminal path after a successful reservation
-      // restores the original mode in the outer finally below.
+      // afterTurnReserved, after Session.send has atomically reserved this turn
+      // but before provider option preflight reads the live permission mode. A
+      // busy Desktop turn therefore rejects before we mutate its state. Every
+      // terminal path after a successful reservation restores the original
+      // mode in the outer finally below.
       let reusedPermissionModeApplied = false;
 
       try {
@@ -916,7 +917,7 @@ export function createMakerHookSessionRunner(deps: {
                   ),
                 }
               : {}),
-            beforeProviderStart: async () => {
+            afterTurnReserved: async () => {
               if (reusedPermissionModeToRestore !== null) {
                 // Mark first: setPermissionMode can partially mutate before a
                 // transport error, in which case the outer finally must still
@@ -924,6 +925,8 @@ export function createMakerHookSessionRunner(deps: {
                 reusedPermissionModeApplied = true;
                 await session.setPermissionMode(permissionMode);
               }
+            },
+            beforeProviderStart: () => {
               const routeOrigin: RoutedTurnOrigin =
                 req.source?.im === 'slack'
                   ? { kind: 'im', channel: 'slack' }

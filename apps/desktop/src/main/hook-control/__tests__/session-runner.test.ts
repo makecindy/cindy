@@ -207,11 +207,13 @@ function makeFakeSession(id: string) {
       async (
         _msg: unknown,
         opts: {
+          afterTurnReserved?: () => Promise<void> | void;
           beforeProviderStart?: () => Promise<void> | void;
           onAccepted?: () => Promise<void>;
         },
       ): Promise<unknown> => {
         h.headlessDuringSend.push(isHeadlessGhostSetupTurn(id));
+        await opts.afterTurnReserved?.();
         await opts.beforeProviderStart?.();
         await opts.onAccepted?.();
         h.headlessAfterAccepted.push(isHeadlessGhostSetupTurn(id));
@@ -1156,9 +1158,9 @@ describe('进度快照(turn.progress 链路)', () => {
     session.send.mockImplementationOnce(
       async (
         _msg: unknown,
-        opts: { beforeProviderStart?: () => Promise<void> | void },
+        opts: { afterTurnReserved?: () => Promise<void> | void },
       ): Promise<never> => {
-        await opts.beforeProviderStart?.();
+        await opts.afterTurnReserved?.();
         throw new Error('send failed');
       },
     );

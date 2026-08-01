@@ -1,13 +1,16 @@
-import { describe, expect, it, vi } from 'vitest';
-import path from 'node:path';
+import { describe, expect, it, vi } from "vitest";
+import path from "node:path";
 
-import { Maker, type CreateSessionOptions } from './maker.js';
-import { Session } from './session.js';
-import { createAsyncQueue } from './agents/shared/async-queue.js';
-import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
-import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
-import type { AgentKind } from './types/common.js';
-import type { AgentEvent } from './types/events.js';
+import { Maker, type CreateSessionOptions } from "./maker.js";
+import { Session } from "./session.js";
+import { createAsyncQueue } from "./agents/shared/async-queue.js";
+import type { AgentSessionHandle, BaseAgent } from "./agents/base-agent.js";
+import type {
+  SessionMeta,
+  SessionStorage,
+} from "./interfaces/session-storage.js";
+import type { AgentKind } from "./types/common.js";
+import type { AgentEvent } from "./types/events.js";
 
 /** A generator that never completes — simulates a live session handle. */
 async function* neverEndingIterator(): AsyncGenerator<AgentEvent> {
@@ -66,7 +69,7 @@ function createLogger() {
 
 function createAgent(
   startSession: (opts: CreateSessionOptions) => Promise<unknown>,
-  kind: AgentKind = 'codex',
+  kind: AgentKind = "codex",
 ): BaseAgent {
   return {
     kind,
@@ -94,22 +97,29 @@ function createHandle(args: {
 }): AgentSessionHandle {
   return {
     id: args.id,
-    agentKind: args.agentKind ?? 'codex',
-    model: 'gpt-5.4',
+    agentKind: args.agentKind ?? "codex",
+    model: "gpt-5.4",
     codexProductPromptDelivery: args.delivery,
     async send() {},
     async steer() {},
     async abort() {},
     async close() {},
-    async *events() { yield* neverEndingIterator(); },
-    getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+    async *events() {
+      yield* neverEndingIterator();
+    },
+    getUsageSnapshot: () => ({
+      tokenUsage: 0,
+      contextTokens: 0,
+      contextWindow: 0,
+      costUsd: 0,
+    }),
     setInteractionResolver() {},
     isTurnRunning: () => false,
   };
 }
 
-describe('Maker session creation singleflight', () => {
-  it('shares one startup when the same business session is restored concurrently', async () => {
+describe("Maker session creation singleflight", () => {
+  it("shares one startup when the same business session is restored concurrently", async () => {
     let resolveStart!: (handle: AgentSessionHandle) => void;
     const startPending = new Promise<AgentSessionHandle>((resolve) => {
       resolveStart = resolve;
@@ -122,21 +132,21 @@ describe('Maker session creation singleflight', () => {
     });
     const created = vi.fn();
     maker.on((event) => {
-      if (event.type === 'session:created') created(event.session);
+      if (event.type === "session:created") created(event.session);
     });
     const options: CreateSessionOptions = {
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-1',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-1",
     };
 
     const first = maker.createSession(options);
     const second = maker.createSession({ ...options });
 
     expect(startSession).toHaveBeenCalledTimes(1);
-    resolveStart(createHandle({ id: 'thread-1' }));
+    resolveStart(createHandle({ id: "thread-1" }));
     const [firstSession, secondSession] = await Promise.all([first, second]);
 
     expect(secondSession).toBe(firstSession);
@@ -145,22 +155,23 @@ describe('Maker session creation singleflight', () => {
     expect(created).toHaveBeenCalledWith(firstSession);
   });
 
-  it('clears a failed startup so the same business session can be retried', async () => {
-    const startupError = new Error('start failed');
-    const startSession = vi.fn()
+  it("clears a failed startup so the same business session can be retried", async () => {
+    const startupError = new Error("start failed");
+    const startSession = vi
+      .fn()
       .mockRejectedValueOnce(startupError)
-      .mockResolvedValueOnce(createHandle({ id: 'thread-recovered' }));
+      .mockResolvedValueOnce(createHandle({ id: "thread-recovered" }));
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
       storage: createStorage(),
       logger: createLogger(),
     });
     const options: CreateSessionOptions = {
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-1',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-1",
     };
 
     const first = maker.createSession(options);
@@ -169,51 +180,53 @@ describe('Maker session creation singleflight', () => {
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(maker.listActiveSessions()).toEqual([]);
 
-    await expect(maker.createSession({ ...options })).resolves.toBeInstanceOf(Session);
+    await expect(maker.createSession({ ...options })).resolves.toBeInstanceOf(
+      Session,
+    );
     expect(startSession).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('Maker session close events', () => {
-  it('preserves the explicit close reason and exact Session identity', async () => {
+describe("Maker session close events", () => {
+  it("preserves the explicit close reason and exact Session identity", async () => {
     const maker = new Maker({
       agents: {
-        codex: createAgent(async () => createHandle({ id: 'thread-1' })),
+        codex: createAgent(async () => createHandle({ id: "thread-1" })),
       },
       storage: createStorage(),
       logger: createLogger(),
     });
     const closed = vi.fn();
     maker.on((event) => {
-      if (event.type === 'session:closed') closed(event);
+      if (event.type === "session:closed") closed(event);
     });
     const session = await maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
     });
 
-    await maker.closeSession('session-1', 'agent-switch');
+    await maker.closeSession("session-1", "agent-switch");
 
     expect(closed).toHaveBeenCalledWith({
-      type: 'session:closed',
-      sessionId: 'session-1',
+      type: "session:closed",
+      sessionId: "session-1",
       session,
-      reason: 'agent-switch',
+      reason: "agent-switch",
     });
   });
 });
 
-describe('Maker before-start lifecycle hook', () => {
-  it('awaits host preparation before starting the agent', async () => {
+describe("Maker before-start lifecycle hook", () => {
+  it("awaits host preparation before starting the agent", async () => {
     const order: string[] = [];
     const onBeforeStart = vi.fn(async () => {
-      order.push('prepare');
+      order.push("prepare");
     });
     const startSession = vi.fn(async () => {
-      order.push('start');
-      return createHandle({ id: 'thread-1' });
+      order.push("start");
+      return createHandle({ id: "thread-1" });
     });
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
@@ -223,55 +236,57 @@ describe('Maker before-start lifecycle hook', () => {
     });
 
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
     });
 
-    expect(order).toEqual(['prepare', 'start']);
+    expect(order).toEqual(["prepare", "start"]);
     expect(onBeforeStart).toHaveBeenCalledWith({
-      agentKind: 'codex',
-      workingDir: '/repo',
+      agentKind: "codex",
+      workingDir: "/repo",
     });
   });
 
-  it('keeps session startup fail-soft when host preparation fails', async () => {
+  it("keeps session startup fail-soft when host preparation fails", async () => {
     const logger = createLogger();
-    const startSession = vi.fn(async () => createHandle({ id: 'thread-1' }));
+    const startSession = vi.fn(async () => createHandle({ id: "thread-1" }));
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
       storage: createStorage(),
       logger,
       lifecycleHooks: {
         onBeforeStart: async () => {
-          throw new Error('prepare failed');
+          throw new Error("prepare failed");
         },
       },
     });
 
-    await expect(maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-    })).resolves.toBeInstanceOf(Session);
+    await expect(
+      maker.createSession({
+        id: "session-1",
+        agentKind: "codex",
+        workingDir: "/repo",
+        model: "gpt-5.4",
+      }),
+    ).resolves.toBeInstanceOf(Session);
     expect(startSession).toHaveBeenCalledTimes(1);
     expect(logger.warn).toHaveBeenCalledWith(
-      'lifecycleHooks.onBeforeStart threw; continuing session startup',
-      expect.objectContaining({ sessionId: 'session-1', workingDir: '/repo' }),
+      "lifecycleHooks.onBeforeStart threw; continuing session startup",
+      expect.objectContaining({ sessionId: "session-1", workingDir: "/repo" }),
     );
   });
 });
 
-describe('Maker start-option lifecycle hooks', () => {
-  it('prepares mutable start options before the agent and marks success before publish', async () => {
+describe("Maker start-option lifecycle hooks", () => {
+  it("prepares mutable start options before the agent and marks success before publish", async () => {
     const order: string[] = [];
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
-      order.push('start');
-      expect(opts.vendorOptions).toMatchObject({ orcaRole: 'lead' });
-      expect(opts.userPrompt).toBe('orca instructions');
-      return createHandle({ id: 'thread-1' });
+      order.push("start");
+      expect(opts.vendorOptions).toMatchObject({ orcaRole: "lead" });
+      expect(opts.userPrompt).toBe("orca instructions");
+      return createHandle({ id: "thread-1" });
     });
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
@@ -279,34 +294,34 @@ describe('Maker start-option lifecycle hooks', () => {
       logger: createLogger(),
       lifecycleHooks: {
         prepareStartOptions: async (_sessionId, opts) => {
-          order.push('prepare');
-          opts.vendorOptions = { orcaRole: 'lead' };
-          opts.userPrompt = 'orca instructions';
+          order.push("prepare");
+          opts.vendorOptions = { orcaRole: "lead" };
+          opts.userPrompt = "orca instructions";
         },
         onStartSucceeded: async (sessionId, opts) => {
-          order.push('succeeded');
-          expect(sessionId).toBe('session-1');
-          expect(opts.vendorOptions).toMatchObject({ orcaRole: 'lead' });
+          order.push("succeeded");
+          expect(sessionId).toBe("session-1");
+          expect(opts.vendorOptions).toMatchObject({ orcaRole: "lead" });
           expect(maker.getSession(sessionId)).toBeUndefined();
         },
       },
     });
     maker.on((event) => {
-      if (event.type === 'session:created') order.push('publish');
+      if (event.type === "session:created") order.push("publish");
     });
 
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
     });
 
-    expect(order).toEqual(['prepare', 'start', 'succeeded', 'publish']);
+    expect(order).toEqual(["prepare", "start", "succeeded", "publish"]);
   });
 
-  it('blocks agent startup when start-option preparation fails', async () => {
-    const startSession = vi.fn(async () => createHandle({ id: 'thread-1' }));
+  it("blocks agent startup when start-option preparation fails", async () => {
+    const startSession = vi.fn(async () => createHandle({ id: "thread-1" }));
     const onStartSucceeded = vi.fn();
     const maker = new Maker({
       agents: { codex: createAgent(startSession) },
@@ -314,50 +329,58 @@ describe('Maker start-option lifecycle hooks', () => {
       logger: createLogger(),
       lifecycleHooks: {
         prepareStartOptions: async () => {
-          throw new Error('prepare failed');
+          throw new Error("prepare failed");
         },
         onStartSucceeded,
       },
     });
 
-    await expect(maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-    })).rejects.toThrow('prepare failed');
+    await expect(
+      maker.createSession({
+        id: "session-1",
+        agentKind: "codex",
+        workingDir: "/repo",
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow("prepare failed");
     expect(startSession).not.toHaveBeenCalled();
     expect(onStartSucceeded).not.toHaveBeenCalled();
     expect(maker.listActiveSessions()).toEqual([]);
   });
 
-  it('does not run the success hook when agent startup fails', async () => {
+  it("does not run the success hook when agent startup fails", async () => {
     const onStartSucceeded = vi.fn();
     const maker = new Maker({
-      agents: { codex: createAgent(vi.fn().mockRejectedValue(new Error('start failed'))) },
+      agents: {
+        codex: createAgent(
+          vi.fn().mockRejectedValue(new Error("start failed")),
+        ),
+      },
       storage: createStorage(),
       logger: createLogger(),
       lifecycleHooks: { onStartSucceeded },
     });
 
-    await expect(maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-    })).rejects.toThrow('start failed');
+    await expect(
+      maker.createSession({
+        id: "session-1",
+        agentKind: "codex",
+        workingDir: "/repo",
+        model: "gpt-5.4",
+      }),
+    ).rejects.toThrow("start failed");
     expect(onStartSucceeded).not.toHaveBeenCalled();
   });
 });
 
-describe('Maker codex prompt lifecycle hooks', () => {
-  it('hydrates codex history prompt state before startSession and persists delivery facts after success', async () => {
+describe("Maker codex prompt lifecycle hooks", () => {
+  it("hydrates codex history prompt state before startSession and persists delivery facts after success", async () => {
     const startSession = vi.fn(async () => ({
-      id: 'thread-1',
-      agentKind: 'codex',
-      model: 'gpt-5.4',
+      id: "thread-1",
+      agentKind: "codex",
+      model: "gpt-5.4",
       codexProductPromptDelivery: {
-        threadId: 'thread-1',
+        threadId: "thread-1",
         historyHasProductPrompt: false,
       },
       async send() {},
@@ -365,7 +388,12 @@ describe('Maker codex prompt lifecycle hooks', () => {
       async abort() {},
       async close() {},
       async *events() {},
-      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      getUsageSnapshot: () => ({
+        tokenUsage: 0,
+        contextTokens: 0,
+        contextWindow: 0,
+        costUsd: 0,
+      }),
       setInteractionResolver() {},
       isTurnRunning: () => false,
     }));
@@ -382,39 +410,46 @@ describe('Maker codex prompt lifecycle hooks', () => {
     });
 
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-1',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-1",
     });
 
-    expect(getCodexHistoryHasProductPrompt).toHaveBeenCalledWith('session-1');
-    expect(startSession).toHaveBeenCalledWith(expect.objectContaining({
-      sessionId: 'session-1',
-      codexHistoryHasProductPrompt: false,
-    }));
+    expect(getCodexHistoryHasProductPrompt).toHaveBeenCalledWith("session-1");
+    expect(startSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        sessionId: "session-1",
+        codexHistoryHasProductPrompt: false,
+      }),
+    );
     expect(onCodexProductPromptDelivery).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      threadId: 'thread-1',
+      sessionId: "session-1",
+      threadId: "thread-1",
       historyHasProductPrompt: false,
     });
   });
 
-  it('does not persist codex prompt state for broken handles', async () => {
+  it("does not persist codex prompt state for broken handles", async () => {
     const startSession = vi.fn(async () => ({
-      id: '<failed>',
-      agentKind: 'codex',
-      model: 'gpt-5.4',
+      id: "<failed>",
+      agentKind: "codex",
+      model: "gpt-5.4",
       codexProductPromptDelivery: {
-        threadId: 'thread-1',
+        threadId: "thread-1",
         historyHasProductPrompt: true,
       },
       async send() {},
       async abort() {},
       async close() {},
       async *events() {},
-      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      getUsageSnapshot: () => ({
+        tokenUsage: 0,
+        contextTokens: 0,
+        contextWindow: 0,
+        costUsd: 0,
+      }),
       setInteractionResolver() {},
       isTurnRunning: () => false,
     }));
@@ -427,42 +462,50 @@ describe('Maker codex prompt lifecycle hooks', () => {
     });
 
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-1',
+      id: "session-1",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-1",
     });
 
     expect(onCodexProductPromptDelivery).not.toHaveBeenCalled();
   });
 
-  it('routes codex prompt lifecycle hooks only through createSession resume success paths', async () => {
+  it("routes codex prompt lifecycle hooks only through createSession resume success paths", async () => {
     const codexStartSession = vi.fn(async (opts: CreateSessionOptions) => {
-      if (opts.id === 'codex-resume') {
+      if (opts.id === "codex-resume") {
         return createHandle({
-          id: 'thread-resume',
-          delivery: { threadId: 'thread-resume', historyHasProductPrompt: true },
+          id: "thread-resume",
+          delivery: {
+            threadId: "thread-resume",
+            historyHasProductPrompt: true,
+          },
         });
       }
-      if (opts.id === 'codex-failed') {
+      if (opts.id === "codex-failed") {
         return createHandle({
-          id: '<failed>',
-          delivery: { threadId: 'thread-failed', historyHasProductPrompt: false },
+          id: "<failed>",
+          delivery: {
+            threadId: "thread-failed",
+            historyHasProductPrompt: false,
+          },
         });
       }
-      return createHandle({ id: 'thread-new' });
+      return createHandle({ id: "thread-new" });
     });
-    const claudeStartSession = vi.fn(async () => createHandle({
-      id: 'claude-thread',
-      agentKind: 'claude-code',
-    }));
+    const claudeStartSession = vi.fn(async () =>
+      createHandle({
+        id: "claude-thread",
+        agentKind: "claude-code",
+      }),
+    );
     const getCodexHistoryHasProductPrompt = vi.fn(async () => false);
     const onCodexProductPromptDelivery = vi.fn(async () => undefined);
     const maker = new Maker({
       agents: {
         codex: createAgent(codexStartSession),
-        'claude-code': createAgent(claudeStartSession, 'claude-code'),
+        "claude-code": createAgent(claudeStartSession, "claude-code"),
       },
       storage: createStorage(),
       logger: createLogger(),
@@ -473,77 +516,95 @@ describe('Maker codex prompt lifecycle hooks', () => {
     });
 
     await maker.createSession({
-      id: 'codex-resume',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-resume',
+      id: "codex-resume",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-resume",
     });
     await maker.createSession({
-      id: 'codex-failed',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
-      resumeSessionId: 'thread-failed',
+      id: "codex-failed",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
+      resumeSessionId: "thread-failed",
     });
     await maker.createSession({
-      id: 'codex-new',
-      agentKind: 'codex',
-      workingDir: '/repo',
-      model: 'gpt-5.4',
+      id: "codex-new",
+      agentKind: "codex",
+      workingDir: "/repo",
+      model: "gpt-5.4",
     });
     await maker.createSession({
-      id: 'claude-resume',
-      agentKind: 'claude-code',
-      workingDir: '/repo',
-      model: 'claude-sonnet-4-5',
-      resumeSessionId: 'claude-thread',
+      id: "claude-resume",
+      agentKind: "claude-code",
+      workingDir: "/repo",
+      model: "claude-sonnet-4-5",
+      resumeSessionId: "claude-thread",
     });
 
     expect(getCodexHistoryHasProductPrompt).toHaveBeenCalledTimes(2);
-    expect(getCodexHistoryHasProductPrompt).toHaveBeenNthCalledWith(1, 'codex-resume');
-    expect(getCodexHistoryHasProductPrompt).toHaveBeenNthCalledWith(2, 'codex-failed');
-    expect(codexStartSession).toHaveBeenCalledWith(expect.objectContaining({
-      id: 'codex-resume',
-      sessionId: 'codex-resume',
-      resumeSessionId: 'thread-resume',
-      codexHistoryHasProductPrompt: false,
-    }));
+    expect(getCodexHistoryHasProductPrompt).toHaveBeenNthCalledWith(
+      1,
+      "codex-resume",
+    );
+    expect(getCodexHistoryHasProductPrompt).toHaveBeenNthCalledWith(
+      2,
+      "codex-failed",
+    );
+    expect(codexStartSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        id: "codex-resume",
+        sessionId: "codex-resume",
+        resumeSessionId: "thread-resume",
+        codexHistoryHasProductPrompt: false,
+      }),
+    );
     expect(onCodexProductPromptDelivery).toHaveBeenCalledTimes(1);
     expect(onCodexProductPromptDelivery).toHaveBeenCalledWith({
-      sessionId: 'codex-resume',
-      threadId: 'thread-resume',
+      sessionId: "codex-resume",
+      threadId: "thread-resume",
       historyHasProductPrompt: true,
     });
   });
 });
 
-describe('Maker session capabilities', () => {
-  it('persists dialogue workspace kind separately from the allocated working directory', async () => {
+describe("Maker session capabilities", () => {
+  it("persists dialogue workspace kind separately from the allocated working directory", async () => {
     const storage = createStorage();
     const maker = new Maker({
-      agents: { codex: createAgent(async () => createHandle({ id: 'dialogue-thread' }), 'codex') },
+      agents: {
+        codex: createAgent(
+          async () => createHandle({ id: "dialogue-thread" }),
+          "codex",
+        ),
+      },
       storage,
       logger: createLogger(),
     });
 
     await maker.createSession({
-      id: 'dialogue-session',
-      agentKind: 'codex',
-      workingDir: '/userData/dialogues/2026-06-29/dialogue-session',
-      workspaceKind: 'dialogue',
-      model: 'gpt-5.4',
+      id: "dialogue-session",
+      agentKind: "codex",
+      workingDir: "/userData/dialogues/2026-06-29/dialogue-session",
+      workspaceKind: "dialogue",
+      model: "gpt-5.4",
     });
 
-    await expect(maker.getSessionMeta('dialogue-session')).resolves.toMatchObject({
-      id: 'dialogue-session',
-      workDir: '/userData/dialogues/2026-06-29/dialogue-session',
-      workspaceKind: 'dialogue',
+    await expect(
+      maker.getSessionMeta("dialogue-session"),
+    ).resolves.toMatchObject({
+      id: "dialogue-session",
+      workDir: "/userData/dialogues/2026-06-29/dialogue-session",
+      workspaceKind: "dialogue",
     });
   });
 
-  it('marks remote Codex session rewind as platform-limited without mutating agent capabilities', async () => {
-    const agent = createAgent(async () => createHandle({ id: 'remote-thread' }), 'codex');
+  it("marks remote Codex session rewind as platform-limited without mutating agent capabilities", async () => {
+    const agent = createAgent(
+      async () => createHandle({ id: "remote-thread" }),
+      "codex",
+    );
     agent.capabilities.rewind = { supported: true };
     const maker = new Maker({
       agents: { codex: agent },
@@ -552,29 +613,29 @@ describe('Maker session capabilities', () => {
     });
 
     const session = await maker.createSession({
-      id: 'remote-session',
-      agentKind: 'codex',
-      workingDir: '/remote/repo',
-      model: 'gpt-5.4',
-      remoteHostId: 'remote-1',
+      id: "remote-session",
+      agentKind: "codex",
+      workingDir: "/remote/repo",
+      model: "gpt-5.4",
+      remoteHostId: "remote-1",
     });
 
     expect(session.capabilities.rewind).toMatchObject({
       supported: false,
-      reason: 'platform-limited',
+      reason: "platform-limited",
     });
     expect(agent.capabilities.rewind).toEqual({ supported: true });
   });
 });
 
-describe('Session turn send guard', () => {
-  it('reserves the turn synchronously while handle.send is still awaiting', async () => {
+describe("Session turn send guard", () => {
+  it("reserves the turn synchronously while handle.send is still awaiting", async () => {
     let publishRelease!: (release: () => void) => void;
     const releaseReady = new Promise<() => void>((resolve) => {
       publishRelease = resolve;
     });
     let handleTurnRunning = false;
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => {
       await new Promise<void>((resolve) => {
         publishRelease(resolve);
@@ -583,18 +644,20 @@ describe('Session turn send guard', () => {
     });
     handle.isTurnRunning = () => handleTurnRunning;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: path.join('workspace', 'repo'),
+      id: "session-1",
+      agentKind: "codex",
+      workDir: path.join("workspace", "repo"),
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first');
+    const firstSend = session.send("first");
     await Promise.resolve();
 
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
     expect(handle.send).toHaveBeenCalledTimes(1);
 
     const releaseSend = await releaseReady;
@@ -604,18 +667,18 @@ describe('Session turn send guard', () => {
     expect(session.isTurnRunning()).toBe(true);
   });
 
-  it('keeps the reservation when abort runs before handle.send observes a running turn', async () => {
+  it("keeps the reservation when abort runs before handle.send observes a running turn", async () => {
     let publishRelease!: (release: () => void) => void;
     const releaseReady = new Promise<() => void>((resolve) => {
       publishRelease = resolve;
     });
     let handleTurnRunning = false;
     let sendCalls = 0;
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => {
       sendCalls += 1;
       if (sendCalls > 1) {
-        throw new Error('second send reached handle');
+        throw new Error("second send reached handle");
       }
       await new Promise<void>((resolve) => {
         publishRelease(() => {
@@ -626,78 +689,87 @@ describe('Session turn send guard', () => {
     });
     handle.isTurnRunning = () => handleTurnRunning;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: path.join('workspace', 'repo'),
+      id: "session-1",
+      agentKind: "codex",
+      workDir: path.join("workspace", "repo"),
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first');
+    const firstSend = session.send("first");
     const releaseSend = await releaseReady;
 
     await session.abort();
 
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
     expect(handle.send).toHaveBeenCalledTimes(1);
 
     releaseSend();
     await firstSend;
   });
 
-  it('cancels a dispatching reservation before handle.send accepts input', async () => {
+  it("cancels a dispatching reservation before handle.send accepts input", async () => {
     let releaseSend!: () => void;
     let resolveSendStarted!: () => void;
-    let sendOpts: Parameters<AgentSessionHandle['send']>[1];
+    let sendOpts: Parameters<AgentSessionHandle["send"]>[1];
     const sendStarted = new Promise<void>((resolve) => {
       resolveSendStarted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async (_message, opts) => {
       sendOpts = opts;
       resolveSendStarted();
       await new Promise<void>((resolve, reject) => {
         releaseSend = resolve;
-        opts?.signal?.addEventListener('abort', () => reject(new Error('send cancelled')), { once: true });
+        opts?.signal?.addEventListener(
+          "abort",
+          () => reject(new Error("send cancelled")),
+          { once: true },
+        );
       });
     });
     handle.abort = vi.fn(async () => undefined);
     handle.isTurnRunning = () => false;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: path.join('workspace', 'repo'),
+      id: "session-1",
+      agentKind: "codex",
+      workDir: path.join("workspace", "repo"),
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first');
+    const firstSend = session.send("first");
     await sendStarted;
     await session.abort();
     const signalWasAborted = sendOpts?.signal?.aborted;
     releaseSend();
 
-    await expect(firstSend).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(firstSend).resolves.toEqual({
+      accepted: false,
+      reason: "cancelled-before-dispatch",
+    });
     expect(signalWasAborted).toBe(true);
     expect(handle.abort).toHaveBeenCalledTimes(1);
   });
 
-  it('does not release a dispatching reservation from an older terminal event', async () => {
+  it("does not release a dispatching reservation from an older terminal event", async () => {
     let releaseSend!: () => void;
     let resolveSendStarted!: () => void;
     let sendCalls = 0;
     const sendStarted = new Promise<void>((resolve) => {
       resolveSendStarted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     const events = createAsyncQueue<AgentEvent>();
     handle.events = () => events;
     handle.send = vi.fn(async () => {
       sendCalls += 1;
       if (sendCalls > 1) {
-        throw new Error('second send reached handle');
+        throw new Error("second send reached handle");
       }
       resolveSendStarted();
       await new Promise<void>((resolve) => {
@@ -706,9 +778,9 @@ describe('Session turn send guard', () => {
     });
     handle.isTurnRunning = () => false;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
@@ -720,45 +792,53 @@ describe('Session turn send guard', () => {
       });
     });
 
-    const firstSend = session.send('first');
+    const firstSend = session.send("first");
     await sendStarted;
-    events.push({ type: 'done', data: {}, source: 'codex' });
+    events.push({ type: "done", data: {}, source: "codex" });
     await terminalEventObserved;
 
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
 
     releaseSend();
     await expect(firstSend).resolves.toEqual({ accepted: true });
     events.end();
   });
 
-  it('does not start handle.send when onAccepted fails', async () => {
-    const handle = createHandle({ id: 'thread-1' });
+  it("does not start handle.send when onAccepted fails", async () => {
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
-    const acceptError = new Error('accept failed');
+    const acceptError = new Error("accept failed");
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    await expect(session.send('first', { onAccepted: () => { throw acceptError; } })).rejects.toBe(acceptError);
+    await expect(
+      session.send("first", {
+        onAccepted: () => {
+          throw acceptError;
+        },
+      }),
+    ).rejects.toBe(acceptError);
     expect(handle.send).not.toHaveBeenCalled();
-    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    await expect(session.send("second")).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not run accepted persistence or provider send when beforeProviderStart fails', async () => {
-    const beforeError = new Error('durable acceptance CAS failed');
-    const handle = createHandle({ id: 'thread-before-provider-start' });
+  it("does not run accepted persistence or provider send when beforeProviderStart fails", async () => {
+    const beforeError = new Error("durable acceptance CAS failed");
+    const handle = createHandle({ id: "thread-before-provider-start" });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'before-provider-start-failure',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "before-provider-start-failure",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
@@ -766,7 +846,7 @@ describe('Session turn send guard', () => {
     const onAccepted = vi.fn();
 
     await expect(
-      session.send('first', {
+      session.send("first", {
         beforeProviderStart: () => {
           throw beforeError;
         },
@@ -776,20 +856,20 @@ describe('Session turn send guard', () => {
 
     expect(onAccepted).not.toHaveBeenCalled();
     expect(handle.send).not.toHaveBeenCalled();
-    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    await expect(session.send("second")).resolves.toEqual({ accepted: true });
   });
 
-  it('runs provider option preflight before durable or accepted side effects', async () => {
-    const preflightError = new Error('unsupported policy/mode combination');
-    const handle = createHandle({ id: 'thread-send-preflight' });
+  it("runs provider option preflight before durable or accepted side effects", async () => {
+    const preflightError = new Error("unsupported policy/mode combination");
+    const handle = createHandle({ id: "thread-send-preflight" });
     handle.validateSendOptions = vi.fn(() => {
       throw preflightError;
     });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'send-preflight',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "send-preflight",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
@@ -798,7 +878,7 @@ describe('Session turn send guard', () => {
     const onAccepted = vi.fn();
 
     await expect(
-      session.send('first', {
+      session.send("first", {
         beforeProviderStart,
         onAccepted,
       }),
@@ -810,90 +890,163 @@ describe('Session turn send guard', () => {
     expect(handle.send).not.toHaveBeenCalled();
   });
 
-  it('awaits beforeProviderStart before accepted persistence and provider dispatch', async () => {
+  it("runs reservation state preparation before provider option preflight", async () => {
+    const order: string[] = [];
+    const handle = createHandle({ id: "thread-reserved-preflight" });
+    handle.validateSendOptions = vi.fn(() => {
+      order.push("preflight");
+    });
+    handle.send = vi.fn(async () => {
+      order.push("provider");
+    });
+    const session = new Session({
+      id: "reserved-preflight",
+      agentKind: "codex",
+      workDir: "/repo",
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    await expect(
+      session.send("first", {
+        afterTurnReserved: () => {
+          order.push("reserved");
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(order).toEqual(["reserved", "preflight", "provider"]);
+  });
+
+  it("does not run reservation state preparation when another turn is active", async () => {
+    let releaseSend!: () => void;
+    const sendBarrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const handle = createHandle({ id: "thread-reserved-busy" });
+    handle.send = vi.fn(async () => sendBarrier);
+    const session = new Session({
+      id: "reserved-busy",
+      agentKind: "codex",
+      workDir: "/repo",
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    const firstSend = session.send("first");
+    await vi.waitFor(() => expect(handle.send).toHaveBeenCalledOnce());
+    const afterTurnReserved = vi.fn();
+
+    await expect(
+      session.send("second", { afterTurnReserved }),
+    ).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
+    expect(afterTurnReserved).not.toHaveBeenCalled();
+
+    releaseSend();
+    await expect(firstSend).resolves.toEqual({ accepted: true });
+  });
+
+  it("awaits beforeProviderStart before accepted persistence and provider dispatch", async () => {
     const order: string[] = [];
     let releaseBarrier!: () => void;
     const barrier = new Promise<void>((resolve) => {
       releaseBarrier = resolve;
     });
-    const handle = createHandle({ id: 'thread-before-provider-order' });
+    const handle = createHandle({ id: "thread-before-provider-order" });
     handle.send = vi.fn(async () => {
-      order.push('provider');
+      order.push("provider");
     });
     const session = new Session({
-      id: 'before-provider-start-order',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "before-provider-start-order",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const sending = session.send('first', {
+    const sending = session.send("first", {
       beforeProviderStart: async () => {
-        order.push('barrier-start');
+        order.push("barrier-start");
         await barrier;
-        order.push('barrier-end');
+        order.push("barrier-end");
       },
       onAccepted: () => {
-        order.push('accepted');
+        order.push("accepted");
       },
     });
-    await vi.waitFor(() => expect(order).toEqual(['barrier-start']));
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await vi.waitFor(() => expect(order).toEqual(["barrier-start"]));
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
 
     releaseBarrier();
     await expect(sending).resolves.toEqual({ accepted: true });
-    expect(order).toEqual(['barrier-start', 'barrier-end', 'accepted', 'provider']);
+    expect(order).toEqual([
+      "barrier-start",
+      "barrier-end",
+      "accepted",
+      "provider",
+    ]);
   });
 
-  it('runs onDispatching after acceptance and immediately before vendor send', async () => {
+  it("runs onDispatching after acceptance and immediately before vendor send", async () => {
     const calls: string[] = [];
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => {
-      calls.push('vendor');
+      calls.push("vendor");
     });
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    await expect(session.send('first', {
-      onAccepted: () => {
-        calls.push('accepted');
-      },
-      onDispatching: () => {
-        calls.push('dispatching');
-      },
-    })).resolves.toEqual({ accepted: true });
+    await expect(
+      session.send("first", {
+        onAccepted: () => {
+          calls.push("accepted");
+        },
+        onDispatching: () => {
+          calls.push("dispatching");
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
 
-    expect(calls).toEqual(['accepted', 'dispatching', 'vendor']);
+    expect(calls).toEqual(["accepted", "dispatching", "vendor"]);
   });
 
-  it('keeps the reservation while onAccepted is awaiting', async () => {
+  it("keeps the reservation while onAccepted is awaiting", async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {
       releaseAccepted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first', { onAccepted: () => acceptedReady });
+    const firstSend = session.send("first", {
+      onAccepted: () => acceptedReady,
+    });
     await Promise.resolve();
 
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
     expect(handle.send).not.toHaveBeenCalled();
 
     releaseAccepted();
@@ -901,19 +1054,19 @@ describe('Session turn send guard', () => {
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not release an accepting reservation from an older terminal event', async () => {
+  it("does not release an accepting reservation from an older terminal event", async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {
       releaseAccepted = resolve;
     });
     const events = createAsyncQueue<AgentEvent>();
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.events = () => events;
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
@@ -925,12 +1078,20 @@ describe('Session turn send guard', () => {
       });
     });
 
-    const firstSend = session.send('first', { onAccepted: () => acceptedReady });
+    const firstSend = session.send("first", {
+      onAccepted: () => acceptedReady,
+    });
     await Promise.resolve();
-    events.push({ type: 'status', data: { isRunning: false }, source: 'codex' });
+    events.push({
+      type: "status",
+      data: { isRunning: false },
+      source: "codex",
+    });
     await terminalEventObserved;
 
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
     expect(handle.send).not.toHaveBeenCalled();
 
     releaseAccepted();
@@ -939,40 +1100,47 @@ describe('Session turn send guard', () => {
     events.end();
   });
 
-  it('does not start handle.send when abort happens while onAccepted is awaiting', async () => {
+  it("does not start handle.send when abort happens while onAccepted is awaiting", async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {
       releaseAccepted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     handle.abort = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first', { onAccepted: () => acceptedReady });
+    const firstSend = session.send("first", {
+      onAccepted: () => acceptedReady,
+    });
     await Promise.resolve();
 
     await session.abort();
-    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await expect(session.send("second")).rejects.toMatchObject({
+      code: "SESSION_RUNNING",
+    });
 
     releaseAccepted();
-    await expect(firstSend).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    await expect(firstSend).resolves.toEqual({
+      accepted: false,
+      reason: "cancelled-before-dispatch",
+    });
     expect(handle.send).not.toHaveBeenCalled();
 
-    await session.send('second');
+    await session.send("second");
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('rejects sends after the event iterator crashes', async () => {
-    const crash = new Error('events crashed');
-    const handle = createHandle({ id: 'thread-1' });
+  it("rejects sends after the event iterator crashes", async () => {
+    const crash = new Error("events crashed");
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     const crashingEvents: AsyncIterable<never> = {
       [Symbol.asyncIterator]() {
@@ -985,29 +1153,29 @@ describe('Session turn send guard', () => {
     };
     handle.events = () => crashingEvents;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
-        if (status === 'error') resolve();
+        if (status === "error") resolve();
       });
     });
 
-    await session.send('first');
+    await session.send("first");
     await statusChanged;
 
-    await expect(session.send('second')).rejects.toThrow('is in error state');
+    await expect(session.send("second")).rejects.toThrow("is in error state");
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not revive an error session when abort is called after the event iterator crashes', async () => {
-    const crash = new Error('events crashed');
-    const handle = createHandle({ id: 'thread-1' });
+  it("does not revive an error session when abort is called after the event iterator crashes", async () => {
+    const crash = new Error("events crashed");
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     handle.abort = vi.fn(async () => undefined);
     const crashingEvents: AsyncIterable<never> = {
@@ -1021,29 +1189,29 @@ describe('Session turn send guard', () => {
     };
     handle.events = () => crashingEvents;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
-        if (status === 'error') resolve();
+        if (status === "error") resolve();
       });
     });
 
-    await session.send('first');
+    await session.send("first");
     await statusChanged;
     await session.abort();
 
-    expect(session.getStatus()).toBe('error');
-    await expect(session.send('second')).rejects.toThrow('is in error state');
+    expect(session.getStatus()).toBe("error");
+    await expect(session.send("second")).rejects.toThrow("is in error state");
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not revive an error session when the event iterator crashes while abort is awaiting', async () => {
+  it("does not revive an error session when the event iterator crashes while abort is awaiting", async () => {
     let releaseAbort!: () => void;
     const abortReady = new Promise<void>((resolve) => {
       releaseAbort = resolve;
@@ -1052,7 +1220,7 @@ describe('Session turn send guard', () => {
     const crashReady = new Promise<void>((resolve) => {
       crashIterator = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     handle.abort = vi.fn(async () => {
       await abortReady;
@@ -1062,82 +1230,84 @@ describe('Session turn send guard', () => {
         return {
           async next(): Promise<IteratorResult<never>> {
             await crashReady;
-            throw new Error('events crashed during abort');
+            throw new Error("events crashed during abort");
           },
         };
       },
     };
     handle.events = () => crashingEvents;
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
     const statusChanged = new Promise<void>((resolve) => {
       session.onStatusChange((status) => {
-        if (status === 'error') resolve();
+        if (status === "error") resolve();
       });
     });
 
-    await session.send('first');
+    await session.send("first");
     const abortPromise = session.abort();
     crashIterator();
     await statusChanged;
     releaseAbort();
     await abortPromise;
 
-    expect(session.getStatus()).toBe('error');
-    await expect(session.send('second')).rejects.toThrow('is in error state');
+    expect(session.getStatus()).toBe("error");
+    await expect(session.send("second")).rejects.toThrow("is in error state");
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
-  it('does not call handle.send when close happens during onAccepted', async () => {
+  it("does not call handle.send when close happens during onAccepted", async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {
       releaseAccepted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const firstSend = session.send('first', { onAccepted: () => acceptedReady });
+    const firstSend = session.send("first", {
+      onAccepted: () => acceptedReady,
+    });
     await Promise.resolve();
     await session.close();
     releaseAccepted();
 
-    await expect(firstSend).rejects.toThrow('is closed');
+    await expect(firstSend).rejects.toThrow("is closed");
     expect(handle.send).not.toHaveBeenCalled();
     expect(session.isTurnRunning()).toBe(false);
   });
 
-  it('keeps the session open when closeIfIdle loses to an accepting send', async () => {
+  it("keeps the session open when closeIfIdle loses to an accepting send", async () => {
     let releaseAccepted!: () => void;
     const acceptedReady = new Promise<void>((resolve) => {
       releaseAccepted = resolve;
     });
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
     handle.close = vi.fn(async () => undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    const send = session.send('first', { onAccepted: () => acceptedReady });
+    const send = session.send("first", { onAccepted: () => acceptedReady });
     await Promise.resolve();
 
     await expect(session.closeIfIdle()).resolves.toBe(false);
@@ -1147,17 +1317,20 @@ describe('Session turn send guard', () => {
     await expect(send).resolves.toEqual({ accepted: true });
   });
 
-  it('rejects a send that starts after closeIfIdle reserves the session close', async () => {
+  it("rejects a send that starts after closeIfIdle reserves the session close", async () => {
     let releaseClose!: () => void;
-    const handle = createHandle({ id: 'thread-1' });
+    const handle = createHandle({ id: "thread-1" });
     handle.send = vi.fn(async () => undefined);
-    handle.close = vi.fn(() => new Promise<void>((resolve) => {
-      releaseClose = resolve;
-    }));
+    handle.close = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseClose = resolve;
+        }),
+    );
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
@@ -1165,105 +1338,108 @@ describe('Session turn send guard', () => {
 
     const close = session.closeIfIdle();
 
-    await expect(session.send('late send')).rejects.toThrow('is closing');
+    await expect(session.send("late send")).rejects.toThrow("is closing");
     expect(handle.send).not.toHaveBeenCalled();
 
     releaseClose();
     await expect(close).resolves.toBe(true);
   });
 
-  it('releases the reservation when handle.send fails before a turn starts', async () => {
-    const handle = createHandle({ id: 'thread-1' });
-    const firstError = new Error('boom');
-    handle.send = vi.fn()
+  it("releases the reservation when handle.send fails before a turn starts", async () => {
+    const handle = createHandle({ id: "thread-1" });
+    const firstError = new Error("boom");
+    handle.send = vi
+      .fn()
       .mockRejectedValueOnce(firstError)
       .mockResolvedValueOnce(undefined);
     const session = new Session({
-      id: 'session-1',
-      agentKind: 'codex',
-      workDir: '/repo',
+      id: "session-1",
+      agentKind: "codex",
+      workDir: "/repo",
       handle,
       capabilities: createAgent(async () => handle).capabilities,
       logger: createLogger(),
     });
 
-    await expect(session.send('first')).rejects.toBe(firstError);
-    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    await expect(session.send("first")).rejects.toBe(firstError);
+    await expect(session.send("second")).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledTimes(2);
   });
 });
 
-describe('Maker invalid-resume persistence bridge', () => {
-  it('injects a compare-and-clear callback for resumed Claude sessions', async () => {
+describe("Maker invalid-resume persistence bridge", () => {
+  it("injects a compare-and-clear callback for resumed Claude sessions", async () => {
     const storage = createStorage();
     await storage.create({
-      id: 'session-1',
-      agentKind: 'claude-code',
-      workDir: '/repo',
-      title: 'Resume me',
-      model: 'claude-opus-4-6',
-      sdkSessionId: 'sdk-old',
+      id: "session-1",
+      agentKind: "claude-code",
+      workDir: "/repo",
+      title: "Resume me",
+      model: "claude-opus-4-6",
+      sdkSessionId: "sdk-old",
     });
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
-      expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
-      expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(false);
-      return createHandle({ id: '<pending>', agentKind: 'claude-code' });
+      expect(await opts.onInvalidResumeSession?.("sdk-old")).toBe(true);
+      expect(await opts.onInvalidResumeSession?.("sdk-old")).toBe(false);
+      return createHandle({ id: "<pending>", agentKind: "claude-code" });
     });
     const maker = new Maker({
-      agents: { 'claude-code': createAgent(startSession, 'claude-code') },
+      agents: { "claude-code": createAgent(startSession, "claude-code") },
       storage,
       logger: createLogger(),
     });
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'claude-code',
-      workingDir: '/repo',
-      model: 'claude-opus-4-6',
-      resumeSessionId: 'sdk-old',
+      id: "session-1",
+      agentKind: "claude-code",
+      workingDir: "/repo",
+      model: "claude-opus-4-6",
+      resumeSessionId: "sdk-old",
     });
-    expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
+    expect((await storage.get("session-1"))?.sdkSessionId).toBeUndefined();
   });
 
-  it('injects a compare-and-clear callback for fresh (non-resume) Claude sessions too', async () => {
+  it("injects a compare-and-clear callback for fresh (non-resume) Claude sessions too", async () => {
     // 全新会话(无 resumeSessionId)也可能把首个 turn 崩溃前落库的 fresh sdk id 变成幽灵 id,
     // 需要同一把 CAS 才能清掉。之前该回调只对 resume 会话装配,全新会话会漏。
     const storage = createStorage();
-    let captured: CreateSessionOptions['onInvalidResumeSession'];
+    let captured: CreateSessionOptions["onInvalidResumeSession"];
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
       captured = opts.onInvalidResumeSession;
-      return createHandle({ id: 'sdk-fresh', agentKind: 'claude-code' });
+      return createHandle({ id: "sdk-fresh", agentKind: "claude-code" });
     });
     const maker = new Maker({
-      agents: { 'claude-code': createAgent(startSession, 'claude-code') },
+      agents: { "claude-code": createAgent(startSession, "claude-code") },
       storage,
       logger: createLogger(),
     });
     await maker.createSession({
-      id: 'session-fresh',
-      agentKind: 'claude-code',
-      workingDir: '/repo',
-      model: 'claude-opus-4-6',
+      id: "session-fresh",
+      agentKind: "claude-code",
+      workingDir: "/repo",
+      model: "claude-opus-4-6",
       // 无 resumeSessionId —— 全新会话
     });
 
     expect(captured).toBeDefined();
     // fresh id 已落库;CAS 能把它清掉(index.ts 的 fresh-session self-reference 恢复会调它)。
-    expect((await storage.get('session-fresh'))?.sdkSessionId).toBe('sdk-fresh');
-    expect(await captured?.('sdk-fresh')).toBe(true);
-    expect((await storage.get('session-fresh'))?.sdkSessionId).toBeUndefined();
+    expect((await storage.get("session-fresh"))?.sdkSessionId).toBe(
+      "sdk-fresh",
+    );
+    expect(await captured?.("sdk-fresh")).toBe(true);
+    expect((await storage.get("session-fresh"))?.sdkSessionId).toBeUndefined();
     // CAS 不匹配(已清)时再次调用返回 false,不误覆盖。
-    expect(await captured?.('sdk-fresh')).toBe(false);
+    expect(await captured?.("sdk-fresh")).toBe(false);
   });
 
-  it('clears after in-flight writes and ignores stale session_id events that arrive after recovery', async () => {
+  it("clears after in-flight writes and ignores stale session_id events that arrive after recovery", async () => {
     const baseStorage = createStorage();
     await baseStorage.create({
-      id: 'session-1',
-      agentKind: 'claude-code',
-      workDir: '/repo',
-      title: 'Resume me',
-      model: 'claude-opus-4-6',
-      sdkSessionId: 'sdk-old',
+      id: "session-1",
+      agentKind: "claude-code",
+      workDir: "/repo",
+      title: "Resume me",
+      model: "claude-opus-4-6",
+      sdkSessionId: "sdk-old",
     });
 
     let releaseOldWrite!: () => void;
@@ -1282,9 +1458,9 @@ describe('Maker invalid-resume persistence bridge', () => {
     const storage: SessionStorage = {
       ...baseStorage,
       async update(id, patch) {
-        if (typeof patch.sdkSessionId === 'string') {
+        if (typeof patch.sdkSessionId === "string") {
           persistedSdkSessionIds.push(patch.sdkSessionId);
-          if (patch.sdkSessionId === 'sdk-old' && shouldBlockOldWrite) {
+          if (patch.sdkSessionId === "sdk-old" && shouldBlockOldWrite) {
             shouldBlockOldWrite = false;
             markOldWriteStarted();
             await oldWriteGate;
@@ -1297,10 +1473,16 @@ describe('Maker invalid-resume persistence bridge', () => {
 
     const oldEvents = createAsyncQueue<AgentEvent>();
     const freshEvents = createAsyncQueue<AgentEvent>();
-    const oldHandle = createHandle({ id: '<pending>', agentKind: 'claude-code' });
+    const oldHandle = createHandle({
+      id: "<pending>",
+      agentKind: "claude-code",
+    });
     oldHandle.events = () => oldEvents;
     oldHandle.close = vi.fn(async () => oldEvents.end());
-    const freshHandle = createHandle({ id: '<pending>', agentKind: 'claude-code' });
+    const freshHandle = createHandle({
+      id: "<pending>",
+      agentKind: "claude-code",
+    });
     freshHandle.events = () => freshEvents;
     freshHandle.close = vi.fn(async () => freshEvents.end());
 
@@ -1308,32 +1490,36 @@ describe('Maker invalid-resume persistence bridge', () => {
     const startSession = vi.fn(async (opts: CreateSessionOptions) => {
       startCount += 1;
       if (startCount === 1) return oldHandle;
-      expect(await opts.onInvalidResumeSession?.('sdk-old')).toBe(true);
+      expect(await opts.onInvalidResumeSession?.("sdk-old")).toBe(true);
       return freshHandle;
     });
     const maker = new Maker({
-      agents: { 'claude-code': createAgent(startSession, 'claude-code') },
+      agents: { "claude-code": createAgent(startSession, "claude-code") },
       storage,
       logger: createLogger(),
     });
 
     await maker.createSession({
-      id: 'session-1',
-      agentKind: 'claude-code',
-      workingDir: '/repo',
-      model: 'claude-opus-4-6',
-      resumeSessionId: 'sdk-old',
+      id: "session-1",
+      agentKind: "claude-code",
+      workingDir: "/repo",
+      model: "claude-opus-4-6",
+      resumeSessionId: "sdk-old",
     });
-    oldEvents.push({ type: 'session_id', data: 'sdk-old', source: 'claude-code' });
+    oldEvents.push({
+      type: "session_id",
+      data: "sdk-old",
+      source: "claude-code",
+    });
     await oldWriteStarted;
-    await maker.closeSession('session-1');
+    await maker.closeSession("session-1");
 
     const recoveredSessionPromise = maker.createSession({
-      id: 'session-1',
-      agentKind: 'claude-code',
-      workingDir: '/repo',
-      model: 'claude-opus-4-6',
-      resumeSessionId: 'sdk-old',
+      id: "session-1",
+      agentKind: "claude-code",
+      workingDir: "/repo",
+      model: "claude-opus-4-6",
+      resumeSessionId: "sdk-old",
     });
     await vi.waitFor(() => expect(startSession).toHaveBeenCalledTimes(2));
     expect(compareAndClear).not.toHaveBeenCalled();
@@ -1341,15 +1527,23 @@ describe('Maker invalid-resume persistence bridge', () => {
     releaseOldWrite();
     await recoveredSessionPromise;
     expect(compareAndClear).toHaveBeenCalledTimes(1);
-    expect((await storage.get('session-1'))?.sdkSessionId).toBeUndefined();
+    expect((await storage.get("session-1"))?.sdkSessionId).toBeUndefined();
 
     // CAS 后晚到的旧 query 事件必须跳过；fresh query 的新 id 仍按原路径回填。
-    freshEvents.push({ type: 'session_id', data: 'sdk-old', source: 'claude-code' });
-    freshEvents.push({ type: 'session_id', data: 'sdk-fresh', source: 'claude-code' });
+    freshEvents.push({
+      type: "session_id",
+      data: "sdk-old",
+      source: "claude-code",
+    });
+    freshEvents.push({
+      type: "session_id",
+      data: "sdk-fresh",
+      source: "claude-code",
+    });
     await vi.waitFor(async () =>
-      expect((await storage.get('session-1'))?.sdkSessionId).toBe('sdk-fresh'),
+      expect((await storage.get("session-1"))?.sdkSessionId).toBe("sdk-fresh"),
     );
-    expect(persistedSdkSessionIds).toEqual(['sdk-old', 'sdk-fresh']);
-    await maker.closeSession('session-1');
+    expect(persistedSdkSessionIds).toEqual(["sdk-old", "sdk-fresh"]);
+    await maker.closeSession("session-1");
   });
 });
