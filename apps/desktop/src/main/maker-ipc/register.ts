@@ -3207,11 +3207,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         if (schedulerInterruptedTurnRecoveryClaim?.disposition === 'started') {
           autoResumeBookkeeping.stashSuppressedError(
             session.id,
-            attributedEvent.data,
+            broadcastEvent.data,
             schedulerInterruptedTurnRecoveryClaim.runId,
           );
         } else if (!schedulerInterruptedTurnRecoveryClaim) {
-          autoResumeBookkeeping.stashSuppressedError(session.id, attributedEvent.data);
+          autoResumeBookkeeping.stashSuppressedError(session.id, broadcastEvent.data);
         }
       }
       // deferred 路径保存 turn 开始时刻:isRemoteAuthRetry 时 onTurnErrorEvent 被跳过，

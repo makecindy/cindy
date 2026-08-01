@@ -83,7 +83,7 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { MakerScheduleRunner } from '../runner';
+import { BG_TASK_IDLE_FALLBACK_MS, MakerScheduleRunner } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 
@@ -1225,6 +1225,53 @@ describe('MakerScheduleRunner send outcome policy', () => {
       sessionId: 'scheduler-session',
       resultText: 'partial',
     });
+  });
+
+  it('settles a recovery activity row only when background-idle fallback truly ends the run', async () => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      opts?.onDispatching?.();
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+
+    h.emit({
+      type: 'agent_task_update',
+      data: { taskId: 'recovery-background-task', status: 'running' },
+    });
+    const settleCallsBeforeIntermediateDone = mocks.settleSchedulerResumeOutcome.mock.calls.length;
+    h.emit({ type: 'done', data: {} });
+
+    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenCalledTimes(
+      settleCallsBeforeIntermediateDone,
+    );
+    expect(h.listenerCount()).toBe(1);
+
+    await vi.advanceTimersByTimeAsync(BG_TASK_IDLE_FALLBACK_MS);
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: 'partial',
+    });
+    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenLastCalledWith(
+      'scheduler-session',
+      'run-1',
+      'failed',
+    );
   });
 
   it('uses fail cleanup when silent-stop auto-resume is exhausted', async () => {

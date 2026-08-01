@@ -126,6 +126,24 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('isSchedulerInterruptedTurnRecoverySessionReserved(sessionId) ||');
   });
 
+  it('stashes only the redacted projection of suppressed turn errors', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const blockStart = wireSessionSource.indexOf('if (autoResumeSuppressesPersist) {');
+    const blockEnd = wireSessionSource.indexOf(
+      '// deferred 路径保存 turn 开始时刻',
+      blockStart,
+    );
+    const suppressedPersistBlock = wireSessionSource.slice(blockStart, blockEnd);
+
+    expect(blockStart).toBeGreaterThanOrEqual(0);
+    expect(blockEnd).toBeGreaterThan(blockStart);
+    expect(wireSessionSource.indexOf('let broadcastEvent = redactEventForRenderer(attributedEvent);'))
+      .toBeLessThan(blockStart);
+    expect(suppressedPersistBlock.match(/stashSuppressedError\(/g)).toHaveLength(2);
+    expect(suppressedPersistBlock).toContain('broadcastEvent.data');
+    expect(suppressedPersistBlock).not.toContain('attributedEvent.data');
+  });
+
   it('fires git snapshots only from post-broadcast done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');

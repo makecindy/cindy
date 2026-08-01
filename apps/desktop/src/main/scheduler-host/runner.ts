@@ -2081,16 +2081,28 @@ export class MakerScheduleRunner implements ScheduleRunner {
         off();
         stopListeningTurn = undefined;
       };
-      const finish = (): void => {
-        if (settled) return;
+      const settleWaiter = (): boolean => {
+        if (settled) return false;
         settled = true;
+        // A recovery activity row may still be pending when the waiter reaches a terminal
+        // boundary without text/tool progress. Keep this settlement beside the shared cleanup
+        // so background-idle fallback, silent-stop, ordinary done, and failure paths cannot
+        // leave a persisted "reconnecting" row behind. If progress already settled the row as
+        // succeeded, AutoResumeBookkeeping makes this a no-op.
+        settleSchedulerInterruptedTurnResumeOutcome(
+          session.id,
+          options.origin.runId,
+          'failed',
+        );
         cleanup();
+        return true;
+      };
+      const finish = (): void => {
+        if (!settleWaiter()) return;
         resolve();
       };
       const fail = (err: Error): void => {
-        if (settled) return;
-        settled = true;
-        cleanup();
+        if (!settleWaiter()) return;
         reject(err);
       };
       const cancelInterruptedRecovery = (message: string): void => {
@@ -2353,11 +2365,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // terminal error 后 SDK 仍可能紧跟一个旧 turn 的 done。续跑已排期时这不是
           // 整个 schedule run 的完成边界；等补发 turn 的 status/done。
           if (recovery.isPending) return;
-          settleSchedulerInterruptedTurnResumeOutcome(
-            session.id,
-            options.origin.runId,
-            'failed',
-          );
           // silent-stop:上游空内容消息静默收尾,main 守卫会在 1.5s 后自动续跑
           // (或弹耗尽横幅)。不 finish——等续跑 turn 的 done 或守卫 settle 通知。
           // settle 通知覆盖守卫决策为非续跑的所有路径(skip/exhausted/send 失败),
@@ -2395,11 +2402,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // 本 waiter 注册，并把匹配 run 的 recovery phase 置为 backoff。这里不再自行认领，避免
           // 同 session 的另一个 Schedule waiter 也拿原始事件启动恢复。
           if (recovery.isPending) return;
-          settleSchedulerInterruptedTurnResumeOutcome(
-            session.id,
-            options.origin.runId,
-            'failed',
-          );
           fail(new Error(extractErr(ev.data)));
         }
       });
