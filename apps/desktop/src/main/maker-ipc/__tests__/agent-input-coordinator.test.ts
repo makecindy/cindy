@@ -215,7 +215,7 @@ function createHarness() {
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
-  >(async () => []);
+  >(async () => ({ clientIds: [], preview: null, messageCount: 0 }));
   const coordinator = new AgentInputCoordinator({
     sendToAgent,
     steerToAgent,
@@ -2064,9 +2064,9 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
   });
 
-  it('zero-progress retry supersedes the failed user row once the clone is persisted', async () => {
+  it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
-    // (旧行 + 克隆行)。克隆行落库(onPersisted)后必须软删旧行,且锚定的是
+    // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
     // 本轮被取代的那条与新克隆行——软删本体在 host(见 supersedeRetriedUserTurn
     // dep),这里锁 coordinator 的触发时机与参数。
     const h = createHarness();
@@ -2167,6 +2167,36 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not supersede when the clone is persisted but cancelled before vendor dispatch', async () => {
+    // review(greptile P1)回归锁:软删一度挂在 onPersisted 上,而落库到派发之间
+    // 还夹着 beforeDispatch / onAccepted 两个 hook —— 期间停止或关闭会话会走
+    // cancelled-before-dispatch,那时旧行若已被藏,历史里只剩一条从未送达模型的
+    // 克隆消息,连原失败 error 行上的「重试」入口都没了。派发确实发生前不许软删。
+    const h = createHarness();
+    const sid = 'retry-supersede-cancelled-before-dispatch';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      // 克隆行照常落库(onPersisted 走完),但 vendor 派发被取消。
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sessionDispatchFailure('stopped before dispatch');
+    });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(
+      h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.clientId,
+    ).toEqual(expect.any(String));
     expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
   });
 

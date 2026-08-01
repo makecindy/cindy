@@ -747,11 +747,37 @@ export async function commitMessageDeletion(
   }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
-  // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出
-  // canonical session-list projection，避免其它窗口 / device-link 控制端继续显示
-  // 已删除的末条消息预览或旧 _count。count 口径与 sessions:list / preview 的可见消息保持一致。
-  let preview: string | null = null;
-  let messageCount = 0;
+  // 删除后同步带出 canonical session-list projection，避免其它窗口 / device-link
+  // 控制端继续显示已删除的末条消息预览或旧 _count(见 computeSessionListProjection)。
+  const { preview, messageCount } = await computeSessionListProjection(sessionId, {
+    op: 'message-delete',
+    deletedClientIds: clientIds,
+  });
+  return {
+    sessionId,
+    deletedClientIds: result.messages.map((message) => message.clientId),
+    updatedAt: now,
+    preview,
+    messageCount,
+  };
+}
+
+/**
+ * 会话列表投影(末条预览 + 可见消息数)的 canonical 计算。凡是「让已落库的消息行
+ * 不再可见」的路径都要带上它一起广播 sessions:patched —— 那些消费者只做 shallow
+ * merge、不会主动重拉,漏带就会让侧栏与 device-link 控制端一直显示旧预览和旧
+ * _count。count / preview 口径与 sessions:list 的可见消息保持一致。
+ *
+ * 现有两个调用方:上面的 commitMessageDeletion(菜单删除)与下面的
+ * supersedeRetriedUserTurn(零产出重试软删)。
+ *
+ * 不抛:调用方的删除或软删已经原子提交，投影查询失败不能把成功操作伪装成失败。
+ * 保守返回空值，后续 sessions:list / reseed 会按 DB 真相收敛。
+ */
+async function computeSessionListProjection(
+  sessionId: string,
+  logFields: Record<string, unknown>,
+): Promise<{ preview: string | null; messageCount: number }> {
   try {
     const db = getDbClient().drizzle;
     const [sessionRow] = await db
@@ -780,24 +806,18 @@ export async function commitMessageDeletion(
         .orderBy(desc(messages.createdAt), desc(messageRowid))
         .limit(1),
     ]);
-    preview = extractMessagePreview(latestRow?.content, latestRow?.role);
-    messageCount = countRow?.messageCount ?? 0;
+    return {
+      preview: extractMessagePreview(latestRow?.content, latestRow?.role),
+      messageCount: countRow?.messageCount ?? 0,
+    };
   } catch (error) {
-    // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
-    // 后续 sessions:list / reseed 会按 DB 真相收敛。
-    log.warn('message delete session projection refresh failed', {
+    log.warn('session list projection refresh failed', {
       sessionId,
-      deletedClientIds: clientIds,
+      ...logFields,
       error: error instanceof Error ? error.message : String(error),
     });
+    return { preview: null, messageCount: 0 };
   }
-  return {
-    sessionId,
-    deletedClientIds: result.messages.map((message) => message.clientId),
-    updatedAt: now,
-    preview,
-    messageCount,
-  };
 }
 
 export function broadcastMessageDeleted(payload: MessageDeletedPayload): void {
@@ -838,7 +858,7 @@ export async function dismissErrorMessage(
 
 /**
  * retry-supersede:零产出失败 turn 被「重试」克隆重发后,软删被取代的旧 user 行
- * 与其后的 role='error' 行(coordinator 在克隆行 onPersisted 边界调用,见
+ * 与其后的 role='error' 行(coordinator 在克隆行落库且 vendor 派发成功之后调用,见
  * AgentInputQueuedMessage.supersedesUserClientId)。
  *
  * 语义与守卫:
@@ -853,12 +873,16 @@ export async function dismissErrorMessage(
  *  - 单条 UPDATE 原子置位后经 messages:deleted 广播(本机各窗口 + device-link
  *    转发),desktop / mobile 的移除处理复用消息删除的既有消费端。
  *
- * @returns 实际软删的 clientIds(空数组 = no-op),仅供调用方与测试观察。
+ * @returns 实际软删的 clientIds(空数组 = no-op)与软删后的会话列表投影。调用方
+ *   在 clientIds 非空时必须把 preview / _count 经 sessions:patched 广播出去
+ *   (见 computeSessionListProjection):软删让旧 user 行退出可见集,漏广播则侧栏与
+ *   被控端的消息计数会一直停在软删前。sessions:patched 由调用方发,本模块不 import
+ *   sessions ipc(避免 messages ↔ sessions 循环依赖)。
  */
 export async function supersedeRetriedUserTurn(
   sessionId: string,
   args: { supersededUserClientId: string; retryUserClientId: string },
-): Promise<string[]> {
+): Promise<{ clientIds: string[]; preview: string | null; messageCount: number }> {
   const db = getDbClient().drizzle;
   const [oldRow] = await db
     .select({
@@ -883,7 +907,10 @@ export async function supersedeRetriedUserTurn(
       and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)),
     )
     .limit(1);
-  if (!oldRow || !retryRow) return [];
+  if (!oldRow || !retryRow) return { clientIds: [], preview: null, messageCount: 0 };
+  // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
+  // 但历史数据与时钟边缘仍可能与相邻 user 行同毫秒。口径与 rewind / fork 的边界
+  // 比较一致(messageRowid + gt/lt 组合),orderBy 让返回顺序确定,不依赖执行计划。
   const errorRows = await db
     .select({ clientId: messages.clientId })
     .from(messages)
@@ -892,12 +919,17 @@ export async function supersedeRetriedUserTurn(
         eq(messages.sessionId, sessionId),
         eq(messages.role, 'error'),
         isNull(messages.rewindAt),
-        sql`(${messages.createdAt} > ${oldRow.createdAt}
-          OR (${messages.createdAt} = ${oldRow.createdAt} AND ${sql.raw('"messages"."rowid"')} > ${oldRow.rowid}))`,
-        sql`(${messages.createdAt} < ${retryRow.createdAt}
-          OR (${messages.createdAt} = ${retryRow.createdAt} AND ${sql.raw('"messages"."rowid"')} < ${retryRow.rowid}))`,
+        or(
+          gt(messages.createdAt, oldRow.createdAt),
+          and(eq(messages.createdAt, oldRow.createdAt), gt(messageRowid, oldRow.rowid)),
+        ),
+        or(
+          lt(messages.createdAt, retryRow.createdAt),
+          and(eq(messages.createdAt, retryRow.createdAt), lt(messageRowid, retryRow.rowid)),
+        ),
       ),
-    );
+    )
+    .orderBy(asc(messages.createdAt), asc(messageRowid));
   const clientIds = [oldRow.clientId, ...errorRows.map((r) => r.clientId)];
   await db
     .update(messages)
@@ -910,7 +942,11 @@ export async function supersedeRetriedUserTurn(
       ),
     );
   broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds });
-  return clientIds;
+  const { preview, messageCount } = await computeSessionListProjection(sessionId, {
+    op: 'retry-supersede',
+    supersededClientIds: clientIds,
+  });
+  return { clientIds, preview, messageCount };
 }
 
 export async function updateMessageContent(

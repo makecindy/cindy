@@ -151,10 +151,11 @@ export interface AgentInputCoordinatorDeps {
    */
   hasAssistantProgressAfter?: (sessionId: string, userClientId: string) => Promise<boolean>;
   /**
-   * retry-supersede:零产出重试的克隆行(supersedesUserClientId 非空)落库成功后,
-   * 把被取代的旧 user 行与其后的 role='error' 行软删(置 rewind_at + 广播),让
-   * 历史里只留重发的那一条。在 onPersisted 边界 fire-and-forget 调用:软删失败
-   * 只是退回"显示两条"的旧观感,绝不阻塞 vendor dispatch。未注入 = 保持旧行为。
+   * retry-supersede:零产出重试的克隆行(supersedesUserClientId 非空)落库且 vendor
+   * 派发成功后,把被取代的旧 user 行与其后的 role='error' 行软删(置 rewind_at +
+   * 广播),让历史里只留重发的那一条。在派发已不可逆的边界 await 调用(与
+   * onDispatchedUserTurn 同侧):派发前取消时旧 error 行还是用户唯一的重试入口,
+   * 不能先藏。失败只吞错落日志,退回"显示两条"的旧观感;未注入 = 保持旧行为。
    */
   supersedeRetriedUserTurn?: (
     sessionId: string,
@@ -2401,26 +2402,6 @@ export class AgentInputCoordinator {
                 // 已送达的消息二次恢复(issue #761)。
                 this.maybePersistQueueSnapshot(sessionId);
               }
-              // retry-supersede:克隆重发行已确定落库,被取代的旧 user 行从此冗余,
-              // 软删它(连同其后的 error 行)。fire-and-forget:软删失败只是退回
-              // "显示两条"的旧观感,不拦派发;之后的取消路径也不需要回滚——文本
-              // 已经保存在本条新行里,用户的消息不会丢。
-              if (head.supersedesUserClientId) {
-                const supersededUserClientId = head.supersedesUserClientId;
-                void this.deps
-                  .supersedeRetriedUserTurn?.(sessionId, {
-                    supersededUserClientId,
-                    retryUserClientId: head.clientId,
-                  })
-                  ?.catch((err) => {
-                    log.warn('supersedeRetriedUserTurn failed', {
-                      sessionId,
-                      supersededUserClientId,
-                      retryUserClientId: head.clientId,
-                      error: err instanceof Error ? err.message : String(err),
-                    });
-                  });
-              }
               await this.deps.beforeDispatchUserTurn?.(sessionId, head);
               if (!this.isActiveTurnCurrent(sessionId, active)) {
                 throw new Error('[SEND_CANCELLED_BEFORE_DISPATCH] User turn was cancelled before vendor dispatch');
@@ -2456,6 +2437,31 @@ export class AgentInputCoordinator {
           clientId: head.clientId,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+      // retry-supersede:克隆重发行既落库又真正派发出去了,被取代的旧 user 行从此
+      // 冗余,软删它(连同其后的 error 行)。落在这里而不是 onPersisted 里:落库到
+      // 派发之间还夹着 beforeDispatch / onAccepted 两个 hook,期间停止或关闭会话会走
+      // cancelled-before-dispatch —— 那时若已软删,历史里只剩一条从未送达模型的克隆
+      // 消息,原失败的 error 行连同它上面的「重试」入口一起消失(与上面 durable-ack
+      // 同一个「派发已不可逆才动持久化状态」的边界理由)。
+      // await 而非 fire-and-forget:软删先落库再继续推进本 turn,把"克隆已落库、旧行
+      // 还在"的窗口压到最小。软删失败(或崩在这个窗口里)只退回"显示两条"的旧观感,
+      // 文本已经保存在克隆行里,用户的消息不会丢。
+      if (head.supersedesUserClientId) {
+        const supersededUserClientId = head.supersedesUserClientId;
+        try {
+          await this.deps.supersedeRetriedUserTurn?.(sessionId, {
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+          });
+        } catch (err) {
+          log.warn('supersedeRetriedUserTurn failed', {
+            sessionId,
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       if (active.pendingTerminalEvent) {

@@ -3,7 +3,8 @@
  *
  * 场景背景:零产出失败 turn 被「重试」克隆重发后,历史里会留下两条一模一样的
  * user 行(旧行 + 克隆行)与夹在中间的 error 行。本函数把旧 user 行与窗口内的
- * error 行软删(置 rewind_at),经 messages:deleted 广播让各端移除。
+ * error 行软删(置 rewind_at),经 messages:deleted 广播让各端移除,并返回软删后的
+ * 会话列表投影(preview + 可见消息数)供调用方广播 sessions:patched。
  */
 import Database from 'better-sqlite3';
 import { drizzle } from 'drizzle-orm/better-sqlite3';
@@ -54,6 +55,8 @@ const SESSION = 'session-1';
 
 function createDb(): Database.Database {
   const sqlite = new Database(':memory:');
+  // sessions 表只需 id / cleared_at:软删后的会话列表投影(preview + 可见消息数)
+  // 要读 clearedAt 才能与 sessions:list 同口径。
   sqlite.exec(`
     CREATE TABLE messages (
       id TEXT PRIMARY KEY,
@@ -68,7 +71,12 @@ function createDb(): Database.Database {
       rewind_at INTEGER
     );
     CREATE UNIQUE INDEX uniq_messages_session_client ON messages(session_id, client_id);
+    CREATE TABLE sessions (
+      id TEXT PRIMARY KEY,
+      cleared_at INTEGER
+    );
   `);
+  sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run(SESSION);
   h.db = drizzle(sqlite, { schema: { messages, sessions } });
   return sqlite;
 }
@@ -125,7 +133,11 @@ describe('supersedeRetriedUserTurn', () => {
       retryUserClientId: 'user-1',
     });
 
-    expect(removed).toEqual(['user-0', 'error-0']);
+    expect(removed.clientIds).toEqual(['user-0', 'error-0']);
+    // 会话列表投影必须是软删**之后**的真相(未软删时可见 user 行是 2 条):调用方
+    // 靠它广播 sessions:patched,漏刷新则侧栏/被控端的消息计数会停在软删前。
+    expect(removed.messageCount).toBe(1);
+    expect(removed.preview).toBe('user-1');
     expect(rewindAtOf(sqlite, 'user-0')).toEqual(expect.any(Number));
     expect(rewindAtOf(sqlite, 'error-0')).toEqual(expect.any(Number));
     expect(rewindAtOf(sqlite, 'user-1')).toBeNull();
@@ -152,7 +164,7 @@ describe('supersedeRetriedUserTurn', () => {
       retryUserClientId: 'user-1',
     });
 
-    expect(removed).toEqual(['user-0', 'error-mid']);
+    expect(removed.clientIds).toEqual(['user-0', 'error-mid']);
     expect(rewindAtOf(sqlite, 'error-before')).toBeNull();
     expect(rewindAtOf(sqlite, 'assistant-mid')).toBeNull();
     expect(rewindAtOf(sqlite, 'error-after')).toBeNull();
@@ -171,7 +183,7 @@ describe('supersedeRetriedUserTurn', () => {
       retryUserClientId: 'user-1',
     });
 
-    expect(removed).toEqual(['user-0', 'error-0']);
+    expect(removed.clientIds).toEqual(['user-0', 'error-0']);
     expect(rewindAtOf(sqlite, 'error-late')).toBeNull();
   });
 
@@ -183,7 +195,7 @@ describe('supersedeRetriedUserTurn', () => {
         supersededUserClientId: 'missing',
         retryUserClientId: 'user-1',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ clientIds: [] });
 
     insertRow(sqlite, { clientId: 'user-0', role: 'user', createdAt: 100, rewindAt: 90 });
     await expect(
@@ -191,7 +203,7 @@ describe('supersedeRetriedUserTurn', () => {
         supersededUserClientId: 'user-0',
         retryUserClientId: 'user-1',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ clientIds: [] });
 
     insertRow(sqlite, { clientId: 'error-x', role: 'error', createdAt: 110 });
     await expect(
@@ -199,7 +211,7 @@ describe('supersedeRetriedUserTurn', () => {
         supersededUserClientId: 'error-x',
         retryUserClientId: 'user-1',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ clientIds: [] });
 
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
@@ -212,7 +224,7 @@ describe('supersedeRetriedUserTurn', () => {
         supersededUserClientId: 'user-0',
         retryUserClientId: 'not-persisted-yet',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ clientIds: [] });
 
     expect(rewindAtOf(sqlite, 'user-0')).toBeNull();
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
@@ -234,7 +246,7 @@ describe('supersedeRetriedUserTurn', () => {
         supersededUserClientId: 'user-0',
         retryUserClientId: 'user-1',
       }),
-    ).resolves.toEqual([]);
+    ).resolves.toMatchObject({ clientIds: [] });
     expect(h.tapWindowBroadcast).not.toHaveBeenCalled();
   });
 
@@ -248,7 +260,7 @@ describe('supersedeRetriedUserTurn', () => {
       retryUserClientId: 'user-1',
     });
 
-    expect(removed).toEqual(['user-0']);
+    expect(removed.clientIds).toEqual(['user-0']);
     const other = sqlite
       .prepare("SELECT rewind_at AS rewindAt FROM messages WHERE session_id = 'other'")
       .get() as { rewindAt: number | null };
