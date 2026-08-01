@@ -34,9 +34,14 @@ export function parseOrcaCommunicationContent(content: string): OrcaCommunicatio
   }
 }
 
-/** 过渡期 hook 消息的兜底:剥正文开头的 <thread_context> 块与紧随的提示行。 */
+/**
+ * 过渡期 hook 消息的兜底:剥正文开头的 <thread_context> 块与紧随的提示行。
+ * 刻意不带 /m:^ 只匹配字符串起始(主机拼装的块必在串首),带 /m 会让正文
+ * 中间恰好以 <thread_context> 开头的行也被误剥(Copilot review;旧实现的
+ * /m 系历史遗留,原样迁入本文件后一并修正)。
+ */
 const THREAD_CONTEXT_PREFIX_RE =
-  /^<thread_context>[\s\S]*?<\/thread_context>\s*(?:\(thread 历史中的.*?\)\s*)?/m;
+  /^<thread_context>[\s\S]*?<\/thread_context>\s*(?:\(thread 历史中的.*?\)\s*)?/;
 
 /**
  * 输入按结构收敛到两个字段,不 import ChatMessage / props 类型:

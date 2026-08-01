@@ -9,7 +9,6 @@
  */
 
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
-import { parseUserContent } from '@/lib/imageRef';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
 import { resolveUserDisplayText } from './userMessageDisplayText';
 
@@ -17,12 +16,13 @@ export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
   id: string;
   /**
-   * 提问的单行预览。不是原文首行:user 消息可能是附件封装 JSON、可能带
-   * composer 引用标记行(`> <!-- cindy-composer-quote -->`),直接截原文会把
-   * 内部标记裸奔进预览卡(2026-07-28 验收实锤)。派生时先经
-   * resolveUserDisplayText 取显示文本(hook / Orca 消息与气泡正文同源),
-   * 再走 parseUserContent + stripChatQuoteMarkerLines 解析,并优先取
-   * 用户自己的话(引用块之外的首个非空行)。
+   * 提问的单行预览。不是原文首行:user 消息可能带 composer 引用标记行
+   * (`> <!-- cindy-composer-quote -->`),直接截原文会把内部标记裸奔进
+   * 预览卡(2026-07-28 验收实锤)。派生时先经 resolveUserDisplayText 取
+   * 显示文本(hook / Orca 消息与气泡正文同源),再剥引用标记行,并优先取
+   * 用户自己的话(引用块之外的首个非空行)。content 已由 store 归一成可见
+   * 正文,不做二次 parseUserContent(提问本身是 JSON 字面量会被解空丢刻度,
+   * PR #830 review)。
    */
   preview: string;
   /**
@@ -141,9 +141,9 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       if (m.delivery === 'steer') continue;
       // 预览来源按序:显示文本(hook 消息取 userText / 剥 <thread_context>,
       // Orca 通信行解包 JSON,与 UserMessage 气泡正文同源,见
-      // userMessageDisplayText.ts;PR #830 review)→ 其中的正文(含 content
-      // 封装内的附件名)→ ChatMessage 顶层 images/files 字段的名字(附件可
-      // 存在 content 之外,PR #830 review)。
+      // userMessageDisplayText.ts;PR #830 review)→ ChatMessage 顶层
+      // images/files 字段的附件名(store 入库时已把封装解到顶层,content 即
+      // 可见正文,PR #830 review)。
       let preview = promptPreviewLine(resolveUserDisplayText(m));
       const attachmentNames = [
         ...(m.images ?? []).map((image) =>
@@ -173,22 +173,20 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
 }
 
 /**
- * 提问 → 单行预览。解析附件封装、无条件剥引用标记行(不赌 quotesEncoded
- * 旗标),优先取引用块之外用户自己的话;全引用消息退回引用文字本身;
- * 纯附件消息退回附件名。
+ * 提问(可见正文)→ 单行预览。无条件剥引用标记行(不赌 quotesEncoded 旗标),
+ * 优先取引用块之外用户自己的话;全引用消息退回引用文字本身。
+ *
+ * 输入按**已归一化的可见正文**处理,不再 parseUserContent:store 侧两条入库
+ * 路径(发送存 text / 历史映射存 parsed.text)都已解掉附件封装,附件名在
+ * ChatMessage 顶层 images/files。这里再解析一次,提问本身恰好是 JSON 字面量
+ * 时(如只输入 `[1,2,3]`)会被误当成附件封装 / SDK content blocks,预览解空、
+ * 真实提问丢刻度,出场门槛也被算小(PR #830 review)。
  */
-export function promptPreviewLine(rawContent: string): string {
-  const parsed = parseUserContent(rawContent);
-  const lines = stripChatQuoteMarkerLines(parsed.text).split('\n');
+export function promptPreviewLine(visibleText: string): string {
+  const lines = stripChatQuoteMarkerLines(visibleText).split('\n');
   const own = lines.find((line) => line.trim() && !line.trimStart().startsWith('>'));
   const anyLine = lines.find((line) => line.trim()) ?? '';
-  const picked = (own ?? anyLine).replace(/^\s*>\s?/, '').trim();
-  if (picked) return picked;
-  const attachmentNames = [
-    ...parsed.images.map((image) => image.originalName),
-    ...parsed.files.map((file) => file.name),
-  ].filter((name): name is string => Boolean(name));
-  return attachmentNames.join(' · ');
+  return (own ?? anyLine).replace(/^\s*>\s?/, '').trim();
 }
 
 /**

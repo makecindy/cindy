@@ -174,6 +174,33 @@ describe('deriveNavRailEntries', () => {
     ];
     expect(deriveNavRailEntries(messages)[0].preview).toBe('{"cmd":"build"}');
   });
+
+  it('JSON 数组字面量提问不被二次解析,保留刻度与原文预览', () => {
+    // store 入库已把 content 归一成可见正文;这里再 parseUserContent 会把
+    // 数组当 SDK content blocks 解空、丢刻度(PR #830 review)。
+    const messages = [msg({ clientId: 'u1', role: 'user', content: '[1,2,3]' })];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].preview).toBe('[1,2,3]');
+  });
+
+  it('带 text 字段的 JSON 对象字面量提问显示原文,不被解成内层字段', () => {
+    const content = '{"text":"内层不该被提出来"}';
+    const messages = [msg({ clientId: 'u1', role: 'user', content })];
+    expect(deriveNavRailEntries(messages)[0].preview).toBe(content);
+  });
+
+  it('hook 消息正文中间以 <thread_context> 开头的行不被误剥(^ 只锚串首)', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: '看看这段配置\n<thread_context>foo</thread_context>\n有什么问题',
+        hookSource: { im: 'feishu' },
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].preview).toBe('看看这段配置');
+  });
 });
 
 describe('promptPreviewLine', () => {
