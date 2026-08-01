@@ -3971,7 +3971,9 @@ export class CodexAgent extends BaseAgent {
       try {
         await handle.send(
           { type: 'user', content: feedback },
-          planFollowUpSendOptions(feedback),
+          // 修订轮同样带上原始审查意图快照:否则 send 会把 auto-review intent 覆盖成这条修改意见,
+          // 下一次计划获批后 implementation reviewer 拿到的是"修改意见+计划"而非原始用户请求(codex 报)。
+          planFollowUpSendOptions(feedback, planRequestAutoReviewIntent),
         );
       } catch (e) {
         planCycleActive = false;

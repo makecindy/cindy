@@ -1488,3 +1488,40 @@ describe('timeout 浮点时长 / 裸 declare·typeset 全环境导出(第二十�
     expect(classifyShellCommand('typeset -i count', roots)).not.toBe('prompt-each-time');
   });
 });
+
+describe('stdbuf 分离 MODE / watch·flock 执行包装器解包(第二十七批评审)', () => {
+  it('stdbuf -o/-i/-e 分离 MODE 值不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'stdbuf -o L rm -rf /outside',
+      'stdbuf -i 0 -o L rm -rf /outside',
+      'stdbuf -oL rm -rf /outside', // 附加形态仍作单 token 消费
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('watch 执行的命令被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'watch -- rm -rf /outside',
+      'watch -n 2 rm -rf /outside',
+      "watch 'rm -rf /outside'",
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:watch 跑只读命令 → 放行;watch 区内 scoped 删除 → 灰区。
+    expect(classifyShellCommand('watch -n 1 ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('watch -- rm -rf build', roots)).toBe('prompt');
+  });
+
+  it('flock 执行的命令(lockfile 操作数后 / -c 形态)被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'flock /tmp/lock rm -rf /outside',
+      'flock -w 5 /tmp/lock rm -rf /outside',
+      "flock /tmp/lock -c 'rm -rf /outside'",
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:flock 跑只读命令 → 放行。
+    expect(classifyShellCommand('flock /tmp/lock ls', roots)).toBe('auto-approve');
+  });
+});

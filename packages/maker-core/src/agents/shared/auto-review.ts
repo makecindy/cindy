@@ -143,7 +143,7 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
-  'setsid', 'chrt', 'exec',
+  'setsid', 'chrt', 'exec', 'watch', 'flock',
 ]);
 
 /**
@@ -542,12 +542,46 @@ function unwrapCommand(
         // timeout -s/--signal SIG、-k/--kill-after DUR:带独立值选项,须连值一起消费 —— 否则停在 SIG(如 KILL)
         // 把真正的内层命令(rm 等)当参数漏掉(codex 报 `timeout -s KILL 5 rm -rf /outside`)。
         if (head === 'timeout' && /^(?:-s|--signal|-k|--kill-after)$/.test(t)) { i += 2; continue; }
+        // stdbuf -i/-o/-e MODE(分离形态):MODE(如 `L`/`0`/`4K`)是独立 token,不连值消费会停在 MODE
+        // 漏掉内层命令(codex 报 `stdbuf -o L rm -rf /outside`)。附加形态 `-oL`/`--output=L` 作单 token。
+        if (head === 'stdbuf' && /^(?:-[ioe]|--input|--output|--error)$/.test(t)) { i += 2; continue; }
         // 时长可为浮点(timeout 文档:DURATION 是浮点数,`timeout 0.5 rm …`),整数正则会停在 0.5 漏掉内层
         // 命令(codex 报)→ 接受 `0.5` / `1.5s` / `.5` 等小数时长。
         if (t.startsWith('-') || /^\d*\.?\d+[smhd]?$/.test(t)) { i++; continue; }
         break;
       }
       toks = toks.slice(i);
+    } else if (head === 'watch') {
+      // watch [options] COMMAND:周期执行 COMMAND。`-n`/`--interval` 带值,其余 `-flag` 单 token,`--` 终结
+      // 选项(codex 报 `watch -- rm -rf /outside`)。COMMAND 若是带空格的单 token(`watch 'rm -rf x'`)则再拆。
+      let i = 1;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-n' || t === '--interval') { i += 2; continue; }
+        if (t.startsWith('-')) { i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (toks.length === 1 && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'flock') {
+      // flock [options] <file> COMMAND [args] 或 flock [options] <file> -c '<shell 命令串>'。
+      // 消费带值选项(-w/--timeout、-E/--conflict-exit-code),跳过一个 lockfile 操作数,其余为真实命令
+      // (codex 报 `flock /tmp/lock rm -rf /outside`)。-c 形态其后是 shell 命令串,再拆成 argv。
+      let i = 1;
+      let shellForm = false;
+      let consumedLockfile = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-w' || t === '--timeout' || t === '-E' || t === '--conflict-exit-code') { i += 2; continue; }
+        if (t === '-c' || t === '--command') { shellForm = true; i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!consumedLockfile) { consumedLockfile = true; i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if ((shellForm || toks.length === 1) && toks.length >= 1 && /\s/.test(toks[0])) toks = tokenize(toks[0]);
     } else {
       // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
       toks = toks.slice(1);
