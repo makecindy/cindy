@@ -2114,3 +2114,78 @@ describe('伪设备白名单:静音重定向不得打断(实机语料探针发�
     }
   });
 });
+
+describe('find -exec 内层命令的受保护写入(第四十四批评审)', () => {
+  // -exec 原先只抽内层的破坏性 rm 目标,`-exec cp payload /etc/hosts \;` 这类可静态识别的系统写入
+  // 从未进入系统写判定 → 只落灰区。改成把内层 argv 当独立命令整段复用完整审查。
+  it('内层命令写系统/受保护路径 → 确定性同意', () => {
+    for (const c of [
+      'find build -maxdepth 0 -exec cp payload /etc/hosts \;',
+      'find . -name "*.sh" -exec tee /etc/profile.d/x.sh \;',
+      'find . -exec install -d /etc/cron.d \;',
+      'find . -exec dd of=/etc/hosts if=/tmp/p \;',
+      'find /repo -exec sed -i s/a/b/ /etc/hosts \;',
+      'find . -exec unzip -d /etc pkg.zip \;',
+      'find . -exec cp /tmp/p /usr/bin/node \;',
+      // -execdir 下的字面系统目标同样按目标判定(与 cwd 无关)。
+      'find . -execdir cp /tmp/p /etc/hosts \;',
+      // 载荷里的重定向与 `cd /etc &&` 跨段:靠整段复用完整审查(含有效 cwd 解析)覆盖。
+      "find . -exec sh -c 'cat payload > /etc/hosts' \;",
+      "find . -exec sh -c 'cd /etc && cp /tmp/p hosts' \;",
+      // 包装器改目录后写相对路径。
+      'find . -exec env -C /etc cp /tmp/p hosts \;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('写「被匹配到的路径」按遍历根判定:根落系统目录 → 确定性同意', () => {
+    for (const c of [
+      'find /etc -name "*.conf" -exec truncate -s 0 {} \;',
+      'find /etc -type f -exec sh -c \'truncate -s0 "$1"\' _ {} \;',
+      // 遍历根本身静态不可证(变量/内容驱动)→ 占位目标落哪不可证,写它必问。
+      'find $DIR -exec truncate -s0 {} \;',
+      'find . -files0-from list.txt -exec truncate -s0 {} \;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('区内 -exec 与只读用法不因此误升红线', () => {
+    for (const c of [
+      // 占位符具化成遍历根下的静态路径,故区内根的 `{}` 写/删仍留灰区。
+      'find /repo/src -name "*.png" -exec cp {} dist/img/ \;',
+      'find build -exec rm -rf {} \;',
+      'find build -execdir rm -rf {} \;',
+      'find . -name "*.txt" -exec mv {} {}.bak \;',
+      'find src -type f -exec touch {} \;',
+      'find src -type f -exec sed -i s/a/b/ {} \;',
+      'find src -exec sh -c \'cp "$1" dist/\' _ {} \;',
+      'find src -exec sh -c \'rm -rf "$0"\' {} \;',
+      // 只读动作即便遍历根在系统目录也不该弹窗(不含写通道)。
+      'find /etc -name "*.conf" -exec grep -l foo {} +',
+      'find . -files0-from list.txt -exec grep -l foo {} +',
+      'find src -exec wc -l {} +',
+      'find build -type f -exec chmod 644 {} \;',
+      // 写在区内 / /usr/local / 伪设备。
+      'find dist -exec tee build.log \;',
+      'find . -exec install -d dist/assets \;',
+      'find . -exec cp /tmp/p /usr/local/bin/tool \;',
+      'find . -exec sh -c \'cat "$1" > /dev/null\' _ {} \;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+
+  it('argv 还原成命令字符串时引号载荷不失真', () => {
+    // JSON 双引号序列化会把载荷里的 `"` 转义成 `\"`,tokenize 保留反斜杠后目标残成 `\"/etc/hosts\"`
+    // 而漏判;逐 token 单引号包裹才能原样取回。
+    expect(classifyShellCommand('find . -exec sh -c \'cp /tmp/p "/etc/hosts"\' \;', roots))
+      .toBe('prompt-each-time');
+    expect(classifyShellCommand('find . -exec sh -c \'rm -rf "/etc"\' \;', roots))
+      .toBe('prompt-each-time');
+    // 反例:同样带引号但目标在区内子目录 → 仍留灰区。
+    expect(classifyShellCommand('find src -exec sh -c \'cp "$1" "dist/"\' _ {} \;', roots))
+      .not.toBe('prompt-each-time');
+  });
+});

@@ -1537,6 +1537,52 @@ function isMatchedPathPlaceholder(target: string): boolean {
   return target === '{}' || target === '{' || target === '}' || /^\$(?:\d+|[@*])$/.test(target);
 }
 
+/** 被匹配路径占位符具化后挂在遍历根下的静态叶名。 */
+const MATCHED_PATH_SENTINEL = '.cindy-matched-path';
+
+/**
+ * 内容驱动(`-files0-from`)的遍历根静态不可证:匹配项可能落在任何目录,含系统路径。具化占位符时
+ * 用这个受保护根 —— 写它/删它一律必问,而只读用法(`-exec grep foo {} +`)不含写通道,不受影响。
+ */
+const UNPROVABLE_MATCH_ROOT = '/etc/.cindy-unprovable-match';
+
+/** argv 里是否出现被匹配路径占位符(独立 token 或藏在 `sh -c` 载荷字符串里的 `{}`/`$1`)。 */
+function hasMatchedPathPlaceholder(argv: string[]): boolean {
+  return argv.some((t) => isMatchedPathPlaceholder(t) || /\{\}|\$(?:\d+|[@*])/.test(t));
+}
+
+/** 把 token(含载荷字符串内部)里的被匹配路径占位符换成具化后的静态路径。 */
+function substituteMatchedPath(token: string, sentinel: string): string {
+  if (isMatchedPathPlaceholder(token)) return sentinel;
+  return token.replace(/\{\}/g, sentinel).replace(/\$(?:\d+|[@*])/g, sentinel);
+}
+
+/**
+ * 把遍历根具化成一个静态的「被匹配路径」:根在区内 → 哨兵在区内;根是 `/etc` → 哨兵落 `/etc`,
+ * 从而让占位目标保持「作用域由遍历根决定」的语义。根本身不可静态解析(变量/glob/`~`,或相对根
+ * 且有效 cwd 未知)时返回 `null` → 调用方 fail-closed。
+ */
+/**
+ * 把 argv 还原成命令字符串给递归审查用。**逐 token 单引号**包裹:载荷本身通常已含双引号
+ * (`sh -c 'rm -rf "$1"'`),用 JSON 双引号序列化会把它们转义成 `\"`,再 tokenize 时反斜杠被保留、
+ * 目标残成 `\"/path\"` 而失真;单引号内 tokenize 不做反斜杠处理,能原样取回 token。
+ */
+function shellQuoteArgvForReview(tokens: string[]): string {
+  return tokens.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(' ');
+}
+
+function matchedPathSentinel(
+  root: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): string | null {
+  if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
+  const base = opts.cwd ?? workspaceRoots[0];
+  if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
+  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  return `${resolved}/${MATCHED_PATH_SENTINEL}`;
+}
+
 /**
  * 本段的写目标(shell 重定向 + 参数写通道)是否落在系统/受保护目录。相对目标按 `opts.cwd`
  * (调用方已把包装器/`cd` 解析出的**有效 cwd** 放进来)解析;cwd 未知时相对目标不可静态求证 →
@@ -1625,6 +1671,23 @@ function scopedDestructionNeedsConsent(
         if (rmTargetsInExec.some((target) => !isMatchedPathPlaceholder(target)
           && destructiveTargetNeedsConsent(target, workspaceRoots, execScope))) return true;
         if (rmTargetsInExec.some(isMatchedPathPlaceholder)) execMatchedRm = true;
+        // rm 之外的危险面同样要审:受保护写通道(`-exec cp payload /etc/hosts \;`、`-exec tee /etc/x \;`、
+        // `-exec install -d /etc/cron.d \;`)、载荷里的重定向与 `cd /etc &&` 跨段(codex 报只查了 rm 目标)。
+        // 做法是把内层 argv 当独立命令整段复用完整审查,占位符先按遍历根具化 —— 否则 `{}`/`$1` 会被当成
+        // 不可静态求值的动态目标而误拦,且能顺带覆盖「写被匹配到的路径」(`find /etc -exec truncate -s0 {} \;`)。
+        const concreteRoots = hasMatchedPathPlaceholder(argv)
+          ? (dynamicRoots ? [UNPROVABLE_MATCH_ROOT] : findRoots)
+          : [null];
+        for (const root of concreteRoots) {
+          let innerArgv = argv;
+          if (root !== null) {
+            const sentinel = matchedPathSentinel(root, workspaceRoots, segmentOpts);
+            if (sentinel === null) return true; // 根不可静态解析 → 占位目标落哪不可证
+            innerArgv = argv.map((t) => substituteMatchedPath(t, sentinel));
+          }
+          if (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+            shellQuoteArgvForReview(innerArgv), workspaceRoots, execScope, depth + 1)) return true;
+        }
       }
       // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定;动态根一律必问。
       if (deletes || execMatchedRm) {
