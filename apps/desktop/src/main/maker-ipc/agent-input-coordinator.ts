@@ -130,12 +130,14 @@ export interface AgentInputCoordinatorDeps {
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
   /**
-   * steer 收到 maker-core 权威的 NO_ACTIVE_TURN 后回调 host 校准 busy 视图。
-   * isTurnRunning 的事件驱动 tracker 可能 stale 为 true (turn 异常死亡没发
-   * terminal event), 此时 fallback 转普通派发后 drain 会被假忙永久挡住,
-   * 插话点击表现为"毫无反应"。host 实现应自行复核后再清 tracker。
+   * Reconcile the host's live session/tracker view after an abort or a
+   * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
+   * turn dies without a terminal event, leaving the queue behind a false busy
+   * boundary. Returns true only when it actually cleared that stale boundary;
+   * a normal status=closed cleanup returning false must not make Codex release
+   * its abort lock before the in-flight send outcome settles.
    */
-  reconcileTurnIdle?: (sessionId: string) => void;
+  reconcileTurnIdle?: (sessionId: string) => boolean;
   hasPendingInteraction: (sessionId: string) => boolean;
   getAgentKind: (sessionId: string) => 'claude-code' | 'codex' | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
@@ -1424,7 +1426,29 @@ export class AgentInputCoordinator {
         log.warn('abortSession failed', { sessionId, error: errorMessage(err) });
       })
       .finally(() => {
-        if (this.deps.getAgentKind(sessionId) === 'codex') return;
+        // `Session.abort()` can reject after the vendor process has already
+        // stopped.  That is a real abort boundary, but status/terminal events
+        // are allowed to be lost (for example while the app-session owner is
+        // switching).  Reconcile the host's authoritative idle view before
+        // releasing the queue; otherwise the tracker stays busy forever and
+        // every later message is queued behind a dead turn.
+        let reconciledIdle = false;
+        try {
+          reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
+        } catch (err) {
+          // A best-effort reconciliation must never prevent the normal abort
+          // cleanup below from releasing the coordinator boundary.
+          log.warn('reconcileTurnIdle after abort failed', {
+            sessionId,
+            error: errorMessage(err),
+          });
+        }
+        // Codex normally keeps this lock until its terminal event because the
+        // abort RPC may resolve before the turn really stops.  If the host
+        // reconciliation above has proved that the live session is idle,
+        // however, there is no terminal event left to wait for and retaining
+        // the lock would strand the preserved queue just like Claude's case.
+        if (this.deps.getAgentKind(sessionId) === 'codex' && !reconciledIdle) return;
         this.releaseAbortLockAndDrain(sessionId, 'abort-promise', { clearActiveTurn: true });
       });
 

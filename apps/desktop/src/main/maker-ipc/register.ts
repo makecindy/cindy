@@ -3544,38 +3544,59 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   }));
   registration.disposers.push(session.onStatusChange((status) => {
     if (wiredSessionsById.get(session.id)?.session !== session) return;
-    broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
+    // The local window broadcast is best-effort, but keep this guard here as
+    // well because status callbacks are a lifecycle boundary: a third-party
+    // bridge must not be able to skip session cleanup by throwing.
+    try {
+      broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
+    } catch (err) {
+      log.warn('session status broadcast failed', {
+        sessionId: session.id,
+        status,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (status === 'closed') {
-      cleanupPendingInteractionsForSession(session.id, 'session_closed');
-      // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
-      // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
-      // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
-      // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
-      autoResumeBookkeeping.teardown(session.id);
-      agentInputCoordinatorHolder?.onSessionClosed(session.id);
-      // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
-      pendingCredentialSwitchHolder?.onSessionClosed(session.id);
-      deferredCodexRestartHolder?.onSessionSettled();
-      agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
-      refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
-      gitSnapshotCoordinator?.onSessionClosed(session.id);
-      wiredSessionsById.delete(session.id);
-      for (const dispose of registration.disposers) dispose();
-      session.setInteractionListener(null);
-      clearOrcaMcpHydrated(session.id);
-      knownNonOrcaSessionIds.delete(session.id);
-      lastReportedCostUsdBySession.delete(session.id);
-      lastReportedModelUsageBySession.delete(session.id);
-      turnModelPromiseBySession.delete(session.id);
-      sessionTurnActivityTracker.deleteSession(session.id);
-      markSessionTurnEnded(session.id);
-      // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
-      clearClaudeSessionBackgroundActivity(session.id);
-      clearSessionPersistState(session.id);
-      // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
-      // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
-      // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。
-      handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');
+      try {
+        cleanupPendingInteractionsForSession(session.id, 'session_closed');
+        // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
+        // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
+        // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
+        // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
+        autoResumeBookkeeping.teardown(session.id);
+        agentInputCoordinatorHolder?.onSessionClosed(session.id);
+        // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
+        pendingCredentialSwitchHolder?.onSessionClosed(session.id);
+        deferredCodexRestartHolder?.onSessionSettled();
+        agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
+        refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
+        gitSnapshotCoordinator?.onSessionClosed(session.id);
+        wiredSessionsById.delete(session.id);
+        for (const dispose of registration.disposers) dispose();
+        session.setInteractionListener(null);
+        clearOrcaMcpHydrated(session.id);
+        knownNonOrcaSessionIds.delete(session.id);
+        lastReportedCostUsdBySession.delete(session.id);
+        lastReportedModelUsageBySession.delete(session.id);
+        turnModelPromiseBySession.delete(session.id);
+        // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
+        clearClaudeSessionBackgroundActivity(session.id);
+        clearSessionPersistState(session.id);
+        // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
+        // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
+        // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。
+        handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');
+      } catch (err) {
+        log.warn('session close cleanup failed; forcing idle reconciliation', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        // This must run even when an owner-boundary-sensitive cleanup above
+        // rejects. A closed Session cannot keep the desktop turn boundary busy.
+        sessionTurnActivityTracker.deleteSession(session.id);
+        markSessionTurnEnded(session.id);
+      }
     }
   }));
 
@@ -7315,6 +7336,56 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   });
 
+  /**
+   * Reconcile the in-memory turn boundary after a vendor abort/close when the
+   * normal terminal event was lost. The vendor Session is authoritative for
+   * whether work is still running; the desktop tracker is only an event-driven
+   * view and can remain stale across owner-boundary teardown.
+   */
+  const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
+    const sess = maker.getSession(sessionId);
+    if (sess?.isTurnRunning()) return false;
+    const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
+      sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
+    const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
+    if (!trackerStale && !hadZombieInteraction) return false;
+    log.warn('reconciling stale session turn boundary', {
+      sessionId,
+      source,
+      trackerStale,
+      hadZombieInteraction,
+    });
+    sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
+    try {
+      // The marker write is best-effort and ordered behind pending message
+      // persistence. It may retry/settle after an owner boundary is available.
+      markTurnEndedAfterPersistDrain(sessionId);
+      noteClaudeSessionTurnState(sessionId, false);
+      void pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+      deferredCodexRestartHolder?.onSessionSettled();
+      agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
+      refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
+    } catch (err) {
+      log.warn('stale session turn side-effect cleanup failed', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (hadZombieInteraction) {
+      try {
+        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
+      } catch (err) {
+        log.warn('stale session interaction cleanup failed', {
+          sessionId,
+          source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return true;
+  };
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -7422,36 +7493,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const sess = maker.getSession(sessionId);
       if (!sess) return;
       handleAgentIslandSessionStopped(sess);
-      await sess.abort();
-      cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+      try {
+        await sess.abort();
+      } finally {
+        // Abort may reject after the Claude process is already dead (and its
+        // status listener may have failed during an app-session switch). Do
+        // not let that leave the tracker busy or interaction waiters alive.
+        if (!sess.isTurnRunning()) {
+          reconcileSessionTurnIdle(sessionId, 'abort');
+        }
+        cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+      }
     },
     isTurnRunning: (sessionId) => {
       const sess = maker.getSession(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
     reconcileTurnIdle: (sessionId) => {
-      // steer 拿到 maker-core 权威 NO_ACTIVE_TURN 后校准本地 busy 视图。
-      // tracker 只靠事件流维护, turn 异常死亡 (没发 done / terminal error) 时会
-      // stale 为 in-turn, 让 coordinator 的 fallback drain 永久卡死 —— 插话点击
-      // 表现为"毫无反应"。复核 live session 真没在跑后, 清 tracker + 清僵尸
-      // interaction (两者都是 getDrainableHead 的 busy 门)。
-      const sess = maker.getSession(sessionId);
-      if (sess?.isTurnRunning()) return;
-      const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
-        sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
-      if (!trackerStale && !hadZombieInteraction) return;
-      log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
-        sessionId,
-        trackerStale,
-        hadZombieInteraction,
-      });
-      sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
-      markSessionTurnEnded(sessionId);
-      noteClaudeSessionTurnState(sessionId, false);
-      if (hadZombieInteraction) {
-        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
-      }
+      // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
+      // 但终态事件丢失时，都走同一条收口路径。
+      return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');
     },
     hasPendingInteraction: hasPendingAgentInteractionForSession,
     getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
@@ -8235,8 +8296,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 监听),**再** abort。这样 abort 产生的终止事件到来时目标已暂停、监听已摘,不会被误判成
     // 续跑(原本依赖 error 文案正则判 paused/blocked,不可靠)。null-safe;无 active goal 时 no-op。
     await goalStopObserver?.(sessionId);
-    await sess.abort();
-    cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+    try {
+      await sess.abort();
+    } finally {
+      if (!sess.isTurnRunning()) {
+        reconcileSessionTurnIdle(sessionId, 'direct-abort');
+      }
+      cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+    }
   });
 
   ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION, async (_e, sessionId: unknown, opts?: unknown) => {
@@ -9201,7 +9268,17 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
 function broadcastToAllWindows(channel: string, payload: unknown): void {
   // device-link 被控端旁路:命中转发白名单且存在控制链路时,把事件转发给控制端
   // (无 link 时 O(1) no-op,不进 maker-core 热路径成本)
-  tapWindowBroadcast(channel, payload);
+  // 旁路永远不能反向阻断本机生命周期。owner boundary 切换期间远端链路
+  // 可能暂不可用；如果异常冒泡，Session 的 status/terminal listener 会在
+  // 清理前中止，最终留下 tracker busy + 死进程，所有后续消息永久排队。
+  try {
+    tapWindowBroadcast(channel, payload);
+  } catch (err) {
+    log.warn('device-link broadcast tap failed; keeping local broadcast alive', {
+      channel,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

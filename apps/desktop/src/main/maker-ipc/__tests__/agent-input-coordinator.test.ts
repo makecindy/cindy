@@ -165,7 +165,7 @@ function createHarness() {
   const steerToAgent = vi.fn<AgentInputCoordinatorDeps['steerToAgent']>(async () => {});
   const abortSession = vi.fn<AgentInputCoordinatorDeps['abortSession']>(async () => {});
   const getSdkSessionId = vi.fn<AgentInputCoordinatorDeps['getSdkSessionId']>(async () => 'sdk-session');
-  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(() => {});
+  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(() => false);
   const beforeDispatchUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>>(() => {});
   const onUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>>(() => {});
   const onAcceptedQueuedMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>>(() => {});
@@ -3534,6 +3534,63 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
   });
 
+  it('reconciles a dead Claude turn when abort rejects after the vendor has stopped', async () => {
+    const h = createHarness();
+    const sid = 'stop-claude-abort-rejected';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.abortSession.mockRejectedValueOnce(new Error('Claude Code process aborted by user'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
+  it('releases a Codex abort lock when reconciliation proves the vendor has stopped', async () => {
+    const h = createHarness();
+    const sid = 'stop-codex-abort-rejected';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind: 'codex' },
+    });
+    h.setAgentKind('codex');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.abortSession.mockRejectedValueOnce(new Error('Codex process aborted by user'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
     const sid = 'stop-codex';
@@ -4288,6 +4345,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     // host 校准: 复核后清掉 stale busy tracker (镜像 register.ts 的接线行为)。
     h.reconcileTurnIdle.mockImplementationOnce(() => {
       h.setRunning(false);
+      return true;
     });
 
     const ok = await h.coordinator.steer(sid, second, { removeFromQueue: true });
@@ -4338,7 +4396,10 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
     h.coordinator.enqueue(sid, markerOnly);
     h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session has no active turn'));
-    h.reconcileTurnIdle.mockImplementationOnce(() => h.setRunning(false));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
 
     await expect(h.coordinator.steer(sid, incoming, { removeFromQueue: true })).resolves.toBe(true);
     await flush();
