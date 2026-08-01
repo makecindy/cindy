@@ -416,6 +416,8 @@ type TelegramBotTransportStatus =
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
+  /** 凭证保留、用户主动下线(不轮询); 与 idle=未配置 严格区分。 */
+  | { kind: 'offline'; appId: string }
   | { kind: 'error'; reason: string };
 
 type DingTalkBotTransportStatus = DiscordBotTransportStatus;
@@ -1784,6 +1786,10 @@ interface ElectronAPI {
       botUsername: string | null;
     }>;
     disconnect: () => Promise<{
+      status: TelegramBotTransportStatus;
+    }>;
+    /** 上线/下线(保留 token 与绑定信息, 只切轮询)。 */
+    setOnline: (payload: { online: boolean }) => Promise<{
       status: TelegramBotTransportStatus;
     }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;

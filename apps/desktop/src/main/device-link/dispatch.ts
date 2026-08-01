@@ -34,6 +34,8 @@ import {
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
+  DL_TELEGRAM_STATUS_CHANNEL,
+  DL_TELEGRAM_SET_ONLINE_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -60,6 +62,7 @@ import { dispatchLocalInvoke } from './invoke-registry';
 import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
+import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
 import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
 import { setBroadcastTapListener } from './broadcast-tap';
@@ -1665,6 +1668,24 @@ export async function runInvoke(
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`media:fetch failed from ${shortId(src)}: ${message}`);
       return { ok: false, error: { code: 'MEDIA_FETCH_FAILED', message } };
+    }
+  }
+
+  // device-link:telegram:* 不是 ipcMain handler(IM 的 ipcMain 面统一挂了
+  // assertTrustedAppRendererEvent, 合成 event 必然不可信 —— 那道闸不该为远程下线
+  // 放宽), 故在此拦截。已过三道 gate, 等同受信本地访问。只切轮询、不碰凭证:
+  // 远程能让它停收消息, 但拿不走也删不掉绑定(解绑仍只能本机操作)。
+  if (payload.channel === DL_TELEGRAM_STATUS_CHANNEL) {
+    return { ok: true, result: readTelegramRemoteStatus() };
+  }
+  if (payload.channel === DL_TELEGRAM_SET_ONLINE_CHANNEL) {
+    try {
+      const result = await setTelegramRemoteOnline((payload.args ?? [])[0]);
+      return { ok: true, result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`telegram:set-online failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
     }
   }
 

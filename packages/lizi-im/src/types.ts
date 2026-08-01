@@ -234,6 +234,12 @@ export type IMStatus =
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
+  /**
+   * 凭证仍在、但用户主动下线 —— 不轮询、不收派发, 重启后保持。
+   * 与 idle 严格区分: idle = 没配置(无凭证), offline = 配好了但停用。
+   * 换机器时把另一端停掉而不清凭证, 之后随时可一键上线。
+   */
+  | { kind: 'offline'; appId: string }
   | { kind: 'error'; reason: string };
 
 // ── Outbound spec ─────────────────────────────────────────────────────────────

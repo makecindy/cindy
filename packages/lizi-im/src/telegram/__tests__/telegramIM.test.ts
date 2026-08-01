@@ -456,6 +456,109 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('set-online:false → offline, 停止轮询但保留 token/owner/offset', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    // 先让游标前进一格, 验证下线不会把它一并清掉。
+    api.pushUpdates([privateMessage('hi', Number(OWNER_ID), 7)]);
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBeDefined();
+    });
+    const offsetBeforeOffline = ctx.secrets.get('telegram-updates-offset');
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus()).toEqual({ kind: 'offline', appId: String(BOT.id) });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    // 解绑才清凭证; 下线只是让位, 绑定信息必须原样留着。
+    expect(ctx.secrets.get('telegram-bot-token')).toBe('999:secret-token-abcdefghijk');
+    expect(ctx.secrets.get('telegram-owner-user-id')).toBe(OWNER_ID);
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe(offsetBeforeOffline);
+
+    // 轮询确已停: 之后不再产生新的 getUpdates 调用。
+    const pollsAtOffline = api.calls.filter((c) => c.method === 'getUpdates').length;
+    await new Promise((r) => setTimeout(r, 50));
+    expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
+  });
+
+  it('下线标志写盘失败 → 报错且**不停轮询**(不留会自己复活的假下线)', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    // 模拟 safeStorage 写失败(Linux 无 keychain / 磁盘写不进)。
+    const originalWrite = ctx.host.secrets.write;
+    ctx.host.secrets.write = (name, value) =>
+      name === 'telegram-bot-offline' ? false : originalWrite(name, value);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+
+    expect(im.getStatus().kind).toBe('error');
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    // 关键: 轮询仍在跑 —— 用户看到明确失败, 而不是"看着下线了、重启又上来抢"。
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still here', Number(OWNER_ID), 21)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(
+        pollsBefore,
+      );
+    });
+    ctx.host.secrets.write = originalWrite;
+  });
+
+  it('带下线标志时 init 直接 offline, 零网络请求(重启不抢回轮询)', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    ctx.secrets.set('telegram-bot-offline', '1');
+
+    await im.init();
+
+    // botId 从 token 前缀解析而来, 不发 getMe。
+    expect(im.getStatus()).toEqual({ kind: 'offline', appId: String(BOT.id) });
+    expect(api.calls).toHaveLength(0);
+  });
+
+  it('set-online:true → 清标志并重新拉起轮询', async () => {
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    ctx.secrets.set('telegram-bot-offline', '1');
+    await im.init();
+    expect(api.calls).toHaveLength(0);
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+  });
+
+  it('解绑清掉下线标志(否则重填 token 后重启又被判回 offline)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+
+    await ctx.handlers.get('telegramBot:disconnect')!();
+
+    expect(im.getStatus()).toEqual({ kind: 'idle' });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
+  });
+
+  it('下线态重新填 token 点连接: 清掉遗留标志, 直接连上', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+
+    await connect();
+
+    expect(im.getStatus()).toEqual({ kind: 'connected', appId: String(BOT.id) });
+    expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+  });
+
   it('相册 settle 期间同 chat 的后续消息保序: 先答相册再答追问', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

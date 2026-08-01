@@ -238,6 +238,17 @@ type DiscordBotSessionAuthCheckWire = {
   providerId: string | null;
   providerLabel: string | null;
 };
+/**
+ * 个人 Telegram bot 的传输状态(与 @cindy/im 的 IMStatus 同形; preload 不引包,
+ * 就地声明)。offline = 凭证保留但用户主动下线, 与 idle(未配置)严格区分。
+ */
+type TelegramBotStatusWire =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'conflict'; appId: string }
+  | { kind: 'offline'; appId: string }
+  | { kind: 'error'; reason: string };
 
 /**
  * Factory for lazy, ref-counted IPC fan-out subscriptions.
@@ -1543,39 +1554,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 桌面端直连 Telegram Bot API 长轮询, 不经 Cindy 服务器。
   telegramBot: {
     getStatus: (): Promise<{
-      status:
-        | { kind: 'idle' }
-        | { kind: 'connecting' }
-        | { kind: 'connected'; appId: string }
-        | { kind: 'conflict'; appId: string }
-        | { kind: 'error'; reason: string };
+      status: TelegramBotStatusWire;
       ownerUserId: string | null;
       botUsername: string | null;
     }> => ipcRenderer.invoke('telegramBot:get-status'),
     setConfig: (payload: { token: string; ownerUserId: string }): Promise<{
-      status:
-        | { kind: 'idle' }
-        | { kind: 'connecting' }
-        | { kind: 'connected'; appId: string }
-        | { kind: 'conflict'; appId: string }
-        | { kind: 'error'; reason: string };
-      saveErrorStatus?:
-        | { kind: 'idle' }
-        | { kind: 'connecting' }
-        | { kind: 'connected'; appId: string }
-        | { kind: 'conflict'; appId: string }
-        | { kind: 'error'; reason: string };
+      status: TelegramBotStatusWire;
+      saveErrorStatus?: TelegramBotStatusWire;
       ownerUserId: string | null;
       botUsername: string | null;
     }> => ipcRenderer.invoke('telegramBot:set-config', payload),
     disconnect: (): Promise<{
-      status:
-        | { kind: 'idle' }
-        | { kind: 'connecting' }
-        | { kind: 'connected'; appId: string }
-        | { kind: 'conflict'; appId: string }
-        | { kind: 'error'; reason: string };
+      status: TelegramBotStatusWire;
     }> => ipcRenderer.invoke('telegramBot:disconnect'),
+    /**
+     * 上线/下线: 只切轮询, 保留 token 与绑定信息(与 disconnect 清凭证相对)。
+     * 换机器时把这一端让出来, 之后随时可再上线。
+     */
+    setOnline: (payload: { online: boolean }): Promise<{
+      status: TelegramBotStatusWire;
+    }> => ipcRenderer.invoke('telegramBot:set-online', payload),
     checkSessionAuth: (): Promise<DiscordBotSessionAuthCheckWire> =>
       ipcRenderer.invoke('telegramBot:check-session-auth'),
     // 行为配置(emoji 回应等级 / 回复引用) — 设置卡可视化操作面, 改动即生效。

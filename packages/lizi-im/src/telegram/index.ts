@@ -64,6 +64,12 @@ const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
  * 重放, 而下游 turn 无 messageId 幂等; 落盘让重启从上次处理完的位置续读。
  */
 const UPDATES_OFFSET_SECRET_KEY = 'telegram-updates-offset';
+/**
+ * 用户主动下线标志('1' = 下线)。与凭证分离是本功能的全部要点: 下线只停轮询,
+ * token / owner / offset 一律保留, 重启后仍保持下线(否则换机器时把另一台停掉
+ * 的意义就没了 — 它一重启就又来抢 getUpdates)。解绑(disconnect)会连同清除。
+ */
+const OFFLINE_SECRET_KEY = 'telegram-bot-offline';
 
 const POLL_TIMEOUT_SEC = 50;
 /**
@@ -264,7 +270,59 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.setStatus({ kind: 'idle' });
       return;
     }
+    // 主动下线态必须跨重启保持: 这里一旦 connect 就会重新抢 getUpdates, 把
+    // 用户特意让位给另一台设备的轮询又夺回来。零网络请求进 offline。
+    if (this.isOfflineFlagSet()) {
+      this.botId = botIdFromToken(token);
+      this.setStatus({ kind: 'offline', appId: this.botContextId });
+      return;
+    }
     await this.connect(token);
+  }
+
+  /**
+   * 主动下线: 停轮询但**保留全部绑定信息**(token / owner / offset / 命令菜单)。
+   * 用途是换机器时把这一端让出来 —— 与 disconnect(解绑, 清凭证)是两个动作。
+   * 不向 owner 播报(与 dispose 同口径, 见文件头部生命周期静默说明)。
+   */
+  async goOffline(): Promise<void> {
+    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    if (!token) {
+      this.setStatus({ kind: 'idle' });
+      return;
+    }
+    // 标志必须先落盘成功再停轮询: 反过来的话, 写失败时本机已经停了、UI 也显示
+    // 已下线, 但重启就会自动上线回来抢另一台的轮询 —— 恰好毁掉下线的全部意义。
+    // 宁可停在"没下线成功"的明确错误上, 也不留一个会自己复活的假下线。
+    if (!this.host.secrets.write(OFFLINE_SECRET_KEY, '1')) {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      return;
+    }
+    // 换代先行: 在途 poll 循环据 configVersion 自行退出, 不会把下线状态覆盖回去。
+    this.configVersion += 1;
+    this.clearAllTypingLoops();
+    this.pendingReplyTargets.clear();
+    this.turnReplyTargets.clear();
+    await this.stopPolling();
+    if (!this.botId) this.botId = botIdFromToken(token);
+    this.setStatus({ kind: 'offline', appId: this.botContextId });
+  }
+
+  /** 从下线态恢复: 清标志并按保留的 token 重新建连(offset 续上, 不重放)。 */
+  async goOnline(): Promise<boolean> {
+    const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+    this.host.secrets.remove(OFFLINE_SECRET_KEY);
+    if (!token) {
+      this.setStatus({ kind: 'idle' });
+      return false;
+    }
+    this.configVersion += 1;
+    await this.stopPolling();
+    return this.connect(token);
+  }
+
+  private isOfflineFlagSet(): boolean {
+    return this.host.secrets.read(OFFLINE_SECRET_KEY)?.trim() === '1';
   }
 
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
@@ -318,6 +376,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.configVersion += 1;
         await this.stopPolling();
         this.ownerUserId = nextOwnerUserId;
+        // 手动填 token 点连接 = 明确要在这台机器上用, 清掉遗留的下线标志,
+        // 否则连上了但重启后又被 init 判回 offline。
+        this.host.secrets.remove(OFFLINE_SECRET_KEY);
         const connected = await this.connect(token);
         if (!connected) {
           const failedStatus = this.status;
@@ -351,6 +412,25 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       botUsername: this.botUsername || null,
     }));
 
+    /**
+     * 上线/下线开关(不碰凭证)。单 channel 双向 —— handler 不依赖 event.sender、
+     * 无本机 UI/shell 副作用、语义只在被控端执行才正确, 满足 device-link
+     * allowlist 的三条准入判据, 后续做跨设备下线可原样登记。
+     */
+    this.host.ipc.handle('telegramBot:set-online', async (payload) => {
+      const online = isRecord(payload) && payload.online === true;
+      if (!this.host.secrets.isAvailable()) {
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        return { status: this.status };
+      }
+      if (online) {
+        await this.goOnline();
+      } else {
+        await this.goOffline();
+      }
+      return { status: this.status };
+    });
+
     this.host.ipc.handle('telegramBot:disconnect', async () => {
       this.configVersion += 1;
       const disconnectedOwnerUserId = this.ownerUserId;
@@ -373,6 +453,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       this.host.secrets.remove(OWNER_USER_ID_SECRET_KEY);
       this.host.secrets.remove(LEGACY_RUNTIME_ACTIVE_SECRET_KEY);
       this.host.secrets.remove(UPDATES_OFFSET_SECRET_KEY);
+      // 解绑必须连下线标志一起清: 留着的话重新填 token 会连上、但重启即回
+      // offline, 表现为"填了 token 却不工作"。
+      this.host.secrets.remove(OFFLINE_SECRET_KEY);
       await this.stopPolling();
       this.setStatus({ kind: 'idle' });
       return { status: this.status };
@@ -1636,6 +1719,18 @@ function mapConnectErrorToStatus(err: unknown): IMStatus {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
+}
+
+/**
+ * 从 BotFather token(`<botId>:<secret>`)取 botId。下线态不建连也就没有 getMe,
+ * 但设置卡仍要显示 bot 标识、群窗口仍按 botId 命名空间查询 — 前缀本身就是
+ * botId, 不值得为此发一次网络请求。形态不符返回 0(与"未连接"同值)。
+ */
+function botIdFromToken(token: string): number {
+  const separator = token.indexOf(':');
+  if (separator <= 0) return 0;
+  const n = Number(token.slice(0, separator));
+  return Number.isSafeInteger(n) && n > 0 ? n : 0;
 }
 
 function sleep(ms: number, signal?: AbortSignal): Promise<void> {
