@@ -1757,6 +1757,20 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
     expect(classifyShellCommand('cp -t /tmp/out src/a.ts', roots)).toBe('prompt');
   });
 
+  it('含空格的引号 DEST 不被拆碎,系统路径仍命中红线', () => {
+    for (const c of [
+      'cp payload "C:\\Program Files\\target"',
+      'cp payload "/etc/Program Data/target"',
+      "install payload '/System/Library/My App/x'",
+      'mv payload "/Windows/Program Files/x"',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:含空格但落区内/普通目录 → 灰区。
+    expect(classifyShellCommand('cp payload "dist/My Folder/x"', roots)).toBe('prompt');
+    expect(classifyShellCommand('cp payload "/tmp/My Folder/x"', roots)).toBe('prompt');
+  });
+
   it('prlimit -o/--output 分离值不遮蔽内层破坏命令', () => {
     for (const c of [
       'prlimit -o RESOURCE rm -rf /outside',

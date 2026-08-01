@@ -1856,7 +1856,10 @@ export function classifyShellCommand(
   if (redirectionTargets(command).some(writesProtectedSystemPath)) return 'prompt-each-time';
   // 以**位置参数**指定写入目标的命令(`cp payload /etc/hosts`、`install … /etc/hosts`、`| tee /etc/hosts`、
   // `dd of=/etc/hosts`)与重定向同为写通道,同样过系统红线(codex 报)。按段判(包装器/管道已剥壳)。
-  for (const { text } of splitExecutableSegments(quotesOnly)) {
+  // **必须用原始 command**(保留引号)而不是 quotesOnly:含空格的 DEST 靠引号定界
+  // (`cp payload "C:\Program Files\target"`),先去引号再分词会把单个 DEST 拆成多个 token、
+  // 只查到末尾碎片而漏掉受保护路径(codex 报)。tokenize 自身处理引号,取出的 token 即完整实参。
+  for (const { text } of splitExecutableSegments(command)) {
     if (argumentWriteTargets(unwrapWrappers(tokenize(text))).some(writesProtectedSystemPath)) {
       return 'prompt-each-time';
     }

@@ -8212,6 +8212,21 @@ export class CodexAgent extends BaseAgent {
           if (mutableProviderId !== prevProviderId) {
             autoReviewDecisionCache.clear();
             refreshCodexAutoReviewerRoute(threadId);
+            // approvalsReviewer 是 thread sticky setting:只刷本地标志不够,必须把重算后的
+            // reviewer 推给 app-server,否则同一 thread 换路由后仍沿用旧 reviewer(如从 OpenAI
+            // OAuth 切第三方仍留着 auto_review),与"第三方路由必须走 host reviewer"相悖(copilot 报)。
+            if (approvalsReviewerProtocolSupported) {
+              const { approvalsReviewer } = mapPermissionToCodex(
+                mutablePermissionMode,
+                approvalsReviewerProtocolSupported,
+                approvalsReviewerRouteSupported,
+              );
+              if (approvalsReviewer) {
+                await pushThreadSettings({ approvalsReviewer }).catch((e) => {
+                  log.warn('push approvalsReviewer after provider switch failed', { error: String(e) });
+                });
+              }
+            }
           }
           return;
         }
