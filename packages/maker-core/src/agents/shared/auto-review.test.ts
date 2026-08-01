@@ -1707,3 +1707,36 @@ describe('SSRF/云 metadata network 红线 / setarch 包装器(第三十四批�
     expect(classifyShellCommand('setarch ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('参数形式的系统路径写入 / setsid 选项(第三十五批评审)', () => {
+  it('以位置参数指定的系统路径写入目标 = 确定性红线', () => {
+    for (const c of [
+      'cp payload /etc/hosts',
+      'install payload /etc/hosts',
+      'mv payload /etc/hosts',
+      'printf x | tee /etc/hosts',
+      'dd if=payload of=/etc/hosts',
+      'cp payload /System/Library/x',
+      'cp p "C:\\Windows\\System32\\drivers\\etc\\hosts"',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:写区内/普通区外目标仍是灰区(不误升到硬弹窗)。
+    expect(classifyShellCommand('cp a b', roots)).toBe('prompt');
+    expect(classifyShellCommand('cp payload /tmp/scratch', roots)).toBe('prompt');
+    // 单操作数的 cp(无 DEST)不误判;从系统路径**读**取不算写。
+    expect(classifyShellCommand('cp /etc/hosts ./local-copy', roots)).toBe('prompt');
+  });
+
+  it('setsid 的选项不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'setsid -f rm -rf /outside',
+      'setsid --wait rm -rf /outside',
+      'setsid -c -f rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:setsid 跑只读命令 → 放行。
+    expect(classifyShellCommand('setsid -f ls', roots)).toBe('auto-approve');
+  });
+});

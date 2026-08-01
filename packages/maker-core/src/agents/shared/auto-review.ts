@@ -205,6 +205,30 @@ function redirectionTargets(command: string): string[] {
   return out;
 }
 
+/**
+ * 常见"以位置参数指定写入目标"的命令的目标路径 —— 与 shell 重定向同为写通道,同样要过系统路径红线
+ * (codex 报:`cp payload /etc/hosts`、`install … /etc/hosts`、`… | tee /etc/hosts` 此前只当灰区)。
+ *   - cp/mv/install/rsync/ln:最后一个位置参数是 DEST(≥2 个操作数时);
+ *   - tee/sponge:所有位置参数都是写入文件;
+ *   - dd `of=FILE`。
+ * 只取静态可见的字面目标;拿不准的形态交既有其它规则,不在此强判。
+ */
+function argumentWriteTargets(tokens: string[]): string[] {
+  const bin = executableName(tokens[0] ?? '');
+  const operands = positionalOperands(tokens.slice(1));
+  if (bin === 'tee' || bin === 'sponge') return operands;
+  if (bin === 'cp' || bin === 'mv' || bin === 'install' || bin === 'rsync' || bin === 'ln') {
+    return operands.length >= 2 ? [operands[operands.length - 1]] : [];
+  }
+  if (bin === 'dd') {
+    return tokens.slice(1).flatMap((t) => {
+      const m = /^of=(.+)$/i.exec(t);
+      return m ? [m[1]] : [];
+    });
+  }
+  return [];
+}
+
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
   if (typeof target !== 'string' || target.length === 0) return false;
@@ -655,8 +679,18 @@ function unwrapCommand(
         break; // PROGRAM
       }
       toks = toks.slice(i);
+    } else if (head === 'setsid') {
+      // setsid [-c] [-f] [-w] PROGRAM:选项在实际 program 之前,只删 setsid 会停在 `-f`/`--wait` 而看不到
+      // 内层命令(codex 报 `setsid -f rm -rf /outside`)。这些选项都不带值 → 逐个跳过,`--` 终结选项。
+      let i = 1;
+      while (i < toks.length) {
+        if (toks[i] === '--') { i++; break; }
+        if (toks[i].startsWith('-')) { i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
     } else {
-      // nohup / setsid / builtin 等无自身参数的包裹器:直接跳过包裹器本身。
+      // nohup / builtin 等无自身参数的包裹器:直接跳过包裹器本身。
       toks = toks.slice(1);
     }
   }
@@ -1774,9 +1808,18 @@ export function classifyShellCommand(
   // 输出重定向目标落系统/受保护目录(`cat x > /etc/hosts`、`> C:\Windows\...`)= 高影响系统写,复用
   // file-write 的系统红线,不能只当灰区重定向(codex 报)。canonical(darwin 抹平 /private)后判。
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  // 每个重定向目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`),任一命中即升级。
-  if (redirectionTargets(command).some((t) => [t, t.replace(/\\(.)/g, '$1')].some((v) =>
-    isProtectedSystemPath(canonicalPath(normalizeTarget(v, workspaceRoots), aliasFirmlinks))))) return 'prompt-each-time';
+  const writesProtectedSystemPath = (t: string): boolean =>
+    // 每个目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`),任一命中即升级。
+    [t, t.replace(/\\(.)/g, '$1')].some((v) =>
+      isProtectedSystemPath(canonicalPath(normalizeTarget(v, workspaceRoots), aliasFirmlinks)));
+  if (redirectionTargets(command).some(writesProtectedSystemPath)) return 'prompt-each-time';
+  // 以**位置参数**指定写入目标的命令(`cp payload /etc/hosts`、`install … /etc/hosts`、`| tee /etc/hosts`、
+  // `dd of=/etc/hosts`)与重定向同为写通道,同样过系统红线(codex 报)。按段判(包装器/管道已剥壳)。
+  for (const { text } of splitExecutableSegments(quotesOnly)) {
+    if (argumentWriteTargets(unwrapWrappers(tokenize(text))).some(writesProtectedSystemPath)) {
+      return 'prompt-each-time';
+    }
+  }
   // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
   // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
   // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。
