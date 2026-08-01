@@ -209,25 +209,26 @@ function broadcastSessionCreated(sessionId: string): void {
   }
 }
 
-// ── turn 时长策略: **不设总时长上限, 只设静默兜底**(2026-08-01 定) ──────────
+// ── turn 时长策略: hook 侧**不设任何**上限(2026-08-01 定) ────────────────────
 //
 // 与桌面端自己跑 turn 的规则一致: 普通会话没有任何"一轮跑太久就砍"的机制 ——
-// turn 跑到 done 为止, 卡住了由用户自己停; scheduler 也只有
-// BG_TASK_IDLE_FALLBACK_MS 那条"done 之后还有在途后台 subagent"的兜底。hook 没有
-// 理由比它们更严: 同一个 agent、同一套 SDK, 换个入口就被砍掉正在出的结果, 才是
-// 需要解释的那一侧。所以整轮硬超时(TURN_HARD_TIMEOUT_MS = 60min)撤了 —— 一个跑了
-// 一小时且仍在出结果的任务被拦腰截断, 恰恰截的是最值得等的那类。
+// turn 跑到 done 为止, 卡住了由用户自己停。hook 没有理由比它更严: 同一个 agent、
+// 同一套 SDK, 换个入口就被砍掉正在出的结果, 才是需要解释的那一侧。所以整轮硬
+// 超时(TURN_HARD_TIMEOUT_MS = 60min)撤了 —— 一个跑了一小时且仍在出结果的任务
+// 被拦腰截断, 恰恰截的是最值得等的那类。
 //
-// 但"没有上限"不等于"没有出口"。撤掉它时写的理由是「task.cancel 已实现, 兜底收敛
-// 到 server 的静默 lease 一处」, 那句话漏了一个前提: **cancel 得送得到**。控制连接
-// 断开时它送不到(dispatcher.onDisconnected 只撤 activeContinuations, 不动
-// runningByRequest), abortSession 失败时也只记一行日志。这两种情况下 server 早已
-// 放弃, 而 execute() 还停在 `await observer.finished` 上, running 槽位永不释放 ——
-// 该 session 的后续渠道消息永久排队, 重连也救不回来(PR #1272 review 指出)。
+// 「observer 永不 settle → dispatcher 的 running 槽位永不释放 → 该 session 的后续
+// 渠道消息永久排队」这条路, 由 **maker-core Session 自己的 turn stall 看门狗**
+// 堵上(armTurnStallWatchdog, 默认 45min 零事件), 不需要 hook 侧另起一道:
+//   - 它排除掉等用户回应交互、以及后台任务在跑这两种合法静默;
+//   - 它按分片计时并核对真实经过时间, 把合盖睡眠那段排除掉;
+//   - 它触发时**真的 abort 这一轮**, 还复核 abort 是否生效, 没生效就关会话;
+//   - 它 fan out 的是终态 error 事件, observer 对终态 error 本来就收口。
+// 而且它与控制连接无关 —— server 的 task.cancel 送不到时它照样管用。
 //
-// 出口因此放在 observer 里: TURN_IDLE_TIMEOUT_MS —— **任何**事件都重置, 只对真静默
-// 生效, 且取值高于 server 的 30 分钟静默 lease, 连接还在时永远是 server 的 cancel
-// 先手。见 turnObserver.ts 该常量的注释。
+// 本 PR 一度在 turnObserver 里另起了一个裸 setTimeout 做同样的事, 上面四条一条
+// 都没有(PR #1272 review 指出), 已删除。同一条不变量两处判定, 弱的那处只会先
+// 开火。见 turnObserver.ts 顶部的说明。
 
 /**
  * 从 tool_result 全文抽出可外发的 xdt-image URL —— 与 IM turnRunner 的
@@ -1077,11 +1078,10 @@ function beginContinuationWatch(
     })();
   };
 
-  // 不设**总时长**上限, 与 run() 及桌面端普通会话一致(见本文件「turn 时长策略」)。
-  // 这条路径此前与 run() 一样有整轮硬超时, 只是刻意不再叠加更短的"空转"超时,
-  // 理由是「长 turn 完全可能几分钟不出事件, 或只出被本观察器忽略的账号级事件」
-  // —— 那条担心依然成立, 所以 observer 的静默兜底按**任何**事件重置, 门限也放到
-  // 分钟级之上(TURN_IDLE_TIMEOUT_MS), 长 turn 不受影响。
+  // 不设任何时长上限, 与 run() 及桌面端普通会话一致(见本文件「turn 时长策略」)。
+  // 这条路径此前与 run() 一样有整轮硬超时, 也刻意没有叠加更短的"空转"超时 ——
+  // 理由是「长 turn 完全可能几分钟不出事件, 或只出被本观察器忽略的账号级事件」。
+  // 兜底统一交给 maker-core 的 turn stall 看门狗(它的终态 error 会让 observer 收口)。
   observer.finished.then(
     () => settle(null),
     (err: unknown) => settle(err instanceof Error ? err.message : String(err)),

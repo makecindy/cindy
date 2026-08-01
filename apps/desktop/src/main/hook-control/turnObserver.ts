@@ -36,26 +36,24 @@ import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRet
 /** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
 const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
 
-/**
- * 整轮**静默**兜底: 距上一次任何事件超过这个时长就放弃观察并按失败收口。
+/*
+ * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
  *
- * 这不是时长上限 —— 任何事件都会重置它, 一个持续输出的 turn 可以跑到天荒地老
- * (这正是取消旧的 60 分钟总时长硬超时的原因)。它堵的是另一件事: **observer 永远
- * 不收口时, 调用方的队列槽位永远不释放**。dispatcher 的 running / runningByRequest
- * 只在 execute() 收口那一行删除, 而 execute() 就停在 `await observer.finished`
- * 上 —— 之后这个 session 的所有渠道消息永久排队, 重连也救不回来。
+ * 因为 maker-core 的 Session 已经有一条(`armTurnStallWatchdog` / 默认 45min),
+ * 而且它做对了这里很难做对的几件事:
+ *   - 等用户回应交互(权限询问 / AskUserQuestion / plan review)期间不计时;
+ *   - 有后台任务在跑期间不计时;
+ *   - 按分片计时并核对真实经过时间, 把合盖睡眠那段排除掉;
+ *   - 触发时**真的 abort 这一轮**, 还复核 abort 是否生效, 没生效就关会话。
+ * 它触发时 fan out 的是终态 error 事件, 本观察器对终态 error 本来就收口 ——
+ * 所以「observer 永不 settle → dispatcher 的队列槽位永不释放」那条路早就被堵上,
+ * 与控制连接是否还在无关。
  *
- * 为什么不能只靠 server 的 lease 发 task.cancel(PR #1272 review 指出):
- *   - 控制连接断了: cancel 帧根本送不到, 而 onDisconnected 只撤 activeContinuations,
- *     不动 runningByRequest;
- *   - cancel 送到了但 abortSession 失败: 现在只记一行日志。
- * 两种都是「server 侧已经放弃、这边还挂着」, 必须有一条不依赖连接的本地出口。
- *
- * 取值刻意**高于**服务端的静默 lease(三个 hook server 均为 30 分钟): 连接还在时
- * 永远是 server 的 cancel 先到, 走正常取消路径; 这条只在连 cancel 都送不到时兜底,
- * 不与 server 抢着判定。
+ * 本 PR 一度在这里另起了一个裸 setTimeout, 上面四条一条都没有: 等交互和跑后台
+ * 任务时会误杀, 合盖睡眠会误杀, 而且只 reject 观察者、**不 abort 底层 turn** ——
+ * 渠道报错了, agent 还在继续跑并继续产生副作用(PR #1272 review 指出)。
+ * 同一条不变量在两处判定, 弱的那处只会先开火。已删除。
  */
-const TURN_IDLE_TIMEOUT_MS = 45 * 60_000;
 
 /**
  * 进度快照节流(trailing-edge): 事件密集时最多每 1.5s 发一帧, 与 IM 流式卡的
@@ -194,7 +192,7 @@ export function observeHookTurn(
   const finalizedSegments: string[] = [];
   let streamTail = '';
   let assistantText = '';
-  /** 最近一次定稿段所属的 claude 消息 uuid(同消息相邻块连拼用)。 */
+  /** 最近一次定稿段所属的 claude 消息标识(uuid, 缺失时退到 requestId)。 */
   let lastFinalUuid: string | undefined;
   const recomputeAssistantText = (): void => {
     const finalizedText = finalizedSegments.join('\n\n');
@@ -229,7 +227,6 @@ export function observeHookTurn(
     const runningBgTasks = new Set<string>();
     let waitingForBgTasks = false;
     let bgFallbackTimer: NodeJS.Timeout | undefined;
-    let idleTimer: NodeJS.Timeout | undefined;
     let pendingSettleUnsub: (() => void) | undefined;
     const clearBgTimer = (): void => {
       if (bgFallbackTimer) {
@@ -238,15 +235,11 @@ export function observeHookTurn(
       }
     };
     /**
-     * 摘监听 + 停所有定时器。收口的三条出口(resolve / reject / 调用方 stop)必须
+     * 摘监听 + 停定时器。收口的三条出口(resolve / reject / 调用方 stop)必须
      * 走同一份拆装 —— 之前是三处各抄一遍, 新加一个定时器就得记着补三处。
      */
     const teardown = (): void => {
       clearBgTimer();
-      if (idleTimer) {
-        clearTimeout(idleTimer);
-        idleTimer = undefined;
-      }
       pendingSettleUnsub?.();
       pendingSettleUnsub = undefined;
       progress?.stop();
@@ -261,16 +254,6 @@ export function observeHookTurn(
       teardown();
       reject(err);
     };
-    /** 静默兜底(见 TURN_IDLE_TIMEOUT_MS): 每个事件都重置, 所以只对真静默生效。 */
-    const armIdleTimer = (): void => {
-      if (idleTimer) clearTimeout(idleTimer);
-      idleTimer = setTimeout(() => {
-        const minutes = Math.round(TURN_IDLE_TIMEOUT_MS / 60_000);
-        log.warn(`[hook-runner] turn idle for ${minutes}min without any event: ${session.id}`);
-        failTurn(new Error(`hook turn produced no agent event for ${minutes} minutes`));
-      }, TURN_IDLE_TIMEOUT_MS);
-      idleTimer.unref?.();
-    };
     const armBgTimer = (): void => {
       clearBgTimer();
       bgFallbackTimer = setTimeout(() => {
@@ -280,10 +263,6 @@ export function observeHookTurn(
       bgFallbackTimer.unref?.();
     };
     const off = session.onEvent((ev: AgentEvent) => {
-      // 任何事件都算"还活着" —— 包括本观察器不处理的那些(账号级事件等)。
-      // 判据必须是"有没有事件", 不是"有没有正文": 一个只在跑工具、几十分钟
-      // 不出一个字的 turn 完全正常, 按正文判会把它误杀。
-      armIdleTimer();
       if (waitingForBgTasks) armBgTimer();
       if (ev.type === 'agent_task_update') {
         const data = ev.data as { taskId?: string; status?: string } | null;
@@ -307,7 +286,7 @@ export function observeHookTurn(
             // ③ codex item.completed: 该条全文, 覆盖已流增量。
             // ④ 未知 source: 保守用前缀启发式。
             const src = (ev as { source?: string }).source;
-            const meta = (ev as { agentMeta?: { uuid?: unknown } }).agentMeta;
+            const meta = (ev as { agentMeta?: { uuid?: unknown; requestId?: unknown } }).agentMeta;
             const claudeTail = src === 'claude-code' && meta === undefined;
             const segment = claudeTail
               ? streamTail + data.text
@@ -316,15 +295,29 @@ export function observeHookTurn(
                 : data.text.startsWith(streamTail)
                   ? data.text
                   : streamTail + data.text;
-            const uuid =
-              src === 'claude-code' && typeof meta?.uuid === 'string' ? meta.uuid : undefined;
-            const sameMessage = uuid !== undefined && uuid === lastFinalUuid;
+            // 消息边界标识。uuid 是 envelope 顶层的可选字段, **确实会缺**
+            // (extractAssistantMeta 允许它缺); 缺了就退到 requestId —— 那是
+            // Anthropic 的 message id(`msg_...`), 同一条消息的各 text block 共享、
+            // 不同消息不同, 正好是这里要的语义。
+            //
+            // 少了这道回退, 一条含多个 text block 的消息会被拆成多个"消息",
+            // 而 X 的 finalSegment() 只发最后一段 —— 回帖被从中间截断, 用户拿到
+            // 半句话(PR #1272 review 指出)。
+            const messageId =
+              src === 'claude-code'
+                ? typeof meta?.uuid === 'string'
+                  ? meta.uuid
+                  : typeof meta?.requestId === 'string'
+                    ? meta.requestId
+                    : undefined
+                : undefined;
+            const sameMessage = messageId !== undefined && messageId === lastFinalUuid;
             if (sameMessage && finalizedSegments.length > 0) {
               finalizedSegments[finalizedSegments.length - 1] += segment;
             } else {
               finalizedSegments.push(segment);
             }
-            lastFinalUuid = uuid;
+            lastFinalUuid = messageId;
             streamTail = '';
           } else {
             streamTail += data.text;
@@ -417,9 +410,6 @@ export function observeHookTurn(
       }
     });
     stopListening = teardown;
-    // 观察一开始就上表: turn 从头到尾一个事件都没有(SDK 起不来 / 进程没了)
-    // 同样要有出口, 不能只在收到过事件的路径上才受保护。
-    armIdleTimer();
   });
   // 调用方可能先 stop() 再决定不消费结果; 没有消费方的 rejection 不该炸进程。
   void finished.catch(() => undefined);
