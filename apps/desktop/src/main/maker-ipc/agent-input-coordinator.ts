@@ -42,6 +42,7 @@ import type {
 } from '../../shared/agentInputQueue.js';
 import {
   buildMakerUserMessage,
+  getAgentInputAttachmentBlockType,
   getAgentFacingText,
   projectionRetryText,
   sanitizeQueuedMessageForPersistence,
@@ -67,19 +68,49 @@ const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
 
+type QueuedAttachment = NonNullable<AgentInputQueuedMessage['files']>[number];
+
+function isMakerImageAttachment(file: Pick<QueuedAttachment, 'category' | 'ext'>): boolean {
+  return getAgentInputAttachmentBlockType(file.category, file.ext) === 'image';
+}
+
+function attachmentSourceKey(value: unknown): string | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  if (typeof record.url === 'string') return `url:${record.url}`;
+  if (typeof record.base64 === 'string') return `base64:${record.base64}`;
+  return null;
+}
+
 function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
-  const remainingFiles = item.files?.filter((file) => file.category !== 'image');
+  const remainingFiles = item.files?.filter((file) => !isMakerImageAttachment(file));
+  const remainingImageSources = new Set(
+    (remainingFiles ?? [])
+      .filter((file) => file.category === 'image')
+      .map(attachmentSourceKey)
+      .filter((source): source is string => source !== null),
+  );
   const chatMessage = { ...item.chatMessage };
-  delete chatMessage.images;
+  const remainingChatImages = chatMessage.images?.filter((image) => {
+    const source = attachmentSourceKey(image);
+    return source !== null && remainingImageSources.has(source);
+  });
+  if (remainingChatImages && remainingChatImages.length > 0) {
+    chatMessage.images = remainingChatImages;
+  } else {
+    delete chatMessage.images;
+  }
 
   // Renderer queue objects historically carry retryFiles as an extra presentation field even
-  // though it is not part of the main-process wire contract. Strip image entries when present so
-  // the replacement bubble cannot rehydrate the rejected attachment through an older renderer.
+  // though it is not part of the main-process wire contract. Strip only attachments that become
+  // maker image blocks: GIF keeps category=image for preview, but is sent as a file block.
   const compatibleChatMessage = chatMessage as typeof chatMessage & {
-    retryFiles?: Array<{ category?: string }>;
+    retryFiles?: QueuedAttachment[];
   };
   if (Array.isArray(compatibleChatMessage.retryFiles)) {
-    const retryFiles = compatibleChatMessage.retryFiles.filter((file) => file.category !== 'image');
+    const retryFiles = compatibleChatMessage.retryFiles.filter(
+      (file) => !isMakerImageAttachment(file),
+    );
     if (retryFiles.length > 0) compatibleChatMessage.retryFiles = retryFiles;
     else delete compatibleChatMessage.retryFiles;
   }
@@ -88,9 +119,16 @@ function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueu
   try {
     const parsed = JSON.parse(persistedContent) as unknown;
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      const record = parsed as Record<string, unknown>;
+      const remainingPersistedImages = Array.isArray(record.images)
+        ? record.images.filter((image) => {
+            const source = attachmentSourceKey(image);
+            return source !== null && remainingImageSources.has(source);
+          })
+        : [];
       persistedContent = JSON.stringify({
-        ...(parsed as Record<string, unknown>),
-        images: [],
+        ...record,
+        images: remainingPersistedImages,
       });
     }
   } catch {

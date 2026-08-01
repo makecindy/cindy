@@ -2108,7 +2108,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
   });
 
-  it('removes an unsupported image when retrying a zero-progress text-and-image turn', async () => {
+  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
     const h = createHarness();
     const sid = 'retry-unsupported-image-with-text';
     h.setHasAssistantProgressAfter(async () => false);
@@ -2123,6 +2123,16 @@ describe('AgentInputCoordinator send transaction', () => {
         category: 'image',
         mimeType: 'image/png',
         url: 'data:image/png;base64,aW1hZ2U=',
+      },
+      {
+        id: 'gif-1',
+        name: 'clip.gif',
+        path: '/repo/clip.gif',
+        ext: '.gif',
+        size: 6,
+        category: 'image',
+        mimeType: 'image/gif',
+        url: 'xdt-image://session/clip.gif',
       },
       {
         id: 'file-1',
@@ -2140,6 +2150,10 @@ describe('AgentInputCoordinator send transaction', () => {
         url: 'data:image/png;base64,aW1hZ2U=',
         mimeType: 'image/png',
         originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
       }],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     });
@@ -2149,6 +2163,10 @@ describe('AgentInputCoordinator send transaction', () => {
         url: 'data:image/png;base64,aW1hZ2U=',
         mimeType: 'image/png',
         originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
       }],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     };
@@ -2171,19 +2189,34 @@ describe('AgentInputCoordinator send transaction', () => {
       type: 'user',
       content: [
         { type: 'text', text: 'describe this' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
         { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
       ],
     });
     const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
-    expect(retried?.files).toEqual([expect.objectContaining({ id: 'file-1', category: 'pdf' })]);
-    expect(retried?.chatMessage.images).toBeUndefined();
+    expect(retried?.files).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
+    expect(retried?.chatMessage.images).toEqual([{
+      url: 'xdt-image://session/clip.gif',
+      mimeType: 'image/gif',
+      originalName: 'clip.gif',
+    }]);
     expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
     expect((retried?.chatMessage as typeof retried.chatMessage & {
       retryFiles?: AgentInputQueuedMessage['files'];
-    }).retryFiles).toEqual([expect.objectContaining({ id: 'file-1', category: 'pdf' })]);
+    }).retryFiles).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
     expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
       text: 'describe this',
-      images: [],
+      images: [{
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     });
   });
