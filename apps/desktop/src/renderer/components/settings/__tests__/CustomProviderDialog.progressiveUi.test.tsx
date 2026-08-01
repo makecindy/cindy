@@ -193,6 +193,40 @@ describe('CustomProviderDialog progressive connection settings', () => {
     expect(request.spec).not.toHaveProperty('requestPath');
   });
 
+  it('normalizes a full Anthropic Messages URL selected for Pi', async () => {
+    renderDialog();
+    fireEvent.click(screen.getByRole('tab', { name: 'settings.providers.custom.protocol.pi' }));
+    fireEvent.click(screen.getByText('settings.providers.custom.wireProtocol.piAnthropic'));
+    fireEvent.change(
+      screen.getByPlaceholderText('settings.providers.custom.fields.baseUrlPlaceholder'),
+      {
+        target: { value: 'https://token-plan.example/apps/anthropic/v1/messages' },
+      },
+    );
+    fireEvent.change(
+      screen.getByPlaceholderText('settings.providers.custom.fields.modelIdPlaceholder'),
+      { target: { value: 'qwen-test' } },
+    );
+
+    fireEvent.click(screen.getByText('settings.providers.custom.test.button'));
+
+    await waitFor(() =>
+      expect(window.electronAPI.maker.testProviderConnection).toHaveBeenCalledWith({
+        kind: 'adhoc',
+        spec: expect.objectContaining({
+          agent: 'pi',
+          baseUrl: 'https://token-plan.example/apps/anthropic',
+          wireProtocol: 'anthropic-messages',
+          modelId: 'qwen-test',
+        }),
+      }),
+    );
+    const request = vi.mocked(window.electronAPI.maker.testProviderConnection).mock.calls[0][0];
+    expect(request.kind).toBe('adhoc');
+    if (request.kind !== 'adhoc') throw new Error('expected an adhoc connection test');
+    expect(request.spec).not.toHaveProperty('requestPath');
+  });
+
   it('normalizes a full Chat Completions URL before saving', async () => {
     renderDialog();
     fireEvent.change(

@@ -150,7 +150,7 @@ function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
 }
 
 function defaultRequestPath(agent: DialogAgentKind, wireProtocol: ProviderWireProtocol): string {
-  if (agent === 'claude-code') return '/v1/messages';
+  if (agent === 'claude-code' || wireProtocol === 'anthropic-messages') return '/v1/messages';
   return wireProtocol === 'openai-chat' ? '/chat/completions' : '/responses';
 }
 
