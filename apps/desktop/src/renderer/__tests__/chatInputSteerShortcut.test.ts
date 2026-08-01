@@ -20,20 +20,14 @@ describe('ChatInput steer shortcut contract', () => {
     );
     const editorEnterBlock = extractBetween(
       chatInputSource,
-      '// Plain Enter keeps the existing queue semantics.',
-      'return true;\n        }\n        return false;',
+      '// Resolve the configurable send shortcut after structured list handling.',
+      'return false;\n      },\n    },',
     );
     const windowComposerSteerBlock = extractBetween(
       windowKeydownBlock,
       'if (\n        showStopButtonRef.current &&',
       "if (\n        currentState === 'listening'",
     );
-    const editorSteerChoice = extractBetween(
-      editorEnterBlock,
-      'const wantsSteer =',
-      "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
-    );
-
     expect(chatInputSource).toContain('const composerCanSubmitRef = useRef(false);');
     expect(chatInputSource).toContain('composerCanSubmitRef.current = !sendButtonDisabled;');
     expect(windowKeydownBlock).toContain('showStopButtonRef.current');
@@ -47,16 +41,16 @@ describe('ChatInput steer shortcut contract', () => {
     expect(chatInputSource).toContain('ComposerHardBreak');
     expect(chatInputSource).toContain('turnRunning={showStopButton}');
     expect(chatInputSource).toContain('onSteer={onQueueSteer ? handleQueueSteer : undefined}');
-    expect(editorEnterBlock).toContain("event.key === 'Enter' && !event.shiftKey && !event.altKey");
-    expect(editorEnterBlock).toContain("voiceInputStateRef.current !== 'listening'");
-    expect(editorEnterBlock).toContain(
-      "void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');",
-    );
+    expect(editorEnterBlock).toContain('resolveComposerEnterIntent(');
+    expect(editorEnterBlock).toContain('getComposerSendShortcutPreference()');
+    expect(editorEnterBlock).toContain('turnRunning: showStopButtonRef.current');
+    expect(editorEnterBlock).toContain("if (enterIntent === 'native') return false;");
+    expect(editorEnterBlock).toContain("if (enterIntent === 'ignore')");
+    expect(editorEnterBlock).toContain('void dispatchSendRef.current(enterIntent);');
     // Tiptap's document is current before React's send-button effect updates
-    // composerCanSubmitRef. The shortcut must not use that lagging UI mirror
-    // to choose between steer and normal queue delivery.
+    // composerCanSubmitRef. The resolver must not use that lagging UI mirror.
     expect(windowComposerSteerBlock).not.toContain('composerCanSubmitRef.current');
-    expect(editorSteerChoice).not.toContain('composerCanSubmitRef.current');
+    expect(editorEnterBlock).not.toContain('composerCanSubmitRef.current');
   });
 
   it('steers without an interrupt confirmation gate (same-turn injection)', () => {

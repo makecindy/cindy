@@ -193,6 +193,10 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
 import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
+import {
+  getComposerSendShortcutPreference,
+  resolveComposerEnterIntent,
+} from '@/hooks/useComposerSendShortcutPreference';
 import { createLogger } from '@/lib/logger';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import {
@@ -2008,42 +2012,36 @@ export function ChatInput({
           return false;
         }
 
-        // Plain Enter keeps the existing queue semantics. Cmd/Ctrl+Enter is
-        // only treated as 插话 while a turn is actually running; otherwise it
-        // falls back to the normal send path so the shortcut never becomes a
-        // "no active turn" footgun on an idle composer.
-        if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+        // Resolve the configurable send shortcut after structured list handling.
+        // Native mode keeps Enter available to Tiptap for paragraph breaks and
+        // IME composition; queue/steer modes continue through the existing
+        // send and voice state machines.
+        const enterIntent = resolveComposerEnterIntent(
+          event,
+          getComposerSendShortcutPreference(),
+          { turnRunning: showStopButtonRef.current },
+        );
+        if (enterIntent === 'native') return false;
+        if (enterIntent === 'ignore') {
           event.preventDefault();
+          return true;
+        }
+        if (enterIntent === null) return false;
+
+        event.preventDefault();
+        if (enterIntent === 'queue' || enterIntent === 'steer') {
           const isEditorEnterTarget = event.target instanceof Node && view.dom.contains(event.target);
           if (
             voiceInputStateRef.current === 'listening' &&
             voiceInputCanStopAndSendRef.current &&
             isEditorEnterTarget &&
-            !event.altKey &&
-            !event.repeat &&
-            !event.isComposing &&
             !isVoiceInputShortcutMatch(event, voiceShortcutRef.current)
           ) {
             event.stopPropagation();
-            const deliveryMode =
-              (event.metaKey || event.ctrlKey) &&
-              showStopButtonRef.current &&
-              composerCanSubmitRef.current
-                ? 'steer'
-                : 'queue';
-            void voiceInputStopAndSendRef.current(deliveryMode);
+            void voiceInputStopAndSendRef.current(enterIntent);
             return true;
           }
-          // Do not gate the delivery choice on composerCanSubmitRef here.
-          // Tiptap updates its document synchronously, while that ref mirrors
-          // sendButtonDisabled from a later React effect. A quick Cmd/Ctrl+Enter
-          // after typing could otherwise observe the previous empty state and
-          // incorrectly enqueue instead of steering the running turn.
-          const wantsSteer =
-            (event.metaKey || event.ctrlKey) &&
-            showStopButtonRef.current &&
-            voiceInputStateRef.current !== 'listening';
-          void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');
+          void dispatchSendRef.current(enterIntent);
           return true;
         }
         return false;

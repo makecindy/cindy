@@ -66,24 +66,22 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     );
     const enterBlock = extractBetween(
       tiptapKeydownBlock,
-      "if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {",
-      'const wantsSteer =',
+      '// Resolve the configurable send shortcut after structured list handling.',
+      'void voiceInputStopAndSendRef.current(enterIntent);',
     );
 
+    expect(enterBlock).toContain("if (enterIntent === 'queue' || enterIntent === 'steer') {");
     expect(enterBlock).toContain("voiceInputStateRef.current === 'listening'");
     expect(enterBlock).toContain('voiceInputCanStopAndSendRef.current');
     expect(enterBlock).toContain('const isEditorEnterTarget = event.target instanceof Node && view.dom.contains(event.target);');
     expect(enterBlock).toContain('isEditorEnterTarget');
     expect(enterBlock).not.toContain('isComposerEnterTarget(event.target)');
     expect(enterBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
-    expect(enterBlock).toContain(
-      "(event.metaKey || event.ctrlKey) &&\n              showStopButtonRef.current &&\n              composerCanSubmitRef.current\n                ? 'steer'\n                : 'queue'",
-    );
-    expect(enterBlock).toContain('!event.altKey');
-    expect(enterBlock).toContain('!event.repeat');
-    expect(enterBlock).toContain('!event.isComposing');
+    expect(enterBlock).toContain('resolveComposerEnterIntent(');
+    expect(enterBlock).toContain('getComposerSendShortcutPreference()');
+    expect(enterBlock).toContain('turnRunning: showStopButtonRef.current');
     expect(enterBlock).toContain('event.stopPropagation();');
-    expect(enterBlock).toContain('void voiceInputStopAndSendRef.current(deliveryMode);');
+    expect(chatInputSource).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
   });
 
   it('shows Enter shortcuts in the same label-dot-shortcut tooltip style as the voice input button', () => {
