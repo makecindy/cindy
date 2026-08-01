@@ -479,7 +479,12 @@ describe('deferred switch (turn running)', () => {
   });
 
   it('IPC 切换与 send / SET_MODEL 共用 session 锁', async () => {
-    const withSessionLock = vi.fn(async (_sessionId: string, task: () => Promise<unknown>) => task());
+    const withSessionLockSpy = vi.fn();
+    const withSessionLock: NonNullable<MakerSessionAgentSwitchHandlerDeps['withSessionLock']> =
+      async <T>(sessionId: string, task: () => Promise<T>): Promise<T> => {
+        withSessionLockSpy(sessionId, task);
+        return task();
+      };
     const { deps } = makeDeps({ withSessionLock });
     const ipc = new IpcHarness();
     registerMakerSessionAgentSwitchHandler(ipc, deps);
@@ -494,8 +499,8 @@ describe('deferred switch (turn running)', () => {
       undefined,
     );
 
-    expect(withSessionLock).toHaveBeenCalledTimes(1);
-    expect(withSessionLock).toHaveBeenCalledWith('s1', expect.any(Function));
+    expect(withSessionLockSpy).toHaveBeenCalledTimes(1);
+    expect(withSessionLockSpy).toHaveBeenCalledWith('s1', expect.any(Function));
   });
 
   it('applyPendingAgentSwitchIfIdle:直发路径可要求切换后同步 bootstrap', async () => {
