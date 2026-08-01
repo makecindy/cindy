@@ -1804,6 +1804,53 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
   });
 });
 
+describe('有效 cwd 解析相对写目标 / 系统可执行目录(第三十九批评审)', () => {
+  it('相对写目标按会话 cwd 解析:cwd 落系统目录 → 必问', () => {
+    // cwd=/etc 时 `cp /tmp/payload hosts` 实际写 /etc/hosts。
+    expect(classifyShellCommand('cp /tmp/payload hosts', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    expect(classifyShellCommand('cat /tmp/p > hosts', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    expect(classifyShellCommand('truncate -s 0 passwd', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    // 反例:cwd 在区内时同样的相对目标不该被打断。
+    expect(classifyShellCommand('cp /tmp/payload hosts', roots, { cwd: '/repo' })).toBe('prompt');
+    expect(classifyShellCommand('cat /tmp/p > out.txt', roots, { cwd: '/repo' })).toBe('prompt');
+  });
+
+  it('包装器改目录(env -C)后相对写目标按新目录解析', () => {
+    expect(classifyShellCommand('env -C /etc cp /tmp/payload hosts', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('env --chdir=/etc cp /tmp/payload hosts', roots)).toBe('prompt-each-time');
+    // 反例:改到区内目录 → 灰区。
+    expect(classifyShellCommand('env -C /repo cp /tmp/payload out.txt', roots)).toBe('prompt');
+  });
+
+  it('cd 跨段传递后相对写目标按新 cwd 解析', () => {
+    expect(classifyShellCommand('cd /etc && cp /tmp/payload hosts', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cd /repo && cp /tmp/payload out.txt', roots)).toBe('prompt');
+  });
+
+  it('系统可执行/库目录纳入红线,但放行 /usr/local(homebrew 前缀)', () => {
+    for (const c of [
+      'cp payload /usr/bin/tool',
+      'cp payload /bin/ls',
+      'install -m 755 payload /usr/sbin/svc',
+      'cp payload /usr/lib/libfoo.so',
+      'cp payload /sbin/init',
+      'cp payload /usr/share/x',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // /usr/local 是 FHS local 层级(homebrew),日常安装动作不该硬弹窗。
+    for (const c of [
+      'install -m 755 bin/x /usr/local/bin/x',
+      'cp payload /usr/local/lib/libx.dylib',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+    expect(isProtectedSystemPath('/usr/bin/tool')).toBe(true);
+    expect(isProtectedSystemPath('/usr/local/bin/tool')).toBe(false);
+    expect(isProtectedSystemPath('/bin/sh')).toBe(true);
+  });
+});
+
 describe('写通道全类扫面:truncate/原地编辑/解压落地/下载落盘(第三十八批评审)', () => {
   it('以 FILE 操作数为写目标的命令写系统路径 → 必问', () => {
     for (const c of [

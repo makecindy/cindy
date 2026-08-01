@@ -189,6 +189,11 @@ export function isSensitiveCredentialPath(target: string): boolean {
  */
 const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
   /^\/(?:etc|proc|sys|dev|boot|root)(?:\/|$)/i,             // POSIX 系统目录
+  // 系统可执行/库目录:覆盖它们等于替换系统程序(codex 报 `cp payload /usr/bin/tool` 只落灰区)。
+  // **刻意排除 `/usr/local`**:FHS 里那是 local 层级、非 OS 管理(homebrew 前缀),把它一并红线会
+  // 把 `install -m 755 bin/x /usr/local/bin/x` 这类日常开发动作变成硬弹窗。
+  /^\/(?:bin|sbin|lib(?:32|64|exec)?)(?:\/|$)/i,            // /bin /sbin /lib /lib64 /libexec
+  /^\/usr\/(?!local(?:\/|$))(?:bin|sbin|lib(?:32|64|exec)?|share|include|libdata)(?:\/|$)/i, // /usr/* 但放行 /usr/local
   /^\/var\/(?:log|db|root)(?:\/|$)/i,                       // 系统级 /var 子目录(filePathPolicy 一致)
   /^\/(?:System|Library)(?:\/|$)/i,                         // macOS 系统目录(根级 /Library,非 ~/Library);大小写不敏感 —— 默认 HFS+/APFS 大小写不敏感,`/system`/`/library` 仍落真实系统目录(copilot 报)
   /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录(带盘符)
@@ -1457,6 +1462,31 @@ function isMatchedPathPlaceholder(target: string): boolean {
   return target === '{}' || target === '{' || target === '}' || /^\$(?:\d+|[@*])$/.test(target);
 }
 
+/**
+ * 本段的写目标(shell 重定向 + 参数写通道)是否落在系统/受保护目录。相对目标按 `opts.cwd`
+ * (调用方已把包装器/`cd` 解析出的**有效 cwd** 放进来)解析;cwd 未知时相对目标不可静态求证 →
+ * 保守视为命中(fail-closed)。绝对目标不受 cwd 影响。
+ */
+function systemWriteTargetsInSegment(
+  segment: string,
+  tokens: string[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  const targets = [...redirectionTargets(segment), ...argumentWriteTargets(tokens)];
+  if (targets.length === 0) return false;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const base = opts.cwd ?? workspaceRoots[0];
+  return targets.some((t) =>
+    // 每个目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`)。
+    [t, t.replace(/\\(.)/g, '$1')].some((v) => {
+      const forward = toForwardSlashes(v);
+      // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
+      if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
+      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+    }));
+}
+
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
 function scopedDestructionNeedsConsent(
   command: string,
@@ -1477,6 +1507,10 @@ function scopedDestructionNeedsConsent(
       cwdUnknown: unwrapped.cwdUnknown,
     };
     const bin = executableName(tokens[0] ?? '');
+    // 系统写目标(shell 重定向 + 参数写通道)按**本段有效 cwd** 解析:相对目标必须挂到 unwrapped.cwd
+    // (含 `cd /etc &&` 跨段传递与 `env -C /etc` 段内改目录),否则 `cp /tmp/payload hosts` 配 cwd=/etc
+    // 实际覆盖 /etc/hosts 却因按 workspaceRoots 解析而只落灰区(codex 报)。
+    if (systemWriteTargetsInSegment(segment, tokens, workspaceRoots, segmentOpts)) return true;
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
       destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
@@ -1909,24 +1943,12 @@ export function classifyShellCommand(
   for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
   }
-  // 输出重定向目标落系统/受保护目录(`cat x > /etc/hosts`、`> C:\Windows\...`)= 高影响系统写,复用
-  // file-write 的系统红线,不能只当灰区重定向(codex 报)。canonical(darwin 抹平 /private)后判。
-  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
-  const writesProtectedSystemPath = (t: string): boolean =>
-    // 每个目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`),任一命中即升级。
-    [t, t.replace(/\\(.)/g, '$1')].some((v) =>
-      isProtectedSystemPath(canonicalPath(normalizeTarget(v, workspaceRoots), aliasFirmlinks)));
-  if (redirectionTargets(command).some(writesProtectedSystemPath)) return 'prompt-each-time';
-  // 以**位置参数**指定写入目标的命令(`cp payload /etc/hosts`、`install … /etc/hosts`、`| tee /etc/hosts`、
-  // `dd of=/etc/hosts`)与重定向同为写通道,同样过系统红线(codex 报)。按段判(包装器/管道已剥壳)。
-  // **必须用原始 command**(保留引号)而不是 quotesOnly:含空格的 DEST 靠引号定界
-  // (`cp payload "C:\Program Files\target"`),先去引号再分词会把单个 DEST 拆成多个 token、
-  // 只查到末尾碎片而漏掉受保护路径(codex 报)。tokenize 自身处理引号,取出的 token 即完整实参。
-  for (const { text } of splitExecutableSegments(command)) {
-    if (argumentWriteTargets(unwrapWrappers(tokenize(text))).some(writesProtectedSystemPath)) {
-      return 'prompt-each-time';
-    }
-  }
+  // 写系统/受保护目录(重定向 `cat x > /etc/hosts` 与参数写通道 `cp payload /etc/hosts`、
+  // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
+  // file-write 的系统红线。**判定放在 scopedDestructionNeedsConsent 的分段循环里**,因为那里已经
+  // 跨段跟踪有效 cwd(`cd /etc &&`)与包装器改目录(`env -C /etc`)—— 相对写目标必须按有效 cwd 解析
+  // (codex 报:按 workspaceRoots 解析会让 `cp /tmp/payload hosts` 配 cwd=/etc 漏成灰区)。
+  // 该循环的首个变体就是原始 command(保留引号),含空格的 DEST 靠引号定界不会被拆碎。
   // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
   // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
   // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。
