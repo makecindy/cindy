@@ -86,7 +86,11 @@ describe('interrupted continuation enqueue contract', () => {
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
     expect(dispatchedStart).toBeGreaterThan(-1);
     expect(dispatchedEnd).toBeGreaterThan(dispatchedStart);
-    expect(registerSource.slice(dispatchedStart, dispatchedEnd)).toMatch(
+    const dispatchedHook = registerSource.slice(dispatchedStart, dispatchedEnd);
+    expect(dispatchedHook).toMatch(
+      /!inputCoordinator\.isAutoResumePending\(sessionId\)/,
+    );
+    expect(dispatchedHook).toMatch(
       /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId\)/,
     );
 

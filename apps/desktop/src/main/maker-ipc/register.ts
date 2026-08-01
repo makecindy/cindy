@@ -7977,7 +7977,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (
         item.autoResume &&
         item.origin?.kind === 'scheduler' &&
-        typeof item.origin.runId === 'string'
+        typeof item.origin.runId === 'string' &&
+        // sendToAgent may synchronously emit the next recoverable terminal error.
+        // In that case the coordinator already owns a renewed auto-resume attempt;
+        // this older dispatch must not clear the same scheduler run's new claim.
+        !inputCoordinator.isAutoResumePending(sessionId)
       ) {
         clearSchedulerAutoResumePending(sessionId, item.origin.runId);
       }
