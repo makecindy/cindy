@@ -869,6 +869,40 @@ describe('message render todo grouping', () => {
     expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
   });
 
+  it('findLatestMessageTodoInsertion treats empty plan updates as clearing the pinned plan', () => {
+    const first = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'in_progress' }],
+    });
+    const clearTodo = tool('todo2', 'TodoWrite', { todos: [] });
+    const codex = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Run tests', status: 'in_progress' }],
+    });
+    const clearCodex = tool('plan2', 'update_plan', { plan: [] });
+
+    expect(findLatestMessageTodoInsertion([first, clearTodo])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodex])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion does not fall back to an older source when the latest Task update is unresolved', () => {
+    const todo = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Old todo source', status: 'in_progress' }],
+    });
+    const update = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'completed' }, 'update-1');
+
+    expect(findLatestMessageTodoInsertion([todo, update])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion clears the pinned plan when the latest Task update deletes the last task', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const remove = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      remove,
+    ])).toBeNull();
+  });
+
   it('parses Codex update_plan text and structured plan statuses', () => {
     expect(extractPlanTodos('update_plan', { text: '1. Read code\n2. Run tests' })).toEqual([
       { content: 'Read code', status: 'in_progress' },

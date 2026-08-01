@@ -26,6 +26,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   applyCodexPlanSnapshotOnDone,
   findLatestMessageTodoInsertion,
+  getLatestMessageTodoState,
   isAgentPlanToolName,
 } from '@cindy/maker-shared/message-render';
 import {
@@ -5445,8 +5446,9 @@ function ensureInitialMessages(sessionId: string): void {
       // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
       // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
       //
-      // 无锚点按 10 页(500 行)兜底；计划胶囊必须回填到最近计划边界,
-      // 否则 MessageStream 吞掉计划行后用户没有其它入口看到当前计划。
+      // 无锚点按 10 页(500 行)兜底。计划胶囊分两段:
+      //   - 当前窗口没有任何计划事件时,最多探测 10 页,避免从未使用计划的长会话全量拉历史;
+      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,继续回填直到该事件可解析或清空。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5461,11 +5463,15 @@ function ensureInitialMessages(sessionId: string): void {
       }
       let hasMore = serverMessagePageHasMore(existing);
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
+      const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
       let pagesFetched = 0;
       while (hasMore) {
         const needsAnchorBackfill =
           merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
-        const needsPlanBackfill = !historyRowsContainPlanSnapshot(merged);
+        const planState = historyRowsPlanBackfillState(merged);
+        const needsPlanBackfill = planState.hasPlanEvent
+          ? !planState.isResolved
+          : pagesFetched < MAX_PLAN_DISCOVERY_BACKFILL_PAGES;
         if (!needsAnchorBackfill && !needsPlanBackfill) break;
 
         pagesFetched += 1;
@@ -9499,8 +9505,15 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
 }
 
-function historyRowsContainPlanSnapshot(rows: Message[]): boolean {
-  return findLatestMessageTodoInsertion(mapServerMessages(rows)) !== null;
+function historyRowsPlanBackfillState(rows: Message[]): {
+  hasPlanEvent: boolean;
+  isResolved: boolean;
+} {
+  const state = getLatestMessageTodoState(mapServerMessages(rows));
+  return {
+    hasPlanEvent: state.hasPlanEvent,
+    isResolved: state.isResolved,
+  };
 }
 
 function shouldStopRemoteReconciliationAtOverlap(

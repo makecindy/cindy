@@ -111,6 +111,25 @@ function dbToolUseMessage(
   } as unknown as Message;
 }
 
+function dbToolResultMessage(
+  sessionId: string,
+  id: string,
+  toolUseId: string,
+  content: string,
+  createdAt: string,
+): Message {
+  return {
+    id,
+    clientId: `client-${id}`,
+    sessionId,
+    role: 'tool_result',
+    content,
+    toolUseId,
+    agentMeta: null,
+    createdAt,
+  } as unknown as Message;
+}
+
 function thinkingDbMessage(
   sessionId: string,
   id: string,
@@ -311,6 +330,88 @@ describe('makerChatStore active view tracking', () => {
       before: 'older-3-00',
     });
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-plan');
+  });
+
+  it('caps initial plan discovery backfill for sessions that never used plans', async () => {
+    const sessionId = sid('initial-plan-backfill-no-plan');
+    vi.mocked(messageService.list).mockClear();
+    const page = (prefix: string, startOffsetSeconds: number) =>
+      Array.from({ length: 50 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(page('latest', 1000));
+    for (let i = 0; i < 12; i += 1) {
+      vi.mocked(messageService.list).mockResolvedValueOnce(page(`older-${i}`, 900 - i * 100));
+    }
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(20);
+
+    expect(messageService.list).toHaveBeenCalledTimes(11);
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-9-00');
+  });
+
+  it('continues initial plan backfill past older sources until a latest TaskUpdate can be resolved', async () => {
+    const sessionId = sid('initial-plan-task-boundary');
+    vi.mocked(messageService.list).mockClear();
+    const fillerPage = (prefix: string, startOffsetSeconds: number) =>
+      Array.from({ length: 49 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    const latestTaskUpdate = dbToolUseMessage(
+      sessionId,
+      'latest-task-update',
+      'TaskUpdate',
+      { taskId: 'abc', status: 'completed' },
+      new Date(BASE_TIME.getTime() + 2_000_000).toISOString(),
+    );
+    const olderTodo = dbToolUseMessage(
+      sessionId,
+      'older-todo',
+      'TodoWrite',
+      { todos: [{ content: 'Older source should not stop backfill', status: 'in_progress' }] },
+      new Date(BASE_TIME.getTime() + 1_000_000).toISOString(),
+    );
+    const taskCreate = dbToolUseMessage(
+      sessionId,
+      'task-create',
+      'TaskCreate',
+      { subject: 'Collect logs' },
+      new Date(BASE_TIME.getTime() - 2_000).toISOString(),
+    );
+    const taskCreateResult = dbToolResultMessage(
+      sessionId,
+      'task-create-result',
+      'tool-task-create',
+      'Task #abc created successfully: Collect logs',
+      new Date(BASE_TIME.getTime() - 1_000).toISOString(),
+    );
+
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce([...fillerPage('latest', 2000), latestTaskUpdate])
+      .mockResolvedValueOnce([...fillerPage('older-1', 1000), olderTodo])
+      .mockResolvedValueOnce([taskCreate, taskCreateResult]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises(10);
+
+    expect(messageService.list).toHaveBeenCalledTimes(3);
+    expect(messageService.list).toHaveBeenNthCalledWith(3, sessionId, {
+      limit: 50,
+      before: 'older-1-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('task-create');
   });
 
   it('enterView disposer leaves the session', () => {

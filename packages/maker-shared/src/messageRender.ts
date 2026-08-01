@@ -181,6 +181,14 @@ export interface MessageRenderTodoInsertion {
   source: MessageRenderTodoSource;
 }
 
+export interface MessageRenderLatestTodoState {
+  insertion: MessageRenderTodoInsertion | null;
+  hasPlanEvent: boolean;
+  isResolved: boolean;
+  latestPlanIndex: number;
+  latestInsertionIndex: number;
+}
+
 export interface MessageRenderTodoGroupingOptions {
   keyPrefix?: string;
 }
@@ -436,6 +444,22 @@ export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSou
   messages: readonly TMessage[],
   options: MessageRenderTodoGroupingOptions = {},
 ): MessageRenderTodoInsertion | null {
+  return getLatestMessageTodoState(messages, options).insertion;
+}
+
+export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  options: MessageRenderTodoGroupingOptions = {},
+): MessageRenderLatestTodoState {
+  let latestPlanIndex = -1;
+  let latestPlanMessage: TMessage | null = null;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    latestPlanIndex = index;
+    latestPlanMessage = message;
+  }
+
   let latest: MessageRenderTodoInsertion | null = null;
   let latestIndex = -1;
   for (const [index, insertion] of findMessageTodoInsertions(messages, options)) {
@@ -444,7 +468,17 @@ export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSou
       latest = insertion;
     }
   }
-  return latest;
+  const hasPlanEvent = latestPlanIndex >= 0;
+  const insertionBelongsToLatestEvent = latestIndex === latestPlanIndex;
+  const latestEventClearsPlan =
+    latestPlanMessage !== null && isExplicitPlanClearEvent(latestPlanMessage);
+  return {
+    insertion: insertionBelongsToLatestEvent ? latest : null,
+    hasPlanEvent,
+    isResolved: !hasPlanEvent || insertionBelongsToLatestEvent || latestEventClearsPlan,
+    latestPlanIndex,
+    latestInsertionIndex: latestIndex,
+  };
 }
 
 export interface CodexPlanSnapshotApplyResult<
@@ -569,6 +603,22 @@ export function extractTodos(toolInput: unknown): MessageRenderTodoItem[] | null
     })
     .filter((item): item is MessageRenderTodoItem => item !== null);
   return out.length > 0 ? out : null;
+}
+
+function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): boolean {
+  const toolName = toolNameOf(message);
+  const input = readRecord(toolInputOf(message));
+  if (toolName === 'TodoWrite') return Array.isArray(input?.todos) && input.todos.length === 0;
+  if (toolName === 'update_plan') {
+    return (
+      (Array.isArray(input?.items) && input.items.length === 0) ||
+      (Array.isArray(input?.plan) && input.plan.length === 0)
+    );
+  }
+  if (toolName === 'TaskUpdate' || toolName === 'TaskGet') {
+    return normalizeTaskStatus(input?.status) === 'deleted';
+  }
+  return false;
 }
 
 function buildToolResultLookup<TMessage extends MessageRenderSourceMessageLike>(
