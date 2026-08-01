@@ -565,6 +565,8 @@ import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
   claimSchedulerInterruptedTurnRecovery,
   configureSchedulerInterruptedTurnRecoveryLifecycle,
+  resetSchedulerInterruptedTurnRecovery,
+  type SchedulerInterruptedTurnRecoveryResetReason,
 } from '../scheduler-host/schedulerInterruptedTurnRecoveryBridge.js';
 import {
   InterruptedTurnAutoResumeGuard,
@@ -686,12 +688,22 @@ export function noteSilentStopUserSend(sessionId: string): void {
 }
 
 /**
- * 非 renderer 中止路径(IM `!stop` 等)调用:重置 silent-stop 守卫,让挂在
- * 1.5s 决策窗里的自动续跑判为 superseded(经 settle('skip') 收口),不在用户
- * 明确喊停后"原地复活"。renderer 走 ABORT_SESSION handler 内的同名调用。
+ * 非 renderer 中止路径(IM `!stop` 等)调用:统一重置 silent-stop 与 interrupted-turn
+ * 恢复生命周期,让排期和正在投递的续跑都判为 superseded,不在用户明确喊停后
+ * "原地复活"。renderer 的 Stop / clear / 全部停止也走同一个内部边界。
  */
-export function noteSilentStopSessionReset(sessionId: string): void {
+function noteAutoResumeSessionReset(
+  sessionId: string,
+  reason: SchedulerInterruptedTurnRecoveryResetReason = 'session-reset',
+): void {
   silentStopAutoResumeGuard.noteSessionReset(sessionId);
+  interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
+  resetSchedulerInterruptedTurnRecovery(sessionId, reason);
+  autoResumeBookkeeping.teardown(sessionId);
+}
+
+export function noteSilentStopSessionReset(sessionId: string): void {
+  noteAutoResumeSessionReset(sessionId);
 }
 
 /**
@@ -3788,7 +3800,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
         // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
         // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
-        autoResumeBookkeeping.teardown(session.id);
+        noteAutoResumeSessionReset(session.id, 'session-closed');
         agentInputCoordinatorHolder?.onSessionClosed(session.id);
         // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
         pendingCredentialSwitchHolder?.onSessionClosed(session.id);
@@ -3971,12 +3983,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {
     closeSession: (sessionId) => maker.closeSession(sessionId),
     clearBackgroundActivity: clearClaudeSessionBackgroundActivity,
-    noteSessionReset: (sessionId) => {
-      silentStopAutoResumeGuard.noteSessionReset(sessionId);
-      interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
-      // 「全部停止」是会话级止损:已排期的自动续跑必须撤掉,别在用户喊停后又补发一条。
-      autoResumeBookkeeping.teardown(sessionId);
-    },
+    // 「全部停止」是会话级止损:已排期或正在投递的自动续跑必须撤掉,别在用户喊停后
+    // 又补发一条；Schedule waiter 与 renderer coordinator 由同一入口一起收口。
+    noteSessionReset: noteAutoResumeSessionReset,
     notifyGoalStop: (sessionId) => goalStopObserver?.(sessionId),
   });
 
@@ -8640,9 +8649,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isRemoteInvoke: remoteInvoke,
     });
     const projection = inputCoordinator.clearSession(sid, clearBoundary);
-    silentStopAutoResumeGuard.noteSessionReset(sid);
-    interruptedTurnAutoResumeGuard.noteSessionReset(sid);
-    autoResumeBookkeeping.teardown(sid);
+    noteAutoResumeSessionReset(sid);
     // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
     // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
     // 缓存仍在),下次 send 会把旧血缘灌进用户刚显式清空的上下文。
@@ -8687,9 +8694,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.ABORT_SESSION, async (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     markWorkerManualInterruptIfKnown(sessionId, 'abort_session');
-    silentStopAutoResumeGuard.noteSessionReset(sessionId);
-    interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
-    autoResumeBookkeeping.teardown(sessionId);
+    noteAutoResumeSessionReset(sessionId);
     const sess = getStableSessionForTurnBoundary(sessionId);
     if (!sess) return;
     handleAgentIslandSessionStopped(sess);

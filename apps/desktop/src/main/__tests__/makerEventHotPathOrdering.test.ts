@@ -193,6 +193,24 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('uses one auto-resume reset boundary for stop, clear, abort, and session close', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const clearSessionHandler = source.match(
+      /ipcMain\.handle\(MAKER_INVOKE\.INPUT_CLEAR_SESSION,[\s\S]*?\n {2}\}\);/,
+    )?.[0];
+    const abortSessionHandler = source.match(
+      /ipcMain\.handle\(MAKER_INVOKE\.ABORT_SESSION,[\s\S]*?\n {2}\}\);/,
+    )?.[0];
+
+    expect(source).toContain('function noteAutoResumeSessionReset(');
+    expect(source).toContain('noteSessionReset: noteAutoResumeSessionReset,');
+    expect(clearSessionHandler).toContain('noteAutoResumeSessionReset(sid);');
+    expect(abortSessionHandler).toContain('noteAutoResumeSessionReset(sessionId);');
+    expect(wireSessionSource).toContain("noteAutoResumeSessionReset(session.id, 'session-closed');");
+    expect(source).toContain('resetSchedulerInterruptedTurnRecovery(sessionId, reason);');
+    expect(source).toContain('autoResumeBookkeeping.teardown(sessionId);');
+  });
+
   it('clears Agent Island after mandatory closed-session cleanup', () => {
     const wireSessionSource = extractWireSessionSource();
     const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
