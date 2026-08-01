@@ -7891,9 +7891,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               return;
             }
             // 入队成功后沿用普通聊天语义丢弃被压住的错误；Schedule 的 run 接管标记
-            // 不能在这里清：resumed 只表示续跑项已经进队，真正交给模型要等
-            // onDispatchedUserTurn。派发前被 Stop / clear / ghost block 丢弃时则由
-            // onDiscardedQueuedMessage 立即失败同一个 run。
+            // 不能在这里清：resumed 只表示续跑项已经进队。标记会在续跑项即将进入
+            // vendor 前清掉，让同步返回的新 terminal error 只能靠**本 attempt**重新接管；
+            // 派发前被 Stop / clear / ghost block 丢弃时仍由 discard/undispatched 回调
+            // 立即失败同一个 run。
             autoResumeBookkeeping.discardSuppressedError(sessionId);
             log.info('interrupted-turn auto-resume dispatched', { sessionId });
           } catch (err) {
@@ -8080,6 +8081,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     onUserMessageRewritten: (sessionId, item, info) =>
       broadcastGhostMessageRewritten({ sessionId, clientId: item.clientId, ...info }),
     beforeDispatchUserTurn: (sessionId, item) => {
+      if (
+        item.autoResume &&
+        item.origin?.kind === 'scheduler' &&
+        typeof item.origin.runId === 'string'
+      ) {
+        // 旧 attempt 的接管标记不能跨进下一次 vendor dispatch：sendToAgent 可能在
+        // 返回前同步发出新的 terminal error。先清旧标记后，可恢复错误会由同一条
+        // onResumableTurnError 链重新 begin；认证/计费等确定性错误则保持未接管，
+        // runner 会立即失败。若在真正 dispatch 前取消，下面的 undispatched 回调
+        // 仍会按 item.origin 精确通知对应 run，不会静默丢失。
+        clearSchedulerAutoResumePending(sessionId, item.origin.runId);
+      }
       // hook 续跑回流的**权威归属点**: 在 vendor dispatch 之前(本回调被 await), 所以
       // 观察器挂上就不丢正文开头, 而 live session 此刻必然已就绪。clientId 对得上的
       // 才是目标续跑轮 —— 绕过 coordinator 的 turn(silent-stop 自动续跑)不走这里,

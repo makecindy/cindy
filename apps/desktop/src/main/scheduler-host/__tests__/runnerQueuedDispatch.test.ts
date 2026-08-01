@@ -469,6 +469,39 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(harness.listenerCount()).toBe(0);
   });
 
+  it('does not let the previous auto-resume claim hide a deterministic error from the resumed turn', async () => {
+    let autoResumePending = true;
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => autoResumePending });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+
+    harness.emit({
+      type: 'error',
+      data: { message: 'Selected model is at capacity.', isTerminal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await Promise.resolve();
+    expect(harness.listenerCount()).toBe(1);
+
+    // Production clears the previous claim at the resumed turn's pre-vendor
+    // boundary. A synchronous deterministic error does not create a new claim.
+    autoResumePending = false;
+    harness.emit({
+      type: 'error',
+      data: { message: 'authentication failed', isTerminal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+    await expect(firePromise).rejects.toThrow('authentication failed');
+    expect(harness.listenerCount()).toBe(0);
+  });
+
   it('defers (no duplicate enqueue) when the schedule already has a queued prompt', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: true, hasQueued: true });
