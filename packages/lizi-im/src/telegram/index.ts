@@ -327,7 +327,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // remove 返回 void 且吞掉异常(文件锁/权限/磁盘错误), 只能回读确认。标志没删掉
     // 却照常连上, 会让用户看到"已上线"、重启后却又回到 offline —— 与写标志失败
     // 同源的静默失败, 同样宁可停在明确错误上。
-    if (this.isOfflineFlagSet()) {
+    // 只有明确读到"不存在"才算删成功: 'unknown'(存储在 remove→read 窗口里失效)
+    // 同样 fail closed, 否则删除失败会被当成成功放过。
+    if (this.offlineFlagState() !== 'absent') {
       this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return false;
     }
@@ -340,8 +342,19 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return this.connect(token);
   }
 
+  /**
+   * 下线标志的三态判定。`secrets.read` 对「文件不存在」与「读取失败」都返回 null,
+   * 包内无从区分 —— 只能先问 `isAvailable()`。存储不可用时返回 `unknown`,
+   * **调用方必须 fail closed**: 把"读不出来"当成"已删除"会让删除失败被静默放过,
+   * 用户看到已上线、重启后却又回到 offline。
+   */
+  private offlineFlagState(): 'set' | 'absent' | 'unknown' {
+    if (!this.host.secrets.isAvailable()) return 'unknown';
+    return this.host.secrets.read(OFFLINE_SECRET_KEY)?.trim() === '1' ? 'set' : 'absent';
+  }
+
   private isOfflineFlagSet(): boolean {
-    return this.host.secrets.read(OFFLINE_SECRET_KEY)?.trim() === '1';
+    return this.offlineFlagState() === 'set';
   }
 
   // 生命周期静默: dispose / 重连不向 owner 发任何播报(桌面端频繁重启会刷屏)。
@@ -405,7 +418,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         // (Windows 文件锁尤甚, 见 engineering-conventions「文件系统差异」), 必须
         // 回读确认 —— 否则用户重填 token 看似恢复、重启后又掉回 offline。
         this.host.secrets.remove(OFFLINE_SECRET_KEY);
-        if (this.isOfflineFlagSet()) {
+        if (this.offlineFlagState() !== 'absent') {
           this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
           this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
           this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;

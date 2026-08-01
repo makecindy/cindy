@@ -97,10 +97,17 @@ export function readTelegramRemoteStatus(): TelegramRemoteStatus {
  * 争抢。远程能做的只有「让它别收消息」，上线是目标机本人的决定，只能本地操作。
  */
 export async function setTelegramRemoteOnline(arg: unknown): Promise<TelegramRemoteStatus> {
-  const online =
-    !!arg && typeof arg === 'object' && !Array.isArray(arg)
-      ? (arg as Record<string, unknown>).online === true
-      : false;
+  // 形状先严格校验再谈语义: 缺字段 / null / 数组 / 字符串 / online 非 boolean
+  // 一律报错, 不做"猜意图"的宽松解析。这是跨设备入口, 把畸形 payload 默默当成
+  // 下线会让控制端的字段名笔误变成一次静默的真实副作用 —— 用户莫名其妙被下线,
+  // 而调用方永远发现不了自己发错了。
+  if (!arg || typeof arg !== 'object' || Array.isArray(arg)) {
+    throw new Error('[INVALID_PARAMS] expected an object payload { online: boolean }');
+  }
+  const online = (arg as Record<string, unknown>).online;
+  if (typeof online !== 'boolean') {
+    throw new Error('[INVALID_PARAMS] "online" must be a boolean');
+  }
   if (online) {
     log.warn('remote set-online(true) rejected: bringing a device online is local-only');
     throw new Error('[FORBIDDEN] bringing a device online remotely is not allowed');

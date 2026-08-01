@@ -508,6 +508,28 @@ describe('TelegramIM', () => {
     ctx.host.secrets.write = originalWrite;
   });
 
+  it('存储在 remove→read 窗口失效: 读不出来不算删成功, 必须 fail closed', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // remove 看似成功(不抛), 但紧接着存储不可用 —— read 一律返回 null。
+    // 若把"读不到"当成"已删除", 删除失败就被静默放过: 用户看到已上线,
+    // 重启后存储恢复、标志还在, 又被打回 offline。
+    const originalRemove = ctx.host.secrets.remove;
+    const originalAvailable = ctx.host.secrets.isAvailable;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+      if (name === 'telegram-bot-offline') ctx.host.secrets.isAvailable = () => false;
+    };
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    expect(im.getStatus().kind).toBe('error');
+    // 标志确实还在盘上 —— 证明"读不出来"时放行会是真的错。
+    ctx.host.secrets.isAvailable = originalAvailable;
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
   it('下线标志删不掉时上线要报错, 不能假装已上线(重启会打回 offline)', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:set-online')!({ online: false });

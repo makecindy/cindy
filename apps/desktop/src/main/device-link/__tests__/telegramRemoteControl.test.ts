@@ -101,14 +101,38 @@ describe('telegram 远程上下线', () => {
     expect(goOffline).not.toHaveBeenCalled();
   });
 
-  it('脏 payload(缺参 / 非对象 / online 非 true)一律按下线处理, 绝不误上线', async () => {
-    getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
-    for (const bad of [undefined, null, {}, 'online', 42, [], { online: 'true' }, { online: 1 }]) {
+  it('畸形 payload 一律报错, 不执行任何副作用(不猜意图)', async () => {
+    getStatus.mockReturnValue({ kind: 'connected', appId: '999' });
+    // 跨设备入口不做宽松解析: 把 {} / {offline:true} 这类笔误默默当成下线, 会让
+    // 目标机莫名其妙停止收消息, 而调用方永远发现不了自己发错了。
+    for (const bad of [
+      undefined,
+      null,
+      'online',
+      42,
+      [],
+      [{ online: false }],
+      {},
+      { online: 'false' },
+      { online: 0 },
+      { offline: true },
+    ]) {
       goOffline.mockClear();
       goOnline.mockClear();
-      await setTelegramRemoteOnline(bad);
-      expect(goOnline, `payload ${JSON.stringify(bad)} 不得触发上线`).not.toHaveBeenCalled();
-      expect(goOffline).toHaveBeenCalledTimes(1);
+      await expect(
+        setTelegramRemoteOnline(bad),
+        `payload ${JSON.stringify(bad) ?? 'undefined'} 应被拒绝`,
+      ).rejects.toThrow(/INVALID_PARAMS/);
+      expect(goOffline).not.toHaveBeenCalled();
+      expect(goOnline).not.toHaveBeenCalled();
     }
+  });
+
+  it('合法的 { online: false } 正常执行下线', async () => {
+    getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
+    await expect(setTelegramRemoteOnline({ online: false })).resolves.toMatchObject({
+      kind: 'offline',
+    });
+    expect(goOffline).toHaveBeenCalledTimes(1);
   });
 });
