@@ -3017,7 +3017,8 @@
         "origin": {
           "public": "公開",
           "organization": "チーム共有",
-          "local": "ローカル"
+          "local": "ローカル",
+          "custom": "カスタム"
         },
         "emptyFiltered": "一致するプラグインがありません",
         "useAction": "使用",
@@ -3030,7 +3031,8 @@
           "public": "公開",
           "organization": "組織",
           "personal": "個人",
-          "local": "ローカル"
+          "local": "ローカル",
+          "custom": "カスタム"
         },
         "install": "インストール",
         "details": "詳細",
@@ -3056,10 +3058,69 @@
         },
         "securityTitle": "インストールと権限",
         "securityDescription": "メインプロセスでサイズと SHA-256、プラグインマニフェストを検証してからアトミックにインストールします。初回インストール後は自動的に有効になり、プラグインページからいつでも無効化できます。更新では現在の有効/無効の状態が維持されます。",
+        "customSecurityDescription": "このプラグインは追加したカスタムマーケット由来で、Cindy サーバーによる整合性検証は行われていません。インストール前にメインプロセスでマニフェストを検証します。初回インストール後は自動で有効になり、プラグインページでいつでも無効化できます。",
         "noPermissions": "このプラグインは追加機能を宣言していません。",
         "installConfirmTitle": "「{{name}}」をインストールしますか？",
         "installConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してからインストールします。インストール完了後は自動的に有効になり、いつでも無効化や設定の変更ができます。",
-        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。"
+        "customInstallConfirmDescription": "カスタムマーケット由来のプラグインのため、サーバーによる整合性検証は行われません。インストール前にマニフェストを検証します。インストール後は自動で有効になり、プラグインページでいつでも無効化・設定変更ができます。",
+        "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。",
+        "sources": {
+          "addMarketplace": "プラグインマーケットを追加…",
+          "dialogTitle": "プラグインマーケットを追加",
+          "dialogDescription": "GitHub リポジトリ、Git URL、またはローカルフォルダーからプラグインマーケットを追加します。",
+          "learnMore": "詳しく見る",
+          "sourceLabel": "ソース",
+          "sourcePlaceholder": "openai/plugins または git@github.com:org/repo.git",
+          "refLabel": "Git 参照",
+          "refPlaceholder": "メインブランチ",
+          "sparseLabel": "スパースパス",
+          "sparsePlaceholder": "1 行に 1 パス（例: plugins/codex）",
+          "gitUnavailable": "Git がインストールされていないか、バージョンが 2.25 未満です。Git ソースは利用できません。ローカルフォルダーのソースは引き続き利用できます。",
+          "listTitle": "追加済みのマーケット",
+          "pluginCount": "{{count}} 個のプラグイン",
+          "sourceError": "読み込み失敗",
+          "localBadge": "ローカル",
+          "defaultRef": "デフォルトブランチ",
+          "neverSynced": "未同期",
+          "refresh": "更新",
+          "remove": "削除",
+          "removeConfirmTitle": "マーケット「{{name}}」を削除しますか？",
+          "removeConfirmDescription": "削除すると、このマーケットのプラグインは表示されなくなります。インストール済みのプラグインは保持されます。",
+          "close": "閉じる",
+          "add": "マーケットを追加",
+          "errors": {
+            "invalidSource": "ソースの形式が無効です。GitHub の owner/repo、Git URL、またはローカルフォルダーのパスを指定してください。",
+            "gitUnavailable": "Git がインストールされていないか、バージョンが 2.25 未満のため、Git ソースを追加できません。",
+            "cloneAuthFailed": "このリポジトリにアクセスできません。プライベートリポジトリの場合は、先にシステムで Git 認証（credential helper または SSH key）を設定してください。",
+            "credentialsNotAllowed": "ソースの URL にユーザー名やパスワードを含めることはできません。システムの Git 認証（credential helper または SSH key）を使用してください。",
+            "cloneFailed": "リポジトリのクローンに失敗しました。ネットワークまたはプロキシ設定を確認してから再試行してください。",
+            "refNotFound": "指定された Git 参照が見つかりません。ブランチ名またはタグ名を確認してください。",
+            "manifestMissing": "このソースに対応する marketplace.json マニフェストが見つかりません。",
+            "duplicate": "このマーケットはすでに追加されています。",
+            "notFound": "このマーケットは存在しないか、すでに削除されています。"
+          },
+          "guide": {
+            "title": "カスタムプラグインマーケットガイド",
+            "intro": "プラグインマーケットとは、マニフェストファイルを持つ Git リポジトリまたはローカルフォルダーで、Cindy プラグインのセットを配布するためのものです。",
+            "structureTitle": "ディレクトリ構造",
+            "structureBody": "マーケットには 1 つのマニフェストファイルと、プラグインごとのディレクトリが必要です。各プラグインディレクトリには有効な ghost.json（プラグインの身分証）が必要です。",
+            "structureLabelManifest": "マニフェスト",
+            "structureLabelGhostCard": "プラグインカード",
+            "structureLabelEntry": "プラグインのエントリー",
+            "structureNote": "マニフェストは次のいずれかに配置できます:",
+            "manifestTitle": "マニフェスト形式",
+            "manifestBody": "name はマーケットの一意の識別子です（追加後はこの名前で管理します）。plugins 配列の source はリポジトリ内のプラグインディレクトリを相対パスで指します。{\"source\": \"local\", \"path\": \"…\"} のオブジェクト形式も利用できます。",
+            "sourceTitle": "ソース形式",
+            "sourceBody": "GitHub 省略形 owner/repo、完全な Git URL（https / ssh / git@）、ローカルフォルダーパス（~ 可）を指定できます。Git 参照にはブランチ、タグ、commit を指定でき、空ならデフォルトブランチです。スパースパスは 1 行に 1 つ指定し、リポジトリの一部のサブディレクトリだけをチェックアウトします（大きなリポジトリ向け）。",
+            "authTitle": "プライベートリポジトリ",
+            "authBody": "認証はすべてシステムの Git 設定に依存し、Cindy は Git の認証情報を一切保存しません。SSH の場合: 利用可能な key がマシンに設定されている必要があります。組織が SAML SSO を強制している場合は、GitHub の SSH key 設定で Configure SSO からその組織に key を承認してください。HTTPS の場合: Personal Access Token を使用し、システムの credential helper に保存します。",
+            "rulesTitle": "インストールルール",
+            "rulesBody": "プラグイン id はグローバルに一意で先着順です。インストール済みプラグインとの競合は明示されます。cindy- などの公式予約プレフィックスを使うプラグインはカスタムマーケットからインストールできません。インストール前にプラグインが宣言する権限をすべて表示し、確認するとインストールが完了して自動的に有効になります。",
+            "copy": "ガイドをコピー",
+            "copied": "ガイドをクリップボードにコピーしました。",
+            "copyFailed": "コピーに失敗しました。もう一度お試しください。"
+          }
+        }
       },
       "install": "プラグインをインストール…",
       "empty": "まだプラグインがインストールされていません",
@@ -5229,6 +5290,14 @@
       "aria": "下部に戻り、{{count}} 件の新着メッセージを表示",
       "label_one": "{{count}} 件の新着",
       "label_other": "{{count}} 件の新着"
+    },
+    "messageNavRail": {
+      "aria": "質問ナビゲーション",
+      "jumpAria": "{{index}} 番目の質問へ移動：{{preview}}",
+      "attachmentOnly_one": "添付ファイル {{count}} 件",
+      "attachmentOnly_other": "添付ファイル {{count}} 件",
+      "hiddenEarlier_one": "これより前に {{count}} 件の質問",
+      "hiddenEarlier_other": "これより前に {{count}} 件の質問"
     },
     "messageActionBar": {
       "copy": "メッセージをコピー",

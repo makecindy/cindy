@@ -24,6 +24,10 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+} from '../utils/readBoundedFile.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -38,7 +42,7 @@ const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
 function shouldSkip(name: string): boolean {
   if (name.startsWith('.')) return true; // .git / .DS_Store / .disabled 等
-  if (name === 'node_modules') return true;
+  if (name.toLowerCase() === 'node_modules') return true;
   if (name.toLowerCase().endsWith('.cindy')) return true; // 上次打包产物,防套娃
   return false;
 }
@@ -537,11 +541,27 @@ export async function scaffoldGhostDir(
 }
 
 /**
- * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
- * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
- * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ * 打包核心:校验 + 收集 + 生成 zip buffer,不写盘。packGhostDir(产物进源码目录)
+ * 与 packGhostDirToFile(产物去调用方指定路径,自定义市场安装管道用)共用,
+ * 保证两条路径的校验与打包规则永远一致。
  */
-export async function packGhostDir(dir: string): Promise<ForgePackResult> {
+async function buildGhostPackage(
+  dir: string,
+  /**
+   * 调用方**已经校验过**的规范根(realpath 产物)。传入时,这里会核对自己解析出的
+   * realpath 仍等于它,不等即拒。
+   *
+   * 为什么必须由调用方给:光靠"我自己 realpath 一次、再拿它当 containWithin 的锚点"
+   * 是**自我参照**——插件目录或其父目录在调用方校验之后、这里解析之前被换成指向
+   * 目录外的符号链接时,解析结果就是那个外部目录,以它为锚点的一切包含性判定自然
+   * 全部通过,外部 payload 会被打包进去(外部目录只要留着同样的 ghost.json,清单
+   * 对账也发现不了)。锚点必须来自上游的既有结论,不能在下游重新发明。
+   */
+  expectedRealDir?: string,
+): Promise<
+  | { ok: true; buf: Buffer; manifest: GhostManifest }
+  | Exclude<ForgePackResult, { ok: true }>
+> {
   try {
     let stat: fs.Stats;
     try {
@@ -552,13 +572,42 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     if (!stat.isDirectory()) {
       return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `不是目录:${dir}` };
     }
+    // 后续所有读取都以 realpath 根做 containWithin 复核:O_NOFOLLOW 只管最后
+    // 一个路径分量,校验后中间目录被换成根外链接的窗口靠它堵。
+    const realDir = await fs.promises.realpath(dir);
+    if (expectedRealDir !== undefined && realDir !== expectedRealDir) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: '插件目录在打包前被替换(实际规范路径与调用方校验过的不一致)',
+      };
+    }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
+    // 读到的**原始字节**要留作不可变快照:后面生成 zip 时逐文件重新读盘,若
+    // ghost.json 在"这里校验"与"写入 zip"之间被并发改写(保 id/version、加权限
+    // 声明),返回的 manifest 与包里那份就会分叉——安装侧拿返回值做审阅比对,
+    // 装进去的却是改过的包。快照写入让"校验的 = 返回的 = 包里的"三者恒等。
+    // 与市场发现/安装层同一把闸(单句柄限量读,拒符号链接):打包输入目录是
+    // 用户可写的活目录,按路径无界 readFile 会跟随链接读到目录外、或被超大
+    // 文件耗尽内存。快照字节也必须出自这把闸,不能再按路径重读。
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        await fs.promises.readFile(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'),
+      const bytes = await readBoundedFileNoFollow(
+        path.join(realDir, GHOST_MANIFEST_FILE),
+        GHOST_MANIFEST_MAX_BYTES,
+        { containWithin: realDir },
       );
+      if (bytes === null) {
+        return {
+          ok: false,
+          errorCode: 'MANIFEST_INVALID',
+          message: `${GHOST_MANIFEST_FILE} 不是普通文件或超过 ${GHOST_MANIFEST_MAX_BYTES} 字节上限`,
+        };
+      }
+      manifestBytes = bytes;
+      manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {
         ok: false,
@@ -592,7 +641,9 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     for (const rel of mustExist) {
       try {
-        const st = await fs.promises.stat(path.join(dir, rel));
+        // lstat 与收集侧(walk 的 Dirent)同一语义:声明的入口若是符号链接,
+        // stat 会判"在场"而 walk 不收集它,装出的包缺入口、运行期才 404。
+        const st = await fs.promises.lstat(path.join(dir, rel));
         if (!st.isFile()) throw new Error('not a file');
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
@@ -605,19 +656,23 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       const skillMdPath = path.join(dir, ...item.dir.split('/'), 'SKILL.md');
       let content: string;
       try {
-        content = await fs.promises.readFile(skillMdPath, 'utf-8');
+        // 同一把单句柄限量闸:超限在读之前拒,符号链接不放行。
+        const bytes = await readBoundedFileNoFollow(skillMdPath, GHOST_SKILL_MD_MAX_BYTES, {
+          containWithin: realDir,
+        });
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `${item.dir}/SKILL.md 不是普通文件或超过 ${GHOST_SKILL_MD_MAX_BYTES} 字节上限`,
+          };
+        }
+        content = bytes.toString('utf-8');
       } catch (err) {
         return {
           ok: false,
           errorCode: 'ENTRY_MISSING',
           message: `读取 ${item.dir}/SKILL.md 失败:${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-      if (Buffer.byteLength(content, 'utf8') > GHOST_SKILL_MD_MAX_BYTES) {
-        return {
-          ok: false,
-          errorCode: 'MANIFEST_INVALID',
-          message: `${item.dir}/SKILL.md 过大(上限 ${GHOST_SKILL_MD_MAX_BYTES} 字节)`,
         };
       }
       const consistencyError = checkSkillMdConsistency(content, item);
@@ -636,7 +691,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const maxFiles = manifest.node ? MAX_NODE_FILES : MAX_BASIC_FILES;
     const maxTotalBytes = manifest.node ? MAX_NODE_TOTAL_BYTES : MAX_BASIC_TOTAL_BYTES;
     const seenPackPaths = new Set<string>();
-    const walk = async (cur: string, relBase: string): Promise<ForgePackResult | null> => {
+    const walk = async (cur: string, relBase: string): Promise<Exclude<ForgePackResult, { ok: true }> | null> => {
       const entries = await fs.promises.readdir(cur, { withFileTypes: true });
       for (const e of entries) {
         if (shouldSkip(e.name)) continue;
@@ -654,6 +709,15 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
+        } else if (e.isSymbolicLink()) {
+          // 符号链接一律不穿透。此前是静默跳过——OneDrive 未水合占位文件、
+          // 仓库里提交的链接都会被悄悄丢出包外,校验说"在场"、包里却没有,
+          // 运行期才 404。改为结构化拒绝,错误可见。
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `源码目录含符号链接条目,不允许打包:${rel}`,
+          };
         } else if (e.isFile()) {
           files.push({ rel, abs });
           totalBytes += (await fs.promises.stat(abs)).size;
@@ -674,12 +738,39 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
 
-    // 5) 打包到源码目录自身(2026-07 Lizi 定案:产物跟源码住一起,拿取直观)。
-    // 文件收集在写盘之前完成 + shouldSkip 跳过 *.cindy,自身产物不会进包;
-    // 同名覆盖:同 id 同版本重打包语义上就是同一个包。
+    // 5) 生成 zip buffer。文件收集在此之前完成 + shouldSkip 跳过 *.cindy,
+    // 产物自身不会进包;写盘位置由调用方决定(packGhostDir 进源码目录,
+    // packGhostDirToFile 进调用方指定路径)。
     const zip = new JSZip();
+    // 身份卡用第 1 步的不可变快照,其余文件走同一把单句柄限量闸现读:walk 里
+    // 的 stat 只是预算预估,文件可在 walk 与此处之间被换成超大文件或符号链接
+    // (网络共享/并发写)。真正的边界在读取时按**剩余总预算**强制执行,任何
+    // 文件被并发改动(换链接/删除/膨胀)都结构化拒绝,不把无界字节交给 JSZip。
+    let packedBytes = 0;
     for (const f of files) {
-      zip.file(f.rel, await fs.promises.readFile(f.abs));
+      let content: Buffer;
+      if (f.rel === GHOST_MANIFEST_FILE) {
+        content = manifestBytes;
+      } else {
+        let bytes: Buffer | null;
+        try {
+          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes, {
+            containWithin: realDir,
+          });
+        } catch {
+          bytes = null;
+        }
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'TOO_LARGE',
+            message: `文件在打包期间被并发改动或超出剩余体积预算:${f.rel}`,
+          };
+        }
+        content = bytes;
+      }
+      packedBytes += content.byteLength;
+      zip.file(f.rel, content);
     }
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
@@ -690,9 +781,7 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    const cindyPath = path.join(dir, `${manifest.id}-${manifest.version}.cindy`);
-    await fs.promises.writeFile(cindyPath, buf);
-    return { ok: true, cindyPath, manifest };
+    return { ok: true, buf, manifest };
   } catch (err) {
     return {
       ok: false,
@@ -700,6 +789,57 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
       message: err instanceof Error ? err.message : String(err),
     };
   }
+}
+
+/**
+ * 校验 + 打包一个意识源码目录。产物写到源码目录自身(<id>-<version>.cindy,
+ * 同名覆盖——同 id 同版本重打包语义上就是同一个包),用户在自己的意识目录里
+ * 就能拿到成品;出错返回结构化分类,agent 按 message 修源码即可,不抛异常。
+ */
+export async function packGhostDir(dir: string): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir);
+  if (!built.ok) return built;
+  // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
+  // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
+  const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
+  try {
+    await fs.promises.writeFile(cindyPath, built.buf);
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * 打包到调用方指定的绝对路径。自定义市场安装管道用:市场克隆缓存是只读事实,
+ * 产物落到临时目录,装完即删。校验与打包规则与 packGhostDir 完全一致。
+ *
+ * `expectedRealDir` **必填**:这条路径的输入来自用户可写的市场目录,打包器不能
+ * 自己 realpath 一次就当锚点(自我参照,见 buildGhostPackage 的说明)。做成必填
+ * 而不是可选,是为了让新调用方无法跳过——签名逼着它交出上游已经校验过的规范根。
+ */
+export async function packGhostDirToFile(
+  dir: string,
+  destPath: string,
+  expectedRealDir: string,
+): Promise<ForgePackResult> {
+  const built = await buildGhostPackage(dir, expectedRealDir);
+  if (!built.ok) return built;
+  try {
+    // 0o600:临时包可能落在共享 /tmp,不给同机其它用户读权限。
+    await fs.promises.writeFile(destPath, built.buf, { flag: 'wx', mode: 0o600 });
+  } catch (err) {
+    return {
+      ok: false,
+      errorCode: 'INTERNAL',
+      message: `写入打包产物失败:${err instanceof Error ? err.message : String(err)}`,
+    };
+  }
+  return { ok: true, cindyPath: destPath, manifest: built.manifest };
 }
 
 /**

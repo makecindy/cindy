@@ -49,6 +49,8 @@ export interface ConfirmDialogProps {
   autoFocusConfirm?: boolean;
   /** Disable the primary action until caller-owned validation has passed. */
   confirmDisabled?: boolean;
+  /** 嵌套在其它 Dialog 内时提升层级；普通确认继续使用默认层级。 */
+  zIndex?: number;
   /** Destructive actions use the semantic destructive theme tokens. */
   confirmVariant?: 'default' | 'destructive';
   /**
@@ -85,6 +87,7 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
   onTertiary,
+  zIndex = 10000,
 }: ConfirmDialogProps) {
   const { t } = useTranslation();
   const resolvedConfirmText = confirmText ?? t('commonUi.confirmDialog.confirm');
@@ -123,7 +126,7 @@ export function ConfirmDialog({
             'data-[state=open]:animate-confirm-overlay-in',
             'data-[state=closed]:animate-confirm-overlay-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          style={{ WebkitAppRegion: 'no-drag', zIndex } as React.CSSProperties}
         />
         <AlertDialog.Content
           className={cn(
@@ -134,7 +137,7 @@ export function ConfirmDialog({
             'data-[state=open]:animate-confirm-content-in',
             'data-[state=closed]:animate-confirm-content-out',
           )}
-          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400 } as React.CSSProperties}
+          style={{ WebkitAppRegion: 'no-drag', maxWidth: maxWidth ?? 400, zIndex } as React.CSSProperties}
           {...(!description ? { 'aria-describedby': undefined } : {})}
           onEscapeKeyDown={(e) => {
             if (loading) e.preventDefault();

@@ -6,12 +6,20 @@
  */
 
 import fs from 'node:fs';
+import JSZip from 'jszip';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir, type ForgeScaffoldTemplate } from '../forge';
+import {
+  FORGE_GUIDE,
+  packGhostDir,
+  packGhostDirToFile,
+  scaffoldGhostDir,
+  type ForgeScaffoldTemplate,
+} from '../forge';
 import { GhostManager } from '../GhostManager';
 
 let workDir: string;
@@ -65,6 +73,154 @@ describe('packGhostDir', () => {
     expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
 
     await fs.promises.rm(r.cindyPath, { force: true });
+  });
+
+  it('打包进 zip 的 ghost.json 是校验时的快照,并发改写不生效(防 TOCTOU)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    // 模拟"校验通过后、写入 zip 前"目录被并发改写:保 id/version,偷加权限声明。
+    // 若打包时重读磁盘,包里的 manifest 会与返回值(安装侧审阅比对的依据)分叉。
+    const tampered = JSON.stringify({ ...GOOD_MANIFEST, slots: ['tool', 'network'], network: { allow: ['x.test'] } });
+    const realRead = fs.promises.readFile;
+    let ghostReads = 0;
+    const spy = vi
+      .spyOn(fs.promises, 'readFile')
+      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
+        if (String(target).endsWith('ghost.json')) {
+          ghostReads += 1;
+          if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
+        }
+        return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
+      }) as typeof fs.promises.readFile);
+    try {
+      const r = await packGhostDir(dir);
+      expect(r.ok, JSON.stringify(r)).toBe(true);
+      if (!r.ok) return;
+      const zip = await JSZip.loadAsync(await realRead(r.cindyPath));
+      const packedManifest = JSON.parse(await zip.file('ghost.json')!.async('string'));
+      // 包里的 manifest 必须与返回值一致(校验时的快照),不能是改写后的版本。
+      expect(packedManifest.slots).toEqual(GOOD_MANIFEST.slots);
+      expect(packedManifest).not.toHaveProperty('network');
+      await fs.promises.rm(r.cindyPath, { force: true });
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('ghost.json 为符号链接或超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
+    // 符号链接:目标是合法清单也不放行——"符号链接一律不穿透"覆盖身份卡本身,
+    // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
+    const outside = path.join(workDir, 'outside-ghost.json');
+    await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
+    const linked = path.join(workDir, 'src-linked');
+    await fs.promises.mkdir(linked, { recursive: true });
+    await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
+    await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
+    expect(await packGhostDir(linked)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    // 超限:JSON 本身合法(合法清单 + 尾随空白撑体积),必须在读取层按大小拒,
+    // 不能等到 JSON.parse/validate——那时数 GB 的文件已经进内存了。
+    const big = path.join(workDir, 'src-big');
+    await fs.promises.mkdir(big, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(big, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST) + ' '.repeat(600 * 1024),
+    );
+    await fs.promises.writeFile(path.join(big, 'main.js'), '// brain');
+    const r = await packGhostDir(big);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+    if (!r.ok) expect(r.message).toContain('不是普通文件或超过');
+  });
+
+  it('zip 阶段逐文件走剩余预算限量闸:walk 之后被撑大的文件结构化拒绝', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    // 33MiB 零填充:超总预算(32MiB),但压缩后极小——旧实现无界 readFile 后
+    // 整包压缩体积检查照样通过,超大字节已经进过内存。
+    await fs.promises.writeFile(path.join(dir, 'blob.bin'), Buffer.alloc(33 * 1024 * 1024));
+    // 模拟"walk 预算预估时文件还小,zip 读取时已被并发撑大":walk 的 stat 看
+    // 到 10 字节。句柄侧 handle.stat 不受此 spy 影响,读到真实大小。
+    const realStat = fs.promises.stat;
+    const spy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (
+      target: Parameters<typeof fs.promises.stat>[0],
+      ...rest: unknown[]
+    ) => {
+      const st = await (realStat as (...a: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+      if (String(target).endsWith('blob.bin')) {
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: 10 });
+      }
+      return st;
+    }) as typeof fs.promises.stat);
+    try {
+      const r = await packGhostDir(dir);
+      expect(r).toMatchObject({ ok: false, errorCode: 'TOO_LARGE' });
+      if (!r.ok) expect(r.message).toContain('打包期间被并发改动或超出剩余体积预算');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('打包器不自我参照:realpath 与调用方给定的规范根不一致 → 拒绝', async () => {
+    // 只靠"自己 realpath 一次、再拿它当 containWithin 锚点"是自我参照:目录在
+    // 调用方校验之后、这里解析之前被换成指向外部的链接时,锚点就是那个外部目录,
+    // 包含性判定全部通过,外部 payload 会被打包。锚点必须由上游给。
+    const outside = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// outside payload',
+      'secret.txt': 'EXFILTRATED',
+    });
+    const staged = path.join(workDir, 'staged');
+    await fs.promises.mkdir(staged, { recursive: true });
+    const pluginDir = path.join(staged, 'alpha');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    await fs.promises.writeFile(path.join(pluginDir, 'main.js'), '// brain');
+    // 调用方(安装管道)校验时拿到的规范根。
+    const expectedRealDir = await fs.promises.realpath(pluginDir);
+    // 校验之后被换成指向外部目录的链接(外部目录留着同样的 ghost.json)。
+    await fs.promises.rm(pluginDir, { recursive: true, force: true });
+    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir);
+
+    const dest = path.join(workDir, 'out.cindy');
+    const r = await packGhostDirToFile(pluginDir, dest, expectedRealDir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+    if (!r.ok) expect(r.message).toContain('打包前被替换');
+    // 外部 payload 一个字节都没进包(产物根本没生成)。
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('规范根一致时正常打包(锚点校验不误伤)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    const dest = path.join(workDir, 'ok.cindy');
+    const realDir = await fs.promises.realpath(dir);
+    const r = await packGhostDirToFile(realDir, dest, realDir);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(fs.existsSync(dest)).toBe(true);
+  });
+
+  it('结构守卫:forge.ts 与 ghostLocaleFiles.ts 不允许出现按路径的 readFile', async () => {
+    // 打包管道触及的都是用户可写目录,所有读取必须走 readBoundedFileNoFollow
+    // 系列;任何一处退回按路径 readFile 都会重开"检查与读取两次打开"的窗口。
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    for (const rel of ['../forge.ts', '../ghostLocaleFiles.ts']) {
+      const source = await fs.promises.readFile(path.join(here, rel), 'utf8');
+      expect(source, rel).not.toMatch(/fs\.promises\.readFile\(/);
+      expect(source, rel).not.toMatch(/readFileSync\(/);
+      expect(source, rel).toMatch(/readBoundedFileNoFollow/);
+    }
   });
 
   it('打包跳过开发残留:.git / node_modules / 隐藏文件 / 旧 .cindy 不进包', async () => {

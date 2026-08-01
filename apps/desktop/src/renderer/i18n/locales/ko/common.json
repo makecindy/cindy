@@ -3017,7 +3017,8 @@
         "origin": {
           "public": "공개",
           "organization": "팀 공유",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
         "useAction": "사용",
@@ -3030,7 +3031,8 @@
           "public": "공개",
           "organization": "조직",
           "personal": "개인",
-          "local": "로컬"
+          "local": "로컬",
+          "custom": "사용자 지정"
         },
         "install": "설치",
         "details": "상세",
@@ -3056,10 +3058,69 @@
         },
         "securityTitle": "설치 및 권한",
         "securityDescription": "메인 프로세스에서 크기와 SHA-256 및 플러그인 매니페스트를 검증한 뒤 원자적으로 설치합니다. 최초 설치 후 자동으로 활성화되며 플러그인 페이지에서 언제든지 비활성화할 수 있습니다. 업데이트 시 현재 활성화 상태가 유지됩니다.",
+        "customSecurityDescription": "이 플러그인은 추가한 사용자 지정 마켓에서 제공되며 Cindy 서버의 무결성 검증을 거치지 않았습니다. 설치 전에 메인 프로세스에서 매니페스트를 검증합니다. 처음 설치하면 자동으로 활성화되며 플러그인 페이지에서 언제든 비활성화할 수 있습니다.",
         "noPermissions": "이 플러그인은 추가 기능을 선언하지 않았습니다.",
         "installConfirmTitle": "‘{{name}}’을(를) 설치할까요?",
         "installConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 설치합니다. 설치가 완료되면 자동으로 활성화되며, 언제든지 비활성화하거나 설정을 변경할 수 있습니다.",
-        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다."
+        "customInstallConfirmDescription": "사용자 지정 마켓의 플러그인으로 서버 무결성 검증을 거치지 않았으며, 설치 전에 매니페스트를 검증합니다. 설치 후 플러그인이 자동으로 활성화되며 언제든 비활성화하거나 설정을 변경할 수 있습니다.",
+        "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다.",
+        "sources": {
+          "addMarketplace": "플러그인 마켓 추가…",
+          "dialogTitle": "플러그인 마켓 추가",
+          "dialogDescription": "GitHub 리포지토리, Git URL 또는 로컬 폴더에서 플러그인 마켓을 추가합니다.",
+          "learnMore": "자세히 알아보기",
+          "sourceLabel": "소스",
+          "sourcePlaceholder": "openai/plugins 또는 git@github.com:org/repo.git",
+          "refLabel": "Git 참조",
+          "refPlaceholder": "기본 브랜치",
+          "sparseLabel": "스파스 경로",
+          "sparsePlaceholder": "한 줄에 하나의 경로(예: plugins/codex)",
+          "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만입니다. Git 소스는 사용할 수 없으며 로컬 폴더 소스는 계속 사용할 수 있습니다.",
+          "listTitle": "추가된 마켓",
+          "pluginCount": "플러그인 {{count}}개",
+          "sourceError": "읽기 실패",
+          "localBadge": "로컬",
+          "defaultRef": "기본 브랜치",
+          "neverSynced": "동기화되지 않음",
+          "refresh": "새로고침",
+          "remove": "제거",
+          "removeConfirmTitle": "마켓 \"{{name}}\"을(를) 제거할까요?",
+          "removeConfirmDescription": "제거하면 이 마켓의 플러그인이 더 이상 표시되지 않습니다. 설치된 플러그인은 유지됩니다.",
+          "close": "닫기",
+          "add": "마켓 추가",
+          "errors": {
+            "invalidSource": "소스 형식이 올바르지 않습니다. GitHub owner/repo, Git URL 또는 로컬 폴더 경로를 사용하세요.",
+            "gitUnavailable": "Git이 설치되어 있지 않거나 버전이 2.25 미만이므로 Git 소스를 추가할 수 없습니다.",
+            "cloneAuthFailed": "이 리포지토리에 접근할 수 없습니다. 비공개 리포지토리의 경우 먼저 시스템에 Git 인증(credential helper 또는 SSH key)을 구성하세요.",
+            "credentialsNotAllowed": "소스 URL에 사용자 이름이나 비밀번호를 포함할 수 없습니다. 시스템 Git 인증(credential helper 또는 SSH key)을 사용하세요.",
+            "cloneFailed": "리포지토리를 클론하지 못했습니다. 네트워크 또는 프록시 설정을 확인한 후 다시 시도하세요.",
+            "refNotFound": "지정한 Git 참조를 찾을 수 없습니다. 브랜치 또는 태그 이름을 확인하세요.",
+            "manifestMissing": "이 소스에서 지원되는 marketplace.json 매니페스트를 찾을 수 없습니다.",
+            "duplicate": "이 마켓은 이미 추가되어 있습니다.",
+            "notFound": "이 마켓이 존재하지 않거나 이미 제거되었습니다."
+          },
+          "guide": {
+            "title": "사용자 지정 플러그인 마켓 가이드",
+            "intro": "플러그인 마켓은 매니페스트 파일을 포함하는 Git 리포지토리 또는 로컬 폴더로, Cindy 플러그인 세트를 배포하는 데 사용됩니다.",
+            "structureTitle": "디렉터리 구조",
+            "structureBody": "마켓에는 매니페스트 파일 하나와 플러그인별 디렉터리가 필요합니다. 각 플러그인 디렉터리에는 유효한 ghost.json(플러그인 신원 카드)이 있어야 합니다.",
+            "structureLabelManifest": "매니페스트",
+            "structureLabelGhostCard": "플러그인 카드",
+            "structureLabelEntry": "플러그인 진입점",
+            "structureNote": "매니페스트는 다음 위치 중 하나에 둘 수 있습니다:",
+            "manifestTitle": "매니페스트 형식",
+            "manifestBody": "name은 마켓의 고유 식별자입니다(추가 후 이 이름으로 관리합니다). plugins 배열의 source는 리포지토리 내 플러그인 디렉터리를 상대 경로로 가리킵니다. {\"source\": \"local\", \"path\": \"…\"} 객체 형식도 지원합니다.",
+            "sourceTitle": "소스 형식",
+            "sourceBody": "GitHub 약칭 owner/repo, 전체 Git URL(https / ssh / git@), 로컬 폴더 경로(~ 지원)를 사용할 수 있습니다. Git 참조에는 브랜치, 태그 또는 commit을 입력하고, 비우면 기본 브랜치를 사용합니다. 스파스 경로는 한 줄에 하나씩 입력하며 리포지토리의 지정된 하위 디렉터리만 체크아웃합니다(대형 리포지토리에 유용).",
+            "authTitle": "비공개 리포지토리",
+            "authBody": "인증은 전적으로 시스템 Git 구성에 의존하며 Cindy는 Git 자격 증명을 저장하지 않습니다. SSH: 이 머신에 사용 가능한 key가 구성되어 있어야 합니다. 조직이 SAML SSO를 강제하는 경우 GitHub SSH key 설정에서 Configure SSO로 해당 조직에 key를 승인해야 합니다. HTTPS: Personal Access Token을 사용하고 시스템 credential helper에 저장합니다.",
+            "rulesTitle": "설치 규칙",
+            "rulesBody": "플러그인 id는 전역적으로 고유하며 선착순입니다. 설치된 플러그인과의 충돌은 명확히 표시됩니다. cindy- 같은 공식 예약 접두사를 사용하는 플러그인은 사용자 지정 마켓에서 설치할 수 없습니다. 설치 전에 플러그인이 선언한 권한을 모두 보여주며, 확인하면 설치가 완료되고 자동으로 활성화됩니다.",
+            "copy": "가이드 복사",
+            "copied": "가이드를 클립보드에 복사했습니다.",
+            "copyFailed": "복사에 실패했습니다. 다시 시도하세요."
+          }
+        }
       },
       "install": "플러그인 설치…",
       "empty": "아직 설치된 플러그인이 없습니다",
@@ -5229,6 +5290,14 @@
       "aria": "맨 아래로 이동, {{count}}개의 새 메시지 보기",
       "label_one": "새 메시지 {{count}}개",
       "label_other": "새 메시지 {{count}}개"
+    },
+    "messageNavRail": {
+      "aria": "질문 탐색",
+      "jumpAria": "{{index}}번째 질문으로 이동: {{preview}}",
+      "attachmentOnly_one": "첨부파일 {{count}}개",
+      "attachmentOnly_other": "첨부파일 {{count}}개",
+      "hiddenEarlier_one": "이전 질문 {{count}}개",
+      "hiddenEarlier_other": "이전 질문 {{count}}개"
     },
     "messageActionBar": {
       "copy": "메시지 복사",

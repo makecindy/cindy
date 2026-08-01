@@ -103,7 +103,6 @@ export const RENDER_WINDOW_FIRST_PAINT_ITEMS = 30;
 const RENDER_WINDOW_GROWTH_ITEMS = 80;
 const RENDER_WINDOW_BOUNDARY_LOOKBACK_ITEMS = 24;
 
-
 function isEditableKeyboardTarget(target: EventTarget | null): boolean {
   if (!(target instanceof HTMLElement)) return false;
   const tagName = target.tagName;
@@ -184,6 +183,13 @@ import { PrevMessageJumpChip, firstNonEmptyLine } from './PrevMessageJumpChip';
 import { useTopRightChipSlot } from './TopRightChipStack';
 import { usePrevUserMessageInView } from './usePrevUserMessageInView';
 import { JumpToBottomChip } from './JumpToBottomChip';
+import { MessageNavRail } from './MessageNavRail';
+import {
+  NAV_RAIL_JUMP_TOP_OFFSET_PX,
+  deriveNavRailEntries,
+  shouldBackfillForNavRail,
+} from './messageNavRailModel';
+import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
 import {
   decideAutoFillAction,
@@ -629,12 +635,14 @@ export function shouldBlockAssistantFork(
  * 只回答"是不是本 turn 最后一条正文"。export 仅供单测使用。
  */
 function isCompletedAssistantMessage(message: ChatMessage): boolean {
-  return message.turnCompleted === true ||
+  return (
+    message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
     (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
     // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),
     // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
-    message.turnUsageDetails !== undefined;
+    message.turnUsageDetails !== undefined
+  );
 }
 
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
@@ -1079,7 +1087,10 @@ export function buildRenderItems(
             result = messages[j].content;
           }
           const adjacentTs = Date.parse(messages[j].createdAt ?? '');
-          if (Number.isFinite(adjacentTs) && (resultTsMs === undefined || adjacentTs > resultTsMs)) {
+          if (
+            Number.isFinite(adjacentTs) &&
+            (resultTsMs === undefined || adjacentTs > resultTsMs)
+          ) {
             resultTsMs = adjacentTs;
           }
           j++;
@@ -2165,7 +2176,11 @@ export function groupWorkRuns(items: RenderItem[], isSessionStreaming: boolean):
       continue;
     }
     const itemStartMs = renderItemStartMs(it);
-    if (prevEndMs !== null && itemStartMs !== null && itemStartMs - prevEndMs > HISTORY_GAP_SPLIT_MS) {
+    if (
+      prevEndMs !== null &&
+      itemStartMs !== null &&
+      itemStartMs - prevEndMs > HISTORY_GAP_SPLIT_MS
+    ) {
       flushTurn(false);
       // 空洞切开的新段没有已知的 turn 开场边界:那条 user 行在空洞的**另一侧**(或压根没加载)。
       // 继续拿它当起点会让新段的时长横跨整个空洞 —— 正是本 PR 要修的那种谎报(实测 47 小时)。
@@ -3366,6 +3381,9 @@ export function MessageStream({
   // scrollIntoView 直接可用,无需扩窗。user 消息总是单独 message item(不进
   // segment / 不被丢弃),所以这里只 unwrap type==='message' && role==='user'。
   // previewById 同源,截断/去噪都在 PrevMessageJumpChip 的 truncatePreview 里做。
+  // 预览存显示文本而非原始 content:chip 是导航条缺席/截断时的兜底入口,其
+  // title/aria 与刻度预览承担同一职责,hook 消息的隐藏 prompt/<thread_context>
+  // 与 Orca 行的 JSON 原文同样不能裸奔(userMessageDisplayText,PR #830 review)。
   const { userMessageIds, previewById } = useMemo(() => {
     const ids: string[] = [];
     const map = new Map<string, string>();
@@ -3375,7 +3393,7 @@ export function MessageStream({
       // 静默失效(review P2)。
       if (it.message.isSyntheticTrigger) continue;
       ids.push(it.message.clientId);
-      map.set(it.message.clientId, it.message.content);
+      map.set(it.message.clientId, resolveUserDisplayText(it.message));
     }
     return { userMessageIds: ids, previewById: map };
   }, [visibleRenderItems]);
@@ -3416,6 +3434,119 @@ export function MessageStream({
   // 所以不再需要旧的"通知父级 DiffToggle 让位"那套互斥 —— DiffToggle 与
   // chip 在栈里各占一行,自然共存。
   const prevUserMsgVisible = prevUserMsgId !== null;
+
+  // ── message-nav-rail ──
+  // 左缘"提问导航条":条目覆盖**全量已加载** messages(不同于 chip 的窗口内
+  // 派生 —— 导航条要给整段历史画刻度)。目标可能在渲染窗口外,跳转走下面的
+  // layout effect:复用 focus-jump 的"先扩窗到目标、下一轮再滚动"两段式,
+  // 以及 chip-jump 的 expandWindow/onLoadMore 抑制协议。
+  const navRailEntries = useMemo(() => deriveNavRailEntries(messages), [messages]);
+
+  // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
+  // 提问"chip —— 同一个导航任务只保留一套入口。导航条缺席(短对话 / 窄窗 /
+  // 矮视口)或截断了更早刻度的超长会话里 chip 回归兜底(PR #830 review)。
+  const [navRailCoversNav, setNavRailCoversNav] = useState(false);
+
+  // ── nav-rail 空闲补页 ──
+  // 老会话打开时只加载尾部切片,导航条(整段对话的地图)可能凑不齐条目。
+  // 首屏落定后的空闲期沿现有 onLoadMore 通道自动向前补页,直到提问数达标 /
+  // 翻到历史起点 / 轮数预算用完(目标与预算的设计依据见
+  // shouldBackfillForNavRail 一族常量注释)。与"跳转补齐"同属程序化翻页,
+  // prepend 的滚动补偿照走 F-SYNC-2 协议:调用前快照 scrollHeight/scrollTop。
+  // 即使当下窗口太窄导航条没出场,补到的历史对搜索/上滚阅读同样有用,
+  // 且有轮数预算封顶,不做 eligible 门控。
+  // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
+  // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
+  // 取消旧会话待发的空闲回调、并按归零后的轮数预算为新会话重新评估
+  // (Copilot review)。
+  const navRailBackfillRoundsRef = useRef(0);
+  useEffect(() => {
+    navRailBackfillRoundsRef.current = 0;
+  }, [sessionId]);
+  useEffect(() => {
+    if (!onLoadMore) return;
+    if (
+      !shouldBackfillForNavRail({
+        entryCount: navRailEntries.length,
+        hasMoreMessages: hasMoreMessages ?? false,
+        isLoadingMore: isLoadingMore ?? false,
+        rounds: navRailBackfillRoundsRef.current,
+      })
+    ) {
+      return;
+    }
+    const run = () => {
+      const el = scrollRef.current;
+      if (!el) return;
+      navRailBackfillRoundsRef.current += 1;
+      prevScrollHeightRef.current = el.scrollHeight;
+      prevScrollTopAtLoadRef.current = el.scrollTop;
+      onLoadMore();
+    };
+    // 空闲期执行,别跟首屏渲染 / 两段式扩窗抢主线程;测试等无 ric 环境退化。
+    if (typeof window.requestIdleCallback === 'function') {
+      const id = window.requestIdleCallback(run, { timeout: 2000 });
+      return () => window.cancelIdleCallback(id);
+    }
+    const id = window.setTimeout(run, 300);
+    return () => window.clearTimeout(id);
+  }, [sessionId, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+
+  const railJumpSeqRef = useRef(0);
+  const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
+  const lastAppliedRailJumpRef = useRef(0);
+  const handleNavRailJump = useCallback((clientId: string) => {
+    railJumpSeqRef.current += 1;
+    setRailJumpRequest({ id: clientId, seq: railJumpSeqRef.current });
+  }, []);
+
+  useLayoutEffect(() => {
+    if (!railJumpRequest) return;
+    if (lastAppliedRailJumpRef.current === railJumpRequest.seq) return;
+    const targetKey = renderItemKeyForClientId(allRenderItems, railJumpRequest.id);
+    if (!targetKey) {
+      // 条目派生自 messages,拿不到 key 只可能是消息刚被删 / clear — 放弃本次。
+      lastAppliedRailJumpRef.current = railJumpRequest.seq;
+      return;
+    }
+    if (!visibleRenderItems.some((item) => item.key === targetKey)) {
+      // 目标在渲染窗口外:先把窗口锚到目标。本 effect 因 visibleRenderItems
+      // 变化重跑,下一轮走下面的滚动分支(focus-jump 同款两段式)。
+      setFirstVisibleItemKey(targetKey);
+      return;
+    }
+    const root = scrollRef.current;
+    if (!root) return;
+    const el = root.querySelector(
+      `[data-message-client-id="${CSS.escape(railJumpRequest.id)}"]`,
+    ) as HTMLElement | null;
+    if (!el) return;
+    lastAppliedRailJumpRef.current = railJumpRequest.seq;
+    // 从贴底态往上跳必须先解除 auto-follow 钉底,否则流式期间 pin effect 会把
+    // 视口拽回底部(focus-jump 同款处理;chip 不需要是因为它只在已上滚时出现)。
+    restoringRef.current = false;
+    isNearBottomRef.current = false;
+    setIsNearBottom(false);
+    // smooth scroll 途经顶部区域时抑制 expandWindow/onLoadMore(chip-jump 协议,
+    // 解抑靠用户 wheel/touch/keydown + 安全兜底 timer)。
+    chipJumpInProgressRef.current = true;
+    if (chipJumpClearTimerRef.current !== null) {
+      window.clearTimeout(chipJumpClearTimerRef.current);
+    }
+    chipJumpClearTimerRef.current = window.setTimeout(() => {
+      chipJumpClearTimerRef.current = null;
+      clearChipJumpSuppression();
+    }, CHIP_JUMP_SAFETY_MS);
+    // 落点手动计算,不走 scrollIntoView:轮次跳转要让视口恰好框住
+    // "提问 → 回答",提问顶边停在容器顶下方 12px;消息锚点通用的
+    // scroll-mt-20(80px)是搜索跳转的上文语境预留,对本任务是漏出
+    // 上一轮尾巴的噪音(设计依据见 NAV_RAIL_JUMP_TOP_OFFSET_PX 注释)。
+    const targetTop =
+      root.scrollTop +
+      (el.getBoundingClientRect().top - root.getBoundingClientRect().top) -
+      NAV_RAIL_JUMP_TOP_OFFSET_PX;
+    root.scrollTo({ top: Math.max(0, targetTop), behavior: 'smooth' });
+  }, [railJumpRequest, allRenderItems, visibleRenderItems, clearChipJumpSuppression]);
 
   // 第一条 user 消息没有"上一条 assistant"作为 resumeSessionAt 锚点，
   // rewind 必然抛 NO_PRIOR_ASSISTANT。直接在 UI 层把按钮藏掉，避免无效点击。
@@ -3746,6 +3877,19 @@ export function MessageStream({
               bottomOffset={indicatorBottomOffset}
             />
 
+            {/* message-nav-rail: 左缘提问导航条(每条提问一根刻度,当前项加深,
+          hover 预览,点击跳转)。显隐由组件自判:提问数 ≥4 且内容列左侧留白
+          足够;窄窗口 / 嵌入面板自然隐藏,绝不压在气泡上。 */}
+            <MessageNavRail
+              entries={navRailEntries}
+              scrollRef={scrollRef}
+              contentMaxWidth={contentWidth ?? 880}
+              bottomOffset={resolvedBottomPadding}
+              onJump={handleNavRailJump}
+              onNavCoverageChange={setNavRailCoversNav}
+              resetKey={sessionId}
+            />
+
             {/* prev-user-msg-jump: 右上角"跳到上一条提问"icon 按钮。
           通过 createPortal 挂到祖先的 TopRightChipStack 容器里,与 DiffPanelToggle
           各占栈中一行;DiffToggle 在 session 载入时就 mount,本 chip 仅在
@@ -3754,6 +3898,8 @@ export function MessageStream({
           近底时 hook 自然返回 null → 不挂入 → 不占行。 */}
             {chipSlot &&
               prevUserMsgVisible &&
+              // 导航条完整覆盖导航时不再挂本 chip(入口去重,见 navRailCoversNav)。
+              !navRailCoversNav &&
               createPortal(
                 <PrevMessageJumpChip preview={prevPreview} onClick={handleJumpToPrevUserMsg} />,
                 chipSlot,

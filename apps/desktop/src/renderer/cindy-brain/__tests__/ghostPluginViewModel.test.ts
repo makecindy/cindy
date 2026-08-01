@@ -71,6 +71,8 @@ function marketItem(overrides: Partial<PluginMarketItem> = {}): PluginMarketItem
     releaseId: 'release-1',
     version: '1.5.10',
     publishedAt: '2026-07-27T00:00:00.000Z',
+    sourceType: 'server',
+    sourceMarketName: null,
     icon: {
       mimeType: 'image/png',
       sha256: 'a'.repeat(64),
