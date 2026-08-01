@@ -65,6 +65,63 @@ const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
+const CHAT_BRIDGE_UNSUPPORTED_IMAGE_MARKER =
+  'Responses feature is not supported by the Chat Completions bridge: input_image';
+
+function isUnsupportedChatBridgeImageError(message: string | null): boolean {
+  return Boolean(
+    message
+    && message.includes('unsupported_feature')
+    && message.includes(CHAT_BRIDGE_UNSUPPORTED_IMAGE_MARKER),
+  );
+}
+
+function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
+  const remainingFiles = item.files?.filter((file) => file.category !== 'image');
+  const chatMessage = { ...item.chatMessage };
+  delete chatMessage.images;
+
+  // Renderer queue objects historically carry retryFiles as an extra presentation field even
+  // though it is not part of the main-process wire contract. Strip image entries when present so
+  // the replacement bubble cannot rehydrate the rejected attachment through an older renderer.
+  const compatibleChatMessage = chatMessage as typeof chatMessage & {
+    retryFiles?: Array<{ category?: string }>;
+  };
+  if (Array.isArray(compatibleChatMessage.retryFiles)) {
+    const retryFiles = compatibleChatMessage.retryFiles.filter((file) => file.category !== 'image');
+    if (retryFiles.length > 0) compatibleChatMessage.retryFiles = retryFiles;
+    else delete compatibleChatMessage.retryFiles;
+  }
+
+  let persistedContent = item.persistedContent;
+  try {
+    const parsed = JSON.parse(persistedContent) as unknown;
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+      persistedContent = JSON.stringify({
+        ...(parsed as Record<string, unknown>),
+        images: [],
+      });
+    }
+  } catch {
+    // Historical plain-text queue payloads contain no persisted image references.
+  }
+
+  const stripped: AgentInputQueuedMessage = {
+    ...item,
+    persistedContent,
+    chatMessage,
+  };
+  if (remainingFiles && remainingFiles.length > 0) stripped.files = remainingFiles;
+  else delete stripped.files;
+  return stripped;
+}
+
+function hasRetryableQueuedContent(item: AgentInputQueuedMessage): boolean {
+  return getAgentFacingText(item).trim().length > 0
+    || (item.files?.length ?? 0) > 0
+    || (item.mentions?.length ?? 0) > 0
+    || (item.sessionRefs?.length ?? 0) > 0;
+}
 
 export interface AgentInputSendOpts {
   messageUuid?: string;
@@ -1646,6 +1703,20 @@ export class AgentInputCoordinator {
       log.debug('auto retry skipped — no assistant progress to continue from', { sessionId });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
+    if (
+      !continueItem
+      && retryItem
+      && isUnsupportedChatBridgeImageError(state.error ?? state.stickyError)
+    ) {
+      retryItem = stripQueuedMessageImages(retryItem);
+      if (!hasRetryableQueuedContent(retryItem)) {
+        // An image-only turn has no truthful fallback. Keep the error/recovery intact so a later
+        // text message or model switch can take over instead of inventing replacement text.
+        log.debug('image-only retry skipped for unsupported Chat bridge input', { sessionId });
+        return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
+      }
+    }
     state.error = null;
     state.stickyError = null;
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
@@ -1657,7 +1728,7 @@ export class AgentInputCoordinator {
       if (!item) {
         const clientId = crypto.randomUUID();
         item = {
-          ...recovery.item,
+          ...(retryItem ?? recovery.item),
           clientId,
           // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
           // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
@@ -1665,7 +1736,7 @@ export class AgentInputCoordinator {
           // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
           supersedesUserClientId: recovery.item.clientId,
           chatMessage: {
-            ...recovery.item.chatMessage,
+            ...(retryItem ?? recovery.item).chatMessage,
             clientId,
             createdAt: new Date().toISOString(),
           },

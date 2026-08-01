@@ -2095,6 +2095,145 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
   });
 
+  it('removes an unsupported image when retrying a zero-progress text-and-image turn', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-with-text';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+      {
+        id: 'file-1',
+        name: 'notes.pdf',
+        path: '/repo/notes.pdf',
+        ext: '.pdf',
+        size: 8,
+        category: 'pdf',
+        mimeType: 'application/pdf',
+      },
+    ];
+    item.persistedContent = JSON.stringify({
+      text: item.text,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'unsupported_feature',
+        message: 'Responses feature is not supported by the Chat Completions bridge: input_image',
+      },
+    });
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+      ],
+    });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.files).toEqual([expect.objectContaining({ id: 'file-1', category: 'pdf' })]);
+    expect(retried?.chatMessage.images).toBeUndefined();
+    expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
+    expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
+      text: 'describe this',
+      images: [],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+  });
+
+  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-only';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', '');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+    item.persistedContent = JSON.stringify({
+      text: '',
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+      files: [],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = JSON.stringify({
+      error: {
+        type: 'invalid_request_error',
+        code: 'unsupported_feature',
+        message: 'Responses feature is not supported by the Chat Completions bridge: input_image',
+      },
+    });
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).error).toBe(error);
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+  });
+
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
     // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
