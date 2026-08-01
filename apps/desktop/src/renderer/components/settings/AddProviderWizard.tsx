@@ -29,8 +29,8 @@ import { providerMonogram } from '@/lib/providerModels';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
-import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 import { isCommittableWindowText, parseWindowText } from '@/lib/contextWindow';
+import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
 
 import {
   isLoopbackProviderUrl,
@@ -730,6 +730,11 @@ export function AddProviderWizard({
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
+        // 空窗口 = 显式「不指定」：删除该 agent 的旧槽位，避免同一模型 id 重新添加
+        // 且留空时残留上一次的自定义窗口值（留空应回落 200K 默认，Codex P2）。
+        const nextContextWindows = { ...(existing?.contextWindows ?? {}) };
+        if (contextWindow === undefined) delete nextContextWindows[agent];
+        else nextContextWindows[agent] = contextWindow;
         next.set(
           id,
           existing
@@ -740,16 +745,14 @@ export function AddProviderWizard({
                   ? existing.agents
                   : [...existing.agents, agent],
                 // 手动值优先于发现值：双端归属同一 id 时以本次手填为准，不互相覆盖。
-                ...(contextWindow !== undefined
-                  ? { contextWindows: { ...existing.contextWindows, [agent]: contextWindow } }
-                  : {}),
+                contextWindows: nextContextWindows,
               }
             : {
                 name: id,
                 checked: true,
                 recommended: false,
                 agents: [agent],
-                ...(contextWindow !== undefined ? { contextWindows: { [agent]: contextWindow } } : {}),
+                ...(contextWindow !== undefined ? { contextWindows: nextContextWindows } : {}),
               },
         );
         return next;
@@ -1519,7 +1522,6 @@ export function AddProviderWizard({
                             </span>
                             <input
                               type="text"
-                              inputMode="numeric"
                               aria-label={t('settings.providers.wizard.manualModelWindowLabel')}
                               value={manualModelWindows[agent] ?? ''}
                               onChange={(event) =>
