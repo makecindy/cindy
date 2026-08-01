@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
-import type { PermissionMode } from '@cindy/maker-core';
 
 import {
   createClaudeAutoClassifierFailureObserver,
@@ -40,16 +39,14 @@ function ctx(overrides: Partial<ResponseObserverCtx> = {}): ResponseObserverCtx 
 }
 
 function createDeps(overrides: Partial<ClaudeAutoPermissionFallbackDeps> = {}) {
-  const setPermissionMode = vi.fn<(mode: PermissionMode) => Promise<void>>(async () => {});
+  const useCindyAutoReviewFallback = vi.fn(async () => {});
   const deps: ClaudeAutoPermissionFallbackDeps = {
-    getSession: vi.fn(() => ({ agentKind: 'claude-code', setPermissionMode })),
+    getSession: vi.fn(() => ({ agentKind: 'claude-code', useCindyAutoReviewFallback })),
     getSessionMeta: vi.fn(async () => ({ permissionMode: 'auto' as const })),
-    persistPermissionModeIfAuto: vi.fn(async () => true),
-    broadcast: vi.fn(),
     logger: { info: vi.fn(), warn: vi.fn() },
     ...overrides,
   };
-  return { deps, setPermissionMode };
+  return { deps, useCindyAutoReviewFallback };
 }
 
 afterEach(() => {
@@ -315,43 +312,25 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
 });
 
 describe('createClaudeAutoPermissionFallbackCoordinator', () => {
-  it('switches runtime, persists ask, and broadcasts only after success', async () => {
-    const order: string[] = [];
-    const { deps, setPermissionMode } = createDeps({
-      getSessionMeta: vi.fn(async () => ({ permissionMode: 'auto' as const })),
-      persistPermissionModeIfAuto: vi.fn(async () => {
-        order.push('persist');
-        return true;
-      }),
-      broadcast: vi.fn(() => {
-        order.push('broadcast');
-      }),
-    });
-    setPermissionMode.mockImplementation(async () => {
-      order.push('runtime');
-    });
+  it('keeps the persisted Auto preference and switches only the runtime reviewer', async () => {
+    const { deps, useCindyAutoReviewFallback } = createDeps();
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
     await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(true);
-    expect(order).toEqual(['runtime', 'persist', 'broadcast']);
-    expect(deps.persistPermissionModeIfAuto).toHaveBeenCalledWith('session-1');
-    expect(deps.broadcast).toHaveBeenCalledWith({
-      sessionId: 'session-1',
-      from: 'auto',
-      to: 'ask',
-      reason: 'classifier_unavailable',
-      status: 429,
-    });
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
+    expect(deps.getSessionMeta).toHaveBeenCalledWith('session-1');
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+      expect.objectContaining({ sessionId: 'session-1', status: 429 }),
+    );
   });
 
-  it('accumulates classifier-failure counters across signals and logs them on downgrade', async () => {
-    // 同一 coordinator 实例:先来一个非 auto 会话的跳过(静默计数),
-    // 再来一个成功降级——降级日志里的 counters 必须反映累计(含前一次跳过)。
+  it('accumulates classifier-failure counters across signals and logs them on fallback', async () => {
     const { deps } = createDeps({
       getSessionMeta: vi
         .fn()
-        .mockResolvedValueOnce({ permissionMode: 'ask' }) // session-skip: 非 auto
-        .mockResolvedValueOnce({ permissionMode: 'auto' }), // session-1: 正常降级
+        .mockResolvedValueOnce({ permissionMode: 'ask' })
+        .mockResolvedValueOnce({ permissionMode: 'auto' }),
     });
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
@@ -359,11 +338,11 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     await expect(fallback({ sessionId: 'session-1', status: 503 })).resolves.toBe(true);
 
     expect(deps.logger.info).toHaveBeenCalledWith(
-      'auto permission classifier unavailable; session downgraded to ask',
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
       expect.objectContaining({
         counters: expect.objectContaining({
           detected: 2,
-          downgraded: 1,
+          switched: 1,
           skippedNotAuto: 1,
           dedupedRetries: 0,
         }),
@@ -376,60 +355,30 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     const gate = new Promise<void>((resolve) => {
       release = resolve;
     });
-    const { deps, setPermissionMode } = createDeps();
-    setPermissionMode.mockImplementation(async () => gate);
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    useCindyAutoReviewFallback.mockImplementation(async () => gate);
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
     const first = fallback({ sessionId: 'session-1', status: 429 });
-    await vi.waitFor(() => expect(setPermissionMode).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1));
     await expect(fallback({ sessionId: 'session-1', status: 503 })).resolves.toBe(false);
     release();
     await expect(first).resolves.toBe(true);
-    expect(deps.persistPermissionModeIfAuto).toHaveBeenCalledTimes(1);
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
   });
 
-  it('restores the racing user choice when the conditional persist does not apply', async () => {
-    const { deps, setPermissionMode } = createDeps({
-      getSessionMeta: vi
-        .fn()
-        .mockResolvedValueOnce({ permissionMode: 'auto' })
-        .mockResolvedValueOnce({ permissionMode: 'bypassPermissions' }),
-      persistPermissionModeIfAuto: vi.fn(async () => false),
-    });
-    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
-
-    await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(false);
-    expect(setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual([
-      'ask',
-      'bypassPermissions',
-    ]);
-    expect(deps.broadcast).not.toHaveBeenCalled();
-  });
-
-  it('keeps runtime at ask without re-push when the racing user choice is also ask', async () => {
-    const { deps, setPermissionMode } = createDeps({
-      getSessionMeta: vi
-        .fn()
-        .mockResolvedValueOnce({ permissionMode: 'auto' })
-        .mockResolvedValueOnce({ permissionMode: 'ask' }),
-      persistPermissionModeIfAuto: vi.fn(async () => false),
-    });
-    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
-
-    await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(false);
-    expect(setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual(['ask']);
-    expect(deps.broadcast).not.toHaveBeenCalled();
-  });
-
-  it('skips non-auto or non-Claude sessions', async () => {
+  it('skips non-auto, mismatched-agent, and unsupported sessions', async () => {
     const notAuto = createDeps({
       getSessionMeta: vi.fn(async () => ({ permissionMode: 'ask' as const })),
     });
-    const codex = createDeps({
+    const mismatched = createDeps({
       getSession: vi.fn(() => ({
         agentKind: 'codex',
-        setPermissionMode: vi.fn(async () => {}),
+        useCindyAutoReviewFallback: vi.fn(async () => {}),
       })),
+    });
+    const unsupported = createDeps({
+      getSession: vi.fn(() => ({ agentKind: 'claude-code' })),
     });
 
     await expect(
@@ -439,19 +388,26 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
       }),
     ).resolves.toBe(false);
     await expect(
-      createClaudeAutoPermissionFallbackCoordinator(codex.deps)({
+      createClaudeAutoPermissionFallbackCoordinator(mismatched.deps)({
         sessionId: 'session-1',
         status: 429,
       }),
     ).resolves.toBe(false);
-    expect(notAuto.setPermissionMode).not.toHaveBeenCalled();
-    expect(codex.deps.persistPermissionModeIfAuto).not.toHaveBeenCalled();
+    await expect(
+      createClaudeAutoPermissionFallbackCoordinator(unsupported.deps)({
+        sessionId: 'session-1',
+        status: 429,
+      }),
+    ).resolves.toBe(false);
+    expect(notAuto.useCindyAutoReviewFallback).not.toHaveBeenCalled();
+    expect(mismatched.useCindyAutoReviewFallback).not.toHaveBeenCalled();
+    expect(unsupported.useCindyAutoReviewFallback).not.toHaveBeenCalled();
   });
 
-  it('downgrades a Codex Auto session when the signal identifies Codex', async () => {
-    const setPermissionMode = vi.fn(async () => {});
+  it('accepts a matching agent signal without changing the stored permission mode', async () => {
+    const useCindyAutoReviewFallback = vi.fn(async () => {});
     const { deps } = createDeps({
-      getSession: vi.fn(() => ({ agentKind: 'codex', setPermissionMode })),
+      getSession: vi.fn(() => ({ agentKind: 'codex', useCindyAutoReviewFallback })),
     });
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
@@ -460,25 +416,27 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
       agentKind: 'codex',
       status: 408,
     })).resolves.toBe(true);
-    expect(setPermissionMode).toHaveBeenCalledWith('ask');
-    expect(deps.persistPermissionModeIfAuto).toHaveBeenCalledWith('session-codex');
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
+    expect(deps.getSessionMeta).toHaveBeenCalledTimes(1);
   });
 
-  it('rolls runtime back to persisted mode when persistence fails', async () => {
-    const { deps, setPermissionMode } = createDeps({
-      getSessionMeta: vi.fn(async () => ({ permissionMode: 'auto' as const })),
-      persistPermissionModeIfAuto: vi.fn(async () => {
-        throw new Error('db unavailable');
-      }),
+  it('logs and returns false when the runtime fallback switch fails', async () => {
+    const runtimeFallback = vi.fn(async () => {
+      throw new Error('runtime unavailable');
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => ({
+        agentKind: 'claude-code',
+        useCindyAutoReviewFallback: runtimeFallback,
+      })),
     });
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
     await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(false);
-    expect(setPermissionMode.mock.calls.map(([mode]) => mode)).toEqual(['ask', 'auto']);
-    expect(deps.broadcast).not.toHaveBeenCalled();
+    expect(runtimeFallback).toHaveBeenCalledOnce();
     expect(deps.logger.warn).toHaveBeenCalledWith(
       'auto permission fallback failed',
-      expect.objectContaining({ error: 'db unavailable' }),
+      expect.objectContaining({ error: 'runtime unavailable' }),
     );
   });
 });

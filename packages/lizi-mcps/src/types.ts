@@ -488,7 +488,7 @@ export type ControlResult<T extends object = object, E extends string = never> =
  * adding a new vendor (e.g. 'gemini') without updating this union will cause
  * LLM tool calls to fail zod enum validation.
  */
-export type ControlWorkerAgent = 'claude-code' | 'codex';
+export type ControlWorkerAgent = 'claude-code' | 'codex' | 'pi';
 
 /** Browser automation MCP host deps. Core browser execution is injected by host. */
 export interface BrowserMcpDeps {

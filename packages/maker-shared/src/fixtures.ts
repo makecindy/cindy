@@ -18,7 +18,7 @@ export interface RemoteControlSessionFixture {
   workingDir: string | null;
   workspaceKind: 'project' | 'dialogue';
   status: 'active' | 'archived' | 'deleted';
-  agentKind: 'cc' | 'codex';
+  agentKind: 'cc' | 'codex' | 'pi';
   model: string;
   effort: string;
   permissionMode: string;

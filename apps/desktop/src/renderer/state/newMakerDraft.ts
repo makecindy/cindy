@@ -80,7 +80,7 @@ export interface CollabWorkerConfig {
 
 export interface CollabDraft {
   enabled: boolean;
-  worker: 'cc' | 'codex';
+  worker: 'cc' | 'codex' | 'pi';
   workerConfig?: CollabWorkerConfig;
 }
 
@@ -157,6 +157,18 @@ export interface NewMakerDraft {
  * 在目录里都是默认隐藏的模型 —— 种子默认模型压根不在用户看到的清单里。
  */
 function defaultVendorPrefs(vendor: MakerVendor): VendorPrefs {
+  if (vendor === 'pi') {
+    return {
+      // pi 走 XD 网关(anthropic-messages 可达面),默认给网关中档模型;
+      // 目录未含该 id 时由 ChatInput 的 vendor 回退逻辑纠正。
+      model: 'claude-sonnet-5',
+      effort: 'high',
+      // 新 Pi 草稿默认走 Auto Review；完全访问只能由用户显式选择并持久化。
+      permissionMode: 'auto',
+      planMode: false,
+      providerId: null,
+    };
+  }
   if (vendor === 'codex') {
     return {
       model: getDefaultModelForVendor('codex').id,
@@ -198,6 +210,7 @@ function makeDefault(): NewMakerDraft {
     extraDirs: [],
     lastByVendor: {
       cc: defaultVendorPrefs('cc'),
+      pi: defaultVendorPrefs('pi'),
       orca: defaultVendorPrefs('orca'),
       codex: defaultVendorPrefs('codex'),
     },
@@ -231,7 +244,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // F-COLLAB (2026-05): 'orca' vendor 已被 ChatInput 底部的 toggle 取代,
   // sanitize 时把历史 localStorage 残留的 'orca' 自动迁移到 'cc',避免空白入口。
   const vendor: MakerVendor =
-    r.vendor === 'codex' ? 'codex' : 'cc';
+    r.vendor === 'codex' || r.vendor === 'pi' ? r.vendor : 'cc';
   const workingDir = normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0
@@ -270,7 +283,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // 防止历史脏数据让用户看到协同 ON 但 workdir 为空的不可达状态)。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
-    collabRaw?.worker === 'cc' ? 'cc' : 'codex';
+    collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
   // remote 项目的协同 codex / cc draft 均放行:worker 创建已继承 remoteHostId
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
@@ -328,7 +341,7 @@ function sanitize(raw: unknown): NewMakerDraft {
       ? (r.modelChosenByVendor as Record<string, unknown>)
       : {};
   const modelChosenByVendor: Partial<Record<MakerVendor, boolean>> = {};
-  for (const v of ['cc', 'orca', 'codex'] as const) {
+  for (const v of ['cc', 'orca', 'codex', 'pi'] as const) {
     if (modelChosenRaw[v] === true) modelChosenByVendor[v] = true;
   }
   // 2026-07 已落盘但尚无显式标记的 true，只可能来自用户把当时默认 false 切到 true，
@@ -363,6 +376,7 @@ function sanitize(raw: unknown): NewMakerDraft {
     extraDirs,
     lastByVendor: {
       cc: sanitizeVendorPrefs(lastByVendorRaw.cc, 'cc'),
+      pi: sanitizeVendorPrefs(lastByVendorRaw.pi, 'pi'),
       orca: sanitizeVendorPrefs(lastByVendorRaw.orca, 'orca'),
       codex: sanitizeVendorPrefs(lastByVendorRaw.codex, 'codex'),
     },

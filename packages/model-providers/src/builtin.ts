@@ -65,16 +65,30 @@ if (!xaiRaw) {
 }
 const xaiFromCatalog = withVerifiedStaticWindows(xaiRaw);
 
+/** xAI 静态清单同时供 Claude bridge、Codex 与 Pi bridge 使用。 */
+const XAI_PROVIDER: Provider = {
+  ...xaiFromCatalog,
+  agents: xaiFromCatalog.agents.includes('pi')
+    ? xaiFromCatalog.agents
+    : [...xaiFromCatalog.agents, 'pi'],
+  routing: {
+    ...xaiFromCatalog.routing,
+    pi: xaiFromCatalog.routing.pi ?? xaiFromCatalog.routing['claude-code'],
+  },
+  models: {
+    ...xaiFromCatalog.models,
+    pi: xaiFromCatalog.models.pi ?? xaiFromCatalog.models['claude-code'] ?? [],
+  },
+};
+
 /** Anthropic(Claude.ai 订阅 OAuth)。模型清单运行时动态注入,此处恒为空。 */
 const ANTHROPIC_PROVIDER: Provider = {
   id: 'anthropic',
   name: 'Anthropic',
   source: 'builtin',
-  // Claude.ai OAuth can be used by both native Claude Code and the Codex →
-  // Anthropic Messages bridge.  The two runtimes deliberately use different
-  // auth strategies below: Claude Code may pass its native OAuth through,
-  // while Codex must receive a host-owned Claude.ai token.
-  agents: ['claude-code', 'codex'],
+  // Claude.ai OAuth can be used by native Claude Code and by the Codex/Pi
+  // Anthropic Messages bridges. The bridged runtimes receive a host-owned token.
+  agents: ['claude-code', 'codex', 'pi'],
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'Claude.ai' },
   titleModel: 'claude-haiku-4-5',
@@ -93,8 +107,17 @@ const ANTHROPIC_PROVIDER: Provider = {
       },
       headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
     },
+    pi: {
+      upstream: 'https://api.anthropic.com',
+      authStrategy: 'provider-oauth-header',
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20',
+      },
+      headerDelete: ['x-api-key'],
+    },
   },
-  models: { 'claude-code': [], codex: [] },
+  models: { 'claude-code': [], codex: [], pi: [] },
 };
 
 /** OpenAI(ChatGPT 订阅 OAuth)。模型清单来自 codex 注册表,此处恒为空。 */
@@ -102,7 +125,7 @@ const OPENAI_PROVIDER: Provider = {
   id: 'openai',
   name: 'OpenAI',
   source: 'builtin',
-  agents: ['codex', 'claude-code'],
+  agents: ['codex', 'claude-code', 'pi'],
   auth: { method: 'oauth' },
   access: { kind: 'subscription', product: 'ChatGPT' },
   titleModel: 'gpt-5.4-mini',
@@ -121,8 +144,13 @@ const OPENAI_PROVIDER: Provider = {
       authStrategy: 'oauth-passthrough',
       modelPrefixes: ['chatgpt/'],
     },
+    pi: {
+      upstream: 'https://chatgpt.com/backend-api/codex',
+      authStrategy: 'oauth-passthrough',
+      modelPrefixes: ['chatgpt/'],
+    },
   },
-  models: { codex: [], 'claude-code': [] },
+  models: { codex: [], 'claude-code': [], pi: [] },
 };
 
 /** XD / Cindy AI 网关(账号体系托管 key)。模型清单来自网关实时下发,此处恒为空。 */
@@ -130,7 +158,7 @@ const XD_PROVIDER: Provider = {
   id: 'xd',
   name: 'XD Gateway',
   source: 'builtin',
-  agents: ['claude-code', 'codex'],
+  agents: ['claude-code', 'codex', 'pi'],
   auth: { method: 'managed' },
   access: { kind: 'managed' },
   titleModel: 'gpt-5.4-mini',
@@ -165,8 +193,13 @@ const XD_PROVIDER: Provider = {
       upstream: 'https://xd-gateway.invalid/v1',
       authStrategy: 'gateway-key',
     },
+    // pi 直连网关 anthropic-messages 面(与 claude-code 同可达面);upstream 同为占位。
+    pi: {
+      upstream: 'https://xd-gateway.invalid',
+      authStrategy: 'gateway-key',
+    },
   },
-  models: { 'claude-code': [], codex: [] },
+  models: { 'claude-code': [], codex: [], pi: [] },
 };
 
 /**
@@ -195,7 +228,7 @@ const GEMINI_PROVIDER: Provider = {
 export const BUILTIN_PROVIDERS: Provider[] = [
   ANTHROPIC_PROVIDER,
   OPENAI_PROVIDER,
-  xaiFromCatalog,
+  XAI_PROVIDER,
   XD_PROVIDER,
   GEMINI_PROVIDER,
 ];

@@ -16,6 +16,7 @@ import { useTranslation } from 'react-i18next';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { PiMark } from '@/components/icons/PiMark';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
@@ -42,10 +43,11 @@ const AGENT_OPTIONS: Array<{
 }> = [
   { kind: 'claude-code', Mark: ClaudeMark },
   { kind: 'codex', Mark: CodexMark },
+  { kind: 'pi', Mark: PiMark },
 ];
 
-function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'cc';
+function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'claude-code' ? 'cc' : agentKind;
 }
 
 export interface ImDefaultSettingsSummary {
@@ -70,6 +72,7 @@ export function ImDefaultSettingsSection({
   const { providers } = useProviders();
   const cc = useAgentCapabilities('claude-code');
   const codex = useAgentCapabilities('codex');
+  const pi = useAgentCapabilities('pi');
   const [settings, setSettings] = useState<ImDefaultSettingsState | null>(null);
   const [pending, setPending] = useState(false);
 
@@ -108,6 +111,7 @@ export function ImDefaultSettingsSection({
         admissionFiltered: true,
       }),
       codex: deriveModelsFromProviders(providers, 'codex', { admissionFiltered: true }),
+      pi: deriveModelsFromProviders(providers, 'pi', { admissionFiltered: true }),
     };
     return {
       'claude-code': fromProviders['claude-code'].length
@@ -116,8 +120,11 @@ export function ImDefaultSettingsSection({
       codex: fromProviders.codex.length
         ? fromProviders.codex
         : (codex.capabilities?.availableModels ?? []),
+      pi: fromProviders.pi.length
+        ? fromProviders.pi
+        : (pi.capabilities?.availableModels ?? []),
     };
-  }, [providers, cc.capabilities, codex.capabilities]);
+  }, [providers, cc.capabilities, codex.capabilities, pi.capabilities]);
 
   const resolveProviderId = useCallback(
     (agentKind: ImDefaultAgentKind, modelId: string, providerId: string | null): string | null => {

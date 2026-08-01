@@ -1318,13 +1318,21 @@
           "anthropic": "Anthropic Messages(Cindy 브리지)",
           "responsesHelp": "제공자가 Responses API를 네이티브로 지원하므로 Cindy가 이벤트 스트림을 그대로 전달합니다.",
           "chatHelp": "Chat Completions만 제공하는 업체용입니다. Cindy가 스트리밍 텍스트와 함수 도구 호출을 변환하며 일부 고급 Responses 기능은 사용할 수 없습니다.",
-          "anthropicHelp": "Anthropic Messages API를 제공하는 업체용입니다. Cindy가 Responses 메시지, 이미지, 도구, 추론 내용 및 스트리밍 이벤트를 변환합니다."
+          "anthropicHelp": "Anthropic Messages API를 제공하는 업체용입니다. Cindy가 Responses 메시지, 이미지, 도구, 추론 내용 및 스트리밍 이벤트를 변환합니다.",
+          "piResponses": "OpenAI Responses",
+          "piChat": "OpenAI Chat Completions",
+          "piAnthropic": "Anthropic Messages",
+          "piResponsesHelp": "Pi가 제공자의 OpenAI Responses API에 직접 연결합니다.",
+          "piChatHelp": "Pi가 제공자의 OpenAI 호환 Chat Completions API에 직접 연결합니다.",
+          "piAnthropicHelp": "Pi가 제공자의 Anthropic Messages API에 직접 연결합니다."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code는 Anthropic 프로토콜을 따릅니다(x-api-key 인증). 이 제공자의 Claude Code용 baseURL・키・모델을 입력하세요. 비워 두면 이 제공자는 Claude Code를 제공하지 않습니다.",
           "codex": "Codex",
-          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다."
+          "codexDesc": "Codex는 OpenAI Responses 프로토콜을 사용합니다. Responses를 네이티브로 사용하거나 Chat Completions 또는 Anthropic Messages를 Cindy로 브리지하는 방식을 선택할 수 있습니다. 이 제공자의 Codex용 기본 URL, 키와 모델을 입력하세요. 비워 두면 Codex에서 사용하지 않습니다.",
+          "pi": "Pi",
+          "piDesc": "Pi는 멀티 프로토콜 하네스입니다: 사용자 지정/로컬 모델(Ollama, vLLM, 자체 호스팅 엔드포인트)은 Cindy 호환 프록시를 거치지 않고 네이티브로 연결됩니다. 아래에서 API 유형을 선택한 뒤 이 제공자의 Pi용 base URL, 키, 모델을 입력하세요. 비워 두면 이 제공자에 Pi를 설정하지 않습니다."
         },
         "errors": {
           "nameRequired": "표시 이름을 입력하세요",
@@ -1880,11 +1888,16 @@
         "connecting": "연결 중…",
         "connected": "연결됨",
         "conflict": "다른 기기에서 사용 중",
+        "offline": "오프라인",
         "error": "연결 실패"
       },
       "connected": {
         "heading": "Telegram 봇 연결됨",
         "note": "봇에게 DM을 보내거나 그룹에서 멘션하면 이 기기의 {{appName}}로 전달됩니다. 그룹의 최근 대화는 컨텍스트로 함께 전달됩니다.",
+        "headingOffline": "이 기기에서 오프라인",
+        "noteOffline": "메시지 수신을 중지했습니다. Bot Token과 연동 정보는 이 기기에 그대로 남아 있어 언제든 다시 온라인으로 전환할 수 있습니다.",
+        "headingConflict": "다른 기기에서 사용 중",
+        "noteConflict": "같은 봇으로 메시지를 받을 수 있는 기기는 한 번에 하나뿐이며, 이 기기가 계속 경쟁하고 있습니다. 아래에서 그 기기를 오프라인으로 만들면 이 기기가 이어받습니다. 넘겨주려면 「이 기기 오프라인」을 누르세요.",
         "botLabel": "봇 계정",
         "ownerLabel": "내 사용자 ID"
       },
@@ -1897,6 +1910,43 @@
       "formHint": "사용자 ID는 숫자입니다. @userinfobot에게 DM을 보내면 자신의 ID를 확인할 수 있습니다.",
       "connect": "연결",
       "connectingAction": "연결 중…",
+      "errorCode": {
+        "invalid-token": "Bot Token이 유효하지 않거나 재발급되었습니다. 다시 입력하세요",
+        "provider-api": "Telegram에서 오류를 반환했습니다. 잠시 후 다시 시도하세요",
+        "network": "네트워크에 연결할 수 없어 Telegram에 접속하지 못했습니다",
+        "secret-unavailable": "시스템 보안 저장소를 사용할 수 없어 자격 증명을 저장할 수 없습니다"
+      },
+      "goOffline": "이 기기 오프라인",
+      "goingOfflineAction": "전환 중…",
+      "goOnline": "이 기기 온라인",
+      "goingOnlineAction": "전환 중…",
+      "remoteDevices": {
+        "title": "내 다른 기기",
+        "refresh": "다시 확인",
+        "hint": "기기를 오프라인으로 만들면 해당 기기는 메시지를 받지 않습니다. 토큰과 연동 정보는 지워지지 않으므로 그 기기에서 언제든 다시 온라인으로 전환할 수 있습니다.",
+        "takeOffline": "오프라인으로",
+        "state": {
+          "checking": "확인 중…",
+          "connected": "이 봇을 사용 중",
+          "conflict": "이 봇을 두고 경쟁 중",
+          "offline": "오프라인",
+          "connecting": "연결 중…",
+          "idle": "설정 안 됨",
+          "error": "연결 실패",
+          "notConfigured": "Telegram 봇이 설정되지 않음",
+          "otherBot": "다른 봇에 연동됨 (충돌 없음)",
+          "offlineDevice": "기기가 오프라인이라 조작할 수 없음",
+          "unreachable": "상태를 가져올 수 없음",
+          "unsupported": "이 기기의 버전은 원격 오프라인을 지원하지 않음"
+        },
+        "failure": {
+          "remoteDisabled": "해당 기기에서 원격 제어가 꺼져 있습니다",
+          "accessRevoked": "해당 기기에서 이 기기의 접근 권한을 취소했습니다",
+          "controlDisabled": "이 기기에서 해당 기기 제어가 꺼져 있습니다",
+          "unreachable": "해당 기기가 오프라인이거나 연결할 수 없습니다",
+          "unknown": "원격 요청에 실패했습니다. 기기 상태를 확인한 후 다시 시도하세요"
+        }
+      },
       "disconnect": "연동 해제",
       "disconnectingAction": "해제 중…",
       "disconnectAria": "Telegram 봇 연동 해제",
@@ -2088,6 +2138,10 @@
         "codex": {
           "label": "Codex",
           "description": "Codex 입구를 통해 사용하는 모든 모델이 같은 메모리를 공유합니다"
+        },
+        "pi": {
+          "label": "Pi",
+          "description": "긴 세션의 압축 요약을 Cindy 메모리에 저장해 이후 Pi 세션에서 사용합니다"
         }
       },
       "agent": {
@@ -4769,6 +4823,7 @@
       "add": "프로젝트 추가",
       "cancel": "취소",
       "empty": "먼저 「설정 → 원격 연결」에서 제어 가능한 기기에 연결하거나 「설정 → 원격 머신」에서 SSH 호스트를 추가하세요.",
+      "emptyPiSshFiltered": "Pi는 로컬에서만 실행되어 여기에 SSH 호스트가 표시되지 않습니다. 「설정 → 원격 연결」에서 제어 가능한 기기에 연결하거나, SSH 호스트를 사용하려면 Claude 또는 Codex로 전환하세요.",
       "loading": "로드 중…",
       "noSubdirs": "하위 폴더가 없습니다",
       "doubleClickHint": "더블 클릭으로 진입",
@@ -4827,6 +4882,7 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
+          "pi": "Pi",
           "pending": "다음: {{agent}}"
         }
       },
@@ -4906,6 +4962,20 @@
           "bypassPermissions": {
             "label": "전체 접근",
             "description": "추가 확인 없이 모든 파일 편집과 네트워크 명령 실행을 허용합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
+          }
+        },
+        "pi": {
+          "ask": {
+            "label": "기본 권한",
+            "description": "읽기 전용 도구는 바로 실행하고, 파일 쓰기·명령 실행·MCP 도구는 매번 확인합니다."
+          },
+          "auto": {
+            "label": "자동 리뷰",
+            "description": "워크스페이스 안의 쓰기와 안전한 명령은 자동 실행하고, 경계 밖 쓰기·위험한 명령·MCP 도구는 확인합니다."
+          },
+          "bypassPermissions": {
+            "label": "전체 접근",
+            "description": "모든 도구를 확인 없이 실행합니다. 가장 위험하므로 신뢰할 수 있는 작업에서만 사용하세요."
           }
         }
       }
@@ -6039,6 +6109,7 @@
     },
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
+      "piRemoteUnsupported": "Pi는 로컬에서만 실행되어 SSH 원격 호스트를 사용할 수 없습니다. 이 호스트를 사용하려면 Claude 또는 Codex로 전환하세요.",
       "remoteWorktreeCleanupPending": "이전 원격 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
       "remoteProviderUpdating": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
@@ -6286,7 +6357,35 @@
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
         "openInNewWindow": "새 창에서 열기",
         "exportShare": "세션 내보내기…",
+        "exportHtml": "HTML로 내보내기…",
+        "exportHtmlSuccess": "세션을 HTML로 내보냈습니다",
+        "exportHtmlFailed": "HTML 내보내기 실패",
+        "compact": "컨텍스트 압축",
+        "compacting": "압축 중…",
+        "compactSuccess": "컨텍스트를 압축했습니다",
+        "compactSuccessWithTokens": "컨텍스트를 압축했습니다: {{before}}k → {{after}}k tokens",
+        "compactFailed": "압축 실패",
+        "compactNothing": "아직 압축할 내용이 없습니다",
+        "sessionBranches": "세션 분기",
         "copySessionLink": "세션 링크 복사"
+      },
+      "sessionBranches": {
+        "title": "세션 분기",
+        "close": "세션 분기 닫기",
+        "description": "Cindy 세션 포크와 Pi 세션 내부 분기를 하나의 트리에서 표시합니다.",
+        "current": "현재",
+        "empty": "전환할 수 있는 Pi 분기가 아직 없습니다.",
+        "emptyEntry": "표시할 내용 없음",
+        "loadFailed": "세션 분기를 불러오지 못했습니다",
+        "switchFailed": "분기 전환에 실패했습니다",
+        "switched": "세션 분기를 전환했습니다",
+        "switchedWithDraft": "분기를 전환하고 원래 프롬프트를 입력창에 복원했습니다",
+        "runningBlocked": "현재 턴이 끝난 후 분기를 전환할 수 있습니다.",
+        "remoteBlocked": "분기를 전환하기 전에 제어 중인 데스크톱을 다시 연결하거나 업데이트하세요.",
+        "filesWarning": "전환은 대화 컨텍스트만 변경하며 작업 파일은 되돌리지 않습니다.",
+        "summarize": "떠나는 분기 요약 생성(모델 사용)",
+        "summaryFocus": "선택 사항: 요약 초점(예: 오류 처리 결론 유지)",
+        "role": { "user": "사용자", "assistant": "Agent", "tool": "도구", "summary": "분기 요약", "system": "상태" }
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
@@ -7950,6 +8049,12 @@
       "telegramBotSaveFailed": "저장 실패: {{message}}",
       "telegramBotDisconnected": "Telegram 봇 연동이 해제됨",
       "telegramBotDisconnectFailed": "연동 해제 실패: {{message}}",
+      "telegramBotWentOffline": "오프라인으로 전환됨 (연동 정보는 유지)",
+      "telegramBotWentOnline": "온라인으로 전환됨",
+      "telegramBotToggleOnlineFailed": "전환 실패: {{message}}",
+      "telegramRemoteWentOffline": "해당 기기를 오프라인으로 전환했습니다",
+      "telegramRemoteUnsupported": "해당 기기의 Cindy 버전은 원격 오프라인을 지원하지 않습니다. 먼저 업데이트하세요",
+      "telegramRemoteFailed": "원격 오프라인 전환 실패: {{message}}",
       "dingtalkBotConnected": "DingTalk 봇이 연결됨",
       "dingtalkBotConnectFailed": "DingTalk 봇 연결 실패. 자격 증명, Stream 모드, 네트워크를 확인하세요",
       "dingtalkBotAuthFailed": "DingTalk에서 자격 증명을 거부했습니다. Client ID와 Client Secret이 동일한 앱의 것인지 확인하세요",
@@ -8006,8 +8111,11 @@
       "codexVoiceAuthDescription": "음성 입력은 연결된 ChatGPT 계정으로 GPT 실시간 음성 인식을 사용합니다. 계정이 연결되지 않았거나 연결을 업데이트해야 합니다. 모델 제공자를 열어 ChatGPT를 연결하시겠습니까?",
       "codexBinaryMissingTitle": "Codex 구성 요소가 준비되지 않음",
       "codexBinaryMissingDescription": "Codex 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 제공자에서 Codex 연결 상태를 확인하세요.",
+      "piBinaryMissingTitle": "Pi 구성 요소가 준비되지 않음",
+      "piBinaryMissingDescription": "Pi 구성 요소가 아직 준비되지 않아 이 기능을 사용할 수 없습니다. 잠시 후 다시 시도하거나 설정 → 제공자에서 Pi 연결 상태를 확인하세요.",
       "goToSettings": "설정 열기",
       "remoteCodexBinaryMissingTitle": "원격 기기의 Codex 구성 요소가 준비되지 않음",
+      "remotePiBinaryMissingTitle": "원격 기기의 Pi 구성 요소가 준비되지 않음",
       "remoteAuthDescription": "원격 기기 \"{{device}}\"에서 설정을 완료해야 여기에서 세션을 시작할 수 있습니다. 해당 기기에서 설정한 후 다시 시도하세요.",
       "remoteCodexNoSourceTitle": "원격 기기에 연결된 Codex 소스가 없습니다",
       "remoteCodexNoSourceDescription": "원격 기기 \"{{device}}\"에 Codex에서 사용할 수 있는 모델 소스가 연결되어 있지 않아 여기에서 세션을 시작할 수 없습니다. 해당 기기에서 {{appName}}를 열고 설정 → 제공자에서 OpenAI에 로그인하거나 다른 소스를 연결한 후 다시 시도하세요.",

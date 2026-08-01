@@ -24,6 +24,7 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type DesktopAccountDeletionConfirmInput =
   import('../shared/authIpc').DesktopAccountDeletionConfirmInput;
 type DesktopAccountDeletionAvailabilityResult =
@@ -112,7 +113,7 @@ interface DeviceLinkPresenceSnapshot {
 /** .cshare 导入向导的预览数据(main 侧 SharePreview 的镜像)。 */
 interface SessionSharePreview {
   title: string;
-  agentKind: 'cc' | 'codex';
+  agentKind: 'cc' | 'codex' | 'pi';
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -416,7 +417,12 @@ type TelegramBotTransportStatus =
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
-  | { kind: 'error'; reason: string };
+  /** 凭证保留、用户主动下线(不轮询); 与 idle=未配置 严格区分。 */
+  | { kind: 'offline'; appId: string }
+  | { kind: 'error'; reason: string; code?: TelegramBotErrorCode };
+
+/** 稳定错误分类;renderer 据此取 i18n 文案,不直接展示 main 层 reason。 */
+type TelegramBotErrorCode = 'invalid-token' | 'provider-api' | 'network' | 'secret-unavailable';
 
 type DingTalkBotTransportStatus = DiscordBotTransportStatus;
 type WecomBotTransportStatus =
@@ -454,7 +460,7 @@ interface WechatChannelSettingsState {
 type DiscordBotSessionAuthCheckResult = {
   ok: boolean;
   missing: 'gateway-key' | 'agent-oauth' | 'provider-key' | 'provider-disconnected' | null;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
   providerLabel: string | null;
@@ -549,7 +555,7 @@ interface OrcaWorkerRecord {
   session: {
     id: string;
     title: string;
-    agentKind: 'claude-code' | 'codex';
+    agentKind: 'claude-code' | 'codex' | 'pi';
     workingDir: string;
     model: string;
     effort: string;
@@ -609,7 +615,7 @@ interface CCAgentStreamEvent {
   sessionId: string;
   type: 'text' | 'tool_use' | 'tool_result' | 'tool_result_full' | 'agent_task_update' | 'status' | 'done' | 'error' | 'permission_request' | 'permission_dismissed' | 'ask_user_question' | 'plan_review' | 'thinking' | 'compact_boundary';
   data: unknown;
-  source?: 'claude-code' | 'codex';
+  source?: 'claude-code' | 'codex' | 'pi';
   /**
    * agent-meta: SDK 元信息（按 session.agentKind 解析）。当事件来自一条 SDK
    * message（assistant / tool_use / thinking final / done 等）时由 main 透传过来。
@@ -1807,6 +1813,10 @@ interface ElectronAPI {
     disconnect: () => Promise<{
       status: TelegramBotTransportStatus;
     }>;
+    /** 上线/下线(保留 token 与绑定信息, 只切轮询)。 */
+    setOnline: (payload: { online: boolean }) => Promise<{
+      status: TelegramBotTransportStatus;
+    }>;
     checkSessionAuth: () => Promise<DiscordBotSessionAuthCheckResult>;
     getBehavior: () => Promise<TelegramBotBehavior>;
     setBehavior: (patch: Partial<TelegramBotBehavior>) => Promise<TelegramBotBehavior>;
@@ -1918,7 +1928,7 @@ interface ElectronAPI {
   syncNewMakerDraft: (snapshot: {
     lastByVendor: Partial<
       Record<
-        'cc' | 'codex',
+        'cc' | 'codex' | 'pi',
         { model?: string; effort?: string; permissionMode?: string; providerId?: string | null }
       >
     >;
@@ -1937,7 +1947,7 @@ interface ElectronAPI {
   /** 被控端 renderer → 自身 main:会话「非选中模型」effort/fast 变化镜像(转发给控制端)。 */
   syncSessionModelPref: (pref: {
     sessionId: string;
-    agent: 'claude-code' | 'codex';
+    agent: 'claude-code' | 'codex' | 'pi';
     providerId: string;
     model: string;
     effort?: string;
@@ -1947,7 +1957,7 @@ interface ElectronAPI {
   /** 被控端本地 main → 自身 renderer:控制端写穿的草稿「模型 effort/fast」pref(调本地 setter)。 */
   onMakerDraftPrefApply: (
     cb: (payload: {
-      agent: 'claude-code' | 'codex';
+      agent: 'claude-code' | 'codex' | 'pi';
       providerId: string;
       modelId: string;
       active: boolean;
@@ -1966,7 +1976,7 @@ interface ElectronAPI {
   onMakerSessionPrefApply: (
     cb: (payload: {
       sessionId: string;
-      agent: 'claude-code' | 'codex';
+      agent: 'claude-code' | 'codex' | 'pi';
       providerId: string;
       model: string;
       effort?: string;
@@ -2490,7 +2500,7 @@ interface ElectronAPI {
     workingDir: string;
     cap?: number;
     query?: string;
-    agentKind?: 'claude-code' | 'codex';
+    agentKind?: 'claude-code' | 'codex' | 'pi';
   }) => Promise<{
     success: boolean;
     error?: string;
@@ -3515,7 +3525,7 @@ interface ElectronAPI {
         permissionMode?: string;
         fastMode?: boolean;
         planModeEnabled?: boolean;
-        agentKind?: 'cc' | 'codex';
+        agentKind?: 'cc' | 'codex' | 'pi';
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
         /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
         extraDirs?: string[];
@@ -3904,8 +3914,8 @@ interface ElectronAPI {
    * apps/desktop/src/main/maker-ipc/ 的 handlers + apps/desktop/src/main/maker-host/。
    */
   maker: {
-    listAvailableAgents: () => Promise<Array<'claude-code' | 'codex'>>;
-    getCapabilities: (agentKind: 'claude-code' | 'codex') => Promise<unknown>;
+    listAvailableAgents: () => Promise<Array<'claude-code' | 'codex' | 'pi'>>;
+    getCapabilities: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown>;
     /** workflow 逐 agent 进度树(只读);读不到 / 解析失败返回 null → 回退 workflow 级卡片。 */
     getWorkflowProgress: (
       sessionId: string,
@@ -3926,11 +3936,11 @@ interface ElectronAPI {
     // 自定义供应商配置 CRUD（配置与 runtime 密钥均由 main 原子排队）。
     createCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
     ) => Promise<{ ok: true }>;
     updateCustomProvider: (
       config: import('@cindy/model-providers').CustomProviderConfig,
-      keys: Partial<Record<'claude-code' | 'codex', string>>,
+      keys: Partial<Record<'claude-code' | 'codex' | 'pi', string>>,
     ) => Promise<{ ok: true }>;
     deleteCustomProvider: (providerId: string) => Promise<{ ok: true }>;
     /** 自定义供应商创建模板（目录 presets 段，纯 UI 模板数据）。 */
@@ -3938,11 +3948,11 @@ interface ElectronAPI {
     /** 供应商「测试连接」—— 与真实会话同路由口径的最小探测请求（结构化结果，code 走 providerError.* i18n）。 */
     testProviderConnection: (
       input:
-        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' }
+        | { kind: 'saved'; providerId: string; agent: 'claude-code' | 'codex' | 'pi' }
         | {
             kind: 'adhoc';
             spec: {
-              agent: 'claude-code' | 'codex';
+              agent: 'claude-code' | 'codex' | 'pi';
               baseUrl: string;
               modelId: string;
               authMethod: 'apiKey' | 'oauth' | 'none';
@@ -3961,13 +3971,15 @@ interface ElectronAPI {
     }>;
     /** 供应商「获取模型列表」—— 表单值透传，结构化结果（code 走 providerError.* i18n）。 */
     fetchProviderModels: (input: {
-      agent: 'claude-code' | 'codex';
+      agent: 'claude-code' | 'codex' | 'pi';
       baseUrl: string;
       authMethod: 'apiKey' | 'oauth' | 'none';
       wireProtocol?: import('@cindy/model-providers').ProviderWireProtocol;
       modelsUrl?: string | null;
       apiKey?: string | null;
       headers?: Record<string, string>;
+      /** 已保存供应商 id:main 侧据此并入 main-only 鉴权请求头(renderer 不回读明文头)。 */
+      savedProviderId?: string;
     }) => Promise<{
       ok: boolean;
       models?: { id: string; name: string; contextWindow?: number }[];
@@ -4031,7 +4043,7 @@ interface ElectronAPI {
     /** 自定义供应商上游错误订阅（返回 off）；code 走 providerError.* i18n。 */
     onProviderUpstreamError: (
       cb: (event: {
-        agent: 'claude-code' | 'codex';
+        agent: 'claude-code' | 'codex' | 'pi';
         providerId: string;
         providerName?: string;
         code: import('../shared/providerErrors').ProviderErrorCode;
@@ -4109,7 +4121,7 @@ interface ElectronAPI {
     ) => Promise<{ success: boolean; error?: string }>;
 
     listAgentCommands: (
-      agentKind: 'claude-code' | 'codex',
+      agentKind: 'claude-code' | 'codex' | 'pi',
     ) => Promise<{
       success: boolean;
       error?: string;
@@ -4117,7 +4129,7 @@ interface ElectronAPI {
     }>;
 
     listAgentSkills: (
-      agentKind: 'claude-code' | 'codex',
+      agentKind: 'claude-code' | 'codex' | 'pi',
       params: { workingDir?: string; forceReload?: boolean },
     ) => Promise<{
       success: boolean;
@@ -4178,7 +4190,7 @@ interface ElectronAPI {
     ) => () => void;
 
     scanAtResources: (
-      agentKind: 'claude-code' | 'codex',
+      agentKind: 'claude-code' | 'codex' | 'pi',
       params: { workingDir: string; cap?: number; query?: string },
     ) => Promise<{
       success: boolean;
@@ -4194,7 +4206,7 @@ interface ElectronAPI {
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */
       id?: string;
-      agentKind: 'claude-code' | 'codex';
+      agentKind: 'claude-code' | 'codex' | 'pi';
       workingDir: string;
       model: string;
       title?: string;
@@ -4232,7 +4244,7 @@ interface ElectronAPI {
     enableOrca: (
       leadSessionId: string,
       opts: {
-        workerAgent: 'claude-code' | 'codex';
+        workerAgent: 'claude-code' | 'codex' | 'pi';
         delegateTask?: string;
         role?: string;
         label?: string;
@@ -4260,7 +4272,7 @@ interface ElectronAPI {
       sessionId: string,
       message: string | { type: 'user'; content: string | Array<{ type: string; [k: string]: unknown }> },
       createOpts?: {
-        agentKind: 'claude-code' | 'codex';
+        agentKind: 'claude-code' | 'codex' | 'pi';
         workingDir: string;
         model: string;
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
@@ -4305,7 +4317,7 @@ interface ElectronAPI {
     getContextUsage: (
       sessionId: string,
       createOpts?: {
-        agentKind: 'claude-code' | 'codex';
+        agentKind: 'claude-code' | 'codex' | 'pi';
         workingDir: string;
         model: string;
         orcaRole?: import('@/lib/ccAgent.types').OrcaRole | null;
@@ -4333,7 +4345,7 @@ interface ElectronAPI {
     ) => Promise<{ sessionId: string; clientId: string; clientIds: string[] }>;
     listActive: () => Promise<Array<{
       sessionId: string;
-      agentKind: 'claude-code' | 'codex';
+      agentKind: 'claude-code' | 'codex' | 'pi';
       workDir: string;
       capabilities: unknown;
       isTurnRunning: boolean;
@@ -4427,7 +4439,9 @@ interface ElectronAPI {
       sessionId: string,
       model: string,
       providerId?: string | null,
-    ) => Promise<{ deferred: boolean } | undefined>;
+      expectedAgentSwitchRevision?: number,
+      selection?: { effort: string; fastMode: boolean },
+    ) => Promise<{ deferred: boolean; superseded?: boolean } | undefined>;
     /**
      * session-agent-switch:同一会话切换 agent 引擎(claude-code ↔ codex)。
      * 同引擎换模型走 setModel;跨引擎必须走本方法。意图制:本调用只登记切换
@@ -4437,18 +4451,50 @@ interface ElectronAPI {
      */
     switchSessionAgent: (
       sessionId: string,
-      targetAgentKind: 'claude-code' | 'codex',
+      targetAgentKind: 'claude-code' | 'codex' | 'pi',
       model: string,
       providerId?: string | null,
       effort?: string,
       fastMode?: boolean,
-    ) => Promise<{ switched: boolean; agentKind: 'claude-code' | 'codex'; model: string; engineReady: boolean; deferred?: boolean }>;
+    ) => Promise<{ switched: boolean; agentKind: 'claude-code' | 'codex' | 'pi'; model: string; engineReady: boolean; deferred?: boolean; sameEngineRevision?: number; sameEngineSuperseded?: boolean }>;
+    /**
+     * 读 main 权威的 pending 切换意图(内存态,不落库;无意图 → null)。
+     * 重开视图 / device-link 远程会话重连后恢复乐观显示用。
+     */
+    getSessionAgentSwitchIntent: (
+      sessionId: string,
+    ) => Promise<{
+      targetAgentKind: 'claude-code' | 'codex' | 'pi';
+      model: string;
+      providerId: string | null;
+      effort?: string;
+      fastMode?: boolean;
+    } | null>;
     // effort/mode 透传 string —— 合法值由 maker capabilities 决定, vite-env 不重复枚举
     setEffort: (sessionId: string, effort: string) => Promise<void>;
     setPermissionMode: (sessionId: string, mode: string) => Promise<void>;
     setFastMode: (sessionId: string, enabled: boolean) => Promise<void>;
     /** 计划模式一级开关(与 permissionMode 正交); DB 持久化由调用方另调 sessionService.update({ planModeEnabled }) */
     setPlanMode: (sessionId: string, enabled: boolean) => Promise<void>;
+    /** 会话导出 HTML(pi 原生); 主进程弹保存对话框 + 导出 + 在文件管理器显示; 返回路径或 null(取消/不支持) */
+    exportSessionHtml: (sessionId: string) => Promise<string | null>;
+    /** 手动压缩会话上下文(pi 原生, 可带聚焦指令); 返回压缩前后 token 数 / {noop} / null(会话不在/不支持) */
+    compactSession: (
+      sessionId: string,
+      instructions?: string,
+    ) => Promise<{ tokensBefore?: number; estimatedTokensAfter?: number; noop?: boolean } | null>;
+    /** 同会话原生分支树；旧 Pi 会话会在 main 侧按持久化元数据懒恢复。 */
+    getSessionTree: (sessionId: string) => Promise<MakerSessionTreeSnapshot | null>;
+    /** 切换原生分支并同步 Cindy 可见时间线。 */
+    navigateSessionTree: (
+      sessionId: string,
+      entryId: string,
+      options?: { summarize?: boolean; customInstructions?: string },
+    ) => Promise<{
+      tree: MakerSessionTreeSnapshot;
+      draftText?: string;
+      cancelled?: boolean;
+    } | null>;
     /**
      * 附加只读引用目录的 closure 推送; DB 持久化要 renderer 同步调
      * sessionService.update({ extraDirs }) (跟 setModel + sessionService.update 双 IPC 协调先例一致)。
@@ -4457,21 +4503,21 @@ interface ElectronAPI {
     setExtraDirs: (sessionId: string, dirs: string[]) => Promise<void>;
 
     // Memory 控制 (Settings → Personalization → Memory section)
-    memoryGet: (agentKind: 'claude-code' | 'codex') => Promise<{
+    memoryGet: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
       enabled: boolean;
       source: 'agent-default' | 'host-runtime' | 'user-config';
       stats?: { entryCount?: number; sizeBytes?: number; storagePath?: string };
     }>;
     memorySet: (
-      agentKind: 'claude-code' | 'codex',
+      agentKind: 'claude-code' | 'codex' | 'pi',
       enabled: boolean,
     ) => Promise<{
       effective: 'immediate' | 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
     }>;
-    memoryReset: (agentKind: 'claude-code' | 'codex') => Promise<{
+    memoryReset: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
       removedEntries?: number;
       removedBytes?: number;
     }>;
@@ -4484,7 +4530,7 @@ interface ElectronAPI {
       effective: 'next-session';
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
     }>;
@@ -4493,28 +4539,31 @@ interface ElectronAPI {
     makerMemoryReset: () => Promise<{ removedCount: number }>;
 
     /** 启动期拉 main 持久化的三个 memory 开关 — 见 preload memoryGetSettings 注释 */
-    memoryGetSettings: () => Promise<{ maker: boolean; claudeCode: boolean; codex: boolean }>;
+    memoryGetSettings: () => Promise<{ maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean }>;
     memoryGetSettingsState: () => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
+      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
     }>;
     /** 启动期迁移旧版 renderer/native memory opt-out；null 表示 renderer marker 缺失。 */
     memoryPreserveLegacyMakerDisabled: (legacyRendererValue: boolean | null) => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
+      pi: boolean;
     }>;
     memoryResetSettings: () => Promise<{
       maker: boolean;
       claudeCode: boolean;
       codex: boolean;
+      pi: boolean;
       isCustomized: boolean;
       customizedKeys: string[];
-      defaults: { maker: boolean; claudeCode: boolean; codex: boolean };
+      defaults: { maker: boolean; claudeCode: boolean; codex: boolean; pi: boolean };
       /** true = Codex 正忙, 存活会话的软重启在任务结束后自动补做 (设置已生效) */
       codexRestartDeferred: boolean;
     }>;
@@ -4658,7 +4707,7 @@ interface ElectronAPI {
     // Stage 2 C1: chat utility (前身 cc-agent:generate-title / cc-agent:plan-file-write)
     generateTitle: (
       message: string,
-      agentKind: 'claude-code' | 'codex',
+      agentKind: 'claude-code' | 'codex' | 'pi',
       sessionId?: string,
     ) => Promise<{ title: string | null }>;
     /** 重命名输入框 Magic 按钮:按会话最新对话内容重新生成标题(失败返 title: null)。 */
@@ -4671,7 +4720,7 @@ interface ElectronAPI {
     autoTitle: (request: {
       sessionId: string;
       text: string;
-      agentKind: 'claude-code' | 'codex';
+      agentKind: 'claude-code' | 'codex' | 'pi';
       isUserText?: boolean;
     }) => Promise<{ applied: boolean; done: boolean }>;
     helpAsk: (
@@ -4746,22 +4795,22 @@ interface ElectronAPI {
 
     /* ── Agent 鉴权 (取代老 codex.auth.*) ── */
     auth: {
-      getState: (agentKind: 'claude-code' | 'codex') => Promise<CodexAuthState>;
+      getState: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<CodexAuthState>;
       triggerLogin: (
-        agentKind: 'claude-code' | 'codex',
+        agentKind: 'claude-code' | 'codex' | 'pi',
         options?: { mode?: 'browser' | 'device-code'; ownerId?: string },
       ) => Promise<CodexAuthState>;
       cancelLogin: (
-        agentKind: 'claude-code' | 'codex',
+        agentKind: 'claude-code' | 'codex' | 'pi',
         options?: { releaseOwner?: boolean; ownerId?: string },
       ) => Promise<void>;
-      logout: (agentKind: 'claude-code' | 'codex') => Promise<void>;
+      logout: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<void>;
       onStateChanged: (
-        cb: (s: { agentKind: 'claude-code' | 'codex' } & CodexAuthState) => void,
+        cb: (s: { agentKind: 'claude-code' | 'codex' | 'pi' } & CodexAuthState) => void,
       ) => () => void;
       onLoginProgress: (
         cb: (p: {
-          agentKind: 'claude-code' | 'codex';
+          agentKind: 'claude-code' | 'codex' | 'pi';
           phase: string;
           mode?: 'browser' | 'device-code';
           detail?: string;
@@ -4773,15 +4822,15 @@ interface ElectronAPI {
 
     /* ── Agent 联合状态 (binary + auth, 取代老 codex.binary.getStatus) ── */
     agent: {
-      getStatus: (agentKind: 'claude-code' | 'codex') => Promise<{
+      getStatus: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
         binaryReady: boolean;
         binaryPath: string;
         authReady: boolean;
         identity?: string;
       }>;
       /** spawn 当前应用使用的 binary `--version`, 进程内缓存。About 面板用。 */
-      getBinaryVersion: (agentKind: 'claude-code' | 'codex') => Promise<{
-        kind: 'claude-code' | 'codex';
+      getBinaryVersion: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
+        kind: 'claude-code' | 'codex' | 'pi';
         binaryPath: string | null;
         version: string | null;
         error?: string;
@@ -4790,7 +4839,7 @@ interface ElectronAPI {
 
     /* ── Agent 今日累计 (取代老 codex.usage.* + onUsageTodaySpendChanged) ── */
     usage: {
-      getToday: (agentKind: 'claude-code' | 'codex') => Promise<{
+      getToday: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<{
         day: string;
         money?: import('../shared/regionalMoney').RegionalMoney;
         costUsd?: number;
@@ -4800,7 +4849,7 @@ interface ElectronAPI {
         reasoningTokens?: number;
         cachedTokens?: number;
       }>;
-      getAccount: (agentKind: 'claude-code' | 'codex') => Promise<unknown | null>;
+      getAccount: (agentKind: 'claude-code' | 'codex' | 'pi') => Promise<unknown | null>;
       /** Codex app-server authoritative windows and banked reset-credit metadata. */
       getCodexRateLimits: () => Promise<
         import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
@@ -4877,7 +4926,7 @@ interface ElectronAPI {
     crossAgent: {
       detect: (
         workingDir: string,
-        agentKind: 'claude-code' | 'codex',
+        agentKind: 'claude-code' | 'codex' | 'pi',
       ) => Promise<{ items: CrossAgentMigrationItem[] }>;
       convert: (
         items: CrossAgentMigrationItem[],
@@ -4937,7 +4986,7 @@ interface ElectronAPI {
         scheduleName?: string;
         workingDir?: string;
         providerId?: string;
-        agentKind?: 'claude-code' | 'codex';
+        agentKind?: 'claude-code' | 'codex' | 'pi';
         model?: string;
         /** 绑定会话任务:workingDir 空时 main 按会话 meta.workDir 解析落盘/自测目录。 */
         targetSessionId?: string;
@@ -5116,9 +5165,9 @@ interface SkillhubSkill {
   /** URL 匹配键 — 不含 engine，和路由格式一致，用于侧栏选中高亮。 */
   urlKey: string;
   /** 来自哪个 agent 引擎。 */
-  engine: 'claude-code' | 'codex';
+  engine: 'claude-code' | 'codex' | 'pi';
   /** 发现该 skill 的所有引擎专属路径（去重后）。 */
-  linkedEngines: Array<{ engine: 'claude-code' | 'codex'; label: string }>;
+  linkedEngines: Array<{ engine: 'claude-code' | 'codex' | 'pi'; label: string }>;
   kind: SkillhubKind;
   scope: SkillhubScope;
   name: string;
@@ -5244,7 +5293,7 @@ interface SkillUsageEvidenceIndex {
   rawLineNo: number;
   sessionId: string;
   sdkSessionId: string;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   skillName: string;
   skillPath: string | null;
   skillDocumentHash: string | null;

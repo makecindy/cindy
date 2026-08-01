@@ -55,6 +55,7 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.model.length).toBeGreaterThan(0);
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
     expect(d.lastByVendor.codex.effort).toBe('high');
+    expect(d.lastByVendor.pi.permissionMode).toBe('auto');
     // 种子模型不再写死在 store 里（原先是 'gpt-5.4'，与 modelDefinitions 写死的 'gpt-5.5'
     // 漂移，且两者在目录里都是默认隐藏的模型）。现在统一从 getDefaultModelForVendor 取，
     // capabilities 未加载时它给冷启动占位 id —— 这里只锁「非空且与那个入口同源」。
@@ -65,6 +66,15 @@ describe('newMakerDraft store', () => {
     expect(d.effortByModel).toEqual({});
     expect(d.worktreeEnabled).toBe(false);
     expect(d.worktreePreferenceCustomized).toBe(false);
+  });
+
+  it('persists an explicit Pi model choice across reload', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('pi', { model: 'chatgpt/gpt-5.6' });
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().modelChosenByVendor.pi).toBe(true);
+    expect(m2.getPersistedVendorModel('pi')).toBe('chatgpt/gpt-5.6');
   });
 
   it('Effort 按模型记忆:get/set + 同值短路 + 持久化', async () => {

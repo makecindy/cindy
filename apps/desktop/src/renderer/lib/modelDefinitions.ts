@@ -17,7 +17,7 @@ export interface ModelDefinition {
   description: string;
   efforts: readonly Effort[];
   defaultEffort: Effort | null;
-  vendorKey: 'cc' | 'codex';
+  vendorKey: 'cc' | 'codex' | 'pi';
   contextWindow?: number;
   supportsFastMode?: boolean;
   /** 目录展示排序;缺省排末尾(见 getDefaultModelForVendor)。 */
@@ -26,7 +26,7 @@ export interface ModelDefinition {
   defaultEnabled?: boolean;
 }
 
-function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex'): ModelDefinition {
+function toLegacy(m: ModelDescriptor, vendorKey: 'cc' | 'codex' | 'pi'): ModelDefinition {
   return {
     id: m.id,
     label: m.displayName,
@@ -97,7 +97,7 @@ export function getModelById(modelId: string, deviceId?: string): ModelDefinitio
 }
 
 export function getModelsForVendor(
-  vendorKey: 'cc' | 'codex',
+  vendorKey: 'cc' | 'codex' | 'pi',
   deviceId?: string,
 ): readonly ModelDefinition[] {
   return allCachedModels(deviceId).filter((m) => m.vendorKey === vendorKey);
@@ -135,7 +135,7 @@ function firstByCatalogOrder(models: readonly ModelDefinition[]): ModelDefinitio
  * 自动化任务（scheduler）的默认**故意不同**：无人值守场景成本保守，走 useScheduleForm.ts
  * getScheduleDefaultModel 三级回退（冷启动 Sonnet），不要把这里的默认接到 scheduler 上。
  */
-export function getDefaultModelForVendor(vendorKey: 'cc' | 'codex', deviceId?: string): ModelDefinition {
+export function getDefaultModelForVendor(vendorKey: 'cc' | 'codex' | 'pi', deviceId?: string): ModelDefinition {
   const list = getModelsForVendor(vendorKey, deviceId);
   // capabilities 还没拉到时退化到一个静态 placeholder, 让调用方拿到非 undefined。
   // 调用方真正需要值时通常已经在 useEffect 后, capabilities 已就绪。

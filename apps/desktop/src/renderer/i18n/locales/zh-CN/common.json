@@ -1318,13 +1318,21 @@
           "anthropic": "Anthropic Messages（Cindy 桥接）",
           "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
           "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。",
-          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。"
+          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。",
+          "piResponses": "OpenAI Responses",
+          "piChat": "OpenAI Chat Completions",
+          "piAnthropic": "Anthropic Messages",
+          "piResponsesHelp": "Pi 直接连接供应商的 OpenAI Responses API。",
+          "piChatHelp": "Pi 直接连接供应商的 OpenAI 兼容 Chat Completions API。",
+          "piAnthropicHelp": "Pi 直接连接供应商的 Anthropic Messages API。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型，留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。",
+          "pi": "Pi",
+          "piDesc": "Pi 是多协议 harness：你的自定义或本地模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1880,11 +1888,16 @@
         "connecting": "连接中…",
         "connected": "已连接",
         "conflict": "已被另一台设备使用",
+        "offline": "已下线",
         "error": "连接失败"
       },
       "connected": {
         "heading": "已连接 Telegram Bot",
         "note": "私聊 Bot 或在群里 @ 它，消息会路由到本机的 {{appName}}；群里最近的消息会作为上下文一起带上。",
+        "headingOffline": "已在这台设备下线",
+        "noteOffline": "已停止接收消息。Bot Token 和绑定信息仍保留在本机，随时可以重新上线。",
+        "headingConflict": "已被另一台设备使用",
+        "noteConflict": "同一个 Bot 同时只能有一台设备接收消息，本机正在反复争抢。可以在下方让那台设备下线、由本机接管；或者点「本机下线」把位置让给它。",
         "botLabel": "Bot 账号",
         "ownerLabel": "我的用户 ID"
       },
@@ -1897,6 +1910,43 @@
       "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "连接",
       "connectingAction": "连接中…",
+      "errorCode": {
+        "invalid-token": "Bot Token 无效或已被重置，请重新填写",
+        "provider-api": "Telegram 服务返回错误，请稍后重试",
+        "network": "网络不可达，连不上 Telegram",
+        "secret-unavailable": "系统安全存储不可用，凭证无法保存"
+      },
+      "goOffline": "本机下线",
+      "goingOfflineAction": "下线中…",
+      "goOnline": "本机上线",
+      "goingOnlineAction": "上线中…",
+      "remoteDevices": {
+        "title": "我的其他设备",
+        "refresh": "重新检查",
+        "hint": "让某台设备下线后，它就不再接收消息。它的 Token 和绑定不会被清除，之后在那台设备上随时能自己再上线。",
+        "takeOffline": "让它下线",
+        "state": {
+          "checking": "检查中…",
+          "connected": "正在使用这个 Bot",
+          "conflict": "正在争抢这个 Bot",
+          "offline": "已下线",
+          "connecting": "连接中…",
+          "idle": "未配置",
+          "error": "连接失败",
+          "notConfigured": "未配置 Telegram 机器人",
+          "otherBot": "绑的是另一个 Bot，不冲突",
+          "offlineDevice": "设备离线，无法远程操作",
+          "unreachable": "查不到状态",
+          "unsupported": "该设备版本不支持远程下线"
+        },
+        "failure": {
+          "remoteDisabled": "该设备已关闭远程控制",
+          "accessRevoked": "该设备已撤销本机的访问权限",
+          "controlDisabled": "本机已关闭对该设备的控制",
+          "unreachable": "该设备已离线或暂时无法连接",
+          "unknown": "远程请求失败，请检查设备状态后重试"
+        }
+      },
       "disconnect": "解绑",
       "disconnectingAction": "解绑中…",
       "disconnectAria": "解绑 Telegram 机器人",
@@ -2088,6 +2138,10 @@
         "codex": {
           "label": "Codex",
           "description": "通过 Codex 入口使用的所有模型，会共享同一份记忆"
+        },
+        "pi": {
+          "label": "Pi",
+          "description": "将长任务的压缩摘要保存到 Cindy 记忆，供后续 Pi 任务继续使用"
         }
       },
       "agent": {
@@ -4769,6 +4823,7 @@
       "add": "添加项目",
       "cancel": "取消",
       "empty": "请先在「设置 → 远程连接」连接一台被控设备，或在「设置 → 远端机器」添加 SSH 主机。",
+      "emptyPiSshFiltered": "Pi 仅在本地运行，这里不显示 SSH 主机。请在「设置 → 远程连接」连接一台被控设备，或切换到 Claude / Codex 以使用 SSH 主机。",
       "loading": "加载中…",
       "noSubdirs": "此目录下没有子文件夹",
       "doubleClickHint": "双击进入此文件夹",
@@ -4827,6 +4882,7 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
+          "pi": "Pi",
           "pending": "下条：{{agent}}"
         }
       },
@@ -4906,6 +4962,20 @@
           "bypassPermissions": {
             "label": "完全访问",
             "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+          }
+        },
+        "pi": {
+          "ask": {
+            "label": "默认权限",
+            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "所有工具无需询问直接执行。风险最高，只适合可信任务。"
           }
         }
       }
@@ -6039,6 +6109,7 @@
     },
     "draft": {
       "createSessionFailed": "创建任务失败，请重试",
+      "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
@@ -6286,7 +6357,35 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "openInNewWindow": "在新窗口打开",
         "exportShare": "导出任务…",
+        "exportHtml": "导出为 HTML…",
+        "exportHtmlSuccess": "对话已导出为 HTML",
+        "exportHtmlFailed": "HTML 导出失败",
+        "compact": "压缩上下文",
+        "compacting": "正在压缩…",
+        "compactSuccess": "上下文已压缩",
+        "compactSuccessWithTokens": "上下文已压缩：{{before}}k → {{after}}k tokens",
+        "compactFailed": "压缩失败",
+        "compactNothing": "暂无可压缩内容",
+        "sessionBranches": "任务分支",
         "copySessionLink": "复制任务链接"
+      },
+      "sessionBranches": {
+        "title": "任务分支",
+        "close": "关闭任务分支",
+        "description": "Cindy 任务分叉与 Pi 任务内分支统一显示在这里。",
+        "current": "当前",
+        "empty": "当前任务还没有可切换的 Pi 分支。",
+        "emptyEntry": "无可见内容",
+        "loadFailed": "读取任务分支失败",
+        "switchFailed": "切换分支失败",
+        "switched": "已切换任务分支",
+        "switchedWithDraft": "已切换分支，原问题已放回输入框",
+        "runningBlocked": "当前轮结束后才能切换任务分支。",
+        "remoteBlocked": "请先重连或升级被控桌面端，再切换分支。",
+        "filesWarning": "切换只改变对话上下文，不会回滚工作区文件。",
+        "summarize": "离开当前分支时生成摘要（会调用模型）",
+        "summaryFocus": "可选：摘要重点，例如保留错误处理结论",
+        "role": { "user": "用户", "assistant": "Agent", "tool": "工具", "summary": "分支摘要", "system": "状态" }
       },
       "projectAction": {
         "rename": "重命名项目",
@@ -7950,6 +8049,12 @@
       "telegramBotSaveFailed": "保存失败：{{message}}",
       "telegramBotDisconnected": "已解绑 Telegram 机器人",
       "telegramBotDisconnectFailed": "解绑失败：{{message}}",
+      "telegramBotWentOffline": "已下线，绑定信息已保留",
+      "telegramBotWentOnline": "已上线",
+      "telegramBotToggleOnlineFailed": "切换失败：{{message}}",
+      "telegramRemoteWentOffline": "已让该设备下线",
+      "telegramRemoteUnsupported": "该设备的 Cindy 版本还不支持远程下线，需要先更新",
+      "telegramRemoteFailed": "远程下线失败：{{message}}",
       "dingtalkBotConnected": "钉钉机器人已连接",
       "dingtalkBotConnectFailed": "钉钉机器人连接失败，请检查凭证、Stream 模式和网络",
       "dingtalkBotAuthFailed": "钉钉未通过凭证校验，请确认 Client ID 和 Client Secret 来自同一个应用",
@@ -8006,8 +8111,11 @@
       "codexVoiceAuthDescription": "语音输入需要使用已连接的 ChatGPT 账号调用 GPT 实时语音识别。当前账号尚未连接或需要更新，是否前往「模型供应商」连接 ChatGPT？",
       "codexBinaryMissingTitle": "Codex 组件未就绪",
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
+      "piBinaryMissingTitle": "Pi 组件未就绪",
+      "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
       "goToSettings": "前往设置",
       "remoteCodexBinaryMissingTitle": "被控端 Codex 组件未就绪",
+      "remotePiBinaryMissingTitle": "被控端 Pi 组件未就绪",
       "remoteAuthDescription": "需要在被控设备「{{device}}」上完成配置后，才能在这里新建并运行任务。请在该设备上配置后重试。",
       "remoteCodexNoSourceTitle": "被控端 Codex 暂无可用来源",
       "remoteCodexNoSourceDescription": "被控设备「{{device}}」尚未连接 Codex 可用的模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」登录 OpenAI 或连接其他来源后重试。",

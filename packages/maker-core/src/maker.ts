@@ -742,17 +742,23 @@ export class Maker {
    * Agent 联合状态查询 (binary 是否就绪 + 是否登录)。
    * 老 codex:binary:status 的功能等价物, 现在跨 agent 统一。
    *
-   * binaryReady: maker-core 构造期已校验 binaryPath 非空, 这里返回 true 即可
-   *              (host 真正在 splash 阶段做下载, 走到这里时 binary 必然 ready)。
+   * binaryReady: 已注册 agent 由其 binaryPath 判定；平台不支持或 provision 尚未完成的
+   *              optional runtime 不注册 agent，并在这里明确返回 false。
    * authReady / identity: 走 deps.auth.getState()。
    */
   async getAgentStatus(agentKind: AgentKind): Promise<{
     binaryReady: boolean;
-    binaryPath: string;
+    binaryPath: string | null;
     authReady: boolean;
     identity?: string;
   }> {
-    const agent = this.requireAgent(agentKind);
+    const agent = this.agents[agentKind];
+    // Optional runtimes (currently Pi on unsupported/unprepared platforms) are
+    // intentionally not registered. Status is the one discovery API that must
+    // represent that state instead of throwing and hiding it as an auth error.
+    if (!agent) {
+      return { binaryReady: false, binaryPath: null, authReady: false };
+    }
     const auth = await agent.getAuthState();
     return {
       binaryReady: !!agent.getBinaryPath(),

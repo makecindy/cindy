@@ -137,13 +137,13 @@ interface RewindContext {
   targetCreatedAt: number;
   targetMessageId: string;
   targetClientId: string;
-  /** 当前 agent kind；Claude / Codex 的 rewind 机制不同。 */
-  agentKind: 'claude-code' | 'codex';
+  /** 当前 agent kind；Claude checkpoint 与 conversation-tree rollback 机制不同。 */
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /** prior assistant uuid（Claude 必填）——SDK resumeSessionAt 用。 */
   assistantUuid?: string;
   /** target user 消息的 SDK uuid——仅 preview 的 rewindFiles dryRun 用，老消息可能 NULL。 */
   userUuid?: string;
-  /** Codex thread/rollback 从尾部裁剪的完整 turn 数。 */
+  /** Codex thread/rollback 或 Pi fork(entryId) 从尾部裁剪的完整 turn 数。 */
   tailTurnsToDrop?: number;
   codexUserMessages?: CodexRewindUserMessage[];
   /** DB 事务保留用 uuid；旧数据里可能是 synthetic block uuid，和 SDK anchor 不同。 */
@@ -170,7 +170,11 @@ async function loadRewindContext(
   if (makerSession.isTurnRunning()) {
     throw rewindError('SESSION_RUNNING', '会话进行中，无法回滚');
   }
-  const agentKind = makerSession.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind = makerSession.agentKind === 'codex'
+    ? 'codex'
+    : makerSession.agentKind === 'pi'
+      ? 'pi'
+      : 'claude-code';
 
   // 2. 取 target user 消息
   const [target] = await db
@@ -227,7 +231,7 @@ async function loadRewindContext(
     );
   }
 
-  if (agentKind === 'codex') {
+  if (agentKind === 'codex' || agentKind === 'pi') {
     const tailTurns = await db
       .select({
         rowid: messageRowid,
@@ -250,11 +254,11 @@ async function loadRewindContext(
       .orderBy(asc(messages.createdAt), asc(messageRowid));
     const targetStillVisible = tailTurns.some((row) => row.rowid === target.rowid);
     if (!targetStillVisible) {
-      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 Codex turn 时间线`);
+      throw rewindError('MESSAGE_NOT_FOUND', `Message ${clientId} 不在当前 agent turn 时间线`);
     }
     const codexUserMessages = tailTurns.map((row) => ({ clientId: row.clientId, createdAt: row.createdAt }));
     log.debug(
-      `[rewind] codex sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} tailTurnsToDrop=${tailTurns.length}`,
+      `[rewind] ${agentKind} sessionId=${sessionId.slice(0, 8)} clientId=${clientId} target.createdAt=${target.createdAt} tailTurnsToDrop=${tailTurns.length}`,
     );
     return {
       targetCreatedAt: target.createdAt,
@@ -358,7 +362,7 @@ export async function previewRewindAtMessage(
   if (!makerSession) {
     throw rewindError('NO_LIVE_QUERY', '会话未激活');
   }
-  if (ctx.agentKind === 'codex') {
+  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     return previewCodexFileRewindPlan(await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession));
   }
   if (!ctx.userUuid) {
@@ -462,13 +466,13 @@ export async function commitRewindAtMessage(
   // userUuid 缺失 (老消息) 时跳 SDK 文件回滚, 直接进 DB 段; ctx.assistantUuid 设进
   // pendingRewindTo, 下次 send 仍走三件套 (forkSession=true CLI 端兜底回滚)。
   let rewindResult: Awaited<ReturnType<typeof makerSession.commitRewindFiles>> | undefined;
-  if (ctx.agentKind === 'codex') {
+  if (ctx.agentKind === 'codex' || ctx.agentKind === 'pi') {
     const filePlan = await buildCodexFilePlanForSession(sessionId, clientId, ctx.codexUserMessages ?? [], makerSession);
     const result = await executeCodexFileRewindPlanWithThreadRollback(filePlan, sessionId, {
       commitThreadRollback: () =>
         makerSession.commitRewindFiles('', '', { tailTurnsToDrop: ctx.tailTurnsToDrop }),
       onCompensationError: (compErr, execution) => {
-        log.error('[rewind commit] codex file rewind compensation failed', {
+        log.error(`[rewind commit] ${ctx.agentKind} file rewind compensation failed`, {
           sessionId,
           rollbackCommit: execution.rollbackCommit,
           error: compErr instanceof Error ? compErr.message : String(compErr),

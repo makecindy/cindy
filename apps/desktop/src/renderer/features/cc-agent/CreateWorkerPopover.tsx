@@ -14,6 +14,7 @@ import {
 import { FastModeToggle } from '@/components/new-chat/FastModeToggle';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import { agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useProviders } from '@/hooks/useProviders';
@@ -43,15 +44,18 @@ interface WorkerAgentPrefs {
 }
 
 interface WorkerPrefs {
-  lastAgent: 'codex' | 'claude-code';
+  lastAgent: 'codex' | 'claude-code' | 'pi';
   codex: WorkerAgentPrefs;
   'claude-code': WorkerAgentPrefs;
+  pi: WorkerAgentPrefs;
 }
 
 const DEFAULT_PREFS: WorkerPrefs = {
   lastAgent: 'codex',
   codex: { model: 'codex/gpt-5.5', effort: 'high', fast: false, providerId: null },
   'claude-code': { model: 'claude-opus-4-7', effort: 'high', fast: false, providerId: null },
+  // pi worker 默认模型与 orcaWorkerCreationService.resolveWorkerConfig 的 pi 分支一致。
+  pi: { model: 'claude-sonnet-4-6', effort: 'high', fast: false, providerId: null },
 };
 
 function readWorkerPrefs(): WorkerPrefs {
@@ -59,7 +63,7 @@ function readWorkerPrefs(): WorkerPrefs {
     const raw = window.localStorage.getItem(PREFS_KEY);
     if (!raw) return DEFAULT_PREFS;
     const parsed = JSON.parse(raw) as Partial<WorkerPrefs>;
-    const agentPrefs = (agent: 'codex' | 'claude-code'): WorkerAgentPrefs => {
+    const agentPrefs = (agent: 'codex' | 'claude-code' | 'pi'): WorkerAgentPrefs => {
       const p = parsed[agent];
       return {
         ...DEFAULT_PREFS[agent],
@@ -71,9 +75,11 @@ function readWorkerPrefs(): WorkerPrefs {
       };
     };
     return {
-      lastAgent: parsed.lastAgent === 'claude-code' ? 'claude-code' : 'codex',
+      lastAgent:
+        parsed.lastAgent === 'claude-code' ? 'claude-code' : parsed.lastAgent === 'pi' ? 'pi' : 'codex',
       codex: agentPrefs('codex'),
       'claude-code': agentPrefs('claude-code'),
+      pi: agentPrefs('pi'),
     };
   } catch {
     return DEFAULT_PREFS;
@@ -90,7 +96,7 @@ function writeWorkerPrefs(prefs: WorkerPrefs): void {
 
 export interface CreateWorkerForm {
   role: string;
-  agent: 'claude-code' | 'codex';
+  agent: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort?: Effort;
   fast?: boolean;
@@ -131,7 +137,7 @@ export function CreateWorkerPopover({
   const navigate = useNavigate();
   const [role, setRole] = useState('developer');
   const [customRole, setCustomRole] = useState('');
-  const [agent, setAgent] = useState<'claude-code' | 'codex'>('codex');
+  const [agent, setAgent] = useState<'claude-code' | 'codex' | 'pi'>('codex');
   const [model, setModel] = useState(DEFAULT_PREFS.codex.model);
   const [effort, setEffort] = useState<Effort>(DEFAULT_PREFS.codex.effort);
   const [fast, setFast] = useState(DEFAULT_PREFS.codex.fast);
@@ -146,13 +152,14 @@ export function CreateWorkerPopover({
 
   const ccCaps = useAgentCapabilities('claude-code', deviceId);
   const codexCaps = useAgentCapabilities('codex', deviceId);
+  const piCaps = useAgentCapabilities('pi', deviceId);
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
   const providersError = deviceId ? remoteProviders.error : null;
   const visibilityVersion = useModelVisibilityVersion();
-  const activeCapabilitiesState = agent === 'codex' ? codexCaps : ccCaps;
+  const activeCapabilitiesState = agent === 'codex' ? codexCaps : agent === 'pi' ? piCaps : ccCaps;
   const activeCaps = activeCapabilitiesState.capabilities;
   const activeModels = useMemo(() => {
     return selectWorkerModels({
@@ -242,7 +249,7 @@ export function CreateWorkerPopover({
   // fast=true 清掉,回退默认来源支持 Fast 也不会恢复(codex review)。收窄后按
   // 「实际会生效的来源」口径判定,不经历 false 窗口。
   const currentModelSupportsFast = Boolean(
-    agent === 'codex' &&
+    (agent === 'codex' || agent === 'pi') &&
       activeCaps?.hasFastMode &&
       providerFastSupported(narrowProviderSource(providerSource, model), model),
   );
@@ -345,9 +352,9 @@ export function CreateWorkerPopover({
     }
   }, [currentModel, currentModelSupportsFast, fast]);
 
-  const vendorKey = agent === 'codex' ? 'codex' : 'cc';
+  const vendorKey = agentKindToVendor(agent);
   const updateAgent = useCallback(
-    (nextAgent: 'claude-code' | 'codex') => {
+    (nextAgent: 'claude-code' | 'codex' | 'pi') => {
       if (nextAgent === agent) return;
       // 切走前把当前 agent 的 live 编辑(模型/effort/Fast/来源)快照进内存 prefs:
       // 恢复读的是 prefs,不快照会把「改了还没提交就切了个 tab」的编辑静默回滚到
@@ -687,7 +694,9 @@ export function CreateWorkerPopover({
             value={vendorKey}
             width={220}
             ariaLabel={t('orca.createWorker.agentLabel')}
-            onChange={(next) => updateAgent(next === 'codex' ? 'codex' : 'claude-code')}
+            onChange={(next) =>
+              updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
+            }
           />
         </div>
 
@@ -742,17 +751,17 @@ export function CreateWorkerPopover({
                     }
               }
               modelMemory={modelMemory}
-              // worker 创建链的显式 Fast 派发目前仅 Codex(resolveWorkerConfig 只对
-              // codex 消费 input.fast):cc 不接线,面板就不显示 Fast 开关,避免
-              // 「开关能开、提交被丢」的名不副实(codex review)。
-              fastMode={deviceId || agent !== 'codex' ? undefined : fast}
-              onFastModeChange={deviceId || agent !== 'codex' ? undefined : updateFast}
+              // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
+              // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
+              // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
+              fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
+              onFastModeChange={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast}
             />
           </div>
           {noAvailableLocalModels ? (
             <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
               {t('orca.createWorker.noAvailableModels', {
-                agent: agent === 'codex' ? 'Codex' : 'Claude Code',
+                agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
               })}
             </p>
           ) : null}

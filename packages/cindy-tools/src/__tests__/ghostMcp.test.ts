@@ -1099,6 +1099,38 @@ describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
     );
     expect(many.split("\n")).toHaveLength(1 + 16); // 标题 + 上限 16 条
   });
+
+  /**
+   * 花名册只许进 ghost_list 一处。两件工具的描述都在 system prompt 的固定
+   * 前缀里,拼两遍等于整份已装插件清单在上下文出现两次。
+   */
+  it("只注入 ghost_list 描述;ghost_call 描述不带花名册", () => {
+    const server = createCindyGhostsMcpServer(
+      fakeDeps({
+        getRosterItems: () => [
+          {
+            id: "art",
+            name: "画图",
+            command: "画图",
+            description: "画图与改图。",
+          },
+        ],
+      }),
+    ) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+
+    const listDesc = server._registeredTools.ghost_list?.description ?? "";
+    const callDesc = server._registeredTools.ghost_call?.description ?? "";
+
+    expect(listDesc).toContain("【本机插件清单");
+    expect(listDesc).toContain("- 画图(id: art,指令 $画图):画图与改图。");
+
+    expect(callDesc).not.toContain("【本机插件清单");
+    expect(callDesc).not.toContain("id: art");
+    // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
+    expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
+  });
 });
 
 describe("cindy · 卡槽③(xdt_card_id 提升 + agentToolUseId 提取)", () => {

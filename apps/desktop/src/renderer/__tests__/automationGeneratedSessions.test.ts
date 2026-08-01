@@ -763,8 +763,10 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('disabled={!latestSession}');
     // 自动任务组头首图标必须复用普通 SessionItem 的 15px 槽与 vendor 尺寸规则，
     // 否则裸 VendorIcon 会比其它会话向左偏约 1.5px，Claude mark 还会小 1px。
+    // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
     expect(source).toContain('className="flex w-[15px] shrink-0 items-center justify-center"');
-    expect(source).toContain("size={latestSession?.agentKind === 'codex' ? 12 : 13}");
+    expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
+    expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
     expect(source).toContain('<AutomationTimerIcon');
     expect(source).toContain('paused={isScheduleStopped}');

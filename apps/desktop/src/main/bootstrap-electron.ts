@@ -159,7 +159,8 @@ import { RendererBootGuard } from './renderer-boot-guard';
 import yaml from 'js-yaml';
 import matter from 'gray-matter';
 import type { Maker } from '@cindy/maker-core';
-import { im, feishuIm, registerTelegramBotConfigIpc, startImOrchestrators, startImConnection, stopImConnection } from './im';
+import { im, feishuIm, telegramIm, registerTelegramBotConfigIpc, startImOrchestrators, startImConnection, stopImConnection } from './im';
+import { setTelegramRemoteSource } from './device-link/telegramRemoteControl';
 import * as authManager from './authManager';
 import { hasPersistedSessionHint } from './authSessionHint';
 import { createAccountDeletionIpcHandlers } from './accountDeletionIpc';
@@ -184,6 +185,7 @@ import {
 } from './rsb-browser-bridge';
 import { disposeAndroidAdb } from './mcp-integrations/android.js';
 import { shutdownCodexEnvironment } from './mcp-integrations/codexEnvironment.js';
+import { shutdownPiEnvironment } from './mcp-integrations/piEnvironment.js';
 import { fetchRemoteMediaImageBytes } from './device-link/remoteMediaProtocol';
 import * as imageCacheStore from './imageCacheStore';
 import {
@@ -5837,6 +5839,15 @@ app.on('ready', async () => {
         refreshProviderModels: requestProviderModelAutoRefresh,
         log: accountSwitchLog,
       });
+      // Pi bridge 与 Codex 同源（HTTP bridge + gateway key），账号切换后也必须
+      // 清掉旧账号环境，让下一次 Pi 会话按新账号凭证重建。
+      try {
+        await shutdownPiEnvironment();
+      } catch (err) {
+        accountSwitchLog.warn('shutdownPiEnvironment on account switch failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
       void sweepStartupDraftImages({
         dbClient: getDbClient(),
         processStartedAtMs: PROCESS_STARTED_AT_MS,
@@ -5920,6 +5931,11 @@ app.on('ready', async () => {
   // Telegram 个人 bot 行为/人格/群参与配置的 IPC(设置卡数据面),与 im.registerIpc
   // 同期无条件注册;不能放 host.ts 模块顶层(mock electron 的单测收集期会炸)。
   registerTelegramBotConfigIpc();
+  // 把 telegram transport 注入 device-link 的跨设备上下线执行器。用注入而非
+  // 静态 import: device-link 侧直接引 im/host 会把整个 IM 子系统拽进它的依赖链
+  // (host.ts 模块顶层就调 app.getPath / ipcMain.handle),而 main 进程又禁止运行时
+  // 动态 import(架构不变式 §2)——注入是唯一合规且不破坏单测收集的接法。
+  setTelegramRemoteSource(telegramIm);
   // 挂业务 orchestrator: 订阅 feishuIm.onMessage / .onCardAction。orchestrator
   // 必须在 createWindow 前挂好,避免 renderer 起来后第一波 IPC / event 找不到
   // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
@@ -6095,6 +6111,7 @@ onQuit('shutdown-maker', shutdownMaker, 'async');
 onQuit('orca-idle-watcher', () => stopOrcaIdleWatcher(), 'sync');
 onQuit('im', () => stopImConnection('quit'), 'async');
 onQuit('codex-env', () => shutdownCodexEnvironment(), 'async');
+onQuit('pi-env', () => shutdownPiEnvironment(), 'async');
 // embedding-host: abort 语义 —— 立刻让出 SQLite 写连接, 不等当前 tick (那批 job 保持
 // pending 下次续跑, 写事务同步原子无中断)。
 onQuit('embedding-host', () => stopEmbeddingHost(), 'async');

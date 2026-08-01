@@ -43,7 +43,7 @@ export interface ScanResult {
   truncated: boolean;
 }
 
-export type PaletteAgentKind = 'claude-code' | 'codex';
+export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
 
 /**
  * Load candidate @-resources from the active agent/workspace. Returns `success:false`

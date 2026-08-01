@@ -88,6 +88,7 @@ import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
+import { PiSessionTreeSheet } from '@/session/PiSessionTreeSheet';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
@@ -222,6 +223,7 @@ import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchCon
 import {
   mobileAgentLabel,
   normalizeSessionAgentSwitchIntent,
+  sessionAgentKind as resolveSessionAgentKind,
   supportsMobileSessionAgentSwitch,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
@@ -922,6 +924,8 @@ export default function SessionScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
+  const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
+  const [sessionTreePendingOpen, setSessionTreePendingOpen] = useState(false);
   // inline 排队区:展开操作行的条目(同时只展开一条;null=全收起)。
   const [queueSelectedClientId, setQueueSelectedClientId] = useState<string | null>(null);
   // 排队消息「复用 composer 编辑」态:进入时把队列条目的文本/附件载入 composer,
@@ -1632,18 +1636,12 @@ export default function SessionScreen() {
   const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
     && !inputProjection.queueAbortPending;
   const canStopComposer = canStopQueue || canStopCurrentRun;
-  const sessionAgentKind: MobileSessionAgentKind = currentSession?.agentKind === 'codex'
-    ? 'codex'
+  const sessionAgentKind: MobileSessionAgentKind = currentSession
+    ? resolveSessionAgentKind(currentSession)
     : 'claude-code';
   const agentSwitchIntent = currentSession?.agentSwitchIntent ?? null;
   const sessionAgentSwitchSupported = !!currentSession
     && supportsMobileSessionAgentSwitch(currentSession, capabilities);
-  const alternateAgentKind: MobileSessionAgentKind = sessionAgentKind === 'codex'
-    ? 'claude-code'
-    : 'codex';
-  const resolvedAlternateCapabilities = alternateCapabilitiesAgentKind === alternateAgentKind
-    ? alternateCapabilities
-    : null;
   const runtimeOptions = useMemo(
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
@@ -1660,9 +1658,12 @@ export default function SessionScreen() {
       fastMode: agentSwitchIntent.fastMode ?? false,
     };
   }, [agentSwitchIntent, currentSession]);
-  const composerDisplayCapabilities = agentSwitchIntent?.targetAgentKind === alternateAgentKind
-    ? resolvedAlternateCapabilities
-    : capabilities;
+  const composerDisplayCapabilities = !agentSwitchIntent
+    || agentSwitchIntent.targetAgentKind === sessionAgentKind
+    ? capabilities
+    : alternateCapabilitiesAgentKind === agentSwitchIntent.targetAgentKind
+      ? alternateCapabilities
+      : null;
   const composerDisplayRuntimeOptions = useMemo(
     () => composerDisplaySession
       ? buildSessionRuntimeOptions(composerDisplaySession, composerDisplayCapabilities)
@@ -1681,7 +1682,7 @@ export default function SessionScreen() {
     () => currentSession
       ? buildMobileModelSections({
           providers: composerDeviceProviders.providers,
-          agentKind: currentSession.agentKind === 'codex' ? 'codex' : 'claude-code',
+          agentKind: sessionAgentKind,
           selectedModelId: currentSession.model,
           selectedProviderId: currentSession.providerId ?? null,
           visibilityOverrides: composerDeviceProviders.modelVisibilityOverrides,
@@ -1726,7 +1727,9 @@ export default function SessionScreen() {
   const modelSheetUsesIntent = agentSwitchIntent?.targetAgentKind === modelSheetAgentKind;
   const modelSheetCapabilities = modelSheetAgentKind === sessionAgentKind
     ? capabilities
-    : resolvedAlternateCapabilities;
+    : alternateCapabilitiesAgentKind === modelSheetAgentKind
+      ? alternateCapabilities
+      : null;
   const modelSheetCapabilitiesLoading = modelSheetAgentKind === sessionAgentKind
     ? capabilitiesLoading
     : alternateCapabilitiesLoading;
@@ -2038,6 +2041,15 @@ export default function SessionScreen() {
     setMenuInitialView(view);
     setSettingsOpen(true);
   }, []);
+  const openSessionTreeAfterMenu = useCallback(() => {
+    setSessionTreePendingOpen(true);
+    setSettingsOpen(false);
+  }, []);
+  const handleSessionMenuClosed = useCallback(() => {
+    if (!sessionTreePendingOpen) return;
+    setSessionTreePendingOpen(false);
+    setSessionTreeOpen(true);
+  }, [sessionTreePendingOpen]);
   const renderComposerResizeHandle = () => (
     <ComposerResizeGrabber
       onAdjust={composerResize.adjustByLine}
@@ -2797,7 +2809,21 @@ export default function SessionScreen() {
       setAlternateCapabilitiesError(null);
       return;
     }
-    const targetAgentKind = alternateAgentKind;
+    // 三 Agent 不能再用“当前 / 另一侧”的二元缓存。面板打开时跟随正在浏览的
+    // agent；面板关闭但已有 pending intent 时继续保有目标 agent 的能力快照。
+    const targetAgentKind = modelSheetOpen && modelSheetAgentKind !== sessionAgentKind
+      ? modelSheetAgentKind
+      : agentSwitchIntent?.targetAgentKind !== sessionAgentKind
+        ? agentSwitchIntent?.targetAgentKind ?? null
+        : null;
+    if (!targetAgentKind) {
+      alternateCapabilitiesLoadSeqRef.current += 1;
+      setAlternateCapabilities(null);
+      setAlternateCapabilitiesAgentKind(null);
+      setAlternateCapabilitiesLoading(false);
+      setAlternateCapabilitiesError(null);
+      return;
+    }
     const seq = ++alternateCapabilitiesLoadSeqRef.current;
     let cancelled = false;
     setAlternateCapabilitiesAgentKind(targetAgentKind);
@@ -2852,7 +2878,16 @@ export default function SessionScreen() {
       cancelled = true;
       unsubscribe();
     };
-  }, [alternateAgentKind, deviceId, maker, openLink, sessionAgentSwitchSupported]);
+  }, [
+    agentSwitchIntent?.targetAgentKind,
+    deviceId,
+    maker,
+    modelSheetAgentKind,
+    modelSheetOpen,
+    openLink,
+    sessionAgentKind,
+    sessionAgentSwitchSupported,
+  ]);
 
   useEffect(() => {
     if (!deviceId || !sessionAgentSwitchSupported) {
@@ -7561,6 +7596,7 @@ export default function SessionScreen() {
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             onArchive={() => patchSessionMeta({ status: 'archived' })}
             onClose={() => setSettingsOpen(false)}
+            onClosed={handleSessionMenuClosed}
             onDelete={() => patchSessionMeta({ status: 'deleted' })}
             onLoadExtraDirPath={(path) => void loadExtraDirBrowsePath(path)}
             onRefreshAccountUsage={() => void refreshAccountUsage()}
@@ -7574,6 +7610,9 @@ export default function SessionScreen() {
                 params: { sessionId, deviceId, deviceName },
               });
             }}
+            onOpenSessionTree={currentSession.agentKind === 'pi'
+              ? openSessionTreeAfterMenu
+              : undefined}
             onRegenerateTitle={() => maker.regenerateSessionTitle(sessionId)}
             onRename={(title) => patchSessionMeta({ title })}
             onRestore={() => patchSessionMeta({ status: 'active' })}
@@ -7591,6 +7630,20 @@ export default function SessionScreen() {
             visible={settingsOpen}
           />
         ) : null}
+        <PiSessionTreeSheet
+          disabledReason={remoteSessionRunning
+            ? t('session.menu.branchRunningBlocked')
+            : collaborationReadOnlyReason}
+          maker={maker}
+          onClose={() => setSessionTreeOpen(false)}
+          onNavigated={async (draftText) => {
+            if (draftText) applyComposerDocument(textComposerDocument(draftText));
+            setSessionTreeOpen(false);
+            await requestSync({ reason: 'session-tree-navigate', replaceMessages: true });
+          }}
+          sessionId={sessionId}
+          visible={sessionTreeOpen && currentSession?.agentKind === 'pi'}
+        />
         <SessionSearchSheet
           activeHit={activeSearchHit}
           activeIndex={activeSearchIndex}

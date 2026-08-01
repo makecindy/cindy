@@ -1,5 +1,5 @@
 export type RemoteScheduleStatus = 'active' | 'paused' | 'expired';
-export type RemoteScheduleAgentKind = 'claude-code' | 'codex';
+export type RemoteScheduleAgentKind = 'claude-code' | 'codex' | 'pi';
 export type RemoteScheduleWorkspaceKind = 'project' | 'dialogue';
 export type RemoteScheduleRunStatus = 'running' | 'success' | 'failed' | 'aborted' | 'interrupted' | 'skipped';
 export type RemoteScheduleExecutionMode = 'agent' | 'script';
@@ -23,6 +23,7 @@ export interface RemoteScheduleWriteInput {
   intervalMs?: number;
   agentKind: RemoteScheduleAgentKind;
   model?: string;
+  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   workspaceKind?: RemoteScheduleWorkspaceKind;
@@ -57,6 +58,7 @@ export interface RemoteScheduleTemplate {
   recurring?: boolean;
   agentKind?: RemoteScheduleAgentKind;
   model?: string;
+  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   useWorktree?: boolean;
@@ -91,6 +93,7 @@ export interface RemoteSchedule {
   intervalMs?: number;
   agentKind?: RemoteScheduleAgentKind;
   model?: string;
+  providerId?: string;
   effort?: string;
   fastMode?: boolean;
   workspaceKind?: RemoteScheduleWorkspaceKind;

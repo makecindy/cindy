@@ -105,7 +105,7 @@ describe('NewMakerDraftRoute CREATE AGENT visual contract', () => {
       'onEffortDidChange={handleEffortDidChange}',
       'onPermissionModeDidChange={handlePermissionModeDidChange}',
       'onProviderDidChange={handleProviderDidChange}',
-      'vendorKey={draft.vendor ===',
+      'vendorKey={normalizeDbAgentKind(draft.vendor)}',
       // #807 第二十二轮:仍然由调用方显式持有(ChatInput 不 fallback 内部一份),但远程草稿下
       // 包了一层闸门 —— 拒绝路径型附件,因为那是控制端绝对路径,发到对端读不到或读到无关文件。
       'attachmentState={guardedAttachmentState}',

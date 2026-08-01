@@ -170,9 +170,12 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       source.indexOf('const createAgentQuickStarts'),
     );
     expect(fn).toContain('const preferredAgent');
-    // 按目标设备目录判断:首选 agent 无已连接供应商、另一个有 → 换过去。
+    // 按目标设备目录判断:首选 agent 无已连接供应商时,从三种 agent 中找可用回退。
     expect(fn).toContain('connectedProvidersForAgent(providers, preferredAgent).length > 0');
-    expect(fn).toContain('connectedProvidersForAgent(providers, fallback).length > 0');
+    expect(fn).toContain("(['claude-code', 'codex', 'pi'] as const).find(");
+    expect(fn).toContain(
+      'agent !== preferredAgent && connectedProvidersForAgent(providers, agent).length > 0',
+    );
     // 目录未就绪时不收窄(空快照会误判成"都没有"),与 providerId 同一条口径。
     expect(fn).toContain('if (!providersReady) return preferredAgent;');
     // 换了 agent 就必须丢掉属于旧 agent 的 model / providerId,否则改撞 INVALID_PARAMS。

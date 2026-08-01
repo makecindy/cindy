@@ -40,6 +40,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     await mod.preloadAllCapabilities();
     expect(getCapabilities).toHaveBeenCalledWith('claude-code');
     expect(getCapabilities).toHaveBeenCalledWith('codex');
+    expect(getCapabilities).toHaveBeenCalledWith('pi');
     expect(invoke).not.toHaveBeenCalled();
     expect(mod.getCachedCapabilities('claude-code')?.availableModels[0].displayName).toBe(
       'local:claude-code',
@@ -68,6 +69,7 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     await mod.prefetchDeviceCapabilities('dev-1');
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['claude-code']);
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['codex']);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:get-capabilities', ['pi']);
     expect(getCapabilities).not.toHaveBeenCalled();
     expect(mod.getCachedCapabilities('claude-code', 'dev-1')?.availableModels[0].displayName).toBe(
       'dev-1:claude-code',
@@ -98,8 +100,8 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
       mod.prefetchDeviceCapabilities('dev-1'),
       mod.prefetchDeviceCapabilities('dev-1'),
     ]);
-    // cc + codex 各一次 = 2 次,而非 4 次
-    expect(invoke).toHaveBeenCalledTimes(2);
+    // cc + codex + pi 各一次 = 3 次,而非 6 次
+    expect(invoke).toHaveBeenCalledTimes(3);
   });
 
   it('驱逐:evict 只清该设备,本地与其它设备保留', async () => {
@@ -197,11 +199,15 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     const stale = mod.prefetchDeviceCapabilities('dev-1');
     mod.evictDeviceCapabilities('dev-1');
     const fresh = mod.prefetchDeviceCapabilities('dev-1');
-    resolvers[2](caps('fresh:claude'));
-    resolvers[3](caps('fresh:codex'));
+    // 每轮按 ALL_AGENT_KINDS 顺序 push 三个 resolver(cc/codex/pi):
+    // 第一轮(stale)= [0][1][2],第二轮(fresh)= [3][4][5]。
+    resolvers[3](caps('fresh:claude'));
+    resolvers[4](caps('fresh:codex'));
+    resolvers[5](caps('fresh:pi'));
     await fresh;
     resolvers[0](caps('stale:claude'));
     resolvers[1](caps('stale:codex'));
+    resolvers[2](caps('stale:pi'));
     await stale;
 
     expect(claudeListener).toHaveBeenNthCalledWith(1, { status: 'loading' });

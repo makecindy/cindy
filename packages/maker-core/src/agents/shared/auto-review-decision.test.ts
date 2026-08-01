@@ -58,6 +58,17 @@ describe('resolveAutoReviewDecision', () => {
     },
   );
 
+  it('reviews a concrete unknown/MCP action instead of treating it as missing evidence', async () => {
+    const delegate = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const action = {
+      kind: 'other' as const,
+      description: JSON.stringify({ toolName: 'mcp__server__tool', input: { id: 1 } }),
+    };
+    await expect(resolveAutoReviewDecision(request(action), delegate))
+      .resolves.toEqual({ verdict: 'allow' });
+    expect(delegate).toHaveBeenCalledOnce();
+  });
+
   it.each([
     { kind: 'file-write', path: undefined } as const,
     { kind: 'exec', command: '   ' } as const,

@@ -103,6 +103,21 @@ describe('im default settings store', () => {
     expect(persisted.agents).toBeDefined();
   });
 
+  it('persists a Pi-specific default instead of dropping it from sparse overrides', () => {
+    writeImDefaultSettingsPatch({
+      agents: {
+        pi: { providerId: 'openai', model: 'chatgpt/gpt-5.6', effort: 'high' },
+      },
+    });
+
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.global.agents.pi).toEqual({
+      providerId: 'openai',
+      model: 'chatgpt/gpt-5.6',
+      effort: 'high',
+    });
+  });
+
   it('preserves existing agent overrides when another agent is updated', () => {
     writeImDefaultSettingsPatch({
       agents: {
@@ -151,6 +166,12 @@ describe('im default settings store', () => {
       codex: {
         providerId: 'openai',
         model: 'gpt-5.5',
+        effort: 'high',
+      },
+      // legacy root mirror 是 resolved 满射快照(global 才做 diff),pi 槽为系统默认。
+      pi: {
+        providerId: null,
+        model: 'claude-sonnet-5',
         effort: 'high',
       },
     });

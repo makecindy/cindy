@@ -75,7 +75,7 @@ export interface UsageHistoryDay {
 }
 
 export interface UsageHistoryModel {
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   /** SDK 实报美元 (Claude); Codex 恒 0。 */
   money: RegionalMoney;
@@ -90,7 +90,7 @@ export interface UsageHistoryModel {
 /** 每日 × 模型的一行明细 — 右栏堆叠柱状图的分段数据。 */
 export interface UsageHistoryModelDay {
   day: string;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   /** 可比金额: Claude 实报 $; Codex 为价格表估算 (无价格 → 0, 只出现在图例 token 行)。 */
   money: RegionalMoney;
@@ -349,16 +349,23 @@ export function claudeSubscriptionUsageModelKey(model: string): string {
   return `${displayModelName(model)}#billing=subscription`;
 }
 
+/** Pi 订阅轮与其它 agent 共用 billing 后缀，但保留独立 agentKind。 */
+export function piSubscriptionUsageModelKey(model: string): string {
+  return `${displayModelName(model)}#billing=subscription`;
+}
+
 /**
  * 订阅行的估算价选取,按 agent 分流:
  *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
  *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
  *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
+ *   - pi → 先按订阅直连估价,再依次回退 Codex(OpenAI)与 Anthropic registry 参考价
+ *     (Pi 可跨三类 provider,按模型 id 路由,依次尝试不会串价)
  *   - claude-code → Anthropic registry 参考价
  * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 function getSubscriptionValuePriceFor(
-  agentKind: 'claude-code' | 'codex',
+  agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
@@ -369,6 +376,13 @@ function getSubscriptionValuePriceFor(
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
       getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
       getCodexProviderSubscriptionValuePrice('anthropic', model, pricing, at, overrides)
+    );
+  }
+  if (agentKind === 'pi') {
+    return (
+      getSubscriptionDirectValuePrice(model, undefined, pricing, at, overrides) ??
+      getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
+      getClaudeSubscriptionValuePrice(model, pricing, at, overrides)
     );
   }
   return getClaudeSubscriptionValuePrice(model, pricing, at, overrides);
@@ -587,7 +601,7 @@ export async function readUsageHistoryWith(
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
     !getSubscriptionValuePriceFor(
-      r.agentKind === 'codex' ? 'codex' : 'claude-code',
+      r.agentKind === 'codex' ? 'codex' : r.agentKind === 'pi' ? 'pi' : 'claude-code',
       displayModelName(r.model),
       pricing,
       r.day,
@@ -608,7 +622,7 @@ export async function readUsageHistoryWith(
     if (row.day === todayKey) todayTokens += rowTokens;
   }
   for (const row of modelRows) {
-    const agentKind = row.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind = row.agentKind === 'codex' ? 'codex' : row.agentKind === 'pi' ? 'pi' : 'claude-code';
     // claude 订阅行同样带 #billing= 后缀, 展示名统一剥后缀; key 保留原始 model
     // (api / subscription 两个计费维度分行聚合)。
     const model = displayModelName(row.model);
@@ -663,7 +677,11 @@ export async function readUsageHistoryWith(
   // 每日 × 模型明细 (30 天窗口) — 堆叠柱状图分段。金额口径与 models 一致:
   // Claude 实报 $, Codex 行按价格表折算 (无价格 → 0, 该模型只出现在图例 token 行)。
   const modelDaily: UsageHistoryModelDay[] = modelRows.map((row) => {
-    const agentKind = row.agentKind === 'codex' ? ('codex' as const) : ('claude-code' as const);
+    const agentKind = row.agentKind === 'codex'
+      ? ('codex' as const)
+      : row.agentKind === 'pi'
+        ? ('pi' as const)
+        : ('claude-code' as const);
     const model = displayModelName(row.model);
     const apiMoney = row.money;
     const subscriptionEstimateMoney =

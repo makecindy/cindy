@@ -185,6 +185,14 @@ export const MAKER_INVOKE = {
   SET_FAST_MODE: 'maker:set-fast-mode',
   /** 计划模式一级开关(与 permissionMode 正交), runtime-only; 持久化由 renderer sessions:update / device-link 回流负责 */
   SET_PLAN_MODE: 'maker:set-plan-mode',
+  /** 会话导出 HTML(pi 原生 export_html)。主进程弹保存对话框 + 导出 + 在文件管理器中显示;返回写入路径或 null(取消)。 */
+  EXPORT_SESSION_HTML: 'maker:export-session-html',
+  /** 手动压缩会话上下文(pi 原生 compact,可带聚焦指令)。返回 {tokensBefore?, estimatedTokensAfter?} 或 null(会话不在/不支持)。 */
+  COMPACT_SESSION: 'maker:compact-session',
+  /** 读取当前 live agent 的同会话原生分支树(pi get_tree)。 */
+  GET_SESSION_TREE: 'maker:get-session-tree',
+  /** 切换同会话原生分支并原子重建 Cindy 可见消息时间线。 */
+  NAVIGATE_SESSION_TREE: 'maker:navigate-session-tree',
   /**
    * 旧控制端的会话模型预设写穿兼容 channel。新控制端统一经 APPLY_NEW_MAKER_DRAFT_PREF 写被控端
    * providerModelMemory 全局预设;旧控制端仍发此 invoke 时,被控端 renderer 也会将其收敛到同一

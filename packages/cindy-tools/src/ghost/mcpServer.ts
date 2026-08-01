@@ -732,17 +732,21 @@ export function createCindyGhostsMcpServer(
     version: "1.0.0",
   });
 
-  // 花名册快照:装配时取一次,拼进两件工具的描述(语义召回的数据源;
+  // 花名册快照:装配时取一次,只拼进 ghost_list 的描述(语义召回的数据源;
   // 会话内恒定,缓存安全)。无花名册 dep / 空清单 = 描述保持基线。
+  //
+  // 只拼一处:两件工具的描述都进 system prompt 固定前缀,同一份花名册拼两遍
+  // 等于让整份已装插件清单在上下文里出现两次(12 个插件实测约 1.5k 字符/份)。
+  // ghost_call 的调用前提是已知 ghost_id + tool,那必然来自 ghost_list 的描述
+  // 或返回值(D_GHOST_CALL 首行已写明这点),再挂一份花名册对路由没有增量作用。
   const roster = formatGhostRoster(deps.getRosterItems?.() ?? []);
   const dGhostList = roster ? `${D_GHOST_LIST}\n\n${roster}` : D_GHOST_LIST;
-  const dGhostCall = roster ? `${D_GHOST_CALL}\n\n${roster}` : D_GHOST_CALL;
 
   server.tool("ghost_list", dGhostList, {}, async () => handleGhostList(deps));
 
   server.tool(
     "ghost_call",
-    dGhostCall,
+    D_GHOST_CALL,
     {
       ghost_id: z.string().describe("目标插件 id(来自 ghost_list)"),
       tool: z.string().describe("工具名(来自 ghost_list 该插件的 tools)"),

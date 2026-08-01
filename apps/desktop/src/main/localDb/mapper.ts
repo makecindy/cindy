@@ -218,7 +218,7 @@ export function messageToCamel(row: MessageRow): Message {
     content,
     toolUseId: row.toolUseId,
     agentMeta,
-    agentKind: (row.agentKind as 'cc' | 'codex' | null) ?? null,
+    agentKind: (row.agentKind as 'cc' | 'codex' | 'pi' | null) ?? null,
     createdAt: new Date(row.createdAt).toISOString(),
   };
 }
@@ -373,7 +373,7 @@ export function messageCreateToRow(
     content: unknown;
     toolUseId?: string;
     agentMeta?: AgentMeta | null;
-    agentKind?: 'cc' | 'codex' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | null;
     createdAt?: number;
   },
   now: number,

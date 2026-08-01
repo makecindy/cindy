@@ -20,20 +20,27 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 import { downloadFromCdn } from './agent-binary-cdn-fallback.mjs';
+import { verifyDirDistManifest } from '../tools/shared/dir-dist-manifest.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
 const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const MIN_EXPECTED_BYTES = 1024;
 
 // kind → 本地落点 + 提供 ensurePlatform/readPinnedVersion 的下载模块
+// dirDist: 产物是"目录 + 主执行文件"（非单文件），sibling-worktree 单文件复用不适用
 const KINDS = {
   claude: { binDir: 'claude-code-bin', base: 'claude', module: '../tools/claude/update.mjs' },
   codex: { binDir: 'codex-bin', base: 'codex', module: '../tools/codex/update.mjs' },
   ripgrep: { binDir: 'ripgrep-bin', base: 'rg', module: '../tools/ripgrep/update.mjs' },
+  pi: { binDir: 'pi-bin', base: 'pi', module: '../tools/pi/update.mjs', dirDist: true },
 };
 
 const log = (msg) => console.log(`\x1b[36m[ensure-agent-binaries]\x1b[0m ${msg}`);
 const warn = (msg) => console.log(`\x1b[33m[ensure-agent-binaries]\x1b[0m ${msg}`);
+
+export function supportsCdnFallback(kind) {
+  return KINDS[kind]?.dirDist !== true;
+}
 
 export function currentPlatformKey() {
   return `${process.platform}-${process.arch}`;
@@ -71,6 +78,15 @@ export function isValidBinary(absPath) {
   }
   if (prefix.startsWith(LFS_POINTER_HEADER)) return false;
   return fs.statSync(absPath).size >= MIN_EXPECTED_BYTES;
+}
+
+/**
+ * dirDist kind 的就位判定:主执行文件合法 **且** 安装清单齐全。pi 这类目录分发缺
+ * theme/ 等旁侧资产时 RPC 启动即崩,只验主执行文件会把残缺目录当"已就位"跳过安装,
+ * 随后被打进安装包(codex 报)。清单缺失(旧安装/半成品)按未就位处理,重新 promote 自愈。
+ */
+export function isValidDirDist(binDirPath, binPath) {
+  return isValidBinary(binPath) && verifyDirDistManifest(binDirPath);
 }
 
 /**
@@ -168,7 +184,9 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   }
 
   // 已就位且版本标记 == pin 才跳过；标记缺失/不匹配则刷新（promoteOnePlatform 写入标记）。
-  if (!force && isValidBinary(binPath) && readInstalledVersion(markerPath) === version) {
+  // dirDist 的"已就位"额外要求安装清单齐全,不能只看主执行文件。
+  const presentAndValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  if (!force && presentAndValid && readInstalledVersion(markerPath) === version) {
     log(`${kind} ${platformKey}: already present @ ${version}, skip`);
     return binPath;
   }
@@ -178,7 +196,8 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 磁盘），弱网/断网时这是唯一不用等超时的路径。force 语义是"强制重新获取"，
   // 保持走正宗下载不复用。
   let reusedFrom = null;
-  if (!force) {
+  // dirDist kind 的产物含主执行文件之外的运行时资产，单文件复用会产出缺资产的坏安装。
+  if (!force && !cfg.dirDist) {
     reusedFrom = tryReuseFromSiblingWorktree({
       candidates: listSiblingWorktreeRoots(ROOT).map((root) =>
         path.join(root, 'apps', cfg.binDir, platformKey),
@@ -197,6 +216,12 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
     try {
       await mod.ensurePlatform({ version, platformKey, force });
     } catch (upstreamErr) {
+      if (!supportsCdnFallback(kind)) {
+        throw new Error(
+          `Failed to download ${kind} ${platformKey}@${version} from upstream: ${upstreamErr.message}. ` +
+            'This runtime is a directory distribution, so the single-binary CDN fallback is unsafe.',
+        );
+      }
       // claude / codex / ripgrep：上游慢/失败（含 fetch-with-timeout 的 connect/stall/total/throughput 超时）→
       // 回退公司 CDN（国内快，.gz gunzip 后与上游裸二进制字节一致）。
       warn(`${kind} ${platformKey}: upstream failed/slow (${upstreamErr.message}); falling back to CDN...`);
@@ -220,7 +245,8 @@ export async function ensureBinary(kind, platformKey = currentPlatformKey(), { f
   // 被占用（app 运行中、EBUSY）时只 warn 不抛，会留下旧 binary + 旧标记，这里据此把静默失败
   // 转成显式错误。本地复用路径同样受此终检兜底。
   const installed = readInstalledVersion(markerPath);
-  if (!isValidBinary(binPath) || installed !== version) {
+  const finalValid = cfg.dirDist ? isValidDirDist(binDirPath, binPath) : isValidBinary(binPath);
+  if (!finalValid || installed !== version) {
     throw new Error(
       `${kind} ${platformKey}: ensure failed — expected ${version} at ${binPath} but installed marker is ${installed ?? '(none)'}. ` +
         `The previous binary may be locked (app running); close it and retry, or run "pnpm update:${kind}".`,

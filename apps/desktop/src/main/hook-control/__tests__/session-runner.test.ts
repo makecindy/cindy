@@ -2403,6 +2403,26 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(ends[0]?.finalText).toBe('先回一句。\n\n这是终答。');
   });
 
+  it('Pi message_end 全文替换流式尾部，不重复拼接多文本块', async () => {
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, ends } = watchReq();
+    runner.watchContinuation!(req as never);
+
+    const cb = h.eventCbs.get('sess-live')!;
+    cb({ type: 'text', source: 'pi', data: { text: '第一段', isFinal: false } });
+    cb({ type: 'text', source: 'pi', data: { text: '第二段', isFinal: false } });
+    cb({
+      type: 'text',
+      source: 'pi',
+      data: { text: '第一段\n\n第二段', isFinal: true },
+    });
+    cb({ type: 'done', data: null });
+    await flush();
+
+    expect(ends[0]?.finalText).toBe('第一段\n\n第二段');
+  });
+
   it('续跑轮自己失败 -> onEnd(error) 带错误信息', async () => {
     fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
     const runner = createMakerHookSessionRunner({ log });

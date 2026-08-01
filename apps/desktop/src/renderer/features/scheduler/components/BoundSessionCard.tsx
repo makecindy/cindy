@@ -15,7 +15,7 @@ import { ExternalLink, Unlink } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { VendorIcon } from '@/components/sidebar/VendorIcon';
+import { VendorIcon, agentKindToVendor } from '@/components/sidebar/VendorIcon';
 import type { SessionReference } from '../../../../shared/sessionReference';
 
 export interface BoundSessionCardProps {
@@ -42,7 +42,7 @@ export function BoundSessionCard({ sessionId, onUnbind, onOpen, reference }: Bou
         'border border-[var(--cmd-palette-border)] bg-[var(--chat-input-chip-bg)]',
       )}
     >
-      <VendorIcon vendor={reference?.agentKind === 'codex' ? 'codex' : 'cc'} size={13} />
+      <VendorIcon vendor={agentKindToVendor(reference?.agentKind)} size={13} />
       <span className="min-w-0 flex-1 truncate text-13 font-medium text-[var(--msg-assistant-text)]" title={title}>
         {title}
       </span>

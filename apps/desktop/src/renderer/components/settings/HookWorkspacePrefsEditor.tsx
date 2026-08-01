@@ -471,9 +471,9 @@ function PrefsField({
   );
 }
 
-/** hook prefs 的 agentKind('claude-code' | 'codex')→ 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'cc';
+/** hook prefs 的 agentKind → 选择器的 vendor key。 */
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 
 /**
@@ -484,6 +484,7 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
  */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
+  if (vendor === 'pi') return 'pi';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
@@ -501,13 +502,15 @@ export function WorkspacePrefsEditor({
   const { t } = useTranslation();
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
+  const piCaps = useAgentCapabilities('pi');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
+        pi: piCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>

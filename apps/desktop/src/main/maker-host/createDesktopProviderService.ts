@@ -55,7 +55,7 @@ import {
 } from './model-discovery/anthropic.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
-import { listCustomProviders } from './custom-provider-store.js';
+import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import {
   setCustomProviderKeyReader,
   setOAuthTokenReader,
@@ -406,10 +406,10 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   setCustomProviderKeyReader(readCustomProviderKey);
   setProviderOAuthTokenReader((providerId, agent, options) => {
     if (providerId === 'xai') return getGrokAccessToken();
-    // Codex's child process carries a ChatGPT/OpenAI bearer.  The Anthropic
-    // bridge must instead read the Claude.ai subscription credential owned by
-    // the host (and allow the existing refresher to rotate it when needed).
-    if (providerId === 'anthropic' && agent === 'codex') {
+    // Codex and Pi processes do not carry Claude Code's native OAuth credential.
+    // Their Anthropic bridges read the host-owned Claude.ai token and allow the
+    // existing refresher to rotate it when needed.
+    if (providerId === 'anthropic' && (agent === 'codex' || agent === 'pi')) {
       return getValidClaudeAiOAuth(options).then((oauth) => oauth?.accessToken ?? null);
     }
     return null;
@@ -607,7 +607,7 @@ export async function refreshDiscoveredCodexModels(
  */
 export async function refreshCustomProvidersIntoCatalog(): Promise<void> {
   try {
-    const configs = await listCustomProviders();
+    const configs = await listCustomProvidersWithSecureHeaders();
     setCustomProviders(configs.map((c) => buildUserProvider(c)));
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {

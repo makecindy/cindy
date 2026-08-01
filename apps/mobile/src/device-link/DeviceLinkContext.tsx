@@ -996,14 +996,14 @@ export function routeFrame(env: Envelope, handlers: {
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);
 }
 
-/** provider revision 后并行重拉两种 agent 的能力；旧代或异常结果都不触碰当前页面。 */
+/** provider revision 后并行重拉所有 agent 的能力；旧代或异常结果都不触碰当前页面。 */
 async function refreshDeviceCapabilities(
   client: DeviceLinkClient,
   deviceId: string,
 ): Promise<void> {
   const generation = getAgentCapabilitiesGeneration(deviceId);
   await Promise.allSettled(
-    (['claude-code', 'codex'] as const).map(async (agentKind) => {
+    (['claude-code', 'codex', 'pi'] as const).map(async (agentKind) => {
       const raw = await sendInvokeWithAccessHandling<unknown>(
         client,
         deviceId,

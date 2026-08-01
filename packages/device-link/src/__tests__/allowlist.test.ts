@@ -15,6 +15,8 @@ import {
   DL_VOICE_CREDENTIAL_SYNC_CHANNEL,
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   DL_HISTORY_MESSAGES_CHANNEL,
+  DL_TELEGRAM_STATUS_CHANNEL,
+  DL_TELEGRAM_SET_ONLINE_CHANNEL,
 } from '../allowlist.js';
 import { SESSION_ACTIVITY_CHANNEL } from '../topics.js';
 
@@ -213,6 +215,26 @@ describe('REMOTE_INVOKE_ALLOWLIST', () => {
   it('放行手机语音词典学习 evidence 回写帧(词典仍写在被控桌面)', () => {
     expect(REMOTE_INVOKE_ALLOWLIST.has('device-link:voice:dictionary-learning')).toBe(true);
     expect(DL_VOICE_DICTIONARY_LEARNING_CHANNEL).toBe('device-link:voice:dictionary-learning');
+  });
+
+  it('放行个人 Telegram bot 的跨设备上下线(窄口径例外),但本地那条 IPC 仍绝不放行', () => {
+    // 放行的是两条 device-link 专用通道:被控端 dispatch 拦截执行, 只切轮询。
+    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_TELEGRAM_STATUS_CHANNEL)).toBe(true);
+    expect(REMOTE_INVOKE_ALLOWLIST.has(DL_TELEGRAM_SET_ONLINE_CHANNEL)).toBe(true);
+    // 本地 IM IPC 一律不得入表:它们在 im/host.ts 统一挂了
+    // assertTrustedAppRendererEvent(只认真实 sender), 是有意拦住 IM 凭证/配置面的
+    // 闸门。未来若有人图省事把 telegramBot:* 加进来, 这条直接红 —— 尤其
+    // disconnect / set-config 会清凭证或换 token, 远程绝不该碰。
+    for (const ch of [
+      'telegramBot:set-online',
+      'telegramBot:disconnect',
+      'telegramBot:set-config',
+      'telegramBot:get-status',
+      'discordBot:set-config',
+      'feishuBot:set-config',
+    ]) {
+      expect(REMOTE_INVOKE_ALLOWLIST.has(ch)).toBe(false);
+    }
   });
 
   it('绝不放行:本机副作用 / 全局设置写 / 账号密钥 / 裸写库 / 窗口 UI', () => {

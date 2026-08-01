@@ -451,7 +451,7 @@ describe('AddProviderWizard — preset 直达', () => {
     // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
     // 会让其中一端显示与压缩阈值双错,必须按 agent 分槽各取各的端点上报值。
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ agent }: { agent: 'claude-code' | 'codex' }) => ({
+      async ({ agent }: { agent: 'claude-code' | 'codex' | 'pi' }) => ({
         ok: true,
         models: [
           {

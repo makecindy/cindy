@@ -209,6 +209,21 @@ describe('sessionList', () => {
     });
   });
 
+  it('labels pi sessions as Pi instead of falling back to Claude Code', () => {
+    // codex review 回归:共享标签映射二元化会让桌面创建的 Pi 会话在手机端显示成 Claude Code。
+    const item = toRemoteSessionListItem(session('s-pi', {
+      title: '',
+      workingDir: null,
+      workspaceKind: 'dialogue',
+      agentKind: 'pi',
+      model: 'claude-sonnet-4-6',
+      userSendAt: '2026-01-01T00:05:00.000Z',
+      _count: { messages: 3 },
+    }), new Date('2026-01-01T00:10:00.000Z').getTime());
+
+    expect(item.subtitle).toBe('Pi · claude-sonnet-4-6 · dialogue');
+  });
+
   it('includes the latest message preview in rendered session rows', () => {
     const sections = buildRemoteSessionSections([
       session('s1', { title: 'Implement mobile polish' }),

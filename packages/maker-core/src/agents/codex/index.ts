@@ -78,6 +78,11 @@ import {
   isCapabilityRouteInvocationAllowed,
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
+import {
+  extractAutoReviewUserIntent,
+  resolveAutoReviewDecision,
+  type AutoReviewDecision,
+} from '../shared/auto-review-decision.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
 import { getDefaultImageResizer } from '../shared/image-resizer.js';
@@ -2711,6 +2716,12 @@ export class CodexAgent extends BaseAgent {
      * host 侧的 provider route 与它必须同步,窗口上限按 (provider, model) 解析。
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
+    let currentAutoReviewIntent = '';
+    const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
+    const setAutoReviewIntent = (content: UserMessage['content']): void => {
+      currentAutoReviewIntent = extractAutoReviewUserIntent(content);
+      autoReviewDecisionCache.clear();
+    };
     /**
      * 用于**目录查找**的模型 id —— 与 mutableModel(送上游的 wire 值)刻意分开。
      *
@@ -2875,12 +2886,11 @@ export class CodexAgent extends BaseAgent {
         `Cindy capability routing requires Codex app-server 0.145.0 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
       );
     }
-    // OpenAI OAuth can use Codex's hidden reviewer model directly. Local proxy
-    // routes may opt in after registering a parent-thread → session → main-model
-    // context; until that synchronous registration succeeds they stay on the
-    // explicit user reviewer. Remote non-subscription routes have no local proxy
-    // rewrite and therefore keep the conservative manual fallback.
-    const nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
+    // Only the official OpenAI OAuth route uses Codex Guardian. Third-party,
+    // gateway and custom-provider routes use the current session model through
+    // Cindy's host reviewer; they must never borrow the hidden Guardian model.
+    let nativeAutoReviewUnavailable = false;
+    let nativeApprovalsReviewerRouteSupported = sessionCredentialMode === 'oauth-bearer';
     let approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
     const readonlyReferenceDirsSupported = supportsCodexReadonlyReferenceDirs(initResp.userAgent);
     const resumeExcludeTurnsSupported = supportsCodexResumeExcludeTurns(initResp.userAgent);
@@ -2923,6 +2933,32 @@ export class CodexAgent extends BaseAgent {
     // 关掉抹平 → fail-closed(不把远端 /private/tmp 误当 /tmp 区内)。本地用真实 process.platform。
     // 定义在此(startSession 作用域,opts=session)以避开 awaitApprovalDecision 内层 opts 的遮蔽。
     const sessionReviewPlatform: NodeJS.Platform = opts.remoteHostId ? 'linux' : process.platform;
+    const reviewAutoAction = (action: ReviewableAction): Promise<AutoReviewDecision> => {
+      const request = {
+        sessionId: opts.sessionId,
+        agentKind: 'codex' as const,
+        providerId: mutableProviderId,
+        // app-server may normalize the wire model id to an alias that does not
+        // exist in Cindy's catalog. Review through the user's selected catalog
+        // model so the exact current provider route remains resolvable.
+        model: mutableCatalogModel ?? mutableModel,
+        userIntent: currentAutoReviewIntent,
+        action,
+        workspaceRoots: runtimeWorkspaceRoots().filter(
+          (dir): dir is string => typeof dir === 'string' && dir.length > 0,
+        ),
+        platform: sessionReviewPlatform,
+      };
+      const key = JSON.stringify(request);
+      const cached = autoReviewDecisionCache.get(key);
+      if (cached) return cached;
+      const pending = resolveAutoReviewDecision(
+        request,
+        this.deps.reviewAutoPermissionAction,
+      );
+      autoReviewDecisionCache.set(key, pending);
+      return pending;
+    };
     const readonlyReferencesConfig: Record<string, unknown> = {
       [`permissions.${READONLY_REFERENCES_PERMISSION_PROFILE}`]: {
         filesystem: {
@@ -3226,60 +3262,21 @@ export class CodexAgent extends BaseAgent {
       if (!register) return;
       register({ sessionId: sid, threadId, text });
     };
-    const registerCodexReviewerRouteContext = (targetThreadId: string): void => {
-      if (!sid || opts.remoteHostId || !hostUsesCodexProxy || !approvalsReviewerProtocolSupported) {
-        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
-        return;
-      }
-      // `gpt-5` is the app-server's "use its default" sentinel, not an
-      // authoritative provider model id. A runtime switch to it deliberately
-      // skips thread/settings/update, so there is no concrete model to register
-      // for a third-party Guardian route. Keep manual review until a later
-      // start/resume/settings notification supplies the resolved model.
-      if (mutableModel === 'gpt-5') {
-        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
-        if (!nativeApprovalsReviewerRouteSupported) {
-          log.warn('Codex Auto keeping user approvals: default model sentinel is unresolved', {
-            threadId: prefixId(targetThreadId),
-            sessionId: prefixId(sid),
-          });
-        }
-        return;
-      }
-      const register = this.deps.registerCodexReviewerRouteContext;
-      if (!register) {
-        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
-        return;
-      }
-      try {
-        const registered = register({
-          sessionId: sid,
-          threadId: targetThreadId,
-          model: mutableModel,
-        });
-        approvalsReviewerRouteSupported =
-          nativeApprovalsReviewerRouteSupported || registered === true;
-        if (registered === true) {
-          log.debug('codex provider-aware Guardian reviewer route registered', {
-            threadId: prefixId(targetThreadId),
-            sessionId: prefixId(sid),
-            model: mutableModel,
-          });
-        } else if (!nativeApprovalsReviewerRouteSupported) {
-          log.warn('Codex Auto keeping user approvals: Guardian reviewer route registration declined', {
-            threadId: prefixId(targetThreadId),
-            sessionId: prefixId(sid),
-            model: mutableModel,
-          });
-        }
-      } catch (e) {
-        approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
-        log.warn('registerCodexReviewerRouteContext threw; keeping safe reviewer route', {
-          error: String(e),
-          threadId: prefixId(targetThreadId),
-          sessionId: prefixId(sid),
-        });
-      }
+    const refreshCodexAutoReviewerRoute = (targetThreadId: string): void => {
+      const routeCredentialMode = resolveAgentCredentialMode({
+        agentKind: 'codex',
+        providerId: mutableProviderId,
+        model: mutableModel,
+      }) ?? sessionCredentialMode;
+      nativeApprovalsReviewerRouteSupported =
+        !nativeAutoReviewUnavailable && routeCredentialMode === 'oauth-bearer';
+      approvalsReviewerRouteSupported = nativeApprovalsReviewerRouteSupported;
+      log.debug('codex Auto reviewer route refreshed', {
+        threadId: prefixId(targetThreadId),
+        providerId: mutableProviderId ?? null,
+        model: mutableModel,
+        native: approvalsReviewerRouteSupported,
+      });
     };
 
     // ── thread/start 或 thread/resume ────────────────────────────────────────
@@ -3407,7 +3404,7 @@ export class CodexAgent extends BaseAgent {
           mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
-        registerCodexReviewerRouteContext(threadId);
+        refreshCodexAutoReviewerRoute(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -3479,7 +3476,7 @@ export class CodexAgent extends BaseAgent {
           mutableCatalogModel = resp.model;
         }
         threadId = resp.thread.id;
-        registerCodexReviewerRouteContext(threadId);
+        refreshCodexAutoReviewerRoute(threadId);
         if (useProxyChannel) {
           registerCodexDeveloperInstructions(threadId, developerInstructions);
           codexProductPromptDelivery = { threadId, historyHasProductPrompt: false };
@@ -3652,7 +3649,7 @@ export class CodexAgent extends BaseAgent {
           sdkSessionId = nextThreadId;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
-          registerCodexReviewerRouteContext(threadId);
+          refreshCodexAutoReviewerRoute(threadId);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
           if (replacementServiceTierGeneration !== serviceTierMutationGeneration) {
             // setFastMode() updated the old thread while thread/start was
@@ -3933,7 +3930,7 @@ export class CodexAgent extends BaseAgent {
      * 一个 Promise<ApprovalDecision>。dispatchInteraction 完成时若 entry 还没 settled
      * 就走用户决策; settled=true 说明 dismissAllPending 已经替它做了决定, 用户后续点了也吞掉。
      */
-    function awaitApprovalDecision(
+    async function awaitApprovalDecision(
       requestId: string,
       kind: 'commandExecution' | 'fileChange' | 'mcpServerElicitation',
       req: InteractionRequest,
@@ -3944,8 +3941,8 @@ export class CodexAgent extends BaseAgent {
         (req.kind === 'permission' &&
           forceTurnConfirmation(req.toolName, req.input));
       // Full access 的普通审批不应打断用户。Auto 在已验证路由上由 app-server
-      // auto_review 负责；降级路由则由 user reviewer 把越界请求发回客户端。
-      // 两条路径只要收到请求都走 UI，不能绕过 reviewer / 降级审批直接放行。
+      // auto_review 负责；fallback 路由则由 user reviewer 把越界请求发回客户端，
+      // 再由 Cindy reviewer 静默裁决。
       // forcePrompt 高风险 MCP inner tool
       // (如 contacts delete/merge/系统回写)在任何模式下都必须拿到用户的逐次确认。
       if (
@@ -3983,26 +3980,31 @@ export class CodexAgent extends BaseAgent {
       }
       // Auto-review 兜底路径:非 OAuth 路由下 approvalsReviewer='user',app-server 把越界/网络
       // 等审批请求发回 host(OAuth 原生 auto_review 则由 server 内部裁决、根本不到这里 —— 天然
-      // "原生优先、Cindy 兜底")。这些请求不再一律转发用户,先过 harness 无关的 Cindy core:
-      // 安全的(如 curl 抓取)静默放行、危险的必问、其余升级。与 Claude 侧同一套 core,模型无关。
-      // **仅在有 interactionResolver 时生效**:没有 resolver = 没有能撤销误判的人在场,与 Claude
-      // canUseTool 的 no-resolver 分支一致 fail-closed(下面 dispatchInteraction 无 resolver 直接
-      // deny),不做任何自动放行。
+      // "原生优先、Cindy 兜底")。明显安全由本地规则放行；灰区调用当前会话模型做轻量
+      // allow/block/ask 裁决。allow/block 不依赖 interactionResolver；只有真正红线 ask 才走 UI，
+      // UI 不可用时 dispatchInteraction 自然 fail-closed decline。
       if (
-        interactionResolver &&
         !forcePrompt &&
         mutablePermissionMode === 'auto' &&
         opts?.autoReviewAction
       ) {
-        const verdict = reviewAction(
-          opts.autoReviewAction,
-          runtimeWorkspaceRoots().filter((d): d is string => typeof d === 'string' && d.length > 0),
-          { platform: sessionReviewPlatform },
-        );
-        if (verdict === 'auto-approve') return Promise.resolve('accept');
-        // prompt-each-time:高风险,强制逐次弹窗且剥离会话级 suggestion(不许"总是允许")。
-        if (verdict === 'prompt-each-time') forcePrompt = true;
-        // 'prompt':落到下面的 dispatchInteraction,照常升级用户(可"本会话记住")。
+        const decision = await reviewAutoAction(opts.autoReviewAction);
+        // 热切换收口:reviewAutoAction 是 async,期间 setPermissionMode 可能收紧(Auto→Ask)或
+        // 放宽(→Full)。按**最新**档位决策,否则旧 auto 档 allow 会绕过用户刚要求的确认
+        // (codex review P1;与已修复的 Pi / Claude 线程同口径)。cast 破 TS 收窄:TS 不建模
+        // await 期间经 setPermissionMode 的重赋值,仍视此处为 'auto';运行期确实可能已变。
+        const modeAfterReview = mutablePermissionMode as PermissionMode;
+        if (modeAfterReview === 'bypassPermissions') return 'accept';
+        if (modeAfterReview !== 'auto') {
+          forcePrompt = true;
+        } else if (decision.verdict === 'allow') {
+          return 'accept';
+        } else if (decision.verdict === 'block') {
+          return 'decline';
+        } else {
+          // Only red-line decisions reach the user and they cannot be remembered.
+          forcePrompt = true;
+        }
       }
       const routedRequest =
         forcePrompt && req.kind === 'permission'
@@ -6092,10 +6094,7 @@ export class CodexAgent extends BaseAgent {
      * Full access → Ask → Auto 这类中间态下最近一次是放宽, 而冻结的 Full access 仍然
      * 比 Auto 宽(review #844 codex P1)。
      *
-     * 公开的 setPermissionMode 与 Guardian 失败时的内部降级
-     * (switchAutoRuntimeToAskImmediately) 共用它: 后者绕开了公开路径, 只判
-     * currentTurnId / isTurnStartPending, 会漏掉"退避计时器正在等"这个窗口 ——
-     * 那时重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
+     * 公开的 setPermissionMode 会用它覆盖所有仍可能发生的重投窗口。
      */
     /**
      * 本轮 send 的过载重投是否"还会发生"。三种状态都算:
@@ -6573,75 +6572,6 @@ export class CodexAgent extends BaseAgent {
 
     const GUARDIAN_REVIEW_FAILURE_PREFIX = 'Automatic approval review failed:';
 
-    const emitGuardianUnavailable = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
-      const timedOut = params.review.status === 'timedOut';
-      eventQueue.push({
-        type: 'error',
-        data: {
-          // Renderer uses reason for localized copy. Keep an English fallback for
-          // non-renderer consumers while always stating the blocked action + downgrade.
-          message: timedOut
-            ? 'Codex automatic approval review timed out. The action was blocked and this session is switching to Ask mode.'
-            : 'Codex automatic approval review failed. The action was blocked and this session is switching to Ask mode.',
-          isTerminal: false,
-          reason: 'codex-auto-review-unavailable',
-          reviewId: params.reviewId,
-          reviewRationale: params.review.rationale,
-        },
-        source: 'codex',
-      });
-    };
-
-    /**
-     * Close the race between a Guardian failure notification and the async host
-     * persistence coordinator. The current action is already blocked; changing the
-     * local mode synchronously ensures a message sent immediately afterwards starts
-     * in Ask instead of launching another auto_review turn that is then interrupted.
-     */
-    const switchAutoRuntimeToAskImmediately = (): boolean => {
-      if (mutablePermissionMode !== 'auto') return false;
-      dismissAllPending('permission_mode_changed_to_ask', 'deny');
-      mutablePermissionMode = 'ask';
-      // 挂起的过载重投也要一起收紧: 它冻结的是 Auto / Full access, 而 Guardian 已经
-      // 不可用、运行期刚降到 Ask。这条路**绕开**了公开的 setPermissionMode, 原本只判
-      // currentTurnId / isTurnStartPending —— 退避计时器正在等的那个窗口两者都不成立,
-      // 重投一到点就会以已被撤销的宽松档执行工具(review #844 codex P1)。
-      const retryPolicyLooserThanAsk = overloadRetryPolicyLooserThan('ask');
-      if (!closed && (turnLaunchedUnattended || retryPolicyLooserThanAsk)) {
-        if (currentTurnId !== null) {
-          void interruptTurnForPermissionTighten(currentTurnId);
-        } else if (isTurnStartPending || retryPolicyLooserThanAsk) {
-          // 与 turn/start 在飞同构: 标记由 handleTurnStartResp / turnStarted 在拿到
-          // turn id 的瞬间消费并补中断。
-          pendingTightenInterrupt = true;
-        }
-      }
-      return true;
-    };
-
-    const notifyAutoPermissionClassifierUnavailable = (
-      params: ItemGuardianApprovalReviewCompletedNotification,
-    ): void => {
-      if (!switchAutoRuntimeToAskImmediately() || typeof opts.sessionId !== 'string') return;
-      const notify = this.deps.onAutoPermissionClassifierUnavailable;
-      if (!notify) return;
-      const status = params.review.status === 'timedOut' ? 408 : 500;
-      queueMicrotask(() => {
-        try {
-          notify({
-            sessionId: opts.sessionId as string,
-            agentKind: 'codex',
-            status,
-          });
-        } catch (error) {
-          log.warn('Codex Auto fallback notification threw', {
-            reviewId: params.reviewId,
-            error: String(error),
-          });
-        }
-      });
-    };
-
     const handleGuardianReviewCompleted = (params: ItemGuardianApprovalReviewCompletedNotification): void => {
       if (seenGuardianReviewIds.has(params.reviewId)) return;
       seenGuardianReviewIds.add(params.reviewId);
@@ -6650,8 +6580,16 @@ export class CodexAgent extends BaseAgent {
         params.review.status === 'denied' &&
         rationale?.startsWith(GUARDIAN_REVIEW_FAILURE_PREFIX) === true;
       if (params.review.status === 'timedOut' || failedClosedBecauseReviewerUnavailable) {
-        emitGuardianUnavailable(params);
-        notifyAutoPermissionClassifierUnavailable(params);
+        nativeAutoReviewUnavailable = true;
+        nativeApprovalsReviewerRouteSupported = false;
+        approvalsReviewerRouteSupported = false;
+        log.warn('Codex native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
+          reviewId: params.reviewId,
+          turnId: params.turnId,
+          providerId: mutableProviderId ?? null,
+          model: mutableModel,
+          status: params.review.status,
+        });
         return;
       }
       if (params.review.status === 'denied') {
@@ -6957,7 +6895,7 @@ export class CodexAgent extends BaseAgent {
         // 而停止收敛(见该变量注释)。
         if (typeof s.model === 'string' && s.model) mutableModel = s.model;
         if (mutableModel !== beforeModel) {
-          registerCodexReviewerRouteContext(params.threadId);
+          refreshCodexAutoReviewerRoute(params.threadId);
         }
         // ReasoningEffort 的 'none' 不属于 Effort; 排除后其余值都是合法 Effort, 无需 cast。
         if (s.effort && s.effort !== 'none') mutableEffort = s.effort;
@@ -7375,6 +7313,7 @@ export class CodexAgent extends BaseAgent {
           flushDeferredTerminalTurnCompletionsIfIdle();
           return;
         }
+        setAutoReviewIntent(message.content);
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
         // 权威于 agent 当前武装态;undefined 走旧语义(消耗武装态)。一次性语义:
@@ -8087,6 +8026,7 @@ export class CodexAgent extends BaseAgent {
             turnId: steeredTurnId,
           });
         }
+        setAutoReviewIntent(message.content);
       },
 
       async abort() {
@@ -8190,15 +8130,22 @@ export class CodexAgent extends BaseAgent {
         // 窗口上限按 (provider, model) 解析, 漏掉这一步会让后续 turn 拿新模型去问旧路由。
         const prevProviderId = mutableProviderId;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
-        if (newModel === mutableModel) return; // 去重: 值没变不重推 (renderer 单次切换会全量重调 set*)
+        if (newModel === mutableModel) {
+          if (mutableProviderId !== prevProviderId) {
+            autoReviewDecisionCache.clear();
+            refreshCodexAutoReviewerRoute(threadId);
+          }
+          return;
+        }
         const prevModel = mutableModel;
         const prevCatalogModel = mutableCatalogModel;
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
+        autoReviewDecisionCache.clear();
         // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
         mutableCatalogModel = newModel;
         try {
-          registerCodexReviewerRouteContext(threadId);
+          refreshCodexAutoReviewerRoute(threadId);
           // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由
           // 首个 thread/start 携带。沿用 turn/start 的 'gpt-5'=server 默认哨兵约定 (省略),
           // 避免把占位 model id 发给 server。失败时 turn/start 透传仍是兜底。
@@ -8388,7 +8335,7 @@ export class CodexAgent extends BaseAgent {
           threadMayHaveRollout = true;
           subscription = host.subscribeThread(threadId, handlers);
           registerCodexMcpContext(threadId);
-          registerCodexReviewerRouteContext(threadId);
+          refreshCodexAutoReviewerRoute(threadId);
           registerCodexDeveloperInstructions(threadId, registeredDeveloperInstructions);
           eventQueue.push({ type: 'session_id', data: sdkSessionId, source: 'codex' });
         } else {

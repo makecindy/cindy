@@ -49,7 +49,7 @@ function pushMakerStatus(sessionId: string, data: Record<string, unknown>): void
 function pushMakerTaskUpdate(
   sessionId: string,
   taskId: string,
-  opts: { source?: 'claude-code' | 'codex'; status?: string; description?: string } = {},
+  opts: { source?: 'claude-code' | 'codex' | 'pi'; status?: string; description?: string } = {},
 ): void {
   remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
     sessionId,
@@ -1936,6 +1936,11 @@ describe('remoteSessionStore', () => {
     pushMakerStatus('s1', { isRunning: true, status: 'Thinking', tokenUsage: 100 });
     expect(remoteSessionStore.getSessionTaskUpdates('s1').size).toBe(1);
     expect([...remoteSessionStore.getSessionTaskUpdates('s1').values()][0]?.taskId).toBe('task-new');
+  });
+
+  it('preserves Pi as the source of agent task updates', () => {
+    pushMakerTaskUpdate('s1', 'pi-task', { source: 'pi' });
+    expect([...remoteSessionStore.getSessionTaskUpdates('s1').values()][0]?.provider).toBe('pi');
   });
 
   it('sweeps everything on a side-task start too, recalling the worker on its next update', () => {

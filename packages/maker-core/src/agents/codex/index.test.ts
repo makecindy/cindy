@@ -8885,11 +8885,9 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
-    it('interrupts the retry when a Guardian failure downgrades Auto to Ask mid-backoff', async () => {
-      // Guardian 不可用时的内部降级(switchAutoRuntimeToAskImmediately)绕开了公开的
-      // setPermissionMode, 原本只判 currentTurnId / isTurnStartPending —— 退避计时器
-      // 正在等的窗口两者都不成立, 重投一到点就会以已被撤销的 Auto 档执行工具
-      // (review #844 codex P1)。
+    it('keeps an Auto retry alive when Guardian failure switches only the reviewer route', async () => {
+      // Guardian 不可用不再把用户选择改成 Ask，只把后续审批切到 Cindy fallback。
+      // 因为权限档没有收紧，退避中的同一 Auto turn 不应被额外 interrupt。
       vi.useFakeTimers();
       try {
         const agent = new CodexAgent(createDeps());
@@ -8919,7 +8917,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         expect(handle.getCurrentTurnId?.()).toBeNull();
         expect(turnStartCount(host)).toBe(1);
 
-        // Guardian 超时 → 运行期降到 Ask（不经过 setPermissionMode）。
+        // Guardian 超时 → 保持 Auto，只标记原生 reviewer 不可用。
         handlers.autoApprovalReviewCompleted({
           threadId: 'start-thread-id',
           turnId: 'turn-guardian',
@@ -8939,8 +8937,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         } as never);
         await vi.advanceTimersByTimeAsync(3_000);
 
-        // 重投照常发出（它带的是冻结的 Auto 策略），但必须紧跟一个 interrupt——
-        // 冻结档比当前的 Ask 宽，不能让它以被撤销的权限继续跑工具。
+        // 重投照常发出，权限仍是 Auto，不应被误当成收紧而中断。
         expect(turnStartCount(host)).toBe(2);
         expect(
           host.request.mock.calls.some(
@@ -8948,7 +8945,7 @@ describe('CodexAgent MCP thread context hooks', () => {
               method === Method.TurnInterrupt &&
               (params as { turnId?: string }).turnId === 'turn-2',
           ),
-        ).toBe(true);
+        ).toBe(false);
 
         await handle.close();
       } finally {
@@ -9881,11 +9878,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('enables Guardian after a local provider reviewer route is registered and keeps its model current', async () => {
-    const registerCodexReviewerRouteContext = vi.fn(() => true);
-    const agent = new CodexAgent(createDeps({}, {
-      registerCodexReviewerRouteContext,
-    }));
+  it('keeps third-party routes on the user protocol and reviews with the current session model', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) {
         return { turn: { id: 'turn-provider-aware-reviewer' } };
@@ -9904,189 +9899,38 @@ describe('CodexAgent MCP thread context hooks', () => {
     const startParams = host.request.mock.calls.find(([method]) => method === Method.ThreadStart)?.[1] as {
       approvalsReviewer?: string;
     };
-    // The thread is created before its id can be registered with the proxy.
     expect(startParams.approvalsReviewer).toBe('user');
-    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
-      sessionId: 'session-provider-aware-reviewer',
-      threadId: 'start-thread-id',
-      model: 'deepseek/deepseek-v4',
-    });
-
-    await handle.send({ type: 'user', content: 'hello' });
-    const firstTurnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
-      approvalsReviewer?: string;
-    };
-    expect(firstTurnParams.approvalsReviewer).toBe('auto_review');
 
     if (!handle.setModel) throw new Error('expected setModel');
     await handle.setModel('qwen/qwen3-coder');
-    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
-      sessionId: 'session-provider-aware-reviewer',
-      threadId: 'start-thread-id',
-      model: 'qwen/qwen3-coder',
-    });
-    host.getThreadHandlers()?.threadSettingsUpdated?.({
-      threadId: 'start-thread-id',
-      threadSettings: {
-        serviceTier: null,
-        model: 'qwen/qwen3-coder-202607',
-        effort: 'high',
-      },
-    });
-    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
-      sessionId: 'session-provider-aware-reviewer',
-      threadId: 'start-thread-id',
-      model: 'qwen/qwen3-coder-202607',
-    });
-    await handle.close();
-  });
-
-  it('keeps user approvals while a runtime default-model sentinel is unresolved', async () => {
-    const registerCodexReviewerRouteContext = vi.fn(() => true);
-    const agent = new CodexAgent(createDeps({}, {
-      registerCodexReviewerRouteContext,
-    }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) {
-        return { turn: { id: `turn-default-sentinel-${host.request.mock.calls.length}` } };
-      }
-      if (method === Method.ThreadSettingsUpdate) return {};
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-provider-reviewer-default-sentinel',
-      model: 'deepseek/deepseek-v4',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-
-    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
-      sessionId: 'session-provider-reviewer-default-sentinel',
-      threadId: 'start-thread-id',
-      model: 'deepseek/deepseek-v4',
-    });
-
-    if (!handle.setModel) throw new Error('expected setModel');
-    await handle.setModel('gpt-5');
-    expect(registerCodexReviewerRouteContext).toHaveBeenCalledTimes(1);
-    expect(host.request.mock.calls.some(
-      ([method, params]) =>
-        method === Method.ThreadSettingsUpdate &&
-        (params as { model?: string }).model === 'gpt-5',
-    )).toBe(false);
-
-    await handle.send({ type: 'user', content: 'use the provider default' });
-    const firstTurnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
-      approvalsReviewer?: string;
-    };
-    expect(firstTurnParams.approvalsReviewer).toBe('user');
-
-    await handle.setModel('qwen/qwen3-coder');
-    expect(registerCodexReviewerRouteContext).toHaveBeenLastCalledWith({
-      sessionId: 'session-provider-reviewer-default-sentinel',
-      threadId: 'start-thread-id',
-      model: 'qwen/qwen3-coder',
-    });
-    await handle.send({ type: 'user', content: 'use the concrete model' });
-    const turnCalls = host.request.mock.calls.filter(([method]) => method === Method.TurnStart);
-    const secondTurnParams = turnCalls[1]?.[1] as { approvalsReviewer?: string };
-    expect(secondTurnParams.approvalsReviewer).toBe('auto_review');
-    await handle.close();
-  });
-
-  it('registers the model resolved by thread/start when the request uses the default sentinel', async () => {
-    const registerCodexReviewerRouteContext = vi.fn(() => true);
-    const agent = new CodexAgent(createDeps({}, {
-      registerCodexReviewerRouteContext,
-    }));
-    installFakeHost(agent, (method) => {
-      if (method === Method.ThreadStart) {
-        return {
-          thread: { id: 'start-thread-id' },
-          model: 'deepseek/deepseek-v4',
-          modelProvider: 'xd',
-          cwd: '/repo',
-        };
-      }
-      return undefined;
-    }, { codexProxyActive: true });
-
-    const handle = await agent.startSession({
-      sessionId: 'session-provider-reviewer-default-model',
-      model: 'gpt-5',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-
-    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
-      sessionId: 'session-provider-reviewer-default-model',
-      threadId: 'start-thread-id',
-      model: 'deepseek/deepseek-v4',
-    });
-    await handle.close();
-  });
-
-  it('keeps user approvals when provider reviewer route registration fails', async () => {
-    const registerCodexReviewerRouteContext = vi.fn(() => {
-      throw new Error('proxy registry unavailable');
-    });
-    const agent = new CodexAgent(createDeps({}, {
-      registerCodexReviewerRouteContext,
-    }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) {
-        return { turn: { id: 'turn-provider-reviewer-register-failed' } };
-      }
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-provider-reviewer-register-failed',
-      model: 'deepseek/deepseek-v4',
-      providerId: 'xd',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-
-    await handle.send({ type: 'user', content: 'hello' });
+    await handle.send({ type: 'user', content: 'Check this project for type errors' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
       approvalsReviewer?: string;
     };
     expect(turnParams.approvalsReviewer).toBe('user');
-    await handle.close();
-  });
 
-  it('registers the resumed parent thread before enabling a provider-aware reviewer', async () => {
-    const registerCodexReviewerRouteContext = vi.fn(() => true);
-    const agent = new CodexAgent(createDeps({}, {
-      registerCodexReviewerRouteContext,
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-provider-aware-reviewer',
+      itemId: 'typecheck',
+      command: 'npx tsc --noEmit',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      agentKind: 'codex',
+      providerId: 'xd',
+      model: 'qwen/qwen3-coder',
+      userIntent: 'Check this project for type errors',
+      action: { kind: 'exec', command: 'npx tsc --noEmit' },
+      workspaceRoots: ['/repo'],
+      platform: process.platform,
     }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) {
-        return { turn: { id: 'turn-resumed-provider-reviewer' } };
-      }
-      return undefined;
-    }, { codexProxyActive: true });
-    const handle = await agent.startSession({
-      sessionId: 'session-resumed-provider-reviewer',
-      resumeSessionId: '12345678-1234-1234-1234-123456789abc',
-      model: 'xai/grok-4.5',
-      providerId: 'xai',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-
-    expect(registerCodexReviewerRouteContext).toHaveBeenCalledWith({
-      sessionId: 'session-resumed-provider-reviewer',
-      threadId: 'resume-thread-id',
-      model: 'xai/grok-4.5',
-    });
-    await handle.send({ type: 'user', content: 'hello' });
-    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
-      approvalsReviewer?: string;
-    };
-    expect(turnParams.approvalsReviewer).toBe('auto_review');
+    expect(reviewAutoPermissionAction.mock.calls[0]?.[0]).not.toHaveProperty('transcript');
+    expect(reviewAutoPermissionAction.mock.calls[0]?.[0]).not.toHaveProperty('tools');
+    expect(reviewAutoPermissionAction.mock.calls[0]?.[0]).not.toHaveProperty('memory');
+    expect(reviewAutoPermissionAction.mock.calls[0]?.[0]).not.toHaveProperty('skills');
     await handle.close();
   });
 
@@ -10136,7 +9980,7 @@ describe('CodexAgent MCP thread context hooks', () => {
       itemId: 'cmd-no-resolver',
       command: 'curl https://example.com',
       cwd: '/repo',
-    })).resolves.toEqual({ decision: 'decline' });
+    })).resolves.toEqual({ decision: 'accept' });
     if (!handle.setPermissionMode) throw new Error('expected setPermissionMode');
     await handle.setPermissionMode('ask');
     expect(host.request.mock.calls.filter(([method]) => method === Method.TurnInterrupt)).toHaveLength(0);
@@ -10201,8 +10045,12 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('falls back to the approval UI if Auto-review still forwards a command request', async () => {
-    const agent = new CodexAgent(createDeps());
+  it('opens the approval UI only when the lightweight reviewer explicitly returns ask', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({
+      verdict: 'ask' as const,
+      reason: 'This action crosses a high-impact boundary.',
+    }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-auto-command-fallback',
@@ -10213,11 +10061,12 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    const resolver = vi.fn(async (): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
     handle.setInteractionResolver(resolver);
 
-    // 用一个 Cindy auto-review core 会**升级**的命令(写/未知,非只读):core 只静默放行安全命令
-    // (如 ls / curl GET),需要升级的仍转发到审批 UI。这里断言"该升级的确实到达了 UI"。
+    // 灰区不会自动弹窗；只有 lightweight reviewer 明确返回 ask 才转发用户。
     const result = await handlers.commandExecutionApproval({
       threadId: 'start-thread-id',
       turnId: 'turn-1',
@@ -10228,12 +10077,71 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     expect(result).toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
     expect(resolver).toHaveBeenCalledOnce();
+    const request = resolver.mock.calls[0]?.[0];
+    expect(request?.kind).toBe('permission');
+    if (request?.kind !== 'permission') throw new Error('expected permission request');
+    expect(request.suggestions).toBeUndefined();
     await handle.close();
   });
 
+  it('re-checks Ask and Full access after an in-flight Cindy auto-review', async () => {
+    const askReview = deferred<{ verdict: 'allow' }>();
+    const askReviewer = vi.fn(() => askReview.promise);
+    const askAgent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: askReviewer }));
+    const askHost = installFakeHost(askAgent);
+    const askHandle = await askAgent.startSession({
+      sessionId: 'session-auto-review-late-ask', model: 'gpt-5.5', providerId: 'openai',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    const askHandlers = askHost.getThreadHandlers();
+    if (!askHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const askResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
+    askHandle.setInteractionResolver(askResolver);
+    const pendingAsk = askHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-late-ask', itemId: 'cmd-late-ask', approvalId: 'a-late-ask',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(askReviewer).toHaveBeenCalledOnce());
+    await askHandle.setPermissionMode!('ask');
+    askReview.resolve({ verdict: 'allow' });
+    await expect(pendingAsk).resolves.toEqual({ decision: 'accept' });
+    expect(askResolver).toHaveBeenCalledOnce();
+    expect(askResolver.mock.calls[0]?.[0]).toMatchObject({ kind: 'permission', suggestions: undefined });
+    await askHandle.close();
+
+    const fullReview = deferred<{ verdict: 'allow' }>();
+    const fullReviewer = vi.fn(() => fullReview.promise);
+    const fullAgent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction: fullReviewer }));
+    const fullHost = installFakeHost(fullAgent);
+    const fullHandle = await fullAgent.startSession({
+      sessionId: 'session-auto-review-late-full', model: 'gpt-5.5', providerId: 'openai',
+      workingDir: '/repo', permissionMode: 'auto',
+    });
+    const fullHandlers = fullHost.getThreadHandlers();
+    if (!fullHandlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
+    const fullResolver = vi.fn(async (_request: InteractionRequest): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
+    fullHandle.setInteractionResolver(fullResolver);
+    const pendingFull = fullHandlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-late-full', itemId: 'cmd-late-full', approvalId: 'a-late-full',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    await waitForExpectation(() => expect(fullReviewer).toHaveBeenCalledOnce());
+    await fullHandle.setPermissionMode!('bypassPermissions');
+    fullReview.resolve({ verdict: 'allow' });
+    await expect(pendingFull).resolves.toEqual({ decision: 'accept' });
+    expect(fullResolver).not.toHaveBeenCalled();
+    await fullHandle.close();
+  });
+
   it('auto-approves safe fallback commands via the Cindy auto-review core without prompting', async () => {
-    const agent = new CodexAgent(createDeps());
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-auto-core-safe',
@@ -10244,7 +10152,9 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    const resolver = vi.fn(async () => ({ kind: 'permission' as const, behavior: 'allow' as const }));
+    const resolver = vi.fn(async (): Promise<InteractionDecision> => (
+      { kind: 'permission', behavior: 'allow' }
+    ));
     handle.setInteractionResolver(resolver);
 
     // 只读 shell(命令行浏览器抓取)→ Cindy core 静默放行,不惊动 resolver(少打扰,模型无关)。
@@ -10255,16 +10165,28 @@ describe('CodexAgent MCP thread context hooks', () => {
     expect(safe).toEqual({ decision: 'accept' });
     expect(resolver).not.toHaveBeenCalled();
 
-    // 危险命令 → core 判 prompt-each-time,转发 UI(此测 resolver 恒 allow,断言"确实弹了")。
+    // 常规工作区清理交轻量 reviewer；明确 allow 后也不弹窗。
+    const cleanup = await handlers.commandExecutionApproval({
+      threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'cmd-cleanup', approvalId: 'a-cleanup',
+      command: 'rm -rf build', cwd: '/repo',
+    });
+    expect(cleanup).toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    expect(resolver).not.toHaveBeenCalled();
+
+    // 提权边界才直接转发 UI。
     const danger = await handlers.commandExecutionApproval({
       threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'cmd-danger', approvalId: 'a-danger',
-      command: 'rm -rf build', cwd: '/repo',
+      command: 'sudo rm -rf build', cwd: '/repo',
     });
     expect(danger).toEqual({ decision: 'accept' });
     expect(resolver).toHaveBeenCalledOnce();
     // prompt-each-time 必须剥离会话级 suggestion —— 否则用户点一次"总是允许"就把高风险 action 永久放行
     // (与 Claude Code 侧等价断言对齐)。
-    expect(resolver.mock.calls[0]?.[0]?.suggestions).toBeUndefined();
+    const request = resolver.mock.calls[0]?.[0];
+    expect(request?.kind).toBe('permission');
+    if (request?.kind !== 'permission') throw new Error('expected permission request');
+    expect(request.suggestions).toBeUndefined();
     await handle.close();
   });
 
@@ -10346,7 +10268,7 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('does not auto-approve fallback commands when no interaction resolver is attached (fail-closed)', async () => {
+  it('auto-approves deterministic safe actions even without an interaction resolver', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
@@ -10358,11 +10280,11 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
     const handlers = host.getThreadHandlers();
     if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval handler');
-    // 没有 resolver = 没有能撤销误判的人在场:即便命令"看着安全",core 也不自动放行,fail-closed。
+    // allow/block 不依赖 UI。只有 ask 在没有 resolver 时才 fail-closed decline。
     await expect(handlers.commandExecutionApproval({
       threadId: 'start-thread-id', turnId: 'turn-1', itemId: 'cmd-noresolver', approvalId: 'a-nr',
       command: 'curl -sS https://example.com', cwd: '/repo',
-    })).resolves.toEqual({ decision: 'decline' });
+    })).resolves.toEqual({ decision: 'accept' });
     await handle.close();
   });
 
@@ -10409,12 +10331,13 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
-  it('surfaces Guardian auto-review timeouts as visible non-terminal errors', async () => {
-    const classifierUnavailable = vi.fn();
-    const agent = new CodexAgent(createDeps({}, {
-      onAutoPermissionClassifierUnavailable: classifierUnavailable,
-    }));
-    const host = installFakeHost(agent);
+  it('keeps Auto and switches to the current-model fallback when Guardian times out', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-after-guardian-timeout' } };
+      return undefined;
+    });
     const handle = await agent.startSession({
       sessionId: 'session-guardian-timeout',
       model: 'gpt-5.5',
@@ -10422,7 +10345,6 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
       permissionMode: 'auto',
     });
-    const iterator = handle.events()[Symbol.asyncIterator]();
     const handlers = host.getThreadHandlers();
     if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
     handlers.autoApprovalReviewCompleted({
@@ -10436,78 +10358,33 @@ describe('CodexAgent MCP thread context hooks', () => {
       review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: 'review timed out' },
       action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
     });
-    expect(classifierUnavailable).not.toHaveBeenCalled();
-    await expect(nextEvent(iterator)).resolves.toMatchObject({
-      type: 'error',
-      data: {
-        reason: 'codex-auto-review-unavailable',
-        isTerminal: false,
-        reviewRationale: 'review timed out',
-      },
-    });
-    await Promise.resolve();
-    expect(classifierUnavailable).toHaveBeenCalledWith({
-      sessionId: 'session-guardian-timeout',
-      agentKind: 'codex',
-      status: 408,
-    });
-    await handle.close();
-  });
-
-  it('switches the local runtime to Ask before notifying the host about a Guardian timeout', async () => {
-    const classifierUnavailable = vi.fn();
-    const agent = new CodexAgent(createDeps({}, {
-      onAutoPermissionClassifierUnavailable: classifierUnavailable,
-    }));
-    const host = installFakeHost(agent, (method) => {
-      if (method === Method.TurnStart) return { turn: { id: 'turn-after-guardian-timeout' } };
-      return undefined;
-    });
-    const handle = await agent.startSession({
-      sessionId: 'session-guardian-timeout-runtime',
-      model: 'gpt-5.5',
-      providerId: 'openai',
-      workingDir: '/repo',
-      permissionMode: 'auto',
-    });
-    const handlers = host.getThreadHandlers();
-    if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
-
-    handlers.autoApprovalReviewCompleted({
-      threadId: 'start-thread-id',
-      turnId: 'turn-guardian',
-      startedAtMs: 1,
-      completedAtMs: 2,
-      reviewId: 'review-timeout-runtime',
-      targetItemId: 'item-network-runtime',
-      decisionSource: 'agent',
-      review: { status: 'timedOut', riskLevel: null, userAuthorization: null, rationale: null },
-      action: { type: 'networkAccess', target: 'https://example.com', host: 'example.com', protocol: 'https', port: 443 },
-    });
-
-    expect(classifierUnavailable).not.toHaveBeenCalled();
-    await handle.send({ type: 'user', content: 'retry after fallback' });
+    await handle.send({ type: 'user', content: 'Run the type checker' });
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
       approvalPolicy?: string;
       approvalsReviewer?: string;
     };
-    expect(turnParams.approvalPolicy).toBe('on-request');
-    expect(turnParams.approvalsReviewer).toBe('user');
-    expect(classifierUnavailable).toHaveBeenCalledWith({
-      sessionId: 'session-guardian-timeout-runtime',
-      agentKind: 'codex',
-      status: 408,
+    expect(turnParams).toMatchObject({
+      approvalPolicy: 'on-request',
+      approvalsReviewer: 'user',
     });
+    if (!handlers.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-after-guardian-timeout',
+      itemId: 'typecheck-after-timeout',
+      command: 'npx tsc --noEmit',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      providerId: 'openai',
+      model: 'gpt-5.5',
+      userIntent: 'Run the type checker',
+    }));
     await handle.close();
   });
 
-  it('treats Guardian reviewer failures as unavailable and contains host callback errors', async () => {
-    const classifierUnavailable = vi.fn(() => {
-      throw new Error('host callback failed');
-    });
-    const agent = new CodexAgent(createDeps({}, {
-      onAutoPermissionClassifierUnavailable: classifierUnavailable,
-    }));
+  it('treats Guardian reviewer failures as unavailable without emitting a user-facing error', async () => {
+    const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent);
     const handle = await agent.startSession({
       sessionId: 'session-guardian-reviewer-failure',
@@ -10516,7 +10393,6 @@ describe('CodexAgent MCP thread context hooks', () => {
       workingDir: '/repo',
       permissionMode: 'auto',
     });
-    const iterator = handle.events()[Symbol.asyncIterator]();
     const handlers = host.getThreadHandlers();
     if (!handlers?.autoApprovalReviewCompleted) throw new Error('expected autoApprovalReviewCompleted');
 
@@ -10536,26 +10412,16 @@ describe('CodexAgent MCP thread context hooks', () => {
       },
       action: { type: 'command', source: 'shell', command: 'pwd', cwd: '/repo' },
     });
-    expect(classifierUnavailable).not.toHaveBeenCalled();
-
-    await expect(nextEvent(iterator)).resolves.toMatchObject({
-      type: 'error',
-      data: { reason: 'codex-auto-review-unavailable', isTerminal: false },
-    });
-    await Promise.resolve();
-    expect(classifierUnavailable).toHaveBeenCalledWith({
-      sessionId: 'session-guardian-reviewer-failure',
-      agentKind: 'codex',
-      status: 500,
-    });
+    await handle.send({ type: 'user', content: 'continue after reviewer failure' });
+    const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
+      approvalsReviewer?: string;
+    };
+    expect(turnParams.approvalsReviewer).toBe('user');
     await handle.close();
   });
 
   it('ignores a stale Guardian timeout from a previous turn', async () => {
-    const classifierUnavailable = vi.fn();
-    const agent = new CodexAgent(createDeps({}, {
-      onAutoPermissionClassifierUnavailable: classifierUnavailable,
-    }));
+    const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: 'turn-current' } };
       return undefined;
@@ -10584,7 +10450,6 @@ describe('CodexAgent MCP thread context hooks', () => {
     });
 
     await Promise.resolve();
-    expect(classifierUnavailable).not.toHaveBeenCalled();
     const turnParams = host.request.mock.calls.find(([method]) => method === Method.TurnStart)?.[1] as {
       approvalsReviewer?: string;
     };

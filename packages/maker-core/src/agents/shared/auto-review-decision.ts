@@ -20,6 +20,11 @@ export interface AutoReviewRequest {
   model: string;
   userIntent: string;
   action: ReviewableAction;
+  /**
+   * 位置语义(reviewAction 同契约):`[0]` 是唯一可写的工作目录,其余是只读引用目录
+   * (additionalDirectories)。所有 agent 一律传 `[workingDir, ...extraDirs]`;host 侧
+   * reviewer prompt 依赖该顺序区分可写/只读,不得打乱或拍平。
+   */
   workspaceRoots: string[];
   platform: NodeJS.Platform;
 }
@@ -41,6 +46,8 @@ export function getAutoReviewActionTextLength(action: ReviewableAction): number 
       return action.path?.length ?? 0;
     case 'network':
       return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
+    case 'other':
+      return action.description?.length ?? 0;
     default:
       return 0;
   }
@@ -78,7 +85,9 @@ function missingReviewEvidence(action: ReviewableAction): string | null {
         ? null
         : 'Network review needs a concrete destination or query.';
     case 'other':
-      return 'Unknown actions cannot be reviewed without concrete action details.';
+      return action.description?.trim()
+        ? null
+        : 'Unknown actions cannot be reviewed without concrete action details.';
     default:
       return null;
   }

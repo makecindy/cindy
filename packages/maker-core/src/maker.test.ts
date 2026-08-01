@@ -64,6 +64,21 @@ function createLogger() {
   return logger;
 }
 
+describe('Maker agent status', () => {
+  it('represents an optional unregistered runtime as binary-missing', async () => {
+    const maker = new Maker({
+      agents: {},
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await expect(maker.getAgentStatus('pi')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: false,
+    });
+  });
+});
+
 function createAgent(
   startSession: (opts: CreateSessionOptions) => Promise<unknown>,
   kind: AgentKind = 'codex',

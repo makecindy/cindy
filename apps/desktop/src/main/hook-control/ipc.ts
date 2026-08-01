@@ -425,7 +425,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         deviceId: authManager.getDeviceId(),
         deviceName: os.hostname(),
       }),
-      agents: ['claude-code', 'codex'],
+      // Only advertise runtimes that are actually registered on this build.
+      // Pi is optional on unsupported/unprepared platforms.
+      agents: getMaker().listAvailableAgents(),
       notifyStatus: broadcastStatus,
       onSlackToolProviderEnabledChanged: requestCodexMcpRefreshForSlackAvailability,
       notifyPrefs: broadcastPrefs,
@@ -442,10 +444,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // permissionModes 仍取 capabilities(运行时能力, 与供应商无关), server
       // 侧据此渲染权限档下拉(选中值经 dispatch options.permissionMode 回流)
       listAgentModels: async () => {
-        const providers = await getDesktopProviderService().listProviders({
-          allowSideEffects: true,
-        });
-        return (['claude-code', 'codex'] as const).map((agentKind) => {
+        const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
+        // 动态取 runtime 已注册的 agent(含 Pi,若已安装);上游此处硬编码 cc/codex(早于 Pi),
+        // 本 PR 的 Pi 接入以 listAvailableAgents() 为准 —— 与新建入口按注册结果门控同源。
+        return getMaker().listAvailableAgents().map((agentKind) => {
           const models = visibleModelUnion(providers, agentKind, (providerId, m) =>
             isModelVisible(
               getModelVisibilityOverride(agentKind, providerId, m.id),

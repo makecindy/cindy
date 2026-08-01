@@ -24,6 +24,7 @@ import { Spinner } from '@/components/ui/spinner';
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { PiMark } from '@/components/icons/PiMark';
 import { extractIpcError } from '@/utils/ipcError';
 import {
   createCustomProvider,
@@ -35,15 +36,17 @@ import {
 import { uniqueCustomProviderId } from '@/lib/customProviderId';
 import {
   areProviderRequestUrlsAllowed,
+  connectionTestCanUseSaved,
+  modelFetchCanReuseSavedCredentials,
   providerConnectionTestRequestSignature,
   providerModelFetchRequestSignature,
   stripCredentialHeaders,
   type CustomProviderAuthMode,
+  type SavedProviderProbeBaseline,
 } from '@/lib/providerModelFetch';
 import {
   CUSTOM_PROVIDER_CODEX_WIRE_PROTOCOLS,
   customProviderCodexWireProtocolOption,
-  type CustomProviderCodexWireProtocol,
 } from '@/lib/customProviderWireProtocols';
 
 import {
@@ -60,11 +63,17 @@ import type {
 } from '@cindy/model-providers';
 import { SettingsTextInput } from './SettingsTextInput';
 
-const AGENTS: AgentKind[] = ['claude-code', 'codex'];
+/**
+ * 本面板配置 claude / codex / pi 三个 runtime。pi 是多协议 harness:BYOM 自定义/本地模型
+ * 走 pi 原生 provider 直连(不过 anthropic-compat 代理),故 pi tab 额外提供显式 api 选择器。
+ */
+type DialogAgentKind = Extract<AgentKind, 'claude-code' | 'codex' | 'pi'>;
 
-const VISIBLE_AGENTS: AgentKind[] = AGENTS;
+const AGENTS: DialogAgentKind[] = ['claude-code', 'codex', 'pi'];
 
-const TAB_META: Record<AgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
+const VISIBLE_AGENTS: DialogAgentKind[] = AGENTS;
+
+const TAB_META: Record<DialogAgentKind, { Mark: typeof ClaudeMark; labelKey: string; helpKey: string }> =
   {
     'claude-code': {
       Mark: ClaudeMark,
@@ -76,7 +85,22 @@ const TAB_META: Record<AgentKind, { Mark: typeof ClaudeMark; labelKey: string; h
       labelKey: 'settings.providers.custom.protocol.codex',
       helpKey: 'settings.providers.custom.protocol.codexDesc',
     },
+    pi: {
+      Mark: PiMark,
+      labelKey: 'settings.providers.custom.protocol.pi',
+      helpKey: 'settings.providers.custom.protocol.piDesc',
+    },
   };
+
+/** pi 默认 wire protocol:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。 */
+const PI_DEFAULT_WIRE: ProviderWireProtocol = 'openai-chat';
+
+/** 某 agent runtime 的默认 wire protocol。 */
+function defaultWireFor(agent: DialogAgentKind): ProviderWireProtocol {
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'pi') return PI_DEFAULT_WIRE;
+  return 'openai-responses';
+}
 
 interface CustomProviderDialogProps {
   initial?: CustomProviderConfig;
@@ -111,7 +135,7 @@ interface TestState {
 }
 const IDLE_TEST: TestState = { status: 'idle' };
 
-function emptyRuntime(agent: AgentKind): RuntimeFields {
+function emptyRuntime(agent: DialogAgentKind): RuntimeFields {
   return {
     baseUrl: '',
     requestPath: '',
@@ -125,13 +149,13 @@ function emptyRuntime(agent: AgentKind): RuntimeFields {
   };
 }
 
-function defaultRequestPath(agent: AgentKind, wireProtocol: ProviderWireProtocol): string {
+function defaultRequestPath(agent: DialogAgentKind, wireProtocol: ProviderWireProtocol): string {
   if (agent === 'claude-code') return '/v1/messages';
   return wireProtocol === 'openai-chat' ? '/chat/completions' : '/responses';
 }
 
 /** 用户可直接粘贴完整推理端点；仅在没有显式路径 override 时拆分已知协议后缀。 */
-function normalizeRuntimeEndpoint(agent: AgentKind, fields: RuntimeFields): RuntimeFields {
+function normalizeRuntimeEndpoint(agent: DialogAgentKind, fields: RuntimeFields): RuntimeFields {
   if (fields.requestPath.trim()) return fields;
   const split = splitProviderEndpointUrl(
     fields.baseUrl,
@@ -140,10 +164,11 @@ function normalizeRuntimeEndpoint(agent: AgentKind, fields: RuntimeFields): Runt
   return split ? { ...fields, ...split } : fields;
 }
 
-function initRuntimes(initial?: CustomProviderConfig): Record<AgentKind, RuntimeFields> {
-  const out: Record<AgentKind, RuntimeFields> = {
+function initRuntimes(initial?: CustomProviderConfig): Record<DialogAgentKind, RuntimeFields> {
+  const out: Record<DialogAgentKind, RuntimeFields> = {
     'claude-code': emptyRuntime('claude-code'),
     codex: emptyRuntime('codex'),
+    pi: emptyRuntime('pi'),
   };
   if (initial) {
     for (const a of AGENTS) {
@@ -153,8 +178,7 @@ function initRuntimes(initial?: CustomProviderConfig): Record<AgentKind, Runtime
         baseUrl: rc.baseUrl,
         requestPath: rc.requestPath ?? '',
         apiKey: '',
-        wireProtocol:
-          rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
+        wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
         models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
         headers:
           rc.headers && Object.keys(rc.headers).length > 0
@@ -289,13 +313,14 @@ export function CustomProviderDialog({
   const initialOAuth = initial?.auth?.method === 'oauth' ? initial.auth.oauth : undefined;
 
   const [name, setName] = useState(initial?.name ?? '');
-  const [rt, setRt] = useState<Record<AgentKind, RuntimeFields>>(() => initRuntimes(initial));
-  const [activeTab, setActiveTab] = useState<AgentKind>(
+  const [rt, setRt] = useState<Record<DialogAgentKind, RuntimeFields>>(() => initRuntimes(initial));
+  const [activeTab, setActiveTab] = useState<DialogAgentKind>(
     () => (initial && VISIBLE_AGENTS.find((a) => initial.runtimes[a])) || 'claude-code',
   );
-  const [hasKey, setHasKey] = useState<Record<AgentKind, boolean>>({
+  const [hasKey, setHasKey] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
     codex: false,
+    pi: false,
   });
   const [saving, setSaving] = useState(false);
   // 鉴权形态：API key（默认）/ OAuth / 无鉴权（本机或受信自托管代理）。
@@ -334,18 +359,20 @@ export function CustomProviderDialog({
   const [presets, setPresets] = useState<ProviderPreset[]>([]);
   const [appliedPreset, setAppliedPreset] = useState<string | null>(null);
   // per-runtime 测试连接状态。
-  const [test, setTest] = useState<Record<AgentKind, TestState>>({
+  const [test, setTest] = useState<Record<DialogAgentKind, TestState>>({
     'claude-code': IDLE_TEST,
     codex: IDLE_TEST,
+    pi: IDLE_TEST,
   });
   // per-runtime「获取模型列表」进行中标记（按钮瞬态 spinner）。
-  const [fetchingModels, setFetchingModels] = useState<Record<AgentKind, boolean>>({
+  const [fetchingModels, setFetchingModels] = useState<Record<DialogAgentKind, boolean>>({
     'claude-code': false,
     codex: false,
+    pi: false,
   });
   // 拉取成功后的勾选弹层：行集合 = 拉取结果 ∪ 表单已填（后者默认勾选、保留用户显示名）。
   const [picker, setPicker] = useState<{
-    agent: AgentKind;
+    agent: DialogAgentKind;
     models: ModelRow[];
     selected: Set<string>;
     query: string;
@@ -357,7 +384,7 @@ export function CustomProviderDialog({
   const rtRef = useRef(rt);
   /** 唯一的 rt 写入口：状态更新的同时同步镜像进 rtRef（updater 幂等，StrictMode 双调无害）。 */
   const setRtSynced = useCallback(
-    (fn: (prev: Record<AgentKind, RuntimeFields>) => Record<AgentKind, RuntimeFields>) => {
+    (fn: (prev: Record<DialogAgentKind, RuntimeFields>) => Record<DialogAgentKind, RuntimeFields>) => {
       setRt((prev) => {
         const next = fn(prev);
         rtRef.current = next;
@@ -365,6 +392,44 @@ export function CustomProviderDialog({
       });
     },
     [],
+  );
+
+  // 编辑态回填的已存明文 key(按 agent);测试连接据此判定凭证材料是否被改动。
+  const loadedKeyRef = useRef<Record<DialogAgentKind, string>>({
+    'claude-code': '',
+    codex: '',
+    pi: '',
+  });
+
+  // 已存供应商在编辑态的基线快照:端点/协议/鉴权模式取自已存配置,apiKey 取回填值,
+  // headers 取已存非密文头(自定义鉴权头是 main-only 密文,不回读进表单)。测试连接 /
+  // 获取模型列表据此判定能否复用不回读的密文头(经 saved 探测 / savedProviderId 让 main
+  // 并入),而非把密钥回读到 renderer。非编辑态或该 runtime 未配置时返回 null。
+  const savedBaselineFor = useCallback(
+    (agent: DialogAgentKind): SavedProviderProbeBaseline | null => {
+      if (!editing || !initial) return null;
+      const rc = initial.runtimes[agent];
+      if (!rc) return null;
+      const savedAuthMode: CustomProviderAuthMode =
+        initial.auth?.method === 'oauth'
+          ? 'oauth'
+          : initial.auth?.method === 'none'
+            ? 'none'
+            : 'apiKey';
+      return {
+        baseUrl: rc.baseUrl,
+        requestPath: rc.requestPath ?? '',
+        modelsUrl: rc.modelsUrl ?? '',
+        wireProtocol: rc.wireProtocol ?? defaultWireFor(agent),
+        authMode: savedAuthMode,
+        apiKey: loadedKeyRef.current[agent] ?? '',
+        headers:
+          rc.headers && Object.keys(rc.headers).length > 0
+            ? Object.entries(rc.headers).map(([n, v]) => ({ name: n, value: v }))
+            : [],
+      };
+    },
+    [editing, initial],
   );
 
   // 新建态拉取预设模板（本地 IPC 极快返回；失败静默 —— 没有预设也不影响手填，规则 7 不做 loading）。
@@ -404,8 +469,7 @@ export function CustomProviderDialog({
             baseUrl: rc.baseUrl,
             requestPath: rc.requestPath ?? '',
             apiKey: prev[a].apiKey, // 已填的 key 保留
-            wireProtocol:
-              rc.wireProtocol ?? (a === 'claude-code' ? 'anthropic-messages' : 'openai-responses'),
+            wireProtocol: rc.wireProtocol ?? defaultWireFor(a),
             models: rc.models.length ? rc.models.map((m) => ({ ...m })) : [{ id: '', name: '' }],
             headers:
               rc.headers && Object.keys(rc.headers).length > 0
@@ -416,7 +480,7 @@ export function CustomProviderDialog({
         }
         return next;
       });
-      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
+      setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
       // 预设整体替换所有 runtime 的 models 数组(含清空未声明的 runtime),旧行号
       // 全部失效——不清空的话陈旧草稿(如 -5)会挂在无关的新行、或挂在被预设清空
       // 的 runtime 上,handleSave 的守卫拦不住"用户已经看不到"的这条草稿,表单
@@ -430,12 +494,13 @@ export function CustomProviderDialog({
 
   // 编辑态：回填各已配置 runtime 的已存明文密钥（用户本机自己的 key）——
   // 让密钥框「能看」(eye 显形 / 可核对)，而非空白遮罩；据此点亮「已保存」徽标。
+  // 鉴权请求头是 main-only 密文,不回读进表单;未显式改动时由 main 侧 update 保留旧值。
   useEffect(() => {
     if (!editing || !initial) return;
     let cancelled = false;
     void (async () => {
-      const nextHas: Record<AgentKind, boolean> = { 'claude-code': false, codex: false };
-      const fetched: Partial<Record<AgentKind, string>> = {};
+      const nextHas: Record<DialogAgentKind, boolean> = { 'claude-code': false, codex: false, pi: false };
+      const fetched: Partial<Record<DialogAgentKind, string>> = {};
       for (const a of AGENTS) {
         if (!initial.runtimes[a]) continue;
         const k = await readCustomProviderKey(initial.id, a);
@@ -446,6 +511,9 @@ export function CustomProviderDialog({
       }
       if (cancelled) return;
       setHasKey(nextHas);
+      // 记下回填的已存明文 key 作为基线:测试连接判定「凭证材料是否被改动」时用来决定
+      // 走受控 saved 探测还是 adhoc(headers 是 main-only 密文,基线取自 initial 的非密文头)。
+      for (const a of AGENTS) loadedKeyRef.current[a] = fetched[a] ?? '';
       setRtSynced((prev) => {
         const next = { ...prev };
         for (const a of AGENTS) {
@@ -460,7 +528,7 @@ export function CustomProviderDialog({
   }, [editing, initial]);
 
   const patch = useCallback(
-    (agent: AgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
+    (agent: DialogAgentKind, fn: (f: RuntimeFields) => RuntimeFields) => {
       setRtSynced((prev) => ({ ...prev, [agent]: fn(prev[agent]) }));
       setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
@@ -468,13 +536,13 @@ export function CustomProviderDialog({
   );
 
   /** 切换协议时保留用户已填写的 endpoint，仅使旧测试结果失效。 */
-  const changeCodexWireProtocol = useCallback(
-    (wireProtocol: CustomProviderCodexWireProtocol) => {
+  const changeWireProtocol = useCallback(
+    (agent: DialogAgentKind, wireProtocol: ProviderWireProtocol) => {
       setRtSynced((prev) => ({
         ...prev,
-        codex: { ...prev.codex, wireProtocol },
+        [agent]: { ...prev[agent], wireProtocol },
       }));
-      setTest((prev) => ({ ...prev, codex: IDLE_TEST }));
+      setTest((prev) => ({ ...prev, [agent]: IDLE_TEST }));
     },
     [setRtSynced],
   );
@@ -505,21 +573,32 @@ export function CustomProviderDialog({
     }
     const requestHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
     const requestSig = providerConnectionTestRequestSignature(rf, authMode);
+    // 编辑态且端点/协议/鉴权模式与凭证材料相对已存配置都未改动时,走受控 saved 探测:
+    // 它整体按已存 spec 发起,能带上不回读进表单的 main-only 密文鉴权头(否则纯密文头
+    // 供应商会因缺头而失败)。任一改动则回落 adhoc,测用户新填的值。
+    const savedBaseline = savedBaselineFor(agent);
+    const useSaved = Boolean(
+      initial?.id && savedBaseline && connectionTestCanUseSaved(rf, savedBaseline, authMode),
+    );
     setTest((prev) => ({ ...prev, [agent]: { status: 'testing' } }));
     try {
-      const result = await window.electronAPI.maker.testProviderConnection({
-        kind: 'adhoc',
-        spec: {
-          agent,
-          baseUrl,
-          modelId: firstModel,
-          authMethod: authMode,
-          wireProtocol: rf.wireProtocol,
-          ...(rf.requestPath.trim() ? { requestPath: rf.requestPath.trim() } : {}),
-          apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
-          ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
-        },
-      });
+      const result = await window.electronAPI.maker.testProviderConnection(
+        useSaved
+          ? { kind: 'saved', providerId: initial!.id, agent }
+          : {
+              kind: 'adhoc',
+              spec: {
+                agent,
+                baseUrl,
+                modelId: firstModel,
+                authMethod: authMode,
+                wireProtocol: rf.wireProtocol,
+                ...(rf.requestPath.trim() ? { requestPath: rf.requestPath.trim() } : {}),
+                apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
+                ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
+              },
+            },
+      );
       if (
         providerConnectionTestRequestSignature(rtRef.current[agent], authModeRef.current) !==
         requestSig
@@ -543,11 +622,11 @@ export function CustomProviderDialog({
       setTest((prev) => ({ ...prev, [agent]: { status: 'fail', code: 'UNKNOWN' } }));
       if (ipc?.message) toast.error(ipc.message);
     }
-  }, [activeTab, authMode, rt, setRtSynced, t]);
+  }, [activeTab, authMode, rt, setRtSynced, t, savedBaselineFor, initial]);
 
-  // 拉取单飞：任一 runtime 在途时两个 Tab 的拉取按钮都禁用——两个并发请求会竞争同一个
-  // 勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
-  const anyFetching = fetchingModels['claude-code'] || fetchingModels.codex;
+  // 拉取单飞：任一 runtime（含 Pi）在途时所有 Tab 的拉取按钮都禁用——两个并发请求会竞争
+  // 同一个勾选弹层（后到的覆盖先开的、确认还会写进另一个 runtime），单飞直接消掉这类竞态。
+  const anyFetching = fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi;
 
   /** 获取模型列表：用当前 Tab 表单值 GET 列模型端点（key 仅内存透传），成功后开勾选弹层。 */
   const handleFetchModels = useCallback(async () => {
@@ -556,7 +635,7 @@ export function CustomProviderDialog({
     if (rf !== rt[agent]) {
       setRtSynced((prev) => ({ ...prev, [agent]: rf }));
     }
-    if (fetchingModels['claude-code'] || fetchingModels.codex) return; // 单飞（按钮已禁用，兜底）
+    if (fetchingModels['claude-code'] || fetchingModels.codex || fetchingModels.pi) return; // 单飞（按钮已禁用，兜底）
     const baseUrl = rf.baseUrl.trim();
     if (!baseUrl) {
       toast.error(t('settings.providers.custom.fetch.needBaseUrl'));
@@ -575,6 +654,13 @@ export function CustomProviderDialog({
     // 请求参数签名：响应回来时若该 runtime 的端点/凭证/请求头已被改动，响应按过期丢弃——
     // 不能把旧端点的模型清单当成新端点的填进表单（成功和失败 toast 都不展示）。
     const requestSig = providerModelFetchRequestSignature(rf, authMode);
+    // 编辑态且请求目标端点(baseUrl/modelsUrl)与鉴权模式相对已存配置未改动时,带上
+    // savedProviderId,让 main 侧并入不回读进 renderer 的 main-only 密文鉴权头(表单显式
+    // 填的头/key 仍由 main 以 renderer 值优先);端点一改就不带,避免把已存凭证外泄给新主机。
+    const savedBaseline = savedBaselineFor(agent);
+    const reuseSaved = Boolean(
+      initial?.id && savedBaseline && modelFetchCanReuseSavedCredentials(rf, savedBaseline, authMode),
+    );
     setFetchingModels((prev) => ({ ...prev, [agent]: true }));
     try {
       const result = await window.electronAPI.maker.fetchProviderModels({
@@ -585,6 +671,7 @@ export function CustomProviderDialog({
         modelsUrl: rf.modelsUrl.trim() || null,
         apiKey: authMode === 'apiKey' ? rf.apiKey.trim() || null : null,
         ...(Object.keys(requestHeaders).length > 0 ? { headers: requestHeaders } : {}),
+        ...(reuseSaved ? { savedProviderId: initial!.id } : {}),
       });
       if (
         providerModelFetchRequestSignature(rtRef.current[agent], authModeRef.current) !== requestSig
@@ -638,7 +725,7 @@ export function CustomProviderDialog({
     } finally {
       setFetchingModels((prev) => ({ ...prev, [agent]: false }));
     }
-  }, [activeTab, authMode, rt, fetchingModels, setRtSynced, t]);
+  }, [activeTab, authMode, rt, fetchingModels, setRtSynced, t, savedBaselineFor, initial]);
 
   /**
    * 勾选弹层确认：勾选集写回该 runtime 的模型行。基于**确认时的最新表单行**合并，
@@ -811,7 +898,7 @@ export function CustomProviderDialog({
         if (n) headers[n] = h.value.trim();
       }
       const savedHeaders = authMode === 'none' ? stripCredentialHeaders(headers) : headers;
-      const defaultProtocol = a === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+      const defaultProtocol = defaultWireFor(a);
       runtimes[a] = {
         baseUrl: rf.baseUrl.trim(),
         ...(requestPath ? { requestPath } : {}),
@@ -1016,7 +1103,7 @@ export function CustomProviderDialog({
                   type="button"
                   onClick={() => {
                     setAuthMode(m);
-                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST });
+                    setTest({ 'claude-code': IDLE_TEST, codex: IDLE_TEST, pi: IDLE_TEST });
                   }}
                   className={cn(
                     'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
@@ -1155,7 +1242,7 @@ export function CustomProviderDialog({
               border: '1px solid var(--settings-theme-card-border)',
             }}
           >
-            {showAdvanced && activeTab === 'codex' && (
+            {(activeTab === 'pi' || (showAdvanced && activeTab === 'codex')) && (
               <div className="flex flex-col gap-[7px]">
                 <FieldLabel>{t('settings.providers.custom.fields.wireProtocol')}</FieldLabel>
                 <div className="flex flex-wrap gap-1.5">
@@ -1163,7 +1250,7 @@ export function CustomProviderDialog({
                     <button
                       key={option.value}
                       type="button"
-                      onClick={() => changeCodexWireProtocol(option.value)}
+                      onClick={() => changeWireProtocol(activeTab, option.value)}
                       className={cn(
                         'rounded-full border px-3 py-1.5 text-12 font-medium transition-colors',
                         f.wireProtocol === option.value
@@ -1176,12 +1263,28 @@ export function CustomProviderDialog({
                           : undefined
                       }
                     >
-                      {t(option.labelKey)}
+                      {t(activeTab === 'pi'
+                        ? `settings.providers.custom.wireProtocol.pi${
+                            option.value === 'anthropic-messages'
+                              ? 'Anthropic'
+                              : option.value === 'openai-responses'
+                                ? 'Responses'
+                                : 'Chat'
+                          }`
+                        : option.labelKey)}
                     </button>
                   ))}
                 </div>
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
-                  {t(customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
+                  {t(activeTab === 'pi'
+                    ? `settings.providers.custom.wireProtocol.pi${
+                        f.wireProtocol === 'anthropic-messages'
+                          ? 'AnthropicHelp'
+                          : f.wireProtocol === 'openai-chat'
+                            ? 'ChatHelp'
+                            : 'ResponsesHelp'
+                      }`
+                    : customProviderCodexWireProtocolOption(f.wireProtocol).helpKey)}
                 </span>
               </div>
             )}
@@ -1590,9 +1693,9 @@ function ModelPickerOverlay({
   onConfirm,
   onClose,
 }: {
-  picker: { agent: AgentKind; models: ModelRow[]; selected: Set<string>; query: string };
+  picker: { agent: DialogAgentKind; models: ModelRow[]; selected: Set<string>; query: string };
   onChange: (next: {
-    agent: AgentKind;
+    agent: DialogAgentKind;
     models: ModelRow[];
     selected: Set<string>;
     query: string;

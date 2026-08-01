@@ -38,6 +38,10 @@ export function shouldFallbackVendorModel(
   if (providers.some((p) => providerOffersModel(p, sessionModel, agent))) return false;
   // 本端不 offer:仅当对端 agent 明确 offer 它(确定的跨 vendor 错配)才回退;
   // 两端都不认识(别名 / 脏数据 / 目录未加载)→ 不动,避免误杀。
-  const other: AgentKind = agent === 'codex' ? 'claude-code' : 'codex';
-  return providers.some((p) => providerOffersModel(p, sessionModel, other));
+  const others: AgentKind[] = (['claude-code', 'codex', 'pi'] as const).filter(
+    (candidate) => candidate !== agent,
+  );
+  return providers.some((p) =>
+    others.some((other) => providerOffersModel(p, sessionModel, other)),
+  );
 }

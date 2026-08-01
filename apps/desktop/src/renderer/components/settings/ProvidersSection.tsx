@@ -96,7 +96,7 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
   if (hasProviderLogo(p.id, p.routing)) {
     return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
   }
-  return <span className="text-15 font-semibold leading-none">{providerMonogram(p.name)}</span>;
+  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -167,7 +167,7 @@ function PillButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'flex h-8 shrink-0 items-center justify-center rounded-full px-[14px] text-13 font-medium transition-colors',
+        'flex h-8 shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
         'border',
         disabled && 'cursor-not-allowed opacity-60',
       )}
@@ -210,7 +210,7 @@ function RowIconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
       style={{ color: 'var(--text-tertiary)' }}
     >
       {icon}
@@ -252,13 +252,20 @@ function DetailHeader({
   const singleAgentNote =
     provider && provider.agents.length === 1
       ? t('settings.providers.detail.singleAgentNote', {
-          agent: provider.agents[0] === 'claude-code' ? 'Claude Code' : 'Codex',
+          agent:
+            provider.agents[0] === 'claude-code'
+              ? 'Claude Code'
+              : provider.agents[0] === 'pi'
+                ? 'Pi'
+                : 'Codex',
         })
       : null;
 
   return (
     <div className={cn('flex flex-col px-5 py-4', detail && 'gap-3')}>
-      <div className="flex items-center gap-3">
+      {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
+          不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
+      <div className="flex flex-wrap items-center gap-3 gap-y-2">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
           style={{
@@ -309,7 +316,7 @@ function DetailHeader({
               <button
                 type="button"
                 aria-label={t('settings.providers.detail.moreActionsAria')}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
                 <MoreHorizontal size={15} />
@@ -588,7 +595,9 @@ function ImageApiKeyRow({
 
   if (configured === null) return null;
   return (
-    <div className="flex items-center gap-2 pt-2">
+    /* 可折行:最小窗口(右栏 ~250px 内容区)下「标签 + 掩码/输入框 + 按钮」
+       放不下时换行,操作始终可达(PR #1102 review 第八轮;与详情头折行同口径)。 */
+    <div className="flex flex-wrap items-center gap-2 gap-y-2 pt-2">
       <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
         {t('settings.providers.imagesKey.label')}
       </span>
@@ -895,7 +904,9 @@ function BuiltinApiKeyHeader({
   }, [confirm, onChanged, provider.id, provider.name, t]);
 
   const trailing = (
-    <div className="flex shrink-0 items-center gap-2.5">
+    /* 三控件组自身可折行:最小窗口(内容区 ~235px)下「已连接 / 更换 key / 断开」
+       放不下时组内换行,不再作为整体溢出被裁(PR #1102 review 第九轮)。 */
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5 gap-y-2">
       {provider.connected && <ConnectedPill />}
       <PillButton
         label={t(
@@ -1090,7 +1101,7 @@ function XdGatewayHeader({
     connected && syncStatus.state !== 'unsupported' ? (
       <div className="flex items-center gap-2.5 pl-12">
         <span
-          className="flex shrink-0 items-center rounded-md px-2 py-1 text-12"
+          className="flex shrink-0 items-center rounded-lg px-2 py-1 text-12"
           style={{
             backgroundColor: 'var(--surface-chip)',
             border: '1px solid var(--settings-integration-avatar-border)',
@@ -1262,7 +1273,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1315,7 +1326,7 @@ function ListRow({
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1383,7 +1394,7 @@ function SuggestionRow({
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-70"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1608,6 +1619,8 @@ export function ProvidersSection() {
                 : 'apiKey';
           const apiKey =
             authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
+          // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
+          // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
             baseUrl: rt.baseUrl,
@@ -1615,7 +1628,7 @@ export function ProvidersSection() {
             ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
-            ...(rt.headers ? { headers: rt.headers } : {}),
+            savedProviderId: p.id,
           });
           if (!r.ok || !r.models) continue;
           anyOk = true;
@@ -1757,8 +1770,8 @@ export function ProvidersSection() {
               {suggestions.length > 0 && (
                 <>
                   <span
-                    className="px-2.5 pb-1 pt-3 text-11 font-semibold uppercase"
-                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+                    className="px-2.5 pb-1 pt-3 text-11 font-medium uppercase"
+                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
                   >
                     {t('settings.providers.detect.groupLabel')}
                   </span>
@@ -1794,8 +1807,9 @@ export function ProvidersSection() {
             </div>
           </div>
 
-          {/* 右栏详情 */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          {/* 右栏详情:详情头/条带固定,仅模型列表(UnifiedModelList 内部)滚动 ——
+              长清单滚动时供应商名称、连接状态与工具行不随之滚走(2026-07 定稿)。 */}
+          <div className="flex min-w-0 flex-1 flex-col">
             {cindySigninActive ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
                 <div

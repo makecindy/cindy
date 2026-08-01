@@ -46,7 +46,7 @@ interface ErrorBannerProps {
   onContinueAfterUsageReset?: () => void;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
-  agentKind?: 'cc' | 'codex';
+  agentKind?: 'cc' | 'codex' | 'pi';
   /** 当前 session 的远端 host id;非空 + agentKind='codex' 时显「同步登录态」按钮。
    *  本地 codex 401 仍 hide Retry, 但只能提示用户去自己 fix login (没有 sync 入口)。 */
   remoteHostId?: string;

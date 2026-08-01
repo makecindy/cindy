@@ -106,6 +106,7 @@ import {
   computeAnomaly,
   computeStreaks,
   emptyUsageHistoryPayload,
+  piSubscriptionUsageModelKey,
   prevDayKey,
   readUsageHistory,
   readUsageHistoryWith,
@@ -164,7 +165,7 @@ function subscriptionQuote(
 
 function modelRow(
   day: string,
-  agentKind: 'claude-code' | 'codex',
+  agentKind: 'claude-code' | 'codex' | 'pi',
   model: string,
   money: RegionalMoney,
   tokens: {
@@ -277,6 +278,9 @@ describe('billing model keys', () => {
     );
     expect(claudeSubscriptionUsageModelKey('claude-opus-4-8')).toBe(
       'claude-opus-4-8#billing=subscription',
+    );
+    expect(piSubscriptionUsageModelKey('chatgpt/gpt-5.6-sol')).toBe(
+      'chatgpt/gpt-5.6-sol#billing=subscription',
     );
   });
 });
@@ -524,6 +528,29 @@ describe('readUsageHistoryWith', () => {
       model: 'claude-opus-4-8',
     });
     expect(result.models[0].estimatedMoney?.amount).toBe(expected);
+  });
+
+  it('keeps Pi cache usage as a distinct subscription row', async () => {
+    const result = await readUsageHistoryWith(makeDeps({
+      getModelUsageSince: async () => [
+        modelRow(
+          TODAY,
+          'pi',
+          piSubscriptionUsageModelKey('gpt-5.5'),
+          actual(0),
+          { inputTokens: 100_000, outputTokens: 2_000, cacheReadTokens: 900_000 },
+        ),
+      ],
+    }));
+
+    expect(result.models[0]).toMatchObject({
+      agentKind: 'pi',
+      model: 'gpt-5.5',
+      inputTokens: 100_000,
+      cacheReadTokens: 900_000,
+    });
+    expect(result.models[0].estimatedMoney?.amount).toBeGreaterThan(0);
+    expect(result.totals.todayTokens).toBe(1_002_000);
   });
 
   it('marks estimates pending only when a subscription price is missing during refresh', async () => {

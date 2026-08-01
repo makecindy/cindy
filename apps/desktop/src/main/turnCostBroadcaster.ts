@@ -338,3 +338,18 @@ export function codexUsageToTokens(usage: {
     cacheCreateTokens: 0,
   };
 }
+
+/** Pi done.data.usage → unified turn token fields. */
+export function piUsageToTokens(usage: {
+  inputTokens?: number;
+  outputTokens?: number;
+  cacheReadTokens?: number;
+  cacheCreationTokens?: number;
+}): { inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheCreateTokens: number } {
+  return {
+    inputTokens: Number(usage.inputTokens) || 0,
+    outputTokens: Number(usage.outputTokens) || 0,
+    cacheReadTokens: Number(usage.cacheReadTokens) || 0,
+    cacheCreateTokens: Number(usage.cacheCreationTokens) || 0,
+  };
+}

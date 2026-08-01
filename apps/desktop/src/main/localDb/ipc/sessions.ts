@@ -21,6 +21,7 @@ import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
+import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
   sessionCreateToRow,
@@ -192,7 +193,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
 export async function applyAgentSwitchToSessionRow(
   sessionId: string,
   patch: {
-    agentKind: 'cc' | 'codex';
+    agentKind: 'cc' | 'codex' | 'pi';
     model: string;
     providerId: string | null | undefined;
     sdkSessionId?: string | null;
@@ -579,7 +580,7 @@ export interface OverwritableAutoTitleTarget {
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
    */
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -594,7 +595,7 @@ export async function getOverwritableAutoTitle(
   const db = getDbClient().drizzle;
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
-  const agentKind = row.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind = row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -748,7 +749,7 @@ export function registerSessionIpc(): void {
     const id = resolveBusinessSessionId(bodyObj.id);
     const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
@@ -961,7 +962,7 @@ export function registerSessionIpc(): void {
         state: row.status === 'deleted' ? 'deleted' : 'available',
         status: row.status,
         title: row.title,
-        agentKind: row.agentKind === 'codex' ? 'codex' : 'cc',
+        agentKind: normalizeDbAgentKind(row.agentKind),
       };
     });
   });

@@ -296,6 +296,26 @@ describe('cindy_scheduler MCP server (in-process smoke)', () => {
     await h.cleanup();
   });
 
+  it('call_tool(schedule_create) accepts agentKind: pi as a first-class scheduled agent', async () => {
+    const created = await h.client.callTool({
+      name: 'call_tool',
+      arguments: {
+        name: 'schedule_create',
+        args: { ...baseCreate, name: 'pi-scheduled', agentKind: 'pi' } as unknown as Record<string, unknown>,
+      },
+    });
+    const { envelope, isError } = parseToolResult(
+      created as { content: unknown[]; isError?: boolean },
+    );
+    expect(isError).toBe(false);
+    expect(envelope).toMatchObject({ ok: true });
+    if (!envelope.ok) throw new Error('unreachable');
+    const createdData = envelope.data as Schedule;
+    expect(createdData.agentKind).toBe('pi');
+
+    await h.cleanup();
+  });
+
   it('call_tool(schedule_create) accepts intervalMs and schedules first fire relative to creation time', async () => {
     const created = await h.client.callTool({
       name: 'call_tool',

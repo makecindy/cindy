@@ -36,7 +36,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
   });
 
-  it('routes codex-oauth / cc+chatgpt bridge to OpenAI usage, xai provider/bridge to xAI, claude subscription to claude.ai, and gateway / codex-api to no dashboard (internal console removed pre-OSS)', () => {
+  it('routes Codex/CC/Pi subscription providers to their account usage pages and keeps gateway routes local', () => {
     expect(source).toContain('https://chatgpt.com/codex/settings/usage');
     expect(source).toContain('https://accounts.x.ai');
     expect(source).toContain('https://claude.ai/settings/usage');
@@ -48,18 +48,23 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('todaySpend.openXaiUsage');
     expect(source).toContain('todaySpend.openClaudeUsage');
     // 只有实际 Gateway 会话读取 Model Access quota；自定义供应商只保留本会话统计。
-    expect(source).toContain('const usesGatewayQuota = isClaudeGateway || isCodexGateway;');
+    expect(source).toContain('const usesGatewayQuota = isClaudeGateway || isCodexGateway || isPiGateway;');
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
   });
 
-  it('treats cc + chatgpt/ / xai/ bridge sessions as subscription usage (no gateway quota / spend)', () => {
+  it('treats CC/Pi chatgpt/ and xai/ bridge sessions as subscription usage', () => {
     expect(source).toContain('modelId.startsWith(CHATGPT_MODEL_PREFIX)');
     expect(source).toContain('modelId.startsWith(XAI_MODEL_PREFIX)');
+    expect(source).toContain("(vendorKey === 'cc' || vendorKey === 'pi')");
+    expect(source).toContain("providerId === 'openai'");
+    expect(source).toContain("providerId === 'xai'");
     expect(source).toContain('const isSubscriptionBridge = isChatgptBridge || isXaiBridge;');
     // bridge 只在匹配其内建来源时成立；显式自定义供应商优先于模型前缀。
     expect(source).toContain("(providerId == null || providerId === 'openai')");
     expect(source).toContain("(providerId == null || providerId === 'xai')");
     expect(source).toContain('useClaudeAccountUsage(usesGatewayQuota)');
+    // gateway quota 对订阅 bridge 会话关闭;device-link 远程同样不读本机网关配额
+    expect(source).toContain('&& !isDeviceLinkRemote');
     // chatgpt bridge 复用 codex 订阅 chip 形态;xai bridge / codex xai model 走价值估算 + 尽力限流 tooltip
     expect(source).toContain('const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;');
     expect(source).toContain('const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;');
@@ -95,9 +100,7 @@ describe('TodaySpendChip dashboard routing', () => {
       "vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && providerId == null",
     );
     // 订阅形态分类整体排除 device-link(专属分支接管渲染)
-    expect(source).toContain(
-      "const isClaudeSubscription = vendorKey === 'cc' && !isRemoteClaudeSession && !isDeviceLinkRemote && (",
-    );
+    expect(source).toContain("|| (vendorKey === 'pi' && !remoteHostId && providerId === 'anthropic')");
     // 渲染走专属分支:估算价值 / 累计 cost 有哪个显哪个,不显示本机限额窗口
     expect(source).toContain('if (isDeviceLinkRemote) {');
     // 看板链接对 device-link 落 null(额度属于被控端账号,本机浏览器打开的是控制端账号)

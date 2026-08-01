@@ -18,6 +18,7 @@ import type {
   Effort,
   Provider,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
   RoutingDescriptor,
 } from './types.js';
 import { isLoopbackProviderUrl } from './provider-url.js';
@@ -36,12 +37,15 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh'],
+  // pi 经 thinking level 表达推理强度(off/minimal/low/medium/high/xhigh/max);选择器给
+  // 与 claude 同档,实际是否生效由自定义模型后端决定(BYOM 本地模型可能不支持,无害)。
+  pi: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
 };
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex'];
+const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -69,8 +73,13 @@ function toCatalogModel(
   };
 }
 
-function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' {
-  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
+  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
+  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
+  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'pi') return 'openai-chat';
+  return 'openai-responses';
 }
 
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */

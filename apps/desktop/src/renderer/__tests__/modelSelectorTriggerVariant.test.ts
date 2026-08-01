@@ -2035,8 +2035,9 @@ describe('ModelSelector trigger variants', () => {
       await act(async () => {
         await Promise.resolve();
       });
-      // 第一笔事务仍在途时，后一次配置只入队，不能并发覆盖。
-      expect(onSwitch).toHaveBeenCalledTimes(1);
+      // 第一笔事务仍在途时，后一次配置也立即交给调用方；调用方会同步登记目标
+      // session 的 pending token，再由 session 级协调器保证同会话顺序。
+      expect(onSwitch).toHaveBeenCalledTimes(2);
       expect(setEffort).toHaveBeenNthCalledWith(
         2,
         'codex',
@@ -2049,7 +2050,6 @@ describe('ModelSelector trigger variants', () => {
         releaseFirstSwitch();
         await firstSwitch;
       });
-      await waitFor(() => expect(onSwitch).toHaveBeenCalledTimes(2));
       expect(observedSwitchEfforts).toEqual(['low', 'high']);
 
       fireEvent.click(screen.getByRole('tab', { name: /Claude/ }));

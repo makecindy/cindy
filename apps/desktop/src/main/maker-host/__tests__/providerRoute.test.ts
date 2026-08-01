@@ -149,6 +149,37 @@ describe('codex: buildRouteDecision no-break 基线', () => {
   });
 });
 
+describe('pi: provider-aware Anthropic wire routing', () => {
+  afterEach(() => {
+    clearSessionProvider('s-pi');
+    setProviderOAuthTokenReader(() => null);
+  });
+
+  it('XD uses both Anthropic auth headers so the Pi client never leaks its placeholder', () => {
+    expect(buildRouteDecision(descriptor('xd', 'pi'), KEY, 'pi')).toEqual({
+      headerOverride: { 'x-api-key': KEY, authorization: `Bearer ${KEY}` },
+    });
+  });
+
+  it('Anthropic injects the host OAuth token and required OAuth beta headers', async () => {
+    setSessionProvider('s-pi', 'anthropic');
+    setProviderOAuthTokenReader((providerId, agent) =>
+      providerId === 'anthropic' && agent === 'pi' ? Promise.resolve('claude-live-token') : null,
+    );
+    await expect(
+      Promise.resolve(resolveSessionRouteDecision('s-pi', 'pi', KEY, 'claude-opus-5')),
+    ).resolves.toEqual({
+      upstreamOverride: ANTHROPIC_DIRECT_UPSTREAM,
+      headerOverride: {
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20',
+        authorization: 'Bearer claude-live-token',
+      },
+      headerDelete: ['x-api-key'],
+    });
+  });
+});
+
 describe('resolveSessionRouteDecision (per-session 选择 → 路由;no-break fallback)', () => {
   it('未显式选供应商 → null(调用方回落 spawn-aware 默认路由,行为不变)', () => {
     clearSessionProvider('s-none');

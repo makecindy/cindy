@@ -16,6 +16,7 @@ import { sessions, messages } from '../localDb/schema';
 import { sessionToCamel } from '../localDb/mapper';
 import { getMaker } from '../maker-host/index.js';
 import { createBusinessSessionId } from '../sessionIds.js';
+import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../shared/agentKindConversion.js';
 import type { Session } from '../../renderer/lib/ccAgent.types';
 import {
   type ClaudeTranscriptAnchorIndex,
@@ -50,7 +51,7 @@ function normalizePositiveInt(value: unknown): number {
 
 const messageRowid = sql<number>`rowid`;
 
-type DbAgentKind = 'cc' | 'codex';
+type DbAgentKind = 'cc' | 'codex' | 'pi';
 
 interface MessagePosition {
   createdAt: number;
@@ -89,8 +90,8 @@ interface ParsedAgentSwitchBoundary {
 function parseAgentSwitchBoundary(content: string): ParsedAgentSwitchBoundary | null {
   try {
     const parsed = JSON.parse(content) as Record<string, unknown>;
-    if (parsed.fromAgentKind !== 'cc' && parsed.fromAgentKind !== 'codex') return null;
-    const toAgentKind = parsed.toAgentKind === 'cc' || parsed.toAgentKind === 'codex'
+    if (parsed.fromAgentKind !== 'cc' && parsed.fromAgentKind !== 'codex' && parsed.fromAgentKind !== 'pi') return null;
+    const toAgentKind = parsed.toAgentKind === 'cc' || parsed.toAgentKind === 'codex' || parsed.toAgentKind === 'pi'
       ? parsed.toAgentKind
       : undefined;
     return {
@@ -168,7 +169,7 @@ async function resolveForkNativeSource(
     if (!source.sdkSessionId) {
       throw forkError('SOURCE_NEVER_RAN', '原会话尚未运行，无法 fork');
     }
-    const agentKind: DbAgentKind = source.agentKind === 'codex' ? 'codex' : 'cc';
+    const agentKind: DbAgentKind = normalizeDbAgentKind(source.agentKind);
     return {
       agentKind,
       sdkSessionId: source.sdkSessionId,
@@ -508,6 +509,10 @@ export async function forkSessionAtMessage(
   // Codex: 从当前时间线倒扫 agent_switch，把 copy boundary 之后、确实写入所选
   // 原生 thread 的 user turn 计为 rollback 数；其它引擎片段不能混算。
   const isCodex = forkSource.agentKind === 'codex';
+  // pi 复用 codex 的粗粒度 tail-turn fork:countCodexTailTurns 只按 sdkSessionId
+  // 数边界后的 user turn(引擎无关),pi 的 forkSdkSession 按 tailTurnsToDrop rewind
+  // 到目标 user 消息。只有 Claude(cc)走 message-uuid 锚点路径。
+  const usesTailTurnFork = isCodex || forkSource.agentKind === 'pi';
   let assistantUuid: string | undefined;
   let tailTurnsToDrop: number | undefined;
   let claudeAnchorIndex: ClaudeTranscriptAnchorIndex | null = null;
@@ -516,7 +521,7 @@ export async function forkSessionAtMessage(
     target.role,
     forkSource.agentKind,
   );
-  if (!isCodex) {
+  if (!usesTailTurnFork) {
     claudeAnchorIndex = await loadClaudeTranscriptAnchorIndex({
       sdkSessionId: forkSource.sdkSessionId,
       workingDir: source.workingDir,
@@ -550,8 +555,8 @@ export async function forkSessionAtMessage(
   let newSdkSessionId: string | null = null;
   let uuidMap = new Map<string, string>();
   let initialContextTokens: number | undefined;
-  if (isCodex || assistantUuid) {
-    const agentKind = isCodex ? 'codex' : 'claude-code';
+  if (usesTailTurnFork || assistantUuid) {
+    const agentKind = dbToMakerAgentKind(forkSource.agentKind);
     const forkResult = await getMaker().forkSdkSession(agentKind, {
       sourceSdkSessionId: forkSource.sdkSessionId,
       upToMessageId: assistantUuid,
@@ -559,6 +564,9 @@ export async function forkSessionAtMessage(
       title: newTitle,
       workingDir: source.workingDir ?? undefined,
     }).catch((err: unknown) => {
+      // 这里刻意用 isCodex(非 usesTailTurnFork):CODEX_FORK_STATE_UNAVAILABLE 是 codex 专属
+      // 错误码 + 文案,只有真 codex 失败才包装。pi 与 cc 一样裸抛原始错误(不会拿到指名道姓
+      // 错对象的 "Codex 状态不可用" 提示)。改成 usesTailTurnFork 会让 pi 误报成 codex 错误。
       if (!isCodex) throw err;
       const detail = err instanceof Error ? err.message : String(err);
       throw forkError(
@@ -576,13 +584,15 @@ export async function forkSessionAtMessage(
   const newSessionId = createBusinessSessionId();
 
   const newMessageIds = sourceMessages.map(() => ({ id: createId(), clientId: createId() }));
-  const txUuidMap = isCodex
+  // pi 与 codex 一样:uuidMap 空、无 Claude transcript 锚点,跳过 Claude 专用的
+  // synthetic uuid 补全 / parentUuid 采集(只有 Claude cc 需要)。
+  const txUuidMap = usesTailTurnFork
     ? uuidMap
     : augmentClaudeForkUuidMapForSyntheticRows(sourceMessages, uuidMap, claudeAnchorIndex);
-  const legacyTranscriptParentUuids = isCodex
+  const legacyTranscriptParentUuids = usesTailTurnFork
     ? []
     : collectLegacyClaudeTranscriptParentUuids(sourceMessages, claudeAnchorIndex);
-  const toolParentUuids = isCodex
+  const toolParentUuids = usesTailTurnFork
     ? []
     : collectClaudeToolParentUuids(sourceMessages, claudeAnchorIndex);
   await getDbClient().tx('fork.session', {

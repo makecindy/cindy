@@ -97,7 +97,7 @@ export function applySessionModelPrefPush(payload: unknown): void {
     fast?: unknown;
   };
   if (typeof p.sessionId !== 'string' || !p.sessionId) return;
-  if (p.agent !== 'claude-code' && p.agent !== 'codex') return;
+  if (p.agent !== 'claude-code' && p.agent !== 'codex' && p.agent !== 'pi') return;
   if (typeof p.providerId !== 'string' || !p.providerId) return;
   if (typeof p.model !== 'string' || !p.model) return;
   if (typeof p.effort === 'string' && p.effort.length > 0) {

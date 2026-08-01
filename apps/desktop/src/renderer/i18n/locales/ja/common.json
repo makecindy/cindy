@@ -1318,13 +1318,21 @@
           "anthropic": "Anthropic Messages（Cindy ブリッジ）",
           "responsesHelp": "プロバイダーが Responses API をネイティブ対応しているため、Cindy はイベントストリームをそのまま転送します。",
           "chatHelp": "Chat Completions のみを提供するプロバイダー向けです。Cindy がストリーミングテキストと関数ツール呼び出しを変換します。一部の高度な Responses 機能は利用できません。",
-          "anthropicHelp": "Anthropic Messages API を提供するプロバイダー向けです。Cindy が Responses のメッセージ、画像、ツール、推論内容、ストリーミングイベントを変換します。"
+          "anthropicHelp": "Anthropic Messages API を提供するプロバイダー向けです。Cindy が Responses のメッセージ、画像、ツール、推論内容、ストリーミングイベントを変換します。",
+          "piResponses": "OpenAI Responses",
+          "piChat": "OpenAI Chat Completions",
+          "piAnthropic": "Anthropic Messages",
+          "piResponsesHelp": "Pi がプロバイダーの OpenAI Responses API に直接接続します。",
+          "piChatHelp": "Pi がプロバイダーの OpenAI 互換 Chat Completions API に直接接続します。",
+          "piAnthropicHelp": "Pi がプロバイダーの Anthropic Messages API に直接接続します。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code は Anthropic プロトコルに従います（x-api-key で認証）。この提供元の Claude Code 用 baseURL・キー・モデルを入力します。空欄にするとこの提供元は Claude Code を提供しません。",
           "codex": "Codex",
-          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブ、または Chat Completions / Anthropic Messages を Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。"
+          "codexDesc": "Codex は OpenAI Responses プロトコルを使用します。Responses ネイティブ、または Chat Completions / Anthropic Messages を Cindy でブリッジする方式を選べます。このプロバイダーの Codex 用ベース URL・キー・モデルを入力します。空欄にすると Codex では利用しません。",
+          "pi": "Pi",
+          "piDesc": "Pi はマルチプロトコルのハーネスです:カスタム/ローカルモデル(Ollama、vLLM、自ホストのエンドポイント)は Cindy の互換プロキシを経由せず、そのまま接続します。下で API タイプを選び、この提供元の Pi 用 base URL・キー・モデルを入力してください。空欄なら Pi は設定しません。"
         },
         "errors": {
           "nameRequired": "表示名を入力してください",
@@ -1880,11 +1888,16 @@
         "connecting": "接続中…",
         "connected": "接続済み",
         "conflict": "別のデバイスで使用中",
+        "offline": "オフライン",
         "error": "接続に失敗"
       },
       "connected": {
         "heading": "Telegram Bot 接続済み",
         "note": "Bot への DM やグループでのメンションは、このマシンの {{appName}} にルーティングされます。グループの直近の会話はコンテキストとして添付されます。",
+        "headingOffline": "このデバイスでオフライン中",
+        "noteOffline": "メッセージの受信を停止しています。Bot Token と連携情報はこのマシンに保持されているため、いつでもオンラインに戻せます。",
+        "headingConflict": "別のデバイスで使用中",
+        "noteConflict": "同じ Bot でメッセージを受信できるデバイスは同時に 1 台だけで、このマシンは取り合いを繰り返しています。下でそのデバイスをオフラインにすればこのマシンが引き継ぎます。譲る場合は「このデバイスをオフライン」を押してください。",
         "botLabel": "Bot アカウント",
         "ownerLabel": "自分のユーザー ID"
       },
@@ -1897,6 +1910,43 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
+      "errorCode": {
+        "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
+        "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
+        "network": "ネットワークに到達できず、Telegram に接続できません",
+        "secret-unavailable": "システムの安全なストレージが利用できず、認証情報を保存できません"
+      },
+      "goOffline": "このデバイスをオフライン",
+      "goingOfflineAction": "オフラインにしています…",
+      "goOnline": "このデバイスをオンライン",
+      "goingOnlineAction": "オンラインにしています…",
+      "remoteDevices": {
+        "title": "自分の他のデバイス",
+        "refresh": "再確認",
+        "hint": "デバイスをオフラインにすると、そのデバイスはメッセージを受信しなくなります。Token と連携情報は消えないので、そのデバイス側でいつでもオンラインに戻せます。",
+        "takeOffline": "オフラインにする",
+        "state": {
+          "checking": "確認中…",
+          "connected": "この Bot を使用中",
+          "conflict": "この Bot を取り合い中",
+          "offline": "オフライン",
+          "connecting": "接続中…",
+          "idle": "未設定",
+          "error": "接続に失敗",
+          "notConfigured": "Telegram ボットが未設定",
+          "otherBot": "別の Bot に連携中（競合なし）",
+          "offlineDevice": "デバイスがオフラインのため操作できません",
+          "unreachable": "状態を取得できません",
+          "unsupported": "このデバイスのバージョンではリモートでオフラインにできません"
+        },
+        "failure": {
+          "remoteDisabled": "そのデバイスでリモート操作が無効になっています",
+          "accessRevoked": "そのデバイスがこのデバイスからのアクセスを取り消しました",
+          "controlDisabled": "このデバイスでは、そのデバイスの操作が無効になっています",
+          "unreachable": "そのデバイスはオフラインか、到達できません",
+          "unknown": "リモート操作に失敗しました。デバイスの状態を確認して再試行してください"
+        }
+      },
       "disconnect": "連携解除",
       "disconnectingAction": "解除中…",
       "disconnectAria": "Telegram ボットの連携を解除",
@@ -2088,6 +2138,10 @@
         "codex": {
           "label": "Codex",
           "description": "Codex の入口から使用するすべてのモデルで、同じメモリを共有します"
+        },
+        "pi": {
+          "label": "Pi",
+          "description": "長いセッションの圧縮要約を Cindy メモリに保存し、今後の Pi セッションで利用します"
         }
       },
       "agent": {
@@ -4769,6 +4823,7 @@
       "add": "プロジェクトを追加",
       "cancel": "キャンセル",
       "empty": "「設定 → リモート接続」で被制御デバイスに接続するか、「設定 → リモートマシン」で SSH ホストを追加してください。",
+      "emptyPiSshFiltered": "Pi はローカルでのみ動作するため、ここに SSH ホストは表示されません。「設定 → リモート接続」で被制御デバイスに接続するか、SSH ホストを使う場合は Claude または Codex に切り替えてください。",
       "loading": "読み込み中…",
       "noSubdirs": "サブフォルダはありません",
       "doubleClickHint": "ダブルクリックで入る",
@@ -4827,6 +4882,7 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
+          "pi": "Pi",
           "pending": "次回：{{agent}}"
         }
       },
@@ -4906,6 +4962,20 @@
           "bypassPermissions": {
             "label": "フルアクセス",
             "description": "追加確認なしで任意のファイル編集とネットワークコマンド実行を許可します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
+          }
+        },
+        "pi": {
+          "ask": {
+            "label": "デフォルト権限",
+            "description": "読み取り専用ツールはそのまま実行し、ファイル書き込み・コマンド実行・MCP ツールは毎回確認します。"
+          },
+          "auto": {
+            "label": "自動レビュー",
+            "description": "ワークスペース内の書き込みと安全なコマンドは自動実行し、境界外への書き込み・危険なコマンド・MCP ツールは確認します。"
+          },
+          "bypassPermissions": {
+            "label": "フルアクセス",
+            "description": "すべてのツールを確認なしで実行します。最もリスクが高いため、信頼できるタスクでのみ使用してください。"
           }
         }
       }
@@ -6039,6 +6109,7 @@
     },
     "draft": {
       "createSessionFailed": "セッションの作成に失敗しました。再試行してください",
+      "piRemoteUnsupported": "Pi はローカルでのみ動作し、SSH リモートホストは利用できません。このホストを使うには Claude または Codex に切り替えてください。",
       "remoteWorktreeCleanupPending": "前回のリモート worktree はまだクリーンアップ待ちです。デバイスを再接続してから再試行してください。",
       "remoteProviderUpdating": "プロバイダーの認証情報を更新中です。しばらくしてから再試行してください",
       "remoteProviderUnsupported": "このプロバイダーは SSH リモートセッションに対応していません。別のソースを選択してください",
@@ -6286,7 +6357,35 @@
         "moveToProjectRemoteUnsupported": "リモートセッションの移動はまだサポートされていません",
         "openInNewWindow": "新しいウィンドウで開く",
         "exportShare": "セッションをエクスポート…",
+        "exportHtml": "HTML にエクスポート…",
+        "exportHtmlSuccess": "セッションを HTML にエクスポートしました",
+        "exportHtmlFailed": "HTML エクスポートに失敗しました",
+        "compact": "コンテキストを圧縮",
+        "compacting": "圧縮中…",
+        "compactSuccess": "コンテキストを圧縮しました",
+        "compactSuccessWithTokens": "コンテキストを圧縮しました:{{before}}k → {{after}}k tokens",
+        "compactFailed": "圧縮に失敗しました",
+        "compactNothing": "圧縮できる内容がまだありません",
+        "sessionBranches": "セッション分岐",
         "copySessionLink": "セッションリンクをコピー"
+      },
+      "sessionBranches": {
+        "title": "セッション分岐",
+        "close": "セッション分岐を閉じる",
+        "description": "Cindy のセッション分岐と Pi のセッション内分岐を同じツリーに表示します。",
+        "current": "現在",
+        "empty": "切り替え可能な Pi 分岐はまだありません。",
+        "emptyEntry": "表示できる内容がありません",
+        "loadFailed": "セッション分岐を読み込めませんでした",
+        "switchFailed": "分岐の切り替えに失敗しました",
+        "switched": "セッション分岐を切り替えました",
+        "switchedWithDraft": "分岐を切り替え、元のプロンプトを入力欄に戻しました",
+        "runningBlocked": "現在のターンが終了してから分岐を切り替えてください。",
+        "remoteBlocked": "分岐を切り替える前に、操作対象のデスクトップを再接続または更新してください。",
+        "filesWarning": "切り替わるのは会話コンテキストだけで、作業ファイルは巻き戻りません。",
+        "summarize": "離れる分岐を要約する（モデルを使用）",
+        "summaryFocus": "任意：要約の重点（例：エラー処理の結論を残す）",
+        "role": { "user": "ユーザー", "assistant": "Agent", "tool": "ツール", "summary": "分岐要約", "system": "状態" }
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
@@ -7950,6 +8049,12 @@
       "telegramBotSaveFailed": "保存に失敗しました：{{message}}",
       "telegramBotDisconnected": "Telegram ボットの連携を解除しました",
       "telegramBotDisconnectFailed": "連携解除に失敗しました：{{message}}",
+      "telegramBotWentOffline": "オフラインにしました（連携情報は保持されます）",
+      "telegramBotWentOnline": "オンラインにしました",
+      "telegramBotToggleOnlineFailed": "切り替えに失敗しました：{{message}}",
+      "telegramRemoteWentOffline": "そのデバイスをオフラインにしました",
+      "telegramRemoteUnsupported": "そのデバイスの Cindy はリモートオフラインに未対応です。先に更新してください",
+      "telegramRemoteFailed": "リモートでオフラインにできませんでした：{{message}}",
       "dingtalkBotConnected": "DingTalk ボットに接続しました",
       "dingtalkBotConnectFailed": "DingTalk ボットに接続できません。認証情報、Stream モード、ネットワークを確認してください",
       "dingtalkBotAuthFailed": "DingTalk が認証情報を拒否しました。Client ID と Client Secret が同じアプリのものか確認してください",
@@ -8006,8 +8111,11 @@
       "codexVoiceAuthDescription": "音声入力は、接続済みの ChatGPT アカウントで GPT リアルタイム音声認識を使用します。アカウントが未接続か、接続の更新が必要です。モデルプロバイダーを開いて ChatGPT に接続しますか？",
       "codexBinaryMissingTitle": "Codex コンポーネントの準備ができていません",
       "codexBinaryMissingDescription": "Codex コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Codex の接続状態を確認してください。",
+      "piBinaryMissingTitle": "Pi コンポーネントの準備ができていません",
+      "piBinaryMissingDescription": "Pi コンポーネントの準備がまだできていないため、この機能は使用できません。しばらくしてから再試行するか、「設定 → プロバイダー」で Pi の接続状態を確認してください。",
       "goToSettings": "設定を開く",
       "remoteCodexBinaryMissingTitle": "リモートデバイスの Codex コンポーネントが未準備です",
+      "remotePiBinaryMissingTitle": "リモートデバイスの Pi コンポーネントが未準備です",
       "remoteAuthDescription": "操作対象のデバイス「{{device}}」で設定を完了してから、ここでセッションを開始できます。そのデバイスで設定してから再試行してください。",
       "remoteCodexNoSourceTitle": "リモートデバイスに利用可能な Codex ソースがありません",
       "remoteCodexNoSourceDescription": "デバイス「{{device}}」には Codex で利用可能なモデルソースが接続されていないため、ここからセッションを開始できません。そのデバイスで {{appName}} を開き、「設定 → プロバイダー」で OpenAI にログインするか他のソースを接続してから再試行してください。",

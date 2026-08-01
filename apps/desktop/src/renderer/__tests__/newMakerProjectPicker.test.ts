@@ -53,6 +53,8 @@ const branchPickSource = readSource('components', 'new-chat', 'branchPick.ts');
 const deviceProvidersHookSource = readSource('hooks', 'useDeviceProviders.ts');
 
 const agentCapabilitiesHookSource = readSource('hooks', 'useAgentCapabilities.ts');
+const availableAgentsHookSource = readSource('hooks', 'useAvailableAgents.ts');
+const vendorSwitcherSource = readSource('components', 'new-chat', 'VendorSegmentedSwitcher.tsx');
 
 const scheduleFormDialogSource = readSource(
   'features',
@@ -198,7 +200,7 @@ describe('Shared create project picker', () => {
   });
 
   it('keeps remote project drafts out of local workspace probes', () => {
-    expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft)');
+    expect(newMakerDraftRouteSource).toContain('if (wd && !isRemoteProjectDraft');
     // device-link 草稿的 git 探测经隧道在被控端执行(本机 git 对远程路径必然误报);
     // SSH(worktreeDisabled)仍不探测。
     expect(worktreeChipsSource).toContain('deviceLinkReconnectEpoch,');
@@ -261,6 +263,41 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain('resolveDeviceLinkSubmission({');
     // 组件不得直接调底层组装函数 —— 那样就绕开了来源校准这一步(第 25 轮缺陷的形状)。
     expect(newMakerDraftRouteSource).not.toContain('buildDeviceLinkCreateArgs({');
+  });
+
+  // codex review P1:Pi 是本地专属 agent(startSession 拒绝任何 remoteHostId),SSH 目标
+  // 会建出永远起不来的会话。两道防线:dialog 按 agentVendor 过滤掉 SSH 主机(proactive),
+  // handleRemoteProjectAdded 的 SSH 分支再 fail-closed 兜底(防非 UI 路径漏进 Pi+SSH)。
+  // codex review P2:Pi 二进制缺失时 buildPiAgent() 返回 null → agent map 无 pi,但模型目录仍
+  // 投影 Pi。创建入口必须按 maker:list-available-agents(runtime 注册结果)过滤,否则一路创建到
+  // requireAgent 的 not-registered。远程草稿以被控端注册结果为准(hook 传 deviceId 走隧道)。
+  it('gates the vendor switcher by runtime-registered agents (list-available-agents)', () => {
+    // hook 用权威的 runtime 注册来源,而非模型目录;远程走 device-link 隧道。
+    expect(availableAgentsHookSource).toContain("api.listAvailableAgents()");
+    expect(availableAgentsHookSource).toContain("dl.invoke(deviceId, 'maker:list-available-agents', [])");
+    // claude-code → cc 归一,fail-open(未加载不隐藏)。
+    expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
+    // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
+    expect(availableAgentsHookSource).toMatch(/loaded/);
+
+    // 开关按 hiddenVendors 过滤 OPTIONS,但保留当前选中段避免"无选中"过渡帧。
+    expect(vendorSwitcherSource).toContain('hiddenVendors');
+    expect(vendorSwitcherSource).toMatch(/opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/);
+
+    // 路由:以被控端(deviceId)为准计算 hidden;两处开关都传;选中值被隐藏时 coerce 到首个可用。
+    expect(newMakerDraftRouteSource).toContain('useAvailableAgents(effectiveDeviceLinkDeviceId)');
+    expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
+    expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
+  });
+
+  it('hides SSH targets for Pi and fail-closed guards Pi+SSH session creation', () => {
+    // dialog:选中 Pi 时把 SSH 主机从可选目标里剔除。
+    expect(addRemoteProjectDialogSource).toContain("agentVendor === 'pi'");
+    expect(addRemoteProjectDialogSource).toMatch(/excludeSsh\s*\?\s*\[\]/);
+    // 父层把当前 draft.vendor 传进 dialog 驱动过滤。
+    expect(newMakerDraftRouteSource).toContain('agentVendor={draft.vendor}');
+    // 兜底:SSH 建会话前拦住 Pi,抛清晰的本地化错误而非建出注定失败的会话。
+    expect(newMakerDraftRouteSource).toContain("t('ccAgent.draft.piRemoteUnsupported')");
   });
 
   // #807:设备切换 pill。三条产品裁决写进源码断言,防后续重构悄悄改掉。

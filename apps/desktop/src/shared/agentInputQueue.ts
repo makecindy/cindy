@@ -116,7 +116,7 @@ export interface AgentInputChatMessage {
 }
 
 export interface AgentInputCreateOpts {
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
   model: string;
   providerId?: string | null;

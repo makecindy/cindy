@@ -69,6 +69,7 @@ import { QuoteCapsule } from '@/session/QuoteCapsule';
 import { StreamingStatusText } from '@/session/StreamingStatusText';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { motionDuration, motionEasing } from '@/theme/tokens';
+import { mobileAgentLabelFromUnknown } from '@/session/sessionAgentSwitch';
 import { MessageActionSheet } from '@/session/MessageActionSheet';
 import { buildMobileMessageMenu, type MobileMessageMenuActionId } from '@/session/messageActionMenu';
 import { InlineQuoteChip } from '@/session/InlineQuoteChip';
@@ -2516,6 +2517,7 @@ function agentTaskStatusLabel(status: AgentTaskStatus): string {
 const AGENT_TASK_PROVIDER_LABEL: Record<AgentTaskCardModel['provider'], string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  pi: 'Pi',
 };
 
 function AgentTaskStatusIcon({ status, size = iconSize.md }: { status: AgentTaskStatus; size?: number }) {
@@ -3088,9 +3090,8 @@ function CollabCardShell({
   );
 }
 
-// Agent 引擎显示名(codex → Codex,其余 → Claude Code)。模块级常量:不依赖任何 prop/state,
-// 提到组件外避免 MobileAgentSwitchCard 每次重渲染都重建闭包。
-const agentSwitchEngineLabel = (kind: unknown): string => (kind === 'codex' ? 'Codex' : 'Claude Code');
+// 模块级常量:不依赖任何 prop/state,避免 MobileAgentSwitchCard 每次重渲染重建闭包。
+const agentSwitchEngineLabel = mobileAgentLabelFromUnknown;
 
 // 交接正文是否为英文格式(与 desktop SystemCard.tsx 同款判据)。content.handoff 是持久化
 // 数据:英文化之前落库的行仍是中文正文,升级后展开老卡片看到的就是中文——标题里「原文为

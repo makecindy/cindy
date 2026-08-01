@@ -102,6 +102,12 @@ describe('schedule model', () => {
     });
   });
 
+  it('labels a Pi automation as Pi (not silently mis-shown as Claude)', () => {
+    // 桌面创建的 agentKind:'pi' 任务在手机上必须正确标识为 Pi,而不是回落到 Claude。
+    expect(summarizeSchedule(schedule({ agentKind: 'pi' }), [], NOW).detail)
+      .toBe('cron 0 9 * * * · 新任务 · Pi · xdt-maker');
+  });
+
   it('summarizes persistent and bound schedule session behavior', () => {
     expect(summarizeSchedule(schedule({
       persistentSession: true,

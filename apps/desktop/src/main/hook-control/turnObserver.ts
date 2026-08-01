@@ -307,14 +307,14 @@ export function observeHookTurn(
             //   (renderer 同款 raw concat), 不同消息之间空行分隔。
             // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
             //   只含 UI 缺的尾段, 与已流增量原样接上。
-            // ③ codex item.completed: 该条全文, 覆盖已流增量。
+            // ③ codex item.completed / pi message_end:该条全文,覆盖已流增量。
             // ④ 未知 source: 保守用前缀启发式。
             const src = (ev as { source?: string }).source;
             const meta = (ev as { agentMeta?: { uuid?: unknown; requestId?: unknown } }).agentMeta;
             const claudeTail = src === 'claude-code' && meta === undefined;
             const segment = claudeTail
               ? streamTail + data.text
-              : src === 'claude-code' || src === 'codex'
+              : src === 'claude-code' || src === 'codex' || src === 'pi'
                 ? data.text
                 : data.text.startsWith(streamTail)
                   ? data.text

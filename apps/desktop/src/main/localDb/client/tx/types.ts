@@ -2,6 +2,7 @@ export type DbTxName =
   | 'codex.importMessages'
   | 'claude.importMessages'
   | 'rewind.commit'
+  | 'session.treeRehydrate'
   | 'fork.session'
   | 'embedding.markDone'
   | 'embedding.commit'
@@ -82,6 +83,23 @@ export interface RewindCommitArgs {
   /** Replacement SDK session/thread id to persist atomically with rewind. */
   sdkSessionId?: string;
   now: number;
+}
+
+export interface SessionTreeRehydrateArgs {
+  sessionId: string;
+  now: number;
+  contextTokens: number;
+  contextWindow: number;
+  messages: Array<{
+    id: string;
+    clientId: string;
+    role: string;
+    content: string;
+    toolUseId?: string | null;
+    agentMeta?: string | null;
+    agentKind: string;
+    createdAt: number;
+  }>;
 }
 
 export interface ForkSessionArgs {
@@ -659,6 +677,7 @@ export type DbTxArgsByName = {
   'codex.importMessages': CodexImportMessagesArgs;
   'claude.importMessages': ClaudeImportMessagesArgs;
   'rewind.commit': RewindCommitArgs;
+  'session.treeRehydrate': SessionTreeRehydrateArgs;
   'fork.session': ForkSessionArgs;
   'embedding.markDone': EmbeddingMarkDoneArgs;
   'embedding.commit': EmbeddingCommitArgs;
@@ -701,6 +720,7 @@ export type DbTxResultByName = {
   'codex.importMessages': { changed: number };
   'claude.importMessages': { changed: number };
   'rewind.commit': undefined;
+  'session.treeRehydrate': { messageCount: number; hiddenClientIds: string[] };
   'fork.session': { messageCount: number };
   'embedding.markDone': undefined;
   'embedding.commit': undefined;

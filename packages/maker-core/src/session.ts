@@ -22,7 +22,13 @@ import type {
   AgentKind,
   UserMessage,
 } from './types/common.js';
-import type { Capabilities } from './types/capabilities.js';
+import type {
+  Capabilities,
+  ManualCompactResult,
+  NavigateSessionTreeOptions,
+  NavigateSessionTreeResult,
+  SessionTreeSnapshot,
+} from './types/capabilities.js';
 import { NotSupportedError } from './types/capabilities.js';
 import type {
   AgentEvent,
@@ -836,6 +842,64 @@ export class Session {
 
   getPlanMode(): boolean | null {
     return this.handle.getPlanMode?.() ?? null;
+  }
+
+  /** 导出当前会话为 HTML,返回写入路径(capability 见 Capabilities.sessionHtmlExport)。 */
+  async exportSessionHtml(outputPath?: string): Promise<string> {
+    this.ensureActive();
+    if (!this.capabilities.sessionHtmlExport?.supported) {
+      throw new NotSupportedError(
+        'sessionHtmlExport',
+        this.capabilities.sessionHtmlExport ?? { supported: false, reason: 'not-implemented' },
+      );
+    }
+    if (!this.handle.exportSessionHtml) {
+      throw new NotSupportedError('sessionHtmlExport', { supported: false, reason: 'not-implemented' });
+    }
+    return this.handle.exportSessionHtml(outputPath);
+  }
+
+  /** 手动压缩会话上下文(capability 见 Capabilities.manualCompact)。 */
+  async compactSession(instructions?: string): Promise<ManualCompactResult> {
+    this.ensureActive();
+    if (!this.capabilities.manualCompact?.supported) {
+      throw new NotSupportedError(
+        'manualCompact',
+        this.capabilities.manualCompact ?? { supported: false, reason: 'not-implemented' },
+      );
+    }
+    if (!this.handle.compactSession) {
+      throw new NotSupportedError('manualCompact', { supported: false, reason: 'not-implemented' });
+    }
+    return this.handle.compactSession(instructions);
+  }
+
+  async getSessionTree(): Promise<SessionTreeSnapshot> {
+    this.ensureActive();
+    const status = this.capabilities.sessionTree ?? { supported: false as const, reason: 'not-implemented' as const };
+    if (!status.supported) throw new NotSupportedError('sessionTree', status);
+    if (!this.handle.getSessionTree) {
+      throw new NotSupportedError('sessionTree', { supported: false, reason: 'not-implemented' });
+    }
+    return this.handle.getSessionTree();
+  }
+
+  async navigateSessionTree(
+    entryId: string,
+    options?: NavigateSessionTreeOptions,
+  ): Promise<NavigateSessionTreeResult> {
+    this.ensureActive();
+    const status = this.capabilities.sessionTree ?? { supported: false as const, reason: 'not-implemented' as const };
+    if (!status.supported) throw new NotSupportedError('sessionTree', status);
+    if (!this.handle.navigateSessionTree) {
+      throw new NotSupportedError('sessionTree', { supported: false, reason: 'not-implemented' });
+    }
+    if (this.isTurnRunning()) {
+      const err = new Error('SESSION_RUNNING: 会话进行中，无法切换分支');
+      (err as { code?: string }).code = 'SESSION_RUNNING';
+      throw err;
+    }
+    return this.handle.navigateSessionTree(entryId, options);
   }
 
   getFastMode(): boolean | null {

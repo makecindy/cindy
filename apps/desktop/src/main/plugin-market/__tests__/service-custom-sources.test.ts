@@ -762,11 +762,20 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 落位期间(installOrUpdateMarketGhostPackage 还在 await 包检查)另一窗口尝试
     // 添加声明同一 ghostId 的来源。提交段持有来源锁,这次 addSource 必须排在落位
     // 之后 —— 否则复核结论在真正落位前就过期了。
-    let addSourceStarted = false;
-    let installFinished = false;
+    const order: string[] = [];
+    let markInstallEntered!: () => void;
+    const installEntered = new Promise<void>((resolve) => {
+      markInstallEntered = resolve;
+    });
+    let releaseInstall!: () => void;
+    const installMayFinish = new Promise<void>((resolve) => {
+      releaseInstall = resolve;
+    });
     runtime.install.mockImplementation(async () => {
-      await new Promise((resolve) => setTimeout(resolve, 60));
-      installFinished = true;
+      order.push('install-entered');
+      markInstallEntered();
+      await installMayFinish;
+      order.push('install-finished');
       return { manifest: ghostManifest('alpha'), dir: '/ghosts/alpha', enabled: true };
     });
 
@@ -774,22 +783,31 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
       expectedManifest: reviewed.manifest,
     });
-    // 等安装真正进入落位段再发起来源添加。
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    // runtime.install 只会在 beforeCommit 复核之后、SOURCE_MUTATION_KEY 仍被持有时调用。
+    // 用显式 barrier 等到这个时刻，不能靠固定毫秒数猜测打包是否已经完成：CI 负载下
+    // 打包超过等待时间时，rival 会先拿锁，测试反而正确地收到 ALREADY_EXISTS。
+    await installEntered;
+    let addSourceSettled = false;
     const adding = h.service
       .addSource({ source: rivalDir })
       .then(() => {
-        addSourceStarted = true;
+        addSourceSettled = true;
+        order.push('source-settled');
       })
       .catch(() => {
-        addSourceStarted = true;
+        addSourceSettled = true;
+        order.push('source-settled');
       });
 
-    await installing;
-    // 落位完成时,来源添加还没被放行(它在锁后面排队)。
-    expect(installFinished).toBe(true);
-    expect(addSourceStarted).toBe(false);
-    await adding;
+    // 给 addSource 一次真实调度机会；持锁期间它必须仍未 settle。记录结果后先释放
+    // barrier 并等待两个 promise，保证断言失败也不会把后台操作泄漏到下一条测试。
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    const settledWhileInstallHeld = addSourceSettled;
+    releaseInstall();
+    await Promise.all([installing, adding]);
+
+    expect(settledWhileInstallHeld).toBe(false);
+    expect(order).toEqual(['install-entered', 'install-finished', 'source-settled']);
   });
 
   it('denies a re-added same-name source with a different origin from owning the install', async () => {

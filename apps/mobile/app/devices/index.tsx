@@ -2748,7 +2748,7 @@ function readBooleanField(value: unknown, key: string): boolean {
 }
 
 function isClaudeCodeAgentKind(agentKind: string): boolean {
-  return agentKind !== 'codex';
+  return agentKind === 'cc' || agentKind === 'claude-code';
 }
 
 function homeConnectionTitle(status: 'online' | 'connecting' | 'stopped', t: TFunction): string {

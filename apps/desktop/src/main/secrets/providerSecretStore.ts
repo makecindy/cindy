@@ -5,9 +5,11 @@ import path from 'node:path';
 import { createLogger } from '../logger.js';
 import {
   providerSecretStorageKey,
+  customProviderHeaderStorageKey,
   customProviderSecretStorageKey,
   customMcpSecretStorageKey,
   CUSTOM_MCP_SECRET_PREFIX,
+  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   providerOAuthStorageKey,
   ghostSecretStorageKey,
   ghostSecretHintStorageKey,
@@ -74,6 +76,7 @@ function secretDir(): string {
 
 const DYNAMIC_SECRET_PREFIXES = [
   CUSTOM_MCP_SECRET_PREFIX,
+  CUSTOM_PROVIDER_HEADER_SECRET_PREFIX,
   'provider_key_',
   'provider_oauth_',
   GHOST_SECRET_PREFIX,
@@ -396,6 +399,35 @@ export function readCustomProviderKey(providerId: string, agent: string): string
   }
 }
 
+function parseCustomProviderHeaders(raw: string): Record<string, string> {
+  const value: unknown = JSON.parse(raw);
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw new Error('custom provider headers must be an object');
+  }
+  const entries = Object.entries(value as Record<string, unknown>);
+  if (entries.some(([name, headerValue]) => !name || typeof headerValue !== 'string')) {
+    throw new Error('custom provider headers must be string pairs');
+  }
+  return Object.fromEntries(entries) as Record<string, string>;
+}
+
+/** Read one runtime's encrypted custom headers for routing/Pi injection. */
+export function readCustomProviderHeaders(
+  providerId: string,
+  agent: string,
+): Record<string, string> | null {
+  try {
+    const raw = electronSecretIo.read(customProviderHeaderStorageKey(providerId, agent));
+    return raw === null ? null : parseCustomProviderHeaders(raw);
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'read custom provider headers failed',
+    );
+    return null;
+  }
+}
+
 /**
  * 配置 CRUD 回滚前的严格 API key 快照读取。
  * 仅 ENOENT 表示“没有旧 key”；owner / 加密不可用、文件读取或解密失败都必须抛错，
@@ -435,6 +467,37 @@ export function readCustomProviderKeyForMutation(
   }
 }
 
+/** Strict mutation snapshot for an encrypted runtime header blob. */
+export function readCustomProviderHeadersForMutation(
+  providerId: string,
+  agent: string,
+): Record<string, string> | null {
+  const logicalKey = customProviderHeaderStorageKey(providerId, agent);
+  const scopedKey = resolveOwnerScopedSecretStorageKey(logicalKey);
+  if (!scopedKey) throw new Error('provider secret owner is unavailable');
+  let encoded: string;
+  try {
+    encoded = fs.readFileSync(path.join(secretDir(), `${scopedKey}.enc`), 'utf-8');
+  } catch (err) {
+    if (err instanceof Error && (err as NodeJS.ErrnoException).code === 'ENOENT') return null;
+    throw new Error('existing provider header credentials are unreadable');
+  }
+  if (!safeStorage.isEncryptionAvailable()) {
+    throw new Error('provider credential encryption is unavailable');
+  }
+  try {
+    return parseCustomProviderHeaders(
+      safeStorage.decryptString(Buffer.from(encoded, 'base64')),
+    );
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'decrypt custom provider headers snapshot failed',
+    );
+    throw new Error('existing provider header credentials are unreadable');
+  }
+}
+
 /** 写入某自定义供应商 runtime 的 API key；供 main 侧原子配置更新使用。 */
 export function storeCustomProviderKey(
   providerId: string,
@@ -447,6 +510,26 @@ export function storeCustomProviderKey(
     log.warn(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'write custom provider key failed',
+    );
+    return false;
+  }
+}
+
+/** Persist one runtime's complete custom-header map as a main-only encrypted blob. */
+export function storeCustomProviderHeaders(
+  providerId: string,
+  agent: string,
+  headers: Record<string, string>,
+): boolean {
+  try {
+    return electronSecretIo.write(
+      customProviderHeaderStorageKey(providerId, agent),
+      JSON.stringify(headers),
+    );
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'write custom provider headers failed',
     );
     return false;
   }
@@ -494,6 +577,22 @@ export function removeCustomProviderKey(
     log.warn(
       { providerId, agent, err: err instanceof Error ? err.message : String(err) },
       'remove custom provider key failed',
+    );
+    return { success: false, error: 'remove_failed' };
+  }
+}
+
+/** Delete one runtime's encrypted custom-header blob; absence is success. */
+export function removeCustomProviderHeaders(
+  providerId: string,
+  agent: string,
+): { success: boolean; error?: string } {
+  try {
+    return electronSecretIo.remove(customProviderHeaderStorageKey(providerId, agent));
+  } catch (err) {
+    log.warn(
+      { providerId, agent, err: err instanceof Error ? err.message : String(err) },
+      'remove custom provider headers failed',
     );
     return { success: false, error: 'remove_failed' };
   }

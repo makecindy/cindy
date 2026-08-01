@@ -114,6 +114,20 @@ describe('selectVisibleModels — device-link「以被控端为准」', () => {
     expect(ids(out)).toEqual(['cx-a', 'cx-b']);
   });
 
+  it('agentKind 锁定 pi:只展示 PI 通道真实提供的模型', () => {
+    const out = selectVisibleModels({
+      agentKind: 'pi',
+      deviceId: undefined,
+      providers: [
+        provider('openai', 'codex', ['gpt-5.5']),
+        provider('xd', 'pi', ['pi-model']),
+      ],
+      deviceCcModels: [],
+      deviceCodexModels: [],
+    });
+    expect(ids(out)).toEqual(['pi-model']);
+  });
+
   it('agentKind 为 null:device-link 下 cc + codex 按 id 首见去重并集(cc 优先)', () => {
     const out = selectVisibleModels({
       agentKind: null,
