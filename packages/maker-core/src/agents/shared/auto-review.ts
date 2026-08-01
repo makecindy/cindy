@@ -181,7 +181,8 @@ const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
   /^\/(?:etc|proc|sys|dev|boot|root)(?:\/|$)/i,             // POSIX 系统目录
   /^\/var\/(?:log|db|root)(?:\/|$)/i,                       // 系统级 /var 子目录(filePathPolicy 一致)
   /^\/(?:System|Library)(?:\/|$)/i,                         // macOS 系统目录(根级 /Library,非 ~/Library);大小写不敏感 —— 默认 HFS+/APFS 大小写不敏感,`/system`/`/library` 仍落真实系统目录(copilot 报)
-  /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录
+  /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录(带盘符)
+  /^\/(?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:\/|$)/i, // Windows 当前盘根相对系统路径(`\Windows\…`→`/Windows/…`,path.win32.resolve 后落 C:\Windows\…,codex 报)
 ];
 
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
@@ -533,7 +534,14 @@ function unwrapCommand(
     } else if (head === 'timeout' || head === 'time' || head === 'nice' || head === 'ionice' || head === 'chrt' || head === 'stdbuf') {
       // 带自身参数(timeout 5 / nice -n 10 / stdbuf -oL):跳过前导 `-*` 与紧随的数值/时长参数。
       let i = 1;
-      while (i < toks.length && (toks[i].startsWith('-') || /^[0-9]+[smhd]?$/.test(toks[i]))) i++;
+      while (i < toks.length) {
+        const t = toks[i];
+        // timeout -s/--signal SIG、-k/--kill-after DUR:带独立值选项,须连值一起消费 —— 否则停在 SIG(如 KILL)
+        // 把真正的内层命令(rm 等)当参数漏掉(codex 报 `timeout -s KILL 5 rm -rf /outside`)。
+        if (head === 'timeout' && /^(?:-s|--signal|-k|--kill-after)$/.test(t)) { i += 2; continue; }
+        if (t.startsWith('-') || /^[0-9]+[smhd]?$/.test(t)) { i++; continue; }
+        break;
+      }
       toks = toks.slice(i);
     } else {
       // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
@@ -859,8 +867,9 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
       if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
     }
     if (bin === 'eval' || rawBin === 'eval') return true;
-    // 裸 Windows `set`(全环境导出,含凭证)= exfil 红线;cmd 载荷递归下探使 `cmd /c set` 也命中(codex 报)。
-    if (bareSetDumpsEnvironment(rawTokens)) return true;
+    // 全环境导出(裸 set / export -p / declare -x 等,含凭证)= exfil 红线;cmd 载荷递归下探使
+    // `cmd /c set` 也命中(codex 报)。
+    if (dumpsFullEnvironmentCommand(rawTokens)) return true;
     // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
     // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
     // 超出递归上限仍存在替换体 = 深层嵌套(`echo $(a $(b $(c $(eval …))))`)静态不可证清白 → fail-closed
@@ -1015,11 +1024,22 @@ function destructiveRmTargets(tokens: string[]): string[] | null {
 }
 
 /**
- * Windows cmd 裸 `set`(无参数)= 打印全部环境变量(含注入子进程的 provider API key/token),等价 POSIX
- * 裸 `env`/`printenv` 的全环境导出 → exfil 红线。`set -e`/`set FOO=1`/`set /A x=1` 等带参形态不算(codex 报)。
+ * 无具名变量的全环境导出(含注入子进程的 provider API key/token)→ exfil 红线。覆盖:
+ *   - Windows cmd 裸 `set`(无参数);`set -e`/`set FOO=1`/`set /A x=1` 带参形态不算(codex 报)。
+ *   - Bash `export -p` / 裸 `export`(列出全部导出变量);`export FOO`/`export FOO=1` 具名不算(codex 报)。
+ *   - Bash `declare -x` / `declare -p` / `typeset -x`(带值列出全部);带 NAME 操作数具名不算。
+ * (POSIX 裸 `env`/`printenv` 的等价形态由 classifyShellSegment 另行处理。)
  */
-function bareSetDumpsEnvironment(tokens: string[]): boolean {
-  return executableName(tokens[0] ?? '') === 'set' && tokens.length === 1;
+function dumpsFullEnvironmentCommand(tokens: string[]): boolean {
+  const bin = executableName(tokens[0] ?? '');
+  const args = tokens.slice(1);
+  const operands = args.filter((a) => !a.startsWith('-'));
+  if (bin === 'set') return args.length === 0;
+  if (bin === 'export') return operands.length === 0;          // 裸 export / export -p
+  if (bin === 'declare' || bin === 'typeset') {
+    return operands.length === 0 && args.some((a) => /^-[A-Za-z]*[xp]/.test(a)); // -x/-p 且无具名
+  }
+  return false;
 }
 
 /** cmd.exe `/c`/`/k`/`/r` 后的载荷命令(其余全部构成待执行命令);非 cmd 启动器返回 null。 */
@@ -1048,7 +1068,9 @@ function windowsDestructiveRmTargets(tokens: string[]): string[] | null {
 }
 
 function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; target?: string } {
-  const bin = baseName(tokens[0] ?? '');
+  // executableName 归一大小写/.exe:Windows cmd/PowerShell 大小写不敏感,`CD /` 的 cwd 变更不能漏识别
+  // (copilot 报:漏了会把后续相对破坏目标误当仍在工作区内)。
+  const bin = executableName(tokens[0] ?? '');
   if (bin === 'source' || bin === '.' || bin === 'popd') return { changesDirectory: true };
   if (bin !== 'cd' && bin !== 'pushd') return { changesDirectory: false };
   if (bin === 'pushd' && tokens.slice(1).includes('-n')) return { changesDirectory: false };
@@ -1088,9 +1110,12 @@ function findExecCommands(tokens: string[]): string[][] {
 /** 一个 -exec 命令 argv(直接 `rm -rf …` 或 `sh -c '…'` 载荷)里破坏性 rm 的目标操作数。 */
 function execCommandRmTargets(argv: string[], depth: number): string[] {
   const targets: string[] = [];
-  const direct = destructiveRmTargets(argv); // 直接 `-exec rm -rf /outside`
+  // 先剥透明包装器/前置赋值:find -exec 的 COMMAND 可以是 `env FOO=1 rm …`、`command rm …`、
+  // `timeout 5 rm …` 等,不解包会把 env/command 当可执行名而看不到 rm(codex 报)。
+  const unwrapped = unwrapCommand(argv).tokens;
+  const direct = destructiveRmTargets(unwrapped); // 直接(或解包后)`rm -rf /outside`
   if (direct) targets.push(...direct);
-  const payload = shellCommandPayload(argv); // `-exec sh -c 'rm -rf …'`
+  const payload = shellCommandPayload(unwrapped); // `-exec sh -c 'rm -rf …'`
   if (payload) targets.push(...(commandDestructiveRmTargets(payload, depth) ?? []));
   return targets;
 }

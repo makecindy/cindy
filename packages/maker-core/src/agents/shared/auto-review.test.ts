@@ -1390,3 +1390,49 @@ describe('输出进程替换/未知xargs选项/折叠namespace/裸set/前置赋�
     expect(classifyShellCommand('FOO=1 ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('cwd大小写/timeout值选项/find-exec包装器/bash环境导出/盘根系统路径(第二十四批评审)', () => {
+  it('大小写不敏感的 CD 变更被识别,后续相对破坏目标按新 cwd 判定', () => {
+    // CD 到区外后,相对目标 secrets 落区外 → 必问;若漏识别 CD,secrets 会被误当区内而降灰。
+    expect(classifyShellCommand('CD /outside && rm -rf secrets', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cd /outside && rm -rf secrets', roots)).toBe('prompt-each-time');
+  });
+
+  it('timeout -s/--signal 的独立值不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'timeout -s KILL 5 rm -rf /outside',
+      'timeout --signal KILL 5 rm -rf /outside',
+      'timeout -k 3 5 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('find -exec 的透明包装器(env/command)被解包,区外删除目标不漏', () => {
+    for (const c of [
+      'find build -maxdepth 0 -exec env FOO=1 rm -rf /outside \\;',
+      'find src -exec command rm -rf /etc \\;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:包装器 + 占位符目标,遍历根在区内 → 留灰区。
+    expect(classifyShellCommand('find build -exec env FOO=1 rm -rf {} \\;', roots)).toBe('prompt');
+  });
+
+  it('Bash export -p / declare -x 全环境导出 = exfil 红线', () => {
+    for (const c of ['export -p', 'export', 'declare -x', 'declare -p', 'typeset -x']) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:具名 export/declare 不是全环境导出。
+    expect(classifyShellCommand('export FOO=1', roots)).not.toBe('prompt-each-time');
+    expect(classifyShellCommand('declare -x FOO', roots)).not.toBe('prompt-each-time');
+  });
+
+  it('Windows 当前盘根相对系统路径(\\Windows\\…)命中系统目录', () => {
+    expect(isProtectedSystemPath('\\Windows\\System32\\drivers\\etc\\hosts')).toBe(true);
+    expect(isProtectedSystemPath('/Windows/System32/config')).toBe(true);
+    expect(isProtectedSystemPath('\\Program Files\\x')).toBe(true);
+    // 不误伤区内/普通路径。
+    expect(isProtectedSystemPath('/repo/Windows/x')).toBe(false);
+  });
+});
