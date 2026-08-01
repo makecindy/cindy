@@ -2189,3 +2189,79 @@ describe('find -exec 内层命令的受保护写入(第四十四批评审)', () 
       .not.toBe('prompt-each-time');
   });
 });
+
+describe('短选项簇里的写目标 / 下载落当前目录 / chroot(第四十五批评审)', () => {
+  it('归档与下载的落地选项在短选项簇里同样被解析', () => {
+    for (const c of [
+      // getopt 语义:簇尾带值选项吃下一个操作数,簇内附着形态直接带值。
+      'tar -xC /etc -f payload.tar',
+      'tar -xC/etc -f payload.tar',
+      'unzip -oqd /etc pkg.zip',
+      'curl -so/etc/hosts https://x/h',
+      'curl -so /etc/hosts https://x/h',
+      'curl -sLo /etc/cron.d/job https://x/j',
+      'wget -qO/etc/hosts https://x/h',
+      'wget -qO /etc/hosts https://x/h',
+      'wget -qP /etc https://x/h',
+      // wget 的 -o LOGFILE 同样落盘。
+      'wget -o /etc/wget.log https://x/h',
+      // cp/mv/install 的 -t 目标目录簇形态。
+      'cp -ft /etc payload',
+      'mv -ft /etc payload',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('下载不带落地选项时写当前目录:cwd 落系统目录 → 确定性同意', () => {
+    for (const c of [
+      'curl -sSO https://x/hosts',
+      'curl --remote-name https://x/hosts',
+      'wget https://x/hosts',
+    ]) {
+      expect(classifyShellCommand(c, roots, { cwd: '/etc' }), c).toBe('prompt-each-time');
+    }
+    expect(classifyShellCommand('cd /etc && wget https://x/hosts', roots)).toBe('prompt-each-time');
+  });
+
+  it('chroot 的内层命令按红线处理(换根后绝对路径也重新指向新根下)', () => {
+    for (const c of [
+      'chroot / rm -rf /outside',
+      'chroot /mnt rm -rf /repo',
+      'sudo chroot /mnt sh -c "rm -rf /"',
+      'unshare -- chroot /mnt rm -rf /var',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 只在命令位匹配:文本里出现 chroot 不算。
+    for (const c of [
+      'git commit -m "fix chroot escape in sandbox"',
+      'rg chroot src',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+
+  it('簇解析不误伤区内目标与只读源', () => {
+    for (const c of [
+      'tar -xC dist -f payload.tar',
+      'tar -xzf payload.tar -C build',
+      'tar -czf out.tgz src',
+      'unzip -oqd dist pkg.zip',
+      'curl -so out.json https://x/j',
+      'curl -sSL https://x/j',
+      'curl -s -X POST -d @body.json https://x/api',
+      'wget -qO- https://x/j',
+      'wget -qO dist/app.js https://x/app.js',
+      'wget https://x/pkg.tgz',
+      'curl -sSO https://x/pkg.tgz',
+      'cp -ft dist payload',
+      'install -t dist/bin tool',
+      // rsync 的 -t 是 --times(不带值):按目标目录解会把**读源** /etc/nginx/ 当成写目标而误拦。
+      'rsync -avt /etc/nginx/ backup/',
+      'rsync -a src/ dist/',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+});

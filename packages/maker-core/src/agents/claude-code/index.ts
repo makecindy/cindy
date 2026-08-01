@@ -2377,6 +2377,13 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (decision.kind !== 'ask_user_question') {
                 return { kind: 'ask_user_question', answers: {} };
               }
+              // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
+              // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
+              // 越界操作可能被静默允许(codex 报:这里只为 plan_review 更新了意图)。
+              setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+                currentAutoReviewIntent,
+                Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+              ));
               return { kind: 'ask_user_question', answers: decision.answers };
             }
             if (params.kind === 'plan_review') {

@@ -249,6 +249,32 @@ function isArchiveExtraction(bin: string, args: readonly string[]): boolean {
   return args.some((t) => t === '--extract' || t === '--get' || /^-[a-zA-Z]*x/.test(t));
 }
 
+/**
+ * 解析短选项簇里的**带值选项**(getopt 语义)。簇内第一个带值字母之后的字符就是它的值
+ * (`curl -so/etc/hosts` → `o` 的值是 `/etc/hosts`);若该字母在簇尾,值是下一个 argv
+ * (`tar -xC /etc` → `C` 的值是 `/etc`)。字母后的字符会被当成值吃掉,所以一簇最多解出一个带值选项
+ * —— 与真实 getopt 一致(`tar -Cf DIR FILE` 里 `C` 的值就是字面 `f`,DIR/FILE 是操作数)。
+ * `valueLetters` 必须是该命令**全部**带值短选项字母(大小写敏感),否则 `curl -do out URL` 会把
+ * `-d` 的值误当成输出文件。
+ */
+function shortClusterOption(
+  token: string,
+  next: string | undefined,
+  valueLetters: string,
+): { letter: string; value?: string; consumedNext: boolean } | null {
+  if (!/^-[A-Za-z]/.test(token)) return null; // 排除 `--long`、裸 `-` 与非字母簇
+  const cluster = token.slice(1);
+  for (let k = 0; k < cluster.length; k++) {
+    const ch = cluster[k];
+    if (!valueLetters.includes(ch)) continue;
+    const attached = cluster.slice(k + 1);
+    return attached.length > 0
+      ? { letter: ch, value: attached, consumedNext: false }
+      : { letter: ch, value: next, consumedNext: true };
+  }
+  return null;
+}
+
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
   const args = tokens.slice(1);
@@ -264,14 +290,25 @@ function argumentWriteTargets(tokens: string[]): string[] {
     }
     // `-t DIR` / `--target-directory=DIR`:目标目录由选项给出,**不是**末位操作数
     // (codex 报 `cp -t /etc payload` 会把 payload 当目标、长选项形态则完全取不到目标)。
-    for (let i = 0; i < args.length; i++) {
-      const t = args[i];
-      if (t === '-t' || t === '--target-directory') {
-        const dir = args[i + 1];
-        return dir ? [dir] : [UNPROVABLE_WRITE_TARGET]; // 缺目标 = 静态不可证 → 哨兵,必问
+    // 只对 coreutils 的 cp/mv/install/ln 生效:**rsync 的 `-t` 是 --times**(保留时间戳,不带值),
+    // 按目标目录解会把 `rsync -avt /etc/conf/ backup/` 的**读源**当成写目标而误拦。
+    if (bin !== 'rsync') {
+      const valueLetters = bin === 'install' ? 'tSmog' : 'tS';
+      for (let i = 0; i < args.length; i++) {
+        const t = args[i];
+        if (t === '--target-directory') {
+          const dir = args[i + 1];
+          return dir ? [dir] : [UNPROVABLE_WRITE_TARGET]; // 缺目标 = 静态不可证 → 哨兵,必问
+        }
+        const attached = /^--target-directory=(.+)$/.exec(t);
+        if (attached) return [attached[1]];
+        // 短选项:`-t /etc`、`-t/etc`、簇内 `-ft /etc`(codex 报的簇语义)。
+        const cluster = shortClusterOption(t, args[i + 1], valueLetters);
+        if (!cluster) continue;
+        if (cluster.consumedNext) i++;
+        if (cluster.letter !== 't') continue;
+        return cluster.value ? [cluster.value] : [UNPROVABLE_WRITE_TARGET];
       }
-      const attached = /^(?:--target-directory=|-t)(.+)$/.exec(t);
-      if (attached) return [attached[1]];
     }
     return operands.length >= 2 ? [operands[operands.length - 1]] : [];
   }
@@ -329,19 +366,44 @@ function argumentWriteTargets(tokens: string[]): string[] {
     if (bin === 'tar' && args.some((t) => t === '--absolute-names' || /^-[A-Za-z]*P/.test(t))) {
       return [UNPROVABLE_WRITE_TARGET];
     }
-    const valueFlags = bin === 'tar' ? /^(?:-C|--directory)$/
-      : bin === 'unzip' ? /^-d$/
-        : bin === 'curl' ? /^(?:-o|--output|--output-dir)$/
-          : /^(?:-O|--output-document|-P|--directory-prefix)$/;
-    const attachedFlags = bin === 'tar' ? /^(?:--directory=|-C)(.+)$/
-      : bin === 'unzip' ? /^-d(.+)$/
-        : bin === 'curl' ? /^(?:--output=|--output-dir=|-o)(.+)$/
-          : /^(?:--output-document=|--directory-prefix=|-O|-P)(.+)$/;
+    // 长选项(含 `=` 附加值)按整 token 匹配;短选项一律走**簇语义** —— 原先只认以 `-C`/`-o`/`-O`
+    // 开头的 token,漏掉合法且常见的 `tar -xC /etc -f p.tar`、`unzip -oqd /etc p.zip`、
+    // `curl -so/etc/hosts URL`、`wget -qO/etc/hosts URL`(codex 报,实机探针确认真会落盘)。
+    const never = /(?!)/; // unzip 的落地目录只有短选项 -d,没有长选项形态
+    const longFlags = bin === 'tar' ? /^--directory$/
+      : bin === 'unzip' ? never
+        : bin === 'curl' ? /^(?:--output|--output-dir)$/
+          : /^(?:--output-document|--directory-prefix)$/;
+    const longAttached = bin === 'tar' ? /^--directory=(.+)$/
+      : bin === 'unzip' ? never
+        : bin === 'curl' ? /^(?:--output=|--output-dir=)(.+)$/
+          : /^(?:--output-document=|--directory-prefix=)(.+)$/;
+    // 写目标字母 + 该命令全部带值短选项字母(后者用于定位簇内第一个带值选项,见 shortClusterOption)。
+    // wget 的 `-o LOGFILE` 也落盘(日志文件),同属写通道。
+    const targetLetters = bin === 'tar' ? 'C' : bin === 'unzip' ? 'd' : bin === 'curl' ? 'o' : 'OPo';
+    const valueLetters = bin === 'tar' ? 'CfTXbIKNLVgF'
+      : bin === 'unzip' ? 'dOPx'
+        : bin === 'curl' ? 'odFHuAebcCDEKTUwxyYzmMQ'
+          : 'OPoitTwQARDeUBI';
     for (let i = 0; i < args.length; i++) {
       const t = args[i];
-      if (valueFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
-      const m = attachedFlags.exec(t);
-      if (m) out.push(m[1]);
+      if (longFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
+      const m = longAttached.exec(t);
+      if (m) { out.push(m[1]); continue; }
+      const cluster = shortClusterOption(t, args[i + 1], valueLetters);
+      if (!cluster) continue;
+      if (cluster.consumedNext) i++;
+      if (targetLetters.includes(cluster.letter) && cluster.value) out.push(cluster.value);
+    }
+    // 下载工具**不带落地选项**时按远端文件名写进当前目录(`curl -O URL`、`wget URL`),cwd 落系统目录
+    // 即写系统文件(与解压落 cwd 同类)。curl 默认写 stdout,只有 -O/--remote-name 系才落盘。
+    if (out.length === 0) {
+      const curlWritesCwd = bin === 'curl'
+        && args.some((t) => /^--remote-name(?:-all)?$/.test(t)
+          || (/^-[A-Za-z]/.test(t) && !t.startsWith('--') && t.slice(1).includes('O')));
+      const wgetWritesCwd = bin === 'wget'
+        && !args.some((t) => /^--output-document(?:=|$)/.test(t));
+      if (curlWritesCwd || wgetWritesCwd) return ['.'];
     }
     // 解压**不带落地目录选项**时写入当前目录:归档成员的相对路径(如 `hosts`)会落在有效 cwd 下,
     // cwd=/etc 时即覆盖 /etc/hosts(codex 报;unzip 同缺口)。用 `.` 表示"当前目录",由调用方按
@@ -386,6 +448,11 @@ const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
   // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
   // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
   /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
+  // chroot 与 sudo/su 同族:需要 CAP_SYS_CHROOT(实践中即 root),且换根后**绝对路径也重新指向新根下**
+  // (`chroot / rm -rf /outside` 会真删,`chroot /mnt rm -rf /repo` 删的是 /mnt/repo)→ 目标作用域静态
+  // 不可证,只能确定性同意(codex 报:chroot 既不在包装器集合也不在红线,内层命令完全没被看见)。
+  // 与 `su` 同样只在命令位匹配,避免 `git commit -m "fix chroot"` 之类文本误升。
+  /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock|unshare|nsenter|setpriv)\s+(?:-\S+\s+)*)chroot\b(?![\w.-])/,
   /\b(?:mkfs|fdisk|dd)\b/,                               // 磁盘/文件系统操作
   /(?:^|\s)>\s*\/dev\/[sh]d/,                            // 写块设备
   /\b(?:shutdown|reboot|halt|poweroff)\b/,               // 系统电源
