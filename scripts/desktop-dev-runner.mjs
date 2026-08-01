@@ -30,7 +30,7 @@ const { command, args } = invocation;
 
 const child = spawn(command, args, {
   cwd: rootDir,
-  env: { ...process.env, COREPACK_ENABLE_AUTO_PIN: '0' },
+  env: { ...process.env, COREPACK_ENABLE_AUTO_PIN: '0', ...(invocation.env ?? {}) },
   stdio: 'inherit',
   windowsHide: false,
   shell: invocation.shell,

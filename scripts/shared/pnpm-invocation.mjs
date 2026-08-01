@@ -13,12 +13,13 @@ const JS_ENTRY_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
 // Windows 上只有这两类扩展能被 spawn 直接拉起；.cmd／.bat 这类命令包装
 // 通过 cmd.exe 解析 PATH/PATHEXT，避免 shell:true 拼接参数数组。
 const WINDOWS_DIRECT_EXEC_EXTENSIONS = new Set([".exe", ".com"]);
+const WINDOWS_CMD_ARG_ENV_PREFIX = "CINDY_PNPM_CMD_ARG_";
 
 /**
  * @param {string[]} args 传给 pnpm 的参数
  * @param {{ npmExecPath?: string, npm_execpath?: string, execPath?: string, platform?: NodeJS.Platform | string, comSpec?: string }} options
  * 允许注入 npmExecPath／execPath／platform 覆写，便于测试；生产路径默认从 Node runtime 取 platform。
- * @returns {{ command: string, args: string[], shell: boolean, windowsVerbatimArguments?: boolean }}
+ * @returns {{ command: string, args: string[], shell: boolean, windowsVerbatimArguments?: boolean, env?: Record<string, string> }}
  */
 export function resolvePnpmInvocation(args, options = {}) {
   const hasNpmExecPathOption =
@@ -43,20 +44,29 @@ export function resolvePnpmInvocation(args, options = {}) {
 }
 
 function resolveWindowsPnpmThroughCmd(pnpmCommand, args, comSpec = process.env.ComSpec) {
-  const commandLine = [pnpmCommand, ...args].map(quoteWindowsCmdArg).join(" ");
+  const env = {};
+  const commandLine = [pnpmCommand, ...args]
+    .map((arg, index) => {
+      const name = `${WINDOWS_CMD_ARG_ENV_PREFIX}${index}`;
+      env[name] = escapeWindowsCmdEnvArg(arg);
+      return quoteWindowsCmdExpansion(name);
+    })
+    .join(" ");
   return {
     command: comSpec || "cmd.exe",
     args: ["/d", "/s", "/v:off", "/c", `"${commandLine}"`],
+    env,
     shell: false,
     windowsVerbatimArguments: true,
   };
 }
 
-function quoteWindowsCmdArg(arg) {
-  const value = String(arg);
-  if (value.length === 0) return '""';
-  const escaped = value.replace(/"/g, '""').replace(/%/g, "^%");
-  return /[\s"!&|<>()^%]/.test(value) ? `"${escaped}"` : escaped;
+function quoteWindowsCmdExpansion(name) {
+  return `"%${name}%"`;
+}
+
+function escapeWindowsCmdEnvArg(arg) {
+  return String(arg).replace(/"/g, '""');
 }
 
 /**

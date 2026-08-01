@@ -187,6 +187,7 @@ async function runSample({ workers, iteration, top }) {
   try {
     const result = await runCommand(invocation.command, invocation.args, {
       cwd,
+      env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
       shell: invocation.shell,
       windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       stdout: null,

@@ -298,7 +298,7 @@ function runInstall(args = ['install']) {
   const result = spawnSync(invocation.command, invocation.args, {
     cwd: ROOT,
     stdio: 'inherit',
-    env: createElectronInstallEnv(),
+    env: { ...createElectronInstallEnv(), ...(invocation.env ?? {}) },
     shell: invocation.shell,
     windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });

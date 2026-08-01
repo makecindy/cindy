@@ -556,6 +556,7 @@ export function runCommand(command, args, options = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
 			cwd: options.cwd,
+			env: options.env,
 			shell: options.shell,
 			windowsVerbatimArguments: options.windowsVerbatimArguments,
 			windowsHide: true,
@@ -797,6 +798,7 @@ export async function runPlannedTests({
 					invocation.args,
 					{
 						cwd,
+						env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 						shell: invocation.shell,
 						windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 						stdout: reporter ? null : undefined,
@@ -841,6 +843,7 @@ export async function runPlannedTests({
 				invocation.args,
 				{
 					cwd,
+					env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 					shell: invocation.shell,
 					windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 					stdout: reporter ? null : undefined,
