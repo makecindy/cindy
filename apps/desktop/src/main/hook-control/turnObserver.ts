@@ -124,10 +124,24 @@ function createProgressEmitter(
   };
 }
 
-/** 观察器只需要 session 的这两样东西(测试可注入最小假实现)。 */
+/** 观察器需要 session 的这几样东西(测试可注入最小假实现)。 */
 export interface ObservableSession {
   readonly id: string;
   onEvent(listener: (ev: AgentEvent) => void): () => void;
+  /**
+   * 会话状态变更订阅(生产为 maker-core Session.onStatusChange)。
+   *
+   * 收口必须同时认它, 不能只认事件流: SDK handle 的事件迭代器**抛错或自然结束**
+   * 时, maker-core 只 setStatus('error'/'closed') 并**主动清掉** stall 看门狗,
+   * 不 fan out 任何终态事件 —— 而看门狗本身也只在 status 仍是 'active' 时开火。
+   * 于是「会话已死」这条路上没有任何东西会让 observer settle: 渠道请求永远结束
+   * 不了, 同 session 的后续消息持续排队, finalizeInteractions 也跑不到
+   * (PR #1272 review 指出)。
+   *
+   * 判据是**状态**不是时间, 所以不会误杀等用户回应交互 / 跑后台任务 / 合盖睡眠
+   * 那些合法静默 —— 那正是本 PR 删掉裸 setTimeout 的理由, 两者不冲突。
+   */
+  onStatusChange(listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void): () => void;
 }
 
 export interface HookTurnObserverDeps {
@@ -244,6 +258,7 @@ export function observeHookTurn(
       pendingSettleUnsub = undefined;
       progress?.stop();
       off();
+      offStatus();
       stopListening = undefined;
     };
     const finish = (): void => {
@@ -262,6 +277,12 @@ export function observeHookTurn(
       }, BG_TASK_IDLE_FALLBACK_MS);
       bgFallbackTimer.unref?.();
     };
+    // 会话已死(见 ObservableSession.onStatusChange)。终态事件永远不会来了,
+    // 按失败收口 —— 已累积的正文不足以判定这一轮真的完成了。
+    const offStatus = session.onStatusChange((status) => {
+      if (status !== 'closed' && status !== 'error') return;
+      failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
+    });
     const off = session.onEvent((ev: AgentEvent) => {
       if (waitingForBgTasks) armBgTimer();
       if (ev.type === 'agent_task_update') {
@@ -311,13 +332,19 @@ export function observeHookTurn(
                     ? meta.requestId
                     : undefined
                 : undefined;
-            const sameMessage = messageId !== undefined && messageId === lastFinalUuid;
+            // claudeTail 是**当前这条消息的续尾**(claude result 的 fallbackTail,
+            // 刻意不带 agentMeta), 不是新消息 —— 它没有 messageId 可比, 但语义上
+            // 恒属于上一条。不特判的话它会入栈成独立一段, 而 X 只发最后一段,
+            // 于是回帖只剩那截尾巴(PR #1272 review 的 copilot 抑制项指出)。
+            const sameMessage =
+              claudeTail || (messageId !== undefined && messageId === lastFinalUuid);
             if (sameMessage && finalizedSegments.length > 0) {
               finalizedSegments[finalizedSegments.length - 1] += segment;
             } else {
               finalizedSegments.push(segment);
             }
-            lastFinalUuid = messageId;
+            // 续尾不改变"当前是哪条消息", 保留原标识; 其余情况按本次事件更新。
+            if (!claudeTail) lastFinalUuid = messageId;
             streamTail = '';
           } else {
             streamTail += data.text;

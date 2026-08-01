@@ -53,7 +53,8 @@ const h = vi.hoisted(() => {
     readImDefaultSettings: vi.fn(),
     useActualDefaults: false,
     /** 每个 fake session 的事件监听回调(emit done 用)。 */
-    eventCbs: new Map<
+    statusCbs: new Map<string, (status: 'active' | 'aborting' | 'closed' | 'error') => void>(),
+  eventCbs: new Map<
       string,
       (ev: {
         type: string;
@@ -190,6 +191,12 @@ function makeFakeSession(id: string) {
       h.eventCbs.set(id, cb);
       return () => {
         h.eventCbs.delete(id);
+      };
+    },
+    onStatusChange(cb: (status: 'active' | 'aborting' | 'closed' | 'error') => void) {
+      h.statusCbs.set(id, cb);
+      return () => {
+        h.statusCbs.delete(id);
       };
     },
     setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
@@ -694,6 +701,12 @@ describe('进度快照(turn.progress 链路)', () => {
           h.eventCbs.delete(id);
         };
       },
+      onStatusChange(cb: (status: 'active' | 'aborting' | 'closed' | 'error') => void) {
+        h.statusCbs.set(id, cb);
+        return () => {
+          h.statusCbs.delete(id);
+        };
+      },
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
@@ -912,6 +925,35 @@ describe('进度快照(turn.progress 链路)', () => {
       // 同一条消息的两个 block 必须都在, 且不带上一条的过程叙述。
       expect(outcome.finalText).toBe('结论: 分成两块说。第二块也属于同一条。');
       expect(outcome.finalText).not.toContain('我先看看');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: claude 的 fallbackTail 并入上一条, 不被当成新消息', async () => {
+    // claude result 的 fallbackTail 刻意不带 agentMeta —— 它是**当前这条消息的
+    // 续尾**, 不是新消息。当成新消息入栈的话, X 只发最后一段, 回帖就只剩那截
+    // 尾巴(PR #1272 review 的 copilot 抑制项指出)。
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '先查一下。', isFinal: true }, source: 'claude-code', agentMeta: { uuid: 'm1' } });
+      cb({ type: 'text', data: { text: '结论: 已修复,', isFinal: true }, source: 'claude-code', agentMeta: { uuid: 'm2' } });
+      // fallbackTail: 无 agentMeta, 补的是 m2 的尾段。
+      cb({ type: 'text', data: { text: '详见提交记录。', isFinal: true }, source: 'claude-code' });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      // 尾段必须跟着 m2 一起发, 且不带上 m1 的过程叙述。
+      expect(outcome.finalText).toBe('结论: 已修复,详见提交记录。');
+      expect(outcome.finalText).not.toContain('先查一下');
     } finally {
       vi.useRealTimers();
     }
@@ -1201,6 +1243,12 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
           h.eventCbs.delete(id);
         };
       },
+      onStatusChange(cb: (status: 'active' | 'aborting' | 'closed' | 'error') => void) {
+        h.statusCbs.set(id, cb);
+        return () => {
+          h.statusCbs.delete(id);
+        };
+      },
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
         h.interactionListeners.set(id, listener);
       },
@@ -1407,6 +1455,12 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
         h.eventCbs.set(id, cb);
         return () => {
           h.eventCbs.delete(id);
+        };
+      },
+      onStatusChange(cb: (status: 'active' | 'aborting' | 'closed' | 'error') => void) {
+        h.statusCbs.set(id, cb);
+        return () => {
+          h.statusCbs.delete(id);
         };
       },
       setInteractionListener(listener: (req: unknown) => Promise<unknown>) {
@@ -1794,6 +1848,12 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
           h.eventCbs.delete(id);
         };
       },
+      onStatusChange(cb: (status: 'active' | 'aborting' | 'closed' | 'error') => void) {
+        h.statusCbs.set(id, cb);
+        return () => {
+          h.statusCbs.delete(id);
+        };
+      },
     };
   }
 
@@ -2012,6 +2072,43 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('会话直接死掉(无终态事件)也收口: 状态判据兜住事件流兜不住的那条路', async () => {
+    // SDK handle 的事件迭代器抛错 / 自然结束时, maker-core 只 setStatus('error' /
+    // 'closed') 并**主动清掉** stall 看门狗, 不 fan out 任何终态事件 —— 而看门狗
+    // 本身也只在 status 仍是 'active' 时开火。少了状态订阅, observer 永远不 settle:
+    // 渠道请求结束不了、同 session 后续消息持续排队、finalizeInteractions 也跑不到
+    // (PR #1272 review 指出)。判据是**状态**不是时间, 所以不会误杀合法静默。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events, ends } = watchReq();
+    runner.watchContinuation!(req as never);
+    expect(events).toEqual(['claim']);
+
+    h.statusCbs.get('sess-live')!('closed');
+    await flush();
+    expect(events.at(-1)).toBe('end:error');
+    expect(ends[0]?.errorMessage).toContain('without a terminal event');
+    expect(h.eventCbs.has('sess-live')).toBe(false);
+  });
+
+  it('中途的非终态状态不收口: aborting / active 只是过程', async () => {
+    // abort 往返期间会短暂进 aborting 再回 active(见 maker-core Session.abort),
+    // 那不是会话死亡。只认 closed / error, 否则一次用户 Stop 的往返就会误收口。
+    fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+    const runner = createMakerHookSessionRunner({ log });
+    const { req, events } = watchReq();
+    runner.watchContinuation!(req as never);
+
+    h.statusCbs.get('sess-live')!('aborting');
+    h.statusCbs.get('sess-live')!('active');
+    await flush();
+    expect(events).toEqual(['claim']);
+
+    h.eventCbs.get('sess-live')!({ type: 'done', data: null });
+    await flush();
+    expect(events.at(-1)).toBe('end:ok');
   });
 
   it('stall 看门狗的终态 error 到达时收口: 槽位得以释放', async () => {
