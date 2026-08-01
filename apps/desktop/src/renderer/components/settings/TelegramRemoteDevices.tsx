@@ -105,6 +105,19 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
           { online: false },
         ])) as RemoteStatus;
         setProbes((prev) => ({ ...prev, [deviceId]: { state: 'ok', status: result } }));
+        // 远端执行失败也会作为成功的 device-link 响应回来(例如目标机写不进下线标志时
+        // 只落 error 并保持轮询)。不核对终态就报成功, 会让人以为冲突已经解除。
+        if (result.kind !== 'offline') {
+          toast.error(
+            t('logic.toasts.telegramRemoteFailed', {
+              message:
+                result.kind === 'error' && result.reason
+                  ? result.reason
+                  : t(`settings.telegramBot.remoteDevices.state.${result.kind}`),
+            }),
+          );
+          return;
+        }
         toast.success(t('logic.toasts.telegramRemoteWentOffline'));
       } catch (err) {
         if (isChannelNotAllowed(err)) {

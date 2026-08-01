@@ -508,6 +508,38 @@ describe('TelegramIM', () => {
     ctx.host.secrets.write = originalWrite;
   });
 
+  it('下线标志删不掉时上线要报错, 不能假装已上线(重启会打回 offline)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // 模拟 remove 失败(文件锁/权限/磁盘错误 —— 真实实现吞掉异常且无返回值)。
+    const originalRemove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+    };
+
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+
+    // 标志还在 → 重启会回到 offline, 所以此刻绝不能显示成已上线。
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
+  it('安全存储不可用时下线报错, 不会误判成「未配置」而放任轮询继续', async () => {
+    await connect();
+    await vi.waitFor(() => {
+      expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true);
+    });
+    const originalAvailable = ctx.host.secrets.isAvailable;
+    ctx.host.secrets.isAvailable = () => false;
+
+    await im.goOffline();
+
+    // 关键: 不是 idle。idle 会让设置页显示"未配置"、而轮询其实还在跑。
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.isAvailable = originalAvailable;
+  });
+
   it('带下线标志时 init 直接 offline, 零网络请求(重启不抢回轮询)', async () => {
     ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
     ctx.secrets.set('telegram-owner-user-id', OWNER_ID);

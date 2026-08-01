@@ -189,6 +189,21 @@ export function useTelegramBot(): UseTelegramBotReturn {
           botUsername: cachedState?.botUsername ?? null,
           status: result.status,
         };
+        // IPC 正常 resolve ≠ 切换成功: 上线可能因 token 失效/网络不可达落到 error,
+        // 下线可能因安全存储写不进而保持原样。只有真到达目标态才报成功, 否则用户
+        // 会拿到一个「其实没发生」的确认。
+        const reached = online ? result.status.kind === 'connected' : result.status.kind === 'offline';
+        if (!reached) {
+          toast.error(
+            t('logic.toasts.telegramBotToggleOnlineFailed', {
+              message:
+                result.status.kind === 'error'
+                  ? result.status.reason
+                  : t(`settings.telegramBot.status.${result.status.kind}`),
+            }),
+          );
+          return;
+        }
         toast.success(
           online
             ? t('logic.toasts.telegramBotWentOnline')

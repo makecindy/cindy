@@ -286,6 +286,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 不向 owner 播报(与 dispose 同口径, 见文件头部生命周期静默说明)。
    */
   async goOffline(): Promise<void> {
+    // 先判安全存储可用性: 不可用时 read 一律返回 null, 会把"读不到 token"误判成
+    // "未配置" → 设 idle 却不停轮询, 变成「UI 显示未配置、bot 还在收消息」。
+    // 这条路径远程下线也会走(telegramRemoteControl 不做预检), 必须在这里兜住。
+    if (!this.host.secrets.isAvailable()) {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      return;
+    }
     const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
     if (!token) {
       this.setStatus({ kind: 'idle' });
@@ -312,6 +319,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async goOnline(): Promise<boolean> {
     const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
     this.host.secrets.remove(OFFLINE_SECRET_KEY);
+    // remove 返回 void 且吞掉异常(文件锁/权限/磁盘错误), 只能回读确认。标志没删掉
+    // 却照常连上, 会让用户看到"已上线"、重启后却又回到 offline —— 与写标志失败
+    // 同源的静默失败, 同样宁可停在明确错误上。
+    if (this.isOfflineFlagSet()) {
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      return false;
+    }
     if (!token) {
       this.setStatus({ kind: 'idle' });
       return false;
