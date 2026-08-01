@@ -420,7 +420,9 @@ function unwrapCommand(
     cwdUnknown = next.cwdUnknown;
   };
   for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
-    const head = baseName(toks[0]);
+    // executableName 归一 `.exe`/大小写:`env.exe`/`timeout.exe` 等包裹器也要剥壳,否则 `env.exe`(dump 环境)
+    // 或 `timeout.exe 5 rm -rf /outside`(内层破坏)会因包裹器没被识别而漏判。
+    const head = executableName(toks[0]);
     if (!COMMAND_WRAPPERS.has(head)) break;
     if (head === 'env') {
       // env [-i] [-u NAME]... [-C DIR] [NAME=val...] cmd args。**必须精确消费带独立参数的选项** ——
@@ -742,8 +744,13 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
         return true;
       }
     }
+    // 进程替换 `<(curl…)` 与命令替换 `$(curl…)`/反引号 都能把下载内容喂给 shell/解释器执行:
+    // `source <(curl…)`、`bash <<< "$(curl…)"`、`python <<< "$(curl…)"` 等 here-string/直参形态同属
+    // 远程代码执行红线(codex 报:此前只查了进程替换,漏了命令替换)。仅当 $() 内含 curl/wget 才命中,
+    // 本地 `$(cat f)` 不误伤。
     if ((bin === 'source' || bin === '.' || isPipeExecutor(bin))
-      && substitutionRunsRemoteFetch(text, 'process')) return true;
+      && (substitutionRunsRemoteFetch(text, 'process')
+        || substitutionRunsRemoteFetch(text, 'command'))) return true;
     const segmentFetchesRemoteContent = commandRunsRemoteFetch(text);
     pipeCarriesRemoteContent = separatorAfter === 'pipe'
       && (pipeCarriesRemoteContent || segmentFetchesRemoteContent);
@@ -825,7 +832,8 @@ function findDeleteRoots(tokens: string[]): string[] {
 }
 
 function forcePushNeedsConsent(tokens: string[]): boolean {
-  if (baseName(tokens[0] ?? '') !== 'git') return false;
+  // executableName 归一 `.exe`/大小写:`git.exe push --force`、`GIT.EXE …` 不得绕过受保护分支红线(codex 报)。
+  if (executableName(tokens[0] ?? '') !== 'git') return false;
   const pushIndex = tokens.indexOf('push');
   if (pushIndex < 0) return false;
   const args = tokens.slice(pushIndex + 1);
@@ -851,7 +859,8 @@ function forcePushNeedsConsent(tokens: string[]): boolean {
 
 /** destructive rm 的显式目标；不是递归/强制 rm 时返回 null。 */
 function destructiveRmTargets(tokens: string[]): string[] | null {
-  if (baseName(tokens[0] ?? '') !== 'rm') return null;
+  // executableName 归一 `.exe`/大小写:`rm.exe -rf …`、`RM.EXE …` 不得绕过区外破坏红线(codex 报)。
+  if (executableName(tokens[0] ?? '') !== 'rm') return null;
   const args = tokens.slice(1);
   const destructive = args.some((token) =>
     /^-[^-]*[rRfF]/.test(token) || /^--(?:recursive|force|dir)(?:=|$)/.test(token));
@@ -896,7 +905,7 @@ function scopedDestructionNeedsConsent(
       cwd: unwrapped.cwd,
       cwdUnknown: unwrapped.cwdUnknown,
     };
-    const bin = baseName(tokens[0] ?? '');
+    const bin = executableName(tokens[0] ?? '');
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
       destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
@@ -909,15 +918,16 @@ function scopedDestructionNeedsConsent(
     if (bin === 'find') {
       const findRoots = findDeleteRoots(tokens);
       const deletes = tokens.some((token) => token === '-delete');
-      const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
+      const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
       const execsDestructiveRm = nestedRm >= 0
         && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
       if ((deletes || execsDestructiveRm) && findRoots.some((target) =>
         destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     }
-    // xargs 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意。
-    const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
-    if (bin === 'xargs' && nestedRm >= 0
+    // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
+    // (codex 报:parallel 与 xargs 同为执行器,`parallel rm -rf -- /outside` 也会跑 rm)。
+    const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
+    if ((bin === 'xargs' || bin === 'parallel') && nestedRm >= 0
       && destructiveRmTargets(tokens.slice(nestedRm)) !== null) return true;
     if (bin === 'xargs') {
       const nested = xargsCommandTokens(tokens);
@@ -929,6 +939,10 @@ function scopedDestructionNeedsConsent(
         return true;
       }
     }
+    // parallel 的选项文法与 xargs 不同,不做完整 argv 建模;但它跑 shell 执行器时同样无法静态证明安全 →
+    // 保留同意(如 `parallel sh -c '…'` / `parallel bash …`)。
+    if (bin === 'parallel'
+      && tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
     if (forcePushNeedsConsent(tokens)) return true;
 
     const cwdChange = directoryChangeTarget(tokens);
@@ -1195,7 +1209,7 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
   // reviewer 自行静默 allow。`-0` / `--null` 只改分隔符，不缩小输出范围；只有存在非选项
   // VARIABLE 参数时才算具名读取并留在灰区。`env FOO=bar cmd` 仍按内层命令分类。
-  const printenvArgs = baseName(tokens[0] ?? '') === 'printenv' ? tokens.slice(1) : [];
+  const printenvArgs = executableName(tokens[0] ?? '') === 'printenv' ? tokens.slice(1) : [];
   let printenvHasVariable = false;
   let printenvOptionsEnded = false;
   for (const token of printenvArgs) {
@@ -1209,12 +1223,14 @@ function classifyShellSegment(segment: string): ReviewVerdict {
     }
   }
   const dumpsFullEnvironment =
-    (tokens.length === 0 && rawTokens.some((token) => baseName(token) === 'env'))
-    || (baseName(tokens[0] ?? '') === 'printenv' && !printenvHasVariable);
+    (tokens.length === 0 && rawTokens.some((token) => executableName(token) === 'env'))
+    || (executableName(tokens[0] ?? '') === 'printenv' && !printenvHasVariable);
   if (dumpsFullEnvironment) return 'prompt-each-time';
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
-  const bin = baseName(tokens[0]);
+  // executableName 归一 `.exe`/大小写:Windows/Git Bash 下 `ls.exe`/`cat.exe`/`git.exe status` 等良性
+  // 只读命令不应平白落灰区弹窗(与"尽量不打扰"一致);PATH 污染是已存档残口,归一不新增风险。
+  const bin = executableName(tokens[0]);
   // 去引号标记 + 去反斜杠转义:防 -ex'ec' / -ex\ec / -'o' 这类把 flag/命令拆开的拼接绕过(bash 会把它们
   // 还原成 -exec 等)。再抹掉参数展开(-ex${UNSET}ec / --pr${UNSET}e=…,codex 报):否则 find/rg 等的
   // 执行 flag 被藏在展开里、审查漏放行、bash 展开成空后才执行。flag/命令检测都在此串上跑。
