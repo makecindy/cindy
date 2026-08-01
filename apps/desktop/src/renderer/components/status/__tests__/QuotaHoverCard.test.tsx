@@ -17,6 +17,14 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.limitRejected') return '已触发套餐限额，请求可能被拒绝';
       if (key === 'quotaCard.limitWarning') return '接近套餐限额';
       if (key === 'quotaCard.resetAt') return `${options.at} 重置`;
+      if (key === 'quotaCard.paceOnTrack') return '节奏：正常';
+      if (key === 'quotaCard.paceReserve') return `节奏：有富余（+${options.percent}%）`;
+      if (key === 'quotaCard.paceDeficit') return `节奏：超速 ${options.percent}%`;
+      if (key === 'quotaCard.paceLastsToReset') return '能撑到重置';
+      if (key === 'quotaCard.paceRunsOutIn') return `预计 ${options.duration}后耗尽`;
+      if (key === 'quotaCard.durationMinutes') return `${options.n} 分钟`;
+      if (key === 'quotaCard.durationHours') return `${options.n} 小时`;
+      if (key === 'quotaCard.durationDays') return `${options.n} 天`;
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
@@ -646,5 +654,84 @@ describe('QuotaHoverCard', () => {
     expect(opusTitle.classList.contains('text-[var(--quota-bar-crit)]')).toBe(true);
     expect(screen.getByText('5 小时').getAttribute('data-severity')).toBe('normal');
     expect(screen.getByText('周限').getAttribute('data-severity')).toBe('normal');
+  });
+
+  it('renders a muted weekly reserve pace that lasts to reset', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          sevenDay: {
+            utilization: 4,
+            resetsAt: epochSeconds(2026, 7, 7, 0, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const pace = screen.getByTestId('quota-pace');
+    expect(pace.textContent).toBe('节奏：有富余（+16%） · 能撑到重置');
+    expect(pace.getAttribute('data-severity')).toBeNull();
+    expect(
+      pace.classList.contains(
+        'text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]',
+      ),
+    ).toBe(true);
+  });
+
+  it('renders a critical weekly deficit pace with an hours ETA', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          sevenDay: {
+            utilization: 93,
+            resetsAt: epochSeconds(2026, 7, 2, 10, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const pace = screen.getByTestId('quota-pace');
+    expect(pace.textContent).toBe('节奏：超速 7% · 预计 11 小时后耗尽');
+    expect(pace.getAttribute('data-severity')).toBe('crit');
+    expect(pace.classList.contains('text-[var(--quota-bar-crit,#E5484D)]')).toBe(true);
+  });
+
+  it('hides weekly pace when the window is missing, lacks a reset, or is under 3% elapsed', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          fiveHour: {
+            utilization: 50,
+            resetsAt: epochSeconds(2026, 7, 1, 12, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ sevenDay: { utilization: 30, resetsAt: null } })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          sevenDay: {
+            utilization: 30,
+            resetsAt: epochSeconds(2026, 7, 8, 8, 0),
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
   });
 });

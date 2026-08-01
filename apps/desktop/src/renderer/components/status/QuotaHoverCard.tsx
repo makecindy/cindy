@@ -8,6 +8,7 @@ import React from 'react';
 import type { TFunction } from 'i18next';
 import { useTranslation } from 'react-i18next';
 
+import { computeQuotaPace, type QuotaPace } from '@/lib/quotaPace';
 import { cn } from '@/lib/utils';
 import type {
   ClaudeSubscriptionUsageSnapshot,
@@ -56,9 +57,11 @@ interface DisplayWindow {
   key: string;
   title: string;
   window: ClaudeUsageWindow;
+  paceWindowMinutes?: number;
 }
 
 const STALE_AFTER_MS = 5 * 60_000;
+const WEEKLY_WINDOW_MINUTES = 10_080;
 
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
@@ -152,15 +155,50 @@ function CardDivider() {
   return <div aria-hidden="true" className="mx-4 my-1.5 h-px bg-[var(--border-default)]" />;
 }
 
+/** 将耗尽 ETA 收敛成适合额度卡片的一档时间文案。 */
+function formatPaceDuration(etaSeconds: number, t: TFunction): string {
+  const minutes = etaSeconds / 60;
+  if (minutes < 60) {
+    return t('quotaCard.durationMinutes', { n: Math.round(minutes) });
+  }
+
+  const hours = minutes / 60;
+  if (hours < 48) {
+    return t('quotaCard.durationHours', { n: Math.round(hours) });
+  }
+
+  return t('quotaCard.durationDays', { n: Math.round(hours / 24) });
+}
+
+/** 将 pace 结果映射成状态与耗尽预测两段文案。 */
+function formatPaceLine(pace: QuotaPace, t: TFunction): string | null {
+  const { deltaPercent } = pace;
+  const state = Math.abs(deltaPercent) < 5
+    ? t('quotaCard.paceOnTrack')
+    : deltaPercent <= -5
+      ? t('quotaCard.paceReserve', { percent: Math.round(-deltaPercent) })
+      : t('quotaCard.paceDeficit', { percent: Math.round(deltaPercent) });
+
+  if (pace.willLastToReset) {
+    return `${state} · ${t('quotaCard.paceLastsToReset')}`;
+  }
+  if (pace.etaSeconds === null) return null;
+
+  const duration = formatPaceDuration(pace.etaSeconds, t);
+  return `${state} · ${t('quotaCard.paceRunsOutIn', { duration })}`;
+}
+
 function WindowBlock({
   title,
   window,
+  paceWindowMinutes,
   nowMs,
   locale,
   t,
 }: {
   title: string;
   window: ClaudeUsageWindow;
+  paceWindowMinutes?: number;
   nowMs: number;
   locale: string | undefined;
   t: TFunction;
@@ -175,6 +213,18 @@ function WindowBlock({
         ? t('quotaCard.limitWarning')
         : null;
   const resetAt = formatResetAt(window.resetsAt, nowMs, locale);
+  const pace = paceWindowMinutes === undefined
+    ? null
+    : computeQuotaPace({
+        utilization: window.utilization,
+        resetsAt: window.resetsAt,
+        windowMinutes: paceWindowMinutes,
+        nowMs,
+      });
+  const paceLine = pace === null ? null : formatPaceLine(pace, t);
+  const paceIsCritical = pace !== null
+    && pace.deltaPercent >= 5
+    && !pace.willLastToReset;
 
   return (
     <section data-testid="quota-window" className="px-4 pb-1 pt-2">
@@ -203,6 +253,20 @@ function WindowBlock({
           </span>
         ) : null}
       </div>
+      {paceLine !== null ? (
+        <div
+          data-testid="quota-pace"
+          data-severity={paceIsCritical ? 'crit' : undefined}
+          className={cn(
+            'mt-[3px] text-xs tabular-nums',
+            paceIsCritical
+              ? 'font-medium text-[var(--quota-bar-crit,#E5484D)]'
+              : 'text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]',
+          )}
+        >
+          {paceLine}
+        </div>
+      ) : null}
     </section>
   );
 }
@@ -383,6 +447,7 @@ export function QuotaHoverCard({
       key: 'seven-day',
       title: t('quotaCard.weeklyLabel'),
       window: snapshot.sevenDay,
+      paceWindowMinutes: WEEKLY_WINDOW_MINUTES,
     });
   }
   // 持久化旧快照可能把 scoped 写成非数组；脏容器按缺失处理，避免 .entries() 崩溃。
@@ -450,6 +515,7 @@ export function QuotaHoverCard({
                     key={displayWindow.key}
                     title={displayWindow.title}
                     window={displayWindow.window}
+                    paceWindowMinutes={displayWindow.paceWindowMinutes}
                     nowMs={nowMs}
                     locale={locale}
                     t={t}
