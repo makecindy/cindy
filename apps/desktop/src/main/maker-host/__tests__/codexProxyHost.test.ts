@@ -494,6 +494,17 @@ describe('chatBridgeCapabilitiesForRoute', () => {
   });
 
   it.each([
+    ['https://coding.dashscope.aliyuncs.com/v1', 'qwen3.7-plus'],
+    ['https://dashscope.aliyuncs.com/compatible-mode/v1', 'qwen3.7-plus'],
+    ['https://token-plan.cn-beijing.maas.aliyuncs.com/compatible-mode/v1', 'qwen3.7-plus'],
+    ['https://coding.dashscope.aliyuncs.com/v1', 'qwen3.8-max-preview'],
+    ['https://coding.dashscope.aliyuncs.com/v1', 'qwen3.6-flash'],
+  ])('enables image_url for Qwen on official DashScope host: %s / %s', async (upstream, model) => {
+    const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
+    expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBe('image_url');
+  });
+
+  it.each([
     ['https://api.moonshot.cn/v1', 'kimi-k2.6'],
     ['https://api.deepseek.com/v1', 'kimi-k3'],
     ['https://api.moonshot.cn.evil.example/v1', 'kimi-k3'],
@@ -509,6 +520,11 @@ describe('chatBridgeCapabilitiesForRoute', () => {
     ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-1-0'],
     ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-seed-pro'],
     ['https://ark.cn-beijing.volces.com/api/v3', 'doubao-1-5-vision-pro'],
+    // Qwen: 非官方域名、非 HTTPS、未确认 model 均不放行。
+    ['http://coding.dashscope.aliyuncs.com/v1', 'qwen3.7-plus'],
+    ['https://coding.dashscope.aliyuncs.com.evil.example/v1', 'qwen3.7-plus'],
+    ['https://example.com/v1', 'qwen3.7-plus'],
+    ['https://coding.dashscope.aliyuncs.com/v1', 'qwen3-coder-next'],
   ])('keeps image input disabled for non-matching route %s / %s', async (upstream, model) => {
     const { chatBridgeCapabilitiesForRoute } = await freshCodexProxyHost();
     expect(chatBridgeCapabilitiesForRoute(upstream, model).imageInput).toBeUndefined();
