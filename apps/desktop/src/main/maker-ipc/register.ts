@@ -2716,6 +2716,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
   const ghostSessionTap = createGhostSessionTap(session.id);
+  // 拆线收口:实例替换(上面的 existing.disposers)与会话关闭(下面 closed 的
+  // finally)两条路径都要给插件补上缺失的 did-turn-end,否则订阅方的「AI 在忙」
+  // 外层状态永久卡在 working。
+  registration.disposers.push(() => ghostSessionTap.dispose());
   registration.disposers.push(session.onEvent((event: AgentEvent) => {
     ghostSessionTap.handleEvent(
       event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },

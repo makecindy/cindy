@@ -31,6 +31,11 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain(
       'registration.disposers.push(session.onStatusChange((status) => {',
     );
+    // #1286:拆线(实例替换 / 会话关闭)必须给插件补 did-turn-end,否则订阅方的
+    // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。
+    expect(wireSessionSource).toContain(
+      'registration.disposers.push(() => ghostSessionTap.dispose());',
+    );
   });
 
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {

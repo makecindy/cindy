@@ -1566,6 +1566,8 @@ cindy.onHostMessage(function (msg) {
     // msg.data = { sessionId, agent, model?, durationMs, endReason, usage? }
     // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
+    // 配对保证:每条 did-turn-start 都会等到一条 did-turn-end——会话被关掉或
+    // 引擎被替换时主机补发 endReason: 'interrupted',你不必自己写超时兜底。
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
     return;
   }

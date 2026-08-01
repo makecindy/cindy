@@ -601,15 +601,44 @@ export class GhostTurnTranslator {
     }
   }
 
+  /**
+   * 会话拆线收口(tap dispose 调用):turn 在场时补一条 did-turn-end。
+   *
+   * 漏发的后果是插件永久卡住:订阅方靠 did-turn-start / did-turn-end 配对维护
+   * 「AI 是否在忙」,拆线时缺了 end,它的外层状态就停在 working 再也回不来——下一轮
+   * 到达时序列变成 start, start,配对彻底断掉,插件除重启没有自愈手段。
+   *
+   * 两条拆线路径(会话关闭、Session 实例替换)一律报 interrupted:对插件的含义相同
+   * ——这一轮的产出不会再来。实例替换不会因此把一个仍在跑的 turn 拆成两轮,因为
+   * agent 切换只在会话空闲时落实(`applyPendingAgentSwitchIfIdle` 的 `isTurnRunning`
+   * 守卫),替换发生时本状态机必然已回到 idle,下面的补发分支根本不触发。
+   *
+   * dispose 时没有 ev 可用,`agent` 退化成 `opts.agent`(丢掉 `ev.source` 覆盖):
+   * 补发的这条 end 只负责让配对闭合,来源精度不是它的职责。
+   */
+  dispose(): void {
+    this.clearGraceTimer();
+    if (this.state === 'idle') return;
+    const { sessionId, agent, model } = this.opts;
+    this.finish(
+      { sessionId, agent, ...(model !== undefined ? { model } : {}) },
+      'interrupted',
+      undefined,
+    );
+  }
+
+  private clearGraceTimer(): void {
+    if (!this.graceTimer) return;
+    clearTimeout(this.graceTimer);
+    this.graceTimer = null;
+  }
+
   private finish(
     base: GhostEventTurnStartData,
     endReason: GhostEventTurnEndData['endReason'],
     usage: GhostEventTurnEndData['usage'],
   ): void {
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-      this.graceTimer = null;
-    }
+    this.clearGraceTimer();
     // running 态直接定性(done 先于 status false 的容错路径)用当前时刻;
     // closing 态用 status(false) 到达时刻,宽限等待不算进 turn 时长。
     const endAt = this.state === 'closing' ? this.endedAt : this.opts.now();
