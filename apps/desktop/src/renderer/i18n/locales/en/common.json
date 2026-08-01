@@ -2499,7 +2499,9 @@
           "aliasPlaceholder": "Alias, e.g. my-server",
           "addWorkspace": "Add working directory",
           "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)"
+          "changeDir": "Click to change directory (alias and preferences kept)",
+          "defaultWorkspaceChip": "Default: {{name}}",
+          "defaultWorkspaceAria": "Choose the default workdir for tasks dispatched from X"
         },
         "binding": {
           "copyLink": "Copy link",

@@ -2498,7 +2498,9 @@
           "aliasPlaceholder": "别名，如 my-server",
           "addWorkspace": "添加工作目录",
           "removeWorkspace": "删除此工作目录",
-          "changeDir": "点击更换目录(别名与偏好保留)"
+          "changeDir": "点击更换目录(别名与偏好保留)",
+          "defaultWorkspaceChip": "默认:{{name}}",
+          "defaultWorkspaceAria": "选择 X 派发任务时使用的默认工作目录"
         },
         "binding": {
           "copyLink": "复制链接",

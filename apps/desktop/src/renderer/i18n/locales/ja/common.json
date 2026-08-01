@@ -2498,7 +2498,9 @@
           "aliasPlaceholder": "エイリアス(例: my-server)",
           "addWorkspace": "作業ディレクトリを追加",
           "removeWorkspace": "この作業ディレクトリを削除",
-          "changeDir": "クリックしてディレクトリを変更(別名と設定は保持)"
+          "changeDir": "クリックしてディレクトリを変更(別名と設定は保持)",
+          "defaultWorkspaceChip": "デフォルト: {{name}}",
+          "defaultWorkspaceAria": "X から発行するタスクの既定の作業ディレクトリを選択"
         },
         "binding": {
           "copyLink": "リンクをコピー",

@@ -17,6 +17,7 @@ const ipc = vi.hoisted(() => ({
   revokeTeam: vi.fn(),
   openProviderAction: vi.fn(),
   openExternal: vi.fn(),
+  setXDefaultWorkspace: vi.fn(),
 }));
 const dialog = vi.hoisted(() => ({ confirm: vi.fn() }));
 const workspacePrefsEditor = vi.hoisted(() => ({ render: vi.fn() }));
@@ -107,6 +108,7 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: true,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
   x: {
@@ -116,6 +118,7 @@ const BASE_HOOK: SlackHookView = {
     lastError: null,
     available: false,
     capabilityPending: false,
+    defaultWorkspace: null,
     binding: null,
   },
 };
@@ -142,6 +145,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         cancelPendingBind: ipc.cancelPendingBind,
         revokeTeam: ipc.revokeTeam,
         openProviderAction: ipc.openProviderAction,
+        setXDefaultWorkspace: ipc.setXDefaultWorkspace,
       },
       openExternal: ipc.openExternal,
     };
@@ -346,6 +350,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         lastError: null,
         available: true,
         capabilityPending: false,
+        defaultWorkspace: null,
         binding: {
           provider: 'x',
           state: 'pending',
@@ -393,6 +398,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
         lastError: null,
         available: true,
         capabilityPending: false,
+        defaultWorkspace: null,
         binding: {
           provider: 'x',
           state: 'confirmed',
@@ -842,5 +848,44 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     });
 
     expect(ipc.revokeTeam).not.toHaveBeenCalled();
+  });
+
+  it('默认工作目录控件只出现在 X 卡, 且展示当前生效的目录名', async () => {
+    // X 一次交互只有一条公开推文, 没有目录选择面板的位置 —— 不预设就只能永远
+    // 落在「对话」上、碰不到本地仓库, 所以这个入口是 X 的唯一目录来源。
+    // 注: 下拉展开后的写入路径没在这里覆盖(Radix 菜单在 jsdom 下不展开, 本仓
+    // 同款 team chip 也没测); 写入语义由 store 层的默认目录用例保证。
+    const xView = {
+      enabled: true,
+      url: 'wss://x-hook.example.test',
+      status: 'connected' as const,
+      lastError: null,
+      available: true,
+      capabilityPending: false,
+      defaultWorkspace: 'cindy',
+      binding: null,
+    };
+    const hook: SlackHookView = {
+      ...BASE_HOOK,
+      workspaces: { cindy: '/Users/dash/Code/cindy' },
+      x: xView,
+      telegram: { ...xView, url: 'wss://tg-hook.example.test', defaultWorkspace: null },
+    };
+    ipc.get.mockResolvedValue({ hook });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    expect(
+      await screen.findByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+    ).toBeTruthy();
+
+    // Telegram 能在会话里当场选目录, 不该出现这个预设控件。
+    cleanup();
+    ipc.get.mockResolvedValue({ hook });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(
+      screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+    ).toBeNull();
   });
 });
