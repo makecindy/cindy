@@ -74,6 +74,7 @@ test('falls back to PATH when npm_execpath is missing or stale', () => {
       command: 'C:/Windows/System32/cmd.exe',
       args: ['/d', '/s', '/c', 'pnpm install'],
       shell: false,
+      windowsVerbatimArguments: true,
       displayCommand: 'pnpm install',
     },
   );

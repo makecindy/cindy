@@ -188,6 +188,7 @@ async function runSample({ workers, iteration, top }) {
     const result = await runCommand(invocation.command, invocation.args, {
       cwd,
       shell: invocation.shell,
+      windowsVerbatimArguments: invocation.windowsVerbatimArguments,
       stdout: null,
       stderr: null,
     });

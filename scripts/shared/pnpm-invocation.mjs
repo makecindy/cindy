@@ -10,15 +10,15 @@ import path from "node:path";
  * pnpm 根本没启动，调用方看到的却是命令的失败输出，极易误判成业务错误。
  */
 const JS_ENTRY_EXTENSIONS = new Set([".js", ".cjs", ".mjs"]);
-// Windows 上只有这两类扩展能被 spawn 直接拉起；.cmd／.bat 之类的命令包装必须过 shell，
-// 而 shell:true 无法安全传递带空格的路径，所以退回 PATH 解析（与无 npm_execpath 时同路）。
+// Windows 上只有这两类扩展能被 spawn 直接拉起；.cmd／.bat 这类命令包装
+// 通过 cmd.exe 解析 PATH/PATHEXT，避免 shell:true 拼接参数数组。
 const WINDOWS_DIRECT_EXEC_EXTENSIONS = new Set([".exe", ".com"]);
 
 /**
  * @param {string[]} args 传给 pnpm 的参数
  * @param {{ npmExecPath?: string, npm_execpath?: string, execPath?: string, platform?: NodeJS.Platform | string, comSpec?: string }} options
  * 允许注入 npmExecPath／execPath／platform 覆写，便于测试；生产路径默认从 Node runtime 取 platform。
- * @returns {{ command: string, args: string[], shell: boolean }}
+ * @returns {{ command: string, args: string[], shell: boolean, windowsVerbatimArguments?: boolean }}
  */
 export function resolvePnpmInvocation(args, options = {}) {
   const hasNpmExecPathOption =
@@ -46,13 +46,14 @@ function resolveWindowsPnpmThroughCmd(args, comSpec = process.env.ComSpec) {
     command: comSpec || "cmd.exe",
     args: ["/d", "/s", "/c", ["pnpm", ...args].map(quoteWindowsCmdArg).join(" ")],
     shell: false,
+    windowsVerbatimArguments: true,
   };
 }
 
 function quoteWindowsCmdArg(arg) {
   const value = String(arg);
   if (value.length === 0) return '""';
-  const escaped = value.replace(/"/g, '\\"').replace(/%/g, "%%");
+  const escaped = value.replace(/"/g, '""').replace(/%/g, "%%");
   return /[\s"&|<>()^%]/.test(value) ? `"${escaped}"` : escaped;
 }
 

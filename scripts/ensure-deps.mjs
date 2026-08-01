@@ -300,6 +300,7 @@ function runInstall(args = ['install']) {
     stdio: 'inherit',
     env: createElectronInstallEnv(),
     shell: invocation.shell,
+    windowsVerbatimArguments: invocation.windowsVerbatimArguments,
   });
   if (result.error || result.status !== 0) {
     if (result.error) err(result.error.message);

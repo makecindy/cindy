@@ -557,6 +557,7 @@ export function runCommand(command, args, options = {}) {
 		const child = spawn(command, args, {
 			cwd: options.cwd,
 			shell: options.shell,
+			windowsVerbatimArguments: options.windowsVerbatimArguments,
 			windowsHide: true,
 		});
 		const output = createBoundedOutputBuffer(options.maxOutputChars);
@@ -797,6 +798,7 @@ export async function runPlannedTests({
 					{
 						cwd,
 						shell: invocation.shell,
+						windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 						stdout: reporter ? null : undefined,
 						stderr: reporter ? null : undefined,
 					},
@@ -840,6 +842,7 @@ export async function runPlannedTests({
 				{
 					cwd,
 					shell: invocation.shell,
+					windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 					stdout: reporter ? null : undefined,
 					stderr: reporter ? null : undefined,
 				},

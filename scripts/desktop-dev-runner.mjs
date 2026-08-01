@@ -34,6 +34,7 @@ const child = spawn(command, args, {
   stdio: 'inherit',
   windowsHide: false,
   shell: invocation.shell,
+  windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
 
 child.once('error', (error) => {
