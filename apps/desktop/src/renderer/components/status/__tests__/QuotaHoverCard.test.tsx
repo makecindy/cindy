@@ -380,4 +380,30 @@ describe('QuotaHoverCard', () => {
     expect(title.classList.contains('text-[var(--quota-bar-crit)]')).toBe(true);
     expect(screen.getByRole('progressbar').getAttribute('data-severity')).toBe('crit');
   });
+
+  it('keeps an over-limit off-current-model scoped weekly window visible and critical', () => {
+    // 非当前模型的分模型周限爆量时,卡片必须可见地告警(不依赖 rateLimitStatus)——补 #1300 review advisory。
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          fiveHour: { utilization: 10 },
+          sevenDay: { utilization: 20 },
+          scoped: [
+            {
+              modelDisplayName: 'Opus',
+              utilization: 93,
+              resetsAt: epochSeconds(2026, 7, 8, 10, 0),
+            },
+          ],
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    const opusTitle = screen.getByText('Opus 周限');
+    expect(opusTitle.getAttribute('data-severity')).toBe('crit');
+    expect(opusTitle.classList.contains('text-[var(--quota-bar-crit)]')).toBe(true);
+    expect(screen.getByText('5 小时').getAttribute('data-severity')).toBe('normal');
+    expect(screen.getByText('周限').getAttribute('data-severity')).toBe('normal');
+  });
 });
