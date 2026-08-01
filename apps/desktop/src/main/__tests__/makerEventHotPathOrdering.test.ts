@@ -252,11 +252,22 @@ describe('maker:event hot path ordering', () => {
       'handleAgentIslandSessionStopped(sess);',
       'await sess.abort();',
     );
-    expect(directAbortSource).toContain("reconcileSessionTurnIdle(sessionId, 'direct-abort');");
+    expect(directAbortSource).toContain(
+      'const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);',
+    );
+    expectOrder(
+      directAbortSource,
+      'const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);',
+      'await sess.abort();',
+    );
+    expect(directAbortSource).toContain(
+      "reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');",
+    );
+    expect(directAbortSource).not.toContain("reconcileSessionTurnIdle(sessionId, 'direct-abort');");
     expect(directAbortSource).not.toContain('if (!sess.isTurnRunning())');
     expectOrder(
       directAbortSource,
-      "reconcileSessionTurnIdle(sessionId, 'direct-abort');",
+      "reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');",
       "cleanupPendingInteractionsForSession(sessionId, 'session_aborted');",
     );
     expect(hookAbortStart).toBeGreaterThanOrEqual(0);
@@ -300,6 +311,24 @@ describe('maker:event hot path ordering', () => {
     expect(reconcileSource).toContain('if (!liveSessionIdle) return false;');
     expect(reconcileSource).not.toContain('if (!trackerStale && !hadZombieInteraction) return false;');
     expect(reconcileSource).toContain('confirmed live session idle during turn-boundary reconciliation');
+  });
+
+  it('keeps direct abort reconciliation fail-closed across owner replacement and new turns', () => {
+    const helperStart = source.indexOf('const readDirectAbortTurnId =');
+    const helperEnd = source.indexOf('\n\n  const inputCoordinator:', helperStart);
+    const helperSource = source.slice(helperStart, helperEnd);
+    const wireSessionSource = extractWireSessionSource();
+    const closedBlock = wireSessionSource.slice(wireSessionSource.indexOf("if (status === 'closed') {"));
+
+    expect(source).toContain('const sessionTurnBoundaryGenerationById = new Map<string, number>();');
+    expect(source).toContain('const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();');
+    expect(helperSource).toContain('wiredSessionsById.get(sessionId)?.session !== boundary.session');
+    expect(helperSource).toContain('currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation');
+    expect(helperSource).toContain('direct-abort-retry');
+    expect(helperSource).toContain('cancelDirectAbortReconciliation(sessionId, boundary);');
+    expect(wireSessionSource).toContain('if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);');
+    expect(closedBlock).toContain('cancelDirectAbortReconciliation(session.id);');
+    expect(closedBlock).toContain('sessionTurnBoundaryGenerationById.delete(session.id);');
   });
 
   it('keeps Codex subscription value out of real session cost totals', () => {

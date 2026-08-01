@@ -2992,7 +2992,12 @@ export class AgentInputCoordinator {
     // boundary token while the live turn is still running so a delayed idle
     // reconciliation can clear stale tracker state without touching a newer
     // turn. Codex keeps queueAbortPending until idle is authoritative.
-    const shouldRetry = agentKind !== null && (current.queueAbortPending || liveTurnRunning);
+    //
+    // During an owner-boundary replacement the agent kind can temporarily be
+    // unknown. That is not proof that the boundary is gone: keep retrying while
+    // the queue lock or live turn says work may still exist, but remain
+    // fail-closed until a later reconciliation proves the Session is idle.
+    const shouldRetry = current.queueAbortPending || liveTurnRunning;
     if (agentKind === 'claude-code' && (current.queueAbortPending || current.activeTurn !== null)) {
       this.releaseAbortLockAndDrain(sessionId, 'abort-promise', {
         clearActiveTurn: true,

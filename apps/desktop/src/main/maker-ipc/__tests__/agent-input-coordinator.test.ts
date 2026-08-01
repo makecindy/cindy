@@ -3642,25 +3642,43 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
   });
 
   it('retains an abort lock when owner switching hides the agent kind and live idle cannot be confirmed', async () => {
-    const h = createHarness();
-    const sid = 'stop-owner-boundary-agent-unknown';
-    const first = makeItem('q-1', 'first');
-    const second = makeItem('q-2', 'second');
-    h.setAgentKind(null);
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'stop-owner-boundary-agent-unknown';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'second');
+      h.setAgentKind(null);
+      h.reconcileTurnIdle
+        .mockReturnValueOnce(false)
+        .mockImplementationOnce(() => true);
 
-    h.coordinator.enqueue(sid, first);
-    await flush();
-    h.coordinator.enqueue(sid, second);
-    await flush();
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      h.coordinator.enqueue(sid, second);
+      await flush();
 
-    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
-    h.coordinator.resume(sid);
-    h.setRunning(false);
-    await flush();
+      h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+      h.coordinator.resume(sid);
+      h.setRunning(false);
+      await flush();
 
-    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-    expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+
+      // The owner is available again before the delayed retry. The retry must
+      // keep the lock until the authoritative reconciliation proves idle.
+      h.setAgentKind('codex');
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ignores an old abort completion after clearSession starts a new turn', async () => {

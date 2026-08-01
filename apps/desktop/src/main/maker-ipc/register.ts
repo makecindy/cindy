@@ -1727,6 +1727,45 @@ interface WiredSessionRegistration {
 const wiredSessionsById = new Map<string, WiredSessionRegistration>();
 
 /**
+ * Monotonic logical-turn generation used by direct abort reconciliation.
+ * Session ids survive owner-boundary replacement, so the Session object alone
+ * is not enough to reject a late retry for a newer turn on the same instance.
+ */
+const sessionTurnBoundaryGenerationById = new Map<string, number>();
+
+interface DirectAbortReconcileBoundary {
+  session: WiredSession;
+  generation: number;
+  turnId: string | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** One direct ABORT_SESSION retry chain per session; a newer abort supersedes the old one. */
+const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();
+const DIRECT_ABORT_RECONCILE_RETRY_DELAY_MS = 250;
+
+function currentSessionTurnBoundaryGeneration(sessionId: string): number {
+  return sessionTurnBoundaryGenerationById.get(sessionId) ?? 0;
+}
+
+function advanceSessionTurnBoundaryGeneration(sessionId: string): number {
+  const next = currentSessionTurnBoundaryGeneration(sessionId) + 1;
+  sessionTurnBoundaryGenerationById.set(sessionId, next);
+  return next;
+}
+
+function cancelDirectAbortReconciliation(
+  sessionId: string,
+  expected?: DirectAbortReconcileBoundary,
+): void {
+  const boundary = directAbortReconcileBoundaries.get(sessionId);
+  if (!boundary || (expected && boundary !== expected)) return;
+  if (boundary.retryTimer) clearTimeout(boundary.retryTimer);
+  boundary.retryTimer = null;
+  directAbortReconcileBoundaries.delete(sessionId);
+}
+
+/**
  * SDK result 事件的 total_cost_usd 是 session 累计 (不是 per-turn) ——
  * 老 vendor/claude/usageExtractor.ts:72-74 也确认过。要算"这一 turn 花了多少"
  * 就要拿这次累计减上次累计。这里 per-session 记一下上次报上来的累计值。
@@ -2660,9 +2699,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return;
   }
   if (existing) {
+    // A runtime replacement invalidates any delayed direct-abort callback that
+    // still belongs to the old Session instance.
+    cancelDirectAbortReconciliation(session.id);
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
   }
+  advanceSessionTurnBoundaryGeneration(session.id);
   const registration: WiredSessionRegistration = { session, disposers: [] };
   wiredSessionsById.set(session.id, registration);
 
@@ -2767,6 +2810,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
         const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
         sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
+        if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
         // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
         noteClaudeSessionTurnState(session.id, true);
         if (!wasInTurn) {
@@ -3603,6 +3647,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // Wiring teardown is independent of the best-effort product cleanup
         // above. A single disposer or listener error must not leave a closed
         // session reachable from the in-memory routing map.
+        cancelDirectAbortReconciliation(session.id);
         wiredSessionsById.delete(session.id);
         for (const dispose of registration.disposers) {
           try {
@@ -3625,6 +3670,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // This must run even when an owner-boundary-sensitive cleanup above
         // rejects. A closed Session cannot keep the desktop turn boundary busy.
         sessionTurnActivityTracker.deleteSession(session.id);
+        sessionTurnBoundaryGenerationById.delete(session.id);
         markSessionTurnEnded(session.id);
       }
     }
@@ -7456,6 +7502,98 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     return true;
   };
 
+  const readDirectAbortTurnId = (session: WiredSession, sessionId: string): string | null => {
+    try {
+      return session.getCurrentTurnId?.() ?? null;
+    } catch (err) {
+      log.warn('direct abort turn-id lookup failed', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
+
+  const isDirectAbortBoundaryCurrent = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+  ): boolean => {
+    if (directAbortReconcileBoundaries.get(sessionId) !== boundary) return false;
+    if (wiredSessionsById.get(sessionId)?.session !== boundary.session) return false;
+    if (currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation) return false;
+
+    // Codex exposes a provider turn id. Compare only when both sides have an
+    // id: after an abort the old id legitimately becomes null, while a new
+    // turn with a different non-null id must invalidate this retry chain.
+    const currentTurnId = readDirectAbortTurnId(boundary.session, sessionId);
+    return boundary.turnId === null || currentTurnId === null || boundary.turnId === currentTurnId;
+  };
+
+  const scheduleDirectAbortReconciliation = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+  ): void => {
+    if (boundary.retryTimer) return;
+    boundary.retryTimer = setTimeout(() => {
+      boundary.retryTimer = null;
+      if (!isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+        cancelDirectAbortReconciliation(sessionId, boundary);
+        return;
+      }
+      reconcileDirectAbortBoundary(sessionId, boundary, 'direct-abort-retry');
+    }, DIRECT_ABORT_RECONCILE_RETRY_DELAY_MS);
+  };
+
+  const reconcileDirectAbortBoundary = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+    source: string,
+  ): void => {
+    if (!isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+      return;
+    }
+
+    let reconciledIdle = false;
+    try {
+      reconciledIdle = reconcileSessionTurnIdle(sessionId, source);
+    } catch (err) {
+      log.warn('direct abort idle reconciliation failed', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (reconciledIdle) {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+      return;
+    }
+
+    // Keep the boundary fail-closed until the same Session instance and turn
+    // generation prove idle. Owner replacement, a new turn, or close cancels
+    // this chain through the identity/generation guards above.
+    if (isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+      scheduleDirectAbortReconciliation(sessionId, boundary);
+    } else {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+    }
+  };
+
+  const beginDirectAbortReconciliation = (
+    sessionId: string,
+    session: WiredSession,
+  ): DirectAbortReconcileBoundary => {
+    cancelDirectAbortReconciliation(sessionId);
+    const boundary: DirectAbortReconcileBoundary = {
+      session,
+      generation: currentSessionTurnBoundaryGeneration(sessionId),
+      turnId: readDirectAbortTurnId(session, sessionId),
+      retryTimer: null,
+    };
+    directAbortReconcileBoundaries.set(sessionId, boundary);
+    return boundary;
+  };
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -8363,6 +8501,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 监听),**再** abort。这样 abort 产生的终止事件到来时目标已暂停、监听已摘,不会被误判成
     // 续跑(原本依赖 error 文案正则判 paused/blocked,不可靠)。null-safe;无 active goal 时 no-op。
     await goalStopObserver?.(sessionId);
+    const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);
     try {
       await sess.abort();
     } finally {
@@ -8370,7 +8509,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // reconciliation owns its own safe live-state lookup and must run even
       // when the abort promise rejects or the Session reports a late idle.
       try {
-        reconcileSessionTurnIdle(sessionId, 'direct-abort');
+        reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');
       } finally {
         cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
       }
