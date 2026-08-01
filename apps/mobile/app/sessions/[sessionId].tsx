@@ -1940,11 +1940,14 @@ export default function SessionScreen() {
     const targetSession = item.session as RemoteSession;
     if (targetSession.id === sessionId) return;
     // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
-    // 回退物理 id / store 索引;找不到设备则保持原会话不跳(抽屉里无处放错误条)。
+    // 回退物理 id / store 索引;找不到设备时用 Alert 反馈(文案与首页同键),不静默吞掉。
     const targetDeviceId = targetSession.canonicalDeviceId
       ?? targetSession.deviceLinkDeviceId
       ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
-    if (!targetDeviceId) return;
+    if (!targetDeviceId) {
+      Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
+      return;
+    }
     // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
     router.replace({
       pathname: '/sessions/[sessionId]',
@@ -1954,7 +1957,7 @@ export default function SessionScreen() {
         sessionId: targetSession.id,
       },
     });
-  }, [router, sessionId]);
+  }, [router, sessionId, t]);
   const handleDrawerNewSession = useCallback(() => {
     setSessionListDrawerOpen(false);
     router.push({ pathname: '/sessions/new', params: { deviceId, deviceName } });
@@ -7539,7 +7542,12 @@ export default function SessionScreen() {
   return (
     <View style={styles.safeArea} testID="session.screen">
       <KeyboardAvoidingView
+        // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
+        // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
+        // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
+        accessibilityElementsHidden={sessionListDrawerOpen}
         behavior={nativeShellLayout.keyboardAvoidingBehavior}
+        importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >

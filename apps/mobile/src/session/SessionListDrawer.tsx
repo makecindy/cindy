@@ -83,7 +83,9 @@ export function SessionListDrawer({
   const insets = useSafeAreaInsets();
   const reduceMotion = useReduceMotionEnabled();
   // 抽屉贴左缘,横屏刘海侧的 left inset 并进面板总宽,内容用 padding 让出。
-  const panelWidth = width + insets.left;
+  // 下限 1 是除零保险:当前调用点 enabled=false 时本组件整个不渲染(width 恒 >=300),
+  // 但 progress/scrim 多处除以 panelWidth,不把不变量寄托在调用方身上。
+  const panelWidth = Math.max(1, width + insets.left);
 
   const [mounted, setMounted] = useState(open);
   const mountedRef = useRef(mounted);

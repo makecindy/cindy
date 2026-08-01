@@ -36,6 +36,8 @@ describe('mobile session list drawer', () => {
   it('closes on Android hardware back and folds drag offset into the timing animation', () => {
     const text = source();
     expect(text).toContain("BackHandler.addEventListener('hardwareBackPress', () => {");
+    // 多处除以 panelWidth,宽度必须有正下限(除零保险,不寄托在调用方身上)。
+    expect(text).toContain('Math.max(1, width + insets.left)');
     // 手势位移并回 progress:关闭动画从当前视觉位置继续,不跳帧。
     expect(text).toContain('progress.value + dragX.value / panelWidth');
     // 拖拽关闭只认横向意图,纵向让给列表滚动。

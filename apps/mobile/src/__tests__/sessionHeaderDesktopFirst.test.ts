@@ -90,6 +90,10 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
     // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
     expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOpen(true);');
+    // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
+    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack)。
+    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
+    expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {
