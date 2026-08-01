@@ -3125,6 +3125,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
+    state.continuationTurnClientId === null &&
     !state.pendingTaskWake &&
     stoppedTasks === state.taskUpdates
   ) {
