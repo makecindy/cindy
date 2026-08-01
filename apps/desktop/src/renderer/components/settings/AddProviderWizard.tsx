@@ -491,9 +491,11 @@ export function AddProviderWizard({
   }, [loggingIn, cancelAuthorize, onClose]);
 
   // Esc 关闭(DESIGN.md §4:弹窗关闭 = 取消按钮 / Esc / 点遮罩;本弹窗未用 Radix,需自行监听)。
+  // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
+  // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
   useEffect(() => {
     const onKeyDown = (e: KeyboardEvent) => {
-      if (e.key === 'Escape') handleClose();
+      if (e.key === 'Escape' && !e.isComposing && e.keyCode !== 229) handleClose();
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);

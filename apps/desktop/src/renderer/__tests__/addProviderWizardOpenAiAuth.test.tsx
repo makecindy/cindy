@@ -368,6 +368,24 @@ describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩
     expect(onClose).toHaveBeenCalledTimes(1);
   });
 
+  it('输入法组合期间按 Esc 不关闭向导(取消候选词,不是关闭命令)', () => {
+    const onClose = vi.fn();
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
   it('点击遮罩关闭向导;点击弹窗内部不关闭', () => {
     const onClose = vi.fn();
     const { container } = render(
