@@ -498,6 +498,55 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
+  it('restarts the discovery delay after a row closes and reopens the picker', async () => {
+    vi.useFakeTimers();
+    requestProviderModelsAutoRefresh
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockImplementationOnce(() => new Promise(() => undefined));
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      expect(requestProviderModelsAutoRefresh).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(299);
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps row-count caps finite and within the shared 300px ceiling', () => {
     expect(modelListMaxHeightForRows()).toBeUndefined();
     expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();
@@ -1819,6 +1868,56 @@ describe('ModelSelector trigger variants', () => {
       'true',
     );
     expect(screen.getByRole('option', { name: /Opus 4\.8/ })).toBeTruthy();
+  });
+
+  it('locks an open remote picker while its configuration selection is in flight', async () => {
+    const onProviderChange = vi.fn();
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(),
+      setFast: vi.fn(),
+    };
+    function Harness() {
+      const [switching, setSwitching] = React.useState(false);
+      return React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        onProviderChange: (providerId: string | null, modelId?: string) => {
+          onProviderChange(providerId, modelId);
+          setSwitching(true);
+        },
+        modelMemory,
+        switching,
+      });
+    }
+
+    render(React.createElement(Harness));
+    await clickTrigger();
+
+    fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+    fireEvent.click(
+      within(screen.getByRole('group', { name: /Sonnet 4\.6/ })).getByRole('option', {
+        name: 'high',
+      }),
+    );
+
+    expect(onProviderChange).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('button', { name: /Current: Opus 4\.8/ }).hasAttribute('disabled'),
+    ).toBe(true);
+    const opusRow = screen.getByRole('option', { name: /Opus 4\.8/ });
+    expect(opusRow.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByRole('group', { name: /Sonnet 4\.6/ })).toBeNull();
+
+    fireEvent.click(opusRow);
+    fireEvent.pointerEnter(opusRow);
+    expect(onProviderChange).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
   });
 
   it('keeps target-agent provider rows and effort memory configurable while browsing Codex', async () => {

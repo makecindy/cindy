@@ -504,6 +504,8 @@ interface ModelSelectorContentProps {
    * 成功的结果),列表结构不动、不产生跳变,只是明说「还在找」。
    */
   discoveringModels?: boolean;
+  /** 外层异步切换进行中时锁住已打开面板，避免重复提交互相覆盖。 */
+  interactionDisabled?: boolean;
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex'): AgentKind | null {
@@ -543,6 +545,7 @@ function ModelSelectorContentView({
   fluidWidth = false,
   agentSwitch,
   discoveringModels = false,
+  interactionDisabled = false,
   pricing,
 }: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
@@ -556,7 +559,7 @@ function ModelSelectorContentView({
   );
   const browseSwitchPendingRef = useRef(false);
   const handleBrowseVendorChange = async (next: 'cc' | 'codex') => {
-    if (next === browseVendor || browseSwitchPendingRef.current) return;
+    if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
     // currentVendor 进入另一 Agent 浏览态才调用上层风险确认。确认前绝不翻分段。
     if (agentSwitch && next !== agentSwitch.currentVendor && agentSwitch.confirmBrowseSwitch) {
@@ -675,6 +678,15 @@ function ModelSelectorContentView({
     },
     [],
   );
+
+  useEffect(() => {
+    if (!interactionDisabled) return;
+    if (closeOptionsTimerRef.current !== null) {
+      clearTimeout(closeOptionsTimerRef.current);
+      closeOptionsTimerRef.current = null;
+    }
+    setEditing(null);
+  }, [interactionDisabled]);
 
   // 模型清单来源:本机会话从 live providers 派生(builtin + 自定义合集);device-link 远程会话
   // 必须列**被控端**模型(cc/codex.capabilities.availableModels,deviceId 作用域),不读控制端本地
@@ -1029,6 +1041,7 @@ function ModelSelectorContentView({
     id: string,
     dismiss = true,
   ) => {
+    if (interactionDisabled) return;
     // 浏览目标引擎态:选中模型 = 确认切换引擎(两步式的第二步),走切换事务。
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
@@ -1079,6 +1092,7 @@ function ModelSelectorContentView({
   // 当前行可编辑配置的边界:选中行写实时状态;非选中供应商行写模型级全局预设。
   // flat 非选中行没有来源 capability / 写穿上下文,只展示模型信息,避免出现点击后无效果的配置项。
   const canConfigure =
+    !interactionDisabled &&
     configurationEnabled &&
     !!editingModel &&
     (editingIsActive || (!!modelMemory && !!currentAgentKind && !!editingProviderId));
@@ -1099,7 +1113,7 @@ function ModelSelectorContentView({
     : false;
 
   const handleEditEffort = (e: Effort) => {
-    if (!editing || !editingModel) return;
+    if (interactionDisabled || !editing || !editingModel) return;
     if (editingIsActive) {
       onEffortChange(e);
     } else {
@@ -1114,7 +1128,7 @@ function ModelSelectorContentView({
     }
   };
   const handleEditFast = (enabled: boolean) => {
-    if (!editing || !editingModel) return;
+    if (interactionDisabled || !editing || !editingModel) return;
     if (editingIsActive) {
       // 当前选中模型的 Fast 是会话实时状态,必须等 onFastModeChange 持久化成功后再由
       // ChatInput 同步草稿默认;这里不能预写 modelMemory,否则 device-link 远程失败会污染被控端草稿。
@@ -1324,7 +1338,7 @@ function ModelSelectorContentView({
     const isSelected = isSelectedRow(providerId, model.id);
     const isBudgetModel = model.id.startsWith('codex/');
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
-    const disabled = modelDisabledOf(model.id);
+    const disabled = interactionDisabled || modelDisabledOf(model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
     const rowEffort = rowEffortOf(providerId, model);
     const rowFastOn = fastOnOf(providerId, model);
@@ -1531,6 +1545,7 @@ function ModelSelectorContentView({
         {onNavigateToProviders && (
           <button
             type="button"
+            disabled={interactionDisabled}
             onClick={onNavigateToProviders}
             className={cn(
               'flex h-[34px] w-full items-center justify-center rounded-[8px]',
@@ -1585,6 +1600,7 @@ function ModelSelectorContentView({
         <>
           <button
             type="button"
+            disabled={interactionDisabled}
             onClick={() => {
               followSession.onFollow();
               onDismiss?.();
@@ -1612,6 +1628,7 @@ function ModelSelectorContentView({
         <Search size={16} className="shrink-0 text-[var(--text-tertiary)]" />
         <input
           type="text"
+          disabled={interactionDisabled}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('newChat.modelSelector.search.placeholderAll')}
@@ -1675,6 +1692,7 @@ function ModelSelectorContentView({
           <div className="mx-1 h-px bg-[var(--model-dropdown-border)]" />
           <button
             type="button"
+            disabled={interactionDisabled}
             onClick={onNavigateToProviders}
             className={cn(
               'flex w-full items-center gap-1.5 rounded-[8px] px-3 py-2',
@@ -1737,29 +1755,43 @@ export function ModelSelector({
   const discovery = useModelDiscoveryPending();
   const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
   const showDiscoveryPendingRef = useRef(false);
-  useEffect(() => {
-    if (!discovery.pending) {
-      // 短任务从未越过门槛时不发一次无意义的 false→false 更新；除了少一次 render，
-      // 也保证打开面板只为真正可见的状态变化补量。
-      if (showDiscoveryPendingRef.current) {
-        showDiscoveryPendingRef.current = false;
-        setShowDiscoveryPending(false);
-      }
-      return;
+  const discoveryIndicatorTimerRef = useRef<number | null>(null);
+  const resetDiscoveryPresentation = useCallback((): void => {
+    if (discoveryIndicatorTimerRef.current !== null) {
+      window.clearTimeout(discoveryIndicatorTimerRef.current);
+      discoveryIndicatorTimerRef.current = null;
     }
-    const timer = window.setTimeout(
-      () => {
-        showDiscoveryPendingRef.current = true;
-        setShowDiscoveryPending(true);
-      },
-      MODEL_DISCOVERY_INDICATOR_DELAY_MS,
-    );
-    return () => window.clearTimeout(timer);
-  }, [discovery.pending]);
-  const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
-    openRef.current = next;
-    setOpen(next);
+    if (!showDiscoveryPendingRef.current) return;
+    showDiscoveryPendingRef.current = false;
+    setShowDiscoveryPending(false);
   }, []);
+  useEffect(() => {
+    resetDiscoveryPresentation();
+    if (!discovery.pending) return;
+    const timer = window.setTimeout(() => {
+      discoveryIndicatorTimerRef.current = null;
+      showDiscoveryPendingRef.current = true;
+      setShowDiscoveryPending(true);
+    }, MODEL_DISCOVERY_INDICATOR_DELAY_MS);
+    discoveryIndicatorTimerRef.current = timer;
+    return () => {
+      window.clearTimeout(timer);
+      if (discoveryIndicatorTimerRef.current === timer) {
+        discoveryIndicatorTimerRef.current = null;
+      }
+    };
+  }, [discovery.pending, resetDiscoveryPresentation]);
+  const setOpenWithoutAutoRefresh = useCallback(
+    (next: boolean): void => {
+      openRef.current = next;
+      if (!next) {
+        discovery.reset();
+        resetDiscoveryPresentation();
+      }
+      setOpen(next);
+    },
+    [discovery, resetDiscoveryPresentation],
+  );
   const handleOpenChange = useCallback(
     (next: boolean): void => {
       const nextOpen = disabled ? false : next;
@@ -1770,10 +1802,13 @@ export function ModelSelector({
           window.electronAPI.maker.requestProviderModelsAutoRefresh('model-selector-open'),
         );
       }
-      if (!nextOpen) discovery.reset();
+      if (!nextOpen) {
+        discovery.reset();
+        resetDiscoveryPresentation();
+      }
       setOpen(nextOpen);
     },
-    [deviceId, disabled, discovery],
+    [deviceId, disabled, discovery, resetDiscoveryPresentation],
   );
 
   // AlertDialog 打开时会被 Popover 视作外部交互并请求关闭。Agent 分段确认期间
@@ -2239,7 +2274,8 @@ export function ModelSelector({
       pointerRevealRequiresIntent={morphEnabled}
       fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
-      discoveringModels={showDiscoveryPending}
+      discoveringModels={showDiscoveryPending && discovery.pending}
+      interactionDisabled={switching || disabled}
       pricing={pricing}
       followSession={
         fallbackOption
