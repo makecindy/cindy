@@ -122,52 +122,6 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('projects pending Schedule recovery into scheduler session busy state', () => {
-    expect(source.match(/isSchedulerInterruptedTurnRecoverySessionReserved\(sessionId\)/g)).toHaveLength(2);
-    expect(source).toMatch(
-      /isTurnRunning: \(sessionId\) => \{[\s\S]*?isSchedulerInterruptedTurnRecoverySessionReserved\(sessionId\)[\s\S]*?isSessionTurnDispatchBoundaryBusy/,
-    );
-  });
-
-  it('keeps scheduler origin main-owned at the explicit user enqueue boundary', () => {
-    expect(source).toContain('const requireExplicitUserQueuedMessage = (value: unknown)');
-    expect(source).toContain('delete normalized.origin;');
-    expect(source).toContain('requireExplicitUserQueuedMessage(item),');
-  });
-
-  it('stashes only the redacted projection of suppressed turn errors', () => {
-    const wireSessionSource = extractWireSessionSource();
-    const blockStart = wireSessionSource.indexOf('if (autoResumeSuppressesPersist) {');
-    const blockEnd = wireSessionSource.indexOf(
-      '// deferred 路径保存 turn 开始时刻',
-      blockStart,
-    );
-    const suppressedPersistBlock = wireSessionSource.slice(blockStart, blockEnd);
-
-    expect(blockStart).toBeGreaterThanOrEqual(0);
-    expect(blockEnd).toBeGreaterThan(blockStart);
-    expect(wireSessionSource.indexOf('let broadcastEvent = redactEventForRenderer(attributedEvent);'))
-      .toBeLessThan(blockStart);
-    expect(suppressedPersistBlock.match(/stashSuppressedError\(/g)).toHaveLength(2);
-    expect(suppressedPersistBlock).toContain('broadcastEvent.data');
-    expect(suppressedPersistBlock).not.toContain('attributedEvent.data');
-  });
-
-  it('releases a claimed queued Schedule turn before broadcasting its retry event', () => {
-    const wireSessionSource = extractWireSessionSource();
-
-    expectOrder(
-      wireSessionSource,
-      'schedulerInterruptedTurnRecoveryClaim = claimSchedulerInterruptedTurnRecovery(',
-      'agentInputCoordinatorHolder?.settleClaimedSchedulerTurn(',
-    );
-    expectOrder(
-      wireSessionSource,
-      'agentInputCoordinatorHolder?.settleClaimedSchedulerTurn(',
-      'broadcastToAllWindows(MAKER_PUSH.EVENT',
-    );
-  });
-
   it('fires git snapshots only from post-broadcast done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');
@@ -236,36 +190,6 @@ describe('maker:event hot path ordering', () => {
       closedBlock,
       'agentInputCoordinatorHolder?.onSessionClosed(session.id);',
       'gitSnapshotCoordinator?.onSessionClosed(session.id);',
-    );
-  });
-
-  it('uses one auto-resume boundary family for stop, clear, abort, close, and user intervention', () => {
-    const wireSessionSource = extractWireSessionSource();
-    const clearSessionHandler = source.match(
-      /ipcMain\.handle\(MAKER_INVOKE\.INPUT_CLEAR_SESSION,[\s\S]*?\n {2}\}\);/,
-    )?.[0];
-    const abortSessionHandler = source.match(
-      /ipcMain\.handle\(MAKER_INVOKE\.ABORT_SESSION,[\s\S]*?\n {2}\}\);/,
-    )?.[0];
-    const userEnqueueBoundary = source.match(
-      /onUserEnqueue: \(sessionId\) => \{[\s\S]*?\n {4}\},/,
-    )?.[0];
-
-    expect(source).toContain('function noteAutoResumeSessionReset(');
-    expect(source).toContain('noteSessionReset: noteAutoResumeSessionReset,');
-    expect(clearSessionHandler).toContain('noteAutoResumeSessionReset(sid);');
-    expect(abortSessionHandler).toContain('noteAutoResumeSessionReset(sessionId);');
-    expect(wireSessionSource).toContain("noteAutoResumeSessionReset(session.id, 'session-closed');");
-    expect(source).toContain('resetSchedulerInterruptedTurnRecovery(sessionId, reason);');
-    expect(source).toContain('autoResumeBookkeeping.teardown(sessionId);');
-    expect(source).toContain('function noteAutoResumeUserIntervention(');
-    expect(source).toContain('supersedeSchedulerInterruptedTurnRecovery(sessionId);');
-    expect(source).toContain('autoResumeBookkeeping.teardownOwner(sessionId);');
-    expect(userEnqueueBoundary).toContain('noteAutoResumeUserIntervention(sessionId);');
-    expectOrder(
-      userEnqueueBoundary ?? '',
-      'noteAutoResumeUserIntervention(sessionId);',
-      'publishUiSessionIntervention(sessionId);',
     );
   });
 

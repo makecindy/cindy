@@ -123,31 +123,6 @@ describe('待确认的重连记录:必有一次结算', () => {
     expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'c-1', outcome: 'failed' }]);
     expect(h.book.isPendingOutcomeClientId('s2', 'c-2')).toBe(true);
   });
-
-  it('同一会话的 Schedule run 按 owner 独立结算与丢弃错误', () => {
-    const h = createHarness();
-    h.book.stashSuppressedError('s1', { message: 'run one error' }, 'run-1');
-    h.book.stashSuppressedError('s1', { message: 'run two error' }, 'run-2');
-    h.book.registerPendingOutcome('s1', 'c-1', 'run-1');
-    h.book.registerPendingOutcome('s1', 'c-2', 'run-2');
-
-    h.book.discardSuppressedError('s1', 'run-1');
-    h.book.settleOutcome('s1', 'succeeded', 'run-1');
-    h.book.finalizeSuppressedError(
-      's1',
-      { surfaceBanner: false, abandonTakeover: false },
-      'run-2',
-    );
-
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'run two error' } },
-    ]);
-    expect(h.outcomes).toEqual([
-      { sessionId: 's1', clientId: 'c-1', outcome: 'succeeded' },
-      { sessionId: 's1', clientId: 'c-2', outcome: 'failed' },
-    ]);
-    expect(h.abandons, 'Schedule run 不能清普通聊天的 coordinator 接管态').toEqual([]);
-  });
 });
 
 describe('退避排期:必可撤销、必只认自己那次', () => {
@@ -249,32 +224,6 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
 });
 
 describe('会话终止收尾', () => {
-  it('用户介入只 teardown 普通 owner，保留已 running 的 Schedule outcome', () => {
-    const h = createHarness();
-    h.book.stashSuppressedError('s1', { message: 'ordinary error' });
-    h.book.stashSuppressedError('s1', { message: 'scheduler error' }, 'run-1');
-    h.book.registerPendingOutcome('s1', 'ordinary-client');
-    h.book.registerPendingOutcome('s1', 'scheduler-client', 'run-1');
-
-    h.book.teardownOwner('s1');
-
-    expect(h.persisted).toEqual([
-      { sessionId: 's1', detail: { message: 'ordinary error' } },
-    ]);
-    expect(h.outcomes).toEqual([
-      { sessionId: 's1', clientId: 'ordinary-client', outcome: 'failed' },
-    ]);
-    expect(h.book.isPendingOutcomeClientId('s1', 'scheduler-client', 'run-1')).toBe(true);
-
-    h.book.discardSuppressedError('s1', 'run-1');
-    h.book.settleOutcome('s1', 'succeeded', 'run-1');
-    expect(h.outcomes.at(-1)).toEqual({
-      sessionId: 's1',
-      clientId: 'scheduler-client',
-      outcome: 'succeeded',
-    });
-  });
-
   it('teardown:先补落错误行,再撤排期(含回滚)、清接管态、钉 failed', () => {
     // 顺序重要:先补落 —— 后面就没人管那条详情了,删掉即等于那次中断消失(copilot review)。
     const h = createHarness();

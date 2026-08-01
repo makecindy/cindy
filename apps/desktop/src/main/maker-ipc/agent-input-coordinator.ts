@@ -175,12 +175,13 @@ export interface AgentInputCoordinatorDeps {
    * 则完全走原有的错误呈现。
    *
    * 刻意只在 recovery 真的留下来时回调:没有 recovery 就没有可续跑的目标,
-   * `retryLastError` 会 no-op。scheduler 来源的排除是 setActiveTurnRecovery 内建的,
-   * 本回调因此天然不会对自动化 turn 触发 —— 那类失败由 runner 自己收口。
+   * `retryLastError` 会 no-op。Schedule 输入同样走本入口；item 让 host 只做
+   * run 结果桥接，重试状态仍由本 coordinator 独占。
    */
   onResumableTurnError?: (
     sessionId: string,
     signals: InterruptedTurnErrorSignals,
+    item: AgentInputQueuedMessage,
   ) => AutoResumeInfo | null;
   /**
    * **纯判定**：这条 terminal error 有没有可能被自愈接管（`isInterruptedTurnError`）。
@@ -547,10 +548,8 @@ function isActiveTurnDispatched(active: ActiveTurn): boolean {
 /**
  * 这条消息是自动任务(scheduler)投进来的吗。
  *
- * 用途只有一个:**不给它留 active-turn 重试入口**。scheduler 的 prompt 属于某一轮
- * run —— runner 已经按自己的语义把那一轮 finalize / defer 掉了,而「重试」按钮会把
- * prompt 克隆成一条普通用户消息重跑:没有 FireContext 回调、不计 run 账、通知与
- * 运行历史全部对不上,用户还会莫名看到一条自己没发过的消息在跑。
+ * Scheduler prompt 属于某一轮 run。它可以复用自动续跑，但不能被当作真人介入或
+ * UI Continue；确定性错误也不能留下脱离 FireContext 的人工 Retry。
  *
  * 判据抽成函数是因为它必须覆盖**所有**终态路径:派发失败、turn 终态 error、
  * 派发前会话关闭。前两轮只改了派发失败那一条,漏掉的两条照样造出重试入口
@@ -560,24 +559,8 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
-type EnqueuedInputIntent = 'scheduler-automation' | 'ui-continuation' | 'user-intervention';
-
-/**
- * 入队来源决定谁有权终止当前恢复生命周期。
- *
- * scheduler origin 是 main 侧 runner 写入的可信元数据（IPC 用户入口会剥掉
- * renderer 传来的 origin），优先级高于正文推导出的 Continue 标记：自动任务即使
- * 正文碰巧等于续跑提示，也仍只是等待上一轮恢复收口的 FIFO 工作，不能冒充用户
- * 介入去撤销 owner、清接管态或顶替尚未结算的终态。
- */
-function classifyEnqueuedInputIntent(item: AgentInputQueuedMessage): EnqueuedInputIntent {
-  if (isSchedulerOriginItem(item)) return 'scheduler-automation';
-  if (item.originalSyntheticTrigger === 'continue') return 'ui-continuation';
-  return 'user-intervention';
-}
-
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
-  return classifyEnqueuedInputIntent(item) === 'ui-continuation';
+  return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
 }
 
 function isActiveTurnBeforeVendorDispatch(active: ActiveTurn): boolean {
@@ -932,7 +915,6 @@ export class AgentInputCoordinator {
       return this.getProjection(sessionId);
     }
     this.rememberEnqueuedClientId(state, item.clientId);
-    const intent = classifyEnqueuedInputIntent(item);
     // 真的有一条**新**消息进队了 = 这个会话被别的内容推进(见 deps.onUserEnqueue)。
     // 必须放在幂等去重**之后**: 被去重丢弃的重传(弱网 / 移动端补发)压根没推进任何
     // 东西, 若在它上面作废记账, 一条延迟到达的旧重传就会把之后才装上的、更新的那笔
@@ -943,19 +925,17 @@ export class AgentInputCoordinator {
     // 渠道回流的记账), 而**就是**一次续跑意图 —— 所以在这里发续跑信号并带上 clientId,
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
-    if (intent === 'ui-continuation') {
+    const schedulerOrigin = isSchedulerOriginItem(item);
+    if (isUiContinuationItem(item)) {
       this.deps.onUiRetry?.(sessionId, item.clientId);
-    } else if (intent === 'user-intervention') {
+    } else if (!schedulerOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
     }
-    if (intent !== 'scheduler-automation') {
-      // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示:
-      // 它的语义是"退避窗口内用户没有接手",自动任务排队不改变这一事实。
+    if (!schedulerOrigin) {
+      // 有用户动作入队(用户自己接手,或自愈的续跑指令本身)→ 撤掉「重新连接中」提示。
+      // Scheduler 只是同一串行队列里的自动输入，不代表用户接手，不能取消正在退避的
+      // 自动续跑；它会保持 FIFO，等当前恢复生命周期收口后再派发。
       state.autoResumePending = null;
-      // 还有一种接管**尚未做出决策**的中断(error 早于用户气泡落库完成,见
-      // isAutoResumeDeferred):它的接管发生在本次 enqueue **之后**,清接管态清不到它。
-      // 不就地作废的话,用户已经自己接手了,延后结算却还会再接管一次、再补发一条旧 turn
-      // 的续跑指令插到他前面(greptile P1)。scheduler 自动任务不属于用户接手。
       markPendingTerminalSupersededByUser(state.activeTurn);
     }
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
@@ -971,7 +951,7 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
       });
     }
-    if (intent !== 'scheduler-automation') {
+    if (!schedulerOrigin) {
       this.abandonActiveTurnRecoveryForUserAction(state);
       this.clearErrorUnlessQueueHeadBlocked(state);
     }
@@ -979,7 +959,7 @@ export class AgentInputCoordinator {
     // 已排队的新任务执行；普通 composer / Orca / scheduler 输入仍保持 FIFO。
     // 复用 prepend helper 同时把本项加入 pending compact 的等待集合，避免
     // 已排队的 /compact 抢在续跑前执行，破坏原任务现场。
-    if (intent === 'ui-continuation') {
+    if (isUiContinuationItem(item)) {
       this.prependQueueHeadIfMissing(state, item);
       // 与 move() 对称：插队后原 credential-switch 等待目标不再是队首时，
       // 必须清掉 wait，否则横幅/取消仍绑定旧 clientId，会误删错误排队项。
@@ -1955,35 +1935,6 @@ export class AgentInputCoordinator {
   }
 
   /**
-   * A Schedule runner claimed the current terminal error and will continue the same logical run.
-   * Release the coordinator's accepted queue item synchronously: the recovery bridge/session busy
-   * boundary now owns serialization, while retaining this activeTurn would strand every later
-   * queue item if the hidden continuation failed before reaching vendor dispatch.
-   */
-  settleClaimedSchedulerTurn(sessionId: string, runId: string): boolean {
-    const state = this.getState(sessionId);
-    const active = state.activeTurn;
-    if (
-      active?.item?.origin?.kind !== 'scheduler' ||
-      active.item.origin.runId !== runId
-    ) {
-      return false;
-    }
-    this.clearAbortReconcileRetry(state);
-    this.clearSessionRunningRetry(state);
-    state.queueAbortPending = false;
-    state.abortBoundaryToken = null;
-    state.activeTurn = null;
-    state.error = null;
-    state.stickyError = null;
-    state.recovery = null;
-    state.autoResumePending = null;
-    this.emit(sessionId);
-    this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-turn-claimed-for-auto-resume');
-    return true;
-  }
-
-  /**
    * `signals` 只在 `type='error'` 时有意义：terminal error 的结构化信号（SDK error
    * tag / reason / HTTP 状态码），供 host 判断这次失败是否值得自动续跑。刻意不在
    * coordinator 里做那个判断——它是「这条错误是什么」的领域知识，属于 host 侧的
@@ -2004,10 +1955,15 @@ export class AgentInputCoordinator {
       if (active?.persisted) {
         state.activeTurn = null;
         state.stickyError = null;
-        // scheduler 投进来的 prompt 不留重试入口(判据内建在 setActiveTurnRecovery):
-        // 这一轮 run 已由 runner 按 terminal error 收口,克隆重跑只会造出一条不计账的
-        // 幽灵消息(第十八轮 P1)。
-        const outcome = this.setActiveTurnRecovery(state, active.item);
+        const schedulerItem = active.item && isSchedulerOriginItem(active.item);
+        const resumableCandidate = this.isResumableTurnErrorCandidate(
+          sessionId,
+          message,
+          signals,
+        );
+        const outcome = this.setActiveTurnRecovery(state, active.item, {
+          allowSchedulerAutoResume: Boolean(schedulerItem && resumableCandidate),
+        });
         if (outcome === 'dropped-scheduler') {
           state.error = message ?? state.error;
           // **紧随的 done 必须被配对吃掉。**各 agent 的失败收尾都是 terminal error 后再补
@@ -2030,11 +1986,25 @@ export class AgentInputCoordinator {
         // 用低调提示表达(autoResumePending)。两种结果都只 emit 一次,不让用户先看到一帧
         // 红横幅再被撤掉。
         const takeover =
-          outcome === 'kept' ? this.notifyResumableTurnError(sessionId, message, signals) : null;
+          outcome === 'kept' && active.item
+            ? this.notifyResumableTurnError(sessionId, active.item, message, signals)
+            : null;
         if (takeover) {
           state.autoResumePending = takeover;
         } else {
           state.error = message ?? state.error;
+          // Schedule 的确定性错误或额度耗尽仍由 runner 收口，不留下脱离 run 记账的
+          // 人工 Retry。只有真正被普通自动续跑接管的窗口才保留 recovery。
+          if (schedulerItem) {
+            state.recovery = null;
+            this.markPendingExternalTerminalDone(sessionId, state);
+            this.emit(sessionId);
+            this.scheduleDrainAfterExternalTurnSettles(
+              sessionId,
+              'scheduler-prompt-terminal-error',
+            );
+            return;
+          }
         }
         this.emit(sessionId);
         return;
@@ -3284,10 +3254,8 @@ export class AgentInputCoordinator {
    * **唯一的 active-turn recovery 出口。**任何终态路径想留「重试上一轮」入口都必须经这里,
    * 不要再直接写 `state.recovery = { kind: 'active-turn', ... }`。
    *
-   * 为什么要收成一个出口:scheduler 来源必须被排除(理由见 isSchedulerOriginItem),而这个
-   * 排除条件散在各终态分支里已经漏了三次 —— 派发失败(第九/十轮)、turn 终态 error 与
-   * 派发前会话关闭(第十八轮)、持久化延后结算(第二十轮)。逐个补条件治不住这类漏项,
-   * 收口成一个带内建判据的 setter 才行:此后新增终态路径只要调它,就自动带上排除。
+   * Schedule 的确定性失败仍不留人工 Retry（runner 已记账）；只有候选瞬时错误允许
+   * 暂时保留 recovery，交给与普通聊天相同的自动续跑路径。
    *
    * @returns `kept` = 留下了;`dropped-scheduler` = 因 scheduler 来源被摘掉,此时队列少了
    * 「用户点 clearError / Retry」这个唤醒源,调用方通常要补一次 scheduleDrain(Stop 那条
@@ -3298,12 +3266,13 @@ export class AgentInputCoordinator {
   private setActiveTurnRecovery(
     state: SessionInputState,
     item: AgentInputQueuedMessage | null | undefined,
+    opts?: { allowSchedulerAutoResume?: boolean },
   ): 'kept' | 'dropped-scheduler' | 'no-item' {
     if (!item) {
       state.recovery = null;
       return 'no-item';
     }
-    if (isSchedulerOriginItem(item)) {
+    if (isSchedulerOriginItem(item) && !opts?.allowSchedulerAutoResume) {
       state.recovery = null;
       return 'dropped-scheduler';
     }
@@ -3320,12 +3289,17 @@ export class AgentInputCoordinator {
    */
   private notifyResumableTurnError(
     sessionId: string,
+    item: AgentInputQueuedMessage,
     message?: string,
     signals?: Omit<InterruptedTurnErrorSignals, 'message'>,
   ): AutoResumeInfo | null {
     if (!this.deps.onResumableTurnError) return null;
     try {
-      return this.deps.onResumableTurnError(sessionId, { ...(signals ?? {}), message }) ?? null;
+      return this.deps.onResumableTurnError(
+        sessionId,
+        { ...(signals ?? {}), message },
+        item,
+      ) ?? null;
     } catch (err) {
       log.warn('onResumableTurnError failed', { sessionId, error: errorMessage(err) });
       return null;
@@ -3509,14 +3483,16 @@ export class AgentInputCoordinator {
     state.stickyError = null;
     if (terminalEvent.type === 'error') {
       // 第五条终态路径:终态 error 在持久化还在进行时到达 → 被暂存,落库完成后才在这里
-      // 结算。scheduler 的 prompt 同样不留重试入口(判据内建在 setActiveTurnRecovery):
-      // runner 那边已经把这一轮 run 失败收口,克隆重跑只会造出一条不计账的幽灵消息
-      // (review #944 第二十轮 P1)。
+      // 结算。Schedule 只在候选瞬时错误上短暂保留 recovery，复用普通自动续跑；
+      // 确定性错误仍由 runner 收口，不留下脱离 run 记账的人工 Retry。
       // 被按住的 error 最终没能接管(recovery 没留住 / host 拒绝接管)时,统一在本方法里
       // 通知 host 补落 error 行 —— 出口有三个(dropped-scheduler、非 kept、拒绝接管),
       // 集中在这里判比让 host 在每个 null 返回点各自记得补落更难漏(不变量 I2)。
       const deferredPersistSuppressed = terminalEvent.resumableCandidate === true;
-      const outcome = this.setActiveTurnRecovery(state, active.item);
+      const schedulerItem = active.item && isSchedulerOriginItem(active.item);
+      const outcome = this.setActiveTurnRecovery(state, active.item, {
+        allowSchedulerAutoResume: Boolean(schedulerItem && deferredPersistSuppressed),
+      });
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
         if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
@@ -3535,8 +3511,13 @@ export class AgentInputCoordinator {
       // 候选窗口里用户已经自己接手 → **不问接管**(连额度都不消耗),回落成常规错误呈现:
       // 横幅 + 「继续任务」交回用户,由他决定要不要续跑(greptile P1)。
       const deferredTakeover =
-        outcome === 'kept' && terminalEvent.supersededByUser !== true
-          ? this.notifyResumableTurnError(sessionId, terminalEvent.message, terminalEvent.signals)
+        outcome === 'kept' && active.item && terminalEvent.supersededByUser !== true
+          ? this.notifyResumableTurnError(
+              sessionId,
+              active.item,
+              terminalEvent.message,
+              terminalEvent.signals,
+            )
           : null;
       if (deferredTakeover) {
         state.autoResumePending = deferredTakeover;
@@ -3548,6 +3529,16 @@ export class AgentInputCoordinator {
       } else {
         state.error = terminalEvent.message ?? state.error;
         if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
+        if (schedulerItem) {
+          state.recovery = null;
+          this.markPendingExternalTerminalDone(sessionId, state);
+          this.emit(sessionId);
+          this.scheduleDrainAfterExternalTurnSettles(
+            sessionId,
+            'scheduler-prompt-terminal-error',
+          );
+          return;
+        }
       }
       this.emit(sessionId);
       return;

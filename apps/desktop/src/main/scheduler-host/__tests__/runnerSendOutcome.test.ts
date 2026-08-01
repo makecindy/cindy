@@ -19,31 +19,9 @@ const mocks = vi.hoisted(() => ({
   getSessionRowSnapshot: vi.fn(),
   ensureDialogueWorkspaceDir: vi.fn(),
   wireSessionToIpc: vi.fn(),
-  onSilentStopSettled: vi.fn(),
   isSessionInTurn: vi.fn(() => false),
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
-  schedulerRecoveryHandlers: new Map<
-    string,
-    Map<
-      string,
-      {
-        handler: (event: AgentEvent) => 'started' | 'duplicate' | null;
-        onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void;
-        isDispatchReserved: () => boolean;
-      }
-    >
-  >(),
-  schedulerEventOwners: new Map<string, string>(),
-  registerSchedulerRecovery: vi.fn(),
-  markSchedulerEventOwner: vi.fn(),
-  claimSchedulerRecovery: vi.fn(),
-  isSchedulerEventOwnedBy: vi.fn(),
-  registerSchedulerResumeOutcome: vi.fn(),
-  releaseSchedulerResumeOutcome: vi.fn(),
-  settleSchedulerResumeOutcome: vi.fn(),
-  discardSchedulerSuppressedError: vi.fn(),
-  finalizeSchedulerSuppressedError: vi.fn(),
 }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -63,19 +41,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
   wireSessionToIpc: mocks.wireSessionToIpc,
   isSessionInTurn: mocks.isSessionInTurn,
   noteSilentStopUserSend: vi.fn(),
-  onSilentStopSettled: mocks.onSilentStopSettled,
-}));
-
-vi.mock('../schedulerInterruptedTurnRecoveryBridge.js', () => ({
-  registerSchedulerInterruptedTurnRecovery: mocks.registerSchedulerRecovery,
-  markSchedulerInterruptedTurnEventOwner: mocks.markSchedulerEventOwner,
-  claimSchedulerInterruptedTurnRecovery: mocks.claimSchedulerRecovery,
-  isSchedulerInterruptedTurnEventOwnedBy: mocks.isSchedulerEventOwnedBy,
-  registerSchedulerInterruptedTurnResumeOutcome: mocks.registerSchedulerResumeOutcome,
-  releaseSchedulerInterruptedTurnResumeOutcome: mocks.releaseSchedulerResumeOutcome,
-  settleSchedulerInterruptedTurnResumeOutcome: mocks.settleSchedulerResumeOutcome,
-  discardSchedulerInterruptedTurnSuppressedError: mocks.discardSchedulerSuppressedError,
-  finalizeSchedulerInterruptedTurnSuppressedError: mocks.finalizeSchedulerSuppressedError,
+  onSilentStopSettled: vi.fn(() => () => {}),
 }));
 
 vi.mock('../workdir-resolver', () => ({
@@ -86,9 +52,8 @@ vi.mock('../runners/_shared', () => ({
   backfillSessionMeta: mocks.backfillSessionMeta,
 }));
 
-import { BG_TASK_IDLE_FALLBACK_MS, MakerScheduleRunner } from '../runner';
+import { MakerScheduleRunner } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
-import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -106,7 +71,9 @@ interface FakeSessionHarness {
 
 function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
   const listeners: Array<(event: AgentEvent) => void> = [];
-  const off = vi.fn();
+  const off = vi.fn(() => {
+    listeners.splice(0, listeners.length);
+  });
   const send = vi.fn<SendImpl>(sendImpl);
   const session = {
     id: 'scheduler-session',
@@ -114,14 +81,7 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     send,
     onEvent(listener: (event: AgentEvent) => void) {
       listeners.push(listener);
-      let active = true;
-      return () => {
-        if (!active) return;
-        active = false;
-        const index = listeners.indexOf(listener);
-        if (index >= 0) listeners.splice(index, 1);
-        off();
-      };
+      return off;
     },
     abort: vi.fn(async () => undefined),
     close: vi.fn(async () => undefined),
@@ -132,12 +92,6 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     send,
     off,
     emit(event: AgentEvent) {
-      // Production wireSessionToIpc subscribes before the runner waiter and gives Schedule
-      // recovery first refusal over a terminal error. Mirror that ordering here even though
-      // register.ts is intentionally mocked as a narrow dependency in this unit suite.
-      if (event.type === 'error') {
-        mocks.claimSchedulerRecovery('scheduler-session', event);
-      }
       for (const listener of [...listeners]) listener(event);
     },
     listenerCount() {
@@ -184,14 +138,14 @@ function baseSchedule(overrides: Partial<Schedule> = {}): Schedule {
   };
 }
 
-function createFireContext(runId = 'run-1'): FireContext & {
+function createFireContext(): FireContext & {
   controller: AbortController;
   removeAbortListener: ReturnType<typeof vi.spyOn>;
 } {
   const abortController = new AbortController();
   const removeAbortListener = vi.spyOn(abortController.signal, 'removeEventListener');
   return {
-    runId,
+    runId: 'run-1',
     firedAt: 1_700_000_000_100,
     signal: abortController.signal,
     controller: abortController,
@@ -282,59 +236,6 @@ function expectSafeSendFailureLog(
 describe('MakerScheduleRunner send outcome policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    vi.useRealTimers();
-    mocks.schedulerRecoveryHandlers.clear();
-    mocks.schedulerEventOwners.clear();
-    mocks.registerSchedulerRecovery.mockImplementation(
-      (
-        sessionId: string,
-        runId: string,
-        handler: (event: AgentEvent) => 'started' | 'duplicate' | null,
-        onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void,
-        isDispatchReserved: () => boolean,
-      ) => {
-        let registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
-        if (!registrations) {
-          registrations = new Map();
-          mocks.schedulerRecoveryHandlers.set(sessionId, registrations);
-        }
-        const registration = { handler, onReset, isDispatchReserved };
-        registrations.set(runId, registration);
-        return () => {
-          const current = mocks.schedulerRecoveryHandlers.get(sessionId);
-          if (current?.get(runId) !== registration) return;
-          current.delete(runId);
-          if (mocks.schedulerEventOwners.get(sessionId) === runId) {
-            mocks.schedulerEventOwners.delete(sessionId);
-          }
-          if (current.size === 0) mocks.schedulerRecoveryHandlers.delete(sessionId);
-        };
-      },
-    );
-    mocks.markSchedulerEventOwner.mockImplementation((sessionId: string, runId: string) => {
-      if (!mocks.schedulerRecoveryHandlers.get(sessionId)?.has(runId)) return false;
-      mocks.schedulerEventOwners.set(sessionId, runId);
-      return true;
-    });
-    mocks.claimSchedulerRecovery.mockImplementation((sessionId: string, event: AgentEvent) => {
-      const registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
-      if (!registrations) return null;
-      const eventRunId = event.turnOrigin?.runId;
-      if (eventRunId) {
-        const disposition = registrations.get(eventRunId)?.handler(event) ?? null;
-        return disposition ? { runId: eventRunId, disposition } : null;
-      }
-      const runId = mocks.schedulerEventOwners.get(sessionId);
-      const registration = runId ? registrations.get(runId) : undefined;
-      const disposition = registration?.handler(event) ?? null;
-      return disposition && runId ? { runId, disposition } : null;
-    });
-    mocks.isSchedulerEventOwnedBy.mockImplementation(
-      (sessionId: string, runId: string, eventRunId: string | undefined) => {
-        if (eventRunId) return eventRunId === runId;
-        return mocks.schedulerEventOwners.get(sessionId) === runId;
-      },
-    );
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: 'F:\\XDMaker' });
@@ -342,7 +243,6 @@ describe('MakerScheduleRunner send outcome policy', () => {
     mocks.getSessionRowSnapshot.mockResolvedValue({
       status: 'active',
     });
-    mocks.onSilentStopSettled.mockReturnValue(() => {});
   });
 
   it('marks accepted:false scheduler runs failed without waiting for terminal events; review-pr inherits this runner policy', async () => {
@@ -366,7 +266,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'cancelled-before-dispatch',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
     expect(h.session.close).not.toHaveBeenCalled();
   });
 
@@ -381,7 +281,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     await expect(runner.fire(baseSchedule(), ctx)).rejects.toThrow(/schedule fire aborted/);
     expect(notifier.notify).not.toHaveBeenCalled();
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
   it('closes an accepted ephemeral turn before propagating an abort', async () => {
@@ -593,7 +493,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'Error',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
   it('marks onAccepted rejection failed without waiting for terminal events and records the source', async () => {
@@ -619,7 +519,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'onAccepted-rejected',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
   it('marks SESSION_RUNNING failed without waiting for terminal events and records the reason', async () => {
@@ -642,7 +542,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'SESSION_RUNNING',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
   it('waits for the terminal event when send is accepted', async () => {
@@ -668,807 +568,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const run = latestNotifiedRun(notifier);
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
-  });
-
-  it('fully cleans up when recovery registration resets synchronously', async () => {
-    const unregister = vi.fn();
-    mocks.registerSchedulerRecovery.mockImplementationOnce(
-      (
-        _sessionId: string,
-        _runId: string,
-        _handler: (event: AgentEvent) => 'started' | 'duplicate' | null,
-        onReset: (reason: 'session-reset') => void,
-      ) => {
-        onReset('session-reset');
-        return unregister;
-      },
-    );
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-
-    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow(
-      /session reset during interrupted-turn recovery/,
-    );
-    expect(unregister).toHaveBeenCalledTimes(1);
-    expect(h.off).toHaveBeenCalledTimes(1);
-    expect(h.listenerCount()).toBe(0);
-  });
-
-  it('continues a partially completed capacity-interrupted turn in the same schedule run', async () => {
-    vi.useFakeTimers();
-    const rawInterruptedError =
-      'Selected model is at capacity. Please try a different model. Authorization: Bearer capacity-secret-123';
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const beforeDispatchUserTurn = vi.fn(async () => undefined);
-    const { runner, notifier } = createRunnerHarness(h.session, { beforeDispatchUserTurn });
-    const schedule = baseSchedule();
-    const ctx = createFireContext();
-    const firePromise = runner.fire(schedule, ctx);
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: rawInterruptedError,
-        reason: 'upstream-overload',
-        isTerminal: true,
-      },
-    });
-    // Some SDK paths pair the terminal error with the old turn's done. It must not close
-    // the Schedule run while the continuation is in backoff.
-    h.emit({ type: 'done', data: {} });
-
-    expect(h.send).toHaveBeenCalledTimes(1);
-    expect(notifier.notify).not.toHaveBeenCalled();
-    expect(
-      mocks.schedulerRecoveryHandlers
-        .get('scheduler-session')
-        ?.get(ctx.runId)
-        ?.isDispatchReserved(),
-    ).toBe(true);
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-    expect(
-      mocks.schedulerRecoveryHandlers
-        .get('scheduler-session')
-        ?.get(ctx.runId)
-        ?.isDispatchReserved(),
-    ).toBe(false);
-
-    expect(h.send.mock.calls[0]?.[0]).toEqual(
-      expect.objectContaining({ content: expect.stringContaining(schedule.prompt) }),
-    );
-    expect(h.send.mock.calls[1]?.[0]).toEqual({
-      type: 'user',
-      content: CONTINUE_AFTER_ERROR_PROMPT,
-    });
-    expect(h.send.mock.calls[1]?.[0]).not.toEqual(h.send.mock.calls[0]?.[0]);
-    expect(h.send.mock.calls[1]?.[1]).toEqual(
-      expect.objectContaining({
-        origin: {
-          kind: 'scheduler',
-          scheduleId: schedule.id,
-          scheduleName: schedule.name,
-          runId: ctx.runId,
-        },
-      }),
-    );
-    expect(mocks.createMessage).toHaveBeenNthCalledWith(
-      2,
-      'scheduler-session',
-      expect.objectContaining({
-        role: 'user',
-        content: CONTINUE_AFTER_ERROR_PROMPT,
-        agentMeta: expect.objectContaining({
-          delivery: 'turn',
-          autoResume: true,
-          autoResumeInfo: expect.objectContaining({
-            error: 'Selected model is at capacity. Please try a different model. Authorization: [REDACTED]',
-            attempt: 1,
-            maxAttempts: 5,
-            sessionTotal: 1,
-          }),
-        }),
-      }),
-    );
-    expect(JSON.stringify(mocks.createMessage.mock.calls[1])).not.toContain('capacity-secret-123');
-    expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(2);
-    await vi.waitFor(() =>
-      expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalledWith(
-        'scheduler-session',
-        'run-1',
-      ),
-    );
-
-    // Some providers do not emit a running status for the continuation. A confirmed dispatch
-    // owns the lifecycle transition, so its terminal event must still settle this Schedule run.
-    h.emit({ type: 'text', data: { text: 'completed after recovery', isFinal: true } });
-    h.emit({ type: 'done', data: {} });
-
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'completed after recovery',
-    });
-    expect(notifier.notify).toHaveBeenCalledTimes(1);
-    expect(latestNotifiedRun(notifier)).toEqual(
-      expect.objectContaining({ status: 'success', resultText: 'completed after recovery' }),
-    );
-  });
-
-  it('keeps retrying an established recovery chain when the resumed turn has no new output', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-
-    // The first continuation reached the provider but failed before text/tool_use. The recovery
-    // chain, rather than per-turn output, now owns eligibility for the bounded second attempt.
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(8_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(3));
-    expect(mocks.createMessage).toHaveBeenNthCalledWith(
-      3,
-      'scheduler-session',
-      expect.objectContaining({
-        agentMeta: expect.objectContaining({
-          autoResumeInfo: expect.objectContaining({ attempt: 2, maxAttempts: 5 }),
-        }),
-      }),
-    );
-
-    h.emit({ type: 'text', data: { text: 'recovered', isFinal: true } });
-    h.emit({ type: 'done', data: {} });
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'recovered',
-    });
-  });
-
-  it('suppresses a duplicate terminal error without starting or stashing a second interruption', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
-    const repeatedError = {
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    } as AgentEvent;
-
-    h.emit(repeatedError);
-    const settleCallsAfterFirstError = mocks.settleSchedulerResumeOutcome.mock.calls.length;
-    h.emit(repeatedError);
-
-    expect(mocks.claimSchedulerRecovery.mock.results.at(-1)?.value).toEqual({
-      runId: 'run-1',
-      disposition: 'duplicate',
-    });
-    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenCalledTimes(
-      settleCallsAfterFirstError,
-    );
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-
-    h.emit({ type: 'text', data: { text: 'recovered', isFinal: true } });
-    h.emit({ type: 'done', data: {} });
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'recovered',
-    });
-  });
-
-  it('settles recovery bookkeeping when running status arrives before send resolves', async () => {
-    vi.useFakeTimers();
-    let sendCount = 0;
-    let releaseResumeSend!: () => void;
-    const resumeSendGate = new Promise<void>((resolve) => {
-      releaseResumeSend = resolve;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      sendCount += 1;
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      if (sendCount > 1) await resumeSendGate;
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
-
-    h.emit({ type: 'status', data: { isRunning: true } });
-    releaseResumeSend();
-    await vi.waitFor(() =>
-      expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalledWith(
-        'scheduler-session',
-        'run-1',
-      ),
-    );
-
-    h.emit({ type: 'text', data: { text: 'completed', isFinal: true } });
-    h.emit({ type: 'done', data: {} });
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'completed',
-    });
-  });
-
-  it('keeps concurrent waiters isolated by Schedule run id', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const { runner, notifier } = createRunnerHarness(h.session);
-    const firstFire = runner.fire(baseSchedule(), createFireContext('run-first'));
-    const secondFire = runner.fire(baseSchedule(), createFireContext('run-second'));
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-    // Legacy providers can omit turnOrigin. The latest accepted turn owns that event lease,
-    // while the other registered waiter remains available for its explicit run id.
-    h.emit({ type: 'text', data: { text: 'second output', isFinal: false } });
-    h.emit({ type: 'done', data: {} });
-    await expect(secondFire).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'second output',
-    });
-    expect(notifier.notify).toHaveBeenCalledTimes(1);
-    expect(h.listenerCount()).toBe(1);
-
-    const firstOrigin = {
-      kind: 'scheduler',
-      scheduleId: 'schedule-1',
-      scheduleName: 'review-pr unattended run',
-      runId: 'run-first',
-    } as const;
-    h.emit({ type: 'status', data: { isRunning: true }, turnOrigin: firstOrigin });
-    h.emit({
-      type: 'text',
-      data: { text: 'first partial', isFinal: false },
-      turnOrigin: firstOrigin,
-    });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-      turnOrigin: firstOrigin,
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(3));
-    expect(h.send.mock.calls[2]?.[1]?.origin).toEqual(firstOrigin);
-    await vi.waitFor(() => expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalledTimes(1));
-
-    h.emit({ type: 'done', data: {}, turnOrigin: firstOrigin });
-    await expect(firstFire).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'first partial',
-    });
-    expect(notifier.notify).toHaveBeenCalledTimes(2);
-    expect(h.listenerCount()).toBe(0);
-  });
-
-  it('does not continue a capacity error when the turn produced no output', async () => {
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner, notifier } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        reason: 'upstream-overload',
-        isTerminal: true,
-      },
-    });
-
-    await expect(firePromise).rejects.toThrow(/capacity/);
-    expect(h.send).toHaveBeenCalledTimes(1);
-    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
-  });
-
-  it('does not continue deterministic errors after partial output', async () => {
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner, notifier } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'invalid api key',
-        sdkError: 'authentication_failed',
-        isTerminal: true,
-      },
-    });
-
-    await expect(firePromise).rejects.toThrow(/invalid api key/);
-    expect(h.send).toHaveBeenCalledTimes(1);
-    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
-  });
-
-  it('cancels a pending interrupted-turn continuation when the Schedule run is aborted', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner, notifier } = createRunnerHarness(h.session);
-    const ctx = createFireContext();
-    const firePromise = runner.fire(baseSchedule(), ctx);
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        reason: 'upstream-overload',
-        isTerminal: true,
-      },
-    });
-    ctx.controller.abort();
-
-    await expect(firePromise).rejects.toThrow(/aborted/);
-    await vi.advanceTimersByTimeAsync(30_000);
-    expect(h.send).toHaveBeenCalledTimes(1);
-    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith(
-      'scheduler-session',
-      'run-1',
-    );
-    expect(notifier.notify).toHaveBeenCalledTimes(1);
-    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
-  });
-
-  it('cancels a pending continuation when a real user message supersedes the backoff', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-
-    mocks.schedulerRecoveryHandlers
-      .get('scheduler-session')
-      ?.values()
-      .next().value?.onReset('user-intervention');
-    await expect(firePromise).rejects.toThrow(/superseded by user input/);
-    await vi.advanceTimersByTimeAsync(30_000);
-
-    expect(h.send).toHaveBeenCalledTimes(1);
-    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith(
-      'scheduler-session',
-      'run-1',
-    );
-  });
-
-  it('aborts the recovery attempt signal when reset lands after vendor dispatch begins', async () => {
-    vi.useFakeTimers();
-    let sendCount = 0;
-    let recoverySignal: AbortSignal | undefined;
-    let recoverySendSettled!: () => void;
-    const recoverySettled = new Promise<void>((resolve) => {
-      recoverySendSettled = resolve;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      sendCount += 1;
-      await opts?.onAccepted?.();
-      if (sendCount === 1) return { accepted: true };
-      opts?.onDispatching?.();
-      recoverySignal = opts?.signal;
-      return await new Promise<SessionSendResult>((resolve) => {
-        const finish = () => {
-          recoverySendSettled();
-          resolve({ accepted: false, reason: 'cancelled-before-dispatch' });
-        };
-        if (recoverySignal?.aborted) finish();
-        else recoverySignal?.addEventListener('abort', finish, { once: true });
-      });
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(recoverySignal).toBeDefined());
-
-    mocks.schedulerRecoveryHandlers
-      .get('scheduler-session')
-      ?.get('run-1')
-      ?.onReset('session-reset');
-
-    await expect(firePromise).rejects.toThrow(/session reset/);
-    await recoverySettled;
-    expect(recoverySignal?.aborted).toBe(true);
-    expect(mocks.discardSchedulerSuppressedError).not.toHaveBeenCalled();
-  });
-
-  it('keeps a running recovery outcome live when user input only revokes future retries', async () => {
-    vi.useFakeTimers();
-    let sendCount = 0;
-    let recoverySignal: AbortSignal | undefined;
-    let releaseRecoverySend!: () => void;
-    const recoveryGate = new Promise<void>((resolve) => {
-      releaseRecoverySend = resolve;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      sendCount += 1;
-      await opts?.onAccepted?.();
-      if (sendCount === 1) return { accepted: true };
-      opts?.onDispatching?.();
-      recoverySignal = opts?.signal;
-      await recoveryGate;
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(recoverySignal).toBeDefined());
-
-    mocks.schedulerRecoveryHandlers
-      .get('scheduler-session')
-      ?.get('run-1')
-      ?.onReset('user-intervention');
-    expect(recoverySignal?.aborted).toBe(false);
-    expect(mocks.finalizeSchedulerSuppressedError).not.toHaveBeenCalled();
-
-    releaseRecoverySend();
-    await vi.waitFor(() => expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalled());
-    h.emit({ type: 'text', data: { text: 'finished', isFinal: true } });
-    h.emit({ type: 'done', data: {} });
-
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'finished',
-    });
-    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenCalledWith(
-      'scheduler-session',
-      'run-1',
-      'succeeded',
-    );
-  });
-
-  it('drops background-task state from the failed turn at the recovery vendor boundary', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({
-      type: 'agent_task_update',
-      data: { taskId: 'old-background-task', status: 'running' },
-    });
-    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-
-    h.emit({ type: 'done', data: {} });
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'partial',
-    });
-  });
-
-  it('settles a recovery activity row only when background-idle fallback truly ends the run', async () => {
-    vi.useFakeTimers();
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-
-    h.emit({
-      type: 'agent_task_update',
-      data: { taskId: 'recovery-background-task', status: 'running' },
-    });
-    const settleCallsBeforeIntermediateDone = mocks.settleSchedulerResumeOutcome.mock.calls.length;
-    h.emit({ type: 'done', data: {} });
-
-    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenCalledTimes(
-      settleCallsBeforeIntermediateDone,
-    );
-    expect(h.listenerCount()).toBe(1);
-
-    await vi.advanceTimersByTimeAsync(BG_TASK_IDLE_FALLBACK_MS);
-    await expect(firePromise).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: 'partial',
-    });
-    expect(mocks.settleSchedulerResumeOutcome).toHaveBeenLastCalledWith(
-      'scheduler-session',
-      'run-1',
-      'failed',
-    );
-  });
-
-  it('uses fail cleanup when silent-stop auto-resume is exhausted', async () => {
-    let settleSilentStop!: (
-      sessionId: string,
-      reason: 'exhausted' | 'skip' | 'send-failed',
-    ) => void;
-    mocks.onSilentStopSettled.mockImplementation((
-      _sessionId: string,
-      callback: typeof settleSilentStop,
-    ) => {
-      settleSilentStop = callback;
-      return () => {};
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'done', data: { silentStop: true } });
-    settleSilentStop('scheduler-session', 'exhausted');
-
-    await expect(firePromise).rejects.toThrow(/silent-stop auto-resume exhausted/);
-    expect(h.off).toHaveBeenCalledTimes(1);
-    expect(mocks.schedulerRecoveryHandlers.has('scheduler-session')).toBe(false);
-  });
-
-  it('ignores a late successful send outcome after the session reset settles the waiter', async () => {
-    vi.useFakeTimers();
-    let sendCount = 0;
-    let releaseResumeSend!: (result: SessionSendResult) => void;
-    const resumeSendGate = new Promise<SessionSendResult>((resolve) => {
-      releaseResumeSend = resolve;
-    });
-    let markResumeSendSettled!: () => void;
-    const resumeSendSettled = new Promise<void>((resolve) => {
-      markResumeSendSettled = resolve;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      sendCount += 1;
-      await opts?.onAccepted?.();
-      opts?.onDispatching?.();
-      if (sendCount === 1) return { accepted: true };
-      try {
-        return await resumeSendGate;
-      } finally {
-        markResumeSendSettled();
-      }
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
-
-    mocks.schedulerRecoveryHandlers.get('scheduler-session')?.values().next().value?.onReset('session-reset');
-    await expect(firePromise).rejects.toThrow(/session reset/);
-    releaseResumeSend({ accepted: true });
-    await resumeSendSettled;
-
-    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith(
-      'scheduler-session',
-      'run-1',
-    );
-    expect(mocks.discardSchedulerSuppressedError).not.toHaveBeenCalled();
-  });
-
-  it('blocks a late accepted callback after reset before it can persist a continuation', async () => {
-    vi.useFakeTimers();
-    let sendCount = 0;
-    let allowResumeAccepted!: () => void;
-    const resumeAcceptedGate = new Promise<void>((resolve) => {
-      allowResumeAccepted = resolve;
-    });
-    let markResumeSendSettled!: () => void;
-    const resumeSendSettled = new Promise<void>((resolve) => {
-      markResumeSendSettled = resolve;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      sendCount += 1;
-      try {
-        if (sendCount > 1) await resumeAcceptedGate;
-        await opts?.onAccepted?.();
-        return { accepted: true };
-      } finally {
-        if (sendCount > 1) markResumeSendSettled();
-      }
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-
-    mocks.schedulerRecoveryHandlers.get('scheduler-session')?.values().next().value?.onReset('session-reset');
-    await expect(firePromise).rejects.toThrow(/session reset/);
-    allowResumeAccepted();
-    await resumeSendSettled;
-
-    expect(mocks.createMessage).toHaveBeenCalledTimes(1);
-    expect(mocks.discardSchedulerSuppressedError).not.toHaveBeenCalled();
-  });
-
-  it('finalizes a continuation row whose persistence completes after reset', async () => {
-    vi.useFakeTimers();
-    let releaseResumePersist!: () => void;
-    const resumePersistGate = new Promise<void>((resolve) => {
-      releaseResumePersist = resolve;
-    });
-    mocks.createMessage.mockImplementation(async () => {
-      if (mocks.createMessage.mock.calls.length === 2) await resumePersistGate;
-    });
-    const h = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
-    const { runner } = createRunnerHarness(h.session);
-    const firePromise = runner.fire(baseSchedule(), createFireContext());
-
-    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
-    h.emit({ type: 'status', data: { isRunning: true } });
-    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
-    h.emit({
-      type: 'error',
-      data: {
-        message: 'Selected model is at capacity. Please try a different model.',
-        isTerminal: true,
-      },
-    });
-    await vi.advanceTimersByTimeAsync(4_000);
-    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
-
-    mocks.schedulerRecoveryHandlers.get('scheduler-session')?.values().next().value?.onReset('session-reset');
-    await expect(firePromise).rejects.toThrow(/session reset/);
-    releaseResumePersist();
-    await vi.waitFor(() => expect(mocks.registerSchedulerResumeOutcome).toHaveBeenCalledTimes(2));
-
-    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledTimes(2);
-    expect(mocks.discardSchedulerSuppressedError).not.toHaveBeenCalled();
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
   });
 
   it('marks a direct scheduler turn headless only after acceptance and releases it at terminal', async () => {

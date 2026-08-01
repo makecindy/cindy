@@ -426,31 +426,4 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     expect(otherDecision.action).toBe('resume');
     if (otherDecision.action === 'resume') expect(otherDecision.sessionTotal).toBe(1);
   });
-
-  it('isolates retry state per recovery owner while sharing the displayed session total', () => {
-    const g = createGuard();
-    const first = g.guard.createScope('run-first', SID);
-    const second = g.guard.createScope('run-second', SID);
-
-    const firstDecision = first.onInterruptedTurn(g.now());
-    const secondDecision = second.onInterruptedTurn(g.now());
-    expect(firstDecision.action === 'resume' && firstDecision.attempt).toBe(1);
-    expect(firstDecision.action === 'resume' && firstDecision.sessionTotal).toBe(1);
-    expect(secondDecision.action === 'resume' && secondDecision.attempt).toBe(1);
-    expect(secondDecision.action === 'resume' && secondDecision.sessionTotal).toBe(2);
-
-    // 一个 run 的进展不能重置另一个 run 的 pending 或连续失败账。
-    second.noteProgress();
-    expect(first.onInterruptedTurn(g.now())).toEqual({ action: 'skip', why: 'pending' });
-    first.noteTurnStarted();
-    const firstRetry = first.onInterruptedTurn(g.now());
-    expect(firstRetry.action === 'resume' && firstRetry.attempt).toBe(2);
-    expect(firstRetry.action === 'resume' && firstRetry.sessionTotal).toBe(3);
-
-    first.dispose();
-    const recreated = g.guard.createScope('run-first', SID);
-    const recreatedDecision = recreated.onInterruptedTurn(g.now());
-    expect(recreatedDecision.action === 'resume' && recreatedDecision.attempt).toBe(1);
-    expect(recreatedDecision.action === 'resume' && recreatedDecision.sessionTotal).toBe(4);
-  });
 });

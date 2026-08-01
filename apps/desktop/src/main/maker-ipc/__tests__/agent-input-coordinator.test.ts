@@ -6046,41 +6046,6 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
   });
 
-  it('续跑认领终态时立即释放匹配的 scheduler activeTurn', async () => {
-    vi.useFakeTimers();
-    const h = createHarness();
-    const sid = 'sched-claimed-terminal';
-    const origin = { ...schedOrigin, runId: 'run-claimed' } as const;
-    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
-      await persistQueuedUserMessage(sessionId, sendOpts);
-      h.setRunning(true);
-      return { kind: 'session-dispatch', dispatched: true } as never;
-    });
-    h.coordinator.enqueue(sid, makeItem('c1', 'hb', { origin }));
-    await flush();
-    h.coordinator.enqueue(sid, makeItem('c2', 'next one'));
-    await flush();
-
-    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'another-run')).toBe(false);
-    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'run-claimed')).toBe(true);
-    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'run-claimed')).toBe(false);
-    expect(
-      (h.coordinator as unknown as { getState: (id: string) => { activeTurn: unknown } })
-        .getState(sid).activeTurn,
-    ).toBeNull();
-    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
-
-    // The hidden recovery can fail before dispatch and therefore produce no new running/done
-    // event. Once the host busy boundary clears, the normal retry tick must drain the tail.
-    h.sendToAgent.mockImplementationOnce(async () => ({
-      kind: 'session-dispatch', dispatched: true,
-    }) as never);
-    h.setRunning(false);
-    await vi.advanceTimersByTimeAsync(250);
-    await flush();
-    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
-  });
-
   it('普通用户项收到终态 error 时仍保留 active-turn recovery', async () => {
     // 上一条只对 scheduler 来源生效 —— 交互输入的重试入口不受影响。
     const h = createHarness();
@@ -6520,29 +6485,47 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
   it('通知 host 时带上 message 与结构化信号', async () => {
     const h = createHarness();
     const sid = 'resumable-error-signals';
-    await failAfterDispatch(h, sid);
+    const item = makeItem('q-first', 'original long task');
+    await failAfterDispatch(h, sid, item);
 
     expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
     expect(h.onResumableTurnError).toHaveBeenCalledTimes(1);
     expect(h.onResumableTurnError.mock.calls[0]).toEqual([
       sid,
       { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: item.clientId }),
     ]);
   });
 
-  it('scheduler 来源的失败不通知(没有 recovery 就没有可续跑的目标)', async () => {
+  it('scheduler 来源复用同一套自动续跑并保留 run origin', async () => {
     const h = createHarness();
     const sid = 'resumable-error-scheduler';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const item = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
     await failAfterDispatch(
       h,
       sid,
-      makeItem('q-sched', 'heartbeat', {
-        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
-      }),
+      item,
     );
 
-    expect(latestProjection(h.projections).recovery).toBeNull();
-    expect(h.onResumableTurnError).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+    expect(h.onResumableTurnError).toHaveBeenCalledWith(
+      sid,
+      { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: 'q-sched', origin: item.origin }),
+    );
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.origin).toEqual(item.origin);
   });
 
   it('外部发起的 turn(无 active turn)失败不通知', async () => {
@@ -6581,7 +6564,35 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.onResumableTurnError.mock.calls[0]).toEqual([
       sid,
       { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: 'q-first' }),
     ]);
+  });
+
+  it('scheduler 入队只排队，不冒充用户介入取消当前自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'scheduler-does-not-cancel-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+    const userInterventionsBefore = h.onUserEnqueue.mock.calls.length;
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-sched-next', 'next heartbeat', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'sch-2',
+          scheduleName: '任务 2',
+          runId: 'run-2',
+        },
+      }),
+    );
+
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+    expect(h.onUserEnqueue).toHaveBeenCalledTimes(userInterventionsBefore);
+    expect(latestProjection(h.projections).pendingQueue.map((queued) => queued.clientId)).toContain(
+      'q-sched-next',
+    );
   });
 
   it('autoRetryLastError 在有产出时补发带 autoResume 的续跑指令', async () => {
@@ -6657,70 +6668,6 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
     // recovery 仍在:救不回来时要靠它回落出「继续任务」。
     expect(projection.recovery?.kind).toBe('active-turn');
-  });
-
-  it('退避窗口内 scheduler 入队保持恢复 owner 与接管态,不冒充用户介入', async () => {
-    const h = createHarness();
-    const sid = 'takeover-preserved-by-scheduler-enqueue';
-    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
-    await failAfterDispatch(h, sid);
-    h.onUserEnqueue.mockClear();
-
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-scheduler', 'next scheduled run', {
-        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
-      }),
-    );
-    await flush();
-
-    const projection = latestProjection(h.projections);
-    expect(h.onUserEnqueue).not.toHaveBeenCalled();
-    expect(projection.autoResumePending).toEqual(TAKEOVER_INFO);
-    expect(projection.recovery?.kind).toBe('active-turn');
-    expect(projection.pendingQueue.map((item) => item.clientId)).toContain('q-scheduler');
-  });
-
-  it.each([
-    ['app-exit continuation text', CONTINUE_AFTER_APP_EXIT_PROMPT],
-    ['error continuation text', CONTINUE_AFTER_ERROR_PROMPT],
-  ])('scheduler prompt collision with %s stays FIFO and never projects continuation state', async (_label, prompt) => {
-    const h = createHarness();
-    const sid = `scheduler-prompt-collision-${_label}`;
-    h.setRunning(true);
-
-    h.coordinator.enqueue(sid, makeItem('q-user', 'queued first'));
-    h.onUserEnqueue.mockClear();
-    h.coordinator.enqueue(
-      sid,
-      makeItem('q-scheduler', prompt, {
-        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
-      }),
-    );
-    await flush();
-
-    const projection = latestProjection(h.projections);
-    expect(h.onUserEnqueue).not.toHaveBeenCalled();
-    expect(h.onUiRetry).not.toHaveBeenCalled();
-    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual([
-      'q-user',
-      'q-scheduler',
-    ]);
-    expect(projection.continuationInFlightClientId).toBeNull();
-    expect(projection.continuationTurnClientId).toBeNull();
-
-    const dispatched = createHarness();
-    dispatched.coordinator.enqueue(
-      `${sid}-dispatch`,
-      makeItem('q-scheduler-dispatched', prompt, {
-        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
-      }),
-    );
-    await flush();
-    expect(dispatched.sendToAgent.mock.calls[0]?.[1]).toEqual({ type: 'user', content: prompt });
-    const dispatchedProjection = latestProjection(dispatched.projections);
-    expect(dispatchedProjection.continuationInFlightClientId).toBeNull();
-    expect(dispatchedProjection.continuationTurnClientId).toBeNull();
   });
 
   it('host 不接管时照常呈现错误(默认行为不变)', async () => {

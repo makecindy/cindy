@@ -13,7 +13,7 @@
  *  - 同 schedule 已有排队项 → 顺延(deferred),不重复入队
  *  - 排队项被丢弃(用户删除)→ run 以含 aborted 的错误收尾
  *  - pause/delete abort → removeQueuedPrompt 撤项
- *  - 会话空闲 → 不入队,走原直发路径(行为回归)
+ *  - 会话空闲也走 coordinator，和普通聊天共享恢复生命周期
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
 
@@ -199,6 +199,8 @@ interface QueueHarness {
   accept(): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
   discard(): void;
+  /** 模拟普通自动续跑最终仍失败。 */
+  failAutoResume(): void;
 }
 
 function createQueueHarness(opts: {
@@ -217,9 +219,12 @@ function createQueueHarness(opts: {
    * 复刻「目标会话在入队前的 await 期间恰好空闲」这条既有注释明确允许的顺序。
    */
   acceptBeforeEnqueueResolves?: boolean;
+  /** runner 收到 terminal error 时，普通自动续跑是否已接管。 */
+  autoResumePending?: () => boolean;
 }): QueueHarness {
   const enqueueCalls: QueueHarness['enqueueCalls'] = [];
   const removeCalls: QueueHarness['removeCalls'] = [];
+  const autoResumeFailureListeners = new Set<() => void>();
   return {
     enqueueCalls,
     removeCalls,
@@ -242,12 +247,20 @@ function createQueueHarness(opts: {
         }
       },
       isPromptTracked: () => (opts.tracked ? opts.tracked() : true),
+      isAutoResumePending: () => opts.autoResumePending?.() ?? false,
+      onAutoResumeFailed: (_sessionId, _runId, listener) => {
+        autoResumeFailureListeners.add(listener);
+        return () => autoResumeFailureListeners.delete(listener);
+      },
     },
     async accept() {
       await enqueueCalls.at(-1)?.onAccepted();
     },
     discard() {
       enqueueCalls.at(-1)?.onDiscarded?.();
+    },
+    failAutoResume() {
+      for (const listener of [...autoResumeFailureListeners]) listener();
     },
   };
 }
@@ -350,6 +363,56 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     expect(isHeadlessGhostSetupTurn(SESSION_ID)).toBe(false);
     // 收尾通知照常(未静默场景)。
     expect(latestNotifiedRun(notifier)).toMatchObject({ status: 'success' });
+  });
+
+  it('keeps the same run open when ordinary auto-resume claims a capacity interruption', async () => {
+    let autoResumePending = true;
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => autoResumePending });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    harness.emit({
+      type: 'error',
+      data: { message: 'Selected model is at capacity.', isTerminal: true },
+      source: 'claude-code',
+    });
+    // 同一失败 turn 的配对 done 不能把 schedule run 提前收成成功。
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await Promise.resolve();
+    expect(harness.listenerCount()).toBe(1);
+
+    autoResumePending = false;
+    harness.emit({ type: 'text', data: { text: 'continued result', isFinal: true }, source: 'claude-code' });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+    await expect(firePromise).resolves.toMatchObject({
+      sessionId: SESSION_ID,
+      resultText: 'continued result',
+    });
+  });
+
+  it('fails the same run when a claimed auto-resume cannot be dispatched', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+    const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    harness.emit({
+      type: 'error',
+      data: { message: 'Selected model is at capacity.', isTerminal: true },
+      source: 'claude-code',
+    });
+    harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+    await Promise.resolve();
+    queue.failAutoResume();
+
+    await expect(firePromise).rejects.toThrow('scheduled task auto-resume failed');
+    expect(harness.listenerCount()).toBe(0);
   });
 
   it('defers (no duplicate enqueue) when the schedule already has a queued prompt', async () => {
@@ -764,7 +827,7 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
 
-  it('keeps the direct-send path when the bound session is idle', async () => {
+  it('routes an idle bound session through the same coordinator path', async () => {
     const harness = createSessionHarness(async (_message, opts) => {
       await opts?.onAccepted?.();
       return { accepted: true };
@@ -773,8 +836,9 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     const { runner } = createRunnerHarness(harness.session, queue.deps);
 
     const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
-    await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(1));
-    expect(queue.enqueueCalls.length).toBe(0);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    expect(harness.send).not.toHaveBeenCalled();
+    await queue.accept();
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
     await expect(firePromise).resolves.toMatchObject({ sessionId: SESSION_ID });
   });
@@ -1088,10 +1152,7 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
   });
 
   it('turn 事件经 onProgress 上报给引擎的卡死守卫', async () => {
-    const harness = createSessionHarness(async (_message, opts) => {
-      await opts?.onAccepted?.();
-      return { accepted: true };
-    });
+    const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: false });
     const { runner } = createRunnerHarness(harness.session, queue.deps);
     const ctx = createFireContext();
@@ -1099,7 +1160,8 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
     (ctx as { onProgress?: () => void }).onProgress = onProgress;
 
     const firePromise = runner.fire(heartbeatSchedule(), ctx);
-    await vi.waitFor(() => expect(harness.send).toHaveBeenCalledTimes(1));
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
     harness.emit({ type: 'text', data: { text: 'thinking' }, source: 'claude-code' });
     await vi.waitFor(() => expect(onProgress).toHaveBeenCalled());
     harness.emit({ type: 'done', data: {}, source: 'claude-code' });
