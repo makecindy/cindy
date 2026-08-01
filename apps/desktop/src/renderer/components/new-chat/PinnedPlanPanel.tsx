@@ -33,7 +33,7 @@ export function PinnedPlanPanel({
   return (
     <div className="mb-1.5 max-w-full" style={{ width }}>
       {/* key 按 plan session 锚定:新计划重挂载,浮层/进度从头开始。 */}
-      <TodoListCard key={insertion.key} todos={insertion.todos} animated={animated} />
+      <TodoListCard key={insertion.key} todos={insertion.todos} animated={animated} maxWidth={width} />
     </div>
   );
 }

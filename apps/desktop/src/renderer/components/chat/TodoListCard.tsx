@@ -37,11 +37,14 @@ export type TodoItem = MessageRenderTodoItem;
 export function TodoListCard({
   todos,
   animated = true,
+  maxWidth,
 }: {
   todos: TodoItem[];
   /** When false, in_progress items render the dashed circle but no pulse / spin —
    *  used after the session stops so frozen todos don't keep "spinning". */
   animated?: boolean;
+  /** Composer/chat column width. Keeps the flyout inside clipped compact panes. */
+  maxWidth?: number;
 }) {
   const { t } = useTranslation();
   const flyoutId = useId();
@@ -63,6 +66,10 @@ export function TodoListCard({
     activeIndex >= 0 ? activeIndex : pendingIndex >= 0 ? pendingIndex : Math.min(completed, total - 1);
   const currentStep = allDone ? total : currentIndex + 1;
   const hasActive = todos.some((todo) => todo.status === 'in_progress');
+  const flyoutMaxWidth =
+    typeof maxWidth === 'number' && Number.isFinite(maxWidth) && maxWidth > 0
+      ? `${Math.floor(maxWidth)}px`
+      : null;
 
   return (
     <div className="flex w-full justify-center">
@@ -116,12 +123,21 @@ export function TodoListCard({
               id={flyoutId}
               className={cn(
                 'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
-                'w-max min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
+                'w-max',
+                flyoutMaxWidth === null && 'min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
                 'origin-bottom overflow-hidden rounded-[12px]',
                 'border border-[var(--msg-tool-card-border)]',
                 'bg-[var(--msg-tool-card-bg)]',
                 revealed ? 'animate-float-in' : 'animate-float-out',
               )}
+              style={
+                flyoutMaxWidth === null
+                  ? undefined
+                  : {
+                      minWidth: `min(220px, ${flyoutMaxWidth})`,
+                      maxWidth: `min(420px, ${flyoutMaxWidth}, calc(100vw - 32px))`,
+                    }
+              }
               onAnimationEnd={() => {
                 if (!revealed) setRenderFlyout(false);
               }}
