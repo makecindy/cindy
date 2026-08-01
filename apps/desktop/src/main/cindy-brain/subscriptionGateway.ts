@@ -537,6 +537,9 @@ export class GhostTurnTranslator {
   /** closing 进入时刻(duration 以它为准,不算宽限等待)。 */
   private endedAt = 0;
   private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 本轮 did-turn-start 实际发出去的 agent(已含 ev.source 覆盖);拆线补发 end 要
+   *  复用它,不能退回 opts.agent——两者取值域不同,见 dispose。 */
+  private startedAgent: string | null = null;
 
   constructor(
     private readonly opts: {
@@ -569,6 +572,7 @@ export class GhostTurnTranslator {
         if (this.state === 'idle') {
           this.state = 'running';
           this.startedAt = now();
+          this.startedAgent = base.agent;
           sink.turnStart(base);
         }
       } else if (this.state === 'running') {
@@ -613,15 +617,21 @@ export class GhostTurnTranslator {
    * agent 切换只在会话空闲时落实(`applyPendingAgentSwitchIfIdle` 的 `isTurnRunning`
    * 守卫),替换发生时本状态机必然已回到 idle,下面的补发分支根本不触发。
    *
-   * dispose 时没有 ev 可用,`agent` 退化成 `opts.agent`(丢掉 `ev.source` 覆盖):
-   * 补发的这条 end 只负责让配对闭合,来源精度不是它的职责。
+   * dispose 时没有 ev 可用,`agent` 复用本轮 start 发出的值而不是 `opts.agent`:后者
+   * 来自 `sessions.agent_kind`(默认 `'cc'`),而 start 走的是 `ev.source`
+   * (`'claude-code'`)。补发的 end 必须与那条 start 报同一个 agent,否则按 agent
+   * 分组维护状态的插件配不上这一对,配对照样闭合不了。
    */
   dispose(): void {
     this.clearGraceTimer();
     if (this.state === 'idle') return;
     const { sessionId, agent, model } = this.opts;
     this.finish(
-      { sessionId, agent, ...(model !== undefined ? { model } : {}) },
+      {
+        sessionId,
+        agent: this.startedAgent ?? agent,
+        ...(model !== undefined ? { model } : {}),
+      },
       'interrupted',
       undefined,
     );
@@ -643,6 +653,7 @@ export class GhostTurnTranslator {
     // closing 态用 status(false) 到达时刻,宽限等待不算进 turn 时长。
     const endAt = this.state === 'closing' ? this.endedAt : this.opts.now();
     this.state = 'idle';
+    this.startedAgent = null;
     this.opts.sink.turnEnd({
       ...base,
       durationMs: Math.max(0, endAt - this.startedAt),
