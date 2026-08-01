@@ -478,7 +478,7 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   const latestEventClearsPlan =
     latestPlanMessage !== null &&
     (isExplicitPlanClearEvent(latestPlanMessage) ||
-      latestTaskDeletionClearsPlan(messages, latestPlanIndex));
+      latestTaskEventClearsPlan(messages, latestPlanIndex));
   return {
     insertion: insertionBelongsToLatestEvent ? latest : null,
     hasPlanEvent,
@@ -627,15 +627,16 @@ function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): bool
   return false;
 }
 
-function latestTaskDeletionClearsPlan<TMessage extends MessageRenderSourceMessageLike>(
+function latestTaskEventClearsPlan<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
   latestPlanIndex: number,
 ): boolean {
   const latest = messages[latestPlanIndex];
   const latestToolName = toolNameOf(latest);
-  if (latestToolName !== 'TaskUpdate' && latestToolName !== 'TaskGet') return false;
   const resultByToolUseId = buildToolResultLookup(messages);
   const latestResultText = resultByToolUseId.get(toolUseIdOf(latest) ?? '');
+  if (latestToolName === 'TaskList') return taskListResultClearsPlan(latestResultText);
+  if (latestToolName !== 'TaskUpdate' && latestToolName !== 'TaskGet') return false;
   if (taskToolStatus(latest, latestResultText) !== 'deleted') return false;
 
   const taskState = new Map<string, MessageRenderTodoItem>();
@@ -787,7 +788,13 @@ function applyTaskPlanTool(
   const resultTasks = taskRecordsFromResult(resultText);
 
   if (toolName === 'TaskList') {
-    if (resultTasks.length === 0) return currentTaskTodos(taskState);
+    if (resultTasks.length === 0) {
+      if (taskListResultClearsPlan(resultText)) {
+        taskState.clear();
+        return null;
+      }
+      return currentTaskTodos(taskState);
+    }
     const previousTaskState = new Map(taskState);
     taskState.clear();
     for (const task of resultTasks) {
@@ -850,6 +857,11 @@ function applyTaskPlanTool(
     status,
   });
   return currentTaskTodos(taskState);
+}
+
+function taskListResultClearsPlan(resultText: string | undefined): boolean {
+  const parsed = tryParseJsonRecord(resultText);
+  return Boolean(parsed && Array.isArray(parsed.tasks) && parsed.tasks.length === 0);
 }
 
 function currentTaskTodos(taskState: Map<string, MessageRenderTodoItem>): MessageRenderTodoItem[] | null {

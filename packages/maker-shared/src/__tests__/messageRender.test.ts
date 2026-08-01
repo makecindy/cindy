@@ -961,6 +961,18 @@ describe('message render todo grouping', () => {
     ])).toBeNull();
   });
 
+  it('treats explicit empty TaskList snapshots as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const listEmpty = tool('task2', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      listEmpty,
+      result('list-1', JSON.stringify({ tasks: [] })),
+    ])).toBeNull();
+  });
+
   it('parses Codex update_plan text and structured plan statuses', () => {
     expect(extractPlanTodos('update_plan', { text: '1. Read code\n2. Run tests' })).toEqual([
       { content: 'Read code', status: 'in_progress' },
