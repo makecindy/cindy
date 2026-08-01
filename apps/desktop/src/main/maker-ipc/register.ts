@@ -298,7 +298,7 @@ import { broadcastEffectiveModelPricing, getCodexSubscriptionValuePrice, getGate
 import { clearModelPriceOverride, stageProviderModelPriceOverridesClear, readModelPriceOverrideView, setModelPriceOverride } from '../usage/modelPriceOverrideStore.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
-import { buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
+import { billingRouteForExplicitProvider, buildClaudeTurnUsageDetails, computePriceQuoteTurnMoney, estimateClaudeSubscriptionTurnValue, isAnthropicModel, normalizeModelIdForPricing, resolveClaudeTurnCostSinks, type BillingRoute } from '../usage/turnCostCalculator.js';
 import { CHATGPT_MODEL_PREFIX, XAI_MODEL_PREFIX, isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import {
   addRegionalMoney,
@@ -3188,6 +3188,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           const sessionProviderForBilling = getSessionProvider(session.id);
           const observedClaudeRoute =
             sessionProviderForBilling == null ? readClaudeSessionRoute(session.id) : null;
+          const explicitProviderBillingRoute = billingRouteForExplicitProvider(
+            sessionProviderForBilling,
+            sessionProviderForBilling
+              ? getActiveCatalog().providers.find(
+                  (provider) => provider.id === sessionProviderForBilling,
+                )?.access?.kind
+              : null,
+          );
           const isClaudeSubscriptionSession = !session.remoteHostId && (
             sessionProviderForBilling === 'anthropic'
             || (
@@ -3201,11 +3209,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             ? 'unknown'
             : isClaudeSubscriptionSession
               ? 'subscription'
-              : sessionProviderForBilling === 'xd' || observedClaudeRoute === 'gateway'
-                ? 'xd-gateway'
-                : sessionProviderForBilling
-                  ? 'provider-api'
-                  : 'unknown';
+              : explicitProviderBillingRoute
+                ?? (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown');
           const pricing =
             billingRoute === 'xd-gateway'
               ? await getModelPricingForModel(
@@ -3335,15 +3340,19 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const providerId = getSessionProvider(session.id);
             const observedRoute =
               providerId == null ? readClaudeSessionRoute(session.id) : null;
+            const explicitProviderRoute = billingRouteForExplicitProvider(
+              providerId,
+              providerId
+                ? getActiveCatalog().providers.find((provider) => provider.id === providerId)
+                    ?.access?.kind
+                : null,
+            );
             const route: BillingRoute = session.remoteHostId
               ? 'unknown'
               : providerId === 'anthropic' || observedRoute === 'subscription'
                 ? 'subscription'
-                : providerId === 'xd' || observedRoute === 'gateway'
-                  ? 'xd-gateway'
-                  : providerId
-                    ? 'provider-api'
-                    : 'unknown';
+                : explicitProviderRoute
+                  ?? (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown');
             if (route === 'subscription' || route === 'xd-gateway') return;
             const ledgerCurrency =
               (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();

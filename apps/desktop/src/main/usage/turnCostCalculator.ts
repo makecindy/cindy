@@ -32,6 +32,22 @@ export interface TurnTokenDeltas {
 
 export type BillingRoute = 'xd-gateway' | 'provider-api' | 'subscription' | 'unknown';
 
+/**
+ * 将显式选择的 provider 映射为计费来源。`access.kind` 是目录已有的产品语义，
+ * 不能把所有显式 provider 都推断成按量 API：OpenAI / xAI 等内置 OAuth 来源
+ * 本身是订阅，SDK 即使上报 cost 也不能写进实际支出。
+ */
+export function billingRouteForExplicitProvider(
+  providerId: string | null,
+  accessKind: 'subscription' | 'api' | 'managed' | null | undefined,
+): BillingRoute | null {
+  if (!providerId) return null;
+  if (providerId === 'xd') return 'xd-gateway';
+  // 保留旧目录 / LKG 缺 access 时对 Anthropic 的历史订阅判定。
+  if (providerId === 'anthropic' || accessKind === 'subscription') return 'subscription';
+  return 'provider-api';
+}
+
 export interface TurnPricingContext {
   providerId: string | null;
   billingRoute: BillingRoute;

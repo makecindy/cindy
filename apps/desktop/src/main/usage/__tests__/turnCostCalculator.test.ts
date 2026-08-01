@@ -6,6 +6,7 @@ import {
   setActiveLedgerCurrency,
 } from '../ledgerCurrency';
 import {
+  billingRouteForExplicitProvider,
   buildClaudeTurnUsageDetails,
   computePriceQuoteTurnMoney,
   computeGatewayTurnCost,
@@ -113,6 +114,16 @@ function resolvedModel(
 }
 
 describe('model id and route helpers', () => {
+  it('uses provider access semantics for explicit billing routes', () => {
+    expect(billingRouteForExplicitProvider('openai', 'subscription')).toBe('subscription');
+    expect(billingRouteForExplicitProvider('xai', 'subscription')).toBe('subscription');
+    expect(billingRouteForExplicitProvider('anthropic', undefined)).toBe('subscription');
+    expect(billingRouteForExplicitProvider('xd', 'managed')).toBe('xd-gateway');
+    expect(billingRouteForExplicitProvider('custom-api', 'api')).toBe('provider-api');
+    expect(billingRouteForExplicitProvider('custom-api', undefined)).toBe('provider-api');
+    expect(billingRouteForExplicitProvider(null, null)).toBeNull();
+  });
+
   it('normalizes model suffixes without dropping provider prefixes', () => {
     expect(normalizeModelIdForPricing('gpt-5.5[1m]')).toBe('gpt-5.5');
     expect(normalizeModelIdForPricing('codex/gpt-5.5[1m]')).toBe('codex/gpt-5.5');
@@ -568,6 +579,31 @@ describe('resolveTurnCost', () => {
     });
     expect(byRoute).toMatchObject({ source: 'subscription', money: null });
     expect(byPrefix).toMatchObject({ source: 'subscription', money: null });
+  });
+
+  it('keeps explicit built-in OpenAI and xAI subscription sources out of actual spend', () => {
+    for (const [providerId, rawModel] of [
+      ['openai', 'chatgpt/gpt-5.5'],
+      ['xai', 'xai/grok-4.5'],
+    ] as const) {
+      const result = resolveTurnCost({
+        rawModel,
+        tokens: {
+          inputTokens: 1_000_000,
+          outputTokens: 100_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        sdkCostDelta: 5,
+        pricing: null,
+        context: {
+          providerId,
+          billingRoute: billingRouteForExplicitProvider(providerId, 'subscription')!,
+          region: 'global',
+        },
+      });
+      expect(result).toMatchObject({ source: 'subscription', money: null });
+    }
   });
 
   it('lets an explicit provider API route price a custom xAI-prefixed model', () => {

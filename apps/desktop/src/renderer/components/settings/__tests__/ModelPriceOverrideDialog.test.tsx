@@ -41,9 +41,13 @@ function row(modelId: string): UnionModelRow {
   };
 }
 
-function priceView(modelId: string): ModelPriceOverrideView {
+function priceView(
+  modelId: string,
+  agent: 'claude-code' | 'codex' = 'codex',
+  hasOverride = false,
+): ModelPriceOverrideView {
   return {
-    target: { providerId: 'openrouter', agent: 'codex', modelId },
+    target: { providerId: 'openrouter', agent, modelId },
     editable: true,
     reference: {
       providerId: 'openrouter',
@@ -63,7 +67,7 @@ function priceView(modelId: string): ModelPriceOverrideView {
       inputPerMtok: 1,
       outputPerMtok: 4,
     },
-    override: null,
+    override: hasOverride ? { currency: 'USD', inputPerMtok: 2, outputPerMtok: 8 } : null,
     conflict: false,
     registryUpdatedAt: null,
     allowedCurrencies: ['USD'],
@@ -73,16 +77,18 @@ function priceView(modelId: string): ModelPriceOverrideView {
 describe('ModelPriceOverrideDialog', () => {
   const getModelPriceOverride = vi.fn();
   const setModelPriceOverride = vi.fn();
+  const resetModelPriceOverride = vi.fn();
 
   beforeEach(() => {
     vi.clearAllMocks();
     getModelPriceOverride.mockReset();
     setModelPriceOverride.mockReset();
+    resetModelPriceOverride.mockReset();
     (window as unknown as { electronAPI: unknown }).electronAPI = {
       maker: {
         getModelPriceOverride,
         setModelPriceOverride,
-        resetModelPriceOverride: vi.fn(),
+        resetModelPriceOverride,
       },
     };
   });
@@ -166,5 +172,44 @@ describe('ModelPriceOverrideDialog', () => {
     await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
     expect(getByRole('button', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
     expect(getByRole('button', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
+  });
+
+  it('prevents switching runtime while a reset response is pending', async () => {
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a', 'claude-code', true));
+    let finishReset: ((view: ModelPriceOverrideView) => void) | undefined;
+    resetModelPriceOverride.mockReturnValueOnce(
+      new Promise<ModelPriceOverrideView>((resolve) => {
+        finishReset = resolve;
+      }),
+    );
+    const claudeModel = row('model-a').byAgent.codex!;
+    const dualRuntimeRow: UnionModelRow = {
+      ...row('model-a'),
+      byAgent: { 'claude-code': claudeModel, codex: claudeModel },
+      avail: ['claude-code', 'codex'],
+    };
+
+    const { getByRole } = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={dualRuntimeRow}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    const reset = await waitFor(() =>
+      getByRole('button', { name: 'settings.providers.models.priceOverride.reset' }),
+    );
+    fireEvent.click(reset);
+    await waitFor(() => expect(resetModelPriceOverride).toHaveBeenCalledOnce());
+
+    const codex = getByRole('button', { name: 'Codex' });
+    expect(codex.hasAttribute('disabled')).toBe(true);
+    fireEvent.click(codex);
+    expect(getModelPriceOverride).toHaveBeenCalledOnce();
+
+    finishReset?.(priceView('model-a', 'claude-code'));
+    await waitFor(() => expect(codex.hasAttribute('disabled')).toBe(false));
   });
 });
