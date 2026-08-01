@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { AlertTriangle, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -81,6 +81,13 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
     [agent, model, provider.id],
   );
 
+  // 弹窗关闭或目标切换后,在途 save/reset 的迟到响应必须整体作废:旧实例捕获的
+  // setView/onOpenChange(false) 会覆盖新目标的表单、甚至直接关掉刚打开的弹窗。
+  const mutationEpochRef = useRef(0);
+  useEffect(() => {
+    mutationEpochRef.current += 1;
+  }, [open, target]);
+
   useEffect(() => {
     if (!open) return;
     if (!row.avail.includes(agent)) setAgent(row.avail[0]);
@@ -133,13 +140,16 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
       cacheCreatePerMtok,
     };
     setSaving(true);
+    const epoch = mutationEpochRef.current;
     try {
       const next = await window.electronAPI.maker.setModelPriceOverride(target, desired);
+      if (mutationEpochRef.current !== epoch) return;
       setView(next);
       setForm(formFromView(next));
       toast.success(t('settings.providers.models.priceOverride.saved'));
       onOpenChange(false);
     } catch {
+      if (mutationEpochRef.current !== epoch) return;
       toast.error(t('settings.providers.models.priceOverride.saveFailed'));
     } finally {
       setSaving(false);
@@ -149,12 +159,15 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   const reset = async () => {
     if (!target) return;
     setSaving(true);
+    const epoch = mutationEpochRef.current;
     try {
       const next = await window.electronAPI.maker.resetModelPriceOverride(target);
+      if (mutationEpochRef.current !== epoch) return;
       setView(next);
       setForm(formFromView(next));
       toast.success(t('settings.providers.models.priceOverride.resetDone'));
     } catch {
+      if (mutationEpochRef.current !== epoch) return;
       toast.error(t('settings.providers.models.priceOverride.saveFailed'));
     } finally {
       setSaving(false);

@@ -266,23 +266,67 @@ function mergedQuote(
           : {}),
       }
     : undefined;
+  // A same-currency update can drop the long-context bands the patch was saved
+  // against (typical of a fidelity downgrade to a band-less fallback catalog).
+  // Discarding the bands would flatten long-context estimates, but freezing the
+  // whole saved snapshot would also stop un-overridden base prices from following
+  // the remote. Split the difference: base prices keep following the new
+  // reference, while each saved band keeps its relative multiplier and is
+  // re-anchored onto the new baselines.
+  const reAnchorBandValue = (
+    bandValue: number | undefined,
+    savedBaseValue: number | undefined,
+    referenceValue: number | undefined,
+  ): number | undefined => {
+    if (bandValue === undefined) return undefined;
+    return savedBaseValue !== undefined && savedBaseValue > 0 && referenceValue !== undefined
+      ? (bandValue / savedBaseValue) * referenceValue
+      : bandValue;
+  };
+  const bandPreservingReference =
+    savedBaseQuote?.inputTokenPriceBands !== undefined &&
+    reference &&
+    values.currency === undefined &&
+    savedBaseQuote.currency === reference.currency &&
+    reference.inputTokenPriceBands === undefined
+      ? {
+          ...reference,
+          inputTokenPriceBands: savedBaseQuote.inputTokenPriceBands.map((band) => ({
+            ...band,
+            inputPerMtok: reAnchorBandValue(
+              band.inputPerMtok,
+              savedBaseQuote.inputPerMtok,
+              reference.inputPerMtok,
+            ),
+            outputPerMtok: reAnchorBandValue(
+              band.outputPerMtok,
+              savedBaseQuote.outputPerMtok,
+              reference.outputPerMtok,
+            ),
+            cacheReadPerMtok: reAnchorBandValue(
+              band.cacheReadPerMtok,
+              savedBaseQuote.cacheReadPerMtok,
+              reference.cacheReadPerMtok,
+            ),
+            cacheCreatePerMtok: reAnchorBandValue(
+              band.cacheCreatePerMtok,
+              savedBaseQuote.cacheCreatePerMtok,
+              reference.cacheCreatePerMtok,
+            ),
+          })),
+        }
+      : undefined;
   // A sparse numeric patch was entered in the saved base currency. If the remote
   // route later changes currency or loses its reference price, merging it into the
-  // new/empty quote would silently relabel or discard the user's number. The same
-  // holds when a same-currency update drops the long-context bands the patch was
-  // saved against (typical of a fidelity downgrade to a band-less fallback catalog):
-  // bands belong to their own snapshot, so keep the whole saved reference as the
-  // merge base — never graft saved bands onto a newer baseline — until the user
-  // accepts/resets the conflict.
+  // new/empty quote would silently relabel or discard the user's number. Keep using
+  // the saved reference as the merge base until the user accepts/reset the conflict.
   const mergeReference =
-    savedBaseQuote &&
+    bandPreservingReference ??
+    (savedBaseQuote &&
     (!reference ||
-      (values.currency === undefined &&
-        (savedBaseQuote.currency !== reference.currency ||
-          (savedBaseQuote.inputTokenPriceBands !== undefined &&
-            reference.inputTokenPriceBands === undefined))))
+      (values.currency === undefined && savedBaseQuote.currency !== reference.currency))
       ? savedBaseQuote
-      : reference;
+      : reference);
   const currency = values.currency ?? mergeReference?.currency;
   const inputPerMtok = values.inputPerMtok ?? mergeReference?.inputPerMtok;
   const outputPerMtok = values.outputPerMtok ?? mergeReference?.outputPerMtok;

@@ -228,7 +228,7 @@ describe('model price override sparse persistence', () => {
     });
   });
 
-  it('keeps saved long-context bands when a same-currency remote update drops them', () => {
+  it('re-anchors saved long-context bands when a same-currency remote update drops them', () => {
     const savedBase = {
       currency: 'USD' as const,
       inputPerMtok: 2,
@@ -243,32 +243,34 @@ describe('model price override sparse persistence', () => {
         },
       ],
     };
-    expect(
-      __testing.mergedQuote(
-        { providerId: 'custom', agent: 'codex', modelId: 'model' },
-        {
-          providerId: 'custom',
-          modelId: 'model',
-          source: 'provider-reference',
-          approximate: true,
-          currency: 'USD',
-          inputPerMtok: 3,
-          outputPerMtok: 9,
-        },
-        { inputPerMtok: 4 },
-        savedBase,
-      ),
-    ).toMatchObject({
+    const merged = __testing.mergedQuote(
+      { providerId: 'custom', agent: 'codex', modelId: 'model' },
+      {
+        providerId: 'custom',
+        modelId: 'model',
+        source: 'provider-reference',
+        approximate: true,
+        currency: 'USD',
+        inputPerMtok: 3,
+        outputPerMtok: 9,
+        cacheReadPerMtok: 0.3,
+      },
+      { inputPerMtok: 4 },
+      savedBase,
+    );
+    // 未覆盖的基础价跟随远端;分段价保留保存基底的相对倍率(输入 2×、输出 2×),
+    // 锚回远端新基础价后再按覆盖投影:输入档 2×4=8,输出档 2×9=18。
+    expect(merged).toMatchObject({
       source: 'user-override',
       currency: 'USD',
       inputPerMtok: 4,
-      outputPerMtok: 6,
-      cacheReadPerMtok: 0.2,
+      outputPerMtok: 9,
+      cacheReadPerMtok: 0.3,
       inputTokenPriceBands: [
         {
           minInputTokens: 200_001,
           inputPerMtok: 8,
-          outputPerMtok: 12,
+          outputPerMtok: 18,
         },
       ],
     });

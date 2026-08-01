@@ -212,4 +212,59 @@ describe('ModelPriceOverrideDialog', () => {
     finishReset?.(priceView('model-a', 'claude-code'));
     await waitFor(() => expect(codex.hasAttribute('disabled')).toBe(false));
   });
+
+  it('discards a late save response after the dialog is closed and reopened', async () => {
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
+    let finishSave: ((view: ModelPriceOverrideView) => void) | undefined;
+    setModelPriceOverride.mockReturnValueOnce(
+      new Promise<ModelPriceOverrideView>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+    const onOpenChange = vi.fn();
+    const { getByRole, getByLabelText, rerender } = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-a')}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    );
+    const save = await waitFor(() =>
+      getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
+    );
+    fireEvent.click(save);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
+
+    // 保存尚未返回时关闭弹窗,随即打开模型 B。
+    rerender(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-a')}
+        open={false}
+        onOpenChange={onOpenChange}
+      />,
+    );
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-b'));
+    rerender(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-b')}
+        open
+        onOpenChange={onOpenChange}
+      />,
+    );
+    await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledTimes(2));
+
+    // A 的迟到响应(带 override 2/8)落地:不得关闭 B 的弹窗,也不得覆写 B 的表单。
+    finishSave?.(priceView('model-a', 'codex', true));
+    const saveB = getByRole('button', {
+      name: 'settings.providers.models.priceOverride.save',
+    });
+    await waitFor(() => expect(saveB.hasAttribute('disabled')).toBe(false));
+    expect(
+      (getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement).value,
+    ).toBe('1');
+    expect(onOpenChange).not.toHaveBeenCalled();
+  });
 });
