@@ -2770,9 +2770,8 @@
         "personal": "Personal"
       },
       "tips": {
-        "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal connections include WeChat scan authorization and your own WeCom / Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own WeCom, Feishu, and DingTalk credentials. Each channel keeps independent new-conversation settings."
+        "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
+        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",

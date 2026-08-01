@@ -2769,9 +2769,8 @@
         "personal": "개인"
       },
       "tips": {
-        "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
-        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom / Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom, Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "cindy": "Cindy가 제공하고 관리합니다. 봇을 직접 만들거나 인증 정보를 준비할 필요 없이 안내에 따라 연결하면 바로 사용할 수 있습니다.",
+        "personal": "본인의 계정이나 봇을 연결하고 필요한 인증 정보를 직접 관리합니다. 계정, 권한 및 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
