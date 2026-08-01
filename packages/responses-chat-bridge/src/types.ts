@@ -360,11 +360,55 @@ export interface ResponsesChatBridgeHandler {
   handle(args: ChatBridgeHandleArgs): Promise<void>;
 }
 
+const UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX =
+  'Responses feature is not supported by the Chat Completions bridge: ';
+const RESPONSES_IMAGE_CONTENT_PART_TYPES = new Set(['input_image', 'image_url', 'image']);
+
+export function isResponsesImageContentPartType(
+  value: unknown,
+): value is 'input_image' | 'image_url' | 'image' {
+  return typeof value === 'string' && RESPONSES_IMAGE_CONTENT_PART_TYPES.has(value);
+}
+
+function unsupportedResponsesFeatureFromMessage(message: string): string | null {
+  return message.startsWith(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX)
+    ? message.slice(UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX.length)
+    : null;
+}
+
+function isUnsupportedResponsesImageFeature(feature: string): boolean {
+  const contentPartMatch = /^input content part '([^']+)'$/.exec(feature);
+  const contentPartType = contentPartMatch?.[1] ?? feature;
+  return isResponsesImageContentPartType(contentPartType)
+    || contentPartType.startsWith('input_image.');
+}
+
+/**
+ * Classifies the serialized OpenAI-style error body emitted by this bridge for unsupported image
+ * input. Both the current content-part feature and the legacy direct `input_image` feature are
+ * accepted so persisted retries from older Cindy versions remain recoverable.
+ */
+export function isUnsupportedResponsesImageErrorPayload(payload: string | null): boolean {
+  if (!payload) return false;
+  try {
+    const parsed = JSON.parse(payload) as unknown;
+    if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return false;
+    const error = (parsed as Record<string, unknown>).error;
+    if (typeof error !== 'object' || error === null || Array.isArray(error)) return false;
+    const { code, message } = error as Record<string, unknown>;
+    if (code !== 'unsupported_feature' || typeof message !== 'string') return false;
+    const feature = unsupportedResponsesFeatureFromMessage(message);
+    return feature !== null && isUnsupportedResponsesImageFeature(feature);
+  } catch {
+    return false;
+  }
+}
+
 export class UnsupportedResponsesFeatureError extends Error {
   readonly feature: string;
 
   constructor(feature: string) {
-    super(`Responses feature is not supported by the Chat Completions bridge: ${feature}`);
+    super(`${UNSUPPORTED_RESPONSES_FEATURE_MESSAGE_PREFIX}${feature}`);
     this.name = 'UnsupportedResponsesFeatureError';
     this.feature = feature;
   }

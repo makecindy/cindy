@@ -24,6 +24,7 @@
  * 它只提交 intent payload；排序、投递模式、回滚和持久化由本模块决定。
  */
 
+import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -65,16 +66,6 @@ const SESSION_RUNNING_RETRY_DELAY_MS = 250;
 const CREDENTIAL_SWITCH_RETRY_DELAY_MS = 10_000;
 const TERMINAL_DONE_FALLBACK_DELAY_MS = 250;
 const REWIND_BOUNDARY_POLL_INTERVAL_MS = 100;
-const CHAT_BRIDGE_UNSUPPORTED_IMAGE_MARKER =
-  'Responses feature is not supported by the Chat Completions bridge: input_image';
-
-function isUnsupportedChatBridgeImageError(message: string | null): boolean {
-  return Boolean(
-    message
-    && message.includes('unsupported_feature')
-    && message.includes(CHAT_BRIDGE_UNSUPPORTED_IMAGE_MARKER),
-  );
-}
 
 function stripQueuedMessageImages(item: AgentInputQueuedMessage): AgentInputQueuedMessage {
   const remainingFiles = item.files?.filter((file) => file.category !== 'image');
@@ -1707,7 +1698,7 @@ export class AgentInputCoordinator {
     if (
       !continueItem
       && retryItem
-      && isUnsupportedChatBridgeImageError(state.error ?? state.stickyError)
+      && isUnsupportedResponsesImageErrorPayload(state.error ?? state.stickyError)
     ) {
       retryItem = stripQueuedMessageImages(retryItem);
       if (!hasRetryableQueuedContent(retryItem)) {

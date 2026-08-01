@@ -1,4 +1,5 @@
 import {
+  isResponsesImageContentPartType,
   UnsupportedResponsesFeatureError,
   type ChatAssistantMessage,
   type ChatAudioInput,
@@ -112,7 +113,7 @@ function mediaPart(
   capabilities: ChatMediaCapabilities,
   failClosed = false,
 ): ChatUserContentPart | undefined {
-  if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
+  if (isResponsesImageContentPartType(part.type)) {
     if (!hasImageSource(part)) return undefined;
     if (capabilities.imageInput !== 'image_url') {
       if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
@@ -177,7 +178,7 @@ function messageContent(
     if (
       dropUnsupportedHistoricalImages
       && normalizedRole === 'user'
-      && (rawPart.type === 'input_image' || rawPart.type === 'image_url' || rawPart.type === 'image')
+      && isResponsesImageContentPartType(rawPart.type)
       && hasImageSource(rawPart)
       && mediaCapabilities.imageInput !== 'image_url'
     ) {

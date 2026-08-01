@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { UnsupportedResponsesFeatureError } from '@cindy/responses-chat-bridge';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import type {
   AgentInputCoordinatorDeps,
@@ -148,6 +149,18 @@ function sessionDispatchFailure(context: string): AgentInputSendResult {
 function sessionRunningError(): Error & { code: string } {
   return Object.assign(new Error('[SESSION_RUNNING] Session is already running a turn'), {
     code: 'SESSION_RUNNING',
+  });
+}
+
+function unsupportedChatBridgeImageError(
+  feature = "input content part 'input_image'",
+): string {
+  return JSON.stringify({
+    error: {
+      type: 'invalid_request_error',
+      code: 'unsupported_feature',
+      message: new UnsupportedResponsesFeatureError(feature).message,
+    },
   });
 }
 
@@ -2139,17 +2152,14 @@ describe('AgentInputCoordinator send transaction', () => {
       }],
       files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
     };
+    (item.chatMessage as typeof item.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles = item.files;
 
     h.coordinator.enqueue(sid, item);
     await flush();
     h.setRunning(false);
-    const error = JSON.stringify({
-      error: {
-        type: 'invalid_request_error',
-        code: 'unsupported_feature',
-        message: 'Responses feature is not supported by the Chat Completions bridge: input_image',
-      },
-    });
+    const error = unsupportedChatBridgeImageError();
     h.coordinator.onTurnEvent(sid, 'error', error);
     await flush();
 
@@ -2168,6 +2178,9 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(retried?.files).toEqual([expect.objectContaining({ id: 'file-1', category: 'pdf' })]);
     expect(retried?.chatMessage.images).toBeUndefined();
     expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
+    expect((retried?.chatMessage as typeof retried.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles).toEqual([expect.objectContaining({ id: 'file-1', category: 'pdf' })]);
     expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
       text: 'describe this',
       images: [],
@@ -2211,13 +2224,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, item);
     await flush();
     h.setRunning(false);
-    const error = JSON.stringify({
-      error: {
-        type: 'invalid_request_error',
-        code: 'unsupported_feature',
-        message: 'Responses feature is not supported by the Chat Completions bridge: input_image',
-      },
-    });
+    const error = unsupportedChatBridgeImageError();
     h.coordinator.onTurnEvent(sid, 'error', error);
     await flush();
 
@@ -2232,6 +2239,35 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+  });
+
+  it('keeps retry recovery compatible with the legacy bridge image error', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-legacy-error';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', unsupportedChatBridgeImageError('input_image'));
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
