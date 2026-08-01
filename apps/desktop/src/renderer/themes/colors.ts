@@ -1289,6 +1289,24 @@ registerColor('annotation-accent', {
   dark: '#FF3B30',
 }, 'Annotation Red — 与烧录笔迹同色,语义豁免');
 
+// Claude 额度条:组件级 singleton，保留已拍板色板并允许主题按语义覆写。
+registerColor('quota-bar-fill', {
+  light: '#DE7B52',
+  dark: '#DE7B52',
+}, 'Claude 额度条默认填充');
+registerColor('quota-bar-warn', {
+  light: '#E09A2F',
+  dark: '#E09A2F',
+}, 'Claude 额度条警告填充');
+registerColor('quota-bar-crit', {
+  light: '#E5484D',
+  dark: '#E5484D',
+}, 'Claude 额度条临界填充');
+registerColor('quota-bar-track', {
+  light: 'rgba(0, 0, 0, 0.08)',
+  dark: 'rgba(255, 255, 255, 0.13)',
+}, 'Claude 额度条轨道');
+
 // Running Status Bar (F-SDK-3)
 registerColor('status-bar-accent', {
   light: 'var(--warning-accent)',

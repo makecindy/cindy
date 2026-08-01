@@ -87,7 +87,10 @@ import { useCodexRuntimeRoute } from '@/hooks/useCodexRuntimeRoute';
 import { useCodexRateLimits } from '@/hooks/useCodexRateLimits';
 import { useXaiRateLimit, type XaiRateLimitSnapshot } from '@/hooks/useXaiRateLimit';
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
-import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
+import {
+  buildTurnUsageTooltipLines,
+  getTurnUsageSuggestion,
+} from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
   DEFAULT_USAGE_CURRENCY,
@@ -687,11 +690,6 @@ interface LatestTurnUsageSummary {
   details: TurnUsageDetails;
 }
 
-// turnUsageTooltip 目前只导出整段文本 builder；结构化卡片需要字段级数据，因此在
-// 本组件按同一口径做最小投影。
-const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
-const LOW_CACHE_MAX_HIT_RATE = 0.2;
-
 function formatTurnUsagePercent(value: number | null): string | null {
   if (value === null || !Number.isFinite(value)) return null;
   const percent = Math.min(100, Math.max(0, value * 100));
@@ -726,18 +724,6 @@ function quotaTurnModel(details: TurnUsageDetails, t: TFunction): string | null 
   return null;
 }
 
-function quotaTurnSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
-  const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
-  if (
-    inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS
-    && details.cacheHitRate !== null
-    && details.cacheHitRate < LOW_CACHE_MAX_HIT_RATE
-  ) {
-    return t('usageDetails.suggestion.lowCache');
-  }
-  return null;
-}
-
 function toQuotaHoverCardTurnUsage(
   summary: LatestTurnUsageSummary | null,
   t: TFunction,
@@ -757,7 +743,7 @@ function toQuotaHoverCardTurnUsage(
     outputTokens: details.outputTokens,
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),
-    suggestionText: quotaTurnSuggestion(details, t),
+    suggestionText: getTurnUsageSuggestion(details, t),
   };
 }
 

@@ -13,7 +13,7 @@ import type {
   ClaudeSubscriptionUsageSnapshot,
   ClaudeUsageWindow,
 } from '../../../shared/claudeSubscriptionUsage';
-import { QuotaBar, quotaSeverity } from './QuotaBar';
+import { QuotaBar, quotaSeverity, type QuotaSeverity } from './QuotaBar';
 
 export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
@@ -44,6 +44,29 @@ const STALE_AFTER_MS = 5 * 60_000;
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
+  normal: 0,
+  warn: 1,
+  crit: 2,
+};
+
+/** 只接纳已知服务端级别，未知值不改变本地阈值判定。 */
+function serverQuotaSeverity(value: string | null | undefined): QuotaSeverity {
+  const normalized = value?.trim().toLowerCase();
+  if (normalized === 'warning') return 'warn';
+  const parts = normalized?.split(/[^a-z]+/).filter(Boolean) ?? [];
+  if (parts.includes('exceeded') || parts.includes('critical')) return 'crit';
+  return 'normal';
+}
+
+function effectiveQuotaSeverity(window: ClaudeUsageWindow): QuotaSeverity {
+  const localSeverity = quotaSeverity(window.utilization);
+  const serverSeverity = serverQuotaSeverity(window.severity);
+  return QUOTA_SEVERITY_RANK[serverSeverity] > QUOTA_SEVERITY_RANK[localSeverity]
+    ? serverSeverity
+    : localSeverity;
 }
 
 /** 未知套餐保留原始拼写，只补齐首字母大写。 */
@@ -112,7 +135,7 @@ function WindowBlock({
   t: TFunction;
 }) {
   const usedPercent = clampPercent(window.utilization);
-  const severity = quotaSeverity(window.utilization);
+  const severity = effectiveQuotaSeverity(window);
   const resetAt = formatResetAt(window.resetsAt, nowMs, locale);
 
   return (
@@ -122,13 +145,13 @@ function WindowBlock({
         className={cn(
           'mb-2 text-sm font-medium tracking-[-0.005em]',
           severity === 'crit'
-            ? 'text-[var(--quota-bar-crit,#E5484D)]'
+            ? 'text-[var(--quota-bar-crit)]'
             : 'text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]',
         )}
       >
         {title}
       </div>
-      <QuotaBar usedPercent={window.utilization} />
+      <QuotaBar usedPercent={window.utilization} severity={severity} />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
@@ -210,7 +233,7 @@ function TurnUsageSection({ turnUsage, t }: {
         >
           <span
             aria-hidden="true"
-            className="shrink-0 text-[var(--quota-bar-warn,#E09A2F)]"
+            className="shrink-0 text-[var(--quota-bar-warn)]"
           >
             ●
           </span>
@@ -322,8 +345,8 @@ export function QuotaHoverCard({
                 className={cn(
                   'px-4 py-2 font-medium',
                   status.tone === 'crit'
-                    ? 'text-[var(--quota-bar-crit,#E5484D)]'
-                    : 'text-[var(--quota-bar-warn,#E09A2F)]',
+                    ? 'text-[var(--quota-bar-crit)]'
+                    : 'text-[var(--quota-bar-warn)]',
                 )}
               >
                 {t(status.key)}

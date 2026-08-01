@@ -224,6 +224,23 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText('1234', { exact: false })).toBeNull();
   });
 
+  it('hides present-but-disabled extra usage and its undocumented numbers', () => {
+    render(
+      <QuotaHoverCard
+        nowMs={NOW_MS}
+        snapshot={makeSnapshot({
+          extraUsage: {
+            isEnabled: false,
+            usedCredits: 1234,
+          },
+        })}
+      />,
+    );
+
+    expect(screen.queryByText('quotaCard.extraUsageEnabled')).toBeNull();
+    expect(screen.queryByText('1234', { exact: false })).toBeNull();
+  });
+
   it('renders full turn usage, omits a null section, and hides a null suggestion', () => {
     const { rerender } = render(
       <QuotaHoverCard
@@ -309,6 +326,47 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText('quotaCard.staleData:10')).toBeNull();
   });
 
+  it('shows the stale footnote only after the strict five-minute boundary', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ updatedAt: NOW_MS - 5 * 60_000 })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.queryByText('quotaCard.staleData:5')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({ updatedAt: NOW_MS - 5 * 60_000 - 1 })}
+        nowMs={NOW_MS}
+      />,
+    );
+    expect(screen.getByText('quotaCard.staleData:5')).toBeTruthy();
+  });
+
+  it.each([
+    { severity: 'warning', utilization: 50, expected: 'warn' },
+    { severity: undefined, utilization: 50, expected: 'normal' },
+    { severity: 'unknown-upstream-value', utilization: 50, expected: 'normal' },
+    { severity: 'quota_exceeded', utilization: 50, expected: 'crit' },
+    { severity: 'critical', utilization: 50, expected: 'crit' },
+    { severity: 'normal', utilization: 93, expected: 'crit' },
+  ] as const)(
+    'combines server severity $severity and $utilization% utilization as $expected',
+    ({ severity, utilization, expected }) => {
+      render(
+        <QuotaHoverCard
+          snapshot={makeSnapshot({ fiveHour: { utilization, severity } })}
+          nowMs={NOW_MS}
+        />,
+      );
+
+      expect(screen.getByText('5 小时').getAttribute('data-severity')).toBe(expected);
+      expect(screen.getByRole('progressbar').getAttribute('data-severity')).toBe(expected);
+    },
+  );
+
   it('marks a critical window title with the critical styling hook', () => {
     render(
       <QuotaHoverCard
@@ -319,7 +377,7 @@ describe('QuotaHoverCard', () => {
 
     const title = screen.getByText('周限');
     expect(title.getAttribute('data-severity')).toBe('crit');
-    expect(title.classList.contains('text-[var(--quota-bar-crit,#E5484D)]')).toBe(true);
+    expect(title.classList.contains('text-[var(--quota-bar-crit)]')).toBe(true);
     expect(screen.getByRole('progressbar').getAttribute('data-severity')).toBe('crit');
   });
 });

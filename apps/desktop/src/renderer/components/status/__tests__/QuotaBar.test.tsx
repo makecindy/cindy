@@ -55,6 +55,20 @@ describe('QuotaBar', () => {
     expect(mini.firstElementChild?.classList.contains('min-w-[4px]')).toBe(true);
   });
 
+  it('hides the fill at zero while keeping the minimum dot for a positive fraction', () => {
+    const { getByRole, rerender } = render(<QuotaBar usedPercent={0} />);
+    const zeroFill = getByRole('progressbar').firstElementChild as HTMLElement;
+
+    expect(zeroFill.style.width).toBe('0%');
+    expect(zeroFill.classList.contains('min-w-[7px]')).toBe(false);
+
+    rerender(<QuotaBar usedPercent={0.5} />);
+    const fractionalFill = getByRole('progressbar').firstElementChild as HTMLElement;
+
+    expect(fractionalFill.style.width).toBe('0.5%');
+    expect(fractionalFill.classList.contains('min-w-[7px]')).toBe(true);
+  });
+
   it('exposes the progressbar role and rounded aria values', () => {
     const { getByRole } = render(<QuotaBar usedPercent={42.6} />);
     const progressbar = getByRole('progressbar');

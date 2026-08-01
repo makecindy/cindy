@@ -202,6 +202,24 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.queryByTestId('quota-hover-card')).toBeNull();
   });
 
+  it('打开延迟触发前卸载会清理定时器且不更新已卸载组件', () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+
+    try {
+      const { unmount } = renderClaudeSubscriptionChip();
+      const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+
+      fireEvent.mouseEnter(trigger);
+      unmount();
+      expect(vi.getTimerCount()).toBe(0);
+      act(() => vi.advanceTimersByTime(300));
+
+      expect(errorSpy).not.toHaveBeenCalled();
+    } finally {
+      errorSpy.mockRestore();
+    }
+  });
+
   it('点击 chip 仍只打开一次 Claude 看板', () => {
     renderClaudeSubscriptionChip();
 

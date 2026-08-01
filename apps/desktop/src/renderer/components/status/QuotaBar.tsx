@@ -11,6 +11,8 @@ export type QuotaSeverity = 'normal' | 'warn' | 'crit';
 export interface QuotaBarProps {
   usedPercent: number;
   size?: 'regular' | 'mini';
+  /** 调用方已合并本地阈值与上游信号后的展示级别。 */
+  severity?: QuotaSeverity;
   className?: string;
 }
 
@@ -28,14 +30,19 @@ export function quotaSeverity(usedPercent: number): QuotaSeverity {
 }
 
 const FILL_COLOR_CLASSES: Record<QuotaSeverity, string> = {
-  normal: 'bg-[var(--quota-bar-fill,#DE7B52)]',
-  warn: 'bg-[var(--quota-bar-warn,#E09A2F)]',
-  crit: 'bg-[var(--quota-bar-crit,#E5484D)]',
+  normal: 'bg-[var(--quota-bar-fill)]',
+  warn: 'bg-[var(--quota-bar-warn)]',
+  crit: 'bg-[var(--quota-bar-crit)]',
 };
 
-export function QuotaBar({ usedPercent, size = 'regular', className }: QuotaBarProps) {
+export function QuotaBar({
+  usedPercent,
+  size = 'regular',
+  severity: severityOverride,
+  className,
+}: QuotaBarProps) {
   const clampedPercent = clampPercent(usedPercent);
-  const severity = quotaSeverity(clampedPercent);
+  const severity = severityOverride ?? quotaSeverity(clampedPercent);
   const isMini = size === 'mini';
 
   return (
@@ -46,7 +53,7 @@ export function QuotaBar({ usedPercent, size = 'regular', className }: QuotaBarP
       aria-valuenow={Math.round(clampedPercent)}
       data-severity={severity}
       className={cn(
-        'overflow-hidden rounded-full bg-[rgba(0,0,0,0.08)] dark:bg-[rgba(255,255,255,0.13)]',
+        'overflow-hidden rounded-full bg-[var(--quota-bar-track)]',
         isMini ? 'inline-flex h-[5px] w-[32px]' : 'flex h-[7px] w-full',
         className,
       )}
@@ -54,7 +61,7 @@ export function QuotaBar({ usedPercent, size = 'regular', className }: QuotaBarP
       <div
         className={cn(
           'h-full rounded-full transition-[width] duration-[var(--motion-base)] ease-[var(--motion-ease-move)] motion-reduce:transition-none',
-          isMini ? 'min-w-[4px]' : 'min-w-[7px]',
+          clampedPercent > 0 && (isMini ? 'min-w-[4px]' : 'min-w-[7px]'),
           FILL_COLOR_CLASSES[severity],
         )}
         style={{ width: `${clampedPercent}%` }}
