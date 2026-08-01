@@ -1913,6 +1913,18 @@ describe('ModelSelector trigger variants', () => {
     const opusRow = screen.getByRole('option', { name: /Opus 4\.8/ });
     expect(opusRow.getAttribute('aria-disabled')).toBe('true');
     expect(screen.queryByRole('group', { name: /Sonnet 4\.6/ })).toBeNull();
+    const searchInput = screen.getByRole('textbox', {
+      name: 'newChat.modelSelector.search.placeholderAll',
+    });
+    expect(searchInput.hasAttribute('disabled')).toBe(true);
+    expect(searchInput.className).toContain('cursor-not-allowed');
+    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
+    expect(searchInput.className).toContain(
+      'placeholder:text-[var(--text-disabled-tertiary)]',
+    );
+    expect(searchInput.parentElement?.className).toContain(
+      'bg-[var(--surface-elevated-soft)]',
+    );
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);
@@ -1942,14 +1954,32 @@ describe('ModelSelector trigger variants', () => {
         },
       },
     ];
-    const setEffort = vi.fn();
+    let rememberedEffort: Effort = 'high';
+    const setEffort = vi.fn(
+      (_agent: string, _providerId: string, _modelId: string, nextEffort: Effort) => {
+        rememberedEffort = nextEffort;
+      },
+    );
     const onDismiss = vi.fn();
     const confirmBrowseSwitch = vi.fn(async () => true);
-    const onSwitch = vi.fn();
+    let releaseFirstSwitch!: () => void;
+    const firstSwitch = new Promise<void>((resolve) => {
+      releaseFirstSwitch = resolve;
+    });
+    const observedSwitchEfforts: Effort[] = [];
+    const onSwitch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        observedSwitchEfforts.push(rememberedEffort);
+        await firstSwitch;
+      })
+      .mockImplementationOnce(() => {
+        observedSwitchEfforts.push(rememberedEffort);
+      });
     const modelMemory = {
       getEffort: vi.fn((agent: string, providerId: string, modelId: string) =>
         agent === 'codex' && providerId === 'zeta-codex' && modelId === 'gpt-5.5'
-          ? 'high'
+          ? rememberedEffort
           : undefined,
       ),
       setEffort,
@@ -1990,10 +2020,37 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex');
+      await waitFor(() =>
+        expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'),
+      );
       expect(onDismiss).not.toHaveBeenCalled();
       // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        within(screen.getByRole('group', { name: /GPT-5\.5/ })).getByRole('option', {
+          name: 'high',
+        }),
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // 第一笔事务仍在途时，后一次配置只入队，不能并发覆盖。
+      expect(onSwitch).toHaveBeenCalledTimes(1);
+      expect(setEffort).toHaveBeenNthCalledWith(
+        2,
+        'codex',
+        'zeta-codex',
+        'gpt-5.5',
+        'high',
+      );
+
+      await act(async () => {
+        releaseFirstSwitch();
+        await firstSwitch;
+      });
+      await waitFor(() => expect(onSwitch).toHaveBeenCalledTimes(2));
+      expect(observedSwitchEfforts).toEqual(['low', 'high']);
 
       fireEvent.click(screen.getByRole('tab', { name: /Claude/ }));
       await waitFor(() =>

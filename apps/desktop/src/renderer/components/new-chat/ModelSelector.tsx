@@ -558,6 +558,7 @@ function ModelSelectorContentView({
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
   const browseSwitchPendingRef = useRef(false);
+  const agentSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const handleBrowseVendorChange = async (next: 'cc' | 'codex') => {
     if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
@@ -581,6 +582,22 @@ function ModelSelectorContentView({
     ? vendorKeyToAgentKind(browseVendor)
     : vendorKeyToAgentKind(vendorKey);
   const browseTargetLabel = browseVendor === 'codex' ? 'Codex' : 'Claude Code';
+  const enqueueAgentSwitch = (
+    targetAgentKind: 'claude-code' | 'codex',
+    targetModelId: string,
+    targetProviderId: string | null,
+  ) => {
+    if (!agentSwitch) return;
+    const run = () => agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
+    // 配置面板保持可连续操作，但切换事务必须按点击顺序执行：否则较早的请求可能
+    // 较晚完成并覆盖用户最后一次选择。失败也不能阻断后续已排队的意图。
+    agentSwitchQueueRef.current = agentSwitchQueueRef.current
+      .then(run, run)
+      .then(
+        () => undefined,
+        () => undefined,
+      );
+  };
   // 同时拉两个 agent —— vendorKey 不传时把两边模型一起展示。hooks 必须按固定顺序调用。
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
@@ -1046,7 +1063,7 @@ function ModelSelectorContentView({
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
     if (browsing && agentSwitch) {
-      void agentSwitch.onSwitch(browseVendor === 'codex' ? 'codex' : 'claude-code', id, providerId);
+      enqueueAgentSwitch(browseVendor === 'codex' ? 'codex' : 'claude-code', id, providerId);
       if (dismiss) onDismiss?.();
       return;
     }
@@ -1624,15 +1641,35 @@ function ModelSelectorContentView({
         </>
       )}
       {/* 搜索框 —— 药丸样式。 */}
-      <div className="flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] bg-[var(--surface)] px-3 py-[7px]">
-        <Search size={16} className="shrink-0 text-[var(--text-tertiary)]" />
+      <div
+        className={cn(
+          'flex items-center gap-2 rounded-full border border-[var(--model-dropdown-border)] px-3 py-[7px] transition-colors',
+          interactionDisabled
+            ? 'cursor-not-allowed bg-[var(--surface-elevated-soft)]'
+            : 'bg-[var(--surface)]',
+        )}
+      >
+        <Search
+          size={16}
+          className={cn(
+            'shrink-0',
+            interactionDisabled
+              ? 'text-[var(--text-disabled-tertiary)]'
+              : 'text-[var(--text-tertiary)]',
+          )}
+        />
         <input
           type="text"
           disabled={interactionDisabled}
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder={t('newChat.modelSelector.search.placeholderAll')}
-          className="min-w-0 flex-1 bg-transparent text-14 text-[var(--model-item-text)] outline-none placeholder:text-[var(--text-tertiary)]"
+          className={cn(
+            'min-w-0 flex-1 bg-transparent text-14 outline-none',
+            interactionDisabled
+              ? 'cursor-not-allowed text-[var(--text-disabled)] placeholder:text-[var(--text-disabled-tertiary)]'
+              : 'text-[var(--model-item-text)] placeholder:text-[var(--text-tertiary)]',
+          )}
           aria-label={t('newChat.modelSelector.search.placeholderAll')}
         />
       </div>
