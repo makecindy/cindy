@@ -216,6 +216,20 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
     ).toBe('same-engine-reselect');
   });
 
+  it('回归:同引擎 no-op 的 ack 先于清除回流到达 → 旧镜像仍非空也须继续重选', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 修订号未变证明当前非空仍是发起前的旧 intent,不是外部新登记；不能依赖 null push
+    // 必须抢在 ack 前到达，否则 device-link 的响应/事件调度顺序会随机吞掉用户重选。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: false,
+        intentNowIsEmpty: false,
+        freshness: fresh,
+      }),
+    ).toBe('same-engine-reselect');
+  });
+
   it('回归:同引擎重选在途时外部登记了**新**跨引擎意图 → 丢弃,不能 clear 掉更新的镜像', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     // 修订号同样变了,但回流后的内容是「有意图」——只可能来自更新的登记。继续收尾会把它
