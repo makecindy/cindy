@@ -685,7 +685,14 @@ export function UnifiedModelList({
                         {rep.name}
                       </span>
                       {capNote && (
-                        <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
+                        /* 注记可收缩截断:窄栏(最小窗口右栏 ~275px)下先压缩次要
+                            元数据,保住右侧上下文/菜单/开关列(PR #1102 review 第五轮);
+                            截断时悬停可见全文。 */
+                        <span
+                          className="min-w-0 truncate text-12"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title={capNote}
+                        >
                           {capNote}
                         </span>
                       )}
