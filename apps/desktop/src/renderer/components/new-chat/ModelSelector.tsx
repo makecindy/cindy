@@ -558,7 +558,6 @@ function ModelSelectorContentView({
     agentSwitch?.currentVendor ?? vendorKey ?? 'cc',
   );
   const browseSwitchPendingRef = useRef(false);
-  const agentSwitchQueueRef = useRef<Promise<void>>(Promise.resolve());
   const handleBrowseVendorChange = async (next: 'cc' | 'codex') => {
     if (interactionDisabled || next === browseVendor || browseSwitchPendingRef.current) return;
     // 返回当前引擎（含已有意图时浏览原引擎准备撤销）不需要确认；只有从
@@ -588,15 +587,10 @@ function ModelSelectorContentView({
     targetProviderId: string | null,
   ) => {
     if (!agentSwitch) return;
-    const run = () => agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
-    // 配置面板保持可连续操作，但切换事务必须按点击顺序执行：否则较早的请求可能
-    // 较晚完成并覆盖用户最后一次选择。失败也不能阻断后续已排队的意图。
-    agentSwitchQueueRef.current = agentSwitchQueueRef.current
-      .then(run, run)
-      .then(
-        () => undefined,
-        () => undefined,
-      );
+    // 立即交给调用方同步登记目标 session 的 pending token。真正的顺序由
+    // agentSwitchCoordinator 按 session 串行；组件级 Promise 队列会把不同 session
+    // 错误地串在一起，并在回调尚未启动时留下可发送窗口。
+    void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);
   };
   // 同时拉两个 agent —— vendorKey 不传时把两边模型一起展示。hooks 必须按固定顺序调用。
   const cc = useAgentCapabilities('claude-code', deviceId);

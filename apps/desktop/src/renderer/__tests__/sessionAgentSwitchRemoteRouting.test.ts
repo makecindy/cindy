@@ -579,6 +579,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 组件内不得再持有队列/序号 ref,否则重挂后又会分叉出第二条空队列。
     expect(source).not.toContain('agentSwitchWriteSeqRef');
     expect(source).not.toContain('agentSwitchQueueRef');
+
+    const selectorSource = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/ModelSelector.tsx'),
+      'utf8',
+    );
+    expect(selectorSource).not.toContain('agentSwitchQueueRef');
+    expect(selectorSource).toContain(
+      'void agentSwitch.onSwitch(targetAgentKind, targetModelId, targetProviderId);',
+    );
   });
 
   it('同引擎重选与前置 invoke 共占一个串行位置，并在用最新 ref 前校验会话', () => {
