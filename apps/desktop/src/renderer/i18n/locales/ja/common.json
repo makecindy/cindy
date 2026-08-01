@@ -4213,6 +4213,14 @@
     "cacheLabel": "キャッシュ",
     "modelLabel": "モデル",
     "staleData": "データは {{minutes}} 分前に更新されました",
+    "paceOnTrack": "ペース: 順調",
+    "paceReserve": "ペース: {{percent}}% の余裕",
+    "paceDeficit": "ペース: {{percent}}% 超過",
+    "paceLastsToReset": "リセットまで持ちます",
+    "paceRunsOutIn": "あと {{duration}}で使い切る見込み",
+    "durationMinutes": "{{n}} 分",
+    "durationHours": "{{n}} 時間",
+    "durationDays": "{{n}} 日",
     "waiting": "Claude サブスクリプションの使用量は次のリクエスト完了後に更新されます。"
   },
   "usageDetails": {

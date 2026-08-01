@@ -4213,6 +4213,14 @@
     "cacheLabel": "缓存",
     "modelLabel": "模型",
     "staleData": "数据更新于 {{minutes}} 分钟前",
+    "paceOnTrack": "节奏：正常",
+    "paceReserve": "节奏：有富余（+{{percent}}%）",
+    "paceDeficit": "节奏：超速 {{percent}}%",
+    "paceLastsToReset": "能撑到重置",
+    "paceRunsOutIn": "预计 {{duration}}后耗尽",
+    "durationMinutes": "{{n}} 分钟",
+    "durationHours": "{{n}} 小时",
+    "durationDays": "{{n}} 天",
     "waiting": "Claude 订阅余量会在下一轮完成后更新。"
   },
   "usageDetails": {
