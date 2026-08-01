@@ -13,6 +13,7 @@ import path from 'node:path';
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileFollowLinks,
   readBoundedFileNoFollow,
 } from '../../utils/readBoundedFile.js';
 import { redactAbsolutePaths } from './git.js';
@@ -57,18 +58,11 @@ async function readBoundedJsonFile(filePath: string, maxBytes: number): Promise<
   return JSON.parse(bytes.toString('utf8')) as unknown;
 }
 
-/** 清单侧变体:路径已是 realpath 产物,不加 O_NOFOLLOW,其余同 readBoundedJsonFile。 */
+/** 清单侧变体:路径已是 realpath 产物且经根包含校验,允许跟随链接,其余同上。 */
 async function readBoundedManifest(filePath: string): Promise<unknown | null> {
-  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > MARKETPLACE_MANIFEST_MAX_BYTES) return null;
-    const buffer = Buffer.alloc(Number(stat.size));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')) as unknown;
-  } finally {
-    await handle.close();
-  }
+  const bytes = await readBoundedFileFollowLinks(filePath, MARKETPLACE_MANIFEST_MAX_BYTES);
+  if (bytes === null) return null;
+  return JSON.parse(bytes.toString('utf8')) as unknown;
 }
 
 /** 错误 message 可能携带完整宿主路径(ENOENT/EACCES 自带),进 IPC detail 前脱敏。 */

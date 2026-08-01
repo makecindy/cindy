@@ -7,11 +7,12 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GHOST_MANIFEST_MAX_BYTES,
   readBoundedFileNoFollow,
+  readBoundedFileNoFollowSync,
 } from '../readBoundedFile';
 
 let workDir: string;
@@ -59,5 +60,57 @@ describe('readBoundedFileNoFollow', () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');
     expect((await readBoundedFileNoFollow(file, 1024, null))?.toString('utf8')).toBe('{"ok":1}');
+  });
+
+  it('网络盘短读:单次 read 未填满时循环读满已校验长度', async () => {
+    const file = path.join(workDir, 'short.json');
+    const payload = `{"key":"${'a'.repeat(64)}"}`;
+    await fs.promises.writeFile(file, payload);
+    // 模拟 FUSE/网络盘:每次 read 最多返回 7 字节。单次读会把合法文件截断。
+    const realOpen = fs.promises.open;
+    const spy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      const handle = await realOpen(...args);
+      const realRead = handle.read.bind(handle);
+      return new Proxy(handle, {
+        get(target, key) {
+          if (key === 'read') {
+            return (buffer: Buffer, offset: number, length: number, position: number) =>
+              realRead(buffer, offset, Math.min(length, 7), position);
+          }
+          const value = Reflect.get(target, key);
+          return typeof value === 'function' ? value.bind(target) : value;
+        },
+      });
+    }) as typeof fs.promises.open);
+    try {
+      const bytes = await readBoundedFileNoFollow(file, 1024);
+      expect(bytes?.toString('utf8')).toBe(payload);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+});
+
+describe('readBoundedFileNoFollowSync', () => {
+  it('限量与回退闸语义和异步变体一致', async () => {
+    const file = path.join(workDir, 'plain.json');
+    await fs.promises.writeFile(file, '{"ok":1}');
+    expect(readBoundedFileNoFollowSync(file, 1024)?.toString('utf8')).toBe('{"ok":1}');
+    expect(readBoundedFileNoFollowSync(file, 1024, null)?.toString('utf8')).toBe('{"ok":1}');
+
+    const big = path.join(workDir, 'big.json');
+    await fs.promises.writeFile(big, 'x'.repeat(2048));
+    expect(readBoundedFileNoFollowSync(big, 1024)).toBeNull();
+  });
+
+  it.runIf(process.platform !== 'win32')('符号链接:O_NOFOLLOW 拒于 open,回退闸拒于 lstat', async () => {
+    const target = path.join(workDir, 'target.json');
+    await fs.promises.writeFile(target, '{"ok":true}');
+    const link = path.join(workDir, 'link.json');
+    await fs.promises.symlink(target, link);
+    expect(() => readBoundedFileNoFollowSync(link, 1024)).toThrow();
+    expect(readBoundedFileNoFollowSync(link, 1024, null)).toBeNull();
   });
 });

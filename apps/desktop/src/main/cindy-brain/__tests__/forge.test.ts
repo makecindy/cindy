@@ -9,6 +9,7 @@ import fs from 'node:fs';
 import JSZip from 'jszip';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -128,6 +129,48 @@ describe('packGhostDir', () => {
     const r = await packGhostDir(big);
     expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
     if (!r.ok) expect(r.message).toContain('不是普通文件或超过');
+  });
+
+  it('zip 阶段逐文件走剩余预算限量闸:walk 之后被撑大的文件结构化拒绝', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    // 33MiB 零填充:超总预算(32MiB),但压缩后极小——旧实现无界 readFile 后
+    // 整包压缩体积检查照样通过,超大字节已经进过内存。
+    await fs.promises.writeFile(path.join(dir, 'blob.bin'), Buffer.alloc(33 * 1024 * 1024));
+    // 模拟"walk 预算预估时文件还小,zip 读取时已被并发撑大":walk 的 stat 看
+    // 到 10 字节。句柄侧 handle.stat 不受此 spy 影响,读到真实大小。
+    const realStat = fs.promises.stat;
+    const spy = vi.spyOn(fs.promises, 'stat').mockImplementation((async (
+      target: Parameters<typeof fs.promises.stat>[0],
+      ...rest: unknown[]
+    ) => {
+      const st = await (realStat as (...a: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+      if (String(target).endsWith('blob.bin')) {
+        return Object.assign(Object.create(Object.getPrototypeOf(st)), st, { size: 10 });
+      }
+      return st;
+    }) as typeof fs.promises.stat);
+    try {
+      const r = await packGhostDir(dir);
+      expect(r).toMatchObject({ ok: false, errorCode: 'TOO_LARGE' });
+      if (!r.ok) expect(r.message).toContain('打包期间被并发改动或超出剩余体积预算');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('结构守卫:forge.ts 与 ghostLocaleFiles.ts 不允许出现按路径的 readFile', async () => {
+    // 打包管道触及的都是用户可写目录,所有读取必须走 readBoundedFileNoFollow
+    // 系列;任何一处退回按路径 readFile 都会重开"检查与读取两次打开"的窗口。
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    for (const rel of ['../forge.ts', '../ghostLocaleFiles.ts']) {
+      const source = await fs.promises.readFile(path.join(here, rel), 'utf8');
+      expect(source, rel).not.toMatch(/fs\.promises\.readFile\(/);
+      expect(source, rel).not.toMatch(/readFileSync\(/);
+      expect(source, rel).toMatch(/readBoundedFileNoFollow/);
+    }
   });
 
   it('打包跳过开发残留:.git / node_modules / 隐藏文件 / 旧 .cindy 不进包', async () => {

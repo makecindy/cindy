@@ -632,19 +632,21 @@ async function buildGhostPackage(
       const skillMdPath = path.join(dir, ...item.dir.split('/'), 'SKILL.md');
       let content: string;
       try {
-        content = await fs.promises.readFile(skillMdPath, 'utf-8');
+        // 同一把单句柄限量闸:超限在读之前拒,符号链接不放行。
+        const bytes = await readBoundedFileNoFollow(skillMdPath, GHOST_SKILL_MD_MAX_BYTES);
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `${item.dir}/SKILL.md 不是普通文件或超过 ${GHOST_SKILL_MD_MAX_BYTES} 字节上限`,
+          };
+        }
+        content = bytes.toString('utf-8');
       } catch (err) {
         return {
           ok: false,
           errorCode: 'ENTRY_MISSING',
           message: `读取 ${item.dir}/SKILL.md 失败:${err instanceof Error ? err.message : String(err)}`,
-        };
-      }
-      if (Buffer.byteLength(content, 'utf8') > GHOST_SKILL_MD_MAX_BYTES) {
-        return {
-          ok: false,
-          errorCode: 'MANIFEST_INVALID',
-          message: `${item.dir}/SKILL.md 过大(上限 ${GHOST_SKILL_MD_MAX_BYTES} 字节)`,
         };
       }
       const consistencyError = checkSkillMdConsistency(content, item);
@@ -705,13 +707,33 @@ async function buildGhostPackage(
     // 产物自身不会进包;写盘位置由调用方决定(packGhostDir 进源码目录,
     // packGhostDirToFile 进调用方指定路径)。
     const zip = new JSZip();
+    // 身份卡用第 1 步的不可变快照,其余文件走同一把单句柄限量闸现读:walk 里
+    // 的 stat 只是预算预估,文件可在 walk 与此处之间被换成超大文件或符号链接
+    // (网络共享/并发写)。真正的边界在读取时按**剩余总预算**强制执行,任何
+    // 文件被并发改动(换链接/删除/膨胀)都结构化拒绝,不把无界字节交给 JSZip。
+    let packedBytes = 0;
     for (const f of files) {
-      // 身份卡用第 1 步的不可变快照,其余文件现读。防 TOCTOU:并发改写 ghost.json
-      // 不能让"审阅通过的 manifest"与"包里的 manifest"分叉。
-      zip.file(
-        f.rel,
-        f.rel === GHOST_MANIFEST_FILE ? manifestBytes : await fs.promises.readFile(f.abs),
-      );
+      let content: Buffer;
+      if (f.rel === GHOST_MANIFEST_FILE) {
+        content = manifestBytes;
+      } else {
+        let bytes: Buffer | null;
+        try {
+          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes);
+        } catch {
+          bytes = null;
+        }
+        if (bytes === null) {
+          return {
+            ok: false,
+            errorCode: 'TOO_LARGE',
+            message: `文件在打包期间被并发改动或超出剩余体积预算:${f.rel}`,
+          };
+        }
+        content = bytes;
+      }
+      packedBytes += content.byteLength;
+      zip.file(f.rel, content);
     }
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;
