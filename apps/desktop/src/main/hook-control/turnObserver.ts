@@ -141,6 +141,19 @@ export interface HookTurnObserver {
   stop(): void;
   /** 当前累积的助手正文(已定稿段 + 流式尾部)。 */
   text(): string;
+  /**
+   * **仅**本轮最后一条助手消息(不含此前的过程叙述)。
+   *
+   * 给"一次交互只有一条公开消息名额"的渠道用 —— 目前是 X: 一次 mention 只
+   * 允许回一条推文, 而 agent 的常态是"先说一句要去看看 → 干活 → 给结论",
+   * text() 那样整轮拼接会把过程叙述原样发到公开时间线上, 还会挤占 280 字符
+   * 里本就不够的额度。提示词侧同步告知模型"只有最后一条会被发出"(见
+   * outbound.buildHookPromptNote 的 X 分支), 让机制与模型预期一致 —— 只靠
+   * 提示词要求模型别写过程是软约束, 不听就穿透(2026-08-01 实踩)。
+   *
+   * 最后一条为空白时回退整轮正文: 公开回帖宁可带上过程, 也不能发成空。
+   */
+  finalSegment(): string;
 }
 
 /** 挂上事件监听并开始观察。调用方必须 await finished 或自己 stop()。 */
@@ -154,12 +167,16 @@ export function observeHookTurn(
   // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
   // turn 只剩最后被替换的那条(实踩: Telegram 群里最终答案丢失)。
   // 正确姿势: isFinal 把该条追加进已定稿段, 流式增量走尾部缓冲。
-  let finalizedText = '';
+  // 定稿段**按消息切开存**(而不是直接拼成一个串): 拼接后消息边界就没了, 而
+  // finalSegment() 需要它 —— 见该方法的注释。join('\n\n') 与此前的逐段拼接
+  // 完全等价(同一条消息的相邻块在入栈时已连拼, 段内不含分隔)。
+  const finalizedSegments: string[] = [];
   let streamTail = '';
   let assistantText = '';
   /** 最近一次定稿段所属的 claude 消息 uuid(同消息相邻块连拼用)。 */
   let lastFinalUuid: string | undefined;
   const recomputeAssistantText = (): void => {
+    const finalizedText = finalizedSegments.join('\n\n');
     // trim 只用于判空(纯空白尾巴不该拼出悬空分隔), 拼接用原文 ——
     // 首行缩进/换行是内容(markdown 代码块等), 不得被裁掉。
     const hasTail = streamTail.trim().length > 0;
@@ -251,9 +268,11 @@ export function observeHookTurn(
             const uuid =
               src === 'claude-code' && typeof meta?.uuid === 'string' ? meta.uuid : undefined;
             const sameMessage = uuid !== undefined && uuid === lastFinalUuid;
-            finalizedText = finalizedText
-              ? `${finalizedText}${sameMessage ? '' : '\n\n'}${segment}`
-              : segment;
+            if (sameMessage && finalizedSegments.length > 0) {
+              finalizedSegments[finalizedSegments.length - 1] += segment;
+            } else {
+              finalizedSegments.push(segment);
+            }
             lastFinalUuid = uuid;
             streamTail = '';
           } else {
@@ -373,6 +392,16 @@ export function observeHookTurn(
     },
     text(): string {
       return assistantText;
+    },
+    finalSegment(): string {
+      // streamTail 非空 = 最后一条消息还没收到 isFinal(收口时它就是完整的
+      // 那一条), 此时它**本身**就是最后一条, 不能和上一条定稿段拼起来 ——
+      // 那会把倒数第二条消息也带上。
+      const last =
+        streamTail.trim().length > 0
+          ? streamTail
+          : (finalizedSegments[finalizedSegments.length - 1] ?? '');
+      return last.trim().length > 0 ? last : assistantText;
     },
   };
 }

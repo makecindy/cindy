@@ -817,6 +817,82 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
+  it('X: 回帖只取最后一条助手消息, 过程叙述不进公开时间线', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      // agent 的常态: 先说一句要去看看 -> 干活 -> 给结论。
+      cb({ type: 'text', data: { text: '我先看看这个链接。', isFinal: true } });
+      cb({ type: 'tool_use', data: { toolName: 'WebFetch', toolUseId: 'u1', input: {} } });
+      cb({ type: 'text', data: { text: '结论: 该库已停止维护。', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.status).toBe('ok');
+      // 整轮拼接(上面「多消息 turn」用例里 Slack 的正确行为)会把过程叙述原样
+      // 发到公开时间线, 还挤占 280 字符额度 —— X 只发最后一条。
+      expect(outcome.finalText).toBe('结论: 该库已停止维护。');
+      expect(outcome.finalText).not.toContain('我先看看');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: 最后一条收口时仍在流(无 isFinal)也只取它, 不带上一条', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '先查一下提交记录。', isFinal: true } });
+      // 最后一条只流增量、没等到 isFinal 就 done —— 此时 streamTail 本身就是
+      // 完整的最后一条, 不能和上一条定稿段拼起来。
+      cb({ type: 'text', data: { text: '答案是 42。', isFinal: false } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      expect(outcome.finalText).toBe('答案是 42。');
+      expect(outcome.finalText).not.toContain('先查一下');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('X: 最后一条是空白时回退整轮正文, 不发空回帖', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeManualSession(opts.id ?? 'sess-x'),
+      );
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(baseReq({ source: { im: 'x' } }));
+      await flush();
+      const cb = h.eventCbs.get('sess-new')!;
+
+      cb({ type: 'text', data: { text: '结论: 已修复。', isFinal: true } });
+      cb({ type: 'text', data: { text: '   ', isFinal: true } });
+      cb({ type: 'done', data: null });
+
+      const outcome = await p;
+      // 公开回帖宁可带上过程, 也不能因为末条是空白就发成空。
+      expect(outcome.finalText).toContain('结论: 已修复。');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('claude 续尾与已流增量重复前缀时不误判为全文(ha→haha 不丢后半段)', async () => {
     vi.useFakeTimers();
     try {
@@ -1784,11 +1860,11 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     expect(ends[0]?.errorMessage).toBe('hook continuation cancelled');
   });
 
-  it('长 turn 不被误杀: 几分钟不出事件也不该收口(兜底只有硬超时)', async () => {
+  it('长 turn 不被误杀: 几分钟不出事件也不该收口', async () => {
     // 曾经有过一条 2 分钟"空转"超时, 但它从不在有事件时清除 —— 任何跑过 2 分钟的
-    // 正常续跑都会被强制判成 error 并把那条错误写进渠道。现在兜底与 run() 一致,
-    // 只保留 1 小时硬超时: 认领之后这一轮已经在跑, 长 turn 几分钟不出事件很正常
-    // (或只出被本观察器忽略的账号级事件)。
+    // 正常续跑都会被强制判成 error 并把那条错误写进渠道。现在兜底与 run() 一致:
+    // 静默超时(分钟级门限), 且**任何**事件都会重置它, 长 turn 几分钟不出事件
+    // (或只出被本观察器忽略的账号级事件)仍然安全。
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
@@ -1810,18 +1886,48 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     }
   });
 
-  it('彻底静默的一轮由硬超时收口, 摘掉监听', async () => {
+  it('持续有事件就一直等下去: 远超旧的 1 小时总时长上限也不收口', async () => {
+    // 用户诉求(2026-08-01): 只要 agent 在持续工作、持续输出, 就不要砍。旧实现
+    // 是总时长硬超时, 一个跑了一小时且仍在出结果的任务会被拦腰截断, 用户什么
+    // 都拿不到 —— 而那恰恰是最值得等的那类任务。
     vi.useFakeTimers();
     try {
       fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
       const runner = createMakerHookSessionRunner({ log });
-      const { req, events, ends } = watchReq();
+      const { req, events } = watchReq();
       runner.watchContinuation!(req as never);
 
-      await vi.advanceTimersByTimeAsync(60 * 60_000 + 1);
-      expect(events).toEqual(['claim', 'end:error']);
-      expect(ends[0]?.errorMessage).toContain('hard timeout');
-      expect(h.eventCbs.has('sess-live')).toBe(false);
+      // 每 5 分钟来一个事件, 连续 2 小时 —— 远超旧的 1 小时总时长上限。
+      for (let i = 0; i < 24; i++) {
+        await vi.advanceTimersByTimeAsync(5 * 60_000);
+        h.eventCbs.get('sess-live')!({ type: 'text', data: { text: `第 ${i} 段`, isFinal: false } });
+      }
+      // 两小时里没有任何收口 —— 期间的 progress 照常发。
+      expect(events.filter((e) => e.startsWith('end'))).toEqual([]);
+      expect(h.eventCbs.has('sess-live')).toBe(true);
+
+      h.eventCbs.get('sess-live')!({ type: 'done', data: null });
+      await vi.advanceTimersByTimeAsync(1);
+      expect(events.at(-1)).toBe('end:ok');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('彻底静默也不自行收口: 兜底交给 server lease 的 task.cancel(与桌面端会话一致)', async () => {
+    // 桌面端普通会话没有"一轮跑太久就砍"这回事, hook 没理由更严(2026-08-01 定)。
+    // server 侧 lease 到期会发 task.cancel, 走的是用户手动 Stop 的同一条 abort
+    // 路径 —— 兜底单点在那里, 这边只管跑, 不再两头各砍一刀。
+    vi.useFakeTimers();
+    try {
+      fakeMaker.getSession.mockReturnValueOnce(makeManualSession('sess-live'));
+      const runner = createMakerHookSessionRunner({ log });
+      const { req, events } = watchReq();
+      runner.watchContinuation!(req as never);
+
+      await vi.advanceTimersByTimeAsync(3 * 60 * 60_000);
+      expect(events).toEqual(['claim']);
+      expect(h.eventCbs.has('sess-live')).toBe(true);
     } finally {
       vi.useRealTimers();
     }

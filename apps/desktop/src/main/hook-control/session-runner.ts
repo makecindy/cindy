@@ -85,7 +85,7 @@ import { readImDefaultSettings } from '../im/defaultSettingsStore.js';
 import { getWorkspaceProviderSource } from './workspaceProviderSourceStore.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { beginHeadlessGhostSetupTurn } from '../mcp-integrations/ghostSetupInteractionSurface.js';
-import { observeHookTurn } from './turnObserver.js';
+import { observeHookTurn, type HookTurnObserver } from './turnObserver.js';
 
 import type {
   HookContinuationWatchRequest,
@@ -209,13 +209,19 @@ function broadcastSessionCreated(sessionId: string): void {
   }
 }
 
-/**
- * 整 turn 硬超时。scheduler 有 ctx.signal 可 abort, hook v1 无 task.cancel ——
- * SDK 卡死一个事件都不发时, 没有这条兜底该 session 的 hook 队列会永久饿死。
- * 上限取宽(正常长任务 10-30min 量级), 触发即按 error 收口。
- */
-const TURN_HARD_TIMEOUT_MS = 60 * 60_000;
-
+// ── turn 时长策略: **不设上限**(2026-08-01 定) ──────────────────────────────
+//
+// 与桌面端自己跑 turn 的规则一致: 普通会话没有任何"一轮跑太久就砍"的机制 ——
+// turn 跑到 done 为止, 卡住了由用户自己停; scheduler 也只有
+// BG_TASK_IDLE_FALLBACK_MS 那条"done 之后还有在途后台 subagent"的兜底。hook 没有
+// 理由比它们更严: 同一个 agent、同一套 SDK, 换个入口就被砍掉正在出的结果, 才是
+// 需要解释的那一侧。
+//
+// 这里曾经有过一条整轮硬超时(TURN_HARD_TIMEOUT_MS = 60min), 理由写的是「hook v1
+// 无 task.cancel, SDK 卡死时队列会永久饿死」。那条理由**已经过时**: task.cancel
+// 早已实现(manager 收帧 -> dispatcher.abortSession), 走的正是用户手动 Stop 的同
+// 一条 session.abort() 路径。兜底因此收敛到 server 侧的静默 lease 一处 —— 它到期
+// 会发 cancel 把这边停下来, 单点判定、单点收口, 不再两头各砍一刀还要互相错开数值。
 
 /**
  * 从 tool_result 全文抽出可外发的 xdt-image URL —— 与 IM turnRunner 的
@@ -297,6 +303,21 @@ function collectOutboundImages(
       );
     }
   }
+}
+
+/**
+ * 收口取文(run() 与 watchContinuation 共用 —— 两处必须同判据)。
+ *
+ * X 只取**最后一条**助手消息: 一次 mention 只有一条公开回帖的名额, 而 agent 的
+ * 常态是"先说一句要去看看 → 干活 → 给结论", 整轮拼接会把过程叙述原样发到公开
+ * 时间线, 还挤占 280 字符里本就不够的额度(见 turnObserver.finalSegment)。
+ *
+ * 其余渠道保持整轮正文, 不能跟着改: IM 里过程叙述有用, 且只取最后一条会丢掉
+ * "先答后补"型 turn 的正文(实踩: Telegram 群里最终答案丢失 —— 见 turnObserver
+ * 的文本累积语义注释)。
+ */
+function finalTextForChannel(observer: HookTurnObserver, im: string | undefined): string {
+  return im === 'x' ? observer.finalSegment() : observer.text();
 }
 
 /**
@@ -885,22 +906,13 @@ export function createMakerHookSessionRunner(deps: {
         return fail(err instanceof Error ? err.message : String(err));
       }
 
-      // 硬超时兜底(见常量注释); 超时后摘监听, 迟到的 done 不再有消费方
-      let hardTimer: NodeJS.Timeout | undefined;
-      const hardTimeout = new Promise<never>((_, rejectTimeout) => {
-        hardTimer = setTimeout(
-          () => rejectTimeout(new Error(`hook turn hard timeout (${TURN_HARD_TIMEOUT_MS}ms)`)),
-          TURN_HARD_TIMEOUT_MS,
-        );
-        hardTimer.unref?.();
-      });
+      // turn 不设时长上限(见常量注释): 收口全靠 observer, 兜底在 server 侧 lease。
       try {
-        await Promise.race([observer.finished, hardTimeout]);
+        await observer.finished;
       } catch (err) {
         observer.stop();
         return fail(err instanceof Error ? err.message : String(err));
       } finally {
-        if (hardTimer) clearTimeout(hardTimer);
         // 无论正常收口还是超时/错误,未决交互都按默认收口并释放中央 route
         finalizeInteractions();
       }
@@ -911,7 +923,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
-        observer.text(),
+        finalTextForChannel(observer, req.source?.im),
         extraImageAbsPaths,
         [workingDir],
         log,
@@ -974,13 +986,6 @@ function beginContinuationWatch(
     const extraImageAbsPaths: string[] = [];
     let claimed = false;
     let settled = false;
-    let hardTimer: NodeJS.Timeout | undefined;
-
-    const clearTimers = (): void => {
-      if (hardTimer) clearTimeout(hardTimer);
-      hardTimer = undefined;
-    };
-
     const observer = observeHookTurn(session, {
       // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
       answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
@@ -1003,7 +1008,6 @@ function beginContinuationWatch(
     const settle = (errorMessage: string | null): void => {
       if (settled) return;
       settled = true;
-      clearTimers();
       observer.stop();
       // 已停止观察 —— 成功那一路还要 await 收集出站附件, 所以先同步告知一声, 让
       // dispatcher 把这一轮从"在观察"的账上摘掉(见 onSettling 的说明)。
@@ -1027,7 +1031,7 @@ function beginContinuationWatch(
         // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
         // isDirAuthorized 用 session.workDir 复核同理。
         const collected = await collectOutboundForFinalText(
-          observer.text(),
+          finalTextForChannel(observer, req.source?.im),
           extraImageAbsPaths,
           [session.workDir],
           log,
@@ -1042,14 +1046,10 @@ function beginContinuationWatch(
       })();
     };
 
-    // 兜底只有硬超时, 与 run() 完全一致 —— 刻意**不**加更短的"空转"超时: 认领之后
-    // 这一轮已经在跑, 而一个正常的长 turn 完全可能几分钟不出事件(或只出被本观察器
-    // 忽略的账号级事件), 用短超时去判死会把它误杀成 error 并把那条错误写进渠道。
-    hardTimer = setTimeout(
-      () => settle(`hook continuation hard timeout (${TURN_HARD_TIMEOUT_MS}ms)`),
-      TURN_HARD_TIMEOUT_MS,
-    );
-    hardTimer.unref?.();
+    // 不设时长上限, 与 run() 及桌面端普通会话一致(见本文件「turn 时长策略」)。
+    // 这条路径此前与 run() 一样有整轮硬超时, 只是刻意不再叠加更短的"空转"超时,
+    // 理由是「长 turn 完全可能几分钟不出事件, 或只出被本观察器忽略的账号级事件」
+    // —— 那条担心依然成立, 而现在连整轮那道也撤了, 收口只认 observer。
     observer.finished.then(
       () => settle(null),
       (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
