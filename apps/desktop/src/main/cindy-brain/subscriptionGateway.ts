@@ -517,10 +517,18 @@ export type GhostTapPendingItem =
  * 资格判定期的有界缓冲。DB 未就绪时判定要重试,这段时间的事件先攒着,判定通过后
  * 按序回放;封顶防怪会话把内存吃干。
  *
- * 溢出策略:**丢最新**,但必须护住"不留孤儿 start"这个不变量 —— 回放后没有 end 的
- * start 会让插件一直以为在等审批(要等到会话销毁才被 finishAll 兜底)。所以溢出时
- * 来的是 interaction end,就连它尚未回放的 start 一起撤掉(配对取消);反过来丢 start
- * 是安全的:end 对没登记过的 requestId 本就是 no-op。
+ * 溢出策略:**丢最旧**(与网关缓冲一致)。要护住的不变量是"回放出去的流里不留孤儿
+ * start" —— 没有 end 的 start 会让插件永久停在"在忙 / 在等审批",要等会话销毁才被
+ * finishAll 兜底。丢最旧天然满足它:留下的永远是到达序的一个**后缀**,某个 start 还在
+ * 队里就意味着它之后的一切都还在,它的 end 也在。
+ *
+ * 反过来落单的 end 无害 —— 三个下游状态机对它一律 no-op:translator 在 idle 收到
+ * done/error 直接 return、非 running 收到 status(false) 不动;endThinking 认 blockId、
+ * endInteraction 认在场 requestId。极端情况下连 status(true) 一起被挤掉,turnActive
+ * 压根不置起,那一轮连 thinking 都整体静默 —— 是"少一段情节",不是"半段情节"。
+ *
+ * 所以这里不需要按事件类型做配对压缩:丢最新才需要(收口事件本就排在最后,首当其冲),
+ * 而那要求队列认识 thinking / turn / interaction 各自的语义。
  */
 export class GhostTapPendingQueue {
   private readonly items: GhostTapPendingItem[] = [];
@@ -541,24 +549,11 @@ export class GhostTapPendingQueue {
   }
 
   push(item: GhostTapPendingItem): void {
-    if (this.items.length < this.cap) {
-      this.items.push(item);
-      return;
+    if (this.items.length >= this.cap) {
+      this.items.shift();
+      this.noteDropped(1);
     }
-    if (item.type === 'activity' && item.phase === 'end') {
-      const startAt = this.items.findIndex(
-        (p) =>
-          p.type === 'activity' &&
-          p.phase === 'start' &&
-          p.request.requestId === item.request.requestId,
-      );
-      if (startAt >= 0) {
-        this.items.splice(startAt, 1);
-        this.noteDropped(2); // 撤掉的 start + 没进队的 end
-        return;
-      }
-    }
-    this.noteDropped(1);
+    this.items.push(item);
   }
 
   /** 取快照并清空(回放用:先清再放,回放中新到的事件不会被本轮吞掉)。 */

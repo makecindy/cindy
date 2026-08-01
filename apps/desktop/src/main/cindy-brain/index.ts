@@ -1229,7 +1229,7 @@ export function createGhostSessionTap(sessionId: string): {
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
   const MAX_PENDING = 32;
-  // 有界缓冲 + 溢出配对保护(不留孤儿 start),语义见 GhostTapPendingQueue。
+  // 有界缓冲,溢出丢最旧(留下的是到达序后缀,不留孤儿 start),语义见 GhostTapPendingQueue。
   const pending = new GhostTapPendingQueue(MAX_PENDING, () => {
     log.warn('ghost session tap pending overflow while resolving eligibility', {
       sessionId,

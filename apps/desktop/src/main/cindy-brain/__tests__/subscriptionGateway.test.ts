@@ -795,7 +795,7 @@ describe('GhostTapPendingQueue', () => {
     expect(q.dropped).toBe(0);
   });
 
-  it('溢出丢最新,首次溢出只回调一次', () => {
+  it('溢出丢最旧,首次溢出只回调一次', () => {
     const onFirstOverflow = vi.fn();
     const q = new GhostTapPendingQueue(2, onFirstOverflow);
     q.push(ev(1));
@@ -805,44 +805,36 @@ describe('GhostTapPendingQueue', () => {
     expect(q.size).toBe(2);
     expect(q.dropped).toBe(2);
     expect(onFirstOverflow).toHaveBeenCalledOnce();
-    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e3', 'e4']);
   });
 
-  it('溢出时来的 end 连它排队中的 start 一起撤掉:绝不留孤儿 start', () => {
+  it('丢最旧不留孤儿 start:留下的一定是到达序的后缀', () => {
     const q = new GhostTapPendingQueue(3);
     q.push(act('start', 'p1'));
     q.push(ev(1));
     q.push(ev(2));
-    // 满了:p1 的 end 若只丢自己,回放后 p1 就永远没有结束边界。
+    // 满了:挤掉队首的 start,end 照常入队 —— 落单的 end 在下游是 no-op。
     q.push(act('end', 'p1'));
-    expect(q.dropped).toBe(2); // 撤掉的 start + 没进队的 end
-    const items = q.drain();
-    expect(items.some((i) => i.type === 'activity')).toBe(false);
-    expect(items.map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
-  });
-
-  it('溢出丢 start 是安全的:后到的 end 对没登记过的 requestId 是 no-op', () => {
-    const q = new GhostTapPendingQueue(2);
-    q.push(ev(1));
-    q.push(ev(2));
-    q.push(act('start', 'p1')); // 丢掉
     expect(q.dropped).toBe(1);
-    // start 没进队,end 找不到配对 → 只丢自己,不误撤别人
-    q.push(act('end', 'p1'));
-    expect(q.dropped).toBe(2);
-    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+    const items = q.drain();
+    expect(items.map((i) => (i.type === 'event' ? i.event.type : i.phase))).toEqual([
+      'e1',
+      'e2',
+      'end',
+    ]);
   });
 
-  it('配对撤销按 requestId 精确匹配,不误伤同时在场的其它请求', () => {
-    const q = new GhostTapPendingQueue(3);
+  it('普通 event 与 activity 同规则:收口事件永远留在队尾,不必按类型配对压缩', () => {
+    const q = new GhostTapPendingQueue(2);
+    q.push(ev(1)); // thinking start
+    q.push(ev(2)); // delta…
     q.push(act('start', 'p1'));
-    q.push(act('start', 'p2'));
-    q.push(ev(1));
-    q.push(act('end', 'p2'));
-    const items = q.drain();
-    const acts = items.filter((i) => i.type === 'activity');
-    expect(acts).toHaveLength(1);
-    expect(acts[0]).toMatchObject({ phase: 'start', request: { requestId: 'p1' } });
+    q.push(ev(3)); // status(false) / done 这类终态
+    expect(q.dropped).toBe(2);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : i.phase))).toEqual([
+      'start',
+      'e3',
+    ]);
   });
 });
 
