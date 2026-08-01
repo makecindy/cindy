@@ -399,8 +399,14 @@ describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩
     // 点弹窗内部(标题):target ≠ 遮罩本身,不得关闭。
     fireEvent.click(screen.getByText('settings.providers.wizard.title'));
     expect(onClose).not.toHaveBeenCalled();
-    // 点遮罩本身:关闭。
     const overlay = container.firstElementChild as HTMLElement;
+    // 从弹窗内部按下、拖出到遮罩松开:合成 click 落在遮罩,但按下不始于遮罩,
+    // 不得误关(防丢表单)。
+    fireEvent.mouseDown(screen.getByText('settings.providers.wizard.title'));
+    fireEvent.click(overlay);
+    expect(onClose).not.toHaveBeenCalled();
+    // 按下与松开都在遮罩上:关闭。
+    fireEvent.mouseDown(overlay);
     fireEvent.click(overlay);
     expect(onClose).toHaveBeenCalledTimes(1);
   });

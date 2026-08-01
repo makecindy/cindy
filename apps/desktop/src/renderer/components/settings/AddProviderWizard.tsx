@@ -490,6 +490,12 @@ export function AddProviderWizard({
     onClose();
   }, [loggingIn, cancelAuthorize, onClose]);
 
+  // 遮罩关闭的防误触:从输入框按下、拖到弹窗外松开时,浏览器把合成 click 派发到
+  // 按下点与松开点的最近公共祖先(= 遮罩),target === currentTarget 成立但用户
+  // 并无关闭意图。记录按下是否始于遮罩,按下与松开都在遮罩上才关闭
+  // (PR #1102 review 第七轮)。
+  const overlayMouseDownOnSelfRef = useRef(false);
+
   // Esc 关闭(DESIGN.md §4:弹窗关闭 = 取消按钮 / Esc / 点遮罩;本弹窗未用 Radix,需自行监听)。
   // CJK 输入法组合期间的 Esc 是「取消候选词」,不是关闭命令(isComposing / 遗留
   // keyCode 229),与仓库其他 CJK 输入场景同口径(PR #1102 review 第六轮)。
@@ -833,8 +839,12 @@ export function AddProviderWizard({
     // DESIGN.md §4 Dialog:关闭 = 底部「取消」/ Esc / 点遮罩,不设右上角 ×(与 ConfirmDialog 同构)。
     <div
       className="fixed inset-0 z-[10000] flex items-center justify-center bg-[var(--overlay-modal)]"
+      onMouseDown={(e) => {
+        overlayMouseDownOnSelfRef.current = e.target === e.currentTarget;
+      }}
       onClick={(e) => {
-        if (e.target === e.currentTarget) handleClose();
+        if (e.target === e.currentTarget && overlayMouseDownOnSelfRef.current) handleClose();
+        overlayMouseDownOnSelfRef.current = false;
       }}
     >
       <div
