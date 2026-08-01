@@ -10,20 +10,20 @@
  * 不持有 LLM client、不做决策、不存任何业务记忆 —— 这些是未来 MetaAgent 的事。
  */
 
-import { randomUUID } from "node:crypto";
+import { randomUUID } from 'node:crypto';
 
 import {
   extractNonSecretErrorSignals,
   redactSensitiveText,
-} from "@cindy/maker-shared/error-redaction";
+} from '@cindy/maker-shared/error-redaction';
 import type {
   Effort,
   PermissionMode,
   AgentKind,
   UserMessage,
-} from "./types/common.js";
-import type { Capabilities } from "./types/capabilities.js";
-import { NotSupportedError } from "./types/capabilities.js";
+} from './types/common.js';
+import type { Capabilities } from './types/capabilities.js';
+import { NotSupportedError } from './types/capabilities.js';
 import type {
   AgentEvent,
   InteractionRequest,
@@ -33,17 +33,13 @@ import type {
   UsageSnapshot,
   RewindFilesResult,
   SendOrigin,
-} from "./types/events.js";
-import { isTerminalAgentErrorEvent } from "./types/events.js";
-import type { ContextUsageData } from "./types/context-usage.js";
-import type {
-  AgentSessionHandle,
-  BackgroundTaskSnapshot,
-  SendOptions,
-} from "./agents/base-agent.js";
-import type { Logger } from "./interfaces/logger.js";
+} from './types/events.js';
+import { isTerminalAgentErrorEvent } from './types/events.js';
+import type { ContextUsageData } from './types/context-usage.js';
+import type { AgentSessionHandle, BackgroundTaskSnapshot, SendOptions } from './agents/base-agent.js';
+import type { Logger } from './interfaces/logger.js';
 
-export type SessionStatus = "active" | "aborting" | "closed" | "error";
+export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
 
 export interface PermissionModeState {
   mode: PermissionMode | null;
@@ -52,9 +48,7 @@ export interface PermissionModeState {
 
 export type SessionEventListener = (event: AgentEvent) => void;
 export type SessionStatusListener = (status: SessionStatus) => void;
-export type InteractionRequestListener = (
-  req: InteractionRequest,
-) => Promise<InteractionDecision>;
+export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
 
 /**
  * turn 零事件看门狗阈值(ms)。turn 在跑、却连续这么久**一个事件都没有**,视为整条
@@ -114,7 +108,7 @@ const TURN_STALL_SLICE_MS = 60_000;
 const TURN_STALL_SUSPEND_GAP_MS = 30_000;
 
 function parseTurnStallMs(raw: string | undefined): number {
-  if (raw === undefined || raw === "") return DEFAULT_TURN_STALL_MS;
+  if (raw === undefined || raw === '') return DEFAULT_TURN_STALL_MS;
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 0) return DEFAULT_TURN_STALL_MS;
   return Math.floor(n);
@@ -144,12 +138,12 @@ export interface SessionOptions {
 }
 
 function redactEventForListeners(event: AgentEvent): AgentEvent {
-  if (!event.data || typeof event.data !== "object") return event;
+  if (!event.data || typeof event.data !== 'object') return event;
 
   const data = event.data as Record<string, unknown>;
   const safeData = { ...data };
   let changed = false;
-  if (event.type === "error" && typeof safeData.message === "string") {
+  if (event.type === 'error' && typeof safeData.message === 'string') {
     const signals = extractNonSecretErrorSignals(safeData.message);
     if (safeData.errorStatus == null && signals.errorStatus !== undefined) {
       safeData.errorStatus = signals.errorStatus;
@@ -160,12 +154,12 @@ function redactEventForListeners(event: AgentEvent): AgentEvent {
       changed = true;
     }
   }
-  const stringKeys = ["message", "sdkError", "summary"];
-  if (event.type === "tool_result_full" && safeData.isError === true) {
-    stringKeys.push("fullText");
+  const stringKeys = ['message', 'sdkError', 'summary'];
+  if (event.type === 'tool_result_full' && safeData.isError === true) {
+    stringKeys.push('fullText');
   }
   for (const key of stringKeys) {
-    if (typeof safeData[key] === "string") {
+    if (typeof safeData[key] === 'string') {
       const redacted = redactSensitiveText(safeData[key]);
       if (redacted !== safeData[key]) {
         safeData[key] = redacted;
@@ -175,28 +169,24 @@ function redactEventForListeners(event: AgentEvent): AgentEvent {
   }
 
   if (
-    event.type === "agent_task_update" &&
-    safeData.status === "failed" &&
+    event.type === 'agent_task_update' &&
+    safeData.status === 'failed' &&
     safeData.raw &&
-    typeof safeData.raw === "object"
+    typeof safeData.raw === 'object'
   ) {
     safeData.raw = redactNestedStrings(safeData.raw, () => {
       changed = true;
     });
   }
 
-  if (
-    event.type === "done" &&
-    safeData.raw &&
-    typeof safeData.raw === "object"
-  ) {
+  if (event.type === 'done' && safeData.raw && typeof safeData.raw === 'object') {
     const raw = { ...(safeData.raw as Record<string, unknown>) };
-    if (raw.error && typeof raw.error === "object") {
+    if (raw.error && typeof raw.error === 'object') {
       raw.error = redactNestedStrings(raw.error, () => {
         changed = true;
       });
     }
-    if (raw.status === "failed" && Array.isArray(raw.items)) {
+    if (raw.status === 'failed' && Array.isArray(raw.items)) {
       raw.items = redactNestedStrings(raw.items, () => {
         changed = true;
       });
@@ -208,7 +198,7 @@ function redactEventForListeners(event: AgentEvent): AgentEvent {
 }
 
 function redactNestedStrings(value: unknown, onChange: () => void): unknown {
-  if (typeof value === "string") {
+  if (typeof value === 'string') {
     const redacted = redactSensitiveText(value);
     if (redacted !== value) onChange();
     return redacted;
@@ -216,7 +206,7 @@ function redactNestedStrings(value: unknown, onChange: () => void): unknown {
   if (Array.isArray(value)) {
     return value.map((item) => redactNestedStrings(item, onChange));
   }
-  if (!value || typeof value !== "object") return value;
+  if (!value || typeof value !== 'object') return value;
 
   const copy: Record<string, unknown> = {};
   for (const [key, child] of Object.entries(value)) {
@@ -262,10 +252,11 @@ export interface SessionSendOptions extends SendOptions {
  * 产品层持久化 hook 执行过，不能单独当作 turn 已启动。
  */
 export type SessionSendResult =
-  { accepted: true } | { accepted: false; reason: "cancelled-before-dispatch" };
+  | { accepted: true }
+  | { accepted: false; reason: 'cancelled-before-dispatch' };
 
 type SendReservation = {
-  phase: "accepting" | "dispatching";
+  phase: 'accepting' | 'dispatching';
   cancelled: boolean;
   abortController: AbortController;
 };
@@ -288,7 +279,7 @@ export class Session {
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
-  private status: SessionStatus = "active";
+  private status: SessionStatus = 'active';
   /**
    * 同一 Session 的并发 close 共享一次底层关闭过程。renderer 与 main 生命周期钩子可能
    * 同时请求关闭；所有调用方都必须等到 transport / 子进程真正释放后才能继续回收 worktree。
@@ -341,8 +332,7 @@ export class Session {
       generation: 0,
     };
     this.turnStallMs =
-      opts.turnStallMs ??
-      parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
+      opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
 
     // 注入 InteractionResolver 到底层 handle, 转发到 host 维护的 listener。
     // 没接 listener 时按 kind 给出安全默认: 都视作 deny(host 必须接 listener 才能交互)。
@@ -353,26 +343,14 @@ export class Session {
       this.clearTurnStallWatchdog();
       try {
         if (!this.interactionListener) {
-          this.logger.warn(
-            "interaction request received but no listener attached, denying",
-            { kind: req.kind, requestId: req.requestId },
-          );
-          if (req.kind === "ask_user_question") {
-            return { kind: "ask_user_question", answers: {} };
+          this.logger.warn('interaction request received but no listener attached, denying', { kind: req.kind, requestId: req.requestId });
+          if (req.kind === 'ask_user_question') {
+            return { kind: 'ask_user_question', answers: {} };
           }
-          if (req.kind === "plan_review") {
-            return {
-              kind: "plan_review",
-              behavior: "deny",
-              reason: "no_listener_attached",
-              dismissed: true,
-            };
+          if (req.kind === 'plan_review') {
+            return { kind: 'plan_review', behavior: 'deny', reason: 'no_listener_attached', dismissed: true };
           }
-          return {
-            kind: req.kind,
-            behavior: "deny",
-            reason: "no_listener_attached",
-          } as InteractionDecision;
+          return { kind: req.kind, behavior: 'deny', reason: 'no_listener_attached' } as InteractionDecision;
         }
         return await this.interactionListener(req);
       } finally {
@@ -389,20 +367,11 @@ export class Session {
     return this.turnGeneration;
   }
 
-  async send(
-    message: UserMessage | string,
-    opts?: SessionSendOptions,
-  ): Promise<SessionSendResult> {
-    const {
-      afterTurnReserved,
-      beforeProviderStart,
-      onAccepted,
-      onDispatching,
-      ...handleOpts
-    } = opts ?? {};
+  async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
+    const { afterTurnReserved, beforeProviderStart, onAccepted, onDispatching, ...handleOpts } = opts ?? {};
     const cancelledBeforeReservation = (): SessionSendResult | null =>
       handleOpts.signal?.aborted === true
-        ? { accepted: false, reason: "cancelled-before-dispatch" }
+        ? { accepted: false, reason: 'cancelled-before-dispatch' }
         : null;
     const alreadyCancelled = cancelledBeforeReservation();
     if (alreadyCancelled !== null) return alreadyCancelled;
@@ -410,39 +379,28 @@ export class Session {
     // reports idle between a foreground result and background-task continuation.
     // Wait instead of racing that continuation with a new Desktop turn.
     while (this.hostTurnLeases.size > 0) {
-      if (
-        await this.waitForGateOrAbort(
-          Promise.all([...this.hostTurnLeases]),
-          handleOpts.signal,
-        )
-      ) {
-        return { accepted: false, reason: "cancelled-before-dispatch" };
+      if (await this.waitForGateOrAbort(Promise.all([...this.hostTurnLeases]), handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
     // A temporary host permission lease may be restoring immediately after a
     // terminal event. Do not let the next turn reserve the session until that
     // live provider state is settled.
     while (this.permissionModeChangesInFlight > 0) {
-      if (
-        await this.waitForGateOrAbort(
-          this.permissionModeChangeChain,
-          handleOpts.signal,
-        )
-      ) {
-        return { accepted: false, reason: "cancelled-before-dispatch" };
+      if (await this.waitForGateOrAbort(this.permissionModeChangeChain, handleOpts.signal)) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
     }
-    const msg: UserMessage =
-      typeof message === "string"
-        ? { type: "user", content: message }
-        : message;
-    this.logger.debug("send", summarizeUserMessage(msg));
+    const msg: UserMessage = typeof message === 'string'
+      ? { type: 'user', content: message }
+      : message;
+    this.logger.debug('send', summarizeUserMessage(msg));
     this.ensureActive();
     if (this.isTurnRunning()) {
       throw this.createSessionRunningError();
     }
     const reservation: SendReservation = {
-      phase: "accepting",
+      phase: 'accepting',
       cancelled: false,
       abortController: new AbortController(),
     };
@@ -450,25 +408,20 @@ export class Session {
     // 新一轮 turn 的代号（见 turnGeneration）：看门狗的善后动作据此判断"还是不是那个
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
     this.turnGeneration += 1;
-    const cleanupExternalAbort = this.attachExternalCancellation(
-      reservation,
-      handleOpts.signal,
-    );
+    const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
     // turnDispatched:handle.send 成功、本次 send 真正成为运行中的 turn。
     let originInstalled = false;
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
-      if (!reservation.cancelled && this.sendReservation === reservation)
-        return null;
+      if (!reservation.cancelled && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
-      return { accepted: false, reason: "cancelled-before-dispatch" };
+      return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
       const cancelledBeforePreparation = finishCancelledBeforeDispatch();
-      if (cancelledBeforePreparation !== null)
-        return cancelledBeforePreparation;
+      if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
@@ -480,7 +433,7 @@ export class Session {
       this.ensureActive();
       const cancelledAfterAcceptance = finishCancelledBeforeDispatch();
       if (cancelledAfterAcceptance !== null) return cancelledAfterAcceptance;
-      reservation.phase = "dispatching";
+      reservation.phase = 'dispatching';
       // 越过 dispatch 边界才记 origin — cancelled-before-dispatch 早返回不会到这,
       // 不会污染下一个无 origin 的 turn。先存下当前值,handle.send 失败时**还原**而非
       // 清 null(见下方 finally 注释)。
@@ -504,12 +457,12 @@ export class Session {
         });
       } catch (e) {
         if (reservation.cancelled) {
-          return { accepted: false, reason: "cancelled-before-dispatch" };
+          return { accepted: false, reason: 'cancelled-before-dispatch' };
         }
         throw e;
       }
       if (reservation.cancelled) {
-        return { accepted: false, reason: "cancelled-before-dispatch" };
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
       }
       turnDispatched = true;
       // turn 真正开始跑 → 起 stall 看门狗。后续每个事件都会重置它，done / 终态
@@ -542,21 +495,14 @@ export class Session {
     }
   }
 
-  async steer(
-    message: UserMessage | string,
-    opts?: SendOptions,
-  ): Promise<void> {
-    const msg: UserMessage =
-      typeof message === "string"
-        ? { type: "user", content: message }
-        : message;
-    this.logger.debug("steer", summarizeUserMessage(msg));
+  async steer(message: UserMessage | string, opts?: SendOptions): Promise<void> {
+    const msg: UserMessage = typeof message === 'string'
+      ? { type: 'user', content: message }
+      : message;
+    this.logger.debug('steer', summarizeUserMessage(msg));
     this.ensureActive();
     if (!this.capabilities.sameTurnSteer.supported) {
-      throw new NotSupportedError(
-        "sameTurnSteer",
-        this.capabilities.sameTurnSteer,
-      );
+      throw new NotSupportedError('sameTurnSteer', this.capabilities.sameTurnSteer);
     }
     if (!this.handle.isTurnRunning?.()) {
       throw new Error(`Session ${this.id} has no active turn to steer`);
@@ -566,8 +512,8 @@ export class Session {
   }
 
   async abort(): Promise<void> {
-    if (this.status === "closed") return;
-    if (this.status === "error") return;
+    if (this.status === 'closed') return;
+    if (this.status === 'error') return;
     this.cancelSendReservation(this.sendReservation);
     // 中断已在进行:不再计 stall 额度(下一个 turn 的 send 会重新起表)。
     this.clearTurnStallWatchdog();
@@ -580,17 +526,14 @@ export class Session {
     // 所以这里也排一次与 turn 绑定的复核,且**不挂在 abort 的 promise 上**(它自己就可能
     // 永不 settle,理由同 onTurnStallTimeout)。宽限比看门狗那条长得多:手动 Stop 背后
     // 没有别的兜底,而健康的 interrupt 往返远不需要这么久,宁可多等也不误关正常会话。
-    this.scheduleAbortRecoveryCheck(
-      MANUAL_ABORT_RECOVERY_GRACE_MS,
-      "manual-abort",
-    );
-    this.setStatus("aborting");
+    this.scheduleAbortRecoveryCheck(MANUAL_ABORT_RECOVERY_GRACE_MS, 'manual-abort');
+    this.setStatus('aborting');
     try {
       await this.handle.abort();
     } finally {
       this.releaseSendReservationIfObserved();
-      if (this.status === "aborting") {
-        this.setStatus("active");
+      if (this.status === 'aborting') {
+        this.setStatus('active');
       }
     }
   }
@@ -601,12 +544,9 @@ export class Session {
    * 会话已关闭 / 出错时静默返回 —— 此时子进程已死,后台任务必然随之终止。
    */
   async stopBackgroundTask(taskId: string): Promise<void> {
-    if (this.status === "closed" || this.status === "error") return;
+    if (this.status === 'closed' || this.status === 'error') return;
     if (!this.handle.stopBackgroundTask) {
-      throw new NotSupportedError("stopBackgroundTask", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('stopBackgroundTask', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.stopBackgroundTask(taskId);
   }
@@ -616,13 +556,13 @@ export class Session {
    * 子进程不存在,后台任务必然已死,空数组即事实)。
    */
   listBackgroundTasks(): BackgroundTaskSnapshot[] {
-    if (this.status === "closed" || this.status === "error") return [];
+    if (this.status === 'closed' || this.status === 'error') return [];
     return this.handle.listBackgroundTasks?.() ?? [];
   }
 
   close(): Promise<void> {
     if (this.closePromise) return this.closePromise;
-    if (this.status === "closed") return Promise.resolve();
+    if (this.status === 'closed') return Promise.resolve();
 
     this.closePromise = this.performClose();
     return this.closePromise;
@@ -634,7 +574,7 @@ export class Session {
    * and keeps the session open, or observes closePromise and is rejected.
    */
   closeIfIdle(): Promise<boolean> {
-    if (this.status !== "active" || this.closePromise || this.isTurnRunning()) {
+    if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
     this.closePromise = this.performClose();
@@ -649,7 +589,7 @@ export class Session {
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus("closed");
+      this.setStatus('closed');
       this.eventListeners.clear();
       this.statusListeners.clear();
       this.interactionListener = null;
@@ -657,7 +597,7 @@ export class Session {
   }
 
   async detach(): Promise<void> {
-    if (this.status === "closed") return;
+    if (this.status === 'closed') return;
     try {
       if (this.handle.detach) {
         await this.handle.detach();
@@ -667,7 +607,7 @@ export class Session {
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus("closed");
+      this.setStatus('closed');
       this.eventListeners.clear();
       this.statusListeners.clear();
       this.interactionListener = null;
@@ -681,10 +621,7 @@ export class Session {
   async getContextUsage(): Promise<ContextUsageData> {
     this.ensureActive();
     if (!this.handle.getContextUsage) {
-      throw new NotSupportedError("contextUsage", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('contextUsage', { supported: false, reason: 'not-implemented' });
     }
     return this.handle.getContextUsage();
   }
@@ -748,31 +685,22 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(
-    model: string,
-    opts?: { providerId?: string | null },
-  ): Promise<void> {
+  async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
-      throw new NotSupportedError("switchModel", this.capabilities.switchModel);
+      throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
     if (!this.handle.setModel) {
-      throw new NotSupportedError("switchModel", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('switchModel', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setModel(model, opts);
   }
 
   async setEffort(effort: Effort): Promise<void> {
     if (!this.capabilities.effort.supported) {
-      throw new NotSupportedError("effort", this.capabilities.effort);
+      throw new NotSupportedError('effort', this.capabilities.effort);
     }
     if (!this.handle.setEffort) {
-      throw new NotSupportedError("effort", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('effort', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setEffort(effort);
   }
@@ -781,21 +709,17 @@ export class Session {
     await this.setPermissionModeTracked(mode);
   }
 
-  async setPermissionModeTracked(
-    mode: PermissionMode,
-  ): Promise<PermissionModeState> {
+  async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
     this.assertPermissionModeSupported(mode);
     this.permissionModeChangesInFlight += 1;
-    const operation = this.permissionModeChangeChain
-      .catch(() => undefined)
-      .then(async () => {
-        await this.handle.setPermissionMode!(mode);
-        this.permissionModeStateValue = {
-          mode,
-          generation: this.permissionModeStateValue.generation + 1,
-        };
-        return this.permissionModeState;
-      });
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = {
+        mode,
+        generation: this.permissionModeStateValue.generation + 1,
+      };
+      return this.permissionModeState;
+    });
     const tracked = operation.finally(() => {
       this.permissionModeChangesInFlight -= 1;
     });
@@ -812,23 +736,15 @@ export class Session {
   ): Promise<boolean> {
     this.assertPermissionModeSupported(mode);
     this.permissionModeChangesInFlight += 1;
-    const operation = this.permissionModeChangeChain
-      .catch(() => undefined)
-      .then(async () => {
-        const current = this.permissionModeStateValue;
-        if (
-          current.mode !== expected.mode ||
-          current.generation !== expected.generation
-        ) {
-          return false;
-        }
-        await this.handle.setPermissionMode!(mode);
-        this.permissionModeStateValue = {
-          mode,
-          generation: current.generation + 1,
-        };
-        return true;
-      });
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      const current = this.permissionModeStateValue;
+      if (current.mode !== expected.mode || current.generation !== expected.generation) {
+        return false;
+      }
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = { mode, generation: current.generation + 1 };
+      return true;
+    });
     const tracked = operation.finally(() => {
       this.permissionModeChangesInFlight -= 1;
     });
@@ -841,33 +757,27 @@ export class Session {
 
   private assertPermissionModeSupported(mode: PermissionMode): void {
     if (!this.capabilities.permissionModes.some((m) => m.id === mode)) {
-      throw new NotSupportedError(`permissionMode='${mode}'`, {
-        supported: false,
-        reason: "sdk-missing",
-        message: `Available: ${this.capabilities.permissionModes.map((m) => m.id).join(", ")}`,
-      });
-    }
-    if (!this.capabilities.setPermissionModeMidSession.supported) {
       throw new NotSupportedError(
-        "setPermissionModeMidSession",
-        this.capabilities.setPermissionModeMidSession,
+        `permissionMode='${mode}'`,
+        {
+          supported: false,
+          reason: 'sdk-missing',
+          message: `Available: ${this.capabilities.permissionModes.map((m) => m.id).join(', ')}`,
+        },
       );
     }
+    if (!this.capabilities.setPermissionModeMidSession.supported) {
+      throw new NotSupportedError('setPermissionModeMidSession', this.capabilities.setPermissionModeMidSession);
+    }
     if (!this.handle.setPermissionMode) {
-      throw new NotSupportedError("setPermissionMode", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('setPermissionMode', { supported: false, reason: 'not-implemented' });
     }
   }
 
   async setFastMode(enabled: boolean): Promise<void> {
     this.ensureActive();
     if (!this.handle.setFastMode) {
-      throw new NotSupportedError("fastMode", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('fastMode', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setFastMode(enabled);
   }
@@ -876,19 +786,10 @@ export class Session {
   async setPlanMode(enabled: boolean): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.planMode?.supported) {
-      throw new NotSupportedError(
-        "planMode",
-        this.capabilities.planMode ?? {
-          supported: false,
-          reason: "not-implemented",
-        },
-      );
+      throw new NotSupportedError('planMode', this.capabilities.planMode ?? { supported: false, reason: 'not-implemented' });
     }
     if (!this.handle.setPlanMode) {
-      throw new NotSupportedError("planMode", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('planMode', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setPlanMode(enabled);
   }
@@ -914,10 +815,7 @@ export class Session {
   async setVendorOptions(patch: Record<string, unknown>): Promise<void> {
     this.ensureActive();
     if (!this.handle.setVendorOptions) {
-      throw new NotSupportedError("vendorOptions", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('vendorOptions', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setVendorOptions(patch);
   }
@@ -930,13 +828,10 @@ export class Session {
   async setExtraDirs(dirs: string[]): Promise<void> {
     this.ensureActive();
     if (!this.capabilities.extraDirs.supported) {
-      throw new NotSupportedError("extraDirs", this.capabilities.extraDirs);
+      throw new NotSupportedError('extraDirs', this.capabilities.extraDirs);
     }
     if (!this.handle.setExtraDirs) {
-      throw new NotSupportedError("extraDirs", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('extraDirs', { supported: false, reason: 'not-implemented' });
     }
     await this.handle.setExtraDirs(dirs);
   }
@@ -968,13 +863,10 @@ export class Session {
    */
   async previewRewindFiles(userUuid: string): Promise<RewindFilesResult> {
     if (!this.capabilities.rewind.supported) {
-      throw new NotSupportedError("rewind", this.capabilities.rewind);
+      throw new NotSupportedError('rewind', this.capabilities.rewind);
     }
     if (!this.handle.previewRewindFiles) {
-      throw new NotSupportedError("previewRewindFiles", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('previewRewindFiles', { supported: false, reason: 'not-implemented' });
     }
     this.ensureActive();
     return this.handle.previewRewindFiles(userUuid);
@@ -996,18 +888,15 @@ export class Session {
     opts?: RewindCommitOptions,
   ): Promise<undefined | RewindCommitResult> {
     if (!this.capabilities.rewind.supported) {
-      throw new NotSupportedError("rewind", this.capabilities.rewind);
+      throw new NotSupportedError('rewind', this.capabilities.rewind);
     }
     if (!this.handle.commitRewindFiles) {
-      throw new NotSupportedError("commitRewindFiles", {
-        supported: false,
-        reason: "not-implemented",
-      });
+      throw new NotSupportedError('commitRewindFiles', { supported: false, reason: 'not-implemented' });
     }
     this.ensureActive();
     if (this.isTurnRunning()) {
-      const err = new Error("SESSION_RUNNING: 会话进行中, 无法 rewind");
-      (err as { code?: string }).code = "SESSION_RUNNING";
+      const err = new Error('SESSION_RUNNING: 会话进行中, 无法 rewind');
+      (err as { code?: string }).code = 'SESSION_RUNNING';
       throw err;
     }
     return this.handle.commitRewindFiles(userUuid, priorAssistantUuid, opts);
@@ -1033,13 +922,13 @@ export class Session {
   // ── 内部 ──────────────────────────────────────────────────────────────────
 
   private ensureActive(): void {
-    if (this.status === "closed") {
+    if (this.status === 'closed') {
       throw new Error(`Session ${this.id} is closed`);
     }
     if (this.closePromise) {
       throw new Error(`Session ${this.id} is closing`);
     }
-    if (this.status === "error") {
+    if (this.status === 'error') {
       throw new Error(`Session ${this.id} is in error state`);
     }
   }
@@ -1048,11 +937,7 @@ export class Session {
     if (this.status === s) return;
     this.status = s;
     this.statusListeners.forEach((cb) => {
-      try {
-        cb(s);
-      } catch (e) {
-        this.logger.error("status listener threw", { error: String(e) });
-      }
+      try { cb(s); } catch (e) { this.logger.error('status listener threw', { error: String(e) }); }
     });
   }
 
@@ -1081,14 +966,9 @@ export class Session {
     }
     const listenerEvent = redactEventForListeners(event);
     for (const listener of this.eventListeners) {
-      try {
-        listener(listenerEvent);
-      } catch (e) {
-        this.logger.error("event listener threw", { error: String(e) });
-      }
+      try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
     }
-    const isTerminal =
-      event.type === "done" || isTerminalAgentErrorEvent(event);
+    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
     // turn 真正结束后清 origin,下一轮无 origin 的 turn 不被污染。
     // 关键:**只**在 done / 终止型 error 上清,**不要**在 status(isRunning=false)
     // 上清 —— translator 收尾是先 push end-status(isRunning=false)、紧接着 push
@@ -1131,7 +1011,7 @@ export class Session {
   private armTurnStallWatchdog(): void {
     this.clearTurnStallWatchdog();
     if (this.turnStallMs <= 0) return;
-    if (this.status !== "active") return;
+    if (this.status !== 'active') return;
     if (this.closePromise) return;
     if (!this.isTurnRunning()) return;
     if (this.pendingInteractions > 0) return;
@@ -1160,7 +1040,7 @@ export class Session {
       const elapsed = Date.now() - this.turnStallSliceStartedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
         // 系统挂起过:这一片不算数,原地重开(额度不扣)。
-        this.logger.info("turn stall watchdog skipped a suspended slice", {
+        this.logger.info('turn stall watchdog skipped a suspended slice', {
           sliceMs: slice,
           elapsedMs: elapsed,
         });
@@ -1185,10 +1065,7 @@ export class Session {
     } catch (e) {
       // 查询失败按"没有后台任务"处理:看门狗宁可起表(仍有 45min 缓冲 + 其余排除项),
       // 也不要因为一个诊断查询抛错就永久失效。
-      this.logger.warn(
-        "listBackgroundTasks threw while arming stall watchdog",
-        { error: String(e) },
-      );
+      this.logger.warn('listBackgroundTasks threw while arming stall watchdog', { error: String(e) });
       return false;
     }
   }
@@ -1206,33 +1083,29 @@ export class Session {
    */
   private onTurnStallTimeout(): void {
     // 触发前复核:定时器排上队之后可能已经收到事件 / turn 已结束 / 冒出交互等待。
-    if (this.status !== "active" || this.closePromise) return;
+    if (this.status !== 'active' || this.closePromise) return;
     if (!this.isTurnRunning()) return;
     if (this.pendingInteractions > 0) return;
     if (this.hasRunningBackgroundTasks()) return;
     const now = Date.now();
-    const msSinceLastEvent =
-      this.lastEventAt > 0 ? now - this.lastEventAt : null;
-    this.logger.warn(
-      "turn stall watchdog tripped — no events at all, interrupting turn",
-      {
-        turnStallMs: this.turnStallMs,
-        lastEventType: this.lastEventType,
-        msSinceLastEvent,
-      },
-    );
+    const msSinceLastEvent = this.lastEventAt > 0 ? now - this.lastEventAt : null;
+    this.logger.warn('turn stall watchdog tripped — no events at all, interrupting turn', {
+      turnStallMs: this.turnStallMs,
+      lastEventType: this.lastEventType,
+      msSinceLastEvent,
+    });
     const minutes = Math.round(this.turnStallMs / 60_000);
     this.fanOutEvent({
-      type: "error",
+      type: 'error',
       data: {
         // reason 是 renderer i18n 的稳定 key(ERROR_REASON_I18N_KEYS,规则 18);
         // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
         message:
           `This turn produced no activity at all for ${minutes} minutes ` +
-          "(upstream, tools and the agent subprocess were all silent); " +
-          "it was interrupted automatically. You can send the next message to continue.",
+          '(upstream, tools and the agent subprocess were all silent); ' +
+          'it was interrupted automatically. You can send the next message to continue.',
         isTerminal: true,
-        reason: "turn_no_event_timeout",
+        reason: 'turn_no_event_timeout',
         turnStallMs: this.turnStallMs,
         lastEventType: this.lastEventType,
         msSinceLastEvent,
@@ -1247,14 +1120,9 @@ export class Session {
     // abort 正常生效时它是 no-op,所以无条件排定是安全的。
     // 复核由 abort() 内部统一排(见 scheduleAbortRecoveryCheck),这里只需要用看门狗
     // 自己的短宽限覆盖它:本路径已经确诊卡死,不必再等手动 Stop 那样长的时间。
-    this.scheduleAbortRecoveryCheck(
-      STALL_ABORT_RECOVERY_GRACE_MS,
-      "stall-watchdog",
-    );
+    this.scheduleAbortRecoveryCheck(STALL_ABORT_RECOVERY_GRACE_MS, 'stall-watchdog');
     void this.abort().catch((e) => {
-      this.logger.warn("turn stall watchdog abort failed", {
-        error: String(e),
-      });
+      this.logger.warn('turn stall watchdog abort failed', { error: String(e) });
     });
   }
 
@@ -1264,10 +1132,7 @@ export class Session {
    * turn 代号,否则宽限期内新起的健康 turn 会被误杀(见 turnGeneration)。
    * 幂等:同一 turn 上重复 abort 只保留最早排定的那次复核。
    */
-  private scheduleAbortRecoveryCheck(
-    graceMs: number,
-    trigger: "stall-watchdog" | "manual-abort",
-  ): void {
+  private scheduleAbortRecoveryCheck(graceMs: number, trigger: 'stall-watchdog' | 'manual-abort'): void {
     const generation = this.turnGeneration;
     if (this.abortRecoveryScheduledFor === generation) return;
     this.abortRecoveryScheduledFor = generation;
@@ -1284,14 +1149,14 @@ export class Session {
     generation: number,
     remainingMs: number,
     graceMs: number,
-    trigger: "stall-watchdog" | "manual-abort",
+    trigger: 'stall-watchdog' | 'manual-abort',
   ): void {
     const slice = Math.min(remainingMs, TURN_STALL_SLICE_MS);
     const startedAt = Date.now();
     const timer = setTimeout(() => {
       const elapsed = Date.now() - startedAt;
       if (elapsed > slice + TURN_STALL_SUSPEND_GAP_MS) {
-        this.logger.info("abort recovery skipped a suspended slice", {
+        this.logger.info('abort recovery skipped a suspended slice', {
           trigger,
           sliceMs: slice,
           elapsedMs: elapsed,
@@ -1319,34 +1184,28 @@ export class Session {
    */
   private async recoverIfTurnStillRunning(
     stalledGeneration: number,
-    ctx: { graceMs: number; trigger: "stall-watchdog" | "manual-abort" },
+    ctx: { graceMs: number; trigger: 'stall-watchdog' | 'manual-abort' },
   ): Promise<void> {
-    if (this.status === "closed" || this.closePromise) return;
+    if (this.status === 'closed' || this.closePromise) return;
     // 代号变了 = 卡死那个 turn 已经停了(否则新 send 会被 SESSION_RUNNING 拒),现在跑的是
     // 新活儿。abort 生效了,不能拿"有 turn 在跑"当作"还没恢复"去关会话。
     if (this.turnGeneration !== stalledGeneration) {
-      this.logger.info(
-        "abort took effect; a newer turn is running — not closing session",
-        {
-          trigger: ctx.trigger,
-          stalledGeneration,
-          currentGeneration: this.turnGeneration,
-        },
-      );
+      this.logger.info('abort took effect; a newer turn is running — not closing session', {
+        trigger: ctx.trigger,
+        stalledGeneration,
+        currentGeneration: this.turnGeneration,
+      });
       return;
     }
     if (!this.isTurnRunning()) return; // abort 生效了,会话仍可用,什么都不做
     this.logger.error(
-      "turn still running after abort — closing session so the next send can rebuild it",
+      'turn still running after abort — closing session so the next send can rebuild it',
       { trigger: ctx.trigger, graceMs: ctx.graceMs },
     );
     try {
       await this.close();
     } catch (e) {
-      this.logger.warn("abort recovery close failed", {
-        trigger: ctx.trigger,
-        error: String(e),
-      });
+      this.logger.warn('abort recovery close failed', { trigger: ctx.trigger, error: String(e) });
     }
   }
 
@@ -1359,11 +1218,11 @@ export class Session {
         this.fanOutEvent(event);
       }
     } catch (e) {
-      this.logger.error("event loop crashed", { error: String(e) });
+      this.logger.error('event loop crashed', { error: String(e) });
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.clearTurnStallWatchdog();
-      this.setStatus("error");
+      this.setStatus('error');
       return;
     }
     // handle.events() 自然结束 (iterator return) = 底层 handle 已死、不会再发任何事件。
@@ -1380,11 +1239,11 @@ export class Session {
     // send 自然走 IPC lazy create-session 路径, 重建 handle / transport / 远端连接。
     //
     // 仅当当前 status 还是 'active' 时切 — 'closed' / 'error' 已经表达终态, 不覆盖。
-    if (this.status === "active") {
-      this.logger.debug("event loop ended (handle dead), auto-closing session");
+    if (this.status === 'active') {
+      this.logger.debug('event loop ended (handle dead), auto-closing session');
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus("closed");
+      this.setStatus('closed');
     }
   }
 
@@ -1392,11 +1251,9 @@ export class Session {
     return this.handle.isTurnRunning?.() ?? false;
   }
 
-  private releaseSendReservationIfObserved(
-    reservation = this.sendReservation,
-  ): void {
+  private releaseSendReservationIfObserved(reservation = this.sendReservation): void {
     if (!reservation || this.sendReservation !== reservation) return;
-    if (reservation.phase === "accepting") return;
+    if (reservation.phase === 'accepting') return;
     if (this.isHandleTurnRunning()) {
       this.sendReservation = null;
     }
@@ -1408,24 +1265,18 @@ export class Session {
     reservation.abortController.abort();
   }
 
-  private attachExternalCancellation(
-    reservation: SendReservation,
-    signal?: AbortSignal,
-  ): () => void {
+  private attachExternalCancellation(reservation: SendReservation, signal?: AbortSignal): () => void {
     if (!signal) return () => undefined;
     const onAbort = () => this.cancelSendReservation(reservation);
     if (signal.aborted) {
       onAbort();
       return () => undefined;
     }
-    signal.addEventListener("abort", onAbort, { once: true });
-    return () => signal.removeEventListener("abort", onAbort);
+    signal.addEventListener('abort', onAbort, { once: true });
+    return () => signal.removeEventListener('abort', onAbort);
   }
 
-  private async waitForGateOrAbort(
-    gate: Promise<unknown>,
-    signal?: AbortSignal,
-  ): Promise<boolean> {
+  private async waitForGateOrAbort(gate: Promise<unknown>, signal?: AbortSignal): Promise<boolean> {
     if (!signal) {
       await gate;
       return false;
@@ -1434,21 +1285,19 @@ export class Session {
     let onAbort!: () => void;
     const aborted = new Promise<void>((resolve) => {
       onAbort = resolve;
-      signal.addEventListener("abort", onAbort, { once: true });
+      signal.addEventListener('abort', onAbort, { once: true });
     });
     try {
       await Promise.race([gate, aborted]);
       return signal.aborted;
     } finally {
-      signal.removeEventListener("abort", onAbort);
+      signal.removeEventListener('abort', onAbort);
     }
   }
 
   private createSessionRunningError(): Error {
-    const err = new Error(
-      `SESSION_RUNNING: Session ${this.id} is already running a turn`,
-    );
-    (err as { code?: string }).code = "SESSION_RUNNING";
+    const err = new Error(`SESSION_RUNNING: Session ${this.id} is already running a turn`);
+    (err as { code?: string }).code = 'SESSION_RUNNING';
     return err;
   }
 }
@@ -1464,12 +1313,11 @@ export function generateSessionId(): string {
  * 把 UserMessage 摘要成日志友好的 dict —— 不打全文（可能含敏感/超长），只打长度和数量。
  */
 function summarizeUserMessage(msg: UserMessage): Record<string, unknown> {
-  if (typeof msg.content === "string") {
+  if (typeof msg.content === 'string') {
     return {
-      contentType: "string",
+      contentType: 'string',
       textLen: msg.content.length,
-      textPreview:
-        msg.content.slice(0, 80) + (msg.content.length > 80 ? "…" : ""),
+      textPreview: msg.content.slice(0, 80) + (msg.content.length > 80 ? '…' : ''),
     };
   }
   let textLen = 0;
@@ -1478,22 +1326,21 @@ function summarizeUserMessage(msg: UserMessage): Record<string, unknown> {
   let mentionCount = 0;
   let firstTextPreview: string | undefined;
   for (const block of msg.content) {
-    if (block.type === "text") {
+    if (block.type === 'text') {
       textLen += block.text.length;
       if (firstTextPreview === undefined) {
-        firstTextPreview =
-          block.text.slice(0, 80) + (block.text.length > 80 ? "…" : "");
+        firstTextPreview = block.text.slice(0, 80) + (block.text.length > 80 ? '…' : '');
       }
-    } else if (block.type === "image") {
+    } else if (block.type === 'image') {
       imageCount += 1;
-    } else if (block.type === "file") {
+    } else if (block.type === 'file') {
       fileCount += 1;
-    } else if (block.type === "mention") {
+    } else if (block.type === 'mention') {
       mentionCount += 1;
     }
   }
   return {
-    contentType: "array",
+    contentType: 'array',
     blockCount: msg.content.length,
     textLen,
     imageCount,
