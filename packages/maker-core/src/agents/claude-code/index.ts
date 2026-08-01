@@ -2653,7 +2653,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 用户连发空消息"进入空转(2026-07-31 kimi-k3 实测)。转录就位后、spawn
           // 前做一次幂等归一化(重复 id 去重 + 数字后缀移出铸造空间), 纯 Anthropic
           // 会话预扫不命中、零解析开销。详见 jsonl-tool-id-normalize.ts 头注。
-          if ((outcome === 'in-place' || outcome === 'restored') && resumeSdkSid) {
+          // 'target-key-inexact' 时 relocation 无法定位 CLI 转码目录, 但全局扫描
+          // 找到的最新副本大概率正是 CLI 要读的转录, 归一化它同样是正收益。
+          if (outcome !== 'missing' && resumeSdkSid) {
             const transcriptFile = await findClaudeSessionJsonl(
               resumeSdkSid,
               opts.workingDir,

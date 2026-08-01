@@ -3,10 +3,10 @@
  * kimi 系 tool_call id 与 CLI ensureToolResultPairing 冲突导致的上下文腐蚀。
  *
  * 背景(2026-07-31 moonshot/kimi-k3 实测事故,顺藤摸到的完整因果链):
- *   1. moonshot 服务端按「当前请求历史里可见的 tool 调用数」铸造 tool_call id
- *      (`${ToolName}_${index}`:Bash_210、TaskCreate_35 这种形态)。
+ *   1. kimi 模型按「当前上下文可见的 tool 调用数」生成递增序号的 tool_call id
+ *      (原生 `functions.{name}:{idx}`,经 LiteLLM 清洗为 `${ToolName}_${index}`)。
  *   2. 会话 rewind / 中断轮被 CLI 投影排除后,可见调用数 < 历史已用 id 上界,
- *      resume 后 moonshot 重新铸出**与历史重复**的 id(实测:Bash_210 被铸 9 次、
+ *      resume 后重铸出**与历史重复**的 id(实测:Bash_210 被铸 9 次、
  *      Bash_212 被铸 27 次)。
  *   3. CC CLI(2.1.219 起)的 ensureToolResultPairing 用全局 Set 去重:后出现的
  *      重复 id tool_use 块连同其 tool_result 一起从请求里丢弃;被掏空的 user
@@ -14,16 +14,20 @@
  *      「被阻止」、用户不断「发空消息」,进入空转循环(inc-4977 同族)。
  *
  * 修复策略(resume/spawn 前对转录做一次性归一化,幂等):
- *   a. 去重:同一 id 的第 N 次出现重写为 `${id}_dup${N}`(tool_use 与按出现
- *      顺序配对的 tool_result 同步改写;与 compat-proxy dedupeDuplicateToolUseIds
- *      的出现序配对语义一致,超编 result 保持原 id 不动)。
- *   b. 移出铸造空间:所有 `${name}_${digits}` 形态 id 改写为 `${name}_x${digits}`。
- *      moonshot 的铸造器只会产出 `_数字` 后缀,改写后历史 id 与未来新铸 id
- *      永不撞车;`_x` 形态不再匹配本规则 → 幂等,二次运行零改写。
+ *   a. 去重:同一 id 的第 N 次出现改写为 `${id}_dup${N}`(后缀对**全量既有 id**
+ *      查占用顺延;tool_result 按「最近未配对的同名 call」位置配对同步改写 ——
+ *      孤儿 call + 重铸 call 并存时,result 属于真实执行的那次,Fable-5 review
+ *      指出的出现序配对张冠李戴由此避免)。
+ *   b. 移出铸造空间:所有末段纯数字 id 改写为 `${name}_x${digits}`(占用时追加
+ *      x 顺延)。kimi 铸造器只产 `_数字` 后缀,改写后历史 id 与未来新铸 id 永不
+ *      撞车;`_x` 形态不再匹配本规则 → 幂等,二次运行零改写。
+ *   后缀一律查占用的原因(Fable-5 review P1-B/C):转录里可能已存在上一轮
+ *   归一化/proxy 改名的产物(`_x210`/`_dup2`),不查占用会把新改写撞上去,
+ *   「修复本身复发事故」。
  *
  * id 对模型与 API 均为不透明字符串,配对关系保持 → 改写不改变会话语义。
- * 未改动的行保持原始字节(与 fork-jsonl-repair 同约定),改写整文件前调用方
- * 负责备份(见 normalizeClaudeSessionJsonlToolIds)。
+ * 未改动的行保持原始字节(与 fork-jsonl-repair 同约定);改写整文件前先备份,
+ * 写入走 tmp+rename 原子替换(见 normalizeClaudeSessionJsonlToolIds)。
  */
 
 import { promises as fs } from 'node:fs';
@@ -32,11 +36,15 @@ import { createClaudeJsonlBackup } from './fork-jsonl-repair.js';
 
 type JsonObject = Record<string, unknown>;
 
-/** moonshot/kimi 铸造器形态的 id:`${ToolName}_${纯数字}`。 */
-const MINTED_ID_RE = /^([A-Za-z][A-Za-z0-9]*)_(\d+)$/;
+/**
+ * kimi 铸造器形态的 id:末段为纯数字。MCP 工具名带下划线
+ * (`mcp__cindy_memory__call_tool_5`),实测 MCP id 当前为 `call_<random>` 无撞车
+ * 风险,此处按威胁面放宽防御(Fable-5 review P1-E)。
+ */
+const MINTED_ID_RE = /^[A-Za-z][A-Za-z0-9_]*_(\d+)$/;
 
 /** 廉价预扫:文件里是否存在疑似铸造 id 的 tool_use / tool_result,无命中则跳过全量解析。 */
-const SUSPECT_ID_RE = /"(?:id|tool_use_id)"\s*:\s*"[A-Za-z][A-Za-z0-9]*_\d+"/;
+const SUSPECT_ID_RE = /"(?:id|tool_use_id)"\s*:\s*"[A-Za-z][A-Za-z0-9_]*_\d+"/;
 
 export interface NormalizeClaudeJsonlToolIdsResult {
   /** 归一化后的完整文本(changed=false 时与输入同引用)。 */
@@ -51,6 +59,8 @@ export interface NormalizeClaudeJsonlToolIdsResult {
   offsetBlockCount: number;
   /** 参与去重判定的重复 id 个数(诊断用)。 */
   duplicateIdCount: number;
+  /** 尾部畸形残行被原样保留时为 true(诊断用)。 */
+  keptMalformedTailLine: boolean;
 }
 
 function isRecord(value: unknown): value is JsonObject {
@@ -83,17 +93,48 @@ function messageContentBlocks(entry: JsonObject): JsonObject[] | null {
   return content as JsonObject[];
 }
 
-function offsetMintedId(id: string): string | null {
-  const match = MINTED_ID_RE.exec(id);
-  if (!match) return null;
-  return `${match[1]}_x${match[2]}`;
+function messageRole(entry: JsonObject): unknown {
+  return isRecord(entry.message) ? entry.message.role : undefined;
+}
+
+/** `${id}_dup${k}` 查占用顺延,返回未占用的最小 k ≥ 2 候选。 */
+function freeDupSuffix(id: string, used: ReadonlySet<string>): string {
+  let k = 2;
+  let candidate = `${id}_dup${k}`;
+  while (used.has(candidate)) {
+    k += 1;
+    candidate = `${id}_dup${k}`;
+  }
+  return candidate;
 }
 
 /**
- * 文本级归一化:解析 → 去重 → 移出铸造空间 → 仅重写有改动的行。
+ * `${name}_x${digits}` 移出铸造空间;目标被占用时追加 x 顺延
+ * (`_xx` / `_xxx` … 均不再匹配铸造规则,保持幂等)。非铸造形态返回 null。
+ */
+function offsetMintedId(id: string, used: ReadonlySet<string>): string | null {
+  const match = MINTED_ID_RE.exec(id);
+  if (!match) return null;
+  const digits = match[1];
+  const name = id.slice(0, id.length - digits.length - 1);
+  let xCount = 1;
+  let candidate = `${name}_${'x'.repeat(xCount)}${digits}`;
+  while (used.has(candidate)) {
+    xCount += 1;
+    candidate = `${name}_${'x'.repeat(xCount)}${digits}`;
+  }
+  return candidate;
+}
+
+/**
+ * 文本级归一化:解析 → 去重(位置配对)→ 移出铸造空间 → 仅重写有改动的行。
  *
- * 预扫未命中(纯 Anthropic toolu_* / OpenAI call_* 会话)直接返回原文,
+ * 预扫未命中(纯 Anthropic toolu_* / OpenAI call_<random> 会话)直接返回原文,
  * 不做 JSON 解析 —— spawn 前路径上对绝大多数会话零成本。
+ *
+ * 畸形行容忍:仅**最后一行**允许解析失败(CLI 崩溃截断尾行是常态,这类会话
+ * 恰恰最需要归一化),原样保留;中间行解析失败仍抛错,由调用方 best-effort
+ * 兜底(放弃归一化也不阻断 resume)。
  */
 export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJsonlToolIdsResult {
   const lineCount = text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
@@ -106,22 +147,48 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       dedupedBlockCount: 0,
       offsetBlockCount: 0,
       duplicateIdCount: 0,
+      keptMalformedTailLine: false,
     };
   }
 
   const hadTrailingNewline = text.endsWith('\n');
   const rawLines = text.split('\n');
   if (hadTrailingNewline) rawLines.pop();
-  const entries = rawLines.map((line, index) => {
+  const entries: JsonObject[] = [];
+  let keptMalformedTailLine = false;
+  rawLines.forEach((line, index) => {
     try {
-      return JSON.parse(line) as JsonObject;
-    } catch {
+      entries.push(JSON.parse(line) as JsonObject);
+    } catch (err) {
+      if (index === rawLines.length - 1) {
+        keptMalformedTailLine = true;
+        entries.push({ __malformedTailLine: line });
+        return;
+      }
       const preview = line.slice(0, 120);
-      throw new Error(`tool id normalize: JSONL parse error at line ${index + 1}: ${preview}`);
+      throw new Error(`tool id normalize: JSONL parse error at line ${index + 1}: ${preview}`, {
+        cause: err,
+      });
     }
   });
 
-  // pass 1: 统计每个 tool_use id 的出现次数(assistant 条目)。
+  // pass 0: 全量既有 id 集合(占用判定的基准;含 tool_result 引用,同一命名空间)。
+  const usedIds = new Set<string>();
+  for (const entry of entries) {
+    for (const block of messageContentBlocks(entry) ?? []) {
+      if (isToolUseBlock(block)) usedIds.add(block.id);
+      else if (isToolResultBlock(block)) usedIds.add(block.tool_use_id);
+    }
+  }
+
+  // pass 1: 定终 id —— 按文件序遍历,call occurrence 依次定终(首现保留原 id
+  // 后偏移;第 N 次 _dupN 查占用),result 与配对 call 共享同一终 id:
+  //   - 位置配对:result 配「最近未配对的同名 call」(孤儿 call + 重铸 call 并存
+  //     时,result 属于真实执行的那次,Fable-5 review 指出的出现序配对张冠李戴
+  //     由此避免);
+  //   - 超编 result(无未配对 call):指向首现 call 的终 id(与 compat-proxy
+  //     dedupe 语义一致);全文件无同名 call 时按独立原 id 走偏移。
+  // 占用判定 usedIds = 全量原 id ∪ 已产出终 id;配对 exchange 共享终 id 不算占用。
   const counts = new Map<string, number>();
   for (const entry of entries) {
     if (entry.type !== 'assistant') continue;
@@ -134,63 +201,68 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     if (n > 1) duplicateIdCount += 1;
   }
 
-  // pass 2: 去重 —— 第 N(N≥2) 次出现的 call 重写为 `${id}_dup${N}`;
-  // 按出现顺序配对的第 N 个 result 同步改写(超编 result 保持原 id,
-  // 与 compat-proxy dedupeDuplicateToolUseIds 语义一致)。
   const changedLineIndexes = new Set<number>();
   let dedupedBlockCount = 0;
-  if (duplicateIdCount > 0) {
-    const callSeen = new Map<string, number>();
-    const resultSeen = new Map<string, number>();
-    entries.forEach((entry, index) => {
-      const role = isRecord(entry.message) ? entry.message.role : undefined;
-      const blocks = messageContentBlocks(entry);
-      if (!blocks) return;
-      let lineChanged = false;
-      for (const block of blocks) {
-        if (role === 'assistant' && isToolUseBlock(block)) {
-          const n = (callSeen.get(block.id) ?? 0) + 1;
-          callSeen.set(block.id, n);
-          if (n >= 2) {
-            block.id = `${block.id}_dup${n}`;
-            dedupedBlockCount += 1;
-            lineChanged = true;
-          }
-        } else if (role === 'user' && isToolResultBlock(block)) {
-          const id = block.tool_use_id;
-          const n = (resultSeen.get(id) ?? 0) + 1;
-          resultSeen.set(id, n);
-          if (n >= 2 && (counts.get(id) ?? 0) >= n) {
-            block.tool_use_id = `${id}_dup${n}`;
-            dedupedBlockCount += 1;
-            lineChanged = true;
-          }
-        }
-      }
-      if (lineChanged) changedLineIndexes.add(index);
-    });
-  }
-
-  // pass 3: 移出铸造空间 —— `${name}_${digits}` → `${name}_x${digits}`(幂等)。
   let offsetBlockCount = 0;
+  const callSeen = new Map<string, number>();
+  const openCalls = new Map<string, Array<{ originalId: string; finalId: string }>>();
+  const firstFinalByOriginal = new Map<string, string>();
   entries.forEach((entry, index) => {
     const blocks = messageContentBlocks(entry);
     if (!blocks) return;
+    const role = messageRole(entry);
     let lineChanged = false;
     for (const block of blocks) {
-      if (isToolUseBlock(block)) {
-        const next = offsetMintedId(block.id);
-        if (next !== null) {
-          block.id = next;
+      if (role === 'assistant' && isToolUseBlock(block)) {
+        const originalId = block.id;
+        const n = (callSeen.get(originalId) ?? 0) + 1;
+        callSeen.set(originalId, n);
+        let finalId = originalId;
+        if (n >= 2) {
+          finalId = freeDupSuffix(originalId, usedIds);
+          usedIds.add(finalId);
+          block.id = finalId;
+          dedupedBlockCount += 1;
+          lineChanged = true;
+        }
+        const offset = offsetMintedId(finalId, usedIds);
+        if (offset !== null) {
+          usedIds.add(offset);
+          block.id = offset;
+          finalId = offset;
           offsetBlockCount += 1;
           lineChanged = true;
         }
-      } else if (isToolResultBlock(block)) {
-        const next = offsetMintedId(block.tool_use_id);
-        if (next !== null) {
-          block.tool_use_id = next;
-          offsetBlockCount += 1;
-          lineChanged = true;
+        if (!firstFinalByOriginal.has(originalId)) firstFinalByOriginal.set(originalId, finalId);
+        let stack = openCalls.get(originalId);
+        if (!stack) {
+          stack = [];
+          openCalls.set(originalId, stack);
+        }
+        stack.push({ originalId, finalId });
+      } else if (role === 'user' && isToolResultBlock(block)) {
+        const originalId = block.tool_use_id;
+        const matched = openCalls.get(originalId)?.pop();
+        const inherited = matched?.finalId ?? firstFinalByOriginal.get(originalId);
+        if (inherited !== undefined) {
+          if (inherited !== originalId) {
+            block.tool_use_id = inherited;
+            if (matched && matched.finalId !== matched.originalId && matched.finalId.includes('_dup')) {
+              dedupedBlockCount += 1;
+            } else {
+              offsetBlockCount += 1;
+            }
+            lineChanged = true;
+          }
+        } else {
+          // 全文件无同名 call 的孤儿 result:按独立原 id 走铸造空间偏移。
+          const offset = offsetMintedId(originalId, usedIds);
+          if (offset !== null) {
+            usedIds.add(offset);
+            block.tool_use_id = offset;
+            offsetBlockCount += 1;
+            lineChanged = true;
+          }
         }
       }
     }
@@ -212,6 +284,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     dedupedBlockCount,
     offsetBlockCount,
     duplicateIdCount,
+    keptMalformedTailLine,
   };
 }
 
@@ -222,7 +295,7 @@ export interface NormalizeClaudeSessionJsonlToolIdsResult
 }
 
 /**
- * 文件级归一化:有改动时先备份(`.bak.<timestamp>`)再整文件重写;
+ * 文件级归一化:有改动时先备份(`.bak.<timestamp>`)再 tmp+rename 原子替换;
  * 无改动 / 预扫跳过时不触碰文件(连备份也不留)。
  */
 export async function normalizeClaudeSessionJsonlToolIds(
@@ -233,7 +306,15 @@ export async function normalizeClaudeSessionJsonlToolIds(
   let backupPath: string | undefined;
   if (normalized.changed) {
     backupPath = await createClaudeJsonlBackup(filePath, original);
-    await fs.writeFile(filePath, normalized.text, 'utf8');
+    // tmp+rename 原子替换:写一半崩溃不会留下半截转录(备份仍在,tmp 残留无害)。
+    const tmpPath = `${filePath}.normalize-${process.pid}-${Math.random().toString(36).slice(2, 10)}.tmp`;
+    await fs.writeFile(tmpPath, normalized.text, 'utf8');
+    try {
+      await fs.rename(tmpPath, filePath);
+    } catch (err) {
+      await fs.rm(tmpPath, { force: true }).catch(() => undefined);
+      throw err;
+    }
   }
   return {
     filePath,
@@ -244,5 +325,6 @@ export async function normalizeClaudeSessionJsonlToolIds(
     dedupedBlockCount: normalized.dedupedBlockCount,
     offsetBlockCount: normalized.offsetBlockCount,
     duplicateIdCount: normalized.duplicateIdCount,
+    keptMalformedTailLine: normalized.keptMalformedTailLine,
   };
 }

@@ -1,52 +1,74 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  collectMintedToolUseIds,
+  collectToolUseIdsForResponseRewrite,
   ToolUseIdDedupeRewriter,
   ToolUseIdRewriteTransform,
 } from './tool-use-id-stream-rewrite.js';
 
-// ── collectMintedToolUseIds ─────────────────────────────────────────────
+// ── collectToolUseIdsForResponseRewrite ─────────────────────────────────
 
-describe('collectMintedToolUseIds', () => {
-  it('收集铸造形态(${name}_${digits})的 tool_use id', () => {
-    const ids = collectMintedToolUseIds({
+describe('collectToolUseIdsForResponseRewrite', () => {
+  it('历史含铸造形态 id 时返回**全量** tool_use id 集合(P1-A: 改名产物也在内)', () => {
+    const ids = collectToolUseIdsForResponseRewrite({
       messages: [
-        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210' }, { type: 'text', text: 'x' }] },
+        {
+          role: 'assistant',
+          content: [
+            { type: 'tool_use', id: 'Bash_210' },
+            { type: 'tool_use', id: 'Bash_210_dup2' }, // 上一轮改名产物
+            { type: 'tool_use', id: 'toolu_01Jx4AbC' }, // 非铸造形态也收(防撞基准)
+            { type: 'text', text: 'x' },
+          ],
+        },
         { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'Bash_210' }] },
         { role: 'assistant', content: [{ type: 'tool_use', id: 'TaskCreate_35' }] },
       ],
     });
-    expect(ids).toEqual(new Set(['Bash_210', 'TaskCreate_35']));
+    expect(ids).toEqual(new Set(['Bash_210', 'Bash_210_dup2', 'toolu_01Jx4AbC', 'TaskCreate_35']));
   });
 
-  it('纯 Anthropic toolu_* / OpenAI call_* / 无 tool 调用 → null', () => {
+  it('纯 Anthropic toolu_* / OpenAI call_<random> / 无 tool 调用 → null', () => {
     expect(
-      collectMintedToolUseIds({
+      collectToolUseIdsForResponseRewrite({
         messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'toolu_01Jx4AbC' }] }],
       }),
     ).toBeNull();
     expect(
-      collectMintedToolUseIds({
-        messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'call_abc123' }] }],
+      collectToolUseIdsForResponseRewrite({
+        messages: [
+          { role: 'assistant', content: [{ type: 'tool_use', id: 'call_5teL1yyaqGpp3UKFRv22MkQu' }] },
+        ],
       }),
     ).toBeNull();
-    expect(collectMintedToolUseIds({ messages: [{ role: 'user', content: '你好' }] })).toBeNull();
+    expect(collectToolUseIdsForResponseRewrite({ messages: [{ role: 'user', content: '你好' }] })).toBeNull();
   });
 
   it('非 messages 请求 / 非对象 → null', () => {
-    expect(collectMintedToolUseIds(undefined)).toBeNull();
-    expect(collectMintedToolUseIds(null)).toBeNull();
-    expect(collectMintedToolUseIds('junk')).toBeNull();
-    expect(collectMintedToolUseIds({ model: 'kimi-k3' })).toBeNull();
+    expect(collectToolUseIdsForResponseRewrite(undefined)).toBeNull();
+    expect(collectToolUseIdsForResponseRewrite(null)).toBeNull();
+    expect(collectToolUseIdsForResponseRewrite('junk')).toBeNull();
+    expect(collectToolUseIdsForResponseRewrite({ model: 'kimi-k3' })).toBeNull();
   });
 
-  it('归一化后的 _x 形态 id 不再命中(与转录归一化幂等互补)', () => {
+  it('归一化后的 _x 形态 id 不命中接管开关(与转录归一化幂等互补)', () => {
     expect(
-      collectMintedToolUseIds({
+      collectToolUseIdsForResponseRewrite({
         messages: [{ role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_x210' }] }],
       }),
     ).toBeNull();
+  });
+
+  it('MCP 下划线工具名的铸造 id 命中(P1-E)', () => {
+    const ids = collectToolUseIdsForResponseRewrite({
+      messages: [
+        {
+          role: 'assistant',
+          content: [{ type: 'tool_use', id: 'mcp__cindy_memory__call_tool_5' }],
+        },
+      ],
+    });
+    expect(ids).toEqual(new Set(['mcp__cindy_memory__call_tool_5']));
   });
 });
 
@@ -68,7 +90,9 @@ describe('ToolUseIdDedupeRewriter.resolve', () => {
     ]);
   });
 
-  it('历史已含 _dup2 时跳到未占用的后缀', () => {
+  it('P1-A: 历史已含 _dup2(上一轮改名产物)时,同底 id 再撞顺延到 _dup3', () => {
+    // 事故主态:同一 id 被重铸多次。种子集合含 Bash_210_dup2 时,
+    // 新铸 Bash_210 必须给 _dup3,而不是再产出一个 _dup2 与历史撞车。
     const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210', 'Bash_210_dup2']));
     expect(rewriter.resolve('Bash_210')).toBe('Bash_210_dup3');
   });
@@ -118,6 +142,25 @@ describe('ToolUseIdRewriteTransform', () => {
     expect(text).toContain('"id":"Bash_219"'); // 新 id → 不动
     expect(text).not.toContain('"id":"Bash_210"'); // 原始撞车 id 不再出现
     expect(rewriter.renameCount).toBe(1);
+  });
+
+  it('P1-D: 上游 JSON 带空格风格(python json.dumps)同样命中', async () => {
+    // LiteLLM / Moonshot anthropic 端点若是 python 系,序列化是 {"type": "..."} 带空格;
+    // 逐字节前缀假设会整体静默失效,放宽后的匹配必须覆盖。
+    const body =
+      'event: content_block_start\n' +
+      'data: {"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "id": "Bash_210", "name": "Bash", "input": {}}}\n\n';
+    const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
+    const out = await runTransform([Buffer.from(body, 'utf8')], rewriter);
+    expect(out.toString('utf8')).toContain('"id":"Bash_210_dup2"');
+  });
+
+  it('P1-D: data: 后多个空格 / 键序变化也命中', async () => {
+    const body =
+      'data:  { "content_block": { "id": "Bash_210", "name": "Bash", "type": "tool_use", "input": {} }, "index": 1, "type": "content_block_start" }\n\n';
+    const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
+    const out = await runTransform([Buffer.from(body, 'utf8')], rewriter);
+    expect(out.toString('utf8')).toContain('"id":"Bash_210_dup2"');
   });
 
   it('data 行跨 chunk 切割也能正确改写', async () => {
@@ -173,5 +216,16 @@ describe('ToolUseIdRewriteTransform', () => {
     const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
     const out = await runTransform([Buffer.from(body, 'utf8')], rewriter);
     expect(out.toString('utf8')).toContain('"id":"Bash_210_dup2"');
+  });
+
+  it('病态超长无换行行:超上限直接透传,不拖垮内存', async () => {
+    const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
+    const big = Buffer.alloc(5 * 1024 * 1024, 0x61); // 5MB 'a' 无 \n
+    const tail = Buffer.from('\ndata: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n', 'utf8');
+    const out = await runTransform([big, tail], rewriter);
+    // 超长行原样透传(逐字节不变)
+    expect(out.subarray(0, big.length).equals(big)).toBe(true);
+    // 超长行透传后,后续正常行仍能改写(改名使尾部多 _dup2 的 5 字节)
+    expect(out.toString('utf8', big.length)).toContain('"id":"Bash_210_dup2"');
   });
 });

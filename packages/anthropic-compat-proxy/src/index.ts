@@ -60,7 +60,7 @@ export {
 export { createThreadStripController } from './thread-strip-controller.js';
 export type { ThreadStripController } from './thread-strip-controller.js';
 export {
-  collectMintedToolUseIds,
+  collectToolUseIdsForResponseRewrite,
   ToolUseIdDedupeRewriter,
   ToolUseIdRewriteTransform,
 } from './tool-use-id-stream-rewrite.js';

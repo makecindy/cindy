@@ -35,7 +35,7 @@ import {
 import { Socks5HttpAgent, Socks5HttpsAgent } from './socks5.js';
 import { stripNonAnthropicFields, stripToolUseProviderSpecificFields } from './transform.js';
 import {
-  collectMintedToolUseIds,
+  collectToolUseIdsForResponseRewrite,
   ToolUseIdDedupeRewriter,
   ToolUseIdRewriteTransform,
 } from './tool-use-id-stream-rewrite.js';
@@ -1573,7 +1573,7 @@ export async function createAnthropicCompatProxy(opts: ProxyOptions): Promise<Pr
         parsedForRewrite = undefined;
       }
     }
-    const responseToolUseIds = collectMintedToolUseIds(parsedForRewrite);
+    const responseToolUseIds = collectToolUseIdsForResponseRewrite(parsedForRewrite);
 
     if (transformed) {
       logger.debug?.('⇄ transformed request body', {

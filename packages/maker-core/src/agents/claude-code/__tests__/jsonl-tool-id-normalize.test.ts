@@ -48,6 +48,17 @@ function contentOf(entry: Record<string, unknown>): Array<Record<string, unknown
   return (entry.message as Record<string, unknown>).content as Array<Record<string, unknown>>;
 }
 
+/** 所有 tool_use(call)id —— exchange 的唯一性按 call 判定(result 与 call 共享 id)。 */
+function allCallIds(text: string): string[] {
+  const ids: string[] = [];
+  for (const entry of parseEntries(text)) {
+    for (const b of contentOf(entry)) {
+      if (b.type === 'tool_use') ids.push(b.id as string);
+    }
+  }
+  return ids;
+}
+
 // ── 文本级归一化 ────────────────────────────────────────────────────────
 
 describe('normalizeClaudeJsonlToolIdsText', () => {
@@ -107,7 +118,7 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(twice.text).toBe(once.text);
   });
 
-  it('重复 id: 第 N 次出现去重为 _dupN,result 按出现序配对', () => {
+  it('重复 id: 第 N 次出现去重为 _dupN,result 位置配对取同一终 id', () => {
     // 复刻事故形态: 同一 Bash_210 被铸造两次(两个 exchange)
     const text = [
       assistantEntry('a1', [toolUse('Bash_210')]),
@@ -129,8 +140,23 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_210_dup2');
   });
 
-  it('超编 result(无对应第 N 次 call)保持原 id 不动', () => {
-    // 一个 call、两个 result(病态残留): 第二个 result 不改名,但仍随首现 call 一起偏移
+  it('位置配对: 孤儿 call + 重铸 call 并存时 result 配给真实执行的那次', () => {
+    // 孤儿 Bash_5(无 result,中断残留) + 重铸 Bash_5(有 result):
+    // 出现序配对会把 result 错配给孤儿,位置配对必须配给重铸 call。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5')]), // 孤儿(中断,无 result)
+      assistantEntry('a2', [toolUse('Bash_5')]), // 重铸(真实执行)
+      userEntry('u1', [toolResult('Bash_5', '真实结果')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x5'); // 孤儿保持首现 → 偏移
+    expect(contentOf(entries[1])[0].id).toBe('Bash_5_dup2'); // 重铸去重
+    expect(contentOf(entries[2])[0].tool_use_id).toBe('Bash_5_dup2'); // result 配给重铸 call
+  });
+
+  it('超编 result(无未配对 call)保持原 id 不动,但随铸造空间偏移', () => {
+    // 一个 call、两个 result(病态残留): 第二个 result 无 call 可配 → 不改名
     const text = [
       assistantEntry('a1', [toolUse('Bash_210')]),
       userEntry('u1', [toolResult('Bash_210'), toolResult('Bash_210')]),
@@ -141,6 +167,58 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(results[0].tool_use_id).toBe('Bash_x210');
     expect(results[1].tool_use_id).toBe('Bash_x210'); // 超编不去重,但偏移保持与 call 一致
     expect(result.dedupedBlockCount).toBe(0);
+  });
+
+  it('P1-C: 既有 _dup2 产物时,新重复去重顺延到 _dup3', () => {
+    // 转录里已有上一轮改名产物 Bash_210_dup2,又出现 Bash_210×2:
+    // 第二次出现若还改 Bash_210_dup2 就撞上既有 id(修复本身复发事故)。
+    const text = [
+      assistantEntry('a0', [toolUse('Bash_210_dup2')]),
+      userEntry('u0', [toolResult('Bash_210_dup2')]),
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+      assistantEntry('a2', [toolUse('Bash_210')]),
+      userEntry('u2', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Bash_210_dup2'); // 既有产物不动
+    expect(contentOf(entries[2])[0].id).toBe('Bash_x210');
+    expect(contentOf(entries[4])[0].id).toBe('Bash_210_dup3'); // 顺延,不撞既有 _dup2
+    expect(contentOf(entries[5])[0].tool_use_id).toBe('Bash_210_dup3');
+    // 全文件 call id 唯一(result 与配对 call 共享 id,不纳入唯一性判定)
+    expect(new Set(allCallIds(result.text)).size).toBe(allCallIds(result.text).length);
+  });
+
+  it('P1-B: 既有 _x 偏移产物时,新同号 id 偏移顺延为 _xx', () => {
+    // 上轮归一化产物 Bash_x210 + resume 后 kimi 重铸的 Bash_210:
+    // 偏移若还改 Bash_x210 即撞车。
+    const text = [
+      assistantEntry('a0', [toolUse('Bash_x210')]),
+      userEntry('u0', [toolResult('Bash_x210')]),
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x210'); // 既有产物不动
+    expect(contentOf(entries[2])[0].id).toBe('Bash_xx210'); // 顺延
+    expect(contentOf(entries[3])[0].tool_use_id).toBe('Bash_xx210');
+    expect(new Set(allCallIds(result.text)).size).toBe(allCallIds(result.text).length);
+    // 顺延结果幂等:二次运行零改写
+    expect(normalizeClaudeJsonlToolIdsText(result.text).changed).toBe(false);
+  });
+
+  it('MCP 下划线工具名的铸造 id 同样处理(P1-E)', () => {
+    const text = [
+      assistantEntry('a1', [toolUse('mcp__cindy_memory__call_tool_5', 'mcp__cindy_memory__call_tool')]),
+      userEntry('u1', [toolResult('mcp__cindy_memory__call_tool_5')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('mcp__cindy_memory__call_tool_x5');
+    expect(contentOf(entries[1])[0].tool_use_id).toBe('mcp__cindy_memory__call_tool_x5');
   });
 
   it('不触碰非 message 条目与 tool input 里的同名字符串', () => {
@@ -171,10 +249,28 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect(result.text.trim().split('\n')[0]).toBe(unchangedLine);
   });
 
-  it('畸形 JSON 行抛错(调用方 best-effort 兜底)', () => {
-    expect(() => normalizeClaudeJsonlToolIdsText('{"id": "Bash_210", broken\n')).toThrow(
-      /JSONL parse error at line 1/,
-    );
+  it('尾部畸形残行原样保留并继续归一化(CLI 崩溃截断常态)', () => {
+    const malformedTail = '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"Bas';
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+      malformedTail,
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    expect(result.keptMalformedTailLine).toBe(true);
+    const lines = result.text.trim().split('\n');
+    expect(lines[2]).toBe(malformedTail);
+    const firstEntry = JSON.parse(lines[0]) as Record<string, unknown>;
+    expect(contentOf(firstEntry)[0].id).toBe('Bash_x210');
+  });
+
+  it('中间行畸形仍抛错(调用方 best-effort 兜底)', () => {
+    const text = [
+      '{"type":"assistant",broken',
+      assistantEntry('a1', [toolUse('Bash_210')]),
+    ].join('\n') + '\n';
+    expect(() => normalizeClaudeJsonlToolIdsText(text)).toThrow(/JSONL parse error at line 1/);
   });
 
   it('空文件 / 无尾换行都能处理', () => {
@@ -198,7 +294,7 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
     }
   });
 
-  it('有改动时先备份再重写; 无改动不动文件', async () => {
+  it('有改动时先备份再原子重写; 无改动不动文件', async () => {
     tmpDir = await mkdtemp(path.join(os.tmpdir(), 'jsonl-normalize-'));
     const filePath = path.join(tmpDir, 'session.jsonl');
     const original = [
@@ -214,10 +310,11 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
     expect(result.backupPath).toBeDefined();
     // 备份保留原文
     expect(await readFile(result.backupPath!, 'utf8')).toBe(original);
-    // 文件已归一化
+    // 文件已归一化,无 tmp 残留
     const rewritten = await readFile(filePath, 'utf8');
     expect(rewritten).toContain('Bash_x210');
     expect(rewritten).toContain('Bash_210_dup2');
+    expect((await readdir(tmpDir)).filter((f) => f.endsWith('.tmp'))).toHaveLength(0);
 
     // 第二次运行: 幂等 → 无改动、不再产生新备份
     const again = await normalizeClaudeSessionJsonlToolIds(filePath);
