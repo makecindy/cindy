@@ -93,6 +93,10 @@ export function SettingsTextInput({
       onClick={() => setRevealed((v) => !v)}
       className={cn(
         'absolute top-1/2 -translate-y-1/2 text-[var(--settings-eye-icon)] transition-colors hover:text-[var(--settings-eye-icon-hover)]',
+        // globals.css 的 F3 全局规则把 *:focus-visible 的 outline 抹掉了(只有 input /
+        // textarea 恢复),按钮不自带焦点提示——键盘用户看不出焦点落在眼睛上。按 DESIGN.md
+        // 的 Focus Blue 约定补 ring(--focus-ring),写法与其它图标按钮一致。
+        'rounded-full focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
         eyeStyle.offset,
       )}
       aria-label={revealed ? t('settings.apiKey.hideKey') : t('settings.apiKey.showKey')}
@@ -110,9 +114,10 @@ export function SettingsTextInput({
         onChange={(e) => onChange(e.target.value)}
         onBlur={onBlur}
         placeholder={placeholder}
-        // 密钥框不该触发 Electron 的密码管理器建议，值也不该被拼写检查划红。
-        autoComplete="off"
-        spellCheck={false}
+        // 只对密钥关掉:密码管理器建议和拼写红线对密钥是干扰,但普通文本字段(显示名称、
+        // baseUrl、模型名、请求头)该保留浏览器的自动补全与拼写检查,不能一并禁掉。
+        autoComplete={secret ? 'off' : undefined}
+        spellCheck={secret ? false : undefined}
         className={cn(
           // 单行输入按设计规范走药丸圆角(DESIGN.md §4-5:9999px,明令禁止 10px)。
           'w-full rounded-full outline-none transition-colors',

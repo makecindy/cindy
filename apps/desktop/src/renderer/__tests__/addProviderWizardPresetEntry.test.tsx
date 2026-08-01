@@ -183,6 +183,9 @@ describe('AddProviderWizard — preset 直达', () => {
 
     const keyInput = await screen.findByPlaceholderText('sk-…');
     expect(keyInput.getAttribute('type')).toBe('password');
+    // 密钥框要挡住密码管理器建议与拼写红线(普通文本字段则保留浏览器默认,不禁用)。
+    expect(keyInput.getAttribute('autocomplete')).toBe('off');
+    expect(keyInput.getAttribute('spellcheck')).toBe('false');
 
     // 遮罩态按钮语义是「显示密钥」,点击后翻转为「隐藏密钥」。
     fireEvent.click(screen.getByLabelText('settings.apiKey.showKey'));
