@@ -62,6 +62,7 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { useGuardedBack } from '@/utils/useGuardedBack';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
@@ -1958,10 +1959,13 @@ export default function SessionScreen() {
       },
     });
   }, [router, sessionId, t]);
+  // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
+  // 与首页各入口同一把 guardedPush 锁。
+  const guardedPush = useGuardedPush();
   const handleDrawerNewSession = useCallback(() => {
     setSessionListDrawerOpen(false);
-    router.push({ pathname: '/sessions/new', params: { deviceId, deviceName } });
-  }, [deviceId, deviceName, router]);
+    guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+  }, [deviceId, deviceName, guardedPush]);
   // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
   // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
   const handleDrawerGoHome = useCallback(() => {
