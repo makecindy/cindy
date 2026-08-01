@@ -960,6 +960,59 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(runtime.install).not.toHaveBeenCalled();
   });
 
+  it('skips default installs while a single plugin entry is temporarily unreadable', async () => {
+    // 粒度到条目:来源本身可读、清单也在,只是**某个插件的 ghost.json** 因文件锁/
+    // 权限/网络盘抖动暂时读不到。此前这类失败与"内容非法"共用静默跳过分支,目录
+    // 仍被判 complete,同 ghostId 的默认安装会在这个窗口里抢占所有权,恢复后该
+    // 插件永久 conflict。现在读取事实不明必须让目录判为不完整。
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    // 插件 id **刻意不与服务端 ghostId 相同**:否则"同 ghostId 重复"规则本身就会
+    // 拦下默认安装,用例即使没有完整性闸也照样通过(咬不住)。
+    const dir = writeLocalMarket(root, 'team-lib', [
+      { rel: 'plugins/srv', id: 'unrelated-plugin' },
+    ]);
+    const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+    // EACCES 是可重试类错误(事实不明);注意不能用 ENOENT —— 那是"清单指向不存在
+    // 的目录"这种永久错误,按内容非法跳过才对(否则这类市场永久阻塞默认安装)。
+    // 路径必须按 realpath 拼:发现层用的是 realpath(macOS 上 /var → /private/var),
+    // 用 mkdtemp 原样路径做匹配会让 mock 永不命中。
+    const target = path.join(fs.realpathSync(dir), 'plugins', 'srv', 'ghost.json');
+    const realOpen = fs.promises.open;
+    const spy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+      ...args: Parameters<typeof fs.promises.open>
+    ) => {
+      if (String(args[0]) === target) {
+        throw Object.assign(new Error('EACCES'), { code: 'EACCES' });
+      }
+      return realOpen(...args);
+    }) as typeof fs.promises.open);
+    try {
+      await h.service.snapshot();
+      expect(h.api.download).not.toHaveBeenCalled();
+      expect(runtime.install).not.toHaveBeenCalled();
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('still treats a missing plugin directory as invalid content (不阻塞默认安装)', async () => {
+    // 对照组:marketplace.json 列了一个已被删掉的插件目录(ENOENT)是常见的**永久**
+    // 错误。若把它也当"读取事实不明",这类市场会永久阻塞默认安装 —— 必须按内容
+    // 非法跳过,默认安装照常进行。
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/gone', id: 'stale-entry' }]);
+    fs.rmSync(path.join(dir, 'plugins', 'gone'), { recursive: true, force: true });
+    const h = harness([serverSummary({ defaultInstall: true })], [{ name: 'team-lib', dir }]);
+    h.api.detail.mockResolvedValue(serverDetail());
+
+    await h.service.snapshot();
+    // 与"不可读"组对称的信号:目录判为完整 → 默认安装照常进入下载阶段。
+    expect(h.api.download).toHaveBeenCalled();
+  });
+
   it('fails closed on manual installs while any custom source is unreadable', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

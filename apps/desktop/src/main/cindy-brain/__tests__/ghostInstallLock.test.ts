@@ -50,6 +50,47 @@ describe('withGhostInstallLock', () => {
     expect(order).toEqual(['boom', 'after']);
   });
 
+  it('可重入:同一上下文嵌套取同一 id 不自锁', async () => {
+    // 锁同时加在三个卡点与各调用方的复核段上,外层已持有时内层必须是 no-op,
+    // 否则市场路径(外层持锁)进入 installOrUpdateMarketGhostPackage(卡点也取锁)
+    // 就会等自己释放 → 永久挂起。
+    const order: string[] = [];
+    await withGhostInstallLock('ghost-z', async () => {
+      order.push('outer');
+      await withGhostInstallLock('ghost-z', async () => {
+        order.push('inner');
+        // 再套一层也一样(卡点可能层层嵌套:service → install.ts → market 出口)。
+        await withGhostInstallLock('ghost-z', async () => {
+          order.push('innermost');
+        });
+      });
+    });
+    expect(order).toEqual(['outer', 'inner', 'innermost']);
+  });
+
+  it('可重入不放宽互斥:嵌套期间外部的同 id 请求仍被挡住', async () => {
+    const order: string[] = [];
+    const gate = deferred();
+    const holder = withGhostInstallLock('ghost-w', async () => {
+      await withGhostInstallLock('ghost-w', async () => {
+        order.push('nested:enter');
+        await gate.promise;
+        order.push('nested:exit');
+      });
+    });
+    await Promise.resolve();
+    await Promise.resolve();
+    // 另一个**独立上下文**的同 id 请求不是重入,必须排队。
+    const outsider = withGhostInstallLock('ghost-w', async () => {
+      order.push('outsider');
+    });
+    await Promise.resolve();
+    expect(order).toEqual(['nested:enter']);
+    gate.resolve();
+    await Promise.all([holder, outsider]);
+    expect(order).toEqual(['nested:enter', 'nested:exit', 'outsider']);
+  });
+
   it('不同 ghostId 并行:互不阻塞', async () => {
     const order: string[] = [];
     const xGate = deferred();

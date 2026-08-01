@@ -818,29 +818,33 @@ export class PluginMarketService {
             this.withMutation(SOURCE_MUTATION_KEY, () =>
               withGhostInstallLock(plugin.ghostId, fn),
             ),
-        });
-        // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
-        await this.withCapturedLedgerMutation(ledger, () => {
-          ledger.upsertInstallation({
-            pluginId,
-            ghostId: plugin.ghostId,
-            releaseId,
-            version: plugin.version,
-            // 自定义源没有服务端内容哈希;占位值如实表达"未经内容校验"。
-            sha256: 'custom-unverified',
-            scope: 'public',
-            organizationId: null,
-            source: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
-            installed: true,
-            updatedAt: new Date().toISOString(),
-            // 来源指纹与 pluginId 一起构成所有权:同名异源的重加对不上它。
-            sourceKey,
-            // 落位那一刻的 manifest 摘要:降级期间运行时被换成别的包后,认领
-            // 对不上摘要即失效。摘要来自发现层的原始 manifest(校验器输出),
-            // **不是**安装返回的 ghost.manifest——后者按当前界面语言本地化过,
-            // 切语言会被误判成包被替换。
-            manifestDigest: ghostManifestDigest(plugin.manifest),
-          });
+          // 溯源写入仍在上面那把 ghost 锁内(afterCommit 由 commit 段调用):
+          // 放到锁外时,本地装入能插在"包已落位"与"写下溯源"之间换掉同 id 的包。
+          // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation。
+          afterCommit: async () => {
+            await this.withCapturedLedgerMutation(ledger, () => {
+              ledger.upsertInstallation({
+                pluginId,
+                ghostId: plugin.ghostId,
+                releaseId,
+                version: plugin.version,
+                // 自定义源没有服务端内容哈希;占位值如实表达"未经内容校验"。
+                sha256: 'custom-unverified',
+                scope: 'public',
+                organizationId: null,
+                source: discovered.config.source.type === 'git' ? 'git-market' : 'local-market',
+                installed: true,
+                updatedAt: new Date().toISOString(),
+                // 来源指纹与 pluginId 一起构成所有权:同名异源的重加对不上它。
+                sourceKey,
+                // 落位那一刻的 manifest 摘要:降级期间运行时被换成别的包后,认领
+                // 对不上摘要即失效。摘要来自发现层的原始 manifest(校验器输出),
+                // **不是**安装返回的 ghost.manifest——后者按当前界面语言本地化过,
+                // 切语言会被误判成包被替换。
+                manifestDigest: ghostManifestDigest(plugin.manifest),
+              });
+            });
+          },
         });
         return { ghost };
       });
@@ -888,6 +892,17 @@ export class PluginMarketService {
             code: result.code,
           });
           continue;
+        }
+        // 粒度到条目的同一口径:某个插件的 ghost.json 暂时读不到(文件锁/网络盘
+        // 抖动/权限)时,这个市场声明了哪些 ghostId 就给不出完整答案——展示照旧
+        // 容错,但写路径必须 fail closed,否则同 ghostId 的默认安装会在这个窗口
+        // 里抢占所有权,恢复后该插件永久 conflict。内容非法(skippedCount)不算。
+        if (result.marketplace.unreadableCount > 0) {
+          complete = false;
+          log.warn('custom marketplace has unreadable plugin entries', {
+            market: config.name,
+            unreadableCount: result.marketplace.unreadableCount,
+          });
         }
         for (const plugin of result.marketplace.plugins) {
           entries.push({ config, plugin });
@@ -1090,25 +1105,36 @@ export class PluginMarketService {
           );
         }
       }
-      // 复核 + 落位在同一把来源锁内完成:`installOrUpdateMarketGhostPackage` 会先
-      // await 包检查才开始改动运行时,复核若在锁外做,结论会在这段等待里过期。
-      const ghost = await this.withMutation(SOURCE_MUTATION_KEY, async () => {
-        // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
-        await options.recheckOwnership?.();
-        requireSameMarketOwner(owner);
-        // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
-        // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
-        return installOrUpdateMarketGhostPackage(tempPath, {
-          ghostId: plugin.ghostId,
-          version: plugin.currentRelease.version,
-        });
-      });
-      // Once the package directory is committed, finish provenance against the
-      // owner captured at operation start even if the active session changes.
-      // The bound ledger prevents this write from leaking into the new owner.
-      await this.withCapturedLedgerMutation(ledger, () => {
-        ledger.upsertInstallation(recordFrom(plugin, 'market'));
-      });
+      // 复核 + 落位 + 溯源写入在同一对锁内完成:
+      // - SOURCE_MUTATION_KEY:`installOrUpdateMarketGhostPackage` 会先 await 包
+      //   检查才开始改动运行时,复核若在锁外做,结论会在这段等待里过期。
+      // - withGhostInstallLock(ghostId):与本地 .cindy 装入/更新/卸载共用同一按 id
+      //   互斥。少了它,本地装入能在包检查窗口里落入同 id 的包,随后被本次安装当作
+      //   更新目标覆盖,而权限差异确认因审阅时目标不存在而没跑过。账本写入也必须在
+      //   锁内:否则本地装入可以插在"落位"与"写溯源"之间,让账本认领一个其实已被
+      //   替换掉的包(服务端记录不带 manifestDigest,投影时判不出来)。
+      // 锁序:pluginId → SOURCE_MUTATION_KEY → ghostId → ledgerMutation,不可反向。
+      const ghost = await this.withMutation(SOURCE_MUTATION_KEY, () =>
+        withGhostInstallLock(plugin.ghostId, async () => {
+          // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
+          await options.recheckOwnership?.();
+          requireSameMarketOwner(owner);
+          // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
+          // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
+          const installed = await installOrUpdateMarketGhostPackage(tempPath, {
+            ghostId: plugin.ghostId,
+            version: plugin.currentRelease.version,
+          });
+          // Once the package directory is committed, finish provenance against
+          // the owner captured at operation start even if the active session
+          // changes. The bound ledger prevents this write from leaking into the
+          // new owner.
+          await this.withCapturedLedgerMutation(ledger, () => {
+            ledger.upsertInstallation(recordFrom(plugin, 'market'));
+          });
+          return installed;
+        }),
+      );
       return ghost;
     } finally {
       await fs.promises.rm(tempPath, { force: true }).catch(() => undefined);

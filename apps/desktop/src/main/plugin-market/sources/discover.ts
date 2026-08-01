@@ -99,8 +99,20 @@ export interface DiscoveredMarketplace {
   name: string;
   displayName: string | null;
   plugins: DiscoveredMarketPlugin[];
-  /** 被跳过的插件条目数（非法 source / 缺 ghost.json / 校验失败）。 */
+  /**
+   * 因**内容非法**被跳过的条目数(非法 source / 目录不存在 / 越出根 / 清单不合格 /
+   * 超限)。这类是永久事实,跳过即结论,不影响目录完整性。
+   */
   skippedCount: number;
+  /**
+   * 因**读取事实不明**未能判定的条目数(文件锁、权限、网络盘抖动、瞬时 I/O)。
+   *
+   * 与 skippedCount 必须分开:>0 表示"这个市场声明了哪些 ghostId"当前给不出完整
+   * 答案。展示可以照旧容错,但**新的所有权提交必须 fail closed**——否则同 ghostId
+   * 的服务端默认安装/手动安装会在它暂时不可读的窗口里抢占先装先得,恢复后该插件
+   * 永久 conflict。与来源级失败(result.ok === false)同一口径,只是粒度到条目。
+   */
+  unreadableCount: number;
 }
 
 export type DiscoverResult =
@@ -125,16 +137,56 @@ function pluginEntryRelativePath(source: unknown): string | null {
   return null;
 }
 
-/** 解析并校验单个插件目录；非法时返回 null（调用方计数跳过）。 */
+/**
+ * 单个插件条目的解析结论。
+ * - `ok`:可用。
+ * - `invalid`:**永久**非法(路径形态、目录不存在、越出根、清单不合格、超限、
+ *   ghost.json 是符号链接)。跳过即结论。
+ * - `unreadable`:**事实不明**(文件锁、权限、网络盘抖动、瞬时 I/O)。不能与
+ *   invalid 混同——它会让"本市场声明了哪些 ghostId"给不出完整答案。
+ */
+type PluginDirResolution =
+  | { kind: 'ok'; plugin: DiscoveredMarketPlugin }
+  | { kind: 'invalid' }
+  | { kind: 'unreadable' };
+
+/**
+ * 可重试的文件系统错误码 = 事实不明。
+ *
+ * 刻意**不含 ENOENT / ELOOP / ENOTDIR**:清单指向一个不存在的目录是常见的永久
+ * 错误(市场删了插件却没更新 marketplace.json),把它当"暂时读不到"会让这类市场
+ * 永久处于"目录不完整",默认安装被永久阻塞;ELOOP 是 O_NOFOLLOW 拒符号链接的
+ * 结果,属攻击/非法内容,同样是永久结论。
+ */
+const TRANSIENT_FS_CODES = new Set([
+  'EACCES',
+  'EPERM',
+  'EBUSY',
+  'EIO',
+  'EAGAIN',
+  'ETIMEDOUT',
+  'EMFILE',
+  'ENFILE',
+  'ENOMEM',
+  'ESTALE',
+]);
+
+function classifyFsFailure(error: unknown): 'invalid' | 'unreadable' {
+  const code = (error as NodeJS.ErrnoException | null)?.code;
+  return code && TRANSIENT_FS_CODES.has(code) ? 'unreadable' : 'invalid';
+}
+
 async function resolvePluginDir(
   marketRoot: string,
   relPath: string,
-): Promise<DiscoveredMarketPlugin | null> {
+): Promise<PluginDirResolution> {
   const trimmed = relPath.trim();
-  if (!trimmed || path.isAbsolute(trimmed) || /^[A-Za-z]:/.test(trimmed)) return null;
+  if (!trimmed || path.isAbsolute(trimmed) || /^[A-Za-z]:/.test(trimmed)) {
+    return { kind: 'invalid' };
+  }
   const dir = path.resolve(marketRoot, trimmed);
   const rootWithSep = marketRoot.endsWith(path.sep) ? marketRoot : `${marketRoot}${path.sep}`;
-  if (dir !== marketRoot && !dir.startsWith(rootWithSep)) return null;
+  if (dir !== marketRoot && !dir.startsWith(rootWithSep)) return { kind: 'invalid' };
 
   let realRoot: string;
   let realDir: string;
@@ -145,11 +197,11 @@ async function resolvePluginDir(
       fs.promises.realpath(marketRoot),
       fs.promises.realpath(dir),
     ]);
-  } catch {
-    return null;
+  } catch (error) {
+    return { kind: classifyFsFailure(error) };
   }
   const realRootWithSep = realRoot.endsWith(path.sep) ? realRoot : `${realRoot}${path.sep}`;
-  if (realDir !== realRoot && !realDir.startsWith(realRootWithSep)) return null;
+  if (realDir !== realRoot && !realDir.startsWith(realRootWithSep)) return { kind: 'invalid' };
 
   let raw: unknown;
   try {
@@ -164,17 +216,23 @@ async function resolvePluginDir(
       GHOST_MANIFEST_MAX_BYTES,
       realRoot,
     );
-    if (raw === null) return null;
-  } catch {
-    return null;
+    // null = 非普通文件 / 超限 / 根内复核不过:都是内容判据,属永久非法。
+    if (raw === null) return { kind: 'invalid' };
+  } catch (error) {
+    // JSON 解析失败是内容非法;fs 错误按可重试性分类。
+    if (error instanceof SyntaxError) return { kind: 'invalid' };
+    return { kind: classifyFsFailure(error) };
   }
   const validated = validateGhostManifest(raw);
-  if (!validated.ok) return null;
+  if (!validated.ok) return { kind: 'invalid' };
   return {
-    ghostId: validated.manifest.id,
-    version: validated.manifest.version,
-    dir: realDir,
-    manifest: validated.manifest,
+    kind: 'ok',
+    plugin: {
+      ghostId: validated.manifest.id,
+      version: validated.manifest.version,
+      dir: realDir,
+      manifest: validated.manifest,
+    },
   };
 }
 
@@ -273,6 +331,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
   const plugins: DiscoveredMarketPlugin[] = [];
   const seenGhostIds = new Set<string>();
   let skippedCount = 0;
+  let unreadableCount = 0;
   for (const entry of raw.plugins) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) {
       skippedCount += 1;
@@ -283,17 +342,23 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
       skippedCount += 1;
       continue;
     }
-    const plugin = await resolvePluginDir(marketRoot, relPath);
-    if (!plugin || seenGhostIds.has(plugin.ghostId)) {
+    const resolved = await resolvePluginDir(marketRoot, relPath);
+    if (resolved.kind === 'unreadable') {
+      // 事实不明:不能与"内容非法"共用静默跳过分支,否则调用方会把目录当完整,
+      // 允许同 ghostId 的默认安装/手动安装在这个窗口里抢占所有权。
+      unreadableCount += 1;
+      continue;
+    }
+    if (resolved.kind === 'invalid' || seenGhostIds.has(resolved.plugin.ghostId)) {
       skippedCount += 1;
       continue;
     }
-    seenGhostIds.add(plugin.ghostId);
-    plugins.push(plugin);
+    seenGhostIds.add(resolved.plugin.ghostId);
+    plugins.push(resolved.plugin);
   }
 
   return {
     ok: true,
-    marketplace: { name, displayName, plugins, skippedCount },
+    marketplace: { name, displayName, plugins, skippedCount, unreadableCount },
   };
 }

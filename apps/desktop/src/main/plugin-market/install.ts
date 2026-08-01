@@ -68,6 +68,14 @@ export async function installCustomMarketPlugin(input: {
    * 来源变更插不进来。
    */
   withCommitLock?: <T>(fn: () => Promise<T>) => Promise<T>;
+  /**
+   * 落位成功后、仍在 `withCommitLock` 内执行的溯源写入钩。
+   *
+   * 账本写入必须与落位同锁:放在锁外时,另一条路径(本地 .cindy 装入/更新)可以
+   * 插在"包已落位"与"写下溯源"之间换掉同 id 的包,账本随后认领一个其实已被替换
+   * 的包。抛错则整个安装按失败上报(包已落位,由调用方决定补偿)。
+   */
+  afterCommit?: () => Promise<void>;
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
@@ -133,10 +141,13 @@ export async function installCustomMarketPlugin(input: {
     // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
     const commit = async (): Promise<InstalledGhost> => {
       await input.beforeCommit?.();
-      return installOrUpdateMarketGhostPackage(tempPath, {
+      const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: validated.manifest.id,
         version: validated.manifest.version,
       });
+      // 溯源写入与落位同锁(见 afterCommit 注释)。
+      await input.afterCommit?.();
+      return installed;
     };
     return await (input.withCommitLock ? input.withCommitLock(commit) : commit());
   } finally {

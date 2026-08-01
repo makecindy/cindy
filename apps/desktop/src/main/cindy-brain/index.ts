@@ -2767,17 +2767,38 @@ function throwUninstallError(rejection: UninstallRejection): never {
 export async function installAndDock(
   manager: GhostManager,
   lizFilePath: string,
-  opts?: { enable?: boolean; expectedPackageSha256?: string },
+  /**
+   * `ghostId` 必填:它同时是**按 id 互斥锁的键**。装入前已由调用方经 inspect
+   * 验明(市场路径核对 expected、本地路径核对 sha256 钉住的 probe),所以此处
+   * 可信。做成必填而不是可选,是为了让新增装入路径无法"忘记取锁"——签名逼着
+   * 它交出 id,锁在这里自动获取(外层已持有时按可重入 no-op)。
+   */
+  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
+): Promise<InstalledGhost> {
+  return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
+}
+
+async function installAndDockLocked(
+  manager: GhostManager,
+  lizFilePath: string,
+  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
 ): Promise<InstalledGhost> {
   // 默认沉睡(2026-07-09 Lizi 定案):装入 ≠ 授权运行,用户在确认框显式勾选
   // "立即开启"才带电;沉睡态面板不渲染、总机不列、沙箱不拉起。
   const result = await manager.install(lizFilePath, {
-    initiallyEnabled: opts?.enable ?? false,
-    ...(opts?.expectedPackageSha256
+    initiallyEnabled: opts.enable ?? false,
+    ...(opts.expectedPackageSha256
       ? { expectedPackageSha256: opts.expectedPackageSha256 }
       : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
+  // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
+  // 宁可装完即报错让上层看见,也不要留下"以为串行、其实没有"的假象。
+  if (result.ghost.manifest.id !== opts.ghostId) {
+    throw new Error(
+      `装入包的 ghostId(${result.ghost.manifest.id})与加锁使用的 id(${opts.ghostId})不一致`,
+    );
+  }
   // 用户手动重装同 id 的内置意识 = 重新跟随包内版本(清墓碑,播种恢复对账)。
   clearBuiltinTombstone(brainRootDir(), result.ghost.manifest.id, log);
   // 声明了面板的意识装入后立即停进布局树(树上已有 = 重装,原位复活不动树)。
@@ -2803,6 +2824,21 @@ export async function installAndDock(
  * tokenBroker 门控、原子换目录、布局停靠与运行时重启保持和本地安装一致。
  */
 export async function installOrUpdateMarketGhostPackage(
+  cindyFilePath: string,
+  expected: {
+    ghostId: string;
+    version: string;
+  },
+): Promise<InstalledGhost> {
+  // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
+  // 都经此出口,调用方漏取锁也被兜住;调用方已持有时按可重入 no-op(它们会把
+  // 复核与账本写入一起纳入同一把锁,范围比这里更大)。
+  return withGhostInstallLock(expected.ghostId, () =>
+    installOrUpdateMarketGhostPackageLocked(cindyFilePath, expected),
+  );
+}
+
+async function installOrUpdateMarketGhostPackageLocked(
   cindyFilePath: string,
   expected: {
     ghostId: string;
@@ -2845,6 +2881,7 @@ export async function installOrUpdateMarketGhostPackage(
       // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
       // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
       return installAndDock(manager, cindyFilePath, {
+        ghostId: expected.ghostId,
         enable: true,
         expectedPackageSha256: inspected.packageSha256,
       });
@@ -3917,14 +3954,13 @@ export function registerGhostIpc(): void {
     // Node 高风险提示在 renderer 装入确认卡的权限清单里如实展示;
     // 2026-07-24 Lizi 定案:不再追加 Main 原生二次确认弹窗。
     const enable = installOpts?.enable === true;
-    // 与市场装入/更新/卸载共用按 ghostId 的互斥:同 id 的并发装入不得交错。
+    // 锁由 installAndDock 按 ghostId 自动获取(卡点);这里传 id 即可。
     return {
-      ghost: await withGhostInstallLock(probe.manifest.id, () =>
-        installAndDock(manager, lizFilePath, {
-          enable,
-          expectedPackageSha256,
-        }),
-      ),
+      ghost: await installAndDock(manager, lizFilePath, {
+        ghostId: probe.manifest.id,
+        enable,
+        expectedPackageSha256,
+      }),
     };
   });
 
