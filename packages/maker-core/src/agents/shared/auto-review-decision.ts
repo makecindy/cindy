@@ -206,3 +206,27 @@ export function composeAutoReviewIntentWithApprovedPlan(
     `Approved plan:\n${plan}`,
   ].filter(Boolean).join('\n\n'));
 }
+
+/**
+ * 澄清问答同样改变本轮的授权范围:用户把范围从 `src/` 收窄到 `build/` 后,后续 `rm -rf src` 必须按
+ * **澄清后**的意图裁决,而不是仍按原先那句含糊请求(否则可能被静默 allow)。答案与获批计划同理并入
+ * 有界 intent,不扩大轻量 reviewer 的输入预算。
+ */
+export function composeAutoReviewIntentWithClarification(
+  currentUserIntent: string,
+  clarifications: readonly { question?: string; answer?: string }[],
+): string {
+  const lines = clarifications
+    .map(({ question, answer }) => {
+      const q = (question ?? '').trim();
+      const a = (answer ?? '').trim();
+      if (!a) return '';
+      return q ? `- ${q} → ${a}` : `- ${a}`;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
+  return compactCurrentUserIntent([
+    currentUserIntent.trim(),
+    `Clarifications:\n${lines.join('\n')}`,
+  ].filter(Boolean).join('\n\n'));
+}

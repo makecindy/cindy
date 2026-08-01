@@ -80,6 +80,7 @@ import {
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import {
   composeAutoReviewIntentWithApprovedPlan,
+  composeAutoReviewIntentWithClarification,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -4988,6 +4989,12 @@ export class CodexAgent extends BaseAgent {
           log.warn('requestUserInput got mismatched ask decision', { requestId, decKind: decision.kind });
           return questions.map(() => []);
         }
+        // 澄清答案改变本轮授权范围(把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按澄清后的
+        // 意图裁决)→ 并入有界 review intent 并清缓存,与 Claude 侧 AskUserQuestion 对称(codex 报)。
+        setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+          currentAutoReviewIntent,
+          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+        ));
         return userInputAnswersByPosition(
           questions,
           responseFromAskUserAnswers(questions, decision.answers),

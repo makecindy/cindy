@@ -106,6 +106,7 @@ import {
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
   composeAutoReviewIntentWithApprovedPlan,
+  composeAutoReviewIntentWithClarification,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -1480,6 +1481,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           log.warn('AskUserQuestion got mismatched decision', { decKind: decision.kind });
           return { behavior: 'deny', message: 'resolver kind mismatch' };
         }
+        // 澄清答案同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按
+        // 澄清后的意图裁决)→ 并入有界 review intent 并清空决策缓存,否则 reviewer 仍按原含糊请求
+        // 裁决、可能静默 allow(codex 报)。
+        setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+          currentAutoReviewIntent,
+          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+        ));
         // 把用户回答拼回 SDK 让模型读 (老链路 agentManager.ts:1097-1106 把 answers 当 updatedInput.answers)
         return {
           behavior: 'allow',

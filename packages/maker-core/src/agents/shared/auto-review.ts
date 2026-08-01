@@ -228,6 +228,12 @@ function redirectionTargets(command: string): string[] {
  * 只取静态可见的字面目标;拿不准的形态交既有其它规则,不在此强判。**注意**:这里只产出"目标",
  * 是否升级由调用点的 isProtectedSystemPath 决定 —— 所以日常写区内/临时目录不会被打断。
  */
+/**
+ * 写目标"静态不可证"的哨兵:目标由运行期内容决定(tar -P 的归档成员、缺失的 -t 目录),既不能证明
+ * 落在系统目录、也不能证明没落 —— 消费方见到它一律要求同意。用不可能出现在真实路径里的名字。
+ */
+const UNPROVABLE_WRITE_TARGET = ' unprovable-write-target';
+
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
   const args = tokens.slice(1);
@@ -240,7 +246,7 @@ function argumentWriteTargets(tokens: string[]): string[] {
       const t = args[i];
       if (t === '-t' || t === '--target-directory') {
         const dir = args[i + 1];
-        return dir ? [dir] : ['/']; // 缺目标 = 静态不可证 → 哨兵,必问
+        return dir ? [dir] : [UNPROVABLE_WRITE_TARGET]; // 缺目标 = 静态不可证 → 哨兵,必问
       }
       const attached = /^(?:--target-directory=|-t)(.+)$/.exec(t);
       if (attached) return [attached[1]];
@@ -296,6 +302,11 @@ function argumentWriteTargets(tokens: string[]): string[] {
   // wget -O FILE / -P DIR —— 都能把内容写进系统目录。
   if (bin === 'tar' || bin === 'unzip' || bin === 'curl' || bin === 'wget') {
     const out: string[] = [];
+    // tar -P/--absolute-names:不剥成员路径的前导 `/`,归档里若含 `/etc/cron.d/job` 会直接写进系统路径。
+    // 归档内容静态不可见 → 无法证明成员安全,用哨兵 `/` 强制必问(codex 报)。
+    if (bin === 'tar' && args.some((t) => t === '--absolute-names' || /^-[A-Za-z]*P/.test(t))) {
+      return [UNPROVABLE_WRITE_TARGET];
+    }
     const valueFlags = bin === 'tar' ? /^(?:-C|--directory)$/
       : bin === 'unzip' ? /^-d$/
         : bin === 'curl' ? /^(?:-o|--output|--output-dir)$/
@@ -1475,6 +1486,8 @@ function systemWriteTargetsInSegment(
 ): boolean {
   const targets = [...redirectionTargets(segment), ...argumentWriteTargets(tokens)];
   if (targets.length === 0) return false;
+  // 静态不可证的写目标(tar -P 的归档成员等)一律要求同意。
+  if (targets.includes(UNPROVABLE_WRITE_TARGET)) return true;
   const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
   const base = opts.cwd ?? workspaceRoots[0];
   return targets.some((t) =>

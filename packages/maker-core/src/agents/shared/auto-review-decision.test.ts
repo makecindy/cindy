@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   classifyLocalAutoReviewTier,
   composeAutoReviewIntentWithApprovedPlan,
+  composeAutoReviewIntentWithClarification,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewRequest,
@@ -195,5 +196,39 @@ describe('extractAutoReviewUserIntent', () => {
     expect(compacted).toMatch(/^original-/);
     expect(compacted).toContain('…[middle omitted]…');
     expect(compacted).toMatch(/-FINAL PLAN STEP$/);
+  });
+});
+
+describe('composeAutoReviewIntentWithClarification', () => {
+  it('把澄清问答并入意图,让 reviewer 按收窄后的范围裁决', () => {
+    const out = composeAutoReviewIntentWithClarification('清理一下构建产物', [
+      { question: '清理哪个目录?', answer: 'build/' },
+      { question: '要保留缓存吗?', answer: '保留' },
+    ]);
+    expect(out).toContain('清理一下构建产物');
+    expect(out).toContain('Clarifications:');
+    expect(out).toContain('- 清理哪个目录? → build/');
+    expect(out).toContain('- 要保留缓存吗? → 保留');
+  });
+
+  it('空答案被忽略;全空时保持原意图不变', () => {
+    expect(composeAutoReviewIntentWithClarification('原请求', [])).toBe('原请求');
+    expect(composeAutoReviewIntentWithClarification('原请求', [{ question: 'q', answer: '   ' }]))
+      .toBe('原请求');
+    const partial = composeAutoReviewIntentWithClarification('原请求', [
+      { question: 'q1', answer: '' },
+      { question: 'q2', answer: 'a2' },
+    ]);
+    expect(partial).toContain('- q2 → a2');
+    expect(partial).not.toContain('q1');
+  });
+
+  it('无问题文本时只记答案;整体受 2000 字上限约束', () => {
+    expect(composeAutoReviewIntentWithClarification('原请求', [{ answer: 'build/' }]))
+      .toContain('- build/');
+    const long = composeAutoReviewIntentWithClarification('x'.repeat(1_900), [
+      { question: 'q'.repeat(200), answer: 'a'.repeat(200) },
+    ]);
+    expect(long.length).toBeLessThanOrEqual(2_000);
   });
 });

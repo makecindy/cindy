@@ -1804,6 +1804,22 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
   });
 });
 
+describe('tar --absolute-names 解压需确定性同意(第四十一批评审)', () => {
+  it('-P/--absolute-names:归档成员可含绝对系统路径,内容静态不可见 → 必问', () => {
+    for (const c of [
+      'tar -P -xf payload.tar',
+      'tar --absolute-names -xf payload.tar',
+      'tar -Pxf payload.tar',
+      'tar -xPf payload.tar -C dist', // 即便给了 -C,-P 下成员仍可写绝对路径
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:不带 -P 的普通解压按落地目录判定 —— 区内/临时目录仍灰区。
+    expect(classifyShellCommand('tar -xzf pkg.tgz -C dist', roots)).toBe('prompt');
+    expect(classifyShellCommand('tar -xzf pkg.tgz', roots)).toBe('prompt');
+  });
+});
+
 describe('内网判定前先解码 URL 主机名(第四十批评审)', () => {
   it('百分号编码的 metadata/环回 host 不再被确定性放行', () => {
     // curl 会把 %31%36%39… 归一成 169.254.169.254 再发请求;未解码时既不像 IPv4 也不像 localhost,
