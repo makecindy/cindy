@@ -9,6 +9,7 @@ import {
   finalizeSchedulerInterruptedTurnSuppressedError,
   isSchedulerInterruptedTurnRecoverySessionReserved,
   isSchedulerInterruptedTurnEventOwnedBy,
+  markSchedulerInterruptedTurnEventOwner,
   registerSchedulerInterruptedTurnRecovery,
   registerSchedulerInterruptedTurnResumeOutcome,
   resetSchedulerInterruptedTurnRecovery,
@@ -29,6 +30,7 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const dispose = registerSchedulerInterruptedTurnRecovery(
       'bridge-claim', 'run-1', handler, vi.fn(), notReserved,
     );
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-claim', 'run-1')).toBe(true);
 
     expect(claimSchedulerInterruptedTurnRecovery('bridge-claim', errorEvent)).toEqual({
       runId: 'run-1',
@@ -48,6 +50,7 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const disposeNext = registerSchedulerInterruptedTurnRecovery(
       'bridge-owner', 'same-run', next, vi.fn(), notReserved,
     );
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-owner', 'same-run')).toBe(true);
 
     disposeOld();
     expect(claimSchedulerInterruptedTurnRecovery('bridge-owner', errorEvent)).toEqual({
@@ -94,7 +97,15 @@ describe('scheduler interrupted-turn recovery bridge', () => {
       ),
     ).toBe(true);
 
-    disposeFirst();
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-concurrent', 'run-first')).toBe(true);
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-concurrent', 'run-first', undefined),
+    ).toBe(true);
+    expect(claimSchedulerInterruptedTurnRecovery('bridge-concurrent', errorEvent)).toEqual({
+      runId: 'run-first',
+      disposition: 'started',
+    });
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-concurrent', 'run-second')).toBe(true);
     expect(
       isSchedulerInterruptedTurnEventOwnedBy('bridge-concurrent', 'run-second', undefined),
     ).toBe(true);
@@ -103,6 +114,10 @@ describe('scheduler interrupted-turn recovery bridge', () => {
       disposition: 'duplicate',
     });
     expect(second).toHaveBeenCalledTimes(1);
+    disposeFirst();
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-concurrent', 'run-second', undefined),
+    ).toBe(true);
     disposeSecond();
   });
 
@@ -133,6 +148,7 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const dispose = registerSchedulerInterruptedTurnRecovery(
       'bridge-intervention', 'run-1', handler, onReset, notReserved,
     );
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-intervention', 'run-1')).toBe(true);
 
     supersedeSchedulerInterruptedTurnRecovery('bridge-intervention');
 
@@ -146,6 +162,32 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     expect(
       isSchedulerInterruptedTurnEventOwnedBy('bridge-intervention', 'run-1', undefined),
     ).toBe(false);
+  });
+
+  it('keeps the detached current turn owner when another waiter is also registered', () => {
+    const firstReset = vi.fn();
+    const secondReset = vi.fn();
+    const disposeFirst = registerSchedulerInterruptedTurnRecovery(
+      'bridge-detached-owner', 'run-first', () => 'started', firstReset, notReserved,
+    );
+    const disposeSecond = registerSchedulerInterruptedTurnRecovery(
+      'bridge-detached-owner', 'run-second', () => 'started', secondReset, notReserved,
+    );
+    expect(markSchedulerInterruptedTurnEventOwner('bridge-detached-owner', 'run-first')).toBe(true);
+
+    supersedeSchedulerInterruptedTurnRecovery('bridge-detached-owner');
+
+    expect(firstReset).toHaveBeenCalledWith('user-intervention');
+    expect(secondReset).toHaveBeenCalledWith('user-intervention');
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-detached-owner', 'run-first', undefined),
+    ).toBe(true);
+    expect(
+      isSchedulerInterruptedTurnEventOwnedBy('bridge-detached-owner', 'run-second', undefined),
+    ).toBe(false);
+    expect(claimSchedulerInterruptedTurnRecovery('bridge-detached-owner', errorEvent)).toBeNull();
+    disposeFirst();
+    disposeSecond();
   });
 
   it('reserves the session while any run is in recovery backoff or dispatch', () => {

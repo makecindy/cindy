@@ -21,6 +21,18 @@ interface RecoveryRegistration {
   claimEnabled: boolean;
 }
 
+interface RecoverySession {
+  registrations: Map<string, RecoveryRegistration>;
+  /**
+   * The Schedule run whose vendor turn currently owns origin-less AgentEvents.
+   *
+   * Registrations describe waiters that may recover in the future; they are not proof that
+   * those waiters own the turn currently running in the shared Session. Keeping this lease
+   * separately prevents two concurrent waiters from making every legacy event ambiguous.
+   */
+  eventOwnerRunId: string | null;
+}
+
 interface RecoveryLifecycle {
   registerOutcome(sessionId: string, runId: string, clientId: string): void;
   releaseOutcome(sessionId: string, runId: string, clientId: string): void;
@@ -29,7 +41,7 @@ interface RecoveryLifecycle {
   finalizeSuppressedError(sessionId: string, runId: string): void;
 }
 
-const recoveryHandlers = new Map<string, Map<string, RecoveryRegistration>>();
+const recoverySessions = new Map<string, RecoverySession>();
 let lifecycle: RecoveryLifecycle | null = null;
 
 /**
@@ -49,33 +61,45 @@ export function registerSchedulerInterruptedTurnRecovery(
   onReset: (reason: SchedulerInterruptedTurnRecoveryResetReason) => void,
   isDispatchReserved: () => boolean,
 ): () => void {
-  let registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) {
-    registrations = new Map();
-    recoveryHandlers.set(sessionId, registrations);
+  let recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession) {
+    recoverySession = { registrations: new Map(), eventOwnerRunId: null };
+    recoverySessions.set(sessionId, recoverySession);
   }
   const registration = { handler, onReset, isDispatchReserved, claimEnabled: true };
-  registrations.set(runId, registration);
+  recoverySession.registrations.set(runId, registration);
   return () => {
-    const current = recoveryHandlers.get(sessionId);
-    if (current?.get(runId) !== registration) return;
-    current.delete(runId);
-    if (current.size === 0) recoveryHandlers.delete(sessionId);
+    const current = recoverySessions.get(sessionId);
+    if (current?.registrations.get(runId) !== registration) return;
+    current.registrations.delete(runId);
+    if (current.eventOwnerRunId === runId) current.eventOwnerRunId = null;
+    if (current.registrations.size === 0) recoverySessions.delete(sessionId);
   };
+}
+
+/** Mark the accepted/dispatching Schedule turn as the sole owner of origin-less events. */
+export function markSchedulerInterruptedTurnEventOwner(
+  sessionId: string,
+  runId: string,
+): boolean {
+  const recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession?.registrations.has(runId)) return false;
+  recoverySession.eventOwnerRunId = runId;
+  return true;
 }
 
 /** Backoff/dispatching recovery owns the session even before maker reports a running turn. */
 export function isSchedulerInterruptedTurnRecoverySessionReserved(sessionId: string): boolean {
-  const registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) return false;
-  return [...registrations.values()].some(
+  const recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession) return false;
+  return [...recoverySession.registrations.values()].some(
     (registration) => registration.claimEnabled && registration.isDispatchReserved(),
   );
 }
 
 /**
  * Route ordinary turn events through the same owner boundary as terminal recovery claims.
- * Explicit run ids are authoritative; legacy events without one are safe only with one waiter.
+ * Explicit run ids are authoritative; legacy events follow the accepted vendor-turn lease.
  */
 export function isSchedulerInterruptedTurnEventOwnedBy(
   sessionId: string,
@@ -83,8 +107,7 @@ export function isSchedulerInterruptedTurnEventOwnedBy(
   eventRunId: string | undefined,
 ): boolean {
   if (eventRunId) return eventRunId === runId;
-  const registrations = recoveryHandlers.get(sessionId);
-  return registrations?.size === 1 && registrations.has(runId);
+  return recoverySessions.get(sessionId)?.eventOwnerRunId === runId;
 }
 
 /** Called synchronously by register.ts before it broadcasts or persists a terminal error. */
@@ -92,8 +115,8 @@ export function claimSchedulerInterruptedTurnRecovery(
   sessionId: string,
   event: AgentEvent,
 ): SchedulerInterruptedTurnRecoveryClaim | null {
-  const registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) return null;
+  const recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession) return null;
   const claim = (
     runId: string,
     registration: RecoveryRegistration | undefined,
@@ -104,16 +127,12 @@ export function claimSchedulerInterruptedTurnRecovery(
   };
   const eventRunId = event.turnOrigin?.runId;
   if (typeof eventRunId === 'string' && eventRunId) {
-    return claim(eventRunId, registrations.get(eventRunId));
+    return claim(eventRunId, recoverySession.registrations.get(eventRunId));
   }
-  // Older providers can omit turnOrigin. Only fall back when ownership is unambiguous;
-  // otherwise a concurrent Schedule run could claim and persist another run's failure.
-  const enabledRegistrations = [...registrations.entries()].filter(
-    ([, registration]) => registration.claimEnabled,
-  );
-  if (enabledRegistrations.length !== 1) return null;
-  const [runId, registration] = enabledRegistrations[0] ?? [];
-  return typeof runId === 'string' ? claim(runId, registration) : null;
+  const ownerRunId = recoverySession.eventOwnerRunId;
+  return ownerRunId
+    ? claim(ownerRunId, recoverySession.registrations.get(ownerRunId))
+    : null;
 }
 
 /** Stop every pending recovery lifecycle owned by this session before reset/close continues. */
@@ -121,10 +140,12 @@ export function resetSchedulerInterruptedTurnRecovery(
   sessionId: string,
   reason: SchedulerInterruptedTurnRecoveryResetReason,
 ): void {
-  const registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) return;
-  recoveryHandlers.delete(sessionId);
-  for (const registration of [...registrations.values()]) registration.onReset(reason);
+  const recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession) return;
+  recoverySessions.delete(sessionId);
+  for (const registration of [...recoverySession.registrations.values()]) {
+    registration.onReset(reason);
+  }
 }
 
 /**
@@ -135,9 +156,9 @@ export function resetSchedulerInterruptedTurnRecovery(
  * already-pending continuation must also settle the Schedule run.
  */
 export function supersedeSchedulerInterruptedTurnRecovery(sessionId: string): void {
-  const registrations = recoveryHandlers.get(sessionId);
-  if (!registrations) return;
-  for (const registration of [...registrations.values()]) {
+  const recoverySession = recoverySessions.get(sessionId);
+  if (!recoverySession) return;
+  for (const registration of [...recoverySession.registrations.values()]) {
     registration.claimEnabled = false;
     registration.onReset('user-intervention');
   }

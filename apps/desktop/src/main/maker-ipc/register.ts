@@ -2827,6 +2827,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           session.id,
           attributedEvent,
         );
+        if (schedulerInterruptedTurnRecoveryClaim) {
+          agentInputCoordinatorHolder?.settleClaimedSchedulerTurn(
+            session.id,
+            schedulerInterruptedTurnRecoveryClaim.runId,
+          );
+        }
       } catch (err) {
         log.warn('scheduler interrupted-turn recovery handler threw', {
           sessionId: session.id,

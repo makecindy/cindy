@@ -153,6 +153,21 @@ describe('maker:event hot path ordering', () => {
     expect(suppressedPersistBlock).not.toContain('attributedEvent.data');
   });
 
+  it('releases a claimed queued Schedule turn before broadcasting its retry event', () => {
+    const wireSessionSource = extractWireSessionSource();
+
+    expectOrder(
+      wireSessionSource,
+      'schedulerInterruptedTurnRecoveryClaim = claimSchedulerInterruptedTurnRecovery(',
+      'agentInputCoordinatorHolder?.settleClaimedSchedulerTurn(',
+    );
+    expectOrder(
+      wireSessionSource,
+      'agentInputCoordinatorHolder?.settleClaimedSchedulerTurn(',
+      'broadcastToAllWindows(MAKER_PUSH.EVENT',
+    );
+  });
+
   it('fires git snapshots only from post-broadcast done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');

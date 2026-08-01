@@ -1088,7 +1088,10 @@ describe('MakerScheduleRunner queued dispatch: slot accounting and wait cap', ()
   });
 
   it('turn 事件经 onProgress 上报给引擎的卡死守卫', async () => {
-    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const harness = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
     const queue = createQueueHarness({ busy: false });
     const { runner } = createRunnerHarness(harness.session, queue.deps);
     const ctx = createFireContext();

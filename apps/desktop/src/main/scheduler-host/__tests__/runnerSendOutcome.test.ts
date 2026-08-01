@@ -34,7 +34,9 @@ const mocks = vi.hoisted(() => ({
       }
     >
   >(),
+  schedulerEventOwners: new Map<string, string>(),
   registerSchedulerRecovery: vi.fn(),
+  markSchedulerEventOwner: vi.fn(),
   claimSchedulerRecovery: vi.fn(),
   isSchedulerEventOwnedBy: vi.fn(),
   registerSchedulerResumeOutcome: vi.fn(),
@@ -66,6 +68,7 @@ vi.mock('../../maker-ipc/register.js', () => ({
 
 vi.mock('../schedulerInterruptedTurnRecoveryBridge.js', () => ({
   registerSchedulerInterruptedTurnRecovery: mocks.registerSchedulerRecovery,
+  markSchedulerInterruptedTurnEventOwner: mocks.markSchedulerEventOwner,
   claimSchedulerInterruptedTurnRecovery: mocks.claimSchedulerRecovery,
   isSchedulerInterruptedTurnEventOwnedBy: mocks.isSchedulerEventOwnedBy,
   registerSchedulerInterruptedTurnResumeOutcome: mocks.registerSchedulerResumeOutcome,
@@ -281,6 +284,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     vi.clearAllMocks();
     vi.useRealTimers();
     mocks.schedulerRecoveryHandlers.clear();
+    mocks.schedulerEventOwners.clear();
     mocks.registerSchedulerRecovery.mockImplementation(
       (
         sessionId: string,
@@ -300,10 +304,18 @@ describe('MakerScheduleRunner send outcome policy', () => {
           const current = mocks.schedulerRecoveryHandlers.get(sessionId);
           if (current?.get(runId) !== registration) return;
           current.delete(runId);
+          if (mocks.schedulerEventOwners.get(sessionId) === runId) {
+            mocks.schedulerEventOwners.delete(sessionId);
+          }
           if (current.size === 0) mocks.schedulerRecoveryHandlers.delete(sessionId);
         };
       },
     );
+    mocks.markSchedulerEventOwner.mockImplementation((sessionId: string, runId: string) => {
+      if (!mocks.schedulerRecoveryHandlers.get(sessionId)?.has(runId)) return false;
+      mocks.schedulerEventOwners.set(sessionId, runId);
+      return true;
+    });
     mocks.claimSchedulerRecovery.mockImplementation((sessionId: string, event: AgentEvent) => {
       const registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
       if (!registrations) return null;
@@ -312,16 +324,15 @@ describe('MakerScheduleRunner send outcome policy', () => {
         const disposition = registrations.get(eventRunId)?.handler(event) ?? null;
         return disposition ? { runId: eventRunId, disposition } : null;
       }
-      if (registrations.size !== 1) return null;
-      const [runId, registration] = registrations.entries().next().value ?? [];
+      const runId = mocks.schedulerEventOwners.get(sessionId);
+      const registration = runId ? registrations.get(runId) : undefined;
       const disposition = registration?.handler(event) ?? null;
       return disposition && runId ? { runId, disposition } : null;
     });
     mocks.isSchedulerEventOwnedBy.mockImplementation(
       (sessionId: string, runId: string, eventRunId: string | undefined) => {
         if (eventRunId) return eventRunId === runId;
-        const registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
-        return registrations?.size === 1 && registrations.has(runId);
+        return mocks.schedulerEventOwners.get(sessionId) === runId;
       },
     );
     mocks.createMessage.mockResolvedValue(undefined);
@@ -660,6 +671,33 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
   });
 
+  it('fully cleans up when recovery registration resets synchronously', async () => {
+    const unregister = vi.fn();
+    mocks.registerSchedulerRecovery.mockImplementationOnce(
+      (
+        _sessionId: string,
+        _runId: string,
+        _handler: (event: AgentEvent) => 'started' | 'duplicate' | null,
+        onReset: (reason: 'session-reset') => void,
+      ) => {
+        onReset('session-reset');
+        return unregister;
+      },
+    );
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session);
+
+    await expect(runner.fire(baseSchedule(), createFireContext())).rejects.toThrow(
+      /session reset during interrupted-turn recovery/,
+    );
+    expect(unregister).toHaveBeenCalledTimes(1);
+    expect(h.off).toHaveBeenCalledTimes(1);
+    expect(h.listenerCount()).toBe(0);
+  });
+
   it('continues a partially completed capacity-interrupted turn in the same schedule run', async () => {
     vi.useFakeTimers();
     const rawInterruptedError =
@@ -922,11 +960,16 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const secondFire = runner.fire(baseSchedule(), createFireContext('run-second'));
 
     await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
-    h.emit({ type: 'text', data: { text: 'ambiguous', isFinal: false } });
+    // Legacy providers can omit turnOrigin. The latest accepted turn owns that event lease,
+    // while the other registered waiter remains available for its explicit run id.
+    h.emit({ type: 'text', data: { text: 'second output', isFinal: false } });
     h.emit({ type: 'done', data: {} });
-    await vi.advanceTimersByTimeAsync(1);
-    expect(notifier.notify).not.toHaveBeenCalled();
-    expect(h.listenerCount()).toBe(2);
+    await expect(secondFire).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: 'second output',
+    });
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(h.listenerCount()).toBe(1);
 
     const firstOrigin = {
       kind: 'scheduler',
@@ -958,16 +1001,8 @@ describe('MakerScheduleRunner send outcome policy', () => {
       sessionId: 'scheduler-session',
       resultText: 'first partial',
     });
-    expect(notifier.notify).toHaveBeenCalledTimes(1);
-    expect(h.listenerCount()).toBe(1);
-
-    const secondOrigin = { ...firstOrigin, runId: 'run-second' } as const;
-    h.emit({ type: 'done', data: {}, turnOrigin: secondOrigin });
-    await expect(secondFire).resolves.toEqual({
-      sessionId: 'scheduler-session',
-      resultText: undefined,
-    });
     expect(notifier.notify).toHaveBeenCalledTimes(2);
+    expect(h.listenerCount()).toBe(0);
   });
 
   it('does not continue a capacity error when the turn produced no output', async () => {

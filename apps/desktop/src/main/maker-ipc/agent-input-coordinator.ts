@@ -1951,6 +1951,35 @@ export class AgentInputCoordinator {
   }
 
   /**
+   * A Schedule runner claimed the current terminal error and will continue the same logical run.
+   * Release the coordinator's accepted queue item synchronously: the recovery bridge/session busy
+   * boundary now owns serialization, while retaining this activeTurn would strand every later
+   * queue item if the hidden continuation failed before reaching vendor dispatch.
+   */
+  settleClaimedSchedulerTurn(sessionId: string, runId: string): boolean {
+    const state = this.getState(sessionId);
+    const active = state.activeTurn;
+    if (
+      active?.item?.origin?.kind !== 'scheduler' ||
+      active.item.origin.runId !== runId
+    ) {
+      return false;
+    }
+    this.clearAbortReconcileRetry(state);
+    this.clearSessionRunningRetry(state);
+    state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
+    state.activeTurn = null;
+    state.error = null;
+    state.stickyError = null;
+    state.recovery = null;
+    state.autoResumePending = null;
+    this.emit(sessionId);
+    this.scheduleDrainAfterExternalTurnSettles(sessionId, 'scheduler-turn-claimed-for-auto-resume');
+    return true;
+  }
+
+  /**
    * `signals` 只在 `type='error'` 时有意义：terminal error 的结构化信号（SDK error
    * tag / reason / HTTP 状态码），供 host 判断这次失败是否值得自动续跑。刻意不在
    * coordinator 里做那个判断——它是「这条错误是什么」的领域知识，属于 host 侧的

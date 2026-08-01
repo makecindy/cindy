@@ -88,6 +88,7 @@ import {
   discardSchedulerInterruptedTurnSuppressedError,
   finalizeSchedulerInterruptedTurnSuppressedError,
   isSchedulerInterruptedTurnEventOwnedBy,
+  markSchedulerInterruptedTurnEventOwner,
   registerSchedulerInterruptedTurnRecovery,
   registerSchedulerInterruptedTurnResumeOutcome,
   releaseSchedulerInterruptedTurnResumeOutcome,
@@ -287,6 +288,7 @@ class QueuedSlotUnavailableError extends Error {}
 /** createTurnCompletionWaiter 的返回:turn 终态等待 + 文本缓冲 + 幂等摘除。 */
 interface TurnCompletionWaiter {
   turnFinished: Promise<void>;
+  markTurnAccepted: () => void;
   stopListening: () => void;
   getAssistantText: () => string;
 }
@@ -1141,6 +1143,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // fire 已收口后才到达的迟发 callback 由 guard 拒绝，避免重新污染 session。
           if (!holder.headlessGhostSetupTurn?.markDispatched()) return;
           turnAccepted = true;
+          waiter.markTurnAccepted();
           // turn 已被会话接受 → 此刻才落定 sessionId → 本轮 runId 反向映射(供按
           // session 静默解析)。在 send 被接受这一刻写,被 SESSION_RUNNING 拒的并发 run
           // 不会走到这里,因此不会覆盖/带走仍在执行的活跃 run 的映射(scheduler.ts P2)。
@@ -1581,6 +1584,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
             origin,
             signal: ctx.signal,
           });
+          waiterSlot.current.markTurnAccepted();
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
         ctx.onTurnActive?.(sessionId);
@@ -2057,6 +2061,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
       );
       let settled = false;
       let unregisterInterruptedTurnRecovery: (() => void) | undefined;
+      let off: () => void = () => {};
       const clearBgFallbackTimer = (): void => {
         if (bgFallbackTimer) {
           clearTimeout(bgFallbackTimer);
@@ -2145,6 +2150,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         const noteVendorDispatching = (): void => {
           assertCurrentRecovery();
           if (!recovery.noteVendorDispatching(generation)) return;
+          markSchedulerInterruptedTurnEventOwner(session.id, options.origin.runId);
           // 新 vendor turn 不能继承上一轮未收尾的后台 task id / done 兜底状态。
           clearBgFallbackTimer();
           runningBgTasks.clear();
@@ -2286,7 +2292,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         });
         return 'started';
       };
-      unregisterInterruptedTurnRecovery = registerSchedulerInterruptedTurnRecovery(
+      const unregister = registerSchedulerInterruptedTurnRecovery(
         session.id,
         options.origin.runId,
         scheduleInterruptedTurnResume,
@@ -2307,6 +2313,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
         },
         () => recovery.isPending,
       );
+      if (settled) unregister();
+      else unregisterInterruptedTurnRecovery = unregister;
       const armBgFallbackTimer = (): void => {
         clearBgFallbackTimer();
         bgFallbackTimer = setTimeout(() => {
@@ -2318,7 +2326,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }, BG_TASK_IDLE_FALLBACK_MS);
         bgFallbackTimer.unref?.();
       };
-      const off = session.onEvent((ev: AgentEvent) => {
+      const eventOff = session.onEvent((ev: AgentEvent) => {
         const eventRunId = ev.turnOrigin?.runId;
         if (!isSchedulerInterruptedTurnEventOwnedBy(
           session.id,
@@ -2405,6 +2413,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
           fail(new Error(extractErr(ev.data)));
         }
       });
+      if (settled) eventOff();
+      else off = eventOff;
       stopListeningTurn = (): void => {
         cleanup();
       };
@@ -2414,6 +2424,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
     void turnFinished.catch(() => undefined);
     return {
       turnFinished,
+      markTurnAccepted: () => {
+        markSchedulerInterruptedTurnEventOwner(session.id, options.origin.runId);
+      },
       stopListening: (): void => {
         if (stopped) return;
         stopped = true;

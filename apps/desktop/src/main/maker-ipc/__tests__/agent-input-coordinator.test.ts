@@ -6046,6 +6046,41 @@ describe('AgentInputCoordinator scheduler 排队心跳(review 反馈回归)', ()
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
   });
 
+  it('续跑认领终态时立即释放匹配的 scheduler activeTurn', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'sched-claimed-terminal';
+    const origin = { ...schedOrigin, runId: 'run-claimed' } as const;
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      h.setRunning(true);
+      return { kind: 'session-dispatch', dispatched: true } as never;
+    });
+    h.coordinator.enqueue(sid, makeItem('c1', 'hb', { origin }));
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('c2', 'next one'));
+    await flush();
+
+    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'another-run')).toBe(false);
+    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'run-claimed')).toBe(true);
+    expect(h.coordinator.settleClaimedSchedulerTurn(sid, 'run-claimed')).toBe(false);
+    expect(
+      (h.coordinator as unknown as { getState: (id: string) => { activeTurn: unknown } })
+        .getState(sid).activeTurn,
+    ).toBeNull();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // The hidden recovery can fail before dispatch and therefore produce no new running/done
+    // event. Once the host busy boundary clears, the normal retry tick must drain the tail.
+    h.sendToAgent.mockImplementationOnce(async () => ({
+      kind: 'session-dispatch', dispatched: true,
+    }) as never);
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
   it('普通用户项收到终态 error 时仍保留 active-turn recovery', async () => {
     // 上一条只对 scheduler 来源生效 —— 交互输入的重试入口不受影响。
     const h = createHarness();
