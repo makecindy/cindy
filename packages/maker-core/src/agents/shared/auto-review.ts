@@ -237,12 +237,31 @@ function redirectionTargets(command: string): string[] {
  */
 const UNPROVABLE_WRITE_TARGET = '\u0000unprovable-write-target';
 
+/**
+ * 是否是"解压"模式(会往文件系统写),而非只列出/创建归档。
+ *   - tar:`-x`/`--extract`/`--get` 才解压;`-c`(创建)`-t`(列出)`-r/-u`(追加)不算写落地目录。
+ *   - unzip:默认就是解压;只有 `-l`/`-t`/`-v`/`-z`(列出/校验/注释)不写文件。
+ */
+function isArchiveExtraction(bin: string, args: readonly string[]): boolean {
+  if (bin === 'unzip') {
+    return !args.some((t) => /^-[a-zA-Z]*[ltvz]$/.test(t) && !t.startsWith('--'));
+  }
+  return args.some((t) => t === '--extract' || t === '--get' || /^-[a-zA-Z]*x/.test(t));
+}
+
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
   const args = tokens.slice(1);
   const operands = positionalOperands(args);
   if (bin === 'tee' || bin === 'sponge') return operands;
   if (bin === 'cp' || bin === 'mv' || bin === 'install' || bin === 'rsync' || bin === 'ln') {
+    // `install -d/--directory DIR...`:第四种用法只创建目录,**全部操作数都是写目标**、且可能只有一个
+    // (codex 报 `install -d /etc/cron.d` 因"至少两个操作数"的规则而取不到目标)。
+    // `-d` 可出现在短选项簇里(`install -dm755 /etc/x` = -d + -m 755),不能只匹配末位。
+    // 大小写敏感:`-D`(--create-leading-dirs)仍是"复制文件"语义,末位操作数才是目标,不能误入本分支。
+    if (bin === 'install' && args.some((t) => t === '--directory' || /^-[a-zA-Z]*d/.test(t))) {
+      return operands;
+    }
     // `-t DIR` / `--target-directory=DIR`:目标目录由选项给出,**不是**末位操作数
     // (codex 报 `cp -t /etc payload` 会把 payload 当目标、长选项形态则完全取不到目标)。
     for (let i = 0; i < args.length; i++) {
@@ -323,6 +342,12 @@ function argumentWriteTargets(tokens: string[]): string[] {
       if (valueFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
       const m = attachedFlags.exec(t);
       if (m) out.push(m[1]);
+    }
+    // 解压**不带落地目录选项**时写入当前目录:归档成员的相对路径(如 `hosts`)会落在有效 cwd 下,
+    // cwd=/etc 时即覆盖 /etc/hosts(codex 报;unzip 同缺口)。用 `.` 表示"当前目录",由调用方按
+    // 有效 cwd 解析 —— 区内解压照常留灰区,cwd 落系统目录才升红线。
+    if (out.length === 0 && (bin === 'tar' || bin === 'unzip') && isArchiveExtraction(bin, args)) {
+      return ['.'];
     }
     return out;
   }
@@ -804,7 +829,9 @@ function unwrapCommand(
         ? /^(?:--setuid|--setgid|--propagation|--map-user|--map-group|--wd|--root|-S|-G|-w|-R)$/
         : head === 'nsenter'
           ? /^(?:--target|--wd|--root|--setuid|--setgid|-t|-w|-r|-S|-G)$/
-          : /^(?:--reuid|--regid|--groups|--securebits|--pdeathsig|--selinux-label|--apparmor-profile|--ambient-caps|--inh-caps|--bounding-set|--rlimit)$/;
+          // setpriv 的带值选项:除 --reuid/--regid,还有 --euid/--ruid/--egid/--rgid(codex 报:遗漏它们
+          // 会让解析停在 uid 值 `0` 而看不到内层 rm)。
+          : /^(?:--reuid|--regid|--euid|--ruid|--egid|--rgid|--groups|--securebits|--pdeathsig|--selinux-label|--apparmor-profile|--ambient-caps|--inh-caps|--bounding-set|--rlimit)$/;
       let i = 1;
       let rootChanged = false;
       while (i < toks.length) {

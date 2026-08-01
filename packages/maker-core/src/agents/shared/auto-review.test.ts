@@ -1813,6 +1813,43 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
   });
 });
 
+describe('install -d / setpriv --euid / 解压默认落当前目录(第四十三批评审)', () => {
+  it('install -d/--directory 只创建目录时,全部操作数都是写目标', () => {
+    for (const c of ['install -d /etc/cron.d', 'install --directory /System/Library/x', 'install -dm755 /etc/x']) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:建区内目录、或 /usr/local(FHS local 层级)→ 灰区。
+    expect(classifyShellCommand('install -d dist/assets', roots)).toBe('prompt');
+    expect(classifyShellCommand('install -d /usr/local/share/x', roots)).toBe('prompt');
+  });
+
+  it('setpriv 的 --euid/--ruid/--egid/--rgid 带值选项不遮蔽内层命令', () => {
+    for (const c of [
+      'setpriv --euid 0 rm -rf /outside',
+      'setpriv --ruid 0 rm -rf /outside',
+      'setpriv --egid 0 rm -rf /outside',
+      'setpriv --rgid 0 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    expect(classifyShellCommand('setpriv --euid 1000 ls', roots)).toBe('auto-approve');
+  });
+
+  it('解压不带落地目录选项时写当前目录:cwd 落系统目录 → 必问', () => {
+    // 归档成员的相对路径(如 `hosts`)会落在有效 cwd 下 → cwd=/etc 即覆盖 /etc/hosts。
+    expect(classifyShellCommand('tar -xf /tmp/payload.tar', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    expect(classifyShellCommand('unzip /tmp/p.zip', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    expect(classifyShellCommand('cd /etc && tar -xf /tmp/p.tar', roots)).toBe('prompt-each-time');
+    // 反例:区内解压、显式 -C 到区内、以及**非解压**模式(打包/列出)都不该被打断。
+    expect(classifyShellCommand('tar -xf pkg.tar', roots)).toBe('prompt');
+    expect(classifyShellCommand('tar -xzf pkg.tgz -C dist', roots)).toBe('prompt');
+    expect(classifyShellCommand('cd build && tar -xf /tmp/p.tar', roots)).toBe('prompt');
+    expect(classifyShellCommand('tar -czf out.tgz src', roots, { cwd: '/etc' })).toBe('prompt');
+    expect(classifyShellCommand('tar -tvf pkg.tgz', roots, { cwd: '/etc' })).toBe('prompt');
+    expect(classifyShellCommand('unzip -l pkg.zip', roots, { cwd: '/etc' })).toBe('prompt');
+  });
+});
+
 describe('unshare/nsenter/setpriv 启动器 + `!` 否定前缀(第四十二批评审)', () => {
   it('命名空间/权限启动器执行的命令被解包,区外递归删除不漏', () => {
     for (const c of [
