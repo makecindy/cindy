@@ -84,6 +84,7 @@ import { createHookBindingStore } from './bindings.js';
 import {
   buildGroupContextPrefix,
   listTelegramKnownGroups,
+  mergeTelegramGroupActivationViews,
   resetGroupContextCursors,
 } from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
@@ -900,10 +901,7 @@ export function registerHookControlIpc(): void {
       }
       const knownGroups = await listTelegramKnownGroups(binding.principalId);
       return {
-        groups: knownGroups.map((group) => ({
-          ...group,
-          activation: behavior.groupActivation[group.chatId] === 'always' ? 'always' : 'mention',
-        })),
+        groups: mergeTelegramGroupActivationViews(knownGroups, behavior.groupActivation),
       };
     } catch (err) {
       throwHookPrefsError(err);

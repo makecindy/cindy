@@ -127,9 +127,10 @@ async function resolveNewSessionConfig(
   const resolved = resolveHookSessionConfig(
     {
       readDefaults: () =>
-        readImDefaultSettings(
-          sourceIm === 'slack' ? 'slack' : sourceIm === 'telegram' ? 'telegram' : undefined,
-        ),
+        // 官方 Telegram hook 与个人 Bot 是两个独立入口。个人 Bot 使用
+        // channel='telegram'；官方群继续读取 global，避免任一设置卡静默
+        // 改写另一入口的新会话路由。
+        readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined),
       // 可执行清单按**启用**口径,不叠加「显示 / 隐藏」偏好:隐藏只是陈列过滤
       // (选择器不列),被 IM 显式点名或兜底选中仍然合法;停用的模型与供应商已由
       // visibleModelUnion 内建的准入过滤(model.disabled / suspended)剔除,点名

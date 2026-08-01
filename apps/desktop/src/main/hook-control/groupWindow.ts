@@ -299,3 +299,36 @@ export async function listTelegramKnownGroups(
     .limit(50);
   return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
 }
+
+export interface TelegramGroupActivationView {
+  chatId: string;
+  chatName: string | null;
+  activation: 'mention' | 'always';
+}
+
+/**
+ * 设置卡必须同时展示本地窗口里的群和服务端仍保留 override 的群。后者可能因
+ * principal 总量上限或最近 50 群限制而不在本地查询结果中；若不补回，用户将
+ * 无法把仍为 always 的群恢复为 mention。
+ */
+export function mergeTelegramGroupActivationViews(
+  knownGroups: ReadonlyArray<{ chatId: string; chatName: string | null }>,
+  groupActivation: Readonly<Record<string, 'mention' | 'always'>>,
+): TelegramGroupActivationView[] {
+  const groups = new Map<string, TelegramGroupActivationView>();
+  for (const group of knownGroups) {
+    groups.set(group.chatId, {
+      ...group,
+      activation: groupActivation[group.chatId] === 'always' ? 'always' : 'mention',
+    });
+  }
+  for (const [chatId, activation] of Object.entries(groupActivation)) {
+    if (groups.has(chatId)) continue;
+    groups.set(chatId, {
+      chatId,
+      chatName: chatId,
+      activation: activation === 'always' ? 'always' : 'mention',
+    });
+  }
+  return [...groups.values()];
+}

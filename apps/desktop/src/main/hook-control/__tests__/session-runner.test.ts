@@ -1906,7 +1906,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     expect(h.listProviders).toHaveBeenCalledTimes(1);
   });
 
-  it('官方 Telegram 新会话读取 telegram 渠道默认设置', async () => {
+  it('官方 Telegram 新会话读取 global 默认设置，不与个人 Bot 的 telegram scope 混用', async () => {
     h.useActualDefaults = true;
     h.readImDefaultSettings.mockReturnValue({
       agentKind: 'claude-code',
@@ -1922,7 +1922,7 @@ describe('providerId(来源/供应商)贯通 —— issue #854 回归', () => {
     );
 
     expect(outcome.status).toBe('ok');
-    expect(h.readImDefaultSettings).toHaveBeenCalledWith('telegram');
+    expect(h.readImDefaultSettings).toHaveBeenCalledWith(undefined);
   });
 
   it('新建: 当前无任何已连接来源时保持无 providerId(no-break)', async () => {

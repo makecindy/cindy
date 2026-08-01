@@ -23,6 +23,7 @@ import {
   buildGroupContextPrefix,
   groupLaneOf,
   listTelegramKnownGroups,
+  mergeTelegramGroupActivationViews,
   recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
@@ -197,6 +198,24 @@ describe('listTelegramKnownGroups', () => {
     await expect(listTelegramKnownGroups(PRINCIPAL_ID)).resolves.toEqual([
       { chatId: '-901', chatName: 'Renamed' },
       { chatId: '-902', chatName: 'Newer' },
+    ]);
+  });
+});
+
+describe('mergeTelegramGroupActivationViews', () => {
+  it('补回本地历史已淘汰但服务端仍保留 override 的群', () => {
+    expect(
+      mergeTelegramGroupActivationViews(
+        [
+          { chatId: '-901', chatName: 'Ops' },
+          { chatId: '-902', chatName: null },
+        ],
+        { '-901': 'always', '-999': 'always' },
+      ),
+    ).toEqual([
+      { chatId: '-901', chatName: 'Ops', activation: 'always' },
+      { chatId: '-902', chatName: null, activation: 'mention' },
+      { chatId: '-999', chatName: '-999', activation: 'always' },
     ]);
   });
 });
