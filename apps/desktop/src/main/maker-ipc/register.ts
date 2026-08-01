@@ -136,6 +136,7 @@ import {
   findParkedEngineSession,
   getMessageDeletionTarget,
   listMessagesForAgentHandoff,
+  supersedeRetriedUserTurn,
 } from '../localDb/ipc/messages.js';
 import { visibleMessageTextForConversationSearch } from '../localDb/conversationSearch.pure.js';
 import {
@@ -7734,6 +7735,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       await drainPersistQueue();
       return hasAssistantProgressAfterMessage(sessionId, userClientId);
     },
+    // retry-supersede:零产出重试的克隆行落库后,软删被取代的旧 user 行与其后的
+    // error 行(实现与守卫见 localDb/ipc/messages.supersedeRetriedUserTurn)。
+    supersedeRetriedUserTurn,
     getLastAssistantTranscriptUuid,
     onAcceptedQueuedMessage: (sessionId, item): Promise<void> | undefined => {
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。

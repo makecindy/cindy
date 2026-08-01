@@ -150,6 +150,16 @@ export interface AgentInputCoordinatorDeps {
    * 判定走 DB(代码确定性,规则 9);未注入时一律按零产出处理(向后兼容)。
    */
   hasAssistantProgressAfter?: (sessionId: string, userClientId: string) => Promise<boolean>;
+  /**
+   * retry-supersede:零产出重试的克隆行(supersedesUserClientId 非空)落库成功后,
+   * 把被取代的旧 user 行与其后的 role='error' 行软删(置 rewind_at + 广播),让
+   * 历史里只留重发的那一条。在 onPersisted 边界 fire-and-forget 调用:软删失败
+   * 只是退回"显示两条"的旧观感,绝不阻塞 vendor dispatch。未注入 = 保持旧行为。
+   */
+  supersedeRetriedUserTurn?: (
+    sessionId: string,
+    args: { supersededUserClientId: string; retryUserClientId: string },
+  ) => Promise<unknown>;
   getLastAssistantTranscriptUuid?: (sessionId: string) => string | undefined;
   /**
    * 一个**留下了 active-turn recovery 入口**的 terminal error 刚落地。host 据此决定
@@ -1587,6 +1597,10 @@ export class AgentInputCoordinator {
           // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
           files: undefined,
           mentions: undefined,
+          // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
+          // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
+          // 一并误藏(窗口从更早的行一直铺到本条)。
+          supersedesUserClientId: undefined,
           // 合成续跑指令显式普通执行:原消息若带 planMode=true,原样克隆会把隐藏
           // 指令路由进计划模式而不是立刻续跑(review P2)。与 sendUiTrigger 的
           // 合成 UI 动作同语义 —— planMode 强制 false。
@@ -1619,6 +1633,11 @@ export class AgentInputCoordinator {
         item = {
           ...recovery.item,
           clientId,
+          // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
+          // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
+          // 显式覆盖而非依赖展开继承:recovery.item 可能带着上一轮已消费的旧值
+          // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
+          supersedesUserClientId: recovery.item.clientId,
           chatMessage: {
             ...recovery.item.chatMessage,
             clientId,
@@ -2381,6 +2400,26 @@ export class AgentInputCoordinator {
                 // 辖区,若等到下一次 emit(turn done)才写,长 turn 内崩溃会把
                 // 已送达的消息二次恢复(issue #761)。
                 this.maybePersistQueueSnapshot(sessionId);
+              }
+              // retry-supersede:克隆重发行已确定落库,被取代的旧 user 行从此冗余,
+              // 软删它(连同其后的 error 行)。fire-and-forget:软删失败只是退回
+              // "显示两条"的旧观感,不拦派发;之后的取消路径也不需要回滚——文本
+              // 已经保存在本条新行里,用户的消息不会丢。
+              if (head.supersedesUserClientId) {
+                const supersededUserClientId = head.supersedesUserClientId;
+                void this.deps
+                  .supersedeRetriedUserTurn?.(sessionId, {
+                    supersededUserClientId,
+                    retryUserClientId: head.clientId,
+                  })
+                  ?.catch((err) => {
+                    log.warn('supersedeRetriedUserTurn failed', {
+                      sessionId,
+                      supersededUserClientId,
+                      retryUserClientId: head.clientId,
+                      error: err instanceof Error ? err.message : String(err),
+                    });
+                  });
               }
               await this.deps.beforeDispatchUserTurn?.(sessionId, head);
               if (!this.isActiveTurnCurrent(sessionId, active)) {
