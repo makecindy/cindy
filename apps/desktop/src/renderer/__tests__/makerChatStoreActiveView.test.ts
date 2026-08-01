@@ -246,6 +246,36 @@ describe('makerChatStore active view tracking', () => {
     expect(snapshot.oldestMessageId).toBe('older-plan');
   });
 
+  it('caps plan-only initial history backfill for sessions without plan snapshots', async () => {
+    const sessionId = sid('initial-plan-backfill-cap');
+    vi.mocked(messageService.list).mockClear();
+    const page = (prefix: string, startOffsetSeconds: number) =>
+      Array.from({ length: 50 }, (_, i) =>
+        dbMessage(
+          sessionId,
+          `${prefix}-${String(i).padStart(2, '0')}`,
+          `${prefix} message ${i}`,
+          new Date(BASE_TIME.getTime() + (startOffsetSeconds + i) * 1000).toISOString(),
+        ),
+      );
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(page('latest', 300))
+      .mockResolvedValueOnce(page('older-1', 200))
+      .mockResolvedValueOnce(page('older-2', 100))
+      .mockResolvedValueOnce(page('older-3', 0))
+      .mockResolvedValueOnce(page('older-4', -100));
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    expect(messageService.list).toHaveBeenCalledTimes(4);
+    expect(messageService.list).toHaveBeenNthCalledWith(4, sessionId, {
+      limit: 50,
+      before: 'older-2-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-3-00');
+  });
+
   it('enterView disposer leaves the session', () => {
     const sessionId = sid('disposer');
     const dispose = enter(sessionId);

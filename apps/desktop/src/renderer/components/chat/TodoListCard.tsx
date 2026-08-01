@@ -132,6 +132,7 @@ export function TodoListCard({
         <button
           type="button"
           onClick={() => setRevealed((prev) => !prev)}
+          aria-expanded={revealed}
           className={cn(
             'flex items-center gap-2 rounded-full',
             'border border-[var(--msg-tool-card-border)]',

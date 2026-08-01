@@ -5443,7 +5443,8 @@ function ensureInitialMessages(sessionId: string): void {
       // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
       // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
       //
-      // 上限 10 页(500 行)防御异常长的连续无锚点/无计划队列。
+      // 无锚点仍按 10 页(500 行)兜底；单纯为了计划胶囊找边界只多看 3 页,
+      // 避免无计划长会话冷开稳定付出 500 行额外拉取。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5457,13 +5458,16 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
       let hasMore = serverMessagePageHasMore(existing);
-      const MAX_BACKFILL_PAGES = 10;
+      const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
+      const MAX_PLAN_BACKFILL_PAGES = 3;
       let pagesFetched = 0;
-      while (
-        hasMore &&
-        pagesFetched < MAX_BACKFILL_PAGES &&
-        (merged.every(isNonAnchorHistoryRow) || !historyRowsContainPlanSnapshot(merged))
-      ) {
+      while (hasMore) {
+        const needsAnchorBackfill =
+          merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
+        const needsPlanBackfill =
+          !historyRowsContainPlanSnapshot(merged) && pagesFetched < MAX_PLAN_BACKFILL_PAGES;
+        if (!needsAnchorBackfill && !needsPlanBackfill) break;
+
         pagesFetched += 1;
         try {
           const older = await listMessagesFor(sessionId, {
@@ -9496,7 +9500,7 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
 }
 
 function historyRowsContainPlanSnapshot(rows: Message[]): boolean {
-  return findLatestMessageTodoInsertion(mapServerMessages([...rows])) !== null;
+  return findLatestMessageTodoInsertion(mapServerMessages(rows)) !== null;
 }
 
 function shouldStopRemoteReconciliationAtOverlap(
