@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GhostSubscriptionGateway,
+  GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
   isGhostEligibleSessionRow,
@@ -80,8 +81,28 @@ describe('did- 旁听扇出', () => {
     running.add('b');
     gw.publish('turn', 'did-turn-start', TURN_DATA);
     gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'ignored' });
     expect(sent.map((s) => s.ghostId)).toEqual(['a', 'a']);
     expect(sent.map((s) => (s.payload as { seq: number }).seq)).toEqual([1, 2]);
+  });
+
+  it('activity topic 复用同一扇出/seq/buffer/wake 管道', async () => {
+    const { gw, sent, running, deps } = makeGateway({
+      listGhosts: () => [ghost('a', { topics: ['activity'] })],
+    });
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'b1' });
+    expect(sent).toHaveLength(0);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(deps.wake).toHaveBeenCalledOnce();
+    expect(sent[0]?.payload).toMatchObject({
+      topic: 'activity',
+      name: 'did-thinking-start',
+      seq: 1,
+      data: { sessionId: 's1', blockId: 'b1' },
+    });
+    running.add('a');
+    gw.publish('activity', 'did-thinking-end', { sessionId: 's1', blockId: 'b1' });
+    expect(sent[1]?.payload).toMatchObject({ topic: 'activity', seq: 2 });
   });
 
   it('熄灯缓冲:事件触发唤醒,醒后按序补投', async () => {
@@ -115,6 +136,47 @@ describe('did- 旁听扇出', () => {
     // 补投保序:seq 严格递增
     const seqs = sent.map((s) => (s.payload as { seq: number }).seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  });
+});
+
+describe('GhostActivityTracker', () => {
+  it('按 thinking blockId 边界只发元数据,不发正文', () => {
+    const events: Array<{ name: string; data: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: { activity: (name, data) => events.push({ name, data }) },
+    });
+    tracker.beginTurn();
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'delta', blockId: 'b1', text: 'secret reasoning' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'secret reasoning' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'duplicate' } });
+    expect(events).toEqual([
+      { name: 'did-thinking-start', data: { sessionId: 's1', blockId: 'b1' } },
+      { name: 'did-thinking-end', data: { sessionId: 's1', blockId: 'b1' } },
+    ]);
+    expect(events.some((event) => JSON.stringify(event).includes('secret reasoning'))).toBe(false);
+  });
+
+  it('approval 与 user-input 生命周期分别映射, finishTurn 兜底结束', () => {
+    const names: string[] = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: { activity: (name) => names.push(name) },
+    });
+    tracker.beginTurn();
+    tracker.startInteraction('permission', 'p1');
+    tracker.startInteraction('plan_review', 'p2');
+    tracker.startInteraction('ask_user_question', 'q1');
+    tracker.finishTurn();
+    expect(names).toEqual([
+      'did-approval-start',
+      'did-approval-end',
+      'did-approval-start',
+      'did-user-input-start',
+      'did-approval-end',
+      'did-user-input-end',
+    ]);
   });
 });
 

@@ -361,7 +361,10 @@ import {
   readOrcaWorkerOutputReadOnly,
 } from './orcaDiagnostics.js';
 import { createMakerSendTransaction } from './makerSendTransaction.js';
-import { installDesktopInteractionHandler } from './interactionRouter.js';
+import {
+  installDesktopInteractionHandler,
+  installInteractionLifecycleObserver,
+} from './interactionRouter.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
 import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
@@ -2716,6 +2719,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   // 订阅槽①旁听 tap(独立监听,叠加在主转发之外互不干扰):AgentEvent →
   // did-turn-*。资格(用户主会话)与自动化轮次过滤都在 tap 内部,这里零逻辑。
   const ghostSessionTap = createGhostSessionTap(session.id);
+  registration.disposers.push(() => {
+    ghostSessionTap.dispose();
+    installInteractionLifecycleObserver(session, null);
+  });
   registration.disposers.push(session.onEvent((event: AgentEvent) => {
     ghostSessionTap.handleEvent(
       event as { type: string; data?: unknown; source?: string; turnOrigin?: { kind?: string } },
@@ -3678,6 +3685,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
 
   // 注入 interaction listener (permission/ask/plan 三合一,renderer 按 kind 弹不同 UI)
   installDesktopInteractionListener(session);
+  installInteractionLifecycleObserver(session, ghostSessionTap.interactionObserver);
 }
 
 /**

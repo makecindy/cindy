@@ -439,11 +439,12 @@ export interface GhostCindyNeeds {
 /**
  * 订阅槽 did- 旁听主题(卡槽①,2026-07-12 开闸)。v1 全部是**元数据级**:
  * turn = 轮次开始/结束(agent/模型/耗时/用量,不含消息内容);
+ * activity = 轮次内思考/审批/等待用户输入的开始结束边界(只含 id 元数据);
  * session = 会话创建/归档/切换(切换 = 用户把哪个会话切到台前,2026-07-13 增)。
  * 正文级主题(消息内容旁听)刻意不开——隐私最重,等真实场景再议,权限文案
  * 也要另分一档。
  */
-export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session'] as const;
+export const GHOST_SUBSCRIBE_TOPICS = ['turn', 'session', 'activity'] as const;
 export type GhostSubscribeTopic = (typeof GHOST_SUBSCRIBE_TOPICS)[number];
 
 /**
@@ -5353,13 +5354,23 @@ export const GHOST_HOOK_FUSE_THRESHOLD = 3;
  *  撑爆消息;提示词优化产物通常远小于此。 */
 export const GHOST_HOOK_REWRITE_MAX_CHARS = 16_000;
 
-/** did- 旁听事件名(topic 归属:turn / session)。 */
+/** activity topic 的旁听事件名。 */
+export type GhostActivityEventName =
+  | 'did-thinking-start'
+  | 'did-thinking-end'
+  | 'did-approval-start'
+  | 'did-approval-end'
+  | 'did-user-input-start'
+  | 'did-user-input-end';
+
+/** did- 旁听事件名(topic 归属:turn / session / activity)。 */
 export type GhostDidEventName =
   | 'did-turn-start'
   | 'did-turn-end'
   | 'did-session-created'
   | 'did-session-archived'
-  | 'did-session-switched';
+  | 'did-session-switched'
+  | GhostActivityEventName;
 
 /** did-turn-start 载荷(全元数据,无消息内容)。 */
 export interface GhostEventTurnStartData {
@@ -5388,6 +5399,29 @@ export interface GhostEventSessionData {
   workdir?: string;
 }
 
+/** thinking 活动边界；只暴露稳定 blockId，不暴露 reasoning 正文。 */
+export interface GhostEventThinkingData {
+  sessionId: string;
+  blockId: string;
+}
+
+/** 审批/用户输入活动边界；只暴露 requestId，不暴露请求或回答内容。 */
+export interface GhostEventInteractionActivityData {
+  sessionId: string;
+  requestId: string;
+}
+
+export type GhostEventActivityData =
+  | GhostEventThinkingData
+  | GhostEventInteractionActivityData;
+
+/** 所有 did- 旁听事件共享的安全元数据载荷。 */
+export type GhostDidEventData =
+  | GhostEventTurnStartData
+  | GhostEventTurnEndData
+  | GhostEventSessionData
+  | GhostEventActivityData;
+
 /**
  * 下行:主机 → 意识的事件推送(经管子 onHostMessage 到达)。
  * did- 分支带 topic/seq(每意识单调递增,可自查漏收;dropped = 上一段
@@ -5402,7 +5436,7 @@ export type GhostPipeEventPush =
       seq: number;
       ts: number;
       dropped?: number;
-      data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData;
+      data: GhostDidEventData;
     }
   | {
       type: 'event';

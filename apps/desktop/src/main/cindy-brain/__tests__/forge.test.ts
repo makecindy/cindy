@@ -570,6 +570,11 @@ describe('FORGE_GUIDE', () => {
       'cindy.confirm',
       '只代表问到了,答案看',
       '全局同时只有一个确认框',
+      '"turn", "session", "activity"',
+      'did-thinking-{start,end}',
+      'did-approval-{start,end}',
+      'did-user-input-{start,end}',
+      '不会给 reasoning、工具',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

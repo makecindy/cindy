@@ -1552,7 +1552,7 @@ cindy.onHostMessage(async function (msg) {
 \`\`\`json
 "slots": [..., "subscribe"],
 "subscribe": {
-  "topics": ["turn", "session"],                        // did- 旁听(元数据,不含消息内容)
+  "topics": ["turn", "session", "activity"],           // did- 旁听(元数据,不含消息内容)
   "hooks": ["will-user-message", "will-assistant-message"]  // will- 拦截(声明任一必须 launch:"resident")
 },
 "launch": "resident"               // 拦截要求常驻在场(否则每条消息都等你冷启动)
@@ -1570,6 +1570,12 @@ cindy.onHostMessage(function (msg) {
     return;
   }
   // did-turn-start / did-session-created / did-session-archived 同理(见 topics)。
+  // activity topic 只提供内层活动边界元数据:
+  // did-thinking-{start,end}: { sessionId, blockId }(不含 reasoning 正文);
+  // did-approval-{start,end}: { sessionId, requestId };
+  // did-user-input-{start,end}: { sessionId, requestId }。
+  // approval = permission / plan_review; user-input = ask_user_question。
+  // did-turn-end 前主机会先补发仍在场的 activity end，插件可据此清空内层状态。
   if (msg.name === 'did-session-switched') {
     // 用户把某个会话切到台前(切换会话 / 从非会话页切回都算)。
     // msg.data = { sessionId, workdir? }。连续停留同一会话不重发。
@@ -1601,8 +1607,10 @@ cindy.onHostMessage(function (msg) {
 硬规则(主机代码强制):
 - **旁听 topic**:\`turn\`(轮次开始/结束,带 agent / 模型 / 耗时 / token 用量)、
   \`session\`(会话创建 / 归档 / 切换——切换 = 用户把哪个会话切到台前,连续停留
-  同一会话不重发)。**只有元数据,永远不含消息内容**(v1 不开正文旁听)。
-  没声明的 topic 主机不投;
+  同一会话不重发)、\`activity\`(思考 / 审批 / 等待用户输入的开始结束边界)。
+  activity 只带 \`sessionId\` + \`blockId\` 或 \`requestId\`;**不会给 reasoning、工具
+  input、命令、文件内容、计划正文、问题内容或答案**。旧插件不声明 activity 时行为
+  完全不变;没声明的 topic 主机不投;
 - **只覆盖你自己的主会话**:orca worker、后台自动化会话不投(与你无关的噪音);
 - **旁听是 fire-and-forget**:主机投完即走,你崩了/慢了不影响任何会话;熄灯期事件
   进队列(上限 100,溢出丢最旧,下一条带 \`dropped\` 计数),事件到达会把你按需

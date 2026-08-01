@@ -164,9 +164,11 @@ import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import {
   GhostSubscriptionGateway,
+  GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
   isGhostEligibleSessionRow,
+  type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
 } from './subscriptionGateway.js';
@@ -1186,6 +1188,11 @@ async function isGhostEligibleSession(
   }
 }
 
+type PendingActivityRequest = {
+  kind: GhostInteractionActivityKind;
+  requestId: string;
+};
+
 /**
  * 会话事件 tap 工厂(register.ts wireSessionToIpc 对每个新会话叠加一个
  * onEvent 监听):把 AgentEvent 折叠成 did-turn-* 发进网关。
@@ -1194,15 +1201,47 @@ async function isGhostEligibleSession(
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
+  interactionObserver: {
+    onStart(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+    onEnd(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+  };
+  dispose(): void;
 } {
   let translator: GhostTurnTranslator | null = null;
+  let activity: GhostActivityTracker | null = null;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
   let state: 'unknown' | 'resolving' | 'eligible' | 'ineligible' = 'unknown';
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
-  const pending: MinimalAgentEvent[] = [];
+  const MAX_PENDING = 32;
+  type PendingTapItem =
+    | { type: 'event'; event: MinimalAgentEvent }
+    | { type: 'activity'; phase: 'start' | 'end'; request: PendingActivityRequest };
+  const pending: PendingTapItem[] = [];
+
+  const enqueue = (item: PendingTapItem): void => {
+    if (pending.length < MAX_PENDING) pending.push(item);
+  };
+
+  const applyActivity = (
+    phase: 'start' | 'end',
+    request: PendingActivityRequest,
+  ): void => {
+    if (!activity) {
+      enqueue({ type: 'activity', phase, request });
+      return;
+    }
+    if (phase === 'start') activity.startInteraction(request.kind, request.requestId);
+    else activity.endInteraction(request.kind, request.requestId);
+  };
 
   const kickResolve = (): void => {
     if (state !== 'unknown') return;
@@ -1224,18 +1263,35 @@ export function createGhostSessionTap(sessionId: string): {
         return;
       }
       const gw = getGhostSubscriptionGateway();
+      activity = new GhostActivityTracker({
+        sessionId,
+        sink: { activity: (name, data) => gw.publish('activity', name, data) },
+      });
       translator = new GhostTurnTranslator({
         sessionId,
         agent: info.agentKind ?? 'unknown',
         now: () => Date.now(),
         sink: {
-          turnStart: (d) => gw.publish('turn', 'did-turn-start', d),
-          turnEnd: (d) => gw.publish('turn', 'did-turn-end', d),
+          turnStart: (d) => {
+            gw.publish('turn', 'did-turn-start', d);
+            activity?.beginTurn();
+          },
+          turnEnd: (d) => {
+            activity?.finishTurn();
+            gw.publish('turn', 'did-turn-end', d);
+          },
         },
       });
       state = 'eligible';
       log.debug('ghost session tap eligible', { sessionId, replay: pending.length });
-      for (const ev of pending) translator.handleEvent(ev);
+      for (const item of pending) {
+        if (item.type === 'event') {
+          activity.handleEvent(item.event);
+          translator.handleEvent(item.event);
+        } else {
+          applyActivity(item.phase, item.request);
+        }
+      }
       pending.length = 0;
     });
   };
@@ -1244,12 +1300,38 @@ export function createGhostSessionTap(sessionId: string): {
     handleEvent(ev) {
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
       if (state === 'eligible') {
+        activity?.handleEvent(ev);
         translator?.handleEvent(ev);
         return;
       }
       if (state === 'ineligible') return;
-      if (pending.length < 32) pending.push({ type: ev.type, data: ev.data, source: ev.source });
+      enqueue({
+        type: 'event',
+        event: { type: ev.type, data: ev.data, source: ev.source },
+      });
       kickResolve();
+    },
+    interactionObserver: {
+      onStart(request, route) {
+        if (state === 'ineligible') return;
+        if (route?.origin?.kind && route.origin.kind !== 'desktop') return;
+        applyActivity('start', request);
+        if (state !== 'eligible') kickResolve();
+      },
+      onEnd(request, route) {
+        if (state === 'ineligible') return;
+        if (route?.origin?.kind && route.origin.kind !== 'desktop') return;
+        applyActivity('end', request);
+        if (state !== 'eligible') kickResolve();
+      },
+    },
+    dispose() {
+      translator?.dispose();
+      activity?.reset();
+      translator = null;
+      activity = null;
+      pending.length = 0;
+      state = 'ineligible';
     },
   };
 }

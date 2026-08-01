@@ -26,8 +26,12 @@ import {
   GHOST_HOOK_REWRITE_MAX_CHARS,
   GHOST_HOOK_TIMEOUT_MS,
   GHOST_SUB_QUEUE_MAX,
+  type GhostActivityEventName,
+  type GhostDidEventData,
   type GhostDidEventName,
-  type GhostEventSessionData,
+  type GhostEventActivityData,
+  type GhostEventInteractionActivityData,
+  type GhostEventThinkingData,
   type GhostEventTurnEndData,
   type GhostEventTurnStartData,
   type GhostPipeEventPush,
@@ -124,7 +128,7 @@ export class GhostSubscriptionGateway {
   publish(
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
-    data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData,
+    data: GhostDidEventData,
   ): void {
     for (const ghost of this.deps.listGhosts()) {
       if (!ghost.enabled) continue;
@@ -147,7 +151,7 @@ export class GhostSubscriptionGateway {
     ghost: InstalledGhost,
     topic: GhostSubscribeTopic,
     name: GhostDidEventName,
-    data: GhostEventTurnStartData | GhostEventTurnEndData | GhostEventSessionData,
+    data: GhostDidEventData,
   ): void {
     const ghostId = ghost.manifest.id;
     const e = this.entry(ghostId);
@@ -491,6 +495,134 @@ export interface TurnEventSink {
   turnEnd(data: GhostEventTurnEndData): void;
 }
 
+export type GhostInteractionActivityKind =
+  | 'permission'
+  | 'plan_review'
+  | 'ask_user_question';
+
+export interface ActivityEventSink {
+  activity(
+    name: GhostActivityEventName,
+    data: GhostEventActivityData,
+  ): void;
+}
+
+/** 轮次内 activity 边界状态机：同步、O(1)、不读取正文。 */
+export class GhostActivityTracker {
+  private turnActive = false;
+  private thinkingBlockId: string | null = null;
+  private lastEndedThinkingBlockId: string | null = null;
+  private readonly interactionRequestIds: Record<'approval' | 'user-input', string | null> = {
+    approval: null,
+    'user-input': null,
+  };
+
+  constructor(private readonly opts: { sessionId: string; sink: ActivityEventSink }) {}
+
+  beginTurn(): void {
+    if (this.turnActive) this.finishTurn();
+    this.turnActive = true;
+    this.lastEndedThinkingBlockId = null;
+  }
+
+  handleEvent(ev: MinimalAgentEvent): void {
+    if (!this.turnActive) return;
+    if (ev.type !== 'thinking' || typeof ev.data !== 'object' || ev.data === null) return;
+    const data = ev.data as { stage?: unknown; blockId?: unknown };
+    if (typeof data.blockId !== 'string' || data.blockId.length === 0) return;
+    if (
+      data.stage !== 'start' &&
+      data.stage !== 'delta' &&
+      data.stage !== 'final' &&
+      data.stage !== 'redacted'
+    ) return;
+    if (data.stage === 'start' || data.stage === 'delta') {
+      this.startThinking(data.blockId);
+      return;
+    }
+    if (this.thinkingBlockId !== data.blockId) {
+      if (this.lastEndedThinkingBlockId === data.blockId) return;
+      this.startThinking(data.blockId);
+    }
+    this.endThinking(data.blockId);
+  }
+
+  startInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
+    if (!this.turnActive || !requestId) return;
+    this.replaceInteraction(kind === 'ask_user_question' ? 'user-input' : 'approval', requestId);
+  }
+
+  endInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
+    if (!this.turnActive) return;
+    const type = kind === 'ask_user_question' ? 'user-input' : 'approval';
+    if (this.interactionRequestIds[type] !== requestId) return;
+    this.emitInteraction(type, 'end', requestId);
+    this.interactionRequestIds[type] = null;
+  }
+
+  finishTurn(): void {
+    if (!this.turnActive) return;
+    if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
+    this.finishInteraction('approval');
+    this.finishInteraction('user-input');
+    this.lastEndedThinkingBlockId = null;
+    this.turnActive = false;
+  }
+
+  reset(): void {
+    this.turnActive = false;
+    this.thinkingBlockId = null;
+    this.lastEndedThinkingBlockId = null;
+    this.interactionRequestIds.approval = null;
+    this.interactionRequestIds['user-input'] = null;
+  }
+
+  private startThinking(blockId: string): void {
+    if (this.thinkingBlockId === blockId) return;
+    if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
+    this.thinkingBlockId = blockId;
+    this.lastEndedThinkingBlockId = null;
+    const data: GhostEventThinkingData = { sessionId: this.opts.sessionId, blockId };
+    this.opts.sink.activity('did-thinking-start', data);
+  }
+
+  private endThinking(blockId: string): void {
+    if (this.thinkingBlockId !== blockId) return;
+    const data: GhostEventThinkingData = { sessionId: this.opts.sessionId, blockId };
+    this.opts.sink.activity('did-thinking-end', data);
+    this.thinkingBlockId = null;
+    this.lastEndedThinkingBlockId = blockId;
+  }
+
+  private replaceInteraction(type: 'approval' | 'user-input', requestId: string): void {
+    const current = this.interactionRequestIds[type];
+    if (current === requestId) return;
+    if (current) this.emitInteraction(type, 'end', current);
+    this.interactionRequestIds[type] = requestId;
+    this.emitInteraction(type, 'start', requestId);
+  }
+
+  private finishInteraction(type: 'approval' | 'user-input'): void {
+    const requestId = this.interactionRequestIds[type];
+    if (!requestId) return;
+    this.emitInteraction(type, 'end', requestId);
+    this.interactionRequestIds[type] = null;
+  }
+
+  private emitInteraction(
+    type: 'approval' | 'user-input',
+    edge: 'start' | 'end',
+    requestId: string,
+  ): void {
+    const data: GhostEventInteractionActivityData = { sessionId: this.opts.sessionId, requestId };
+    if (type === 'approval') {
+      this.opts.sink.activity(edge === 'start' ? 'did-approval-start' : 'did-approval-end', data);
+    } else {
+      this.opts.sink.activity(edge === 'start' ? 'did-user-input-start' : 'did-user-input-end', data);
+    }
+  }
+}
+
 /** 从 done 事件的 usage 里尽力抽 token 数。三种真实形态都认:
  *  cc snake_case(input_tokens/cache_read_input_tokens…)、通用 camelCase、
  *  codex translator 形态(promptTokens/completionTokens/cachedTokens);
@@ -601,15 +733,23 @@ export class GhostTurnTranslator {
     }
   }
 
+  dispose(): void {
+    this.clearGraceTimer();
+    this.state = 'idle';
+  }
+
+  private clearGraceTimer(): void {
+    if (!this.graceTimer) return;
+    clearTimeout(this.graceTimer);
+    this.graceTimer = null;
+  }
+
   private finish(
     base: GhostEventTurnStartData,
     endReason: GhostEventTurnEndData['endReason'],
     usage: GhostEventTurnEndData['usage'],
   ): void {
-    if (this.graceTimer) {
-      clearTimeout(this.graceTimer);
-      this.graceTimer = null;
-    }
+    this.clearGraceTimer();
     // running 态直接定性(done 先于 status false 的容错路径)用当前时刻;
     // closing 态用 status(false) 到达时刻,宽限等待不算进 turn 时长。
     const endAt = this.state === 'closing' ? this.endedAt : this.opts.now();

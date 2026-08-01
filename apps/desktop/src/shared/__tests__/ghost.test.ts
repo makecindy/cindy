@@ -1339,9 +1339,9 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
   });
 
   it('topics 合法值放行并归一化进清单', () => {
-    const r = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    const r = validateGhostManifest(withSub({ topics: ['turn', 'session', 'activity'] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session'] });
+    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session', 'activity'] });
   });
 
   it('hooks 必须搭配 launch:"resident",否则拒装', () => {
