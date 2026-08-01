@@ -190,9 +190,11 @@ export function isProtectedSystemPath(target: string): boolean {
   // 先剥离 Windows extended-length / device namespace 前缀(`\\?\` `\\.\` `\\?\UNC\`):toForwardSlashes
   // 后它们变成 `//?/C:/…` / `//./C:/…`,会绕过盘符系统目录匹配落入灰区(copilot 报;与 desktop
   // filePathPolicy.stripWinNamespace 对齐)。UNC 前缀还原成 `//server/share`。
+  // 前缀可能是 `//?/`(toForwardSlashes 直转)或 `/?/`(normalizeTarget 折叠了双斜杠,copilot 报)→ 用
+  // `\/+` 兼容 1 个或多个前导斜杠。仅当其后是盘符或 UNC 才剥,避免误伤 POSIX `/./foo` 这类合法路径。
   const fwd = toForwardSlashes(target)
-    .replace(/^\/\/[?.]\/UNC\//i, '//')
-    .replace(/^\/\/[?.]\//, '');
+    .replace(/^\/+[?.]\/UNC\//i, '//')
+    .replace(/^\/+[?.]\/(?=[A-Za-z]:)/, '');
   return SYSTEM_WRITE_PATH_PATTERNS.some((re) => re.test(fwd));
 }
 
@@ -449,6 +451,13 @@ function unwrapCommand(
     cwdUnknown = next.cwdUnknown;
   };
   for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
+    // 前置环境赋值:bash simple-command 展开把 `NAME=val` 应用到命令环境后照常执行后面的命令
+    // (`FOO=1 rm -rf /outside`)。不消费它们会把 `FOO=1` 当可执行名而看不到真正的 rm(codex 报)→
+    // 先剥掉所有前导 assignment word,再识别真实执行器/包裹器。
+    let assignEnd = 0;
+    while (assignEnd < toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[assignEnd])) assignEnd++;
+    if (assignEnd > 0) toks = toks.slice(assignEnd);
+    if (toks.length === 0) break;
     // executableName 归一 `.exe`/大小写:`env.exe`/`timeout.exe` 等包裹器也要剥壳,否则 `env.exe`(dump 环境)
     // 或 `timeout.exe 5 rm -rf /outside`(内层破坏)会因包裹器没被识别而漏判。
     const head = executableName(toks[0]);
@@ -684,10 +693,13 @@ function commandRunsRemoteFetch(command: string, depth = 0): boolean {
     if (bin === 'curl' || bin === 'wget') return true;
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
-    // xargs 结构化取被包装 argv 再判(`xargs -n1 curl …`)。
+    // xargs 结构化取被包装 argv 再判(`xargs -n1 curl …`);未建模选项(如 `-x`)令 xargsCommandTokens
+    // 返回 null,此时退回扫任意 token 是否 curl/wget,不放过下载传播(greptile 报 `xargs -x curl … | ./run`)。
     if (bin === 'xargs') {
       const nested = xargsCommandTokens(tokens);
-      if (nested && nested.length > 0
+      if (nested === null) {
+        if (tokens.slice(1).some((t) => { const e = executableName(t); return e === 'curl' || e === 'wget'; })) return true;
+      } else if (nested.length > 0
         && commandRunsRemoteFetch(serializeArgvForReview(nested), depth + 1)) return true;
     }
     // parallel 选项文法复杂(`-j1` / `-j 1` / `:::`),不做完整建模:直接下载看任意 token 是否 curl/wget
@@ -770,7 +782,8 @@ function substitutionRunsRemoteFetch(text: string, _kind: 'command' | 'process',
 function substitutionBodies(text: string): string[] {
   const out: string[] = [];
   for (let i = 0; i < text.length; i++) {
-    const opensParen = (text[i] === '$' || text[i] === '<') && text[i + 1] === '(';
+    // `$(` 命令替换、`<(`/`>(` 进程替换(输入与**输出**两向都会起子进程执行,greptile 报 `echo >(eval "$X")`)。
+    const opensParen = (text[i] === '$' || text[i] === '<' || text[i] === '>') && text[i + 1] === '(';
     if (opensParen) {
       let depth = 1;
       let j = i + 2;
@@ -846,6 +859,8 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
       if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
     }
     if (bin === 'eval' || rawBin === 'eval') return true;
+    // 裸 Windows `set`(全环境导出,含凭证)= exfil 红线;cmd 载荷递归下探使 `cmd /c set` 也命中(codex 报)。
+    if (bareSetDumpsEnvironment(rawTokens)) return true;
     // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
     // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
     // 超出递归上限仍存在替换体 = 深层嵌套(`echo $(a $(b $(c $(eval …))))`)静态不可证清白 → fail-closed
@@ -997,6 +1012,14 @@ function destructiveRmTargets(tokens: string[]): string[] | null {
   const destructive = args.some((token) =>
     /^-[^-]*[rRfF]/.test(token) || /^--(?:recursive|force|dir)(?:=|$)/.test(token));
   return destructive ? positionalOperands(args) : null;
+}
+
+/**
+ * Windows cmd 裸 `set`(无参数)= 打印全部环境变量(含注入子进程的 provider API key/token),等价 POSIX
+ * 裸 `env`/`printenv` 的全环境导出 → exfil 红线。`set -e`/`set FOO=1`/`set /A x=1` 等带参形态不算(codex 报)。
+ */
+function bareSetDumpsEnvironment(tokens: string[]): boolean {
+  return executableName(tokens[0] ?? '') === 'set' && tokens.length === 1;
 }
 
 /** cmd.exe `/c`/`/k`/`/r` 后的载荷命令(其余全部构成待执行命令);非 cmd 启动器返回 null。 */

