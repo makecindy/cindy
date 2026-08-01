@@ -3782,6 +3782,7 @@
     "costBreakdownHeader": "モデル別:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "提案: {{suggestion}}",
+    "noBilledCost": "このターンの料金は現在取得できないため、使用量のみ表示しています",
     "suggestion": {
       "lowCache": "キャッシュヒット率が低く、このターンでは多くのコンテキストが再課金されています"
     }
@@ -5107,6 +5108,7 @@
       "turnCost": "このターンの消費",
       "turnCostEstimated": "このターンの token 価値(API 単価換算)",
       "turnCostEstimatedValue": "価値 {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "このユーザーターンの合計: {{cost}}",
       "userTurnCostDetailsTitle": "最終 SDK セグメント"
     },

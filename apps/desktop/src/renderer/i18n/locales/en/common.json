@@ -3784,6 +3784,7 @@
     "costBreakdownHeader": "By model:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "Suggestion: {{suggestion}}",
+    "noBilledCost": "Cost unavailable for this turn; showing usage only",
     "suggestion": {
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
     }
@@ -5109,6 +5110,7 @@
       "turnCost": "Cost this turn",
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "User-turn total: {{cost}}",
       "userTurnCostDetailsTitle": "Final SDK segment"
     },

@@ -290,6 +290,7 @@ import {
   codexUsageToTokens,
   recordSchedulerTurnCost,
   recordTurnCostOnMessage,
+  recordTurnUsageOnMessage,
 } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
@@ -3297,8 +3298,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               estimatedValues.length > 0
                 ? addRegionalMoney(estimatedValues)
                 : null;
+            const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
             if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
-              const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
               const changedScheduleId = await recordSchedulerTurnCost({
                 sessionId: session.id,
                 clientId: turnAssistantPersistId,
@@ -3307,6 +3308,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 turnOrigin: event.turnOrigin,
               });
               if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            } else {
+              // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
+              // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
+              await recordTurnUsageOnMessage({
+                sessionId: session.id,
+                clientId: turnAssistantPersistId,
+                turnUsageDetails,
+              });
             }
           }
         })();
@@ -3314,46 +3323,65 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 窄兜底: 罕见地 done 只带 total_cost_usd、没 modelUsage —— 拆不了 daily_model_usage,
         // 但至少用累计差把总额 / session / message 记上, 别漏整轮 (review #4)。
         const rawDelta = Math.max(0, cumulative - prevReportedCost);
-        if (rawDelta > 0) {
-          void (async () => {
-            let resolvedModel = 'unknown';
-            try {
-              const model = await modelPromise;
-              resolvedModel = model;
-            } catch { /* non-fatal: 保留 SDK 原始 cost */ }
-            // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
-            // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
-            // 避免把订阅 SDK 自报 cost 误记进计费)。
-            if (isSubscriptionDirectModel(resolvedModel)) return;
-            const providerId = getSessionProvider(session.id);
-            const observedRoute =
-              providerId == null ? readClaudeSessionRoute(session.id) : null;
-            const route: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : providerId === 'anthropic' || observedRoute === 'subscription'
-                ? 'subscription'
-                : providerId === 'xd' || observedRoute === 'gateway'
-                  ? 'xd-gateway'
-                  : providerId
-                    ? 'provider-api'
-                    : 'unknown';
-            if (route === 'subscription' || route === 'xd-gateway') return;
-            const ledgerCurrency =
-              (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
-            const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
-            recordTurnSpend(money);
-            recordSessionTurnSpend(session.id, money);
-            const changedScheduleId = await recordSchedulerTurnCost({
+        void (async () => {
+          let resolvedModel = 'unknown';
+          try {
+            const model = await modelPromise;
+            resolvedModel = model;
+          } catch { /* non-fatal: 保留 SDK 原始 cost */ }
+          const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
+          // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
+          // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
+          // 算不出来,UI 那一格据此退回显示 token 而不是空着。
+          const recordUsageOnly = async () => {
+            if (!turnAssistantPersistId) return;
+            await recordTurnUsageOnMessage({
               sessionId: session.id,
               clientId: turnAssistantPersistId,
-              money,
               turnUsageDetails,
-              turnOrigin: event.turnOrigin,
             });
-            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-          })();
-        }
+          };
+          if (rawDelta <= 0) {
+            await recordUsageOnly();
+            return;
+          }
+          // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
+          // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
+          // 避免把订阅 SDK 自报 cost 误记进计费)。
+          if (isSubscriptionDirectModel(resolvedModel)) {
+            await recordUsageOnly();
+            return;
+          }
+          const providerId = getSessionProvider(session.id);
+          const observedRoute =
+            providerId == null ? readClaudeSessionRoute(session.id) : null;
+          const route: BillingRoute = session.remoteHostId
+            ? 'unknown'
+            : providerId === 'anthropic' || observedRoute === 'subscription'
+              ? 'subscription'
+              : providerId === 'xd' || observedRoute === 'gateway'
+                ? 'xd-gateway'
+                : providerId
+                  ? 'provider-api'
+                  : 'unknown';
+          if (route === 'subscription' || route === 'xd-gateway') {
+            await recordUsageOnly();
+            return;
+          }
+          const ledgerCurrency =
+            (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
+          const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
+          recordTurnSpend(money);
+          recordSessionTurnSpend(session.id, money);
+          const changedScheduleId = await recordSchedulerTurnCost({
+            sessionId: session.id,
+            clientId: turnAssistantPersistId,
+            money,
+            turnUsageDetails,
+            turnOrigin: event.turnOrigin,
+          });
+          if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+        })();
       }
       // 与 spend 记账并列的另一个 turn-done side-effect: 刷新 Claude 账号月度配额
       // (LiteLLM /v2/user/info)。fire-and-forget, 模块内 2s 超时 + 10s 节流。
@@ -3456,7 +3484,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 避免 scheduler 的 Cost 汇总混入订阅价值或远端账号消耗。
           // fire-and-forget 不阻塞事件循环;价格表走 main 端内存 + 磁盘缓存,
           // stale 快返并后台刷新,
-          // 拉不到 / 模型无条目 → 本轮不显示。
+          // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
+          // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
+          const turnUsageDetails = buildTurnUsageDetails({
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+            cacheReadTokens: cachedTokens,
+            cacheCreateTokens: 0,
+            model: turnModel,
+          });
+          const recordCodexUsageOnly = async () => {
+            if (!turnAssistantPersistId) return;
+            await recordTurnUsageOnMessage({
+              sessionId: session.id,
+              clientId: turnAssistantPersistId,
+              turnUsageDetails,
+            });
+          };
           try {
             const pricing = isSubscriptionValue && !isCodexXaiProviderRoute
               ? await getModelPricing()
@@ -3486,13 +3530,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 cacheCreateTokensDelta: 0,
               });
             }
-            const turnUsageDetails = buildTurnUsageDetails({
-              inputTokens: promptTokens,
-              outputTokens: completionTokens,
-              cacheReadTokens: cachedTokens,
-              cacheCreateTokens: 0,
-              model: turnModel,
-            });
             if (money && money.amount > 0) {
               if (!isSubscriptionValue) {
                 void recordTurnSpend(money);
@@ -3506,9 +3543,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 turnOrigin: event.turnOrigin,
               });
               if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            } else {
+              await recordCodexUsageOnly();
             }
           } catch {
             // token row 已在价格请求前落库;价格失败只影响 API cost / message cost。
+            // 消息那一格仍要有事实可看:补落一次 token 明细。patch 是 agent_meta merge、
+            // 写的又是同一份明细,所以与上面成功分支重复执行也是幂等的(自身失败只 warn)。
+            await recordCodexUsageOnly();
           }
         })();
       }

@@ -112,5 +112,9 @@ export function buildTurnUsageTooltipLines({
   if (suggestionText) {
     lines.push(t('usageDetails.suggestionLine', { suggestion: suggestionText }));
   }
+  // 无金额时交代一句,避免「只有 token、没有钱」被读成事实缺失；这一层不猜测具体原因。
+  if (!formattedCost) {
+    lines.push(t('usageDetails.noBilledCost'));
+  }
   return lines;
 }

@@ -2304,6 +2304,38 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  // 无当前 segment 金额、只有整轮累计 + token 明细 = 桌面自动续跑的无价收尾轮。
+  // 累计金额必须一起落进 agentMeta,否则操作行会用 token 顶掉这一轮已经花掉的钱
+  // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+  it('keeps the user-round total from usage-only turn cost pushes', () => {
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:message-turn-cost', {
+      sessionId: 's1',
+      clientId: 'm1',
+      userTurnMoney: {
+        amount: 1.25,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      userTurnCostUsd: 1.25,
+      userTurnCostIsEstimate: true,
+      turnUsageDetails: { totalTokens: 2_100_000 },
+    });
+
+    const meta = remoteSessionStore.getMessages('s1')[0].agentMeta;
+    expect(meta).toMatchObject({
+      userTurnCost: { amount: 1.25, currency: 'USD' },
+      userTurnCostUsd: 1.25,
+      userTurnCostIsEstimate: true,
+      turnUsageDetails: { totalTokens: 2_100_000 },
+    });
+    // 当前 segment 没有报价 → 不写任何 segment 金额字段(不记账)。
+    expect(meta?.turnCost).toBeUndefined();
+    expect(meta?.turnCostUsd).toBeUndefined();
+  });
+
   it('patches existing messages from realtime model mismatch pushes', () => {
     remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
 

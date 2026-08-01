@@ -12,6 +12,7 @@
     "sentTime": "发送时间 {{time}}",
     "linkCopied": "链接已复制",
     "turnCostEstimate": "本轮{{cost}}",
+    "turnTokens": "本轮消耗 {{tokens}}",
     "turnCost": "本轮消耗 {{cost}}",
     "messageGenerating": "消息正在生成",
     "generating": "生成中",
@@ -121,7 +122,8 @@
     "justNow": "刚刚",
     "minutesAgo": "{{n}} 分钟前",
     "hoursAgo": "{{n}} 小时前",
-    "turnCostValue": "价值 {{value}}"
+    "turnCostValue": "价值 {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "取消标注",

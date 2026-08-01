@@ -4169,8 +4169,11 @@ function initGlobalListeners(): void {
       (legacyTurnCostUsd !== undefined
         ? legacyUsdMoney(legacyTurnCostUsd)
         : undefined);
-    if (!turnMoney || !(turnMoney.amount > 0)) return;
     const { sessionId, clientId } = p;
+    // 用户轮累计与当前 segment 金额是**两个独立事实**,必须各自判定 —— 一次用户请求
+    // 含多个 SDK segment 时,前面的 segment 有真实费用、收尾 segment 缺报价,payload
+    // 就只有 userTurnMoney + turnUsageDetails。把累计金额的解析放在 turnMoney 分支
+    // 之内,这一轮已经花掉的钱会被 token 顶掉(不变量正本见 shared/turnCostPayload.ts)。
     const userTurnMoney =
       normalizeRegionalMoney(p.userTurnMoney) ??
       (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
@@ -4180,6 +4183,31 @@ function initGlobalListeners(): void {
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
         ? p.userTurnCostUsd
         : undefined;
+    const userTurnCostPatch = userTurnMoney
+      ? {
+          userTurnMoney,
+          ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
+          userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
+        }
+      : {};
+    // 无当前 segment 金额 = main 的 recordTurnUsageOnMessage(算不出报价的轮次):
+    // 更新明细 + 可能存在的整轮累计,让 action bar 优先显示已花的钱、否则退回 token。
+    // 三者都没有才是真的无事可做。
+    if (!turnMoney || !(turnMoney.amount > 0)) {
+      if (!turnUsageDetails && !userTurnMoney) return;
+      setState(sessionId, (s) => {
+        const idx = s.messages.findIndex((m) => m.clientId === clientId);
+        if (idx < 0) return s;
+        const msgs = s.messages.slice();
+        msgs[idx] = {
+          ...msgs[idx],
+          ...userTurnCostPatch,
+          ...(turnUsageDetails ? { turnUsageDetails } : {}),
+        };
+        return { ...s, messages: msgs };
+      });
+      return;
+    }
     const resolvedTurnCostUsd =
       turnMoney.currency === 'USD'
         ? turnMoney.amount
@@ -4195,13 +4223,7 @@ function initGlobalListeners(): void {
           ? { turnCostUsd: resolvedTurnCostUsd }
           : {}),
         turnCostIsEstimate,
-        ...(userTurnMoney
-          ? {
-              userTurnMoney,
-              ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
-              userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
-            }
-          : {}),
+        ...userTurnCostPatch,
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
       };
       return { ...s, messages: msgs };
@@ -10018,6 +10040,26 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             ? legacyUsdMoney(legacyTurnCostUsd)
             : undefined)
         : undefined;
+    // 用户轮累计与当前 segment 费用各自独立读(不变量正本见 shared/turnCostPayload.ts):
+    // 收尾 segment 缺报价的轮次只落了 userTurnCost + turnUsageDetails,若把它嵌在
+    // persistedTurnMoney > 0 的分支里,重开会话后整轮已花的钱会被 token 顶掉。
+    const persistedUserTurnMoney =
+      m.role === 'assistant' && agentMeta
+        ? normalizeRegionalMoney(agentMeta.userTurnCost) ??
+          (typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+            ? legacyUsdMoney(agentMeta.userTurnCostUsd)
+            : undefined)
+        : undefined;
+    const persistedUserTurnCostPatch =
+      agentMeta && persistedUserTurnMoney
+        ? {
+            userTurnMoney: persistedUserTurnMoney,
+            ...(typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+              ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
+              : {}),
+            userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
+          }
+        : {};
     return {
       clientId: m.clientId,
       role: m.role,
@@ -10028,12 +10070,19 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         : {}),
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
+      // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
+      // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
       ...(m.role === 'assistant' && (
         agentMeta?.turnCompleted === true ||
-        (persistedTurnMoney?.amount ?? 0) > 0
+        (persistedTurnMoney?.amount ?? 0) > 0 ||
+        turnUsageDetails !== undefined
       )
         ? { turnCompleted: true }
         : {}),
+      // 本轮 token 明细独立于金额挂载:算不出报价的轮次只有它,UI 据此退回显示 token。
+      ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),
+      // 整轮累计费用同样独立挂载:无价收尾轮只有它,没有 turnCost。
+      ...persistedUserTurnCostPatch,
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
       agentMeta &&
@@ -10044,27 +10093,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
               persistedTurnMoney.currency === 'USD'
                 ? persistedTurnMoney.amount
                 : undefined;
-            const persistedUserTurnMoney =
-              normalizeRegionalMoney(agentMeta.userTurnCost) ??
-              (typeof agentMeta.userTurnCostUsd === 'number' &&
-              agentMeta.userTurnCostUsd > 0
-                ? legacyUsdMoney(agentMeta.userTurnCostUsd)
-                : undefined);
             return {
               turnMoney: persistedTurnMoney,
               ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
               turnCostIsEstimate: agentMeta.turnCostIsEstimate === true,
-              ...(persistedUserTurnMoney
-                ? {
-                    userTurnMoney: persistedUserTurnMoney,
-                    ...(typeof agentMeta.userTurnCostUsd === 'number' &&
-                    agentMeta.userTurnCostUsd > 0
-                      ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
-                      : {}),
-                    userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
-                  }
-                : {}),
-              ...(turnUsageDetails ? { turnUsageDetails } : {}),
             };
           })()
         : {}),

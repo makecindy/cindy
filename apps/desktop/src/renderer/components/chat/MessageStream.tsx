@@ -588,7 +588,10 @@ export function shouldBlockAssistantFork(
 function isCompletedAssistantMessage(message: ChatMessage): boolean {
   return message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
-    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0);
+    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
+    // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),
+    // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
+    message.turnUsageDetails !== undefined;
 }
 
 export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessage[]): Set<string> {
