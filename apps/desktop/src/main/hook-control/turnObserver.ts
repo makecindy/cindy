@@ -10,7 +10,7 @@
  *      (见 dispatcher 的 pending-reopen 记账与协议阶段 18)。
  *
  * 收口语义有几处不是"看着像就行"的细节, 复制第二份必然漂移:
- *   - done 时若还有在途后台 subagent, 延迟定格并用静默超时兜底;
+ *   - done 时若还有在途后台 subagent, 延迟定格直到任务终态后的下一次 done;
  *   - silentStop done 不算收口, 挂到自动续跑守卫上, 只有 exhausted 才算失败;
  *   - 只有**终态** error 才失败 —— 非终态 error 是 agent 正在自愈(上游过载的
  *     自动重试), turn 还在跑, 但过程区必须留一行, 否则零产出的退避窗口里渠道
@@ -33,9 +33,6 @@ import {
 } from '../im/shared/turnActivity.js';
 import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
 
-/** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
-const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
-
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
  *
@@ -48,6 +45,12 @@ const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
  * 它触发时 fan out 的是终态 error 事件, 本观察器对终态 error 本来就收口 ——
  * 所以「observer 永不 settle → dispatcher 的队列槽位永不释放」那条路早就被堵上,
  * 与控制连接是否还在无关。
+ *
+ * 后台任务同样不能在 hook 层按静默时长猜成完成:它结束后可能通过
+ * task_notification 自动续跑新 turn。观察器一旦提前 settle,Telegram 群轮次
+ * 就会恢复原权限档并释放 host-turn lease,后续自动续跑可与桌面 turn 并发且重新
+ * 获得 Full access。后台任务无论静默多久都保留观察器;任务终态后的 done、用户
+ * Stop 引发的终态事件或 session closed/error 才是可证明的收口信号。
  *
  * 本 PR 一度在这里另起了一个裸 setTimeout, 上面四条一条都没有: 等交互和跑后台
  * 任务时会误杀, 合盖睡眠会误杀, 而且只 reject 观察者、**不 abort 底层 turn** ——
@@ -244,16 +247,8 @@ export function observeHookTurn(
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     const runningBgTasks = new Set<string>();
-    let waitingForBgTasks = false;
     let turnTerminalNotified = false;
-    let bgFallbackTimer: NodeJS.Timeout | undefined;
     let pendingSettleUnsub: (() => void) | undefined;
-    const clearBgTimer = (): void => {
-      if (bgFallbackTimer) {
-        clearTimeout(bgFallbackTimer);
-        bgFallbackTimer = undefined;
-      }
-    };
     const notifyTurnTerminal = (): void => {
       if (turnTerminalNotified) return;
       turnTerminalNotified = true;
@@ -269,7 +264,6 @@ export function observeHookTurn(
      * 走同一份拆装 —— 之前是三处各抄一遍, 新加一个定时器就得记着补三处。
      */
     const teardown = (): void => {
-      clearBgTimer();
       pendingSettleUnsub?.();
       pendingSettleUnsub = undefined;
       progress?.stop();
@@ -287,14 +281,6 @@ export function observeHookTurn(
       teardown();
       reject(err);
     };
-    const armBgTimer = (): void => {
-      clearBgTimer();
-      bgFallbackTimer = setTimeout(() => {
-        log.warn(`[hook-runner] bg task events silent, finalizing: ${session.id}`);
-        finish();
-      }, BG_TASK_IDLE_FALLBACK_MS);
-      bgFallbackTimer.unref?.();
-    };
     // 会话已死(见 ObservableSession.onStatusChange)。终态事件永远不会来了,
     // 按失败收口 —— 已累积的正文不足以判定这一轮真的完成了。
     const offStatus = session.onStatusChange((status) => {
@@ -302,7 +288,6 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
-      if (waitingForBgTasks) armBgTimer();
       if (ev.type === 'agent_task_update') {
         const data = ev.data as { taskId?: string; status?: string } | null;
         if (data && typeof data.taskId === 'string') {
@@ -442,8 +427,6 @@ export function observeHookTurn(
           return;
         }
         if (runningBgTasks.size > 0) {
-          waitingForBgTasks = true;
-          armBgTimer();
           return;
         }
         finish();

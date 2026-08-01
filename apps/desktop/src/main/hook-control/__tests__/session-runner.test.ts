@@ -1287,40 +1287,47 @@ describe('进度快照(turn.progress 链路)', () => {
   });
 
   it('Telegram 群后台任务及自动续跑完成前保持安全权限档和 turn lease', async () => {
-    const session = makeManualSession('sess-old');
-    fakeMaker.createSession.mockResolvedValueOnce(session);
-    const runner = createMakerHookSessionRunner({ log });
-    const pending = runner.run(
-      baseReq({
-        sessionId: 'sess-old',
-        isNew: false,
-        source: { im: 'telegram', userText: 'hi' },
-        laneKind: 'group',
-      }),
-    );
-    await flush();
+    vi.useFakeTimers();
+    try {
+      const session = makeManualSession('sess-old');
+      fakeMaker.createSession.mockResolvedValueOnce(session);
+      const runner = createMakerHookSessionRunner({ log });
+      const pending = runner.run(
+        baseReq({
+          sessionId: 'sess-old',
+          isNew: false,
+          source: { im: 'telegram', userText: 'hi' },
+          laneKind: 'group',
+        }),
+      );
+      await flush();
 
-    const cb = h.eventCbs.get('sess-old')!;
-    cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'running' } });
-    cb({ type: 'done', data: null });
-    await flush();
+      const cb = h.eventCbs.get('sess-old')!;
+      cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'running' } });
+      cb({ type: 'done', data: null });
+      await flush();
 
-    const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
-    expect(releaseLease).not.toHaveBeenCalled();
+      const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
+      expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
+      expect(releaseLease).not.toHaveBeenCalled();
 
-    let settled = false;
-    void pending.then(() => {
-      settled = true;
-    });
-    await flush();
-    expect(settled).toBe(false);
+      let settled = false;
+      void pending.then(() => {
+        settled = true;
+      });
+      await vi.advanceTimersByTimeAsync(10 * 60_000);
+      expect(settled).toBe(false);
+      expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
+      expect(releaseLease).not.toHaveBeenCalled();
 
-    cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'completed' } });
-    cb({ type: 'done', data: null });
-    await expect(pending).resolves.toMatchObject({ status: 'ok' });
-    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
-    expect(releaseLease).toHaveBeenCalledOnce();
+      cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'completed' } });
+      cb({ type: 'done', data: null });
+      await expect(pending).resolves.toMatchObject({ status: 'ok' });
+      expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+      expect(releaseLease).toHaveBeenCalledOnce();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('Telegram 群复用安全权限档会话也在后台续跑完成前持有 turn lease', async () => {
