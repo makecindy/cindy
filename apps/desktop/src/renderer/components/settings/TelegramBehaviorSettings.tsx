@@ -12,6 +12,7 @@ import { contactsService } from '@/lib/contactsService';
 import { cn } from '@/lib/utils';
 import type {
   TelegramHookBehavior,
+  TelegramHookBehaviorState,
   TelegramHookGroupActivationMode,
   TelegramHookKnownGroup,
 } from '../../../shared/hookControlIpc';
@@ -26,6 +27,31 @@ function i18nRoot(source: SettingsSource): string {
 const EMOJI_OPTIONS: Behavior['emojiReactions'][] = ['off', 'minimal', 'expressive'];
 const GROUP_QUOTE_OPTIONS: Behavior['replyQuoteGroup'][] = ['off', 'first', 'all'];
 const DM_QUOTE_OPTIONS: Behavior['replyQuoteDm'][] = ['off', 'first'];
+
+function mergeOfficialGroupActivation(
+  groups: readonly TelegramHookKnownGroup[],
+  groupActivation: TelegramHookBehaviorState['groupActivation'],
+): TelegramHookKnownGroup[] {
+  const merged = new Map(
+    groups.map((group) => [
+      group.chatId,
+      {
+        ...group,
+        activation:
+          groupActivation[group.chatId] === 'always' ? ('always' as const) : ('mention' as const),
+      },
+    ]),
+  );
+  for (const [chatId, activation] of Object.entries(groupActivation)) {
+    if (merged.has(chatId)) continue;
+    merged.set(chatId, {
+      chatId,
+      chatName: chatId,
+      activation: activation === 'always' ? 'always' : 'mention',
+    });
+  }
+  return [...merged.values()];
+}
 
 function SegmentedRow<T extends string>(props: {
   label: string;
@@ -478,13 +504,9 @@ export function TelegramGroupActivationSettings({
         ? window.electronAPI.hookControl.onTelegramBehaviorChanged((behavior) => {
             if (cancelled || pendingWrites.current > 0) return;
             const next =
-              groupsRef.current?.map((group) => ({
-                ...group,
-                activation:
-                  behavior.groupActivation[group.chatId] === 'always'
-                    ? ('always' as const)
-                    : ('mention' as const),
-              })) ?? null;
+              groupsRef.current === null
+                ? null
+                : mergeOfficialGroupActivation(groupsRef.current, behavior.groupActivation);
             groupsRef.current = next;
             confirmedRef.current = next;
             setGroups(next);
@@ -523,13 +545,10 @@ export function TelegramGroupActivationSettings({
             chatId,
             mode,
           );
-          const authoritative = (groupsRef.current ?? optimistic).map((group) => ({
-            ...group,
-            activation:
-              result.behavior.groupActivation[group.chatId] === 'always'
-                ? ('always' as const)
-                : ('mention' as const),
-          }));
+          const authoritative = mergeOfficialGroupActivation(
+            groupsRef.current ?? optimistic,
+            result.behavior.groupActivation,
+          );
           confirmedRef.current = authoritative;
           if (mounted.current && revision === latestRevision.current) {
             groupsRef.current = authoritative;

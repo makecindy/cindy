@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { TelegramHookBehaviorState } from '../../../../shared/hookControlIpc';
@@ -10,7 +10,9 @@ const api = vi.hoisted(() => ({
   setTelegramBehavior: vi.fn(),
   listTelegramGroups: vi.fn(),
   setTelegramGroupActivation: vi.fn(),
-  onTelegramBehaviorChanged: vi.fn(() => () => {}),
+  onTelegramBehaviorChanged: vi.fn<
+    (listener: (behavior: TelegramHookBehaviorState) => void) => () => void
+  >(() => () => {}),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -246,6 +248,30 @@ describe('official Telegram behavior settings', () => {
       expect(api.setTelegramGroupActivation).toHaveBeenCalledWith('-1001', 'always'),
     );
     expect(api.listTelegramGroups).toHaveBeenCalledOnce();
+  });
+
+  it('实时行为推送会补入本地群列表中尚不存在的 override', async () => {
+    let behaviorChanged: ((next: TelegramHookBehaviorState) => void) | undefined;
+    api.onTelegramBehaviorChanged.mockImplementationOnce((listener) => {
+      behaviorChanged = listener;
+      return () => {};
+    });
+    render(<TelegramGroupActivationSettings source="official" />);
+
+    expect(await screen.findByText('Ops')).toBeTruthy();
+    act(() => {
+      behaviorChanged?.({
+        ...behavior,
+        groupActivation: { '-1002': 'always' },
+      });
+    });
+
+    expect(screen.getAllByText('-1002').length).toBeGreaterThan(0);
+    const alwaysButtons = screen.getAllByRole('button', {
+      name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+    });
+    expect(alwaysButtons).toHaveLength(2);
+    expect(alwaysButtons[1]?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('群模式写入失败后回滚并保留重试入口', async () => {
