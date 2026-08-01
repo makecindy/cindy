@@ -388,11 +388,21 @@ describe('sendToSession ordering', () => {
     expect(setModelBlock).toContain(
       'return withSendToSessionLock(sessionId, async () => {',
     );
+    expect(setModelBlock).toContain(
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
+    );
+    expect(setModelBlock).toContain('return { deferred: false, superseded: true };');
     expectOrder(
       setModelBlock,
       'return withSendToSessionLock(sessionId, async () => {',
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
+    );
+    expectOrder(
+      setModelBlock,
+      'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
       'applySetModelThenCancelAgentSwitchIntent(',
     );
+    expect(source).toContain('withSessionLock: withSendToSessionLock,');
     expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
     expectOrder(
       directSendSwitchBlock,

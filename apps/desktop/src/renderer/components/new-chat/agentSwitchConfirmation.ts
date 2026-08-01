@@ -93,17 +93,17 @@ export type AgentSwitchAckAction =
  * - **写序号**(本端点选)对所有分支生效:用户又点了一次,本次 ack 整体作废。
  * - **意图修订号**保护「要把本次选择写成乐观意图值」的分支(apply-intent /
  *   apply-switched):外部权威值更新,就不能用旧选择盖回去。
- * - 同引擎 no-op 必须联合看修订号与当前内容,不能依赖 ack / push 的到达顺序:
- *   修订号未变时,当前非空仍是发起前的旧镜像(clear push 尚未到),继续收尾；修订号已变
- *   且当前为空,是本次 clear 已回流的预期终态,也继续收尾；只有修订号已变且当前仍非空
- *   才说明更新的跨引擎意图已经超车,此时丢弃本次 ack。单看修订号会误杀 clear 回流先到,
- *   单看内容则会误杀 ack 先到或覆盖外部新意图。
+ * - 同引擎 no-op 不能从 renderer 的「修订号 + 最终值」猜因果：外部 set→clear ABA 与
+ *   本次 clear 都会得到「修订号已变 + 当前为空」。新 host 因此返回 CAS 成功后的
+ *   `sameEngineRevision`，后续 SET_MODEL 带回该 token 再做一次 CAS；若请求已在 host
+ *   内被超车则返回 `sameEngineSuperseded` 直接丢弃。旧 host 没有因果 token，只在本地
+ *   修订号完全未变（ack 先于任何 push）时兼容执行，否则 fail-closed。
  */
 export function resolveAgentSwitchAckAction(args: {
   deferred: boolean;
   switched: boolean;
-  /** 响应到达时本地是否已无 pending 意图。 */
-  intentNowIsEmpty: boolean;
+  sameEngineRevision?: number;
+  sameEngineSuperseded?: boolean;
   freshness: AgentSwitchResponseFreshness;
 }): AgentSwitchAckAction {
   const { freshness } = args;
@@ -111,8 +111,11 @@ export function resolveAgentSwitchAckAction(args: {
   if (freshness.writeSeqNow !== freshness.writeSeqAtStart) return 'discard';
   if (args.deferred) return isAgentSwitchResponseFresh(freshness) ? 'apply-intent' : 'discard';
   if (!args.switched) {
-    const intentChanged = freshness.intentRevNow !== freshness.intentRevAtStart;
-    return !intentChanged || args.intentNowIsEmpty ? 'same-engine-reselect' : 'discard';
+    if (args.sameEngineSuperseded) return 'discard';
+    if (args.sameEngineRevision !== undefined) return 'same-engine-reselect';
+    return freshness.intentRevNow === freshness.intentRevAtStart
+      ? 'same-engine-reselect'
+      : 'discard';
   }
   return isAgentSwitchResponseFresh(freshness) ? 'apply-switched' : 'discard';
 }

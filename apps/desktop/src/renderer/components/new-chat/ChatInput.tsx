@@ -4064,8 +4064,12 @@ export function ChatInput({
   // handleModelChange / handleProviderChange 声明在本回调之后,经 ref 引用避免
   // TDZ(仅在"选回当前引擎"分支的调用时刻解引用)。
   const sameEngineReselectRef = useRef<{
-    byProvider: (providerId: string, modelId: string) => void | Promise<void>;
-    byModel: (modelId: string) => void | Promise<void>;
+    byProvider: (
+      providerId: string,
+      modelId: string,
+      expectedRevision?: number,
+    ) => void | boolean | Promise<void | boolean>;
+    byModel: (modelId: string, expectedRevision?: number) => void | boolean | Promise<void | boolean>;
   }>({ byProvider: () => {}, byModel: () => {} });
   const confirmAgentBrowseSwitch = useCallback(
     () =>
@@ -4179,7 +4183,8 @@ export function ChatInput({
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
-          intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sourceSessionId) === null,
+          sameEngineRevision: result.sameEngineRevision,
+          sameEngineSuperseded: result.sameEngineSuperseded,
           freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
@@ -4219,9 +4224,18 @@ export function ChatInput({
           // 的话,它可能在用户随后登记的新跨引擎意图之后才落地,把那次选择清掉(下一条
           // 消息就不切引擎了)。因此把完整异步调用也排进同一条会话串行链:后续的引擎切换
           // 必须等它发完才发出,顺序由链保证。
+          const applied = providerId
+            ? await sameEngineReselectRef.current.byProvider(
+                providerId,
+                newModelId,
+                result.sameEngineRevision,
+              )
+            : await sameEngineReselectRef.current.byModel(
+                newModelId,
+                result.sameEngineRevision,
+              );
+          if (applied === false) return;
           makerChatStore.clearAgentSwitchIntent(sourceSessionId);
-          if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);
-          else await sameEngineReselectRef.current.byModel(newModelId);
           return;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
@@ -4259,7 +4273,7 @@ export function ChatInput({
   performAgentSwitchRef.current = performAgentSwitch;
 
   const performModelChange = useCallback(
-    async (newModelId: string) => {
+    async (newModelId: string, expectedAgentSwitchRevision?: number) => {
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -4270,7 +4284,7 @@ export function ChatInput({
       // 容量护栏最先跑: 用户取消时直接 return, 不留任何副作用(effort 快照都不动)。
       if (sessionId && newModelId !== activeModel) {
         const proceed = await confirmModelSwitchContextGuard(newModelId, sourceRemoteDeviceId);
-        if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return;
+        if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
       }
       // 切换意图期:此时列表展示的是目标引擎(乐观翻转),改选模型 = 更新意图,
       // 绝不能走普通 SET_MODEL 链路(main 会清意图、renderer 乐观态失配)。
@@ -4331,7 +4345,16 @@ export function ChatInput({
             let remoteDeferred = false;
             const remoteMaker = makerApiForDevice(sourceRemoteDeviceId);
             try {
-              const remoteSetModelResult = await remoteMaker.setModel(sessionId, newModelId);
+              const remoteSetModelResult = await remoteMaker.setModel(
+                sessionId,
+                newModelId,
+                undefined,
+                expectedAgentSwitchRevision,
+              );
+              if (remoteSetModelResult?.superseded) {
+                if (isSourceSessionCurrent()) setPendingRemoteSwitch(null);
+                return false;
+              }
               remoteDeferred = remoteSetModelResult?.deferred === true;
               await remoteMaker.setEffort(sessionId, newEffort);
             } catch (err) {
@@ -4343,7 +4366,7 @@ export function ChatInput({
                   ),
                 );
               }
-              return;
+              return false;
             } finally {
               // 被控端 ack(成功)/ 失败 return 都解除禁用,不等 mirror 三元回流。
               if (isSourceSessionCurrent()) setRemoteSwitchInFlight(false);
@@ -4371,7 +4394,13 @@ export function ChatInput({
             const switchSeqBySession = localRuntimeSwitchSeqBySessionRef.current;
             const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
             switchSeqBySession.set(sessionId, rollbackSeq);
-            const setModelResult = await window.electronAPI.maker.setModel(sessionId, newModelId);
+            const setModelResult = await window.electronAPI.maker.setModel(
+              sessionId,
+              newModelId,
+              undefined,
+              expectedAgentSwitchRevision,
+            );
+            if (setModelResult?.superseded) return false;
             const deferredUntilTurnEnd = setModelResult?.deferred === true;
             rollbackModelAfterPersistFailure = { model: activeModel, seq: rollbackSeq };
             await sessionService.update(sessionId, {
@@ -4446,6 +4475,7 @@ export function ChatInput({
         }
         log.warn('model change failed:', err);
         toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.switchFailed' })));
+        return false;
       }
     },
     [
@@ -4476,16 +4506,16 @@ export function ChatInput({
   );
 
   const handleModelChange = useCallback(
-    (newModelId: string): Promise<void> => {
+    (newModelId: string, expectedAgentSwitchRevision?: number): Promise<void | boolean> => {
       const remoteDeviceId = sessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId))
         : undefined;
       if (sessionId && !remoteDeviceId) {
         return effortChangeCoordinatorRef.current.enqueue(sessionId, () =>
-          performModelChange(newModelId),
+          performModelChange(newModelId, expectedAgentSwitchRevision),
         );
       }
-      return performModelChange(newModelId);
+      return performModelChange(newModelId, expectedAgentSwitchRevision);
     },
     [deviceLinkDeviceId, performModelChange, sessionId],
   );
@@ -4634,7 +4664,12 @@ export function ChatInput({
   );
 
   const performProviderChange = useCallback(
-    async (newProviderId: string | null, reconciledModelId?: string, reconciledEffort?: Effort) => {
+    async (
+      newProviderId: string | null,
+      reconciledModelId?: string,
+      reconciledEffort?: Effort,
+      expectedAgentSwitchRevision?: number,
+    ) => {
       const sourceSessionId = sessionId;
       const sourceRemoteDeviceId = sourceSessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sourceSessionId))
@@ -4652,7 +4687,7 @@ export function ChatInput({
           reconciledModelId,
           sourceRemoteDeviceId,
         );
-        if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return;
+        if (!proceed || (sourceIsRemoteSession && !isSourceSessionCurrent())) return false;
       }
       // 切换意图期:列表展示的是目标引擎(乐观翻转),(来源,模型) 改选 = 更新意图,
       // 不走普通 set-model 链路(main 会清意图、renderer 乐观态失配)。
@@ -4705,7 +4740,15 @@ export function ChatInput({
             sessionId,
             targetModel,
             newProviderId,
+            expectedAgentSwitchRevision,
           );
+          if (remoteSetModelResult?.superseded) {
+            if (isSourceSessionCurrent()) {
+              setPendingRemoteSwitch(null);
+              setSelectedProviderId(initialProviderId ?? null);
+            }
+            return false;
+          }
           remoteDeferred = remoteSetModelResult?.deferred === true;
           await remoteMaker.setEffort(sessionId, targetEffort);
         } catch (err) {
@@ -4716,7 +4759,7 @@ export function ChatInput({
               t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.remoteSwitchFailed' })),
             );
           }
-          return;
+          return false;
         } finally {
           if (isSourceSessionCurrent()) setRemoteSwitchInFlight(false);
         }
@@ -4770,7 +4813,9 @@ export function ChatInput({
             sessionId,
             modelId,
             newProviderId,
+            expectedAgentSwitchRevision,
           );
+          if (setModelResult?.superseded) return false;
           const deferredUntilTurnEnd = setModelResult?.deferred === true;
           rollbackProviderAfterPersistFailure = {
             model: activeModel,
@@ -4815,17 +4860,17 @@ export function ChatInput({
         onModelDidChange?.(modelId);
         onEffortDidChange?.(eff, sessionId);
         remember(modelId, eff);
+        return true;
       };
       try {
         // 选源 reconcile:picker 传来新来源下应落到的模型(优先恢复该来源记忆的模型,其次当前
         // 模型不被 offer 时落到首个可用)。原子应用 model+effort+providerId(避免「先改 model
         // 再改 provider」的闭包 stale)。effort 优先用记忆带回的 reconciledEffort(resolveSwitchEffort 内校验)。
         if (reconciledModelId && reconciledModelId !== activeModel) {
-          await applyModelAndEffort(
+          return await applyModelAndEffort(
             reconciledModelId,
             resolveSwitchEffort(reconciledModelId, newProviderId, reconciledEffort),
           );
-          return;
         }
         // 同模型只切来源:effort/fast 采用同一份 (agent,model) 全局预设,但仍按新来源 capability
         // 校验;不支持的档位回落模型默认。reconciledEffort(来源切换 hint,当前 picker 不传)
@@ -4849,7 +4894,7 @@ export function ChatInput({
         });
         // applyModelAndEffort 同时按新来源 capability 校验 fast,并把 (activeModel, targetEffort)
         // 写回模型级全局预设。模型不变,model 字段照写 activeModel(幂等)。
-        await applyModelAndEffort(activeModel, targetEffort);
+        return await applyModelAndEffort(activeModel, targetEffort);
       } catch (err) {
         const rollbackProvider = rollbackProviderAfterPersistFailure as {
           model: string;
@@ -4870,6 +4915,7 @@ export function ChatInput({
         }
         log.warn('provider change failed:', err);
         toast.error(t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.switchFailed' })));
+        return false;
       }
     },
     [
@@ -4903,24 +4949,36 @@ export function ChatInput({
       newProviderId: string | null,
       reconciledModelId?: string,
       reconciledEffort?: Effort,
-    ): Promise<void> => {
+      expectedAgentSwitchRevision?: number,
+    ): Promise<void | boolean> => {
       const remoteDeviceId = sessionId
         ? (deviceLinkDeviceId ?? getSessionDeviceId(sessionId))
         : undefined;
       if (sessionId && !remoteDeviceId) {
         return effortChangeCoordinatorRef.current.enqueue(sessionId, () =>
-          performProviderChange(newProviderId, reconciledModelId, reconciledEffort),
+          performProviderChange(
+            newProviderId,
+            reconciledModelId,
+            reconciledEffort,
+            expectedAgentSwitchRevision,
+          ),
         );
       }
-      return performProviderChange(newProviderId, reconciledModelId, reconciledEffort);
+      return performProviderChange(
+        newProviderId,
+        reconciledModelId,
+        reconciledEffort,
+        expectedAgentSwitchRevision,
+      );
     },
     [deviceLinkDeviceId, performProviderChange, sessionId],
   );
 
   // performAgentSwitch 的"选回当前引擎"分支经 ref 调用(两 handler 声明在其后,TDZ)。
   sameEngineReselectRef.current = {
-    byProvider: (providerId, modelId) => handleProviderChange(providerId, modelId),
-    byModel: (modelId) => handleModelChange(modelId),
+    byProvider: (providerId, modelId, expectedRevision) =>
+      handleProviderChange(providerId, modelId, undefined, expectedRevision),
+    byModel: (modelId, expectedRevision) => handleModelChange(modelId, expectedRevision),
   };
 
   const handleNavigateToProviders = useCallback(() => {

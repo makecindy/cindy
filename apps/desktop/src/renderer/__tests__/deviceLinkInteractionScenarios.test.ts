@@ -1117,7 +1117,7 @@ describe('远程交互接线不变式', () => {
     expect(end).toBeGreaterThan(start);
     const body = src.slice(start, end);
     const runtimeGate = body.indexOf(
-      'const setModelResult = await window.electronAPI.maker.setModel(sessionId, newModelId)',
+      'const setModelResult = await window.electronAPI.maker.setModel(',
     );
     const persist = body.indexOf('await sessionService.update(sessionId, {');
     const applyUi = body.indexOf('onModelDidChange?.(newModelId)');

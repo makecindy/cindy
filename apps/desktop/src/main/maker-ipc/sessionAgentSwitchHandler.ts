@@ -99,6 +99,8 @@ export interface AgentSwitchSessionRow {
 }
 
 export interface MakerSessionAgentSwitchHandlerDeps {
+  /** 与 send / SET_MODEL 共用的 session 锁；生产注入，最小测试 harness 可省略。 */
+  withSessionLock?<T>(sessionId: string, task: () => Promise<T>): Promise<T>;
   /**
    * 停用轴的边界裁决(生产 = register.ts 的 assertModelRouteUsable,内核纯逻辑在
    * model-route-guard.ts)。跨引擎切换是新的路由选择,目标 (agent, model, 来源) 被
@@ -212,6 +214,13 @@ export interface SessionAgentSwitchResult {
   deferred?: boolean;
   /** resume 回落的原子事务失败,保留切换意图供下一条消息重试恢复尾段。 */
   retryPending?: boolean;
+  /**
+   * 同引擎 no-op 成功清除意图后的 host 修订号。renderer 后续 SET_MODEL 必须带回
+   * 该值做 CAS，防止另一控制端的更新在 ack 往返期间被旧选择覆盖。
+   */
+  sameEngineRevision?: number;
+  /** 同引擎请求已被更晚的意图写入/撤销超车，renderer 必须丢弃旧选择。 */
+  sameEngineSuperseded?: boolean;
 }
 
 /** 登记的切换意图(下一条消息发送时刻执行;effort/fastMode 由 renderer 按目标引擎解析好带入)。 */
@@ -253,6 +262,10 @@ export interface PendingAgentSwitchRegistry {
   set(sessionId: string, intent: PendingAgentSwitchIntent): void;
   get(sessionId: string): PendingAgentSwitchIntent | undefined;
   clear(sessionId: string): void;
+  /** session 级单调修订号；set / clear（含 ABA）都会推进。 */
+  revision?(sessionId: string): number;
+  /** 修订号仍匹配才清除，成功返回清除后的新修订号，否则返回 null。 */
+  clearIfRevision?(sessionId: string, expectedRevision: number): number | null;
 }
 
 /** 将 main 内部 intent 收窄成可跨 IPC / device-link 暴露的只读投影。 */
@@ -271,10 +284,28 @@ export function projectPendingAgentSwitchIntent(
 
 export function createPendingAgentSwitchRegistry(): PendingAgentSwitchRegistry {
   const pending = new Map<string, PendingAgentSwitchIntent>();
+  const revisions = new Map<string, number>();
+  const bump = (sessionId: string): number => {
+    const next = (revisions.get(sessionId) ?? 0) + 1;
+    revisions.set(sessionId, next);
+    return next;
+  };
   return {
-    set: (sessionId, intent) => void pending.set(sessionId, intent),
+    set: (sessionId, intent) => {
+      pending.set(sessionId, intent);
+      bump(sessionId);
+    },
     get: (sessionId) => pending.get(sessionId),
-    clear: (sessionId) => void pending.delete(sessionId),
+    clear: (sessionId) => {
+      pending.delete(sessionId);
+      bump(sessionId);
+    },
+    revision: (sessionId) => revisions.get(sessionId) ?? 0,
+    clearIfRevision: (sessionId, expectedRevision) => {
+      if ((revisions.get(sessionId) ?? 0) !== expectedRevision) return null;
+      pending.delete(sessionId);
+      return bump(sessionId);
+    },
   };
 }
 
@@ -333,6 +364,8 @@ export async function performSessionAgentSwitch(
   if (providerId !== undefined && providerId !== null && typeof providerId !== 'string') {
     throwIpcError('INVALID_PARAMS', 'providerId must be string | null');
   }
+  // 必须在第一个 await 前快照：跨窗口 / 跨设备写入即使 set→clear 回到同值，修订号也会变化。
+  const pendingRevisionAtStart = deps.pendingSwitches?.revision?.(sessionId);
   let normalizedProviderId =
     typeof providerId === 'string' ? providerId.trim() || null : providerId;
 
@@ -367,9 +400,34 @@ export async function performSessionAgentSwitch(
   if (fromDbKind === toDbKind) {
     // 同引擎 = 纯模型切换,调用方应走 SET_MODEL;这里按 no-op 成功返回。
     // 顺带清 pending:用户先登记了跨引擎切换、又选回当前引擎 = 改主意取消。
-    deps.pendingSwitches?.clear(sessionId);
+    let sameEngineRevision: number | undefined;
+    if (deps.pendingSwitches?.clearIfRevision && pendingRevisionAtStart !== undefined) {
+      const clearedRevision = deps.pendingSwitches.clearIfRevision(
+        sessionId,
+        pendingRevisionAtStart,
+      );
+      if (clearedRevision === null) {
+        return {
+          switched: false,
+          agentKind: targetAgentKind,
+          model,
+          engineReady: true,
+          sameEngineSuperseded: true,
+        };
+      }
+      sameEngineRevision = clearedRevision;
+    } else {
+      // 最小测试 harness / 旧内嵌调用方没有修订能力时维持原 no-op 清除语义。
+      deps.pendingSwitches?.clear(sessionId);
+    }
     deps.onPendingSwitchChanged?.(sessionId, null);
-    return { switched: false, agentKind: targetAgentKind, model, engineReady: true };
+    return {
+      switched: false,
+      agentKind: targetAgentKind,
+      model,
+      engineReady: true,
+      ...(sameEngineRevision !== undefined ? { sameEngineRevision } : {}),
+    };
   }
 
   // 跨引擎选择比此前登记的凭证切换更新；即使旧切换已在 await close，清掉登记后
@@ -727,15 +785,19 @@ export function registerMakerSessionAgentSwitchHandler(
       providerId: unknown,
       effort: unknown,
       fastMode: unknown,
-    ) =>
-      performSessionAgentSwitch(deps, {
+    ) => {
+      const run = () => performSessionAgentSwitch(deps, {
         sessionId,
         targetAgentKind,
         model,
         providerId,
         effort,
         fastMode,
-      }),
+      });
+      return typeof sessionId === 'string' && sessionId && deps.withSessionLock
+        ? deps.withSessionLock(sessionId, run)
+        : run();
+    },
   );
   registry.handle(
     MAKER_INVOKE.GET_SESSION_AGENT_SWITCH_INTENT,

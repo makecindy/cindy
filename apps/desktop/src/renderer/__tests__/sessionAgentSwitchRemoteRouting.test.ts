@@ -196,7 +196,6 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: true,
         switched: false,
-        intentNowIsEmpty: true,
         freshness: fresh,
       }),
     ).toBe('apply-intent');
@@ -210,7 +209,7 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: false,
-        intentNowIsEmpty: true, // 清除回流已到:当前无意图 = 本次 no-op 的预期终态
+        sameEngineRevision: 8,
         freshness: { ...fresh, intentRevNow: 9 },
       }),
     ).toBe('same-engine-reselect');
@@ -224,13 +223,27 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: false,
-        intentNowIsEmpty: false,
+        sameEngineRevision: 8,
         freshness: fresh,
       }),
     ).toBe('same-engine-reselect');
   });
 
-  it('回归:同引擎重选在途时外部登记了**新**跨引擎意图 → 丢弃,不能 clear 掉更新的镜像', async () => {
+  it('旧 host 无 CAS token:仅修订号未变时兼容执行,任何回流变化都 fail-closed', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    expect(
+      resolveAgentSwitchAckAction({ deferred: false, switched: false, freshness: fresh }),
+    ).toBe('same-engine-reselect');
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: false,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
+  });
+
+  it('回归:同引擎重选在途时外部登记或 ABA → host CAS 标成 superseded,一律丢弃', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     // 修订号同样变了,但回流后的内容是「有意图」——只可能来自更新的登记。继续收尾会把它
     // 抹掉,选择器退回旧引擎,而被控端下一条消息仍按新意图切换。
@@ -238,8 +251,8 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: false,
-        intentNowIsEmpty: false,
-        freshness: { ...fresh, intentRevNow: 9 },
+        sameEngineSuperseded: true,
+        freshness: { ...fresh, intentRevNow: 10 },
       }),
     ).toBe('discard');
   });
@@ -254,7 +267,6 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       expect(
         resolveAgentSwitchAckAction({
           ...branch,
-          intentNowIsEmpty: true,
           freshness: { ...fresh, writeSeqNow: 4 },
         }),
       ).toBe('discard');
@@ -268,7 +280,6 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: true,
         switched: false,
-        intentNowIsEmpty: false,
         freshness: superseded,
       }),
     ).toBe('discard');
@@ -276,7 +287,6 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: true,
-        intentNowIsEmpty: false,
         freshness: superseded,
       }),
     ).toBe('discard');
@@ -288,7 +298,6 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: true,
-        intentNowIsEmpty: true,
         freshness: fresh,
       }),
     ).toBe('apply-switched');
@@ -632,9 +641,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
     expect(source).toContain("if (ackAction === 'discard') return;");
     expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
-    expect(source).toContain(
-      'intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sourceSessionId) === null,',
-    );
+    expect(source).toContain('sameEngineRevision: result.sameEngineRevision,');
+    expect(source).toContain('sameEngineSuperseded: result.sameEngineSuperseded,');
   });
 
   it('切换写入走模块级协调层(串行链与写序号按 session,不随组件卸载归零)', () => {
@@ -669,16 +677,23 @@ describe('ChatInput 的入口门控与调用路由', () => {
       'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
       invoke,
     );
-    const reselect = source.indexOf(
-      'if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);',
-      scopeGuard,
-    );
+    const reselect = source.indexOf('const applied = providerId', scopeGuard);
+    const staleGuard = source.indexOf('if (applied === false) return;', reselect);
     const release = source.indexOf('exclusiveTurn.release();', reselect);
     expect(reservation).toBeGreaterThanOrEqual(0);
     expect(invoke).toBeGreaterThan(reservation);
     expect(scopeGuard).toBeGreaterThan(invoke);
     expect(reselect).toBeGreaterThan(scopeGuard);
+    expect(staleGuard).toBeGreaterThan(reselect);
     expect(release).toBeGreaterThan(reselect);
+  });
+
+  it('同引擎重选把 host 因果 token 带回 SET_MODEL，且遇到 superseded 不落后续状态', () => {
+    expect(source).toContain('expectedAgentSwitchRevision?: number');
+    expect(source).toContain('expectedAgentSwitchRevision,\n              );');
+    expect(source).toContain('if (remoteSetModelResult?.superseded) {');
+    expect(source).toContain('if (setModelResult?.superseded) return false;');
+    expect(source).toContain('result.sameEngineRevision,');
   });
 
   it('切换意图登记完成前所有发送入口都被同步门禁，组件重挂后 pending 仍可见', () => {

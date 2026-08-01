@@ -5258,6 +5258,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   }
 
   const agentSwitchDeps: MakerSessionAgentSwitchHandlerDeps = {
+    withSessionLock: withSendToSessionLock,
     // 停用轴边界裁决:目标路由被停用 → 抛错;隐式默认落点被停用 → 返回启用替代来源。
     assertModelRouteUsable: (agent, model, providerId) =>
       assertModelRouteUsable(agent, model, providerId),
@@ -8765,7 +8766,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // session 不存在(被 close / 还没 send 创建出来)就 no-op 不报错, 让 renderer
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
-  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async (_e, sessionId: unknown, model: unknown, providerId?: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async (
+    _e,
+    sessionId: unknown,
+    model: unknown,
+    providerId?: unknown,
+    expectedAgentSwitchRevision?: unknown,
+  ) => {
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
@@ -8776,10 +8783,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'providerId must be string, null, or undefined');
     }
+    if (
+      expectedAgentSwitchRevision !== undefined &&
+      (typeof expectedAgentSwitchRevision !== 'number' ||
+        !Number.isSafeInteger(expectedAgentSwitchRevision) ||
+        expectedAgentSwitchRevision < 0)
+    ) {
+      throwIpcError('INVALID_PARAMS', 'expectedAgentSwitchRevision must be a non-negative integer');
+    }
     // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
     return withSendToSessionLock(sessionId, async () => {
+      // 同引擎重选是 switch ack 后的第二段写入。另一控制端若在两段之间更新（含
+      // set→clear ABA），修订号已变化：旧 SET_MODEL 必须在任何 route/DB 副作用前让位。
+      if (
+        typeof expectedAgentSwitchRevision === 'number' &&
+        agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision
+      ) {
+        return { deferred: false, superseded: true };
+      }
       // 停用轴准入(PR #744 review;第十二轮移入锁内):切换模型是一次新的路由选择,
       // 不得切到用户停用的模型 / 来源(本机选择器已过滤,但本 channel 在 device-link
       // allowlist 内,老控制端可直接点名)。裁决必须在拿到会话锁**之后**执行 ——
@@ -8826,7 +8849,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         );
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
-        return { deferred: result.status === 'deferred' };
+        return { deferred: result.status === 'deferred', superseded: false };
       } catch (err) {
         if (err instanceof CredentialModeSwitchBusyError) {
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,
