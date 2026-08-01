@@ -851,6 +851,39 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     );
   });
 
+  it('keeps local Telegram defaults visible when the linked server lacks behavior capability', async () => {
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...BASE_HOOK,
+        telegram: {
+          ...BASE_HOOK.telegram,
+          behaviorAvailable: false,
+          binding: {
+            provider: 'telegram',
+            state: 'confirmed',
+            attemptId: null,
+            bindingId: 'legacy-binding',
+            principalId: '12345',
+            principalName: 'Cindy User',
+            scopeId: 'bot-1',
+            scopeName: 'cindy_example_bot',
+            connectUrl: null,
+            expiresAt: null,
+            reason: null,
+            remediationUrl: 'https://t.me/cindy_example_bot',
+            actions: ['revoke'],
+          },
+        },
+      },
+    });
+
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
+    expect(screen.queryByTestId('telegram-behavior')).toBeNull();
+    expect(screen.queryByTestId('telegram-groups')).toBeNull();
+  });
+
   it('does not remove a changed Slack binding from a stale confirmation', async () => {
     let pushStatus: ((view: SlackHookView) => void) | undefined;
     let resolveConfirm: ((value: boolean) => void) | undefined;
