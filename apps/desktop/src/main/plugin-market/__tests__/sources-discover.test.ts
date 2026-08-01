@@ -287,6 +287,35 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.displayName).toBeNull();
   });
 
+  it('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
+    const root = makeRoot();
+    const outside = makeRoot();
+    // 市场外放一份**内容完全合法**的身份卡:只断言"被跳过"才有区分度——
+    // 若 lstat 闸退回 stat,这份外部身份卡会被解析并投影给 Renderer。
+    // (/dev/zero 一类特殊文件是同一漏洞的 DoS 形态:stat.size 为 0 绕过大小闸
+    // 后 readFile 无限读;lstat 拒掉 symlink 本身,两种形态一起堵死。)
+    const target = path.join(outside, 'stolen-ghost.json');
+    fs.writeFileSync(target, ghostJson('stolen'));
+    writePlugin(root, 'plugins/good', 'good-one');
+    const evilDir = path.join(root, 'plugins', 'evil');
+    fs.mkdirSync(evilDir, { recursive: true });
+    fs.writeFileSync(path.join(evilDir, 'main.js'), '// entry');
+    fs.symlinkSync(target, path.join(evilDir, 'ghost.json'));
+    writeManifest(root, {
+      name: 'linked-card',
+      plugins: [
+        { name: 'good', source: 'plugins/good' },
+        { name: 'evil', source: 'plugins/evil' },
+      ],
+    });
+
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
+    expect(result.marketplace.skippedCount).toBe(1);
+  });
+
   it('rejects a manifest whose real path escapes the market root', async () => {
     const root = makeRoot();
     const outside = makeRoot();

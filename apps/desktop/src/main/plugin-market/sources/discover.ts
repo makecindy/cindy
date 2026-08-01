@@ -117,10 +117,15 @@ async function resolvePluginDir(
 
   let raw: unknown;
   try {
-    // 身份卡同样是不受信内容,先看大小再读(超限按条目非法跳过,不拖垮整个市场)。
+    // 身份卡必须是**普通文件**且在大小上限内,并且用 lstat(不跟随链接)判定:
+    // realpath 只校验了插件目录,ghost.json 自己仍可以是指向市场外的 symlink——
+    // stat 会跟随它,`/dev/zero` 这类特殊文件 size 为 0 还能绕过大小闸,readFile
+    // 会无限读到 OOM;普通外部 JSON 也会被解析并投影给 Renderer。目录已经
+    // realpath 过,最后一段用 lstat 拒掉 symlink,链接就无处藏身(与打包侧
+    // "符号链接一律不穿透"同口径)。
     const manifestFile = path.join(realDir, 'ghost.json');
-    const stat = await fs.promises.stat(manifestFile);
-    if (stat.size > GHOST_MANIFEST_MAX_BYTES) return null;
+    const stat = await fs.promises.lstat(manifestFile);
+    if (!stat.isFile() || stat.size > GHOST_MANIFEST_MAX_BYTES) return null;
     raw = JSON.parse(await fs.promises.readFile(manifestFile, 'utf8'));
   } catch {
     return null;

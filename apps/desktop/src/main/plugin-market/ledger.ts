@@ -51,6 +51,20 @@ function isCustomRecord(record: PluginMarketInstallationRecord): boolean {
   return record.source === 'git-market' || record.source === 'local-market';
 }
 
+/**
+ * 同一 ghostId 在两个账本文件里都有记录时的消解规则(只在降级窗口出现):
+ * 仍在安装中的记录优先于已卸载的;同为安装中(或同为已卸载)按 updatedAt 新者
+ * 胜(ISO 字符串可直接比较);完全平手保第一个参数(调用方传主账本记录——冲突
+ * 本身即意味着旧版本操作过主账本,它是最后被真实写入过的一侧)。
+ */
+function preferRecord(
+  main: PluginMarketInstallationRecord,
+  custom: PluginMarketInstallationRecord,
+): PluginMarketInstallationRecord {
+  if (main.installed !== custom.installed) return main.installed ? main : custom;
+  return custom.updatedAt > main.updatedAt ? custom : main;
+}
+
 function validRecord(value: unknown): value is PluginMarketInstallationRecord {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -154,7 +168,14 @@ export class PluginMarketLedger {
     }
     for (const [ghostId, record] of Object.entries(custom.installations)) {
       if (!isCustomRecord(record)) continue; // 自定义账本只承载自定义溯源
-      installations[ghostId] = record;
+      // 两个文件出现同一 ghostId 只发生在降级窗口:旧版本只写主账本(比如降级后
+      // 卸载了自定义安装、又从服务端装了同 ghostId),custom 账本里留着它不认识、
+      // 也不会清理的陈旧记录。无条件让 custom 覆盖会把服务端安装错误归属给自定义
+      // 来源,并允许该来源提供更新 —— 必须按"实际安装状态 + 时间"消解,平手保
+      // 主账本(冲突本身即意味着旧版操作过主账本)。胜出后由任意一次写入按 source
+      // 归位,败方记录随整份重写被清掉。
+      const existing = installations[ghostId];
+      installations[ghostId] = existing ? preferRecord(existing, record) : record;
     }
 
     const defaultInstallOptOuts: Record<string, string[]> = {};

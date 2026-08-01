@@ -188,6 +188,64 @@ describe('PluginMarketLedger', () => {
     });
   });
 
+  it('does not let a stale custom record shadow a newer server record for the same ghostId', () => {
+    const h = harness();
+    const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
+    // 降级窗口:新版装过自定义 X(记录在 custom 账本)→ 降级后旧版卸载它并从
+    // 服务端装了同 ghostId(只写主账本)→ 升级回来。custom 账本里的陈旧记录若
+    // 无条件覆盖,服务端安装会被错误归属给自定义来源,并允许该来源提供更新。
+    fs.mkdirSync(path.dirname(h.filePath), { recursive: true });
+    fs.writeFileSync(
+      customPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-x': record({
+            ghostId: 'cindy-x',
+            pluginId: 'custom:team-lib/cindy-x',
+            source: 'git-market',
+            sourceKey: '["git","https://x.test/r.git",null,[]]',
+            updatedAt: '2026-07-01T00:00:00.000Z',
+          }),
+        },
+      }),
+    );
+    fs.writeFileSync(
+      h.filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-x': record({
+            ghostId: 'cindy-x',
+            source: 'market',
+            updatedAt: '2026-08-01T00:00:00.000Z',
+          }),
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+
+    expect(h.ledger.read().installations['cindy-x']).toMatchObject({ source: 'market' });
+
+    // 反向仍成立:custom 记录更新(正常使用中主账本残留陈旧 server 记录)时 custom 胜。
+    fs.writeFileSync(
+      h.filePath,
+      JSON.stringify({
+        schemaVersion: 1,
+        installations: {
+          'cindy-x': record({
+            ghostId: 'cindy-x',
+            source: 'market',
+            installed: false,
+            updatedAt: '2026-06-01T00:00:00.000Z',
+          }),
+        },
+        defaultInstallOptOuts: {},
+      }),
+    );
+    expect(h.ledger.read().installations['cindy-x']).toMatchObject({ source: 'git-market' });
+  });
+
   it('migrates stray custom records out of the main ledger on the next write', () => {
     const h = harness();
     const customPath = path.join(path.dirname(h.filePath), 'custom-ledger.v1.json');
