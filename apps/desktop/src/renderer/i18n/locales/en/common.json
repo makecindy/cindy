@@ -4685,7 +4685,7 @@
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests. This reduces interruptions, but can make mistakes."
+            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests; high-risk actions may still be denied or require confirmation. This reduces interruptions, but can make mistakes."
           },
           "bypassPermissions": {
             "label": "Full access",
