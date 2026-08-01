@@ -257,7 +257,12 @@ export function observeHookTurn(
     const notifyTurnTerminal = (): void => {
       if (turnTerminalNotified) return;
       turnTerminalNotified = true;
-      onTurnTerminal?.();
+      try {
+        onTurnTerminal?.();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`[hook-runner] onTurnTerminal failed: ${message}`);
+      }
     };
     /**
      * 摘监听 + 停定时器。收口的三条出口(resolve / reject / 调用方 stop)必须

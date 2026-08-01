@@ -514,6 +514,8 @@ export function TelegramGroupActivationSettings({
   const latestRevision = useRef(0);
   const mounted = useRef(true);
   const root = i18nRoot(source);
+  const bindingKey = `${source}:${bindingId ?? ''}`;
+  const activeBindingKey = useRef(bindingKey);
 
   useEffect(() => {
     mounted.current = true;
@@ -521,6 +523,18 @@ export function TelegramGroupActivationSettings({
       mounted.current = false;
     };
   }, []);
+
+  useLayoutEffect(() => {
+    activeBindingKey.current = bindingKey;
+    groupsRef.current = null;
+    confirmedRef.current = null;
+    pendingWrites.current = 0;
+    saveFailed.current = false;
+    saveQueue.current = Promise.resolve();
+    latestRevision.current += 1;
+    setGroups(null);
+    setError(null);
+  }, [bindingKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -584,6 +598,9 @@ export function TelegramGroupActivationSettings({
   }
 
   const setMode = (chatId: string, mode: TelegramHookGroupActivationMode) => {
+    const writeBindingKey = bindingKey;
+    const writeBindingId = bindingId;
+    const writeSource = source;
     const optimistic = (groupsRef.current ?? groups).map((group) =>
       group.chatId === chatId ? { ...group, activation: mode } : group,
     );
@@ -594,12 +611,13 @@ export function TelegramGroupActivationSettings({
     pendingWrites.current += 1;
     saveQueue.current = saveQueue.current.then(async () => {
       try {
-        if (source === 'official') {
+        if (writeSource === 'official') {
           const result = await window.electronAPI.hookControl.setTelegramGroupActivation(
-            bindingId as string,
+            writeBindingId as string,
             chatId,
             mode,
           );
+          if (activeBindingKey.current !== writeBindingKey) return;
           const authoritative = mergeOfficialGroupActivation(
             groupsRef.current ?? optimistic,
             result.behavior.groupActivation,
@@ -611,22 +629,24 @@ export function TelegramGroupActivationSettings({
           }
         } else {
           await window.electronAPI.telegramBot.setGroupActivation({ chatId, mode });
+          if (activeBindingKey.current !== writeBindingKey) return;
           confirmedRef.current = (confirmedRef.current ?? groups).map((group) =>
             group.chatId === chatId ? { ...group, activation: mode } : group,
           );
         }
         if (mounted.current && revision === latestRevision.current) setError(null);
       } catch {
-        saveFailed.current = true;
+        if (activeBindingKey.current === writeBindingKey) saveFailed.current = true;
       } finally {
+        if (activeBindingKey.current !== writeBindingKey) return;
         pendingWrites.current -= 1;
         if (pendingWrites.current === 0 && saveFailed.current) {
           const reconcileRevision = latestRevision.current;
           let authoritative = confirmedRef.current;
           try {
             authoritative = (
-              source === 'official'
-                ? await window.electronAPI.hookControl.listTelegramGroups(bindingId as string)
+              writeSource === 'official'
+                ? await window.electronAPI.hookControl.listTelegramGroups(writeBindingId as string)
                 : await window.electronAPI.telegramBot.listGroups()
             ).groups;
             confirmedRef.current = authoritative;
@@ -635,6 +655,7 @@ export function TelegramGroupActivationSettings({
           }
           if (
             mounted.current &&
+            activeBindingKey.current === writeBindingKey &&
             pendingWrites.current === 0 &&
             reconcileRevision === latestRevision.current &&
             authoritative !== null

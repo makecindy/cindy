@@ -340,6 +340,48 @@ describe('official Telegram behavior settings', () => {
     expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
   });
 
+  it('绑定切换后旧账号的群模式回执不覆盖新账号状态', async () => {
+    const oldSave = deferred<{ behavior: typeof behavior }>();
+    api.listTelegramGroups
+      .mockResolvedValueOnce({
+        groups: [{ chatId: '-1001', chatName: 'Old account group', activation: 'mention' }],
+      })
+      .mockResolvedValueOnce({
+        groups: [{ chatId: '-2001', chatName: 'New account group', activation: 'mention' }],
+      });
+    api.setTelegramGroupActivation.mockReturnValueOnce(oldSave.promise);
+    const view = render(
+      <TelegramGroupActivationSettings source="official" bindingId="binding-1" />,
+    );
+    expect(await screen.findByText('Old account group')).toBeTruthy();
+
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+      }),
+    );
+    await waitFor(() => expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(1));
+    view.rerender(<TelegramGroupActivationSettings source="official" bindingId="binding-2" />);
+    expect(await screen.findByText('New account group')).toBeTruthy();
+
+    oldSave.resolve({
+      behavior: { ...behavior, groupActivation: { '-1001': 'always' } },
+    });
+    await act(async () => {
+      await oldSave.promise;
+    });
+
+    expect(screen.getByText('New account group')).toBeTruthy();
+    expect(screen.queryByText('Old account group')).toBeNull();
+    expect(
+      screen
+        .getByRole('button', {
+          name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
+        })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
   it('首次群列表加载期间缓存最新行为推送并合并到查询结果', async () => {
     const list = deferred<{
       groups: Array<{ chatId: string; chatName: string; activation: 'mention' }>;

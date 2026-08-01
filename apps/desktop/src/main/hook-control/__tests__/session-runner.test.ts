@@ -300,6 +300,7 @@ vi.mock('../../maker-host/index.js', () => ({
 }));
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
+import { observeHookTurn } from '../turnObserver.js';
 import { buildHookPromptNote, SLACK_HOOK_PROMPT_NOTE } from '../outbound.js';
 import { resolveSafe as resolveXdtImage } from '../../imageCacheStore.js';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface.js';
@@ -2296,6 +2297,27 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   async function flush(times = 30): Promise<void> {
     for (let i = 0; i < times; i++) await Promise.resolve();
   }
+
+  it('终态回调抛错时仍拆监听并 settle finished', async () => {
+    const session = makeManualSession('sess-terminal-callback');
+    const observer = observeHookTurn(session as never, {
+      answerOnlyProgress: false,
+      onTurnTerminal: () => {
+        throw new Error('restore failed');
+      },
+      onSilentStopSettled: () => () => {},
+      log,
+    });
+
+    h.eventCbs.get('sess-terminal-callback')!({ type: 'done', data: null });
+
+    await expect(observer.finished).resolves.toBeUndefined();
+    expect(h.eventCbs.has('sess-terminal-callback')).toBe(false);
+    expect(h.statusCbs.has('sess-terminal-callback')).toBe(false);
+    expect(log.warn).toHaveBeenCalledWith(
+      '[hook-runner] onTurnTerminal failed: restore failed',
+    );
+  });
 
   it('会话不在进程里 -> 立刻 onAbandon(dispatcher 会把记账还回去), 撤销函数不炸', () => {
     // 本调用发生在 vendor dispatch **之前**, live session 正常必然已就绪, 所以这是
