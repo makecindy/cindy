@@ -416,12 +416,14 @@ export function AddProviderWizard({
   const pickOauth = useCallback((provider: ProviderView) => {
     fetchSeqRef.current += 1;
     setManualModelIds({});
+    setManualModelWindows({});
     setSel({ kind: 'oauth', provider });
     setStep(2);
   }, []);
   const pickBuiltinApiKey = useCallback((provider: ProviderView) => {
     fetchSeqRef.current += 1;
     setManualModelIds({});
+    setManualModelWindows({});
     setSel({ kind: 'builtinApiKey', provider });
     setApiKey('');
     setStep(2);
@@ -430,6 +432,7 @@ export function AddProviderWizard({
     (preset: ProviderPreset) => {
       fetchSeqRef.current += 1;
       setManualModelIds({});
+      setManualModelWindows({});
       setSel({ kind: 'preset', preset });
       setName(presetDisplayName(preset, i18n.language));
       setApiKey('');
@@ -1509,6 +1512,7 @@ export function AddProviderWizard({
                             <input
                               type="text"
                               inputMode="numeric"
+                              aria-label={t('settings.providers.wizard.manualModelWindowLabel')}
                               value={manualModelWindows[agent] ?? ''}
                               onChange={(event) =>
                                 setManualModelWindows((prev) => ({
