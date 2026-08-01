@@ -338,6 +338,11 @@ export class Session {
 
   // ── 公开 API ─────────────────────────────────────────────────────────────
 
+  /** 当前/最近一次已建立 reservation 的 turn 代号；只用于跨 await 识别是否仍是同一轮。 */
+  getTurnGeneration(): number {
+    return this.turnGeneration;
+  }
+
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
     const msg: UserMessage = typeof message === 'string'
       ? { type: 'user', content: message }

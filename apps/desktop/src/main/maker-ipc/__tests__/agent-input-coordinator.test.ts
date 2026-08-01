@@ -153,6 +153,7 @@ function sessionRunningError(): Error & { code: string } {
 
 function createHarness() {
   let running = false;
+  let turnGeneration = 0;
   let pendingInteraction = false;
   let agentKind: 'claude-code' | 'codex' | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
@@ -220,6 +221,7 @@ function createHarness() {
     onUiRetry,
     onUserEnqueue,
     isTurnRunning: () => running,
+    getTurnGeneration: () => turnGeneration,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
     getAgentKind: () => agentKind,
@@ -272,6 +274,9 @@ function createHarness() {
     onUserEnqueue,
     setRunning(value: boolean) {
       running = value;
+    },
+    setTurnGeneration(value: number) {
+      turnGeneration = value;
     },
     setPendingInteraction(value: boolean) {
       pendingInteraction = value;
@@ -5109,6 +5114,34 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
 
     expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
   });
+
+  it('does not inherit a continuation owner when another vendor turn starts during steer ack', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setTurnGeneration(1);
+    const sid = 'continue-owner-new-vendor-turn-during-steer';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.setTurnGeneration(2);
+
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
   it('clears the continuation vendor-turn owner immediately when the user stops', async () => {
     const h = createHarness();
     h.setAgentKind('codex');

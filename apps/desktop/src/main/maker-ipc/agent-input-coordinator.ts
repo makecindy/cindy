@@ -129,6 +129,8 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
+  getTurnGeneration?: (sessionId: string) => number | null;
   /**
    * Reconcile the host's live session/tracker view after an abort or a
    * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
@@ -1174,6 +1176,7 @@ export class AgentInputCoordinator {
     // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
     // 可能已经清空的 activeTurn 读取。
     const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
+    const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
@@ -1352,6 +1355,9 @@ export class AgentInputCoordinator {
     accepted.stickyError = null;
     accepted.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(accepted);
+    const sameVendorTurn =
+      steerVendorTurnGeneration === null ||
+      this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
       item,
       delivery: 'steer',
@@ -1366,7 +1372,9 @@ export class AgentInputCoordinator {
       continuationOwnerClientId:
         item.originalSyntheticTrigger === 'continue'
           ? item.clientId
-          : steerContinuationOwnerClientId,
+          : sameVendorTurn
+            ? steerContinuationOwnerClientId
+            : null,
     };
     this.emit(sessionId);
 
