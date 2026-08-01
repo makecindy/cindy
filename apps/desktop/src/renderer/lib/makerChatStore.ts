@@ -5445,8 +5445,8 @@ function ensureInitialMessages(sessionId: string): void {
       // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
       // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
       //
-      // 无锚点仍按 10 页(500 行)兜底；单纯为了计划胶囊找边界只多看 3 页,
-      // 避免无计划长会话冷开稳定付出 500 行额外拉取。
+      // 无锚点按 10 页(500 行)兜底；计划胶囊必须回填到最近计划边界,
+      // 否则 MessageStream 吞掉计划行后用户没有其它入口看到当前计划。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5461,13 +5461,11 @@ function ensureInitialMessages(sessionId: string): void {
       }
       let hasMore = serverMessagePageHasMore(existing);
       const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
-      const MAX_PLAN_BACKFILL_PAGES = 3;
       let pagesFetched = 0;
       while (hasMore) {
         const needsAnchorBackfill =
           merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
-        const needsPlanBackfill =
-          !historyRowsContainPlanSnapshot(merged) && pagesFetched < MAX_PLAN_BACKFILL_PAGES;
+        const needsPlanBackfill = !historyRowsContainPlanSnapshot(merged);
         if (!needsAnchorBackfill && !needsPlanBackfill) break;
 
         pagesFetched += 1;

@@ -275,8 +275,8 @@ describe('makerChatStore active view tracking', () => {
     expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-visible');
   });
 
-  it('caps plan-only initial history backfill for sessions without plan snapshots', async () => {
-    const sessionId = sid('initial-plan-backfill-cap');
+  it('continues initial history backfill until the latest plan boundary is found', async () => {
+    const sessionId = sid('initial-plan-backfill-deep');
     vi.mocked(messageService.list).mockClear();
     const page = (prefix: string, startOffsetSeconds: number) =>
       Array.from({ length: 50 }, (_, i) =>
@@ -292,17 +292,25 @@ describe('makerChatStore active view tracking', () => {
       .mockResolvedValueOnce(page('older-1', 200))
       .mockResolvedValueOnce(page('older-2', 100))
       .mockResolvedValueOnce(page('older-3', 0))
-      .mockResolvedValueOnce(page('older-4', -100));
+      .mockResolvedValueOnce([
+        dbToolUseMessage(
+          sessionId,
+          'older-plan',
+          'update_plan',
+          { plan: [{ step: 'Deep plan boundary', status: 'in_progress' }] },
+          new Date(BASE_TIME.getTime() - 100_000).toISOString(),
+        ),
+      ]);
 
     makerChatStore.ensureInitialMessages(sessionId);
     await flushPromises();
 
-    expect(messageService.list).toHaveBeenCalledTimes(4);
-    expect(messageService.list).toHaveBeenNthCalledWith(4, sessionId, {
+    expect(messageService.list).toHaveBeenCalledTimes(5);
+    expect(messageService.list).toHaveBeenNthCalledWith(5, sessionId, {
       limit: 50,
-      before: 'older-2-00',
+      before: 'older-3-00',
     });
-    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-3-00');
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-plan');
   });
 
   it('enterView disposer leaves the session', () => {

@@ -56,8 +56,11 @@ export function TodoListCard({
   const completed = todos.filter((todo) => todo.status === 'completed').length;
   const total = todos.length;
   const allDone = completed >= total;
-  // Codex 口径:当前步 = 已完成数 + 1(全部完成时停在 M / M)。
-  const currentStep = allDone ? total : Math.min(completed + 1, total);
+  const activeIndex = todos.findIndex((todo) => todo.status === 'in_progress');
+  const pendingIndex = todos.findIndex((todo) => todo.status === 'pending');
+  const currentIndex =
+    activeIndex >= 0 ? activeIndex : pendingIndex >= 0 ? pendingIndex : Math.min(completed, total - 1);
+  const currentStep = allDone ? total : currentIndex + 1;
   const hasActive = todos.some((todo) => todo.status === 'in_progress');
 
   return (
