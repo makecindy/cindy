@@ -203,6 +203,8 @@ export interface SchedulerQueueDeps {
     runId: string,
     listener: () => void,
   ) => () => void;
+  /** Schedule pause/delete：撤销仍属于该 run 的退避或派发前隐藏续跑。 */
+  cancelAutoResume?: (sessionId: string, runId: string) => void;
 }
 
 export interface MakerScheduleRunnerDeps {
@@ -1654,10 +1656,16 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // 是 no-op,不会有回调);已派发则中断 live turn(与直发路径语义一致)。
     // failDispatch 对已 settle 的 promise 是 no-op,双通道安全。
     const onAbort = (): void => {
+      const abortError = new Error('queued heartbeat aborted by schedule pause/delete');
       this.deps.logger.info?.(
         `[runner] ctx.signal aborted while heartbeat queued, cleaning up for ${sessionId}`,
       );
       sq.removeQueuedPrompt(sessionId, clientId);
+      sq.cancelAutoResume?.(sessionId, ctx.runId);
+      // 这两个 promise 分别覆盖 accept 前与 accept 后；重复 reject 安全。不能只等
+      // vendor terminal event：退避期没有活动 turn，Session.abort() 不会产生终态。
+      failDispatch(abortError);
+      failAfterAccept(abortError);
       if (dispatched) {
         const live = this.deps.maker.getSession(sessionId);
         if (live) {
@@ -1665,8 +1673,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
             this.deps.logger.warn?.('[runner] session.abort failed', err);
           });
         }
-      } else {
-        failDispatch(new Error('queued heartbeat aborted by schedule pause/delete'));
       }
     };
     if (ctx.signal.aborted) {

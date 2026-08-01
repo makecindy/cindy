@@ -702,6 +702,15 @@ export function onSchedulerAutoResumeFailed(
   };
 }
 
+/** Schedule pause/delete：只撤销仍属于该 run 的普通聊天自动续跑。 */
+export function cancelSchedulerAutoResume(sessionId: string, runId: string): boolean {
+  if (!isSchedulerAutoResumePending(sessionId, runId)) return false;
+  // teardown 是既有唯一生命周期出口：撤退避、清 coordinator 接管与隐藏续跑、
+  // 结算活动行并通知 runner。runId 校验防止迟到的旧 abort 误杀新 run。
+  autoResumeBookkeeping.teardown(sessionId);
+  return true;
+}
+
 /**
  * 中断自愈的每会话簿记(压住的错误详情 / 待确认的重连记录 / 退避排期)。
  *

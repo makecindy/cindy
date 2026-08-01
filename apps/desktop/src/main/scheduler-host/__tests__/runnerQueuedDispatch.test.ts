@@ -204,6 +204,7 @@ interface QueueHarness {
   deps: SchedulerQueueDeps;
   enqueueCalls: Array<Parameters<SchedulerQueueDeps['enqueuePrompt']>[0]>;
   removeCalls: Array<{ sessionId: string; clientId: string }>;
+  cancelAutoResumeCalls: Array<{ sessionId: string; runId: string }>;
   /** 模拟 drain 派发:触发最近一次入队项的 onAccepted。 */
   accept(): Promise<void>;
   /** 模拟排队项被丢弃(用户删除 / abort 撤项)。 */
@@ -233,10 +234,12 @@ function createQueueHarness(opts: {
 }): QueueHarness {
   const enqueueCalls: QueueHarness['enqueueCalls'] = [];
   const removeCalls: QueueHarness['removeCalls'] = [];
+  const cancelAutoResumeCalls: QueueHarness['cancelAutoResumeCalls'] = [];
   const autoResumeFailureListeners = new Set<() => void>();
   return {
     enqueueCalls,
     removeCalls,
+    cancelAutoResumeCalls,
     deps: {
       isSessionBusy: () => opts.busy,
       hasQueuedPrompt: () => opts.hasQueued ?? false,
@@ -260,6 +263,9 @@ function createQueueHarness(opts: {
       onAutoResumeFailed: (_sessionId, _runId, listener) => {
         autoResumeFailureListeners.add(listener);
         return () => autoResumeFailureListeners.delete(listener);
+      },
+      cancelAutoResume: (sessionId, runId) => {
+        cancelAutoResumeCalls.push({ sessionId, runId });
       },
     },
     async accept() {
@@ -507,6 +513,32 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     queue.failAutoResume();
 
     await expect(firePromise).rejects.toThrow('scheduled task auto-resume failed');
+    expect(harness.listenerCount()).toBe(0);
+  });
+
+  it('cancels a claimed auto-resume when the schedule is paused or deleted', async () => {
+    const harness = createSessionHarness(async () => ({ accepted: true }));
+    const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
+    const { runner } = createRunnerHarness(harness.session, queue.deps);
+    const ctx = createFireContext();
+
+    const firePromise = runner.fire(heartbeatSchedule(), ctx);
+    await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+    await queue.accept();
+    harness.emit({
+      type: 'error',
+      data: { message: 'Selected model is at capacity.', isTerminal: true },
+      source: 'claude-code',
+    });
+    await Promise.resolve();
+
+    // 退避中没有活动 vendor turn；abort 必须直接撤销接管并结束 waiter。
+    ctx.abortController.abort();
+
+    await expect(firePromise).rejects.toThrow(/abort/i);
+    expect(queue.cancelAutoResumeCalls).toEqual([
+      { sessionId: SESSION_ID, runId: 'run-q1' },
+    ]);
     expect(harness.listenerCount()).toBe(0);
   });
 

@@ -31,6 +31,7 @@ import { getDesktopNotificationsEnabled } from '../notificationService.js';
 import {
   acquirePendingAgentSwitchForDirectSend,
   broadcastSessionCreated,
+  cancelSchedulerAutoResume,
   enqueueSchedulerPrompt,
   hasQueuedSchedulerPrompt,
   isSchedulerAutoResumePending,
@@ -99,6 +100,7 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
       isPromptTracked: isSchedulerPromptTracked,
       isAutoResumePending: isSchedulerAutoResumePending,
       onAutoResumeFailed: onSchedulerAutoResumeFailed,
+      cancelAutoResume: cancelSchedulerAutoResume,
     },
   });
   const scriptRunner = new ScriptScheduleRunner({

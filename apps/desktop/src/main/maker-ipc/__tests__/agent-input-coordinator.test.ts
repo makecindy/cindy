@@ -6575,6 +6575,39 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.sendToAgent.mock.calls[2]?.[1]).toEqual({ type: 'user', content: 'take over' });
   });
 
+  it('host 放弃接管会撤销仍在队列中的 scheduler 自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'abandon-queued-scheduler-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const schedulerItem = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
+    await failAfterDispatch(h, sid, schedulerItem);
+
+    // 模拟另一个 turn 占用会话：自动 Continue 已入队，但尚未离队派发。
+    h.setRunning(true);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await flush();
+    expect(latestProjection(h.projections).pendingQueue).toEqual([
+      expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
+    ]);
+
+    h.coordinator.abandonAutoResume(sid);
+
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
+    );
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+  });
+
   it('外部发起的 turn(无 active turn)失败不通知', async () => {
     const h = createHarness();
     const sid = 'resumable-error-external';

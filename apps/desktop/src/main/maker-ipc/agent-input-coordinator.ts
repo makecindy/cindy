@@ -935,7 +935,7 @@ export class AgentInputCoordinator {
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
       // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
       // 旧续跑已被 coordinator 丢弃，再发布用户接管信号。
-      this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
+      this.cancelPreparedSchedulerAutoResume(sessionId, state);
     }
     if (isUiContinuationItem(item)) {
       this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
@@ -1012,7 +1012,7 @@ export class AgentInputCoordinator {
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
     // vendor dispatch 的隐藏 scheduler 续跑，再让 host 终止对应 run waiter；
     // 否则 compact 自己的 text/done 可能被旧 schedule run 误收。
-    this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
+    this.cancelPreparedSchedulerAutoResume(sessionId, state);
     this.deps.onUserEnqueue?.(sessionId);
     // 手动压缩与发送新消息一样,都是用户对失败 turn 的明确后续选择:
     // 放弃 active-turn retry,让 /compact 在真实 dispatch boundary 空闲时立即执行,
@@ -1193,7 +1193,7 @@ export class AgentInputCoordinator {
     }
 
     if (!isSchedulerOriginItem(item)) {
-      this.cancelPreparedSchedulerAutoResumeForUserAction(sessionId, state);
+      this.cancelPreparedSchedulerAutoResume(sessionId, state);
     }
 
     if (!this.isTurnSteerable(sessionId, state)) {
@@ -3006,10 +3006,15 @@ export class AgentInputCoordinator {
    * 是已被用户后续选择取代的合成 Continue。持久化前走 discard 回调，持久化后走
    * undispatched 回调，两条既有 host 边界都会同步结清对应 schedule waiter。
    */
-  private cancelPreparedSchedulerAutoResumeForUserAction(
+  private cancelPreparedSchedulerAutoResume(
     sessionId: string,
     state: SessionInputState,
-  ): void {
+  ): boolean {
+    const queuedClientIds = state.pendingQueue
+      .filter((item) => item.autoResume && isSchedulerOriginItem(item))
+      .map((item) => item.clientId);
+    for (const clientId of queuedClientIds) this.remove(sessionId, clientId);
+
     const active = state.activeTurn;
     const item = active?.item;
     if (
@@ -3018,16 +3023,20 @@ export class AgentInputCoordinator {
       !isSchedulerOriginItem(item) ||
       !isActiveTurnBeforeVendorDispatch(active)
     ) {
-      return;
+      return queuedClientIds.length > 0;
     }
     const persisted = active.persisted;
     this.cancelPreSendActiveTurn(sessionId, state, false);
-    log.info('cancelled prepared scheduler auto-resume after user takeover', {
+    this.emit(sessionId);
+    this.scheduleDrain(sessionId, 'scheduler-auto-resume-cancelled');
+    log.info('cancelled prepared scheduler auto-resume', {
       sessionId,
       clientId: item.clientId,
       runId: item.origin?.kind === 'scheduler' ? item.origin.runId : undefined,
       persisted,
+      queuedClientIds,
     });
+    return true;
   }
 
   private fallbackPreparedAsTurn(sessionId: string, item: AgentInputQueuedMessage, removeFromQueue: boolean): void {
@@ -3451,10 +3460,14 @@ export class AgentInputCoordinator {
 
   abandonAutoResume(sessionId: string, message?: string): void {
     const state = this.getState(sessionId);
-    if (!state.autoResumePending) return;
+    const hadPendingTakeover = state.autoResumePending !== null;
     state.autoResumePending = null;
-    if (message && state.recovery) state.error = message;
-    this.emit(sessionId);
+    const cancelledPrepared = this.cancelPreparedSchedulerAutoResume(sessionId, state);
+    const surfacedMessage = Boolean(message && state.recovery);
+    if (surfacedMessage) state.error = message ?? null;
+    // cancelPreparedSchedulerAutoResume 已为队列 / active 变化 emit；纯退避态仍需
+    // 单独投影接管结束。没有任何接管状态时保持既有 no-op 语义。
+    if (!cancelledPrepared && (hadPendingTakeover || surfacedMessage)) this.emit(sessionId);
   }
 
   private notifyUndispatchedUserTurn(sessionId: string, item: AgentInputQueuedMessage): void {
