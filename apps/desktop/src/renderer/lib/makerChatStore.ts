@@ -3360,17 +3360,17 @@ function dispatchStreamEventPayload(
   resolvedContent?: string,
 ): void {
   if (!event) return;
-  setState(sessionId, (s) =>
-    handleStreamEvent(s, {
-      sessionId,
-      type: event.type,
-      data: event.data,
-      source: event.source,
-      agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
-      persistId,
-      resolvedContent,
-    } as CCAgentStreamEvent),
-  );
+  const streamEvent = {
+    sessionId,
+    type: event.type,
+    data: event.data,
+    source: event.source,
+    agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
+    persistId,
+    resolvedContent,
+  } as CCAgentStreamEvent;
+  supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent));
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -3708,6 +3708,9 @@ function initGlobalListeners(): void {
         sessionId,
         ...(event.data as Record<string, unknown>),
       } as CCAgentStatusUpdate;
+      if (!update.skipTurnReset && !update.isRunning) {
+        supersedeInputProjectionRequests(sessionId);
+      }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
       return;
     }
@@ -3818,13 +3821,13 @@ function initGlobalListeners(): void {
                 event.data as Record<string, unknown> | null,
                 event.agentMeta ?? null,
               );
-              setState(sessionId, (s) =>
-                handleStreamEvent(s, {
-                  sessionId,
-                  type: 'error',
-                  data: event.data,
-                } as CCAgentStreamEvent),
-              );
+              const terminalErrorEvent = {
+                sessionId,
+                type: 'error',
+                data: event.data,
+              } as CCAgentStreamEvent;
+              supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
+              setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
             } finally {
               setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
             }
@@ -3921,6 +3924,7 @@ function initGlobalListeners(): void {
   const handleMakerStatusRaw = (raw: unknown) => {
     const payload = raw as { sessionId?: string; status?: string } | null;
     if (!payload?.sessionId || payload.status !== 'closed') return;
+    supersedeInputProjectionRequests(payload.sessionId);
     flushPendingTextDelta(payload.sessionId);
     setState(payload.sessionId, forceFinalizeOnSessionClosed);
   };
@@ -5358,15 +5362,18 @@ function beginInputProjectionRequest(sessionId: string, origin: string | undefin
   return epoch;
 }
 
-function noteInputProjectionOrigin(sessionId: string, origin: string | undefined): number {
+function noteInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): { epoch: number; changed: boolean } {
   const previous = _inputProjectionOrigin.get(sessionId);
   if (!_inputProjectionOrigin.has(sessionId) || previous !== origin) {
     _inputProjectionOrigin.set(sessionId, origin);
-    const nextEpoch = nextInputProjectionEpoch();
-    _inputProjectionEpoch.set(sessionId, nextEpoch);
-    return nextEpoch;
+    const epoch = nextInputProjectionEpoch();
+    _inputProjectionEpoch.set(sessionId, epoch);
+    return { epoch, changed: true };
   }
-  return _inputProjectionEpoch.get(sessionId)!;
+  return { epoch: _inputProjectionEpoch.get(sessionId)!, changed: false };
 }
 
 function isCurrentInputProjectionOrigin(
@@ -5416,6 +5423,25 @@ function applyInputProjectionOperationResponse(
   // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
   applyInputProjection(projection);
   return true;
+}
+
+/**
+ * Renderer 收到权威 turn 终态时，同时作废所有此前发出的 projection 查询。
+ * reducer 本身保持纯函数；调用方在 setState 前执行这条时序屏障。
+ */
+function supersedeInputProjectionOnTerminalEvent(
+  sessionId: string,
+  event: Pick<CCAgentStreamEvent, 'type' | 'data'>,
+): void {
+  if (event.type === 'done') {
+    if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true) {
+      supersedeInputProjectionRequests(sessionId);
+    }
+    return;
+  }
+  if (event.type === 'error' && isTerminalErrorData(event.data)) {
+    supersedeInputProjectionRequests(sessionId);
+  }
 }
 
 function runInputProjectionOperation(
@@ -5984,7 +6010,17 @@ function reconcileOpenSessionOrigins(): void {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
     // 即使当前来源暂时为空也要推进 projection 代际:否则 A→断连→A 的 ABA 会让
     // 最初按 A 发起的旧查询在来源恢复后重新通过检查,覆盖恢复后的权威投影。
-    noteInputProjectionOrigin(sessionId, current);
+    const originChange = noteInputProjectionOrigin(sessionId, current);
+    if (originChange.changed) {
+      // 来源变更后旧设备的 owner / capability 都失效。在新来源 projection 回来前
+      // fail closed，不能让 B 的历史沿用 A 的精确 owner 或 legacy 兜底。
+      setState(sessionId, (state) => ({
+        ...state,
+        continuationInFlightClientId: null,
+        continuationTurnClientId: null,
+        continuationInFlightProjectionCapability: 'unknown',
+      }));
+    }
     if (current === undefined) continue;
     const loaded = _historyLoadOrigin.get(sessionId);
     if (current === loaded) continue;
@@ -6311,6 +6347,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
  */
 function finalizeStuckRemoteTurn(sessionId: string): void {
   if (!isRemoteSession(sessionId)) return;
+  // 看门狗确认被控端已停止 = 权威终态；在清本地 owner 前先作废所有旧查询，
+  // 防止 stall 期间悬挂的 getProjection 随后把已死 turn 重新点亮。
+  supersedeInputProjectionRequests(sessionId);
   flushPendingTextDelta(sessionId); // 收尾前把残留增量落定,避免丢最后一截文本
   setState(sessionId, forceFinalizeOnSessionClosed);
 }
@@ -9481,11 +9520,17 @@ export const makerChatStore = {
     autoNameAttempts.clear();
   },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
-  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
-    setState(sessionId, (s) => handleStreamEvent(s, event)),
+  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
+    supersedeInputProjectionOnTerminalEvent(sessionId, event);
+    setState(sessionId, (s) => handleStreamEvent(s, event));
+  },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
-  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void =>
-    setState(sessionId, (s) => handleStatusUpdate(s, update)),
+  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
+    if (!update.skipTurnReset && !update.isRunning) {
+      supersedeInputProjectionRequests(sessionId);
+    }
+    setState(sessionId, (s) => handleStatusUpdate(s, update));
+  },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,
   /** Exposed for tests only. */

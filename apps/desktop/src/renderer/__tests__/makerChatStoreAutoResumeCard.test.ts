@@ -382,6 +382,24 @@ describe('续跑边界投影能力与 vendor turn owner', () => {
     );
   });
 
+  it('done 终态清 owner后，迟到旧 projection 不能重新点亮转圈', async () => {
+    const staleQuery = deferred<unknown>();
+    inputGetProjection.mockImplementationOnce(() => staleQuery.promise);
+
+    inputProjectionCb!(projection({ continuationTurnClientId: 'resume-1' }));
+    makerChatStore.ensureInitialMessages(SID);
+    makerChatStore.__applyStreamEventForTest(SID, {
+      sessionId: SID,
+      type: 'done',
+      data: {},
+    } as CCAgentStreamEvent);
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+
+    staleQuery.resolve(projection({ continuationTurnClientId: 'resume-stale' }));
+    await flush();
+    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+  });
+
   it('Stop 立即清除续跑 owner，迟到旧 projection 不能重新点亮转圈', async () => {
     const staleQuery = deferred<unknown>();
     inputGetProjection.mockImplementationOnce(() => staleQuery.promise);

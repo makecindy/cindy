@@ -303,6 +303,43 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(snapshot.queueExpanded).toBe(false);
   });
 
+  it('origin 切换后立即清除旧设备 owner 并退回 unknown', async () => {
+    const s = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+    // 避免 origin 变更自动触发的新来源查询立即返回 legacy 投影，覆盖待验证的
+    // 中间 fail-closed 状态；真实 B 投影到达后的升级已有独立用例覆盖。
+    remoteProjectionResult = new Promise(() => {});
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-a');
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    expect(snapshot.continuationInFlightProjectionCapability).toBe('unknown');
+  });
+
   it('同源权威 projection push 到达后丢弃已在途旧查询', async () => {
     const s = sid();
     const oldProjection = deferred<unknown>();
