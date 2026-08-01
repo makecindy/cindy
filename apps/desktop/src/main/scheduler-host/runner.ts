@@ -2070,6 +2070,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
           interruptedDoneTimer = undefined;
         }
       };
+      const isCurrentAutoResumePending = (): boolean =>
+        this.deps.schedulerQueue?.isAutoResumePending?.(
+          session.id,
+          options.origin.runId,
+        ) === true;
       const cleanup = (): void => {
         clearBgFallbackTimer();
         clearInterruptedDoneTimer();
@@ -2147,6 +2152,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
             clearInterruptedDoneTimer();
             return;
           }
+          // 250ms 只用于快速识别紧邻 terminal error 的配对 done；真正的生命周期
+          // 边界是本 run 的 auto-resume claim。旧 turn 的 done 即使迟到也不能提前
+          // 收口，恢复 turn 跨过 pre-vendor 边界时 claim 会先被清除。
+          if (isCurrentAutoResumePending()) return;
           // silent-stop:上游空内容消息静默收尾,main 守卫会在 1.5s 后自动续跑
           // (或弹耗尽横幅)。不 finish——等续跑 turn 的 done 或守卫 settle 通知。
           // settle 通知覆盖守卫决策为非续跑的所有路径(skip/exhausted/send 失败),
@@ -2192,10 +2201,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // listener 全跑完再问 bridge，避免订阅注册顺序把已接管的错误抢先判失败。
           queueMicrotask(() => {
             if (settled) return;
-            const claimed = this.deps.schedulerQueue?.isAutoResumePending?.(
-              session.id,
-              options.origin.runId,
-            ) === true;
+            const claimed = isCurrentAutoResumePending();
             if (!claimed) fail(new Error(error));
           });
         }

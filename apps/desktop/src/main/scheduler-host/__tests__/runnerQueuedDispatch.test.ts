@@ -448,6 +448,47 @@ describe('MakerScheduleRunner queued dispatch (busy bound session)', () => {
     });
   });
 
+  it('ignores a delayed done while the same run still owns the auto-resume claim', async () => {
+    vi.useFakeTimers();
+    try {
+      let autoResumePending = true;
+      const harness = createSessionHarness(async () => ({ accepted: true }));
+      const queue = createQueueHarness({ busy: true, autoResumePending: () => autoResumePending });
+      const { runner } = createRunnerHarness(harness.session, queue.deps);
+
+      const firePromise = runner.fire(heartbeatSchedule(), createFireContext());
+      await vi.waitFor(() => expect(queue.enqueueCalls.length).toBe(1));
+      await queue.accept();
+      harness.emit({
+        type: 'error',
+        data: { message: 'Selected model is at capacity.', isTerminal: true },
+        source: 'claude-code',
+      });
+      await Promise.resolve();
+
+      // 配对 done 晚于优化窗口到达时，仍应以 run claim 为准，不得提前 finish。
+      await vi.advanceTimersByTimeAsync(251);
+      harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+      expect(harness.listenerCount()).toBe(1);
+
+      // 生产路径在恢复 turn 的 pre-vendor 边界清除旧 claim。
+      autoResumePending = false;
+      harness.emit({
+        type: 'text',
+        data: { text: 'delayed continuation result', isFinal: true },
+        source: 'claude-code',
+      });
+      harness.emit({ type: 'done', data: {}, source: 'claude-code' });
+
+      await expect(firePromise).resolves.toMatchObject({
+        sessionId: SESSION_ID,
+        resultText: 'delayed continuation result',
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('fails the same run when a claimed auto-resume cannot be dispatched', async () => {
     const harness = createSessionHarness(async () => ({ accepted: true }));
     const queue = createQueueHarness({ busy: true, autoResumePending: () => true });
