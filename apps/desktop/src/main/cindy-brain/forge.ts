@@ -1575,7 +1575,12 @@ cindy.onHostMessage(function (msg) {
   // did-approval-{start,end}: { sessionId, requestId };
   // did-user-input-{start,end}: { sessionId, requestId }。
   // approval = permission / plan_review; user-input = ask_user_question。
-  // did-turn-end 前主机会先补发仍在场的 activity end，插件可据此清空内层状态。
+  // **按 requestId 配对,不是全局开关**:一轮里并行工具调用可能同时挂着多个审批,
+  // 每个 requestId 各发自己的 start / end。要判断"是否仍在等审批",用 requestId
+  // 集合(收到 start 加入、end 移除),集合非空即仍在等;别用单个布尔位,否则先结束
+  // 的那个请求会把还在等的抹掉。
+  // did-turn-end 前、以及会话被关闭 / 重建时,主机会给所有仍在场的 requestId 各补
+  // 一条 end，插件不会卡在等待态。
   if (msg.name === 'did-session-switched') {
     // 用户把某个会话切到台前(切换会话 / 从非会话页切回都算)。
     // msg.data = { sessionId, workdir? }。连续停留同一会话不重发。

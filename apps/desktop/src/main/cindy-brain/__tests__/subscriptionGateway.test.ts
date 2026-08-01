@@ -158,7 +158,7 @@ describe('GhostActivityTracker', () => {
     expect(events.some((event) => JSON.stringify(event).includes('secret reasoning'))).toBe(false);
   });
 
-  it('approval 与 user-input 生命周期分别映射, finishTurn 兜底结束', () => {
+  it('approval 与 user-input 生命周期分别映射, finishTurn 给所有在场请求兜底结束', () => {
     const names: string[] = [];
     const tracker = new GhostActivityTracker({
       sessionId: 's1',
@@ -168,15 +168,51 @@ describe('GhostActivityTracker', () => {
     tracker.startInteraction('permission', 'p1');
     tracker.startInteraction('plan_review', 'p2');
     tracker.startInteraction('ask_user_question', 'q1');
-    tracker.finishTurn();
+    // 三个请求同时在场:开始阶段只有 start,谁都不被提前收口。
     expect(names).toEqual([
       'did-approval-start',
-      'did-approval-end',
       'did-approval-start',
       'did-user-input-start',
+    ]);
+    tracker.finishTurn();
+    expect(names.slice(3)).toEqual([
+      'did-approval-end',
       'did-approval-end',
       'did-user-input-end',
     ]);
+  });
+
+  it('并发审批按 requestId 各自配对:先结束的不抹掉仍在等的', () => {
+    const events: Array<{ name: string; requestId: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: {
+        activity: (name, data) =>
+          events.push({ name, requestId: (data as { requestId?: unknown }).requestId }),
+      },
+    });
+    tracker.beginTurn();
+    tracker.startInteraction('permission', 'a');
+    tracker.startInteraction('permission', 'b');
+    tracker.startInteraction('permission', 'b'); // 同 id 重复进入不重发 start
+    tracker.endInteraction('permission', 'b');
+    // b 已收口而 a 仍在等:此刻绝不能出现 a 的 end。
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: 'a' },
+      { name: 'did-approval-start', requestId: 'b' },
+      { name: 'did-approval-end', requestId: 'b' },
+    ]);
+    tracker.endInteraction('permission', 'b'); // 已收口不重发 end
+    tracker.endInteraction('permission', 'a');
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: 'a' },
+      { name: 'did-approval-start', requestId: 'b' },
+      { name: 'did-approval-end', requestId: 'b' },
+      { name: 'did-approval-end', requestId: 'a' },
+    ]);
+    // 全部收口后 finishTurn 不再补发。
+    tracker.finishTurn();
+    expect(events).toHaveLength(4);
   });
 });
 

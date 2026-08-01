@@ -507,14 +507,28 @@ export interface ActivityEventSink {
   ): void;
 }
 
-/** 轮次内 activity 边界状态机：同步、O(1)、不读取正文。 */
+/** interaction kind → 对插件暴露的活动类型(等待用户回答 vs 等待用户批准)。 */
+function activityTypeOf(kind: GhostInteractionActivityKind): 'approval' | 'user-input' {
+  return kind === 'ask_user_question' ? 'user-input' : 'approval';
+}
+
+/**
+ * 轮次内 activity 边界状态机：同步、O(1)、不读取正文。
+ *
+ * thinking 是**单活跃 block**模型(vendor 的 reasoning block 串行产出,新 block
+ * 开始即代表上一个已收口);approval / user-input 则必须按 requestId **集合**
+ * 跟踪——同一轮的并行工具调用会让多个 permission 同时等在 router 里(见
+ * SessionInteractionRouter.pending),用单值覆盖会在第二个请求开始时提前给第一个
+ * 发 end,等于告诉插件"审批已结束"而用户其实还在等。每个 requestId 各配一对
+ * start/end,插件按集合非空判断是否仍在等待。
+ */
 export class GhostActivityTracker {
   private turnActive = false;
   private thinkingBlockId: string | null = null;
   private lastEndedThinkingBlockId: string | null = null;
-  private readonly interactionRequestIds: Record<'approval' | 'user-input', string | null> = {
-    approval: null,
-    'user-input': null,
+  private readonly interactionRequestIds: Record<'approval' | 'user-input', Set<string>> = {
+    approval: new Set(),
+    'user-input': new Set(),
   };
 
   constructor(private readonly opts: { sessionId: string; sink: ActivityEventSink }) {}
@@ -549,15 +563,19 @@ export class GhostActivityTracker {
 
   startInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
     if (!this.turnActive || !requestId) return;
-    this.replaceInteraction(kind === 'ask_user_question' ? 'user-input' : 'approval', requestId);
+    const type = activityTypeOf(kind);
+    // 同一 requestId 重复进入(路由重投)不重复发 start。
+    if (this.interactionRequestIds[type].has(requestId)) return;
+    this.interactionRequestIds[type].add(requestId);
+    this.emitInteraction(type, 'start', requestId);
   }
 
   endInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
     if (!this.turnActive) return;
-    const type = kind === 'ask_user_question' ? 'user-input' : 'approval';
-    if (this.interactionRequestIds[type] !== requestId) return;
+    const type = activityTypeOf(kind);
+    // delete 返回 false = 这个 requestId 没在场(已收口或从未开始),不重复发 end。
+    if (!this.interactionRequestIds[type].delete(requestId)) return;
     this.emitInteraction(type, 'end', requestId);
-    this.interactionRequestIds[type] = null;
   }
 
   finishTurn(): void {
@@ -573,8 +591,8 @@ export class GhostActivityTracker {
     this.turnActive = false;
     this.thinkingBlockId = null;
     this.lastEndedThinkingBlockId = null;
-    this.interactionRequestIds.approval = null;
-    this.interactionRequestIds['user-input'] = null;
+    this.interactionRequestIds.approval.clear();
+    this.interactionRequestIds['user-input'].clear();
   }
 
   private startThinking(blockId: string): void {
@@ -594,19 +612,14 @@ export class GhostActivityTracker {
     this.lastEndedThinkingBlockId = blockId;
   }
 
-  private replaceInteraction(type: 'approval' | 'user-input', requestId: string): void {
-    const current = this.interactionRequestIds[type];
-    if (current === requestId) return;
-    if (current) this.emitInteraction(type, 'end', current);
-    this.interactionRequestIds[type] = requestId;
-    this.emitInteraction(type, 'start', requestId);
-  }
-
+  /** 回合收口:给所有仍在场的 requestId 各补一条 end,插件不会卡在等待态。 */
   private finishInteraction(type: 'approval' | 'user-input'): void {
-    const requestId = this.interactionRequestIds[type];
-    if (!requestId) return;
-    this.emitInteraction(type, 'end', requestId);
-    this.interactionRequestIds[type] = null;
+    const ids = this.interactionRequestIds[type];
+    if (ids.size === 0) return;
+    // 先取快照再清:emit 是同步回调,清空后再遍历可避免被回调内的再入改动影响。
+    const pending = [...ids];
+    ids.clear();
+    for (const requestId of pending) this.emitInteraction(type, 'end', requestId);
   }
 
   private emitInteraction(

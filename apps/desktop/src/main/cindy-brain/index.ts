@@ -1227,8 +1227,21 @@ export function createGhostSessionTap(sessionId: string): {
     | { type: 'activity'; phase: 'start' | 'end'; request: PendingActivityRequest };
   const pending: PendingTapItem[] = [];
 
+  let droppedPending = 0;
   const enqueue = (item: PendingTapItem): void => {
-    if (pending.length < MAX_PENDING) pending.push(item);
+    if (pending.length >= MAX_PENDING) {
+      // 封顶丢最新(保住最早的连续前缀:end 之前一定有它的 start,配对性优于丢最旧)。
+      // 只在首次溢出告警,避免怪会话把日志刷爆。
+      droppedPending += 1;
+      if (droppedPending === 1) {
+        log.warn('ghost session tap pending overflow while resolving eligibility', {
+          sessionId,
+          cap: MAX_PENDING,
+        });
+      }
+      return;
+    }
+    pending.push(item);
   };
 
   const applyActivity = (
@@ -1283,7 +1296,11 @@ export function createGhostSessionTap(sessionId: string): {
         },
       });
       state = 'eligible';
-      log.debug('ghost session tap eligible', { sessionId, replay: pending.length });
+      log.debug('ghost session tap eligible', {
+        sessionId,
+        replay: pending.length,
+        ...(droppedPending > 0 ? { droppedPending } : {}),
+      });
       for (const item of pending) {
         if (item.type === 'event') {
           activity.handleEvent(item.event);
@@ -1326,6 +1343,10 @@ export function createGhostSessionTap(sessionId: string): {
       },
     },
     dispose() {
+      // 先收口再拆线:会话关闭 / Session 实例替换时,router 里可能还有 interaction
+      // 等在 finally 前,而 observer 马上就会被摘掉。不在这里补发 end,插件就会永久
+      // 停在"等待审批 / 等待用户输入"。finishTurn 给所有在场 requestId 各发一条 end。
+      activity?.finishTurn();
       translator?.dispose();
       activity?.reset();
       translator = null;
