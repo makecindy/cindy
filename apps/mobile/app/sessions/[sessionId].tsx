@@ -1962,6 +1962,12 @@ export default function SessionScreen() {
     setSessionListDrawerOpen(false);
     router.push({ pathname: '/sessions/new', params: { deviceId, deviceName } });
   }, [deviceId, deviceName, router]);
+  // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
+  // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
+  const handleDrawerGoHome = useCallback(() => {
+    setSessionListDrawerOpen(false);
+    router.dismissTo('/');
+  }, [router]);
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
   // 否则「拖回单行退出激活态」永远收不回去。
@@ -8353,7 +8359,7 @@ export default function SessionScreen() {
         <SessionListDrawer
           currentSessionId={sessionId}
           onClose={closeSessionListDrawer}
-          onGoHome={goBackToHome}
+          onGoHome={handleDrawerGoHome}
           onNewSession={handleDrawerNewSession}
           onSelectSession={handleDrawerSelectSession}
           open={sessionListDrawerOpen}

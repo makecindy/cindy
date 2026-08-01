@@ -219,6 +219,12 @@ export function SessionListDrawer({
       devices: remoteSessionStore.getDeviceIdentity(),
       liveActivityIndex: new Map(liveActivityEntries),
       pendingInteractionIndex,
+      // scheduleIndex **刻意不接**:它靠 1+N×listRuns RPC 水合,仓内把这条链路限制在
+      // 首页/设备详情页并配 defer+30s 节流(见 scheduleIndex.ts / scheduleIndexDefer.ts,
+      // issue 324:单 WS 管道被背景 listRuns 拥塞会拖慢会话打开的关键读)。抽屉是瞬态
+      // 切换器:分组与名称由共享层 fallbackScheduleInfo 兜底,主选与运行态由
+      // pendingInteractionIndex / liveActivity / useSessionRunning 覆盖,仅缺 schedule
+      // 未读绿点这档次要徽标——不值得从会话页新开一个取数点。
       sessions: excludeOrcaWorkerSessions(sessions),
       statusFilter: 'active',
       // 已解析的 i18n 文案传给共享层(共享层不出中文串;en/ja/ko 不再回退「未命名任务」)。
