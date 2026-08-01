@@ -442,6 +442,7 @@ import {
 import {
   getSessionProvider,
   hydrateSessionProvider,
+  normalizeSessionProviderId,
   setSessionProvider,
 } from '../maker-host/session-provider-store.js';
 import { getActiveCatalog, setDiscoveredProviderModels } from '../maker-host/active-catalog.js';
@@ -533,6 +534,7 @@ import { resolveClearSessionBoundary } from './clearSessionBoundary.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { setBusyProbe as setDeviceLinkBusyProbe } from '../device-link/index.js';
 import {
+  markRemoteSettingPersistedInsideHandler,
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
@@ -3844,10 +3846,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // 必须是本机当前可访问的目录,挡掉控制端用任意路径越权起进程或执行 git。
   setDeviceLinkRemoteWorkingDirGuard(checkRemoteWorkingDir);
 
-  // device-link 远程 set-* 持久化回流:控制端远程切 model/effort/permission/fastMode/extraDirs
-  // 时,被控端 set-* 只改运行时不落库;这里注入「写被控端 DB + 广播 patched」,让控制端镜像
-  // 收敛到被控端真相(取代控制端乐观覆盖)。必须 await DB 写入后才回 invoke-result,否则控制端会
-  // 过早同步新聊天草稿默认值,与被控端未来 resume 的真实 row 脱节。
+  // device-link 远程 set-* 持久化回流:effort/permission/fastMode/extraDirs 等
+  // runtime-only handler 经这个注入写被控端 DB + 广播 patched。SET_MODEL 是例外:
+  // 它必须在自己的 session 锁内直接调 persistSessionFields，防队列 drain 夹在
+  // runtime 切换与 DB 落盘之间。两条路径都必须 await 持久化后才回 invoke-result。
   setDeviceLinkRemoteSettingsPersist(async (sessionId, patch) => {
     try {
       await persistSessionFields(sessionId, patch);
@@ -8849,7 +8851,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         );
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
-        return { deferred: result.status === 'deferred', superseded: false };
+        const response = { deferred: result.status === 'deferred', superseded: false };
+        if (isDeviceLinkInvoke()) {
+          // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后。
+          // 凭证形态切换会在 runtime 阶段 close + wake 队列，等锁的 drain 可能先按
+          // 旧 DB route 重建会话。因此远程 model/provider 必须在同一锁内先落 DB。
+          const patch: Record<string, unknown> = { model };
+          if (effectiveProviderId !== undefined) {
+            patch.providerId = normalizeSessionProviderId(
+              typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
+            );
+          }
+          await persistSessionFields(sessionId, patch);
+          // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
+          markRemoteSettingPersistedInsideHandler(response);
+        }
+        return response;
       } catch (err) {
         if (err instanceof CredentialModeSwitchBusyError) {
           // 兜底(正常路径 busy 已转 deferred):切模型撞上凭证切换忙,独立 code,

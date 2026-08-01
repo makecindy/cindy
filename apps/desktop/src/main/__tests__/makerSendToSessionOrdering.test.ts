@@ -402,6 +402,19 @@ describe('sendToSession ordering', () => {
       'agentSwitchPending.revision?.(sessionId) !== expectedAgentSwitchRevision',
       'applySetModelThenCancelAgentSwitchIntent(',
     );
+    expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
+    expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
+    expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
+    expectOrder(
+      setModelBlock,
+      'applySetModelThenCancelAgentSwitchIntent(',
+      'await persistSessionFields(sessionId, patch);',
+    );
+    expectOrder(
+      setModelBlock,
+      'await persistSessionFields(sessionId, patch);',
+      'return response;',
+    );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
     expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');
     expectOrder(

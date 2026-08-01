@@ -27,6 +27,7 @@ vi.mock('../voice-input/index.js', () => ({
 }));
 
 import {
+  markRemoteSettingPersistedInsideHandler,
   runInvoke,
   setRemoteWorkingDirGuard,
   setRemoteSettingsPersist,
@@ -2102,6 +2103,22 @@ describe('远程 set-* 持久化回流', () => {
     });
 
     expect(r).toEqual({ ok: true, result: { deferred: false, superseded: true } });
+    expect(persist).not.toHaveBeenCalled();
+  });
+
+  it('set-model handler 已在 session 锁内持久化时 dispatch 不重复回流', async () => {
+    const persist = vi.fn();
+    setRemoteSettingsPersist(persist);
+    const handlerResult = { deferred: false, superseded: false };
+    markRemoteSettingPersistedInsideHandler(handlerResult);
+    registry.register('maker:set-model', () => handlerResult);
+
+    const r = await runInvoke('ctrl-a', {
+      channel: 'maker:set-model',
+      args: ['sess-1', 'claude-x', 'anthropic'],
+    });
+
+    expect(r).toEqual({ ok: true, result: handlerResult });
     expect(persist).not.toHaveBeenCalled();
   });
 

@@ -217,10 +217,11 @@ function extractGuardedPath(args: unknown[], field: 'workingDir' | 'baseRepo'): 
 }
 
 /**
- * 远程 set-* 成功后回流持久化(register.ts 在 maker 就绪后注入)。被控端 set-* 是
- * runtime-only,这里补一次写被控端 DB + 广播 sessions:patched,使控制端镜像收敛到被控端真相
- * (取代控制端乐观覆盖)。调用方会等待注入函数完成后才回 invoke-result,让控制端只在被控端
- * DB 已确认持久化后继续同步新聊天草稿默认值。
+ * 远程 set-* 成功后回流持久化(register.ts 在 maker 就绪后注入)。被控端大多数
+ * set-* 是 runtime-only,这里补一次写被控端 DB + 广播 sessions:patched。SET_MODEL
+ * 生产 handler 为了与队列 drain 原子化，会在 session 锁内先持久化并标记结果，
+ * 这里只保留给最小/旧 handler 的兼容回流。调用方会等待持久化完成后才回
+ * invoke-result，让控制端只在被控端 DB 已确认后同步新聊天草稿默认值。
  */
 type RemoteSettingsPersist = (
   sessionId: string,
@@ -228,6 +229,15 @@ type RemoteSettingsPersist = (
 ) => void | Promise<void>;
 
 let settingsPersist: RemoteSettingsPersist | null = null;
+
+// SET_MODEL 需要把 runtime + DB 持久化放在同一把 session 锁内。handler 会在锁内
+// 完成持久化后标记返回对象；dispatch 仍保留通用回流逻辑给其它 set-* 和
+// 最小/旧 handler，但不得对已原子持久化的结果再写一次。WeakSet 标记不进 wire。
+const settingsPersistedInsideHandler = new WeakSet<object>();
+
+export function markRemoteSettingPersistedInsideHandler(result: object): void {
+  settingsPersistedInsideHandler.add(result);
+}
 
 export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void {
   settingsPersist = fn;
@@ -246,6 +256,13 @@ const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {
   const field = SET_CHANNEL_FIELD[channel];
   if (!field || !settingsPersist) return;
+  if (
+    result !== null &&
+    typeof result === 'object' &&
+    settingsPersistedInsideHandler.has(result)
+  ) {
+    return;
+  }
   const sessionId = args[0];
   if (typeof sessionId !== 'string') return;
   // extraDirs 特例:set-extra-dirs handler 会按被控端 workingDir 校验、只应用 validation.valid,
