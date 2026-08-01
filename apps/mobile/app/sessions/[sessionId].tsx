@@ -1939,11 +1939,15 @@ export default function SessionScreen() {
   }, []);
   const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
-    setSessionListDrawerOpen(false);
     const targetSession = item.session as RemoteSession;
-    if (targetSession.id === sessionId) return;
+    if (targetSession.id === sessionId) {
+      setSessionListDrawerOpen(false);
+      return;
+    }
     // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
-    // 回退物理 id / store 索引;找不到设备时用 Alert 反馈(文案与首页同键),不静默吞掉。
+    // 回退物理 id / store 索引。校验先于关闭动画:失败时保持抽屉打开 + Alert 反馈
+    // (文案与首页同键)——先关再弹会让 200ms 后的读屏焦点归还从错误弹窗手里抢焦点,
+    // 且抽屉留在原地,用户可直接改选别的任务。
     const targetDeviceId = targetSession.canonicalDeviceId
       ?? targetSession.deviceLinkDeviceId
       ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
@@ -1951,6 +1955,7 @@ export default function SessionScreen() {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
+    setSessionListDrawerOpen(false);
     // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
     router.replace({
       pathname: '/sessions/[sessionId]',

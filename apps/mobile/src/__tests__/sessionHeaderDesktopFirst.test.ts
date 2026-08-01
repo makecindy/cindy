@@ -94,6 +94,8 @@ describe('mobile session header desktop-first surface', () => {
     // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack)。
     expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
     expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
+    // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    setSessionListDrawerOpen(false);");
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {
