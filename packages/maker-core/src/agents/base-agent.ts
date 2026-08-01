@@ -18,69 +18,51 @@ import type {
   ForkSdkSessionOptions,
   ForkSdkSessionResult,
   SendOrigin,
-} from "../types/events.js";
-import type { ContextUsageData } from "../types/context-usage.js";
+} from '../types/events.js';
+import type { ContextUsageData } from '../types/context-usage.js';
 import {
   coerceSessionPermissionUpdates,
   createSessionPermissionUpdate,
   hasSessionPermissionUpdates,
   type SessionPermissionUpdate,
-} from "../types/permissions.js";
-import type {
-  AgentKind,
-  Effort,
-  PermissionMode,
-  ReasoningDisplay,
-  UserMessage,
-  WorkspaceKind,
-} from "../types/common.js";
-import type {
-  Capabilities,
-  EffortDescriptor,
-  ModelDescriptor,
-} from "../types/capabilities.js";
-import type { CapabilityRoutingPolicy } from "../types/capability-routing.js";
-import { NotSupportedError } from "../types/capabilities.js";
-import type {
-  AgentCredentialMode,
-  AuthLoginOptions,
-} from "../interfaces/auth-adapter.js";
-import type { ContactsPromptState } from "../contacts/system-prompt.js";
+} from '../types/permissions.js';
+import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
+import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
+import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
+import { NotSupportedError } from '../types/capabilities.js';
+import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
+import type { ContactsPromptState } from '../contacts/system-prompt.js';
 import type {
   MemoryStatus,
   MemorySetResult,
   MemoryResetResult,
-} from "../types/memory.js";
+} from '../types/memory.js';
 import type {
   AccountRateLimitsResponse,
   ConsumeAccountRateLimitResetCreditParams,
   ConsumeAccountRateLimitResetCreditResponse,
-} from "../types/account-rate-limits.js";
-import type {
-  HookEvent,
-  HookCallbackMatcher,
-  Query,
-} from "@anthropic-ai/claude-agent-sdk";
+} from '../types/account-rate-limits.js';
+import type { HookEvent, HookCallbackMatcher, Query } from '@anthropic-ai/claude-agent-sdk';
 
-import type { AuthAdapter } from "../interfaces/auth-adapter.js";
-import type { AgentRuntimeConfig } from "../interfaces/runtime-config.js";
-import type { Logger } from "../interfaces/logger.js";
-import type { McpProvider } from "../interfaces/mcp-provider.js";
-import type { MakerMemoryManager } from "../memory/manager.js";
-import type { CodexModelListItem } from "./codex/app-server/protocol.js";
+import type { AuthAdapter } from '../interfaces/auth-adapter.js';
+import type { AgentRuntimeConfig } from '../interfaces/runtime-config.js';
+import type { Logger } from '../interfaces/logger.js';
+import type { McpProvider } from '../interfaces/mcp-provider.js';
+import type { MakerMemoryManager } from '../memory/manager.js';
+import type { CodexModelListItem } from './codex/app-server/protocol.js';
 import type {
   ScanAtResourcesOptions,
   ScanAtResourcesResult,
   AgentBuiltinCommand,
   ListAgentSkillsOptions,
   ListAgentSkillsResult,
-} from "../types/palette.js";
+} from '../types/palette.js';
 import type {
   ListCustomizationsOptions,
   ListCustomizationsResult,
-} from "../types/customizations.js";
-import { scanWorkspaceFileResources } from "./shared/palette-scanner.js";
-import type { AutoReviewDelegate } from "./shared/auto-review-decision.js";
+} from '../types/customizations.js';
+import { scanWorkspaceFileResources } from './shared/palette-scanner.js';
+import type { AutoReviewDelegate } from './shared/auto-review-decision.js';
 
 export interface AgentCapabilityAdditions {
   /** Extra models exposed by the host for this agent. Existing built-in ids are ignored. */
@@ -123,7 +105,9 @@ export interface McpToolApprovalContext {
 }
 
 export type McpToolApprovalPolicy =
-  "auto-approve" | "prompt" | "prompt-each-time";
+  | 'auto-approve'
+  | 'prompt'
+  | 'prompt-each-time';
 
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
@@ -264,7 +248,7 @@ export interface AgentDeps {
       remoteHostId?: string;
       credentialMode?: AgentCredentialMode;
       /** Marks one-off app-server work (e.g. model/list) that must not alter session routing. */
-      hostPurpose?: "control-plane";
+      hostPurpose?: 'control-plane';
     },
   ) => Promise<CodexExtraSpawnConfig>;
 
@@ -291,7 +275,7 @@ export interface AgentDeps {
   /** @deprecated Kept until the Auto-review routing PR removes the persisted Auto→Ask fallback. */
   onAutoPermissionClassifierUnavailable?: (args: {
     sessionId: string;
-    agentKind: "claude-code" | "codex";
+    agentKind: 'claude-code' | 'codex';
     status: number;
   }) => void;
 
@@ -323,9 +307,7 @@ export interface AgentDeps {
    *
    * 缺省 / undefined → 不支持远端, 任何带 remoteHostId 的 session 会被拒。
    */
-  getRemoteCodexTransport?: (
-    remoteHostId: string,
-  ) => import("./codex/app-server/transport.js").Transport;
+  getRemoteCodexTransport?: (remoteHostId: string) => import('./codex/app-server/transport.js').Transport;
 
   /**
    * Codex 专用:读**这个 thread 本次实际出口**的出站代理路径判定,用于把「后端不可达」
@@ -343,9 +325,9 @@ export interface AgentDeps {
    *
    * 缺省 / undefined / 返回 null → 保留原有的通用排查文案,不降级任何行为。
    */
-  getOutboundPathFact?: (ctx: {
-    threadId?: string;
-  }) => import("./codex/retry-escalation.js").OutboundPathFact | null;
+  getOutboundPathFact?: (
+    ctx: { threadId?: string },
+  ) => import('./codex/retry-escalation.js').OutboundPathFact | null;
 
   /**
    * Maker Memory 顶层单例 (host 注入). 当 runtimeConfig.makerMemoryEnabled === true 时,
@@ -374,9 +356,7 @@ export interface AgentDeps {
    *
    * 缺省 / undefined → 两段都不注入 (host 未接线, 与改造前行为一致)。
    */
-  getContactsPromptState?: (ctx: {
-    workingDir?: string;
-  }) => ContactsPromptState;
+  getContactsPromptState?: (ctx: { workingDir?: string }) => ContactsPromptState;
 
   /**
    * Host-side MCP approval policy, shared by **both** agents. `auto-approve`
@@ -402,9 +382,7 @@ export interface AgentDeps {
    *
    * 缺省 / undefined → 走原 dispatchInteraction (弹 UI), 行为与改动前一致。
    */
-  getMcpToolApprovalPolicy?: (
-    context: McpToolApprovalContext,
-  ) => McpToolApprovalPolicy;
+  getMcpToolApprovalPolicy?: (context: McpToolApprovalContext) => McpToolApprovalPolicy;
 
   /**
    * Codex 专用钩子：resume / fork 外部本地 thread 前由 host 准备底层 session state。
@@ -458,9 +436,7 @@ export interface AgentDeps {
    * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
    * user reviewer，不能让未知路由进入无人值守审批。
    */
-  registerCodexReviewerRouteContext?: (
-    args: CodexReviewerRouteContextArgs,
-  ) => boolean;
+  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Codex 专用：app-server 创建子 Agent thread 后，把明确的父子 thread 关系同步给宿主。
@@ -470,9 +446,9 @@ export interface AgentDeps {
    * thread 首个网络请求前完成登记。
    */
   registerCodexChildThreadForParent?: (args: {
-    parentThreadId: string;
-    childThreadId: string;
-  }) => void;
+     parentThreadId: string;
+     childThreadId: string;
+   }) => void;
 
   /**
    * Claude 专用: host 明确认定可无提示执行的只读工具名, 透传到 SDK
@@ -509,9 +485,7 @@ export interface AgentDeps {
 
   /** Host bridge for repairing Claude Code subagent usage when provider usage is zero. */
   registerClaudeSubagentTask?: (task: ClaudeSubagentTaskRegistration) => void;
-  getClaudeSubagentTaskUsage?: (
-    taskId: string,
-  ) => ClaudeSubagentTaskUsage | undefined;
+  getClaudeSubagentTaskUsage?: (taskId: string) => ClaudeSubagentTaskUsage | undefined;
 
   /**
    * Claude Code 专用:为远端机器构造一个 SDK `Query` (实际是 cc-mgr daemon 端
@@ -662,7 +636,7 @@ export interface OneShotOptions {
  *
  * "宽容"调用方 (起标题) 自己 try/catch 返空串即可,不要在 agent 里做 swallow。
  */
-export type OneShotErrorReason = "timeout" | "auth" | "network" | "malformed";
+export type OneShotErrorReason = 'timeout' | 'auth' | 'network' | 'malformed';
 
 export class OneShotError extends Error {
   constructor(
@@ -670,7 +644,7 @@ export class OneShotError extends Error {
     msg?: string,
   ) {
     super(msg ?? `oneshot-failed:${reason}`);
-    this.name = "OneShotError";
+    this.name = 'OneShotError';
   }
 }
 
@@ -687,12 +661,9 @@ export class OneShotError extends Error {
  * 用 instanceof 判断;不要靠 message 文本。
  */
 export class AgentNotAuthenticatedError extends Error {
-  constructor(
-    public readonly agentKind: string,
-    msg?: string,
-  ) {
+  constructor(public readonly agentKind: string, msg?: string) {
     super(msg ?? `agent-not-authenticated:${agentKind}`);
-    this.name = "AgentNotAuthenticatedError";
+    this.name = 'AgentNotAuthenticatedError';
   }
 }
 
@@ -864,34 +835,27 @@ export interface SendOptions {
 }
 
 export type TurnPermissionOrigin =
-  | { kind: "desktop" }
+  | { kind: 'desktop' }
   | {
-      kind: "im";
-      channel:
-        | "feishu"
-        | "discord"
-        | "slack"
-        | "wechat"
-        | "telegram"
-        | "dingtalk"
-        | "wecom";
+      kind: 'im';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
       taskId?: string;
     }
-  | { kind: "scheduler" }
-  | { kind: "hook"; source: string };
+  | { kind: 'scheduler' }
+  | { kind: 'hook'; source: string };
 
 export interface TurnPermissionPolicy {
   readonly origin: TurnPermissionOrigin;
-  readonly confirmationSurface: "desktop" | "channel";
+  readonly confirmationSurface: 'desktop' | 'channel';
   readonly confirmationTimeoutMs?: number;
   readonly onInteractionStateChange?: (
-    state: "waiting" | "resolved" | "cancelled",
+    state: 'waiting' | 'resolved' | 'cancelled',
   ) => void;
   forceConfirmToolCall(toolName: string, input: unknown): boolean;
 }
 
 export class TurnPermissionPolicyUnsupportedError extends Error {
-  readonly code = "TURN_PERMISSION_POLICY_UNSUPPORTED";
+  readonly code = 'TURN_PERMISSION_POLICY_UNSUPPORTED';
 
   constructor(
     readonly agentKind: AgentKind,
@@ -900,7 +864,7 @@ export class TurnPermissionPolicyUnsupportedError extends Error {
     super(
       `Turn permission policy is not supported by ${agentKind} in permission mode ${permissionMode}`,
     );
-    this.name = "TurnPermissionPolicyUnsupportedError";
+    this.name = 'TurnPermissionPolicyUnsupportedError';
   }
 }
 
@@ -1007,10 +971,7 @@ export interface AgentSessionHandle {
   setInteractionResolver(resolver: InteractionResolver): void;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(
-    model: string,
-    opts?: { providerId?: string | null },
-  ): Promise<void>;
+  setModel?(model: string, opts?: { providerId?: string | null }): Promise<void>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;
@@ -1123,12 +1084,12 @@ export abstract class BaseAgent {
     return {
       ...base,
       availableModels: this.mergeCapabilityList(
-        "availableModels",
+        'availableModels',
         base.availableModels,
         additions?.availableModels,
       ),
       effortLevels: this.mergeCapabilityList(
-        "effortLevels",
+        'effortLevels',
         base.effortLevels,
         additions?.effortLevels,
       ),
@@ -1136,7 +1097,7 @@ export abstract class BaseAgent {
   }
 
   private mergeCapabilityList<T extends { id: string }>(
-    listName: "availableModels" | "effortLevels",
+    listName: 'availableModels' | 'effortLevels',
     builtIn: readonly T[],
     additions: readonly T[] | undefined,
   ): T[] {
@@ -1146,7 +1107,7 @@ export abstract class BaseAgent {
     const ids = new Set(merged.map((item) => item.id));
     for (const item of additions) {
       if (ids.has(item.id)) {
-        this.deps.logger.warn("capability addition ignored duplicate id", {
+        this.deps.logger.warn('capability addition ignored duplicate id', {
           agentKind: this.kind,
           listName,
           id: item.id,
@@ -1181,7 +1142,7 @@ export abstract class BaseAgent {
   }
 
   protected permissionDecisionRequestsSessionApproval(
-    decision: Extract<InteractionDecision, { kind: "permission" }>,
+    decision: Extract<InteractionDecision, { kind: 'permission' }>,
   ): boolean {
     return hasSessionPermissionUpdates(decision);
   }
@@ -1214,9 +1175,7 @@ export abstract class BaseAgent {
    * app-server skills/list。子类自己负责缓存策略与未授权静默处理。
    * 默认无实现, 不暴露任何 skill。
    */
-  async listAgentSkills(
-    opts: ListAgentSkillsOptions,
-  ): Promise<ListAgentSkillsResult> {
+  async listAgentSkills(opts: ListAgentSkillsOptions): Promise<ListAgentSkillsResult> {
     void opts;
     return { skills: [] };
   }
@@ -1227,12 +1186,8 @@ export abstract class BaseAgent {
    * Default: workspace files/directories only. Agents can extend or replace this
    * when their native UX exposes additional @ resources.
    */
-  async scanAtResources(
-    opts: ScanAtResourcesOptions,
-  ): Promise<ScanAtResourcesResult> {
-    return scanWorkspaceFileResources(opts.workingDir, opts.cap, {
-      query: opts.query,
-    });
+  async scanAtResources(opts: ScanAtResourcesOptions): Promise<ScanAtResourcesResult> {
+    return scanWorkspaceFileResources(opts.workingDir, opts.cap, { query: opts.query });
   }
 
   /**
@@ -1250,9 +1205,7 @@ export abstract class BaseAgent {
    *
    * 默认实现: 空数组 + 空 errors。子类按自家发现方式覆盖。
    */
-  async listCustomizations(
-    opts: ListCustomizationsOptions,
-  ): Promise<ListCustomizationsResult> {
+  async listCustomizations(opts: ListCustomizationsOptions): Promise<ListCustomizationsResult> {
     void opts;
     return { items: [], errors: [] };
   }
@@ -1272,9 +1225,8 @@ export abstract class BaseAgent {
    * 子类可选实现; 不实现时调到这里, 抛 NotSupportedError。
    */
   async oneShot(prompt: string, opts?: OneShotOptions): Promise<string> {
-    void prompt;
-    void opts;
-    return this.throwNotSupported("oneShot", "not-implemented");
+    void prompt; void opts;
+    return this.throwNotSupported('oneShot', 'not-implemented');
   }
 
   /**
@@ -1288,11 +1240,9 @@ export abstract class BaseAgent {
    *
    * Claude / Codex 端各自实现；不支持的 agent 默认抛 NotSupportedError。
    */
-  async forkSdkSession(
-    opts: ForkSdkSessionOptions,
-  ): Promise<ForkSdkSessionResult> {
+  async forkSdkSession(opts: ForkSdkSessionOptions): Promise<ForkSdkSessionResult> {
     void opts;
-    return this.throwNotSupported("forkSdkSession", "sdk-missing");
+    return this.throwNotSupported('forkSdkSession', 'sdk-missing');
   }
 
   // ── Auth 透传到 deps.auth ────────────────────────────────────────────────
@@ -1318,9 +1268,7 @@ export abstract class BaseAgent {
    * 默认无运行时发现能力，返回 false；Codex 覆盖后通过 app-server `model/list`
    * 拉完整分页快照。返回值表示快照是否仍属于当前 host 且已由宿主成功应用。
    */
-  async refreshLocalModels(
-    _options?: RefreshLocalModelsOptions,
-  ): Promise<boolean> {
+  async refreshLocalModels(_options?: RefreshLocalModelsOptions): Promise<boolean> {
     return false;
   }
 
@@ -1329,10 +1277,7 @@ export abstract class BaseAgent {
    * Codex implements this through the app-server control plane.
    */
   async readAccountRateLimits(): Promise<AccountRateLimitsResponse> {
-    return this.throwNotSupported(
-      "account:rate-limits:read",
-      "not-implemented",
-    );
+    return this.throwNotSupported('account:rate-limits:read', 'not-implemented');
   }
 
   /** Consume one banked provider reset credit without starting a model turn. */
@@ -1340,10 +1285,7 @@ export abstract class BaseAgent {
     params: ConsumeAccountRateLimitResetCreditParams,
   ): Promise<ConsumeAccountRateLimitResetCreditResponse> {
     void params;
-    return this.throwNotSupported(
-      "account:rate-limit-reset:consume",
-      "not-implemented",
-    );
+    return this.throwNotSupported('account:rate-limit-reset:consume', 'not-implemented');
   }
 
   /**
@@ -1376,7 +1318,7 @@ export abstract class BaseAgent {
    * 不实现 = 不支持。
    */
   async getMemoryStatus(): Promise<MemoryStatus> {
-    return this.throwNotSupported("memory:get", "not-implemented");
+    return this.throwNotSupported('memory:get', 'not-implemented');
   }
 
   /**
@@ -1394,7 +1336,7 @@ export abstract class BaseAgent {
    */
   async setMemory(enabled: boolean): Promise<MemorySetResult> {
     void enabled;
-    return this.throwNotSupported("memory:set", "not-implemented");
+    return this.throwNotSupported('memory:set', 'not-implemented');
   }
 
   /**
@@ -1408,7 +1350,7 @@ export abstract class BaseAgent {
    * 失败抛错; 调用方决定 UI 怎么处理 (toast / dialog)。
    */
   async resetMemory(): Promise<MemoryResetResult> {
-    return this.throwNotSupported("memory:reset", "not-implemented");
+    return this.throwNotSupported('memory:reset', 'not-implemented');
   }
 
   /**
@@ -1427,16 +1369,7 @@ export abstract class BaseAgent {
   /**
    * 默认的"不支持"抛错助手。子类不实现某能力时调此方法。
    */
-  protected throwNotSupported(
-    capability: string,
-    reason:
-      "sdk-missing" | "not-implemented" | "platform-limited" = "sdk-missing",
-    upstreamRef?: string,
-  ): never {
-    throw new NotSupportedError(capability, {
-      supported: false,
-      reason,
-      upstreamRef,
-    });
+  protected throwNotSupported(capability: string, reason: 'sdk-missing' | 'not-implemented' | 'platform-limited' = 'sdk-missing', upstreamRef?: string): never {
+    throw new NotSupportedError(capability, { supported: false, reason, upstreamRef });
   }
 }
