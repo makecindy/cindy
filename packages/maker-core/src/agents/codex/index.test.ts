@@ -9934,6 +9934,93 @@ describe('CodexAgent MCP thread context hooks', () => {
     await handle.close();
   });
 
+  it('reviews approvals against a steer intent before its acknowledgement arrives', async () => {
+    const steerAck = deferred<{ turnId: string }>();
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-steer-review-intent' } };
+      if (method === Method.TurnSteer) return steerAck.promise;
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-steer-review-intent',
+      model: 'qwen/qwen3-coder',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'Inspect the current build' });
+
+    const steerPromise = handle.steer({
+      type: 'user',
+      content: 'Clean the generated build directory',
+    });
+    for (let i = 0; i < 5; i += 1) {
+      if (host.request.mock.calls.some(([method]) => method === Method.TurnSteer)) break;
+      await Promise.resolve();
+    }
+    expect(host.request.mock.calls.some(([method]) => method === Method.TurnSteer)).toBe(true);
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-steer-review-intent',
+      itemId: 'cleanup-build',
+      command: 'rm -rf build',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      userIntent: 'Clean the generated build directory',
+    }));
+
+    steerAck.resolve({ turnId: 'turn-steer-review-intent' });
+    await expect(steerPromise).resolves.toBeUndefined();
+    await handle.close();
+  });
+
+  it('restores the prior auto-review intent after a definite steer rejection', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: 'turn-rejected-steer-intent' } };
+      if (method === Method.TurnSteer) {
+        throw Object.assign(
+          new Error('codex app-server turn/steer error -32602: no active turn to steer'),
+          { code: -32602 },
+        );
+      }
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-rejected-steer-intent',
+      model: 'qwen/qwen3-coder',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+    });
+    await handle.send({ type: 'user', content: 'Inspect the current build' });
+    await expect(handle.steer({
+      type: 'user',
+      content: 'Clean the generated build directory',
+    })).rejects.toThrow(/no active turn to steer/i);
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-rejected-steer-intent',
+      itemId: 'inspect-package',
+      command: 'npm install --dry-run',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      userIntent: 'Inspect the current build',
+    }));
+    await handle.close();
+  });
+
   it('falls back to user approvals on XD without interrupting when the UI switches to Ask', async () => {
     const agent = new CodexAgent(createDeps());
     const host = installFakeHost(agent, (method) => {

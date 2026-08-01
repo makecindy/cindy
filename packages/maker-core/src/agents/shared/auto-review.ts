@@ -402,10 +402,36 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
   return out;
 }
 
-const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
-  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish',
-  'python', 'python2', 'python3', 'node', 'ruby', 'perl', 'php', 'pwsh', 'powershell',
+const SHELL_EXECUTORS: ReadonlySet<string> = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh',
 ]);
+
+const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
+  ...SHELL_EXECUTORS,
+  'node', 'nodejs', 'deno', 'bun',
+  'ruby', 'perl', 'php', 'lua', 'luajit',
+  'pwsh', 'pwsh.exe', 'powershell', 'powershell.exe',
+  'r', 'rscript', 'tclsh', 'wish', 'julia', 'groovy', 'swift', 'osascript',
+]);
+
+function isPipeExecutor(bin: string): boolean {
+  const normalized = bin.toLowerCase().replace(/\.exe$/, '');
+  return PIPE_EXECUTORS.has(normalized)
+    || /^(?:python|pypy|ruby|perl|php|lua)\d*(?:\.\d+)*$/.test(normalized);
+}
+
+/** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
+function shellCommandPayload(tokens: string[]): string | null {
+  if (!SHELL_EXECUTORS.has(baseName(tokens[0] ?? '').toLowerCase())) return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === '--') return null;
+    if (token === '--command' || /^-[^-]*c[^-]*$/.test(token)) {
+      return tokens[i + 1] ?? '';
+    }
+  }
+  return null;
+}
 
 /** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
 function highImpactExecutionNeedsConsent(command: string): boolean {
@@ -413,14 +439,11 @@ function highImpactExecutionNeedsConsent(command: string): boolean {
     const normalized = text.replace(/['"\\]/g, '');
     const tokens = unwrapWrappers(tokenize(normalized));
     const bin = baseName(tokens[0] ?? '');
-    if (fromPipe && PIPE_EXECUTORS.has(bin)) return true;
+    if (fromPipe && isPipeExecutor(bin)) return true;
     if (bin === 'eval') return true;
-    if (/^(?:ba|z|da|k)?sh$/.test(bin)) {
-      const commandIndex = tokens.indexOf('-c');
-      const payload = commandIndex >= 0 ? tokens.slice(commandIndex + 1).join(' ') : '';
-      if (/\$\(\s*(?:curl|wget)\b/.test(payload)) return true;
-    }
-    if ((bin === 'source' || bin === '.' || /^(?:ba|z|da|k)?sh$/.test(bin))
+    const payload = shellCommandPayload(unwrapWrappers(tokenize(text)));
+    if (payload !== null && /\$\(\s*(?:curl|wget)\b/.test(payload)) return true;
+    if ((bin === 'source' || bin === '.' || SHELL_EXECUTORS.has(bin.toLowerCase()))
       && /<\(\s*(?:curl|wget)\b/.test(normalized)) return true;
   }
   return false;
@@ -455,7 +478,7 @@ function destructiveTargetNeedsConsent(
   const writableRoot = workspaceRoots[0];
   if (!writableRoot) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
-  if (/[$`{}]/.test(target) || /^~(?:[\\/]|$)/.test(target)) return true;
+  if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
   // glob 可保留，只用首个 glob 前的静态前缀证明作用域。前缀落在可写根本身仍是“清空整个
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
@@ -536,13 +559,11 @@ function scopedDestructionNeedsConsent(
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
       destructiveTargetNeedsConsent(target, workspaceRoots, opts))) return true;
-    // shell -c 内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠，按高影响边界处理。
-    if (/^(?:ba|z|da|k)?sh$/.test(bin)) {
-      const commandIndex = tokens.indexOf('-c');
-      if (commandIndex >= 0 && tokens[commandIndex + 1]) {
-        if (depth >= 3 || scopedDestructionNeedsConsent(
-          tokens[commandIndex + 1], workspaceRoots, opts, depth + 1)) return true;
-      }
+    // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
+    const shellPayload = shellCommandPayload(tokens);
+    if (shellPayload && (depth >= 3 || scopedDestructionNeedsConsent(
+      shellPayload, workspaceRoots, opts, depth + 1))) {
+      return true;
     }
     if (bin === 'find') {
       const findRoots = findDeleteRoots(tokens);

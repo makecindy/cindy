@@ -760,6 +760,17 @@ function isExpectedTurnIdMismatchError(error: unknown): boolean {
   return code === -32600 && /expected active turn id\b[\s\S]*\bbut found\b/i.test(message);
 }
 
+function isDefiniteTurnSteerRejection(error: unknown): boolean {
+  const code =
+    typeof error === 'object' && error !== null && 'code' in error
+      ? (error as { code?: unknown }).code
+      : undefined;
+  // A numeric JSON-RPC error came back from app-server: the request was
+  // processed and rejected. Transport/timeout failures have no numeric RPC
+  // code and remain delivery-uncertain.
+  return typeof code === 'number' && Number.isInteger(code);
+}
+
 // 插话 (steer) 时 turn/steer RPC 的 ack 有界等待上限。AppServerClient.request
 // 本身没有超时, app-server 卡死时裸 await 会永久挂起 → coordinator steering marker
 // 永久残留 → 后续插话点击被静默吞掉。正常情况下 ack 是毫秒级, 10s 足够宽裕。
@@ -2717,9 +2728,39 @@ export class CodexAgent extends BaseAgent {
      */
     let mutableProviderId: string | null | undefined = opts.providerId;
     let currentAutoReviewIntent = '';
+    type AutoReviewIntentMutation = {
+      intent: string;
+      previous: AutoReviewIntentMutation | null;
+      rejected: boolean;
+    };
+    let currentAutoReviewIntentMutation: AutoReviewIntentMutation = {
+      intent: '',
+      previous: null,
+      rejected: false,
+    };
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
-    const setAutoReviewIntent = (content: UserMessage['content']): void => {
-      currentAutoReviewIntent = extractAutoReviewUserIntent(content);
+    const setAutoReviewIntent = (content: UserMessage['content']): AutoReviewIntentMutation => {
+      const mutation: AutoReviewIntentMutation = {
+        intent: extractAutoReviewUserIntent(content),
+        previous: currentAutoReviewIntentMutation,
+        rejected: false,
+      };
+      currentAutoReviewIntentMutation = mutation;
+      currentAutoReviewIntent = mutation.intent;
+      autoReviewDecisionCache.clear();
+      return mutation;
+    };
+    const rejectAutoReviewIntent = (mutation: AutoReviewIntentMutation): void => {
+      mutation.rejected = true;
+      // A later send/steer owns the current intent. If it is also rejected
+      // later, the linked history skips every rejected predecessor instead of
+      // resurrecting an older rejected steer.
+      if (currentAutoReviewIntentMutation !== mutation) return;
+      let restored = mutation.previous;
+      while (restored?.rejected) restored = restored.previous;
+      if (!restored) return;
+      currentAutoReviewIntentMutation = restored;
+      currentAutoReviewIntent = restored.intent;
       autoReviewDecisionCache.clear();
     };
     /**
@@ -7924,6 +7965,12 @@ export class CodexAgent extends BaseAgent {
           steeredTurnId,
           capabilitySelectionText,
         );
+        // Approval callbacks can arrive after the server accepts this request
+        // but before its ACK reaches us. Publish the new intent before dispatch
+        // so those callbacks never review against the previous user message.
+        // Timeout/abort is delivery-uncertain and therefore keeps this intent;
+        // only a provable pre-accept rejection rolls it back.
+        const steerAutoReviewIntentMutation = setAutoReviewIntent(message.content);
         let steerRpc: Promise<unknown>;
         try {
           steerRpc = host.request(Method.TurnSteer, {
@@ -7932,6 +7979,7 @@ export class CodexAgent extends BaseAgent {
             expectedTurnId: steeredTurnId,
           });
         } catch (error) {
+          rejectAutoReviewIntent(steerAutoReviewIntentMutation);
           settleCapabilitySteer(false);
           throw error;
         }
@@ -7979,10 +8027,13 @@ export class CodexAgent extends BaseAgent {
           ackSettled = true;
           capabilitySteerAccepted = true;
         } catch (error) {
+          if (isDefiniteTurnSteerRejection(error)) {
+            ackSettled = true;
+            rejectAutoReviewIntent(steerAutoReviewIntentMutation);
+          }
           if (isExpectedTurnIdMismatchError(error)) {
             // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
             // 标记 RPC 已 settle,避免把这类确定性拒绝误当成 timeout/abort 在飞请求。
-            ackSettled = true;
             throw new Error('No active Codex turn to steer', { cause: error });
           }
           throw error;
@@ -8009,7 +8060,11 @@ export class CodexAgent extends BaseAgent {
                   turnId: steeredTurnId,
                 });
               },
-              () => {},
+              (error) => {
+                if (isDefiniteTurnSteerRejection(error)) {
+                  rejectAutoReviewIntent(steerAutoReviewIntentMutation);
+                }
+              },
             );
           }
         }
@@ -8025,7 +8080,6 @@ export class CodexAgent extends BaseAgent {
             turnId: steeredTurnId,
           });
         }
-        setAutoReviewIntent(message.content);
       },
 
       async abort() {
