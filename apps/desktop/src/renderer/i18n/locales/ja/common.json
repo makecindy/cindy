@@ -1500,6 +1500,7 @@
         "manualModelWindowLabel": "コンテキストウィンドウ（任意）",
         "manualModelWindowPlaceholder": "例: 1000000",
         "manualModelWindowHint": "空欄の場合は 200K にフォールバックします。このモデルが実際にサポートするコンテキストトークン数を入力してください（1M = 1000000）",
+        "manualModelWindowInvalid": "コンテキストウィンドウは正の整数で入力してください（カンマ・アンダースコア・スペースで桁区切り可）。修正して再度お試しください",
         "manualModelPlaceholder": "例: local-model",
         "addManualModel": "モデルを追加",
         "recommended": "推奨",

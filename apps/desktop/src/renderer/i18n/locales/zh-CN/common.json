@@ -1500,6 +1500,7 @@
         "manualModelWindowLabel": "上下文窗口（可选）",
         "manualModelWindowPlaceholder": "如 1000000",
         "manualModelWindowHint": "留空按 200K 兜底；填该模型实际支持的上下文 token 数（1M 写作 1000000）",
+        "manualModelWindowInvalid": "上下文窗口需为正整数（可用逗号、下划线或空格分组），请修正后重试",
         "manualModelPlaceholder": "例如 local-model",
         "addManualModel": "添加模型",
         "recommended": "推荐",

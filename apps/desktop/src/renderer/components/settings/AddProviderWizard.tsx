@@ -716,14 +716,19 @@ export function AddProviderWizard({
       if (!sel || sel.kind !== 'preset' || !sel.preset.runtimes[agent]) return;
       const id = manualModelIds[agent]?.trim() ?? '';
       if (!id) return;
-      // 可选窗口输入：空 / 非法忽略（落 200K 兜底），合法正整数按 agent 分槽随模型入库。
-      // 校验复用 CustomProviderDialog 的 isCommittableWindowText：允许 `,`/`_`/空格 分组
-      // 分隔，BigInt 精确解析并限 MAX_SAFE_INTEGER，拒绝 `1e6` 等科学计数法。
+      // 可选窗口输入：空 = 不指定（落 200K 兜底）；非空须通过 isCommittableWindowText
+      // （复用 CustomProviderDialog：允许 `,`/`_`/空格 分组，BigInt 精确解析并限
+      // MAX_SAFE_INTEGER，拒绝 `1e6`、`0`、超界粘贴）。非法文本不静默丢弃——
+      // 拒绝添加并 toast 提示，保留输入让用户修正。
       const rawWindow = manualModelWindows[agent]?.trim() ?? '';
+      if (rawWindow !== '' && !isCommittableWindowText(rawWindow)) {
+        toast.error(t('settings.providers.wizard.manualModelWindowInvalid'));
+        return;
+      }
       const window =
-        rawWindow !== '' && isCommittableWindowText(rawWindow)
-          ? Number(BigInt(rawWindow.replace(/[,_ ]/g, '')))
-          : undefined;
+        rawWindow === ''
+          ? undefined
+          : Number(BigInt(rawWindow.replace(/[,_ ]/g, '')));
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
