@@ -2321,3 +2321,66 @@ describe('会执行内层命令的启动器:script / sg / unbuffer / busybox / a
     }
   });
 });
+
+describe('tar 传统无横线选项词 / 权限属主变更(第四十七批评审)', () => {
+  it('tar 的传统选项词既判解压模式也取落地目录', () => {
+    for (const c of [
+      // 带值字母按出现顺序吃后面的操作数(与 getopt 簇的附着值语义不同):xCf → C=/etc、f=payload.tar。
+      'tar xCf /etc payload.tar',
+      'tar xfC payload.tar /etc',
+      'tar xvfC payload.tar /etc',
+      // 传统选项词里的 P(--absolute-names)同样让归档成员写绝对路径 → 静态不可证,必问。
+      'tar xPf payload.tar',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 传统选项词也要能判出"这是解压":不带落地目录时写当前目录,cwd 落系统目录 → 必问。
+    expect(classifyShellCommand('tar xf payload.tar', roots, { cwd: '/etc' })).toBe('prompt-each-time');
+    expect(classifyShellCommand('cd /etc && tar xf /tmp/payload.tar', roots)).toBe('prompt-each-time');
+  });
+
+  it('系统文件的权限/属主/属性变更进入确定性同意', () => {
+    for (const c of [
+      'chmod 000 /etc/passwd',
+      'chmod -R 700 /etc',
+      // 符号模式可以 `-`/`+` 起头:当成选项跳过会把真实目标误当模式操作数吃掉。
+      'chmod u+w /etc/passwd',
+      'chmod -w /etc/passwd',
+      'chown attacker /etc/passwd',
+      'chown -R me:staff /etc',
+      'chgrp staff /etc/passwd',
+      // --reference 从参考文件取模式 → 没有模式操作数,首个操作数就是目标。
+      'chmod --reference=/tmp/ref /etc/passwd',
+      'chattr +i /etc/passwd',
+      'setfacl -m u:me:rw /etc/passwd',
+      'chflags uchg /etc/passwd',
+      'chmod 600 /usr/bin/node',
+      // 与既有的 -exec 递归、cd 跨段有效-cwd 组合生效。
+      'find . -exec chmod 000 /etc/passwd \;',
+      'cd /etc && chmod 000 passwd',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('区内目标与打包/列出形态不误升', () => {
+    for (const c of [
+      'tar xCf dist payload.tar',
+      'tar xf payload.tar',
+      'tar xzvf payload.tar',
+      'tar cf out.tar src',
+      'tar tvf payload.tar',
+      'tar dist',                       // 目录名不是传统选项词(不含功能字母)
+      'chmod 755 dist/bin/tool',
+      'chmod +x scripts/build.sh',
+      'chmod -R u+w build',
+      'chown -R me:staff .',
+      'chmod 755 /usr/local/bin/tool',
+      'chattr +i build/lock',
+      'setfacl -m u:me:rw build/out',
+      'rg "chmod 000" docs',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+});

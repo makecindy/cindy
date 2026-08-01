@@ -250,7 +250,40 @@ function isArchiveExtraction(bin: string, args: readonly string[]): boolean {
   if (bin === 'unzip') {
     return !args.some((t) => /^-[a-zA-Z]*[ltvz]$/.test(t) && !t.startsWith('--'));
   }
-  return args.some((t) => t === '--extract' || t === '--get' || /^-[a-zA-Z]*x/.test(t));
+  const oldStyle = tarOldStyleOptionWord(args);
+  return (oldStyle?.includes('x') ?? false)
+    || args.some((t) => t === '--extract' || t === '--get' || /^-[a-zA-Z]*x/.test(t));
+}
+
+/**
+ * tar 的**传统无横线选项词**(首个参数,如 `tar xCf /etc payload.tar` 里的 `xCf`)。GNU/BSD tar 都接受
+ * 这种历史写法,且带值字母**按出现顺序依次取后面的操作数**(与 getopt 簇的"附着值"语义不同:
+ * `xCf /etc p.tar` → C=/etc、f=p.tar)。只有首个参数按此解析(codex 报:原先只认 `-` 开头的 token,
+ * 既判不出解压模式也取不到写目标)。
+ */
+function tarOldStyleOptionWord(args: readonly string[]): string | null {
+  const first = args[0];
+  if (!first || !/^[A-Za-z]+$/.test(first)) return null;
+  // 传统选项词必须含一个功能字母(x/c/t/r/u/A/d),否则 `tar dist` 这类把目录名当选项词会误判。
+  return /[xctruAd]/.test(first) ? first : null;
+}
+
+/** tar 传统选项词里带值字母按顺序绑定后续操作数;返回 `letter` 绑定到的值。 */
+function tarOldStyleValues(
+  optionWord: string,
+  operands: readonly string[],
+  valueLetters: string,
+  letter: string,
+): string[] {
+  const out: string[] = [];
+  let oi = 0;
+  for (const ch of optionWord) {
+    if (!valueLetters.includes(ch)) continue;
+    const value = operands[oi];
+    oi += 1;
+    if (ch === letter && value) out.push(value);
+  }
+  return out;
 }
 
 /**
@@ -367,7 +400,9 @@ function argumentWriteTargets(tokens: string[]): string[] {
     const out: string[] = [];
     // tar -P/--absolute-names:不剥成员路径的前导 `/`,归档里若含 `/etc/cron.d/job` 会直接写进系统路径。
     // 归档内容静态不可见 → 无法证明成员安全,用哨兵 `/` 强制必问(codex 报)。
-    if (bin === 'tar' && args.some((t) => t === '--absolute-names' || /^-[A-Za-z]*P/.test(t))) {
+    const tarOldStyle = bin === 'tar' ? tarOldStyleOptionWord(args) : null;
+    if (bin === 'tar' && (args.some((t) => t === '--absolute-names' || /^-[A-Za-z]*P/.test(t))
+      || (tarOldStyle?.includes('P') ?? false))) {
       return [UNPROVABLE_WRITE_TARGET];
     }
     // 长选项(含 `=` 附加值)按整 token 匹配;短选项一律走**簇语义** —— 原先只认以 `-C`/`-o`/`-O`
@@ -389,6 +424,10 @@ function argumentWriteTargets(tokens: string[]): string[] {
       : bin === 'unzip' ? 'dOPx'
         : bin === 'curl' ? 'odFHuAebcCDEKTUwxyYzmMQ'
           : 'OPoitTwQARDeUBI';
+    // tar 的传统无横线选项词:带值字母按顺序吃后面的操作数(`tar xCf /etc payload.tar` → C=/etc)。
+    if (tarOldStyle) {
+      out.push(...tarOldStyleValues(tarOldStyle, positionalOperands(args.slice(1)), valueLetters, 'C'));
+    }
     for (let i = 0; i < args.length; i++) {
       const t = args[i];
       if (longFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
@@ -414,6 +453,41 @@ function argumentWriteTargets(tokens: string[]): string[] {
     // 有效 cwd 解析 —— 区内解压照常留灰区,cwd 落系统目录才升红线。
     if (out.length === 0 && (bin === 'tar' || bin === 'unzip') && isArchiveExtraction(bin, args)) {
       return ['.'];
+    }
+    return out;
+  }
+  // 权限/属主/属性变更:改的是**访问控制**,与改内容同等危险(`chmod 000 /etc/passwd` 直接破坏系统
+  // 可用性、`chown me /etc/passwd` 把系统文件交给当前用户)。既有红线只覆盖 chmod 777 / 全局开放写
+  // 这一类"放宽"形态,收紧与换属主都没覆盖(codex 报)→ 把 FILE 操作数当写目标,复用系统路径判定。
+  if (/^(?:chmod|chown|chgrp|chflags|chattr|setfacl)$/.test(bin)) {
+    const out: string[] = [];
+    // 首个操作数是 MODE/OWNER/GROUP/FLAGS 规格而非文件;`--reference=RFILE`(chmod/chown)从参考文件
+    // 取规格,此时**没有**规格操作数,全部操作数都是目标。chattr 的属性词以 `+`/`-`/`=` 起头,已被
+    // 选项过滤跳过,故不占规格位。
+    const specFromReference = args.some((t) => /^--reference(?:=|$)/.test(t));
+    // 需要"规格操作数"的命令:chmod 的 MODE、chown 的 OWNER[:GROUP]、chgrp 的 GROUP、chflags 的 FLAGS、
+    // chattr 的属性词。setfacl 的 ACL 由 -m/-x 等选项给出,`--reference` 从参考文件取规格 → 无规格操作数,
+    // 此时全部操作数都是目标。
+    let needsSpec = bin !== 'setfacl' && !specFromReference;
+    let optionsEnded = false;
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (!optionsEnded) {
+        if (t === '--') { optionsEnded = true; continue; }
+        // 带独立值的选项:chmod/chown `--reference RFILE`、chown `--from OLD`、setfacl `-m/-x/-M/-X ACL`。
+        if (/^(?:--reference|--from)$/.test(t)) { i++; continue; }
+        if (bin === 'setfacl' && /^(?:-m|-x|-M|-X|--modify|--remove|--set|--restore)$/.test(t)) { i++; continue; }
+        // chmod 的符号模式与 chattr 的属性词可以 `-`/`+`/`=` 起头(`chmod -w f`、`chmod +x f`、`chattr +i f`),
+        // 当成选项跳过会把后面的**真实目标**误当规格操作数吃掉 → 先正面识别规格词。
+        // 大小写敏感:`-R`(递归)不落进 `-[rwxXstugo]+`,仍按选项跳过。
+        const isSpecWord = needsSpec && (
+          (bin === 'chmod' && /^(?:[0-7]{1,4}|[-+=][rwxXstugo]+|[ugoa]*[-+=][rwxXstugo]*)$/.test(t))
+          || (bin === 'chattr' && /^[-+=][a-zA-Z]+$/.test(t)));
+        if (isSpecWord) { needsSpec = false; continue; }
+        if (t.startsWith('-')) continue;
+      }
+      if (needsSpec) { needsSpec = false; continue; } // 位置型规格(chown/chgrp/chflags 的首个操作数)
+      out.push(t);
     }
     return out;
   }
