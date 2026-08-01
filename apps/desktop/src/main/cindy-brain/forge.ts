@@ -1620,7 +1620,11 @@ cindy.onHostMessage(function (msg) {
   activity 只带 \`sessionId\` + \`blockId\` 或 \`requestId\`;**不会给 reasoning、工具
   input、命令、文件内容、计划正文、问题内容或答案**。旧插件不声明 activity 时行为
   完全不变;没声明的 topic 主机不投;
-- **只覆盖你自己的主会话**:orca worker、后台自动化会话不投(与你无关的噪音);
+- **只覆盖你自己的主会话**:orca worker、后台自动化会话不投(与你无关的噪音)。
+  粒度到**轮次**:主会话里的自动化轮次(\`/goal\` 自动续跑、定时任务、IM / hook 渠道
+  代发)同样不投,**连它们触发的审批与提问也不投** —— 所以你收到的每条
+  \`did-approval-*\` / \`did-user-input-*\` 都是用户本人在 Desktop 上被问到,
+  不会有"没有对应轮次的审批"这种孤儿事件;
 - **旁听是 fire-and-forget**:主机投完即走,你崩了/慢了不影响任何会话;熄灯期事件
   进队列(上限 100,溢出丢最旧,下一条带 \`dropped\` 计数),事件到达会把你按需
   拉起补投——但订阅型意识**建议 \`launch:"resident"\`**(要秒收就得在场);

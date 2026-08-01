@@ -495,6 +495,56 @@ export interface TurnEventSink {
   turnEnd(data: GhostEventTurnEndData): void;
 }
 
+/**
+ * 读 status 事件的 isRunning。非 status 事件返回 null(供"这是不是轮次起点"判断);
+ * status 但 data 形状不对按 false —— 拿不准就不算在跑。
+ */
+export function readStatusIsRunning(ev: MinimalAgentEvent): boolean | null {
+  if (ev.type !== 'status') return null;
+  if (typeof ev.data !== 'object' || ev.data === null) return false;
+  return (ev.data as { isRunning?: unknown }).isRunning === true;
+}
+
+/**
+ * 轮次来源跟踪:回答"这条 interaction 该不该投给插件"。
+ *
+ * 为什么需要它 —— interaction router 给 observer 的 `route.origin` 是另一套取值
+ * (TurnPermissionOrigin: desktop / im / scheduler / hook),而且只有 hook-control 与
+ * IM turnRunner 会 beginInteractionRoute。goal 续跑与 scheduler 定时任务都是直发
+ * session.send,压根没有 route,光看 route 会把它们的审批 / 提问放行;而事件侧
+ * (turnOrigin 非 user)又把它们的轮次事件滤掉了,插件就会收到"没有对应轮次的审批",
+ * 违反作者手册"不投后台自动化"的契约。所以来源要从事件流上自己记。
+ */
+export class GhostTurnOriginTracker {
+  /** 缺省 user:接线发生在任何轮次之前,首个轮次起点到达前按用户会话处理。 */
+  private kind = 'user';
+
+  /**
+   * 只在轮次起点(status isRunning:true)更新:Session 越过 dispatch 边界后才装
+   * currentTurnOrigin,provider 的 status(true) 必然带上本轮 origin;而轮次终态之后
+   * origin 会被清空,逐事件更新会被 undefined 抹回 user。
+   *
+   * 也**不在轮次结束时复位** —— codex 计划审批就发生在轮次终态之后,复位会把它
+   * 误判成用户轮次。下一个轮次起点自然会覆盖。
+   */
+  noteEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void {
+    if (readStatusIsRunning(ev) === true) this.kind = ev.turnOrigin?.kind ?? 'user';
+  }
+
+  /**
+   * 两道独立的门:route 存在时必须是 desktop 面(IM / hook 注册的是 channel-card /
+   * headless);route 缺省即 Desktop 面,此时再看当前轮次来源挡掉 goal / scheduler。
+   *
+   * **只该用在 start 侧**:end 由 GhostActivityTracker 按 requestId 配对,没登记过的
+   * requestId 本就是 no-op。若 end 也过滤,一旦来源在等待期间翻转(理论上被 Session
+   * busy 守卫挡住,但不该依赖它),start 就会永远等不到 end。
+   */
+  acceptsInteraction(route?: { origin?: { kind?: string } }): boolean {
+    if (route?.origin?.kind && route.origin.kind !== 'desktop') return false;
+    return this.kind === 'user';
+  }
+}
+
 export type GhostInteractionActivityKind =
   | 'permission'
   | 'plan_review'
@@ -720,10 +770,7 @@ export class GhostTurnTranslator {
     };
 
     if (ev.type === 'status') {
-      const isRunning =
-        typeof ev.data === 'object' && ev.data !== null
-          ? (ev.data as { isRunning?: unknown }).isRunning === true
-          : false;
+      const isRunning = readStatusIsRunning(ev) === true;
       if (isRunning) {
         // closing 期间就开新 turn:上一轮确实没等到定性事件,按中断收口。
         if (this.state === 'closing') this.finish(base, 'interrupted', undefined);

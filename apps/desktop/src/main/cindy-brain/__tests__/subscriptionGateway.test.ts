@@ -2,7 +2,7 @@
  * subscriptionGateway.test.ts — 订阅槽网关单测(纯 DI,假时钟,无 Electron)。
  * 覆盖:did- 扇出(topic 白名单/停用忽略)、熄灯缓冲+唤醒补投+溢出丢最旧
  * 带 dropped、seq 单调;will- 串行短路、超时 fail-open、熔断降级、verdict
- * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化。
+ * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -10,10 +10,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   GhostSubscriptionGateway,
   GhostActivityTracker,
+  GhostTurnOriginTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
+  readStatusIsRunning,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -720,5 +722,70 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
     ).toEqual({ inputTokens: 100, outputTokens: 40, cacheReadTokens: 60 });
     expect(normalizeTurnUsage({})).toBeUndefined();
     expect(normalizeTurnUsage('x')).toBeUndefined();
+  });
+});
+
+describe('readStatusIsRunning', () => {
+  it('只认 status 事件,data 形状不对按 false', () => {
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: true } })).toBe(true);
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: false } })).toBe(false);
+    // 非布尔真值不认(避免 'true' / 1 之类被当成在跑)
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: 'true' } })).toBe(false);
+    expect(readStatusIsRunning({ type: 'status', data: undefined })).toBe(false);
+    expect(readStatusIsRunning({ type: 'status', data: null })).toBe(false);
+    // null 表示"不是轮次起点判断的对象",与 false 语义不同
+    expect(readStatusIsRunning({ type: 'done', data: {} })).toBeNull();
+    expect(readStatusIsRunning({ type: 'thinking', data: {} })).toBeNull();
+  });
+});
+
+describe('GhostTurnOriginTracker', () => {
+  it('缺省放行用户 Desktop:首个轮次起点到达前也认', () => {
+    const origin = new GhostTurnOriginTracker();
+    expect(origin.acceptsInteraction(undefined)).toBe(true);
+    expect(origin.acceptsInteraction({ origin: { kind: 'desktop' } })).toBe(true);
+  });
+
+  it('非 desktop route 直接挡掉(IM / hook 的 channel-card / headless 面)', () => {
+    const origin = new GhostTurnOriginTracker();
+    expect(origin.acceptsInteraction({ origin: { kind: 'im' } })).toBe(false);
+    expect(origin.acceptsInteraction({ origin: { kind: 'hook' } })).toBe(false);
+    expect(origin.acceptsInteraction({ origin: { kind: 'scheduler' } })).toBe(false);
+  });
+
+  it('goal / scheduler 直发(无 route)靠事件流上的轮次来源挡掉', () => {
+    const origin = new GhostTurnOriginTracker();
+    // goal 续跑:GoalController 直发 session.send,router 侧没有 route
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+    // 轮次终态之后 origin 会被 Session 清空,但不能因此放行(codex 计划审批就在终态后)
+    origin.noteEvent({ type: 'status', data: { isRunning: false } });
+    origin.noteEvent({ type: 'done', data: {} });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+
+    origin.noteEvent({
+      type: 'status',
+      data: { isRunning: true },
+      turnOrigin: { kind: 'scheduler' },
+    });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+  });
+
+  it('自动化轮次之后的用户轮次要恢复放行(不带 turnOrigin = Desktop 直发)', () => {
+    const origin = new GhostTurnOriginTracker();
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+    // Desktop 的 send 不传 origin,Session 就不会给事件打 turnOrigin
+    origin.noteEvent({ type: 'status', data: { isRunning: true } });
+    expect(origin.acceptsInteraction(undefined)).toBe(true);
+  });
+
+  it('只有轮次起点更新来源:轮次中途的事件不会把 goal 抹回 user', () => {
+    const origin = new GhostTurnOriginTracker();
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    // 中途事件在 Session 清空 origin 后不带 turnOrigin,逐事件更新就会误判
+    origin.noteEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
+    origin.noteEvent({ type: 'assistant', data: {} });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
   });
 });

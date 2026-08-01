@@ -167,6 +167,7 @@ import {
   GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
   type GhostInteractionActivityKind,
   type GhostScreenResult,
@@ -1197,7 +1198,9 @@ type PendingActivityRequest = {
  * 会话事件 tap 工厂(register.ts wireSessionToIpc 对每个新会话叠加一个
  * onEvent 监听):把 AgentEvent 折叠成 did-turn-* 发进网关。
  * - 只投用户主会话(desktop、非 orca;资格 DB 现查,判定期事件小缓冲回放);
- * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除。
+ * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除;
+ * - interaction 侧同样只投用户 Desktop 面(见 GhostTurnOriginTracker):非 desktop
+ *   route 直接挡掉,route 缺省时按事件流上记下的轮次来源挡掉 goal / scheduler。
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
@@ -1219,6 +1222,9 @@ export function createGhostSessionTap(sessionId: string): {
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
   let state: 'unknown' | 'resolving' | 'eligible' | 'ineligible' = 'unknown';
+  // 轮次来源:interaction 侧只靠 route 判断不住 goal / scheduler(它们没 route),
+  // 得从事件流上记。语义与理由见 GhostTurnOriginTracker。资格无关,恒记。
+  const origin = new GhostTurnOriginTracker();
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
   const MAX_PENDING = 32;
@@ -1315,6 +1321,8 @@ export function createGhostSessionTap(sessionId: string): {
 
   return {
     handleEvent(ev) {
+      // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
+      origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
       if (state === 'eligible') {
         activity?.handleEvent(ev);
@@ -1331,13 +1339,13 @@ export function createGhostSessionTap(sessionId: string): {
     interactionObserver: {
       onStart(request, route) {
         if (state === 'ineligible') return;
-        if (route?.origin?.kind && route.origin.kind !== 'desktop') return;
+        if (!origin.acceptsInteraction(route)) return;
         applyActivity('start', request);
         if (state !== 'eligible') kickResolve();
       },
       onEnd(request, route) {
         if (state === 'ineligible') return;
-        if (route?.origin?.kind && route.origin.kind !== 'desktop') return;
+        void route; // 见 acceptsInteraction 注释:end 只按 requestId 配对,不过滤来源
         applyActivity('end', request);
         if (state !== 'eligible') kickResolve();
       },
