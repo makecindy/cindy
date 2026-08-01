@@ -1501,7 +1501,7 @@
         "manualModelWindowLabel": "Context window (optional)",
         "manualModelWindowPlaceholder": "e.g. 1000000",
         "manualModelWindowHint": "Leave empty to fall back to 200K; enter the actual context token count of this model (1M = 1000000)",
-        "manualModelWindowInvalid": "Context window must be a positive integer (commas, underscores or spaces allowed as grouping). Please correct it and try again",
+        "manualModelWindowInvalid": "Context window must be a valid positive integer (separators allowed between digit groups). Please correct it and try again",
         "manualModelPlaceholder": "e.g. local-model",
         "addManualModel": "Add model",
         "recommended": "Recommended",

@@ -30,7 +30,7 @@ import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
-import { isCommittableWindowText } from './CustomProviderDialog';
+import { isCommittableWindowText, parseWindowText } from '@/lib/contextWindow';
 
 import {
   isLoopbackProviderUrl,
@@ -717,18 +717,15 @@ export function AddProviderWizard({
       const id = manualModelIds[agent]?.trim() ?? '';
       if (!id) return;
       // 可选窗口输入：空 = 不指定（落 200K 兜底）；非空须通过 isCommittableWindowText
-      // （复用 CustomProviderDialog：允许 `,`/`_`/空格 分组，BigInt 精确解析并限
-      // MAX_SAFE_INTEGER，拒绝 `1e6`、`0`、超界粘贴）。非法文本不静默丢弃——
-      // 拒绝添加并 toast 提示，保留输入让用户修正。
+      // （lib/contextWindow 与 CustomProviderDialog 共用：允许 `,`/`_`/空格 分组，
+      // BigInt 精确解析并限 MAX_SAFE_INTEGER，拒绝 `1e6`、`0`、超界粘贴）。
+      // 非法文本不静默丢弃——拒绝添加并 toast 提示，保留输入让用户修正。
       const rawWindow = manualModelWindows[agent]?.trim() ?? '';
       if (rawWindow !== '' && !isCommittableWindowText(rawWindow)) {
         toast.error(t('settings.providers.wizard.manualModelWindowInvalid'));
         return;
       }
-      const window =
-        rawWindow === ''
-          ? undefined
-          : Number(BigInt(rawWindow.replace(/[,_ ]/g, '')));
+      const window = parseWindowText(rawWindow);
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);

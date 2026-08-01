@@ -1500,7 +1500,7 @@
         "manualModelWindowLabel": "컨텍스트 윈도우 (선택)",
         "manualModelWindowPlaceholder": "예: 1000000",
         "manualModelWindowHint": "비워 두면 200K로 대체됩니다. 이 모델이 실제로 지원하는 컨텍스트 토큰 수를 입력하세요 (1M = 1000000)",
-        "manualModelWindowInvalid": "컨텍스트 윈도우는 양의 정수로 입력하세요 (쉼표·밑줄·공백으로 자리 구분 가능). 수정 후 다시 시도해 주세요",
+        "manualModelWindowInvalid": "컨텍스트 윈도우는 유효한 양의 정수여야 합니다(숫자 그룹 사이에 구분 기호 사용 가능). 수정 후 다시 시도해 주세요",
         "manualModelPlaceholder": "예: local-model",
         "addManualModel": "모델 추가",
         "recommended": "추천",
