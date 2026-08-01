@@ -547,6 +547,17 @@ export async function scaffoldGhostDir(
  */
 async function buildGhostPackage(
   dir: string,
+  /**
+   * 调用方**已经校验过**的规范根(realpath 产物)。传入时,这里会核对自己解析出的
+   * realpath 仍等于它,不等即拒。
+   *
+   * 为什么必须由调用方给:光靠"我自己 realpath 一次、再拿它当 containWithin 的锚点"
+   * 是**自我参照**——插件目录或其父目录在调用方校验之后、这里解析之前被换成指向
+   * 目录外的符号链接时,解析结果就是那个外部目录,以它为锚点的一切包含性判定自然
+   * 全部通过,外部 payload 会被打包进去(外部目录只要留着同样的 ghost.json,清单
+   * 对账也发现不了)。锚点必须来自上游的既有结论,不能在下游重新发明。
+   */
+  expectedRealDir?: string,
 ): Promise<
   | { ok: true; buf: Buffer; manifest: GhostManifest }
   | Exclude<ForgePackResult, { ok: true }>
@@ -564,6 +575,13 @@ async function buildGhostPackage(
     // 后续所有读取都以 realpath 根做 containWithin 复核:O_NOFOLLOW 只管最后
     // 一个路径分量,校验后中间目录被换成根外链接的窗口靠它堵。
     const realDir = await fs.promises.realpath(dir);
+    if (expectedRealDir !== undefined && realDir !== expectedRealDir) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: '插件目录在打包前被替换(实际规范路径与调用方校验过的不一致)',
+      };
+    }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
     // 读到的**原始字节**要留作不可变快照:后面生成 zip 时逐文件重新读盘,若
@@ -799,12 +817,17 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
 /**
  * 打包到调用方指定的绝对路径。自定义市场安装管道用:市场克隆缓存是只读事实,
  * 产物落到临时目录,装完即删。校验与打包规则与 packGhostDir 完全一致。
+ *
+ * `expectedRealDir` **必填**:这条路径的输入来自用户可写的市场目录,打包器不能
+ * 自己 realpath 一次就当锚点(自我参照,见 buildGhostPackage 的说明)。做成必填
+ * 而不是可选,是为了让新调用方无法跳过——签名逼着它交出上游已经校验过的规范根。
  */
 export async function packGhostDirToFile(
   dir: string,
   destPath: string,
+  expectedRealDir: string,
 ): Promise<ForgePackResult> {
-  const built = await buildGhostPackage(dir);
+  const built = await buildGhostPackage(dir, expectedRealDir);
   if (!built.ok) return built;
   try {
     // 0o600:临时包可能落在共享 /tmp,不给同机其它用户读权限。

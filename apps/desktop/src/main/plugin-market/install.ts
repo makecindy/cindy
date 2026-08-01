@@ -77,18 +77,25 @@ export async function installCustomMarketPlugin(input: {
    */
   afterCommit?: () => Promise<void>;
 }): Promise<InstalledGhost> {
+  // input.pluginDir 是发现层已 realpath、且已校验落在市场根内的规范路径。
+  // 发现之后、打包之前,若插件目录或其某个父目录被换成指向市场外的符号链接,
+  // 重新 realpath 会解析到别处——只要外部目录留着同样的 ghost.json,清单摘要
+  // 复核发现不了(它只比对清单本身),市场外的 payload 就会被打包安装。
+  // 这里要求重解析结果**仍等于发现时的规范路径**:任一路径段被换成链接都会
+  // 让 realpath 改变,直接拒绝(比只锚新解析目录更严——那等于跟着链接走)。
+  // 刻意放在下面那个 try 之外:它的 catch 会把一切压成"清单读不出来"的通用
+  // 文案,这条的原因需要如实区分。
+  let realPluginDir: string;
+  try {
+    realPluginDir = await fs.promises.realpath(input.pluginDir);
+  } catch {
+    throwIpcError('GHOST_FILE_INVALID', 'The Plugin directory is unreadable');
+  }
+  if (realPluginDir !== input.pluginDir) {
+    throwIpcError('GHOST_FILE_INVALID', 'The Plugin directory changed after discovery');
+  }
   let raw: unknown;
   try {
-    // input.pluginDir 是发现层已 realpath、且已校验落在市场根内的规范路径。
-    // 发现之后、打包之前,若插件目录或其某个父目录被换成指向市场外的符号链接,
-    // 重新 realpath 会解析到别处——只要外部目录留着同样的 ghost.json,清单摘要
-    // 复核发现不了(它只比对清单本身),市场外的 payload 就会被打包安装。
-    // 这里要求重解析结果**仍等于发现时的规范路径**:任一路径段被换成链接都会
-    // 让 realpath 改变,直接拒绝(比只锚新解析目录更严——那等于跟着链接走)。
-    const realPluginDir = await fs.promises.realpath(input.pluginDir);
-    if (realPluginDir !== input.pluginDir) {
-      throwIpcError('GHOST_FILE_INVALID', 'The Plugin directory changed after discovery');
-    }
     // 与发现层同一把闸(单句柄限量读,拒符号链接):本地市场目录仍是用户可写的
     // 活目录,按路径无界 readFile 会被换成超大文件或 /dev/zero 链接卡死 main。
     // containWithin 再堵 ghost.json 这一层自身被换成根外链接的窗口。
@@ -117,7 +124,11 @@ export async function installCustomMarketPlugin(input: {
     `cindy-custom-market-${validated.manifest.id}-${crypto.randomUUID()}.cindy`,
   );
   try {
-    const packed = await packGhostDirToFile(input.pluginDir, tempPath);
+    // 传**已校验的规范根**(既作为打包输入,也作为打包器的锚点):打包器会核对
+    // 自己解析出的 realpath 仍等于它。少了这个传递,上面那次等值校验只能证明
+    // "检查那一刻是干净的"——打包器随后自己重解析,目录在这中间被换成指向市场外
+    // 的链接时,它以自己解析出的结果为锚点,外部 payload 会被打包进去。
+    const packed = await packGhostDirToFile(realPluginDir, tempPath, realPluginDir);
     if (!packed.ok) {
       throwIpcError(
         packed.errorCode === 'TOO_LARGE' || packed.errorCode === 'MANIFEST_INVALID'

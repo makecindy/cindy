@@ -92,6 +92,36 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
   });
 
+  it('把已校验的规范根同时作为打包输入与打包器锚点传下去', async () => {
+    // 契约用例:锚点必须是**本层校验过的那个规范根**,不能是任何别的字符串
+    // (第三个参数是必填的,TS 只能保证"传了",保证不了"传对";传成 tempPath
+    // 之类会让打包器的锚点校验永远失败或永远通过,这里咬住)。
+    // "被换成外部链接"本身由两处防线拦:本层的等值校验 + 打包器内的锚点校验
+    // (各有独立用例)。
+    const pluginDir = path.join(workDir, 'plugin-ok');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    const canonical = await fs.promises.realpath(pluginDir);
+    brain.packGhostDirToFile.mockResolvedValue({
+      ok: true as const,
+      manifest: GOOD_MANIFEST,
+    });
+
+    await installCustomMarketPlugin({
+      pluginDir: canonical,
+      expected: GOOD_MANIFEST as unknown as GhostManifest,
+    });
+
+    expect(brain.packGhostDirToFile).toHaveBeenCalledWith(
+      canonical,
+      expect.stringContaining('.cindy'),
+      canonical, // ← 锚点必须是上游校验过的规范根
+    );
+  });
+
   it.runIf(process.platform !== 'win32')(
     '发现后插件目录被换成指向市场外的符号链接 → 拒绝,不进入打包',
     async () => {

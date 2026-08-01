@@ -13,7 +13,13 @@ import { fileURLToPath } from 'node:url';
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir, type ForgeScaffoldTemplate } from '../forge';
+import {
+  FORGE_GUIDE,
+  packGhostDir,
+  packGhostDirToFile,
+  scaffoldGhostDir,
+  type ForgeScaffoldTemplate,
+} from '../forge';
 import { GhostManager } from '../GhostManager';
 
 let workDir: string;
@@ -159,6 +165,50 @@ describe('packGhostDir', () => {
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('打包器不自我参照:realpath 与调用方给定的规范根不一致 → 拒绝', async () => {
+    // 只靠"自己 realpath 一次、再拿它当 containWithin 锚点"是自我参照:目录在
+    // 调用方校验之后、这里解析之前被换成指向外部的链接时,锚点就是那个外部目录,
+    // 包含性判定全部通过,外部 payload 会被打包。锚点必须由上游给。
+    const outside = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// outside payload',
+      'secret.txt': 'EXFILTRATED',
+    });
+    const staged = path.join(workDir, 'staged');
+    await fs.promises.mkdir(staged, { recursive: true });
+    const pluginDir = path.join(staged, 'alpha');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST),
+    );
+    await fs.promises.writeFile(path.join(pluginDir, 'main.js'), '// brain');
+    // 调用方(安装管道)校验时拿到的规范根。
+    const expectedRealDir = await fs.promises.realpath(pluginDir);
+    // 校验之后被换成指向外部目录的链接(外部目录留着同样的 ghost.json)。
+    await fs.promises.rm(pluginDir, { recursive: true, force: true });
+    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir);
+
+    const dest = path.join(workDir, 'out.cindy');
+    const r = await packGhostDirToFile(pluginDir, dest, expectedRealDir);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+    if (!r.ok) expect(r.message).toContain('打包前被替换');
+    // 外部 payload 一个字节都没进包(产物根本没生成)。
+    expect(fs.existsSync(dest)).toBe(false);
+  });
+
+  it('规范根一致时正常打包(锚点校验不误伤)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    const dest = path.join(workDir, 'ok.cindy');
+    const realDir = await fs.promises.realpath(dir);
+    const r = await packGhostDirToFile(realDir, dest, realDir);
+    expect(r.ok, JSON.stringify(r)).toBe(true);
+    expect(fs.existsSync(dest)).toBe(true);
   });
 
   it('结构守卫:forge.ts 与 ghostLocaleFiles.ts 不允许出现按路径的 readFile', async () => {
