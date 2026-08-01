@@ -725,6 +725,17 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   log: (message, fields) => log.debug(message, fields),
 });
 
+function settleUndispatchedAutoResumeOutcome(
+  sessionId: string,
+  item: AgentInputQueuedMessage,
+): boolean {
+  if (!autoResumeBookkeeping.isPendingOutcomeClientId(sessionId, item.clientId)) return false;
+  // markOutcome 复用 durable-write 队列；持久化中取消时，failed patch 会排在
+  // 正在进行的 user row insert 后面，不会出现先 patch、后 insert 的窗口。
+  autoResumeBookkeeping.settleOutcome(sessionId, 'failed');
+  return true;
+}
+
 /**
  * 非 renderer 发送路径(scheduler runner / hook runner)调用:给 silent-stop
  * 守卫充值自动续跑额度。renderer 发送走 createMakerSendTransaction 内部已充值,
@@ -8026,6 +8037,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 队列项未派发即被丢弃(stop/remove/clearSession) → 释放暂存的 accepted 副作用, 防回调表泄漏。
     onDiscardedQueuedMessage: (sessionId, item) => {
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
+      // 持久化中的项在这里被取消后不会再走 onUndispatchedUserTurn，复用同一结算出口。
+      settleUndispatchedAutoResumeOutcome(sessionId, item);
       // 排队心跳被丢弃 → 通知 runner 按 aborted 收尾对应 run,不让 fire 永久挂起。
       const watcher = schedulerQueuedPromptDiscardWatchers.get(item.clientId);
       if (watcher) {
@@ -8108,8 +8121,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 它不会产生任何 turn 事件,新加的终态结算路径够不到它,待确认记录于是悬空,被之后
       // 任何一个无关的 text / tool 事件误标成「已重新连接」(codex P1)。
       // 按 clientId 匹配 —— 别的 turn 未派发不该动这条记录。
-      if (autoResumeBookkeeping.isPendingOutcomeClientId(sessionId, item.clientId)) {
-        autoResumeBookkeeping.settleOutcome(sessionId, 'failed');
+      if (settleUndispatchedAutoResumeOutcome(sessionId, item)) {
         // 同时把守卫的 pendingResume 回滚:不回滚会让该会话之后的中断永远被判成
         // 「上一次还在路上」,再也不自愈(不变量 I5)。
         interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);

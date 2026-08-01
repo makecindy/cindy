@@ -100,10 +100,33 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedEnd).toBeGreaterThan(discardedStart);
     const discardedHook = registerSource.slice(discardedStart, discardedEnd);
     expect(discardedHook).toMatch(
+      /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
+    );
+    expect(discardedHook).toMatch(
       /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId\)/,
     );
     expect(discardedHook).toMatch(
       /notifySchedulerAutoResumeFailed\(sessionId, item\.origin\.runId\)/,
+    );
+
+    const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
+    const settleEnd = registerSource.indexOf('\n}\n', settleStart);
+    expect(settleStart).toBeGreaterThan(-1);
+    expect(settleEnd).toBeGreaterThan(settleStart);
+    const settleHelper = registerSource.slice(settleStart, settleEnd);
+    expect(settleHelper).toMatch(
+      /autoResumeBookkeeping\.isPendingOutcomeClientId\(sessionId, item\.clientId\)/,
+    );
+    expect(settleHelper).toMatch(
+      /autoResumeBookkeeping\.settleOutcome\(sessionId, ['"]failed['"]\)/,
+    );
+
+    const undispatchedStart = registerSource.indexOf('onUndispatchedUserTurn:');
+    const undispatchedEnd = registerSource.indexOf('onQueueEmptied:', undispatchedStart);
+    expect(undispatchedStart).toBeGreaterThan(-1);
+    expect(undispatchedEnd).toBeGreaterThan(undispatchedStart);
+    expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
+      /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
     );
   });
 
