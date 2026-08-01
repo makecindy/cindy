@@ -503,6 +503,14 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).not.toContain('agentSwitchQueueRef');
   });
 
+  it('同引擎重选也进串行链:它的 SET_MODEL 在被控端会无条件清 pending intent', () => {
+    // fire-and-forget 时这条慢请求可能在用户随后登记的新跨引擎意图之后才落地,把它清掉。
+    expect(source).toContain('void runAgentSwitchExclusive(sourceSessionId, async () => {');
+    expect(source).toContain(
+      'if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);',
+    );
+  });
+
   it('远程分支用稳定 deviceId 直连隧道:relay 瞬时重连会清空 sessionId→deviceId 索引', () => {
     expect(source).toContain('const switchApi = deviceLinkDeviceId');
     expect(source).toContain('? makerApiForDevice(deviceLinkDeviceId)');

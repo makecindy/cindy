@@ -4086,9 +4086,17 @@ export function ChatInput({
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
           // 再把这次点选当作普通的模型/来源切换应用到当前引擎。
+          //
+          // 这次 SET_MODEL 在被控端会走 applySetModelThenCancelAgentSwitchIntent —— 它
+          // **无条件**清掉 pending intent 并广播 agentSwitchIntent:null。fire-and-forget
+          // 的话,它可能在用户随后登记的新跨引擎意图之后才落地,把那次选择清掉(下一条
+          // 消息就不切引擎了)。因此把完整异步调用也排进同一条会话串行链:后续的引擎切换
+          // 必须等它发完才发出,顺序由链保证。
           makerChatStore.clearAgentSwitchIntent(sourceSessionId);
-          if (providerId) void sameEngineReselectRef.current.byProvider(providerId, newModelId);
-          else void sameEngineReselectRef.current.byModel(newModelId);
+          void runAgentSwitchExclusive(sourceSessionId, async () => {
+            if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);
+            else await sameEngineReselectRef.current.byModel(newModelId);
+          });
           return;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
