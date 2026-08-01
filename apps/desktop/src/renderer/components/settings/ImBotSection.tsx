@@ -31,6 +31,7 @@ import { FeishuBotSection } from './FeishuBotSection';
 import { HookConnectionsSection } from './HookConnectionsSection';
 import { TelegramBotSection } from './TelegramBotSection';
 import { WechatBotSection } from './WechatBotSection';
+import { WecomBotSection } from './WecomBotSection';
 import {
   showCindyGroup,
   showDiscordBot,
@@ -73,16 +74,19 @@ function PersonalGroupContent({
   showTelegram: boolean;
 }) {
   const [expandedChannel, setExpandedChannel] = useState<
-    'wechat' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
+    'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk' | null
   >(null);
 
-  const toggle = (channel: 'wechat' | 'feishu' | 'discord' | 'telegram' | 'dingtalk') => {
+  const toggle = (
+    channel: 'wechat' | 'wecom' | 'feishu' | 'discord' | 'telegram' | 'dingtalk',
+  ) => {
     setExpandedChannel((current) => (current === channel ? null : channel));
   };
 
   return (
     <div className="flex flex-col gap-3">
       <WechatBotSection expanded={expandedChannel === 'wechat'} onToggle={() => toggle('wechat')} />
+      <WecomBotSection expanded={expandedChannel === 'wecom'} onToggle={() => toggle('wecom')} />
       <FeishuBotSection
         expanded={expandedChannel === 'feishu'}
         onToggle={() => toggle('feishu')}

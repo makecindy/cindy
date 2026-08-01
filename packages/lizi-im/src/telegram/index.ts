@@ -1624,10 +1624,6 @@ export function createTelegramIM(host: IMHost, opts?: TelegramIMOptions): Telegr
 
 export type { TelegramGroupWindowEntry } from './inbound.js';
 
-function laneUserIdOf(m: TgMessage): string {
-  return encodeLaneUserId(String(m.chat.id), laneThreadIdOf(m));
-}
-
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {

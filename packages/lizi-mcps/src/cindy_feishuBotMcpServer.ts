@@ -55,10 +55,14 @@ export const TELEGRAM_HOOK_SESSION_CHANNEL_NOTE =
 export const X_HOOK_SESSION_CHANNEL_NOTE =
   '\n\n⚠️ 当前是 X (Twitter) 会话:文字回复直接输出即可(会自动作为单条公开回帖发布在 X 上,无需工具);回帖为纯文本呈现,保持简短聚焦;把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
 
+export const WECOM_SESSION_CHANNEL_NOTE =
+  '\n\n⚠️ 当前是企业微信会话:文字回复直接输出即可(会自动回复到当前企业微信会话,无需工具);把文件发给用户是在最终回复文本里写 `[文件名](xdt-file:///绝对路径)`(文件须位于当前工作目录内),图片直接引用其地址 `![说明](cindy-media://… 或 xdt-image://…)`,系统自动作为企业微信附件发回,不要用本工具;仅当用户明确说「发飞书 / 飞书通知我」时才走飞书通道。';
+
 const NOTE_BY_SOURCE: Record<string, string> = {
   'slack-hook': SLACK_HOOK_SESSION_CHANNEL_NOTE,
   telegram: TELEGRAM_HOOK_SESSION_CHANNEL_NOTE,
   // 键与 hook-control/session-runner.ts 的 vendorOptions.source 是一对隐式契约
+  wecom: WECOM_SESSION_CHANNEL_NOTE,
   x: X_HOOK_SESSION_CHANNEL_NOTE,
 };
 

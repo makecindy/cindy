@@ -130,12 +130,14 @@ export interface AgentInputCoordinatorDeps {
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
   /**
-   * steer 收到 maker-core 权威的 NO_ACTIVE_TURN 后回调 host 校准 busy 视图。
-   * isTurnRunning 的事件驱动 tracker 可能 stale 为 true (turn 异常死亡没发
-   * terminal event), 此时 fallback 转普通派发后 drain 会被假忙永久挡住,
-   * 插话点击表现为"毫无反应"。host 实现应自行复核后再清 tracker。
+   * Reconcile the host's live session/tracker view after an abort or a
+   * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
+   * turn dies without a terminal event, leaving the queue behind a false busy
+   * boundary. Returns true only when it actually cleared that stale boundary;
+   * a normal status=closed cleanup returning false must not make Codex release
+   * its abort lock before the in-flight send outcome settles.
    */
-  reconcileTurnIdle?: (sessionId: string) => void;
+  reconcileTurnIdle?: (sessionId: string) => boolean;
   hasPendingInteraction: (sessionId: string) => boolean;
   getAgentKind: (sessionId: string) => 'claude-code' | 'codex' | null;
   getSdkSessionId: (sessionId: string) => Promise<string | undefined>;
@@ -366,6 +368,18 @@ interface SessionInputState {
   /** Codex emits terminal error followed by done; queued work must not drain between the pair. */
   pendingExternalTerminalDone: boolean;
   pendingExternalTerminalDoneTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Identity of the current user-stop abort boundary. An old abort promise may
+   * settle after clearSession/new turn; its cleanup must not release the newer
+   * turn's boundary or clear its activeTurn.
+   */
+  abortBoundaryToken: symbol | null;
+  /**
+   * Session.abort() may settle before maker-core publishes the idle state. Keep
+   * rechecking the same abort boundary until the live turn is idle or a newer
+   * state invalidates it.
+   */
+  abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
   /**
@@ -406,6 +420,8 @@ function createInitialInputState(generation = 0): SessionInputState {
     drainWakeupGeneration: 0,
     pendingExternalTerminalDone: false,
     pendingExternalTerminalDoneTimer: null,
+    abortBoundaryToken: null,
+    abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
     credentialSwitchWait: null,
@@ -1009,6 +1025,7 @@ export class AgentInputCoordinator {
     reason: string,
   ): Promise<AgentInputProjection> {
     const state = this.getState(sessionId);
+    this.invalidateAbortBoundaryForNewTurn(state);
     const active: ActiveTurn = {
       item: null,
       delivery: 'turn',
@@ -1327,6 +1344,7 @@ export class AgentInputCoordinator {
     accepted.error = null;
     accepted.stickyError = null;
     accepted.recovery = null;
+    this.invalidateAbortBoundaryForNewTurn(accepted);
     accepted.activeTurn = {
       item,
       delivery: 'steer',
@@ -1379,6 +1397,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
     this.abortSteerTransactions(sessionId);
+    this.clearAbortReconcileRetry(state);
     // Stop 是用户显式收手:凭证切换等待随之取消(保留队列时队首仍在,恢复后会重新进入等待)。
     this.clearCredentialSwitchWait(state);
     if (!preserveQueue) {
@@ -1415,6 +1434,9 @@ export class AgentInputCoordinator {
     // Stop 出来的暂停是用户显式意图,不许后续新输入静默放行(区别于崩溃恢复暂停)。
     state.queuePausedByRestore = false;
     state.queueAbortPending = shouldPause && this.isDispatchBoundaryBusy(sessionId, state);
+    const abortBoundaryToken = Symbol('agent-input-abort-boundary');
+    const abortBoundaryGeneration = state.generation;
+    state.abortBoundaryToken = abortBoundaryToken;
     state.steeringQueueClientIds = [];
     state.queueExpanded = false;
     this.emit(sessionId);
@@ -1424,8 +1446,32 @@ export class AgentInputCoordinator {
         log.warn('abortSession failed', { sessionId, error: errorMessage(err) });
       })
       .finally(() => {
-        if (this.deps.getAgentKind(sessionId) === 'codex') return;
-        this.releaseAbortLockAndDrain(sessionId, 'abort-promise', { clearActiveTurn: true });
+        const current = this.states.get(sessionId);
+        if (
+          current !== state ||
+          current.generation !== abortBoundaryGeneration ||
+          current.abortBoundaryToken !== abortBoundaryToken
+        ) {
+          // clearSession, a newer Stop, or a terminal event has superseded this
+          // abort. Its late promise must not touch the current session state.
+          log.info('ignoring stale abort completion', {
+            sessionId,
+            abortBoundaryGeneration,
+            currentGeneration: current?.generation,
+          });
+          return;
+        }
+        // `Session.abort()` can settle before the vendor process has actually
+        // published its idle state. Keep this boundary alive and recheck it
+        // instead of relying on a terminal event that may be lost during an
+        // owner switch.
+        this.reconcileAbortBoundary(
+          sessionId,
+          state,
+          abortBoundaryGeneration,
+          abortBoundaryToken,
+          'abort-promise',
+        );
       });
 
     return this.getProjection(sessionId);
@@ -1822,6 +1868,7 @@ export class AgentInputCoordinator {
   clearSession(sessionId: string, clearedAt: string | number = Date.now()): AgentInputProjection {
     this.deps.noteSessionClearBoundary?.(sessionId, clearedAt);
     const prev = this.getState(sessionId);
+    this.clearAbortReconcileRetry(prev);
     this.clearSessionRunningRetry(prev);
     this.clearCredentialSwitchWait(prev);
     this.clearPendingExternalTerminalDone(prev);
@@ -1851,7 +1898,9 @@ export class AgentInputCoordinator {
   ): void {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
+    this.clearAbortReconcileRetry(state);
     state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     if (type === 'error') {
       if (active?.persisted) {
         state.activeTurn = null;
@@ -2009,6 +2058,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
+    this.clearAbortReconcileRetry(state);
     this.clearSessionRunningRetry(state);
     this.clearPendingExternalTerminalDone(state);
     this.abortSteerTransactions(sessionId);
@@ -2020,12 +2070,14 @@ export class AgentInputCoordinator {
         this.handleActiveTurnClosedBeforeDispatch(sessionId, state, active);
       }
       state.queueAbortPending = false;
+      state.abortBoundaryToken = null;
       state.steeringQueueClientIds = [];
       this.emit(sessionId);
       return;
     }
     state.activeTurn = null;
     state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     state.steeringQueueClientIds = [];
     this.emit(sessionId);
     if (releasedAbortLock) this.scheduleDrain(sessionId, 'session-closed-abort-boundary');
@@ -2229,6 +2281,7 @@ export class AgentInputCoordinator {
       state.error = null;
     }
     state.recovery = null;
+    this.invalidateAbortBoundaryForNewTurn(state);
     const active: ActiveTurn = {
       item: head,
       delivery: 'turn',
@@ -2849,7 +2902,7 @@ export class AgentInputCoordinator {
   private releaseAbortLockAndDrain(
     sessionId: string,
     reason: string,
-    opts?: { clearActiveTurn?: boolean },
+    opts?: { clearActiveTurn?: boolean; preserveAbortBoundaryToken?: boolean },
   ): void {
     const state = this.getState(sessionId);
     if (opts?.clearActiveTurn) {
@@ -2860,8 +2913,143 @@ export class AgentInputCoordinator {
     }
     if (!state.queueAbortPending && !opts?.clearActiveTurn) return;
     state.queueAbortPending = false;
+    if (!opts?.preserveAbortBoundaryToken) {
+      this.clearAbortReconcileRetry(state);
+      state.abortBoundaryToken = null;
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, reason);
+  }
+
+  /**
+   * A stop abort is scoped to the turn that existed when stop was requested.
+   * A non-preserving stop does not keep the abort lock, so a new enqueue may
+   * start another turn before the old vendor abort promise settles. Invalidate
+   * the old token at that new-turn boundary; otherwise the late abort callback
+   * would pass the state/generation check and clear the replacement turn.
+   */
+  private invalidateAbortBoundaryForNewTurn(state: SessionInputState): void {
+    this.clearAbortReconcileRetry(state);
+    state.abortBoundaryToken = null;
+  }
+
+  private reconcileAbortBoundary(
+    sessionId: string,
+    state: SessionInputState,
+    abortBoundaryGeneration: number,
+    abortBoundaryToken: symbol,
+    source: string,
+  ): void {
+    const current = this.states.get(sessionId);
+    if (
+      current !== state ||
+      current.generation !== abortBoundaryGeneration ||
+      current.abortBoundaryToken !== abortBoundaryToken
+    ) {
+      return;
+    }
+
+    let reconciledIdle = false;
+    try {
+      reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
+    } catch (err) {
+      // A best-effort reconciliation must never prevent the retry path from
+      // keeping the boundary fail-closed.
+      log.warn('reconcileTurnIdle after abort failed', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+    if (reconciledIdle) {
+      this.releaseAbortLockAndDrain(sessionId, 'abort-idle-reconciled', { clearActiveTurn: true });
+      return;
+    }
+
+    let agentKind: 'claude-code' | 'codex' | null = null;
+    try {
+      agentKind = this.deps.getAgentKind(sessionId);
+    } catch (err) {
+      log.warn('agent kind lookup failed during abort reconciliation', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+
+    let liveTurnRunning = true;
+    try {
+      liveTurnRunning = this.deps.isTurnRunning(sessionId);
+    } catch (err) {
+      log.warn('live turn-state lookup failed during abort reconciliation', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+
+    // Claude can release its queue lock as soon as abort settles, but keep the
+    // boundary token while the live turn is still running so a delayed idle
+    // reconciliation can clear stale tracker state without touching a newer
+    // turn. Codex keeps queueAbortPending until idle is authoritative.
+    //
+    // During an owner-boundary replacement the agent kind can temporarily be
+    // unknown. That is not proof that the boundary is gone: keep retrying while
+    // the queue lock or live turn says work may still exist, but remain
+    // fail-closed until a later reconciliation proves the Session is idle.
+    const shouldRetry = current.queueAbortPending || liveTurnRunning;
+    if (agentKind === 'claude-code' && (current.queueAbortPending || current.activeTurn !== null)) {
+      this.releaseAbortLockAndDrain(sessionId, 'abort-promise', {
+        clearActiveTurn: true,
+        preserveAbortBoundaryToken: shouldRetry,
+      });
+    }
+    if (shouldRetry) {
+      this.scheduleAbortReconcileRetry(
+        sessionId,
+        current,
+        abortBoundaryGeneration,
+        abortBoundaryToken,
+      );
+    } else if (!current.queueAbortPending && current.activeTurn === null) {
+      // Nothing remains that this stop boundary can own. Do not leave a stale
+      // token behind after the one-shot Claude cleanup path has completed.
+      current.abortBoundaryToken = null;
+    }
+  }
+
+  private scheduleAbortReconcileRetry(
+    sessionId: string,
+    state: SessionInputState,
+    abortBoundaryGeneration: number,
+    abortBoundaryToken: symbol,
+  ): void {
+    if (state.abortReconcileRetryTimer) return;
+    state.abortReconcileRetryTimer = setTimeout(() => {
+      const current = this.states.get(sessionId);
+      if (current === state) current.abortReconcileRetryTimer = null;
+      if (
+        current !== state ||
+        current.generation !== abortBoundaryGeneration ||
+        current.abortBoundaryToken !== abortBoundaryToken
+      ) {
+        return;
+      }
+      this.reconcileAbortBoundary(
+        sessionId,
+        current,
+        abortBoundaryGeneration,
+        abortBoundaryToken,
+        'abort-retry',
+      );
+    }, SESSION_RUNNING_RETRY_DELAY_MS);
+  }
+
+  private clearAbortReconcileRetry(state: SessionInputState): void {
+    if (state.abortReconcileRetryTimer) {
+      clearTimeout(state.abortReconcileRetryTimer);
+    }
+    state.abortReconcileRetryTimer = null;
   }
 
   private registerSteerAbortController(sessionId: string, clientId: string, controller: AbortController): void {

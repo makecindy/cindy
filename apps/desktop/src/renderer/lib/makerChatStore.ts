@@ -23,7 +23,11 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import {
+  applyCodexPlanSnapshotOnDone,
+  getLatestMessageTodoState,
+  isAgentPlanToolName,
+} from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
   type WorkflowProgressEntry,
@@ -1359,12 +1363,21 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
+    const preTrimPlanState = getLatestMessageTodoState(s.messages);
+    const trimmedMessages = s.messages.slice(-TRIM_TARGET);
+    const trimmedPlanState = getLatestMessageTodoState(trimmedMessages);
+    const needsPlanReloadAfterTrim =
+      s.historyLoaded &&
+      preTrimPlanState.insertion !== null &&
+      (!trimmedPlanState.hasPlanEvent || !trimmedPlanState.isResolved);
+
     return {
       ...s,
-      messages: s.messages.slice(-TRIM_TARGET),
+      messages: trimmedMessages,
       hasMoreMessages: true,
       oldestMessageId: null,
       isLoadingMore: false,
+      ...(needsPlanReloadAfterTrim ? { historyLoaded: false } : {}),
       // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
       // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
@@ -1655,6 +1668,7 @@ function markSessionHasUserMessage(sessionId: string): void {
 
 function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
+  if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
   makerApiFor(sessionId)
     .input.getProjection(sessionId)
     .then(applyInputProjection)
@@ -4169,8 +4183,11 @@ function initGlobalListeners(): void {
       (legacyTurnCostUsd !== undefined
         ? legacyUsdMoney(legacyTurnCostUsd)
         : undefined);
-    if (!turnMoney || !(turnMoney.amount > 0)) return;
     const { sessionId, clientId } = p;
+    // 用户轮累计与当前 segment 金额是**两个独立事实**,必须各自判定 —— 一次用户请求
+    // 含多个 SDK segment 时,前面的 segment 有真实费用、收尾 segment 缺报价,payload
+    // 就只有 userTurnMoney + turnUsageDetails。把累计金额的解析放在 turnMoney 分支
+    // 之内,这一轮已经花掉的钱会被 token 顶掉(不变量正本见 shared/turnCostPayload.ts)。
     const userTurnMoney =
       normalizeRegionalMoney(p.userTurnMoney) ??
       (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
@@ -4180,6 +4197,31 @@ function initGlobalListeners(): void {
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
         ? p.userTurnCostUsd
         : undefined;
+    const userTurnCostPatch = userTurnMoney
+      ? {
+          userTurnMoney,
+          ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
+          userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
+        }
+      : {};
+    // 无当前 segment 金额 = main 的 recordTurnUsageOnMessage(算不出报价的轮次):
+    // 更新明细 + 可能存在的整轮累计,让 action bar 优先显示已花的钱、否则退回 token。
+    // 三者都没有才是真的无事可做。
+    if (!turnMoney || !(turnMoney.amount > 0)) {
+      if (!turnUsageDetails && !userTurnMoney) return;
+      setState(sessionId, (s) => {
+        const idx = s.messages.findIndex((m) => m.clientId === clientId);
+        if (idx < 0) return s;
+        const msgs = s.messages.slice();
+        msgs[idx] = {
+          ...msgs[idx],
+          ...userTurnCostPatch,
+          ...(turnUsageDetails ? { turnUsageDetails } : {}),
+        };
+        return { ...s, messages: msgs };
+      });
+      return;
+    }
     const resolvedTurnCostUsd =
       turnMoney.currency === 'USD'
         ? turnMoney.amount
@@ -4195,13 +4237,7 @@ function initGlobalListeners(): void {
           ? { turnCostUsd: resolvedTurnCostUsd }
           : {}),
         turnCostIsEstimate,
-        ...(userTurnMoney
-          ? {
-              userTurnMoney,
-              ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
-              userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
-            }
-          : {}),
+        ...userTurnCostPatch,
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
       };
       return { ...s, messages: msgs };
@@ -5303,11 +5339,16 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
     // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
     // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
     // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
-    if (rows.every(isNonAnchorHistoryRow)) return;
     const mapped = mapServerMessages(rows).map((message) => ({
       ...message,
       cacheHydrated: true as const,
     }));
+    if (
+      rows.every(isNonAnchorHistoryRow) &&
+      getLatestMessageTodoState(mapped).insertion === null
+    ) {
+      return;
+    }
     if (mapped.length === 0) return;
     // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
     // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,
@@ -5458,16 +5499,23 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
 
-      // no-anchor-backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
+      // no-anchor / plan-boundary backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
       // 而 MessageStream 在 visibleRenderItems.length === 0 时不触发自动翻页 —— 结果是
       // DB 里有 2000+ 条消息,重启后 ChatView 渲染 0 项,看起来"内容消失了"。
-      // 两类命中(见 isNonAnchorHistoryRow):
+      // 四类命中(见 isNonAnchorHistoryRow):
       //   - 全是 tool_result:配对的 tool_use 父消息在更老的页里,orphan 会被丢弃;
       //   - 全是被隐藏的 thinking 行:如一轮搜索密集、在产出可见正文前就失败的会话,
       //     最新 50 行可能全是加密推理;
-      //   - 合成指令行:渲染 null,混在上面两类里同样撑不出可见锚点。
-      // 这里继续往前翻页,直到出现可渲染锚点或翻完。
-      // 上限 10 页(500 行)防御异常长的连续无锚点队列。
+      //   - 计划工具行:计划只在输入框上方的胶囊呈现,不在消息流中留锚点;
+      //   - 合成指令行:渲染 null,混在这些行里同样撑不出可见锚点。
+      //
+      // PinnedPlanPanel 的唯一数据源同样是当前消息窗口。计划工具行不再在消息流中渲染,
+      // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
+      // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
+      //
+      // 无锚点按 10 页(500 行)兜底。计划胶囊分两段:
+      //   - 当前窗口没有任何计划事件时,最多探测 10 页,避免从未使用计划的长会话全量拉历史;
+      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,最多再补 10 页。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5481,14 +5529,26 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
       let hasMore = serverMessagePageHasMore(existing);
-      const MAX_BACKFILL_PAGES = 10;
+      const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
+      const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
+      const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
       let pagesFetched = 0;
-      while (
-        hasMore &&
-        pagesFetched < MAX_BACKFILL_PAGES &&
-        merged.every(isNonAnchorHistoryRow)
-      ) {
+      let planResolutionPagesFetched = 0;
+      while (hasMore) {
+        const needsAnchorBackfill =
+          merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
+        const planState = historyRowsPlanBackfillState(merged);
+        const needsPlanResolution =
+          planState.hasPlanEvent &&
+          !planState.isResolved &&
+          planResolutionPagesFetched < MAX_PLAN_RESOLUTION_BACKFILL_PAGES;
+        const needsPlanBackfill = planState.hasPlanEvent
+          ? needsPlanResolution
+          : pagesFetched < MAX_PLAN_DISCOVERY_BACKFILL_PAGES;
+        if (!needsAnchorBackfill && !needsPlanBackfill) break;
+
         pagesFetched += 1;
+        if (needsPlanResolution) planResolutionPagesFetched += 1;
         try {
           const older = await listMessagesFor(sessionId, {
             limit: 50,
@@ -6217,7 +6277,8 @@ function loadOlderMessages(sessionId: string): void {
  * 为什么不再按 role / 工具名折算:折算模型必须逐一追平 buildRenderItems 的每种 item
  * 展开规则,而那套规则会持续演化。#676 的 review 连着四轮各挖出一种被低估的展开路径:
  * agent_task 卡(每个 Agent/Task/Workflow 调用 1:1)、按空洞切段后的孤立单行调用、
- * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡、
+ * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡
+ * (该卡现已移出流内,计划改钉在 composer 上方的 PinnedPlanPanel;历史结论不变)、
  * 以及结果含媒体时额外产出的 tool_media —— 每次都是"某行额外产生 item",而折算恰恰
  * 假设"多行合成一个 item"。低估预算的方向是危险的那一侧(放进更多实际渲染量),所以
  * 不再猜比例:一行最多产出一个可见 item 的量级,直接按行数当上界。
@@ -9544,6 +9605,17 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
 }
 
+function historyRowsPlanBackfillState(rows: Message[]): {
+  hasPlanEvent: boolean;
+  isResolved: boolean;
+} {
+  const state = getLatestMessageTodoState(mapServerMessages(rows));
+  return {
+    hasPlanEvent: state.hasPlanEvent,
+    isResolved: state.isResolved,
+  };
+}
+
 function shouldStopRemoteReconciliationAtOverlap(
   rows: Message[],
   hasKnownOverlap: boolean,
@@ -9659,9 +9731,10 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 三类:
+ * 四类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
+ *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
@@ -9672,7 +9745,23 @@ function isHiddenThinkingRow(m: Message): boolean {
  * 再也拉不回来。
  */
 function isNonAnchorHistoryRow(m: Message): boolean {
-  return m.role === 'tool_result' || isHiddenThinkingRow(m) || isSyntheticTriggerRow(m);
+  return (
+    m.role === 'tool_result' ||
+    isHiddenThinkingRow(m) ||
+    isAgentPlanHistoryToolUseRow(m) ||
+    isSyntheticTriggerRow(m)
+  );
+}
+
+function isAgentPlanHistoryToolUseRow(m: Message): boolean {
+  if (m.role !== 'tool_use') return false;
+  return isAgentPlanToolName(historyToolName(m));
+}
+
+function historyToolName(m: Message): string | undefined {
+  if (!m.content || typeof m.content !== 'object') return undefined;
+  const toolName = (m.content as Record<string, unknown>).toolName;
+  return typeof toolName === 'string' ? toolName : undefined;
 }
 
 function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
@@ -10018,6 +10107,26 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             ? legacyUsdMoney(legacyTurnCostUsd)
             : undefined)
         : undefined;
+    // 用户轮累计与当前 segment 费用各自独立读(不变量正本见 shared/turnCostPayload.ts):
+    // 收尾 segment 缺报价的轮次只落了 userTurnCost + turnUsageDetails,若把它嵌在
+    // persistedTurnMoney > 0 的分支里,重开会话后整轮已花的钱会被 token 顶掉。
+    const persistedUserTurnMoney =
+      m.role === 'assistant' && agentMeta
+        ? normalizeRegionalMoney(agentMeta.userTurnCost) ??
+          (typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+            ? legacyUsdMoney(agentMeta.userTurnCostUsd)
+            : undefined)
+        : undefined;
+    const persistedUserTurnCostPatch =
+      agentMeta && persistedUserTurnMoney
+        ? {
+            userTurnMoney: persistedUserTurnMoney,
+            ...(typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+              ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
+              : {}),
+            userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
+          }
+        : {};
     return {
       clientId: m.clientId,
       role: m.role,
@@ -10028,12 +10137,19 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         : {}),
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
+      // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
+      // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
       ...(m.role === 'assistant' && (
         agentMeta?.turnCompleted === true ||
-        (persistedTurnMoney?.amount ?? 0) > 0
+        (persistedTurnMoney?.amount ?? 0) > 0 ||
+        turnUsageDetails !== undefined
       )
         ? { turnCompleted: true }
         : {}),
+      // 本轮 token 明细独立于金额挂载:算不出报价的轮次只有它,UI 据此退回显示 token。
+      ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),
+      // 整轮累计费用同样独立挂载:无价收尾轮只有它,没有 turnCost。
+      ...persistedUserTurnCostPatch,
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
       agentMeta &&
@@ -10044,27 +10160,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
               persistedTurnMoney.currency === 'USD'
                 ? persistedTurnMoney.amount
                 : undefined;
-            const persistedUserTurnMoney =
-              normalizeRegionalMoney(agentMeta.userTurnCost) ??
-              (typeof agentMeta.userTurnCostUsd === 'number' &&
-              agentMeta.userTurnCostUsd > 0
-                ? legacyUsdMoney(agentMeta.userTurnCostUsd)
-                : undefined);
             return {
               turnMoney: persistedTurnMoney,
               ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
               turnCostIsEstimate: agentMeta.turnCostIsEstimate === true,
-              ...(persistedUserTurnMoney
-                ? {
-                    userTurnMoney: persistedUserTurnMoney,
-                    ...(typeof agentMeta.userTurnCostUsd === 'number' &&
-                    agentMeta.userTurnCostUsd > 0
-                      ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
-                      : {}),
-                    userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
-                  }
-                : {}),
-              ...(turnUsageDetails ? { turnUsageDetails } : {}),
             };
           })()
         : {}),

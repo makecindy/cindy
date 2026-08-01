@@ -467,7 +467,23 @@
       "feishuLabel": "Send a Feishu / Lark DM when a session finishes or needs a reply",
       "feishuHint": "Sends a private message via the linked Feishu or Lark bot; only when the window is unfocused.",
       "feishuDisabledHint": "First set up the bot in \"Feishu / Lark Bot\" and DM it once to complete binding.",
-      "feishuAria": "Toggle session-done FeiShu notifications"
+      "feishuAria": "Toggle session-done FeiShu notifications",
+      "wecomGroupLabel": "WeCom group notifications",
+      "wecomGroupHint": "Used for automation completion notifications. Paste a WeCom group bot Webhook URL; it is encrypted on this device.",
+      "wecomGroupConfiguredHint": "Configured (key {{maskedKey}}). Turn on the master switch, then enable it for each automation as needed.",
+      "wecomGroupAria": "Toggle the WeCom group notification master switch",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
+      "wecomGroupSaveAndTest": "Save and test",
+      "wecomGroupSaveSuccess": "Webhook saved and test message sent",
+      "wecomGroupSaveFailed": "Could not save or test the Webhook",
+      "wecomGroupTest": "Send test",
+      "wecomGroupTestMessage": "Cindy WeCom group notification test succeeded",
+      "wecomGroupTestSuccess": "Test message sent",
+      "wecomGroupTestFailed": "Test message failed",
+      "wecomGroupToggleFailed": "Could not update WeCom group notifications",
+      "wecomGroupClear": "Remove",
+      "wecomGroupCleared": "Webhook removed",
+      "wecomGroupClearFailed": "Could not remove the Webhook"
     },
     "windowBehavior": {
       "title": "App Behavior",
@@ -1813,6 +1829,48 @@
         }
       }
     },
+    "wecomBot": {
+      "title": "WeCom Intelligent Bot",
+      "description": "Connect a WeCom intelligent bot and use {{appName}} from direct and group chats.",
+      "status": {
+        "needsConfig": "Not configured",
+        "connecting": "Connecting…",
+        "connected": "Connected",
+        "conflict": "Connection replaced",
+        "error": "Connection failed"
+      },
+      "fieldsRequired": "Enter both the Bot ID and Secret",
+      "botIdLabel": "Bot ID",
+      "botIdPlaceholder": "Bot ID from WeCom administration",
+      "secretLabel": "Secret",
+      "secretPlaceholder": "Bot Secret from WeCom administration",
+      "showSecret": "Show Secret",
+      "hideSecret": "Hide Secret",
+      "setupHint": "Create an intelligent bot in WeCom administration, enable long connection, then enter its Bot ID and Secret.",
+      "ownerHint": "After connecting, the first member to DM the bot becomes this computer's owner. Only that member can trigger the Agent.",
+      "connect": "Save and connect",
+      "reconnect": "Reconnect",
+      "connectingAction": "Connecting…",
+      "disconnect": "Unbind",
+      "configSaved": "WeCom bot configuration saved",
+      "connectFailed": "WeCom bot connection failed; check the credentials and network",
+      "reconnecting": "Reconnecting the WeCom bot",
+      "reconnectFailed": "Reconnect failed: {{message}}",
+      "saveFailed": "Save failed: {{message}}",
+      "disconnected": "WeCom bot unbound",
+      "disconnectFailed": "Unbind failed: {{message}}",
+      "connected": {
+        "heading": "WeCom bot connected",
+        "awaitingOwner": "Send the bot a direct message from your WeCom account to bind the owner.",
+        "ownerBound": "Owner on this computer: {{ownerUserId}}"
+      },
+      "disconnectConfirm": {
+        "title": "Unbind the WeCom bot?",
+        "description": "The saved Bot ID, Secret, and owner binding will be removed from this computer.",
+        "confirm": "Unbind",
+        "cancel": "Cancel"
+      }
+    },
     "telegramBot": {
       "title": "Telegram Bot",
       "description": "Connect your own Telegram bot. The desktop connects to Telegram directly, so {{appName}} works from DMs and group chats.",
@@ -2733,8 +2791,8 @@
       },
       "tips": {
         "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal connections include WeChat scan authorization and your own Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own Feishu and DingTalk credentials. Each channel keeps independent new-conversation settings."
+        "personal": "Personal connections include WeChat scan authorization and your own WeCom / Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
+        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own WeCom, Feishu, and DingTalk credentials. Each channel keeps independent new-conversation settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -2744,7 +2802,8 @@
           "discord": "New Discord conversations use this Agent and model. Send /new in an existing DM to apply it.",
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
           "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it."
+          "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it.",
+          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -3477,6 +3536,12 @@
         "mailPrompt": "Help me build my Smart Contacts from email: first check which mail tools I have connected (if none, tell me how to connect one); scan the last 6 months of correspondence and create profiles for real contacts I exchange mail with — confirm high-frequency, clearly-identified people directly, use pending for uncertain ones; skip marketing mail, notification bots, and one-off senders. Report which profiles you created at the end.",
         "imPrompt": "Help me build my Smart Contacts from chat tools: first check which IMs I have connected (Feishu / Slack / WeChat etc.; if none, tell me how to connect one); organize the people I chat with regularly into contacts, use pending for uncertain ones, and skip group bots and one-off conversations. Report which profiles you created at the end."
       }
+    },
+    "remotePermission": {
+      "label": "Permission mode",
+      "hint": "Remote IM keeps confirmation enabled for actions that need approval.",
+      "fullAccessDisabled": "Full Access is unavailable for remote IM because actions that cannot be safely confirmed must not run directly.",
+      "permissionModeDisabled": "This permission mode is unavailable because remote IM uses Cindy Desktop's confirmation policy."
     }
   },
   "remoteDevice": {
@@ -3806,6 +3871,7 @@
     "costBreakdownHeader": "By model:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "Suggestion: {{suggestion}}",
+    "noBilledCost": "Cost unavailable for this turn; showing usage only",
     "suggestion": {
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
     }
@@ -5097,6 +5163,9 @@
       "lastTool": "Last tool: {{tool}}",
       "outputFile": "Output: {{path}}"
     },
+    "planPill": {
+      "step": "Step {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "Created from another session"
     },
@@ -5131,6 +5200,7 @@
       "turnCost": "Cost this turn",
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "User-turn total: {{cost}}",
       "userTurnCostDetailsTitle": "Final SDK segment"
     },
@@ -6620,6 +6690,8 @@
         "silentRunTooltip": "When enabled, successful runs do not notify by default. If the task prompt asks to notify under specific conditions, AI will report when those conditions are met. Failures and errors still notify.",
         "silentRunInfoAria": "View silent run rules",
         "finishSendToFeishu": "Finish Send To FeishuBot",
+        "finishSendToWecomGroup": "Send result to WeCom group",
+        "configWecomGroup": "Configure WeCom group notifications",
         "configFeishu": "Config FeishuBot"
       },
       "runSession": {

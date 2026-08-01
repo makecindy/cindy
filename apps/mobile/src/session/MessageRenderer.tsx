@@ -140,6 +140,7 @@ import {
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
   formatMessageTurnCost,
+  formatMessageTurnTokens,
   formatModelShortLabel,
   mobileMessageShowsActionBar,
   writeClipboardText,
@@ -1580,6 +1581,10 @@ function MessageBubble({
   const turnCost = showCompletedActionBar && item.message.kind === 'assistant'
     ? formatMessageTurnCost(item.message.turnMoney)
     : '';
+  // 金额缺席时退回显示本轮 token(桌面算不出模型报价的轮次):这一格不留空。
+  const turnTokens = !turnCost && showCompletedActionBar && item.message.kind === 'assistant'
+    ? formatMessageTurnTokens(item.message.turnTotalTokens)
+    : '';
   const canFork = !!(
     showCompletedActionBar
     && clientId
@@ -1663,9 +1668,10 @@ function MessageBubble({
     canCopy,
     hasMoreActions: messageMenu.length > 0,
     hasTime: !!relativeTime,
-    hasTurnCost: !!turnCost,
+    // 金额与 token 回退占同一格,任一有值就保留该位置。
+    hasTurnCost: !!turnCost || !!turnTokens,
     isStreaming: isStreamingAssistant,
-  }), [canCopy, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost]);
+  }), [canCopy, isStreamingAssistant, isUser, messageMenu.length, relativeTime, turnCost, turnTokens]);
   const hasActions = actionBar.items.length > 0;
   const actionBusy = !!clientId && actions.busyClientId === clientId;
   const disabled = !!actions.busyClientId;
@@ -1744,12 +1750,23 @@ function MessageBubble({
   ) : null;
   const costText = turnCost ? (
     <Text
-      accessibilityLabel={item.message.turnCostIsEstimate ? t('message.renderer.turnCostEstimate', { cost: turnCost }) : t('message.renderer.turnCost', { cost: turnCost })}
+      accessibilityLabel={item.message.turnMoney?.kind === 'value-estimate'
+        ? t('message.renderer.turnCostEstimate', { cost: turnCost })
+        : t('message.renderer.turnCost', { cost: turnCost })}
       key="cost"
       style={styles.messageActionMeta}
       testID="message.turnCostText"
     >
       {turnCost}
+    </Text>
+  ) : turnTokens ? (
+    <Text
+      accessibilityLabel={t('message.renderer.turnTokens', { tokens: turnTokens })}
+      key="cost"
+      style={styles.messageActionMeta}
+      testID="message.turnTokensText"
+    >
+      {turnTokens}
     </Text>
   ) : null;
   const streamingStatus = isStreamingAssistant ? (

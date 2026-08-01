@@ -467,7 +467,23 @@
       "feishuLabel": "세션 완료 또는 응답 필요 시 Feishu / Lark 메시지 전송",
       "feishuHint": "연동된 Feishu 또는 Lark 봇을 통해 개인 메시지를 보냅니다. 창이 비활성 상태일 때만 전송됩니다.",
       "feishuDisabledHint": "먼저 \"Feishu / Lark 봇\"에서 봇을 설정하고 한 번 메시지를 보내 바인딩을 완료하세요.",
-      "feishuAria": "세션 완료 Feishu 알림 전환"
+      "feishuAria": "세션 완료 Feishu 알림 전환",
+      "wecomGroupLabel": "WeCom 그룹 알림",
+      "wecomGroupHint": "자동 작업 완료 알림에 사용됩니다. WeCom 그룹 봇 Webhook URL을 붙여넣으면 이 기기에 암호화되어 저장됩니다.",
+      "wecomGroupConfiguredHint": "설정됨(키 {{maskedKey}}). 전체 스위치를 켠 후 각 자동 작업에서 필요할 때 전송할 수 있습니다.",
+      "wecomGroupAria": "WeCom 그룹 알림 전체 스위치 전환",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
+      "wecomGroupSaveAndTest": "저장 및 테스트",
+      "wecomGroupSaveSuccess": "Webhook을 저장하고 테스트 메시지를 보냈습니다",
+      "wecomGroupSaveFailed": "Webhook 저장 또는 테스트에 실패했습니다",
+      "wecomGroupTest": "테스트 전송",
+      "wecomGroupTestMessage": "Cindy WeCom 그룹 알림 테스트에 성공했습니다",
+      "wecomGroupTestSuccess": "테스트 메시지를 보냈습니다",
+      "wecomGroupTestFailed": "테스트 메시지 전송에 실패했습니다",
+      "wecomGroupToggleFailed": "WeCom 그룹 알림 설정을 업데이트하지 못했습니다",
+      "wecomGroupClear": "삭제",
+      "wecomGroupCleared": "Webhook을 삭제했습니다",
+      "wecomGroupClearFailed": "Webhook을 삭제하지 못했습니다"
     },
     "windowBehavior": {
       "title": "앱 동작",
@@ -1812,6 +1828,48 @@
         }
       }
     },
+    "wecomBot": {
+      "title": "WeCom 지능형 봇",
+      "description": "WeCom 지능형 봇을 연결하고 DM과 그룹 채팅에서 {{appName}}를 사용하세요.",
+      "status": {
+        "needsConfig": "설정되지 않음",
+        "connecting": "연결 중…",
+        "connected": "연결됨",
+        "conflict": "연결이 대체됨",
+        "error": "연결 실패"
+      },
+      "fieldsRequired": "Bot ID와 Secret을 모두 입력하세요",
+      "botIdLabel": "Bot ID",
+      "botIdPlaceholder": "WeCom 관리 화면의 Bot ID",
+      "secretLabel": "Secret",
+      "secretPlaceholder": "WeCom 관리 화면의 Secret",
+      "showSecret": "Secret 표시",
+      "hideSecret": "Secret 숨기기",
+      "setupHint": "WeCom 관리 화면에서 지능형 봇을 만들고 장기 연결을 활성화한 다음 Bot ID와 Secret을 입력하세요.",
+      "ownerHint": "연결 후 봇에 처음 DM을 보낸 구성원이 이 컴퓨터의 owner로 연결됩니다. 해당 구성원만 Agent를 실행할 수 있습니다.",
+      "connect": "저장하고 연결",
+      "reconnect": "다시 연결",
+      "connectingAction": "연결 중…",
+      "disconnect": "연결 해제",
+      "configSaved": "WeCom 봇 설정을 저장했습니다",
+      "connectFailed": "WeCom 봇 연결에 실패했습니다. 자격 증명과 네트워크를 확인하세요",
+      "reconnecting": "WeCom 봇에 다시 연결하는 중입니다",
+      "reconnectFailed": "다시 연결하지 못했습니다: {{message}}",
+      "saveFailed": "저장 실패: {{message}}",
+      "disconnected": "WeCom 봇 연결을 해제했습니다",
+      "disconnectFailed": "연결 해제 실패: {{message}}",
+      "connected": {
+        "heading": "WeCom 봇 연결됨",
+        "awaitingOwner": "WeCom 계정에서 봇으로 DM을 보내 owner를 연결하세요.",
+        "ownerBound": "이 컴퓨터의 owner: {{ownerUserId}}"
+      },
+      "disconnectConfirm": {
+        "title": "WeCom 봇 연결을 해제할까요?",
+        "description": "저장된 Bot ID, Secret 및 owner 연결이 이 컴퓨터에서 삭제됩니다.",
+        "confirm": "연결 해제",
+        "cancel": "취소"
+      }
+    },
     "telegramBot": {
       "title": "Telegram 봇",
       "description": "직접 만든 Telegram 봇을 연결하세요. 데스크톱이 Telegram에 직접 연결되어 DM과 그룹 채팅에서 {{appName}}를 사용할 수 있습니다.",
@@ -2732,8 +2790,8 @@
       },
       "tips": {
         "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
-        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom / Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
+        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom, Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",
@@ -2743,7 +2801,8 @@
           "discord": "새 Discord 대화는 이 Agent와 모델을 사용합니다. 기존 DM에는 /new를 보내 적용하세요.",
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
           "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
-          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요."
+          "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
+          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -3475,6 +3534,12 @@
         "mailPrompt": "이메일에서 스마트 연락처를 만들어 주세요: 먼저 연결된 메일 도구를 확인하고(없다면 연결 방법을 알려 주세요), 최근 6개월간의 주고받은 메일을 스캔해 실제로 왕래하는 연락처를 등록해 주세요 — 빈도가 높고 신원이 명확한 사람은 바로 확정, 불확실한 사람은 pending으로. 마케팅 메일, 알림 봇, 일회성 발신자는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요.",
         "imPrompt": "채팅 도구에서 스마트 연락처를 만들어 주세요: 먼저 연결된 IM(Feishu / Slack / WeChat 등)을 확인하고(없다면 연결 방법을 알려 주세요), 최근 자주 대화하는 사람들을 연락처로 정리해 주세요. 불확실한 사람은 pending으로, 그룹 봇과 일회성 대화는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요."
       }
+    },
+    "remotePermission": {
+      "label": "권한 모드",
+      "hint": "원격 IM은 승인이 필요한 작업의 확인 절차를 유지합니다.",
+      "fullAccessDisabled": "안전하게 확인할 수 없는 작업이 직접 실행되지 않도록 원격 IM에서는 Full Access를 사용할 수 없습니다.",
+      "permissionModeDisabled": "원격 IM은 Cindy Desktop의 확인 정책을 사용하므로 이 권한 모드를 사용할 수 없습니다."
     }
   },
   "remoteDevice": {
@@ -3804,6 +3869,7 @@
     "costBreakdownHeader": "모델별:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "제안: {{suggestion}}",
+    "noBilledCost": "이번 턴의 비용을 현재 확인할 수 없어 사용량만 표시합니다",
     "suggestion": {
       "lowCache": "캐시 적중률이 낮아 이번 턴에서 더 많은 컨텍스트가 다시 과금되었습니다"
     }
@@ -5095,6 +5161,9 @@
       "lastTool": "최근 도구: {{tool}}",
       "outputFile": "출력: {{path}}"
     },
+    "planPill": {
+      "step": "단계 {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "원래 세션에서 생성됨"
     },
@@ -5129,6 +5198,7 @@
       "turnCost": "이번 턴 비용",
       "turnCostEstimated": "이번 턴 토큰 가치(API 단가 환산)",
       "turnCostEstimatedValue": "가치 {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "이번 사용자 턴 합계: {{cost}}",
       "userTurnCostDetailsTitle": "마지막 SDK 세그먼트"
     },
@@ -6609,6 +6679,8 @@
         "silentRunTooltip": "켜면 작업이 성공적으로 완료되어도 기본적으로 알림을 보내지 않습니다. 작업 프롬프트에서 특정 조건에 알림을 요청한 경우, AI가 조건이 충족될 때 직접 보고합니다. 실패와 오류는 계속 알림을 보냅니다.",
         "silentRunInfoAria": "조용히 실행 규칙 보기",
         "finishSendToFeishu": "완료 시 Feishu Bot에 전송",
+        "finishSendToWecomGroup": "완료 시 WeCom 그룹으로 전송",
+        "configWecomGroup": "WeCom 그룹 알림 설정",
         "configFeishu": "Feishu Bot 설정"
       },
       "runSession": {

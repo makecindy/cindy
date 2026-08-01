@@ -419,6 +419,12 @@ type TelegramBotTransportStatus =
   | { kind: 'error'; reason: string };
 
 type DingTalkBotTransportStatus = DiscordBotTransportStatus;
+type WecomBotTransportStatus =
+  | { kind: 'idle' }
+  | { kind: 'connecting' }
+  | { kind: 'connected'; appId: string }
+  | { kind: 'conflict'; appId: string }
+  | { kind: 'error'; reason: string };
 
 type WechatBotPhase =
   | 'disconnected'
@@ -1828,6 +1834,37 @@ interface ElectronAPI {
     onOwnerChange: (callback: (update: { ownerUserId: string }) => void) => () => void;
   };
 
+  wecomBot: {
+    getStatus: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    setConfig: (payload: { botId: string; secret: string }) => Promise<{
+      status: WecomBotTransportStatus;
+      saveErrorStatus?: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    reconnect: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    disconnect: () => Promise<{
+      status: WecomBotTransportStatus;
+      botId: string | null;
+      ownerUserId: string | null;
+    }>;
+    onStatusChange: (
+      callback: (update: {
+        status: WecomBotTransportStatus;
+        botId: string | null;
+        ownerUserId: string | null;
+      }) => void,
+    ) => () => void;
+  };
+
   // ── Personal WeChat (Settings → IM Bot → Personal) ──
   wechatBot: {
     getState: () => Promise<WechatBotState>;
@@ -2136,6 +2173,18 @@ interface ElectronAPI {
   }) => Promise<void>;
   /** Sync the renderer-owned global desktop-notification preference to main. */
   notificationSetDesktopEnabled?: (enabled: boolean) => Promise<{ ok: true }>;
+  wecomGroupNotification: {
+    getState: () => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    saveAndTest: (
+      webhookUrl: string,
+      testMessage: string,
+    ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    test: (testMessage: string) => Promise<{ ok: true }>;
+    setEnabled: (
+      enabled: boolean,
+    ) => Promise<{ configured: boolean; enabled: boolean; maskedKey?: string }>;
+    clear: () => Promise<{ configured: boolean; enabled: boolean }>;
+  };
   /** 将对应 session 标记为需要关注，显示 Dock/taskbar app badge。 */
   notificationMarkSessionAttention: (sessionId: string) => Promise<void>;
   /** 用户查看对应 session 后，清除系统级 Dock/taskbar attention badge。 */
@@ -3359,18 +3408,13 @@ interface ElectronAPI {
   ) => () => void;
 
   // per-message 维度: turn 结束后 main 推该轮费用(挂在最后一条 assistant 上)。
+  // 直接复用 main 侧的 payload 正本 —— 金额字段整组可选(无报价轮只带
+  // turnUsageDetails),两侧各写一份必然漂移:曾出现 main 已放宽为可选、这里仍声明
+  // 必填,消费方在 typecheck 通过的情况下解引用 undefined。
   onUsageMessageTurnCost: (
-    cb: (data: {
-      sessionId: string;
-      clientId: string;
-      turnMoney: import('../shared/regionalMoney').RegionalMoney;
-      turnCostUsd?: number;
-      turnCostIsEstimate: boolean;
-      userTurnMoney: import('../shared/regionalMoney').RegionalMoney;
-      userTurnCostUsd?: number;
-      userTurnCostIsEstimate: boolean;
-      turnUsageDetails?: import('../shared/turnUsageDetails').TurnUsageDetails;
-    }) => void,
+    cb: (
+      data: import('../shared/turnCostPayload').MessageTurnCostPayload,
+    ) => void,
   ) => () => void;
 
   // per-message 维度: turn 结束检测到模型被上游降级 / 替换时 main 推标记

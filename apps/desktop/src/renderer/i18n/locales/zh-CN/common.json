@@ -467,7 +467,23 @@
       "feishuLabel": "任务完成或需要回复时发送飞书 / Lark 消息",
       "feishuHint": "通过已绑定的飞书或 Lark 机器人，向你私聊发送一条消息；仅在窗口失焦时发送。",
       "feishuDisabledHint": "需要先在「飞书 / Lark 机器人」中配置 bot 并向它发送一条消息以完成绑定。",
-      "feishuAria": "切换任务完成的飞书通知"
+      "feishuAria": "切换任务完成的飞书通知",
+      "wecomGroupLabel": "企业微信群通知",
+      "wecomGroupHint": "用于自动操作的完成通知。粘贴企微群机器人的 Webhook URL，URL 会加密保存在本机。",
+      "wecomGroupConfiguredHint": "已配置（密钥 {{maskedKey}}）。开启总开关后，可在每个自动操作中按需发送。",
+      "wecomGroupAria": "切换企业微信群通知总开关",
+      "wecomGroupPlaceholder": "https://qyapi.weixin.qq.com/cgi-bin/webhook/send?key=…",
+      "wecomGroupSaveAndTest": "保存并测试",
+      "wecomGroupSaveSuccess": "Webhook 已保存，测试消息已发送",
+      "wecomGroupSaveFailed": "Webhook 保存或测试失败",
+      "wecomGroupTest": "发送测试",
+      "wecomGroupTestMessage": "Cindy 企业微信群通知测试成功",
+      "wecomGroupTestSuccess": "测试消息已发送",
+      "wecomGroupTestFailed": "测试消息发送失败",
+      "wecomGroupToggleFailed": "企业微信群通知开关更新失败",
+      "wecomGroupClear": "移除",
+      "wecomGroupCleared": "Webhook 已移除",
+      "wecomGroupClearFailed": "Webhook 移除失败"
     },
     "windowBehavior": {
       "title": "应用行为",
@@ -1812,6 +1828,48 @@
         }
       }
     },
+    "wecomBot": {
+      "title": "企业微信智能机器人",
+      "description": "连接企业微信智能机器人，在单聊和群聊中使用 {{appName}}。",
+      "status": {
+        "needsConfig": "未配置",
+        "connecting": "连接中…",
+        "connected": "已连接",
+        "conflict": "连接被替换",
+        "error": "连接失败"
+      },
+      "fieldsRequired": "请输入 Bot ID 和 Secret",
+      "botIdLabel": "Bot ID",
+      "botIdPlaceholder": "企业微信后台中的机器人 ID",
+      "secretLabel": "Secret",
+      "secretPlaceholder": "企业微信后台中的机器人 Secret",
+      "showSecret": "显示 Secret",
+      "hideSecret": "隐藏 Secret",
+      "setupHint": "在企业微信管理后台创建智能机器人并启用长连接，然后填入 Bot ID 和 Secret。",
+      "ownerHint": "连接后，首个向机器人发送单聊消息的成员会绑定为本机 owner；仅该成员可触发 Agent。",
+      "connect": "保存并连接",
+      "reconnect": "重新连接",
+      "connectingAction": "正在连接…",
+      "disconnect": "解绑",
+      "configSaved": "企业微信机器人配置已保存",
+      "connectFailed": "企业微信机器人连接失败，请检查凭证与网络",
+      "reconnecting": "正在重新连接企业微信机器人",
+      "reconnectFailed": "重新连接失败：{{message}}",
+      "saveFailed": "保存失败：{{message}}",
+      "disconnected": "已解绑企业微信机器人",
+      "disconnectFailed": "解绑失败：{{message}}",
+      "connected": {
+        "heading": "企业微信机器人已连接",
+        "awaitingOwner": "请使用你的企业微信账号向机器人发送一条单聊消息，完成 owner 绑定。",
+        "ownerBound": "本机 owner：{{ownerUserId}}"
+      },
+      "disconnectConfirm": {
+        "title": "解绑企业微信机器人？",
+        "description": "本机保存的 Bot ID、Secret 和 owner 绑定会被清除。",
+        "confirm": "解绑",
+        "cancel": "取消"
+      }
+    },
     "telegramBot": {
       "title": "Telegram 机器人",
       "description": "绑定你自建的 Telegram Bot，桌面端直连 Telegram，私聊和群聊都能找 {{appName}}。",
@@ -2732,8 +2790,8 @@
       },
       "tips": {
         "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人连接包括微信扫码，以及使用自有凭证接入飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入飞书和钉钉；各渠道独立保存新对话配置。"
+        "personal": "个人连接包括微信扫码，以及使用自有凭证接入企业微信 / 飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
+        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入企业微信、飞书和钉钉；各渠道独立保存新对话配置。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -2743,7 +2801,8 @@
           "discord": "Discord 新对话会使用这组 Agent 和模型；已有私聊发送 /new 后应用。",
           "wechat": "微信新对话会使用这组 Agent、模型和权限模式；已有私聊发送 /new 后应用。",
           "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
-          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。"
+          "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
+          "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",
@@ -3475,6 +3534,12 @@
         "mailPrompt": "帮我从邮件建立智能通讯录：先看看我连接了哪些邮箱工具(没有的话告诉我该怎么连接)；扫描最近 6 个月的往来邮件，找出和我有双向往来的真实联系人建档——高频且信息明确的直接确认，拿不准的用 pending；营销邮件、通知机器人、一次性发件人跳过。最后汇报建了哪些档案。",
         "imPrompt": "帮我从 IM 工具建立智能通讯录：先看看我连接了哪些 IM(飞书 / Slack / 微信等，没有的话告诉我该怎么连接)；把近期经常和我对话的联系人整理进通讯录，拿不准的用 pending，群机器人和一次性对话跳过。最后汇报建了哪些档案。"
       }
+    },
+    "remotePermission": {
+      "label": "权限模式",
+      "hint": "远程 IM 会为需要审批的操作保留确认流程。",
+      "fullAccessDisabled": "远程 IM 不支持完全访问，避免无法安全确认的操作被直接执行。",
+      "permissionModeDisabled": "远程 IM 使用 Cindy 桌面端确认策略，因此该权限模式不可用。"
     }
   },
   "remoteDevice": {
@@ -3804,6 +3869,7 @@
     "costBreakdownHeader": "按模型拆分：",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "建议：{{suggestion}}",
+    "noBilledCost": "本轮费用暂不可用，仅显示用量",
     "suggestion": {
       "lowCache": "缓存命中率偏低，本轮较多上下文重新计费"
     }
@@ -5095,6 +5161,9 @@
       "lastTool": "最近工具：{{tool}}",
       "outputFile": "输出：{{path}}"
     },
+    "planPill": {
+      "step": "步骤 {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "基于原任务创建"
     },
@@ -5129,6 +5198,7 @@
       "turnCost": "本轮消耗",
       "turnCostEstimated": "本轮 token 价值(按 API 单价折算)",
       "turnCostEstimatedValue": "价值 {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "本轮累计：{{cost}}",
       "userTurnCostDetailsTitle": "最后一个 SDK 分段"
     },
@@ -6609,6 +6679,8 @@
         "silentRunTooltip": "开启后，任务成功完成时默认不提醒。若任务说明中要求在特定情况提醒，AI 会在满足条件时主动上报；失败和异常仍会提醒。",
         "silentRunInfoAria": "查看静默运行规则",
         "finishSendToFeishu": "完成时发送到飞书机器人",
+        "finishSendToWecomGroup": "完成时发送到企业微信群",
+        "configWecomGroup": "配置企微群通知",
         "configFeishu": "配置飞书机器人"
       },
       "runSession": {

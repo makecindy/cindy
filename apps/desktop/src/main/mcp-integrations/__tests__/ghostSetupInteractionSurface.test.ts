@@ -17,7 +17,7 @@ describe('ghostSetupInteractionSessionId', () => {
     ).toBe('desktop-session');
   });
 
-  it.each(['feishu', 'discord', 'slack-hook', 'telegram'])(
+  it.each(['feishu', 'discord', 'slack-hook', 'telegram', 'wecom'])(
     'treats %s turns as non-interactive even when they have a business session id',
     (source) => {
       expect(

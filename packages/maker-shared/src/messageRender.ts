@@ -190,6 +190,14 @@ export interface MessageRenderTodoInsertion {
   source: MessageRenderTodoSource;
 }
 
+export interface MessageRenderLatestTodoState {
+  insertion: MessageRenderTodoInsertion | null;
+  hasPlanEvent: boolean;
+  isResolved: boolean;
+  latestPlanIndex: number;
+  latestInsertionIndex: number;
+}
+
 export interface MessageRenderTodoGroupingOptions {
   keyPrefix?: string;
 }
@@ -421,9 +429,14 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     const source = agentPlanSource(toolNameOf(message));
     if (!source) continue;
 
+    const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
     const previous = lastSessionBySource.get(source);
     const previousAllDone = previous?.todos.every((todo) => todo.status === 'completed');
-    const startsNewSession = !previous || Boolean(previousAllDone);
+    const continuesCompletedTaskSession =
+      source === 'task'
+      && Boolean(previousAllDone)
+      && taskToolTargetsExistingTask(message, resultText, taskState);
+    const startsNewSession = !previous || (Boolean(previousAllDone) && !continuesCompletedTaskSession);
     if (source === 'task' && startsNewSession) {
       taskState.clear();
     }
@@ -433,7 +446,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       ?? applyTaskPlanTool(
         taskState,
         message,
-        resultByToolUseId.get(toolUseIdOf(message) ?? ''),
+        resultText,
       );
     if (!parsed) continue;
 
@@ -458,6 +471,55 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
     });
   }
   return out;
+}
+
+/**
+ * 常驻计划面板(composer 上方钉住式)用:取整段会话里**最近一次更新**的 plan
+ * session 快照 —— 跨 source(TodoWrite / update_plan / Task*)按 lastIndex 取
+ * 最大者。面板只展示"当前计划"一份,历史 session 不再逐张呈现。
+ * 没有任何 plan 调用时返回 null(面板不渲染、不占位)。
+ */
+export function findLatestMessageTodoInsertion<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  options: MessageRenderTodoGroupingOptions = {},
+): MessageRenderTodoInsertion | null {
+  return getLatestMessageTodoState(messages, options).insertion;
+}
+
+export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  options: MessageRenderTodoGroupingOptions = {},
+): MessageRenderLatestTodoState {
+  let latestPlanIndex = -1;
+  let latestPlanMessage: TMessage | null = null;
+  for (let index = 0; index < messages.length; index++) {
+    const message = messages[index];
+    if (!isAgentPlanToolName(toolNameOf(message))) continue;
+    latestPlanIndex = index;
+    latestPlanMessage = message;
+  }
+
+  let latest: MessageRenderTodoInsertion | null = null;
+  let latestIndex = -1;
+  for (const [index, insertion] of findMessageTodoInsertions(messages, options)) {
+    if (index > latestIndex) {
+      latestIndex = index;
+      latest = insertion;
+    }
+  }
+  const hasPlanEvent = latestPlanIndex >= 0;
+  const insertionBelongsToLatestEvent = latestIndex === latestPlanIndex;
+  const latestEventClearsPlan =
+    latestPlanMessage !== null &&
+    (isExplicitPlanClearEvent(latestPlanMessage) ||
+      latestTaskEventClearsPlan(messages, latestPlanIndex));
+  return {
+    insertion: insertionBelongsToLatestEvent ? latest : null,
+    hasPlanEvent,
+    isResolved: !hasPlanEvent || insertionBelongsToLatestEvent || latestEventClearsPlan,
+    latestPlanIndex,
+    latestInsertionIndex: latestIndex,
+  };
 }
 
 export interface CodexPlanSnapshotApplyResult<
@@ -584,6 +646,68 @@ export function extractTodos(toolInput: unknown): MessageRenderTodoItem[] | null
   return out.length > 0 ? out : null;
 }
 
+function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): boolean {
+  const toolName = toolNameOf(message);
+  const input = readRecord(toolInputOf(message));
+  if (toolName === 'TodoWrite') return Array.isArray(input?.todos) && input.todos.length === 0;
+  if (toolName === 'update_plan') {
+    return (
+      (Array.isArray(input?.items) && input.items.length === 0) ||
+      (Array.isArray(input?.plan) && input.plan.length === 0) ||
+      (typeof input?.text === 'string' && input.text.trim().length === 0) ||
+      (input !== null && Object.keys(input).length === 0)
+    );
+  }
+  return false;
+}
+
+function latestTaskEventClearsPlan<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  latestPlanIndex: number,
+): boolean {
+  const latest = messages[latestPlanIndex];
+  const latestToolName = toolNameOf(latest);
+  const resultByToolUseId = buildToolResultLookup(messages);
+  const latestResultText = resultByToolUseId.get(toolUseIdOf(latest) ?? '');
+  if (latestToolName === 'TaskList') return taskListResultClearsPlan(latestResultText);
+  if (latestToolName !== 'TaskUpdate' && latestToolName !== 'TaskGet') return false;
+  if (taskToolStatus(latest, latestResultText) !== 'deleted') return false;
+
+  const taskState = new Map<string, MessageRenderTodoItem>();
+  let previousTaskTodos: MessageRenderTodoItem[] | null = null;
+  let resolvedTaskContext = false;
+
+  for (let index = 0; index <= latestPlanIndex; index += 1) {
+    const message = messages[index];
+    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+
+    const resultText = resultByToolUseId.get(toolUseIdOf(message) ?? '');
+    const startsNewSession =
+      previousTaskTodos === null ||
+      (
+        previousTaskTodos.every((todo) => todo.status === 'completed') &&
+        !taskToolTargetsExistingTask(message, resultText, taskState)
+      );
+    if (startsNewSession) taskState.clear();
+
+    const hadTaskContext = taskState.size > 0;
+    const parsed = applyTaskPlanTool(
+      taskState,
+      message,
+      resultText,
+    );
+    if (parsed) {
+      resolvedTaskContext = true;
+      previousTaskTodos = parsed;
+      continue;
+    }
+    if (index === latestPlanIndex) {
+      return resolvedTaskContext && hadTaskContext && taskState.size === 0;
+    }
+  }
+  return false;
+}
+
 function buildToolResultLookup<TMessage extends MessageRenderSourceMessageLike>(
   messages: readonly TMessage[],
 ): Map<string, string> {
@@ -638,6 +762,30 @@ function normalizeTaskStatus(status: unknown): MessageRenderTodoItem['status'] |
   return null;
 }
 
+function taskToolStatus(
+  message: MessageRenderSourceMessageLike,
+  resultText: string | undefined,
+): MessageRenderTodoItem['status'] | 'deleted' | null {
+  const toolName = toolNameOf(message);
+  const input = readRecord(toolInputOf(message));
+  const resultTask = taskRecordsFromResult(resultText)[0];
+  if (toolName === 'TaskGet' && resultTask) return normalizeTaskStatus(resultTask.status);
+  return normalizeTaskStatus(input?.status ?? resultTask?.status);
+}
+
+function taskToolTargetsExistingTask(
+  message: MessageRenderSourceMessageLike,
+  resultText: string | undefined,
+  taskState: ReadonlyMap<string, MessageRenderTodoItem>,
+): boolean {
+  const toolName = toolNameOf(message);
+  if (toolName !== 'TaskUpdate' && toolName !== 'TaskGet') return false;
+  const input = readRecord(toolInputOf(message));
+  const resultTask = taskRecordsFromResult(resultText)[0];
+  const id = taskId(input ?? undefined) ?? taskId(resultTask);
+  return Boolean(id && taskState.has(id));
+}
+
 function extractStructuredPlanItems(items: unknown): MessageRenderTodoItem[] | null {
   if (!Array.isArray(items) || items.length === 0) return null;
   const todos = items
@@ -674,7 +822,13 @@ function applyTaskPlanTool(
   const resultTasks = taskRecordsFromResult(resultText);
 
   if (toolName === 'TaskList') {
-    if (resultTasks.length === 0) return currentTaskTodos(taskState);
+    if (resultTasks.length === 0) {
+      if (taskListResultClearsPlan(resultText)) {
+        taskState.clear();
+        return null;
+      }
+      return currentTaskTodos(taskState);
+    }
     const previousTaskState = new Map(taskState);
     taskState.clear();
     for (const task of resultTasks) {
@@ -737,6 +891,11 @@ function applyTaskPlanTool(
     status,
   });
   return currentTaskTodos(taskState);
+}
+
+function taskListResultClearsPlan(resultText: string | undefined): boolean {
+  const parsed = tryParseJsonRecord(resultText);
+  return Boolean(parsed && Array.isArray(parsed.tasks) && parsed.tasks.length === 0);
 }
 
 function currentTaskTodos(taskState: Map<string, MessageRenderTodoItem>): MessageRenderTodoItem[] | null {

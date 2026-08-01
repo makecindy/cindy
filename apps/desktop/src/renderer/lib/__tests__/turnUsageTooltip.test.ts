@@ -136,6 +136,58 @@ describe('buildTurnUsageTooltipLines — 建议行 (只在真正有价值时出�
   });
 });
 
+describe('buildTurnUsageTooltipLines — 无金额 (token 回退) tooltip', () => {
+  const details = buildTurnUsageDetails({
+    inputTokens: 12_400,
+    outputTokens: 8_900,
+    cacheReadTokens: 2_000_000,
+    cacheCreateTokens: 86_400,
+    model: 'claude-opus-5',
+  })!;
+
+  it('不传 money/costUsd → 跳过费用行, 保留 token / 缓存 / 模型行', () => {
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out.some((l) => l.startsWith('usageDetails.costLine'))).toBe(false);
+    expect(out.some((l) => l.startsWith('usageDetails.valueLine'))).toBe(false);
+    expect(out.some((l) => l.startsWith('usageDetails.tokenLine'))).toBe(true);
+    expect(out.some((l) => l.startsWith('usageDetails.cacheLine'))).toBe(true);
+    expect(out.some((l) => l.startsWith('usageDetails.modelLine'))).toBe(true);
+  });
+
+  it('无金额 → 末尾追加「取不到报价」说明, 避免被读成"这轮不花钱"', () => {
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out[out.length - 1]).toBe('usageDetails.noBilledCost');
+  });
+
+  it('有金额 → 不出现该说明行', () => {
+    expect(
+      buildTurnUsageTooltipLines({ details, t, costUsd: 0.42 }),
+    ).not.toContain('usageDetails.noBilledCost');
+    expect(
+      buildTurnUsageTooltipLines({
+        details,
+        t,
+        money: { amount: 3.5, currency: 'CNY', approximate: false, kind: 'actual-cost' },
+      }),
+    ).not.toContain('usageDetails.noBilledCost');
+  });
+
+  it('金额为 0 / 负 → 视同无金额, 仍给说明行 (绝不显示 $0.00 当事实)', () => {
+    const zero = buildTurnUsageTooltipLines({ details, t, costUsd: 0 });
+    expect(zero).toContain('usageDetails.noBilledCost');
+    const negative = buildTurnUsageTooltipLines({ details, t, costUsd: -1 });
+    expect(negative).toContain('usageDetails.noBilledCost');
+  });
+
+  // 说明行刻意**不断言原因**:这一层分不清「价格字段缺失」与「显式全 0 的免费模型」,
+  // 断言"取不到报价"会对后者给出错误解释。
+  it('说明行不断言原因 (免费模型与缺价轮共用同一句)', () => {
+    const out = buildTurnUsageTooltipLines({ details, t });
+    expect(out).toContain('usageDetails.noBilledCost');
+    expect(out.some((l) => l.includes('priceUnavailable'))).toBe(false);
+  });
+});
+
 describe('normalizeTurnUsageDetails — perModelCost 往返 / 清洗', () => {
   it('合法数组往返, 过滤空 model / cost<=0', () => {
     const d = normalizeTurnUsageDetails({

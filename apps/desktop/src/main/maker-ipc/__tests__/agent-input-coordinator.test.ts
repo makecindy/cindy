@@ -165,7 +165,7 @@ function createHarness() {
   const steerToAgent = vi.fn<AgentInputCoordinatorDeps['steerToAgent']>(async () => {});
   const abortSession = vi.fn<AgentInputCoordinatorDeps['abortSession']>(async () => {});
   const getSdkSessionId = vi.fn<AgentInputCoordinatorDeps['getSdkSessionId']>(async () => 'sdk-session');
-  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(() => {});
+  const reconcileTurnIdle = vi.fn<NonNullable<AgentInputCoordinatorDeps['reconcileTurnIdle']>>(() => false);
   const beforeDispatchUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['beforeDispatchUserTurn']>>(() => {});
   const onUndispatchedUserTurn = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUndispatchedUserTurn']>>(() => {});
   const onAcceptedQueuedMessage = vi.fn<NonNullable<AgentInputCoordinatorDeps['onAcceptedQueuedMessage']>>(() => {});
@@ -3534,6 +3534,238 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
   });
 
+  it('reconciles a dead Claude turn when abort rejects after the vendor has stopped', async () => {
+    const h = createHarness();
+    const sid = 'stop-claude-abort-rejected';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'second');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.abortSession.mockRejectedValueOnce(new Error('Claude Code process aborted by user'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
+  it('releases a Codex abort lock when reconciliation proves the vendor has stopped', async () => {
+    const h = createHarness();
+    const sid = 'stop-codex-abort-rejected';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind: 'codex' },
+    });
+    h.setAgentKind('codex');
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.abortSession.mockRejectedValueOnce(new Error('Codex process aborted by user'));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
+  it.each([
+    { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
+    { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+  ])('retries abort reconciliation after $agentKind abort settles before the live turn is idle', async ({
+    agentKind,
+    providerId,
+    model,
+  }) => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = `stop-delayed-idle-${agentKind}`;
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind, providerId, model },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind(agentKind);
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+    h.reconcileTurnIdle
+      .mockReturnValueOnce(false)
+      .mockImplementationOnce(() => {
+        h.setRunning(false);
+        return true;
+      });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    abort.resolve();
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue).toEqual([second]);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
+  it('retains an abort lock when owner switching hides the agent kind and live idle cannot be confirmed', async () => {
+    vi.useFakeTimers();
+    try {
+      const h = createHarness();
+      const sid = 'stop-owner-boundary-agent-unknown';
+      const first = makeItem('q-1', 'first');
+      const second = makeItem('q-2', 'second');
+      h.setAgentKind(null);
+      h.reconcileTurnIdle
+        .mockReturnValueOnce(false)
+        .mockImplementationOnce(() => true);
+
+      h.coordinator.enqueue(sid, first);
+      await flush();
+      h.coordinator.enqueue(sid, second);
+      await flush();
+
+      h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+      h.coordinator.resume(sid);
+      h.setRunning(false);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledWith(sid);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+      expect(latestProjection(h.projections).queueAbortPending).toBe(true);
+
+      // The owner is available again before the delayed retry. The retry must
+      // keep the lock until the authoritative reconciliation proves idle.
+      h.setAgentKind('codex');
+      await vi.advanceTimersByTimeAsync(250);
+      await flush();
+
+      expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
+      expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+      expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ignores an old abort completion after clearSession starts a new turn', async () => {
+    const h = createHarness();
+    const sid = 'stop-abort-clear-new-turn';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const replacement = makeItem('q-new', 'replacement', {
+      createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind: 'codex' },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind('codex');
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+    // The user explicitly resets the session while the old abort RPC is still
+    // pending, then starts a new turn in the replacement state.
+    h.coordinator.clearSession(sid);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, replacement);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    h.reconcileTurnIdle.mockReturnValueOnce(true);
+    abort.resolve();
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
+      }
+    ).getState(sid);
+    expect(state.activeTurn?.item?.clientId).toBe('q-new');
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
+    { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+  ])('invalidates an old abort token when $agentKind starts a new turn after a non-preserving stop', async ({
+    agentKind,
+    providerId,
+    model,
+  }) => {
+    const h = createHarness();
+    const sid = `stop-abort-new-turn-${agentKind}`;
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+    });
+    const replacement = makeItem('q-new', 'replacement', {
+      createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind, providerId, model },
+    });
+    const abort = deferred<void>();
+    const beforeDispatch = deferred<void>();
+    h.setAgentKind(agentKind);
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+    h.beforeDispatchUserTurn.mockImplementationOnce(() => beforeDispatch.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: false });
+    h.setRunning(false);
+    beforeDispatch.resolve();
+    await flush();
+
+    // A non-preserving stop does not hold queueAbortPending, so a replacement
+    // turn can start while the old vendor abort promise is still unresolved.
+    h.coordinator.enqueue(sid, replacement);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    abort.resolve();
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
+      }
+    ).getState(sid);
+    expect(state.activeTurn?.item?.clientId).toBe('q-new');
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+  });
+
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
     const sid = 'stop-codex';
@@ -4288,6 +4520,7 @@ describe('AgentInputCoordinator steer transaction', () => {
     // host 校准: 复核后清掉 stale busy tracker (镜像 register.ts 的接线行为)。
     h.reconcileTurnIdle.mockImplementationOnce(() => {
       h.setRunning(false);
+      return true;
     });
 
     const ok = await h.coordinator.steer(sid, second, { removeFromQueue: true });
@@ -4338,7 +4571,10 @@ describe('AgentInputCoordinator steer transaction', () => {
     await flush();
     h.coordinator.enqueue(sid, markerOnly);
     h.steerToAgent.mockRejectedValueOnce(new Error('[NO_ACTIVE_TURN] Session has no active turn'));
-    h.reconcileTurnIdle.mockImplementationOnce(() => h.setRunning(false));
+    h.reconcileTurnIdle.mockImplementationOnce(() => {
+      h.setRunning(false);
+      return true;
+    });
 
     await expect(h.coordinator.steer(sid, incoming, { removeFromQueue: true })).resolves.toBe(true);
     await flush();

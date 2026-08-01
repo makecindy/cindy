@@ -7,6 +7,7 @@ export const SESSION_SOURCES = [
   'discord',
   'wechat',
   'dingtalk',
+  'wecom',
   'scheduler',
   'learn',
   'shared',
@@ -37,6 +38,7 @@ export const DESKTOP_VISIBLE_SESSION_SOURCES: SessionSource[] = [
   'discord',
   'wechat',
   'dingtalk',
+  'wecom',
   'scheduler',
   'learn',
   'shared',
@@ -51,6 +53,7 @@ export function normalizeSessionSource(source: unknown): SessionSource {
     source === 'discord' ||
     source === 'wechat' ||
     source === 'dingtalk' ||
+    source === 'wecom' ||
     source === 'scheduler' ||
     source === 'learn' ||
     source === 'shared' ||

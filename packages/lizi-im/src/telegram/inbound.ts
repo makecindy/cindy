@@ -14,7 +14,7 @@ import path from 'node:path';
 
 import type { IMAttachment, IMHostMediaCache, IMMessageEvent, IMUnsupportedEntry } from '../types.js';
 import type { TelegramApiClient, TgFile, TgMessage, TgMessageEntity, TgUser } from './api.js';
-import { encodeLaneUserId, encodeMessageId } from './codec.js';
+import { encodeMessageId } from './codec.js';
 
 /** Bot API getFile 的官方下载上限(20MB), 超过标注 oversize 不下载。 */
 const MAX_INBOUND_FILE_BYTES = 20 * 1024 * 1024;
