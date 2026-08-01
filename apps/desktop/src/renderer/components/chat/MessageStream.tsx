@@ -188,6 +188,8 @@ import {
 } from './viewportFillDetect';
 import {
   resolveNearBottomOnScroll,
+  resolveLastUserMessageObservation,
+  resolveRenderPinDecision,
   shouldUnpinOnUpIntent,
   shouldUnpinOnWheel,
 } from './autoFollowIntent';
@@ -2196,7 +2198,10 @@ export function MessageStream({
   const prevScrollTopRef = useRef(0);
   /** clientId of the last user-role message we've already observed. Used to
    *  detect a NEW user send → force pin regardless of prior scroll state. */
-  const lastUserMsgIdRef = useRef<string | null>(null);
+  const lastUserMsg = messages[messages.length - 1];
+  const lastUserMsgIdRef = useRef<string | null>(
+    lastUserMsg?.role === 'user' ? lastUserMsg.clientId : null,
+  );
 
   // ── render-window state ──
   // null = 默认窗口(取末尾 RENDER_WINDOW_INITIAL_ITEMS 个 item);非 null = 锚定到
@@ -2982,12 +2987,6 @@ export function MessageStream({
   // result land.
   // biome-ignore lint/correctness/useExhaustiveDependencies: bottomPadding 是触发型依赖；overlay 高度变化时即使 effect 内不读取它，也必须重新 pin 到底。
   useLayoutEffect(() => {
-    // 还原中:跳过一切 auto-follow,位置由下面的还原 effect / ResizeObserver 接管。
-    if (restoringRef.current) {
-      const el = scrollRef.current;
-      if (el) prevScrollTopRef.current = el.scrollTop;
-      return;
-    }
     // tail item 在 visibleRenderItems 与 allRenderItems 末尾完全一致(window 始终
     // 包含最新的一段),用 visibleRenderItems 避免扩窗时多触发一次。
     // 用户消息总是产出独立的 message item(不进 segment / 不被丢弃),所以这里
@@ -2995,15 +2994,26 @@ export function MessageStream({
     const lastItem = visibleRenderItems[visibleRenderItems.length - 1];
     const lastUserMsg =
       lastItem?.type === 'message' && lastItem.message.role === 'user' ? lastItem.message : null;
-    const isNewUserSend = lastUserMsg !== null && lastUserMsg.clientId !== lastUserMsgIdRef.current;
+    const userMessageObservation = resolveLastUserMessageObservation({
+      restoring: restoringRef.current,
+      tailUserMessageId: lastUserMsg?.clientId ?? null,
+      previousTailUserMessageId: lastUserMsgIdRef.current,
+    });
+    lastUserMsgIdRef.current = userMessageObservation.baselineUserMessageId;
+    const decision = resolveRenderPinDecision({
+      restoring: restoringRef.current,
+      newUserSend: userMessageObservation.isNewUserSend,
+      nearBottom: isNearBottomRef.current,
+    });
 
-    if (isNewUserSend) {
+    if (userMessageObservation.isNewUserSend && lastUserMsg) {
       lastUserMsgIdRef.current = lastUserMsg.clientId;
-      isNearBottomRef.current = true;
-      pinToBottom();
-    } else if (isNearBottomRef.current) {
-      pinToBottom();
     }
+    if (decision.clearRestoring) {
+      restoringRef.current = false;
+      isNearBottomRef.current = true;
+    }
+    if (decision.pinToBottom) pinToBottom();
 
     const el = scrollRef.current;
     if (el) prevScrollTopRef.current = el.scrollTop;
