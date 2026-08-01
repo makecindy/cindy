@@ -2417,6 +2417,10 @@ export class ClaudeCodeAgent extends BaseAgent {
             if (params.kind === 'plan_review') {
               const planInput = (params.input ?? {}) as { plan?: string; planFilePath?: string };
               const plan = params.plan ?? planInput.plan ?? '';
+              // 审批等待期间用户可能继续发消息(setAutoReviewIntent 会覆盖 currentAutoReviewIntent),
+              // 实施阶段的审查意图必须锚在**发起计划时**的原始请求上,不能掺进审批期间的内部跟进
+              // (copilot 报;与本地 ExitPlanMode 分支的 planRequestAutoReviewIntent 同款)。
+              const planRequestAutoReviewIntent = currentAutoReviewIntent;
               const decision = await dispatchWithTimeout({
                 kind: 'plan_review',
                 requestId: params.requestId,
@@ -2438,7 +2442,7 @@ export class ClaudeCodeAgent extends BaseAgent {
                 // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支
                 // 一致,否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
                 setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
-                  currentAutoReviewIntent,
+                  planRequestAutoReviewIntent,
                   decision.editedPlan ?? plan,
                 ));
               } else if (!decision.dismissed) {
