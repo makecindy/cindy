@@ -67,7 +67,8 @@ describe('cloneMarketplace', () => {
     );
     expect(calls[0]?.args).toEqual(expect.arrayContaining(['clone']));
     expect(calls[0]?.args).not.toContain('--branch');
-    expect(calls[1]?.args).toEqual(['checkout', 'v1.2']);
+    // --detach 消歧:防 ref 与仓库内同名文件把 checkout 变成路径检出。
+    expect(calls[1]?.args).toEqual(['checkout', '--detach', 'v1.2']);
   });
 
   it('uses blobless clone + sparse-checkout when sparse paths are given', async () => {
@@ -80,7 +81,7 @@ describe('cloneMarketplace', () => {
     expect(calls[0]?.args).toContain('--filter=blob:none');
     expect(calls[0]?.args).toContain('--no-checkout');
     expect(calls[1]?.args).toEqual(['sparse-checkout', 'set', '--', 'plugins/a', 'plugins/b']);
-    expect(calls[2]?.args).toEqual(['checkout', 'main']);
+    expect(calls[2]?.args).toEqual(['checkout', '--detach', 'main']);
   });
 
   it('checks out the default branch for sparse clones without an explicit ref', async () => {

@@ -211,8 +211,12 @@ export async function cloneMarketplace(
     if (input.sparsePaths.length === 0) {
       await executor(['clone', input.url, stagingPath], { timeoutMs });
       if (input.ref) {
-        // --branch 只支持 branch/tag；显式 checkout 同时覆盖可达的 commit SHA。
-        await executor(['checkout', input.ref], { cwd: stagingPath, timeoutMs });
+        // --branch 只支持 branch/tag;显式 checkout 同时覆盖可达的 commit SHA。
+        // 必须带 --detach 消歧:`git checkout <ref>` 在 ref 不存在但仓库根恰有
+        // 同名文件时会退化成**路径检出**并成功返回,HEAD 仍停在默认分支——用户
+        // pin 住的引用被静默换成默认分支内容。--detach 强制按 commit-ish 解析,
+        // 解析不了就如实失败。
+        await executor(['checkout', '--detach', input.ref], { cwd: stagingPath, timeoutMs });
       }
     } else {
       await executor(
@@ -227,8 +231,13 @@ export async function cloneMarketplace(
       // 无显式 ref 时必须 checkout 默认**分支**而不是 `HEAD`:后者留下 detached
       // HEAD,刷新走的 `git pull --ff-only` 会稳定失败并回落到整仓重克隆,
       // 等于每次刷新都重新 clone。取不到默认分支名时才退回 HEAD。
-      const target = input.ref ?? (await defaultBranchName(stagingPath, executor)) ?? 'HEAD';
-      await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
+      // 显式 ref 同样带 --detach 消歧(见上:防同名文件把 checkout 变成路径检出)。
+      if (input.ref) {
+        await executor(['checkout', '--detach', input.ref], { cwd: stagingPath, timeoutMs });
+      } else {
+        const target = (await defaultBranchName(stagingPath, executor)) ?? 'HEAD';
+        await executor(['checkout', target], { cwd: stagingPath, timeoutMs });
+      }
     }
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
     await fs.promises.rename(stagingPath, destPath);
