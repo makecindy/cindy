@@ -330,8 +330,9 @@ export function AddProviderWizard({
   const [manualModelIds, setManualModelIds] = useState<Partial<Record<AgentKind, string>>>({});
   /**
    * 手动添加模型的上下文窗口输入（可空字符串 = 不指定）。纯文本输入，添加时解析：
-   * 空 / 非法忽略（落 DEFAULT_CUSTOM_CONTEXT_WINDOW 200K 兜底），合法正整数随模型入库，
-   * 否则与「发现」路径一致退回 200K —— 手动添加不再必然拿到 1/5 窗口。
+   * 空 = 不指定（落 DEFAULT_CUSTOM_CONTEXT_WINDOW 200K 兜底）；非空非法（如 `1e6`、
+   * `0`、超界值）拒绝添加并 toast 提示、保留输入让用户修正；合法正整数随模型入库，
+   * 与「发现」路径一致 —— 手动添加不再必然拿到 1/5 窗口。
    */
   const [manualModelWindows, setManualModelWindows] = useState<Partial<Record<AgentKind, string>>>({});
   /**
@@ -725,7 +726,7 @@ export function AddProviderWizard({
         toast.error(t('settings.providers.wizard.manualModelWindowInvalid'));
         return;
       }
-      const window = parseWindowText(rawWindow);
+      const contextWindow = parseWindowText(rawWindow);
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
@@ -739,8 +740,8 @@ export function AddProviderWizard({
                   ? existing.agents
                   : [...existing.agents, agent],
                 // 手动值优先于发现值：双端归属同一 id 时以本次手填为准，不互相覆盖。
-                ...(window !== undefined
-                  ? { contextWindows: { ...existing.contextWindows, [agent]: window } }
+                ...(contextWindow !== undefined
+                  ? { contextWindows: { ...existing.contextWindows, [agent]: contextWindow } }
                   : {}),
               }
             : {
@@ -748,7 +749,7 @@ export function AddProviderWizard({
                 checked: true,
                 recommended: false,
                 agents: [agent],
-                ...(window !== undefined ? { contextWindows: { [agent]: window } } : {}),
+                ...(contextWindow !== undefined ? { contextWindows: { [agent]: contextWindow } } : {}),
               },
         );
         return next;
@@ -756,7 +757,7 @@ export function AddProviderWizard({
       setManualModelIds((prev) => ({ ...prev, [agent]: '' }));
       setManualModelWindows((prev) => ({ ...prev, [agent]: '' }));
     },
-    [sel, manualModelIds, manualModelWindows],
+    [sel, manualModelIds, manualModelWindows, t],
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
