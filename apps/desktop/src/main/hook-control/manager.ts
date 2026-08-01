@@ -18,6 +18,7 @@ import { randomUUID } from 'node:crypto';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
@@ -44,6 +45,7 @@ import {
   makeTaskAck,
   makeToolRequest,
   type BindUpdatePayload,
+  type GroupMessagePayload,
   type HelloInput,
   type HookMessage,
   type HookProvider,
@@ -148,6 +150,29 @@ export function providerForExternalKey(externalKey: string): HookProvider | null
     return 'slack';
   }
   return null;
+}
+
+/**
+ * group.message 的本地持久化 owner 只能来自 server 针对本次扇出的权威
+ * recipient,不能用帧到达时的当前 binding 猜测。旧 server 未协商 recipient
+ * 能力、字段缺席或切号后的任一代际不匹配都 fail closed。
+ */
+export function telegramGroupMessageOwner(
+  payload: GroupMessagePayload,
+  binding: ProviderBindingView | null,
+  recipientCapabilityReady: boolean,
+): string | null {
+  if (
+    payload.provider !== 'telegram' ||
+    !recipientCapabilityReady ||
+    binding?.state !== 'confirmed' ||
+    payload.recipient === undefined ||
+    payload.recipient.bindingId !== binding.bindingId ||
+    payload.recipient.principalId !== binding.principalId
+  ) {
+    return null;
+  }
+  return payload.recipient.principalId;
 }
 
 export interface HookControlManagerDeps {
@@ -632,6 +657,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
       HOOK_FEATURE_GROUP_RELAY,
+      HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
       HOOK_FEATURE_PROVIDER_BEHAVIOR,
     ],
     isEnabled: () => store.get().telegramEnabled,
@@ -2361,10 +2387,11 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       }
       // 账号边界: 写入纳入 pendingAccountOps, 登出/切号等待落库完成后再
       // 销毁 DB client, 不留 use-after-dispose。
-      const ownerId =
-        lane?.config.provider === 'telegram' && lane.binding?.state === 'confirmed'
-          ? lane.binding.principalId
-          : null;
+      const ownerId = telegramGroupMessageOwner(
+        msg.payload,
+        lane?.config.provider === 'telegram' ? lane.binding : null,
+        lane?.serverFeatures.includes(HOOK_FEATURE_GROUP_RELAY_RECIPIENT) === true,
+      );
       trackAccountOp(
         (async () => {
           if (ownerId === null) {

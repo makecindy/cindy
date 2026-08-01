@@ -14,6 +14,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
@@ -37,6 +38,7 @@ import {
   parseHookMessage,
   serializeHookMessage,
   type HookMessage,
+  type GroupMessagePayload,
   type ProviderBindStatusPayload,
 } from '@cindy/slack-hook-protocol';
 
@@ -47,6 +49,7 @@ import {
   HookPrefsTimeoutError,
   providerForExternalKey,
   providerForTaskDispatch,
+  telegramGroupMessageOwner,
   type HookControlManagerDeps,
 } from '../manager';
 import { computeBackoffDelayMs, createHookTransport, type HookTransportOpts } from '../transport';
@@ -1575,6 +1578,42 @@ describe('Telegram provider capability, binding and prefs', () => {
       ),
     );
     await expect.poll(() => handleDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('group.message 只接受与当前 Telegram binding 代际一致的 recipient', () => {
+    const frame: GroupMessagePayload = {
+      provider: 'telegram',
+      recipient: { bindingId: 'binding-telegram-1', principalId: 'telegram-user-1' },
+      chatId: '-900',
+      threadId: null,
+      messageId: '1',
+      chatName: 'Ops',
+      author: { name: 'Alice', id: '101' },
+      text: 'hello',
+      sentAt: 1,
+    };
+    const binding = {
+      ...TELEGRAM_CONFIRMED,
+      remediationUrl: null,
+    };
+
+    expect(telegramGroupMessageOwner(frame, binding, true)).toBe('telegram-user-1');
+    expect(
+      telegramGroupMessageOwner(
+        { ...frame, recipient: { ...frame.recipient!, bindingId: 'binding-old' } },
+        binding,
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      telegramGroupMessageOwner(
+        { ...frame, recipient: { ...frame.recipient!, principalId: 'old-principal' } },
+        binding,
+        true,
+      ),
+    ).toBeNull();
+    expect(telegramGroupMessageOwner({ ...frame, recipient: undefined }, binding, true)).toBeNull();
+    expect(telegramGroupMessageOwner(frame, binding, false)).toBeNull();
   });
 
   it('显式开启会等待服务端权威状态，缓存误报 confirmed 时仍自动发起绑定', async () => {
