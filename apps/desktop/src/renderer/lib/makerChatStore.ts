@@ -75,6 +75,7 @@ import {
   aroundMessagesByClientIdFor,
   dismissErrorMessageFor,
   isRemoteSession,
+  type RoutableMaker,
 } from '@/lib/makerTransport';
 import {
   remoteProjectsStore,
@@ -737,6 +738,8 @@ export interface AgentSwitchIntentRecord {
   fastMode?: boolean;
 }
 
+export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
+
 export interface SessionChatState {
   /**
    * 该 session 用哪个 agent (Claude / Codex)。 sendMessage 据此走 maker.send 时
@@ -820,6 +823,18 @@ export interface SessionChatState {
    * 保持熄灭，同时不影响用户取消仍在队列中的 Continue 后恢复横幅。
    */
   continuationInFlightClientId: string | null;
+  /**
+   * 当前 vendor turn 的续跑发起项 clientId。它由 main 绑定在 ActiveTurn 上，steer 顶替
+   * activeTurn 后仍保持原值，因此 Renderer 重载 / 新窗口也能恢复归属。
+   */
+  continuationTurnClientId: string | null;
+  /**
+   * 当前 projection 是否支持 `continuationTurnClientId`：
+   * unknown = 尚未收到投影；supported = 字段显式存在（值可以是 null）；
+   * legacy = 旧被控端完全缺省字段，只能回落到 running + 最后一条输入的兼容判据。
+   * 不能用 `?? null` 推断：新版显式 null 需要挡住无关 Goal turn，旧版缺省需要兼容。
+   */
+  continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   /**
@@ -1015,6 +1030,8 @@ export type SessionChatLightState = Pick<
   | 'errorRetryText'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
+  | 'continuationTurnClientId'
+  | 'continuationInFlightProjectionCapability'
   | 'isLoadingMore'
   | 'hasMoreMessages'
   | 'isFirstMessage'
@@ -1066,6 +1083,8 @@ function createInitialState(): SessionChatState {
     errorRetryText: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
+    continuationTurnClientId: null,
+    continuationInFlightProjectionCapability: 'unknown',
     isLoadingMore: false,
     hasMoreMessages: true,
     historyWindowHasIsland: false,
@@ -1130,6 +1149,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  continuationTurnClientId: null,
+  continuationInFlightProjectionCapability: 'unknown',
   isLoadingMore: false,
   hasMoreMessages: false,
   historyWindowHasIsland: false,
@@ -1271,6 +1292,7 @@ function _purgeSession(sessionId: string): void {
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   bumpMessagesEpoch(sessionId);
+  invalidateInputProjectionRequests(sessionId);
   sessions.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
@@ -1551,8 +1573,21 @@ function shallowEqualRecord(
 
 const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 
-function applyInputProjection(projection: AgentInputProjection): void {
+function applyInputProjection(
+  projection: AgentInputProjection,
+  opts: { supersedeQueries?: boolean } = {},
+): void {
   if (!projection.sessionId) return;
+  if (opts.supersedeQueries !== false) {
+    supersedeInputProjectionRequests(projection.sessionId);
+  }
+  // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
+  // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
+  const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
+    Object.prototype.hasOwnProperty.call(projection, 'continuationTurnClientId')
+      ? 'supported'
+      : 'legacy';
+  const projectedContinuationTurnClientId = projection.continuationTurnClientId ?? null;
   setState(projection.sessionId, (s) => {
     // Only trigger if the retried message is still stuck in the pending queue:
     // projection.error is queue-level (string | null, no clientId), so we correlate
@@ -1654,6 +1689,8 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
+      continuationTurnClientId: projectedContinuationTurnClientId,
+      continuationInFlightProjectionCapability,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -1669,9 +1706,15 @@ function markSessionHasUserMessage(sessionId: string): void {
 function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
   if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
-  makerApiFor(sessionId)
-    .input.getProjection(sessionId)
-    .then(applyInputProjection)
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  const epoch = beginInputProjectionRequest(sessionId, origin);
+  const api = makerApiFor(sessionId);
+  api.input
+    .getProjection(sessionId)
+    .then((projection) => {
+      if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
+      applyInputProjection(projection, { supersedeQueries: false });
+    })
     .catch((err) => log.warn('get input projection failed:', err));
 }
 
@@ -2588,6 +2631,7 @@ export function handleStreamEvent(
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
         pendingAskUser: null,
+        continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
         // pending question is gone, reset so the next one starts expanded.
         askUserViewerState: 'expanded',
@@ -2691,6 +2735,7 @@ export function handleStreamEvent(
         errorRetryText: derivedRetryText ?? preservedRetryText,
         isStreaming: false,
         activeTurnRetryText: null,
+        continuationTurnClientId: null,
         queueAbortPending: false,
         streamingText: '', // MEM-4: finalizeStreamingInState intentionally keeps streamingText for
         // the 'done' path to consume — reset it explicitly on error so the
@@ -3080,6 +3125,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
+    state.continuationTurnClientId === null &&
     !state.pendingTaskWake &&
     stoppedTasks === state.taskUpdates
   ) {
@@ -3126,6 +3172,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingGhostGrantConfirm: null,
     queueAbortPending: false,
     steeringQueueClientIds: [],
+    continuationTurnClientId: null,
     // session 都关了,后台任务事件流已断:running 残留任务标 stopped、唤醒桥接
     // 清零,否则 running 快照(折算了后台任务)会让 spinner 永久转下去。
     taskUpdates: stoppedTasks,
@@ -3223,6 +3270,7 @@ function handleStatusUpdate(
       startedAt,
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
+    continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
     // 新 turn 真正启动(isRunning false→true)时清掉上一轮残留的终态 error:
     // coordinator 路径的 send 经 projection error:null 清横幅,但 direct send
     // (scheduler / send-to-session / goal 等不走 coordinator 的路径)不发
@@ -3313,17 +3361,17 @@ function dispatchStreamEventPayload(
   resolvedContent?: string,
 ): void {
   if (!event) return;
-  setState(sessionId, (s) =>
-    handleStreamEvent(s, {
-      sessionId,
-      type: event.type,
-      data: event.data,
-      source: event.source,
-      agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
-      persistId,
-      resolvedContent,
-    } as CCAgentStreamEvent),
-  );
+  const streamEvent = {
+    sessionId,
+    type: event.type,
+    data: event.data,
+    source: event.source,
+    agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
+    persistId,
+    resolvedContent,
+  } as CCAgentStreamEvent;
+  supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent));
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -3661,6 +3709,9 @@ function initGlobalListeners(): void {
         sessionId,
         ...(event.data as Record<string, unknown>),
       } as CCAgentStatusUpdate;
+      if (!update.skipTurnReset && !update.isRunning) {
+        supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+      }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
       return;
     }
@@ -3771,13 +3822,13 @@ function initGlobalListeners(): void {
                 event.data as Record<string, unknown> | null,
                 event.agentMeta ?? null,
               );
-              setState(sessionId, (s) =>
-                handleStreamEvent(s, {
-                  sessionId,
-                  type: 'error',
-                  data: event.data,
-                } as CCAgentStreamEvent),
-              );
+              const terminalErrorEvent = {
+                sessionId,
+                type: 'error',
+                data: event.data,
+              } as CCAgentStreamEvent;
+              supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
+              setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
             } finally {
               setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
             }
@@ -3874,14 +3925,21 @@ function initGlobalListeners(): void {
   const handleMakerStatusRaw = (raw: unknown) => {
     const payload = raw as { sessionId?: string; status?: string } | null;
     if (!payload?.sessionId || payload.status !== 'closed') return;
+    supersedeInputProjectionRequests(payload.sessionId, { supersedeOperations: true });
     flushPendingTextDelta(payload.sessionId);
     setState(payload.sessionId, forceFinalizeOnSessionClosed);
   };
   bindIpc(window.electronAPI.maker.onStatusChanged, handleMakerStatusRaw, 'maker-status-changed');
 
-  const handleInputProjectionRaw = (raw: unknown) => {
+  const handleInputProjectionRaw = (raw: unknown, sourceDeviceId?: string) => {
     const projection = raw as AgentInputProjection | null;
     if (!projection?.sessionId) return;
+    if (
+      sourceDeviceId !== undefined &&
+      remoteProjectsStore.getSessionDeviceId(projection.sessionId) !== sourceDeviceId
+    ) {
+      return;
+    }
     applyInputProjection(projection);
   };
   bindIpc(
@@ -4297,7 +4355,8 @@ function initGlobalListeners(): void {
           handleMakerStatusRaw(push.payload);
           break;
         case 'maker:input:projection':
-          handleInputProjectionRaw(push.payload);
+          if (!push.deviceId) break;
+          handleInputProjectionRaw(push.payload, push.deviceId);
           break;
         case 'maker:interaction-request':
           handleInteractionRequestRaw(push.payload);
@@ -4753,6 +4812,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
+    continuationTurnClientId: state.continuationTurnClientId,
+    continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
     isFirstMessage: state.isFirstMessage,
@@ -4791,7 +4852,11 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
+    a.continuationTurnClientId === b.continuationTurnClientId &&
+    a.continuationInFlightProjectionCapability ===
+      b.continuationInFlightProjectionCapability &&
     a.isLoadingMore === b.isLoadingMore &&
+
     a.hasMoreMessages === b.hasMoreMessages &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
@@ -5259,6 +5324,154 @@ const _historyFetchInFlight = new Set<string>();
  * (undefined→deviceId)后重载,经隧道拉被控端真历史。
  */
 const _historyLoadOrigin = new Map<string, string | undefined>();
+
+/**
+ * input projection 请求的来源与代际守卫。
+ *
+ * projection 查询可能跨过 device-link origin 切换:启动时先按本机来源发起的请求,可能在
+ * 远程来源已经接管后才返回。若无守卫,旧本机 projection 会覆盖远程 projection(尤其把
+ * continuationTurnClientId 从非空写回 null),让仍在运行的续跑行停止转圈。
+ *
+ * origin 变化时 epoch 单调递增,因此即使来源经历 A→undefined→A 的 ABA 也不会重新放行
+ * 更早请求。查询按 origin + epoch 丢弃旧响应；直接操作按 origin + authority epoch 拒绝
+ * 来源漂移或终态前发出的响应。实时 push 另在接收点按 source device 校验。
+ */
+const _inputProjectionOrigin = new Map<string, string | undefined>();
+const _inputProjectionEpoch = new Map<string, number>();
+const _inputProjectionAuthorityEpoch = new Map<string, number>();
+let _nextInputProjectionEpoch = 0;
+
+function nextInputProjectionEpoch(): number {
+  _nextInputProjectionEpoch += 1;
+  return _nextInputProjectionEpoch;
+}
+
+function supersedeInputProjectionRequests(
+  sessionId: string,
+  opts: { supersedeOperations?: boolean } = {},
+): void {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  _inputProjectionOrigin.set(sessionId, origin);
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  if (opts.supersedeOperations) {
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
+  }
+}
+
+function invalidateInputProjectionRequests(sessionId: string): void {
+  _inputProjectionOrigin.delete(sessionId);
+  _inputProjectionEpoch.delete(sessionId);
+  // authority 代际不能 delete：pre-purge 操作可能捕获 0，delete 后回落 0 会误放行，
+  // 并通过 setState 复活已 purge 的 session。保留单调墓碑，与 messagesEpoch 同理。
+  _inputProjectionAuthorityEpoch.set(sessionId, nextInputProjectionEpoch());
+}
+
+function beginInputProjectionRequest(sessionId: string, origin: string | undefined): number {
+  _inputProjectionOrigin.set(sessionId, origin);
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  return epoch;
+}
+
+function noteInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): { epoch: number; changed: boolean } {
+  const previous = _inputProjectionOrigin.get(sessionId);
+  if (!_inputProjectionOrigin.has(sessionId) || previous !== origin) {
+    _inputProjectionOrigin.set(sessionId, origin);
+    const epoch = nextInputProjectionEpoch();
+    _inputProjectionEpoch.set(sessionId, epoch);
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
+    return { epoch, changed: true };
+  }
+  return { epoch: _inputProjectionEpoch.get(sessionId)!, changed: false };
+}
+
+function isCurrentInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): boolean {
+  return remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+}
+
+function isCurrentInputProjectionRequest(
+  sessionId: string,
+  origin: string | undefined,
+  epoch: number,
+): boolean {
+  return (
+    isCurrentInputProjectionOrigin(sessionId, origin) &&
+    (_inputProjectionEpoch.get(sessionId) ?? 0) === epoch
+  );
+}
+
+interface InputProjectionOperation {
+  api: RoutableMaker;
+  origin: string | undefined;
+  epoch: number;
+}
+
+/**
+ * 捕获一次会返回 projection 的操作路由。`api` 与 origin 必须在同一时刻定格：
+ * origin 漂移后重新调用 makerApiFor 会把同一业务意图错发到另一台设备。
+ * authority epoch 只由终态 / 来源切换推进；普通 push 与同源并发操作仍按响应到达顺序落地。
+ */
+function beginInputProjectionOperation(sessionId: string): InputProjectionOperation {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  return {
+    api: makerApiFor(sessionId),
+    origin,
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+  };
+}
+
+function applyInputProjectionOperationResponse(
+  sessionId: string,
+  operation: InputProjectionOperation,
+  projection: AgentInputProjection,
+): boolean {
+  if (
+    !isCurrentInputProjectionOrigin(sessionId, operation.origin) ||
+    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) !== operation.epoch
+  ) {
+    return false;
+  }
+  // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
+  applyInputProjection(projection);
+  return true;
+}
+
+/**
+ * Renderer 收到权威 turn 终态时，同时作废所有此前发出的 projection 查询。
+ * reducer 本身保持纯函数；调用方在 setState 前执行这条时序屏障。
+ */
+function supersedeInputProjectionOnTerminalEvent(
+  sessionId: string,
+  event: Pick<CCAgentStreamEvent, 'type' | 'data'>,
+): void {
+  if (event.type === 'done') {
+    if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true) {
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+    }
+    return;
+  }
+  if (event.type === 'error' && isTerminalErrorData(event.data)) {
+    supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  }
+}
+
+function runInputProjectionOperation(
+  sessionId: string,
+  invoke: (input: RoutableMaker['input']) => Promise<AgentInputProjection>,
+): Promise<{ applied: boolean; projection: AgentInputProjection }> {
+  const operation = beginInputProjectionOperation(sessionId);
+  return invoke(operation.api.input).then((projection) => ({
+    applied: applyInputProjectionOperationResponse(sessionId, operation, projection),
+    projection,
+  }));
+}
 
 /**
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
@@ -5813,6 +6026,19 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
 function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
+    // 即使当前来源暂时为空也要推进 projection 代际:否则 A→断连→A 的 ABA 会让
+    // 最初按 A 发起的旧查询在来源恢复后重新通过检查,覆盖恢复后的权威投影。
+    const originChange = noteInputProjectionOrigin(sessionId, current);
+    if (originChange.changed) {
+      // 来源变更后旧设备的 owner / capability 都失效。在新来源 projection 回来前
+      // fail closed，不能让 B 的历史沿用 A 的精确 owner 或 legacy 兜底。
+      setState(sessionId, (state) => ({
+        ...state,
+        continuationInFlightClientId: null,
+        continuationTurnClientId: null,
+        continuationInFlightProjectionCapability: 'unknown',
+      }));
+    }
     if (current === undefined) continue;
     const loaded = _historyLoadOrigin.get(sessionId);
     if (current === loaded) continue;
@@ -6139,6 +6365,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
  */
 function finalizeStuckRemoteTurn(sessionId: string): void {
   if (!isRemoteSession(sessionId)) return;
+  // 看门狗确认被控端已停止 = 权威终态；在清本地 owner 前先作废所有旧查询，
+  // 防止 stall 期间悬挂的 getProjection 随后把已死 turn 重新点亮。
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   flushPendingTextDelta(sessionId); // 收尾前把残留增量落定,避免丢最后一截文本
   setState(sessionId, forceFinalizeOnSessionClosed);
 }
@@ -6952,42 +7181,36 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
  */
 function setQueueExpanded(sessionId: string, expanded: boolean): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.setExpanded(sessionId, expanded)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueExpanded failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setExpanded(sessionId, expanded),
+  ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.resume(sessionId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.resume(sessionId))
     .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
   if (!sessionId || !lockId) return;
-  makerApiFor(sessionId)
-    .input.setInteractionLock(sessionId, lockId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueInteractionLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setInteractionLock(sessionId, lockId, locked),
+  ).catch((err) => log.warn('setQueueInteractionLock failed:', err));
 }
 
 function setQueueEditLock(sessionId: string, clientId: string, locked: boolean): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.setEditLock(sessionId, clientId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueEditLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setEditLock(sessionId, clientId, locked),
+  ).catch((err) => log.warn('setQueueEditLock failed:', err));
 }
 
 function moveQueueItem(sessionId: string, clientId: string, targetIndex: number): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.move(sessionId, clientId, targetIndex)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('moveQueueItem failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.move(sessionId, clientId, targetIndex),
+  ).catch((err) => log.warn('moveQueueItem failed:', err));
 }
 
 /**
@@ -6999,9 +7222,7 @@ function moveQueueItem(sessionId: string, clientId: string, targetIndex: number)
  */
 function removeFromQueue(sessionId: string, clientId: string): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.remove(sessionId, clientId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId))
     .catch((err) => log.warn('removeFromQueue failed:', err));
 }
 
@@ -7017,15 +7238,14 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
   const trimmed = newText.trim();
   if (!trimmed) return;
   const queued = getOrCreateState(sessionId).pendingQueue.find((q) => q.clientId === clientId);
-  makerApiFor(sessionId)
-    .input.updateText(
+  runInputProjectionOperation(sessionId, (input) =>
+    input.updateText(
       sessionId,
       clientId,
       newText,
       extractSessionRefs(newText, queued?.sessionRefs),
-    )
-    .then(applyInputProjection)
-    .catch((err) => log.warn('updateQueueItem failed:', err));
+    ),
+  ).catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
 /**
@@ -7347,8 +7567,9 @@ async function sendMessageCore(
     );
   }
 
-  return makerApiFor(sessionId)
-    .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+  const operation = beginInputProjectionOperation(sessionId);
+  return operation.api.input
+    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
     .then((projection) => {
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({
@@ -7359,8 +7580,10 @@ async function sendMessageCore(
           },
         }));
       }
-      applyInputProjection(projection);
-      markSessionHasUserMessage(sessionId);
+      const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
+      if (applied) markSessionHasUserMessage(sessionId);
+      // RPC 已在发起时的设备上成功受理；origin 期间漂移只意味着旧 projection
+      // 不能写进当前镜像，不应向 composer 谎报发送失败并诱导用户重复发送。
       return true;
     })
     .catch((err) => {
@@ -7407,12 +7630,11 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
-  return makerApiFor(sessionId)
-    .input.compact(sessionId, createOpts, { userName: currentUserName })
-    .then((projection) => {
-      applyInputProjection(projection);
-      return projection.error === null;
-    })
+  return runInputProjectionOperation(sessionId, (input) =>
+    input.compact(sessionId, createOpts, { userName: currentUserName }),
+  )
+    // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
+    .then(({ projection }) => projection.error === null)
     .catch((err) => {
       const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
@@ -7540,8 +7762,11 @@ function steerMessageCore(
       // 由队列行接管显示,这里必须返回 true 让 composer 清空草稿,否则用户面前
       // 同时存在暂停行 + 草稿,再次发送会双份消费(review #939 第五轮)。
       try {
-        const latest = await makerApiFor(sessionId).input.getProjection(sessionId);
-        applyInputProjection(latest);
+        const operation = beginInputProjectionOperation(sessionId);
+        const latest = await operation.api.input.getProjection(sessionId);
+        if (!applyInputProjectionOperationResponse(sessionId, operation, latest)) {
+          return false;
+        }
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
@@ -7711,9 +7936,21 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   flushPendingTextDelta(sessionId);
-  makerApiFor(sessionId)
-    .input.stop(sessionId, opts)
-    .then(applyInputProjection)
+  const api = makerApiFor(sessionId);
+  // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
+  // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
+  // 让 Stop 自己的权威响应仍属于新代际。
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  const operation: InputProjectionOperation = {
+    api,
+    origin: remoteProjectsStore.getSessionDeviceId(sessionId),
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+  };
+  operation.api.input
+    .stop(sessionId, opts)
+    .then((projection) => {
+      applyInputProjectionOperationResponse(sessionId, operation, projection);
+    })
     .catch((err) => log.warn('maker.input.stop failed:', err));
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
@@ -7739,6 +7976,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
       askUserViewerState: 'expanded',
@@ -7815,9 +8053,7 @@ function popQueueTail(sessionId: string): boolean {
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.clearError(sessionId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId))
     .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
     if (
@@ -7844,11 +8080,8 @@ function retryLastError(sessionId: string): Promise<void> {
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  return makerApiFor(sessionId)
-    .input.retryLastError(sessionId)
-    .then((projection) => {
-      applyInputProjection(projection);
-    });
+  return runInputProjectionOperation(sessionId, (input) => input.retryLastError(sessionId))
+    .then(() => undefined);
 }
 
 /**
@@ -7944,10 +8177,10 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     | { kind: 'projection'; projection: AgentInputProjection }
     | { kind: 'error'; err: unknown }
     | { kind: 'timeout' };
+  const clearOperation = beginInputProjectionOperation(sessionId);
   try {
     guardResult = await Promise.race([
-      makerApiFor(sessionId)
-        .input.clearSession(sessionId, clearedAt)
+      clearOperation.api.input.clearSession(sessionId, clearedAt)
         .then(
           (projection) => ({ kind: 'projection' as const, projection }),
           (err) => ({ kind: 'error' as const, err }),
@@ -7965,7 +8198,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     if (guardTimeoutId) clearTimeout(guardTimeoutId);
   }
   if (guardResult.kind === 'projection') {
-    applyInputProjection(guardResult.projection);
+    applyInputProjectionOperationResponse(sessionId, clearOperation, guardResult.projection);
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
@@ -8986,10 +9219,11 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
-      return makerApiFor(sessionId)
-        .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+      const operation = beginInputProjectionOperation(sessionId);
+      return operation.api.input
+        .enqueue(sessionId, queued, { sendAtMs: Date.now() })
         .then((projection) => {
-          applyInputProjection(projection);
+          applyInputProjectionOperationResponse(sessionId, operation, projection);
         });
     })
     .catch((err) => {
@@ -9310,11 +9544,17 @@ export const makerChatStore = {
     autoNameAttempts.clear();
   },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
-  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
-    setState(sessionId, (s) => handleStreamEvent(s, event)),
+  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
+    supersedeInputProjectionOnTerminalEvent(sessionId, event);
+    setState(sessionId, (s) => handleStreamEvent(s, event));
+  },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
-  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void =>
-    setState(sessionId, (s) => handleStatusUpdate(s, update)),
+  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
+    if (!update.skipTurnReset && !update.isRunning) {
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+    }
+    setState(sessionId, (s) => handleStatusUpdate(s, update));
+  },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,
   /** Exposed for tests only. */

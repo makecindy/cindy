@@ -254,6 +254,12 @@ export interface AgentInputProjection {
    * 派发」；旧被控端可能缺省该字段，消费方必须回落为 null。
    */
   continuationInFlightClientId?: string | null;
+  /**
+   * 当前 vendor turn 的续跑发起项 clientId。与上面的 dispatch 边界字段不同：同轮
+   * steer 顶替 activeTurn 后，本字段仍保持原续跑项归属，供 Renderer 重载后恢复
+   * 「仍在运行」呈现。旧被控端可能缺省，消费方必须按旧端兼容策略处理。
+   */
+  continuationTurnClientId?: string | null;
   steeringQueueClientIds: string[];
   queuePaused: boolean;
   queueExpanded: boolean;

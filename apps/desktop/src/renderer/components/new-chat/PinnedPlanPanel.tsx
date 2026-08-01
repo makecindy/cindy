@@ -6,29 +6,52 @@
  * 鼠标悬停时完整清单以浮层向上展开,原地实时更新,不会被后续消息冲走。
  * 数据从会话消息派生(findLatestMessageTodoInsertion):跨 source(TodoWrite /
  * update_plan / Task*)取最近更新的 plan session 快照;历史 session 不再逐张
- * 展示。无计划时返回 null,不占位。
+ * 展示。无计划时返回 null,不占位;计划完成后保留 2 秒再收起。
  */
 
-import { useMemo } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { findLatestMessageTodoInsertion } from '@cindy/maker-shared/message-render';
 
 import { TodoListCard } from '@/components/chat/TodoListCard';
 import type { ChatMessage } from '@/lib/makerChatStore';
 
+const COMPLETED_PLAN_VISIBLE_MS = 2_000;
+
 export function PinnedPlanPanel({
   messages,
   animated,
   width,
+  visible = true,
 }: {
   messages: readonly ChatMessage[];
   /** 会话仍在流式时进行中项呼吸/旋转;停止后冻结。 */
   animated: boolean;
   /** 与 composer 同宽(inputWidth),胶囊在该宽度内居中,浮层不超出。 */
   width: number;
+  /** 交互卡接管底部区域时只隐藏视图,保留完成后的计时与已收起状态。 */
+  visible?: boolean;
 }): React.ReactElement | null {
   const insertion = useMemo(() => findLatestMessageTodoInsertion(messages), [messages]);
+  const allDone = Boolean(
+    insertion
+    && insertion.todos.length > 0
+    && insertion.todos.every((todo) => todo.status === 'completed'),
+  );
+  const [hiddenInsertionKey, setHiddenInsertionKey] = useState<string | null>(null);
 
-  if (!insertion || insertion.todos.length === 0) return null;
+  useEffect(() => {
+    if (!insertion || !allDone) {
+      setHiddenInsertionKey(null);
+      return;
+    }
+
+    const timer = window.setTimeout(() => {
+      setHiddenInsertionKey(insertion.key);
+    }, COMPLETED_PLAN_VISIBLE_MS);
+    return () => window.clearTimeout(timer);
+  }, [allDone, insertion?.key]);
+
+  if (!visible || !insertion || insertion.todos.length === 0 || hiddenInsertionKey === insertion.key) return null;
 
   return (
     <div className="mb-1.5 max-w-full" style={{ width }}>

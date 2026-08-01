@@ -2373,6 +2373,60 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  it('soft-invalidates an offline device without deleting sessions or messages', () => {
+    const meta = session('s1', {
+      updatedAt: '2026-01-01T00:00:01.000Z',
+      _count: { messages: 1 },
+    });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setDeviceSessions('dev-2', 'Windows', [session('s2')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    pushMakerText('s1', 'live-1', 'streaming', false);
+    remoteSessionStore.setMessages('s2', [message('m2', 's2')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    remoteSessionStore.setPendingInteractions('s1', [{ request: { requestId: 'req-1' } }]);
+    remoteSessionStore.setInputProjection('s1', projection('s1'));
+    remoteSessionStore.setSessionRunning('s1', true);
+    remoteSessionStore.setGoalStatus('s1', { status: 'running' } as never);
+
+    remoteSessionStore.markDeviceOffline('dev-1');
+
+    expect(remoteSessionStore.getSessions().map((item) => item.id).sort()).toEqual(['s1', 's2']);
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      expect.objectContaining({ id: 'm1' }),
+      expect.objectContaining({ content: 'streaming', agentMeta: expect.not.objectContaining({ isStreaming: true }) }),
+    ]);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+    expect(remoteSessionStore.getPendingInteractions('s1')).toEqual([]);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(false);
+    expect(remoteSessionStore.getGoalStatus('s1')).toBeUndefined();
+    expect(remoteSessionStore.getMessages('s2')).toHaveLength(1);
+
+    // 重复离线通知幂等,不会清掉保留的 last-known 内容。
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+  });
+
+  it('emits when soft offline only clears pending-refresh metadata', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:session:error-persisted', {
+      sessionId: 's1',
+    });
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      remoteSessionStore.markDeviceOffline('dev-1');
+      expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(false);
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
+  });
+
   it('removes a device shard with its messages and pending interactions', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
     remoteSessionStore.setDeviceSessions('dev-2', 'Windows', [session('s2')]);

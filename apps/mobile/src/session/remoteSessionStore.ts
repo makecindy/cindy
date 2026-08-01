@@ -2450,6 +2450,34 @@ export const remoteSessionStore = {
     if (textFlushed || reconnectCleared) emit();
   },
 
+  /**
+   * 短暂离线只失效依赖实时连接的投影,保留 shard / session / messages / 路由索引。
+   * 恢复后会话页因此走 reopen(旧内容立即可见),而 marker 已删除会强制后台核对
+   * 最新消息窗口,不会把断线前缓存误判为 fresh。
+   */
+  markDeviceOffline(deviceId: string): void {
+    let changed = false;
+    for (const [sessionId, indexedDeviceId] of sessionDeviceIndex) {
+      if (indexedDeviceId !== deviceId) continue;
+      changed = sessionMessageSyncMarkers.delete(sessionId) || changed;
+      changed = livePlanSnapshots.delete(sessionId) || changed;
+      changed = pendingRefreshSessions.delete(sessionId) || changed;
+      changed = pendingInteractions.delete(sessionId) || changed;
+      changed = inputProjections.delete(sessionId) || changed;
+      changed = sessionLiveActivity.delete(sessionId) || changed;
+      changed = sessionGoalStatus.delete(sessionId) || changed;
+      changed = sessionTaskUpdates.delete(sessionId) || changed;
+      changed = sessionParkedTaskUpdates.delete(sessionId) || changed;
+      changed = sessionMakerActivityEpochs.delete(sessionId) || changed;
+      changed = flushAndFinalizeRemoteStreamingMessages(sessionId) || changed;
+      changed = streamingAssistantClientIds.delete(sessionId) || changed;
+      changed = pendingLiveAssistantClientIds.delete(sessionId) || changed;
+      changed = writeMakerTurnRunning(sessionId, false) || changed;
+      changed = writeSessionRunStatus(sessionId, EMPTY_SESSION_RUN_STATUS) || changed;
+    }
+    if (changed) emit();
+  },
+
   removeDevice(deviceId: string): void {
     const hadShard = shards.delete(deviceId);
     const hadWorktreePreference = newMakerWorktreePreferences.delete(deviceId);

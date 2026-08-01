@@ -129,6 +129,8 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
+  getTurnGeneration?: (sessionId: string) => number | null;
   /**
    * Reconcile the host's live session/tracker view after an abort or a
    * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
@@ -307,6 +309,8 @@ interface ActiveTurn {
   sendStarted: boolean;
   dispatchLifecycle: ActiveTurnDispatchLifecycle;
   pendingTerminalEvent: ActiveTurnTerminalEvent | null;
+  /** 当前 vendor turn 由哪条 Continue 合成项发起；同轮 steer 会继承它。 */
+  continuationOwnerClientId: string | null;
   controlKind?: 'compact';
 }
 
@@ -1048,6 +1052,7 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId: null,
       controlKind: 'compact',
     };
     state.activeTurn = active;
@@ -1178,6 +1183,11 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
+    // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
+    // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
+    // 可能已经清空的 activeTurn 读取。
+    const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
+    const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
@@ -1356,6 +1366,9 @@ export class AgentInputCoordinator {
     accepted.stickyError = null;
     accepted.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(accepted);
+    const sameVendorTurn =
+      steerVendorTurnGeneration !== null &&
+      this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
       item,
       delivery: 'steer',
@@ -1367,6 +1380,12 @@ export class AgentInputCoordinator {
       sendStarted: true,
       dispatchLifecycle: 'dispatched',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        item.originalSyntheticTrigger === 'continue'
+          ? item.clientId
+          : sameVendorTurn
+            ? steerContinuationOwnerClientId
+            : null,
     };
     this.emit(sessionId);
 
@@ -1440,6 +1459,12 @@ export class AgentInputCoordinator {
     state.stickyError = null;
     state.recovery = null;
     this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
+    // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
+    // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
+    if (state.activeTurn && state.activeTurn.continuationOwnerClientId !== null) {
+      state.activeTurn.continuationOwnerClientId = null;
+    }
     const shouldPause = Boolean(preserveQueue && opts?.pauseQueue && state.pendingQueue.length > 0);
     state.queuePaused = shouldPause;
     // Stop 出来的暂停是用户显式意图,不许后续新输入静默放行(区别于崩溃恢复暂停)。
@@ -2174,6 +2199,7 @@ export class AgentInputCoordinator {
         state.activeTurn?.item?.originalSyntheticTrigger === 'continue'
           ? state.activeTurn.item.clientId
           : null,
+      continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
       steeringQueueClientIds: [...state.steeringQueueClientIds],
       queuePaused: state.queuePaused,
       queueExpanded: state.queueExpanded,
@@ -2210,7 +2236,19 @@ export class AgentInputCoordinator {
     if (item.sessionReferencesRequireTrustedSnapshot) {
       throw new Error('Remote session reference snapshot is missing; edit and resend the message.');
     }
-    return this.deps.resolveSessionReferences?.(item.sessionRefs) ?? [];
+    try {
+      return await (this.deps.resolveSessionReferences?.(item.sessionRefs) ?? []);
+    } catch (error) {
+      // Session links are still useful as ordinary Agent-facing text when the
+      // referenced session belongs to another account, was deleted, or is
+      // temporarily unavailable.  Quoted history is an optional enrichment:
+      // fail closed on the history body, but do not fail the user's message.
+      log.warn('session reference enrichment skipped', {
+        referenceCount: item.sessionRefs.length,
+        error: errorMessage(error),
+      });
+      return [];
+    }
   }
 
   private isDispatchBoundaryBusy(sessionId: string, state: SessionInputState): boolean {
@@ -2313,6 +2351,8 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        head.originalSyntheticTrigger === 'continue' ? head.clientId : null,
     };
     state.activeTurn = active;
     this.emit(sessionId);

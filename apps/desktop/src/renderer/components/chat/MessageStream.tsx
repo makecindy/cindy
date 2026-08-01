@@ -36,7 +36,11 @@ import {
   isDeliveryProseText,
 } from '@cindy/maker-shared/message-render';
 
-import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
+import type {
+  AgentTaskUpdate,
+  ChatMessage,
+  ContinuationInFlightProjectionCapability,
+} from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
@@ -222,6 +226,10 @@ interface MessageStreamProps {
    *  state via useExpandedBlockMemory). The session-level "is streaming"
    *  state lives on each ChatMessage's own `isStreaming` field instead. */
   isSessionStreaming?: boolean;
+  /** 当前 vendor turn 的续跑发起项 clientId；steer 顶替 activeTurn 后仍保持。 */
+  continuationTurnClientId?: string | null;
+  /** 旧被控端缺省该字段时才启用兼容兜底；unknown 在首个投影前 fail closed。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** F-SYNC-2: callback to load older messages */
   onLoadMore?: () => void;
   isLoadingMore?: boolean;
@@ -551,6 +559,51 @@ export function findLastUserMessageClientId(messages: readonly ChatMessage[]): s
     if (messages[i].role === 'user' && !messages[i].isSyntheticTrigger) return messages[i].clientId;
   }
   return null;
+}
+
+/**
+ * 最后一条「用户侧输入」的 clientId —— **含**合成行（自动续跑指令本身）。
+ *
+ * 与上面的 `findLastUserMessageClientId` 的区别就在这里：那份服务于「编辑最后一条消息」
+ * 这个**可见** affordance，刻意跳过渲染成 null 的合成行；本份要回答的是「此刻正在跑的
+ * 这个 turn 是不是自动续跑发起的」——合成行恰恰是那个 turn 的发起者，跳过就答不了。
+ *
+ * 用途：自愈重连行判断自己是不是"仍在飞"。用户在续跑之后又自己发了消息时，最后一条用户
+ * 侧输入就换成他那条，旧的重连行随之停转（正在跑的已经是另一个 turn 了）。
+ */
+export function findLastUserInputClientId(messages: readonly ChatMessage[]): string | null {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    // **插话（`delivery === 'steer'`）不算新 turn 的发起者** —— 它是同一个正在跑的 turn 内
+    // 的追加输入。算进来的话，用户在自愈 turn 里插一句，正在跑的重连行会立刻被"夺走归属"、
+    // 提前停转退回静态（codex P2 / greptile P1）。本文件里其它 turn 边界判断（见上方
+    // `hasFollowingUserTurn` 等）也都显式排除 steer，此处保持一致。
+    //
+    // 首选判据直接使用 main 投影的 vendor-turn owner；旧被控端缺省 owner 字段时，
+    // 才由下面的兼容分支按最后一条非 steer 用户输入兜底。
+    if (messages[i].role === 'user' && messages[i].delivery !== 'steer') {
+      return messages[i].clientId;
+    }
+  }
+  return null;
+}
+
+/**
+ * 自愈落库行是否仍属于当前运行中的续跑 turn。
+ *
+ * 新端以 main 持有的 vendor-turn owner 做精确关联；只有 wire 上确实缺省 owner 字段的旧
+ * 被控端才恢复历史启发式。旧端无法区分自动续跑与不落 user 行的 Goal turn，这是协议信息
+ * 不足时的兼容降级，不能扩散到 supported / unknown 两种状态。
+ */
+export function isAutoResumeRowInFlight(args: {
+  isContinuationTurnOwner: boolean;
+  sessionRunning: boolean;
+  isLastUserInput: boolean;
+  projectionCapability: ContinuationInFlightProjectionCapability;
+}): boolean {
+  return (
+    args.isContinuationTurnOwner ||
+    (args.projectionCapability === 'legacy' && args.sessionRunning && args.isLastUserInput)
+  );
 }
 
 export function shouldBlockAssistantFork(
@@ -1999,6 +2052,12 @@ function renderWorkGroupChild(
     isSessionStreaming: boolean;
     firstUserMessageClientId: string | null;
     lastUserMessageClientId: string | null;
+    /** 含合成行的最后一条用户侧输入(自愈重连行判断"仍在飞"的兜底判据)。 */
+    lastUserInputClientId: string | null;
+    /** 当前 vendor turn 的续跑 owner clientId。 */
+    continuationTurnClientId: string | null;
+    /** 旧端缺省 owner 字段时才启用兼容兜底。 */
+    continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
     localFileRefs: readonly KnownLocalFileRef[];
     singleResultMap: Map<string, string>;
     assistantsWithFollowingUserBoundary: ReadonlySet<string>;
@@ -2040,6 +2099,9 @@ function renderWorkGroupChild(
       assistantIsTurnFinal={props.turnFinalAssistantClientIds.has(item.message.clientId)}
       isFirstUserMessage={item.message.clientId === props.firstUserMessageClientId}
       isLastUserMessage={item.message.clientId === props.lastUserMessageClientId}
+      isLastUserInput={item.message.clientId === props.lastUserInputClientId}
+      isContinuationTurnOwner={item.message.clientId === props.continuationTurnClientId}
+      continuationInFlightProjectionCapability={props.continuationInFlightProjectionCapability}
       localFileRefs={props.localFileRefs}
     />
   );
@@ -2139,6 +2201,8 @@ export function MessageStream({
   messages,
   taskUpdates,
   isSessionStreaming = false,
+  continuationTurnClientId = null,
+  continuationInFlightProjectionCapability = 'unknown',
   onLoadMore,
   isLoadingMore,
   hasMoreMessages,
@@ -3368,6 +3432,8 @@ export function MessageStream({
   // + 重发,更早的消息会连带丢弃后续轮次,v1 不开放)。与 first 同理用全量
   // messages 判定,不受窗口分页影响。
   const lastUserMessageClientId = useMemo(() => findLastUserMessageClientId(messages), [messages]);
+  // 含合成行的"最后一条用户侧输入":自愈重连行据此判断自己是不是仍在飞(见 helper 注释)。
+  const lastUserInputClientId = useMemo(() => findLastUserInputClientId(messages), [messages]);
 
   // error-tail-banner:尾部未忽略的 error 行由输入框上方红条独家承载,流内需要
   // 知道"是不是最后一条"来跳过重复渲染。
@@ -3523,6 +3589,9 @@ export function MessageStream({
                               isSessionStreaming,
                               firstUserMessageClientId,
                               lastUserMessageClientId,
+                              lastUserInputClientId,
+                              continuationTurnClientId,
+                              continuationInFlightProjectionCapability,
                               localFileRefs,
                               singleResultMap,
                               assistantsWithFollowingUserBoundary,
@@ -3642,6 +3711,11 @@ export function MessageStream({
                           assistantIsTurnFinal={turnFinalAssistantClientIds.has(msg.clientId)}
                           isFirstUserMessage={msg.clientId === firstUserMessageClientId}
                           isLastUserMessage={msg.clientId === lastUserMessageClientId}
+                          isLastUserInput={msg.clientId === lastUserInputClientId}
+                          isContinuationTurnOwner={msg.clientId === continuationTurnClientId}
+                          continuationInFlightProjectionCapability={
+                            continuationInFlightProjectionCapability
+                          }
                           isLastMessage={msg.clientId === lastMessageClientId}
                           localFileRefs={localFileRefs}
                         />
@@ -3713,6 +3787,9 @@ const MessageItem = memo(function MessageItem({
   assistantIsTurnFinal,
   isFirstUserMessage,
   isLastUserMessage,
+  isLastUserInput,
+  isContinuationTurnOwner,
+  continuationInFlightProjectionCapability,
   isLastMessage,
   localFileRefs,
 }: {
@@ -3745,6 +3822,16 @@ const MessageItem = memo(function MessageItem({
   /** True iff this message is the last user message in the full list —
    *  edit-last-message: gates the Edit (pencil) entry in UserMessage. */
   isLastUserMessage?: boolean;
+  /**
+   * True iff this message is the last **user-side input** in the full list, synthetic rows
+   * included（见 `findLastUserInputClientId`）。自愈重连行用它 + `sessionRunning` 判断
+   * 「此刻正在跑的 turn 是不是我发起的」，从而决定要不要显示成"重新连接中"。
+   */
+  isLastUserInput?: boolean;
+  /** 当前 vendor turn 的续跑 owner 是否就是这条消息。 */
+  isContinuationTurnOwner?: boolean;
+  /** 当前投影对精确续跑边界字段的支持状态；legacy 才允许启用旧端兼容兜底。 */
+  continuationInFlightProjectionCapability?: ContinuationInFlightProjectionCapability;
   /** True iff this message is the last message in the full list —
    *  error-tail-banner: a trailing un-dismissed error row is rendered by the
    *  actionable banner above the composer instead of an inline card. */
@@ -3759,6 +3846,14 @@ const MessageItem = memo(function MessageItem({
         cardType={message.systemCardType}
         data={message.systemCardData}
         sessionId={sessionId}
+        // 「这条自愈记录此刻真的在飞吗」：main 持有 vendor-turn owner，只有旧端缺省该字段时
+        // 才回落到兼容启发式；supported / unknown 不再依赖 Renderer 的 sticky memory。
+        autoResumeInFlight={isAutoResumeRowInFlight({
+          isContinuationTurnOwner: isContinuationTurnOwner === true,
+          sessionRunning: sessionRunning === true,
+          isLastUserInput: isLastUserInput === true,
+          projectionCapability: continuationInFlightProjectionCapability ?? 'unknown',
+        })}
       />
     );
   }

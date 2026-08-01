@@ -5,7 +5,7 @@ import { CURRENT_CINDY_REGION } from './brandRegion.js';
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
 export type MoneyEstimateReason =
-  'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price';
+  'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency';
 
 /**
  * 用量/费用金额始终携带币种。当前构建的本地账本使用区域币种:
@@ -25,14 +25,38 @@ export interface ModelPriceQuote {
   providerId: string;
   modelId: string;
   currency: MoneyCurrency;
-  source: 'gateway' | 'provider-reference' | 'subscription-reference';
+  source:
+    | 'gateway'
+    | 'provider-reference'
+    | 'subscription-reference'
+    | 'user-override';
   approximate: boolean;
   inputPerMtok: number;
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /**
+   * Context-length pricing bands. minInputTokens is inclusive and maxInputTokens
+   * is exclusive; omitted prices inherit the quote's baseline field.
+   */
+  inputTokenPriceBands?: Array<{
+    minInputTokens: number;
+    maxInputTokens?: number;
+    inputPerMtok?: number;
+    outputPerMtok?: number;
+    cacheReadPerMtok?: number;
+    cacheCreatePerMtok?: number;
+  }>;
   /** Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
   costDiscount?: number;
+  /**
+   * 该报价的币种不是上游声明的，而是本地按兜底链推断出来的。
+   *
+   * 报价数值由服务端给定、币种却由客户端猜，猜错就会把一个口径的数字盖上另一个口径的
+   * 戳（既不换算也不拒收），下游账本按它记账后无从分辨。带上这个标记，金额侧才能降级
+   * 成估算而不是继续冒充精确账单。
+   */
+  currencyInferred?: boolean;
 }
 
 export type ModelPricingCatalog = Record<string, Record<string, ModelPriceQuote>>;
@@ -245,7 +269,8 @@ export function normalizeRegionalMoney(value: unknown): RegionalMoney | undefine
             reason === 'fixed-fx' ||
             reason === 'legacy-usd' ||
             reason === 'subscription-value' ||
-            reason === 'reference-price',
+            reason === 'reference-price' ||
+            reason === 'inferred-currency',
         ),
       )
     : undefined;

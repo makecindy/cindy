@@ -35,6 +35,28 @@ describe('remote schedule event store', () => {
     off();
   });
 
+  it('publishes mirror invalidation even without an existing schedule event snapshot', () => {
+    const before = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    const sub = vi.fn();
+    const off = remoteScheduleEventStore.subscribe(sub);
+
+    remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
+
+    const afterFirst = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(afterFirst).not.toBe(before);
+    expect(afterFirst.get('dev-1')).toBe(1);
+    expect(remoteScheduleEventStore.getVersion('dev-1')).toBe(0);
+    expect(sub).toHaveBeenCalledTimes(1);
+
+    remoteScheduleEventStore.invalidateDeviceMirror('dev-1');
+    const afterSecond = remoteScheduleEventStore.getMirrorInvalidationSnapshot();
+    expect(afterSecond).not.toBe(afterFirst);
+    expect(afterSecond.get('dev-1')).toBe(2);
+    expect(sub).toHaveBeenCalledTimes(2);
+
+    off();
+  });
+
   it('projects run lifecycle and read events into targeted refresh versions', () => {
     remoteScheduleEventStore.apply('dev-1', { type: 'fired', scheduleId: 'sched-1', runId: 'run-1' });
     expect(remoteScheduleEventStore.getSnapshot('dev-1')).toMatchObject({
@@ -100,5 +122,6 @@ describe('remote schedule event store', () => {
 
     remoteScheduleEventStore.clearAll();
     expect(remoteScheduleEventStore.getVersion('dev-2')).toBe(0);
+    expect(remoteScheduleEventStore.getMirrorInvalidationSnapshot().size).toBe(0);
   });
 });

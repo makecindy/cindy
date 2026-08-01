@@ -153,6 +153,7 @@ function sessionRunningError(): Error & { code: string } {
 
 function createHarness() {
   let running = false;
+  let turnGeneration = 0;
   let pendingInteraction = false;
   let agentKind: 'claude-code' | 'codex' | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
@@ -224,6 +225,7 @@ function createHarness() {
     onUserEnqueue,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
+    getTurnGeneration: () => turnGeneration,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
     getAgentKind: () => agentKind,
@@ -277,6 +279,9 @@ function createHarness() {
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
+    },
+    setTurnGeneration(value: number) {
+      turnGeneration = value;
     },
     setPendingInteraction(value: boolean) {
       pendingInteraction = value;
@@ -493,6 +498,32 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     expect(h.resolveSessionReferences).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).error).toBeNull();
+  });
+
+  it('sends a foreign session link as ordinary Agent text when history enrichment fails', async () => {
+    const h = createHarness();
+    h.resolveSessionReferences.mockRejectedValueOnce(new Error('session belongs to another account'));
+    const text = 'inspect cindy://session/foreign-session';
+
+    h.coordinator.enqueue('target-session', makeItem('quoted-foreign', text, {
+      sessionRefs: [{ sessionId: 'foreign-session' }],
+    }));
+    await flush();
+
+    expect(h.resolveSessionReferences).toHaveBeenCalledWith([
+      { sessionId: 'foreign-session' },
+    ]);
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      'target-session',
+      { type: 'user', content: text },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'session reference enrichment skipped',
+      expect.objectContaining({ referenceCount: 1 }),
+    );
   });
 
   it('clears a stale trusted snapshot on a full-content rewrite without refs', () => {
@@ -5194,6 +5225,167 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
 
     projection = latestProjection(h.projections);
     expect(projection.continuationInFlightClientId).toBeNull();
+  });
+
+  it('preserves the continuation vendor-turn owner after an accepted steer', async () => {
+    const h = createHarness();
+    const sid = 'continue-owner-survives-steer';
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.continuationInFlightClientId).toBe('q-continue');
+    expect(projection.continuationTurnClientId).toBe('q-continue');
+
+    await h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(projection.continuationInFlightClientId).toBeNull();
+    expect(projection.continuationTurnClientId).toBe('q-continue');
+
+    h.coordinator.onTurnEvent(sid, 'done');
+    projection = latestProjection(h.projections);
+    expect(projection.continuationTurnClientId).toBeNull();
+  });
+
+  it('keeps the continuation owner when a terminal event races ahead of steer ack but host remains running', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-terminal-before-steer-ack';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+
+    // maker-core 仍把注入接受进同一 vendor turn；host running 视图也仍为 true。
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
+  });
+
+  it('does not inherit a continuation owner when vendor turn generation is unavailable', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-generation-unavailable';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    h.setTurnGeneration(null as never);
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
+  it('does not inherit a continuation owner when another vendor turn starts during steer ack', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    h.setTurnGeneration(1);
+    const sid = 'continue-owner-new-vendor-turn-during-steer';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    h.coordinator.onTurnEvent(sid, 'done');
+    h.setTurnGeneration(2);
+
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
+  it('clears the continuation vendor-turn owner immediately when the user stops', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-cleared-on-stop';
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
+
+    h.coordinator.stop(sid);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
+  it('keeps the continuation dispatch identity current when Stop wins during vendor send', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-stop-during-vendor-send';
+    const sendStarted = deferred<void>();
+    const sendSettled = deferred<void>();
+
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      sendStarted.resolve();
+      await sendSettled.promise;
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sendSuccess();
+    });
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await sendStarted.promise;
+
+    h.coordinator.stop(sid);
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+
+    sendSettled.resolve();
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+    expect(h.onDispatchedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-continue' }),
+      expect.any(Number),
+    );
   });
 
   it('does not retain an in-flight continuation marker when the user cancels it in the queue', async () => {

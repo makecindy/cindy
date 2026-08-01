@@ -207,6 +207,10 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
+  MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
+  MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',
+  MODEL_PRICE_OVERRIDE_RESET: 'maker:model-price-override:reset',
   // 附加只读引用目录 — 走 closure 推送; DB 持久化由 renderer 同步调
   // local-db:sessions:update (跟 SET_MODEL / sessionService.update 双 IPC 协调先例一致)
   SET_EXTRA_DIRS: 'maker:set-extra-dirs',

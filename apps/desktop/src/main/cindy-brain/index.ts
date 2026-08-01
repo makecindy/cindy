@@ -1191,11 +1191,17 @@ async function isGhostEligibleSession(
  * onEvent 监听):把 AgentEvent 折叠成 did-turn-* 发进网关。
  * - 只投用户主会话(desktop、非 orca;资格 DB 现查,判定期事件小缓冲回放);
  * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除。
+ *
+ * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
+ * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
+  dispose(): void;
 } {
   let translator: GhostTurnTranslator | null = null;
+  /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
+  let disposed = false;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
@@ -1214,6 +1220,9 @@ export function createGhostSessionTap(sessionId: string): {
     state = 'resolving';
     attempts += 1;
     void isGhostEligibleSession(sessionId).then((info) => {
+      // 判定期间会话已拆线:不建 translator、不回放,否则会向已经没人配对的
+      // topic 发出一条永远等不到 end 的 did-turn-start。
+      if (disposed) return;
       if (info.outcome === 'retry') {
         state = 'unknown'; // 暂时态:留着 pending,下个事件再试
         return;
@@ -1242,6 +1251,7 @@ export function createGhostSessionTap(sessionId: string): {
 
   return {
     handleEvent(ev) {
+      if (disposed) return;
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
       if (state === 'eligible') {
         translator?.handleEvent(ev);
@@ -1250,6 +1260,23 @@ export function createGhostSessionTap(sessionId: string): {
       if (state === 'ineligible') return;
       if (pending.length < 32) pending.push({ type: ev.type, data: ev.data, source: ev.source });
       kickResolve();
+    },
+    dispose() {
+      if (disposed) return; // 两条 disposer 路径都可能跑到,补发只做一次
+      disposed = true;
+      // 补发 end 会走插件分发链路,它的异常不能打断 register.ts 的 disposer 队列
+      // ——实例替换路径是裸调用,后面还排着 onEvent 退订。
+      try {
+        translator?.dispose();
+      } catch (err) {
+        log.warn('ghost session tap dispose failed', {
+          sessionId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      translator = null;
+      state = 'ineligible';
+      pending.length = 0;
     },
   };
 }

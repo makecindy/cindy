@@ -1195,6 +1195,8 @@ export function CCAgentSessionView({
     errorRetryText,
     credentialSwitchWait,
     continuationInFlightClientId,
+    continuationTurnClientId,
+    continuationInFlightProjectionCapability,
     loadOlderMessages,
     isLoadingMore,
     hasMoreMessages,
@@ -3019,6 +3021,8 @@ export function CCAgentSessionView({
       messages={messages}
       taskUpdates={taskUpdates}
       isSessionStreaming={isStreaming}
+      continuationTurnClientId={continuationTurnClientId}
+      continuationInFlightProjectionCapability={continuationInFlightProjectionCapability}
       onLoadMore={loadOlderMessages}
       isLoadingMore={isLoadingMore}
       hasMoreMessages={hasMoreMessages}
@@ -3513,17 +3517,20 @@ export function CCAgentSessionView({
                  审核 / 权限 / 提问 / 插件配置 / 各类确认卡)接管底部区时隐藏:
                  胶囊的悬停浮层向上展开,会盖住交互卡内容(条件集与下方 ternary
                  的静默判定保持一致)。 */}
-              {!(
-                pendingPlanReview ||
-                pendingPermission ||
-                pendingAskUser ||
-                pendingPluginSetup ||
-                pendingIssueConfirm ||
-                pendingRenameSessionsConfirm ||
-                pendingGhostGrantConfirm
-              ) && (
-                <PinnedPlanPanel messages={messages} animated={isStreaming} width={inputWidth} />
-              )}
+              <PinnedPlanPanel
+                messages={messages}
+                animated={isStreaming}
+                width={inputWidth}
+                visible={!(
+                  pendingPlanReview ||
+                  pendingPermission ||
+                  pendingAskUser ||
+                  pendingPluginSetup ||
+                  pendingIssueConfirm ||
+                  pendingRenameSessionsConfirm ||
+                  pendingGhostGrantConfirm
+                )}
+              />
               {/* 互斥:有任意 pending interaction 时,下方 takeover/overlay/ChatInput
                  全部静默 — 跟改造前 ternary 链 (Plan ? : Perm ? : Ask ? :
                  Takeover ? : ChatInput) 的语义一致。

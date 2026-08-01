@@ -579,6 +579,76 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
     expect(ends).toHaveLength(1);
   });
 
+  // 拆线补发(#1286):会话关闭与 Session 实例替换都会跑 register.ts 的 disposer,
+  // turn 在场时不补 end,插件的「AI 在忙」外层状态就永久卡在 working。
+  it('拆线:running 态 dispose 补一条 interrupted,配对闭合', () => {
+    const nowRef = { t: 1_000 };
+    const { tr, starts, ends } = makeTranslator(nowRef);
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    expect(starts).toHaveLength(1);
+    nowRef.t = 3_400;
+    tr.dispose();
+    expect(ends).toEqual([
+      {
+        sessionId: 's1',
+        agent: 'claude-code',
+        model: 'opus',
+        durationMs: 2_400,
+        endReason: 'interrupted',
+      },
+    ]);
+  });
+
+  it('拆线:closing 态 dispose 只补一条,时长按 status(false) 时刻算,宽限定时器一并清掉', () => {
+    const nowRef = { t: 0 };
+    const { tr, ends } = makeTranslator(nowRef);
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    nowRef.t = 700;
+    tr.handleEvent({ type: 'status', data: { isRunning: false } });
+    nowRef.t = 900; // 宽限窗内就被拆线
+    tr.dispose();
+    expect(ends).toMatchObject([{ endReason: 'interrupted', durationMs: 700 }]);
+    vi.advanceTimersByTime(1_000);
+    expect(ends).toHaveLength(1); // 定时器已清,不会补出第二条 end
+  });
+
+  it('拆线:idle 态 dispose 不发事件(实例替换只在会话空闲时落实,这是常态路径)', () => {
+    const nowRef = { t: 0 };
+    const { tr, starts, ends } = makeTranslator(nowRef);
+    tr.dispose(); // 一个 turn 都没跑过
+    expect(starts).toHaveLength(0);
+    expect(ends).toHaveLength(0);
+    tr.handleEvent({ type: 'status', data: { isRunning: true } });
+    tr.handleEvent({ type: 'done', data: {} });
+    expect(ends).toHaveLength(1);
+    tr.dispose(); // 正常收口后再拆线,不重复补发
+    expect(ends).toHaveLength(1);
+    expect(starts).toHaveLength(1);
+  });
+
+  it('拆线:补发的 end 与 start 报同一个 agent(不退回 DB 的 agent_kind)', () => {
+    const nowRef = { t: 0 };
+    const starts: unknown[] = [];
+    const ends: unknown[] = [];
+    // opts.agent 取 sessions.agent_kind 的真实取值('cc',见 localDb/schema.ts),
+    // 事件 source 则是 'claude-code'——两者取值域不同,补发退回 opts.agent 会让
+    // 同一对 start/end 报不同 agent,按 agent 分组的插件照样配不上。
+    const tr = new GhostTurnTranslator({
+      sessionId: 's1',
+      agent: 'cc',
+      now: () => nowRef.t,
+      graceMs: 500,
+      sink: { turnStart: (d) => starts.push(d), turnEnd: (d) => ends.push(d) },
+    });
+    tr.handleEvent({ type: 'status', data: { isRunning: true }, source: 'claude-code' });
+    expect(starts).toMatchObject([{ agent: 'claude-code' }]);
+    nowRef.t = 1_200;
+    tr.dispose();
+    expect(ends).toMatchObject([
+      { agent: 'claude-code', endReason: 'interrupted', durationMs: 1_200 },
+    ]);
+  });
+
   it('normalizeTurnUsage:cc snake_case / codex(promptTokens 系)/ 通用 camelCase 都认', () => {
     expect(normalizeTurnUsage({ inputTokens: 1, cachedInputTokens: 2 })).toEqual({
       inputTokens: 1,

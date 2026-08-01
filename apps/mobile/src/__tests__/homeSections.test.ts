@@ -60,21 +60,20 @@ describe('buildHomeSections', () => {
     expect(sections.find((s) => s.key === 'pinned')).toBeUndefined();
   });
 
-  it('分组模式按桌面层级拆分数据,但不渲染项目 / 对话汇总表头', () => {
+  it('分组模式把项目与普通对话放在同一分区,不渲染项目 / 对话汇总表头', () => {
     const home = presentation({
       chats: [listItem('c1', '2026-06-01T00:00:00Z')],
       projects: [projectGroup('proj-a', '2026-06-02T00:00:00Z', [listItem('s1', '2026-06-02T00:00:00Z')])],
     });
     expect(buildHomeSections(home, false, false).find((s) => s.title === null)?.key).toBe('mixed');
     expect(buildHomeSections(home, true, false).map((s) => [s.key, s.title])).toEqual([
-      ['projects', null],
-      ['dialogue', null],
+      ['grouped', null],
     ]);
   });
 });
 
 describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依据)', () => {
-  // 分组模式:置顶 + 项目区 + 对话区(首行是自动化组会话 —— 首页里以块呈现,自画顶线)。
+  // 分组模式:置顶区 + 按活动时间混排的主列表(首行是自动化组会话 —— 首页里以块呈现,自画顶线)。
   const automationChat = {
     session: { id: 'auto-1' },
     lastActivityAt: '2026-06-06T00:00:00Z',
@@ -89,22 +88,23 @@ describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依
     ],
   });
 
-  it('项目区末块 → 对话区首行(自动化组):跨区取到末位项目行,块顶线得以让位', () => {
+  it('置顶区 → 主列表首行:跨区取到末位置顶会话', () => {
     const sections = buildHomeSections(home, true, false);
-    const prev = homeRowBefore(sections, 'dialogue', 0);
-    expect(prev?.kind).toBe('project');
-    expect(prev && prev.kind === 'project' ? prev.project.key : null).toBe('proj-b');
+    const prev = homeRowBefore(sections, 'grouped', 0);
+    expect(prev?.kind).toBe('session');
+    expect(prev && prev.kind === 'session' ? prev.item.session.id : null).toBe('pin-1');
   });
 
   it('同区内仍取 index-1,不受跨区逻辑影响', () => {
     const sections = buildHomeSections(home, true, false);
-    const prev = homeRowBefore(sections, 'projects', 1);
-    expect(prev && prev.kind === 'project' ? prev.project.key : null).toBe('proj-a');
+    const prev = homeRowBefore(sections, 'grouped', 1);
+    expect(prev?.kind).toBe('session');
+    expect(prev && prev.kind === 'session' ? prev.item.session.id : null).toBe('auto-1');
   });
 
   it('置顶收起时 pinned 区 data 为空:跨区回溯要跳过空区', () => {
     const sections = buildHomeSections(home, true, true);
-    const prev = homeRowBefore(sections, 'projects', 0);
+    const prev = homeRowBefore(sections, 'grouped', 0);
     expect(prev).toBeUndefined();
   });
 
@@ -117,7 +117,10 @@ describe('homeRowBefore(跨 section 邻接:分割线唯一化的 prevIsBlock 依
 
 describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
   const home = presentation({
-    chats: [listItem('chat-old', '2026-06-01T00:00:00Z')],
+    chats: [
+      listItem('chat-new', '2026-06-06T00:00:00Z'),
+      listItem('chat-old', '2026-06-01T00:00:00Z'),
+    ],
     projects: [
       projectGroup('proj-new', '2026-06-05T00:00:00Z', [
         listItem('s1', '2026-06-05T00:00:00Z'),
@@ -129,16 +132,42 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
   it('混排:项目下属会话展平为 session 行,按活动时间倒序', () => {
     const rows = buildMixedHomeRows(home);
     expect(rows.every((r) => r.kind === 'session')).toBe(true);
-    // proj 的两条(06-05/06-04)比 chat(06-01)新 → 排在前
-    expect(rows.map((r) => (r.kind === 'session' ? r.source : 'project'))).toEqual(['project', 'project', 'chat']);
+    expect(rows.map((r) => (r.kind === 'session' ? r.item.session.id : 'project'))).toEqual([
+      'chat-new',
+      's1',
+      's2',
+      'chat-old',
+    ]);
   });
 
-  it('分组:固定桌面层级,项目文件夹始终在普通对话之前', () => {
+  it('分组:项目保留 folder 行,与普通对话按活动时间倒序混排', () => {
     const rows = buildGroupedHomeRows(home);
-    const kinds = rows.map((r) => r.kind);
-    expect(kinds).toContain('project');
-    expect(kinds).toContain('session');
-    // 用户口头定稿:移动端跟 Mac 侧栏一致,分组模式不再按时间把普通对话插到项目上方。
-    expect(rows[0].kind).toBe('project');
+    expect(rows.map((row) => row.kind === 'project' ? row.project.key : row.item.session.id)).toEqual([
+      'chat-new',
+      'proj-new',
+      'chat-old',
+    ]);
+  });
+
+  it('活动时间相同时按 row key 稳定排序,不受上游输入顺序影响', () => {
+    const activityAt = '2026-06-07T00:00:00Z';
+    const forward = presentation({
+      chats: [listItem('chat-z', activityAt), listItem('chat-a', activityAt)],
+      projects: [
+        projectGroup('project-z', activityAt, [listItem('session-z', activityAt)]),
+        projectGroup('project-a', activityAt, [listItem('session-a', activityAt)]),
+      ],
+    });
+    const reversed = presentation({
+      chats: [...forward.chats].reverse(),
+      projects: [...forward.projects].reverse(),
+    });
+
+    for (const buildRows of [buildMixedHomeRows, buildGroupedHomeRows]) {
+      const forwardKeys = buildRows(forward).map((row) => row.key);
+      const reversedKeys = buildRows(reversed).map((row) => row.key);
+      expect(forwardKeys).toEqual([...forwardKeys].sort((a, b) => a.localeCompare(b)));
+      expect(reversedKeys).toEqual(forwardKeys);
+    }
   });
 });
