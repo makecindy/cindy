@@ -87,6 +87,18 @@ describe('classifyProviderError — quota patterns', () => {
     expect(result.retryable).toBe(true);
   });
 
+  it.each(['RPS', 'RPM', 'RPH', 'RPD', 'TPS', 'TPM', 'TPH', 'TPD'])(
+    'keeps %s rate quota abbreviations as retryable RATE_LIMITED (not billing)',
+    (unit) => {
+      const result = classifyProviderError({
+        status: 429,
+        bodyText: `Quota exceeded: limit 500 ${unit}`,
+      });
+      expect(result.code).toBe('RATE_LIMITED');
+      expect(result.retryable).toBe(true);
+    },
+  );
+
   it('keeps plain 429 as retryable RATE_LIMITED', () => {
     const result = classifyProviderError({
       status: 429,
@@ -132,6 +144,13 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     // 单字母斜杠写法(review P1 ×4)。
     'Quota exceeded: 100 tokens/s',
     'quota exceeded: 500 requests/s',
+    // requests/tokens-per-second/hour/day 缩写(review P1 ×5)。
+    'Quota exceeded: 50 RPD',
+    'Quota exceeded: 100 RPH',
+    'Quota exceeded: 250 RPS',
+    'Quota exceeded: 500 TPS',
+    'Quota exceeded: 10 TPH',
+    'Quota exceeded: 1M TPD',
   ])('does not match non-quota errors: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(false);
   });

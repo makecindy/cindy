@@ -87,11 +87,12 @@ const QUOTA_RE =
 /** 速率型配额措辞(每分钟/每秒请求或 token 上限,如 Google "Quota exceeded for quota
  *  metric 'requests per minute'"、紧凑斜杠写法 "100 requests/minute"、
  *  "1M tokens/day"、缩写斜杠写法 "100 requests/min"、"500 tokens/sec"、单字母斜杠
- *  写法 "100 tokens/s"):也含 quota exceeded 字样,但等待重试即可恢复,**不是**
+ *  写法 "100 tokens/s"、速率缩写 RPS/RPM/RPH/RPD 与 TPS/TPM/TPH/TPD):
+ *  也含 quota exceeded 字样,但等待重试即可恢复,**不是**
  *  余额/预算耗尽——不得判成不可重试的 QUOTA_EXCEEDED,更不得触发充值引导
- *  (review P1 ×4)。 */
+ *  (review P1 ×5)。 */
 const RATE_QUOTA_RE =
-  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day|sec|min|hr|s)\b|\b[rt]pm\b|quota metric|rate.{0,8}limit/i;
+  /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day|sec|min|hr|s)\b|\b[rt]p[smhd]\b|quota metric|rate.{0,8}limit/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
