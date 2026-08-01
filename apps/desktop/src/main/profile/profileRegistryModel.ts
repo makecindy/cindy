@@ -95,10 +95,16 @@ function assertSafePathSegment(value: unknown, field: string): asserts value is 
   }
 }
 
-function assertTimestamp(value: unknown, field: string): asserts value is number | null {
+function assertOptionalTimestamp(value: unknown, field: string): asserts value is number | null {
   if (value === null) return;
   if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
     throw new Error(`${field} must be a non-negative integer or null`);
+  }
+}
+
+function assertRequiredTimestamp(value: unknown, field: string): asserts value is number {
+  if (typeof value !== 'number' || !Number.isSafeInteger(value) || value < 0) {
+    throw new Error(`${field} must be a non-negative integer`);
   }
 }
 
@@ -142,9 +148,9 @@ export function assertValidProfileDescriptor(profile: ProfileDescriptor): void {
     assertSafePathSegment(profile.legacyUserId, 'legacyUserId');
   }
 
-  assertTimestamp(profile.createdAt, 'createdAt');
-  assertTimestamp(profile.lastOpenedAt, 'lastOpenedAt');
-  assertTimestamp(profile.lastVerifiedAt, 'lastVerifiedAt');
+  assertRequiredTimestamp(profile.createdAt, 'createdAt');
+  assertOptionalTimestamp(profile.lastOpenedAt, 'lastOpenedAt');
+  assertOptionalTimestamp(profile.lastVerifiedAt, 'lastVerifiedAt');
 }
 
 /**
@@ -242,9 +248,18 @@ export function registerProfile(
   const profiles = existingById
     ? state.profiles.map((item) => (item.profileId === profile.profileId ? serialized : item))
     : [...state.profiles, serialized];
+
+  const currentDefault = state.defaultProfileId
+    ? (profiles.find(
+        (item) => item.profileId === state.defaultProfileId && item.status !== 'deleting',
+      )?.profileId ?? null)
+    : null;
+  const firstSelectableProfile =
+    profiles.find((item) => item.status !== 'deleting')?.profileId ?? null;
+
   return {
     profiles,
-    defaultProfileId: state.defaultProfileId ?? profile.profileId,
+    defaultProfileId: currentDefault ?? firstSelectableProfile,
   };
 }
 
@@ -265,7 +280,7 @@ export function markProfileOpened(
 ): ProfileRegistryState {
   const profile = findProfileById(state, profileId);
   if (!profile) throw new Error(`cannot open unknown profile ${profileId}`);
-  assertTimestamp(openedAt, 'openedAt');
+  assertRequiredTimestamp(openedAt, 'openedAt');
   return {
     ...state,
     profiles: state.profiles.map((item) =>

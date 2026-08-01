@@ -8,6 +8,7 @@ import {
   createProfileId,
   emptyProfileRegistry,
   findProfileByIdentity,
+  markProfileOpened,
   parseProfileDescriptor,
   profileIdentityKey,
   registerProfile,
@@ -129,6 +130,17 @@ describe('profile registry model', () => {
     expect(parsed).not.toHaveProperty('accessToken');
   });
 
+  it('rejects registry records without a required creation timestamp', () => {
+    expect(() => parseProfileDescriptor({ ...cloudProfile(), createdAt: null })).toThrow(
+      'createdAt must be a non-negative integer',
+    );
+
+    const state = registerProfile(emptyProfileRegistry(), cloudProfile());
+    expect(() => markProfileOpened(state, PROFILE_A, null as unknown as number)).toThrow(
+      'openedAt must be a non-negative integer',
+    );
+  });
+
   it('selects the first registered profile by default and permits explicit changes', () => {
     const state = registerProfile(emptyProfileRegistry(), cloudProfile());
     const withSecond = registerProfile(
@@ -140,5 +152,23 @@ describe('profile registry model', () => {
     expect(() =>
       setDefaultProfile(withSecond, '00000000-0000-4000-8000-000000000099' as ProfileId),
     ).toThrow('unknown profile');
+  });
+
+  it('never selects a deleting profile as the default', () => {
+    const deletingFirst = registerProfile(
+      emptyProfileRegistry(),
+      cloudProfile({ status: 'deleting' }),
+    );
+    expect(deletingFirst.defaultProfileId).toBeNull();
+
+    const withTwoProfiles = registerProfile(
+      registerProfile(emptyProfileRegistry(), cloudProfile()),
+      cloudProfile({ profileId: PROFILE_B, dataOwnerId: 'owner-b', displayName: 'Account B' }),
+    );
+    const afterDefaultDeletion = registerProfile(
+      withTwoProfiles,
+      cloudProfile({ status: 'deleting' }),
+    );
+    expect(afterDefaultDeletion.defaultProfileId).toBe(PROFILE_B);
   });
 });
