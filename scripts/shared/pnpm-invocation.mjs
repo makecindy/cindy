@@ -36,15 +36,16 @@ export function resolvePnpmInvocation(args, options = {}) {
       return { command: execPath, args: [npmExecPath, ...args], shell: false };
     if (!isWindows || WINDOWS_DIRECT_EXEC_EXTENSIONS.has(extension))
       return { command: npmExecPath, args, shell: false };
+    return resolveWindowsPnpmThroughCmd(npmExecPath, args, options.comSpec);
   }
-  if (isWindows) return resolveWindowsPnpmThroughCmd(args, options.comSpec);
+  if (isWindows) return resolveWindowsPnpmThroughCmd("pnpm", args, options.comSpec);
   return { command: "pnpm", args, shell: isWindows };
 }
 
-function resolveWindowsPnpmThroughCmd(args, comSpec = process.env.ComSpec) {
+function resolveWindowsPnpmThroughCmd(pnpmCommand, args, comSpec = process.env.ComSpec) {
   return {
     command: comSpec || "cmd.exe",
-    args: ["/d", "/s", "/v:off", "/c", ["pnpm", ...args].map(quoteWindowsCmdArg).join(" ")],
+    args: ["/d", "/s", "/v:off", "/c", [pnpmCommand, ...args].map(quoteWindowsCmdArg).join(" ")],
     shell: false,
     windowsVerbatimArguments: true,
   };
@@ -53,7 +54,7 @@ function resolveWindowsPnpmThroughCmd(args, comSpec = process.env.ComSpec) {
 function quoteWindowsCmdArg(arg) {
   const value = String(arg);
   if (value.length === 0) return '""';
-  const escaped = value.replace(/"/g, '""').replace(/%/g, "%%");
+  const escaped = value.replace(/"/g, '""');
   return /[\s"!&|<>()^%]/.test(value) ? `"${escaped}"` : escaped;
 }
 

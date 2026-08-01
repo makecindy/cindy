@@ -1184,8 +1184,8 @@ test("resolvePnpmInvocation runs a native pnpm binary directly instead of feedin
 	);
 });
 
-test("resolvePnpmInvocation falls back to PATH for Windows command wrappers", () => {
-	// .cmd／.bat 通过 cmd.exe 解析 PATH/PATHEXT，同时逐字传递 /c 命令串。
+test("resolvePnpmInvocation invokes Windows command wrappers through cmd.exe", () => {
+	// .cmd／.bat 通过 cmd.exe 执行，同时逐字传递 /c 命令串。
 	for (const npmExecPath of [
 		"C:/Program Files/nodejs/pnpm.cmd",
 		"C:/Program Files/nodejs/pnpm.bat",
@@ -1199,7 +1199,13 @@ test("resolvePnpmInvocation falls back to PATH for Windows command wrappers", ()
 			}),
 			{
 				command: "C:/Windows/System32/cmd.exe",
-				args: ["/d", "/s", "/v:off", "/c", "pnpm --version"],
+				args: [
+					"/d",
+					"/s",
+					"/v:off",
+					"/c",
+					`"${npmExecPath}" --version`,
+				],
 				shell: false,
 				windowsVerbatimArguments: true,
 			},
@@ -1212,7 +1218,7 @@ test("resolvePnpmInvocation quotes Windows command wrapper arguments", () => {
 		resolvePnpmInvocation(
 			[
 				"--dir",
-				'C:/Users/First Last/repo & "tools"!/apps/server',
+				'C:/Users/First Last/repo & "tools"!/%literal%/apps/server',
 				"run",
 				"test",
 			],
@@ -1229,7 +1235,7 @@ test("resolvePnpmInvocation quotes Windows command wrapper arguments", () => {
 				"/s",
 				"/v:off",
 				"/c",
-				'pnpm --dir "C:/Users/First Last/repo & ""tools""!/apps/server" run test',
+				'"C:/Program Files/nodejs/pnpm.cmd" --dir "C:/Users/First Last/repo & ""tools""!/%literal%/apps/server" run test',
 			],
 			shell: false,
 			windowsVerbatimArguments: true,
