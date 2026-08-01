@@ -269,12 +269,12 @@ export interface AgentInputCoordinatorDeps {
    */
   onUiRetry?: (sessionId: string, clientId: string) => void;
   /**
-   * 用户/上游把一条**新**消息排进了这个会话(enqueue 入口)。
+   * 用户/上游用一条**新**消息接管了这个会话(enqueue 或 steer 回落为普通 turn)。
    *
    * hook-control 用它作废该会话的待续跑记账: 会话已经被别的内容推进, 再把结果接回
    * 渠道那条旧消息只会显示无关输出。判据刻意用**入口**而不是消息文本 ——
    * retryLastError 的零产出分支重发的是原文, 文本上与新消息无从区分, 而它走的是
-   * pendingQueue.unshift、不经本入口, 于是不会自我作废。
+   * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
   /**
@@ -2977,7 +2977,13 @@ export class AgentInputCoordinator {
 
   private fallbackPreparedAsTurn(sessionId: string, item: AgentInputQueuedMessage, removeFromQueue: boolean): void {
     const state = this.getState(sessionId);
-    // 插话回落成普通派发 = 也是一条新用户输入,同 enqueue 放弃 active-turn 重试。
+    // 插话回落成普通派发 = 也是一条新用户输入。普通 composer / 队列项可能在
+    // scheduler 自动续跑退避期间走到这里，必须先同步作废那一轮的 waiter，避免
+    // fallback turn 的 text/done 被旧 run 消费。scheduler 自己与 UI Continue 仍保留
+    // 各自的续跑归属，不按无关用户输入处理。
+    if (!isSchedulerOriginItem(item) && !isUiContinuationItem(item)) {
+      this.deps.onUserEnqueue?.(sessionId);
+    }
     this.abandonActiveTurnRecoveryForUserAction(state);
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;

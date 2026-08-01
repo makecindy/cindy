@@ -4666,6 +4666,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       item.createOpts,
       expect.objectContaining({ throwOnStartFailure: true }),
     );
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
     expect(mocks.touchUserSendInDb).toHaveBeenCalledWith(sid, undefined);
   });
 

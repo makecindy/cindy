@@ -8004,7 +8004,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     noteSessionClearBoundary,
     // 用户点了错误横幅的「重试」→ hook 侧把这一轮接回渠道那条已收口的消息。
     // 这是权威来源: 零产出重试重发的是原文, 从文本认不出重试意图(见 deps 注释)。
-    onUiRetry: publishUiContinuation,
+    onUiRetry: (sessionId, clientId) => {
+      // UI continuation can dispatch before the scheduler backoff callback.
+      // Retire that pending waiter first so it cannot consume the manual retry.
+      failPendingSchedulerAutoResume(sessionId);
+      publishUiContinuation(sessionId, clientId);
+    },
     // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
