@@ -428,6 +428,37 @@ describe('renderer input queue facade', () => {
     expect(ok).toBe(true);
   });
 
+  it('settles a materialized composer steer after stop advances the projection epoch', async () => {
+    const sid = `steer-materialized-stop-${Math.random().toString(36).slice(2, 8)}`;
+    let resolveProjection!: (value: AgentInputProjection) => void;
+    input.steer.mockResolvedValueOnce(false);
+    input.getProjection.mockImplementationOnce(
+      () =>
+        new Promise<AgentInputProjection>((resolve) => {
+          resolveProjection = resolve;
+        }),
+    );
+
+    const steer = makerChatStore.steerMessage(sid, 'uncertain text', MODEL, EFFORT, PERM, WD);
+    await flushPromises();
+    const steered = (input.steer.mock.calls.at(-1) as unknown as [
+      string,
+      AgentInputQueuedMessage,
+      unknown,
+    ])[1];
+
+    makerChatStore.stopSession(sid, { keepQueue: true, pauseQueue: true });
+    resolveProjection(
+      projection(sid, {
+        pendingQueue: [steered],
+        queuePaused: true,
+        error: 'Codex turn/steer did not acknowledge within 10000ms',
+      }),
+    );
+
+    await expect(steer).resolves.toBe(true);
+  });
+
   it('keeps a plainly failed composer steer as unhandled so the draft is preserved', async () => {
     const sid = `steer-plain-fail-${Math.random().toString(36).slice(2, 8)}`;
     input.steer.mockResolvedValueOnce(false);

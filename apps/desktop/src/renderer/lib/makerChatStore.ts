@@ -7764,9 +7764,9 @@ function steerMessageCore(
       try {
         const operation = beginInputProjectionOperation(sessionId);
         const latest = await operation.api.input.getProjection(sessionId);
-        if (!applyInputProjectionOperationResponse(sessionId, operation, latest)) {
-          return false;
-        }
+        // authority 代际变化时旧 projection 不能覆盖当前镜像，但其中与本次
+        // clientId 精确匹配的队列行仍证明 main 已接管输入，不能因此诱导重复发送。
+        applyInputProjectionOperationResponse(sessionId, operation, latest);
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
