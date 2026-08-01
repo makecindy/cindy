@@ -1209,11 +1209,7 @@ export function CustomProviderDialog({
                   surface="ivory"
                   value={f.requestPath}
                   onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
-                  placeholder={
-                    activeTab === 'claude-code'
-                      ? '/v1/messages'
-                      : customProviderCodexWireProtocolOption(f.wireProtocol).defaultRequestPath
-                  }
+                  placeholder={t('settings.providers.custom.fields.requestPathPlaceholder')}
                 />
                 <span className="text-12 leading-snug text-[var(--text-tertiary)]">
                   {t('settings.providers.custom.fields.requestPathHelp')}
