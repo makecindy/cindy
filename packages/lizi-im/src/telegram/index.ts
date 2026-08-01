@@ -229,8 +229,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * (2026-07-30 #1098 review: 全局 await 会让一个 chat 的相册下载拖住全部)。
    */
   private readonly chatQueues = new Map<string, Promise<void>>();
-  /** 已分发未收口的 update_id — 持久化游标的低水位以它为准, 掉线不丢任何在途消息。 */
-  private readonly inflightUpdateIds = new Set<number>();
+  /**
+   * 已分发未收口的 update。key 是每次分发的独立身份而非裸 update_id:
+   * offline→online 后 Telegram 会重放未提交的同一 update_id，旧世代任务收尾时
+   * 只能删除自己的登记，不能误删新世代的重放任务并让游标越过去。
+   */
+  private readonly inflightUpdates = new Map<symbol, number>();
   /**
    * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
    * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
@@ -413,8 +417,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         return configResult();
       }
 
-      const previousToken = this.host.secrets.read(TOKEN_SECRET_KEY);
-      const previousOwnerUserId = this.host.secrets.read(OWNER_USER_ID_SECRET_KEY);
+      // 回滚前必须先可靠读取旧值；把读取失败当成“不存在”会在后续失败时误删旧配置。
+      const previousTokenResult = this.secretReadResult(TOKEN_SECRET_KEY);
+      const previousOwnerResult = this.secretReadResult(OWNER_USER_ID_SECRET_KEY);
+      if (previousTokenResult.kind === 'error' || previousOwnerResult.kind === 'error') {
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+        return configResult();
+      }
+      const previousToken =
+        previousTokenResult.kind === 'value' ? previousTokenResult.value : null;
+      const previousOwnerUserId =
+        previousOwnerResult.kind === 'value' ? previousOwnerResult.value : null;
       const previousRuntimeOwnerUserId = this.ownerUserId;
 
       const tokenSaved = token ? this.host.secrets.write(TOKEN_SECRET_KEY, token) : true;
@@ -422,9 +435,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         ? this.host.secrets.write(OWNER_USER_ID_SECRET_KEY, ownerUserId)
         : true;
       if (!tokenSaved || !ownerSaved) {
-        this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-        this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-        this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+        await this.rollbackConfigOrFailClosed(
+          previousToken,
+          previousOwnerUserId,
+          previousRuntimeOwnerUserId,
+        );
         this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
@@ -440,18 +455,23 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         // 回读确认 —— 否则用户重填 token 看似恢复、重启后又掉回 offline。
         this.host.secrets.remove(OFFLINE_SECRET_KEY);
         if (this.offlineFlagState() !== 'absent') {
-          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          await this.rollbackConfigOrFailClosed(
+            previousToken,
+            previousOwnerUserId,
+            previousRuntimeOwnerUserId,
+          );
           this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
           return configResult();
         }
         const connected = await this.connect(token);
         if (!connected) {
           const failedStatus = this.status;
-          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
-          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
-          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          const restored = await this.rollbackConfigOrFailClosed(
+            previousToken,
+            previousOwnerUserId,
+            previousRuntimeOwnerUserId,
+          );
+          if (!restored) return configResult(this.status);
           const previous = previousToken?.trim();
           if (previous) {
             this.configVersion += 1;
@@ -964,7 +984,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const chatId =
       update.message?.chat.id ?? update.callback_query?.message?.chat.id ?? 'global';
     const key = String(chatId);
-    this.inflightUpdateIds.add(update.update_id);
+    const inflightKey = Symbol();
+    this.inflightUpdates.set(inflightKey, update.update_id);
     const prev = this.chatQueues.get(key) ?? Promise.resolve();
     const next = prev
       .then(async () => {
@@ -977,7 +998,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         }
       })
       .finally(() => {
-        this.inflightUpdateIds.delete(update.update_id);
+        this.inflightUpdates.delete(inflightKey);
         if (this.chatQueues.get(key) === next) this.chatQueues.delete(key);
         if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
       });
@@ -1676,12 +1697,52 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── owner notices / secrets ────────────────────────────────────────────────
 
-  private restoreSecret(key: string, previousValue: string | null): void {
+  /** 恢复一项 secret 并回读确认；调用成功不等于数据真的落盘。 */
+  private restoreSecret(key: string, previousValue: string | null): boolean {
     if (previousValue === null) {
       this.host.secrets.remove(key);
-      return;
+      return this.secretReadResult(key).kind === 'missing';
     }
-    this.host.secrets.write(key, previousValue);
+    if (!this.host.secrets.write(key, previousValue)) return false;
+    const restored = this.secretReadResult(key);
+    return restored.kind === 'value' && restored.value === previousValue;
+  }
+
+  /**
+   * 配置事务回滚。任一 secret 无法恢复时，运行态立即停轮询并重新落下线闩锁；
+   * 即使磁盘留下新 token 或新旧混合配置，重启也不会拿它自动上线。
+   */
+  private async rollbackConfigOrFailClosed(
+    previousToken: string | null,
+    previousOwnerUserId: string | null,
+    previousRuntimeOwnerUserId: string,
+  ): Promise<boolean> {
+    // 两项都必须尝试，不能因第一项失败而把另一项也留在新值。
+    const tokenRestored = this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+    const ownerRestored = this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+    this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+    if (tokenRestored && ownerRestored) return true;
+
+    this.configVersion += 1;
+    this.clearAllTypingLoops();
+    this.pendingReplyTargets.clear();
+    this.turnReplyTargets.clear();
+    await this.stopPolling();
+    const latchWritten = this.host.secrets.write(OFFLINE_SECRET_KEY, '1');
+    const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';
+    if (!latchConfirmed) {
+      // 最后兜底：闩锁无法确认时删除 token 并回读。二者任一可靠落盘，重启都不会
+      // 自动上线；若存储整体失效，运行态仍保持停止并显式报错。
+      this.host.secrets.remove(TOKEN_SECRET_KEY);
+      const tokenRemovalConfirmed = this.secretReadResult(TOKEN_SECRET_KEY).kind === 'missing';
+      if (!tokenRemovalConfirmed) {
+        this.log.warn(
+          'telegram config rollback failed and no durable offline guard could be confirmed',
+        );
+      }
+    }
+    this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
+    return false;
   }
 
   /** 持久化游标按 botId 命名空间 — 换 bot(token)后旧 offset 无意义, 归零。 */
@@ -1718,7 +1779,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     for (const album of this.albumsInFlight) {
       floor = Math.min(floor, album.firstUpdateId);
     }
-    for (const updateId of this.inflightUpdateIds) {
+    for (const updateId of this.inflightUpdates.values()) {
       floor = Math.min(floor, updateId);
     }
     this.persistOffset(Math.min(this.lastSeenOffset, floor));

@@ -219,6 +219,49 @@ describe('TelegramIM', () => {
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
   });
 
+  it('set-config 连接失败且旧 secret 回滚写失败: 落下线闩锁, 重启不得用混合配置上线', async () => {
+    await im.dispose();
+    const oldToken = '999:old-token-abcdefghijklmnop';
+    const newToken = '888:new-token-abcdefghijklmnop';
+    const oldApi = createFakeApi();
+    const rejectedApi = createFakeApi({
+      getMeError: new TelegramApiError('getMe', 401, 'Unauthorized'),
+    });
+    im = new TelegramIM(ctx.host, {
+      apiFactory: (token) => (token === oldToken ? oldApi : rejectedApi),
+    });
+    im.registerIpc();
+    const handler = ctx.handlers.get('telegramBot:set-config')!;
+    await handler({ token: oldToken, ownerUserId: OWNER_ID });
+    expect(im.getStatus().kind).toBe('connected');
+
+    const originalWrite = ctx.host.secrets.write;
+    ctx.host.secrets.write = (name, value) => {
+      // 新 token 已经落盘；模拟连接失败后恢复旧 token 时安全存储拒写。
+      if (name === 'telegram-bot-token' && value === oldToken) return false;
+      return originalWrite(name, value);
+    };
+    const result = (await handler({ token: newToken, ownerUserId: '222' })) as {
+      status: { kind: string };
+      saveErrorStatus?: { kind: string };
+    };
+
+    expect(result.status.kind).toBe('error');
+    expect(result.saveErrorStatus?.kind).toBe('error');
+    expect(ctx.secrets.get('telegram-bot-token')).toBe(newToken);
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    ctx.host.secrets.write = originalWrite;
+
+    // 模拟重启：即使磁盘仍是未完成回滚的新 token，也只能停在 offline，零联网。
+    await im.dispose();
+    const rebootApi = createFakeApi();
+    const rebooted = new TelegramIM(ctx.host, { apiFactory: () => rebootApi });
+    await rebooted.init();
+    expect(rebooted.getStatus().kind).toBe('offline');
+    expect(rebootApi.calls).toHaveLength(0);
+    await rebooted.dispose();
+  });
+
   it('私聊: 非 owner 忽略, owner 消息进 onMessage', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
@@ -489,6 +532,61 @@ describe('TelegramIM', () => {
     const pollsAtOffline = api.calls.filter((c) => c.method === 'getUpdates').length;
     await new Promise((r) => setTimeout(r, 50));
     expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
+  });
+
+  it('下线后立即上线重放同一 update: 旧世代收尾不得移除新任务的游标低水位', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((event) => events.push(event));
+    await connect();
+
+    let releaseOldDownload!: () => void;
+    let releaseReplayDownload!: () => void;
+    const oldDownload = new Promise<void>((resolve) => (releaseOldDownload = resolve));
+    const replayDownload = new Promise<void>((resolve) => (releaseReplayDownload = resolve));
+    let getFileCalls = 0;
+    const originalCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        getFileCalls += 1;
+        await (getFileCalls === 1 ? oldDownload : replayDownload);
+      }
+      return originalCall(method, params, signal);
+    }) as typeof api.call;
+    const attachment: TgUpdate = {
+      update_id: 50,
+      message: {
+        message_id: 50,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        caption: '慢附件',
+        photo: [{ file_id: 'slow', file_unique_id: 'slow-u', width: 10, height: 10 }],
+      },
+    };
+
+    api.pushUpdates([attachment]);
+    await vi.waitFor(() => expect(getFileCalls).toBe(1));
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    await ctx.handlers.get('telegramBot:set-online')!({ online: true });
+    api.pushUpdates([attachment]);
+
+    // 同 chat 的重放排在旧任务后；旧任务一收口，重放开始并继续悬在下载中。
+    releaseOldDownload();
+    await vi.waitFor(() => expect(getFileCalls).toBe(2));
+    // 另一 chat 的后续 update 收口会尝试补写游标。先等它确实处理完成，再断言
+    // 游标仍不能越过仍在途的重放 50（避免只读到上一个批次留下的旧值）。
+    api.pushUpdates([
+      groupMessage({ text: 'other chat', fromId: 111, messageId: 51, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    expect(events[0].text).toBe('other chat');
+    expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:50`);
+
+    releaseReplayDownload();
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    await vi.waitFor(() => {
+      expect(ctx.secrets.get('telegram-updates-offset')).toBe(`${BOT.id}:52`);
+    });
   });
 
   it('set-online 畸形 payload 一律报错且不产生上下线副作用', async () => {
