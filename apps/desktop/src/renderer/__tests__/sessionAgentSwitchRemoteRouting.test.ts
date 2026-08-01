@@ -262,5 +262,11 @@ describe('ChatInput 的入口门控与调用路由', () => {
     // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
     expect(source).toContain('agentSwitchWriteSeqRef.current += 1;');
     expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
+    // deviceId 跨重连不变,不把重连代际放进依赖就永远不会重试(断链期间的读回失败
+    // 与错过的 sessions:patched 都靠这一跳补回)。
+    expect(source).toContain(
+      '}, [sessionId, deviceLinkDeviceId, remoteHostId, remoteReconnectEpoch]);',
+    );
+    expect(source).toContain("remoteConnStatus === 'connected'");
   });
 });

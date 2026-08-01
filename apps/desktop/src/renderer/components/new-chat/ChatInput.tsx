@@ -97,6 +97,8 @@ import {
   enqueueEffortChange,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
+import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
+
 import {
   confirmAgentSwitchRisk,
   isRemoteIntentReadbackFresh,
@@ -1235,6 +1237,19 @@ export function ChatInput({
   // 「在途期间用户是否动过意图」——单调递增,不受 ABA 影响:登记后又撤销时值虽然都回到
   // null,序号已经 +2,过期响应不会被误判为「期间没变」而恢复已撤销的意图。
   const agentSwitchWriteSeqRef = useRef(0);
+  // 链路重连代际:deviceId 在断链重连期间保持不变,只靠它当依赖的话读回永远不会重试。
+  // 断链期间发出的读回会失败(catch 吞掉),断链期间被控端 / 另一控制端改的意图其
+  // sessions:patched 推送也收不到 —— 恢复连接后必须重读一次,否则 composer 会一直
+  // 停在过期引擎上。非 connected → connected 的每次跃迁 +1,驱动下方 effect 重跑。
+  const remoteConnStatus = useRemoteSessionConnection(deviceLinkDeviceId);
+  const [remoteReconnectEpoch, setRemoteReconnectEpoch] = useState(0);
+  const remoteWasConnectedRef = useRef(false);
+  useEffect(() => {
+    const connected = remoteConnStatus === 'connected';
+    if (connected && !remoteWasConnectedRef.current) setRemoteReconnectEpoch((n) => n + 1);
+    remoteWasConnectedRef.current = connected;
+  }, [remoteConnStatus]);
+
   // 远程会话打开时读回被控端的权威 pending 意图。意图是 main 的内存态、不落库,
   // 控制端换窗口 / 重开视图 / 重启后本地镜像为空,不读回就会出现「UI 显示旧引擎、
   // 下一条消息却按意图切换」的错位(在被控端本机或另一台控制端登记时同理)。
@@ -1263,7 +1278,7 @@ export function ChatInput({
     return () => {
       cancelled = true;
     };
-  }, [sessionId, deviceLinkDeviceId, remoteHostId]);
+  }, [sessionId, deviceLinkDeviceId, remoteHostId, remoteReconnectEpoch]);
 
   // cycle-permission-mode 快捷键 (默认 Shift+Tab) 的轮切候选 —— 与
   // PermissionSelector 用同一份 capabilities.permissionModes 列表, 键盘轮切
