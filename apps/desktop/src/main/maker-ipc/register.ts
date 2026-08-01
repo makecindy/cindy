@@ -2222,7 +2222,16 @@ function handleAgentIslandEventAfterBroadcast(
       service.deferRemoteAuthRetryError(meta, event);
       return;
     }
-    service.handleAgentEvent(meta, event);
+    const terminalError = event.type === 'error' && isTerminalTurnErrorEvent(event);
+    const suppressErrorSound = terminalError && (
+      agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
+      agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true
+    );
+    service.handleAgentEvent(meta, event, {
+      // The auto-resume decision owns this one failure transition. A later
+      // retry failure is evaluated independently and sounds normally if final.
+      suppressErrorSound,
+    });
   } catch (error) {
     log.warn('Agent Island event update failed after maker event broadcast', {
       sessionId: session.id,
@@ -7745,6 +7754,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 被按住的 error 最终没接管 → 只补落 error 行(横幅 coordinator 自己设)。
     onResumableTurnErrorDiscarded: (sessionId: string) => {
       autoResumeBookkeeping.flushSuppressedError(sessionId);
+      getAgentIslandService()?.restoreTaskFailureSound(sessionId);
     },
     onResumableTurnError: (sessionId: string, signals: InterruptedTurnErrorSignals) => {
       if (!isInterruptedTurnError(signals)) return null;
@@ -7795,6 +7805,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
               autoResumeBookkeeping.finalizeSuppressedError(sessionId, {
                 surfaceBanner: outcome === 'no-progress',
               });
+              if (outcome === 'no-progress') {
+                getAgentIslandService()?.restoreTaskFailureSound(sessionId);
+              }
               log.debug('interrupted-turn auto-resume not dispatched', { sessionId, outcome });
               return;
             }
@@ -7805,6 +7818,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
             // 补发本身失败 → 回落成常规错误呈现,让用户能手点重试。
             autoResumeBookkeeping.finalizeSuppressedError(sessionId, { surfaceBanner: true });
+            getAgentIslandService()?.restoreTaskFailureSound(sessionId);
             log.warn('interrupted-turn auto-resume failed', {
               sessionId,
               error: err instanceof Error ? err.message : String(err),

@@ -2636,6 +2636,77 @@ describe('AgentIslandService native publishing', () => {
     });
   });
 
+  it('keeps an auto-resumed failure transition silent and restores it if recovery does not start', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    syncEnabledForTest(service, publish);
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        error: customSound('error.wav'),
+      },
+    });
+    const meta = { sessionId: 'auto-resume', agentKind: 'claude-code' };
+    service.handleUserPrompt(meta, 'run tests');
+    playSound.mockClear();
+
+    service.handleAgentEvent(meta, terminalErrorEvent('connection closed mid-response'), {
+      suppressErrorSound: true,
+    });
+
+    expect(playSound).not.toHaveBeenCalled();
+    expect(publish.mock.calls.at(-1)?.[0].sessions[0]).toMatchObject({
+      sessionId: 'auto-resume',
+      phase: 'error',
+      detail: 'connection closed mid-response',
+    });
+    service.restoreTaskFailureSound(meta.sessionId);
+    expect(playSound).toHaveBeenCalledTimes(1);
+    expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+  });
+
+  it('keeps an auto-resumed failure silent through the initial enabled sync', async () => {
+    const { AgentIslandService } = await import('../service.js');
+    const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
+      void state;
+      void frameOrFrames;
+      return true;
+    });
+    const playSound = vi.fn<(sound: AgentIslandSoundChoice) => boolean>(() => true);
+    const service = new AgentIslandService({
+      getMainWindow: () => null,
+      nativeHost: { failed: false, publish, playSound },
+    });
+    service.setSoundSettings({
+      enabled: true,
+      sounds: {
+        ...DEFAULT_AGENT_ISLAND_SOUND_SETTINGS.sounds,
+        error: customSound('error.wav'),
+      },
+    });
+    const meta = { sessionId: 'pre-sync-auto-resume', agentKind: 'claude-code' };
+    service.handleUserPrompt(meta, 'run tests');
+    service.handleAgentEvent(meta, terminalErrorEvent('connection closed before sync'), {
+      suppressErrorSound: true,
+    });
+    service.setEnabled(true);
+
+    expect(playSound).not.toHaveBeenCalled();
+    service.restoreTaskFailureSound(meta.sessionId);
+    expect(playSound).toHaveBeenCalledTimes(1);
+    expect(playSound).toHaveBeenCalledWith(customSound('error.wav'));
+  });
+
   it('allows a remote daemon close inside the upgrade window to converge to completed', async () => {
     const { AgentIslandService } = await import('../service.js');
     const publish = vi.fn((state: AgentIslandDisplayState, frameOrFrames: AgentIslandNativeFrame | AgentIslandNativeFrame[]) => {
