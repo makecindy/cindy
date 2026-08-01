@@ -36,6 +36,7 @@ import { buildHomeSections, type HomeRow, type HomeSection } from '@/session/hom
 import { buildMobileHomePresentation, excludeOrcaWorkerSessions } from '@/session/mobileHome';
 import {
   remoteSessionStore,
+  useRemoteMessageVersion,
   useRemoteSessions,
   useRemoteSessionStoreVersion,
   useSessionRunning,
@@ -44,6 +45,7 @@ import type { RemoteSessionLiveActivity } from '@/session/sessionList';
 import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
 import {
   buildRemoteSessionCardPreview,
+  buildSessionMessagePreviewIndex,
   formatRemoteSessionSidebarTime,
   type RemoteSessionListItem,
 } from '@/session/sessionList';
@@ -193,12 +195,22 @@ export function SessionListDrawer({
   // 与首页同一套展示模型(排序 / 置顶区 / 自动化折叠);未挂载时跳过重建,
   // 常驻宽屏页面时不为收起的抽屉付 presentation 成本。
   const sessions = useRemoteSessions();
-  // storeVersion:pending 交互 / liveActivity 不在 sessions 数组身份里,靠版本号驱动重算
-  // (与首页两个 index 的依赖口径一致);未挂载时 memo 早退,不为收起的抽屉付这份成本。
+  // storeVersion / messageVersion:pending 交互、liveActivity、消息镜像都不在 sessions
+  // 数组身份里,靠版本号驱动重算(与首页三个 index 的依赖口径一致);未挂载时 memo
+  // 早退,不为收起的抽屉付这份成本。
   const storeVersion = useRemoteSessionStoreVersion();
+  const messageVersion = useRemoteMessageVersion();
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];
     void storeVersion;
+    void messageVersion;
+    // 已 load 会话的预览走消息镜像(applyRemotePush 只追加镜像、不回写 session.preview,
+    // 缺这个索引会让「坐在会话页期间别的任务来了新消息」的摘要停在旧值);未打开过的
+    // 会话由 presentation 内部回退 session.preview,与首页同一套兜底链。
+    const messagePreviewIndex = buildSessionMessagePreviewIndex(
+      sessions.map((session) => session.id),
+      (sessionId) => remoteSessionStore.getMessages(sessionId),
+    );
     // 与首页同口径的行内状态输入:等待授权/回复(awaiting)与 live error/done 都来自
     // 这两个 index,缺了会全部退化成普通时间行。
     const pendingInteractionIndex = new Map(
@@ -218,6 +230,7 @@ export function SessionListDrawer({
       // 本 memo 以 sessions 为依赖即可保持同步。
       devices: remoteSessionStore.getDeviceIdentity(),
       liveActivityIndex: new Map(liveActivityEntries),
+      messagePreviewIndex,
       pendingInteractionIndex,
       // scheduleIndex **刻意不接**:它靠 1+N×listRuns RPC 水合,仓内把这条链路限制在
       // 首页/设备详情页并配 defer+30s 节流(见 scheduleIndex.ts / scheduleIndexDefer.ts,
@@ -231,7 +244,7 @@ export function SessionListDrawer({
       unnamedLabel: t('session.menu.unnamedTitle'),
     });
     return buildHomeSections(home, false, false);
-  }, [mounted, sessions, storeVersion, t]);
+  }, [messageVersion, mounted, sessions, storeVersion, t]);
   const hasRows = useMemo(
     () => sections.some((section) => section.data.length > 0),
     [sections],
