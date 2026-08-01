@@ -180,7 +180,7 @@ export function isSensitiveCredentialPath(target: string): boolean {
 const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
   /^\/(?:etc|proc|sys|dev|boot|root)(?:\/|$)/i,             // POSIX 系统目录
   /^\/var\/(?:log|db|root)(?:\/|$)/i,                       // 系统级 /var 子目录(filePathPolicy 一致)
-  /^\/(?:System|Library)(?:\/|$)/,                          // macOS 系统目录(根级 /Library,非 ~/Library)
+  /^\/(?:System|Library)(?:\/|$)/i,                         // macOS 系统目录(根级 /Library,非 ~/Library);大小写不敏感 —— 默认 HFS+/APFS 大小写不敏感,`/system`/`/library` 仍落真实系统目录(copilot 报)
   /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录
 ];
 
@@ -859,6 +859,10 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     if (payload && (substitutionRunsRemoteFetch(payload, 'command')
       || depth >= MAX_EXEC_REVIEW_DEPTH
       || highImpactExecutionNeedsConsent(payload, depth + 1))) return true;
+    // cmd.exe /c "…" 载荷同样可包 powershell -enc / 下载即执行 → 递归下探(codex 报的 cmd 包装面)。
+    const cmdInner = cmdCommandPayload(rawTokens);
+    if (cmdInner && (depth >= MAX_EXEC_REVIEW_DEPTH
+      || highImpactExecutionNeedsConsent(cmdInner, depth + 1))) return true;
     const inlineCode = interpreterInlineCodePayload(rawTokens);
     if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
     if (executableName(rawTokens[0] ?? '') === 'xargs') {
@@ -995,6 +999,31 @@ function destructiveRmTargets(tokens: string[]): string[] | null {
   return destructive ? positionalOperands(args) : null;
 }
 
+/** cmd.exe `/c`/`/k`/`/r` 后的载荷命令(其余全部构成待执行命令);非 cmd 启动器返回 null。 */
+function cmdCommandPayload(tokens: string[]): string | null {
+  if (executableName(tokens[0] ?? '') !== 'cmd') return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const flag = tokens[i].toLowerCase();
+    if (flag === '/c' || flag === '/k' || flag === '/r') {
+      return tokens.slice(i + 1).join(' ');
+    }
+  }
+  return null;
+}
+
+/**
+ * Windows cmd.exe 广泛递归删除(`rd`/`rmdir`/`del`/`erase` 带 `/s`)的显式目标;非此形态返回 null。
+ * `/s` = 递归删整棵树(rmdir 文档),等价 POSIX `rm -rf` 的破坏面 → 交目标级作用域判定(codex 报)。
+ */
+function windowsDestructiveRmTargets(tokens: string[]): string[] | null {
+  const bin = executableName(tokens[0] ?? '');
+  if (bin !== 'rd' && bin !== 'rmdir' && bin !== 'del' && bin !== 'erase') return null;
+  const args = tokens.slice(1);
+  if (!args.some((token) => /^\/s$/i.test(token))) return null; // 无 /s 非广泛递归
+  const targets = args.filter((token) => !token.startsWith('/'));
+  return targets.length > 0 ? targets : null;
+}
+
 function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; target?: string } {
   const bin = baseName(tokens[0] ?? '');
   if (bin === 'source' || bin === '.' || bin === 'popd') return { changesDirectory: true };
@@ -1093,10 +1122,20 @@ function scopedDestructionNeedsConsent(
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
       destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+    // Windows cmd.exe 广泛递归删除(`rd`/`rmdir`/`del`/`erase` 带 `/s`)按目标作用域判定(codex 报)。
+    const winRmTargets = windowsDestructiveRmTargets(tokens);
+    if (winRmTargets?.some((target) =>
+      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
       shellPayload, workspaceRoots, segmentOpts, depth + 1))) {
+      return true;
+    }
+    // cmd.exe /c "rd /s /q …" 把破坏性删除藏进 cmd 载荷,递归下探(codex 报)。
+    const cmdPayload = cmdCommandPayload(tokens);
+    if (cmdPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+      cmdPayload, workspaceRoots, segmentOpts, depth + 1))) {
       return true;
     }
     if (bin === 'find') {

@@ -1321,3 +1321,33 @@ describe('classifyShellCommand — 嵌套下载替换/Windows路径管道/直接
     expect(classifyShellCommand('pwsh -Command Get-ChildItem -Recurse', roots)).toBe('prompt');
   });
 });
+
+describe('isProtectedSystemPath 大小写 / cmd.exe 包装破坏性删除(第二十二批评审)', () => {
+  it('macOS 系统目录判定大小写不敏感(默认 HFS+/APFS)', () => {
+    for (const p of ['/System/Library/x', '/system/library/x', '/Library/LaunchDaemons/y', '/library/y']) {
+      expect(isProtectedSystemPath(p), p).toBe(true);
+    }
+    // 非系统的用户路径不误判。
+    expect(isProtectedSystemPath('/Users/me/Library/x')).toBe(false);
+    expect(isProtectedSystemPath('/repo/system/x')).toBe(false);
+  });
+
+  it('cmd.exe /c 包装的 rd/rmdir/del 广泛递归删除按目标作用域必问', () => {
+    for (const c of [
+      'cmd.exe /c "rd /s /q C:\\Users"',
+      'cmd /c "rmdir /s /q C:\\Windows\\Temp"',
+      'cmd /c "del /s /q C:\\Users\\me\\logs"',
+      'cmd /c rd /s /q C:\\Users',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:cmd 包装的递归删除目标在区内子目录 → 留灰区(scoped);无 /s 的 rd 只删空目录 → 不升。
+    expect(classifyShellCommand('cmd /c "rd /s /q build"', roots)).toBe('prompt');
+    expect(classifyShellCommand('cmd /c "rd C:\\Users"', roots)).toBe('prompt');
+  });
+
+  it('cmd.exe /c 包装的 PowerShell 编码命令仍过红线(RCE 面)', () => {
+    expect(classifyShellCommand('cmd /c "powershell -EncodedCommand ZQBjAGgAbwA="', roots))
+      .toBe('prompt-each-time');
+  });
+});
