@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { UnsupportedResponsesFeatureError } from '@cindy/responses-chat-bridge';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
 import type {
   AgentInputCoordinatorDeps,
@@ -155,13 +154,8 @@ function sessionRunningError(): Error & { code: string } {
 function unsupportedChatBridgeImageError(
   feature = "input content part 'input_image'",
 ): string {
-  return JSON.stringify({
-    error: {
-      type: 'invalid_request_error',
-      code: 'unsupported_feature',
-      message: new UnsupportedResponsesFeatureError(feature).message,
-    },
-  });
+  return 'unexpected status 400 Bad Request: Responses feature is not supported by the '
+    + `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`;
 }
 
 function createHarness() {
