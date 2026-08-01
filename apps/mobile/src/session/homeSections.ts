@@ -103,7 +103,7 @@ export function buildGroupedHomeRows(home: MobileHomePresentation): HomeRow[] {
 }
 
 function compareHomeRowsByActivityDesc(a: HomeRow, b: HomeRow): number {
-  return homeRowActivity(b).localeCompare(homeRowActivity(a));
+  return homeRowActivity(b).localeCompare(homeRowActivity(a)) || a.key.localeCompare(b.key);
 }
 
 function homeRowActivity(row: HomeRow): string {

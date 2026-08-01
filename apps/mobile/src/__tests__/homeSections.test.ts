@@ -148,4 +148,26 @@ describe('buildMixedHomeRows / buildGroupedHomeRows', () => {
       'chat-old',
     ]);
   });
+
+  it('活动时间相同时按 row key 稳定排序,不受上游输入顺序影响', () => {
+    const activityAt = '2026-06-07T00:00:00Z';
+    const forward = presentation({
+      chats: [listItem('chat-z', activityAt), listItem('chat-a', activityAt)],
+      projects: [
+        projectGroup('project-z', activityAt, [listItem('session-z', activityAt)]),
+        projectGroup('project-a', activityAt, [listItem('session-a', activityAt)]),
+      ],
+    });
+    const reversed = presentation({
+      chats: [...forward.chats].reverse(),
+      projects: [...forward.projects].reverse(),
+    });
+
+    for (const buildRows of [buildMixedHomeRows, buildGroupedHomeRows]) {
+      const forwardKeys = buildRows(forward).map((row) => row.key);
+      const reversedKeys = buildRows(reversed).map((row) => row.key);
+      expect(forwardKeys).toEqual([...forwardKeys].sort((a, b) => a.localeCompare(b)));
+      expect(reversedKeys).toEqual(forwardKeys);
+    }
+  });
 });
