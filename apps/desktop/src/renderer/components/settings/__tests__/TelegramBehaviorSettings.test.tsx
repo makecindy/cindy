@@ -147,6 +147,48 @@ describe('official Telegram behavior settings', () => {
     expect(api.setTelegramBehavior.mock.calls[1]?.[0]).toBe('binding-1');
   });
 
+  it('绑定切换后旧账号的保存回执不覆盖新账号状态', async () => {
+    const oldSave = deferred<{ behavior: typeof behavior }>();
+    const secondBehavior = {
+      ...behavior,
+      bindingId: 'binding-2',
+      emojiReactions: 'off' as const,
+    };
+    api.getTelegramBehavior.mockImplementation(async (bindingId: string) => ({
+      behavior: bindingId === 'binding-2' ? secondBehavior : behavior,
+    }));
+    api.setTelegramBehavior.mockImplementationOnce(() => oldSave.promise);
+    const view = render(<TelegramBehaviorSettings source="official" bindingId="binding-1" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
+      }),
+    );
+    await waitFor(() => expect(api.setTelegramBehavior).toHaveBeenCalledOnce());
+
+    view.rerender(<TelegramBehaviorSettings source="official" bindingId="binding-2" />);
+    await waitFor(() =>
+      expect(
+        screen
+          .getByRole('button', {
+            name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.off',
+          })
+          .getAttribute('aria-pressed'),
+      ).toBe('true'),
+    );
+
+    oldSave.resolve({ behavior: { ...behavior, emojiReactions: 'expressive' } });
+    await act(async () => oldSave.promise);
+    expect(
+      screen
+        .getByRole('button', {
+          name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.off',
+        })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+  });
+
   it('队列中较早写入失败也会在排空后重读并提示', async () => {
     const first = deferred<{ behavior: typeof behavior }>();
     const authoritative = { ...behavior, replyQuoteGroup: 'all' as const };

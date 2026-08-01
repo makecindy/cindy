@@ -5,7 +5,7 @@
  * 改动即写 main 侧 store(transport 每次使用现读), 无需重启 bot。
  */
 
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { contactsService } from '@/lib/contactsService';
@@ -131,6 +131,8 @@ export function TelegramBehaviorSettings({
   const latestRevision = useRef(0);
   const mounted = useRef(true);
   const root = i18nRoot(source);
+  const bindingKey = `${source}:${bindingId ?? ''}`;
+  const activeBindingKey = useRef(bindingKey);
 
   useEffect(() => {
     mounted.current = true;
@@ -138,6 +140,18 @@ export function TelegramBehaviorSettings({
       mounted.current = false;
     };
   }, []);
+
+  useLayoutEffect(() => {
+    activeBindingKey.current = bindingKey;
+    behaviorRef.current = null;
+    confirmedRef.current = null;
+    pendingWrites.current = 0;
+    saveFailed.current = false;
+    saveQueue.current = Promise.resolve();
+    latestRevision.current += 1;
+    setBehavior(null);
+    setError(null);
+  }, [bindingKey]);
 
   useEffect(() => {
     let cancelled = false;
@@ -197,6 +211,9 @@ export function TelegramBehaviorSettings({
   }
 
   const patch = (partial: Partial<Behavior>) => {
+    const writeBindingKey = bindingKey;
+    const writeBindingId = bindingId;
+    const writeSource = source;
     const optimistic = { ...(behaviorRef.current ?? behavior), ...partial };
     behaviorRef.current = optimistic;
     setBehavior(optimistic);
@@ -206,11 +223,12 @@ export function TelegramBehaviorSettings({
     saveQueue.current = saveQueue.current.then(async () => {
       try {
         const saved =
-          source === 'official'
+          writeSource === 'official'
             ? await window.electronAPI.hookControl
-                .setTelegramBehavior(bindingId as string, partial)
+                .setTelegramBehavior(writeBindingId as string, partial)
                 .then((value) => value.behavior)
             : await window.electronAPI.telegramBot.setBehavior(partial);
+        if (activeBindingKey.current !== writeBindingKey) return;
         confirmedRef.current = saved;
         if (mounted.current && revision === latestRevision.current) {
           behaviorRef.current = saved;
@@ -218,17 +236,18 @@ export function TelegramBehaviorSettings({
           setError(null);
         }
       } catch {
-        saveFailed.current = true;
+        if (activeBindingKey.current === writeBindingKey) saveFailed.current = true;
       } finally {
+        if (activeBindingKey.current !== writeBindingKey) return;
         pendingWrites.current -= 1;
         if (pendingWrites.current === 0 && saveFailed.current) {
           const reconcileRevision = latestRevision.current;
           let authoritative = confirmedRef.current;
           try {
             authoritative =
-              source === 'official'
+              writeSource === 'official'
                 ? await window.electronAPI.hookControl
-                    .getTelegramBehavior(bindingId as string)
+                    .getTelegramBehavior(writeBindingId as string)
                     .then((value) => value.behavior)
                 : await window.electronAPI.telegramBot.getBehavior();
             confirmedRef.current = authoritative;
@@ -237,6 +256,7 @@ export function TelegramBehaviorSettings({
           }
           if (
             mounted.current &&
+            activeBindingKey.current === writeBindingKey &&
             pendingWrites.current === 0 &&
             reconcileRevision === latestRevision.current &&
             authoritative !== null
