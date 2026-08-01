@@ -214,10 +214,14 @@ function redirectionTargets(command: string): string[] {
 /**
  * 常见"以位置参数指定写入目标"的命令的目标路径 —— 与 shell 重定向同为写通道,同样要过系统路径红线
  * (codex 报:`cp payload /etc/hosts`、`install … /etc/hosts`、`… | tee /etc/hosts` 此前只当灰区)。
- *   - cp/mv/install/rsync/ln:最后一个位置参数是 DEST(≥2 个操作数时);
+ *   - cp/mv/install/rsync/ln:最后一个位置参数是 DEST(≥2 个操作数时),或 `-t DIR`;
  *   - tee/sponge:所有位置参数都是写入文件;
- *   - dd `of=FILE`。
- * 只取静态可见的字面目标;拿不准的形态交既有其它规则,不在此强判。
+ *   - dd `of=FILE`;
+ *   - truncate / touch / mkdir / rmdir:FILE 操作数本身就是写目标;
+ *   - sed/perl/ruby/awk 的 `-i` 原地编辑:FILE 操作数被改写;
+ *   - tar `-C DIR`、unzip `-d DIR`、curl `-o FILE`/`--output-dir`、wget `-O FILE`/`-P DIR`:落地位置。
+ * 只取静态可见的字面目标;拿不准的形态交既有其它规则,不在此强判。**注意**:这里只产出"目标",
+ * 是否升级由调用点的 isProtectedSystemPath 决定 —— 所以日常写区内/临时目录不会被打断。
  */
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
@@ -243,6 +247,65 @@ function argumentWriteTargets(tokens: string[]): string[] {
       const m = /^of=(.+)$/i.exec(t);
       return m ? [m[1]] : [];
     });
+  }
+  // 直接以 FILE 操作数为写目标:truncate(-s 改大小,可清空)、touch(创建/改 mtime)、
+  // mkdir/rmdir(在系统目录下建删目录)。codex 报 `truncate -s 0 /etc/passwd`;此处把同类
+  // 写通道一并纳入,不逐条等报。带值选项先消费,避免把选项值当目标。
+  if (bin === 'truncate') {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (t === '-s' || t === '--size' || t === '-r' || t === '--reference') { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    return out;
+  }
+  if (bin === 'touch' || bin === 'mkdir' || bin === 'rmdir') {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      // touch -r REF / -d DATE / -t STAMP;mkdir -m MODE 都带独立值。
+      if (/^(?:-r|--reference|-d|--date|-t|-m|--mode)$/.test(t)) { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    return out;
+  }
+  // 原地编辑:`sed -i`、`perl -i`(含 -pi/-i.bak)、`ruby -i` 直接改写 FILE 操作数。
+  if (bin === 'sed' || bin === 'perl' || bin === 'ruby' || /^(?:gawk|awk)$/.test(bin)) {
+    const inPlace = args.some((t) => /^-{1,2}i/.test(t) || /^-[a-zA-Z]*i/.test(t));
+    if (!inPlace) return [];
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      // sed -e SCRIPT / -f FILE、perl -e CODE 的值不是写目标。
+      if (/^(?:-e|--expression|-f|--file)$/.test(t)) { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    // sed 的第一个非选项操作数可能是 script(`sed -i 's/a/b/' f`),多取一个目标只会更保守。
+    return out;
+  }
+  // 解压/下载的**落地目录或文件**:tar -C DIR、unzip -d DIR、curl -o FILE / --output-dir DIR、
+  // wget -O FILE / -P DIR —— 都能把内容写进系统目录。
+  if (bin === 'tar' || bin === 'unzip' || bin === 'curl' || bin === 'wget') {
+    const out: string[] = [];
+    const valueFlags = bin === 'tar' ? /^(?:-C|--directory)$/
+      : bin === 'unzip' ? /^-d$/
+        : bin === 'curl' ? /^(?:-o|--output|--output-dir)$/
+          : /^(?:-O|--output-document|-P|--directory-prefix)$/;
+    const attachedFlags = bin === 'tar' ? /^(?:--directory=|-C)(.+)$/
+      : bin === 'unzip' ? /^-d(.+)$/
+        : bin === 'curl' ? /^(?:--output=|--output-dir=|-o)(.+)$/
+          : /^(?:--output-document=|--directory-prefix=|-O|-P)(.+)$/;
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (valueFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
+      const m = attachedFlags.exec(t);
+      if (m) out.push(m[1]);
+    }
+    return out;
   }
   return [];
 }

