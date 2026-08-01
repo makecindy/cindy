@@ -246,6 +246,35 @@ describe('makerChatStore active view tracking', () => {
     expect(snapshot.oldestMessageId).toBe('older-plan');
   });
 
+  it('initial history load treats swallowed plan tool rows as non-anchor rows', async () => {
+    const sessionId = sid('initial-plan-non-anchor');
+    vi.mocked(messageService.list).mockClear();
+    const latestPage = Array.from({ length: 50 }, (_, i) =>
+      dbToolUseMessage(
+        sessionId,
+        `plan-${String(i).padStart(2, '0')}`,
+        'update_plan',
+        { plan: [{ step: `Plan row ${i}`, status: 'completed' }] },
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latestPage)
+      .mockResolvedValueOnce([
+        dbMessage(sessionId, 'older-visible', 'older visible message', BASE_TIME.toISOString()),
+      ]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    expect(messageService.list).toHaveBeenCalledTimes(2);
+    expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
+      limit: 50,
+      before: 'plan-00',
+    });
+    expect(makerChatStore.getSnapshot(sessionId).oldestMessageId).toBe('older-visible');
+  });
+
   it('caps plan-only initial history backfill for sessions without plan snapshots', async () => {
     const sessionId = sid('initial-plan-backfill-cap');
     vi.mocked(messageService.list).mockClear();

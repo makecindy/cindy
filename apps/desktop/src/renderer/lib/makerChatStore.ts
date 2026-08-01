@@ -26,6 +26,7 @@ import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import {
   applyCodexPlanSnapshotOnDone,
   findLatestMessageTodoInsertion,
+  isAgentPlanToolName,
 } from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
@@ -5433,11 +5434,12 @@ function ensureInitialMessages(sessionId: string): void {
       // no-anchor / plan-boundary backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
       // 而 MessageStream 在 visibleRenderItems.length === 0 时不触发自动翻页 —— 结果是
       // DB 里有 2000+ 条消息,重启后 ChatView 渲染 0 项,看起来"内容消失了"。
-      // 两类命中(见 isNonAnchorHistoryRow):
+      // 四类命中(见 isNonAnchorHistoryRow):
       //   - 全是 tool_result:配对的 tool_use 父消息在更老的页里,orphan 会被丢弃;
       //   - 全是被隐藏的 thinking 行:如一轮搜索密集、在产出可见正文前就失败的会话,
       //     最新 50 行可能全是加密推理;
-      //   - 合成指令行:渲染 null,混在上面两类里同样撑不出可见锚点。
+      //   - 计划工具行:计划只在输入框上方的胶囊呈现,不在消息流中留锚点;
+      //   - 合成指令行:渲染 null,混在这些行里同样撑不出可见锚点。
       //
       // PinnedPlanPanel 的唯一数据源同样是当前消息窗口。计划工具行不再在消息流中渲染,
       // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
@@ -9618,9 +9620,10 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 三类:
+ * 四类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
+ *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
@@ -9631,7 +9634,23 @@ function isHiddenThinkingRow(m: Message): boolean {
  * 再也拉不回来。
  */
 function isNonAnchorHistoryRow(m: Message): boolean {
-  return m.role === 'tool_result' || isHiddenThinkingRow(m) || isSyntheticTriggerRow(m);
+  return (
+    m.role === 'tool_result' ||
+    isHiddenThinkingRow(m) ||
+    isAgentPlanHistoryToolUseRow(m) ||
+    isSyntheticTriggerRow(m)
+  );
+}
+
+function isAgentPlanHistoryToolUseRow(m: Message): boolean {
+  if (m.role !== 'tool_use') return false;
+  return isAgentPlanToolName(historyToolName(m));
+}
+
+function historyToolName(m: Message): string | undefined {
+  if (!m.content || typeof m.content !== 'object') return undefined;
+  const toolName = (m.content as Record<string, unknown>).toolName;
+  return typeof toolName === 'string' ? toolName : undefined;
 }
 
 function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
