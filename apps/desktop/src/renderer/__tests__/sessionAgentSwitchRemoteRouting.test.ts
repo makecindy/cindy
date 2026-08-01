@@ -667,6 +667,22 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(hostSource).toContain('supportsSessionAgentSwitchCas: true');
   });
 
+  it('lazy-create 从 DB 对齐原子模型选择的 effort 与 Fast,不复用旧排队快照', () => {
+    const hostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
+      'utf8',
+    );
+    const start = hostSource.indexOf('async function reconcileCreateOptsAgainstDb(');
+    const end = hostSource.indexOf('const agentSwitchDeps:', start);
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const body = hostSource.slice(start, end);
+    expect(body).toContain('effort: sessions.effort,');
+    expect(body).toContain('fastMode: sessions.fastMode,');
+    expect(body).toContain("co.effort = (row.effort ?? undefined) as CreateOpts['effort'];");
+    expect(body).toContain('co.fastMode = !!row.fastMode;');
+  });
+
   it('Orca 与角色未加载会话都 fail-closed:只有完整元数据确认非协同后开放入口', () => {
     expect(source).toContain('sessionOrcaRole === null &&');
     // 会话视图必须保留 undefined 未知态,不能在完整 session 回流前冒充「非协同」。
