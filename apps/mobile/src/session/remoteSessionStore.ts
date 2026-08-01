@@ -1202,6 +1202,16 @@ function recallParkedTaskUpdates(
 }
 
 export const remoteSessionStore = {
+  /**
+   * 读当前权威设备身份列表(setDeviceIdentity 注入的那份;未注入过为空)。
+   * 会话页抽屉等在首页之外调 buildMobileHomePresentation 时传入,保证展示归一化
+   * (canonicalDeviceId 认领)与首页/本 store 同一口径——不传 devices 的空列表会把
+   * store 已算好的规范 id 覆盖成仅凭会话内嵌名字推出的弱结果(re-link 后路由错设备)。
+   */
+  getDeviceIdentity(): readonly { deviceId: string; name: string }[] {
+    return deviceList ?? [];
+  },
+
   // 注入当前权威设备列表(首页从 /api/device-link/devices reconcile 后调用),用于设备身份归一化。
   // 仅在身份索引实际变化时重算,避免每次设备列表引用变动都刷新全部会话。
   setDeviceIdentity(devices: readonly { deviceId: string; name: string }[]): void {

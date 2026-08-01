@@ -40,9 +40,16 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('Math.max(1, width + insets.left)');
     // 手势位移并回 progress:关闭动画从当前视觉位置继续,不跳帧。
     expect(text).toContain('progress.value + dragX.value / panelWidth');
-    // 拖拽关闭只认横向意图,纵向让给列表滚动。
-    expect(text).toContain('.activeOffsetX([-16, 16])');
-    expect(text).toContain('.failOffsetY([-24, 24])');
+    // 拖拽关闭只认「向左」意图:右拖 16pt 判失败,纵向 16pt 先到滚动优先(review #1328)。
+    expect(text).toContain('.activeOffsetX(-16)');
+    expect(text).toContain('.failOffsetX(16)');
+    expect(text).toContain('.failOffsetY([-16, 16])');
+    // 关闭动画期间 overlay 恒拦截,不放行点击穿透半透明 scrim(review #1328)。
+    expect(text).toContain('pointerEvents="auto"');
+    // 抽屉 presentation 必须带权威设备身份,防 canonicalDeviceId 被弱推断覆盖(review #1328)。
+    expect(text).toContain('devices: remoteSessionStore.getDeviceIdentity(),');
+    // 底部主操作行触控目标 >=44。
+    expect(text).toContain('minHeight: 44,');
   });
 
   it('keeps the drawer aligned with the home list presentation pipeline', () => {

@@ -34,7 +34,7 @@ import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { buildHomeSections, type HomeRow, type HomeSection } from '@/session/homeSections';
 import { buildMobileHomePresentation, excludeOrcaWorkerSessions } from '@/session/mobileHome';
-import { useRemoteSessions, useSessionRunning } from '@/session/remoteSessionStore';
+import { remoteSessionStore, useRemoteSessions, useSessionRunning } from '@/session/remoteSessionStore';
 import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
 import {
   buildRemoteSessionCardPreview,
@@ -146,9 +146,12 @@ export function SessionListDrawer({
   const panGesture = useMemo(
     () =>
       Gesture.Pan()
-        // 只认横向意图:纵向先动交给列表滚动。
-        .activeOffsetX([-16, 16])
-        .failOffsetY([-24, 24])
+        // 与内部 SectionList 纵向滚动的协调全靠激活窗口收窄:
+        // - 只认「向左」(关闭方向)为激活条件,向右 16pt 直接判失败——右拖不该抢任何手势;
+        // - 纵向 16pt 先到即失败,滚动优先;斜向手势必须横向分量先赢才归抽屉。
+        .activeOffsetX(-16)
+        .failOffsetX(16)
+        .failOffsetY([-16, 16])
         .onUpdate((event) => {
           'worklet';
           dragX.value = Math.min(0, event.translationX);
@@ -187,6 +190,11 @@ export function SessionListDrawer({
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];
     const home = buildMobileHomePresentation({
+      // 权威设备身份必须随会话一起进 presentation:canonicalizeSessionDevice 会按传入
+      // devices 重算并覆盖 canonicalDeviceId,空列表会把 store 已认领好的规范 id 打回
+      // 弱推断(re-link 后点行路由到旧物理设备)。store 身份变化会触发 sessions 重算,
+      // 本 memo 以 sessions 为依赖即可保持同步。
+      devices: remoteSessionStore.getDeviceIdentity(),
       sessions: excludeOrcaWorkerSessions(sessions),
       statusFilter: 'active',
     });
@@ -220,7 +228,9 @@ export function SessionListDrawer({
     <View
       // iOS VoiceOver:抽屉开着时按模态处理,不让焦点跑到被遮住的会话内容上。
       accessibilityViewIsModal={open}
-      pointerEvents={open ? 'auto' : 'none'}
+      // mounted 期间恒拦截(含 200ms 关闭动画):此时 scrim 仍半透明盖着内容,放行
+      // 点击会穿透误触;落在 scrim 上的点击只是幂等地再触发一次 onClose。
+      pointerEvents="auto"
       style={styles.overlay}
       testID="sessionDrawer.overlay"
     >
@@ -564,6 +574,8 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.container,
       flexDirection: 'row',
       gap: spacing.sm,
+      // 主操作行触控目标 >=44(iOS HIG):内容 22 + padV 16 只有 38,minHeight 补足。
+      minHeight: 44,
       paddingHorizontal: spacing.sm,
       paddingVertical: spacing.sm,
     },
