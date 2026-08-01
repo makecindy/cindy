@@ -423,6 +423,81 @@ describe('ModelSelector trigger variants', () => {
     expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
   });
 
+  it('keeps short model discovery out of the morph opening geometry', async () => {
+    vi.useFakeTimers();
+    let resolveRefresh!: (value: { ok: true }) => void;
+    const refresh = new Promise<{ ok: true }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    requestProviderModelsAutoRefresh.mockImplementationOnce(() => refresh);
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      expect(requestProviderModelsAutoRefresh).toHaveBeenCalledOnce();
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        resolveRefresh({ ok: true });
+        await refresh;
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still explains a model discovery that remains in flight', async () => {
+    vi.useFakeTimers();
+    let resolveRefresh!: (value: { ok: true }) => void;
+    const refresh = new Promise<{ ok: true }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    requestProviderModelsAutoRefresh.mockImplementationOnce(() => refresh);
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+
+      await act(async () => {
+        resolveRefresh({ ok: true });
+        await refresh;
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('keeps row-count caps finite and within the shared 300px ceiling', () => {
     expect(modelListMaxHeightForRows()).toBeUndefined();
     expect(modelListMaxHeightForRows(Number.NaN)).toBeUndefined();
@@ -1599,8 +1674,9 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
-  it('lets inactive provider rows edit the injected preset without switching the model', () => {
+  it('selects an inactive provider row after its effort preset is clicked', () => {
     const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
     const setEffort = vi.fn();
     const modelMemory = {
       getEffort: vi.fn(),
@@ -1618,6 +1694,7 @@ describe('ModelSelector trigger variants', () => {
         vendorKey: 'cc',
         currentProviderId: 'anthropic',
         onProviderChange,
+        onDismiss,
         modelMemory,
       }),
     );
@@ -1635,7 +1712,113 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.click(within(options).getByRole('option', { name: 'high' }));
 
     expect(setEffort).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', 'high');
-    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(setEffort.mock.invocationCallOrder[0]).toBeLessThan(
+      onProviderChange.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('selects an inactive provider row after its Fast toggle is clicked', () => {
+    const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
+    const setFast = vi.fn();
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(() => false),
+      setFast,
+    };
+    agentCapabilitiesRef.capabilities = {
+      ...agentCapabilitiesRef.DEFAULT_CAPABILITIES,
+      hasFastMode: true,
+    };
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        models: {
+          'claude-code': (
+            providersRef.DEFAULT_PROVIDERS[0] as { models: { 'claude-code': unknown[] } }
+          ).models['claude-code'].map((model) =>
+            (model as { id: string }).id === 'claude-sonnet-4-6'
+              ? { ...(model as Record<string, unknown>), supportsFastMode: true }
+              : model,
+          ),
+        },
+      },
+    ];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          fastMode: false,
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          onFastModeChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange,
+          onDismiss,
+          modelMemory,
+        }),
+      );
+
+      fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Fast Mode' }));
+
+      expect(setFast).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', true);
+      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(setFast.mock.invocationCallOrder[0]).toBeLessThan(
+        onProviderChange.mock.invocationCallOrder[0],
+      );
+    } finally {
+      agentCapabilitiesRef.capabilities = agentCapabilitiesRef.DEFAULT_CAPABILITIES;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('keeps the model picker open after an inactive row configuration selects that model', async () => {
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(),
+      setFast: vi.fn(),
+    };
+
+    function Harness() {
+      const [selection, setSelection] = React.useState({
+        providerId: 'anthropic',
+        modelId: 'claude-opus-4-8',
+      });
+      return React.createElement(ModelSelector, {
+        modelId: selection.modelId,
+        effort: 'high',
+        onModelChange: (modelId: string) =>
+          setSelection((current) => ({ ...current, modelId })),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: selection.providerId,
+        onProviderChange: (providerId: string | null, modelId?: string) => {
+          if (providerId && modelId) setSelection({ providerId, modelId });
+        },
+        modelMemory,
+      });
+    }
+
+    render(React.createElement(Harness));
+    await clickTrigger();
+
+    fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+    const options = screen.getByRole('group', { name: /Sonnet 4\.6/ });
+    fireEvent.click(within(options).getByRole('option', { name: 'high' }));
+
+    expect(screen.getByRole('option', { name: /Sonnet 4\.6/ }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(screen.getByRole('option', { name: /Opus 4\.8/ })).toBeTruthy();
   });
 
   it('keeps target-agent provider rows and effort memory configurable while browsing Codex', async () => {
@@ -1661,6 +1844,7 @@ describe('ModelSelector trigger variants', () => {
       },
     ];
     const setEffort = vi.fn();
+    const onDismiss = vi.fn();
     const confirmBrowseSwitch = vi.fn(async () => true);
     const onSwitch = vi.fn();
     const modelMemory = {
@@ -1684,6 +1868,7 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
           currentProviderId: 'anthropic',
           onProviderChange: vi.fn(),
+          onDismiss,
           modelMemory,
           agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch },
         }),
@@ -1706,10 +1891,9 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-
-      fireEvent.click(row);
       expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex');
-      // 模型确认与意图期配置不再触发确认；确认门只在 Agent 分段切换。
+      expect(onDismiss).not.toHaveBeenCalled();
+      // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
 
       fireEvent.click(screen.getByRole('tab', { name: /Claude/ }));

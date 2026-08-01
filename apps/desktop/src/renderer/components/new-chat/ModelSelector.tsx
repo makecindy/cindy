@@ -67,6 +67,11 @@ import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
+// 短刷新（尤其 auto-refresh cooldown 命中）不应让状态行参与 MorphPopover 的首帧量高：
+// 否则它在 220ms 开场内消失后，settle 补量会把面板再缩一次，形成“先变大再变小”。
+// 300ms 门槛也与仓库其它本地/远程混合 loading 提示一致；真正的秒级发现仍会明确反馈。
+const MODEL_DISCOVERY_INDICATOR_DELAY_MS = 300;
+
 // 厂商分类 / 分组标题 key 表的纯逻辑在 ./sourceSwitch。这里 re-export 给 ChatInput
 // (它从 './ModelSelector' import categorize / CATEGORY_LABEL_KEY / ModelCategory 做跨厂商确认弹窗)。
 export { categorize, CATEGORY_LABEL_KEY, type ModelCategory } from './sourceSwitch';
@@ -488,7 +493,8 @@ interface ModelSelectorContentProps {
     ) => void | Promise<void>;
   };
   /**
-   * 打开选择器触发的那次供应商模型发现是否仍在途。
+   * 是否显示打开选择器触发的供应商模型发现提示。调用方可延迟短任务的提示，但一旦传 true，
+   * 对应的发现仍必须在途。
    *
    * 为什么需要它:发现不是本地读取 —— ChatGPT 订阅那条要起一个 codex app-server 再 RPC 列
    * 模型,秒级到十几秒。以前这个过程完全静默,列表在用户看完关掉之后才更新,于是「只能看到
@@ -1018,13 +1024,17 @@ function ModelSelectorContentView({
   }, [sections, flatModels]);
 
   // ── 行选择 ───────────────────────────────────────────────────────────────
-  const handleRowSelect = (providerId: string | null, id: string) => {
+  const handleRowSelect = (
+    providerId: string | null,
+    id: string,
+    dismiss = true,
+  ) => {
     // 浏览目标引擎态:选中模型 = 确认切换引擎(两步式的第二步),走切换事务。
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
     // trigger 来源 icon / 路由立即正确(null = flat 退化行,交给默认路由)。
     if (browsing && agentSwitch) {
       void agentSwitch.onSwitch(browseVendor === 'codex' ? 'codex' : 'claude-code', id, providerId);
-      onDismiss?.();
+      if (dismiss) onDismiss?.();
       return;
     }
     if (isSelectedRow(providerId, id)) {
@@ -1036,7 +1046,7 @@ function ModelSelectorContentView({
         if (sections && providerId) onProviderChange?.(providerId, id);
         else onModelChange(id);
       }
-      onDismiss?.();
+      if (dismiss) onDismiss?.();
       return;
     }
     if (sections && providerId) {
@@ -1045,7 +1055,7 @@ function ModelSelectorContentView({
     } else {
       onModelChange(id);
     }
-    onDismiss?.();
+    if (dismiss) onDismiss?.();
   };
   // ── hover / focus 浮层目标 ───────────────────────────────────────────────
   const editingModel: RowModel | null = useMemo(() => {
@@ -1093,11 +1103,14 @@ function ModelSelectorContentView({
     if (editingIsActive) {
       onEffortChange(e);
     } else {
-      // 非选中行:只写该设备的全局模型预设;不传 modelMemory(flat 选择器)则纯 no-op。
+      // 非选中行:先写该设备的全局模型预设,再选中这行。选择事务会同步读取刚写入的
+      // effort,从而一次点击同时落定 model/provider/effort,不再留下「改了配置但勾还在旧模型」的状态。
       if (currentAgentKind && editing.providerId) {
         modelMemory?.setEffort(currentAgentKind, editing.providerId, editingModel.id, e);
       }
       bump();
+      // 配置点击同时选中模型，但保留模型选择窗口，方便继续比较和调整。
+      handleRowSelect(editing.providerId, editingModel.id, false);
     }
   };
   const handleEditFast = (enabled: boolean) => {
@@ -1107,10 +1120,13 @@ function ModelSelectorContentView({
       // ChatInput 同步草稿默认;这里不能预写 modelMemory,否则 device-link 远程失败会污染被控端草稿。
       void onFastModeChange?.(enabled);
     } else {
-      // 非选中行:只写该设备的模型级全局预设;来源参数用于 capability / device-link 写穿路由。
+      // 非选中行:先写模型级全局预设,再选中这行。模型切换恢复 Fast 时会读到本次点击值。
+      // 来源参数用于 capability / device-link 写穿路由。
       if (currentAgentKind && editing.providerId) {
         modelMemory?.setFast(currentAgentKind, editing.providerId, editingModel.id, enabled);
       }
+      // 配置点击同时选中模型，但保留模型选择窗口，方便继续比较和调整。
+      handleRowSelect(editing.providerId, editingModel.id, false);
     }
     bump();
   };
@@ -1719,6 +1735,27 @@ export function ModelSelector({
   const [keepOpenForAgentConfirmation, setKeepOpenForAgentConfirmation] = useState(false);
   // 打开触发的那次模型发现是否仍在途(并发语义与理由见 useModelDiscoveryPending)。
   const discovery = useModelDiscoveryPending();
+  const [showDiscoveryPending, setShowDiscoveryPending] = useState(false);
+  const showDiscoveryPendingRef = useRef(false);
+  useEffect(() => {
+    if (!discovery.pending) {
+      // 短任务从未越过门槛时不发一次无意义的 false→false 更新；除了少一次 render，
+      // 也保证打开面板只为真正可见的状态变化补量。
+      if (showDiscoveryPendingRef.current) {
+        showDiscoveryPendingRef.current = false;
+        setShowDiscoveryPending(false);
+      }
+      return;
+    }
+    const timer = window.setTimeout(
+      () => {
+        showDiscoveryPendingRef.current = true;
+        setShowDiscoveryPending(true);
+      },
+      MODEL_DISCOVERY_INDICATOR_DELAY_MS,
+    );
+    return () => window.clearTimeout(timer);
+  }, [discovery.pending]);
   const setOpenWithoutAutoRefresh = useCallback((next: boolean): void => {
     openRef.current = next;
     setOpen(next);
@@ -2202,7 +2239,7 @@ export function ModelSelector({
       pointerRevealRequiresIntent={morphEnabled}
       fluidWidth={isFieldTrigger}
       agentSwitch={contentAgentSwitch}
-      discoveringModels={discovery.pending}
+      discoveringModels={showDiscoveryPending}
       pricing={pricing}
       followSession={
         fallbackOption
