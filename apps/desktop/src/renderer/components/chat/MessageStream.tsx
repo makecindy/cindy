@@ -183,6 +183,7 @@ import {
   deriveNavRailEntries,
   shouldBackfillForNavRail,
 } from './messageNavRailModel';
+import { resolveUserDisplayText } from './userMessageDisplayText';
 import { detectScrollAnchoringApplied } from './scrollAnchoringDetect';
 import {
   decideAutoFillAction,
@@ -3223,6 +3224,9 @@ export function MessageStream({
   // scrollIntoView 直接可用,无需扩窗。user 消息总是单独 message item(不进
   // segment / 不被丢弃),所以这里只 unwrap type==='message' && role==='user'。
   // previewById 同源,截断/去噪都在 PrevMessageJumpChip 的 truncatePreview 里做。
+  // 预览存显示文本而非原始 content:chip 是导航条缺席/截断时的兜底入口,其
+  // title/aria 与刻度预览承担同一职责,hook 消息的隐藏 prompt/<thread_context>
+  // 与 Orca 行的 JSON 原文同样不能裸奔(userMessageDisplayText,PR #830 review)。
   const { userMessageIds, previewById } = useMemo(() => {
     const ids: string[] = [];
     const map = new Map<string, string>();
@@ -3232,7 +3236,7 @@ export function MessageStream({
       // 静默失效(review P2)。
       if (it.message.isSyntheticTrigger) continue;
       ids.push(it.message.clientId);
-      map.set(it.message.clientId, it.message.content);
+      map.set(it.message.clientId, resolveUserDisplayText(it.message));
     }
     return { userMessageIds: ids, previewById: map };
   }, [visibleRenderItems]);

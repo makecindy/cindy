@@ -129,6 +129,50 @@ describe('deriveNavRailEntries', () => {
     ];
     expect(deriveNavRailEntries(messages)[0].answerExcerpt).toBe('真正的回答');
   });
+
+  it('hook 消息(带 userText):预览取干净原文,不取 content 里的 agent prompt', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: '<thread_context>群里的历史消息</thread_context>请根据以上上下文回复用户',
+        hookSource: { im: 'feishu', userText: '帮我看下这个报错' },
+      }),
+    ];
+    const entries = deriveNavRailEntries(messages);
+    expect(entries).toHaveLength(1);
+    expect(entries[0].preview).toBe('帮我看下这个报错');
+  });
+
+  it('hook 消息(过渡期,无 userText):预览剥掉 <thread_context> 块', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: '<thread_context>A: 早\nB: 早</thread_context>\n这个 bug 谁修一下',
+        hookSource: { im: 'feishu' },
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].preview).toBe('这个 bug 谁修一下');
+  });
+
+  it('Orca 通信行:预览取封装内的 content,不裸奔 JSON 原文', () => {
+    const messages = [
+      msg({
+        clientId: 'u1',
+        role: 'user',
+        content: JSON.stringify({ orcaSource: 'lead', content: '任务:补齐单测覆盖' }),
+      }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].preview).toBe('任务:补齐单测覆盖');
+  });
+
+  it('正文恰好是 JSON 字面量的普通提问不受 Orca 解包影响', () => {
+    const messages = [
+      msg({ clientId: 'u1', role: 'user', content: '{"cmd":"build"}' }),
+    ];
+    expect(deriveNavRailEntries(messages)[0].preview).toBe('{"cmd":"build"}');
+  });
 });
 
 describe('promptPreviewLine', () => {

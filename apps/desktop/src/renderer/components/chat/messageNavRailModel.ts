@@ -11,6 +11,7 @@
 import type { ChatMessage } from '@/hooks/useCCAgentChat';
 import { parseUserContent } from '@/lib/imageRef';
 import { stripChatQuoteMarkerLines } from '@/lib/chatQuotes';
+import { resolveUserDisplayText } from './userMessageDisplayText';
 
 export interface NavRailEntry {
   /** user 消息的 clientId,同时是 data-message-client-id 锚点值。 */
@@ -18,8 +19,9 @@ export interface NavRailEntry {
   /**
    * 提问的单行预览。不是原文首行:user 消息可能是附件封装 JSON、可能带
    * composer 引用标记行(`> <!-- cindy-composer-quote -->`),直接截原文会把
-   * 内部标记裸奔进预览卡(2026-07-28 验收实锤)。这里走与会话深链接预览
-   * 同一套解析(parseUserContent + stripChatQuoteMarkerLines),并优先取
+   * 内部标记裸奔进预览卡(2026-07-28 验收实锤)。派生时先经
+   * resolveUserDisplayText 取显示文本(hook / Orca 消息与气泡正文同源),
+   * 再走 parseUserContent + stripChatQuoteMarkerLines 解析,并优先取
    * 用户自己的话(引用块之外的首个非空行)。
    */
   preview: string;
@@ -137,9 +139,12 @@ export function deriveNavRailEntries(messages: readonly ChatMessage[]): NavRailE
       // 运行中插话(steer)不是新一轮问答:MessageStream 的轮次语义也不把
       // 它当边界,算成刻度会把进行中的回答错挂到插话名下(PR #830 review)。
       if (m.delivery === 'steer') continue;
-      // 预览来源按序:正文(含 content 封装内的附件名)→ ChatMessage 顶层
-      // images/files 字段的名字(附件可存在 content 之外,PR #830 review)。
-      let preview = promptPreviewLine(m.content);
+      // 预览来源按序:显示文本(hook 消息取 userText / 剥 <thread_context>,
+      // Orca 通信行解包 JSON,与 UserMessage 气泡正文同源,见
+      // userMessageDisplayText.ts;PR #830 review)→ 其中的正文(含 content
+      // 封装内的附件名)→ ChatMessage 顶层 images/files 字段的名字(附件可
+      // 存在 content 之外,PR #830 review)。
+      let preview = promptPreviewLine(resolveUserDisplayText(m));
       const attachmentNames = [
         ...(m.images ?? []).map((image) =>
           'originalName' in image ? image.originalName : undefined,

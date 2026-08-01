@@ -244,10 +244,13 @@ export function MessageNavRail({
 
   useNavigationKeyListener(dropPending);
 
-  // 条目变化(新发消息 / load-more prepend)也要重算当前项。
+  // 条目变化(新发消息 / load-more prepend)与喂进测量的布局 props 变化都要
+  // 重算。bottomOffset / contentMaxWidth 只经 ref 透传给 measure,不列进这里
+  // 的话 composer 撑高(多行输入 / 加附件)既不触发容器 resize 也不滚动,
+  // availHeight 与纵向出场门槛会停在旧值直到下次滚动(PR #830 review)。
   useEffect(() => {
     scheduleMeasure();
-  }, [entries, scheduleMeasure]);
+  }, [entries, bottomOffset, contentMaxWidth, scheduleMeasure]);
 
   // 挂载亮相的那次也要按空闲节奏淡出。
   useEffect(() => {
