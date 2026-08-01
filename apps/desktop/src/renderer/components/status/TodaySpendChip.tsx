@@ -47,6 +47,11 @@ import {
   formatTurnCostMoney,
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover';
 import { Tip } from '@/components/ui/tooltip';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useClaudeOAuthConnected } from '@/hooks/useClaudeOAuthConnected';
@@ -97,6 +102,10 @@ import {
   useQuotaResetRollup,
   type ChipWindowSlot,
 } from './quotaResetRollup';
+import {
+  QuotaHoverCard,
+  type QuotaHoverCardTurnUsage,
+} from './QuotaHoverCard';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -117,6 +126,8 @@ type MetricKey = (typeof METRIC_KEYS)[number];
 // 按账号所属租户二选一下发, 两组互斥, 同一形态下不会都占位。
 const PRIMARY_GATEWAY_METRICS: readonly MetricKey[] = ['daily', 'credit', 'session'];
 const DAY_MS = 24 * 60 * 60 * 1000;
+const QUOTA_POPOVER_OPEN_DELAY_MS = 300;
+const QUOTA_POPOVER_CLOSE_GRACE_MS = 200;
 const DEFAULT_MONEY_SYMBOL = DEFAULT_USAGE_CURRENCY === 'CNY' ? '¥' : '$';
 const DEFAULT_MONEY_PLACEHOLDER = `${DEFAULT_MONEY_SYMBOL}—`;
 
@@ -781,6 +792,80 @@ interface LatestTurnUsageSummary {
   details: TurnUsageDetails;
 }
 
+// turnUsageTooltip 目前只导出整段文本 builder；结构化卡片需要字段级数据，先在
+// 本组件按同一口径做最小投影。旧 builder 会在下一步连同 Claude 纯文本 tooltip 删除。
+const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
+const LOW_CACHE_MAX_HIT_RATE = 0.2;
+
+function formatTurnUsagePercent(value: number | null): string | null {
+  if (value === null || !Number.isFinite(value)) return null;
+  const percent = Math.min(100, Math.max(0, value * 100));
+  if (Math.abs(percent - Math.round(percent)) < 0.05) return `${Math.round(percent)}%`;
+  return `${percent.toFixed(1).replace(/\.0$/, '')}%`;
+}
+
+function formatQuotaCacheLine(details: TurnUsageDetails, t: TFunction): string {
+  const read = formatCompactTokens(Math.max(0, Math.floor(details.cacheReadTokens)));
+  const create = formatCompactTokens(Math.max(0, Math.floor(details.cacheCreateTokens)));
+  const rate = formatTurnUsagePercent(details.cacheHitRate);
+  const localized = t(rate ? 'usageDetails.cacheLine' : 'usageDetails.cacheLineNoRate', {
+    read,
+    create,
+    rate: rate ?? '',
+  });
+
+  // 卡片左列已有“缓存”标题，复用既有 i18n 后去掉重复前缀；中文再收成示意稿的短标签。
+  return localized
+    .replace(/^[^:：]+[:：]\s*/, '')
+    .replace(/^读取\s/, '读 ')
+    .replace(' · 写入 ', ' · 写 ')
+    .replace(' · 命中率 ', ' · 命中 ');
+}
+
+function quotaTurnModel(details: TurnUsageDetails, t: TFunction): string | null {
+  if (details.model) return details.model;
+  if (details.models?.length === 1) return details.models[0];
+  if (details.models && details.models.length > 1) {
+    return t('usageDetails.multipleModels', { count: details.models.length });
+  }
+  return null;
+}
+
+function quotaTurnSuggestion(details: TurnUsageDetails, t: TFunction): string | null {
+  const inputTotal = details.inputTokens + details.cacheReadTokens + details.cacheCreateTokens;
+  if (
+    inputTotal >= LOW_CACHE_MIN_INPUT_TOKENS
+    && details.cacheHitRate !== null
+    && details.cacheHitRate < LOW_CACHE_MAX_HIT_RATE
+  ) {
+    return t('usageDetails.suggestion.lowCache');
+  }
+  return null;
+}
+
+function toQuotaHoverCardTurnUsage(
+  summary: LatestTurnUsageSummary | null,
+  t: TFunction,
+): QuotaHoverCardTurnUsage | null {
+  if (!summary) return null;
+  const { details } = summary;
+  const costText = summary.money
+    ? formatTurnCostMoney(summary.money)
+    : summary.costUsd != null
+      ? formatTurnCostUsd(summary.costUsd)
+      : null;
+
+  return {
+    costText,
+    totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
+    inputTokens: details.inputTokens,
+    outputTokens: details.outputTokens,
+    cacheLineText: formatQuotaCacheLine(details, t),
+    model: quotaTurnModel(details, t),
+    suggestionText: quotaTurnSuggestion(details, t),
+  };
+}
+
 function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSummary | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -1205,6 +1290,55 @@ export function TodaySpendChip({
     isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
   );
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
+  const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
+  const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
+  const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
+  const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
+
+  const clearQuotaPopoverOpenTimer = React.useCallback(() => {
+    if (quotaPopoverOpenTimerRef.current === null) return;
+    window.clearTimeout(quotaPopoverOpenTimerRef.current);
+    quotaPopoverOpenTimerRef.current = null;
+  }, []);
+  const clearQuotaPopoverCloseTimer = React.useCallback(() => {
+    if (quotaPopoverCloseTimerRef.current === null) return;
+    window.clearTimeout(quotaPopoverCloseTimerRef.current);
+    quotaPopoverCloseTimerRef.current = null;
+  }, []);
+  const keepQuotaPopoverOpen = React.useCallback(() => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  const openQuotaPopoverImmediately = React.useCallback(() => {
+    keepQuotaPopoverOpen();
+    setQuotaPopoverOpen(true);
+  }, [keepQuotaPopoverOpen]);
+  const closeQuotaPopoverImmediately = React.useCallback(() => {
+    keepQuotaPopoverOpen();
+    setQuotaPopoverOpen(false);
+  }, [keepQuotaPopoverOpen]);
+  const scheduleQuotaPopoverOpen = React.useCallback(() => {
+    clearQuotaPopoverCloseTimer();
+    clearQuotaPopoverOpenTimer();
+    quotaPopoverOpenTimerRef.current = window.setTimeout(() => {
+      quotaPopoverOpenTimerRef.current = null;
+      setQuotaPopoverOpen(true);
+    }, QUOTA_POPOVER_OPEN_DELAY_MS);
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  const scheduleQuotaPopoverClose = React.useCallback(() => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+    quotaPopoverCloseTimerRef.current = window.setTimeout(() => {
+      quotaPopoverCloseTimerRef.current = null;
+      setQuotaPopoverOpen(false);
+    }, QUOTA_POPOVER_CLOSE_GRACE_MS);
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+
+  React.useEffect(() => () => {
+    clearQuotaPopoverOpenTimer();
+    clearQuotaPopoverCloseTimer();
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+
   const sessionSegment = sessionMoney?.amount
     ? t('todaySpend.sessionCostLabel', {
         cost: formatTurnCostMoney(sessionMoney),
@@ -1362,6 +1496,7 @@ export function TodaySpendChip({
 
   let labelNode: React.ReactNode;
   let tooltipNode: React.ReactNode = usageDashboardLabel;
+  let usesClaudeSubscriptionPopover = false;
   if (isDeviceLinkRemote) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     const chipSegments = sessionSegment ? [sessionSegment] : [];
@@ -1412,6 +1547,7 @@ export function TodaySpendChip({
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
+    usesClaudeSubscriptionPopover = true;
     tooltipNode = buildClaudeSubscriptionTooltipNode(
       claudeSubscriptionUsage,
       modelId,
@@ -1521,22 +1657,92 @@ export function TodaySpendChip({
       onMouseEnter={refreshCodexRateLimits}
       onFocusCapture={refreshCodexRateLimits}
     >
-      <Tip text={tooltipNode}>
-        {isDashboardClickable ? (
-          <button
-            type="button"
-            onClick={handleClick}
-            className={buttonClass}
-            aria-label={usageDashboardLabel ?? undefined}
+      {usesClaudeSubscriptionPopover ? (
+        <Popover
+          open={quotaPopoverOpen}
+          onOpenChange={(open) => {
+            // 打开只由 hover / focus 驱动；Radix 的 outside / Escape 仍可请求关闭。
+            if (!open) closeQuotaPopoverImmediately();
+          }}
+          modal={false}
+        >
+          <PopoverTrigger asChild>
+            {isDashboardClickable ? (
+              <button
+                type="button"
+                onClick={(event) => {
+                  // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
+                  event.preventDefault();
+                  handleClick();
+                }}
+                onMouseEnter={scheduleQuotaPopoverOpen}
+                onMouseLeave={scheduleQuotaPopoverClose}
+                onFocus={openQuotaPopoverImmediately}
+                onBlur={scheduleQuotaPopoverClose}
+                onKeyDown={(event) => {
+                  if (event.key !== 'Escape') return;
+                  event.preventDefault();
+                  closeQuotaPopoverImmediately();
+                }}
+                className={buttonClass}
+                aria-label={usageDashboardLabel ?? undefined}
+              >
+                {labelNode}
+              </button>
+            ) : (
+              <span
+                className={cn(buttonClass, 'cursor-default')}
+                onMouseEnter={scheduleQuotaPopoverOpen}
+                onMouseLeave={scheduleQuotaPopoverClose}
+              >
+                {labelNode}
+              </span>
+            )}
+          </PopoverTrigger>
+          <PopoverContent
+            side="top"
+            align="end"
+            sideOffset={8}
+            collisionPadding={8}
+            onOpenAutoFocus={(event) => event.preventDefault()}
+            onCloseAutoFocus={(event) => event.preventDefault()}
+            onEscapeKeyDown={closeQuotaPopoverImmediately}
+            onMouseEnter={keepQuotaPopoverOpen}
+            onMouseLeave={scheduleQuotaPopoverClose}
+            onFocusCapture={keepQuotaPopoverOpen}
+            onBlurCapture={(event) => {
+              const nextTarget = event.relatedTarget;
+              if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+              scheduleQuotaPopoverClose();
+            }}
+            className="w-[340px] border-0 bg-transparent p-0 shadow-none"
           >
-            {labelNode}
-          </button>
-        ) : (
-          // 网关 / 托管账号暂无看板可跳(见 usageDashboardUrl):渲染为非交互文本,
-          // 点击无反应、不显示手型 / hover 态;用量指标与 tooltip 仍照常展示。
-          <span className={cn(buttonClass, 'cursor-default')}>{labelNode}</span>
-        )}
-      </Tip>
+            <QuotaHoverCard
+              snapshot={claudeSubscriptionUsage}
+              turnUsage={quotaCardTurnUsage}
+              dashboardLabel={usageDashboardLabel}
+              onOpenDashboard={handleClick}
+            />
+          </PopoverContent>
+        </Popover>
+      ) : (
+        <Tip text={tooltipNode}>
+          {isDashboardClickable ? (
+            <button
+              type="button"
+              onClick={handleClick}
+              className={buttonClass}
+              aria-label={usageDashboardLabel ?? undefined}
+            >
+              {labelNode}
+            </button>
+          ) : (
+            // 网关 / 托管账号暂无看板可跳(见 usageDashboardUrl):渲染为非交互文本,
+            // 点击无反应、不显示手型 / hover 态;用量指标与 tooltip 仍照常展示。
+            <span className={cn(buttonClass, 'cursor-default')}>{labelNode}</span>
+          )}
+        </Tip>
+      )}
       {confettiBurst && (
         <QuotaResetConfetti
           key={confettiBurst.nonce}
