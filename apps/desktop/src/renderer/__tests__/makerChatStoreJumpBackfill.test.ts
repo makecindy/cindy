@@ -154,6 +154,10 @@ function fullPageNewestFirst(): Message[] {
 
 describe('跳转补齐 — 窗口连续,不留历史空洞', () => {
   beforeEach(() => {
+    vi.mocked(listMessagesFor).mockReset();
+    vi.mocked(listMessagesFor).mockResolvedValue([]);
+    vi.mocked(aroundMessagesByClientIdFor).mockReset();
+    vi.mocked(aroundMessagesByClientIdFor).mockResolvedValue([]);
     (globalThis as { window?: unknown }).window = { electronAPI: makeElectronApiStub() };
     makerChatStore.initGlobalListeners();
   });

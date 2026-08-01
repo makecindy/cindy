@@ -154,6 +154,10 @@ describe('makerChatStore active view tracking', () => {
   beforeEach(() => {
     vi.useFakeTimers();
     vi.setSystemTime(BASE_TIME);
+    vi.mocked(messageService.list).mockReset();
+    vi.mocked(messageService.list).mockResolvedValue([]);
+    vi.mocked(messageService.around).mockReset();
+    vi.mocked(messageService.around).mockResolvedValue([]);
     disposers = [];
     sessionIds = [];
   });
@@ -374,14 +378,14 @@ describe('makerChatStore active view tracking', () => {
       'latest-task-update',
       'TaskUpdate',
       { taskId: 'abc', status: 'completed' },
-      new Date(BASE_TIME.getTime() + 2_000_000).toISOString(),
+      new Date(BASE_TIME.getTime() + 3_000_000).toISOString(),
     );
     const olderTodo = dbToolUseMessage(
       sessionId,
       'older-todo',
       'TodoWrite',
       { todos: [{ content: 'Older source should not stop backfill', status: 'in_progress' }] },
-      new Date(BASE_TIME.getTime() + 1_000_000).toISOString(),
+      new Date(BASE_TIME.getTime() + 1_100_000).toISOString(),
     );
     const taskCreate = dbToolUseMessage(
       sessionId,
