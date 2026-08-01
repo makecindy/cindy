@@ -211,6 +211,7 @@ function makePermissionModeFake() {
       return true;
     },
   );
+  const acquireTurnLease = vi.fn(() => vi.fn());
   return {
     get permissionModeState() {
       return { ...permissionModeState };
@@ -218,6 +219,7 @@ function makePermissionModeFake() {
     setPermissionMode,
     setPermissionModeTracked,
     setPermissionModeIfUnchanged,
+    acquireTurnLease,
   };
 }
 
@@ -233,6 +235,7 @@ function makeFakeSession(id: string) {
     setPermissionMode: permission.setPermissionMode,
     setPermissionModeTracked: permission.setPermissionModeTracked,
     setPermissionModeIfUnchanged: permission.setPermissionModeIfUnchanged,
+    acquireTurnLease: permission.acquireTurnLease,
     onEvent(cb: (ev: { type: string; data: unknown }) => void) {
       h.eventCbs.set(id, cb);
       return () => {
@@ -1237,6 +1240,43 @@ describe('进度快照(turn.progress 链路)', () => {
 
     releaseRestore();
     await expect(pending).resolves.toMatchObject({ status: 'ok' });
+  });
+
+  it('Telegram 群后台任务及自动续跑完成前保持安全权限档和 turn lease', async () => {
+    const session = makeManualSession('sess-old');
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+    const pending = runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+    await flush();
+
+    const cb = h.eventCbs.get('sess-old')!;
+    cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'running' } });
+    cb({ type: 'done', data: null });
+    await flush();
+
+    const releaseLease = session.acquireTurnLease.mock.results[0]?.value;
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
+    expect(releaseLease).not.toHaveBeenCalled();
+
+    let settled = false;
+    void pending.then(() => {
+      settled = true;
+    });
+    await flush();
+    expect(settled).toBe(false);
+
+    cb({ type: 'agent_task_update', data: { taskId: 'bg-1', status: 'completed' } });
+    cb({ type: 'done', data: null });
+    await expect(pending).resolves.toMatchObject({ status: 'ok' });
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+    expect(releaseLease).toHaveBeenCalledOnce();
   });
 
   it('Telegram 群轮次结束时不覆盖用户并发选择的更严格权限档', async () => {

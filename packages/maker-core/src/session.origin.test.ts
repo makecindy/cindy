@@ -112,6 +112,31 @@ describe('Session interaction fallback', () => {
 });
 
 describe('Session per-turn origin 打标', () => {
+  it('host turn lease serializes a new send across a vendor idle edge', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    let releaseLease!: () => void;
+
+    await session.send('first', {
+      afterTurnReserved: () => {
+        releaseLease = session.acquireTurnLease();
+      },
+    });
+    await emit({ type: 'done', data: {} });
+
+    let secondSettled = false;
+    const second = session.send('second').then(() => {
+      secondSettled = true;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(secondSettled).toBe(false);
+    expect(session.isTurnRunning()).toBe(true);
+
+    releaseLease();
+    await second;
+    expect(secondSettled).toBe(true);
+  });
+
   it('带 origin 的 send → 本轮每个事件都带同一 turnOrigin;done 后清空', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);

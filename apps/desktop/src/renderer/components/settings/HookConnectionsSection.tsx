@@ -1052,10 +1052,19 @@ export function HookConnectionsSection() {
               )
             : null}
           {provider === 'telegram' && cs.confirmed && view.behaviorAvailable === true ? (
-            <div className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4">
+            <div
+              key={cs.binding?.bindingId ?? 'telegram-unbound'}
+              className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
+            >
               <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
-              <TelegramBehaviorSettings source="official" />
-              <TelegramGroupActivationSettings source="official" />
+              <TelegramBehaviorSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
+              <TelegramGroupActivationSettings
+                source="official"
+                bindingId={cs.binding?.bindingId ?? undefined}
+              />
             </div>
           ) : null}
         </div>

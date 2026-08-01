@@ -274,6 +274,8 @@ export class Session {
   private permissionModeStateValue: PermissionModeState;
   private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private permissionModeChangesInFlight = 0;
+  /** Host-owned logical turn leases that outlive a vendor's transient idle edge. */
+  private readonly hostTurnLeases = new Set<Promise<void>>();
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
@@ -361,6 +363,12 @@ export class Session {
   // ── 公开 API ─────────────────────────────────────────────────────────────
 
   async send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult> {
+    // A host may need to keep a logical turn exclusive while the vendor briefly
+    // reports idle between a foreground result and background-task continuation.
+    // Wait instead of racing that continuation with a new Desktop turn.
+    while (this.hostTurnLeases.size > 0) {
+      await Promise.all([...this.hostTurnLeases]);
+    }
     // A temporary host permission lease may be restoring immediately after a
     // terminal event. Do not let the next turn reserve the session until that
     // live provider state is settled.
@@ -639,6 +647,25 @@ export class Session {
     return { ...this.permissionModeStateValue };
   }
 
+  /**
+   * Keep this Session logically occupied beyond the provider's own turn flag.
+   * The caller must release the returned lease on every terminal path.
+   */
+  acquireTurnLease(): () => void {
+    let resolveGate!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      resolveGate = resolve;
+    });
+    this.hostTurnLeases.add(gate);
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.hostTurnLeases.delete(gate);
+      resolveGate();
+    };
+  }
+
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
   async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
@@ -803,6 +830,7 @@ export class Session {
   isTurnRunning(): boolean {
     return (
       this.sendReservation !== null ||
+      this.hostTurnLeases.size > 0 ||
       this.permissionModeChangesInFlight > 0 ||
       this.isHandleTurnRunning()
     );

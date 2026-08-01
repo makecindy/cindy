@@ -250,6 +250,25 @@ describe('official Telegram behavior settings', () => {
     expect(api.listTelegramGroups).toHaveBeenCalledOnce();
   });
 
+  it('官方群 binding 代际变化时重新加载群列表', async () => {
+    api.listTelegramGroups
+      .mockResolvedValueOnce({
+        groups: [{ chatId: '-1001', chatName: 'Old account group', activation: 'mention' }],
+      })
+      .mockResolvedValueOnce({
+        groups: [{ chatId: '-2001', chatName: 'New account group', activation: 'always' }],
+      });
+    const view = render(
+      <TelegramGroupActivationSettings source="official" bindingId="binding-1" />,
+    );
+    expect(await screen.findByText('Old account group')).toBeTruthy();
+
+    view.rerender(<TelegramGroupActivationSettings source="official" bindingId="binding-2" />);
+    expect(await screen.findByText('New account group')).toBeTruthy();
+    expect(screen.queryByText('Old account group')).toBeNull();
+    expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
+  });
+
   it('实时行为推送会补入本地群列表中尚不存在的 override', async () => {
     let behaviorChanged: ((next: TelegramHookBehaviorState) => void) | undefined;
     api.onTelegramBehaviorChanged.mockImplementationOnce((listener) => {

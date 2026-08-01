@@ -87,8 +87,12 @@ vi.mock('../ImDefaultSettingsSection', () => ({
 }));
 
 vi.mock('../TelegramBehaviorSettings', () => ({
-  TelegramBehaviorSettings: () => <div data-testid="telegram-behavior" />,
-  TelegramGroupActivationSettings: () => <div data-testid="telegram-groups" />,
+  TelegramBehaviorSettings: ({ bindingId }: { bindingId?: string }) => (
+    <div data-testid="telegram-behavior" data-binding-id={bindingId} />
+  ),
+  TelegramGroupActivationSettings: ({ bindingId }: { bindingId?: string }) => (
+    <div data-testid="telegram-groups" data-binding-id={bindingId} />
+  ),
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
@@ -839,8 +843,12 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     render(<HookConnectionsSection />);
     await expandChannelCard(TELEGRAM_CARD);
     expect(await screen.findByTestId('im-defaults-global')).toBeTruthy();
-    expect(screen.getByTestId('telegram-behavior')).toBeTruthy();
-    expect(screen.getByTestId('telegram-groups')).toBeTruthy();
+    expect(screen.getByTestId('telegram-behavior').getAttribute('data-binding-id')).toBe(
+      'binding-settings',
+    );
+    expect(screen.getByTestId('telegram-groups').getAttribute('data-binding-id')).toBe(
+      'binding-settings',
+    );
   });
 
   it('does not remove a changed Slack binding from a stale confirmation', async () => {

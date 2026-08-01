@@ -112,7 +112,13 @@ function SettingsRequestError(props: { message: string; retryLabel: string; onRe
   );
 }
 
-export function TelegramBehaviorSettings({ source = 'personal' }: { source?: SettingsSource }) {
+export function TelegramBehaviorSettings({
+  source = 'personal',
+  bindingId,
+}: {
+  source?: SettingsSource;
+  bindingId?: string;
+}) {
   const { t } = useTranslation();
   const [behavior, setBehavior] = useState<Behavior | null>(null);
   const [error, setError] = useState<'load' | 'save' | null>(null);
@@ -165,7 +171,7 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
       cancelled = true;
       unsubscribe?.();
     };
-  }, [reloadToken, source]);
+  }, [bindingId, reloadToken, source]);
 
   if (!behavior) {
     return error === 'load' ? (
@@ -458,8 +464,10 @@ function ContactsAutoRegisterHint({ root }: { root: string }) {
 /** 「群聊」节: bot 进过的群逐行切换参与模式(仅@ / 全响应·自主判断)。 */
 export function TelegramGroupActivationSettings({
   source = 'personal',
+  bindingId,
 }: {
   source?: SettingsSource;
+  bindingId?: string;
 }) {
   const { t } = useTranslation();
   const [groups, setGroups] = useState<TelegramHookKnownGroup[] | null>(null);
@@ -517,7 +525,7 @@ export function TelegramGroupActivationSettings({
       cancelled = true;
       unsubscribe?.();
     };
-  }, [reloadToken, source]);
+  }, [bindingId, reloadToken, source]);
 
   if (!groups) {
     return error === 'load' ? (

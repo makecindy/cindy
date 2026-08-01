@@ -586,6 +586,7 @@ export function createMakerHookSessionRunner(deps: {
       let reusedPermissionModeApplied = false;
       let reusedPermissionModeLease: PermissionModeState | null = null;
       let reusedPermissionRestore: Promise<void> | null = null;
+      let releaseReusedTurnLease: (() => void) | null = null;
       const restoreReusedPermissionMode = (): Promise<void> => {
         if (reusedPermissionRestore !== null) return reusedPermissionRestore;
         if (
@@ -631,6 +632,14 @@ export function createMakerHookSessionRunner(deps: {
           }
         })();
         return reusedPermissionRestore;
+      };
+      const restoreReusedPermissionModeAndReleaseTurn = async (): Promise<void> => {
+        try {
+          await restoreReusedPermissionMode();
+        } finally {
+          releaseReusedTurnLease?.();
+          releaseReusedTurnLease = null;
+        }
       };
 
       try {
@@ -804,7 +813,7 @@ export function createMakerHookSessionRunner(deps: {
           ...(req.onProgress ? { onProgress: req.onProgress } : {}),
           onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
           onTurnTerminal: () => {
-            void restoreReusedPermissionMode();
+            void restoreReusedPermissionModeAndReleaseTurn();
           },
           onSilentStopSettled,
           log,
@@ -977,6 +986,11 @@ export function createMakerHookSessionRunner(deps: {
               : {}),
             afterTurnReserved: async () => {
               if (reusedPermissionModeToRestore !== null) {
+                // Claude can report the foreground turn done while background
+                // tasks still own automatic continuations. Keep the Session
+                // exclusive until the observer settles those tasks and the
+                // temporary safe permission mode has been restored.
+                releaseReusedTurnLease ??= session.acquireTurnLease();
                 // Mark first: setPermissionMode can partially mutate before a
                 // transport error, in which case the outer finally must still
                 // make a best-effort restore.
@@ -1069,7 +1083,7 @@ export function createMakerHookSessionRunner(deps: {
         // The terminal callback starts this synchronously before the observer
         // settles. Await the same promise before attachment IO so the reused
         // session is already back in its desktop permission mode.
-        await restoreReusedPermissionMode();
+        await restoreReusedPermissionModeAndReleaseTurn();
 
         // 已知 v1 取舍: 不做 scheduler 4.5.1 的完整 backfillSessionMeta。
         // provider_id 仍按建会话结果补写；Telegram 另补 source，让桌面/移动端
@@ -1098,7 +1112,7 @@ export function createMakerHookSessionRunner(deps: {
           ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         };
       } finally {
-        await restoreReusedPermissionMode();
+        await restoreReusedPermissionModeAndReleaseTurn();
       }
     },
 

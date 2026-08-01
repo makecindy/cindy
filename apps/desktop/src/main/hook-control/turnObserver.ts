@@ -161,7 +161,7 @@ export interface HookTurnObserverDeps {
   onProgress?: (text: string) => void;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
-  /** 真实 turn 终态到达时同步通知，早于 finished settle。 */
+  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
   onTurnTerminal?: () => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
@@ -273,10 +273,12 @@ export function observeHookTurn(
       stopListening = undefined;
     };
     const finish = (): void => {
+      notifyTurnTerminal();
       teardown();
       resolve();
     };
     const failTurn = (err: Error): void => {
+      notifyTurnTerminal();
       teardown();
       reject(err);
     };
@@ -426,7 +428,6 @@ export function observeHookTurn(
           pendingSettleUnsub = onSilentStopSettled(session.id, (_sid, reason) => {
             pendingSettleUnsub?.();
             pendingSettleUnsub = undefined;
-            notifyTurnTerminal();
             if (reason === 'exhausted') {
               failTurn(new Error('silent-stop auto-resume exhausted'));
             } else {
@@ -435,7 +436,6 @@ export function observeHookTurn(
           });
           return;
         }
-        notifyTurnTerminal();
         if (runningBgTasks.size > 0) {
           waitingForBgTasks = true;
           armBgTimer();
@@ -443,7 +443,6 @@ export function observeHookTurn(
         }
         finish();
       } else if (isTerminalAgentErrorEvent(ev)) {
-        notifyTurnTerminal();
         const data = ev.data as {
           message?: string;
           errorStatus?: number;
