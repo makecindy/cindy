@@ -2265,3 +2265,59 @@ describe('短选项簇里的写目标 / 下载落当前目录 / chroot(第四十
     }
   });
 });
+
+describe('会执行内层命令的启动器:script / sg / unbuffer / busybox / arch / caffeinate(第四十六批评审)', () => {
+  it('两种 script 形态的内层命令都进入目标级判定', () => {
+    for (const c of [
+      // util-linux:`-c '<命令串>'` 经 shell 执行(codex 报)。
+      "script -q -c 'rm -rf /outside' /dev/null",
+      "script --command='rm -rf /outside' /dev/null",
+      "script -c'rm -rf /outside'",
+      // 带独立值的日志选项不消费其值会停在文件名而看不到 -c。
+      "script -q -O /tmp/log.txt -c 'rm -rf /outside'",
+      // BSD/macOS:`[file [command ...]]` 尾随 argv。
+      'script -q /dev/null rm -rf /outside',
+      'script /dev/null cp /tmp/p /etc/hosts',
+      // 包装器可叠加。
+      "env script -q -c 'rm -rf /outside' /dev/null",
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('sg / unbuffer / busybox / arch / caffeinate 的内层命令同样被看见', () => {
+    for (const c of [
+      "sg docker -c 'rm -rf /outside'",
+      "sg staff 'rm -rf /outside'",
+      'unbuffer -p rm -rf /outside',
+      'busybox rm -rf /outside',
+      'busybox sh -c "rm -rf /outside"',
+      'arch -arm64 rm -rf /outside',
+      'arch -e FOO=1 rm -rf /outside',
+      'caffeinate -i rm -rf /outside',
+      'caffeinate -t 60 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('区内命令与无内层命令的形态不误升', () => {
+    for (const c of [
+      "script -q -c 'pnpm test' /tmp/typescript",
+      'script -q /tmp/typescript ls -la',
+      'script /tmp/out.txt rm -rf build',
+      'script -q /tmp/typescript',        // 纯记录交互会话,没有内层命令
+      "sg docker -c 'docker ps'",
+      'unbuffer pnpm test',
+      'busybox rm -rf build',
+      'arch -arm64 node -v',
+      'arch',                             // 裸 arch 只打印架构
+      'caffeinate -i pnpm build',
+      'caffeinate',
+      'rg "script -c" src',
+      'git commit -m "add script -c wrapper"',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+});

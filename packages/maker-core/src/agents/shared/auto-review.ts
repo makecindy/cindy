@@ -157,6 +157,10 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   // 命名空间/权限启动器:`unshare [opts] PROGRAM`、`nsenter [opts] PROGRAM`、`setpriv [opts] PROGRAM`
   // 都会执行后面的程序(codex 报 `unshare -- rm -rf /outside` 只落灰区)。
   'unshare', 'nsenter', 'setpriv',
+  // 其余「会执行后面命令」的启动器:script(`-c '<命令串>'` 或 BSD 形态的尾随 argv,codex 报
+  // `script -q -c 'rm -rf /outside' /dev/null` 只落灰区)、sg(`sg GROUP -c '<命令串>'`)、
+  // unbuffer(expect 的透明包装)、busybox(applet 多路复用器)、macOS 的 arch / caffeinate。
+  'script', 'sg', 'unbuffer', 'busybox', 'arch', 'caffeinate',
 ]);
 
 /**
@@ -920,9 +924,73 @@ function unwrapCommand(
       toks = toks.slice(i);
       // 换根后 `/outside` 之类绝对路径指向新根下的位置,静态不可证 → 相对与绝对目标都按未知处理。
       if (rootChanged) { cwd = undefined; cwdUnknown = true; }
-    } else if (head === 'setsid') {
+    } else if (head === 'script') {
+      // 两种形态都会跑命令:util-linux `script [opts] -c '<命令串>' [file]`(值经 shell 执行)与
+      // BSD/macOS `script [opts] [file [command ...]]`(尾随 argv)。带独立值的日志/管道选项要消费其值,
+      // 否则解析会停在文件名;`-t`(util-linux 的 --timing 可无值)刻意不消费 —— 少吃只会让它当成
+      // file 操作数被跳过,多吃则可能把真正的命令吞掉。
+      let i = 1;
+      let commandString: string | undefined;
+      let fileConsumed = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t.startsWith('-')) {
+          const attachedCmd = /^(?:--command=|-c)(.+)$/.exec(t);
+          if (attachedCmd) { commandString = attachedCmd[1]; i++; continue; }
+          if (/^(?:-c|--command)$/.test(t)) { commandString = toks[i + 1]; i += 2; continue; }
+          if (/^(?:-T|--log-timing|-I|--log-in|-B|--log-io|-O|--log-out|-m|--logging-format|-F)$/.test(t)) {
+            i += 2; continue;
+          }
+          i++;
+          continue;
+        }
+        if (!fileConsumed) { fileConsumed = true; i++; continue; } // typescript 输出文件
+        break; // BSD 形态的 command
+      }
+      if (commandString !== undefined) {
+        if (!commandString) break; // -c 缺值 → 形态不可解析,留壳 fail-closed
+        toks = tokenize(commandString);
+      } else {
+        if (i >= toks.length) break; // 没有内层命令(纯记录交互会话)→ 留壳
+        toks = toks.slice(i);
+      }
+    } else if (head === 'sg') {
+      // sg GROUP [-c] '<命令串>':以另一个组身份执行命令串(缺 -c 时最后一个操作数同样是命令串)。
+      let i = 1;
+      let groupConsumed = false;
+      let shellForm = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-c' || t === '--command') { shellForm = true; i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!groupConsumed) { groupConsumed = true; i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (toks.length === 0) break; // 只切组、没有命令(交互 shell)→ 留壳
+      if ((shellForm || toks.length === 1) && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'arch' || head === 'caffeinate') {
+      // macOS:`arch [-arch NAME] [-e VAR=VAL] … command args`、`caffeinate [-disu] [-t secs] [-w pid] command`。
+      // 只消费确知带独立值的选项(少吃 → 值当命令名 → 未知 bin → 灰区 fail-closed)。
+      const valued = head === 'arch'
+        ? /^(?:-arch|-e|-d|-l)$/
+        : /^(?:-t|-w)$/;
+      let i = 1;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (!t.startsWith('-')) break;
+        if (valued.test(t)) { i += 2; continue; }
+        i++;
+      }
+      if (i >= toks.length) break; // 裸 `arch`/`caffeinate` 不跑命令 → 留壳
+      toks = toks.slice(i);
+    } else if (head === 'setsid' || head === 'unbuffer') {
       // setsid [-c] [-f] [-w] PROGRAM:选项在实际 program 之前,只删 setsid 会停在 `-f`/`--wait` 而看不到
       // 内层命令(codex 报 `setsid -f rm -rf /outside`)。这些选项都不带值 → 逐个跳过,`--` 终结选项。
+      // unbuffer 同形(`unbuffer [-p] PROGRAM`,唯一选项 -p 不带值)。
       let i = 1;
       while (i < toks.length) {
         if (toks[i] === '--') { i++; break; }
