@@ -3381,6 +3381,10 @@ export function MessageStream({
   // prepend 的滚动补偿照走 F-SYNC-2 协议:调用前快照 scrollHeight/scrollTop。
   // 即使当下窗口太窄导航条没出场,补到的历史对搜索/上滚阅读同样有用,
   // 且有轮数预算封顶,不做 eligible 门控。
+  // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
+  // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
+  // 取消旧会话待发的空闲回调、并按归零后的轮数预算为新会话重新评估
+  // (Copilot review)。
   const navRailBackfillRoundsRef = useRef(0);
   useEffect(() => {
     navRailBackfillRoundsRef.current = 0;
@@ -3412,7 +3416,7 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [sessionId, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);

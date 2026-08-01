@@ -117,10 +117,17 @@ export function MessageNavRail({
   // 容器左缘缓存,给高频 mousemove 的左缘唤醒判定用,免得每次事件都
   // getBoundingClientRect 强制布局读;measure(scroll/resize 都会触发)时刷新。
   const containerLeftRef = useRef(0);
-  // 测量回调经 rAF 异步触发,entries / 布局参数用 ref 透传拿最新值,
-  // 避免把大数组挂进依赖链让监听器反复重挂。
-  const entriesRef = useRef(entries);
-  entriesRef.current = entries;
+  // 测量回调经 rAF 异步触发,entries 派生的 id 列表 / 布局参数用 ref 透传
+  // 拿最新值,避免把大数组挂进依赖链让监听器反复重挂。id 列表按 entries
+  // 引用缓存,长会话滚动的高频测量不逐帧重新分配数组(Copilot review);
+  // 初值空占位,首次渲染即被下面的引用比较填充,不在每次 render 白算一遍。
+  const measureIdsRef = useRef<{ source: readonly NavRailEntry[] | null; ids: string[] }>({
+    source: null,
+    ids: [],
+  });
+  if (measureIdsRef.current.source !== entries) {
+    measureIdsRef.current = { source: entries, ids: entries.map((e) => e.id) };
+  }
   const contentMaxWidthRef = useRef(contentMaxWidth);
   contentMaxWidthRef.current = contentMaxWidth;
   const bottomOffsetRef = useRef(bottomOffset);
@@ -159,14 +166,22 @@ export function MessageNavRail({
     if (!root) return;
     const containerRect = root.getBoundingClientRect();
     containerLeftRef.current = containerRect.left;
-    setHasRoom(hasNavRailRoom(containerRect.width, contentMaxWidthRef.current));
-    setAvailHeight(
-      Math.max(
-        0,
-        containerRect.height - bottomOffsetRef.current - RAIL_TOP_PX - RAIL_BOTTOM_EXTRA_PX,
-      ),
+    const roomOk = hasNavRailRoom(containerRect.width, contentMaxWidthRef.current);
+    setHasRoom(roomOk);
+    const avail = Math.max(
+      0,
+      containerRect.height - bottomOffsetRef.current - RAIL_TOP_PX - RAIL_BOTTOM_EXTRA_PX,
     );
-    const ids = entriesRef.current.map((e) => e.id);
+    setAvailHeight(avail);
+    const ids = measureIdsRef.current.ids;
+    // 组件常驻挂载,不出场(条数不足 / 窄窗 / 矮视口)时跳过逐条锚点测量,
+    // 短对话滚动不背 querySelector + 布局读的开销;room/avail 已更新,条件
+    // 翻转时下一次测量自然恢复(Copilot review)。
+    if (ids.length < NAV_RAIL_MIN_ENTRIES || !roomOk || avail < NAV_RAIL_MIN_AVAIL_HEIGHT_PX) {
+      setActiveId((cur) => (cur === null ? cur : null));
+      setVisibleRange((cur) => (cur === null ? cur : null));
+      return;
+    }
     // 同一帧内 topAt 会被 active / range 两个判定反复调,缓存 DOM 测量。
     const topCache = new Map<number, number | null>();
     const topAt = (i: number): number | null => {
@@ -362,9 +377,9 @@ export function MessageNavRail({
   return (
     <nav
       aria-label={t('chat.messageNavRail.aria')}
-      // 容器不吃事件,只有刻度自身 pointer-events-auto(且仅醒着时),
-      // 不挡左缘留白里的文字选择;justify-center 让刻度组在(避开输入
-      // overlay 的)带内垂直居中。
+      // 容器不吃事件,只有刻度自身 pointer-events-auto(空闲减淡时也可点,
+      // 见 tickEvents 注释),不挡左缘留白里的文字选择;justify-center 让
+      // 刻度组在(避开输入 overlay 的)带内垂直居中。
       className={cn(
         'pointer-events-none absolute inset-y-0 left-2 z-30 flex w-6 flex-col items-stretch justify-center',
         'transition-opacity duration-200 ease-out',

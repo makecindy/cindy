@@ -48,8 +48,15 @@ export interface UserDisplayTextSource {
   hookSource?: { userText?: string } | null;
 }
 
-export function resolveUserDisplayText(source: UserDisplayTextSource): string {
-  const orcaCommunication = parseOrcaCommunicationContent(source.content);
+export function resolveUserDisplayText(
+  source: UserDisplayTextSource,
+  // 渲染热路径(UserMessage 本就要单独解析 Orca 结果画卡片)可把已解析值
+  // 传进来复用,免得每条 user 消息渲染都重复 JSON.parse(Copilot review);
+  // 省略时自行解析,导航条 / chip 侧的单参调用形态不变。
+  orcaCommunication: OrcaCommunicationContent | null = parseOrcaCommunicationContent(
+    source.content,
+  ),
+): string {
   const rawDisplayContent = orcaCommunication?.content ?? source.content;
   if (!source.hookSource) return rawDisplayContent;
   return (

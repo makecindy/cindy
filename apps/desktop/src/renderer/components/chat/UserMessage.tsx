@@ -760,8 +760,9 @@ export function UserMessage({
   // pen DLGJ9 / s2N4G). The text bubble itself only renders user-typed content.
   const orcaCommunication = parseOrcaCommunicationContent(content);
   // 显示文本推导(Orca JSON 解包 / hook 消息取 userText 或剥 <thread_context>)
-  // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts。
-  const displayContent = resolveUserDisplayText({ content, hookSource });
+  // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
+  // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
+  const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
   // ghost-summon-card:意识指令/提示的机器追加段从气泡正文尾部剥离,交给
   // GhostSummonCard 渲染(splitGhostDirective 与 expandGhostCommand 同模板,
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用
