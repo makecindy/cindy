@@ -1,3 +1,8 @@
+import type {
+  InterruptedTurnAutoResumeScope,
+  InterruptedTurnResumeDecision,
+} from '../maker-ipc/interruptedTurnAutoResume.js';
+
 /**
  * Schedule interrupted-turn recovery 的唯一状态 owner。
  *
@@ -12,6 +17,8 @@ export class SchedulerInterruptedTurnRecoveryState {
   private currentTurnHasProgress = false;
   private attemptAbortController: AbortController | null = null;
 
+  constructor(private readonly resumeScope: InterruptedTurnAutoResumeScope) {}
+
   get isPending(): boolean {
     return this.phase === 'backoff' || this.phase === 'dispatching';
   }
@@ -24,12 +31,22 @@ export class SchedulerInterruptedTurnRecoveryState {
   noteRunningStatus(): boolean {
     if (this.phase !== 'idle') return false;
     this.currentTurnHasProgress = false;
+    this.resumeScope.noteTurnStarted();
     return true;
   }
 
   noteProgress(): void {
     if (this.phase === 'settled') return;
     this.currentTurnHasProgress = true;
+    this.resumeScope.noteProgress();
+  }
+
+  onInterruptedTurn(erroredAt: number): InterruptedTurnResumeDecision {
+    return this.resumeScope.onInterruptedTurn(erroredAt);
+  }
+
+  noteResumeSendFailed(): void {
+    this.resumeScope.noteResumeSendFailed();
   }
 
   /**
@@ -68,6 +85,7 @@ export class SchedulerInterruptedTurnRecoveryState {
     this.phase = 'running';
     this.recoveryChainEstablished = true;
     this.currentTurnHasProgress = false;
+    this.resumeScope.noteTurnStarted();
     return true;
   }
 
@@ -95,15 +113,21 @@ export class SchedulerInterruptedTurnRecoveryState {
     this.phase = 'settled';
     this.recoveryChainEstablished = false;
     this.currentTurnHasProgress = false;
+    this.resumeScope.noteSessionReset();
+    this.resumeScope.dispose();
     return hadActiveRecovery;
   }
 
   settle(): void {
-    if (this.phase === 'settled') return;
+    if (this.phase === 'settled') {
+      this.resumeScope.dispose();
+      return;
+    }
     this.generation += 1;
     this.attemptAbortController = null;
     this.phase = 'settled';
     this.recoveryChainEstablished = false;
     this.currentTurnHasProgress = false;
+    this.resumeScope.dispose();
   }
 }

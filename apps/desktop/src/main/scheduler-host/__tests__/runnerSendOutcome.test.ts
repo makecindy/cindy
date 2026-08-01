@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
       {
         handler: (event: AgentEvent) => 'started' | 'duplicate' | null;
         onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void;
+        isDispatchReserved: () => boolean;
       }
     >
   >(),
@@ -284,13 +285,14 @@ describe('MakerScheduleRunner send outcome policy', () => {
         runId: string,
         handler: (event: AgentEvent) => 'started' | 'duplicate' | null,
         onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void,
+        isDispatchReserved: () => boolean,
       ) => {
         let registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
         if (!registrations) {
           registrations = new Map();
           mocks.schedulerRecoveryHandlers.set(sessionId, registrations);
         }
-        const registration = { handler, onReset };
+        const registration = { handler, onReset, isDispatchReserved };
         registrations.set(runId, registration);
         return () => {
           const current = mocks.schedulerRecoveryHandlers.get(sessionId);
@@ -681,8 +683,20 @@ describe('MakerScheduleRunner send outcome policy', () => {
 
     expect(h.send).toHaveBeenCalledTimes(1);
     expect(notifier.notify).not.toHaveBeenCalled();
+    expect(
+      mocks.schedulerRecoveryHandlers
+        .get('scheduler-session')
+        ?.get(ctx.runId)
+        ?.isDispatchReserved(),
+    ).toBe(true);
     await vi.advanceTimersByTimeAsync(4_000);
     await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+    expect(
+      mocks.schedulerRecoveryHandlers
+        .get('scheduler-session')
+        ?.get(ctx.runId)
+        ?.isDispatchReserved(),
+    ).toBe(false);
 
     expect(h.send.mock.calls[0]?.[0]).toEqual(
       expect.objectContaining({ content: expect.stringContaining(schedule.prompt) }),

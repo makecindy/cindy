@@ -565,6 +565,7 @@ import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
   claimSchedulerInterruptedTurnRecovery,
   configureSchedulerInterruptedTurnRecoveryLifecycle,
+  isSchedulerInterruptedTurnRecoverySessionReserved,
   resetSchedulerInterruptedTurnRecovery,
   supersedeSchedulerInterruptedTurnRecovery,
   type SchedulerInterruptedTurnRecoveryResetReason,
@@ -8115,6 +8116,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // maker-core 修复后含自动续跑 turn)。任一认为忙即入队,不再让 runner 盲发。
       const sess = maker.getSession(sessionId);
       return (
+        isSchedulerInterruptedTurnRecoverySessionReserved(sessionId) ||
         inputCoordinator.shouldQueueNewTurn(sessionId) ||
         isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess)
       );

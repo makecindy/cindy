@@ -122,6 +122,10 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('projects pending Schedule recovery into scheduler session busy state', () => {
+    expect(source).toContain('isSchedulerInterruptedTurnRecoverySessionReserved(sessionId) ||');
+  });
+
   it('fires git snapshots only from post-broadcast done events', () => {
     const wireSessionSource = extractWireSessionSource();
     const broadcastIndex = wireSessionSource.indexOf('broadcastToAllWindows(MAKER_PUSH.EVENT');

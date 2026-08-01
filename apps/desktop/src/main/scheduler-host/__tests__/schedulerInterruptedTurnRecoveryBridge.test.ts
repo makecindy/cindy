@@ -7,6 +7,7 @@ import {
   configureSchedulerInterruptedTurnRecoveryLifecycle,
   discardSchedulerInterruptedTurnSuppressedError,
   finalizeSchedulerInterruptedTurnSuppressedError,
+  isSchedulerInterruptedTurnRecoverySessionReserved,
   registerSchedulerInterruptedTurnRecovery,
   registerSchedulerInterruptedTurnResumeOutcome,
   resetSchedulerInterruptedTurnRecovery,
@@ -19,12 +20,13 @@ const errorEvent = {
   type: 'error',
   data: { message: 'Selected model is at capacity.', isTerminal: true },
 } as AgentEvent;
+const notReserved = () => false;
 
 describe('scheduler interrupted-turn recovery bridge', () => {
   it('lets the active Schedule waiter synchronously claim a terminal error', () => {
     const handler = vi.fn(() => 'started' as const);
     const dispose = registerSchedulerInterruptedTurnRecovery(
-      'bridge-claim', 'run-1', handler, vi.fn(),
+      'bridge-claim', 'run-1', handler, vi.fn(), notReserved,
     );
 
     expect(claimSchedulerInterruptedTurnRecovery('bridge-claim', errorEvent)).toEqual({
@@ -39,11 +41,11 @@ describe('scheduler interrupted-turn recovery bridge', () => {
 
   it('does not let a stale disposer remove a newer run for the same session', () => {
     const disposeOld = registerSchedulerInterruptedTurnRecovery(
-      'bridge-owner', 'same-run', () => null, vi.fn(),
+      'bridge-owner', 'same-run', () => null, vi.fn(), notReserved,
     );
     const next = vi.fn(() => 'started' as const);
     const disposeNext = registerSchedulerInterruptedTurnRecovery(
-      'bridge-owner', 'same-run', next, vi.fn(),
+      'bridge-owner', 'same-run', next, vi.fn(), notReserved,
     );
 
     disposeOld();
@@ -60,10 +62,10 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const first = vi.fn(() => 'started' as const);
     const second = vi.fn(() => 'duplicate' as const);
     const disposeFirst = registerSchedulerInterruptedTurnRecovery(
-      'bridge-concurrent', 'run-first', first, vi.fn(),
+      'bridge-concurrent', 'run-first', first, vi.fn(), notReserved,
     );
     const disposeSecond = registerSchedulerInterruptedTurnRecovery(
-      'bridge-concurrent', 'run-second', second, vi.fn(),
+      'bridge-concurrent', 'run-second', second, vi.fn(), notReserved,
     );
     const firstEvent = {
       ...errorEvent,
@@ -97,8 +99,12 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const secondReset = vi.fn();
     const first = vi.fn(() => 'started' as const);
     const second = vi.fn(() => 'started' as const);
-    registerSchedulerInterruptedTurnRecovery('bridge-reset', 'run-first', first, firstReset);
-    registerSchedulerInterruptedTurnRecovery('bridge-reset', 'run-second', second, secondReset);
+    registerSchedulerInterruptedTurnRecovery(
+      'bridge-reset', 'run-first', first, firstReset, notReserved,
+    );
+    registerSchedulerInterruptedTurnRecovery(
+      'bridge-reset', 'run-second', second, secondReset, notReserved,
+    );
 
     resetSchedulerInterruptedTurnRecovery('bridge-reset', 'session-reset');
 
@@ -113,7 +119,7 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     const onReset = vi.fn();
     const handler = vi.fn(() => 'started' as const);
     const dispose = registerSchedulerInterruptedTurnRecovery(
-      'bridge-intervention', 'run-1', handler, onReset,
+      'bridge-intervention', 'run-1', handler, onReset, notReserved,
     );
 
     supersedeSchedulerInterruptedTurnRecovery('bridge-intervention');
@@ -122,6 +128,26 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     expect(claimSchedulerInterruptedTurnRecovery('bridge-intervention', errorEvent)).toBeNull();
     expect(handler).not.toHaveBeenCalled();
     dispose();
+  });
+
+  it('reserves the session while any run is in recovery backoff or dispatch', () => {
+    let firstReserved = false;
+    let secondReserved = true;
+    const disposeFirst = registerSchedulerInterruptedTurnRecovery(
+      'bridge-reserved', 'run-first', () => null, vi.fn(), () => firstReserved,
+    );
+    const disposeSecond = registerSchedulerInterruptedTurnRecovery(
+      'bridge-reserved', 'run-second', () => null, vi.fn(), () => secondReserved,
+    );
+
+    expect(isSchedulerInterruptedTurnRecoverySessionReserved('bridge-reserved')).toBe(true);
+    secondReserved = false;
+    expect(isSchedulerInterruptedTurnRecoverySessionReserved('bridge-reserved')).toBe(false);
+    firstReserved = true;
+    expect(isSchedulerInterruptedTurnRecoverySessionReserved('bridge-reserved')).toBe(true);
+    disposeFirst();
+    expect(isSchedulerInterruptedTurnRecoverySessionReserved('bridge-reserved')).toBe(false);
+    disposeSecond();
   });
 
   it('forwards persistence lifecycle events when the desktop host is installed', () => {

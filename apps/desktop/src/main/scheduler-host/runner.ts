@@ -1145,7 +1145,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           // 不会走到这里,因此不会覆盖/带走仍在执行的活跃 run 的映射(scheduler.ts P2)。
           ctx.onTurnActive?.(session.id);
           noteSilentStopUserSend(session.id);
-          this.interruptedTurnAutoResumeGuard.noteUserSend(session.id);
           try {
             await createMessage(session.id, {
               clientId: randomUUID(),
@@ -1581,7 +1580,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
             origin,
             signal: ctx.signal,
           });
-          this.interruptedTurnAutoResumeGuard.noteUserSend(sessionId);
         }
         // 与直发路径 onAccepted 的簿记对齐(落库/基线钩子除外,见方法头注释)。
         ctx.onTurnActive?.(sessionId);
@@ -2050,7 +2048,12 @@ export class MakerScheduleRunner implements ScheduleRunner {
       let bgFallbackTimer: NodeJS.Timeout | undefined;
       let pendingSettleUnsub: (() => void) | undefined;
       let resumeTimer: NodeJS.Timeout | undefined;
-      const recovery = new SchedulerInterruptedTurnRecoveryState();
+      const recovery = new SchedulerInterruptedTurnRecoveryState(
+        this.interruptedTurnAutoResumeGuard.createScope(
+          JSON.stringify([session.id, options.origin.runId]),
+          session.id,
+        ),
+      );
       let settled = false;
       let unregisterInterruptedTurnRecovery: (() => void) | undefined;
       const clearBgFallbackTimer = (): void => {
@@ -2090,7 +2093,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         reject(err);
       };
       const cancelInterruptedRecovery = (message: string): void => {
-        this.interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
         const hadActiveRecovery = recovery.cancel();
         clearResumeTimer();
         if (hadActiveRecovery) {
@@ -2099,7 +2101,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
         fail(new Error(message));
       };
       const onAbort = (): void => {
-        this.interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
         // 普通在途 turn 维持既有语义：外层 abort listener 负责 session.abort，最终
         // done/error 决定收口（卡死守卫也依赖这条路径）。只有退避窗口里没有 vendor
         // turn 可供 abort 时，才由等待器自己撤定时器并立即 settle。
@@ -2135,7 +2136,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           clearBgFallbackTimer();
           runningBgTasks.clear();
           waitingForBgTasks = false;
-          this.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
         };
         try {
           const sendResult = await session.send(
@@ -2208,7 +2208,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
           }
           if (!outcome.dispatched) {
             if (baselineStarted) this.deps.onUndispatchedUserTurn?.(session.id);
-            this.interruptedTurnAutoResumeGuard.noteResumeSendFailed(session.id);
+            recovery.noteResumeSendFailed();
             finalizeSchedulerInterruptedTurnSuppressedError(session.id, options.origin.runId);
             fail(new Error(`interrupted-turn auto-resume was not dispatched (${outcome.reason})`));
             return;
@@ -2224,7 +2224,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         } catch (err) {
           if (baselineStarted) this.deps.onUndispatchedUserTurn?.(session.id);
           if (!isCurrentRecovery()) return;
-          this.interruptedTurnAutoResumeGuard.noteResumeSendFailed(session.id);
+          recovery.noteResumeSendFailed();
           // 已落库的活动行由 finalize 结算 failed；尚未落库的登记已在 onAccepted
           // catch 里 release。两种情况都由同一出口补回原错误。
           finalizeSchedulerInterruptedTurnSuppressedError(session.id, options.origin.runId);
@@ -2244,10 +2244,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         const error = extractErr(ev.data);
         const signals = interruptedTurnErrorSignals(ev.data, error);
         if (!isInterruptedTurnError(signals)) return null;
-        const decision = this.interruptedTurnAutoResumeGuard.onInterruptedTurn(
-          session.id,
-          Date.now(),
-        );
+        const decision = recovery.onInterruptedTurn(Date.now());
         if (decision.action !== 'resume') return null;
         settleSchedulerInterruptedTurnResumeOutcome(
           session.id,
@@ -2295,6 +2292,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
                 : 'schedule session reset during interrupted-turn recovery',
           );
         },
+        () => recovery.isPending,
       );
       const armBgFallbackTimer = (): void => {
         clearBgFallbackTimer();
@@ -2318,13 +2316,10 @@ export class MakerScheduleRunner implements ScheduleRunner {
         options.onProgress?.();
         if (ev.type === 'status') {
           const isRunning = (ev.data as { isRunning?: unknown } | null | undefined)?.isRunning;
-          if (isRunning === true && recovery.noteRunningStatus()) {
-            this.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
-          }
+          if (isRunning === true) recovery.noteRunningStatus();
         }
         if (isSubstantiveProgressEvent(ev)) {
           recovery.noteProgress();
-          this.interruptedTurnAutoResumeGuard.noteProgress(session.id);
           settleSchedulerInterruptedTurnResumeOutcome(
             session.id,
             options.origin.runId,

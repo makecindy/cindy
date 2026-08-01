@@ -17,6 +17,7 @@ export type SchedulerInterruptedTurnRecoveryResetReason =
 interface RecoveryRegistration {
   handler: RecoveryHandler;
   onReset: (reason: SchedulerInterruptedTurnRecoveryResetReason) => void;
+  isDispatchReserved: () => boolean;
 }
 
 interface RecoveryLifecycle {
@@ -45,13 +46,14 @@ export function registerSchedulerInterruptedTurnRecovery(
   runId: string,
   handler: RecoveryHandler,
   onReset: (reason: SchedulerInterruptedTurnRecoveryResetReason) => void,
+  isDispatchReserved: () => boolean,
 ): () => void {
   let registrations = recoveryHandlers.get(sessionId);
   if (!registrations) {
     registrations = new Map();
     recoveryHandlers.set(sessionId, registrations);
   }
-  const registration = { handler, onReset };
+  const registration = { handler, onReset, isDispatchReserved };
   registrations.set(runId, registration);
   return () => {
     const current = recoveryHandlers.get(sessionId);
@@ -59,6 +61,13 @@ export function registerSchedulerInterruptedTurnRecovery(
     current.delete(runId);
     if (current.size === 0) recoveryHandlers.delete(sessionId);
   };
+}
+
+/** Backoff/dispatching recovery owns the session even before maker reports a running turn. */
+export function isSchedulerInterruptedTurnRecoverySessionReserved(sessionId: string): boolean {
+  const registrations = recoveryHandlers.get(sessionId);
+  if (!registrations) return false;
+  return [...registrations.values()].some((registration) => registration.isDispatchReserved());
 }
 
 /** Called synchronously by register.ts before it broadcasts or persists a terminal error. */

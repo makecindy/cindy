@@ -233,8 +233,6 @@ interface GuardLogger {
 interface SessionGuardState {
   /** 本轮连续重连次数（模型有产出 / 人工介入即归零）。 */
   consecutiveAttempts: number;
-  /** 会话累计自动重连次数（只增，仅展示）。 */
-  sessionTotalResumes: number;
   lastTurnStartAt: number;
   lastUserSendAt: number;
   pendingResume: boolean;
@@ -252,6 +250,20 @@ export interface InterruptedTurnAutoResumeGuardDeps {
 }
 
 /**
+ * 一条恢复 owner 独占的额度作用域。Schedule 可能在同一 session 上同时等待多个 run，
+ * 所以 runner 只能持有这个无 key API，不能在每次回调里重新拿 sessionId 查共享状态。
+ */
+export interface InterruptedTurnAutoResumeScope {
+  noteProgress(): void;
+  noteUserSend(): void;
+  noteTurnStarted(): void;
+  noteResumeSendFailed(): void;
+  noteSessionReset(): void;
+  onInterruptedTurn(erroredAt: number): InterruptedTurnResumeDecision;
+  dispose(): void;
+}
+
+/**
  * 中断自动续跑的决策器。
  *
  * 与 `SilentStopAutoResumeGuard` 保持相似形状（pendingResume 去重、陈旧保护、
@@ -262,6 +274,8 @@ export interface InterruptedTurnAutoResumeGuardDeps {
  */
 export class InterruptedTurnAutoResumeGuard {
   private readonly sessions = new Map<string, SessionGuardState>();
+  /** 展示用累计数仍按用户会话共享；失败额度则由 sessions 中的 owner key 隔离。 */
+  private readonly resumeTotals = new Map<string, number>();
 
   constructor(private readonly deps: InterruptedTurnAutoResumeGuardDeps) {}
 
@@ -274,7 +288,6 @@ export class InterruptedTurnAutoResumeGuard {
     if (!s) {
       s = {
         consecutiveAttempts: 0,
-        sessionTotalResumes: 0,
         lastTurnStartAt: 0,
         lastUserSendAt: 0,
         pendingResume: false,
@@ -283,6 +296,42 @@ export class InterruptedTurnAutoResumeGuard {
       this.sessions.set(sessionId, s);
     }
     return s;
+  }
+
+  /**
+   * 为一个恢复 owner 建立稳定作用域。`totalSessionId` 只影响 UI 展示的会话累计数，
+   * 不参与 pending / 连续失败 / superseded 判定。
+   */
+  createScope(ownerId: string, totalSessionId: string = ownerId): InterruptedTurnAutoResumeScope {
+    const ownedState = this.state(ownerId);
+    let disposed = false;
+    const isCurrent = (): boolean => !disposed && this.sessions.get(ownerId) === ownedState;
+    return {
+      noteProgress: () => {
+        if (isCurrent()) this.noteProgress(ownerId);
+      },
+      noteUserSend: () => {
+        if (isCurrent()) this.noteUserSend(ownerId);
+      },
+      noteTurnStarted: () => {
+        if (isCurrent()) this.noteTurnStarted(ownerId);
+      },
+      noteResumeSendFailed: () => {
+        if (isCurrent()) this.noteResumeSendFailed(ownerId);
+      },
+      noteSessionReset: () => {
+        if (isCurrent()) this.noteSessionReset(ownerId);
+      },
+      onInterruptedTurn: (erroredAt) =>
+        isCurrent()
+          ? this.onInterruptedTurn(ownerId, erroredAt, totalSessionId)
+          : { action: 'skip', why: 'superseded' },
+      dispose: () => {
+        if (disposed) return;
+        disposed = true;
+        if (this.sessions.get(ownerId) === ownedState) this.sessions.delete(ownerId);
+      },
+    };
   }
 
   /**
@@ -348,7 +397,11 @@ export class InterruptedTurnAutoResumeGuard {
    * 返回 resume 时已内部累加计数并置 pendingResume，调用方负责在 `delayMs` 后实际
    * 补发，并在补发前**再复核一次**会话状态（退避窗口内用户介入的概率不低）。
    */
-  onInterruptedTurn(sessionId: string, erroredAt: number): InterruptedTurnResumeDecision {
+  onInterruptedTurn(
+    sessionId: string,
+    erroredAt: number,
+    totalSessionId: string = sessionId,
+  ): InterruptedTurnResumeDecision {
     const s = this.state(sessionId);
     if (!this.deps.isEnabled()) {
       this.deps.log.debug('interrupted-turn auto-resume disabled by kill switch', { sessionId });
@@ -378,7 +431,8 @@ export class InterruptedTurnAutoResumeGuard {
       return { action: 'exhausted', consecutiveAttempts: s.consecutiveAttempts };
     }
     s.consecutiveAttempts += 1;
-    s.sessionTotalResumes += 1;
+    const sessionTotalResumes = (this.resumeTotals.get(totalSessionId) ?? 0) + 1;
+    this.resumeTotals.set(totalSessionId, sessionTotalResumes);
     s.pendingResume = true;
     const attempt = s.consecutiveAttempts;
     const delayMs = interruptedTurnResumeDelayMs(attempt, this.deps.random);
@@ -386,14 +440,14 @@ export class InterruptedTurnAutoResumeGuard {
       sessionId,
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
-      sessionTotal: s.sessionTotalResumes,
+      sessionTotal: sessionTotalResumes,
       delayMs,
     });
     return {
       action: 'resume',
       attempt,
       maxAttempts: INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS,
-      sessionTotal: s.sessionTotalResumes,
+      sessionTotal: sessionTotalResumes,
       delayMs,
     };
   }
