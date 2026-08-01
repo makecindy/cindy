@@ -1673,3 +1673,37 @@ describe('字符类穿越 / 重定向拼接引号 / prlimit 包装器(第三十�
     expect(classifyShellCommand('prlimit --nofile=1024 ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('SSRF/云 metadata network 红线 / setarch 包装器(第三十四批评审)', () => {
+  it('抓取云 metadata / localhost / 内网 = 确定性必问,不交灰区', () => {
+    for (const target of [
+      'http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'http://metadata.google.internal/computeMetadata/v1/',
+      'http://localhost:8080/admin',
+      'http://127.0.0.1/x',
+      'http://10.0.0.5/internal',
+    ]) {
+      expect(reviewAction({ kind: 'network', operation: 'WebFetch', target }, roots), target)
+        .toBe('prompt-each-time');
+    }
+    // 反例:公网抓取 / WebSearch 查询词仍走灰区。
+    expect(reviewAction({ kind: 'network', operation: 'WebFetch', target: 'https://example.com/x' }, roots)).toBe('prompt');
+    expect(reviewAction({ kind: 'network', operation: 'WebSearch', target: 'current release notes' }, roots)).toBe('prompt');
+    // 无 target 的 network 动作仍灰区(不误升)。
+    expect(reviewAction({ kind: 'network' }, roots)).toBe('prompt');
+  });
+
+  it('setarch 执行的内层命令被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'setarch x86_64 rm -rf /outside',
+      'setarch uname26 rm -rf /outside',
+      'setarch -R rm -rf /outside',        // 无 arch、仅选项
+      'setarch x86_64 -R rm -rf /outside', // arch + 选项
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:setarch 跑只读命令 → 放行(arch 或直接程序两种形态)。
+    expect(classifyShellCommand('setarch x86_64 ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('setarch ls', roots)).toBe('auto-approve');
+  });
+});

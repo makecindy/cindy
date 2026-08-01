@@ -113,6 +113,10 @@ export function reviewAction(
       return shellVerdict;
     }
     case 'network':
+      // SSRF / 云 metadata(169.254.169.254)/ localhost / 内网抓取会把实例临时凭证或内网数据读进模型上下文,
+      // 不能交灰区 reviewer 静默 allow(codex 报 WebFetch 打 metadata)→ 复用 shell 分类器同款 isInternalFetchTarget,
+      // 命中即确定性必问。公网 target(及 WebSearch 的查询词)仍走灰区。
+      if (action.target && isInternalFetchTarget(action.target)) return 'prompt-each-time';
       return 'prompt';
     case 'other':
     default:
@@ -143,7 +147,7 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
-  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset', 'prlimit',
+  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset', 'prlimit', 'setarch',
 ]);
 
 /**
@@ -635,8 +639,24 @@ function unwrapCommand(
       let i = 1;
       while (i < toks.length && toks[i].startsWith('-')) i++;
       toks = toks.slice(i);
+    } else if (head === 'setarch') {
+      // setarch [arch] [options] PROGRAM(codex 报 `setarch x86_64 rm -rf /outside`)。首个非选项若形似已知
+      // 架构名则作 arch 跳过(否则它就是 PROGRAM,不误跳);其余选项跳过后即真实命令。--list 无 PROGRAM。
+      let i = 1;
+      let archConsumed = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!archConsumed
+          && /^(?:x86_64|i[3456]86|ia64|s390x?|ppc(?:64(?:le)?)?|arm(?:v[0-9]+l?)?|aarch64|mips\w*|sparc\w*|riscv\w*|uname26|linux(?:32|64))$/i.test(t)) {
+          archConsumed = true; i++; continue;
+        }
+        break; // PROGRAM
+      }
+      toks = toks.slice(i);
     } else {
-      // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
+      // nohup / setsid / builtin 等无自身参数的包裹器:直接跳过包裹器本身。
       toks = toks.slice(1);
     }
   }
