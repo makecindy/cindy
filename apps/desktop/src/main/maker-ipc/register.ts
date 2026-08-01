@@ -3412,13 +3412,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             await recordUsageOnly();
             return;
           }
-          // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
-          // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
-          // 避免把订阅 SDK 自报 cost 误记进计费)。
-          if (isSubscriptionDirectModel(resolvedModel)) {
-            await recordUsageOnly();
-            return;
-          }
           const providerId = getSessionProvider(session.id);
           const observedRoute =
             providerId == null ? readClaudeSessionRoute(session.id) : null;
@@ -3435,6 +3428,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               ? 'subscription'
               : explicitProviderRoute
                 ?? (observedRoute === 'gateway' ? 'xd-gateway' : 'unknown');
+          // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
+          // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
+          // 避免把订阅 SDK 自报 cost 误记进计费)。但显式 provider-api 是权威路由:
+          // 自定义 API 供应商可能供应带订阅前缀的模型 id,不能按前缀把真实费用判掉。
+          if (route !== 'provider-api' && isSubscriptionDirectModel(resolvedModel)) {
+            await recordUsageOnly();
+            return;
+          }
           if (route === 'subscription' || route === 'xd-gateway') {
             await recordUsageOnly();
             return;
