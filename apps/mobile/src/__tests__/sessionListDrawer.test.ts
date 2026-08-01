@@ -33,6 +33,20 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('reduceMotion === false');
   });
 
+  it('drives all motion through the shared motion tokens (no hardcoded durations)', () => {
+    const text = source();
+    // 动效全走 motionDuration/motionEasing 档位(review #1328):入场 enter+out、
+    // 退场 exit+in、回弹 fast+move、spinner 走 spinnerCycle 语义例外档。
+    expect(text).toContain('duration: motionDuration.enter');
+    expect(text).toContain('duration: motionDuration.exit');
+    expect(text).toContain('duration: motionDuration.fast');
+    expect(text).toContain('duration: motionDuration.spinnerCycle');
+    expect(text).toContain('Easing.bezier(...motionEasing.out)');
+    expect(text).toContain('Easing.bezier(...motionEasing.in)');
+    expect(text).toContain('Easing.bezier(...motionEasing.move)');
+    expect(text).not.toMatch(/duration:\s*\d/);
+  });
+
   it('closes on Android hardware back and folds drag offset into the timing animation', () => {
     const text = source();
     expect(text).toContain("BackHandler.addEventListener('hardwareBackPress', () => {");

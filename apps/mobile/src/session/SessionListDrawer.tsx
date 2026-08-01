@@ -65,14 +65,13 @@ import {
   iconSize,
   iconStroke,
   lineHeight,
+  motionDuration,
+  motionEasing,
   radius,
   spacing,
   typeScale,
 } from '@/theme/tokens';
 
-const DRAWER_IN_MS = 240;
-const DRAWER_OUT_MS = 200;
-const DRAWER_DRAG_SETTLE_MS = 160;
 /** 拖过面板宽度的 1/3 或甩速超阈即判定关闭(常见抽屉手感)。 */
 const DRAWER_CLOSE_DISTANCE_RATIO = 1 / 3;
 const DRAWER_CLOSE_VELOCITY = -800;
@@ -136,7 +135,7 @@ export function SessionListDrawer({
     const timer = setTimeout(() => {
       const node = findNodeHandle(newSessionButtonRef.current);
       if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
-    }, DRAWER_IN_MS);
+    }, motionDuration.enter);
     return () => clearTimeout(timer);
   }, [open]);
 
@@ -149,8 +148,9 @@ export function SessionListDrawer({
       const effective = Math.max(0, Math.min(1, progress.value + dragX.value / panelWidth));
       progress.value = effective;
       dragX.value = 0;
+      // 重浮层入场档(motionDuration.enter + out 曲线),与 DESIGN.md §14.4 双端同构。
       progress.value = animate
-        ? withTiming(1, { duration: DRAWER_IN_MS, easing: Easing.out(Easing.cubic) })
+        ? withTiming(1, { duration: motionDuration.enter, easing: Easing.bezier(...motionEasing.out) })
         : 1;
       return;
     }
@@ -165,7 +165,8 @@ export function SessionListDrawer({
     }
     progress.value = withTiming(
       0,
-      { duration: DRAWER_OUT_MS, easing: Easing.in(Easing.cubic) },
+      // 重浮层退场档(motionDuration.exit + in 曲线)。
+      { duration: motionDuration.exit, easing: Easing.bezier(...motionEasing.in) },
       (finished) => {
         'worklet';
         if (finished) runOnJS(finishClose)();
@@ -205,7 +206,11 @@ export function SessionListDrawer({
           if (shouldClose) {
             runOnJS(closeFromGesture)();
           } else {
-            dragX.value = withTiming(0, { duration: DRAWER_DRAG_SETTLE_MS });
+            // 未过阈回弹:位置插值档(fast + move 曲线)。
+            dragX.value = withTiming(0, {
+              duration: motionDuration.fast,
+              easing: Easing.bezier(...motionEasing.move),
+            });
           }
         }),
     [closeFromGesture, dragX, panelWidth],
@@ -493,7 +498,8 @@ function DrawerRowSpinner({ sessionId }: { sessionId: string }) {
     if (!animate) return;
     turn.value = 0;
     turn.value = withRepeat(
-      withTiming(1, { duration: 1000, easing: Easing.linear }),
+      // spinnerCycle 是功能性 loading 的语义循环档(§14.4 窄例外),匀速不走缓动曲线。
+      withTiming(1, { duration: motionDuration.spinnerCycle, easing: Easing.linear }),
       -1,
       false,
     );
