@@ -56,6 +56,21 @@ vi.mock('../modelPricing', () => ({
           outputPerMtok: 8,
         }
       : undefined),
+  getCodexProviderSubscriptionValuePrice: (
+    providerId: string,
+    model: string,
+  ) =>
+    providerId === 'anthropic' && model === 'claude-sonnet-5'
+      ? {
+          providerId: 'anthropic',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        }
+      : undefined,
   getSubscriptionDirectValuePrice: (model: string) =>
     model === 'xai/grok-4.3'
       ? {

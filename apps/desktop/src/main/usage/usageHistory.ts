@@ -25,6 +25,7 @@ import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
   getClaudeSubscriptionValuePrice,
+  getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getSubscriptionDirectValuePrice,
@@ -349,8 +350,10 @@ export function claudeSubscriptionUsageModelKey(model: string): string {
 /**
  * 订阅行的估算价选取,按 agent 分流:
  *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
+ *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
+ *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
  *   - claude-code → Anthropic registry 参考价
- * 两级都 miss → undefined(该行只显示 token,不臆造金额)。
+ * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex',
@@ -362,7 +365,8 @@ function getSubscriptionValuePriceFor(
   if (agentKind === 'codex') {
     return (
       getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
-      getCodexSubscriptionValuePrice(model, pricing, at, overrides)
+      getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
+      getCodexProviderSubscriptionValuePrice('anthropic', model, pricing, at, overrides)
     );
   }
   return getClaudeSubscriptionValuePrice(model, pricing, at, overrides);

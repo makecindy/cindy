@@ -444,35 +444,52 @@ export async function getModelPricingForModel(
   return pricing;
 }
 
-export function getCodexSubscriptionValuePrice(
+/**
+ * Codex 订阅轮的估算价,按显式来源 provider 取该 provider 的 registry 参考价
+ * (含用户价格覆盖)。openai 之外的订阅来源(如内置 anthropic 的 Claude.ai 订阅)
+ * 也走各自的日期定价路由,不能一律套 OpenAI 价表。
+ */
+export function getCodexProviderSubscriptionValuePrice(
+  providerId: string,
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
   at?: string | Date,
   overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  const effective = getModelPriceQuote(pricing, 'openai', modelId, 'codex');
+  const effective = getModelPriceQuote(pricing, providerId, modelId, 'codex');
   if (effective?.source === 'user-override') {
     if (at === undefined) return effective;
     // 目录里烘焙的 user-override 是按当前日期合并的;历史窗口跨过参考价生效边界时,
     // 未覆盖字段必须按 at 时点的参考价重新合并,不能直接回用当前合并结果。
     return (
       mergeStoredModelPriceOverride(
-        { providerId: 'openai', agent: 'codex', modelId: effective.modelId },
-        providerReferencePriceQuote('openai', effective.modelId, getActiveCatalog().modelRegistry, {
-          agent: 'codex',
-          at,
-        }),
+        { providerId, agent: 'codex', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          providerId,
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'codex', at },
+        ),
         overrides,
       ) ?? effective
     );
   }
   const reference = providerReferencePriceQuote(
-    'openai',
+    providerId,
     modelId,
     getActiveCatalog().modelRegistry,
     { agent: 'codex', at },
   );
   return reference ?? (at === undefined ? effective : undefined);
+}
+
+export function getCodexSubscriptionValuePrice(
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  return getCodexProviderSubscriptionValuePrice('openai', modelId, pricing, at, overrides);
 }
 
 export function getClaudeSubscriptionValuePrice(

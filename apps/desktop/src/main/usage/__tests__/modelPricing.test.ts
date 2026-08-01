@@ -71,6 +71,7 @@ import {
   __resetModelPricingCacheForTesting,
   clearGatewayModelPricing,
   getClaudeSubscriptionValuePrice,
+  getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getModelPricingForModel,
@@ -567,6 +568,15 @@ describe('reference pricing helpers', () => {
       outputPerMtok: 27,
     });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
+  });
+
+  it('prices Codex Anthropic subscription rounds through the anthropic date route', () => {
+    expect(
+      getCodexProviderSubscriptionValuePrice('anthropic', 'claude-sonnet-5', null, '2026-08-31'),
+    ).toMatchObject({ providerId: 'anthropic', inputPerMtok: 2, outputPerMtok: 10 });
+    expect(
+      getCodexProviderSubscriptionValuePrice('anthropic', 'claude-sonnet-5', null, '2026-09-01'),
+    ).toMatchObject({ inputPerMtok: 3, outputPerMtok: 15 });
   });
 
   it('re-merges sparse price overrides against the reference effective at the queried date', () => {

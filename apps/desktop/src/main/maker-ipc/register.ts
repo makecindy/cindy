@@ -295,7 +295,7 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { broadcastEffectiveModelPricing, getCodexSubscriptionValuePrice, getGatewayAccountCurrency, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { broadcastEffectiveModelPricing, getCodexProviderSubscriptionValuePrice, getGatewayAccountCurrency, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
 import { clearModelPriceOverride, stageProviderModelPriceOverridesClear, readModelPriceOverrideView, setModelPriceOverride } from '../usage/modelPriceOverrideStore.js';
 import { computeModelUsageDeltas, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey } from '../usage/usageHistory.js';
@@ -3530,8 +3530,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               isCodexBudgetRoute ||
               (sessionProvider === 'xd' && hasGatewayKey)
             );
+          // 显式来源的订阅判定以目录 access.kind 为权威(内置 anthropic 的 Claude.ai
+          // 订阅同样是订阅价值,不能只认 OpenAI/xAI);目录缺 access 的旧快照仍靠下面
+          // 的 openai oauth 分支兜底。
+          const sessionProviderAccessKind = sessionProvider
+            ? getActiveCatalog().providers.find((provider) => provider.id === sessionProvider)
+                ?.access?.kind
+            : null;
+          const isCodexSubscriptionAccessRoute =
+            !isRemoteCodexSession &&
+            sessionProvider != null &&
+            sessionProvider !== 'xd' &&
+            sessionProviderAccessKind === 'subscription' &&
+            !hasEffectiveGatewayRoute;
           const isSubscriptionValue = isRemoteCodexSession ||
             isCodexXaiProviderRoute ||
+            isCodexSubscriptionAccessRoute ||
             (
               isCodexOpenAiProviderRoute
               && codexAuthInjection === 'oauth-bearer'
@@ -3586,10 +3600,20 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 : usesReferencePriceEstimate
                   ? await getModelPricing()
                   : null;
+            // 订阅估值按显式来源取各自的日期定价路由:内置 anthropic 走 Anthropic
+            // registry 参考价(含 codex 侧价格覆盖),默认/openai 保持 OpenAI 价表。
+            const subscriptionValueProviderId =
+              isCodexSubscriptionAccessRoute && sessionProvider != null
+                ? sessionProvider
+                : 'openai';
             const price = isCodexXaiProviderRoute
               ? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)
               : isSubscriptionValue
-                ? getCodexSubscriptionValuePrice(pricingModel, pricing)
+                ? getCodexProviderSubscriptionValuePrice(
+                    subscriptionValueProviderId,
+                    pricingModel,
+                    pricing,
+                  )
                 : hasEffectiveGatewayRoute
                   ? getModelPriceQuote(pricing, 'xd', pricingModel)
                   : usesReferencePriceEstimate
