@@ -2560,14 +2560,16 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Workdir mappings",
+          "workspacesCardTitle": "Working directory mappings",
           "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
           "workspacesBoundCount_one": "{{count}} local working directory bound",
           "workspacesBoundCount_other": "{{count}} local working directories bound",
           "aliasPlaceholder": "Alias, e.g. my-server",
           "addWorkspace": "Add working directory",
           "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)"
+          "changeDir": "Click to change directory (alias and preferences kept)",
+          "defaultWorkspaceChip": "Default: {{name}}",
+          "defaultWorkspaceAria": "Choose the default working directory for tasks dispatched from X"
         },
         "binding": {
           "copyLink": "Copy link",

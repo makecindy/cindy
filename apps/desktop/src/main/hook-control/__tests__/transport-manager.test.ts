@@ -66,6 +66,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
     lifecycleAnnouncementOverride: initial.lifecycleAnnouncementOverride ?? null,
     telegramBindingCache: initial.telegramBindingCache ?? null,
     xBindingCache: initial.xBindingCache ?? null,
+    xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
   };
   return {
     get: () => ({
@@ -109,6 +110,10 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
         provider === 'x'
           ? { ...state, xBindingCache: entry ? { ...entry } : null }
           : { ...state, telegramBindingCache: entry ? { ...entry } : null };
+      return state;
+    },
+    setXDefaultWorkspace(alias) {
+      state = { ...state, xDefaultWorkspace: alias };
       return state;
     },
   };

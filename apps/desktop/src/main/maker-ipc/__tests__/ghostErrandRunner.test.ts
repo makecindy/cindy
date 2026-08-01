@@ -15,11 +15,19 @@ import {
 import type { AgentEvent } from '@cindy/maker-core';
 
 /** 最小可观察会话替身:测试手动放事件。 */
+type FakeStatus = 'active' | 'aborting' | 'closed' | 'error';
+
 function fakeSession(id: string): {
-  session: { id: string; onEvent(listener: (ev: AgentEvent) => void): () => void };
+  session: {
+    id: string;
+    onEvent(listener: (ev: AgentEvent) => void): () => void;
+    onStatusChange(listener: (status: FakeStatus) => void): () => void;
+  };
   emit: (ev: AgentEvent) => void;
+  setStatus: (status: FakeStatus) => void;
 } {
   const listeners = new Set<(ev: AgentEvent) => void>();
+  const statusListeners = new Set<(status: FakeStatus) => void>();
   return {
     session: {
       id,
@@ -27,8 +35,13 @@ function fakeSession(id: string): {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      onStatusChange(listener) {
+        statusListeners.add(listener);
+        return () => statusListeners.delete(listener);
+      },
     },
     emit: (ev) => listeners.forEach((l) => l(ev)),
+    setStatus: (status) => statusListeners.forEach((l) => l(status)),
   };
 }
 

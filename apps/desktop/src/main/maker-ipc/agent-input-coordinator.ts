@@ -150,6 +150,17 @@ export interface AgentInputCoordinatorDeps {
    * 判定走 DB(代码确定性,规则 9);未注入时一律按零产出处理(向后兼容)。
    */
   hasAssistantProgressAfter?: (sessionId: string, userClientId: string) => Promise<boolean>;
+  /**
+   * retry-supersede:零产出重试的克隆行(supersedesUserClientId 非空)落库且 vendor
+   * 派发成功后,把被取代的旧 user 行与其后的 role='error' 行软删(置 rewind_at +
+   * 广播),让历史里只留重发的那一条。在派发已不可逆的边界 await 调用(与
+   * onDispatchedUserTurn 同侧):派发前取消时旧 error 行还是用户唯一的重试入口,
+   * 不能先藏。失败只吞错落日志,退回"显示两条"的旧观感;未注入 = 保持旧行为。
+   */
+  supersedeRetriedUserTurn?: (
+    sessionId: string,
+    args: { supersededUserClientId: string; retryUserClientId: string },
+  ) => Promise<unknown>;
   getLastAssistantTranscriptUuid?: (sessionId: string) => string | undefined;
   /**
    * 一个**留下了 active-turn recovery 入口**的 terminal error 刚落地。host 据此决定
@@ -1587,6 +1598,10 @@ export class AgentInputCoordinator {
           // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
           files: undefined,
           mentions: undefined,
+          // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
+          // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
+          // 一并误藏(窗口从更早的行一直铺到本条)。
+          supersedesUserClientId: undefined,
           // 合成续跑指令显式普通执行:原消息若带 planMode=true,原样克隆会把隐藏
           // 指令路由进计划模式而不是立刻续跑(review P2)。与 sendUiTrigger 的
           // 合成 UI 动作同语义 —— planMode 强制 false。
@@ -1619,6 +1634,11 @@ export class AgentInputCoordinator {
         item = {
           ...recovery.item,
           clientId,
+          // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
+          // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
+          // 显式覆盖而非依赖展开继承:recovery.item 可能带着上一轮已消费的旧值
+          // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
+          supersedesUserClientId: recovery.item.clientId,
           chatMessage: {
             ...recovery.item.chatMessage,
             clientId,
@@ -2417,6 +2437,31 @@ export class AgentInputCoordinator {
           clientId: head.clientId,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+      // retry-supersede:克隆重发行既落库又真正派发出去了,被取代的旧 user 行从此
+      // 冗余,软删它(连同其后的 error 行)。落在这里而不是 onPersisted 里:落库到
+      // 派发之间还夹着 beforeDispatch / onAccepted 两个 hook,期间停止或关闭会话会走
+      // cancelled-before-dispatch —— 那时若已软删,历史里只剩一条从未送达模型的克隆
+      // 消息,原失败的 error 行连同它上面的「重试」入口一起消失(与上面 durable-ack
+      // 同一个「派发已不可逆才动持久化状态」的边界理由)。
+      // await 而非 fire-and-forget:软删先落库再继续推进本 turn,把"克隆已落库、旧行
+      // 还在"的窗口压到最小。软删失败(或崩在这个窗口里)只退回"显示两条"的旧观感,
+      // 文本已经保存在克隆行里,用户的消息不会丢。
+      if (head.supersedesUserClientId) {
+        const supersededUserClientId = head.supersedesUserClientId;
+        try {
+          await this.deps.supersedeRetriedUserTurn?.(sessionId, {
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+          });
+        } catch (err) {
+          log.warn('supersedeRetriedUserTurn failed', {
+            sessionId,
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       if (active.pendingTerminalEvent) {

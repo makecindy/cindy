@@ -3263,6 +3263,10 @@ interface ElectronAPI {
     setWorkspaces: (
       workspaces: Record<string, string>,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    /** X 派发任务的默认工作目录别名(null = 内置「对话」伪目录)。 */
+    setXDefaultWorkspace: (
+      alias: string | null,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
     bindRevoke: () => Promise<{ ok: true }>;
     // (multi-team)多 workspace 绑定动作

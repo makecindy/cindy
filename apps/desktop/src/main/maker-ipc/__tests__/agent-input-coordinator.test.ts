@@ -213,12 +213,16 @@ function createHarness() {
   >();
   const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
+  const supersedeRetriedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
+  >(async () => []);
   const coordinator = new AgentInputCoordinator({
     sendToAgent,
     steerToAgent,
     abortSession,
     onUiRetry,
     onUserEnqueue,
+    supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     reconcileTurnIdle,
     hasPendingInteraction: () => pendingInteraction,
@@ -270,6 +274,7 @@ function createHarness() {
     projections,
     onUiRetry,
     onUserEnqueue,
+    supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
     },
@@ -2057,6 +2062,142 @@ describe('AgentInputCoordinator send transaction', () => {
     // 回调传出去。hook 侧的渠道回流(turn.reopen)依赖它: 零产出失败恰是上游过载
     // 最典型的形态, 也最需要把结果接回渠道那条消息。
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+  });
+
+  it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
+    // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
+    // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
+    // 本轮被取代的那条与新克隆行——软删本体在 host(见 supersedeRetriedUserTurn
+    // dep),这里锁 coordinator 的触发时机与参数。
+    const h = createHarness();
+    const sid = 'retry-supersede-basic';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    const persist = h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage;
+    expect(persist?.clientId).toEqual(expect.any(String));
+    expect(persist?.clientId).not.toBe('q-first');
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledTimes(1);
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledWith(sid, {
+      supersededUserClientId: 'q-first',
+      retryUserClientId: persist?.clientId,
+    });
+  });
+
+  it('continue-prompt retry (turn made progress) never supersedes the original row', async () => {
+    // 续跑分支的原消息是真实历史,不取代。这里同时锁住展开继承陷阱:续跑 item
+    // 由 recovery.item 展开而来,若不显式清 supersedesUserClientId,上一轮克隆
+    // 消费过的旧值会跟着落库,把"有产出失败"的 error 行一并误藏。
+    const h = createHarness();
+    const sid = 'retry-supersede-continue-exempt';
+    h.setHasAssistantProgressAfter(async () => true);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+    expect(
+      h.onDispatchedUserTurn.mock.calls[1]?.[1]?.supersedesUserClientId,
+    ).toBeUndefined();
+  });
+
+  it('chained zero-progress retries anchor each supersede on the previous clone', async () => {
+    // 连环失败回归锁:第二次重试的克隆项由 recovery.item(= 第一次的克隆项)
+    // 展开而来,取代目标必须显式覆盖为第一次克隆行,不能顺着展开继承退回最初
+    // 那条(它已被软删,窗口锚错会漏掉第二次失败的 error 行)。
+    const h = createHarness();
+    const sid = 'retry-supersede-chain';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+    const firstClone =
+      h.supersedeRetriedUserTurn.mock.calls[0]?.[1]?.retryUserClientId;
+    expect(firstClone).toEqual(expect.any(String));
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed again');
+    await flush();
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.supersedeRetriedUserTurn).toHaveBeenCalledTimes(2);
+    const second = h.supersedeRetriedUserTurn.mock.calls[1]?.[1];
+    expect(second?.supersededUserClientId).toBe(firstClone);
+    expect(second?.retryUserClientId).not.toBe(firstClone);
+  });
+
+  it('does not supersede when the retry dispatch fails before the clone is persisted', async () => {
+    // 软删只能发生在克隆行确定落库之后:落库前派发失败时旧行是用户消息的唯一
+    // 载体,动它就是消息凭空消失。
+    const h = createHarness();
+    const sid = 'retry-supersede-persist-fail';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    h.sendToAgent.mockImplementationOnce(async () => {
+      throw new Error('vendor exploded before persist');
+    });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+  });
+
+  it('does not supersede when the clone is persisted but cancelled before vendor dispatch', async () => {
+    // review(greptile P1)回归锁:软删一度挂在 onPersisted 上,而落库到派发之间
+    // 还夹着 beforeDispatch / onAccepted 两个 hook —— 期间停止或关闭会话会走
+    // cancelled-before-dispatch,那时旧行若已被藏,历史里只剩一条从未送达模型的
+    // 克隆消息,连原失败 error 行上的「重试」入口都没了。派发确实发生前不许软删。
+    const h = createHarness();
+    const sid = 'retry-supersede-cancelled-before-dispatch';
+    h.setHasAssistantProgressAfter(async () => false);
+
+    h.coordinator.enqueue(sid, makeItem('q-first', 'original task'));
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'turn failed');
+    await flush();
+
+    h.sendToAgent.mockImplementationOnce(async (sessionId, _message, _createOpts, sendOpts) => {
+      // 克隆行照常落库(onPersisted 走完),但 vendor 派发被取消。
+      await persistQueuedUserMessage(sessionId, sendOpts);
+      return sessionDispatchFailure('stopped before dispatch');
+    });
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(
+      h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.clientId,
+    ).toEqual(expect.any(String));
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
   });
 
   it('signals an explicit UI retry on both retry shapes (continue prompt and original resend)', async () => {

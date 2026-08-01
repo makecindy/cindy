@@ -2566,7 +2566,9 @@
           "aliasPlaceholder": "별칭, 예: my-server",
           "addWorkspace": "작업 디렉터리 추가",
           "removeWorkspace": "이 작업 디렉터리 삭제",
-          "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)"
+          "changeDir": "클릭하여 디렉터리 변경(별명과 설정은 유지)",
+          "defaultWorkspaceChip": "기본값: {{name}}",
+          "defaultWorkspaceAria": "X에서 보낸 작업에 사용할 기본 작업 디렉터리 선택"
         },
         "binding": {
           "copyLink": "링크 복사",

@@ -222,6 +222,20 @@ export interface AgentInputQueuedMessage {
    * 一起透传到落库 agentMeta，供「已重新连接」活动行的展开详情用。
    */
   autoResumeInfo?: AutoResumeInfo;
+  /**
+   * 本条是零产出失败 turn 的克隆重发(错误横幅「重试」,见 performRetryLastError),
+   * 值 = 被取代的那条已落库 user 行的 clientId。本条落库并派发成功后,host 据此把
+   * 旧 user 行与其后的 role='error' 行软删(置 rewind_at + messages:deleted 广播),
+   * 否则历史里会留下两条一模一样的用户消息。
+   *
+   * 只在克隆重发分支置位:续跑指令(失败 turn 已有产出)不重发原文,旧行是真实
+   * 历史,不取代。软删必须等本条**落库且真正派发出去**之后才执行:落库前的失败路径
+   * 里旧行是用户消息的唯一载体,动它就是消息凭空消失;落库后、派发前的取消路径里
+   * 旧 error 行还是用户唯一的重试入口,提前藏掉会让人卡在"消息发了没反应"。
+   *
+   * 旧队列快照缺省该字段(undefined = 不软删),向后兼容。
+   */
+  supersedesUserClientId?: string;
 }
 
 export type AgentInputDelivery = 'turn' | 'steer';

@@ -3584,6 +3584,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:hook-control:set-provider-enabled', { provider, enabled }),
     setWorkspaces: (workspaces: Record<string, string>): Promise<{ hook: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:set-workspaces', { workspaces }),
+    setXDefaultWorkspace: (alias: string | null): Promise<{ hook: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:set-x-default-workspace', { alias }),
     // SIWS OIDC 绑定: 无参数; main 发 bind.start, server 回 pending + 授权链接
     bindStart: (): Promise<{ ok: true }> =>
       ipcRenderer.invoke('maker:hook-control:bind-start', {}),
