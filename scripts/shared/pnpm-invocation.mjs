@@ -43,9 +43,10 @@ export function resolvePnpmInvocation(args, options = {}) {
 }
 
 function resolveWindowsPnpmThroughCmd(pnpmCommand, args, comSpec = process.env.ComSpec) {
+  const commandLine = [pnpmCommand, ...args].map(quoteWindowsCmdArg).join(" ");
   return {
     command: comSpec || "cmd.exe",
-    args: ["/d", "/s", "/v:off", "/c", [pnpmCommand, ...args].map(quoteWindowsCmdArg).join(" ")],
+    args: ["/d", "/s", "/v:off", "/c", `"${commandLine}"`],
     shell: false,
     windowsVerbatimArguments: true,
   };
@@ -54,7 +55,7 @@ function resolveWindowsPnpmThroughCmd(pnpmCommand, args, comSpec = process.env.C
 function quoteWindowsCmdArg(arg) {
   const value = String(arg);
   if (value.length === 0) return '""';
-  const escaped = value.replace(/"/g, '""');
+  const escaped = value.replace(/"/g, '""').replace(/%/g, "^%");
   return /[\s"!&|<>()^%]/.test(value) ? `"${escaped}"` : escaped;
 }
 
