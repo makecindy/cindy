@@ -79,7 +79,6 @@ import {
   type ClaudeSubscriptionUsageSnapshot,
 } from '@/hooks/useClaudeSubscriptionUsage';
 import {
-  hasAlertingClaudeSessionWindow,
   isClaudeSubscriptionAlerting,
   matchScopedWindowForModel,
   type ClaudeUsageWindow,
@@ -597,37 +596,7 @@ function buildCodexTooltipNode(
 
 // ── Claude 订阅 (Anthropic OAuth) 形态 ───────────────────────────────────────
 // 主 chip 方案 B: 5h 剩余% · 当前模型周限剩余% (weekly_scoped 按模型家族匹配, 匹配
-// 不到回退总周限并标注口径) · 本会话价值 $。tooltip 列全量窗口 (含非当前模型的
-// scoped 条目) + 套餐 + extra usage。utilization 语义 = 已用百分比 (0-100)。
-
-/**
- * Claude 窗口 → tooltip 行素材;窗口缺失 / 数据不可解析 → null (调用方过滤)。
- * tooltip 的窗口行不做逐行高亮 (纯文本 tooltip), 告警只体现在 chip 配色与末尾的
- * 「接近限额」行 —— 故这里不带 alerting 标记。
- */
-interface ClaudeWindowUsage {
-  label: string;
-  used: string;
-  remaining: string;
-  /** tooltip 用的精确 reset 时间点;无数据 → null。 */
-  resetAt: string | null;
-}
-
-function toClaudeWindowUsage(
-  label: string,
-  window: ClaudeUsageWindow | null | undefined,
-): ClaudeWindowUsage | null {
-  if (!window || typeof window.utilization !== 'number' || !Number.isFinite(window.utilization)) {
-    return null;
-  }
-  const usedPercent = clampPercent(window.utilization);
-  return {
-    label,
-    used: formatPercent(usedPercent),
-    remaining: formatPercent(100 - usedPercent),
-    resetAt: formatResetAt(window.resetsAt),
-  };
-}
+// 不到回退总周限并标注口径) · 本会话价值 $。utilization 语义 = 已用百分比 (0-100)。
 
 /**
  * 当前会话生效的周限窗口: 命中当前模型的 weekly_scoped 条目优先 (label 带模型名,
@@ -703,82 +672,8 @@ function getClaudeChipWindows(
 }
 
 // 告警判定 (chip 变红的口径 + allowed_warning 为何不染红、为何不用 representativeClaim
-// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts: isClaudeUsageWindowAlerting /
-// hasAlertingClaudeSessionWindow / isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
-// tooltip 不逐行高亮, 它比 chip 宽一档的那一档在 buildClaudeSubscriptionTooltipNode 里
-// (整体 status 的 allowed_warning 也出「接近限额」行)。
-
-function buildClaudeSubscriptionTooltipNode(
-  snapshot: ClaudeSubscriptionUsageSnapshot | null,
-  modelId: string | null | undefined,
-  sessionUsage: SessionUsageMoney,
-  t: TFunction,
-  usageDashboardLabel: string | null,
-  latestTurnUsage: LatestTurnUsageSummary | null,
-): React.ReactNode {
-  const lines: string[] = [];
-  pushSessionUsageLines(lines, sessionUsage, null, t);
-  if (!snapshot) {
-    lines.push(t('todaySpend.claude.waitingDetail'));
-    appendLatestTurnUsageLines(lines, latestTurnUsage, t);
-    pushDashboardLinkLine(lines, usageDashboardLabel);
-    return buildTooltipNode(lines);
-  }
-
-  const planLabel = formatPlanType(snapshot.subscriptionType);
-  if (planLabel) {
-    lines.push(t('todaySpend.claude.planLine', { plan: planLabel }));
-  }
-  // 窗口明细: 5h → 总周限 → 全部分模型周限 (含非当前模型, 用户能看到谁先见底)。
-  // tooltip 保留精确 reset 时间点 (chip 上是倒计时, 两层信息互补)。
-  const windows: ClaudeWindowUsage[] = [];
-  const fiveHour = toClaudeWindowUsage('5h', snapshot.fiveHour);
-  if (fiveHour) windows.push(fiveHour);
-  const sevenDay = toClaudeWindowUsage(t('todaySpend.claude.weeklyLabel'), snapshot.sevenDay);
-  if (sevenDay) windows.push(sevenDay);
-  for (const scoped of snapshot.scoped ?? []) {
-    const usage = toClaudeWindowUsage(
-      t('todaySpend.claude.modelWeeklyLabel', { model: scoped.modelDisplayName }),
-      scoped,
-    );
-    if (usage) windows.push(usage);
-  }
-  for (const window of windows) {
-    const base = t('todaySpend.claude.windowLine', {
-      label: window.label,
-      remaining: window.remaining,
-      used: window.used,
-    });
-    lines.push(window.resetAt
-      ? `${base} · ${t('todaySpend.claude.resetAt', { at: window.resetAt })}`
-      : base,
-    );
-  }
-
-  // tooltip 比 chip 宽一档: allowed_warning (服务端综合全部窗口的模糊信号) 也提示 ——
-  // 上面刚列完全量窗口, 用户能自己看出是哪个窗口吃紧; chip 颜色不吃这个信号 (见
-  // isClaudeSubscriptionAlerting)。
-  const status = snapshot.rateLimitStatus?.trim().toLowerCase();
-  if (status === 'rejected') {
-    lines.push(t('todaySpend.claude.limitRejected'));
-  } else if (status === 'allowed_warning' || hasAlertingClaudeSessionWindow(snapshot, modelId)) {
-    lines.push(t('todaySpend.claude.limitWarning'));
-  }
-
-  if (snapshot.extraUsage?.isEnabled) {
-    // extra_usage 的 used_credits / monthly_limit 单位未文档化且本地暂无实样账号,
-    // 不能假设 cents 并渲染美元金额。这里只展示启用状态;数值原样保留在 snapshot,
-    // 等拿到 live response 后再补准确单位展示。
-    lines.push(t('todaySpend.claude.extraUsageEnabledLine'));
-  }
-
-  if (lines.length === 0) {
-    lines.push(t('todaySpend.claude.waitingDetail'));
-  }
-  appendLatestTurnUsageLines(lines, latestTurnUsage, t);
-  pushDashboardLinkLine(lines, usageDashboardLabel);
-  return buildTooltipNode(lines);
-}
+// 的取舍) 已收进 shared/claudeSubscriptionUsage.ts 的
+// isClaudeSubscriptionAlerting (纯数据判定, 有直接单测)。
 
 /** 最近一轮 tooltip 使用的 assistant 消息明细。 */
 interface LatestTurnUsageSummary {
@@ -792,8 +687,8 @@ interface LatestTurnUsageSummary {
   details: TurnUsageDetails;
 }
 
-// turnUsageTooltip 目前只导出整段文本 builder；结构化卡片需要字段级数据，先在
-// 本组件按同一口径做最小投影。旧 builder 会在下一步连同 Claude 纯文本 tooltip 删除。
+// turnUsageTooltip 目前只导出整段文本 builder；结构化卡片需要字段级数据，因此在
+// 本组件按同一口径做最小投影。
 const LOW_CACHE_MIN_INPUT_TOKENS = 50_000;
 const LOW_CACHE_MAX_HIT_RATE = 0.2;
 
@@ -1454,7 +1349,6 @@ export function TodaySpendChip({
   const resetsAtSignature = chipWindows.map((window) => window.resetsAtMs ?? 'na').join(',');
   const chipResetsAtMsList = React.useMemo(
     () => chipWindows.map((window) => window.resetsAtMs),
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- resetsAtSignature 是 chipWindows reset 时点的值签名
     [resetsAtSignature],
   );
 
@@ -1541,21 +1435,13 @@ export function TodaySpendChip({
     );
   } else if (isClaudeSubscription) {
     // Claude 订阅形态 (方案 B): chip 显示「剩余时长 剩余%」倒计时段 + 本会话合计,
-    // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒); tooltip 保留精确时间。
+    // 倒计时由 windowLabelNowMs 驱动 (常态 60s tick, 最后一分钟逐秒)。
     const chipSegments = [...windowSegments];
     if (sessionSegment) chipSegments.push(sessionSegment);
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
     usesClaudeSubscriptionPopover = true;
-    tooltipNode = buildClaudeSubscriptionTooltipNode(
-      claudeSubscriptionUsage,
-      modelId,
-      sessionUsage,
-      t,
-      usageDashboardLabel,
-      latestTurnUsage,
-    );
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
