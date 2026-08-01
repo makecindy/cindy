@@ -3,6 +3,46 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 /**
+ * Windows 上 AV / 索引器 / 云同步会短暂占用刚落地的文件,rename 抛
+ * EBUSY / EACCES,而不是 POSIX 直觉里的 EPERM / EEXIST。这些是瞬时锁,短退避
+ * 重试即可解除;EPERM / EEXIST 属"无法覆盖已存在目标"的语义分歧,不在此列
+ * (由调用方的备份交换兜底)。
+ */
+const TRANSIENT_RENAME_CODES = new Set(['EBUSY', 'EACCES', 'ENOTEMPTY']);
+
+/** 同步小退避。状态文件都很小、重试上限低,阻塞时间可忽略。 */
+function sleepSync(ms: number): void {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** rename 遇瞬时锁短退避重试;EPERM/EEXIST 与其余错误立即上抛。 */
+function renameSyncWithRetry(from: string, to: string): void {
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      fs.renameSync(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (attempt >= 3 || !code || !TRANSIENT_RENAME_CODES.has(code)) throw error;
+      sleepSync(20 * (attempt + 1));
+    }
+  }
+}
+
+/**
+ * 尽力删除,绝不外抛。清理残留文件失败(AV 占用)不能掩盖一次**已经成功**的
+ * 写入,也不能中断一次尚可继续的写入;残留由下次写入清掉。maxRetries 交给
+ * libuv 处理 Windows 的 EBUSY/EPERM/ENOTEMPTY。
+ */
+function rmSyncQuiet(target: string): void {
+  try {
+    fs.rmSync(target, { force: true, maxRetries: 3, retryDelay: 20 });
+  } catch {
+    // 忽略:best-effort 清理。
+  }
+}
+
+/**
  * 主文件缺失但 `.bak` 仍在、且无法恢复回来。
  *
  * 这种状态下磁盘上唯一的有效快照是那个 `.bak`,任何"按空数据继续"的行为都会把它
@@ -39,7 +79,7 @@ function restoreBackupIfMainMissing(filePath: string): 'restored' | 'not-needed'
   const backupPath = `${filePath}.bak`;
   if (fs.existsSync(filePath) || !fs.existsSync(backupPath)) return 'not-needed';
   try {
-    fs.renameSync(backupPath, filePath);
+    renameSyncWithRetry(backupPath, filePath);
   } catch (error) {
     throw new AtomicBackupUnrecoverableError(filePath, error);
   }
@@ -88,37 +128,41 @@ export function atomicWriteFileSync(filePath: string, contents: string): void {
   // 先把它恢复回主文件,再写入,避免把缺失主文件读成空后覆盖唯一快照。
   // 主文件存在时,.bak 才是陈旧残留,直接清理。恢复不了则抛错,不写入。
   if (restoreBackupIfMainMissing(filePath) === 'not-needed') {
-    fs.rmSync(backupPath, { force: true });
+    rmSyncQuiet(backupPath);
   }
   try {
     fs.writeFileSync(tempPath, contents, { mode: 0o600, flag: 'wx' });
     try {
-      fs.renameSync(tempPath, filePath);
+      // 主路径:rename 覆盖已存在目标(Windows/POSIX 均原子替换),瞬时锁重试。
+      renameSyncWithRetry(tempPath, filePath);
       return;
     } catch (error) {
       const code =
         error && typeof error === 'object' && 'code' in error
           ? (error as NodeJS.ErrnoException).code
           : undefined;
-      if (process.platform !== 'win32' || (code !== 'EPERM' && code !== 'EEXIST')) {
+      // 只有"无法覆盖已存在目标"(EPERM/EEXIST)才走备份交换;EBUSY/EACCES 已在
+      // renameSyncWithRetry 里重试过,到这里仍失败就是真失败,直接上抛。
+      if (code !== 'EPERM' && code !== 'EEXIST') {
         throw error;
       }
-      // Windows 兜底：备份交换而非直接删目标。
-      fs.renameSync(filePath, backupPath);
+      // 兜底：备份交换而非直接删目标(两步 rename 都带瞬时锁重试)。
+      renameSyncWithRetry(filePath, backupPath);
       try {
-        fs.renameSync(tempPath, filePath);
+        renameSyncWithRetry(tempPath, filePath);
       } catch (swapError) {
         // temp 落位失败：从备份恢复旧文件，避免配置全丢。
         try {
-          fs.renameSync(backupPath, filePath);
+          renameSyncWithRetry(backupPath, filePath);
         } catch {
           // 恢复也失败：.bak 仍在磁盘上,下次写入或启动时可人工/自愈找回。
         }
         throw swapError;
       }
-      fs.rmSync(backupPath, { force: true });
+      // 写入已成功;清 .bak 失败(AV 占用)不能反过来把成功报成失败。
+      rmSyncQuiet(backupPath);
     }
   } finally {
-    fs.rmSync(tempPath, { force: true });
+    rmSyncQuiet(tempPath);
   }
 }

@@ -41,6 +41,18 @@ function isWithinRoot(realFilePath: string, realRoot: string): boolean {
 }
 
 /**
+ * 路径上的目录项与已打开句柄是否同一 inode。**必须用 BigInt**:
+ * NTFS 的 FileId 高位在长期使用的卷上会超过 2^53,number 截断可能让两个不同
+ * 文件比相等(误放行)。dev/ino 任一为 0 表示文件系统没提供可信标识(SMB /
+ * 网络重定向器 / 部分 FUSE 常见)——此时无法证明"路径仍解析到这个 inode",
+ * 一律按不可信拒绝,不让回退闸退化成只剩 isSymbolicLink 一条。
+ */
+function sameInode(a: fs.BigIntStats, b: fs.BigIntStats): boolean {
+  if (a.dev === 0n || a.ino === 0n || b.dev === 0n || b.ino === 0n) return false;
+  return a.dev === b.dev && a.ino === b.ino;
+}
+
+/**
  * 在已打开句柄上循环读满已校验的长度。网络盘/FUSE 上单次 read() 不保证填满
  * 请求区间,单次读会把合法文件截断成解析失败。EOF 早于已校验长度(并发截断)
  * 时按实际读到的字节返回,交由上层解析/校验自然拒绝。
@@ -61,16 +73,16 @@ async function readToLength(
 
 /** open 之后的根内复核(异步侧),失败一律按不可信拒绝。 */
 async function verifyStillWithinRoot(
-  handleStat: fs.Stats,
+  handleStat: fs.BigIntStats,
   filePath: string,
   realRoot: string,
 ): Promise<boolean> {
   try {
     const [pathStat, realFilePath] = await Promise.all([
-      fs.promises.stat(filePath),
+      fs.promises.stat(filePath, { bigint: true }),
       fs.promises.realpath(filePath),
     ]);
-    if (pathStat.dev !== handleStat.dev || pathStat.ino !== handleStat.ino) return false;
+    if (!sameInode(pathStat, handleStat)) return false;
     return isWithinRoot(realFilePath, realRoot);
   } catch {
     return false;
@@ -103,18 +115,18 @@ export async function readBoundedFileNoFollow(
     fs.constants.O_RDONLY | (noFollow ?? 0),
   );
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > maxBytes) return null;
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
     if (noFollow === null) {
-      let linkStat: fs.Stats;
+      let linkStat: fs.BigIntStats;
       try {
-        linkStat = await fs.promises.lstat(filePath);
+        linkStat = await fs.promises.lstat(filePath, { bigint: true });
       } catch {
         // 路径条目已消失,无从证明句柄对应目录项 → 按不可信拒绝。
         return null;
       }
       if (linkStat.isSymbolicLink()) return null;
-      if (linkStat.dev !== stat.dev || linkStat.ino !== stat.ino) return null;
+      if (!sameInode(linkStat, stat)) return null;
     }
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
@@ -137,8 +149,8 @@ export async function readBoundedFileFollowLinks(
 ): Promise<Buffer | null> {
   const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY);
   try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > maxBytes) return null;
+    const stat = await handle.stat({ bigint: true });
+    if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
     if (options?.containWithin !== undefined) {
       if (!(await verifyStillWithinRoot(stat, filePath, options.containWithin))) return null;
     }
@@ -163,23 +175,23 @@ export function readBoundedFileNoFollowSync(
       : (fs.constants.O_NOFOLLOW ?? null);
   const fd = fs.openSync(filePath, fs.constants.O_RDONLY | (noFollow ?? 0));
   try {
-    const stat = fs.fstatSync(fd);
-    if (!stat.isFile() || stat.size > maxBytes) return null;
+    const stat = fs.fstatSync(fd, { bigint: true });
+    if (!stat.isFile() || Number(stat.size) > maxBytes) return null;
     if (noFollow === null) {
-      let linkStat: fs.Stats;
+      let linkStat: fs.BigIntStats;
       try {
-        linkStat = fs.lstatSync(filePath);
+        linkStat = fs.lstatSync(filePath, { bigint: true });
       } catch {
         return null;
       }
       if (linkStat.isSymbolicLink()) return null;
-      if (linkStat.dev !== stat.dev || linkStat.ino !== stat.ino) return null;
+      if (!sameInode(linkStat, stat)) return null;
     }
     if (options?.containWithin !== undefined) {
       try {
-        const pathStat = fs.statSync(filePath);
+        const pathStat = fs.statSync(filePath, { bigint: true });
         const realFilePath = fs.realpathSync(filePath);
-        if (pathStat.dev !== stat.dev || pathStat.ino !== stat.ino) return null;
+        if (!sameInode(pathStat, stat)) return null;
         if (!isWithinRoot(realFilePath, options.containWithin)) return null;
       } catch {
         return null;

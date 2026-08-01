@@ -59,6 +59,55 @@ describe('atomicWriteFileSync', () => {
     expect(fs.readFileSync(file, 'utf8')).toBe('fresh');
     expect(fs.existsSync(`${file}.bak`)).toBe(false);
   });
+
+  it('retries a transient EBUSY rename (Windows AV/索引器持句柄)而非硬失败', () => {
+    const file = makeFile('old');
+    const realRename = fs.renameSync;
+    let flaky = 2; // 前两次抛 EBUSY,第三次放行
+    const spy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from).endsWith('.tmp') && flaky > 0) {
+        flaky -= 1;
+        throw Object.assign(new Error('EBUSY'), { code: 'EBUSY' });
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+    try {
+      atomicWriteFileSync(file, 'new');
+      expect(fs.readFileSync(file, 'utf8')).toBe('new');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('已成功落位后清理 .bak 失败不把成功报成失败', () => {
+    // Windows 上 AV 占用刚生成的 .bak 会让 rm 抛 EPERM/EBUSY;这发生在 rename
+    // 成功**之后**,不能反过来让整个写入抛错。这里用 EEXIST 触发备份交换分支,
+    // 再让 .bak 的 rm 抛错,断言写入仍成功。
+    const file = makeFile('old');
+    const realRename = fs.renameSync;
+    let firstTmpRename = true;
+    const renameSpy = vi.spyOn(fs, 'renameSync').mockImplementation(((from: string, to: string) => {
+      if (String(from).endsWith('.tmp') && String(to) === file && firstTmpRename) {
+        firstTmpRename = false;
+        throw Object.assign(new Error('EEXIST'), { code: 'EEXIST' }); // 逼入备份交换
+      }
+      return realRename(from as never, to as never);
+    }) as typeof fs.renameSync);
+    const realRm = fs.rmSync;
+    const rmSpy = vi.spyOn(fs, 'rmSync').mockImplementation(((target: string, opts?: fs.RmOptions) => {
+      if (String(target) === `${file}.bak`) {
+        throw Object.assign(new Error('EPERM'), { code: 'EPERM' });
+      }
+      return realRm(target as never, opts as never);
+    }) as typeof fs.rmSync);
+    try {
+      expect(() => atomicWriteFileSync(file, 'new')).not.toThrow();
+      expect(fs.readFileSync(file, 'utf8')).toBe('new');
+    } finally {
+      renameSpy.mockRestore();
+      rmSpy.mockRestore();
+    }
+  });
 });
 
 describe('readAtomicFileSync', () => {

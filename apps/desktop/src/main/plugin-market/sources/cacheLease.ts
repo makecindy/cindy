@@ -124,7 +124,9 @@ export async function removeCachePath(
  */
 async function runRemoval(target: string, options: DeferredRemoval): Promise<void> {
   const task = fs.promises
-    .rm(target, { recursive: true, force: true })
+    // maxRetries/retryDelay:Windows 上 AV/索引器/云同步持句柄会让 rm 抛
+    // EBUSY/EPERM/ENOTEMPTY,libuv 原生重试即可,不必自建循环。
+    .rm(target, { recursive: true, force: true, maxRetries: 3, retryDelay: 50 })
     .catch((error: unknown) => {
       options.onError?.(error);
     });

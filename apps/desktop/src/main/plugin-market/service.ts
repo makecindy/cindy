@@ -50,6 +50,7 @@ import {
   GHOST_MANIFEST_MAX_BYTES,
   readBoundedFileNoFollowSync,
 } from '../utils/readBoundedFile.js';
+import { withGhostInstallLock } from '../cindy-brain/ghostInstallLock.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
@@ -807,9 +808,16 @@ export class PluginMarketService {
               throwIpcError('PRECONDITION_FAILED', 'Installed Plugin changed during the install');
             }
           },
-          // 复核与落位共用来源锁:beforeCommit 返回后包检查还要跑一段,期间不能让
-          // 来源被增删,否则复核结论在真正落位前就过期了。
-          withCommitLock: (fn) => this.withMutation(SOURCE_MUTATION_KEY, fn),
+          // 复核与落位的双重互斥:
+          // - SOURCE_MUTATION_KEY:beforeCommit 返回后包检查还要跑一段,期间不能
+          //   让来源被增删,否则复核结论在落位前过期。
+          // - withGhostInstallLock(ghostId):与本地 .cindy 装入/更新/卸载共用同一
+          //   按 id 互斥,beforeCommit 的 runtime 复核到 installOrUpdate 落位之间,
+          //   同 id 的本地装入/卸载插不进来(否则复核仍会在落位前过期)。
+          withCommitLock: (fn) =>
+            this.withMutation(SOURCE_MUTATION_KEY, () =>
+              withGhostInstallLock(plugin.ghostId, fn),
+            ),
         });
         // 包目录落位后,溯源写入操作开始时捕获的 owner 账本(与服务端安装同款)。
         await this.withCapturedLedgerMutation(ledger, () => {

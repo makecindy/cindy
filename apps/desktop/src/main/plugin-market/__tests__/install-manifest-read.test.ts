@@ -92,6 +92,42 @@ describe('installCustomMarketPlugin · 身份卡读取闸', () => {
     expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
   });
 
+  it.runIf(process.platform !== 'win32')(
+    '发现后插件目录被换成指向市场外的符号链接 → 拒绝,不进入打包',
+    async () => {
+      // 发现层交回的是已 realpath、已校验在根内的规范路径。之后把该目录换成指向
+      // 市场外(留着同样的 ghost.json)的符号链接:重解析落到别处,清单摘要复核
+      // 发现不了。install 必须发现 realpath 已改变并拒绝,payload 不被打包。
+      const outside = path.join(workDir, 'outside');
+      await fs.promises.mkdir(outside, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(outside, 'ghost.json'),
+        JSON.stringify(GOOD_MANIFEST),
+      );
+      const realParent = path.join(workDir, 'market');
+      await fs.promises.mkdir(realParent, { recursive: true });
+      const realPluginDir = path.join(realParent, 'alpha');
+      await fs.promises.mkdir(realPluginDir, { recursive: true });
+      await fs.promises.writeFile(
+        path.join(realPluginDir, 'ghost.json'),
+        JSON.stringify(GOOD_MANIFEST),
+      );
+      // 发现时的规范路径(realpath 幂等)。
+      const discovered = await fs.promises.realpath(realPluginDir);
+      // 攻击:把 alpha 换成指向 outside 的符号链接。
+      await fs.promises.rm(realPluginDir, { recursive: true, force: true });
+      await fs.promises.symlink(outside, realPluginDir);
+
+      await expect(
+        installCustomMarketPlugin({
+          pluginDir: discovered, // 传发现时的规范路径
+          expected: GOOD_MANIFEST as unknown as GhostManifest,
+        }),
+      ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
+      expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+    },
+  );
+
   it('结构守卫:install.ts 不允许出现按路径的 readFile', async () => {
     // 发现/安装/打包三条链路都必须走 readBoundedFileNoFollow;任何一处退回
     // fs.promises.readFile(path) 都会重开"检查与读取两次打开"的替换窗口。

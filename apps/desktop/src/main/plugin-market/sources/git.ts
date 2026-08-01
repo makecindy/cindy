@@ -15,6 +15,21 @@ import type { IpcErrorCode } from '../../../shared/ipc-errors.js';
 
 /** 克隆/拉取超时：大仓库给足窗口，但绝不无限挂起。 */
 const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
+
+/** rename 遇 Windows 瞬时锁(AV/索引器/云同步持句柄)短退避重试;其余立即上抛。 */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const transient = new Set(['EBUSY', 'EACCES', 'EPERM', 'ENOTEMPTY']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.promises.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (attempt >= 3 || !code || !transient.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
 /** sparse-checkout 需要 Git >= 2.25。 */
 export const MIN_GIT_VERSION = { major: 2, minor: 25 } as const;
 
@@ -262,7 +277,9 @@ export async function cloneMarketplace(
       }
     }
     await fs.promises.mkdir(path.dirname(destPath), { recursive: true });
-    await fs.promises.rename(stagingPath, destPath);
+    // Windows 上 AV/索引器/云同步会短暂占用刚 clone 出的文件,rename 抛
+    // EBUSY/EACCES/EPERM;瞬时锁短退避重试。目标是全新 UUID 路径,不存在覆盖。
+    await renameWithRetry(stagingPath, destPath);
     return await currentRevision(destPath, executor);
   } catch (error) {
     await fs.promises.rm(stagingPath, { recursive: true, force: true }).catch(() => undefined);

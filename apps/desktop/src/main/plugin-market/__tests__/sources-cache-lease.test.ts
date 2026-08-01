@@ -184,19 +184,34 @@ describe('cacheLease 删除守卫', () => {
 });
 
 describe('缓存删除收口(结构门禁)', () => {
-  it('sources/index.ts never deletes cache paths directly', () => {
-    const indexPath = path.join(
-      path.dirname(fileURLToPath(import.meta.url)),
-      '..',
-      'sources',
-      'index.ts',
-    );
-    const source = fs.readFileSync(indexPath, 'utf8');
-    // 允许 cacheLease 自己用 fs.rm;index.ts 一旦出现直接删除,说明又新增了一个
-    // 绕过租约守卫的删除点——这正是此前每一轮返工的形态,必须在这里拦下。
-    const rawDeletions = [
-      ...source.matchAll(/fs\.(?:promises\.)?rm(?:Sync|dir)?\s*\(/g),
-    ].map((match) => match[0]);
-    expect(rawDeletions).toEqual([]);
+  const sourcesDir = path.join(
+    path.dirname(fileURLToPath(import.meta.url)),
+    '..',
+    'sources',
+  );
+  // 容忍链式换行(fs.promises\n.rm(…)):否则漏数 cacheLease/git 的真实删除点。
+  const countRawDeletions = (file: string): number =>
+    [
+      ...fs
+        .readFileSync(path.join(sourcesDir, file), 'utf8')
+        .matchAll(/fs\s*\.\s*(?:promises\s*\.\s*)?rm(?:Sync|dir)?\s*\(/g),
+    ].length;
+
+  // 门禁扩到整个 sources/,而不只 index.ts:任一 lease 管理的文件新增直接删除点
+  // 就是又一个绕过租约守卫的口子——这正是此前每一轮返工的形态。
+  it.each(['index.ts', 'store.ts', 'discover.ts', 'parse.ts', 'preflight.ts'])(
+    'sources/%s never deletes filesystem paths directly',
+    (file) => {
+      expect(countRawDeletions(file)).toBe(0);
+    },
+  );
+
+  it('git.ts only deletes its own private clone staging, nothing else', () => {
+    // git.ts 的唯一直接删除是它自己 clone 出的 `<dest>.staging-<uuid>` 私有目录
+    // (UUID 私有、同函数内建同函数内删、从不被租约持有),是经过审阅的例外。
+    // 断言"只删 stagingPath":出现任何删别的路径的调用都要重新确认边界。
+    const git = fs.readFileSync(path.join(sourcesDir, 'git.ts'), 'utf8');
+    const deletions = [...git.matchAll(/\.\s*rm(?:Sync|dir)?\s*\(\s*([A-Za-z]+)/g)].map((m) => m[1]);
+    expect(deletions).toEqual(['stagingPath']);
   });
 });

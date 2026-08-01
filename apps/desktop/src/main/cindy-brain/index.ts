@@ -39,6 +39,7 @@ import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
+import { withGhostInstallLock } from './ghostInstallLock.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -2912,6 +2913,15 @@ export async function uninstallGhostAndCleanup(
   id: string,
   options?: { skipMarketLedger?: boolean },
 ): Promise<void> {
+  // 按 ghostId 与装入/更新互斥:卸载与同 id 的市场/本地装入不得交错,否则
+  // 市场装入的"目标是否已装"判定会被本卸载在其落位前抽走(反之亦然)。
+  return withGhostInstallLock(id, () => uninstallGhostAndCleanupLocked(id, options));
+}
+
+async function uninstallGhostAndCleanupLocked(
+  id: string,
+  options?: { skipMarketLedger?: boolean },
+): Promise<void> {
   const releaseMutation = beginGhostMutation();
   try {
     requireGhostAvailableForActiveSession(id);
@@ -3890,27 +3900,31 @@ export function registerGhostIpc(): void {
     const installOpts = opts as
       | { enable?: unknown; expectedPackageSha256?: unknown }
       | undefined;
+    const expectedPackageSha256 = installOpts?.expectedPackageSha256;
     if (
-      typeof installOpts?.expectedPackageSha256 !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(installOpts.expectedPackageSha256)
+      typeof expectedPackageSha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedPackageSha256 must come from ghosts:inspect');
     }
     const probe = await manager.inspect(lizFilePath);
     if ('rejection' in probe) throwInstallError(probe.rejection);
-    if (probe.packageSha256 !== installOpts.expectedPackageSha256) {
+    if (probe.packageSha256 !== expectedPackageSha256) {
       throwIpcError('GHOST_FILE_INVALID', '插件文件在确认后发生了变化，请重新选择并确认');
     }
     rejectReservedGhostId(probe.manifest.id);
     rejectUnauthorizedTokenBroker(probe.manifest);
     // Node 高风险提示在 renderer 装入确认卡的权限清单里如实展示;
     // 2026-07-24 Lizi 定案:不再追加 Main 原生二次确认弹窗。
-    const enable = installOpts.enable === true;
+    const enable = installOpts?.enable === true;
+    // 与市场装入/更新/卸载共用按 ghostId 的互斥:同 id 的并发装入不得交错。
     return {
-      ghost: await installAndDock(manager, lizFilePath, {
-        enable,
-        expectedPackageSha256: installOpts.expectedPackageSha256,
-      }),
+      ghost: await withGhostInstallLock(probe.manifest.id, () =>
+        installAndDock(manager, lizFilePath, {
+          enable,
+          expectedPackageSha256,
+        }),
+      ),
     };
   });
 
@@ -3937,34 +3951,38 @@ export function registerGhostIpc(): void {
     }
     rejectReservedGhostId(inspected.manifest.id);
     rejectUnauthorizedTokenBroker(inspected.manifest);
-    const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
-    runtime.stop(inspected.manifest.id);
-    getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
-    getGhostAgentSlot().clearGhost(inspected.manifest.id);
-    getGhostErrandSlot().clearGhost(inspected.manifest.id);
-    let result: Awaited<ReturnType<typeof manager.update>>;
-    try {
-      result = await manager.update(lizFilePath, { expectedPackageSha256 });
-    } catch (err) {
-      // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
-      if (previousGhost) spawnIfResident(previousGhost);
-      throw err;
-    }
-    if ('rejection' in result) {
-      if (previousGhost) spawnIfResident(previousGhost);
-      throwInstallError(result.rejection);
-    }
-    runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
-    const store = getLayoutStore();
-    const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-    if (docked) {
-      const applied = store.setLayout(docked);
-      if ('rejection' in applied) {
-        log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
+    // 与市场装入/本地装入/卸载共用按 ghostId 的互斥:换目录期间同 id 的其它
+    // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
+    return withGhostInstallLock(inspected.manifest.id, async () => {
+      const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+      runtime.stop(inspected.manifest.id);
+      getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
+      getGhostAgentSlot().clearGhost(inspected.manifest.id);
+      getGhostErrandSlot().clearGhost(inspected.manifest.id);
+      let result: Awaited<ReturnType<typeof manager.update>>;
+      try {
+        result = await manager.update(lizFilePath, { expectedPackageSha256 });
+      } catch (err) {
+        // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
+        if (previousGhost) spawnIfResident(previousGhost);
+        throw err;
       }
-    }
-    spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
-    return { ghost: result.ghost };
+      if ('rejection' in result) {
+        if (previousGhost) spawnIfResident(previousGhost);
+        throwInstallError(result.rejection);
+      }
+      runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
+      const store = getLayoutStore();
+      const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+      if (docked) {
+        const applied = store.setLayout(docked);
+        if ('rejection' in applied) {
+          log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
+        }
+      }
+      spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
+      return { ghost: result.ghost };
+    });
   });
 
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。

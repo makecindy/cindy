@@ -98,6 +98,32 @@ export function marketCloneSlug(name: string, source: MarketSource): string {
   return `${base}-${hash}`;
 }
 
+/**
+ * Windows 上 AV / 索引器 / 云同步会短暂占用刚 clone / cp 出来的目录里的文件,
+ * 使 rename 抛 EBUSY / EACCES / EPERM。这些是瞬时锁,短退避重试即可解除;目标
+ * 都是全新 UUID 路径(不存在覆盖问题),重试纯粹是等锁释放。其余错误立即上抛。
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+  const transient = new Set(['EBUSY', 'EACCES', 'EPERM', 'ENOTEMPTY']);
+  for (let attempt = 0; ; attempt += 1) {
+    try {
+      await fs.promises.rename(from, to);
+      return;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException)?.code;
+      if (attempt >= 3 || !code || !transient.has(code)) throw error;
+      await new Promise((resolve) => setTimeout(resolve, 50 * (attempt + 1)));
+    }
+  }
+}
+
+/** 版本目录名比较:大小写不敏感。我们生成的版本名恒为小写 UUID,但备份还原 /
+ * 跨 FS 迁移可能引入大小写漂移;不敏感比较确保绝不把 current 的大小写变体
+ * 误判成历史版本删掉(方向永远偏向"不删")。 */
+function sameVersionName(a: string, b: string): boolean {
+  return a.toLowerCase() === b.toLowerCase();
+}
+
 export class MarketSourceManager {
   private readonly log = createLogger('plugin-market-sources');
 
@@ -178,7 +204,12 @@ export class MarketSourceManager {
         const keep = new Set(['versions', 'current', 'incoming']);
         for (const entry of fs.readdirSync(slot)) {
           if (keep.has(entry)) continue;
-          fs.renameSync(path.join(slot, entry), path.join(dir, entry));
+          // 符号链接条目不搬(与打包/读取侧同口径:一律不跟随)。留在旧槽根即可,
+          // 读取只经 versions/ 目录,永不跟随它;删除留给缓存删除唯一入口,本文件
+          // 不做任何直接的文件系统删除(结构门禁)。
+          const src = path.join(slot, entry);
+          if (fs.lstatSync(src).isSymbolicLink()) continue;
+          fs.renameSync(src, path.join(dir, entry));
         }
         atomicWriteFileSync(pointer, version);
         this.log.warn('migrated legacy marketplace cache layout', { name: config.name });
@@ -236,7 +267,7 @@ export class MarketSourceManager {
       // 裸读会把当前版本误判成"非 current",让延迟删除把它删掉。
       const text = readAtomicFileSync(this.currentPointer(slot));
       if (text === null) return false;
-      return text.trim() === path.basename(dir);
+      return sameVersionName(text.trim(), path.basename(dir));
     } catch {
       // 指针读不出来(文件锁/备份救不回来):事实不明,宁可不删。
       return true;
@@ -284,7 +315,9 @@ export class MarketSourceManager {
   private looksLikeLegacyCache(slot: string): boolean {
     if (!fs.existsSync(slot)) return false;
     try {
-      return fs.statSync(slot).isDirectory() && fs.existsSync(path.join(slot, '.agents'));
+      // lstat 拒符号链接:槽被换成指向别处的链接时,迁移会把外部目录的条目
+      // rename 进版本目录(数据破坏 + 把外部内容当市场内容读)。槽必须是真目录。
+      return fs.lstatSync(slot).isDirectory() && fs.existsSync(path.join(slot, '.agents'));
     } catch {
       return false;
     }
@@ -324,7 +357,7 @@ export class MarketSourceManager {
       return;
     }
     for (const entry of entries) {
-      if (entry === current) continue;
+      if (sameVersionName(entry, current)) continue;
       // 仅删除 versions/ 内的直接子目录,防穿越。
       if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
       const dir = path.join(this.versionsDir(slot), entry);
@@ -350,6 +383,24 @@ export class MarketSourceManager {
     for (const entry of entries) {
       if (entry.includes('/') || entry.includes('\\') || entry === '..' || entry === '.') continue;
       await this.removeCacheDir(path.join(root, entry));
+    }
+  }
+
+  /**
+   * 清理 cloneRoot 顶层的 `.incoming-*` / `.staging-*` 残骸(add 途中进程被杀
+   * 遗留)。它们在任何 slot 之外,pruneStaleIncoming/Versions 都扫不到。仍被
+   * 租约持有的(正在进行的 add)由 removeCachePath 守卫按前缀跳过。
+   */
+  private async pruneStaleCloneStaging(): Promise<void> {
+    let entries: string[];
+    try {
+      entries = await fs.promises.readdir(this.deps.cloneRoot);
+    } catch {
+      return;
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith('.incoming-') && !entry.startsWith('.staging-')) continue;
+      await this.removeCacheDir(path.join(this.deps.cloneRoot, entry));
     }
   }
 
@@ -386,6 +437,10 @@ export class MarketSourceManager {
     if (!preflight.ok) {
       throwIpcError('MARKET_GIT_UNAVAILABLE', preflight.version ?? 'git not found');
     }
+    // 进程在上次 add 途中被杀会在 cloneRoot 顶层留下 `.incoming-*`(及其
+    // `.staging-*` 兄弟),这两者不在任何 slot 内,pruneStale* 扫不到,会永久
+    // 占盘。新建前先扫掉未被租约持有的残骸(被持有的由守卫跳过)。
+    await this.pruneStaleCloneStaging();
     const incoming = path.join(this.deps.cloneRoot, `.incoming-${crypto.randomUUID()}`);
     let revision: string;
     try {
@@ -454,7 +509,7 @@ export class MarketSourceManager {
         // 已经启动的删除仍要等它跑完——租约挡不住早于它启动的那笔。
         await settleCachePathRemovals(slot);
         await fs.promises.mkdir(this.versionsDir(slot), { recursive: true });
-        await fs.promises.rename(discoveredRoot, dir);
+        await renameWithRetry(discoveredRoot, dir);
         atomicWriteFileSync(this.currentPointer(slot), version);
         // 配置必须在**释放槽租约之前**写入:这样任何被推迟的整槽删除在释放时
         // 立刻看到"槽已被配置占用"并放弃,不存在中间空档。
@@ -592,7 +647,7 @@ export class MarketSourceManager {
       retainCachePath(newDir);
       try {
         try {
-          await fs.promises.rename(stagedDir, newDir);
+          await renameWithRetry(stagedDir, newDir);
           await this.activateVersion(slot, newVersion);
         } catch (error) {
           // 半落位目录交给守卫:它会在执行前再核对一次指针,指针一旦已经指向

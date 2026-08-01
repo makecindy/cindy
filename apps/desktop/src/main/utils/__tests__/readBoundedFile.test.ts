@@ -130,6 +130,55 @@ describe('readBoundedFileNoFollow', () => {
       spy.mockRestore();
     }
   });
+
+  it.runIf(process.platform !== 'win32')(
+    '回退闸:dev/ino 为 0(网络盘/无标识 FS)时拒绝,不退化成只看 isSymbolicLink',
+    async () => {
+      const file = path.join(workDir, 'zero-ino.json');
+      await fs.promises.writeFile(file, '{"ok":1}');
+      // 模拟 SMB/FUSE:句柄 stat 与 lstat 都拿不到可信 dev/ino(填 0)。没有 reject-0
+      // 守卫时 0n===0n 恒真,回退闸退化成"证明句柄=路径目录项"永真,只剩
+      // isSymbolicLink 一条。此时应拒绝(无法证明),而不是照读。走 noFollowFlag:null。
+      const zero = (st: fs.BigIntStats): fs.BigIntStats =>
+        new Proxy(st, {
+          get(target, key) {
+            if (key === 'dev' || key === 'ino') return 0n;
+            const value = Reflect.get(target, key);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      const realOpen = fs.promises.open;
+      const openSpy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
+        ...args: Parameters<typeof fs.promises.open>
+      ) => {
+        const handle = await realOpen(...args);
+        const realStat = handle.stat.bind(handle);
+        return new Proxy(handle, {
+          get(target, key) {
+            if (key === 'stat') {
+              return async (opts?: fs.StatOptions) =>
+                zero((await realStat(opts as never)) as unknown as fs.BigIntStats);
+            }
+            const value = Reflect.get(target, key);
+            return typeof value === 'function' ? value.bind(target) : value;
+          },
+        });
+      }) as typeof fs.promises.open);
+      const realLstat = fs.promises.lstat;
+      const lstatSpy = vi
+        .spyOn(fs.promises, 'lstat')
+        .mockImplementation((async (p: fs.PathLike, opts?: fs.StatOptions) => {
+          const st = (await (realLstat as (...a: unknown[]) => Promise<fs.BigIntStats>)(p, opts)) as fs.BigIntStats;
+          return zero(st);
+        }) as typeof fs.promises.lstat);
+      try {
+        expect(await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null })).toBeNull();
+      } finally {
+        openSpy.mockRestore();
+        lstatSpy.mockRestore();
+      }
+    },
+  );
 });
 
 describe('readBoundedFileNoFollowSync', () => {
