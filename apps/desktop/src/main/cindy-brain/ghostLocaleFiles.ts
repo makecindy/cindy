@@ -47,12 +47,24 @@ export function validateGhostLocaleResourcesInDirectory(
   manifest: GhostManifest,
 ): GhostLocaleDirectoryValidation {
   if (!manifest.locales) return { ok: true };
+  let realRoot: string;
+  try {
+    realRoot = fs.realpathSync(rootDir);
+  } catch (error) {
+    return {
+      ok: false,
+      reason: `locale 根目录不可用:${error instanceof Error ? error.message : String(error)}`,
+    };
+  }
   for (const [locale, relativePath] of Object.entries(manifest.locales)) {
     try {
       const absolutePath = resolveExactFile(rootDir, relativePath);
       // 单句柄限量闸(同步变体):statSync 后再 readFileSync 是两次独立打开,
-      // 并发方可在其间把文件换成超大文件或符号链接绕过大小闸。
-      const bytes = readBoundedFileNoFollowSync(absolutePath, GHOST_LOCALE_MAX_BYTES);
+      // 并发方可在其间把文件换成超大文件或符号链接绕过大小闸;containWithin
+      // 复核堵中间目录被换成根外链接的窗口。
+      const bytes = readBoundedFileNoFollowSync(absolutePath, GHOST_LOCALE_MAX_BYTES, {
+        containWithin: realRoot,
+      });
       if (bytes === null) {
         return {
           ok: false,

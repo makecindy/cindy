@@ -52,15 +52,28 @@ const FORBIDDEN_NAME_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u206
  * Windows 无 O_NOFOLLOW 时的 lstat+dev/ino 回退闸)。非普通文件/超限返回 null;
  * 打开失败(含 O_NOFOLLOW 对 symlink 的拒绝)抛出,由调用方决定语义。
  */
-async function readBoundedJsonFile(filePath: string, maxBytes: number): Promise<unknown | null> {
-  const bytes = await readBoundedFileNoFollow(filePath, maxBytes);
+async function readBoundedJsonFile(
+  filePath: string,
+  maxBytes: number,
+  realRoot: string,
+): Promise<unknown | null> {
+  // containWithin 复核堵"realpath 校验后、open 前中间目录被换成根外链接"的
+  // 窗口:O_NOFOLLOW 只管最后一个路径分量。
+  const bytes = await readBoundedFileNoFollow(filePath, maxBytes, {
+    containWithin: realRoot,
+  });
   if (bytes === null) return null;
   return JSON.parse(bytes.toString('utf8')) as unknown;
 }
 
 /** 清单侧变体:路径已是 realpath 产物且经根包含校验,允许跟随链接,其余同上。 */
-async function readBoundedManifest(filePath: string): Promise<unknown | null> {
-  const bytes = await readBoundedFileFollowLinks(filePath, MARKETPLACE_MANIFEST_MAX_BYTES);
+async function readBoundedManifest(
+  filePath: string,
+  realRoot: string,
+): Promise<unknown | null> {
+  const bytes = await readBoundedFileFollowLinks(filePath, MARKETPLACE_MANIFEST_MAX_BYTES, {
+    containWithin: realRoot,
+  });
   if (bytes === null) return null;
   return JSON.parse(bytes.toString('utf8')) as unknown;
 }
@@ -149,6 +162,7 @@ async function resolvePluginDir(
     raw = await readBoundedJsonFile(
       path.join(realDir, 'ghost.json'),
       GHOST_MANIFEST_MAX_BYTES,
+      realRoot,
     );
     if (raw === null) return null;
   } catch {
@@ -183,6 +197,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
   // `.agents/plugins/marketplace.json` 做成指向市场根目录外的链接,从而让宿主去读
   // 任意路径。realpath 落在根目录外一律拒。
   let realManifestPath: string;
+  let realMarketRoot: string;
   try {
     const [realRoot, realManifest] = await Promise.all([
       fs.promises.realpath(marketRoot),
@@ -197,6 +212,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
       };
     }
     realManifestPath = realManifest;
+    realMarketRoot = realRoot;
   } catch (error) {
     // realpath 的 ENOENT/EACCES message 自带完整宿主路径,进 IPC detail 前必须脱敏。
     return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: sanitizedDetail(error) };
@@ -207,7 +223,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
     // 校验与读取共用同一句柄(见 readBoundedJsonFile):数 GB 的清单在读之前按
     // 大小拒掉,且两次之间不存在被替换的窗口。realpath 已解析链接并做过根包含
     // 校验,这里不再加 O_NOFOLLOW(根内链接指向根内文件是允许的)。
-    const parsed = await readBoundedManifest(realManifestPath);
+    const parsed = await readBoundedManifest(realManifestPath, realMarketRoot);
     if (parsed === null) {
       return {
         ok: false,

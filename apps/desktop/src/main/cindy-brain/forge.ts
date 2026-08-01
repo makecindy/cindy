@@ -42,7 +42,7 @@ const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
 function shouldSkip(name: string): boolean {
   if (name.startsWith('.')) return true; // .git / .DS_Store / .disabled 等
-  if (name === 'node_modules') return true;
+  if (name.toLowerCase() === 'node_modules') return true;
   if (name.toLowerCase().endsWith('.cindy')) return true; // 上次打包产物,防套娃
   return false;
 }
@@ -561,6 +561,9 @@ async function buildGhostPackage(
     if (!stat.isDirectory()) {
       return { ok: false, errorCode: 'DIR_NOT_FOUND', message: `不是目录:${dir}` };
     }
+    // 后续所有读取都以 realpath 根做 containWithin 复核:O_NOFOLLOW 只管最后
+    // 一个路径分量,校验后中间目录被换成根外链接的窗口靠它堵。
+    const realDir = await fs.promises.realpath(dir);
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
     // 读到的**原始字节**要留作不可变快照:后面生成 zip 时逐文件重新读盘,若
@@ -574,8 +577,9 @@ async function buildGhostPackage(
     let manifestBytes: Buffer;
     try {
       const bytes = await readBoundedFileNoFollow(
-        path.join(dir, GHOST_MANIFEST_FILE),
+        path.join(realDir, GHOST_MANIFEST_FILE),
         GHOST_MANIFEST_MAX_BYTES,
+        { containWithin: realDir },
       );
       if (bytes === null) {
         return {
@@ -619,7 +623,9 @@ async function buildGhostPackage(
     for (const item of manifest.skill?.items ?? []) mustExist.push(`${item.dir}/SKILL.md`);
     for (const rel of mustExist) {
       try {
-        const st = await fs.promises.stat(path.join(dir, rel));
+        // lstat 与收集侧(walk 的 Dirent)同一语义:声明的入口若是符号链接,
+        // stat 会判"在场"而 walk 不收集它,装出的包缺入口、运行期才 404。
+        const st = await fs.promises.lstat(path.join(dir, rel));
         if (!st.isFile()) throw new Error('not a file');
       } catch {
         return { ok: false, errorCode: 'ENTRY_MISSING', message: `清单声明的文件不存在:${rel}` };
@@ -633,7 +639,9 @@ async function buildGhostPackage(
       let content: string;
       try {
         // 同一把单句柄限量闸:超限在读之前拒,符号链接不放行。
-        const bytes = await readBoundedFileNoFollow(skillMdPath, GHOST_SKILL_MD_MAX_BYTES);
+        const bytes = await readBoundedFileNoFollow(skillMdPath, GHOST_SKILL_MD_MAX_BYTES, {
+          containWithin: realDir,
+        });
         if (bytes === null) {
           return {
             ok: false,
@@ -683,6 +691,15 @@ async function buildGhostPackage(
         if (e.isDirectory()) {
           const bad = await walk(abs, rel);
           if (bad) return bad;
+        } else if (e.isSymbolicLink()) {
+          // 符号链接一律不穿透。此前是静默跳过——OneDrive 未水合占位文件、
+          // 仓库里提交的链接都会被悄悄丢出包外,校验说"在场"、包里却没有,
+          // 运行期才 404。改为结构化拒绝,错误可见。
+          return {
+            ok: false,
+            errorCode: 'MANIFEST_INVALID',
+            message: `源码目录含符号链接条目,不允许打包:${rel}`,
+          };
         } else if (e.isFile()) {
           files.push({ rel, abs });
           totalBytes += (await fs.promises.stat(abs)).size;
@@ -719,7 +736,9 @@ async function buildGhostPackage(
       } else {
         let bytes: Buffer | null;
         try {
-          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes);
+          bytes = await readBoundedFileNoFollow(f.abs, maxTotalBytes - packedBytes, {
+            containWithin: realDir,
+          });
         } catch {
           bytes = null;
         }
@@ -788,7 +807,8 @@ export async function packGhostDirToFile(
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
   try {
-    await fs.promises.writeFile(destPath, built.buf, { flag: 'wx' });
+    // 0o600:临时包可能落在共享 /tmp,不给同机其它用户读权限。
+    await fs.promises.writeFile(destPath, built.buf, { flag: 'wx', mode: 0o600 });
   } catch (err) {
     return {
       ok: false,

@@ -10,6 +10,8 @@ const runtime = vi.hoisted(() => ({
     dir: string;
     enabled: boolean;
   }>,
+  /** 测试可注入:每次 list() 调用返回不同快照(模拟打包窗口内运行时变动)。 */
+  listSequence: null as null | (() => Array<{ manifest: Record<string, unknown>; dir: string; enabled: boolean }>),
   install: vi.fn(),
   uninstall: vi.fn(),
   builtinRemoved: new Set<string>(),
@@ -49,7 +51,9 @@ vi.mock('../../logger.js', () => ({
   createLogger: () => ({ info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../cindy-brain/index.js', () => ({
-  getGhostManager: () => ({ list: () => runtime.ghosts }),
+  getGhostManager: () => ({
+    list: () => (runtime.listSequence ? runtime.listSequence() : runtime.ghosts),
+  }),
   isGhostAvailableForActiveSession: vi.fn(() => runtime.accountGhostAvailable),
   installOrUpdateMarketGhostPackage: runtime.install,
   rejectReservedGhostIdForCustomMarket: vi.fn(),
@@ -74,6 +78,7 @@ const PLUGIN_ID = `c${'a'.repeat(24)}`;
 
 afterEach(() => {
   runtime.ghosts = [];
+  runtime.listSequence = null;
   runtime.install.mockReset();
   runtime.uninstall.mockReset();
   runtime.builtinRemoved.clear();
@@ -212,6 +217,40 @@ describe('PluginMarketService 自定义市场聚合', () => {
       sourceType: 'local-market',
       sourceMarketName: 'team-lib',
     });
+  });
+
+  it('strips bidi/control chars from custom plugin name/description/author in snapshot', async () => {
+    // ghost.json 来自不受信市场仓库,双向控制符会在卡片上伪造署名/说明。
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = path.join(root, 'team-lib');
+    const pluginDir = path.join(dir, 'plugins', 'alpha');
+    fs.mkdirSync(pluginDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify({
+        ...ghostManifest('alpha'),
+        name: 'Alpha‮EVIL',
+        description: 'line1‏‭trick',
+        author: 'me⁦x⁩',
+      }),
+    );
+    fs.writeFileSync(path.join(pluginDir, 'main.js'), '// entry');
+    fs.mkdirSync(path.join(dir, '.agents', 'plugins'), { recursive: true });
+    fs.writeFileSync(
+      path.join(dir, '.agents', 'plugins', 'marketplace.json'),
+      JSON.stringify({ name: 'team-lib', plugins: [{ name: 'alpha', source: 'plugins/alpha' }] }),
+    );
+    const h = harness([], [{ name: 'team-lib', dir }]);
+
+    const snapshot = await h.service.snapshot();
+    const custom = snapshot.items.find((item) => item.ghostId === 'alpha');
+    expect(custom?.name).toBe('AlphaEVIL');
+    expect(custom?.description).toBe('line1trick');
+    expect(custom?.author).toBe('mex');
+    for (const field of [custom?.name, custom?.description, custom?.author]) {
+      expect(field).not.toMatch(/[‎‏‪-‮⁦-⁩]/);
+    }
   });
 
   it('keeps custom items available when the server market is not configured', async () => {
@@ -446,6 +485,38 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     await expect(installPromise).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(runtime.install).not.toHaveBeenCalled();
     runtime.session = { mode: 'cloud', dataOwnerId: 'user-1', generation: 1 };
+  });
+
+  it('rejects install when the plugin is uninstalled during packaging (runtime 复核)', async () => {
+    // F1:审阅时 alpha 已装(existing 存在),打包窗口内本地页把它卸载。
+    // beforeCommit 的 runtime 复核必须发现 existing→缺失并拒,避免"更新"被
+    // 静默降级成"首装 + 带电启用"。用 listSequence 让最后一次 list()(即
+    // beforeCommit 内的复核)看到空,前面的 list() 都看到已装。
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    const pluginId = customMarketPluginId('team-lib', 'alpha');
+    const reviewed = await h.service.detail(pluginId);
+    const installedGhost = [
+      { manifest: ghostManifest('alpha'), dir: path.join(dir, 'plugins', 'alpha'), enabled: true },
+    ];
+    // detail 之后开始计数:审阅路径的 list() 都看到已装,beforeCommit(最后一次)
+    // 看到空——alpha 在打包窗口内被卸载。
+    // 该路径共两次 list():#1 审阅算 existing(看到已装),#2 beforeCommit
+    // 的 runtime 复核(看到空=打包窗口内被卸载)。
+    const calls = { n: 0 };
+    runtime.listSequence = () => {
+      calls.n += 1;
+      return calls.n >= 2 ? [] : installedGhost;
+    };
+    await expect(
+      h.service.install(pluginId, {
+        expectedReleaseId: reviewed.releaseId,
+        expectedManifest: reviewed.manifest,
+      }),
+    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    expect(runtime.install).not.toHaveBeenCalled();
   });
 
   it('rejects listSources when the account switches during discovery', async () => {
@@ -993,5 +1064,17 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     await expect(h.service.uninstall(pluginId)).resolves.toEqual({ ok: true });
     expect(runtime.uninstall).toHaveBeenCalledWith('alpha', { skipMarketLedger: true });
     expect(h.ledger.installationForGhost('alpha')?.installed).toBe(false);
+  });
+
+  it('结构守卫:service.ts 不允许出现按路径的 readFile/readFileSync', async () => {
+    // 已安装目录同样可能被外部进程/同步盘改动,且摘要读取在每次市场快照都会
+    // 执行;所有此类读取必须走 readBoundedFileNoFollow 系列(单句柄限量闸)。
+    const source = await fs.promises.readFile(
+      path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'service.ts'),
+      'utf8',
+    );
+    expect(source).not.toMatch(/fs\.promises\.readFile\(/);
+    expect(source).not.toMatch(/readFileSync\(/);
+    expect(source).toMatch(/readBoundedFileNoFollowSync/);
   });
 });

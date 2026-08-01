@@ -52,15 +52,54 @@ describe('readBoundedFileNoFollow', () => {
       const link = path.join(workDir, 'link.json');
       await fs.promises.symlink(target, link);
       // 注入 null 模拟 Windows:open 会跟随链接,回退闸必须把它拦下来。
-      expect(await readBoundedFileNoFollow(link, 1024, null)).toBeNull();
+      expect(await readBoundedFileNoFollow(link, 1024, { noFollowFlag: null })).toBeNull();
     },
   );
 
   it('无 O_NOFOLLOW 的平台:普通文件不被回退闸误伤', async () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');
-    expect((await readBoundedFileNoFollow(file, 1024, null))?.toString('utf8')).toBe('{"ok":1}');
+    expect((await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null }))?.toString('utf8')).toBe('{"ok":1}');
   });
+
+  it.runIf(process.platform !== 'win32')(
+    'containWithin:中间目录被换成根外链接时拒绝(最终分量是普通文件,O_NOFOLLOW 拦不住)',
+    async () => {
+      const realWork = await fs.promises.realpath(workDir);
+      const root = path.join(realWork, 'root');
+      const outsideSub = path.join(realWork, 'outside', 'sub');
+      await fs.promises.mkdir(root, { recursive: true });
+      await fs.promises.mkdir(outsideSub, { recursive: true });
+      await fs.promises.writeFile(path.join(outsideSub, 'ghost.json'), '{"ok":1}');
+      await fs.promises.symlink(outsideSub, path.join(root, 'linkdir'));
+
+      expect(
+        await readBoundedFileNoFollow(path.join(root, 'linkdir', 'ghost.json'), 1024, {
+          containWithin: root,
+        }),
+      ).toBeNull();
+      expect(
+        readBoundedFileNoFollowSync(path.join(root, 'linkdir', 'ghost.json'), 1024, {
+          containWithin: root,
+        }),
+      ).toBeNull();
+
+      // 根内正常文件不被复核误伤(含 root 自带链接祖先的情形:两侧都走 realpath)。
+      await fs.promises.writeFile(path.join(root, 'plain.json'), '{"ok":2}');
+      expect(
+        (
+          await readBoundedFileNoFollow(path.join(root, 'plain.json'), 1024, {
+            containWithin: root,
+          })
+        )?.toString('utf8'),
+      ).toBe('{"ok":2}');
+      expect(
+        readBoundedFileNoFollowSync(path.join(root, 'plain.json'), 1024, {
+          containWithin: root,
+        })?.toString('utf8'),
+      ).toBe('{"ok":2}');
+    },
+  );
 
   it('网络盘短读:单次 read 未填满时循环读满已校验长度', async () => {
     const file = path.join(workDir, 'short.json');
@@ -98,7 +137,7 @@ describe('readBoundedFileNoFollowSync', () => {
     const file = path.join(workDir, 'plain.json');
     await fs.promises.writeFile(file, '{"ok":1}');
     expect(readBoundedFileNoFollowSync(file, 1024)?.toString('utf8')).toBe('{"ok":1}');
-    expect(readBoundedFileNoFollowSync(file, 1024, null)?.toString('utf8')).toBe('{"ok":1}');
+    expect(readBoundedFileNoFollowSync(file, 1024, { noFollowFlag: null })?.toString('utf8')).toBe('{"ok":1}');
 
     const big = path.join(workDir, 'big.json');
     await fs.promises.writeFile(big, 'x'.repeat(2048));
@@ -111,6 +150,6 @@ describe('readBoundedFileNoFollowSync', () => {
     const link = path.join(workDir, 'link.json');
     await fs.promises.symlink(target, link);
     expect(() => readBoundedFileNoFollowSync(link, 1024)).toThrow();
-    expect(readBoundedFileNoFollowSync(link, 1024, null)).toBeNull();
+    expect(readBoundedFileNoFollowSync(link, 1024, { noFollowFlag: null })).toBeNull();
   });
 });

@@ -2839,7 +2839,14 @@ export async function installOrUpdateMarketGhostPackage(
       // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
       // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
       // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
-      return installAndDock(manager, cindyFilePath, { enable: true });
+      // expectedPackageSha256 把"检查过的字节"与"落位的字节"钉死为同一份:
+      // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
+      // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
+      // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
+      return installAndDock(manager, cindyFilePath, {
+        enable: true,
+        expectedPackageSha256: inspected.packageSha256,
+      });
     }
 
     const runtime = getGhostRuntime();
@@ -2849,7 +2856,10 @@ export async function installOrUpdateMarketGhostPackage(
     getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
-      result = await manager.update(cindyFilePath);
+      // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
+      result = await manager.update(cindyFilePath, {
+        expectedPackageSha256: inspected.packageSha256,
+      });
     } catch (error) {
       spawnIfResident(installed);
       throw error;

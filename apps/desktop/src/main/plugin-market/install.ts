@@ -24,6 +24,7 @@ import {
   rejectReservedGhostIdForCustomMarket,
 } from '../cindy-brain/index.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
+import { redactAbsolutePaths } from './sources/git.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   GHOST_MANIFEST_MAX_BYTES,
@@ -37,6 +38,16 @@ import {
  * 逐字比对，确认到打包之间目录被改动时拒绝滑入（与服务端市场的
  * expectedReleaseId 同一防线，但自定义市场必须核对权限与能力声明本身）。
  */
+/** 进 IPC 的打包/校验详情统一脱敏(宿主路径、控制符)并截断,原文留 main 日志。 */
+function sanitizeInstallDetail(message: string): string {
+  return (
+    redactAbsolutePaths(message)
+      // eslint-disable-next-line no-control-regex
+      .replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '')
+      .slice(0, 256)
+  );
+}
+
 export async function installCustomMarketPlugin(input: {
   pluginDir: string;
   expected: GhostManifest;
@@ -62,10 +73,13 @@ export async function installCustomMarketPlugin(input: {
   try {
     // 与发现层同一把闸(单句柄限量读,拒符号链接):详情展示后、确认安装前,
     // 本地市场目录仍是用户可写的活目录,按路径无界 readFile 会被换成超大文件
-    // 或 /dev/zero 链接卡死 main。超限/非普通文件与读取失败同语义拒绝。
+    // 或 /dev/zero 链接卡死 main。containWithin 锚在插件目录自身的 realpath,
+    // 中间目录被换成根外链接同样拒。超限/非普通文件与读取失败同语义拒绝。
+    const realPluginDir = await fs.promises.realpath(input.pluginDir);
     const bytes = await readBoundedFileNoFollow(
-      path.join(input.pluginDir, 'ghost.json'),
+      path.join(realPluginDir, 'ghost.json'),
       GHOST_MANIFEST_MAX_BYTES,
+      { containWithin: realPluginDir },
     );
     if (bytes === null) throw new Error('not a bounded regular file');
     raw = JSON.parse(bytes.toString('utf8'));
@@ -73,9 +87,12 @@ export async function installCustomMarketPlugin(input: {
     throwIpcError('GHOST_FILE_INVALID', 'The Plugin manifest is missing or unreadable');
   }
   // 前置快速失败:清单非法或官方保留 id 直接拒,避免无谓打包。
+  // reason 会插值 ghost.json 里的未知字段值(不受长度约束的不可信内容),
+  // packed.message 会带 fs 错误自附的宿主绝对路径——进 IPC 前一律脱敏+截断,
+  // 完整原文只留 main 日志。
   const validated = validateGhostManifest(raw);
   if (!validated.ok) {
-    throwIpcError('GHOST_FILE_INVALID', validated.reason);
+    throwIpcError('GHOST_FILE_INVALID', sanitizeInstallDetail(validated.reason));
   }
   rejectReservedGhostIdForCustomMarket(validated.manifest.id);
 
@@ -92,7 +109,7 @@ export async function installCustomMarketPlugin(input: {
           : packed.errorCode === 'DIR_NOT_FOUND'
             ? 'NOT_FOUND'
             : 'INTERNAL',
-        packed.message,
+        sanitizeInstallDetail(packed.message),
       );
     }
     // 唯一防篡改防线:比对实际打进包的 manifest,而非打包前磁盘上的 ghost.json。

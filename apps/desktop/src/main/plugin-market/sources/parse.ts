@@ -24,6 +24,13 @@ export type MarketSourceParseResult =
 
 /** Git 引用（branch / tag / commit）允许的字符集；拒绝选项注入（- 开头）与路径穿越。 */
 const REF_PATTERN = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
+/**
+ * 控制字符与双向文本控制符:URL / sparsePaths 里出现即拒。U+202E 等可让来源
+ * 在 UI 单行里显示成另一个域名(视觉欺骗),控制字符则可注入日志与终端。
+ * 与 discover 的市场名闸(FORBIDDEN_NAME_CHARS)同一口径。
+ */
+// eslint-disable-next-line no-control-regex
+const FORBIDDEN_SOURCE_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 /** GitHub shorthand：owner/repo，各段为常见 GitHub 命名字符。 */
 const GITHUB_SHORTHAND_PATTERN = /^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})\/[A-Za-z0-9._-]{1,100}$/;
 // 仅允许经认证的传输:https(服务端证书)、ssh/git@(SSH agent)。
@@ -53,7 +60,8 @@ function hasEmbeddedCredentials(input: string): boolean {
       // 不需要 query,一律拒绝,引导走 credential helper / SSH,而非白名单剥离。
       if (parsed.search.length > 0 || parsed.hash.length > 0) return true;
     } catch {
-      return false;
+      // 解析不了的串无从判定 userinfo,按"可能带凭证"拒绝(fail closed)。
+      return true;
     }
   }
   // ssh:// 的 username 是认证主体,但 password 位是明文凭证;query / fragment
@@ -63,7 +71,7 @@ function hasEmbeddedCredentials(input: string): boolean {
       const parsed = new URL(input);
       return parsed.password.length > 0 || parsed.search.length > 0 || parsed.hash.length > 0;
     } catch {
-      return false;
+      return true;
     }
   }
   // scp 形态(git@host:owner/repo.git)不是合法 URL,new URL 解析不了。它同样不该
@@ -87,6 +95,7 @@ function validSparsePaths(paths: readonly string[]): boolean {
   return paths.every((entry) => {
     const trimmed = entry.trim();
     if (!trimmed || trimmed.length > 256) return false;
+    if (FORBIDDEN_SOURCE_CHARS.test(trimmed)) return false;
     if (trimmed.startsWith('/') || trimmed.startsWith('\\')) return false;
     if (/^[A-Za-z]:/.test(trimmed)) return false;
     // 拒绝 Git 选项注入(--stdin 会让 sparse-checkout 读 stdin 直至超时)。
@@ -111,6 +120,7 @@ export function parseMarketSource(
     .filter((entry) => entry.length > 0);
 
   if (!trimmed) return { ok: false, code: 'EMPTY_SOURCE' };
+  if (FORBIDDEN_SOURCE_CHARS.test(trimmed)) return { ok: false, code: 'INVALID_SOURCE_FORMAT' };
   if (ref && !REF_PATTERN.test(ref)) return { ok: false, code: 'INVALID_REF' };
   if (!validSparsePaths(sparsePaths)) return { ok: false, code: 'INVALID_SPARSE_PATH' };
 
@@ -121,6 +131,10 @@ export function parseMarketSource(
   }
 
   if (GIT_URL_PATTERN.test(trimmed)) {
+    // WHATWG URL 把 `\` 当 `/` 归一,git 却按原样解析 authority:
+    // `https://TOKEN\@host/...` 在 new URL 里看不到 userinfo(凭证闸失明),
+    // git 实际连的 host 也与校验层认定的不一致(供应链/视觉欺骗)。一律拒。
+    if (trimmed.includes('\\')) return { ok: false, code: 'INVALID_SOURCE_FORMAT' };
     if (hasEmbeddedCredentials(trimmed)) {
       return { ok: false, code: 'CREDENTIALS_NOT_ALLOWED' };
     }

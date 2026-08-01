@@ -46,6 +46,10 @@ import {
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { createLogger } from '../logger.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollowSync,
+} from '../utils/readBoundedFile.js';
 import { PluginMarketApi } from './api.js';
 import { downloadVerifiedPlugin } from './download.js';
 import { installCustomMarketPlugin } from './install.js';
@@ -202,9 +206,25 @@ function combinedDuplicateGhostIds(
  * plugin.manifest,同为校验器输出)同口径。读不出/校验不过返回 null,视为不匹配
  * (fail 向 conflict,安全方向)。
  */
+/**
+ * 展示投影用:剥掉控制字符(保留换行/制表)与双向文本控制符。只作用于送往
+ * Renderer 的市场条目字段,不改动 manifest 本体(校验/摘要仍以原文为准)。
+ */
+function stripDirectionalControls(text: string): string {
+  // eslint-disable-next-line no-control-regex
+  return text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
+}
+
 function installedGhostRawManifestDigest(dir: string): string | null {
   try {
-    const raw = JSON.parse(fs.readFileSync(path.join(dir, 'ghost.json'), 'utf8')) as unknown;
+    // 安装目录也可能被外部进程/同步盘改动,且本函数每次市场快照都会执行:
+    // 与市场目录同一把单句柄限量闸,拒链接、超限即拒,不让无界字节进快照路径。
+    const bytes = readBoundedFileNoFollowSync(
+      path.join(dir, 'ghost.json'),
+      GHOST_MANIFEST_MAX_BYTES,
+    );
+    if (bytes === null) return null;
+    const raw = JSON.parse(bytes.toString('utf8')) as unknown;
     const validated = validateGhostManifest(raw);
     return validated.ok ? ghostManifestDigest(validated.manifest) : null;
   } catch {
@@ -711,13 +731,17 @@ export class PluginMarketService {
         // 换成本地安装的任何东西(旧版不认识 custom 账本,不会更新它)——只凭
         // 记录存在就认领,会把别人的包错误归属给本来源并放行其更新覆盖。
         const sourceKey = marketSourceKey(discovered.config.source);
+        // 审阅时刻的已装内容摘要:所有权/收养判定与提交段复核共用同一份快照。
+        const reviewInstalledDigest = existing
+          ? installedGhostRawManifestDigest(existing.dir)
+          : null;
         const ownsInstall = Boolean(
           existing &&
             currentRecord?.installed &&
             currentRecord.pluginId === pluginId &&
             currentRecord.sourceKey === sourceKey &&
             currentRecord.manifestDigest != null &&
-            currentRecord.manifestDigest === installedGhostRawManifestDigest(existing.dir),
+            currentRecord.manifestDigest === reviewInstalledDigest,
         );
         // 收养:运行时已装内容的声明与本来源候选**完全一致**(原始 manifest 摘要
         // 相等)时,允许在没有有效账本记录的情况下重装并补写溯源。这是"包已落位
@@ -727,7 +751,7 @@ export class PluginMarketService {
         const adoptable = Boolean(
           existing &&
             !ownsInstall &&
-            installedGhostRawManifestDigest(existing.dir) === ghostManifestDigest(plugin.manifest),
+            reviewInstalledDigest === ghostManifestDigest(plugin.manifest),
         );
         if (existing && !ownsInstall && !adoptable) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
@@ -763,6 +787,25 @@ export class PluginMarketService {
               );
             }
             await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
+            // runtime 所有权也要复核,不只来源所有权:打包窗口(秒到分钟级)内,
+            // 本地插件页可以卸载同 id 插件(那条路径不持本服务的互斥锁)——不查
+            // 会把"更新"降级成"首装+带电启用";反向地,窗口内新装入的同 id
+            // 本地 .cindy 会被更新分支静默覆盖,还绕过了审阅时跳过的权限 diff。
+            // 判据与审阅时刻同一份:在场状态一致 + 已装内容摘要未变。
+            const current = getGhostManager()
+              .list()
+              .find((ghost) => ghost.manifest.id === plugin.ghostId);
+            if (Boolean(current) !== Boolean(existing)) {
+              throwIpcError(
+                'PRECONDITION_FAILED',
+                current
+                  ? 'A local Plugin appeared with this Plugin ID during the install'
+                  : 'Plugin was uninstalled while the install was packaging',
+              );
+            }
+            if (current && installedGhostRawManifestDigest(current.dir) !== reviewInstalledDigest) {
+              throwIpcError('PRECONDITION_FAILED', 'Installed Plugin changed during the install');
+            }
           },
           // 复核与落位共用来源锁:beforeCommit 返回后包检查还要跑一段,期间不能让
           // 来源被增删,否则复核结论在真正落位前就过期了。
@@ -799,6 +842,9 @@ export class PluginMarketService {
   /** 已配置来源名（按添加顺序）；存储读取失败时降级为空数组。 */
   private customSourceNamesSafe(owner?: ActiveAppSession): string[] {
     try {
+      // 与 sourceManagerForOwner/ledgerForOwner 同一约定:先确认会话没漂移,
+      // 再按 owner 解析路径——否则切号窗口里会读到新账号的 sources.v1.json。
+      if (owner) requireSameMarketOwner(owner);
       const store = owner
         ? this.sourceStore.bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'))
         : this.sourceStore;
@@ -905,9 +951,16 @@ export class PluginMarketService {
     return {
       pluginId,
       ghostId: plugin.ghostId,
-      name: plugin.manifest.name,
-      description: plugin.manifest.description ?? null,
-      author: plugin.manifest.author ?? null,
+      // ghost.json 来自不受信市场仓库:双向控制符可把市场卡片上的署名/说明
+      // 显示成另一副样子(视觉欺骗),控制字符可撑破布局。展示投影一律剥掉
+      // (保留换行);市场名闸在 discover,这里补齐插件侧同一口径。
+      name: stripDirectionalControls(plugin.manifest.name),
+      description: plugin.manifest.description != null
+        ? stripDirectionalControls(plugin.manifest.description)
+        : null,
+      author: plugin.manifest.author != null
+        ? stripDirectionalControls(plugin.manifest.author)
+        : null,
       // scope 是服务端授权概念，自定义市场项无服务端身份;展示层按 sourceType 分流。
       scope: 'public',
       organizationId: null,
@@ -1138,16 +1191,19 @@ export class PluginMarketService {
     ledger: PluginMarketLedger,
     owner: ActiveAppSession,
   ): Promise<void> {
-    const installedIds = new Set(
-      getGhostManager().list().map((ghost) => ghost.manifest.id),
-    );
     const installSubject = defaultInstallSubject(owner);
     for (const record of Object.values(ledger.read().installations)) {
-      if (record.installed && !installedIds.has(record.ghostId)) {
-        await this.withLedgerMutation(owner, () => {
-          ledger.markRemoved(record.ghostId, installSubject);
-        });
-      }
+      if (!record.installed) continue;
+      await this.withLedgerMutation(owner, () => {
+        // 在场判定必须与写入同处一把锁内且即时重取:manager.update 的两次
+        // rename 之间 ghosts/<id> 短暂不存在,锁外的一次性快照会把这类瞬态
+        // 误判成"已卸载",把 pluginId 永久写进 defaultInstallOptOuts,该
+        // 默认安装插件从此不再自动装回。
+        const stillInstalled = getGhostManager()
+          .list()
+          .some((ghost) => ghost.manifest.id === record.ghostId);
+        if (!stillInstalled) ledger.markRemoved(record.ghostId, installSubject);
+      });
     }
   }
 

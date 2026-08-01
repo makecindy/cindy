@@ -50,16 +50,26 @@ const defaultExecutor: GitExecutor = (args, options) =>
   new Promise((resolve, reject) => {
     execFile(
       'git',
-      [...args],
+      // 缓存路径(owners/<hex>/plugin-market/sources/<slug>/incoming/…)在
+      // Windows 上极易越过 MAX_PATH 260,不带 longpaths 时 clone/checkout 报
+      // "Filename too long"。统一在执行器注入,非 Windows 平台 git 会忽略。
+      ['-c', 'core.longpaths=true', ...args],
       {
         cwd: options.cwd,
         timeout: options.timeoutMs,
         maxBuffer: 16 * 1024 * 1024,
+        // Windows 上不闪控制台窗口(一次 addSource 要跑 5-6 条 git 命令)。
+        windowsHide: true,
         env: {
           ...process.env,
           GIT_TERMINAL_PROMPT: '0',
           // Windows 上凭据管理器可能尝试弹 UI；与 TERMINAL_PROMPT 一起双保险。
           GCM_INTERACTIVE: 'never',
+          // askpass helper(VSCode 注入的 GIT_ASKPASS、桌面环境的 SSH_ASKPASS)
+          // 会弹 GUI 输入框,Electron main 没人去点,只能挂满 5 分钟超时。
+          // 置空让 git 直接失败并落到 stderr 分类。
+          GIT_ASKPASS: '',
+          SSH_ASKPASS: '',
           // 强制英文报错：classifyGitFailure 按英文文案分类，本地化 git
           // 输出（如中文 "无法读取远程仓库"）会让分类失效、误导引导文案。
           LC_ALL: 'C',
@@ -112,7 +122,13 @@ export function redactAbsolutePaths(text: string): string {
       .replace(/\/(?:[^\s"'<>|/]+\/)+[^\s"'<>|/]*/g, '<path>')
       // ~ 开头的家目录相对路径
       .replace(/~\/[^\s"'<>|]*/g, '<path>')
-      .replace(/\u0000URL(\d+)\u0000/g, (_, index: string) => urls[Number(index)] ?? '<path>')
+      // 还原 URL 时抹掉整个 userinfo:`https://ghp_TOKEN@host/...` 这类单段
+      // 凭证没有冒号,user:pass 规则盖不住;host 与路径保留给用户定位问题。
+      .replace(/\u0000URL(\d+)\u0000/g, (_, index: string) => {
+        const url = urls[Number(index)];
+        if (url === undefined) return '<path>';
+        return url.replace(/^((?:https?|ssh|git):\/\/)[^/@\s]+@/i, '$1***@');
+      })
   );
 }
 
@@ -131,10 +147,16 @@ function sanitizeGitDetail(error: unknown, internalPaths: readonly string[]): st
   for (const internalPath of internalPaths) {
     text = text.split(internalPath).join('<marketplace>');
   }
-  // URL 内嵌凭证（https://user:pass@host）不进 Renderer。
+  // URL 内嵌凭证不进 Renderer:user:pass 与单段 token(https://ghp_x@host,
+  // 常见于 ~/.gitconfig 的 insteadOf 重写)都要盖住。
   text = text.replace(/(https?:\/\/)[^\s/@]+:[^\s/@]+@/g, '$1***@');
+  text = text.replace(/((?:https?|ssh):\/\/)[^\s/@]+@/gi, '$1***@');
   // 兜住其余任意绝对路径（SSH identity file、credential helper、杀毒钩子等）。
   text = redactAbsolutePaths(text);
+  // git stderr 会回显远端提供的文案(remote: …),自建服务可塞双向控制符做
+  // 错误区文案欺骗;与市场名同一口径剥掉(保留换行/制表便于阅读)。
+  // eslint-disable-next-line no-control-regex
+  text = text.replace(/[\u0000-\u0008\u000b\u000c\u000e-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/g, '');
   return text.trim().slice(0, 512);
 }
 

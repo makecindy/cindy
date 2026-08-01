@@ -142,4 +142,32 @@ describe('parseMarketSource', () => {
   it('resolves local paths without touching the filesystem', () => {
     expect(resolveLocalSourcePath('~/a/b', HOME)).toBe(`${HOME}/a/b`);
   });
+
+  it('rejects backslash in git URL authority (WHATWG/git 分歧,凭证闸失明)', () => {
+    // new URL 把 \ 归一成 /,userinfo 看不见;git 实际连 evil.com。
+    expect(parse({ source: 'https://github.com\\@evil.com/x/y.git' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
+    // 单段 token 形态:同样必须在 \ 处拒,不能落进 git 源。
+    expect(parse({ source: 'https://ghp_secret\\@github.com/o/r.git' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
+  });
+
+  it('rejects control/bidi chars in source and sparse paths', () => {
+    expect(parse({ source: 'https://github.com/o/r‮.git' })).toEqual({
+      ok: false,
+      code: 'INVALID_SOURCE_FORMAT',
+    });
+    expect(
+      parse({ source: 'https://github.com/o/r.git', sparsePaths: ['plugins/‎a'] }),
+    ).toEqual({ ok: false, code: 'INVALID_SPARSE_PATH' });
+  });
+
+  it('unparseable https URL fails closed as possibly carrying credentials', () => {
+    // new URL 抛错的串按"可能带凭证"拒,而不是 fail-open 放行。
+    expect(parse({ source: 'https://[not-a-host/o/r.git' }).ok).toBe(false);
+  });
 });

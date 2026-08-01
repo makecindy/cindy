@@ -239,4 +239,24 @@ describe('classifyGitFailure', () => {
     ).message;
     expect(detail).toContain('<marketplace>');
   });
+
+  it('masks single-segment userinfo token in URLs (insteadOf 重写场景)', () => {
+    // ~/.gitconfig 的 url.https://<token>@github.com/.insteadOf 会让 git 把
+    // 带 token 的 URL 回显到 stderr;user:pass 规则盖不住无冒号的单段 token。
+    const stderr = "fatal: unable to access 'https://ghp_SUPERSECRET@github.com/o/r.git/'";
+    const detail = classifyGitFailure(Object.assign(new Error('boom'), { stderr })).message;
+    expect(detail).not.toContain('ghp_SUPERSECRET');
+    expect(detail).toContain('***@');
+    // host 与路径保留给用户定位。
+    expect(detail).toContain('github.com/o/r.git');
+  });
+
+  it('strips control/bidi chars remote can echo into stderr', () => {
+    // 自建 git 服务可在 remote: 文案里塞 U+202E 做错误区文案欺骗。
+    const stderr = 'remote: denied ‮hctlibgtnetnoc‬\nfatal: unable to access repo';
+    const detail = classifyGitFailure(Object.assign(new Error('boom'), { stderr })).message;
+    expect(detail).not.toMatch(/[‪-‮⁦-⁩]/);
+    // 换行保留(可读性)。
+    expect(detail).toContain('\n');
+  });
 });
