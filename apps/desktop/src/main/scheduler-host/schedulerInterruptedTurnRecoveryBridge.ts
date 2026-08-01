@@ -3,7 +3,8 @@ import type { AgentEvent } from '@cindy/maker-core';
 type RecoveryHandler = (event: AgentEvent) => boolean;
 export type SchedulerInterruptedTurnRecoveryResetReason =
   | 'session-reset'
-  | 'session-closed';
+  | 'session-closed'
+  | 'user-intervention';
 
 interface RecoveryRegistration {
   handler: RecoveryHandler;
@@ -77,6 +78,22 @@ export function resetSchedulerInterruptedTurnRecovery(
   if (!registrations) return;
   recoveryHandlers.delete(sessionId);
   for (const registration of [...registrations.values()]) registration.onReset(reason);
+}
+
+/**
+ * Tell every waiter that a real user message entered the session queue.
+ *
+ * Intervention revokes future recovery ownership immediately so a later error cannot enqueue a
+ * hidden continuation ahead of the user's message. The waiter callback decides whether an
+ * already-pending continuation must also settle the Schedule run.
+ */
+export function supersedeSchedulerInterruptedTurnRecovery(sessionId: string): void {
+  const registrations = recoveryHandlers.get(sessionId);
+  if (!registrations) return;
+  recoveryHandlers.delete(sessionId);
+  for (const registration of [...registrations.values()]) {
+    registration.onReset('user-intervention');
+  }
 }
 
 export function registerSchedulerInterruptedTurnResumeOutcome(

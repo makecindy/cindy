@@ -2048,11 +2048,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
       let bgFallbackTimer: NodeJS.Timeout | undefined;
       let pendingSettleUnsub: (() => void) | undefined;
       let resumeTimer: NodeJS.Timeout | undefined;
-      let resumePending = false;
+      let recoveryPhase: 'idle' | 'backoff' | 'dispatching' | 'running' = 'idle';
+      let recoveryChainEstablished = false;
       let currentTurnHasProgress = false;
       let settled = false;
       let recoveryGeneration = 0;
       let unregisterInterruptedTurnRecovery: (() => void) | undefined;
+      const isRecoveryPending = (): boolean =>
+        recoveryPhase === 'backoff' || recoveryPhase === 'dispatching';
       const clearBgFallbackTimer = (): void => {
         if (bgFallbackTimer) {
           clearTimeout(bgFallbackTimer);
@@ -2093,8 +2096,11 @@ export class MakerScheduleRunner implements ScheduleRunner {
         this.interruptedTurnAutoResumeGuard.noteSessionReset(session.id);
         recoveryGeneration += 1;
         clearResumeTimer();
-        if (resumePending) finalizeSchedulerInterruptedTurnSuppressedError(session.id);
-        resumePending = false;
+        if (recoveryPhase !== 'idle') {
+          finalizeSchedulerInterruptedTurnSuppressedError(session.id);
+        }
+        recoveryPhase = 'idle';
+        recoveryChainEstablished = false;
         fail(new Error(message));
       };
       const onAbort = (): void => {
@@ -2102,7 +2108,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         // 普通在途 turn 维持既有语义：外层 abort listener 负责 session.abort，最终
         // done/error 决定收口（卡死守卫也依赖这条路径）。只有退避窗口里没有 vendor
         // turn 可供 abort 时，才由等待器自己撤定时器并立即 settle。
-        if (!resumePending) return;
+        if (!isRecoveryPending()) return;
         cancelInterruptedRecovery(
           'schedule fire aborted while waiting for interrupted-turn auto-resume',
         );
@@ -2116,7 +2122,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
           !settled
           && !stopped
           && !options.signal.aborted
-          && resumePending
           && recoveryGeneration === generation;
         const assertCurrentRecovery = (): void => {
           if (isCurrentRecovery()) return;
@@ -2185,8 +2190,8 @@ export class MakerScheduleRunner implements ScheduleRunner {
             fail(new Error(`interrupted-turn auto-resume was not dispatched (${outcome.reason})`));
             return;
           }
-          resumeTimer = undefined;
-          resumePending = false;
+          recoveryPhase = 'running';
+          recoveryChainEstablished = true;
           currentTurnHasProgress = false;
           this.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
           discardSchedulerInterruptedTurnSuppressedError(session.id);
@@ -2209,8 +2214,15 @@ export class MakerScheduleRunner implements ScheduleRunner {
         }
       };
       const scheduleInterruptedTurnResume = (ev: AgentEvent): boolean => {
-        if (resumePending) return true;
-        if (!currentTurnHasProgress) return false;
+        if (recoveryPhase === 'backoff') return true;
+        if (recoveryPhase === 'dispatching') {
+          // A terminal event delivered while session.send is still resolving proves the resumed
+          // vendor turn started even when the provider omitted status(isRunning=true).
+          recoveryPhase = 'running';
+          recoveryChainEstablished = true;
+          this.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
+        }
+        if (!currentTurnHasProgress && !recoveryChainEstablished) return false;
         const error = extractErr(ev.data);
         const signals = interruptedTurnErrorSignals(ev.data, error);
         if (!isInterruptedTurnError(signals)) return false;
@@ -2219,11 +2231,14 @@ export class MakerScheduleRunner implements ScheduleRunner {
           Date.now(),
         );
         if (decision.action !== 'resume') return false;
-        resumePending = true;
+        recoveryPhase = 'backoff';
         currentTurnHasProgress = false;
         const generation = ++recoveryGeneration;
         clearBgFallbackTimer();
         resumeTimer = setTimeout(() => {
+          if (recoveryGeneration !== generation || recoveryPhase !== 'backoff') return;
+          resumeTimer = undefined;
+          recoveryPhase = 'dispatching';
           void sendInterruptedTurnResume(error, {
             attempt: decision.attempt,
             maxAttempts: decision.maxAttempts,
@@ -2245,10 +2260,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         options.origin.runId,
         scheduleInterruptedTurnResume,
         (reason) => {
+          if (reason === 'user-intervention' && !isRecoveryPending()) return;
           cancelInterruptedRecovery(
             reason === 'session-closed'
               ? 'schedule session closed during interrupted-turn recovery'
-              : 'schedule session reset during interrupted-turn recovery',
+              : reason === 'user-intervention'
+                ? 'schedule interrupted-turn recovery superseded by user input'
+                : 'schedule session reset during interrupted-turn recovery',
           );
         },
       );
@@ -2274,9 +2292,13 @@ export class MakerScheduleRunner implements ScheduleRunner {
         options.onProgress?.();
         if (ev.type === 'status') {
           const isRunning = (ev.data as { isRunning?: unknown } | null | undefined)?.isRunning;
-          if (isRunning === true) {
+          // A late status from the failed turn must not cancel a continuation still in backoff.
+          if (isRunning === true && recoveryPhase !== 'backoff') {
             currentTurnHasProgress = false;
-            resumePending = false;
+            if (recoveryPhase === 'dispatching') {
+              recoveryPhase = 'running';
+              recoveryChainEstablished = true;
+            }
             this.interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
           }
         }
@@ -2305,7 +2327,7 @@ export class MakerScheduleRunner implements ScheduleRunner {
         if (ev.type === 'done') {
           // terminal error 后 SDK 仍可能紧跟一个旧 turn 的 done。续跑已排期时这不是
           // 整个 schedule run 的完成边界；等补发 turn 的 status/done。
-          if (resumePending) return;
+          if (isRecoveryPending()) return;
           // silent-stop:上游空内容消息静默收尾,main 守卫会在 1.5s 后自动续跑
           // (或弹耗尽横幅)。不 finish——等续跑 turn 的 done 或守卫 settle 通知。
           // settle 通知覆盖守卫决策为非续跑的所有路径(skip/exhausted/send 失败),
@@ -2343,9 +2365,9 @@ export class MakerScheduleRunner implements ScheduleRunner {
           finish();
         } else if (isTerminalAgentErrorEvent(ev)) {
           // register.ts 的同步 bridge listener 是 terminal error 的唯一认领入口；它先于
-          // 本 waiter 注册，并把匹配 run 的 resumePending 置起。这里不再自行认领，避免
+          // 本 waiter 注册，并把匹配 run 的 recovery phase 置为 backoff。这里不再自行认领，避免
           // 同 session 的另一个 Schedule waiter 也拿原始事件启动恢复。
-          if (resumePending) return;
+          if (isRecoveryPending()) return;
           fail(new Error(extractErr(ev.data)));
         }
       });

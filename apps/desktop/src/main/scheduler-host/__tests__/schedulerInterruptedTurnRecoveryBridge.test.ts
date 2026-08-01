@@ -11,6 +11,7 @@ import {
   registerSchedulerInterruptedTurnResumeOutcome,
   resetSchedulerInterruptedTurnRecovery,
   releaseSchedulerInterruptedTurnResumeOutcome,
+  supersedeSchedulerInterruptedTurnRecovery,
 } from '../schedulerInterruptedTurnRecoveryBridge';
 
 const errorEvent = {
@@ -93,6 +94,21 @@ describe('scheduler interrupted-turn recovery bridge', () => {
     expect(claimSchedulerInterruptedTurnRecovery('bridge-reset', errorEvent)).toBe(false);
     expect(first).not.toHaveBeenCalled();
     expect(second).not.toHaveBeenCalled();
+  });
+
+  it('fans user intervention out and revokes future recovery ownership', () => {
+    const onReset = vi.fn();
+    const handler = vi.fn(() => true);
+    const dispose = registerSchedulerInterruptedTurnRecovery(
+      'bridge-intervention', 'run-1', handler, onReset,
+    );
+
+    supersedeSchedulerInterruptedTurnRecovery('bridge-intervention');
+
+    expect(onReset).toHaveBeenCalledWith('user-intervention');
+    expect(claimSchedulerInterruptedTurnRecovery('bridge-intervention', errorEvent)).toBe(false);
+    expect(handler).not.toHaveBeenCalled();
+    dispose();
   });
 
   it('forwards persistence lifecycle events when the desktop host is installed', () => {

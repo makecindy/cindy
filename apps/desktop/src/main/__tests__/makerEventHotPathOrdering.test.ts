@@ -193,13 +193,16 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
-  it('uses one auto-resume reset boundary for stop, clear, abort, and session close', () => {
+  it('uses one auto-resume boundary family for stop, clear, abort, close, and user intervention', () => {
     const wireSessionSource = extractWireSessionSource();
     const clearSessionHandler = source.match(
       /ipcMain\.handle\(MAKER_INVOKE\.INPUT_CLEAR_SESSION,[\s\S]*?\n {2}\}\);/,
     )?.[0];
     const abortSessionHandler = source.match(
       /ipcMain\.handle\(MAKER_INVOKE\.ABORT_SESSION,[\s\S]*?\n {2}\}\);/,
+    )?.[0];
+    const userEnqueueBoundary = source.match(
+      /onUserEnqueue: \(sessionId\) => \{[\s\S]*?\n {4}\},/,
     )?.[0];
 
     expect(source).toContain('function noteAutoResumeSessionReset(');
@@ -209,6 +212,14 @@ describe('maker:event hot path ordering', () => {
     expect(wireSessionSource).toContain("noteAutoResumeSessionReset(session.id, 'session-closed');");
     expect(source).toContain('resetSchedulerInterruptedTurnRecovery(sessionId, reason);');
     expect(source).toContain('autoResumeBookkeeping.teardown(sessionId);');
+    expect(source).toContain('function noteAutoResumeUserIntervention(');
+    expect(source).toContain('supersedeSchedulerInterruptedTurnRecovery(sessionId);');
+    expect(userEnqueueBoundary).toContain('noteAutoResumeUserIntervention(sessionId);');
+    expectOrder(
+      userEnqueueBoundary ?? '',
+      'noteAutoResumeUserIntervention(sessionId);',
+      'publishUiSessionIntervention(sessionId);',
+    );
   });
 
   it('clears Agent Island after mandatory closed-session cleanup', () => {

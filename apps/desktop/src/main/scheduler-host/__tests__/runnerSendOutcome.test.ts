@@ -28,7 +28,7 @@ const mocks = vi.hoisted(() => ({
       string,
       {
         handler: (event: AgentEvent) => boolean;
-        onReset: (reason: 'session-reset' | 'session-closed') => void;
+        onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void;
       }
     >
   >(),
@@ -280,7 +280,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
         sessionId: string,
         runId: string,
         handler: (event: AgentEvent) => boolean,
-        onReset: (reason: 'session-reset' | 'session-closed') => void,
+        onReset: (reason: 'session-reset' | 'session-closed' | 'user-intervention') => void,
       ) => {
         let registrations = mocks.schedulerRecoveryHandlers.get(sessionId);
         if (!registrations) {
@@ -731,6 +731,101 @@ describe('MakerScheduleRunner send outcome policy', () => {
     );
   });
 
+  it('keeps retrying an established recovery chain when the resumed turn has no new output', async () => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+
+    // The first continuation reached the provider but failed before text/tool_use. The recovery
+    // chain, rather than per-turn output, now owns eligibility for the bounded second attempt.
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(8_000);
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(3));
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      3,
+      'scheduler-session',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({
+          autoResumeInfo: expect.objectContaining({ attempt: 2, maxAttempts: 5 }),
+        }),
+      }),
+    );
+
+    h.emit({ type: 'text', data: { text: 'recovered', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: 'recovered',
+    });
+  });
+
+  it('settles recovery bookkeeping when running status arrives before send resolves', async () => {
+    vi.useFakeTimers();
+    let sendCount = 0;
+    let releaseResumeSend!: () => void;
+    const resumeSendGate = new Promise<void>((resolve) => {
+      releaseResumeSend = resolve;
+    });
+    const h = createSessionHarness(async (_message, opts) => {
+      sendCount += 1;
+      await opts?.onAccepted?.();
+      if (sendCount > 1) await resumeSendGate;
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+
+    h.emit({ type: 'status', data: { isRunning: true } });
+    releaseResumeSend();
+    await vi.waitFor(() =>
+      expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalledWith('scheduler-session'),
+    );
+
+    h.emit({ type: 'text', data: { text: 'completed', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: 'completed',
+    });
+  });
+
   it('keeps concurrent waiters isolated by Schedule run id', async () => {
     vi.useFakeTimers();
     const h = createSessionHarness(async (_message, opts) => {
@@ -862,6 +957,37 @@ describe('MakerScheduleRunner send outcome policy', () => {
     expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith('scheduler-session');
     expect(notifier.notify).toHaveBeenCalledTimes(1);
     expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('cancels a pending continuation when a real user message supersedes the backoff', async () => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        isTerminal: true,
+      },
+    });
+
+    mocks.schedulerRecoveryHandlers
+      .get('scheduler-session')
+      ?.values()
+      .next().value?.onReset('user-intervention');
+    await expect(firePromise).rejects.toThrow(/superseded by user input/);
+    await vi.advanceTimersByTimeAsync(30_000);
+
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith('scheduler-session');
   });
 
   it('ignores a late successful send outcome after the session reset settles the waiter', async () => {
