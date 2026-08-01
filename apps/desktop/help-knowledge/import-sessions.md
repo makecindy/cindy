@@ -12,7 +12,7 @@ If you already have Codex or Claude Code conversations on disk (from the CLIs), 
 - Click **Scan** to discover sessions in the standard Codex / Claude Code locations on your machine.
 - Filter the results:
   - by **source** — Codex or Claude Code;
-  - by **placement** — by project (sessions inside a specific working directory) or by dialogue (free-form conversations not tied to a project).
+  - by **placement** — by project (sessions inside a specific working directory) or by chat (free-form sessions not tied to a project).
 - Tick the sessions or projects you want, then click **Import**.
 - They appear in the left sidebar.
 

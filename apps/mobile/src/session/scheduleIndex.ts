@@ -74,7 +74,7 @@ interface ScheduleIndexThrottleEntry {
   failedAt: number | null;
   /** 失败原因是 DEVICE_UNRESPONSIVE(熔断快速失败);恢复旁路判定用。 */
   failedUnresponsive: boolean;
-  /** 失败原因是本机链路问题(NOT_CONNECTED / LINK_NOT_OPEN);重连全局失效。 */
+  /** 失败原因是本机链路问题(NOT_CONNECTED / LINK_NOT_OPEN / BACKPRESSURE);重连全局失效。 */
   failedTransient: boolean;
   /** 失败原因是目标设备离线(DEVICE_OFFLINE);仅该设备 presence 恢复时失效。 */
   failedOffline: boolean;
@@ -94,13 +94,17 @@ function hasRemoteErrorMarker(error: unknown, marker: string): boolean {
 }
 
 /**
- * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN):重连即恢复,重连钩子全局失效。
+ * 本机链路未通(NOT_CONNECTED / LINK_NOT_OPEN / BACKPRESSURE):重连即恢复,重连钩子全局失效。
  * 不含 INVOKE_TIMEOUT——「设备不回包」不是断线,不能被重连钩子清掉;也不含
  * DEVICE_OFFLINE——那是逐设备状态,归 isDeviceOfflineError(review:全局失效
  * 会让 B 设备的任何 rehydrate 反复清掉仍离线的 A 设备的负缓存,止损失效)。
  */
 function isLocalLinkDownError(error: unknown): boolean {
-  return hasRemoteErrorMarker(error, 'NOT_CONNECTED') || hasRemoteErrorMarker(error, 'LINK_NOT_OPEN');
+  return (
+    hasRemoteErrorMarker(error, 'NOT_CONNECTED')
+    || hasRemoteErrorMarker(error, 'LINK_NOT_OPEN')
+    || hasRemoteErrorMarker(error, 'BACKPRESSURE')
+  );
 }
 
 /**

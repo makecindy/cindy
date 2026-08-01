@@ -2,10 +2,11 @@
  * MakerContactsStore 单测 — 用真 better-sqlite3 内存库跑全链路
  * (CRUD / 身份唯一约束与冲突 / resolve 三级递降 / FTS 检索 / 事件流 / 分组 / merge / sanity rebuild)。
  */
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import DatabaseCtor from 'better-sqlite3';
 import type Database from 'better-sqlite3';
 
+import { buildAllFtsDocs, buildFtsDoc } from '../rows.js';
 import { MakerContactsStore } from '../store.js';
 import { ContactsError } from '../types.js';
 import type { Logger } from '../../interfaces/logger.js';
@@ -515,6 +516,47 @@ describe('MakerContactsStore', () => {
       const store2 = new MakerContactsStore({ db, logger: noopLogger() });
       store2.init();
       expect(store2.search('林子航')[0]!.contactId).toBe(p.id);
+    });
+
+    it('sanity check 使用固定次数的集合查询构建 FTS 投影', () => {
+      for (let index = 0; index < 50; index += 1) {
+        store.createContact({
+          kind: 'person',
+          displayName: `批量联系人 ${index}`,
+          identities: [{ platform: 'email', value: `batch-${index}@example.com` }],
+        });
+      }
+
+      const prepare = vi.spyOn(db, 'prepare');
+      const store2 = new MakerContactsStore({ db, logger: noopLogger() });
+      store2.init();
+      const prepareCount = prepare.mock.calls.length;
+      prepare.mockRestore();
+
+      // 初始化允许固定数量的 schema / sanity / 电话规范化查询，但不能退回每联系人 4 次查询。
+      expect(prepareCount).toBeLessThan(20);
+    });
+
+    it('批量与单联系人 FTS 投影在时间戳并列时保持完全一致', () => {
+      const person = createNeo();
+      const org = store.createContact({ kind: 'org', displayName: '云岚网络' });
+      store.appendEvent(person.id, { date: '2026-08-01', text: '上午讨论方案' });
+      store.appendEvent(person.id, { date: '2026-08-01', text: '下午确认方案' });
+      store.addRelation(person.id, { toId: org.id, relation: '任职' });
+      store.addRelation(org.id, { toId: person.id, relation: '合作' });
+
+      const sameStamp = '2026-08-01T00:00:00.000Z';
+      db.prepare(`UPDATE contact_identities SET created_at = ?`).run(sameStamp);
+      db.prepare(`UPDATE contact_events SET created_at = ?`).run(sameStamp);
+      db.prepare(`UPDATE contact_relations SET created_at = ?`).run(sameStamp);
+
+      const byContactId = (a: { contactId: string }, b: { contactId: string }) =>
+        a.contactId.localeCompare(b.contactId);
+      const individual = [person.id, org.id]
+        .map((contactId) => buildFtsDoc(db, contactId))
+        .filter((doc): doc is NonNullable<typeof doc> => doc !== null)
+        .sort(byContactId);
+      expect(buildAllFtsDocs(db).sort(byContactId)).toEqual(individual);
     });
   });
 });

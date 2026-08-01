@@ -116,6 +116,7 @@ export function ErrorTailErrorBanner({
   deviceLinkDeviceId,
   modelId,
   providerId,
+  onSwitchToClaudeSubscription,
   silentEncryptedRetryEnabled,
   onForkStripEncrypted,
   forkStripEncryptedRunning,
@@ -134,6 +135,7 @@ export function ErrorTailErrorBanner({
   deviceLinkDeviceId?: string | null;
   modelId?: string;
   providerId?: string | null;
+  onSwitchToClaudeSubscription?: () => Promise<void>;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -155,6 +157,7 @@ export function ErrorTailErrorBanner({
       deviceLinkDeviceId={deviceLinkDeviceId}
       modelId={modelId}
       providerId={providerId}
+      onSwitchToClaudeSubscription={onSwitchToClaudeSubscription}
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}

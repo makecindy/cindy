@@ -17,7 +17,7 @@ Each **session** is a persistent chat thread driven by **one agent** (Claude Cod
 - While the agent is replying, **Send** becomes **Stop** — click it to interrupt the current turn cleanly.
 - You can keep typing while the agent is busy — follow-ups are **queued** in order and sent one after another when the previous turn finishes.
 
-**Conversation controls:**
+**Chat controls:**
 
 - **`/clear`** — clears the current session's conversation context in place (resets messages and state without creating or switching to a new session). The session itself stays in the sidebar; only its content is wiped.
 - **`/compact`** — ask the agent to summarize and compress earlier turns into a shorter context (Claude Code).

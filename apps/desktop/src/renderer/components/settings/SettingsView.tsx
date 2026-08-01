@@ -33,6 +33,7 @@ import { GitSafetySection } from './GitSafetySection';
 import { SessionImportSection } from './SessionImportSection';
 import { HelpSection } from './HelpSection';
 import { HelpAssistantPanel } from './HelpAssistantPanel';
+import { AgentResourceSection } from './AgentResourceSection';
 import { CollaborationSection } from './CollaborationSection';
 import { BuiltinToolsSection } from './BuiltinToolsSection';
 import { ContactsSection } from './contacts/ContactsSection';
@@ -314,6 +315,16 @@ export function SettingsView() {
                   aria-label={t('settings.sections.collaboration')}
                 >
                   <CollaborationSection />
+                </section>
+
+                {/* Section — Agent resource usage (命令并发/进程优先级/工具链限核)。
+                    与 Collaboration(worker 上限)相邻:同属"agent 吃多少机器资源"的治理面。 */}
+                <section
+                  id="settings-agent-resource"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.agentResource')}
+                >
+                  <AgentResourceSection />
                 </section>
 
                 {/* Section — Git safety savepoints (formal setting, not experimental). */}

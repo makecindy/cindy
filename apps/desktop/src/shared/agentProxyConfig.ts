@@ -52,6 +52,23 @@ export const LEGACY_AGENT_PROXY_REMOTE_PORT = 17893;
 const PROXY_URL_SCHEMES = new Set(['http:', 'https:', 'socks5:', 'socks5h:']);
 
 /**
+ * Produce a safe diagnostic representation of a possibly-invalid proxy URL.
+ * This is intentionally separate from validation: rejected values must still
+ * never be copied verbatim into logs because they may contain userinfo.
+ */
+export function redactAgentProxyUrlForLog(raw: unknown): string {
+  if (typeof raw !== 'string') return '[redacted]';
+  if (!raw.trim() || /\s/.test(raw)) return '[redacted]';
+  try {
+    const url = new URL(raw.trim());
+    if (!PROXY_URL_SCHEMES.has(url.protocol) || !url.hostname) return '[redacted]';
+    return `${url.protocol}//${url.host}`;
+  } catch {
+    return '[redacted]';
+  }
+}
+
+/**
  * 校验 env 模式的 proxyUrl; 非法返回 null。main 的 prefs/IPC 与 renderer
  * 表单共用同一口径 — 两套标准会让用户填了合法表象却被 IPC 打回。
  */

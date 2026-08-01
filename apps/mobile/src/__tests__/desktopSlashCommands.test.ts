@@ -23,9 +23,9 @@ describe('filterMobileDesktopCommands', () => {
 
 describe('parseMobileDesktopCommand', () => {
   it('命中白名单命令并抽出参数', () => {
-    expect(parseMobileDesktopCommand('/learn 总结这个会话的调试技巧')).toEqual({
+    expect(parseMobileDesktopCommand('/learn 总结这个任务的调试技巧')).toEqual({
       name: 'learn',
-      args: '总结这个会话的调试技巧',
+      args: '总结这个任务的调试技巧',
     });
   });
 

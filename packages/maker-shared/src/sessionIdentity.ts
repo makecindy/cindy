@@ -29,13 +29,13 @@ export function sessionCollaborationLabel(session: SessionCollaborationLike): st
 export function sessionCollaborationNotice(session: SessionCollaborationLike | null): string | null {
   if (!session) return null;
   if (session.orcaRole === 'lead') {
-    return '这是桌面端 Orca Lead 会话。可以在手机上继续发消息聊天;创建 worker、切换 focus、fork/rewind、队列编辑和会话设置等编排操作请在电脑端完成。';
+    return '这是桌面端 Orca Lead 任务。可以在手机上继续发消息聊天;创建 worker、切换 focus、fork/rewind、队列编辑和任务设置等编排操作请在电脑端完成。';
   }
   if (session.orcaRole === 'worker') {
-    return '这是桌面端 Orca Worker 会话。手机版第一版只做安全查看,暂不提供发送消息、worker focus、归档 worker 或停止协作。';
+    return '这是桌面端 Orca Worker 任务。手机版第一版只做安全查看,暂不提供发送消息、worker focus、归档 worker 或停止协作。';
   }
   return sessionCollaborationLabel(session)
-    ? '这是桌面端协作会话。手机版第一版只做安全查看,协作编排操作请先在电脑端完成。'
+    ? '这是桌面端协作任务。手机版第一版只做安全查看,协作编排操作请先在电脑端完成。'
     : null;
 }
 
@@ -44,23 +44,23 @@ export function isCollaborationSession(session: SessionCollaborationLike | null)
 }
 
 /**
- * 写编排操作的只读 reason:对所有协作会话(lead + worker + 其它角色)返回 reason,驱动 fork/rewind、
- * 队列编辑、会话设置写、pending interaction 等高风险写操作的 gating(这些操作 lead 也仍留在电脑端)。
+ * 写编排操作的只读 reason:对所有协作任务(lead + worker + 其它角色)返回 reason,驱动 fork/rewind、
+ * 队列编辑、任务设置写、pending interaction 等高风险写操作的 gating(这些操作 lead 也仍留在电脑端)。
  */
 export function sessionCollaborationReadOnlyReason(session: SessionCollaborationLike | null): string | null {
   if (!isCollaborationSession(session)) return null;
-  return '协作模式手机版第一版为只读安全降级。处理确认、队列编辑和会话写操作请先在电脑端完成。';
+  return '协作模式手机版第一版为只读安全降级。处理确认、队列编辑和任务写操作请先在电脑端完成。';
 }
 
 /**
- * 输入框(发消息)是否只读:只对**非 lead** 的协作会话(worker / 其它角色)返回 reason;对 Lead 会话
- * 返回 null —— Lead 允许在手机上发文字消息(集中在原对话里继续聊)。普通(非协作)会话也返回 null。
+ * 输入框(发消息)是否只读:只对**非 lead** 的协作任务(worker / 其它角色)返回 reason;对 Lead 任务
+ * 返回 null —— Lead 允许在手机上发文字消息(集中在原对话里继续聊)。普通(非协作)任务也返回 null。
  * 与 sessionCollaborationReadOnlyReason(写编排只读)区分:composer 只读 ≠ 写编排只读。
  */
 export function sessionCollaborationComposerReadOnlyReason(session: SessionCollaborationLike | null): string | null {
   if (!isCollaborationSession(session)) return null;
   if (session?.orcaRole === 'lead') return null;
-  return '该协作子会话手机版为只读,发送消息请在电脑端完成。';
+  return '该协作子任务手机版为只读,发送消息请在电脑端完成。';
 }
 
 export function sessionWorktreeInfo(session: SessionWorktreeLike): SessionWorktreeInfo | null {

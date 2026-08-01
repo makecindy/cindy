@@ -53,7 +53,7 @@ vi.mock('react-i18next', () => ({
         'ccAgent.sidebar.sessionMenu.pin': '置顶',
         'ccAgent.sidebar.sessionMenu.openInNewWindow': '新窗口打开',
         'ccAgent.sidebar.sessionMenu.archived': '归档',
-        'ccAgent.sidebar.sessionMenu.copySessionLink': '复制对话链接',
+        'ccAgent.sidebar.sessionMenu.copySessionLink': '复制任务链接',
       };
       return dict[key] ?? key;
     },

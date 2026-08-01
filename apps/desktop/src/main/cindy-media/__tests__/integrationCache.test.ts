@@ -166,3 +166,22 @@ describe('miss 路径', () => {
     await expect(integrationCache.integrationCacheGet(KEY, db)).resolves.not.toBeNull();
   });
 });
+
+describe('staged write rollback', () => {
+  it('removes only the integration ref created by that write', async () => {
+    const first = await integrationCache.integrationCachePut(
+      { cacheKey: KEY, integration: 'feishu', buffer: BYTES_A, mimeType: 'image/png' },
+      db,
+    );
+    const reused = await integrationCache.integrationCachePut(
+      { cacheKey: KEY, integration: 'feishu', buffer: BYTES_A, mimeType: 'image/png' },
+      db,
+    );
+
+    await reused.rollbackRef();
+    expect(db.select().from(schema.mediaRefs).all()).toHaveLength(1);
+
+    await first.rollbackRef();
+    expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
+  });
+});

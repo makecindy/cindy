@@ -7,12 +7,7 @@
  */
 
 export type FeishuConnectionStatus =
-  | 'idle'
-  | 'testing'
-  | 'connected'
-  | 'reconnecting'
-  | 'conflict'
-  | 'error';
+  'idle' | 'testing' | 'connected' | 'reconnecting' | 'conflict' | 'error';
 
 export interface FeishuStatusUpdate {
   status: FeishuConnectionStatus;
@@ -22,9 +17,7 @@ export interface FeishuStatusUpdate {
 }
 
 export type ConnectVerdict =
-  | { kind: 'connected' }
-  | { kind: 'conflict' }
-  | { kind: 'error'; message: string };
+  { kind: 'connected' } | { kind: 'conflict' } | { kind: 'error'; message: string };
 
 /**
  * Public state surfaced to the renderer through `feishuBot:get-state` —
@@ -43,9 +36,13 @@ export interface FeishuPublicState {
   ownerOpenId: string | null;
   error?: string;
   lifecycleAnnouncement: boolean;
+  service: FeishuService;
 }
+
+export type FeishuService = 'feishu' | 'lark';
 
 export interface BotCredentials {
   appId: string;
   appSecret: string;
+  service: FeishuService;
 }

@@ -47,6 +47,7 @@ import {
   type GhostGrantLane,
 } from '../cindy-brain/ghostGrantConfirmBridge.js';
 import { classifyLocalAttachmentPath } from '../cindy-brain/ghostLocalPathGrant.js';
+import { toolNotFoundMessage } from '../cindy-brain/pipeDispatcher.js';
 import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { deriveGhostSessionContext, type GhostSessionContextInjected } from '../../shared/ghost.js';
 import { withCardToken } from '../cindy-brain/cardService.js';
@@ -659,7 +660,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return {
           ok: false,
           errorCode: 'TOOL_NOT_FOUND',
-          message: `目标插件没有工具 ${tool}`,
+          message: toolNotFoundMessage(ghostId, tool, target.manifest.tools),
         };
       }
       if (grantOnly && (!attachments || attachments.length === 0)) {
@@ -708,7 +709,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         !grantOnly &&
         !(refreshed.manifest.tools ?? []).some((candidate) => candidate.name === tool)
       ) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, refreshed.manifest.tools) };
       }
       let finalAssessment;
       try {
@@ -884,7 +885,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         };
       }
       if (!(preDispatch.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, preDispatch.manifest.tools) };
       }
       try {
         const preDispatchAssessment = getGhostSetupAssessment(ghostId);
@@ -923,7 +924,7 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
         return { ok: false, errorCode: 'GHOST_DISABLED_IN_WORKDIR', message: t('newChat.pluginSetup.targetDisabledInWorkdir') };
       }
       if (!(postCtx.manifest.tools ?? []).some((c) => c.name === tool)) {
-        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: `${t('newChat.pluginSetup.targetToolNotFound')} (${tool})` };
+        return { ok: false, errorCode: 'TOOL_NOT_FOUND', message: toolNotFoundMessage(ghostId, tool, postCtx.manifest.tools) };
       }
       try {
         const postCtxAssessment = getGhostSetupAssessment(ghostId);

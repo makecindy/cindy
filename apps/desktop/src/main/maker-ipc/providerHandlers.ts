@@ -316,7 +316,7 @@ function parseTestInput(input: unknown): ProviderTestInput | null {
     if (spec.wireProtocol !== undefined) {
       const allowed = spec.agent === 'claude-code'
         ? ['anthropic-messages']
-        : ['openai-responses', 'openai-chat'];
+        : ['openai-responses', 'openai-chat', 'anthropic-messages'];
       if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol)) return null;
     }
     if (spec.requestPath !== undefined && !isProviderRequestPath(spec.requestPath)) return null;
@@ -371,6 +371,12 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     )
   ) return null;
   if (spec.apiKey !== undefined && spec.apiKey !== null && typeof spec.apiKey !== 'string') return null;
+  if (spec.wireProtocol !== undefined) {
+    const allowed = spec.agent === 'claude-code'
+      ? ['anthropic-messages']
+      : ['openai-responses', 'openai-chat', 'anthropic-messages'];
+    if (typeof spec.wireProtocol !== 'string' || !allowed.includes(spec.wireProtocol)) return null;
+  }
   if (spec.headers !== undefined) {
     if (!spec.headers || typeof spec.headers !== 'object' || Array.isArray(spec.headers)) return null;
     if (Object.values(spec.headers as Record<string, unknown>).some((v) => typeof v !== 'string')) return null;
@@ -382,6 +388,9 @@ function parseModelsFetchInput(input: unknown): ProviderModelsFetchSpec | null {
     modelsUrl: (spec.modelsUrl as string | null | undefined) ?? null,
     apiKey: (spec.apiKey as string | null | undefined) ?? null,
     headers: spec.headers as Record<string, string> | undefined,
+    ...(typeof spec.wireProtocol === 'string'
+      ? { wireProtocol: spec.wireProtocol as ProviderModelsFetchSpec['wireProtocol'] }
+      : {}),
   };
 }
 

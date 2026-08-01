@@ -78,7 +78,11 @@ import {
 import { createReadImageHook } from './claude-hooks/read-image-hook.js';
 import { readAgentResourceSettings } from './agent-resource-settings-store.js';
 import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
-import { deriveAvailableModels, refreshCatalogDerivedModels } from './catalog-to-descriptors.js';
+import {
+  deriveAvailableModels,
+  refreshCatalogDerivedModels,
+  resolveVerifiedContextWindow,
+} from './catalog-to-descriptors.js';
 import { clearChatgptBridgeCredentialCache } from './anthropic-responses-bridge-host.js';
 import {
   getDesktopSelectableCatalog,
@@ -100,6 +104,7 @@ import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { notifyAutoPermissionClassifierUnavailable } from './claude-auto-permission-fallback.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
+  armCodexHttpRecovery,
   clearCodexProxyAuthInjection,
   ensureCodexControlPlaneProxyReady,
   ensureCodexProxyReady,
@@ -113,6 +118,7 @@ import {
   setCodexProxyGatewayKeyReader,
   registerComposed as registerCodexProxyComposed,
   registerReviewerRouteContext as registerCodexReviewerRouteContext,
+  registerChildThread as registerCodexProxyChildThread,
   unregister as unregisterCodexProxyPrompt,
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
@@ -156,6 +162,8 @@ import {
 } from './remote-codex-mcp-recovery.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../mcp-integrations/codexBuiltinToolPolicy.js';
 import { buildCodexProxySpawnArgs, CODEX_OPENAI_COMPACT_PROVIDER_ID } from './codex-gateway-config.js';
+import { buildCodexSubagentSpawnArgs } from './codex-subagent-config.js';
+import { readSubagentModelSettings } from './subagent-model-settings-store.js';
 import { getOutboundPathSnapshotFor } from './outbound-proxy-resolver.js';
 import {
   createDesktopMakerMemoryManager,
@@ -173,6 +181,7 @@ import {
 } from './mcp-tool-approval-policy.js';
 import { mapCodexAppServerModelsToCatalog } from './codex-model-discovery.js';
 import { prepareSharedProjectSkillLinks } from './shared-global-skills.js';
+import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 export { withRehydrateCloseSuppressed };
 
 type RemoteCcQuery = Awaited<
@@ -688,6 +697,7 @@ export function getMaker(): Maker {
       // + mkdir), tailer 再归一化汇入该 session 的 <date>.ndjson。
       resolveCcDebugFile: resolveSessionCcDebugFile,
       mcpProviders: claudeMcpProviders,
+      capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
       makerMemory: makerMemoryManager,
       // 智能通讯录 prompt 段的「本会话有效状态」: 与 mcp-providers.ts 的 provider
       // 包装同一判定链(PluginRegistry 工作区/用户覆盖 → 全局开关), 保证工具面与
@@ -933,6 +943,7 @@ export function getMaker(): Maker {
       // codex 子进程没法消费 in-process JS instance, prepareCodexExtraSpawnConfig
       // 起 streamable-HTTP bridge 把 instance 通过 -c 'mcp_servers...=...' 注入。
       mcpProviders: codexMcpProviders,
+      capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
       makerMemory: makerMemoryManager,
       // 通讯录 prompt 段有效状态(codex 版): 在 claude 的判定链之上再与「实际应用
       // 到 running app-server 的 spawn 快照」对齐 —— 开关切换后失效失败(busy,
@@ -952,6 +963,11 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'codex'),
       },
+      // 把 app-server 上报的上下文窗口收敛到该**路由**真实上限。每次调用读 live 目录:
+      // 模型发现 / 切账号 / 自定义 provider 增删改都要即时反映。按 providerId 定夺而不是
+      // 让 agent 按 id 回查 availableModels —— 那张表去重后 provider 归属已丢。
+      resolveVerifiedContextWindow: (providerId, modelId) =>
+        resolveVerifiedContextWindow(getDesktopSelectableCatalog(), 'codex', providerId, modelId),
       onCodexLocalModelsListed: (models) => {
         setDiscoveredCodexModels(mapCodexAppServerModelsToCatalog(models));
       },
@@ -1060,7 +1076,14 @@ export function getMaker(): Maker {
           ? getCodexControlPlaneProxyEndpoint(authInjection)
           : getCodexProxyEndpoint();
         return {
-          extraArgs: [...mcpExtraArgs, ...buildCodexProxySpawnArgs(endpoint, authInjection)],
+          // 子代理护栏/默认模型每次 createHost 现读 store:DeferredCodexRestart 兑现
+          // (dispose host)后的新 spawn 自动带新值。agents.* 对 control-plane 的
+          // model/list 无影响,不加 hostPurpose 分支。
+          extraArgs: [
+            ...mcpExtraArgs,
+            ...buildCodexSubagentSpawnArgs(readSubagentModelSettings()),
+            ...buildCodexProxySpawnArgs(endpoint, authInjection),
+          ],
           extraEnv: mcpExtraEnv,
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
@@ -1091,8 +1114,12 @@ export function getMaker(): Maker {
       prepareCodexResumeSession: prepareExternalCodexSessionForResume,
       registerCodexSystemPromptForThread: ({ sessionId, threadId, text }) =>
         registerCodexProxyComposed(sessionId, threadId, text),
+      armCodexHttpRecovery,
       registerCodexReviewerRouteContext: ({ sessionId, threadId, model }) =>
         registerCodexReviewerRouteContext(sessionId, threadId, model),
+      registerCodexChildThreadForParent: ({ parentThreadId, childThreadId }) => {
+        registerCodexProxyChildThread(parentThreadId, childThreadId);
+      },
       // host 自家、用户已通过 OAuth/账号授权过且完成权限 review 的 MCP server,
       // 按精确 server name 自动通过 Codex MCP elicitation，避免每次可信写操作都弹
       // PermissionPrompt。`cindy_` 只是 namespace，不构成信任边界；新 provider

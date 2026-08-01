@@ -18,12 +18,27 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 
+vi.mock('../../contacts-sync/driver.js', () => ({
+  broadcastContactsNow: vi.fn(),
+  getContactsDeviceSyncStatus: vi.fn(),
+  onContactsDeviceSyncStatusChanged: vi.fn(),
+  setContactsDeviceSyncEnabled: vi.fn(),
+}));
+
 import { createContactsIpcHandlers } from '../contacts-ipc.js';
 import { MAKER_INVOKE } from '../channels.js';
 
 function noopLogger() {
   const noop = () => {};
-  const l = { trace: noop, debug: noop, info: noop, warn: noop, error: noop, fatal: noop, child: () => l };
+  const l = {
+    trace: noop,
+    debug: noop,
+    info: noop,
+    warn: noop,
+    error: noop,
+    fatal: noop,
+    child: () => l,
+  };
   return l;
 }
 
@@ -67,7 +82,9 @@ describe('contacts-ipc handlers', () => {
     });
     await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true);
     expect(enabled).toBe(true);
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!('yes')).rejects.toThrow(/INVALID_PARAMS/);
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!('yes')).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
   });
 
   it('开关落盘失败按 [CODE] 协议上抛, 不漏裸 Error(规则 13)', async () => {
@@ -79,7 +96,55 @@ describe('contacts-ipc handlers', () => {
       },
       broadcastChanged: () => {},
     });
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true)).rejects.toThrow(/\[INTERNAL\]/);
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true)).rejects.toThrow(
+      /\[INTERNAL\]/,
+    );
+  });
+
+  it('设备同步状态、开关和立即同步走独立程序通道', async () => {
+    let syncEnabled = false;
+    const setDeviceSyncEnabled = vi.fn(async (value: boolean) => {
+      syncEnabled = value;
+    });
+    const syncNow = vi.fn(async () => {});
+    const status = () => ({
+      enabled: syncEnabled,
+      phase: syncEnabled ? 'waiting' : 'off',
+      onlineDeviceCount: 0,
+    });
+    handlers = createContactsIpcHandlers({
+      getManager: () => manager,
+      readSettingsState: () => ({ value: { enabled }, isCustomized: enabled }),
+      writeEnabled: (value) => {
+        enabled = value;
+      },
+      broadcastChanged: () => {},
+      readDeviceSyncStatus: status,
+      setDeviceSyncEnabled,
+      syncNow,
+    });
+
+    expect(await handlers[MAKER_INVOKE.CONTACTS_SYNC_STATUS_GET]!()).toMatchObject({
+      enabled: false,
+      phase: 'off',
+    });
+    expect(await handlers[MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]!(true)).toMatchObject({
+      enabled: true,
+      phase: 'waiting',
+    });
+    await handlers[MAKER_INVOKE.CONTACTS_SYNC_NOW]!();
+    expect(setDeviceSyncEnabled).toHaveBeenCalledWith(true);
+    expect(syncNow).toHaveBeenCalledTimes(1);
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]!('yes')).rejects.toThrow(
+      /INVALID_PARAMS/,
+    );
+  });
+
+  it('设备同步状态依赖缺失时 fail closed，不向 renderer 返回 undefined', async () => {
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SYNC_ENABLED_SET]!(true)).rejects.toThrow(
+      /\[INTERNAL\]/,
+    );
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SYNC_NOW]!()).rejects.toThrow(/\[INTERNAL\]/);
   });
 
   it('开关值变化时失效 Codex MCP, 同值重写不失效, 失效失败不影响落盘', async () => {
@@ -132,13 +197,19 @@ describe('contacts-ipc handlers', () => {
     })) as { id: string };
     expect(broadcasts).toBe(1);
 
-    const resolved = (await handlers[MAKER_INVOKE.CONTACTS_RESOLVE]!('zhang@example.com', undefined)) as Array<{
+    const resolved = (await handlers[MAKER_INVOKE.CONTACTS_RESOLVE]!(
+      'zhang@example.com',
+      undefined,
+    )) as Array<{
       profile: { id: string };
     }>;
     expect(resolved[0]!.profile.id).toBe(created.id);
     expect(broadcasts).toBe(1); // 查询不广播
 
-    await handlers[MAKER_INVOKE.CONTACTS_APPEND_EVENT]!(created.id, { date: '2026-07-07', text: '入职' });
+    await handlers[MAKER_INVOKE.CONTACTS_APPEND_EVENT]!(created.id, {
+      date: '2026-07-07',
+      text: '入职',
+    });
     const got = (await handlers[MAKER_INVOKE.CONTACTS_GET]!(created.id)) as { events: unknown[] };
     expect(got.events).toHaveLength(1);
     expect(broadcasts).toBe(2);
@@ -171,22 +242,35 @@ describe('contacts-ipc handlers', () => {
   });
 
   it('分组: create/set-members/list/delete', async () => {
-    const c = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({ kind: 'person', displayName: 'A' })) as {
+    const c = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({
+      kind: 'person',
+      displayName: 'A',
+    })) as {
       id: string;
     };
-    const g = (await handlers[MAKER_INVOKE.CONTACTS_GROUPS_CREATE]!('核心', undefined)) as { id: string };
+    const g = (await handlers[MAKER_INVOKE.CONTACTS_GROUPS_CREATE]!('核心', undefined)) as {
+      id: string;
+    };
     await handlers[MAKER_INVOKE.CONTACTS_GROUPS_SET_MEMBERS]!(g.id, { add: [c.id] });
-    const groups = (await handlers[MAKER_INVOKE.CONTACTS_GROUPS_LIST]!()) as Array<{ memberCount: number }>;
+    const groups = (await handlers[MAKER_INVOKE.CONTACTS_GROUPS_LIST]!()) as Array<{
+      memberCount: number;
+    }>;
     expect(groups[0]!.memberCount).toBe(1);
     await handlers[MAKER_INVOKE.CONTACTS_GROUPS_DELETE]!(g.id);
     expect(await handlers[MAKER_INVOKE.CONTACTS_GROUPS_LIST]!()).toEqual([]);
   });
 
   it('关系边: add/remove relation', async () => {
-    const p1 = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({ kind: 'person', displayName: 'A' })) as {
+    const p1 = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({
+      kind: 'person',
+      displayName: 'A',
+    })) as {
       id: string;
     };
-    const o1 = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({ kind: 'org', displayName: 'O' })) as {
+    const o1 = (await handlers[MAKER_INVOKE.CONTACTS_CREATE]!({
+      kind: 'org',
+      displayName: 'O',
+    })) as {
       id: string;
     };
     const rel = (await handlers[MAKER_INVOKE.CONTACTS_ADD_RELATION]!(p1.id, {

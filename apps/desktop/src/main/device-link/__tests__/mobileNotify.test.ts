@@ -17,7 +17,10 @@ describe('buildSessionNotifyPayload', () => {
       title: '修复登录问题',
       body: '已完成 ✓',
       deepLink: '/sessions/session-1234?deviceId=desktop-abcd',
-      collapseId: createHash('sha256').update('desktop-abcd:session-1234').digest('hex').slice(0, 32),
+      collapseId: createHash('sha256')
+        .update('desktop-abcd:session-1234')
+        .digest('hex')
+        .slice(0, 32),
     });
     expect(buildSessionNotifyPayload({ ...base, kind: 'error' }).category).toBe('session-error');
     expect(buildSessionNotifyPayload({ ...base, kind: 'needs-reply' }).category).toBe(

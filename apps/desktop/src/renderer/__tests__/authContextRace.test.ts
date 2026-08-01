@@ -33,6 +33,18 @@ describe('AuthContext auth-state races', () => {
     expect(source).toContain('clearWorkersCache();');
   });
 
+  it('publishes a data-owner generation at every auth boundary', () => {
+    expect(source).toContain('setDataOwnerGeneration(state.dataOwnerId);');
+    expect(source).toContain('// Invalidate in-flight remote sends before the confirmation dialog resolves.');
+    expect(source.match(/setDataOwnerGeneration\(null\);/g)?.length).toBeGreaterThanOrEqual(2);
+    const enterLocal = source.indexOf('const enterLocalMode = useCallback');
+    const exitLocal = source.indexOf('const exitLocalMode = useCallback');
+    expect(source.indexOf('setDataOwnerGeneration(state.dataOwnerId);', enterLocal))
+      .toBeLessThan(exitLocal);
+    expect(source.indexOf('setDataOwnerGeneration(state.dataOwnerId);', exitLocal))
+      .toBeGreaterThan(exitLocal);
+  });
+
   it('projects browser waiting state before the main-process loopback request settles', () => {
     expect(source).toContain("if (action.type === 'start-browser')");
     expect(source).toContain("setLoginState({ step: 'browser-redirect', label: action.label });");

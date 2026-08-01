@@ -15,6 +15,13 @@ Skills are reusable agent capabilities you package as a folder and load into you
 - Project-scoped (only inside one working directory): `<working-dir>/.agents/skills/<name>/` or `<working-dir>/.claude/skills/<name>/`.
 - Each skill is its own folder with a required `SKILL.md` at the root (the prompt / spec the agent reads). Sibling files and subfolders in that folder are also visible to the agent.
 
+**Importing a local skill:**
+
+- On the Skills page, use **Import skill** (top-right) to pick a `.zip` package or a standalone `SKILL.md` file.
+- A zip must contain a `SKILL.md` (at the package root, or inside a single top-level folder). The YAML frontmatter must include non-empty `name` and `description` fields; `name` must match `^[a-z0-9-]{1,200}$`.
+- You then choose where to install: global, a known project, or another directory. Cindy extracts metadata from the file automatically and lists the skill with that name and description.
+- Imported skills can be uninstalled from the detail page, and you can publish them to SkillHub later if you want.
+
 **Using an installed skill:**
 
 - Type `/` in the composer to open the slash-command palette; your installed skills show up there alongside built-in and agent commands. Pick one to run it.

@@ -709,9 +709,9 @@ describe('mobile remote-control headless UI flow smoke', () => {
     )).toMatchObject({
       title: '移动端巡检',
       unreadCount: 1,
-      detail: 'cron 0 9 * * * · 新会话 · Claude · xdt-maker',
+      detail: 'cron 0 9 * * * · 新任务 · Claude · xdt-maker',
       runSessionDetail: null,
-      runSessionLabel: '新会话',
+      runSessionLabel: '新任务',
     });
     await maker.schedule.markScheduleRunsRead('sched-1');
     expect(countUnreadRuns(normalizeScheduleRuns(await maker.schedule.listRuns('sched-1', 50)))).toBe(0);

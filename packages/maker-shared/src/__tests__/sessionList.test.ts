@@ -110,7 +110,7 @@ describe('sessionList', () => {
 
   it('未起名会话用调用方给的本地化文案,不回落工作目录路径', () => {
     // 哨兵若按「无标题」处理,会回落 workingDir 把完整路径当标题显示,与 desktop 的
-    // 「未命名对话」不一致(PR #1031 review P1)。文案由调用方按当前 locale 传入 ——
+    // 「未命名任务」不一致(PR #1031 review P1)。文案由调用方按当前 locale 传入 ——
     // 共享层不能兜中文串,mobile 还支持 en / ja / ko。
     const now = new Date('2026-01-01T00:10:00.000Z').getTime();
     const sentinel = session('s-sentinel', {
@@ -119,8 +119,8 @@ describe('sessionList', () => {
     });
 
     expect(
-      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, '未命名对话').title,
-    ).toBe('未命名对话');
+      toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, '未命名任务').title,
+    ).toBe('未命名任务');
     // 同一条会话换 locale → 换文案(锁住「不在共享层写死中文」)。
     expect(
       toRemoteSessionListItem(sentinel, now, undefined, 0, null, null, 'Untitled session').title,
@@ -136,7 +136,7 @@ describe('sessionList', () => {
       0,
       null,
       null,
-      '未命名对话',
+      '未命名任务',
     );
     expect(emptyTitle.title).toBe('/Users/dash/Code/Cindy/cindy');
   });
@@ -201,7 +201,7 @@ describe('sessionList', () => {
     }), new Date('2026-01-01T00:10:00.000Z').getTime());
 
     expect(item).toMatchObject({
-      title: '未命名会话',
+      title: '未命名任务',
       subtitle: 'Codex · gpt-5.4 · dialogue',
       detail: '活跃 · 5 分钟前 · 12 条消息',
       messagePreview: null,
@@ -423,8 +423,8 @@ describe('sessionList', () => {
     const group = rows.find((item) => item.automationGroup);
     expect(group).toMatchObject({
       title: '移动端巡检',
-      subtitle: '自动化任务 · 2 个会话 · Claude Code · claude-sonnet-4-6',
-      detail: '2 个会话 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
+      subtitle: '自动化 · 2 个任务 · Claude Code · claude-sonnet-4-6',
+      detail: '2 个任务 · 4 分钟前 · 自动化执行中 · 1 个自动化未读',
       automationGroup: {
         key: 'schedule:sched-1',
         sessionIds: ['running', 'old'],
@@ -659,7 +659,7 @@ describe('sessionList', () => {
       statusFilter: 'active',
     })).toMatchObject({
       title: '搜索结果',
-      detail: '1 个匹配会话 · 活跃 2 · 项目分组',
+      detail: '1 个匹配任务 · 活跃 2 · 项目分组',
       hint: '搜索范围包含标题、项目路径、模型、自动化名称和消息预览。',
       resultCount: 1,
       rowCount: 1,
@@ -690,9 +690,9 @@ describe('sessionList', () => {
       sections: automationSections,
       statusFilter: 'automation',
     })).toMatchObject({
-      title: '自动化会话',
-      detail: '2 个会话 · 1 行 · 自动化 2 · 项目分组',
-      hint: '自动化会话会按计划聚合，展开后可以进入单次运行。',
+      title: '自动化生成的任务',
+      detail: '2 个任务 · 1 行 · 自动化 2 · 项目分组',
+      hint: '自动化生成的任务会按计划聚合，展开后可以进入单次运行。',
       resultCount: 2,
       rowCount: 1,
     });
@@ -700,19 +700,19 @@ describe('sessionList', () => {
 
   it('keeps mobile device-detail empty states specific to search and filters', () => {
     expect(deviceSessionEmptyState('active', 'billing')).toMatchObject({
-      title: '没有匹配的会话',
+      title: '没有匹配的任务',
     });
     expect(deviceSessionEmptyState('waiting', '')).toMatchObject({
       title: '没有待处理请求',
     });
     expect(deviceSessionEmptyState('automation', '')).toMatchObject({
-      title: '没有自动化会话',
+      title: '没有自动化生成的任务',
     });
     expect(deviceSessionEmptyState('archived', '')).toMatchObject({
-      title: '没有归档会话',
+      title: '没有归档任务',
     });
     expect(deviceSessionEmptyState('active', '')).toMatchObject({
-      title: '这台电脑暂无活动会话',
+      title: '这台电脑暂无活动任务',
     });
   });
 

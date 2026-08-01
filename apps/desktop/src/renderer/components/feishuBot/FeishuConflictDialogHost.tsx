@@ -12,16 +12,25 @@ import { useCallback, useEffect, useState } from 'react';
 
 import { FeishuConflictDialog } from './FeishuConflictDialog';
 
-const FEISHU_OPEN_PLATFORM_URL = 'https://open.feishu.cn/app?lang=zh-CN';
+const OPEN_PLATFORM_URLS = {
+  feishu: 'https://open.feishu.cn/app?lang=zh-CN',
+  lark: 'https://open.larksuite.com/app',
+} as const;
 
 export function FeishuConflictDialogHost() {
   const [open, setOpen] = useState(false);
   const [appId, setAppId] = useState<string | null>(null);
+  const [service, setService] = useState<'feishu' | 'lark'>('feishu');
 
   useEffect(() => {
     const unsub = window.electronAPI.feishuBot.onConflict((payload) => {
       setAppId(payload.appId);
-      setOpen(true);
+      setService('feishu');
+      void window.electronAPI.feishuBot
+        .getState()
+        .then((state) => setService(state.service ?? 'feishu'))
+        .catch(() => undefined)
+        .finally(() => setOpen(true));
     });
     return unsub;
   }, []);
@@ -32,13 +41,14 @@ export function FeishuConflictDialogHost() {
 
   const handleCreateOwnApp = useCallback(() => {
     setOpen(false);
-    window.electronAPI.openExternal?.(FEISHU_OPEN_PLATFORM_URL);
-  }, []);
+    window.electronAPI.openExternal?.(OPEN_PLATFORM_URLS[service]);
+  }, [service]);
 
   return (
     <FeishuConflictDialog
       open={open}
       appId={appId}
+      service={service}
       onDismiss={handleDismiss}
       onCreateOwnApp={handleCreateOwnApp}
     />

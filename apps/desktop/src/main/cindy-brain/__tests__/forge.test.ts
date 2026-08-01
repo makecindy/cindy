@@ -410,6 +410,14 @@ describe('FORGE_GUIDE', () => {
       'userActionToken',
       "mode:'continue'",
       "trigger: 'background'",
+      // 2026-07-31 快问快答(cindy.text.oneshot)与派活取件(agent.errand)。
+      'oneshot_text',
+      'NO_CANDIDATE',
+      'expectJson',
+      '4.11.1',
+      'cindy.agent.errand',
+      'queryErrand',
+      '"errand": true',
       'node 槽',
       'cindy.node.request',
       'json-rpc-stdio',
@@ -546,6 +554,22 @@ describe('FORGE_GUIDE', () => {
       '视频画面参数(四项全可选',
       'videoParams',
       '各型号支持集不同',
+      // 2026-07-31 设计对齐章(§0):动手前用带选项的提问卡片摆出"隐藏"设计
+      // 选项(界面形态/点名词/启动模式/联网等),用户确认设计小结后才动手;
+      // 小结须告知源码目录位置(知情即可,不需要用户选)。
+      '设计对齐',
+      '提问卡片',
+      '推荐项',
+      '"隐藏"设计选项',
+      '设计小结',
+      '源码会放在工作目录的哪个文件夹',
+      '让用户知情即可',
+      // 2026-07-31 确认弹窗(confirm 槽):主机同款确认框 + 真实点击回执;
+      // §2 卡槽清单、§4.9 的"不是确认框"指向、§4.18 章节三处同步。
+      '确认弹窗(confirm 槽)',
+      'cindy.confirm',
+      '只代表问到了,答案看',
+      '全局同时只有一个确认框',
     ]) {
       expect(FORGE_GUIDE).toContain(marker);
     }

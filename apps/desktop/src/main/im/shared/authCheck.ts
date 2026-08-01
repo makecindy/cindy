@@ -1,7 +1,8 @@
 import {
+  chatEligibleSourcesForModel,
+  getModel,
+  isAgentSelectableModel,
   nativeDefaultSourceId,
-  providerOffersModel,
-  sourcesForModel,
   type ProviderView,
 } from '@cindy/model-providers';
 import type { AgentKind } from '@cindy/maker-core';
@@ -162,16 +163,22 @@ export function resolveEffectiveProvider(
 ): ProviderResolution {
   if (!providers) return row.providerId ? { kind: 'explicit-invalid' } : { kind: 'none' };
   if (row.providerId) {
-    const explicit = providers.find(
-      (p) =>
-        p.id === row.providerId &&
-        p.connected &&
-        p.agents.includes(row.agentKind) &&
-        providerOffersModel(p, row.model, row.agentKind),
-    );
+    // 显式 providerId 命中的这个具体来源上,当前 model id 必须真的是聊天模型才接受
+    // (issue #882 第 3 点,2026-07 review):否则鉴权检查会去校验一个非聊天来源的
+    // 凭证,校验"通过"也不代表这个会话真能发聊天请求。
+    const explicit = providers.find((p) => {
+      if (p.id !== row.providerId || !p.connected || !p.agents.includes(row.agentKind)) {
+        return false;
+      }
+      const model = getModel(p, row.model, row.agentKind);
+      return (
+        model !== undefined &&
+        isAgentSelectableModel(model, { userProvider: p.source === 'user' })
+      );
+    });
     return explicit ? { kind: 'provider', provider: explicit } : { kind: 'explicit-invalid' };
   }
-  const sources = sourcesForModel(providers, row.model, row.agentKind);
+  const sources = chatEligibleSourcesForModel(providers, row.model, row.agentKind);
   const nativeId = nativeDefaultSourceId(sources, row.agentKind);
   const provider = (nativeId ? sources.find((p) => p.id === nativeId) : sources[0]) ?? null;
   return provider ? { kind: 'provider', provider } : { kind: 'none' };

@@ -9,7 +9,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import * as Dialog from '@radix-ui/react-dialog';
-import { Import, X } from 'lucide-react';
+import { Import, RefreshCw, X } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -21,6 +21,7 @@ import {
   type ContactProfile,
   type ContactSummary,
   type ContactGroupWithCount,
+  type ContactsDeviceSyncStatus,
   type ContactsStats,
 } from '@/lib/contactsService';
 import { ContactsListPane, type ContactsFilter } from './ContactsListPane';
@@ -37,9 +38,21 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   /** "让 AI 整理"引导(空列表态展示): 由 ContactsSection 注入, 会关闭本浮层并跳新会话草稿 */
   onAiOrganize?: () => void;
+  syncStatus?: ContactsDeviceSyncStatus | null;
+  syncPending?: boolean;
+  syncSummary?: string;
+  onSyncNow?: () => void;
 }
 
-export function ContactsManagerDialog({ open, onOpenChange, onAiOrganize }: Props) {
+export function ContactsManagerDialog({
+  open,
+  onOpenChange,
+  onAiOrganize,
+  syncStatus,
+  syncPending = false,
+  syncSummary,
+  onSyncNow,
+}: Props) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
 
@@ -242,9 +255,52 @@ export function ContactsManagerDialog({ open, onOpenChange, onAiOrganize }: Prop
                 {t('settings.contacts.manager.title')}
               </Dialog.Title>
               {statsLine && (
-                <p className="text-12 leading-[1.4] text-[var(--cmd-palette-item-meta)]">{statsLine}</p>
+                <p className="text-12 leading-[1.4] text-[var(--cmd-palette-item-meta)]">
+                  {statsLine}
+                </p>
+              )}
+              {syncSummary && (
+                <p
+                  className={cn(
+                    'text-12 leading-[1.4]',
+                    syncStatus?.phase === 'error'
+                      ? 'text-[var(--settings-error-text)]'
+                      : 'text-[var(--cmd-palette-item-meta)]',
+                  )}
+                >
+                  {syncSummary}
+                  {syncStatus?.enabled && syncStatus.onlineDeviceCount > 0
+                    ? ` · ${t('settings.contacts.sync.onlineDevices', {
+                        count: syncStatus.onlineDeviceCount,
+                      })}`
+                    : ''}
+                </p>
               )}
             </div>
+            {syncStatus?.enabled && onSyncNow && (
+              <button
+                type="button"
+                onClick={onSyncNow}
+                disabled={syncPending || syncStatus.onlineDeviceCount === 0}
+                className={cn(
+                  'flex h-8 items-center gap-1.5 rounded-lg px-2.5 text-13 transition-colors',
+                  'text-[var(--settings-section-title)] bg-[var(--settings-input-bg)]',
+                  'hover:bg-[var(--settings-menu-bg-hover)]',
+                  'disabled:cursor-not-allowed disabled:opacity-50',
+                )}
+              >
+                <span
+                  className={cn(
+                    'inline-flex',
+                    syncPending && 'animate-spinner motion-reduce:animate-none',
+                  )}
+                  aria-hidden="true"
+                >
+                  <RefreshCw size={14} />
+                </span>
+                {t('settings.contacts.sync.syncNow')}
+              </button>
+            )}
             <button
               type="button"
               onClick={() => setImportOpen(true)}

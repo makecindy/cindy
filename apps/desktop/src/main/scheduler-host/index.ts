@@ -45,6 +45,7 @@ import { ScriptScheduleRunner } from './script-runner';
 import { SchedulerScriptCapabilityBroker } from './script-capability-broker';
 import { DesktopNotifier } from './notifier';
 import { withScheduleLock } from './scheduleLock';
+import { wecomGroupNotificationService } from '../wecomGroupNotification';
 
 export interface StartSchedulerDeps {
   maker: Maker;
@@ -71,6 +72,7 @@ export async function startScheduler(deps: StartSchedulerDeps): Promise<Schedule
     logger: deps.logger,
     shouldNotifyDesktop: () =>
       getDesktopNotificationsEnabled() && !(getAgentIslandService()?.isEnabled() ?? false),
+    wecomGroupPublisher: wecomGroupNotificationService,
   });
   const promptRunner = new MakerScheduleRunner({
     maker: deps.maker,

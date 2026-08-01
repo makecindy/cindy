@@ -1,6 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const handlers = new Map<string, (...args: unknown[]) => unknown>();
+const showOpenDialog = vi.fn();
+const assertTrustedAppRendererEvent = vi.fn();
+const importLocalSkillMocks = vi.hoisted(() => ({
+  inspectLocalSkill: vi.fn(),
+  importLocalSkill: vi.fn(),
+}));
 const installServiceMocks = vi.hoisted(() => ({
   install: vi.fn(),
   cancelInstall: vi.fn(),
@@ -9,13 +15,21 @@ const installServiceMocks = vi.hoisted(() => ({
 
 vi.mock('electron', () => ({
   BrowserWindow: {
+    fromWebContents: vi.fn(() => ({ isDestroyed: () => false })),
     getAllWindows: vi.fn(() => []),
+  },
+  dialog: {
+    showOpenDialog,
   },
   ipcMain: {
     handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       handlers.set(channel, handler);
     }),
   },
+}));
+
+vi.mock('../../security/trustedAppRenderer.js', () => ({
+  assertTrustedAppRendererEvent,
 }));
 
 vi.mock('../../authManager', () => ({
@@ -59,6 +73,7 @@ vi.mock('../usageIndexer', () => ({
 }));
 
 vi.mock('../installService', () => installServiceMocks);
+vi.mock('../importLocalSkill', () => importLocalSkillMocks);
 
 const publish = vi.fn();
 const cancel = vi.fn();
@@ -79,12 +94,117 @@ describe('registerSkillhubIpc usage handlers', () => {
     vi.clearAllMocks();
     ensureReady.mockResolvedValue({ ready: true });
     requestLocalSkillUsageAnalyticsRefresh.mockReturnValue(null);
+    showOpenDialog.mockResolvedValue({ canceled: true, filePaths: [] });
     const { registerSkillhubIpc } = await import('../registerIpc');
     registerSkillhubIpc({
       getMaker: () => ({ listAgentSkills }) as never,
       marketService: marketService as never,
       publishService: { publish, cancel } as never,
     });
+  });
+
+  it('issues a sender-bound grant for the file selected and inspected in main', async () => {
+    showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/selected/demo-skill.zip'],
+    });
+    importLocalSkillMocks.inspectLocalSkill.mockResolvedValueOnce({
+      success: true,
+      name: 'demo-skill',
+      description: 'Demo',
+      version: '1.0.0',
+    });
+    const sender = { id: 11 };
+    const handler = handlers.get('skillhub:pick-local');
+
+    const result = await handler?.({ sender });
+
+    expect(assertTrustedAppRendererEvent).toHaveBeenCalledWith({ sender });
+    expect(importLocalSkillMocks.inspectLocalSkill).toHaveBeenCalledWith({
+      filePath: '/selected/demo-skill.zip',
+    });
+    expect(result).toMatchObject({
+      success: true,
+      canceled: false,
+      grantToken: expect.any(String),
+      name: 'demo-skill',
+      description: 'Demo',
+      version: '1.0.0',
+    });
+  });
+
+  it('imports only the selected path for the grant owner and consumes a successful grant', async () => {
+    showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/selected/demo-skill.zip'],
+    });
+    importLocalSkillMocks.inspectLocalSkill.mockResolvedValueOnce({
+      success: true,
+      name: 'demo-skill',
+      description: 'Demo',
+      version: '1.0.0',
+    });
+    importLocalSkillMocks.importLocalSkill.mockResolvedValueOnce({
+      success: true,
+      name: 'demo-skill',
+      description: 'Demo',
+      version: '1.0.0',
+      absolutePath: '/home/.agents/skills/demo-skill',
+    });
+    const sender = { id: 11 };
+    const picked = (await handlers.get('skillhub:pick-local')?.({ sender })) as {
+      grantToken: string;
+    };
+    const handler = handlers.get('skillhub:import-local');
+
+    const result = await handler?.(
+      { sender },
+      {
+        grantToken: picked.grantToken,
+        filePath: '/not-authorized/other.zip',
+        force: true,
+      },
+    );
+
+    expect(importLocalSkillMocks.importLocalSkill).toHaveBeenCalledWith({
+      filePath: '/selected/demo-skill.zip',
+      force: true,
+    });
+    expect(result).toMatchObject({ success: true, name: 'demo-skill' });
+
+    const replay = await handler?.({ sender }, { grantToken: picked.grantToken });
+    expect(replay).toMatchObject({ success: false, errorCode: 'PERMISSION_DENIED' });
+    expect(importLocalSkillMocks.importLocalSkill).toHaveBeenCalledTimes(1);
+  });
+
+  it('rejects missing grants and grants issued to another renderer', async () => {
+    const importHandler = handlers.get('skillhub:import-local');
+    const missing = await importHandler?.(
+      { sender: { id: 11 } },
+      { filePath: '/not-authorized/demo.zip' },
+    );
+    expect(missing).toMatchObject({ success: false, errorCode: 'PERMISSION_DENIED' });
+
+    showOpenDialog.mockResolvedValueOnce({
+      canceled: false,
+      filePaths: ['/selected/demo-skill.zip'],
+    });
+    importLocalSkillMocks.inspectLocalSkill.mockResolvedValueOnce({
+      success: true,
+      name: 'demo-skill',
+      description: 'Demo',
+      version: '1.0.0',
+    });
+    const picked = (await handlers.get('skillhub:pick-local')?.({
+      sender: { id: 11 },
+    })) as { grantToken: string };
+    const wrongSender = await importHandler?.(
+      { sender: { id: 22 } },
+      { grantToken: picked.grantToken },
+    );
+
+    expect(wrongSender).toMatchObject({ success: false, errorCode: 'PERMISSION_DENIED' });
+    expect(importLocalSkillMocks.importLocalSkill).not.toHaveBeenCalled();
   });
 
   it('retries usage summary after local DB becomes ready', async () => {

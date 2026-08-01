@@ -33,6 +33,7 @@ const log = createLogger('ssh-host-prefs-store');
 import {
   LEGACY_AGENT_PROXY_REMOTE_PORT,
   normalizeAgentProxyUrl,
+  redactAgentProxyUrlForLog,
   type SshHostAgentProxyPref,
 } from '../../shared/agentProxyConfig.js';
 
@@ -71,7 +72,7 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
     const proxyUrl = normalizeAgentProxyUrl(v.proxyUrl);
     if (!proxyUrl) {
       log.warn('invalid agentProxy.proxyUrl in prefs — dropping (was it hand-edited?)', {
-        proxyUrl: typeof v.proxyUrl === 'string' ? v.proxyUrl.slice(0, 80) : v.proxyUrl,
+        proxyUrl: redactAgentProxyUrlForLog(v.proxyUrl),
       });
       return undefined;
     }
@@ -85,7 +86,7 @@ function normalizeAgentProxy(raw: unknown): SshHostAgentProxyPref | undefined {
   // 可用 pref, 然后晚到 net.connect 才以难懂的方式失败。
   if (!localHost || /\s/.test(localHost) || localHost.includes("'") || localHost.includes('"')) {
     log.warn('invalid agentProxy.localHost in prefs — dropping (was it hand-edited?)', {
-      localHost: typeof v.localHost === 'string' ? v.localHost.slice(0, 80) : v.localHost,
+      localHost: '[redacted]',
     });
     return undefined;
   }
@@ -180,19 +181,9 @@ export function setSshHostAgentProxy(hostId: string, agentProxy: SshHostAgentPro
     target: ap
       ? ap.mode === 'tunnel'
         ? `remote:${ap.remotePort} -> ${ap.localHost}:${ap.localPort}`
-        : redactProxyUrlForLog(ap.proxyUrl)
+        : redactAgentProxyUrlForLog(ap.proxyUrl)
       : null,
   });
-}
-
-/** 日志安全的 proxy URL 形态: scheme://host:port (剥 userinfo / path / query)。 */
-function redactProxyUrlForLog(url: string): string {
-  try {
-    const u = new URL(url);
-    return `${u.protocol}//${u.host}`;
-  } catch {
-    return '(unparseable)';
-  }
 }
 
 function writePrefs(prefs: SshHostPrefs): void {

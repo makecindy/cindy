@@ -13,6 +13,7 @@ import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
@@ -45,7 +46,11 @@ import {
   providerForTaskDispatch,
   type HookControlManagerDeps,
 } from '../manager';
-import { createHookTransport, type HookTransportOpts } from '../transport';
+import {
+  computeBackoffDelayMs,
+  createHookTransport,
+  type HookTransportOpts,
+} from '../transport';
 import type { SlackHookStore, SlackHookConfigState } from '../store';
 
 const noopLog = { info: () => {}, warn: () => {} };
@@ -55,10 +60,14 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
   let state: SlackHookConfigState = {
     enabled: initial.enabled ?? true,
     telegramEnabled: initial.telegramEnabled ?? false,
+    xEnabled: initial.xEnabled ?? false,
     urlOverride: initial.url,
     workspaces: initial.workspaces ?? {},
     bindingsCache: initial.bindingsCache ?? [],
+    lifecycleAnnouncementOverride: initial.lifecycleAnnouncementOverride ?? null,
     telegramBindingCache: initial.telegramBindingCache ?? null,
+    xBindingCache: initial.xBindingCache ?? null,
+    xDefaultWorkspace: initial.xDefaultWorkspace ?? null,
   };
   return {
     get: () => ({
@@ -66,6 +75,7 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       workspaces: { ...state.workspaces },
       bindingsCache: state.bindingsCache.map((e) => ({ ...e })),
       telegramBindingCache: state.telegramBindingCache ? { ...state.telegramBindingCache } : null,
+      xBindingCache: state.xBindingCache ? { ...state.xBindingCache } : null,
     }),
     effectiveUrl: () => state.urlOverride ?? 'wss://unused.example',
     setEnabled(enabled) {
@@ -73,11 +83,16 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       return state;
     },
     setProviderEnabled(provider, enabled) {
-      state = provider === 'slack' ? { ...state, enabled } : { ...state, telegramEnabled: enabled };
+      state =
+        provider === 'slack'
+          ? { ...state, enabled }
+          : provider === 'x'
+            ? { ...state, xEnabled: enabled }
+            : { ...state, telegramEnabled: enabled };
       return state;
     },
     anyProviderEnabled() {
-      return state.enabled || state.telegramEnabled;
+      return state.enabled || state.telegramEnabled || state.xEnabled;
     },
     setWorkspaces(workspaces) {
       state = { ...state, workspaces };
@@ -87,8 +102,19 @@ function memoryStore(initial: Partial<SlackHookConfigState> & { url: string }): 
       state = { ...state, bindingsCache: entries.map((e) => ({ ...e })) };
       return state;
     },
-    setTelegramBindingCache(entry) {
-      state = { ...state, telegramBindingCache: entry ? { ...entry } : null };
+    setLifecycleAnnouncementOverride(enabled) {
+      state = { ...state, lifecycleAnnouncementOverride: enabled };
+      return state;
+    },
+    setProviderBindingCache(provider, entry) {
+      state =
+        provider === 'x'
+          ? { ...state, xBindingCache: entry ? { ...entry } : null }
+          : { ...state, telegramBindingCache: entry ? { ...entry } : null };
+      return state;
+    },
+    setXDefaultWorkspace(alias) {
+      state = { ...state, xDefaultWorkspace: alias };
       return state;
     },
   };
@@ -102,6 +128,8 @@ function makeManager(
     store,
     createTransport: createHookTransport,
     getTelegramUrl: () => store.effectiveUrl(),
+    // X lane 默认不配端点(未部署形态), 相关用例用 overrides 显式注入。
+    getXUrl: () => '',
     getAuthToken: async () => 'jwt-token-1',
     refreshAuthToken: async () => false,
     deviceInfo: () => ({ deviceId: 'dev-1', deviceName: 'TestBox' }),
@@ -393,6 +421,60 @@ describe('hook-control transport handshake recovery', () => {
   });
 });
 
+describe('hook-control transport backoff jitter', () => {
+  const BASE = 1000;
+  const MAX = 30_000;
+
+  it('抖动落在退避值的 [0.7, 1.0] 区间内', () => {
+    // random 的两个极端决定区间端点；中点用于确认是线性插值而非跳变。
+    expect(computeBackoffDelayMs(0, BASE, MAX, () => 0)).toBe(700);
+    expect(computeBackoffDelayMs(0, BASE, MAX, () => 0.5)).toBe(850);
+    // random() 取不到 1，但末尾 Math.round 会把逼近满值的比例舍入上去，
+    // 所以上端是闭的：延迟可以恰好等于退避值（这也是 maxMs 仍不被越过的边界）。
+    expect(computeBackoffDelayMs(0, BASE, MAX, () => 0.999999)).toBe(BASE);
+  });
+
+  it('指数增长仍然成立，且 maxMs 是真实上限（抖动只向下）', () => {
+    // 高位 attempt 会让指数项远超 MAX，封顶后再抖动，绝不越过 MAX。
+    for (const attempt of [0, 1, 2, 3, 4, 5, 10, 30]) {
+      for (const r of [0, 0.25, 0.5, 0.75, 0.999999]) {
+        const delay = computeBackoffDelayMs(attempt, BASE, MAX, () => r);
+        expect(delay).toBeLessThanOrEqual(MAX);
+        expect(delay).toBeGreaterThan(0);
+      }
+    }
+    // 同一 random 下，未封顶区间应严格递增（抖动不掩盖退避本身）。
+    const at = (n: number) => computeBackoffDelayMs(n, BASE, MAX, () => 0.5);
+    expect(at(1)).toBeGreaterThan(at(0));
+    expect(at(2)).toBeGreaterThan(at(1));
+    // 封顶后不再增长。
+    expect(computeBackoffDelayMs(30, BASE, MAX, () => 0.5)).toBe(
+      computeBackoffDelayMs(10, BASE, MAX, () => 0.5),
+    );
+  });
+
+  it('同一 attempt 的不同随机源给出不同延迟（真正打散齐步重连）', () => {
+    const spread = new Set(
+      [0, 0.2, 0.4, 0.6, 0.8].map((r) => computeBackoffDelayMs(5, BASE, MAX, () => r)),
+    );
+    expect(spread.size).toBeGreaterThan(1);
+  });
+
+  it('生产缺省不注入 random 时也能建连（Math.random 兜底）', async () => {
+    const { wss, url } = await startServer();
+    const statuses: string[] = [];
+    const transport = createHookTransport({
+      ...transportOpts(url, { onStatus: (status) => statuses.push(status) }),
+      random: undefined,
+    });
+    cleanups.push(() => transport.dispose());
+
+    const [sock] = (await once(wss, 'connection')) as [ServerSocket];
+    sock.send(serializeHookMessage(makeWelcome({ serverName: 'mock', features: [] })));
+    await expect.poll(() => statuses.at(-1), { timeout: 3000 }).toBe('connected');
+  });
+});
+
 const WORKSPACES = { xdmaker: 'E:\\AIWork\\Lizi', blog: 'D:\\repos\\blog' };
 
 describe('provider dispatch boundary', () => {
@@ -440,6 +522,36 @@ describe('provider dispatch boundary', () => {
     expect(providerForTaskDispatch({ externalKey: 'telegram:dm:bot-1:user-1:g0' })).toBeNull();
   });
 
+  it('routes X dispatches only when source and lane key agree, failing closed on mismatch', () => {
+    expect(
+      providerForTaskDispatch({
+        externalKey: 'x:conv:999:conv-1:111:g1',
+        source: { im: 'x' },
+      }),
+    ).toBe('x');
+    // source/key 任一缺失或错配一律 fail closed —— X 不得继承 Slack 语义。
+    expect(providerForTaskDispatch({ externalKey: 'x:conv:999:conv-1:111:g1' })).toBeNull();
+    expect(
+      providerForTaskDispatch({
+        externalKey: 'x:conv:999:conv-1:111:g1',
+        source: { im: 'slack' },
+      }),
+    ).toBeNull();
+    expect(
+      providerForTaskDispatch({
+        externalKey: 'x:conv:999:conv-1:111:g1',
+        source: { im: 'telegram' },
+      }),
+    ).toBeNull();
+    expect(providerForTaskDispatch({ externalKey: 'T1:C1:1.1', source: { im: 'x' } })).toBeNull();
+    expect(
+      providerForTaskDispatch({
+        externalKey: 'telegram:dm:bot-1:user-1:g0',
+        source: { im: 'x' },
+      }),
+    ).toBeNull();
+  });
+
   it('routes only known provider lane keys for session archive', () => {
     expect(providerForExternalKey('slack:dm:T1:U1:g2')).toBe('slack');
     expect(providerForExternalKey('dm:U1:g2')).toBe('slack');
@@ -447,6 +559,7 @@ describe('provider dispatch boundary', () => {
     expect(providerForExternalKey('team-slack:C1:1.1')).toBe('slack');
     expect(providerForExternalKey('T1:C1:1.1')).toBe('slack');
     expect(providerForExternalKey('telegram:dm:bot:user:g2')).toBe('telegram');
+    expect(providerForExternalKey('x:conv:999:conv-1:111:g1')).toBe('x');
     expect(providerForExternalKey('discord:channel-1')).toBeNull();
     expect(providerForExternalKey('arbitrary')).toBeNull();
   });
@@ -474,6 +587,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
     const hello = await server.waitFor('hello');
     if (hello.type !== 'hello') throw new Error('unreachable');
     expect(hello.payload.deviceId).toBe('dev-1');
+    expect(hello.payload.lifecycleAnnouncement).toBe(false);
     // 内置「对话」伪目录 chat 恒在清单第一位, 真实别名跟在后面
     expect(hello.payload.workspaces[0]).toBe('chat');
     expect([...hello.payload.workspaces].sort()).toEqual(['blog', 'chat', 'xdmaker']);
@@ -512,6 +626,119 @@ describe('hook-control transport + manager(真实 ws server)', () => {
       result: 'rejected',
       reason: 'disabled',
     });
+  });
+
+  it('上下线通知偏好随 hello 上报，并在能力协商后实时更新', async () => {
+    const { wss, url } = await startServer();
+    const store = memoryStore({ url });
+    const manager = makeManager(store);
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+
+    const hello = await server.waitFor('hello');
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.lifecycleAnnouncement).toBe(false);
+
+    // 模拟 hello 已发送、welcome 尚未返回时切换。welcome 能力协商完成后
+    // 必须补发最新值，不能让 server 永久停留在 hello 的旧快照。
+    manager.setLifecycleAnnouncement(true);
+    sock.send(
+      serializeHookMessage(
+        makeWelcome({
+          serverName: 'mock',
+          features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+        }),
+      ),
+    );
+    const preference = await server.waitFor('lifecycle.preference');
+    if (preference.type !== 'lifecycle.preference') throw new Error('unreachable');
+    expect(preference.payload.enabled).toBe(true);
+    await expect.poll(() => manager.snapshot().status, { timeout: 3000 }).toBe('connected');
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
+    expect(manager.snapshot().lifecycleAnnouncement).toBe(true);
+  });
+
+  it('上下线通知实时更新发送失败时重建连接，并由下一次 hello 同步持久化值', () => {
+    const store = memoryStore({ url: 'wss://fake.example' });
+    const transportOpts: HookTransportOpts[] = [];
+    const disposes: Array<ReturnType<typeof vi.fn>> = [];
+    let sendOk = true;
+    const manager = makeManager(store, {
+      createTransport: (opts) => {
+        transportOpts.push(opts);
+        const dispose = vi.fn();
+        disposes.push(dispose);
+        return {
+          send: () => sendOk,
+          dispose,
+        };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+
+    manager.sync();
+    const first = transportOpts[0];
+    const welcome = makeWelcome({
+      serverName: 'mock',
+      features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+    });
+    first.onWelcome?.(welcome.payload);
+    first.onStatus('connected', null);
+
+    sendOk = false;
+    manager.setLifecycleAnnouncement(true);
+
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
+    expect(disposes[0]).toHaveBeenCalledOnce();
+    expect(transportOpts).toHaveLength(2);
+    expect(transportOpts[1].buildHello().lifecycleAnnouncement).toBe(true);
+    expect(manager.snapshot().status).toBe('connecting');
+  });
+
+  it('Slack 重连在新 welcome 前不复用旧 capability 发送偏好', () => {
+    const store = memoryStore({ url: 'wss://fake.example' });
+    const transportOpts: HookTransportOpts[] = [];
+    const sends: Array<ReturnType<typeof vi.fn>> = [];
+    const manager = makeManager(store, {
+      createTransport: (opts) => {
+        transportOpts.push(opts);
+        const send = vi.fn(() => true);
+        sends.push(send);
+        return {
+          send,
+          dispose: vi.fn(),
+        };
+      },
+    });
+    cleanups.push(() => manager.dispose());
+
+    manager.sync();
+    transportOpts[0].onWelcome?.(
+      makeWelcome({
+        serverName: 'new-server',
+        features: [HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT],
+      }).payload,
+    );
+    transportOpts[0].onStatus('connected', null);
+
+    manager.sync();
+    expect(transportOpts).toHaveLength(2);
+    transportOpts[1].onStatus('connected', null);
+    manager.setLifecycleAnnouncement(true);
+    expect(sends[1]).not.toHaveBeenCalled();
+
+    transportOpts[1].onWelcome?.(
+      makeWelcome({
+        serverName: 'old-server',
+        features: [],
+      }).payload,
+    );
+    expect(sends[1]).not.toHaveBeenCalled();
+    expect(store.get().lifecycleAnnouncementOverride).toBe(true);
   });
 
   it('未登录(token=null): 不发起连接, 状态 error + not logged in', async () => {
@@ -1974,7 +2201,7 @@ describe('Telegram provider capability, binding and prefs', () => {
   it('本地绑定缓存写失败时仍保留并广播服务端确认态', async () => {
     const { wss, url } = await startServer();
     const store = memoryStore({ url, enabled: false, telegramEnabled: true });
-    store.setTelegramBindingCache = () => {
+    store.setProviderBindingCache = () => {
       throw new Error('disk full');
     };
     const warnings: string[] = [];
@@ -2255,15 +2482,15 @@ describe('Telegram provider capability, binding and prefs', () => {
       principalId: 'telegram-user-1',
       scopeId: 'bot-1',
     });
-    await expect(manager.openTelegramAction('connect')).resolves.toBe(false);
-    await expect(manager.openTelegramAction('provider')).resolves.toBe(true);
-    await expect(manager.openTelegramAction('add-to-group')).resolves.toBe(true);
+    await expect(manager.openProviderAction('telegram', 'connect')).resolves.toBe(false);
+    await expect(manager.openProviderAction('telegram', 'provider')).resolves.toBe(true);
+    await expect(manager.openProviderAction('telegram', 'add-to-group')).resolves.toBe(true);
     expect(opened).toEqual([
       'https://t.me/cindy_example_bot',
       'https://t.me/cindy_example_bot?startgroup=true',
     ]);
     rejectOpen = true;
-    await expect(manager.openTelegramAction('provider')).rejects.toThrow('no system URL handler');
+    await expect(manager.openProviderAction('telegram', 'provider')).rejects.toThrow('no system URL handler');
 
     const prefs = {
       provider: 'telegram' as const,

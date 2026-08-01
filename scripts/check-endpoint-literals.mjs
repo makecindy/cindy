@@ -44,7 +44,11 @@ const ALLOWED_NON_PRODUCTION_ORIGINS = new Set([
   'http://localhost:3335',
   // model-access-server 本地开发兜底(服务端仓,端口 3339)
   'http://localhost:3339',
+  // TapDB 埋点采集端(cn / global 各一),第三方固定协议地址而非本产品生产端点,
+  // 不进入 config/endpoint*.json;与项目 appId 的区域配对见
+  // renderer/analytics/tapdbClient.ts 的 TAPDB_PROJECT_BY_REGION。
   'https://e.tapdb.com',
+  'https://e.tapdb.ap-sg.tapapis.com',
 ]);
 
 /** 解析单个 EAS profile 的继承 env，供门禁测试复用。 */

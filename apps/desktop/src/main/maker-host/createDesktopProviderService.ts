@@ -52,7 +52,12 @@ import {
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
 import { listCustomProviders } from './custom-provider-store.js';
-import { setCustomProviderKeyReader, setOAuthTokenReader, setProviderOAuthTokenReader } from './provider-route.js';
+import {
+  setCustomProviderKeyReader,
+  setOAuthTokenReader,
+  setProviderOAuthTokenReader,
+  setProviderViewsReader,
+} from './provider-route.js';
 import { setDiagnosticsKeyReader, setDiagnosticsOAuthTokenReader } from './provider-diagnostics.js';
 import {
   configureGenericOAuth,
@@ -62,8 +67,9 @@ import {
 } from './generic-oauth.js';
 import { genericOAuthSecretIo, addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
-import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
+import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
+import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import {
   getGrokAccessToken,
   hasGrokOAuthLogin,
@@ -217,7 +223,16 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 接通自定义供应商密钥读取器（idempotent）：provider-route 用 setter 注入避免触电，
   // 这里在路由发生前（splash 早于任何 turn）把真实 safeStorage 读取接进去。
   setCustomProviderKeyReader(readCustomProviderKey);
-  setProviderOAuthTokenReader((providerId) => (providerId === 'xai' ? getGrokAccessToken() : null));
+  setProviderOAuthTokenReader((providerId, agent, options) => {
+    if (providerId === 'xai') return getGrokAccessToken();
+    // Codex's child process carries a ChatGPT/OpenAI bearer.  The Anthropic
+    // bridge must instead read the Claude.ai subscription credential owned by
+    // the host (and allow the existing refresher to rotate it when needed).
+    if (providerId === 'anthropic' && agent === 'codex') {
+      return getValidClaudeAiOAuth(options).then((oauth) => oauth?.accessToken ?? null);
+    }
+    return null;
+  });
   // 测试连接探测与路由同源读 key（同 setter 模式，见 provider-diagnostics.ts）。
   setDiagnosticsKeyReader(readCustomProviderKey);
   // 通用 OAuth Runner 接线（idempotent）：safeStorage blob IO + 系统浏览器拉起;
@@ -241,6 +256,13 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   };
   setOAuthTokenReader(readOAuthToken);
   setDiagnosticsOAuthTokenReader(readOAuthToken);
+  // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
+  // owner 绑定迁移；每次 listProviders 仍会实时读取凭证连接态。
+  const providerService = getDesktopProviderService();
+  setProviderViewsReader(() => providerService.listProviders({
+    allowSideEffects: false,
+    catalog: getActiveCatalog(),
+  }));
   if (activeLoaded) return Promise.resolve(getActiveCatalog());
   if (!activeInflight) {
     const source = buildSource();
@@ -506,6 +528,9 @@ export function getDesktopProviderService(): ProviderService {
     },
     // 通用 OAuth 供应商（目录 auth.oauth 描述符驱动）：连接态 = 本机凭证 blob 是否存在。
     genericOAuthConnected: (providerId) => hasGenericOAuthLogin(providerId),
+    // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
+    builtinApiKeyConnected: (providerId) =>
+      providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
     // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
     // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
     //

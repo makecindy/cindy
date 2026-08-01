@@ -58,9 +58,18 @@ export interface XdGatewayAgentOverride {
   defaultEnabled?: boolean;
 }
 
-/** 服务端下发的 XD 网关聊天模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。 */
+/**
+ * 服务端下发的 XD 网关模型条目(shared/modelAccess ModelAccessGatewayModel 的子集)。
+ * 命名沿用历史("聊天"),但条目本身不保证是聊天模型——是否聊天模型看 mode,
+ * 服务端目前只透传已经过它自己 chat 过滤的条目,过滤范围以后可能放开(issue #882);
+ * 客户端一律用 isChatEligible 判定,不依赖本类型名字或服务端过滤范围。
+ *
+ * 能力字段已由服务端一次归一化,客户端不再二次转换(见 model-access/index.ts)。
+ */
 export interface XdGatewayModelInfo {
   id: string;
+  /** Gateway 原生 mode(issue #882,权威分类字段;缺省时下游按 id 正则兜底)。 */
+  mode?: string;
   /** AIGateway 折扣比例(0..1),折后价 = 原价 × (1 - costDiscount)。 */
   costDiscount?: number;
   /** AIGateway 标准 token 单价(per token)。 */
@@ -75,6 +84,7 @@ export interface XdGatewayModelInfo {
   group?: string;
   description?: string;
   contextWindow?: number;
+  maxOutputTokens?: number;
   efforts?: string[];
   defaultEffort?: string | null;
   sortOrder?: number;
@@ -84,6 +94,7 @@ export interface XdGatewayModelInfo {
   defaultEnabled?: boolean;
   /** 展示图标 id(AI Gateway 设定;缺省 / 未知值渲染层回落来源供应商标)。 */
   icon?: string;
+  modalities?: { input: string[]; output: string[] };
   /** per-tab 能力覆盖。 */
   perAgent?: Partial<Record<AgentKind, XdGatewayAgentOverride>>;
 }
@@ -101,6 +112,14 @@ export interface XdGatewayModelInfo {
  *  - 目录里有、网关没有 → 不展示。
  */
 let xdGatewayModels: XdGatewayModelInfo[] = [];
+/**
+ * XD 服务端只声明 claude-code、未声明 codex 的聊天模型。
+ *
+ * 这些模型在客户端投影进 Codex 选择器，但请求必须走本地
+ * Responses → Anthropic Messages bridge，不能误用 XD 的原生 Responses 路由。
+ * Set 在模型目录刷新时一次性派生，路由热路径只做 O(1) 查询。
+ */
+let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
  * Anthropic(Claude.ai 订阅)的**权威模型清单**(2026-07-19 统一重构):由 host 的
@@ -121,6 +140,35 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 ]);
 
 type Effort = CatalogModel['efforts'][number];
+
+function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
+  return model.agents && model.agents.length > 0 ? model.agents : ['claude-code'];
+}
+
+function deriveXdCodexAnthropicBridgeModelIds(
+  models: XdGatewayModelInfo[],
+): Set<string> {
+  const support = new Map<string, { claudeCode: boolean; codex: boolean }>();
+  for (const model of models) {
+    const current = support.get(model.id) ?? { claudeCode: false, codex: false };
+    for (const agent of xdGatewayTargetAgents(model)) {
+      if (agent === 'claude-code') current.claudeCode = true;
+      else if (agent === 'codex') current.codex = true;
+    }
+    support.set(model.id, current);
+  }
+  return new Set(
+    [...support]
+      .filter(([, agents]) => agents.claudeCode && !agents.codex)
+      .map(([modelId]) => modelId),
+  );
+}
+
+/** 当前 XD 模型是否由客户端投影给 Codex、并应走 Anthropic Messages bridge。 */
+export function isXdCodexAnthropicBridgeModel(modelId: string): boolean {
+  // Codex 会把 1M 上下文选择编码成 wire model 后缀；目录身份仍是原始 model id。
+  return xdCodexAnthropicBridgeModelIds.has(modelId.replace(/\[1m\]$/, ''));
+}
 
 function nonNegativeFiniteOrUndefined(value: number | undefined): number | undefined {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : undefined;
@@ -479,8 +527,21 @@ function computeMerged(): Catalog {
     const overlaid = sortModelsByOrder(
       anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
     );
+    const codexBridgeModels = overlaid.map((model) => ({
+      ...model,
+      supportsFastMode: false,
+    }));
     providers = providers.map((p) =>
-      p.id === 'anthropic' ? { ...p, models: { ...p.models, 'claude-code': overlaid } } : p,
+      p.id === 'anthropic'
+        ? {
+            ...p,
+            models: {
+              ...p.models,
+              'claude-code': overlaid,
+              codex: codexBridgeModels,
+            },
+          }
+        : p,
     );
   }
 
@@ -503,8 +564,7 @@ function computeMerged(): Catalog {
     for (const agent of agentKeys) models[agent] = [];
     for (const gm of gwModels) {
       // tab 归属:服务端 agents > 仅 claude-code(网关 /v1/messages 翻译覆盖面最广,不猜)
-      const targetAgents: AgentKind[] =
-        gm.agents && gm.agents.length > 0 ? gm.agents : ['claude-code'];
+      const targetAgents = xdGatewayTargetAgents(gm);
       for (const agent of targetAgents) {
         if (!models[agent]) continue; // 未知 agent 键防御(wire 数据)
         const ov = gm.perAgent?.[agent] ?? {};
@@ -516,7 +576,11 @@ function computeMerged(): Catalog {
             : rawEfforts.filter((e): e is Effort => VALID_EFFORTS.has(e));
         const rawDefault = ov.defaultEffort !== undefined ? ov.defaultEffort : gm.defaultEffort;
         const defaultEffort: Effort | null =
-          rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
+          rawDefault === null
+            ? null
+            : rawDefault &&
+                VALID_EFFORTS.has(rawDefault) &&
+                efforts.includes(rawDefault as Effort)
             ? (rawDefault as Effort)
             : efforts.includes('high')
               ? 'high'
@@ -530,16 +594,38 @@ function computeMerged(): Catalog {
           name: gm.name ?? gm.id,
           group: gm.group ?? 'custom:xd',
           contextWindow: ov.contextWindow ?? gm.contextWindow ?? 200_000,
+          ...(gm.maxOutputTokens !== undefined ? { maxOutput: gm.maxOutputTokens } : {}),
+          // override 或 gateway 模型显式给了才算真实上限;落到 200_000 兜底的不标记。
+          ...(ov.contextWindow !== undefined || gm.contextWindow !== undefined
+            ? { contextWindowVerified: true }
+            : {}),
           efforts,
           defaultEffort,
           supportsFastMode: ov.supportsFastMode ?? gm.supportsFastMode ?? false,
+          ...(gm.mode !== undefined ? { mode: gm.mode } : {}),
           ...(gm.description !== undefined ? { description: gm.description } : {}),
           ...(gm.sortOrder !== undefined ? { sortOrder: gm.sortOrder } : {}),
           ...(defaultEnabled !== undefined ? { defaultEnabled } : {}),
           ...(gm.icon !== undefined ? { icon: gm.icon } : {}),
           ...(cost ? { cost } : {}),
+          ...(gm.modalities !== undefined ? { modalities: gm.modalities } : {}),
         };
         models[agent]!.push(merged);
+      }
+    }
+    // 服务端明确没有 codex 的 Claude-wire 模型仍可由本地 bridge 服务。选择器需要看到
+    // 它们，但路由身份保留在 xdCodexAnthropicBridgeModelIds，不能把投影误当原生支持。
+    const claudeModels = models['claude-code'] ?? [];
+    const codexModels = models.codex;
+    if (codexModels) {
+      for (const model of claudeModels) {
+        if (xdCodexAnthropicBridgeModelIds.has(model.id)) {
+          codexModels.push({
+            ...model,
+            supportsFastMode: false,
+            codexCompatibilityWireProtocol: 'anthropic-messages',
+          });
+        }
       }
     }
     // 每个 tab 内按 sortOrder 稳定排序(无 sortOrder 的合成条目排最后,按进入序)。
@@ -566,6 +652,33 @@ function computeMerged(): Catalog {
 export function getActiveCatalog(): Catalog {
   if (!merged) merged = computeMerged();
   return merged;
+}
+
+/**
+ * 返回指定 provider/agent 下模型的目录上下文窗口。
+ *
+ * Codex wire model 可能带有 `[1m]` 展示后缀，或被 route 的 stripPrefix
+ * 包了一层；目录始终保存原始模型 id，因此查询在这里统一做去后缀/去前缀
+ * 候选归一，避免各个上游 bridge 自己复制一份模型匹配逻辑。
+ */
+export function getCatalogModelContextWindow(
+  providerId: string,
+  agent: AgentKind,
+  modelId: string,
+  stripPrefix?: string,
+): number | null {
+  const candidates = new Set<string>([
+    modelId,
+    modelId.replace(/\[1m\]$/, ''),
+  ]);
+  if (stripPrefix && modelId.startsWith(stripPrefix)) {
+    const stripped = modelId.slice(stripPrefix.length);
+    candidates.add(stripped);
+    candidates.add(stripped.replace(/\[1m\]$/, ''));
+  }
+  const provider = getActiveCatalog().providers.find((entry) => entry.id === providerId);
+  const model = provider?.models[agent]?.find((entry) => candidates.has(entry.id));
+  return model?.contextWindow ?? null;
 }
 
 /** 由 host 的目录加载器(ensureActiveCatalogLoaded)在拉取成功后写入基础目录。 */
@@ -636,6 +749,7 @@ export function setDiscoveredProviderModels(
  */
 export function setXdGatewayModels(models: XdGatewayModelInfo[]): void {
   xdGatewayModels = [...models];
+  xdCodexAnthropicBridgeModelIds = deriveXdCodexAnthropicBridgeModelIds(models);
   markChanged();
 }
 

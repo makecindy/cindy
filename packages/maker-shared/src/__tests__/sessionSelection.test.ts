@@ -91,7 +91,7 @@ describe('mobile session selection', () => {
 
     expect(summary.candidates.map((item) => item.id)).toEqual(['active']);
     expect(summary.skippedCount).toBe(2);
-    expect(summary.description).toContain('将跳过 2 个不适用的会话');
+    expect(summary.description).toContain('将跳过 2 个不适用的任务');
     expect(isMobileSessionBulkActionAvailable(summary)).toBe(true);
     expect(mobileSessionBulkActionButtonLabel(summary)).toBe('归档 1');
     expect(mobileSessionBulkPatch('archive')).toEqual({ status: 'archived', pinnedAt: null });
@@ -118,7 +118,7 @@ describe('mobile session selection', () => {
 
     expect(summary.candidates.map((item) => item.id)).toEqual(['archived']);
     expect(summary.skippedCount).toBe(2);
-    expect(summary.description).toContain('将跳过 2 个不适用的会话');
+    expect(summary.description).toContain('将跳过 2 个不适用的任务');
     expect(mobileSessionBulkPatch('restore')).toEqual({ status: 'active' });
   });
 

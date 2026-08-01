@@ -281,6 +281,104 @@ describe('submitGithubIssueWithConfirm', () => {
     expect(postIssue).not.toHaveBeenCalled();
   });
 
+  it('平台代发成功后记账,带公开署名、不带 githubLogin', async () => {
+    const onSubmitted = vi.fn();
+    const { deps } = makeDeps({ onSubmitted });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    expect(onSubmitted).toHaveBeenCalledTimes(1);
+    const record = onSubmitted.mock.calls[0]![0];
+    expect(record).toMatchObject({
+      number: 80,
+      url: 'https://github.com/makecindy/cindy/issues/80',
+      title: REQ.title,
+      type: 'bug',
+      identity: 'platform',
+      publicName: 'Carol',
+    });
+    expect(record).not.toHaveProperty('githubLogin');
+    expect(Number.isFinite(Date.parse(record.submittedAt))).toBe(true);
+  });
+
+  it('GitHub 用户直发成功后记账,带 login、不带公开署名', async () => {
+    const onSubmitted = vi.fn();
+    const { deps } = makeDeps({
+      resolveSubmissionIdentity: async () => ({ kind: 'github-user', login: 'octocat' }) as const,
+      onSubmitted,
+    });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    const record = onSubmitted.mock.calls[0]![0];
+    expect(record).toMatchObject({ identity: 'github-user', githubLogin: 'octocat' });
+    expect(record).not.toHaveProperty('publicName');
+  });
+
+  it('记账的 url 由 issue 号派生,不采纳 postIssue 返回的原值', async () => {
+    // 账本**读取**侧用 isMyIssueUrl 强校验(必须指向本仓这一号 issue)。写入侧存原值
+    // 就两侧口径不一:返回 API 链接或别的 host 时,这条记录写得进去、读出来却被当坏
+    // 数据过滤掉 —— 平台读接口未就绪 / 离线时,用户看不到自己刚提交的那条。
+    const onSubmitted = vi.fn();
+    const { deps } = makeDeps({
+      postIssue: vi.fn(async () => ({
+        githubIssue: { number: 80, url: 'https://api.github.com/repos/makecindy/cindy/issues/80' },
+      })),
+      onSubmitted,
+    });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({ ok: true });
+    expect(onSubmitted.mock.calls[0]![0].url).toBe('https://github.com/makecindy/cindy/issues/80');
+  });
+
+  it('记账用的是用户确认版标题与类型,不是 agent 传入的', async () => {
+    const onSubmitted = vi.fn();
+    const { deps } = makeDeps({
+      confirm: vi.fn(async () => ({
+        confirmed: true as const,
+        title: '用户改过的标题',
+        body: '用户改过的正文',
+        type: 'feature' as const,
+        publicName: 'Carol',
+      })),
+      onSubmitted,
+    });
+    await submitGithubIssueWithConfirm(deps, REQ);
+    expect(onSubmitted.mock.calls[0]![0]).toMatchObject({
+      title: '用户改过的标题',
+      type: 'feature',
+    });
+  });
+
+  it('未提交(取消 / 提交失败)时不记账', async () => {
+    const cancelled = vi.fn();
+    await submitGithubIssueWithConfirm(
+      makeDeps({
+        confirm: vi.fn(async () => ({ confirmed: false as const, reason: 'cancelled' as const })),
+        onSubmitted: cancelled,
+      }).deps,
+      REQ,
+    );
+    expect(cancelled).not.toHaveBeenCalled();
+
+    const failed = vi.fn();
+    await submitGithubIssueWithConfirm(
+      makeDeps({
+        postIssue: vi.fn(async () => Promise.reject(Object.assign(new Error('x'), { statusCode: 500 }))),
+        onSubmitted: failed,
+      }).deps,
+      REQ,
+    );
+    expect(failed).not.toHaveBeenCalled();
+  });
+
+  it('记账抛错不影响已经成功的提交结果', async () => {
+    const { deps } = makeDeps({
+      onSubmitted: () => {
+        throw new Error('ledger disk full');
+      },
+    });
+    await expect(submitGithubIssueWithConfirm(deps, REQ)).resolves.toMatchObject({
+      ok: true,
+      issueNumber: 80,
+    });
+  });
+
   it('用户身份提交失败时只调用一次该身份，不切换平台重试', async () => {
     const identity = { kind: 'github-user', login: 'octocat' } as const;
     const postIssue = vi.fn<GithubIssueSubmitServiceDeps['postIssue']>(async () => {

@@ -46,30 +46,7 @@ export async function persistUserMessage(args: {
 }): Promise<{ clientId: string } | null> {
   const { sessionId, text, attachments = [] } = args;
   const clientId = createId();
-
-  let content: unknown;
-  if (attachments.length === 0) {
-    content = text;
-  } else {
-    // Keep durable content aligned with renderer/lib/imageRef.ts. The media
-    // URL is retained so createMessage can pin the blob to this session.
-    content = {
-      text,
-      images: attachments
-        .filter((att) => att.kind === 'image')
-        .map((att) => ({
-          originalName: att.originalName,
-          mimeType: att.mimeType,
-          ...(att.url ? { url: att.url } : {}),
-        })),
-      files: attachments
-        .filter((att) => att.kind === 'file')
-        .map((att) => ({
-          name: att.originalName,
-          path: att.absPath,
-        })),
-    };
-  }
+  const content = buildPersistedUserContent(text, attachments);
 
   try {
     await createMessage(sessionId, {
@@ -85,6 +62,35 @@ export async function persistUserMessage(args: {
     );
     return null;
   }
+}
+
+/** Build the durable content shape while retaining cindy-media URLs for ledger pinning. */
+export function buildPersistedUserContent(
+  text: string,
+  attachments: readonly IMAttachment[],
+): unknown {
+  if (attachments.length === 0) {
+    return text;
+  }
+  // Keep durable content aligned with renderer/lib/imageRef.ts. Media URLs
+  // remain embedded so createMessage can pin every blob to this session.
+  return {
+    text,
+    images: attachments
+      .filter((att) => att.kind === 'image')
+      .map((att) => ({
+        originalName: att.originalName,
+        mimeType: att.mimeType,
+        ...(att.url ? { url: att.url } : {}),
+      })),
+    files: attachments
+      .filter((att) => att.kind === 'file')
+      .map((att) => ({
+        name: att.originalName,
+        path: att.absPath,
+        ...(att.url ? { url: att.url } : {}),
+      })),
+  };
 }
 
 // 注: assistant 消息不在本模块落库 — IM 会话统一经 wireSessionToIpcExternal

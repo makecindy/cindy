@@ -51,6 +51,7 @@ let n = 0;
 const sid = () => `stall-${n++}`;
 
 let onEvent: ((data: unknown) => void) | undefined;
+let onInputProjection: ((data: unknown) => void) | undefined;
 let remoteList: Message[] = [];
 
 const invoke = vi.fn(async (_deviceId: string, channel: string) => {
@@ -63,10 +64,14 @@ const invoke = vi.fn(async (_deviceId: string, channel: string) => {
 
 function installBridge(): void {
   onEvent = undefined;
+  onInputProjection = undefined;
   vi.stubGlobal('window', {
     electronAPI: {
       maker: {
-        onInputProjection: vi.fn(() => vi.fn()),
+        onInputProjection: vi.fn((cb: (data: unknown) => void) => {
+          onInputProjection = cb;
+          return vi.fn();
+        }),
         input: { getProjection: vi.fn(async () => null) },
         onEvent: (cb: (d: unknown) => void) => { onEvent = cb; return vi.fn(); },
         onStatusChanged: vi.fn(() => vi.fn()),
@@ -134,6 +139,29 @@ describe('finalizeStuckRemoteTurn', () => {
     // 幂等:已收尾再调 → 不新建对象(引用不变)
     makerChatStore.finalizeStuckRemoteTurn(s);
     expect(makerChatStore.getSnapshot(s)).toBe(after);
+  });
+
+  it('仅残留 continuation owner 时也清除，不被空闲早返漏掉', async () => {
+    const s = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    onInputProjection?.({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'resume-owner',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('resume-owner');
+
+    makerChatStore.finalizeStuckRemoteTurn(s);
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBeNull();
   });
 
   it('本机会话 → no-op(不收尾,isRunning 保持)', async () => {

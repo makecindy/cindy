@@ -9,7 +9,7 @@
  * 三块都是整页内容卡片/列表;首页是栈底,自身无返回。
  */
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import {
@@ -19,10 +19,12 @@ import {
   Package,
   SquareTerminal,
   Store,
+  Upload,
   type LucideIcon,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { toast } from '@/lib/toast';
 import { useAuth } from '@/contexts/AuthContext';
 import {
   PLUGIN_MANAGEMENT_CARD_GRID_CLASS,
@@ -32,10 +34,14 @@ import {
 import { canAccessSkillhubMarket } from './lib/marketAccess';
 import { refresh as refreshSkillhub, useSkillhub } from './hooks/useSkillhub';
 import { useMarketList, type MarketSkill } from './hooks/useMarketList';
-import { basename } from './lib/pathDerivations';
+import { basename, deriveProjectWorkingDir } from './lib/pathDerivations';
+import { projectHash } from './lib/projectHash';
 import { marketCardPrimaryAction } from './lib/marketDetailViewModel';
 import { deriveSkillSource } from './lib/skillSource';
-import { InstallTargetPicker } from './components/InstallTargetPicker';
+import {
+  InstallTargetPicker,
+  type InstallTargetSkill,
+} from './components/InstallTargetPicker';
 import { SkillhubMarketPreviewPanel } from './SkillhubMarketPreviewPanel';
 
 const KIND_ICON: Record<string, LucideIcon> = {
@@ -137,6 +143,12 @@ export function SkillhubHomeView() {
   const [pickerSkill, setPickerSkill] = useState<MarketSkill | null>(null);
   const [pickerOpen, setPickerOpen] = useState(false);
 
+  // 本地导入：main 选择并检查文件 → 安装位置选择器 → 凭授权导入
+  const [importGrantToken, setImportGrantToken] = useState<string | null>(null);
+  const [importTarget, setImportTarget] = useState<InstallTargetSkill | null>(null);
+  const [importPickerOpen, setImportPickerOpen] = useState(false);
+  const [importBusy, setImportBusy] = useState(false);
+
   const openLocal = (s: SkillhubSkill) => {
     const name = encodeURIComponent(s.name);
     const base =
@@ -156,6 +168,37 @@ export function SkillhubHomeView() {
     setPickerSkill(skill);
     setPickerOpen(true);
   };
+
+  const handleImportSkill = useCallback(async () => {
+    if (importBusy) return;
+    setImportBusy(true);
+    try {
+      const picked = await window.electronAPI.skillhub.pickLocal();
+      if (!picked.success) {
+        toast.error(picked.message || t('skillhub.home.importFailed'));
+        return;
+      }
+      if (picked.canceled) return;
+
+      setImportGrantToken(picked.grantToken);
+      setImportTarget({
+        name: picked.name,
+        versionLabel: picked.version,
+        description: picked.description,
+      });
+      setImportPickerOpen(true);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : t('skillhub.home.importFailed'));
+    } finally {
+      setImportBusy(false);
+    }
+  }, [importBusy, t]);
+
+  const closeImportPicker = useCallback(() => {
+    setImportPickerOpen(false);
+    setImportGrantToken(null);
+    setImportTarget(null);
+  }, []);
 
   return (
     <PluginManagementLayout
@@ -180,6 +223,23 @@ export function SkillhubHomeView() {
                 )}
               </p>
             </div>
+            <button
+              type="button"
+              onClick={() => void handleImportSkill()}
+              disabled={importBusy}
+              className={cn(
+                'mt-1 inline-flex h-9 shrink-0 items-center gap-2 rounded-full border border-[var(--border-default)]',
+                'bg-[var(--surface-elevated)] px-3.5 text-12 font-medium text-[var(--text-primary)] shadow-[var(--plugin-card-shadow)]',
+                'transition-[background-color,border-color,transform] duration-150 ease-out',
+                'hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                'disabled:cursor-not-allowed disabled:opacity-50',
+              )}
+              aria-label={t('skillhub.home.importAria')}
+            >
+              <Upload size={14} strokeWidth={1.8} aria-hidden="true" />
+              <span>{t('skillhub.home.import')}</span>
+            </button>
           </header>
 
           {/* ① Skill Hub 入口 → 完整 Market 浏览页(仅市场可见账号) */}
@@ -351,6 +411,44 @@ export function SkillhubHomeView() {
             // 安装后关掉预览浮层:否则它仍持有 stale previewSkill、CTA 继续显示「安装/克隆」,
             // 可被重复点安装(PR #246 review)。
             setPreviewSkill(null);
+          }}
+        />
+        <InstallTargetPicker
+          open={importPickerOpen}
+          skill={importTarget}
+          onClose={closeImportPicker}
+          titleKey="skillhub.home.importPickerTitle"
+          subtitleKey="skillhub.home.importPickerSubtitle"
+          successToastKey="skillhub.home.importSuccess"
+          failedToastKey="skillhub.home.importFailed"
+          runAction={async ({ installPath, force }) => {
+            if (!importGrantToken) {
+              return { success: false, errorCode: 'INVALID_FILE', message: t('skillhub.home.importFailed') };
+            }
+            return window.electronAPI.skillhub.importLocal({
+              grantToken: importGrantToken,
+              installPath,
+              force,
+            });
+          }}
+          onInstallComplete={(result) => {
+            void refreshSkillhub();
+            closeImportPicker();
+            if (!result?.name) return;
+            const name = encodeURIComponent(result.name);
+            const projectRoot = result.absolutePath
+              ? deriveProjectWorkingDir(result.absolutePath)
+              : null;
+            if (projectRoot) {
+              navigate(
+                `/skillhub/local/skill/project/${projectHash(projectRoot)}/${name}`,
+                { state: { from: '/skillhub/local', resetHistory: true } },
+              );
+              return;
+            }
+            navigate(`/skillhub/local/skill/global/${name}`, {
+              state: { from: '/skillhub/local', resetHistory: true },
+            });
           }}
         />
       </main>

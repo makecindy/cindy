@@ -10,7 +10,7 @@ describe('session operation layout', () => {
       hasActivePendingInteraction: true,
     })).toEqual({
       canUseComposer: false,
-      composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReason: '当前任务还没有同步完成。',
       composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',

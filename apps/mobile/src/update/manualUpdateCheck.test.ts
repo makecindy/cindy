@@ -21,8 +21,9 @@ function deps(overrides: Partial<ManualUpdateCheckDeps> = {}): ManualUpdateCheck
   return {
     otaEnabled: true,
     checkOtaUpdate: vi.fn(async () => ({ isAvailable: false })),
-    fetchOtaUpdate: vi.fn(async () => undefined),
+    fetchOtaUpdate: vi.fn(async () => ({ isNew: true })),
     reload: vi.fn(async () => undefined),
+    isEmergencyLaunch: vi.fn(() => false),
     onPhase: vi.fn(),
     ...overrides,
   };
@@ -87,6 +88,58 @@ describe('runManualUpdateCheck', () => {
     expect(input.checkOtaUpdate).not.toHaveBeenCalled();
   });
 
+  // emergency launch(没有 launchedUpdate)时 reloadAsync 会被原生层拒绝,但 bundle 已落盘:
+  // 这不是一次失败的检查,必须导向"重开 App 生效",否则用户只看到一条无从下手的红字报错。
+  it('asks for a manual restart when an emergency launch blocks reloading the downloaded bundle', async () => {
+    const input = deps({
+      checkOtaUpdate: vi.fn(async () => ({ isAvailable: true })),
+      fetchOtaUpdate: vi.fn(async () => ({ isNew: true })),
+      reload: vi.fn(async () => {
+        throw new Error("Call to function 'ExpoUpdates.reload' has been rejected.");
+      }),
+      isEmergencyLaunch: vi.fn(() => true),
+    });
+
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({ kind: 'restart-required' });
+    expect(input.fetchOtaUpdate).toHaveBeenCalledOnce();
+    expect(input.reload).toHaveBeenCalledOnce();
+  });
+
+  it('still reports a failure when reload fails without any downloaded bundle', async () => {
+    const input = deps({
+      checkOtaUpdate: vi.fn(async () => ({ isAvailable: true })),
+      fetchOtaUpdate: vi.fn(async () => ({ isNew: false })),
+      reload: vi.fn(async () => {
+        throw new Error('reload rejected');
+      }),
+      isEmergencyLaunch: vi.fn(() => true),
+    });
+
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({
+      kind: 'error',
+      reason: 'ota-check',
+      detail: 'reload rejected',
+    });
+  });
+
+  // 非应急启动下的 reload 失败原因未知,原始详情是唯一线索:不能被重启指引盖掉。
+  it('keeps the reload failure detail when the app is not in an emergency launch', async () => {
+    const input = deps({
+      checkOtaUpdate: vi.fn(async () => ({ isAvailable: true })),
+      fetchOtaUpdate: vi.fn(async () => ({ isNew: true })),
+      reload: vi.fn(async () => {
+        throw new Error('Could not reload application; activity is null');
+      }),
+      isEmergencyLaunch: vi.fn(() => false),
+    });
+
+    await expect(runManualUpdateCheck(input)).resolves.toEqual({
+      kind: 'error',
+      reason: 'ota-check',
+      detail: 'Could not reload application; activity is null',
+    });
+  });
+
   it('keeps OTA failure details unlocalized until the settings page renders them', async () => {
     const input = deps({
       checkOtaUpdate: vi.fn(async () => {
@@ -103,6 +156,12 @@ describe('runManualUpdateCheck', () => {
 });
 
 describe('manualUpdateCheckMessage', () => {
+  it('tells the user to fully reopen the app when reload was rejected', async () => {
+    await i18n.changeLanguage('zh-CN');
+    expect(manualUpdateCheckMessage({ kind: 'restart-required' }, { isTestFlightBuild: false, t: i18n.t }))
+      .toBe('更新已下载，完全退出 App 后重新打开即可生效');
+  });
+
   it('uses the current language for an already completed TestFlight check', async () => {
     const outcome = { kind: 'up-to-date' } as const;
 

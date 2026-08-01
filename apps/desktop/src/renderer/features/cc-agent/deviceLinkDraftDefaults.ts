@@ -40,6 +40,12 @@ export interface RemoteDraftDefaults {
     string,
     { effortByModel: Record<string, string>; fastByModel: Record<string, boolean> }
   >;
+  /**
+   * 被控端「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段)。控制端远程草稿
+   * 据此播种 worktree chip 初始态;旧版被控端不回 → undefined → 按未勾选兜底。
+   * 不参与 resolveDeviceLinkDraftDefaults 的 per-vendor 解析(消费方直接读)。
+   */
+  worktreeEnabled?: boolean;
 }
 
 /** 校准后可直接 seed 控制端草稿 holder 的一组值。 */

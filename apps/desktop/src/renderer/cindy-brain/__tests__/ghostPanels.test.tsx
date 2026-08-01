@@ -1,18 +1,40 @@
 // @vitest-environment jsdom
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 
+import { ConfirmDialogProvider } from '@/components/ui/confirm-dialog-provider';
 import type { GhostManifest, InstalledGhost } from '../../../shared/ghost';
 import {
   __resetGhostPanelBubbleStateForTest,
   getGhostPanelBubbleState,
   minimizeGhostPanel,
 } from '../../lib/ghostPanelBubbleState';
-import { __resetPanelRegistryForTest, hasPanelKind, listPanelKinds } from '../../panels/registry';
+import {
+  __resetPanelRegistryForTest,
+  getPanelKind,
+  hasPanelKind,
+  listPanelKinds,
+} from '../../panels/registry';
 import {
   __resetGhostPanelsForTest,
   pickGhostPanelMediaUri,
   syncGhostPanelRegistrations,
 } from '../ghostPanels';
+
+// 仓库同款 i18n mock:t 返回 key(带参拼上,便于断言)。
+vi.mock('react-i18next', () => ({
+  useTranslation: () => ({
+    t: (key: string, args?: Record<string, unknown>) =>
+      args ? `${key}:${JSON.stringify(args)}` : key,
+  }),
+}));
+
+// 面板体是 webview 供片,jsdom 渲不了也不该渲 —— 置空,只测宿主壳(标准头/关闭链路)。
+vi.mock('../ghostPanelBody', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../ghostPanelBody')>()),
+  GhostChipPanelBody: () => null,
+  GhostPanelError: () => null,
+}));
 
 /** 造一个已装意识(panel 可覆写/置空;enabled 默认 true)。 */
 function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true): InstalledGhost {
@@ -30,9 +52,11 @@ function ghost(id: string, panel?: GhostManifest['panel'] | null, enabled = true
 }
 
 afterEach(() => {
+  cleanup();
   __resetPanelRegistryForTest();
   __resetGhostPanelsForTest();
   __resetGhostPanelBubbleStateForTest();
+  delete (window as unknown as { electronAPI?: unknown }).electronAPI;
 });
 
 describe('syncGhostPanelRegistrations · 注册表与已装清单对齐', () => {
@@ -122,5 +146,48 @@ describe('syncGhostPanelRegistrations · 停用即休眠', () => {
     expect(hasPanelKind('ghost:a')).toBe(true);
     syncGhostPanelRegistrations([ghost('a', undefined, false)]);
     expect(hasPanelKind('ghost:a')).toBe(false);
+  });
+});
+
+describe('GhostPanel · 标准头关闭按钮(二次确认后停用插件)', () => {
+  function renderPanel(setEnabled: ReturnType<typeof vi.fn>): void {
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      ghosts: { setEnabled },
+    };
+    syncGhostPanelRegistrations([ghost('demo')]);
+    const def = getPanelKind('ghost:demo');
+    if (!def) throw new Error('面板未注册');
+    const Component = def.Component;
+    render(
+      <ConfirmDialogProvider>
+        <Component paneId="pane-1" />
+      </ConfirmDialogProvider>,
+    );
+  }
+
+  it('点关闭 → 弹确认框;确认后 setEnabled(id, false)', async () => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    renderPanel(setEnabled);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    // 确认框标题带插件名(t mock 把插值参数拼在 key 后)。
+    await screen.findByText('ghostPanel.disableConfirm.title:{"name":"demo 意识"}');
+    expect(setEnabled).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'ghostPanel.disableConfirm.confirm' }));
+    await waitFor(() => expect(setEnabled).toHaveBeenCalledWith('demo', false));
+    expect(setEnabled).toHaveBeenCalledTimes(1);
+  });
+
+  it('点关闭后取消 → 不停用', async () => {
+    const setEnabled = vi.fn().mockResolvedValue({ ok: true });
+    renderPanel(setEnabled);
+    fireEvent.click(screen.getByRole('button', { name: 'panelChrome.closeAria' }));
+    await screen.findByText('ghostPanel.disableConfirm.title:{"name":"demo 意识"}');
+    fireEvent.click(screen.getByRole('button', { name: 'commonUi.confirmDialog.cancel' }));
+    await waitFor(() =>
+      expect(
+        screen.queryByText('ghostPanel.disableConfirm.title:{"name":"demo 意识"}'),
+      ).toBeNull(),
+    );
+    expect(setEnabled).not.toHaveBeenCalled();
   });
 });

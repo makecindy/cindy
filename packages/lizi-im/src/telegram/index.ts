@@ -105,6 +105,20 @@ type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
 
+/** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
+interface PendingAlbum {
+  messages: TgMessage[];
+  /** settle 定时器; null = 尚未挂上(构造与 setTimeout 之间的窗口)。 */
+  timer: ReturnType<typeof setTimeout> | null;
+  firstUpdateId: number;
+  chatId: string;
+  /** 处理收口(或被丢弃)时 resolve — 同 chat 后续消息的顺序门在等它。 */
+  done: Promise<void>;
+  resolveDone: () => void;
+  /** settle 定时器已触发, 不再接受追加成员。 */
+  settled: boolean;
+}
+
 /** 行为配置(设置卡可视化, 实时生效 — host 以 getter 注入, transport 每次使用时读)。 */
 export interface TelegramBehaviorConfig {
   /**
@@ -192,12 +206,24 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private richSendDisabled = false;
   private readonly mediaDir: string;
   /** 相册聚合缓冲 — key `${chatId}:${mediaGroupId}`。 */
-  private readonly pendingAlbums = new Map<
-    string,
-    { messages: TgMessage[]; timer: ReturnType<typeof setTimeout>; firstUpdateId: number }
-  >();
+  private readonly pendingAlbums = new Map<string, PendingAlbum>();
+  /**
+   * 缓冲或处理中的相册(settle 定时器一响就从 pendingAlbums 摘键关闭追加,
+   * 但要留在这里直到 processInboundMessage 收口): 持久化游标 cap 与同
+   * chat 的顺序门都看本集合 — 摘早了, 处理途中到达的批次会把游标推过
+   * 未完成的相册(review P1)。
+   */
+  private readonly albumsInFlight = new Set<PendingAlbum>();
   /** 本连接见过的最大 offset(update_id+1) — 相册 flush 后补写持久化游标用。 */
   private lastSeenOffset = 0;
+  /**
+   * per-chat 串行处理链(chatKey → 链尾 promise): 轮询循环只做分发不等待 —
+   * 同 chat 内保序(相册门只挡自己 chat), 跨 chat 并行, 无队头阻塞
+   * (2026-07-30 #1098 review: 全局 await 会让一个 chat 的相册下载拖住全部)。
+   */
+  private readonly chatQueues = new Map<string, Promise<void>>();
+  /** 已分发未收口的 update_id — 持久化游标的低水位以它为准, 掉线不丢任何在途消息。 */
+  private readonly inflightUpdateIds = new Set<number>();
   /**
    * 待配对的回挂触发队列(laneUserId → 原生 message_id FIFO): 多条消息在上一
    * 轮还没出话时先后触发同一 lane, 各自的答案必须挂回各自的提问 — 单值会被
@@ -694,16 +720,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           offset = Math.max(offset, update.update_id + 1);
           this.lastSeenOffset = offset;
           if (abort.signal.aborted || this.configVersion !== generation) return;
-          try {
-            await this.handleUpdate(update);
-          } catch (err) {
-            const msg = err instanceof Error ? err.message : String(err);
-            this.log.warn(`telegram update handling failed: ${msg}`);
-          }
+          // 只分发不等待: 处理进 per-chat 串行链, 循环立即消费下一条 —
+          // 一个 chat 的相册下载/顺序门不会拖住其它 chat(#1098 review P1/P2)。
+          this.dispatchUpdate(update, generation);
         }
-        // 持久化游标不越过仍在缓冲的相册成员: settle 窗口内断开/换 token 时,
-        // 下次连接从相册首条重放, 不丢用户的图(getUpdates 的内存 offset 照常
-        // 前进, 本连接内不重复拉取)。flush 完成后由 persistOffsetCapped 补写。
+        // 持久化游标走低水位: 不越过任何在途(分发未收口)update 与缓冲中
+        // 相册 — 各任务收口时在 finally 里自行补写(getUpdates 的内存 offset
+        // 照常前进, 本连接内不重复拉取)。
         if (updates.length > 0) this.persistOffsetCapped();
       } catch (err) {
         if (abort.signal.aborted || this.configVersion !== generation) return;
@@ -741,6 +764,36 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   // ── update handling ────────────────────────────────────────────────────────
 
+  /**
+   * 把 update 挂进所属 chat 的串行处理链并登记在途 id。链尾即序: 同 chat
+   * 严格按到达顺序处理; 不同 chat 各自成链互不等待。收口(成功/失败/跳过)
+   * 时移除在途 id 并补写低水位游标 — 进程在任何点退出, 重启都从"最早未
+   * 完成的 update"续读, 不丢消息(at-least-once)。
+   */
+  private dispatchUpdate(update: TgUpdate, generation: number): void {
+    const chatId =
+      update.message?.chat.id ?? update.callback_query?.message?.chat.id ?? 'global';
+    const key = String(chatId);
+    this.inflightUpdateIds.add(update.update_id);
+    const prev = this.chatQueues.get(key) ?? Promise.resolve();
+    const next = prev
+      .then(async () => {
+        if (this.disposing || this.configVersion !== generation) return;
+        try {
+          await this.handleUpdate(update);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          this.log.warn(`telegram update handling failed: ${msg}`);
+        }
+      })
+      .finally(() => {
+        this.inflightUpdateIds.delete(update.update_id);
+        if (this.chatQueues.get(key) === next) this.chatQueues.delete(key);
+        if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+      });
+    this.chatQueues.set(key, next);
+  }
+
   private async handleUpdate(update: TgUpdate): Promise<void> {
     if (this.disposing) return;
     if (update.callback_query) {
@@ -760,6 +813,18 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       return;
     }
 
+    // 顺序门: 同 chat 有相册在 settle/处理中时, 后续消息等它收口再进 turn —
+    // 否则"相册 + 追问"会被倒序回答。本方法跑在该 chat 自己的串行链里
+    // (dispatchUpdate), 等待只挡本 chat, 其它 chat 的链照常并行。
+    const gates = [...this.albumsInFlight]
+      .filter((album) => album.chatId === String(m.chat.id))
+      .map((album) => album.done);
+    if (gates.length > 0) {
+      const generation = this.configVersion;
+      await Promise.all(gates);
+      if (this.disposing || this.configVersion !== generation) return;
+    }
+
     await this.processInboundMessage(m);
   }
 
@@ -768,36 +833,63 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const key = `${m.chat.id}:${m.media_group_id}`;
     const generation = this.configVersion;
     const existing = this.pendingAlbums.get(key);
-    if (existing) {
+    let album: PendingAlbum;
+    if (existing && !existing.settled) {
       existing.messages.push(m);
-      clearTimeout(existing.timer);
+      if (existing.timer) clearTimeout(existing.timer);
+      album = existing;
+    } else {
+      let resolveDone!: () => void;
+      const done = new Promise<void>((resolve) => {
+        resolveDone = resolve;
+      });
+      album = {
+        messages: [m],
+        timer: null,
+        firstUpdateId: updateId,
+        chatId: String(m.chat.id),
+        done,
+        resolveDone,
+        settled: false,
+      };
+      this.pendingAlbums.set(key, album);
+      this.albumsInFlight.add(album);
     }
-    const messages = existing?.messages ?? [m];
-    const firstUpdateId = existing?.firstUpdateId ?? updateId;
-    const timer = setTimeout(() => {
+    album.timer = setTimeout(() => {
+      // 关闭追加(摘 append 键), 但留在 albumsInFlight 直到处理收口 —
+      // 游标 cap 与顺序门在处理期间必须仍然生效(review P1)。
+      album.settled = true;
       this.pendingAlbums.delete(key);
-      if (this.disposing || this.configVersion !== generation) return;
+      const finish = () => {
+        this.albumsInFlight.delete(album);
+        album.resolveDone();
+        if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
+      };
+      if (this.disposing || this.configVersion !== generation) {
+        finish();
+        return;
+      }
       // 有正文/引用的成员当主消息(caption 通常只挂在其中一条上)。
       const primary =
-        messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
-        messages[0];
-      const siblings = messages.filter((x) => x !== primary);
+        album.messages.find((x) => (x.text ?? x.caption ?? '') !== '' || x.reply_to_message) ??
+        album.messages[0];
+      const siblings = album.messages.filter((x) => x !== primary);
       void this.processInboundMessage(primary, siblings, { skipGroupWindow: true })
         .catch((err) => {
           const msg = err instanceof Error ? err.message : String(err);
           this.log.warn(`telegram album handling failed: ${msg}`);
         })
-        .finally(() => {
-          // 相册已处理(或确定失败) — 持久化游标此刻才允许越过它。
-          if (!this.disposing && this.configVersion === generation) this.persistOffsetCapped();
-        });
+        .finally(finish);
     }, ALBUM_SETTLE_MS);
-    this.pendingAlbums.set(key, { messages, timer, firstUpdateId });
   }
 
   private clearPendingAlbums(): void {
-    for (const { timer } of this.pendingAlbums.values()) clearTimeout(timer);
+    for (const album of this.albumsInFlight) {
+      if (album.timer) clearTimeout(album.timer);
+      album.resolveDone(); // 解开顺序门, 不留悬挂 await
+    }
     this.pendingAlbums.clear();
+    this.albumsInFlight.clear();
   }
 
   private async processInboundMessage(
@@ -843,6 +935,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
       let trigger = detectGroupTrigger(m, this.botId, this.botUsername, this.botDisplayName);
       let ambient = false;
+      const isOwner = String(m.from.id) === this.ownerUserId;
+      if (!trigger && isOwner) {
+        // owner 的裸斜杠命令视为显式召唤: 群里主人手打 /project 不该因为没带
+        // @username 而石沉大海(2026-07-31 实测反馈)。只认**不带 @ 后缀**的
+        // 命令 token — `/cmd@其它bot` 是显式发给别的 bot 的, 不抢答(带
+        // @本bot 后缀的由 detectGroupTrigger 的 bot_command 分支处理)。
+        // 成员的裸命令不在此列 — 仍走"命令 owner 专属"的静默丢弃。
+        const plain = (m.text ?? '').trim();
+        const firstToken = plain.split(/\s/, 1)[0] ?? '';
+        if (/^\/[a-zA-Z][a-zA-Z0-9_]{0,63}$/.test(firstToken)) trigger = { text: plain };
+      }
       if (!trigger) {
         // 全响应·自主判断(per-chat 配置): 未被召唤的消息也进 turn, 打 ambient
         // 标记 — 业务层注入安静上下文, 模型可用 NO_REPLY 沉默。
@@ -853,7 +956,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         trigger = { text: plain };
         ambient = true;
       }
-      const isOwner = String(m.from.id) === this.ownerUserId;
       {
         const probe = trigger.text.trimStart();
         const isCommand = probe.startsWith('/') || probe.startsWith('!');
@@ -1419,9 +1521,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
    * 补写时相册会重放一次, 比丢图可取。
    */
   private persistOffsetCapped(): void {
+    // 低水位 = min(在途 update, 缓冲/处理中相册的首条): 顺序门里等待的追问、
+    // 处理中的消息、settle 后仍在下载附件的相册都算未完成 — 游标一律不越过
+    // (#1098 review: 只看相册会把门里等待的追问永久跳过)。
     let floor = Number.POSITIVE_INFINITY;
-    for (const album of this.pendingAlbums.values()) {
+    for (const album of this.albumsInFlight) {
       floor = Math.min(floor, album.firstUpdateId);
+    }
+    for (const updateId of this.inflightUpdateIds) {
+      floor = Math.min(floor, updateId);
     }
     this.persistOffset(Math.min(this.lastSeenOffset, floor));
   }
@@ -1515,10 +1623,6 @@ export function createTelegramIM(host: IMHost, opts?: TelegramIMOptions): Telegr
 }
 
 export type { TelegramGroupWindowEntry } from './inbound.js';
-
-function laneUserIdOf(m: TgMessage): string {
-  return encodeLaneUserId(String(m.chat.id), laneThreadIdOf(m));
-}
 
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {

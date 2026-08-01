@@ -11,7 +11,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { DEFAULT_DRAFT_SESSION_TITLE } from '@cindy/maker-shared/session-title';
 
-const UNNAMED = '未命名对话';
+const UNNAMED = '未命名任务';
 
 const sessionGet = vi.fn();
 vi.mock('@/lib/sessionService', () => ({

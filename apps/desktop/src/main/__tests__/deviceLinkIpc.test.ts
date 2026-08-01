@@ -484,6 +484,15 @@ describe('device-link controller handlers', () => {
     );
   });
 
+  it('invoke:本地传输背压 → DEVICE_LINK_NOT_CONNECTED', async () => {
+    const deps = makeDeps({
+      invoke: vi.fn().mockRejectedValue(new DeviceLinkError('BACKPRESSURE', 'buffer full')),
+    });
+    await expect(handleInvoke(deps, 'dev-2', 'maker:send', [])).rejects.toThrowError(
+      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+    );
+  });
+
   it('invoke:出方向附件改写失败 → DEVICE_LINK_MEDIA_TRANSFER_FAILED,不发 invoke(整条不发)', async () => {
     const invoke = vi.fn().mockResolvedValue({ ok: true, result: null });
     const deps = makeDeps({
@@ -600,6 +609,21 @@ describe('device-link controller handlers', () => {
     );
     expect(deps.unsubscribe).toHaveBeenCalledTimes(1);
     // 第二次(重试):引用还在 → 再次向 relay 转发并成功
+    await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).resolves.toEqual({ ok: true });
+    expect(deps.unsubscribe).toHaveBeenCalledTimes(2);
+  });
+
+  it('unsubscribe 本地背压时恢复引用，避免未发送的退订意图丢失', async () => {
+    const deps = makeDeps({
+      unsubscribe: vi
+        .fn()
+        .mockRejectedValueOnce(new DeviceLinkError('BACKPRESSURE', 'buffer full'))
+        .mockResolvedValue({ ok: true, result: { ok: true } }),
+    });
+    await handleSubscribe(deps, 'dev-2', ['sessions'], 1);
+    await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).rejects.toThrowError(
+      /\[DEVICE_LINK_NOT_CONNECTED\]/,
+    );
     await expect(handleUnsubscribe(deps, 'dev-2', ['sessions'], 1)).resolves.toEqual({ ok: true });
     expect(deps.unsubscribe).toHaveBeenCalledTimes(2);
   });

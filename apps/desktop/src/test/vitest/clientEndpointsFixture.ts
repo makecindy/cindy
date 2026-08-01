@@ -31,6 +31,7 @@ export const TEST_CLIENT_ENDPOINTS: ClientEndpointMap = {
   ossApiBaseUrl: 'https://oss.test.invalid',
   heartbeatUrl: 'https://heartbeat.test.invalid',
   telegramHookWsUrl: 'wss://telegram-hook.test.invalid',
+  xHookWsUrl: 'wss://x-hook.test.invalid',
   slackHookWsUrl: 'wss://slack-hook.test.invalid',
   websiteUrl: 'https://website.test.invalid',
   modelAccessApiBaseUrl: 'https://model-access.test.invalid',

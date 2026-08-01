@@ -30,6 +30,45 @@
 | `presence-set` | client→server | 部分更新本机 presence(开关 / busy),server 广播。|
 | `presence-changed` | server→client | 同账号某设备 presence 快照(`PresenceSnapshot`)。控制端据此维护设备列表 / 在线态。**改名也经此即时广播**。|
 
+### 弱网可靠传输（可选 `reliable-transport-v1`）
+
+在 `link-open` / `link-accept` 的 `capabilities` 中同时声明该能力后，`invoke`、
+`invoke-result` 和普通 `push` 会使用端到端可靠 wrapper；旧客户端仍收到原始 payload，
+不会误把 wrapper 当成业务数据。
+
+- 每个 peer 使用独立 `streamId + seq`；接收端只按序交付，乱序和重复帧进入有界缓存。
+- 单条逻辑消息最多 4 MiB，按 UTF-8 字节计算；超过物理 `MAX_FRAME_BYTES` 的消息拆成
+  128 KiB 目标大小的安全 UTF-8 分片，最多 64 段。
+- ACK 是累计确认，但只有上层 handler 成功接收后才推进；Desktop 在第一次 `await` 前把
+  requestId 登记进有界执行队列，因此 ACK 表示“已安全进入本地状态机”，不等待耗时 IPC
+  完成，也不会让 stop/steer 被慢查询堵住。handler 拒绝时保留当前 seq，等待有限重传。
+- 请求超时或永久单帧错误会用同 seq 的 skip marker 收敛；控制方向 invoke 遇到
+  `DEVICE_OFFLINE` / `REMOTE_DISABLED` 会立即失败并跨过该 seq。已执行完成的
+  `invoke-result` 若在回程遇到目标瞬时离线，则保留到下一次 link-open 重放；能力降级或
+  显式 link-close 才清空该 peer 的不可交付 pending，并用 `transportBaseSeq` 跨过。
+- 重传次数耗尽不会静默挂起：客户端主动切换连接世代，保留未确认消息，握手后按原
+  `streamId/seq` replay；握手还会携带未确认消息的 `transportBaseSeq`，接收端进程重启
+  丢失内存 ACK 时也能从当前起点继续，不会永远等待旧 seq。
+- 每个 peer 最多保留 64 条未确认消息、16 MiB pending；接收重组/待交付缓存同样限制为
+  16 MiB，缓存满时优先为当前队头分片/skip 腾出空间，避免未来 seq 占满后永久卡死。
+  Desktop 耗时 invoke 执行队列另限 64 条/16 MiB；旧协议 fallback 的串行入站队列限
+  128 帧/16 MiB。WebSocket native send buffer 超过 8 MiB 时停止继续灌入并让连接重连收敛。
+- 被控端 IPC 已完成、但 `invoke-result` 因本地 WebSocket/可靠层背压暂时无法入队时，
+  Desktop 会把**原结果**放进 64 条/16 MiB 的有界 outbox，每 500ms 尝试补发；presence
+  短暂离线不清 outbox，显式 link-close/撤权才清，最长保留 120s。这样 mutation 已成功时
+  不会被错误改写成 BACKPRESSURE、诱导控制端重复执行。
+- `ipcMain` handler 没有统一的取消信号，不能把控制端 30s 超时等同于副作用已取消。
+  Desktop 对永久不 settle 的 handler 只在 120s 后回收执行槽和 busy lease，返回明确
+  `[TIMEOUT]`，并继续吞住底层 Promise 的晚到结果/异常；同 requestId 仍由结果缓存去重。
+- 初次发送、relay 入站队列和 relay 出站 buffer 都有上限；relay 过载使用 close code
+  `1013`，客户端依靠现有退避和 link reopen 恢复。
+- 心跳、ACK、握手响应不与慢的业务 handler 共用串行队列；同一可靠 stream 仍保持严格
+  顺序，避免“业务处理慢”被误判成“网络断开”。
+- 可靠业务帧必须等 link-open/link-accept 能力协商完成后才接收；断线后迟到到新进程的
+  旧 relay 帧不会在新基线建立前执行。
+- 当前**不做压缩**：wrapper 只做分片、顺序、ACK、重传和背压。文本消息的压缩收益有限，
+ 先避免引入 CPU、延迟和跨端实现差异；后续若需要可新增独立 capability。
+
 设备列表另有 REST:`GET /api/device-link/devices` → `DeviceView[]`(DB 档案 ∪ presence 三态合成,含可选 `selfName/deviceInfo`);`PATCH`/`DELETE` 改名/删除。
 
 ## 远程控制面(隧道层)—— 手机版要实现的核心
@@ -77,7 +116,8 @@
 - `PROTOCOL_VERSION`(`src/protocol.ts`,当前 `1`)**只升不降**,不兼容改动 +1;`apps/server/src/device-link/protocol.ts` 的最小子集必须同步。
 - `allowlistHash`(`computeAllowlistHash`,FNV-1a)在 `link-accept` 回传,供控制端探测「对方 allowlist 与我不一致」并提示,而非静默 `CHANNEL_NOT_ALLOWED`。
 - **手机与桌面版本会错位**:新增/变更 channel 走兼容评估,别破坏老客户端;新增 push 事件控制端应忽略未知 channel。
-- 帧上限 `MAX_FRAME_BYTES`(2MB,按 **UTF-8 字节** 计,两端一致)。
+- 物理帧上限 `MAX_FRAME_BYTES`(2MB,按 **UTF-8 字节** 计,两端一致)；可靠 wrapper 的
+ 逻辑消息上限和分片边界见上节。
 
 ## 源码导航
 

@@ -19,12 +19,16 @@ import {
 
 describe('planOutboundImageCompression', () => {
   it('png 只降采样(skipWithoutResize),jpeg 按体积决定是否必重编码', () => {
-    expect(planOutboundImageCompression('image/png', 10 * 1024 * 1024))
-      .toEqual({ format: 'png', skipWithoutResize: true });
-    expect(planOutboundImageCompression('image/jpeg', OUTBOUND_IMAGE_RECOMPRESS_MIN_BYTES + 1))
-      .toEqual({ format: 'jpeg', skipWithoutResize: false });
-    expect(planOutboundImageCompression('image/jpeg', OUTBOUND_IMAGE_RECOMPRESS_MIN_BYTES))
-      .toEqual({ format: 'jpeg', skipWithoutResize: true });
+    expect(planOutboundImageCompression('image/png', 10 * 1024 * 1024)).toEqual({
+      format: 'png',
+      skipWithoutResize: true,
+    });
+    expect(
+      planOutboundImageCompression('image/jpeg', OUTBOUND_IMAGE_RECOMPRESS_MIN_BYTES + 1),
+    ).toEqual({ format: 'jpeg', skipWithoutResize: false });
+    expect(planOutboundImageCompression('image/jpeg', OUTBOUND_IMAGE_RECOMPRESS_MIN_BYTES)).toEqual(
+      { format: 'jpeg', skipWithoutResize: true },
+    );
   });
 
   it('gif / webp / 非图片 / 未知 mime 直通不压', () => {
@@ -74,15 +78,23 @@ describe('compressOutboundImage', () => {
   });
 
   it('transform 放弃(skip 规则)/ 产物不更小 / 抛错 → 一律回退原字节(null)', async () => {
-    expect(await compressOutboundImage(bigJpeg, 'image/jpeg', {
-      transform: vi.fn<OutboundImageTransform>().mockResolvedValue(null),
-    })).toBeNull();
-    expect(await compressOutboundImage(bigJpeg, 'image/jpeg', {
-      transform: vi.fn<OutboundImageTransform>().mockResolvedValue(Buffer.alloc(bigJpeg.byteLength, 1)),
-    })).toBeNull();
-    expect(await compressOutboundImage(bigJpeg, 'image/jpeg', {
-      transform: vi.fn<OutboundImageTransform>().mockRejectedValue(new Error('sharp boom')),
-    })).toBeNull();
+    expect(
+      await compressOutboundImage(bigJpeg, 'image/jpeg', {
+        transform: vi.fn<OutboundImageTransform>().mockResolvedValue(null),
+      }),
+    ).toBeNull();
+    expect(
+      await compressOutboundImage(bigJpeg, 'image/jpeg', {
+        transform: vi
+          .fn<OutboundImageTransform>()
+          .mockResolvedValue(Buffer.alloc(bigJpeg.byteLength, 1)),
+      }),
+    ).toBeNull();
+    expect(
+      await compressOutboundImage(bigJpeg, 'image/jpeg', {
+        transform: vi.fn<OutboundImageTransform>().mockRejectedValue(new Error('sharp boom')),
+      }),
+    ).toBeNull();
   });
 });
 

@@ -226,6 +226,24 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('群里 owner 裸斜杠命令视为召唤(不带 @ 也进 slash); 成员裸命令仍静默', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '/project', fromId: 111, messageId: 55 }),
+      groupMessage({ text: '/new', fromId: 222, messageId: 56 }),
+      // 显式发给其它 bot 的命令: 本 bot 不抢答(多 bot 群, review P1)
+      groupMessage({ text: '/new@another_bot', fromId: 111, messageId: 58 }),
+      groupMessage({ text: '/nonsense extra args', fromId: 111, messageId: 57 }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+    // owner 裸命令(55/57)按原文进事件流(slash 层消费);
+    // 成员裸命令(56)与发给其它 bot 的命令(58)静默丢弃
+    expect(events[0]).toMatchObject({ senderId: 'g/-100200', text: '/project' });
+    expect(events[1]).toMatchObject({ senderId: 'g/-100200', text: '/nonsense extra args' });
+  });
+
   it('名字召唤: 手打 "@显示名" 与句首裸名字都触发(非 username), 句中提到不触发', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));
@@ -435,6 +453,70 @@ describe('TelegramIM', () => {
     api.failNextGetUpdates(new TelegramApiError('getUpdates', 409, 'Conflict'));
     await vi.waitFor(() => {
       expect(im.getStatus()).toEqual({ kind: 'conflict', appId: String(BOT.id) });
+    });
+  });
+
+  it('相册 settle 期间同 chat 的后续消息保序: 先答相册再答追问', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    const member = (messageId: number, caption?: string): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        media_group_id: 'album-ord',
+        ...(caption ? { caption } : {}),
+        photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
+      },
+    });
+    // 同一批次: 相册两张 + 紧跟的追问文本 — 追问必须排在相册事件之后
+    api.pushUpdates([member(35, '看这组图'), member(36), privateMessage('顺便再查个东西', 111, 37)]);
+    await vi.waitFor(() => expect(events).toHaveLength(2), { timeout: 5000 });
+    expect(events[0].text).toBe('看这组图');
+    expect(events[1].text).toBe('顺便再查个东西');
+  });
+
+  it('相册处理(附件下载)未收口前, 持久化游标不越过相册首条 update', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // 让 getFile 悬住 — 模拟 settle 已触发、附件仍在下载的处理窗口
+    let releaseGetFile!: () => void;
+    const gate = new Promise<void>((r) => (releaseGetFile = r));
+    const origCall = api.call.bind(api);
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getFile') {
+        await gate;
+      }
+      return origCall(method, params, signal);
+    }) as typeof api.call;
+    const member = (messageId: number): TgUpdate => ({
+      update_id: messageId,
+      message: {
+        message_id: messageId,
+        from: { id: 111, is_bot: false, first_name: 'U' },
+        chat: { id: 111, type: 'private' },
+        date: 1_753_000_000,
+        media_group_id: 'album-cap',
+        ...(messageId === 45 ? { caption: '慢速相册' } : {}),
+        photo: [{ file_id: `f${messageId}`, file_unique_id: `u${messageId}`, width: 10, height: 10 }],
+      },
+    });
+    api.pushUpdates([member(45), member(46)]);
+    // 等 settle 触发进入下载(getFile 悬住), 此时游标不得越过 45
+    await new Promise((r) => setTimeout(r, 1400));
+    expect(events).toHaveLength(0);
+    const persistedDuring = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
+    expect(persistedDuring).toBeLessThanOrEqual(45);
+    // 放行下载 → 相册收口 → 游标补写越过整组
+    releaseGetFile();
+    await vi.waitFor(() => expect(events).toHaveLength(1), { timeout: 4000 });
+    await vi.waitFor(() => {
+      const persisted = Number((ctx.secrets.get('telegram-updates-offset') ?? ':0').split(':')[1]);
+      expect(persisted).toBeGreaterThanOrEqual(47);
     });
   });
 
@@ -717,8 +799,8 @@ describe('TelegramIM', () => {
     expect(events[0].senderId).toBe('g/-100200');
     // ambient 触发的表情回应被抑制
     expect(await im.reactToMessage('-100200|50', '👀')).toBeNull();
-    // ambient 路径不消费命令(即使 owner)
-    api.pushUpdates([groupMessage({ text: '/new', fromId: 111, messageId: 51 })]);
+    // ambient 路径不消费成员命令(owner 裸命令走显式召唤通道, 另有用例)
+    api.pushUpdates([groupMessage({ text: '/new', fromId: 222, messageId: 51 })]);
     await new Promise((r) => setTimeout(r, 100));
     expect(events).toHaveLength(1);
     // NO_REPLY 哨兵: 惰性占位下从头到尾零消息(不发送、无需删除 — 真零痕迹)

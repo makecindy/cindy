@@ -1,8 +1,16 @@
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+
 import { describe, expect, it, vi } from 'vitest';
+
+const electronMock = vi.hoisted(() => ({
+  userDataDir: '',
+}));
 
 vi.mock('electron', () => ({
   app: {
-    getPath: vi.fn(() => ''),
+    getPath: vi.fn(() => electronMock.userDataDir),
   },
 }));
 
@@ -15,7 +23,11 @@ vi.mock('../maker-host/logger-adapter.js', () => ({
   },
 }));
 
-import { __testing } from '../maker-host/agent-resource-settings-store';
+import {
+  __testing,
+  readAgentResourceSettings,
+  writeAgentResourceSetting,
+} from '../maker-host/agent-resource-settings-store';
 
 describe('agent resource settings store', () => {
   it('defaults to unlimited concurrency (0)', () => {
@@ -55,5 +67,35 @@ describe('agent resource settings store', () => {
     expect(__testing.normalize({ capToolchainThreads: true }).capToolchainThreads).toBe(true);
     expect(__testing.normalize({ capToolchainThreads: 'yes' }).capToolchainThreads).toBe(false);
     expect(__testing.normalize({ capToolchainThreads: 1 }).capToolchainThreads).toBe(false);
+  });
+
+  it('does not clobber out-of-process file edits when writing another key', () => {
+    // 隐藏配置约定:直接改文件也是正式入口。写路径必须先按 mtime 失效缓存,
+    // 否则 writePatch 基于旧 overrides 计算,把手改的其它 key 静默覆盖回去。
+    electronMock.userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'agent-resource-store-'));
+    const file = path.join(electronMock.userDataDir, 'agent-resource-settings.json');
+    try {
+      writeAgentResourceSetting('maxConcurrentCommands', 5); // 建立缓存
+      // 进程外手改:补一个 processPriority override,并保证 mtime 前进
+      const onDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+      fs.writeFileSync(file, JSON.stringify({ ...onDisk, processPriority: 'low' }, null, 2));
+      const bumped = new Date(Date.now() + 5_000);
+      fs.utimesSync(file, bumped, bumped);
+
+      writeAgentResourceSetting('capToolchainThreads', true);
+
+      const finalOnDisk = JSON.parse(fs.readFileSync(file, 'utf-8')) as Record<string, unknown>;
+      expect(finalOnDisk.processPriority).toBe('low'); // 手改不被覆盖
+      expect(finalOnDisk.maxConcurrentCommands).toBe(5);
+      expect(finalOnDisk.capToolchainThreads).toBe(true);
+      expect(readAgentResourceSettings()).toEqual({
+        maxConcurrentCommands: 5,
+        processPriority: 'low',
+        capToolchainThreads: true,
+      });
+    } finally {
+      fs.rmSync(electronMock.userDataDir, { recursive: true, force: true });
+      electronMock.userDataDir = '';
+    }
   });
 });

@@ -129,17 +129,36 @@ function generationCanApply(generation: number, models: CatalogModel[]): boolean
   return generation === authGeneration && (models.length === 0 || hasClaudeAiOAuth());
 }
 
-/** 剥掉 dated wire id 的日期后缀(claude-opus-4-8-20260401 → claude-opus-4-8)。 */
+/**
+ * wire id → 目录 id 归一化:先剥 `[1m]` 等方括号路由后缀,再剥 dated 日期后缀
+ * (claude-opus-4-8-20260401 → claude-opus-4-8)。SDK 注册表把长上下文变体报成
+ * claude-fable-5[1m],而目录与会话选中的 id 无此后缀——不剥会让该模型在
+ * sourcesForModel 的精确匹配整体 miss,顶栏误报「已断开」并禁发。口径与
+ * claude-gateway-config / usageFormat 的既有归一化一致。
+ */
 function normalizeModelId(raw: string): string {
-  return raw.replace(/-20\d{6}$/, '');
+  return raw.replace(/\[[^\]]*\]$/, '').replace(/-20\d{6}$/, '');
 }
 
-/** contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。 */
-function contextWindowFor(id: string, explicit?: number): number {
-  if (typeof explicit === 'number' && explicit > 0) return explicit;
+/**
+ * contextWindow 规则:HTTP 明示 > 目录已知值 > 未知模型启发式(默认 1M,Haiku 200k)。
+ *
+ * 前两档是**显式声明**的真实上限,一并标记 contextWindowVerified 让下游可以拿它收敛
+ * 运行期上报的窗口;最后一档是猜的,不标记 —— 否则未知模型会被一个启发式常量当成硬
+ * 上限(见 CatalogModel.contextWindowVerified 注释)。返回可直接展开进 CatalogModel。
+ */
+function contextWindowFor(
+  id: string,
+  explicit?: number,
+): { contextWindow: number; contextWindowVerified?: true } {
+  if (typeof explicit === 'number' && explicit > 0) {
+    return { contextWindow: explicit, contextWindowVerified: true };
+  }
   const catalogWindow = getCindyModelContextWindow(id);
-  if (catalogWindow !== null) return catalogWindow;
-  return /haiku/.test(id) ? 200_000 : 1_000_000;
+  if (catalogWindow !== null) {
+    return { contextWindow: catalogWindow, contextWindowVerified: true };
+  }
+  return { contextWindow: /haiku/.test(id) ? 200_000 : 1_000_000 };
 }
 
 function pickDefaultEffort(efforts: Effort[]): Effort | null {
@@ -326,7 +345,7 @@ export function mapAnthropicSdkModels(raw: unknown): SdkMappedModel[] {
         ...(typeof e.description === 'string' && e.description.length > 0
           ? { description: e.description }
           : {}),
-        contextWindow: contextWindowFor(id),
+        ...contextWindowFor(id),
         efforts,
         defaultEffort,
         supportsFastMode: e.supportsFastMode === true,
@@ -444,7 +463,7 @@ export function mapAnthropicHttpModels(raw: unknown): HttpMappedModel[] {
         name: typeof e.display_name === 'string' && e.display_name.length > 0 ? e.display_name : id,
         group: 'anthropic',
         sortOrder: out.length,
-        contextWindow: contextWindowFor(id, maxInput ?? undefined),
+        ...contextWindowFor(id, maxInput ?? undefined),
         efforts,
         defaultEffort,
         supportsFastMode: caps?.fast_mode === true,
@@ -547,7 +566,11 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
     const windows = (raw as { explicitWindows?: unknown }).explicitWindows;
     if (windows && typeof windows === 'object' && !Array.isArray(windows)) {
       for (const [id, win] of Object.entries(windows as Record<string, unknown>)) {
-        if (typeof win === 'number' && win > 0) explicitWindows.set(id, win);
+        // key 同样归一化:历史缓存可能以带 [1m] 后缀的脏 id 记账。归一化后撞 key 时
+        // first-wins,与下方 models 去重同口径,避免拼出「窗口来自 A、能力来自 B」的杂交态。
+        if (typeof win !== 'number' || win <= 0) continue;
+        const normalizedId = normalizeModelId(id);
+        if (!explicitWindows.has(normalizedId)) explicitWindows.set(normalizedId, win);
       }
     }
     // 恢复待确认骤减记账(跨重启累计,见 persistPendingShrink;坏字段静默忽略)。
@@ -561,7 +584,11 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         Number.isInteger(p.streak) &&
         p.streak > 0
       ) {
-        httpShrinkSignature = p.signature;
+        // 签名按当前归一化口径重算(排序 id 集):历史签名可能含脏 id,口径漂移会让
+        // 跨重启的骤减确认计数被无声重置。
+        httpShrinkSignature = [...new Set(p.signature.split('\n').map(normalizeModelId))]
+          .sort()
+          .join('\n');
         httpShrinkStreak = Math.min(p.streak, CONFIRMED_SHRINK_STREAK);
       }
     }
@@ -576,12 +603,28 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
         Array.isArray((m as CatalogModel).efforts),
     );
     if (valid.length === 0) return;
-    const validIds = new Set(valid.map((model) => model.id));
+    // 归一化自愈:修复前的 SDK 捕获会把 claude-fable-5[1m] 这类脏 id 落盘。按当前口径
+    // 清洗 + first-wins 去重,启动加载即恢复来源匹配,不等下一次动态捕获才纠正。
+    const validIds = new Set<string>();
+    const deduped: CatalogModel[] = [];
+    for (const model of valid) {
+      const id = normalizeModelId(model.id);
+      if (validIds.has(id)) {
+        // 折叠丢弃留痕:两条脏/裸变体的能力字段可能不同,first-wins 的输者信息
+        // 会等下一次动态捕获刷新,这里记日志方便定位。
+        log.info(`anthropic disk cache entry folded by id normalization: ${model.id}`);
+        continue;
+      }
+      validIds.add(id);
+      deduped.push(id === model.id ? model : { ...model, id });
+    }
     const restoreIds = (value: unknown): Set<string> => {
       const restored = new Set<string>();
       if (Array.isArray(value)) {
         for (const id of value) {
-          if (typeof id === 'string' && validIds.has(id)) restored.add(id);
+          if (typeof id !== 'string') continue;
+          const normalizedId = normalizeModelId(id);
+          if (validIds.has(normalizedId)) restored.add(normalizedId);
         }
       }
       return restored;
@@ -598,13 +641,19 @@ export async function loadAnthropicModelsFromDiskCache(): Promise<void> {
     // mapper fallbacks from API/SDK-declared capabilities. Refresh every
     // non-explicit effort baseline and context window from the current
     // catalog so app upgrades cannot preserve stale model metadata.
-    const normalized = valid.map((model) => {
+    const normalized = deduped.map((model) => {
       const effortBaseline = restoredExplicitEffortIds.has(model.id)
         ? null
         : fallbackEffortBaseline(model.id);
+      // 必须先抹掉缓存里的旧 provenance 再让 contextWindowFor 重新判定:它的启发式分支
+      // **不返回** contextWindowVerified 键,残留的 true 会盖在新算出的启发式窗口上。
+      // 触发面窄但后果正是本次要消除的那种:某模型被新版目录移除、又不在 explicitWindows
+      // 里(命中目录的窗口不进那张表)时,会得到一个「已核实」的猜测值 —— 例如 Haiku 残留
+      // 200K 而运行期真实 1M,反倒把上报值压小。这也是上面那条刷新不变量的要求。
+      const { contextWindowVerified: _staleProvenance, ...rest } = model;
       return {
-        ...model,
-        contextWindow: contextWindowFor(model.id, explicitWindows.get(model.id)),
+        ...rest,
+        ...contextWindowFor(model.id, explicitWindows.get(model.id)),
         ...(effortBaseline ?? {}),
       };
     });
@@ -634,7 +683,14 @@ export function noteAnthropicSdkSupportedModels(raw: unknown): void {
   if (mapped.length === 0) return;
   const mappedWithWindows = mapped.map(({ model, hasEffortInfo, hasFastModeInfo }) => {
     const explicit = explicitWindows.get(model.id);
-    const base = explicit !== undefined ? { ...model, contextWindow: explicit } : model;
+    // explicitWindows 存的是 HTTP 明说过的 max_input_tokens —— 恢复它时必须连
+    // contextWindowVerified 一起恢复。SDK 通道重新映射同一模型时走的是「无 explicit」
+    // 分支(目录里没有该模型就落到启发式、不带标记), 只覆盖 contextWindow 会把这份
+    // provenance 静默擦掉, 之后就不再拿这个真实上限去收敛虚高的上报值了。
+    const base =
+      explicit !== undefined
+        ? { ...model, contextWindow: explicit, contextWindowVerified: true as const }
+        : model;
     return { model: base, hasEffortInfo, hasFastModeInfo };
   });
   const { models, explicitEffortIds, explicitFastModeIds } =

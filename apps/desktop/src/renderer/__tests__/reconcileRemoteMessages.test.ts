@@ -28,6 +28,7 @@ import { makerChatStore } from '@/lib/makerChatStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 
 const DEVICE_ID = 'dev-A';
+const DEVICE_B_ID = 'dev-B';
 let n = 0;
 const sid = () => `reconcile-${n++}`;
 type RemotePush = { deviceId: string; channel: string; payload: unknown };
@@ -62,6 +63,8 @@ let remoteList: Message[] = [];
 let remoteListResolver: ((args: unknown[]) => Message[] | Promise<Message[]>) | null = null;
 /** 被控端经隧道返回的 around 窗口(local-db:messages:around-client-id):搜索跳转用。 */
 let remoteAround: Message[] = [];
+let remoteProjectionResult: Promise<unknown> | null = null;
+let remoteExpandedResult: Promise<unknown> | null = null;
 const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]) => {
   if (channel === 'local-db:messages:list') return remoteListResolver?.(_args) ?? remoteList;
   if (channel === 'local-db:messages:around-client-id') return remoteAround;
@@ -69,7 +72,12 @@ const invoke = vi.fn(async (_deviceId: string, channel: string, _args: unknown[]
     return { agentKind: 'cc', remoteHostId: null, sdkSessionId: null, fastMode: false, contextTokens: 0, contextWindow: 0, totalCostUsd: 0 };
   }
   if (channel === 'maker:input:get-projection') {
+    if (remoteProjectionResult) return remoteProjectionResult;
     return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: false, queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, error: null, recovery: null, errorRetryText: null };
+  }
+  if (channel === 'maker:input:set-expanded') {
+    if (remoteExpandedResult) return remoteExpandedResult;
+    return { sessionId: _args[0], pendingQueue: [], steeringQueueClientIds: [], queuePaused: false, queueExpanded: Boolean(_args[1]), queueInteractionLocks: [], queueEditLocks: [], queueAbortPending: false, continuationTurnClientId: null, error: null, recovery: null, errorRetryText: null };
   }
   return null;
 });
@@ -135,6 +143,8 @@ beforeEach(() => {
   remoteList = [];
   remoteListResolver = null;
   remoteAround = [];
+  remoteProjectionResult = null;
+  remoteExpandedResult = null;
   invoke.mockClear();
 });
 
@@ -146,6 +156,292 @@ afterEach(() => {
 });
 
 describe('makerChatStore.reconcileRemoteMessages', () => {
+  it('丢弃来源漂移前设备发来的旧 input projection push', async () => {
+    const s = sid();
+    makerChatStore.initGlobalListeners();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-a');
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    expect(remoteProjectsStore.getSessionDeviceId(s)).toBe(DEVICE_B_ID);
+
+    remotePush?.({
+      deviceId: DEVICE_B_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-b',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: null,
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-b');
+  });
+
+  it('丢弃 origin 漂移前旧设备返回的直接操作 projection', async () => {
+    const s = sid();
+    const oldOperation = deferred<unknown>();
+    remoteExpandedResult = oldOperation.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    makerChatStore.setQueueExpanded(s, true);
+    await flush();
+    expect(invoke).toHaveBeenCalledWith(
+      DEVICE_ID,
+      'maker:input:set-expanded',
+      [s, true],
+    );
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    remotePush?.({
+      deviceId: DEVICE_B_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-b',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+
+    oldOperation.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: true,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-a-stale',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBe('owner-b');
+    expect(snapshot.queueExpanded).toBe(false);
+  });
+
+  it('终态之后丢弃此前发出的同源直接操作 projection', async () => {
+    const s = sid();
+    const oldOperation = deferred<unknown>();
+    remoteExpandedResult = oldOperation.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-live',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    makerChatStore.setQueueExpanded(s, true);
+    await flush();
+
+    makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s,
+      type: 'done',
+      data: {},
+    } as CCAgentStreamEvent);
+    oldOperation.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: true,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-stale',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    expect(snapshot.queueExpanded).toBe(false);
+  });
+
+  it('origin 切换后立即清除旧设备 owner 并退回 unknown', async () => {
+    const s = sid();
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+    // 避免 origin 变更自动触发的新来源查询立即返回 legacy 投影，覆盖待验证的
+    // 中间 fail-closed 状态；真实 B 投影到达后的升级已有独立用例覆盖。
+    remoteProjectionResult = new Promise(() => {});
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-a',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-a');
+
+    remoteProjectsStore.setDeviceSessions(DEVICE_B_ID, 'Mac B', [{ id: s }] as never);
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', []);
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    expect(snapshot.continuationInFlightProjectionCapability).toBe('unknown');
+  });
+
+  it('同源权威 projection push 到达后丢弃已在途旧查询', async () => {
+    const s = sid();
+    const oldProjection = deferred<unknown>();
+    remoteProjectionResult = oldProjection.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-new',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-new');
+
+    oldProjection.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: false,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-old',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    expect(makerChatStore.getSnapshot(s).continuationTurnClientId).toBe('owner-new');
+  });
+
   it('remote stall watchdog only counts heavy session pushes, not lightweight activity', async () => {
     const s = sid();
     makerChatStore.initGlobalListeners();

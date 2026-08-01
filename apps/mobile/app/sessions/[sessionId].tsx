@@ -75,7 +75,7 @@ import {
 } from '@/device-link/remoteStatus';
 import { agentAuthGateHint, agentAuthGateVerdict } from '@/session/agentAuthGate';
 import { isTransientRemoteError, withTransientRemoteRetry } from '@/device-link/remoteRetry';
-import { useRemoteSyncTask } from '@/device-link/remoteSyncTask';
+import { useRemoteSyncCoordinator, type RemoteSyncRun } from '@/device-link/remoteSyncTask';
 import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import { createMobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { startFocusedTopicSubscription } from '@/device-link/focusedTopicSubscription';
@@ -86,7 +86,10 @@ import { InlineQueueSection } from '@/session/InlineQueueSection';
 import { RewindPreviewPanel } from '@/session/RewindPreviewPanel';
 import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
-import { SheetGrabber } from '@/session/SheetSurface';
+import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
+import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
+import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
+import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
   SessionMenuSheet,
   type SessionExtraDirBrowserState,
@@ -140,6 +143,7 @@ import { ImageLightbox } from '@/session/ImageLightbox';
 import { pickWriteFields, retryPatchWhileLatest, writeGuardFields } from '@/session/swipeRowRegistry';
 import {
   dismissNewSessionCreation,
+  prepareNewSessionCreationForEdit,
   getNewSessionCreationTask,
   retryNewSessionCreation,
   shouldBlockSessionSync,
@@ -371,6 +375,14 @@ import {
   shouldKeepOlderMessagesAffordance,
 } from '@/session/messagePaging';
 import {
+  HISTORY_BACKFILL_MAX_GAPS_PER_VISIT,
+  HISTORY_GAP_MAX_CONSIDERED_PER_VISIT,
+  HISTORY_GAP_PROBE_LIMIT,
+  backfillHistoryWindowGap,
+  findHistoryWindowGap,
+  historyWindowGapKey,
+} from '@/session/historyWindowGap';
+import {
   buildMobileMessageRenderItems,
   insertMobileForkOriginItem,
   type MobileMessageRenderItem,
@@ -425,6 +437,8 @@ import type {
   MobileSessionAgentSwitchIntent,
 } from '@cindy/maker-shared/device-link-contract';
 import {
+  REMOTE_MEDIA_NEVER_EXPIRES,
+  localCopyResolvedMedia,
   resolveMobileRemoteMedia,
   type MobileRemoteMediaPresignResult,
   type MobileResolvedRemoteMedia,
@@ -433,6 +447,7 @@ import {
   createRemoteMediaResolveQueue,
   type RemoteMediaRequest,
   type RemoteMediaRequestOptions,
+  type RemoteMediaResolveHooks,
 } from '@/session/remoteMediaResolveQueue';
 import { ChatFilePathContext, type ChatFilePathContextValue, type ChatFilePathTarget } from '@/session/chatFilePathContext';
 import { pathDisplayName } from '@/session/chatPathCandidate';
@@ -566,16 +581,24 @@ function isChannelNotAllowedError(err: unknown): boolean {
 }
 
 /**
- * NOT_CONNECTED 判定。注意它**不保证请求未送达**:多数来自发送前的本地拒绝
+ * enqueue 可自动重试的瞬时传输错误。NOT_CONNECTED **不保证请求未送达**:多数来自发送前的本地拒绝
  * (未连接 / 有界等待超时),但断连瞬间 in-flight 的 invoke 也会被 failAllPending
  * 批量 reject 成 NOT_CONNECTED——请求可能已出、只是 ack 丢了。因此命中它只代表
- * 「值得自动重试」,重发前仍必须先做权威对账(见 send 内 enqueue 重试循环)。
+ * 「值得评估自动重试」,仍必须同时通过 inFlight 守卫。BACKPRESSURE 要么发生在本地
+ * 发送前,要么是被控端 admission 明确拒绝执行,可直接进入同一退避重试路径。
  */
-function isNotConnectedError(err: unknown): boolean {
-  return formatRemoteError(err).includes('NOT_CONNECTED');
+function isRetryableEnqueueTransportError(err: unknown): boolean {
+  const code = (err as { code?: unknown } | null)?.code;
+  if (code === 'NOT_CONNECTED' || code === 'BACKPRESSURE') return true;
+  const formatted = formatRemoteError(err);
+  return (
+    formatted.includes('[NOT_CONNECTED]')
+    || formatted.includes('[DEVICE_LINK_NOT_CONNECTED]')
+    || formatted.includes('[BACKPRESSURE]')
+  );
 }
 
-/** enqueue 对 NOT_CONNECTED 的自动重试次数与退避(每次重试前 transport 还会有界等待重连)。 */
+/** enqueue 对可安全重发的瞬时传输错误做有界退避。 */
 const ENQUEUE_RECONNECT_RETRIES = 3;
 const ENQUEUE_RECONNECT_BACKOFF_MS = 300;
 
@@ -763,6 +786,16 @@ export default function SessionScreen() {
   const [contextSheetView, setContextSheetView] = useState<'main' | 'screenshots' | 'goal'>('main');
   // 模型 + 权限浮窗(ContextSheet 同款 Modal,含二级「模型选项 / 权限」叠层)。
   const [modelSheetOpen, setModelSheetOpen] = useState(false);
+  // 权限模式独立浮窗(composer 左侧图标钮点开,与模型浮窗同属 composer 激活态)。
+  const [permissionSheetOpen, setPermissionSheetOpen] = useState(false);
+  const [permissionSheetSnap, setPermissionSheetSnap] = useState<ContextSheetSnap>('half');
+  const permissionSheetHeights = useMemo(
+    () => computeContextSheetSnapHeights({
+      safeAreaTopInset: insets.top,
+      screenHeight: windowDimensions.height,
+    }),
+    [insets.top, windowDimensions.height],
+  );
   // 已建会话的模型浮窗可先浏览另一 Agent；只改此浏览态不触碰会话，选模型才登记 intent。
   const [modelSheetAgentKind, setModelSheetAgentKind] = useState<MobileSessionAgentKind>('claude-code');
   const [attachments, setAttachments] = useState<RemoteSerializedAttachment[]>([]);
@@ -1054,7 +1087,7 @@ export default function SessionScreen() {
   const [controlBusy, setControlBusy] = useState(false);
   const [messageActionBusy, setMessageActionBusy] = useState<string | null>(null);
   const [rewindState, setRewindState] = useState<RewindPreviewState>({ kind: 'idle' });
-  // 切 session 时同步(render 阶段)重置回撤确认框 / busy 态并递增「请求代际」。SessionScreen 切
+  // 切 session 时同步(render 阶段)重置回撤确认框 / busy / loading 态并递增「请求代际」。SessionScreen 切
   // session 复用实例、不 remount,这些本地 UI state 不会自动重置,残留会让确认框跨 session 出现且
   // 无法自愈(messageActionBusy 残留还会置灰目标 session 的消息操作栏)。用 React 官方「prop 变化时
   // 调整 state」的 render 阶段模式而非 useEffect:同步生效,既无切换首帧的残留闪帧,也不留「路由已切、
@@ -1065,6 +1098,7 @@ export default function SessionScreen() {
     setPrevRewindSessionId(sessionId);
     setRewindState({ kind: 'idle' });
     setMessageActionBusy(null);
+    setLoading(false);
     rewindRequestSeqRef.current += 1;
   }
   const [contextLoading, setContextLoading] = useState(false);
@@ -1187,7 +1221,11 @@ export default function SessionScreen() {
   // 队列工厂:本屏切 sessionId 不重挂载,换会话时旧队列 releaseAll 后必须换全新
   // 实例(released 标志一次性,释放过的队列不再回填缓存)。
   const createRemoteMediaQueue = useCallback(() => createRemoteMediaResolveQueue({
-      resolve: async (media: RemoteMediaRequest, opts?: { skipCache?: boolean }) => {
+      resolve: async (
+        media: RemoteMediaRequest,
+        opts?: { skipCache?: boolean },
+        hooks?: RemoteMediaResolveHooks,
+      ) => {
         const deps = remoteMediaDepsRef.current;
         const diskCache = remoteMediaDiskCacheRef.current;
         // 命名空间键与 deps 同一时刻捕获(首个 await 之前):切设备/账号时在飞的
@@ -1209,7 +1247,7 @@ export default function SessionScreen() {
               mimeType: hit.mimeType,
               size: hit.size,
               // 本地文件不过期;若被 LRU/OS 清掉,Image onError → forceRefresh 重取自愈。
-              expiresAt: '9999-12-31T00:00:00.000Z',
+              expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
               previewable: hit.mimeType.startsWith('image/'),
             };
           }
@@ -1244,13 +1282,32 @@ export default function SessionScreen() {
           // 走到这里的都是完整原图字节(inline 缩略图已在上面 return):即便请求方
           // 要的是缩略图(被控端缩不了回落原图),也落**裸键**——lightbox 后续按裸键
           // 取原图直接磁盘命中,不再对同一张原图二次下载、双份落盘。
-          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size).catch(() => undefined);
+          const store = diskCache.store(bareDiskSource, resolved.url, resolved.mimeType, resolved.size)
+            .catch(() => false);
           if (resolved.ossKey) {
             const key = resolved.ossKey;
             pendingDiskStoresRef.current.set(key, store.finally(() => {
               pendingDiskStoresRef.current.delete(key);
             }));
           }
+          // 落盘成功后把队列缓存条目升级成本地 file://:presign 地址会被队列当 fresh
+          // 结果缓存,在有效期内同键请求一律直接命中它、再也不会重进磁盘 lookup,
+          // 于是「已经打开过的原图,关掉再打开又从 OSS 重下一整张」,盘上那份副本
+          // 永远轮不到用(用户实测 + PR #1125 review)。
+          // 这里刻意**不同步等待**落盘:调用方立即拿到可渲染的 presign 地址。取件队列
+          // maxConcurrent=2 且看不到 front,同步等待会让 lightbox 的相邻页预取同样
+          // 占住槽位,把用户正在看的那张排到已翻过去的图的后台下载之后。
+          // store 的返回值是「本次是否真的写入了新字节」:超预算跳过 / 下载失败(现存
+          // 同名旧文件被刻意保留)/ 落成 0 字节都为 false,此时绝不能改用本地文件——
+          // 否则会把**已被 onError 证伪的旧文件**当本次结果并标成永不过期。
+          void store
+            .then(async (stored) => {
+              if (!stored) return;
+              const hit = await diskCache.lookup(bareDiskSource).catch(() => null);
+              const local = localCopyResolvedMedia(resolved, hit);
+              if (local) hooks?.onLocalCopy(local);
+            })
+            .catch(() => undefined);
         }
         return resolved;
       },
@@ -1865,6 +1922,7 @@ export default function SessionScreen() {
   });
   const composerCardActive = (canUseComposer && composerFocused)
     || modelSheetOpen
+    || permissionSheetOpen
     || voiceIsBusy
     || composerVoiceHoldActive;
   useComposerCardTransition(composerCardActive);
@@ -1990,9 +2048,44 @@ export default function SessionScreen() {
   );
   // 聚焦卡片形态的底部工具排:[+][模型] …… [语音][停止/发送]。
   // + 号打开 Context 面板(附件 / 计划模式 / 目标模式收在面板内);权限模式入口收进会话设置。
+  // 权限模式图标钮(2026-07-29 用户裁决,对齐 Codex,与新建页同位同款):
+  // 只显示档位图标,不带文字;危险档(auto / bypass)只染图标色。
+  const renderSessionPermissionButton = () => {
+    const presentation = permissionPresentation(displayPermissionMode, displayPermissionLabel);
+    const accent = presentation.accent !== 'neutral'
+      ? permissionAccentColor(presentation.accent, colors)
+      : null;
+    return (
+      <RouteActionButton
+        accessibilityLabel={t('models.picker.permissionModeAccessibility', { mode: presentation.label })}
+        active={permissionSheetOpen}
+        disabled={controlBusy || !canUseComposer}
+        hitSlop={COMPOSER_CONTROL_HIT_SLOP}
+        onPress={() => {
+          setModelSheetOpen(false);
+          setPermissionSheetSnap('half');
+          setPermissionSheetOpen(true);
+        }}
+        style={[
+          styles.composerInlineToolButton,
+          permissionSheetOpen && styles.composerToolButtonActive,
+        ]}
+        testID="session.permissionIndicator"
+      >
+        <presentation.Icon
+          color={accent ?? colors.textSecondary}
+          size={iconSize.sm}
+          strokeWidth={iconStroke.regular}
+        />
+      </RouteActionButton>
+    );
+  };
+
+  // 工具条布局(对齐 Codex):左 = [+][权限图标][计划 chip];右 = [模型][语音][动作]。
   const renderComposerToolbar = () => (
     <>
       {renderComposerAttachmentButton()}
+      {renderSessionPermissionButton()}
       {planModeOn ? (
         <PlanModeChip
           disabled={!canUseComposer || controlBusy || sessionSettingsLocked}
@@ -2000,6 +2093,7 @@ export default function SessionScreen() {
           testID="session.planModeChip"
         />
       ) : null}
+      <ComposerToolbarSpacer />
       {composerRuntimeSummary ? (
         <ComposerRuntimePill
           fastOn={composerPillFastOn}
@@ -2028,10 +2122,9 @@ export default function SessionScreen() {
           testID="session.composerModelButton"
         />
       ) : null}
-      <ComposerToolbarSpacer />
-      {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边
-         (对齐桌面),语音占位宽度随录音胶囊(红点+计时)展开,把停止任务
-          推开——语音右缘与发送槽的邻接关系全程不变。 */}
+      {/* 工具排右段顺序:[模型][停止任务][语音占位][发送槽](spacer 已在模型左侧,
+          模型右对齐对齐 Codex)。停止任务在语音左边(对齐桌面),语音占位宽度随录音
+          胶囊(红点+计时)展开,把停止任务推开——语音右缘与发送槽的邻接关系全程不变。 */}
       {renderComposerInlineStop()}
       {composerVoicePlacement?.inline || composerVoicePlacement?.floating
         ? <ComposerToolbarVoiceSlot width={voiceRecordingTimer.pillWidth} />
@@ -2294,6 +2387,7 @@ export default function SessionScreen() {
   useEffect(() => {
     if (canUseComposer) return;
     setModelSheetOpen(false);
+    setPermissionSheetOpen(false);
   }, [canUseComposer]);
 
   useEffect(() => {
@@ -2790,12 +2884,16 @@ export default function SessionScreen() {
     };
   }, [connectionEpoch, deviceId, lastSyncedAt, maker, openLink, sessionAgentSwitchSupported, sessionId]);
 
-  const syncSession = useCallback(async (options: { replaceMessages?: boolean } = {}) => {
-    if (!deviceId || !sessionId) return;
+  const syncSession = useCallback(async (syncRun: Pick<RemoteSyncRun, 'isStale' | 'replaceMessages'>) => {
+    const options = { replaceMessages: syncRun.replaceMessages };
+    if (!deviceId || !sessionId || syncRun.isStale()) return;
     // 新建会话乐观管线在途(running / create-failed):被控端可能还没有这个会话,
     // getSession 会 NOT_FOUND 报错横幅。统一在这里挡掉全部 load 触发点;管线完成
     // (task 移除)后由下方 effect 触发一轮真正的同步。
-    if (shouldBlockSessionSync(sessionId)) return;
+    if (shouldBlockSessionSync(sessionId)) {
+      if (!syncRun.isStale()) setLoading(false);
+      return;
+    }
     // 已读回执门槛的 epoch 必须在 sync **开始**时捕获:重连时 connectionEpoch 先行推进,
     // 旧连接代的 in-flight load 若在尾部读 ref 的最新值,会把旧窗口数据标成新代已同步,
     // 抢在排队的 resync 之前放行回执。开始时捕获则旧 load 落的是旧代 key,门槛不放行。
@@ -2823,6 +2921,7 @@ export default function SessionScreen() {
       const activeSessions = await maker.listActiveSessions().catch(() => []);
       return { activeSessions, activityEpochAtFetchStart };
     };
+    if (syncRun.isStale()) return;
     setLoading(true);
     setError(null);
     try {
@@ -2838,6 +2937,7 @@ export default function SessionScreen() {
             fetchActiveSessionSnapshot(),
           ]);
         });
+        if (syncRun.isStale()) return;
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
@@ -2847,13 +2947,17 @@ export default function SessionScreen() {
           activeSessionSnapshot.activityEpochAtFetchStart,
         );
         const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
+        // moreBeyondWindow:本页上沿之外服务端还有历史(满页 / 被裁行)。为真时 store 不保留早于
+        // 本页的缓存段 —— 它与本页之间可能隔着从未加载的行,保留就是孤岛(#1222)。判据与
+        // 「加载更早」入口同源,两者本就该一致。
+        const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
         if (options.replaceMessages) {
           remoteSessionStore.setMessages(sessionId, historyPage);
         } else {
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage);
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
         }
         remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-        setHasOlderMessages(shouldKeepOlderMessagesAffordance(history));
+        setHasOlderMessages(moreBeyondWindow);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         remoteSessionStore.setInputProjection(sessionId, projection);
       } else {
@@ -2877,6 +2981,7 @@ export default function SessionScreen() {
           messageWindowSynced: remoteSessionStore.isSessionMessageWindowSynced(sessionId, sessionMeta),
           storedSession: storedSessionAtStart,
         });
+        if (syncRun.isStale()) return;
         remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
@@ -2892,10 +2997,13 @@ export default function SessionScreen() {
               REOPEN_MESSAGE_WINDOW_LIMITS,
             ),
           );
+          if (syncRun.isStale()) return;
           const historyPage: RemoteMessage[] = Array.isArray(history.messages) ? history.messages : [];
-          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage);
+          // 同首开路径:上沿之外还有历史时不保留更早的缓存段(#1222)。
+          const moreBeyondWindow = shouldKeepOlderMessagesAffordance(history);
+          remoteSessionStore.setLatestMessageWindow(sessionId, historyPage, { moreBeyondWindow });
           remoteSessionStore.markSessionMessagesSynced(sessionId, sessionMeta);
-          setHasOlderMessages(shouldKeepOlderMessagesAffordance(history));
+          setHasOlderMessages(moreBeyondWindow);
         } else {
           // 回归修复:没新内容也要补设 hasOlderMessages —— 屏幕重开把该 state 重置为 false,跳过整窗
           // 重拉时若不补设,「加载更早」入口会消失、往上拖刷不出老消息。用服务端总数 vs in-store 已加载
@@ -2908,6 +3016,7 @@ export default function SessionScreen() {
       // 不变量:上面 setHasOlderMessages 的校正(:806/:841/:846)与这里的 setLastSyncedAt 之间必须保持
       // 同步尾、无 await —— 否则乐观点亮 effect(依赖 lastSyncedAt===null)会在 await 间隙把刚校正成 false
       // 的「加载更早」入口重新点亮。将来切勿在两者之间插入 await。
+      if (syncRun.isStale()) return;
       setLastSyncedAt(Date.now());
       // 已读回执门槛:本会话在当前连接代完成过整窗同步。sessionId / epoch / 门槛代号
       // 都取 sync 开始时的快照——原地切 session、重连、attention 上升沿之后,启动更早
@@ -2916,12 +3025,19 @@ export default function SessionScreen() {
         setReadAckSyncedKey(`${sessionId}:${readAckEpochAtStart}`);
       }
     } catch (err) {
-      setError(formatRemoteError(err));
+      if (!syncRun.isStale()) setError(formatRemoteError(err));
     } finally {
-      setLoading(false);
+      if (!syncRun.isStale()) setLoading(false);
     }
   }, [deviceId, deviceName, maker, openLink, sessionId, subscribe]);
-  const load = useRemoteSyncTask(() => syncSession());
+  const requestSync = useRemoteSyncCoordinator(
+    (run) => syncSession(run),
+    `${deviceId}:${sessionId}`,
+  );
+  const load = useCallback(
+    () => requestSync({ reason: 'passive-refresh' }),
+    [requestSync],
+  );
 
   /** 恢复路径里装不下的附件:中转对象回收,不留无人认领的已上传对象。 */
   const discardRecoveredAttachments = (attachments: readonly RemoteSerializedAttachment[]) => {
@@ -2998,39 +3114,62 @@ export default function SessionScreen() {
           style: 'cancel',
           onPress: () => {
             if (!creationTask) return;
-            // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
-            // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
-            // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
-            // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
-            // 上传任务保不住:本页(连同 upload controller)马上就要销毁,只能取消
-            // 并回收,再把「没能带回多少」告知用户(review P1:静默丢等于偷走内容)。
-            const { items: followUps, cancelledUploadCount } = takeOutboxForSession(sessionId, 'cancel');
-            if (followUps.length > 0) {
-              const { merged, dropped } = mergeAttachmentsWithinLimit(
-                creationTask.attachments,
-                followUps.flatMap(outboxItemAttachments),
-              );
-              // 装不下的中转对象在这里回收:草稿带不走它们,留着就是没人认领的垃圾。
-              discardRecoveredAttachments(dropped);
-              const unrecoveredCount = dropped.length + cancelledUploadCount;
-              stashNewSessionDraftForEdit(creationTask, {
-                draft: {
-                  ...creationTask.draft,
-                  firstMessage: [
-                    creationTask.draft.firstMessage,
-                    ...followUps.map(outboxItemDraftText),
-                  ].filter(Boolean).join('\n\n'),
-                },
-                attachments: merged,
-                notice: unrecoveredCount > 0
-                  ? t('session.screen.attachmentsNotCarriedBack', { count: unrecoveredCount })
-                  : null,
+            void prepareNewSessionCreationForEdit(sessionId)
+              .then((prepared) => {
+                if (!prepared) return;
+                // 创建期间发出的后续消息必须一起带回新建页(review P1):它们此刻在 outbox 里,
+                // 而下一行 dismiss 会连同合成会话行一起删掉——会话页 unmount 时 cleanup 会把它们
+                // 写进那个已经不存在的会话的草稿,用户在新建页看不到、也再也找不回来。
+                // 新建页只有一个首条消息输入框,所以按序拼成文本、附件按 id 去重合并后一起 stash。
+                // 上传任务保不住:本页(连同 upload controller)马上要销毁,只能取消
+                // 并回收,再把「没能带回多少」告知用户(review P1:静默丢等于偷走内容)。
+                const { items: followUps, cancelledUploadCount } = takeOutboxForSession(sessionId, 'cancel');
+                if (followUps.length > 0) {
+                  const { merged, dropped } = mergeAttachmentsWithinLimit(
+                    prepared.attachments,
+                    followUps.flatMap(outboxItemAttachments),
+                  );
+                  // 装不下的中转对象在这里回收:草稿带不走它们,留着就是没人认领的垃圾。
+                  discardRecoveredAttachments(dropped);
+                  const unrecoveredCount = dropped.length + cancelledUploadCount;
+                  stashNewSessionDraftForEdit(prepared, {
+                    draft: {
+                      ...prepared.draft,
+                      firstMessage: [
+                        prepared.draft.firstMessage,
+                        ...followUps.map(outboxItemDraftText),
+                      ].filter(Boolean).join('\n\n'),
+                    },
+                    attachments: merged,
+                    notice: unrecoveredCount > 0
+                      ? t('session.screen.attachmentsNotCarriedBack', { count: unrecoveredCount })
+                      : null,
+                  });
+                } else {
+                  stashNewSessionDraftForEdit(prepared);
+                }
+                dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
+                router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+              })
+              .catch((err: unknown) => {
+                // 补偿回收失败时保留 task + 合成行，绝不先跳回表单再创建第二个孤儿
+                // worktree。用户可取消等待连接恢复，或直接复用同 sessionId 重试创建。
+                const cleanupError = formatRemoteError(err);
+                setError(t('session.screen.createFailedNotice', { message: cleanupError }));
+                Alert.alert(t('session.screen.createFailedTitle'), cleanupError, [
+                  {
+                    text: t('session.common.cancel'),
+                    style: 'cancel',
+                  },
+                  {
+                    text: t('session.screen.retry'),
+                    onPress: () => {
+                      setError(null);
+                      retryNewSessionCreation(sessionId);
+                    },
+                  },
+                ]);
               });
-            } else {
-              stashNewSessionDraftForEdit(creationTask);
-            }
-            dismissNewSessionCreation(sessionId, { removeSyntheticRow: true });
-            router.replace({ pathname: '/sessions/new', params: { deviceId, deviceName } });
           },
         },
         {
@@ -3521,7 +3660,7 @@ export default function SessionScreen() {
         // remoteSessionRunning(activity 推送 / 活跃快照会先置 true,重连场景渲染先于清理)。
         buildMobileMessageRenderItems(
           messages,
-          { isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning },
+          { autoResumePending: inputProjection.autoResumePending, isSessionStreaming, renderOrphanTaskUpdates: makerTurnRunning, sessionId },
           taskUpdates,
         ),
         forkOrigin,
@@ -3537,7 +3676,7 @@ export default function SessionScreen() {
       const reconciled = reconcileMobileMessageRenderItems(previous, items);
       return reconciled;
     },
-    [errorTailClientId, forkOrigin, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
+    [errorTailClientId, forkOrigin, inputProjection.autoResumePending, isSessionStreaming, makerTurnRunning, messages, sessionId, taskUpdates],
   );
   // 只在本次 render 真正 commit 后更新 reconcile 基准。写入 useMemo/ref 会让
   // Concurrent Mode 下被丢弃的 render 泄漏成下一轮的 previous,破坏尾行 memo 的稳定性。
@@ -3732,6 +3871,30 @@ export default function SessionScreen() {
     remoteMediaQueueRef.current = createRemoteMediaQueue();
   }, [sessionId, createRemoteMediaQueue, deleteRemoteMediaObject]);
 
+  /** 单调递增的补齐轮次计数器;`latest` 是本屏最新那一轮的序号(旧轮据此自我作废)。 */
+  const backfillRunSeqRef = useRef(0);
+  const backfillLatestRunSeqRef = useRef(0);
+  /**
+   * 作废在飞的那一轮补齐:占掉一个序号但不启动任何轮,于是它在下一次 isCancelled 上收手。
+   *
+   * 走单调序号而不是在 isCancelled 里比"当前会话 id / loadingEarlier 是否变了":那类判据会随
+   * 状态摆回而把取消撤销掉(#1210 review 的 P1);序号只增不减,作废是终态。
+   */
+  const abandonInFlightBackfill = useCallback(() => {
+    backfillRunSeqRef.current += 1;
+    backfillLatestRunSeqRef.current = backfillRunSeqRef.current;
+  }, []);
+  // 会话切走、或连接代变化(重连)时作废:用户已经离开的会话不值得继续花翻页请求;换连接后在飞的
+  // 请求走的是旧连接,让它早点收手比等它超时干净。
+  //
+  // 手动「加载更早」的作废**不在这里**:effect 是被动的,而 loadEarlierMessages 在
+  // setLoadingEarlier(true) 之后同步就发请求 —— 若自动补齐在这个 effect 跑之前返回,它仍会通过
+  // isCancelled、merge 并继续下一页,两条分页流程短暂并发(#1210 review)。所以那条路在手动入口的
+  // **同步路径**里直接调 abandonInFlightBackfill。
+  useEffect(() => {
+    abandonInFlightBackfill();
+  }, [abandonInFlightBackfill, sessionId, connectionEpoch]);
+
   const loadEarlierMessages = useCallback(async () => {
     if (!deviceId || !sessionId || loadingEarlier || !hasOlderMessages) return;
     const before = oldestMessageCursor(messages);
@@ -3739,6 +3902,10 @@ export default function SessionScreen() {
       setHasOlderMessages(false);
       return;
     }
+    // 同步作废在飞的自动补齐:两者都按 before 游标翻页,并发只会重复拉取、反复 merge。必须在
+    // 发请求**之前**同步做掉,不能只靠依赖 loadingEarlier 的 effect —— 那是被动的,自动补齐可能
+    // 在它执行前就返回并继续下一页(#1210 review)。
+    abandonInFlightBackfill();
     setLoadingEarlier(true);
     setError(null);
     try {
@@ -3746,14 +3913,168 @@ export default function SessionScreen() {
         listMessagesWithPayloadRetry((limit) => maker.listMessages(sessionId, { limit, before })),
       );
       const pageList = Array.isArray(page.messages) ? page.messages : [];
-      remoteSessionStore.mergeMessages(sessionId, pageList);
+      // 用 mergeEarlierMessages 而不是 mergeMessages:这一页是沿 before 从窗口最旧端**连续**取的,
+      // 登记进「已验证连续」区间后,后续满页的最新窗口同步才不会把用户一路翻出来的历史当成来源
+      // 不明的缓存丢掉(#1210 review)。
+      remoteSessionStore.mergeEarlierMessages(sessionId, pageList);
       setHasOlderMessages(shouldKeepOlderMessagesAffordance(page));
     } catch (err) {
       setError(formatRemoteError(err));
     } finally {
       setLoadingEarlier(false);
     }
-  }, [deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
+  }, [abandonInFlightBackfill, deviceId, hasOlderMessages, loadingEarlier, maker, messages, sessionId]);
+
+  /**
+   * 历史窗口空洞的自动补齐(见 `historyWindowGap.ts` 的文件头)。
+   *
+   * 缓存旧页 + 最新页拼接、断连期间漏收 push,都会让窗口出现"首段 + 尾段"的孤岛,中间几百行
+   * 从未加载 —— 手机上看起来就是"中间掉了一大段"。这里在窗口就位后检测最靠尾部的一处跳变,
+   * 先花一次 `limit=1` 探测确认服务端两行是否本来就相邻(正常的隔夜会话不该白翻页),确认有洞
+   * 才沿 `before` 游标补齐。
+   *
+   * 后台跑、不阻塞首屏,也不写 `error` / `loadingEarlier`:补齐是静默自愈,失败时渲染层的
+   * `HISTORY_GAP_SPLIT_MS` 守卫兜底(不谎报时长),用户仍可用「加载更早」自己往上翻。
+   */
+  /**
+   * 本次访问考察过的空洞,按**结局**分三类 —— 它们的"遗忘条件"和"是否消耗额度"都不同,合成
+   * 一个集合会同时踩两个坑(#1210 review):
+   *
+   *  - `contiguous`:探测确认服务端两行本来就相邻(隔夜等正常停顿)。这是**事实**,与连接状态
+   *    无关,所以本次访问内永久跳过;但它一个请求的翻页都没花,**不占额度** —— 否则窗口里
+   *    只要有三处正常停顿,更早处的真实缺行就永远排不到探测。
+   *  - `backfilled`:真的翻过页(covered / budget / exhausted)。跳过 + **占额度**,额度限制的
+   *    正是"一次访问最多翻多少段历史"。
+   *  - `failed`:请求异常(断线等)。跳过是为了防抖(messages 每变一次就重试会打成请求风暴),
+   *    但**绑在连接代上**:`connectionEpoch` 变化即清空,重连后同一处可以再试。不占额度。
+   *    `cancelled` 也归这里 —— 会话切走 / 锚点行被 /clear、rewind 拿掉,都属于"这次没做成"。
+   *
+   * 检测的跳过表是三者的并集;额度只看 `backfilled`。
+   */
+  const backfillGapStateRef = useRef<{
+    sid: string;
+    epoch: number;
+    contiguous: Set<string>;
+    backfilled: Set<string>;
+    failed: Set<string>;
+  } | null>(null);
+  /**
+   * 飞行中的那一轮补齐:会话 id + **单调递增的运行序号**。
+   *
+   * 为什么必须有 seq、且一切判据都对着它比:所有"当前状态是否仍等于启动时状态"的判据都不可靠,
+   * 因为会话 id 会**摆回来** —— A 的补齐在飞时切到 B 再快速切回 A,`sessionId === 'A'` 会重新
+   * 成立,于是旧那一轮的取消被撤销、effect 又放行一轮新的 A,同一会话并发翻页;旧轮收尾时还会
+   * 按 sid 把新轮的飞行标记误清,继续放行更多轮(#1210 review 的 P1)。seq 只增不减,"我还是不是
+   * 本会话最新那一轮"是单调判据,撤销不了。
+   *
+   * 用 state 而不是 ref 的理由不变:ref 在 `finally` 里改写不触发重渲染,那样本次访问里就不会
+   * 再检测下一处空洞,要等新消息或重开会话。互斥仍只按 `sid` 判 —— 别的会话残留的那一轮不连坐
+   * 当前会话(它自己会在下一次 isCancelled 上收手)。
+   */
+  const [backfillInFlightRun, setBackfillInFlightRun] = useState<{ sid: string; seq: number } | null>(null);
+  useEffect(() => {
+    if (!deviceId || !sessionId) return;
+    // 同步门槛必须按 **session + 连接代** 判定,不能用 lastSyncedAt:屏实例复用、原地从会话 A
+    // 切到有缓存消息的 B 时,lastSyncedAt 仍是 A 留下的非空值,补齐会在 B 的 listMessages 对账
+    // 完成前就基于旧缓存快照动手 —— 而空洞 key 在请求前已记为已考察,那一处从此不再重试
+    // (#1210 review)。readAckSyncedKey 正是「本会话在当前连接代完成过整窗同步」这个判据的
+    // 既有单一来源(见它的声明处),这里直接复用。
+    if (readAckSyncedKey !== `${sessionId}:${connectionEpoch}`) return;
+    // 与「加载更早」互斥:两者都按 before 游标翻页,同时跑只会让窗口反复 merge、白拉页。
+    // 飞行判定只挡**同一会话**,别的会话残留的那一轮不连坐(见 backfillInFlightRun)。
+    if (loading || loadingEarlier || backfillInFlightRun?.sid === sessionId) return;
+    // 换会话时整体重置;同一会话内换了连接代只清 failed —— 断线那次不该把这处空洞永久钉死,
+    // 重连并重新同步后要能再试(#1210 review)。contiguous / backfilled 是与连接无关的结论,
+    // 重连后不必重来。
+    const existingState = backfillGapStateRef.current;
+    const gapState = existingState?.sid === sessionId
+      ? existingState
+      : {
+        sid: sessionId,
+        epoch: connectionEpoch,
+        contiguous: new Set<string>(),
+        backfilled: new Set<string>(),
+        failed: new Set<string>(),
+      };
+    if (gapState.epoch !== connectionEpoch) {
+      gapState.epoch = connectionEpoch;
+      gapState.failed.clear();
+    }
+    backfillGapStateRef.current = gapState;
+    // 跳过表是三类的并集:contiguous 那种"不 merge、跳变留在窗口里"的结局若不跳过,检测会永远
+    // 返回同一处,更早处的真实缺行进不了探测。
+    const consideredKeys = new Set<string>([
+      ...gapState.contiguous,
+      ...gapState.backfilled,
+      ...gapState.failed,
+    ]);
+    // 两道闸各管一件事,都不能省(常量注释里有完整理由):
+    //  - 翻页额度只算真花了翻页请求的结局 —— 正常停顿不该把它吃光,否则更早的真实缺行排不到;
+    //  - 考察总闸管住探测本身 —— 跨数百天的会话可能有上百处正常停顿,只有翻页额度的话会串行
+    //    发出上百次 limit=1 探测。
+    if (gapState.backfilled.size >= HISTORY_BACKFILL_MAX_GAPS_PER_VISIT) return;
+    if (consideredKeys.size >= HISTORY_GAP_MAX_CONSIDERED_PER_VISIT) return;
+    const gap = findHistoryWindowGap(messages, consideredKeys);
+    if (!gap) return;
+    const gapKey = historyWindowGapKey(gap);
+    const sessionIdAtStart = sessionId;
+    const epochAtStart = connectionEpoch;
+    // 本轮的身份:单调序号。启动即成为"最新一轮",此前还在飞的那一轮由此自我作废。
+    const runSeq = backfillRunSeqRef.current + 1;
+    backfillRunSeqRef.current = runSeq;
+    backfillLatestRunSeqRef.current = runSeq;
+    setBackfillInFlightRun({ sid: sessionIdAtStart, seq: runSeq });
+    void backfillHistoryWindowGap(gap, {
+      listPage: async (before, limit) => {
+        const page = await listMessagesWithPayloadRetry(
+          (retryLimit) => maker.listMessages(sessionIdAtStart, { limit: retryLimit, before }),
+          // 探测页只要一行,不能沿用默认阶梯(它从 80 起降,第一枪就是满页,探测的成本优势没了);
+          // 翻页页照常走默认阶梯,帧超限时要能降级重试,否则大 tool 输出的会话一枪就 failed。
+          limit === HISTORY_GAP_PROBE_LIMIT ? [HISTORY_GAP_PROBE_LIMIT] : undefined,
+        );
+        return Array.isArray(page.messages) ? page.messages : [];
+      },
+      merge: (rows) => {
+        if (rows.length > 0) remoteSessionStore.mergeMessages(sessionIdAtStart, rows);
+      },
+      // 两个收手条件:
+      //  - **我不再是最新那一轮** —— 屏幕已经为别的会话(或切回来后的同一会话)起了新的一轮。
+      //    判据必须是单调的 seq,不能比"当前会话 id 是否仍等于启动时的":会话切走再切回时后者会
+      //    重新成立,取消被撤销、同一会话并发翻页(#1210 review 的 P1)。
+      //  - 空洞较新一侧那行已不在窗口里 —— /clear、rewind 或整窗替换把它拿掉了,继续 merge 会
+      //    把刚被移除的历史(甚至 clearedAt 之前的消息)塞回窗口。锚点没了就等于这处空洞不存在了。
+      isCancelled: () => backfillLatestRunSeqRef.current !== runSeq
+        || !remoteSessionStore.getMessages(sessionIdAtStart).some((row) => row.id === gap.newerId),
+    }).then((outcome) => {
+      // 按结局归类(容器的三类语义见 backfillGapStateRef 的注释)。归类发生在**收尾**而不是发起
+      // 前:发起期间的重入由飞行标记挡住,不需要预先占位。切会话 / 换连接代之后落地的旧结局
+      // 一律丢弃 —— 它属于上一个容器,写进新容器会污染当前会话的判断。
+      // 已被新一轮取代的旧轮不写结论:它看到的窗口已经不是当前的了。
+      if (backfillLatestRunSeqRef.current !== runSeq) return;
+      const state = backfillGapStateRef.current;
+      if (!state || state.sid !== sessionIdAtStart || state.epoch !== epochAtStart) return;
+      // cancelled 刻意**不记**:它的两个触发条件本身就不会招来立刻重试 —— 会话切走时当前会话
+      // 的检测看的是另一个窗口,回到这个会话时理应重新考察;锚点行被 /clear、rewind 拿掉时那处
+      // 跳变也随之消失,检测不会再返回它。记下来只会让"切走再回来"白白丢掉一次自愈机会。
+      if (outcome === 'contiguous') state.contiguous.add(gapKey);
+      else if (outcome === 'failed') state.failed.add(gapKey);
+      else if (outcome !== 'cancelled') state.backfilled.add(gapKey);
+    }).finally(() => {
+      // 按 **seq** 精确匹配再清:切会话(甚至切回同一会话)后可能已经起了新的一轮,按 sid 比会把
+      // 新轮的标记误清、于是又放行一轮,越滚越多(#1210 review 的 P1)。
+      setBackfillInFlightRun((current) => (current?.seq === runSeq ? null : current));
+    });
+  }, [
+    backfillInFlightRun,
+    connectionEpoch,
+    deviceId,
+    loading,
+    loadingEarlier,
+    maker,
+    messages,
+    readAckSyncedKey,
+    sessionId,
+  ]);
 
   const selectSlashCommand = useCallback((command: MobileSlashCommand) => {
     // 点选 agent-skill 时记录名字+会话 id:palette 关闭后 slashCommands 被清,发送侧
@@ -4483,7 +4804,7 @@ export default function SessionScreen() {
     // 不要在这一帧闪成排队 icon 再回来(也不能谎报「已入队」)。
     markQueueItemSending(queued.clientId);
     try {
-      // 弱网重试与写序边界同 send() 原路径(仅「保证未发出」的 NOT_CONNECTED 自动重发)。
+      // 弱网重试与写序边界同 send() 原路径(仅明确可安全重发的瞬时传输错误)。
       let projection: InputProjection | undefined;
       for (let attempt = 0; ; attempt++) {
         try {
@@ -4492,7 +4813,7 @@ export default function SessionScreen() {
         } catch (err) {
           if (
             attempt >= ENQUEUE_RECONNECT_RETRIES
-            || !isNotConnectedError(err)
+            || !isRetryableEnqueueTransportError(err)
             || isInFlightDeviceLinkError(err)
           ) throw err;
           await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
@@ -5215,12 +5536,12 @@ export default function SessionScreen() {
       try {
         // 弱网重试:切基站 / 短暂断连时自动补发,不让用户为一次抖动手动重发。
         // 写序边界(codex review P1 + auto-review P1):只有「保证未发出」的
-        // NOT_CONNECTED(发送前本地拒绝,inFlight 未置位)才允许自动重发——
+        // NOT_CONNECTED 仅在 inFlight 未置位时允许自动重发——
         // in-flight 被断连批量 reject 的 NOT_CONNECTED 可能已送达(ack 丢失),
         // 且 projection 无法证明未入队(空闲 agent 下消息瞬间进 activeTurn、
         // 不在 pendingQueue 里),盲重会双入队;这类歧义失败直接交给下方 catch
-        // 的回滚/报错路径。被控端 enqueue 侧另有 clientId 幂等去重兜底
-        // (agent-input-coordinator),双保险。
+        // 的回滚/报错路径。BACKPRESSURE 在本地发送前或被控端 admission 拒绝
+        // 执行时产生,可安全重发。被控端 enqueue 侧另有 clientId 幂等去重兜底。
         let projection: InputProjection | undefined;
         for (let attempt = 0; ; attempt++) {
           try {
@@ -5229,7 +5550,7 @@ export default function SessionScreen() {
           } catch (err) {
             if (
               attempt >= ENQUEUE_RECONNECT_RETRIES
-              || !isNotConnectedError(err)
+              || !isRetryableEnqueueTransportError(err)
               || isInFlightDeviceLinkError(err)
             ) throw err;
             await new Promise((resolve) => setTimeout(resolve, ENQUEUE_RECONNECT_BACKOFF_MS * 2 ** attempt));
@@ -6082,6 +6403,21 @@ export default function SessionScreen() {
       ? prePlanPermissionModeRef.current
       : runtimeOptions?.permissionOptions.find((option) => option.id !== 'plan')?.id ?? 'ask')
     : currentSession?.permissionMode ?? 'ask';
+  // 权限模式独立浮窗(2026-07-29 用户裁决,对齐 Codex 与新建页):composer 左侧图标钮
+  // 点开;选择走既有 confirmFullAccessChange + maker:set-permission-mode 链路。
+  const displayPermissionLabel =
+    runtimeOptions?.permissionOptions.find((option) => option.id === displayPermissionMode)?.label
+      ?? displayPermissionMode;
+  const selectSessionPermissionMode = useCallback((mode: string) => {
+    void (async () => {
+      if (!currentSession) return;
+      if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
+      await runControlAction(
+        () => maker.setPermissionMode(sessionId, mode),
+        { permissionMode: mode },
+      );
+    })();
+  }, [currentSession, maker, runControlAction, sessionId]);
 
   // 「已提交、仍在上传」的相册资产:pendingUploads 携带 sourceId(相册来源才有)。
   // 重开面板时这些格子标 busy(spinner + 禁点),onUploaded 落定后自然转为勾选态,
@@ -6907,15 +7243,20 @@ export default function SessionScreen() {
 
   const forkAtMessage = useCallback((clientId: string, draft?: MobileMessageDraft) => {
     if (!deviceId || messageActionBusy) return;
+    // 文案走 i18n(与本页其它 Alert 同规):mobile 支持 en / ja / ko,硬编码中文会让
+    // 非中文环境看到中文弹窗。四语措辞与 desktop 的 chat.messageActionBar.fork* 对齐。
     Alert.alert(
-      '从这里开启一个新对话？',
-      '系统会根据这里的对话上下文创建一个独立的新对话。原对话不会改变，之后两边的消息互不影响。',
+      t('session.screen.forkConfirmTitle'),
+      t('session.screen.forkConfirmDescription'),
       [
-        { text: '取消', style: 'cancel' },
-        { text: '开启新对话', onPress: () => void performForkAtMessage(clientId, draft) },
+        { text: t('session.screen.forkCancel'), style: 'cancel' },
+        {
+          text: t('session.screen.forkConfirm'),
+          onPress: () => void performForkAtMessage(clientId, draft),
+        },
       ],
     );
-  }, [deviceId, messageActionBusy, performForkAtMessage]);
+  }, [deviceId, messageActionBusy, performForkAtMessage, t]);
 
   const openForkOrigin = useCallback(() => {
     const parentSessionId = currentSession?.parentSessionId;
@@ -7129,7 +7470,7 @@ export default function SessionScreen() {
       ));
       clearQuotes(sessionId);
       setRewindState({ kind: 'idle' });
-      await syncSession({ replaceMessages: true });
+      await requestSync({ reason: 'rewind-commit', replaceMessages: true });
     } catch (err) {
       if (rewindRequestSeqRef.current !== seq) return;
       setError(formatRemoteError(err));
@@ -7145,7 +7486,7 @@ export default function SessionScreen() {
     } finally {
       if (rewindRequestSeqRef.current === seq) setMessageActionBusy(null);
     }
-  }, [applyComposerDocument, deviceId, maker, messageActionBusy, rewindState, sessionId, syncSession]);
+  }, [applyComposerDocument, deviceId, maker, messageActionBusy, requestSync, rewindState, sessionId]);
 
   return (
     <View style={styles.safeArea} testID="session.screen">
@@ -7200,7 +7541,7 @@ export default function SessionScreen() {
                 issue={connectionIssue}
                 lastSyncedAt={lastSyncedAt}
                 loading={loading}
-                onSync={() => void load()}
+                onSync={() => void requestSync({ reason: 'manual', replaceMessages: false })}
                 status={status}
                 variant="inline"
               />
@@ -7424,15 +7765,8 @@ export default function SessionScreen() {
             onChangeSelectedFastMode={changeComposerSelectedFastMode}
             onClose={() => setModelSheetOpen(false)}
             onSelectFlatModel={selectComposerFlatModel}
-            onSelectPermissionMode={(mode) => {
-              void (async () => {
-                if (!await confirmFullAccessChange(currentSession.permissionMode, mode)) return;
-                await runControlAction(
-                  () => maker.setPermissionMode(sessionId, mode),
-                  { permissionMode: mode },
-                );
-              })();
-            }}
+            hidePermissionTrigger
+            onSelectPermissionMode={selectSessionPermissionMode}
             onSelectProviderRow={selectComposerModelRow}
             permissionDisabled={controlBusy || !canUseComposer}
             permissionOptions={runtimeOptions.permissionOptions}
@@ -7444,6 +7778,37 @@ export default function SessionScreen() {
             testID="session.modelSheet"
             visible={modelSheetOpen && canUseComposer}
           />
+        ) : null}
+        {/* 权限模式独立浮窗(composer 权限图标钮点开;列表复用 MobilePermissionPickerList,
+            选择走 confirmFullAccessChange + maker:set-permission-mode 后关浮窗)。 */}
+        {currentSession && runtimeOptions ? (
+          <SheetModal
+            backdropTestID="session.permissionSheet.backdrop"
+            onBackdropPress={() => setPermissionSheetOpen(false)}
+            onRequestClose={() => setPermissionSheetOpen(false)}
+            visible={permissionSheetOpen && canUseComposer}
+          >
+            <SheetSurface
+              bottomInset={insets.bottom}
+              heights={permissionSheetHeights}
+              onClose={() => setPermissionSheetOpen(false)}
+              onSnapChange={setPermissionSheetSnap}
+              snap={permissionSheetSnap}
+              testID="session.permissionSheet"
+              title={t('models.picker.permissionTitle')}
+            >
+              <MobilePermissionPickerList
+                activeMode={displayPermissionMode}
+                disabled={controlBusy || !canUseComposer}
+                onSelect={(mode) => {
+                  selectSessionPermissionMode(mode);
+                  setPermissionSheetOpen(false);
+                }}
+                options={runtimeOptions.permissionOptions}
+                testID="session.permissionSheet.option"
+              />
+            </SheetSurface>
+          </SheetModal>
         ) : null}
         {composerPreviewUrl && composerGalleryImages.length > 0 ? (
           // composer 托盘图片的全屏查看(沿用聊天消息同款 ImageLightbox;本地图无需远端取件)。
@@ -7461,7 +7826,7 @@ export default function SessionScreen() {
             // 设备真不可用(离线/被撤销):消息区保留阻塞占位和重试入口;底部 composer 仍可编辑草稿。
             <SessionSyncPlaceholder
               loading={loading}
-              onSync={() => void load()}
+              onSync={() => void requestSync({ reason: 'manual', replaceMessages: false })}
             />
           ) : (
             <>
@@ -9128,8 +9493,10 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     flexDirection: 'row',
     minHeight: COMPOSER_INPUT_LINE_HEIGHT,
   },
+  // 语音态占位文案渲染的就是普通态 TextInput 的 placeholder,颜色必须同源
+  // (placeholderTextColor 也是 textTertiary),否则一进语音态这行字会变色。
   voiceDraftListeningText: {
-    color: colors.statusReady,
+    color: colors.textTertiary,
     ...MOBILE_COMPOSER_DRAFT_TEXT_STYLE,
   },
   palettePanel: {
