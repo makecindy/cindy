@@ -336,7 +336,32 @@ function argumentWriteTargets(tokens: string[]): string[] {
         return cluster.value ? [cluster.value] : [UNPROVABLE_WRITE_TARGET];
       }
     }
+    // mv 的**源**操作数同样被销毁(搬走系统文件等于删掉它,`mv /usr/bin/node /tmp/`)→ 源与目标
+    // 都算写目标;cp/install/ln/rsync 的源是只读的,不在此列(自审补的同族缺口)。
+    if (bin === 'mv') return operands;
     return operands.length >= 2 ? [operands[operands.length - 1]] : [];
+  }
+  // 删除本身就是写通道:`rm /etc/passwd`(无 -rf)只删单个文件,不进递归/强制路径,原先取不到目标、
+  // 只落灰区(codex 报)。所有删除目标都要过受保护系统路径判定;**区外批量破坏**仍由
+  // destructiveRmTargets 的递归/强制条件负责,故此处不改变 `rm -rf build` 这类区内删除的档位。
+  if (/^(?:rm|unlink|shred|srm)$/.test(bin)) {
+    const out: string[] = [];
+    let optionsEnded = false;
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (!optionsEnded) {
+        if (t === '--') { optionsEnded = true; continue; }
+        // shred 的带值选项(-n 次数 / -s 字节 / --random-source=FILE)不能当成删除目标。
+        if (bin === 'shred' && /^(?:-n|--iterations|-s|--size|--random-source)$/.test(t)) { i++; continue; }
+        if (t.startsWith('-') && t !== '-') continue;
+      }
+      out.push(t);
+    }
+    return out;
+  }
+  if (bin === 'del' || bin === 'erase') {
+    // cmd.exe 的开关形如 `/f` `/s` `/q` `/a:-h`;Windows 路径不会以单个 `/` + 字母起头。
+    return args.filter((t) => !/^\/[a-zA-Z](?::|$)/.test(t));
   }
   if (bin === 'dd') {
     return tokens.slice(1).flatMap((t) => {

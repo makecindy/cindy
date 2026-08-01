@@ -2388,3 +2388,43 @@ describe('tar 传统无横线选项词 / 权限属主变更(第四十七批评�
     }
   });
 });
+
+describe('删除也是写通道:普通 rm / mv 源 / cmd del(第四十八批评审)', () => {
+  it('不带递归强制的删除命中系统路径 → 确定性同意', () => {
+    for (const c of [
+      'rm -- /etc/passwd',
+      'rm /etc/passwd',
+      'rm /usr/bin/node',
+      'rm /var/log/system.log',
+      'unlink /etc/hosts',
+      'shred -n 3 /etc/passwd',   // -n 的值不是删除目标
+      'shred -u /etc/shadow',
+      // mv 的**源**同样被销毁:搬走系统文件等于删掉它。
+      'mv /usr/bin/node /tmp/',
+      'mv /etc/hosts /tmp/h',
+      // 与既有的有效-cwd 解析、-exec 递归组合生效。
+      'cd /etc && rm passwd',
+      'find . -exec rm /etc/passwd \;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('区内删除与 /usr/local 不因此误升', () => {
+    for (const c of [
+      'rm build/out.js',
+      'rm -f dist/app.js',
+      'rm -rf build',
+      'rm -- build/x',
+      'unlink build/link',
+      'shred -n 3 build/secret.bin',
+      'mv src/a.ts src/b.ts',
+      'mv dist/app.js dist/app.min.js',
+      'mv build/x /usr/local/lib/',
+      'rm /tmp/scratch.txt',
+      'rm >/dev/null',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+});
