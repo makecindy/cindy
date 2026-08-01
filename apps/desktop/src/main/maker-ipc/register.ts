@@ -8002,12 +8002,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       }
     },
     noteSessionClearBoundary,
-    // 用户点了错误横幅的「重试」→ hook 侧把这一轮接回渠道那条已收口的消息。
-    // 这是权威来源: 零产出重试重发的是原文, 从文本认不出重试意图(见 deps 注释)。
-    onUiRetry: (sessionId, clientId) => {
-      // UI continuation can dispatch before the scheduler backoff callback.
-      // Retire that pending waiter first so it cannot consume the manual retry.
-      failPendingSchedulerAutoResume(sessionId);
+    // 失败 turn 重试 → hook 侧把这一轮接回渠道那条已收口的消息。source 区分
+    // 人工与自动续跑：只有真人接手才作废 scheduler waiter，自动路径不能取消自己。
+    onUiRetry: (sessionId, clientId, source) => {
+      if (source === 'manual') {
+        // UI continuation can dispatch before the scheduler backoff callback.
+        // Retire that pending waiter first so it cannot consume the manual retry.
+        failPendingSchedulerAutoResume(sessionId);
+      }
       publishUiContinuation(sessionId, clientId);
     },
     // 新消息进队 → 作废该会话的待续跑记账(渠道那条旧消息已被别的内容取代)。

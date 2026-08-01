@@ -2092,7 +2092,7 @@ describe('AgentInputCoordinator send transaction', () => {
     // 重发的是原文, 文本上与普通用户消息无异 —— 所以「用户显式重试」只能靠这个
     // 回调传出去。hook 侧的渠道回流(turn.reopen)依赖它: 零产出失败恰是上游过载
     // 最典型的形态, 也最需要把结果接回渠道那条消息。
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
@@ -2248,7 +2248,7 @@ describe('AgentInputCoordinator send transaction', () => {
       expect(h.onUiRetry).not.toHaveBeenCalled();
       await h.coordinator.retryLastError(sid);
       await flush();
-      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
       expect(h.onUiRetry).toHaveBeenCalledTimes(1);
     }
   });
@@ -2272,7 +2272,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
   });
 
@@ -2285,6 +2285,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT));
     await flush();
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, 'q-continue', 'manual');
 
     // 普通消息照常上报。
     h.coordinator.enqueue(sid, makeItem('q-normal', '顺手问个别的'));
@@ -6615,6 +6616,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     // autoResume 必须透到落库参数:renderer 靠它隐藏气泡,host 靠它跳过额度充值。
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'auto');
     // 自动补发不冒充人类动作(userSendAt 是「人最近发过消息」的语义)。
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });

@@ -119,15 +119,17 @@ describe('interrupted continuation enqueue contract', () => {
     expect(publishIndex).toBeGreaterThan(failIndex);
   });
 
-  it('fails a pending scheduler auto-resume before dispatching a UI continuation', () => {
+  it('fails a pending scheduler auto-resume only for a manual UI continuation', () => {
     const uiRetryStart = registerSource.indexOf('onUiRetry:');
     const uiRetryEnd = registerSource.indexOf('onUserEnqueue:', uiRetryStart);
     expect(uiRetryStart).toBeGreaterThan(-1);
     expect(uiRetryEnd).toBeGreaterThan(uiRetryStart);
     const uiRetryHook = registerSource.slice(uiRetryStart, uiRetryEnd);
+    const manualCheckIndex = uiRetryHook.indexOf("source === 'manual'");
     const failIndex = uiRetryHook.indexOf('failPendingSchedulerAutoResume(sessionId)');
     const publishIndex = uiRetryHook.indexOf('publishUiContinuation(sessionId, clientId)');
-    expect(failIndex).toBeGreaterThan(-1);
+    expect(manualCheckIndex).toBeGreaterThan(-1);
+    expect(failIndex).toBeGreaterThan(manualCheckIndex);
     expect(publishIndex).toBeGreaterThan(failIndex);
   });
 

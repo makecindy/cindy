@@ -258,7 +258,7 @@ export interface AgentInputCoordinatorDeps {
    */
   onDiscardedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   /**
-   * 用户在桌面端**显式重试**了这个会话的失败 turn(错误横幅「重试」)。
+   * 这个会话的失败 turn 正在重试；`source` 区分人工操作与自动续跑。
    *
    * hook-control 用它把那一轮的结果接回渠道里那条已经收口的消息(turn.reopen)。
    * 之所以要 coordinator 显式回调、而不是在发送路径上按文本认续跑指令:
@@ -267,7 +267,7 @@ export interface AgentInputCoordinatorDeps {
    * 克隆重发原文 —— 那条消息文本上与普通用户消息毫无区别, 从文本无法认出重试意图。
    * 只靠文本嗅探会让最需要回流的那类失败恰好没有信号。
    */
-  onUiRetry?: (sessionId: string, clientId: string) => void;
+  onUiRetry?: (sessionId: string, clientId: string, source: 'manual' | 'auto') => void;
   /**
    * 用户/上游用一条**新**消息接管了这个会话(enqueue 或 steer 回落为普通 turn)。
    *
@@ -927,7 +927,7 @@ export class AgentInputCoordinator {
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
     const schedulerOrigin = isSchedulerOriginItem(item);
     if (isUiContinuationItem(item)) {
-      this.deps.onUiRetry?.(sessionId, item.clientId);
+      this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
     } else if (!schedulerOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
     }
@@ -1687,7 +1687,7 @@ export class AgentInputCoordinator {
       //
       // 带上这条重试消息的 clientId: 消费方(hook-control)用它做**权威归属** ——
       // 只有 clientId 对得上的那次 dispatch 才是目标续跑轮, 不再靠"首个事件"猜。
-      this.deps.onUiRetry?.(sessionId, item.clientId);
+      this.deps.onUiRetry?.(sessionId, item.clientId, opts?.auto ? 'auto' : 'manual');
     }
     if (!opts?.auto) this.touchUserSend(sessionId);
     this.emit(sessionId);
