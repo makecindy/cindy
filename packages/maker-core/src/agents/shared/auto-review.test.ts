@@ -1804,6 +1804,46 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
   });
 });
 
+describe('内网判定前先解码 URL 主机名(第四十批评审)', () => {
+  it('百分号编码的 metadata/环回 host 不再被确定性放行', () => {
+    // curl 会把 %31%36%39… 归一成 169.254.169.254 再发请求;未解码时既不像 IPv4 也不像 localhost,
+    // 此前会被 isSafeFetch 直接 auto-approve(静默放行,比降灰区更糟)。
+    for (const c of [
+      'curl http://%31%36%39.%32%35%34.%31%36%39.%32%35%34/latest/meta-data/',
+      'curl http://%6c%6f%63%61%6c%68%6f%73%74:8080/admin',
+      'curl http://%31%32%37.0.0.1/x',
+      'curl http://%2531%2532%2537.0.0.1/x', // 双重编码 → 127.0.0.1
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('auto-approve');
+    }
+    // 内置 WebFetch 走同一判定 → 编码形态也必问。
+    expect(reviewAction({
+      kind: 'network',
+      operation: 'WebFetch',
+      target: 'http://%31%36%39.%32%35%34.%31%36%39.%32%35%34/latest/meta-data/iam/',
+    }, roots)).toBe('prompt-each-time');
+  });
+
+  it('解码失败(合法 hex、非法 UTF-8)fail-closed;NUL 截断不伪装成外网域名', () => {
+    // `%C0%80` 命中 %XX 形态但不是合法 UTF-8,decodeURIComponent 抛错 → 静态不可证清白 → 必问。
+    expect(reviewAction({ kind: 'network', target: 'http://%C0%80/x' }, roots)).toBe('prompt-each-time');
+    // `%00` 解码成 NUL,curl 在此截断 host → 实际打的是 169.254.169.254,不能被后缀伪装成外网域名。
+    expect(reviewAction({ kind: 'network', target: 'http://169.254.169.254%00.example.com/x' }, roots))
+      .toBe('prompt-each-time');
+  });
+
+  it('公网 URL 路径里带百分号编码不受影响(不误升)', () => {
+    // 解码只用于 host 提取;路径上的编码不该让公网请求被打断。
+    expect(classifyShellCommand('curl -sS https://example.com/a%2Fb%2Fc', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('curl -sS https://example.com/a%20b', roots)).toBe('auto-approve');
+    // 注:带 query 的 URL(`?q=…`)本就被既有规则升到灰区(与百分号编码无关,`?q=foo` 同样如此)。
+    expect(classifyShellCommand('curl -sS https://api.github.com/search?q=%22foo%22', roots)).toBe('prompt');
+    expect(reviewAction({
+      kind: 'network', operation: 'WebFetch', target: 'https://example.com/x?q=%31%36%39',
+    }, roots)).toBe('prompt');
+  });
+});
+
 describe('有效 cwd 解析相对写目标 / 系统可执行目录(第三十九批评审)', () => {
   it('相对写目标按会话 cwd 解析:cwd 落系统目录 → 必问', () => {
     // cwd=/etc 时 `cp /tmp/payload hosts` 实际写 /etc/hosts。

@@ -1673,12 +1673,44 @@ function parseNumericHostComponent(p: string): number | null {
   return null;
 }
 
+/** host 归一用:NUL 及其后全部(curl 在 NUL 处截断);以及嵌入的控制字符/空白(curl 会剥掉)。 */
+const NUL_AND_REST = new RegExp(`${String.fromCharCode(0)}[\\s\\S]*$`);
+const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
+
+/**
+ * 内网判定必须在 **百分号解码后**的 host 上做:curl/浏览器把 `%31%36%39.%32%35%34.…` 归一成
+ * `169.254.169.254` 再发请求(codex 的 `curl -sv` 探针确认请求行与 Host 都已归一),而未解码的字符串
+ * 既不像 IPv4 也不像 localhost —— 会被 isSafeFetch **确定性 auto-approve**(静默放行,比降灰区更糟)。
+ * 逐轮解码(≤3 轮,覆盖 `%2531` 这类双重编码),任一形态命中内网即算内网;解码失败(`%zz` 等畸形
+ * 序列)静态不可证清白 → fail-closed。
+ */
 function isInternalFetchTarget(t: string): boolean {
+  const forms: string[] = [t];
+  let cur = t;
+  for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(cur);
+    } catch {
+      return true;
+    }
+    if (decoded === cur) break;
+    cur = decoded;
+    forms.push(cur);
+  }
+  return forms.some(isInternalFetchHostForm);
+}
+
+function isInternalFetchHostForm(t: string): boolean {
   const host = t
     .replace(/^[a-z][\w+.-]*:\/\//i, '') // 去 scheme
     .replace(/[/?#].*$/, '')             // 去 path/query/fragment
     .replace(/^[^@]*@/, '')              // 去 userinfo
     .replace(/:\d+$/, '')                // 去端口
+    // NUL 截断与控制字符/空白:解码后可能出现 `169.254.169.254\0.example.com` 或嵌入的
+    // TAB/CR/LF —— curl 在此截断或剥掉,不归一会让内网 host 伪装成外网域名(与编码同类绕过)。
+    .replace(NUL_AND_REST, '')
+    .replace(HOST_CONTROL_CHARS, '')
     .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点):curl/DNS 视 `127.0.0.1.`=127.0.0.1、
                                           // `metadata.google.internal.`=metadata.google.internal,不剥会漏判内网(SSRF)
     .toLowerCase();
