@@ -11,6 +11,10 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+} from '../../utils/readBoundedFile.js';
 import { redactAbsolutePaths } from './git.js';
 
 /** 与 Codex 相同的清单位置，按优先级查找。 */
@@ -27,7 +31,6 @@ export const MARKETPLACE_MANIFEST_PATHS = [
  * 里把 main 进程内存打爆。合法清单远小于此(Codex 生态同量级)。
  */
 const MARKETPLACE_MANIFEST_MAX_BYTES = 1024 * 1024;
-const GHOST_MANIFEST_MAX_BYTES = 512 * 1024;
 
 /**
  * 插件条目数上限。每个条目都会触发 realpath + 读身份卡,不设上限时一份十万条目的
@@ -44,22 +47,14 @@ const FORBIDDEN_NAME_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u206
 
 /**
  * 以单一文件句柄完成"拒符号链接 → 校验普通文件与大小 → 限量读取 → JSON 解析"。
- * 检查与读取共用同一 inode,消除"lstat/stat 之后、readFile 之前"的替换窗口。
- * 非普通文件/超限返回 null;打开失败(含 O_NOFOLLOW 对 symlink 的拒绝)抛出,
- * 由调用方决定语义。
+ * 实体见 readBoundedFileNoFollow(发现/安装/打包三条链路共用同一实现,含
+ * Windows 无 O_NOFOLLOW 时的 lstat+dev/ino 回退闸)。非普通文件/超限返回 null;
+ * 打开失败(含 O_NOFOLLOW 对 symlink 的拒绝)抛出,由调用方决定语义。
  */
 async function readBoundedJsonFile(filePath: string, maxBytes: number): Promise<unknown | null> {
-  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
-  const handle = await fs.promises.open(filePath, flags);
-  try {
-    const stat = await handle.stat();
-    if (!stat.isFile() || stat.size > maxBytes) return null;
-    const buffer = Buffer.alloc(Number(stat.size));
-    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
-    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')) as unknown;
-  } finally {
-    await handle.close();
-  }
+  const bytes = await readBoundedFileNoFollow(filePath, maxBytes);
+  if (bytes === null) return null;
+  return JSON.parse(bytes.toString('utf8')) as unknown;
 }
 
 /** 清单侧变体:路径已是 realpath 产物,不加 O_NOFOLLOW,其余同 readBoundedJsonFile。 */
@@ -154,9 +149,9 @@ async function resolvePluginDir(
     // 身份卡的校验与读取必须落在**同一个文件句柄**上:先 lstat 再按路径 readFile
     // 是两次独立打开,并发方可以在两次之间把 ghost.json 换成超大文件或指向
     // /dev/zero 的链接,绕过类型与大小闸。O_NOFOLLOW 让 open 对 symlink 直接
-    // 失败(与打包侧"符号链接一律不穿透"同口径;Windows 无此 flag 时按 0 处理,
-    // NTFS 链接需管理员权限,句柄一致性仍然成立);随后 stat 与限量读取都作用于
-    // 已打开的 inode,路径再被替换也影响不到它。
+    // 失败(与打包侧"符号链接一律不穿透"同口径;Windows 无此 flag 时走
+    // lstat+dev/ino 回退闸,同样拒链接);随后 stat 与限量读取都作用于已打开的
+    // inode,路径再被替换也影响不到它。
     raw = await readBoundedJsonFile(
       path.join(realDir, 'ghost.json'),
       GHOST_MANIFEST_MAX_BYTES,

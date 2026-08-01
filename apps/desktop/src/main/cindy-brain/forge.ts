@@ -24,6 +24,10 @@ import {
   validateGhostManifest,
   type GhostManifest,
 } from '../../shared/ghost.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+} from '../utils/readBoundedFile.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
@@ -563,10 +567,24 @@ async function buildGhostPackage(
     // ghost.json 在"这里校验"与"写入 zip"之间被并发改写(保 id/version、加权限
     // 声明),返回的 manifest 与包里那份就会分叉——安装侧拿返回值做审阅比对,
     // 装进去的却是改过的包。快照写入让"校验的 = 返回的 = 包里的"三者恒等。
+    // 与市场发现/安装层同一把闸(单句柄限量读,拒符号链接):打包输入目录是
+    // 用户可写的活目录,按路径无界 readFile 会跟随链接读到目录外、或被超大
+    // 文件耗尽内存。快照字节也必须出自这把闸,不能再按路径重读。
     let manifestRaw: unknown;
     let manifestBytes: Buffer;
     try {
-      manifestBytes = await fs.promises.readFile(path.join(dir, GHOST_MANIFEST_FILE));
+      const bytes = await readBoundedFileNoFollow(
+        path.join(dir, GHOST_MANIFEST_FILE),
+        GHOST_MANIFEST_MAX_BYTES,
+      );
+      if (bytes === null) {
+        return {
+          ok: false,
+          errorCode: 'MANIFEST_INVALID',
+          message: `${GHOST_MANIFEST_FILE} 不是普通文件或超过 ${GHOST_MANIFEST_MAX_BYTES} 字节上限`,
+        };
+      }
+      manifestBytes = bytes;
       manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {

@@ -1,0 +1,105 @@
+/**
+ * installCustomMarketPlugin — 安装前置的身份卡读取必须走限量句柄闸。
+ * 详情展示后、确认安装前,本地市场目录仍是用户可写的活目录;按路径无界
+ * readFile 会被换成超大文件或符号链接绕过发现层的闸。
+ */
+import fs from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+
+vi.mock('electron', () => ({
+  app: { getPath: vi.fn(() => os.tmpdir()) },
+}));
+
+const brain = vi.hoisted(() => ({
+  installOrUpdateMarketGhostPackage: vi.fn(async () => ({}) as never),
+  rejectReservedGhostIdForCustomMarket: vi.fn(),
+  packGhostDirToFile: vi.fn(async () => ({ ok: true as const, manifest: {} })),
+}));
+vi.mock('../../cindy-brain/index.js', () => ({
+  installOrUpdateMarketGhostPackage: brain.installOrUpdateMarketGhostPackage,
+  rejectReservedGhostIdForCustomMarket: brain.rejectReservedGhostIdForCustomMarket,
+}));
+vi.mock('../../cindy-brain/forge.js', () => ({
+  packGhostDirToFile: brain.packGhostDirToFile,
+}));
+
+import type { GhostManifest } from '../../../shared/ghost.js';
+import { installCustomMarketPlugin } from '../install';
+
+const GOOD_MANIFEST = {
+  schemaVersion: 2,
+  id: 'demo',
+  name: '演示插件',
+  version: '1.0.0',
+  kind: 'chip',
+  entry: 'main.js',
+  slots: ['tool'],
+  tools: [{ name: 'do_thing', description: '做点事' }],
+};
+
+let workDir: string;
+
+beforeEach(async () => {
+  workDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'cindy-market-install-'));
+  brain.packGhostDirToFile.mockClear();
+});
+
+afterEach(async () => {
+  await fs.promises.rm(workDir, { recursive: true, force: true });
+});
+
+describe('installCustomMarketPlugin · 身份卡读取闸', () => {
+  it.runIf(process.platform !== 'win32')(
+    'ghost.json 为符号链接 → GHOST_FILE_INVALID,不进入打包',
+    async () => {
+      // 目标是合法清单也不放行:发现层拒链接,安装层跟随链接就等于绕闸。
+      const outside = path.join(workDir, 'outside-ghost.json');
+      await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
+      const pluginDir = path.join(workDir, 'plugin');
+      await fs.promises.mkdir(pluginDir, { recursive: true });
+      await fs.promises.symlink(outside, path.join(pluginDir, 'ghost.json'));
+
+      await expect(
+        installCustomMarketPlugin({
+          pluginDir,
+          expected: GOOD_MANIFEST as unknown as GhostManifest,
+        }),
+      ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
+      expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+    },
+  );
+
+  it('ghost.json 超过 512 KiB → GHOST_FILE_INVALID,不进入打包', async () => {
+    // JSON 本身合法(合法清单 + 尾随空白撑体积):必须在读取层按大小拒,
+    // 不能等 parse/validate——那时超大文件已经整个进内存了。
+    const pluginDir = path.join(workDir, 'plugin-big');
+    await fs.promises.mkdir(pluginDir, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(pluginDir, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST) + ' '.repeat(600 * 1024),
+    );
+
+    await expect(
+      installCustomMarketPlugin({
+        pluginDir,
+        expected: GOOD_MANIFEST as unknown as GhostManifest,
+      }),
+    ).rejects.toMatchObject({ code: 'GHOST_FILE_INVALID' });
+    expect(brain.packGhostDirToFile).not.toHaveBeenCalled();
+  });
+
+  it('结构守卫:install.ts 不允许出现按路径的 readFile', async () => {
+    // 发现/安装/打包三条链路都必须走 readBoundedFileNoFollow;任何一处退回
+    // fs.promises.readFile(path) 都会重开"检查与读取两次打开"的替换窗口。
+    const source = await fs.promises.readFile(
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'install.ts'),
+      'utf8',
+    );
+    expect(source).not.toMatch(/readFile\(/);
+    expect(source).toContain('readBoundedFileNoFollow');
+  });
+});

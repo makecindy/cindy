@@ -25,6 +25,10 @@ import {
 } from '../cindy-brain/index.js';
 import { packGhostDirToFile } from '../cindy-brain/forge.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import {
+  GHOST_MANIFEST_MAX_BYTES,
+  readBoundedFileNoFollow,
+} from '../utils/readBoundedFile.js';
 
 /**
  * 把插件目录装成运行中的 Ghost。
@@ -56,9 +60,15 @@ export async function installCustomMarketPlugin(input: {
 }): Promise<InstalledGhost> {
   let raw: unknown;
   try {
-    raw = JSON.parse(
-      await fs.promises.readFile(path.join(input.pluginDir, 'ghost.json'), 'utf8'),
+    // 与发现层同一把闸(单句柄限量读,拒符号链接):详情展示后、确认安装前,
+    // 本地市场目录仍是用户可写的活目录,按路径无界 readFile 会被换成超大文件
+    // 或 /dev/zero 链接卡死 main。超限/非普通文件与读取失败同语义拒绝。
+    const bytes = await readBoundedFileNoFollow(
+      path.join(input.pluginDir, 'ghost.json'),
+      GHOST_MANIFEST_MAX_BYTES,
     );
+    if (bytes === null) throw new Error('not a bounded regular file');
+    raw = JSON.parse(bytes.toString('utf8'));
   } catch {
     throwIpcError('GHOST_FILE_INVALID', 'The Plugin manifest is missing or unreadable');
   }

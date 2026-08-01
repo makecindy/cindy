@@ -102,6 +102,34 @@ describe('packGhostDir', () => {
     }
   });
 
+  it('ghost.json 为符号链接或超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
+    // 符号链接:目标是合法清单也不放行——"符号链接一律不穿透"覆盖身份卡本身,
+    // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
+    const outside = path.join(workDir, 'outside-ghost.json');
+    await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
+    const linked = path.join(workDir, 'src-linked');
+    await fs.promises.mkdir(linked, { recursive: true });
+    await fs.promises.symlink(outside, path.join(linked, 'ghost.json'));
+    await fs.promises.writeFile(path.join(linked, 'main.js'), '// brain');
+    expect(await packGhostDir(linked)).toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+
+    // 超限:JSON 本身合法(合法清单 + 尾随空白撑体积),必须在读取层按大小拒,
+    // 不能等到 JSON.parse/validate——那时数 GB 的文件已经进内存了。
+    const big = path.join(workDir, 'src-big');
+    await fs.promises.mkdir(big, { recursive: true });
+    await fs.promises.writeFile(
+      path.join(big, 'ghost.json'),
+      JSON.stringify(GOOD_MANIFEST) + ' '.repeat(600 * 1024),
+    );
+    await fs.promises.writeFile(path.join(big, 'main.js'), '// brain');
+    const r = await packGhostDir(big);
+    expect(r).toMatchObject({ ok: false, errorCode: 'MANIFEST_INVALID' });
+    if (!r.ok) expect(r.message).toContain('不是普通文件或超过');
+  });
+
   it('打包跳过开发残留:.git / node_modules / 隐藏文件 / 旧 .cindy 不进包', async () => {
     const dir = await makeSrcDir({
       'ghost.json': JSON.stringify(GOOD_MANIFEST),
