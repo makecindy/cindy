@@ -88,24 +88,29 @@ export type AgentSwitchAckAction =
   | 'discard';
 
 /**
- * 切换 ack 的分派决策。两类守卫的作用域**不同**,不能一刀切:
+ * 切换 ack 的分派决策。三类判据作用域**不同**,不能一刀切:
  *
  * - **写序号**(本端点选)对所有分支生效:用户又点了一次,本次 ack 整体作废。
- * - **意图修订号**只保护「要把本次选择写成乐观意图值」的分支(apply-intent /
- *   apply-switched)。同引擎 no-op **不能**受它约束 —— 被控端处理这次 no-op 时本就会
- *   清掉 pending 意图并广播,回流推进修订号;拿它当「被超车」的证据就会把本次自己
- *   引起的回流误判成 stale,提前 return,用户刚选的当前引擎模型永远不生效。
- *   该分支不写意图值(clear 幂等),让它继续收尾不会覆盖任何更新的状态。
+ * - **意图修订号**保护「要把本次选择写成乐观意图值」的分支(apply-intent /
+ *   apply-switched):外部权威值更新,就不能用旧选择盖回去。
+ * - 同引擎 no-op 两头都不能靠:拿修订号当「被超车」的证据,会把**本次自己**引起的
+ *   清除回流误判成 stale(被控端处理 no-op 时本就清 pending 意图并广播),用户选回当前
+ *   引擎的模型永远不生效;可完全忽略修订号又会走到另一个极端——外部刚登记的**新**跨
+ *   引擎意图会被这里的 clear 抹掉,选择器退回旧引擎,而被控端下一条消息仍按新意图切换。
+ *   判据因此落在**回流后的内容**上:当前无意图 = 本次 no-op 的预期终态(或本来就没有),
+ *   继续收尾;当前有意图 = 只可能来自更新的登记,丢弃本次 ack,让权威值继续生效。
  */
 export function resolveAgentSwitchAckAction(args: {
   deferred: boolean;
   switched: boolean;
+  /** 响应到达时本地是否已无 pending 意图。 */
+  intentNowIsEmpty: boolean;
   freshness: AgentSwitchResponseFreshness;
 }): AgentSwitchAckAction {
   const { freshness } = args;
   if (freshness.cancelled) return 'discard';
   if (freshness.writeSeqNow !== freshness.writeSeqAtStart) return 'discard';
   if (args.deferred) return isAgentSwitchResponseFresh(freshness) ? 'apply-intent' : 'discard';
-  if (!args.switched) return 'same-engine-reselect';
+  if (!args.switched) return args.intentNowIsEmpty ? 'same-engine-reselect' : 'discard';
   return isAgentSwitchResponseFresh(freshness) ? 'apply-switched' : 'discard';
 }

@@ -1238,6 +1238,33 @@ export function ChatInput({
   // 「在途期间用户是否动过意图」——单调递增,不受 ABA 影响:登记后又撤销时值虽然都回到
   // null,序号已经 +2,过期响应不会被误判为「期间没变」而恢复已撤销的意图。
   const agentSwitchWriteSeqRef = useRef(0);
+  // 同一会话的切换写入串行化。被控端 device-link dispatch 对每个 invoke 独立起协程,
+  // 而 sessionAgentSwitchHandler 在写 pendingSwitches 前还要 await 路由校验与 DB 读——
+  // 用户快速点两次时,**较旧**的请求可能后完成、覆盖较新的选择;本端写序号只能丢弃旧
+  // ack,拦不住被控端那次旧写入及其权威 push(下一条消息就会按第一次点选切引擎)。
+  // 排队让「发送顺序 = 被控端处理顺序」,后点的选择永远最后落库。本机会话同理(handler
+  // 也有 await),排队开销可忽略。
+  const agentSwitchQueueRef = useRef<{ sessionId: string; chain: Promise<unknown> }>({
+    sessionId: '',
+    chain: Promise.resolve(),
+  });
+  const runAgentSwitchExclusive = useCallback(
+    <T,>(targetSessionId: string, task: () => Promise<T>): Promise<T> => {
+      const queue = agentSwitchQueueRef.current;
+      // 换会话时另起链,不让上个会话的在途请求拖住新会话的第一次点选。
+      const base = queue.sessionId === targetSessionId ? queue.chain : Promise.resolve();
+      const next = base.then(task, task);
+      agentSwitchQueueRef.current = {
+        sessionId: targetSessionId,
+        chain: next.then(
+          () => undefined,
+          () => undefined,
+        ),
+      };
+      return next;
+    },
+    [],
+  );
   // 链路重连代际:deviceId 在断链重连期间保持不变,只靠它当依赖的话读回永远不会重试。
   // 断链期间发出的读回会失败(catch 吞掉),断链期间被控端 / 另一控制端改的意图其
   // sessions:patched 推送也收不到 —— 恢复连接后必须重读一次,否则 composer 会一直
@@ -4016,13 +4043,15 @@ export function ChatInput({
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
         // 交接都在那边),本机会话零变化直连本机 maker。
-        const result = await makerApiFor(sessionId).switchSessionAgent(
-          sessionId,
-          targetAgentKind,
-          newModelId,
-          providerId,
-          newEffort,
-          targetFast,
+        const result = await runAgentSwitchExclusive(sessionId, () =>
+          makerApiFor(sessionId).switchSessionAgent(
+            sessionId,
+            targetAgentKind,
+            newModelId,
+            providerId,
+            newEffort,
+            targetFast,
+          ),
         );
         // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
         // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
@@ -4033,6 +4062,7 @@ export function ChatInput({
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
+          intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sessionId) === null,
           freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
@@ -4095,6 +4125,7 @@ export function ChatInput({
       localProviders.providers,
       ccCaps.capabilities,
       codexCaps.capabilities,
+      runAgentSwitchExclusive,
     ],
   );
   // 声明顺序在 performAgentSwitch 之前的 handler(handleFastModeChange)经此 ref

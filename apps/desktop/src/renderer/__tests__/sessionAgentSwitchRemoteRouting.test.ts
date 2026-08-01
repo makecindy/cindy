@@ -193,7 +193,12 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
   it('deferred 常态 → 登记乐观意图', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     expect(
-      resolveAgentSwitchAckAction({ deferred: true, switched: false, freshness: fresh }),
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        intentNowIsEmpty: true,
+        freshness: fresh,
+      }),
     ).toBe('apply-intent');
   });
 
@@ -205,9 +210,24 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       resolveAgentSwitchAckAction({
         deferred: false,
         switched: false,
+        intentNowIsEmpty: true, // 清除回流已到:当前无意图 = 本次 no-op 的预期终态
         freshness: { ...fresh, intentRevNow: 9 },
       }),
     ).toBe('same-engine-reselect');
+  });
+
+  it('回归:同引擎重选在途时外部登记了**新**跨引擎意图 → 丢弃,不能 clear 掉更新的镜像', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 修订号同样变了,但回流后的内容是「有意图」——只可能来自更新的登记。继续收尾会把它
+    // 抹掉,选择器退回旧引擎,而被控端下一条消息仍按新意图切换。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: false,
+        intentNowIsEmpty: false,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('discard');
   });
 
   it('用户又点了一次(写序号变)→ 所有分支一律作废,包括同引擎重选', async () => {
@@ -218,7 +238,11 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
       { deferred: false, switched: true },
     ]) {
       expect(
-        resolveAgentSwitchAckAction({ ...branch, freshness: { ...fresh, writeSeqNow: 4 } }),
+        resolveAgentSwitchAckAction({
+          ...branch,
+          intentNowIsEmpty: true,
+          freshness: { ...fresh, writeSeqNow: 4 },
+        }),
       ).toBe('discard');
     }
   });
@@ -227,17 +251,32 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
     const { resolveAgentSwitchAckAction } = await load();
     const superseded = { ...fresh, intentRevNow: 9 };
     expect(
-      resolveAgentSwitchAckAction({ deferred: true, switched: false, freshness: superseded }),
+      resolveAgentSwitchAckAction({
+        deferred: true,
+        switched: false,
+        intentNowIsEmpty: false,
+        freshness: superseded,
+      }),
     ).toBe('discard');
     expect(
-      resolveAgentSwitchAckAction({ deferred: false, switched: true, freshness: superseded }),
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: true,
+        intentNowIsEmpty: false,
+        freshness: superseded,
+      }),
     ).toBe('discard');
   });
 
   it('立即切换路径无人超车 → 收敛真实引擎', async () => {
     const { resolveAgentSwitchAckAction } = await load();
     expect(
-      resolveAgentSwitchAckAction({ deferred: false, switched: true, freshness: fresh }),
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: true,
+        intentNowIsEmpty: true,
+        freshness: fresh,
+      }),
     ).toBe('apply-switched');
   });
 });
@@ -295,7 +334,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
   ).replace(/\r\n/g, '\n');
 
   it('切换 IPC 走传输层(远程会话隧道到被控端),不再硬打本机 maker', () => {
-    expect(source).toContain('await makerApiFor(sessionId).switchSessionAgent(');
+    expect(source).toContain('makerApiFor(sessionId).switchSessionAgent(');
     expect(source).not.toContain('window.electronAPI.maker.switchSessionAgent(');
   });
 
@@ -340,5 +379,16 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
     expect(source).toContain("if (ackAction === 'discard') return;");
     expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
+    expect(source).toContain(
+      'intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sessionId) === null,',
+    );
+  });
+
+  it('同会话切换写入串行化:被控端 handler 写 pendingSwitches 前有 await,并发会让旧请求后落库', () => {
+    expect(source).toContain('const result = await runAgentSwitchExclusive(sessionId, () =>');
+    // 换会话时另起链,不让上个会话的在途请求拖住新会话的第一次点选。
+    expect(source).toContain(
+      'const base = queue.sessionId === targetSessionId ? queue.chain : Promise.resolve();',
+    );
   });
 });
