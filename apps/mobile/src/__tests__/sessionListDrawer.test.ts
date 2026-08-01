@@ -80,9 +80,11 @@ describe('mobile session list drawer', () => {
     }
     expect(text).toContain('accessibilityViewIsModal={open}');
     expect(text).toContain("t('home.drawer.closeA11y')");
-    // 读屏焦点管理(review #1328):打开移焦到面板首控件,关闭归还三条杠。
+    // 读屏焦点管理(review #1328):打开移焦到面板首控件,关闭归还三条杠;
+    // 导航型关闭(本屏已失焦)不归还,不抢新屏焦点。
     expect(text).toContain('AccessibilityInfo.setAccessibilityFocus(node)');
     expect(text).toContain('AccessibilityInfo.setAccessibilityFocus(returnNode)');
     expect(text).toContain('ref={newSessionButtonRef}');
+    expect(text).toContain('if (!navigation.isFocused()) return;');
   });
 });

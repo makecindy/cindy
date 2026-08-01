@@ -36,6 +36,7 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { useNavigation } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
@@ -116,12 +117,17 @@ export function SessionListDrawer({
   const dragX = useSharedValue(0);
   // 关闭收尾统一走这里(动画完成回调 / reduce-motion 直跳两条路径):卸载 overlay 并把
   // 读屏焦点还给触发钮——三条杠在抽屉打开期间被遮罩挡住,不还焦点会落在任意节点。
+  const navigation = useNavigation();
   const finishClose = useCallback(() => {
     if (openRef.current) return;
     setMounted(false);
+    // 只有「原地关闭」(本屏仍聚焦)才归还焦点:导航型关闭(新建 push / 深链下
+    // dismissTo 推入主页)收尾时本屏已失焦,把读屏焦点拉回背景页的三条杠会抢走
+    // 新屏焦点。isFocused 是确定性信号,不用枚举关闭原因。
+    if (!navigation.isFocused()) return;
     const returnNode = returnFocusRef?.current ? findNodeHandle(returnFocusRef.current) : null;
     if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
-  }, [returnFocusRef]);
+  }, [navigation, returnFocusRef]);
   // 打开后把读屏焦点移进面板首控件(新建任务):背后内容已按模态摘出读屏树,不移焦
   // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
   const newSessionButtonRef = useRef<View>(null);
