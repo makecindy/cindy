@@ -535,8 +535,11 @@ function unwrapWrappers(tokens: string[]): string[] {
 }
 
 function baseName(p: string): string {
-  const cleaned = p.replace(/\/+$/, '');
-  const idx = cleaned.lastIndexOf('/');
+  // 同时按 `/` 与 `\` 取末段:Windows Codex 会话把命令以完整反斜杠路径传入
+  // (`C:\Program Files\…\pwsh.exe`、`C:\…\rm.exe`),只认 `/` 会把整条路径当文件名,
+  // 令 PowerShell / rm / git 等红线判定全部落空(codex 报,translator 已固定该形态)。
+  const cleaned = p.replace(/[\\/]+$/, '');
+  const idx = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf('\\'));
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
@@ -671,6 +674,15 @@ function commandRunsRemoteFetch(command: string, depth = 0): boolean {
     if (bin === 'curl' || bin === 'wget') return true;
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && depth < 3 && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
+    // xargs/parallel 把远端下载藏进被包装的子命令(`xargs curl …/payload | sh`、`parallel curl …`),
+    // 下载识别不下探就不会置远端内容传播标志,右侧非枚举解释器只落灰区(greptile 报)。
+    if (depth < 3) {
+      const wrapped = bin === 'xargs' ? xargsCommandTokens(tokens)
+        : bin === 'parallel' ? tokens.slice(1)
+          : null;
+      if (wrapped && wrapped.length > 0
+        && commandRunsRemoteFetch(serializeArgvForReview(wrapped), depth + 1)) return true;
+    }
   }
   return false;
 }
@@ -734,12 +746,33 @@ function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'):
   return false;
 }
 
-/** 提取命令替换 `$(…)` / 反引号 / 进程替换 `<(…)` 的内层文本(单层;嵌套是既有限制)。 */
+/**
+ * 提取命令替换 `$(…)` / 进程替换 `<(…)` / 反引号 的**外层**内层文本,`$(`·`<(` 按括号深度取
+ * 平衡子串。单层正则只抓到最内层,令外层 eval/下载执行逃过确定性红线
+ * (greptile 报 `echo $(eval "$(echo payload)")`);返回外层体后,递归调用者会再拆其中的内层。
+ */
 function substitutionBodies(text: string): string[] {
   const out: string[] = [];
-  for (const m of text.matchAll(/\$\(([^()]*)\)/g)) out.push(m[1] ?? '');
-  for (const m of text.matchAll(/`([^`]*)`/g)) out.push(m[1] ?? '');
-  for (const m of text.matchAll(/<\(([^()]*)\)/g)) out.push(m[1] ?? '');
+  for (let i = 0; i < text.length; i++) {
+    const opensParen = (text[i] === '$' || text[i] === '<') && text[i + 1] === '(';
+    if (opensParen) {
+      let depth = 1;
+      let j = i + 2;
+      for (; j < text.length && depth > 0; j++) {
+        if (text[j] === '(') depth++;
+        else if (text[j] === ')') depth--;
+      }
+      if (depth === 0) {
+        out.push(text.slice(i + 2, j - 1));
+        i = j - 1; // 跳过整个外层替换,内层交给递归拆解
+      }
+      continue;
+    }
+    if (text[i] === '`') {
+      const end = text.indexOf('`', i + 1);
+      if (end > i) { out.push(text.slice(i + 1, end)); i = end; }
+    }
+  }
   return out;
 }
 
