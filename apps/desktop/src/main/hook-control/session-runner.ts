@@ -33,12 +33,7 @@ import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
 
-import type {
-  AgentKind,
-  PermissionMode,
-  UserContentBlock,
-  UserMessage,
-} from '@cindy/maker-core';
+import type { AgentKind, PermissionMode, UserContentBlock, UserMessage } from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
   type ProviderView,
@@ -219,7 +214,6 @@ function broadcastSessionCreated(sessionId: string): void {
  * 上限取宽(正常长任务 10-30min 量级), 触发即按 error 收口。
  */
 const TURN_HARD_TIMEOUT_MS = 60 * 60_000;
-
 
 /**
  * 从 tool_result 全文抽出可外发的 xdt-image URL —— 与 IM turnRunner 的
@@ -422,6 +416,31 @@ export function createMakerHookSessionRunner(deps: {
         durationMs: Date.now() - startedAt,
       });
 
+      const isTelegramGroupTurn = req.source?.im === 'telegram' && req.laneKind === 'group';
+      let reapplyTelegramGroupPermissionMode = false;
+      if (isTelegramGroupTurn) {
+        const capabilities = maker.getCapabilities(effectiveAgentKind);
+        const policyCapability = capabilities.turnPermissionPolicy;
+        if (policyCapability?.supported.supported !== true) {
+          return fail('The selected agent cannot enforce Telegram group permissions.');
+        }
+        if (policyCapability.unsupportedPermissionModes.includes(permissionMode)) {
+          const safeMode = capabilities.permissionModes.find(
+            (candidate) =>
+              candidate.id === 'ask' &&
+              !policyCapability.unsupportedPermissionModes.includes(candidate.id),
+          );
+          if (safeMode === undefined) {
+            return fail('The selected agent has no safe permission mode for Telegram groups.');
+          }
+          permissionMode = safeMode.id;
+          // maker.createSession({ id }) may return an already-active instance
+          // and ignore create options. Re-apply on reused sessions so the
+          // per-turn guest policy is never combined with Full access.
+          reapplyTelegramGroupPermissionMode = !req.isNew;
+        }
+      }
+
       /**
        * 授权判定刻意**只在 dispatcher 侧**做(定位时 + 执行前按当前映射重查),
        * runner 不再参与。曾经尝试过把判定贯穿到这里 —— 比对 meta.workDir、比对
@@ -490,6 +509,9 @@ export function createMakerHookSessionRunner(deps: {
       };
       try {
         session = await maker.createSession(createOpts);
+        if (reapplyTelegramGroupPermissionMode) {
+          await session.setPermissionMode(permissionMode);
+        }
       } catch (err) {
         // session 未建成: 若有预建 worktree 则回收(同 maker-ipc/register.ts
         // 的 shouldRecycleHandoffWorktreeOnFailure 判据), 防孤儿泄漏
@@ -826,10 +848,10 @@ export function createMakerHookSessionRunner(deps: {
         const sendResult = await session.send(outgoingMessage, {
           origin,
           planMode: false,
-          ...(req.source?.im === 'telegram' && req.laneKind === 'group'
+          ...(isTelegramGroupTurn
             ? {
                 turnPermissionPolicy: createTelegramGuestTurnPermissionPolicy(
-                  req.source.triggerMessageId ?? req.sessionId,
+                  req.source?.triggerMessageId ?? req.sessionId,
                 ),
               }
             : {}),
@@ -951,7 +973,9 @@ export function createMakerHookSessionRunner(deps: {
       const session = getMaker().getSession(req.sessionId);
       if (!session) {
         // 理论上不该发生(马上就要 dispatch)。保守放弃, 让 dispatcher 把记账还回去。
-        log.warn(`hook continuation: live session vanished right before dispatch (${req.sessionId})`);
+        log.warn(
+          `hook continuation: live session vanished right before dispatch (${req.sessionId})`,
+        );
         req.onAbandon();
         return () => undefined;
       }
@@ -981,93 +1005,93 @@ function beginContinuationWatch(
     req.onAbandon();
     return () => undefined;
   }
-    const startedAt = Date.now();
-    const extraImageAbsPaths: string[] = [];
-    let claimed = false;
-    let settled = false;
-    let hardTimer: NodeJS.Timeout | undefined;
+  const startedAt = Date.now();
+  const extraImageAbsPaths: string[] = [];
+  let claimed = false;
+  let settled = false;
+  let hardTimer: NodeJS.Timeout | undefined;
 
-    const clearTimers = (): void => {
-      if (hardTimer) clearTimeout(hardTimer);
-      hardTimer = undefined;
-    };
+  const clearTimers = (): void => {
+    if (hardTimer) clearTimeout(hardTimer);
+    hardTimer = undefined;
+  };
 
-    const observer = observeHookTurn(session, {
-      // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
-      answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
-      onProgress: (text) => {
-        // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
-        if (claimed) req.onProgress(text);
-      },
-      onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
-      onSilentStopSettled,
-      log,
-    });
+  const observer = observeHookTurn(session, {
+    // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
+    answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
+    onProgress: (text) => {
+      // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
+      if (claimed) req.onProgress(text);
+    },
+    onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
+    onSilentStopSettled,
+    log,
+  });
 
-    // **立刻认领**: 归属已由 clientId 确认, 且 dispatch 即将不可逆 —— 不需要再等首个
-    // 事件来判断"这一轮到底是不是目标轮"。早先那套(等首个事件)恰恰是误认的来源:
-    // 会话级观察器分不清事件属于哪条用户消息, 绕过 coordinator 的 turn 会顶替进来。
-    claimed = true;
-    req.onClaim();
+  // **立刻认领**: 归属已由 clientId 确认, 且 dispatch 即将不可逆 —— 不需要再等首个
+  // 事件来判断"这一轮到底是不是目标轮"。早先那套(等首个事件)恰恰是误认的来源:
+  // 会话级观察器分不清事件属于哪条用户消息, 绕过 coordinator 的 turn 会顶替进来。
+  claimed = true;
+  req.onClaim();
 
-    /** 收口一次(幂等)。errorMessage 非空 = 这一轮失败。 */
-    const settle = (errorMessage: string | null): void => {
-      if (settled) return;
-      settled = true;
-      clearTimers();
-      observer.stop();
-      // 已停止观察 —— 成功那一路还要 await 收集出站附件, 所以先同步告知一声, 让
-      // dispatcher 把这一轮从"在观察"的账上摘掉(见 onSettling 的说明)。
-      req.onSettling?.();
-      if (!claimed) {
-        // 从没认领过 -> server 侧对这条消息一无所知, 静默退场。
-        req.onAbandon();
-        return;
-      }
-      if (errorMessage !== null) {
-        // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
-        req.onEnd({
-          status: 'error',
-          finalText: '',
-          errorMessage,
-          durationMs: Date.now() - startedAt,
-        });
-        return;
-      }
-      void (async () => {
-        // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
-        // isDirAuthorized 用 session.workDir 复核同理。
-        const collected = await collectOutboundForFinalText(
-          observer.text(),
-          extraImageAbsPaths,
-          [session.workDir],
-          log,
-        );
-        req.onEnd({
-          status: 'ok',
-          finalText: collected.finalText,
-          errorMessage: null,
-          durationMs: Date.now() - startedAt,
-          ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
-        });
-      })();
-    };
+  /** 收口一次(幂等)。errorMessage 非空 = 这一轮失败。 */
+  const settle = (errorMessage: string | null): void => {
+    if (settled) return;
+    settled = true;
+    clearTimers();
+    observer.stop();
+    // 已停止观察 —— 成功那一路还要 await 收集出站附件, 所以先同步告知一声, 让
+    // dispatcher 把这一轮从"在观察"的账上摘掉(见 onSettling 的说明)。
+    req.onSettling?.();
+    if (!claimed) {
+      // 从没认领过 -> server 侧对这条消息一无所知, 静默退场。
+      req.onAbandon();
+      return;
+    }
+    if (errorMessage !== null) {
+      // 与 run() 的失败收口同形(finalText 空, 错误交给渠道渲染)。
+      req.onEnd({
+        status: 'error',
+        finalText: '',
+        errorMessage,
+        durationMs: Date.now() - startedAt,
+      });
+      return;
+    }
+    void (async () => {
+      // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
+      // isDirAuthorized 用 session.workDir 复核同理。
+      const collected = await collectOutboundForFinalText(
+        observer.text(),
+        extraImageAbsPaths,
+        [session.workDir],
+        log,
+      );
+      req.onEnd({
+        status: 'ok',
+        finalText: collected.finalText,
+        errorMessage: null,
+        durationMs: Date.now() - startedAt,
+        ...(collected.attachments !== undefined ? { attachments: collected.attachments } : {}),
+      });
+    })();
+  };
 
-    // 兜底只有硬超时, 与 run() 完全一致 —— 刻意**不**加更短的"空转"超时: 认领之后
-    // 这一轮已经在跑, 而一个正常的长 turn 完全可能几分钟不出事件(或只出被本观察器
-    // 忽略的账号级事件), 用短超时去判死会把它误杀成 error 并把那条错误写进渠道。
-    hardTimer = setTimeout(
-      () => settle(`hook continuation hard timeout (${TURN_HARD_TIMEOUT_MS}ms)`),
-      TURN_HARD_TIMEOUT_MS,
-    );
-    hardTimer.unref?.();
-    observer.finished.then(
-      () => settle(null),
-      (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
-    );
+  // 兜底只有硬超时, 与 run() 完全一致 —— 刻意**不**加更短的"空转"超时: 认领之后
+  // 这一轮已经在跑, 而一个正常的长 turn 完全可能几分钟不出事件(或只出被本观察器
+  // 忽略的账号级事件), 用短超时去判死会把它误杀成 error 并把那条错误写进渠道。
+  hardTimer = setTimeout(
+    () => settle(`hook continuation hard timeout (${TURN_HARD_TIMEOUT_MS}ms)`),
+    TURN_HARD_TIMEOUT_MS,
+  );
+  hardTimer.unref?.();
+  observer.finished.then(
+    () => settle(null),
+    (err: unknown) => settle(err instanceof Error ? err.message : String(err)),
+  );
 
-    return () => {
-      // 撤销: 已认领的必须收口(否则渠道消息停在假的"进行中"), 未认领的静默退场。
-      settle(claimed ? 'hook continuation cancelled' : null);
-    };
+  return () => {
+    // 撤销: 已认领的必须收口(否则渠道消息停在假的"进行中"), 未认领的静默退场。
+    settle(claimed ? 'hook continuation cancelled' : null);
+  };
 }

@@ -186,6 +186,7 @@ function makeFakeSession(id: string) {
   return {
     id,
     workDir: 'D:/repo',
+    setPermissionMode: vi.fn(async () => undefined),
     onEvent(cb: (ev: { type: string; data: unknown }) => void) {
       h.eventCbs.set(id, cb);
       return () => {
@@ -225,7 +226,14 @@ const fakeMaker = {
     permissionMode: undefined as 'ask' | 'bypassPermissions' | undefined,
   })),
   getSession: vi.fn(),
-  getCapabilities: vi.fn(() => ({ availableModels: [], permissionModes: [] })),
+  getCapabilities: vi.fn(() => ({
+    availableModels: [],
+    permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }],
+    turnPermissionPolicy: {
+      supported: { supported: true },
+      unsupportedPermissionModes: ['bypassPermissions'],
+    },
+  })),
 };
 
 vi.mock('../../maker-host/index.js', () => ({
@@ -680,6 +688,7 @@ describe('进度快照(turn.progress 链路)', () => {
     return {
       id,
       workDir: 'D:/repo',
+      setPermissionMode: vi.fn(async () => undefined),
       onEvent(
         cb: (ev: {
           type: string;
@@ -878,6 +887,9 @@ describe('进度快照(turn.progress 链路)', () => {
         }),
       );
       await flush();
+      expect(fakeMaker.createSession).toHaveBeenCalledWith(
+        expect.objectContaining({ permissionMode: 'ask' }),
+      );
       const session = await fakeMaker.createSession.mock.results[0].value;
       const sendOptions = session.send.mock.calls[0]?.[1] as {
         turnPermissionPolicy?: {
@@ -916,6 +928,24 @@ describe('进度快照(turn.progress 链路)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('Telegram 群复用 Full access 会话时先切到可执行逐轮策略的安全权限档', async () => {
+    const runner = createMakerHookSessionRunner({ log });
+    const outcome = await runner.run(
+      baseReq({
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(fakeMaker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ permissionMode: 'ask' }),
+    );
+    const session = await fakeMaker.createSession.mock.results[0].value;
+    expect(session.setPermissionMode).toHaveBeenCalledWith('ask');
   });
 
   it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {
@@ -1052,6 +1082,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     return {
       id,
       workDir: 'D:/repo',
+      setPermissionMode: vi.fn(async () => undefined),
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {
@@ -1253,6 +1284,7 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     return {
       id,
       workDir: 'D:/repo',
+      setPermissionMode: vi.fn(async () => undefined),
       onEvent(
         cb: (ev: {
           type: string;
@@ -1664,6 +1696,7 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
     return {
       id,
       workDir: 'D:/repo',
+      setPermissionMode: vi.fn(async () => undefined),
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {

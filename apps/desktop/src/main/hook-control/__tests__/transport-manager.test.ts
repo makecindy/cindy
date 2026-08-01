@@ -13,6 +13,7 @@ import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_GROUP_RELAY,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
@@ -1499,6 +1500,76 @@ describe('Telegram provider capability, binding and prefs', () => {
       'open_provider',
       'add_to_group',
     ]);
+  });
+
+  it('迟到的旧 principal 群派发在读取本地群历史前被拒绝', async () => {
+    const { wss, url } = await startServer();
+    const handleDispatch = vi.fn();
+    const dispatcher = {
+      handleDispatch,
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      cancel: vi.fn(),
+      handleSessionArchive: vi.fn(),
+      handleInteractionDecision: vi.fn(),
+      activateAccount: vi.fn(),
+      deactivateAccount: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as NonNullable<HookControlManagerDeps['dispatcher']>;
+    const manager = makeManager(memoryStore({ url, enabled: false, telegramEnabled: true }), {
+      dispatcher,
+    });
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    await server.waitFor('hello');
+    sock.send(
+      serializeHookMessage(
+        makeWelcome({
+          serverName: 'telegram-server',
+          features: [...TELEGRAM_FEATURES, HOOK_FEATURE_GROUP_RELAY],
+        }),
+      ),
+    );
+    sock.send(serializeHookMessage(makeProviderBindState(TELEGRAM_CONFIRMED)));
+    await expect
+      .poll(() => manager.snapshot().telegram.binding?.state, { timeout: 3000 })
+      .toBe('confirmed');
+
+    sock.send(
+      serializeHookMessage(
+        makeTaskDispatch({
+          requestId: 'stale-principal-group-task',
+          externalKey: 'telegram:group:bot-1:-900:42:old-principal:g1',
+          workspace: 'chat',
+          prompt: 'must not read old principal history',
+          source: { im: 'telegram' },
+        }),
+      ),
+    );
+    const rejected = await server.waitFor('task.ack');
+    expect(rejected.type === 'task.ack' ? rejected.payload : null).toMatchObject({
+      requestId: 'stale-principal-group-task',
+      result: 'rejected',
+      reason: 'invalid',
+    });
+    expect(handleDispatch).not.toHaveBeenCalled();
+
+    sock.send(
+      serializeHookMessage(
+        makeTaskDispatch({
+          requestId: 'current-principal-group-task',
+          externalKey: 'telegram:group:bot-1:-900:42:telegram-user-1:g1',
+          workspace: 'chat',
+          prompt: 'current principal may dispatch',
+          source: { im: 'telegram' },
+        }),
+      ),
+    );
+    await expect.poll(() => handleDispatch).toHaveBeenCalledOnce();
   });
 
   it('显式开启会等待服务端权威状态，缓存误报 confirmed 时仍自动发起绑定', async () => {

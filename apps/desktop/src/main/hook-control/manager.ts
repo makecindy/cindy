@@ -87,6 +87,7 @@ import {
   resetTelegramSpeakerRegistrationCache,
 } from '../im/telegram/contactsAutoRegister.js';
 import {
+  groupLaneOf,
   recordGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
@@ -2283,13 +2284,23 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     }
     if (msg.type === 'task.dispatch') {
       const provider = providerForTaskDispatch(msg.payload);
+      const telegramGroupLane =
+        provider === 'telegram' ? groupLaneOf(msg.payload.externalKey) : null;
+      const telegramGroupPrincipalMismatch =
+        telegramGroupLane !== null &&
+        (lane?.binding?.state !== 'confirmed' ||
+          lane.binding.principalId !== telegramGroupLane.principalId);
       // 接收日志: 复用已有会话的派发在 dispatcher 里是静默路径(只有新建才留
       // worktree 痕迹), 没有这条就无法区分「没收到」和「静默复用」。lane
       // key 含 IM 用户/聊天标识，不写日志。
       log.info(
         `task.dispatch received: requestId=${msg.payload.requestId} provider=${provider ?? 'unknown'} sessionId=${msg.payload.sessionId ?? '(new/bound)'}`,
       );
-      if (provider !== expectedProvider || (lane !== null && !laneCapabilityReady(lane))) {
+      if (
+        provider !== expectedProvider ||
+        (lane !== null && !laneCapabilityReady(lane)) ||
+        telegramGroupPrincipalMismatch
+      ) {
         log.warn(
           `task.dispatch rejected for unsupported or mismatched provider: requestId=${msg.payload.requestId}`,
         );

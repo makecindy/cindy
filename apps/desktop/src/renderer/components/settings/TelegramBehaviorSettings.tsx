@@ -211,9 +211,9 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
       <div className="text-13 font-medium text-[var(--settings-section-title)]">
         {t(`${root}.behavior.title`)}
       </div>
-      {error === 'save' && (
+      {error !== null && (
         <SettingsRequestError
-          message={t(`${root}.behavior.error.save`)}
+          message={t(`${root}.behavior.error.${error}`)}
           retryLabel={t(`${root}.behavior.error.retry`)}
           onRetry={() => setReloadToken((value) => value + 1)}
         />
@@ -583,9 +583,9 @@ export function TelegramGroupActivationSettings({
       <div className="text-11 leading-[1.5] text-[var(--settings-section-desc)] opacity-80">
         {t(`${root}.groups.hint`)}
       </div>
-      {error === 'save' && (
+      {error !== null && (
         <SettingsRequestError
-          message={t(`${root}.groups.error.save`)}
+          message={t(`${root}.groups.error.${error}`)}
           retryLabel={t(`${root}.groups.error.retry`)}
           onRetry={() => setReloadToken((value) => value + 1)}
         />

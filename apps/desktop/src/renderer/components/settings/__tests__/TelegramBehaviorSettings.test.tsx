@@ -184,6 +184,33 @@ describe('official Telegram behavior settings', () => {
     ).toBe('true');
   });
 
+  it('已有行为缓存时重试读取失败仍显示加载错误与重试入口', async () => {
+    api.setTelegramBehavior.mockRejectedValueOnce(new Error('offline'));
+    render(<TelegramBehaviorSettings source="official" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
+      }),
+    );
+    await screen.findByText('settings.remoteControl.hook.telegram.behavior.error.save');
+    api.getTelegramBehavior.mockRejectedValueOnce(new Error('still offline'));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.error.retry',
+      }),
+    );
+
+    expect(
+      await screen.findByText('settings.remoteControl.hook.telegram.behavior.error.load'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.error.retry',
+      }),
+    ).toBeTruthy();
+  });
+
   it('首次读取失败后可主动重试', async () => {
     api.getTelegramBehavior
       .mockRejectedValueOnce(new Error('offline'))
@@ -242,6 +269,34 @@ describe('official Telegram behavior settings', () => {
         })
         .getAttribute('aria-pressed'),
     ).toBe('true');
+  });
+
+  it('已有群列表缓存时重试读取失败仍显示加载错误与重试入口', async () => {
+    api.setTelegramGroupActivation.mockRejectedValueOnce(new Error('offline'));
+    render(<TelegramGroupActivationSettings source="official" />);
+
+    expect(await screen.findByText('Ops')).toBeTruthy();
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+      }),
+    );
+    await screen.findByText('settings.remoteControl.hook.telegram.groups.error.save');
+    api.listTelegramGroups.mockRejectedValueOnce(new Error('still offline'));
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.groups.error.retry',
+      }),
+    );
+
+    expect(
+      await screen.findByText('settings.remoteControl.hook.telegram.groups.error.load'),
+    ).toBeTruthy();
+    expect(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.groups.error.retry',
+      }),
+    ).toBeTruthy();
   });
 
   it('群模式队列中较早失败不会被后续成功静默吞掉', async () => {
