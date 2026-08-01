@@ -36,6 +36,7 @@ import {
   readImDefaultSettings,
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
@@ -357,5 +358,23 @@ describe('im default settings store', () => {
     expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
     expect(readImDefaultSettings('feishu')).toEqual(IM_DEFAULT_SETTINGS);
     expect(readImDefaultSettings('discord').agents['claude-code'].model).toBe('claude-sonnet-4-8');
+  });
+
+  it('resets global defaults without deleting channel overrides', () => {
+    writeImDefaultSettingsPatch({ agentKind: 'codex' });
+    writeImDefaultSettingsPatch({ permissionMode: 'bypassPermissions' }, 'feishu');
+    writeImDefaultSettingsPatch({ agentKind: 'codex' }, 'slack');
+
+    resetImDefaultSettingsGlobal();
+
+    expect(readImDefaultSettingsState().isCustomized).toBe(false);
+    expect(readImDefaultSettings()).toEqual(IM_DEFAULT_SETTINGS);
+    expect(readImDefaultSettings('feishu').permissionMode).toBe('bypassPermissions');
+    expect(readImDefaultSettings('slack').agentKind).toBe('codex');
+
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.global).toBeUndefined();
+    expect(persisted.channels.feishu.permissionMode).toBe('bypassPermissions');
+    expect(persisted.channels.slack.agentKind).toBe('codex');
   });
 });

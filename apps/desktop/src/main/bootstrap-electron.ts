@@ -421,6 +421,7 @@ import { refreshProviderModelsAfterAccountReady } from './maker-host/account-pro
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from './im/defaultSettingsStore.js';
@@ -2686,7 +2687,7 @@ const registerIpcHandlers = () => {
     if (channel) {
       resetImDefaultSettingsChannel(channel);
     } else {
-      resetImDefaultSettings();
+      resetImDefaultSettingsGlobal();
     }
     return imDefaultSettingsWire(channel);
   });

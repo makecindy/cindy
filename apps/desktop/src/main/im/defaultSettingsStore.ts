@@ -246,6 +246,12 @@ export function resetImDefaultSettings(): ImDefaultSettings {
   return store.reset().global;
 }
 
+export function resetImDefaultSettingsGlobal(): OverrideSettingsState<ImDefaultSettings> {
+  store.writePatch({ global: cloneSettings(IM_DEFAULT_SETTINGS) });
+  log.info('im default settings reset', { channel: 'global' });
+  return readImDefaultSettingsState();
+}
+
 export function resetImDefaultSettingsChannel(
   channel: ImDefaultSettingsChannel,
 ): OverrideSettingsState<ImDefaultSettings> {
