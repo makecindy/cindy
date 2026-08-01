@@ -384,6 +384,7 @@ type UnwrappedCommand = {
   tokens: string[];
   cwd?: string;
   cwdUnknown: boolean;
+  inspectionOnly: boolean;
 };
 
 function resolveCwdTarget(
@@ -412,6 +413,7 @@ function unwrapCommand(
   let toks = stripShellControlTokens(tokens);
   let cwd = initialCwd;
   let cwdUnknown = initialCwdUnknown;
+  let inspectionOnly = false;
   const applyCwd = (target: string | undefined): void => {
     const next = resolveCwdTarget(target, cwd, cwdUnknown);
     cwd = next.cwd;
@@ -448,6 +450,31 @@ function unwrapCommand(
       // bail 时 toks[i] 是可疑选项(如 -S),保留它作首 token → classifyShellSegment 认不出安全命令 → 升级。
       toks = toks.slice(i);
       if (bail) break;
+    } else if (head === 'command') {
+      // Bash builtin: command [-pVv] command [arg ...]. `-p` still executes the
+      // inner command, while -v/-V only inspect it. Consume supported options
+      // and `--` so a real executor cannot hide behind `command -p`.
+      let i = 1;
+      let bail = false;
+      let inspectsCommand = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (/^-[pVv]+$/.test(t)) {
+          if (/[Vv]/.test(t)) inspectsCommand = true;
+          i++;
+          continue;
+        }
+        if (t.startsWith('-')) { bail = true; break; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (bail) break;
+      if (inspectsCommand) {
+        toks = [];
+        inspectionOnly = true;
+        break;
+      }
     } else if (head === 'exec') {
       // POSIX shell builtin: exec [-cl] [-a name] [command [args…]]. 未建模选项不剥壳，
       // 保持 fail-closed；已知选项后继续递归识别真实执行器。
@@ -469,11 +496,11 @@ function unwrapCommand(
       while (i < toks.length && (toks[i].startsWith('-') || /^[0-9]+[smhd]?$/.test(toks[i]))) i++;
       toks = toks.slice(i);
     } else {
-      // nohup / setsid / command / setarch:直接跳过包裹器本身。
+      // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
       toks = toks.slice(1);
     }
   }
-  return { tokens: toks, cwd, cwdUnknown };
+  return { tokens: toks, cwd, cwdUnknown, inspectionOnly };
 }
 
 /** 无需 cwd 语义的调用点只取剥壳后的真实 argv。 */
@@ -552,12 +579,16 @@ const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
   'ruby', 'perl', 'php', 'lua', 'luajit',
   'pwsh', 'pwsh.exe', 'powershell', 'powershell.exe',
   'r', 'rscript', 'tclsh', 'wish', 'julia', 'groovy', 'swift', 'osascript',
+  'guile', 'racket', 'scheme', 'chezscheme', 'csi', 'gosh', 'mit-scheme',
+  'clisp', 'sbcl', 'ecl', 'qjs', 'xargs', 'parallel',
 ]);
 
 function isPipeExecutor(bin: string): boolean {
   const normalized = bin.toLowerCase().replace(/\.exe$/, '');
   return PIPE_EXECUTORS.has(normalized)
-    || /^(?:python|pypy|ruby|perl|php|lua)\d*(?:\.\d+)*$/.test(normalized);
+    || /^(?:python|pypy|ruby|perl|php|lua)\d*(?:\.\d+)*$/.test(normalized)
+    || /^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(normalized)
+    || /^(?:guile|racket)(?:-\d+(?:\.\d+)*)?$/.test(normalized);
 }
 
 /** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
@@ -628,13 +659,21 @@ function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'):
 
 /** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
 function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
-  for (const { text, fromPipe } of splitExecutableSegments(command)) {
+  let pipeCarriesRemoteContent = false;
+  for (const { text, fromPipe, separatorAfter } of splitExecutableSegments(command)) {
     const normalized = text.replace(/['"\\]/g, '');
-    const tokens = unwrapWrappers(tokenize(normalized));
+    const unwrapped = unwrapCommand(tokenize(normalized));
+    const tokens = unwrapped.tokens;
     const bin = baseName(tokens[0] ?? '');
-    if (fromPipe && isPipeExecutor(bin)) return true;
+    if (fromPipe && !unwrapped.inspectionOnly) {
+      if (isPipeExecutor(bin)) return true;
+      // An incomplete interpreter enum must never turn remote "download and
+      // execute" into a model-allowable gray action. Only consumers proven
+      // passive by the existing read-only classifier may keep the pipeline in Auto.
+      if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
+    }
     if (bin === 'eval') return true;
-    const rawTokens = unwrapWrappers(tokenize(text));
+    const rawTokens = unwrapCommand(tokenize(text)).tokens;
     const payload = shellCommandPayload(rawTokens);
     if (payload && (substitutionRunsRemoteFetch(payload, 'command')
       || depth >= 3
@@ -643,6 +682,9 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
     if ((bin === 'source' || bin === '.' || isPipeExecutor(bin))
       && substitutionRunsRemoteFetch(text, 'process')) return true;
+    const segmentFetchesRemoteContent = commandRunsRemoteFetch(text);
+    pipeCarriesRemoteContent = separatorAfter === 'pipe'
+      && (pipeCarriesRemoteContent || segmentFetchesRemoteContent);
   }
   return false;
 }
