@@ -1916,9 +1916,12 @@ export default function SessionScreen() {
   const composerTouchLayout = useMemo(() => buildComposerTouchLayout({
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
-  // 宽屏导航形态(iPad / 折叠屏展开 / 横屏手机):左上角三条杠 + 任务列表抽屉,
-  // 原地 replace 切任务;窄屏保持传统返回键。断点口径见 wideSessionNav.ts。
+  // 宽屏导航形态(iPad / 安卓折叠屏与横屏大屏机):左上角三条杠 + 任务列表抽屉,
+  // 原地 replace 切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
+  // iPhone 不发)见 wideSessionNav.ts。
   const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
+    iosPad: Platform.OS === 'ios' && Platform.isPad,
+    platform: Platform.OS,
     windowHeight: windowDimensions.height,
     windowWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);

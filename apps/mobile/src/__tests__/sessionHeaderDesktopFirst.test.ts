@@ -75,6 +75,9 @@ describe('mobile session header desktop-first surface', () => {
     // 左上角三条杠替代返回,抽屉原地 replace 切任务;窄屏保持 ScreenBackButton(上一用例已锁)。
     expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
     expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    // 按平台分闸(发布策略):iOS 只发 iPad,iPhone 横屏也保持返回键;安卓纯宽度闸。
+    expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
+    expect(source).toContain('platform: Platform.OS,');
     expect(source).toContain('onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}');
     expect(source).toContain('icon={Menu}');
     expect(source).toContain('testID="session.sessionListButton"');

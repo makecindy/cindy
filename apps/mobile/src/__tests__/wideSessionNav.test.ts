@@ -17,18 +17,26 @@ describe('buildWideSessionNavLayout', () => {
 
   it('enables drawer navigation for iPad both orientations', () => {
     // iPad mini 竖屏(744)/ iPad Pro 横屏(1366)。
-    expect(buildWideSessionNavLayout({ windowHeight: 1133, windowWidth: 744 }).enabled).toBe(true);
-    expect(buildWideSessionNavLayout({ windowHeight: 1024, windowWidth: 1366 }).enabled).toBe(true);
+    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1133, windowWidth: 744 }).enabled).toBe(true);
+    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1024, windowWidth: 1366 }).enabled).toBe(true);
+    // iPad 窄分屏(~1/3)回退返回键。
+    expect(buildWideSessionNavLayout({ iosPad: true, platform: 'ios', windowHeight: 1024, windowWidth: 320 }).enabled).toBe(false);
   });
 
-  it('enables drawer navigation for unfolded foldables even in portrait', () => {
+  it('keeps iPhone on back-button navigation even in landscape (per-platform rollout)', () => {
+    // 发布策略:iOS 只发 iPad;iPhone 横屏达宽也不启用宽屏形态。
+    expect(buildWideSessionNavLayout({ iosPad: false, platform: 'ios', windowHeight: 393, windowWidth: 852 }).enabled).toBe(false);
+    expect(buildWideSessionNavLayout({ platform: 'ios', windowHeight: 393, windowWidth: 852 }).enabled).toBe(false);
+  });
+
+  it('enables drawer navigation for unfolded foldables even in portrait (android)', () => {
     // Pixel Fold 内屏竖持(约 648×672)——宽度已达 medium 档,不要求 landscape。
-    const layout = buildWideSessionNavLayout({ windowHeight: 672, windowWidth: 648 });
+    const layout = buildWideSessionNavLayout({ platform: 'android', windowHeight: 672, windowWidth: 648 });
     expect(layout.enabled).toBe(true);
   });
 
-  it('enables drawer navigation for landscape phones', () => {
-    const layout = buildWideSessionNavLayout({ windowHeight: 393, windowWidth: 852 });
+  it('enables drawer navigation for android landscape phones', () => {
+    const layout = buildWideSessionNavLayout({ platform: 'android', windowHeight: 393, windowWidth: 852 });
     expect(layout.enabled).toBe(true);
   });
 

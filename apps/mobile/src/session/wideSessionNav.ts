@@ -13,6 +13,11 @@
  *   (>=640),同时排除所有竖屏直板手机(<=约 440)与 iPad 窄分屏(~320,此时回退
  *   返回键模式是正确行为)。不额外要求 landscape:折叠屏内屏竖持宽度已达标,
  *   要求横向反而把它漏掉。
+ *
+ * 发布策略按平台分闸(2026-08-02 用户定稿):
+ * - Android:纯宽度闸——折叠屏展开 / 平板 / 横屏大屏机都启用;
+ * - iOS:仅 iPad(iosPad)启用;iPhone 即使横屏达宽也**不发**,保持返回键
+ *   (评审风险面最小,后续要放开 iPhone 横屏只改这一处)。
  */
 
 export const WIDE_SESSION_NAV_MIN_WIDTH = 600;
@@ -24,6 +29,10 @@ const DRAWER_WIDTH_RATIO = 0.4;
 export interface WideSessionNavLayoutInput {
   windowWidth?: number;
   windowHeight?: number;
+  /** Platform.OS。iOS 有 iPad 专属闸;其余平台(android/web)纯宽度闸。 */
+  platform?: string;
+  /** iOS 下是否 iPad(Platform.isPad)。iPhone 恒 false → 宽屏形态不启用。 */
+  iosPad?: boolean;
 }
 
 export interface WideSessionNavLayout {
@@ -37,7 +46,9 @@ export function buildWideSessionNavLayout(
   input: WideSessionNavLayoutInput,
 ): WideSessionNavLayout {
   const windowWidth = normalizeDimension(input.windowWidth);
-  const enabled = windowWidth >= WIDE_SESSION_NAV_MIN_WIDTH;
+  // iOS 只对 iPad 发宽屏形态;iPhone(含横屏)按发布策略回退返回键。
+  const platformAllowed = input.platform !== 'ios' || input.iosPad === true;
+  const enabled = platformAllowed && windowWidth >= WIDE_SESSION_NAV_MIN_WIDTH;
   if (!enabled) return { drawerWidth: 0, enabled };
   const drawerWidth = clamp(
     Math.round(windowWidth * DRAWER_WIDTH_RATIO),

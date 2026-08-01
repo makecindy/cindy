@@ -167,8 +167,8 @@
     <span>设备:</span>
     <button data-dev="ipad-l" class="on">iPad 横屏 1180×820</button>
     <button data-dev="ipad-p">iPad 竖屏 820×1180</button>
-    <button data-dev="fold">折叠屏展开 648×672</button>
-    <button data-dev="phone-l">手机横屏 852×393</button>
+    <button data-dev="fold">安卓折叠屏展开 648×672</button>
+    <button data-dev="phone-l">安卓手机横屏 852×393</button>
     <button data-dev="phone-p">手机竖屏 393×852(对照:回退返回键)</button>
     <span style="width:12px"></span>
     <button id="modeBtn">☀︎ Light</button>
@@ -287,7 +287,9 @@
   <div class="hint">
     点 <b>三条杠</b> 拉出抽屉 · 点 <b>遮罩</b> 或在面板上 <b>向左拖</b>(超 1/3 或快甩)关闭 ·
     点任务行 = 原地切换(高亮行为当前任务) · 色值/尺寸/动效参数与 <b>tokens.ts / SessionListDrawer.tsx</b> 一致 ·
-    手机竖屏预设展示窄屏回退的返回键形态
+    手机竖屏预设展示窄屏回退的返回键形态<br>
+    发布策略按平台分闸:<b>安卓</b>纯宽度闸(折叠屏/平板/横屏大屏机);<b>iOS 仅 iPad</b>,
+    iPhone 即使横屏达宽也不启用、保持返回键(见 wideSessionNav.ts)
   </div>
 
 <script>
