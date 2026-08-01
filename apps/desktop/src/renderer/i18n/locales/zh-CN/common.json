@@ -3838,6 +3838,24 @@
       "latestUserTurnTitle": "最近一轮用户请求累计"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5 小时",
+    "weeklyLabel": "周限",
+    "modelWeeklyLabel": "{{model}} 周限",
+    "usedPercent": "已用 {{percent}}%",
+    "resetAt": "{{at}} 重置",
+    "noWindows": "暂无配额窗口数据",
+    "limitRejected": "已触发套餐限额，请求可能被拒绝",
+    "limitWarning": "接近套餐限额",
+    "extraUsageEnabled": "额外用量已启用",
+    "turnCost": "本轮消耗",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（输入 {{input}} · 输出 {{output}}）",
+    "cacheLabel": "缓存",
+    "modelLabel": "模型",
+    "staleData": "数据更新于 {{minutes}} 分钟前",
+    "waiting": "Claude 订阅余量会在下一轮完成后更新。"
+  },
   "usageDetails": {
     "costLine": "本轮消耗：{{cost}}",
     "valueLine": "本轮 token 价值：{{cost}}",

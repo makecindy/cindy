@@ -3838,6 +3838,24 @@
       "latestUserTurnTitle": "直近のユーザーターン合計"
     }
   },
+  "quotaCard": {
+    "fiveHourLabel": "5 時間",
+    "weeklyLabel": "週間",
+    "modelWeeklyLabel": "{{model}} 週間",
+    "usedPercent": "使用済み {{percent}}%",
+    "resetAt": "{{at}} にリセット",
+    "noWindows": "使用量枠のデータはありません",
+    "limitRejected": "プランの上限に到達しました。リクエストが拒否される可能性があります",
+    "limitWarning": "プランの上限に近づいています",
+    "extraUsageEnabled": "追加使用量が有効です",
+    "turnCost": "このターンの消費",
+    "tokenLabel": "Token",
+    "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
+    "cacheLabel": "キャッシュ",
+    "modelLabel": "モデル",
+    "staleData": "データは {{minutes}} 分前に更新されました",
+    "waiting": "Claude サブスクリプションの使用量は次回のターン完了後に更新されます。"
+  },
   "usageDetails": {
     "costLine": "このターンの消費: {{cost}}",
     "valueLine": "このターンの token 価値: {{cost}}",
