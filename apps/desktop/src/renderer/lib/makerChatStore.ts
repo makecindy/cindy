@@ -8119,8 +8119,14 @@ function retryLastError(sessionId: string): Promise<void> {
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  return runInputProjectionOperation(sessionId, (input) => input.retryLastError(sessionId))
-    .then(() => undefined);
+  // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
+  // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.reject(new Error('Agent switch is still in progress')),
+    () => runInputProjectionOperation(sessionId, (input) => input.retryLastError(sessionId))
+      .then(() => undefined),
+  );
 }
 
 /**

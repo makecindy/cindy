@@ -552,7 +552,7 @@ describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
 });
 
 describe('makerChatStore 共享发送边界', () => {
-  it('切换在途时普通消息与 UI 续跑都 fail-closed,不会碰发送传输层', async () => {
+  it('切换在途时普通消息、UI 续跑与错误重试都 fail-closed,不会碰发送传输层', async () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     const finishSwitch = coordinator.beginAgentSwitchOperation('guarded-send');
@@ -571,8 +571,34 @@ describe('makerChatStore 共享发送边界', () => {
     await expect(
       makerChatStore.sendUiTrigger('guarded-send', '[UI_ACTION_TRIGGER] continue'),
     ).rejects.toThrow('Agent switch is still in progress');
+    await expect(makerChatStore.retryLastError('guarded-send')).rejects.toThrow(
+      'Agent switch is still in progress',
+    );
     expect(coordinator.hasPendingAgentSendDispatch('guarded-send')).toBe(false);
     finishSwitch();
+  });
+
+  it('错误重试先发时从历史查询开始占住发送 token，settle 后才允许切换', async () => {
+    const coordinator = await import('@/lib/agentSwitchCoordinator');
+    coordinator.__resetAgentSwitchCoordinatorForTests();
+    let rejectRetry!: (reason: Error) => void;
+    const retryLastError = vi.fn(() => new Promise<never>((_resolve, reject) => {
+      rejectRetry = reject;
+    }));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { input: { retryLastError } } },
+    });
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+
+    const retry = makerChatStore.retryLastError('retry-first');
+    expect(retryLastError).toHaveBeenCalledWith('retry-first');
+    expect(coordinator.hasPendingAgentSendDispatch('retry-first')).toBe(true);
+    // ChatInput 的切换入口同步检查这个 registry；重试 main RPC 尚未入队也不能被越过。
+    expect(coordinator.hasPendingAgentSwitchOperation('retry-first')).toBe(false);
+
+    rejectRetry(new Error('retry failed'));
+    await expect(retry).rejects.toThrow('retry failed');
+    expect(coordinator.hasPendingAgentSendDispatch('retry-first')).toBe(false);
   });
 });
 
@@ -597,7 +623,14 @@ describe('ChatInput 的入口门控与调用路由', () => {
       'sessionId && vendorKey && !remoteHostId && sessionAgentSwitchSupported',
     );
     expect(source).toContain('ccCaps.capabilities?.supportsSessionAgentSwitch === true');
+    expect(source).toContain('ccCaps.capabilities.supportsSessionAgentSwitchCas === true');
     expect(source).toContain('codexCaps.capabilities?.supportsSessionAgentSwitch === true');
+    expect(source).toContain('codexCaps.capabilities.supportsSessionAgentSwitchCas === true');
+    const hostSource = readFileSync(
+      resolve(process.cwd(), 'src/main/maker-ipc/register.ts'),
+      'utf8',
+    );
+    expect(hostSource).toContain('supportsSessionAgentSwitchCas: true');
   });
 
   it('Orca 与角色未加载会话都 fail-closed:只有完整元数据确认非协同后开放入口', () => {
@@ -711,6 +744,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const sendMessageBegin = storeSource.indexOf('return withAgentSendDispatch(', sendMessage);
     const sendUiTrigger = storeSource.indexOf('function sendUiTrigger(');
     const uiTriggerBegin = storeSource.indexOf('return withAgentSendDispatch(', sendUiTrigger);
+    const retryLastError = storeSource.indexOf('function retryLastError(');
+    const retryBegin = storeSource.indexOf('return withAgentSendDispatch(', retryLastError);
     const sharedBegin = storeSource.indexOf(
       'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
     );
@@ -720,6 +755,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     );
     expect(sendMessageBegin).toBeGreaterThan(sendMessage);
     expect(uiTriggerBegin).toBeGreaterThan(sendUiTrigger);
+    expect(retryBegin).toBeGreaterThan(retryLastError);
     expect(sharedBegin).toBeGreaterThanOrEqual(0);
     expect(sharedFinish).toBeGreaterThan(sharedBegin);
   });

@@ -1243,18 +1243,23 @@ export function ChatInput({
   const ccCaps = useAgentCapabilities('claude-code', deviceLinkDeviceId);
   const codexCaps = useAgentCapabilities('codex', deviceLinkDeviceId);
 
-  // session-agent-switch 入口门控。supportsSessionAgentSwitch 是 host 级能力(两个
-  // agent 的 capabilities 都带回),device-link 远程会话读**被控端**的值:老被控端没有
-  // 该字段、也没收录切换 channel,入口必须隐藏(与手机端 supportsMobileSessionAgentSwitch
-  // 同口径)。本机会话恒可用——main 就是实现方,不能因 capabilities 还没加载完而闪掉入口。
+  // session-agent-switch 入口门控。device-link 远程会话读**被控端**的值；除了基础
+  // supportsSessionAgentSwitch，还必须有 v2 CAS 能力。同引擎 no-op 的安全收尾依赖 host
+  // 返回修订号，只有基础位的旧 host 无法把自己的 clear push 与外部 ABA 关联，不能开放
+  // 一个会随机吞掉模型重选的入口。本机会话恒可用——main 与 renderer 同版本，不能因
+  // capabilities 还没加载完而闪掉入口。
   // SSH 远程(remoteHostId)是另一套引擎生命周期,继续不支持,由调用点单独排除。
   // Orca 会话(lead / worker)同样排除:被控端 handler 对带 orcaRole 的会话一律拒
   // UNSUPPORTED_CAPABILITY。角色未加载(undefined)也 fail-closed,避免冷启动短暂露出入口。
+  const ccSupportsSessionAgentSwitch =
+    ccCaps.capabilities?.supportsSessionAgentSwitch === true &&
+    ccCaps.capabilities.supportsSessionAgentSwitchCas === true;
+  const codexSupportsSessionAgentSwitch =
+    codexCaps.capabilities?.supportsSessionAgentSwitch === true &&
+    codexCaps.capabilities.supportsSessionAgentSwitchCas === true;
   const sessionAgentSwitchSupported =
     sessionOrcaRole === null &&
-    (!deviceLinkDeviceId ||
-      ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
-      codexCaps.capabilities?.supportsSessionAgentSwitch === true);
+    (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
 
   // 切换写入的串行链与写序号都按 session 存在**模块级**协调层(agentSwitchCoordinator),
   // 不放组件 ref:用户切走再切回时旧组件已卸载但 invoke 仍在飞,新组件若另起空队列 /

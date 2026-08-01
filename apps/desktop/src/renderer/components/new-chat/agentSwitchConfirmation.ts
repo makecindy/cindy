@@ -96,8 +96,9 @@ export type AgentSwitchAckAction =
  * - 同引擎 no-op 不能从 renderer 的「修订号 + 最终值」猜因果：外部 set→clear ABA 与
  *   本次 clear 都会得到「修订号已变 + 当前为空」。新 host 因此返回 CAS 成功后的
  *   `sameEngineRevision`，后续 SET_MODEL 带回该 token 再做一次 CAS；若请求已在 host
- *   内被超车则返回 `sameEngineSuperseded` 直接丢弃。旧 host 没有因果 token，只在本地
- *   修订号完全未变（ack 先于任何 push）时兼容执行，否则 fail-closed。
+ *   内被超车则返回 `sameEngineSuperseded` 直接丢弃。远程入口另由
+ *   `supportsSessionAgentSwitchCas` 门控，不会向缺 token 的旧 host 开放；这里的无 token
+ *   分支只作本地 harness / 防御性兼容，修订号变化时仍 fail-closed。
  */
 export function resolveAgentSwitchAckAction(args: {
   deferred: boolean;
