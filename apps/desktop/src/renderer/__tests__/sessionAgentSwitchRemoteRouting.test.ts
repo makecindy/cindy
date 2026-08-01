@@ -281,6 +281,115 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
   });
 });
 
+describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件实例存活）', () => {
+  const load = async () => {
+    const mod = await import('@/components/new-chat/agentSwitchCoordinator');
+    mod.__resetAgentSwitchCoordinatorForTests();
+    return mod;
+  };
+  const deferred = <T,>() => {
+    let resolve!: (v: T) => void;
+    const promise = new Promise<T>((r) => {
+      resolve = r;
+    });
+    return { promise, resolve };
+  };
+
+  it('同 session 串行:后一次点选必须等前一次往返结束才发出', async () => {
+    const { runAgentSwitchExclusive } = await load();
+    const first = deferred<string>();
+    const started: string[] = [];
+
+    const a = runAgentSwitchExclusive('s1', () => {
+      started.push('a');
+      return first.promise;
+    });
+    const b = runAgentSwitchExclusive('s1', () => {
+      started.push('b');
+      return Promise.resolve('b');
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual(['a']); // b 尚未发出
+    first.resolve('a');
+    await Promise.all([a, b]);
+    expect(started).toEqual(['a', 'b']); // 发送顺序 = 点选顺序
+  });
+
+  it('不同 session 各自独立:A 的慢请求不拖住 B', async () => {
+    const { runAgentSwitchExclusive } = await load();
+    const slow = deferred<string>();
+    const started: string[] = [];
+
+    void runAgentSwitchExclusive('s1', () => {
+      started.push('s1');
+      return slow.promise;
+    });
+    await runAgentSwitchExclusive('s2', () => {
+      started.push('s2');
+      return Promise.resolve('s2');
+    });
+
+    expect(started).toEqual(['s1', 's2']);
+    slow.resolve('done');
+  });
+
+  it('前一个任务失败不掐断链:后一个仍会发出', async () => {
+    const { runAgentSwitchExclusive } = await load();
+    const started: string[] = [];
+    const failed = runAgentSwitchExclusive('s1', () => {
+      started.push('a');
+      return Promise.reject(new Error('tunnel down'));
+    });
+    await expect(failed).rejects.toThrow('tunnel down');
+    await runAgentSwitchExclusive('s1', () => {
+      started.push('b');
+      return Promise.resolve('b');
+    });
+    expect(started).toEqual(['a', 'b']);
+  });
+
+  it('回归:写序号按 session 存在模块级,组件卸载重挂后不归零', async () => {
+    const { nextAgentSwitchWriteSeq, getAgentSwitchWriteSeq } = await load();
+    expect(nextAgentSwitchWriteSeq('s1')).toBe(1);
+    expect(nextAgentSwitchWriteSeq('s1')).toBe(2);
+    // 组件重挂 = 重新读取,而不是从 0 开始 —— 否则在途 ack 会被误判成新鲜。
+    expect(getAgentSwitchWriteSeq('s1')).toBe(2);
+    expect(getAgentSwitchWriteSeq('s2')).toBe(0); // 每个 session 独立计数
+  });
+
+  it('回归:同一 session 的队列跨「组件实例」共享,切走再切回不会分叉出并发', async () => {
+    const { runAgentSwitchExclusive } = await load();
+    const inFlight = deferred<string>();
+    const started: string[] = [];
+
+    // 旧组件发出请求后卸载(invoke 仍在飞)。
+    void runAgentSwitchExclusive('s1', () => {
+      started.push('old-mount');
+      return inFlight.promise;
+    });
+    await Promise.resolve();
+    // 新组件挂载后立即点选:必须排在在途请求之后,而不是另起一条空队列并发发送。
+    const next = runAgentSwitchExclusive('s1', () => {
+      started.push('new-mount');
+      return Promise.resolve('ok');
+    });
+    await Promise.resolve();
+    expect(started).toEqual(['old-mount']);
+    inFlight.resolve('done');
+    await next;
+    expect(started).toEqual(['old-mount', 'new-mount']);
+  });
+
+  it('dispose 释放该 session 的协调状态', async () => {
+    const { nextAgentSwitchWriteSeq, getAgentSwitchWriteSeq, disposeAgentSwitchSession } =
+      await load();
+    nextAgentSwitchWriteSeq('s1');
+    disposeAgentSwitchSession('s1');
+    expect(getAgentSwitchWriteSeq('s1')).toBe(0);
+  });
+});
+
 describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
   let n = 0;
   const sid = () => `agent-switch-rev-${n++}`;
@@ -334,7 +443,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
   ).replace(/\r\n/g, '\n');
 
   it('切换 IPC 走传输层(远程会话隧道到被控端),不再硬打本机 maker', () => {
-    expect(source).toContain('makerApiFor(sessionId).switchSessionAgent(');
+    expect(source).toContain('switchApi.switchSessionAgent(');
+    expect(source).toContain(': makerApiFor(sourceSessionId);');
     expect(source).not.toContain('window.electronAPI.maker.switchSessionAgent(');
   });
 
@@ -361,7 +471,7 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('isAgentSwitchResponseFresh({');
     expect(source).toContain('makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent)');
     // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
-    expect(source).toContain('agentSwitchWriteSeqRef.current += 1)');
+    expect(source).toContain('nextAgentSwitchWriteSeq(sourceSessionId)');
     expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
     // deviceId 跨重连不变,不把重连代际放进依赖就永远不会重试(断链期间的读回失败
     // 与错过的 sessions:patched 都靠这一跳补回)。
@@ -372,23 +482,40 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   it('切换 ack 走分派决策:发起时捕获写序号与修订号,按分支判定而非一刀切 return', () => {
-    expect(source).toContain('const writeSeq = (agentSwitchWriteSeqRef.current += 1);');
+    expect(source).toContain('const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);');
     expect(source).toContain(
-      'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sessionId);',
+      'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sourceSessionId);',
     );
     expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
     expect(source).toContain("if (ackAction === 'discard') return;");
     expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
     expect(source).toContain(
-      'intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sessionId) === null,',
+      'intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sourceSessionId) === null,',
     );
   });
 
-  it('同会话切换写入串行化:被控端 handler 写 pendingSwitches 前有 await,并发会让旧请求后落库', () => {
-    expect(source).toContain('const result = await runAgentSwitchExclusive(sessionId, () =>');
-    // 换会话时另起链,不让上个会话的在途请求拖住新会话的第一次点选。
+  it('切换写入走模块级协调层(串行链与写序号按 session,不随组件卸载归零)', () => {
+    expect(source).toContain('const result = await runAgentSwitchExclusive(sourceSessionId, () =>');
+    expect(source).toContain('const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);');
+    expect(source).toContain('writeSeqNow: getAgentSwitchWriteSeq(sourceSessionId),');
+    // 组件内不得再持有队列/序号 ref,否则重挂后又会分叉出第二条空队列。
+    expect(source).not.toContain('agentSwitchWriteSeqRef');
+    expect(source).not.toContain('agentSwitchQueueRef');
+  });
+
+  it('远程分支用稳定 deviceId 直连隧道:relay 瞬时重连会清空 sessionId→deviceId 索引', () => {
+    expect(source).toContain('const switchApi = deviceLinkDeviceId');
+    expect(source).toContain('? makerApiForDevice(deviceLinkDeviceId)');
+    expect(source).toContain(': makerApiFor(sourceSessionId);');
+  });
+
+  it('await 返回后做会话作用域校验:旧会话响应不得借最新 ref 写进当前会话', () => {
     expect(source).toContain(
-      'const base = queue.sessionId === targetSessionId ? queue.chain : Promise.resolve();',
+      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
+    );
+    // 读回同理:往返期间被切走就丢弃。
+    expect(source).toContain(
+      'cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),',
     );
   });
 });

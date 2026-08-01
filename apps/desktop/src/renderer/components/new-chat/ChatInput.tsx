@@ -105,6 +105,11 @@ import {
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
+  getAgentSwitchWriteSeq,
+  nextAgentSwitchWriteSeq,
+  runAgentSwitchExclusive,
+} from './agentSwitchCoordinator';
+import {
   isSelectedSourceDisconnected,
   resolveEffort,
   resolveProviderSwitchEffort,
@@ -1234,37 +1239,9 @@ export function ChatInput({
       ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
       codexCaps.capabilities?.supportsSessionAgentSwitch === true);
 
-  // 本端对该会话意图的写次数(登记 / 撤销 / 选回当前引擎都算一次)。读回请求用它判断
-  // 「在途期间用户是否动过意图」——单调递增,不受 ABA 影响:登记后又撤销时值虽然都回到
-  // null,序号已经 +2,过期响应不会被误判为「期间没变」而恢复已撤销的意图。
-  const agentSwitchWriteSeqRef = useRef(0);
-  // 同一会话的切换写入串行化。被控端 device-link dispatch 对每个 invoke 独立起协程,
-  // 而 sessionAgentSwitchHandler 在写 pendingSwitches 前还要 await 路由校验与 DB 读——
-  // 用户快速点两次时,**较旧**的请求可能后完成、覆盖较新的选择;本端写序号只能丢弃旧
-  // ack,拦不住被控端那次旧写入及其权威 push(下一条消息就会按第一次点选切引擎)。
-  // 排队让「发送顺序 = 被控端处理顺序」,后点的选择永远最后落库。本机会话同理(handler
-  // 也有 await),排队开销可忽略。
-  const agentSwitchQueueRef = useRef<{ sessionId: string; chain: Promise<unknown> }>({
-    sessionId: '',
-    chain: Promise.resolve(),
-  });
-  const runAgentSwitchExclusive = useCallback(
-    <T,>(targetSessionId: string, task: () => Promise<T>): Promise<T> => {
-      const queue = agentSwitchQueueRef.current;
-      // 换会话时另起链,不让上个会话的在途请求拖住新会话的第一次点选。
-      const base = queue.sessionId === targetSessionId ? queue.chain : Promise.resolve();
-      const next = base.then(task, task);
-      agentSwitchQueueRef.current = {
-        sessionId: targetSessionId,
-        chain: next.then(
-          () => undefined,
-          () => undefined,
-        ),
-      };
-      return next;
-    },
-    [],
-  );
+  // 切换写入的串行链与写序号都按 session 存在**模块级**协调层(agentSwitchCoordinator),
+  // 不放组件 ref:用户切走再切回时旧组件已卸载但 invoke 仍在飞,新组件若另起空队列 /
+  // 归零序号,两个请求会重新并发、旧 ack 会被误判成新鲜。理由与取舍见该模块头注释。
   // 链路重连代际:deviceId 在断链重连期间保持不变,只靠它当依赖的话读回永远不会重试。
   // 断链期间发出的读回会失败(catch 吞掉),断链期间被控端 / 另一控制端改的意图其
   // sessions:patched 推送也收不到 —— 恢复连接后必须重读一次,否则 composer 会一直
@@ -1284,15 +1261,16 @@ export function ChatInput({
   useEffect(() => {
     if (!sessionId || !deviceLinkDeviceId || remoteHostId) return;
     let cancelled = false;
-    const writeSeq = agentSwitchWriteSeqRef.current;
+    const writeSeq = getAgentSwitchWriteSeq(sessionId);
     const intentRev = makerChatStore.getAgentSwitchIntentRev(sessionId);
     void makerApiForDevice(deviceLinkDeviceId)
       .getSessionAgentSwitchIntent(sessionId)
       .then((remoteIntent) => {
         const fresh = isAgentSwitchResponseFresh({
-          cancelled,
+          // 会话在往返期间被切走 → 这次响应不属于当前视图,丢弃。
+          cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),
           writeSeqAtStart: writeSeq,
-          writeSeqNow: agentSwitchWriteSeqRef.current,
+          writeSeqNow: getAgentSwitchWriteSeq(sessionId),
           intentRevAtStart: intentRev,
           intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
         });
@@ -3996,8 +3974,9 @@ export function ChatInput({
       if (!sessionId) return;
       // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
       // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
-      const writeSeq = (agentSwitchWriteSeqRef.current += 1);
-      const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sessionId);
+      const sourceSessionId = sessionId;
+      const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);
+      const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sourceSessionId);
       try {
         // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
         // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
@@ -4043,9 +4022,16 @@ export function ChatInput({
 
         // 会话级操作按来源路由:device-link 远程会话隧道到被控端(意图注册表与引擎
         // 交接都在那边),本机会话零变化直连本机 maker。
-        const result = await runAgentSwitchExclusive(sessionId, () =>
-          makerApiFor(sessionId).switchSessionAgent(
-            sessionId,
+        // 远程分支用**稳定的** deviceLinkDeviceId 直连隧道,不走 makerApiFor 的
+        // sessionId→deviceId 索引解析:该索引在 relay 瞬时重连窗口会被清空(见
+        // stickySessionOrigin),此时远程会话会被误判成本机 → 打到控制端本机 maker,
+        // 轻则「无此 session」,极小概率命中本机同 id 会话写错 pending intent。
+        const switchApi = deviceLinkDeviceId
+          ? makerApiForDevice(deviceLinkDeviceId)
+          : makerApiFor(sourceSessionId);
+        const result = await runAgentSwitchExclusive(sourceSessionId, () =>
+          switchApi.switchSessionAgent(
+            sourceSessionId,
             targetAgentKind,
             newModelId,
             providerId,
@@ -4053,6 +4039,10 @@ export function ChatInput({
             targetFast,
           ),
         );
+        // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
+        // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
+        // 响应绝不能借最新的 ref 把模型/来源写进当前会话。
+        if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;
         // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
         // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
         // **旧**选择,落下去会让选择器显示过期引擎,而被控端按新意图执行下一条消息。
@@ -4062,13 +4052,13 @@ export function ChatInput({
         const ackAction = resolveAgentSwitchAckAction({
           deferred: result.deferred === true,
           switched: result.switched,
-          intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sessionId) === null,
+          intentNowIsEmpty: makerChatStore.getAgentSwitchIntent(sourceSessionId) === null,
           freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
-            writeSeqNow: agentSwitchWriteSeqRef.current,
+            writeSeqNow: getAgentSwitchWriteSeq(sourceSessionId),
             intentRevAtStart: intentRevAtSend,
-            intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
+            intentRevNow: makerChatStore.getAgentSwitchIntentRev(sourceSessionId),
           },
         });
         if (ackAction === 'discard') return;
@@ -4076,13 +4066,13 @@ export function ChatInput({
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
-          makerChatStore.noteAgentSwitchIntent(sessionId, targetAgentKind, {
+          makerChatStore.noteAgentSwitchIntent(sourceSessionId, targetAgentKind, {
             model: newModelId,
             providerId,
             effort: newEffort,
             fastMode: targetFast,
           });
-          if (makerChatStore.getSnapshot(sessionId).agentStatus.isRunning) {
+          if (makerChatStore.getSnapshot(sourceSessionId).agentStatus.isRunning) {
             toast.success(
               t('newChat.chatInput.agentSwitch.deferred', {
                 agent: targetAgentKind === 'codex' ? 'Codex' : 'Claude Code',
@@ -4096,13 +4086,13 @@ export function ChatInput({
         if (ackAction === 'same-engine-reselect') {
           // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
           // 再把这次点选当作普通的模型/来源切换应用到当前引擎。
-          makerChatStore.clearAgentSwitchIntent(sessionId);
+          makerChatStore.clearAgentSwitchIntent(sourceSessionId);
           if (providerId) void sameEngineReselectRef.current.byProvider(providerId, newModelId);
           else void sameEngineReselectRef.current.byModel(newModelId);
           return;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
-        makerChatStore.noteAgentSwitched(sessionId, targetAgentKind);
+        makerChatStore.noteAgentSwitched(sourceSessionId, targetAgentKind);
         if (!result.engineReady) {
           toast.error(t('newChat.chatInput.agentSwitch.engineNotReady'), { duration: 4000 });
         }
