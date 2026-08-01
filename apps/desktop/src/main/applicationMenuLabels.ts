@@ -48,6 +48,9 @@ export interface ApplicationMenuLabels {
   installCliDevOnlyDetail: string;
   installCliUnsupportedTitle: string;
   installCliUnsupportedDetail: string;
+  installCliNotInApplicationsTitle: string;
+  installCliNotInApplicationsDetail: string;
+  installCliMoveToApplications: string;
 }
 
 export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationMenuLabels> = {
@@ -82,6 +85,10 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
       '开发模式下无法安装命令行工具：此时的可执行文件指向 Electron 解释器，而非 Cindy 应用。请在正式安装的 Cindy 中使用此功能。',
     installCliUnsupportedTitle: '暂不支持当前系统',
     installCliUnsupportedDetail: '安装到命令行目前仅支持 macOS。',
+    installCliNotInApplicationsTitle: '请先把 Cindy 移动到「应用程序」文件夹',
+    installCliNotInApplicationsDetail:
+      '当前 Cindy 运行在临时位置（不在「应用程序」文件夹里）。此时安装的命令会指向这个临时路径，应用退出或磁盘弹出后即失效。请先把 Cindy 移动到「应用程序」文件夹，再安装命令行。',
+    installCliMoveToApplications: '移动到「应用程序」',
   },
   en: {
     about: 'About {{appName}}',
@@ -114,6 +121,10 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
       'The command-line tool cannot be installed in development mode: the executable points at the Electron runtime rather than the Cindy app. Use this from an installed Cindy build.',
     installCliUnsupportedTitle: 'Not supported on this system',
     installCliUnsupportedDetail: "Installing the '{{cmd}}' command is currently supported on macOS only.",
+    installCliNotInApplicationsTitle: 'Move Cindy to the Applications folder first',
+    installCliNotInApplicationsDetail:
+      'Cindy is running from a temporary location (not the Applications folder). A command installed now would point at that temporary path and break as soon as the app quits or the volume is ejected. Move Cindy to the Applications folder, then install the command.',
+    installCliMoveToApplications: 'Move to Applications',
   },
   ja: {
     about: '{{appName}} について',
@@ -146,6 +157,10 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
       '開発モードではコマンドラインツールをインストールできません。実行ファイルが Cindy アプリではなく Electron ランタイムを指しているためです。インストール済みの Cindy から実行してください。',
     installCliUnsupportedTitle: 'このシステムには非対応',
     installCliUnsupportedDetail: 'コマンドラインへのインストールは現在 macOS のみ対応しています。',
+    installCliNotInApplicationsTitle: 'まず Cindy を「アプリケーション」フォルダに移動してください',
+    installCliNotInApplicationsDetail:
+      'Cindy は一時的な場所(「アプリケーション」フォルダの外)で実行されています。この状態でインストールしたコマンドはその一時パスを指すため、アプリの終了やボリュームの取り出しで無効になります。Cindy を「アプリケーション」フォルダに移動してから、コマンドをインストールしてください。',
+    installCliMoveToApplications: '「アプリケーション」に移動',
   },
   ko: {
     about: '{{appName}} 정보',
@@ -178,5 +193,9 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
       '개발 모드에서는 명령줄 도구를 설치할 수 없습니다. 실행 파일이 Cindy 앱이 아닌 Electron 런타임을 가리키기 때문입니다. 설치된 Cindy에서 사용하세요.',
     installCliUnsupportedTitle: '이 시스템에서는 지원되지 않음',
     installCliUnsupportedDetail: '명령줄 설치는 현재 macOS에서만 지원됩니다.',
+    installCliNotInApplicationsTitle: '먼저 Cindy를 응용 프로그램 폴더로 옮기세요',
+    installCliNotInApplicationsDetail:
+      'Cindy가 임시 위치(응용 프로그램 폴더 밖)에서 실행되고 있습니다. 지금 설치하는 명령은 이 임시 경로를 가리키므로 앱을 종료하거나 볼륨을 꺼내면 작동하지 않습니다. Cindy를 응용 프로그램 폴더로 옮긴 다음 명령을 설치하세요.',
+    installCliMoveToApplications: '응용 프로그램으로 이동',
   },
 };

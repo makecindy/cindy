@@ -40,7 +40,7 @@ import { promisify } from 'node:util';
 
 import { brandExecutableName } from '@cindy/maker-shared/brand-identity';
 
-import { createLogger } from './logger';
+import { createLogger, maskPath } from './logger';
 import {
   APPLICATION_MENU_LABELS,
   type ApplicationMenuLabels,
@@ -192,12 +192,35 @@ export async function installCindyCliCommand(
     return;
   }
 
+  // App Translocation / 直接从 DMG 运行时,process.resourcesPath 是临时只读路径。
+  // 此时建的 symlink 指向这个临时位置,app 退出或卷弹出后即失效,却会「安装成功」。
+  // 先要求把 app 移动到「应用程序」再安装(与 bootstrap-electron 的搬运提示同源)。
+  if (!app.isInApplicationsFolder()) {
+    const choice = await showMessage(window, {
+      type: 'warning',
+      buttons: [labels.installCliMoveToApplications, labels.installCliCancel],
+      defaultId: 0,
+      cancelId: 1,
+      message: labels.installCliNotInApplicationsTitle,
+      detail: labels.installCliNotInApplicationsDetail,
+    });
+    if (choice.response === 0) {
+      try {
+        // 成功会从「应用程序」重新拉起并结束当前进程;失败则不建 symlink。
+        app.moveToApplicationsFolder();
+      } catch (err) {
+        log.warn('failed to move Cindy to Applications before CLI install', err);
+      }
+    }
+    return;
+  }
+
   const source = CLI_LINK_PATH;
   const target = resolveBundledCliPath(process.resourcesPath);
 
   // 包内启动器脚本缺失(打包异常)→ 明确报错,不尝试建指向空的 symlink。
   if (!fs.existsSync(target)) {
-    log.warn('bundled cindy launcher missing; cannot install', { target });
+    log.warn('bundled cindy launcher missing; cannot install', { target: maskPath(target) });
     await showMessage(window, {
       type: 'error',
       message: labels.installCliErrorTitle,
@@ -208,7 +231,7 @@ export async function installCindyCliCommand(
 
   // 已正确安装:直接告知成功,不重复弹管理员授权。
   if (await isAlreadyLinked(source, target)) {
-    log.info('cindy CLI command already installed', { source, target });
+    log.info('cindy CLI command already installed', { source: maskPath(source), target: maskPath(target) });
     await showMessage(window, {
       type: 'info',
       message: fmt(labels.installCliSuccessTitle, source),
@@ -229,7 +252,7 @@ export async function installCindyCliCommand(
 
   try {
     await runWithAdmin(buildInstallShellCommand(target, source));
-    log.info('cindy CLI command installed', { source, target });
+    log.info('cindy CLI command installed', { source: maskPath(source), target: maskPath(target) });
     await showMessage(window, {
       type: 'info',
       message: fmt(labels.installCliSuccessTitle, source),
@@ -258,7 +281,7 @@ export async function uninstallCindyCliCommand(): Promise<void> {
   const source = CLI_LINK_PATH;
   try {
     await fs.promises.unlink(source);
-    log.info('cindy CLI command uninstalled', { source });
+    log.info('cindy CLI command uninstalled', { source: maskPath(source) });
     return;
   } catch (err) {
     const code = (err as NodeJS.ErrnoException)?.code;
@@ -270,7 +293,7 @@ export async function uninstallCindyCliCommand(): Promise<void> {
   }
   try {
     await runWithAdmin(buildUninstallShellCommand(source));
-    log.info('cindy CLI command uninstalled (elevated)', { source });
+    log.info('cindy CLI command uninstalled (elevated)', { source: maskPath(source) });
   } catch (err) {
     log.warn('failed to uninstall cindy CLI command with privileges (non-fatal)', err);
   }

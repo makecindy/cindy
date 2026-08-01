@@ -145,15 +145,19 @@ describe('随包分发的启动器脚本 resources/cli/cindy', () => {
     expect(script).toContain('APP=$(cd "$BIN_DIR/../../.." >/dev/null 2>&1 && pwd)');
   });
 
-  it('无参数仅唤起 app,有参数用 open -a 打开', () => {
+  it('无参数仅唤起 app,单参数用 open -a 打开', () => {
     expect(script).toContain('if [ "$#" -eq 0 ]; then\n  exec open -a "$APP"');
-    expect(script).toContain('exec open -a "$APP" "$@"');
+    // -- 结束选项解析,避免以 - 开头的路径被 open 当成自身选项。
+    expect(script).toContain('exec open -a "$APP" -- "$abs"');
   });
 
-  it('把参数解析为绝对路径(支持 cindy .)', () => {
+  it('拒绝多路径调用(避免冷启动 pending 槽互相覆盖、静默丢失)', () => {
+    expect(script).toContain('if [ "$#" -gt 1 ]; then');
+    expect(script).toContain('exit 2');
+  });
+
+  it('把单个参数解析为绝对路径(支持 cindy .)', () => {
     expect(script).toContain('abs=$(cd "$arg" >/dev/null 2>&1 && pwd)');
-    // append + shift 原地重建位置参数的惯用法
-    expect(script).toContain('set -- "$@" "$abs"');
-    expect(script).toContain('\n  shift\n');
+    expect(script).toContain('arg="$1"');
   });
 });

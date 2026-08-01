@@ -1,6 +1,6 @@
 #!/bin/sh
 # Cindy 命令行启动器 —— 随 Cindy.app 分发,由「帮助 → 安装到命令行」symlink 到 PATH。
-# 用法:  cindy [路径 ...]      例如  cindy .
+# 用法:  cindy [路径]      例如  cindy .
 #
 # 手动卸载:  rm /usr/local/bin/cindy
 #
@@ -8,6 +8,7 @@
 #   <Cindy.app>/Contents/Resources/cli/cindy
 # 反推 .app 根目录。因此即使 app 被移动位置,已装好的 symlink 仍然可用,无需重装
 # (与 VS Code 的 bin/code 同一思路)。
+PROG=$(basename "$0")
 SELF="$0"
 while [ -h "$SELF" ]; do
   link=$(readlink "$SELF")
@@ -24,19 +25,24 @@ if [ "$#" -eq 0 ]; then
   exec open -a "$APP"
 fi
 
-# 有参数:把每个参数解析成绝对路径(cindy . → 当前目录绝对路径),再交给
-# `open -a`;目录会通过 app 的 open-file 管线落成工作目录。用 append+shift 惯用法
-# 原地重建位置参数,for 快照原始列表,循环内改写 $@ 不影响遍历。
-for arg in "$@"; do
-  if [ -d "$arg" ]; then
-    abs=$(cd "$arg" >/dev/null 2>&1 && pwd)
-  elif [ -e "$arg" ]; then
-    dir=$(cd "$(dirname "$arg")" >/dev/null 2>&1 && pwd) && abs="$dir/$(basename "$arg")"
-  else
-    abs="$arg"
-  fi
-  set -- "$@" "$abs"
-  shift
-done
+# 只接受单个路径:app 冷启动时目录经 open-file → handleIncomingOpenFolder 落地,
+# main 侧只有单个 pending 槽,窗口未就绪时多路径会互相覆盖、静默丢失。与其悄悄丢,
+# 不如显式拒绝,让用户分多次调用。
+if [ "$#" -gt 1 ]; then
+  echo "$PROG: 一次只能打开一个路径(收到 $# 个)。请分多次运行,例如:$PROG ." >&2
+  exit 2
+fi
 
-exec open -a "$APP" "$@"
+# 把参数解析成绝对路径(cindy . → 当前目录绝对路径),再交给 `open -a`;目录会通过
+# app 的 open-file 管线落成工作目录。`--` 结束选项解析,避免以 - 开头的路径被 open
+# 当成自身选项。
+arg="$1"
+if [ -d "$arg" ]; then
+  abs=$(cd "$arg" >/dev/null 2>&1 && pwd)
+elif [ -e "$arg" ]; then
+  dir=$(cd "$(dirname "$arg")" >/dev/null 2>&1 && pwd) && abs="$dir/$(basename "$arg")"
+else
+  abs="$arg"
+fi
+
+exec open -a "$APP" -- "$abs"
