@@ -368,6 +368,12 @@ interface SessionInputState {
   /** Codex emits terminal error followed by done; queued work must not drain between the pair. */
   pendingExternalTerminalDone: boolean;
   pendingExternalTerminalDoneTimer: ReturnType<typeof setTimeout> | null;
+  /**
+   * Identity of the current user-stop abort boundary. An old abort promise may
+   * settle after clearSession/new turn; its cleanup must not release the newer
+   * turn's boundary or clear its activeTurn.
+   */
+  abortBoundaryToken: symbol | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
   /**
@@ -408,6 +414,7 @@ function createInitialInputState(generation = 0): SessionInputState {
     drainWakeupGeneration: 0,
     pendingExternalTerminalDone: false,
     pendingExternalTerminalDoneTimer: null,
+    abortBoundaryToken: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
     credentialSwitchWait: null,
@@ -1417,6 +1424,9 @@ export class AgentInputCoordinator {
     // Stop 出来的暂停是用户显式意图,不许后续新输入静默放行(区别于崩溃恢复暂停)。
     state.queuePausedByRestore = false;
     state.queueAbortPending = shouldPause && this.isDispatchBoundaryBusy(sessionId, state);
+    const abortBoundaryToken = Symbol('agent-input-abort-boundary');
+    const abortBoundaryGeneration = state.generation;
+    state.abortBoundaryToken = abortBoundaryToken;
     state.steeringQueueClientIds = [];
     state.queueExpanded = false;
     this.emit(sessionId);
@@ -1426,6 +1436,21 @@ export class AgentInputCoordinator {
         log.warn('abortSession failed', { sessionId, error: errorMessage(err) });
       })
       .finally(() => {
+        const current = this.states.get(sessionId);
+        if (
+          current !== state ||
+          current.generation !== abortBoundaryGeneration ||
+          current.abortBoundaryToken !== abortBoundaryToken
+        ) {
+          // clearSession, a newer Stop, or a terminal event has superseded this
+          // abort. Its late promise must not touch the current session state.
+          log.info('ignoring stale abort completion', {
+            sessionId,
+            abortBoundaryGeneration,
+            currentGeneration: current?.generation,
+          });
+          return;
+        }
         // `Session.abort()` can reject after the vendor process has already
         // stopped.  That is a real abort boundary, but status/terminal events
         // are allowed to be lost (for example while the app-session owner is
@@ -1876,6 +1901,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
     state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     if (type === 'error') {
       if (active?.persisted) {
         state.activeTurn = null;
@@ -2044,12 +2070,14 @@ export class AgentInputCoordinator {
         this.handleActiveTurnClosedBeforeDispatch(sessionId, state, active);
       }
       state.queueAbortPending = false;
+      state.abortBoundaryToken = null;
       state.steeringQueueClientIds = [];
       this.emit(sessionId);
       return;
     }
     state.activeTurn = null;
     state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     state.steeringQueueClientIds = [];
     this.emit(sessionId);
     if (releasedAbortLock) this.scheduleDrain(sessionId, 'session-closed-abort-boundary');
@@ -2884,6 +2912,7 @@ export class AgentInputCoordinator {
     }
     if (!state.queueAbortPending && !opts?.clearActiveTurn) return;
     state.queueAbortPending = false;
+    state.abortBoundaryToken = null;
     this.emit(sessionId);
     this.scheduleDrain(sessionId, reason);
   }

@@ -3591,6 +3591,44 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(latestProjection(h.projections).queueAbortPending).toBe(false);
   });
 
+  it('ignores an old abort completion after clearSession starts a new turn', async () => {
+    const h = createHarness();
+    const sid = 'stop-abort-clear-new-turn';
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind: 'codex' },
+    });
+    const replacement = makeItem('q-new', 'replacement', {
+      createOpts: { ...makeItem('tmp-new', 'tmp-new').createOpts, agentKind: 'codex' },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind('codex');
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+
+    // The user explicitly resets the session while the old abort RPC is still
+    // pending, then starts a new turn in the replacement state.
+    h.coordinator.clearSession(sid);
+    h.setRunning(false);
+    h.coordinator.enqueue(sid, replacement);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    h.reconcileTurnIdle.mockReturnValueOnce(true);
+    abort.resolve();
+    await flush();
+
+    const state = (
+      h.coordinator as unknown as {
+        getState: (id: string) => { activeTurn: { item: AgentInputQueuedMessage | null } | null };
+      }
+    ).getState(sid);
+    expect(state.activeTurn?.item?.clientId).toBe('q-new');
+    expect(h.reconcileTurnIdle).not.toHaveBeenCalled();
+  });
+
   it('keeps Codex queue abort lock until a real turn boundary', async () => {
     const h = createHarness();
     const sid = 'stop-codex';

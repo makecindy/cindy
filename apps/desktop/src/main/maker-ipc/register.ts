@@ -3571,9 +3571,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
         refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
         gitSnapshotCoordinator?.onSessionClosed(session.id);
-        wiredSessionsById.delete(session.id);
-        for (const dispose of registration.disposers) dispose();
-        session.setInteractionListener(null);
         clearOrcaMcpHydrated(session.id);
         knownNonOrcaSessionIds.delete(session.id);
         lastReportedCostUsdBySession.delete(session.id);
@@ -3592,6 +3589,28 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           error: err instanceof Error ? err.message : String(err),
         });
       } finally {
+        // Wiring teardown is independent of the best-effort product cleanup
+        // above. A single disposer or listener error must not leave a closed
+        // session reachable from the in-memory routing map.
+        wiredSessionsById.delete(session.id);
+        for (const dispose of registration.disposers) {
+          try {
+            dispose();
+          } catch (err) {
+            log.warn('session disposer failed during close teardown', {
+              sessionId: session.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        try {
+          session.setInteractionListener(null);
+        } catch (err) {
+          log.warn('session interaction listener teardown failed', {
+            sessionId: session.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
         // This must run even when an owner-boundary-sensitive cleanup above
         // rejects. A closed Session cannot keep the desktop turn boundary busy.
         sessionTurnActivityTracker.deleteSession(session.id);
@@ -7496,12 +7515,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       try {
         await sess.abort();
       } finally {
-        // Abort may reject after the Claude process is already dead (and its
-        // status listener may have failed during an app-session switch). Do
-        // not let that leave the tracker busy or interaction waiters alive.
-        if (!sess.isTurnRunning()) {
-          reconcileSessionTurnIdle(sessionId, 'abort');
-        }
+        // The coordinator owns idle reconciliation after this promise settles,
+        // so its boolean result is not consumed twice. Interaction waiters are
+        // still always released even when the vendor abort rejects.
         cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
       }
     },
