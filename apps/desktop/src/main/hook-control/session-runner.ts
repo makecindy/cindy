@@ -479,23 +479,29 @@ export function createMakerHookSessionRunner(deps: {
 
       const isTelegramGroupTurn = req.source?.im === 'telegram' && req.laneKind === 'group';
       let reusedPermissionModeToRestore: PermissionMode | null = null;
+      let telegramGroupSafePermissionMode: PermissionMode | null = null;
+      let telegramGroupUnsupportedPermissionModes: readonly PermissionMode[] = [];
       if (isTelegramGroupTurn) {
         const capabilities = maker.getCapabilities(effectiveAgentKind);
         const policyCapability = capabilities.turnPermissionPolicy;
         if (policyCapability?.supported.supported !== true) {
           return fail('The selected agent cannot enforce Telegram group permissions.');
         }
-        if (policyCapability.unsupportedPermissionModes.includes(permissionMode)) {
-          const safeMode = capabilities.permissionModes.find(
+        telegramGroupUnsupportedPermissionModes = policyCapability.unsupportedPermissionModes;
+        telegramGroupSafePermissionMode =
+          capabilities.permissionModes.find(
             (candidate) =>
               candidate.id === 'ask' &&
-              !policyCapability.unsupportedPermissionModes.includes(candidate.id),
-          );
-          if (safeMode === undefined) {
+              !telegramGroupUnsupportedPermissionModes.includes(candidate.id),
+          )?.id ?? null;
+        // Fresh sessions have no prior live mode to restore. Reused sessions
+        // keep their persisted mode through creation and switch only after the
+        // turn reservation, based on the then-current live state.
+        if (req.isNew && telegramGroupUnsupportedPermissionModes.includes(permissionMode)) {
+          if (telegramGroupSafePermissionMode === null) {
             return fail('The selected agent has no safe permission mode for Telegram groups.');
           }
-          if (!req.isNew) reusedPermissionModeToRestore = permissionMode;
-          permissionMode = safeMode.id;
+          permissionMode = telegramGroupSafePermissionMode;
         }
       }
 
@@ -993,7 +999,21 @@ export function createMakerHookSessionRunner(deps: {
                 // no temporary mode switch.
                 releaseTelegramGroupTurnLease ??= session.acquireTurnLease();
               }
-              if (reusedPermissionModeToRestore !== null) {
+              if (!req.isNew && isTelegramGroupTurn) {
+                const beforeTemporaryMode = session.permissionModeState;
+                const livePermissionMode = beforeTemporaryMode.mode;
+                if (livePermissionMode === null) {
+                  throw new Error('The live session permission mode is unavailable.');
+                }
+                if (!telegramGroupUnsupportedPermissionModes.includes(livePermissionMode)) {
+                  return;
+                }
+                const safePermissionMode = telegramGroupSafePermissionMode;
+                if (safePermissionMode === null) {
+                  throw new Error(
+                    'The selected agent has no safe permission mode for Telegram groups.',
+                  );
+                }
                 // Claude can report the foreground turn done while background
                 // tasks still own automatic continuations. Keep the Session
                 // exclusive until the observer settles those tasks and the
@@ -1001,11 +1021,11 @@ export function createMakerHookSessionRunner(deps: {
                 // Mark first: setPermissionMode can partially mutate before a
                 // transport error, in which case the outer finally must still
                 // make a best-effort restore.
-                const beforeTemporaryMode = session.permissionModeState;
+                reusedPermissionModeToRestore = livePermissionMode;
                 reusedPermissionModeApplied = true;
                 try {
                   reusedPermissionModeLease =
-                    await session.setPermissionModeTracked(permissionMode);
+                    await session.setPermissionModeTracked(safePermissionMode);
                 } catch (error) {
                   reusedPermissionModeLease = beforeTemporaryMode;
                   throw error;

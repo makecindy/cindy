@@ -745,8 +745,12 @@ describe('hook session-runner 的 userSendAt 时序(未分类误判回归)', () 
 describe('进度快照(turn.progress 链路)', () => {
   /** 不自动 done 的 fake session: 测试手动驱动事件流。 */
   function makeManualSession(id: string) {
+    const permission = makePermissionModeFake();
     return {
-      ...makePermissionModeFake(),
+      ...permission,
+      get permissionModeState() {
+        return permission.permissionModeState;
+      },
       id,
       workDir: 'D:/repo',
       onEvent(
@@ -1199,10 +1203,49 @@ describe('进度快照(turn.progress 链路)', () => {
 
     expect(outcome.status).toBe('ok');
     expect(fakeMaker.createSession).toHaveBeenCalledWith(
-      expect.objectContaining({ permissionMode: 'ask' }),
+      expect.objectContaining({ permissionMode: 'bypassPermissions' }),
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
     expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+  });
+
+  it('Telegram 群按 reservation 时用户已收紧的实时权限档决定不恢复旧 Full access', async () => {
+    const session = makeFakeSession('sess-old');
+    session.send.mockImplementationOnce(
+      async (
+        _msg: unknown,
+        opts: {
+          afterTurnReserved?: () => Promise<void> | void;
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ): Promise<unknown> => {
+        // Simulate the user tightening the live session after meta was read but
+        // before this Telegram turn wins the reservation.
+        await session.setPermissionModeTracked('ask');
+        await opts.afterTurnReserved?.();
+        await opts.beforeProviderStart?.();
+        await opts.onAccepted?.();
+        queueMicrotask(() => h.eventCbs.get('sess-old')?.({ type: 'done', data: null }));
+        return { accepted: true };
+      },
+    );
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask']]);
+    expect(session.setPermissionModeIfUnchanged).not.toHaveBeenCalled();
+    expect(session.permissionModeState.mode).toBe('ask');
   });
 
   it('Telegram 群轮次终态同步启动权限恢复并在收口前等完', async () => {
@@ -1288,6 +1331,9 @@ describe('进度快照(turn.progress 链路)', () => {
       permissionMode: 'ask',
     });
     const session = makeManualSession('sess-old');
+    await session.setPermissionModeTracked('ask');
+    session.setPermissionMode.mockClear();
+    session.setPermissionModeTracked.mockClear();
     fakeMaker.createSession.mockResolvedValueOnce(session);
     const runner = createMakerHookSessionRunner({ log });
     const pending = runner.run(
