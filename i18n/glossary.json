@@ -1192,6 +1192,17 @@
       "note": "issue #882：模型管理/新对话选择器的分类标签，对应网关的文档压缩类模型（如 ai-gateway-doc）。此前被硬编码为笼统的 other 分类。"
     },
     {
+      "id": "api-price-estimate",
+      "status": "proposed",
+      "en": "API Price Estimate",
+      "translations": {
+        "zh-CN": "API 估价",
+        "ja": "API 料金見積もり",
+        "ko": "API 가격 추정치"
+      },
+      "note": "用户为自有 API、OAuth 或订阅通道维护的本地 token 单价估算；只影响 Cindy 的用量价值估算，不代表供应商实际账单，也不覆盖 Cindy AI Gateway 的服务端实售价。先登记为 proposed，待产品术语评审后固化。"
+    },
+    {
       "id": "context-window",
       "status": "proposed",
       "en": "Context window",

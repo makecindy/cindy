@@ -33,6 +33,8 @@ export const HOOK_CONTROL_INVOKE = {
   SET_LIFECYCLE_ANNOUNCEMENT: 'maker:hook-control:set-lifecycle-announcement',
   /** 覆写工作目录清单(别名 -> 本地绝对路径, 全量替换)。 */
   SET_WORKSPACES: 'maker:hook-control:set-workspaces',
+  /** 设置 X 派发任务的默认工作目录(null / 「对话」= 内置伪目录)。 */
+  SET_X_DEFAULT_WORKSPACE: 'maker:hook-control:set-x-default-workspace',
   /** 发起 Slack 账号绑定(bind.start; SIWS OIDC, 无参数)。 */
   BIND_START: 'maker:hook-control:bind-start',
   /** 解除 Slack 账号绑定(bind.revoke)。 */
@@ -134,6 +136,13 @@ export interface ProviderHookView {
   /** 尚未收到任何 welcome；用于首开时先显示入口、连接后再权威收敛。 */
   capabilityPending: boolean;
   binding: ProviderBindingView | null;
+  /**
+   * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
+   *
+   * **目前只有 X 会给出非 null 值**: Slack / Telegram 能在会话里当场选目录,
+   * X 一次交互只有一条公开推文, 没有承载选择面板的位置, 只能靠这个预设。
+   */
+  defaultWorkspace: string | null;
 }
 
 /** @deprecated 兼容别名;新代码用 ProviderHookView。 */

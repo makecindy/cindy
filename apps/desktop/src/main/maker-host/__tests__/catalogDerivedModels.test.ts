@@ -63,10 +63,14 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
     ]);
     expect(codex.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
     ]);
   });
 
@@ -106,7 +110,9 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(ids).toEqual([
       'claude-opus-4-8',
       'chatgpt/gpt-5.5',
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
       'gpt-5.5',
     ]);
     // 首见胜出:opus 取 anthropic 条目(supportsFastMode=true),不是 xd 的 false。

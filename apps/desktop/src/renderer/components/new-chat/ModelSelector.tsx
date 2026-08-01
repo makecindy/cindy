@@ -788,7 +788,12 @@ function ModelSelectorContentView({
       (currentAgentKind
         ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
         : null);
-    const quote = getModelPriceQuote(pricing, effectiveProviderId, id);
+    const quote = getModelPriceQuote(
+      pricing,
+      effectiveProviderId,
+      id,
+      currentAgentKind ?? undefined,
+    );
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
       if (!quote && pricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);

@@ -24,16 +24,17 @@ import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyMod
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
+  getClaudeSubscriptionValuePrice,
+  getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
   getModelPricing,
   getSubscriptionDirectValuePrice,
   isModelPricingRefreshInFlight,
+  readModelPriceOverridesSnapshot,
+  type ModelPriceOverridesSnapshot,
   type ModelPricingMap,
 } from './modelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
-import {
-  getModelPriceQuote,
-} from '../../shared/modelPriceQuote.js';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
@@ -225,6 +226,8 @@ export interface UsageHistoryDeps {
   getAllSpendDays(): Promise<Array<{ day: string; money: RegionalMoney }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
   getModelPricing(): Promise<ModelPricingMap | null>;
+  /** 覆盖记录快照,一次聚合读一份——历史重合并逐行读文件会在慢盘上拖垮 Main 线程。 */
+  getModelPriceOverridesSnapshot(): ModelPriceOverridesSnapshot;
   isModelPricingRefreshInFlight(): boolean;
   todayKey(): string;
 }
@@ -233,6 +236,7 @@ const defaultDeps: UsageHistoryDeps = {
   getAllSpendDays,
   getModelUsageSince,
   getModelPricing,
+  getModelPriceOverridesSnapshot: readModelPriceOverridesSnapshot,
   isModelPricingRefreshInFlight,
   todayKey: () => localDayKey(),
 };
@@ -345,23 +349,27 @@ export function claudeSubscriptionUsageModelKey(model: string): string {
 
 /**
  * 订阅行的估算价选取,按 agent 分流:
- *   - codex → 订阅直连(chatgpt/ / xai/)静态价 →
- *     既有 getCodexSubscriptionValuePrice(网关价 + OpenAI 静态兜底表)
- *   - claude-code → 网关价表精确条目(带 cache 档价)→ Anthropic 家族牌价兜底
- * 两级都 miss → undefined(该行只显示 token,不臆造金额)。
+ *   - codex → 订阅直连(chatgpt/ / xai/)registry 参考价 → OpenAI registry 参考价
+ *     → Anthropic registry 参考价(Codex 显式选内置 anthropic 的 Claude.ai 订阅轮;
+ *     模型 id 只会命中各自 provider 的路由,依次尝试不会串价)
+ *   - claude-code → Anthropic registry 参考价
+ * 各级都 miss → undefined(该行只显示 token,不臆造金额)。
  */
 function getSubscriptionValuePriceFor(
   agentKind: 'claude-code' | 'codex',
   model: string,
   pricing: ModelPricingMap | null,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
     return (
-      getSubscriptionDirectValuePrice(model) ??
-      getCodexSubscriptionValuePrice(model, pricing)
+      getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
+      getCodexSubscriptionValuePrice(model, pricing, at, overrides) ??
+      getCodexProviderSubscriptionValuePrice('anthropic', model, pricing, at, overrides)
     );
   }
-  return getModelPriceQuote(pricing, 'anthropic', model);
+  return getClaudeSubscriptionValuePrice(model, pricing, at, overrides);
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -567,12 +575,17 @@ export async function readUsageHistoryWith(
   }
   const days = [...daysMap.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   // pricing 在函数开头已与消费行并行取好(见那里的 race 注释)。
+  // 覆盖记录也在这里读一次快照:缺价检查、模型聚合、每日明细三条遍历共用,
+  // 避免历史重合并按 model-day 逐行 stat 覆盖文件。
+  const priceOverrides = deps.getModelPriceOverridesSnapshot();
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
     !getSubscriptionValuePriceFor(
       r.agentKind === 'codex' ? 'codex' : 'claude-code',
       displayModelName(r.model),
       pricing,
+      r.day,
+      priceOverrides,
     ),
   );
   const estimatesPending =
@@ -580,6 +593,7 @@ export async function readUsageHistoryWith(
     deps.isModelPricingRefreshInFlight();
 
   const byKey = new Map<string, UsageHistoryModel>();
+  const subscriptionEstimatesByKey = new Map<string, RegionalMoney[]>();
   let todayTokens = 0;
   let last30DaysTokens = 0;
   for (const row of modelRows) {
@@ -617,15 +631,25 @@ export async function readUsageHistoryWith(
     agg.outputTokens += row.outputTokens;
     agg.cacheReadTokens += row.cacheReadTokens;
     agg.cacheCreateTokens += row.cacheCreateTokens;
-  }
-  for (const [key, m] of byKey) {
-    const modelKey = key.slice(key.indexOf('\u0000') + 1);
-    if (m.money.amount === 0 && isSubscriptionUsageModel(modelKey)) {
-      m.estimatedMoney = computePriceQuoteTurnMoney(
-        m,
-        getSubscriptionValuePriceFor(m.agentKind, m.model, pricing),
+    if (row.money.amount === 0 && isSubscriptionUsageModel(row.model)) {
+      const estimate = computePriceQuoteTurnMoney(
+        row,
+        getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
         ledgerCurrency,
       );
+      if (estimate?.amount) {
+        const estimates = subscriptionEstimatesByKey.get(key) ?? [];
+        estimates.push(estimate);
+        subscriptionEstimatesByKey.set(key, estimates);
+      }
+    }
+  }
+  for (const [key, m] of byKey) {
+    if (m.money.amount === 0) {
+      const estimates = subscriptionEstimatesByKey.get(key);
+      if (estimates?.length) {
+        m.estimatedMoney = addCompatibleRegionalMoney(estimates, ledgerCurrency);
+      }
     }
   }
   const models = [...byKey.values()];
@@ -640,7 +664,7 @@ export async function readUsageHistoryWith(
       apiMoney.amount === 0 && isSubscriptionUsageModel(row.model)
         ? (computePriceQuoteTurnMoney(
             row,
-            getSubscriptionValuePriceFor(agentKind, model, pricing),
+            getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
             ledgerCurrency,
           ) ?? zeroEstimate())
         : zeroEstimate();

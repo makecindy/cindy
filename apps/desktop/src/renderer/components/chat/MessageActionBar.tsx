@@ -51,7 +51,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { toast } from '@/lib/toast';
 import { formatAbsolute, useRelativeTime } from '@/hooks/useRelativeTime';
-import { formatTurnCostMoney } from '@/lib/usageFormat';
+import { formatCompactTokens, formatTurnCostMoney } from '@/lib/usageFormat';
 import { buildTurnUsageTooltipLines } from '@/lib/turnUsageTooltip';
 import type { TurnUsageDetails } from '../../../shared/turnUsageDetails';
 import {
@@ -348,19 +348,20 @@ export function MessageActionBar({
       )
     );
 
+  // 时间戳之后那一格的排版口径:与 timeText 同为 12px 次要文本 + 0.5px 光学修正;
+  // bar 的 gap-0.5(2px)对两段相邻文本太挤,额外 6px 左距(共 8px)让「时间 | 用量」
+  // 读成两个独立信息组。金额与 token 回退共用同一套 —— 换的是内容,不是位置。
+  const metaTextClassName = cn(
+    'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
+    'relative top-[0.5px]',
+    'ml-1.5',
+    'text-[var(--settings-section-desc)] cursor-default',
+  );
+
   const costText = displayedMoney && displayedMoney.amount > 0 && (
     <Tooltip.Root key="cost">
       <Tooltip.Trigger asChild>
-        <span
-          className={cn(
-            'inline-flex h-[24px] items-center text-[12px] font-normal whitespace-nowrap',
-            'relative top-[0.5px]',
-            // 与时间戳同为 12px 文本,bar 的 gap-0.5(2px)对两段相邻文本太挤 —
-            // 额外 6px 左距(共 8px)让时间 / 费用读起来是两个独立信息组。
-            'ml-1.5',
-            'text-[var(--settings-section-desc)] cursor-default',
-          )}
-        >
+        <span className={metaTextClassName}>
           {displayedCostIsEstimate
             ? t('chat.messageActionBar.turnCostEstimatedValue', {
                 cost: formatTurnCostMoney(displayedMoney),
@@ -373,6 +374,28 @@ export function MessageActionBar({
       </Tooltip.Content>
     </Tooltip.Root>
   );
+
+  // 金额缺席时的回退:显示本轮 token 总量。成因可能是网关目录整体不下发价格、
+  // 模型不在价表、或订阅估值也 miss —— 对用户都一样,这一格不该因此空着。
+  // 钱算不出来不代表用量算不出来:明细由 main 在 turn 结束时落库,与金额同源。
+  const tokensText = !(displayedMoney && displayedMoney.amount > 0) &&
+    turnUsageDetails &&
+    turnUsageDetails.totalTokens > 0 && (
+      <Tooltip.Root key="tokens">
+        <Tooltip.Trigger asChild>
+          <span className={metaTextClassName}>
+            {t('chat.messageActionBar.turnTokens', {
+              tokens: formatCompactTokens(turnUsageDetails.totalTokens),
+            })}
+          </span>
+        </Tooltip.Trigger>
+        <Tooltip.Content>
+          <span className="whitespace-pre-line">
+            {buildTurnUsageTooltipLines({ details: turnUsageDetails, t }).join('\n')}
+          </span>
+        </Tooltip.Content>
+      </Tooltip.Root>
+    );
 
   // Edit (Pencil) button — last user message only. Enters the inline edit
   // state owned by UserMessage; no in-flight state here (entering edit is
@@ -547,7 +570,7 @@ export function MessageActionBar({
   // align='right' → [time][copy][edit][more]        (user)
   const items =
     align === 'left'
-      ? [copyBtn, moreMenu, timeText, costText]
+      ? [copyBtn, moreMenu, timeText, costText || tokensText]
       : [timeText, copyBtn, editBtn, moreMenu];
 
   return (

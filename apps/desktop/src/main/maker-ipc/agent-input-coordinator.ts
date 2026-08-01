@@ -129,6 +129,8 @@ export interface AgentInputCoordinatorDeps {
   ) => Promise<void>;
   abortSession: (sessionId: string) => Promise<void>;
   isTurnRunning: (sessionId: string) => boolean;
+  /** maker-core turn 代号；steer 跨 await 后据此验证仍属于开始时的同一 vendor turn。 */
+  getTurnGeneration?: (sessionId: string) => number | null;
   /**
    * Reconcile the host's live session/tracker view after an abort or a
    * maker-core NO_ACTIVE_TURN. The event-driven tracker can stay stale when a
@@ -150,6 +152,17 @@ export interface AgentInputCoordinatorDeps {
    * 判定走 DB(代码确定性,规则 9);未注入时一律按零产出处理(向后兼容)。
    */
   hasAssistantProgressAfter?: (sessionId: string, userClientId: string) => Promise<boolean>;
+  /**
+   * retry-supersede:零产出重试的克隆行(supersedesUserClientId 非空)落库且 vendor
+   * 派发成功后,把被取代的旧 user 行与其后的 role='error' 行软删(置 rewind_at +
+   * 广播),让历史里只留重发的那一条。在派发已不可逆的边界 await 调用(与
+   * onDispatchedUserTurn 同侧):派发前取消时旧 error 行还是用户唯一的重试入口,
+   * 不能先藏。失败只吞错落日志,退回"显示两条"的旧观感;未注入 = 保持旧行为。
+   */
+  supersedeRetriedUserTurn?: (
+    sessionId: string,
+    args: { supersededUserClientId: string; retryUserClientId: string },
+  ) => Promise<unknown>;
   getLastAssistantTranscriptUuid?: (sessionId: string) => string | undefined;
   /**
    * 一个**留下了 active-turn recovery 入口**的 terminal error 刚落地。host 据此决定
@@ -296,6 +309,8 @@ interface ActiveTurn {
   sendStarted: boolean;
   dispatchLifecycle: ActiveTurnDispatchLifecycle;
   pendingTerminalEvent: ActiveTurnTerminalEvent | null;
+  /** 当前 vendor turn 由哪条 Continue 合成项发起；同轮 steer 会继承它。 */
+  continuationOwnerClientId: string | null;
   controlKind?: 'compact';
 }
 
@@ -1037,6 +1052,7 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId: null,
       controlKind: 'compact',
     };
     state.activeTurn = active;
@@ -1167,6 +1183,11 @@ export class AgentInputCoordinator {
     const messageUuid = crypto.randomUUID();
     const createdAt = new Date().toISOString();
     const steerGeneration = state.generation;
+    // steer ack 期间原 turn 可能先收到 terminal 事件并清掉 activeTurn。owner 是本次
+    // 注入开始时就已确定的 vendor-turn 身份，必须在 await 前快照，不能等 ack 后再从
+    // 可能已经清空的 activeTurn 读取。
+    const steerContinuationOwnerClientId = state.activeTurn?.continuationOwnerClientId ?? null;
+    const steerVendorTurnGeneration = this.deps.getTurnGeneration?.(sessionId) ?? null;
     this.clearErrorUnlessQueueHeadBlocked(state, item.clientId);
     state.queuePaused = false;
     if (!state.steeringQueueClientIds.includes(item.clientId)) {
@@ -1345,6 +1366,9 @@ export class AgentInputCoordinator {
     accepted.stickyError = null;
     accepted.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(accepted);
+    const sameVendorTurn =
+      steerVendorTurnGeneration !== null &&
+      this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
       item,
       delivery: 'steer',
@@ -1356,6 +1380,12 @@ export class AgentInputCoordinator {
       sendStarted: true,
       dispatchLifecycle: 'dispatched',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        item.originalSyntheticTrigger === 'continue'
+          ? item.clientId
+          : sameVendorTurn
+            ? steerContinuationOwnerClientId
+            : null,
     };
     this.emit(sessionId);
 
@@ -1429,6 +1459,12 @@ export class AgentInputCoordinator {
     state.stickyError = null;
     state.recovery = null;
     this.cancelPreSendActiveTurn(sessionId, state, preserveQueue);
+    // 用户显式 Stop 立即结束续跑行的 vendor-turn 归属。已跨过 vendor dispatch
+    // 的 activeTurn 仍需保留到 abort/terminal 收口，以维持队列边界；这里只清 owner，
+    // 让本次 stop projection 不再把「重新连接中」误判为仍在飞。
+    if (state.activeTurn && state.activeTurn.continuationOwnerClientId !== null) {
+      state.activeTurn.continuationOwnerClientId = null;
+    }
     const shouldPause = Boolean(preserveQueue && opts?.pauseQueue && state.pendingQueue.length > 0);
     state.queuePaused = shouldPause;
     // Stop 出来的暂停是用户显式意图,不许后续新输入静默放行(区别于崩溃恢复暂停)。
@@ -1587,6 +1623,10 @@ export class AgentInputCoordinator {
           // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
           files: undefined,
           mentions: undefined,
+          // retry-supersede 只属于零产出克隆重发。续跑分支的原消息是真实历史,
+          // 不取代;展开继承的旧值若留着,落库后会把本轮"有产出失败"的 error 行
+          // 一并误藏(窗口从更早的行一直铺到本条)。
+          supersedesUserClientId: undefined,
           // 合成续跑指令显式普通执行:原消息若带 planMode=true,原样克隆会把隐藏
           // 指令路由进计划模式而不是立刻续跑(review P2)。与 sendUiTrigger 的
           // 合成 UI 动作同语义 —— planMode 强制 false。
@@ -1619,6 +1659,11 @@ export class AgentInputCoordinator {
         item = {
           ...recovery.item,
           clientId,
+          // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
+          // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
+          // 显式覆盖而非依赖展开继承:recovery.item 可能带着上一轮已消费的旧值
+          // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
+          supersedesUserClientId: recovery.item.clientId,
           chatMessage: {
             ...recovery.item.chatMessage,
             clientId,
@@ -2154,6 +2199,7 @@ export class AgentInputCoordinator {
         state.activeTurn?.item?.originalSyntheticTrigger === 'continue'
           ? state.activeTurn.item.clientId
           : null,
+      continuationTurnClientId: state.activeTurn?.continuationOwnerClientId ?? null,
       steeringQueueClientIds: [...state.steeringQueueClientIds],
       queuePaused: state.queuePaused,
       queueExpanded: state.queueExpanded,
@@ -2293,6 +2339,8 @@ export class AgentInputCoordinator {
       sendStarted: false,
       dispatchLifecycle: 'preparing',
       pendingTerminalEvent: null,
+      continuationOwnerClientId:
+        head.originalSyntheticTrigger === 'continue' ? head.clientId : null,
     };
     state.activeTurn = active;
     this.emit(sessionId);
@@ -2417,6 +2465,31 @@ export class AgentInputCoordinator {
           clientId: head.clientId,
           error: err instanceof Error ? err.message : String(err),
         });
+      }
+      // retry-supersede:克隆重发行既落库又真正派发出去了,被取代的旧 user 行从此
+      // 冗余,软删它(连同其后的 error 行)。落在这里而不是 onPersisted 里:落库到
+      // 派发之间还夹着 beforeDispatch / onAccepted 两个 hook,期间停止或关闭会话会走
+      // cancelled-before-dispatch —— 那时若已软删,历史里只剩一条从未送达模型的克隆
+      // 消息,原失败的 error 行连同它上面的「重试」入口一起消失(与上面 durable-ack
+      // 同一个「派发已不可逆才动持久化状态」的边界理由)。
+      // await 而非 fire-and-forget:软删先落库再继续推进本 turn,把"克隆已落库、旧行
+      // 还在"的窗口压到最小。软删失败(或崩在这个窗口里)只退回"显示两条"的旧观感,
+      // 文本已经保存在克隆行里,用户的消息不会丢。
+      if (head.supersedesUserClientId) {
+        const supersededUserClientId = head.supersedesUserClientId;
+        try {
+          await this.deps.supersedeRetriedUserTurn?.(sessionId, {
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+          });
+        } catch (err) {
+          log.warn('supersedeRetriedUserTurn failed', {
+            sessionId,
+            supersededUserClientId,
+            retryUserClientId: head.clientId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       }
       if (this.discardOnStaleActiveTurn(sessionId, active)) return;
       if (active.pendingTerminalEvent) {

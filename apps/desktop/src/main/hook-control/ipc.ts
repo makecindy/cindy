@@ -33,7 +33,12 @@ import {
   onUiTurnDispatching,
   onUiTurnUndispatched,
 } from '../maker-ipc/uiContinuationSignal.js';
-import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  throwIpcError,
+  requireObject,
+  requireNullableString,
+  requireString,
+} from '../utils/ipcValidate.js';
 import {
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
@@ -130,6 +135,7 @@ function disabledHookView(): SlackHookView {
       available: false,
       capabilityPending: false,
       binding: null,
+      defaultWorkspace: null,
     },
     x: {
       enabled: false,
@@ -139,6 +145,7 @@ function disabledHookView(): SlackHookView {
       available: false,
       capabilityPending: false,
       binding: null,
+      defaultWorkspace: null,
     },
   };
 }
@@ -642,6 +649,20 @@ export function registerHookControlIpc(): void {
     // 别名清单变更要让 server 侧感知: 在线时直接重发 hello(server 以最新
     // 一帧为准, 连接不动 —— 整条重建会让设置页状态/偏好区闪烁); 未连接时
     // 回退重建, 下次建连的 hello 自带新清单
+    if (!m.refreshHello()) m.sync();
+    return { hook: m.snapshot() };
+  });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_DEFAULT_WORKSPACE, (_e, payload) => {
+    requireHookControl();
+    const { store: s, manager: m } = ensureInstances();
+    const p = requireObject(payload);
+    // 只认显式的 null 或字符串: 这里的 null 是「清空默认目录」这个破坏性动作,
+    // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
+    const alias = requireNullableString(p.alias, 'alias');
+    translateValidation(() => s.setXDefaultWorkspace(alias));
+    // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
+    // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
     if (!m.refreshHello()) m.sync();
     return { hook: m.snapshot() };
   });

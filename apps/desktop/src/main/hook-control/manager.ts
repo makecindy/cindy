@@ -1023,6 +1023,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       capabilityPending: enabled && url.length > 0 && !lane.serverWelcomeReceived,
       binding:
         lane.binding === null ? null : { ...lane.binding, actions: [...lane.binding.actions] },
+      // store 侧已保证读出来的别名仍然有效(目录删掉即归零), 这里直投。
+      defaultWorkspace: lane.config.provider === 'x' ? store.get().xDefaultWorkspace : null,
     };
   }
 
@@ -1589,20 +1591,30 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function buildHello(
     features: readonly string[],
     includeLifecycleAnnouncement = false,
+    provider?: NeutralHookProvider,
   ): HelloInput {
     // 每次连接成功都重读配置 —— 别名映射变更后重连即生效
     const device = deviceInfo();
+    const config = store.get();
     return {
       deviceId: device.deviceId,
       deviceName: device.deviceName,
       // 内置「对话」伪目录恒在清单第一位(与真实目录同级; Set 去重防存量撞名)
-      workspaces: [...new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(store.get().workspaces)])],
+      workspaces: [...new Set([HOOK_CHAT_WORKSPACE_ALIAS, ...Object.keys(config.workspaces)])],
       agents,
       // 每条连接只声明其服务会实际使用的能力，避免把 provider-neutral wire 误投
       // 到 Slack 服务，也保持老 Slack hello 的兼容面最小。
       features: [...features],
       ...(includeLifecycleAnnouncement
         ? { lifecycleAnnouncement: lifecycleAnnouncementEnabled() }
+        : {}),
+      // 默认工作目录目前只有 X 需要 —— Slack / Telegram 能在会话里当场选目录,
+      // X 一条推文里没有选择面板的位置。协议字段本身是 provider 无关的, 将来
+      // 别的渠道要用直接在这里加分支即可。
+      // store 侧已保证读出来的别名仍在 workspaces 里(目录删掉即归零), 所以这里
+      // 不再复核 —— 复核两遍反而会让"哪边是权威"变模糊。
+      ...(provider === 'x' && config.xDefaultWorkspace !== null
+        ? { defaultWorkspace: config.xDefaultWorkspace }
         : {}),
     };
   }
@@ -2355,7 +2367,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       url,
       getAuthToken,
       refreshAuthToken,
-      buildHello: () => buildHello(lane.config.helloFeatures),
+      buildHello: () => buildHello(lane.config.helloFeatures, false, lane.config.provider),
       onMessage: (msg, send) => handleBusinessMessage(provider, msg, send),
       onWelcome: (payload) => {
         if (created === null || lane.transport !== created) return;
@@ -2456,7 +2468,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       for (const lane of lanes) {
         if (lane.transport !== null && lane.status === 'connected') {
           attempted = true;
-          sent = lane.transport.send(makeHello(buildHello(lane.config.helloFeatures))) && sent;
+          sent = lane.transport.send(makeHello(buildHello(lane.config.helloFeatures, false, lane.config.provider))) && sent;
         }
       }
       return attempted && sent;

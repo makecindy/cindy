@@ -304,6 +304,28 @@ export function HookConnectionsSection() {
     [applyView, t],
   );
 
+  /**
+   * X 的默认工作目录写入。
+   *
+   * 只有 X 有这个控件: Slack / Telegram 能在会话里当场挑目录, X 一次交互只允许
+   * 回一条公开推文, 没有承载选择面板的位置 —— 不预设的话所有任务都只能落在
+   * 「对话」上, 碰不到本地仓库。
+   */
+  const setXDefaultWorkspace = useCallback(
+    async (alias: string | null) => {
+      try {
+        const requestedAtRevision = ++viewRevisionRef.current;
+        const res = await window.electronAPI.hookControl.setXDefaultWorkspace(alias);
+        if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
+      } catch (err) {
+        toast.error(
+          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.saveFailed'),
+        );
+      }
+    },
+    [applyView, t],
+  );
+
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
       runHookAction(
@@ -701,6 +723,8 @@ export function HookConnectionsSection() {
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
+    /** 非空 = 该卡显示「默认目录」选择器(目前只有 X 传)。 */
+    defaultWorkspace?: { value: string | null },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -735,6 +759,35 @@ export function HookConnectionsSection() {
                     onClick={() => prefsState.selectTeam(tm.teamId)}
                   >
                     {tm.teamName ?? tm.teamId}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {/* X 专属: 默认工作目录。X 一条推文里没有目录选择面板的位置, 不预设
+              就只能永远落在「对话」上、碰不到本地仓库(见 setXDefaultWorkspace)。 */}
+          {defaultWorkspace ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label={t('settings.remoteControl.hook.form.defaultWorkspaceAria')}
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)]"
+              >
+                <span className="max-w-40 truncate">
+                  {t('settings.remoteControl.hook.form.defaultWorkspaceChip', {
+                    name:
+                      defaultWorkspace.value ??
+                      t('settings.tina.chat.title'),
+                  })}
+                </span>
+                <ChevronDown size={12} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void setXDefaultWorkspace(null)}>
+                  {t('settings.tina.chat.title')}
+                </DropdownMenuItem>
+                {Object.keys(hook.workspaces).map((alias) => (
+                  <DropdownMenuItem key={alias} onClick={() => void setXDefaultWorkspace(alias)}>
+                    {alias}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -974,7 +1027,13 @@ export function HookConnectionsSection() {
           ) : null}
 
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
-          {view.enabled ? renderWorkdirSection(prefsState) : null}
+          {view.enabled
+            ? renderWorkdirSection(
+                prefsState,
+                undefined,
+                provider === 'x' ? { value: view.defaultWorkspace } : undefined,
+              )
+            : null}
         </div>
       </ImChannelSettingsCard>
     );

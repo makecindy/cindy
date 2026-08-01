@@ -25,12 +25,28 @@ export interface ModelPriceQuote {
   providerId: string;
   modelId: string;
   currency: MoneyCurrency;
-  source: 'gateway' | 'provider-reference' | 'subscription-reference';
+  source:
+    | 'gateway'
+    | 'provider-reference'
+    | 'subscription-reference'
+    | 'user-override';
   approximate: boolean;
   inputPerMtok: number;
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /**
+   * Context-length pricing bands. minInputTokens is inclusive and maxInputTokens
+   * is exclusive; omitted prices inherit the quote's baseline field.
+   */
+  inputTokenPriceBands?: Array<{
+    minInputTokens: number;
+    maxInputTokens?: number;
+    inputPerMtok?: number;
+    outputPerMtok?: number;
+    cacheReadPerMtok?: number;
+    cacheCreatePerMtok?: number;
+  }>;
   /** Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
   costDiscount?: number;
 }

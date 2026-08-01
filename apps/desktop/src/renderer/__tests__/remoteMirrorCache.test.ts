@@ -61,6 +61,26 @@ function dbMessage(sessionId: string, id: string, content: string, ts: string): 
   };
 }
 
+function dbPlanToolMessage(sessionId: string, id: string, ts: string): Message {
+  const toolUseId = `tool-${id}`;
+  return {
+    id,
+    clientId: `client-${id}`,
+    sessionId,
+    role: 'tool_use',
+    content: {
+      toolName: 'update_plan',
+      toolUseId,
+      input: {
+        plan: [{ content: 'Cached remote plan', status: 'in_progress' }],
+      },
+    },
+    toolUseId,
+    agentMeta: null,
+    createdAt: ts,
+  } as unknown as Message;
+}
+
 /** 被控端经隧道返回的权威列表;可换成挂起的 promise 模拟慢隧道 / 离线。 */
 let remoteList: Message[] = [];
 let remoteListPromise: Promise<Message[]> | null = null;
@@ -219,6 +239,26 @@ describe('冷缓存 hydrate', () => {
     expect(snapshot.historyLoaded).toBe(false);
     // 缓存窗口不接管分页游标:不发注定失败的隧道翻页。
     expect(snapshot.hasMoreMessages).toBe(false);
+  });
+
+  it('缓存页只有计划工具行时仍种入,供 PinnedPlanPanel 派生计划', async () => {
+    const s = sid();
+    cachedMessages.set(`${DEVICE_ID}::${s}`, [
+      dbPlanToolMessage(s, 'plan', '2026-01-01T00:00:00.000Z') as unknown as Record<
+        string,
+        unknown
+      >,
+    ]);
+    registerRemote(s);
+    remoteListPromise = new Promise<Message[]>(() => {});
+
+    makerChatStore.ensureInitialMessages(s);
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.messages.map((m) => m.clientId)).toEqual(['client-plan']);
+    expect(snapshot.messages[0].cacheHydrated).toBe(true);
+    expect(snapshot.historyLoaded).toBe(false);
   });
 
   it('fresh 落地后整批剔除缓存行:权威页里没有的缓存消息不残留', async () => {

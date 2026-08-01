@@ -42,6 +42,19 @@ export function optionalNullableString(value: unknown): string | null | undefine
   return optionalString(value);
 }
 
+/**
+ * 必填、但允许显式 `null` 的字符串。
+ *
+ * 与 `optionalNullableString` 的区别是**字段缺失即报错**。用在「没传」与「显式
+ * 传 null」语义不同的地方 —— 尤其是 null 代表一个破坏性动作时(如清空用户已保存
+ * 的设置): 把缺字段当 null,调用方的一次疏忽就变成一次静默的清除。
+ * 非字符串值同样拒绝, 不做 String() 强转(`123` 会命中名叫 "123" 的合法别名)。
+ */
+export function requireNullableString(value: unknown, name: string): string | null {
+  if (value === null) return null;
+  return requireString(value, name);
+}
+
 export function requireEnum<T extends string>(
   value: unknown,
   allowed: readonly T[],

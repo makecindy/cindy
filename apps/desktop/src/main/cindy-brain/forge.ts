@@ -1567,6 +1567,9 @@ cindy.onHostMessage(function (msg) {
     // usage 各字段可选(cc/codex 上报详尽度不同,别假设字段必在):
     //   { inputTokens?, outputTokens?, cacheReadTokens?, cacheCreationTokens? }
     // msg.seq 每意识单调递增;msg.dropped(可选)= 你熄灯期溢出丢弃的事件数。
+    // 生命周期:会话被关掉或引擎被替换时,主机会给还在场的那一轮补发
+    // endReason: 'interrupted',让 start/end 成对。但这不是投递保证——熄灯期
+    // 缓冲溢出照样会丢(见 msg.dropped),状态机别只靠 end 归位。
     return;
   }
   // did-turn-start / did-session-created / did-session-archived 同理(见 topics)。

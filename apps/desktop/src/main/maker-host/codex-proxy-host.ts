@@ -481,6 +481,12 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
 /** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
 const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
+/** 阿里云百炼 Coding Plan / Token Plan / 按量付费官方 DNS 边界。 */
+const DASHSCOPE_CODING_CHAT_HOSTS = new Set([
+  'coding.dashscope.aliyuncs.com',
+  'dashscope.aliyuncs.com',
+  'token-plan.cn-beijing.maas.aliyuncs.com',
+]);
 /**
  * 豆包 Seed 系列 model id 的版本前缀:doubao-seed-<major>-<minor>-…。
  * 只放行 1.6 起的版本——Seed 品牌线从 1.6 开始原生多模态(官方 Chat Completions
@@ -496,6 +502,17 @@ function isDoubaoVisionModel(model: string): boolean {
   return major > 1 || (major === 1 && minor >= 6);
 }
 
+/** 已确认支持图片输入的 Qwen model id 白名单。 */
+const QWEN_IMAGE_CHAT_MODELS = new Set([
+  'qwen3.6-flash',
+  'qwen3.7-plus',
+  'qwen3.8-max-preview',
+]);
+
+function isQwenImageChatModel(model: string): boolean {
+  return QWEN_IMAGE_CHAT_MODELS.has(model);
+}
+
 function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
   return stripPrefix && model.startsWith(stripPrefix)
     ? model.slice(stripPrefix.length)
@@ -504,10 +521,15 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
 
 /**
  * 在模型级多模态能力元数据接入路由前,图片桥接先按已验证的上游能力显式开启。
- * 这里认官方 DNS 边界 + 上游 model
- * (Moonshot 的 Kimi K3、火山方舟的豆包 Seed 系列),不认 provider id(预设创建后
- * 会生成用户自定义 id),也不对所有 openai-chat 供应商放开。未命中继续沿用
- * fail-closed 默认——无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
+ *
+ * 当前覆盖:
+ * - Moonshot Kimi K3
+ * - Volcengine Doubao Seed 系列
+ * - Alibaba Cloud Bailian Coding Plan Qwen 3.7 Plus
+ *
+ * 这里认官方 DNS 边界 + 上游 model,不认 provider id(预设创建后会生成用户自定义
+ * id),也不对所有 openai-chat 供应商放开。未命中继续沿用 fail-closed 默认——
+ * 无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
  */
 export function chatBridgeCapabilitiesForRoute(
   upstream: string,
@@ -532,6 +554,7 @@ function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean 
   const host = url.hostname.toLowerCase();
   if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
   if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
+  if (isQwenImageChatModel(realModel)) return DASHSCOPE_CODING_CHAT_HOSTS.has(host);
   return false;
 }
 

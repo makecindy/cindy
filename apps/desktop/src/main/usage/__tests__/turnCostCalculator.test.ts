@@ -6,7 +6,9 @@ import {
   setActiveLedgerCurrency,
 } from '../ledgerCurrency';
 import {
+  billingRouteForExplicitProvider,
   buildClaudeTurnUsageDetails,
+  computePriceQuoteTurnMoney,
   computeGatewayTurnCost,
   estimateClaudeSubscriptionTurnValue,
   isAnthropicModel,
@@ -112,6 +114,16 @@ function resolvedModel(
 }
 
 describe('model id and route helpers', () => {
+  it('uses provider access semantics for explicit billing routes', () => {
+    expect(billingRouteForExplicitProvider('openai', 'subscription')).toBe('subscription');
+    expect(billingRouteForExplicitProvider('xai', 'subscription')).toBe('subscription');
+    expect(billingRouteForExplicitProvider('anthropic', undefined)).toBe('subscription');
+    expect(billingRouteForExplicitProvider('xd', 'managed')).toBe('xd-gateway');
+    expect(billingRouteForExplicitProvider('custom-api', 'api')).toBe('provider-api');
+    expect(billingRouteForExplicitProvider('custom-api', undefined)).toBe('provider-api');
+    expect(billingRouteForExplicitProvider(null, null)).toBeNull();
+  });
+
   it('normalizes model suffixes without dropping provider prefixes', () => {
     expect(normalizeModelIdForPricing('gpt-5.5[1m]')).toBe('gpt-5.5');
     expect(normalizeModelIdForPricing('codex/gpt-5.5[1m]')).toBe('codex/gpt-5.5');
@@ -154,6 +166,102 @@ describe('computeGatewayTurnCost', () => {
         }),
       ),
     ).toBeCloseTo(12.7);
+  });
+
+  it('uses the matching context-length band for all token classes', () => {
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 210_000,
+          outputTokens: 10_000,
+          cacheReadTokens: 20_000,
+          cacheCreateTokens: 10_000,
+        },
+        quote('m', 2, 8, {
+          cacheReadPerMtok: 0.2,
+          cacheCreatePerMtok: 2.5,
+          inputTokenPriceBands: [
+            {
+              minInputTokens: 200_001,
+              inputPerMtok: 4,
+              outputPerMtok: 12,
+              cacheReadPerMtok: 0.4,
+              cacheCreatePerMtok: 5,
+            },
+          ],
+        }),
+      ),
+    ).toBeCloseTo(1.018);
+  });
+
+  it('does not extend a bounded provider reference beyond its published interval', () => {
+    const boundedReference = quote('grok-code-fast', 0.2, 1.5, {
+      providerId: 'xai',
+      source: 'provider-reference',
+      approximate: true,
+      inputTokenPriceBands: [
+        {
+          minInputTokens: 0,
+          maxInputTokens: 200_000,
+          inputPerMtok: 0.2,
+          outputPerMtok: 1.5,
+        },
+      ],
+    });
+
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 199_999,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        boundedReference,
+      ),
+    ).not.toBeNull();
+    expect(
+      computeGatewayTurnCost(
+        {
+          inputTokens: 200_000,
+          outputTokens: 1,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        boundedReference,
+      ),
+    ).toBeNull();
+  });
+});
+
+describe('computePriceQuoteTurnMoney', () => {
+  const tokens = {
+    inputTokens: 1_000_000,
+    outputTokens: 0,
+    cacheReadTokens: 0,
+    cacheCreateTokens: 0,
+  };
+
+  it('only marks subscription estimates with the subscription-value reason', () => {
+    expect(
+      computePriceQuoteTurnMoney(
+        tokens,
+        quote('subscription-model', 2, 10, {
+          source: 'subscription-reference',
+          approximate: true,
+        }),
+        'USD',
+      )?.estimateReasons,
+    ).toEqual(['subscription-value', 'reference-price']);
+    for (const source of ['provider-reference', 'user-override'] as const) {
+      expect(
+        computePriceQuoteTurnMoney(
+          tokens,
+          quote('reference-model', 2, 10, { source, approximate: true }),
+          'USD',
+        )?.estimateReasons,
+      ).toEqual(['reference-price']);
+    }
   });
 });
 
@@ -393,6 +501,34 @@ describe('resolveTurnCost', () => {
     });
   });
 
+  it('uses a provider reference or user override estimate when the SDK reports no cost', () => {
+    const result = resolveTurnCost({
+      rawModel: 'custom-model',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0,
+      pricing: catalog(
+        quote('custom-model', 2, 10, {
+          providerId: 'anthropic',
+          source: 'user-override',
+          approximate: true,
+        }),
+      ),
+      context: PROVIDER_API,
+    });
+    expect(result.source).toBe('reference');
+    expect(result.money).toMatchObject({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
+  });
+
   it('does not apply a Gateway discount to provider SDK cost facts', () => {
     // 本例只验"折扣不落到第三方 SDK 实报值上",所以把账号币种显式钉成 USD:
     // 否则 CNY 账本会按固定汇率投影,金额不再等于 SDK 原值,验的就不是折扣了。
@@ -416,7 +552,7 @@ describe('resolveTurnCost', () => {
     }
   });
 
-  it('subscription routes and explicit subscription model prefixes never become actual cost', () => {
+  it('subscription routes and inferred subscription model prefixes never become actual cost', () => {
     const byRoute = resolveTurnCost({
       rawModel: 'claude-opus-4-8',
       tokens: {
@@ -439,10 +575,68 @@ describe('resolveTurnCost', () => {
       },
       sdkCostDelta: 5,
       pricing: null,
-      context: PROVIDER_API,
+      context: { providerId: null, billingRoute: 'unknown', region: 'global' },
     });
     expect(byRoute).toMatchObject({ source: 'subscription', money: null });
     expect(byPrefix).toMatchObject({ source: 'subscription', money: null });
+  });
+
+  it('keeps explicit built-in OpenAI and xAI subscription sources out of actual spend', () => {
+    for (const [providerId, rawModel] of [
+      ['openai', 'chatgpt/gpt-5.5'],
+      ['xai', 'xai/grok-4.5'],
+    ] as const) {
+      const result = resolveTurnCost({
+        rawModel,
+        tokens: {
+          inputTokens: 1_000_000,
+          outputTokens: 100_000,
+          cacheReadTokens: 0,
+          cacheCreateTokens: 0,
+        },
+        sdkCostDelta: 5,
+        pricing: null,
+        context: {
+          providerId,
+          billingRoute: billingRouteForExplicitProvider(providerId, 'subscription')!,
+          region: 'global',
+        },
+      });
+      expect(result).toMatchObject({ source: 'subscription', money: null });
+    }
+  });
+
+  it('lets an explicit provider API route price a custom xAI-prefixed model', () => {
+    const result = resolveTurnCost({
+      rawModel: 'xai/grok-4.5',
+      tokens: {
+        inputTokens: 1_000_000,
+        outputTokens: 100_000,
+        cacheReadTokens: 0,
+        cacheCreateTokens: 0,
+      },
+      sdkCostDelta: 0,
+      pricing: catalog(
+        quote('xai/grok-4.5', 2, 10, {
+          providerId: 'vercel-ai-gateway',
+          source: 'user-override',
+          approximate: true,
+        }),
+      ),
+      context: {
+        providerId: 'vercel-ai-gateway',
+        billingRoute: 'provider-api',
+        region: 'global',
+      },
+    });
+
+    expect(result.source).toBe('reference');
+    expect(result.money).toMatchObject({
+      amount: 3,
+      currency: 'USD',
+      approximate: true,
+      kind: 'value-estimate',
+    });
   });
 });
 
@@ -458,6 +652,7 @@ describe('resolveClaudeTurnCostSinks', () => {
       XD_GATEWAY,
     );
     expect(result.turnMoney?.amount).toBe(7);
+    expect(result.estimatedTurnMoney).toBeNull();
     expect(result.perModel.map((item) => item.money?.amount)).toEqual([5, 2]);
     expect(result.perModel.map((item) => item.source)).toEqual(['gateway', 'gateway']);
   });
@@ -491,15 +686,63 @@ describe('resolveClaudeTurnCostSinks', () => {
       SUBSCRIPTION,
     );
     expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney).toBeNull();
     expect(result.perModel[0]).toMatchObject({
       source: 'subscription',
       money: null,
     });
   });
+
+  it('keeps provider reference estimates out of actual spend', () => {
+    const reference = quote('claude-opus-4-8', 5, 25, {
+      providerId: 'anthropic',
+      source: 'provider-reference',
+      approximate: true,
+    });
+    const result = resolveClaudeTurnCostSinks(
+      [delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 })],
+      catalog(reference),
+      PROVIDER_API,
+    );
+    expect(result.turnMoney).toBeNull();
+    expect(result.estimatedTurnMoney).toMatchObject({
+      amount: 5,
+      kind: 'value-estimate',
+    });
+  });
+
+  it('does not mix a reference estimate into an actual SDK cost total', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+    );
+    const result = resolveClaudeTurnCostSinks(
+      [
+        delta('claude-opus-4-8', { inputTokensDelta: 1_000_000 }),
+        delta('other-model', { costUsdDelta: 2 }),
+      ],
+      pricing,
+      PROVIDER_API,
+    );
+    expect(result.turnMoney).toMatchObject({ amount: 2, kind: 'actual-cost' });
+    expect(result.estimatedTurnMoney).toMatchObject({ amount: 5, kind: 'value-estimate' });
+  });
 });
 
 describe('subscription value and usage details', () => {
   it('estimates Anthropic subscription value from USD reference pricing', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+        cacheReadPerMtok: 0.5,
+        cacheCreatePerMtok: 6.25,
+      }),
+    );
     const value = estimateClaudeSubscriptionTurnValue(
       [
         resolvedModel('claude-opus-4-8', {
@@ -508,6 +751,7 @@ describe('subscription value and usage details', () => {
         }),
       ],
       'USD',
+      pricing,
     );
     expect(value).toMatchObject({
       amount: 10,
@@ -515,6 +759,63 @@ describe('subscription value and usage details', () => {
       approximate: true,
       kind: 'value-estimate',
     });
+  });
+
+  it('keeps estimates for Claude family aliases and dated wire ids', () => {
+    const pricing = catalog(
+      quote('claude-opus-4-8', 5, 25, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+      quote('claude-sonnet-4-6', 3, 15, {
+        providerId: 'anthropic',
+        source: 'provider-reference',
+        approximate: true,
+      }),
+    );
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('opus', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 5, kind: 'value-estimate' });
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('claude-sonnet-4-6-20260701', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 3, kind: 'value-estimate' });
+  });
+
+  it('prefers an agent-specific user override for a bare Claude family alias', () => {
+    const canonical = 'claude-sonnet-4-6';
+    const reference = quote(canonical, 3, 15, {
+      providerId: 'anthropic',
+      source: 'provider-reference',
+      approximate: true,
+    });
+    const override = quote(canonical, 9, 45, {
+      providerId: 'anthropic',
+      source: 'user-override',
+      approximate: true,
+    });
+    const pricing = {
+      anthropic: {
+        [canonical]: reference,
+        [`${canonical}\u0000claude-code`]: override,
+      },
+    };
+
+    expect(
+      estimateClaudeSubscriptionTurnValue(
+        [resolvedModel('sonnet', { inputTokens: 1_000_000 })],
+        'USD',
+        pricing,
+      ),
+    ).toMatchObject({ amount: 9, kind: 'value-estimate' });
   });
 
   it('does not estimate non-Anthropic, already-costed, unknown, or zero-token entries', () => {
@@ -526,10 +827,11 @@ describe('subscription value and usage details', () => {
           resolvedModel('claude-unknown-9', { inputTokens: 1_000_000 }),
         ],
         'USD',
+        {},
       ),
     ).toBeNull();
     expect(
-      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'USD'),
+      estimateClaudeSubscriptionTurnValue([resolvedModel('claude-opus-4-8')], 'USD', {}),
     ).toBeNull();
   });
 

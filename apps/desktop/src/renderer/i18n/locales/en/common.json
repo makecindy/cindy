@@ -1421,7 +1421,29 @@
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
         "disabledGroup": "Disabled",
-        "enableAllModels": "Enable All"
+        "enableAllModels": "Enable All",
+        "priceOverride": {
+          "menu": "Edit API Price Estimate",
+          "title": "{{model}} API Price Estimate",
+          "description": "Used only to estimate usage on your own API or subscription route. This does not change the provider’s bill.",
+          "currency": "Currency",
+          "input": "Input",
+          "output": "Output",
+          "cacheRead": "Cache read",
+          "cacheWrite": "Cache write",
+          "unit": "Price per 1M tokens. Leave cache fields blank when they are not billed separately.",
+          "registryDate": "Reference updated {{date}}",
+          "conflict": "The remote reference price changed. Your local estimate is still in use; review it or reset to the new reference.",
+          "reset": "Reset to Current Reference",
+          "resetDone": "Restored the current reference price",
+          "save": "Save",
+          "cancel": "Cancel",
+          "close": "Close",
+          "saved": "API price estimate saved",
+          "invalid": "Enter valid non-negative input and output prices",
+          "loadFailed": "Couldn’t load the price estimate. Please try again.",
+          "saveFailed": "Couldn’t save the price estimate. Please try again."
+        }
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
@@ -2550,14 +2572,16 @@
           "error": "Connection failed"
         },
         "form": {
-          "workspacesCardTitle": "Workdir mappings",
+          "workspacesCardTitle": "Working directory mappings",
           "workspacesCardDescription": "Alias → local absolute path; the directory list is shared across channels while run preferences stay per channel.",
           "workspacesBoundCount_one": "{{count}} local working directory bound",
           "workspacesBoundCount_other": "{{count}} local working directories bound",
           "aliasPlaceholder": "Alias, e.g. my-server",
           "addWorkspace": "Add working directory",
           "removeWorkspace": "Remove this working directory",
-          "changeDir": "Click to change directory (alias and preferences kept)"
+          "changeDir": "Click to change directory (alias and preferences kept)",
+          "defaultWorkspaceChip": "Default: {{name}}",
+          "defaultWorkspaceAria": "Choose the default working directory for tasks dispatched from X"
         },
         "binding": {
           "copyLink": "Copy link",
@@ -3851,6 +3875,7 @@
     "costBreakdownHeader": "By model:",
     "modelCostLine": "· {{model}} {{cost}}",
     "suggestionLine": "Suggestion: {{suggestion}}",
+    "noBilledCost": "Cost unavailable for this turn; showing usage only",
     "suggestion": {
       "lowCache": "Cache hit rate is low; more context was billed again this turn"
     }
@@ -5142,6 +5167,9 @@
       "lastTool": "Last tool: {{tool}}",
       "outputFile": "Output: {{path}}"
     },
+    "planPill": {
+      "step": "Step {{current}} / {{total}}"
+    },
     "forkOrigin": {
       "label": "Created from another session"
     },
@@ -5176,6 +5204,7 @@
       "turnCost": "Cost this turn",
       "turnCostEstimated": "Token value this turn (API-price equivalent)",
       "turnCostEstimatedValue": "Worth {{cost}}",
+      "turnTokens": "{{tokens}} tokens",
       "userTurnCostTotalLine": "User-turn total: {{cost}}",
       "userTurnCostDetailsTitle": "Final SDK segment"
     },

@@ -28,6 +28,7 @@ import History from '@tiptap/extension-history';
 import Placeholder from '@tiptap/extension-placeholder';
 import HardBreak from '@tiptap/extension-hard-break';
 import type { Editor, JSONContent } from '@tiptap/core';
+import { createComposerInputLatencyProbe } from '@/lib/composerInputLatencyProbe';
 import { CjkPunctDecoration } from './CjkPunctDecoration';
 import { ComposerListIndentDecoration } from './ComposerListIndentDecoration';
 import {
@@ -133,6 +134,7 @@ import {
   composerHistoryEntryToDocument,
   type ComposerHistoryEntry,
 } from '@/lib/composerQuoteDocument';
+import { deriveStableComposerHistory } from './composerHistoryProjection';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import {
   pastedSessionChipAttrs,
@@ -175,6 +177,13 @@ import { getAppShortcutCombos } from '@/lib/appShortcutStore';
 import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import { createLogger } from '@/lib/logger';
+import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
+import {
+  composerRenderSnapshot,
+  shouldRefreshComposerRender,
+  type ComposerRenderSnapshot,
+} from './composerRenderGate';
+import { createComposerFrameScheduler } from './composerFrameScheduler';
 import { serializeEditorContent, serializeEditorSlice } from './composerContentSerialization';
 import {
   composerDocumentContainsList,
@@ -232,6 +241,7 @@ const log = createLogger('ChatInput');
 // chat-input:commit 量化每次会话切换时 ChatInput 子树(Lexical 初始化 + 草稿恢复
 // + 工具栏)的首次 commit 主线程占用;<30ms 不打,避免噪音。
 const perfLog = createLogger('perf/session-switch');
+const composerPerfLog = createLogger('perf/composer-input');
 
 const VOICE_INPUT_LONG_PRESS_MS = 450;
 const VOICE_INPUT_SHORTCUT_DEDUPE_MS = 250;
@@ -988,19 +998,8 @@ export function ChatInput({
   const effectiveCompactToolbar = compactToolbar || autoCompactToolbar;
 
   // ── User message history for ↑/↓ navigation ──────────────────────
-  const userHistory = useMemo(
-    () =>
-      (messages ?? [])
-        .filter((m) => m.role === 'user' && m.content.trim())
-        .map((m): ComposerHistoryEntry => ({
-          content: m.content,
-          ...(m.quotesEncoded === true ? { quotesEncoded: true } : {}),
-        }))
-        .reverse(), // newest first
-    [messages],
-  );
-  const userHistoryRef = useRef(userHistory);
-  userHistoryRef.current = userHistory;
+  const userHistoryRef = useRef<ComposerHistoryEntry[]>([]);
+  userHistoryRef.current = deriveStableComposerHistory(messages, userHistoryRef.current);
   const historyIndexRef = useRef(-1); // -1 = current draft (not browsing)
   const draftRef = useRef<JSONContent | null>(null); // saves draft doc JSON when user starts browsing (preserves marks)
   const hydratedHistoryDocumentRef = useRef<ProseMirrorNode | null>(null);
@@ -1370,7 +1369,36 @@ export function ChatInput({
   // atomic chips, and only the list nodes needed to preserve Markdown list
   // structure while editing. It does not use StarterKit, whose headings and
   // marks are not part of the chat input contract.
+  const [, setTick] = useState(0);
+  const refreshComposerRef = useRef<(() => void) | null>(null);
+  refreshComposerRef.current = () => setTick((t) => t + 1);
+  const renderSnapshotRef = useRef<ComposerRenderSnapshot | null>(null);
+  const draftSaveSchedulerRef = useRef<ReturnType<
+    typeof createComposerDraftSaveScheduler
+  > | null>(null);
+  draftSaveSchedulerRef.current ??= createComposerDraftSaveScheduler();
+  const caretScrollEditorRef = useRef<Editor | null>(null);
+  const caretScrollSchedulerRef = useRef<ReturnType<
+    typeof createComposerFrameScheduler
+  > | null>(null);
+  caretScrollSchedulerRef.current ??= createComposerFrameScheduler(() => {
+    const current = caretScrollEditorRef.current;
+    if (current) scrollCaretIntoView(current);
+  });
+  const scheduleCaretScroll = (ed: Editor): void => {
+    caretScrollEditorRef.current = ed;
+    caretScrollSchedulerRef.current?.schedule();
+  };
+  useEffect(
+    () => () => {
+      caretScrollSchedulerRef.current?.cancel();
+    },
+    [],
+  );
   const editor = useEditor({
+    // React receives only the narrow snapshots above; Tiptap keeps ordinary
+    // transactions inside its editor view instead of rerendering ChatInput.
+    shouldRerenderOnTransaction: false,
     // Match the legacy textarea's `autoFocus` prop — on mount, focus the
     // editor at the end so the user can continue typing after restored text.
     // Tiptap treats boolean `true` as `focus('start')`; its deferred mount
@@ -1919,7 +1947,14 @@ export function ChatInput({
           }
         });
       }
-      setTick((t) => t + 1);
+      const nextRenderSnapshot = composerRenderSnapshot(
+        detectTrigger(ed),
+        !composerDocIsEmpty(ed.state.doc),
+      );
+      if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
+        renderSnapshotRef.current = nextRenderSnapshot;
+        refreshComposerRef.current?.();
+      }
       if (!composerMentionDragActiveRef.current) {
         lastComposerSelectionFromRef.current = ed.state.selection.from;
       }
@@ -1929,45 +1964,68 @@ export function ChatInput({
       // recurse on rapid switches).
       if (isRestoringRef.current) {
         // 即便是 restore，也要补一次滚动——切换 session 后光标常落在末尾
-        requestAnimationFrame(() => scrollCaretIntoView(ed));
+        scheduleCaretScroll(ed);
         return;
       }
       // composer-draft-mount-race 修复 (issue #40):hydration 还没跑过 → 这次
       // onUpdate 是 Tiptap mount 期间的初始触发(空 editor),不能写 store。
       if (!hasHydratedRef.current) {
-        requestAnimationFrame(() => scrollCaretIntoView(ed));
+        scheduleCaretScroll(ed);
         return;
       }
       const sk = storageKeyForDraftRef.current;
       if (!sk) {
-        requestAnimationFrame(() => scrollCaretIntoView(ed));
+        scheduleCaretScroll(ed);
         return;
       }
-      const existing = getComposerDraft(sk);
       // silent: 自己写自己——不通知 subscribeComposerDraft 监听器，避免回灌
-      // setContent 把光标位置/IME 组合状态打乱。
-      saveComposerDraft(
-        sk,
-        {
-          text: ed.getJSON(),
-          attachments: existing?.attachments ?? [],
-          quotes: existing?.quotes ?? [],
-          browserComments: existing?.browserComments ?? [],
-        },
-        { silent: true },
-      );
+      // setContent 把光标位置/IME 组合状态打乱。把 JSON 序列化和写入都放进短
+      // debounce,生命周期边界由 flush 强制落最后一版。
+      //
+      // voice-input session-switch 草稿串味修复:`ed.getJSON()` 故意延后到
+      // debounce 触发那一刻才读(保住上面这条 perf 优化——不在每次按键都同步
+      // 序列化整份文档)。但 storageKeyForDraftRef 在语音输入 stop/refine/send
+      // 的 async 等待期间会「故意滞后」于 storageKey prop(见该 ref 声明处注释),
+      // 期间若这条 debounce 定时器还没触发,restoreNextDraft 就可能先跑完
+      // setContent 把编辑器换成下一个 session 的文档、再把 ref 切到新 key —
+      // 定时器这时才触发的话,`ed.getJSON()` 读到的已经是下一个 session 的内容,
+      // 却仍会存进这里捕获的旧 `sk` 下,串味覆盖旧会话草稿。任务真正执行时重新核对
+      // ref 是否还等于调度时捕获的 `sk`,不等就说明编辑器内容已经不再属于它,直接
+      // 跳过这次写入(旧会话的最终内容已由 saveCurrentEditorDraft 在切换前存妥)。
+      draftSaveSchedulerRef.current?.schedule(() => {
+        if (storageKeyForDraftRef.current !== sk) return;
+        const existing = getComposerDraft(sk);
+        saveComposerDraft(
+          sk,
+          {
+            text: ed.getJSON(),
+            attachments: existing?.attachments ?? [],
+            quotes: existing?.quotes ?? [],
+            browserComments: existing?.browserComments ?? [],
+          },
+          { silent: true },
+        );
+      });
       // chat-input-autoscroll fix: 输入超过 max-h 后，让光标随内容追底
-      requestAnimationFrame(() => scrollCaretIntoView(ed));
+      scheduleCaretScroll(ed);
     },
     onSelectionUpdate: ({ editor: ed }) => {
-      setTick((t) => t + 1);
+      const nextRenderSnapshot = composerRenderSnapshot(
+        detectTrigger(ed),
+        !composerDocIsEmpty(ed.state.doc),
+      );
+      if (shouldRefreshComposerRender(renderSnapshotRef.current, nextRenderSnapshot)) {
+        renderSnapshotRef.current = nextRenderSnapshot;
+        refreshComposerRef.current?.();
+      }
       if (!composerMentionDragActiveRef.current) {
         lastComposerSelectionFromRef.current = ed.state.selection.from;
       }
       // 方向键移动光标也要跟随（例如 ↓ 把光标从可见区移到 doc 末尾）
-      requestAnimationFrame(() => scrollCaretIntoView(ed));
+      scheduleCaretScroll(ed);
     },
     onBlur: () => {
+      draftSaveSchedulerRef.current?.flush();
       // Focus left the editor. Spec F1/F2 require the palette to close on
       // blur. We defer by a microtask so mouse-click selections on the
       // palette (which also blur the editor momentarily) still register.
@@ -2031,6 +2089,34 @@ export function ChatInput({
     editorRef.current = editor;
   }, [editor]);
 
+  useEffect(() => {
+    if (!editor) return;
+
+    const probe = createComposerInputLatencyProbe({ log: composerPerfLog });
+    const markDocumentUpdate = ({ editor: activeEditor }: { editor: Editor }): void => {
+      probe.markUpdate({
+        kind: 'document',
+        composing: activeEditor.view.composing,
+        docSize: activeEditor.state.doc.content.size,
+      });
+    };
+    const markSelectionUpdate = ({ editor: activeEditor }: { editor: Editor }): void => {
+      probe.markUpdate({
+        kind: 'selection',
+        composing: activeEditor.view.composing,
+        docSize: activeEditor.state.doc.content.size,
+      });
+    };
+
+    editor.on('update', markDocumentUpdate);
+    editor.on('selectionUpdate', markSelectionUpdate);
+    return () => {
+      editor.off('update', markDocumentUpdate);
+      editor.off('selectionUpdate', markSelectionUpdate);
+      probe.dispose();
+    };
+  }, [editor]);
+
   // Message action menu “Add to chat”: reuse the exact session-chip insertion
   // path used by clipboard paste, at the last composer caret position.
   useEffect(() => {
@@ -2092,6 +2178,8 @@ export function ChatInput({
   // 目录级禁用同判(ghostWorkdirFilter):被禁用的意识胶囊不亮——渲染层
   // 绝不比发送层乐观;禁用变更会广播 ghosts:changed,清单引用变化时重滤。
   const installedGhosts = useInstalledGhosts();
+  const installedGhostsRef = useRef(installedGhosts);
+  installedGhostsRef.current = installedGhosts;
   const pluginsForMenu = useMemo(
     () =>
       installedGhosts.filter(
@@ -2573,6 +2661,7 @@ export function ChatInput({
   useEffect(() => {
     if (!editor) return;
     return () => {
+      draftSaveSchedulerRef.current?.flush();
       const editorStorageKey = storageKeyForDraftRef.current;
       if (!editorStorageKey) return;
       const existing = getComposerDraft(editorStorageKey);
@@ -2657,6 +2746,7 @@ export function ChatInput({
 
     const transitionSeq = storageKeyTransitionSeqRef.current + 1;
     storageKeyTransitionSeqRef.current = transitionSeq;
+    draftSaveSchedulerRef.current?.flush();
     const saveCurrentEditorDraft = () => {
       if (!prevEditorKey) return;
       if (!hasHydratedRef.current) return;
@@ -2946,9 +3036,6 @@ export function ChatInput({
     [syncPaletteHover],
   );
 
-  // Bump to force trigger recompute (editor state is mutable, not React state)
-  const [, setTick] = useState(0);
-
   // ── Slash / At panel state ─────────────────────────────────────────
   const trigger: TriggerState = editor ? detectTrigger(editor) : { kind: 'none' };
 
@@ -3001,13 +3088,12 @@ export function ChatInput({
   useEffect(() => {
     setSlashCommandRoster(editor, mergedCommands);
   }, [editor, mergedCommands]);
-  // 意识指令源($ 触发):已唤醒且声明了 command 的意识,现查现报(同步
-  // IPC 极小);构造成 UnifiedCommand 形状喂同一个面板(交互与 / 完全一致)。
+  // 意识指令源($ 触发):复用窗口级已装意识快照,避免输入触发符时同步扫盘。
   // 目录级禁用同判:被禁用的意识不进 $ 菜单(与胶囊 / 发送期展开同源)。
   const isGhostSigil = trigger.kind === 'slash' && trigger.sigil === '$';
   const ghostCommandItems = useMemo(() => {
     if (!isGhostSigil) return [];
-    return filterGhostsForWorkdir(window.electronAPI.ghosts.listSync().ghosts, workingDir)
+    return ghostsForCommand
       .filter((g) => g.enabled && g.manifest.command !== undefined)
       .map(
         (g) =>
@@ -3017,7 +3103,7 @@ export function ChatInput({
             description: `${g.manifest.name} · ${t('settings.ghosts.commandPaletteTag')}`,
           }) as UnifiedCommand,
       );
-  }, [isGhostSigil, t, workingDir]);
+  }, [ghostsForCommand, isGhostSigil, t]);
   // 面板显示与键盘导航共用同一份命令源:$ 只列意识,/ 只列技能/命令。
   const paletteCommands = isGhostSigil ? ghostCommandItems : mergedCommands;
   const filteredCommands = useMemo(
@@ -3340,6 +3426,7 @@ export function ChatInput({
       if (!editor) return;
       if (disabled) return;
       if (dispatchSendInFlightRef.current) return;
+      draftSaveSchedulerRef.current?.flush();
       dispatchSendInFlightRef.current = true;
       setSendDispatchInFlight(true);
       try {
@@ -3421,10 +3508,10 @@ export function ChatInput({
       const mentionsToSend = mentions.length > 0 ? mentions : undefined;
       // 意识 $指令展开(C3d 双触发):`$画图 ...` 开头且命中已唤醒意识时,
       // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
-      // listSync 是既有同步 IPC(首帧同款,极小),每次发送现查,装/卸即时反映;
-      // 目录级禁用同判(与胶囊 / main 侧生效点同源),被禁用 = 原样发送。
+      // 读取 useInstalledGhosts 的最新窗口级快照。ghosts:changed 会原子更新
+      // 该快照;发送路径无需同步 IPC,仍按当前工作目录执行同一禁用判定。
       const eligibleGhosts = filterGhostsForWorkdir(
-        window.electronAPI.ghosts.listSync().ghosts,
+        installedGhostsRef.current,
         workingDirRef.current,
       );
       const ghostCommandWord = parseGhostCommandWord(text);
@@ -4738,6 +4825,7 @@ export function ChatInput({
   );
 
   const hasMessage = !isEditorEmpty(editor);
+  renderSnapshotRef.current = composerRenderSnapshot(trigger, hasMessage);
   const canSend = hasMessage || hasAttachments || browserComments.length > 0;
   const hasVoiceDraftText = voiceInput.draftText.trim().length > 0;
   const [voiceReleaseToSendActive, setVoiceReleaseToSendActive] = useState(false);

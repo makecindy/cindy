@@ -16,6 +16,8 @@ import {
   gatewayLedgerCurrency,
   gatewayPricingCatalog,
   getModelPriceQuote,
+  providerReferencePriceQuote,
+  registryPricingCatalog,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
@@ -31,6 +33,15 @@ import { setActiveLedgerCurrency } from './ledgerCurrency.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import {
+  applyModelPriceOverrides,
+  mergeStoredModelPriceOverride,
+  type ModelPriceOverridesSnapshot,
+} from './modelPriceOverrideStore.js';
+
+export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
+export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -111,6 +122,45 @@ function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
 }
 
+function validateInputTokenPriceBands(
+  value: unknown,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  if (!Array.isArray(value)) return undefined;
+  const bands: NonNullable<ModelPriceQuote['inputTokenPriceBands']> = [];
+  for (const raw of value.slice(0, 32)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const band = raw as Record<string, unknown>;
+    if (
+      !isNonNegativeFinite(band.minInputTokens) ||
+      (band.maxInputTokens !== undefined &&
+        (!isNonNegativeFinite(band.maxInputTokens) ||
+          band.maxInputTokens <= band.minInputTokens))
+    ) {
+      continue;
+    }
+    const next: NonNullable<ModelPriceQuote['inputTokenPriceBands']>[number] = {
+      minInputTokens: band.minInputTokens,
+      ...(band.maxInputTokens !== undefined
+        ? { maxInputTokens: band.maxInputTokens as number }
+        : {}),
+    };
+    let hasPrice = false;
+    for (const field of [
+      'inputPerMtok',
+      'outputPerMtok',
+      'cacheReadPerMtok',
+      'cacheCreatePerMtok',
+    ] as const) {
+      if (isNonNegativeFinite(band[field])) {
+        next[field] = band[field];
+        hasPrice = true;
+      }
+    }
+    if (hasPrice) bands.push(next);
+  }
+  return bands.length > 0 ? bands : undefined;
+}
+
 function validateQuote(
   value: unknown,
   providerId: string,
@@ -143,6 +193,10 @@ function validateQuote(
   }
   if (isNonNegativeFinite(quote.cacheCreatePerMtok)) {
     next.cacheCreatePerMtok = quote.cacheCreatePerMtok;
+  }
+  const inputTokenPriceBands = validateInputTokenPriceBands(quote.inputTokenPriceBands);
+  if (inputTokenPriceBands) {
+    next.inputTokenPriceBands = inputTokenPriceBands;
   }
   if (
     typeof quote.costDiscount === 'number' &&
@@ -264,6 +318,23 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
   }
 }
 
+function effectivePricingCatalog(gatewayPricing: ModelPricingCatalog | null): ModelPricingCatalog {
+  const registry = getActiveCatalog().modelRegistry;
+  const reference = registryPricingCatalog(registry);
+  return applyModelPriceOverrides(
+    {
+      ...reference,
+      ...(gatewayPricing?.xd ? { xd: gatewayPricing.xd } : {}),
+    },
+    registry,
+  );
+}
+
+export function broadcastEffectiveModelPricing(): void {
+  const scope = currentScope();
+  broadcastPricing(effectivePricingCatalog(cacheScope === scope ? cache : null));
+}
+
 /**
  * 与模型同步同快照更新 XD quote。models 非空但没有标准 input/output 价格时，
  * 价格投影会被清空，不复活旧模型价格。
@@ -288,7 +359,7 @@ export function replaceGatewayModelPricing(
   setActiveLedgerCurrency(gatewayAccountCurrency);
   hydratedScopes.add(scope);
   void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt);
-  broadcastPricing(pricing);
+  broadcastPricing(effectivePricingCatalog(pricing));
   return pricing;
 }
 
@@ -314,8 +385,8 @@ export function isModelPricingRefreshInFlight(): boolean {
 
 export async function getModelPricing(): Promise<ModelPricingCatalog | null> {
   const scope = currentScope();
-  if (cacheScope === scope) return cache;
-  return hydrateFromDisk(scope);
+  const gatewayPricing = cacheScope === scope ? cache : await hydrateFromDisk(scope);
+  return effectivePricingCatalog(gatewayPricing);
 }
 
 /**
@@ -373,15 +444,124 @@ export async function getModelPricingForModel(
   return pricing;
 }
 
+/**
+ * Codex 订阅轮的估算价,按显式来源 provider 取该 provider 的 registry 参考价
+ * (含用户价格覆盖)。openai 之外的订阅来源(如内置 anthropic 的 Claude.ai 订阅)
+ * 也走各自的日期定价路由,不能一律套 OpenAI 价表。
+ */
+export function getCodexProviderSubscriptionValuePrice(
+  providerId: string,
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const effective = getModelPriceQuote(pricing, providerId, modelId, 'codex');
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 目录里烘焙的 user-override 是按当前日期合并的;历史窗口跨过参考价生效边界时,
+    // 未覆盖字段必须按 at 时点的参考价重新合并,不能直接回用当前合并结果。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId, agent: 'codex', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          providerId,
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'codex', at },
+        ),
+        overrides,
+      ) ?? effective
+    );
+  }
+  const reference = providerReferencePriceQuote(
+    providerId,
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'codex', at },
+  );
+  return reference ?? (at === undefined ? effective : undefined);
+}
+
 export function getCodexSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  return getModelPriceQuote(pricing, 'openai', modelId);
+  return getCodexProviderSubscriptionValuePrice('openai', modelId, pricing, at, overrides);
 }
 
-export function getSubscriptionDirectValuePrice(modelId: string): ModelPriceQuote | undefined {
-  return subscriptionDirectPriceQuote(modelId);
+export function getClaudeSubscriptionValuePrice(
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 同 getCodexSubscriptionValuePrice:历史估值按 at 时点参考价重新合并稀疏覆盖。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId: 'anthropic', agent: 'claude-code', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          'anthropic',
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'claude-code', at },
+        ),
+        overrides,
+      ) ?? effective
+    );
+  }
+  const reference = providerReferencePriceQuote(
+    'anthropic',
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'claude-code', at },
+  );
+  return reference ?? (at === undefined ? effective : undefined);
+}
+
+export function getSubscriptionDirectValuePrice(
+  modelId: string,
+  agent?: 'claude-code' | 'codex',
+  pricing?: ModelPricingCatalog | null,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const registry = getActiveCatalog().modelRegistry;
+  const fallback = subscriptionDirectPriceQuote(
+    modelId,
+    registry,
+    agent,
+    at,
+  );
+  const routingQuote = fallback ?? subscriptionDirectPriceQuote(modelId, registry, agent);
+  if (!routingQuote) return undefined;
+  const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
+  const quote =
+    effective?.source === 'user-override'
+      ? at === undefined || agent === undefined
+        ? effective
+        : // 同上:历史窗口内的订阅直连估值也要按 at 时点参考价重新合并稀疏覆盖。
+          (mergeStoredModelPriceOverride(
+            { providerId: effective.providerId, agent, modelId: effective.modelId },
+            providerReferencePriceQuote(effective.providerId, effective.modelId, registry, {
+              agent,
+              at,
+            }),
+            overrides,
+          ) ?? effective)
+      : fallback;
+  if (!quote) return undefined;
+  return {
+    ...quote,
+    modelId,
+    source:
+      quote.source === 'provider-reference' ? 'subscription-reference' : quote.source,
+  };
 }
 
 /** 启动只读磁盘快照；真正的新价格仍由 /models 同步整体替换。 */

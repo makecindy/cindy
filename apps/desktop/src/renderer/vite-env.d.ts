@@ -3263,6 +3263,10 @@ interface ElectronAPI {
     setWorkspaces: (
       workspaces: Record<string, string>,
     ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
+    /** X 派发任务的默认工作目录别名(null = 内置「对话」伪目录)。 */
+    setXDefaultWorkspace: (
+      alias: string | null,
+    ) => Promise<{ hook: import('../shared/hookControlIpc').SlackHookView }>;
     bindStart: () => Promise<{ ok: true }>;
     bindRevoke: () => Promise<{ ok: true }>;
     // (multi-team)多 workspace 绑定动作
@@ -3408,18 +3412,13 @@ interface ElectronAPI {
   ) => () => void;
 
   // per-message 维度: turn 结束后 main 推该轮费用(挂在最后一条 assistant 上)。
+  // 直接复用 main 侧的 payload 正本 —— 金额字段整组可选(无报价轮只带
+  // turnUsageDetails),两侧各写一份必然漂移:曾出现 main 已放宽为可选、这里仍声明
+  // 必填,消费方在 typecheck 通过的情况下解引用 undefined。
   onUsageMessageTurnCost: (
-    cb: (data: {
-      sessionId: string;
-      clientId: string;
-      turnMoney: import('../shared/regionalMoney').RegionalMoney;
-      turnCostUsd?: number;
-      turnCostIsEstimate: boolean;
-      userTurnMoney: import('../shared/regionalMoney').RegionalMoney;
-      userTurnCostUsd?: number;
-      userTurnCostIsEstimate: boolean;
-      turnUsageDetails?: import('../shared/turnUsageDetails').TurnUsageDetails;
-    }) => void,
+    cb: (
+      data: import('../shared/turnCostPayload').MessageTurnCostPayload,
+    ) => void,
   ) => () => void;
 
   // per-message 维度: turn 结束检测到模型被上游降级 / 替换时 main 推标记
@@ -4040,6 +4039,16 @@ interface ElectronAPI {
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
+    getModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
+    setModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+      desired: import('../shared/modelPriceOverride').ModelPriceOverrideDesiredQuote,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
+    resetModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;
 
     // 「在新窗口打开」会话多开
     openSessionInNewWindow: (sessionId: string) => Promise<void>;

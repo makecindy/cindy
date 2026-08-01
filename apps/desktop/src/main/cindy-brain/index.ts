@@ -1202,6 +1202,9 @@ type PendingActivityRequest = {
  * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除;
  * - interaction 侧同样只投用户 Desktop 面(见 GhostTurnOriginTracker):非 desktop
  *   route 直接挡掉,route 缺省时按事件流上记下的轮次来源挡掉 goal / scheduler。
+ *
+ * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
+ * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
@@ -1219,6 +1222,8 @@ export function createGhostSessionTap(sessionId: string): {
 } {
   let translator: GhostTurnTranslator | null = null;
   let activity: GhostActivityTracker | null = null;
+  /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
+  let disposed = false;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
@@ -1259,6 +1264,9 @@ export function createGhostSessionTap(sessionId: string): {
     state = 'resolving';
     attempts += 1;
     void isGhostEligibleSession(sessionId).then((info) => {
+      // 判定期间会话已拆线:不建 translator、不回放,否则会向已经没人配对的
+      // topic 发出一条永远等不到 end 的 did-turn-start。
+      if (disposed) return;
       if (info.outcome === 'retry') {
         state = 'unknown'; // 暂时态:留着 pending,下个事件再试
         return;
@@ -1309,6 +1317,7 @@ export function createGhostSessionTap(sessionId: string): {
 
   return {
     handleEvent(ev) {
+      if (disposed) return;
       // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
       origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
@@ -1339,12 +1348,29 @@ export function createGhostSessionTap(sessionId: string): {
       },
     },
     dispose() {
-      // 先收口再拆线:会话关闭 / Session 实例替换时,router 里可能还有 interaction
-      // 等在 finally 前,而 observer 马上就会被摘掉。不在这里补发 end,插件就会永久
-      // 停在"等待审批 / 等待用户输入"。finishAll 给所有在场 requestId 各发一条 end
-      // (回合边界只收口 thinking——审批可以跨回合终态,见 GhostActivityTracker)。
-      activity?.finishAll();
-      translator?.dispose();
+      if (disposed) return; // 两条 disposer 路径都可能跑到,补发只做一次
+      disposed = true;
+      // 补发都会走插件分发链路,它们的异常不能打断 register.ts 的 disposer 队列
+      // (实例替换路径是裸调用,后面还排着 onEvent 退订),也不能让 activity 侧的
+      // 失败吃掉 turn 侧的补发,所以两段各自兜住。
+      const guard = (stage: string, fn: () => void): void => {
+        try {
+          fn();
+        } catch (err) {
+          log.warn('ghost session tap dispose failed', {
+            sessionId,
+            stage,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      // 先收口 activity 再收口 turn:会话关闭 / Session 实例替换时,router 里可能还有
+      // interaction 等在 finally 前,而 observer 马上就会被摘掉——不补发 end 插件就会
+      // 永久停在"等待审批 / 等待用户输入"。顺序也是契约:未收口的 thinking end 必须
+      // 排在 did-turn-end 之前(回合边界只收口 thinking——审批可以跨回合终态,
+      // 见 GhostActivityTracker)。
+      guard('activity', () => activity?.finishAll());
+      guard('turn', () => translator?.dispose());
       activity?.reset();
       translator = null;
       activity = null;

@@ -308,6 +308,64 @@ describe('makerChatStore per-turn 费用', () => {
     expect(makerChatStore.getSnapshot(SID)).toBe(snap);
   });
 
+  // 自动续跑的收尾 segment 缺报价时,payload / agent_meta 只有「整轮累计 + token 明细」,
+  // 没有当前 segment 金额。三个字段互不蕴含(见 shared/turnCostPayload.ts 的不变量),
+  // 累计金额的读取一旦嵌进 turnMoney 分支,这一轮已经花掉的钱就会被 token 顶掉。
+  it('实时推送:无当前分段金额但有用户轮累计时,累计金额照样写入', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'a-usage-only' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    const cb = getTurnCostCb();
+    cb!({
+      sessionId: SID,
+      clientId: 'a-usage-only',
+      userTurnMoney: legacyMoney(1.25),
+      userTurnCostUsd: 1.25,
+      userTurnCostIsEstimate: true,
+      turnUsageDetails: DETAILS,
+    });
+
+    const msg = makerChatStore
+      .getSnapshot(SID)
+      .messages.find((m) => m.clientId === 'a-usage-only');
+    expect(msg?.turnMoney).toBeUndefined();
+    expect(msg?.userTurnMoney).toEqual(legacyMoney(1.25));
+    expect(msg?.userTurnCostUsd).toBe(1.25);
+    expect(msg?.userTurnCostIsEstimate).toBe(true);
+    expect(msg?.turnUsageDetails).toEqual(DETAILS);
+  });
+
+  it('历史加载:只落了用户轮累计的无价收尾轮,重开会话仍恢复累计金额', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({
+        clientId: 'a-usage-only-history',
+        agentMeta: {
+          userTurnCost: legacyMoney(3.5),
+          userTurnCostUsd: 3.5,
+          userTurnCostIsEstimate: false,
+          turnUsageDetails: DETAILS ?? undefined,
+        },
+      }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    const msg = makerChatStore
+      .getSnapshot(SID)
+      .messages.find((m) => m.clientId === 'a-usage-only-history');
+    expect(msg?.turnMoney).toBeUndefined();
+    expect(msg?.userTurnMoney).toEqual(legacyMoney(3.5));
+    expect(msg?.userTurnCostUsd).toBe(3.5);
+    expect(msg?.userTurnCostIsEstimate).toBe(false);
+    // 明细落库即等价 turn 收尾,action bar 才挂得出来。
+    expect(msg?.turnCompleted).toBe(true);
+  });
+
   it('实时推送:订阅估算值有 GPT token 明细时按 cache 口径重算', async () => {
     vi.mocked(messageService.list).mockResolvedValueOnce([
       serverMessage({ clientId: 'a-live-estimate' }),

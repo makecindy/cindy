@@ -84,6 +84,75 @@ export function shouldUnpinOnUpIntent({ scrollHeight, clientHeight }: UpIntentUn
   return scrollHeight - clientHeight > UNPIN_MIN_SCROLLABLE_PX;
 }
 
+export interface ResolveRenderPinArgs {
+  /** A saved non-bottom viewport is currently being restored. */
+  restoring: boolean;
+  /** The current render introduced a new user message at the tail. */
+  newUserSend: boolean;
+  /** Auto-follow was active before this render. */
+  nearBottom: boolean;
+}
+
+export interface ResolveRenderPinDecision {
+  /** Explicit sends hand ownership back to the latest-message anchor. */
+  clearRestoring: boolean;
+  /** Pin the scroll container to its content end in this layout pass. */
+  pinToBottom: boolean;
+}
+
+export interface ResolveLastUserMessageObservationArgs {
+  /** A saved non-bottom viewport is currently being restored. */
+  restoring: boolean;
+  /** The current render's tail user message, if any. */
+  tailUserMessageId: string | null;
+  /** The last tail user message already observed by the mounted stream. */
+  previousTailUserMessageId: string | null;
+}
+
+export interface ResolveLastUserMessageObservation {
+  /** Baseline to store after observing the current render. */
+  baselineUserMessageId: string | null;
+  /** Whether the current tail user message is a newly sent message. */
+  isNewUserSend: boolean;
+}
+
+/**
+ * Distinguish restored history hydration from a user send at the tail.
+ *
+ * A restored stream can mount before its first history batch arrives. If that
+ * batch ends in a user message, it must establish the baseline rather than
+ * taking ownership from the restored viewport as a new send.
+ */
+export function resolveLastUserMessageObservation({
+  restoring,
+  tailUserMessageId,
+  previousTailUserMessageId,
+}: ResolveLastUserMessageObservationArgs): ResolveLastUserMessageObservation {
+  const baselineUserMessageId =
+    restoring && previousTailUserMessageId === null && tailUserMessageId !== null
+      ? tailUserMessageId
+      : previousTailUserMessageId;
+  return {
+    baselineUserMessageId,
+    isNewUserSend: tailUserMessageId !== null && tailUserMessageId !== baselineUserMessageId,
+  };
+}
+
+/**
+ * Resolve the render-time priority between a saved history anchor and auto-follow.
+ * Reopening a session must preserve a real reading position, but a user message
+ * sent during that mounted session is an explicit request to resume at the tail.
+ */
+export function resolveRenderPinDecision({
+  restoring,
+  newUserSend,
+  nearBottom,
+}: ResolveRenderPinArgs): ResolveRenderPinDecision {
+  if (newUserSend) return { clearRestoring: restoring, pinToBottom: true };
+  if (restoring) return { clearRestoring: false, pinToBottom: false };
+  return { clearRestoring: false, pinToBottom: nearBottom };
+}
+
 export interface ResolveNearBottomArgs {
   /** scroll 事件前的跟随态(isNearBottomRef) */
   wasNearBottom: boolean;

@@ -58,6 +58,11 @@ let pendingOfflineNotice = false;
 const DEFAULT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 1500;
 export const QUIT_OFFLINE_ANNOUNCE_TIMEOUT_MS = 4500;
 
+// The SDK disables its ping watchdog when this value is omitted. Keep the
+// timeout finite so a locally OPEN but silent connection is forced through the
+// existing reconnect flow instead of dropping inbound messages indefinitely.
+const FEISHU_WS_PING_TIMEOUT_SECONDS = 30;
+
 function emitRendererStatus(error?: string): void {
   feishuEvents.emit('status', {
     status: currentStatus,
@@ -261,6 +266,9 @@ export async function start(
     domain: creds.service === 'lark' ? Lark.Domain.Lark : Lark.Domain.Feishu,
     loggerLevel: Lark.LoggerLevel.info,
     autoReconnect: true,
+    wsConfig: {
+      pingTimeout: FEISHU_WS_PING_TIMEOUT_SECONDS,
+    },
     logger: makeCapturingLogger(startDetector, startedGeneration, creds.appId),
     onReady: () => {
       handleReadySignal(startDetector, startedGeneration, creds.appId);

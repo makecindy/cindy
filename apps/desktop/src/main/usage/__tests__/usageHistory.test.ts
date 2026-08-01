@@ -23,6 +23,23 @@ vi.mock('../../localDb/client/current', () => ({
 vi.mock('../modelPricing', () => ({
   getModelPricing: vi.fn(),
   isModelPricingRefreshInFlight: vi.fn(() => false),
+  readModelPriceOverridesSnapshot: vi.fn(() => ({})),
+  getClaudeSubscriptionValuePrice: (
+    model: string,
+    pricing: Record<string, Record<string, unknown>> | null | undefined,
+    at?: string | Date,
+  ) =>
+    model === 'claude-sonnet-5'
+      ? {
+          providerId: 'anthropic',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: String(at).slice(0, 10) < '2026-09-01' ? 2 : 3,
+          outputPerMtok: String(at).slice(0, 10) < '2026-09-01' ? 10 : 15,
+        }
+      : pricing?.anthropic?.[model],
   getCodexSubscriptionValuePrice: (
     model: string,
     pricing: Record<string, Record<string, unknown>> | null | undefined,
@@ -39,6 +56,21 @@ vi.mock('../modelPricing', () => ({
           outputPerMtok: 8,
         }
       : undefined),
+  getCodexProviderSubscriptionValuePrice: (
+    providerId: string,
+    model: string,
+  ) =>
+    providerId === 'anthropic' && model === 'claude-sonnet-5'
+      ? {
+          providerId: 'anthropic',
+          modelId: model,
+          currency: 'USD',
+          source: 'subscription-reference',
+          approximate: true,
+          inputPerMtok: 2,
+          outputPerMtok: 10,
+        }
+      : undefined,
   getSubscriptionDirectValuePrice: (model: string) =>
     model === 'xai/grok-4.3'
       ? {
@@ -159,6 +191,7 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
     getAllSpendDays: async () => [],
     getModelUsageSince: async () => [],
     getModelPricing: async () => null,
+    getModelPriceOverridesSnapshot: () => ({}),
     isModelPricingRefreshInFlight: () => false,
     todayKey: () => TODAY,
     ...overrides,
@@ -316,6 +349,37 @@ describe('readUsageHistoryWith', () => {
       (row) => row.apiMoney.amount === 1,
     );
     expect(api?.subscriptionEstimateMoney.amount).toBe(0);
+  });
+
+  it('resolves subscription reference prices for each usage day', async () => {
+    const result = await readUsageHistoryWith(
+      makeDeps({
+        todayKey: () => '2026-09-02',
+        getModelUsageSince: async () => [
+          modelRow(
+            '2026-08-31',
+            'claude-code',
+            claudeSubscriptionUsageModelKey('claude-sonnet-5'),
+            actual(0),
+            { inputTokens: 1_000_000 },
+          ),
+          modelRow(
+            '2026-09-01',
+            'claude-code',
+            claudeSubscriptionUsageModelKey('claude-sonnet-5'),
+            actual(0),
+            { inputTokens: 1_000_000 },
+          ),
+        ],
+      }),
+    );
+
+    expect(result.modelDaily.map((row) => row.subscriptionEstimateMoney.amount)).toEqual([
+      regionalUsdAmount(2),
+      regionalUsdAmount(3),
+    ]);
+    expect(result.models[0].estimatedMoney?.amount).toBeCloseTo(regionalUsdAmount(5));
+    expect(result.totals.last30DaysEstimatedValue.amount).toBeCloseTo(regionalUsdAmount(5));
   });
 
   it('keeps current-region subscription estimates when history uses another currency', async () => {

@@ -96,14 +96,6 @@ const mkAskUser = (id: string): ChatMessage => ({
   content: '',
 });
 
-const todoInput = (items: Array<{ content: string; status: 'pending' | 'in_progress' | 'completed' }>) => ({
-  todos: items.map((t, idx) => ({
-    id: `todo-${idx}`,
-    content: t.content,
-    status: t.status,
-  })),
-});
-
 /**
  * 构造一个"现实风格"的消息序列:user → (thinking → assistant text → tool_use × k → tool_result × k) × turn
  * 用于 perf 微基准,模拟真实 session 形态。
@@ -281,12 +273,13 @@ describe('Scenario 2 — U1 short session full two-stage trace (build → decide
 // ── Scenario 2b: render-window 不从 Task/Todo 卡中间开窗 ───────────────────
 
 describe('Scenario 2b — render-window start snaps to user turn boundary', () => {
-  it('includes the preceding user message when the default 80-item window would start at a plan card', () => {
+  it('includes the preceding user message when the default 80-item window would start at a task card', () => {
     const messages: ChatMessage[] = [
       mkUser('u-before', 'before'),
       mkAssistant('a-before', 'before answer'),
       mkUser('u-task', 'fix the task card'),
-      mkTool('tw-task', 'TodoWrite', todoInput([{ content: 'fix the task card', status: 'completed' }])),
+      // 运行中的子 Agent 卡(无 result)—— 非 boundary item,窗口不该从它开窗。
+      mkTool('task-1', 'Task', { description: 'fix the task card' }),
       mkAssistant('a-task', 'done'),
     ];
     for (let i = 0; i < 39; i++) {
@@ -297,7 +290,7 @@ describe('Scenario 2b — render-window start snaps to user turn boundary', () =
     const allRenderItems = groupWorkRuns(buildRenderItems(messages).items, false);
     const rawStartIdx = Math.max(0, allRenderItems.length - RENDER_WINDOW_INITIAL_ITEMS);
 
-    expect(allRenderItems[rawStartIdx]?.type).toBe('agent_plan');
+    expect(allRenderItems[rawStartIdx]?.type).toBe('agent_task');
 
     const snappedStartIdx = snapRenderWindowStartIdx(allRenderItems, rawStartIdx);
     const firstVisible = allRenderItems[snappedStartIdx];
@@ -307,7 +300,7 @@ describe('Scenario 2b — render-window start snaps to user turn boundary', () =
       expect(firstVisible.message.role).toBe('user');
       expect(firstVisible.message.clientId).toBe('u-task');
     }
-    expect(allRenderItems[snappedStartIdx + 1]?.type).toBe('agent_plan');
+    expect(allRenderItems[snappedStartIdx + 1]?.type).toBe('agent_task');
   });
 });
 
