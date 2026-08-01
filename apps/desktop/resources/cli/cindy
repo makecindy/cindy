@@ -11,6 +11,13 @@
 # (与 VS Code 的 bin/code 同一思路)。
 PROG=$(basename "$0")
 SELF="$0"
+
+# 当命令通过 PATH 调用时，$0 可能不带路径（例如 "cindy"），需要先解析为可访问的路径。
+case "$SELF" in
+  */*) ;;
+  *) SELF=$(command -v "$SELF" 2>/dev/null || printf '%s' "$SELF") ;;
+esac
+
 while [ -h "$SELF" ]; do
   link=$(readlink "$SELF")
   case "$link" in
