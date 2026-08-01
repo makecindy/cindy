@@ -189,3 +189,20 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
       .join('\n');
   return compactCurrentUserIntent(text);
 }
+
+/**
+ * Plan approval changes the authority for the implementation turn. Keep the
+ * original request together with the approved plan without expanding the
+ * lightweight reviewer beyond its existing intent budget.
+ */
+export function composeAutoReviewIntentWithApprovedPlan(
+  currentUserIntent: string,
+  approvedPlan: string,
+): string {
+  const plan = approvedPlan.trim();
+  if (!plan) return compactCurrentUserIntent(currentUserIntent);
+  return compactCurrentUserIntent([
+    currentUserIntent.trim(),
+    `Approved plan:\n${plan}`,
+  ].filter(Boolean).join('\n\n'));
+}

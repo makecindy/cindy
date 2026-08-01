@@ -105,6 +105,7 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  composeAutoReviewIntentWithApprovedPlan,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -1495,6 +1496,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 空 plan 直接放过(老链路 agentManager.ts:1118-1120 同样处理)
           return { behavior: 'allow', updatedInput: input };
         }
+        const planRequestAutoReviewIntent = currentAutoReviewIntent;
         const decision = await dispatchInteraction({
           kind: 'plan_review',
           requestId: options.toolUseID,
@@ -1536,6 +1538,10 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
         }
         const finalPlan = decision.editedPlan ?? plan;
+        setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
+          planRequestAutoReviewIntent,
+          finalPlan,
+        ));
         return {
           behavior: 'allow',
           updatedInput: { ...(input as Record<string, unknown>), plan: finalPlan } as Record<string, unknown>,

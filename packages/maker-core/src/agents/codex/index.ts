@@ -79,6 +79,7 @@ import {
 } from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import {
+  composeAutoReviewIntentWithApprovedPlan,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -868,8 +869,10 @@ function codexPermissionStrictnessRank(mode: PermissionMode): number {
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
 const PLAN_IMPLEMENTATION_MESSAGE = 'Implement the plan.';
 const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySelection');
+const CODEX_AUTO_REVIEW_INTENT = Symbol('codexAutoReviewIntent');
 type CodexInternalSendOptions = SendOptions & {
   [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
+  [CODEX_AUTO_REVIEW_INTENT]?: string;
 };
 const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'no_listener_attached',
@@ -3874,8 +3877,10 @@ export class CodexAgent extends BaseAgent {
     ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
+      const planRequestAutoReviewIntent = currentAutoReviewIntent;
       const planFollowUpSendOptions = (
         additionalSelectionText = '',
+        autoReviewIntent?: string,
       ): CodexInternalSendOptions => ({
         ...(activeTurnPermissionPolicy
           ? { turnPermissionPolicy: activeTurnPermissionPolicy }
@@ -3886,6 +3891,7 @@ export class CodexAgent extends BaseAgent {
         ]
           .filter(Boolean)
           .join('\n'),
+        ...(autoReviewIntent ? { [CODEX_AUTO_REVIEW_INTENT]: autoReviewIntent } : {}),
       });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
@@ -3922,6 +3928,11 @@ export class CodexAgent extends BaseAgent {
         const message = edited && edited !== plan.trim()
           ? `${PLAN_IMPLEMENTATION_MESSAGE} Follow this revised plan:\n\n${edited}`
           : PLAN_IMPLEMENTATION_MESSAGE;
+        const finalPlan = edited && edited !== plan.trim() ? edited : plan;
+        const implementationAutoReviewIntent = composeAutoReviewIntentWithApprovedPlan(
+          planRequestAutoReviewIntent,
+          finalPlan,
+        );
         const addedCapabilitySelection = capabilitySelectionAddedByPlanEdit(
           capabilityRoutingPolicy,
           'codex',
@@ -3932,7 +3943,10 @@ export class CodexAgent extends BaseAgent {
         try {
           await handle.send(
             { type: 'user', content: message },
-            planFollowUpSendOptions(addedCapabilitySelection),
+            planFollowUpSendOptions(
+              addedCapabilitySelection,
+              implementationAutoReviewIntent,
+            ),
           );
         } catch (e) {
           emitPlanFollowUpStartFailure('implementation', e);
@@ -7353,7 +7367,10 @@ export class CodexAgent extends BaseAgent {
           flushDeferredTerminalTurnCompletionsIfIdle();
           return;
         }
-        setAutoReviewIntent(message.content);
+        const autoReviewIntent = (sendOpts as CodexInternalSendOptions | undefined)?.[
+          CODEX_AUTO_REVIEW_INTENT
+        ];
+        setAutoReviewIntent(autoReviewIntent ?? message.content);
         assertCurrentHost('turn/start');
         // 本条消息的计划意图:sendOpts.planMode 是点击发送瞬间的快照(排队行透传),
         // 权威于 agent 当前武装态;undefined 走旧语义(消耗武装态)。一次性语义:

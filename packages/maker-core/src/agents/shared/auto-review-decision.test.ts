@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   classifyLocalAutoReviewTier,
+  composeAutoReviewIntentWithApprovedPlan,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewRequest,
@@ -158,5 +159,24 @@ describe('extractAutoReviewUserIntent', () => {
     expect(compacted).toMatch(/^initial context-/);
     expect(compacted).toContain('…[middle omitted]…');
     expect(compacted).toMatch(/-FINAL: do not push$/);
+  });
+
+  it('keeps an approved plan with the original intent inside the same budget', () => {
+    expect(composeAutoReviewIntentWithApprovedPlan(
+      'Refactor the parser without changing public behavior',
+      '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+    )).toBe(
+      'Refactor the parser without changing public behavior\n\n'
+      + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+    );
+
+    const compacted = composeAutoReviewIntentWithApprovedPlan(
+      `original-${'x'.repeat(1_900)}`,
+      `first plan step-${'y'.repeat(1_900)}-FINAL PLAN STEP`,
+    );
+    expect(compacted).toHaveLength(2_000);
+    expect(compacted).toMatch(/^original-/);
+    expect(compacted).toContain('…[middle omitted]…');
+    expect(compacted).toMatch(/-FINAL PLAN STEP$/);
   });
 });

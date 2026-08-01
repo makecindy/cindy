@@ -15336,6 +15336,50 @@ describe('CodexAgent plan mode', () => {
     await handle.close();
   });
 
+  it('reviews implementation actions against the approved plan instead of the internal follow-up', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const agent = new CodexAgent(createDeps({}, { reviewAutoPermissionAction }));
+    let turnSeq = 0;
+    const host = installFakeHost(agent, (method) => {
+      if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
+      return undefined;
+    }, { codexProxyActive: true });
+    const handle = await agent.startSession({
+      sessionId: 'session-plan-approved-review-intent',
+      model: 'qwen/qwen3-coder',
+      providerId: 'xd',
+      workingDir: '/repo',
+      permissionMode: 'auto',
+      planMode: true,
+    });
+    handle.setInteractionResolver(async () => ({ kind: 'plan_review', behavior: 'allow' }));
+
+    await handle.send({
+      type: 'user',
+      content: 'Refactor the parser without changing public behavior',
+    });
+    runPlanTurn(host, 'turn-1', '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests');
+    await vi.waitFor(() => {
+      expect(turnStartCalls(host)).toHaveLength(2);
+    });
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.commandExecutionApproval) throw new Error('expected commandExecutionApproval');
+    await expect(handlers.commandExecutionApproval({
+      threadId: 'start-thread-id',
+      turnId: 'turn-2',
+      itemId: 'focused-typecheck',
+      command: 'npx tsc --noEmit',
+      cwd: '/repo',
+    })).resolves.toEqual({ decision: 'accept' });
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      userIntent:
+        'Refactor the parser without changing public behavior\n\n'
+        + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+    }));
+    await handle.close();
+  });
+
   it('requests the default marker again when turn/start retries after a daemon restart', async () => {
     const agent = new CodexAgent(createDeps());
     let turnStartCount = 0;
