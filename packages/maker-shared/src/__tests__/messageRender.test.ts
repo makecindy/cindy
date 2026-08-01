@@ -925,6 +925,42 @@ describe('message render todo grouping', () => {
     });
   });
 
+  it('keeps other completed tasks when the latest Task update deletes one completed task', () => {
+    const first = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const second = tool('task2', 'TaskCreate', { subject: 'Write summary' }, 'create-2');
+    const completeFirst = tool('task3', 'TaskUpdate', { taskId: 'abc', status: 'completed' }, 'update-1');
+    const completeSecond = tool('task4', 'TaskUpdate', { taskId: 'def', status: 'completed' }, 'update-2');
+    const removeFirst = tool('task5', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-3');
+
+    expect(findLatestMessageTodoInsertion([
+      first,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      second,
+      result('create-2', 'Task #def created successfully: Write summary'),
+      completeFirst,
+      completeSecond,
+      removeFirst,
+    ])).toMatchObject({
+      key: 'todo-task1',
+      source: 'task',
+      todos: [{ content: 'Write summary', status: 'completed' }],
+    });
+  });
+
+  it('treats TaskGet deleted results as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const getDeleted = tool('task2', 'TaskGet', { taskId: 'abc' }, 'get-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      getDeleted,
+      result('get-1', JSON.stringify({
+        task: { id: 'abc', subject: 'Collect logs', status: 'deleted' },
+      })),
+    ])).toBeNull();
+  });
+
   it('parses Codex update_plan text and structured plan statuses', () => {
     expect(extractPlanTodos('update_plan', { text: '1. Read code\n2. Run tests' })).toEqual([
       { content: 'Read code', status: 'in_progress' },
