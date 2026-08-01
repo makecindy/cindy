@@ -47,29 +47,30 @@ export async function confirmAgentSwitchRisk({
   });
 }
 
-export interface RemoteIntentReadbackFreshness {
-  /** effect 已清理(切走会话 / 换设备)。 */
+export interface AgentSwitchResponseFreshness {
+  /** 发起方已放弃(effect 清理:切走会话 / 换设备)。同步调用点传 false。 */
   cancelled: boolean;
-  /** 发起读回时的本端写序号 vs 响应到达时的当前值(覆盖「已点选但尚未落 store」的窗口)。 */
+  /** 发起时的本端写序号 vs 响应到达时的当前值(覆盖「已点选但尚未落 store」的窗口)。 */
   writeSeqAtStart: number;
   writeSeqNow: number;
-  /** 发起读回时的意图修订号 vs 响应到达时的当前值(覆盖任何来源的实际变更)。 */
+  /** 发起时的意图修订号 vs 响应到达时的当前值(覆盖任何来源的实际变更)。 */
   intentRevAtStart: number;
   intentRevNow: number;
 }
 
 /**
- * device-link 远程会话的 pending 意图读回结果是否仍然新鲜(可以应用)。
+ * device-link 远程会话的异步意图响应是否仍然新鲜(可以落到展示态)。两个调用点同构:
+ * 打开 / 重连时的**权威意图读回**,以及切换 IPC 的**登记 ack**——两者都在 await 期间
+ * 可能被更新的状态超车,落下去就会让选择器显示过期引擎,与被控端实际要执行的不一致。
  *
  * 判定必须基于**单调计数**,不能比较意图值本身:意图在途期间从 null 变成非空又清回
  * null(本端登记后撤销,或另一窗口 / 被控端经 sessions:patched 来回改)时,值与引用都会
- * 回到相等,过期的非空响应就会被误判为新鲜、把已取消的意图复活出来,选择器继续显示一个
- * 用户已经放弃的目标引擎,还与被控端权威状态不一致。
+ * 回到相等,过期响应就会被误判为新鲜。
  *
- * 两个计数各管一段:store 修订号覆盖**任何来源**的实际变更(含外部回流);本端写序号覆盖
- * 「用户已点选、切换 IPC 还在途、尚未落 store」的空窗。
+ * 两个计数各管一段:store 修订号覆盖**任何来源**的实际变更(含外部权威回流);本端写序号
+ * 覆盖「用户已点选、切换 IPC 还在途、尚未落 store」的空窗。
  */
-export function isRemoteIntentReadbackFresh(args: RemoteIntentReadbackFreshness): boolean {
+export function isAgentSwitchResponseFresh(args: AgentSwitchResponseFreshness): boolean {
   if (args.cancelled) return false;
   if (args.writeSeqNow !== args.writeSeqAtStart) return false;
   return args.intentRevNow === args.intentRevAtStart;

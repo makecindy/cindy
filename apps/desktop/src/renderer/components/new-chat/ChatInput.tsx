@@ -101,7 +101,7 @@ import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteS
 
 import {
   confirmAgentSwitchRisk,
-  isRemoteIntentReadbackFresh,
+  isAgentSwitchResponseFresh,
 } from './agentSwitchConfirmation';
 import {
   isSelectedSourceDisconnected,
@@ -1261,7 +1261,7 @@ export function ChatInput({
     void makerApiForDevice(deviceLinkDeviceId)
       .getSessionAgentSwitchIntent(sessionId)
       .then((remoteIntent) => {
-        const fresh = isRemoteIntentReadbackFresh({
+        const fresh = isAgentSwitchResponseFresh({
           cancelled,
           writeSeqAtStart: writeSeq,
           writeSeqNow: agentSwitchWriteSeqRef.current,
@@ -3968,7 +3968,8 @@ export function ChatInput({
       if (!sessionId) return;
       // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
       // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
-      agentSwitchWriteSeqRef.current += 1;
+      const writeSeq = (agentSwitchWriteSeqRef.current += 1);
+      const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sessionId);
       try {
         // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
         // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
@@ -4022,6 +4023,21 @@ export function ChatInput({
           newEffort,
           targetFast,
         );
+        // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
+        // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
+        // **旧**选择,落下去会让选择器显示过期引擎,而被控端按新意图执行下一条消息。
+        // 直接丢弃即可——被控端每次意图变更都会广播,权威值随 push 收敛。
+        if (
+          !isAgentSwitchResponseFresh({
+            cancelled: false,
+            writeSeqAtStart: writeSeq,
+            writeSeqNow: agentSwitchWriteSeqRef.current,
+            intentRevAtStart: intentRevAtSend,
+            intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
+          })
+        ) {
+          return;
+        }
         if (result.deferred) {
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换

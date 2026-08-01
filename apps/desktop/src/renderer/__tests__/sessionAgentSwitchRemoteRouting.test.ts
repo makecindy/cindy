@@ -147,7 +147,7 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
   });
 });
 
-describe('isRemoteIntentReadbackFresh（远程意图读回的新鲜度守卫）', () => {
+describe('isAgentSwitchResponseFresh（远程意图读回的新鲜度守卫）', () => {
   const base = {
     cancelled: false,
     writeSeqAtStart: 3,
@@ -157,25 +157,25 @@ describe('isRemoteIntentReadbackFresh（远程意图读回的新鲜度守卫）'
   };
 
   it('在途期间无人改动 → 应用读回结果', async () => {
-    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
-    expect(isRemoteIntentReadbackFresh(base)).toBe(true);
+    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isAgentSwitchResponseFresh(base)).toBe(true);
   });
 
   it('effect 已清理(切走会话)→ 丢弃', async () => {
-    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
-    expect(isRemoteIntentReadbackFresh({ ...base, cancelled: true })).toBe(false);
+    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isAgentSwitchResponseFresh({ ...base, cancelled: true })).toBe(false);
   });
 
   it('本端 ABA:点选登记后又撤销 → 写序号已变,丢弃', async () => {
-    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
-    expect(isRemoteIntentReadbackFresh({ ...base, writeSeqNow: 5 })).toBe(false);
+    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    expect(isAgentSwitchResponseFresh({ ...base, writeSeqNow: 5 })).toBe(false);
   });
 
   it('外部 ABA:另一窗口 / 被控端把意图改成非空又清回 null → 修订号已变,丢弃', async () => {
-    const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
+    const { isAgentSwitchResponseFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
     // 外部回流不经本端点选,writeSeq 不动;值也回到发起时的 null —— 只有修订号能识别。
     expect(
-      isRemoteIntentReadbackFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 }),
+      isAgentSwitchResponseFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 }),
     ).toBe(false);
   });
 });
@@ -257,10 +257,10 @@ describe('ChatInput 的入口门控与调用路由', () => {
 
   it('远程会话打开时读回被控端权威意图,并经新鲜度守卫过滤过期响应', () => {
     expect(source).toContain('.getSessionAgentSwitchIntent(sessionId)');
-    expect(source).toContain('isRemoteIntentReadbackFresh({');
+    expect(source).toContain('isAgentSwitchResponseFresh({');
     expect(source).toContain('makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent)');
     // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
-    expect(source).toContain('agentSwitchWriteSeqRef.current += 1;');
+    expect(source).toContain('agentSwitchWriteSeqRef.current += 1)');
     expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
     // deviceId 跨重连不变,不把重连代际放进依赖就永远不会重试(断链期间的读回失败
     // 与错过的 sessions:patched 都靠这一跳补回)。
@@ -268,5 +268,14 @@ describe('ChatInput 的入口门控与调用路由', () => {
       '}, [sessionId, deviceLinkDeviceId, remoteHostId, remoteReconnectEpoch]);',
     );
     expect(source).toContain("remoteConnStatus === 'connected'");
+  });
+
+  it('切换 ack 也过同一守卫:远程往返期间被更新的选择超车时丢弃,不用旧值盖新状态', () => {
+    // ack 与读回同构,复用同一个纯函数;发起时同时捕获写序号与修订号。
+    expect(source).toContain('const writeSeq = (agentSwitchWriteSeqRef.current += 1);');
+    expect(source).toContain(
+      'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sessionId);',
+    );
+    expect(source).toContain('intentRevAtStart: intentRevAtSend,');
   });
 });
