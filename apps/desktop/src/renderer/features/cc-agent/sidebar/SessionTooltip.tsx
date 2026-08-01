@@ -216,12 +216,16 @@ function PrLine({ prRef, status }: { prRef: SessionPrRef; status: PrStatusResult
   const unresolved = status?.ok && status.unresolvedCount ? status.unresolvedCount : 0;
 
   return (
-    <div className="flex max-w-80 items-center gap-1.5">
+    <div className="flex min-w-0 max-w-80 items-center gap-1.5">
       <Icon size={12} strokeWidth={1.75} className="shrink-0" style={{ color }} />
-      <span className="shrink-0">
+      <span className="min-w-0 truncate">
         {prRef.owner}/{prRef.repo}#{prRef.prNumber}
       </span>
-      {kind && <span className="shrink-0">· {t(`ccAgent.gitContext.pr.status.${kind}`)}</span>}
+      {kind && (
+        <span className="shrink-0 whitespace-nowrap">
+          · {t(`ccAgent.gitContext.pr.status.${kind}`)}
+        </span>
+      )}
       {unresolved > 0 && (
         <span
           className="inline-flex shrink-0 items-center gap-0.5"
