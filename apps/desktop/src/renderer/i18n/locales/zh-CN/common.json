@@ -1420,7 +1420,29 @@
         "capabilityGroupHint": "不会出现在对话模型选择中，仅供图像生成等功能使用",
         "accessWriteFailed": "停用设置未能保存，请重试",
         "disabledGroup": "已停用",
-        "enableAllModels": "全部启用"
+        "enableAllModels": "全部启用",
+        "priceOverride": {
+          "menu": "编辑 API 估价",
+          "title": "{{model}} API 估价",
+          "description": "仅用于估算你自己的 API 或订阅通道用量，不会改变供应商的实际账单。",
+          "currency": "币种",
+          "input": "输入",
+          "output": "输出",
+          "cacheRead": "缓存读取",
+          "cacheWrite": "缓存写入",
+          "unit": "每 100 万 token 的价格；缓存不单独计费时留空。",
+          "registryDate": "参考价更新于 {{date}}",
+          "conflict": "线上参考价已更新，你的本地估价仍会保留并优先生效。请检查或恢复为新的参考价。",
+          "reset": "恢复当前参考价",
+          "resetDone": "已恢复当前参考价",
+          "save": "保存",
+          "cancel": "取消",
+          "close": "关闭",
+          "saved": "API 估价已保存",
+          "invalid": "请输入有效且不小于 0 的输入、输出价格",
+          "loadFailed": "API 估价加载失败，请重试",
+          "saveFailed": "API 估价保存失败，请重试"
+        }
       },
       "genericOAuth": {
         "subtitle": "订阅授权登录（OAuth）",
@@ -2769,9 +2791,8 @@
         "personal": "个人"
       },
       "tips": {
-        "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人连接包括微信扫码，以及使用自有凭证接入企业微信 / 飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入企业微信、飞书和钉钉；各渠道独立保存新对话配置。"
+        "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
+        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。"
       },
       "defaults": {
         "title": "新对话配置",

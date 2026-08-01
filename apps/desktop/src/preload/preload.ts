@@ -4280,6 +4280,19 @@ contextBridge.exposeInMainWorld('electronAPI', {
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:model-disable:set', input),
+    getModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:get', target),
+    setModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+      desired: import('../shared/modelPriceOverride').ModelPriceOverrideDesiredQuote,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:set', target, desired),
+    resetModelPriceOverride: (
+      target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
+    ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
+      ipcRenderer.invoke('maker:model-price-override:reset', target),
 
     // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session。
     openSessionInNewWindow: (sessionId: string): Promise<void> =>

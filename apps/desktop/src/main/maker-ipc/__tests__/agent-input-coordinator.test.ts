@@ -500,6 +500,32 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     expect(latestProjection(h.projections).error).toBeNull();
   });
 
+  it('sends a foreign session link as ordinary Agent text when history enrichment fails', async () => {
+    const h = createHarness();
+    h.resolveSessionReferences.mockRejectedValueOnce(new Error('session belongs to another account'));
+    const text = 'inspect cindy://session/foreign-session';
+
+    h.coordinator.enqueue('target-session', makeItem('quoted-foreign', text, {
+      sessionRefs: [{ sessionId: 'foreign-session' }],
+    }));
+    await flush();
+
+    expect(h.resolveSessionReferences).toHaveBeenCalledWith([
+      { sessionId: 'foreign-session' },
+    ]);
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      'target-session',
+      { type: 'user', content: text },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'session reference enrichment skipped',
+      expect.objectContaining({ referenceCount: 1 }),
+    );
+  });
+
   it('clears a stale trusted snapshot on a full-content rewrite without refs', () => {
     const h = createHarness();
     const item = makeItem('quoted-content-rewrite', 'compare cindy://session/source-session', {

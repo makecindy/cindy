@@ -304,7 +304,7 @@ export interface ScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
   >;
 }
 

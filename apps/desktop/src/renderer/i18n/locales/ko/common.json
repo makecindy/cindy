@@ -1420,7 +1420,29 @@
         "capabilityGroupHint": "대화 모델 선택에는 표시되지 않으며, 이미지 생성 등 기능에서만 사용됩니다.",
         "accessWriteFailed": "변경 사항을 저장하지 못했습니다. 다시 시도해 주세요.",
         "disabledGroup": "비활성화됨",
-        "enableAllModels": "모두 활성화"
+        "enableAllModels": "모두 활성화",
+        "priceOverride": {
+          "menu": "API 가격 추정치 편집",
+          "title": "{{model}} API 가격 추정치",
+          "description": "내 API 또는 구독 경로의 사용량을 추정할 때만 사용되며 제공자의 실제 청구 금액은 변경하지 않습니다.",
+          "currency": "통화",
+          "input": "입력",
+          "output": "출력",
+          "cacheRead": "캐시 읽기",
+          "cacheWrite": "캐시 쓰기",
+          "unit": "100만 토큰당 가격입니다. 캐시가 별도로 과금되지 않으면 비워 두세요.",
+          "registryDate": "참고 가격 업데이트 {{date}}",
+          "conflict": "원격 참고 가격이 변경되었습니다. 로컬 추정치는 계속 우선 적용됩니다. 검토하거나 새 참고 가격으로 재설정하세요.",
+          "reset": "현재 참고 가격으로 재설정",
+          "resetDone": "현재 참고 가격으로 복원했습니다",
+          "save": "저장",
+          "cancel": "취소",
+          "close": "닫기",
+          "saved": "API 가격 추정치를 저장했습니다",
+          "invalid": "0 이상의 올바른 입력 및 출력 가격을 입력하세요",
+          "loadFailed": "가격 추정치를 불러오지 못했습니다. 다시 시도하세요.",
+          "saveFailed": "가격 추정치를 저장하지 못했습니다. 다시 시도하세요."
+        }
       },
       "genericOAuth": {
         "subtitle": "구독 인증 로그인 (OAuth)",
@@ -2769,9 +2791,8 @@
         "personal": "개인"
       },
       "tips": {
-        "cindy": "Cindy는 공식 제공 공유 봇입니다. 자격 증명을 신청할 필요 없이 Slack을 연결하고 @Cindy를 멘션하면 바로 작업을 맡길 수 있습니다.",
-        "personal": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom / Feishu / Discord / Telegram 인증 정보 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다.",
-        "personalFeishuOnly": "개인 연결에는 WeChat 스캔 인증과 직접 발급한 WeCom, Feishu 및 DingTalk 자격 증명 연결이 포함됩니다. 새 대화 설정은 채널별로 저장됩니다."
+        "cindy": "Cindy가 제공하고 관리합니다. 봇을 직접 만들거나 인증 정보를 준비할 필요 없이 안내에 따라 연결하면 바로 사용할 수 있습니다.",
+        "personal": "본인의 계정이나 봇을 연결하고 필요한 인증 정보를 직접 관리합니다. 계정, 권한 및 설정은 채널별로 저장됩니다."
       },
       "defaults": {
         "title": "새 대화 설정",

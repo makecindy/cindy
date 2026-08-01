@@ -47,7 +47,11 @@ import {
   rehydrateDeviceLinkTopics,
   type DeviceLinkRehydrateSendOptions,
 } from '@/device-link/rehydrate';
-import { invalidateOfflineScheduleIndexFailureFor, invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
+import {
+  invalidateOfflineScheduleIndexFailureFor,
+  invalidateScheduleIndexForDevice,
+  invalidateTransientScheduleIndexFailures,
+} from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -465,6 +469,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
                 // 目标端真实应答即可证明设备可达,取消上一代 unavailable 留下的宽限清理;
                 // 不伪造 presence=true,后续权威 false delta 仍可照常过滤并重新计时。
                 clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
+                remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+                invalidateOfflineScheduleIndexFailureFor(deviceId);
               },
               onDeviceRemoteDisabled: (deviceId) => {
                 // 被控端实时设置已明确关闭远控:这是当前 epoch 的权威终态,
@@ -695,6 +701,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
+      remoteScheduleEventStore.clearDeviceMirrorInvalidation(snap.deviceId);
       // 每个「可用」快照都清该设备的 DEVICE_OFFLINE 负缓存(review P1 ×2):
       // 主机在手机连上 relay 之前就离线时,presence 只在变化时广播,首个在线
       // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
@@ -1304,9 +1311,23 @@ function requireClient(client: DeviceLinkClient | null): DeviceLinkClient {
   return client;
 }
 
+function markOfflineDeviceMirror(deviceId: string): void {
+  // 普通离线只清依赖在线连接的 live 投影,保留 session/messages。这样用户切回
+  // 刚看过的会话时先看到 last-known 内容,恢复后 marker 失效会触发后台窗口对账。
+  remoteSessionStore.markDeviceOffline(deviceId);
+  invalidateScheduleIndexForDevice(deviceId);
+  remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
+  evictDeviceProviders(deviceId);
+  evictDeviceModelMeta(deviceId);
+  evictAgentCapabilitiesForDevice(deviceId);
+  evictComposerPaletteCacheForDevice(deviceId);
+}
+
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);
+  remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
   // Drop the cached provider catalog so a returning/re-granted device re-fetches it
   // instead of serving a list frozen from a previous connection.
   evictDeviceProviders(deviceId);
@@ -1322,7 +1343,7 @@ const basePresenceWipeTimerDeps = {
   setTimer: (callback: () => void, delayMs: number) =>
     setTimeout(callback, delayMs),
   clearTimer: clearTimeout,
-  wipe: wipeUnavailableDeviceMirror,
+  wipe: markOfflineDeviceMirror,
 };
 
 function scheduleUnavailableDeviceMirrorWipe(

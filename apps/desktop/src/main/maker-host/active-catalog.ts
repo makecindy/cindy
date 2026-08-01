@@ -25,6 +25,7 @@
 
 import {
   BUNDLED_CATALOG,
+  findModelRegistryRoute,
   type AgentKind,
   type Catalog,
   type CatalogModel,
@@ -145,9 +146,7 @@ function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
   return model.agents && model.agents.length > 0 ? model.agents : ['claude-code'];
 }
 
-function deriveXdCodexAnthropicBridgeModelIds(
-  models: XdGatewayModelInfo[],
-): Set<string> {
+function deriveXdCodexAnthropicBridgeModelIds(models: XdGatewayModelInfo[]): Set<string> {
   const support = new Map<string, { claudeCode: boolean; codex: boolean }>();
   for (const model of models) {
     const current = support.get(model.id) ?? { claudeCode: false, codex: false };
@@ -207,8 +206,8 @@ function effectiveGatewayModelCost(model: XdGatewayModelInfo): CatalogModel['cos
 
 /** base + custom + discovered augment 的合并缓存;null = 待重算(惰性)。 */
 let merged: Catalog | null = null;
-/** bundled + active v1 `cindyModelMeta` 的合并索引；目录变化时与 merged 一起失效。 */
-let effectiveCindyModelMetaIndex: Map<string, CindyModelMetaFields> | null = null;
+/** 当前 registry 的 Anthropic 路由元数据索引；目录变化时与 merged 一起失效。 */
+let effectiveRegistryMetaIndex: Map<string, RegistryMetaFields> | null = null;
 
 /**
  * 目录修订号。所有会改变 getActiveCatalog() 结果的写入都必须经过 markChanged，
@@ -221,7 +220,7 @@ let changedListener: ((nextRevision: number) => void) | null = null;
 
 function markChanged(): void {
   merged = null;
-  effectiveCindyModelMetaIndex = null;
+  effectiveRegistryMetaIndex = null;
   revision += 1;
   changedListener?.(revision);
 }
@@ -312,100 +311,86 @@ function projectCodexModelsToClaude(p: Provider): Provider {
 const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
 
 /**
- * cindyModelMeta 里客户端认识的字段子集。展示字段直接覆盖发现条目；context / effort
+ * modelRegistry 里客户端认识的字段子集。展示字段直接覆盖发现条目；context / effort
  * 字段只在 Anthropic 动态通道**没有能力信息**时作为基线，由
  * model-discovery/anthropic 消费。上游显式能力始终优先，meta 不在 active catalog
  * overlay 阶段改写能力。
  */
-interface CindyModelMetaFields {
+interface RegistryMetaFields {
   name?: string;
   group?: string;
   description?: string;
   sortOrder?: number;
   defaultEnabled?: boolean;
   contextWindow?: number;
+  maxOutput?: number;
   efforts?: Effort[];
   defaultEffort?: Effort | null;
+  supportsFastMode?: boolean;
+  status?: CatalogModel['status'];
 }
 
-/**
- * 解析目录顶层 `cindyModelMeta`(`{ version: 1, models: { id: {...} } }` 信封)为
- * 展示字段索引。schema 归服务端所有,客户端只读认识的字段、逐字段校验类型;
- * **版本门禁**:version !== 1 整段忽略(未来服务端升 schema 时老客户端安全降级,
- * 不按旧语义误读新数据)。坏信封 / 坏条目静默跳过,绝不让元数据把清单弄坏。
- */
-function buildCindyModelMetaIndex(meta: unknown): Map<string, CindyModelMetaFields> {
-  const index = new Map<string, CindyModelMetaFields>();
-  if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return index;
-  const envelope = meta as { version?: unknown; models?: unknown };
-  if (envelope.version !== 1) return index;
-  const models = envelope.models;
-  if (!models || typeof models !== 'object' || Array.isArray(models)) return index;
-  for (const [id, entry] of Object.entries(models as Record<string, unknown>)) {
-    if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue;
-    const e = entry as Record<string, unknown>;
-    const fields: CindyModelMetaFields = {};
-    if (typeof e.name === 'string' && e.name.length > 0) fields.name = e.name;
-    if (typeof e.group === 'string' && e.group.length > 0) fields.group = e.group;
-    if (typeof e.description === 'string' && e.description.length > 0)
-      fields.description = e.description;
-    if (typeof e.sortOrder === 'number' && Number.isFinite(e.sortOrder))
-      fields.sortOrder = e.sortOrder;
-    if (typeof e.defaultEnabled === 'boolean') fields.defaultEnabled = e.defaultEnabled;
-    if (
-      typeof e.contextWindow === 'number' &&
-      Number.isFinite(e.contextWindow) &&
-      e.contextWindow > 0
-    ) {
-      fields.contextWindow = e.contextWindow;
-    }
-    if (Array.isArray(e.efforts)) {
-      const efforts = e.efforts.filter(
-        (value): value is Effort => typeof value === 'string' && VALID_EFFORTS.has(value),
-      );
-      if (efforts.length === e.efforts.length) fields.efforts = efforts;
-    }
-    if (e.defaultEffort === null) fields.defaultEffort = null;
-    else if (typeof e.defaultEffort === 'string' && VALID_EFFORTS.has(e.defaultEffort)) {
-      fields.defaultEffort = e.defaultEffort as Effort;
-    }
-    if (Object.keys(fields).length > 0) index.set(id, fields);
-  }
-  return index;
+function modelRegistryMetaFields(
+  providerId: string,
+  agent: AgentKind,
+  modelId: string,
+): RegistryMetaFields | undefined {
+  const catalog = base ?? BUNDLED_CATALOG;
+  const matched = findModelRegistryRoute(catalog.modelRegistry, providerId, modelId, agent);
+  if (!matched) return undefined;
+  const { entry } = matched;
+  const perAgent = entry.perAgent?.[agent];
+  const efforts = perAgent?.efforts ?? entry.efforts;
+  const defaultEffort = perAgent?.defaultEffort ?? entry.defaultEffort;
+  return {
+    name: entry.name,
+    ...(entry.group !== undefined ? { group: entry.group } : {}),
+    ...(entry.description !== undefined ? { description: entry.description } : {}),
+    ...(entry.sortOrder !== undefined ? { sortOrder: entry.sortOrder } : {}),
+    ...(perAgent?.defaultEnabled !== undefined || entry.defaultEnabled !== undefined
+      ? { defaultEnabled: perAgent?.defaultEnabled ?? entry.defaultEnabled }
+      : {}),
+    ...(perAgent?.contextWindow !== undefined || entry.contextWindow !== undefined
+      ? { contextWindow: perAgent?.contextWindow ?? entry.contextWindow }
+      : {}),
+    ...(entry.maxOutputTokens !== undefined ? { maxOutput: entry.maxOutputTokens } : {}),
+    ...(efforts !== undefined ? { efforts: efforts as Effort[] } : {}),
+    ...(defaultEffort !== undefined
+      ? { defaultEffort: defaultEffort as Effort }
+      : efforts?.length === 0
+        ? { defaultEffort: null }
+        : {}),
+    ...(perAgent?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
+      ? { supportsFastMode: perAgent?.supportsFastMode ?? entry.supportsFastMode }
+      : {}),
+    ...(entry.status !== undefined
+      ? {
+          status:
+            entry.status === 'preview'
+              ? 'alpha'
+              : entry.status === 'deprecated' || entry.status === 'retired'
+                ? 'deprecated'
+                : 'active',
+        }
+      : {}),
+  };
 }
 
-/**
- * 远端 v1 元数据允许按模型、按字段增量覆盖 bundled v1。旧远端目录经常只带
- * 部分新字段或缺少新模型；缺口必须回落 bundled，否则已知 200k 模型会落入
- * 1M 启发式。非 v1 active 信封仍整段忽略，不能拿 bundled v1 混入未知 schema。
- */
-function buildEffectiveCindyModelMetaIndex(): Map<string, CindyModelMetaFields> {
-  if (effectiveCindyModelMetaIndex) return effectiveCindyModelMetaIndex;
+/** Registry 是动态发现缺少能力信息时唯一的产品元数据基线。 */
+function buildEffectiveRegistryMetaIndex(): Map<string, RegistryMetaFields> {
+  if (effectiveRegistryMetaIndex) return effectiveRegistryMetaIndex;
 
-  const bundled = buildCindyModelMetaIndex(BUNDLED_CATALOG.cindyModelMeta);
-  if (!base || base.cindyModelMeta === undefined) {
-    effectiveCindyModelMetaIndex = bundled;
-    return effectiveCindyModelMetaIndex;
+  const effective = new Map<string, RegistryMetaFields>();
+  const registry = (base ?? BUNDLED_CATALOG).modelRegistry;
+  for (const entry of registry?.models ?? []) {
+    for (const route of entry.routes) {
+      if (route.providerId !== 'anthropic' || !route.agents.includes('claude-code')) continue;
+      const fields = modelRegistryMetaFields('anthropic', 'claude-code', route.modelId);
+      if (fields) effective.set(route.modelId, fields);
+    }
   }
-
-  const activeMeta = base.cindyModelMeta;
-  if (
-    !activeMeta ||
-    typeof activeMeta !== 'object' ||
-    Array.isArray(activeMeta) ||
-    (activeMeta as { version?: unknown }).version !== 1
-  ) {
-    effectiveCindyModelMetaIndex = new Map();
-    return effectiveCindyModelMetaIndex;
-  }
-
-  const effective = new Map<string, CindyModelMetaFields>();
-  for (const [id, fields] of bundled) effective.set(id, { ...fields });
-  for (const [id, fields] of buildCindyModelMetaIndex(activeMeta)) {
-    effective.set(id, { ...effective.get(id), ...fields });
-  }
-  effectiveCindyModelMetaIndex = effective;
-  return effectiveCindyModelMetaIndex;
+  effectiveRegistryMetaIndex = effective;
+  return effectiveRegistryMetaIndex;
 }
 
 export interface CindyModelEffortBaseline {
@@ -415,7 +400,7 @@ export interface CindyModelEffortBaseline {
 
 /** 返回当前目录的已知上下文窗口；只供动态发现缺少上游明确值时兜底。 */
 export function getCindyModelContextWindow(modelId: string): number | null {
-  return buildEffectiveCindyModelMetaIndex().get(modelId)?.contextWindow ?? null;
+  return buildEffectiveRegistryMetaIndex().get(modelId)?.contextWindow ?? null;
 }
 
 /**
@@ -423,7 +408,7 @@ export function getCindyModelContextWindow(modelId: string): number | null {
  * 模型是否存在仍完全由 HTTP / SDK 动态清单决定。
  */
 export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBaseline | null {
-  const fields = buildEffectiveCindyModelMetaIndex().get(modelId);
+  const fields = buildEffectiveRegistryMetaIndex().get(modelId);
   if (!fields?.efforts) return null;
   const efforts = [...fields.efforts];
   const defaultEffort =
@@ -441,9 +426,9 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
  * 典型修正:订阅 `/v1/models` / SDK 捕获给的家族级名字("Fable")→ 产品命名
  * ("Fable 5");上游无排序 → 产品排序。
  */
-function overlayCindyMeta(
+function overlayRegistryMeta(
   model: CatalogModel,
-  fields: CindyModelMetaFields | undefined,
+  fields: RegistryMetaFields | undefined,
 ): CatalogModel {
   if (!fields) return model;
   return {
@@ -454,6 +439,39 @@ function overlayCindyMeta(
     ...(fields.sortOrder !== undefined ? { sortOrder: fields.sortOrder } : {}),
     ...(fields.defaultEnabled !== undefined ? { defaultEnabled: fields.defaultEnabled } : {}),
   };
+}
+
+function overlayModelRegistry(
+  providerId: string,
+  agent: AgentKind,
+  models: CatalogModel[],
+): CatalogModel[] {
+  return sortModelsByOrder(
+    models.map((model) => {
+      const fields = modelRegistryMetaFields(providerId, agent, model.id);
+      const overlaid = overlayRegistryMeta(model, fields);
+      if (!fields) return overlaid;
+      if (DYNAMIC_LIST_PROVIDER_IDS.has(providerId)) {
+        return {
+          ...overlaid,
+          ...(fields.status !== undefined ? { status: fields.status } : {}),
+        };
+      }
+      return {
+        ...overlaid,
+        ...(fields.contextWindow !== undefined
+          ? { contextWindow: fields.contextWindow, contextWindowVerified: true }
+          : {}),
+        ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
+        ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
+        ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
+        ...(fields.supportsFastMode !== undefined
+          ? { supportsFastMode: fields.supportsFastMode }
+          : {}),
+        ...(fields.status !== undefined ? { status: fields.status } : {}),
+      };
+    }),
+  );
 }
 
 /** 按 sortOrder 稳定排序(无 sortOrder 排最后,按进入序)——与 augmentModels 同口径。 */
@@ -519,13 +537,13 @@ function computeMerged(): Catalog {
   // Anthropic 权威模型清单重建(2026-07-19 统一重构):清单唯一来源是 SDK / 登录时
   // HTTP 发现(host 经 setAnthropicDiscoveredModels 注入),目录静态段已退役(bundled
   // 恒为空数组)。空 = 未发现,anthropic 供应商保留但不暴露任何模型,不用静态数据冒充。
-  // 展示元数据(名字/分组/排序/默认可见)以目录 cindyModelMeta 为基线覆盖(2026-07-21
+  // 展示元数据(名字/分组/排序/默认可见)以目录 modelRegistry 为基线覆盖(2026-07-21
   // 三层合并:存在性=发现,展示=产品目录,用户 override 永远最高)——订阅通道返回的
   // 家族级名字("Fable")在此归位为产品命名("Fable 5");能力字段仍以发现为准。
   if (anthropicModels.length > 0) {
-    const metaIndex = buildEffectiveCindyModelMetaIndex();
+    const metaIndex = buildEffectiveRegistryMetaIndex();
     const overlaid = sortModelsByOrder(
-      anthropicModels.map((m) => overlayCindyMeta(m, metaIndex.get(m.id))),
+      anthropicModels.map((m) => overlayRegistryMeta(m, metaIndex.get(m.id))),
     );
     const codexBridgeModels = overlaid.map((model) => ({
       ...model,
@@ -545,9 +563,24 @@ function computeMerged(): Catalog {
     );
   }
 
+  providers = providers.map((provider) => {
+    if (provider.id === 'xd') return provider;
+    let changed = false;
+    const models: Provider['models'] = { ...provider.models };
+    for (const [agent, entries] of Object.entries(provider.models) as [
+      AgentKind,
+      CatalogModel[],
+    ][]) {
+      const overlaid = overlayModelRegistry(provider.id, agent, entries);
+      if (overlaid.some((model, index) => model !== entries[index])) changed = true;
+      models[agent] = overlaid;
+    }
+    return changed ? { ...provider, models } : provider;
+  });
+
   // XD 网关权威模型清单重建。即使实时清单为空也必须重建为空:不能证明某个模型
   // 当前在网关可用就不显示。元数据**只信服务端下发 + 确定性默认值**(2026-07-19 起
-  // 不再回落产品目录条目——服务端 MODEL_METADATA 已是唯一权威):
+  // 不再回落产品目录静态模型条目——服务端 modelRegistry 已是唯一策展元数据权威):
   //   - perAgent 覆盖块按 tab 应用在基线字段之上;
   //   - efforts 字段缺失 = 未登记 → 合成 3 档(low/medium/high,默认 high);
   //     显式 [] = 登记为不可调 → 尊重为空;
@@ -578,15 +611,13 @@ function computeMerged(): Catalog {
         const defaultEffort: Effort | null =
           rawDefault === null
             ? null
-            : rawDefault &&
-                VALID_EFFORTS.has(rawDefault) &&
-                efforts.includes(rawDefault as Effort)
-            ? (rawDefault as Effort)
-            : efforts.includes('high')
-              ? 'high'
-              : efforts.length > 0
-                ? efforts[efforts.length - 1]
-                : null;
+            : rawDefault && VALID_EFFORTS.has(rawDefault) && efforts.includes(rawDefault as Effort)
+              ? (rawDefault as Effort)
+              : efforts.includes('high')
+                ? 'high'
+                : efforts.length > 0
+                  ? efforts[efforts.length - 1]
+                  : null;
         const defaultEnabled = ov.defaultEnabled ?? gm.defaultEnabled;
         const cost = effectiveGatewayModelCost(gm);
         const merged: CatalogModel = {
@@ -667,10 +698,7 @@ export function getCatalogModelContextWindow(
   modelId: string,
   stripPrefix?: string,
 ): number | null {
-  const candidates = new Set<string>([
-    modelId,
-    modelId.replace(/\[1m\]$/, ''),
-  ]);
+  const candidates = new Set<string>([modelId, modelId.replace(/\[1m\]$/, '')]);
   if (stripPrefix && modelId.startsWith(stripPrefix)) {
     const stripped = modelId.slice(stripPrefix.length);
     candidates.add(stripped);
@@ -707,6 +735,13 @@ export function setProviderModelsFromCatalog(providerId: string, catalog: Catalo
       provider.id === providerId ? { ...provider, models: incoming.models } : provider,
     ),
   };
+  markChanged();
+}
+
+export function setModelRegistryFromCatalog(catalog: Catalog): void {
+  if (!catalog.modelRegistry) return;
+  const current = base ?? BUNDLED_CATALOG;
+  base = { ...current, modelRegistry: catalog.modelRegistry };
   markChanged();
 }
 

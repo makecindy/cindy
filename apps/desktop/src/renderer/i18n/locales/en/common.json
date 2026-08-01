@@ -1421,7 +1421,29 @@
         "capabilityGroupHint": "Not shown in the chat model picker; used only by features like image generation.",
         "accessWriteFailed": "Couldn't save the change. Please try again.",
         "disabledGroup": "Disabled",
-        "enableAllModels": "Enable All"
+        "enableAllModels": "Enable All",
+        "priceOverride": {
+          "menu": "Edit API Price Estimate",
+          "title": "{{model}} API Price Estimate",
+          "description": "Used only to estimate usage on your own API or subscription route. This does not change the provider’s bill.",
+          "currency": "Currency",
+          "input": "Input",
+          "output": "Output",
+          "cacheRead": "Cache read",
+          "cacheWrite": "Cache write",
+          "unit": "Price per 1M tokens. Leave cache fields blank when they are not billed separately.",
+          "registryDate": "Reference updated {{date}}",
+          "conflict": "The remote reference price changed. Your local estimate is still in use; review it or reset to the new reference.",
+          "reset": "Reset to Current Reference",
+          "resetDone": "Restored the current reference price",
+          "save": "Save",
+          "cancel": "Cancel",
+          "close": "Close",
+          "saved": "API price estimate saved",
+          "invalid": "Enter valid non-negative input and output prices",
+          "loadFailed": "Couldn’t load the price estimate. Please try again.",
+          "saveFailed": "Couldn’t save the price estimate. Please try again."
+        }
       },
       "genericOAuth": {
         "subtitle": "Subscription sign-in (OAuth)",
@@ -2770,9 +2792,8 @@
         "personal": "Personal"
       },
       "tips": {
-        "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal connections include WeChat scan authorization and your own WeCom / Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own WeCom, Feishu, and DingTalk credentials. Each channel keeps independent new-conversation settings."
+        "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
+        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",

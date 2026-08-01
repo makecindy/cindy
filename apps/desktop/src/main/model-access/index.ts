@@ -13,7 +13,7 @@ import {
 } from '../maker-host/index.js';
 import { getActiveCatalog, setXdGatewayModels } from '../maker-host/active-catalog.js';
 import { isDev } from '../manifestService.js';
-import { overlayCindyModelMeta } from './devMetaOverlay.js';
+import { overlayModelRegistryMeta } from './devMetaOverlay.js';
 import {
   replaceGatewayModelPricing,
   trackGatewayModelPricingSync,
@@ -168,12 +168,11 @@ function applyGatewayModels(
       `xd gateway pricing quotes cover ${quoteCount}/${pricedCount} priced models (${models.length} total)`,
     );
   }
-  // dev:本地目录文件(catalog/providers.json)的 cindyModelMeta 段覆盖服务端下发的
-  // 元数据,改本地 json + 重启即可自测,无需发 OSS / 等服务端热加载;只覆盖同 id,
-  // 清单成员资格仍以网关为准。packaged 不走此分支(语义见 devMetaOverlay.ts)。
+  // dev:本地统一 registry 的 XD 路由覆盖服务端下发的策展元数据;只覆盖同 id,
+  // 清单成员资格与价格仍以 Gateway 为准。packaged 不走此分支。
   const overlaid =
     isDev() && models.length > 0
-      ? overlayCindyModelMeta(models, getActiveCatalog().cindyModelMeta, log)
+      ? overlayModelRegistryMeta(models, getActiveCatalog().modelRegistry, log)
       : models;
   // 能力字段不在客户端二次转换 —— Model Access Server 已把 Gateway 的
   // contextLength / supportedEndpoints / reasoning / supportsServiceTier / architecture

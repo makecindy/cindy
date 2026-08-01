@@ -2236,7 +2236,19 @@ export class AgentInputCoordinator {
     if (item.sessionReferencesRequireTrustedSnapshot) {
       throw new Error('Remote session reference snapshot is missing; edit and resend the message.');
     }
-    return this.deps.resolveSessionReferences?.(item.sessionRefs) ?? [];
+    try {
+      return await (this.deps.resolveSessionReferences?.(item.sessionRefs) ?? []);
+    } catch (error) {
+      // Session links are still useful as ordinary Agent-facing text when the
+      // referenced session belongs to another account, was deleted, or is
+      // temporarily unavailable.  Quoted history is an optional enrichment:
+      // fail closed on the history body, but do not fail the user's message.
+      log.warn('session reference enrichment skipped', {
+        referenceCount: item.sessionRefs.length,
+        error: errorMessage(error),
+      });
+      return [];
+    }
   }
 
   private isDispatchBoundaryBusy(sessionId: string, state: SessionInputState): boolean {
