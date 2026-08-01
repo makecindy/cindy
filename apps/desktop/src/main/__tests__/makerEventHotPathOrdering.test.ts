@@ -369,7 +369,13 @@ describe('maker:event hot path ordering', () => {
     expect(codexDoneSource).toContain(
       "? getSubscriptionDirectValuePrice(pricingModel, 'codex', pricing)",
     );
-    expect(codexDoneSource).toContain('? getCodexSubscriptionValuePrice(pricingModel, pricing)');
+    // 订阅估值按显式来源取各自 registry 日期定价:内置 anthropic(access.kind=subscription)
+    // 不再被记成 #billing=api;默认/openai 仍走 OpenAI 价表。
+    expect(codexDoneSource).toContain("sessionProviderAccessKind === 'subscription'");
+    expect(codexDoneSource).toContain('isCodexSubscriptionAccessRoute ||');
+    expect(codexDoneSource).toMatch(
+      /\? getCodexProviderSubscriptionValuePrice\(\s*subscriptionValueProviderId,\s*pricingModel,\s*pricing,\s*\)/,
+    );
     expect(codexDoneSource).toContain("? getModelPriceQuote(pricing, 'xd', pricingModel)");
     expect(codexDoneSource).toContain(
       "? getModelPriceQuote(pricing, sessionProvider, pricingModel, 'codex')",

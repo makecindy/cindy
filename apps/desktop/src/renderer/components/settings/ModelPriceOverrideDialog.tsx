@@ -90,6 +90,15 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   useEffect(() => {
     mutationEpochRef.current += 1;
   }, [open, target]);
+  // UnifiedModelList 按行条件渲染本弹窗:换行会卸载重挂、换新实例,但旧实例的
+  // 在途 save/reset 闭包仍握着共享的 onOpenChange。卸载时同样作废 epoch,
+  // 迟到响应不得关掉新实例的弹窗或触发任何副作用。
+  useEffect(
+    () => () => {
+      mutationEpochRef.current += 1;
+    },
+    [],
+  );
 
   useEffect(() => {
     if (!open) return;

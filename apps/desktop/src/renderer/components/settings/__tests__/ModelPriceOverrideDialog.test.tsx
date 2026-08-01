@@ -230,6 +230,52 @@ describe('ModelPriceOverrideDialog', () => {
     );
   });
 
+  it('invalidates a pending save when the dialog instance unmounts', async () => {
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
+    let finishSave: ((view: ModelPriceOverrideView) => void) | undefined;
+    setModelPriceOverride.mockReturnValueOnce(
+      new Promise<ModelPriceOverrideView>((resolve) => {
+        finishSave = resolve;
+      }),
+    );
+    const onOpenChangeA = vi.fn();
+    const first = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-a')}
+        open
+        onOpenChange={onOpenChangeA}
+      />,
+    );
+    const save = await waitFor(() =>
+      first.getByRole('button', { name: 'settings.providers.models.priceOverride.save' }),
+    );
+    fireEvent.click(save);
+    await waitFor(() => expect(setModelPriceOverride).toHaveBeenCalledOnce());
+
+    // 生产路径:UnifiedModelList 换行时条件渲染会卸载 A、另挂全新实例 B。
+    first.unmount();
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-b'));
+    const second = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-b')}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledTimes(2));
+
+    // A 的迟到响应落地:不得触发旧实例的 onOpenChange(false),B 的表单不受影响。
+    finishSave?.(priceView('model-a', 'codex', true));
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(onOpenChangeA).not.toHaveBeenCalled();
+    expect(
+      (second.getByLabelText('settings.providers.models.priceOverride.input') as HTMLInputElement)
+        .value,
+    ).toBe('1');
+  });
+
   it('discards a late save response after the dialog is closed and reopened', async () => {
     getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
     let finishSave: ((view: ModelPriceOverrideView) => void) | undefined;
