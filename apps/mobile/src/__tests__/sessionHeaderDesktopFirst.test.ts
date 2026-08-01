@@ -68,6 +68,27 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('minHeight: 54');
   });
 
+  it('switches the leading control to the session-list hamburger on wide-screen navigation', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    // 宽屏(iPad / 折叠屏展开 / 横屏手机)导航形态:断点判定走 wideSessionNav 纯函数,
+    // 左上角三条杠替代返回,抽屉原地 replace 切任务;窄屏保持 ScreenBackButton(上一用例已锁)。
+    expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
+    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    expect(source).toContain('onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}');
+    expect(source).toContain('icon={Menu}');
+    expect(source).toContain('testID="session.sessionListButton"');
+    expect(source).toContain('{onOpenSessionList ? (');
+    // 抽屉切任务是「原地切换」:replace 保持导航栈 [主页, 会话],不逐层压栈。
+    expect(source).toContain("pathname: '/sessions/[sessionId]'");
+    expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
+    expect(source).toContain('router.replace({');
+    // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
+    expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
+    // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
+    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOpen(true);');
+  });
+
   it('keeps pending history access as a lightweight control without message counters', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const start = source.indexOf('function MessageHistoryToggle');

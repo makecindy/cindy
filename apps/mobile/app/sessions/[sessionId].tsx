@@ -12,6 +12,7 @@ import {
   Image,
   List,
   ListTodo,
+  Menu,
   Mic,
   Pencil,
   Pin,
@@ -37,6 +38,7 @@ import {
   ActivityIndicator,
   Alert,
   AppState,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -393,6 +395,9 @@ import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
+import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
+import { SessionListDrawer } from '@/session/SessionListDrawer';
+import type { RemoteSessionListItem } from '@/session/sessionList';
 import {
   findMobileMessageSearchHits,
   nextMessageSearchIndex,
@@ -1911,6 +1916,46 @@ export default function SessionScreen() {
   const composerTouchLayout = useMemo(() => buildComposerTouchLayout({
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
+  // 宽屏导航形态(iPad / 折叠屏展开 / 横屏手机):左上角三条杠 + 任务列表抽屉,
+  // 原地 replace 切任务;窄屏保持传统返回键。断点口径见 wideSessionNav.ts。
+  const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
+    windowHeight: windowDimensions.height,
+    windowWidth: windowDimensions.width,
+  }), [windowDimensions.height, windowDimensions.width]);
+  const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
+  useEffect(() => {
+    if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
+  }, [wideSessionNav.enabled]);
+  const openSessionListDrawer = useCallback(() => {
+    Keyboard.dismiss();
+    setSessionListDrawerOpen(true);
+  }, []);
+  const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
+  const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
+    setSessionListDrawerOpen(false);
+    const targetSession = item.session as RemoteSession;
+    if (targetSession.id === sessionId) return;
+    // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
+    // 回退物理 id / store 索引;找不到设备则保持原会话不跳(抽屉里无处放错误条)。
+    const targetDeviceId = targetSession.canonicalDeviceId
+      ?? targetSession.deviceLinkDeviceId
+      ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
+    if (!targetDeviceId) return;
+    // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
+    router.replace({
+      pathname: '/sessions/[sessionId]',
+      params: {
+        deviceId: targetDeviceId,
+        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        sessionId: targetSession.id,
+      },
+    });
+  }, [router, sessionId]);
+  const handleDrawerNewSession = useCallback(() => {
+    setSessionListDrawerOpen(false);
+    router.push({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+  }, [deviceId, deviceName, router]);
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
   // 否则「拖回单行退出激活态」永远收不回去。
@@ -7505,6 +7550,7 @@ export default function SessionScreen() {
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
+              onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}
               onOpenFiles={() => {
                 if (!currentSession?.workingDir) return;
                 router.push({
@@ -8290,6 +8336,19 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      {wideSessionNav.enabled ? (
+        // 树内 overlay(zIndex 40)盖住顶部 chrome 与底部 composer;树内层叠而非 Modal 的
+        // 取舍见 SessionListDrawer 头注释。
+        <SessionListDrawer
+          currentSessionId={sessionId}
+          onClose={closeSessionListDrawer}
+          onGoHome={goBackToHome}
+          onNewSession={handleDrawerNewSession}
+          onSelectSession={handleDrawerSelectSession}
+          open={sessionListDrawerOpen}
+          width={wideSessionNav.drawerWidth}
+        />
+      ) : null}
     </View>
   );
 }
@@ -8310,6 +8369,7 @@ function SessionHeaderBar({
   messageCount,
   onBack,
   onOpenFiles,
+  onOpenSessionList,
   onOpenSettings,
   onOpenUsage,
   onToggleSearch,
@@ -8327,6 +8387,8 @@ function SessionHeaderBar({
   syncing: boolean;
   messageCount: number;
   onBack(): void;
+  /** 宽屏导航形态下提供:左上角改为三条杠,点击拉出任务列表抽屉(替代返回)。 */
+  onOpenSessionList?: () => void;
   onOpenFiles(): void;
   onOpenSettings(): void;
   onOpenUsage(): void;
@@ -8377,12 +8439,25 @@ function SessionHeaderBar({
 
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
-      <ScreenBackButton
-        hitSlop={4}
-        onPress={onBack}
-        style={styles.sessionHeaderBackButton}
-        testID="session.backButton"
-      />
+      {onOpenSessionList ? (
+        // 宽屏(iPad / 折叠屏展开 / 横屏手机):三条杠拉任务列表抽屉,返回语义由抽屉里的
+        // 「主页」项与系统返回手势承担。
+        <SessionHeaderIconButton
+          accessibilityLabel={t('home.drawer.openA11y')}
+          active={false}
+          hitSlop={4}
+          icon={Menu}
+          onPress={onOpenSessionList}
+          testID="session.sessionListButton"
+        />
+      ) : (
+        <ScreenBackButton
+          hitSlop={4}
+          onPress={onBack}
+          style={styles.sessionHeaderBackButton}
+          testID="session.backButton"
+        />
+      )}
 
       <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
@@ -8437,6 +8512,7 @@ function SessionHeaderIconButton({
   active,
   attention = false,
   disabled,
+  hitSlop,
   icon: Icon,
   onPress,
   testID,
@@ -8446,6 +8522,8 @@ function SessionHeaderIconButton({
   active?: boolean;
   attention?: boolean;
   disabled?: boolean;
+  /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
+  hitSlop?: PressableProps['hitSlop'];
   icon: SessionHeaderIcon;
   onPress?: () => void;
   testID: string;
@@ -8459,6 +8537,7 @@ function SessionHeaderIconButton({
       accessibilityLabel={accessibilityLabel}
       active={active}
       disabled={disabled}
+      hitSlop={hitSlop}
       onPress={onPress}
       pressedStyle={styles.sessionHeaderIconPressed}
       style={[
