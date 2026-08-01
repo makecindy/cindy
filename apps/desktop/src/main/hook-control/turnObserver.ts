@@ -332,19 +332,28 @@ export function observeHookTurn(
                     ? meta.requestId
                     : undefined
                 : undefined;
-            // claudeTail 是**当前这条消息的续尾**(claude result 的 fallbackTail,
-            // 刻意不带 agentMeta), 不是新消息 —— 它没有 messageId 可比, 但语义上
-            // 恒属于上一条。不特判的话它会入栈成独立一段, 而 X 只发最后一段,
-            // 于是回帖只剩那截尾巴(PR #1272 review 的 copilot 抑制项指出)。
-            const sameMessage =
-              claudeTail || (messageId !== undefined && messageId === lastFinalUuid);
+            // claudeTail(claude result 的 fallbackTail)**自成一段**, 不并入上一条。
+            //
+            // 它刻意不带 agentMeta(translator 的原话: 补推文本是"孤儿正文",
+            // 拿 lastAssistantMeta 当锚点会污染 fork/rewind), 所以 hook 层**拿不到
+            // 它属于哪条消息** —— 这个歧义是结构性的, 不是这里少判了一个条件。
+            //
+            // 两种真实情形都存在, 从这里看完全一样:
+            //   ① 它续的是上一条(该消息有多个 block, 只流了前一个);
+            //   ② 它是**新的一条**: translator 明写覆盖"前面 call 推过旁白、最后
+            //      一次 call 的最终回复被截断"(见 translator.ts 的 fallbackTail 注释)。
+            //
+            // 选 ②(自成一段)是因为两侧代价不对称: 按 ② 处理而实为 ① 时, X 发出
+            // 的是尾段 —— 而尾段按构造就是整轮文本的**结尾**, 结论在里面; 按 ① 处理
+            // 而实为 ② 时, 旁白会被粘进公开回帖一起发出去。何况 ② 才是 translator
+            // 文档里点名的那个场景(PR #1272 review 指出, 推翻了上一版的无条件并入)。
+            const sameMessage = messageId !== undefined && messageId === lastFinalUuid;
             if (sameMessage && finalizedSegments.length > 0) {
               finalizedSegments[finalizedSegments.length - 1] += segment;
             } else {
               finalizedSegments.push(segment);
             }
-            // 续尾不改变"当前是哪条消息", 保留原标识; 其余情况按本次事件更新。
-            if (!claudeTail) lastFinalUuid = messageId;
+            lastFinalUuid = messageId;
             streamTail = '';
           } else {
             streamTail += data.text;

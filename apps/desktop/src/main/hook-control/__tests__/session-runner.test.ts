@@ -930,10 +930,11 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('X: claude 的 fallbackTail 并入上一条, 不被当成新消息', async () => {
-    // claude result 的 fallbackTail 刻意不带 agentMeta —— 它是**当前这条消息的
-    // 续尾**, 不是新消息。当成新消息入栈的话, X 只发最后一段, 回帖就只剩那截
-    // 尾巴(PR #1272 review 的 copilot 抑制项指出)。
+  it('X: claude 的 fallbackTail 自成一段, 旁白不被粘进公开回帖', async () => {
+    // fallbackTail 刻意不带 agentMeta, hook 层拿不到它属于哪条消息。translator
+    // 点名覆盖的场景是「前面 call 推过旁白、最后一次 call 的最终回复被截断」——
+    // 即尾段是**新的一条**。并入上一条会把旁白和终答一起发到公开时间线
+    // (PR #1272 review 指出, 推翻了上一版的无条件并入)。
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -944,16 +945,14 @@ describe('进度快照(turn.progress 链路)', () => {
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
 
-      cb({ type: 'text', data: { text: '先查一下。', isFinal: true }, source: 'claude-code', agentMeta: { uuid: 'm1' } });
-      cb({ type: 'text', data: { text: '结论: 已修复,', isFinal: true }, source: 'claude-code', agentMeta: { uuid: 'm2' } });
-      // fallbackTail: 无 agentMeta, 补的是 m2 的尾段。
-      cb({ type: 'text', data: { text: '详见提交记录。', isFinal: true }, source: 'claude-code' });
+      // 旁白已定稿(带 agentMeta), 随后终答只经 result 的 fallbackTail 补回。
+      cb({ type: 'text', data: { text: '我先去看看。', isFinal: true }, source: 'claude-code', agentMeta: { uuid: 'm1' } });
+      cb({ type: 'text', data: { text: '结论: 已修复。', isFinal: true }, source: 'claude-code' });
       cb({ type: 'done', data: null });
 
       const outcome = await p;
-      // 尾段必须跟着 m2 一起发, 且不带上 m1 的过程叙述。
-      expect(outcome.finalText).toBe('结论: 已修复,详见提交记录。');
-      expect(outcome.finalText).not.toContain('先查一下');
+      expect(outcome.finalText).toBe('结论: 已修复。');
+      expect(outcome.finalText).not.toContain('我先去看看');
     } finally {
       vi.useRealTimers();
     }
