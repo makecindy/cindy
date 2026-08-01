@@ -559,11 +559,15 @@ async function buildGhostPackage(
     }
 
     // 1) 清单先行:与装入侧同一套校验,错在打包期就报清楚。
+    // 读到的**原始字节**要留作不可变快照:后面生成 zip 时逐文件重新读盘,若
+    // ghost.json 在"这里校验"与"写入 zip"之间被并发改写(保 id/version、加权限
+    // 声明),返回的 manifest 与包里那份就会分叉——安装侧拿返回值做审阅比对,
+    // 装进去的却是改过的包。快照写入让"校验的 = 返回的 = 包里的"三者恒等。
     let manifestRaw: unknown;
+    let manifestBytes: Buffer;
     try {
-      manifestRaw = JSON.parse(
-        await fs.promises.readFile(path.join(dir, GHOST_MANIFEST_FILE), 'utf-8'),
-      );
+      manifestBytes = await fs.promises.readFile(path.join(dir, GHOST_MANIFEST_FILE));
+      manifestRaw = JSON.parse(manifestBytes.toString('utf-8'));
     } catch (err) {
       return {
         ok: false,
@@ -684,7 +688,12 @@ async function buildGhostPackage(
     // packGhostDirToFile 进调用方指定路径)。
     const zip = new JSZip();
     for (const f of files) {
-      zip.file(f.rel, await fs.promises.readFile(f.abs));
+      // 身份卡用第 1 步的不可变快照,其余文件现读。防 TOCTOU:并发改写 ghost.json
+      // 不能让"审阅通过的 manifest"与"包里的 manifest"分叉。
+      zip.file(
+        f.rel,
+        f.rel === GHOST_MANIFEST_FILE ? manifestBytes : await fs.promises.readFile(f.abs),
+      );
     }
     const buf = await zip.generateAsync({ type: 'nodebuffer', compression: 'DEFLATE' });
     const maxCindyBytes = manifest.node ? MAX_NODE_CINDY_BYTES : MAX_BASIC_CINDY_BYTES;

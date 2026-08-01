@@ -1018,6 +1018,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('plugin-market:uninstall', pluginId),
     listSources: (): Promise<import('../shared/pluginMarket').MarketSourceSummary[]> =>
       ipcRenderer.invoke('plugin-market:list-sources'),
+    pickLocalSource: (
+      defaultPath?: string,
+    ): Promise<
+      | { canceled: true }
+      | { canceled: false; summary: import('../shared/pluginMarket').MarketSourceSummary }
+    > => ipcRenderer.invoke('plugin-market:pick-local-source', defaultPath),
     addSource: (input: {
       source: string;
       ref?: string;

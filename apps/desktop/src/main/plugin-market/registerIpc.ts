@@ -1,3 +1,5 @@
+import os from 'node:os';
+
 import { ipcMain } from 'electron';
 
 import { isIpcError } from '../../shared/ipc-errors.js';
@@ -6,6 +8,7 @@ import { setGhostUninstallLedgerPreparer } from '../cindy-brain/index.js';
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
+import { parseMarketSource } from './sources/parse.js';
 import { PluginMarketService } from './service.js';
 
 const log = createLogger('plugin-market-ipc');
@@ -114,6 +117,16 @@ export function registerPluginMarketIpc(): void {
         return value;
       });
     }
+    // 本地目录不接受 Renderer 直传的绝对路径:XSS 控制下的 Renderer 自报路径
+    // 不构成用户授权(frame 校验只证明来源窗口,不证明用户选择了这个目录)。
+    // 本地来源一律走 pick-local-source(Main 原生目录选择器,选择即授权)。
+    const parsed = parseMarketSource(
+      { source, ...(ref !== undefined ? { ref } : {}), ...(sparsePaths !== undefined ? { sparsePaths } : {}) },
+      os.homedir(),
+    );
+    if (parsed.ok && parsed.source.type === 'local') {
+      throwIpcError('INVALID_PARAMS', 'Local folders must be added via the directory picker');
+    }
     return invokePluginMarket(() =>
       service().addSource({
         source,
@@ -121,6 +134,18 @@ export function registerPluginMarketIpc(): void {
         ...(sparsePaths !== undefined ? { sparsePaths } : {}),
       }),
     );
+  });
+  ipcMain.handle('plugin-market:pick-local-source', (event, defaultPath: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const hint =
+      defaultPath === undefined || defaultPath === null
+        ? undefined
+        : requireString(defaultPath, 'defaultPath');
+    if (hint !== undefined && hint.length > 512) {
+      throwIpcError('INVALID_PARAMS', 'defaultPath is too long');
+    }
+    // 授权来自用户在 Main 原生选择器里的选择;hint 只影响初始定位。
+    return invokePluginMarket(() => service().addLocalSourceFromPicker(hint));
   });
   ipcMain.handle('plugin-market:remove-source', (event, name: unknown) => {
     assertTrustedAppRendererEvent(event);

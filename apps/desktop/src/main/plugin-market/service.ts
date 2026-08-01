@@ -7,7 +7,7 @@ import {
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
-import { app, type WebContents } from 'electron';
+import { app, dialog, type WebContents } from 'electron';
 
 import {
   diffGhostPermissionItems,
@@ -522,6 +522,26 @@ export class PluginMarketService {
     );
   }
 
+  /**
+   * 经 Main 侧原生目录选择器添加本地市场来源。
+   *
+   * 本地目录的授权必须来自**用户在原生对话框里的选择**,而不是 Renderer 传来的
+   * 绝对路径——Renderer 被 XSS 控制时,任何"它自己报的路径"都不构成用户授权
+   * (electron-security 规则:不把 Renderer 路径当授权)。`defaultPath` 只是原生
+   * 框的初始定位提示,不参与授权判定;用户在框里选中哪个目录,授权就是哪个。
+   */
+  async addLocalSourceFromPicker(
+    defaultPath?: string,
+  ): Promise<{ canceled: true } | { canceled: false; summary: MarketSourceSummary }> {
+    const picked = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+      ...(defaultPath ? { defaultPath } : {}),
+    });
+    const dir = picked.filePaths[0];
+    if (picked.canceled || !dir) return { canceled: true };
+    return { canceled: false, summary: await this.addSource({ source: dir }) };
+  }
+
   async removeSource(name: string): Promise<{ ok: true }> {
     return this.runForOwner((owner) =>
       this.withMutation(SOURCE_MUTATION_KEY, async () => {
@@ -694,7 +714,17 @@ export class PluginMarketService {
             currentRecord.manifestDigest != null &&
             currentRecord.manifestDigest === installedGhostRawManifestDigest(existing.dir),
         );
-        if (existing && !ownsInstall) {
+        // 收养:运行时已装内容的声明与本来源候选**完全一致**(原始 manifest 摘要
+        // 相等)时,允许在没有有效账本记录的情况下重装并补写溯源。这是"包已落位
+        // 但账本写失败"(文件锁/磁盘错)后的唯一自愈入口——否则该插件永久 conflict、
+        // 更新永被拒。安全性:收养走完整重装,落位字节来自本来源的包,且用户刚在
+        // 确认框审阅过同一份 manifest;声明有任何差异都收养不了。
+        const adoptable = Boolean(
+          existing &&
+            !ownsInstall &&
+            installedGhostRawManifestDigest(existing.dir) === ghostManifestDigest(plugin.manifest),
+        );
+        if (existing && !ownsInstall && !adoptable) {
           throwIpcError('ALREADY_EXISTS', 'A local Plugin already uses this Plugin ID');
         }
         await this.assertSourceOwnsGhostId({ owner, ghostId: plugin.ghostId, ownsInstall });
@@ -846,10 +876,19 @@ export class PluginMarketService {
         record.manifestDigest != null &&
         record.manifestDigest === local.rawDigestByGhostId.get(plugin.ghostId),
     );
+    // 收养口径与 customInstall 一致:运行时内容声明与候选完全一致时不标 conflict,
+    // 投影成可安装——这是账本写失败后的自愈入口(conflict 在 UI 被禁用,没有它
+    // 用户连重试的按钮都没有)。
+    const adoptable = Boolean(
+      ghost &&
+        !ownsInstall &&
+        local.rawDigestByGhostId.get(plugin.ghostId) === ghostManifestDigest(plugin.manifest),
+    );
     // 已拥有当前安装记录的来源保留所有权（installed / update-available）；
     // duplicate 只把未拥有安装的竞争来源标为冲突，避免“先装先得”被降格。
     const conflict = Boolean(
-      (duplicateGhostIds.has(plugin.ghostId) && !ownsInstall) || (ghost && !ownsInstall),
+      (duplicateGhostIds.has(plugin.ghostId) && !ownsInstall) ||
+        (ghost && !ownsInstall && !adoptable),
     );
     const installState: PluginMarketItem['installState'] = conflict
       ? 'conflict'

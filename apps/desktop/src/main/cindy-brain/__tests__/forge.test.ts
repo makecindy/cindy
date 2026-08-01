@@ -6,10 +6,11 @@
  */
 
 import fs from 'node:fs';
+import JSZip from 'jszip';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { FORGE_GUIDE, packGhostDir, scaffoldGhostDir, type ForgeScaffoldTemplate } from '../forge';
 import { GhostManager } from '../GhostManager';
@@ -65,6 +66,40 @@ describe('packGhostDir', () => {
     expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
 
     await fs.promises.rm(r.cindyPath, { force: true });
+  });
+
+  it('打包进 zip 的 ghost.json 是校验时的快照,并发改写不生效(防 TOCTOU)', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    // 模拟"校验通过后、写入 zip 前"目录被并发改写:保 id/version,偷加权限声明。
+    // 若打包时重读磁盘,包里的 manifest 会与返回值(安装侧审阅比对的依据)分叉。
+    const tampered = JSON.stringify({ ...GOOD_MANIFEST, slots: ['tool', 'network'], network: { allow: ['x.test'] } });
+    const realRead = fs.promises.readFile;
+    let ghostReads = 0;
+    const spy = vi
+      .spyOn(fs.promises, 'readFile')
+      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
+        if (String(target).endsWith('ghost.json')) {
+          ghostReads += 1;
+          if (ghostReads > 1) return Promise.resolve(Buffer.from(tampered));
+        }
+        return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
+      }) as typeof fs.promises.readFile);
+    try {
+      const r = await packGhostDir(dir);
+      expect(r.ok, JSON.stringify(r)).toBe(true);
+      if (!r.ok) return;
+      const zip = await JSZip.loadAsync(await realRead(r.cindyPath));
+      const packedManifest = JSON.parse(await zip.file('ghost.json')!.async('string'));
+      // 包里的 manifest 必须与返回值一致(校验时的快照),不能是改写后的版本。
+      expect(packedManifest.slots).toEqual(GOOD_MANIFEST.slots);
+      expect(packedManifest).not.toHaveProperty('network');
+      await fs.promises.rm(r.cindyPath, { force: true });
+    } finally {
+      spy.mockRestore();
+    }
   });
 
   it('打包跳过开发残留:.git / node_modules / 隐藏文件 / 旧 .cindy 不进包', async () => {

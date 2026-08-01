@@ -23,13 +23,16 @@ vi.mock('@/contexts/AuthContext', () => ({
 import { AddMarketplaceDialog } from '../AddMarketplaceDialog';
 
 const addSource = vi.fn(async () => ({}) as never);
+const pickLocalSource = vi.fn(async () => ({ canceled: false, summary: {} }) as never);
 
 beforeEach(() => {
   addSource.mockClear();
   vi.stubGlobal('window', window);
+  pickLocalSource.mockClear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     pluginMarket: {
       addSource,
+      pickLocalSource,
       listSources: vi.fn(async () => []),
       removeSource: vi.fn(async () => ({ ok: true })),
       refreshSource: vi.fn(),
@@ -67,11 +70,10 @@ describe('AddMarketplaceDialog', () => {
     ).toBe(true);
 
     fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.market.sources.add' }));
-    await waitFor(() => expect(addSource).toHaveBeenCalled());
-
-    // 提交的 payload 里不能带 Git 专属字段,否则 Main 会以
-    // REF_NOT_ALLOWED_FOR_LOCAL / SPARSE_NOT_ALLOWED_FOR_LOCAL 拒绝,成为死结。
-    expect(addSource).toHaveBeenCalledWith({ source: '~/team/plugins' });
+    // 本地目录必须走 Main 原生选择器(选择即授权),输入的路径只是初始定位提示;
+    // Renderer 直传本地路径的 addSource 会在 IPC 层被拒。
+    await waitFor(() => expect(pickLocalSource).toHaveBeenCalledWith('~/team/plugins'));
+    expect(addSource).not.toHaveBeenCalled();
   });
 
   it('drops the loaded source summaries when the account switches', async () => {

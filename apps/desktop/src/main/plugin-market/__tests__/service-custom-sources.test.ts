@@ -23,8 +23,12 @@ const runtime = vi.hoisted(() => ({
   },
 }));
 
+const pickerDialog = vi.hoisted(() => ({
+  showOpenDialog: vi.fn(async () => ({ canceled: true, filePaths: [] as string[] })),
+}));
 vi.mock('electron', () => ({
   app: { getPath: vi.fn(() => os.tmpdir()) },
+  dialog: pickerDialog,
 }));
 vi.mock('../../authManager.js', () => ({
   getCurrentUserId: vi.fn(() =>
@@ -898,6 +902,57 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
       h.service.install(item.id, { expectedReleaseId: item.currentRelease.id }),
     ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
     expect(h.api.download).not.toHaveBeenCalled();
+  });
+
+  it('adopts a matching install after a lost ledger write instead of dead-ending in conflict', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], [{ name: 'team-lib', dir }]);
+    // 场景:包已落位,但溯源账本因文件锁/磁盘错没写成——账本里没有记录。
+    // 运行时内容与来源候选**完全一致**(同一份原始 ghost.json)。
+    const installedDir = path.join(root, 'installed-alpha');
+    fs.mkdirSync(installedDir, { recursive: true });
+    fs.writeFileSync(path.join(installedDir, 'ghost.json'), JSON.stringify(ghostManifest('alpha')));
+    runtime.ghosts = [{ manifest: ghostManifest('alpha'), dir: installedDir, enabled: true }];
+
+    // 列表:不能标 conflict(UI 会禁用安装,用户连修复入口都没有);投影成可安装。
+    const snapshot = await h.service.snapshot();
+    expect(snapshot.items[0]?.installState).toBe('not-installed');
+
+    // 安装 = 收养:完整重装 + 补写溯源,自愈完成。
+    runtime.install.mockResolvedValue({
+      manifest: ghostManifest('alpha'),
+      dir: installedDir,
+      enabled: true,
+    });
+    const reviewed = await h.service.detail(customMarketPluginId('team-lib', 'alpha'));
+    await h.service.install(customMarketPluginId('team-lib', 'alpha'), {
+      expectedReleaseId: customMarketReleaseId('team-lib', 'alpha', '1.0.0'),
+      expectedManifest: reviewed.manifest,
+    });
+    expect(h.ledger.installationForGhost('alpha')).toMatchObject({
+      installed: true,
+      source: 'local-market',
+    });
+  });
+
+  it('adds a local source only through the native directory picker', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], []);
+
+    // 用户取消:什么都不添加。
+    pickerDialog.showOpenDialog.mockResolvedValueOnce({ canceled: true, filePaths: [] });
+    await expect(h.service.addLocalSourceFromPicker(dir)).resolves.toEqual({ canceled: true });
+    expect(h.sourceStore.list()).toEqual([]);
+
+    // 用户在原生框选中目录:授权即选择结果,defaultPath 只是初始定位提示。
+    pickerDialog.showOpenDialog.mockResolvedValueOnce({ canceled: false, filePaths: [dir] });
+    const added = await h.service.addLocalSourceFromPicker('/somewhere/else');
+    expect(added).toMatchObject({ canceled: false, summary: { name: 'team-lib' } });
+    expect(h.sourceStore.list().map((config) => config.name)).toEqual(['team-lib']);
   });
 
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {

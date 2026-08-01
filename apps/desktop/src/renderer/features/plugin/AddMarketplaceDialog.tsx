@@ -123,22 +123,24 @@ export function AddMarketplaceDialog({
     setAdding(true);
     setOperationError(null);
     try {
-      // 本地来源不接受 Git 专属字段。用户可能先按 Git 源填了 ref / 稀疏路径再把
-      // 来源改成本地目录——那两个输入框此时是禁用的,他没法自己清空,若照旧提交
-      // 会被 Main 以 REF_NOT_ALLOWED_FOR_LOCAL / SPARSE_NOT_ALLOWED_FOR_LOCAL
-      // 拒绝,变成解不开的死结。组装 payload 时直接忽略。
-      const sparsePaths = sourceIsLocal
-        ? []
-        : sparseInput
-            .split('\n')
-            .map((entry) => entry.trim())
-            .filter((entry) => entry.length > 0);
-      const ref = sourceIsLocal ? '' : refInput.trim();
-      await window.electronAPI.pluginMarket.addSource({
-        source: sourceInput.trim(),
-        ...(ref ? { ref } : {}),
-        ...(sparsePaths.length > 0 ? { sparsePaths } : {}),
-      });
+      // 本地目录的授权必须来自 Main 原生目录选择器(选择即授权):Renderer 直传
+      // 绝对路径在 IPC 层会被拒——XSS 控制下的自报路径不构成用户授权。输入的
+      // 路径只作为原生框的初始定位提示;用户取消则静默结束。
+      if (sourceIsLocal) {
+        const picked = await window.electronAPI.pluginMarket.pickLocalSource(sourceInput.trim());
+        if (picked.canceled) return;
+      } else {
+        const sparsePaths = sparseInput
+          .split('\n')
+          .map((entry) => entry.trim())
+          .filter((entry) => entry.length > 0);
+        const ref = refInput.trim();
+        await window.electronAPI.pluginMarket.addSource({
+          source: sourceInput.trim(),
+          ...(ref ? { ref } : {}),
+          ...(sparsePaths.length > 0 ? { sparsePaths } : {}),
+        });
+      }
       setSourceInput('');
       setRefInput('');
       setSparseInput('');

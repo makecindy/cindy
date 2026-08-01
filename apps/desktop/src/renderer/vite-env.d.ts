@@ -1359,6 +1359,12 @@ interface ElectronAPI {
     ) => Promise<{ ghost: import('../shared/ghost').InstalledGhost }>;
     uninstall: (pluginId: string) => Promise<{ ok: true }>;
     listSources: () => Promise<import('../shared/pluginMarket').MarketSourceSummary[]>;
+    pickLocalSource: (
+      defaultPath?: string,
+    ) => Promise<
+      | { canceled: true }
+      | { canceled: false; summary: import('../shared/pluginMarket').MarketSourceSummary }
+    >;
     addSource: (input: {
       source: string;
       ref?: string;
