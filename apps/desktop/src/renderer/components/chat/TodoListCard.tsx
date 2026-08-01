@@ -134,7 +134,14 @@ export function TodoListCard({
         {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
         <button
           type="button"
-          onClick={() => setRevealed((prev) => !prev)}
+          onClick={(event) => {
+            if (event.detail === 0) {
+              setRevealed((prev) => !prev);
+              return;
+            }
+            setRevealed(true);
+          }}
+          aria-haspopup="dialog"
           aria-expanded={revealed}
           className={cn(
             'flex items-center gap-2 rounded-full',
