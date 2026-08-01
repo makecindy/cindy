@@ -215,7 +215,7 @@ function createHarness() {
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
-  >(async () => ({ clientIds: [], preview: null, messageCount: 0 }));
+  >(async () => []);
   const coordinator = new AgentInputCoordinator({
     sendToAgent,
     steerToAgent,

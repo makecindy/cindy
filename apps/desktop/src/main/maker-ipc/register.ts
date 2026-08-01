@@ -7737,22 +7737,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     // retry-supersede:零产出重试的克隆行落库并派发成功后,软删被取代的旧 user 行
     // 与其后的 error 行(实现与守卫见 localDb/ipc/messages.supersedeRetriedUserTurn)。
-    supersedeRetriedUserTurn: async (sessionId, args) => {
-      const result = await supersedeRetriedUserTurn(sessionId, args);
-      // 没软删任何行 = 无投影变化。messageCount 为 0 只能是投影查询失败被吞错
-      // (软删后至少还有克隆行可见),此时广播会把侧栏预览清空、计数打成 0 ——
-      // 宁可不广播,交给后续 sessions:list / reseed 按 DB 真相收敛。
-      if (result.clientIds.length === 0 || result.messageCount === 0) return result;
-      // 软删把旧 user 行移出可见集,会话列表投影必须跟着刷新 —— 与菜单删除同一
-      // 口径(见 messageDeleteHandler 的 onCommitted)。刻意不带 sdkSessionId: null:
-      // 被软删的旧行从未进入原生 transcript(零产出失败连模型都没到),不需要像
-      // 删消息那样重建上下文;清了反而会白白丢弃当前 session 绑定。
-      broadcastSessionPatched(sessionId, {
-        preview: result.preview,
-        _count: { messages: result.messageCount },
-      });
-      return result;
-    },
+    // 只发 messages:deleted、不额外发 sessions:patched:软删既不改变会话列表的
+    // _count(权威口径不过滤 rewind_at,行本体还在)也不改变 preview(克隆行仍是最新
+    // 可见行),理由与踩过的坑记在 helper 的注释里。
+    supersedeRetriedUserTurn,
     getLastAssistantTranscriptUuid,
     onAcceptedQueuedMessage: (sessionId, item): Promise<void> | undefined => {
       // 已派发 → 该项不会再走 discard,释放 scheduler 的 discard 监听防泄漏。
