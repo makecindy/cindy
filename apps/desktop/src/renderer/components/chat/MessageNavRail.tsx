@@ -32,7 +32,7 @@
  * 3s 安全兜底防"点完不动"卡住乐观态,与 CHIP_JUMP_SAFETY_MS 同源经验值。
  */
 
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useRef, useState, type WheelEvent as ReactWheelEvent } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -50,6 +50,7 @@ import {
   planNavRailTicks,
   type NavRailEntry,
 } from './messageNavRailModel';
+import { forwardNavRailWheel } from './messageNavRailWheel';
 
 // 乐观 pending 态的安全兜底时长,对齐 MessageStream 的 CHIP_JUMP_SAFETY_MS。
 const PENDING_SAFETY_MS = 3000;
@@ -317,6 +318,27 @@ export function MessageNavRail({
     hoveringRef.current = false;
   }, []);
 
+  // 悬停刻度带时滚轮不能失灵:导航条是滚动容器的兄弟 overlay,刻度按钮
+  // pointer-events-auto 会成为 wheel 目标、冒泡不经过滚动容器,浏览器不会
+  // 替我们滚聊天区(PR #830 review)。补两件事,缺一不可:
+  //   1. 先把 wheel **重派**给滚动容器 —— root 上挂着既有的 wheel 意图监听
+  //      (本组件的 dropPending;MessageStream 的贴底跟随解锚 / 顶部意图
+  //      补页 / chip 抑制解除)。只补位移不补意图,贴底流式时在刻度带上滚
+  //      会被 pin-to-bottom 拽回、到顶后拉不出更早历史(对抗审查 P1)。
+  //      合成事件 untrusted、不产生默认滚动,与下一步不会双滚;先意图后
+  //      位移,对齐原生"监听先于默认滚动"的时序。
+  //   2. 再把增量转发成真实位移(见 messageNavRailWheel.ts)。产生的
+  //      scroll 事件经 root 的 onScroll 走 wake + scheduleMeasure。
+  const handleRailWheel = useCallback(
+    (e: ReactWheelEvent<HTMLElement>) => {
+      const root = scrollRef.current;
+      if (!root) return;
+      root.dispatchEvent(new WheelEvent('wheel', { deltaX: e.deltaX, deltaY: e.deltaY }));
+      forwardNavRailWheel(root, e);
+    },
+    [scrollRef],
+  );
+
   if (!eligible) return null;
 
   const shown = entries.slice(plan.startIndex);
@@ -349,6 +371,9 @@ export function MessageNavRail({
         awake ? 'opacity-100' : NAV_RAIL_IDLE_OPACITY_CLASS,
       )}
       style={{ paddingTop: RAIL_TOP_PX, paddingBottom: bottomOffset + RAIL_BOTTOM_EXTRA_PX }}
+      // wheel 事件从 pointer-events-auto 的刻度冒泡到这里统一转发,
+      // "更早还有 N 条"占位刻度一并覆盖。
+      onWheel={handleRailWheel}
     >
       {plan.hiddenCount > 0 ? (
         <Tip

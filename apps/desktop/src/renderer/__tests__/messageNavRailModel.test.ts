@@ -23,6 +23,7 @@ import {
   promptPreviewLine,
   shouldBackfillForNavRail,
 } from '@/components/chat/messageNavRailModel';
+import { forwardNavRailWheel } from '@/components/chat/messageNavRailWheel';
 
 function msg(
   partial: Partial<ChatMessage> & { clientId: string; role: ChatMessage['role'] },
@@ -388,5 +389,17 @@ describe('hasNavRailRoom', () => {
   it('容器比内容列 maxWidth 还窄(嵌入面板)时没有空间', () => {
     expect(hasNavRailRoom(600, 880)).toBe(false);
     expect(hasNavRailRoom(0, 880)).toBe(false);
+  });
+});
+
+describe('forwardNavRailWheel', () => {
+  it('把 wheel 增量原样转发给滚动容器(横竖两轴)', () => {
+    const calls: ScrollToOptions[] = [];
+    forwardNavRailWheel({ scrollBy: (options) => calls.push(options) }, { deltaX: 3, deltaY: -120 });
+    expect(calls).toEqual([{ left: 3, top: -120 }]);
+  });
+
+  it('滚动容器缺席(卸载竞态)时静默不抛', () => {
+    expect(() => forwardNavRailWheel(null, { deltaX: 0, deltaY: 10 })).not.toThrow();
   });
 });
