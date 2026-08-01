@@ -285,6 +285,7 @@ import {
   buildMessageLoadEarlierAction,
   createMobileFollowEndPinState,
   evaluateMessageWindowUpdate,
+  evaluateMobileAnchorVerify,
   evaluateMobileFollowEndContentSizePin,
   mobileMessageListTopPadding,
   MOBILE_FOLLOW_END_PIN_SUPPRESS_MS,
@@ -318,6 +319,10 @@ const MESSAGE_CONTROL_HIT_SLOP = { bottom: 10, left: 10, right: 10, top: 10 };
  * 更长会放大「进入会话到内容可见」的感知延迟,不取。
  */
 const MOBILE_INITIAL_ANCHOR_SETTLE_MS = 300;
+/** Maximum time a native imperative scroll may be reported as in-flight. */
+const MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS = 1000;
+/** Animated jump-to-latest commands get a little more time to settle. */
+const MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS = 1400;
 /** Cold-open history fill is useful, but bounded so a short/duplicate host page cannot drain history forever. */
 const MAX_INITIAL_HISTORY_AUTOFILL_PAGES = 3;
 const MOBILE_MESSAGE_ESTIMATED_ITEM_SIZE = 140;
@@ -554,6 +559,9 @@ export function MessageRenderer({
   const readingOlderRef = useRef(false);
   // 每次补页分配 generation：旧会话 / 旧请求的异步 settle 不得清掉新请求的抑制态。
   const readingOlderRequestGenerationRef = useRef(0);
+  const programmaticScrollGenerationRef = useRef(0);
+  const programmaticScrollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const programmaticScrollInFlightRef = useRef(false);
   const previousFollowLatestRequestKeyRef = useRef(followLatestRequestKey);
   const previousItemKeysRef = useRef<readonly string[]>([]);
   const scrollMetricsRef = useRef<MessageScrollMetrics>({
@@ -571,8 +579,9 @@ export function MessageRenderer({
   // (弃用原因见下方 LegendList props 注释)。首批 items commit 后 rAF 命令式落底一次,
   // 目标偏差由 handleContentSize 的贴底补滚随后续测量自然校正。
   const initialAnchorDoneRef = useRef(false);
-  // 落底 rAF / 揭开 timer 的句柄(生命周期 = 每个 scrollResetKey 一轮,不挂 effect
-  // cleanup——原因见冷开落底 effect 的注释;清旧在落底 effect 自身开头,卸载时兜底清)。
+  const initialAnchorGenerationRef = useRef(0);
+  const initialAnchorVerifyFrameRef = useRef<number | null>(null);
+  // 落底 rAF / verify loop / 揭开 timer 的句柄(生命周期 = 每个 scrollResetKey 一轮)。
   const initialAnchorFrameRef = useRef<number | null>(null);
   const initialRevealTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   // settle 遮罩:落底两段式期间列表保持 opacity 0,settle 窗口后揭开(规则 7 防跳动)。
@@ -593,22 +602,29 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     readingOlderRef.current = false;
     readingOlderRequestGenerationRef.current += 1;
+    programmaticScrollGenerationRef.current += 1;
+    programmaticScrollInFlightRef.current = false;
+    if (programmaticScrollTimerRef.current !== null) {
+      clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
     previousItemKeysRef.current = [];
     scrollMetricsRef.current = { contentHeight: 0, offsetY: 0, viewportHeight: 0 };
     followEndPinStateRef.current = createMobileFollowEndPinState();
     initialAnchorDoneRef.current = false;
+    initialAnchorGenerationRef.current += 1;
+    if (initialAnchorFrameRef.current !== null) {
+      cancelAnimationFrame(initialAnchorFrameRef.current);
+      initialAnchorFrameRef.current = null;
+    }
+    if (initialAnchorVerifyFrameRef.current !== null) {
+      cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
+      initialAnchorVerifyFrameRef.current = null;
+    }
     // settle 遮罩复位必须与列表重挂同帧(渲染期 setState,React 官方 prop-change 模式):
     // 走 effect 会晚一帧,新列表以旧 revealed=true 裸挂一帧,未锚定内容闪现。
     setListRevealed(false);
   }
-  // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
-  useEffect(() => {
-    if (!__DEV__) return;
-    devExposeList?.({
-      scrollTo: (y: number) => listRef.current?.scrollToOffset({ animated: false, offset: y }),
-      getMetrics: () => scrollMetricsRef.current,
-    });
-  }, [devExposeList]);
   const lastAppliedFocusKeyRef = useRef<string | null>(null);
   const [hasNewMessages, setHasNewMessages] = useState(false);
   const [isAwayFromBottom, setIsAwayFromBottom] = useState(false);
@@ -618,6 +634,55 @@ export function MessageRenderer({
   // LightboxPage 手势 useMemo 的依赖,流式回复期间每 token 重建手势图,
   // 可能打断进行中的捏合/拖动手势(rule 7)。
   const closePayload = useCallback(() => setPayload(null), []);
+  const markProgrammaticScroll = useCallback((animated: boolean) => {
+    const generation = programmaticScrollGenerationRef.current + 1;
+    programmaticScrollGenerationRef.current = generation;
+    programmaticScrollInFlightRef.current = true;
+    if (programmaticScrollTimerRef.current !== null) {
+      clearTimeout(programmaticScrollTimerRef.current);
+    }
+    programmaticScrollTimerRef.current = setTimeout(() => {
+      if (programmaticScrollGenerationRef.current !== generation) return;
+      programmaticScrollTimerRef.current = null;
+      programmaticScrollInFlightRef.current = false;
+    }, animated
+      ? MOBILE_PROGRAMMATIC_ANIMATED_SCROLL_SETTLE_MS
+      : MOBILE_PROGRAMMATIC_SCROLL_SETTLE_MS);
+  }, []);
+
+  const clearProgrammaticScroll = useCallback(() => {
+    programmaticScrollGenerationRef.current += 1;
+    programmaticScrollInFlightRef.current = false;
+    if (programmaticScrollTimerRef.current !== null) {
+      clearTimeout(programmaticScrollTimerRef.current);
+      programmaticScrollTimerRef.current = null;
+    }
+  }, []);
+
+  const scrollToEndProgrammatically = useCallback((animated: boolean) => {
+    markProgrammaticScroll(animated);
+    void listRef.current?.scrollToEnd({ animated });
+  }, [markProgrammaticScroll]);
+
+  const scrollToOffsetProgrammatically = useCallback((offset: number, animated: boolean) => {
+    markProgrammaticScroll(animated);
+    void listRef.current?.scrollToOffset({ animated, offset });
+  }, [markProgrammaticScroll]);
+
+  const scrollToIndexProgrammatically = useCallback((index: number, viewPosition: number) => {
+    markProgrammaticScroll(true);
+    void listRef.current?.scrollToIndex({ animated: true, index, viewPosition });
+  }, [markProgrammaticScroll]);
+
+  // DEV-only:把列表控制器 + 滚动 metrics 暴露给性能 harness(临时,profiling/回归测量用)。
+  useEffect(() => {
+    if (!__DEV__) return;
+    devExposeList?.({
+      scrollTo: (y: number) => scrollToOffsetProgrammatically(y, false),
+      getMetrics: () => scrollMetricsRef.current,
+    });
+  }, [devExposeList, scrollToOffsetProgrammatically]);
+
   const listData = useMemo(() => [...items], [items]);
   // 遮罩重武装(review P1):真冷开(无缓存)时列表以空挂载,落底 effect 的空分支已把
   // 遮罩揭开;首批消息到达(0→N)且本会话尚未落底时,必须在**渲染期**重新武装遮罩——
@@ -782,8 +847,8 @@ export function MessageRenderer({
     }
     setIsAwayFromBottom(false);
     setHasNewMessages(false);
-    void listRef.current?.scrollToEnd({ animated: true });
-  }, []);
+    scrollToEndProgrammatically(true);
+  }, [scrollToEndProgrammatically]);
 
   const jumpToPreviousUserMessage = useCallback(() => {
     if (!previousUserTarget) return;
@@ -794,12 +859,8 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     nearBottomRef.current = false;
     setIsAwayFromBottom(true);
-    void listRef.current?.scrollToIndex({
-      animated: true,
-      index: previousUserTarget.index,
-      viewPosition: 0.12,
-    });
-  }, [previousUserTarget]);
+    scrollToIndexProgrammatically(previousUserTarget.index, 0.12);
+  }, [previousUserTarget, scrollToIndexProgrammatically]);
 
   // 「跳到最新」请求(会话外部触发):命令式滚到底,之后由 handleContentSize 补滚维持贴底。
   useEffect(() => {
@@ -816,8 +877,8 @@ export function MessageRenderer({
     }
     setHasNewMessages(false);
     setIsAwayFromBottom(false);
-    void listRef.current?.scrollToEnd({ animated: true });
-  }, [followLatestRequestKey]);
+    scrollToEndProgrammatically(true);
+  }, [followLatestRequestKey, scrollToEndProgrammatically]);
 
   // 自动加载更早:电平触发判定(shouldAutoLoadEarlier),在所有可能改变判定结果的时机重评估
   // (scroll 事件 / LegendList onStartReached 边沿 / eligibility 变化 effect)。
@@ -908,6 +969,7 @@ export function MessageRenderer({
       const nearBottom = resolveMobileNearBottomOnScroll({
         wasNearBottom: nearBottomRef.current,
         metrics,
+        programmaticScrollInFlight: programmaticScrollInFlightRef.current,
         scrollDelta: readingOlderRef.current ? 0 : metrics.offsetY - previousOffsetY,
         bottomOverlayHeight,
       });
@@ -924,6 +986,7 @@ export function MessageRenderer({
   // 程序化 scrollToEnd 不会触发,故不会误置);同时记录拖动起点 offset,供
   // shouldUnpinMobileFollowOnDrag 判「相对起点累计上移」。
   const handleScrollBeginDrag = useCallback((event: NativeSyntheticEvent<NativeScrollEvent>) => {
+    clearProgrammaticScroll();
     isDraggingRef.current = true;
     dragStartOffsetYRef.current = event.nativeEvent.contentOffset.y;
     userScrollForOlderRef.current = true;
@@ -995,47 +1058,89 @@ export function MessageRenderer({
         followEndPinRecoveryTimerRef.current = setTimeout(() => {
           followEndPinRecoveryTimerRef.current = null;
           if (nearBottomRef.current && !readingOlderRef.current) {
-            void listRef.current?.scrollToEnd({ animated: false });
+            scrollToEndProgrammatically(false);
           }
         }, MOBILE_FOLLOW_END_PIN_SUPPRESS_MS + 50);
       }
       if (decision.shouldScroll) {
-        void listRef.current?.scrollToEnd({ animated: false });
+        scrollToEndProgrammatically(false);
       }
     }
   }, []);
 
   // 冷开落底(替代 initialScrollAtEnd,弃用原因见 LegendList props 注释):首批 items
-  // commit 后 rAF 一次命令式落底。此刻测量未完备、目标可能偏短,但 nearBottomRef 冷开
-  // 为 true,后续每次 contentSize 增长都由 handleContentSize 的贴底补滚继续拉到底,
-  // 最终收敛在真实底部(与迁移 LegendList 前的手搓落底同机制)。落底→补滚是两段式的,
-  // 肉眼可见「跳两下」(规则 7)——沿用老方案的 settle 遮罩:列表先以 opacity 0 挂载,
-  // 落底发起后等一个 settle 窗口(初窗测量与补滚基本结算)再揭开,揭开后不再隐藏。
-  // ⚠️ rAF / reveal timer 挂 ref 而非 effect cleanup:本 effect 依赖 listData.length,
-  // settle 窗口内消息追加会触发 cleanup——若把 timer 交给 cleanup,它会被清掉且因
-  // initialAnchorDoneRef 已置位不再重设,列表永久停在 opacity 0(即新一种白屏)。
-  // 两者的真实生命周期是「每个 scrollResetKey 一轮」,清理归会话切换 effect 与卸载。
+  // commit 后先命令式落底,随后双帧校验 native metrics 是否真的到达 content end。
+  // LegendList 可能仍在以估高换实高或等待 mVCP/data settle,所以一次 scrollToEnd 的
+  // Promise/回调不等价于真实落底；verify 带独立 wait/retry 上限,只在跟随仍归本流程
+  // 所有且用户未开始浏览历史时补滚。settled/give-up 后才揭开列表,固定 300ms 仅作
+  // 首次校验前的最短遮罩窗口,不再是“已经落底”的假定。
   useEffect(() => {
     if (initialAnchorDoneRef.current) return;
     if (listData.length === 0) {
-      // 空会话没有落底问题,直接可见(空态/同步占位不该被遮罩藏住)。
       setListRevealed(true);
       return;
     }
+
     initialAnchorDoneRef.current = true;
-    // 上个会话可能遗留的在飞句柄在此接管清理。不能放会话切换 reset effect:它声明
-    // 在本 effect 之后,同一轮 commit 里会把这里刚排好的新句柄误清。
+    const generation = initialAnchorGenerationRef.current + 1;
+    initialAnchorGenerationRef.current = generation;
     if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
+    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
     if (initialRevealTimerRef.current) clearTimeout(initialRevealTimerRef.current);
-    initialAnchorFrameRef.current = requestAnimationFrame(() => {
-      initialAnchorFrameRef.current = null;
-      void listRef.current?.scrollToEnd({ animated: false });
-    });
-    initialRevealTimerRef.current = setTimeout(() => {
+
+    const finish = () => {
+      if (initialAnchorGenerationRef.current !== generation) return;
+      if (initialAnchorVerifyFrameRef.current !== null) {
+        cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
+        initialAnchorVerifyFrameRef.current = null;
+      }
       initialRevealTimerRef.current = null;
       setListRevealed(true);
-    }, MOBILE_INITIAL_ANCHOR_SETTLE_MS);
-  }, [listData.length, scrollResetKey]);
+    };
+
+    const startedAt = Date.now();
+    const verify = (attempts: number, waitRounds: number) => {
+      if (initialAnchorGenerationRef.current !== generation) return;
+      const preserveVisibleContentPosition = readingOlderRef.current;
+      const action = evaluateMobileAnchorVerify({
+        attempts,
+        listVisible: true,
+        metrics: scrollMetricsRef.current,
+        preserveVisibleContentPosition,
+        stickToLatest: nearBottomRef.current && !userScrollForOlderRef.current,
+        waitRounds,
+      });
+      if (action === 'settled' || action === 'give-up') {
+        const remaining = Math.max(0, MOBILE_INITIAL_ANCHOR_SETTLE_MS - (Date.now() - startedAt));
+        if (remaining === 0) finish();
+        else initialRevealTimerRef.current = setTimeout(finish, remaining);
+        return;
+      }
+      if (action === 'retry') scrollToEndProgrammatically(false);
+      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+          initialAnchorVerifyFrameRef.current = null;
+          verify(
+            attempts + (action === 'retry' ? 1 : 0),
+            waitRounds + (action === 'wait' ? 1 : 0),
+          );
+        });
+      });
+    };
+
+    initialAnchorFrameRef.current = requestAnimationFrame(() => {
+      initialAnchorFrameRef.current = null;
+      if (initialAnchorGenerationRef.current !== generation) return;
+      scrollToEndProgrammatically(false);
+      initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+        initialAnchorVerifyFrameRef.current = requestAnimationFrame(() => {
+          initialAnchorVerifyFrameRef.current = null;
+          if (initialAnchorGenerationRef.current !== generation) return;
+          verify(0, 0);
+        });
+      });
+    });
+  }, [listData.length, scrollResetKey, scrollToEndProgrammatically]);
 
   // 会话切换(scrollResetKey):重置浮标/近底等 UI 状态;LegendList 本体经 key={scrollResetKey}
   // 重挂并重新落底(上方冷开落底 effect;initialAnchorDoneRef 已在渲染期同步块复位)。
@@ -1056,10 +1161,13 @@ export function MessageRenderer({
   // 卸载时清掉在飞的定时器/rAF(闭包引用 listRef,卸载后触发是无害 no-op,
   // 但不留悬挂句柄)。
   useEffect(() => () => {
+    initialAnchorGenerationRef.current += 1;
     if (followEndPinRecoveryTimerRef.current) clearTimeout(followEndPinRecoveryTimerRef.current);
+    clearProgrammaticScroll();
     if (initialAnchorFrameRef.current !== null) cancelAnimationFrame(initialAnchorFrameRef.current);
+    if (initialAnchorVerifyFrameRef.current !== null) cancelAnimationFrame(initialAnchorVerifyFrameRef.current);
     if (initialRevealTimerRef.current) clearTimeout(initialRevealTimerRef.current);
-  }, []);
+  }, [clearProgrammaticScroll]);
 
   // 顶部 chrome(如连接横幅)出现/消失 → topPadding 变 → contentContainerStyle.paddingTop 变 →
   // 所有 item 随之上下移。LegendList 的 maintainVisibleContentPosition 只跟 data / item 尺寸变化、
@@ -1074,8 +1182,8 @@ export function MessageRenderer({
     const delta = topPadding - prev;
     if (delta === 0 || (nearBottomRef.current && !readingOlderRef.current)) return;
     const { offsetY } = scrollMetricsRef.current;
-    void listRef.current?.scrollToOffset({ animated: false, offset: Math.max(0, offsetY + delta) });
-  }, [topPadding]);
+    scrollToOffsetProgrammatically(Math.max(0, offsetY + delta), false);
+  }, [scrollToOffsetProgrammatically, topPadding]);
 
   // 深链/搜索:滚到指定消息(LegendList scrollToIndex 自带 offscreen 处理,无需 rAF/失败兜底)。
   useEffect(() => {
@@ -1093,8 +1201,8 @@ export function MessageRenderer({
     lastAutoLoadEarlierKeyRef.current = null;
     nearBottomRef.current = false;
     setIsAwayFromBottom(true);
-    void listRef.current?.scrollToIndex({ animated: true, index, viewPosition: 0.45 });
-  }, [focusRunKey, focusedItemKey, listData]);
+    scrollToIndexProgrammatically(index, 0.45);
+  }, [focusRunKey, focusedItemKey, listData, scrollToIndexProgrammatically]);
 
   // 新消息红点:滚离底时来新消息(尾部 append)→ 提示。贴底时由 handleContentSize 补滚
   // 自动跟随、不提示。wasNearBottom 只看 nearBottomRef(跟随态唯一真相):以前 || 距离兜底
