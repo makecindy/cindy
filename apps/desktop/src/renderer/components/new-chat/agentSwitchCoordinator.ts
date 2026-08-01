@@ -24,6 +24,8 @@ const switchQueues = new Map<string, Promise<void>>();
 const writeSeqs = new Map<string, number>();
 /** 完整切换操作的在途 token；Set 避免并发点选或 dispose 后旧 finally 误清新操作。 */
 const pendingOperations = new Map<string, Set<symbol>>();
+/** 发送准备至 maker:send 完成的在途 token；与切换操作互斥，避免动作顺序被 await 反转。 */
+const pendingSendDispatches = new Map<string, Set<symbol>>();
 const pendingListeners = new Set<() => void>();
 
 function emitPendingChange(): void {
@@ -121,6 +123,32 @@ export function hasPendingAgentSwitchOperation(sessionId: string): boolean {
   return (pendingOperations.get(sessionId)?.size ?? 0) > 0;
 }
 
+/**
+ * 登记一次完整发送派发（引用水合、预检、maker:send 与发送后清理），返回幂等完成函数。
+ * 状态放在模块级，ChatInput 重挂后新的切换入口仍能看到旧实例尚未完成的发送。
+ */
+export function beginAgentSendDispatch(sessionId: string): () => void {
+  const token = Symbol(sessionId);
+  const tokens = pendingSendDispatches.get(sessionId) ?? new Set<symbol>();
+  tokens.add(token);
+  pendingSendDispatches.set(sessionId, tokens);
+  emitPendingChange();
+
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    const current = pendingSendDispatches.get(sessionId);
+    if (!current?.delete(token)) return;
+    if (current.size === 0) pendingSendDispatches.delete(sessionId);
+    emitPendingChange();
+  };
+}
+
+export function hasPendingAgentSendDispatch(sessionId: string): boolean {
+  return (pendingSendDispatches.get(sessionId)?.size ?? 0) > 0;
+}
+
 export function subscribeAgentSwitchPending(listener: () => void): () => void {
   pendingListeners.add(listener);
   return () => pendingListeners.delete(listener);
@@ -130,7 +158,10 @@ export function subscribeAgentSwitchPending(listener: () => void): () => void {
 export function disposeAgentSwitchSession(sessionId: string): void {
   switchQueues.delete(sessionId);
   writeSeqs.delete(sessionId);
-  if (pendingOperations.delete(sessionId)) emitPendingChange();
+  const hadPendingSwitch = pendingOperations.delete(sessionId);
+  const hadPendingSend = pendingSendDispatches.delete(sessionId);
+  const pendingChanged = hadPendingSwitch || hadPendingSend;
+  if (pendingChanged) emitPendingChange();
 }
 
 /** 仅供测试:清空全部协调状态。 */
@@ -138,4 +169,5 @@ export function __resetAgentSwitchCoordinatorForTests(): void {
   switchQueues.clear();
   writeSeqs.clear();
   pendingOperations.clear();
+  pendingSendDispatches.clear();
 }

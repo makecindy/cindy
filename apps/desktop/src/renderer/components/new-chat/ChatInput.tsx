@@ -106,8 +106,10 @@ import {
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
+  beginAgentSendDispatch,
   beginAgentSwitchOperation,
   getAgentSwitchWriteSeq,
+  hasPendingAgentSendDispatch,
   hasPendingAgentSwitchOperation,
   nextAgentSwitchWriteSeq,
   reserveAgentSwitchExclusive,
@@ -1163,6 +1165,11 @@ export function ChatInput({
   const agentSwitchInFlight = useSyncExternalStore(
     subscribeAgentSwitchPending,
     () => !!sessionId && hasPendingAgentSwitchOperation(sessionId),
+    () => false,
+  );
+  const agentSendDispatchInFlight = useSyncExternalStore(
+    subscribeAgentSwitchPending,
+    () => !!sessionId && hasPendingAgentSendDispatch(sessionId),
     () => false,
   );
 
@@ -3419,7 +3426,8 @@ export function ChatInput({
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
-  const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const [localSendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const sendDispatchInFlight = localSendDispatchInFlight || agentSendDispatchInFlight;
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -3430,158 +3438,167 @@ export function ChatInput({
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
       if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;
+      if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
       if (dispatchSendInFlightRef.current) return;
+      const sourceSessionId = sessionId;
+      const finishAgentSendDispatch = sourceSessionId
+        ? beginAgentSendDispatch(sourceSessionId)
+        : () => {};
       dispatchSendInFlightRef.current = true;
       setSendDispatchInFlight(true);
       try {
         await resolveSessionMessageReferencesForSend(editor);
-      } finally {
-        dispatchSendInFlightRef.current = false;
-        setSendDispatchInFlight(false);
-      }
-      if (editor.isDestroyed) return;
-      const {
-        text: editorText,
-        mentions,
-        hasQuotes,
-        agentReferences,
-        pastedTextRanges,
-        slashCommandRanges,
-      } = serializeEditorContent(editor);
-      // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。
-      // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
-      // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
-      // caption 对应)。
-      const text = formatBrowserCommentsForSend(browserCommentsRef.current, editorText);
-      // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
-      if (!text && !hasAttachments) return;
+        // 引用 chip 水合会跨 device-link await；等待期间若旧客户端 / 其他入口登记了切换，
+        // 必须在真正 onSend 前再查一次，不能让准备阶段前的一次性检查代表发送时刻。
+        if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;
+        if (editor.isDestroyed) return;
+        const {
+          text: editorText,
+          mentions,
+          hasQuotes,
+          agentReferences,
+          pastedTextRanges,
+          slashCommandRanges,
+        } = serializeEditorContent(editor);
+        // composerQuote 在其正文位置序列化成 markdown blockquote,支持引用与回复交错。
+        // browser-comment-chip:页面评论序列化为 `# Browser comments:` 段拼在正文后
+        // (截图在下方并入 filesToSend,与文本块里的 "attached as a labeled image"
+        // caption 对应)。
+        const text = formatBrowserCommentsForSend(browserCommentsRef.current, editorText);
+        // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
+        if (!text && !hasAttachments) return;
 
-      // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
-      // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
-      // 弹窗给出明确原因 + 去设置入口,而不是让请求出去撞一个原始错误码。
-      // Send 按钮已被 selectedSourceDisconnected 禁用,此 guard 兜底覆盖间接派发路径。
-      if (selectedSourceDisconnected) {
-        const goConnect = await confirmDialog({
-          title: t('newChat.sourceDisconnected.title'),
-          description: t('newChat.sourceDisconnected.description'),
-          confirmText: t('newChat.sourceDisconnected.connect'),
-          cancelText: t('logic.confirm.cancel'),
-          autoFocusConfirm: true,
-        });
-        if (goConnect) navigate('/settings?tab=providers');
-        return;
-      }
-
-      // 预检(通用、provider-aware): 当前模型在当前 agent 下「一个已连接来源都没有」
-      // 时,不把请求扔给 SDK 等 401,改弹确认框引导用户去「设置 → 模型供应商」连接。
-      // 取代过去仅 cc + 仅 api_key 的写法 —— 现在 OAuth / XD 网关 / 未来自定义供应商
-      // 都按 ProviderView.connected 统一计入(chatEligibleSourcesForModel onlyConnected),
-      // 未来加新供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、
-      // ~ms 级。只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。
-      // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
-      // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
-      // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
-      if (currentModelAgentKind) {
-        // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
-        // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
-        // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
-        const connectedSources = chatEligibleSourcesForModel(providers, activeModel, currentModelAgentKind, {
-          onlyConnected: true,
-          includeDisabled: !!sessionId,
-        });
-        if (connectedSources.length === 0) {
+        // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
+        // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
+        // 弹窗给出明确原因 + 去设置入口,而不是让请求出去撞一个原始错误码。
+        // Send 按钮已被 selectedSourceDisconnected 禁用,此 guard 兜底覆盖间接派发路径。
+        if (selectedSourceDisconnected) {
           const goConnect = await confirmDialog({
-            title: t('newChat.noProvider.title'),
-            description: t('newChat.noProvider.description'),
-            confirmText: t('newChat.noProvider.connect'),
+            title: t('newChat.sourceDisconnected.title'),
+            description: t('newChat.sourceDisconnected.description'),
+            confirmText: t('newChat.sourceDisconnected.connect'),
             cancelText: t('logic.confirm.cancel'),
             autoFocusConfirm: true,
           });
           if (goConnect) navigate('/settings?tab=providers');
           return;
         }
-      }
 
-      // 评论截图并入发送附件(item.screenshot 即 AttachedFile,顺序在用户附件后,
-      // 与评论块的编号 caption 对应)。
-      const commentScreenshots = browserCommentsRef.current.map((c) => c.screenshot);
-      const filesToSend =
-        hasAttachments || commentScreenshots.length > 0
-          ? [...attachments, ...commentScreenshots]
-          : undefined;
-      const mentionsToSend = mentions.length > 0 ? mentions : undefined;
-      // 意识 $指令展开(C3d 双触发):`$画图 ...` 开头且命中已唤醒意识时,
-      // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
-      // listSync 是既有同步 IPC(首帧同款,极小),每次发送现查,装/卸即时反映;
-      // 目录级禁用同判(与胶囊 / main 侧生效点同源),被禁用 = 原样发送。
-      const eligibleGhosts = filterGhostsForWorkdir(
-        window.electronAPI.ghosts.listSync().ghosts,
-        workingDirRef.current,
-      );
-      const ghostCommandWord = parseGhostCommandWord(text);
-      const usedGhost = ghostCommandWord
-        ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
-        : null;
-      const textToSend = expandGhostCommand(text, eligibleGhosts);
-      let recentUsageMarked = false;
-      const markRecentPluginUsage = () => {
-        if (!usedGhost || recentUsageMarked) return;
-        recentUsageMarked = true;
-        void window.electronAPI.ghosts.markUsed(usedGhost.manifest.id).catch((error) => {
-          log.warn(
-            'failed to persist recent Plugin usage:',
-            error instanceof Error ? error.message : String(error),
-          );
-        });
-      };
-      dispatchSendInFlightRef.current = true;
-      setSendDispatchInFlight(true);
-      let result: boolean | void;
-      try {
-        result = await onSend(
-          textToSend,
-          activeModel,
-          activeEffort,
-          activePermissionMode,
-          filesToSend,
-          mentionsToSend,
-          {
-            deliveryMode,
-            providerId: sendProviderId,
-            ...(hasQuotes ? { quotesEncoded: true } : {}),
-            ...(agentReferences.length > 0 ? { agentReferences } : {}),
-            ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
-            slashCommandRanges,
-            ...(usedGhost ? { onAccepted: markRecentPluginUsage } : {}),
-          },
+        // 预检(通用、provider-aware): 当前模型在当前 agent 下「一个已连接来源都没有」
+        // 时,不把请求扔给 SDK 等 401,改弹确认框引导用户去「设置 → 模型供应商」连接。
+        // 取代过去仅 cc + 仅 api_key 的写法 —— 现在 OAuth / XD 网关 / 未来自定义供应商
+        // 都按 ProviderView.connected 统一计入(chatEligibleSourcesForModel onlyConnected),
+        // 未来加新供应商无需改这里。判定数据来自本地 IPC(useProviders),无网络往返、
+        // ~ms 级。只有「确实零已连接来源」才拦截;≥1 个直接放行(无弹窗)。
+        // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
+        // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
+        // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
+        if (currentModelAgentKind) {
+          // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
+          // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
+          // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
+          const connectedSources = chatEligibleSourcesForModel(providers, activeModel, currentModelAgentKind, {
+            onlyConnected: true,
+            includeDisabled: !!sessionId,
+          });
+          if (connectedSources.length === 0) {
+            const goConnect = await confirmDialog({
+              title: t('newChat.noProvider.title'),
+              description: t('newChat.noProvider.description'),
+              confirmText: t('newChat.noProvider.connect'),
+              cancelText: t('logic.confirm.cancel'),
+              autoFocusConfirm: true,
+            });
+            if (goConnect) navigate('/settings?tab=providers');
+            return;
+          }
+        }
+
+        // 评论截图并入发送附件(item.screenshot 即 AttachedFile,顺序在用户附件后,
+        // 与评论块的编号 caption 对应)。
+        const commentScreenshots = browserCommentsRef.current.map((c) => c.screenshot);
+        const filesToSend =
+          hasAttachments || commentScreenshots.length > 0
+            ? [...attachments, ...commentScreenshots]
+            : undefined;
+        const mentionsToSend = mentions.length > 0 ? mentions : undefined;
+        // 意识 $指令展开(C3d 双触发):`$画图 ...` 开头且命中已唤醒意识时,
+        // 追加"必须走 cindy 总机"的机器指令;未命中原样发送。
+        // listSync 是既有同步 IPC(首帧同款,极小),每次发送现查,装/卸即时反映;
+        // 目录级禁用同判(与胶囊 / main 侧生效点同源),被禁用 = 原样发送。
+        const eligibleGhosts = filterGhostsForWorkdir(
+          window.electronAPI.ghosts.listSync().ghosts,
+          workingDirRef.current,
         );
-      } catch (error) {
-        log.warn('send rejected:', error instanceof Error ? error.message : String(error));
-        return;
+        const ghostCommandWord = parseGhostCommandWord(text);
+        const usedGhost = ghostCommandWord
+          ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
+          : null;
+        const textToSend = expandGhostCommand(text, eligibleGhosts);
+        let recentUsageMarked = false;
+        const markRecentPluginUsage = () => {
+          if (!usedGhost || recentUsageMarked) return;
+          recentUsageMarked = true;
+          void window.electronAPI.ghosts.markUsed(usedGhost.manifest.id).catch((error) => {
+            log.warn(
+              'failed to persist recent Plugin usage:',
+              error instanceof Error ? error.message : String(error),
+            );
+          });
+        };
+        dispatchSendInFlightRef.current = true;
+        setSendDispatchInFlight(true);
+        let result: boolean | void;
+        try {
+          result = await onSend(
+            textToSend,
+            activeModel,
+            activeEffort,
+            activePermissionMode,
+            filesToSend,
+            mentionsToSend,
+            {
+              deliveryMode,
+              providerId: sendProviderId,
+              ...(hasQuotes ? { quotesEncoded: true } : {}),
+              ...(agentReferences.length > 0 ? { agentReferences } : {}),
+              ...(pastedTextRanges.length > 0 ? { pastedTextRanges } : {}),
+              slashCommandRanges,
+              ...(usedGhost ? { onAccepted: markRecentPluginUsage } : {}),
+            },
+          );
+        } catch (error) {
+          log.warn('send rejected:', error instanceof Error ? error.message : String(error));
+          return;
+        } finally {
+          dispatchSendInFlightRef.current = false;
+          setSendDispatchInFlight(false);
+        }
+        if (result === false) return;
+        markRecentPluginUsage();
+        // Suppress onUpdate's draft-save during the post-send clearContent so
+        // we don't write a transient empty-doc entry that we're about to drop.
+        isRestoringRef.current = true;
+        try {
+          editor.commands.clearContent(true);
+        } finally {
+          isRestoringRef.current = false;
+        }
+        clearFiles();
+        setBrowserComments([]);
+        historyIndexRef.current = -1;
+        hydratedHistoryDocumentRef.current = null;
+        draftRef.current = null;
+        // composer-draft-per-session: drop the saved draft now that this
+        // session's content has been sent. Without this, switching away then
+        // back would re-restore the just-sent text/files into the composer.
+        if (storageKey) {
+          clearComposerDraft(storageKey);
+        }
       } finally {
         dispatchSendInFlightRef.current = false;
         setSendDispatchInFlight(false);
-      }
-      if (result === false) return;
-      markRecentPluginUsage();
-      // Suppress onUpdate's draft-save during the post-send clearContent so
-      // we don't write a transient empty-doc entry that we're about to drop.
-      isRestoringRef.current = true;
-      try {
-        editor.commands.clearContent(true);
-      } finally {
-        isRestoringRef.current = false;
-      }
-      clearFiles();
-      setBrowserComments([]);
-      historyIndexRef.current = -1;
-      hydratedHistoryDocumentRef.current = null;
-      draftRef.current = null;
-      // composer-draft-per-session: drop the saved draft now that this
-      // session's content has been sent. Without this, switching away then
-      // back would re-restore the just-sent text/files into the composer.
-      if (storageKey) {
-        clearComposerDraft(storageKey);
+        finishAgentSendDispatch();
       }
     },
     [
@@ -3986,6 +4003,9 @@ export function ChatInput({
       },
     ) => {
       if (!sessionId) return;
+      // 发送的引用水合 / 预检也可能 await。以同步登记的 session 级发送 token 为准，
+      // 防止「先点发送、后选引擎」被异步准备反转成先登记切换再 maker:send。
+      if (hasPendingAgentSendDispatch(sessionId)) return;
       // 本次点选无论落到哪个分支(登记意图 / 撤销意图 / 立即切换),都算一次本端写入:
       // 在途的远程意图读回据此作废,不会用旧快照盖掉用户刚做的选择。
       const sourceSessionId = sessionId;
@@ -5508,7 +5528,7 @@ export function ChatInput({
                     onProviderChange={handleProviderChange}
                     onNavigateToProviders={handleNavigateToProviders}
                     switching={remoteSwitchInFlight}
-                    disabled={disabled}
+                    disabled={disabled || agentSendDispatchInFlight}
                     visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                     compactToolbar={useNarrowToolbar}
                     ultraCompactToolbar={useUltraCompactToolbar}

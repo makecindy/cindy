@@ -401,17 +401,21 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
 
   it('dispose 释放该 session 的协调状态', async () => {
     const {
+      beginAgentSendDispatch,
       beginAgentSwitchOperation,
       nextAgentSwitchWriteSeq,
       getAgentSwitchWriteSeq,
+      hasPendingAgentSendDispatch,
       hasPendingAgentSwitchOperation,
       disposeAgentSwitchSession,
     } = await load();
     nextAgentSwitchWriteSeq('s1');
     beginAgentSwitchOperation('s1');
+    beginAgentSendDispatch('s1');
     disposeAgentSwitchSession('s1');
     expect(getAgentSwitchWriteSeq('s1')).toBe(0);
     expect(hasPendingAgentSwitchOperation('s1')).toBe(false);
+    expect(hasPendingAgentSendDispatch('s1')).toBe(false);
   });
 
   it('完整切换 pending 按 session 计数并通知，最后一个操作完成后才放开发送', async () => {
@@ -438,6 +442,21 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
     expect(hasPendingAgentSwitchOperation('s2')).toBe(true);
     expect(notifications).toEqual([true, true, true, true, false]);
     unsubscribe();
+  });
+
+  it('完整发送 pending 按 session 计数，跨组件重挂可见且完成函数幂等', async () => {
+    const { beginAgentSendDispatch, hasPendingAgentSendDispatch } = await load();
+    const finishA = beginAgentSendDispatch('s1');
+    const finishB = beginAgentSendDispatch('s1');
+
+    // 新组件从同一模块级 registry 读取，不依赖旧组件实例的 ref/state。
+    expect(hasPendingAgentSendDispatch('s1')).toBe(true);
+    expect(hasPendingAgentSendDispatch('s2')).toBe(false);
+    finishA();
+    finishA();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(true);
+    finishB();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(false);
   });
 });
 
@@ -586,6 +605,33 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('finishAgentSwitchOperation();');
     expect(source).toContain('if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;');
     expect(source).toContain('agentSwitchInFlight ||');
+  });
+
+  it('引用水合期间发送与切换双向互斥，并在真正发送前复核切换状态', () => {
+    const sendBegin = source.indexOf('beginAgentSendDispatch(sourceSessionId)');
+    const hydrate = source.indexOf('await resolveSessionMessageReferencesForSend(editor);');
+    const sendRecheck = source.indexOf(
+      'if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;',
+      hydrate,
+    );
+    const onSend = source.indexOf('result = await onSend(', sendRecheck);
+    const sendFinish = source.indexOf('finishAgentSendDispatch();', onSend);
+    const sendSelfGuard = source.indexOf(
+      'if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;',
+    );
+    const switchGuard = source.indexOf(
+      'if (hasPendingAgentSendDispatch(sessionId)) return;',
+      sendFinish,
+    );
+
+    expect(sendSelfGuard).toBeGreaterThanOrEqual(0);
+    expect(sendBegin).toBeGreaterThan(sendSelfGuard);
+    expect(hydrate).toBeGreaterThan(sendBegin);
+    expect(sendRecheck).toBeGreaterThan(hydrate);
+    expect(onSend).toBeGreaterThan(sendRecheck);
+    expect(sendFinish).toBeGreaterThan(onSend);
+    expect(switchGuard).toBeGreaterThan(sendFinish);
+    expect(source).toContain('disabled={disabled || agentSendDispatchInFlight}');
   });
 
   it('远程分支用稳定 deviceId 直连隧道:relay 瞬时重连会清空 sessionId→deviceId 索引', () => {
