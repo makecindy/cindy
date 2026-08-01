@@ -36,7 +36,7 @@ export type BrowserTabCleanupConfig = {
   sweepMinutes?: number;
 };
 export type BrowserSsrFPolicyConfig = {
-  /** If true, permit browser navigation to private/internal networks. Default: true */
+  /** If true, permit browser navigation to private/internal networks. Default: false */
   dangerouslyAllowPrivateNetwork?: boolean;
   /** Permit RFC 2544 benchmark addresses (198.18.0.0/15) used by fake-IP proxy DNS. */
   allowRfc2544BenchmarkRange?: boolean;
