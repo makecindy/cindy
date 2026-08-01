@@ -264,7 +264,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     });
     const r = await canUseTool(
       'Write',
-      { file_path: '/etc/evil.conf' },
+      { file_path: '/tmp/out.txt' },
       { toolUseID: 't4', suggestions: SESSION_SUGGESTION },
     );
     expect(r.behavior).toBe('allow');

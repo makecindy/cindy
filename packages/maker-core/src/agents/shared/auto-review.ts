@@ -86,13 +86,17 @@ export function reviewAction(
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
       if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
       // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写),写入其中须升级(codex 报)。相对路径仍
-      // 挂到 workspaceRoots[0] 解析,故边界集只取第一个 root。
+      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
+      // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
       const writableRoots = workspaceRoots.slice(0, 1);
-      return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), writableRoots, aliasFirmlinks)
-        ? 'auto-approve'
-        : 'prompt';
+      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
+      // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
+      // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
+      if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
+      return 'prompt';
     }
     case 'exec': {
       const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
@@ -165,6 +169,26 @@ const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
 /** 路径是否触碰已知凭证/密钥位置(shell 命令与内置 Read 工具共用同一判定)。 */
 export function isSensitiveCredentialPath(target: string): boolean {
   return typeof target === 'string' && CREDENTIAL_PATH_PATTERNS.some((re) => re.test(target));
+}
+
+/**
+ * 系统 / 受保护目录:写入是高影响系统级操作,不能交给灰区模型 reviewer 静默 allow(copilot 报:
+ * 新语义下 `prompt` 可被 reviewer allow,写 /etc/passwd、/System/… 会绕过用户同意)。命中即确定性
+ * `prompt-each-time`。与 apps/desktop/src/main/filePathPolicy.ts 的系统 blocklist 对齐(POSIX 系统目录 +
+ * macOS /System·/Library + Windows %SystemRoot%/%ProgramFiles%/%ProgramData%)。判定针对已归一的绝对路径。
+ */
+const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
+  /^\/(?:etc|proc|sys|dev|boot|root)(?:\/|$)/i,             // POSIX 系统目录
+  /^\/var\/(?:log|db|root)(?:\/|$)/i,                       // 系统级 /var 子目录(filePathPolicy 一致)
+  /^\/(?:System|Library)(?:\/|$)/,                          // macOS 系统目录(根级 /Library,非 ~/Library)
+  /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录
+];
+
+/** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
+export function isProtectedSystemPath(target: string): boolean {
+  if (typeof target !== 'string' || target.length === 0) return false;
+  const fwd = toForwardSlashes(target);
+  return SYSTEM_WRITE_PATH_PATTERNS.some((re) => re.test(fwd));
 }
 
 /**
@@ -710,6 +734,44 @@ function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'):
   return false;
 }
 
+/** 提取命令替换 `$(…)` / 反引号 / 进程替换 `<(…)` 的内层文本(单层;嵌套是既有限制)。 */
+function substitutionBodies(text: string): string[] {
+  const out: string[] = [];
+  for (const m of text.matchAll(/\$\(([^()]*)\)/g)) out.push(m[1] ?? '');
+  for (const m of text.matchAll(/`([^`]*)`/g)) out.push(m[1] ?? '');
+  for (const m of text.matchAll(/<\(([^()]*)\)/g)) out.push(m[1] ?? '');
+  return out;
+}
+
+/**
+ * PowerShell 载荷的确定性红线(payload 语法与 POSIX 不同,scopedDestruction 的 rm/ 等规则识别不到):
+ *   - `-EncodedCommand`(及唯一前缀缩写 -e/-enc/…)= base64,静态不可读 → 必问;
+ *   - 明文 `-Command` 载荷含递归/强制删除、磁盘格式化、Invoke-Expression(eval)、下载 | iex → 必问。
+ * codex 报:此前只查了 PowerShell 载荷里的命令替换下载,没过破坏/系统控制检查。
+ */
+const POWERSHELL_DANGER_PATTERNS: readonly RegExp[] = [
+  /\b(?:remove-item|ri|rd|rmdir|del|erase)\b[\s\S]*?-(?:recurse|r|force|f)\b/i, // 递归/强制删除
+  /\b(?:format-volume|clear-disk|format-disk)\b/i,                              // 磁盘格式化/清空
+  /\b(?:invoke-expression|iex)\b/i,                                            // eval
+  /\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[\s\S]*\|\s*(?:iex|invoke-expression)\b/i, // 下载 | iex
+];
+
+function powerShellNeedsConsent(tokens: string[]): boolean {
+  if (!/^(?:pwsh|powershell)$/.test(executableName(tokens[0] ?? ''))) return false;
+  let payload: string | null = null;
+  for (let i = 1; i < tokens.length; i++) {
+    const raw = tokens[i];
+    const name = raw.split('=')[0].toLowerCase();
+    // -EncodedCommand(-e/-ec/-enc/…):base64 静态不可读 → 必问(不可只当灰区)。
+    if (name.length >= 2 && '-encodedcommand'.startsWith(name)) return true;
+    // -Command(-c/-co/…)的明文载荷交给危险模式扫描。
+    if (name.length >= 2 && '-command'.startsWith(name)) {
+      payload = raw.includes('=') ? raw.slice(raw.indexOf('=') + 1) : tokens[i + 1] ?? '';
+    }
+  }
+  return payload !== null && POWERSHELL_DANGER_PATTERNS.some((re) => re.test(payload as string));
+}
+
 /** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
 function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
   let pipeCarriesRemoteContent = false;
@@ -727,6 +789,12 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     }
     if (bin === 'eval') return true;
     const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
+    // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
+    if (depth < 3 && substitutionBodies(text).some(
+      (body) => highImpactExecutionNeedsConsent(body, depth + 1))) return true;
+    // PowerShell 载荷(-Command 明文的破坏/eval、-EncodedCommand 的 base64)过确定性红线(codex 报)。
+    if (powerShellNeedsConsent(rawTokens)) return true;
     const payload = shellCommandPayload(rawTokens);
     if (payload && (substitutionRunsRemoteFetch(payload, 'command')
       || depth >= 3

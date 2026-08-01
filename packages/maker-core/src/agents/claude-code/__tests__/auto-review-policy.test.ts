@@ -63,13 +63,14 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
     // /extra 是只读引用目录(additionalDirectories),写入须升级(codex 报)。
     expect(verdict('Write', { file_path: '/extra/y.ts' })).toBe('prompt');
   });
-  it('工作区外写 → prompt(升级)', () => {
-    expect(verdict('Write', { file_path: '/etc/passwd' })).toBe('prompt');
+  it('工作区外(非系统)写 → prompt(升级);系统目录写 → prompt-each-time', () => {
     expect(verdict('Write', { file_path: '/tmp/leak.txt' })).toBe('prompt');
+    expect(verdict('Write', { file_path: '/etc/passwd' })).toBe('prompt-each-time');
+    expect(verdict('Write', { file_path: '/System/x' })).toBe('prompt-each-time');
   });
-  it('用 .. 逃出工作区 → prompt', () => {
+  it('用 .. 逃出工作区 → prompt(非系统);逃进系统目录 → prompt-each-time', () => {
     expect(verdict('Write', { file_path: '/repo/../outside/x' })).toBe('prompt');
-    expect(verdict('Write', { file_path: '../../etc/hosts' })).toBe('prompt');
+    expect(verdict('Write', { file_path: '../../etc/hosts' })).toBe('prompt-each-time');
   });
   it('前缀不整段匹配:/repo-secrets 不算 /repo 内 → prompt', () => {
     expect(verdict('Write', { file_path: '/repo-secrets/x' })).toBe('prompt');
@@ -90,13 +91,13 @@ describe('classifyBuiltinToolForAutoReview — 文件写(结构化 path 精确�
       workspaceRoots: ['/private/var/folders/x/ws'],
       platform: 'darwin',
     })).toBe('auto-approve');
-    // /private 抹平不误伤真实越界:/private/etc 归 /etc,仍在 /var 工作区外。
+    // /private/etc 归 /etc(系统目录)→ 高影响系统写红线(canonical 抹平后命中)。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
       input: { file_path: '/private/etc/passwd' },
       workspaceRoots: ['/var/folders/x/ws'],
       platform: 'darwin',
-    })).toBe('prompt');
+    })).toBe('prompt-each-time');
     // Linux:/private/var 不再抹平 → 区外写升级(远端 Linux 会话)。
     expect(classifyBuiltinToolForAutoReview({
       toolName: 'Write',
@@ -150,8 +151,8 @@ describe('classifyBuiltinToolForAutoReview — Windows 盘符路径边界', () =
     expect(verdict('Write', { file_path: 'C:\\Users\\me\\project\\src\\a.ts' }, win)).toBe('auto-approve');
     expect(verdict('Edit', { file_path: 'src\\a.ts' }, win)).toBe('auto-approve');
   });
-  it('Windows 工作区外写 → prompt(盘符绝对路径不再被当相对路径拼进区内)', () => {
-    expect(verdict('Write', { file_path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' }, win)).toBe('prompt');
+  it('Windows 工作区外写:系统目录 → prompt-each-time,非系统 → prompt', () => {
+    expect(verdict('Write', { file_path: 'C:\\Windows\\System32\\drivers\\etc\\hosts' }, win)).toBe('prompt-each-time');
     expect(verdict('Write', { file_path: 'D:\\secrets\\x.txt' }, win)).toBe('prompt');
   });
 });
