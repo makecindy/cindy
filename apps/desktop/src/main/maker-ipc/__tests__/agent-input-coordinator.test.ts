@@ -5115,6 +5115,30 @@ describe('AgentInputCoordinator crash-recovery queue snapshots (issue #761)', ()
     expect(latestProjection(h.projections).continuationTurnClientId).toBe('q-continue');
   });
 
+  it('does not inherit a continuation owner when vendor turn generation is unavailable', async () => {
+    const h = createHarness();
+    h.setAgentKind('codex');
+    const sid = 'continue-owner-generation-unavailable';
+    const steerGate = deferred<void>();
+    h.steerToAgent.mockImplementationOnce(() => steerGate.promise);
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-continue', CONTINUE_AFTER_ERROR_PROMPT),
+      { resumeRestorePausedQueue: true },
+    );
+    await flush();
+
+    h.setTurnGeneration(null as never);
+    const steerPromise = h.coordinator.steer(sid, makeItem('q-steer', 'additional context'));
+    await flush();
+    steerGate.resolve();
+    await expect(steerPromise).resolves.toBe(true);
+    await flush();
+
+    expect(latestProjection(h.projections).continuationTurnClientId).toBeNull();
+  });
+
   it('does not inherit a continuation owner when another vendor turn starts during steer ack', async () => {
     const h = createHarness();
     h.setAgentKind('codex');

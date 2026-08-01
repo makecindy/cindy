@@ -1356,7 +1356,7 @@ export class AgentInputCoordinator {
     accepted.recovery = null;
     this.invalidateAbortBoundaryForNewTurn(accepted);
     const sameVendorTurn =
-      steerVendorTurnGeneration === null ||
+      steerVendorTurnGeneration !== null &&
       this.deps.getTurnGeneration?.(sessionId) === steerVendorTurnGeneration;
     accepted.activeTurn = {
       item,
