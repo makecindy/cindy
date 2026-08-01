@@ -1271,17 +1271,21 @@ export function ChatInput({
     remoteWasConnectedRef.current = connected;
   }, [remoteConnStatus]);
 
-  // 远程会话打开时读回被控端的权威 pending 意图。意图是 main 的内存态、不落库,
-  // 控制端换窗口 / 重开视图 / 重启后本地镜像为空,不读回就会出现「UI 显示旧引擎、
-  // 下一条消息却按意图切换」的错位(在被控端本机或另一台控制端登记时同理)。
+  // 会话打开时读回 main 的权威 pending 意图。意图是 main 的内存态、不落库,
+  // renderer 换窗口 / 重开视图 / LRU 驱逐后本地镜像为空,不读回就会出现「UI 显示旧引擎、
+  // 下一条消息却按意图切换」的错位。device-link 会话直连稳定 deviceId;本地会话走
+  // 本机 maker。SSH 是另一套引擎生命周期,继续排除。
   useEffect(() => {
-    if (!sessionId || !deviceLinkDeviceId || remoteHostId) return;
+    if (!sessionId || remoteHostId) return;
     let cancelled = false;
     const writeSeq = getAgentSwitchWriteSeq(sessionId);
     const intentRev = makerChatStore.getAgentSwitchIntentRev(sessionId);
-    void makerApiForDevice(deviceLinkDeviceId)
+    const switchApi = deviceLinkDeviceId
+      ? makerApiForDevice(deviceLinkDeviceId)
+      : makerApiFor(sessionId);
+    void switchApi
       .getSessionAgentSwitchIntent(sessionId)
-      .then((remoteIntent) => {
+      .then((authoritativeIntent) => {
         const fresh = isAgentSwitchResponseFresh({
           // 会话在往返期间被切走 → 这次响应不属于当前视图,丢弃。
           cancelled: cancelled || !isSessionScopeCurrent(sessionId, currentSessionIdRef.current),
@@ -1291,10 +1295,10 @@ export function ChatInput({
           intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
         });
         if (!fresh) return;
-        makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent);
+        makerChatStore.mirrorAgentSwitchIntent(sessionId, authoritativeIntent);
       })
       .catch(() => {
-        // 老被控端未收录该 channel(CHANNEL_NOT_ALLOWED)或断链:保留本地镜像,
+        // 老被控端未收录该 channel(CHANNEL_NOT_ALLOWED)、断链或本地读取失败:保留已有镜像,
         // 不擦用户已登记的选择(入口本身已按 capabilities 隐藏)。
       });
     return () => {

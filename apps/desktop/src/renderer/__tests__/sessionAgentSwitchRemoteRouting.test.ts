@@ -536,10 +536,16 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(viewSource).toContain('sessionOrcaRole={session?.orcaRole ?? null}');
   });
 
-  it('远程会话打开时读回被控端权威意图,并经新鲜度守卫过滤过期响应', () => {
+  it('本地与远程会话打开时都读回 main 权威意图,并经新鲜度守卫过滤过期响应', () => {
+    expect(source).toContain('if (!sessionId || remoteHostId) return;');
+    expect(source).toContain('const switchApi = deviceLinkDeviceId');
+    expect(source).toContain('? makerApiForDevice(deviceLinkDeviceId)');
+    expect(source).toContain(': makerApiFor(sessionId);');
     expect(source).toContain('.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('isAgentSwitchResponseFresh({');
-    expect(source).toContain('makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent)');
+    expect(source).toContain(
+      'makerChatStore.mirrorAgentSwitchIntent(sessionId, authoritativeIntent)',
+    );
     // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
     expect(source).toContain('nextAgentSwitchWriteSeq(sourceSessionId)');
     expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
