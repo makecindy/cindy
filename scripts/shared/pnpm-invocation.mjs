@@ -21,7 +21,12 @@ const WINDOWS_DIRECT_EXEC_EXTENSIONS = new Set([".exe", ".com"]);
  * @returns {{ command: string, args: string[], shell: boolean }}
  */
 export function resolvePnpmInvocation(args, options = {}) {
-  const npmExecPath = options.npmExecPath ?? options.npm_execpath ?? process.env.npm_execpath;
+  const hasNpmExecPathOption =
+    Object.prototype.hasOwnProperty.call(options, "npmExecPath") ||
+    Object.prototype.hasOwnProperty.call(options, "npm_execpath");
+  const npmExecPath = hasNpmExecPathOption
+    ? (options.npmExecPath ?? options.npm_execpath)
+    : process.env.npm_execpath;
   const execPath = options.execPath ?? process.execPath;
   const platform = options.platform ?? process.platform;
   const isWindows = platform === "win32";

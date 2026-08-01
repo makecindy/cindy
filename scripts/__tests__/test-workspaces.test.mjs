@@ -1248,6 +1248,7 @@ test("resolvePnpmInvocation fallback shell behavior is explicit per platform", (
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "win32",
 			comSpec: "C:/Windows/System32/cmd.exe",
 		}),
@@ -1260,6 +1261,7 @@ test("resolvePnpmInvocation fallback shell behavior is explicit per platform", (
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "darwin",
 		}),
 		{ command: "pnpm", args: ["--version"], shell: false },
@@ -1267,6 +1269,7 @@ test("resolvePnpmInvocation fallback shell behavior is explicit per platform", (
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "linux",
 		}),
 		{ command: "pnpm", args: ["--version"], shell: false },
