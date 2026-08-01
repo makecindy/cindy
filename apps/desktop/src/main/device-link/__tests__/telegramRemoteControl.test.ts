@@ -74,6 +74,11 @@ describe('telegram 远程状态投影', () => {
       reason: null,
     });
   });
+
+  it('拒绝上线优先于一切 —— 未注入 source 时也不能被当成"成功"', async () => {
+    setTelegramRemoteSource(null);
+    await expect(setTelegramRemoteOnline({ online: true })).rejects.toThrow(/FORBIDDEN/);
+  });
 });
 
 describe('telegram 远程上下线', () => {
@@ -85,12 +90,13 @@ describe('telegram 远程上下线', () => {
     expect(result.kind).toBe('offline');
   });
 
-  it('{online:true} → goOnline', async () => {
-    getStatus.mockReturnValue({ kind: 'connected', appId: '999' });
-    const result = await setTelegramRemoteOnline({ online: true });
-    expect(goOnline).toHaveBeenCalledTimes(1);
+  it('{online:true} 被硬拒绝 —— 远程不得撤销目标机自己选的下线', async () => {
+    getStatus.mockReturnValue({ kind: 'offline', appId: '999' });
+    // 控制端 UI 只发 false 是产品选择, 不是权限约束: deviceLink.invoke 通用入口
+    // 允许任意参数, 放开上线等于让别的设备把这台拽回 409 争抢。
+    await expect(setTelegramRemoteOnline({ online: true })).rejects.toThrow(/FORBIDDEN/);
+    expect(goOnline).not.toHaveBeenCalled();
     expect(goOffline).not.toHaveBeenCalled();
-    expect(result.kind).toBe('connected');
   });
 
   it('脏 payload(缺参 / 非对象 / online 非 true)一律按下线处理, 绝不误上线', async () => {

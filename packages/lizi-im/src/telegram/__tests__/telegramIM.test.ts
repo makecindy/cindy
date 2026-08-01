@@ -580,6 +580,25 @@ describe('TelegramIM', () => {
     expect(ctx.secrets.has('telegram-bot-token')).toBe(false);
   });
 
+  it('重填 token 时标志删不掉要报错, 不能连上后重启又掉回 offline', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    const originalRemove = ctx.host.secrets.remove;
+    ctx.host.secrets.remove = (name) => {
+      if (name !== 'telegram-bot-offline') originalRemove(name);
+    };
+
+    await ctx.handlers.get('telegramBot:set-config')!({
+      token: '999:secret-token-abcdefghijk',
+      ownerUserId: OWNER_ID,
+    });
+
+    // 标志还在 → 重启必回 offline, 所以不能报告成功。
+    expect(ctx.secrets.get('telegram-bot-offline')).toBe('1');
+    expect(im.getStatus().kind).toBe('error');
+    ctx.host.secrets.remove = originalRemove;
+  });
+
   it('下线态重新填 token 点连接: 清掉遗留标志, 直接连上', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:set-online')!({ online: false });

@@ -85,21 +85,26 @@ export function readTelegramRemoteStatus(): TelegramRemoteStatus {
 }
 
 /**
- * device-link:telegram:set-online —— 切换本机(被控端)的轮询开关。
- * 参数形状与本地 telegramBot:set-online 一致, 便于两端共用理解。
+ * device-link:telegram:set-online —— 让被控端下线。参数形状与本地
+ * `telegramBot:set-online` 一致，便于两端共用理解，但**远程只接受 online:false**。
+ *
+ * 为什么在这里硬拒绝 `online:true`：`deviceLink.invoke` 是通用入口，控制端可以
+ * 自行构造参数 —— 控制端 UI 只发 `false` 是产品选择，不是权限约束。放开上线等于
+ * 让任一有控制权的设备**撤销目标机用户主动选择的下线状态**，把它重新拽回 409
+ * 争抢。远程能做的只有「让它别收消息」，上线是目标机本人的决定，只能本地操作。
  */
 export async function setTelegramRemoteOnline(arg: unknown): Promise<TelegramRemoteStatus> {
   const online =
     !!arg && typeof arg === 'object' && !Array.isArray(arg)
       ? (arg as Record<string, unknown>).online === true
       : false;
-  if (!source) return { ...NOT_CONFIGURED };
   if (online) {
-    await source.goOnline();
-  } else {
-    await source.goOffline();
+    log.warn('remote set-online(true) rejected: bringing a device online is local-only');
+    throw new Error('[FORBIDDEN] bringing a device online remotely is not allowed');
   }
+  if (!source) return { ...NOT_CONFIGURED };
+  await source.goOffline();
   const projected = projectStatus();
-  log.info(`remote set-online(${online}) -> ${projected.kind}`);
+  log.info(`remote set-online(false) -> ${projected.kind}`);
   return projected;
 }

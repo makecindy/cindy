@@ -391,8 +391,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         await this.stopPolling();
         this.ownerUserId = nextOwnerUserId;
         // 手动填 token 点连接 = 明确要在这台机器上用, 清掉遗留的下线标志,
-        // 否则连上了但重启后又被 init 判回 offline。
+        // 否则连上了但重启后又被 init 判回 offline。remove 吞异常且无返回值
+        // (Windows 文件锁尤甚, 见 engineering-conventions「文件系统差异」), 必须
+        // 回读确认 —— 否则用户重填 token 看似恢复、重启后又掉回 offline。
         this.host.secrets.remove(OFFLINE_SECRET_KEY);
+        if (this.isOfflineFlagSet()) {
+          this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
+          this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
+          this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          return configResult();
+        }
         const connected = await this.connect(token);
         if (!connected) {
           const failedStatus = this.status;
