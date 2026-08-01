@@ -589,7 +589,9 @@ function ImageApiKeyRow({
 
   if (configured === null) return null;
   return (
-    <div className="flex items-center gap-2 pt-2">
+    /* 可折行:最小窗口(右栏 ~250px 内容区)下「标签 + 掩码/输入框 + 按钮」
+       放不下时换行,操作始终可达(PR #1102 review 第八轮;与详情头折行同口径)。 */
+    <div className="flex flex-wrap items-center gap-2 gap-y-2 pt-2">
       <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
         {t('settings.providers.imagesKey.label')}
       </span>
