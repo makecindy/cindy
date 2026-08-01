@@ -11,6 +11,9 @@ interface CapturingLogger {
 interface MockSdkOptions {
   logger: CapturingLogger;
   domain?: string;
+  wsConfig?: {
+    pingTimeout?: number;
+  };
   onReady?: () => void;
   onError?: (error: Error) => void;
 }
@@ -339,6 +342,17 @@ describe('Feishu owner binding updates', () => {
 });
 
 describe('IM service routing', () => {
+  it('enables the SDK ping watchdog for Feishu connections', async () => {
+    const connecting = wsClient.start(credentials, {
+      announceLifecycle: false,
+    });
+    const sdkClient = latestClient();
+
+    expect(sdkClient.options.wsConfig).toEqual({ pingTimeout: 30 });
+    sdkClient.options.onReady?.();
+    await expect(connecting).resolves.toBe('connected');
+  });
+
   it('selects the Lark SDK domain for Lark credentials', async () => {
     const connecting = wsClient.start(
       { ...credentials, service: 'lark' },
@@ -347,6 +361,7 @@ describe('IM service routing', () => {
     const sdkClient = latestClient();
 
     expect(sdkClient.options.domain).toBe('lark-domain');
+    expect(sdkClient.options.wsConfig).toEqual({ pingTimeout: 30 });
     sdkClient.options.onReady?.();
     await expect(connecting).resolves.toBe('connected');
   });
