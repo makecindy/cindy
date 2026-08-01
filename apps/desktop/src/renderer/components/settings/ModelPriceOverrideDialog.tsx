@@ -210,7 +210,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                     className={cn(
                       'h-7 flex-1 rounded-full text-12 font-medium transition-colors',
                       candidate === agent
-                        ? 'bg-[var(--surface-elevated)] text-[var(--settings-section-title)] shadow-sm'
+                        ? 'bg-[var(--surface-elevated)] text-[var(--settings-section-title)]'
                         : 'text-[var(--text-secondary)]',
                     )}
                   >

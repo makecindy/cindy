@@ -110,33 +110,49 @@ describe('mergeWithBundled', () => {
 
   it('keeps a newer bundled modelRegistry when the primary full snapshot is stale', () => {
     const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
+    if (!bundledXai) throw new Error('missing bundled xAI provider');
     const staleRegistry = {
       ...bundledRegistry,
       updatedAt: '2026-01-01T00:00:00.000Z',
       models: [bundledRegistry.models[0]!],
     };
+    const staleXai = { ...bundledXai, name: 'STALE-XAI' };
 
-    const merged = mergeWithBundled({ ...MINIMAL, modelRegistry: staleRegistry });
+    const merged = mergeWithBundled({
+      ...MINIMAL,
+      providers: [...MINIMAL.providers, staleXai],
+      modelRegistry: staleRegistry,
+    });
 
     expect(merged.modelRegistry).toBe(bundledRegistry);
     expect(merged.modelRegistry?.models.length).toBeGreaterThan(staleRegistry.models.length);
+    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(bundledXai);
   });
 
   it('uses a newer primary modelRegistry as one complete snapshot, including retirements', () => {
     const bundledRegistry = BUNDLED_CATALOG.modelRegistry;
+    const bundledXai = BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai');
     if (!bundledRegistry) throw new Error('missing bundled modelRegistry');
+    if (!bundledXai) throw new Error('missing bundled xAI provider');
     const newerRegistry = {
       ...bundledRegistry,
       updatedAt: '2099-01-01T00:00:00.000Z',
       models: [{ ...bundledRegistry.models[0]!, status: 'retired' as const }],
     };
+    const newerXai = { ...bundledXai, name: 'NEWER-XAI' };
 
-    const merged = mergeWithBundled({ ...MINIMAL, modelRegistry: newerRegistry });
+    const merged = mergeWithBundled({
+      ...MINIMAL,
+      providers: [...MINIMAL.providers, newerXai],
+      modelRegistry: newerRegistry,
+    });
 
     expect(merged.modelRegistry).toBe(newerRegistry);
     expect(merged.modelRegistry?.models).toHaveLength(1);
     expect(merged.modelRegistry?.models[0]?.status).toBe('retired');
+    expect(merged.providers.find((provider) => provider.id === 'xai')).toBe(newerXai);
   });
 
   it('orders result by bundled provider order (v2 远端只带 xai 时不得窜位)', () => {

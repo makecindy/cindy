@@ -246,12 +246,20 @@ export function mergeWithBundled(primary: Catalog): Catalog {
   // modelRegistry 是带 updatedAt 的完整快照，不做逐字段拼接。远端比 bundled 旧时
   // 保留新版客户端随包快照，避免复现 presets 曾出现的“旧远端遮掉新本地能力”；
   // 远端较新时整份生效，继续支持 status=retired、route 删除和价格纠错。
-  const modelRegistry = newerModelRegistry(primary, BUNDLED_CATALOG);
+  const selectedRegistry = selectNewerModelRegistry(primary, BUNDLED_CATALOG);
+  // xAI is the only provider whose model list is a static part of this Catalog snapshot. When
+  // bundled wins the registry revision guard, keep its xAI provider with that same snapshot
+  // instead of combining a new registry with an older remote/LKG list.
+  const providers = selectedRegistry.fromFallback && primary.modelRegistry !== undefined
+    ? merged.map((provider) =>
+        provider.id === 'xai' ? (bundledById.get('xai') ?? provider) : provider,
+      )
+    : merged;
   return {
     version: primary.version,
-    providers: merged,
+    providers,
     ...(presets && presets.length > 0 ? { presets } : {}),
-    ...(modelRegistry ? { modelRegistry } : {}),
+    ...(selectedRegistry.modelRegistry ? { modelRegistry: selectedRegistry.modelRegistry } : {}),
   };
 }
 
@@ -266,7 +274,10 @@ function registryUpdatedAt(catalog: Catalog): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['modelRegistry'] {
+function selectNewerModelRegistry(
+  primary: Catalog,
+  fallback: Catalog,
+): { modelRegistry: Catalog['modelRegistry']; fromFallback: boolean } {
   const primaryUpdatedAt = registryUpdatedAt(primary);
   const fallbackUpdatedAt = registryUpdatedAt(fallback);
   if (
@@ -274,9 +285,16 @@ function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['model
     fallbackUpdatedAt !== null &&
     (primaryUpdatedAt === null || fallbackUpdatedAt > primaryUpdatedAt)
   ) {
-    return fallback.modelRegistry;
+    return { modelRegistry: fallback.modelRegistry, fromFallback: true };
   }
-  return primary.modelRegistry ?? fallback.modelRegistry;
+  if (primary.modelRegistry) {
+    return { modelRegistry: primary.modelRegistry, fromFallback: false };
+  }
+  return { modelRegistry: fallback.modelRegistry, fromFallback: fallback.modelRegistry !== undefined };
+}
+
+function newerModelRegistry(primary: Catalog, fallback: Catalog): Catalog['modelRegistry'] {
+  return selectNewerModelRegistry(primary, fallback).modelRegistry;
 }
 
 /**

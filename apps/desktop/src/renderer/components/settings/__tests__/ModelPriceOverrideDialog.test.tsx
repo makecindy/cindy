@@ -144,4 +144,27 @@ describe('ModelPriceOverrideDialog', () => {
       expect(control.classList.contains('rounded-lg')).toBe(false);
     }
   });
+
+  it('does not add an unregistered shadow to the runtime segmented control', async () => {
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
+    const claudeModel = row('model-a').byAgent.codex!;
+    const dualRuntimeRow: UnionModelRow = {
+      ...row('model-a'),
+      byAgent: { 'claude-code': claudeModel, codex: claudeModel },
+      avail: ['claude-code', 'codex'],
+    };
+
+    const { getByRole } = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={dualRuntimeRow}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+
+    await waitFor(() => expect(getModelPriceOverride).toHaveBeenCalledOnce());
+    expect(getByRole('button', { name: 'Claude Code' }).classList.contains('shadow-sm')).toBe(false);
+    expect(getByRole('button', { name: 'Codex' }).classList.contains('shadow-sm')).toBe(false);
+  });
 });
