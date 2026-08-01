@@ -102,6 +102,7 @@ import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteS
 import {
   confirmAgentSwitchRisk,
   isAgentSwitchResponseFresh,
+  resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
   isSelectedSourceDisconnected,
@@ -4026,19 +4027,22 @@ export function ChatInput({
         // 远程往返期间状态可能已被更新的选择超车:用户又点了一次(写序号变),或另一个
         // 控制端 / 被控端的权威 sessions:patched 先到(修订号变)。此时这次 ack 携带的是
         // **旧**选择,落下去会让选择器显示过期引擎,而被控端按新意图执行下一条消息。
-        // 直接丢弃即可——被控端每次意图变更都会广播,权威值随 push 收敛。
-        if (
-          !isAgentSwitchResponseFresh({
+        // 丢弃即可——被控端每次意图变更都会广播,权威值随 push 收敛。
+        // 注意两类守卫作用域不同(见 resolveAgentSwitchAckAction):同引擎 no-op 的清除
+        // 回流本就由本次调用引起,不能拿修订号变化把自己判成 stale。
+        const ackAction = resolveAgentSwitchAckAction({
+          deferred: result.deferred === true,
+          switched: result.switched,
+          freshness: {
             cancelled: false,
             writeSeqAtStart: writeSeq,
             writeSeqNow: agentSwitchWriteSeqRef.current,
             intentRevAtStart: intentRevAtSend,
             intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
-          })
-        ) {
-          return;
-        }
-        if (result.deferred) {
+          },
+        });
+        if (ackAction === 'discard') return;
+        if (ackAction === 'apply-intent') {
           // 意图已登记:乐观呈现目标引擎/模型/档位(独立 intent 覆盖
           // model/effort/provider/fast 显示,不改真实 reducer agentKind)。真切换
           // 在下一条消息发送时刻执行;turn 运行中额外提示旧 turn 不受影响。
@@ -4059,9 +4063,9 @@ export function ChatInput({
           }
           return;
         }
-        if (!result.switched) {
-          // 同引擎 no-op = 用户选回当前引擎:撤销展示意图,再把这次
-          // 点选当作普通的模型/来源切换应用到当前引擎。
+        if (ackAction === 'same-engine-reselect') {
+          // 同引擎 no-op = 用户选回当前引擎:撤销展示意图(幂等,被控端可能已清并回流),
+          // 再把这次点选当作普通的模型/来源切换应用到当前引擎。
           makerChatStore.clearAgentSwitchIntent(sessionId);
           if (providerId) void sameEngineReselectRef.current.byProvider(providerId, newModelId);
           else void sameEngineReselectRef.current.byModel(newModelId);

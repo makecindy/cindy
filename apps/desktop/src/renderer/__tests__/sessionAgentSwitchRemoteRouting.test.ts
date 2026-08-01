@@ -180,6 +180,68 @@ describe('isAgentSwitchResponseFresh（远程意图读回的新鲜度守卫）',
   });
 });
 
+describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同）', () => {
+  const fresh = {
+    cancelled: false,
+    writeSeqAtStart: 3,
+    writeSeqNow: 3,
+    intentRevAtStart: 7,
+    intentRevNow: 7,
+  };
+  const load = () => import('@/components/new-chat/agentSwitchConfirmation');
+
+  it('deferred 常态 → 登记乐观意图', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    expect(
+      resolveAgentSwitchAckAction({ deferred: true, switched: false, freshness: fresh }),
+    ).toBe('apply-intent');
+  });
+
+  it('回归:已有跨引擎意图 → 选回当前引擎模型 → 清除回流先到,仍须走同引擎重选', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    // 被控端处理同引擎 no-op 时会清 pending 意图并广播,回流推进修订号 —— 那是本次调用
+    // 自己引起的,不是被外部超车。误判成 stale 会让用户刚选的模型不生效。
+    expect(
+      resolveAgentSwitchAckAction({
+        deferred: false,
+        switched: false,
+        freshness: { ...fresh, intentRevNow: 9 },
+      }),
+    ).toBe('same-engine-reselect');
+  });
+
+  it('用户又点了一次(写序号变)→ 所有分支一律作废,包括同引擎重选', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    for (const branch of [
+      { deferred: true, switched: false },
+      { deferred: false, switched: false },
+      { deferred: false, switched: true },
+    ]) {
+      expect(
+        resolveAgentSwitchAckAction({ ...branch, freshness: { ...fresh, writeSeqNow: 4 } }),
+      ).toBe('discard');
+    }
+  });
+
+  it('外部权威更新抢先 → 写意图值的分支仍然丢弃(不回退 stale-ack 防护)', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    const superseded = { ...fresh, intentRevNow: 9 };
+    expect(
+      resolveAgentSwitchAckAction({ deferred: true, switched: false, freshness: superseded }),
+    ).toBe('discard');
+    expect(
+      resolveAgentSwitchAckAction({ deferred: false, switched: true, freshness: superseded }),
+    ).toBe('discard');
+  });
+
+  it('立即切换路径无人超车 → 收敛真实引擎', async () => {
+    const { resolveAgentSwitchAckAction } = await load();
+    expect(
+      resolveAgentSwitchAckAction({ deferred: false, switched: true, freshness: fresh }),
+    ).toBe('apply-switched');
+  });
+});
+
 describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
   let n = 0;
   const sid = () => `agent-switch-rev-${n++}`;
@@ -270,12 +332,13 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain("remoteConnStatus === 'connected'");
   });
 
-  it('切换 ack 也过同一守卫:远程往返期间被更新的选择超车时丢弃,不用旧值盖新状态', () => {
-    // ack 与读回同构,复用同一个纯函数;发起时同时捕获写序号与修订号。
+  it('切换 ack 走分派决策:发起时捕获写序号与修订号,按分支判定而非一刀切 return', () => {
     expect(source).toContain('const writeSeq = (agentSwitchWriteSeqRef.current += 1);');
     expect(source).toContain(
       'const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sessionId);',
     );
-    expect(source).toContain('intentRevAtStart: intentRevAtSend,');
+    expect(source).toContain('const ackAction = resolveAgentSwitchAckAction({');
+    expect(source).toContain("if (ackAction === 'discard') return;");
+    expect(source).toContain("if (ackAction === 'same-engine-reselect') {");
   });
 });
