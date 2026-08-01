@@ -49,10 +49,13 @@ describe('默认态与持久化', () => {
     expect(store.get()).toEqual({
       enabled: false,
       telegramEnabled: false,
+      xEnabled: false,
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
+      xBindingCache: null,
     });
     expect(store.effectiveUrl()).toBe(TEST_DEFAULT_URL);
   });
@@ -167,11 +170,26 @@ describe('旧多连接文件迁移', () => {
     expect(makeStore().get()).toEqual({
       enabled: false,
       telegramEnabled: false,
+      xEnabled: false,
       urlOverride: null,
       workspaces: {},
       bindingsCache: [],
+      lifecycleAnnouncementOverride: null,
       telegramBindingCache: null,
+      xBindingCache: null,
     });
+  });
+});
+
+describe('Slack 上下线通知偏好', () => {
+  it('默认跟随产品值，用户切换后按账号持久化显式覆写', () => {
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBeNull();
+
+    makeStore().setLifecycleAnnouncementOverride(true);
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBe(true);
+
+    makeStore().setLifecycleAnnouncementOverride(false);
+    expect(makeStore().get().lifecycleAnnouncementOverride).toBe(false);
   });
 });
 
@@ -235,7 +253,7 @@ describe('provider 与 Cindy 账号隔离', () => {
 
     store.setEnabled(true);
     store.setProviderEnabled('telegram', true);
-    store.setTelegramBindingCache(telegramBinding);
+    store.setProviderBindingCache('telegram', telegramBinding);
     store.setWorkspaces({ cindy: abs });
 
     expect(store.anyProviderEnabled()).toBe(true);

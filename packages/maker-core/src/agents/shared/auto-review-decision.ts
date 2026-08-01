@@ -1,0 +1,182 @@
+import type { AgentKind, UserMessage } from '../../types/common.js';
+
+import {
+  reviewAction,
+  type ReviewableAction,
+  type ReviewVerdict,
+} from './auto-review.js';
+
+/** Auto 对用户可见行为的最终三态；只有 `ask` 才允许弹用户确认。 */
+export type AutoReviewDecision = {
+  verdict: 'allow' | 'block' | 'ask';
+  reason?: string;
+};
+
+/** 交给 host 侧轻量 reviewer 的最小上下文；不含历史、工具结果、Skill 或 Memory。 */
+export interface AutoReviewRequest {
+  sessionId?: string;
+  agentKind: AgentKind;
+  providerId?: string | null;
+  model: string;
+  userIntent: string;
+  action: ReviewableAction;
+  workspaceRoots: string[];
+  platform: NodeJS.Platform;
+}
+
+export type AutoReviewDelegate = (
+  request: AutoReviewRequest,
+) => Promise<AutoReviewDecision | null>;
+
+export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
+const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
+
+export function getAutoReviewActionTextLength(action: ReviewableAction): number {
+  switch (action.kind) {
+    case 'exec':
+      return action.command.length;
+    case 'read':
+    case 'file-write':
+      return action.path?.length ?? 0;
+    case 'network':
+      return (action.target?.length ?? 0) + (action.operation?.length ?? 0);
+    default:
+      return 0;
+  }
+}
+
+/**
+ * `prompt` 是旧 core 给 UI adapter 用的名字；在新的 Auto reviewer 流程里它只代表
+ * “确定性规则无法独立裁决”，不是“现在弹用户”。显式映射成独立 tier，避免两层语义混用。
+ */
+export type LocalAutoReviewTier = Exclude<ReviewVerdict, 'prompt'> | 'needs-review';
+
+export function classifyLocalAutoReviewTier(
+  request: AutoReviewRequest,
+): LocalAutoReviewTier {
+  const verdict = reviewAction(
+    request.action,
+    request.workspaceRoots,
+    { platform: request.platform },
+  );
+  return verdict === 'prompt' ? 'needs-review' : verdict;
+}
+
+function missingReviewEvidence(action: ReviewableAction): string | null {
+  switch (action.kind) {
+    case 'file-write':
+      return action.path?.trim()
+        ? null
+        : 'File-write review needs a concrete destination path.';
+    case 'exec':
+      return action.command.trim()
+        ? null
+        : 'Command review needs concrete command text.';
+    case 'network':
+      return action.target?.trim()
+        ? null
+        : 'Network review needs a concrete destination or query.';
+    case 'other':
+      return 'Unknown actions cannot be reviewed without concrete action details.';
+    default:
+      return null;
+  }
+}
+
+function oversizedReviewEvidence(action: ReviewableAction): string | null {
+  return getAutoReviewActionTextLength(action) > MAX_AUTO_REVIEW_ACTION_TEXT_CHARS
+    ? `Automatic review requires action text at most ${MAX_AUTO_REVIEW_ACTION_TEXT_CHARS} characters.`
+    : null;
+}
+
+/**
+ * 原生 reviewer 不可用时的统一裁决入口：明显安全和明显红线仍由本地规则确定，
+ * 只有中间灰区才调用当前会话模型。delegate 缺失、超时、抛错或返回非法结果时
+ * 灰区一律 `block`，不会退化成逐条弹窗。
+ */
+export async function resolveAutoReviewDecision(
+  request: AutoReviewRequest,
+  delegate: AutoReviewDelegate | undefined,
+): Promise<AutoReviewDecision> {
+  const localTier = classifyLocalAutoReviewTier(request);
+  if (localTier === 'auto-approve') return { verdict: 'allow' };
+  if (localTier === 'prompt-each-time') return { verdict: 'ask' };
+  // Never ask the model to approve an action whose material target/text is absent.
+  // It has no evidence to distinguish routine work from an unsafe side effect.
+  const missingEvidenceReason = missingReviewEvidence(request.action);
+  if (missingEvidenceReason) {
+    return {
+      verdict: 'block',
+      reason: missingEvidenceReason,
+    };
+  }
+  // The model must see the complete material action. Character sampling can hide
+  // a dangerous middle segment, so oversized gray actions must be retried in smaller form.
+  const oversizedEvidenceReason = oversizedReviewEvidence(request.action);
+  if (oversizedEvidenceReason) {
+    return {
+      verdict: 'block',
+      reason: oversizedEvidenceReason,
+    };
+  }
+  if (!delegate) {
+    return {
+      verdict: 'block',
+      reason: 'Automatic review is unavailable. Choose a safer, workspace-scoped alternative.',
+    };
+  }
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const decision = await Promise.race([
+      delegate(request),
+      new Promise<typeof AUTO_REVIEW_TIMEOUT>((resolve) => {
+        timeout = setTimeout(
+          () => resolve(AUTO_REVIEW_TIMEOUT),
+          AUTO_REVIEW_DELEGATE_TIMEOUT_MS,
+        );
+      }),
+    ]);
+    if (
+      decision !== AUTO_REVIEW_TIMEOUT
+      && (
+        decision?.verdict === 'allow'
+        || decision?.verdict === 'block'
+        || decision?.verdict === 'ask'
+      )
+    ) {
+      return decision;
+    }
+  } catch {
+    // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
+  return {
+    verdict: 'block',
+    reason: 'Automatic review could not complete. Choose a safer, workspace-scoped alternative.',
+  };
+}
+
+const MAX_USER_INTENT_CHARS = 2_000;
+const USER_INTENT_TRUNCATION_MARKER = '\n…[middle omitted]…\n';
+
+function compactCurrentUserIntent(text: string): string {
+  const normalized = text.trim();
+  if (normalized.length <= MAX_USER_INTENT_CHARS) return normalized;
+  const remaining = MAX_USER_INTENT_CHARS - USER_INTENT_TRUNCATION_MARKER.length;
+  const headChars = Math.ceil(remaining * 0.75);
+  const tailChars = remaining - headChars;
+  return `${normalized.slice(0, headChars)}${USER_INTENT_TRUNCATION_MARKER}${normalized.slice(-tailChars)}`;
+}
+
+/** 只取当前用户消息文本并设硬上限，保留末尾的最终要求或更正。 */
+export function extractAutoReviewUserIntent(content: UserMessage['content']): string {
+  const text = typeof content === 'string'
+    ? content
+    : content
+      .filter((block): block is Extract<typeof block, { type: 'text' }> => block.type === 'text')
+      .map((block) => block.text)
+      .join('\n');
+  return compactCurrentUserIntent(text);
+}

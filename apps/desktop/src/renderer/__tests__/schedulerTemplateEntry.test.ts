@@ -6,9 +6,22 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ScheduleTemplate } from '@cindy/maker-scheduler';
 
 import { SchedulerPage } from '@/features/scheduler/SchedulerPage';
+import {
+  oneTimeCronAfterUsageReset,
+  systemTimeZone,
+  usageLimitScheduleNavigationState,
+} from '@/features/scheduler/lib/usageLimitScheduleCreateIntent';
 
 const createSchedule = vi.fn();
 const localStorageData = new Map<string, string>();
+const routerMocks = vi.hoisted(() => ({
+  location: {
+    pathname: '/cc-agent/scheduled',
+    search: '',
+    state: null as unknown,
+  },
+  navigate: vi.fn(),
+}));
 
 const template: ScheduleTemplate = {
   id: 'review-template',
@@ -40,8 +53,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('react-router-dom', () => ({
-  useLocation: () => ({ search: '' }),
-  useNavigate: () => vi.fn(),
+  useLocation: () => routerMocks.location,
+  useNavigate: () => routerMocks.navigate,
 }));
 
 vi.mock('@radix-ui/react-dialog', async () => {
@@ -51,7 +64,8 @@ vi.mock('@radix-ui/react-dialog', async () => {
   return {
     Root: ({ open, children }: { open: boolean; children: ReactNode }) =>
       React.createElement(DialogContext.Provider, { value: open }, open ? children : null),
-    Portal: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    Portal: ({ children }: { children: ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
     Overlay: (props: Record<string, unknown>) => React.createElement('div', props),
     Content: ({
       children,
@@ -82,7 +96,8 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/components/ui/tooltip', async () => {
   const React = await import('react');
   return {
-    Tip: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    Tip: ({ children }: { children: ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
   };
 });
 
@@ -109,6 +124,10 @@ vi.mock('@/features/scheduler/hooks/useScheduleUnreadRunCounts', () => ({
 
 vi.mock('@/features/scheduler/hooks/useScheduleCostSummaries', () => ({
   useScheduleCostSummaries: () => ({ summaries: new Map(), loaded: true }),
+}));
+
+vi.mock('@/features/scheduler/hooks/useSessionReferences', () => ({
+  useSessionReferences: () => new Map(),
 }));
 
 vi.mock('@/hooks/useFeishuBot', () => ({
@@ -160,6 +179,9 @@ vi.mock('@/features/scheduler/components/ScheduleChips', async () => {
 
 beforeEach(() => {
   createSchedule.mockImplementation(async (input) => ({ id: 'created-schedule', ...input }));
+  routerMocks.location.pathname = '/cc-agent/scheduled';
+  routerMocks.location.search = '';
+  routerMocks.location.state = null;
   localStorageData.clear();
   Object.defineProperty(window, 'localStorage', {
     configurable: true,
@@ -174,6 +196,12 @@ beforeEach(() => {
     },
   });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    wecomGroupNotification: {
+      getState: vi.fn(async () => ({ configured: false })),
+      saveAndTest: vi.fn(),
+      test: vi.fn(),
+      clear: vi.fn(),
+    },
     maker: {
       schedule: {
         listTemplates: vi.fn(async () => [template]),
@@ -210,7 +238,9 @@ describe('Scheduler template entry', () => {
     expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
     expect(screen.getByTestId('model-value').textContent).toBe('claude-sonnet-4-6');
 
-    fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }),
+    );
 
     await waitFor(() => expect(createSchedule).toHaveBeenCalledTimes(1));
     expect(createSchedule).toHaveBeenCalledWith(
@@ -222,8 +252,55 @@ describe('Scheduler template entry', () => {
         recurring: true,
         agentKind: 'claude-code',
         model: 'claude-sonnet-4-6',
-        notify: { desktop: true, feishu: false },
+        notify: { desktop: true, feishu: false, wecomGroup: false },
       }),
     );
+  });
+
+  it('opens a usage-limit recovery Automation for confirmation without creating it', async () => {
+    const resetAtMs = Date.parse('2027-01-24T10:30:00.000Z');
+    routerMocks.location.state = usageLimitScheduleNavigationState({
+      kind: 'usage-limit-recovery',
+      requestId: 'request-1',
+      sessionId: 'session-1',
+      agentKind: 'codex',
+      resetAtMs,
+    });
+
+    render(createElement(SchedulerPage));
+
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    expect(
+      screen.getByDisplayValue('scheduler.usageLimitRecovery.name'),
+    ).toBeTruthy();
+    expect(
+      screen.getByDisplayValue('scheduler.usageLimitRecovery.prompt'),
+    ).toBeTruthy();
+    expect(screen.getByTestId('cron-expr').textContent).toBe(
+      oneTimeCronAfterUsageReset(resetAtMs, systemTimeZone()),
+    );
+    expect(screen.getByTestId('agent-kind').textContent).toBe('codex');
+    expect(createSchedule).not.toHaveBeenCalled();
+    expect(routerMocks.navigate).toHaveBeenCalledWith('/cc-agent/scheduled', {
+      replace: true,
+      state: null,
+    });
+  });
+
+  it('opens the same confirmation form with a blank schedule when reset time is unknown', async () => {
+    routerMocks.location.state = usageLimitScheduleNavigationState({
+      kind: 'usage-limit-recovery',
+      requestId: 'request-unknown-time',
+      sessionId: 'session-2',
+      agentKind: 'claude-code',
+      resetAtMs: null,
+    });
+
+    render(createElement(SchedulerPage));
+
+    await waitFor(() => expect(screen.getByRole('dialog')).toBeTruthy());
+    expect(screen.getByTestId('cron-expr').textContent).toBe('');
+    expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
+    expect(createSchedule).not.toHaveBeenCalled();
   });
 });

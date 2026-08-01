@@ -9,6 +9,7 @@ export type RemoteTimestamp = number | string | null | undefined;
 export interface RemoteScheduleNotifyConfig {
   desktop?: boolean;
   feishu?: boolean;
+  wecomGroup?: boolean;
 }
 
 export interface RemoteScheduleWriteInput {

@@ -5,7 +5,7 @@
     "footerOnline": "已连接 · 实时同步",
     "footerConnecting": "连接中…",
     "folderEmpty": "文件夹为空。",
-    "noWorkdir": "该对话没有工作目录，无法浏览文件。",
+    "noWorkdir": "该任务没有工作目录，无法浏览文件。",
     "rootDir": "(根目录)",
     "copyPath": "复制路径",
     "sendToSession": "发送到对话",

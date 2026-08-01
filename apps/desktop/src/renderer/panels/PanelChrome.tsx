@@ -1,5 +1,5 @@
 import type { CSSProperties, ReactNode } from 'react';
-import { Maximize2, Minimize2, Minus, PictureInPicture2 } from 'lucide-react';
+import { Maximize2, Minimize2, Minus, PictureInPicture2, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { CHROME_ACTIONS_GEOMETRY } from '@/components/layout/chromeActionsGeometry';
@@ -24,7 +24,9 @@ import { usePanelMaximize } from '../layout/panelMaximize';
  *  - 「独立窗口」(detach):传 onDetach 即得,点击把面板抽进自己的 OS 窗口
  *    (状态机在 main 的 ghost-panel-window/controller.ts);
  *  - 「撑满内容区」(maximize):传 panelKind 即得,状态在 LayoutRoot 的
- *    PanelMaximizeContext。
+ *    PanelMaximizeContext;
+ *  - 「关闭」(close):传 onClose 即得,永远排最右。语义归调用方
+ *    (意识面板用它走"二次确认后停用插件",见 ghostPanels.tsx)。
  *
  * 视觉走主题 token(规则 16);按钮 aria 文案走 i18n(panelChrome.*),
  * 标题由调用方传入并自行 i18n。
@@ -44,6 +46,8 @@ export interface PanelChromeProps {
   onDetach?: () => void;
   /** 传入即长出「最小化为浮动气泡」系统按钮(排在独立窗口按钮左侧)。 */
   onMinimize?: () => void;
+  /** 传入即长出「关闭」系统按钮(恒排最右);二次确认等语义归调用方。 */
+  onClose?: () => void;
 }
 
 export function PanelChrome({
@@ -52,6 +56,7 @@ export function PanelChrome({
   panelKind,
   onDetach,
   onMinimize,
+  onClose,
 }: PanelChromeProps): ReactNode {
   const { t } = useTranslation();
   const maximize = usePanelMaximize();
@@ -101,7 +106,7 @@ export function PanelChrome({
         <div className="min-w-0 truncate text-[12px] font-medium text-[var(--text-secondary)]">
           {title}
         </div>
-        {(actions || showMaximize || onDetach || onMinimize) && (
+        {(actions || showMaximize || onDetach || onMinimize || onClose) && (
           <div className="flex shrink-0 items-center gap-0.5">
             {actions}
             {onMinimize && (
@@ -134,6 +139,16 @@ export function PanelChrome({
                 className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
               >
                 {isMaximized ? <Minimize2 size={14} /> : <Maximize2 size={14} />}
+              </button>
+            )}
+            {onClose && (
+              <button
+                type="button"
+                aria-label={t('panelChrome.closeAria')}
+                onClick={onClose}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-full text-[var(--titlebar-icon)] transition-colors hover:bg-[var(--surface-hover)] hover:text-[var(--text-primary)]"
+              >
+                <X size={14} />
               </button>
             )}
           </div>

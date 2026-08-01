@@ -30,6 +30,7 @@ describe('EmptyState add-more hint', () => {
       <EmptyState
         onAddFileTab={vi.fn()}
         onAddReviewTab={vi.fn()}
+        onAddBackgroundTasksTab={vi.fn()}
         onAddBrowserTab={vi.fn()}
         onAddTerminalTab={vi.fn()}
       />,
@@ -51,6 +52,7 @@ describe('EmptyState 插件页签行(1 个直显 / ≥2 折叠)', () => {
       <EmptyState
         onAddFileTab={vi.fn()}
         onAddReviewTab={vi.fn()}
+        onAddBackgroundTasksTab={vi.fn()}
         onAddBrowserTab={vi.fn()}
         onAddTerminalTab={vi.fn()}
         ghostTabMetas={[ghostMeta('art', '画廊')]}
@@ -70,6 +72,7 @@ describe('EmptyState 插件页签行(1 个直显 / ≥2 折叠)', () => {
       <EmptyState
         onAddFileTab={vi.fn()}
         onAddReviewTab={vi.fn()}
+        onAddBackgroundTasksTab={vi.fn()}
         onAddBrowserTab={vi.fn()}
         onAddTerminalTab={vi.fn()}
         ghostTabMetas={[ghostMeta('art', '画廊'), ghostMeta('memo', '备忘')]}
@@ -96,6 +99,7 @@ describe('EmptyState 插件页签行(1 个直显 / ≥2 折叠)', () => {
       <EmptyState
         onAddFileTab={vi.fn()}
         onAddReviewTab={vi.fn()}
+        onAddBackgroundTasksTab={vi.fn()}
         onAddBrowserTab={vi.fn()}
         onAddTerminalTab={vi.fn()}
       />,

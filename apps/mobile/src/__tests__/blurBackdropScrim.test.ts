@@ -51,7 +51,9 @@ describe('BlurBackdrop scrim 双模式恒深 (用户定稿 2026-07-21)', () => {
     const files = [
       'ModelPickerSheet.tsx',
       'SessionMenuSheet.tsx',
-      'InlineQueueSection.tsx',
+      // 待发送气泡的附件上传遮罩:气泡已从 InlineQueueSection(现在只剩队列状态横幅)
+      // 搬进消息流渲染项 PendingSendBubble。
+      'PendingSendBubble.tsx',
       'ContextSheetMediaViews.tsx',
       'ComposerAttachmentTray.tsx',
     ];

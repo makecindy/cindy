@@ -2,19 +2,26 @@
  * cindySlot.test.ts — cindy 槽代办单测(纯 DI,无 Electron)。
  * 覆盖:载荷校验、卡槽资格审(未声明 cindy 槽即拒)、happy path 记账链路、
  * 生成失败折叠为结构化拒绝、每意识在途单数闸门、模型白名单、
- * 改图(归属校验/指纹形状/张数上限)。
+ * 改图(归属校验/指纹形状/张数上限)、寄存(#784:能力详单、魔数验型、
+ * 单次上限、频控令牌桶、配额硬顶、撤回幂等、不进产物账)。
  */
 
 import { describe, it, expect, vi } from 'vitest';
 
 import { GhostCindySlot, type CindySlotDeps } from '../cindySlot';
+import { sniffMediaMime } from '../../cindy-media/sniffMediaMime';
+import {
+  GHOST_CINDY_DEPOSIT_BURST,
+  GHOST_CINDY_DEPOSIT_MAX_BYTES,
+  GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+} from '../../../shared/ghost';
 import type { InstalledGhost } from '../../../shared/ghost';
 
 function fakeGhost(
   overrides: {
     enabled?: boolean;
     slots?: string[];
-    model?: { image?: string[]; video?: string[] } | null;
+    model?: { image?: string[]; video?: string[]; media?: string[]; text?: string[] } | null;
   } = {},
 ): InstalledGhost {
   return {
@@ -27,10 +34,17 @@ function fakeGhost(
       entry: 'main.js',
       slots: overrides.slots ?? ['tool', 'cindy', 'panel'],
       tools: [{ name: 'gen_image', description: '生成图片' }],
-      // null = 模拟老包缺详单;undefined = 默认全能力(image + video)。
+      // null = 模拟老包缺详单;undefined = 默认全能力(image + video + media)。
       ...(overrides.model === null
         ? {}
-        : { cindy: overrides.model ?? { image: ['generate', 'edit'], video: ['generate', 'edit'] } }),
+        : {
+            cindy:
+              overrides.model ?? {
+                image: ['generate', 'edit'],
+                video: ['generate', 'edit'],
+                media: ['deposit'],
+              },
+          }),
     },
     dir: '/fake/brain/art',
     enabled: overrides.enabled ?? true,
@@ -47,7 +61,12 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   getOverride: ReturnType<typeof vi.fn>;
   getImageConfig: ReturnType<typeof vi.fn>;
   getVideoConfig: ReturnType<typeof vi.fn>;
+  videoCapabilities: ReturnType<typeof vi.fn>;
   saveGhostMedia: ReturnType<typeof vi.fn>;
+  sniffDepositMime: ReturnType<typeof vi.fn>;
+  depositMedia: ReturnType<typeof vi.fn>;
+  depositUsageBytes: ReturnType<typeof vi.fn>;
+  releaseDeposit: ReturnType<typeof vi.fn>;
 } {
   const generateImage = vi.fn(async () => ({
     buffer: new Uint8Array([1, 2, 3]),
@@ -60,11 +79,26 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
   const generateVideo = vi.fn(async () => ({
     buffer: new Uint8Array([7, 8, 9]),
     mimeType: 'video/mp4',
+    videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
   }));
   const editVideo = vi.fn(async () => ({
     buffer: new Uint8Array([10, 11]),
     mimeType: 'video/mp4',
+    videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
   }));
+  // 按型号能力校验的数据源:仿 seedance 的支持集(时长 4/6/8/10,无 5 秒)。
+  const videoCapabilities = vi.fn((model: string) =>
+    model.startsWith('seedance')
+      ? {
+          durations: [4, 6, 8, 10],
+          resolutions: ['480p', '720p', '1080p'],
+          ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
+          fps: [24],
+          maxImagesByRefMode: { first_and_last_frame: 2, reference_image: 9 },
+        }
+      : null,
+  );
+  const imageCapabilities = vi.fn(() => null);
   const resolveOwnedMedia = vi.fn(async (_ghostId: string, hash: string) => `/disk/${hash}.png`);
   const getOverride = vi.fn((_ghostId: string, _capability: string) => null as string | null);
   const getImageConfig = vi.fn(() => ({
@@ -87,8 +121,24 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     hash: 'a'.repeat(64),
     ext: '.png',
   }));
+  // 寄存三件套的缺省替身:真实魔数识别(不放水,类型判定的真行为要被测到),
+  // 落仓/配额/撤回用可控假件。
+  const sniffDepositMime = vi.fn((buffer: Uint8Array) => sniffMediaMime(buffer));
+  const depositMedia = vi.fn(
+    async (params: { buffer: Uint8Array; mimeType: string }) => ({
+      url: 'cindy-media://blobs/dep.png',
+      hash: 'd'.repeat(64),
+      ext: '.png',
+      bytes: params.buffer.byteLength,
+      deduplicated: false,
+    }),
+  );
+  const depositUsageBytes = vi.fn(async () => 0);
+  const releaseDeposit = vi.fn(async () => true);
   const slot = new GhostCindySlot({
     getGhost: () => fakeGhost(),
+    getOwnerScopeKey: () => 'cloud:test-owner:1',
+    isOwnerBoundaryPending: () => false,
     generateImage,
     editImage,
     generateVideo,
@@ -97,7 +147,13 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    imageCapabilities,
+    videoCapabilities,
     saveGhostMedia,
+    sniffDepositMime,
+    depositMedia,
+    depositUsageBytes,
+    releaseDeposit,
     ...overrides,
   } as CindySlotDeps);
   return {
@@ -110,7 +166,12 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
     getOverride,
     getImageConfig,
     getVideoConfig,
+    videoCapabilities,
     saveGhostMedia,
+    sniffDepositMime,
+    depositMedia,
+    depositUsageBytes,
+    releaseDeposit,
   };
 }
 
@@ -185,13 +246,28 @@ describe('载荷校验', () => {
     expect(generateImage).toHaveBeenCalledTimes(2);
   });
 
-  it('画幅意图仅生图收:改图/视频带 aspectRatio → 明拒且不触发生成', async () => {
-    const { slot, editImage, generateVideo } = makeSlot();
-    const editBad = await slot.handleModelRequest('art', { ...EDIT_REQ, aspectRatio: '1:1' });
-    expect(editBad).toMatchObject({ ok: false });
-    expect((editBad as { message: string }).message).toContain('gen_image');
-    expect(editImage).not.toHaveBeenCalled();
+  it('画幅意图图像类通吃:改图也收 aspectRatio;不传时载荷无该键', async () => {
+    const { slot, editImage } = makeSlot();
+    const ok = await slot.handleModelRequest('art', { ...EDIT_REQ, aspectRatio: '1:1' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(editImage).toHaveBeenLastCalledWith({
+      prompt: '加顶帽子',
+      model: 'gpt-image-2',
+      imagePaths: [`/disk/${HASH_S}.png`],
+      aspectRatio: '1:1',
+    });
 
+    // 不传 = 与老协议同形(连键都没有),后端 auto = 跟随源图画幅。
+    await slot.handleModelRequest('art', EDIT_REQ);
+    expect(editImage).toHaveBeenLastCalledWith({
+      prompt: '加顶帽子',
+      model: 'gpt-image-2',
+      imagePaths: [`/disk/${HASH_S}.png`],
+    });
+  });
+
+  it('aspectRatio 不收视频:视频带图像画幅 → 明拒且不触发生成', async () => {
+    const { slot, generateVideo } = makeSlot();
     const videoBad = await slot.handleModelRequest('art', {
       type: 'cindy-request',
       kind: 'gen_video',
@@ -199,7 +275,114 @@ describe('载荷校验', () => {
       aspectRatio: '2:3',
     });
     expect(videoBad).toMatchObject({ ok: false });
+    expect((videoBad as { message: string }).message).toContain('ratio');
     expect(generateVideo).not.toHaveBeenCalled();
+  });
+});
+
+describe('视频画面参数', () => {
+  const VIDEO_REQ = { type: 'cindy-request', kind: 'gen_video', prompt: '一只猫奔跑' };
+  const EDIT_VIDEO_REQ = {
+    type: 'cindy-request',
+    kind: 'edit_video',
+    prompt: '让它动起来',
+    hashes: [HASH_S],
+  };
+
+  it('合法参数透传;不传时载荷与老协议同形;实际生效参数随结果回传', async () => {
+    const { slot, generateVideo } = makeSlot();
+    const ok = await slot.handleModelRequest('art', {
+      ...VIDEO_REQ,
+      ratio: '9:16',
+      resolution: '1080p',
+      duration: 8,
+      fps: 24,
+    });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+      ratio: '9:16',
+      resolution: '1080p',
+      duration: 8,
+      fps: 24,
+    });
+
+    // 一项都不传 = 老协议逐字节同形(连键都没有),后端走型号出厂默认。
+    const bare = await slot.handleModelRequest('art', VIDEO_REQ);
+    expect(generateVideo).toHaveBeenLastCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
+    // 回执照样带回来(注入实现给了就透传),意识据此判断参数是否兑现。
+    expect(bare).toMatchObject({
+      ok: true,
+      videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
+    });
+  });
+
+  it('部分传参:只展开传了的键,其余不出现在载荷里', async () => {
+    const { slot, editVideo } = makeSlot();
+    const ok = await slot.handleModelRequest('art', { ...EDIT_VIDEO_REQ, resolution: '480p' });
+    expect(ok).toMatchObject({ ok: true });
+    expect(editVideo).toHaveBeenLastCalledWith({
+      prompt: '让它动起来',
+      model: 'seedance-fast',
+      imagePaths: [`/disk/${HASH_S}.png`],
+      // refMode 有缺省值(不是"传了才出现"的可选键),始终随载荷下发
+      refMode: 'first_and_last_frame',
+      resolution: '480p',
+    });
+  });
+
+  it('值域粗筛:未知比例/分辨率、非正整数时长与帧率一律拒且不触发生成', async () => {
+    const { slot, generateVideo } = makeSlot();
+    for (const bad of [
+      { ratio: '21:9' },
+      { resolution: '4k' },
+      { duration: 0 },
+      { duration: 4.5 },
+      { duration: -1 },
+      { duration: 999 },
+      { duration: '8' },
+      { fps: 0 },
+      { fps: 1000 },
+    ]) {
+      const r = await slot.handleModelRequest('art', { ...VIDEO_REQ, ...bad });
+      expect(r, JSON.stringify(bad)).toMatchObject({ ok: false });
+    }
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('按型号二次校验:型号不支持的时长明拒,话术带该型号可用值', async () => {
+    const { slot, generateVideo } = makeSlot();
+    // 5 秒在协议层粗筛内,但仿 seedance 的支持集是 4/6/8/10。
+    const bad = await slot.handleModelRequest('art', { ...VIDEO_REQ, duration: 5 });
+    expect(bad).toMatchObject({ ok: false });
+    expect((bad as { message: string }).message).toContain('4 / 6 / 8 / 10');
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('videoCapabilities 缺席(查无该型号)→ 跳过按型号校验,粗筛过了就放行', async () => {
+    const { slot, generateVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => null) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    const ok = await slot.handleModelRequest('art', { ...VIDEO_REQ, duration: 5 });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+      duration: 5,
+    });
+  });
+
+  it('画面参数不收图像类:生图/改图带 resolution → 明拒且不触发生成', async () => {
+    const { slot, generateImage, editImage } = makeSlot();
+    const genBad = await slot.handleModelRequest('art', { ...REQ, resolution: '1080p' });
+    expect(genBad).toMatchObject({ ok: false });
+    expect((genBad as { message: string }).message).toContain('aspectRatio');
+    expect(generateImage).not.toHaveBeenCalled();
+
+    const editBad = await slot.handleModelRequest('art', { ...EDIT_REQ, duration: 4 });
+    expect(editBad).toMatchObject({ ok: false });
+    expect(editImage).not.toHaveBeenCalled();
   });
 });
 
@@ -314,11 +497,13 @@ describe('视频代办(gen_video / edit_video)', () => {
       hashes: [HASH_S],
     });
     expect(r).toMatchObject({ ok: true });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editVideo).toHaveBeenCalledWith({
       prompt: '让它动起来',
       model: 'seedance-fast',
       imagePaths: [`/disk/${HASH_S}.png`],
+      // 不传 refMode 的老调用方落首尾帧
+      refMode: 'first_and_last_frame',
     });
     const over = await slot.handleModelRequest('art', {
       type: 'cindy-request',
@@ -328,6 +513,103 @@ describe('视频代办(gen_video / edit_video)', () => {
     });
     expect(over).toMatchObject({ ok: false });
     expect((over as { message: string }).message).toContain('上限 2');
+  });
+
+  it('refMode:reference_image → 上限放宽到 9 张并原样透传', async () => {
+    const { slot, editVideo } = makeSlot();
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: '[Image 1] 的人穿着 [Image 2] 的衣服',
+      refMode: 'reference_image',
+      hashes: Array(3).fill(HASH_S),
+    });
+    expect(r).toMatchObject({ ok: true });
+    expect(editVideo).toHaveBeenLastCalledWith({
+      prompt: '[Image 1] 的人穿着 [Image 2] 的衣服',
+      model: 'seedance-fast',
+      imagePaths: Array(3).fill(`/disk/${HASH_S}.png`),
+      refMode: 'reference_image',
+    });
+  });
+
+  it('refMode:reference_image 超过 9 张 → 协议层粗筛拒', async () => {
+    const { slot, editVideo } = makeSlot();
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'reference_image',
+      hashes: Array(10).fill(HASH_S),
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('上限 9');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('型号不支持该 refMode → 明拒,不降级成另一种用法', async () => {
+    const { slot, editVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => ({
+        durations: [5],
+        resolutions: ['720p'],
+        ratios: ['16:9'],
+        fps: [24],
+        // 只有首尾帧用法
+        maxImagesByRefMode: { first_and_last_frame: 1 },
+      })) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'reference_image',
+      hashes: [HASH_S],
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('不支持参考图用法');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('型号张数上限低于协议层粗筛 → 按型号拒并报该型号的上限', async () => {
+    const { slot, editVideo } = makeSlot({
+      videoCapabilities: vi.fn(() => ({
+        durations: [5],
+        resolutions: ['720p'],
+        ratios: ['16:9'],
+        fps: [24],
+        maxImagesByRefMode: { first_and_last_frame: 1, reference_image: 9 },
+      })) as unknown as CindySlotDeps['videoCapabilities'],
+    });
+    // 协议层首尾帧上限是 2,这个型号只吃 1 张(happyhorse i2v 的情形)
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      hashes: [HASH_S, HASH_S],
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('最多 1 张参考图');
+    expect(editVideo).not.toHaveBeenCalled();
+  });
+
+  it('refMode 值域粗筛 + 只认 edit_video(带错代办类型明拒)', async () => {
+    const { slot } = makeSlot();
+    const bogus = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_video',
+      prompt: 'x',
+      refMode: 'last_frame_only',
+      hashes: [HASH_S],
+    });
+    expect(bogus).toMatchObject({ ok: false });
+    expect((bogus as { message: string }).message).toContain('未知参考图用法');
+
+    const wrongKind = await slot.handleModelRequest('art', {
+      ...VREQ,
+      refMode: 'reference_image',
+    });
+    expect(wrongKind).toMatchObject({ ok: false });
+    expect((wrongKind as { message: string }).message).toContain('仅支持 edit_video');
   });
 
   it('详单只有 image → 视频代办拒且提示补声明(类目粒度资格审)', async () => {
@@ -392,8 +674,54 @@ describe('代办链路', () => {
     });
     expect(generateImage).toHaveBeenCalledWith({ prompt: '一只猫', model: 'gpt-image-2' });
     expect(saveGhostMedia).toHaveBeenCalledWith(
-      expect.objectContaining({ ghostId: 'art', mimeType: 'image/png' }),
+      expect.objectContaining({
+        ghostId: 'art',
+        mimeType: 'image/png',
+        ownerScopeKey: 'cloud:test-owner:1',
+      }),
     );
+  });
+
+  it('生成期间切换账号时不保存旧作用域产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      generateImage: vi.fn(async () => {
+        ownerScopeKey = 'cloud:owner-b:2';
+        return { buffer: new Uint8Array([1, 2, 3]), mimeType: 'image/png' };
+      }),
+      saveGhostMedia,
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).not.toHaveBeenCalled();
+  });
+
+  it('保存期间切换账号时不向新作用域返回旧产物', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const saveGhostMedia = vi.fn(async (params: { ownerScopeKey: string }) => {
+      expect(params.ownerScopeKey).toBe('cloud:owner-a:1');
+      ownerScopeKey = 'cloud:owner-b:2';
+      return {
+        url: 'cindy-media://blobs/abc.png',
+        hash: 'a'.repeat(64),
+        ext: '.png',
+      };
+    });
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      saveGhostMedia: saveGhostMedia as unknown as CindySlotDeps['saveGhostMedia'],
+    });
+
+    const result = await slot.handleModelRequest('art', REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(saveGhostMedia).toHaveBeenCalledOnce();
   });
 
   it('图片代办附带像素宽高(字节头可解析时);探测不出则缺省', async () => {
@@ -528,7 +856,7 @@ describe('改图代办(edit_image)', () => {
     const { slot, editImage, resolveOwnedMedia, saveGhostMedia } = makeSlot();
     const r = await slot.handleModelRequest('art', EDIT_REQ);
     expect(r).toMatchObject({ ok: true, hash: 'a'.repeat(64) });
-    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S);
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:test-owner:1');
     expect(editImage).toHaveBeenCalledWith({
       prompt: '加顶帽子',
       model: 'gpt-image-2',
@@ -550,6 +878,40 @@ describe('改图代办(edit_image)', () => {
     expect(editImage).not.toHaveBeenCalled();
   });
 
+  it('通用契约允许四图；provider 上限更低时按选中型号在读图前明拒', async () => {
+    const generic = makeSlot();
+    const four = await generic.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(four).toMatchObject({ ok: true });
+    expect(generic.editImage).toHaveBeenCalledWith(expect.objectContaining({
+      imagePaths: Array(4).fill(`/disk/${HASH_S}.png`),
+    }));
+
+    const xaiConfig = vi.fn(() => ({
+      models: [{ id: 'xai/grok-imagine-image', label: 'Grok Imagine Image' }],
+      defaults: {
+        standard: 'xai/grok-imagine-image',
+        draft: 'xai/grok-imagine-image',
+        best: 'xai/grok-imagine-image',
+      },
+    }));
+    const xai = makeSlot({
+      getImageConfig: xaiConfig,
+      imageCapabilities: vi.fn(() => ({ maxEditImages: 3 })),
+    });
+    const rejected = await xai.slot.handleModelRequest('art', {
+      ...EDIT_REQ,
+      hashes: Array(4).fill(HASH_S),
+    });
+    expect(rejected).toMatchObject({ ok: false });
+    expect((rejected as { message: string }).message).toContain('Grok Imagine Image');
+    expect((rejected as { message: string }).message).toContain('最多支持 3 张源图');
+    expect(xai.resolveOwnedMedia).not.toHaveBeenCalled();
+    expect(xai.editImage).not.toHaveBeenCalled();
+  });
+
   it('任一源图不在本意识名下 → 整单拒(统一话术)', async () => {
     const { slot, editImage } = makeSlot({
       resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
@@ -562,6 +924,30 @@ describe('改图代办(edit_image)', () => {
     });
     expect(r).toMatchObject({ ok: false });
     expect((r as { message: string }).message).toContain('名下');
+    expect(editImage).not.toHaveBeenCalled();
+  });
+
+  it('解析源图期间切换账号时丢弃任务,且解析器收到受理时的稳定作用域', async () => {
+    let ownerScopeKey = 'cloud:owner-a:1';
+    const resolveOwnedMedia = vi.fn(
+      async (_ghostId: string, hash: string, taskOwnerScopeKey: string) => {
+        expect(taskOwnerScopeKey).toBe('cloud:owner-a:1');
+        ownerScopeKey = 'cloud:owner-b:2';
+        return `/disk/${hash}.png`;
+      },
+    );
+    const editImage = vi.fn();
+    const { slot } = makeSlot({
+      getOwnerScopeKey: () => ownerScopeKey,
+      resolveOwnedMedia,
+      editImage,
+    } as Partial<CindySlotDeps>);
+
+    const result = await slot.handleModelRequest('art', EDIT_REQ);
+
+    expect(result).toMatchObject({ ok: false });
+    expect((result as { message: string }).message).toContain('账号已切换');
+    expect(resolveOwnedMedia).toHaveBeenCalledWith('art', HASH_S, 'cloud:owner-a:1');
     expect(editImage).not.toHaveBeenCalled();
   });
 });
@@ -778,5 +1164,455 @@ describe('异步任务(mode:submit / query_job)', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+});
+
+/**
+ * 寄存通道(deposit_media / release_media,#784)。
+ * 重点是三道硬闸(类型 / 单次上限 / 配额)与两条"刻意的不"(不认自报类型、
+ * 不进产物账),以及撤回的归属收敛与幂等。
+ */
+describe('寄存(deposit_media / release_media)', () => {
+  /** 最小合法 PNG 头(魔数识别只看前 8 字节)。 */
+  const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3, 4]);
+  const b64 = (bytes: Uint8Array) => Buffer.from(bytes).toString('base64');
+  const depositReq = (data: unknown, extra: Record<string, unknown> = {}) => ({
+    type: 'cindy-request',
+    kind: 'deposit_media',
+    data,
+    ...extra,
+  });
+  const releaseReq = (hash: unknown) => ({ type: 'cindy-request', kind: 'release_media', hash });
+
+  it('happy path:字节 → 指纹,mime 由主机判定,配额口径随结果回传', async () => {
+    const { slot, depositMedia } = makeSlot();
+    const r = await slot.handleModelRequest('art', depositReq(b64(PNG), { label: '拖入的参考图' }));
+    expect(r).toMatchObject({
+      ok: true,
+      url: 'cindy-media://blobs/dep.png',
+      hash: 'd'.repeat(64),
+      ext: '.png',
+      bytes: PNG.byteLength,
+      deduplicated: false,
+      quotaLimitBytes: GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+    });
+    expect(depositMedia).toHaveBeenCalledWith(
+      expect.objectContaining({ ghostId: 'art', mimeType: 'image/png', label: '拖入的参考图' }),
+    );
+  });
+
+  it('寄存的指纹随即可当 edit_image 源图', async () => {
+    const HASH_D = 'd'.repeat(64);
+    // 归属账本认寄存物(生产由 ledger.ghostCanRead 的 ghost-deposit 分支保证)。
+    const { slot, editImage } = makeSlot({
+      resolveOwnedMedia: vi.fn(async (_g: string, hash: string) =>
+        hash === HASH_D ? `/disk/${hash}.png` : null,
+      ),
+    } as Partial<CindySlotDeps>);
+    const dep = await slot.handleModelRequest('art', depositReq(b64(PNG)));
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'edit_image',
+      prompt: '背景换成雪山',
+      hashes: [(dep as { hash: string }).hash],
+    });
+    expect(r).toMatchObject({ ok: true });
+    expect(editImage).toHaveBeenCalledWith(
+      expect.objectContaining({ imagePaths: [`/disk/${HASH_D}.png`] }),
+    );
+  });
+
+  it('资格审:详单缺 media.deposit / 缺 cindy 槽 / 意识停用 → 拒', async () => {
+    const noMedia = makeSlot({
+      getGhost: () => fakeGhost({ model: { image: ['generate', 'edit'] } }),
+    } as Partial<CindySlotDeps>);
+    const r1 = await noMedia.slot.handleModelRequest('art', depositReq(b64(PNG)));
+    expect(r1).toMatchObject({ ok: false });
+    expect((r1 as { message: string }).message).toContain('cindy.media');
+    expect(noMedia.depositMedia).not.toHaveBeenCalled();
+
+    const noSlot = makeSlot({
+      getGhost: () => fakeGhost({ slots: ['tool'], model: null }),
+    } as Partial<CindySlotDeps>);
+    expect(await noSlot.slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({
+      ok: false,
+    });
+
+    const disabled = makeSlot({
+      getGhost: () => fakeGhost({ enabled: false }),
+    } as Partial<CindySlotDeps>);
+    expect(await disabled.slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('类型只认字节:非媒体内容拒收,额外塞的自报 mime 不作数', async () => {
+    const { slot, depositMedia } = makeSlot();
+    const json = new TextEncoder().encode('{"not":"media"}');
+    const r = await slot.handleModelRequest('art', depositReq(b64(json), { mimeType: 'image/png' }));
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('受支持的媒体类型');
+    expect(depositMedia).not.toHaveBeenCalled();
+  });
+
+  it('载荷形状:非字符串 / 空 / 非法 base64 / data: 前缀 → 拒', async () => {
+    const { slot, depositMedia } = makeSlot();
+    for (const bad of [undefined, '', 123, {}]) {
+      expect(await slot.handleModelRequest('art', depositReq(bad))).toMatchObject({ ok: false });
+    }
+    // 冒号不在允许字符集内:明确拒绝,而不是让 Buffer.from 静默丢字符。
+    const withPrefix = await slot.handleModelRequest(
+      'art',
+      depositReq(`data:image/png;base64,${b64(PNG)}`),
+    );
+    expect((withPrefix as { message: string }).message).toContain('base64');
+    expect(depositMedia).not.toHaveBeenCalled();
+  });
+
+  it('单次上限:超限在解码前就拒(不为超长串分配解码缓冲)', async () => {
+    const { slot, sniffDepositMime, depositMedia } = makeSlot();
+    // 只造字符数、不造真字节:上限判定必须早于 base64 校验与解码。
+    // 刚好越过字符闸(4/3 膨胀率 + padding)即可,不用造两倍——上限已是
+    // 50MB 量级,乘 2 会让每次跑测试白分配上百 MB。
+    const huge = 'A'.repeat(Math.ceil((GHOST_CINDY_DEPOSIT_MAX_BYTES * 4) / 3) + 1024);
+    const r = await slot.handleModelRequest('art', depositReq(huge));
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('单次寄存上限');
+    expect(sniffDepositMime).not.toHaveBeenCalled();
+    expect(depositMedia).not.toHaveBeenCalled();
+  });
+
+  it('配额是硬顶:已用 + 本次超限即拒,不落仓', async () => {
+    const { slot, depositMedia } = makeSlot({
+      depositUsageBytes: vi.fn(async () => GHOST_CINDY_DEPOSIT_QUOTA_BYTES),
+    } as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', depositReq(b64(PNG)));
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('release_media');
+    expect(depositMedia).not.toHaveBeenCalled();
+  });
+
+  it('频控:突发额度用尽后拒,且不再去打扰配额查询与落仓', async () => {
+    const { slot, depositUsageBytes, depositMedia } = makeSlot();
+    for (let i = 0; i < GHOST_CINDY_DEPOSIT_BURST; i++) {
+      expect(await slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({ ok: true });
+    }
+    const throttled = await slot.handleModelRequest('art', depositReq(b64(PNG)));
+    expect(throttled).toMatchObject({ ok: false });
+    expect((throttled as { message: string }).message).toContain('过于频繁');
+    // 每单成功读两次配额(落仓前的硬顶预判 + 落仓后回读真实占用);被频控
+    // 拦下的那单一次都不读,也不落仓 —— 频控闸在配额之前正是为了这个。
+    expect(depositUsageBytes).toHaveBeenCalledTimes(GHOST_CINDY_DEPOSIT_BURST * 2);
+    expect(depositMedia).toHaveBeenCalledTimes(GHOST_CINDY_DEPOSIT_BURST);
+  });
+
+  it('落仓抛错折叠成结构化拒绝', async () => {
+    const { slot } = makeSlot({
+      depositMedia: vi.fn(async () => {
+        throw new Error('磁盘满');
+      }),
+    } as Partial<CindySlotDeps>);
+    const r = await slot.handleModelRequest('art', depositReq(b64(PNG)));
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('磁盘满');
+  });
+
+  it('注入实现意外抛错也不穿透("永不 reject"是对沙箱的硬承诺)', async () => {
+    const boom = () => {
+      throw new Error('嗅探炸了');
+    };
+    const dep = makeSlot({ sniffDepositMime: vi.fn(boom) } as unknown as Partial<CindySlotDeps>);
+    const r1 = await dep.slot.handleModelRequest('art', depositReq(b64(PNG)));
+    expect(r1).toMatchObject({ ok: false });
+    expect((r1 as { message: string }).message).toContain('嗅探炸了');
+
+    const rel = makeSlot({ releaseDeposit: vi.fn(boom) } as unknown as Partial<CindySlotDeps>);
+    expect(await rel.slot.handleModelRequest('art', releaseReq('d'.repeat(64)))).toMatchObject({
+      ok: false,
+    });
+  });
+
+  it('能力未接线(主机没注入寄存三件套)→ fail closed', async () => {
+    const slot = new GhostCindySlot({
+      getGhost: () => fakeGhost(),
+      generateImage: vi.fn(),
+      editImage: vi.fn(),
+      generateVideo: vi.fn(),
+      editVideo: vi.fn(),
+      resolveOwnedMedia: vi.fn(),
+      getOverride: vi.fn(() => null),
+      getImageConfig: vi.fn(() => ({ models: [], defaults: null })),
+      getVideoConfig: vi.fn(() => ({ models: [], defaults: null })),
+      saveGhostMedia: vi.fn(),
+    } as unknown as CindySlotDeps);
+    expect(await slot.handleModelRequest('art', depositReq(b64(PNG)))).toMatchObject({ ok: false });
+  });
+
+  it('release_media:指纹形状校验 + 归属由主机拼 + 幂等', async () => {
+    const { slot, releaseDeposit } = makeSlot();
+    expect(await slot.handleModelRequest('art', releaseReq('nope'))).toMatchObject({ ok: false });
+    expect(releaseDeposit).not.toHaveBeenCalled();
+
+    const HASH = 'd'.repeat(64);
+    expect(await slot.handleModelRequest('art', releaseReq(HASH))).toMatchObject({
+      ok: true,
+      released: true,
+    });
+    // 删除条件由主机拼(refKind + 本意识 id),沙箱递不进 refKind / 别人的 id。
+    expect(releaseDeposit).toHaveBeenCalledWith({ ghostId: 'art', hash: HASH });
+
+    const { slot: slot2 } = makeSlot({
+      releaseDeposit: vi.fn(async () => false),
+    } as Partial<CindySlotDeps>);
+    expect(await slot2.handleModelRequest('art', releaseReq(HASH))).toMatchObject({
+      ok: true,
+      released: false,
+    });
+  });
+
+  it('release_media 同样过资格审(详单缺 deposit → 拒)', async () => {
+    const { slot, releaseDeposit } = makeSlot({
+      getGhost: () => fakeGhost({ model: { image: ['generate'] } }),
+    } as Partial<CindySlotDeps>);
+    expect(await slot.handleModelRequest('art', releaseReq('d'.repeat(64)))).toMatchObject({
+      ok: false,
+    });
+    expect(releaseDeposit).not.toHaveBeenCalled();
+  });
+});
+
+describe('快问快答(oneshot_text)', () => {
+  const ONESHOT = { type: 'cindy-request', kind: 'oneshot_text', prompt: '总结一下' };
+  const withText = (deps: Partial<CindySlotDeps> = {}) =>
+    makeSlot({
+      getGhost: () =>
+        fakeGhost({ model: { image: ['generate'], text: ['oneshot'] } }),
+      oneshotText: vi.fn(async () => ({ ok: true as const, text: '好的', model: 'chain/mini' })),
+      ...deps,
+    });
+
+  it('未声明 text.oneshot → PERMISSION_DENIED,不触发链路', async () => {
+    const oneshotText = vi.fn();
+    const { slot } = makeSlot({ oneshotText });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: false, errorCode: 'PERMISSION_DENIED' });
+    expect(oneshotText).not.toHaveBeenCalled();
+  });
+
+  it('载荷校验:空 prompt / 超长 prompt / 非法 maxTokens / 非法 expectJson → INVALID_PARAMS', async () => {
+    const { slot } = withText();
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, prompt: '  ' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, prompt: 'x'.repeat(32_769) }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 0 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, maxTokens: 99999 }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+    expect(
+      await slot.handleModelRequest('art', { ...ONESHOT, expectJson: 'yes' }),
+    ).toMatchObject({ ok: false, errorCode: 'INVALID_PARAMS' });
+  });
+
+  it('能力未接线(deps 缺 oneshotText)→ 结构化拒绝,fail closed', async () => {
+    const { slot } = makeSlot({
+      getGhost: () => fakeGhost({ model: { text: ['oneshot'] } }),
+      oneshotText: undefined,
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+
+  it('happy path:文字随返回递回,带实际选型;缺省 maxTokens=1024', async () => {
+    const oneshotText = vi.fn(async () => ({ ok: true as const, text: '答案', model: 'chain/mini' }));
+    const { slot } = withText({ oneshotText });
+    const r = await slot.handleModelRequest('art', ONESHOT);
+    expect(r).toMatchObject({ ok: true, text: '答案', model: 'chain/mini' });
+    expect(oneshotText).toHaveBeenCalledWith({
+      prompt: '总结一下',
+      maxTokens: 1024,
+      timeoutMs: 60_000,
+    });
+  });
+
+  it('链路失败三档映射:no_candidate → NO_CANDIDATE,timeout → TIMEOUT,failed → INTERNAL', async () => {
+    for (const [reason, errorCode] of [
+      ['no_candidate', 'NO_CANDIDATE'],
+      ['timeout', 'TIMEOUT'],
+      ['failed', 'INTERNAL'],
+    ] as const) {
+      const { slot } = withText({
+        oneshotText: vi.fn(async () => ({ ok: false as const, reason, message: '不行' })),
+      });
+      expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+        ok: false,
+        errorCode,
+        message: '不行',
+      });
+    }
+  });
+
+  it('expectJson:剥围栏后可解析 → 返回清洗后的 JSON 文本;不可解析 → BAD_MODEL_OUTPUT', async () => {
+    const good = withText({
+      oneshotText: vi.fn(async () => ({
+        ok: true as const,
+        text: '```json\n{"a":1}\n```',
+      })),
+    });
+    expect(await good.slot.handleModelRequest('art', { ...ONESHOT, expectJson: true })).toMatchObject(
+      { ok: true, text: '{"a":1}' },
+    );
+    const bad = withText({
+      oneshotText: vi.fn(async () => ({ ok: true as const, text: '这不是 JSON' })),
+    });
+    expect(await bad.slot.handleModelRequest('art', { ...ONESHOT, expectJson: true })).toMatchObject(
+      { ok: false, errorCode: 'BAD_MODEL_OUTPUT' },
+    );
+  });
+
+  it('expectJson 时提示里追加 JSON 要求(确定性拼接,不甩给链路)', async () => {
+    const oneshotText = vi.fn(async (_params: { prompt: string; maxTokens: number; timeoutMs: number }) => ({
+      ok: true as const,
+      text: '{}',
+    }));
+    const { slot } = withText({ oneshotText });
+    await slot.handleModelRequest('art', { ...ONESHOT, expectJson: true });
+    expect(oneshotText.mock.calls[0]?.[0]?.prompt).toContain('只输出 JSON');
+  });
+
+  it('在途并发闸与媒体代办共用:达到上限即 RATE_LIMITED', async () => {
+    let release: (() => void) | null = null;
+    const oneshotText = vi.fn(
+      () =>
+        new Promise<{ ok: true; text: string }>((resolve) => {
+          release = () => resolve({ ok: true, text: 'ok' });
+        }),
+    );
+    const { slot } = withText({ oneshotText, getInflightLimit: () => 1 });
+    const first = slot.handleModelRequest('art', ONESHOT);
+    await Promise.resolve();
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'RATE_LIMITED',
+    });
+    release!();
+    expect(await first).toMatchObject({ ok: true });
+  });
+
+  it('注入实现抛错 → 折叠为 INTERNAL,不向沙箱穿透异常', async () => {
+    const { slot } = withText({
+      oneshotText: vi.fn(async () => {
+        throw new Error('boom');
+      }),
+    });
+    expect(await slot.handleModelRequest('art', ONESHOT)).toMatchObject({
+      ok: false,
+      errorCode: 'INTERNAL',
+    });
+  });
+});
+
+/**
+ * 更新重启前的阻断探针要问「Cindy slot 现在有没有在干活」。两半状态各自独立记账
+ * (异步 jobs / 同步 inflight),只查一半就会漏一半 —— 而漏掉的后果是 forceQuit()
+ * 连 Ghost Node runtime 一起销毁,正在生成的付费结果直接丢掉。
+ */
+describe('anyInflightWork（更新重启阻断探针）', () => {
+  it('空闲时为 false', () => {
+    const { slot } = makeSlot();
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  it('同步代办在途期间为 true，结算后回到 false', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateImage: vi.fn(async () => {
+        // 请求已计入 inflight、但还没结算的那一刻。
+        expect(slot.anyInflightWork()).toBe(true);
+        await gate;
+        return { buffer: new Uint8Array([1]), mimeType: 'image/png' };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const pending = slot.handleModelRequest('art', REQ);
+    release();
+    await pending;
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  // 寄存 / 撤回寄存在进入代办链之前就 return 了，走不到 inflight 记账；被打断会卡在
+  // blob 落盘与账本挂引用之间，所以单独记 mediaOps。
+  it('寄存在途期间为 true，结算后回到 false', async () => {
+    const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    let seenDuring: boolean | null = null;
+    const { slot } = makeSlot({
+      depositMedia: vi.fn(async () => {
+        seenDuring = slot.anyInflightWork();
+        await gate;
+        return { hash: 'a'.repeat(64), bytes: PNG_BYTES.length, usedBytes: 10, quotaBytes: 100 };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const pending = slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'deposit_media',
+      data: Buffer.from(PNG_BYTES).toString('base64'),
+    });
+    release();
+    await pending;
+    expect(seenDuring).toBe(true);
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  it('寄存抛错也会释放在途计数（finally）', async () => {
+    const PNG_BYTES = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2]);
+    const { slot } = makeSlot({
+      depositMedia: vi.fn(async () => { throw new Error('disk is full'); }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'deposit_media',
+      data: Buffer.from(PNG_BYTES).toString('base64'),
+    });
+    expect(r).toMatchObject({ ok: false });
+    // 计数泄漏会让重启入口从此永久卡在「有任务在跑」。
+    expect(slot.anyInflightWork()).toBe(false);
+  });
+
+  // 异步提交只对视频类开放（图像代办秒级完成，走同步等待）。
+  it('异步视频代办（mode:submit）受理后为 true', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    const { slot } = makeSlot({
+      generateVideo: vi.fn(async () => {
+        await gate;
+        return {
+          buffer: new Uint8Array([1]),
+          mimeType: 'video/mp4',
+          videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
+        };
+      }),
+    } as unknown as Partial<CindySlotDeps>);
+
+    const res = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_video',
+      prompt: '一只猫奔跑',
+      mode: 'submit',
+    });
+    expect(res).toMatchObject({ ok: true, status: 'running' });
+    // 受理即返回，job 仍在途 —— 此时没有任何 turn 级信号还亮着。
+    expect(slot.anyInflightWork()).toBe(true);
+    release();
   });
 });

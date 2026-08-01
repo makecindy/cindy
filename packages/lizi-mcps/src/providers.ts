@@ -3,6 +3,7 @@ import type {
   BrowserMcpDeps,
   ComputerMcpDeps,
   FeishuBotMcpHostDeps,
+  WechatBotMcpHostDeps,
   LiziMcpId,
   LiziMcpProvider,
   LiziMcpSessionContext,
@@ -14,6 +15,7 @@ import type {
   LspMcpDeps,
 } from './types.js';
 import { createFeishuBotMcpServer } from './cindy_feishuBotMcpServer.js';
+import { createWechatMcpServer } from './cindy_wechatMcpServer.js';
 import { createSlackMcpGatewayServer } from './cindy_slackMcpServer.js';
 import { createSchedulerMcpServer } from './cindy_schedulerMcpServer.js';
 import { createSshMcpServer } from './cindy_sshMcpServer.js';
@@ -38,6 +40,7 @@ export interface CreateLiziMcpProvidersOptions {
   /** Local desktop computer-use tools backed by a host-managed external driver. */
   computer?: ComputerMcpDeps;
   feishuBot?: FeishuBotMcpHostDeps;
+  wechatBot?: WechatBotMcpHostDeps;
   /**
    * cindy_slack: Slack 网关工具(经 hook 通道由 slack-hook-server 以托管
    * user token 调 Slack 官方 MCP, 接替退役的 cindy-slack 意识)。
@@ -92,6 +95,11 @@ function selected(
 
 function readFeishuChatId(ctx: LiziMcpSessionContext): string | null {
   const raw = ctx.vendorOptions?.feishuChatId;
+  return typeof raw === 'string' && raw.length > 0 ? raw : null;
+}
+
+function readWechatPeerId(ctx: LiziMcpSessionContext): string | null {
+  const raw = ctx.vendorOptions?.wechatPeerId;
   return typeof raw === 'string' && raw.length > 0 ? raw : null;
 }
 
@@ -238,6 +246,28 @@ export function createLiziMcpProviders(
           // slack-hook 会话里按来源在构建期注入渠道路由提示,
           // 把「发给我」的默认通道钉死在会话自身渠道(规则 9)。
           sessionSource: readSessionSource(ctx),
+        }),
+      }),
+    });
+  }
+
+  if (opts.wechatBot && selected(enabled, 'cindy_wechat')) {
+    providers.push({
+      name: 'cindy_wechat',
+      toClaudeSdkConfig: (ctx) => ({
+        type: 'sdk',
+        name: 'cindy_wechat',
+        instance: createWechatMcpServer({
+          ...opts.wechatBot!,
+          getPeerId: async () => {
+            const current = resolveLiziMcpSessionContext(ctx);
+            return (
+              readWechatPeerId(current) ??
+              (await opts.wechatBot!.getActivePeerIdForSession(current.sessionId)) ??
+              (await opts.wechatBot!.getMostRecentPeerId())
+            );
+          },
+          workingDir: ctx.workingDir,
         }),
       }),
     });

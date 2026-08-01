@@ -33,6 +33,10 @@ import {
   readAgentInputReferences,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
+import {
+  normalizeRemoteMoney,
+  type RemoteMoney,
+} from '@/session/remoteMoney';
 
 export type NormalizedRemoteMessageKind =
   | 'user'
@@ -68,11 +72,22 @@ export interface NormalizedRemoteMessage {
   diff?: NormalizedToolDiff;
   align: 'user' | 'agent';
   createdAt: string;
+  /**
+   * tool 消息专用:配对 tool_result 的落库时刻(ISO),即这次调用的结束时刻。渲染层用它做
+   * 历史空洞判定的锚点(见共享 `MessageRenderNormalizedMessage.settledAt`)。
+   */
+  settledAt?: string;
   isStreaming?: boolean;
   /** Host 在 SDK done 边界写入；后台自动续跑时每个 sealed assistant 都是正式回复。 */
   turnCompleted?: boolean;
+  turnMoney?: RemoteMoney;
+  /** 旧 Desktop 消息兼容字段。 */
   turnCostUsd?: number;
-  turnCostIsEstimate?: boolean;
+  /**
+   * 本轮 token 总量(agentMeta.turnUsageDetails.totalTokens)。桌面算不出模型报价时
+   * 只落这一份用量事实,操作行据此退回显示 token 而不是空着一格。
+   */
+  turnTotalTokens?: number;
   /** assistant 专用:本轮模型降级标记(agentMeta.modelMismatch,桌面 main 在 turn 结束检测命中时落库)。 */
   modelMismatch?: { selected: string; actual: string };
   /** Orca 协同卡片(Lead 派活 / worker 回报);存在时由 MessageRenderer 渲染成专属卡片而非普通气泡。 */
@@ -102,7 +117,7 @@ export interface NormalizedAutomationOrigin {
 }
 
 export interface NormalizedHookSource {
-  im: 'slack' | 'telegram';
+  im: 'slack' | 'telegram' | 'x';
   channelName?: string;
   userText: string;
   threadContext?: Array<{ author: string; text: string; isBot?: boolean }>;
@@ -190,6 +205,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         diff: tool.diff,
         align: 'agent',
         createdAt: message.createdAt,
+        // 结束时刻(配对 tool_result 落库时间)驱动渲染层的历史空洞判定,详见共享类型上的说明。
+        settledAt: toolResultPairing.resultCreatedAtFor(message, tool),
         toolSettled: toolResultPairing.hasResultFor(message, tool),
       });
       continue;
@@ -303,6 +320,8 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     // user 以保留 turn 边界(上一段被截断 turn 的工具行按历史收敛),align 'agent'
     // 让卡片走系统卡的左侧版式而不是右侧用户气泡。
     if (message.role === 'user' && message.agentMeta?.autoResume === true) {
+      const autoResumeInfo = readRecord(message.agentMeta.autoResumeInfo) ?? {};
+      const autoResumeOutcome = message.agentMeta.autoResumeOutcome;
       result.push({
         key: messageNormalizeKey(message),
         source: message,
@@ -311,7 +330,13 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
         label: 'user',
         body: '',
         systemCardType: 'auto-resume',
-        systemCardData: {},
+        isSyntheticTrigger: true,
+        systemCardData: {
+          ...autoResumeInfo,
+          ...(autoResumeOutcome === 'succeeded' || autoResumeOutcome === 'failed'
+            ? { outcome: autoResumeOutcome }
+            : {}),
+        },
         align: 'agent',
         createdAt: message.createdAt,
       });
@@ -336,6 +361,7 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
     const rawBody = userContent ? userContent.text : contentToPreview(message.content);
     const hookSource = message.role === 'user' ? readHookSource(message, rawBody) : undefined;
     const body = hookSource?.userText ?? rawBody;
+    const turnCost = readTurnCost(message);
     result.push({
       key: messageNormalizeKey(message),
       source: message,
@@ -360,11 +386,13 @@ export function normalizeRemoteMessages(messages: readonly RemoteMessage[]): Nor
       isStreaming: readMessageStreaming(message) || undefined,
       ...(message.role === 'assistant' && (
         message.agentMeta?.turnCompleted === true ||
-        (readNumber(message.agentMeta?.turnCostUsd) ?? 0) > 0
+        (turnCost.turnMoney?.amount ?? 0) > 0 ||
+        // 无报价轮只落 turnUsageDetails,它同样只在 turn 结束时写入,等价收尾信号。
+        turnCost.turnTotalTokens !== undefined
       )
         ? { turnCompleted: true }
         : {}),
-      ...readTurnCost(message),
+      ...turnCost,
       ...readModelMismatch(message),
       ...(message.role === 'user' ? readAutomationOrigin(message) : {}),
       ...(hookSource ? { hookSource } : {}),
@@ -675,14 +703,69 @@ function readTimestamp(value: unknown): number | null {
   return Number.isFinite(timestamp) ? timestamp : null;
 }
 
-function readTurnCost(message: RemoteMessage): Pick<NormalizedRemoteMessage, 'turnCostUsd' | 'turnCostIsEstimate'> {
-  if (message.role !== 'assistant') return {};
-  const cost = readNumber(message.agentMeta?.turnCostUsd);
-  if (cost === null || cost <= 0) return {};
+/**
+ * agentMeta 里一对「金额 + 旧版 USD 数字 + 估算标记」→ 操作行可显示的金额投影。
+ * 用户轮累计与当前 segment 走同一个实现,免得两处各写一份判据后漂移。
+ */
+function projectTurnMoney(
+  money: unknown,
+  legacyUsd: unknown,
+  isEstimateFlag: boolean,
+): Pick<NormalizedRemoteMessage, 'turnMoney' | 'turnCostUsd'> | null {
+  const normalized = normalizeRemoteMoney(money);
+  if (normalized && normalized.amount > 0) {
+    const isEstimate = isEstimateFlag || normalized.kind === 'value-estimate';
+    // NormalizedRemoteMessage is a display projection, not the accounting record. Fold the
+    // separate wire flag into turnMoney so visible text and accessibility cannot choose
+    // different estimate semantics for mixed actual-cost + value-estimate user-turn totals.
+    const displayMoney: RemoteMoney = isEstimate
+      ? { ...normalized, approximate: true, kind: 'value-estimate' }
+      : normalized;
+    return {
+      turnMoney: displayMoney,
+      ...(displayMoney.currency === 'USD' ? { turnCostUsd: displayMoney.amount } : {}),
+    };
+  }
+  const cost = readNumber(legacyUsd);
+  if (cost === null || cost <= 0) return null;
   return {
+    turnMoney: {
+      amount: cost,
+      currency: 'USD',
+      approximate: isEstimateFlag,
+      kind: isEstimateFlag ? 'value-estimate' : 'actual-cost',
+    },
     turnCostUsd: cost,
-    turnCostIsEstimate: message.agentMeta?.turnCostIsEstimate === true,
   };
+}
+
+function readTurnCost(
+  message: RemoteMessage,
+): Pick<
+  NormalizedRemoteMessage,
+  'turnMoney' | 'turnCostUsd' | 'turnTotalTokens'
+> {
+  if (message.role !== 'assistant') return {};
+  // 用量与金额分开读:桌面算不出报价的轮次只落 turnUsageDetails,操作行退回显示 token。
+  const totalTokens = readNumber(readRecord(message.agentMeta?.turnUsageDetails)?.totalTokens);
+  const usage: Pick<NormalizedRemoteMessage, 'turnTotalTokens'> =
+    totalTokens !== null && totalTokens > 0 ? { turnTotalTokens: totalTokens } : {};
+  // 整轮累计优先于当前 segment(与桌面 MessageActionBar 的 displayedMoney 同口径):
+  // 一次用户请求含多个自动续跑 segment 时,操作行只挂在收尾正文上,而它要承载整轮总额;
+  // 收尾 segment 缺报价的轮次更是只有 userTurnCost。两者独立判定,不互为前提
+  // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+  const projected =
+    projectTurnMoney(
+      message.agentMeta?.userTurnCost,
+      message.agentMeta?.userTurnCostUsd,
+      message.agentMeta?.userTurnCostIsEstimate === true,
+    ) ??
+    projectTurnMoney(
+      message.agentMeta?.turnCost,
+      message.agentMeta?.turnCostUsd,
+      message.agentMeta?.turnCostIsEstimate === true,
+    );
+  return projected ? { ...usage, ...projected } : usage;
 }
 
 // 桌面 main 在 turn 结束检测到模型被上游降级时写 agentMeta.modelMismatch =
@@ -716,7 +799,9 @@ function readAutomationOrigin(message: RemoteMessage): Pick<NormalizedRemoteMess
 /** Fail closed on unknown providers and bound all server-controlled display fields. */
 function readHookSource(message: RemoteMessage, fallbackBody: string): NormalizedHookSource | undefined {
   const source = readRecord(message.agentMeta?.hookSource);
-  if (!source || (source.im !== 'slack' && source.im !== 'telegram')) return undefined;
+  if (!source || (source.im !== 'slack' && source.im !== 'telegram' && source.im !== 'x')) {
+    return undefined;
+  }
   const userText = (
     typeof source.userText === 'string' ? source.userText : fallbackBody
   ).slice(0, 20_000);

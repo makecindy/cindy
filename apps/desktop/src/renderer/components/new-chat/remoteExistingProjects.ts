@@ -21,6 +21,8 @@ export interface ExistingRemoteProject {
   path: string;
   /** 同名消歧后的展示名。 */
   name: string;
+  /** device-link 被控端的目录存在性探测;SSH 数据源没有该信息。 */
+  exists?: boolean;
 }
 
 /** extractDisplayName 按 `/` 切分 —— 统一成 POSIX 再消歧(Windows 反斜杠路径也能正确取名)。 */
@@ -41,13 +43,17 @@ function toProjects(paths: readonly string[]): ExistingRemoteProject[] {
 interface RecentWorkdirRow {
   path: string;
   lastUsedAt: string;
+  exists?: boolean;
 }
 
 /** device-link:被控端 recent_workdirs → 已有项目列表(保序,handler 已按 lastUsedAt desc 排好)。 */
 export function recentWorkdirsToProjects(
   rows: readonly RecentWorkdirRow[],
 ): ExistingRemoteProject[] {
-  return toProjects(rows.map((r) => r.path));
+  return toProjects(rows.map((r) => r.path)).map((project, index) => ({
+    ...project,
+    ...(rows[index].exists === undefined ? {} : { exists: rows[index].exists }),
+  }));
 }
 
 /** SSH:本地会话里 remoteHostId 命中该 host 的 project 会话 workingDir 去重 → 已有项目列表。 */
@@ -78,4 +84,16 @@ export async function loadDeviceLinkExistingProjects(
     [],
   )) as RecentWorkdirRow[] | null | undefined;
   return recentWorkdirsToProjects(rows ?? []);
+}
+
+/** device-link:从被控端最近项目列表移除一条,不删除会话或磁盘目录。 */
+export async function removeDeviceLinkExistingProject(
+  deviceId: string,
+  path: string,
+): Promise<void> {
+  await window.electronAPI.deviceLink.invoke(
+    deviceId,
+    'local-db:recent-workdirs:remove',
+    [{ path }],
+  );
 }

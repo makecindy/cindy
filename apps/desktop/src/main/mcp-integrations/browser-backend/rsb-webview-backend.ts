@@ -74,6 +74,11 @@ export interface RsbWebviewBackendOptions {
   bridge: RendererBridgeOptions;
   logger: BackendLogger;
   artifactRoot?: () => string;
+  /**
+   * Download-start grace override for deterministic tests. Production keeps
+   * RsbWebviewArtifacts' bounded two-second default.
+   */
+  artifactDownloadGraceMs?: number;
   resolveUploadRoots?: (sessionId: string) => Promise<string[]>;
   /**
    * Timing overrides for the detached-window tab re-registration wait (tests
@@ -190,7 +195,11 @@ export class RsbWebviewBackend implements BrowserBackend {
   constructor(private readonly opts: RsbWebviewBackendOptions) {
     this.automation = new RsbWebviewAutomation(opts.logger);
     this.artifacts = opts.artifactRoot
-      ? new RsbWebviewArtifacts(opts.artifactRoot, opts.logger)
+      ? new RsbWebviewArtifacts(
+        opts.artifactRoot,
+        opts.logger,
+        opts.artifactDownloadGraceMs,
+      )
       : undefined;
     this.dialogs = new RsbWebviewDialogs(opts.logger);
     this.network = new RsbWebviewNetwork(opts.logger);

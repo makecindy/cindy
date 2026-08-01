@@ -31,6 +31,7 @@ import {
   normalizeRegionalMoney,
   type RegionalMoney,
 } from '../shared/regionalMoney.js';
+import { currentLedgerCurrency } from './usage/ledgerCurrency.js';
 
 const log = createLogger('sessionSpendBroadcaster');
 
@@ -80,17 +81,28 @@ export async function recordSessionTurnSpend(
   if (!sessionId) return;
   const normalized = normalizeRegionalMoney(money);
   if (!normalized || normalized.amount < 1e-10) return;
+  // 只接受本账号的结算币种。基准取 currentLedgerCurrency() 而不是构建区域 —— 结算币种
+  // 由服务端按账号所属租户下发,不保证等于发行区域;按区域判会让以 USD 结算的账号
+  // 「本对话」金额永远停在 0。异币种(脏数据 / 上游 bug)仍然拒收。
+  const ledgerCurrency = currentLedgerCurrency();
+  if (normalized.currency !== ledgerCurrency) {
+    log.warn(
+      `recordSessionTurnSpend rejected currency mismatch: ${normalized.currency} != ${ledgerCurrency}`,
+    );
+    return;
+  }
   try {
     const db = getDbClient().drizzle;
-    // 单币种累计列:币种守卫必须在同一条 UPDATE 里用 CASE 表达 —— 先查再写
-    // 有 TOCTOU 窗口,并发首写会把不同币种的裸数字加进同一列。冲突段原子地
-    // 弃掉(列保持原币种),下方回读后 warn 留痕。
+    // 单币种累计列:恢复旧会话时若累计仍是旧币种，首笔当前币种费用重新起算聚合列；
+    // 消息历史保持原样，不猜测旧总额应如何换算。CASE 与写入在同一条 UPDATE 里，
+    // 避免并发混加不同单位。
     const sameCurrency = sql`(${sessions.totalCostCurrency} IS NULL OR ${sessions.totalCostCurrency} = ${normalized.currency})`;
-    await db.update(sessions)
+    await db
+      .update(sessions)
       .set({
-        totalCostAmount: sql`CASE WHEN ${sameCurrency} THEN ${sessions.totalCostAmount} + ${normalized.amount} ELSE ${sessions.totalCostAmount} END`,
-        totalCostCurrency: sql`CASE WHEN ${sameCurrency} THEN ${normalized.currency} ELSE ${sessions.totalCostCurrency} END`,
-        totalCostIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${sessions.totalCostIsApproximate} END`,
+        totalCostAmount: sql`CASE WHEN ${sameCurrency} THEN ${sessions.totalCostAmount} + ${normalized.amount} ELSE ${normalized.amount} END`,
+        totalCostCurrency: normalized.currency,
+        totalCostIsApproximate: sql`CASE WHEN ${sameCurrency} THEN (${sessions.totalCostIsApproximate} OR ${normalized.approximate ? 1 : 0}) ELSE ${normalized.approximate ? 1 : 0} END`,
       })
       .where(sql`${sessions.id} = ${sessionId}`)
       .run();
@@ -104,12 +116,6 @@ export async function recordSessionTurnSpend(
       .from(sessions)
       .where(sql`${sessions.id} = ${sessionId}`)
       .get();
-    if (
-      row?.totalCostCurrency &&
-      row.totalCostCurrency !== normalized.currency
-    ) {
-      log.warn('recordSessionTurnSpend dropped a conflicting-currency segment');
-    }
     const legacy = legacyUsdMoney(row?.totalCostUsd ?? 0);
     const current = normalizeRegionalMoney({
       amount: row?.totalCostAmount ?? 0,
@@ -122,19 +128,14 @@ export async function recordSessionTurnSpend(
         ? legacy.currency === current.currency
           ? addRegionalMoney([legacy, current])
           : current
-        : current ?? legacy;
+        : (current ?? legacy);
     broadcast({
       sessionId,
       totalMoney,
-      ...(totalMoney.currency === 'USD'
-        ? { totalCostUsd: totalMoney.amount }
-        : {}),
+      ...(totalMoney.currency === 'USD' ? { totalCostUsd: totalMoney.amount } : {}),
     });
   } catch (err) {
-    log.warn(
-      'recordSessionTurnSpend failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    log.warn('recordSessionTurnSpend failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -151,12 +152,16 @@ function broadcast(payload: SessionSpendPayload): void {
 }
 
 /** 给 session 累加一笔 turn token delta，然后回读最新值并广播。 */
-export async function recordSessionTurnTokens(sessionId: string, tokenDelta: number): Promise<void> {
+export async function recordSessionTurnTokens(
+  sessionId: string,
+  tokenDelta: number,
+): Promise<void> {
   if (!sessionId) return;
   if (!Number.isFinite(tokenDelta) || tokenDelta <= 0) return;
   try {
     const db = getDbClient().drizzle;
-    await db.update(sessions)
+    await db
+      .update(sessions)
       .set({ totalTokenUsage: sql`${sessions.totalTokenUsage} + ${Math.floor(tokenDelta)}` })
       .where(sql`${sessions.id} = ${sessionId}`)
       .run();
@@ -167,10 +172,7 @@ export async function recordSessionTurnTokens(sessionId: string, tokenDelta: num
       .get();
     broadcastTokens({ sessionId, totalTokens: row?.totalTokenUsage ?? 0 });
   } catch (err) {
-    log.warn(
-      'recordSessionTurnTokens failed:',
-      err instanceof Error ? err.message : String(err),
-    );
+    log.warn('recordSessionTurnTokens failed:', err instanceof Error ? err.message : String(err));
   }
 }
 
@@ -211,7 +213,8 @@ export async function recordSessionContextSnapshot(
     if (Number.isFinite(contextWindow) && contextWindow > 0) {
       updates.contextWindow = Math.floor(contextWindow);
     }
-    await db.update(sessions)
+    await db
+      .update(sessions)
       .set(updates)
       .where(sql`${sessions.id} = ${sessionId}`)
       .run();

@@ -35,11 +35,14 @@ import {
   createResponsesChatHandler,
   type ChatBridgeCapabilities,
 } from '@cindy/responses-chat-bridge';
+import { createResponsesAnthropicHandler } from '@cindy/responses-anthropic-bridge';
+import { createHash, randomUUID } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 
 import { buildCodexGatewayBaseUrl, CODEX_OAUTH_UPSTREAM } from './codex-gateway-config.js';
-import { getActiveCatalog } from './active-catalog.js';
+import { claudeUpstreamEndpoint } from './runtime-configs.js';
+import { getActiveCatalog, getCatalogModelContextWindow } from './active-catalog.js';
 import {
   gatewayDefaultRouteDecision,
   getSessionRoutingDescriptor,
@@ -50,7 +53,9 @@ import {
   isHostInjectedAuthSession,
   isUserProviderSession,
   getUserProviderIdForSession,
+  readProviderOAuthToken,
   providerRoutingServesWireModel,
+  resolveImplicitLocalBridgeRoute,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
   rewriteImplicitModelIdForRoute,
@@ -65,6 +70,7 @@ import { encryptedStripController, imageGenerationStripController } from './thre
 import { createMakerLogger } from './logger-adapter.js';
 import { resolveDesktopOutboundProxy } from './outbound-proxy-resolver.js';
 import { outboundFetch } from './outbound-fetch.js';
+import { desktopAnthropicImageCodec } from './anthropic-image-codec.js';
 import { readSilentEncryptedRetrySettings } from './silent-encrypted-retry-store.js';
 import { getLogDir } from '../logger.js';
 import { recordXaiRateLimitSnapshot } from '../usageBroadcaster.js';
@@ -74,14 +80,99 @@ const log = createMakerLogger('codex-proxy');
 
 const registry = createInstructionsRegistry();
 const sessionToThread = new Map<string, string>();
+const sessionToThreads = new Map<string, Set<string>>();
 const threadToSession = new Map<string, string>();
+const reviewerModelBySession = new Map<string, string>();
+const httpRecoveryReasonByThread = new Map<string, string>();
+
+const CODEX_AUTO_REVIEW_MODEL = 'codex-auto-review';
+const CODEX_GUARDIAN_SUBAGENT = 'guardian';
 
 let _handle: ProxyHandle | null = null;
 let _startPromise: Promise<void> | null = null;
+const _controlPlaneHandles = new Map<CodexProxyAuthInjection, ProxyHandle>();
+const _controlPlaneStartPromises = new Map<CodexProxyAuthInjection, Promise<void>>();
 let _disposeGeneration = 0;
 let dumpSeq = 0;
 
 const CODEX_RESPONSE_OBSERVER_MAX_BYTES = 2 * 1024 * 1024;
+
+const encryptedContentRecoveryRule = createEncryptedContentRecoveryRule({
+  enabled: () => readSilentEncryptedRetrySettings().enabled,
+  onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
+});
+const imageGenerationIdRecoveryRule = createImageGenerationIdRecoveryRule({
+  onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
+});
+const CODEX_BODY_RECOVERY_RULES = [
+  encryptedContentRecoveryRule,
+  imageGenerationIdRecoveryRule,
+] as const;
+
+/**
+ * WS 已建立后 proxy 只转发 socket，真正的上游请求错误会由 app-server 报给 maker-core。
+ * maker-core 把错误文本回传到这里，由与 HTTP recovery 完全相同的 rule 判定并登记：
+ * 下一次 upgrade 返回 426，Codex 原生 transport 随即切到 HTTP，既有 strip+retry 接管。
+ */
+export function armCodexHttpRecovery(args: {
+  sessionId: string;
+  threadId: string;
+  message: string;
+  additionalDetails?: string | null;
+}): string | null {
+  const threadId = args.threadId.trim();
+  if (!threadId) return null;
+  const errorText = [args.message, args.additionalDetails]
+    .filter((part): part is string => typeof part === 'string' && part.length > 0)
+    .join('\n');
+  if (!errorText) return null;
+
+  const rule = CODEX_BODY_RECOVERY_RULES.find(
+    (candidate) => candidate.enabled() && candidate.matches(errorText),
+  );
+  if (!rule) return null;
+
+  const sessionId = args.sessionId.trim();
+  const existingSessionId = threadToSession.get(threadId);
+  if (sessionId && existingSessionId && existingSessionId !== sessionId) {
+    log.warn('refusing to arm codex websocket recovery for a thread owned by another session', {
+      sessionId,
+      threadId,
+      existingSessionId,
+    });
+    return null;
+  }
+  httpRecoveryReasonByThread.set(threadId, rule.id);
+  const disconnectedWebSockets = _handle?.disconnectWebSocketsForThread?.(threadId) ?? 0;
+  if (disconnectedWebSockets === 0) {
+    httpRecoveryReasonByThread.delete(threadId);
+    // startup-prewarm 没有稳定 thread header，且 shared app-server 会跨业务 session
+    // 复用这些连接。不能为恢复 thread A 而全局断开匿名连接（可能正承载 thread B）；
+    // 无法精确定位时保留 Codex 原生错误语义，不自动重投，也不制造跨会话降级。
+    log.info('codex websocket recovery left to native transport; no scoped socket found', {
+      sessionId,
+      threadId,
+      reason: rule.id,
+    });
+    return null;
+  }
+  if (sessionId && !existingSessionId) {
+    // recovery 只需要让 unregister 能清掉 thread 标记，不能调用 bindThreadToSession：
+    // 子 Agent thread 与主 thread 属于同一业务 session，但 bind 会把它当成主 thread
+    // 切换并清空整个父子线程集合，连 registry 与已有 recovery 标记一起误删。
+    const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
+    threads.add(threadId);
+    sessionToThreads.set(sessionId, threads);
+    threadToSession.set(threadId, sessionId);
+  }
+  log.info('codex websocket recovery fallback armed', {
+    sessionId,
+    threadId,
+    reason: rule.id,
+    disconnectedWebSockets,
+  });
+  return rule.id;
+}
 
 // codex 走 Responses API,每轮**全量重发**整个 thread 历史;导入的存量长会话
 // (贴图 base64 + 加密 reasoning blob,字节数膨胀远快于 token 数)单次请求体可以
@@ -142,6 +233,23 @@ function selectedThreadIdFromHeaders(headers: Readonly<Record<string, string>>):
     'unknown';
 }
 
+function guardianParentThreadIdFromHeaders(
+  headers: Readonly<Record<string, string>>,
+): string {
+  if (headerValue(headers, 'x-openai-subagent').toLowerCase() !== CODEX_GUARDIAN_SUBAGENT) {
+    return '';
+  }
+  return headerValue(headers, 'x-codex-parent-thread-id');
+}
+
+function sessionIdFromHeaders(
+  headers: Readonly<Record<string, string>>,
+): string | undefined {
+  const parentThreadId = guardianParentThreadIdFromHeaders(headers);
+  if (parentThreadId) return threadToSession.get(parentThreadId);
+  return threadToSession.get(selectedThreadIdFromHeaders(headers));
+}
+
 function safeDumpName(threadId: string): string {
   return threadId.replace(/[^A-Za-z0-9._-]/g, '_') || 'unknown';
 }
@@ -184,9 +292,150 @@ function createCodexTransform(): RequestTransform {
   return createInstructionsInjectionTransform({ registry, logger: log });
 }
 
+function sessionUsesNativeOpenAIReviewer(
+  sessionId: string,
+  model: string,
+  authInjection: CodexProxyAuthInjection,
+): boolean {
+  const explicitProviderId = getSessionProvider(sessionId);
+  if (explicitProviderId) return explicitProviderId === 'openai';
+
+  const inferredProviderId = inferProviderIdForModel(model, 'codex');
+  if (inferredProviderId) return inferredProviderId === 'openai';
+
+  // An unscoped model inherits the app-server's spawn credential. Namespaced
+  // models are never treated as native OpenAI merely because a superset OAuth
+  // host happens to serve the session.
+  if (
+    model.startsWith('codex/') ||
+    model.startsWith('chatgpt/') ||
+    model.startsWith('xai/')
+  ) {
+    return false;
+  }
+  return authInjection === 'oauth-bearer';
+}
+
+function providerAwareGuardianReviewerModel(
+  body: unknown,
+  headers: Readonly<Record<string, string>>,
+  authInjection: CodexProxyAuthInjection,
+): string | null {
+  if (!isPlainObject(body) || body.model !== CODEX_AUTO_REVIEW_MODEL) return null;
+  const parentThreadId = guardianParentThreadIdFromHeaders(headers);
+  if (!parentThreadId) return null;
+  const sessionId = threadToSession.get(parentThreadId);
+  if (!sessionId) return null;
+  const mainModel = reviewerModelBySession.get(sessionId);
+  if (!mainModel || mainModel === CODEX_AUTO_REVIEW_MODEL) return null;
+  return sessionUsesNativeOpenAIReviewer(sessionId, mainModel, authInjection)
+    ? null
+    : mainModel;
+}
+
+const GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES = new Set(['web_search', 'x_search']);
+
+/**
+ * Guardian decides whether another action may run. Provider-hosted search
+ * tools must not let that reviewer initiate an unrelated upstream network
+ * action with the approval context.
+ */
+function stripGuardianProviderSearchTools(
+  body: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!Array.isArray(body.tools)) return body;
+  const tools = body.tools.filter(
+    (tool) =>
+      !isPlainObject(tool) ||
+      typeof tool.type !== 'string' ||
+      !GUARDIAN_PROVIDER_SEARCH_TOOL_TYPES.has(tool.type),
+  );
+  if (tools.length === body.tools.length) return body;
+
+  const next = { ...body };
+  if (tools.length > 0) next.tools = tools;
+  else delete next.tools;
+  return next;
+}
+
+function createProviderAwareGuardianReviewerTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform {
+  return (body, ctx) => {
+    if (ctx.method !== 'POST' || !isPlainObject(body)) return null;
+    const parentThreadId = guardianParentThreadIdFromHeaders(ctx.headers);
+    const sessionId = parentThreadId ? threadToSession.get(parentThreadId) : undefined;
+    const mainModel = providerAwareGuardianReviewerModel(
+      body,
+      ctx.headers,
+      frozenAuthInjection ?? getCodexProxyAuthInjection(),
+    );
+    if (!parentThreadId || !sessionId || !mainModel) return null;
+
+    log.info('routing Codex Guardian reviewer through the session provider model', {
+      sessionId,
+      parentThreadId,
+      fromModel: CODEX_AUTO_REVIEW_MODEL,
+      toModel: mainModel,
+      providerId: getSessionProvider(sessionId),
+    });
+    return stripGuardianProviderSearchTools({ ...body, model: mainModel });
+  };
+}
+
+/**
+ * Codex Code Mode 对部分 GPT-5.6 网关模型不会发出 Responses 原生搜索声明：
+ * 目录里的 `supports_search_tool` / `webSearch` 能力虽为 true，但 Gateway 只看最终
+ * 请求的 `tools`。插件搜索是增强项，不能作为该基础能力的前置条件，因此在明确走
+ * Cindy Gateway 的 GPT-5.6 请求中补回标准 `web_search` 工具；已有声明保持原样。
+ */
+function createGatewayNativeWebSearchTransform(): RequestTransform {
+  return (body, ctx) => {
+    if (!isPlainObject(body) || typeof body.model !== 'string') return null;
+    if (guardianParentThreadIdFromHeaders(ctx.headers)) return null;
+    const path = ctx.url.split('?', 1)[0] ?? ctx.url;
+    if (ctx.method !== 'POST' || (!path.endsWith('/responses') && path !== '/responses')) return null;
+
+    const model = body.model;
+    const gatewayModel = model.replace(/^codex\//, '');
+    if (!/^gpt-5\.6(?:$|[-.])/.test(gatewayModel)) return null;
+
+    const sessionId = sessionIdFromTransformCtx(ctx);
+    const authInjection = getCodexProxyAuthInjection();
+    const canUseExplicitSessionRoute = Boolean(sessionId && (
+      authInjection === 'oauth-bearer' ||
+      isUserProviderSession(sessionId) ||
+      isHostInjectedAuthSession(sessionId, 'codex')
+    ));
+    const explicitRouting = canUseExplicitSessionRoute && sessionId
+      ? getSessionRoutingDescriptor(sessionId, 'codex', model)
+      : null;
+    const resolvedExplicitRoute = explicitRouting
+      && sessionId
+      && (authInjection === 'oauth-bearer' || authInjection === 'provider-oauth')
+      ? resolveSessionRouteDecision(sessionId, 'codex', _readGatewayKey(), model)
+      : null;
+    const providerOAuthGatewayFallback = authInjection === 'provider-oauth'
+      ? gatewayDefaultRouteDecision('codex', _readGatewayKey())
+      : null;
+    const isGatewaySession = explicitRouting
+      ? explicitRouting.authStrategy === 'gateway-key' &&
+        (authInjection === 'env-key' || resolvedExplicitRoute !== null)
+      // provider-oauth 的显式来源越界后，实际路由会回落默认 Gateway；没有 descriptor
+      // 时也必须与 createModelRoutingTransform 保持同源。
+      : model.startsWith('codex/') ||
+        authInjection === 'env-key' ||
+        providerOAuthGatewayFallback !== null;
+    if (!isGatewaySession) return null;
+
+    const existingTools = Array.isArray(body.tools) ? body.tools : [];
+    if (existingTools.some((tool) => isPlainObject(tool) && tool.type === 'web_search')) return null;
+    return { ...body, tools: [...existingTools, { type: 'web_search' }] };
+  };
+}
+
 function sessionIdFromTransformCtx(ctx: RequestTransformCtx): string | undefined {
-  const threadId = selectedThreadIdFromHeaders(ctx.headers);
-  return threadId ? threadToSession.get(threadId) : undefined;
+  return sessionIdFromHeaders(ctx.headers);
 }
 
 // 通用 Chat Completions 上游(DeepSeek/GLM/Kimi 等非 OpenAI o-series)的兼容默认。
@@ -200,6 +449,23 @@ const CHAT_BRIDGE_DEFAULT_CAPABILITIES: ChatBridgeCapabilities = {
   maxTokensField: 'max_tokens',
   reasoningField: 'none',
   streamUsage: true,
+  // Responses fields with direct Chat equivalents. Provider-specific unsupported fields can
+  // be removed later when the model capability catalog becomes more granular.
+  passthroughFields: [
+    'temperature',
+    'top_p',
+    'frequency_penalty',
+    'presence_penalty',
+    'stop',
+    'seed',
+    'user',
+    'metadata',
+    'service_tier',
+    'response_format',
+    'logit_bias',
+    // Token log probabilities are not restored by ChatSseTranslator yet; do not advertise
+    // request passthrough until the Responses response shape is implemented.
+  ],
   toolCallReasoningPlaceholder: true,
   forceAutoToolChoice: true,
 };
@@ -213,6 +479,22 @@ function isGoogleGeminiChatUpstream(upstream: string): boolean {
 }
 
 const MOONSHOT_CHAT_HOSTS = new Set(['api.moonshot.cn', 'api.moonshot.ai']);
+/** 火山方舟(豆包)官方 DNS 边界:ark.<region>.volces.com(如 ark.cn-beijing.volces.com)。 */
+const VOLCENGINE_ARK_CHAT_HOST_RE = /^ark\.[a-z0-9-]+\.volces\.com$/;
+/**
+ * 豆包 Seed 系列 model id 的版本前缀:doubao-seed-<major>-<minor>-…。
+ * 只放行 1.6 起的版本——Seed 品牌线从 1.6 开始原生多模态(官方 Chat Completions
+ * 支持 image_url);万一上游日后出现更低版本号的 seed 变体,不被顺带放行。
+ */
+const DOUBAO_SEED_VERSION_RE = /^doubao-seed-(\d+)-(\d+)(?:-|$)/;
+
+function isDoubaoVisionModel(model: string): boolean {
+  const m = DOUBAO_SEED_VERSION_RE.exec(model);
+  if (!m) return false;
+  const major = Number(m[1]);
+  const minor = Number(m[2]);
+  return major > 1 || (major === 1 && minor >= 6);
+}
 
 function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined): string {
   return stripPrefix && model.startsWith(stripPrefix)
@@ -221,28 +503,36 @@ function rewriteChatBridgeModel(model: string, stripPrefix: string | undefined):
 }
 
 /**
- * 图片桥接必须按已验证的上游能力显式开启。这里认官方 Moonshot DNS 边界 + Kimi K3
- * 上游 model，不认 provider id（预设创建后会生成用户自定义 id），也不对所有
- * openai-chat 供应商放开。未命中继续沿用 fail-closed 默认。
+ * 在模型级多模态能力元数据接入路由前,图片桥接先按已验证的上游能力显式开启。
+ * 这里认官方 DNS 边界 + 上游 model
+ * (Moonshot 的 Kimi K3、火山方舟的豆包 Seed 系列),不认 provider id(预设创建后
+ * 会生成用户自定义 id),也不对所有 openai-chat 供应商放开。未命中继续沿用
+ * fail-closed 默认——无图片能力的上游(如 DeepSeek)保持发送前显式报错,不静默吞图。
  */
 export function chatBridgeCapabilitiesForRoute(
   upstream: string,
   realModel: string,
   fallback: ChatBridgeCapabilities = CHAT_BRIDGE_DEFAULT_CAPABILITIES,
 ): ChatBridgeCapabilities {
-  if (realModel !== 'kimi-k3') return fallback;
-  try {
-    const url = new URL(upstream);
-    if (url.protocol !== 'https:' || !MOONSHOT_CHAT_HOSTS.has(url.hostname.toLowerCase())) {
-      return fallback;
-    }
-  } catch {
-    return fallback;
-  }
+  if (!isVerifiedImageChatRoute(upstream, realModel)) return fallback;
   return {
     ...fallback,
     imageInput: 'image_url',
   };
+}
+
+function isVerifiedImageChatRoute(upstream: string, realModel: string): boolean {
+  let url: URL;
+  try {
+    url = new URL(upstream);
+  } catch {
+    return false;
+  }
+  if (url.protocol !== 'https:') return false;
+  const host = url.hostname.toLowerCase();
+  if (realModel === 'kimi-k3') return MOONSHOT_CHAT_HOSTS.has(host);
+  if (isDoubaoVisionModel(realModel)) return VOLCENGINE_ARK_CHAT_HOST_RE.test(host);
+  return false;
 }
 
 /**
@@ -253,6 +543,7 @@ function createChatBridgeDecision(
   route: Awaited<ReturnType<typeof resolveSessionRoute>>,
   instructions: string | undefined,
   wireModel: string,
+  requestModelOverride?: string,
 ): RoutingDecision | null {
   if (!route || route.routing.wireProtocol !== 'openai-chat') return null;
   const { headers } = buildLocalHandlerHeaders(route, 'codex');
@@ -275,7 +566,7 @@ function createChatBridgeDecision(
         toolCallReasoningPlaceholder: false,
         forceAutoToolChoice: false,
         googleThoughtSignaturePlaceholder: true,
-      }
+    }
     : CHAT_BRIDGE_DEFAULT_CAPABILITIES;
   const capabilities = chatBridgeCapabilitiesForRoute(
     route.routing.upstream,
@@ -299,39 +590,370 @@ function createChatBridgeDecision(
   }, { logger: log, fetchImpl: outboundFetch });
   return {
     localHandler: ({ rawBody, parsedBody, res }) => {
-      let body = parsedBody;
-      const strippedBody = stripImageGenerationItemsWithoutIdFromBody(rawBody);
-      if (strippedBody) {
-        try {
-          body = JSON.parse(strippedBody.toString('utf8'));
-        } catch {
-          // Keep the already parsed body if the defensive strip result cannot be parsed.
-        }
-      }
-      if (instructions && isPlainObject(body)) {
-        const existing = typeof body.instructions === 'string' ? body.instructions : '';
-        body = {
-          ...body,
-          instructions: existing.includes(instructions)
-            ? existing
-            : [existing, instructions].filter(Boolean).join('\n\n'),
-        };
-      }
-      // localHandler 在 transform 链**之前**执行(引擎按路由决策短路),跨来源恢复的
-      // 加密压缩块不会被 createCrossProviderCompactionCompatTransform 处理;而 bridge
-      // 的翻译层遇到 compaction 项会按不支持的输入 400(Greptile P1 第二轮)。Chat
-      // bridge 目标上游定义上永远不是 ChatGPT,这里无条件做同一份替换。
-      const compactionSafe = replaceEncryptedCompactionItems(body);
-      if (compactionSafe) {
-        log.info('replaced encrypted compaction history for chat-bridge upstream', {
-          providerId,
-          upstreamBase: route.routing.upstream,
-        });
-        body = compactionSafe;
-      }
+      const body = prepareLocalBridgeBody({
+        rawBody,
+        parsedBody,
+        instructions,
+        requestModelOverride,
+        bridge: 'chat',
+        providerId,
+        upstreamBase: route.routing.upstream,
+      });
       return handler.handle({ parsedBody: body, res });
     },
   };
+}
+
+interface PrepareLocalBridgeBodyOptions {
+  rawBody: Buffer;
+  parsedBody: unknown;
+  instructions?: string;
+  requestModelOverride?: string;
+  bridge: 'chat' | 'anthropic';
+  providerId: string;
+  upstreamBase: string;
+}
+
+/**
+ * localHandler runs before the shared request transform chain. Keep the preprocessing
+ * needed by every Responses bridge in one place so adding another wire adapter cannot
+ * accidentally lose product instructions or cross-provider compaction recovery.
+ */
+function prepareLocalBridgeBody(opts: PrepareLocalBridgeBodyOptions): unknown {
+  let body = opts.parsedBody;
+  const strippedBody = stripImageGenerationItemsWithoutIdFromBody(opts.rawBody);
+  if (strippedBody) {
+    try {
+      body = JSON.parse(strippedBody.toString('utf8'));
+    } catch {
+      // Keep the already parsed body if the defensive strip result cannot be parsed.
+    }
+  }
+  if (opts.requestModelOverride && isPlainObject(body)) {
+    body = stripGuardianProviderSearchTools({
+      ...body,
+      model: opts.requestModelOverride,
+    });
+  }
+  if (opts.instructions && isPlainObject(body)) {
+    const existing = body.instructions;
+    const existingText = Array.isArray(existing)
+      ? existing.map((part) => {
+        if (!isPlainObject(part) || typeof part.type !== 'string') return '';
+        if (
+          (part.type === 'input_text' || part.type === 'output_text' || part.type === 'text')
+          && typeof part.text === 'string'
+        ) {
+          return part.text;
+        }
+        if (part.type === 'refusal' && typeof part.refusal === 'string') return part.refusal;
+        return '';
+      }).join('')
+      : typeof existing === 'string'
+        ? existing
+        : '';
+    body = {
+      ...body,
+      instructions: existingText.includes(opts.instructions)
+        ? existing
+        : Array.isArray(existing)
+          ? [...existing, { type: 'input_text', text: `\n\n${opts.instructions}` }]
+          : [existingText, opts.instructions].filter(Boolean).join('\n\n'),
+    };
+  }
+  const compactionSafe = replaceEncryptedCompactionItems(body);
+  if (compactionSafe) {
+    log.info('replaced encrypted compaction history for local bridge upstream', {
+      bridge: opts.bridge,
+      providerId: opts.providerId,
+      upstreamBase: opts.upstreamBase,
+    });
+    body = compactionSafe;
+  }
+  return body;
+}
+
+function rewriteAnthropicBridgeModel(model: string, stripPrefix: string | undefined): string {
+  const stripped = stripPrefix && model.startsWith(stripPrefix) ? model.slice(stripPrefix.length) : model;
+  return stripped.replace(/\[1m\]$/, '');
+}
+
+function isOfficialAnthropicUpstream(value: string): boolean {
+  try {
+    return new URL(value).hostname.toLowerCase() === 'api.anthropic.com';
+  } catch {
+    return false;
+  }
+}
+
+function anthropicBridgeUpstreamBase(
+  route: NonNullable<Awaited<ReturnType<typeof resolveSessionRoute>>>,
+): string {
+  const isXdGatewayBridge =
+    route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
+  return isXdGatewayBridge
+    ? claudeUpstreamEndpoint().trim()
+    : route.routing.upstream;
+}
+
+function appendCommaSeparatedHeaderToken(
+  headers: Record<string, string>,
+  name: string,
+  token: string,
+): void {
+  const existingName = Object.keys(headers).find((candidate) => (
+    candidate.toLowerCase() === name.toLowerCase()
+  ));
+  const existing = existingName ? headers[existingName] : '';
+  const values = existing
+    .split(',')
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (!values.includes(token)) values.push(token);
+  if (existingName && existingName !== name) delete headers[existingName];
+  headers[name] = values.join(',');
+}
+
+function claudeCodeSessionId(token: string): string {
+  const hash = createHash('sha256')
+    .update(`claude-code-session:${token}`, 'utf8')
+    .digest('hex');
+  const variant = ((Number.parseInt(hash[16], 16) & 0x3) | 0x8).toString(16);
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-4${hash.slice(13, 16)}-${variant}${hash.slice(17, 20)}-${hash.slice(20, 32)}`;
+}
+
+function claudeOAuthHeaders(
+  base: Record<string, string>,
+  token: string,
+): Record<string, string> {
+  return {
+    ...base,
+    authorization: `Bearer ${token}`,
+    'anthropic-beta': 'claude-code-20250219,oauth-2025-04-20',
+    'user-agent': '@anthropic-ai/sdk/0.74.0',
+    'x-app': 'cli',
+    'x-stainless-retry-count': '0',
+    'x-stainless-runtime': 'node',
+    'x-stainless-lang': 'js',
+    'x-stainless-timeout': '600',
+    'x-stainless-arch': process.arch,
+    'x-stainless-os': process.platform,
+    'x-stainless-package-version': '0.74.0',
+    'x-stainless-runtime-version': process.version.slice(1),
+    'x-claude-code-session-id': claudeCodeSessionId(token),
+    'x-client-request-id': randomUUID(),
+  };
+}
+
+/**
+ * Responses → Anthropic Messages local bridge. The bridge owns both request and
+ * response translation; this host layer only resolves the selected provider, supplies
+ * provider-owned credentials, and restores preprocessing skipped by localHandler.
+ */
+function createAnthropicBridgeDecision(
+  route: Awaited<ReturnType<typeof resolveSessionRoute>>,
+  instructions: string | undefined,
+  wireModel: string,
+  requestModelOverride?: string,
+): RoutingDecision | null {
+  if (!route || route.routing.wireProtocol !== 'anthropic-messages') return null;
+  const isXdGatewayBridge =
+    route.providerId === 'xd' && route.routing.authStrategy === 'gateway-key';
+  const gatewayKey = isXdGatewayBridge ? _readGatewayKey() : null;
+  const upstreamBase = anthropicBridgeUpstreamBase(route);
+  if (isXdGatewayBridge && (!gatewayKey || !upstreamBase)) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(503, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'authentication_error',
+            code: 'cindy_gateway_credentials_unavailable',
+            message: 'Cindy AI credentials are not ready for this bridged model.',
+          },
+        }));
+      },
+    };
+  }
+  // For Codex, provider-oauth-header is the subscription-safe route: the host
+  // injects the Claude.ai token and never forwards the Codex/OpenAI bearer.
+  if (
+    route.providerId === 'anthropic'
+    && route.providerSource === 'builtin'
+    && route.routing.authStrategy === 'provider-oauth-header'
+    && !route.oauthToken
+  ) {
+    return {
+      localHandler: async ({ res }) => {
+        res.writeHead(401, {
+          'content-type': 'application/json; charset=utf-8',
+          'cache-control': 'no-store',
+        });
+        res.end(JSON.stringify({
+          error: {
+            type: 'authentication_error',
+            code: 'anthropic_subscription_auth_required',
+            message: 'Connect a Claude.ai subscription before using Anthropic models in Codex.',
+          },
+        }));
+      },
+    };
+  }
+  const usesProviderOAuth = route.routing.authStrategy === 'provider-oauth-header';
+  const isAnthropicSubscriptionOAuth =
+    usesProviderOAuth
+    && route.providerId === 'anthropic'
+    && route.providerSource === 'builtin';
+  const buildProviderHeaders = (token: string | null): Record<string, string> => {
+    const { headers: baseHeaders } = buildLocalHandlerHeaders(
+      token === route.oauthToken ? route : { ...route, oauthToken: token },
+      'codex',
+    );
+    let headers = { ...baseHeaders };
+    if (isAnthropicSubscriptionOAuth) {
+      if (token) headers = claudeOAuthHeaders(headers, token);
+    } else if (route.routing.authStrategy === 'api-key-header') {
+      if (route.apiKey) {
+        headers['x-api-key'] = route.apiKey;
+      } else if (!headerValue(headers, 'x-api-key')) {
+        headers['x-api-key'] = 'cindy-missing-custom-provider-api-key';
+      }
+    } else if (isXdGatewayBridge && gatewayKey) {
+      // 上游 wire 是 Anthropic Messages，复用 Claude Code 的网关鉴权形态；同时覆盖
+      // Authorization，确保 Codex/ChatGPT bearer 永远不会离开本机。
+      headers['x-api-key'] = gatewayKey;
+      headers.authorization = `Bearer ${gatewayKey}`;
+    } else if (route.routing.authStrategy === 'none') {
+      delete headers.authorization;
+      delete headers['x-api-key'];
+    }
+    const catalogContextWindow = getCatalogModelContextWindow(
+      providerId,
+      'codex',
+      wireModel,
+      stripPrefix,
+    );
+    if (
+      wireModel.endsWith('[1m]')
+      || (
+        isOfficialAnthropicUpstream(upstreamBase)
+        && catalogContextWindow !== null
+        && catalogContextWindow >= 1_000_000
+      )
+    ) {
+      appendCommaSeparatedHeaderToken(
+        headers,
+        'anthropic-beta',
+        'context-1m-2025-08-07',
+      );
+    }
+    return headers;
+  };
+  const providerId = route.providerId;
+  const providerName = getActiveCatalog().providers.find((p) => p.id === providerId)?.name ?? providerId;
+  const stripPrefix = route.routing.modelIdRewrite?.stripPrefix;
+  const supportsPromptCaching =
+    isXdGatewayBridge || isOfficialAnthropicUpstream(upstreamBase);
+  const onUpstreamError = route.providerSource === 'user'
+    ? ({ status, body }: { status: number; body: string }): void => {
+        reportProviderUpstreamError({ agent: 'codex', providerId, providerName, status, bodyText: body });
+      }
+    : undefined;
+  const handler = createResponsesAnthropicHandler({
+    upstreamBase,
+    ...(route.routing.requestPath ? { requestPath: route.routing.requestPath } : {}),
+    authMode: isAnthropicSubscriptionOAuth ? 'oauth' : 'api-key',
+    buildHeaders: async () => buildProviderHeaders(route.oauthToken),
+    ...(usesProviderOAuth
+      ? {
+          refreshHeaders: async ({
+            requestHeaders,
+          }: {
+            status: 401 | 403;
+            body: string;
+            requestHeaders: Readonly<Record<string, string>>;
+          }) => {
+            const authorization = headerValue(requestHeaders, 'authorization');
+            const staleToken = authorization?.replace(/^Bearer\s+/i, '');
+            const token = await readProviderOAuthToken(providerId, 'codex', {
+              forceRefresh: true,
+              ...(staleToken ? { staleToken } : {}),
+            });
+            return token ? buildProviderHeaders(token) : null;
+          },
+        }
+      : {}),
+    rewriteModel: (model) => rewriteAnthropicBridgeModel(model, stripPrefix),
+    promptCaching: supportsPromptCaching,
+    automaticPromptCaching: isOfficialAnthropicUpstream(upstreamBase),
+    strictTools: isOfficialAnthropicUpstream(upstreamBase),
+    supportsThinking: isOfficialAnthropicUpstream(upstreamBase) || isXdGatewayBridge
+      ? undefined
+      : () => false,
+    supportsAdaptiveThinking: isOfficialAnthropicUpstream(upstreamBase) || isXdGatewayBridge
+      ? undefined
+      : () => false,
+    imageCodec: desktopAnthropicImageCodec,
+    ...(onUpstreamError ? { onUpstreamError } : {}),
+  }, {
+    logger: log,
+    fetchImpl: outboundFetch,
+  });
+  return {
+    localHandler: ({ rawBody, parsedBody, ctx, res }) => {
+      const body = prepareLocalBridgeBody({
+        rawBody,
+        parsedBody,
+        instructions,
+        requestModelOverride,
+        bridge: 'anthropic',
+        providerId,
+        upstreamBase,
+      });
+      return handler.handle({ parsedBody: body, ctx, res });
+    },
+  };
+}
+
+function createLocalBridgeDecision(
+  route: Awaited<ReturnType<typeof resolveSessionRoute>>,
+  instructions: string | undefined,
+  wireModel: string,
+  requestModelOverride: string | undefined,
+  threadId: string,
+): RoutingDecision | null {
+  if (!route) return null;
+  if (route.routing.wireProtocol === 'openai-chat') {
+    const decision = createChatBridgeDecision(
+      route,
+      instructions,
+      wireModel,
+      requestModelOverride,
+    );
+    if (decision) {
+      recordCodexThreadUpstreamForDiagnostics(threadId, route.routing.upstream);
+    }
+    return decision;
+  }
+  if (route.routing.wireProtocol === 'anthropic-messages') {
+    const decision = createAnthropicBridgeDecision(
+      route,
+      instructions,
+      wireModel,
+      requestModelOverride,
+    );
+    if (decision) {
+      recordCodexThreadUpstreamForDiagnostics(
+        threadId,
+        anthropicBridgeUpstreamBase(route),
+      );
+    }
+    return decision;
+  }
+  return null;
 }
 
 function moveInstructionsIntoInput(body: Record<string, unknown>): Record<string, unknown> | null {
@@ -695,7 +1317,35 @@ function ensureXaiServerSideTools(body: Record<string, unknown>): Record<string,
  * is rejected as an unknown field.
  */
 function isByteDanceSeedModel(model: unknown): boolean {
-  return typeof model === 'string' && model.startsWith('bytedance-seed/');
+  return typeof model === 'string' && (
+    model.startsWith('bytedance-seed/') ||
+    model.startsWith('doubao-seed-')
+  );
+}
+
+function isVolcengineArkResponsesRouting(ctx: RequestTransformCtx, model: unknown): boolean {
+  if (typeof model !== 'string' || model.length === 0) return false;
+  const sessionId = sessionIdFromTransformCtx(ctx);
+  if (!sessionId) return false;
+  const routing = getSessionRoutingDescriptor(sessionId, 'codex', model);
+  if (!routing || (routing.wireProtocol ?? 'openai-responses') !== 'openai-responses') return false;
+
+  try {
+    const url = new URL(routing.upstream);
+    return url.protocol === 'https:' && VOLCENGINE_ARK_CHAT_HOST_RE.test(url.hostname.toLowerCase());
+  } catch {
+    return false;
+  }
+}
+
+function isByteDanceSeedRequest(
+  body: Record<string, unknown>,
+  ctx: RequestTransformCtx,
+): boolean {
+  // The catalog model uses a provider namespace, while Volcengine's native
+  // model IDs use doubao-seed-* and user-defined aliases may use neither.
+  // The selected official Ark Responses route is the authoritative fallback.
+  return isByteDanceSeedModel(body.model) || isVolcengineArkResponsesRouting(ctx, body.model);
 }
 
 function seedToolChoiceReferencesRemovedTool(
@@ -712,7 +1362,7 @@ function seedToolChoiceReferencesRemovedTool(
 }
 
 function sanitizeByteDanceSeedTools(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.tools)) return null;
+  if (!Array.isArray(body.tools)) return null;
 
   let changed = false;
   const tools: Record<string, unknown>[] = [];
@@ -785,7 +1435,7 @@ function stripEmptyResponseMessage(item: unknown): { item: unknown; changed: boo
 
 /** Volcengine requires replayed assistant messages to carry their output status and non-empty text. */
 function normalizeByteDanceSeedInput(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !Array.isArray(body.input)) return null;
+  if (!Array.isArray(body.input)) return null;
 
   let changed = false;
   const input: unknown[] = [];
@@ -914,7 +1564,7 @@ function createStrictGatewayHistoryCompatTransform(): RequestTransform {
 
 /** Seed accepts the reasoning effort, but rejects Responses' summary selector. */
 function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<string, unknown> | null {
-  if (!isByteDanceSeedModel(body.model) || !isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
+  if (!isPlainObject(body.reasoning) || !('summary' in body.reasoning)) {
     return null;
   }
 
@@ -928,8 +1578,9 @@ function sanitizeByteDanceSeedReasoning(body: Record<string, unknown>): Record<s
 }
 
 function createByteDanceSeedResponsesCompatTransform(): RequestTransform {
-  return (body) => {
+  return (body, ctx) => {
     if (!isPlainObject(body)) return null;
+    if (!isByteDanceSeedRequest(body, ctx)) return null;
     let changed = false;
     let current = body;
     const withSanitizedTools = sanitizeByteDanceSeedTools(current);
@@ -977,10 +1628,14 @@ function createXaiResponsesCompatTransform(): RequestTransform {
 
     // 补服务端工具排在 sanitize 之后:先按 xAI schema 清掉 Codex 专属工具,再追加 x_search,
     // 保证注入项不会被同一轮的裁剪逻辑改形或丢掉。
-    const withServerSideTools = ensureXaiServerSideTools(current);
-    if (withServerSideTools) {
-      current = withServerSideTools;
-      changed = true;
+    // Guardian must retain xAI's schema/input compatibility, but it must not
+    // gain provider-hosted search tools while reviewing another action.
+    if (!guardianParentThreadIdFromHeaders(ctx.headers)) {
+      const withServerSideTools = ensureXaiServerSideTools(current);
+      if (withServerSideTools) {
+        current = withServerSideTools;
+        changed = true;
+      }
     }
 
     const withoutUnsupportedReasoning = stripUnsupportedXaiReasoning(current);
@@ -1173,7 +1828,7 @@ function logProviderServiceTier(ctx: ResponseObserverCtx, body: Record<string, u
   const request = readRequestMeta(ctx.requestBody);
   const upstream = readProviderResponseMeta(body);
   const threadId = selectedThreadIdFromObserver(ctx);
-  const sessionId = threadToSession.get(threadId) ?? null;
+  const sessionId = sessionIdFromHeaders(ctx.requestHeaders) ?? null;
   log.info('codex provider service tier observed', {
     reqId: ctx.reqId,
     threadId,
@@ -1343,15 +1998,31 @@ export function decideCodexRoute(opts: {
   return { upstreamOverride: CODEX_OAUTH_UPSTREAM };
 }
 
-export function createModelRoutingTransform(): RoutingTransform {
+export function createModelRoutingTransform(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RoutingTransform {
   return (body, ctx) => {
     // body 可能为 undefined —— 无 body 的 GET(典型: codex models-manager 的 `GET /models` 轮询,
     // 引擎现在也会对它跑路由)。不再因 body 非对象就短路;会话解析只依赖 headers,model 字段可选。
-    const model = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
     const gatewayKey = _readGatewayKey();
-    const authInjection = getCodexProxyAuthInjection();
+    const authInjection = frozenAuthInjection ?? getCodexProxyAuthInjection();
+    const requestModel = isPlainObject(body) && typeof body.model === 'string' ? body.model : '';
+    const model =
+      providerAwareGuardianReviewerModel(body, ctx.headers, authInjection) ??
+      requestModel;
     const threadId = selectedThreadIdFromHeaders(ctx.headers);
-    const sessionId = threadId ? threadToSession.get(threadId) : undefined;
+    const sessionId = sessionIdFromHeaders(ctx.headers);
+    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    const selectedRouting = sessionId
+      ? getSessionRoutingDescriptor(sessionId, 'codex', model || undefined)
+      : null;
+    const selectedUsesLocalBridge =
+      ctx.method === 'POST'
+      && Boolean(model)
+      && (
+        selectedRouting?.wireProtocol === 'openai-chat'
+        || selectedRouting?.wireProtocol === 'anthropic-messages'
+      );
 
     // ① 该会话显式选了供应商 → 据 catalog 统一路由。thread-id header → threadToSession 反解 xdt sessionId。
     //    oauth-bearer 态全量适用;env-key 态默认全量走网关、per-session 无意义(与 decideCodexRoute 的
@@ -1361,16 +2032,19 @@ export function createModelRoutingTransform(): RoutingTransform {
     if (sessionId && (
       authInjection === 'oauth-bearer' ||
       isUserProviderSession(sessionId) ||
-      isHostInjectedAuthSession(sessionId, 'codex')
+      isHostInjectedAuthSession(sessionId, 'codex') ||
+      selectedUsesLocalBridge
     )) {
-      const selectedRouting = getSessionRoutingDescriptor(sessionId, 'codex', model || undefined);
-      if (selectedRouting?.wireProtocol === 'openai-chat' && ctx.method === 'POST' && model) {
-        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) =>
-          createChatBridgeDecision(
+      if (selectedUsesLocalBridge && model) {
+        return resolveSessionRoute(sessionId, 'codex', model).then((localRoute) => {
+          return createLocalBridgeDecision(
             localRoute,
             threadId ? registry.get(threadId) : undefined,
             model,
-          ));
+            model !== requestModel ? model : undefined,
+            threadId,
+          );
+        });
       }
       // model 传给 scope 门(空串 = 控制面 GET,不受范围限制);声明了 modelPrefixes 的
       // 供应商(如 xai)只捕获自家命名空间的请求,其余回落默认路由。
@@ -1387,11 +2061,31 @@ export function createModelRoutingTransform(): RoutingTransform {
       }
     }
 
-    // ①.5 隐式来源(providerId/sessionProvider=null)但 model 自带唯一供应商命名空间。
-    // 典型:xai/grok-* 来自默认/调度/IM 路径时不写 sessionProvider,但仍必须走 api.x.ai
-    // + SuperGrok OAuth + modelIdRewrite,不能掉到 Codex 默认 ChatGPT/XD 分支。
-    const explicitProviderId = sessionId ? getSessionProvider(sessionId) : null;
+    // ①.5 隐式来源(providerId/sessionProvider=null):
+    //   - Chat / Anthropic Messages wire 按模型选择器相同的默认来源进入本地 bridge;
+    //   - xai/grok-* 等唯一 provider-oauth 来源仍注入对应 OAuth 并透明转发。
+    // 两者都必须先于 Codex 默认 ChatGPT/XD 分支，避免协议或凭证落错上游。
     if (!explicitProviderId && model) {
+      if (sessionId && ctx.method === 'POST') {
+        return resolveImplicitLocalBridgeRoute(model, 'codex').then((localRoute) => {
+          if (localRoute) {
+            return createLocalBridgeDecision(
+              localRoute,
+              threadId ? registry.get(threadId) : undefined,
+              model,
+              model !== requestModel ? model : undefined,
+              threadId,
+            );
+          }
+          const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
+            model,
+            'codex',
+            gatewayKey,
+          );
+          if (implicitProviderOAuth) return implicitProviderOAuth;
+          return decideCodexRoute({ model, authInjection, gatewayKey });
+        });
+      }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;
     }
@@ -1422,7 +2116,9 @@ export function createModelRoutingTransform(): RoutingTransform {
   };
 }
 
-function createTransformRequestChain(): RequestTransform[] {
+function createTransformRequestChain(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): RequestTransform[] {
   const transforms: RequestTransform[] = [
     createActiveStripTransform({
       controller: encryptedStripController,
@@ -1435,6 +2131,11 @@ function createTransformRequestChain(): RequestTransform[] {
       strip: stripImageGenerationItemsWithoutIdFromBody,
     }),
     createCodexTransform(),
+    // Guardian uses an isolated child thread. Resolve its parent business
+    // session and select that session's real provider model before provider
+    // compatibility transforms inspect the request.
+    createProviderAwareGuardianReviewerTransform(frozenAuthInjection),
+    createGatewayNativeWebSearchTransform(),
     // 必须先于 xAI/MiniMax 兼容改写:加密压缩块换成明文占位 message 后,后续
     // 针对具体供应商的 input 归一化才能按标准 message 处理它。
     createCrossProviderCompactionCompatTransform(),
@@ -1452,6 +2153,163 @@ function createTransformRequestChain(): RequestTransform[] {
 }
 
 /**
+ * threadId → 该 thread 最近一次转发的**实际出口 origin**。
+ *
+ * 「后端不可达」诊断要报的出站路径必须属于这次失败的请求。resolver 侧的快照按上游
+ * origin 分桶,但光有 origin 不够:codex 的出口随会话选定的 provider 变(订阅直连
+ * ChatGPT、网关、xAI、自定义供应商),多会话并发时「按时间戳挑最新」只是猜测,可能
+ * 把另一个会话的判定报到本次故障上。这里在转发前记下每个 thread 的实际出口,诊断按
+ * threadId 精确取。
+ *
+ * 记录点选在 routingTransform 外层而非 responseObserver:observer 要等响应回来才跑,
+ * 而上游不可达时压根没有响应 —— 那恰恰是诊断最需要它的时刻。
+ *
+ * 另一个副产品:只有请求**真的经过本 loopback proxy** 时才会有记录。gateway-key
+ * fallback 下 codexProxyActive=false、codex 直连 gateway,这个 transform 不跑,于是
+ * 查不到映射、诊断退回通用文案 —— 而不是报一条本次根本没走过的陈旧路径。
+ */
+const codexThreadUpstreamOrigin = new Map<string, string>();
+const CODEX_THREAD_UPSTREAM_MAX_ENTRIES = 256;
+
+/**
+ * 记录 thread 的出口 origin。两个调用点共用(routingTransform 包装层与 chat bridge
+ * 分支),守卫集中在这里 —— 分散写必然有一处漏掉 'unknown' 排除或漏掉 try/catch。
+ *
+ * `selectedThreadIdFromHeaders` 对无 thread 的请求(典型: models-manager 的
+ * `GET /models` 轮询)回落到字面量 'unknown';那不是一个 thread,记进去只会污染桶,
+ * 而诊断永远是用真实 threadId 来查的。
+ *
+ * 任何异常一律吞掉:这是诊断旁路,绝不能反过来影响转发。
+ */
+function recordCodexThreadUpstreamForDiagnostics(
+  threadId: string | undefined,
+  upstream: string,
+): void {
+  try {
+    if (!threadId || threadId === 'unknown') return;
+    const origin = new URL(upstream).origin;
+    if (
+      codexThreadUpstreamOrigin.size >= CODEX_THREAD_UPSTREAM_MAX_ENTRIES
+      && !codexThreadUpstreamOrigin.has(threadId)
+    ) {
+      codexThreadUpstreamOrigin.clear();
+    }
+    codexThreadUpstreamOrigin.set(threadId, origin);
+  } catch {
+    // 上游串解析不出 origin(或其它意外)→ 不记,转发照常。
+  }
+}
+
+/** 诊断用:该 thread 最近一次转发的实际出口 origin;没有记录过 → null。 */
+export function getCodexThreadUpstreamOrigin(threadId: string): string | null {
+  return codexThreadUpstreamOrigin.get(threadId) ?? null;
+}
+
+/** @internal 单测用。 */
+export function resetCodexThreadUpstreamForTest(): void {
+  codexThreadUpstreamOrigin.clear();
+}
+
+/**
+ * 给 routingTransform 包一层「记录本次实际出口」。刻意包在外层而不是往
+ * createModelRoutingTransform 内部逐分支补:那里有六个以上 return(含一个返回
+ * Promise 的 chat-bridge 分支),逐个补必漏。
+ *
+ * 记录异常一律吞掉 —— 这是诊断旁路,绝不能反过来影响转发。
+ */
+export function withCodexUpstreamRecording(
+  inner: RoutingTransform,
+  defaultUpstream: () => string,
+): RoutingTransform {
+  return (body, ctx) => {
+    const result = inner(body, ctx);
+    const record = (decision: RoutingDecision | null): RoutingDecision | null => {
+      try {
+        // localHandler 的上游在这一层**看不见**(它由产生 decision 的分支自己持有),
+        // 所以这里跳过,由那些分支自行记录 —— chat bridge 就在它的 .then 里记了。
+        // 注意:localHandler 不代表「不出网」(chat bridge 自己用 outboundFetch 打
+        // route.routing.upstream),只代表「不走 compat-proxy 的转发层」。
+        if (!decision?.localHandler) {
+          recordCodexThreadUpstreamForDiagnostics(
+            selectedThreadIdFromHeaders(ctx.headers),
+            decision?.upstreamOverride ?? defaultUpstream(),
+          );
+        }
+      } catch {
+        // 诊断旁路:记录失败就不记,转发照常。
+      }
+      return decision;
+    };
+    return result instanceof Promise ? result.then(record) : record(result);
+  };
+}
+
+function createCodexProxyHandle(
+  frozenAuthInjection?: CodexProxyAuthInjection,
+): Promise<ProxyHandle> {
+  return createAnthropicCompatProxy({
+    // 默认上游 = gateway(含 /v1)；普通模型 + oauth 由 routingTransform 覆盖到 ChatGPT。
+    upstream: () => buildCodexGatewayBaseUrl(),
+    transformRequest: createTransformRequestChain(frozenAuthInjection),
+    // 常规 session proxy 继续读取当前全局 spawn 形态；control-plane proxy 在创建时
+    // 冻结自己的形态，两个 app-server 并行时不会互相改写路由。
+    routingTransform: withCodexUpstreamRecording(
+      createModelRoutingTransform(frozenAuthInjection),
+      () => buildCodexGatewayBaseUrl(),
+    ),
+    responseObserver: composeResponseObservers(
+      createCodexResponseObserver(),
+      createProviderUpstreamErrorObserver({
+        agent: 'codex',
+        resolveUserProviderId: (requestHeaders) => {
+          const sessionId = sessionIdFromHeaders(requestHeaders);
+          return sessionId ? getUserProviderIdForSession(sessionId) : null;
+        },
+        resolveUserProviderName: (providerId) =>
+          getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
+      }),
+      createXaiProxyAuthInvalidationObserver(),
+    ),
+    maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
+    debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
+    recoveryRules: [...CODEX_BODY_RECOVERY_RULES],
+    logger: log,
+    resolveOutboundProxy: resolveDesktopOutboundProxy,
+    /**
+     * WS upgrade 的上游固定为 ChatGPT 订阅后端。
+     *
+     * 为什么可以固定: 只有订阅直连 provider(CODEX_OPENAI_COMPACT_PROVIDER_ID)打开了
+     * supports_websockets, 网关 / xAI / 自定义供应商一律保持 false 且永不发出 upgrade
+     * 请求 —— 所以任何进到这里的 upgrade 必然属于订阅直连路由, 上游是确定的, 不需要
+     * 像 HTTP 路径那样按 model 推导(upgrade 也没有 body 可供推导)。
+     *
+     * 非 oauth-bearer 态返回 null → proxy 回 426 → codex 退回 HTTP transport:
+     * 该 provider 只在 oauth spawn 时定义(见 buildCodexProxySpawnArgs), env-key /
+     * provider-oauth 进程本不该有 upgrade 进来; 真收到就让它降级, 而不是拿一个凭据
+     * 形态不匹配的连接去打订阅后端。
+     *
+     * WS 内首次命中 body recovery 错误后，maker-core 调 armCodexHttpRecovery 登记
+     * thread；下一次 upgrade 在这里回 426，Codex 原生 transport 按 session 级稳定
+     * 降到 HTTP，再由上面的 recoveryRules 清理并透明重试。没有实际命中过错误的
+     * thread 不预扫描、不降级，继续保留原生 WS 容量体验。
+     */
+    resolveWebSocketUpstream: ({ headers }) => {
+      if ((frozenAuthInjection ?? getCodexProxyAuthInjection()) !== 'oauth-bearer') return null;
+      const threadId = selectedThreadIdFromHeaders(headers);
+      const recoveryReason = httpRecoveryReasonByThread.get(threadId);
+      if (recoveryReason) {
+        log.info('codex websocket declined for HTTP body recovery', {
+          threadId,
+          reason: recoveryReason,
+        });
+        return null;
+      }
+      return CODEX_OAUTH_UPSTREAM;
+    },
+  });
+}
+
+/**
  * 启动本地 Codex prompt proxy。幂等 —— 重复调用直接返回已缓存状态。
  *
  * `_startPromise` 去重并发启动;`_handle` 为空时 getCodexProxyEndpoint()
@@ -1464,51 +2322,7 @@ export async function ensureCodexProxyReady(): Promise<void> {
   const generation = _disposeGeneration;
   _startPromise = (async () => {
     try {
-      const handle = await createAnthropicCompatProxy({
-        // 默认上游 = gateway(含 /v1); 「普通模型 + oauth」由 routingTransform override 到 ChatGPT。
-        // 函数形态:model-access 下发切换网关 endpoint 后,常驻 proxy 每请求现取(按值 memoize)。
-        upstream: () => buildCodexGatewayBaseUrl(),
-        transformRequest: createTransformRequestChain(),
-        routingTransform: createModelRoutingTransform(),
-        // 组合三个只读观察器:service-tier 抽取 + 自定义供应商上游错误分类广播 + xAI 凭证
-        // 失效收口(后两者分别仅在 status≥400 路由到 user 供应商、401/403 且上游为 api.x.ai
-        // 时才 tee,成功路径零开销)。
-        responseObserver: composeResponseObservers(
-          createCodexResponseObserver(),
-          createProviderUpstreamErrorObserver({
-            agent: 'codex',
-            resolveUserProviderId: (requestHeaders) => {
-              const threadId = selectedThreadIdFromHeaders(requestHeaders);
-              const sessionId = threadId ? threadToSession.get(threadId) : undefined;
-              return sessionId ? getUserProviderIdForSession(sessionId) : null;
-            },
-            resolveUserProviderName: (providerId) =>
-              getActiveCatalog().providers.find((provider) => provider.id === providerId)?.name ?? null,
-          }),
-          // xai 是 builtin 来源,上面那个 observer 的 user-only 语义覆盖不到它;订阅 OAuth
-          // 被上游作废后必须有人收口,否则 codex agent 下会连环 403 而 UI 仍显示已连接。
-          createXaiProxyAuthInvalidationObserver(),
-        ),
-        maxRequestBodyBytes: CODEX_PROXY_MAX_REQUEST_BODY_BYTES,
-        // 请求体 dump 默认关(dev trace 级别 + agent 高并发会刷爆 main event loop
-        // 与日志盘);诊断请求体时设 XDT_PROXY_DUMP_REQUEST_BODY=1 显式开启。
-        debugDumpRequestBody: process.env.XDT_PROXY_DUMP_REQUEST_BODY === '1',
-        // Codex 走 OpenAI Responses API, 从不打 Anthropic Messages API, 不会出现空 thinking 块 400
-        // → 挂 Responses 专属恢复规则, 不挂 thinking 规则。
-        recoveryRules: [
-          createEncryptedContentRecoveryRule({
-            enabled: () => readSilentEncryptedRetrySettings().enabled,
-            onRetry: (threadId, model) => encryptedStripController.markActive(threadId, model),
-          }),
-          createImageGenerationIdRecoveryRule({
-            onRetry: (threadId, model) => imageGenerationStripController.markActive(threadId, model),
-          }),
-        ],
-        logger: log,
-        // 上游连接跟随代理环境变量 / 系统代理(非 TUN 的代理软件场景);无代理配置时直连,
-        // 行为与之前字节级一致。见 outbound-proxy-resolver.ts。
-        resolveOutboundProxy: resolveDesktopOutboundProxy,
-      });
+      const handle = await createCodexProxyHandle();
       if (generation !== _disposeGeneration) {
         await handle.dispose().catch((err) => {
           log.warn('codex proxy start raced with dispose; disposing fresh handle failed', {
@@ -1533,6 +2347,72 @@ export async function ensureCodexProxyReady(): Promise<void> {
 }
 
 /**
+ * 为一次独立 control-plane app-server 提供冻结鉴权形态的专用 proxy。
+ * 它不读取也不改写 session host 的全局 auth injection；同形态可安全复用同一端口。
+ */
+export async function ensureCodexControlPlaneProxyReady(
+  authInjection: CodexProxyAuthInjection,
+): Promise<void> {
+  if (_controlPlaneHandles.has(authInjection)) return;
+  const existing = _controlPlaneStartPromises.get(authInjection);
+  if (existing) return existing;
+
+  const generation = _disposeGeneration;
+  let start!: Promise<void>;
+  start = (async () => {
+    try {
+      const handle = await createCodexProxyHandle(authInjection);
+      if (generation !== _disposeGeneration) {
+        await handle.dispose().catch((err) => {
+          log.warn('codex control-plane proxy start raced with dispose', {
+            authInjection,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        });
+        return;
+      }
+      _controlPlaneHandles.set(authInjection, handle);
+      log.info('codex control-plane proxy ready', {
+        authInjection,
+        url: handle.url,
+        upstream: buildCodexGatewayBaseUrl(),
+      });
+    } catch (err) {
+      _controlPlaneHandles.delete(authInjection);
+      log.error('codex control-plane proxy failed to start', {
+        authInjection,
+        err: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      if (_controlPlaneStartPromises.get(authInjection) === start) {
+        _controlPlaneStartPromises.delete(authInjection);
+      }
+    }
+  })();
+  _controlPlaneStartPromises.set(authInjection, start);
+  return start;
+}
+
+export function isCodexControlPlaneProxyHandleReady(
+  authInjection: CodexProxyAuthInjection,
+): boolean {
+  return _controlPlaneHandles.has(authInjection);
+}
+
+export function getCodexControlPlaneProxyEndpoint(
+  authInjection: CodexProxyAuthInjection,
+): string {
+  const handle = _controlPlaneHandles.get(authInjection);
+  if (handle) return handle.url;
+  const fallbackEndpoint = buildCodexGatewayBaseUrl();
+  log.warn('codex control-plane proxy not ready, falling back to direct gateway', {
+    authInjection,
+    fallbackEndpoint,
+  });
+  return fallbackEndpoint;
+}
+
+/**
  * 给 Codex app-server 用的 provider base_url —— 永远是 loopback proxy 的 root。
  *
  * codex 向 `${base_url}/responses` 发请求 → proxy 收 `/responses`。proxy 默认上游
@@ -1553,19 +2433,7 @@ export function getCodexProxyEndpoint(): string {
  * 这是同步内存 Map 写入,不做 IO / 网络,调用方可以把它当成不可失败的强时序步骤。
  */
 export function registerComposed(sessionId: string, threadId: string, text: string): void {
-  const previousThreadId = sessionToThread.get(sessionId);
-  if (previousThreadId && previousThreadId !== threadId) {
-    registry.delete(previousThreadId);
-    threadToSession.delete(previousThreadId);
-  }
-
-  const previousSessionId = threadToSession.get(threadId);
-  if (previousSessionId && previousSessionId !== sessionId) {
-    sessionToThread.delete(previousSessionId);
-  }
-
-  sessionToThread.set(sessionId, threadId);
-  threadToSession.set(threadId, sessionId);
+  bindThreadToSession(sessionId, threadId);
   registry.set(threadId, text);
   log.debug('registered codex prompt for thread', {
     sessionId,
@@ -1575,19 +2443,107 @@ export function registerComposed(sessionId: string, threadId: string, text: stri
   });
 }
 
+function bindThreadToSession(sessionId: string, threadId: string): void {
+  const previousThreadId = sessionToThread.get(sessionId);
+  if (previousThreadId && previousThreadId !== threadId) {
+    clearSessionThreads(sessionId);
+  }
+
+  const previousSessionId = threadToSession.get(threadId);
+  if (previousSessionId && previousSessionId !== sessionId) {
+    clearSessionThreads(previousSessionId);
+  }
+
+  sessionToThread.set(sessionId, threadId);
+  const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
+  threads.add(threadId);
+  sessionToThreads.set(sessionId, threads);
+  threadToSession.set(threadId, sessionId);
+}
+
+/**
+ * Register the exact parent-thread/session/model context required to route a
+ * Guardian child request without consulting the shared app-server catalog.
+ */
+export function registerReviewerRouteContext(
+  sessionId: string,
+  threadId: string,
+  model: string,
+): boolean {
+  const normalizedModel = model.trim();
+  if (!sessionId || !threadId || !normalizedModel) return false;
+  bindThreadToSession(sessionId, threadId);
+  reviewerModelBySession.set(sessionId, normalizedModel);
+  return true;
+}
+
+/**
+ * 让 Codex 子 Agent thread 继承父 thread 的业务 session、桥接路由和产品 prompt。
+ * app-server 的 thread/started 通知在子 thread 首个请求前同步调用这里。
+ */
+export function registerChildThread(parentThreadId: string, childThreadId: string): boolean {
+  if (!parentThreadId || !childThreadId || parentThreadId === childThreadId) return false;
+
+  const sessionId = threadToSession.get(parentThreadId);
+  const text = registry.get(parentThreadId);
+  if (!sessionId || text === undefined) {
+    log.warn('cannot inherit codex child thread route from unknown parent', {
+      parentThreadId,
+      childThreadId,
+    });
+    return false;
+  }
+
+  const previousSessionId = threadToSession.get(childThreadId);
+  if (previousSessionId && previousSessionId !== sessionId) {
+    log.warn('refusing to overwrite codex child thread owned by another session', {
+      parentThreadId,
+      childThreadId,
+      sessionId,
+      previousSessionId,
+    });
+    return false;
+  }
+
+  const threads = sessionToThreads.get(sessionId) ?? new Set<string>();
+  threads.add(childThreadId);
+  sessionToThreads.set(sessionId, threads);
+  threadToSession.set(childThreadId, sessionId);
+  registry.set(childThreadId, text);
+  log.debug('registered codex child thread route', {
+    sessionId,
+    parentThreadId,
+    childThreadId,
+    registrySize: registry.size,
+  });
+  return true;
+}
+
+function clearSessionThreads(sessionId: string): string[] {
+  const threadIds = Array.from(sessionToThreads.get(sessionId) ?? []);
+  sessionToThreads.delete(sessionId);
+  sessionToThread.delete(sessionId);
+  reviewerModelBySession.delete(sessionId);
+  for (const threadId of threadIds) {
+    if (threadToSession.get(threadId) === sessionId) {
+      threadToSession.delete(threadId);
+      registry.delete(threadId);
+      httpRecoveryReasonByThread.delete(threadId);
+    }
+  }
+  return threadIds;
+}
+
 /**
  * 清理业务 session 对应的 thread prompt。由后续 Layer 4 接到 onClose 调用。
  */
 export function unregister(sessionId: string): void {
-  const threadId = sessionToThread.get(sessionId);
-  if (!threadId) return;
+  const threadIds = clearSessionThreads(sessionId);
+  if (threadIds.length === 0) return;
 
-  sessionToThread.delete(sessionId);
-  threadToSession.delete(threadId);
-  registry.delete(threadId);
   log.debug('unregistered codex prompt for session', {
     sessionId,
-    threadId,
+    threadIds,
     registrySize: registry.size,
   });
 }
@@ -1608,23 +2564,43 @@ export function isCodexProxyHandleReady(): boolean {
 export async function disposeCodexProxy(): Promise<void> {
   _disposeGeneration += 1;
   dumpSeq = 0;
-  for (const threadId of sessionToThread.values()) {
+  for (const threadId of threadToSession.keys()) {
     registry.delete(threadId);
   }
   sessionToThread.clear();
+  sessionToThreads.clear();
   threadToSession.clear();
+  reviewerModelBySession.clear();
+  httpRecoveryReasonByThread.clear();
 
   if (_startPromise) {
     await _startPromise.catch(() => undefined);
   }
 
-  if (!_handle) return;
-
   const h = _handle;
   _handle = null;
-  try {
-    await h.dispose();
-  } catch (err) {
-    log.warn('codex proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+
+  if (_controlPlaneStartPromises.size > 0) {
+    await Promise.allSettled(_controlPlaneStartPromises.values());
+    _controlPlaneStartPromises.clear();
   }
+  const controlPlaneHandles = Array.from(_controlPlaneHandles.values());
+  _controlPlaneHandles.clear();
+
+  if (h) {
+    try {
+      await h.dispose();
+    } catch (err) {
+      log.warn('codex proxy dispose failed', { err: err instanceof Error ? err.message : String(err) });
+    }
+  }
+  await Promise.all(controlPlaneHandles.map(async (handle) => {
+    try {
+      await handle.dispose();
+    } catch (err) {
+      log.warn('codex control-plane proxy dispose failed', {
+        err: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }));
 }

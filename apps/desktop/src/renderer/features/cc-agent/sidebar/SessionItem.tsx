@@ -66,22 +66,25 @@ import { createLogger } from '@/lib/logger';
 import { formatSidebarTime, formatSidebarTimeAbsolute } from '../lib/formatSidebarTime';
 import { highlightSegments } from '../lib/highlightSegments';
 import { scrollIntoNearestView } from '../lib/scrollIntoNearestView';
+import { isAutomationGeneratedSession } from '../lib/scheduledSessionGrouping';
 import {
-  getAutomationSessionDisplayTitle,
-  isAutomationGeneratedSession,
-  isScheduledSession,
-} from '../lib/scheduledSessionGrouping';
+  canHighlightSessionDisplayTitle,
+  getSessionDisplayTitle,
+  isEmptyDraftSession,
+} from '../lib/sessionDisplayTitle';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { loadScheduleSidebarIndexRuns, type ScheduleSidebarIndexRun } from '@/features/scheduler/lib/scheduleSidebarIndexRuns';
 import { useSchedulesSnapshot } from '@/features/scheduler/lib/schedulesStore';
 import { scheduleFocusPath } from '@/features/scheduler/lib/scheduleSessionBinding';
 import { ScheduleBindingBadge } from './ScheduleBindingBadge';
+import { SessionOrdinalBadgeKbd, useSessionOrdinalBadge } from './sessionOrdinalBadges';
 import { SessionProjectMoveSubmenu } from './SessionProjectMoveSubmenu';
 import type { SessionMoveTarget } from './sessionMoveTarget';
 import type { FolderPickerOption } from '@/components/new-chat/FolderPickerPopover';
 import { RemoteProjectIcon } from './RemoteProjectIcon';
 import { SessionShareExportDialog } from './SessionShareExportDialog';
 import { isRemoteSessionWriteBlocked } from '../lib/remoteSessionWriteGuard';
+import { prefetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import { useSessionAttentionKind } from '@/lib/sessionAttentionStore';
 import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyContext';
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
@@ -193,8 +196,11 @@ export const SessionItem = memo(function SessionItem({
 }: SessionItemProps) {
   const { t } = useTranslation();
   const prRefs = usePrRefsForSession(session.id);
+  // mod+1..9 序号徽标:模块 store 按 sessionId 精准订阅(性能不变量第 2 条),
+  // 非按住态恒为 null,不惊动 memo。
+  const ordinalBadgeLabel = useSessionOrdinalBadge(session.id);
   const isPinned = session.pinnedAt != null;
-  const isEmpty = session.title === 'New Maker' && (session._count?.messages ?? 0) === 0;
+  const isEmpty = isEmptyDraftSession(session);
   // 取 userSendAt 与 updatedAt 中较新的值，兼容存量 DB 行（旧版只写 userSendAt），
   // 与 projectGrouping/dateSessionGrouping 的排序时间轴保持一致。
   const activityIso =
@@ -324,8 +330,8 @@ export const SessionItem = memo(function SessionItem({
       );
     }
   }, [effectiveScheduleId, t]);
-  const displayTitle = getAutomationSessionDisplayTitle(session);
-  const canHighlightDisplayTitle = !isScheduledSession(session);
+  const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
+  const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
   // F-PJ-10：archived 视图下的 session 走特殊视觉/菜单分支
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
@@ -342,6 +348,14 @@ export const SessionItem = memo(function SessionItem({
   const [archivePending, setArchivePending] = useState(false);
   // confirm 胶囊 DOM 引用——outside-mousedown 用它判断点击是否落在自己身上。
   const confirmPillRef = useRef<HTMLButtonElement>(null);
+
+  // 归档/删除前那次 dirty-worktree 预检要在 main 侧跑 git status,是"点了归档、
+  // 行还没消失"里剩下的最大一块等待。每个入口真正执行前都隔着一次人类操作
+  // (亮出 Confirm 胶囊后再点一下 / 打开菜单后再点条目),在那一刻先发出去,
+  // 执行时命中缓存即可。TTL 与去重都在 worktreeRemovalWarning 里。
+  const prefetchRemovalPreflight = useCallback(() => {
+    prefetchDirtyWorktreeForRemoval(session.id, session.deviceLinkDeviceId);
+  }, [session.id, session.deviceLinkDeviceId]);
 
   // 行容器 ref:在 isActive 切到 true 时把当前行滚进 viewport。
   //
@@ -536,7 +550,7 @@ export const SessionItem = memo(function SessionItem({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
-  // 单项「复制对话链接」:直接复制 cindy://session/<id> 深链(可粘贴到聊天里
+  // 单项「复制任务链接」:直接复制 cindy://session/<id> 深链(可粘贴到聊天里
   // 渲染成会话 chip)。原「复制会话 ID」二级菜单(深度链接 / 仅 ID / Agent)已按
   // 产品决策收敛为这一项;不自带分隔线,分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (
@@ -614,6 +628,7 @@ export const SessionItem = memo(function SessionItem({
         if (isEditing) return;
         e.preventDefault();
         e.stopPropagation();
+        prefetchRemovalPreflight();
         setMenuPos({ x: e.clientX, y: e.clientY });
       }}
       className={cn(
@@ -753,6 +768,8 @@ export const SessionItem = memo(function SessionItem({
               !archivePending && 'group-hover:opacity-0 group-focus-within/slot:opacity-0',
               menuPos !== null && 'opacity-0',
               archivePending && 'opacity-0',
+              // mod+1..9 序号徽标出现时同样让位:徽标独占行尾,不与时间/badge 并排。
+              ordinalBadgeLabel != null && 'opacity-0',
             )}
           >
             <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
@@ -888,6 +905,7 @@ export const SessionItem = memo(function SessionItem({
                 label={t('ccAgent.sidebar.sessionMenu.moreActions')}
                 onClick={(e) => {
                   const rect = e.currentTarget.getBoundingClientRect();
+                  prefetchRemovalPreflight();
                   setMenuPos({ x: rect.left, y: rect.bottom + 2 });
                 }}
                 isActive={isActive}
@@ -905,7 +923,12 @@ export const SessionItem = memo(function SessionItem({
               ) : canQuickArchive ? (
                 <SessionAction
                   label={t('ccAgent.sidebar.sessionMenu.archived')}
-                  onClick={() => setArchivePending(true)}
+                  onClick={() => {
+                    // 第一步:亮出 Confirm 胶囊,同时把 dirty 预检发出去。用户抬手
+                    // 再点第二下的间隔足够那次 git status 跑完 → 归档零等待。
+                    prefetchRemovalPreflight();
+                    setArchivePending(true);
+                  }}
                   isActive={isActive}
                 >
                   <Archive size={14} strokeWidth={2} />
@@ -914,6 +937,22 @@ export const SessionItem = memo(function SessionItem({
             </div>
           )}
         </div>
+      )}
+
+      {/* mod+1..9 序号徽标(按住修饰键浮现,见 sessionOrdinalBadges):绝对定位
+          在右侧时间槽位置(与行 pr-2 对齐),时间/badge 容器同步让位淡出;
+          z-20 压过 hover 操作钮,pointer-events-none 不挡点击。前景色给到
+          容器:普通行次级灰、active 反色行用 active foreground,kbd 内
+          text-current + currentColor 底自动跟随。编辑态让位给重命名输入框。 */}
+      {!isEditing && ordinalBadgeLabel != null && (
+        <span
+          className={cn(
+            'pointer-events-none absolute inset-y-0 right-2 z-20 flex items-center',
+            isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
+          )}
+        >
+          <SessionOrdinalBadgeKbd label={ordinalBadgeLabel} />
+        </span>
       )}
 
       {/* 右键菜单：与 ProjectNode 同款 coordinate-anchored DropdownMenu —

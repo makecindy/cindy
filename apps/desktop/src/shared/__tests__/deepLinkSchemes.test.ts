@@ -65,7 +65,7 @@ describe('isDeepLinkProtocol', () => {
 
 describe('textContainsDeepLink', () => {
   it('detects either scheme anywhere in free text', () => {
-    expect(textContainsDeepLink('见 cindy://session/abc 这个会话')).toBe(true);
+    expect(textContainsDeepLink('见 cindy://session/abc 这个任务')).toBe(true);
     expect(textContainsDeepLink('老链接 xdt-maker://session/abc 仍可点')).toBe(true);
     expect(textContainsDeepLink('普通文本 https://example.com')).toBe(false);
   });

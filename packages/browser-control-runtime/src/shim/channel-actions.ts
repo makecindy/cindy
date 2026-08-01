@@ -2,7 +2,7 @@
  * Shim: openclaw/plugin-sdk/channel-actions.
  *
  * These build agent-tool JSON Schema / result envelopes for the UPSTREAM
- * browser tool (browser-tool.schema.ts), which we do NOT vendor — XDMaker
+ * browser tool (browser-tool.schema.ts), which we do NOT vendor — Cindy
  * exposes its own MCP tool in @cindy/mcps. They are only re-exported by the
  * dropped `sdk-setup-tools` bridge and never called on the dispatcher path.
  * `stringEnum`/`optionalStringEnum` keep a typebox-compatible shape in case a

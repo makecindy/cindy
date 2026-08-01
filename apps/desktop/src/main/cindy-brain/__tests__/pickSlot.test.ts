@@ -127,6 +127,31 @@ describe('pickSlot · 授权 = 用户亲选', () => {
       await slot.handleRequest('pick-ghost', { mode: 'directory', deposit: true }),
     ).toMatchObject({ ok: false, errorCode: 'INTERNAL' });
   });
+
+  it('亲选成功记台账(recordPickedDir);取消不记', async () => {
+    const recordPickedDir = vi.fn();
+    const { slot } = makeSlot({ recordPickedDir });
+    await slot.handleRequest('pick-ghost', { mode: 'directory' });
+    expect(recordPickedDir).toHaveBeenCalledWith('pick-ghost', '/Users/me/projects');
+
+    const cancelled = makeSlot({
+      showDirectoryDialog: vi.fn(async () => null),
+      recordPickedDir,
+    });
+    recordPickedDir.mockClear();
+    await cancelled.slot.handleRequest('pick-ghost', { mode: 'directory' });
+    expect(recordPickedDir).not.toHaveBeenCalled();
+  });
+
+  it('票据签发失败也已记台账(用户确实亲选过,授权事实不随票据丢)', async () => {
+    const recordPickedDir = vi.fn();
+    const { slot } = makeSlot({
+      depositDir: () => ({ ok: false as const, message: '超过收集上限' }),
+      recordPickedDir,
+    });
+    await slot.handleRequest('pick-ghost', { mode: 'directory', deposit: true });
+    expect(recordPickedDir).toHaveBeenCalledWith('pick-ghost', '/Users/me/projects');
+  });
 });
 
 describe('pickSlot · 骚扰钳制', () => {

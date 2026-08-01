@@ -77,6 +77,38 @@ export function canPreviewResolvedRemoteMedia(
   return false;
 }
 
+/**
+ * 原图落盘成功后的条目升级:把渲染地址从 presign OSS 换成本地 file://。
+ *
+ * 为什么必须换:presign 地址在有效期内会被取件队列当 fresh 缓存命中反复复用,
+ * 同键请求再也不会重进磁盘 lookup,于是每次点开查看器都从 OSS 重新拉整张原图
+ * (用户实测「已经打开过原图,关闭再打开又从黑屏开始」),盘上那份副本永远轮不
+ * 到用。换成本地文件后再次点开零网络秒出。
+ *
+ * 升级是**事件驱动**的(落盘完成后经 RemoteMediaResolveHooks 回写队列缓存),不让
+ * 调用方同步等待落盘——取件队列并发上限只有 2 且看不到 front,同步等待会让相邻页
+ * 预取占住槽位,把用户正在看的那张饿住(PR #1125 review)。
+ *
+ * ossKey 必须保留:OSS 对象仍在世,退屏清理要靠它 DELETE(空 key 才跳过),队列也
+ * 靠它识别「升级迟到、对象已被 forceRefresh 换掉」并丢弃本次升级。
+ * hit 为空(落盘被跳过 / 失败)或 mime 不是图片时返回 null,由调用方放弃升级。
+ */
+export function localCopyResolvedMedia(
+  resolved: MobileResolvedRemoteMedia,
+  hit: { uri: string; mimeType: string; size: number } | null | undefined,
+): MobileResolvedRemoteMedia | null {
+  if (!hit || !hit.uri || !hit.mimeType.startsWith('image/')) return null;
+  return {
+    url: hit.uri,
+    ossKey: resolved.ossKey,
+    mimeType: hit.mimeType,
+    size: hit.size,
+    // 本地文件不过期;被 LRU/OS 清掉时 Image onError → forceRefresh 重取自愈。
+    expiresAt: REMOTE_MEDIA_NEVER_EXPIRES,
+    previewable: true,
+  };
+}
+
 export function isResolvedRemoteMediaFresh(
   media: Pick<MobileResolvedRemoteMedia, 'expiresAt'>,
   now = Date.now(),

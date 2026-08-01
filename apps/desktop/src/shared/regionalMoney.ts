@@ -1,15 +1,17 @@
+import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+
+import { CURRENT_CINDY_REGION } from './brandRegion.js';
+
 export type MoneyCurrency = 'CNY' | 'USD';
 export type MoneyKind = 'actual-cost' | 'value-estimate';
 export type MoneyEstimateReason =
   'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price';
 
 /**
- * 用量/费用金额永远携带自己的币种(单位跟随数据来源,构建区域不参与):
- * - Gateway(LiteLLM)同步的 spend / 价格数值原生口径是 USD;服务端未声明币种时
- *   一律按 USD 记账与展示,绝不按区域改标或按固定汇率折算。
- * - 服务端将来在契约里声明币种(如 model-groups 条目的 currency 字段)时,以声明为准。
- * - CNY 只会来自「来源本身就是 CNY」的金额;历史上被错标/折算的 CNY 数据由
- *   migration 0081 修复,读侧仍保留跨币种兼容(device-link 对端可能是旧版本)。
+ * 用量/费用金额始终携带币种。当前构建的本地账本使用区域币种:
+ * - Cindy AI Gateway:CN 原生 CNY,Global 原生 USD,数值不做二次换算;
+ * - 其它渠道的 USD 费用进入 CN 账本前按固定汇率换成 CNY;
+ * - 历史结构化金额保持原样,不在读侧猜测或回填。
  */
 export interface RegionalMoney {
   amount: number;
@@ -29,24 +31,21 @@ export interface ModelPriceQuote {
   outputPerMtok: number;
   cacheReadPerMtok?: number;
   cacheCreatePerMtok?: number;
+  /** Gateway 声明的折扣比例；计费金额按原价 × (1 - costDiscount)。 */
+  costDiscount?: number;
 }
 
 export type ModelPricingCatalog = Record<string, Record<string, ModelPriceQuote>>;
 
-/**
- * 仅供读取历史数据兼容用:2026-07 曾按此固定汇率把 USD 金额折算成 CNY 落盘/投影,
- * 逆推这批历史数据时使用。禁止再用它产生新的折算金额。
- */
+/** CN 构建把其它渠道的 USD 费用统一换算为 CNY 时使用的固定汇率。 */
 export const USD_TO_CNY_FIXED_RATE = 6.7;
 
-/** Gateway 未声明币种时的原生记账单位(LiteLLM spend / per-token 价格口径)。 */
-export const GATEWAY_NATIVE_CURRENCY: MoneyCurrency = 'USD';
+export function gatewayCurrencyForRegion(region: CindyRegion): MoneyCurrency {
+  return region === 'global' ? 'USD' : 'CNY';
+}
 
-/**
- * 零值与读侧聚合 preferred 的默认币种。与 Gateway 原生单位一致;当前所有金额
- * 来源(Gateway 价格、LiteLLM spend、订阅参考价)都是 USD。
- */
-export const DEFAULT_USAGE_CURRENCY: MoneyCurrency = 'USD';
+/** 当前构建的本地 usage 账本币种。 */
+export const DEFAULT_USAGE_CURRENCY: MoneyCurrency = gatewayCurrencyForRegion(CURRENT_CINDY_REGION);
 
 function assertAmount(amount: number): void {
   if (!Number.isFinite(amount) || amount < 0) {
@@ -61,13 +60,12 @@ function uniqueReasons(
   return out.length > 0 ? out : undefined;
 }
 
-/** Gateway 金额的币种:以服务端声明为准,未声明按原生 USD。 */
-export function gatewayCurrency(
-  declared?: MoneyCurrency | null,
-): MoneyCurrency {
-  return declared ?? GATEWAY_NATIVE_CURRENCY;
+/** Gateway 金额币种由显式 region 决定。 */
+export function gatewayCurrency(region: CindyRegion): MoneyCurrency {
+  return gatewayCurrencyForRegion(region);
 }
 
+/** 当前客户端本地 usage 账本的零值。 */
 export function zeroUsageMoney(kind: MoneyKind = 'actual-cost'): RegionalMoney {
   return {
     amount: 0,
@@ -89,9 +87,7 @@ export function usdMoney(
 ): RegionalMoney {
   assertAmount(amountUsd);
   const approximate = kind === 'value-estimate';
-  const estimateReasons = approximate
-    ? uniqueReasons([reason, 'subscription-value'])
-    : undefined;
+  const estimateReasons = approximate ? uniqueReasons([reason, 'subscription-value']) : undefined;
   return {
     amount: amountUsd,
     currency: 'USD',
@@ -106,16 +102,74 @@ export function legacyUsdMoney(amountUsd: number): RegionalMoney {
   return usdMoney(amountUsd);
 }
 
+/**
+ * 把来源金额投影到当前区域账本。固定汇率本身不改变 approximate 语义：
+ * 精确 USD 费用换算后仍直接展示，价值估算仍保留其原有估算标记。
+ */
+export function regionalizeMoney(money: RegionalMoney, region: CindyRegion): RegionalMoney {
+  assertAmount(money.amount);
+  if (region === 'global' || money.currency === 'CNY') return money;
+  return {
+    ...money,
+    amount: money.amount * USD_TO_CNY_FIXED_RATE,
+    currency: 'CNY',
+  };
+}
+
+export function regionalizeUsd(
+  amountUsd: number,
+  region: CindyRegion,
+  kind: MoneyKind = 'actual-cost',
+  reason?: MoneyEstimateReason,
+): RegionalMoney {
+  return regionalizeMoney(usdMoney(amountUsd, kind, reason), region);
+}
+
+/**
+ * 把 USD 口径金额投影到目标账本币种。
+ *
+ * 与 regionalizeMoney 的区别：投影目标是**账号的结算币种**而不是构建区域。本地账本是
+ * 单币种的，写入侧只接受该币种（见 main/usage/ledgerCurrency），所以非 Gateway 渠道
+ * （订阅价值估算、第三方供应商 SDK 费用，原始口径都是 USD）必须按账本币种投影而不是按
+ * 区域 —— 否则以 USD 结算的账号在 CN 构建上会拿到 CNY 金额，被账本守卫当异币种全部丢弃，
+ * 这些渠道的花费就再也记不进日账本、按模型统计与「本对话」累计。
+ *
+ * 只支持 USD → CNY（固定汇率本就是为这个方向的展示投影设的）。已是目标币种的原样返回；
+ * CNY → USD 没有反向汇率契约，不猜、原样返回交给上层的异币种处理。
+ */
+export function toLedgerCurrency(
+  money: RegionalMoney,
+  ledgerCurrency: MoneyCurrency,
+): RegionalMoney {
+  assertAmount(money.amount);
+  if (money.currency === ledgerCurrency) return money;
+  if (ledgerCurrency === 'CNY' && money.currency === 'USD') {
+    return { ...money, amount: money.amount * USD_TO_CNY_FIXED_RATE, currency: 'CNY' };
+  }
+  return money;
+}
+
+/** usdMoney + 按账本币种投影（替代按区域投影的 regionalizeUsd）。 */
+export function usdToLedgerCurrency(
+  amountUsd: number,
+  ledgerCurrency: MoneyCurrency,
+  kind: MoneyKind = 'actual-cost',
+  reason?: MoneyEstimateReason,
+): RegionalMoney {
+  return toLedgerCurrency(usdMoney(amountUsd, kind, reason), ledgerCurrency);
+}
+
+/** Gateway 原生数值；缺省币种跟随本地 usage 账本，账号快照可显式传入币种。 */
 export function gatewayMoney(
   amount: number,
+  currency: MoneyCurrency = DEFAULT_USAGE_CURRENCY,
   kind: MoneyKind = 'actual-cost',
-  declaredCurrency?: MoneyCurrency | null,
 ): RegionalMoney {
   assertAmount(amount);
   const approximate = kind === 'value-estimate';
   return {
     amount,
-    currency: gatewayCurrency(declaredCurrency),
+    currency,
     approximate,
     kind,
     ...(approximate ? { estimateReasons: ['subscription-value'] } : {}),

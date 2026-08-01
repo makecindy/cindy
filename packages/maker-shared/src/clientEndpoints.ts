@@ -11,11 +11,22 @@
  *  - 拉不到 / JSON 或 schema 无法解析 / 非空 endpoint 值非法 → 启动阻断,
  *    宿主报错并提供重试;
  *  - endpoint 字段允许按 region 缺失或留空,解析结果统一补成空串,不因此阻断启动;
- *  - **没有缓存回退、没有超时后静默继续、没有逐字段烘焙回退**——任何本地兜底
+ *  - **没有自动缓存回退、没有超时后静默继续、没有逐字段烘焙回退**——任何本地兜底
  *    都会把非空 CDN 配置错误静默掩盖成"部分端点漂移",这里要的是非法值立刻暴露;
  *    desktop 与 mobile 正式包均遵守本条严格语义。
- *  - 客户端唯一烘焙的远程 URL 是拉清单用的 CDN 基址(自举必需,且防"清单配错
- *    CDN 把自己锁死");**更新/hotfix 链的 CDN base 也来自清单**(cdnBaseUrl)
+ *    唯一例外是 desktop 阻断框上**由用户显式点击**的离线出口(2026-07 追加,
+ *    见 apps/desktop/src/main/endpointManifestCache.ts):只在**不是本仓配置错**的
+ *    失败上出现——传输层失败(超时 / DNS / 代理 / ERR_*)、5xx,以及 407 / 408 / 425 /
+ *    429 这类非配置 4xx(407 只可能来自代理,是本机网络环境;其余是瞬时)。
+ *    **判定以 desktop 的 classifyManifestFailure 为准**,别按这段注释里的举例反推
+ *    "4xx 一定没有离线按钮"。缓存里存的是当初校验通过的清单原文,读回后仍走本模块的
+ *    同一套严格解析,清单地址变化即作废,且端点主机必须落在**源码写死的受信任域**内
+ *    (缓存文件在 userData、可被其他进程写,语法合法 ≠ 来源可信)。JSON / schema /
+ *    非法值 / region 不匹配,以及**永久性** HTTP 3xx/4xx(路径 / 权限 / 部署错)这类
+ *    配置事故照旧硬阻断——本模块的解析语义一字未放松,宿主也不得据此新增任何自动回退。
+ *  - 客户端只烘焙 CN/Global 两份清单的 CDN 基址(自举与组织区域发现必需,
+ *    且防"清单配错 CDN 把自己锁死");**更新/hotfix 链的 CDN base 也来自清单**
+ *    (cdnBaseUrl)
  *    ——清单阻断在一切更新检查之前,更新链拿到的一定是已解析的清单值,
  *    无鸡生蛋问题;
  *  - dev(desktop 未打包 / mobile __DEV__)默认不走 CDN,改读仓内正本文件
@@ -69,8 +80,8 @@ export const CLIENT_ENDPOINT_KEYS = [
   // SlackIM→slack-hook / GitHub 反馈→githubApiBaseUrl / Skillhub→
   // skillhubApiBaseUrl)。退役时清单体系尚无已发布的 packaged/mobile 消费者,
   // 正本(=CDN 上传源)已同步删值,无兼容包袱(同 cdnInternalBaseUrl 先例)。
-  // auth 不分 cn/global:国内/海外是两条 CDN 各发各的清单,清单本身已 region 化,
-  // 客户端无脑取本字段即可。
+  // 每份清单只描述自身 region 的 auth/业务端点。默认会话读取构建清单；
+  // 跨区域组织登录会先加载目标 region 清单，再整体切换 token 消费端点。
   'authApiBaseUrl',
   // desktop 系统浏览器登录的**服务端托管回调**地址(auth-server 路由,精确值需与
   // 服务端 redirect_uri allowlist 逐字符一致)。非空 = 走托管回调链路:回调页停在
@@ -88,6 +99,10 @@ export const CLIENT_ENDPOINT_KEYS = [
   // Telegram hook is deployed independently from Slack; empty means the
   // current environment has not rolled out Telegram yet.
   'telegramHookWsUrl',
+  // X (Twitter) hook, same deployment model as Telegram; empty (or a manifest
+  // that omits the key entirely) means X has not rolled out yet — the Settings
+  // card stays hidden, which is the intended gradual-rollout switch.
+  'xHookWsUrl',
   'slackHookWsUrl',
   'websiteUrl',
   // model-access-server(登录后自动下发 LLM 网关凭据)的 API 基址。
@@ -113,6 +128,13 @@ export type ClientEndpointKey = (typeof CLIENT_ENDPOINT_KEYS)[number];
 
 /** 解析成功后的端点全集(全 key 存在;清单缺失/空白的字段值为 `''`)。 */
 export type ClientEndpointMap = Record<ClientEndpointKey, string>;
+
+/** auth-server 的物理部署区域；与 App 包体的品牌/更新区域是两个独立概念。 */
+export type ClientEndpointRegion = 'cn' | 'global';
+
+export type RealmManifestBaseUrls = Readonly<
+  Record<ClientEndpointRegion, string>
+>;
 
 /**
  * 可选字符串字段:`review` = 手机版审核模式的**送审版本号**(App 审核期间填
@@ -147,6 +169,7 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
   ossApiBaseUrl: ['https:'],
   heartbeatUrl: ['https:'],
   telegramHookWsUrl: ['wss:'],
+  xHookWsUrl: ['wss:'],
   slackHookWsUrl: ['wss:'],
   websiteUrl: ['https:'],
   modelAccessApiBaseUrl: ['https:'],
@@ -162,6 +185,8 @@ const FIELD_PROTOCOLS: Record<ClientEndpointKey, readonly string[]> = {
 export interface ParseClientEndpointManifestOptions {
   /** true 时 https-only 字段追加接受 http:、wss 字段追加 ws:(localhost 场景)。 */
   allowHttp?: boolean;
+  /** 加载指定区域的清单时必须提供；清单自报区域不一致或缺失会整份拒绝。 */
+  expectedRegion?: ClientEndpointRegion;
 }
 
 // 去尾部斜杠。不用 /\/+$/ 正则——超长 '/' 串上会 O(n²) 回溯(CodeQL js/polynomial-redos)。
@@ -171,7 +196,10 @@ function trimTrailingSlashes(s: string): string {
   return s.slice(0, end);
 }
 
-function allowedProtocols(key: ClientEndpointKey, allowHttp: boolean): readonly string[] {
+function allowedProtocols(
+  key: ClientEndpointKey,
+  allowHttp: boolean,
+): readonly string[] {
   const base = FIELD_PROTOCOLS[key];
   if (!allowHttp) return base;
   const relaxed = [...base];
@@ -181,7 +209,13 @@ function allowedProtocols(key: ClientEndpointKey, allowHttp: boolean): readonly 
 }
 
 export type ParseClientEndpointManifestResult =
-  | { ok: true; endpoints: ClientEndpointMap; reviewVersion: string | null }
+  | {
+      ok: true;
+      endpoints: ClientEndpointMap;
+      reviewVersion: string | null;
+      /** 可选诊断元数据；缺失时由受信任清单地址确定区域。 */
+      region: ClientEndpointRegion | null;
+    }
   | { ok: false; reason: string };
 
 /**
@@ -234,7 +268,9 @@ export function parseClientEndpointManifest(
     } catch {
       return { ok: false, reason: `invalid-field:${key}` };
     }
-    if (!allowedProtocols(key, options?.allowHttp === true).includes(url.protocol)) {
+    if (
+      !allowedProtocols(key, options?.allowHttp === true).includes(url.protocol)
+    ) {
       return { ok: false, reason: `invalid-protocol:${key}` };
     }
     if (url.username || url.password) {
@@ -250,11 +286,36 @@ export function parseClientEndpointManifest(
   const reviewVersion =
     typeof rawReview === 'string' && rawReview.trim() ? rawReview.trim() : null;
 
-  return { ok: true, endpoints, reviewVersion };
+  const rawRegion = record.region;
+  const region =
+    rawRegion === undefined
+      ? null
+      : rawRegion === 'cn' || rawRegion === 'global'
+        ? rawRegion
+        : null;
+  if (rawRegion !== undefined && region === null) {
+    return { ok: false, reason: 'invalid-field:region' };
+  }
+  if (
+    options?.expectedRegion !== undefined &&
+    region !== options.expectedRegion
+  ) {
+    return {
+      ok: false,
+      reason: `region-mismatch:${options.expectedRegion}:${region ?? 'missing'}`,
+    };
+  }
+
+  return {
+    ok: true,
+    endpoints,
+    reviewVersion,
+    region,
+  };
 }
 
 export type ResolveClientEndpointsResult =
-  | { ok: true; endpoints: ClientEndpointMap; reviewVersion: string | null }
+  | Extract<ParseClientEndpointManifestResult, { ok: true }>
   | { ok: false; reason: string };
 
 /**

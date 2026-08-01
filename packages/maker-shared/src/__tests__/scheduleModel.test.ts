@@ -116,9 +116,9 @@ describe('schedule model', () => {
     expect(summary).toMatchObject({
       title: '巡检 xdt-maker',
       subtitle: '上次 1 小时前 · 2 小时后',
-      detail: 'cron 0 9 * * * · 新会话 · Claude · xdt-maker',
+      detail: 'cron 0 9 * * * · 新任务 · Claude · xdt-maker',
       runSessionDetail: null,
-      runSessionLabel: '新会话',
+      runSessionLabel: '新任务',
       statusLabel: '运行中',
       unreadCount: 1,
     });
@@ -129,9 +129,9 @@ describe('schedule model', () => {
       persistentSession: true,
       targetSessionId: 'session-persistent-123',
     }), [], NOW)).toMatchObject({
-      detail: 'cron 0 9 * * * · 持续会话 · Claude · xdt-maker',
-      runSessionDetail: '持续会话 session-',
-      runSessionLabel: '持续会话',
+      detail: 'cron 0 9 * * * · 持续任务 · Claude · xdt-maker',
+      runSessionDetail: '持续任务 session-',
+      runSessionLabel: '持续任务',
     });
 
     expect(summarizeSchedule(schedule({
@@ -139,9 +139,9 @@ describe('schedule model', () => {
       workingDir: '',
       useWorktree: true,
     }), [], NOW)).toMatchObject({
-      detail: 'cron 0 9 * * * · 绑定会话 · Claude · 未设置目录',
+      detail: 'cron 0 9 * * * · 绑定任务 · Claude · 未设置目录',
       runSessionDetail: '绑定到 session-',
-      runSessionLabel: '绑定会话',
+      runSessionLabel: '绑定任务',
     });
   });
 
@@ -190,7 +190,7 @@ describe('schedule model', () => {
     expect(summarizeRun(runs[1], NOW)).toMatchObject({
       title: '失败',
       detail: 'boom',
-      meta: '耗时未知 · 未创建会话',
+      meta: '耗时未知 · 未创建任务',
       canDelete: true,
       canMarkRead: true,
       canOpenSession: false,
@@ -208,9 +208,9 @@ describe('schedule model', () => {
     }), NOW)).toMatchObject({
       title: '执行中',
       detail: null,
-      meta: '已运行 1 分 30 秒 · 会话 session-',
+      meta: '已运行 1 分 30 秒 · 任务 session-',
       openSessionLabel: '打开',
-      sessionDetail: '会话 session-',
+      sessionDetail: '任务 session-',
       canDelete: false,
       canMarkRead: false,
       canOpenSession: true,

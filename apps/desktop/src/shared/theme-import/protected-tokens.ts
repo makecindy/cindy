@@ -42,9 +42,10 @@ const PROTECTED_IDS = new Set<string>([
   // 权限语义色（自动审批蓝 / bypass 橙）
   'perm-auto-selected-text',
   'perm-bypass-selected-text',
-  // 无障碍焦点环
+  // 无障碍焦点环与文字选中提示色
   'focus-ring',
   'focus-ring-soft',
+  'text-selection-bg',
   // 阴影：跨主题恒定，不是可换肤的风格项
   'shadow-menu',
   'cmd-palette-shadow',

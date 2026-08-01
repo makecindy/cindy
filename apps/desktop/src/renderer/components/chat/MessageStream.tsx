@@ -31,7 +31,10 @@ import { createPortal } from 'react-dom';
 import { GitFork } from 'lucide-react';
 import { SelectionQuoteButton } from './SelectionQuoteButton';
 import { useTranslation } from 'react-i18next';
-import { findMessageTodoInsertions, isAgentPlanToolName } from '@cindy/maker-shared/message-render';
+import {
+  isAgentPlanToolName,
+  isDeliveryProseText,
+} from '@cindy/maker-shared/message-render';
 
 import type { AgentTaskUpdate, ChatMessage } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
@@ -138,7 +141,6 @@ import { ErrorMessageCard } from './ErrorMessageCard';
 import { APP_EXIT_INTERRUPTED_REASON } from '../../../shared/interruptedTurn';
 import { PlanReviewBubble } from './PlanReviewBubble';
 import { ToolCallCard, getToolSummary } from './ToolCallCard';
-import { TodoListCard, type TodoItem } from './TodoListCard';
 import { SystemCard } from './SystemCard';
 import { NewMessageIndicator } from './NewMessageIndicator';
 import { ThinkingCard } from './ThinkingCard';
@@ -262,15 +264,6 @@ interface MessageStreamProps {
 // 引用这两个成员(WorkChildItem),让「children 只含这两类」由类型系统保证,
 // 渲染处无需 as 强转;其余成员保持内联。
 type MessageRenderItem = { type: 'message'; key: string; message: ChatMessage };
-type AgentPlanRenderItem = {
-  type: 'agent_plan';
-  key: string;
-  todos: TodoItem[];
-  /** 派生自哪条 TodoWrite / update_plan 调用(该调用的行被卡片取代,不再单独渲染)。
-   *  空洞判定与工作组锚定需要它:卡片是这次调用在流里的**唯一**呈现,没有时间戳的
-   *  item 会被间隔判定跳过,于是"空洞后的第一个动作恰好是计划卡"时切不开(#676 review)。 */
-  createdAt?: string;
-};
 type ToolSegmentRenderItem = {
   /** A run of consecutive tool_use messages between text segments,
    *  rendered as a single AgentActionsBlock. v2 — no isStreaming
@@ -333,7 +326,6 @@ interface WorkGroupRenderItem {
 
 export type RenderItem =
   | MessageRenderItem
-  | AgentPlanRenderItem
   | ToolSegmentRenderItem
   | AgentTaskRenderItem
   | ForkOriginRenderItem
@@ -385,7 +377,7 @@ function isRenderWindowBoundaryItem(item: RenderItem | undefined): boolean {
 }
 
 // export 仅供 render-window 集成单测使用。窗口默认/扩窗时如果刚好切在
-// agent_plan / work_group / assistant 中间,顶部会出现无上下文的 Task/Todo 卡。
+// agent_task / work_group / assistant 中间,顶部会出现无上下文的卡片。
 // 向前吸收同一 user turn 的开头,但限制 lookback 防止单个超长 turn 破坏首屏预算。
 export function snapRenderWindowStartIdx(
   items: readonly RenderItem[],
@@ -591,7 +583,10 @@ function isCompletedAssistantMessage(message: ChatMessage): boolean {
   return (
     message.turnCompleted === true ||
     (message.turnMoney?.amount ?? 0) > 0 ||
-    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0)
+    (typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0) ||
+    // turnUsageDetails 也只在 turn 结束时 patch(算不出报价的轮次只落它),
+    // 与费用字段一样是等价的收尾信号 —— 少这一条,无金额轮就挂不出 action bar。
+    message.turnUsageDetails !== undefined
   );
 }
 
@@ -635,17 +630,13 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * their own per-block expand state via useExpandedBlockMemory (default
  * collapsed; user click → persisted).
  *
- * Agent plan handling (two-pass):
- *   Pass 1 — Pre-scan all messages to group TodoWrite / update_plan /
- *     TaskCreate/TaskUpdate/TaskList calls into logical "sessions".
- *     A session is one logical task list. A new session starts after the
- *     previous one's items are all completed. Within a session every
- *     plan update refreshes the same card; only the LAST update's position
- *     and state are kept (the card "moves down" as updates arrive).
- *   Pass 2 — Linear build. Plan tool_use messages are skipped, but at the
- *     position of each session's last update an `agent_plan` RenderItem is injected.
- *     Pending tool_segment is flushed before the plan card so order is
- *     preserved.
+ * Agent plan handling:
+ *   Plan tool calls (TodoWrite / update_plan / TaskCreate…) are swallowed
+ *   entirely — same treatment as F7's AskUserQuestion / ExitPlanMode: the
+ *   call and its tool_results produce no render item and do NOT cut the
+ *   surrounding tool_segment. 计划的唯一呈现是 composer 上方的常驻面板
+ *   (PinnedPlanPanel,Codex IDE 扩展式钉住交互),它直接从 messages 派生
+ *   最新 plan session 快照,与本函数无关。
  */
 /**
  * 锚点丢失恢复:DB 加载更老历史 prepend 时,若新拉回的末尾是 tool_use 且当前
@@ -658,7 +649,7 @@ export function collectTurnFinalAssistantClientIds(messages: readonly ChatMessag
  * 扫描 allRenderItems 找哪个 item **现在覆盖**这个 clientId:
  *   - message: msg.clientId 严格匹配
  *   - tool_segment: toolCalls.*.clientId 任一匹配(段合并后老 toolCall 仍在新段内)
- *   - tool_media / agent_plan: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
+ *   - tool_media / ghost_card: 用 key 后缀匹配(它们的 key 派生自 stable message clientId)
  *
  * 找到即返回该 index,visible slice 从这里继续;找不到才退回默认窗口。
  *
@@ -688,7 +679,7 @@ function recoverLostAnchorIdx(items: RenderItem[], lostKey: string): number {
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
       if (renderItemContainsClientId(it, lostCid)) return i;
     } else if (it.type !== 'fork_origin') {
-      // tool_media / agent_plan:其 key 派生自 stable message clientId,精确后缀匹配
+      // tool_media / ghost_card:其 key 派生自 stable message clientId,精确后缀匹配
       if (it.key === lostKey || it.key.endsWith(`-${lostCid}`)) return i;
     }
   }
@@ -838,6 +829,13 @@ export function buildRenderItems(
   messages: ChatMessage[],
   taskUpdates?: ReadonlyMap<string, AgentTaskUpdate>,
   ghostCards?: GhostCardSnapshot,
+  opts?: {
+    /**
+     * 还有更老的历史页没加载(= `messages` 只是窗口、不是全量)。为真时,凡靠
+     * 「父调用在不在 messages 里」做的归属判定都不可信,必须放宽而不是丢弃。
+     */
+    historyWindowIncomplete?: boolean;
+  },
 ): {
   items: RenderItem[];
   singleResultMap: Map<string, string>;
@@ -861,12 +859,6 @@ export function buildRenderItems(
       if (cardId) settledCardIds.add(cardId);
     }
   }
-
-  // ── Pass 1: pre-scan agent plan sessions ──
-  // Shared groups TodoWrite / update_plan / Task* into logical sessions.
-  // Desktop keeps the existing `agent_plan` render item and `plan-*` keys,
-  // while mobile can consume the same shared logic through buildMessageRenderItems.
-  const planInsertAt = findMessageTodoInsertions(messages, { keyPrefix: 'plan' });
 
   const isOrcaCommunicationTool = (toolName: string): boolean => {
     const normalized = toolName.replace(/^mcp__/, 'mcp:').replace(/__/g, ':');
@@ -1013,19 +1005,10 @@ export function buildRenderItems(
         continue;
       }
 
-      // Todo/plan updates — break the segment so the plan card doesn't get buried
-      // inside the tool block.
+      // Plan tools (TodoWrite / update_plan / Task*) — swallowed like F7:
+      // 计划的唯一呈现是 composer 上方的 PinnedPlanPanel(钉住式常驻面板),
+      // 流内不再插卡;也不切段,周围工具保持聚组,如同调用不存在。
       if (isAgentPlanToolName(toolName)) {
-        const sessionTodos = planInsertAt.get(i);
-        if (sessionTodos) {
-          flushSegment();
-          items.push({
-            type: 'agent_plan',
-            key: sessionTodos.key,
-            todos: sessionTodos.todos,
-            createdAt: msg.createdAt,
-          });
-        }
         let j = i + 1;
         while (j < messages.length && messages[j].role === 'tool_result') j++;
         i = j;
@@ -1296,8 +1279,38 @@ export function buildRenderItems(
   flushSegment();
 
   if (taskUpdates) {
+    // 父会话自己的 Bash 调用集合:local_bash 任务卡(#247 的「后台命令」卡,含
+    // 停止按钮)的**唯一**渲染来源就是本孤儿循环(Bash toolCall 走 tool_segment,
+    // 不进 agent_task 配对分支),必须按 parentToolUseId 命中保留;命不中的才是
+    // workflow / 子 agent 内部启动的后台命令 —— 只进后台任务面板,不进聊天流刷屏
+    // (对齐官方:聊天流只呈现父会话自己的调用)。
+    //
+    // 归属只能靠「父 Bash 调用在不在 messages 里」判定(AgentTaskUpdate 没有
+    // 结构化的「谁 spawn 的」字段),而 messages 是分页窗口(首屏 50 行)。窗口
+    // 不完整时父调用可能只是还没翻到,此时**不丢**:宁可临时多显示 workflow 内部
+    // 的后台命令卡(本 PR 之前就是这个形态),也不能把用户自己还在跑的后台命令
+    // 及其停止按钮从聊天流里抹掉。翻到旧页 / 加载完历史后过滤自动恢复。
+    const historyWindowIncomplete = opts?.historyWindowIncomplete === true;
+    const parentBashToolUseIds = new Set<string>();
+    for (const m of messages) {
+      if (
+        m.role === 'tool_use' &&
+        m.toolName === 'Bash' &&
+        typeof m.toolUseId === 'string' &&
+        m.toolUseId.length > 0
+      ) {
+        parentBashToolUseIds.add(m.toolUseId);
+      }
+    }
     const seenTaskIds = new Set<string>();
     for (const update of taskUpdates.values()) {
+      if (
+        update.taskType === 'local_bash' &&
+        !historyWindowIncomplete &&
+        !(update.parentToolUseId && parentBashToolUseIds.has(update.parentToolUseId))
+      ) {
+        continue;
+      }
       const primaryKey = update.parentToolUseId ?? update.taskId;
       if (
         seenTaskIds.has(update.taskId) ||
@@ -1357,14 +1370,47 @@ function isRunningAgentTask(it: RenderItem): boolean {
   return status === 'running';
 }
 
+/** workflow 卡永远平铺,完成后也不折进工作组:它是后台任务面板的常驻入口,
+ *  折叠掉等于把入口藏起来(产品拍板 2026-07-27:完成后保留痕迹、可点击进
+ *  面板详情;对齐官方——原版完成的 workflow 行留在对话里)。 */
+function isWorkflowTaskItem(it: RenderItem): boolean {
+  return (
+    it.type === 'agent_task' &&
+    (it.update?.taskType === 'local_workflow' || it.toolCall?.toolName === 'Workflow')
+  );
+}
+
 /** preview 中计为一条真实活动的 render item。assistant 进度文字
  *  始终留在主消息流,不占最近 5 条活动窗口。 */
 function isWorkActivityItem(it: RenderItem): it is WorkChildItem {
   return (
     !isRunningAgentTask(it) &&
+    // workflow 卡三条分组路径(answered/legacy/active)统一平铺,见 isWorkflowTaskItem。
+    !isWorkflowTaskItem(it) &&
     (it.type === 'tool_segment' ||
       it.type === 'agent_task' ||
       (it.type === 'message' && it.message.role === 'thinking'))
+  );
+}
+
+/**
+ * 交付正文 item —— 无论落在 turn 的哪个位置都不折进「已工作 Xs」。
+ *
+ * 为什么只靠 seal 位置不够:「最终答复」只认最后一次动作之后的正文,而 agent
+ * 常见「先输出正文 → 再执行一个收尾副作用(发通知 / 落库 / 提交) → 再说一句
+ * 已完成」。这时真正的交付内容排在收尾动作之前,会被整段折起来,只剩收尾那句
+ * 元数据留在消息流里(实例:2026-07-31 定时巡检的产品决策简报 3250 字被折,
+ * 外面只剩 110 字的「已触发通知」)。
+ *
+ * 判据(长度 / 块级 markdown 结构)由 maker-shared 的 isDeliveryProseText 单一
+ * 提供,两端不各写一份。
+ */
+function isDeliveryProseItem(it: RenderItem): boolean {
+  return (
+    it.type === 'message' &&
+    it.message.role === 'assistant' &&
+    !it.message.systemCardType &&
+    isDeliveryProseText(it.message.content)
   );
 }
 
@@ -1408,6 +1454,22 @@ function workGroupClientId(run: WorkChildItem[]): string {
   return workChildClientId(firstActivity ?? run[0]);
 }
 
+/** 工作组内全部可定位 clientId(嵌套组递归),供组容器的回退锚点使用。 */
+function collectWorkGroupClientIds(children: readonly RenderItem[]): string[] {
+  const ids: string[] = [];
+  for (const child of children) {
+    if (child.type === 'message') ids.push(child.message.clientId);
+    else if (child.type === 'tool_segment') {
+      for (const toolCall of child.toolCalls) ids.push(toolCall.clientId);
+    } else if (child.type === 'agent_task' && child.toolCall) {
+      ids.push(child.toolCall.clientId);
+    } else if (child.type === 'work_group') {
+      ids.push(...collectWorkGroupClientIds(child.children));
+    }
+  }
+  return ids;
+}
+
 function renderItemContainsClientId(item: RenderItem, clientId: string): boolean {
   if (item.type === 'fork_origin') return false;
   if (item.type === 'message') return item.message.clientId === clientId;
@@ -1433,15 +1495,11 @@ function renderItemStartMs(item: RenderItem): number | null {
     const ms = Date.parse(item.toolCall?.createdAt ?? item.update?.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
-  // ghost_card / agent_plan 是各自那次调用在流里的**唯一**呈现(工具行被卡片取代),
-  // 所以它们必须报出调用时间。漏掉的后果是间隔判定把它们当"无时间戳"跳过:空洞后的
-  // 第一个动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
+  // ghost_card 是那次调用在流里的**唯一**呈现(工具行被卡片取代),所以它必须
+  // 报出调用时间。漏掉的后果是间隔判定把它当"无时间戳"跳过:空洞后的第一个
+  // 动作恰好是卡片时切不开,卡片还会被归到空洞前那一组里(#676 review)。
   if (item.type === 'ghost_card') {
     const ms = Date.parse(item.toolCall.createdAt ?? '');
-    return Number.isFinite(ms) ? ms : null;
-  }
-  if (item.type === 'agent_plan') {
-    const ms = Date.parse(item.createdAt ?? '');
     return Number.isFinite(ms) ? ms : null;
   }
   if (item.type === 'work_group') {
@@ -1500,11 +1558,18 @@ function renderItemEndMs(item: RenderItem): number | null {
     return startMs === null ? item.resultTsMs : Math.max(startMs, item.resultTsMs);
   }
   if (item.type === 'work_group') {
-    for (let i = item.children.length - 1; i >= 0; i--) {
-      const childMs = renderItemEndMs(item.children[i]);
-      if (childMs !== null) return childMs;
+    // 全量取 max,不是"最后一个 child":children 按**发起**时刻排列,并行的 Agent/Task 乱序完成时
+    // 真正的结束时刻可能落在更靠前的 child 上(先发起、更晚 settle)。取最后一个会低估组的结束
+    // 时间,于是空洞判定的锚点变小、把本来连续的 turn 误判成空洞切开 —— 与本函数 tool_segment
+    // 分支、以及 groupWorkRuns 里 prevEndMs 的 Math.max 是同一条理由(#676 review codex P1)。
+    // 手机端同款函数(maker-shared 的 itemEndTimestamp)已按此收敛,#1210 review 指出这里镜像存在。
+    let latest: number | null = null;
+    for (const child of item.children) {
+      const childMs = renderItemEndMs(child);
+      if (childMs === null) continue;
+      latest = latest === null ? childMs : Math.max(latest, childMs);
     }
-    return null;
+    return latest;
   }
   // thinking 的 createdAt 是块**开始**的时刻,真正结束要加 thinkingDurationMs
   // (与 workRunEndTs 同口径)。一个想了半小时以上的 thinking 块后面紧跟工具或正文时,
@@ -1756,9 +1821,12 @@ function groupActiveWorkRuns(items: RenderItem[], turnStartTs: number | null = n
  * 连续输出的 assistant 文字视为最终答复阶段,留在组外;若整轮没有真实动作,
  * 只保留最后一条 assistant 正文,此前文字仍视作工作过程。
  *
+ * 位置判定之外还有一条位置无关的兜底:交付正文(见 isDeliveryProseItem)即使排在
+ * 收尾动作之前也不折叠,免得「先出简报 → 再发通知 → 再说一句已完成」把产出藏进组里。
+ *
  * 没有最终正文(被中断 / 停在工具)或最终正文后仍有已完成动作时返回
  * handled:false,交回 groupLegacyWorkRuns 按连续动作折叠。tool_media /
- * agent_plan /运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
+ * 运行中子 Agent 等非可归档项保持可见,并作为顺序锚点切开工作组。
  */
 function groupAnsweredTurnItems(
   turnItems: RenderItem[],
@@ -1848,7 +1916,13 @@ function groupAnsweredTurnItems(
 
   for (let i = 0; i < turnItems.length; i++) {
     const it = turnItems[i];
-    if (!sealedAnswers.has(i) && !isRunningAgentTask(it) && isWorkChild(it)) {
+    if (
+      !sealedAnswers.has(i) &&
+      !isRunningAgentTask(it) &&
+      !isWorkflowTaskItem(it) &&
+      !isDeliveryProseItem(it) &&
+      isWorkChild(it)
+    ) {
       run.push(it);
     } else {
       flushRun(it);
@@ -2206,8 +2280,11 @@ export function MessageStream({
   // 用户看到的。流式中每 token messages 引用变 → 这里跑一次 O(n) 单线性扫描,
   // 实测 N=1000 < 2ms (Windows),如果未来发现瓶颈再走增量化(out of scope)。
   const { items: ungroupedRenderItems, singleResultMap } = useMemo(
-    () => buildRenderItems(messages, taskUpdates, ghostCardSnapshot),
-    [messages, taskUpdates, ghostCardSnapshot],
+    () =>
+      buildRenderItems(messages, taskUpdates, ghostCardSnapshot, {
+        historyWindowIncomplete: Boolean(hasMoreMessages),
+      }),
+    [messages, taskUpdates, ghostCardSnapshot, hasMoreMessages],
   );
   const assistantsWithFollowingUserBoundary = useMemo(
     () => collectAssistantsWithFollowingUserBoundary(messages),
@@ -2235,7 +2312,7 @@ export function MessageStream({
    * 末尾、**没有上界**。这是 #676 review 反复指向的根因:补齐 / 跳转让 messages 变长后,
    * 深跳会一次挂载"锚点 → 末尾"的全部 item。因为它无界,store 侧只能靠"跳转补齐预算"
    * 间接限制挂载量,而那个预算必须逐一追平 buildRenderItems 的每种 item 展开规则
-   * (agent_task 卡、空洞切段、ghost_card、agent_plan、tool_media…),review 中已发现 5 种
+   * (agent_task 卡、空洞切段、ghost_card、tool_media…),review 中已发现 5 种
    * 被低估的路径 —— 是一条追不完的线。
    *
    * 决定:把锚定窗口做成双向有界 + 配套向下扩窗,作为紧随其后的独立改动(不塞进本 PR ——
@@ -2345,9 +2422,15 @@ export function MessageStream({
     }
     const root = scrollRef.current;
     if (!root) return;
-    const el = root.querySelector(
+    // 精确锚点(message wrapper / 带 toolCall 的任务卡)优先;查不到时退回
+    // 聚合动作块的容器锚点(data-message-client-ids 空格分隔多 clientId)——
+    // 后台 Bash 等工具行渲染在折叠块内,没有独立的行级 DOM 锚点。
+    const el = (root.querySelector(
       `[data-message-client-id="${CSS.escape(focusMessageClientId)}"]`,
-    ) as HTMLElement | null;
+    ) ??
+      root.querySelector(
+        `[data-message-client-ids~="${CSS.escape(focusMessageClientId)}"]`,
+      )) as HTMLElement | null;
     if (!el) return;
     restoringRef.current = false;
     isNearBottomRef.current = false;
@@ -3488,16 +3571,6 @@ export function MessageStream({
                       return <ForkOriginMarker key={item.key} onClick={onOpenForkOrigin} />;
                     }
 
-                    if (item.type === 'agent_plan') {
-                      return (
-                        <TodoListCard
-                          key={item.key}
-                          todos={item.todos}
-                          animated={isSessionStreaming}
-                        />
-                      );
-                    }
-
                     if (item.type === 'tool_segment') {
                       return (
                         <AgentActionsBlock
@@ -3577,16 +3650,26 @@ export function MessageStream({
                       };
                       const childItems = item.children.map(toWorkGroupChild);
                       return (
-                        <WorkGroupBlock
+                        // data-message-client-ids:组折叠时子卡片/聚合块整体 unmount,
+                        // 精确锚点消失 —— 后台任务面板「点行跳聊天」经 ~= 回退查询
+                        // 落到组容器(与 AgentActionsBlock 的容器锚点同一约定)。
+                        <div
                           key={item.key}
-                          // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
-                          // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
-                          blockId={`work:${item.key.slice('work-'.length)}`}
-                          durationMs={item.durationMs}
-                          isStreaming={item.isStreaming}
-                          startedAtMs={item.startedAtMs}
-                          childItems={childItems}
-                        />
+                          className="scroll-mt-20"
+                          data-message-client-ids={collectWorkGroupClientIds(item.children).join(
+                            ' ',
+                          )}
+                        >
+                          <WorkGroupBlock
+                            // 单层前缀约定 `work:<clientId>` — item.key 形如 `work-<cid>`,
+                            // 去掉 `work-` 后拼 `<role>:<id>`,与 agent: / thinking: 同构。
+                            blockId={`work:${item.key.slice('work-'.length)}`}
+                            durationMs={item.durationMs}
+                            isStreaming={item.isStreaming}
+                            startedAtMs={item.startedAtMs}
+                            childItems={childItems}
+                          />
+                        </div>
                       );
                     }
 
@@ -3896,7 +3979,18 @@ const MessageItem = memo(function MessageItem({
     case 'ask_user':
       return <AskUserQuestionBubble message={message} />;
     case 'plan_review':
-      return <PlanReviewBubble message={message} />;
+      // 计划正文是会话消息内容,解析上下文与 AssistantMessage 保持一致
+      // (currentSessionId 缺失会让远程会话里计划内的媒体链接绕过
+      // cindy-remote-media:// 改写而坏图)。
+      return (
+        <PlanReviewBubble
+          message={message}
+          workingDir={workingDir}
+          currentSessionId={sessionId}
+          currentSessionTitle={sessionTitle}
+          localFileRefs={localFileRefs}
+        />
+      );
     case 'error':
       // interrupted-turn-resume:app 退出中断标记行不进消息流(2026-07-05 产品
       // 决策)——它作为「会话尾部是否停在中断态」的判定源保留在 messages 数组里,

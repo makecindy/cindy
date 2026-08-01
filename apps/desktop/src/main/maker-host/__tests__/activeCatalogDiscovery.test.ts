@@ -8,7 +8,12 @@
  */
 import { afterEach, describe, expect, it } from 'vitest';
 
-import { BUNDLED_CATALOG, type Catalog, type CatalogModel } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  type AgentKind,
+  type Catalog,
+  type CatalogModel,
+} from '@cindy/model-providers';
 
 import {
   getActiveCatalog,
@@ -156,9 +161,9 @@ const anthro = (id: string, name: string, sortOrder: number): CatalogModel => ({
   status: 'active',
 });
 
-function anthropicList(): CatalogModel[] {
+function anthropicList(agent: AgentKind = 'claude-code'): CatalogModel[] {
   const p = getActiveCatalog().providers.find((x) => x.id === 'anthropic');
-  return p?.models['claude-code'] ?? [];
+  return p?.models[agent] ?? [];
 }
 
 describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
@@ -193,6 +198,12 @@ describe('anthropic 发现条目的 cindyModelMeta 元数据基线', () => {
       ['claude-sonnet-4-5', 'Sonnet 4.5'],
       ['claude-haiku-4-5', 'Haiku 4.5'],
     ]);
+    expect(anthropicList('codex')).toEqual(
+      anthropicList('claude-code').map((model) => ({
+        ...model,
+        supportsFastMode: false,
+      })),
+    );
     expect(Object.fromEntries([
       'claude-fable-5',
       'claude-opus-5',

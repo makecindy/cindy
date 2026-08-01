@@ -225,6 +225,17 @@ class BrowserWebviewPoolImpl {
   }
 
   /**
+   * 订阅 guest 自关事件(guest 页面调 `window.close()`)。pool 只广播 tabId,
+   * "该不该真关"的裁决(popup-spawned 判定、store closeTab)在订阅方。
+   */
+  onGuestClose(listener: (tabId: string) => void): () => void {
+    this.guestCloseListeners.add(listener);
+    return () => {
+      this.guestCloseListeners.delete(listener);
+    };
+  }
+
+  /**
    * 订阅新 entry 创建。Shell 中已挂载但隐藏的 hook 用它观察 Agent 显式创建的
    * webview；命中已有 entry 的 acquire 不触发。
    */
@@ -258,11 +269,18 @@ class BrowserWebviewPoolImpl {
     const onStartLoading = () => {
       entry.guestFailure = null;
     };
+    // guest `window.close()` → webview 'close' DOM 事件。监听挂在 pool 层而不是
+    // useBrowserWebview:hook 只在 tab 被用户看着时才绑定(隐藏 tab 甚至不物化
+    // webview),而 OAuth callback 页的自关可能发生在后台 tab(eager-spawn /
+    // 用户已切走)。谁来关、允不允许关由订阅方(rsbBrowserBridge,带
+    // popup-spawned 判定)决定,pool 只负责广播。
+    const onGuestClose = () => this.fireGuestClose(entry.tabId);
 
     entry.webview.addEventListener('render-process-gone', onRenderProcessGone);
     entry.webview.addEventListener('unresponsive', onUnresponsive);
     entry.webview.addEventListener('responsive', onResponsive);
     entry.webview.addEventListener('did-start-loading', onStartLoading);
+    entry.webview.addEventListener('close', onGuestClose);
   }
 
   /**
@@ -289,6 +307,7 @@ class BrowserWebviewPoolImpl {
 
   private pinListeners = new Set<(tabId: string, pinned: boolean) => void>();
   private releaseListeners = new Set<(tabId: string) => void>();
+  private guestCloseListeners = new Set<(tabId: string) => void>();
   private entryCreatedListeners = new Set<(tabId: string) => void>();
 
   private firePinChange(tabId: string, pinned: boolean): void {
@@ -303,6 +322,16 @@ class BrowserWebviewPoolImpl {
 
   private fireRelease(tabId: string): void {
     for (const l of this.releaseListeners) {
+      try {
+        l(tabId);
+      } catch {
+        // listener throw must not stop the pool from advancing
+      }
+    }
+  }
+
+  private fireGuestClose(tabId: string): void {
+    for (const l of this.guestCloseListeners) {
       try {
         l(tabId);
       } catch {

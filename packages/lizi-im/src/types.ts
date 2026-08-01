@@ -58,14 +58,16 @@ export interface IMHost {
     feishuMediaDir: string;
     /** Root for downloaded discord media. Optional — only hosts that wire the discord channel provide it. */
     discordMediaDir?: string;
+    /** Root for downloaded telegram media. Optional — only hosts that wire the telegram channel provide it. */
+    telegramMediaDir?: string;
+    /** Root for downloaded WeCom files and legacy image fallback. */
+    wecomMediaDir?: string;
   };
 
   /**
-   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后
-   * 入站**图片**改走 host 内容寻址仓(按 token 免重下、全局去重、吃缓存回收
-   * 策略);缺省时回落 `paths.*MediaDir` 的老目录写盘。非图片文件始终走老
-   * 目录(host 侧规则 25 边界:非媒体不进字节仓)。包侧只摸字节和字符串,
-   * 落盘/记账细节全在 host(规则 2)。
+   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后入站图片及
+   * host 明确支持的其它媒体改走内容寻址仓;非媒体文件仍走
+   * `paths.*MediaDir`。包侧只摸字节和字符串,落盘/记账细节全在 host。
    */
   media?: IMHostMediaCache;
 
@@ -83,19 +85,50 @@ export interface IMHost {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord';
-    /** 平台侧稳定 token(feishu image_key / discord attachment id),host 据此免重下。 */
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
+    /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
     mimeType: string;
-  }): Promise<{ absPath: string; url: string }>;
+    /** Keep the blob reclaimable until the transport confirms account ownership after the write. */
+    staging?: boolean;
+  }): Promise<{ absPath: string; url: string; discard?: () => Promise<void> }>;
+  /**
+   * 其它 Cindy 托管媒体入总仓。未提供时 transport 必须降级为 unsupported，
+   * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
+   */
+  cacheMedia?(params: {
+    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    token: string;
+    buffer: Uint8Array;
+    mimeType: string;
+  }): Promise<{
+    absPath: string;
+    url: string;
+    mimeType: string;
+    /** Release host-side staging when the originating account becomes stale. */
+    discard?: () => Promise<void>;
+  }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord',
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
     token: string,
+    options?: {
+      /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
+      shouldReuse?: () => boolean;
+    },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
   resolveMediaUrl(url: string): string | null;
+  /**
+   * 下载公开 HTTPS 图片供 IM 出站上传或拉取平台签发的临时媒体 URL。
+   * host 必须逐跳执行 SSRF / DNS rebinding 防护并在读取过程中执行
+   * maxBytes 上限；返回字节不落盘。
+   */
+  fetchRemoteImage?(
+    url: string,
+    maxBytes: number,
+  ): Promise<{ buffer: Uint8Array; mimeType?: string }>;
 }
 
 export interface IMAttachment {
@@ -129,6 +162,16 @@ export interface IMMessageEvent {
   messageId: string;
   /** Plain-text payload. */
   text: string;
+  /**
+   * 群多人对话的发言人元数据(telegram 群 turn 提供; 其它渠道/DM 缺省)。
+   * name 为平台显示名 — 不可信输入, 消费方注入 prompt 前必须消毒。
+   */
+  speaker?: { id: string; name: string; username?: string; isOwner: boolean };
+  /**
+   * 全响应模式下的旁听触发(非显式召唤): 业务层注入安静上下文指令,
+   * 模型可用 NO_REPLY 哨兵选择沉默; transport 抑制该消息的表情回应。
+   */
+  ambient?: boolean;
   /** Pre-downloaded attachments. */
   attachments: IMAttachment[];
   /**
@@ -152,6 +195,18 @@ export interface IMMessageEvent {
    * 「thread = 独立 session」;feishu 恒 undefined(整 DM 单会话)。
    */
   scopeKey?: string;
+  /**
+   * 本条消息所**回复/引用**的原消息(telegram reply_to_message 等)。
+   * 编排层可据此在送模型正文前拼引用上下文块;落库仍是渠道原文。
+   * 不支持引用语义的渠道恒 undefined。
+   */
+  replyContext?: {
+    author: string;
+    text: string;
+    isBot?: boolean;
+    /** 被引消息的附件数(已并入本事件 attachments;0/缺省 = 无)。 */
+    attachmentCount?: number;
+  };
   /** Channel-specific raw event for debug. */
   raw?: unknown;
 }

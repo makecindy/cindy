@@ -14,6 +14,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
+import cindyIconUrl from '@/../../resources/icon.png?url';
 import { Spinner } from '@/components/ui/spinner';
 import { cn } from '@/lib/utils';
 import type {
@@ -168,7 +169,13 @@ export function PlanChangeTargetDialog({
                         </p>
                         {candidate.offer.creditAmount && (
                           <p className="mt-0.5 text-11 text-[var(--text-tertiary)]">
-                            {t('billing.credits', { amount: candidate.offer.creditAmount })}
+                            {t('billing.credits', {
+                              amount: formatMoney(
+                                candidate.offer.creditAmount,
+                                candidate.offer.currency,
+                                billingLocale,
+                              ),
+                            })}
                           </p>
                         )}
                       </div>
@@ -257,7 +264,11 @@ export function PlanChangeStatusDialog({
     let active = true;
     setQrDataUrl(null);
     if (action?.type === 'QR_CODE') {
-      void QRCode.toDataURL(action.value, { width: 1024, margin: 4 })
+      void QRCode.toDataURL(action.value, {
+        errorCorrectionLevel: 'H',
+        width: 320,
+        margin: 4,
+      })
         .then((dataUrl) => {
           if (active) setQrDataUrl(dataUrl);
         })
@@ -411,14 +422,22 @@ export function PlanChangeStatusDialog({
             {state.phase === 'AWAITING_PAYMENT' && action?.type === 'QR_CODE' && (
               <>
                 <div
-                  className="grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
+                  className="relative grid place-items-center rounded-xl border border-[var(--border-default)] bg-white p-2"
                   style={{
-                    width: 'min(440px, calc(100vw - 96px), calc(100vh - 280px))',
-                    height: 'min(440px, calc(100vw - 96px), calc(100vh - 280px))',
+                    width: 'min(280px, calc(100vw - 96px), calc(100vh - 280px))',
+                    height: 'min(280px, calc(100vw - 96px), calc(100vh - 280px))',
                   }}
                 >
                   {qrDataUrl ? (
-                    <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                    <>
+                      <img src={qrDataUrl} className="size-full" alt={t('billing.checkout.qrAlt')} />
+                      <span
+                        aria-hidden="true"
+                        className="pointer-events-none absolute grid size-10 place-items-center rounded-lg bg-white p-1"
+                      >
+                        <img src={cindyIconUrl} className="size-8 rounded-md" alt="" />
+                      </span>
+                    </>
                   ) : (
                     <Spinner size={24} className="text-[var(--text-secondary)]" />
                   )}

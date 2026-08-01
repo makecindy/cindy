@@ -1,3 +1,4 @@
+import { Stack } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Animated, Easing, Keyboard, Linking, Platform, Pressable, StyleSheet, View } from 'react-native';
@@ -5,6 +6,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import type { AccountDeletionStatus, SocialProvider, VerificationKind } from '@cindy/auth-client';
 
 import { useAuth } from '@/auth/AuthContext';
+import { useLoginFirstLaunchLight } from '@/auth/loginFirstLaunchGate';
+import { resolveStartupSplashHandoff } from '@/auth/startupSplashContinuity';
 import {
   CN_PHONE_PREFIX,
   isCompleteCnPhone,
@@ -87,6 +90,13 @@ export default function LoginScreen() {
   const auth = useAuth();
   const stage = useLoginSurface();
   const insets = useSafeAreaInsets();
+  // 舞台有效主题(首启亮色门可强制 light,与系统主题可能不一致):状态栏样式
+  // 必须跟舞台而不是系统,经 screen option 走 VC-based 通道(见 _layout 注释)。
+  const { mode: systemTheme } = useTheme();
+  const firstLaunchGate = useLoginFirstLaunchLight();
+  const stageTheme =
+    resolveStartupSplashHandoff(firstLaunchGate, systemTheme).targetTheme ??
+    systemTheme;
   const handoff = useLoginHandoffOptional();
   const handoffDispatch = handoff?.dispatch;
   // readiness 锚之一(v6.3):登录面板已挂载(防面板未挂载先播 panel 步)
@@ -116,6 +126,10 @@ export default function LoginScreen() {
   // 企业 SSO 入口子视图:在 identifier 步骤内输入组织标识(本地展示态)
   const [ssoOrgMode, setSsoOrgMode] = useState(false);
   const [ssoOrg, setSsoOrg] = useState('');
+  const realmConfirmation =
+    auth.loginState?.step === 'realm-confirmation'
+      ? auth.loginState
+      : null;
   /* ── 协议同意链路(consent PR,与桌面 LoginPage 同源语义):radio 状态 +
      未勾选拦截弹窗 + 同意后续接。过门点(产品拍板 2026-07-24 二次):手机号提交、
      邮箱提交(discover 前)、method-choice 个人行发码、社交圆钮(Apple/Google/
@@ -356,7 +370,12 @@ export default function LoginScreen() {
       const submitSsoOrg = () => {
         const value = ssoOrg.trim();
         if (!value) return;
-        void auth.dispatchLoginAction({ type: 'discover-sso-org', org: value });
+        // 先静默发现组织区域；只有跨出安装包区域时 AuthContext 才进入
+        // realm-confirmation，并由页面底部弹窗在继续 SSO 前确认。
+        void auth.dispatchLoginAction({
+          type: 'discover-sso-org',
+          org: value,
+        });
       };
       return (
         <LoginPanel testID="login.panel.ssoOrg">
@@ -1145,19 +1164,32 @@ export default function LoginScreen() {
   // 穿透读到文案、completed 态还能激活「我知道了」);② 入场未完成(opacity/pointerEvents
   // 只管渲染与命中,读屏仍会念出不可见的注销状态)。iOS 走 accessibilityElementsHidden、
   // Android 走 importantForAccessibility,两端都要给(PR #464 codex)。
-  const deletionBubbleA11yHidden = consentDialogOpen || handoffPhase !== 'done';
+  const realmConsentOpen = realmConfirmation !== null;
+  const deletionBubbleA11yHidden =
+    consentDialogOpen || realmConsentOpen || handoffPhase !== 'done';
 
   return (
     <MobileLoginHandoffStage
       keyboardShiftPx={keyboardShift}
       testID="login.screen"
     >
+      {/* 渲染为 null,仅把状态栏样式写进本屏 screen options。iOS 专用:
+          Android 由舞台内组件式 StatusBar 控制,不走 RNS 双轨 */}
+      {Platform.OS === 'ios' ? (
+        <Stack.Screen
+          options={{
+            statusBarStyle: stageTheme === 'dark' ? 'light' : 'dark',
+          }}
+        />
+      ) : null}
       {/* 外层未变换测量 wrapper(v5 冻结拓扑):持布局基线,不参与任何 translate */}
       <View
         collapsable={false}
         // Android 读屏:弹窗打开时隐藏背景登录组(accessibilityViewIsModal 仅 iOS
         // 生效;codex 审查 P2)。iOS 忽略此属性,无副作用。
-        importantForAccessibility={consentDialogOpen ? 'no-hide-descendants' : 'auto'}
+        importantForAccessibility={
+          consentDialogOpen || realmConsentOpen ? 'no-hide-descendants' : 'auto'
+        }
         onLayout={measureBaseline}
         ref={outerGroupRef}
         style={{
@@ -1238,6 +1270,27 @@ export default function LoginScreen() {
           onDisagree={dismissConsent}
           onOpenTerms={() => openLegalLink('terms')}
           onOpenPrivacy={() => openLegalLink('privacy')}
+        />
+      ) : null}
+      {realmConfirmation ? (
+        <LoginConsentDialog
+          scale={groupScale}
+          title={loginText('realmConsentTitle')}
+          body={loginText(
+            realmConfirmation.targetRegion === 'cn'
+              ? 'realmConsentBodyCn'
+              : 'realmConsentBodyGlobal',
+          )}
+          agreeLabel={loginText('realmConsentAgree')}
+          disagreeLabel={loginText('realmConsentDisagree')}
+          onAgree={() =>
+            void auth.dispatchLoginAction({ type: 'confirm-sso-realm' })
+          }
+          onDisagree={() =>
+            void auth.dispatchLoginAction({ type: 'cancel-sso-realm' })
+          }
+          onOpenTerms={() => undefined}
+          onOpenPrivacy={() => undefined}
         />
       ) : null}
     </MobileLoginHandoffStage>

@@ -175,6 +175,63 @@ describe('codex OAuth binding auto-claim on reconcile', () => {
     expect(fs.existsSync(bindingFile)).toBe(false);
   });
 
+  it('runs the model-discovery follow-up exactly once when the claim succeeds', async () => {
+    // 首启回归：本机已有 ChatGPT 凭证这条路径不走 OAuth 登录动作，拿不到 onLoginSuccess。
+    // 认领完不补拉，供应商就停在「已连接 + 零模型」，清单要等用户打开某个面板才出现。
+    const { bindingFile } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const claimed = vi.fn();
+    adapter.setOnOAuthBindingClaimed(claimed);
+
+    await expect(adapter.getState()).resolves.toMatchObject({ authenticated: true });
+    expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
+    expect(claimed).toHaveBeenCalledOnce();
+
+    // 绑定已在场 → 后续读取不再认领，也不该重复补拉（补拉会 spawn app-server）。
+    await adapter.getState();
+    expect(claimed).toHaveBeenCalledOnce();
+  });
+
+  it('does not run the follow-up when there was nothing to claim', async () => {
+    const { bindingFile } = fixture();
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({ openai: 'owner-a', legacyClaimOwner: 'owner-a' }),
+    );
+    h.dataOwnerId = 'owner-b';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+    const adapter = new DesktopCodexAuthAdapter();
+    const claimed = vi.fn();
+    adapter.setOnOAuthBindingClaimed(claimed);
+
+    await expect(adapter.getState()).resolves.toMatchObject({ authenticated: false });
+    expect(claimed).not.toHaveBeenCalled();
+  });
+
+  it('keeps the claim successful when the follow-up throws or rejects', async () => {
+    // 补拉是「认领之后要做什么」，它失败不该被记成认领失败，更不该把 reconcile 链路搞挂。
+    const { bindingFile } = fixture();
+    h.dataOwnerId = 'owner-a';
+    const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');
+
+    const throwing = new DesktopCodexAuthAdapter();
+    throwing.setOnOAuthBindingClaimed(() => {
+      throw new Error('backfill exploded');
+    });
+    await expect(throwing.getState()).resolves.toMatchObject({ authenticated: true });
+    expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
+
+    fs.rmSync(bindingFile, { force: true });
+    const rejecting = new DesktopCodexAuthAdapter();
+    rejecting.setOnOAuthBindingClaimed(async () => {
+      throw new Error('backfill rejected');
+    });
+    await expect(rejecting.getState()).resolves.toMatchObject({ authenticated: true });
+    expect(readBindingFile(bindingFile)).toMatchObject({ openai: 'owner-a' });
+  });
+
   it('keeps pre-session behavior without writing any binding when no owner is committed', async () => {
     const { bindingFile } = fixture();
     const { DesktopCodexAuthAdapter } = await import('../auth-adapters.js');

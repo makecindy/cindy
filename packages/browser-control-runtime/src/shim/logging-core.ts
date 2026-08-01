@@ -5,7 +5,7 @@
  * 54 config types). The browser core only calls a small surface
  * (`createSubsystemLogger(name).child(sub).{trace,debug,info,warn,error}`), so
  * we provide a minimal console-backed logger with the same shape. The host can
- * replace the sink via `setBrowserRuntimeLogSink` so logs flow into XDMaker's
+ * replace the sink via `setBrowserRuntimeLogSink` so logs flow into Cindy's
  * unified logger instead of console.
  *
  * redactSensitiveText / redactToolPayloadText reuse the conservative local

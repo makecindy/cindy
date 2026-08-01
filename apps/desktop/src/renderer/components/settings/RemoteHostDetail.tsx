@@ -13,10 +13,10 @@
  * that's Phase C (RemoteAgent as a BaseAgent subclass).
  */
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { CheckCircle2, AlertCircle, Play, Upload, Sparkles } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Play, Upload, Sparkles, Waypoints } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { toast } from '@/lib/toast';
@@ -25,6 +25,7 @@ import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { Spinner } from '@/components/ui/spinner';
 import * as sessionService from '@/lib/sessionService';
 import { buildCodexSyncWarning } from '@/utils/codexAuthSync';
+import { remoteSshHostsStore } from '@/lib/remoteSshHostsStore';
 
 type AgentKind = RemoteAgentKind;
 const AGENT_KINDS: ReadonlyArray<AgentKind> = ['claude-code', 'codex'];
@@ -240,9 +241,109 @@ export function RemoteHostDetail({ hostId }: Props) {
         <QuickTestPanel hostId={hostId} availableKinds={installedKinds} />
       )}
 
+      <AgentProxyTunnelCard hostId={hostId} />
+
       {agents.codex.probe?.installed && (
         <StartRemoteSessionPanel hostId={hostId} />
       )}
+    </div>
+  );
+}
+
+// ── agent proxy tunnel status card ──────────────────────────────────────────
+//
+// 「Agent 流量走本地 Proxy」pref 开启时显示隧道实时状态。快照来自
+// remoteSshHostsStore (main 端 status push 驱动, withPrefs 携带 tunnel state)。
+
+function AgentProxyTunnelCard({ hostId }: { hostId: string }) {
+  const { t } = useTranslation();
+  const snap = useSyncExternalStore(
+    (cb) => remoteSshHostsStore.subscribe(cb),
+    () => remoteSshHostsStore.get()?.find((h) => h.config.id === hostId) ?? null,
+  );
+  // 触发一次 ensure, 保证 cold start (没开过 Settings 列表) 也有快照。
+  // ensure() 可能因 IPC 失败 reject — 裸 void 会把 rejection 抛成 renderer
+  // unhandled rejection; 与 useRemoteSshHosts hook 同款 catch 守护
+  // (review: PR #715 copilot R7)。
+  useEffect(() => {
+    void remoteSshHostsStore.ensure().catch(() => {});
+  }, []);
+
+  const pref = snap?.agentProxy ?? null;
+  const tunnel = snap?.agentProxyTunnel ?? null;
+  // pref 已关但 disable 失败 (daemon 没死透, 错误已落 lastError) 时仍渲染
+  // 错误卡片 (codex R17 P2) — 否则 Settings 看起来像成功关闭, 存活 daemon
+  // 还握着旧 proxy env, 用户毫无察觉。
+  if (!pref && !tunnel?.lastError) return null;
+  const localTarget = pref?.mode === 'tunnel' ? `${pref.localHost}:${pref.localPort}` : '';
+
+  let icon;
+  let text: string;
+  let isError = false;
+  if (!pref) {
+    // disable 失败分支: pref 已清, 只有 lastError 可显示。
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyError', { message: tunnel?.lastError ?? '' });
+    isError = true;
+  } else if (pref.mode === 'env') {
+    // env 模式无隧道 — 只有 apply 成功 (phase='active' 由 main 侧落下) 才
+    // 显示「已注入」; 未连接 / 尚未应用 / live-turn 推迟中都显示等待态,
+    // 不凭 pref 存在就谎报已生效。
+    if (tunnel?.phase === 'error' && tunnel.lastError) {
+      icon = <AlertCircle size={14} />;
+      text = t('settings.remote.detail.agentProxyError', { message: tunnel.lastError });
+      isError = true;
+    } else if (snap?.status === 'ready' && tunnel?.phase === 'active') {
+      icon = <CheckCircle2 size={14} />;
+      text = t('settings.remote.detail.agentProxyEnvInfo', { url: pref.proxyUrl });
+    } else {
+      icon = <Spinner size={12} />;
+      text = t('settings.remote.detail.agentProxyEnvPending', { url: pref.proxyUrl });
+    }
+  } else if (tunnel?.phase === 'active' && tunnel.remotePort != null) {
+    // 隧道走独立 SSH 连接 — 主连接断开期间它可能仍在服务, active 优先展示。
+    icon = <CheckCircle2 size={14} />;
+    text = t('settings.remote.detail.agentProxyActive', {
+      port: tunnel.remotePort,
+      target: localTarget,
+    });
+  } else if (snap?.status !== 'ready' || tunnel?.phase === 'paused') {
+    // 主机断连/重连中: 隧道保活挂起, 主连接恢复后自动重建。
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyWaiting', { target: localTarget });
+  } else if (tunnel?.phase === 'port-busy') {
+    icon = <Spinner size={12} />;
+    text = t('settings.remote.detail.agentProxyPortBusy', {
+      port: tunnel.remotePort ?? pref.remotePort,
+    });
+  } else if (tunnel?.lastError && tunnel.phase === 'error') {
+    icon = <AlertCircle size={14} />;
+    text = t('settings.remote.detail.agentProxyError', { message: tunnel.lastError });
+    isError = true;
+  } else {
+    icon = <Spinner size={12} />;
+    text = t('settings.remote.detail.agentProxyPending', { target: localTarget });
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <p
+        className="text-13 font-medium"
+        style={{ color: 'var(--settings-section-sublabel)' }}
+      >
+        {t('settings.remote.detail.agentProxyTitle')}
+      </p>
+      <div
+        className="flex items-center gap-2 rounded-lg p-3 text-12"
+        style={{
+          border: '1px solid var(--settings-theme-card-border)',
+          color: isError ? 'var(--error-fg)' : 'var(--settings-integration-subtitle)',
+        }}
+      >
+        <Waypoints size={14} className="shrink-0" />
+        {icon}
+        <span className="break-all">{text}</span>
+      </div>
     </div>
   );
 }
@@ -705,7 +806,7 @@ function QuickTestResult({ result }: { result: RemoteAgentOneShotResult }) {
             style={{
               backgroundColor: 'var(--settings-input-bg, #faf9f5)',
               borderColor: 'var(--settings-input-border, #d7d7d4)',
-              color: 'var(--error-fg, #dc2626)',
+              color: 'var(--error-fg)',
               fontFamily: 'var(--app-font-code, var(--app-font-code-default))',
               margin: 0,
             }}

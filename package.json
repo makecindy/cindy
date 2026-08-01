@@ -49,12 +49,14 @@
       "protobufjs": "7.6.5",
       "tar": "^7.5.21",
       "brace-expansion@^5.0.0": "^5.0.8",
+      "@anthropic-ai/sdk": "0.91.1",
       "js-yaml@^4.0.0": "^4.3.0",
       "zod": "4.3.6",
       "tmp": "^0.2.7",
       "fast-uri": "^3.1.4",
       "sharp": "^0.35.0",
-      "@esbuild-kit/core-utils>esbuild": "^0.25.0"
+      "@esbuild-kit/core-utils>esbuild": "^0.25.0",
+      "builder-util-runtime": "^9.7.0"
     },
     "patchedDependencies": {
       "harmonyos-sans-sc-webfont-splitted": "dependency-patches/harmonyos-sans-sc-webfont-splitted.patch",
@@ -114,6 +116,7 @@
     "test:runner": "node --test scripts/__tests__/test-workspaces.test.mjs scripts/__tests__/desktop-worker-benchmark.test.mjs scripts/__tests__/dev-docs-contract.test.mjs scripts/__tests__/restart-desktop-remote.test.mjs scripts/__tests__/dev-migration-policy.test.mjs scripts/__tests__/ensure-deps.test.mjs scripts/__tests__/client-endpoint-build-env.test.mjs scripts/__tests__/desktop-dev-region.test.mjs scripts/__tests__/endpoint-consistency.test.mjs scripts/__tests__/endpoint-local-file.test.mjs scripts/__tests__/ensure-agent-binaries.test.mjs scripts/__tests__/ensure-android-platform-tools.test.mjs scripts/__tests__/fetch-with-timeout.test.mjs scripts/__tests__/agent-binary-cdn-fallback.test.mjs scripts/__tests__/ensure-binary-fallback.test.mjs scripts/__tests__/verify-sha256.test.mjs scripts/__tests__/migration-freeze.test.mjs scripts/__tests__/third-party-notices.test.mjs scripts/__tests__/brand-identity-sync.test.mjs scripts/__tests__/check-dco.test.mjs scripts/__tests__/package-args.test.mjs scripts/__tests__/glossary-rules.test.mjs",
     "test:unit": "pnpm test:runner && node scripts/test-workspaces.mjs --tier unit",
     "test:all": "pnpm test:runner && node scripts/test-workspaces.mjs --all",
+    "test:git-integration": "pnpm test:runner && node scripts/test-workspaces.mjs --tier git-integration",
     "test:db": "pnpm test:runner && node scripts/test-workspaces.mjs --tier db",
     "test:guard": "node scripts/test-workspaces.mjs --tier guard",
     "ci:scheduler-guard": "node scripts/scheduler-ci-guard.mjs",

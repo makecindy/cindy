@@ -12,6 +12,7 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
+import { withVerifiedStaticWindows } from './builtin.js';
 import { findReservedOAuthExtraParam } from './provider-oauth.js';
 import { isProviderRequestPath } from './provider-url.js';
 
@@ -184,7 +185,16 @@ function validateProvider(p: Provider): void {
     p.auth.method === 'oauth' || p.auth.oauth === undefined,
     `provider '${p.id}' auth.oauth not allowed for ${p.auth.method} method`,
   );
-  assert(Array.isArray(p.agents) && p.agents.length > 0, `provider.agents missing for '${p.id}'`);
+  // agents 允许为空**当且仅当**声明了媒体清单(媒体-only 供应商,如 Gemini 图像
+  // API key 来源,2026-07 图像多来源):图像/视频模型不经 agent runtime,由主机
+  // 图像通道直调,不需要任何 agent 路由;没有媒体清单的空 agents 仍是无效数据。
+  const hasMediaModels =
+    (Array.isArray(p.imageModels) && p.imageModels.length > 0) ||
+    (Array.isArray(p.videoModels) && p.videoModels.length > 0);
+  assert(
+    Array.isArray(p.agents) && (p.agents.length > 0 || hasMediaModels),
+    `provider.agents missing for '${p.id}'`,
+  );
   assert(p.agents.every(isAgentKind), `provider.agents has invalid kind for '${p.id}'`);
   assert(p.routing && typeof p.routing === 'object', `provider.routing missing for '${p.id}'`);
   assert(
@@ -220,14 +230,9 @@ function validateProvider(p: Provider): void {
           `provider '${p.id}' routing[${agent}] cannot use openai-chat`,
         );
       }
-      // Codex host 只实现原生 Responses 与本地 Responses→Chat 桥;anthropic-messages 会掉进
-      // 透明路由、把 Responses body 直发上游 → 确定性 4xx。热更目录里的坏 runtime 在此拦下。
-      if (agent === 'codex') {
-        assert(
-          routing.wireProtocol !== 'anthropic-messages',
-          `provider '${p.id}' routing[${agent}] cannot use anthropic-messages`,
-        );
-      }
+      // Codex supports native Responses, Responses→Chat and Responses→Anthropic local
+      // bridges. The latter is deliberately a local handler path; transparent forwarding
+      // must never be used for an Anthropic Messages runtime.
     }
     if (routing.requestPath !== undefined) {
       assert(
@@ -377,7 +382,6 @@ function isValidPreset(v: unknown): v is ProviderPreset {
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;
-    if (agent === 'codex' && r.wireProtocol === 'anthropic-messages') return false;
     if (r.headers !== undefined) {
       if (!r.headers || typeof r.headers !== 'object' || Array.isArray(r.headers)) return false;
       if (Object.values(r.headers as Record<string, unknown>).some((x) => typeof x !== 'string')) return false;
@@ -509,5 +513,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
   else delete catalog.presets;
-  return catalog;
+  // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
+  // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
+  //
+  // 刻意**不**原地替换 catalog.providers:入参可能就是 BUNDLED_CATALOG(共享的 import 对象),
+  // 原地改会把标记悄悄写回那份共享目录 —— 既是跨调用方的副作用,也会让「bundled 自己有没有
+  // 标记」这类断言变成假通过。
+  return { ...catalog, providers: catalog.providers.map(withVerifiedStaticWindows) };
 }

@@ -4,9 +4,11 @@ import {
   type MobileMarkdownBlock,
   type MobileMarkdownInline,
 } from '@/session/messageMarkdown';
+import { tokenizeCode } from '@/session/codeHighlight';
 import { parseSessionDeepLinkUrl, shortSessionId } from '@/session/sessionLinks';
 import { buildKatexLoaderJs } from '@/session/mathWebViewHtml';
-import { lightColors, typeScale } from '@/theme/tokens';
+// lineHeight 取别名:本模块内 `lineHeight` 是正文行高的局部变量(来自 options)。
+import { lightColors, lineHeight as lineHeightScale, typeScale } from '@/theme/tokens';
 import { i18n } from '@/i18n';
 
 /**
@@ -20,6 +22,8 @@ export interface SelectableMarkdownHtmlOptions {
   borderColor?: string;
   chipColor?: string;
   fontSize?: number;
+  /** 行内 code 文字色(压暗档,不是底色;见 css 里的说明)。 */
+  inlineCodeColor?: string;
   lineHeight?: number;
   markerWidth?: number;
   mutedColor?: string;
@@ -28,6 +32,15 @@ export interface SelectableMarkdownHtmlOptions {
    * HTML(WebView 无法事后 patch DOM);缺失时降级「会话 <短id>」。
    */
   sessionLinkTitles?: Readonly<Record<string, string>>;
+  /** 代码块语法着色的 6 档颜色(缺省用 light 主题值)。 */
+  syntaxColors?: {
+    comment?: string;
+    function?: string;
+    keyword?: string;
+    number?: string;
+    property?: string;
+    string?: string;
+  };
   tableCellMinWidth?: number;
   textColor?: string;
   /**
@@ -143,9 +156,22 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
   const mutedColor = cssValue(options.mutedColor ?? lightColors.textSecondary);
   const borderColor = cssValue(options.borderColor ?? lightColors.border);
   const chipColor = cssValue(options.chipColor ?? lightColors.surfaceChip);
+  const inlineCodeColor = cssValue(options.inlineCodeColor ?? lightColors.chatInlineCodeText);
   const fontSize = cssNumber(options.fontSize ?? 16);
   const lineHeight = cssNumber(options.lineHeight ?? 23);
   const codeFontSize = cssNumber(typeScale.code);
+  // 标题两档大号 + 共用行高(20/28、18/28 都是 lineHeight 阶梯里的既有配对)。
+  const headingLargeFontSize = cssNumber(typeScale.title);
+  const headingMediumFontSize = cssNumber(typeScale.subtitle);
+  const headingLineHeight = cssNumber(lineHeightScale.listTitle);
+  const syntax = {
+    comment: cssValue(options.syntaxColors?.comment ?? lightColors.syntaxComment),
+    function: cssValue(options.syntaxColors?.function ?? lightColors.syntaxFunction),
+    keyword: cssValue(options.syntaxColors?.keyword ?? lightColors.syntaxKeyword),
+    number: cssValue(options.syntaxColors?.number ?? lightColors.syntaxNumber),
+    property: cssValue(options.syntaxColors?.property ?? lightColors.syntaxProperty),
+    string: cssValue(options.syntaxColors?.string ?? lightColors.syntaxString),
+  };
   const bodyGap = cssNumber(options.bodyGap ?? 10);
   const markerWidth = cssNumber(options.markerWidth ?? 24);
   const tableCellMinWidth = cssNumber(options.tableCellMinWidth ?? 112);
@@ -203,14 +229,32 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
     p, h1, h2, h3, h4, h5, h6, blockquote, pre, table, .list-row {
       margin: 0;
     }
+    /* 标题分三档。改前 h1–h6 全部等于正文字号(只有 font-weight:500 撑),文档里
+       完全读不出层级 —— 与聊天消息流同一个缺陷、同一套修法:
+         h1  20/28 = 1.400(= desktop h1 比例)
+         h2  18/28 = 1.556(= desktop h2 比例)
+         h3+ 正文字号,靠 500 字重区分(= desktop 让 h3 贴近正文的处理) */
     h1, h2, h3, h4, h5, h6 {
       font-size: ${fontSize}px;
       font-weight: 500;
       line-height: ${lineHeight}px;
     }
+    h1 {
+      font-size: ${headingLargeFontSize}px;
+      line-height: ${headingLineHeight}px;
+    }
+    h2 {
+      font-size: ${headingMediumFontSize}px;
+      line-height: ${headingLineHeight}px;
+    }
+    /* 引用正文与列表 marker 走正文色(不用 mutedColor):mutedColor =
+       textSecondary 对底色仅 3.1:1(light)/ 3.4:1(dark),低于 WCAG AA 4.5:1。
+       引用语义由左侧竖线表达,编号与列表项正文同色。与聊天消息流
+       (MessageRenderer 的 markdownQuoteText / markdownListMarker)保持一致。
+       th 仍用 mutedColor —— 表头是元信息且有 font-weight 500 区分。 */
     blockquote {
       border-left: 2px solid ${borderColor};
-      color: ${mutedColor};
+      color: ${textColor};
       padding-left: 8px;
     }
     .list-row {
@@ -218,7 +262,7 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       gap: 8px;
     }
     #xdt-content .list-marker {
-      color: ${mutedColor};
+      color: ${textColor};
       flex: 0 0 ${markerWidth}px;
       text-align: right;
     }
@@ -238,41 +282,71 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       padding: 10px 12px;
       white-space: pre-wrap;
     }
+    /* 语法着色只作用于代码块内(pre code):行内 code 不着色 —— 一句话里的短标识
+       被染成关键字色反而更吵。与聊天消息流共用 session/codeHighlight 的分词
+       结果,配色同为 GitHub 主题。
+       注意:本文件是模板字符串,注释里不能出现反引号。 */
+    pre code .syn-keyword { color: ${syntax.keyword}; }
+    pre code .syn-string { color: ${syntax.string}; }
+    pre code .syn-comment { color: ${syntax.comment}; }
+    pre code .syn-number { color: ${syntax.number}; }
+    pre code .syn-function { color: ${syntax.function}; }
+    pre code .syn-property { color: ${syntax.property}; }
+    /* 行内 code:零底色 + 等宽字体 + 文字压暗(取值见 tokens 里 chatInlineCodeText)。
+       本文件虽然是 CSS,做得出圆角淡底,但仍跟随聊天消息流的 markdownInlineCode ——
+       同一个 App 里同一种元素不该两副样子;桌面端另走 GitHub 淡底,两端形态刻意不同。 */
     code {
-      background: ${chipColor};
-      border-radius: 4px;
+      color: ${inlineCodeColor};
       font-family: Menlo, Monaco, Consolas, monospace;
       font-size: ${codeFontSize}px;
-      padding: 0 4px;
     }
+    /* 代码块内不压暗:pre 已有底色与描边把它划成独立区块,里面还要承载语法着色,
+       正文片段必须留在正文色上。不写这条 color 就会继承上面 code 的压暗。
+       background 同理复位(与 GitHub 的 pre code 规则同形):判据是**祖先结构**,
+       不是语言标注 —— 无语言围栏一样在 pre 里,一样要复位。桌面端因为按
+       className(只有带语言标注才有)近似判断,曾把无语言围栏整块套上行内底色,
+       修法是给 pre 的 code 打结构标记(见 desktop 的 rehypeFencedCodeMarker)。
+       别当这条规则冗余删掉,回归测试见 selectableMarkdownHtml.test.ts。 */
     pre code {
       background: transparent;
-      border-radius: 0;
-      font-size: inherit;
-      padding: 0;
-    }
-    a {
       color: ${textColor};
+      font-size: inherit;
+    }
+    /* 可点的 http(s) 链接:**只有下划线**,颜色继承上下文(DESIGN.md §14.5 —— 可点态
+       相对不可点态只多一条横线)。不写死 textColor:表头等非正文色上下文里会让链接除
+       下划线之外还变色。
+       但这里必须**显式**写 color: inherit 而不是留空 —— 本文件是手写 CSS 模板,没有
+       Tailwind preflight 那种 a { color: inherit } 复位,留空会命中 UA 样式表的
+       a:link { color: -webkit-link },外链掉回浏览器默认蓝(既违反本规则,又不随
+       light/dark 适配、深色底对比度差)。桌面靠 preflight、RN Text 靠天然继承,唯独
+       WebView 需要这一行(PR #1144 review 实捉)。
+       ⚠️ 本段在 JS 模板字符串内,注释里不能用反引号。 */
+    a {
+      color: inherit;
       text-decoration: underline;
     }
+    /* 直连图片:本模块的唯一消费方 MarkdownFileReader 没有 postMessage bridge,
+       生成的 <img> 也不在链接内 —— 点它毫无响应,所以**不带 pointer**(与下面的
+       .xdt-image-chip 同一条判据:这个面上「像能点」的反馈一律不给)。
+       上一轮只清了 chip、漏了直连图片这对称的另一半,PR #1144 review 实捉。 */
     img {
       border-radius: 8px;
-      cursor: pointer;
       display: inline-block;
       height: auto;
       max-width: 100%;
-      /* 气泡内渲染高度上限,与 bridge 预留封顶(320px)对齐:无尺寸 ![](url) 的长图加载后
-         不再无界长高(intrinsic 比例在 max-width/max-height 双约束下保持,宽随高等比收缩),
-         加载后的跳变被封在预留值与上限的差以内;点开 lightbox 看全图。 */
+      /* 渲染高度上限 320px:无尺寸 ![](url) 的长图加载后不再无界长高(intrinsic 比例在
+         max-width/max-height 双约束下保持,宽随高等比收缩),加载后的跳变被封在这个
+         上限以内。 */
       max-height: 320px;
       vertical-align: middle;
     }
+    /* 图片 chip:阅读器没有 postMessage bridge,这里点不动,所以**不带下划线也不带
+       pointer** —— 下划线在本仓专表「可点」(DESIGN.md §14.5),给点不动的东西加就是
+       制造反例。底色只表达「这是张图的占位」这层排版含义。 */
     .xdt-image-chip {
       background: ${chipColor};
       border-radius: 6px;
-      cursor: pointer;
       padding: 1px 8px;
-      text-decoration: underline;
     }
     .xdt-session-chip {
       background: ${chipColor};
@@ -283,7 +357,8 @@ function buildSelectableMarkdownCss(options: SelectableMarkdownHtmlOptions): str
       display: inline-block;
       max-width: 100%;
       padding: 0 6px;
-      text-decoration: none;
+      /* 同 .xdt-image-chip:阅读器里会话 chip 点不动(无 bridge、interceptNavigation
+         只放行 http(s)),所以不带下划线。渲染侧也用 <span> 而非 <a>。 */
       vertical-align: bottom;
     }
     table {
@@ -349,7 +424,9 @@ function renderBlock(block: MobileMarkdownBlock, ctx: RenderContext): string {
       ].join('');
     }
     case 'code':
-      return `<pre><code>${escapeHtml(block.text)}</code></pre>`;
+      // 与聊天消息流同一个 tokenizer(session/codeHighlight),着色口径一致;
+      // 每个非 plain 片段包一层 <span class="syn-*">,颜色见 css 里的 .syn-* 规则。
+      return `<pre><code>${highlightCodeHtml(block.text, block.language)}</code></pre>`;
     case 'mermaid':
       return `<pre><code>${escapeHtml(`// mermaid\n${block.text}`)}</code></pre>`;
     case 'math':
@@ -379,16 +456,31 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
     case 'text':
       return escapeHtml(inline.text);
     case 'link': {
-      const session = parseSessionDeepLinkUrl(inline.url);
-      if (session) {
-        // 会话深链 → chip:作者显式 label 优先,否则标题 map,再降级「会话 <短id>」。
-        const explicit =
-          inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
-        const title =
-          explicit ??
-          ctx.sessionLinkTitles?.[session.sessionId] ??
-          i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
-        return `<a class="xdt-session-chip" href="${escapeAttribute(inline.url)}">›&nbsp;${escapeHtml(title)}</a>`;
+      // 本模块唯一消费方是文件阅读器 WebView(MarkdownFileReader)。那个面**只有
+      // http(s) 真的可点**:interceptNavigation 只把 http(s) 交给 Linking.openURL,
+      // 其余导航一律 return false;而且它没有任何 postMessage bridge,所以 chip 类
+      // 元素的点击也无处可去。
+      //
+      // 于是按 DESIGN.md §14.5 规则①的反面要求:**这个面上只有 http(s) 能带下划线**。
+      // 会话深链 / 本地路径 / mailto 等一律渲染成不可点形态、不出下划线 —— 否则就是
+      // 「有下划线却点不动」的反例,把刚建立的信号本身弄脏(PR #1144 review 实捉)。
+      if (!/^https?:\/\//i.test(inline.url)) {
+        const session = parseSessionDeepLinkUrl(inline.url);
+        if (session) {
+          // 会话引用仍保留 chip 观感(底色 + 边框只表达「这是个会话引用」这层排版
+          // 含义),但用 <span> 而不是 <a> —— 点不动的东西不该是锚点。
+          const explicit =
+            inline.text.trim() && inline.text.trim() !== inline.url ? inline.text.trim() : null;
+          const title =
+            explicit ??
+            ctx.sessionLinkTitles?.[session.sessionId] ??
+            i18n.t('message.renderer.sessionChipFallback', { id: shortSessionId(session.sessionId) });
+          return `<span class="xdt-session-chip">›&nbsp;${escapeHtml(title)}</span>`;
+        }
+        // 本地路径(`[README.md](/abs/README.md:17)` 与正文裸写的路径)、mailto 等:
+        // 纯文本。与原生侧「未点亮 → 纯文本」同语义(阅读器里没有 chip / 远端 stat
+        // 基础设施,让文档里的路径也可点属于另一个功能)。
+        return escapeHtml(inline.text);
       }
       return `<a href="${escapeAttribute(inline.url)}">${escapeHtml(inline.text)}</a>`;
     }
@@ -426,6 +518,21 @@ function renderInline(inline: MobileMarkdownInline, ctx: RenderContext = {}): st
       return `<img src="${escapeAttribute(inline.url)}" data-xdt-src="${escapeAttribute(inline.url)}" alt="${escapeAttribute(inline.alt)}"${size}>`;
     }
   }
+}
+
+/**
+ * 代码块语法着色 → HTML。走与聊天消息流相同的 tokenizer,颜色由 css 的 .syn-*
+ * 规则给(见 buildSelectableMarkdownCss)。每个片段都经 escapeHtml,不会因为着色
+ * 引入未转义内容。
+ */
+function highlightCodeHtml(source: string, language: string | undefined): string {
+  return tokenizeCode(source, language)
+    .map((token) => (
+      token.kind === 'plain'
+        ? escapeHtml(token.text)
+        : `<span class="syn-${token.kind}">${escapeHtml(token.text)}</span>`
+    ))
+    .join('');
 }
 
 function escapeHtml(value: string): string {

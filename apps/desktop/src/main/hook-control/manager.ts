@@ -17,15 +17,19 @@
 import { randomUUID } from 'node:crypto';
 
 import {
+  HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
+  HOOK_FEATURE_PROVIDER_X,
   HOOK_FEATURE_SESSION_PICKER,
   HOOK_FEATURE_SLACK_TOOLS,
   makeBindRevoke,
   makeBindStart,
   makeHello,
+  makeLifecyclePreference,
   makePrefsGet,
   makePrefsSet,
   makeProviderBindCancel,
@@ -56,15 +60,23 @@ import type {
   HookPendingBindView,
   HookPrefsPatch,
   HookPrefsView,
+  HookProvider as ClientHookProvider,
   ProviderBindingView,
+  ProviderHookView,
   ProviderPrefsView,
   HookTeamBindingView,
   SlackHookView,
 } from '../../shared/hookControlIpc.js';
-import type { ProviderBindingCacheEntry, SlackHookStore } from './store.js';
+import {
+  DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
+  type ProviderBindingCacheEntry,
+  type SlackHookStore,
+} from './store.js';
 import type { HookDispatcher } from './dispatcher.js';
 import { buildQueryResponse, type AgentModelSource } from './queryResponder.js';
+import { recordGroupMessage, sweepGroupWindowExpired } from './groupWindow.js';
 import { parseTelegramConnectUrl } from './telegramDeepLink.js';
+import { parseXConnectUrl, xProfileUrlOrNull } from './xDeepLink.js';
 import type { HookTransport, HookTransportOpts, HookTransportStatus } from './transport.js';
 
 /** dispatcher / bindings 的 connectionId 基础键；运行时追加账号与 provider。 */
@@ -81,9 +93,9 @@ function isLegacySlackDmExternalKey(externalKey: string): boolean {
 }
 
 /**
- * Route only the two providers implemented by this client.  Missing source is
- * retained solely for legacy Slack servers; Telegram always has both an
- * explicit source and the provider-prefixed lane key from its wire contract.
+ * Route only the providers implemented by this client.  Missing source is
+ * retained solely for legacy Slack servers; Telegram and X always have both an
+ * explicit source and the provider-prefixed lane key from their wire contracts.
  * A source/key disagreement fails closed instead of letting a future or
  * compromised provider inherit Slack permissions and prompt semantics.
  */
@@ -91,6 +103,7 @@ export function providerForTaskDispatch(
   payload: Pick<import('@cindy/slack-hook-protocol').TaskDispatchPayload, 'externalKey' | 'source'>,
 ): HookProvider | null {
   const telegramKey = payload.externalKey.startsWith('telegram:');
+  const xKey = payload.externalKey.startsWith('x:');
   const slackKey =
     payload.externalKey.startsWith('slack:') ||
     payload.externalKey.startsWith('team-slack:') ||
@@ -100,6 +113,7 @@ export function providerForTaskDispatch(
   const source = payload.source?.im;
   if (source === undefined) return slackKey ? 'slack' : null;
   if (source === 'telegram') return telegramKey ? 'telegram' : null;
+  if (source === 'x') return xKey ? 'x' : null;
   if (source === 'slack') return slackKey ? 'slack' : null;
   return null;
 }
@@ -107,6 +121,7 @@ export function providerForTaskDispatch(
 /** Route archive frames only for lane-key formats owned by implemented providers. */
 export function providerForExternalKey(externalKey: string): HookProvider | null {
   if (externalKey.startsWith('telegram:')) return 'telegram';
+  if (externalKey.startsWith('x:')) return 'x';
   if (
     externalKey.startsWith('slack:') ||
     externalKey.startsWith('team-slack:') ||
@@ -126,6 +141,8 @@ export interface HookControlManagerDeps {
   createTransport: (opts: HookTransportOpts) => HookTransport;
   /** Telegram 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
   getTelegramUrl: () => string;
+  /** X (Twitter) 平级服务端点；空字符串表示当前环境尚未部署该服务。 */
+  getXUrl: () => string;
   /** 登录 accessToken 源(transport 每次建连实时取; null = 未登录)。 */
   getAuthToken: () => Promise<string | null>;
   /** upgrade 401 后强制刷新一次登录凭证；成功后 transport 立即重连。 */
@@ -150,6 +167,8 @@ export interface HookControlManagerDeps {
   notifyProviderPrefs?: (view: ProviderPrefsView) => void;
   /** prefs 读写往返超时(默认 10s; 测试注短)。 */
   prefsTimeoutMs?: number;
+  /** multi-team 自动首绑延迟窗；仅测试注短，生产默认 300ms。 */
+  autoBindDeferMs?: number;
   /** Slack 网关工具往返超时(默认 60s —— 搜索/长查询比 prefs 慢得多; 测试注短)。 */
   toolTimeoutMs?: number;
   /**
@@ -181,6 +200,8 @@ export interface HookControlManagerDeps {
    * renderer 主动触发的打开动作能等待系统 shell 的真实结果。
    */
   openTelegramUrl?: (url: string) => void | Promise<void>;
+  /** X URL 的 main 安全边界(语义同 openTelegramUrl, 校验走 validateXExternalUrl)。 */
+  openXUrl?: (url: string) => void | Promise<void>;
   log: { info(msg: string): void; warn(msg: string): void };
 }
 
@@ -195,6 +216,8 @@ export interface HookControlManager {
   refreshHello(): boolean;
   /** 渲染层快照。 */
   snapshot(): SlackHookView;
+  /** 持久化并尽力实时同步 Slack 上下线通知偏好。 */
+  setLifecycleAnnouncement(enabled: boolean): void;
   /**
    * 发起 Slack 账号绑定(SIWS OIDC): 发 bind.start(无参); server 回
    * bind.update(pending, authorizeUrl), main 打开系统浏览器。false = 连接不在线。
@@ -261,13 +284,17 @@ export interface HookControlManager {
     teamId?: string | null,
   ): Promise<HookPrefsView>;
   setProviderEnabled(provider: HookProvider, enabled: boolean): void;
-  providerBindStart(provider: 'telegram'): boolean;
-  providerBindCancel(provider: 'telegram'): boolean;
-  providerBindRevoke(provider: 'telegram'): boolean;
-  openTelegramAction(action: 'connect' | 'provider' | 'add-to-group'): Promise<boolean>;
-  getProviderWorkspacePrefs(provider: 'telegram'): Promise<ProviderPrefsView>;
+  providerBindStart(provider: NeutralHookProvider): boolean;
+  providerBindCancel(provider: NeutralHookProvider): boolean;
+  providerBindRevoke(provider: NeutralHookProvider): boolean;
+  /** 在本机安全打开 provider 的绑定链接 / bot 主页 / 加群链接(main 边界校验)。 */
+  openProviderAction(
+    provider: NeutralHookProvider,
+    action: 'connect' | 'provider' | 'add-to-group',
+  ): Promise<boolean>;
+  getProviderWorkspacePrefs(provider: NeutralHookProvider): Promise<ProviderPrefsView>;
   setProviderWorkspacePrefs(
-    provider: 'telegram',
+    provider: NeutralHookProvider,
     workspace: string,
     patch: HookPrefsPatch,
   ): Promise<ProviderPrefsView>;
@@ -320,9 +347,11 @@ export class HookNotConnectedError extends Error {
     super(
       provider === 'telegram'
         ? 'telegram provider connection is not connected'
-        : provider === 'slack'
-          ? 'slack hook connection is not connected'
-          : 'hook connection is not connected',
+        : provider === 'x'
+          ? 'x provider connection is not connected'
+          : provider === 'slack'
+            ? 'slack hook connection is not connected'
+            : 'hook connection is not connected',
     );
     this.name = 'HookNotConnectedError';
     this.provider = provider;
@@ -339,9 +368,11 @@ export class HookNotConnectedError extends Error {
 export function hookNotConnectedIpcMessage(provider: HookProvider | null): string {
   return provider === 'telegram'
     ? 'Telegram provider is not connected'
-    : provider === 'slack'
-      ? 'slack hook is not connected'
-      : 'hook is not connected';
+    : provider === 'x'
+      ? 'X provider is not connected'
+      : provider === 'slack'
+        ? 'slack hook is not connected'
+        : 'hook is not connected';
 }
 
 /** prefs 往返超时 —— server 大概率是不认识 prefs.* 帧的旧版本(丢帧不应答)。 */
@@ -406,10 +437,17 @@ type ProviderBindRequest =
   | { kind: 'cancel'; requestId: string; attemptId: string }
   | { kind: 'revoke'; requestId: string; bindingId: string };
 
-/** Provider-neutral 连接线的 provider 值域(Slack 走 legacy 专属帧, 不进本表)。 */
-type NeutralHookProvider = Exclude<HookProvider, 'slack'>;
+/**
+ * Provider-neutral 连接线的 provider 值域(Slack 走 legacy 专属帧, 不进本表)。
+ *
+ * 从**客户端支持集**(IPC 契约的 ClientHookProvider)派生, 而不是协议全集:
+ * 协议按 append-only 演进, 客户端尚未实现的 provider 不得漏进 renderer 可见
+ * 类型。X 渠道已随 xConfig lane 与设置页落地(makecindy/cindy#691),
+ * ClientHookProvider 已同步放宽为含 'x'。
+ */
+export type NeutralHookProvider = Exclude<ClientHookProvider, 'slack'>;
 
-/** renderer 请求打开 provider 相关链接的动作(openTelegramAction 的值域)。 */
+/** renderer 请求打开 provider 相关链接的动作(openProviderAction 的值域)。 */
 type ProviderOpenAction = 'connect' | 'provider' | 'add-to-group';
 
 /**
@@ -491,6 +529,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     isAvailable = () => true,
     createTransport,
     getTelegramUrl,
+    getXUrl,
     getAuthToken,
     refreshAuthToken,
     deviceInfo,
@@ -499,6 +538,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     onSlackToolProviderEnabledChanged,
     notifyPrefs,
     prefsTimeoutMs,
+    autoBindDeferMs = AUTO_BIND_DEFER_MS,
     toolTimeoutMs,
     bindPendingTimeoutMs,
     installWaitTimeoutMs,
@@ -509,6 +549,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     accountInitiallyActive,
     openExternalUrl,
     openTelegramUrl,
+    openXUrl,
     log,
   } = deps;
   const id = SLACK_HOOK_CONNECTION_ID;
@@ -551,6 +592,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       HOOK_FEATURE_PROVIDER_BIND,
       HOOK_FEATURE_PROVIDER_PREFS,
       HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_GROUP_RELAY,
     ],
     isEnabled: () => store.get().telegramEnabled,
     setEnabled: (enabled) => {
@@ -576,7 +618,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       };
     },
     writeBindingCache: (entry) => {
-      store.setTelegramBindingCache(entry);
+      store.setProviderBindingCache('telegram', entry);
     },
     normalizePendingPayload: (payload) => {
       const connectLink = parseTelegramConnectUrl(payload.connectUrl ?? '');
@@ -609,6 +651,69 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     openUrl: openTelegramUrl,
   };
 
+  const xConfig: NeutralProviderConfig = {
+    provider: 'x',
+    label: 'X',
+    getUrl: getXUrl,
+    notConfiguredError: 'X service endpoint is not configured',
+    requiredFeatures: [
+      HOOK_FEATURE_PROVIDER_BIND,
+      HOOK_FEATURE_PROVIDER_PREFS,
+      HOOK_FEATURE_SESSION_PICKER,
+      HOOK_FEATURE_PROVIDER_X,
+    ],
+    // X v1 没有群消息中继(group relay 是 Telegram 专属能力), 不声明。
+    helloFeatures: [
+      HOOK_FEATURE_PROVIDER_BIND,
+      HOOK_FEATURE_PROVIDER_PREFS,
+      HOOK_FEATURE_SESSION_PICKER,
+    ],
+    isEnabled: () => store.get().xEnabled,
+    setEnabled: (enabled) => {
+      store.setProviderEnabled('x', enabled);
+    },
+    restoreCachedBinding: () => {
+      const cached = store.get().xBindingCache;
+      if (cached === null) return null;
+      return {
+        provider: 'x',
+        state: 'confirmed',
+        attemptId: null,
+        bindingId: cached.bindingId,
+        principalId: cached.principalId,
+        principalName: cached.principalName,
+        scopeId: cached.scopeId,
+        scopeName: cached.scopeName,
+        connectUrl: null,
+        expiresAt: null,
+        reason: null,
+        // scopeName 是 bot handle(如 '@CindyBot'); 形状不合法时容错为 null,
+        // 缓存恢复路径不抛错。
+        remediationUrl: xProfileUrlOrNull(cached.scopeName),
+        actions: ['revoke', 'open_provider'],
+      };
+    },
+    writeBindingCache: (entry) => {
+      store.setProviderBindingCache('x', entry);
+    },
+    normalizePendingPayload: (payload) => {
+      // connectUrl 是 X OAuth2 (PKCE) 授权页 —— host/path/参数集精确校验,
+      // 授权 URL 不含 bot 身份, scopeName 原样保留(由 server 侧协商下发)。
+      const connectLink = parseXConnectUrl(payload.connectUrl ?? '');
+      return { ...payload, connectUrl: connectLink.url };
+    },
+    actionUrl: (action, bindingView) => {
+      if (action === 'connect' && bindingView.actions.includes('open_connect_url')) {
+        return bindingView.connectUrl;
+      }
+      if (action === 'provider' && bindingView.actions.includes('open_provider')) {
+        return xProfileUrlOrNull(bindingView.scopeName);
+      }
+      return null; // X 没有加群概念, add-to-group 恒不可用
+    },
+    ...(openXUrl !== undefined ? { openUrl: openXUrl } : {}),
+  };
+
   function createNeutralLane(config: NeutralProviderConfig): NeutralProviderLane {
     return {
       config,
@@ -628,12 +733,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   const telegramLane = createNeutralLane(telegramConfig);
+  const xLane = createNeutralLane(xConfig);
   /** 全部 provider-neutral 线; 遍历顺序即启动 / hello 重发顺序。 */
-  const lanes: readonly NeutralProviderLane[] = [telegramLane];
+  const lanes: readonly NeutralProviderLane[] = [telegramLane, xLane];
   // key 收窄到 NeutralHookProvider: 'slack' 走 legacy 线, 在编译期就挡在本表外
   const laneByProvider = new Map<NeutralHookProvider, NeutralProviderLane>(
     lanes.map((lane) => [lane.config.provider, lane]),
   );
+  /**
+   * 协议全集的 provider → 客户端实际跑着的那条 lane。两类值在这里都归为 null,
+   * 调用方按「没有这条线」处理:
+   *   - 'slack': 走 legacy 专属帧, 本就不进本表;
+   *   - 协议按 append-only 先行加入、客户端尚未实现的 provider(当前是 'x',
+   *     见 makecindy/cindy#691) —— 没有 lane config, 也没有设置页入口。
+   * 直接用 laneByProvider.get() 会因 key 已收窄而在这类入口处编译不过, 那正是
+   * 本函数要收的边界: 收窄发生一次, 而不是在每个调用点各写一遍断言。
+   */
+  function neutralLaneFor(provider: HookProvider): NeutralProviderLane | null {
+    return lanes.find((lane) => lane.config.provider === provider) ?? null;
+  }
   /**
    * (multi-team)自动首绑的延迟触发器: 空 bind.state + autoBindIntent 时不能
    * 立即发 bind.start —— server 的 hello 同步可能紧跟一帧 pending 回放(旧
@@ -713,6 +831,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     return lane.config.requiredFeatures.every((f) => lane.serverFeatures.includes(f));
   }
 
+  function lifecycleAnnouncementEnabled(): boolean {
+    return store.get().lifecycleAnnouncementOverride ?? DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT;
+  }
+
   function dispatchId(provider: HookProvider): string {
     const account = getAccountFingerprint?.() ?? 'no-account';
     return `${id}:${account}:${provider}`;
@@ -721,6 +843,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   function activateCurrentAccount(): void {
     if (accountActive || disposed) return;
     accountActive = true;
+    // 群窗口 TTL 兜底清扫: 流量路径的清扫只在有群消息/派发时触发, 这里保证
+    // 群不再活跃(或通道停用)后过期行也在每次账号激活时清掉。纳入
+    // pendingAccountOps: 登出/切号等待清扫落库完成再销毁 DB client。
+    trackAccountOp(sweepGroupWindowExpired());
     dispatcher?.activateAccount();
     multiBindings = store.get().bindingsCache.map((entry) => ({ ...entry, displaced: false }));
     for (const lane of lanes) lane.binding = lane.config.restoreCachedBinding();
@@ -880,14 +1006,13 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   /** 本线的 IPC 视图切片(形状与历史 SlackHookView.telegram 字段完全一致)。 */
-  function laneView(lane: NeutralProviderLane): SlackHookView['telegram'] {
+  function laneView(lane: NeutralProviderLane): ProviderHookView {
     const enabled = lane.config.isEnabled();
     const url = lane.config.getUrl().trim();
     return {
       enabled,
       url,
-      status:
-        enabled && url.length === 0 ? 'error' : toViewStatus(lane.status, enabled),
+      status: enabled && url.length === 0 ? 'error' : toViewStatus(lane.status, enabled),
       lastError:
         enabled && url.length === 0
           ? lane.config.notConfiguredError
@@ -905,6 +1030,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     const config = store.get();
     return {
       enabled: config.enabled,
+      lifecycleAnnouncement:
+        config.lifecycleAnnouncementOverride ?? DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
       url: store.effectiveUrl(),
       workspaces: { ...config.workspaces },
       status: toViewStatus(status, config.enabled),
@@ -914,6 +1041,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       pendingBind: pendingBind !== null ? { ...pendingBind } : null,
       serverMultiTeam: serverMultiTeam(),
       telegram: laneView(telegramLane),
+      x: laneView(xLane),
     };
   }
 
@@ -996,9 +1124,18 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     lane.bindWatchdog.unref?.();
   }
 
-  function providerBindingView(payload: ProviderBindStatusPayload): ProviderBindingView {
+  /**
+   * provider 取本地 lane config 而不是 payload: 调用方已用
+   * `payload.provider !== lane.config.provider` 丢过走错线的帧, 两者必然相等,
+   * 而 lane config 是接线期定死的可信值 —— renderer 可见快照里的渠道标识不从
+   * 网线上的值取。
+   */
+  function providerBindingView(
+    provider: NeutralHookProvider,
+    payload: ProviderBindStatusPayload,
+  ): ProviderBindingView {
     return {
-      provider: payload.provider,
+      provider,
       state: payload.state,
       attemptId: payload.attemptId,
       bindingId: payload.bindingId,
@@ -1230,7 +1367,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     // initial snapshot; do not let that older snapshot roll it back.
     if (!isStateSnapshot) lane.awaitingStateSnapshot = false;
     const previousBindingId = lane.binding?.state === 'confirmed' ? lane.binding.bindingId : null;
-    const view = providerBindingView(acceptedPayload);
+    const view = providerBindingView(lane.config.provider, acceptedPayload);
     lane.binding = view;
     const currentBindingId = view.state === 'confirmed' ? view.bindingId : null;
     if (previousBindingId !== null && previousBindingId !== currentBindingId) {
@@ -1449,7 +1586,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     HOOK_FEATURE_SESSION_PICKER,
   ];
 
-  function buildHello(features: readonly string[]): HelloInput {
+  function buildHello(
+    features: readonly string[],
+    includeLifecycleAnnouncement = false,
+  ): HelloInput {
     // 每次连接成功都重读配置 —— 别名映射变更后重连即生效
     const device = deviceInfo();
     return {
@@ -1461,6 +1601,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       // 每条连接只声明其服务会实际使用的能力，避免把 provider-neutral wire 误投
       // 到 Slack 服务，也保持老 Slack hello 的兼容面最小。
       features: [...features],
+      ...(includeLifecycleAnnouncement
+        ? { lifecycleAnnouncement: lifecycleAnnouncementEnabled() }
+        : {}),
     };
   }
 
@@ -1645,8 +1788,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       log.info(`hook frame dropped after account ingress closed: ${msg.type}`);
       return;
     }
-    const lane =
-      expectedProvider === 'slack' ? null : (laneByProvider.get(expectedProvider) ?? null);
+    const lane = neutralLaneFor(expectedProvider);
     const neutralOnly =
       msg.type === 'provider.bind.update' ||
       msg.type === 'provider.bind.state' ||
@@ -1736,7 +1878,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
             if (!autoBindIntent || !store.get().enabled) return;
             if (pendingBind !== null) return; // 回放先到, 已交给 pending 路径
             if (initiateMultiBind(null)) autoBindIntent = false;
-          }, AUTO_BIND_DEFER_MS);
+          }, autoBindDeferMs);
           autoBindDefer.unref?.();
         }
       }
@@ -1797,7 +1939,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return;
       }
       const view: ProviderPrefsView = {
-        provider: msg.payload.provider,
+        // 同 providerBindingView: 上面已丢过走错线的帧, 渠道标识取可信的 lane config。
+        provider: lane.config.provider,
         bindingId: msg.payload.bindingId,
         scopeId: msg.payload.scopeId,
         bound: msg.payload.bound,
@@ -2044,6 +2187,25 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       );
       return;
     }
+    if (msg.type === 'group.message') {
+      // 群消息实时中继入本地窗口(group-relay-v1)。只接受来自对应 provider
+      // transport 的帧(错误路由的连接不得写窗口); fire-and-forget:
+      // 失败只记日志, 窗口是上下文增强, 不影响任务链路。内容不写日志。
+      if (msg.payload.provider !== expectedProvider) {
+        log.warn(
+          `group.message ignored: provider=${msg.payload.provider} on ${expectedProvider} transport`,
+        );
+        return;
+      }
+      // 账号边界: 写入纳入 pendingAccountOps, 登出/切号等待落库完成后再
+      // 销毁 DB client, 不留 use-after-dispose。
+      trackAccountOp(
+        recordGroupMessage(msg.payload).catch((err) =>
+          log.warn(`group window record failed: ${String(err)}`),
+        ),
+      );
+      return;
+    }
     // task.ack / turn.end 不该由 server 发给 desktop; 未知业务帧只记日志
     log.warn(`unexpected message type=${msg.type}, ignored`);
   }
@@ -2098,6 +2260,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     ) {
       return;
     }
+    // serverFeatures intentionally survives reconnects for stable tool exposure,
+    // but capability-gated frames must wait for this transport's own welcome.
+    serverWelcomeReceived = false;
     // created 先声明后赋值: transport 工厂同步触发首个 onStatus(connecting),
     // 此时按"未注册"丢弃(status 随后统一置 connecting, 不丢信息)
     let created: HookTransport | null = null;
@@ -2105,13 +2270,22 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       url: store.effectiveUrl(),
       getAuthToken,
       refreshAuthToken,
-      buildHello: () => buildHello(SLACK_HELLO_FEATURES),
+      buildHello: () => buildHello(SLACK_HELLO_FEATURES, true),
       onMessage: (msg, send) => handleBusinessMessage('slack', msg, send),
       onWelcome: (payload) => {
         if (created === null || transport !== created) return;
         // server 能力集以最新一次握手为准(重连可能落到另一版本实例)
         serverFeatures = [...payload.features];
         serverWelcomeReceived = true;
+        // hello 发出后、welcome 返回前用户仍可能切换设置。能力协商完成时
+        // 补发当前有效值，避免 server 留在 hello 携带的旧快照。
+        if (serverFeatures.includes(HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT)) {
+          created.send(
+            makeLifecyclePreference({
+              enabled: lifecycleAnnouncementEnabled(),
+            }),
+          );
+        }
         // 落回老 server(无 multi-team): 多绑定列表与缓存作废 —— 老 server 是
         // 单绑定权威(它会经 bind.update 推现状), 残留的多绑定行会让 toView
         // 误走 multi 映射、渲染层误开列表 UI。pendingBind 无条件清: 滚动发布
@@ -2133,6 +2307,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         lastError = err;
         // 掉线(含退避重连中): 在途往返快速失败, 不让调用方挂满超时
         if (s !== 'connected') {
+          serverWelcomeReceived = false;
           dispatcher?.onDisconnected(dispatchId('slack'));
           drainPendingPrefs();
           drainPendingTools();
@@ -2140,7 +2315,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         // 握手完成 → dispatcher 刷新发送函数并补发离线积压的 turn.end
         if (s === 'connected') {
           const t = created;
-          dispatcher?.onConnected(dispatchId('slack'), (m) => t.send(m));
+          // features 一并交出去: dispatcher 的 turn.reopen 回流按 server 本次
+          // 握手宣告的能力开关(滚动发布时重连可能落到不支持的旧实例)。
+          dispatcher?.onConnected(dispatchId('slack'), (m) => t.send(m), serverFeatures);
           // 阶段 4 起绑定走 SIWS OIDC, 由用户点「连接 Slack」显式发起(需开浏览器),
           // 不再随连接就绪自动绑 —— 抢占式绑定若自动补绑会让两台设备互相顶。
         }
@@ -2205,7 +2382,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
           // refreshHello() can upgrade an already-open socket after a rolling
           // deploy without another status transition.
           const t = created;
-          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m));
+          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
         }
         notifyStatus(toView());
       },
@@ -2219,7 +2396,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }
         if (s === 'connected' && laneCapabilityReady(lane)) {
           const t = created;
-          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m));
+          dispatcher?.onConnected(dispatchId(provider), (m) => t.send(m), lane.serverFeatures);
         }
         notifyStatus(toView());
       },
@@ -2249,12 +2426,32 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       notifyStatus(toView());
     },
     snapshot: () => toView(),
+    setLifecycleAnnouncement(enabled) {
+      store.setLifecycleAnnouncementOverride(enabled);
+      if (
+        transport !== null &&
+        status === 'connected' &&
+        serverWelcomeReceived &&
+        serverFeatures.includes(HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT)
+      ) {
+        const sent = transport.send(makeLifecyclePreference({ enabled }));
+        if (!sent) {
+          // 连接状态与 socket readyState 可能在 close 回调前短暂错位。偏好已经
+          // 持久化；主动重建连接，让下一次 hello 立即携带最新值，避免等待旧
+          // transport 的退避/回调后 server 继续沿用旧偏好。
+          log.warn('lifecycle preference send failed; reconnecting to resync persisted value');
+          stopSlack();
+          startSlack();
+        }
+      }
+      notifyStatus(toView());
+    },
     refreshHello() {
       let attempted = false;
       let sent = true;
       if (transport !== null && status === 'connected') {
         attempted = true;
-        sent = transport.send(makeHello(buildHello(SLACK_HELLO_FEATURES))) && sent;
+        sent = transport.send(makeHello(buildHello(SLACK_HELLO_FEATURES, true))) && sent;
       }
       for (const lane of lanes) {
         if (lane.transport !== null && lane.status === 'connected') {
@@ -2435,8 +2632,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         notifyStatus(toView());
         return;
       }
-      const lane = laneByProvider.get(provider);
-      if (lane === undefined) return;
+      const lane = neutralLaneFor(provider);
+      if (lane === null) return;
       lane.config.setEnabled(enabled);
       if (!enabled) {
         lane.autoBindIntent = false;
@@ -2535,9 +2732,9 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       if (sent) lane.bindRequest = { kind: 'revoke', requestId, bindingId };
       return sent;
     },
-    async openTelegramAction(action) {
-      const lane = telegramLane;
-      if (!lane.config.openUrl || lane.binding === null) return false;
+    async openProviderAction(provider, action) {
+      const lane = laneByProvider.get(provider);
+      if (lane === undefined || !lane.config.openUrl || lane.binding === null) return false;
       const url = lane.config.actionUrl(action, lane.binding);
       if (!url) return false;
       await lane.config.openUrl(url);
@@ -2667,6 +2864,10 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
     dispose() {
       disposed = true;
       stopAll();
+      // dispatcher 由本 manager 独占持有(ipc.ts 在同一处创建两者), 所以它的
+      // 进程级信号订阅也随本次 dispose 一起退掉, 否则重建 manager 会叠加一个
+      // 对着废弃 dispatcher 状态跑的续跑监听。
+      dispatcher?.dispose();
     },
   };
 }

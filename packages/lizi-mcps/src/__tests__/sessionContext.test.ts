@@ -224,6 +224,55 @@ describe('dynamic lizi MCP session context', () => {
     expect(getStore).toHaveBeenLastCalledWith('/repo');
   });
 
+  it('scopes cindy_memory stores by remoteHostId for SSH remote session contexts', async () => {
+    // SSH remote ctx 带 remoteHostId:workingDir 是远端机器上的路径, 直接当
+    // store key 会与本地同名路径互串 — withStore 必须经 buildMemoryScopeKey
+    // 定位到 ssh:<hostId>:<path> 的独立 store。
+    const getStore = vi.fn(async (_workdir: string) => ({
+      list: vi.fn(async () => []),
+    }));
+    const getManager = () => ({
+      isEnabled: () => true,
+      getStore,
+    }) as never;
+    const provider = createLiziMcpProviders({ memory: { getManager } })
+      .find((p) => p.name === 'cindy_memory');
+    if (!provider) throw new Error('cindy_memory provider missing');
+
+    const cfg = provider.toClaudeSdkConfig({
+      agentKind: 'codex',
+      workingDir: '',
+      vendorOptions: {},
+    }) as { type: 'sdk'; instance: unknown };
+    const server = cfg.instance;
+
+    const remote = await runWithLiziMcpSessionContext(
+      {
+        agentKind: 'claude-code',
+        workingDir: '/home/me/proj',
+        remoteHostId: 'my-ssh-host',
+        sessionId: 'remote-session',
+        vendorOptions: {},
+      },
+      () => tools(server).call_tool.handler({ name: 'memory_list', args: {} }),
+    );
+    expect(parse(remote as never)).toMatchObject({ ok: true, data: [] });
+    expect(getStore).toHaveBeenLastCalledWith('ssh:my-ssh-host:/home/me/proj');
+
+    // 本地 ctx (无 remoteHostId) 保持原样键 — 既有存储目录不迁移。
+    const local = await runWithLiziMcpSessionContext(
+      {
+        agentKind: 'claude-code',
+        workingDir: '/home/me/proj',
+        sessionId: 'local-session',
+        vendorOptions: {},
+      },
+      () => tools(server).call_tool.handler({ name: 'memory_list', args: {} }),
+    );
+    expect(parse(local as never)).toMatchObject({ ok: true, data: [] });
+    expect(getStore).toHaveBeenLastCalledWith('/home/me/proj');
+  });
+
   it('advertises Cindy as the helper self-inspection category', async () => {
     const server = createXdtHelperMcpServer(
       {},

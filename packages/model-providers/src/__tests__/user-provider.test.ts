@@ -63,6 +63,20 @@ describe('buildUserProvider (per-runtime)', () => {
     });
   });
 
+  it('preserves an explicit Anthropic Messages protocol for Codex routing', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: { ...codexOnly.runtimes.codex!, wireProtocol: 'anthropic-messages' },
+      },
+    });
+    expect(p.routing.codex).toMatchObject({
+      upstream: 'https://openrouter.ai/api/v1',
+      authStrategy: 'api-key-header',
+      wireProtocol: 'anthropic-messages',
+    });
+  });
+
   it('preserves a non-standard inference request path in routing', () => {
     const p = buildUserProvider({
       ...codexOnly,
@@ -122,6 +136,37 @@ describe('buildUserProvider (per-runtime)', () => {
       ['long-context', 1_000_000],
       ['default-context', DEFAULT_CUSTOM_CONTEXT_WINDOW],
     ]);
+    // 只有用户自己填的窗口算「已核实」,可以拿去收敛运行期上报值;走 200K 兜底的那条
+    // 不标记 —— 否则真实 1M 的端点会被这个展示用默认值压到 200K。
+    expect(p.models.codex?.map((m) => [m.id, m.contextWindowVerified])).toEqual([
+      ['long-context', true],
+      ['default-context', undefined],
+    ]);
+    // 显式配置打标、缺省物化不打标:编辑表单靠它区分「显式 200K」与「默认 200K」,
+    // 不能靠与默认等值推断(显式覆盖必须在默认升级后原样保留)。
+    expect(p.models.codex?.map((m) => [m.id, m.contextWindowExplicit ?? null])).toEqual([
+      ['long-context', true],
+      ['default-context', null],
+    ]);
+  });
+
+  it('marks an explicit contextWindow equal to the current default as explicit', () => {
+    const p = buildUserProvider({
+      ...codexOnly,
+      runtimes: {
+        codex: {
+          ...codexOnly.runtimes.codex!,
+          models: [
+            { id: 'pinned-default', name: 'Pinned', contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW },
+          ],
+        },
+      },
+    });
+    expect(p.models.codex?.[0]).toMatchObject({
+      contextWindow: DEFAULT_CUSTOM_CONTEXT_WINDOW,
+      contextWindowVerified: true,
+      contextWindowExplicit: true,
+    });
   });
 
   it('attaches per-runtime custom headers (still no api key)', () => {

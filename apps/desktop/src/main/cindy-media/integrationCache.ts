@@ -55,6 +55,11 @@ export interface IntegrationCacheHit {
   hash: string;
 }
 
+export interface IntegrationCacheWrite extends IntegrationCacheHit {
+  /** Roll back only the integration-cache ref created by this write. */
+  rollbackRef(): Promise<void>;
+}
+
 /** 查缓存:命中返回文件坐标并刷 LRU 时间;未登记 / 文件缺失(坏账)返回 null。 */
 export async function integrationCacheGet(
   cacheKey: string,
@@ -98,7 +103,7 @@ export async function integrationCachePut(
     isCache?: boolean;
   },
   db?: LedgerDb,
-): Promise<IntegrationCacheHit> {
+): Promise<IntegrationCacheWrite> {
   const written = await ingestMedia(
     {
       buffer: params.buffer,
@@ -109,9 +114,10 @@ export async function integrationCachePut(
     db,
   );
   const existing = await ledger.getIntegrationCacheHash(params.cacheKey, db);
+  let addedRefId: string | null = null;
   if (existing !== written.hash) {
     // 新登记 / token 复用换内容:追加索引行,cacheGet 取最新。
-    await ledger.addRef(
+    addedRefId = await ledger.addRef(
       {
         hash: written.hash,
         refKind: 'integration-cache',
@@ -128,6 +134,9 @@ export async function integrationCachePut(
     absPath: resolved.absPath,
     mimeType: written.mimeType,
     hash: written.hash,
+    rollbackRef: async () => {
+      if (addedRefId) await ledger.removeRefById(addedRefId, db);
+    },
   };
 }
 

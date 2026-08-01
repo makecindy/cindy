@@ -19,6 +19,8 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   …req}) 的语法糖,零新通道零新权限(白名单/凭证注入全在主机侧守门)。
  * - fs(req):fs 槽代写文件的便捷口——send({type:'fs-request', …req}) 的
  *   语法糖,同样零新通道零新权限(三档守门全在主机侧 fsSlot)。
+ * - agent.errand(req) / agent.queryErrand(req):派活取件便捷口——
+ *   send({type:'agent-errand-request', kind:'run'/'query', …req}) 的语法糖;
  * - agent.run(req):Agent 新回合的便捷口——send({type:'agent-request',
  *   …req}) 的语法糖；一次性用户票、后台权限和会话归属由主机校验。
  * - node.request(req):随包 Node / stdio MCP 的便捷口。Node 只能经本管子与
@@ -29,6 +31,9 @@ import { contextBridge, ipcRenderer } from 'electron';
  *   的语法糖;URL 白名单守门在主机侧 previewSlot。
  * - workspace(req):workspace 槽的便捷口——send({type:'workspace-request',
  *   …req}) 的语法糖;目录授权与会话创建守门全在主机侧 workspaceSlot。
+ * - confirm(req):confirm 槽的便捷口——send({type:'confirm-request', …req}) 的
+ *   语法糖;主机弹自己那套确认框并把用户的真实点击回给沙箱,资格审/净化/限速/
+ *   单飞/超时兜底全在主机侧 confirmSlot 与 ghostConfirmDialogBridge。
  */
 
 type HostMessageListener = (payload: unknown) => void;
@@ -53,6 +58,13 @@ contextBridge.exposeInMainWorld('cindy', {
   agent: {
     run: (req: Record<string, unknown>): Promise<unknown> =>
       ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-request' }),
+    // 派活取件(agent.errand 加档)的便捷口:errand = 提交(kind:'run'),
+    // queryErrand = 取件(kind:'query')。都是 send({type:'agent-errand-request'})
+    // 的语法糖,资格审与频控在主机 errandSlot。
+    errand: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'run' }),
+    queryErrand: (req: Record<string, unknown>): Promise<unknown> =>
+      ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'agent-errand-request', kind: 'query' }),
   },
   node: {
     request: (req: Record<string, unknown>): Promise<unknown> =>
@@ -64,4 +76,6 @@ contextBridge.exposeInMainWorld('cindy', {
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'preview-request' }),
   workspace: (req: Record<string, unknown>): Promise<unknown> =>
     ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'workspace-request' }),
+  confirm: (req: Record<string, unknown>): Promise<unknown> =>
+    ipcRenderer.invoke('ghost-pipe:send', { ...req, type: 'confirm-request' }),
 });

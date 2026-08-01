@@ -184,6 +184,84 @@ function header(srcLabel) {
 const LOCAL_PATCHES = {
   'extension/src/browser/config.ts': [
     {
+      desc: 'preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access',
+      find: `function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+  const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
+  const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
+
+  if (
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
+  ) {
+    // Keep the default policy object present so CDP guards still enforce
+    // fail-closed private-network checks on unconfigured installs.
+    return {};
+  }
+
+  return {
+    ...(resolvedAllowPrivateNetwork ||
+    dangerouslyAllowPrivateNetwork === false ||
+    allowPrivateNetwork === false
+      ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
+      : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
+}`,
+      replace: `function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | undefined {
+  const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
+  const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
+  const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+  // LOCAL PATCH (Cindy, via sync.mjs): upstream's config resolver currently
+  // drops the narrow fake-IP allowances even though the SSRF layer supports
+  // them. Preserve explicit booleans so hosts can allow only proxy fake-IP
+  // ranges without disabling protection for metadata, link-local, or RFC1918.
+  const allowRfc2544BenchmarkRange = rawPolicy?.allowRfc2544BenchmarkRange;
+  const allowIpv6UniqueLocalRange = rawPolicy?.allowIpv6UniqueLocalRange;
+  const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
+  const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
+  const hasExplicitPrivateSetting =
+    allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  const hasExplicitFakeIpSetting =
+    allowRfc2544BenchmarkRange !== undefined || allowIpv6UniqueLocalRange !== undefined;
+  const resolvedAllowPrivateNetwork =
+    dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
+
+  if (
+    !resolvedAllowPrivateNetwork &&
+    !hasExplicitPrivateSetting &&
+    !hasExplicitFakeIpSetting &&
+    !allowedHostnames &&
+    !hostnameAllowlist
+  ) {
+    // Keep the default policy object present so CDP guards still enforce
+    // fail-closed private-network checks on unconfigured installs.
+    return {};
+  }
+
+  return {
+    ...(resolvedAllowPrivateNetwork ||
+    dangerouslyAllowPrivateNetwork === false ||
+    allowPrivateNetwork === false
+      ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
+      : {}),
+    ...(allowRfc2544BenchmarkRange !== undefined ? { allowRfc2544BenchmarkRange } : {}),
+    ...(allowIpv6UniqueLocalRange !== undefined ? { allowIpv6UniqueLocalRange } : {}),
+    ...(allowedHostnames ? { allowedHostnames } : {}),
+    ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
+  };
+}`,
+    },
+    {
       desc: 'skip upstream auto-injected "openclaw"/"user" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user\'s Chrome)',
       find:
         '  let profiles = ensureDefaultUserBrowserProfile(\n' +

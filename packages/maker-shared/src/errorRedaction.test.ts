@@ -112,6 +112,57 @@ describe('redactSensitiveText', () => {
     expect(output).not.toMatch(/abc123|def456|ghi789/);
   });
 
+  it('redacts gateway principals while keeping surrounding diagnostics', () => {
+    const output = redactSensitiveText(
+      '{"error":"ExceededBudget","principal":"aigw:v1:cindy:usr_a1b2c3","spend":12.34,"budget":10}',
+    );
+
+    expect(output).not.toContain('usr_a1b2c3');
+    expect(output).toContain('aigw:[REDACTED]');
+    expect(output).toContain('ExceededBudget');
+    expect(output).toContain('"spend":12.34');
+
+    const inline = redactSensitiveText('Request rejected (429): budget check failed for aigw:v1:cindy:usr_a1b2c3, retry later');
+    expect(inline).not.toContain('usr_a1b2c3');
+    expect(inline).toContain('aigw:[REDACTED], retry later');
+  });
+
+  it('keeps gateway principal redaction idempotent (review 反馈)', () => {
+    // 没有 negative lookahead 时第二遍会匹配 `aigw:[REDACTED`(`]` 在排除集里),
+    // 每跑一遍多长出一个 `]`;多路径重复调用 redactSensitiveText 是常态。
+    const once = redactSensitiveText('aigw:v1:cindy:usr_a1b2c3');
+    expect(once).toBe('aigw:[REDACTED]');
+    expect(redactSensitiveText(once)).toBe('aigw:[REDACTED]');
+    expect(redactSensitiveText(redactSensitiveText(once))).toBe('aigw:[REDACTED]');
+    const inJson = redactSensitiveText(redactSensitiveText('{"principal":"aigw:v1:cindy:usr_a1b2c3"}'));
+    expect(inJson).toContain('"aigw:[REDACTED]"');
+  });
+
+  it('recognizes gateway budget-exhaustion signals', () => {
+    expect(
+      extractNonSecretErrorSignals('Request rejected (429): ExceededBudget for aigw:v1:cindy:usr_a1b2c3'),
+    ).toEqual({ errorStatus: 429, usageLimit: true });
+    expect(extractNonSecretErrorSignals('{"code":"ExceededBudget"}')).toEqual({
+      usageLimit: true,
+    });
+    // 网关结构化错误也常用 error / message 字段承载额度码(review 反馈:只认
+    // code|type 会把 {"error":"ExceededBudget"} 判成普通错误进 blocked)。
+    expect(extractNonSecretErrorSignals('{"error":"ExceededBudget","spend":12.3}')).toEqual({
+      usageLimit: true,
+    });
+    expect(extractNonSecretErrorSignals('{"message":"budget_exceeded"}')).toEqual({
+      usageLimit: true,
+    });
+    expect(extractNonSecretErrorSignals('upstream said budget_exceeded, status=429')).toEqual({
+      errorStatus: 429,
+      usageLimit: true,
+    });
+    // A 504 gateway timeout is not a quota signal and carries no supported status.
+    expect(
+      extractNonSecretErrorSignals('{"code":"origin_gateway_timeout","status":504}'),
+    ).toEqual({ usageLimit: false });
+  });
+
   it('keeps redaction idempotent for existing placeholders', () => {
     const output = 'access_token=[REDACTED] key=[REDACTED_KEY]';
 

@@ -55,12 +55,21 @@ function isSameNavigationUrl(a: string, b: string): boolean {
 export interface UseBrowserWebviewResult {
   /** webview 外层 wrapper DOM;caller appendChild 到自己的 body slot。 */
   wrapper: HTMLDivElement | null;
+  /**
+   * 当前 Pool entry 的 WebView 代际句柄。隐藏但仍由 Pool 保活时保持非空；
+   * entry 被淘汰 / 释放时变 null，重建后变为新的对象。依赖 guest 事件或
+   * 通信的功能必须以它为 effect dependency，不能只按 tabId 绑定。
+   */
+  webview: WebviewTag | null;
   /** 当前页面 URL(`did-navigate` / `did-navigate-in-page` 同步)。 */
   url: string;
   /** 当前页面 title(`page-title-updated`)。 */
   title: string;
-  /** 当前页面 favicon URL,无则空串(`page-favicon-updated`)。 */
-  favicon: string;
+  /**
+   * 当前页面 favicon URL。null = 当前 webview 代际尚未观测到 favicon；
+   * 空串 = 已明确观测到页面没有 favicon。
+   */
+  favicon: string | null;
   /** 正在加载中(`did-start-loading` 翻 true,`did-stop-loading` 翻 false)。 */
   isLoading: boolean;
   /** webview 导航历史里有"上一页"。 */
@@ -108,7 +117,7 @@ export function useBrowserWebview(
   const [wrapper, setWrapper] = useState<HTMLDivElement | null>(null);
   const [url, setUrl] = useState('');
   const [title, setTitle] = useState('');
-  const [favicon, setFavicon] = useState('');
+  const [favicon, setFavicon] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [canGoBack, setCanGoBack] = useState(false);
   const [canGoForward, setCanGoForward] = useState(false);
@@ -165,12 +174,13 @@ export function useBrowserWebview(
         !isSameNavigationUrl(nextUrl, suppress.targetUrl)
       ) {
         suppressStaleUrlRef.current = null;
-        return;
+        return false;
       }
       suppressStaleUrlRef.current = null;
     }
     urlRef.current = nextUrl;
     setUrl(nextUrl);
+    return true;
   }, []);
 
   useEffect(() => {
@@ -195,7 +205,7 @@ export function useBrowserWebview(
       suppressStaleUrlRef.current = null;
       setUrl('');
       setTitle('');
-      setFavicon('');
+      setFavicon(null);
       setIsLoading(false);
       setCanGoBack(false);
       setCanGoForward(false);
@@ -232,10 +242,16 @@ export function useBrowserWebview(
 
     const onTitle = (e: Electron.PageTitleUpdatedEvent) => setTitle(e.title);
     const onFavicon = (e: Electron.PageFaviconUpdatedEvent) => {
-      setFavicon(e.favicons[0] ?? '');
+      setFavicon(e.favicons.find((candidate) => candidate.trim().length > 0) ?? '');
     };
     const onDidNavigate = (e: Electron.DidNavigateEvent) => {
-      setObservedUrl(e.url);
+      const previousUrl = urlRef.current;
+      const accepted = setObservedUrl(e.url);
+      // 网页自身发起的跨页导航没有走 navigate(),必须在提交新 URL 时清掉旧站图标；
+      // 初次 attach / 被抑制的旧 URL 回报都保持 "尚未观测" 语义,避免抹掉持久化 favicon。
+      if (accepted && previousUrl && !isSameNavigationUrl(previousUrl, e.url)) {
+        setFavicon('');
+      }
       refreshNav();
     };
     const onDidNavigateInPage = (e: Electron.DidNavigateInPageEvent) => {
@@ -273,6 +289,19 @@ export function useBrowserWebview(
         // a subsequent did-navigate will not re-fire dom-ready, so we lose this
         // attach window. The next pool acquire / mount will retry. Don't block
         // the hook on a webContentsId we can't get.
+      }
+    };
+    // did-attach 早期上报:dom-ready 之前页面 head 同步脚本就可能 window.open(),
+    // 那时 registry 若还没本 tab 的记录,popup 的 opener 反查落空、归属丢失。
+    // did-attach 在导航提交前触发且 getWebContentsId 已可取,提早送映射进 main。
+    // report 幂等,与 dom-ready 的兜底上报共存。
+    const onDidAttach = () => {
+      if (!sessionId) return;
+      try {
+        const webContentsId = entry.webview.getWebContentsId();
+        void reportRsbBrowserTab({ sessionId, tabId, webContentsId });
+      } catch {
+        /* attach in-flight —— dom-ready 兜底。 */
       }
     };
     // did-fail-load:404 / 网络错误 / SSL 错误,Electron 不会自动停 loading 态;
@@ -346,6 +375,7 @@ export function useBrowserWebview(
     entry.webview.addEventListener('did-redirect-navigation', onRedirect);
     entry.webview.addEventListener('did-start-loading', onStartLoading);
     entry.webview.addEventListener('did-stop-loading', onStopLoading);
+    entry.webview.addEventListener('did-attach', onDidAttach);
     entry.webview.addEventListener('dom-ready', onDomReady);
     entry.webview.addEventListener('did-fail-load', onFailLoad);
     entry.webview.addEventListener('audio-state-changed', onAudioState);
@@ -386,6 +416,7 @@ export function useBrowserWebview(
       entry.webview.removeEventListener('did-redirect-navigation', onRedirect);
       entry.webview.removeEventListener('did-start-loading', onStartLoading);
       entry.webview.removeEventListener('did-stop-loading', onStopLoading);
+      entry.webview.removeEventListener('did-attach', onDidAttach);
       entry.webview.removeEventListener('dom-ready', onDomReady);
       entry.webview.removeEventListener('did-fail-load', onFailLoad);
       entry.webview.removeEventListener('audio-state-changed', onAudioState);
@@ -432,6 +463,9 @@ export function useBrowserWebview(
     }
     urlRef.current = nextUrl;
     setUrl(nextUrl);
+    // 主动导航后旧页 favicon 已不再可信，但这里用 null 表示 "等待新页观测"；
+    // BrowserTabBody 会保留持久化 fallback，显式用户导航则由调用方同步清空。
+    setFavicon(null);
     setIsLoading(true);
     if (!wv) return;
     try {
@@ -447,17 +481,39 @@ export function useBrowserWebview(
     navigationAttemptsRef.current = [];
     navigationFuseTrippedRef.current = false;
     setCrash(null);
-    webviewRef.current?.reload();
+    setResourceAlert(null);
+    const wv = webviewRef.current;
+    if (!wv) return;
+    // 不等 did-start-loading 才反馈；Electron 事件有异步间隙，用户点击后应立即看到
+    // BrowserChrome 的 loading 动画。调用失败时回滚，避免 UI 永久卡住。
+    setIsLoading(true);
+    try {
+      wv.reload();
+    } catch {
+      setIsLoading(false);
+    }
   }, []);
   const goBack = useCallback(() => webviewRef.current?.goBack(), []);
   const goForward = useCallback(() => webviewRef.current?.goForward(), []);
-  const stop = useCallback(() => webviewRef.current?.stop(), []);
+  const stop = useCallback(() => {
+    try {
+      webviewRef.current?.stop();
+    } catch {
+      // detach / crash 窗口内 stop 可能抛；UI 仍应退出 loading，等待后续事件恢复。
+    } finally {
+      // stop 也是用户发起的即时动作；不必再等 did-stop-loading 才恢复刷新按钮。
+      setIsLoading(false);
+    }
+  }, []);
   const dismissResourceAlert = useCallback(() => setResourceAlert(null), []);
+  const currentEntry = browserWebviewPool.peek(tabId);
+  const currentWebview = currentEntry?.wrapper === wrapper ? currentEntry.webview : null;
 
   return {
     // 隐藏时仍观察已有 entry 的 guest 生命周期，但不把 wrapper 交给 caller，
     // 避免隐藏 Body 把它移出停车区并触发首次导航。
     wrapper: visible === true ? wrapper : null,
+    webview: currentWebview,
     url,
     title,
     favicon,

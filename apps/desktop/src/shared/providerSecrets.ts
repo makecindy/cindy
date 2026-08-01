@@ -3,7 +3,7 @@
  * ---------------------------------------------------------------------------
  * 供应商 API key(密钥)在本机的存储约定 —— 单一事实来源(SSoT)。
  *
- * 设计背景:XDMaker 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
+ * 设计背景:Cindy 的供应商密钥一律 **本地 only**,只存 Electron safeStorage
  * (委托 OS keychain / DPAPI 加密),从不同步 / 上传到服务器。历史上各处用裸字符串
  * ("api_key" / "mivo_api_key")指代存储键名,随供应商增多容易散落、写错。本模块
  * 把「providerId → safeStorage 存储键名」收敛成唯一映射:
@@ -18,7 +18,15 @@
  */
 
 /** 供应商密钥的稳定标识。新增供应商时在此扩展。 */
-export type ProviderSecretId = 'xd' | 'mivo' | 'brave' | 'tavily' | 'xai' | 'voice-asr';
+export type ProviderSecretId =
+  | 'xd'
+  | 'mivo'
+  | 'brave'
+  | 'tavily'
+  | 'xai'
+  | 'voice-asr'
+  | 'gemini'
+  | 'openai-images';
 
 /**
  * providerId → safeStorage 存储键名(.enc 文件名,不含后缀)。
@@ -37,6 +45,12 @@ const STORAGE_KEYS: Record<ProviderSecretId, string> = {
   // Voice input's user-configured realtime ASR credential is intentionally
   // isolated from chat/model gateway keys.
   'voice-asr': 'voice_input_asr_api_key',
+  // Google Gemini API key(图像通道,2026-07 图像多来源)。按新供应商约定命名。
+  gemini: 'provider_key_gemini',
+  // OpenAI 平台 API key(仅图像通道,2026-07 图像多来源)。与 ChatGPT 订阅 OAuth
+  // (codex-home/auth.json)是两套凭证:订阅 token 调不了平台 images API(实测
+  // 401/403 缺 scope),聊天照旧走订阅,图像走这把平台 key。
+  'openai-images': 'provider_key_openai_images',
   // 未来新增示例(届时在 ProviderSecretId 与此处同步添加):
   //   anthropic: 'provider_key_anthropic',
   //   openai:    'provider_key_openai',
@@ -50,8 +64,21 @@ export function providerSecretStorageKey(id: ProviderSecretId): string {
   return STORAGE_KEYS[id];
 }
 
+/**
+ * SSH 远端常驻 codex daemon 经 remote-forward 直连本机 MCP bridge 时使用的
+ * persistent bearer token 的存储键名。
+ *
+ * 与 bridge 主 token (per-run 随机, 经 env 给本地 codex 子进程) 不同:daemon
+ * env 在其 spawn 时固定, 需要跨 app 重启稳定, 因此落 safeStorage。main-only:
+ * renderer 没有正当读取场景, 不经通用 safe-storage IPC 暴露。
+ */
+export const REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY = 'remote_mcp_bridge_token';
+
 const MAIN_ONLY_PROVIDER_SECRET_STORAGE_KEYS = new Set<string>([
   STORAGE_KEYS['voice-asr'].toLowerCase(),
+  STORAGE_KEYS['gemini'].toLowerCase(),
+  STORAGE_KEYS['openai-images'].toLowerCase(),
+  REMOTE_MCP_BRIDGE_TOKEN_STORAGE_KEY.toLowerCase(),
 ]);
 
 /**

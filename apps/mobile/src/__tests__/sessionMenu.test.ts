@@ -41,19 +41,31 @@ function session(patch: Partial<RemoteSession> = {}): RemoteSession {
 describe('sessionMenu header', () => {
   it('builds title, meta line and usage summary for a plain session', () => {
     const header = buildSessionMenuHeader(session({
-      totalCostUsd: 2.312,
+      totalMoney: {
+        amount: 2.312,
+        currency: 'CNY',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      totalCostUsd: 99,
       contextTokens: 90000,
       contextWindow: 200000,
     }), {});
     expect(header.title).toBe('修复语音输入丢字');
     expect(header.chips).toEqual([]);
     expect(header.metaLine).toBe('Claude · xdt-maker');
-    expect(header.usageSummary).toBe('$2.31 · 上下文 45%');
+    expect(header.usageSummary).toBe('¥2.31 · 上下文 45%');
   });
 
   it('falls back to workspace name when the session has no title', () => {
     expect(buildSessionMenuHeader(session({ title: '' }), {}).title).toBe('xdt-maker');
-    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程对话');
+    expect(buildSessionMenuHeader(session({ title: '', workingDir: null }), {}).title).toBe('远程任务');
+  });
+
+  it('未起名会话显示本地化兜底,不回落工作目录名', () => {
+    // 哨兵若按「无标题」处理会回落 workspaceName 显示目录名,与 desktop 的
+    // 「未命名任务」不一致(PR #1031 review P1)。
+    expect(buildSessionMenuHeader(session({ title: 'New Maker' }), {}).title).toBe('未命名任务');
   });
 
   it('prefers the worktree name in the meta line', () => {
@@ -88,7 +100,7 @@ describe('sessionMenu actions', () => {
       writeDisabled: false,
     });
     expect(actions.map((action) => action.id)).toEqual(['rename', 'copyLink', 'pin', 'archive', 'delete']);
-    expect(actions.find((action) => action.id === 'copyLink')?.label).toBe('复制对话链接');
+    expect(actions.find((action) => action.id === 'copyLink')?.label).toBe('复制任务链接');
     expect(actions.find((action) => action.id === 'pin')?.label).toBe('置顶');
     expect(actions.find((action) => action.id === 'archive')?.testID).toBe('session.archiveButton');
     expect(actions.find((action) => action.id === 'delete')?.tone).toBe('danger');
@@ -162,21 +174,23 @@ describe('sessionMenu navigation', () => {
 describe('sessionMenu ai rename failure text', () => {
   it('maps outdated controlled devices to an upgrade hint', () => {
     expect(aiRenameFailureText(new Error("[CHANNEL_NOT_ALLOWED] channel 'maker:regenerate-title' not allowed")))
-      .toBe('被控电脑版本过旧，暂不支持自动起名。');
+      .toBe('被控设备版本过旧，暂不支持自动起名。');
     const coded = new Error('rejected');
     (coded as { code?: string }).code = 'DEVICE_LINK_VERSION_MISMATCH';
-    expect(aiRenameFailureText(coded)).toBe('被控电脑版本过旧，暂不支持自动起名。');
+    expect(aiRenameFailureText(coded)).toBe('被控设备版本过旧，暂不支持自动起名。');
   });
 
   it('maps offline links by exact device-link codes and falls back to a generic failure', () => {
     expect(aiRenameFailureText(new Error('[DEVICE_OFFLINE] target device offline')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[LINK_NOT_OPEN] link not open')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[NOT_CONNECTED] relay not connected')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
+    expect(aiRenameFailureText(new Error('[BACKPRESSURE] buffer full')))
+      .toBe('被控设备不在线，稍后再试。');
     expect(aiRenameFailureText(new Error('[INVOKE_TIMEOUT] no invoke-result within 15000ms')))
-      .toBe('被控电脑不在线，稍后再试。');
+      .toBe('被控设备不在线，稍后再试。');
     // 非链路类全大写超时码不允许误判为离线(review P2 反馈的误命中场景)。
     expect(aiRenameFailureText(new Error('[DB_QUERY_TIMEOUT] query slow'))).toBe('自动起名失败，请重试。');
     expect(aiRenameFailureText(new Error('boom'))).toBe('自动起名失败，请重试。');

@@ -189,7 +189,7 @@ export function summarizeRun(run: RemoteScheduleRun, now = Date.now()): RunSumma
   const subtitle = finished ? `${fired} - ${finished}` : fired;
   const error = run.errorMsg?.trim();
   const result = run.resultText?.trim();
-  const sessionDetail = run.sessionId?.trim() ? `会话 ${shortSessionId(run.sessionId)}` : null;
+  const sessionDetail = run.sessionId?.trim() ? `任务 ${shortSessionId(run.sessionId)}` : null;
   const isLegacySessionRun = run.id.startsWith(LEGACY_SESSION_RUN_ID_PREFIX);
   const unread = isUnreadRun(run, now);
   const canDelete = !isLegacySessionRun && run.status !== 'running';
@@ -210,7 +210,7 @@ export function summarizeRun(run: RemoteScheduleRun, now = Date.now()): RunSumma
     markReadLabel: canMarkRead ? '已读' : null,
     meta: [
       describeRunTiming(run, now),
-      sessionDetail ?? (canRestart ? '可重新执行' : '未创建会话'),
+      sessionDetail ?? (canRestart ? '可重新执行' : '未创建任务'),
     ].filter(Boolean).join(' · '),
     openSessionLabel: sessionDetail ? '打开' : null,
     restartLabel: canRestart ? '重跑' : null,
@@ -314,18 +314,18 @@ function describeDestination(schedule: RemoteSchedule): string {
 function describeRunSessionLabel(
   schedule: Pick<RemoteSchedule, 'persistentSession' | 'targetSessionId'>,
 ): string {
-  if (schedule.persistentSession) return '持续会话';
-  if (schedule.targetSessionId?.trim()) return '绑定会话';
-  return '新会话';
+  if (schedule.persistentSession) return '持续任务';
+  if (schedule.targetSessionId?.trim()) return '绑定任务';
+  return '新任务';
 }
 
 function describeRunSessionDetail(
   schedule: Pick<RemoteSchedule, 'persistentSession' | 'targetSessionId'>,
 ): string | null {
   if (schedule.persistentSession && schedule.targetSessionId?.trim()) {
-    return `持续会话 ${shortSessionId(schedule.targetSessionId)}`;
+    return `持续任务 ${shortSessionId(schedule.targetSessionId)}`;
   }
-  if (schedule.persistentSession) return '首次触发后持续复用同一会话';
+  if (schedule.persistentSession) return '首次触发后持续复用同一任务';
   if (schedule.targetSessionId?.trim()) return `绑定到 ${shortSessionId(schedule.targetSessionId)}`;
   return null;
 }

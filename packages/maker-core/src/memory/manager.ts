@@ -25,7 +25,7 @@
 import * as path from 'node:path';
 import type Database from 'better-sqlite3';
 
-import { MakerMemoryStore, sanitizeWorkdir } from './store.js';
+import { MakerMemoryStore, memoryScopeDirName } from './store.js';
 import {
   type MemoryConfig,
   type WriteOptions,
@@ -47,6 +47,13 @@ export interface MakerMemoryManagerDeps {
   agents: Partial<Record<AgentKind, BaseAgent>>;
   /** 跑 memory_review 时用哪个 agent 的 oneShot. 默认 'claude-code' (haiku 最便宜) */
   reviewAgent?: AgentKind;
+  /**
+   * review 派发前的停用轴守卫(host 注入,desktop = isAgentOneShotRouteDisabled)。
+   * memory_review 的 oneShot 是一次新的付费调用:该 agent 的默认 one-shot 路由被
+   * 用户停用时不派发,抛错让 MCP 工具面把原因回给调用方(PR #744 review 第十六轮)。
+   * 缺席 = 不裁决(未接入停用设置的宿主)。
+   */
+  isOneShotRouteDisabled?: (agent: AgentKind) => Promise<boolean>;
   logger: Logger;
   /** 配置覆盖 */
   config?: Partial<MemoryConfig>;
@@ -191,6 +198,10 @@ export class MakerMemoryManager {
    *  - 调 store.init() (创建 FTS 表 + sanity check)
    *
    * 同 workdir 复用同一 store + db 实例。失败 (db open 失败 / mkdir 失败) 抛错。
+   *
+   * key 语义: 本地会话传 workdir 绝对路径; SSH remote 会话传
+   * buildMemoryScopeKey 产出的 `ssh:<hostId>:<path>` 复合键 (调用方负责,
+   * manager 不自己判远端) — 见 storage.ts buildMemoryScopeKey。
    */
   async getStore(absWorkdir: string): Promise<MakerMemoryStore> {
     if (!absWorkdir || absWorkdir.length === 0) {
@@ -199,7 +210,9 @@ export class MakerMemoryManager {
     const cached = this.stores.get(absWorkdir);
     if (cached) return cached.store;
 
-    const sanitized = sanitizeWorkdir(absWorkdir);
+    // 目录名派生见 memoryScopeDirName:本地键 = sanitizeWorkdir 原规则 (不迁移),
+    // 远端 ssh: 键 = 碰撞安全的 hash 形态 (review R4 P2)。
+    const sanitized = memoryScopeDirName(absWorkdir);
     const storageDir = path.join(this.deps.basePath, MEMORY_SUBDIR, sanitized);
     const dbPath = path.join(storageDir, FTS_DB_FILENAME);
 
@@ -287,6 +300,11 @@ export class MakerMemoryManager {
     const agent = this.deps.agents[reviewAgentKind];
     if (!agent) {
       throw new Error(`runReview: review agent '${reviewAgentKind}' not registered`);
+    }
+    if (await this.deps.isOneShotRouteDisabled?.(reviewAgentKind)) {
+      throw new Error(
+        `runReview: one-shot route for '${reviewAgentKind}' is disabled in settings`,
+      );
     }
 
     const summary = records

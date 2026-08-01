@@ -117,3 +117,58 @@ jobs:
 
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
+
+  git-integration:
+    name: Desktop Git integration
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # `.gitmodules` comes from the PR branch. Pin the public protocol source
+      # before recursively initializing it, matching the verify job boundary.
+      - name: Verify cindy-protocol submodule source
+        run: |
+          set -euo pipefail
+          expected_url='https://github.com/makecindy/cindy-protocol.git'
+          expected_path='cindy-protocol'
+          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
+          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
+          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
+            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
+            exit 1
+          fi
+          echo "cindy-protocol submodule source verified: $actual_url"
+
+      - name: Fetch cindy-protocol submodule
+        run: |
+          git submodule sync -- cindy-protocol
+          git submodule update --init --force --recursive -- cindy-protocol
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Run Desktop Git integration tests
+        run: pnpm test:git-integration

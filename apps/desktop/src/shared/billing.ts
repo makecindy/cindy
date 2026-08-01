@@ -25,12 +25,17 @@ export const BILLING_INVOKE = {
   CONFIRM_PLAN_CHANGE: 'billing:confirm-plan-change',
   REFRESH_PLAN_CHANGE: 'billing:refresh-plan-change',
   CANCEL_PLAN_CHANGE: 'billing:cancel-plan-change',
+  OPEN_SUBSCRIPTION_PORTAL: 'billing:open-subscription-portal',
   OPEN_PAYMENT_REDIRECT: 'billing:open-payment-redirect',
 } as const;
 
 export type BillingPaymentAction =
   | { type: 'QR_CODE'; value: string; expiresAt: string }
   | { type: 'REDIRECT'; url: string; expiresAt: string };
+
+export type BillingSubscriptionPortalResult =
+  | { success: true }
+  | { success: false; timedOut?: true };
 
 export type BillingFulfillmentStatus = 'NOT_STARTED' | 'PENDING' | 'SUCCEEDED' | 'FAILED';
 
@@ -236,5 +241,6 @@ export interface BillingRendererApi {
   confirmPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
   refreshPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
   cancelPlanChange: (payload: { planChangeId: string }) => Promise<BillingPlanChange>;
+  openSubscriptionPortal: () => Promise<BillingSubscriptionPortalResult>;
   openPaymentRedirect: (payload: { url: string }) => Promise<{ success: boolean }>;
 }

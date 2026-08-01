@@ -39,10 +39,12 @@ import { cn } from '@/lib/utils';
 import { Switch } from '@/components/ui/switch';
 import { getLastWorkingDir, subscribeToLastWorkingDir } from '@/state/lastWorkingDir';
 import { findSplitChildByPanelKind } from '../../../shared/layoutTree';
+import { resolveSystemLocale } from '../../../shared/locale';
 import {
   diffGhostPermissionItems,
   ghostPanelKind,
   ghostPermissionItems,
+  isOfficialGhostId,
   type GhostSetupStatus,
 } from '../../../shared/ghost';
 import type {
@@ -78,6 +80,7 @@ import {
 import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
+import { usePluginMarketLocaleRefresh } from './lib/usePluginMarketLocaleRefresh';
 import './plugin-motion.css';
 
 const MAX_VISIBLE_INSTALLED_GHOSTS = 5;
@@ -105,7 +108,8 @@ const PRESENTATION_FILTERS: readonly PluginPresentationFilter[] = [
  * interaction shape, while every displayed field comes from InstalledGhost.
  */
 export function GhostPluginPage() {
-  const { t } = useTranslation();
+  const { i18n, t } = useTranslation();
+  const marketLocale = resolveSystemLocale(i18n.resolvedLanguage ?? i18n.language);
   const navigate = useNavigate();
   const [searchParams, setSearchParams] = useSearchParams();
   const { confirm, confirmWithCheckbox } = useConfirmDialog();
@@ -624,6 +628,19 @@ export function GhostPluginPage() {
     }
   }, [handleUseGhost, selectedDetail, selectedGhost]);
 
+  // 导出当前插件的 .cindy 包:main 侧打包安装目录 → 系统保存对话框落盘。
+  // 取消选择静默返回;成功/失败都如实 toast。
+  const handleExport = useCallback(async () => {
+    if (!selectedDetail) return;
+    try {
+      const result = await window.electronAPI.ghosts.export(selectedDetail.id);
+      if (result.status === 'canceled') return;
+      toast.success(t('settings.ghosts.toast.exported', { name: selectedDetail.name }));
+    } catch {
+      toast.error(t('settings.ghosts.toast.exportFailed', { name: selectedDetail.name }));
+    }
+  }, [selectedDetail, t]);
+
   const handleUninstall = useCallback(async () => {
     if (!selectedDetail) return;
     const ok = await confirm({
@@ -691,6 +708,14 @@ export function GhostPluginPage() {
       if (requestId === marketDetailRequestRef.current) throw error;
     }
   }, []);
+  usePluginMarketLocaleRefresh(
+    marketLocale,
+    async () => {
+      await window.electronAPI.setApplicationMenuLocale(marketLocale);
+    },
+    () => refreshMarket(true),
+    marketDetail?.pluginId ? () => refreshVisibleMarketDetail(marketDetail.pluginId) : undefined,
+  );
   const visibleMarketIcons = useMemo(
     () => [...marketItems.map((item) => item.icon), marketDetail?.icon],
     [marketDetail?.icon, marketItems],
@@ -857,6 +882,13 @@ export function GhostPluginPage() {
         }
         updateBusy={selectedMarketUpdate !== null && marketBusyId !== null}
         onUninstall={() => void handleUninstall()}
+        // 官方保留前缀(cindy-/filo-/xd-)的插件走本地装入会被拒,
+        // 导出产物无法重装,不提供导出项。
+        onExport={
+          selectedGhost && !isOfficialGhostId(selectedDetail.id)
+            ? () => void handleExport()
+            : undefined
+        }
         toggleDisabled={scopeDir !== null && selectedGhost !== null && !selectedGhost.enabled}
         onIconLoadError={handleMarketIconLoadError}
       />

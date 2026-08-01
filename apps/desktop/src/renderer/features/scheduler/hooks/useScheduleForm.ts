@@ -58,6 +58,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   preRunHookTimeoutSec: '',
   notifyDesktop: true,
   notifyFeishu: false,
+  notifyWecomGroup: false,
 };
 
 const SCHEDULE_FORM_PREFS_KEY = 'xdt:scheduleFormPrefs:v1';
@@ -244,6 +245,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
       : '',
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
+    notifyWecomGroup: s.notify.wecomGroup === true,
   };
 }
 
@@ -265,7 +267,7 @@ export interface UseScheduleFormResult {
   selectBoundSession: (session: Session | null) => void;
   /** 应用模板里的 agent/model/provider/effort/fast 字段,并在跨 agent 时重建成目标 agent 的默认组合。 */
   applyTemplateAgentFields: (template: ScheduleTemplate) => void;
-  reset: (s?: Schedule | null) => void;
+  reset: (s?: Schedule | null, overrides?: Partial<ScheduleFormState>) => void;
   /**
    * 把表单转成 CreateScheduleInput；
    * heartbeat 模式（targetSessionId 非空）只跳过 workingDir/useWorktree
@@ -297,8 +299,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     [],
   );
 
-  const reset = useCallback((s: Schedule | null = null) => {
-    const next = makeFormFromSchedule(s);
+  const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
+    const next = { ...makeFormFromSchedule(s), ...overrides };
     lastBindingRef.current = captureBinding(next);
     setForm(next);
   }, []);

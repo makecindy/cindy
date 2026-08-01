@@ -4,7 +4,7 @@
  * 订阅价值不能写入 sessions.total_cost_usd（那是 scheduler / API 账单的真实 cost）。
  * 这里从 assistant message 的结构化 turnMoney 估算值汇总，历史初值走 main
  * 侧 SQLite 汇总，实时增量走 usage:message-turn-cost。旧 turnCostUsd 只作为
- * 历史 USD 事实投影到当前区域金额。
+ * 历史 USD 候选；与当前会话账本币种不兼容时由统一展示投影丢弃。
  */
 
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from 'react';
@@ -38,7 +38,12 @@ interface EstimatedValueTurnCostPayload {
   clientId: string;
   turnMoney?: unknown;
   turnCostUsd?: number;
-  turnCostIsEstimate: boolean;
+  /**
+   * 无报价轮(main 的 recordTurnUsageOnMessage)只推 turnUsageDetails,整组金额字段
+   * 缺省 —— 与 MessageTurnCostPayload 保持一致的可选性。下面的
+   * `turnCostIsEstimate !== true` 早退本就把这类轮次挡在估值汇总之外。
+   */
+  turnCostIsEstimate?: boolean;
   turnUsageDetails?: unknown;
 }
 

@@ -6,8 +6,10 @@
  * renderer/lib/remoteFileOpen.ts 的 verdict 层同语义:
  *
  *   - `file` / `directory` → 点亮;`nonfile`(远端明确不存在)→ 保持纯文本;
- *   - `unknown`(链路断 / stat 异常等无法判定)→ 乐观点亮,点击后由预览页
- *     自己的错误 UX 兜底——绝不因为断链把整条消息的 chip 全灭掉;
+ *   - `unknown`(链路断 / stat 异常等无法判定)→ **按形状分档**:形状明确是路径的
+ *     乐观点亮(点击后由预览页自己的错误 UX 兜底,绝不因为断链把整条消息的 chip
+ *     全灭掉),歧义形状必须等确定答案(判据 chatPathCandidate.isAmbiguousChatPathShape,
+ *     门槛落地在 MessageRenderer.ChatPathChipSpan;DESIGN.md §14.5 规则 5);
  *   - 确定态(file/directory/nonfile)按 (deviceId, workdir, absPath) 缓存,
  *     无 TTL、容量兜底:聊天引用的文件在视图生命周期内视作不变,切会话回来
  *     chip 必须同步点亮不闪烁;
@@ -78,6 +80,78 @@ function capMapSize(map: Map<string, unknown>, cap: number): void {
   if (oldest !== undefined) map.delete(oldest);
 }
 
+// ── 负缓存到期的通知 ────────────────────────────────────────────────────────
+// TTL 到期**本身不是事件**:没有任何 React 依赖会因它而变。所以「TTL 过后重挂自愈」
+// 只在真的重挂时才发生 —— 短转录不会被 FlatList 回收,一条挂着不动的消息在链路恢复
+// 后会一直停在纯文本(PR #1144 review 实捉,与桌面同款缺口)。
+//
+// 由本模块把它翻译成一次通知:**一个**模块级定时器对齐「最早的负缓存到期时刻」
+// (不是每个 chip 挂一个表 —— 一屏几十个 chip 就是几十个定时器),没有 unknown 待期时
+// 零定时器、不轮询;到期清掉过期条目后发**一次**通知,已有确定结论的 chip 会在 peek
+// 处早退,于是实际重验的只有仍是 unknown 的那批,节奏就是 TTL 本身(30s)。
+const changeListeners = new Set<(key: string) => void>();
+let staleTimer: ReturnType<typeof setTimeout> | null = null;
+
+/**
+ * 订阅「某个 key 的缓存状态变了」——**确定态落库、或 unknown 负缓存到期**都会通知。
+ * listener 收到变化的 key(用 remotePathVerdictKey 构造自己的 key 比对),按 key 过滤是
+ * 刻意的:一屏几十个 chip 各自订阅,全量广播会让首屏 N 次 stat 引发 N×N 次重渲染。
+ *
+ * 「确定态落库也通知」是必需的:同一路径可能出现在多个 chip 上,A 先按 unknown 乐观
+ * 点亮,B 随后拿到确定的 nonfile 写进缓存 —— 没有这条通道 A 永远不知道,已确认不存在的
+ * 路径会一直带着下划线可点(PR #1144 review 实捉,桌面同款)。
+ */
+export function subscribeRemotePathVerdictChange(listener: (key: string) => void): () => void {
+  changeListeners.add(listener);
+  return () => {
+    changeListeners.delete(listener);
+  };
+}
+
+function notifyVerdictChange(key: string): void {
+  for (const listener of [...changeListeners]) listener(key);
+}
+
+/** 缓存 key(供订阅方按 key 过滤变化通知)。 */
+export function remotePathVerdictKey(deviceId: string, workdir: string, absPath: string): string {
+  return verdictKey(deviceId, workdir, absPath);
+}
+
+/**
+ * 同步读**渲染用状态**:确定态优先,否则 TTL 未过期的负缓存回 `'unknown'`,都没有回
+ * `undefined`。让「点亮态」成为缓存的纯派生 —— 断链期间的乐观点亮不再需要 chip 自己
+ * 存一份(自存的那份收不到缓存变化,就会变陈旧)。
+ */
+export function peekRemotePathVerdictForRender(
+  deviceId: string,
+  workdir: string,
+  absPath: string,
+): RemotePathVerdict | undefined {
+  const key = verdictKey(deviceId, workdir, absPath);
+  const definitive = verdictCache.get(key);
+  if (definitive) return definitive;
+  const until = unknownUntil.get(key);
+  return until !== undefined && until > Date.now() ? 'unknown' : undefined;
+}
+
+function scheduleStaleSweep(delayMs: number): void {
+  // 已有定时器就复用:它一定排在同一或更早的时刻,醒来后会把剩下的重新排期。
+  if (staleTimer !== null) return;
+  staleTimer = setTimeout(() => {
+    staleTimer = null;
+    const now = Date.now();
+    let earliest = Number.POSITIVE_INFINITY;
+    const expired: string[] = [];
+    for (const [key, until] of unknownUntil) {
+      if (until <= now) expired.push(key);
+      else if (until < earliest) earliest = until;
+    }
+    for (const key of expired) unknownUntil.delete(key);
+    if (earliest !== Number.POSITIVE_INFINITY) scheduleStaleSweep(earliest - now);
+    for (const key of expired) notifyVerdictChange(key);
+  }, Math.max(1, delayMs));
+}
+
 /** 同步读已验证结论(未验证 / 仅负缓存 unknown → undefined,调用方走异步验证)。 */
 export function peekRemotePathVerdict(
   deviceId: string,
@@ -122,10 +196,15 @@ export function verifyRemotePathCached(
         // 短 TTL 负缓存(见头注释):TTL 内同 key 不再发 stat,乐观点亮语义不变。
         capMapSize(unknownUntil, UNKNOWN_CACHE_CAP);
         unknownUntil.set(key, Date.now() + UNKNOWN_TTL_MS);
+        // 到期时通知挂载中的 chip 重验(否则「自愈」只在重挂时发生)。
+        scheduleStaleSweep(UNKNOWN_TTL_MS);
       } else {
         capMapSize(verdictCache, VERDICT_CACHE_CAP);
         verdictCache.set(key, verdict);
       }
+      // 两条分支都通知:确定态落库要让其它 chip 收敛(含把乐观点亮降级成纯文本),
+      // unknown 落负缓存要让本次发起者之外的 chip 也能画出乐观点亮态。
+      notifyVerdictChange(key);
       return verdict;
     })
     .finally(() => verdictInflight.delete(key));
@@ -141,4 +220,9 @@ export function _clearRemotePathVerdictCache(): void {
   unknownUntil.clear();
   statActive = 0;
   statWaiters.length = 0;
+  if (staleTimer !== null) {
+    clearTimeout(staleTimer);
+    staleTimer = null;
+  }
+  changeListeners.clear();
 }

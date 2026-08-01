@@ -13,7 +13,7 @@
  */
 
 import { useEffect, useState } from 'react';
-import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, X } from 'lucide-react';
+import { AlertCircle, Check, GitFork, Play, RotateCcw, RefreshCw, Timer, X } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { toast } from '@/lib/toast';
 import { Spinner } from '@/components/ui/spinner';
@@ -28,7 +28,9 @@ import {
 } from '@/hooks/useCodexSessionExpiredPrompt';
 import { cn } from '@/lib/utils';
 import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
-import { isNetworkishErrorMessage } from '@/utils/networkError';
+import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
+import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
+import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 
 interface ErrorBannerProps {
   error: string;
@@ -40,6 +42,8 @@ interface ErrorBannerProps {
   onCancel?: () => void;
   /** silent-stop 耗尽横幅「继续」:清横幅 + 发隐藏续跑指令(见 makerChatStore)。 */
   onSilentStopContinue?: () => void;
+  /** 账号用量限制：打开预填好的一次性 Automation，由用户确认后创建。 */
+  onContinueAfterUsageReset?: () => void;
   /** 当前 session 的 agent kind。codex 的 401 / Missing bearer 必须 hide Retry,
    *  否则 retry 撞同一个 in-memory auth retry-loop 产生重复失败 turn。 */
   agentKind?: 'cc' | 'codex';
@@ -56,6 +60,9 @@ interface ErrorBannerProps {
   /** 当前会话显式选择的模型来源。OpenAI 重连只能处理 openai / 无显式来源的历史会话；
    * 其它 provider 的 OAuth 错误必须留给对应来源处理。 */
   providerId?: string | null;
+  /** XD Gateway 返回了误导性的 Claude Pro/Opus 套餐错误时，切到已连接的
+   * Claude.ai 订阅来源并重试本轮。未连接 Anthropic 时不提供此操作。 */
+  onSwitchToClaudeSubscription?: () => Promise<void>;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -74,11 +81,13 @@ export function ErrorBanner({
   onRetry,
   onCancel,
   onSilentStopContinue,
+  onContinueAfterUsageReset,
   agentKind,
   remoteHostId,
   deviceLinkDeviceId,
   modelId,
   providerId,
+  onSwitchToClaudeSubscription,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -177,13 +186,26 @@ export function ErrorBanner({
     isOpenAiConnectionExpired && isChatGptConnectionConnected(openAiAuthState, false);
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
   // 网络类错误(502/连接失败/fetch failed 等):友好文案 + 原始错误折叠可查。
-  const isNetworkishError = isNetworkishErrorMessage(error);
+  // Codex `Reconnecting... N/M` 额外解析次数，让 recoverable 状态持续更新而非裸英文。
+  const reconnectAttempt = parseReconnectAttemptMessage(error);
+  const isNetworkishError = reconnectAttempt !== null || isNetworkishErrorMessage(error);
+  // 服务过载(模型容量不足 / 上游 529):与网络类分开判定——把容量问题说成"网络
+  // 异常"会让用户白折腾自己的网络。带 `(auto-retry N/M)` 后缀 = 仍在自动重试。
+  //
+  // 判定优先吃 errorReason 的稳定 key(maker-core 的 UPSTREAM_OVERLOAD_REASON):
+  // Codex 的容量文案是它二进制里硬编码的提示语, 改一次措辞就会让这里退回英文原文,
+  // 而这条判定驱动的正是本地化文案、重试进度与 hideRetry。文案匹配保留作兜底
+  // (老 daemon / Anthropic 侧 / 历史持久化错误行 —— 后者只有文案可用)。
+  const isOverloadError = isOverloadErrorMessage(error, undefined, errorReason);
+  const overloadRetryProgress = parseOverloadRetryProgress(error);
   // Retry 的显示条件与网络错误文案必须共用同一个判定。外部发起的 turn（例如
   // scheduler / goal）失败时没有安全的 recovery target，errorRetryText 会是 null；
   // 此时不能一边隐藏按钮，一边仍提示用户“点击重试”。
   const isSilentStopExhausted = errorReason === 'silent-stop-exhausted';
+  const isClaudeGatewayOpusPlanMismatch = errorReason === CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON;
   const hideRetry =
     isSilentStopExhausted ||
+    isClaudeGatewayOpusPlanMismatch ||
     isCodexThreadStale ||
     showInvalidEncryptedContentRecovery ||
     (isCodexRemoteAuthMissing && !syncedSinceError) ||
@@ -191,8 +213,10 @@ export function ErrorBanner({
     isCodexLocalOAuthAuthMissing;
   const safeRetryText = !hideRetry && retryText ? retryText : null;
   const [showRawNetworkError, setShowRawNetworkError] = useState(false);
+  const [switchingClaudeSubscription, setSwitchingClaudeSubscription] = useState(false);
   useEffect(() => {
     setShowRawNetworkError(false);
+    setSwitchingClaudeSubscription(false);
   }, [error]);
 
   // hasSpecialGuidance: 是否命中下面任一「有专属可操作指引」的特殊分支。用一个在
@@ -216,13 +240,39 @@ export function ErrorBanner({
       : t('chat.errorBanner.codexSessionExpired');
   } else if (isCodexLocalOAuthAuthMissing) {
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
+  } else if (isClaudeGatewayOpusPlanMismatch) {
+    displayError = t('chat.errorBanner.claudeGatewayOpusPlanMismatch');
+  } else if (isOverloadError) {
+    // 服务过载:上游模型没有可用容量。原始英文("Selected model is at capacity")
+    // 对用户没有行动价值,换成友好文案 + 明确的下一步;原始错误折叠可查。
+    // 放在网络类之前:两者都可能重试自愈,但只有这里该建议"换模型"。
+    // 终态文案刻意**不**声称"多次重试仍未成功": 走到终态的原因不止"预算耗尽",
+    // 还包括"本 turn 已有产出所以不重投"以及接管条件不满足(如 daemon 自己已经
+    // retry 很久后升级成终态)。那些情况下一次自动重试都没发生过, 说"重试多次"
+    // 是假信息(review #844 codex P1)。真的重试过时用户也已经在退避窗口里逐帧看过
+    // 「正在自动重试（N/M）」, 信息不丢。两个分支只按"有没有重试按钮"给不同下一步。
+    displayError = overloadRetryProgress
+      ? t('chat.errorBanner.overloadRetrying', {
+          attempt: overloadRetryProgress.attempt,
+          maxAttempts: overloadRetryProgress.maxAttempts,
+        })
+      : t(
+          safeRetryText
+            ? 'chat.errorBanner.overloadBusy'
+            : 'chat.errorBanner.overloadBusyNoRetry',
+        );
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
     // 非终止(isRecoverable,daemon 自动重试中)与终止(可点重试)文案区分。
     // 放在所有专属指引分支之后:401 等更具体的分支优先。
     displayError = isRecoverable
-      ? t('chat.errorBanner.networkAutoRetrying')
+      ? reconnectAttempt
+        ? t('chat.errorBanner.networkReconnecting', {
+            attempt: reconnectAttempt.attempt,
+            maxAttempts: reconnectAttempt.maxAttempts,
+          })
+        : t('chat.errorBanner.networkAutoRetrying')
       : t(
           safeRetryText
             ? 'chat.errorBanner.networkUnreachable'
@@ -239,9 +289,29 @@ export function ErrorBanner({
   // budget 判定与全项目一致: `codex/` 前缀。
   // 例外:网络类分支(终止态)仍叠加 —— 折扣版 gateway 挂掉恰恰多表现为 502 /
   // upstream unreachable,「切普通版试试」对症;自动重试中不叠(用户无需行动)。
+  // 过载类同理叠加:折扣版 gateway 的容量往往比官方版更紧,「切普通版试试」对症。
+  // 仍在自动重试时不叠(用户无需行动)——判据是有没有进度后缀,而不是 isRecoverable:
+  // 预算耗尽后的终止错误没有后缀,那时才该给建议。
   const isBudgetModel = !!modelId && modelId.startsWith('codex/');
   const showBudgetHint =
-    isBudgetModel && (!hasSpecialGuidance || (isNetworkishError && !isRecoverable));
+    isBudgetModel &&
+    (!hasSpecialGuidance ||
+      (isNetworkishError && !isRecoverable) ||
+      (isOverloadError && !overloadRetryProgress));
+
+  const handleSwitchToClaudeSubscription = async (): Promise<void> => {
+    if (!onSwitchToClaudeSubscription || switchingClaudeSubscription) return;
+    setSwitchingClaudeSubscription(true);
+    try {
+      await onSwitchToClaudeSubscription();
+    } catch (e) {
+      const ipcErr = extractIpcError(e);
+      const msg = ipcErr?.message ?? (e instanceof Error ? e.message : String(e));
+      toast.error(t('chat.errorBanner.claudeSubscriptionSwitchFailed', { msg }));
+    } finally {
+      setSwitchingClaudeSubscription(false);
+    }
+  };
 
   // 走跟 Settings/RemoteHostDetail 同款的 check → confirm → sync 三步:
   // 1. checkCodexAuth: 探远端是否已有 auth.json (有则要 confirm 覆盖)
@@ -337,9 +407,9 @@ export function ErrorBanner({
             {t('chat.errorBanner.budgetModelHint')}
           </span>
         )}
-        {isNetworkishError && (
-          // 网络分支的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
-          // errno)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
+        {(isNetworkishError || isOverloadError || isClaudeGatewayOpusPlanMismatch) && (
+          // 网络类与过载类的原始错误折叠可查:友好文案替换了原文,但排障(端口/URL/
+          // errno/上游原话)仍需要原文,点击展开。新增控件走 --error-fg token(规则 16;
           // 本组件其余 red-600/400 为历史存量,error 属语义豁免色但新代码仍走 token)。
           <>
             <button
@@ -376,6 +446,25 @@ export function ErrorBanner({
           {t('chat.errorBanner.codexSessionExpiredLogin')}
         </button>
       )}
+      {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (
+        <button
+          type="button"
+          onClick={() => void handleSwitchToClaudeSubscription()}
+          disabled={switchingClaudeSubscription}
+          className={cn(
+            'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg-strong)]',
+            'hover:opacity-70 transition-opacity',
+            'disabled:cursor-not-allowed disabled:opacity-50',
+          )}
+          title={t('chat.errorBanner.switchClaudeSubscriptionTitle')}
+        >
+          <Spinner icon={RefreshCw} size={12} spinning={switchingClaudeSubscription} />
+          {switchingClaudeSubscription
+            ? t('chat.errorBanner.switchingClaudeSubscription')
+            : t('chat.errorBanner.switchClaudeSubscription')}
+        </button>
+      )}
       {isCodexRemoteAuthMissing && !syncedSinceError && (
         <button
           type="button"
@@ -406,6 +495,21 @@ export function ErrorBanner({
         >
           <Play size={12} />
           {t('chat.errorBanner.silentStopContinue')}
+        </button>
+      )}
+      {onContinueAfterUsageReset && (
+        <button
+          type="button"
+          onClick={onContinueAfterUsageReset}
+          className={cn(
+            'shrink-0 flex items-center gap-1 text-xs font-medium',
+            'text-[var(--error-fg)]',
+            'hover:opacity-70 transition-opacity',
+          )}
+          title={t('chat.errorBanner.continueAfterResetTitle')}
+        >
+          <Timer size={12} />
+          {t('chat.errorBanner.continueAfterReset')}
         </button>
       )}
       {safeRetryText && (
@@ -444,19 +548,18 @@ export function ErrorBanner({
             : t('chat.errorBanner.forkStripEncrypted')}
         </button>
       )}
+      {/* 关闭:纯 X 图标,与 InterruptedTurnBanner / WorktreeRestoreBanner / UpgradeBanner
+          的关闭按钮统一(2026-07 统一:输入框上方所有提示条的关闭一律是一个 X,不带
+          文字标签)。配色走 --error-fg token,不用本文件存量的硬编码 red(规则 16,
+          见上方 349 行注释)。语义由 title 承载,供 hover 与读屏。 */}
       {onCancel && (
         <button
           type="button"
           onClick={onCancel}
-          className={cn(
-            'shrink-0 flex items-center gap-1 text-xs font-medium',
-            'text-red-600 dark:text-red-400',
-            'hover:opacity-70 transition-opacity',
-          )}
+          className="shrink-0 text-[var(--error-fg)] opacity-60 hover:opacity-100 transition-opacity"
           title={t('chat.errorBanner.cancelTitle')}
         >
-          <X size={12} />
-          {t('chat.errorBanner.cancel')}
+          <X size={14} />
         </button>
       )}
     </div>

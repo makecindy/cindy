@@ -11,7 +11,6 @@
  * detach source 标记为 `${channel}-slash`。
  */
 
-import { getMaker } from '../../maker-host';
 import { getDesktopProviderService } from '../../maker-host/createDesktopProviderService';
 import { getModelVisibilityOverride } from '../../maker-host/model-visibility-mirror';
 import { getSessionProvider } from '../../maker-host/session-provider-store';
@@ -27,12 +26,30 @@ import { resetSessionToDefaults } from './sessionRepo';
 import type { ImSessionRepo } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImTurnRunner } from './turnRunner';
-import { listProjectsForControl, readSessionTitle } from './controlProjects';
+import {
+  listProjectsForControl,
+  listRecentSessionsForPicker,
+  readSessionTitle,
+} from './controlProjects';
 import { startThreadControlFlow } from './controlFlow';
 import { enterControl } from './controlState';
 import { bindingStore, executeDetach } from '../binding';
 import type { IdentityKey } from '@cindy/im';
 import type { ImChannelAdapter } from './types';
+import {
+  permissionModeCommandContext,
+  renderTextPermissionModePicker,
+  renderTextPermissionModeResult,
+  resolvePermissionMode,
+} from './permissionModeControl';
+
+const INTERACTIVE_SLASH_COMMANDS = new Set([
+  '/model',
+  '/permission',
+  '/ctr',
+  '/session',
+  '/project',
+]);
 
 /** Quick text-only check; treat anything starting with '/' (no spaces before) as a command. */
 export function looksLikeSlashCommand(text: string): boolean {
@@ -60,7 +77,8 @@ export function createSlashHandlers(
   cards: ImCardBuilders,
   turnRunner: ImTurnRunner,
 ): ImSlashHandlers {
-  const { im, ui, channel, threadScoped } = adapter;
+  const { im, output, ui, channel, threadScoped } = adapter;
+  const richIm = output.kind === 'rich-card' ? output.im : null;
   const log = createLogger(`im:${channel}:slash`);
   // threadScoped 渠道的 thread 文案组 — orchestrator 接线期已断言存在
   const threadUi = ui.thread;
@@ -80,13 +98,56 @@ export function createSlashHandlers(
   }
 
   async function handleSlashCommand(text: string, ctx: SlashCtx): Promise<boolean> {
-    const [cmd] = text.trim().split(/\s+/);
+    const [cmd, ...commandArgs] = text.trim().split(/\s+/);
     log.info(`slash cmd=${cmd} userId=...${ctx.userId.slice(-8)}`);
+
+    const supportsTextPermissionCommand = channel === 'wecom' && cmd === '/permission';
+    if (
+      adapter.output.kind === 'chunked-text' &&
+      INTERACTIVE_SLASH_COMMANDS.has(cmd) &&
+      !supportsTextPermissionCommand
+    ) {
+      await safeSendText(
+        ctx.userId,
+        ui.slash.interactiveCommandUnsupported?.(cmd) ?? ui.slash.unknownCommand(cmd),
+      );
+      return true;
+    }
 
     switch (cmd) {
       case '/help':
         await safeSendText(ctx.userId, ui.slash.help);
         return true;
+
+      case '/start': {
+        // Telegram 私聊首次交互必发 /start(START 按钮) — 有欢迎语的渠道回
+        // 欢迎语, 其它渠道走未知命令提示。
+        if (ui.slash.start) {
+          await safeSendText(ctx.userId, ui.slash.start);
+          return true;
+        }
+        await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+        return true;
+      }
+
+      case '/stop': {
+        // 官方 Telegram bot 的 /stop 习惯 — 语义与 `!stop` 完全一致
+        // (中止当前 turn + 丢弃排队消息, 会话保留)。
+        let reply: string;
+        try {
+          const result = await turnRunner.stopActiveTurn({
+            botContextId: ctx.botContextId,
+            userId: ctx.userId,
+          });
+          reply = result.stopped ? ui.agent.stopDone(result.droppedQueued) : ui.agent.stopIdle;
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/stop stopActiveTurn threw: ${msg}`);
+          reply = ui.agent.sendInternalError(msg);
+        }
+        await safeSendText(ctx.userId, reply);
+        return true;
+      }
 
       case '/new': {
         // thread = session 模型: 发新顶层消息即新会话, /new 无意义 → 废弃提示。
@@ -122,6 +183,10 @@ export function createSlashHandlers(
       }
 
       case '/model': {
+        if (!richIm) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
         // thread 模型: slash 命令不携带 thread 上下文(Slack 平台限制), 无法定位
         // 目标 thread/session;不拦的话 resolveRouteTarget 会误建空 scope session。
         if (threadScoped && threadUi) {
@@ -170,7 +235,7 @@ export function createSlashHandlers(
             : undefined,
         });
         try {
-          await im.sendInteractiveCard(ctx.userId, spec);
+          await richIm.sendInteractiveCard(ctx.userId, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/model card send failed: ${msg}`);
@@ -225,12 +290,16 @@ export function createSlashHandlers(
       }
 
       case '/ctr': {
+        if (!richIm) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
         // ── thread 模型: 整个选择流程在"接管锚点卡"的 thread 里进行 ────────
         // 顶层只发一张锚点卡(未来的接管 thread root), 工作区/会话选择卡发进
         // 它的 thread — 用户从选择那一刻就在 thread 里操作, 接管完成后锚点卡
         // 原地变身"已接管"(带 🚪), 同一 thread 直接续聊。
-        if (threadScoped && threadUi && im.threadKeyForMessage) {
-          await startThreadControlFlow(im, adapter, cards, {
+        if (threadScoped && threadUi && richIm.threadKeyForMessage) {
+          await startThreadControlFlow(richIm, adapter, cards, {
             botContextId: ctx.botContextId,
             userId: ctx.userId,
           });
@@ -264,11 +333,74 @@ export function createSlashHandlers(
           currentAttachedTitle,
         });
         try {
-          await im.sendInteractiveCard(ctx.userId, spec);
+          await richIm.sendInteractiveCard(ctx.userId, spec);
           enterControl(ctx.botContextId, ctx.userId);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/ctr card send failed: ${msg}`);
+        }
+        return true;
+      }
+
+      case '/session': {
+        // 跨工作区最近会话直达(官方 bot /session 习惯) — 提供文案组的渠道
+        // 才放行; 选中走 control:session-pick 接管路径。
+        const recentUi = ui.cards.control.recentSessions;
+        if (!richIm || !recentUi) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        const recent = await listRecentSessionsForPicker();
+        const spec = cards.buildRecentSessionPickerCard({
+          botAppId: ctx.botContextId,
+          sessions: recent,
+        });
+        try {
+          await richIm.sendInteractiveCard(ctx.userId, spec);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/session card send failed: ${msg}`);
+        }
+        return true;
+      }
+
+      case '/project': {
+        // 项目切换 — projectSwitching 渠道专属(个人 Telegram);其它渠道当
+        // 未知命令处理, 不暴露半成品入口。
+        const projectUi = ui.cards.project;
+        if (!richIm || !adapter.projectSwitching || !projectUi) {
+          await safeSendText(ctx.userId, ui.slash.unknownCommand(cmd));
+          return true;
+        }
+        // /ctr 接管期间语义冲突(消息在被接管的 desktop 会话里跑): 先 /exctr。
+        const identity: IdentityKey = {
+          channel,
+          botContextId: ctx.botContextId,
+          userId: ctx.userId,
+        };
+        if (bindingStore.get(identity)) {
+          await safeSendText(ctx.userId, projectUi.attachedUnsupported);
+          return true;
+        }
+        const [projects, current] = await Promise.all([
+          listProjectsForControl(),
+          repo.findActiveSession(ctx.botContextId, ctx.userId),
+        ]);
+        const dialogueDir = adapter.sessions.ensureWorkingDir(ctx.botContextId);
+        const currentName =
+          !current || current.workingDir === dialogueDir
+            ? projectUi.dialogueName
+            : (current.workingDir.split(/[\\/]/).filter(Boolean).pop() ?? current.workingDir);
+        const spec = cards.buildProjectPickerCard({
+          botAppId: ctx.botContextId,
+          projects,
+          currentName,
+        });
+        try {
+          await richIm.sendInteractiveCard(ctx.userId, spec);
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          log.error(`/project card send failed: ${msg}`);
         }
         return true;
       }
@@ -284,16 +416,40 @@ export function createSlashHandlers(
           return true;
         }
         const { row } = target;
-        const maker = getMaker();
-        const modes = maker.getCapabilities(row.agentKind).permissionModes;
+        const context = permissionModeCommandContext(
+          row.id,
+          row.permissionMode,
+          turnRunner.getPermissionModes(row.agentKind),
+        );
+        if (!richIm) {
+          const requested = commandArgs[0];
+          if (!requested) {
+            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            return true;
+          }
+          const mode = resolvePermissionMode(context.modes, requested);
+          if (!mode) {
+            await safeSendText(ctx.userId, renderTextPermissionModePicker(ui, context));
+            return true;
+          }
+          const confirmedFullAccess = ['confirm', '确认'].includes(commandArgs[1]?.toLowerCase());
+          const result = await turnRunner.changePermissionMode({
+            sessionId: row.id,
+            mode: mode.id,
+            modes: context.modes,
+            confirmedFullAccess,
+          });
+          await safeSendText(ctx.userId, renderTextPermissionModeResult(ui, result));
+          return true;
+        }
         const spec = cards.buildPermissionModePickerCard({
           sessionId: row.id,
           agentKind: row.agentKind,
-          modes,
+          modes: context.modes,
           currentMode: row.permissionMode,
         });
         try {
-          await im.sendInteractiveCard(ctx.userId, spec);
+          await richIm.sendInteractiveCard(ctx.userId, spec);
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           log.error(`/permission card send failed: ${msg}`);

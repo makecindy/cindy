@@ -67,7 +67,7 @@ import {
 import { resolveJavaRuntimeEnv } from './java-runtime-env.mjs';
 import { clearBundlerCache } from './lib/bundler-cache.mjs';
 import { readEmbeddedRuntimeVersionFromApk } from './lib/embedded-runtime.mjs';
-import { loadEndpointManifestBaseUrl, mobileClientBuildEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
+import { mobileClientBundleEnv } from '../../../scripts/shared/client-endpoint-build-env.mjs';
 import { SELF_HOST_REGIONS, loadSelfHostRegions, missingSelfHostBakeFields, stripSelfHostRegionEnv } from './lib/self-host-region.mjs';
 
 const MOBILE_DIR = resolve(dirname(fileURLToPath(import.meta.url)), '..');
@@ -79,7 +79,7 @@ function log(msg) { console.error(msg); }
 function selfhostEnv(region, versionCode, desktopVersion) {
   const env = {
     ...process.env,
-    ...mobileClientBuildEnv({ authRegion: region.authRegion }),
+    ...mobileClientBundleEnv({ authRegion: region.authRegion }),
     EXPO_PUBLIC_XDT_OTA_SELFHOST: '1',
     XDT_ANDROID_VERSION_CODE: String(versionCode),
   };
@@ -95,8 +95,7 @@ function selfhostEnv(region, versionCode, desktopVersion) {
 // 口令等机密)引入日志(与 selfhostEnv 注入的同名值一致)。
 function bakedDisplayEnv(region, versionCode, desktopVersion) {
   return {
-    EXPO_PUBLIC_CINDY_AUTH_REGION: region.authRegion,
-    EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL: loadEndpointManifestBaseUrl({ authRegion: region.authRegion }),
+    ...mobileClientBundleEnv({ authRegion: region.authRegion }),
     EXPO_PUBLIC_XDT_OTA_SELFHOST: '1',
     ...(desktopVersion ? { EXPO_PUBLIC_DESKTOP_VERSION: desktopVersion } : {}),
     XDT_ANDROID_VERSION_CODE: String(versionCode),

@@ -12,6 +12,7 @@
  */
 
 import {
+  isAgentSelectableModel,
   isModelVisible,
   providerOffersModel,
   providersForAgent,
@@ -39,6 +40,7 @@ function toDescriptor(m: CatalogModel): ModelDescriptor {
   if (m.description !== undefined) d.description = m.description;
   if (m.effortDisplayNames !== undefined) d.effortDisplayNames = m.effortDisplayNames;
   if (m.supportsFastMode !== undefined) d.supportsFastMode = m.supportsFastMode;
+  if (m.mode !== undefined) d.mode = m.mode;
   return d;
 }
 
@@ -129,17 +131,39 @@ export function filterChatBridgedCodexProviders(
  *
  * `excludeProvider` 命中的供应商整条跳过（其模型不加入、也不占 seen），这样若同一
  * model id 另有可路由的供应商提供，仍能由后者补上——用于 SSH 远程排除仅本地可桥接的来源。
+ *
+ * `admissionFiltered` = 剔除停用轴不可路由的条目(suspended 供应商 / model.disabled /
+ * 非 agent 分组的能力模型)。**只给「用户从零挑一个模型」的清单**用(IM 默认设置下拉、
+ * SSH 候选,PR #744 review);按 id 找**当前会话已选模型**的元数据查询(ChatInput 的
+ * effort 表、selectVisibleModels 的 currentModel)不要开 —— 运行中的会话可以正用着
+ * 停用模型,过滤会把它的档位/显示信息一并弄丢。
  */
 export function deriveModelsFromProviders(
   providers: ProviderView[],
   agent: AgentKind,
-  opts?: { excludeProvider?: (provider: ProviderView) => boolean },
+  opts?: {
+    excludeProvider?: (provider: ProviderView) => boolean;
+    admissionFiltered?: boolean;
+  },
 ): ModelDescriptor[] {
   const seen = new Set<string>();
   const out: ModelDescriptor[] = [];
   for (const provider of providersForAgent(providers, agent)) {
     if (opts?.excludeProvider?.(provider)) continue;
+    if (opts?.admissionFiltered && provider.suspended) continue;
     for (const m of provider.models[agent] ?? []) {
+      if (
+        opts?.admissionFiltered &&
+        (m.disabled === true ||
+          // 非聊天模型同样不进 picker(issue #882 第 3 点):isAgentSelectableModel 现在
+          // 内部就是 isChatEligible(+ userProvider 例外),与 main 侧
+          // catalog-to-descriptors.ts deriveAvailableModels 用的同一份权威判定
+          // 保持一致——但只在 admissionFiltered 时生效,不能无条件开(见上方函数
+          // 文档:current-model 元数据查询不能被这个轴过滤掉)。
+          !isAgentSelectableModel(m, { userProvider: provider.source === 'user' }))
+      ) {
+        continue;
+      }
       if (seen.has(m.id)) continue;
       seen.add(m.id);
       out.push(toDescriptor(m));
@@ -170,10 +194,11 @@ export function selectVisibleModels(params: {
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
   /**
-   * 过滤订阅直连模型(chatgpt/ / xai/,经本地 compat-proxy 的 responses-bridge 翻译)。
-   * SSH 远程会话(remoteHostId)必须传 true:远程模式走 remoteEndpoint、不经本地 loopback
-   * proxy,bridge 前缀模型送出去不会被翻译,选了必失败。device-link 远程不受影响
-   * (被控端跑完整 app,其本地 proxy 上 bridge 可用,模型清单本就来自被控端)。
+   * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
+   * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
+   * 远端 cc 不经本地 compat-proxy 的 responses-bridge,选了必失败;静默消失会让用户
+   * 误以为订阅掉了。device-link 远程不受影响(被控端跑完整 app,其本地 proxy 上
+   * bridge 可用,模型清单本就来自被控端)。
    */
   excludeSubscriptionDirect?: boolean;
   /**
@@ -185,13 +210,14 @@ export function selectVisibleModels(params: {
   excludeChatBridgedCodex?: boolean;
 }): ModelDescriptor[] {
   const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect, excludeChatBridgedCodex } = params;
-  const drop = (list: ModelDescriptor[]): ModelDescriptor[] =>
-    excludeSubscriptionDirect ? list.filter((m) => !isSubscriptionDirectModel(m.id)) : list;
+  // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
+  // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
+  const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
   const codexDeriveOpts = excludeChatBridgedCodex
     ? { excludeProvider: isChatBridgedCodexProvider }
     : undefined;
-  const cc = drop(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
-  const codex = drop(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
+  const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
+  const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
   const merged = [...cc];

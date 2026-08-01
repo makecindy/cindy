@@ -71,7 +71,8 @@ export function buildCodexGatewayBaseUrl(upstream = claudeUpstreamEndpoint()): s
  *     proxy 直转 gateway(不破坏现有纯 key 用户)。
  *   - provider-oauth (如 xAI): env_key=XDT_CODEX_API_KEY → codex 带占位 key,
  *     proxy 按会话用供应商 OAuth token 覆盖 Authorization。
- * supports_websockets 显式冻成 false, 防止 Codex startup prewarm 在 threadId 登记前打模型。
+ * cindy_gateway 显式冻成 false；仅 oauth-bearer 额外定义的 cindy_openai 打开 WS。
+ * 后者的 upgrade 由 loopback proxy 按 thread 转发，任何建连不兼容都会用 426 回到旧 HTTP。
  */
 export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySpawnAuthMode): string[] {
   const p = CODEX_GATEWAY_PROVIDER_ID;
@@ -84,6 +85,10 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
     '-c', `model_providers.${p}.base_url="${baseUrl}"`,
     '-c', `model_providers.${p}.wire_api="responses"`,
     '-c', authArg,
+    // cindy_gateway 必须留在 HTTP:proxy 要整段 JSON.parse 请求体做 instructions 注入、
+    // 按 model 分流改写与 recoveryRules,这些能力在 WS 帧上不存在(proxy 的 WS 通道只做
+    // socket 级透传)。网关 / xAI / 自定义供应商都走这个 provider,因此一律不发 upgrade。
+    // 只有不依赖请求体改写的订阅直连 provider(下面的 cindy_openai)才放开 WS。
     '-c', `model_providers.${p}.supports_websockets=false`,
   ];
   if (authMode === 'oauth-bearer') {
@@ -97,7 +102,28 @@ export function buildCodexProxySpawnArgs(baseUrl: string, authMode: CodexProxySp
       '-c', `model_providers.${o}.base_url="${baseUrl}"`,
       '-c', `model_providers.${o}.wire_api="responses"`,
       '-c', `model_providers.${o}.requires_openai_auth=true`,
-      '-c', `model_providers.${o}.supports_websockets=false`,
+      // 订阅直连走 bundled codex 原生的 Responses WebSocket:Codex 自己执行
+      // startup prewarm、连接复用、重试与 HTTP fallback；Cindy 只把 loopback upgrade
+      // 原样隧道到同一个 ChatGPT endpoint。这样 at-capacity / 重连语义由同版本 Codex
+      // 和上游决定，不在宿主侧另造一套传输策略。
+      //
+      // 字段是 boolean(实测传字符串报 `expected a boolean`),没有「只开通道不开预热」
+      // 的中间档,true 即含 prewarm。因此灰度只能由外层控制(proxy 侧
+      // resolveWebSocketUpstream 返回 null → 426 → codex 退回 HTTP),不能靠这个字段分档。
+      //
+      // 前提:proxy 必须支持 upgrade 转发(见 anthropic-compat-proxy 的
+      // resolveWebSocketUpstream),否则 codex 的 WS 会打在一个不认 upgrade 的 loopback 上。
+      //
+      // 代价(WS 上 proxy 看不到请求体,以下能力对订阅直连失效):
+      //  - recoveryRules(encrypted_content / image-id 修复):app-server 报错后由
+      //    maker-core 通知 host 按同一套 rule 判定，逐出该 thread 的预热 WS；
+      //    下一次 upgrade 返回 426，codex 降到 HTTP 后由原 recoveryRules 接管。
+      //  - responseObserver 的限流 header 观测:订阅直连已由 app-server 的
+      //    `account/rateLimits/updated` 原生通道覆盖(不经 body,不受 WS 影响)。
+      //  - prompt 改走原生 developerInstructions:Codex 0.145 自动 compact 会把当前
+      //    session 的 canonical developer context 重新注入 replacement history(中途
+      //    compact)或下一次正常采样(pre-turn compact),无需 proxy 逐请求重复注入。
+      '-c', `model_providers.${o}.supports_websockets=true`,
       // is_openai + codex-backend OAuth 命中时 codex 默认对 /responses 请求体做 zstd
       // 压缩(enable_request_compression 默认开);loopback proxy 要整段 JSON.parse
       // 改写请求体,无法解 zstd,必须显式关掉(仅少传输优化,无功能损失)。

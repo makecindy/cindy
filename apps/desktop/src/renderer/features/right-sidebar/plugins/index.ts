@@ -14,3 +14,4 @@ import './web-browser';
 import './terminal';
 import './review';
 import './orca-workers';
+import './background-tasks';

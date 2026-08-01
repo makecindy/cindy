@@ -12,7 +12,7 @@
   "cloudTeaserTitle": "云端 {{appName}} 筹备中",
   "cloudTeaserCopy": "上线后无需电脑，手机版即可直接使用。",
   "sectionFirstRun": "开始使用",
-  "sectionOffline": "连接过的电脑",
+  "sectionOffline": "连接过的设备",
   "sectionRemoteDisabled": "在电脑上操作",
   "sectionAccessRevoked": "需要重新允许",
   "retryAccess": "重试访问",

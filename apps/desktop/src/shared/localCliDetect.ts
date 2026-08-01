@@ -31,6 +31,15 @@ export interface LocalCliDetection {
   installed: boolean;
   /** 登录态凭证文件存在(只 stat 不读)。 */
   loggedIn: boolean;
+  /**
+   * Cindy 当前用的凭证**确实就是这一份本机凭证**(而不是各自登录了不同账号)。
+   *
+   * 与 `loggedIn` 是两件事,不能互推:codex 有独立的 codex-home,只有双方账号一致时
+   * reconcile 才建硬链;账号不同时两边都 loggedIn,但用的不是同一份凭证。据此判定
+   * 「已沿用本机订阅」类文案,避免对显式登录了另一个账号的用户报错话
+   * (PR #1076 review)。判据按 CLI 分派,见 main 侧 `createLocalCliScanDeps`。
+   */
+  sharedWithCindy: boolean;
 }
 
 /**

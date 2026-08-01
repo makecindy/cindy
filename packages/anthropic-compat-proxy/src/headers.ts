@@ -16,9 +16,13 @@
  *   - x-client-request-id      —— **每请求唯一**,只作最后兜底;命中它时 Layer-2 标记
  *     跨不过下一请求(但 Layer-1 反应式仍每轮兜底,功能不受影响,只是少省一次往返)。
  */
-export const DEFAULT_THREAD_ID_HEADERS = [
+export const STABLE_THREAD_ID_HEADERS = [
   'x-claude-code-session-id',
   'thread-id',
+] as const;
+
+export const DEFAULT_THREAD_ID_HEADERS = [
+  ...STABLE_THREAD_ID_HEADERS,
   'x-client-request-id',
 ] as const;
 

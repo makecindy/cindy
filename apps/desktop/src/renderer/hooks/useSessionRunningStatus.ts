@@ -23,8 +23,8 @@
  *
  * Notifications are cleared when:
  *    - The user navigates to that session (clicks it) — done / awaiting only。
- *      'error' 例外:已读以 App 内真实展示为准,红角标由 useErrorReadAck 在
- *      ErrorBanner 聚焦驻留后清除(用户显式「全部标为已读」仍可清)。
+ *      'error' 例外:红角标是未处理告警的派生投影(hooks/usePendingAlertAttention),
+ *      展示不构成已读 —— 只有用户处置横幅或告警本身消失才清。
  *    - The pending state that caused the notification disappears (e.g. the
  *      ask-user or permission was resolved elsewhere) — 同样不清 'error'。
  *
@@ -50,8 +50,8 @@ import {
 import {
   clearCompletedSchedulerOwnedRunForNewActivity,
   clearCompletedSilencedRunForNewActivity,
-  observeNextSessionTerminalNotificationOwnedByScheduler,
-  observeNextSessionDoneSilenced,
+  isSessionTerminalNotificationOwnedByScheduler,
+  isSessionDoneSilenced,
 } from '@/lib/silencedSessionDoneStore';
 
 // Codex maker 化后, codex session 也走 makerChatStore;
@@ -145,13 +145,18 @@ export function useSessionRunningStatus(
     // --- 1. Detect new turn starts ---
     for (const sessionId of currentRunningSet) {
       if (!prevRunning.has(sessionId)) {
+        // 只清「run 已终态」的标记(用户手动起的新对话或下一个 run);run 还在跑时
+        // 是 subagent 续 turn / silent-stop 自动续跑,标记必须留着。兜底定时器不在
+        // 这里动 —— 统一由本 effect 末尾的对账按当前 running 状态处理。
         clearCompletedSilencedRunForNewActivity(sessionId);
         clearCompletedSchedulerOwnedRunForNewActivity(sessionId);
         // error 红角标与真实错误态同步:新 turn 启动会清掉 store 的终止错误
         // (staleErrorClearedOnTurnStart),若此时角标还是 'error' 就成了 orphan——
-        // useErrorReadAck 因错误态消失永不 ack,活跃会话的 done 分支又不覆写,
-        // 角标会永久残留。错误已不存在,这里显式清除(explicit 才能过 store 咽喉);
-        // 新 turn 的结局(done/error)会按最新状态重新挂角标,提醒不丢失。
+        // 活跃会话的 done 分支不覆写它,角标会永久残留。错误已不存在,这里显式清除
+        // (explicit 才能过 store 咽喉);新 turn 的结局(done/error)会按最新状态
+        // 重新挂角标,提醒不丢失。
+        // 与派生红点(usePendingAlertAttention)一致:turn 启动会插入新的 user 行,
+        // 原 error 行不再是尾行,pending-alerts 也不再命中 —— 两条路径同向收敛。
         if (
           getSessionAttentionKind(sessionId) === 'error' &&
           !makerChatStore.hasSessionTerminalError(sessionId)
@@ -186,30 +191,32 @@ export function useSessionRunningStatus(
         // `false` here was the root cause of failed turns being notified as
         // "done"; always resolve errors against the authoritative store.
         const hasError = info?.hasError ?? makerChatStore.hasSessionTerminalError(sessionId);
-        // observeNextSessionDoneSilenced 有副作用(消费一次静默 slot),必须在这里
-        // 读一次,不能推迟到定时器里 —— 否则 debounce 期间 session 又起新 turn 时
-        // 静默 slot 会被跳过。
-        const isSilencedDone = !hasError && observeNextSessionDoneSilenced(sessionId);
+        // 两个查询都无副作用、且在 run 存续期间对每次 done 转换都成立:一个静默
+        // run 内 running→done 会翻转多次(后台 subagent 续 turn、silent-stop 自动
+        // 续跑),标记若被第一次中间 done 消费掉,最终那次真 done 就会当成普通完成
+        // 把系统通知发出去。标记的清除只由 scheduler 事件驱动,见
+        // silencedSessionDoneStore 的文件头注释。
+        const isSilencedDone = !hasError && isSessionDoneSilenced(sessionId);
         // Scheduler 已按 schedule.notify 接管这次终态的桌面 / 飞书通知。这里只
         // 抑制 callback，侧栏 / Dock attention 仍按普通 done/error 逻辑保留。
         const notificationOwnedByScheduler =
-          observeNextSessionTerminalNotificationOwnedByScheduler(sessionId);
+          isSessionTerminalNotificationOwnedByScheduler(sessionId);
         const isActive = sessionId === activeSessionId;
 
         // error 立刻处理:队列会被 abort,不存在"下一条自动接着跑"的场景;红角标 +
         // 系统通知(onSessionError,由 renderer 侧 gate focus)都马上触发,不走
         // debounce。出错永不静默:失败的后台 turn 不能伪装成正常完成或悄无声息消失。
         if (hasError) {
-          // 报错的已读以 App 内真实展示为准:即使是当前活跃会话也先挂红角标,由
-          // useErrorReadAck 在 ErrorBanner 真实展示(会话打开 + 窗口聚焦驻留)后清除。
-          // 不能沿用「活跃会话不亮」的 done 语义——活跃 ≠ 用户看到了报错。
+          // 即使是当前活跃会话也挂红角标:红点跟随「告警未处理」而非「是否看到」,
+          // 横幅就在眼前时列表同样亮点(2026-07 统一决策)。不能沿用「活跃会话不亮」
+          // 的 done 语义。清除只能来自用户处置横幅或 pending-alerts 派生收敛。
           addSessionAttention(sessionId, 'error');
           if (!notificationOwnedByScheduler) onSessionErrorRef.current?.(sessionId);
           continue;
         }
 
         // 静默完成(scheduled automation 等):既不亮角标也不发系统通知,直接跳过、
-        // 不进 debounce 调度(静默 slot 副作用已在上面消费完毕)。
+        // 不进 debounce 调度。中间 done 与最终 done 都会走到这里。
         if (isSilencedDone) continue;
 
         // 正常 done:走 debounce。QUEUE_DEBOUNCE_MS 内若同 session 又变 running
@@ -313,16 +320,15 @@ export function useSessionRunningStatus(
   }, []);
 
   // When the active session changes, clear its notification if any.
-  // 默认 passive:切到会话 ≠ 看到了报错。store 会保住 'error' 红角标,
-  // 由 useErrorReadAck 在 ErrorBanner 真实展示后以 explicit 清除。
+  // 默认 passive:切到会话 ≠ 处置了报错。store 会保住 'error' 红角标,
+  // 只有用户处置横幅或告警本身消失才清。
   useEffect(() => {
     if (activeSessionId) clearSessionAttention(activeSessionId);
   }, [activeSessionId]);
 
   const clearNotification = useCallback(
     (sessionId: string) => {
-      // 默认 passive:点击会话卡片只导航,'error' 红角标由 store 保住,
-      // 等真实展示后由 useErrorReadAck 以 explicit 清除。
+      // 默认 passive:点击会话卡片只导航,'error' 红角标由 store 保住。
       clearSessionAttention(sessionId);
     },
     [],

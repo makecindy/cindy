@@ -402,6 +402,36 @@ export function plainTextToTiptapDoc(text: string): JSONContent {
 }
 
 /**
+ * 递归给文档中所有 text 节点附加 quickStartPill mark（非 text 节点原样保留）。
+ * 用于在 plainTextToComposerDocument 生成的规范化文档（含列表/围栏代码块）
+ * 上统一加 mark，保证 quick-start 文本即使包含 markdown 列表标记也能
+ * 正确渲染，行为与 plainTextToTiptapDoc 真正同构（review 反馈）。
+ */
+function applyQuickStartPillMark(node: JSONContent): JSONContent {
+  if (node.type === 'text') {
+    return {
+      ...node,
+      marks: [...(node.marks ?? []), { type: 'quickStartPill' }],
+    };
+  }
+  if (Array.isArray(node.content)) {
+    return { ...node, content: node.content.map(applyQuickStartPillMark) };
+  }
+  return node;
+}
+
+/**
+ * 与 plainTextToTiptapDoc 相同，但给文本附加 quickStartPill mark，
+ * 使编辑器渲染为黑底白字胶囊标签（视觉区分卡片预填 vs 手动输入）。
+ * 复用 plainTextToComposerDocument 保证列表/围栏/空段落规范化行为一致，
+ * 再递归给所有 text 节点加 mark（review：不能绕过 normalizeComposerDocumentJSON）。
+ */
+export function quickStartTextToTiptapDoc(text: string): JSONContent {
+  const normalized = plainTextToComposerDocument(text);
+  return applyQuickStartPillMark(normalized);
+}
+
+/**
  * Subscribe to external writes for `sessionId`. Returns an unsubscribe fn.
  * ChatInput uses this to force-setContent when an outside writer (rewind /
  * fork pre-fill) updates the draft for the currently-mounted session.

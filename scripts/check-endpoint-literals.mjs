@@ -13,8 +13,9 @@ import { fileURLToPath } from 'node:url';
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const EAS_ENDPOINT_ENV_KEYS = Object.freeze([
   'EXPO_PUBLIC_FEISHU_APP_ID',
-  // 现役:端点清单自举基址(唯一烘焙远程 URL,由发版脚本临时注入)。
+  // 现役:本区与对端的两份清单自举基址,由发版脚本临时注入。
   'EXPO_PUBLIC_ENDPOINT_MANIFEST_BASE_URL',
+  'EXPO_PUBLIC_ENDPOINT_MANIFEST_PEER_BASE_URL',
   // 以下为已退役键(2026-07 端点清单重构后不再注入)——保留在名单里防复活。
   'EXPO_PUBLIC_CINDY_AUTH_BASE_URL',
   'EXPO_PUBLIC_XDT_API_BASE_URL',
@@ -43,7 +44,11 @@ const ALLOWED_NON_PRODUCTION_ORIGINS = new Set([
   'http://localhost:3335',
   // model-access-server 本地开发兜底(服务端仓,端口 3339)
   'http://localhost:3339',
+  // TapDB 埋点采集端(cn / global 各一),第三方固定协议地址而非本产品生产端点,
+  // 不进入 config/endpoint*.json;与项目 appId 的区域配对见
+  // renderer/analytics/tapdbClient.ts 的 TAPDB_PROJECT_BY_REGION。
   'https://e.tapdb.com',
+  'https://e.tapdb.ap-sg.tapapis.com',
 ]);
 
 /** 解析单个 EAS profile 的继承 env，供门禁测试复用。 */

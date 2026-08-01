@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
+import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 
 export type AppSessionMode = 'signed-out' | 'local' | 'cloud';
 
@@ -20,7 +21,8 @@ export interface ActiveAppSession {
   generation: number;
 }
 
-export const LOCAL_DATA_OWNER_ID = 'local-v1';
+/** Backward-compatible name for the canonical Profile model constant. */
+export const LOCAL_DATA_OWNER_ID = LOCAL_PROFILE_DATA_OWNER_ID;
 
 /** Filesystem/storage-safe opaque namespace for a data owner. */
 export function dataOwnerStorageKey(ownerId: string): string {
@@ -95,6 +97,23 @@ function ensureLoaded(): ActiveAppSession {
 /** Read the last committed stable session. */
 export function getActiveAppSession(): ActiveAppSession {
   return { ...ensureLoaded() };
+}
+
+/**
+ * Opaque key identifying "which account is active right now".
+ *
+ * Any owner-scoped read or write that spans an `await` must capture this before
+ * the wait and re-check it after, then drop the operation when it no longer
+ * matches — otherwise account A's data lands in account B's storage or UI.
+ * `generation` advances on every mode/owner commit, so the key changes even if
+ * the same owner is re-committed.
+ *
+ * Single source of truth on purpose: this invariant was first fixed per-call-site
+ * and each missed call site became its own bug.
+ */
+export function activeOwnerScopeKey(): string {
+  const session = ensureLoaded();
+  return `${session.mode}:${session.dataOwnerId ?? 'none'}:${session.generation}`;
 }
 
 /**

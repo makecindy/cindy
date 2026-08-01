@@ -751,6 +751,102 @@ describe('Session turn send guard', () => {
     expect(handle.send).toHaveBeenCalledTimes(1);
   });
 
+  it('does not run accepted persistence or provider send when beforeProviderStart fails', async () => {
+    const beforeError = new Error('durable acceptance CAS failed');
+    const handle = createHandle({ id: 'thread-before-provider-start' });
+    handle.send = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'before-provider-start-failure',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const onAccepted = vi.fn();
+
+    await expect(
+      session.send('first', {
+        beforeProviderStart: () => {
+          throw beforeError;
+        },
+        onAccepted,
+      }),
+    ).rejects.toBe(beforeError);
+
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+  });
+
+  it('runs provider option preflight before durable or accepted side effects', async () => {
+    const preflightError = new Error('unsupported policy/mode combination');
+    const handle = createHandle({ id: 'thread-send-preflight' });
+    handle.validateSendOptions = vi.fn(() => {
+      throw preflightError;
+    });
+    handle.send = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'send-preflight',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+
+    await expect(
+      session.send('first', {
+        beforeProviderStart,
+        onAccepted,
+      }),
+    ).rejects.toBe(preflightError);
+
+    expect(handle.validateSendOptions).toHaveBeenCalledOnce();
+    expect(beforeProviderStart).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
+  it('awaits beforeProviderStart before accepted persistence and provider dispatch', async () => {
+    const order: string[] = [];
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const handle = createHandle({ id: 'thread-before-provider-order' });
+    handle.send = vi.fn(async () => {
+      order.push('provider');
+    });
+    const session = new Session({
+      id: 'before-provider-start-order',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    const sending = session.send('first', {
+      beforeProviderStart: async () => {
+        order.push('barrier-start');
+        await barrier;
+        order.push('barrier-end');
+      },
+      onAccepted: () => {
+        order.push('accepted');
+      },
+    });
+    await vi.waitFor(() => expect(order).toEqual(['barrier-start']));
+    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+
+    releaseBarrier();
+    await expect(sending).resolves.toEqual({ accepted: true });
+    expect(order).toEqual(['barrier-start', 'barrier-end', 'accepted', 'provider']);
+  });
+
   it('runs onDispatching after acceptance and immediately before vendor send', async () => {
     const calls: string[] = [];
     const handle = createHandle({ id: 'thread-1' });

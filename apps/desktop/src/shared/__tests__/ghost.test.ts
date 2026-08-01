@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import {
   GHOST_CARD_ACTION_ID_RE,
+  GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
   deriveGhostSessionContext,
   diffGhostPermissionItems,
   ghostContentKeys,
@@ -708,7 +709,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent 详单必须与槽成对，且目前只接受 background: true', () => {
+  it('agent 详单必须与槽成对，且只接受 background / errand 两项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -734,6 +735,56 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         ...goodChipManifest(),
         slots: ['panel', 'agent'],
         agent: { background: true, command: 'hidden' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('agent.errand 派活加档:单列高风险权限,可与 background 并存(2026-07-31)', () => {
+    const errand = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { errand: true },
+    });
+    expect(errand.ok).toBe(true);
+    if (!errand.ok) return;
+    expect(errand.manifest.agent).toEqual({ errand: true });
+    expect(ghostPermissionItems(errand.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:errand',
+          kind: 'agent',
+          labelKey: 'agentErrand',
+          detailKey: 'agentErrandDetail',
+        }),
+      ]),
+    );
+
+    const both = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { background: true, errand: true },
+    });
+    expect(both.ok).toBe(true);
+    if (!both.ok) return;
+    expect(both.manifest.agent).toEqual({ background: true, errand: true });
+    expect(ghostPermissionItems(both.manifest).map((item) => item.key)).toEqual(
+      expect.arrayContaining(['agent:user-action', 'agent:background', 'agent:errand']),
+    );
+
+    // errand: false 与 background 双双非 true = 详单没意义,拒(应省略字段)。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: false },
+      }).ok,
+    ).toBe(false);
+    // errand 非布尔 → 拒。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: 'yes' },
       }).ok,
     ).toBe(false);
   });
@@ -1186,12 +1237,70 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       {},
       { image: ['generate', 'generate'] },
       'image',
+      { media: ['upload'] }, // media 类目只有 deposit
+      { media: [] },
     ]) {
       const v = validateGhostManifest(chipWithModel(bad));
       expect(v.ok, JSON.stringify(bad)).toBe(false);
     }
   });
 
+  // #784:media 类目落位必须独立成键——曾经的 `else cindy.video = …` 兜底
+  // 分支会把新类目的动作静默塞进 video,校验层还照样放行。
+  it('media 类目落进 cindy.media,不串到 video', () => {
+    const v = validateGhostManifest(chipWithModel({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({ media: ['deposit'] });
+    expect(v.ok && v.manifest.cindy?.video).toBeUndefined();
+  });
+
+  it('三类目可同时声明', () => {
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate', 'edit'], video: ['edit'], media: ['deposit'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate', 'edit'],
+      video: ['edit'],
+      media: ['deposit'],
+    });
+  });
+
+  // 2026-07-31 快问快答:text 类目独立落位(同 #784 的落位纪律),权限清单
+  // 单独成行(cindy:text.oneshot,带固定说明)。
+  it('text 类目落进 cindy.text,并生成 cindy:text.oneshot 权限行', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'] });
+    expect(v.manifest.cindy?.image).toBeUndefined();
+    expect(v.manifest.cindy?.video).toBeUndefined();
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          kind: 'cindy',
+          labelKey: 'cindyTextOneshot',
+          detailKey: 'cindyTextOneshotDetail',
+        }),
+      ]),
+    );
+  });
+
+  it('text 类目未知动作 / 空数组 → 拒;四类目可同时声明', () => {
+    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate'], video: ['edit'], media: ['deposit'], text: ['oneshot'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate'],
+      video: ['edit'],
+      media: ['deposit'],
+      text: ['oneshot'],
+    });
+  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {
@@ -1396,10 +1505,34 @@ describe('ghost · cindy 详单 video 类目', () => {
     expect(validateGhostManifest(withCindy({ video: ['generate', 'generate'] })).ok).toBe(false);
   });
 
-  it('未知类目报错列出全部支持类目(image / video)', () => {
+  it('未知类目报错列出全部支持类目(image / video / media)', () => {
     const bad = validateGhostManifest(withCindy({ audio: ['generate'] }));
     expect(bad.ok).toBe(false);
     expect(!bad.ok && bad.reason).toContain('video');
+    expect(!bad.ok && bad.reason).toContain('media');
+  });
+
+  // #784:寄存是唯一"不花钱就写用户媒体库"的能力,确认框必须单独列一行,
+  // 并带上主机固定说明(内含字节上限,由常量插值,不在 locale 里写死数字)。
+  it('权限清单推导:media.deposit 单独成行且带上限说明', () => {
+    const v = validateGhostManifest(withCindy({ media: ['deposit'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    const items = ghostPermissionItems(v.manifest).filter((i) => i.kind === 'cindy');
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({
+      key: 'cindy:media.deposit',
+      labelKey: 'cindyMediaDeposit',
+      detailKey: 'cindyMediaDepositDetail',
+    });
+    // 数字与单位都从常量算出来(locale 里只有 {{quota}} 占位):反解回字节
+    // 必须等于常量本身 —— 上限调成 GB 量级时,写死 "MB" 的文案就是错的。
+    const quota = items[0].detailArgs?.quota ?? '';
+    expect(quota).toMatch(/^\d+ (MB|GB)$/);
+    const [amount, unit] = quota.split(' ');
+    expect(Number(amount) * 1024 * 1024 * (unit === 'GB' ? 1024 : 1)).toBe(
+      GHOST_CINDY_DEPOSIT_QUOTA_BYTES,
+    );
   });
 
   it('权限清单推导:video 详单产出对应权限项(确认框自动吃到)', () => {

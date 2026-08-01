@@ -48,7 +48,7 @@ describe('applyRuntimeSetModelChange', () => {
       }),
     ).rejects.toThrow('transport rejected');
 
-    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5', { providerId: null });
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -73,7 +73,7 @@ describe('applyRuntimeSetModelChange', () => {
       providerId: 'xd',
     });
 
-    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5', { providerId: 'xd' });
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -112,7 +112,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(result).toEqual({ status: 'applied' });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
     expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId);
-    expect(setModel).toHaveBeenCalledWith('gpt-5.4');
+    expect(setModel).toHaveBeenCalledWith('gpt-5.4', { providerId: null });
     expect(getSessionProvider(sessionId)).toBeNull();
   });
 
@@ -218,7 +218,7 @@ describe('applyRuntimeSetModelChange', () => {
     });
 
     expect(closeSession).not.toHaveBeenCalled();
-    expect(setModel).toHaveBeenCalledWith('xai/grok-4.3');
+    expect(setModel).toHaveBeenCalledWith('xai/grok-4.3', { providerId: 'xai' });
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
 
@@ -384,7 +384,7 @@ describe('applyRuntimeSetModelChange', () => {
 
     expect(result).toEqual({ status: 'applied' });
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
-    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5');
+    expect(setModel).toHaveBeenCalledWith('codex/gpt-5.5', { providerId: 'xd' });
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
@@ -423,7 +423,7 @@ describe('applyRuntimeSetModelChange', () => {
     });
 
     expect(closeSession).not.toHaveBeenCalled();
-    expect(setModel).toHaveBeenCalledWith('xai/grok-4.3');
+    expect(setModel).toHaveBeenCalledWith('xai/grok-4.3', { providerId: 'xai' });
     expect(getSessionProvider(sessionId)).toBe('xai');
   });
 
@@ -603,7 +603,7 @@ describe('applyRuntimeSetModelChange', () => {
     expect(result).toEqual({ status: 'applied' });
     expect(clearPendingCredentialSwitch).toHaveBeenCalledWith(sessionId);
     expect(registerPendingCredentialSwitch).not.toHaveBeenCalled();
-    expect(setModel).toHaveBeenCalledWith('gpt-5.5');
+    expect(setModel).toHaveBeenCalledWith('gpt-5.5', { providerId: null });
   });
 
   it('updates the pending model and keeps its provider on a model-only change under a deferred source', async () => {

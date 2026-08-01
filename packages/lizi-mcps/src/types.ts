@@ -125,6 +125,33 @@ export interface FeishuBotMcpHostDeps {
   logger?: LiziMcpLogger;
 }
 
+export interface WechatBotSendMessageResult {
+  ok: boolean;
+  messageId?: string;
+  reason?: string;
+}
+
+export interface WechatBotSendFileResult {
+  ok: boolean;
+  messageId?: string;
+  reason?: string;
+}
+
+/** Host bridge for the personal WeChat proactive-message MCP. */
+export interface WechatBotMcpHostDeps {
+  getActivePeerIdForSession(
+    sessionId: string | undefined,
+  ): Promise<string | null> | string | null;
+  getMostRecentPeerId(): Promise<string | null> | string | null;
+  sendMessage(peerId: string, text: string): Promise<WechatBotSendMessageResult>;
+  sendFile(
+    peerId: string,
+    absPath: string,
+    displayName?: string,
+  ): Promise<WechatBotSendFileResult>;
+  logger?: LiziMcpLogger;
+}
+
 // ── cindy_slack(Slack 网关工具, 2026-07 并轨 hook 通道) ──────────────────────
 
 /** Slack 网关工具的结构化错误(hook-control manager 定义的同构形状)。 */
@@ -418,6 +445,7 @@ export type LiziMcpId =
   | 'browser'
   | 'computer'
   | 'cindy_feishu_bot'
+  | 'cindy_wechat'
   | 'cindy_slack'
   | 'cindy_scheduler'
   | 'cindy_ssh'
@@ -698,6 +726,13 @@ export interface AndroidMcpDeps {
 export interface LiziMcpSessionContext {
   agentKind: string;
   workingDir: string;
+  /**
+   * SSH remote 会话的 host id (本地会话缺省)。workingDir 此时是远端机器上的
+   * 路径字符串 — cindy_memory 等按 workdir 分区的工具必须用
+   * buildMemoryScopeKey(workingDir, remoteHostId) 定位 store, 不得把远端路径
+   * 直接当本地键 (会与本地同名路径互串)。
+   */
+  remoteHostId?: string;
   vendorOptions?: Record<string, unknown>;
   /**
    * Business 层 session id (host 在 createSession 时通过 opts.id 注入, maker-core

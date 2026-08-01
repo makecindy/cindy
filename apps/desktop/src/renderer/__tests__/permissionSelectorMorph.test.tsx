@@ -271,6 +271,41 @@ describe('PermissionSelector triggerVariant', () => {
     await waitFor(() => expect(document.activeElement).toBe(selectedOption));
   });
 
+  it('field 形态可原生禁用渠道不支持的权限档', async () => {
+    const { onChange } = renderSelector({
+      triggerVariant: 'field',
+      disabledModes: { bypassPermissions: '个人微信暂不支持' },
+    });
+    fireEvent.click(getTrigger());
+    await screen.findByRole('listbox');
+
+    const fullAccess = screen.getByRole('option', { name: '完全访问' });
+    expect((fullAccess as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(fullAccess);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('keeps the selected disabled mode focusable for keyboard navigation', async () => {
+    const { onChange } = renderSelector({
+      triggerVariant: 'field',
+      permissionMode: 'bypassPermissions',
+      disabledModes: { bypassPermissions: 'Personal WeChat is not supported' },
+    });
+    fireEvent.click(getTrigger());
+    const listbox = await screen.findByRole('listbox');
+
+    const selectedOption = screen.getByRole('option', { name: '完全访问' });
+    const defaultOption = screen.getByRole('option', { name: '默认权限' });
+    await waitFor(() => expect(document.activeElement).toBe(selectedOption));
+    expect((selectedOption as HTMLButtonElement).disabled).toBe(false);
+    expect(selectedOption.getAttribute('aria-disabled')).toBe('true');
+
+    fireEvent.keyDown(listbox, { key: 'ArrowDown' });
+    expect(document.activeElement).toBe(defaultOption);
+    fireEvent.click(selectedOption);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it('ariaContext 前置到 trigger 可及名(多实例同屏读屏区分,不传则原样)', () => {
     renderSelector({ triggerVariant: 'field', ariaContext: '权限模式 · chat' });
     expect(screen.getByRole('button', { name: '权限模式 · chat:默认权限' })).toBeTruthy();

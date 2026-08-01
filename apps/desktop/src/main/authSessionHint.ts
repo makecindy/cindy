@@ -13,9 +13,10 @@
 import path from 'node:path';
 import fs from 'node:fs';
 
-/** 与 authManager.ts 的 REFRESH_TOKEN_KEY / LEGACY_*_KEY 对应(那边是
+/** 与 authManager.ts 的 AUTH_SESSION_KEY / LEGACY_*_KEY 对应(那边是
  * module-private 常量;此处只按 safe-storage 落盘文件名做存在性检查)。 */
 const PERSISTED_TOKEN_FILES = [
+  'cindy_auth_session_v1.enc',
   'cindy_auth_refresh_token.enc',
   'cindy_auth_account_refresh_token.enc',
   'refresh_token.enc',
