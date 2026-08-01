@@ -154,6 +154,15 @@ export class ToolUseIdDedupeRewriter {
     }
     let jsonStart = 5;
     while (jsonStart < end && (line[jsonStart] === 0x20 || line[jsonStart] === 0x09)) jsonStart += 1;
+    // UTF-8 BOM(\xEF\xBB\xBF):上游可能在最前面插入 BOM 前缀;跳过 BOM 后 { 才是 JSON 开头
+    if (
+      jsonStart + 2 < end &&
+      line[jsonStart] === 0xef &&
+      line[jsonStart + 1] === 0xbb &&
+      line[jsonStart + 2] === 0xbf
+    ) {
+      jsonStart += 3;
+    }
     if (jsonStart >= end || line[jsonStart] !== 0x7b /* { */) return line;
     // 扫描本身限界在窗口内(不是先全行扫再判窗口 —— 那种写法既付全行成本
     // 又留漏命中,两头不占,Fable-5 复核指出)。

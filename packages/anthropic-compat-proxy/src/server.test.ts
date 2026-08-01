@@ -2231,4 +2231,36 @@ describe('tool_use id 响应流去重改写(kimi 撞车自愈)', () => {
     expect(res.status).toBe(200);
     expect(res.text).toContain('"id":"Bash_210"');
   });
+
+  it('SSE 改写长度变化时自动剥离 content-length,客户端不截断(GPT-5.5 第 5 轮 P1)', async () => {
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n' +
+        'event: message_stop\n' +
+        'data: {"type":"message_stop"}\n\n';
+      // upstream 发出定长 content-length(改写后 body 会变得更长)
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-length': String(Buffer.byteLength(sseBody)),
+      });
+      res.end(sseBody);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 改写后 id 被改名,且完整的 SSE 帧无截断(message_stop 存在)
+    expect(res.text).toContain('"id":"Bash_210_dup2"');
+    expect(res.text).toContain('"type":"message_stop"');
+  });
 });

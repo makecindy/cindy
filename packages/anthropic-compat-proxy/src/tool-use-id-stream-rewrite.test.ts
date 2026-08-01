@@ -247,4 +247,16 @@ describe('ToolUseIdRewriteTransform', () => {
     // 超长行透传后,后续正常行仍能改写(改名使尾部多 _dup2 的 5 字节)
     expect(out.toString('utf8', big.length)).toContain('"id":"Bash_210_dup2"');
   });
+
+  it('UTF-8 BOM 前缀的 data 行也能命中(GPT-5.5 review 第 2 轮 P2)', async () => {
+    const bom = Buffer.from([0xef, 0xbb, 0xbf]);
+    const body = Buffer.concat([
+      Buffer.from('data: ', 'utf8'),
+      bom,
+      Buffer.from('{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n', 'utf8'),
+    ]);
+    const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
+    const out = await runTransform([body], rewriter);
+    expect(out.toString('utf8')).toContain('"id":"Bash_210_dup2"');
+  });
 });

@@ -1112,16 +1112,18 @@ function forward(
     };
     failActiveResponse = (err) => failStreamingResponse('error', err);
 
-    clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
-
     // kimi 撞车 id 的响应流改名(仅当请求历史带铸造形态 id 且响应是 SSE 才接管;
     // 否则保持字节级 pipe,与扩展前一致)。observer 仍吃上游原始字节(计数/错误体
     // 收集语义不变),CLI 客户端拿到的是改名后的流。
+    // 必须在 writeHead 前判定:改名会改变 body 长度,上游 content-length 必须删掉,
+    // 否则客户端按旧值读取 → 截断(GPT-5.5 review 第 5 轮 P1,本地 fake upstream
+    // 复现确认)。
     const isSse = String(upstreamRes.headers['content-type'] ?? '')
       .toLowerCase()
       .startsWith('text/event-stream');
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
     if (responseToolUseIds && responseToolUseIds.size > 0 && isSse) {
+      delete respHeaders['content-length'];
       const rewriter = new ToolUseIdDedupeRewriter(responseToolUseIds, (from, to) => {
         logger.info?.('⇄ renamed duplicate tool_use id in response stream (kimi mint collision)', {
           reqId,
@@ -1132,6 +1134,8 @@ function forward(
       toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
     }
+
+    clientRes.writeHead(status, upstreamRes.statusMessage, respHeaders);
 
     // 收 body: 总字节始终累加;status >= 400 时额外收集前 ERROR_RESPONSE_DUMP_MAX_BYTES
     // 字节做 dump 用。2xx 路径只做计数, 无内存压力。

@@ -34,6 +34,8 @@ import { promises as fs } from 'node:fs';
 
 import { createClaudeJsonlBackup, isRecord } from './fork-jsonl-repair.js';
 
+type JsonObject = Record<string, unknown>;
+
 /**
  * kimi 铸造器形态的 id:末段为纯数字。MCP 工具名带下划线
  * (`mcp__cindy_memory__call_tool_5`),实测 MCP id 当前为 `call_<random>` 无撞车
