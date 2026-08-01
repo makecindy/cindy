@@ -148,13 +148,12 @@ describe('makerChatStore.mirrorAgentSwitchIntent', () => {
 });
 
 describe('isRemoteIntentReadbackFresh（远程意图读回的新鲜度守卫）', () => {
-  const intentA = { target: 'codex', model: 'gpt-5.5', providerId: null } as const;
   const base = {
     cancelled: false,
     writeSeqAtStart: 3,
     writeSeqNow: 3,
-    intentAtStart: null,
-    intentNow: null,
+    intentRevAtStart: 7,
+    intentRevNow: 7,
   };
 
   it('在途期间无人改动 → 应用读回结果', async () => {
@@ -167,22 +166,63 @@ describe('isRemoteIntentReadbackFresh（远程意图读回的新鲜度守卫）'
     expect(isRemoteIntentReadbackFresh({ ...base, cancelled: true })).toBe(false);
   });
 
-  it('ABA:本端登记后又撤销,意图引用回到 null 也必须丢弃(引用比较看不出来)', async () => {
+  it('本端 ABA:点选登记后又撤销 → 写序号已变,丢弃', async () => {
     const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
-    expect(
-      isRemoteIntentReadbackFresh({
-        ...base,
-        // 登记 +1、撤销 +1 —— 两次写入后序号已变,而 intent 值回到了发起时的 null。
-        writeSeqNow: 5,
-        intentAtStart: null,
-        intentNow: null,
-      }),
-    ).toBe(false);
+    expect(isRemoteIntentReadbackFresh({ ...base, writeSeqNow: 5 })).toBe(false);
   });
 
-  it('外部回流(被控端 push / 另一窗口)改过意图 → 丢弃', async () => {
+  it('外部 ABA:另一窗口 / 被控端把意图改成非空又清回 null → 修订号已变,丢弃', async () => {
     const { isRemoteIntentReadbackFresh } = await import('@/components/new-chat/agentSwitchConfirmation');
-    expect(isRemoteIntentReadbackFresh({ ...base, intentNow: intentA })).toBe(false);
+    // 外部回流不经本端点选,writeSeq 不动;值也回到发起时的 null —— 只有修订号能识别。
+    expect(
+      isRemoteIntentReadbackFresh({ ...base, writeSeqNow: 3, intentRevNow: 9 }),
+    ).toBe(false);
+  });
+});
+
+describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
+  let n = 0;
+  const sid = () => `agent-switch-rev-${n++}`;
+
+  it('任何来源的实际变更都推进修订号:本端登记 / 撤销 / 外部回流镜像', async () => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const s = sid();
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBe(0);
+
+    makerChatStore.noteAgentSwitchIntent(s, 'codex', { model: 'gpt-5.5', providerId: null });
+    const afterNote = makerChatStore.getAgentSwitchIntentRev(s);
+    expect(afterNote).toBeGreaterThan(0);
+
+    makerChatStore.clearAgentSwitchIntent(s);
+    const afterClear = makerChatStore.getAgentSwitchIntentRev(s);
+    // 值回到 null(与登记前相同),修订号必须继续前进 —— 这正是 ABA 能被识别的原因。
+    expect(makerChatStore.getAgentSwitchIntent(s)).toBeNull();
+    expect(afterClear).toBeGreaterThan(afterNote);
+
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: null,
+    });
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBeGreaterThan(afterClear);
+  });
+
+  it('no-op(同值镜像 / 重复清空)不推进修订号,不误伤在途读回', async () => {
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+    const s = sid();
+    makerChatStore.noteAgentSwitchIntent(s, 'codex', { model: 'gpt-5.5', providerId: 'openai' });
+    const rev = makerChatStore.getAgentSwitchIntentRev(s);
+    makerChatStore.mirrorAgentSwitchIntent(s, {
+      targetAgentKind: 'codex',
+      model: 'gpt-5.5',
+      providerId: 'openai',
+    });
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBe(rev);
+
+    makerChatStore.clearAgentSwitchIntent(s);
+    const cleared = makerChatStore.getAgentSwitchIntentRev(s);
+    makerChatStore.clearAgentSwitchIntent(s);
+    expect(makerChatStore.getAgentSwitchIntentRev(s)).toBe(cleared);
   });
 });
 
@@ -219,7 +259,8 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('.getSessionAgentSwitchIntent(sessionId)');
     expect(source).toContain('isRemoteIntentReadbackFresh({');
     expect(source).toContain('makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent)');
-    // 每次点选都要推进写序号,否则 ABA 守卫失效。
+    // 每次点选都要推进写序号,外部变更靠 store 修订号 —— 少任一个 ABA 守卫都失效。
     expect(source).toContain('agentSwitchWriteSeqRef.current += 1;');
+    expect(source).toContain('makerChatStore.getAgentSwitchIntentRev(sessionId)');
   });
 });

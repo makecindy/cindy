@@ -744,6 +744,13 @@ export interface SessionChatState {
   /** 下一条消息发送时才由 main 应用的跨引擎切换意图。 */
   agentSwitchIntent: AgentSwitchIntentRecord | null;
   /**
+   * 意图的单调修订号:**任何来源**(本端登记/撤销、被控端 push 回流、另一窗口)真正改变
+   * 意图时 +1,只增不减。异步读回的新鲜度判定必须用它,不能比较意图值本身——外部把意图
+   * 从 null 改成非空又清回 null 时,值与引用都会回到相等,过期响应会被误判为新鲜而复活
+   * 已取消的意图(ABA)。
+   */
+  agentSwitchIntentRev: number;
+  /**
    * Remote codex target (P2): SSH host alias from `@cindy/maker-remote-ssh`
    * pool。null/undefined = 本地 session。ensureInitialMessages 从 DB
    * sessions.remote_host_id 灌进, lazy-create 时透传给 maker.send.createOpts,
@@ -1041,6 +1048,7 @@ function createInitialState(): SessionChatState {
   return {
     agentKind: 'claude-code',
     agentSwitchIntent: null,
+    agentSwitchIntentRev: 0,
     remoteHostId: null,
     messages: [],
     taskUpdates: EMPTY_TASK_UPDATES,
@@ -1105,6 +1113,7 @@ function createInitialState(): SessionChatState {
 export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   agentKind: 'claude-code',
   agentSwitchIntent: null,
+  agentSwitchIntentRev: 0,
   remoteHostId: null,
   messages: [],
   taskUpdates: EMPTY_TASK_UPDATES,
@@ -8948,7 +8957,16 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
   setState(sessionId, (s) =>
     s.agentKind === agentKind && s.sdkSessionId === null && s.agentSwitchIntent === null
       ? s
-      : { ...s, agentKind, sdkSessionId: null, agentSwitchIntent: null },
+      : {
+          ...s,
+          agentKind,
+          sdkSessionId: null,
+          agentSwitchIntent: null,
+          // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
+          ...(s.agentSwitchIntent === null
+            ? {}
+            : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
+        },
   );
 }
 
@@ -8973,6 +8991,7 @@ function noteAgentSwitchIntent(
       effort: opts.effort,
       fastMode: opts.fastMode,
     },
+    agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
   }));
 }
 
@@ -8980,12 +8999,22 @@ function noteAgentSwitchIntent(
 function clearAgentSwitchIntent(sessionId: string): void {
   if (!sessionId) return;
   setState(sessionId, (s) =>
-    s.agentSwitchIntent === null ? s : { ...s, agentSwitchIntent: null },
+    s.agentSwitchIntent === null
+      ? s
+      : { ...s, agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 },
   );
 }
 
 function getAgentSwitchIntent(sessionId: string): AgentSwitchIntentRecord | null {
   return sessions.get(sessionId)?.agentSwitchIntent ?? null;
+}
+
+/**
+ * 意图的单调修订号(不存在的会话按 0)。异步读回的新鲜度判定读它——值比较会被 ABA
+ * (null → 已登记 → null)骗过,修订号不会。
+ */
+function getAgentSwitchIntentRev(sessionId: string): number {
+  return sessions.get(sessionId)?.agentSwitchIntentRev ?? 0;
 }
 
 /**
@@ -9042,7 +9071,11 @@ function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
     clearAgentSwitchIntent(sessionId);
     return;
   }
-  setState(sessionId, (s) => ({ ...s, agentSwitchIntent: next }));
+  setState(sessionId, (s) => ({
+    ...s,
+    agentSwitchIntent: next,
+    agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
+  }));
 }
 
 function setSessionRuntime(
@@ -9133,7 +9166,10 @@ function mirrorSessionFields(
         ...s,
         agentKind: nextKind,
         sdkSessionId: null,
-        ...(intentApplied ? { agentSwitchIntent: null } : {}),
+        // 意图被真实切换消费 = 一次意图变更,推进修订号让在途读回作废。
+        ...(intentApplied
+          ? { agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }
+          : {}),
       };
     });
   }
@@ -9234,6 +9270,8 @@ export const makerChatStore = {
   noteAgentSwitchIntent,
   clearAgentSwitchIntent,
   getAgentSwitchIntent,
+  /** 意图的单调修订号;异步读回的新鲜度判定用它,值比较会被 ABA 骗过。 */
+  getAgentSwitchIntentRev,
   /** 会话所在端(被控端 / 另一窗口)的权威 pending 意图回流镜像;幂等,值等价即 no-op。 */
   mirrorAgentSwitchIntent,
   /** Update the displayed context window immediately after local model switches. */

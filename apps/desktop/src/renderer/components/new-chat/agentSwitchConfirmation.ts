@@ -1,5 +1,4 @@
 import type { ConfirmOptions } from '@/components/ui/confirm-dialog-provider';
-import type { AgentSwitchIntentRecord } from '@/lib/makerChatStore';
 
 /**
  * 隐藏的本地用户 override（规则 20）：键缺失 = 系统默认“显示确认”；用户勾选
@@ -51,24 +50,27 @@ export async function confirmAgentSwitchRisk({
 export interface RemoteIntentReadbackFreshness {
   /** effect 已清理(切走会话 / 换设备)。 */
   cancelled: boolean;
-  /** 发起读回时的本端写序号 vs 响应到达时的当前值。 */
+  /** 发起读回时的本端写序号 vs 响应到达时的当前值(覆盖「已点选但尚未落 store」的窗口)。 */
   writeSeqAtStart: number;
   writeSeqNow: number;
-  /** 发起读回时的意图引用 vs 响应到达时的当前引用。 */
-  intentAtStart: AgentSwitchIntentRecord | null;
-  intentNow: AgentSwitchIntentRecord | null;
+  /** 发起读回时的意图修订号 vs 响应到达时的当前值(覆盖任何来源的实际变更)。 */
+  intentRevAtStart: number;
+  intentRevNow: number;
 }
 
 /**
  * device-link 远程会话的 pending 意图读回结果是否仍然新鲜(可以应用)。
  *
- * 单纯比较「当前意图 === 发起时意图」不够:用户在途期间登记又撤销(null → 已登记 → null)
- * 会让两次读数再次相等,过期的非空响应就会把已撤销的意图恢复出来,选择器继续显示一个
- * 用户已经放弃的目标引擎。因此本端写入用单调序号判定(A→B→A 也能识别),外部回流
- * (被控端 push / 另一窗口)再用引用比较兜住。
+ * 判定必须基于**单调计数**,不能比较意图值本身:意图在途期间从 null 变成非空又清回
+ * null(本端登记后撤销,或另一窗口 / 被控端经 sessions:patched 来回改)时,值与引用都会
+ * 回到相等,过期的非空响应就会被误判为新鲜、把已取消的意图复活出来,选择器继续显示一个
+ * 用户已经放弃的目标引擎,还与被控端权威状态不一致。
+ *
+ * 两个计数各管一段:store 修订号覆盖**任何来源**的实际变更(含外部回流);本端写序号覆盖
+ * 「用户已点选、切换 IPC 还在途、尚未落 store」的空窗。
  */
 export function isRemoteIntentReadbackFresh(args: RemoteIntentReadbackFreshness): boolean {
   if (args.cancelled) return false;
   if (args.writeSeqNow !== args.writeSeqAtStart) return false;
-  return args.intentNow === args.intentAtStart;
+  return args.intentRevNow === args.intentRevAtStart;
 }

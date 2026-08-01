@@ -1242,7 +1242,7 @@ export function ChatInput({
     if (!sessionId || !deviceLinkDeviceId || remoteHostId) return;
     let cancelled = false;
     const writeSeq = agentSwitchWriteSeqRef.current;
-    const before = makerChatStore.getAgentSwitchIntent(sessionId);
+    const intentRev = makerChatStore.getAgentSwitchIntentRev(sessionId);
     void makerApiForDevice(deviceLinkDeviceId)
       .getSessionAgentSwitchIntent(sessionId)
       .then((remoteIntent) => {
@@ -1250,8 +1250,8 @@ export function ChatInput({
           cancelled,
           writeSeqAtStart: writeSeq,
           writeSeqNow: agentSwitchWriteSeqRef.current,
-          intentAtStart: before,
-          intentNow: makerChatStore.getAgentSwitchIntent(sessionId),
+          intentRevAtStart: intentRev,
+          intentRevNow: makerChatStore.getAgentSwitchIntentRev(sessionId),
         });
         if (!fresh) return;
         makerChatStore.mirrorAgentSwitchIntent(sessionId, remoteIntent);
