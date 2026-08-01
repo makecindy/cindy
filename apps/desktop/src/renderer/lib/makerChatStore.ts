@@ -1640,6 +1640,7 @@ function markSessionHasUserMessage(sessionId: string): void {
 
 function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
+  if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
   makerApiFor(sessionId)
     .input.getProjection(sessionId)
     .then(applyInputProjection)
