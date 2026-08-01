@@ -1740,3 +1740,57 @@ describe('参数形式的系统路径写入 / setsid 选项(第三十五批评�
     expect(classifyShellCommand('setsid -f ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('伪设备白名单:静音重定向不得打断(实机语料探针发现的误报)', () => {
+  it('写标准伪设备(/dev/null 等)不算系统写 → 不打断', () => {
+    // `> /dev/null` 是最高频写法;第三十一批把重定向接上系统红线后曾整片误升为硬弹窗。
+    for (const c of [
+      'ls > /dev/null',
+      'ls 2>/dev/null',
+      'command -v node >/dev/null 2>&1',
+      'pnpm test > /dev/null 2>&1',
+      'echo hi > /dev/null',
+      'cat f > /dev/stdout',
+      'echo x > /dev/tty',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+    for (const p of ['/dev/null', '/dev/zero', '/dev/urandom', '/dev/stdout', '/dev/stderr', '/dev/tty', '/dev/fd/2']) {
+      expect(isProtectedSystemPath(p), p).toBe(false);
+    }
+  });
+
+  it('块设备/内存设备与非白名单 /dev 路径仍是系统红线', () => {
+    for (const c of [
+      'cat payload > /dev/sda',
+      'echo x > /dev/disk0',
+      'cat p > /dev/rdisk0',
+      'echo x > /dev/mem',
+      'cat p > /dev/kmem',
+      'echo x > /dev/sda1',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 白名单只认精确名:相近路径不得被放宽。
+    for (const p of ['/dev/sda', '/dev/disk0', '/dev/mem', '/dev/nullx', '/dev/null/x', '/dev']) {
+      expect(isProtectedSystemPath(p), p).toBe(true);
+    }
+  });
+
+  it('日常命令语料整体不被硬拦(尽量不打扰的回归护栏)', () => {
+    for (const c of [
+      'ls -la', 'git status', 'cat package.json', 'grep -rn TODO src',
+      'pnpm install', 'npx tsc --noEmit', 'rm -rf node_modules', 'rm -rf build',
+      'git add .', 'git commit -m "fix: x"', 'git push origin feature/x',
+      'env NODE_ENV=test npx vitest run', 'timeout 60 pnpm test', 'nohup pnpm dev',
+      'stdbuf -oL pnpm test', 'setsid -f pnpm dev', 'watch -n 2 git status',
+      'flock /tmp/lock pnpm install', 'taskset -c 0 pnpm build',
+      'export NODE_ENV=test', 'declare -i count=0', 'set -euo pipefail', 'printenv PATH',
+      'rm -rf logs/[0-9]*.log', 'cp -r src dst', 'tee /tmp/build.log', 'mv dist out',
+      'echo $(git rev-parse HEAD)', "grep -n 'a(b' src/x.ts",
+      "git commit -m 'add su support'", 'cat subdir/notes.txt', 'echo superuser',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).not.toBe('prompt-each-time');
+    }
+  });
+});

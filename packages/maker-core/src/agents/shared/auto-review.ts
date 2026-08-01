@@ -229,9 +229,18 @@ function argumentWriteTargets(tokens: string[]): string[] {
   return [];
 }
 
+/**
+ * 标准伪设备:写它们不是"系统写入",而是丢弃输出/写终端/取随机数,属日常最高频写法
+ * (`cmd > /dev/null`、`2>/dev/null`、`>/dev/null 2>&1`)。必须排除在系统红线外,否则 Auto 档会对
+ * 几乎每条带静音重定向的命令弹窗,严重违反"尽量不打扰"(实机语料探针发现:44 条良性命令误拦 9 条)。
+ * 块设备/内存设备(`/dev/sda`、`/dev/mem` 等)**不在**此列,仍按系统红线拦。
+ */
+const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)$/i;
+
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
   if (typeof target !== 'string' || target.length === 0) return false;
+  if (SAFE_DEVICE_PATH.test(toForwardSlashes(target))) return false;
   // 先剥离 Windows extended-length / device namespace 前缀(`\\?\` `\\.\` `\\?\UNC\`):toForwardSlashes
   // 后它们变成 `//?/C:/…` / `//./C:/…`,会绕过盘符系统目录匹配落入灰区(copilot 报;与 desktop
   // filePathPolicy.stripWinNamespace 对齐)。UNC 前缀还原成 `//server/share`。
