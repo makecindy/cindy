@@ -152,6 +152,40 @@ describe('provider catalog realm reload', () => {
     expect(JSON.stringify(envelope)).not.toContain('do-not-persist');
   });
 
+  it('uses a unique temporary path for every LKG write', () => {
+    const first = __testing.catalogLkgTemporaryPath('/catalog.json');
+    const second = __testing.catalogLkgTemporaryPath('/catalog.json');
+
+    expect(first).not.toBe(second);
+    expect(first).toMatch(/\/catalog\.json\.\d+\.[0-9a-f-]+\.tmp$/);
+    expect(second).toMatch(/\/catalog\.json\.\d+\.[0-9a-f-]+\.tmp$/);
+  });
+
+  it('serializes the complete LKG replacement transaction for the same scope', async () => {
+    const events: string[] = [];
+    let finishFirst!: () => void;
+    const firstGate = new Promise<void>((resolve) => {
+      finishFirst = resolve;
+    });
+    const first = __testing.serializeCatalogLkgWrite('/same-catalog.json', async () => {
+      events.push('first:start');
+      await firstGate;
+      events.push('first:end');
+    });
+    await vi.waitFor(() => expect(events).toEqual(['first:start']));
+
+    const second = __testing.serializeCatalogLkgWrite('/same-catalog.json', async () => {
+      events.push('second:start');
+      events.push('second:end');
+    });
+    await Promise.resolve();
+    expect(events).toEqual(['first:start']);
+
+    finishFirst();
+    await Promise.all([first, second]);
+    expect(events).toEqual(['first:start', 'first:end', 'second:start', 'second:end']);
+  });
+
   it('replaces an existing LKG through a Windows-safe backup path', async () => {
     const files = new Set(['/catalog.json', '/catalog.tmp']);
     const calls: Array<[string, string]> = [];

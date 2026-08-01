@@ -17,7 +17,7 @@
  */
 
 import { app, net } from 'electron';
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fsp } from 'node:fs';
 import path from 'node:path';
 
@@ -160,6 +160,8 @@ interface CatalogLkgFileIo {
   rm(target: string, options: { force: boolean }): Promise<void>;
 }
 
+const catalogLkgWriteTails = new Map<string, Promise<void>>();
+
 function catalogScopeHash(scope: string): string {
   return createHash('sha256').update(scope).digest('hex');
 }
@@ -242,17 +244,38 @@ async function replaceCatalogLkgFile(
   }
 }
 
+function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
+  return `${file}.${process.pid}.${nonce}.tmp`;
+}
+
+/** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
+async function serializeCatalogLkgWrite(
+  file: string,
+  write: () => Promise<void>,
+): Promise<void> {
+  const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
+  const current = previous.catch(() => undefined).then(write);
+  catalogLkgWriteTails.set(file, current);
+  try {
+    await current;
+  } finally {
+    if (catalogLkgWriteTails.get(file) === current) catalogLkgWriteTails.delete(file);
+  }
+}
+
 async function writeCatalogLkg(scope: string, catalog: string): Promise<void> {
   const file = catalogLkgPath(scope);
-  const temporary = `${file}.${process.pid}.tmp`;
-  await fsp.mkdir(path.dirname(file), { recursive: true });
-  const envelope = catalogLkgEnvelope(scope, catalog);
-  await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
-  try {
-    await replaceCatalogLkgFile(temporary, file);
-  } finally {
-    await fsp.rm(temporary, { force: true }).catch(() => undefined);
-  }
+  await serializeCatalogLkgWrite(file, async () => {
+    const temporary = catalogLkgTemporaryPath(file);
+    await fsp.mkdir(path.dirname(file), { recursive: true });
+    const envelope = catalogLkgEnvelope(scope, catalog);
+    await fsp.writeFile(temporary, JSON.stringify(envelope), 'utf8');
+    try {
+      await replaceCatalogLkgFile(temporary, file);
+    } finally {
+      await fsp.rm(temporary, { force: true }).catch(() => undefined);
+    }
+  });
 }
 
 /** 桌面端 CatalogIO —— net + fs + 按端点隔离的 last-known-good 快照。 */
@@ -707,4 +730,9 @@ export function getDesktopProviderService(): ProviderService {
   return singleton;
 }
 
-export const __testing = { catalogLkgEnvelope, replaceCatalogLkgFile };
+export const __testing = {
+  catalogLkgEnvelope,
+  catalogLkgTemporaryPath,
+  replaceCatalogLkgFile,
+  serializeCatalogLkgWrite,
+};
