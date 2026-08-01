@@ -303,6 +303,60 @@ describe('makerChatStore.reconcileRemoteMessages', () => {
     expect(snapshot.queueExpanded).toBe(false);
   });
 
+  it('终态之后丢弃此前发出的同源直接操作 projection', async () => {
+    const s = sid();
+    const oldOperation = deferred<unknown>();
+    remoteExpandedResult = oldOperation.promise;
+    remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);
+    makerChatStore.initGlobalListeners();
+
+    remotePush?.({
+      deviceId: DEVICE_ID,
+      channel: 'maker:input:projection',
+      payload: {
+        sessionId: s,
+        pendingQueue: [],
+        steeringQueueClientIds: [],
+        queuePaused: false,
+        queueExpanded: false,
+        queueInteractionLocks: [],
+        queueEditLocks: [],
+        queueAbortPending: false,
+        continuationTurnClientId: 'owner-live',
+        error: null,
+        recovery: null,
+        errorRetryText: null,
+      },
+    });
+    makerChatStore.setQueueExpanded(s, true);
+    await flush();
+
+    makerChatStore.__applyStreamEventForTest(s, {
+      sessionId: s,
+      type: 'done',
+      data: {},
+    } as CCAgentStreamEvent);
+    oldOperation.resolve({
+      sessionId: s,
+      pendingQueue: [],
+      steeringQueueClientIds: [],
+      queuePaused: false,
+      queueExpanded: true,
+      queueInteractionLocks: [],
+      queueEditLocks: [],
+      queueAbortPending: false,
+      continuationTurnClientId: 'owner-stale',
+      error: null,
+      recovery: null,
+      errorRetryText: null,
+    });
+    await flush();
+
+    const snapshot = makerChatStore.getSnapshot(s);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    expect(snapshot.queueExpanded).toBe(false);
+  });
+
   it('origin 切换后立即清除旧设备 owner 并退回 unknown', async () => {
     const s = sid();
     remoteProjectsStore.setDeviceSessions(DEVICE_ID, 'Mac A', [{ id: s }] as never);

@@ -60,7 +60,7 @@ import * as messageService from '@/lib/messageService';
 import type { Message } from '@/lib/ccAgent.types';
 import { CONTINUE_AFTER_ERROR_PROMPT } from '../../shared/interruptedTurn.js';
 
-const inputStop = vi.fn(async () => ({ queue: [], paused: false }));
+const inputStop = vi.fn(async () => projection({ queuePaused: false }));
 const inputGetProjection = vi.fn<() => Promise<unknown>>(async () =>
   Promise.reject(new Error('n/a in test')),
 );
@@ -410,12 +410,16 @@ describe('续跑边界投影能力与 vendor turn owner', () => {
     makerChatStore.ensureInitialMessages(SID);
     expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBe('resume-1');
 
+    inputStop.mockResolvedValueOnce(projection({ queueExpanded: true }));
     makerChatStore.stopSession(SID);
     expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
 
     staleQuery.resolve(projection({ continuationTurnClientId: 'resume-stale' }));
     await flush();
-    expect(makerChatStore.getSnapshot(SID).continuationTurnClientId).toBeNull();
+    const snapshot = makerChatStore.getSnapshot(SID);
+    expect(snapshot.continuationTurnClientId).toBeNull();
+    // Stop 自己的响应属于推进后的新 authority 代际，不能被一并误杀。
+    expect(snapshot.queueExpanded).toBe(true);
   });
 });
 

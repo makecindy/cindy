@@ -3709,7 +3709,7 @@ function initGlobalListeners(): void {
         ...(event.data as Record<string, unknown>),
       } as CCAgentStatusUpdate;
       if (!update.skipTurnReset && !update.isRunning) {
-        supersedeInputProjectionRequests(sessionId);
+        supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
       }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
       return;
@@ -3924,7 +3924,7 @@ function initGlobalListeners(): void {
   const handleMakerStatusRaw = (raw: unknown) => {
     const payload = raw as { sessionId?: string; status?: string } | null;
     if (!payload?.sessionId || payload.status !== 'closed') return;
-    supersedeInputProjectionRequests(payload.sessionId);
+    supersedeInputProjectionRequests(payload.sessionId, { supersedeOperations: true });
     flushPendingTextDelta(payload.sessionId);
     setState(payload.sessionId, forceFinalizeOnSessionClosed);
   };
@@ -5332,11 +5332,12 @@ const _historyLoadOrigin = new Map<string, string | undefined>();
  * continuationTurnClientId 从非空写回 null),让仍在运行的续跑行停止转圈。
  *
  * origin 变化时 epoch 单调递增,因此即使来源经历 A→undefined→A 的 ABA 也不会重新放行
- * 更早请求。查询按 origin + epoch 丢弃旧响应；直接操作按发起时 origin 丢弃来源漂移后的
- * 响应，并在有效落地时 supersede 早先查询。实时 push 另在接收点按 source device 校验。
+ * 更早请求。查询按 origin + epoch 丢弃旧响应；直接操作按 origin + authority epoch 拒绝
+ * 来源漂移或终态前发出的响应。实时 push 另在接收点按 source device 校验。
  */
 const _inputProjectionOrigin = new Map<string, string | undefined>();
 const _inputProjectionEpoch = new Map<string, number>();
+const _inputProjectionAuthorityEpoch = new Map<string, number>();
 let _nextInputProjectionEpoch = 0;
 
 function nextInputProjectionEpoch(): number {
@@ -5344,15 +5345,25 @@ function nextInputProjectionEpoch(): number {
   return _nextInputProjectionEpoch;
 }
 
-function supersedeInputProjectionRequests(sessionId: string): void {
+function supersedeInputProjectionRequests(
+  sessionId: string,
+  opts: { supersedeOperations?: boolean } = {},
+): void {
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
   _inputProjectionOrigin.set(sessionId, origin);
-  _inputProjectionEpoch.set(sessionId, nextInputProjectionEpoch());
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  if (opts.supersedeOperations) {
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
+  }
 }
 
 function invalidateInputProjectionRequests(sessionId: string): void {
   _inputProjectionOrigin.delete(sessionId);
   _inputProjectionEpoch.delete(sessionId);
+  // authority 代际不能 delete：pre-purge 操作可能捕获 0，delete 后回落 0 会误放行，
+  // 并通过 setState 复活已 purge 的 session。保留单调墓碑，与 messagesEpoch 同理。
+  _inputProjectionAuthorityEpoch.set(sessionId, nextInputProjectionEpoch());
 }
 
 function beginInputProjectionRequest(sessionId: string, origin: string | undefined): number {
@@ -5371,6 +5382,7 @@ function noteInputProjectionOrigin(
     _inputProjectionOrigin.set(sessionId, origin);
     const epoch = nextInputProjectionEpoch();
     _inputProjectionEpoch.set(sessionId, epoch);
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
     return { epoch, changed: true };
   }
   return { epoch: _inputProjectionEpoch.get(sessionId)!, changed: false };
@@ -5397,18 +5409,20 @@ function isCurrentInputProjectionRequest(
 interface InputProjectionOperation {
   api: RoutableMaker;
   origin: string | undefined;
+  epoch: number;
 }
 
 /**
  * 捕获一次会返回 projection 的操作路由。`api` 与 origin 必须在同一时刻定格：
  * origin 漂移后重新调用 makerApiFor 会把同一业务意图错发到另一台设备。
- * 操作之间保留既有「响应到达顺序即权威顺序」语义；只丢来源已漂移的响应。
+ * authority epoch 只由终态 / 来源切换推进；普通 push 与同源并发操作仍按响应到达顺序落地。
  */
 function beginInputProjectionOperation(sessionId: string): InputProjectionOperation {
   const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
   return {
     api: makerApiFor(sessionId),
     origin,
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
   };
 }
 
@@ -5417,7 +5431,10 @@ function applyInputProjectionOperationResponse(
   operation: InputProjectionOperation,
   projection: AgentInputProjection,
 ): boolean {
-  if (!isCurrentInputProjectionOrigin(sessionId, operation.origin)) {
+  if (
+    !isCurrentInputProjectionOrigin(sessionId, operation.origin) ||
+    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) !== operation.epoch
+  ) {
     return false;
   }
   // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
@@ -5435,12 +5452,12 @@ function supersedeInputProjectionOnTerminalEvent(
 ): void {
   if (event.type === 'done') {
     if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true) {
-      supersedeInputProjectionRequests(sessionId);
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     return;
   }
   if (event.type === 'error' && isTerminalErrorData(event.data)) {
-    supersedeInputProjectionRequests(sessionId);
+    supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   }
 }
 
@@ -6349,7 +6366,7 @@ function finalizeStuckRemoteTurn(sessionId: string): void {
   if (!isRemoteSession(sessionId)) return;
   // 看门狗确认被控端已停止 = 权威终态；在清本地 owner 前先作废所有旧查询，
   // 防止 stall 期间悬挂的 getProjection 随后把已死 turn 重新点亮。
-  supersedeInputProjectionRequests(sessionId);
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   flushPendingTextDelta(sessionId); // 收尾前把残留增量落定,避免丢最后一截文本
   setState(sessionId, forceFinalizeOnSessionClosed);
 }
@@ -7918,10 +7935,16 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   flushPendingTextDelta(sessionId);
-  const operation = beginInputProjectionOperation(sessionId);
-  // Stop 的乐观终态必须立即作废此前同源查询；不能等 stop 响应回来再 supersede，
-  // 否则旧查询会在 abort 往返期间把刚清掉的 owner 重新写回。
-  supersedeInputProjectionRequests(sessionId);
+  const api = makerApiFor(sessionId);
+  // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
+  // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
+  // 让 Stop 自己的权威响应仍属于新代际。
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  const operation: InputProjectionOperation = {
+    api,
+    origin: remoteProjectsStore.getSessionDeviceId(sessionId),
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+  };
   operation.api.input
     .stop(sessionId, opts)
     .then((projection) => {
@@ -9527,7 +9550,7 @@ export const makerChatStore = {
   /** Exposed for tests only: 把 status update 打进真实 store。 */
   __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
     if (!update.skipTurnReset && !update.isRunning) {
-      supersedeInputProjectionRequests(sessionId);
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
     }
     setState(sessionId, (s) => handleStatusUpdate(s, update));
   },
