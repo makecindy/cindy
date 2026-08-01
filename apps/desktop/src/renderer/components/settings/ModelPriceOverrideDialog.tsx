@@ -81,6 +81,9 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
     [agent, model, provider.id],
   );
 
+  // DESIGN.md §4:弹窗打开时焦点落主输入,而不是 Radix 默认的首个可聚焦元素(关闭按钮)。
+  const primaryInputRef = useRef<HTMLInputElement | null>(null);
+
   // 弹窗关闭或目标切换后,在途 save/reset 的迟到响应必须整体作废:旧实例捕获的
   // setView/onOpenChange(false) 会覆盖新目标的表单、甚至直接关掉刚打开的弹窗。
   const mutationEpochRef = useRef(0);
@@ -191,6 +194,10 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
             'border border-[var(--cmd-palette-border)] bg-[var(--cmd-palette-bg)]',
           )}
           style={{ WebkitAppRegion: 'no-drag' } as React.CSSProperties}
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            primaryInputRef.current?.focus();
+          }}
         >
           <header className="flex items-start justify-between gap-4 px-5 pb-3 pt-4">
             <div className="min-w-0">
@@ -280,6 +287,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                     {t(`settings.providers.models.priceOverride.${label}`)}
                   </span>
                   <input
+                    ref={field === 'input' ? primaryInputRef : undefined}
                     type="number"
                     min="0"
                     step="any"

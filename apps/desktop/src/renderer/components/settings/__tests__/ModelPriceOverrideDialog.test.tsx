@@ -213,6 +213,23 @@ describe('ModelPriceOverrideDialog', () => {
     await waitFor(() => expect(codex.hasAttribute('disabled')).toBe(false));
   });
 
+  it('moves initial focus to the primary price input', async () => {
+    getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
+    const { getByLabelText } = render(
+      <ModelPriceOverrideDialog
+        provider={provider}
+        row={row('model-a')}
+        open
+        onOpenChange={vi.fn()}
+      />,
+    );
+    await waitFor(() =>
+      expect(document.activeElement).toBe(
+        getByLabelText('settings.providers.models.priceOverride.input'),
+      ),
+    );
+  });
+
   it('discards a late save response after the dialog is closed and reopened', async () => {
     getModelPriceOverride.mockResolvedValueOnce(priceView('model-a'));
     let finishSave: ((view: ModelPriceOverrideView) => void) | undefined;
