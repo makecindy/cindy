@@ -185,6 +185,21 @@ const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
   /^\/(?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:\/|$)/i, // Windows 当前盘根相对系统路径(`\Windows\…`→`/Windows/…`,path.win32.resolve 后落 C:\Windows\…,codex 报)
 ];
 
+/**
+ * 抽出 shell 输出重定向(`>`/`>>`/`N>`/`&>`/`>|`)的目标文件。用于把重定向写入复用 file-write 的系统红线
+ * (codex 报:`cat x > /etc/hosts` 只当灰区重定向会绕过系统写同意)。目标可带引号或裸,取到空白/分隔符止。
+ */
+function redirectionTargets(command: string): string[] {
+  const out: string[] = [];
+  const re = /(?:^|[\s;&|()])(?:\d*|&)>{1,2}\|?\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|<>()]+)/g;
+  for (const m of command.matchAll(re)) {
+    let t = m[1];
+    if ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'"))) t = t.slice(1, -1);
+    if (t) out.push(t);
+  }
+  return out;
+}
+
 /** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
 export function isProtectedSystemPath(target: string): boolean {
   if (typeof target !== 'string' || target.length === 0) return false;
@@ -545,6 +560,9 @@ function unwrapCommand(
         // stdbuf -i/-o/-e MODE(分离形态):MODE(如 `L`/`0`/`4K`)是独立 token,不连值消费会停在 MODE
         // 漏掉内层命令(codex 报 `stdbuf -o L rm -rf /outside`)。附加形态 `-oL`/`--output=L` 作单 token。
         if (head === 'stdbuf' && /^(?:-[ioe]|--input|--output|--error)$/.test(t)) { i += 2; continue; }
+        // GNU time -f/--format FORMAT、-o/--output FILE 带值:分离形态不连值消费会停在 FORMAT(如 `%e`)漏掉
+        // 内层命令(codex 报 `/usr/bin/time -f '%e' rm -rf /outside`)。bash 内建 time 无此选项、不受影响。
+        if (head === 'time' && /^(?:-f|--format|-o|--output)$/.test(t)) { i += 2; continue; }
         // 时长可为浮点(timeout 文档:DURATION 是浮点数,`timeout 0.5 rm …`),整数正则会停在 0.5 漏掉内层
         // 命令(codex 报)→ 接受 `0.5` / `1.5s` / `.5` 等小数时长。
         if (t.startsWith('-') || /^\d*\.?\d+[smhd]?$/.test(t)) { i++; continue; }
@@ -865,9 +883,10 @@ function substitutionBodies(text: string): string[] {
         if (c === "'" && !dq) { sq = !sq; continue; }
         if (c === '"' && !sq) { dq = !dq; continue; }
         if (sq || dq) continue;
-        // shell 注释:`#` 在词首(行首/空白/分隔符/`(` 之后)起注释到行尾,其中的 `)` 是字面不是替换体终点
-        // (greptile 报 `$(echo ok # )\neval …\n)`)→ 跳到换行,避免注释里的 `)` 提前截断。
-        if (c === '#' && (j === i + 2 || /[\s(;&|]/.test(text[j - 1]))) {
+        // shell 注释:`#` 在词首(行首/空白/**任一未引用 metacharacter** 之后:`( ) ; & | < >` 等)起注释到
+        // 行尾,其中的 `)` 是字面不是替换体终点(greptile 报 `$(echo ok # )…` 与 `$( (echo ok)# )…`,后者 `#`
+        // 前是 `)`)→ 跳到换行,避免注释里的 `)` 提前截断。
+        if (c === '#' && (j === i + 2 || /[\s(){}<>;&|]/.test(text[j - 1]))) {
           while (j + 1 < text.length && text[j + 1] !== '\n') j++;
           continue;
         }
@@ -1686,6 +1705,11 @@ export function classifyShellCommand(
   for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
   }
+  // 输出重定向目标落系统/受保护目录(`cat x > /etc/hosts`、`> C:\Windows\...`)= 高影响系统写,复用
+  // file-write 的系统红线,不能只当灰区重定向(codex 报)。canonical(darwin 抹平 /private)后判。
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  if (redirectionTargets(command).some((t) =>
+    isProtectedSystemPath(canonicalPath(normalizeTarget(t, workspaceRoots), aliasFirmlinks)))) return 'prompt-each-time';
   // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
   // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
   // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。

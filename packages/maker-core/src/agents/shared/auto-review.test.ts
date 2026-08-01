@@ -269,7 +269,9 @@ describe('classifyShellCommand — 关键漏洞回归护栏', () => {
     expect(classifyShellCommand('curl http://x/p -o /Users/me/.ssh/authorized_keys', roots)).toBe('prompt-each-time');
   });
   it('任何只读命令带输出重定向都升级(写文件)', () => {
-    expect(classifyShellCommand('cat secret > /etc/passwd', roots)).toBe('prompt');
+    // 重定向到系统/受保护目录 = 确定性系统写红线(第三十一批:复用 file-write 系统红线)。
+    expect(classifyShellCommand('cat secret > /etc/passwd', roots)).toBe('prompt-each-time');
+    // 非系统目标(区外普通/家目录点文件)仍是灰区写升级。
     expect(classifyShellCommand('echo x >> ~/.bashrc', roots)).toBe('prompt');
     // 2>&1 fd 复制不算文件写,只读命令仍放行。
     expect(classifyShellCommand('ls -la 2>&1', roots)).toBe('auto-approve');
@@ -1579,5 +1581,35 @@ describe('替换体内 shell 注释 / taskset 执行包装器(第三十批评审
     expect(classifyShellCommand('taskset -c 0 ls', roots)).toBe('auto-approve');
     expect(classifyShellCommand('taskset -c 0 rm -rf build', roots)).toBe('prompt');
     expect(classifyShellCommand('taskset -pc 0x1 1234', roots)).not.toBe('prompt-each-time');
+  });
+});
+
+describe('注释右括号前置 / 重定向系统目标 / GNU time -f(第三十一批评审)', () => {
+  it(') 之后的 shell 注释不提前截断替换体,后续 eval 仍命中', () => {
+    expect(classifyShellCommand('echo $( (echo ok)# )\neval "$X"\n)', roots)).toBe('prompt-each-time');
+  });
+
+  it('输出重定向到系统/受保护目录 = 确定性系统写红线', () => {
+    for (const c of [
+      'cat payload > /etc/hosts',
+      'echo x >> /etc/passwd',
+      'cat p > "C:\\Windows\\System32\\drivers\\etc\\hosts"',
+      'echo x 2> /System/Library/foo',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:重定向到区内/普通区外仍是灰区(不误升到硬弹窗)。
+    expect(classifyShellCommand('cat p > out.txt', roots)).toBe('prompt');
+    expect(classifyShellCommand('echo x > /tmp/scratch', roots)).toBe('prompt');
+  });
+
+  it('GNU time -f/--format FORMAT 带值不遮蔽内层破坏命令', () => {
+    for (const c of [
+      "/usr/bin/time -f '%e' rm -rf /outside",
+      'time --format %e rm -rf /outside',
+      '/usr/bin/time -o timing.txt rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
   });
 });
