@@ -878,9 +878,13 @@ describe('message render todo grouping', () => {
       plan: [{ step: 'Run tests', status: 'in_progress' }],
     });
     const clearCodex = tool('plan2', 'update_plan', { plan: [] });
+    const clearCodexObject = tool('plan3', 'update_plan', {});
+    const clearCodexText = tool('plan4', 'update_plan', { text: '  \n  ' });
 
     expect(findLatestMessageTodoInsertion([first, clearTodo])).toBeNull();
     expect(findLatestMessageTodoInsertion([codex, clearCodex])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodexObject])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodexText])).toBeNull();
   });
 
   it('findLatestMessageTodoInsertion does not fall back to an older source when the latest Task update is unresolved', () => {

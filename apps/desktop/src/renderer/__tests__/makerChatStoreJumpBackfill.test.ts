@@ -120,14 +120,17 @@ function serverMessage(over: Partial<Message>): Message {
 }
 
 function planToolMessage(over: Partial<Message>): Message {
+  const toolUseId = over.toolUseId ?? over.id ?? over.clientId ?? 'plan-tool';
   return serverMessage({
-    role: 'assistant',
-    toolName: 'update_plan',
-    toolUseId: over.toolUseId ?? over.id ?? over.clientId ?? 'plan-tool',
-    toolInput: {
-      plan: [{ content: 'Preserve current plan after trim', status: 'in_progress' }],
+    role: 'tool_use',
+    content: {
+      toolName: 'update_plan',
+      toolUseId,
+      input: {
+        plan: [{ content: 'Preserve current plan after trim', status: 'in_progress' }],
+      },
     },
-    content: '',
+    toolUseId,
     ...over,
   } as Partial<Message>);
 }

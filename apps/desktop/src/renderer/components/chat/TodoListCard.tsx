@@ -16,7 +16,7 @@
  *   --msg-tool-card-chevron: secondary(completed 置灰)
  */
 
-import { useEffect, useState } from 'react';
+import { useEffect, useId, useState } from 'react';
 import { CircleCheck, CircleDashed, Circle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
@@ -44,6 +44,7 @@ export function TodoListCard({
   animated?: boolean;
 }) {
   const { t } = useTranslation();
+  const flyoutId = useId();
   const [revealed, setRevealed] = useState(false);
   const [renderFlyout, setRenderFlyout] = useState(false);
 
@@ -70,11 +71,49 @@ export function TodoListCard({
         onMouseEnter={() => setRevealed(true)}
         onMouseLeave={() => setRevealed(false)}
       >
+        {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
+        <button
+          type="button"
+          onClick={(event) => {
+            if (event.detail === 0) {
+              setRevealed((prev) => !prev);
+              return;
+            }
+            setRevealed(true);
+          }}
+          aria-controls={flyoutId}
+          aria-expanded={revealed}
+          className={cn(
+            'flex items-center gap-2 rounded-full',
+            'border border-[var(--msg-tool-card-border)]',
+            'bg-[var(--msg-tool-card-bg)]',
+            'px-[14px] py-[8px]',
+            'cursor-pointer select-none',
+            'hover:opacity-80 transition-opacity',
+          )}
+        >
+          {allDone ? (
+            <CircleCheck size={14} strokeWidth={2} className="shrink-0 text-[var(--msg-tool-card-text)]" />
+          ) : (
+            <Spinner
+              icon={CircleDashed}
+              size={14}
+              strokeWidth={2}
+              spinning={animated && hasActive}
+              className="shrink-0 text-[var(--msg-tool-card-text)]"
+            />
+          )}
+          <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
+            {t('chat.planPill.step', { current: currentStep, total })}
+          </span>
+        </button>
+
         {/* Hover flyout — 完整清单向上浮出;绝对定位不占布局高度,消息流不抖动。 */}
         {renderFlyout && (
           <>
             <div className="absolute bottom-full left-1/2 h-2 min-w-full -translate-x-1/2" aria-hidden="true" />
             <div
+              id={flyoutId}
               className={cn(
                 'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
                 'w-max min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
@@ -130,43 +169,6 @@ export function TodoListCard({
             </div>
           </>
         )}
-
-        {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
-        <button
-          type="button"
-          onClick={(event) => {
-            if (event.detail === 0) {
-              setRevealed((prev) => !prev);
-              return;
-            }
-            setRevealed(true);
-          }}
-          aria-haspopup="dialog"
-          aria-expanded={revealed}
-          className={cn(
-            'flex items-center gap-2 rounded-full',
-            'border border-[var(--msg-tool-card-border)]',
-            'bg-[var(--msg-tool-card-bg)]',
-            'px-[14px] py-[8px]',
-            'cursor-pointer select-none',
-            'hover:opacity-80 transition-opacity',
-          )}
-        >
-          {allDone ? (
-            <CircleCheck size={14} strokeWidth={2} className="shrink-0 text-[var(--msg-tool-card-text)]" />
-          ) : (
-            <Spinner
-              icon={CircleDashed}
-              size={14}
-              strokeWidth={2}
-              spinning={animated && hasActive}
-              className="shrink-0 text-[var(--msg-tool-card-text)]"
-            />
-          )}
-          <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
-            {t('chat.planPill.step', { current: currentStep, total })}
-          </span>
-        </button>
       </div>
     </div>
   );

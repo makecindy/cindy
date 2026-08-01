@@ -1354,12 +1354,13 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
+    const preTrimPlanState = getLatestMessageTodoState(s.messages);
     const trimmedMessages = s.messages.slice(-TRIM_TARGET);
-    const planState = getLatestMessageTodoState(trimmedMessages);
+    const trimmedPlanState = getLatestMessageTodoState(trimmedMessages);
     const needsPlanReloadAfterTrim =
       s.historyLoaded &&
-      s.messages.some((message) => isAgentPlanToolName(message.toolName)) &&
-      (!planState.hasPlanEvent || !planState.isResolved);
+      preTrimPlanState.insertion !== null &&
+      (!trimmedPlanState.hasPlanEvent || !trimmedPlanState.isResolved);
 
     return {
       ...s,
@@ -5285,11 +5286,16 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
     // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
     // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
     // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
-    if (rows.every(isNonAnchorHistoryRow)) return;
     const mapped = mapServerMessages(rows).map((message) => ({
       ...message,
       cacheHydrated: true as const,
     }));
+    if (
+      rows.every(isNonAnchorHistoryRow) &&
+      getLatestMessageTodoState(mapped).insertion === null
+    ) {
+      return;
+    }
     if (mapped.length === 0) return;
     // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
     // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,

@@ -614,7 +614,9 @@ function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): bool
   if (toolName === 'update_plan') {
     return (
       (Array.isArray(input?.items) && input.items.length === 0) ||
-      (Array.isArray(input?.plan) && input.plan.length === 0)
+      (Array.isArray(input?.plan) && input.plan.length === 0) ||
+      (typeof input?.text === 'string' && input.text.trim().length === 0) ||
+      (input !== null && Object.keys(input).length === 0)
     );
   }
   return false;
