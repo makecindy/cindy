@@ -75,14 +75,17 @@ describe('rewriteOutboundSessionReferences', () => {
     expect(JSON.stringify(rewritten)).not.toContain('renderer-forged history');
   });
 
-  it('does not borrow the target device identity when the controller cannot read a third device', async () => {
+  it('falls back to raw link text when the controller cannot read a third device', async () => {
     resolveSessionReferences.mockRejectedValueOnce(new Error('source device access revoked'));
-    await expect(
-      rewriteOutboundSessionReferences('maker:input:steer', [
-        'target-on-b',
-        queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
-      ]),
-    ).rejects.toThrow('access revoked');
+    const rewritten = await rewriteOutboundSessionReferences('maker:input:steer', [
+      'target-on-b',
+      queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
+    ]);
+
+    expect((rewritten[1] as AgentInputQueuedMessage).text).toBe('compare linked session');
+    expect((rewritten[1] as AgentInputQueuedMessage).sessionRefs).toBeUndefined();
+    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts)
+      .toBeUndefined();
   });
 
   it('lets a queued remove-from-queue steer use the target stored snapshot', async () => {
@@ -108,6 +111,26 @@ describe('rewriteOutboundSessionReferences', () => {
     ]);
     expect(resolveSessionReferences).toHaveBeenCalledWith(refs);
     expect(rewritten[4]).toEqual(snapshot);
+  });
+
+  it('drops unresolved update-text side channels while preserving the edited text', async () => {
+    const refs = [{ sessionId: 'foreign', deviceId: 'device-c' }];
+    resolveSessionReferences.mockRejectedValueOnce(new Error('foreign session'));
+
+    const rewritten = await rewriteOutboundSessionReferences('maker:input:update-text', [
+      'target-on-b',
+      'client-1',
+      'now use cindy://session/foreign',
+      refs,
+    ]);
+
+    expect(rewritten).toEqual([
+      'target-on-b',
+      'client-1',
+      'now use cindy://session/foreign',
+      [],
+      [],
+    ]);
   });
 
   it('keeps the legacy three-argument update-text shape unchanged', async () => {

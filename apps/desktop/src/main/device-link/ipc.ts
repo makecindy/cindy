@@ -443,6 +443,22 @@ export async function handleInvoke(
   }
   let callArgs = Array.isArray(args) ? args : [];
 
+  // Resolve controller-relative references first. If the source session is
+  // foreign or unavailable, the rewrite drops only the optional reference
+  // side channel and preserves the raw link text. Recompute the capability
+  // need afterwards so that plain-link fallback also works with older targets.
+  if (deps.rewriteOutboundSessionReferences) {
+    try {
+      callArgs = await deps.rewriteOutboundSessionReferences(channel, callArgs);
+    } catch (err) {
+      throwIpcError(
+        'SESSION_REFERENCE_UNAVAILABLE',
+        err instanceof Error ? err.message : String(err),
+      );
+    }
+    assertControlTargetEnabled(deps, normalizedDeviceId);
+  }
+
   if (outboundSessionReferencesRequested(channel, callArgs)) {
     let capability: InvokeResultPayload;
     try {
@@ -492,19 +508,6 @@ export async function handleInvoke(
         '目标设备版本不支持任务引用，请升级目标设备后重试',
       );
     }
-  }
-
-  // 会话引用必须在控制端坐标系解析；放在附件上传前，引用失败时不产生无用 OSS 写入。
-  if (deps.rewriteOutboundSessionReferences) {
-    try {
-      callArgs = await deps.rewriteOutboundSessionReferences(channel, callArgs);
-    } catch (err) {
-      throwIpcError(
-        'SESSION_REFERENCE_UNAVAILABLE',
-        err instanceof Error ? err.message : String(err),
-      );
-    }
-    assertControlTargetEnabled(deps, normalizedDeviceId);
   }
 
   // 出方向附件:发往远程前先把本机附件上传 OSS、替换成引用串(bytes 不内联进 relay)。

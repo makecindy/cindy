@@ -154,7 +154,7 @@ describe('mobile session-reference links', () => {
     })).toBe('链接附近 · 4 条 · 已截断');
   });
 
-  it('rejects an old target before reading history from the source device', async () => {
+  it('falls back to raw link text when the target does not support references', async () => {
     const invoke = vi.fn(async (deviceId: string, channel: string) => {
       expect(deviceId).toBe('target-old');
       expect(channel).toBe(DL_SESSION_REFERENCE_CAPABILITY_CHANNEL);
@@ -166,8 +166,33 @@ describe('mobile session-reference links', () => {
       asInvoke(invoke),
       () => 'source-device',
       'target-old',
-    )).rejects.toMatchObject({ code: 'SESSION_REFERENCE_UNSUPPORTED' });
+    )).resolves.toEqual({ text: 'compare cindy://session/source' });
     expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
+  it('falls back to raw link text when the source session is foreign', async () => {
+    const invoke = vi.fn(async (_deviceId: string, channel: string) => {
+      if (channel === DL_SESSION_REFERENCE_CAPABILITY_CHANNEL) {
+        return { supported: true, version: 1 };
+      }
+      if (channel === 'local-db:sessions:get') return null;
+      throw new Error(`unexpected channel ${channel}`);
+    });
+
+    await expect(prepareMobileQueuedSessionReferences(
+      {
+        text: 'compare cindy://session/foreign',
+        sessionRefs: [{ sessionId: 'stale', deviceId: 'old-device' }],
+        sessionReferencesRequireTrustedSnapshot: true,
+      },
+      asInvoke(invoke),
+      () => 'source-device',
+      'target-new',
+    )).resolves.toEqual({ text: 'compare cindy://session/foreign' });
+    expect(invoke.mock.calls.map((call) => call[1])).toEqual([
+      DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+      'local-db:sessions:get',
+    ]);
   });
 
   it('probes a new target before resolving source history', async () => {

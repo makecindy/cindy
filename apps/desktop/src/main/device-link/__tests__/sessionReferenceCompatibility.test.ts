@@ -22,7 +22,7 @@ function queuedWithReference() {
 }
 
 describe('device-link target session-reference capability gate', () => {
-  it('rejects an old target before resolving or sending the referenced message', async () => {
+  it('rewrites references before rejecting an old target', async () => {
     const invoke = vi.fn<DeviceLinkIpcDeps['invoke']>().mockResolvedValue({
       ok: false,
       error: { code: 'CHANNEL_NOT_ALLOWED', message: 'unknown channel' },
@@ -42,10 +42,10 @@ describe('device-link target session-reference capability gate', () => {
       DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
       [],
     );
-    expect(rewrite).not.toHaveBeenCalled();
+    expect(rewrite).toHaveBeenCalledTimes(1);
   });
 
-  it('probes a new target before rewriting and sending the message', async () => {
+  it('rewrites before probing a new target and sending the message', async () => {
     const invoke = vi
       .fn<DeviceLinkIpcDeps['invoke']>()
       .mockResolvedValueOnce({ ok: true, result: { supported: true, version: 1 } })
@@ -67,6 +67,33 @@ describe('device-link target session-reference capability gate', () => {
       'maker:input:enqueue',
     ]);
     expect(rewrite).toHaveBeenCalledTimes(1);
+  });
+
+  it('sends a raw foreign link without probing reference support', async () => {
+    const invoke = vi
+      .fn<DeviceLinkIpcDeps['invoke']>()
+      .mockResolvedValueOnce({ ok: true, result: { accepted: true } });
+    const rewrite = vi.fn(async (_channel: string, args: unknown[]) => [
+      args[0],
+      { ...(args[1] as object), sessionRefs: undefined },
+    ]);
+
+    await expect(
+      handleInvoke(depsForInvoke(invoke, rewrite), 'target-device', 'maker:input:enqueue', [
+        'target-session',
+        queuedWithReference(),
+      ]),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(invoke).toHaveBeenCalledTimes(1);
+    expect(invoke).toHaveBeenCalledWith(
+      'target-device',
+      'maker:input:enqueue',
+      [
+        'target-session',
+        expect.objectContaining({ text: 'compare cindy://session/source' }),
+      ],
+    );
   });
 
   it('accepts newer compatible capability versions', async () => {

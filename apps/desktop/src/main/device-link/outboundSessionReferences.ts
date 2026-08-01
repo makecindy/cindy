@@ -45,7 +45,14 @@ export async function rewriteOutboundSessionReferences(
     if (!Array.isArray(args[3])) return args;
     const refs = args[3] as AgentInputQueuedMessage['sessionRefs'];
     const next = [...args];
-    next[4] = refs && refs.length > 0 ? await resolveSessionReferences(refs) : [];
+    try {
+      next[4] = refs && refs.length > 0 ? await resolveSessionReferences(refs) : [];
+    } catch {
+      // Preserve the edited text, but do not ask the target to trust an
+      // unresolved controller-side reference or reject the whole edit.
+      next[3] = [];
+      next[4] = [];
+    }
     return next;
   }
   if (!QUEUED_CHANNELS.has(channel)) return args;
@@ -58,7 +65,15 @@ export async function rewriteOutboundSessionReferences(
   // renderer 永远不能夹带可信正文；无论是否有 refs 都先清掉。
   delete nextItem.trustedSessionReferenceContexts;
   if (queued.sessionRefs && queued.sessionRefs.length > 0) {
-    nextItem.trustedSessionReferenceContexts = await resolveSessionReferences(queued.sessionRefs);
+    try {
+      nextItem.trustedSessionReferenceContexts = await resolveSessionReferences(queued.sessionRefs);
+    } catch {
+      // The raw deep link remains in `text`.  Dropping both side-channel
+      // fields keeps the target from reinterpreting a foreign session id in
+      // its own account while still letting the Agent handle the link.
+      delete nextItem.sessionRefs;
+      delete nextItem.sessionReferencesRequireTrustedSnapshot;
+    }
   }
   const next = [...args];
   next[itemIndex] = nextItem;

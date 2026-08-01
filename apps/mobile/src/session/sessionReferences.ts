@@ -789,7 +789,7 @@ export async function resolveMobileSessionReferences(
  * This deliberately removes stale snapshots first, so editing a link away cannot retain
  * previously trusted history and steering a display-safe projection always re-reads source data.
  */
-export async function prepareMobileQueuedSessionReferences<T extends MobileQueuedReferenceCarrier>(
+async function prepareMobileQueuedSessionReferencesStrict<T extends MobileQueuedReferenceCarrier>(
   item: T,
   invoke: RemoteInvoke,
   deviceIdForSession: (sessionId: string) => string | undefined,
@@ -852,6 +852,35 @@ export async function prepareMobileQueuedSessionReferences<T extends MobileQueue
   return prepared;
 }
 
+/**
+ * Prepare optional trusted history for a queued mobile message.
+ *
+ * A session link may point at another account or an unavailable device. In
+ * that case the safe fallback is the already-present raw link text: omit all
+ * trusted-reference side channels and let the Agent handle the link itself.
+ */
+export async function prepareMobileQueuedSessionReferences<T extends MobileQueuedReferenceCarrier>(
+  item: T,
+  invoke: RemoteInvoke,
+  deviceIdForSession: (sessionId: string) => string | undefined,
+  targetDeviceId: string,
+): Promise<T> {
+  try {
+    return await prepareMobileQueuedSessionReferencesStrict(
+      item,
+      invoke,
+      deviceIdForSession,
+      targetDeviceId,
+    );
+  } catch {
+    const prepared = { ...item };
+    delete prepared.sessionRefs;
+    delete prepared.trustedSessionReferenceContexts;
+    delete prepared.sessionReferencesRequireTrustedSnapshot;
+    return prepared;
+  }
+}
+
 /** Reuse the target's trusted snapshot only when the source cannot currently be read. */
 export function canFallbackToStoredMobileSessionReferenceSnapshot(error: unknown): boolean {
   return error instanceof MobileSessionReferenceError && (
@@ -868,14 +897,18 @@ export async function prepareMobileQueuedSessionReferencesForSteer<T extends Mob
   targetDeviceId: string,
 ): Promise<T> {
   try {
-    return await prepareMobileQueuedSessionReferences(
+    return await prepareMobileQueuedSessionReferencesStrict(
       item,
       invoke,
       deviceIdForSession,
       targetDeviceId,
     );
   } catch (error) {
-    if (!canFallbackToStoredMobileSessionReferenceSnapshot(error)) throw error;
-    return item;
+    if (canFallbackToStoredMobileSessionReferenceSnapshot(error)) return item;
+    const prepared = { ...item };
+    delete prepared.sessionRefs;
+    delete prepared.trustedSessionReferenceContexts;
+    delete prepared.sessionReferencesRequireTrustedSnapshot;
+    return prepared;
   }
 }
