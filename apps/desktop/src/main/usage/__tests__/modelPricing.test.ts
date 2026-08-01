@@ -54,7 +54,14 @@ vi.mock('../../secrets/providerSecretStore', () => ({
 }));
 
 import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
+import { providerReferencePriceQuote } from '../../../shared/modelPriceQuote';
 import { DEFAULT_USAGE_CURRENCY } from '../../../shared/regionalMoney';
+import { getActiveCatalog } from '../../maker-host/active-catalog';
+import {
+  applyModelPriceOverrides,
+  clearModelPriceOverride,
+  setModelPriceOverride,
+} from '../modelPriceOverrideStore';
 import {
   __resetActiveLedgerCurrencyForTesting,
   currentLedgerCurrency,
@@ -559,5 +566,48 @@ describe('reference pricing helpers', () => {
       outputPerMtok: 27,
     });
     expect(getSubscriptionDirectValuePrice('unknown')).toBeUndefined();
+  });
+
+  it('re-merges sparse price overrides against the reference effective at the queried date', () => {
+    const registry = getActiveCatalog().modelRegistry;
+    const target = {
+      providerId: 'anthropic',
+      agent: 'claude-code',
+      modelId: 'claude-sonnet-5',
+    } as const;
+    const currentReference = providerReferencePriceQuote(
+      target.providerId,
+      target.modelId,
+      registry,
+      { agent: target.agent },
+    );
+    expect(currentReference).toBeDefined();
+    try {
+      // 只覆盖输入价:其余字段保持跟随参考价,形成稀疏 override。
+      setModelPriceOverride(
+        target,
+        {
+          currency: currentReference!.currency,
+          inputPerMtok: 2.5,
+          outputPerMtok: currentReference!.outputPerMtok,
+          cacheReadPerMtok: currentReference!.cacheReadPerMtok ?? null,
+          cacheCreatePerMtok: currentReference!.cacheCreatePerMtok ?? null,
+        },
+        registry,
+      );
+      const pricing = applyModelPriceOverrides({}, registry);
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-08-31'),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 10 });
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-09-01'),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 15 });
+      expect(getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing)).toMatchObject({
+        source: 'user-override',
+        inputPerMtok: 2.5,
+      });
+    } finally {
+      clearModelPriceOverride(target);
+    }
   });
 });

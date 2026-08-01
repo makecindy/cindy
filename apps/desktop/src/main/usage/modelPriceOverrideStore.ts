@@ -469,6 +469,20 @@ export function stageProviderModelPriceOverridesClear(providerId: string): () =>
   };
 }
 
+/**
+ * 把持久化的稀疏覆盖合并到调用方给定的参考价上（典型:按历史日期 `at` 解析出的
+ * 参考价）。目录里烘焙的 user-override 报价是按当前日期合并的,历史估值不能直接
+ * 回用——未覆盖字段必须跟随查询时点的参考价。无该目标的覆盖记录时返回 undefined。
+ */
+export function mergeStoredModelPriceOverride(
+  target: ModelPriceOverrideTarget,
+  reference: ModelPriceQuote | undefined,
+): ModelPriceQuote | undefined {
+  const record = readEntries()[overrideKey(target)];
+  if (!record) return undefined;
+  return mergedQuote(record, reference, record.values, record.baseReference);
+}
+
 export function applyModelPriceOverrides(
   pricing: ModelPricingCatalog,
   registry: ModelRegistry | null | undefined,

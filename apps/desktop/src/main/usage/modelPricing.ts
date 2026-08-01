@@ -34,7 +34,7 @@ import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { applyModelPriceOverrides } from './modelPriceOverrideStore.js';
+import { applyModelPriceOverrides, mergeStoredModelPriceOverride } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -443,7 +443,20 @@ export function getCodexSubscriptionValuePrice(
   at?: string | Date,
 ): ModelPriceQuote | undefined {
   const effective = getModelPriceQuote(pricing, 'openai', modelId, 'codex');
-  if (effective?.source === 'user-override') return effective;
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 目录里烘焙的 user-override 是按当前日期合并的;历史窗口跨过参考价生效边界时,
+    // 未覆盖字段必须按 at 时点的参考价重新合并,不能直接回用当前合并结果。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId: 'openai', agent: 'codex', modelId: effective.modelId },
+        providerReferencePriceQuote('openai', effective.modelId, getActiveCatalog().modelRegistry, {
+          agent: 'codex',
+          at,
+        }),
+      ) ?? effective
+    );
+  }
   const reference = providerReferencePriceQuote(
     'openai',
     modelId,
@@ -459,7 +472,21 @@ export function getClaudeSubscriptionValuePrice(
   at?: string | Date,
 ): ModelPriceQuote | undefined {
   const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
-  if (effective?.source === 'user-override') return effective;
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 同 getCodexSubscriptionValuePrice:历史估值按 at 时点参考价重新合并稀疏覆盖。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId: 'anthropic', agent: 'claude-code', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          'anthropic',
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'claude-code', at },
+        ),
+      ) ?? effective
+    );
+  }
   const reference = providerReferencePriceQuote(
     'anthropic',
     modelId,
@@ -485,7 +512,19 @@ export function getSubscriptionDirectValuePrice(
   const routingQuote = fallback ?? subscriptionDirectPriceQuote(modelId, registry, agent);
   if (!routingQuote) return undefined;
   const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
-  const quote = effective?.source === 'user-override' ? effective : fallback;
+  const quote =
+    effective?.source === 'user-override'
+      ? at === undefined || agent === undefined
+        ? effective
+        : // 同上:历史窗口内的订阅直连估值也要按 at 时点参考价重新合并稀疏覆盖。
+          (mergeStoredModelPriceOverride(
+            { providerId: effective.providerId, agent, modelId: effective.modelId },
+            providerReferencePriceQuote(effective.providerId, effective.modelId, registry, {
+              agent,
+              at,
+            }),
+          ) ?? effective)
+      : fallback;
   if (!quote) return undefined;
   return {
     ...quote,
