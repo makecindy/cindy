@@ -1354,12 +1354,20 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
+    const trimmedMessages = s.messages.slice(-TRIM_TARGET);
+    const planState = getLatestMessageTodoState(trimmedMessages);
+    const needsPlanReloadAfterTrim =
+      s.historyLoaded &&
+      s.messages.some((message) => isAgentPlanToolName(message.toolName)) &&
+      (!planState.hasPlanEvent || !planState.isResolved);
+
     return {
       ...s,
-      messages: s.messages.slice(-TRIM_TARGET),
+      messages: trimmedMessages,
       hasMoreMessages: true,
       oldestMessageId: null,
       isLoadingMore: false,
+      ...(needsPlanReloadAfterTrim ? { historyLoaded: false } : {}),
       // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
       // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
