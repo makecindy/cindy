@@ -4,6 +4,7 @@ import { fetchWithSsrFGuard } from '../shim/ssrf-runtime.js';
 import {
   isBlockedHostnameOrIp,
   isPrivateIpAddress,
+  resolvePinnedHostnameWithPolicy,
 } from '../_generated/leaf/src/infra/net/ssrf.js';
 
 /**
@@ -25,6 +26,15 @@ describe('vendored SSRF decision primitives', () => {
 
   it('does not flag a public IP as private', () => {
     expect(isPrivateIpAddress('8.8.8.8')).toBe(false);
+  });
+
+  it('allows proxy fake-IP DNS answers when private-network access is enabled', async () => {
+    const resolved = await resolvePinnedHostnameWithPolicy('example.com', {
+      policy: { dangerouslyAllowPrivateNetwork: true },
+      lookupFn: async () => [{ address: '198.18.0.1', family: 4 }],
+    });
+
+    expect(resolved.addresses).toEqual(['198.18.0.1']);
   });
 });
 
