@@ -16,8 +16,16 @@
  *   (useReduceMotionEnabled === false 才播)。
  */
 import { House, LoaderCircle, SquarePen } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { BackHandler, Pressable, SectionList, StyleSheet, View } from 'react-native';
+import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import {
+  AccessibilityInfo,
+  BackHandler,
+  findNodeHandle,
+  Pressable,
+  SectionList,
+  StyleSheet,
+  View,
+} from 'react-native';
 import Animated, {
   cancelAnimation,
   Easing,
@@ -75,6 +83,7 @@ export function SessionListDrawer({
   onNewSession,
   onSelectSession,
   open,
+  returnFocusRef,
   width,
 }: {
   currentSessionId: string;
@@ -83,6 +92,8 @@ export function SessionListDrawer({
   onNewSession(): void;
   onSelectSession(item: RemoteSessionListItem): void;
   open: boolean;
+  /** 关闭后读屏焦点归还的触发钮(左上角三条杠);切任务导航整屏卸载时不消费。 */
+  returnFocusRef?: RefObject<View | null>;
   width: number;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -103,9 +114,25 @@ export function SessionListDrawer({
   // progress 0→1 = 收起→展开;dragX(≤0)是手势拖拽的临时位移,松手后归零或并入 progress。
   const progress = useSharedValue(open ? 1 : 0);
   const dragX = useSharedValue(0);
-  const unmountAfterClose = useCallback(() => {
-    if (!openRef.current) setMounted(false);
-  }, []);
+  // 关闭收尾统一走这里(动画完成回调 / reduce-motion 直跳两条路径):卸载 overlay 并把
+  // 读屏焦点还给触发钮——三条杠在抽屉打开期间被遮罩挡住,不还焦点会落在任意节点。
+  const finishClose = useCallback(() => {
+    if (openRef.current) return;
+    setMounted(false);
+    const returnNode = returnFocusRef?.current ? findNodeHandle(returnFocusRef.current) : null;
+    if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
+  }, [returnFocusRef]);
+  // 打开后把读屏焦点移进面板首控件(新建任务):背后内容已按模态摘出读屏树,不移焦
+  // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
+  const newSessionButtonRef = useRef<View>(null);
+  useEffect(() => {
+    if (!open) return;
+    const timer = setTimeout(() => {
+      const node = findNodeHandle(newSessionButtonRef.current);
+      if (node != null) AccessibilityInfo.setAccessibilityFocus(node);
+    }, DRAWER_IN_MS);
+    return () => clearTimeout(timer);
+  }, [open]);
 
   useEffect(() => {
     // reduce-motion 约定:只有 === false 才播动画,null(首帧未知)按不播降级。
@@ -127,7 +154,7 @@ export function SessionListDrawer({
     dragX.value = 0;
     if (!animate) {
       progress.value = 0;
-      setMounted(false);
+      finishClose();
       return;
     }
     progress.value = withTiming(
@@ -135,10 +162,10 @@ export function SessionListDrawer({
       { duration: DRAWER_OUT_MS, easing: Easing.in(Easing.cubic) },
       (finished) => {
         'worklet';
-        if (finished) runOnJS(unmountAfterClose)();
+        if (finished) runOnJS(finishClose)();
       },
     );
-  }, [dragX, open, panelWidth, progress, reduceMotion, unmountAfterClose]);
+  }, [dragX, finishClose, open, panelWidth, progress, reduceMotion]);
 
   // Android 系统返回键:抽屉开着时先关抽屉,不冒泡成页面返回。
   useEffect(() => {
@@ -306,6 +333,7 @@ export function SessionListDrawer({
               accessibilityRole="button"
               hitSlop={6}
               onPress={onNewSession}
+              ref={newSessionButtonRef}
               style={({ pressed }) => [styles.panelIconButton, pressed && styles.pressed]}
               testID="sessionDrawer.newSession"
             >

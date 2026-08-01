@@ -33,7 +33,7 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from 'react';
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -1927,6 +1927,8 @@ export default function SessionScreen() {
     windowWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点(SessionListDrawer.returnFocusRef)。
+  const sessionListButtonRef = useRef<View>(null);
   // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
   useEffect(() => {
     if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
@@ -7572,6 +7574,7 @@ export default function SessionScreen() {
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
               onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}
+              sessionListButtonRef={sessionListButtonRef}
               onOpenFiles={() => {
                 if (!currentSession?.workingDir) return;
                 router.push({
@@ -8367,6 +8370,7 @@ export default function SessionScreen() {
           onNewSession={handleDrawerNewSession}
           onSelectSession={handleDrawerSelectSession}
           open={sessionListDrawerOpen}
+          returnFocusRef={sessionListButtonRef}
           width={wideSessionNav.drawerWidth}
         />
       ) : null}
@@ -8400,6 +8404,7 @@ function SessionHeaderBar({
   readOnlyReason,
   remoteUnavailableReason,
   searchOpen,
+  sessionListButtonRef,
   title,
 }: {
   currentSession: RemoteSession | null;
@@ -8410,6 +8415,8 @@ function SessionHeaderBar({
   onBack(): void;
   /** 宽屏导航形态下提供:左上角改为三条杠,点击拉出任务列表抽屉(替代返回)。 */
   onOpenSessionList?: () => void;
+  /** 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点。 */
+  sessionListButtonRef?: RefObject<View | null>;
   onOpenFiles(): void;
   onOpenSettings(): void;
   onOpenUsage(): void;
@@ -8466,6 +8473,7 @@ function SessionHeaderBar({
         <SessionHeaderIconButton
           accessibilityLabel={t('home.drawer.openA11y')}
           active={false}
+          buttonRef={sessionListButtonRef}
           hitSlop={4}
           icon={Menu}
           onPress={onOpenSessionList}
@@ -8532,6 +8540,7 @@ function SessionHeaderIconButton({
   accessibilityLabel,
   active,
   attention = false,
+  buttonRef,
   disabled,
   hitSlop,
   icon: Icon,
@@ -8542,6 +8551,8 @@ function SessionHeaderIconButton({
   accessibilityLabel: string;
   active?: boolean;
   attention?: boolean;
+  /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
+  buttonRef?: RefObject<View | null>;
   disabled?: boolean;
   /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
   hitSlop?: PressableProps['hitSlop'];
@@ -8554,6 +8565,7 @@ function SessionHeaderIconButton({
   const color = colors.textPrimary;
   return (
     <RouteActionButton
+      ref={buttonRef}
       accessibilityHint={accessibilityHint}
       accessibilityLabel={accessibilityLabel}
       active={active}
