@@ -1199,7 +1199,7 @@ test("resolvePnpmInvocation falls back to PATH for Windows command wrappers", ()
 			}),
 			{
 				command: "C:/Windows/System32/cmd.exe",
-				args: ["/d", "/s", "/c", "pnpm --version"],
+				args: ["/d", "/s", "/v:off", "/c", "pnpm --version"],
 				shell: false,
 				windowsVerbatimArguments: true,
 			},
@@ -1212,7 +1212,7 @@ test("resolvePnpmInvocation quotes Windows command wrapper arguments", () => {
 		resolvePnpmInvocation(
 			[
 				"--dir",
-				'C:/Users/First Last/repo & "tools"/apps/server',
+				'C:/Users/First Last/repo & "tools"!/apps/server',
 				"run",
 				"test",
 			],
@@ -1227,8 +1227,9 @@ test("resolvePnpmInvocation quotes Windows command wrapper arguments", () => {
 			args: [
 				"/d",
 				"/s",
+				"/v:off",
 				"/c",
-				'pnpm --dir "C:/Users/First Last/repo & ""tools""/apps/server" run test',
+				'pnpm --dir "C:/Users/First Last/repo & ""tools""!/apps/server" run test',
 			],
 			shell: false,
 			windowsVerbatimArguments: true,
@@ -1260,7 +1261,7 @@ test("resolvePnpmInvocation fallback shell behavior is explicit per platform", (
 		}),
 		{
 			command: "C:/Windows/System32/cmd.exe",
-			args: ["/d", "/s", "/c", "pnpm --version"],
+			args: ["/d", "/s", "/v:off", "/c", "pnpm --version"],
 			shell: false,
 			windowsVerbatimArguments: true,
 		},
