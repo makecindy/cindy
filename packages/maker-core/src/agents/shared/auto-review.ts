@@ -138,8 +138,8 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
-  'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command',
-  'setsid', 'chrt',
+  'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
+  'setsid', 'chrt', 'exec',
 ]);
 
 /**
@@ -308,20 +308,115 @@ function splitTopLevelSegments(command: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-/** 极简 tokenizer:按空白切,去掉包裹引号。够用于取首个命令 + flag 形状判定。 */
+/** 轻量 shell tokenizer：引号外按空白切，拼接相邻的 quoted/unquoted 片段并保留反斜杠。 */
 function tokenize(segment: string): string[] {
   const tokens: string[] = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(segment)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3] ?? '');
+  let token = '';
+  let tokenStarted = false;
+  let quote: "'" | '"' | null = null;
+  let substitutionDepth = 0;
+  const flush = (): void => {
+    if (!tokenStarted) return;
+    tokens.push(token);
+    token = '';
+    tokenStarted = false;
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const char = segment[i];
+    if (char === '\\' && quote !== "'" && i + 1 < segment.length) {
+      tokenStarted = true;
+      token += char + segment[i + 1];
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      tokenStarted = true;
+      continue;
+    }
+    if ((char === '$' || char === '<') && segment[i + 1] === '(') {
+      token += `${char}(`;
+      tokenStarted = true;
+      substitutionDepth += 1;
+      i++;
+      continue;
+    }
+    if (substitutionDepth > 0) {
+      token += char;
+      tokenStarted = true;
+      if (char === '(') substitutionDepth += 1;
+      else if (char === ')') substitutionDepth -= 1;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      // Preserve the ANSI-C quote marker so callers can distinguish $'…'
+      // (runtime escape decoding) from an ordinary single-quoted fragment.
+      if (char === "'" && token.endsWith('$')) token += char;
+      quote = char;
+      tokenStarted = true;
+    } else if (/\s/.test(char)) {
+      flush();
+    } else {
+      token += char;
+      tokenStarted = true;
+    }
   }
+  flush();
   return tokens;
 }
 
-/** 剥掉包裹器(env/timeout/…)及其自身参数,返回内层命令 token 数组。 */
-function unwrapWrappers(tokens: string[]): string[] {
-  let toks = tokens;
+/** 去掉分段后残留的 shell 分组/控制关键字，让组内真实命令继续参与安全判定。 */
+function stripShellControlTokens(tokens: string[]): string[] {
+  const out = [...tokens];
+  while (out.length > 0 && /^(?:\{|\(|then|do|else)$/.test(out[0])) out.shift();
+  if (out[0]) out[0] = out[0].replace(/^[({]+/, '');
+  while (out[0] === '') out.shift();
+  const last = out.length - 1;
+  if (last >= 0 && !/[$<]\(/.test(out[last])) {
+    out[last] = out[last].replace(/[)}]+$/, '');
+    if (out[last] === '') out.pop();
+  }
+  return out;
+}
+
+type UnwrappedCommand = {
+  tokens: string[];
+  cwd?: string;
+  cwdUnknown: boolean;
+};
+
+function resolveCwdTarget(
+  target: string | undefined,
+  currentCwd: string | undefined,
+  currentCwdUnknown = false,
+): { cwd?: string; cwdUnknown: boolean } {
+  if (!target || target === '-' || /[$`~{}*?[\]]/.test(target)) {
+    return { cwdUnknown: true };
+  }
+  if (!isAbsolutePath(toForwardSlashes(target)) && (!currentCwd || currentCwdUnknown)) {
+    return { cwdUnknown: true };
+  }
+  return {
+    cwd: normalizeTarget(target, currentCwd ? [currentCwd] : []),
+    cwdUnknown: false,
+  };
+}
+
+/** 剥掉包裹器及其参数；同时保留 env -C/--chdir 对内层命令 cwd 的影响。 */
+function unwrapCommand(
+  tokens: string[],
+  initialCwd?: string,
+  initialCwdUnknown = false,
+): UnwrappedCommand {
+  let toks = stripShellControlTokens(tokens);
+  let cwd = initialCwd;
+  let cwdUnknown = initialCwdUnknown;
+  const applyCwd = (target: string | undefined): void => {
+    const next = resolveCwdTarget(target, cwd, cwdUnknown);
+    cwd = next.cwd;
+    cwdUnknown = next.cwdUnknown;
+  };
   for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
     const head = baseName(toks[0]);
     if (!COMMAND_WRAPPERS.has(head)) break;
@@ -335,13 +430,37 @@ function unwrapWrappers(tokens: string[]): string[] {
       while (i < toks.length) {
         const t = toks[i];
         if (t === '-' || t === '-i' || t === '--ignore-environment' || t === '-0' || t === '--null' || t === '-v' || t === '--debug') { i++; continue; }
-        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') { i += 2; continue; } // 消费独立参数(NAME / DIR)
-        if (/^(?:--unset|--chdir)=/.test(t) || /^-[uC]./.test(t)) { i++; continue; }             // --unset=NAME / -uNAME / -C=DIR
+        if (t === '-u' || t === '--unset') { i += 2; continue; }
+        if (t === '-C' || t === '--chdir') {
+          applyCwd(toks[i + 1]);
+          i += 2;
+          continue;
+        }
+        const longChdir = /^--chdir=(.*)$/.exec(t);
+        if (longChdir) { applyCwd(longChdir[1]); i++; continue; }
+        const shortChdir = /^-C=?(.+)$/.exec(t);
+        if (shortChdir) { applyCwd(shortChdir[1]); i++; continue; }
+        if (/^--unset=/.test(t) || /^-u./.test(t)) { i++; continue; } // --unset=NAME / -uNAME
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { i++; continue; }                                 // NAME=VALUE
         if (t.startsWith('-')) { bail = true; break; }  // -S/--split-string 及一切未建模选项 → 不剥,fail-closed
         break;                                          // 内层命令
       }
       // bail 时 toks[i] 是可疑选项(如 -S),保留它作首 token → classifyShellSegment 认不出安全命令 → 升级。
+      toks = toks.slice(i);
+      if (bail) break;
+    } else if (head === 'exec') {
+      // POSIX shell builtin: exec [-cl] [-a name] [command [args…]]. 未建模选项不剥壳，
+      // 保持 fail-closed；已知选项后继续递归识别真实执行器。
+      let i = 1;
+      let bail = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-a') { i += 2; continue; }
+        if (/^-a.+/.test(t) || /^-[cl]+$/.test(t)) { i++; continue; }
+        if (t.startsWith('-')) { bail = true; break; }
+        break;
+      }
       toks = toks.slice(i);
       if (bail) break;
     } else if (head === 'timeout' || head === 'time' || head === 'nice' || head === 'ionice' || head === 'chrt' || head === 'stdbuf') {
@@ -354,7 +473,12 @@ function unwrapWrappers(tokens: string[]): string[] {
       toks = toks.slice(1);
     }
   }
-  return toks;
+  return { tokens: toks, cwd, cwdUnknown };
+}
+
+/** 无需 cwd 语义的调用点只取剥壳后的真实 argv。 */
+function unwrapWrappers(tokens: string[]): string[] {
+  return unwrapCommand(tokens).tokens;
 }
 
 function baseName(p: string): string {
@@ -363,7 +487,8 @@ function baseName(p: string): string {
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
 }
 
-type ExecutableSegment = { text: string; fromPipe: boolean };
+type ShellSeparator = 'and' | 'or' | 'pipe' | 'sequence' | 'background' | 'end';
+type ExecutableSegment = { text: string; fromPipe: boolean; separatorAfter: ShellSeparator };
 
 /** 仅供高影响执行判定：识别引号外的 shell 分隔符，避免把 `echo 'x | sh'` 误当执行。 */
 function splitExecutableSegments(command: string): ExecutableSegment[] {
@@ -373,6 +498,7 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
   let singleQuoted = false;
   let doubleQuoted = false;
   let escaped = false;
+  let substitutionDepth = 0;
   for (let i = 0; i < command.length; i++) {
     const char = command[i];
     if (escaped) { escaped = false; continue; }
@@ -380,25 +506,39 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted || doubleQuoted) continue;
+    if ((char === '$' || char === '<') && command[i + 1] === '(') {
+      substitutionDepth += 1;
+      i++;
+      continue;
+    }
+    if (substitutionDepth > 0) {
+      if (char === '(') substitutionDepth += 1;
+      else if (char === ')') substitutionDepth -= 1;
+      continue;
+    }
     let separatorLength = 0;
     let nextFromPipe = false;
+    let separatorAfter: ShellSeparator = 'sequence';
     if (char === '|') {
       separatorLength = command[i + 1] === '|' || command[i + 1] === '&' ? 2 : 1;
       nextFromPipe = command[i + 1] !== '|';
+      separatorAfter = nextFromPipe ? 'pipe' : 'or';
     } else if (char === '&' && command[i - 1] !== '>' && command[i + 1] !== '>') {
       separatorLength = command[i + 1] === '&' ? 2 : 1;
+      separatorAfter = command[i + 1] === '&' ? 'and' : 'background';
     } else if (char === ';' || char === '\n') {
       separatorLength = 1;
+      separatorAfter = 'sequence';
     }
     if (separatorLength === 0) continue;
     const text = command.slice(start, i).trim();
-    if (text) out.push({ text, fromPipe });
+    if (text) out.push({ text, fromPipe, separatorAfter });
     fromPipe = nextFromPipe;
     i += separatorLength - 1;
     start = i + 1;
   }
   const text = command.slice(start).trim();
-  if (text) out.push({ text, fromPipe });
+  if (text) out.push({ text, fromPipe, separatorAfter: 'end' });
   return out;
 }
 
@@ -433,24 +573,83 @@ function shellCommandPayload(tokens: string[]): string | null {
   return null;
 }
 
+/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
+function interpreterInlineCodePayload(tokens: string[]): string | null {
+  const bin = baseName(tokens[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
+  const flags = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
+    : /^(?:node|nodejs|bun)$/.test(bin) ? ['-e', '--eval', '-p', '--print']
+      : /^(?:ruby|lua|luajit)\d*(?:\.\d+)*$/.test(bin) ? ['-e']
+        : bin === 'perl' ? ['-e', '-E']
+          : bin === 'php' ? ['-r']
+            : /^(?:pwsh|powershell)$/.test(bin) ? ['-c', '-command', '-e', '-encodedcommand']
+              : /^(?:r|rscript|julia|groovy|swift|osascript)$/.test(bin) ? ['-e', '--eval']
+                : [];
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    for (const flag of flags) {
+      const normalizedFlag = flag.toLowerCase();
+      if (lower === normalizedFlag) return tokens[i + 1] ?? '';
+      if (normalizedFlag.startsWith('--') && lower.startsWith(`${normalizedFlag}=`)) {
+        return token.slice(flag.length + 1);
+      }
+      if (normalizedFlag.length === 2 && lower.startsWith(normalizedFlag) && token.length > 2) {
+        return token.slice(flag.length);
+      }
+    }
+  }
+  return null;
+}
+
+function commandRunsRemoteFetch(command: string, depth = 0): boolean {
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = baseName(tokens[0] ?? '').toLowerCase().replace(/\.exe$/, '');
+    if (bin === 'curl' || bin === 'wget') return true;
+    const shellPayload = shellCommandPayload(tokens);
+    if (shellPayload && depth < 3 && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
+  }
+  return false;
+}
+
+function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'): boolean {
+  const pattern = kind === 'command' ? /\$\(([^()]*)\)/g : /<\(([^()]*)\)/g;
+  for (const match of text.matchAll(pattern)) {
+    if (commandRunsRemoteFetch(match[1] ?? '')) return true;
+  }
+  if (kind === 'command') {
+    for (const match of text.matchAll(/`([^`]*)`/g)) {
+      if (commandRunsRemoteFetch(match[1] ?? '')) return true;
+    }
+  }
+  return false;
+}
+
 /** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
-function highImpactExecutionNeedsConsent(command: string): boolean {
+function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
   for (const { text, fromPipe } of splitExecutableSegments(command)) {
     const normalized = text.replace(/['"\\]/g, '');
     const tokens = unwrapWrappers(tokenize(normalized));
     const bin = baseName(tokens[0] ?? '');
     if (fromPipe && isPipeExecutor(bin)) return true;
     if (bin === 'eval') return true;
-    const payload = shellCommandPayload(unwrapWrappers(tokenize(text)));
-    if (payload !== null && /\$\(\s*(?:curl|wget)\b/.test(payload)) return true;
-    if ((bin === 'source' || bin === '.' || SHELL_EXECUTORS.has(bin.toLowerCase()))
-      && /<\(\s*(?:curl|wget)\b/.test(normalized)) return true;
+    const rawTokens = unwrapWrappers(tokenize(text));
+    const payload = shellCommandPayload(rawTokens);
+    if (payload && (substitutionRunsRemoteFetch(payload, 'command')
+      || depth >= 3
+      || highImpactExecutionNeedsConsent(payload, depth + 1))) return true;
+    const inlineCode = interpreterInlineCodePayload(rawTokens);
+    if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
+    if ((bin === 'source' || bin === '.' || isPipeExecutor(bin))
+      && substitutionRunsRemoteFetch(text, 'process')) return true;
   }
   return false;
 }
 
 type ShellReviewOptions = {
   cwd?: string;
+  cwdUnknown?: boolean;
   platform?: NodeJS.Platform;
 };
 
@@ -479,6 +678,7 @@ function destructiveTargetNeedsConsent(
   if (!writableRoot) return true;
   // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
   if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
+  if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
   // glob 可保留，只用首个 glob 前的静态前缀证明作用域。前缀落在可写根本身仍是“清空整个
   // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
   const globIndex = target.search(/[*?[\]]/);
@@ -546,6 +746,27 @@ function destructiveRmTargets(tokens: string[]): string[] | null {
   return destructive ? positionalOperands(args) : null;
 }
 
+function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; target?: string } {
+  const bin = baseName(tokens[0] ?? '');
+  if (bin === 'source' || bin === '.' || bin === 'popd') return { changesDirectory: true };
+  if (bin !== 'cd' && bin !== 'pushd') return { changesDirectory: false };
+  if (bin === 'pushd' && tokens.slice(1).includes('-n')) return { changesDirectory: false };
+  let optionsEnded = false;
+  for (const token of tokens.slice(1)) {
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && token.startsWith('-') && token !== '-') continue;
+    // pushd +/-N rotates the directory stack; the resulting cwd is runtime state.
+    if (bin === 'pushd' && /^[+-]\d+$/.test(token)) {
+      return { changesDirectory: true };
+    }
+    return { changesDirectory: true, target: token };
+  }
+  return { changesDirectory: true };
+}
+
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
 function scopedDestructionNeedsConsent(
   command: string,
@@ -553,16 +774,24 @@ function scopedDestructionNeedsConsent(
   opts: ShellReviewOptions,
   depth = 0,
 ): boolean {
-  for (const segment of splitTopLevelSegments(command)) {
-    const tokens = unwrapWrappers(tokenize(segment));
+  let currentCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let currentCwdUnknown = opts.cwdUnknown === true;
+  for (const { text: segment, separatorAfter } of splitExecutableSegments(command)) {
+    const unwrapped = unwrapCommand(tokenize(segment), currentCwd, currentCwdUnknown);
+    const tokens = unwrapped.tokens;
+    const segmentOpts: ShellReviewOptions = {
+      ...opts,
+      cwd: unwrapped.cwd,
+      cwdUnknown: unwrapped.cwdUnknown,
+    };
     const bin = baseName(tokens[0] ?? '');
     const rmTargets = destructiveRmTargets(tokens);
     if (rmTargets?.some((target) =>
-      destructiveTargetNeedsConsent(target, workspaceRoots, opts))) return true;
+      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
     const shellPayload = shellCommandPayload(tokens);
     if (shellPayload && (depth >= 3 || scopedDestructionNeedsConsent(
-      shellPayload, workspaceRoots, opts, depth + 1))) {
+      shellPayload, workspaceRoots, segmentOpts, depth + 1))) {
       return true;
     }
     if (bin === 'find') {
@@ -572,13 +801,32 @@ function scopedDestructionNeedsConsent(
       const execsDestructiveRm = nestedRm >= 0
         && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
       if ((deletes || execsDestructiveRm) && findRoots.some((target) =>
-        destructiveTargetNeedsConsent(target, workspaceRoots, opts))) return true;
+        destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     }
     // xargs 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意。
     const nestedRm = tokens.findIndex((token) => baseName(token) === 'rm');
     if (bin === 'xargs' && nestedRm >= 0
       && destructiveRmTargets(tokens.slice(nestedRm)) !== null) return true;
     if (forcePushNeedsConsent(tokens)) return true;
+
+    const cwdChange = directoryChangeTarget(tokens);
+    if (!cwdChange.changesDirectory || separatorAfter === 'pipe' || separatorAfter === 'background') {
+      continue;
+    }
+    if (separatorAfter === 'or') {
+      // The next branch may run after the directory change failed, while later
+      // sequence segments may also run after it succeeded. Keep both fail-closed.
+      currentCwd = undefined;
+      currentCwdUnknown = true;
+      continue;
+    }
+    const nextCwd = resolveCwdTarget(
+      cwdChange.target,
+      unwrapped.cwd,
+      unwrapped.cwdUnknown,
+    );
+    currentCwd = nextCwd.cwd;
+    currentCwdUnknown = nextCwd.cwdUnknown;
   }
   return false;
 }
