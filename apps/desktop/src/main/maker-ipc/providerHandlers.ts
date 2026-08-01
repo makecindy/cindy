@@ -941,7 +941,17 @@ export function registerProviderHandlers(
         if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
           throwIpcError('INTERNAL', 'active account changed before resetting price override');
         }
-        deps.clearModelPriceOverride(target);
+        try {
+          deps.clearModelPriceOverride(target);
+        } catch (err) {
+          log.warn('model price override reset failed', {
+            providerId: target.providerId,
+            agent: target.agent,
+            modelId: target.modelId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          throwIpcError('INTERNAL', 'failed to reset model price override');
+        }
         deps.broadcastPricingChanged();
         return deps.readModelPriceOverride(target);
       }),

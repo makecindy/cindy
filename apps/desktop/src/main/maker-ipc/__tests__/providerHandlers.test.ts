@@ -1472,6 +1472,27 @@ describe('model price override handlers', () => {
     expect(deps.clearModelPriceOverride).toHaveBeenCalledWith(target);
     expect(deps.broadcastPricingChanged).toHaveBeenCalledTimes(1);
   });
+
+  it('converts reset persistence failures to a stable IPC error without leaking paths', async () => {
+    const harness = new IpcHarness();
+    const clearModelPriceOverride = vi.fn(() => {
+      throw new Error('EROFS: read-only file system, unlink /private/userData/model-price.json');
+    });
+    const deps = makeDeps({ clearModelPriceOverride });
+    registerProviderHandlers(harness, deps);
+
+    let failure: unknown;
+    try {
+      await harness.invoke(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, target);
+    } catch (error) {
+      failure = error;
+    }
+
+    expect(failure).toBeInstanceOf(Error);
+    expect((failure as Error).message).toMatch(/INTERNAL.*failed to reset model price override/);
+    expect((failure as Error).message).not.toContain('/private/userData');
+    expect(deps.broadcastPricingChanged).not.toHaveBeenCalled();
+  });
 });
 
 describe('provider:presets handler', () => {

@@ -91,6 +91,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
     let cancelled = false;
     setLoading(true);
     setView(null);
+    setForm(EMPTY_FORM);
     void window.electronAPI.maker
       .getModelPriceOverride(target)
       .then((next) => {
@@ -110,7 +111,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   }, [open, target, t]);
 
   const save = async () => {
-    if (!target) return;
+    if (!target || !view || loading) return;
     const inputPerMtok = parseRequiredPrice(form.input);
     const outputPerMtok = parseRequiredPrice(form.output);
     const cacheReadPerMtok = parseOptionalPrice(form.cacheRead);
@@ -161,7 +162,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
   };
 
   const fieldClass = cn(
-    'h-9 w-full rounded-lg border px-3 text-13 tabular-nums outline-none',
+    'h-9 w-full rounded-full border px-3 text-13 tabular-nums outline-none',
     'border-[var(--settings-input-border)] bg-[var(--settings-input-bg)]',
     'text-[var(--settings-section-title)] focus:border-[var(--focus-ring)]',
   );
@@ -313,7 +314,7 @@ export function ModelPriceOverrideDialog({ provider, row, open, onOpenChange }: 
                 <button
                   type="button"
                   onClick={() => void save()}
-                  disabled={loading || saving}
+                  disabled={loading || saving || !view}
                   className="h-8 rounded-full bg-[var(--settings-btn-primary-bg)] px-3.5 text-12 font-medium text-[var(--settings-btn-primary-text)] disabled:opacity-50"
                 >
                   {t('settings.providers.models.priceOverride.save')}
