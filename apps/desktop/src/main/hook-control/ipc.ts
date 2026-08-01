@@ -33,7 +33,12 @@ import {
   onUiTurnDispatching,
   onUiTurnUndispatched,
 } from '../maker-ipc/uiContinuationSignal.js';
-import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  throwIpcError,
+  requireObject,
+  requireNullableString,
+  requireString,
+} from '../utils/ipcValidate.js';
 import {
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
@@ -652,7 +657,9 @@ export function registerHookControlIpc(): void {
     requireHookControl();
     const { store: s, manager: m } = ensureInstances();
     const p = requireObject(payload);
-    const alias = p.alias === null || p.alias === undefined ? null : String(p.alias);
+    // 只认显式的 null 或字符串: 这里的 null 是「清空默认目录」这个破坏性动作,
+    // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
+    const alias = requireNullableString(p.alias, 'alias');
     translateValidation(() => s.setXDefaultWorkspace(alias));
     // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
     // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
