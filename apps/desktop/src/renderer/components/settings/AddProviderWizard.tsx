@@ -328,6 +328,12 @@ export function AddProviderWizard({
   >({ status: 'idle' });
   const [manualModelIds, setManualModelIds] = useState<Partial<Record<AgentKind, string>>>({});
   /**
+   * 手动添加模型的上下文窗口输入（可空字符串 = 不指定）。纯文本输入，添加时解析：
+   * 空 / 非法忽略（落 DEFAULT_CUSTOM_CONTEXT_WINDOW 200K 兜底），合法正整数随模型入库，
+   * 否则与「发现」路径一致退回 200K —— 手动添加不再必然拿到 1/5 窗口。
+   */
+  const [manualModelWindows, setManualModelWindows] = useState<Partial<Record<AgentKind, string>>>({});
+  /**
    * 勾选清单:id → { name, checked, recommended, agents }。Map 保序(推荐在前,拉取新增在后)。
    * agents = 该模型归属的 runtime:预设推荐模型归属「预设里列出它的那些 runtime」;拉取新增
    * 归属「实际返回它的那个端点的 runtime」——完成创建时按归属分发,**不**把统一列表复制进
@@ -706,6 +712,10 @@ export function AddProviderWizard({
       if (!sel || sel.kind !== 'preset' || !sel.preset.runtimes[agent]) return;
       const id = manualModelIds[agent]?.trim() ?? '';
       if (!id) return;
+      // 可选窗口输入：空 / 非正整数忽略（落 200K 兜底），合法正整数按 agent 分槽随模型入库。
+      const rawWindow = manualModelWindows[agent]?.trim() ?? '';
+      const parsed = rawWindow === '' ? NaN : Number(rawWindow);
+      const window = Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
       setPicks((prev) => {
         const next = new Map(prev);
         const existing = next.get(id);
@@ -718,19 +728,25 @@ export function AddProviderWizard({
                 agents: existing.agents.includes(agent)
                   ? existing.agents
                   : [...existing.agents, agent],
+                // 手动值优先于发现值：双端归属同一 id 时以本次手填为准，不互相覆盖。
+                ...(window !== undefined
+                  ? { contextWindows: { ...existing.contextWindows, [agent]: window } }
+                  : {}),
               }
             : {
                 name: id,
                 checked: true,
                 recommended: false,
                 agents: [agent],
+                ...(window !== undefined ? { contextWindows: { [agent]: window } } : {}),
               },
         );
         return next;
       });
       setManualModelIds((prev) => ({ ...prev, [agent]: '' }));
+      setManualModelWindows((prev) => ({ ...prev, [agent]: '' }));
     },
-    [sel, manualModelIds],
+    [sel, manualModelIds, manualModelWindows],
   );
 
   // ── 完成创建(预设)────────────────────────────────────────────────────
@@ -1478,6 +1494,38 @@ export function AddProviderWizard({
                               }}
                               placeholder={t('settings.providers.wizard.manualModelPlaceholder')}
                               className="h-9 min-w-0 flex-1 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
+                              style={{
+                                borderColor: 'var(--border-default)',
+                                backgroundColor: 'var(--surface-elevated)',
+                                color: 'var(--settings-section-title)',
+                              }}
+                            />
+                            <span
+                              className="shrink-0 text-12 font-medium"
+                              style={{ color: 'var(--text-secondary)' }}
+                            >
+                              {t('settings.providers.wizard.manualModelWindowLabel')}
+                            </span>
+                            <input
+                              type="text"
+                              inputMode="numeric"
+                              value={manualModelWindows[agent] ?? ''}
+                              onChange={(event) =>
+                                setManualModelWindows((prev) => ({
+                                  ...prev,
+                                  [agent]: event.target.value,
+                                }))
+                              }
+                              onKeyDown={(event) => {
+                                if (event.key !== 'Enter') return;
+                                event.preventDefault();
+                                addManualModel(agent);
+                              }}
+                              placeholder={t(
+                                'settings.providers.wizard.manualModelWindowPlaceholder',
+                              )}
+                              title={t('settings.providers.wizard.manualModelWindowHint')}
+                              className="h-9 w-36 shrink-0 rounded-full border px-4 font-mono text-12 outline-none focus:ring-2 focus:ring-[var(--focus-ring)]"
                               style={{
                                 borderColor: 'var(--border-default)',
                                 backgroundColor: 'var(--surface-elevated)',
