@@ -22,6 +22,13 @@
 const switchQueues = new Map<string, Promise<void>>();
 /** 每个 session 的本端写次数(登记 / 撤销 / 选回当前引擎都算一次),单调递增。 */
 const writeSeqs = new Map<string, number>();
+/** 完整切换操作的在途 token；Set 避免并发点选或 dispose 后旧 finally 误清新操作。 */
+const pendingOperations = new Map<string, Set<symbol>>();
+const pendingListeners = new Set<() => void>();
+
+function emitPendingChange(): void {
+  for (const listener of pendingListeners) listener();
+}
 
 /**
  * 推进并返回本次点选的写序号。响应到达时与 `getAgentSwitchWriteSeq` 比对即可判断
@@ -58,14 +65,77 @@ export function runAgentSwitchExclusive<T>(
   return run;
 }
 
+/**
+ * 预占该 session 的串行位置，直到 release 才允许后续任务开始。
+ * 用于 host ack 后仍需继续执行 renderer 异步收尾的复合操作，避免后续点选插进两段之间。
+ */
+export function reserveAgentSwitchExclusive(sessionId: string): {
+  ready: Promise<void>;
+  release: () => void;
+} {
+  const base = switchQueues.get(sessionId) ?? Promise.resolve();
+  const ready = base.then(() => undefined);
+  let releaseGate!: () => void;
+  const gate = new Promise<void>((resolve) => {
+    releaseGate = resolve;
+  });
+  switchQueues.set(
+    sessionId,
+    ready.then(() => gate),
+  );
+
+  let released = false;
+  return {
+    ready,
+    release: () => {
+      if (released) return;
+      released = true;
+      releaseGate();
+    },
+  };
+}
+
+/**
+ * 登记一次完整的切换操作（含 host ack 后的 renderer 收敛），返回幂等完成函数。
+ * pending 状态独立于组件实例，切走再切回或重挂 ChatInput 时发送门禁仍然可靠。
+ */
+export function beginAgentSwitchOperation(sessionId: string): () => void {
+  const token = Symbol(sessionId);
+  const tokens = pendingOperations.get(sessionId) ?? new Set<symbol>();
+  tokens.add(token);
+  pendingOperations.set(sessionId, tokens);
+  emitPendingChange();
+
+  let finished = false;
+  return () => {
+    if (finished) return;
+    finished = true;
+    const current = pendingOperations.get(sessionId);
+    if (!current?.delete(token)) return;
+    if (current.size === 0) pendingOperations.delete(sessionId);
+    emitPendingChange();
+  };
+}
+
+export function hasPendingAgentSwitchOperation(sessionId: string): boolean {
+  return (pendingOperations.get(sessionId)?.size ?? 0) > 0;
+}
+
+export function subscribeAgentSwitchPending(listener: () => void): () => void {
+  pendingListeners.add(listener);
+  return () => pendingListeners.delete(listener);
+}
+
 /** 会话销毁(purge / 关闭)时释放协调状态。 */
 export function disposeAgentSwitchSession(sessionId: string): void {
   switchQueues.delete(sessionId);
   writeSeqs.delete(sessionId);
+  if (pendingOperations.delete(sessionId)) emitPendingChange();
 }
 
 /** 仅供测试:清空全部协调状态。 */
 export function __resetAgentSwitchCoordinatorForTests(): void {
   switchQueues.clear();
   writeSeqs.clear();
+  pendingOperations.clear();
 }

@@ -4,6 +4,7 @@ import {
   useMemo,
   useRef,
   useState,
+  useSyncExternalStore,
   useLayoutEffect,
   type DragEvent as ReactDragEvent,
   type PointerEvent as ReactPointerEvent,
@@ -105,9 +106,12 @@ import {
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
+  beginAgentSwitchOperation,
   getAgentSwitchWriteSeq,
+  hasPendingAgentSwitchOperation,
   nextAgentSwitchWriteSeq,
-  runAgentSwitchExclusive,
+  reserveAgentSwitchExclusive,
+  subscribeAgentSwitchPending,
 } from './agentSwitchCoordinator';
 import {
   isSelectedSourceDisconnected,
@@ -1155,6 +1159,12 @@ export function ChatInput({
   // 只镜像 fastMode),若把禁用绑到 pendingRemoteSwitch 的三元 settle 上,跨来源切换(如 GPT→Opus 必换来源)
   // 会一直 settle 不了、selector 置灰吃满 5s 兜底。乐观显示(chip 不回落默认)仍由 pendingRemoteSwitch 承接。
   const [remoteSwitchInFlight, setRemoteSwitchInFlight] = useState(false);
+  // 跨引擎切换的 pending 真源在模块级协调器：切走再切回 / 组件重挂时仍保持发送门禁。
+  const agentSwitchInFlight = useSyncExternalStore(
+    subscribeAgentSwitchPending,
+    () => !!sessionId && hasPendingAgentSwitchOperation(sessionId),
+    () => false,
+  );
 
   useEffect(() => {
     setPendingRemoteSwitch(null);
@@ -3417,6 +3427,9 @@ export function ChatInput({
     async (deliveryMode: MessageDeliveryMode = 'queue') => {
       if (!editor) return;
       if (disabled) return;
+      // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
+      // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
+      if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;
       if (dispatchSendInFlightRef.current) return;
       dispatchSendInFlightRef.current = true;
       setSendDispatchInFlight(true);
@@ -3574,6 +3587,7 @@ export function ChatInput({
     [
       editor,
       disabled,
+      sessionId,
       onSend,
       activeModel,
       activeEffort,
@@ -3977,7 +3991,10 @@ export function ChatInput({
       const sourceSessionId = sessionId;
       const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);
       const intentRevAtSend = makerChatStore.getAgentSwitchIntentRev(sourceSessionId);
+      const finishAgentSwitchOperation = beginAgentSwitchOperation(sourceSessionId);
+      const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);
       try {
+        await exclusiveTurn.ready;
         // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
         // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
         // 悬浮面板写下的 per-(目标引擎,来源,模型) 预设在此恢复。
@@ -4029,15 +4046,13 @@ export function ChatInput({
         const switchApi = deviceLinkDeviceId
           ? makerApiForDevice(deviceLinkDeviceId)
           : makerApiFor(sourceSessionId);
-        const result = await runAgentSwitchExclusive(sourceSessionId, () =>
-          switchApi.switchSessionAgent(
-            sourceSessionId,
-            targetAgentKind,
-            newModelId,
-            providerId,
-            newEffort,
-            targetFast,
-          ),
+        const result = await switchApi.switchSessionAgent(
+          sourceSessionId,
+          targetAgentKind,
+          newModelId,
+          providerId,
+          newEffort,
+          targetFast,
         );
         // device-link 往返期间可以切到另一个任务:同一路由下 ChatInput 会带着新
         // sessionId 继续渲染,sameEngineReselectRef 等闭包也已指向新会话。旧会话的
@@ -4093,10 +4108,8 @@ export function ChatInput({
           // 消息就不切引擎了)。因此把完整异步调用也排进同一条会话串行链:后续的引擎切换
           // 必须等它发完才发出,顺序由链保证。
           makerChatStore.clearAgentSwitchIntent(sourceSessionId);
-          void runAgentSwitchExclusive(sourceSessionId, async () => {
-            if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);
-            else await sameEngineReselectRef.current.byModel(newModelId);
-          });
+          if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);
+          else await sameEngineReselectRef.current.byModel(newModelId);
           return;
         }
         // 立即切换路径(harness / registry 缺省兜底,生产不走):维持旧收敛语义。
@@ -4108,6 +4121,9 @@ export function ChatInput({
         toast.error(
           t(mapIpcErrorToI18nKey(err, { fallback: 'newChat.chatInput.agentSwitch.failed' })),
         );
+      } finally {
+        exclusiveTurn.release();
+        finishAgentSwitchOperation();
       }
     },
     [
@@ -4123,7 +4139,6 @@ export function ChatInput({
       localProviders.providers,
       ccCaps.capabilities,
       codexCaps.capabilities,
-      runAgentSwitchExclusive,
     ],
   );
   // 声明顺序在 performAgentSwitch 之前的 handler(handleFastModeChange)经此 ref
@@ -4873,6 +4888,8 @@ export function ChatInput({
     noConnectedSource ||
     // 会话显式选中的来源已断开 → Send 禁用(trigger 同步显示「已断开」错误态说明原因)。
     selectedSourceDisconnected ||
+    // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
+    agentSwitchInFlight ||
     sendDispatchInFlight ||
     (!voiceInput.isListening && !canSend && !hasVoiceDraftText) ||
     voiceInput.state === 'submitting' ||

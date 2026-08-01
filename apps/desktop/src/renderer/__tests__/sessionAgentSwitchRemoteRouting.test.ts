@@ -316,6 +316,24 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
     expect(started).toEqual(['a', 'b']); // 发送顺序 = 点选顺序
   });
 
+  it('复合操作预占整条串行位置:release 前后续点选不能插进 ack 后收尾', async () => {
+    const { reserveAgentSwitchExclusive, runAgentSwitchExclusive } = await load();
+    const turn = reserveAgentSwitchExclusive('s1');
+    const started: string[] = [];
+    await turn.ready;
+    const next = runAgentSwitchExclusive('s1', () => {
+      started.push('next');
+      return Promise.resolve();
+    });
+
+    await Promise.resolve();
+    expect(started).toEqual([]);
+    turn.release();
+    await next;
+    expect(started).toEqual(['next']);
+    turn.release(); // release 幂等。
+  });
+
   it('不同 session 各自独立:A 的慢请求不拖住 B', async () => {
     const { runAgentSwitchExclusive } = await load();
     const slow = deferred<string>();
@@ -382,11 +400,44 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
   });
 
   it('dispose 释放该 session 的协调状态', async () => {
-    const { nextAgentSwitchWriteSeq, getAgentSwitchWriteSeq, disposeAgentSwitchSession } =
-      await load();
+    const {
+      beginAgentSwitchOperation,
+      nextAgentSwitchWriteSeq,
+      getAgentSwitchWriteSeq,
+      hasPendingAgentSwitchOperation,
+      disposeAgentSwitchSession,
+    } = await load();
     nextAgentSwitchWriteSeq('s1');
+    beginAgentSwitchOperation('s1');
     disposeAgentSwitchSession('s1');
     expect(getAgentSwitchWriteSeq('s1')).toBe(0);
+    expect(hasPendingAgentSwitchOperation('s1')).toBe(false);
+  });
+
+  it('完整切换 pending 按 session 计数并通知，最后一个操作完成后才放开发送', async () => {
+    const {
+      beginAgentSwitchOperation,
+      hasPendingAgentSwitchOperation,
+      subscribeAgentSwitchPending,
+    } = await load();
+    const notifications: boolean[] = [];
+    const unsubscribe = subscribeAgentSwitchPending(() => {
+      notifications.push(hasPendingAgentSwitchOperation('s1'));
+    });
+    const finishA = beginAgentSwitchOperation('s1');
+    const finishB = beginAgentSwitchOperation('s1');
+    beginAgentSwitchOperation('s2');
+
+    expect(hasPendingAgentSwitchOperation('s1')).toBe(true);
+    finishA();
+    expect(hasPendingAgentSwitchOperation('s1')).toBe(true);
+    finishA(); // 完成函数幂等，不误减另一个操作。
+    expect(hasPendingAgentSwitchOperation('s1')).toBe(true);
+    finishB();
+    expect(hasPendingAgentSwitchOperation('s1')).toBe(false);
+    expect(hasPendingAgentSwitchOperation('s2')).toBe(true);
+    expect(notifications).toEqual([true, true, true, true, false]);
+    unsubscribe();
   });
 });
 
@@ -495,7 +546,9 @@ describe('ChatInput 的入口门控与调用路由', () => {
   });
 
   it('切换写入走模块级协调层(串行链与写序号按 session,不随组件卸载归零)', () => {
-    expect(source).toContain('const result = await runAgentSwitchExclusive(sourceSessionId, () =>');
+    expect(source).toContain('const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);');
+    expect(source).toContain('await exclusiveTurn.ready;');
+    expect(source).toContain('exclusiveTurn.release();');
     expect(source).toContain('const writeSeq = nextAgentSwitchWriteSeq(sourceSessionId);');
     expect(source).toContain('writeSeqNow: getAgentSwitchWriteSeq(sourceSessionId),');
     // 组件内不得再持有队列/序号 ref,否则重挂后又会分叉出第二条空队列。
@@ -503,12 +556,36 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).not.toContain('agentSwitchQueueRef');
   });
 
-  it('同引擎重选也进串行链:它的 SET_MODEL 在被控端会无条件清 pending intent', () => {
-    // fire-and-forget 时这条慢请求可能在用户随后登记的新跨引擎意图之后才落地,把它清掉。
-    expect(source).toContain('void runAgentSwitchExclusive(sourceSessionId, async () => {');
-    expect(source).toContain(
-      'if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);',
+  it('同引擎重选与前置 invoke 共占一个串行位置，并在用最新 ref 前校验会话', () => {
+    const reservation = source.indexOf(
+      'const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);',
     );
+    const invoke = source.indexOf(
+      'const result = await switchApi.switchSessionAgent(',
+      reservation,
+    );
+    const scopeGuard = source.indexOf(
+      'if (!isSessionScopeCurrent(sourceSessionId, currentSessionIdRef.current)) return;',
+      invoke,
+    );
+    const reselect = source.indexOf(
+      'if (providerId) await sameEngineReselectRef.current.byProvider(providerId, newModelId);',
+      scopeGuard,
+    );
+    const release = source.indexOf('exclusiveTurn.release();', reselect);
+    expect(reservation).toBeGreaterThanOrEqual(0);
+    expect(invoke).toBeGreaterThan(reservation);
+    expect(scopeGuard).toBeGreaterThan(invoke);
+    expect(reselect).toBeGreaterThan(scopeGuard);
+    expect(release).toBeGreaterThan(reselect);
+  });
+
+  it('切换意图登记完成前所有发送入口都被同步门禁，组件重挂后 pending 仍可见', () => {
+    expect(source).toContain('const agentSwitchInFlight = useSyncExternalStore(');
+    expect(source).toContain('const finishAgentSwitchOperation = beginAgentSwitchOperation(');
+    expect(source).toContain('finishAgentSwitchOperation();');
+    expect(source).toContain('if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;');
+    expect(source).toContain('agentSwitchInFlight ||');
   });
 
   it('远程分支用稳定 deviceId 直连隧道:relay 瞬时重连会清空 sessionId→deviceId 索引', () => {
