@@ -94,6 +94,7 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
   const behaviorRef = useRef<Behavior | null>(null);
   const confirmedRef = useRef<Behavior | null>(null);
   const pendingWrites = useRef(0);
+  const saveFailed = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestRevision = useRef(0);
   const mounted = useRef(true);
@@ -108,6 +109,7 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
 
   useEffect(() => {
     let cancelled = false;
+    saveFailed.current = false;
     setError(null);
     const load =
       source === 'official'
@@ -171,26 +173,35 @@ export function TelegramBehaviorSettings({ source = 'personal' }: { source?: Set
           setError(null);
         }
       } catch {
-        if (revision !== latestRevision.current) return;
-        let authoritative = confirmedRef.current;
-        try {
-          authoritative =
-            source === 'official'
-              ? await window.electronAPI.hookControl
-                  .getTelegramBehavior()
-                  .then((value) => value.behavior)
-              : await window.electronAPI.telegramBot.getBehavior();
-          confirmedRef.current = authoritative;
-        } catch {
-          // Keep the last confirmed snapshot; the inline retry remains available.
-        }
-        if (mounted.current && authoritative !== null) {
-          behaviorRef.current = authoritative;
-          setBehavior(authoritative);
-          setError('save');
-        }
+        saveFailed.current = true;
       } finally {
         pendingWrites.current -= 1;
+        if (pendingWrites.current === 0 && saveFailed.current) {
+          const reconcileRevision = latestRevision.current;
+          let authoritative = confirmedRef.current;
+          try {
+            authoritative =
+              source === 'official'
+                ? await window.electronAPI.hookControl
+                    .getTelegramBehavior()
+                    .then((value) => value.behavior)
+                : await window.electronAPI.telegramBot.getBehavior();
+            confirmedRef.current = authoritative;
+          } catch {
+            // Keep the last confirmed snapshot; the inline retry remains available.
+          }
+          if (
+            mounted.current &&
+            pendingWrites.current === 0 &&
+            reconcileRevision === latestRevision.current &&
+            authoritative !== null
+          ) {
+            saveFailed.current = false;
+            behaviorRef.current = authoritative;
+            setBehavior(authoritative);
+            setError('save');
+          }
+        }
       }
     });
   };
@@ -431,6 +442,7 @@ export function TelegramGroupActivationSettings({
   const groupsRef = useRef<TelegramHookKnownGroup[] | null>(null);
   const confirmedRef = useRef<TelegramHookKnownGroup[] | null>(null);
   const pendingWrites = useRef(0);
+  const saveFailed = useRef(false);
   const saveQueue = useRef<Promise<void>>(Promise.resolve());
   const latestRevision = useRef(0);
   const mounted = useRef(true);
@@ -445,6 +457,7 @@ export function TelegramGroupActivationSettings({
 
   useEffect(() => {
     let cancelled = false;
+    saveFailed.current = false;
     setError(null);
     const load =
       source === 'official'
@@ -530,25 +543,34 @@ export function TelegramGroupActivationSettings({
         }
         if (mounted.current && revision === latestRevision.current) setError(null);
       } catch {
-        if (revision !== latestRevision.current) return;
-        let authoritative = confirmedRef.current;
-        try {
-          authoritative = (
-            source === 'official'
-              ? await window.electronAPI.hookControl.listTelegramGroups()
-              : await window.electronAPI.telegramBot.listGroups()
-          ).groups;
-          confirmedRef.current = authoritative;
-        } catch {
-          // Keep the last confirmed snapshot; the inline retry remains available.
-        }
-        if (mounted.current && authoritative !== null) {
-          groupsRef.current = authoritative;
-          setGroups(authoritative);
-          setError('save');
-        }
+        saveFailed.current = true;
       } finally {
         pendingWrites.current -= 1;
+        if (pendingWrites.current === 0 && saveFailed.current) {
+          const reconcileRevision = latestRevision.current;
+          let authoritative = confirmedRef.current;
+          try {
+            authoritative = (
+              source === 'official'
+                ? await window.electronAPI.hookControl.listTelegramGroups()
+                : await window.electronAPI.telegramBot.listGroups()
+            ).groups;
+            confirmedRef.current = authoritative;
+          } catch {
+            // Keep the last confirmed snapshot; the inline retry remains available.
+          }
+          if (
+            mounted.current &&
+            pendingWrites.current === 0 &&
+            reconcileRevision === latestRevision.current &&
+            authoritative !== null
+          ) {
+            saveFailed.current = false;
+            groupsRef.current = authoritative;
+            setGroups(authoritative);
+            setError('save');
+          }
+        }
       }
     });
   };

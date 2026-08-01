@@ -40,10 +40,12 @@ const behavior: TelegramHookBehaviorState = {
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
-  const promise = new Promise<T>((done) => {
+  let reject!: (reason?: unknown) => void;
+  const promise = new Promise<T>((done, fail) => {
     resolve = done;
+    reject = fail;
   });
-  return { promise, resolve };
+  return { promise, resolve, reject };
 }
 
 beforeEach(() => {
@@ -112,6 +114,52 @@ describe('official Telegram behavior settings', () => {
           .getAttribute('aria-pressed'),
       ).toBe('true'),
     );
+  });
+
+  it('队列中较早写入失败也会在排空后重读并提示', async () => {
+    const first = deferred<{ behavior: typeof behavior }>();
+    const authoritative = { ...behavior, replyQuoteGroup: 'all' as const };
+    api.getTelegramBehavior
+      .mockReset()
+      .mockResolvedValueOnce({ behavior })
+      .mockResolvedValueOnce({ behavior: authoritative });
+    api.setTelegramBehavior
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({ behavior: authoritative });
+    render(<TelegramBehaviorSettings source="official" />);
+
+    fireEvent.click(
+      await screen.findByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.expressive',
+      }),
+    );
+    fireEvent.click(
+      screen.getByRole('button', {
+        name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
+      }),
+    );
+    await waitFor(() => expect(api.setTelegramBehavior).toHaveBeenCalledTimes(1));
+    first.reject(new Error('first write failed'));
+
+    expect(
+      await screen.findByText('settings.remoteControl.hook.telegram.behavior.error.save'),
+    ).toBeTruthy();
+    expect(api.setTelegramBehavior).toHaveBeenCalledTimes(2);
+    expect(api.getTelegramBehavior).toHaveBeenCalledTimes(2);
+    expect(
+      screen
+        .getByRole('button', {
+          name: 'settings.remoteControl.hook.telegram.behavior.emojiOption.minimal',
+        })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
+    expect(
+      screen
+        .getByRole('button', {
+          name: 'settings.remoteControl.hook.telegram.behavior.quoteOption.all',
+        })
+        .getAttribute('aria-pressed'),
+    ).toBe('true');
   });
 
   it('写入失败后恢复权威值并给出可重试提示', async () => {
@@ -194,5 +242,47 @@ describe('official Telegram behavior settings', () => {
         })
         .getAttribute('aria-pressed'),
     ).toBe('true');
+  });
+
+  it('群模式队列中较早失败不会被后续成功静默吞掉', async () => {
+    const first = deferred<{ behavior: typeof behavior }>();
+    const initialGroups = [
+      { chatId: '-1001', chatName: 'Ops', activation: 'mention' as const },
+      { chatId: '-1002', chatName: 'Eng', activation: 'mention' as const },
+    ];
+    const authoritativeGroups = [
+      initialGroups[0],
+      { ...initialGroups[1], activation: 'always' as const },
+    ];
+    api.listTelegramGroups
+      .mockReset()
+      .mockResolvedValueOnce({ groups: initialGroups })
+      .mockResolvedValueOnce({ groups: authoritativeGroups });
+    api.setTelegramGroupActivation
+      .mockImplementationOnce(() => first.promise)
+      .mockResolvedValueOnce({
+        behavior: { ...behavior, groupActivation: { '-1002': 'always' as const } },
+      });
+    render(<TelegramGroupActivationSettings source="official" />);
+
+    expect(await screen.findByText('Ops')).toBeTruthy();
+    const alwaysButtons = screen.getAllByRole('button', {
+      name: 'settings.remoteControl.hook.telegram.groups.mode.always',
+    });
+    fireEvent.click(alwaysButtons[0]);
+    fireEvent.click(alwaysButtons[1]);
+    await waitFor(() => expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(1));
+    first.reject(new Error('first group write failed'));
+
+    expect(
+      await screen.findByText('settings.remoteControl.hook.telegram.groups.error.save'),
+    ).toBeTruthy();
+    expect(api.setTelegramGroupActivation).toHaveBeenCalledTimes(2);
+    expect(api.listTelegramGroups).toHaveBeenCalledTimes(2);
+    const mentionButtons = screen.getAllByRole('button', {
+      name: 'settings.remoteControl.hook.telegram.groups.mode.mention',
+    });
+    expect(mentionButtons[0].getAttribute('aria-pressed')).toBe('true');
+    expect(alwaysButtons[1].getAttribute('aria-pressed')).toBe('true');
   });
 });
