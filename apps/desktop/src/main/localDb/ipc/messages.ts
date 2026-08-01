@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, count, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -712,7 +712,6 @@ export async function commitMessageDeletion(
   deletedClientIds: string[];
   updatedAt: number;
   preview: string | null;
-  messageCount: number;
 }> {
   const now = Date.now();
   const result = await getDbClient().tx('message.delete', {
@@ -747,11 +746,27 @@ export async function commitMessageDeletion(
   }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
-  // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出
-  // canonical session-list projection，避免其它窗口 / device-link 控制端继续显示
-  // 已删除的末条消息预览或旧 _count。count 口径与 sessions:list / preview 的可见消息保持一致。
+  // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
+  // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
+  // sessions:list 的 LATEST_MSG_CONTENT_SQL 一致：可见 user/assistant，过滤 rewind_at /
+  // agentMeta.autoResume / cleared_at。
+  //
+  // 刻意**不**广播 `_count.messages`：列表里 `_count.messages` 的权威口径是该会话的全部
+  // messages 行数（sessions.ts 的 SESSION_MESSAGE_COUNT_SQL / MESSAGE_COUNT_COL，不过滤
+  // role / rewind_at / cleared_at），而下面这个可见投影只数 user/assistant 行——一个正常
+  // 会话里 tool_use / tool_result / thinking / error 行往往是它的几十倍，拿它去 patch 会把
+  // 侧栏与手机端卡片的「N 条消息」改成明显偏小的值，且 shallow merge 消费端不会自己纠正，
+  // 错值一直留到下次完整 reseed。
+  //
+  // 那为什么不顺手广播权威口径？因为删除对它的影响只有 0 或 +1，不值得每次删除多跑一次
+  // 全表 count：message.delete 事务（worker/opHandlers/tx.ts）先物理删掉该会话所有旧
+  // context_rebuild 行，再把目标行原地改成 message_tombstone（保留，不删行），最后插入
+  // 一个新的 context_rebuild 行——首次删除（无旧标记）净 +1，之后每次删旧插新、净 0。
+  // 差的这一行是用户看不见的隐藏派生行（普通列表 / 搜索 / 导出都按 rewind_at 过滤掉它），
+  // 下次完整 reseed 即收敛；而事务外单独查的标量本身也带竞态（并发落消息时它已不等于
+  // 「删除后那一刻」的值）。要真的同步就得广播不过滤的 count(*)，见 issue #1282 的讨论。
+  // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
-  let messageCount = 0;
   try {
     const db = getDbClient().drizzle;
     const [sessionRow] = await db
@@ -768,20 +783,13 @@ export async function commitMessageDeletion(
       sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
       visibleAfterClear,
     );
-    const [[countRow], [latestRow]] = await Promise.all([
-      db
-        .select({ messageCount: count(messages.id) })
-        .from(messages)
-        .where(visibleMessageProjection),
-      db
-        .select({ content: messages.content, role: messages.role })
-        .from(messages)
-        .where(visibleMessageProjection)
-        .orderBy(desc(messages.createdAt), desc(messageRowid))
-        .limit(1),
-    ]);
+    const [latestRow] = await db
+      .select({ content: messages.content, role: messages.role })
+      .from(messages)
+      .where(visibleMessageProjection)
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(1);
     preview = extractMessagePreview(latestRow?.content, latestRow?.role);
-    messageCount = countRow?.messageCount ?? 0;
   } catch (error) {
     // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
     // 后续 sessions:list / reseed 会按 DB 真相收敛。
@@ -796,7 +804,6 @@ export async function commitMessageDeletion(
     deletedClientIds: result.messages.map((message) => message.clientId),
     updatedAt: now,
     preview,
-    messageCount,
   };
 }
 

@@ -5269,20 +5269,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     setPendingHandoff: (sessionId, handoff, expectedGeneration) =>
       agentHandoffPending.set(sessionId, handoff, expectedGeneration),
     readPendingHandoffGeneration: (sessionId) => agentHandoffPending.readGeneration(sessionId),
-    onCommitted: (
-      { sessionId, deletedClientIds, updatedAt, preview, messageCount },
-      requestedClientId,
-    ) => {
+    onCommitted: ({ sessionId, deletedClientIds, updatedAt, preview }, requestedClientId) => {
       broadcastMessageDeleted({
         sessionId,
         clientId: requestedClientId,
         clientIds: deletedClientIds,
       });
+      // 不带 _count:可见消息数不是列表的权威口径,拿它 patch 的错值会被 shallow merge 一直
+      // 留住;权威口径受删除影响只有 0 或 +1,交给 sessions:list / reseed 收敛就够。
+      // 见 commitMessageDeletion 的注释与 issue #1282。
       broadcastSessionPatched(sessionId, {
         sdkSessionId: null,
         updatedAt: new Date(updatedAt).toISOString(),
         preview,
-        _count: { messages: messageCount },
       });
     },
     withCloseSuppressed: withRehydrateCloseSuppressed,
