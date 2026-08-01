@@ -1436,3 +1436,34 @@ describe('cwd大小写/timeout值选项/find-exec包装器/bash环境导出/盘�
     expect(isProtectedSystemPath('/repo/Windows/x')).toBe(false);
   });
 });
+
+describe('自审补: su/runuser 提权 + 输出进程替换分段(第二十五批)', () => {
+  it('su / runuser 提权在命令位命中确定性红线', () => {
+    for (const c of [
+      'su',
+      'su -',
+      'su -c "rm -rf /"',
+      'su root -c whoami',
+      'ls; su',
+      'sudo su',
+      'runuser -u root -- rm -rf /outside',
+      'xargs su',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+  });
+
+  it('无关文本里的 "su" 子串不误升(降打扰)', () => {
+    // su 不在命令位:作为参数/消息/路径的一部分。
+    expect(classifyShellCommand('git commit -m "su"', roots)).not.toBe('prompt-each-time');
+    expect(classifyShellCommand('echo super', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('cat sub/notes.txt', roots)).toBe('auto-approve');
+  });
+
+  it('输出进程替换 >(...) 内的分隔符不被误当顶层,内层 eval 仍命中', () => {
+    // >(...) 里的 `;` 不应把命令截断;其中的 eval 经 substitutionBodies 递归命中红线。
+    expect(classifyShellCommand('echo >(eval "$X"; ls)', roots)).toBe('prompt-each-time');
+    // 良性输出进程替换保持灰区(不误升)。
+    expect(classifyShellCommand('tee >(cat; wc -l) < in', roots)).toBe('prompt');
+  });
+});

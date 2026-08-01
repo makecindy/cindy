@@ -204,7 +204,10 @@ export function isProtectedSystemPath(target: string): boolean {
  * 提权 / 系统与磁盘控制 / 凭证访问 / fork bomb / 全局权限放宽。
  */
 const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
-  /\b(?:sudo|doas)\b/,                                   // 提权
+  /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+  // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
+  // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
+  /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
   /\b(?:mkfs|fdisk|dd)\b/,                               // 磁盘/文件系统操作
   /(?:^|\s)>\s*\/dev\/[sh]d/,                            // 写块设备
   /\b(?:shutdown|reboot|halt|poweroff)\b/,               // 系统电源
@@ -589,7 +592,9 @@ function splitExecutableSegments(command: string): ExecutableSegment[] {
     if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
     if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
     if (singleQuoted || doubleQuoted) continue;
-    if ((char === '$' || char === '<') && command[i + 1] === '(') {
+    // `$(` 命令替换、`<(`/`>(` 进程替换都成组,组内的 `|`/`;` 不是顶层分隔符 → 一并按深度跳过
+    // (自审补:此前漏了输出进程替换 `>(`,`>(cmd1; cmd2)` 里的 `;` 会被误当顶层分隔)。
+    if ((char === '$' || char === '<' || char === '>') && command[i + 1] === '(') {
       substitutionDepth += 1;
       i++;
       continue;
