@@ -16,7 +16,7 @@
  *   --msg-tool-card-chevron: secondary(completed 置灰)
  */
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CircleCheck, CircleDashed, Circle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import type { MessageRenderTodoItem } from '@cindy/maker-shared/message-render';
@@ -45,6 +45,11 @@ export function TodoListCard({
 }) {
   const { t } = useTranslation();
   const [revealed, setRevealed] = useState(false);
+  const [renderFlyout, setRenderFlyout] = useState(false);
+
+  useEffect(() => {
+    if (revealed) setRenderFlyout(true);
+  }, [revealed]);
 
   if (!todos || todos.length === 0) return null;
 
@@ -56,93 +61,102 @@ export function TodoListCard({
   const hasActive = todos.some((todo) => todo.status === 'in_progress');
 
   return (
-    <div
-      className="relative flex w-full justify-center"
-      onMouseEnter={() => setRevealed(true)}
-      onMouseLeave={() => setRevealed(false)}
-    >
-      {/* Hover flyout — 完整清单向上浮出;绝对定位不占布局高度,消息流不抖动。 */}
-      {revealed && (
-        <div
+    <div className="flex w-full justify-center">
+      <div
+        className="relative inline-flex items-center justify-center"
+        onMouseEnter={() => setRevealed(true)}
+        onMouseLeave={() => setRevealed(false)}
+      >
+        {/* Hover flyout — 完整清单向上浮出;绝对定位不占布局高度,消息流不抖动。 */}
+        {renderFlyout && (
+          <>
+            <div className="absolute bottom-full left-1/2 h-2 min-w-full -translate-x-1/2" aria-hidden="true" />
+            <div
+              className={cn(
+                'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
+                'w-max min-w-[220px] max-w-[min(420px,calc(100vw-32px))]',
+                'origin-bottom overflow-hidden rounded-[12px]',
+                'border border-[var(--msg-tool-card-border)]',
+                'bg-[var(--msg-tool-card-bg)]',
+                revealed ? 'animate-float-in' : 'animate-float-out',
+              )}
+              onAnimationEnd={() => {
+                if (!revealed) setRenderFlyout(false);
+              }}
+            >
+              <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
+                {todos.map((todo, i) => (
+                  <div
+                    key={i}
+                    className={cn(
+                      'flex h-[30px] items-center gap-[10px]',
+                      todo.status === 'in_progress' && animated && 'animate-pulse',
+                    )}
+                  >
+                    {/* Icon */}
+                    {todo.status === 'completed' && (
+                      <CircleCheck size={18} strokeWidth={1.5} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
+                    )}
+                    {todo.status === 'in_progress' && (
+                      <Spinner
+                        icon={CircleDashed}
+                        size={18}
+                        strokeWidth={1.5}
+                        spinning={animated}
+                        className="text-[var(--msg-tool-card-text)]"
+                      />
+                    )}
+                    {todo.status === 'pending' && (
+                      <Circle size={18} strokeWidth={1.5} className="shrink-0 text-[var(--msg-tool-card-text)]" />
+                    )}
+
+                    {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
+                    <span
+                      className={cn(
+                        'mt-px truncate text-13',
+                        todo.status === 'completed' && 'font-normal text-[var(--msg-tool-card-chevron)]',
+                        todo.status === 'in_progress' && 'font-semibold text-[var(--msg-tool-card-text)]',
+                        todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
+                      )}
+                    >
+                      {todo.content}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
+        <button
+          type="button"
+          onClick={() => setRevealed((prev) => !prev)}
           className={cn(
-            'absolute bottom-full left-1/2 z-10 mb-2 -translate-x-1/2',
-            'w-max min-w-[220px] max-w-full',
-            'overflow-hidden rounded-[12px]',
+            'flex items-center gap-2 rounded-full',
             'border border-[var(--msg-tool-card-border)]',
             'bg-[var(--msg-tool-card-bg)]',
+            'px-[14px] py-[8px]',
+            'cursor-pointer select-none',
+            'hover:opacity-80 transition-opacity',
           )}
         >
-          <div className="flex max-h-[280px] flex-col gap-[2px] overflow-y-auto px-[14px] py-[10px]">
-            {todos.map((todo, i) => (
-              <div
-                key={i}
-                className={cn(
-                  'flex h-[30px] items-center gap-[10px]',
-                  todo.status === 'in_progress' && animated && 'animate-pulse',
-                )}
-              >
-                {/* Icon */}
-                {todo.status === 'completed' && (
-                  <CircleCheck size={18} strokeWidth={1.5} className="shrink-0 text-[var(--msg-tool-card-chevron)]" />
-                )}
-                {todo.status === 'in_progress' && (
-                  <Spinner
-                    icon={CircleDashed}
-                    size={18}
-                    strokeWidth={1.5}
-                    spinning={animated}
-                    className="text-[var(--msg-tool-card-text)]"
-                  />
-                )}
-                {todo.status === 'pending' && (
-                  <Circle size={18} strokeWidth={1.5} className="shrink-0 text-[var(--msg-tool-card-text)]" />
-                )}
-
-                {/* Text — 对齐 Codex:completed 置灰,in_progress 高亮,pending 正常。 */}
-                <span
-                  className={cn(
-                    'mt-px truncate text-13',
-                    todo.status === 'completed' && 'font-normal text-[var(--msg-tool-card-chevron)]',
-                    todo.status === 'in_progress' && 'font-semibold text-[var(--msg-tool-card-text)]',
-                    todo.status === 'pending' && 'font-normal text-[var(--msg-tool-card-text)]',
-                  )}
-                >
-                  {todo.content}
-                </span>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Collapsed pill — `[icon] Step N / M`,点击/Enter 也可切换浮层(键盘可达)。 */}
-      <button
-        type="button"
-        onClick={() => setRevealed((prev) => !prev)}
-        className={cn(
-          'flex items-center gap-2 rounded-full',
-          'border border-[var(--msg-tool-card-border)]',
-          'bg-[var(--msg-tool-card-bg)]',
-          'px-[14px] py-[8px]',
-          'cursor-pointer select-none',
-          'hover:opacity-80 transition-opacity',
-        )}
-      >
-        {allDone ? (
-          <CircleCheck size={14} strokeWidth={2} className="shrink-0 text-[var(--msg-tool-card-text)]" />
-        ) : (
-          <Spinner
-            icon={CircleDashed}
-            size={14}
-            strokeWidth={2}
-            spinning={animated && hasActive}
-            className="shrink-0 text-[var(--msg-tool-card-text)]"
-          />
-        )}
-        <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
-          {t('chat.planPill.step', { current: currentStep, total })}
-        </span>
-      </button>
+          {allDone ? (
+            <CircleCheck size={14} strokeWidth={2} className="shrink-0 text-[var(--msg-tool-card-text)]" />
+          ) : (
+            <Spinner
+              icon={CircleDashed}
+              size={14}
+              strokeWidth={2}
+              spinning={animated && hasActive}
+              className="shrink-0 text-[var(--msg-tool-card-text)]"
+            />
+          )}
+          <span className="text-13 leading-none tabular-nums text-[var(--msg-tool-card-text)]">
+            {t('chat.planPill.step', { current: currentStep, total })}
+          </span>
+        </button>
+      </div>
     </div>
   );
 }

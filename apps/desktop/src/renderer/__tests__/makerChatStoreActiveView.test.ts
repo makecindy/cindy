@@ -68,6 +68,10 @@ function addMessage(sessionId: string): void {
   makerChatStore.insertSystemCard(sessionId, 'status', { label: sessionId });
 }
 
+async function flushPromises(rounds = 6): Promise<void> {
+  for (let i = 0; i < rounds; i += 1) await Promise.resolve();
+}
+
 function dbMessage(
   sessionId: string,
   id: string,
@@ -85,6 +89,26 @@ function dbMessage(
     agentMeta: null,
     createdAt,
   };
+}
+
+function dbToolUseMessage(
+  sessionId: string,
+  id: string,
+  toolName: string,
+  input: unknown,
+  createdAt: string,
+): Message {
+  const toolUseId = `tool-${id}`;
+  return {
+    id,
+    clientId: `client-${id}`,
+    sessionId,
+    role: 'tool_use',
+    content: { toolName, input, toolUseId },
+    toolUseId,
+    agentMeta: null,
+    createdAt,
+  } as unknown as Message;
 }
 
 function thinkingDbMessage(
@@ -186,6 +210,40 @@ describe('makerChatStore active view tracking', () => {
     // 非空泛验证:回收确实发生了 —— 最早创建的 idle 会话(非 active)已被 purge,
     // 重新 getSnapshot 只会拿到重建的空 slice。
     expect(makerChatStore.getSnapshot(otherIds[0]).messages).toHaveLength(0);
+  });
+
+  it('initial history load backfills to the latest plan boundary', async () => {
+    const sessionId = sid('initial-plan-backfill');
+    const latestPage = Array.from({ length: 50 }, (_, i) =>
+      dbMessage(
+        sessionId,
+        `latest-${String(i).padStart(2, '0')}`,
+        `latest message ${i}`,
+        new Date(BASE_TIME.getTime() + (60 + i) * 1000).toISOString(),
+      ),
+    );
+    const planRow = dbToolUseMessage(
+      sessionId,
+      'older-plan',
+      'update_plan',
+      { plan: [{ step: 'Restore pinned plan', status: 'in_progress' }] },
+      new Date(BASE_TIME.getTime() + 30_000).toISOString(),
+    );
+    vi.mocked(messageService.list)
+      .mockResolvedValueOnce(latestPage)
+      .mockResolvedValueOnce([planRow]);
+
+    makerChatStore.ensureInitialMessages(sessionId);
+    await flushPromises();
+
+    const snapshot = makerChatStore.getSnapshot(sessionId);
+    expect(messageService.list).toHaveBeenNthCalledWith(1, sessionId, undefined);
+    expect(messageService.list).toHaveBeenNthCalledWith(2, sessionId, {
+      limit: 50,
+      before: 'latest-00',
+    });
+    expect(snapshot.messages.some((message) => message.toolName === 'update_plan')).toBe(true);
+    expect(snapshot.oldestMessageId).toBe('older-plan');
   });
 
   it('enterView disposer leaves the session', () => {

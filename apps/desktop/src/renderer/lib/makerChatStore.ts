@@ -23,7 +23,10 @@
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import {
+  applyCodexPlanSnapshotOnDone,
+  findLatestMessageTodoInsertion,
+} from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
   type WorkflowProgressEntry,
@@ -5427,7 +5430,7 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
 
-      // no-anchor-backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
+      // no-anchor / plan-boundary backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
       // 而 MessageStream 在 visibleRenderItems.length === 0 时不触发自动翻页 —— 结果是
       // DB 里有 2000+ 条消息,重启后 ChatView 渲染 0 项,看起来"内容消失了"。
       // 两类命中(见 isNonAnchorHistoryRow):
@@ -5435,8 +5438,12 @@ function ensureInitialMessages(sessionId: string): void {
       //   - 全是被隐藏的 thinking 行:如一轮搜索密集、在产出可见正文前就失败的会话,
       //     最新 50 行可能全是加密推理;
       //   - 合成指令行:渲染 null,混在上面两类里同样撑不出可见锚点。
-      // 这里继续往前翻页,直到出现可渲染锚点或翻完。
-      // 上限 10 页(500 行)防御异常长的连续无锚点队列。
+      //
+      // PinnedPlanPanel 的唯一数据源同样是当前消息窗口。计划工具行不再在消息流中渲染,
+      // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
+      // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
+      //
+      // 上限 10 页(500 行)防御异常长的连续无锚点/无计划队列。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5455,7 +5462,7 @@ function ensureInitialMessages(sessionId: string): void {
       while (
         hasMore &&
         pagesFetched < MAX_BACKFILL_PAGES &&
-        merged.every(isNonAnchorHistoryRow)
+        (merged.every(isNonAnchorHistoryRow) || !historyRowsContainPlanSnapshot(merged))
       ) {
         pagesFetched += 1;
         try {
@@ -9486,6 +9493,10 @@ function oldestChatMessage(rows: ChatMessage[]): ChatMessage | null {
 
 function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
+}
+
+function historyRowsContainPlanSnapshot(rows: Message[]): boolean {
+  return findLatestMessageTodoInsertion(mapServerMessages([...rows])) !== null;
 }
 
 function shouldStopRemoteReconciliationAtOverlap(
