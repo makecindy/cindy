@@ -126,6 +126,7 @@
       "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
+      "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
@@ -2246,6 +2247,14 @@
         "label": "기본 셸",
         "description": "기본값을 변경해도 새 터미널 탭에만 적용되며 기존 터미널은 영향을 받지 않습니다.",
         "selectAria": "기본 터미널 셸 선택"
+      }
+    },
+    "composer": {
+      "title": "메시지 입력",
+      "sendShortcut": {
+        "label": "{{shortcut}}로 보내기",
+        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기"
       }
     },
     "linkOpen": {
@@ -4720,6 +4729,7 @@
       "send": "메시지 전송",
       "queue": "대기열에 추가",
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
+      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
       "stop": "생성 중지"
     },
     "pluginSetup": {

@@ -126,6 +126,7 @@
       "subagentModels": "Subagents",
       "compaction": "Context compaction",
       "terminalShell": "Default terminal shell",
+      "composer": "Message input",
       "linkOpen": "Link open behavior",
       "compatMode": "Tips",
       "voiceInput": "Voice input",
@@ -2247,6 +2248,14 @@
         "label": "Default shell",
         "description": "Changing the default only applies to new terminal tabs. Existing terminals are not affected.",
         "selectAria": "Select default terminal shell"
+      }
+    },
+    "composer": {
+      "title": "Message input",
+      "sendShortcut": {
+        "label": "Use {{shortcut}} to send",
+        "hint": "When enabled, {{shortcut}} sends messages. When disabled, Enter sends messages and Shift+Enter inserts a new line.",
+        "ariaLabel": "Use {{shortcut}} to send messages"
       }
     },
     "linkOpen": {
@@ -4722,6 +4731,7 @@
       "send": "Send message",
       "queue": "Queue message",
       "queueTooltip": "Click to queue; press {{shortcut}} to steer without interrupting the task",
+      "queueTooltipSendMode": "Click to queue; press {{shortcut}} to send this message",
       "stop": "Stop generating"
     },
     "pluginSetup": {
