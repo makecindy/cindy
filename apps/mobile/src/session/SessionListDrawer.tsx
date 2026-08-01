@@ -34,7 +34,13 @@ import { Gesture, GestureDetector } from '@/platform/gestureHandler';
 import { useReduceMotionEnabled } from '@/hooks/useReduceMotion';
 import { buildHomeSections, type HomeRow, type HomeSection } from '@/session/homeSections';
 import { buildMobileHomePresentation, excludeOrcaWorkerSessions } from '@/session/mobileHome';
-import { remoteSessionStore, useRemoteSessions, useSessionRunning } from '@/session/remoteSessionStore';
+import {
+  remoteSessionStore,
+  useRemoteSessions,
+  useRemoteSessionStoreVersion,
+  useSessionRunning,
+} from '@/session/remoteSessionStore';
+import type { RemoteSessionLiveActivity } from '@/session/sessionList';
 import { resolveMobileSessionRightStatus } from '@/session/sessionRightStatus';
 import {
   buildRemoteSessionCardPreview,
@@ -187,19 +193,39 @@ export function SessionListDrawer({
   // 与首页同一套展示模型(排序 / 置顶区 / 自动化折叠);未挂载时跳过重建,
   // 常驻宽屏页面时不为收起的抽屉付 presentation 成本。
   const sessions = useRemoteSessions();
+  // storeVersion:pending 交互 / liveActivity 不在 sessions 数组身份里,靠版本号驱动重算
+  // (与首页两个 index 的依赖口径一致);未挂载时 memo 早退,不为收起的抽屉付这份成本。
+  const storeVersion = useRemoteSessionStoreVersion();
   const sections = useMemo<HomeSection[]>(() => {
     if (!mounted) return [];
+    void storeVersion;
+    // 与首页同口径的行内状态输入:等待授权/回复(awaiting)与 live error/done 都来自
+    // 这两个 index,缺了会全部退化成普通时间行。
+    const pendingInteractionIndex = new Map(
+      sessions
+        .map((session) => [session.id, remoteSessionStore.getPendingInteractions(session.id).length] as const)
+        .filter(([, count]) => count > 0),
+    );
+    const liveActivityEntries: Array<[string, RemoteSessionLiveActivity]> = [];
+    for (const session of sessions) {
+      const liveActivity = remoteSessionStore.getSessionLiveActivity(session.id);
+      if (liveActivity) liveActivityEntries.push([session.id, liveActivity]);
+    }
     const home = buildMobileHomePresentation({
       // 权威设备身份必须随会话一起进 presentation:canonicalizeSessionDevice 会按传入
       // devices 重算并覆盖 canonicalDeviceId,空列表会把 store 已认领好的规范 id 打回
       // 弱推断(re-link 后点行路由到旧物理设备)。store 身份变化会触发 sessions 重算,
       // 本 memo 以 sessions 为依赖即可保持同步。
       devices: remoteSessionStore.getDeviceIdentity(),
+      liveActivityIndex: new Map(liveActivityEntries),
+      pendingInteractionIndex,
       sessions: excludeOrcaWorkerSessions(sessions),
       statusFilter: 'active',
+      // 已解析的 i18n 文案传给共享层(共享层不出中文串;en/ja/ko 不再回退「未命名任务」)。
+      unnamedLabel: t('session.menu.unnamedTitle'),
     });
     return buildHomeSections(home, false, false);
-  }, [mounted, sessions]);
+  }, [mounted, sessions, storeVersion, t]);
   const hasRows = useMemo(
     () => sections.some((section) => section.data.length > 0),
     [sections],
@@ -506,6 +532,9 @@ const makeStyles = (colors: ThemeColors) =>
       borderRadius: radius.container,
       // 标题与预览行距 2pt 微调:xs(4) 会把双行行高撑过 56,列表密度掉档。
       gap: 2,
+      // 无预览的单行任务行只有 42(22+20),minHeight 补足 44 触控底线;居中让单行不顶格。
+      justifyContent: 'center',
+      minHeight: 44,
       paddingHorizontal: spacing.sm,
       // sm+2 微调:凑出双行行高 ≈56 的触控行,md(12) 会松成 60+。
       paddingVertical: spacing.sm + 2,

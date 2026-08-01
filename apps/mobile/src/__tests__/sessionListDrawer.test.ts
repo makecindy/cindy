@@ -48,6 +48,10 @@ describe('mobile session list drawer', () => {
     expect(text).toContain('pointerEvents="auto"');
     // 抽屉 presentation 必须带权威设备身份,防 canonicalDeviceId 被弱推断覆盖(review #1328)。
     expect(text).toContain('devices: remoteSessionStore.getDeviceIdentity(),');
+    // 行内状态与标题兜底与首页同口径:pending/liveActivity 索引 + 已解析 unnamedLabel(review #1328)。
+    expect(text).toContain('remoteSessionStore.getPendingInteractions(session.id).length');
+    expect(text).toContain('remoteSessionStore.getSessionLiveActivity(session.id)');
+    expect(text).toContain("unnamedLabel: t('session.menu.unnamedTitle')");
     // 底部主操作行触控目标 >=44。
     expect(text).toContain('minHeight: 44,');
   });
