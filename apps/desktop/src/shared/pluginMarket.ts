@@ -81,11 +81,16 @@ export interface MarketSourceSummary extends MarketSourceConfig {
  * 安装的账本记录同时记下这个指纹,所有权校验必须两者都对上。
  * 与 sources/store 的 sourcesEqual、sources/index 的 marketCloneSlug 同一套
  * 判定维度(type + 定位 + ref + 稀疏路径)。
+ *
+ * 序列化必须**无歧义**:用分隔符拼接(`join(',')`、`#ref:sparse`)会产生可构造的
+ * 碰撞——`sparsePaths:['a,b','c']` 与 `['a','b,c']`、`ref:'x' + ['p']` 与
+ * `ref:'x:p' + []` 都会得到同一 key,两个不同来源被判成同一个,所有权校验随之
+ * 失效。JSON 数组序列化对每个元素定界,不存在拼接歧义。
  */
 export function marketSourceKey(source: MarketSource): string {
   return source.type === 'local'
-    ? `local:${source.path}`
-    : `git:${source.url}#${source.ref ?? ''}:${source.sparsePaths.join(',')}`;
+    ? JSON.stringify(['local', source.path])
+    : JSON.stringify(['git', source.url, source.ref ?? null, source.sparsePaths]);
 }
 
 /**

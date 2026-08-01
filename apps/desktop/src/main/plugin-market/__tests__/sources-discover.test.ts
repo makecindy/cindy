@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { discoverMarketplace } from '../sources/discover';
 
@@ -165,6 +165,126 @@ describe('discoverMarketplace', () => {
     if (!result.ok) return;
     expect(result.marketplace.plugins).toHaveLength(1);
     expect(result.marketplace.plugins[0]?.version).toBe('1.0.0');
+  });
+
+  it('redacts host paths from the detail when the manifest cannot be resolved', async () => {
+    const root = makeRoot();
+    writeManifest(root, { name: 'lib', plugins: [] });
+    // realpath 的 ENOENT/EACCES message 自带完整宿主路径;detail 会经 IPC 原样
+    // 转发 Renderer,必须脱敏。用 mock 确定性地触发 catch 分支。
+    const spy = vi.spyOn(fs.promises, 'realpath').mockRejectedValue(
+      Object.assign(
+        new Error("ENOENT: no such file or directory, realpath '/Users/alice/.config/secret'"),
+        { code: 'ENOENT' },
+      ),
+    );
+    try {
+      const result = await discoverMarketplace(root);
+      expect(result.ok).toBe(false);
+      if (result.ok) return;
+      expect(result.detail ?? '').not.toContain('alice');
+      expect(result.detail ?? '').not.toContain('/Users/');
+      // 仍保留可引导的原因文本。
+      expect(result.detail ?? '').toContain('ENOENT');
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rejects an oversized marketplace manifest instead of parsing it', async () => {
+    const root = makeRoot();
+    const file = path.join(root, '.agents', 'plugins', 'marketplace.json');
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    // 市场仓库是不受信内容:超大清单必须在 readFile 之前按大小拒绝,不能靠解析。
+    fs.writeFileSync(file, `{"name":"big","plugins":[],"pad":"${'x'.repeat(1024 * 1024)}"}`);
+
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.detail).toContain('exceeds');
+  });
+
+  it('skips a plugin whose ghost.json is oversized without reading it', async () => {
+    const root = makeRoot();
+    writePlugin(root, 'plugins/good', 'good-one');
+    const bigDir = path.join(root, 'plugins', 'big');
+    fs.mkdirSync(bigDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(bigDir, 'ghost.json'),
+      `{"schemaVersion":2,"id":"big","pad":"${'x'.repeat(600 * 1024)}"}`,
+    );
+    writeManifest(root, {
+      name: 'sized',
+      plugins: [
+        { name: 'good', source: 'plugins/good' },
+        { name: 'big', source: 'plugins/big' },
+      ],
+    });
+
+    // 关键断言是"没有去读":超大身份卡若被 readFile 进内存,拒绝就晚了(OOM 防护
+    // 的意义就在读之前)。仅断言"被跳过"没有牙齿——解析/校验失败同样会跳过。
+    const realReadFile = fs.promises.readFile;
+    const readTargets: string[] = [];
+    const spy = vi
+      .spyOn(fs.promises, 'readFile')
+      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
+        readTargets.push(String(target));
+        return (realReadFile as (...args: unknown[]) => unknown)(target, ...rest);
+      }) as typeof fs.promises.readFile);
+    try {
+      const result = await discoverMarketplace(root);
+      expect(result.ok).toBe(true);
+      if (!result.ok) return;
+      expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
+      expect(result.marketplace.skippedCount).toBe(1);
+      expect(readTargets.some((target) => target.includes(path.join('big', 'ghost.json')))).toBe(
+        false,
+      );
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('rejects a manifest that lists an absurd number of plugin entries', async () => {
+    const root = makeRoot();
+    // 每个条目都触发 realpath + 读身份卡:十万条目能把快照/列表/刷新拖死。
+    writeManifest(root, {
+      name: 'flood',
+      plugins: Array.from({ length: 513 }, (_, index) => ({
+        name: `p${index}`,
+        source: `plugins/p${index}`,
+      })),
+    });
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.detail).toContain('more than');
+  });
+
+  it('rejects marketplace names that are oversized or carry control characters', async () => {
+    for (const name of ['x'.repeat(129), 'evil‮name', 'line\nbreak']) {
+      const root = makeRoot();
+      writeManifest(root, { name, plugins: [] });
+      const result = await discoverMarketplace(root);
+      expect(result.ok).toBe(false);
+    }
+    // 合法边界值仍然接受。
+    const root = makeRoot();
+    writeManifest(root, { name: 'x'.repeat(128), plugins: [] });
+    expect((await discoverMarketplace(root)).ok).toBe(true);
+  });
+
+  it('drops an invalid displayName instead of failing the market', async () => {
+    const root = makeRoot();
+    writeManifest(root, {
+      name: 'lib',
+      interface: { displayName: 'bad‮display' },
+      plugins: [],
+    });
+    const result = await discoverMarketplace(root);
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.displayName).toBeNull();
   });
 
   it('rejects a manifest whose real path escapes the market root', async () => {

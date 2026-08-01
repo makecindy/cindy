@@ -89,8 +89,12 @@ function errorText(error: unknown): string {
  * 往 stderr 写宿主路径（`/Users/<name>/.ssh/id_rsa`、`C:\Users\<name>\...`、
  * `~/.gitconfig`），只替换已知的缓存路径盖不住这些 —— 用户名与宿主目录结构不该
  * 经 IPC 到达 Renderer。诊断用的完整原文仍在 main 日志里。
+ *
+ * 导出给 discover 等其它会把错误详情转发 Renderer 的模块共用:任何进 IPC 错误
+ * detail 的系统错误 message(realpath/readFile 的 ENOENT/EACCES 自带完整路径)
+ * 都必须先过这一遍。
  */
-function redactAbsolutePaths(text: string): string {
+export function redactAbsolutePaths(text: string): string {
   // 先把 URL 摘出来占位:仓库地址是用户自己输入的、要留着给他定位问题,不能被
   // 下面的路径规则把 `https://host/org/repo.git` 的路径段一起抹掉。
   const urls: string[] = [];

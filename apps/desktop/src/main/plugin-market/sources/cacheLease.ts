@@ -18,6 +18,11 @@
  * 某个租约全文开头的无关目录判成"在用"——后果仅是该目录晚一点被清理(纯磁盘),
  * 永远不会导致误删。
  *
+ * 字符串比较是**大小写敏感**的,而 Windows/macOS 文件系统通常不敏感。这里安全的
+ * 前提是:所有缓存路径都由同一套代码派生(ownerScopedUserDataPath + marketCloneSlug,
+ * slug 全小写),同一目录永远以同一写法出现。新调用方不得传入手工拼写或改过大小写
+ * 的路径。
+ *
  * 仅在 main 进程内有效(同一 userData 只有一个 main 进程,Electron 单实例)。
  * 按绝对路径为键,因此 owner 隔离由路径自带(`ownerScopedUserDataPath` 已把
  * owner 编进 cloneRoot),也不受"每次操作都新建 MarketSourceManager"影响。

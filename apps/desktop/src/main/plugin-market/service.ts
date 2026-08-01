@@ -64,8 +64,16 @@ const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
 /**
  * 来源增删改的互斥键。**安装的提交段(所有权复核 + 包落位)也要拿这把锁**:
  * 否则复核通过后、真正改动 Ghost 运行时之前,另一窗口能添加声明同一 ghostId 的
- * 来源,让已冲突的插件照样装上。与按 pluginId 的安装锁嵌套无环(来源操作不反向
- * 获取 pluginId 锁),不会死锁。
+ * 来源,让已冲突的插件照样装上。
+ *
+ * **锁次序(不变量,违反即死锁)**:允许 `withMutation(pluginId)` 内再取本键
+ * (安装路径就是这么做的),**禁止**持本键时再取任何 pluginId 键。来源操作
+ * (add/remove/refresh)只拿本键,永不反向,因此锁图无环。
+ *
+ * **已知权衡**:refreshSource 全程持本键,大仓库 clone 期间(可达分钟级)安装的
+ * 提交段与其它来源操作会排队。这是有意选择——只读路径(快照/列表/详情)不受
+ * 影响,而把刷新的网络段移出锁会重新打开"提交点复核过期"的窗口;吞吐不构成
+ * 放宽正确性的理由。
  */
 const SOURCE_MUTATION_KEY = 'market-sources';
 

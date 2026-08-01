@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 
 import { validateGhostManifest, type GhostManifest } from '../../../shared/ghost.js';
+import { redactAbsolutePaths } from './git.js';
 
 /** 与 Codex 相同的清单位置，按优先级查找。 */
 export const MARKETPLACE_MANIFEST_PATHS = [
@@ -19,6 +20,32 @@ export const MARKETPLACE_MANIFEST_PATHS = [
   '.claude-plugin/marketplace.json',
   '.cursor-plugin/marketplace.json',
 ] as const;
+
+/**
+ * 清单与身份卡的读取上限。市场仓库是不受信内容,git clone 不限制单文件大小,
+ * 不设上限时一份数 GB 的 marketplace.json / ghost.json 会在 readFile + JSON.parse
+ * 里把 main 进程内存打爆。合法清单远小于此(Codex 生态同量级)。
+ */
+const MARKETPLACE_MANIFEST_MAX_BYTES = 1024 * 1024;
+const GHOST_MANIFEST_MAX_BYTES = 512 * 1024;
+
+/**
+ * 插件条目数上限。每个条目都会触发 realpath + 读身份卡,不设上限时一份十万条目的
+ * 清单能把快照/列表/刷新拖住很久。合法市场远小于此。
+ */
+const MARKETPLACE_MAX_PLUGIN_ENTRIES = 512;
+
+/** 市场名上限:进 store 持久化、进 pluginId、进 UI,不能不设边界。 */
+const MARKET_NAME_MAX_CHARS = 128;
+
+/** 控制字符与双向文本控制符不允许出现在市场名里,防 UI 欺骗与日志注入。 */
+// eslint-disable-next-line no-control-regex
+const FORBIDDEN_NAME_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
+
+/** 错误 message 可能携带完整宿主路径(ENOENT/EACCES 自带),进 IPC detail 前脱敏。 */
+function sanitizedDetail(error: unknown): string {
+  return redactAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 256);
+}
 
 export type DiscoverError =
   | 'MARKET_MANIFEST_MISSING'
@@ -90,7 +117,11 @@ async function resolvePluginDir(
 
   let raw: unknown;
   try {
-    raw = JSON.parse(await fs.promises.readFile(path.join(realDir, 'ghost.json'), 'utf8'));
+    // 身份卡同样是不受信内容,先看大小再读(超限按条目非法跳过,不拖垮整个市场)。
+    const manifestFile = path.join(realDir, 'ghost.json');
+    const stat = await fs.promises.stat(manifestFile);
+    if (stat.size > GHOST_MANIFEST_MAX_BYTES) return null;
+    raw = JSON.parse(await fs.promises.readFile(manifestFile, 'utf8'));
   } catch {
     return null;
   }
@@ -138,38 +169,68 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
     }
     realManifestPath = realManifest;
   } catch (error) {
-    return {
-      ok: false,
-      code: 'MARKET_SOURCE_INVALID',
-      detail: error instanceof Error ? error.message : String(error),
-    };
+    // realpath 的 ENOENT/EACCES message 自带完整宿主路径,进 IPC detail 前必须脱敏。
+    return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: sanitizedDetail(error) };
   }
 
   let raw: RawMarketplaceManifest;
   try {
+    // 不受信内容先看大小再读:git clone 不限制单文件大小,数 GB 的清单会在
+    // readFile + JSON.parse 里把 main 进程内存打爆。
+    const stat = await fs.promises.stat(realManifestPath);
+    if (!stat.isFile()) {
+      return {
+        ok: false,
+        code: 'MARKET_SOURCE_INVALID',
+        detail: 'marketplace manifest is not a regular file',
+      };
+    }
+    if (stat.size > MARKETPLACE_MANIFEST_MAX_BYTES) {
+      return {
+        ok: false,
+        code: 'MARKET_SOURCE_INVALID',
+        detail: `marketplace manifest exceeds ${MARKETPLACE_MANIFEST_MAX_BYTES} bytes`,
+      };
+    }
     raw = JSON.parse(
       await fs.promises.readFile(realManifestPath, 'utf8'),
     ) as RawMarketplaceManifest;
   } catch (error) {
-    return {
-      ok: false,
-      code: 'MARKET_SOURCE_INVALID',
-      detail: error instanceof Error ? error.message : String(error),
-    };
+    return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: sanitizedDetail(error) };
   }
   if (!raw || typeof raw.name !== 'string' || raw.name.trim().length === 0) {
     return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'marketplace.json missing name' };
   }
+  const name = raw.name.trim();
+  // 市场名会进 store 持久化、进 pluginId、进 UI 与路径 slug,必须有边界:超长
+  // 会让配置与账本无界膨胀,控制字符/双向控制符可伪装 UI 文案与污染日志。
+  if (name.length > MARKET_NAME_MAX_CHARS || FORBIDDEN_NAME_CHARS.test(name)) {
+    return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'marketplace name is invalid' };
+  }
   if (!Array.isArray(raw.plugins)) {
     return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: 'marketplace.json plugins must be an array' };
   }
+  if (raw.plugins.length > MARKETPLACE_MAX_PLUGIN_ENTRIES) {
+    return {
+      ok: false,
+      code: 'MARKET_SOURCE_INVALID',
+      detail: `marketplace lists more than ${MARKETPLACE_MAX_PLUGIN_ENTRIES} plugins`,
+    };
+  }
 
-  const displayName =
+  const rawDisplayName =
     raw.interface &&
     typeof raw.interface === 'object' &&
     !Array.isArray(raw.interface) &&
     typeof (raw.interface as Record<string, unknown>).displayName === 'string'
-      ? ((raw.interface as Record<string, unknown>).displayName as string)
+      ? ((raw.interface as Record<string, unknown>).displayName as string).trim()
+      : null;
+  // displayName 是描述性字段:非法就丢弃,不因它拒掉整个市场。
+  const displayName =
+    rawDisplayName &&
+    rawDisplayName.length <= MARKET_NAME_MAX_CHARS &&
+    !FORBIDDEN_NAME_CHARS.test(rawDisplayName)
+      ? rawDisplayName
       : null;
 
   const plugins: DiscoveredMarketPlugin[] = [];
@@ -196,6 +257,6 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
 
   return {
     ok: true,
-    marketplace: { name: raw.name.trim(), displayName, plugins, skippedCount },
+    marketplace: { name, displayName, plugins, skippedCount },
   };
 }

@@ -5,6 +5,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 
 import type { MarketSourceConfig } from '../../../shared/pluginMarket';
+import { marketSourceKey } from '../../../shared/pluginMarket';
 import { MarketSourceStore, sourcesEqual } from '../sources/store';
 
 const roots: string[] = [];
@@ -118,6 +119,20 @@ describe('MarketSourceStore', () => {
     expect(store.list().map((item) => item.name)).toEqual(['openai/plugins']);
     store.add(config({ name: 'other/hub' }));
     expect(store.list().map((item) => item.name).sort()).toEqual(['openai/plugins', 'other/hub']);
+  });
+
+  it('marketSourceKey never collides across distinct sources', () => {
+    // 拼接式指纹(join/定界符)存在可构造碰撞,而这个 key 承担账本所有权判定:
+    // 碰撞 = 两个不同来源被判成同一个,同名异源防线随之失效。
+    const keys = [
+      marketSourceKey({ type: 'git', url: 'u', sparsePaths: ['a,b', 'c'] }),
+      marketSourceKey({ type: 'git', url: 'u', sparsePaths: ['a', 'b,c'] }),
+      marketSourceKey({ type: 'git', url: 'u', ref: 'x', sparsePaths: ['p'] }),
+      marketSourceKey({ type: 'git', url: 'u', ref: 'x:p', sparsePaths: [] }),
+      marketSourceKey({ type: 'git', url: 'u#x', sparsePaths: ['p'] }),
+      marketSourceKey({ type: 'local', path: 'u' }),
+    ];
+    expect(new Set(keys).size).toBe(keys.length);
   });
 
   it('sourcesEqual treats undefined and empty ref as identical', () => {
