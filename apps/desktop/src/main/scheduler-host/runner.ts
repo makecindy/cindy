@@ -927,24 +927,6 @@ export class MakerScheduleRunner implements ScheduleRunner {
     // wireSessionToIpc 内部按 Session 实例幂等；同 id 换实例时会先解绑旧实例。
     wireSessionToIpc(session);
 
-    // 4.5.0 abort listener:scheduler 在 user delete/pause 时会 abort ctx.signal,
-    // runner 这里收到后立刻 session.abort() —— SDK 抛 AbortError → 下面 turnFinished
-    // 的 onEvent 'error' 触发 reject → fire 整体走 catch 路径,engine 那侧识别 wasAborted。
-    // session.abort 幂等;listener 用 { once: true } + 提前 short-circuit aborted 兜底。
-    const onAbort = (): void => {
-      this.deps.logger.info?.(
-        `[runner] ctx.signal aborted, calling session.abort() for ${session.id}`,
-      );
-      void session.abort().catch((err) => {
-        this.deps.logger.warn?.('[runner] session.abort failed', err);
-      });
-    };
-    if (ctx.signal.aborted) {
-      onAbort();
-    } else {
-      ctx.signal.addEventListener('abort', onAbort, { once: true });
-    }
-
     // 4.5.1 修正 sessions 行的 permission_mode + effort/source/workspace_kind 列。
     // 这一步必须早于 session-bound 广播：renderer 收到 session-bound 会立刻刷新
     // sidebar，如果此时 source 仍是 DesktopSessionStorage.create() 写入的 'desktop'，
@@ -1034,6 +1016,23 @@ export class MakerScheduleRunner implements ScheduleRunner {
             : undefined,
         },
       );
+    }
+
+    // 4.5.4 只有直发降级路径需要把取消映射到 session.abort()。生产队列路径由
+    // coordinator 按「仍在排队 / 已派发」分别撤项或中断，不能让这个监听器误杀
+    // 异步入队期间刚好开始的用户 turn。
+    const onAbort = (): void => {
+      this.deps.logger.info?.(
+        `[runner] ctx.signal aborted, calling session.abort() for ${session.id}`,
+      );
+      void session.abort().catch((err) => {
+        this.deps.logger.warn?.('[runner] session.abort failed', err);
+      });
+    };
+    if (ctx.signal.aborted) {
+      onAbort();
+    } else {
+      ctx.signal.addEventListener('abort', onAbort, { once: true });
     }
 
     // 5. 一次性 listener + 收集 assistant 最终文本(排队派发路径复用,实现与
