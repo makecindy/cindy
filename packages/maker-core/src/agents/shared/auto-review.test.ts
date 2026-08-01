@@ -486,11 +486,13 @@ describe('classifyShellCommand — git --output 写文件 / curl SSRF 改路由 
       'curl --resolve example.com:443:169.254.169.254 https://example.com',
       'curl --connect-to example.com:443:10.0.0.5:443 https://example.com',
       'curl --unix-socket /var/run/docker.sock http://localhost/x',
-      'curl -x http://proxy.internal:8080 https://example.com',
       'curl --proxy http://p:8080 https://example.com',
     ]) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
     }
+    // 代理指向 *.internal(metadata 家族)→ 第四十二批起与 WebFetch 一致地确定性必问。
+    expect(classifyShellCommand('curl -x http://proxy.internal:8080 https://example.com', roots))
+      .toBe('prompt-each-time');
   });
   it('wget 一律升级(默认写文件 + 跟随重定向),含 stdout 形态', () => {
     for (const c of ['wget https://example.com', 'wget -qO- https://example.com', 'wget --max-redirect=0 https://example.com']) {
@@ -539,7 +541,8 @@ describe('classifyShellCommand — 第六轮 bot 护栏', () => {
     expect(classifyShellCommand("rg --hostname-bin=./payload --hyperlink-format='file://{host}{path}' pattern f", roots)).toBe('prompt');
   });
   it('curl 多 URL:任一为内网/metadata → prompt;全公网仍放行', () => {
-    expect(classifyShellCommand('curl https://example.com http://169.254.169.254/latest/meta-data', roots)).toBe('prompt');
+    // 任一 URL 是云 metadata → 确定性必问(第四十二批:与 WebFetch 通道对齐)。
+    expect(classifyShellCommand('curl https://example.com http://169.254.169.254/latest/meta-data', roots)).toBe('prompt-each-time');
     expect(classifyShellCommand('curl https://a.example https://b.example', roots)).toBe('auto-approve');
   });
   it('Windows 大小写不敏感凭证目录(.AWS = .aws)→ prompt-each-time', () => {
@@ -566,8 +569,8 @@ describe('classifyShellCommand — 第七轮 bot 护栏', () => {
     expect(classifyShellCommand('curl --dump-header /tmp/h https://example.com', roots)).toBe('prompt');
   });
   it('整数/十六进制 IPv4 SSRF 混淆(2852039166 / 0xA9FEA9FE = 169.254.169.254)→ prompt', () => {
-    expect(classifyShellCommand('curl http://2852039166/latest/meta-data', roots)).toBe('prompt');
-    expect(classifyShellCommand('curl http://0xA9FEA9FE/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://2852039166/latest/meta-data', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('curl http://0xA9FEA9FE/latest/meta-data', roots)).toBe('prompt-each-time');
   });
   it('公网点分 IP 仍放行(8.8.8.8)', () => {
     expect(classifyShellCommand('curl http://8.8.8.8/', roots)).toBe('auto-approve');
@@ -575,17 +578,23 @@ describe('classifyShellCommand — 第七轮 bot 护栏', () => {
 });
 
 describe('classifyShellCommand — 内网/云 metadata 抓取升级(SSRF 面)', () => {
-  it('云 metadata / localhost / 私网 IP → prompt', () => {
+  it('云 metadata → prompt-each-time;localhost / 私网 IP → prompt', () => {
     for (const c of [
-      'curl http://169.254.169.254/latest/meta-data/iam/security-credentials/',
       'curl -sS localhost:3000/health',
       'curl http://127.0.0.1:8080/',
       'curl http://10.0.0.5/x',
       'curl http://192.168.1.1/admin',
       'curl http://172.16.0.9/',
-      'curl https://metadata.google.internal/computeMetadata/v1/',
     ]) {
       expect(classifyShellCommand(c, roots)).toBe('prompt');
+    }
+    // 云 metadata 与私网分档(第四十二批):metadata 读的是实例临时凭证 → 必问;
+    // localhost/私网是开发日常 → 留灰区交模型裁决。
+    for (const c of [
+      'curl http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'curl https://metadata.google.internal/computeMetadata/v1/',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
     }
   });
   it('公网 host 仍放行', () => {
@@ -707,11 +716,11 @@ describe('复审第三批:env 注入 / 显式路径 / file:// / 缩写 IP / git 
   });
   it('curl 八进制/十六进制 IPv4 分量按 inet_aton 进制解析命中内网 → prompt(codex P1)', () => {
     // 0251=169、0376=254(八进制)→ 169.254.169.254(metadata)。
-    expect(classifyShellCommand('curl http://0251.0376.0251.0376/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://0251.0376.0251.0376/latest/meta-data', roots)).toBe('prompt-each-time');
     expect(classifyShellCommand('curl http://0177.0.0.1/x', roots)).toBe('prompt'); // 0177=127 环回
-    expect(classifyShellCommand('curl http://0xA9.0xFE.0xA9.0xFE/', roots)).toBe('prompt'); // 每段十六进制
+    expect(classifyShellCommand('curl http://0xA9.0xFE.0xA9.0xFE/', roots)).toBe('prompt-each-time'); // 每段十六进制 = metadata
     // 单整数八进制形态(前导 0)同样按八进制:025177524776(八进制)= 2852039166 = 169.254.169.254。
-    expect(classifyShellCommand('curl http://025177524776/', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://025177524776/', roots)).toBe('prompt-each-time');
     // 反例:公网十进制不误伤(0251 之外的规范公网)。
     expect(classifyShellCommand('curl http://93.184.216.34/', roots)).toBe('auto-approve');
   });
@@ -1005,7 +1014,7 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
 
   it('两段式 IPv4(a.B24)内网判定 → prompt(codex P1)', () => {
     // 169.16689662 = 169.254.169.254(inet_aton 两段式:B24 高8位=254 → 云 metadata)
-    expect(classifyShellCommand('curl http://169.16689662/latest/meta-data', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://169.16689662/latest/meta-data', roots)).toBe('prompt-each-time');
     // 127.65793 = 127.1.1.1(127.0x10101 → 环回)
     expect(classifyShellCommand('curl http://127.65793/', roots)).toBe('prompt');
     // 反例:公网两段式不误伤(8.524288 = 8.8.0.0,公网)
@@ -1036,9 +1045,9 @@ describe('classifyShellCommand — 第三轮 bot 审查回归护栏', () => {
 
   it('host 尾随点(FQDN 根点)不绕过内网判定 → 升级', () => {
     expect(classifyShellCommand('curl http://127.0.0.1./x', roots)).toBe('prompt');
-    expect(classifyShellCommand('curl http://169.254.169.254./latest/meta-data', roots)).toBe('prompt');
-    expect(classifyShellCommand('curl http://metadata.google.internal./x', roots)).toBe('prompt');
-    expect(classifyShellCommand('curl http://foo.internal./x', roots)).toBe('prompt');
+    expect(classifyShellCommand('curl http://169.254.169.254./latest/meta-data', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('curl http://metadata.google.internal./x', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('curl http://foo.internal./x', roots)).toBe('prompt-each-time');
     // 反例:公网带尾点仍放行(尾点不影响公网判定)。
     expect(classifyShellCommand('curl http://example.com./', roots)).toBe('auto-approve');
   });
@@ -1801,6 +1810,60 @@ describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六
     expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '' }, roots)).toBe('prompt-each-time');
     // 确定性红线不因 cwd 未知而降级。
     expect(reviewAction({ kind: 'exec', command: 'sudo rm x', cwd: '' }, roots)).toBe('prompt-each-time');
+  });
+});
+
+describe('unshare/nsenter/setpriv 启动器 + `!` 否定前缀(第四十二批评审)', () => {
+  it('命名空间/权限启动器执行的命令被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'unshare -- rm -rf /outside',
+      'unshare -m rm -rf /outside',
+      'unshare --fork --pid rm -rf /outside',
+      'unshare --setuid 0 rm -rf /outside',   // 带独立值选项
+      'nsenter -t 1 -m rm -rf /outside',
+      'nsenter --target 1 --mount -- rm -rf /outside',
+      'setpriv --reuid 0 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:启动器跑只读命令 → 放行;区内 scoped 删除 → 灰区。
+    expect(classifyShellCommand('unshare -- ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('unshare -m rm -rf build', roots)).toBe('prompt');
+  });
+
+  it('换根(--root)后路径语义不可证 → 相对目标必问', () => {
+    // 换根下 build 未必还在工作区内 → cwd 视为未知,相对递归删除必问。
+    expect(classifyShellCommand('unshare --root /jail rm -rf build', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('nsenter -r /jail rm -rf build', roots)).toBe('prompt-each-time');
+  });
+
+  it('shell curl/wget 抓云 metadata 与 WebFetch 一致地必问;localhost 仍留灰区', () => {
+    // 自审发现的两通道不一致:WebFetch 打 metadata 是硬弹窗,shell curl 却只灰区。
+    for (const c of [
+      'curl http://169.254.169.254/latest/meta-data/iam/security-credentials/',
+      'curl http://%31%36%39.%32%35%34.%31%36%39.%32%35%34/latest/meta-data/',
+      'curl http://metadata.google.internal/computeMetadata/v1/',
+      'wget -qO- http://169.254.169.254/latest/meta-data/',
+      'curl http://2852039166/latest/meta-data/', // 整数形态
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // localhost / 私网仍是灰区 —— `curl localhost:3000` 是开发日常,不该硬弹窗。
+    for (const c of [
+      'curl -sS http://localhost:3000/api/health',
+      'curl -sS http://127.0.0.1:8080/x',
+      'curl -sS http://192.168.1.10/status',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt');
+    }
+  });
+
+  it('`!` 否定前缀不遮蔽真实命令(命令照常执行)', () => {
+    expect(classifyShellCommand('! rm -rf /outside', roots)).toBe('prompt-each-time');
+    expect(classifyShellCommand('if ! rm -rf /outside', roots)).toBe('prompt-each-time');
+    // 反例:否定只读命令仍放行;否定区内 scoped 删除仍灰区。
+    expect(classifyShellCommand('! ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('! rm -rf build', roots)).toBe('prompt');
   });
 });
 

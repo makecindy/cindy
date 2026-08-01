@@ -154,6 +154,9 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
   'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset', 'prlimit', 'setarch',
+  // 命名空间/权限启动器:`unshare [opts] PROGRAM`、`nsenter [opts] PROGRAM`、`setpriv [opts] PROGRAM`
+  // 都会执行后面的程序(codex 报 `unshare -- rm -rf /outside` 只落灰区)。
+  'unshare', 'nsenter', 'setpriv',
 ]);
 
 /**
@@ -232,7 +235,7 @@ function redirectionTargets(command: string): string[] {
  * 写目标"静态不可证"的哨兵:目标由运行期内容决定(tar -P 的归档成员、缺失的 -t 目录),既不能证明
  * 落在系统目录、也不能证明没落 —— 消费方见到它一律要求同意。用不可能出现在真实路径里的名字。
  */
-const UNPROVABLE_WRITE_TARGET = ' unprovable-write-target';
+const UNPROVABLE_WRITE_TARGET = '\u0000unprovable-write-target';
 
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
@@ -551,10 +554,14 @@ function tokenize(segment: string): string[] {
   return tokens;
 }
 
-/** 去掉分段后残留的 shell 分组/控制关键字，让组内真实命令继续参与安全判定。 */
+/**
+ * 去掉分段后残留的 shell 分组/控制关键字，让组内真实命令继续参与安全判定。
+ * 含 `!`(否定退出码,但**命令照常执行** —— `! rm -rf /outside` 仍会删,codex 报)与 `elif`/`until`/
+ * `while`/`if` 等把真实命令挡在后面的关键字。
+ */
 function stripShellControlTokens(tokens: string[]): string[] {
   const out = [...tokens];
-  while (out.length > 0 && /^(?:\{|\(|then|do|else)$/.test(out[0])) out.shift();
+  while (out.length > 0 && /^(?:\{|\(|!|then|do|else|elif|if|while|until)$/.test(out[0])) out.shift();
   if (out[0]) out[0] = out[0].replace(/^[({]+/, '');
   while (out[0] === '') out.shift();
   const last = out.length - 1;
@@ -789,6 +796,36 @@ function unwrapCommand(
         break; // PROGRAM
       }
       toks = toks.slice(i);
+    } else if (head === 'unshare' || head === 'nsenter' || head === 'setpriv') {
+      // 只消费 `-…` 选项;**仅对确知带独立值的选项**多吃一个 token —— 宁可少吃(留下的值当命令名 →
+      // 未知 bin → 灰区,fail-closed)也不能多吃(会把真正的 rm 吞掉 → 漏红线)。
+      // `--wd/-w DIR` 改工作目录(同 env -C);`--root/-R/-r` 换根 → 路径语义不可静态求证 → cwdUnknown。
+      const valued = head === 'unshare'
+        ? /^(?:--setuid|--setgid|--propagation|--map-user|--map-group|--wd|--root|-S|-G|-w|-R)$/
+        : head === 'nsenter'
+          ? /^(?:--target|--wd|--root|--setuid|--setgid|-t|-w|-r|-S|-G)$/
+          : /^(?:--reuid|--regid|--groups|--securebits|--pdeathsig|--selinux-label|--apparmor-profile|--ambient-caps|--inh-caps|--bounding-set|--rlimit)$/;
+      let i = 1;
+      let rootChanged = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (!t.startsWith('-')) break;
+        if (/^(?:--root|-R|-r)(?:=|$)/.test(t)) rootChanged = true;
+        const wd = /^(?:--wd|-w)=(.+)$/.exec(t);
+        if (wd) { applyCwd(wd[1]); i++; continue; }
+        const rootAttached = /^(?:--root|-R|-r)=(.+)$/.exec(t);
+        if (rootAttached) { i++; continue; }
+        if (valued.test(t)) {
+          if (/^(?:--wd|-w)$/.test(t)) applyCwd(toks[i + 1]);
+          i += 2;
+          continue;
+        }
+        i++;
+      }
+      toks = toks.slice(i);
+      // 换根后 `/outside` 之类绝对路径指向新根下的位置,静态不可证 → 相对与绝对目标都按未知处理。
+      if (rootChanged) { cwd = undefined; cwdUnknown = true; }
     } else if (head === 'setsid') {
       // setsid [-c] [-f] [-w] PROGRAM:选项在实际 program 之前,只删 setsid 会停在 `-f`/`--wait` 而看不到
       // 内层命令(codex 报 `setsid -f rm -rf /outside`)。这些选项都不带值 → 逐个跳过,`--` 终结选项。
@@ -1714,8 +1751,9 @@ function isInternalFetchTarget(t: string): boolean {
   return forms.some(isInternalFetchHostForm);
 }
 
-function isInternalFetchHostForm(t: string): boolean {
-  const host = t
+/** 从 fetch 目标里取归一后的 host(去 scheme/path/userinfo/port、NUL 截断、控制字符、尾随点)。 */
+function fetchHostOf(t: string): string {
+  return t
     .replace(/^[a-z][\w+.-]*:\/\//i, '') // 去 scheme
     .replace(/[/?#].*$/, '')             // 去 path/query/fragment
     .replace(/^[^@]*@/, '')              // 去 userinfo
@@ -1724,41 +1762,76 @@ function isInternalFetchHostForm(t: string): boolean {
     // TAB/CR/LF —— curl 在此截断或剥掉,不归一会让内网 host 伪装成外网域名(与编码同类绕过)。
     .replace(NUL_AND_REST, '')
     .replace(HOST_CONTROL_CHARS, '')
-    .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点):curl/DNS 视 `127.0.0.1.`=127.0.0.1、
-                                          // `metadata.google.internal.`=metadata.google.internal,不剥会漏判内网(SSRF)
+    .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点)
     .toLowerCase();
+}
+
+/**
+ * 取 host 的 IPv4 前两字节(内网/metadata 判定只需前两段)。支持点分、缩写形(127.1)、整数
+ * (2852039166)与十六进制(0xA9FEA9FE);每个分量按 curl/inet_aton 进制规则解析(前导 0=八进制)。
+ * `unprovable: true` 表示是数字型 host 但非规范(如畸形八进制 08)—— 调用方应 fail-closed。
+ */
+function fetchHostIpv4Prefix(host: string): { a: number; b: number; unprovable?: boolean } | null {
+  const NUMERIC = /^(?:0[xX][0-9a-fA-F]+|\d+)$/;
+  const parts = host.split('.');
+  if (parts.length >= 2 && parts.length <= 4 && parts.every((q) => NUMERIC.test(q))) {
+    const p0 = parseNumericHostComponent(parts[0]);
+    const p1 = parseNumericHostComponent(parts[1]);
+    if (p0 === null || p1 === null) return { a: -1, b: -1, unprovable: true };
+    // 两段式 a.B24:B24 高 8 位是第二字节(inet_aton 规则)。
+    return { a: p0, b: parts.length === 2 ? (p1 >>> 16) & 255 : p1 };
+  }
+  if (NUMERIC.test(host)) {
+    const n = parseNumericHostComponent(host);
+    if (n === null) return { a: -1, b: -1, unprovable: true };
+    if (n >= 0 && n <= 0xffffffff) return { a: (n >>> 24) & 255, b: (n >>> 16) & 255 };
+  }
+  return null;
+}
+
+/**
+ * 云 metadata 端点(而非泛内网):抓它等于读取实例的临时云凭证 —— 静态可证的高危,两条通道
+ * (内置 WebFetch 与 shell curl/wget)都必须确定性同意。
+ *
+ * **刻意只含 metadata、不含 localhost/私网**:`curl localhost:3000` 是开发日常,把它一并硬弹窗会
+ * 违反 Auto-review「尽量不打扰」的第一承诺;localhost/私网仍走灰区交模型裁决。
+ * 复用 isInternalFetchTarget 的百分号解码外壳,编码形态同样命中。
+ */
+function isCloudMetadataFetchTarget(t: string): boolean {
+  const forms: string[] = [t];
+  let cur = t;
+  for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(cur);
+    } catch {
+      return false; // 畸形序列由 isInternalFetchTarget 兜成内网(灰区),这里不另判红线
+    }
+    if (decoded === cur) break;
+    cur = decoded;
+    forms.push(cur);
+  }
+  return forms.some((form) => {
+    const host = fetchHostOf(form);
+    if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
+    const ip = fetchHostIpv4Prefix(host);
+    return ip !== null && ip.a === 169 && ip.b === 254; // 链路本地:含 169.254.169.254
+  });
+}
+
+function isInternalFetchHostForm(t: string): boolean {
+  const host = fetchHostOf(t);
   if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
   if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
   if (host.startsWith('[')) return true; // IPv6 字面量(环回/私网难精确,保守升级)
-  // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
-  // **每个分量按 curl/inet_aton 进制规则解析**(前导 0=八进制、0x=十六进制、否则十进制):`0251.0376.0251.0376`
-  // = 169.254.169.254、`0177.0.0.1`=127.0.0.1(codex 报:Number('0251') 误按十进制得 251 而漏判)。
-  const NUMERIC = /^(?:0[xX][0-9a-fA-F]+|\d+)$/;
-  let a: number | null = null;
-  let b = 0;
-  const parts = host.split('.');
-  if (parts.length >= 2 && parts.length <= 4 && parts.every((p) => NUMERIC.test(p))) {
-    // 点分 IPv4,含缩写形(curl 接受 127.1=127.0.0.1、10.1=10.0.0.1):内网判定只看前两段即可。
-    const p0 = parseNumericHostComponent(parts[0]);
-    const p1 = parseNumericHostComponent(parts[1]);
-    if (p0 === null || p1 === null) return true; // 畸形八进制(如 08)等非规范数字 host → 保守视为内网升级
-    a = p0;
-    // 两段式 a.B24:B24 高 8 位是第二字节(inet_aton 规则);如 169.16689662 → b=(16689662>>>16)&255=254 → 命中 metadata(codex P1)。
-    b = parts.length === 2 ? (p1 >>> 16) & 255 : p1;
-  } else if (NUMERIC.test(host)) {
-    const n = parseNumericHostComponent(host);
-    if (n === null) return true;                 // 非规范数字 host → 保守升级
-    if (n >= 0 && n <= 0xffffffff) {
-      a = (n >>> 24) & 255;
-      b = (n >>> 16) & 255;
-    }
-  }
-  if (a !== null) {
-    if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
-    if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
-    if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12
-    if (a === 192 && b === 168) return true;              // 192.168.0.0-16
-  }
+  const ip = fetchHostIpv4Prefix(host);
+  if (ip === null) return false;
+  if (ip.unprovable) return true;        // 非规范数字 host → 保守视为内网升级
+  const { a, b } = ip;
+  if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
+  if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12
+  if (a === 192 && b === 168) return true;              // 192.168.0.0-16
   return false;
 }
 
@@ -1987,6 +2060,17 @@ export function classifyShellCommand(
     .some((variant) => highImpactExecutionNeedsConsent(variant))) return 'prompt-each-time';
   for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
+  }
+  // 抓云 metadata = 读实例临时云凭证,静态可证的高危 → 与内置 WebFetch(reviewAction network)一致地
+  // 确定性必问,不能一边硬问一边只给 shell curl 灰区(自审发现的两通道不一致)。
+  // 只认 metadata,不含 localhost/私网 —— `curl localhost:3000` 是开发日常,硬弹窗会违反"尽量不打扰"。
+  for (const { text } of splitExecutableSegments(quotesOnly)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    if (bin !== 'curl' && bin !== 'wget') continue;
+    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
+      return 'prompt-each-time';
+    }
   }
   // 写系统/受保护目录(重定向 `cat x > /etc/hosts` 与参数写通道 `cp payload /etc/hosts`、
   // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
