@@ -1907,6 +1907,13 @@
           "offlineDevice": "기기가 오프라인이라 조작할 수 없음",
           "unreachable": "상태를 가져올 수 없음",
           "unsupported": "이 기기의 버전은 원격 오프라인을 지원하지 않음"
+        },
+        "failure": {
+          "remoteDisabled": "해당 기기에서 원격 제어가 꺼져 있습니다",
+          "accessRevoked": "해당 기기에서 이 기기의 접근 권한을 취소했습니다",
+          "controlDisabled": "이 기기에서 해당 기기 제어가 꺼져 있습니다",
+          "unreachable": "해당 기기가 오프라인이거나 연결할 수 없습니다",
+          "unknown": "원격 요청에 실패했습니다. 기기 상태를 확인한 후 다시 시도하세요"
         }
       },
       "disconnect": "연동 해제",

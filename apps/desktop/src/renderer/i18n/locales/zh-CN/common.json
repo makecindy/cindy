@@ -1907,6 +1907,13 @@
           "offlineDevice": "设备离线，无法远程操作",
           "unreachable": "查不到状态",
           "unsupported": "该设备版本不支持远程下线"
+        },
+        "failure": {
+          "remoteDisabled": "该设备已关闭远程控制",
+          "accessRevoked": "该设备已撤销本机的访问权限",
+          "controlDisabled": "本机已关闭对该设备的控制",
+          "unreachable": "该设备已离线或暂时无法连接",
+          "unknown": "远程请求失败，请检查设备状态后重试"
         }
       },
       "disconnect": "解绑",

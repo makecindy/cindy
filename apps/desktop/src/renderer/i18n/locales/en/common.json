@@ -1908,6 +1908,13 @@
           "offlineDevice": "Device offline — can't control it remotely",
           "unreachable": "Status unavailable",
           "unsupported": "This device's version can't be taken offline remotely"
+        },
+        "failure": {
+          "remoteDisabled": "Remote control is turned off on that device",
+          "accessRevoked": "That device has revoked this device's access",
+          "controlDisabled": "Control of that device is turned off on this device",
+          "unreachable": "That device is offline or unreachable",
+          "unknown": "The remote request failed. Check the device status and try again"
         }
       },
       "disconnect": "Unbind",

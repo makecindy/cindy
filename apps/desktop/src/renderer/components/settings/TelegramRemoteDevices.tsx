@@ -49,6 +49,28 @@ function isChannelNotAllowed(err: unknown): boolean {
   return extractIpcError(err)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
 }
 
+/** Stable device-link IPC codes → localized copy; never surface transport messages in UI. */
+const TELEGRAM_REMOTE_FAILURE_I18N: Record<string, string> = {
+  PRECONDITION_FAILED: 'settings.telegramBot.remoteDevices.state.otherBot',
+  DEVICE_LINK_REMOTE_DISABLED: 'settings.telegramBot.remoteDevices.failure.remoteDisabled',
+  DEVICE_LINK_ACCESS_REVOKED: 'settings.telegramBot.remoteDevices.failure.accessRevoked',
+  DEVICE_LINK_CONTROL_DISABLED: 'settings.telegramBot.remoteDevices.failure.controlDisabled',
+  DEVICE_LINK_NOT_CONNECTED: 'settings.telegramBot.remoteDevices.failure.unreachable',
+  DEVICE_LINK_DEVICE_OFFLINE: 'settings.telegramBot.remoteDevices.failure.unreachable',
+  DEVICE_LINK_TIMEOUT: 'settings.telegramBot.remoteDevices.failure.unreachable',
+  DEVICE_LINK_UNAVAILABLE: 'settings.telegramBot.remoteDevices.failure.unreachable',
+  DEVICE_LINK_STANDBY: 'settings.telegramBot.remoteDevices.failure.unreachable',
+  DEVICE_LINK_VERSION_MISMATCH: 'settings.telegramBot.remoteDevices.state.unsupported',
+};
+
+export function telegramRemoteFailureKey(err: unknown): string {
+  const code = extractIpcError(err)?.code;
+  return (
+    (code && TELEGRAM_REMOTE_FAILURE_I18N[code])
+    || 'settings.telegramBot.remoteDevices.failure.unknown'
+  );
+}
+
 export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null }) {
   const { t } = useTranslation();
   const { devices, loaded } = useSelectableDevices();
@@ -130,12 +152,16 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
         } else {
           const ipcError = extractIpcError(err);
           if (ipcError?.code === 'PRECONDITION_FAILED') await probeAll();
-          const msg =
-            ipcError?.code === 'PRECONDITION_FAILED'
-              ? t('settings.telegramBot.remoteDevices.state.otherBot')
-              : (ipcError?.message ?? (err instanceof Error ? err.message : String(err)));
-          log.error('remote set-online failed:', msg);
-          toast.error(t('logic.toasts.telegramRemoteFailed', { message: msg }));
+          // 原始 message 只写诊断日志；toast 只能展示稳定 code 对应的 locale 文案。
+          log.error('remote set-online failed', {
+            code: ipcError?.code ?? null,
+            error: err instanceof Error ? err.message : String(err),
+          });
+          toast.error(
+            t('logic.toasts.telegramRemoteFailed', {
+              message: t(telegramRemoteFailureKey(err)),
+            }),
+          );
         }
       } finally {
         setBusyDeviceId(null);
