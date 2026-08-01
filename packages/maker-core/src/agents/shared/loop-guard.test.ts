@@ -62,25 +62,95 @@ describe('ToolLoopGuard', () => {
     }
   });
 
-  it('每次调用都不同(合法长任务)不误判', () => {
+  // ── 合法长 turn / 原生轮询工具 ───────────────────────────────────────────
+  it('TaskOutput 状态长期不变仍放行,不会被通用重复判据中断', () => {
     const g = new ToolLoopGuard();
-    for (let i = 0; i < 30; i += 1) {
-      expect(feed(g, `id${i}`, 'Read', { file: `f${i}.ts` }, 'content').kind).toBe('ok');
+    for (let i = 0; i < 250; i += 1) {
+      expect(
+        feed(
+          g,
+          `id${i}`,
+          'TaskOutput',
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
+        ).kind,
+      ).toBe('ok');
     }
   });
 
-  // ── 第 3 层: 单 turn tool result 硬上限 ───────────────────────────────────
-  it('在 turn 内调用总数超硬上限时判 turn-cap(任何形态兜底)', () => {
-    // 放宽前两层, 只验证兜底: 每次 input 都不同, 不会触发 consecutive / pingpong
-    const g = new ToolLoopGuard({ turnHardCap: 5, windowSize: 1000, consecutiveLimit: 1000 });
-    for (let i = 0; i < 5; i += 1) {
-      expect(feed(g, `id${i}`, 'Read', { file: `f${i}` }, `o${i}`).kind).toBe('ok');
+  it('TaskOutput 不会隐藏穿插在轮询之间的连续普通工具循环', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 4; i += 1) {
+      const ordinary = feed(g, `bash-${i}`, 'Bash', { cmd: 'ls' }, 'same');
+      if (i < 3) expect(ordinary.kind).toBe('ok');
+      else expect(ordinary).toMatchObject({ kind: 'hard', reason: 'consecutive' });
+
+      expect(
+        feed(
+          g,
+          `poll-${i}`,
+          'TaskOutput',
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
+        ).kind,
+      ).toBe('ok');
     }
-    expect(feed(g, 'id5', 'Read', { file: 'f5' }, 'o5')).toMatchObject({
-      kind: 'hard',
-      reason: 'turn-cap',
-      count: 6,
-    });
+  });
+
+  it('TaskOutput 不会隐藏穿插在轮询之间的 ABAB 普通工具循环', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 12; i += 1) {
+      const ordinary = feed(
+        g,
+        `ordinary-${i}`,
+        'Bash',
+        i % 2 === 0 ? { cmd: 'python run.py' } : { cmd: 'p4 sync' },
+        `output-${i}`,
+      );
+      if (i < 11) expect(ordinary.kind).toBe('ok');
+      else expect(ordinary).toMatchObject({ kind: 'hard', reason: 'pingpong' });
+
+      expect(
+        feed(
+          g,
+          `poll-${i}`,
+          'TaskOutput',
+          { task_id: 'task-1', block: true, timeout: 30_000 },
+          'still running',
+        ).kind,
+      ).toBe('ok');
+    }
+  });
+
+  it('三十三项固定序列不会被有限窗口冒充为通用硬上限', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 198; i += 1) {
+      const position = i % 33;
+      expect(
+        feed(
+          g,
+          `id${i}`,
+          'Read',
+          { file: `project-${position}.json` },
+          `stable-${position}`,
+        ).kind,
+      ).toBe('ok');
+    }
+  });
+
+  it('参数持续变化时即使结果高度重复也不判 hard', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 250; i += 1) {
+      expect(feed(g, `id${i}`, 'Read', { file: `missing-${i}.ts` }, 'not found').kind).toBe('ok');
+    }
+  });
+
+  it('参数持续变化且结果为空或纯空白时也不判 hard', () => {
+    const g = new ToolLoopGuard();
+    for (let i = 0; i < 250; i += 1) {
+      const output = i % 2 === 0 ? '' : '   ';
+      expect(feed(g, `id${i}`, 'Write', { file: `f${i}.ts` }, output).kind).toBe('ok');
+    }
   });
 
   // ── 配对 / 放行 ───────────────────────────────────────────────────────────

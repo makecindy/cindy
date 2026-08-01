@@ -85,7 +85,7 @@ describe('composeInteractionCard', () => {
     });
   });
 
-  it('permission: 三按钮卡(允许一次/本对话总是允许/拒绝), 超时默认拒绝', () => {
+  it('permission: 三按钮卡(允许一次/本任务总是允许/拒绝), 超时默认拒绝', () => {
     const composed = composeInteractionCard({
       kind: 'permission',
       requestId: 'int-6',
@@ -99,12 +99,12 @@ describe('composeInteractionCard', () => {
     expect(composed.card.body).toContain('rm -rf dist');
     expect(composed.card.buttons).toEqual([
       { id: 'perm:allow', label: '允许一次', style: 'primary' },
-      { id: 'perm:always', label: '本对话总是允许', style: 'default' },
+      { id: 'perm:always', label: '本任务总是允许', style: 'default' },
       { id: 'perm:deny', label: '拒绝', style: 'danger' },
     ]);
     expect(composed.decisions.get('perm:allow')).toEqual({ kind: 'permission', behavior: 'allow' });
-    // 「本对话总是允许」带会话级 addRules(claude 直接消费, codex 非空即会话放行)
-    // 注:按钮文案用「对话」(产品术语,与应用内 permissions.alwaysAllowForSession 一致),
+    // 「本任务总是允许」带会话级 addRules(claude 直接消费, codex 非空即会话放行)
+    // 注:按钮文案用「任务」(产品术语,与应用内 permissions.alwaysAllowForSession 一致),
     // 但 addRules 的作用域仍是技术意义上的 agent session,两者刻意不同名。
     expect(composed.decisions.get('perm:always')).toEqual({
       kind: 'permission',

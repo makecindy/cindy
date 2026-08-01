@@ -34,7 +34,7 @@ const NATIVE_COMPACT_BADGE_WIDTH: Array<{
   renderedWidth: number;
 }> = [
   { label: '单会话', pillSnapshot: { activeSessionCount: 0, sessionCount: 1 }, layoutWidth: 22, renderedWidth: 22 },
-  { label: '12 个会话', pillSnapshot: { activeSessionCount: 0, sessionCount: 12 }, layoutWidth: 22, renderedWidth: 22 },
+  { label: '12 个任务', pillSnapshot: { activeSessionCount: 0, sessionCount: 12 }, layoutWidth: 22, renderedWidth: 22 },
   { label: '1/2', pillSnapshot: { activeSessionCount: 1, sessionCount: 2 }, layoutWidth: 30, renderedWidth: 30 },
   { label: '9/9', pillSnapshot: { activeSessionCount: 9, sessionCount: 9 }, layoutWidth: 30, renderedWidth: 30 },
   { label: '1/12', pillSnapshot: { activeSessionCount: 1, sessionCount: 12 }, layoutWidth: 37, renderedWidth: 33 },

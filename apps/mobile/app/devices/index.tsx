@@ -1046,7 +1046,7 @@ export default function HomeScreen() {
     if (action === 'delete') {
       // 菜单不再展示会话标题(2026-07-07 产品反馈),删除确认在这里带上标题作上下文。
       // 哨兵先过投影,与列表行显示同一个串:否则确认框里写着 "New Maker",用户在列表上
-      // 看到的却是「未命名对话」,对不上自己要删的是哪条。
+      // 看到的却是「未命名任务」,对不上自己要删的是哪条。
       const title = projectDraftSessionTitle(session.title, t('session.menu.unnamedTitle')).trim()
         || t('devices.list.untitled');
       Alert.alert(t('devices.list.alert.deleteTitle'), t('devices.list.alert.deleteMessage', { title }), [

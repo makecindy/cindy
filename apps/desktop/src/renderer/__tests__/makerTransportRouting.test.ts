@@ -55,7 +55,7 @@ function stubElectron() {
 const sess = (id: string): Session => ({ id }) as unknown as Session;
 
 describe('makerApiFor 路由(完整对等会话级操作)', () => {
-  it('远程 device-link 会话:每个会话级操作命中对应隧道 channel + 原样转发 args', async () => {
+  it('远程 device-link 会话:每个任务级操作命中对应隧道 channel + 原样转发 args', async () => {
     const { invoke } = stubElectron();
     const { makerApiFor } = await import('@/lib/makerTransport');
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');

@@ -291,7 +291,7 @@ describe('userMessageLinkify', () => {
   it('matches markdown-form session links with an explicit label', () => {
     const sessionUrl = 'xdt-maker://session/03e0c22d-19db-4ac5-814f-1ea04040b471';
     const md = `[修复语音输入白屏](${sessionUrl})`;
-    const matches = findLinkifyMatches(`帮我看下 ${md} 这个会话`);
+    const matches = findLinkifyMatches(`帮我看下 ${md} 这个任务`);
     expect(matches).toEqual([
       {
         kind: 'session',

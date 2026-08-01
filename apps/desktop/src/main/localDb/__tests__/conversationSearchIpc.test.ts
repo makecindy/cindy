@@ -45,10 +45,10 @@ beforeEach(() => {
 
 describe('local-db:conversations:search — unnamedLabel 透传', () => {
   it('把 renderer 的已解析文案原样带给 searchConversations', async () => {
-    await handler()(null, { query: 'needle', unnamedLabel: '未命名对话' });
+    await handler()(null, { query: 'needle', unnamedLabel: '未命名任务' });
 
     expect(h.searchConversations).toHaveBeenCalledWith(
-      expect.objectContaining({ query: 'needle', unnamedLabel: '未命名对话' }),
+      expect.objectContaining({ query: 'needle', unnamedLabel: '未命名任务' }),
     );
   });
 

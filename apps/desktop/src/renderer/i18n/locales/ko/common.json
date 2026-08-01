@@ -52,8 +52,8 @@
   },
   "agentIsland": {
     "native": {
-      "newConversationTitle": "새 대화",
-      "newConversationHint": "새 대화 시작",
+      "newConversationTitle": "새 세션",
+      "newConversationHint": "새 세션 시작",
       "muteSound": "Agent Island 소리 끄기",
       "enableSound": "Agent Island 소리 켜기",
       "settings": "Agent Island 설정",
@@ -659,7 +659,7 @@
       },
       "qnaTitle": "바로 질문하기",
       "qnaDescription": "overview 에 없는 내용이라도 하고 싶은 일을 물어보면 다음에 열어야 할 곳이나 진행 방법을 안내합니다.",
-      "qnaPlaceholder": "예: Codex 대화를 어떻게 가져오나요?",
+      "qnaPlaceholder": "예: Codex 세션을 어떻게 가져오나요?",
       "qnaSend": "보내기",
       "qnaPending": "답변을 준비하는 중…",
       "qnaNoAnswer": "아직 확실한 답을 찾지 못했습니다. 표현을 바꿔 다시 물어보세요.",
@@ -678,7 +678,7 @@
       "openAssistant": "바로 질문하기",
       "panelTitle": "도움말 어시스턴트",
       "panelAriaLabel": "도움말 어시스턴트 패널",
-      "newSession": "새 대화",
+      "newSession": "새 세션",
       "threadEmptyTitle": "무엇이든 물어보세요",
       "threadEmptyHint": "자주 묻는 질문에 빠르게 답하고, 이어서 질문해 바로잡을 수 있어요"
     },
@@ -1195,7 +1195,7 @@
     },
     "providers": {
       "title": "모델 제공자",
-      "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 대화별로 전환할 수 있습니다.",
+      "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
       "pill": {
         "connected": "연결됨",
         "suspended": "비활성화됨"
@@ -1653,7 +1653,7 @@
       },
       "intro": "연결하면 이 WeChat 연결로 보낸 개인 메시지가 이 컴퓨터의 Cindy로 전달됩니다. 인증 페이지는 Tencent가 제공하며 OpenClaw로 표시될 수 있습니다.",
       "errorNote": "연결이 완료되지 않았습니다. 네트워크를 확인하고 다시 스캔하세요. 연결 실패 시 Cindy는 인증 정보를 평문으로 저장하지 않습니다.",
-      "disabledNote": "호환성 정책에 따라 이 버전에서는 개인 WeChat 연결이 일시 중지되었습니다. 저장된 대화와 설정은 삭제되지 않습니다.",
+      "disabledNote": "호환성 정책에 따라 이 버전에서는 개인 WeChat 연결이 일시 중지되었습니다. 저장된 세션과 설정은 삭제되지 않습니다.",
       "permission": {
         "label": "권한 모드",
         "hint": "/new 이후의 새 컨텍스트에 적용됩니다. 위험한 작업은 계속 Cindy Desktop에서 확인해야 합니다.",
@@ -1689,7 +1689,7 @@
           "connected": "WeChat 개인 메시지는 이 컴퓨터의 Cindy로 직접 전달되며 Cindy 서버를 경유하지 않습니다.",
           "reconnecting": "WeChat 연결을 복구하고 있습니다. 다시 스캔할 필요가 없습니다.",
           "needs_reauth": "WeChat 인증이 만료되었거나 다른 연결로 교체되었습니다. 다시 스캔하세요.",
-          "disabled_by_policy": "호환성 정책으로 연결이 일시 중지되었습니다. 인증 정보와 대화는 유지됩니다.",
+          "disabled_by_policy": "호환성 정책으로 연결이 일시 중지되었습니다. 인증 정보와 세션은 유지됩니다.",
           "error": "연결을 일시적으로 사용할 수 없습니다. 다시 스캔하거나 연동 해제 후 나중에 다시 시도하세요."
         }
       },
@@ -1707,7 +1707,7 @@
       },
       "unbind": {
         "title": "개인 WeChat 연동을 해제하시겠습니까?",
-        "description": "연동을 해제하면 메시지 송수신을 중지하고 로컬 WeChat 인증 정보와 미완료 작업을 삭제합니다. 기존 Cindy 대화, 기록, 저장된 첨부 파일은 유지됩니다.",
+        "description": "연동을 해제하면 메시지 송수신을 중지하고 로컬 WeChat 인증 정보와 미완료 작업을 삭제합니다. 기존 Cindy 세션, 기록, 저장된 첨부 파일은 유지됩니다.",
         "confirm": "연동 해제",
         "cancel": "취소"
       },
@@ -1851,7 +1851,7 @@
       },
       "commandMenu": {
         "start": "환영 메시지와 사용법 보기",
-        "new": "새 세션 시작",
+        "new": "새 대화 시작",
         "help": "명령어 도움말 보기",
         "stop": "현재 작업 중지",
         "session": "최근 세션 목록에서 이어서 대화",
@@ -1967,7 +1967,7 @@
     },
     "memory": {
       "title": "메모리",
-      "description": "워크스페이스 단위 메모리를 구현합니다. 설정 변경 후에는 일반적으로 새 Session을 시작해야 적용됩니다. 메모리에 문제가 있다면 Reset하거나 끄세요.",
+      "description": "워크스페이스 단위 메모리를 구현합니다. 설정 변경 후에는 일반적으로 새 Agent 세션을 시작해야 적용됩니다. 메모리에 문제가 있다면 Reset하거나 끄세요.",
       "maker": {
         "label": "Cindy",
         "description": "메모리는 개별 모델이 아니라 Agent 진입점별로 관리됩니다. 동일한 작업 디렉터리에서 Claude Code와 Codex 진입점으로 시작한 Session은 메모리를 공유합니다",
@@ -2005,7 +2005,7 @@
         "toast": {
           "enabled": "{{label}} 메모리가 활성화되었습니다",
           "disabled": "{{label}} 메모리가 비활성화되었습니다",
-          "takesEffectSuffix": " — 새 채팅에서 적용됩니다",
+          "takesEffectSuffix": " — 다음 Agent 세션부터 적용됩니다",
           "toggleFailed": "메모리 설정 업데이트 실패",
           "resetSuccess_one": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
           "resetSuccess_other": "{{label}} 메모리가 재설정되었습니다 — {{count}}개 항목 제거됨",
@@ -2175,7 +2175,7 @@
         "title": "자동 조작 브라우저",
         "description": "에이전트 전용 독립 브라우저 — 평소 쓰는 Chrome과 분리됩니다",
         "toggleAria": "브라우저 자동화 전환",
-        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 브라우저 자동화를 전환할 수 있습니다.",
         "detected": "{{browser}} 감지됨",
         "notDetected": "로컬 브라우저를 찾을 수 없습니다. Chrome을 설치하면 브라우저 자동화를 사용할 수 있습니다.",
@@ -2210,7 +2210,7 @@
         "description": "에이전트가 ADB를 통해 연결된 Android 기기를 검사하고 조작할 수 있습니다",
         "toggleAria": "Android 자동화 전환",
         "refresh": "다시 확인",
-        "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 시스템 전체 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "status": {
           "checking": "ADB 상태 확인 중…",
           "preparing": "ADB 준비 중…",
@@ -2347,7 +2347,7 @@
           "windowsHint": "Windows에서는 추가 시스템 권한이 필요하지 않습니다. 에이전트가 작업하는 동안 대상 앱을 현재 활성 데스크톱에 보이도록 유지하세요.",
           "linuxHint": "Linux에서는 macOS TCC 권한을 사용하지 않습니다. 현재 데스크톱 세션에서 창 검사와 입력 자동화가 허용되는지 확인하세요."
         },
-        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 대화에는 영향을 주지 않습니다.",
+        "toggleHint": "이 토글은 이후 시작하는 Agent 세션에만 적용되며, 진행 중인 세션에는 영향을 주지 않습니다.",
         "noProjectHint": "프로젝트 세션에서 설정을 열면 해당 프로젝트의 컴퓨터 직접 제어를 전환할 수 있습니다.",
         "update": {
           "available": "새 버전 v{{version}}을(를) 사용할 수 있습니다. 업데이트 후 시스템 권한을 다시 허용해야 할 수 있습니다.",
@@ -2376,21 +2376,21 @@
     },
     "builtinTools": {
       "title": "기본 제공 도구",
-      "description": "새 대화의 기본값을 설정하거나 프로젝트별로 재정의합니다. 프로젝트 설정이 우선합니다.",
+      "description": "새 세션의 기본값을 설정하거나 프로젝트별로 재정의합니다. 프로젝트 설정이 우선합니다.",
       "empty": "사용 가능한 도구가 없습니다.",
       "toggleAria": "{{name}} 도구 전환",
       "toggleHint": "변경 사항은 새로 만들거나 다시 시작한 Agent 세션에만 적용되며, 실행 중인 세션에는 영향을 주지 않습니다.",
       "loadFailed": "도구 목록을 불러오지 못했습니다",
       "scopePicker": {
         "ariaLabel": "기본 제공 도구 설정 범위 전환",
-        "userDefault": "새 대화 기본값",
+        "userDefault": "새 세션 기본값",
         "userDefaultDescription": "프로젝트 재정의가 없는 새 세션에 적용"
       },
       "source": {
         "project": "프로젝트",
         "projectTooltip": "프로젝트 설정으로 재정의됨 ({{dir}})",
         "user": "사용자 기본값",
-        "userTooltip": "새 대화 기본값을 따름",
+        "userTooltip": "새 세션 기본값을 따름",
         "product": "제품 기본값",
         "productTooltip": "Cindy 제품 기본값을 따름"
       },
@@ -2758,8 +2758,8 @@
           "description": "설정 페이지를 엽니다"
         },
         "new-maker": {
-          "label": "새 대화",
-          "description": "새 대화를 시작합니다"
+          "label": "새 세션",
+          "description": "새 세션을 시작합니다"
         },
         "close-tab-or-window": {
           "label": "탭 또는 창 닫기",
@@ -3013,7 +3013,7 @@
       "projectSwitchLockedTip": "이 플러그인은 전역에서 비활성 상태입니다. 먼저 '전역' 보기에서 활성화해 주세요",
       "projectBanner": {
         "title": "프로젝트 \"{{name}}\" 설정 중",
-        "desc": "여기 스위치는 이 프로젝트에만 적용됩니다. 끈 플러그인은 새 세션에 나타나지 않습니다",
+        "desc": "여기 스위치는 이 프로젝트에만 적용됩니다. 끈 플러그인은 이 프로젝트에서 사용할 수 없습니다",
         "backToGlobal": "전역으로 돌아가기"
       },
       "scopePicker": {
@@ -3044,7 +3044,7 @@
         "updated": "\"{{name}}\"이(가) v{{version}}(으)로 업데이트되었습니다",
         "exported": "\"{{name}}\"의 .cindy 파일을 내보냈습니다",
         "exportFailed": "\"{{name}}\"을(를) 내보내지 못했습니다. 다시 시도하세요",
-        "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다(새 세션부터 적용)",
+        "projectDisabled": "이 프로젝트에서 \"{{name}}\"을(를) 껐습니다",
         "projectEnabled": "\"{{name}}\"이(가) 이 프로젝트에서 전역 설정을 따릅니다"
       },
       "panelError": {
@@ -3330,11 +3330,40 @@
     },
     "contacts": {
       "title": "스마트 연락처",
-      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 이 기기에만 저장되며, 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
+      "description": "에이전트를 위한 인물·조직 데이터베이스입니다. 플랫폼 간 신원 조회(이메일 / Feishu / Slack / GitHub id → 이 사람이 누구인지), 관계 배경, 날짜별 이벤트 기록을 제공합니다. 에이전트가 작업 중 자동으로 수집하며, 확신도가 낮은 항목은 확인 대기 큐로 들어갑니다. 데이터는 기본적으로 이 기기에만 저장되며 필요할 때 기기 간 동기화를 켤 수 있습니다. 조회와 정리는 사용자의 모델을 통해 처리됩니다.",
       "enable": {
         "label": "스마트 연락처 사용",
         "description": "켜면 에이전트가 연락처 정보를 조회하고 자동으로 수집할 수 있습니다(불확실한 항목은 확인 대기로 이동). 꺼도 여기에서 기존 데이터를 보고 관리하는 데는 영향이 없습니다.",
         "toggleAria": "스마트 연락처 전환"
+      },
+      "sync": {
+        "label": "내 기기 간 동기화",
+        "description": "참여할 각 데스크톱에서 한 번 켜세요. 온라인 기기는 자동으로 동기화하며, 같은 로컬 네트워크에서는 직접 연결을 우선합니다. 그 외에는 종단 간 암호화된 릴레이 데이터를 사용합니다. 비교는 프로그램으로만 처리되어 모델이나 token을 사용하지 않습니다.",
+        "toggleAria": "연락처 기기 동기화 전환",
+        "syncNow": "지금 동기화",
+        "onlineDevices_other": "다른 기기 {{count}}대 온라인",
+        "route": {
+          "lan": "로컬 네트워크",
+          "relay": "암호화 릴레이"
+        },
+        "status": {
+          "loading": "동기화 상태 확인 중…",
+          "signInRequired": "기기 간 동기화를 사용하려면 Cindy 계정에 로그인하세요",
+          "off": "동기화 꺼짐",
+          "waiting": "동기화를 켠 다른 데스크톱 기기가 온라인이 되기를 기다리는 중",
+          "syncing": "안전하게 동기화 중…",
+          "ready": "준비됨 — 기기가 온라인이 되면 자동으로 동기화합니다",
+          "lastSuccess": "{{device}} · {{time}} · {{route}}"
+        },
+        "error": {
+          "secure-storage-unavailable": "시스템 보안 저장소를 사용할 수 없어 기기 비밀 키를 보호할 수 없습니다",
+          "peer-identity-changed": "기기 식별 정보가 변경되어 데이터 보호를 위해 동기화를 중지했습니다",
+          "sync-failed": "동기화에 실패했습니다. 다음에 기기가 온라인이 되면 다시 시도합니다"
+        },
+        "toast": {
+          "enabled": "기기 동기화를 켰습니다",
+          "disabled": "기기 동기화를 껐습니다"
+        }
       },
       "stats": "{{people}}명 / 조직 {{orgs}}개 / 그룹 {{groups}}개",
       "kind": {
@@ -4582,7 +4611,7 @@
         "search": "검색",
         "local": "로컬",
         "projects": "프로젝트",
-        "conversations": "대화"
+        "conversations": "세션"
       }
     },
     "addRemoteProject": {
@@ -4757,7 +4786,9 @@
       "detecting": "환경 감지 중…",
       "gitMissing": "git이 감지되지 않습니다. 먼저 설치하세요",
       "notGitRepo": "현재 디렉터리는 git 리포지토리가 아닙니다",
-      "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다"
+      "alreadyInWorktree": "이미 worktree 안에 있어 중첩이 금지됩니다",
+      "toggleAria": "worktree 격리 사용",
+      "chipTooltip": "독립된 worktree에서 이 대화를 시작하며 현재 브랜치에는 영향을 주지 않습니다"
     },
     "branchChip": {
       "label": "브랜치",
@@ -4765,7 +4796,8 @@
       "loadFailed": "브랜치를 불러오지 못했습니다. 눌러서 다시 시도",
       "currentTooltip": "현재 브랜치",
       "sourceTooltip": "worktree 소스 브랜치",
-      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작됩니다"
+      "worktreeHint": "다른 브랜치를 선택하면 worktree 격리로 시작합니다",
+      "exitWorktreeHint": "현재 브랜치를 선택하면 worktree를 해제하고 바로 시작합니다"
     },
     "folderPicker": {
       "selectFolder": "폴더 선택",
@@ -4830,7 +4862,7 @@
       "disabledHint": "이 프로젝트에서는 협업 모드가 비활성화되어 있습니다. 프로젝트 설정에서 활성화하세요.",
       "unavailableHint": "이 프로젝트의 협업 설정을 확인할 수 없습니다. 잠시 후 다시 시도하세요.",
       "unsupportedRemoteHint": "제어 대상 기기의 버전이 오래되어 협업을 사용할 수 없습니다.",
-      "remoteContinueNotice": " 이 메시지는 단일 대화로 계속 전송됩니다.",
+      "remoteContinueNotice": " 이 메시지는 단일 세션으로 계속 전송됩니다.",
       "handoffRecoveredMessage": "지난번 협업 시작이 중단되었습니다. 전송되지 않은 메시지를 입력창에 복원했습니다.",
       "handoffRecoveredGoal": "지난번 협업 시작이 중단되었습니다. 목표가 시작되지 않아 내용을 입력창에 복원했습니다.",
       "loadingHint": "이 프로젝트의 협업 설정을 확인하는 중입니다. 잠시 후 다시 시도하세요.",
@@ -5103,7 +5135,7 @@
       "outputFile": "출력: {{path}}"
     },
     "forkOrigin": {
-      "label": "원래 대화에서 생성됨"
+      "label": "원래 세션에서 생성됨"
     },
     "imageMissing": {
       "title": "이미지가 손실되었습니다"
@@ -5117,13 +5149,13 @@
       "copy": "메시지 복사",
       "linkCopied": "링크가 복사되었습니다",
       "moreActions": "메시지 추가 작업",
-      "copyLink": "현재 대화 링크 복사",
+      "copyLink": "현재 메시지 링크 복사",
       "copyLinkFailed": "링크를 복사하지 못했습니다",
       "rewind": "여기로 돌아가기",
-      "fork": "새 대화에서 계속하기",
-      "forkConfirmTitle": "여기서 새 대화를 시작할까요?",
-      "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 대화를 만듭니다. 원래 대화는 변경되지 않으며, 이후 두 대화의 메시지는 서로에게 영향을 주지 않습니다.",
-      "forkConfirm": "새 대화 시작",
+      "fork": "새 세션에서 계속하기",
+      "forkConfirmTitle": "여기서 새 세션을 시작할까요?",
+      "forkConfirmDescription": "이 지점의 대화 맥락을 사용해 독립된 새 세션을 만듭니다. 원래 세션은 변경되지 않으며, 이후 두 세션의 메시지는 서로에게 영향을 주지 않습니다.",
+      "forkConfirm": "새 세션 시작",
       "forkCancel": "취소",
       "delete": "이 메시지 삭제",
       "deleteConfirmTitle": "이 메시지를 삭제할까요?",
@@ -5145,11 +5177,16 @@
       "retry": "다시 시도",
       "continueAfterReset": "재설정 후 계속",
       "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
-      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 대화에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
-      "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 대화는 계속할 수 없습니다. 새 대화를 시작하세요.",
+      "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
+      "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
+      "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
+      "switchClaudeSubscription": "Claude.ai로 전환 후 재시도",
+      "switchClaudeSubscriptionTitle": "이 세션을 Claude.ai 구독으로 전환하고 다시 시도",
+      "switchingClaudeSubscription": "Claude.ai로 전환하는 중…",
+      "claudeSubscriptionSwitchFailed": "Claude.ai로 전환하거나 이 세션을 다시 시도할 수 없습니다: {{msg}}",
       "budgetModelHint": "계속 실패하면 일반 GPT 모델로 전환해 보세요.",
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
-      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 대화를 시작하세요.",
+      "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
       "codexSessionExpiredDialog": {
         "title": "OpenAI 연결 업데이트 필요",
@@ -5494,7 +5531,7 @@
         "detail": {
           "reason": "중단 원인",
           "attempt": "이번 재시도 {{attempt}}/{{total}}",
-          "sessionTotal": "이 대화에서 재연결 {{count}}회"
+          "sessionTotal": "이 세션에서 재연결 {{count}}회"
         }
       },
       "autoResumeSeparator": {
@@ -5575,7 +5612,7 @@
         "messageCount_other": "메시지 {{count}}개",
         "truncated": "일부 생략"
       },
-      "forkBusy": "현재 응답이 종료된 후 여기서 새 대화를 시작해 주세요",
+      "forkBusy": "현재 응답이 종료된 후 여기서 새 세션을 시작해 주세요",
       "editStopTimeout": "작업 중지 대기 시간이 초과되었습니다. 다시 시도하세요",
       "editQueueNotEmpty": "이 세션에 대기 중인 메시지가 있습니다. 먼저 전송하거나 제거한 후 편집하세요",
       "editNotLast": "세션에 더 새로운 메시지가 있어 이 메시지는 더 이상 최신이 아니므로 편집하여 재전송할 수 없습니다",
@@ -5584,11 +5621,11 @@
       "editSend": "전송",
       "editRollbackHint": "전송하면 이전 턴에서 변경된 파일 {{count}}개가 되돌려집니다",
       "forkErrors": {
-        "unsupportedHistory": "이 지점에 해당하는 이전 에이전트 세션을 사용할 수 없어 여기서 새 대화를 시작할 수 없습니다",
-        "noPriorAssistant": "AI 응답 뒤의 메시지에서 새 대화를 시작해 주세요",
-        "sourceNeverRan": "원래 대화가 아직 실행되지 않아 새 대화를 시작할 수 없습니다",
-        "codexStateUnavailable": "Codex 대화 상태를 사용할 수 없어 새 대화를 시작할 수 없습니다. {{detail}}",
-        "generic": "새 대화를 시작하지 못했습니다. 다시 시도해 주세요"
+        "unsupportedHistory": "이 지점에 해당하는 이전 에이전트 세션을 사용할 수 없어 여기서 새 세션을 시작할 수 없습니다",
+        "noPriorAssistant": "AI 응답 뒤의 메시지에서 새 세션을 시작해 주세요",
+        "sourceNeverRan": "원래 세션이 아직 실행되지 않아 새 세션을 시작할 수 없습니다",
+        "codexStateUnavailable": "Codex 세션 상태를 사용할 수 없어 새 세션을 시작할 수 없습니다. {{detail}}",
+        "generic": "새 세션을 시작하지 못했습니다. 다시 시도해 주세요"
       }
     },
     "threadContext": {
@@ -5847,12 +5884,13 @@
     },
     "draft": {
       "createSessionFailed": "세션 생성에 실패했습니다. 다시 시도하세요",
+      "remoteWorktreeCleanupPending": "이전 원격 worktree가 아직 정리 대기 중입니다. 기기를 다시 연결한 후 재시도하세요.",
       "remoteProviderUpdating": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
       "remoteProviderUnsupported": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
       "remoteNativeOauthUnavailable": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
       "deviceStillLoading": "원격 기기가 아직 로딩 중입니다. 잠시 기다려 주세요",
-      "worktreeMissingRepo": "worktree를 만들 수 없음: 현재 디렉터리의 리포지토리 루트가 없습니다",
-      "worktreeRepoHint": "작업 디렉터리를 다시 선택하고 우측 하단의 폴더 표시가 갱신된 후 다시 시도하세요",
+      "worktreeMissingRepo": "worktree를 만들 수 없습니다: 현재 디렉터리의 리포지토리 루트가 없습니다",
+      "worktreeRepoHint": "작업 디렉터리를 다시 선택한 뒤 오른쪽 아래 폴더 표시가 갱신되면 다시 시도하세요",
       "sessionInactive": "세션이 더 이상 활성 상태가 아닙니다",
       "remoteProjectBanner": "{{device}}의 {{project}}에서 새 세션 만들기",
       "remoteDialogueBanner": "{{device}}에서 새 대화(프로젝트 없음)"
@@ -5889,11 +5927,11 @@
       },
       "showAllSessions": "모두 표시 {{count}}개",
       "dialogues": "대화",
-      "newDialogue": "새 대화",
+      "newDialogue": "새 세션",
       "dialoguesToggleExpand": "대화 펼치기",
       "dialoguesToggleCollapse": "대화 접기",
       "loadingDialogues": "불러오는 중…",
-      "noDialogues": "대화 없음",
+      "noDialogues": "세션 없음",
       "dialogueSettings": "대화 정리",
       "dialogueSettingsAria": "대화 정리(정렬: {{sortBy}})",
       "dialogueSortHeading": "정렬",
@@ -6093,7 +6131,7 @@
         "moveToProjectRemoteUnsupported": "원격 세션 이동은 아직 지원하지 않습니다",
         "openInNewWindow": "새 창에서 열기",
         "exportShare": "세션 내보내기…",
-        "copySessionLink": "대화 링크 복사"
+        "copySessionLink": "세션 링크 복사"
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
@@ -6328,11 +6366,11 @@
       "open": "검색",
       "placeholder": "제목 또는 내용 검색…",
       "clear": "검색 지우기",
-      "empty": "키워드를 입력해 대화 제목과 내용을 검색하세요",
+      "empty": "키워드를 입력해 세션 제목과 내용을 검색하세요",
       "searching": "검색 중…",
       "failed": "검색 실패",
-      "noResults": "일치하는 대화가 없습니다",
-      "jumpFailed": "대화를 열었지만 일치한 메시지로 이동하지 못했습니다",
+      "noResults": "일치하는 세션이 없습니다",
+      "jumpFailed": "세션을 열었지만 일치한 메시지로 이동하지 못했습니다",
       "moreHits": "관련 {{count}}곳 더 있음",
       "kind": {
         "title": "제목",
@@ -6778,28 +6816,28 @@
     "deleteDialog": {
       "title": "자동화 \"{{name}}\"을(를) 삭제하시겠습니까?",
       "titleFallback": "자동화를 삭제하시겠습니까?",
-      "description": "향후 트리거가 중지됩니다. 이 자동화가 이미 생성한 대화를 어떻게 처리할지 선택하세요.",
-      "sessionCountPending": "생성된 대화를 확인하는 중…",
-      "sessionCount": "생성된 대화 {{count}}개",
+      "description": "향후 트리거가 중지됩니다. 이 자동화가 이미 생성한 세션을 어떻게 처리할지 선택하세요.",
+      "sessionCountPending": "생성된 세션을 확인하는 중…",
+      "sessionCount": "생성된 세션 {{count}}개",
       "inflightCount": "현재 {{count}}건의 실행이 진행 중이며 삭제하면 중지됩니다",
-      "optionAria": "생성된 대화 처리 방식 선택",
+      "optionAria": "생성된 세션 처리 방식 선택",
       "option": {
         "keep": {
-          "title": "대화 유지",
-          "description": "자동화 작업만 삭제하고 대화는 사이드바에 유지합니다."
+          "title": "세션 유지",
+          "description": "자동화 작업만 삭제하고 세션은 사이드바에 유지합니다."
         },
         "archive": {
-          "title": "대화 보관",
-          "description": "자동화 작업을 삭제하고 생성된 대화를 보관함으로 이동합니다."
+          "title": "세션 보관",
+          "description": "자동화 작업을 삭제하고 생성된 세션을 보관함으로 이동합니다."
         },
         "delete": {
-          "title": "대화 삭제",
-          "description": "자동화 작업과 생성된 대화를 삭제합니다. 이 작업은 되돌릴 수 없습니다."
+          "title": "세션 삭제",
+          "description": "자동화 작업과 생성된 세션을 삭제합니다. 이 작업은 되돌릴 수 없습니다."
         }
       },
       "confirm": "자동화 삭제",
-      "confirmDeleteSessions": "자동화와 대화 삭제",
-      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 대화를 처리하지 못했습니다"
+      "confirmDeleteSessions": "자동화와 세션 삭제",
+      "sessionUpdatePartial": "자동화는 삭제되었지만 {{fail}}개 세션을 처리하지 못했습니다"
     },
     "confirm": {
       "delete": {
@@ -6898,7 +6936,8 @@
     "mine": {
       "refresh": "새로 고침",
       "emptyTitle": "아직 제출한 이슈가 없습니다",
-      "startIssueChat": "/issue 로 새 채팅 시작",
+      "emptyTitleUnverified": "현재 이슈를 가져올 수 없습니다",
+      "startIssueChat": "/issue 로 새 세션 시작",
       "statusUnknown": "상태 알 수 없음",
       "sourceCindy": "Cindy에서 제출",
       "sourceGithub": "GitHub 계정",
@@ -6910,6 +6949,8 @@
       "notSignedInHint": "Cindy 계정에 로그인하면 제출한 모든 이슈와 최신 상태를 볼 수 있습니다.",
       "fetchFailedHint": "최신 상태를 가져오지 못했습니다. 이 기기에 기록된 제출 항목만 표시하므로 목록이 완전하지 않을 수 있습니다.",
       "fetchFailedPartialHint": "최신 상태를 가져오지 못했습니다. 일부 이슈의 상태가 완전하지 않을 수 있습니다.",
+      "enhancementFailedHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. Cindy GitHub 플러그인의 액세스 토큰 권한이 부족할 수 있습니다. 플러그인 페이지에서 확인해 주세요.",
+      "enhancementFailedGenericHint": "GitHub 계정으로 등록한 이슈를 읽지 못했습니다. 네트워크 문제이거나 GitHub 요청 제한일 수 있습니다. 잠시 후 다시 시도해 주세요.",
       "truncatedHint": "이슈가 많아 일부만 표시했습니다. 전체 목록은 GitHub에서 확인하세요."
     },
     "redirect": {
@@ -7176,7 +7217,13 @@
       "installed": "설치됨",
       "globalScope": "전역",
       "sourceSkillhub": "SkillHub",
-      "sourceLocal": "로컬"
+      "sourceLocal": "로컬",
+      "import": "스킬 가져오기",
+      "importAria": "로컬 zip 또는 SKILL.md에서 스킬 가져오기",
+      "importPickerTitle": "가져오기 위치 선택",
+      "importPickerSubtitle": "{{name}} · {{description}}",
+      "importSuccess": "{{name}} 가져오기 완료{{suffix}}",
+      "importFailed": "스킬 가져오기 실패"
     },
     "common": {
       "openFolderFailed": "폴더 열기 실패",
@@ -7739,7 +7786,7 @@
       "migrationPartial": "마이그레이션 완료: 성공 {{success}} / 건너뜀 {{skipped}} / 실패 {{failed}} (총 {{total}})",
       "migrationFailed": "마이그레이션 실패. 잠시 후 다시 시도하세요",
       "fetchUpdateNoticeFailed": "업데이트 알림 가져오기 실패",
-      "corruptionRestored": "{{time}}의 스냅샷에서 데이터베이스가 복원됨. 그 사이의 채팅이 손실되었을 수 있습니다",
+      "corruptionRestored": "{{time}}의 스냅샷에서 데이터베이스가 복원됨. 그 사이의 대화 기록이 손실되었을 수 있습니다",
       "schemaDriftWarning": "로컬 데이터베이스 버전 기록이 일치하지 않습니다. 최신 버전으로 업데이트한 뒤에도 이 경고가 계속 표시되면 지원팀에 문의해 주세요. 앱은 로컬 데이터를 자동으로 삭제하지 않습니다.",
       "telegramBotConnected": "Telegram 봇 구성이 저장됨",
       "telegramBotConnectFailed": "Telegram 봇 연결 실패. Token과 네트워크를 확인하세요",
@@ -7957,7 +8004,7 @@
     },
     "toast": {
       "usage": "사용법: /goal <목표 조건>",
-      "noSession": "목표를 설정하려면 먼저 대화를 열거나 시작하세요",
+      "noSession": "목표를 설정하려면 먼저 세션을 열거나 시작하세요",
       "failed": "목표 설정에 실패했습니다",
       "set": "목표를 설정했습니다 — 자동으로 진행합니다",
       "cleared": "목표를 지웠습니다"
@@ -7980,7 +8027,7 @@
       "failed": "학습에 실패했습니다",
       "cancel": "취소",
       "review": "제안 검토",
-      "fromConversation": "현재 대화에서 증류",
+      "fromConversation": "현재 세션에서 증류",
       "openSession": "학습 세션 열기",
       "continueHint": "이 세션에서 계속 대화하면 제안을 수정할 수 있습니다. 만족하면 \"제안 검토\"로 적용하세요"
     },

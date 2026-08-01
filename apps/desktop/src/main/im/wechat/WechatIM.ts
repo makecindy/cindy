@@ -1207,7 +1207,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
       case '/help':
         await this.#commitSimpleReply(
           task,
-          '可用命令：/new 新对话；/stop 停止当前任务；/stop all 停止全部任务；/status 查看状态；/help 查看帮助。',
+          '可用命令：/new 新对话；/stop 中止当前执行；/stop all 中止全部执行；/status 查看状态；/help 查看帮助。',
         );
         return;
       case '/status':
@@ -1290,7 +1290,7 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     const text =
       reason.includes('TURN_PERMISSION_POLICY_UNSUPPORTED') ||
       reason.includes('unsupported_turn_permission')
-        ? '当前会话使用“完全访问”权限，个人微信暂不支持该模式。请在 Cindy 中改为“自动”或“每次询问”。'
+        ? '当前任务使用“完全访问”权限，个人微信暂不支持该模式。请在 Cindy 中改为“自动”或“每次询问”。'
         : reason === 'missing_auth'
           ? '当前 Agent 尚未完成授权，请先在 Cindy 中连接模型服务。'
           : '这条消息暂时无法启动，请稍后重试。';

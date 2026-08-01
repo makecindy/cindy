@@ -34,6 +34,12 @@ type DesktopAccountDeletionConfirmResult =
   import('../shared/authIpc').DesktopAccountDeletionConfirmResult;
 type DesktopAccountDeletionStatusResult =
   import('../shared/authIpc').DesktopAccountDeletionStatusResult;
+type PendingRemotePrecreatedWorktree =
+  import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktree;
+type PendingRemotePrecreatedWorktreeTarget =
+  import('../shared/remotePrecreatedWorktreeLedger').PendingRemotePrecreatedWorktreeTarget;
+type RemotePrecreatedWorktreeLedgerSnapshot =
+  import('../shared/remotePrecreatedWorktreeLedger').RemotePrecreatedWorktreeLedgerSnapshot;
 
 /* ── Environment check ── */
 
@@ -1875,6 +1881,8 @@ interface ElectronAPI {
     >;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
+    /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
+    worktreeEnabled: boolean;
   }) => void;
 
   /** 被控端 renderer → 自身 main:providerModelMemory 全量快照镜像(草稿列表行真实读源)。 */
@@ -1904,6 +1912,11 @@ interface ElectronAPI {
       effort?: string;
       fast?: boolean;
     }) => void,
+  ) => () => void;
+
+  /** 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」(patchDraft 写真实草稿)。 */
+  onMakerWorktreePrefApply: (
+    cb: (payload: { worktreeEnabled: boolean }) => void,
   ) => () => void;
 
   /** 被控端本地 main → 自身 renderer:控制端写穿的会话「模型 effort/fast」pref(调本地 setter)。 */
@@ -2118,10 +2131,10 @@ interface ElectronAPI {
   // ── 系统级通知（CC Agent session 状态变更）──
   /**
    * 弹一条桌面通知。kind 决定文案：
-   *   - 'done'        — 真完成，文案 "会话「xxx」已完成"
-   *   - 'error'       — 执行失败，文案 "会话「xxx」执行失败"
+   *   - 'done'        — 真完成，文案 "任务「xxx」已完成"
+   *   - 'error'       — 执行失败，文案 "任务「xxx」执行失败"
    *   - 'needs-reply' — 等用户回复（ask-user / permission / plan-review），
-   *                     文案 "会话「xxx」需要你回复"
+   *                     文案 "任务「xxx」需要你回复"
    */
   notificationShowSessionEvent: (payload: {
     sessionId: string;
@@ -2723,6 +2736,34 @@ interface ElectronAPI {
       | { success: true }
       | { success: false; errorCode: string; message: string }
     >;
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: () => Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    >;
+    /** 使用 main 签发的文件授权导入；registry origin=imported。 */
+    importLocal: (params: {
+      grantToken: string;
+      installPath?: string;
+      force?: boolean;
+    }) => Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    >;
     onInstallProgress: (
       callback: (event: {
         phase:
@@ -3308,6 +3349,16 @@ interface ElectronAPI {
   sidebarSettingsLoadPinnedOrderSync: () => string[];
   sidebarSettingsSavePinnedOrder: (order: readonly string[]) => Promise<void>;
   sidebarSettingsOnPinnedOrderChanged: (cb: (order: string[]) => void) => () => void;
+
+  remotePrecreatedWorktreeLedger: {
+    list: () => Promise<RemotePrecreatedWorktreeLedgerSnapshot>;
+    register: (
+      record: PendingRemotePrecreatedWorktree,
+    ) => Promise<{ persisted: boolean }>;
+    forget: (
+      target: PendingRemotePrecreatedWorktreeTarget,
+    ) => Promise<{ persisted: boolean }>;
+  };
 
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // today aggregate 已搬到 electronAPI.maker.usage.* (Claude USD + Codex token 统一)。
@@ -4441,6 +4492,9 @@ interface ElectronAPI {
     contacts: {
       settingsGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
       settingsSet: (enabled: boolean) => Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }>;
+      syncStatusGet: () => Promise<unknown>;
+      syncEnabledSet: (enabled: boolean) => Promise<unknown>;
+      syncNow: () => Promise<unknown>;
       list: (opts?: unknown) => Promise<unknown[]>;
       get: (id: string) => Promise<unknown>;
       create: (input: unknown) => Promise<unknown>;
@@ -4469,6 +4523,7 @@ interface ElectronAPI {
       parseVcf: (text: string) => Promise<unknown[]>;
       import: (records: unknown[], opts?: { groupId?: string }) => Promise<unknown>;
       onChanged: (cb: () => void) => () => void;
+      onSyncStatusChanged: (cb: (status: unknown) => void) => () => void;
     };
 
     /** Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth) */
@@ -4540,6 +4595,14 @@ interface ElectronAPI {
       input: import('../shared/helpTypes').HelpFeedbackDraftInput,
     ) => Promise<import('../shared/helpTypes').HelpFeedbackDraft>;
     /** /issues 页面的「我的 Issue」列表;force=true 绕过 main 侧 60s TTL(手动刷新)。 */
+    /**
+     * /issues 首屏快照(上次查询成功时落盘的列表镜像)。进页面先渲染它,避免空等远端;
+     * fresh 一到即整体接管。**非权威**:里面没有本次查询的健康状况,它的空列表也不构成
+     * 「查证过的空」(详见 main/github-issue/myIssuesSnapshotStore.ts)。
+     */
+    getMyIssuesSnapshot: () => Promise<
+      import('../shared/myIssues').MyIssuesSnapshot | null
+    >;
     listMyIssues: (options?: { force?: boolean }) => Promise<
       | ({ success: true } & import('../shared/myIssues').MyIssuesResult)
       | {
@@ -4548,6 +4611,7 @@ interface ElectronAPI {
           error: import('../shared/myIssues').MyIssuesErrorCode;
           items: [];
           githubEnhancement: null;
+          githubEnhancementFailed: false;
           degraded: null;
           truncated: false;
         }
@@ -4931,8 +4995,8 @@ interface StoredInstall {
   installedAt: number;
   /** unix seconds。update / publish 同步时刷新。 */
   updatedAt: number;
-  /** 本地来源：installed=从市场安装，published=本地创建后发布，learned=/learn 蒸馏产物。历史数据无此字段。 */
-  origin?: 'installed' | 'published' | 'learned';
+  /** 本地来源：installed=从市场安装，published=本地创建后发布，learned=/learn 蒸馏产物，imported=本地 zip/SKILL.md 导入。历史数据无此字段。 */
+  origin?: 'installed' | 'published' | 'learned' | 'imported';
   /** 是否由产品自动同步流程安装。用于区分普通市场安装与用户可 opt-out 的自动同步安装。 */
   autoSynced?: boolean;
   /** /learn 蒸馏产物的溯源(仅 origin='learned')。personal=true ⇒ publish 拦截。 */

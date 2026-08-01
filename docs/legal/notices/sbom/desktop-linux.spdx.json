@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/2f4208adab9bc42a0ee330f6d5be37bac601e420d3e683bc7d67774ac07a3dd0",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/3de28c6999b2a84a3b7670006064475e8501052279f386fa3792034e4013eac8",
   "creationInfo": {
-    "created": "2026-07-29T09:30:58Z",
+    "created": "2026-07-30T07:20:40Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -155,6 +155,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/%40antfu/install-pkg@1.1.0"
+        }
+      ]
+    },
+    {
+      "name": "@anthropic-ai/sdk",
+      "SPDXID": "SPDXRef-Package-69d311a72cf4a3c3",
+      "versionInfo": "0.81.0",
+      "downloadLocation": "https://github.com/anthropics/anthropic-sdk-typescript",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/%40anthropic-ai/sdk@0.81.0"
         }
       ]
     },
@@ -5820,23 +5837,6 @@
       ]
     },
     {
-      "name": "dingtalk-stream",
-      "SPDXID": "SPDXRef-Package-90f04b6ed7221e7d",
-      "versionInfo": "v2.1.5",
-      "downloadLocation": "https://github.com/open-dingtalk/dingtalk-stream-sdk-nodejs",
-      "filesAnalyzed": false,
-      "licenseConcluded": "MIT",
-      "licenseDeclared": "MIT",
-      "copyrightText": "NOASSERTION",
-      "externalRefs": [
-        {
-          "referenceCategory": "PACKAGE-MANAGER",
-          "referenceType": "purl",
-          "referenceLocator": "pkg:npm/dingtalk-stream@v2.1.5"
-        }
-      ]
-    },
-    {
       "name": "discord-api-types",
       "SPDXID": "SPDXRef-Package-c1fb6106ccdf0317",
       "versionInfo": "0.38.50",
@@ -6853,6 +6853,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/get-caller-file@2.0.5"
+        }
+      ]
+    },
+    {
+      "name": "get-east-asian-width",
+      "SPDXID": "SPDXRef-Package-d60bc4ed2cc53300",
+      "versionInfo": "1.6.0",
+      "downloadLocation": "https://github.com/sindresorhus/get-east-asian-width",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/get-east-asian-width@1.6.0"
         }
       ]
     },
@@ -9152,6 +9169,23 @@
       ]
     },
     {
+      "name": "mdast-util-to-markdown-cjk-friendly",
+      "SPDXID": "SPDXRef-Package-d34528f8f0b2d6a4",
+      "versionInfo": "1.0.0",
+      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/mdast-util-to-markdown-cjk-friendly@1.0.0"
+        }
+      ]
+    },
+    {
       "name": "mdast-util-to-string",
       "SPDXID": "SPDXRef-Package-236fb819698c71e4",
       "versionInfo": "4.0.0",
@@ -9267,6 +9301,40 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/micromark-core-commonmark@2.0.3"
+        }
+      ]
+    },
+    {
+      "name": "micromark-extension-cjk-friendly",
+      "SPDXID": "SPDXRef-Package-c36e3ff21cfabdb2",
+      "versionInfo": "2.0.1",
+      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/micromark-extension-cjk-friendly@2.0.1"
+        }
+      ]
+    },
+    {
+      "name": "micromark-extension-cjk-friendly-util",
+      "SPDXID": "SPDXRef-Package-6210e203ddfb6030",
+      "versionInfo": "3.0.1",
+      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/micromark-extension-cjk-friendly-util@3.0.1"
         }
       ]
     },
@@ -11375,6 +11443,23 @@
           "referenceCategory": "PACKAGE-MANAGER",
           "referenceType": "purl",
           "referenceLocator": "pkg:npm/rehype-slug@6.0.0"
+        }
+      ]
+    },
+    {
+      "name": "remark-cjk-friendly",
+      "SPDXID": "SPDXRef-Package-0265a938fcf75432",
+      "versionInfo": "2.3.1",
+      "downloadLocation": "https://github.com/tats-u/markdown-cjk-friendly",
+      "filesAnalyzed": false,
+      "licenseConcluded": "MIT",
+      "licenseDeclared": "MIT",
+      "copyrightText": "NOASSERTION",
+      "externalRefs": [
+        {
+          "referenceCategory": "PACKAGE-MANAGER",
+          "referenceType": "purl",
+          "referenceLocator": "pkg:npm/remark-cjk-friendly@2.3.1"
         }
       ]
     },
@@ -13510,6 +13595,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-69d311a72cf4a3c3"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-6dd15d27ddf97540"
     },
     {
@@ -15175,11 +15265,6 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-90f04b6ed7221e7d"
-    },
-    {
-      "spdxElementId": "SPDXRef-DOCUMENT",
-      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-c1fb6106ccdf0317"
     },
     {
@@ -15476,6 +15561,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-d72432ec68d04997"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d60bc4ed2cc53300"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16155,6 +16245,11 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-d34528f8f0b2d6a4"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-236fb819698c71e4"
     },
     {
@@ -16186,6 +16281,16 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-6537e377a4711f98"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-c36e3ff21cfabdb2"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-6210e203ddfb6030"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -16806,6 +16911,11 @@
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
       "relatedSpdxElement": "SPDXRef-Package-649883e5ac9fe55a"
+    },
+    {
+      "spdxElementId": "SPDXRef-DOCUMENT",
+      "relationshipType": "DESCRIBES",
+      "relatedSpdxElement": "SPDXRef-Package-0265a938fcf75432"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",

@@ -14,6 +14,7 @@
 import { createElement, memo, useCallback, useEffect, useRef, useState, useMemo, isValidElement, type HTMLAttributes, type ReactNode } from 'react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
 import rehypeHighlight from 'rehype-highlight';
 import rehypeKatex from 'rehype-katex';
@@ -178,8 +179,16 @@ function isMermaidCodeChild(child: ReactNode): boolean {
 // remarkGfm singleTilde:false — 删除线只认标准 GFM 的 `~~text~~`,单个 `~` 保持
 // 字面量。默认 singleTilde:true 会把「4~6……4~6」这类区间写法中间整段划成删除线,
 // mobile 自研 parser(messageMarkdown.ts)本就只匹配 `~~`,此处对齐。
+// remarkCjkFriendly 紧随 remarkGfm 注册(官方示例顺序):放宽 CommonMark 加粗
+// 定界的侧翼(flanking)规则——CJK 全角标点(。：，“”（）等)不再被当作
+// 「标点」参与判定。原生规则下 `**` 内侧挨全角标点时开/闭侧翼不成立,整对
+// 星号退化成字面量(AI 高频写法「**小标题：**正文」「**“术语”**」「**（注）**」
+// 全中招);mobile 自研 parser 用正则配对本就能渲染这些写法,此处对齐。只放宽
+// emphasis/strong 的定界判定,不碰 `~~` 删除线(gfm strikethrough 有独立定界
+// 逻辑,行为不变),也不影响带空格的 `2 ** 3 ** 4` 这类本应保持字面量的写法。
 const REMARK_PLUGINS: PluggableList = [
   [remarkGfm, { singleTilde: false }],
+  remarkCjkFriendly,
   remarkMath,
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,
@@ -189,6 +198,7 @@ const REMARK_PLUGINS: PluggableList = [
 ];
 const REMARK_PLUGINS_PRIVILEGED: PluggableList = [
   [remarkGfm, { singleTilde: false }],
+  remarkCjkFriendly,
   remarkMath,
   remarkStrictInlineMath,
   remarkTruncateCjkUrls,

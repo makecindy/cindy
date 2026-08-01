@@ -39,6 +39,7 @@ import { createWorkerLabel } from './workerLabel';
 import { useNavigate, useOutletContext } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
+import { useAuth } from '@/contexts/AuthContext';
 import { themeService } from '@/themes/theme-service';
 import type { Theme as ColorTheme } from '@/themes/types';
 import { ThemeBrandLockup } from '@/components/branding/ThemeBrandLockup';
@@ -79,6 +80,7 @@ import {
   getFastModeForModel,
   setFastModeForModel,
   setEffortForModel,
+  setWorktreePreference,
   type VendorPrefs,
   type CollabDraft,
 } from '@/state/newMakerDraft';
@@ -157,6 +159,22 @@ import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
+import {
+  createRemoteSessionWithPrecreatedWorktree,
+  forgetPendingRemotePrecreatedWorktree,
+  isRemotePrecreatedWorktreeCleanupPendingError,
+  isRemotePrecreatedWorktreeOwnerChangedError,
+  registerPendingRemotePrecreatedWorktree,
+  recoverPendingRemotePrecreatedWorktrees,
+  RemotePrecreatedWorktreeCleanupPendingError,
+  RemotePrecreatedWorktreeOwnerChangedError,
+} from './remotePrecreatedWorktree';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+} from '@/contexts/dataOwnerGeneration';
+import { useDeviceLinkReconnectEpoch } from '@/features/device-link/useDeviceLinkReconnectEpoch';
+import { extractIpcError } from '@/utils/ipcError';
 import { matchNavigationCommandName, tryHandleNavigationCommand } from '@/lib/navigationCommands';
 import {
   useAgentCapabilities,
@@ -256,7 +274,7 @@ const DRAFT_IMAGE_URL_PREFIX = `xdt-image://${NEW_MAKER_DRAFT_KEY}/`;
  * **只对能证明一致的纯文本消息放行**。带 @mention / 附件 / 会话引用时,权威占位由
  * `deriveAutoTitleSeed` 另行推导(剔除 mention 的 wire token、拿文件名合成描述),这里
  * 算不出同一个串 —— 预览会先显示 A 再跳成 B,比短暂显示占位更糟。这类消息交给显示层的
- * 「未命名对话」兜底,等权威标题回流。
+ * 「未命名任务」兜底,等权威标题回流。
  *
  * 纯文本时两侧一致是可证明的:无 reference / 未编码引用标记时 `projectLiteralUserText`
  * 退化为 `text.trim()`,无 mention 时 `stripMentionTokens` 同样只做 trim,而
@@ -477,6 +495,7 @@ interface DraftTargetRequest {
 
 export function NewMakerDraftRoute() {
   const { t } = useTranslation();
+  const { dataOwnerId } = useAuth();
   const draft = useNewMakerDraft();
   const navigate = useNavigate();
   // 首参 914=内容封顶宽(→ inputWidth 封顶 934):大屏留出左右呼吸空间,不再顶满全宽;
@@ -571,6 +590,7 @@ export function NewMakerDraftRoute() {
   const [wtName, setWtName] = useState('');
   const [wtSourceBranch, setWtSourceBranch] = useState('');
   const [wtBaseRepo, setWtBaseRepo] = useState<string | null>(null);
+  const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(null);
   // F-COLLAB: 协同模式状态(enabled + worker 类型)直接读自 draft store,
   // 和 workingDir 走同一份 localStorage,重启 / 切走再回都能恢复。
   // 互斥约束(本组件 enforce):
@@ -1018,35 +1038,66 @@ export function NewMakerDraftRoute() {
   const [dlSel, setDlSel] = useState<DeviceLinkDraftSelection | null>(null);
   const dlSeedKeyRef = useRef<string | null>(null);
   const skipDefaultsRefetchRef = useRef(false);
+  const remoteDraftIdentityRef = useRef<string | null>(null);
+  const remoteDraftRevisionRef = useRef(0);
+  const remoteDraftRefreshEpoch = useDeviceLinkReconnectEpoch(
+    isDeviceLinkDraft ? effectiveDeviceLinkDeviceId : undefined,
+  );
 
-  // 拉被控端当前草稿值(每次 deviceId / vendor 变化重拉;失败 / 旧版 → value=null 触发 fallback)。
+  // 拉被控端当前草稿值。切 device/vendor 时清旧镜像；同一目标重连时后台重拉，
+  // 但保留已知值直到新结果落下，避免一次瞬态失败把工作端拥有的 true 压成 false。
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) {
+      remoteDraftIdentityRef.current = null;
       setRemoteDraftState({ loaded: false, value: null });
       return;
     }
+    const identity = `${effectiveDeviceLinkDeviceId}:${capabilityAgentKind}`;
+    const sameIdentity = remoteDraftIdentityRef.current === identity;
+    remoteDraftIdentityRef.current = identity;
     // handoff 路径已 inline 拉取并 set 了 remoteDraftState,跳过本次 effect 重拉。
     if (skipDefaultsRefetchRef.current) {
       skipDefaultsRefetchRef.current = false;
       return;
     }
     let cancelled = false;
-    setRemoteDraftState({ loaded: false, value: null });
+    const requestRevision = remoteDraftRevisionRef.current;
+    setRemoteDraftState((previous) => (
+      sameIdentity ? previous : { loaded: false, value: null }
+    ));
     window.electronAPI.deviceLink
       .invoke(effectiveDeviceLinkDeviceId, 'maker:get-new-maker-defaults', [capabilityAgentKind])
       .then((v) => {
-        if (!cancelled) {
+        if (
+          !cancelled
+          && remoteDraftRevisionRef.current === requestRevision
+        ) {
           setRemoteDraftState({ loaded: true, value: (v as RemoteDraftDefaults | null) ?? null });
         }
       })
-      .catch(() => {
-        // 旧版被控端无此 channel(CHANNEL_NOT_ALLOWED)/ 拉取失败 → 回落 capabilities 默认。
-        if (!cancelled) setRemoteDraftState({ loaded: true, value: null });
+      .catch((error) => {
+        if (
+          cancelled
+          || remoteDraftRevisionRef.current !== requestRevision
+        ) return;
+        const unsupported =
+          extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED';
+        // 只有确认旧端不支持时回落 capabilities 默认。超时/断链保留同目标旧镜像，
+        // remoteDraftRefreshEpoch 会在 relay 或目标设备恢复后触发下一次权威拉取。
+        setRemoteDraftState((previous) => ({
+          loaded: true,
+          value: unsupported ? null : previous.value,
+        }));
       });
     return () => {
       cancelled = true;
     };
-  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, capabilityAgentKind]);
+  }, [
+    isDeviceLinkDraft,
+    effectiveDeviceLinkDeviceId,
+    capabilityAgentKind,
+    remoteDraftRefreshEpoch,
+  ]);
 
   // seed dlSel:等被控端 capabilities + 草稿值都就绪后种一次;按 (deviceId, vendor) 记 seedKey,
   // 同一设备 / vendor 内不重种(用户编辑只改 dlSel、不动 seedKey,故不被覆盖),切设备 / vendor 才重种。
@@ -1120,6 +1171,7 @@ export function NewMakerDraftRoute() {
       if (push.channel !== 'maker:new-maker-draft:changed') return;
       const payload = push.payload as Record<string, RemoteDraftDefaults | undefined> | null;
       const next = payload?.[vendorSlot] ?? null;
+      remoteDraftRevisionRef.current += 1;
       setRemoteDraftState({ loaded: true, value: next });
       // 选中行(dlSel)的 effort/fast 也跟被控端走:按当前 dlSel.model 重解析,但保留控制端的
       // permission/source/model 选择(非按模型记 / 控制端 launch 意图)。被控端改选中模型 effort 即时反映。
@@ -1137,6 +1189,19 @@ export function NewMakerDraftRoute() {
       }
     });
   }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, capabilityAgentKind, capabilities]);
+
+  // ── worktree 勾选 = 工作端记忆的镜像(2026-07-29 用户裁决:状态只属于用户) ────
+  // 本地草稿读本地 draft.worktreeEnabled;device-link 远程草稿读被控端镜像
+  // (remoteDraftState.value.worktreeEnabled,vendor 无关根字段,拉取完成前保持关,
+  // 不闪开)。checkbox **原样直出**记忆——不做 baseRepo/资格点亮门槛、没有任何
+  // 自动开关;环境合格性只影响 checkbox 禁用态与发送时是否真的走 worktree
+  // (handleSend 按「勾选 && baseRepo 就绪」静默降级,绝不报错拦截、绝不改记忆)。
+  const worktreePref = isDeviceLinkDraft
+    ? remoteDraftState.loaded && remoteDraftState.value?.worktreeEnabled === true
+    : draft.worktreeEnabled;
+  useEffect(() => {
+    setWtEnabled(worktreePref);
+  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId, worktreePref]);
 
   // modelMemoryOverride:非选中行读镜像、改动经隧道写穿被控端(active=false)。providerId 由
   // ModelSelector 按行传入(每行各自的供应商)。写失败(旧版被控端 / 离线)静默吞 —— 乐观本地镜像
@@ -1447,9 +1512,11 @@ export function NewMakerDraftRoute() {
       // 这个窗口内发送会把 worktree 建到上一个 repo 里;sourceBranch 只在为空时才自动填充,用户在
       // X 上显式选过的分支会一直跟到 Y —— Y 上不存在就报错,恰好存在就在一条毫不相关的分支上开工。
       if (deviceChanged || workingDirChanged) {
-        setWtEnabled(false);
+        // worktreeEnabled is the user's working-device preference, not repo metadata.
+        // Keep it across target changes; only invalidate the probed repository/branch.
         setWtBaseRepo(null);
         setWtSourceBranch('');
+        setWtSupportsRecoveryKeyDiscard(null);
       }
 
       patchDraft({
@@ -1912,14 +1979,38 @@ export function NewMakerDraftRoute() {
     [handleWorkingDirChange],
   );
 
-  const handleWtEnabledChange = useCallback((enabled: boolean) => {
+  // 用户切换 worktree(2026-07-29 实测后第二版):
+  //  - source='chip'(点 checkbox 本体)→ 写穿「工作端勾选记忆」——本地草稿写本地
+  //    newMakerDraft 根字段;device-link 远程草稿写到被控端(状态归工作端所有,
+  //    控制端只是远程操作器,与手机端同语义);
+  //  - source='branch-pick'(分支选择的双向联动)→ 仅本次草稿的 UI 态,不落记忆
+  //    ——分支选择表达"这一次从哪启动",不改全局默认。
+  // 系统/环境路径没有任何入口能触达这里(不变量)。
+  const handleWtEnabledChange = useCallback((enabled: boolean, source: 'chip' | 'branch-pick') => {
     setWtEnabled(enabled);
-  }, []);
+    if (source !== 'chip') return;
+    if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
+      remoteDraftRevisionRef.current += 1;
+      window.electronAPI.deviceLink
+        .invoke(effectiveDeviceLinkDeviceId, 'maker:apply-new-maker-worktree-pref', [
+          { worktreeEnabled: enabled },
+        ])
+        .catch(() => {
+          // 旧版被控端无此 channel(CHANNEL_NOT_ALLOWED)/ 隧道瞬断 → 勾选仅本次草稿
+          // 生效,不打断用户;被控端后续 push 回流可能把 UI 收敛回旧值,属可接受降级。
+        });
+      return;
+    }
+    setWorktreePreference(enabled);
+  }, [isDeviceLinkDraft, effectiveDeviceLinkDeviceId]);
   const handleWtSourceBranchChange = useCallback((sourceBranch: string) => {
     setWtSourceBranch(sourceBranch);
   }, []);
   const handleWtBaseRepoChange = useCallback((baseRepo: string | null) => {
     setWtBaseRepo(baseRepo);
+  }, []);
+  const handleWtRecoveryKeyDiscardSupportChange = useCallback((supported: boolean | null) => {
+    setWtSupportsRecoveryKeyDiscard(supported);
   }, []);
   const handleWtNameChange = useCallback((name: string) => {
     setWtName(name);
@@ -1941,12 +2032,14 @@ export function NewMakerDraftRoute() {
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
   });
   wtRef.current = {
     enabled: wtEnabled,
     name: wtName,
     sourceBranch: wtSourceBranch,
     baseRepo: wtBaseRepo,
+    supportsRecoveryKeyDiscard: wtSupportsRecoveryKeyDiscard,
   };
 
   // ─── Send 拦截:vendorAuthGate → createSession → send / background worktree ──
@@ -2045,6 +2138,15 @@ export function NewMakerDraftRoute() {
       // workingDir 为空就是 standalone dialogue;main 端按 workspaceKind='dialogue'
       // 自动分配运行目录。项目不是必填项,只是同一创建页里的可切换上下文。
       const selectedWorkingDir = effectiveWorkingDir?.trim() || undefined;
+      // 发送语义以用户按下 Send 的那一帧为准。鉴权检查期间项目/分支仍可能被 UI
+      // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
+      // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
+      const selectedWorktree = { ...wtRef.current };
+      const dataOwnerAtSend = getDataOwnerGeneration();
+      const isCurrentDataOwner = () => (
+        dataOwnerAtSend.dataOwnerId === dataOwnerId
+        && isDataOwnerGenerationCurrent(dataOwnerAtSend)
+      );
 
       markSendInFlight(true);
       // 已登记乐观标题预览的会话 id。交接链路(rehomeDraftAttachments / setPending /
@@ -2054,11 +2156,13 @@ export function NewMakerDraftRoute() {
       let optimisticTitleSessionId: string | null = null;
       void (async () => {
         try {
+          if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           // device-link:远程草稿就绪态以被控端为准(传 deviceId 走隧道查被控端 maker:agent:status);
           // 本地草稿 effectiveDeviceLinkDeviceId 为 undefined → 仍走控制端本机就绪检查(行为不变)。
           const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
             deviceId: effectiveDeviceLinkDeviceId,
           });
+          if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
 
           // device-link 远程项目:在被控端走校验过的 maker:create-session 建会话(写被控 DB,
@@ -2076,61 +2180,144 @@ export function NewMakerDraftRoute() {
           if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {
             const deviceId = effectiveDeviceLinkDeviceId;
             const deviceName = effectiveDeviceLinkDeviceName ?? deviceId;
-            const wt = wtRef.current;
-            let remoteWorkingDir = effectiveWorkingDir ?? undefined;
-            let presetSessionId: string | undefined;
-            // worktree 是项目专属能力:远程纯对话没有 repo,即使 wtEnabled 还残留着上一个
-            // 项目草稿的 true(切「对话」不会重置它),也必须跳过,否则会拿 null baseRepo
-            // 撞进 worktreeMissingRepo 报错、把一次正常的对话创建拦掉。
-            if (effectiveWorkingDir && wt.enabled) {
-              // baseRepo 来自被控端 worktree:detect-cwd 的 repoRoot(hooks 已按 deviceId 路由)。
-              const baseRepo = wt.baseRepo;
-              if (!baseRepo) {
-                showWorktreeError({
-                  kind: 'unknown',
-                  message: t('ccAgent.draft.worktreeMissingRepo'),
-                  hint: t('ccAgent.draft.worktreeRepoHint'),
-                });
-                return;
+            const invokeRemote = async (channel: string, args: unknown[]) => {
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
               }
+              const result = await window.electronAPI.deviceLink.invoke(deviceId, channel, args);
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              return result;
+            };
+            const wt = selectedWorktree;
+            const ownerAtSend = dataOwnerAtSend.dataOwnerId;
+            let remoteWorkingDir = effectiveWorkingDir?.trim() || undefined;
+            let presetSessionId: string | undefined;
+            let precreatedWorktree: {
+              path: string;
+              recoveryKey: string;
+              createdAt: number;
+            } | undefined;
+            // 生效条件 = 勾选 && baseRepo 已就绪 && 被控端明确支持 recoveryKey discard。
+            // 旧 Desktop 可能接受未知 recoveryKey 却不持久化，不能把它当成支持端发起
+            // 预创建；能力不合格 / 探测未回时静默按普通方式启动，不报错不改勾选记忆。
+            if (
+              effectiveWorkingDir
+              && wt.enabled
+              && wt.baseRepo
+              && wt.supportsRecoveryKeyDiscard === true
+            ) {
+              // 账本必须绑定发起时的账号/本地数据 owner。账号在后续 await
+              // 期间切换时，Main 会拒绝把这笔义务落入新 owner 的命名空间。
+              if (!ownerAtSend) {
+                throw new RemotePrecreatedWorktreeCleanupPendingError();
+              }
+              // 上次两步创建若在 create / probe / discard 都断线后失败，本地账本仍
+              // 承担 cleanup obligation。新建下一份前先恢复；无法确认回收/认领时
+              // 硬挡本次 worktree:create，避免每次重试生成一个新的受管目录。
+              const recovery = await recoverPendingRemotePrecreatedWorktrees({
+                deviceId,
+                dataOwnerId: ownerAtSend,
+                invoke: invokeRemote,
+                isCurrent: isCurrentDataOwner,
+              });
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              // 账本不可读时磁盘上是否还有旧 obligation 未知，也必须 fail
+              // closed；否则一次暂时的 localStorage 故障会绕过同设备串行回收。
+              if (!recovery.storageReadable || recovery.retained > 0) {
+                throw new RemotePrecreatedWorktreeCleanupPendingError();
+              }
+              const baseRepo = wt.baseRepo;
               let name = wt.name.trim();
               if (!name) name = `auto-${Date.now().toString(36).slice(-6)}`;
               presetSessionId = makeDraftSessionId();
+              const recoveryKey = makeDraftSessionId();
+              const createdAt = Date.now();
+              const reservation = {
+                deviceId,
+                sessionId: presetSessionId,
+                dataOwnerId: ownerAtSend,
+                recoveryKey,
+                createdAt,
+              };
+              // 远端副作用之前先持久化 recoveryKey reservation。首次写盘失败时
+              // 绝不调用 worktree:create；内存镜像不能冒充跨进程恢复保证。
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              const reservationRecorded = await registerPendingRemotePrecreatedWorktree(
+                reservation,
+                isCurrentDataOwner,
+              );
+              if (!isCurrentDataOwner()) {
+                throw new RemotePrecreatedWorktreeOwnerChangedError();
+              }
+              if (!reservationRecorded) {
+                await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
+                throw new RemotePrecreatedWorktreeCleanupPendingError();
+              }
               setWtCreating(true);
               try {
-                const resp = (await window.electronAPI.deviceLink.invoke(
-                  deviceId,
+                const resp = (await invokeRemote(
                   'worktree:create',
                   [
                     {
                       sessionId: presetSessionId,
                       baseRepo,
                       name,
-                      sourceBranch: wt.sourceBranch.trim() || 'main',
+                      sourceBranch: wt.sourceBranch.trim() || 'HEAD',
+                      recoveryKey,
                     },
                   ],
                 )) as CreateWorktreeResp | null;
-                if (!resp || !resp.ok) {
-                  showWorktreeError(
-                    resp && !resp.ok
-                      ? resp.error
-                      : { kind: 'unknown', message: t('ccAgent.draft.createSessionFailed') },
-                  );
+                if (!resp) {
+                  throw new RemotePrecreatedWorktreeCleanupPendingError();
+                }
+                if (!resp.ok) {
+                  if (!isCurrentDataOwner()) {
+                    throw new RemotePrecreatedWorktreeOwnerChangedError();
+                  }
+                  await forgetPendingRemotePrecreatedWorktree(reservation, isCurrentDataOwner);
+                  if (!isCurrentDataOwner()) {
+                    throw new RemotePrecreatedWorktreeOwnerChangedError();
+                  }
+                  showWorktreeError(resp.error);
                   return;
                 }
                 remoteWorkingDir = resp.meta.path;
-              } catch (err) {
-                const remoteWorkdirMessage = getRemoteWorkingDirErrorMessage(err, t);
-                if (remoteWorkdirMessage) {
-                  toast.error(remoteWorkdirMessage);
-                } else {
-                  // 隧道失败(含老被控端 CHANNEL_NOT_ALLOWED)仍沿用 worktree 通用错误提示。
-                  showWorktreeError({
-                    kind: 'unknown',
-                    message: err instanceof Error ? err.message : String(err),
-                  });
+                precreatedWorktree = {
+                  path: resp.meta.path,
+                  recoveryKey,
+                  createdAt,
+                };
+                // 回包后尽力补 path；即使更新失败，首次已确认落盘的 recoveryKey
+                // reservation 仍足够让重启后的控制端精确恢复。
+                if (!isCurrentDataOwner()) {
+                  throw new RemotePrecreatedWorktreeOwnerChangedError();
                 }
-                return;
+                await registerPendingRemotePrecreatedWorktree(
+                  {
+                    ...reservation,
+                    path: resp.meta.path,
+                  },
+                  isCurrentDataOwner,
+                );
+                if (!isCurrentDataOwner()) {
+                  throw new RemotePrecreatedWorktreeOwnerChangedError();
+                }
+              } catch (err) {
+                if (isRemotePrecreatedWorktreeOwnerChangedError(err)) throw err;
+                if (isRemotePrecreatedWorktreeCleanupPendingError(err)) throw err;
+                log.warn(
+                  '[remote worktree:create] response not confirmed; retaining recovery reservation',
+                  err,
+                );
+                // invoke 抛错时无法判断被控端是否已完成创建，保留 reservation，
+                // 交给重连/重启恢复；不能把“不知道”展示成普通创建失败后允许重试。
+                throw new RemotePrecreatedWorktreeCleanupPendingError({ cause: err });
               } finally {
                 setWtCreating(false);
               }
@@ -2158,22 +2345,34 @@ export function NewMakerDraftRoute() {
               deviceProviders,
               capabilityAgentKind,
             });
-            const createResult = await window.electronAPI.deviceLink.invoke(
-              deviceId,
-              'maker:create-session',
-              // workspaceKind 由 workingDir 派生 + agentKind 归一 + 来源经共享解析器校准,
-              // 全部发生在 resolveDeviceLinkSubmission 里。
-              // extraDirs 一并透传(与本地 create 对齐):被控端 bootstrapSession 按 set-extra-dirs
-              // 同款 validateExtraDirs 校验后只存通过的子集,控制端镜像随被控端真相回流。
-              [createArgs],
-            );
-            const created = createResult as { sessionId?: string; workDir?: string } | null;
-            const remoteSessionId = created?.sessionId;
+            let created: { sessionId?: string; workDir?: string } | null = null;
+            const remoteSessionId = presetSessionId && precreatedWorktree
+              ? await createRemoteSessionWithPrecreatedWorktree({
+                  deviceId,
+                  sessionId: presetSessionId,
+                  path: precreatedWorktree.path,
+                  recoveryKey: precreatedWorktree.recoveryKey,
+                  ...(ownerAtSend ? { dataOwnerId: ownerAtSend } : {}),
+                  createdAt: precreatedWorktree.createdAt,
+                  createArgs: createArgs,
+                  invoke: invokeRemote,
+                  isCurrent: isCurrentDataOwner,
+                })
+              : (created = (await invokeRemote('maker:create-session', [createArgs])) as {
+                  sessionId?: string;
+                  workDir?: string;
+                } | null)?.sessionId;
+            if (presetSessionId && precreatedWorktree) {
+              created = { sessionId: remoteSessionId, workDir: remoteWorkingDir };
+            }
             if (!remoteSessionId) {
               // device-link 创建失败:错误来自被控端 RPC,与 useCCSessions().error 无关,
               // 不应读 state 里的 REMOTE_* code(copilot review #1035)。
               toast.error(t('ccAgent.draft.createSessionFailed'));
               return;
+            }
+            if (!isCurrentDataOwner()) {
+              throw new RemotePrecreatedWorktreeOwnerChangedError();
             }
             // remoteSessionId 到手就是**提交点**:对端会话已经建出来了。此后任何一步都不许再把它
             // 退化成「创建失败」—— 用户会照着提示重试,于是对端多出第二个会话,第一个空着永久滞留。
@@ -2207,6 +2406,9 @@ export function NewMakerDraftRoute() {
             // 交接出去之后,等待发生在**已经导航到的**会话视图里:UI 不卡,输入已在视图手里,
             // 而首轮仍然由同一个 await 串在协同之后。
             const rehydratedFiles = await rehomeDraftAttachments(files, remoteSessionId);
+            if (!isCurrentDataOwner()) {
+              throw new RemotePrecreatedWorktreeOwnerChangedError();
+            }
             setPending(remoteSessionId, {
               text: message,
               files: rehydratedFiles,
@@ -2266,17 +2468,11 @@ export function NewMakerDraftRoute() {
 
           const sessionId = makeDraftSessionId();
           const workingDir = selectedWorkingDir;
-          const wt = wtRef.current;
-          if (!isRemoteProjectDraft && wt.enabled) {
+          const wt = selectedWorktree;
+          // 生效条件 = 勾选 && baseRepo 已就绪;不合格时静默普通启动(同 device-link 分支,
+          // 见 2026-07-29 状态不变量:勾选记忆永不因环境被改动或报错拦截)。
+          if (!isRemoteProjectDraft && wt.enabled && wt.baseRepo) {
             const baseRepo = wt.baseRepo;
-            if (!baseRepo) {
-              showWorktreeError({
-                kind: 'unknown',
-                message: t('ccAgent.draft.worktreeMissingRepo'),
-                hint: t('ccAgent.draft.worktreeRepoHint'),
-              });
-              return;
-            }
 
             let name = wt.name.trim();
             if (!name) {
@@ -2371,7 +2567,7 @@ export function NewMakerDraftRoute() {
                   sessionId: newSession.id,
                   baseRepo,
                   name,
-                  sourceBranch: wt.sourceBranch.trim() || 'main',
+                  sourceBranch: wt.sourceBranch.trim() || 'HEAD',
                 });
                 if (!resp.ok) {
                   worktreeCreationStore.set(newSession.id, {
@@ -2588,11 +2784,17 @@ export function NewMakerDraftRoute() {
               : undefined,
           });
         } catch (err) {
+          if (isRemotePrecreatedWorktreeOwnerChangedError(err)) return;
           log.error('[draft send]', err);
           // 交接失败 → 撤回乐观标题预览(理由见上面 optimisticTitleSessionId 的注释)。
           if (optimisticTitleSessionId) emitAutoTitlePreviewCleared(optimisticTitleSessionId);
           toast.error(
-            getRemoteWorkingDirErrorMessage(err, t) ?? t('ccAgent.draft.createSessionFailed'),
+            isRemotePrecreatedWorktreeCleanupPendingError(err)
+              ? t('ccAgent.draft.remoteWorktreeCleanupPending')
+              : (
+                  getRemoteWorkingDirErrorMessage(err, t)
+                  ?? t('ccAgent.draft.createSessionFailed')
+                ),
           );
         } finally {
           setWtCreating(false);
@@ -2615,6 +2817,7 @@ export function NewMakerDraftRoute() {
       deviceProvidersLoading,
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,
+      dataOwnerId,
       effectiveExtraDirs,
       authVendor,
       persistedAgentKind,
@@ -3213,11 +3416,13 @@ export function NewMakerDraftRoute() {
                   sourceBranch={wtSourceBranch}
                   onSourceBranchChange={handleWtSourceBranchChange}
                   onBaseRepoChange={handleWtBaseRepoChange}
+                  onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}
                   onSuggestedNameChange={handleWtNameChange}
                   // SSH 远程仍禁用 worktree(远端 git 探测未落地);device-link 远程可用:
                   // 探测/建议名/创建全部经隧道在被控端执行(与 488cb33 前口径一致)。
                   worktreeDisabled={isRemoteProjectDraft}
                   deviceLinkDeviceId={effectiveDeviceLinkDeviceId ?? null}
+                  deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}
                   disabled={wtCreating}
                 />
               </div>

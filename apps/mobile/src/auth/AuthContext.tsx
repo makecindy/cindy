@@ -84,6 +84,7 @@ import { unregisterPushTokenBestEffort } from '@/notifications/pushNotifications
 import { resetAgentCapabilitiesCache } from '@/session/agentCapabilitiesCache';
 import { resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearCachedHomeListSnapshot } from '@/session/mobileHomeListCache';
+import { setMobileAuthOwner } from '@/auth/authOwnerGeneration';
 import { clearCachedSessionMessages } from '@/session/mobileSessionMessageCache';
 import { clearAllMobileVoiceCredentials } from '@/session/mobileVoiceCredentialStore';
 import {
@@ -291,6 +292,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
   const suspendSessionRecoveryForLogin = useCallback(() => {
     if (sessionRecoverySuspendedRef.current) return;
+    setMobileAuthOwner(null);
     sessionRecoverySuspendedRef.current = true;
     authGenerationRef.current += 1;
     refreshInFlightRef.current = null;
@@ -391,6 +393,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyUser = useCallback(
     (next: MobileUser | null) => {
       setDeferredSessionRecovery(false);
+      setMobileAuthOwner(next?.id);
       userRef.current = next;
       setUser(next);
       void serializeUserProfileMutation(() => writeCachedUserProfile(next));
@@ -689,6 +692,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             activateMobileSessionRealm(storedSession.realm);
             activeAuthRealmRef.current = storedSession.realm;
             userRef.current = cachedUser;
+            setMobileAuthOwner(cachedUser.id);
             setUser(cachedUser);
           } catch {
             if (!cancelled) setDeferredSessionRecovery(true);
@@ -730,6 +734,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.warn('[auth] initialize failed; normalized to signed-out', error);
       if (cancelled) return;
       userRef.current = null;
+      setMobileAuthOwner(null);
       setUser(null);
     });
     return () => {
@@ -1264,6 +1269,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     // 都先 best-effort 注销移动推送 token —— 只挂在 logout 会漏掉终止路径,设备会
     // 继续收到旧账号的任务通知。token 此刻可能已失效(账号不可用),失败静默,
     // 残留由 server 侧 APNs 410 回收与换账号重注册的让位逻辑兜底。
+    // Invalidate in-flight remote creates before any async logout cleanup begins.
+    setMobileAuthOwner(null);
     await unregisterPushTokenBestEffort(
       accessTokenRef.current,
       activeAuthRealmRef.current,

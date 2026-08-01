@@ -33,6 +33,7 @@ import { createLogger } from '../logger.js';
 import { prepareCodexGlobalSkillsLinks } from './codex-global-skills.js';
 import { prepareCodexGlobalRulesCopy } from './codex-global-rules.js';
 import { prepareCodexGlobalPluginsBridge } from './codex-global-plugins.js';
+import { DESKTOP_CAPABILITY_ROUTING_POLICY } from './capability-routing.js';
 import { prepareSharedGlobalSkillLinks } from './shared-global-skills.js';
 import { relinkSharedCodexAuth } from './codex-auth-link.js';
 import { claudeOAuthSpawnEnv } from './claude-oauth-spawn-env.js';
@@ -895,8 +896,15 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
         (r) => ({ ok: true as const, label: 'rules' as const, warnings: r.warnings }),
         (err: Error) => ({ ok: false as const, label: 'rules' as const, err }),
       ),
-      prepareCodexGlobalPluginsBridge(this.codexHome).then(
-        (r) => ({ ok: true as const, label: 'plugins' as const, warnings: r.warnings }),
+      prepareCodexGlobalPluginsBridge(this.codexHome, {
+        capabilityRouting: DESKTOP_CAPABILITY_ROUTING_POLICY,
+      }).then(
+        (r) => ({
+          ok: true as const,
+          label: 'plugins' as const,
+          warnings: r.warnings,
+          routingFailures: r.routingFailures,
+        }),
         (err: Error) => ({ ok: false as const, label: 'plugins' as const, err }),
       ),
     ]);
@@ -912,6 +920,22 @@ export class DesktopCodexAuthAdapter implements AuthAdapter {
       for (const warning of outcome.warnings) {
         log.warn('Codex global asset warning', { asset: outcome.label, warning });
       }
+    }
+    if (!pluginsOutcome.ok) {
+      // Expected cache/config I/O failures are normalized by the bridge and
+      // gated against the isolated plugin enablement. A rejection here is an
+      // unexpected invariant failure, so it must remain fail-closed.
+      throw new Error(
+        `Cannot start Codex safely because Cindy could not inspect downstream plugin capabilities: ${pluginsOutcome.err.message}`,
+      );
+    }
+    if (pluginsOutcome.ok && pluginsOutcome.routingFailures.length > 0) {
+      for (const failure of pluginsOutcome.routingFailures) {
+        log.error('Codex capability routing enforcement failed', { failure });
+      }
+      throw new Error(
+        `Cannot start Codex safely because Cindy could not isolate a downstream plugin capability: ${pluginsOutcome.routingFailures.join('; ')}`,
+      );
     }
   }
 

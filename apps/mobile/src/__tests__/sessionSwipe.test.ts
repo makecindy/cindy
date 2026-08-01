@@ -446,7 +446,7 @@ describe('buildSessionActionMenu', () => {
   it('菜单顺序固定:重命名 → 置顶切换 → 归档 → 删除,删除标 destructive', () => {
     const menu = buildSessionActionMenu(null);
     expect(menu.map((item) => item.action)).toEqual(['rename', 'pin', 'archive', 'delete']);
-    expect(menu[3]).toMatchObject({ label: '删除对话', destructive: true });
+    expect(menu[3]).toMatchObject({ label: '删除任务', destructive: true });
     expect(menu.filter((item) => item.destructive)).toHaveLength(1);
   });
 

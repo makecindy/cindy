@@ -1870,6 +1870,29 @@ describe('被控端订阅 registry + topic 转发', () => {
     });
   });
 
+  it.each([
+    'issue_confirm',
+    'rename_sessions_confirm',
+    'ghost_grant_confirm',
+  ])('device-link does not forward Desktop-only %s live pushes', (kind) => {
+    remoteControlEnabled = true;
+    const { client, calls, feed } = makeFakeClient();
+    wireInboundDispatch(client);
+    feed(subFrame('ctrl-a', SUB, ['session:s1']));
+
+    tapWindowBroadcast(MAKER_PUSH.INTERACTION_REQUEST, {
+      sessionId: 's1',
+      request: {
+        kind,
+        requestId: `${kind}-1`,
+        absPath: '/Users/me/private.png',
+        previewDataUrl: 'data:image/png;base64,private',
+      },
+    });
+
+    expect(calls.push).toEqual([]);
+  });
+
   it('unsubscribe 移除 topic;registry 空后停 tap', () => {
     remoteControlEnabled = true;
     const { client, feed } = makeFakeClient();

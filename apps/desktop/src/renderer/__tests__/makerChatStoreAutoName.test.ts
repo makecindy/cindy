@@ -265,7 +265,7 @@ describe('makerChatStore auto-name — 本机会话', () => {
   it('较早那次尝试失败时不撤回预览 —— 更晚的尝试仍在飞', async () => {
     // 用户在首次 auto-title 返回前连发两条:两次都通过 autoNameSettled 检查各起一次尝试。
     // 早的那次失败若按 sessionId 直接撤回,会把仍在飞的那次的预览一起revoke,标题白闪
-    // 一次「未命名对话」。
+    // 一次「未命名任务」。
     let failFirst: (v: { applied: boolean; done: boolean }) => void = () => {};
     autoTitle.mockImplementationOnce(() => new Promise((resolve) => {
       failFirst = resolve;

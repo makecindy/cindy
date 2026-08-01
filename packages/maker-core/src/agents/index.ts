@@ -50,6 +50,14 @@ export {
 // 同上理由(同 bundle 直接复用,不造第三份):desktop 的中断自愈判据要认「网络到不了
 // 上游」这一类 —— 那类同样是"连不上"而不是"请求有问题",续跑一次就能过去。
 export { isNetworkishErrorMessage } from './shared/network-error.js';
+export {
+  getAutoReviewActionTextLength,
+  MAX_AUTO_REVIEW_ACTION_TEXT_CHARS,
+  type AutoReviewDecision,
+  type AutoReviewDelegate,
+  type AutoReviewRequest,
+} from './shared/auto-review-decision.js';
+export type { ReviewableAction } from './shared/auto-review.js';
 // host 侧会话分享(导出/导入 .xdtshare)需要按 cwd 复算 CLI 转录目录、
 // 定位/落位 jsonl。规则单点维护在 claude-projects-fs.ts,这里仅 re-export。
 export {

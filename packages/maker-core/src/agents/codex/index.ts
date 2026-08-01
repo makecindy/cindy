@@ -72,6 +72,11 @@ import type {
   ConsumeAccountRateLimitResetCreditParams,
   ConsumeAccountRateLimitResetCreditResponse,
 } from '../../types/account-rate-limits.js';
+import {
+  capabilitySelectionAddedByPlanEdit,
+  findCapabilityRouteOverride,
+  isCapabilityRouteInvocationAllowed,
+} from '../../types/capability-routing.js';
 import { createAsyncQueue, type AsyncQueue } from '../shared/async-queue.js';
 import { reviewAction, type ReviewableAction } from '../shared/auto-review.js';
 import { UsageTracker } from '../shared/usage-tracker.js';
@@ -83,6 +88,7 @@ import {
   parseOverloadError,
 } from '../shared/overload-error.js';
 import { buildCodexEnv } from './env-builder.js';
+import { buildCodexCapabilityConfigOverrides } from './capability-routing.js';
 import { scanCodexCustomizations } from './customization-scanner.js';
 import { commandExecutionDisplayInput } from './command-display.js';
 import {
@@ -388,6 +394,15 @@ function supportsCodexReadonlyReferenceDirs(userAgent: string | undefined): bool
 }
 
 /**
+ * Per-thread plugin config for capability arbitration was verified against
+ * Codex 0.145.0. If the host policy needs those overrides, an older daemon must
+ * be rejected rather than silently starting with the downstream plugins active.
+ */
+function supportsCodexCapabilityRoutingProtocol(userAgent: string | undefined): boolean {
+  return codexUserAgentAtLeast(userAgent, [0, 145, 0]);
+}
+
+/**
  * `excludeTurns` was introduced in Codex 0.125.0 and later marked experimental.
  * Older remote daemons can outlive desktop upgrades, so omit the unknown field
  * and preserve their legacy full-history resume behavior.
@@ -496,6 +511,13 @@ interface ActiveToolContext {
   type: 'mcpToolCall' | 'dynamicToolCall';
   turnId?: string | null;
   server?: string | null;
+  /**
+   * Codex attaches the owning plugin id to mcpToolCall items. `null` means the
+   * configured server is user-owned (including a user server shadowing a
+   * plugin server); `undefined` means this app-server did not provide
+   * provenance, so routing must fail closed.
+   */
+  pluginId?: string | null;
   namespace?: string | null;
   tool?: string | null;
 }
@@ -829,6 +851,10 @@ function codexPermissionStrictnessRank(mode: PermissionMode): number {
 // (codex-rs/tui/src/chatwidget/plan_implementation.rs 的
 // PLAN_IMPLEMENTATION_CODING_MESSAGE), 模型对这句有训练分布上的既有理解。
 const PLAN_IMPLEMENTATION_MESSAGE = 'Implement the plan.';
+const CODEX_INHERITED_CAPABILITY_SELECTION = Symbol('codexInheritedCapabilitySelection');
+type CodexInternalSendOptions = SendOptions & {
+  [CODEX_INHERITED_CAPABILITY_SELECTION]?: string;
+};
 const SYSTEM_PLAN_REVIEW_DISMISSAL_REASONS = new Set([
   'no_listener_attached',
   'no_interaction_resolver',
@@ -892,7 +918,7 @@ const CAPABILITIES: Capabilities = {
   memory: {
     supported: { supported: true },
     displayName: '记忆 (实验性)',
-    description: '从聊天中生成新记忆并在新对话中召回 (Codex Feature::MemoryTool, 默认关)',
+    description: '从对话中生成新记忆并在后续对话中召回 (Codex Feature::MemoryTool, 默认关)',
     stage: 'experimental',
     defaultEnabled: false,
     resettable: true,
@@ -1004,6 +1030,14 @@ function formatReferencedPathsForCodex(refs: ReferencedPath[], requestText: stri
   }
 
   return lines.join('\n');
+}
+
+function userMessageText(content: UserMessage['content']): string {
+  if (typeof content === 'string') return content;
+  return content
+    .filter((block): block is Extract<(typeof content)[number], { type: 'text' }> => block.type === 'text')
+    .map((block) => block.text)
+    .join('\n');
 }
 
 /**
@@ -2427,6 +2461,7 @@ export class CodexAgent extends BaseAgent {
     const inFlightStarts = new Map<number, {
       quarantined: boolean;
       terminalSettled: boolean;
+      capabilitySelectionText: string;
       sendGen: number;
     }>();
     /** 每次 turn/start RPC 的自增序号, 作为登记表的键。 */
@@ -2442,11 +2477,15 @@ export class CodexAgent extends BaseAgent {
     let sendGeneration = 0;
 
     /** 登记一次即将发出的 turn/start, 返回它的序号。 */
-    const beginTurnStart = (ownerSendGen: number): number => {
+    const beginTurnStart = (
+      ownerSendGen: number,
+      capabilitySelectionText: string,
+    ): number => {
       const seq = ++turnStartSeq;
       inFlightStarts.set(seq, {
         quarantined: false,
         terminalSettled: false,
+        capabilitySelectionText,
         sendGen: ownerSendGen,
       });
       isTurnStartPending = true;
@@ -2553,6 +2592,95 @@ export class CodexAgent extends BaseAgent {
     // Kept across the internal plan implementation/revision turns. A later
     // explicit Session.send replaces it before turn/start.
     let activeTurnPermissionPolicy: TurnPermissionPolicy | null = null;
+    // Capability source choice belongs to the server-accepted turn that
+    // carried it. A global "last send text" can be poisoned by a turn/start
+    // that later fails, and can then unlock an unrelated surviving turn.
+    const capabilitySelectionTextByTurnId = new Map<string, string>();
+    type PendingCapabilitySteer = {
+      completion: Promise<void>;
+      resolve: () => void;
+    };
+    const pendingCapabilitySteersByTurnId = new Map<string, Set<PendingCapabilitySteer>>();
+
+    const appendCapabilitySelectionText = (turnId: string, selectionText: string): void => {
+      if (!selectionText) return;
+      capabilitySelectionTextByTurnId.set(
+        turnId,
+        [capabilitySelectionTextByTurnId.get(turnId) ?? '', selectionText]
+          .filter(Boolean)
+          .join('\n'),
+      );
+    };
+
+    const recordAcceptedCapabilitySteer = (
+      turnId: string,
+      selectionText: string,
+    ): void => {
+      if (
+        closed ||
+        !isTurnInFlight ||
+        currentTurnId !== turnId ||
+        completedTurnIds.has(turnId) ||
+        terminalErroredTurnIds.has(turnId)
+      ) {
+        return;
+      }
+      appendCapabilitySelectionText(turnId, selectionText);
+    };
+
+    const registerPendingCapabilitySteer = (
+      turnId: string,
+      selectionText: string,
+    ): ((accepted: boolean) => void) => {
+      let resolve!: () => void;
+      const entry: PendingCapabilitySteer = {
+        completion: new Promise<void>((done) => {
+          resolve = done;
+        }),
+        resolve: () => resolve(),
+      };
+      const entries = pendingCapabilitySteersByTurnId.get(turnId) ?? new Set();
+      entries.add(entry);
+      pendingCapabilitySteersByTurnId.set(turnId, entries);
+      let settled = false;
+      return (accepted) => {
+        if (settled) return;
+        settled = true;
+        if (accepted) recordAcceptedCapabilitySteer(turnId, selectionText);
+        entries.delete(entry);
+        if (entries.size === 0) pendingCapabilitySteersByTurnId.delete(turnId);
+        entry.resolve();
+      };
+    };
+
+    const waitForPendingCapabilitySteers = async (turnId: string): Promise<boolean> => {
+      // More than one direct caller can steer the same turn concurrently. A
+      // controlled MCP request cannot be attributed to one steer RPC, so wait
+      // until every steer that was already in flight has an authoritative ACK.
+      while (true) {
+        const entries = pendingCapabilitySteersByTurnId.get(turnId);
+        if (!entries || entries.size === 0) break;
+        await Promise.all([...entries].map((entry) => entry.completion));
+      }
+      return (
+        !closed &&
+        !completedTurnIds.has(turnId) &&
+        !terminalErroredTurnIds.has(turnId)
+      );
+    };
+
+    const abandonPendingCapabilitySteersForTurn = (turnId: string): void => {
+      const entries = pendingCapabilitySteersByTurnId.get(turnId);
+      if (!entries) return;
+      pendingCapabilitySteersByTurnId.delete(turnId);
+      for (const entry of entries) entry.resolve();
+    };
+
+    const abandonPendingCapabilitySteers = (): void => {
+      for (const turnId of pendingCapabilitySteersByTurnId.keys()) {
+        abandonPendingCapabilitySteersForTurn(turnId);
+      }
+    };
     const forceTurnConfirmation = (toolName: string, input: unknown): boolean => {
       const policy = activeTurnPermissionPolicy;
       if (!policy) return false;
@@ -2726,6 +2854,27 @@ export class CodexAgent extends BaseAgent {
       : credentialMode ?? this.hostEffectiveCredentialModes.get(currentHostKey);
     const approvalsReviewerProtocolSupported =
       supportsCodexApprovalsReviewerProtocol(initResp.userAgent);
+    const capabilityRoutingPolicy = this.deps.capabilityRouting;
+    const capabilityRoutingConfig = buildCodexCapabilityConfigOverrides(
+      capabilityRoutingPolicy,
+      {
+        // Remote Codex uses its own isolated CODEX_HOME. Cindy currently
+        // prepares provenance-preserving plugin overlays only in the local
+        // home, so remote explicit-only harness plugins must fail closed.
+        isolatedPluginOverlays: !opts.remoteHostId,
+      },
+    );
+    const capabilityRoutingProtocolSupported =
+      supportsCodexCapabilityRoutingProtocol(initResp.userAgent);
+    if (
+      Object.keys(capabilityRoutingConfig).length > 0 &&
+      !capabilityRoutingProtocolSupported
+    ) {
+      releaseHostBindingLeaseIfNeeded();
+      throw new Error(
+        `Cindy capability routing requires Codex app-server 0.145.0 or newer (current: ${initResp.userAgent ?? 'unknown'})`,
+      );
+    }
     // OpenAI OAuth can use Codex's hidden reviewer model directly. Local proxy
     // routes may opt in after registering a parent-thread → session → main-model
     // context; until that synchronous registration succeeds they stay on the
@@ -2885,15 +3034,19 @@ export class CodexAgent extends BaseAgent {
       | 'config'
     > {
       const { approvalPolicy, approvalsReviewer, sandbox } = currentApprovalConfig();
+      const config = {
+        ...capabilityRoutingConfig,
+        ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
+      };
       const shared = {
         approvalPolicy,
         ...(approvalsReviewer ? { approvalsReviewer } : {}),
         ...(readonlyReferenceDirsSupported
           ? {
               runtimeWorkspaceRoots: runtimeWorkspaceRoots(),
-              config: readonlyReferencesConfig,
             }
           : {}),
+        ...(Object.keys(config).length > 0 ? { config } : {}),
       };
       if (shouldUseReadonlyReferencesProfile()) {
         return {
@@ -3676,9 +3829,26 @@ export class CodexAgent extends BaseAgent {
      *   - 取消 / 无反馈的 deny (会话关闭 / 交互被 dismiss): 结束本轮循环, 下一条
      *     消息回到常规模式(想再规划需重新勾选), 不发起任何新 turn。
      */
-    async function runPlanReviewFlow(plan: string, turnId: string): Promise<void> {
+    async function runPlanReviewFlow(
+      plan: string,
+      turnId: string,
+      inheritedCapabilitySelectionText: string,
+    ): Promise<void> {
       planReviewSeq += 1;
       const requestId = `codex-plan-review:${turnId}:${planReviewSeq}`;
+      const planFollowUpSendOptions = (
+        additionalSelectionText = '',
+      ): CodexInternalSendOptions => ({
+        ...(activeTurnPermissionPolicy
+          ? { turnPermissionPolicy: activeTurnPermissionPolicy }
+          : {}),
+        [CODEX_INHERITED_CAPABILITY_SELECTION]: [
+          inheritedCapabilitySelectionText,
+          additionalSelectionText,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+      });
       const emitPlanFollowUpStartFailure = (kind: 'implementation' | 'revision', error: unknown): void => {
         log.warn(`plan ${kind} turn failed to start`, { error: String(error) });
         // If handle.send throws before it can emit its own terminal event (for
@@ -3714,13 +3884,17 @@ export class CodexAgent extends BaseAgent {
         const message = edited && edited !== plan.trim()
           ? `${PLAN_IMPLEMENTATION_MESSAGE} Follow this revised plan:\n\n${edited}`
           : PLAN_IMPLEMENTATION_MESSAGE;
+        const addedCapabilitySelection = capabilitySelectionAddedByPlanEdit(
+          capabilityRoutingPolicy,
+          'codex',
+          plan,
+          decision.editedPlan,
+        );
         log.debug('plan review ◀ approved — starting implementation turn', { turnId, edited: Boolean(edited && edited !== plan.trim()) });
         try {
           await handle.send(
             { type: 'user', content: message },
-            activeTurnPermissionPolicy
-              ? { turnPermissionPolicy: activeTurnPermissionPolicy }
-              : undefined,
+            planFollowUpSendOptions(addedCapabilitySelection),
           );
         } catch (e) {
           emitPlanFollowUpStartFailure('implementation', e);
@@ -3745,9 +3919,7 @@ export class CodexAgent extends BaseAgent {
       try {
         await handle.send(
           { type: 'user', content: feedback },
-          activeTurnPermissionPolicy
-            ? { turnPermissionPolicy: activeTurnPermissionPolicy }
-            : undefined,
+          planFollowUpSendOptions(feedback),
         );
       } catch (e) {
         planCycleActive = false;
@@ -4382,6 +4554,31 @@ export class CodexAgent extends BaseAgent {
       return stringFromMeta(recordFromUnknown(context.toolParams), 'name');
     }
 
+    function mcpToolPluginId(
+      params: McpServerElicitationRequestParams,
+    ): string | null | undefined {
+      const toolName = stringFromMeta(mcpElicitationMeta(params), 'tool_name');
+      const matches: ActiveToolContext[] = [];
+      for (const context of activeToolContexts.values()) {
+        if (
+          context.type !== 'mcpToolCall' ||
+          context.turnId !== params.turnId ||
+          context.server !== params.serverName ||
+          (toolName && context.tool !== toolName)
+        ) {
+          continue;
+        }
+        matches.push(context);
+      }
+      if (matches.length === 0 || (!toolName && matches.length !== 1)) {
+        return undefined;
+      }
+      const pluginId = matches[0]?.pluginId;
+      return matches.every((context) => context.pluginId === pluginId)
+        ? pluginId
+        : undefined;
+    }
+
     const mcpToolApprovalPolicy = (params: McpServerElicitationRequestParams) => {
       const classifier = this.deps.getMcpToolApprovalPolicy;
       if (!classifier) return 'prompt' as const;
@@ -4418,6 +4615,64 @@ export class CodexAgent extends BaseAgent {
           mode: params.mode,
         });
         return { action: 'decline', content: null, _meta: null };
+      }
+
+      const capabilityRoute = findCapabilityRouteOverride(
+        this.deps.capabilityRouting,
+        {
+          harness: 'codex',
+          surface: 'mcp',
+          id: params.serverName,
+        },
+      );
+      if (
+        capabilityRoute &&
+        params.turnId &&
+        !(await waitForPendingCapabilitySteers(params.turnId))
+      ) {
+        log.warn('Codex MCP invocation blocked while its steer turn became inactive', {
+          serverName: params.serverName,
+          turnId: params.turnId,
+          capabilityId: capabilityRoute.capabilityId,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
+      const activePluginId = capabilityRoute
+        ? mcpToolPluginId(params)
+        : undefined;
+      if (capabilityRoute && activePluginId === undefined) {
+        log.warn('Codex MCP invocation blocked because plugin provenance is unavailable', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
+      const isRoutedSource =
+        capabilityRoute != null &&
+        activePluginId === capabilityRoute.source.containerId;
+      if (
+        capabilityRoute &&
+        isRoutedSource &&
+        !isCapabilityRouteInvocationAllowed(
+          capabilityRoute,
+          params.turnId
+            ? capabilitySelectionTextByTurnId.get(params.turnId) ?? ''
+            : '',
+        )
+      ) {
+        log.warn('Codex MCP invocation blocked by host capability routing', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+          invocation: capabilityRoute.invocation,
+        });
+        return { action: 'decline', content: null, _meta: null };
+      }
+      if (capabilityRoute && !isRoutedSource) {
+        log.debug('Codex MCP routing skipped for a non-target source', {
+          serverName: params.serverName,
+          capabilityId: capabilityRoute.capabilityId,
+          activePluginId,
+        });
       }
 
       // Host policy 可在 outer call_tool 的 metadata 中识别渐进式 server 的
@@ -4524,6 +4779,12 @@ export class CodexAgent extends BaseAgent {
             type: 'mcpToolCall',
             turnId,
             server: typeof rec.server === 'string' ? rec.server : null,
+            pluginId:
+              typeof rec.pluginId === 'string'
+                ? rec.pluginId
+                : rec.pluginId === null
+                  ? null
+                  : undefined,
             tool: typeof rec.tool === 'string' ? rec.tool : null,
           },
         };
@@ -5518,6 +5779,13 @@ export class CodexAgent extends BaseAgent {
       // 同一个墓碑也负责拦截该 turn 随后迟到的 item / reasoning / started 事件。
       if (completedTurnIds.has(turn.id)) return;
       completedTurnIds.add(turn.id);
+      // A controlled MCP request may already be waiting for a steer ACK. The
+      // completed tombstone is authoritative, so release it immediately to
+      // decline instead of waiting for the local ACK timeout.
+      abandonPendingCapabilitySteersForTurn(turn.id);
+      const completedCapabilitySelectionText =
+        capabilitySelectionTextByTurnId.get(turn.id) ?? '';
+      capabilitySelectionTextByTurnId.delete(turn.id);
       const suppressTerminalUi = terminalErroredTurnIds.has(turn.id);
       deferredTerminalTurnCompletions.delete(turn.id);
       if (currentTurnId === turn.id || currentTurnId === null) {
@@ -5692,7 +5960,11 @@ export class CodexAgent extends BaseAgent {
       proposedPlanText = null;
       if (completedTurnWasPlanMode && planCycleActive) {
         if (planForReview) {
-          void runPlanReviewFlow(planForReview, turn.id);
+          void runPlanReviewFlow(
+            planForReview,
+            turn.id,
+            completedCapabilitySelectionText,
+          );
         } else {
           log.debug('plan turn produced no proposed plan — plan cycle ends', { turnId: turn.id });
           planCycleActive = false;
@@ -6465,11 +6737,30 @@ export class CodexAgent extends BaseAgent {
         const wasSameTurn = currentTurnId === params.turn.id;
         // started 先于响应到达时归属方只能推断: 只有一个 start 在飞 → 就是它; 多个 → 认不出,
         // 不登记(读取方按"归属不明"从严处理)。
-        const startedOwnerSeqs = [...inFlightStarts.keys()];
+        const startedOwnerEntries = [...inFlightStarts.entries()];
+        const startedOwner = startedOwnerEntries.length === 1
+          ? startedOwnerEntries[0]
+          : undefined;
         turnOriginByTurnId.set(params.turn.id, {
-          startSeq: startedOwnerSeqs.length === 1 ? (startedOwnerSeqs[0] as number) : null,
-          sendGen: sendGeneration,
+          startSeq: startedOwner?.[0] ?? null,
+          sendGen: startedOwner?.[1].sendGen ?? sendGeneration,
         });
+        // Notifications may arrive before the turn/start RPC response. Bind the
+        // selector at the same unique-owner boundary as turnOrigin so an early
+        // MCP elicitation sees the accepted send's capability choice. Multiple
+        // starts, quarantined starts, and already-settled cancellations remain
+        // unbound and therefore fail closed.
+        if (
+          !wasSameTurn &&
+          startedOwner &&
+          !startedOwner[1].quarantined &&
+          !startedOwner[1].terminalSettled
+        ) {
+          capabilitySelectionTextByTurnId.set(
+            params.turn.id,
+            startedOwner[1].capabilitySelectionText,
+          );
+        }
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
         turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
@@ -6976,6 +7267,10 @@ export class CodexAgent extends BaseAgent {
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        const capabilitySelectionText =
+          (sendOpts as CodexInternalSendOptions | undefined)?.[
+            CODEX_INHERITED_CAPABILITY_SELECTION
+          ] ?? userMessageText(message.content);
         assertCurrentHost('turn/start');
         resubscribeAfterTransportErrorIfNeeded();
         // 新 turn 总是携带当前 (可能已收紧的) 策略, 上一轮残留的延迟中断标记
@@ -7231,6 +7526,13 @@ export class CodexAgent extends BaseAgent {
             // turnCompleted(interrupted) 先回), 不得重新置活, 否则会话卡 running。
             const alreadyCompleted = turnsCompletedBeforeStartResp.has(resp.turn.id);
             if (!alreadyCompleted && !terminalErroredTurnIds.has(resp.turn.id)) {
+              // The app-server has now acknowledged which turn owns this
+              // input. Bind explicit source selection before buffered tool
+              // requests are released, and never on a pre-accept failure.
+              capabilitySelectionTextByTurnId.set(
+                resp.turn.id,
+                capabilitySelectionText,
+              );
               // 权威归属: 这个 turn 由本次 start 生出, 属于本轮 send。
               turnOriginByTurnId.set(resp.turn.id, { startSeq: ownerSeq, sendGen: mySendGen });
               currentTurnId = resp.turn.id;
@@ -7311,7 +7613,10 @@ export class CodexAgent extends BaseAgent {
             // RPC 在途也算忙（见 isTurnRunning 注释）：计时器已清、turn 未激活的
             // 这段窗口若报 idle，并发 send 会把原消息挤掉。
             state.inFlight = true;
-            const retryStartSeq = beginTurnStart(state.sendGen);
+            const retryStartSeq = beginTurnStart(
+              state.sendGen,
+              capabilitySelectionText,
+            );
             // RPC 是否走完了成功路径。补排延后的容量失败**只能**在成功路径上做:
             // finally 先于外层 state.retry().catch 执行, 若 RPC 已经 reject 却在这里
             // 排上新计时器, 紧随其后的 catch 会推终态 error + Done 收口 UI, 而那个
@@ -7414,7 +7719,10 @@ export class CodexAgent extends BaseAgent {
         let finalErr: unknown = null;
         // 初始 RPC 在飞期间到达的空 id 容量拒绝只会被"延后"(不排计时器), 由下面的
         // finally 在响应处理完之后补排 —— 保证任一时刻只有一个 turn/start 在飞。
-        const initialStartSeq = beginTurnStart(mySendGen);
+        const initialStartSeq = beginTurnStart(
+          mySendGen,
+          capabilitySelectionText,
+        );
         let initialStartSettledOk = false;
         /** 本次请求是否已被 Stop / 撤单收口过(条目会在 finally 里删掉, 所以先取出来)。 */
         let initialStartSettledByCancel = false;
@@ -7673,12 +7981,24 @@ export class CodexAgent extends BaseAgent {
         // turn 结束后队列再发一遍"的重复消费;这里同时给在飞 RPC 挂
         // late-resolution 观察,迟到结果留日志现场。
         assertCurrentHost('turn/steer');
-        const steerRpc = host.request(Method.TurnSteer, {
-          threadId,
-          input,
-          expectedTurnId: steeredTurnId,
-        });
+        const capabilitySelectionText = userMessageText(message.content);
+        const settleCapabilitySteer = registerPendingCapabilitySteer(
+          steeredTurnId,
+          capabilitySelectionText,
+        );
+        let steerRpc: Promise<unknown>;
+        try {
+          steerRpc = host.request(Method.TurnSteer, {
+            threadId,
+            input,
+            expectedTurnId: steeredTurnId,
+          });
+        } catch (error) {
+          settleCapabilitySteer(false);
+          throw error;
+        }
         let ackSettled = false;
+        let capabilitySteerAccepted = false;
         try {
           await new Promise<void>((resolve, reject) => {
             const onAbort = () => {
@@ -7719,6 +8039,7 @@ export class CodexAgent extends BaseAgent {
             );
           });
           ackSettled = true;
+          capabilitySteerAccepted = true;
         } catch (error) {
           if (isExpectedTurnIdMismatchError(error)) {
             // app-server 已明确拒绝该 stale expectedTurnId,消息没有注入其它 turn。
@@ -7728,12 +8049,23 @@ export class CodexAgent extends BaseAgent {
           }
           throw error;
         } finally {
+          // Only an authoritative ACK may extend this turn's explicit source
+          // selection. Requests emitted before that ACK wait on this entry;
+          // rejection/timeout/abort releases them against the previous state.
+          settleCapabilitySteer(capabilitySteerAccepted);
           if (!ackSettled) {
             // 超时 / abort 后请求仍在飞:迟到成功说明消息已注入但上层已按失败
             // 处理(队列行被暂停保留),留 warn 现场供排查;迟到失败静默吞掉,
             // 防 unhandled rejection。
             steerRpc.then(
               () => {
+                // The timeout/abort already released waiting MCP requests
+                // against the previous selection. A later authoritative ACK
+                // must still update subsequent requests while this turn lives.
+                recordAcceptedCapabilitySteer(
+                  steeredTurnId,
+                  capabilitySelectionText,
+                );
                 log.warn('turn/steer acknowledged after local timeout/abort; message may already be injected', {
                   threadId,
                   turnId: steeredTurnId,
@@ -7825,6 +8157,7 @@ export class CodexAgent extends BaseAgent {
         // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
         // 永不返回, server 侧请求卡死。
         abandonBufferedTurns('session closed');
+        abandonPendingCapabilitySteers();
         // 把挂起的 approval 强制 deny + emit interaction_dismissed (UI 关 dialog),
         // 否则 server 那边没回 response 会卡; UI 上的 PermissionPrompt 也会留尸
         try { dismissAllPending('session_closed', 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }

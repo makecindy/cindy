@@ -53,9 +53,9 @@ describe('shared remote-control fixture baseline', () => {
       Date.parse('2026-06-17T08:00:00.000Z'),
     )).toMatchObject({
       title: '每日移动端远控巡检',
-      detail: 'cron 0 9 * * * · 新会话 · Claude · xdt-maker',
+      detail: 'cron 0 9 * * * · 新任务 · Claude · xdt-maker',
       runSessionDetail: null,
-      runSessionLabel: '新会话',
+      runSessionLabel: '新任务',
       unreadCount: 1,
     });
 

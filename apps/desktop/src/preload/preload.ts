@@ -101,6 +101,12 @@ import type {
   DesktopLoginActionResult,
 } from '../shared/authIpc';
 import { BILLING_INVOKE, type BillingRendererApi } from '../shared/billing';
+import {
+  REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS,
+  type PendingRemotePrecreatedWorktree,
+  type PendingRemotePrecreatedWorktreeTarget,
+  type RemotePrecreatedWorktreeLedgerSnapshot,
+} from '../shared/remotePrecreatedWorktreeLedger';
 
 // Codex 元 IPC 全部升级到 maker.* (agentKind 参数化), preload 不再 import vendor/codex/ipcChannels。
 //   auth      → maker:auth:*(agentKind)
@@ -514,6 +520,7 @@ const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
 const fanOutMakerDraftPrefApply = createIpcFanOut('maker:draft-pref:apply');
+const fanOutMakerWorktreePrefApply = createIpcFanOut('maker:worktree-pref:apply');
 const fanOutMakerSessionPrefApply = createIpcFanOut('maker:session-pref:apply');
 
 // 跨 Agent 迁移项的 wire 形态（同 main/cross-agent-convert/types.ts 的 MigrationItem，
@@ -1744,6 +1751,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     >;
     fastModeByModel: Record<string, boolean>;
     effortByModel: Record<string, string>;
+    /** 「新建会话默认启用 worktree」勾选记忆(vendor 无关根字段,远程草稿播种用)。 */
+    worktreeEnabled: boolean;
   }): void => ipcRenderer.send('maker:sync-new-maker-draft', snapshot),
 
   /**
@@ -1773,6 +1782,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
    * renderer 收到后调它原来的本地 setter 写真实草稿 / 会话记忆。仅被控端进程消费。
    */
   onMakerDraftPrefApply: fanOutMakerDraftPrefApply,
+  /**
+   * 被控端本地 main → 自身 renderer:控制端写穿的「新建会话默认启用 worktree」,
+   * renderer 收到后 patchDraft 写真实草稿。仅被控端进程消费。
+   */
+  onMakerWorktreePrefApply: fanOutMakerWorktreePrefApply,
   onMakerSessionPrefApply: fanOutMakerSessionPrefApply,
 
   binding: {
@@ -2465,6 +2479,36 @@ contextBridge.exposeInMainWorld('electronAPI', {
       | { success: true }
       | { success: false; errorCode: string; message: string }
     > => ipcRenderer.invoke('skillhub:uninstall', { absolutePath }),
+
+    /** 在 main 内选择并检查本地包，成功时签发绑定当前 renderer 的短期导入授权。 */
+    pickLocal: (): Promise<
+      | { success: true; canceled: true }
+      | {
+          success: true;
+          canceled: false;
+          grantToken: string;
+          name: string;
+          description: string;
+          version: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:pick-local'),
+
+    /** 使用 main 签发的文件授权导入到全局或指定 installPath；registry origin=imported。 */
+    importLocal: (params: {
+      grantToken: string;
+      installPath?: string;
+      force?: boolean;
+    }): Promise<
+      | {
+          success: true;
+          name: string;
+          description: string;
+          version: string;
+          absolutePath: string;
+        }
+      | { success: false; errorCode: string; message: string }
+    > => ipcRenderer.invoke('skillhub:import-local', params),
 
     // 订阅 install 进度事件
     onInstallProgress: (
@@ -3644,6 +3688,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }
     }),
 
+  remotePrecreatedWorktreeLedger: {
+    list: (): Promise<RemotePrecreatedWorktreeLedgerSnapshot> =>
+      ipcRenderer.invoke(REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS.LIST),
+    register: (
+      record: PendingRemotePrecreatedWorktree,
+    ): Promise<{ persisted: boolean }> =>
+      ipcRenderer.invoke(
+        REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS.REGISTER,
+        record,
+      ),
+    forget: (
+      target: PendingRemotePrecreatedWorktreeTarget,
+    ): Promise<{ persisted: boolean }> =>
+      ipcRenderer.invoke(
+        REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS.FORGET,
+        target,
+      ),
+  },
+
   // ── session 级"终身累计 cost"变化 (per-session, 不是 today-aggregate) ──
   // 今日累计 (Claude USD + Codex token) 已搬到 electronAPI.maker.usage.* (取代老
   // getTodaySpend / onUsageTodaySpendChanged + electronAPI.codex.usage.*)。
@@ -4709,6 +4772,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       // codexMcpRefreshed:false = 开关已落盘但 Codex 失效失败(会话正忙), 对 Codex 延迟生效
       settingsSet: (enabled: boolean): Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }> =>
         ipcRenderer.invoke('maker:contacts:settings:set', enabled),
+      syncStatusGet: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:status:get'),
+      syncEnabledSet: (enabled: boolean): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:enabled:set', enabled),
+      syncNow: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:contacts:sync:now'),
       list: (opts?: unknown): Promise<unknown[]> => ipcRenderer.invoke('maker:contacts:list', opts),
       get: (id: string): Promise<unknown> => ipcRenderer.invoke('maker:contacts:get', id),
       create: (input: unknown): Promise<unknown> => ipcRenderer.invoke('maker:contacts:create', input),
@@ -4753,6 +4822,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       import: (records: unknown[], opts?: { groupId?: string }): Promise<unknown> =>
         ipcRenderer.invoke('maker:contacts:import', records, opts),
       onChanged: createIpcFanOut('maker:contacts:changed'),
+      onSyncStatusChanged: createIpcFanOut('maker:contacts:sync:status-changed'),
     },
 
     // Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。
@@ -4902,6 +4972,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
       input: import('../shared/helpTypes').HelpFeedbackDraftInput,
     ): Promise<import('../shared/helpTypes').HelpFeedbackDraft> =>
       ipcRenderer.invoke('maker:help:feedback:create', input),
+    // /issues 首屏快照(上次结果的落盘镜像);没有 / 坏掉返回 null。非权威,fresh 一到即接管。
+    getMyIssuesSnapshot: (): Promise<import('../shared/myIssues').MyIssuesSnapshot | null> =>
+      ipcRenderer.invoke('maker:issues:snapshot-mine'),
     // /issues 页面的「我的 Issue」列表;force=true 绕过 main 侧 60s TTL(手动刷新)。
     listMyIssues: (
       options?: { force?: boolean },

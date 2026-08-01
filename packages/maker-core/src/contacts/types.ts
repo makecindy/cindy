@@ -448,6 +448,23 @@ export const DEFAULT_CONTACTS_CONFIG: ContactsConfig = {
   maxRelationLen: 30,
 };
 
+/**
+ * JavaScript 默认 Unicode 小写映射会扩展部分字符（例如 İ → i + combining dot）。
+ * 设备同步以默认身份值长度为 wire contract；本地配置可以收紧但不能放宽它，
+ * 避免写入本地后才发现状态无法同步。
+ */
+export function getMaxSyncableIdentityValueLen(maxIdentityValueLen: number): number {
+  return Math.min(maxIdentityValueLen, DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen);
+}
+
+export function getMaxNormalizedIdentityValueLen(maxIdentityValueLen: number): number {
+  return getMaxSyncableIdentityValueLen(maxIdentityValueLen) * 2;
+}
+
+export const MAX_NORMALIZED_IDENTITY_VALUE_LEN = getMaxNormalizedIdentityValueLen(
+  DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen,
+);
+
 export type ContactsErrorCode =
   | 'invalid-params'
   | 'not-found'

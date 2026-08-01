@@ -10,21 +10,26 @@
  * "happyhorse" / "happy horse" / "快马" in the request (hard rule lives in
  * prompt md, not here).
  *
- * Internal model picked by request shape:
- *   - 0 images → `happyhorse-1.0-t2v` (text-to-video)
- *   - 1 image  → `happyhorse-1.0-i2v` (image-to-video, first frame)
+ * Internal model picked by request shape + refMode:
+ *   - 0 images                      → `happyhorse-1.0-t2v` (text-to-video)
+ *   - 1 image, first_and_last_frame → `happyhorse-1.0-i2v` (首帧动画;该变体
+ *     没有尾帧,所以这个模式下上限就是 1 张)
+ *   - 1–9 images, reference_image   → `happyhorse-1.0-r2v` (参考图生视频)
  *
- * The other two upstream variants (`-r2v` reference-to-video, `-video-edit`
- * video editing) are NOT exposed here — they don't map cleanly to the
- * existing video_generate / video_edit tool surface (r2v wants reference
- * images for character/style consistency; video-edit needs an actual video
- * file). Add them when there's a tool surface that fits.
+ * 三者是**不同的上游模型**,不是同一模型换参数——但共用同一个 endpoint、
+ * 同一套轮询与下载,所以只在 submit 期分叉。
+ *
+ * 仍未接入的是 `-video-edit`(改视频):它要一个真视频文件作输入,现有
+ * gen/edit 的工具面给不了,等有合适的面再说。
+ *
+ * 上游还有 1.1 代(多参考图一致性更好),本次不动代次——换代是独立的
+ * 选型决策,与「支持多参考图」不是一件事。
  *
  * Async API shape (per Aliyun docs, re-verified 2026-05-14 after upstream
  * change rejected bare-string media items):
  *   POST .../video-synthesis
  *     { model, input: { prompt,
- *                       media?: [{ type: 'first_frame',
+ *                       media?: [{ type: 'first_frame' | 'reference_image',
  *                                  url: data-uri | https-url }, ...] },
  *       parameters?: { resolution?: '480P'|'720P'|'1080P', duration?: 5 } }
  *     → { request_id, output: { task_id, task_status:'PENDING' } }
@@ -71,6 +76,21 @@ const DEFAULT_POLL_TEMPLATE = '/dashscope/api/v1/tasks/{id}';
 
 const INTERNAL_T2V = 'happyhorse-1.0-t2v';
 const INTERNAL_I2V = 'happyhorse-1.0-i2v';
+const INTERNAL_R2V = 'happyhorse-1.0-r2v';
+
+/**
+ * r2v 只出 720P / 1080P(阿里云文档明列),没有 480P:提交前明拒,好过让上游
+ * 回一句英文 "The resolution is not valid" 再由用户去猜。
+ *
+ * 为什么只减 r2v、不动 i2v/t2v:阿里云国际站文档里**三个变体**的 resolution
+ * 都只列 720P/1080P,但 CAPABILITIES.supportedResolutions 自开源首版起就声明
+ * 了 480p,且本仓走的是网关 /dashscope/ 透传(国内站 wire 是否一致未核实)。
+ * r2v 是本次新接入的路径,按已知最严的文档收紧,砍掉的是从未存在过的能力,
+ * 零存量影响;i2v/t2v 是存量路径,在实测国内站之前收紧有砍掉在用能力的风险。
+ * 三个变体的 resolution/ratio/duration 声明是否准确,连同 capabilities 按变体
+ * 分裂一起留作跟踪项,不在本次范围。
+ */
+const R2V_RESOLUTIONS = new Set(['720p', '1080p']);
 
 const CAPABILITIES: VideoProviderCapabilities = {
   modelAliases: [
@@ -91,7 +111,12 @@ const CAPABILITIES: VideoProviderCapabilities = {
   supportedRatios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
   // No explicit fps knob in DashScope; declare 24 to match the surface.
   supportedFps: [24],
-  maxImages: 1,
+  // 首尾帧模式走 i2v —— 该变体压根没有尾帧,所以上限 1 张(不是「暂时只支持
+  // 1 张」)。参考图模式走 r2v,阿里云文档明写 1–9 张。
+  maxImagesByRefMode: {
+    first_and_last_frame: 1,
+    reference_image: 9,
+  },
   expectedSecondsByAlias: {
     happyhorse: 180,
   },
@@ -131,7 +156,8 @@ interface DashScopePollResponse {
 
 function pickInternalModel(req: VideoGenerationRequest): string {
   const imageCount = (req.images ?? []).length;
-  return imageCount > 0 ? INTERNAL_I2V : INTERNAL_T2V;
+  if (imageCount === 0) return INTERNAL_T2V;
+  return req.refMode === 'reference_image' ? INTERNAL_R2V : INTERNAL_I2V;
 }
 
 function buildInput(
@@ -140,11 +166,12 @@ function buildInput(
   const input: Record<string, unknown> = { prompt: req.prompt };
   const images = req.images ?? [];
   if (images.length > 0) {
-    // i2v requires array of MediaItem objects, not bare strings. happyhorse
-    // only supports first-frame i2v (maxImages: 1), so type is always
-    // 'first_frame'. Bare-string form returns Pydantic
-    // "Input should be a valid dictionary or instance of MediaItem".
-    input.media = images.map((url) => ({ type: 'first_frame', url }));
+    // 两个变体都要 MediaItem 对象数组,不收裸字符串(裸串会撞 Pydantic
+    // "Input should be a valid dictionary or instance of MediaItem")。
+    // type 随变体走:i2v 只认 first_frame,r2v 只认 reference_image。
+    // r2v 的顺序即提示词里 [Image 1]/[Image 2] 的序号,不能重排。
+    const type = req.refMode === 'reference_image' ? 'reference_image' : 'first_frame';
+    input.media = images.map((url) => ({ type, url }));
   }
   return input;
 }
@@ -152,6 +179,7 @@ function buildInput(
 /** Translate the LLM-facing knobs to DashScope's `parameters` block. */
 function buildParameters(
   req: VideoGenerationRequest,
+  internalModel: string,
 ): Record<string, unknown> | undefined {
   const params: Record<string, unknown> = {};
   if (req.resolution) {
@@ -159,6 +187,13 @@ function buildParameters(
   }
   if (req.duration) {
     params.duration = req.duration;
+  }
+  // r2v 的画幅走 `ratio`(阿里云 r2v 文档里的字段就叫 ratio,直接收 '16:9'
+  // 这种比例串),不是 i2v/t2v 那套 `size: W*H`。别把下面的 size 映射套到
+  // r2v 上——两个变体的 parameters 块并不同形。
+  if (internalModel === INTERNAL_R2V) {
+    if (req.ratio) params.ratio = req.ratio;
+    return Object.keys(params).length > 0 ? params : undefined;
   }
   if (req.ratio) {
     // DashScope wants `size` as 'W*H' (not ratio). Map common ratios at our
@@ -214,11 +249,21 @@ export function createHappyhorseProvider(
     }
     const apiKey = await requireApiKey({ getApiKey: opts.getApiKey });
     const internalModel = pickInternalModel(req);
+    if (
+      internalModel === INTERNAL_R2V &&
+      req.resolution &&
+      !R2V_RESOLUTIONS.has(req.resolution)
+    ) {
+      throw new GatewayHttpError(
+        `happyhorse: refMode 'reference_image' does not support resolution ${req.resolution} (supported: ${[...R2V_RESOLUTIONS].join(', ')})`,
+        400,
+      );
+    }
     const body: Record<string, unknown> = {
       model: internalModel,
       input: buildInput(req),
     };
-    const parameters = buildParameters(req);
+    const parameters = buildParameters(req, internalModel);
     if (parameters) body.parameters = parameters;
 
     const res = await doFetch(submitUrl, {

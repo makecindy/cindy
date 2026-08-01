@@ -70,6 +70,25 @@ describe('provider model auto-refresh coordinator', () => {
     ]);
   });
 
+  it('honors an explicit provider filter without waiting on unrelated sources', async () => {
+    const refreshProvider = vi.fn(async (_providerId: BuiltinRefreshableProviderId) => {});
+    const coordinator = createProviderModelRefreshCoordinator({
+      listProviders: async () => [
+        view('xd', true),
+        view('anthropic', true),
+        view('openai', true),
+        view('xai', true),
+      ],
+      refreshProvider,
+      now: () => 1_000,
+      log: { debug: vi.fn(), warn: vi.fn() },
+    });
+
+    await coordinator.requestAutoRefresh('startup', ['anthropic']);
+    expect(refreshProvider).toHaveBeenCalledOnce();
+    expect(refreshProvider).toHaveBeenCalledWith('anthropic');
+  });
+
   it('manual refresh queues behind an automatic flight instead of being represented by it', async () => {
     // 行为变更（PR #1076 review，与 forced startup 同一个不变量）：手动刷新也是 forced
     // 请求，撞上**非强制**在途时不再合并进去，而是排在它后面真跑一次。

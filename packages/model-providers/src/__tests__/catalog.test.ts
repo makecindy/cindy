@@ -100,6 +100,13 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     expect((xai.models.codex ?? []).map((m) => m.id)).toEqual(EXPECTED_XAI_IDS);
   });
 
+  it('xai ships both Grok Imagine subscription image models', () => {
+    expect(provider('xai').imageModels).toEqual([
+      { id: 'xai/grok-imagine-image', name: 'Grok Imagine Image' },
+      { id: 'xai/grok-imagine-image-quality', name: 'Grok Imagine Image (Quality)' },
+    ]);
+  });
+
   it('provides routing + a models[agent] array for every agent the provider declares', () => {
     for (const p of BUNDLED_CATALOG.providers) {
       for (const a of p.agents) {

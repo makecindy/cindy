@@ -44,6 +44,12 @@ export interface IngestMediaParams {
    * 在同一逻辑事务内尽快 addRef)。
    */
   refs: IngestRef[];
+  /**
+   * 跨账号/会话写入的失效闸。调用方可注入同步断言；入库助手会在第一个
+   * 副作用前及每个 await 后调用，失效即停止后续记账/挂引用并向上抛错。
+   * 启用时必须同时显式传入在稳定作用域下捕获的 db，禁止每次记账现取新作用域。
+   */
+  assertStillValid?: () => void;
 }
 
 export interface IngestedMedia {
@@ -69,10 +75,15 @@ export async function ingestMedia(
   params: IngestMediaParams,
   db?: LedgerDb,
 ): Promise<IngestedMedia> {
+  if (params.assertStillValid && !db) {
+    throw new Error('cindy-media: guarded ingest requires an explicit database');
+  }
+  params.assertStillValid?.();
   const written = await blobStore.writeBlob({
     buffer: params.buffer,
     mimeType: params.mimeType,
   });
+  params.assertStillValid?.();
   await ledger.recordBlob(
     {
       hash: written.hash,
@@ -83,9 +94,11 @@ export async function ingestMedia(
     },
     db,
   );
+  params.assertStillValid?.();
   const refIds: string[] = [];
   for (const ref of params.refs) {
     refIds.push(await ledger.addRef({ hash: written.hash, ...ref }, db));
+    params.assertStillValid?.();
   }
   return { ...written, refIds };
 }

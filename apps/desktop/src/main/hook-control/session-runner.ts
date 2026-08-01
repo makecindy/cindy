@@ -524,7 +524,7 @@ export function createMakerHookSessionRunner(deps: {
           `hook run aborted: live session ${req.sessionId} runs in a directory that is no longer in the workspace map`,
         );
         return fail(
-          '这个对话正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个对话后重发。',
+          '这个任务正在一个已不在工作目录映射里的目录中运行，本条消息没有执行。把该目录加进 设置 → 远程连接 → 工作目录映射，或在桌面端关掉这个任务后重发。',
         );
       }
 

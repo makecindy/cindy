@@ -200,9 +200,9 @@ export function SessionContentHeader({
       const trimmed = raw.trim();
       setIsEditing(false);
       // 「没改」= 与原始标题相同,**或**与预填的显示标题相同。后者不可省:未起名的
-      // 会话预填的是本地化兜底文案(「未命名对话」),它不等于库里的英文哨兵 —— 只比
+      // 会话预填的是本地化兜底文案(「未命名任务」),它不等于库里的英文哨兵 —— 只比
       // session.title 的话,用户双击后原样回车就会把兜底文案写进库、把哨兵冲掉,
-      // 自动起名从此永久跳过这个会话(标题永远停在「未命名对话」)。
+      // 自动起名从此永久跳过这个会话(标题永远停在「未命名任务」)。
       const unchanged = !trimmed || trimmed === session.title || trimmed === displayTitle;
       if (remoteWritesBlocked) {
         if (!unchanged) showRemoteWriteBlockedToast();
@@ -263,7 +263,7 @@ export function SessionContentHeader({
     t,
   ]);
 
-  /* ---- 复制对话链接(cindy://session/<id> 深链,与 SessionItem 同语义;
+  /* ---- 复制任务链接(cindy://session/<id> 深链,与 SessionItem 同语义;
           远程会话把归属设备冻进 ?device=) ---- */
   const handleCopyDeepLink = useCallback(async () => {
     try {

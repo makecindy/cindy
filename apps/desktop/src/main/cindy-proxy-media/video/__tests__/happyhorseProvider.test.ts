@@ -27,8 +27,11 @@ describe('happyhorse provider · capabilities', () => {
       'happyhorse',
     ]);
   });
-  it('declares maxImages=1 (no first+last frame transition support)', () => {
-    expect(p.capabilities.maxImages).toBe(1);
+  it('首尾帧模式上限 1 张(i2v 变体没有尾帧),参考图模式 9 张(r2v)', () => {
+    expect(p.capabilities.maxImagesByRefMode).toEqual({
+      first_and_last_frame: 1,
+      reference_image: 9,
+    });
   });
   it('declares supported durations / resolutions / ratios', () => {
     expect(p.capabilities.supportedDurations).toContain(5);
@@ -113,6 +116,92 @@ describe('happyhorse provider · submit body shape', () => {
     expect(body.input.media).toEqual([
       { type: 'first_frame', url: 'data:image/png;base64,AAAA' },
     ]);
+  });
+
+  it('refMode:reference_image → 换 r2v 模型,media type 全是 reference_image', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ output: { task_id: 'task-r2v', task_status: 'PENDING' } }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    const handle = await p.submit(
+      {
+        prompt: '[Image 1] 的女孩戴着 [Image 2] 的耳环',
+        refMode: 'reference_image',
+        images: ['data:image/png;base64,ONE', 'data:image/png;base64,TWO'],
+      },
+      'happyhorse',
+    );
+    // 三个变体是不同的上游模型,不是同模型换参数
+    expect(handle.modelUsed).toBe('happyhorse-1.0-r2v');
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.model).toBe('happyhorse-1.0-r2v');
+    expect(body.input.media).toEqual([
+      { type: 'reference_image', url: 'data:image/png;base64,ONE' },
+      { type: 'reference_image', url: 'data:image/png;base64,TWO' },
+    ]);
+  });
+
+  it('r2v 的画幅走 ratio 字段,不套 i2v 那套 size 映射', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ output: { task_id: 'task-r2v-2', task_status: 'PENDING' } }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    await p.submit(
+      {
+        prompt: '[Image 1] 在雪地里',
+        refMode: 'reference_image',
+        images: ['data:image/png;base64,ONE'],
+        ratio: '9:16',
+        resolution: '1080p',
+      },
+      'happyhorse',
+    );
+    const init = (fetchMock as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1] as RequestInit;
+    const body = JSON.parse(init.body as string);
+    expect(body.parameters.ratio).toBe('9:16');
+    expect(body.parameters.size).toBeUndefined();
+    expect(body.parameters.resolution).toBe('1080P');
+  });
+
+  it('r2v 不支持 480p → 提交前明拒(不发请求)', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response('{}', { status: 200 }),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    await expect(
+      p.submit(
+        {
+          prompt: '[Image 1]',
+          refMode: 'reference_image',
+          images: ['data:image/png;base64,ONE'],
+          resolution: '480p',
+        },
+        'happyhorse',
+      ),
+    ).rejects.toThrow(/does not support resolution 480p/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('480p 在首尾帧模式(i2v)下仍然放行 —— 减法只针对 r2v', async () => {
+    const fetchMock = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ output: { task_id: 'task-i2v-480', task_status: 'PENDING' } }),
+        { status: 200 },
+      ),
+    ) as unknown as typeof fetch;
+    const p = makeProvider(fetchMock);
+    const handle = await p.submit(
+      { prompt: '动起来', images: ['data:image/png;base64,ONE'], resolution: '480p' },
+      'happyhorse',
+    );
+    expect(handle.modelUsed).toBe('happyhorse-1.0-i2v');
   });
 
   it('vertical 9:16 maps size with shortSide as width', async () => {

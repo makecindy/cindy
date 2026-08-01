@@ -180,6 +180,12 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // re-mirror 回 main 并广播。被控端转发给自身 renderer 执行(无 sender 依赖、无本机副作用)。
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉,退回一次性 pull 行为。
   'maker:apply-new-maker-draft-pref',
+  // device-link 草稿「新建会话默认启用 worktree」写穿(控制端 → 被控端):worktree 勾选记忆是
+  // 被控端 newMakerDraft 的 vendor 无关根字段,「这台工作端新建会话是否默认进 worktree」的真相
+  // 在被控端。被控端 handler 校验布尔后转发给自身 renderer 写真实草稿(无 sender 依赖、无本机
+  // UI 副作用);回读经 maker:get-new-maker-defaults + NEW_MAKER_DRAFT_CHANGED 回流。
+  // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端吞掉降级(勾选仅本次草稿生效)。
+  'maker:apply-new-maker-worktree-pref',
   // 模型供应商目录(只读):远程会话的模型选择器据此 1:1 镜像被控端的「供应商+模型」结构。
   // 被控端 dispatch 在返回前剥离 routing 等执行字段(见 device-link/dispatch.ts),只回显示用字段。
   'maker:provider:list',
@@ -411,13 +417,18 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   // validateWorktreeName 白名单校验,不接受任意路径),且 baseRepo 在被控端 dispatch
   // 层过 remote-workdir-guard 同款收敛(见 dispatch.ts PATH_GUARDED)。device-link
   // 已是同账号 + remoteControlEnabled 显式 opt-in,控制端本就能在项目目录跑 agent
-  // (任意 exec),不扩大攻击面。removal-preview 只读、用于删除前警告；实际删除路径不放行
-  // (removeWorktreeForSession 只在被控端状态变更流程内部触发)。老被控端无这些 channel →
-  // CHANNEL_NOT_ALLOWED → 控制端保持"worktree 不可用"降级。
+  // (任意 exec),不扩大攻击面。removal-preview 只读、用于删除前警告；通用删除路径仍不放行。
+  // discard-precreated 是唯一窄删除例外：常规收 sessionId + create 回包的精确 path；
+  // 若手机在 create 回包前退出，则收其在 create 前已持久化、并与被控端 worktree
+  // 元数据精确匹配的随机 recoveryKey。两路都重新核对 store 归属、无 DB/live
+  // session、无 dirty/keep/live-ref 后才删；recoveryKey create/discard 另按 sessionId
+  // 串行，且本口与 maker:create-session 共用 session 锁，专门补偿两步创建的失败窗口。
+  // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 控制端按对应能力降级。
   'worktree:detect-cwd',
   'worktree:list-branches',
   'worktree:suggest-name',
   'worktree:create',
+  'worktree:discard-precreated',
   'worktree:removal-preview',
 ];
 
@@ -494,6 +505,8 @@ export const INVOKE_TIMEOUT_OVERRIDES_MS: Readonly<Record<string, number>> = {
   // 被控端 worktree:create 含 git worktree add(--no-checkout)+ 白名单文件选择性
   // checkout + .claude/.sivi 拷贝;大仓库 / 慢盘上可能超默认 30s,给足执行预算 + 回程余量。
   'worktree:create': 60_000,
+  // 可能先等待同 sessionId 的晚到 create 释放互斥锁，再执行 git worktree remove。
+  'worktree:discard-precreated': 60_000,
 };
 
 /**

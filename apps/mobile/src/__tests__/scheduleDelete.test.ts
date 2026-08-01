@@ -48,7 +48,7 @@ describe('mobile schedule delete model', () => {
       sessionCount: 2,
       inflightCount: 1,
     });
-    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的会话，还有 1 次执行正在进行');
+    expect(describeScheduleDeletePreview(preview)).toBe('找到 2 个由它生成的任务，还有 1 次执行正在进行');
   });
 
   it('maps deletion dispositions to desktop-compatible session patches', () => {

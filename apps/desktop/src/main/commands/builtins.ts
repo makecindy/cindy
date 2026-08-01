@@ -343,8 +343,11 @@ export function registerBuiltinDesktopCommands(
 
   registry.register({
     name: 'clear',
+    // 实现是 renderer 收到 DESKTOP_COMMAND_TRIGGERED 后调 clearSession() →
+    // clearSessionAfterGuard:**原地**清空当前任务的对话上下文,不新建、也不切走
+    // (help-knowledge/{commands,sessions-and-chat}.md 写的才是对的)。
     description:
-      'Equivalent of the sidebar\'s "New Chat" button — opens a fresh empty draft and switches to it. Discards the current conversation context.',
+      'Clears the current session context in place — wipes its messages and state without creating or switching to a new session. The session stays in the sidebar.',
     execute: (ctx) => broadcastDesktopCommand(buildPayload('clear', ctx)),
   });
 
@@ -573,7 +576,7 @@ export function registerBuiltinDesktopCommands(
 
   registry.register({
     name: 'jump-session',
-    description: '输入 sessionId 后直接跳转到该会话。',
+    description: '输入 sessionId 后直接跳转到该任务。',
     // 实际执行在 renderer 本地拦截(navigationCommands.ts)；这里仅负责让命令出现在
     // `/` 菜单并提供描述，不走 executeDesktopCommand broadcast。
     execute: () => {},

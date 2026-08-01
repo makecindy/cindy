@@ -276,7 +276,7 @@ describe('sessionComposerLayout', () => {
       label: '停止',
       visible: true,
     });
-    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前会话设置执行。');
+    expect(runningWithDraft.guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
   });
 
   it('marks busy operations without changing the primary layout shape', () => {
@@ -400,6 +400,6 @@ describe('sessionComposerLayout', () => {
       queueBusy: false,
       sending: false,
       voiceState: 'idle',
-    }).guidanceText).toBe('点发送后会进入桌面端队列，按当前会话设置执行。');
+    }).guidanceText).toBe('点发送后会进入桌面端队列，按当前任务设置执行。');
   });
 });

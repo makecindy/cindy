@@ -29,7 +29,7 @@ import {
   effectiveSourceIdForModel,
   resolveRoute,
 } from '../registry.js';
-import type { Catalog, CatalogModel } from '../types.js';
+import type { Catalog, CatalogModel, Provider } from '../types.js';
 
 const MINIMAL: Catalog = {
   version: 'test',
@@ -143,6 +143,91 @@ describe('mergeWithBundled', () => {
       providers: MINIMAL.providers.map((p) => ({ ...p, access: { kind: 'api' } })),
     };
     expect(mergeWithBundled(primary).providers.find((p) => p.id === 'anthropic')?.access).toEqual({ kind: 'api' });
+  });
+
+  it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+    const inherited = mergeWithBundled({ version: '2', providers: [oldRemoteXai] });
+    expect(inherited.providers.find((p) => p.id === 'xai')?.imageModels)
+      .toEqual(bundledXai.imageModels);
+
+    const explicitlyDisabled = mergeWithBundled({
+      version: '2',
+      providers: [{ ...oldRemoteXai, imageModels: [] }],
+    });
+    expect(explicitlyDisabled.providers.find((p) => p.id === 'xai')?.imageModels).toEqual([]);
+  });
+
+  it('旧远端改变鉴权或路由形状时不继承 bundled 图像能力', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+
+    const apiKeyXai: Provider = {
+      ...oldRemoteXai,
+      auth: { method: 'apiKey' },
+    };
+    const alternateRouteXai: Provider = {
+      ...oldRemoteXai,
+      routing: {
+        ...oldRemoteXai.routing,
+        codex: {
+          ...oldRemoteXai.routing.codex!,
+          upstream: 'https://oauth-proxy.example.test',
+        },
+      },
+    };
+
+    expect(
+      mergeWithBundled({ version: '2', providers: [apiKeyXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.imageModels,
+    ).toBeUndefined();
+    expect(
+      mergeWithBundled({ version: '2', providers: [alternateRouteXai] }).providers.find(
+        (p) => p.id === 'xai',
+      )?.imageModels,
+    ).toBeUndefined();
+  });
+
+  it('旧 xAI 条目仅在 access 缺省或仍为同一订阅时继承 bundled 图像能力', () => {
+    const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
+    const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;
+    delete oldRemoteXai.imageModels;
+
+    for (const access of [
+      { kind: 'api' as const },
+      { kind: 'managed' as const },
+      { kind: 'subscription' as const, product: 'Another subscription' },
+    ]) {
+      expect(
+        mergeWithBundled({
+          version: '2',
+          providers: [{ ...oldRemoteXai, access }],
+        }).providers.find((p) => p.id === 'xai')?.imageModels,
+      ).toBeUndefined();
+    }
+
+    expect(
+      mergeWithBundled({
+        version: '2',
+        providers: [{ ...oldRemoteXai, access: bundledXai.access }],
+      }).providers.find((p) => p.id === 'xai')?.imageModels,
+    ).toEqual(bundledXai.imageModels);
+  });
+
+  it('非 xAI 远端条目缺少媒体字段时不从 bundled 恢复已撤下能力', () => {
+    const bundledOpenai = BUNDLED_CATALOG.providers.find((p) => p.id === 'openai')!;
+    const remoteOpenai = JSON.parse(JSON.stringify(bundledOpenai)) as Provider;
+    delete remoteOpenai.imageModels;
+
+    expect(
+      mergeWithBundled({ version: '2', providers: [remoteOpenai] }).providers.find(
+        (p) => p.id === 'openai',
+      )?.imageModels,
+    ).toBeUndefined();
   });
 
   it('does not infer bundled billing when a same-id primary changes auth or upstream', () => {

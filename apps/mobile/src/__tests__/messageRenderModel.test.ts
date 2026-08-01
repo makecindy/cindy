@@ -718,6 +718,35 @@ describe('messageRenderModel', () => {
       expect(liveGroup.tools[0].toolSettled).toBe(false);
     });
   });
+
+  describe('历史窗口空洞', () => {
+    /**
+     * 2026-07-31 手机端实测:窗口由"冷开缓存的首段 + 最新页的尾段"拼成(中间 400 余行从未
+     * 加载),整场会话被渲染成 3 个 item —— 首条 user、一条「已工作 142m 32s」、最后一条回复。
+     * 那条组吞掉了中间 6 轮对话,时长也谎报成整场跨度。窗口本身由 historyWindowGap 的补齐
+     * 自愈,这里锁住渲染层的兜底:即使补不回来,也不许把两段不相干的历史折成一条。
+     */
+    const minutes = (value: number): string =>
+      new Date(Date.parse('2026-07-31T06:00:00.000Z') + value * 60_000).toISOString();
+
+    it('跨空洞不折成一条工作组，时长不横跨空洞', () => {
+      const items = buildMobileMessageRenderItems([
+        message({ id: 'ask', role: 'user', content: { text: '帮我解决下这个问题', images: [], files: [] }, createdAt: minutes(0) }),
+        message({ id: 'head-thinking', role: 'thinking', content: { thinking: '先看仓库规则', durationMs: 2_000 }, createdAt: minutes(0) }),
+        message({ id: 'head-tool', role: 'tool_use', toolUseId: 'head-tool', content: { toolUseId: 'head-tool', toolName: 'Read', input: { file_path: '/repo/AGENTS.md' } }, createdAt: minutes(1) }),
+        // ↑ 首段到此为止;↓ 尾段直接跳到两小时后(中间的 user 行与动作全部缺席)
+        message({ id: 'tail-tool', role: 'tool_use', toolUseId: 'tail-tool', content: { toolUseId: 'tail-tool', toolName: 'Bash', input: { command: 'gh pr view 1194' } }, createdAt: minutes(140) }),
+        message({ id: 'tail-answer', role: 'assistant', content: 'PR #1194 已合并', createdAt: minutes(142) }),
+      ], { isSessionStreaming: false });
+
+      // 修复前:['message','work_group','message'],那条 work_group 的 durationMs = 142 分钟。
+      expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'work_group', 'message']);
+      for (const item of items) {
+        if (item.type !== 'work_group') continue;
+        expect(item.durationMs ?? 0).toBeLessThan(30 * 60_000);
+      }
+    });
+  });
 });
 
 function expectType<TType extends MobileMessageRenderItem['type']>(

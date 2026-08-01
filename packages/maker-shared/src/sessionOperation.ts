@@ -267,7 +267,7 @@ export function buildSessionOperationLayout(input: SessionOperationLayoutInput):
   if (!input.hasCurrentSession) {
     return {
       canUseComposer: false,
-      composerDisabledReason: '当前会话还没有同步完成。',
+      composerDisabledReason: '当前任务还没有同步完成。',
       composerDisabledReasonSource: 'session-syncing',
       composerSlot: 'missing-session',
       messageHistoryMode: 'hidden',
@@ -370,7 +370,7 @@ function buildComposerGuidanceText(input: SessionComposerLayoutInput): string {
   if (hasAttachments && hasDraft) return `将发送 ${input.attachmentCount} 个附件和输入框里的文字。`;
   if (hasAttachments) return `将只发送 ${input.attachmentCount} 个附件，也可以补充说明后再发送。`;
   if (input.attachmentPickerOpen) return '可以添加手机上的照片、截图或文件。';
-  if (hasDraft) return '点发送后会进入桌面端队列，按当前会话设置执行。';
+  if (hasDraft) return '点发送后会进入桌面端队列，按当前任务设置执行。';
   if (hasQuotes) return `将发送 ${input.quoteCount} 处引用，也可以补充说明后再发送。`;
   if (input.canStop) return '电脑端正在执行；可继续排队输入，或点停止保留当前队列。';
   return '输入文字开始，使用 / 调命令，使用 @ 引用项目资源。';

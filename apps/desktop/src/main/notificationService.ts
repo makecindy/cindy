@@ -79,9 +79,9 @@ interface ShowSessionEventPayload {
 }
 
 /**
- * Toast 文案分两层：title 同时标识 Cindy 与会话，body 放结构化终态。
+ * Toast 文案分两层：title 同时标识 Cindy 与任务，body 放结构化终态。
  * 不能只依赖 Windows AUMID / macOS bundle 元数据标识来源：不同系统和通知中心
- * 展示的 app 元数据并不一致，只显示会话名时容易被误认成同名插件主动发出的通知。
+ * 展示的 app 元数据并不一致，只显示任务名时容易被误认成同名插件主动发出的通知。
  */
 function buildBody(kind: SessionEventKind): string {
   switch (kind) {
@@ -105,7 +105,7 @@ function buildFeishuText(title: string, kind: SessionEventKind): string {
     : kind === 'error'
       ? '执行失败'
       : '已完成 ✓';
-  return `${CLIENT_NOTIFICATION_NAME} · 会话「${title}」${status}`;
+  return `${CLIENT_NOTIFICATION_NAME} · 任务「${title}」${status}`;
 }
 
 // 防 GC：Electron Notification 实例如果不持引用，JS 引擎可能在 toast 还在显示
@@ -147,7 +147,7 @@ export function showDesktopSessionEvent(
 ): void {
   const { sessionId, title, kind } = payload;
   if (sessionId) markSessionNeedsAttention(sessionId);
-  const safeTitle = title?.trim() || sessionId.slice(0, 8) || '会话';
+  const safeTitle = title?.trim() || sessionId.slice(0, 8) || '任务';
   showDesktopToast(safeTitle, kind, () => focusWindow(getWindow, sessionId));
 }
 

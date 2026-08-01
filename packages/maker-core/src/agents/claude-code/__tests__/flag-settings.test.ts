@@ -50,4 +50,29 @@ describe('buildClaudeFlagSettings', () => {
       'fastMode' in buildClaudeFlagSettings({ showThinkingSummaries: false, fastMode: false }),
     ).toBe(false);
   });
+
+  it('adds namespaced plugin skill overrides from the host routing policy', () => {
+    const settings = buildClaudeFlagSettings({
+      showThinkingSummaries: false,
+      fastMode: false,
+      capabilityRouting: {
+        overrides: [
+          {
+            capabilityId: 'feishu',
+            source: {
+              kind: 'harness-plugin',
+              harness: 'claude-code',
+              surface: 'skill',
+              id: 'feishu-delegate:message-feishu-coworkers',
+            },
+            invocation: 'explicit-only',
+          },
+        ],
+      },
+    });
+
+    expect(settings.skillOverrides).toEqual({
+      'feishu-delegate:message-feishu-coworkers': 'user-invocable-only',
+    });
+  });
 });

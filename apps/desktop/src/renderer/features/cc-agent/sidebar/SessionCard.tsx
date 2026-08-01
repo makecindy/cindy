@@ -383,7 +383,7 @@ export function SessionCard({
     }
   }, [session.deviceLinkDeviceId, session.id, t]);
 
-  // 单项「复制对话链接」:直接复制 cindy://session/<id> 深链。原「复制会话 ID」
+  // 单项「复制任务链接」:直接复制 cindy://session/<id> 深链。原「复制会话 ID」
   // 二级菜单(深度链接 / 仅 ID / Agent)已按产品决策收敛为这一项;不自带分隔线,
   // 分组由各使用点决定,避免菜单被切得过碎。
   const copySessionIdSubmenu = (
