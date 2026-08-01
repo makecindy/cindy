@@ -34,7 +34,14 @@ import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
 import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import { applyModelPriceOverrides, mergeStoredModelPriceOverride } from './modelPriceOverrideStore.js';
+import {
+  applyModelPriceOverrides,
+  mergeStoredModelPriceOverride,
+  type ModelPriceOverridesSnapshot,
+} from './modelPriceOverrideStore.js';
+
+export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
+export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -441,6 +448,7 @@ export function getCodexSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
   at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
   const effective = getModelPriceQuote(pricing, 'openai', modelId, 'codex');
   if (effective?.source === 'user-override') {
@@ -454,6 +462,7 @@ export function getCodexSubscriptionValuePrice(
           agent: 'codex',
           at,
         }),
+        overrides,
       ) ?? effective
     );
   }
@@ -470,6 +479,7 @@ export function getClaudeSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
   at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
   const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
   if (effective?.source === 'user-override') {
@@ -484,6 +494,7 @@ export function getClaudeSubscriptionValuePrice(
           getActiveCatalog().modelRegistry,
           { agent: 'claude-code', at },
         ),
+        overrides,
       ) ?? effective
     );
   }
@@ -501,6 +512,7 @@ export function getSubscriptionDirectValuePrice(
   agent?: 'claude-code' | 'codex',
   pricing?: ModelPricingCatalog | null,
   at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
   const registry = getActiveCatalog().modelRegistry;
   const fallback = subscriptionDirectPriceQuote(
@@ -523,6 +535,7 @@ export function getSubscriptionDirectValuePrice(
               agent,
               at,
             }),
+            overrides,
           ) ?? effective)
       : fallback;
   if (!quote) return undefined;

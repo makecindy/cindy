@@ -60,6 +60,7 @@ import { getActiveCatalog } from '../../maker-host/active-catalog';
 import {
   applyModelPriceOverrides,
   clearModelPriceOverride,
+  readModelPriceOverridesSnapshot,
   setModelPriceOverride,
 } from '../modelPriceOverrideStore';
 import {
@@ -606,6 +607,11 @@ describe('reference pricing helpers', () => {
         source: 'user-override',
         inputPerMtok: 2.5,
       });
+      // 批量路径:传入一次性快照时结果一致,不逐行重读覆盖文件。
+      const snapshot = readModelPriceOverridesSnapshot();
+      expect(
+        getClaudeSubscriptionValuePrice('claude-sonnet-5', pricing, '2026-08-31', snapshot),
+      ).toMatchObject({ source: 'user-override', inputPerMtok: 2.5, outputPerMtok: 10 });
     } finally {
       clearModelPriceOverride(target);
     }

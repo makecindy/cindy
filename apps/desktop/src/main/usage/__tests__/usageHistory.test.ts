@@ -23,6 +23,7 @@ vi.mock('../../localDb/client/current', () => ({
 vi.mock('../modelPricing', () => ({
   getModelPricing: vi.fn(),
   isModelPricingRefreshInFlight: vi.fn(() => false),
+  readModelPriceOverridesSnapshot: vi.fn(() => ({})),
   getClaudeSubscriptionValuePrice: (
     model: string,
     pricing: Record<string, Record<string, unknown>> | null | undefined,
@@ -175,6 +176,7 @@ function makeDeps(overrides: Partial<UsageHistoryDeps> = {}): UsageHistoryDeps {
     getAllSpendDays: async () => [],
     getModelUsageSince: async () => [],
     getModelPricing: async () => null,
+    getModelPriceOverridesSnapshot: () => ({}),
     isModelPricingRefreshInFlight: () => false,
     todayKey: () => TODAY,
     ...overrides,

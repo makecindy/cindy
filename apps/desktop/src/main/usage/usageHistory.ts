@@ -29,6 +29,8 @@ import {
   getModelPricing,
   getSubscriptionDirectValuePrice,
   isModelPricingRefreshInFlight,
+  readModelPriceOverridesSnapshot,
+  type ModelPriceOverridesSnapshot,
   type ModelPricingMap,
 } from './modelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
@@ -223,6 +225,8 @@ export interface UsageHistoryDeps {
   getAllSpendDays(): Promise<Array<{ day: string; money: RegionalMoney }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
   getModelPricing(): Promise<ModelPricingMap | null>;
+  /** 覆盖记录快照,一次聚合读一份——历史重合并逐行读文件会在慢盘上拖垮 Main 线程。 */
+  getModelPriceOverridesSnapshot(): ModelPriceOverridesSnapshot;
   isModelPricingRefreshInFlight(): boolean;
   todayKey(): string;
 }
@@ -231,6 +235,7 @@ const defaultDeps: UsageHistoryDeps = {
   getAllSpendDays,
   getModelUsageSince,
   getModelPricing,
+  getModelPriceOverridesSnapshot: readModelPriceOverridesSnapshot,
   isModelPricingRefreshInFlight,
   todayKey: () => localDayKey(),
 };
@@ -352,14 +357,15 @@ function getSubscriptionValuePriceFor(
   model: string,
   pricing: ModelPricingMap | null,
   at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
   if (agentKind === 'codex') {
     return (
-      getSubscriptionDirectValuePrice(model, 'codex', pricing, at) ??
-      getCodexSubscriptionValuePrice(model, pricing, at)
+      getSubscriptionDirectValuePrice(model, 'codex', pricing, at, overrides) ??
+      getCodexSubscriptionValuePrice(model, pricing, at, overrides)
     );
   }
-  return getClaudeSubscriptionValuePrice(model, pricing, at);
+  return getClaudeSubscriptionValuePrice(model, pricing, at, overrides);
 }
 
 async function hydrateFromDisk(expectedOptsKey: string): Promise<UsageHistoryPayload | null> {
@@ -565,6 +571,9 @@ export async function readUsageHistoryWith(
   }
   const days = [...daysMap.values()].sort((a, b) => (a.day < b.day ? -1 : 1));
   // pricing 在函数开头已与消费行并行取好(见那里的 race 注释)。
+  // 覆盖记录也在这里读一次快照:缺价检查、模型聚合、每日明细三条遍历共用,
+  // 避免历史重合并按 model-day 逐行 stat 覆盖文件。
+  const priceOverrides = deps.getModelPriceOverridesSnapshot();
   const hasMissingPendingSubscriptionPrice = modelRows.some((r) =>
     isSubscriptionUsageModel(r.model) &&
     !getSubscriptionValuePriceFor(
@@ -572,6 +581,7 @@ export async function readUsageHistoryWith(
       displayModelName(r.model),
       pricing,
       r.day,
+      priceOverrides,
     ),
   );
   const estimatesPending =
@@ -620,7 +630,7 @@ export async function readUsageHistoryWith(
     if (row.money.amount === 0 && isSubscriptionUsageModel(row.model)) {
       const estimate = computePriceQuoteTurnMoney(
         row,
-        getSubscriptionValuePriceFor(agentKind, model, pricing, row.day),
+        getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
         ledgerCurrency,
       );
       if (estimate?.amount) {
@@ -650,7 +660,7 @@ export async function readUsageHistoryWith(
       apiMoney.amount === 0 && isSubscriptionUsageModel(row.model)
         ? (computePriceQuoteTurnMoney(
             row,
-            getSubscriptionValuePriceFor(agentKind, model, pricing, row.day),
+            getSubscriptionValuePriceFor(agentKind, model, pricing, row.day, priceOverrides),
             ledgerCurrency,
           ) ?? zeroEstimate())
         : zeroEstimate();

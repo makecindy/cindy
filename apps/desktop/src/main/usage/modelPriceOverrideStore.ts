@@ -470,15 +470,28 @@ export function stageProviderModelPriceOverridesClear(providerId: string): () =>
 }
 
 /**
+ * 覆盖记录的一次性快照。历史用量聚合按 model-day 逐行取价,每行都走
+ * `readEntries()` 会重复 stat 覆盖文件(Windows/慢盘上数百上千次同步磁盘访问);
+ * 聚合开始时读一次快照、贯穿整轮复用。
+ */
+export type ModelPriceOverridesSnapshot = Readonly<Record<string, StoredModelPriceOverride>>;
+
+export function readModelPriceOverridesSnapshot(): ModelPriceOverridesSnapshot {
+  return readEntries();
+}
+
+/**
  * 把持久化的稀疏覆盖合并到调用方给定的参考价上（典型:按历史日期 `at` 解析出的
  * 参考价）。目录里烘焙的 user-override 报价是按当前日期合并的,历史估值不能直接
  * 回用——未覆盖字段必须跟随查询时点的参考价。无该目标的覆盖记录时返回 undefined。
+ * 批量取价的调用方应传入同一份 `entries` 快照,避免逐行重读覆盖文件。
  */
 export function mergeStoredModelPriceOverride(
   target: ModelPriceOverrideTarget,
   reference: ModelPriceQuote | undefined,
+  entries: ModelPriceOverridesSnapshot = readEntries(),
 ): ModelPriceQuote | undefined {
-  const record = readEntries()[overrideKey(target)];
+  const record = entries[overrideKey(target)];
   if (!record) return undefined;
   return mergedQuote(record, reference, record.values, record.baseReference);
 }
