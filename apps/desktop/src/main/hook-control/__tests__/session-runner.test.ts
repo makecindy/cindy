@@ -19,7 +19,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import type { Effort } from '@cindy/maker-core';
+import type { Effort, PermissionMode, PermissionModeState } from '@cindy/maker-core';
 import type { CatalogModel, ProviderView } from '@cindy/model-providers';
 
 const h = vi.hoisted(() => {
@@ -185,12 +185,52 @@ vi.mock('../defaults.js', async (importOriginal) => {
   };
 });
 
+function makePermissionModeFake() {
+  let permissionModeState: PermissionModeState = {
+    mode: 'bypassPermissions',
+    generation: 0,
+  };
+  const setPermissionMode = vi.fn(async (_mode: PermissionMode) => undefined);
+  const setPermissionModeTracked = vi.fn(async (mode: PermissionMode) => {
+    await setPermissionMode(mode);
+    permissionModeState = { mode, generation: permissionModeState.generation + 1 };
+    return { ...permissionModeState };
+  });
+  const setPermissionModeIfUnchanged = vi.fn(
+    async (expected: PermissionModeState, mode: PermissionMode) => {
+      if (
+        permissionModeState.mode !== expected.mode ||
+        permissionModeState.generation !== expected.generation
+      ) {
+        return false;
+      }
+      await setPermissionMode(mode);
+      permissionModeState = { mode, generation: permissionModeState.generation + 1 };
+      return true;
+    },
+  );
+  return {
+    get permissionModeState() {
+      return { ...permissionModeState };
+    },
+    setPermissionMode,
+    setPermissionModeTracked,
+    setPermissionModeIfUnchanged,
+  };
+}
+
 /** fake maker: createSession 返回"send 即接受、随后立刻 done"的会话。 */
 function makeFakeSession(id: string) {
+  const permission = makePermissionModeFake();
   return {
     id,
     workDir: 'D:/repo',
-    setPermissionMode: vi.fn(async () => undefined),
+    get permissionModeState() {
+      return permission.permissionModeState;
+    },
+    setPermissionMode: permission.setPermissionMode,
+    setPermissionModeTracked: permission.setPermissionModeTracked,
+    setPermissionModeIfUnchanged: permission.setPermissionModeIfUnchanged,
     onEvent(cb: (ev: { type: string; data: unknown }) => void) {
       h.eventCbs.set(id, cb);
       return () => {
@@ -701,9 +741,9 @@ describe('进度快照(turn.progress 链路)', () => {
   /** 不自动 done 的 fake session: 测试手动驱动事件流。 */
   function makeManualSession(id: string) {
     return {
+      ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
-      setPermissionMode: vi.fn(async () => undefined),
       onEvent(
         cb: (ev: {
           type: string;
@@ -1158,6 +1198,43 @@ describe('进度快照(turn.progress 链路)', () => {
     expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
   });
 
+  it('Telegram 群轮次结束时不覆盖用户并发选择的更严格权限档', async () => {
+    const session = makeFakeSession('sess-old');
+    session.send.mockImplementationOnce(
+      async (
+        _msg: unknown,
+        opts: {
+          afterTurnReserved?: () => Promise<void> | void;
+          beforeProviderStart?: () => Promise<void> | void;
+          onAccepted?: () => Promise<void>;
+        },
+      ): Promise<unknown> => {
+        await opts.afterTurnReserved?.();
+        await session.setPermissionModeTracked('auto');
+        await opts.beforeProviderStart?.();
+        await opts.onAccepted?.();
+        queueMicrotask(() => h.eventCbs.get('sess-old')?.({ type: 'done', data: null }));
+        return { accepted: true };
+      },
+    );
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['auto']]);
+    expect(session.setPermissionModeIfUnchanged).toHaveBeenCalledOnce();
+    expect(session.permissionModeState.mode).toBe('auto');
+  });
+
   it('Telegram 群复用会话发送失败时也恢复原权限档', async () => {
     const session = makeFakeSession('sess-old');
     session.send.mockImplementationOnce(
@@ -1389,9 +1466,9 @@ describe('进度快照(turn.progress 链路)', () => {
 describe('上游过载自动重试期间的渠道进度(零产出窗口)', () => {
   function makeManualSession(id: string) {
     return {
+      ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
-      setPermissionMode: vi.fn(async () => undefined),
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {
@@ -1597,9 +1674,9 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
   /** 带 setInteractionListener 的 fake session(不自动 done)。 */
   function makeInteractiveSession(id: string) {
     return {
+      ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
-      setPermissionMode: vi.fn(async () => undefined),
       onEvent(
         cb: (ev: {
           type: string;
@@ -2015,9 +2092,9 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   /** 不自动 done 的 fake session(测试手动驱动事件流)。 */
   function makeManualSession(id: string) {
     return {
+      ...makePermissionModeFake(),
       id,
       workDir: 'D:/repo',
-      setPermissionMode: vi.fn(async () => undefined),
       onEvent(cb: (ev: { type: string; data: unknown }) => void) {
         h.eventCbs.set(id, cb);
         return () => {

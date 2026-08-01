@@ -33,7 +33,13 @@ import path from 'node:path';
 
 import { app, BrowserWindow } from 'electron';
 
-import type { AgentKind, PermissionMode, UserContentBlock, UserMessage } from '@cindy/maker-core';
+import type {
+  AgentKind,
+  PermissionMode,
+  PermissionModeState,
+  UserContentBlock,
+  UserMessage,
+} from '@cindy/maker-core';
 import {
   effectiveSourceIdForModel,
   type ProviderView,
@@ -578,6 +584,7 @@ export function createMakerHookSessionRunner(deps: {
       // terminal path after a successful reservation restores the original
       // mode in the outer finally below.
       let reusedPermissionModeApplied = false;
+      let reusedPermissionModeLease: PermissionModeState | null = null;
 
       try {
         /**
@@ -923,8 +930,15 @@ export function createMakerHookSessionRunner(deps: {
                 // Mark first: setPermissionMode can partially mutate before a
                 // transport error, in which case the outer finally must still
                 // make a best-effort restore.
+                const beforeTemporaryMode = session.permissionModeState;
                 reusedPermissionModeApplied = true;
-                await session.setPermissionMode(permissionMode);
+                try {
+                  reusedPermissionModeLease =
+                    await session.setPermissionModeTracked(permissionMode);
+                } catch (error) {
+                  reusedPermissionModeLease = beforeTemporaryMode;
+                  throw error;
+                }
               }
             },
             beforeProviderStart: () => {
@@ -1029,15 +1043,31 @@ export function createMakerHookSessionRunner(deps: {
           ...(outAttachments !== undefined ? { attachments: outAttachments } : {}),
         };
       } finally {
-        if (reusedPermissionModeApplied && reusedPermissionModeToRestore !== null) {
+        if (
+          reusedPermissionModeApplied &&
+          reusedPermissionModeToRestore !== null &&
+          reusedPermissionModeLease !== null
+        ) {
           try {
-            await session.setPermissionMode(reusedPermissionModeToRestore);
+            const restored = await session.setPermissionModeIfUnchanged(
+              reusedPermissionModeLease,
+              reusedPermissionModeToRestore,
+            );
+            if (!restored) {
+              log.info('hook permission restore skipped because a newer live change won');
+            }
           } catch (err) {
             log.warn(
               `hook permission restore failed; retrying: ${err instanceof Error ? err.message : String(err)}`,
             );
             try {
-              await session.setPermissionMode(reusedPermissionModeToRestore);
+              const restored = await session.setPermissionModeIfUnchanged(
+                reusedPermissionModeLease,
+                reusedPermissionModeToRestore,
+              );
+              if (!restored) {
+                log.info('hook permission restore retry skipped because a newer live change won');
+              }
             } catch (retryErr) {
               // Never leave a reused Desktop session live in the temporary
               // Telegram group mode. Preserve its durable metadata and local

@@ -6,7 +6,7 @@ import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
-import type { AgentKind } from './types/common.js';
+import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
 
 /** A generator that never completes — simulates a live session handle. */
@@ -1321,6 +1321,43 @@ describe('Session turn send guard', () => {
     await expect(session.send('first')).rejects.toBe(firstError);
     await expect(session.send('second')).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Session permission mode leases', () => {
+  it('serializes live changes and skips a stale conditional restore', async () => {
+    const handle = createHandle({ id: 'permission-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const temporary = await session.setPermissionModeTracked('ask');
+    const userChange = session.setPermissionMode('auto');
+    const restored = session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions');
+
+    await expect(userChange).resolves.toBeUndefined();
+    await expect(restored).resolves.toBe(false);
+    expect(applied).toEqual(['ask', 'auto']);
+    expect(session.permissionModeState).toEqual({ mode: 'auto', generation: 2 });
   });
 });
 

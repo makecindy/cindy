@@ -41,6 +41,11 @@ import type { Logger } from './interfaces/logger.js';
 
 export type SessionStatus = 'active' | 'aborting' | 'closed' | 'error';
 
+export interface PermissionModeState {
+  mode: PermissionMode | null;
+  generation: number;
+}
+
 export type SessionEventListener = (event: AgentEvent) => void;
 export type SessionStatusListener = (status: SessionStatus) => void;
 export type InteractionRequestListener = (req: InteractionRequest) => Promise<InteractionDecision>;
@@ -116,6 +121,8 @@ export interface SessionOptions {
   handle: AgentSessionHandle;
   capabilities: Capabilities;
   logger: Logger;
+  /** Runtime permission mode used to create/resume the underlying handle. */
+  permissionMode?: PermissionMode;
   /**
    * 远端 SSH 主机的 alias (来自 `@cindy/maker-remote-ssh` ConnectionPool)。
    * 非空 → 这个 session 实际跑在远端机器上, workDir 是远端机器上的路径。
@@ -264,6 +271,8 @@ export class Session {
 
   private readonly handle: AgentSessionHandle;
   private readonly logger: Logger;
+  private permissionModeStateValue: PermissionModeState;
+  private permissionModeChangeChain: Promise<void> = Promise.resolve();
   private readonly eventListeners = new Set<SessionEventListener>();
   private readonly statusListeners = new Set<SessionStatusListener>();
   private interactionListener: InteractionRequestListener | null = null;
@@ -315,6 +324,10 @@ export class Session {
     this.capabilities = opts.capabilities;
     this.remoteHostId = opts.remoteHostId ?? null;
     this.logger = opts.logger.child(`s:${this.id}`);
+    this.permissionModeStateValue = {
+      mode: opts.permissionMode ?? null,
+      generation: 0,
+    };
     this.turnStallMs =
       opts.turnStallMs ?? parseTurnStallMs(process.env.XDT_SESSION_TURN_STALL_MS);
 
@@ -614,6 +627,11 @@ export class Session {
     return this.handle.codexProxyActive;
   }
 
+  /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */
+  get permissionModeState(): PermissionModeState {
+    return { ...this.permissionModeStateValue };
+  }
+
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
   async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
@@ -637,6 +655,48 @@ export class Session {
   }
 
   async setPermissionMode(mode: PermissionMode): Promise<void> {
+    await this.setPermissionModeTracked(mode);
+  }
+
+  async setPermissionModeTracked(mode: PermissionMode): Promise<PermissionModeState> {
+    this.assertPermissionModeSupported(mode);
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = {
+        mode,
+        generation: this.permissionModeStateValue.generation + 1,
+      };
+      return this.permissionModeState;
+    });
+    this.permissionModeChangeChain = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
+  async setPermissionModeIfUnchanged(
+    expected: PermissionModeState,
+    mode: PermissionMode,
+  ): Promise<boolean> {
+    this.assertPermissionModeSupported(mode);
+    const operation = this.permissionModeChangeChain.catch(() => undefined).then(async () => {
+      const current = this.permissionModeStateValue;
+      if (current.mode !== expected.mode || current.generation !== expected.generation) {
+        return false;
+      }
+      await this.handle.setPermissionMode!(mode);
+      this.permissionModeStateValue = { mode, generation: current.generation + 1 };
+      return true;
+    });
+    this.permissionModeChangeChain = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
+  private assertPermissionModeSupported(mode: PermissionMode): void {
     if (!this.capabilities.permissionModes.some((m) => m.id === mode)) {
       throw new NotSupportedError(
         `permissionMode='${mode}'`,
@@ -653,7 +713,6 @@ export class Session {
     if (!this.handle.setPermissionMode) {
       throw new NotSupportedError('setPermissionMode', { supported: false, reason: 'not-implemented' });
     }
-    await this.handle.setPermissionMode(mode);
   }
 
   async setFastMode(enabled: boolean): Promise<void> {
