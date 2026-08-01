@@ -44,10 +44,11 @@ describe('buildHookPromptNote', () => {
     expect(buildHookPromptNote('slack')).not.toContain('[X 回复格式]');
   });
 
-  it('X 提示词陈述取文机制, 而不是要求模型自律(与 finalTextForChannel 同一约定)', () => {
+  it('X 提示词陈述取文机制, 而不是要求模型自律(与 turnTextsFor 同一约定)', () => {
     const x = buildHookPromptNote('x');
-    // 机制侧: session-runner 对 X 取 observer.finalSegment()。提示词必须把这条
-    // 规则告诉模型 —— 否则它会把结论拆在多条消息里, 而只有最后一条会被发出。
+    // 机制侧: session-runner 的 turnTextsFor 对 X 取 observer.finalSegment() 当
+    // 公开正文。提示词必须把这条规则告诉模型 —— 否则它会把结论拆在多条消息里,
+    // 而只有最后一条会被发出。
     expect(x).toContain('只有你的最后一条消息会被发出');
     expect(x).toContain('最终结论必须完整地放进最后');
     // 反面: 不得退回"要求模型不要写过程叙述"的纯软约束写法 —— 模型不听就直接
