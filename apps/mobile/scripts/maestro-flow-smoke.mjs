@@ -430,6 +430,7 @@ const requiredSourceAnchors = [
   'session.openWorkspaceButton',
   'session.copyWorkspacePath',
   'session.composerModelButton',
+  'session.composerCollapsedModelButton',
   'session.extraDirsSection',
   'session.extraDirsStatus',
   'session.extraDirsDraftStatus',

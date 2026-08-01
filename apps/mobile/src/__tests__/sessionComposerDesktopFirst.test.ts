@@ -117,7 +117,13 @@ describe('mobile session composer desktop-first surface', () => {
     // 权限选择已合并进模型浮窗(ModelPickerSheet 二级视图);composer 底排只剩 [+][模型]。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
     expect(source).not.toContain('<MobilePermissionPickerList');
-    expect(source).toContain('testID="session.composerModelButton"');
+    // 展开态 toolbar / 收起态 leading 共用 renderComposerModelPill(testID)(#900)。
+    expect(source).toContain("renderComposerModelPill('session.composerModelButton')");
+    expect(source).toContain("renderComposerModelPill('session.composerCollapsedModelButton')");
+    expect(source).toContain('const renderComposerModelPill = (testID: string) => (');
+    expect(source).toContain('const renderComposerCollapsedLeading = () => (');
+    expect(composerInputSource).toContain('leading={renderComposerCollapsedLeading()}');
+    expect(composerInputSource).not.toContain('leading={renderComposerCollapsedAttachmentBadge()}');
     // 模型 + 权限浮窗:ContextSheet 同款独立 Modal(单 Modal 双 SheetSurface 叠层),
     // 不再是 composer 上方的 in-flow drop-up。
     expect(source).toContain('<ModelPickerSheet');

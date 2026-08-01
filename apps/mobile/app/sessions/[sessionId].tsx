@@ -2014,6 +2014,38 @@ export default function SessionScreen() {
       visible
     />
   );
+  // 模型 pill:展开态进 toolbar,收起态进 leading(见 renderComposerCollapsedLeading)。
+  // 两处共用同一颗,避免收起时只能进选择器才知道当前模型(#900)。
+  const renderComposerModelPill = (testID: string) => (
+    composerRuntimeSummary ? (
+      <ComposerRuntimePill
+        fastOn={composerPillFastOn}
+        label={composerRuntimeLabel}
+        leading={agentSwitchIntent ? (
+          <MobileAgentMark
+            agentKind={agentSwitchIntent.targetAgentKind}
+            color={colors.textSecondary}
+            size={iconSize.sm}
+          />
+        ) : composerPillSourceId ? (
+          // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
+          // 不静默换成 activeSourceId 的默认回退 Logo。
+          <MobileModelIconMark
+            color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
+            icon={currentSession && composerPillSourceProvider
+              ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
+              : undefined}
+            name={composerPillSourceProvider?.name ?? composerPillSourceId}
+            providerId={composerPillSourceId}
+            routing={composerPillSourceProvider?.routing}
+            logoKind={composerPillSourceProvider?.logoKind}
+          />
+        ) : null}
+        onPress={toggleComposerModelPicker}
+        testID={testID}
+      />
+    ) : null
+  );
   // 聚焦卡片形态的底部工具排:[+][模型] …… [语音][停止/发送]。
   // + 号打开 Context 面板(附件 / 计划模式 / 目标模式收在面板内);权限模式入口收进会话设置。
   const renderComposerToolbar = () => (
@@ -2026,34 +2058,7 @@ export default function SessionScreen() {
           testID="session.planModeChip"
         />
       ) : null}
-      {composerRuntimeSummary ? (
-        <ComposerRuntimePill
-          fastOn={composerPillFastOn}
-          label={composerRuntimeLabel}
-          leading={agentSwitchIntent ? (
-            <MobileAgentMark
-              agentKind={agentSwitchIntent.targetAgentKind}
-              color={colors.textSecondary}
-              size={iconSize.sm}
-            />
-          ) : composerPillSourceId ? (
-            // 正常态显示真正生效来源；断开态显示 DB 中的真实来源并使用状态色，
-            // 不静默换成 activeSourceId 的默认回退 Logo。
-            <MobileModelIconMark
-              color={composerSelectedSourceDisconnected ? colors.statusError : undefined}
-              icon={currentSession && composerPillSourceProvider
-                ? getModel(composerPillSourceProvider, currentSession.model, sessionAgentKind)?.icon
-                : undefined}
-              name={composerPillSourceProvider?.name ?? composerPillSourceId}
-              providerId={composerPillSourceId}
-              routing={composerPillSourceProvider?.routing}
-              logoKind={composerPillSourceProvider?.logoKind}
-            />
-          ) : null}
-          onPress={toggleComposerModelPicker}
-          testID="session.composerModelButton"
-        />
-      ) : null}
+      {renderComposerModelPill('session.composerModelButton')}
       <ComposerToolbarSpacer />
       {/* 工具排右段顺序:[停止任务][语音占位][发送槽]。停止任务在语音左边
          (对齐桌面),语音占位宽度随录音胶囊(红点+计时)展开,把停止任务
@@ -5461,6 +5466,15 @@ export default function SessionScreen() {
     />
   ) : null);
 
+  // 收起态 leading:[模型 chip][附件徽标]。模型常驻可见、点开选择器(#900);
+  // card 态 leading 被 MobileComposerInputRow 收掉,改由 toolbar 的同款 pill 承接。
+  const renderComposerCollapsedLeading = () => (
+    <>
+      {renderComposerModelPill('session.composerCollapsedModelButton')}
+      {renderComposerCollapsedAttachmentBadge()}
+    </>
+  );
+
   // 停止任务按钮(实心中性方块)。两处使用:语音/发送左边的独立槽(inline)、
   // 发送位顶替(sendSlotIsStop);同一颗按钮的两个宿主位置,样式与行为一致。
   const renderComposerStopButton = () => (
@@ -7914,7 +7928,7 @@ export default function SessionScreen() {
                     inputOverlay={renderComposerInputOverlay()}
                     inputStyle={voiceIsListening ? styles.inputVoiceHidden : undefined}
                     inputTestID="session.composerInput"
-                    leading={renderComposerCollapsedAttachmentBadge()}
+                    leading={renderComposerCollapsedLeading()}
                     maxHeight={composerResize.inputMaxHeight}
                     multilineShape={!composerCardActive && composerInputIsMultiline}
                     onBlur={() => {
