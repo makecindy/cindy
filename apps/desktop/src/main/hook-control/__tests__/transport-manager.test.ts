@@ -2627,7 +2627,12 @@ describe('Telegram provider capability, binding and prefs', () => {
       replyQuoteGroup: 'first' as const,
       groupActivation: { '-1001': 'always' as const },
     };
-    const behaviorRead = manager.getTelegramBehavior();
+    await expect(manager.getTelegramBehavior('stale-binding')).rejects.toBeInstanceOf(
+      HookNotConnectedError,
+    );
+    expect(server.frames.some((frame) => frame.type === 'provider.behavior.get')).toBe(false);
+
+    const behaviorRead = manager.getTelegramBehavior('binding-telegram-1');
     const behaviorGet = await server.waitFor('provider.behavior.get');
     if (behaviorGet.type !== 'provider.behavior.get') throw new Error('unreachable');
     sock.send(
@@ -2644,7 +2649,7 @@ describe('Telegram provider capability, binding and prefs', () => {
       groupActivation: { '-1001': 'always' },
     });
 
-    const behaviorWrite = manager.setTelegramBehavior({
+    const behaviorWrite = manager.setTelegramBehavior('binding-telegram-1', {
       emojiReactions: 'expressive',
       replyQuoteGroup: 'all',
     });
@@ -2663,7 +2668,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     );
     await expect(behaviorWrite).resolves.toMatchObject({ bindingId: 'binding-telegram-1' });
 
-    const groupWrite = manager.setTelegramGroupActivation('-1002', 'mention');
+    const groupWrite = manager.setTelegramGroupActivation('binding-telegram-1', '-1002', 'mention');
     await expect
       .poll(() => server.frames.filter((frame) => frame.type === 'provider.behavior.set').length)
       .toBe(2);

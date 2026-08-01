@@ -3634,17 +3634,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
       patch: Record<string, string | null>,
     ): Promise<{ prefs: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:provider-prefs-set', { provider, workspace, patch }),
-    getTelegramBehavior: (): Promise<{ behavior: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:telegram-behavior-get'),
-    setTelegramBehavior: (patch: Record<string, string>): Promise<{ behavior: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:telegram-behavior-set', { patch }),
-    listTelegramGroups: (): Promise<{ groups: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:telegram-groups-list'),
+    getTelegramBehavior: (bindingId: string): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-get', { bindingId }),
+    setTelegramBehavior: (
+      bindingId: string,
+      patch: Record<string, string>,
+    ): Promise<{ behavior: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-behavior-set', { bindingId, patch }),
+    listTelegramGroups: (bindingId: string): Promise<{ groups: unknown }> =>
+      ipcRenderer.invoke('maker:hook-control:telegram-groups-list', { bindingId }),
     setTelegramGroupActivation: (
+      bindingId: string,
       chatId: string,
       mode: 'mention' | 'always',
     ): Promise<{ behavior: unknown }> =>
-      ipcRenderer.invoke('maker:hook-control:telegram-group-activation-set', { chatId, mode }),
+      ipcRenderer.invoke('maker:hook-control:telegram-group-activation-set', {
+        bindingId,
+        chatId,
+        mode,
+      }),
     // 工作目录模型来源偏好(纯本地, 不经 WS; providerId=null 清除条目)
     getWorkspaceProviderSources: (): Promise<{ entries: unknown }> =>
       ipcRenderer.invoke('maker:hook-control:workspace-provider-source-get'),

@@ -316,9 +316,13 @@ export interface HookControlManager {
     workspace: string,
     patch: HookPrefsPatch,
   ): Promise<ProviderPrefsView>;
-  getTelegramBehavior(): Promise<TelegramHookBehaviorState>;
-  setTelegramBehavior(patch: TelegramHookBehaviorPatch): Promise<TelegramHookBehaviorState>;
+  getTelegramBehavior(bindingId: string): Promise<TelegramHookBehaviorState>;
+  setTelegramBehavior(
+    bindingId: string,
+    patch: TelegramHookBehaviorPatch,
+  ): Promise<TelegramHookBehaviorState>;
   setTelegramGroupActivation(
+    bindingId: string,
     chatId: string,
     mode: TelegramHookGroupActivationMode,
   ): Promise<TelegramHookBehaviorState>;
@@ -1006,6 +1010,7 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
   }
 
   function sendTelegramBehaviorRequest(
+    expectedBindingId: string,
     build: (requestId: string, bindingId: string) => HookMessage,
   ): Promise<TelegramHookBehaviorState> {
     const lane = telegramLane;
@@ -1017,7 +1022,8 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
       !laneCapabilityReady(lane) ||
       !lane.serverFeatures.includes(HOOK_FEATURE_PROVIDER_BEHAVIOR) ||
       !lane.config.isEnabled() ||
-      bindingId === null
+      bindingId === null ||
+      bindingId !== expectedBindingId
     ) {
       return Promise.reject(new HookNotConnectedError('telegram'));
     }
@@ -2954,17 +2960,21 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         }),
       );
     },
-    getTelegramBehavior() {
-      return sendTelegramBehaviorRequest((requestId, bindingId) =>
-        makeProviderBehaviorGet({ requestId, provider: 'telegram', bindingId }),
+    getTelegramBehavior(bindingId) {
+      return sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
+        makeProviderBehaviorGet({
+          requestId,
+          provider: 'telegram',
+          bindingId: currentBindingId,
+        }),
       );
     },
-    setTelegramBehavior(patch) {
-      return sendTelegramBehaviorRequest((requestId, bindingId) => {
+    setTelegramBehavior(bindingId, patch) {
+      return sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) => {
         const payload: ProviderBehaviorSetPayload = {
           requestId,
           provider: 'telegram',
-          bindingId,
+          bindingId: currentBindingId,
           ...(patch.emojiReactions !== undefined ? { emojiReactions: patch.emojiReactions } : {}),
           ...(patch.replyQuoteDm !== undefined ? { replyQuoteDm: patch.replyQuoteDm } : {}),
           ...(patch.replyQuoteGroup !== undefined
@@ -2974,12 +2984,12 @@ export function createHookControlManager(deps: HookControlManagerDeps): HookCont
         return makeProviderBehaviorSet(payload);
       });
     },
-    setTelegramGroupActivation(chatId, mode) {
-      return sendTelegramBehaviorRequest((requestId, bindingId) =>
+    setTelegramGroupActivation(bindingId, chatId, mode) {
+      return sendTelegramBehaviorRequest(bindingId, (requestId, currentBindingId) =>
         makeProviderBehaviorSet({
           requestId,
           provider: 'telegram',
-          bindingId,
+          bindingId: currentBindingId,
           groupActivation: { chatId, value: mode === 'always' ? 'always' : null },
         }),
       );

@@ -842,10 +842,11 @@ export function registerHookControlIpc(): void {
     }
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET, async () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET, async (_e, payload) => {
     requireHookControl();
+    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
     try {
-      return { behavior: await ensureInstances().manager.getTelegramBehavior() };
+      return { behavior: await ensureInstances().manager.getTelegramBehavior(bindingId) };
     } catch (err) {
       throwHookPrefsError(err);
     }
@@ -855,7 +856,9 @@ export function registerHookControlIpc(): void {
     HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_SET,
     async (_e, payload) => {
       requireHookControl();
-      const raw = requireObject(requireObject(payload).patch);
+      const request = requireObject(payload);
+      const bindingId = requireString(request.bindingId, 'bindingId');
+      const raw = requireObject(request.patch);
       const patch: TelegramHookBehaviorPatch = {};
       if (raw.emojiReactions !== undefined) {
         if (!['off', 'minimal', 'expressive'].includes(String(raw.emojiReactions))) {
@@ -879,21 +882,23 @@ export function registerHookControlIpc(): void {
         throwIpcError('INVALID_PARAMS', 'behavior patch must not be empty');
       }
       try {
-        return { behavior: await ensureInstances().manager.setTelegramBehavior(patch) };
+        return { behavior: await ensureInstances().manager.setTelegramBehavior(bindingId, patch) };
       } catch (err) {
         throwHookPrefsError(err);
       }
     },
   );
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST, async () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST, async (_e, payload) => {
     requireHookControl();
+    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
     try {
       const { manager: m } = ensureInstances();
-      const behavior = await m.getTelegramBehavior();
+      const behavior = await m.getTelegramBehavior(bindingId);
       const binding = m.snapshot().telegram.binding;
       if (
         binding?.state !== 'confirmed' ||
+        binding.bindingId !== bindingId ||
         binding.bindingId !== behavior.bindingId ||
         !binding.principalId
       ) {
@@ -917,6 +922,7 @@ export function registerHookControlIpc(): void {
     async (_e, payload) => {
       requireHookControl();
       const p = requireObject(payload);
+      const bindingId = requireString(p.bindingId, 'bindingId');
       const chatId = requireString(p.chatId, 'chatId');
       if (chatId.length > 32 || !/^-?[0-9]+$/.test(chatId)) {
         throwIpcError('INVALID_PARAMS', 'chatId is invalid');
@@ -926,7 +932,11 @@ export function registerHookControlIpc(): void {
       }
       try {
         return {
-          behavior: await ensureInstances().manager.setTelegramGroupActivation(chatId, p.mode),
+          behavior: await ensureInstances().manager.setTelegramGroupActivation(
+            bindingId,
+            chatId,
+            p.mode,
+          ),
         };
       } catch (err) {
         throwHookPrefsError(err);

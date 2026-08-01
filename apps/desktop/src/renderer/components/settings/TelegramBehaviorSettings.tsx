@@ -141,32 +141,45 @@ export function TelegramBehaviorSettings({
 
   useEffect(() => {
     let cancelled = false;
+    let loadSettled = false;
+    let pushedDuringLoad: TelegramHookBehaviorState | null = null;
     saveFailed.current = false;
     setError(null);
-    const load =
-      source === 'official'
-        ? window.electronAPI.hookControl.getTelegramBehavior().then((value) => value.behavior)
-        : window.electronAPI.telegramBot.getBehavior();
-    void load
-      .then((value) => {
-        if (cancelled) return;
-        behaviorRef.current = value;
-        confirmedRef.current = value;
-        setBehavior(value);
-      })
-      .catch(() => {
-        if (!cancelled) setError('load');
-      });
     const unsubscribe =
       source === 'official'
         ? window.electronAPI.hookControl.onTelegramBehaviorChanged((value) => {
-            if (cancelled || pendingWrites.current > 0) return;
+            if (cancelled || value.bindingId !== bindingId) return;
+            if (!loadSettled) {
+              pushedDuringLoad = value;
+              return;
+            }
+            if (pendingWrites.current > 0) return;
             behaviorRef.current = value;
             confirmedRef.current = value;
             setBehavior(value);
             setError(null);
           })
         : undefined;
+    const load =
+      source === 'official'
+        ? window.electronAPI.hookControl
+            .getTelegramBehavior(bindingId as string)
+            .then((value) => value.behavior)
+        : window.electronAPI.telegramBot.getBehavior();
+    void load
+      .then((value) => {
+        loadSettled = true;
+        if (cancelled) return;
+        const effective = pushedDuringLoad ?? value;
+        if (pendingWrites.current > 0) return;
+        behaviorRef.current = effective;
+        confirmedRef.current = effective;
+        setBehavior(effective);
+      })
+      .catch(() => {
+        loadSettled = true;
+        if (!cancelled) setError('load');
+      });
     return () => {
       cancelled = true;
       unsubscribe?.();
@@ -195,7 +208,7 @@ export function TelegramBehaviorSettings({
         const saved =
           source === 'official'
             ? await window.electronAPI.hookControl
-                .setTelegramBehavior(partial)
+                .setTelegramBehavior(bindingId as string, partial)
                 .then((value) => value.behavior)
             : await window.electronAPI.telegramBot.setBehavior(partial);
         confirmedRef.current = saved;
@@ -215,7 +228,7 @@ export function TelegramBehaviorSettings({
             authoritative =
               source === 'official'
                 ? await window.electronAPI.hookControl
-                    .getTelegramBehavior()
+                    .getTelegramBehavior(bindingId as string)
                     .then((value) => value.behavior)
                 : await window.electronAPI.telegramBot.getBehavior();
             confirmedRef.current = authoritative;
@@ -491,26 +504,19 @@ export function TelegramGroupActivationSettings({
 
   useEffect(() => {
     let cancelled = false;
+    let loadSettled = false;
+    let pushedDuringLoad: TelegramHookBehaviorState | null = null;
     saveFailed.current = false;
     setError(null);
-    const load =
-      source === 'official'
-        ? window.electronAPI.hookControl.listTelegramGroups()
-        : window.electronAPI.telegramBot.listGroups();
-    void load
-      .then((result) => {
-        if (cancelled) return;
-        groupsRef.current = result.groups;
-        confirmedRef.current = result.groups;
-        setGroups(result.groups);
-      })
-      .catch(() => {
-        if (!cancelled) setError('load');
-      });
     const unsubscribe =
       source === 'official'
         ? window.electronAPI.hookControl.onTelegramBehaviorChanged((behavior) => {
-            if (cancelled || pendingWrites.current > 0) return;
+            if (cancelled || behavior.bindingId !== bindingId) return;
+            if (!loadSettled) {
+              pushedDuringLoad = behavior;
+              return;
+            }
+            if (pendingWrites.current > 0) return;
             const next =
               groupsRef.current === null
                 ? null
@@ -521,6 +527,26 @@ export function TelegramGroupActivationSettings({
             setError(null);
           })
         : undefined;
+    const load =
+      source === 'official'
+        ? window.electronAPI.hookControl.listTelegramGroups(bindingId as string)
+        : window.electronAPI.telegramBot.listGroups();
+    void load
+      .then((result) => {
+        loadSettled = true;
+        if (cancelled) return;
+        const next =
+          pushedDuringLoad === null
+            ? result.groups
+            : mergeOfficialGroupActivation(result.groups, pushedDuringLoad.groupActivation);
+        groupsRef.current = next;
+        confirmedRef.current = next;
+        setGroups(next);
+      })
+      .catch(() => {
+        loadSettled = true;
+        if (!cancelled) setError('load');
+      });
     return () => {
       cancelled = true;
       unsubscribe?.();
@@ -550,6 +576,7 @@ export function TelegramGroupActivationSettings({
       try {
         if (source === 'official') {
           const result = await window.electronAPI.hookControl.setTelegramGroupActivation(
+            bindingId as string,
             chatId,
             mode,
           );
@@ -579,7 +606,7 @@ export function TelegramGroupActivationSettings({
           try {
             authoritative = (
               source === 'official'
-                ? await window.electronAPI.hookControl.listTelegramGroups()
+                ? await window.electronAPI.hookControl.listTelegramGroups(bindingId as string)
                 : await window.electronAPI.telegramBot.listGroups()
             ).groups;
             confirmedRef.current = authoritative;

@@ -878,6 +878,28 @@ describe('Session turn send guard', () => {
     expect(handle.send).not.toHaveBeenCalled();
   });
 
+  it('does not run reservation preparation when the external signal is already aborted', async () => {
+    const handle = createHandle({ id: 'thread-pre-cancelled' });
+    handle.send = vi.fn(handle.send);
+    const session = new Session({
+      id: 'reserved-pre-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const afterTurnReserved = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      session.send('first', { signal: controller.signal, afterTurnReserved }),
+    ).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(afterTurnReserved).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
   it('does not run reservation state preparation when another turn is active', async () => {
     let releaseSend!: () => void;
     const sendBarrier = new Promise<void>((resolve) => {

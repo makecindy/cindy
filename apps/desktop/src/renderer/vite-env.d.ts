@@ -3307,18 +3307,20 @@ interface ElectronAPI {
       workspace: string,
       patch: import('../shared/hookControlIpc').HookPrefsPatch,
     ) => Promise<{ prefs: import('../shared/hookControlIpc').ProviderPrefsView }>;
-    getTelegramBehavior: () => Promise<{
+    getTelegramBehavior: (bindingId: string) => Promise<{
       behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
     }>;
     setTelegramBehavior: (
+      bindingId: string,
       patch: import('../shared/hookControlIpc').TelegramHookBehaviorPatch,
     ) => Promise<{
       behavior: import('../shared/hookControlIpc').TelegramHookBehaviorState;
     }>;
-    listTelegramGroups: () => Promise<{
+    listTelegramGroups: (bindingId: string) => Promise<{
       groups: import('../shared/hookControlIpc').TelegramHookKnownGroup[];
     }>;
     setTelegramGroupActivation: (
+      bindingId: string,
       chatId: string,
       mode: import('../shared/hookControlIpc').TelegramHookGroupActivationMode,
     ) => Promise<{

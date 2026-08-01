@@ -405,6 +405,8 @@ export class Session {
       return { accepted: false, reason: 'cancelled-before-dispatch' };
     };
     try {
+      const cancelledBeforePreparation = finishCancelledBeforeDispatch();
+      if (cancelledBeforePreparation !== null) return cancelledBeforePreparation;
       if (afterTurnReserved) await afterTurnReserved();
       const cancelledAfterReservation = finishCancelledBeforeDispatch();
       if (cancelledAfterReservation !== null) return cancelledAfterReservation;
