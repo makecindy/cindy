@@ -72,7 +72,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     installCli: '安装到命令行',
     installCliConfirmTitle: '把 {{cmd}} 命令安装到命令行？',
     installCliConfirmDetail:
-      '将在 {{path}} 创建指向 Cindy 的符号链接。之后在终端运行 {{cmd}} . 即可把当前目录作为工作目录在 Cindy 中打开。系统会请求你的管理员密码以写入该目录。',
+      '将在 {{path}} 创建指向 Cindy 的符号链接；若该路径已存在同名文件，会被替换。之后在终端运行 {{cmd}} . 即可把当前目录作为工作目录在 Cindy 中打开。系统会请求你的管理员密码以写入该目录。',
     installCliConfirmOk: '安装',
     installCliCancel: '取消',
     installCliSuccessTitle: '{{cmd}} 命令已安装',
@@ -108,7 +108,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     installCli: "Install '{{cmd}}' Command in PATH",
     installCliConfirmTitle: "Install the '{{cmd}}' command in your PATH?",
     installCliConfirmDetail:
-      'A symlink to Cindy will be created at {{path}}. You can then run `{{cmd}} .` in a terminal to open the current directory as a working directory in Cindy. You will be asked for your administrator password to write to that location.',
+      'A symlink to Cindy will be created at {{path}}; if a file already exists there, it will be replaced. You can then run `{{cmd}} .` in a terminal to open the current directory as a working directory in Cindy. You will be asked for your administrator password to write to that location.',
     installCliConfirmOk: 'Install',
     installCliCancel: 'Cancel',
     installCliSuccessTitle: "'{{cmd}}' command installed",
@@ -144,7 +144,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     installCli: 'コマンドラインに {{cmd}} をインストール',
     installCliConfirmTitle: '{{cmd}} コマンドをコマンドラインにインストールしますか?',
     installCliConfirmDetail:
-      'Cindy へのシンボリックリンクを {{path}} に作成します。その後ターミナルで {{cmd}} . を実行すると、現在のディレクトリを作業ディレクトリとして Cindy で開けます。この場所への書き込みには管理者パスワードの入力を求められます。',
+      'Cindy へのシンボリックリンクを {{path}} に作成します。そのパスに既存のファイルがある場合は置き換えられます。その後ターミナルで {{cmd}} . を実行すると、現在のディレクトリを作業ディレクトリとして Cindy で開けます。この場所への書き込みには管理者パスワードの入力を求められます。',
     installCliConfirmOk: 'インストール',
     installCliCancel: 'キャンセル',
     installCliSuccessTitle: '{{cmd}} コマンドをインストールしました',
@@ -180,7 +180,7 @@ export const APPLICATION_MENU_LABELS: Record<ApplicationMenuLocale, ApplicationM
     installCli: '명령줄에 {{cmd}} 명령 설치',
     installCliConfirmTitle: '{{cmd}} 명령을 명령줄에 설치할까요?',
     installCliConfirmDetail:
-      'Cindy를 가리키는 심볼릭 링크를 {{path}}에 만듭니다. 이후 터미널에서 {{cmd}} . 를 실행하면 현재 디렉터리를 작업 디렉터리로 Cindy에서 열 수 있습니다. 이 위치에 쓰려면 관리자 암호를 입력해야 합니다.',
+      'Cindy를 가리키는 심볼릭 링크를 {{path}}에 만듭니다. 해당 경로에 파일이 이미 있으면 대체됩니다. 이후 터미널에서 {{cmd}} . 를 실행하면 현재 디렉터리를 작업 디렉터리로 Cindy에서 열 수 있습니다. 이 위치에 쓰려면 관리자 암호를 입력해야 합니다.',
     installCliConfirmOk: '설치',
     installCliCancel: '취소',
     installCliSuccessTitle: '{{cmd}} 명령을 설치했습니다',

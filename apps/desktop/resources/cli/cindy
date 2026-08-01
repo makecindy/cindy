@@ -2,7 +2,8 @@
 # Cindy 命令行启动器 —— 随 Cindy.app 分发,由「帮助 → 安装到命令行」symlink 到 PATH。
 # 用法:  cindy [路径]      例如  cindy .
 #
-# 手动卸载:  rm /usr/local/bin/cindy
+# 手动卸载:  rm 掉安装时创建的 symlink(默认 /usr/local/bin/<命令名>;命令名随
+#            edition 品牌,正式版为 cindy,内部 dev 构建为 cindydev)。
 #
 # 自定位:先跟随 symlink 找到本脚本的真实路径,再按包内布局
 #   <Cindy.app>/Contents/Resources/cli/cindy

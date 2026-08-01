@@ -66,8 +66,17 @@ describe('buildInstallShellCommand', () => {
 });
 
 describe('buildUninstallShellCommand', () => {
-  it('rm 掉 source symlink', () => {
-    expect(buildUninstallShellCommand(CLI_LINK_PATH)).toBe(`rm '/usr/local/bin/cindy'`);
+  it('仅当目标是 symlink 时才 rm(不误删同路径普通文件)', () => {
+    expect(buildUninstallShellCommand(CLI_LINK_PATH)).toBe(
+      `if [ -L '/usr/local/bin/cindy' ]; then rm '/usr/local/bin/cindy'; fi`,
+    );
+  });
+
+  it('含单引号的路径两处引用都被安全转义', () => {
+    const cmd = buildUninstallShellCommand(`/usr/local/bin/o'brien`);
+    expect(cmd).toBe(
+      `if [ -L '/usr/local/bin/o'\\''brien' ]; then rm '/usr/local/bin/o'\\''brien'; fi`,
+    );
   });
 });
 

@@ -89,9 +89,14 @@ export function buildInstallShellCommand(target: string, source: string): string
   )}`;
 }
 
-/** 卸载用 shell 命令(仅在直接 unlink 遇 EACCES 时才走管理员分支)。 */
+/**
+ * 卸载用 shell 命令(仅在直接 unlink 遇 EACCES 时才走管理员分支)。
+ * 只在目标是 symlink 时才删除:即便上层已 lstat 把关,elevated `rm` 也不越权误删
+ * 同路径上用户自己放的普通文件。非 symlink / 不存在时 `if` 直接跳过,退出码为 0。
+ */
 export function buildUninstallShellCommand(source: string): string {
-  return `rm ${shellSingleQuote(source)}`;
+  const quoted = shellSingleQuote(source);
+  return `if [ -L ${quoted} ]; then rm ${quoted}; fi`;
 }
 
 function isPermissionError(err: unknown): boolean {
@@ -279,6 +284,22 @@ export async function installCindyCliCommand(
 export async function uninstallCindyCliCommand(): Promise<void> {
   if (process.platform !== 'darwin') return;
   const source = CLI_LINK_PATH;
+
+  // 只删本功能装的 symlink。路径上若是普通文件(用户自己放的真实可执行文件)一律不动,
+  // 避免误删。lstat 不跟随链接,悬空 symlink 也照删。
+  let stat: fs.Stats;
+  try {
+    stat = await fs.promises.lstat(source);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code === 'ENOENT') return;
+    log.warn('failed to stat cindy CLI command for uninstall (non-fatal)', err);
+    return;
+  }
+  if (!stat.isSymbolicLink()) {
+    log.warn('refusing to uninstall: path is not a symlink', { source: maskPath(source) });
+    return;
+  }
+
   try {
     await fs.promises.unlink(source);
     log.info('cindy CLI command uninstalled', { source: maskPath(source) });
@@ -292,6 +313,7 @@ export async function uninstallCindyCliCommand(): Promise<void> {
     }
   }
   try {
+    // elevated 命令自身也 symlink 把关(见 buildUninstallShellCommand),双保险。
     await runWithAdmin(buildUninstallShellCommand(source));
     log.info('cindy CLI command uninstalled (elevated)', { source: maskPath(source) });
   } catch (err) {
