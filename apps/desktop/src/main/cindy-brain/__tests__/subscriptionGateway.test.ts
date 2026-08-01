@@ -158,7 +158,7 @@ describe('GhostActivityTracker', () => {
     expect(events.some((event) => JSON.stringify(event).includes('secret reasoning'))).toBe(false);
   });
 
-  it('approval 与 user-input 生命周期分别映射, finishTurn 给所有在场请求兜底结束', () => {
+  it('approval 与 user-input 生命周期分别映射, finishAll 给所有在场请求兜底结束', () => {
     const names: string[] = [];
     const tracker = new GhostActivityTracker({
       sessionId: 's1',
@@ -174,11 +174,40 @@ describe('GhostActivityTracker', () => {
       'did-approval-start',
       'did-user-input-start',
     ]);
+    // 回合收口不碰审批(用户可能还在批),只有会话级 finishAll 才兜底。
     tracker.finishTurn();
+    expect(names).toHaveLength(3);
+    tracker.finishAll();
     expect(names.slice(3)).toEqual([
       'did-approval-end',
       'did-approval-end',
       'did-user-input-end',
+    ]);
+  });
+
+  it('codex 计划审批在回合终态之后开始也能完整配对', () => {
+    const events: Array<{ name: string; requestId: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: {
+        activity: (name, data) =>
+          events.push({ name, requestId: (data as { requestId?: unknown }).requestId }),
+      },
+    });
+    // codex 计划模式真实时序:计划 turn 的 done 先入队被消费(turn 收口),
+    // runPlanReviewFlow 之后才发起 plan_review。
+    tracker.beginTurn();
+    tracker.finishTurn();
+    tracker.startInteraction('plan_review', 'plan-1');
+    // 回合已收口也必须发 start:否则插件根本不知道用户正在批计划。
+    expect(events).toEqual([{ name: 'did-approval-start', requestId: 'plan-1' }]);
+    // 期间新回合开始也不能把仍在等的审批抹掉(修订 turn 由审批结果触发)。
+    tracker.beginTurn();
+    expect(events).toHaveLength(1);
+    tracker.endInteraction('plan_review', 'plan-1');
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: 'plan-1' },
+      { name: 'did-approval-end', requestId: 'plan-1' },
     ]);
   });
 

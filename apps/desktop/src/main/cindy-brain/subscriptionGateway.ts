@@ -513,14 +513,21 @@ function activityTypeOf(kind: GhostInteractionActivityKind): 'approval' | 'user-
 }
 
 /**
- * 轮次内 activity 边界状态机：同步、O(1)、不读取正文。
+ * activity 边界状态机：同步、O(1)、不读取正文。两类活动的生命周期主人不同:
  *
- * thinking 是**单活跃 block**模型(vendor 的 reasoning block 串行产出,新 block
- * 开始即代表上一个已收口);approval / user-input 则必须按 requestId **集合**
- * 跟踪——同一轮的并行工具调用会让多个 permission 同时等在 router 里(见
- * SessionInteractionRouter.pending),用单值覆盖会在第二个请求开始时提前给第一个
- * 发 end,等于告诉插件"审批已结束"而用户其实还在等。每个 requestId 各配一对
- * start/end,插件按集合非空判断是否仍在等待。
+ * - **thinking 归回合**:是单活跃 block 模型(vendor 的 reasoning block 串行产出,
+ *   新 block 开始即代表上一个已收口),只在回合内有意义,turn 收口时强制结束。
+ * - **approval / user-input 归 router,可跨回合终态**:codex 计划模式里
+ *   runPlanReviewFlow 是在计划 turn 把 status(false) 与 done **入队之后**才发起
+ *   plan_review(见 agents/codex/index.ts 的 "放在 done 之后 (AsyncQueue FIFO)"),
+ *   即 done 必然先被消费。若拿 turnActive 当门控,这个审批的 start 会被直接丢掉,
+ *   插件根本不知道用户正在批计划;若靠 turn 收口去补 end,又会在用户还在审批时
+ *   谎报"审批结束"。所以这两类只认 SessionInteractionRouter 的 dispatch/finally
+ *   ——finally 保证每个 requestId 一定收口,回合边界不插手。
+ *
+ * 两类都按 id 集合跟踪:同一轮的并行工具调用会让多个 permission 同时等在 router
+ * 里(见 SessionInteractionRouter.pending),用单值覆盖会在第二个请求开始时提前给
+ * 第一个发 end。每个 id 各配一对 start/end,插件按集合非空判断是否仍在等待。
  */
 export class GhostActivityTracker {
   private turnActive = false;
@@ -561,8 +568,9 @@ export class GhostActivityTracker {
     this.endThinking(data.blockId);
   }
 
+  /** 不看 turnActive:审批可以在回合终态之后才开始(codex 计划模式),见类注释。 */
   startInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
-    if (!this.turnActive || !requestId) return;
+    if (!requestId) return;
     const type = activityTypeOf(kind);
     // 同一 requestId 重复进入(路由重投)不重复发 start。
     if (this.interactionRequestIds[type].has(requestId)) return;
@@ -571,20 +579,28 @@ export class GhostActivityTracker {
   }
 
   endInteraction(kind: GhostInteractionActivityKind, requestId: string): void {
-    if (!this.turnActive) return;
     const type = activityTypeOf(kind);
     // delete 返回 false = 这个 requestId 没在场(已收口或从未开始),不重复发 end。
     if (!this.interactionRequestIds[type].delete(requestId)) return;
     this.emitInteraction(type, 'end', requestId);
   }
 
+  /** 回合收口:只结束 thinking。在场的审批交给 router 的 finally,不在这里谎报结束。 */
   finishTurn(): void {
     if (!this.turnActive) return;
     if (this.thinkingBlockId) this.endThinking(this.thinkingBlockId);
-    this.finishInteraction('approval');
-    this.finishInteraction('user-input');
     this.lastEndedThinkingBlockId = null;
     this.turnActive = false;
+  }
+
+  /**
+   * 会话级收口(tap dispose):observer 即将被摘掉,router 的 finally 再也到不了
+   * 这里,所以此刻必须把仍在场的审批 / 等待输入逐个补 end,否则插件永久停在等待态。
+   */
+  finishAll(): void {
+    this.finishTurn();
+    this.finishInteraction('approval');
+    this.finishInteraction('user-input');
   }
 
   reset(): void {
@@ -612,7 +628,7 @@ export class GhostActivityTracker {
     this.lastEndedThinkingBlockId = blockId;
   }
 
-  /** 回合收口:给所有仍在场的 requestId 各补一条 end,插件不会卡在等待态。 */
+  /** 给所有仍在场的 requestId 各补一条 end(仅会话级收口调用,见 finishAll)。 */
   private finishInteraction(type: 'approval' | 'user-input'): void {
     const ids = this.interactionRequestIds[type];
     if (ids.size === 0) return;

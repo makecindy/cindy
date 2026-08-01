@@ -3111,6 +3111,8 @@
         "resident": "常驻运行(生效后即启动，不调用也保持后台进程)",
         "residentDetail": "空闲时也占用少量内存；停用或卸载后进程立即关闭。",
         "subscribeTopics": "旁听你的任务动态(每轮往来与任务事件，不含消息内容)",
+        "subscribeActivity": "旁听 AI 何时在思考、何时在等你",
+        "subscribeActivityDetail": "只知道时机：思考何时开始与结束，以及 AI 何时在等你批准或等你回答。看不到思考内容、待批准的操作、涉及的命令与文件、计划正文、问题与你的答案，也无法代你批准。",
         "subscribeHooks": "可读取、拦截或改写你发出的消息",
         "subscribeHooksDetail": "发送前先经它审阅：可拦下消息，也可能改写正文后再发出；被拦的消息可编辑后重发。",
         "subscribeAssistantReply": "可读取并重写 AI 的回复",

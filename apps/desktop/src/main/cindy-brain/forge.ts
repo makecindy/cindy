@@ -1579,8 +1579,12 @@ cindy.onHostMessage(function (msg) {
   // 每个 requestId 各发自己的 start / end。要判断"是否仍在等审批",用 requestId
   // 集合(收到 start 加入、end 移除),集合非空即仍在等;别用单个布尔位,否则先结束
   // 的那个请求会把还在等的抹掉。
-  // did-turn-end 前、以及会话被关闭 / 重建时,主机会给所有仍在场的 requestId 各补
-  // 一条 end，插件不会卡在等待态。
+  // **审批可能跨过 did-turn-end**:codex 计划模式的 plan_review 就是在计划轮次
+  // 收尾之后才发起的,你会先收到 did-turn-end、再收到 did-approval-start。所以
+  // 别拿 did-turn-end 去清空审批状态——只认对应 requestId 的 did-approval-end。
+  // thinking 不同:它只在轮次内,did-turn-end 前主机必定先补发未收口的
+  // did-thinking-end。审批 / 等待输入则由主机在真实决策落地(批准、拒绝、回答、
+  // 超时、取消)时收口,会话被关闭 / 重建时也会给所有在场 requestId 各补一条 end。
   if (msg.name === 'did-session-switched') {
     // 用户把某个会话切到台前(切换会话 / 从非会话页切回都算)。
     // msg.data = { sessionId, workdir? }。连续停留同一会话不重发。

@@ -1345,8 +1345,9 @@ export function createGhostSessionTap(sessionId: string): {
     dispose() {
       // 先收口再拆线:会话关闭 / Session 实例替换时,router 里可能还有 interaction
       // 等在 finally 前,而 observer 马上就会被摘掉。不在这里补发 end,插件就会永久
-      // 停在"等待审批 / 等待用户输入"。finishTurn 给所有在场 requestId 各发一条 end。
-      activity?.finishTurn();
+      // 停在"等待审批 / 等待用户输入"。finishAll 给所有在场 requestId 各发一条 end
+      // (回合边界只收口 thinking——审批可以跨回合终态,见 GhostActivityTracker)。
+      activity?.finishAll();
       translator?.dispose();
       activity?.reset();
       translator = null;

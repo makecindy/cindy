@@ -3112,6 +3112,8 @@
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
         "residentDetail": "Uses a small amount of memory while idle; the process stops immediately when it is disabled or uninstalled.",
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
+        "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
+        "subscribeActivityDetail": "Sees only the timing: when thinking starts and ends, and when the AI is waiting for your approval or your answer. It never sees the reasoning text, the action awaiting approval, the command or file involved, the plan, the question, or your answer — and it cannot approve anything on your behalf.",
         "subscribeHooks": "Can read, block, or rewrite the messages you send",
         "subscribeHooksDetail": "Reviews each message before sending: it may block it or rewrite the text before it goes out; blocked messages can be edited and resent.",
         "subscribeAssistantReply": "Can read and rewrite the AI's replies",

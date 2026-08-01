@@ -1389,6 +1389,37 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     }
   });
 
+  it('activity 单列一项权限,从 turn 加订阅 activity 计入扩张;turn/session 清单逐字不变', () => {
+    const turnOnly = validateGhostManifest(withSub({ topics: ['turn'] }));
+    const withActivity = validateGhostManifest(withSub({ topics: ['turn', 'activity'] }));
+    const turnAndSession = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    expect(turnOnly.ok && withActivity.ok && turnAndSession.ok).toBe(true);
+    if (!turnOnly.ok || !withActivity.ok || !turnAndSession.ok) return;
+
+    // activity 是独立一项(带自己的 label/detail),不并进固定的 subscribe:topics。
+    expect(ghostPermissionItems(withActivity.manifest).map((i) => i.key)).toContain(
+      'subscribe:topics:activity',
+    );
+    expect(
+      ghostPermissionItems(withActivity.manifest).find((i) => i.key === 'subscribe:topics:activity'),
+    ).toMatchObject({ labelKey: 'subscribeActivity', detailKey: 'subscribeActivityDetail' });
+
+    // 存量插件更新时新增 activity 必须被权限扩张检测抓到(plugin-market 要求复核)。
+    const added = diffGhostPermissionItems(turnOnly.manifest, withActivity.manifest).added;
+    expect(added.map((i) => i.key)).toEqual(['subscribe:topics:activity']);
+
+    // 只动 turn / session 的存量插件权限清单不 churn(批准状态不受影响)。
+    expect(diffGhostPermissionItems(turnOnly.manifest, turnAndSession.manifest).added).toEqual([]);
+    expect(ghostPermissionItems(turnAndSession.manifest).filter((i) => i.kind === 'subscribe')).toEqual(
+      ghostPermissionItems(turnOnly.manifest).filter((i) => i.kind === 'subscribe'),
+    );
+
+    // 取消订阅 activity 应报为 removed。
+    expect(
+      diffGhostPermissionItems(withActivity.manifest, turnOnly.manifest).removed.map((i) => i.key),
+    ).toEqual(['subscribe:topics:activity']);
+  });
+
   it('will-assistant-message:出口钩子合法(继承 resident 要求),单列一档权限行', () => {
     const noResident = validateGhostManifest(withSub({ hooks: ['will-assistant-message'] }));
     expect(noResident.ok).toBe(false); // resident 要求 key 在 hooks 非空,自动覆盖新钩子

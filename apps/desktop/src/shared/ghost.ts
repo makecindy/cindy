@@ -1707,6 +1707,21 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       // unshift 排到清单最顶(敏感项排最上)。
       if (manifest.subscribe?.topics?.length) {
         items.push({ key: 'subscribe:topics', kind: 'subscribe', labelKey: 'subscribeTopics' });
+        // activity 单列一项(不并进 subscribe:topics):它暴露的是"用户此刻正被要求
+        // 批准某个操作 / 正被问问题"的行为时序,比 turn / session 的统计元数据敏感
+        // 一档,文案也要另讲。更要紧的是权限扩张检测——diffGhostPermissionItems 按
+        // key + detail 比对,若 activity 并进固定的 subscribe:topics,已装插件从
+        // topics:["turn"] 更新到 ["turn","activity"] 时 added 为空,plugin-market
+        // 的复核就不会拦,用户会在毫不知情的情况下多给出审批时序。旧 key 保持原样,
+        // 只声明 turn / session 的存量插件权限清单逐字不变(批准状态不 churn)。
+        if (manifest.subscribe.topics.includes('activity')) {
+          items.push({
+            key: 'subscribe:topics:activity',
+            kind: 'subscribe',
+            labelKey: 'subscribeActivity',
+            detailKey: 'subscribeActivityDetail',
+          });
+        }
       }
       if (manifest.subscribe?.hooks?.length) {
         // 拦截钩按点分列(入口=改用户消息、出口=读并重渲 AI 回复,后者更敏感);
