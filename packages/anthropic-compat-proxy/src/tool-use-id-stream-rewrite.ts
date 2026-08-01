@@ -48,8 +48,17 @@ const MINTED_TOOL_USE_ID_RE = /^[A-Za-z][A-Za-z0-9_]*_\d+$/;
 
 /** SSE data 行前缀。 */
 const SSE_DATA_PREFIX = 'data: ';
-/** 行首内搜索 `"content_block_start"` 的窗口(块头 JSON 通常在几十字节内)。 */
-const CONTENT_BLOCK_START_SCAN_WINDOW = 120;
+/**
+ * `"content_block_start"` 的扫描窗口:扫描本身限界在行前 512 字节
+ * (Buffer.indexOf 原生实现,成本可忽略;text delta 行不付全行扫描)。
+ * 512 按威胁面取:content_block_start 行 = 事件头 + id + name + 空 input,
+ * pydantic/model_dump 字段序(content_block、index、type 末尾)+ MCP 最长
+ * 工具名(64 字符)+ json.dumps 空格风格合计 ~300 字节,512 给足余量;
+ * 再大就是破坏流式约定的内联大 input,fail-open 与扩展前一致。
+ * (Fable-5 review:120 字节窗口是按短名 Bash 的测试擦线校准,type 末尾键序
+ * + MCP 长名时 marker 落到 ~150 → 静默 no-op,专漏 P1-E 要保护的 MCP 场景。)
+ */
+const CONTENT_BLOCK_START_SCAN_WINDOW = 512;
 /** 不完整行的缓冲上限:病态上游发无 \n 长流时直接透传放弃改写,防内存膨胀。 */
 const MAX_PENDING_LINE_BYTES = 4 * 1024 * 1024;
 
@@ -146,10 +155,12 @@ export class ToolUseIdDedupeRewriter {
     let jsonStart = 5;
     while (jsonStart < end && (line[jsonStart] === 0x20 || line[jsonStart] === 0x09)) jsonStart += 1;
     if (jsonStart >= end || line[jsonStart] !== 0x7b /* { */) return line;
-    const markerAt = line.indexOf('"content_block_start"', jsonStart);
-    if (markerAt === -1 || markerAt >= Math.min(end, jsonStart + CONTENT_BLOCK_START_SCAN_WINDOW)) {
-      return line;
-    }
+    // 扫描本身限界在窗口内(不是先全行扫再判窗口 —— 那种写法既付全行成本
+    // 又留漏命中,两头不占,Fable-5 复核指出)。
+    const markerAt = line
+      .subarray(jsonStart, Math.min(end, jsonStart + CONTENT_BLOCK_START_SCAN_WINDOW))
+      .indexOf('"content_block_start"');
+    if (markerAt === -1) return line;
     let parsed: unknown;
     try {
       parsed = JSON.parse(line.toString('utf8', jsonStart, end));

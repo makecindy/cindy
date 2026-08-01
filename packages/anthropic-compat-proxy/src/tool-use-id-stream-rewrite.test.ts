@@ -163,6 +163,25 @@ describe('ToolUseIdRewriteTransform', () => {
     expect(out.toString('utf8')).toContain('"id":"Bash_210_dup2"');
   });
 
+  it('P1-D: pydantic 字段序(type 末尾)+ MCP 长工具名也命中(Fable-5 复现形态)', async () => {
+    // anthropic python SDK / pydantic model_dump 的字段序是 content_block, index, type 末尾;
+    // MCP 长名时 marker 落在 ~150 字节处,扫描窗口必须按此威胁面校准。
+    const mcpId = 'mcp__xd_atlassian__call_tool_210';
+    const body =
+      'event: content_block_start\n' +
+      `data: {"content_block":{"id":"${mcpId}","name":"mcp__xd_atlassian__call_tool","type":"tool_use","input":{}},"index":1,"type":"content_block_start"}\n\n`;
+    const rewriter = new ToolUseIdDedupeRewriter(new Set([mcpId]));
+    const out = await runTransform([Buffer.from(body, 'utf8')], rewriter);
+    expect(out.toString('utf8')).toContain(`"id":"${mcpId}_dup2"`);
+    // json.dumps 带空格风格(marker 更靠后,~165)
+    const spaced =
+      'event: content_block_start\n' +
+      `data: { "content_block": { "id": "${mcpId}", "name": "mcp__xd_atlassian__call_tool", "type": "tool_use", "input": {} }, "index": 1, "type": "content_block_start" }\n\n`;
+    const rewriter2 = new ToolUseIdDedupeRewriter(new Set([mcpId]));
+    const out2 = await runTransform([Buffer.from(spaced, 'utf8')], rewriter2);
+    expect(out2.toString('utf8')).toContain(`"id":"${mcpId}_dup2"`);
+  });
+
   it('data 行跨 chunk 切割也能正确改写', async () => {
     const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210']));
     const bytes = Buffer.from(SSE_BODY, 'utf8');

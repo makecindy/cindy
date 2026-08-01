@@ -185,7 +185,10 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // 后偏移;第 N 次 _dupN 查占用),result 与配对 call 共享同一终 id:
   //   - 位置配对:result 配「最近未配对的同名 call」(孤儿 call + 重铸 call 并存
   //     时,result 属于真实执行的那次,Fable-5 review 指出的出现序配对张冠李戴
-  //     由此避免);
+  //     由此避免)。已知盲区(记录备查,均不阻断):同一条 assistant 消息内同 id
+  //     并行调用且 result 按调用序到达时 LIFO 会倒配 —— kimi 自回归铸号在同
+  //     响应内天然递增,该形态需要模型故障,概率远低于它修掉的孤儿场景;
+  //     result 先于 call 的文件序倒挂会分叉断配(CC 转录追加序下构造不出)。
   //   - 超编 result(无未配对 call):指向首现 call 的终 id(与 compat-proxy
   //     dedupe 语义一致);全文件无同名 call 时按独立原 id 走偏移。
   // 占用判定 usedIds = 全量原 id ∪ 已产出终 id;配对 exchange 共享终 id 不算占用。
