@@ -624,6 +624,37 @@ describe('TelegramIM', () => {
     });
   });
 
+  it('先下线再解绑: 仍要清掉 Telegram 里的命令菜单(否则失效命令永久残留)', async () => {
+    await connect();
+    await ctx.handlers.get('telegramBot:set-online')!({ online: false });
+    // 下线已把 this.api 置空;此时解绑若不复活 client, deleteMyCommands 会被跳过,
+    // 而 token 随即删除 —— 以后再没机会清, /help 等入口就永久留在 Telegram 里。
+    const before = api.calls.filter((c) => c.method === 'deleteMyCommands').length;
+
+    await ctx.handlers.get('telegramBot:disconnect')!();
+
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'deleteMyCommands').length).toBe(before + 1);
+    });
+    expect(im.getStatus()).toEqual({ kind: 'idle' });
+  });
+
+  it('连接失败带稳定 code, 供 UI 取本地化文案(不直接展示英文 reason)', async () => {
+    const failing = createFakeApi({
+      getMeError: new TelegramApiError('getMe', 401, 'Unauthorized'),
+    });
+    const failIm = new TelegramIM(ctx.host, { apiFactory: () => failing });
+    failIm.registerIpc();
+    await ctx.handlers.get('telegramBot:set-config')!({
+      token: '999:secret-token-abcdefghijk',
+      ownerUserId: OWNER_ID,
+    });
+    const status = failIm.getStatus();
+    expect(status.kind).toBe('error');
+    if (status.kind === 'error') expect(status.code).toBe('invalid-token');
+    await failIm.dispose();
+  });
+
   it('解绑清掉下线标志(否则重填 token 后重启又被判回 offline)', async () => {
     await connect();
     await ctx.handlers.get('telegramBot:set-online')!({ online: false });

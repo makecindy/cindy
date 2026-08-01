@@ -1879,6 +1879,12 @@
       "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "连接",
       "connectingAction": "连接中…",
+      "errorCode": {
+        "invalid-token": "Bot Token 无效或已被重置，请重新填写",
+        "provider-api": "Telegram 服务返回错误，请稍后重试",
+        "network": "网络不可达，连不上 Telegram",
+        "secret-unavailable": "系统安全存储不可用，凭证无法保存"
+      },
       "goOffline": "本机下线",
       "goingOfflineAction": "下线中…",
       "goOnline": "本机上线",

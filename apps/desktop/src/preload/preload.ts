@@ -248,7 +248,7 @@ type TelegramBotStatusWire =
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
   | { kind: 'offline'; appId: string }
-  | { kind: 'error'; reason: string };
+  | { kind: 'error'; reason: string; code?: 'invalid-token' | 'provider-api' | 'network' | 'secret-unavailable' };
 
 /**
  * Factory for lazy, ref-counted IPC fan-out subscriptions.

@@ -37,9 +37,9 @@ describe('telegram 远程状态投影', () => {
   it('connected: 只带 kind + appId, 不泄漏任何凭证/身份字段', () => {
     getStatus.mockReturnValue({ kind: 'connected', appId: '999' });
     const projected = readTelegramRemoteStatus();
-    expect(projected).toEqual({ kind: 'connected', appId: '999', reason: null });
+    expect(projected).toEqual({ kind: 'connected', appId: '999', reason: null, code: null });
     // 白名单式断言:未来给 IMStatus 加字段时, 不会悄悄漏到网线上。
-    expect(Object.keys(projected).sort()).toEqual(['appId', 'kind', 'reason']);
+    expect(Object.keys(projected).sort()).toEqual(['appId', 'code', 'kind', 'reason']);
     const serialized = JSON.stringify(projected);
     expect(serialized).not.toMatch(/ownerUserId|botUsername|token|secret/i);
   });
@@ -53,25 +53,27 @@ describe('telegram 远程状态投影', () => {
 
   it('idle: 无 appId 时回 null 而不是 undefined(过 JSON 后形状稳定)', () => {
     getStatus.mockReturnValue({ kind: 'idle' });
-    expect(readTelegramRemoteStatus()).toEqual({ kind: 'idle', appId: null, reason: null });
+    expect(readTelegramRemoteStatus()).toEqual({ kind: 'idle', appId: null, reason: null, code: null });
   });
 
   it('error: 带上 reason 供控制端显示"token 无效"这类原因', () => {
-    getStatus.mockReturnValue({ kind: 'error', reason: 'invalid token' });
+    getStatus.mockReturnValue({ kind: 'error', reason: 'invalid token', code: 'invalid-token' });
     expect(readTelegramRemoteStatus()).toEqual({
       kind: 'error',
       appId: null,
       reason: 'invalid token',
+      code: 'invalid-token',
     });
   });
 
   it('未注入 source(IM 子系统没接线): 按未配置处理, 不抛错给控制端', async () => {
     setTelegramRemoteSource(null);
-    expect(readTelegramRemoteStatus()).toEqual({ kind: 'idle', appId: null, reason: null });
+    expect(readTelegramRemoteStatus()).toEqual({ kind: 'idle', appId: null, reason: null, code: null });
     await expect(setTelegramRemoteOnline({ online: false })).resolves.toEqual({
       kind: 'idle',
       appId: null,
       reason: null,
+      code: null,
     });
   });
 

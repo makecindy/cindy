@@ -1880,6 +1880,12 @@
       "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
       "connect": "Connect",
       "connectingAction": "Connecting…",
+      "errorCode": {
+        "invalid-token": "Bot token is invalid or was reset — enter it again",
+        "provider-api": "Telegram returned an error — try again shortly",
+        "network": "Network unreachable — can't connect to Telegram",
+        "secret-unavailable": "System secure storage is unavailable, credentials cannot be saved"
+      },
       "goOffline": "Go offline here",
       "goingOfflineAction": "Going offline…",
       "goOnline": "Go online here",

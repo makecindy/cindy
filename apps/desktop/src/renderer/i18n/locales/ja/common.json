@@ -1879,6 +1879,12 @@
       "formHint": "ユーザー ID は数字です。@userinfobot に DM すると自分の ID を確認できます。",
       "connect": "接続",
       "connectingAction": "接続中…",
+      "errorCode": {
+        "invalid-token": "Bot Token が無効か再発行されています。入力し直してください",
+        "provider-api": "Telegram 側でエラーが発生しました。しばらくしてから再試行してください",
+        "network": "ネットワークに到達できず、Telegram に接続できません",
+        "secret-unavailable": "システムの安全なストレージが利用できず、認証情報を保存できません"
+      },
       "goOffline": "このデバイスをオフライン",
       "goingOfflineAction": "オフラインにしています…",
       "goOnline": "このデバイスをオンライン",

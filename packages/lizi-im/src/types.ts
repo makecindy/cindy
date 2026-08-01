@@ -229,6 +229,21 @@ export interface IMCardActionEvent {
   scopeKey?: string;
 }
 
+/**
+ * 稳定的传输层错误分类。`reason` 是给日志/诊断看的原文(可能是英文技术串或
+ * 渠道原始描述), **不适合直接当 UI 文案**;渲染层按本枚举映射到 i18n key。
+ * 可选字段 —— 未标注 code 的渠道/旧路径由消费方回退到 reason。
+ */
+export type IMErrorCode =
+  /** token 无效 / 被吊销(401 / 404)。 */
+  | 'invalid-token'
+  /** 渠道 API 返回了其它失败码(限流、服务端错误等)。 */
+  | 'provider-api'
+  /** 网络不可达 / 请求异常。 */
+  | 'network'
+  /** 系统安全存储不可用或写入失败,凭证与状态无法落盘。 */
+  | 'secret-unavailable';
+
 export type IMStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
@@ -240,7 +255,7 @@ export type IMStatus =
    * 换机器时把另一端停掉而不清凭证, 之后随时可一键上线。
    */
   | { kind: 'offline'; appId: string }
-  | { kind: 'error'; reason: string };
+  | { kind: 'error'; reason: string; code?: IMErrorCode };
 
 // ── Outbound spec ─────────────────────────────────────────────────────────────
 // p2p only — outbound APIs always take a single openId: string.

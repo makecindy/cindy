@@ -15,7 +15,7 @@ import {
 
 import { cn } from '@/lib/utils';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
-import { useTelegramBot } from '@/hooks/useTelegramBot';
+import { describeTelegramStatusFailure, useTelegramBot } from '@/hooks/useTelegramBot';
 import { ImChannelSettingsCard, useImChannelSettingsSummary } from './ImChannelSettingsCard';
 import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
 import { TelegramRemoteDevices } from './TelegramRemoteDevices';
@@ -263,7 +263,7 @@ export function TelegramBotSection({
                 </p>
               ) : status.kind === 'error' ? (
                 <p className="text-12 text-[var(--settings-error-text)]" role="alert">
-                  {status.reason}
+                  {describeTelegramStatusFailure(status, t)}
                 </p>
               ) : (
                 <p className="text-12 text-[var(--settings-source-meta)]">

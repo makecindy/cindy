@@ -32,7 +32,10 @@ const SET_ONLINE_CHANNEL = 'device-link:telegram:set-online';
 interface RemoteStatus {
   kind: 'idle' | 'connecting' | 'connected' | 'conflict' | 'offline' | 'error';
   appId: string | null;
+  /** 诊断原文(可能是英文技术串), 不直接展示。 */
   reason: string | null;
+  /** 稳定错误分类, 展示走 i18n。 */
+  code: 'invalid-token' | 'provider-api' | 'network' | 'secret-unavailable' | null;
 }
 
 /** 每台设备的探测结果:未知(拉取中)/ 拿到状态 / 版本太老 / 拉取失败。 */
@@ -110,9 +113,10 @@ export function TelegramRemoteDevices({ selfAppId }: { selfAppId: string | null 
         if (result.kind !== 'offline') {
           toast.error(
             t('logic.toasts.telegramRemoteFailed', {
+              // 远端的 reason 同样是诊断原文, 展示一律走 code / 状态 i18n。
               message:
-                result.kind === 'error' && result.reason
-                  ? result.reason
+                result.kind === 'error' && result.code
+                  ? t(`settings.telegramBot.errorCode.${result.code}`)
                   : t(`settings.telegramBot.remoteDevices.state.${result.kind}`),
             }),
           );

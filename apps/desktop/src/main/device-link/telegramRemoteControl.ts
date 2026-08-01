@@ -24,7 +24,7 @@
  *     ownerUserId 是 Telegram 用户 id、botUsername 是 bot 身份, 都没有理由过网线。
  */
 
-import type { IMStatus } from '@cindy/im';
+import type { IMErrorCode, IMStatus } from '@cindy/im';
 
 import { createLogger } from '../logger.js';
 
@@ -62,11 +62,13 @@ export interface TelegramRemoteStatus {
   kind: 'idle' | 'connecting' | 'connected' | 'conflict' | 'offline' | 'error';
   /** bot 数字 id;未绑定/未解析出时 null。控制端据此判断是否同一个 bot。 */
   appId: string | null;
-  /** 仅 kind='error' 时可能非空 —— 让控制端能显示"token 无效"这类原因。 */
+  /** 仅 kind='error' 时可能非空 —— 原文只作诊断, 控制端展示走 code。 */
   reason: string | null;
+  /** 稳定错误分类;控制端按它取本地化文案, 不直接显示 reason。 */
+  code: IMErrorCode | null;
 }
 
-const NOT_CONFIGURED: TelegramRemoteStatus = { kind: 'idle', appId: null, reason: null };
+const NOT_CONFIGURED: TelegramRemoteStatus = { kind: 'idle', appId: null, reason: null, code: null };
 
 /** 把 IMStatus 收敛成过网线的投影(多余字段一律不带)。 */
 function projectStatus(): TelegramRemoteStatus {
@@ -76,6 +78,7 @@ function projectStatus(): TelegramRemoteStatus {
     kind: status.kind,
     appId: 'appId' in status ? status.appId : null,
     reason: status.kind === 'error' ? status.reason : null,
+    code: status.kind === 'error' ? (status.code ?? null) : null,
   };
 }
 

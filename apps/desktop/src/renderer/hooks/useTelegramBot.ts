@@ -18,6 +18,22 @@ interface TelegramBotCache {
 
 let cachedState: TelegramBotCache | null = null;
 
+/**
+ * 把传输层状态翻成当前语言的失败原因。
+ *
+ * main 层的 `reason` 是诊断原文——既有英文技术串(`network unreachable`)也有硬编码
+ * 中文,直接塞进 toast 会给非中文用户拼出混合语言。稳定分类走 `code` → i18n key;
+ * 只有旧路径/其它渠道没带 code 时才回退 reason(总比空白强)。
+ */
+export function describeTelegramStatusFailure(
+  status: TelegramBotTransportStatus,
+  t: (key: string) => string,
+): string {
+  if (status.kind !== 'error') return t(`settings.telegramBot.status.${status.kind}`);
+  if (status.code) return t(`settings.telegramBot.errorCode.${status.code}`);
+  return status.reason;
+}
+
 export interface UseTelegramBotReturn {
   token: string;
   setToken: (v: string) => void;
@@ -196,10 +212,7 @@ export function useTelegramBot(): UseTelegramBotReturn {
         if (!reached) {
           toast.error(
             t('logic.toasts.telegramBotToggleOnlineFailed', {
-              message:
-                result.status.kind === 'error'
-                  ? result.status.reason
-                  : t(`settings.telegramBot.status.${result.status.kind}`),
+              message: describeTelegramStatusFailure(result.status, t),
             }),
           );
           return;

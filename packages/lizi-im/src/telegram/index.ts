@@ -295,7 +295,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // "未配置" → 设 idle 却不停轮询, 变成「UI 显示未配置、bot 还在收消息」。
     // 这条路径远程下线也会走(telegramRemoteControl 不做预检), 必须在这里兜住。
     if (!this.host.secrets.isAvailable()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
     const token = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
@@ -307,7 +307,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 已下线, 但重启就会自动上线回来抢另一台的轮询 —— 恰好毁掉下线的全部意义。
     // 宁可停在"没下线成功"的明确错误上, 也不留一个会自己复活的假下线。
     if (!this.host.secrets.write(OFFLINE_SECRET_KEY, '1')) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return;
     }
     // 换代先行: 在途 poll 循环据 configVersion 自行退出, 不会把下线状态覆盖回去。
@@ -328,7 +328,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 却照常连上, 会让用户看到"已上线"、重启后却又回到 offline —— 与写标志失败
     // 同源的静默失败, 同样宁可停在明确错误上。
     if (this.isOfflineFlagSet()) {
-      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+      this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
       return false;
     }
     if (!token) {
@@ -375,7 +375,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       const ownerUserId =
         typeof config.ownerUserId === 'string' ? config.ownerUserId.trim() : '';
       if (!this.host.secrets.isAvailable()) {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
 
@@ -391,7 +391,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
         this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
         this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return configResult();
       }
 
@@ -409,7 +409,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           this.restoreSecret(TOKEN_SECRET_KEY, previousToken);
           this.restoreSecret(OWNER_USER_ID_SECRET_KEY, previousOwnerUserId);
           this.ownerUserId = previousOwnerUserId?.trim() || previousRuntimeOwnerUserId;
-          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+          this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
           return configResult();
         }
         const connected = await this.connect(token);
@@ -453,7 +453,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.host.ipc.handle('telegramBot:set-online', async (payload) => {
       const online = isRecord(payload) && payload.online === true;
       if (!this.host.secrets.isAvailable()) {
-        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON });
+        this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return { status: this.status };
       }
       if (online) {
@@ -467,6 +467,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.host.ipc.handle('telegramBot:disconnect', async () => {
       this.configVersion += 1;
       const disconnectedOwnerUserId = this.ownerUserId;
+      // 下线态 this.api 已被 stopPolling 置空,但解绑仍要用它清命令菜单、发解绑
+      // 通知 —— 不复活的话「先下线再解绑」会让 /help 等失效命令永久留在 Telegram
+      // 里,而 token 随即被删,以后再也没机会清。用保留的 token 临时造一个
+      // client(best-effort;末尾 stopPolling 会再次置空)。
+      if (!this.api) {
+        const retainedToken = this.host.secrets.read(TOKEN_SECRET_KEY)?.trim() ?? '';
+        if (retainedToken) {
+          this.api = (this.opts.apiFactory ?? createTelegramApiClient)(retainedToken);
+        }
+      }
       // 顺手清掉 owner scope 的命令菜单(解绑后菜单残留会误导)。
       if (this.api && disconnectedOwnerUserId) {
         void this.api
@@ -865,7 +875,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
           continue;
         }
         if (err instanceof TelegramApiError && (err.errorCode === 401 || err.errorCode === 404)) {
-          this.setStatus({ kind: 'error', reason: 'invalid token' });
+          this.setStatus({ kind: 'error', reason: 'invalid token', code: 'invalid-token' });
           return;
         }
         // 网络抖动/超时: connecting + 指数退避重试。
@@ -1753,14 +1763,18 @@ export function createTelegramIM(host: IMHost, opts?: TelegramIMOptions): Telegr
 
 export type { TelegramGroupWindowEntry } from './inbound.js';
 
+/**
+ * reason 保留原文供日志/诊断; code 是给 UI 用的稳定分类 —— 渲染层按 code 取
+ * i18n 文案, 不再把这些英文技术串直接怼给用户看。
+ */
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {
-      return { kind: 'error', reason: 'invalid token' };
+      return { kind: 'error', reason: 'invalid token', code: 'invalid-token' };
     }
-    return { kind: 'error', reason: `telegram api ${err.errorCode}` };
+    return { kind: 'error', reason: `telegram api ${err.errorCode}`, code: 'provider-api' };
   }
-  return { kind: 'error', reason: 'network unreachable' };
+  return { kind: 'error', reason: 'network unreachable', code: 'network' };
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

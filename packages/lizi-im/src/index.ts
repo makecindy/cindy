@@ -28,6 +28,7 @@ export type {
   IMMessageEvent,
   IMCardActionEvent,
   IMStatus,
+  IMErrorCode,
   InteractiveCardButton,
   InteractiveCardSpec,
   StreamingTextHandle,

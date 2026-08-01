@@ -1879,6 +1879,12 @@
       "formHint": "사용자 ID는 숫자입니다. @userinfobot에게 DM을 보내면 자신의 ID를 확인할 수 있습니다.",
       "connect": "연결",
       "connectingAction": "연결 중…",
+      "errorCode": {
+        "invalid-token": "Bot Token이 유효하지 않거나 재발급되었습니다. 다시 입력하세요",
+        "provider-api": "Telegram에서 오류를 반환했습니다. 잠시 후 다시 시도하세요",
+        "network": "네트워크에 연결할 수 없어 Telegram에 접속하지 못했습니다",
+        "secret-unavailable": "시스템 보안 저장소를 사용할 수 없어 자격 증명을 저장할 수 없습니다"
+      },
       "goOffline": "이 기기 오프라인",
       "goingOfflineAction": "전환 중…",
       "goOnline": "이 기기 온라인",
