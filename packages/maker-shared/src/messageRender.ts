@@ -471,7 +471,9 @@ export function getLatestMessageTodoState<TMessage extends MessageRenderSourceMe
   const hasPlanEvent = latestPlanIndex >= 0;
   const insertionBelongsToLatestEvent = latestIndex === latestPlanIndex;
   const latestEventClearsPlan =
-    latestPlanMessage !== null && isExplicitPlanClearEvent(latestPlanMessage);
+    latestPlanMessage !== null &&
+    (isExplicitPlanClearEvent(latestPlanMessage) ||
+      latestTaskDeletionClearsPlan(messages, latestPlanIndex));
   return {
     insertion: insertionBelongsToLatestEvent ? latest : null,
     hasPlanEvent,
@@ -615,8 +617,46 @@ function isExplicitPlanClearEvent(message: MessageRenderSourceMessageLike): bool
       (Array.isArray(input?.plan) && input.plan.length === 0)
     );
   }
-  if (toolName === 'TaskUpdate' || toolName === 'TaskGet') {
-    return normalizeTaskStatus(input?.status) === 'deleted';
+  return false;
+}
+
+function latestTaskDeletionClearsPlan<TMessage extends MessageRenderSourceMessageLike>(
+  messages: readonly TMessage[],
+  latestPlanIndex: number,
+): boolean {
+  const latest = messages[latestPlanIndex];
+  const latestToolName = toolNameOf(latest);
+  if (latestToolName !== 'TaskUpdate' && latestToolName !== 'TaskGet') return false;
+  const latestInput = readRecord(toolInputOf(latest));
+  if (normalizeTaskStatus(latestInput?.status) !== 'deleted') return false;
+
+  const resultByToolUseId = buildToolResultLookup(messages);
+  const taskState = new Map<string, MessageRenderTodoItem>();
+  let previousTaskTodos: MessageRenderTodoItem[] | null = null;
+  let resolvedTaskContext = false;
+
+  for (let index = 0; index <= latestPlanIndex; index += 1) {
+    const message = messages[index];
+    if (agentPlanSource(toolNameOf(message)) !== 'task') continue;
+
+    const startsNewSession =
+      previousTaskTodos === null || previousTaskTodos.every((todo) => todo.status === 'completed');
+    if (startsNewSession) taskState.clear();
+
+    const hadTaskContext = taskState.size > 0;
+    const parsed = applyTaskPlanTool(
+      taskState,
+      message,
+      resultByToolUseId.get(toolUseIdOf(message) ?? ''),
+    );
+    if (parsed) {
+      resolvedTaskContext = true;
+      previousTaskTodos = parsed;
+      continue;
+    }
+    if (index === latestPlanIndex) {
+      return resolvedTaskContext && hadTaskContext && taskState.size === 0;
+    }
   }
   return false;
 }
