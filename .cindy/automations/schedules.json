@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "schedules": [
+    {
+      "id": "cindy-pr-preflight",
+      "name": "Cindy PR 前置流程推进",
+      "prompt": "处理 GitHub 仓库 makecindy/cindy 中当前登录用户 kafeifei 的所有未完成 open PR。每次启动不是单轮扫描，而是一个持续处理循环：反复读取最新 GitHub 状态，处理当前最前面的阻塞，等待 CI/机器审核或 GitHub 状态变化，然后继续处理；直到每个 PR 都进入已完成、已关闭，或明确只剩人工审批/签字/merge/需要人工决策的状态。不要在只做一轮 API 查询后结束。\n\n对每个 PR 按当前 head SHA 工作：先确认 PR 仍开放、不是已合并/关闭；检查与 main 的冲突、draft 状态、verify、check:pr-design-basis、Desktop Git integration、DCO、Greptile Review 及其它必需检查；检查 Codex、Greptile、Copilot、自动 code-review 等机器审核是否针对当前 head 完成；检查所有 review conversation 和 requested changes；检查 product/arch/security 签字门和 ruleset 审批。历史 head 的通过不算当前 head 通过；SKIPPED/CANCELLED 只有在确认不适用且不阻塞合并时才可接受。\n\n对能安全自动推进的事项继续推进：等待并轮询正在运行的检查；在官方支持且不会重复刷屏时重跑失败/卡住的检查；当前 head 缺少有效机器审核时触发一次官方 Codex review；只有在后续代码/回复已明确解决且证据充分时才 resolve conversation。需要代码修改、解决冲突、补充证据、业务判断或人工授权时，整理具体文件、意见和下一步，并把该 PR 标记为等待人工，但继续处理其它 PR。绝不自动 merge，不伪造通过，不把 skipped/blocked/conflicting 当作成功。\n\n持续循环中的每次状态变化都更新进度。所有 PR 都到人工门禁或完成后，输出汇总：每个 PR 的当前 head、已通过机器检查、剩余前置阻塞、需要哪位角色/权限、PR 链接。两小时只是下一次唤醒间隔：如果本轮仍在运行，不得启动重复实例；如果异常退出，下一轮从持久会话和已保存状态恢复；如果等待人工，下一轮只重新确认人工是否已操作，发生新提交或状态变化则继续循环。",
+      "cronExpr": "0 */2 * * *",
+      "intervalMs": 7200000,
+      "timezone": "Asia/Singapore",
+      "recurring": true,
+      "manual": false,
+      "agentKind": "codex",
+      "persistentSession": true,
+      "useWorktree": false,
+      "silentWhenIdle": false,
+      "notify": {
+        "desktop": true,
+        "feishu": false
+      }
+    }
+  ]
+}
