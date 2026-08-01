@@ -8,6 +8,10 @@
  * 「提供商 ID」内部句柄由显示名自动 slug 派生 + 去重,对用户隐藏(密钥名/文件名不能含 . 或 /)。
  * 配置经 maker IPC 入 localDb；密钥按 runtime 经 safeStorage 存(见 lib/customProviders)。
  * 编辑态回填已存密钥(默认遮罩,eye 可显形核对)、留空 = 不改；id 不可改。颜色全走主题 token。
+ *
+ * 本弹窗的输入统一传 `surface="ivory"`：面板是白色(`--surface-elevated`),ivory 底给出 fill
+ * 抬升,这是收敛进 SettingsTextInput 之前就有的底色,原样保留。共享组件的默认底色是
+ * DESIGN.md §4 规定的 `--surface-elevated`(压在 ivory settings 卡上的输入必须用它)。
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -959,6 +963,7 @@ export function CustomProviderDialog({
           <div className="flex flex-col gap-[7px]">
             <FieldLabel>{t('settings.providers.custom.fields.name')}</FieldLabel>
             <SettingsTextInput
+              surface="ivory"
               value={name}
               onChange={setName}
               placeholder={t('settings.providers.custom.fields.namePlaceholder')}
@@ -1039,6 +1044,7 @@ export function CustomProviderDialog({
                       {t(`settings.providers.custom.authMode.fields.${field}`)}
                     </FieldLabel>
                     <SettingsTextInput
+                      surface="ivory"
                       value={oauthFields[field]}
                       onChange={(v) => setOauthFields((prev) => ({ ...prev, [field]: v }))}
                       placeholder={ph}
@@ -1148,6 +1154,7 @@ export function CustomProviderDialog({
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.baseUrl')}</FieldLabel>
               <SettingsTextInput
+                surface="ivory"
                 value={f.baseUrl}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, baseUrl: v }))}
                 placeholder={t('settings.providers.custom.fields.baseUrlPlaceholder')}
@@ -1158,6 +1165,7 @@ export function CustomProviderDialog({
             <div className="flex flex-col gap-[7px]">
               <FieldLabel>{t('settings.providers.custom.fields.requestPath')}</FieldLabel>
               <SettingsTextInput
+                surface="ivory"
                 value={f.requestPath}
                 onChange={(v) => patch(activeTab, (x) => ({ ...x, requestPath: v }))}
                 placeholder={
@@ -1191,6 +1199,7 @@ export function CustomProviderDialog({
                   )}
                 </div>
                 <SettingsTextInput
+                  surface="ivory"
                   value={f.apiKey}
                   onChange={(v) => patch(activeTab, (x) => ({ ...x, apiKey: v }))}
                   placeholder={keyPlaceholder}
@@ -1233,6 +1242,7 @@ export function CustomProviderDialog({
                     <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
                         <SettingsTextInput
+                          surface="ivory"
                           value={m.id}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1247,6 +1257,7 @@ export function CustomProviderDialog({
                       </div>
                       <div className="flex-1">
                         <SettingsTextInput
+                          surface="ivory"
                           value={m.name}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1266,6 +1277,7 @@ export function CustomProviderDialog({
                             拒绝本次变更(保持原值)——绝不剥字符再拼数字,-5 / 1e6 /
                             262144.9 这类输入不得被静默纠正成另一个合法值(review P1)。 */}
                         <SettingsTextInput
+                          surface="ivory"
                           value={
                             windowDrafts[`${activeTab}:${i}`]
                             ?? (m.contextWindow != null ? String(m.contextWindow) : '')
@@ -1368,6 +1380,7 @@ export function CustomProviderDialog({
                     <div key={i} className="flex items-center gap-2">
                       <div className="flex-1">
                         <SettingsTextInput
+                          surface="ivory"
                           value={h.name}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({
@@ -1380,6 +1393,7 @@ export function CustomProviderDialog({
                       </div>
                       <div className="flex-1">
                         <SettingsTextInput
+                          surface="ivory"
                           value={h.value}
                           onChange={(v) =>
                             patch(activeTab, (x) => ({

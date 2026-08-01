@@ -195,6 +195,17 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(keyInput.getAttribute('type')).toBe('password');
   });
 
+  it('密钥框底色是 DESIGN.md §4 的 --surface-elevated,不是 settings 的 ivory', async () => {
+    renderWizard('deepseek');
+
+    // 共享化时把底色顺手换成 --settings-input-bg 会退化:该 token 解析到
+    // --surface-card-ivory,而 ProvidersSection 的卡片本身就是这个值,行内密钥框会与卡片
+    // 同色、只剩边框。DESIGN.md §4 input/text 规定 fill = --surface-elevated。
+    const cls = (await screen.findByPlaceholderText('sk-…')).className;
+    expect(cls).toContain('bg-[var(--surface-elevated)]');
+    expect(cls).not.toContain('bg-[var(--settings-input-bg)]');
+  });
+
   it('OAuth 授权步提供「改用 API Key 接入」→ 切到官方 API 预设表单', async () => {
     render(
       React.createElement(AddProviderWizard, {

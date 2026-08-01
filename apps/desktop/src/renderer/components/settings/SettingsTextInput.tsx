@@ -21,6 +21,21 @@ import { useTranslation } from 'react-i18next';
 import { cn } from '@/lib/utils';
 
 export type SettingsTextInputSize = 'sm' | 'md' | 'lg';
+export type SettingsTextInputSurface = 'elevated' | 'ivory';
+
+/**
+ * 底色：默认 `elevated` = DESIGN.md §4 `input/text` 规定的 fill(`--surface-elevated`)。
+ *
+ * `ivory` 是给「输入压在白色弹窗面板上」的调用点保留的既有底色(`--settings-input-bg`,
+ * 解析到 `--surface-card-ivory`)。这份 ivory 在设计文档里没有任何背书,属 colors.ts 的
+ * 无文档漂移;它在白面板上能给出 fill 抬升,所以不在本 PR 里翻成白色,但也不能当默认——
+ * settings 卡片本身就是 ivory(`--settings-theme-card-bg`),ivory 输入压在 ivory 卡上会和
+ * 背景同色,填充对比度归零。settings 域这处 ivory / elevated 的收口是独立议题。
+ */
+const SURFACE_STYLES: Record<SettingsTextInputSurface, string> = {
+  elevated: 'bg-[var(--surface-elevated)]',
+  ivory: 'bg-[var(--settings-input-bg)]',
+};
 
 /** 各档的框体几何 + 无 trailing 时的右内边距（有 trailing 时统一让位给按钮）。 */
 const SIZE_STYLES: Record<
@@ -61,6 +76,7 @@ export function SettingsTextInput({
   placeholder,
   type = 'text',
   size = 'lg',
+  surface = 'elevated',
   mono = false,
   secret = false,
   trailing,
@@ -73,6 +89,8 @@ export function SettingsTextInput({
   /** `secret` 为真时由组件接管（明文 / 遮罩切换），此处传值无效。 */
   type?: string;
   size?: SettingsTextInputSize;
+  /** 底色档:默认 §4 规定的 `--surface-elevated`;`ivory` 见 SURFACE_STYLES 注释。 */
+  surface?: SettingsTextInputSurface;
   /** 等宽字体——密钥、ID 这类需要逐字核对的值。 */
   mono?: boolean;
   /** 密钥字段：遮罩输入 + 自带明文切换按钮。 */
@@ -126,7 +144,8 @@ export function SettingsTextInput({
           trailingNode ? sizeStyle.trailingPaddingRight : sizeStyle.paddingRight,
           mono && 'font-mono',
           'text-[var(--settings-input-text)] placeholder:text-[var(--settings-input-placeholder)]',
-          'border border-[var(--settings-input-border)] bg-[var(--settings-input-bg)] focus:border-[var(--settings-input-border-focus)]',
+          SURFACE_STYLES[surface],
+          'border border-[var(--settings-input-border)] focus:border-[var(--settings-input-border-focus)]',
           // Focus Blue 环(DESIGN.md §4 Inputs 的 focus 槽 + §「Focus Blue」的 --focus-ring):
           // 迁移进来的密钥输入原本就带 focus:ring-2,不能在收敛时丢掉——同一个表单里紧邻的
           // 名称框仍是蓝环,只留 border 变色会让上下两个框焦点表现不一致。用 opaque
