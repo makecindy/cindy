@@ -312,18 +312,38 @@ function collectOutboundImages(
 }
 
 /**
- * 收口取文(run() 与 watchContinuation 共用 —— 两处必须同判据)。
+ * 一轮 turn 的两份正文。**必须成对传递**, 所以做成一个值而不是两个参数。
  *
- * X 只取**最后一条**助手消息: 一次 mention 只有一条公开回帖的名额, 而 agent 的
- * 常态是"先说一句要去看看 → 干活 → 给结论", 整轮拼接会把过程叙述原样发到公开
- * 时间线, 还挤占 280 字符里本就不够的额度(见 turnObserver.finalSegment)。
- *
- * 其余渠道保持整轮正文, 不能跟着改: IM 里过程叙述有用, 且只取最后一条会丢掉
- * "先答后补"型 turn 的正文(实踩: Telegram 群里最终答案丢失 —— 见 turnObserver
- * 的文本累积语义注释)。
+ * 两者在 X 上不相等, 而它们的用途完全不同 —— 混用过一次就是本 PR 的缺陷:
+ * 把公开正文缩到末段时, 附件的引用扫描跟着缩了, agent 贴在中间那条消息里的
+ * 图和文件被静默丢掉。两个相邻的 string 参数编译器管不了传反, 收成命名字段
+ * 之后传错就写不出来。
  */
-function finalTextForChannel(observer: HookTurnObserver, im: string | undefined): string {
-  return im === 'x' ? observer.finalSegment() : observer.text();
+interface HookTurnTexts {
+  /** 发出去的正文。 */
+  readonly publicText: string;
+  /** 整轮正文 —— 出站引用的扫描范围, 与公开正文无关。 */
+  readonly wholeTurn: string;
+}
+
+/**
+ * 收口取文(run() 与 watchContinuation 共用 —— 两处必须同判据, 所以两份正文
+ * 的关系只在这里定义一次, 调用方不自己拼)。
+ *
+ * X 的**公开正文**只取最后一条助手消息: 一次 mention 只有一条公开回帖的名额,
+ * 而 agent 的常态是"先说一句要去看看 → 干活 → 给结论", 整轮拼接会把过程叙述
+ * 原样发到公开时间线, 还挤占 280 字符里本就不够的额度(见
+ * turnObserver.finalSegment)。
+ *
+ * 其余渠道公开正文就是整轮, 不能跟着改: IM 里过程叙述有用, 且只取最后一条会
+ * 丢掉"先答后补"型 turn 的正文(实踩: Telegram 群里最终答案丢失 —— 见
+ * turnObserver 的文本累积语义注释)。
+ *
+ * wholeTurn 则**任何渠道都是整轮**: 它只用于扫描出站引用, 与"发什么"无关。
+ */
+function turnTextsFor(observer: HookTurnObserver, im: string | undefined): HookTurnTexts {
+  const wholeTurn = observer.text();
+  return { publicText: im === 'x' ? observer.finalSegment() : wholeTurn, wholeTurn };
 }
 
 /**
@@ -332,25 +352,24 @@ function finalTextForChannel(observer: HookTurnObserver, im: string | undefined)
  * 文本引用 / 旁路图都不存在时不读盘 —— base64 编码只在真需要时发生; 收集失败不
  * 拖垮收口, 附件是回帖增强, 文本永远要发出去。
  *
- * `publicText` 是要发出去的正文, `turnText` 是**整轮**正文。X 那种只发最后一条的
- * 渠道两者不相等 —— 引用扫描必须按整轮来, 否则 agent 贴在中间那条消息里的图和
- * 文件会随着"只取末段"一起被丢掉(PR #1272 review 指出)。
+ * 引用扫描按**整轮**来, 而不是按要发出去的那段(见 HookTurnTexts): 否则 agent
+ * 贴在中间那条消息里的图和文件会随着"只取末段"一起被丢掉(PR #1272 review)。
  */
 async function collectOutboundForFinalText(
-  publicText: string,
-  turnText: string,
+  texts: HookTurnTexts,
   extraImageAbsPaths: string[],
   allowedFileRoots: string[],
   log: { warn(msg: string): void },
 ): Promise<{ finalText: string; attachments?: HookRunOutcome['attachments'] }> {
-  if (!hasOutboundRefs(turnText) && extraImageAbsPaths.length === 0) {
+  const { publicText, wholeTurn } = texts;
+  if (!hasOutboundRefs(wholeTurn) && extraImageAbsPaths.length === 0) {
     return { finalText: publicText };
   }
   try {
     const collected = await collectOutboundAttachments(publicText, extraImageAbsPaths, {
       resolveImageUrl: resolveRenderableImageUrl,
       allowedFileRoots,
-      ...(turnText !== publicText ? { refScanText: turnText } : {}),
+      ...(wholeTurn !== publicText ? { refScanText: wholeTurn } : {}),
       log,
     });
     if (collected.skipped > 0) {
@@ -935,8 +954,7 @@ export function createMakerHookSessionRunner(deps: {
       // 出站附件: 文本引用 / 旁路图存在时才收集(读盘 + base64 只在需要时
       // 发生); 收集失败不拖垮收口 —— 附件是回帖增强, 文本永远要发出去
       const collected = await collectOutboundForFinalText(
-        finalTextForChannel(observer, req.source?.im),
-        observer.text(),
+        turnTextsFor(observer, req.source?.im),
         extraImageAbsPaths,
         [workingDir],
         log,
@@ -1044,8 +1062,7 @@ function beginContinuationWatch(
       // workDir 以 live session 为权威(会话可能被移动过), 与 run() 里
       // isDirAuthorized 用 session.workDir 复核同理。
       const collected = await collectOutboundForFinalText(
-        finalTextForChannel(observer, req.source?.im),
-        observer.text(),
+        turnTextsFor(observer, req.source?.im),
         extraImageAbsPaths,
         [session.workDir],
         log,
