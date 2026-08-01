@@ -667,21 +667,33 @@ function interpreterInlineCodePayload(tokens: string[]): string | null {
   return null;
 }
 
+// 静态审查的递归深度上限:命令替换/shell -c/xargs·parallel 包装每层递增一次,超过即认定结构已
+// 不可静态求证,fail-closed(见各调用点)。取 6 兼顾现实嵌套(3-4 层已属极端)与 DoS 边界。
+const MAX_EXEC_REVIEW_DEPTH = 6;
+
 function commandRunsRemoteFetch(command: string, depth = 0): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到无法静态求证 → 保守当作远端下载
   for (const { text } of splitExecutableSegments(command)) {
     const tokens = unwrapWrappers(tokenize(text));
     const bin = executableName(tokens[0] ?? '');
     if (bin === 'curl' || bin === 'wget') return true;
     const shellPayload = shellCommandPayload(tokens);
-    if (shellPayload && depth < 3 && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
-    // xargs/parallel 把远端下载藏进被包装的子命令(`xargs curl …/payload | sh`、`parallel curl …`),
-    // 下载识别不下探就不会置远端内容传播标志,右侧非枚举解释器只落灰区(greptile 报)。
-    if (depth < 3) {
-      const wrapped = bin === 'xargs' ? xargsCommandTokens(tokens)
-        : bin === 'parallel' ? tokens.slice(1)
-          : null;
-      if (wrapped && wrapped.length > 0
-        && commandRunsRemoteFetch(serializeArgvForReview(wrapped), depth + 1)) return true;
+    if (shellPayload && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
+    // xargs 结构化取被包装 argv 再判(`xargs -n1 curl …`)。
+    if (bin === 'xargs') {
+      const nested = xargsCommandTokens(tokens);
+      if (nested && nested.length > 0
+        && commandRunsRemoteFetch(serializeArgvForReview(nested), depth + 1)) return true;
+    }
+    // parallel 选项文法复杂(`-j1` / `-j 1` / `:::`),不做完整建模:直接下载看任意 token 是否 curl/wget
+    // (跳过前导选项对首 token 的干扰,greptile 报 `parallel -j1 curl … ::: 1`);shell 载荷则从首个
+    // shell 执行器处下探(`parallel [-j1] sh -c 'curl …'`)。
+    if (bin === 'parallel') {
+      const rest = tokens.slice(1);
+      if (rest.some((t) => { const e = executableName(t); return e === 'curl' || e === 'wget'; })) return true;
+      const shIdx = rest.findIndex((t) => SHELL_EXECUTORS.has(executableName(t)));
+      if (shIdx >= 0
+        && commandRunsRemoteFetch(serializeArgvForReview(rest.slice(shIdx)), depth + 1)) return true;
     }
   }
   return false;
@@ -783,7 +795,7 @@ function substitutionBodies(text: string): string[] {
  * codex 报:此前只查了 PowerShell 载荷里的命令替换下载,没过破坏/系统控制检查。
  */
 const POWERSHELL_DANGER_PATTERNS: readonly RegExp[] = [
-  /\b(?:remove-item|ri|rd|rmdir|del|erase)\b[\s\S]*?-(?:recurse|r|force|f)\b/i, // 递归/强制删除
+  /\b(?:remove-item|rm|ri|rd|rmdir|del|erase)\b[\s\S]*?-(?:recurse|r|force|f)\b/i, // 递归/强制删除(rm 是 Remove-Item 官方别名,codex 报)
   /\b(?:format-volume|clear-disk|format-disk)\b/i,                              // 磁盘格式化/清空
   /\b(?:invoke-expression|iex)\b/i,                                            // eval
   /\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[\s\S]*\|\s*(?:iex|invoke-expression)\b/i, // 下载 | iex
@@ -824,13 +836,16 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     const rawTokens = unwrapCommand(tokenize(text)).tokens;
     // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
     // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
-    if (depth < 3 && substitutionBodies(text).some(
-      (body) => highImpactExecutionNeedsConsent(body, depth + 1))) return true;
+    // 超出递归上限仍存在替换体 = 深层嵌套(`echo $(a $(b $(c $(eval …))))`)静态不可证清白 → fail-closed
+    // 必问,不得因到达深度上限而静默降灰(greptile 报)。
+    if (substitutionBodies(text).some(
+      (body) => depth + 1 >= MAX_EXEC_REVIEW_DEPTH
+        || highImpactExecutionNeedsConsent(body, depth + 1))) return true;
     // PowerShell 载荷(-Command 明文的破坏/eval、-EncodedCommand 的 base64)过确定性红线(codex 报)。
     if (powerShellNeedsConsent(rawTokens)) return true;
     const payload = shellCommandPayload(rawTokens);
     if (payload && (substitutionRunsRemoteFetch(payload, 'command')
-      || depth >= 3
+      || depth >= MAX_EXEC_REVIEW_DEPTH
       || highImpactExecutionNeedsConsent(payload, depth + 1))) return true;
     const inlineCode = interpreterInlineCodePayload(rawTokens);
     if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
@@ -840,7 +855,7 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
         // Unknown xargs options only cross the deterministic boundary when a
         // visible shell executor is present; otherwise the gray reviewer remains usable.
         if (rawTokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
-      } else if (nested.length > 0 && (depth >= 3 || highImpactExecutionNeedsConsent(
+      } else if (nested.length > 0 && (depth >= MAX_EXEC_REVIEW_DEPTH || highImpactExecutionNeedsConsent(
         serializeArgvForReview(nested), depth + 1))) {
         return true;
       }
@@ -989,6 +1004,36 @@ function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; t
   return { changesDirectory: true };
 }
 
+/** 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段(到 `;`/`\;`/`+` 止)里的 shell `-c` 载荷字符串。 */
+function findExecShellPayloads(tokens: string[]): string[] {
+  const out: string[] = [];
+  const execFlags = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+  for (let i = 0; i < tokens.length; i++) {
+    if (!execFlags.has(tokens[i].toLowerCase())) continue;
+    const rest: string[] = [];
+    for (let j = i + 1; j < tokens.length; j++) {
+      const tok = tokens[j];
+      if (tok === ';' || tok === '\\;' || tok === '+') break;
+      rest.push(tok);
+    }
+    const payload = shellCommandPayload(rest);
+    if (payload !== null) out.push(payload);
+  }
+  return out;
+}
+
+/** 命令(含 shell -c 载荷,有限深递归)是否调用带 `-rf`/`--recursive` 等破坏性标志的 rm(不判目标范围)。 */
+function commandRunsDestructiveRm(command: string, depth = 0): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到无法静态求证 → 保守当作破坏性
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    if (destructiveRmTargets(tokens) !== null) return true;
+    const payload = shellCommandPayload(tokens);
+    if (payload && commandRunsDestructiveRm(payload, depth + 1)) return true;
+  }
+  return false;
+}
+
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
 function scopedDestructionNeedsConsent(
   command: string,
@@ -1012,7 +1057,7 @@ function scopedDestructionNeedsConsent(
       destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
     const shellPayload = shellCommandPayload(tokens);
-    if (shellPayload && (depth >= 3 || scopedDestructionNeedsConsent(
+    if (shellPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
       shellPayload, workspaceRoots, segmentOpts, depth + 1))) {
       return true;
     }
@@ -1020,9 +1065,12 @@ function scopedDestructionNeedsConsent(
       const findRoots = findDeleteRoots(tokens);
       const deletes = tokens.some((token) => token === '-delete');
       const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
-      const execsDestructiveRm = nestedRm >= 0
-        && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
-      if ((deletes || execsDestructiveRm) && findRoots.some((target) =>
+      const directRm = nestedRm >= 0 && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
+      // -exec/-execdir 经 shell 间接删除:载荷里的 rm 藏在引号内的单 token,直接 findIndex('rm') 命不中
+      // (codex 报 `find / -exec sh -c 'rm -rf "$0"' {} \;`)→ 抽出 -exec 的 shell -c 载荷递归查破坏性 rm。
+      const execRm = findExecShellPayloads(tokens).some(
+        (payload) => commandRunsDestructiveRm(payload, depth + 1));
+      if ((deletes || directRm || execRm) && findRoots.some((target) =>
         destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     }
     // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
@@ -1035,7 +1083,7 @@ function scopedDestructionNeedsConsent(
       if (nested === null) {
         // Unmodelled options plus an apparent shell command cannot be proven safe.
         if (tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
-      } else if (nested.length > 0 && (depth >= 3 || scopedDestructionNeedsConsent(
+      } else if (nested.length > 0 && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
         serializeArgvForReview(nested), workspaceRoots, segmentOpts, depth + 1))) {
         return true;
       }
