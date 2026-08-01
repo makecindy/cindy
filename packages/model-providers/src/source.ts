@@ -92,9 +92,32 @@ function parseRemoteCatalog(input: string, allowLegacyModelMeta: boolean): Catal
   if (!allowLegacyModelMeta) return parseCatalog(input);
   const raw: unknown = JSON.parse(input);
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return parseCatalog(raw);
-  const migrated = { ...(raw as Record<string, unknown>) };
-  delete migrated.cindyModelMeta;
+  // Keep every unknown field so parseCatalog can reject it; only the retired legacy block is
+  // exempt. A null-prototype destination makes special JSON keys such as `__proto__` ordinary
+  // own properties instead of invoking an inherited setter during the compatibility copy.
+  const migrated = Object.create(null) as Record<string, unknown>;
+  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+    if (key !== 'cindyModelMeta') migrated[key] = value;
+  }
   return parseCatalog(migrated);
+}
+
+/** Strip credentials and request-only URL parts before diagnostics leave this package. */
+function catalogUrlForLog(value: string): string {
+  try {
+    const parsed = new URL(value);
+    parsed.username = '';
+    parsed.password = '';
+    parsed.search = '';
+    parsed.hash = '';
+    return parsed.toString();
+  } catch {
+    return '[redacted invalid catalog URL]';
+  }
+}
+
+function remoteErrorForLog(error: unknown, remoteUrl: string, logUrl: string): string {
+  return String(error).split(remoteUrl).join(logUrl);
 }
 
 /** 只给仍保持 bundled 鉴权与上游路由形状的旧条目迁移 access，不能仅凭 provider id 猜计费。 */
@@ -310,6 +333,7 @@ export async function loadCatalogWithSource(
     const budgetMs = Number.isFinite(configuredBudget) ? Math.max(0, configuredBudget) : 0;
     const deadline = now() + budgetMs;
     for (const { url: remoteUrl, allowLegacyModelMeta } of remoteSources) {
+      const logUrl = catalogUrlForLog(remoteUrl);
       const remainingMs = Math.max(0, deadline - now());
       if (remainingMs > 0) {
         try {
@@ -328,7 +352,7 @@ export async function loadCatalogWithSource(
                   parsed = merged;
                   cacheText = JSON.stringify(merged);
                   log(io, 'warn', 'remote model registry is older than LKG; preserving newer registry', {
-                    url: remoteUrl,
+                    url: logUrl,
                     remoteUpdatedAt: remoteRegistryUpdatedAt,
                     cachedUpdatedAt: registryUpdatedAt(cached),
                   });
@@ -336,8 +360,8 @@ export async function loadCatalogWithSource(
               }
             } catch (err) {
               log(io, 'warn', 'cached catalog could not be compared with remote snapshot', {
-                url: remoteUrl,
-                err: String(err),
+                url: logUrl,
+                err: remoteErrorForLog(err, remoteUrl, logUrl),
               });
             }
           }
@@ -346,22 +370,22 @@ export async function loadCatalogWithSource(
               await io.writeCache(remoteUrl, cacheText);
             } catch (err) {
               log(io, 'warn', 'valid remote catalog loaded but LKG write failed', {
-                url: remoteUrl,
-                err: String(err),
+                url: logUrl,
+                err: remoteErrorForLog(err, remoteUrl, logUrl),
               });
             }
           }
-          log(io, 'info', 'loaded catalog from remote', { url: remoteUrl });
+          log(io, 'info', 'loaded catalog from remote', { url: logUrl });
           return { catalog: mergeWithBundled(parsed), source: 'remote' };
         } catch (err) {
           log(io, 'warn', 'remote catalog read/parse failed, trying fallback', {
-            url: remoteUrl,
-            err: String(err),
+            url: logUrl,
+            err: remoteErrorForLog(err, remoteUrl, logUrl),
           });
         }
       } else {
         log(io, 'warn', 'remote catalog fallback budget exhausted, trying cache', {
-          url: remoteUrl,
+          url: logUrl,
         });
       }
       if (io.readCache) {
@@ -369,13 +393,13 @@ export async function loadCatalogWithSource(
           const cached = await io.readCache(remoteUrl);
           if (cached !== null) {
             const parsed = parseRemoteCatalog(cached, allowLegacyModelMeta);
-            log(io, 'info', 'loaded last-known-good catalog snapshot', { url: remoteUrl });
+            log(io, 'info', 'loaded last-known-good catalog snapshot', { url: logUrl });
             return { catalog: mergeWithBundled(parsed), source: 'cache' };
           }
         } catch (err) {
           log(io, 'warn', 'cached catalog read/parse failed, trying fallback', {
-            url: remoteUrl,
-            err: String(err),
+            url: logUrl,
+            err: remoteErrorForLog(err, remoteUrl, logUrl),
           });
         }
       }

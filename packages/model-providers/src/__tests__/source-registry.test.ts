@@ -577,6 +577,49 @@ describe('loadCatalog', () => {
     expect(cat.version).toBe(BUNDLED_CATALOG.version);
   });
 
+  it('redacts credentials, query, and hash from remote URL diagnostics', async () => {
+    const remoteUrl = 'https://catalog-user:catalog-pass@override.example.com/providers.json?token=secret-token#private';
+    const log = vi.fn<NonNullable<CatalogIO['log']>>();
+    const fetchText = vi.fn(async (url: string) => {
+      throw new Error(`request failed for ${url}`);
+    });
+
+    await loadCatalog(
+      { url: remoteUrl, now: () => 0 },
+      { fetchText, log },
+    );
+
+    expect(fetchText).toHaveBeenCalledWith(remoteUrl, 15_000);
+    const diagnostics = JSON.stringify(log.mock.calls);
+    expect(diagnostics).toContain('https://override.example.com/providers.json');
+    expect(diagnostics).not.toContain('catalog-user');
+    expect(diagnostics).not.toContain('catalog-pass');
+    expect(diagnostics).not.toContain('secret-token');
+    expect(diagnostics).not.toContain('#private');
+  });
+
+  it('keeps special legacy JSON keys inert and lets strict parsing reject them', async () => {
+    const legacyPayload = JSON.stringify(MINIMAL).replace(
+      '{',
+      '{"__proto__":{"polluted":true},"cindyModelMeta":{"version":1},',
+    );
+    const fetchText = vi.fn()
+      .mockRejectedValueOnce(new Error('api unavailable'))
+      .mockResolvedValueOnce(legacyPayload);
+
+    const result = await loadCatalogWithSource(
+      {
+        baseUrl: 'https://model-access.example.com',
+        fallbackBaseUrl: 'https://cdn.example.com/cindy',
+        now: () => 0,
+      },
+      { fetchText },
+    );
+
+    expect(result).toEqual({ source: 'bundled', catalog: BUNDLED_CATALOG });
+    expect((Object.prototype as { polluted?: unknown }).polluted).toBeUndefined();
+  });
+
   it('falls back to bundled when fetch fails', async () => {
     const io: CatalogIO = {
       fetchText: vi.fn(async () => {
