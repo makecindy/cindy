@@ -1504,6 +1504,8 @@ describe('stdbuf 分离 MODE / watch·flock 执行包装器解包(第二十七�
     for (const c of [
       'watch -- rm -rf /outside',
       'watch -n 2 rm -rf /outside',
+      'watch -q 1 rm -rf /outside',        // -q/--equexit <cycles> 带值
+      'watch --equexit 3 rm -rf /outside',
       "watch 'rm -rf /outside'",
     ]) {
       expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');

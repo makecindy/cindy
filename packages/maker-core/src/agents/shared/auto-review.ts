@@ -558,7 +558,8 @@ function unwrapCommand(
       while (i < toks.length) {
         const t = toks[i];
         if (t === '--') { i++; break; }
-        if (t === '-n' || t === '--interval') { i += 2; continue; }
+        // 带独立值选项:-n/--interval <secs>、-q/--equexit <cycles>(codex 报:漏了 equexit 会停在其值漏掉命令)。
+        if (t === '-n' || t === '--interval' || t === '-q' || t === '--equexit') { i += 2; continue; }
         if (t.startsWith('-')) { i++; continue; }
         break;
       }
