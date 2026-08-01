@@ -36,7 +36,7 @@ playwright-core → 托管 Chrome(Cindy profile, 持久 user-data-dir)
 
 ## 3. 配置流(以及那个静默 bug)
 
-host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ dangerouslyAllowPrivateNetwork:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。显式放开 private network 是产品决定:Agent 需要访问 localhost / 内网站点,也避免 Surge/Clash/sing-box 等代理的 fake-IP DNS(`198.18.0.0/15` 等)把普通公网域名误拦成 SSRF。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
+host 在 `browser-managed-config.ts` 用 `buildManagedConfig()` 造出 `{ browser: { enabled, defaultProfile:'Cindy', headless:false, ssrfPolicy:{ allowRfc2544BenchmarkRange:true, allowIpv6UniqueLocalRange:true }, profiles:{ Cindy:{ driver:'openclaw', color, cdpPort } } } }`,`browser.ts` 在模块求值时将其传给 `createBrowserControlRuntime({ config })`。这两个窄开关只豁免 Surge/Clash/sing-box 等代理使用的 fake-IP DNS(`198.18.0.0/15` 与 IPv6 ULA),避免普通公网域名被误拦;localhost、RFC1918、cloud metadata、link-local 与其它 special-use 地址继续由 SSRF guard 阻断。上游 SSRF 层已经支持这两个字段,但 config resolver 尚未透传,所以 `sync.mjs` 用 fail-loud `LOCAL_PATCHES` 保留它们。runtime 内部把 config 存进 in-memory 配置快照;vendored dispatcher 每次请求经
 `getRuntimeConfigSourceSnapshot() ?? getRuntimeConfig()` 再取 `.browser` 拿到它。
 
 > ⚠️ **不变量(踩过的最大的坑):** `src/shim/runtime-config-snapshot.ts` 的 `getRuntimeConfigSourceSnapshot()` **必须返回 `OpenClawConfig | null`**(默认 `return null`)。它一旦返回 `{config, source}` 这种 wrapper,上面的 `?? getRuntimeConfig()` 永远短路、`.browser` 取到 `undefined`,**host 注入的整份 config 被静默丢弃、runtime 跑纯 vendored 默认值**(于是 profile 显示成上游默认名、颜色/目录全不对)。由 `src/__tests__/runtime-config-application.test.ts` 守护——别删那条测试。

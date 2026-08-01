@@ -54,13 +54,12 @@ const MANAGED_CDP_PORT = 18800;
  * (`browser-backend-settings-store` resolves `'external'` as the system default,
  * so this config is what a user who never touched the toggle gets.)
  *
- * SECURITY POSTURE (intentional, owner-decided 2026-06):
- *  - `dangerouslyAllowPrivateNetwork:true` keeps localhost / private-network
- *    navigation available. This is deliberate: Cindy is an internal tool and
- *    users need the agent to drive local dev servers / internal sites. It also
- *    prevents system-proxy fake-IP DNS answers (for example 198.18.0.0/15) from
- *    making ordinary public sites look like SSRF attempts. Do not tighten this
- *    setting without re-confirming that product decision.
+ * SECURITY POSTURE:
+ *  - Only the fake-IP ranges used by system proxies are exempted from the SSRF
+ *    guard. This prevents Surge/Clash/sing-box DNS answers (198.18.0.0/15 or
+ *    IPv6 ULA) from making ordinary public sites look like SSRF attempts while
+ *    localhost, RFC1918, metadata, link-local, and other special-use addresses
+ *    remain blocked.
  *  - Page-context `evaluate` (and recipe `evaluate` steps) run author/agent JS in
  *    Chromium, whose network stack is NOT subject to the Node SSRF guard — a
  *    same-origin `fetch` there can reach any host the browser can. This residual
@@ -74,7 +73,8 @@ export function buildManagedConfig(): BrowserRuntimeConfig {
       defaultProfile: MANAGED_PROFILE,
       headless: false, // headed so the user can see + log into sites
       ssrfPolicy: {
-        dangerouslyAllowPrivateNetwork: true,
+        allowRfc2544BenchmarkRange: true,
+        allowIpv6UniqueLocalRange: true,
       },
       profiles: {
         [MANAGED_PROFILE]: {
