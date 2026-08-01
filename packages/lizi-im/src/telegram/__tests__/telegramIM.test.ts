@@ -487,6 +487,38 @@ describe('TelegramIM', () => {
     expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBe(pollsAtOffline);
   });
 
+  it('set-online 畸形 payload 一律报错且不产生上下线副作用', async () => {
+    await connect();
+    await vi.waitFor(() => expect(api.calls.some((c) => c.method === 'getUpdates')).toBe(true));
+    const handler = ctx.handlers.get('telegramBot:set-online')!;
+
+    for (const bad of [
+      undefined,
+      null,
+      true,
+      'false',
+      [],
+      {},
+      { online: 'false' },
+      { online: 0 },
+      { online: null },
+    ]) {
+      await expect(
+        handler(bad),
+        `payload ${JSON.stringify(bad) ?? 'undefined'} 应被拒绝`,
+      ).rejects.toThrow(/INVALID_PARAMS/);
+      expect(im.getStatus().kind).toBe('connected');
+      expect(ctx.secrets.has('telegram-bot-offline')).toBe(false);
+    }
+
+    // 轮询仍在继续，证明畸形输入没有暗中走到 goOffline。
+    const pollsBefore = api.calls.filter((c) => c.method === 'getUpdates').length;
+    api.pushUpdates([privateMessage('still online', Number(OWNER_ID), 23)]);
+    await vi.waitFor(() => {
+      expect(api.calls.filter((c) => c.method === 'getUpdates').length).toBeGreaterThan(pollsBefore);
+    });
+  });
+
   it('下线标志写盘失败 → 报错且**不停轮询**(不留会自己复活的假下线)', async () => {
     await connect();
     await vi.waitFor(() => {

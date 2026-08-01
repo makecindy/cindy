@@ -485,7 +485,10 @@ export class TelegramIM extends BaseIM implements ChannelIM {
      * allowlist 的三条准入判据, 后续做跨设备下线可原样登记。
      */
     this.host.ipc.handle('telegramBot:set-online', async (payload) => {
-      const online = isRecord(payload) && payload.online === true;
+      if (!isRecord(payload) || typeof payload.online !== 'boolean') {
+        throw new Error('[INVALID_PARAMS] expected an object payload { online: boolean }');
+      }
+      const { online } = payload;
       if (!this.host.secrets.isAvailable()) {
         this.setStatus({ kind: 'error', reason: SECRET_WRITE_FAILED_REASON, code: 'secret-unavailable' });
         return { status: this.status };
