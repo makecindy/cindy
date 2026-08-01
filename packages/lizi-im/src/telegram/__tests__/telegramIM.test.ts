@@ -540,6 +540,62 @@ describe('TelegramIM', () => {
     ctx.host.secrets.isAvailable = originalAvailable;
   });
 
+  it('getMe 在途时被下线: 连接结果作废, 不得写 connected、不得起轮询', async () => {
+    // 复现远程下线的真实窗口: 目标机正在 connect 等 getMe, 另一台设备把它下线。
+    // 控制端已收到「已下线」, 这里若无条件写回 connected 就会回来继续抢同一个 bot。
+    ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
+    ctx.secrets.set('telegram-owner-user-id', OWNER_ID);
+    let releaseGetMe: (() => void) | null = null;
+    const slowApi = createFakeApi();
+    const originalCall = slowApi.call.bind(slowApi);
+    slowApi.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'getMe') {
+        await new Promise<void>((resolve) => {
+          releaseGetMe = resolve;
+        });
+      }
+      return originalCall(method, params, signal);
+    }) as typeof slowApi.call;
+    const slowIm = new TelegramIM(ctx.host, { apiFactory: () => slowApi });
+    slowIm.registerIpc();
+
+    const connecting = slowIm.init();
+    await vi.waitFor(() => expect(releaseGetMe).not.toBeNull());
+    // getMe 还挂着 —— 此刻下线
+    await slowIm.goOffline();
+    releaseGetMe!();
+    await connecting;
+
+    expect(slowIm.getStatus().kind).toBe('offline');
+    expect(slowApi.calls.some((c) => c.method === 'getUpdates')).toBe(false);
+    await slowIm.dispose();
+  });
+
+  it('换账号后不继承上个账号的 bot 身份(离线态拿不到 getMe 也不许张冠李戴)', async () => {
+    await connect();
+    expect(
+      (
+        (await ctx.handlers.get('telegramBot:get-status')!()) as { botUsername: string | null }
+      ).botUsername,
+    ).toBe(BOT.username);
+
+    // 账号 A 登出 → 账号 B 的 bot 已持久化为下线态
+    await im.dispose();
+    ctx.secrets.set('telegram-bot-token', '888:another-account-token-xyz');
+    ctx.secrets.set('telegram-owner-user-id', '222');
+    ctx.secrets.set('telegram-bot-offline', '1');
+    await im.init();
+
+    const status = (await ctx.handlers.get('telegramBot:get-status')!()) as {
+      status: { kind: string; appId?: string };
+      botUsername: string | null;
+    };
+    expect(status.status.kind).toBe('offline');
+    expect(status.status.appId).toBe('888');
+    // 关键: 不是 A 的 my_cindy_bot
+    expect(status.botUsername).toBeNull();
+  });
+
   it('带下线标志时 init 直接 offline, 零网络请求(重启不抢回轮询)', async () => {
     ctx.secrets.set('telegram-bot-token', '999:secret-token-abcdefghijk');
     ctx.secrets.set('telegram-owner-user-id', OWNER_ID);

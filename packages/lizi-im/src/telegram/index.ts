@@ -273,7 +273,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 主动下线态必须跨重启保持: 这里一旦 connect 就会重新抢 getUpdates, 把
     // 用户特意让位给另一台设备的轮询又夺回来。零网络请求进 offline。
     if (this.isOfflineFlagSet()) {
+      // botId 能从 token 前缀解析, 但 username / 显示名只有 getMe 拿得到 —— 而
+      // 下线态不发请求。同进程内换账号(A→B)时若不清, get-status 会把 A 的 bot
+      // 身份和 B 的离线状态一起报给设置卡。宁可留空, 不可张冠李戴。
       this.botId = botIdFromToken(token);
+      this.botUsername = '';
+      this.botDisplayName = '';
       this.setStatus({ kind: 'offline', appId: this.botContextId });
       return;
     }
@@ -348,6 +353,11 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
     await this.stopPolling();
+    // bot 身份是上一个账号的连接期产物: 登出/换账号后必须清干净, 否则下一个
+    // 账号在 offline 等拿不到 getMe 的状态下会继承旧账号的 bot 名字。
+    this.botId = 0;
+    this.botUsername = '';
+    this.botDisplayName = '';
     this.setStatus({ kind: 'idle' });
   }
 
@@ -732,12 +742,25 @@ export class TelegramIM extends BaseIM implements ChannelIM {
 
   private async connect(token: string): Promise<boolean> {
     const api = (this.opts.apiFactory ?? createTelegramApiClient)(token);
+    // getMe 是网络请求, 这段窗口里另一台设备可能远程下线、用户可能本地下线或
+    // 登出。这些路径都只递增 configVersion + 停当前 poll —— 尚未创建 poll 的
+    // 本次 connect 不受影响, 返回后会无条件写 connected 并拉起新一轮轮询,
+    // 于是控制端已经收到「已下线」, 目标机却又回来抢同一个 bot。
+    // 捕获出发时的世代, 回来后核对: 失效就安静退出, 不写状态、不起轮询。
+    const generation = this.configVersion;
     this.setStatus({ kind: 'connecting' });
     let me: TgUser;
     try {
       me = await api.call<TgUser>('getMe');
     } catch (err) {
+      if (this.configVersion !== generation || this.disposing) return false;
       this.setStatus(mapConnectErrorToStatus(err));
+      return false;
+    }
+    // 世代变了(被下线/登出/换 token)或已 dispose → 本次连接结果作废。offline
+    // 标志再查一次是防守: 远程下线写标志与递增世代之间也有窗口。
+    if (this.configVersion !== generation || this.disposing || this.isOfflineFlagSet()) {
+      this.log.info('connect result discarded: superseded by offline/dispose during getMe');
       return false;
     }
     this.api = api;
