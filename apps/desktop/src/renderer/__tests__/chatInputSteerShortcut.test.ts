@@ -2,6 +2,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+import {
+  resolveComposerEnterIntent,
+  type ComposerEnterEvent,
+  type ComposerEnterIntent,
+} from '@/hooks/useComposerSendShortcutPreference';
+
 const chatInputSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'ChatInput.tsx'),
   'utf8',
@@ -72,7 +78,49 @@ describe('ChatInput steer shortcut contract', () => {
       "const base = t(turnRunning ? 'newChat.pendingQueue.steerRunningTip' : 'newChat.pendingQueue.steerPausedTip');",
     );
   });
+
+  it('keeps mode A queue and running-turn steer semantics on the Tiptap path', () => {
+    expect(resolveComposerEnterIntent(makeEnterEvent(), 'enter', { turnRunning: false })).toBe(
+      'queue',
+    );
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ metaKey: true }), 'enter', {
+        turnRunning: true,
+      }),
+    ).toBe('steer');
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent({ ctrlKey: true }), 'enter', {
+        turnRunning: false,
+      }),
+    ).toBe('queue');
+  });
+
+  it('maps mode B modifier send and native/boundary cases without list interception', () => {
+    const modeB = (event: ComposerEnterEvent): ComposerEnterIntent =>
+      resolveComposerEnterIntent(event, 'modifier-enter', { turnRunning: true });
+
+    expect(modeB(makeEnterEvent())).toBe('native');
+    expect(modeB(makeEnterEvent({ metaKey: true }))).toBe('queue');
+    expect(modeB(makeEnterEvent({ ctrlKey: true }))).toBe('queue');
+    expect(modeB(makeEnterEvent({ shiftKey: true }))).toBeNull();
+    expect(modeB(makeEnterEvent({ altKey: true }))).toBeNull();
+    expect(modeB(makeEnterEvent({ isComposing: true }))).toBe('native');
+    expect(modeB(makeEnterEvent({ repeat: true }))).toBe('ignore');
+  });
 });
+
+function makeEnterEvent(overrides: Partial<ComposerEnterEvent> = {}): ComposerEnterEvent {
+  return {
+    key: 'Enter',
+    shiftKey: false,
+    altKey: false,
+    metaKey: false,
+    ctrlKey: false,
+    repeat: false,
+    isComposing: false,
+    ...overrides,
+  };
+}
 
 function extractBetween(sourceBlock: string, startNeedle: string, endNeedle: string): string {
   const start = sourceBlock.indexOf(startNeedle);

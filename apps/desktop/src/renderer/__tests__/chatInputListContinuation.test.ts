@@ -35,6 +35,7 @@ describe('ChatInput list continuation wiring contract', () => {
     expect(block).toContain(
       'if (handleStructuredListBreak(view) || applyListContinuation(view)) {',
     );
+    expect(block).not.toContain('resolveComposerEnterIntent');
     // 非列表行必须放行给 ComposerHardBreak 默认换行
     expect(block).toContain('return false;');
   });
