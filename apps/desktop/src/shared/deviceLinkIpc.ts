@@ -61,48 +61,48 @@ export const DEVICE_LINK_INVOKE = {
 /** main → renderer push */
 export const DEVICE_LINK_PUSH = {
   /** 同账号某设备 presence 变化(上线/下线/开关/busy),payload: PresenceSnapshot */
-  PRESENCE_CHANGED: 'device-link:presence-changed',
+  PRESENCE_CHANGED: IPC_CHANNELS.DEVICE_LINK.PRESENCE_CHANGED,
   /** 本机 relay 连接状态变化,payload: { status: 'stopped'|'connecting'|'online' } */
-  STATUS_CHANGED: 'device-link:status-changed',
+  STATUS_CHANGED: IPC_CHANNELS.DEVICE_LINK.STATUS_CHANGED,
   /**
    * 本机 relay 连接问题变化(鉴权失效/被顶号/超限/版本不符;null = 已恢复)。
    * payload: { issue: DeviceLinkConnectionIssue | null }
    */
-  CONNECTION_ISSUE: 'device-link:connection-issue',
+  CONNECTION_ISSUE: IPC_CHANNELS.DEVICE_LINK.CONNECTION_ISSUE,
   /**
    * 控制端:被控端转发回来的 renderer 广播(maker:event / local-db:* 等)。
    * payload: { deviceId, channel, payload } —— deviceId 是来源被控端,
    * renderer 据此把事件路由到对应远程设备的 store。
    */
-  REMOTE_PUSH: 'device-link:remote-push',
+  REMOTE_PUSH: IPC_CHANNELS.DEVICE_LINK.REMOTE_PUSH,
   /**
    * 被控端可见性:本机正在被哪些控制端控制(状态条 chip)。
    * payload: { controllers: Array<{ deviceId, name }> },空数组 = 未被控制。
    */
-  CONTROLLED_STATE: 'device-link:controlled-state',
+  CONTROLLED_STATE: IPC_CHANNELS.DEVICE_LINK.CONTROLLED_STATE,
   /**
    * 控制端:被某被控端撤销了访问权限(收到该被控端的 link-close('revoked'))。
    * payload: { deviceId } —— 来源被控端。控制端据此移除其项目/对话 + 标记「已撤销」。
    */
-  ACCESS_REVOKED: 'device-link:access-revoked',
+  ACCESS_REVOKED: IPC_CHANNELS.DEVICE_LINK.ACCESS_REVOKED,
   /**
    * 控制端本地偏好变化:某目标设备是否允许被本机主动控制。
    * payload: { deviceId, enabled, disabledControlDeviceIds }
    */
-  CONTROL_TARGET_CHANGED: 'device-link:control-target-changed',
+  CONTROL_TARGET_CHANGED: IPC_CHANNELS.DEVICE_LINK.CONTROL_TARGET_CHANGED,
   /**
    * 「保持电脑唤醒」开关在另一个共享 userData 的实例里被翻转,main 侧已跟随。
    * payload: { keepAwake: boolean } —— renderer 据此同步开关显示状态。
    */
-  KEEP_AWAKE_CHANGED: 'device-link:keep-awake-changed',
+  KEEP_AWAKE_CHANGED: IPC_CHANNELS.DEVICE_LINK.KEEP_AWAKE_CHANGED,
   /** 同机单持有者仲裁角色变化。payload: { standby: boolean }。 */
-  OWNERSHIP_CHANGED: 'device-link:ownership-changed',
+  OWNERSHIP_CHANGED: IPC_CHANNELS.DEVICE_LINK.OWNERSHIP_CHANGED,
   /**
    * 控制端:某目标设备的「无响应」熔断状态翻转(连续 invoke 超时判定,弱网 / 对端
    * 卡死;presence 可能仍显示在线)。payload: { deviceId, unresponsive: boolean }。
    * renderer 据此显示「通路不稳定」降级态,恢复(探测拿到真实回包)时自动清除。
    */
-  RESPONSIVENESS_CHANGED: 'device-link:responsiveness-changed',
+  RESPONSIVENESS_CHANGED: IPC_CHANNELS.DEVICE_LINK.RESPONSIVENESS_CHANGED,
 } as const;
 
 /** 控制本机的控制端信息(同 main/device-link/dispatch.ts ActiveController) */

@@ -4562,6 +4562,7 @@ export function ChatInput({
         opts.memoryProviderId !== undefined ? opts.memoryProviderId : effectiveSourceId;
       const remoteDeviceId =
         opts.remoteDeviceId ?? getSessionDeviceId(sessionId) ?? deviceLinkDeviceId;
+      const sessionDraftModelChoice = { markModelChoice: false } as const;
       if (!remoteDeviceId) {
         const vendor =
           currentModelAgentKind === 'codex'
@@ -4593,7 +4594,7 @@ export function ChatInput({
             providerId: activeProviderId ?? '',
             modelId,
             active: true,
-            markModelChoice: false,
+            ...sessionDraftModelChoice,
             ...(patch.effort !== undefined ? { effort: patch.effort } : {}),
             ...(patch.fast !== undefined ? { fast: patch.fast } : {}),
           },

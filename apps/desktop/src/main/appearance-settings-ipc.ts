@@ -26,7 +26,7 @@ import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 export { writeAppearanceSettingsPatch } from './appearance-settings-store.js';
 
-export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = 'appearance-settings:changed';
+export const APPEARANCE_SETTINGS_CHANGED_CHANNEL = IPC_CHANNELS.APPEARANCE_SETTINGS.CHANGED;
 
 let registered = false;
 

@@ -1,6 +1,7 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import type { VoiceInputProviderKind } from './voiceInputAsrProfiles.js';
 
-export const VOICE_INPUT_TEST_CONNECTION_CHANNEL = 'voice-input:test-connection';
+export const VOICE_INPUT_TEST_CONNECTION_CHANNEL = IPC_CHANNELS.VOICE_INPUT.TEST_CONNECTION;
 
 export type VoiceInputConnectionTestFailureReason =
   | 'credentials-missing'

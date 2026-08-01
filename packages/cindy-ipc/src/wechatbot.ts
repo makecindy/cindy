@@ -5,6 +5,7 @@ export const WECHAT_BOT_CHANNELS = {
   GET_CHANNEL_SETTINGS: "wechatBot:get-channel-settings",
   GET_STATE: "wechatBot:get-state",
   RESET_WORKING_DIRECTORY: "wechatBot:reset-working-directory",
+  STATE_CHANGED: "wechatBot:state-changed",
   UNBIND: "wechatBot:unbind",
 } as const;
 

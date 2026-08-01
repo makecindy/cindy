@@ -30,6 +30,16 @@ channel 字符串。
 - `ipcRenderer.invoke/send/on/once/sendSync/postMessage/sendToHost`
 - `webContents.send`、`event.sender.send`、`sender.send`
 
+下列项目内 IPC wrapper / fan-out API 的 channel 参数同样禁止写字符串字面量：
+
+- `createIpcFanOut`
+- `broadcastToRenderers`
+- `tapWindowBroadcast`
+
+`apps/desktop/src` 与 `packages/device-link/src` 内不得重新定义字符串值形式的
+`*_CHANNEL` / `*_CHANNELS` 常量。需要保留 shared 文件作为 payload 类型入口时，只能从
+`@cindy/cindy-ipc` re-export 或派生常量。
+
 测试里需要构造非法未知 channel 时，使用明显非法值并在同一行或上一行标注
 `ipc-channel-literal-ok`。该例外只用于负例测试，不得用于真实 handler、bridge 或
 broadcast。

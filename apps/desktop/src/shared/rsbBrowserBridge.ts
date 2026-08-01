@@ -57,9 +57,9 @@ export const RSB_BROWSER_BRIDGE_CAPTURE_SCREENSHOT_DATA_CHANNEL =
   IPC_CHANNELS.RSB_BROWSER_BRIDGE.CAPTURE_SCREENSHOT_DATA;
 
 /** Channel name for main → renderer "pin this tab against LRU eviction". */
-export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = 'rsb-browser-bridge:pin';
+export const RSB_BROWSER_BRIDGE_PIN_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.PIN;
 /** Channel name for main → renderer "release the pin on this tab". */
-export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = 'rsb-browser-bridge:unpin';
+export const RSB_BROWSER_BRIDGE_UNPIN_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.UNPIN;
 
 /**
  * Channel name for renderer → main "the user is currently looking at THIS
@@ -88,7 +88,7 @@ export const RSB_BROWSER_BRIDGE_FORCE_KILL_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BR
  *  - `cpu-alert`:前台 guest 持续高 CPU;renderer 显示非阻断提示条 + 终止按钮,
  *    不自动杀(可能是用户在跑正经的重页面)。
  */
-export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:resource-event';
+export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.RESOURCE_EVENT;
 
 /**
  * Channel name for main → renderer "execute this tab operation against the
@@ -96,7 +96,7 @@ export const RSB_BROWSER_BRIDGE_RESOURCE_EVENT_CHANNEL = 'rsb-browser-bridge:res
  * actions).
  * The renderer answers via `tab-op-result` keyed by `reqId`.
  */
-export const RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL = 'rsb-browser-bridge:tab-op-request';
+export const RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_REQUEST;
 /** Channel name for renderer → main answer to a tab-op-request. */
 export const RSB_BROWSER_BRIDGE_TAB_OP_RESULT_CHANNEL = IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_RESULT;
 

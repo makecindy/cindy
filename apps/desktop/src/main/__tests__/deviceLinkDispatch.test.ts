@@ -572,7 +572,7 @@ describe('被控端控制链路生命周期', () => {
     wireInboundDispatch(client);
     feed(subFrame('ctrl-drop-queue', SUB, ['session:s1']));
     handleControllerOffline('ctrl-drop-queue');
-    tapWindowBroadcast('local-db:messages:created', {
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, {
       sessionId: 's1',
       id: 'm-stale',
     });
@@ -684,14 +684,14 @@ describe('被控端控制链路生命周期', () => {
     wireInboundDispatch(client);
     feed(subFrame('ctrl-c', SUB, ['session:s1'], 'C'));
     handleControllerOffline('ctrl-c');
-    tapWindowBroadcast('local-db:messages:created', {
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, {
       sessionId: 's1',
       id: 'm-before-close',
     });
     expect(dispatchTesting.queuedPushesFor('ctrl-c')).toHaveLength(1);
 
     feed({ v: 1, kind: 'link-close', src: 'ctrl-c', payload: { reason: 'user' } });
-    tapWindowBroadcast('local-db:messages:created', {
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, {
       sessionId: 's1',
       id: 'm-after-close',
     });
@@ -1660,15 +1660,19 @@ describe('被控端订阅 registry + topic 转发', () => {
       src: 'ctrl-desktop',
       payload: { reason: 'transport-timeout' },
     });
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId: 's1' });
     expect(calls.push).toEqual([
-      { dst: 'ctrl-desktop', channel: 'local-db:sessions:created', payload: { sessionId: 's1' } },
+      {
+        dst: 'ctrl-desktop',
+        channel: IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED,
+        payload: { sessionId: 's1' },
+      },
     ]);
 
     // 永久关闭(user)仍完整清理
     calls.push.length = 0;
     feed({ v: 1, kind: 'link-close', src: 'ctrl-desktop', payload: { reason: 'user' } });
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's2' });
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId: 's2' });
     expect(calls.push).toEqual([]);
   });
 
@@ -2042,8 +2046,8 @@ describe('被控端订阅 registry + topic 转发', () => {
       },
     });
 
-    tapWindowBroadcast('local-db:sessions:created', { sessionId: 's1' });
-    tapWindowBroadcast('maker:event', { sessionId: 's1', event: {} });
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.SESSIONS_CREATED, { sessionId: 's1' });
+    tapWindowBroadcast(IPC_CHANNELS.MAKER_PUSH.EVENT, { sessionId: 's1', event: {} });
 
     expect(calls.push).toEqual([]);
     expect(getUpdateRelaunchControllers()).toEqual([]);
@@ -2255,7 +2259,7 @@ describe('被控端订阅 registry + topic 转发', () => {
     feed(subFrame('ctrl-a', SUB, ['session:s1']));
     setStatus('connecting');
 
-    tapWindowBroadcast('local-db:messages:created', {
+    tapWindowBroadcast(IPC_CHANNELS.LOCAL_DB.MESSAGES_CREATED, {
       sessionId: 's1',
       id: 'm1',
     });

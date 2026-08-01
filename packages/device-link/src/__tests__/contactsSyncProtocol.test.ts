@@ -5,12 +5,13 @@ import {
   DL_CONTACTS_SYNC_CHANNEL,
   isContactsSyncWireFrame,
 } from "../contactsSyncProtocol.js";
+import { IPC_CHANNELS } from "@cindy/cindy-ipc";
 
 const publicKey = `${"A".repeat(59)}=`;
 
 describe("contacts sync protocol", () => {
   it("pins the channel/version and accepts bounded key/cipher payloads", () => {
-    expect(DL_CONTACTS_SYNC_CHANNEL).toBe("device-link:contacts:sync:v1");
+    expect(DL_CONTACTS_SYNC_CHANNEL).toBe(IPC_CHANNELS.DEVICE_LINK.CONTACTS_SYNC);
     expect(CONTACTS_SYNC_WIRE_VERSION).toBe(1);
     expect(
       isContactsSyncWireFrame({ version: 1, type: "key", publicKey }),

@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 /**
  * 使用统计(TapDB)同意闸的跨进程协议类型。
  *
@@ -21,4 +23,4 @@ export interface AnalyticsSettingsPayload {
   allowed: boolean;
 }
 
-export const ANALYTICS_SETTINGS_CHANGE_CHANNEL = 'analytics:settings-change';
+export const ANALYTICS_SETTINGS_CHANGE_CHANNEL = IPC_CHANNELS.ANALYTICS.SETTINGS_CHANGE;

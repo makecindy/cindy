@@ -18,7 +18,7 @@ import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 const log = createLogger('plugin-market-ipc');
 let registered = false;
 let serviceSingleton: PluginMarketService | null = null;
-const REMOVAL_NOTICE_AVAILABLE_CHANNEL = 'plugin-market:removal-notice-available';
+const REMOVAL_NOTICE_AVAILABLE_CHANNEL = IPC_CHANNELS.PLUGIN_MARKET.REMOVAL_NOTICE_AVAILABLE;
 
 function service(): PluginMarketService {
   serviceSingleton ??= new PluginMarketService();

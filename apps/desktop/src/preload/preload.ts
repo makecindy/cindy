@@ -362,20 +362,20 @@ const fanOutAppUpdateProgress = createIpcFanOut(IPC_CHANNELS.APP_UPDATE_PROGRESS
 // worktree 回收(归档/删除后的异步链)真正跑完 —— renderer 据此重拉 worktree 快照,
 // 否则徽标会停在回收前的旧条目上。只在本机窗口内广播。
 const fanOutWorktreeChanged = createIpcFanOut(IPC_CHANNELS.WORKTREE.CHANGED);
-const fanOutAuthStateChange = createIpcFanOut('auth:state-change');
-const fanOutAuthSessionExpired = createIpcFanOut('auth:session-expired');
+const fanOutAuthStateChange = createIpcFanOut(IPC_CHANNELS.AUTH.STATE_CHANGE);
+const fanOutAuthSessionExpired = createIpcFanOut(IPC_CHANNELS.AUTH.SESSION_EXPIRED);
 // 使用统计(TapDB)的同意状态 / 开关变化;renderer 据此即时 init 或 opt-out
 const fanOutAnalyticsSettingsChange = createIpcFanOut(ANALYTICS_SETTINGS_CHANGE_CHANNEL);
 const fanOutFullscreenChange = createIpcFanOut(IPC_CHANNELS.FULLSCREEN_CHANGE.FULLSCREEN_CHANGE);
 // 窗口是否对用户不可见(最小化 / hide)。装饰动画闸门用它兜底 —— backgroundThrottling
 // 关闭时 Renderer 的 document.visibilityState 会一直停在 visible,见 main 侧注释。
-const fanOutWindowHiddenChange = createIpcFanOut('window-hidden-change');
+const fanOutWindowHiddenChange = createIpcFanOut(IPC_CHANNELS.WINDOW_HIDDEN.CHANGE);
 const fanOutApplicationMenuCommand = createIpcFanOut(IPC_CHANNELS.APP_MENU.COMMAND);
 // 首登轻量数据迁移(mToc)弹窗阶段推送(confirm / running / done / failed)
 const fanOutLegacyMigrationState = createIpcFanOut(IPC_CHANNELS.LEGACY_MIGRATION.STATE);
 const fanOutCorruptionRestored = createIpcFanOut(IPC_CHANNELS.LOCAL_DB.CORRUPTION_RESTORED);
 const fanOutPluginRemovalNoticeAvailable = createIpcFanOut(
-  'plugin-market:removal-notice-available',
+  IPC_CHANNELS.PLUGIN_MARKET.REMOVAL_NOTICE_AVAILABLE,
 );
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut(IPC_CHANNELS.LOCAL_DB.SCHEMA_DRIFT_WARNING);
@@ -386,9 +386,9 @@ const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
 );
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_EVENT);
-const fanOutFileBrowserTransfer = createIpcFanOut('maker:file-browser:transfer');
+const fanOutFileBrowserTransfer = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.FILE_BROWSER_TRANSFER);
 // Project-wide text search (rg-backed) — match/end/error stream events keyed by searchId.
-const fanOutSearchEvent = createIpcFanOut('maker:search:event');
+const fanOutSearchEvent = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.SEARCH_EVENT);
 // 系统级通知点击回调：把 sessionId 广播给 renderer 做路由跳转。
 const fanOutNotificationFocusSession = createIpcFanOut(IPC_CHANNELS.NOTIFICATION.FOCUS_SESSION);
 // 会话已读广播:main 端 clearSessionAttention 后同步给所有窗口。清除来源可能是
@@ -401,7 +401,7 @@ const fanOutDeepLinkNavigate = createIpcFanOut(IPC_CHANNELS.DEEP_LINK.NAVIGATE);
 // RSB web-browser plugin:guest webview 内 window.open / target=_blank 路由。
 // main 端 webview-security setWindowOpenHandler 把 popup URL 推到这里,renderer
 // 端 RightSidebarShell 订阅 → store.addTab 开新 web-browser tab。
-const fanOutRsbBrowserPopup = createIpcFanOut('rsb:browser-popup');
+const fanOutRsbBrowserPopup = createIpcFanOut(IPC_CHANNELS.BROWSER.RSB_POPUP);
 const fanOutRsbNativePopupEvent = createIpcFanOut(RSB_NATIVE_POPUP_EVENT_CHANNEL);
 // RSB terminal plugin: main 端 PTY onData / onExit 推过来,renderer 按 id filter。
 // 每个 tab 自己订阅,fanOut 内部去重 ipcRenderer.on 绑定。
@@ -410,19 +410,19 @@ const fanOutTerminalExit = createIpcFanOut(IPC_CHANNELS.TERMINAL_PUSH.EXIT);
 // RSB web-browser plugin:guest webview 内 Cmd/Ctrl+L 路由。main 端
 // webview-security before-input-event 拦截 → 通知 host renderer 让 active 的
 // BrowserTabBody 调 chrome.focusUrlBar()。
-const fanOutRsbBrowserFocusUrlBar = createIpcFanOut('rsb:browser-focus-url-bar');
-const fanOutRsbBrowserCommand = createIpcFanOut('rsb:browser-command');
+const fanOutRsbBrowserFocusUrlBar = createIpcFanOut(IPC_CHANNELS.BROWSER.RSB_FOCUS_URL_BAR);
+const fanOutRsbBrowserCommand = createIpcFanOut(IPC_CHANNELS.BROWSER.RSB_COMMAND);
 // RSB browser bridge:main 端 TabRegistry 在 pin set 变化时通知 renderer 把
 // 对应 tab 标记 / 取消标记 automation pinned。renderer 端的 BrowserWebviewPool
 // LRU 据此跳过 pinned tab,避免 automation 操作期间 webContents 被销毁。
-const fanOutRsbBrowserBridgePin = createIpcFanOut('rsb-browser-bridge:pin');
-const fanOutRsbBrowserBridgeUnpin = createIpcFanOut('rsb-browser-bridge:unpin');
-const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut('rsb-browser-bridge:resource-event');
+const fanOutRsbBrowserBridgePin = createIpcFanOut(IPC_CHANNELS.RSB_BROWSER_BRIDGE.PIN);
+const fanOutRsbBrowserBridgeUnpin = createIpcFanOut(IPC_CHANNELS.RSB_BROWSER_BRIDGE.UNPIN);
+const fanOutRsbBrowserBridgeResourceEvent = createIpcFanOut(IPC_CHANNELS.RSB_BROWSER_BRIDGE.RESOURCE_EVENT);
 // Phase 3: RsbWebviewBackend (open/focus/close) push 给 renderer 让它代调 store。
-const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut('rsb-browser-bridge:tab-op-request');
+const fanOutRsbBrowserBridgeTabOpRequest = createIpcFanOut(IPC_CHANNELS.RSB_BROWSER_BRIDGE.TAB_OP_REQUEST);
 // session-git-pr-context: HEAD 分支变化 / session PR 引用变化推送
-const fanOutGitContextChanged = createIpcFanOut('git-context:changed');
-const fanOutGitContextPrRefsChanged = createIpcFanOut('git-context:pr-refs-changed');
+const fanOutGitContextChanged = createIpcFanOut(IPC_CHANNELS.GIT_CONTEXT.CHANGED);
+const fanOutGitContextPrRefsChanged = createIpcFanOut(IPC_CHANNELS.GIT_CONTEXT.PR_REFS_CHANGED);
 // 系统级瞬时网络错误 tip：lifecycle 兜底 catch 到 ETIMEDOUT/ECONNRESET 等不杀进程时,
 // 把 err.code / address / port 推给 renderer, renderer 自己 toast (带节流) 让用户感知。
 const fanOutSystemTransientNetworkError = createIpcFanOut(IPC_CHANNELS.SYSTEM.TRANSIENT_NETWORK_ERROR);
@@ -443,18 +443,18 @@ const fanOutUsageMessageTurnCost = createIpcFanOut(IPC_CHANNELS.USAGE.MESSAGE_TU
 // 渲染降级提示行)。payload: { sessionId, clientId, modelMismatch: { selected, actual } }。
 const fanOutUsageMessageModelMismatch = createIpcFanOut(IPC_CHANNELS.USAGE.MESSAGE_MODEL_MISMATCH);
 // FeiShu Bot：状态变化 + 冲突检测 + 注册流程 push channel。
-const fanOutFeishuBotStatusChange = createIpcFanOut('feishuBot:status-change');
-const fanOutFeishuBotConflict = createIpcFanOut('feishuBot:conflict');
-const fanOutFeishuBotRegistrationStatus = createIpcFanOut('feishuBot:registration-status');
+const fanOutFeishuBotStatusChange = createIpcFanOut(IPC_CHANNELS.FEISHU_BOT.STATUS_CHANGE);
+const fanOutFeishuBotConflict = createIpcFanOut(IPC_CHANNELS.FEISHU_BOT.CONFLICT);
+const fanOutFeishuBotRegistrationStatus = createIpcFanOut(IPC_CHANNELS.FEISHU_BOT.REGISTRATION_STATUS);
 // Discord Bot：本机凭证模式；这里只暴露 @cindy/im DiscordIM 的 transport 状态。
-const fanOutDiscordBotStatusChange = createIpcFanOut('discordBot:status-change');
+const fanOutDiscordBotStatusChange = createIpcFanOut(IPC_CHANNELS.DISCORD_BOT.STATUS_CHANGE);
 // 个人 Telegram Bot：本机凭证模式(BotFather token 直连);同上只暴露 transport 状态。
-const fanOutTelegramBotStatusChange = createIpcFanOut('telegramBot:status-change');
-const fanOutDingTalkBotStatusChange = createIpcFanOut('dingtalkBot:status-change');
-const fanOutDingTalkBotOwnerChange = createIpcFanOut('dingtalkBot:owner-change');
+const fanOutTelegramBotStatusChange = createIpcFanOut(IPC_CHANNELS.TELEGRAM_BOT.STATUS_CHANGE);
+const fanOutDingTalkBotStatusChange = createIpcFanOut(IPC_CHANNELS.DINGTALK_BOT.STATUS_CHANGE);
+const fanOutDingTalkBotOwnerChange = createIpcFanOut(IPC_CHANNELS.DINGTALK_BOT.OWNER_CHANGE);
 const fanOutWecomBotStatusChange = createIpcFanOut(IPC_CHANNELS.WECOM_BOT.STATUS_CHANGE);
 // Personal WeChat: main owns auth/polling and broadcasts a credential-free state snapshot.
-const fanOutWechatBotStateChange = createIpcFanOut('wechatBot:state-changed');
+const fanOutWechatBotStateChange = createIpcFanOut(IPC_CHANNELS.WECHAT_BOT.STATE_CHANGED);
 const fanOutVoiceInputEvent = createIpcFanOut(IPC_CHANNELS.VOICE_INPUT.EVENT);
 const fanOutVoiceInputGlobalShortcutTrigger = createIpcFanOut(
   IPC_CHANNELS.VOICE_INPUT.GLOBAL_SHORTCUT_TRIGGER,
@@ -483,34 +483,34 @@ const fanOutGhostInstallRequested = createIpcFanOut(IPC_CHANNELS.GHOSTS.INSTALL_
 // 意识运行时状态广播(crashed/fused → 面板原地错误接管态)。
 const fanOutGhostRuntimeChanged = createIpcFanOut(IPC_CHANNELS.GHOSTS.RUNTIME_CHANGED);
 // 意识面板「点图看大图」推送(main 拦下 /preview/ 导航并过闸后推 cindy-media 地址)。
-const fanOutGhostPreviewMedia = createIpcFanOut('ghosts:preview-media');
+const fanOutGhostPreviewMedia = createIpcFanOut(IPC_CHANNELS.GHOSTS.PREVIEW_MEDIA);
 // 意识聊天卡片更新推送(卡槽③:card-update 过闸后带 html 全量推,renderer 免回查)。
-const fanOutGhostCardUpdated = createIpcFanOut('ghosts:card-updated');
+const fanOutGhostCardUpdated = createIpcFanOut(IPC_CHANNELS.GHOSTS.CARD_UPDATED);
 // 意识后台活动(card-action 干活)会话忙闲推送(0↔1 转变才推;侧栏呼吸用)。
-const fanOutGhostSessionActivity = createIpcFanOut('ghosts:session-activity');
+const fanOutGhostSessionActivity = createIpcFanOut(IPC_CHANNELS.GHOSTS.SESSION_ACTIVITY);
 // 用户消息被意识钩子拦下(卡槽①:renderer 把乐观气泡原地降级为被拦态)。
-const fanOutGhostMessageBlocked = createIpcFanOut('ghosts:user-message-blocked');
+const fanOutGhostMessageBlocked = createIpcFanOut(IPC_CHANNELS.GHOSTS.MESSAGE_BLOCKED);
 // 用户消息被意识钩子改写(卡槽①:renderer 把气泡正文换成改写版并留痕署名)。
-const fanOutGhostMessageRewritten = createIpcFanOut('ghosts:user-message-rewritten');
+const fanOutGhostMessageRewritten = createIpcFanOut(IPC_CHANNELS.GHOSTS.MESSAGE_REWRITTEN);
 // AI 回复被出口钩子(will-assistant-message)改写(renderer 气泡静默换文本)。
-const fanOutGhostAssistantRewritten = createIpcFanOut('ghosts:assistant-message-rewritten');
+const fanOutGhostAssistantRewritten = createIpcFanOut(IPC_CHANNELS.GHOSTS.ASSISTANT_REWRITTEN);
 // 出口钩子后台处理中/完成的轻指示(renderer 在该 assistant 气泡挂"意识处理中")。
-const fanOutGhostAssistantPending = createIpcFanOut('ghosts:assistant-message-pending');
+const fanOutGhostAssistantPending = createIpcFanOut(IPC_CHANNELS.GHOSTS.ASSISTANT_PENDING);
 // 意识钩子熔断(连续超时/崩溃 → 降级只旁听,renderer 弹提示)。
-const fanOutGhostHookFused = createIpcFanOut('ghosts:hook-fused');
+const fanOutGhostHookFused = createIpcFanOut(IPC_CHANNELS.GHOSTS.HOOK_FUSED);
 // 意识系统提示(notify 槽:宿主 Toast 渲染,带意识身份头)。
-const fanOutGhostNotify = createIpcFanOut('ghosts:notify');
+const fanOutGhostNotify = createIpcFanOut(IPC_CHANNELS.GHOSTS.NOTIFY);
 // 意识未读角标(badge 槽:插件入口与插件卡上的绿点,持久状态非一次性 toast)。
-const fanOutGhostBadge = createIpcFanOut('ghosts:badge');
+const fanOutGhostBadge = createIpcFanOut(IPC_CHANNELS.GHOSTS.BADGE);
 // 未读全量快照(换账号后整表替换;逐条 badge 只表达增量)。
-const fanOutGhostUnreadSnapshot = createIpcFanOut('ghosts:unread-snapshot');
+const fanOutGhostUnreadSnapshot = createIpcFanOut(IPC_CHANNELS.GHOSTS.UNREAD_SNAPSHOT);
 // 意识确认弹窗(confirm 槽:renderer 用主机同款 ConfirmDialog 弹,答案回 main)。
 // main 只投单个窗口(不广播),所以这里落地的窗口就是该弹框的唯一归属。
-const fanOutGhostConfirmRequest = createIpcFanOut('ghosts:confirm-request');
+const fanOutGhostConfirmRequest = createIpcFanOut(IPC_CHANNELS.GHOSTS.CONFIRM_REQUEST);
 // 插件预览开页(preview 槽:renderer 在右侧栏开 web-browser 标签)。
-const fanOutGhostPreviewOpen = createIpcFanOut('ghosts:preview-open');
+const fanOutGhostPreviewOpen = createIpcFanOut(IPC_CHANNELS.GHOSTS.PREVIEW_OPEN);
 // 插件自动化草稿(agent 槽 schedule 加档:renderer 开自动化创建面板并预填)。
-const fanOutGhostScheduleDraft = createIpcFanOut('ghosts:schedule-draft');
+const fanOutGhostScheduleDraft = createIpcFanOut(IPC_CHANNELS.GHOSTS.SCHEDULE_DRAFT);
 const fanOutVoiceInputModifierShortcutKeys = createIpcFanOut(IPC_CHANNELS.VOICE_INPUT.MODIFIER_SHORTCUT_KEYS);
 // 「待授权」快捷键在设置页之外自动恢复失败（helper 起不来）。设置页不在,它的 toast 也就
 // 不在,所以由常挂载的 MainLayout 接这条并提示。main 侧一次 App 运行只推一次。
@@ -520,16 +520,16 @@ const fanOutVoiceInputShortcutRecoveryFailed = createIpcFanOut(
 // Remote SSH (Phase A) — host status fan-out. Channel literal kept in
 // sync with REMOTE_SSH_PUSH.STATUS_CHANGED in main/remote-ssh/index.ts;
 // preload can't import from main due to vite chunking.
-const fanOutRemoteSshStatus = createIpcFanOut('maker:remote-ssh:status-changed');
+const fanOutRemoteSshStatus = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_STATUS_CHANGED);
 // Phase B — install progress events (per hostId + agentKind).
-const fanOutRemoteSshInstallProgress = createIpcFanOut('maker:remote-ssh:install-progress');
+const fanOutRemoteSshInstallProgress = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_INSTALL_PROGRESS);
 // Phase D — silent install status (maker:send 触发的自动 install 给 toast 用)。
 const fanOutRemoteSshSilentInstallStatus = createIpcFanOut(
-  'maker:remote-ssh:silent-install-status',
+  IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_SILENT_INSTALL_STATUS,
 );
 // cc-mgr 版本不匹配的 banner push (per hostId set / clear)。
 const fanOutRemoteSshCcMgrUpgradeAvailable = createIpcFanOut(
-  'maker:remote-ssh:cc-mgr-upgrade-available',
+  IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_UPGRADE_AVAILABLE,
 );
 // Hook 连接(hook-control)状态推送(单条连接快照)。
 const fanOutHookControlStatus = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.HOOK_CONTROL_STATUS_CHANGED);
@@ -572,18 +572,18 @@ const fanOutMakerClaudeSessionRouteChanged = createIpcFanOut(IPC_CHANNELS.MAKER_
 const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut(
   IPC_CHANNELS.MAKER_PUSH.SESSION_BACKGROUND_ACTIVITY_CHANGED,
 );
-const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed'); // Claude USD
-const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed'); // Codex token
-const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
+const fanOutMakerUsageTodaySpend = createIpcFanOut(IPC_CHANNELS.USAGE.TODAY_SPEND_CHANGED); // Claude USD
+const fanOutMakerUsageTodayTokens = createIpcFanOut(IPC_CHANNELS.USAGE.TODAY_TOKENS_CHANGED); // Codex token
+const fanOutMakerUsageModelPricing = createIpcFanOut(IPC_CHANNELS.USAGE.MODEL_PRICING_CHANGED);
 const fanOutMakerUsageReferenceModelPricing = createIpcFanOut(
-  'usage:reference-model-pricing-changed',
+  IPC_CHANNELS.USAGE.REFERENCE_MODEL_PRICING_CHANGED,
 );
-const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-changed'); // Claude 月度配额
-const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
-const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
-const fanOutMakerUsageClaudeSubscription = createIpcFanOut('usage:claude-subscription-changed'); // Claude 订阅余量
+const fanOutMakerUsageClaudeAccount = createIpcFanOut(IPC_CHANNELS.USAGE.CLAUDE_ACCOUNT_CHANGED); // Claude 月度配额
+const fanOutMakerUsageCodexAccount = createIpcFanOut(IPC_CHANNELS.USAGE.CODEX_ACCOUNT_CHANGED); // Codex 订阅用量
+const fanOutMakerUsageXaiRateLimit = createIpcFanOut(IPC_CHANNELS.USAGE.XAI_RATE_LIMIT_CHANGED); // xAI bridge 限流快照
+const fanOutMakerUsageClaudeSubscription = createIpcFanOut(IPC_CHANNELS.USAGE.CLAUDE_SUBSCRIPTION_CHANGED); // Claude 订阅余量
 // 跨 Agent 工作区互转 — 转换进度 push (per step)
-const fanOutCrossAgentStep = createIpcFanOut('maker:cross-agent:step');
+const fanOutCrossAgentStep = createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_STEP);
 // Scheduler (Phase 4) — 4 个 SchedulerEvent 类型 ('fired'|'completed'|'failed'|'changed')
 // 共用一个 channel；renderer 拿到 payload 后按 .type 分支。
 const fanOutScheduleEvent = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.SCHEDULE_EVENT);
@@ -591,24 +591,24 @@ const fanOutProjectAutomationEvent = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.PRO
 // 会话内 /goal 状态变化 push（GoalStatusUpdate）。renderer useGoalStatus 按 sessionId 过滤。
 const fanOutGoalStatusChanged = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.GOAL_STATUS_CHANGED);
 // 设备互联(跨设备远程控制)— presence / relay 连接状态 / 远程事件转发 push
-const fanOutDeviceLinkPresenceChanged = createIpcFanOut('device-link:presence-changed');
-const fanOutDeviceLinkStatusChanged = createIpcFanOut('device-link:status-changed');
-const fanOutDeviceLinkConnectionIssue = createIpcFanOut('device-link:connection-issue');
-const fanOutDeviceLinkRemotePush = createIpcFanOut('device-link:remote-push');
-const fanOutDeviceLinkControlledState = createIpcFanOut('device-link:controlled-state');
-const fanOutDeviceLinkAccessRevoked = createIpcFanOut('device-link:access-revoked');
-const fanOutDeviceLinkControlTargetChanged = createIpcFanOut('device-link:control-target-changed');
-const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut('device-link:keep-awake-changed');
-const fanOutDeviceLinkOwnershipChanged = createIpcFanOut('device-link:ownership-changed');
+const fanOutDeviceLinkPresenceChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.PRESENCE_CHANGED);
+const fanOutDeviceLinkStatusChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.STATUS_CHANGED);
+const fanOutDeviceLinkConnectionIssue = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.CONNECTION_ISSUE);
+const fanOutDeviceLinkRemotePush = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.REMOTE_PUSH);
+const fanOutDeviceLinkControlledState = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.CONTROLLED_STATE);
+const fanOutDeviceLinkAccessRevoked = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.ACCESS_REVOKED);
+const fanOutDeviceLinkControlTargetChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.CONTROL_TARGET_CHANGED);
+const fanOutDeviceLinkKeepAwakeChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.KEEP_AWAKE_CHANGED);
+const fanOutDeviceLinkOwnershipChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.OWNERSHIP_CHANGED);
 // 控制端:目标设备「无响应」熔断状态翻转(payload = { deviceId, unresponsive })
-const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut('device-link:responsiveness-changed');
+const fanOutDeviceLinkResponsivenessChanged = createIpcFanOut(IPC_CHANNELS.DEVICE_LINK.RESPONSIVENESS_CHANGED);
 
 // device-link 模型列表写穿:被控端本地 main → 自身 renderer,把控制端写穿的草稿 / 会话 pref
 // 交给 renderer 调它原来的本地 setter。仅被控端进程会收到(控制端从不收 → 监听不误触发)。
 const fanOutMakerDraftPrefApply = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.DRAFT_PREF_APPLY);
 const fanOutMakerWorktreePrefApply = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.WORKTREE_PREF_APPLY);
 const fanOutMakerSessionPrefApply = createIpcFanOut(IPC_CHANNELS.MAKER_PUSH.SESSION_PREF_APPLY);
-const fanOutAppearanceSettingsChanged = createIpcFanOut('appearance-settings:changed');
+const fanOutAppearanceSettingsChanged = createIpcFanOut(IPC_CHANNELS.APPEARANCE_SETTINGS.CHANGED);
 
 // 跨 Agent 迁移项的 wire 形态（同 main/cross-agent-convert/types.ts 的 MigrationItem，
 // 但 preload 是单独编译单元，不便 import；renderer 真正消费在 vite-env.d.ts 重新声明）。
@@ -2035,7 +2035,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     listAttached: (): Promise<{ sessionIds: string[] }> =>
       ipcRenderer.invoke(IPC_CHANNELS.BINDING.LIST_ATTACHED),
     /** 订阅 binding 变更广播 — main 端 attach/detach 后推一次 */
-    onChanged: createIpcFanOut('binding:changed'),
+    onChanged: createIpcFanOut(IPC_CHANNELS.BINDING.CHANGED),
   },
 
   // Environment
@@ -3225,14 +3225,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // 真相在 main:是否配置了上报目标、是否已同意隐私政策、开关的 override 状态都由 main
   // 判定,renderer 只消费结论。上传编号由 main 生成并回传,用户报障时口述给我们。
   getLogUploadSettings: (): Promise<LogUploadSettingsPayload> =>
-    ipcRenderer.invoke('log-upload:settings-get'),
+    ipcRenderer.invoke(IPC_CHANNELS.LOG_UPLOAD.SETTINGS_GET),
   setLogUploadCrashAuto: (enabled: boolean): Promise<LogUploadSettingsPayload> =>
-    ipcRenderer.invoke('log-upload:set-crash-auto', enabled === true),
+    ipcRenderer.invoke(IPC_CHANNELS.LOG_UPLOAD.SET_CRASH_AUTO, enabled === true),
   /** 恢复默认:删掉开关 override,重新跟随当前版本默认值(默认关闭)。 */
   resetLogUploadCrashAuto: (): Promise<LogUploadSettingsPayload> =>
-    ipcRenderer.invoke('log-upload:reset-crash-auto'),
+    ipcRenderer.invoke(IPC_CHANNELS.LOG_UPLOAD.RESET_CRASH_AUTO),
   /** 手动上传一次。失败以 IPC 错误码返回(LOG_UPLOAD_* / PRIVACY_CONSENT_REQUIRED)。 */
-  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke('log-upload:upload-now'),
+  uploadLogsNow: (): Promise<LogUploadResult> => ipcRenderer.invoke(IPC_CHANNELS.LOG_UPLOAD.UPLOAD_NOW),
   onLogUploadSettingsChange: (
     callback: (payload: LogUploadSettingsPayload) => void,
   ): (() => void) => {
@@ -5602,8 +5602,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.CONTACTS_PARSE_VCF, text),
       import: (records: unknown[], opts?: { groupId?: string }): Promise<unknown> =>
         ipcRenderer.invoke(IPC_CHANNELS.MAKER_INVOKE.CONTACTS_IMPORT, records, opts),
-      onChanged: createIpcFanOut('maker:contacts:changed'),
-      onSyncStatusChanged: createIpcFanOut('maker:contacts:sync:status-changed'),
+      onChanged: createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.CONTACTS_CHANGED),
+      onSyncStatusChanged: createIpcFanOut(IPC_CHANNELS.MAKER_EXTRA.CONTACTS_SYNC_STATUS_CHANGED),
     },
 
     // Codex app-server 当前进程启动冻结的鉴权注入方式(oauth-bearer = 走订阅 / env-key = 走网关 / provider-oauth = proxy 注入供应商 OAuth)。

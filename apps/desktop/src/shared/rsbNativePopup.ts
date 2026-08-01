@@ -5,12 +5,13 @@
  * the exact pre-created WebContents into a WebContentsView; renderer only owns
  * the sidebar tab chrome and reports the slot bounds.
  */
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const RSB_NATIVE_POPUP_CLAIM_CHANNEL = 'rsb-native-popup:claim';
-export const RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL = 'rsb-native-popup:set-bounds';
-export const RSB_NATIVE_POPUP_COMMAND_CHANNEL = 'rsb-native-popup:command';
-export const RSB_NATIVE_POPUP_CLOSE_CHANNEL = 'rsb-native-popup:close';
-export const RSB_NATIVE_POPUP_EVENT_CHANNEL = 'rsb-native-popup:event';
+export const RSB_NATIVE_POPUP_CLAIM_CHANNEL = IPC_CHANNELS.RSB_NATIVE_POPUP.CLAIM;
+export const RSB_NATIVE_POPUP_SET_BOUNDS_CHANNEL = IPC_CHANNELS.RSB_NATIVE_POPUP.SET_BOUNDS;
+export const RSB_NATIVE_POPUP_COMMAND_CHANNEL = IPC_CHANNELS.RSB_NATIVE_POPUP.COMMAND;
+export const RSB_NATIVE_POPUP_CLOSE_CHANNEL = IPC_CHANNELS.RSB_NATIVE_POPUP.CLOSE;
+export const RSB_NATIVE_POPUP_EVENT_CHANNEL = IPC_CHANNELS.RSB_NATIVE_POPUP.EVENT;
 
 export interface RsbNativePopupBounds {
   x: number;

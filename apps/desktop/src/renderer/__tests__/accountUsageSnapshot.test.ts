@@ -203,12 +203,12 @@ describe('mergeCodexAccountUsageSnapshot', () => {
     );
     const hookSource = readFileSync(new URL('../hooks/useAccountUsage.ts', import.meta.url), 'utf8');
 
-    expect(mainSource).toContain("USAGE_CODEX_ACCOUNT_CHANGED = 'usage:codex-account-changed'");
+    expect(mainSource).toContain('USAGE_CODEX_ACCOUNT_CHANGED = IPC_CHANNELS.USAGE.CODEX_ACCOUNT_CHANGED');
     expect(mainSource).toContain('broadcastCodexAccountUsage(payload);');
     expect(mainSource).toContain('isCodexZeroWindowFallback(incoming)');
     expect(mainSource).toContain('isCodexWindowlessFallback(incoming)');
     expect(mainSource).toContain('broadcastCodexAccountUsage(null);');
-    expect(preloadSource).toContain("createIpcFanOut('usage:codex-account-changed')");
+    expect(preloadSource).toContain('createIpcFanOut(IPC_CHANNELS.USAGE.CODEX_ACCOUNT_CHANGED)');
     expect(preloadSource).toContain('onCodexAccountChanged: fanOutMakerUsageCodexAccount');
     expect(hookSource).toContain('api.onCodexAccountChanged');
     expect(hookSource).toContain('options: { clearOnNull?: boolean } = {}');

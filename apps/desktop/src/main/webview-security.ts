@@ -25,6 +25,7 @@
 import path from 'node:path';
 
 import { app, type BrowserWindow, type WebContents } from 'electron';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 import { BROWSER_PARTITION } from '../shared/webviewPartition';
 import { GHOST_PARTITION_PREFIX } from '../shared/ghost';
@@ -161,13 +162,13 @@ export function applyGhostWebviewHardening(
 }
 
 /** Renderer 接收 popup 路由消息的 IPC channel。main → renderer。 */
-export const RSB_BROWSER_POPUP_CHANNEL = 'rsb:browser-popup';
+export const RSB_BROWSER_POPUP_CHANNEL = IPC_CHANNELS.BROWSER.RSB_POPUP;
 /** Renderer 接收"webview 内按了 Cmd/Ctrl+L"的 IPC channel。main → renderer。
  *  对齐 Codex `main-cC-d0ezP.js:48846` 监听 before-input-event 的设计 —— 把
  *  webview guest 内的浏览器级快捷键路由回 host chrome 接管。 */
-export const RSB_BROWSER_FOCUS_URL_BAR_CHANNEL = 'rsb:browser-focus-url-bar';
+export const RSB_BROWSER_FOCUS_URL_BAR_CHANNEL = IPC_CHANNELS.BROWSER.RSB_FOCUS_URL_BAR;
 /** Renderer 接收 webview guest 内浏览器级导航快捷键。main → renderer。 */
-export const RSB_BROWSER_COMMAND_CHANNEL = 'rsb:browser-command';
+export const RSB_BROWSER_COMMAND_CHANNEL = IPC_CHANNELS.BROWSER.RSB_COMMAND;
 
 /** RSB_BROWSER_COMMAND_CHANNEL 的 payload.command 联合。'close-tab' = guest 内
  *  按下 ⌘W / Ctrl+W ('close-tab-or-window'), active 的 BrowserTabBody 关掉自己

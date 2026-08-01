@@ -51,6 +51,7 @@ export const VOICE_INPUT_CHANNELS = {
   OPEN_INPUT_MONITORING_SETTINGS: "voice-input:open-input-monitoring-settings",
   OPEN_MICROPHONE_SETTINGS: "voice-input:open-microphone-settings",
   OPEN_SETTINGS: "voice-input:open-settings",
+  POWER_STATE_CHANGE: "voice-input:power-state-change",
   PREWARM: "voice-input:prewarm",
   REQUEST_INPUT_MONITORING_PERMISSION: "voice-input:request-input-monitoring-permission",
   REQUEST_MICROPHONE_PERMISSION: "voice-input:request-microphone-permission",
@@ -61,6 +62,7 @@ export const VOICE_INPUT_CHANNELS = {
   SHORTCUT_RECOVERY_FAILED: "voice-input:shortcut-recovery-failed",
   START: "voice-input:start",
   STOP: "voice-input:stop",
+  TEST_CONNECTION: "voice-input:test-connection",
 } as const;
 
 export type VOICE_INPUTChannel = typeof VOICE_INPUT_CHANNELS[keyof typeof VOICE_INPUT_CHANNELS];

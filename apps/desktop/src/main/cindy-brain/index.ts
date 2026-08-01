@@ -1141,11 +1141,11 @@ export function getGhostNodeRuntimeBroker(): GhostNodeRuntimeBroker {
 }
 
 /** 意识聊天卡片更新推送通道(main → 全窗口 renderer;ghostCardStore 消费)。 */
-export const GHOST_CARD_UPDATED_CHANNEL = 'ghosts:card-updated';
+export const GHOST_CARD_UPDATED_CHANNEL = IPC_CHANNELS.GHOSTS.CARD_UPDATED;
 
 /** 意识后台活动(会话呼吸)推送通道(main → 全窗口 renderer;
  *  ghostSessionActivityStore 消费,载荷 { sessionId, busy })。 */
-export const GHOST_SESSION_ACTIVITY_CHANNEL = 'ghosts:session-activity';
+export const GHOST_SESSION_ACTIVITY_CHANNEL = IPC_CHANNELS.GHOSTS.SESSION_ACTIVITY;
 
 let sessionActivityTrackerSingleton: GhostSessionActivityTracker | null = null;
 
@@ -1233,17 +1233,17 @@ export function getGhostCardActionDispatcher(): GhostCardActionDispatcher {
 /* ── 订阅槽①(旁听 + 拦截)装配点 ──────────────────────────────────── */
 
 /** 钩子熔断通知通道(main → 全窗口 renderer;toast 提示用)。 */
-export const GHOST_HOOK_FUSED_CHANNEL = 'ghosts:hook-fused';
+export const GHOST_HOOK_FUSED_CHANNEL = IPC_CHANNELS.GHOSTS.HOOK_FUSED;
 /** 用户消息被拦通知通道(main → 全窗口 renderer;气泡原地降级用)。 */
-export const GHOST_MESSAGE_BLOCKED_CHANNEL = 'ghosts:user-message-blocked';
+export const GHOST_MESSAGE_BLOCKED_CHANNEL = IPC_CHANNELS.GHOSTS.MESSAGE_BLOCKED;
 /** 用户消息被意识钩子改写通知通道(main → 全窗口 renderer;气泡静默换文本,v1 无留痕标记)。 */
-export const GHOST_MESSAGE_REWRITTEN_CHANNEL = 'ghosts:user-message-rewritten';
+export const GHOST_MESSAGE_REWRITTEN_CHANNEL = IPC_CHANNELS.GHOSTS.MESSAGE_REWRITTEN;
 /** AI 回复被 will-assistant-message 出口钩子改写通知(main → renderer;气泡静默换文本)。 */
-export const GHOST_ASSISTANT_REWRITTEN_CHANNEL = 'ghosts:assistant-message-rewritten';
+export const GHOST_ASSISTANT_REWRITTEN_CHANNEL = IPC_CHANNELS.GHOSTS.ASSISTANT_REWRITTEN;
 /** 出口钩子后台处理中/完成的轻指示(main → renderer;回复已显示、意识还在跑那段)。
  *  render(自绘卡)不另设通道:卡片经 GHOST_CARD_UPDATED_CHANNEL(callId = 该
  *  assistant 消息 clientId)推达,renderer 见 byCallId 出现该键即判定气泡被自绘替换。 */
-export const GHOST_ASSISTANT_PENDING_CHANNEL = 'ghosts:assistant-message-pending';
+export const GHOST_ASSISTANT_PENDING_CHANNEL = IPC_CHANNELS.GHOSTS.ASSISTANT_PENDING;
 
 let subscriptionGatewaySingleton: GhostSubscriptionGateway | null = null;
 
@@ -1867,7 +1867,7 @@ function getConnectionTokenProvider(): ConnectionTokenProvider {
 }
 
 /** 意识系统提示通道(main → 全窗口 renderer;宿主 Toast 渲染,带意识身份头)。 */
-export const GHOST_NOTIFY_CHANNEL = 'ghosts:notify';
+export const GHOST_NOTIFY_CHANNEL = IPC_CHANNELS.GHOSTS.NOTIFY;
 
 /** 主机代言提示的每意识限速账本(见 broadcastGhostHostNotice)。 */
 const hostNoticeLastAt = new Map<string, number>();
@@ -1937,14 +1937,14 @@ export function getGhostNotifySlot(): GhostNotifySlot {
 let badgeSlotSingleton: GhostBadgeSlot | null = null;
 
 /** 意识未读角标通道(main → 全窗口 renderer;插件入口与插件卡上的绿点)。 */
-export const GHOST_BADGE_CHANNEL = 'ghosts:badge';
+export const GHOST_BADGE_CHANNEL = IPC_CHANNELS.GHOSTS.BADGE;
 
 /**
  * 未读全量快照通道(main → 全窗口 renderer)。逐条的 GHOST_BADGE_CHANNEL 只表达
  * 增量,**换账号**必须整表替换:未读账本按 owner 分文件(ownerScopedUserDataPath),
  * 切到账号 B 后 renderer 手上还攥着账号 A 的点和摘要,不推一次快照就是跨账号残留。
  */
-export const GHOST_UNREAD_SNAPSHOT_CHANNEL = 'ghosts:unread-snapshot';
+export const GHOST_UNREAD_SNAPSHOT_CHANNEL = IPC_CHANNELS.GHOSTS.UNREAD_SNAPSHOT;
 
 /**
  * 未读推送的收口:**只发给可信的 Cindy 自有顶层页面**。
@@ -2116,7 +2116,7 @@ function resumeGhostUnreadProjection(ghostId: string): void {
 let confirmSlotSingleton: GhostConfirmSlot | null = null;
 
 /** 意识确认弹窗通道(main → **单个**窗口;renderer 用主机同款 ConfirmDialog 渲染)。 */
-export const GHOST_CONFIRM_CHANNEL = 'ghosts:confirm-request';
+export const GHOST_CONFIRM_CHANNEL = IPC_CHANNELS.GHOSTS.CONFIRM_REQUEST;
 
 /**
  * 确认弹窗槽单例(confirm):资格审/净化/限速/单飞在 GhostConfirmSlot,往返与
@@ -2278,7 +2278,7 @@ export function setGhostWorkspaceSessionService(service: WorkspaceSessionService
 let previewSlotSingleton: GhostPreviewSlot | null = null;
 
 /** 插件预览开页通道(main → 全窗口 renderer;右侧栏开 web-browser 标签)。 */
-export const GHOST_PREVIEW_OPEN_CHANNEL = 'ghosts:preview-open';
+export const GHOST_PREVIEW_OPEN_CHANNEL = IPC_CHANNELS.GHOSTS.PREVIEW_OPEN;
 
 /**
  * 面板预览槽单例(preview):URL 白名单守门/限速在 GhostPreviewSlot,这里只
@@ -2305,7 +2305,7 @@ export function getGhostPreviewSlot(): GhostPreviewSlot {
 let scheduleSlotSingleton: GhostScheduleSlot | null = null;
 
 /** 插件自动化草稿通道(main → **单个**窗口;renderer 开自动化创建面板并预填)。 */
-export const GHOST_SCHEDULE_DRAFT_CHANNEL = 'ghosts:schedule-draft';
+export const GHOST_SCHEDULE_DRAFT_CHANNEL = IPC_CHANNELS.GHOSTS.SCHEDULE_DRAFT;
 
 /**
  * 自动化草稿槽单例(agent 槽的 schedule 加档):资格审/净化/频率钳制/限速在
@@ -5134,7 +5134,7 @@ export function registerGhostIpc(): void {
 }
 
 /** 面板「点图看大图」推送通道(main → 宿主窗口 renderer;GhostMediaLightboxHost 消费)。 */
-export const GHOST_PREVIEW_MEDIA_CHANNEL = 'ghosts:preview-media';
+export const GHOST_PREVIEW_MEDIA_CHANNEL = IPC_CHANNELS.GHOSTS.PREVIEW_MEDIA;
 
 let previewGateSingleton: GhostPreviewGate | null = null;
 

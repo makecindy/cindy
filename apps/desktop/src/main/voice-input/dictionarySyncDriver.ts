@@ -16,6 +16,7 @@
  */
 
 import { MAX_FRAME_BYTES } from '@cindy/device-link';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import { buildStateVersionVector, type VoiceDictionarySyncState } from '@cindy/voice-input-core';
 
 import { createLogger } from '../logger.js';
@@ -25,7 +26,7 @@ import { voiceInputDataStore } from './VoiceInputDataStore.js';
 const log = createLogger('voice-input:dictionary-sync-driver');
 
 /** push 帧 channel。payload 形状见 {@link DictionarySyncFramePayload}。 */
-export const DL_VOICE_DICTIONARY_SYNC_CHANNEL = 'device-link:voice:dictionary:sync-state';
+export const DL_VOICE_DICTIONARY_SYNC_CHANNEL = IPC_CHANNELS.DEVICE_LINK.VOICE_DICTIONARY_SYNC_STATE;
 
 /** 本地变更后的去抖窗口:连续学习/编辑合并成一次广播。 */
 const BROADCAST_DEBOUNCE_MS = 8_000;

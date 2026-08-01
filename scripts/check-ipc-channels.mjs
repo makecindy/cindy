@@ -8,7 +8,7 @@
  */
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 import ts from 'typescript';
 
 const REPO_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -50,14 +50,65 @@ function isLowLevelIpcCall(call, sourceFile) {
   return method === 'send' && /(^|\.)webContents$|^event\.sender$|^sender$/.test(receiver);
 }
 
+function isIpcWrapperCall(call, sourceFile) {
+  const expression = call.expression;
+  const text = expression.getText(sourceFile);
+  return [
+    'createIpcFanOut',
+    'broadcastToRenderers',
+    'tapWindowBroadcast',
+  ].includes(text);
+}
+
 function hasAllowComment(text, sourceFile, node) {
   const { line } = sourceFile.getLineAndCharacterOfPosition(node.getStart(sourceFile));
   const lines = text.split(/\r?\n/);
   return [line, line - 1].some((index) => index >= 0 && lines[index]?.includes(ALLOW_COMMENT));
 }
 
-function checkFile(file) {
-  const text = fs.readFileSync(file, 'utf8');
+function isChannelLikeName(name) {
+  return /(^|_)(CHANNEL|CHANNELS)$/.test(name) || /_CHANNEL(S)?_/.test(name);
+}
+
+function unwrapExpression(node) {
+  let current = node;
+  while (
+    ts.isAsExpression(current)
+    || ts.isSatisfiesExpression(current)
+    || ts.isParenthesizedExpression(current)
+    || ts.isTypeAssertionExpression(current)
+  ) {
+    current = current.expression;
+  }
+  return current;
+}
+
+export function collectStringLiterals(node, out = []) {
+  const expression = unwrapExpression(node);
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    out.push(expression);
+    return out;
+  }
+  if (ts.isObjectLiteralExpression(expression) || ts.isArrayLiteralExpression(expression)) {
+    ts.forEachChild(expression, (child) => collectNestedStringLiterals(child, out));
+  }
+  return out;
+}
+
+function collectNestedStringLiterals(node, out) {
+  const expression = unwrapExpression(node);
+  if (ts.isStringLiteral(expression) || ts.isNoSubstitutionTemplateLiteral(expression)) {
+    out.push(expression);
+    return;
+  }
+  ts.forEachChild(expression, (child) => collectNestedStringLiterals(child, out));
+}
+
+function isIpcChannelLiteral(value) {
+  return value.includes(':') || value.startsWith('__cindy/') || value === 'window-hidden-change';
+}
+
+export function checkSourceText(file, text) {
   const sourceFile = ts.createSourceFile(
     file,
     text,
@@ -68,7 +119,7 @@ function checkFile(file) {
   const errors = [];
 
   function visit(node) {
-    if (ts.isCallExpression(node) && isLowLevelIpcCall(node, sourceFile)) {
+    if (ts.isCallExpression(node) && (isLowLevelIpcCall(node, sourceFile) || isIpcWrapperCall(node, sourceFile))) {
       const firstArg = node.arguments[0];
       if (
         firstArg &&
@@ -84,11 +135,28 @@ function checkFile(file) {
         });
       }
     }
+    if (ts.isVariableDeclaration(node) && ts.isIdentifier(node.name) && isChannelLikeName(node.name.text) && node.initializer) {
+      for (const literal of collectStringLiterals(node.initializer)) {
+        if (!isIpcChannelLiteral(literal.text)) continue;
+        if (hasAllowComment(text, sourceFile, literal)) continue;
+        const { line, character } = sourceFile.getLineAndCharacterOfPosition(literal.getStart(sourceFile));
+        errors.push({
+          line: line + 1,
+          column: character + 1,
+          call: `const ${node.name.text}`,
+          channel: literal.text,
+        });
+      }
+    }
     ts.forEachChild(node, visit);
   }
 
   visit(sourceFile);
   return errors;
+}
+
+function checkFile(file) {
+  return checkSourceText(file, fs.readFileSync(file, 'utf8'));
 }
 
 function main() {
@@ -113,4 +181,5 @@ function main() {
   console.log('ipc channel guard passed');
 }
 
-main();
+const isDirectRun = process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href;
+if (isDirectRun) main();

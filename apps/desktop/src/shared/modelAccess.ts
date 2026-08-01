@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 /**
  * modelAccess.ts — 网关凭据自动下发(model-access-server)的 main / renderer 共享类型。
  *
@@ -80,7 +82,7 @@ export interface ModelAccessCreditUsage {
 }
 
 /** main → renderer 的状态推送通道。 */
-export const MODEL_ACCESS_STATUS_CHANNEL = 'model-access:status-change';
+export const MODEL_ACCESS_STATUS_CHANNEL = IPC_CHANNELS.MODEL_ACCESS.STATUS_CHANGE;
 
 /**
  * 服务端下发的网关聊天模型条目(model-access-server GET /models):

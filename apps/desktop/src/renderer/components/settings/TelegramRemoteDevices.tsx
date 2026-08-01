@@ -22,11 +22,12 @@ import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
 import { useSelectableDevices } from '@/hooks/useControllableDevices';
+import { DEVICE_LINK_CHANNELS } from '@cindy/cindy-ipc/device-link';
 
 const log = createLogger('TelegramRemoteDevices');
 
-const STATUS_CHANNEL = 'device-link:telegram:status';
-const SET_ONLINE_CHANNEL = 'device-link:telegram:set-online';
+const STATUS_CHANNEL = DEVICE_LINK_CHANNELS.TELEGRAM_STATUS;
+const SET_ONLINE_CHANNEL = DEVICE_LINK_CHANNELS.TELEGRAM_SET_ONLINE;
 
 /** 与被控端 TelegramRemoteStatus 同形(无凭证 / 无 owner id / 无 bot 身份)。 */
 interface RemoteStatus {

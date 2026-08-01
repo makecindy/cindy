@@ -10,6 +10,7 @@ export const TELEGRAM_BOT_CHANNELS = {
   SET_GROUP_ACTIVATION: "telegramBot:set-group-activation",
   SET_ONLINE: "telegramBot:set-online",
   SET_PERSONA: "telegramBot:set-persona",
+  STATUS_CHANGE: "telegramBot:status-change",
 } as const;
 
 export type TELEGRAM_BOTChannel = typeof TELEGRAM_BOT_CHANNELS[keyof typeof TELEGRAM_BOT_CHANNELS];

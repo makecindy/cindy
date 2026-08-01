@@ -5,9 +5,10 @@
  * bounds still belong in the shared protocol layer so another client cannot
  * accidentally implement a different frame shape.
  */
+import { IPC_CHANNELS } from "@cindy/cindy-ipc";
 
 export const CONTACTS_SYNC_WIRE_VERSION = 1;
-export const DL_CONTACTS_SYNC_CHANNEL = "device-link:contacts:sync:v1";
+export const DL_CONTACTS_SYNC_CHANNEL = IPC_CHANNELS.DEVICE_LINK.CONTACTS_SYNC;
 
 export const CONTACTS_SYNC_CHUNK_BYTES = 256 * 1024;
 export const CONTACTS_SYNC_MAX_CHUNKS = 128;

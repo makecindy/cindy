@@ -103,7 +103,7 @@ describe('desktop auth session-expiry detection', () => {
     const body = authSource.slice(start, end);
 
     expect(body).toContain("reason: SessionExpiredReason = 'unknown'");
-    expect(body).toContain("broadcastToRenderers('auth:session-expired', { message: '', reason });");
+    expect(body).toContain("broadcastToRenderers(IPC_CHANNELS.AUTH.SESSION_EXPIRED, { message: '', reason });");
   });
 
   it('invalidateSession 只显式归类 account-unavailable,其余走通用文案', () => {

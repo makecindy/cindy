@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import { BRAND_NAME } from '@cindy/maker-shared/branding';
 
 export type AgentIslandSessionPhase = 'running' | 'needs-interaction' | 'completed' | 'error';
@@ -732,12 +733,12 @@ export function computeAgentIslandContentHeight(input: {
 }
 
 /** main → renderer:per-session 活动快照(侧栏卡片用)。 */
-export const AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL = 'agent-island:session-snapshots';
-export const AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL = 'agent-island:set-visible-session';
-export const AGENT_ISLAND_SET_ENABLED_CHANNEL = 'agent-island:set-enabled';
-export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = 'agent-island:set-sound-settings';
-export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = 'agent-island:set-mascot-skin';
-export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = 'agent-island:set-display-target';
-export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = 'agent-island:get-display-options';
-export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = 'agent-island:preview-sound';
-export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = 'agent-island:select-sound-file';
+export const AGENT_ISLAND_SESSION_SNAPSHOTS_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SESSION_SNAPSHOTS;
+export const AGENT_ISLAND_SET_VISIBLE_SESSION_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SET_VISIBLE_SESSION;
+export const AGENT_ISLAND_SET_ENABLED_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SET_ENABLED;
+export const AGENT_ISLAND_SET_SOUND_SETTINGS_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SET_SOUND_SETTINGS;
+export const AGENT_ISLAND_SET_MASCOT_SKIN_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SET_MASCOT_SKIN;
+export const AGENT_ISLAND_SET_DISPLAY_TARGET_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SET_DISPLAY_TARGET;
+export const AGENT_ISLAND_GET_DISPLAY_OPTIONS_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.GET_DISPLAY_OPTIONS;
+export const AGENT_ISLAND_PREVIEW_SOUND_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.PREVIEW_SOUND;
+export const AGENT_ISLAND_SELECT_SOUND_FILE_CHANNEL = IPC_CHANNELS.AGENT_ISLAND.SELECT_SOUND_FILE;

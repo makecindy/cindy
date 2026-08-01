@@ -10,6 +10,7 @@ export const PLUGIN_MARKET_CHANNELS = {
   REFRESH_SOURCE: "plugin-market:refresh-source",
   GIT_PREFLIGHT: "plugin-market:git-preflight",
   CONSUME_REMOVAL_NOTICE: "plugin-market:consume-removal-notice",
+  REMOVAL_NOTICE_AVAILABLE: "plugin-market:removal-notice-available",
 } as const;
 
 export type PLUGIN_MARKETChannel = typeof PLUGIN_MARKET_CHANNELS[keyof typeof PLUGIN_MARKET_CHANNELS];

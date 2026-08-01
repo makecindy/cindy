@@ -13,6 +13,8 @@ export const AUTH_CHANNELS = {
   INITIALIZE: "auth:initialize",
   LOGOUT: "auth:logout",
   REFRESH: "auth:refresh",
+  SESSION_EXPIRED: "auth:session-expired",
+  STATE_CHANGE: "auth:state-change",
 } as const;
 
 export type AUTHChannel = typeof AUTH_CHANNELS[keyof typeof AUTH_CHANNELS];

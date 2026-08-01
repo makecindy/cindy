@@ -256,12 +256,12 @@ export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void
 
 /** set-* channel → 持久化的 session 字段名(args[0]=sessionId, args[1]=value)。 */
 const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 'fastMode' | 'planModeEnabled' | 'extraDirs'> = {
-  'maker:set-model': 'model',
-  'maker:set-effort': 'effort',
-  'maker:set-permission-mode': 'permissionMode',
-  'maker:set-fast-mode': 'fastMode',
-  'maker:set-plan-mode': 'planModeEnabled',
-  'maker:set-extra-dirs': 'extraDirs',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_MODEL]: 'model',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_EFFORT]: 'effort',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_PERMISSION_MODE]: 'permissionMode',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_FAST_MODE]: 'fastMode',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_PLAN_MODE]: 'planModeEnabled',
+  [IPC_CHANNELS.MAKER_INVOKE.SET_EXTRA_DIRS]: 'extraDirs',
 };
 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {

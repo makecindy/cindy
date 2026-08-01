@@ -41,6 +41,7 @@ import {
   type ProviderConfig,
   type SocialProvider,
 } from '@cindy/auth-client';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import { closeDb as closeLocalDb } from './localDb';
 import { readReloginFlag, clearReloginFlag } from './updateService';
 import * as canaryFlagStore from './canaryFlagStore';
@@ -1314,11 +1315,11 @@ function snapshotLoggedOutAuthState(): AuthState {
 }
 
 function notifyRenderer(): void {
-  broadcastToRenderers('auth:state-change', snapshotAuthState());
+  broadcastToRenderers(IPC_CHANNELS.AUTH.STATE_CHANGE, snapshotAuthState());
 }
 
 function notifyRendererAuthBoundaryPending(): void {
-  broadcastToRenderers('auth:state-change', snapshotLoggedOutAuthState());
+  broadcastToRenderers(IPC_CHANNELS.AUTH.STATE_CHANGE, snapshotLoggedOutAuthState());
 }
 
 /**
@@ -1329,7 +1330,7 @@ function notifyRendererAuthBoundaryPending(): void {
  * expired / account unavailable" copy without leaking internals.
  */
 function notifySessionExpired(reason: SessionExpiredReason = 'unknown'): void {
-  broadcastToRenderers('auth:session-expired', { message: '', reason });
+  broadcastToRenderers(IPC_CHANNELS.AUTH.SESSION_EXPIRED, { message: '', reason });
 }
 
 // ── In-process auth state subscription ─────────────────────────────────────

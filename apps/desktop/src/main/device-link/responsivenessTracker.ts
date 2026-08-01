@@ -25,6 +25,7 @@ import {
   DL_UNSUBSCRIBE_CHANNEL,
   type DeviceLinkErrorCode,
 } from '@cindy/device-link';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 /**
  * DEVICE_UNRESPONSIVE 尚未收编进 @cindy/device-link 的 DeviceLinkErrorCode 联合
@@ -46,7 +47,7 @@ export function createDeviceUnresponsiveError(deviceId: string): DeviceLinkError
  * 于 runInvoke 之前特判应答,IPC/DB 卡死时它们照常回包,不能作恢复证据)。
  * sessions:list limit=1 是最便宜的真实 DB 读;与 mobile 的探测通道一致。
  */
-export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = 'local-db:sessions:list';
+export const DEVICE_RESPONSIVENESS_PROBE_CHANNEL = IPC_CHANNELS.LOCAL_DB.SESSIONS_LIST;
 
 export function buildDeviceResponsivenessProbeArgs(): unknown[] {
   return [1, 'all', { includePinned: true }];

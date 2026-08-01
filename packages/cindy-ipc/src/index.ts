@@ -1,4 +1,5 @@
 import { MAKER_INVOKE, MAKER_SEND, MAKER_PUSH, TERMINAL_INVOKE, TERMINAL_PUSH } from './maker';
+import { AGENT_ISLAND_CHANNELS } from './agent-island';
 import { ANALYTICS_CHANNELS } from './analytics';
 import { APP_CHANNELS } from './app';
 import { APP_LOCALE_CHANNELS } from './app-locale';
@@ -9,6 +10,7 @@ import { APPEARANCE_SETTINGS_CHANNELS } from './appearance-settings';
 import { AUTH_CHANNELS } from './auth';
 import { BINARY_DOWNLOAD_PROGRESS_CHANNELS } from './binary-download-progress';
 import { BINDING_CHANNELS } from './binding';
+import { BROWSER_CHANNELS } from './browser';
 import { BROWSER_BACKEND_CHANNELS } from './browser-backend';
 import { BROWSER_COMMENT_CHANNELS } from './browser-comment';
 import { BUILTIN_API_KEY_HAS_CHANNELS } from './builtin-api-key-has';
@@ -63,11 +65,14 @@ import { PROFILE_CHANNELS } from './profile';
 import { READ_FILE_BYTES_CHANNELS } from './read-file-bytes';
 import { READ_FILE_FOR_ATTACHMENT_CHANNELS } from './read-file-for-attachment';
 import { RELEASE_NOTES_CHANNELS } from './release-notes';
+import { REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS } from './remote-precreated-worktree-ledger';
 import { RENDERER_CHANNELS } from './renderer';
 import { RSB_BROWSER_BRIDGE_CHANNELS } from './rsb-browser-bridge';
+import { RSB_NATIVE_POPUP_CHANNELS } from './rsb-native-popup';
 import { SAFE_STORAGE_READ_CHANNELS } from './safe-storage-read';
 import { SAFE_STORAGE_REMOVE_CHANNELS } from './safe-storage-remove';
 import { SAFE_STORAGE_STORE_CHANNELS } from './safe-storage-store';
+import { SELECTION_CONTEXT_MENU_CHANNELS } from './selection-context-menu';
 import { SHELL_CHANNELS } from './shell';
 import { SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS } from './show-open-directory-dialog';
 import { SIDEBAR_SETTINGS_CHANNELS } from './sidebar-settings';
@@ -92,16 +97,19 @@ import { VOICE_INPUT_CHANNELS } from './voice-input';
 import { WECOM_BOT_CHANNELS } from './wecombot';
 import { WECOM_GROUP_NOTIFICATION_CHANNELS } from './wecom-group-notification';
 import { WECHAT_BOT_CHANNELS } from './wechatbot';
+import { WINDOW_BEHAVIOR_CHANNELS } from './window-behavior';
 import { WINDOW_CLOSE_CHANNELS } from './window-close';
 import { WINDOW_CLOSE_SELF_CHANNELS } from './window-close-self';
 import { WINDOW_DRAG_MOVE_START_CHANNELS } from './window-drag-move-start';
 import { WINDOW_DRAG_MOVE_STOP_CHANNELS } from './window-drag-move-stop';
+import { WINDOW_HIDDEN_CHANNELS } from './window-hidden';
 import { WINDOW_MAXIMIZE_CHANNELS } from './window-maximize';
 import { WINDOW_MINIMIZE_CHANNELS } from './window-minimize';
 import { WORKSPACE_CHANNELS } from './workspace';
 import { WORKTREE_CHANNELS } from './worktree';
 
 export { MAKER_INVOKE, MAKER_SEND, MAKER_PUSH, TERMINAL_INVOKE, TERMINAL_PUSH } from './maker';
+export { AGENT_ISLAND_CHANNELS } from './agent-island';
 export { ANALYTICS_CHANNELS } from './analytics';
 export { APP_CHANNELS } from './app';
 export { APP_LOCALE_CHANNELS } from './app-locale';
@@ -112,6 +120,7 @@ export { APPEARANCE_SETTINGS_CHANNELS } from './appearance-settings';
 export { AUTH_CHANNELS } from './auth';
 export { BINARY_DOWNLOAD_PROGRESS_CHANNELS } from './binary-download-progress';
 export { BINDING_CHANNELS } from './binding';
+export { BROWSER_CHANNELS } from './browser';
 export { BROWSER_BACKEND_CHANNELS } from './browser-backend';
 export { BROWSER_COMMENT_CHANNELS } from './browser-comment';
 export { BUILTIN_API_KEY_HAS_CHANNELS } from './builtin-api-key-has';
@@ -166,11 +175,14 @@ export { PROFILE_CHANNELS } from './profile';
 export { READ_FILE_BYTES_CHANNELS } from './read-file-bytes';
 export { READ_FILE_FOR_ATTACHMENT_CHANNELS } from './read-file-for-attachment';
 export { RELEASE_NOTES_CHANNELS } from './release-notes';
+export { REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS } from './remote-precreated-worktree-ledger';
 export { RENDERER_CHANNELS } from './renderer';
 export { RSB_BROWSER_BRIDGE_CHANNELS } from './rsb-browser-bridge';
+export { RSB_NATIVE_POPUP_CHANNELS } from './rsb-native-popup';
 export { SAFE_STORAGE_READ_CHANNELS } from './safe-storage-read';
 export { SAFE_STORAGE_REMOVE_CHANNELS } from './safe-storage-remove';
 export { SAFE_STORAGE_STORE_CHANNELS } from './safe-storage-store';
+export { SELECTION_CONTEXT_MENU_CHANNELS } from './selection-context-menu';
 export { SHELL_CHANNELS } from './shell';
 export { SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS } from './show-open-directory-dialog';
 export { SIDEBAR_SETTINGS_CHANNELS } from './sidebar-settings';
@@ -195,10 +207,12 @@ export { VOICE_INPUT_CHANNELS } from './voice-input';
 export { WECOM_BOT_CHANNELS } from './wecombot';
 export { WECOM_GROUP_NOTIFICATION_CHANNELS } from './wecom-group-notification';
 export { WECHAT_BOT_CHANNELS } from './wechatbot';
+export { WINDOW_BEHAVIOR_CHANNELS } from './window-behavior';
 export { WINDOW_CLOSE_CHANNELS } from './window-close';
 export { WINDOW_CLOSE_SELF_CHANNELS } from './window-close-self';
 export { WINDOW_DRAG_MOVE_START_CHANNELS } from './window-drag-move-start';
 export { WINDOW_DRAG_MOVE_STOP_CHANNELS } from './window-drag-move-stop';
+export { WINDOW_HIDDEN_CHANNELS } from './window-hidden';
 export { WINDOW_MAXIMIZE_CHANNELS } from './window-maximize';
 export { WINDOW_MINIMIZE_CHANNELS } from './window-minimize';
 export { WORKSPACE_CHANNELS } from './workspace';
@@ -210,6 +224,7 @@ export const IPC_CHANNELS = {
   MAKER_PUSH,
   TERMINAL_INVOKE,
   TERMINAL_PUSH,
+  AGENT_ISLAND: AGENT_ISLAND_CHANNELS,
   ANALYTICS: ANALYTICS_CHANNELS,
   APP: APP_CHANNELS,
   APP_LOCALE: APP_LOCALE_CHANNELS,
@@ -220,6 +235,7 @@ export const IPC_CHANNELS = {
   AUTH: AUTH_CHANNELS,
   BINARY_DOWNLOAD_PROGRESS: BINARY_DOWNLOAD_PROGRESS_CHANNELS,
   BINDING: BINDING_CHANNELS,
+  BROWSER: BROWSER_CHANNELS,
   BROWSER_BACKEND: BROWSER_BACKEND_CHANNELS,
   BROWSER_COMMENT: BROWSER_COMMENT_CHANNELS,
   BUILTIN_API_KEY_HAS: BUILTIN_API_KEY_HAS_CHANNELS,
@@ -274,11 +290,14 @@ export const IPC_CHANNELS = {
   READ_FILE_BYTES: READ_FILE_BYTES_CHANNELS,
   READ_FILE_FOR_ATTACHMENT: READ_FILE_FOR_ATTACHMENT_CHANNELS,
   RELEASE_NOTES: RELEASE_NOTES_CHANNELS,
+  REMOTE_PRECREATED_WORKTREE_LEDGER: REMOTE_PRECREATED_WORKTREE_LEDGER_CHANNELS,
   RENDERER: RENDERER_CHANNELS,
   RSB_BROWSER_BRIDGE: RSB_BROWSER_BRIDGE_CHANNELS,
+  RSB_NATIVE_POPUP: RSB_NATIVE_POPUP_CHANNELS,
   SAFE_STORAGE_READ: SAFE_STORAGE_READ_CHANNELS,
   SAFE_STORAGE_REMOVE: SAFE_STORAGE_REMOVE_CHANNELS,
   SAFE_STORAGE_STORE: SAFE_STORAGE_STORE_CHANNELS,
+  SELECTION_CONTEXT_MENU: SELECTION_CONTEXT_MENU_CHANNELS,
   SHELL: SHELL_CHANNELS,
   SHOW_OPEN_DIRECTORY_DIALOG: SHOW_OPEN_DIRECTORY_DIALOG_CHANNELS,
   SIDEBAR_SETTINGS: SIDEBAR_SETTINGS_CHANNELS,
@@ -303,10 +322,12 @@ export const IPC_CHANNELS = {
   WECOM_BOT: WECOM_BOT_CHANNELS,
   WECOM_GROUP_NOTIFICATION: WECOM_GROUP_NOTIFICATION_CHANNELS,
   WECHAT_BOT: WECHAT_BOT_CHANNELS,
+  WINDOW_BEHAVIOR: WINDOW_BEHAVIOR_CHANNELS,
   WINDOW_CLOSE: WINDOW_CLOSE_CHANNELS,
   WINDOW_CLOSE_SELF: WINDOW_CLOSE_SELF_CHANNELS,
   WINDOW_DRAG_MOVE_START: WINDOW_DRAG_MOVE_START_CHANNELS,
   WINDOW_DRAG_MOVE_STOP: WINDOW_DRAG_MOVE_STOP_CHANNELS,
+  WINDOW_HIDDEN: WINDOW_HIDDEN_CHANNELS,
   WINDOW_MAXIMIZE: WINDOW_MAXIMIZE_CHANNELS,
   WINDOW_MINIMIZE: WINDOW_MINIMIZE_CHANNELS,
   WORKSPACE: WORKSPACE_CHANNELS,

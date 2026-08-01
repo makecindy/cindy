@@ -48,7 +48,7 @@ export const USAGE_SESSION_TOKENS_CHANGED = IPC_CHANNELS.USAGE.SESSION_TOKENS_CH
  * 这个 channel 当前**只**为以后 history 列表 / 未打开 session 的 chip 等场景预留,
  * 本次 renderer 暂不订阅 —— 但落库本身仍会触发广播, 接入零成本。
  */
-export const USAGE_SESSION_CONTEXT_CHANGED = 'usage:session-context-changed';
+export const USAGE_SESSION_CONTEXT_CHANGED = IPC_CHANNELS.USAGE.SESSION_CONTEXT_CHANGED;
 
 export interface SessionSpendPayload {
   sessionId: string;

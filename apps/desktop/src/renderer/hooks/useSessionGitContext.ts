@@ -33,6 +33,7 @@ import type {
 import { useWorktreeForSession } from '@/contexts/WorktreeContext';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import { createLogger } from '@/lib/logger';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
 const log = createLogger('useSessionGitContext');
 
@@ -53,9 +54,9 @@ const STATUS_REFRESH_INTERVAL_MS = 90_000;
  */
 const DIR_RERESOLVE_INTERVAL_MS = 60_000;
 
-const GET_FOR_SESSION_CHANNEL = 'git-context:get-for-session';
-const PR_REFS_LIST_CHANNEL = 'git-context:pr-refs:list';
-const PR_STATUS_CHANNEL = 'git-context:pr-status';
+const GET_FOR_SESSION_CHANNEL = IPC_CHANNELS.GIT_CONTEXT.GET_FOR_SESSION;
+const PR_REFS_LIST_CHANNEL = IPC_CHANNELS.GIT_CONTEXT.PR_REFS_LIST;
+const PR_STATUS_CHANNEL = IPC_CHANNELS.GIT_CONTEXT.PR_STATUS;
 
 async function invokeRemoteGitContext<T>(
   deviceId: string,

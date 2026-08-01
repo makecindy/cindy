@@ -157,17 +157,17 @@ export function isCcMgrUpgradeInFlight(sessionId: string | null | undefined): bo
 }
 
 export const REMOTE_SSH_PUSH = {
-  STATUS_CHANGED: 'maker:remote-ssh:status-changed',
-  INSTALL_PROGRESS: 'maker:remote-ssh:install-progress',
+  STATUS_CHANGED: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_STATUS_CHANGED,
+  INSTALL_PROGRESS: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_INSTALL_PROGRESS,
   // Phase D — maker:send 触发的静默 install 状态推送 (粗粒度: started/progress/done/failed)。
   // 跟 INSTALL_PROGRESS 解耦: 后者是逐行 log (RemoteHostDetail 消费),
   // 这条是 toast 状态机用的高层 phase, 避免 toast 跟每条 log 同频更新刷屏。
-  SILENT_INSTALL_STATUS: 'maker:remote-ssh:silent-install-status',
+  SILENT_INSTALL_STATUS: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_SILENT_INSTALL_STATUS,
   // cc-mgr 版本管理: silent install pipeline 探到远端 daemon 版本 != desktop
   // 手里的 bundle 版本, 且 daemon 上有 alive session 时, 不强升, push 这条让
   // 该 host 上每个 cc remote ChatView 顶部显示一条 UpgradeBanner 提示用户主动升。
   // payload.available=null 表示 pending 被清空 (升级完成 / 显式 dismiss), banner 自己消失。
-  CC_MGR_UPGRADE_AVAILABLE: 'maker:remote-ssh:cc-mgr-upgrade-available',
+  CC_MGR_UPGRADE_AVAILABLE: IPC_CHANNELS.MAKER_EXTRA.REMOTE_SSH_CC_MGR_UPGRADE_AVAILABLE,
 } as const;
 
 /** silent-install push payload — renderer-side 状态机消费这条切 toast 文案。 */

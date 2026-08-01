@@ -1,3 +1,4 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 import { PROTOCOL_VERSION, type Envelope } from './protocol.js';
 
 /**
@@ -18,7 +19,7 @@ export const DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT = 'reliable-transport-v1'
 export const DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE = 'transport-timeout-close-v1';
 
 /** transport ACK 使用普通 push 承载，且 ACK 本身永不再包 transport。 */
-export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = '__cindy/device-link/transport-ack';
+export const DEVICE_LINK_TRANSPORT_ACK_CHANNEL = IPC_CHANNELS.DEVICE_LINK.TRANSPORT_ACK;
 
 /** 分片目标大小；给 JSON envelope 的路由头和 wrapper 留出足够余量。 */
 export const MAX_TRANSPORT_CHUNK_BYTES = 128 * 1024;

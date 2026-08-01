@@ -1,3 +1,5 @@
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
+
 /**
  * 会话 attention(未读)跨进程契约的单一来源。
  *
@@ -9,7 +11,7 @@
  * 回声做幂等 no-op)。发送方 appBadgeService、订阅方 preload fan-out、
  * 消费方 renderer store 三端共用本常量。
  */
-export const SESSION_ATTENTION_CLEARED_CHANNEL = 'notification:session-attention-cleared';
+export const SESSION_ATTENTION_CLEARED_CHANNEL = IPC_CHANNELS.NOTIFICATION.SESSION_ATTENTION_CLEARED;
 
 /**
  * 清除会话 attention 的意图,随 IPC / 广播全链路透传:

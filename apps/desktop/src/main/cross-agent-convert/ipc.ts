@@ -22,7 +22,7 @@ const log = createLogger('cross-agent-convert:ipc');
 export const CROSS_AGENT_CHANNELS = {
   DETECT: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_DETECT,
   CONVERT: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_CONVERT,
-  STEP: 'maker:cross-agent:step',
+  STEP: IPC_CHANNELS.MAKER_EXTRA.CROSS_AGENT_STEP,
 } as const;
 
 function broadcastStep(ev: MigrationStepEvent): void {

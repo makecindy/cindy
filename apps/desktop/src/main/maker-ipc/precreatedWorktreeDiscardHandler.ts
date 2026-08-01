@@ -9,8 +9,9 @@
 import type { DiscardPrecreatedWorktreeResult } from '../worktree/WorktreeManager.js';
 import { requireObject, requireString, throwIpcError } from '../utils/ipcValidate.js';
 import type { IpcHandlerRegistry } from './ipcHandlerRegistry.js';
+import { IPC_CHANNELS } from '@cindy/cindy-ipc';
 
-export const WORKTREE_DISCARD_PRECREATED_CHANNEL = 'worktree:discard-precreated';
+export const WORKTREE_DISCARD_PRECREATED_CHANNEL = IPC_CHANNELS.WORKTREE.DISCARD_PRECREATED;
 
 const MAX_SESSION_ID_LENGTH = 256;
 const MAX_EXPECTED_PATH_LENGTH = 4_096;
