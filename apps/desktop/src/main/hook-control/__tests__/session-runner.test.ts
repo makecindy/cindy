@@ -68,6 +68,9 @@ const h = vi.hoisted(() => {
     headlessDuringSend: [] as boolean[],
     headlessAfterAccepted: [] as boolean[],
     installDesktopInteractionListener: vi.fn(),
+    withRehydrateCloseSuppressed: vi.fn(async (_sessionId: string, fn: () => Promise<unknown>) =>
+      fn(),
+    ),
     /** mocked resolveHookSessionConfig 的返回值(测试内可改写)。 */
     resolvedConfig: {
       agentKind: 'claude-code' as const,
@@ -235,6 +238,7 @@ const fakeMaker = {
     permissionMode: undefined as 'ask' | 'bypassPermissions' | undefined,
   })),
   getSession: vi.fn(),
+  closeSession: vi.fn(async () => undefined),
   getCapabilities: vi.fn(() => ({
     availableModels: [],
     permissionModes: [{ id: 'ask' }, { id: 'bypassPermissions' }],
@@ -247,6 +251,7 @@ const fakeMaker = {
 
 vi.mock('../../maker-host/index.js', () => ({
   getMaker: () => fakeMaker,
+  withRehydrateCloseSuppressed: h.withRehydrateCloseSuppressed,
 }));
 
 import { createMakerHookSessionRunner, extractToolResultImageUrls } from '../session-runner.js';
@@ -1178,6 +1183,56 @@ describe('进度快照(turn.progress 链路)', () => {
 
     expect(outcome).toMatchObject({ status: 'error', errorMessage: 'send failed' });
     expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+  });
+
+  it('Telegram 群复用会话权限恢复失败时重试，避免 live 状态与持久配置漂移', async () => {
+    const session = makeFakeSession('sess-old');
+    session.setPermissionMode
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('restore transport failed'))
+      .mockResolvedValueOnce(undefined);
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(session.setPermissionMode.mock.calls).toEqual([
+      ['ask'],
+      ['bypassPermissions'],
+      ['bypassPermissions'],
+    ]);
+    expect(fakeMaker.closeSession).not.toHaveBeenCalled();
+  });
+
+  it('Telegram 群复用会话权限恢复连续失败时失效 live handle', async () => {
+    const session = makeFakeSession('sess-old');
+    session.setPermissionMode
+      .mockResolvedValueOnce(undefined)
+      .mockRejectedValueOnce(new Error('restore transport failed'))
+      .mockRejectedValueOnce(new Error('restore retry failed'));
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome.status).toBe('ok');
+    expect(h.withRehydrateCloseSuppressed).toHaveBeenCalledWith('sess-old', expect.any(Function));
+    expect(fakeMaker.closeSession).toHaveBeenCalledWith('sess-old');
   });
 
   it('Telegram 群复用会话 busy 时不改动正在运行桌面轮次的权限档', async () => {

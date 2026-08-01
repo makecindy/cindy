@@ -41,7 +41,7 @@ import {
 } from '@cindy/model-providers';
 
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
-import { getMaker } from '../maker-host/index.js';
+import { getMaker, withRehydrateCloseSuppressed } from '../maker-host/index.js';
 import { resolveLenientRoute } from '../maker-host/model-route-guard.js';
 import { resolveLenientSessionRoute } from '../maker-host/model-route-guard-live.js';
 import {
@@ -1029,13 +1029,31 @@ export function createMakerHookSessionRunner(deps: {
         };
       } finally {
         if (reusedPermissionModeApplied && reusedPermissionModeToRestore !== null) {
-          await session
-            .setPermissionMode(reusedPermissionModeToRestore)
-            .catch((err) =>
-              log.warn(
-                `hook permission restore failed: ${err instanceof Error ? err.message : String(err)}`,
-              ),
+          try {
+            await session.setPermissionMode(reusedPermissionModeToRestore);
+          } catch (err) {
+            log.warn(
+              `hook permission restore failed; retrying: ${err instanceof Error ? err.message : String(err)}`,
             );
+            try {
+              await session.setPermissionMode(reusedPermissionModeToRestore);
+            } catch (retryErr) {
+              // Never leave a reused Desktop session live in the temporary
+              // Telegram group mode. Preserve its durable metadata and local
+              // resources while closing only the live handle; the next send
+              // lazily rebuilds it with the persisted permission mode.
+              log.warn(
+                `hook permission restore retry failed; invalidating live session: ${retryErr instanceof Error ? retryErr.message : String(retryErr)}`,
+              );
+              await withRehydrateCloseSuppressed(session.id, () =>
+                maker.closeSession(session.id),
+              ).catch((closeErr) =>
+                log.warn(
+                  `hook permission session invalidation failed: ${closeErr instanceof Error ? closeErr.message : String(closeErr)}`,
+                ),
+              );
+            }
+          }
         }
       }
     },
