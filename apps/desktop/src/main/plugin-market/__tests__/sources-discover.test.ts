@@ -201,7 +201,7 @@ describe('discoverMarketplace', () => {
     const result = await discoverMarketplace(root);
     expect(result.ok).toBe(false);
     if (result.ok) return;
-    expect(result.detail).toContain('exceeds');
+    expect(result.detail).toContain('regular file within');
   });
 
   it('skips a plugin whose ghost.json is oversized without reading it', async () => {
@@ -314,6 +314,35 @@ describe('discoverMarketplace', () => {
     if (!result.ok) return;
     expect(result.marketplace.plugins.map((plugin) => plugin.ghostId)).toEqual(['good-one']);
     expect(result.marketplace.skippedCount).toBe(1);
+  });
+
+  it('validates and reads ghost.json through one file handle, never by pathname', async () => {
+    const root = makeRoot();
+    writePlugin(root, 'plugins/good', 'good-one');
+    writeManifest(root, { name: 'lib', plugins: [{ name: 'good', source: 'plugins/good' }] });
+
+    // 校验与读取必须共用同一句柄:路径式 lstat/readFile 是两次独立打开,并发方
+    // 可以在两次之间把身份卡换成超大文件或设备链接。此断言防止退回两段式实现。
+    const pathReads: string[] = [];
+    const realRead = fs.promises.readFile;
+    const readSpy = vi
+      .spyOn(fs.promises, 'readFile')
+      .mockImplementation(((target: unknown, ...rest: unknown[]) => {
+        pathReads.push(String(target));
+        return (realRead as (...args: unknown[]) => unknown)(target, ...rest);
+      }) as typeof fs.promises.readFile);
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat');
+    try {
+      const result = await discoverMarketplace(root);
+      expect(result.ok).toBe(true);
+      expect(pathReads.some((target) => target.endsWith('ghost.json'))).toBe(false);
+      expect(
+        lstatSpy.mock.calls.some((call) => String(call[0]).endsWith('ghost.json')),
+      ).toBe(false);
+    } finally {
+      readSpy.mockRestore();
+      lstatSpy.mockRestore();
+    }
   });
 
   it('rejects a manifest whose real path escapes the market root', async () => {

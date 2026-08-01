@@ -42,6 +42,40 @@ const MARKET_NAME_MAX_CHARS = 128;
 // eslint-disable-next-line no-control-regex
 const FORBIDDEN_NAME_CHARS = /[\u0000-\u001f\u007f\u200e\u200f\u202a-\u202e\u2066-\u2069]/;
 
+/**
+ * 以单一文件句柄完成"拒符号链接 → 校验普通文件与大小 → 限量读取 → JSON 解析"。
+ * 检查与读取共用同一 inode,消除"lstat/stat 之后、readFile 之前"的替换窗口。
+ * 非普通文件/超限返回 null;打开失败(含 O_NOFOLLOW 对 symlink 的拒绝)抛出,
+ * 由调用方决定语义。
+ */
+async function readBoundedJsonFile(filePath: string, maxBytes: number): Promise<unknown | null> {
+  const flags = fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW ?? 0);
+  const handle = await fs.promises.open(filePath, flags);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > maxBytes) return null;
+    const buffer = Buffer.alloc(Number(stat.size));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')) as unknown;
+  } finally {
+    await handle.close();
+  }
+}
+
+/** 清单侧变体:路径已是 realpath 产物,不加 O_NOFOLLOW,其余同 readBoundedJsonFile。 */
+async function readBoundedManifest(filePath: string): Promise<unknown | null> {
+  const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY);
+  try {
+    const stat = await handle.stat();
+    if (!stat.isFile() || stat.size > MARKETPLACE_MANIFEST_MAX_BYTES) return null;
+    const buffer = Buffer.alloc(Number(stat.size));
+    const { bytesRead } = await handle.read(buffer, 0, buffer.length, 0);
+    return JSON.parse(buffer.subarray(0, bytesRead).toString('utf8')) as unknown;
+  } finally {
+    await handle.close();
+  }
+}
+
 /** 错误 message 可能携带完整宿主路径(ENOENT/EACCES 自带),进 IPC detail 前脱敏。 */
 function sanitizedDetail(error: unknown): string {
   return redactAbsolutePaths(error instanceof Error ? error.message : String(error)).slice(0, 256);
@@ -117,16 +151,17 @@ async function resolvePluginDir(
 
   let raw: unknown;
   try {
-    // 身份卡必须是**普通文件**且在大小上限内,并且用 lstat(不跟随链接)判定:
-    // realpath 只校验了插件目录,ghost.json 自己仍可以是指向市场外的 symlink——
-    // stat 会跟随它,`/dev/zero` 这类特殊文件 size 为 0 还能绕过大小闸,readFile
-    // 会无限读到 OOM;普通外部 JSON 也会被解析并投影给 Renderer。目录已经
-    // realpath 过,最后一段用 lstat 拒掉 symlink,链接就无处藏身(与打包侧
-    // "符号链接一律不穿透"同口径)。
-    const manifestFile = path.join(realDir, 'ghost.json');
-    const stat = await fs.promises.lstat(manifestFile);
-    if (!stat.isFile() || stat.size > GHOST_MANIFEST_MAX_BYTES) return null;
-    raw = JSON.parse(await fs.promises.readFile(manifestFile, 'utf8'));
+    // 身份卡的校验与读取必须落在**同一个文件句柄**上:先 lstat 再按路径 readFile
+    // 是两次独立打开,并发方可以在两次之间把 ghost.json 换成超大文件或指向
+    // /dev/zero 的链接,绕过类型与大小闸。O_NOFOLLOW 让 open 对 symlink 直接
+    // 失败(与打包侧"符号链接一律不穿透"同口径;Windows 无此 flag 时按 0 处理,
+    // NTFS 链接需管理员权限,句柄一致性仍然成立);随后 stat 与限量读取都作用于
+    // 已打开的 inode,路径再被替换也影响不到它。
+    raw = await readBoundedJsonFile(
+      path.join(realDir, 'ghost.json'),
+      GHOST_MANIFEST_MAX_BYTES,
+    );
+    if (raw === null) return null;
   } catch {
     return null;
   }
@@ -180,26 +215,18 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
 
   let raw: RawMarketplaceManifest;
   try {
-    // 不受信内容先看大小再读:git clone 不限制单文件大小,数 GB 的清单会在
-    // readFile + JSON.parse 里把 main 进程内存打爆。
-    const stat = await fs.promises.stat(realManifestPath);
-    if (!stat.isFile()) {
+    // 校验与读取共用同一句柄(见 readBoundedJsonFile):数 GB 的清单在读之前按
+    // 大小拒掉,且两次之间不存在被替换的窗口。realpath 已解析链接并做过根包含
+    // 校验,这里不再加 O_NOFOLLOW(根内链接指向根内文件是允许的)。
+    const parsed = await readBoundedManifest(realManifestPath);
+    if (parsed === null) {
       return {
         ok: false,
         code: 'MARKET_SOURCE_INVALID',
-        detail: 'marketplace manifest is not a regular file',
+        detail: `marketplace manifest must be a regular file within ${MARKETPLACE_MANIFEST_MAX_BYTES} bytes`,
       };
     }
-    if (stat.size > MARKETPLACE_MANIFEST_MAX_BYTES) {
-      return {
-        ok: false,
-        code: 'MARKET_SOURCE_INVALID',
-        detail: `marketplace manifest exceeds ${MARKETPLACE_MANIFEST_MAX_BYTES} bytes`,
-      };
-    }
-    raw = JSON.parse(
-      await fs.promises.readFile(realManifestPath, 'utf8'),
-    ) as RawMarketplaceManifest;
+    raw = parsed as RawMarketplaceManifest;
   } catch (error) {
     return { ok: false, code: 'MARKET_SOURCE_INVALID', detail: sanitizedDetail(error) };
   }

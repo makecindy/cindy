@@ -955,6 +955,22 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     expect(h.sourceStore.list().map((config) => config.name)).toEqual(['team-lib']);
   });
 
+  it('rejects the picker result when the account switched while it was open', async () => {
+    const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
+    roots.push(root);
+    const dir = writeLocalMarket(root, 'team-lib', [{ rel: 'plugins/alpha', id: 'alpha' }]);
+    const h = harness([], []);
+    // 原生选择器可以开着很久:打开期间切号,选完落盘会写进新账户的 store。
+    pickerDialog.showOpenDialog.mockImplementationOnce(async () => {
+      runtime.session = { ...runtime.session, generation: runtime.session.generation + 1 };
+      return { canceled: false, filePaths: [dir] };
+    });
+    await expect(h.service.addLocalSourceFromPicker()).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(h.sourceStore.list()).toEqual([]);
+  });
+
   it('uninstalls a custom market plugin through the shared uninstall path', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

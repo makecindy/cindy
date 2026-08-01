@@ -533,12 +533,17 @@ export class PluginMarketService {
   async addLocalSourceFromPicker(
     defaultPath?: string,
   ): Promise<{ canceled: true } | { canceled: false; summary: MarketSourceSummary }> {
+    // owner 在**打开选择器之前**捕获:原生框可以开着很久,期间切号的话,
+    // 选完再捕获会把账户 A 发起的选择持久化进账户 B 的 store。返回后先校验
+    // 同一代际,漂移即拒,再让 addSource 在同一 owner 下落盘。
+    const owner = captureMarketOwner();
     const picked = await dialog.showOpenDialog({
       properties: ['openDirectory'],
       ...(defaultPath ? { defaultPath } : {}),
     });
     const dir = picked.filePaths[0];
     if (picked.canceled || !dir) return { canceled: true };
+    requireSameMarketOwner(owner);
     return { canceled: false, summary: await this.addSource({ source: dir }) };
   }
 
