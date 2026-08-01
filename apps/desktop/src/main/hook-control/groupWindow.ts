@@ -275,29 +275,27 @@ export async function listTelegramKnownGroups(
 ): Promise<Array<{ chatId: string; chatName: string | null }>> {
   const db = getDbClient().drizzle;
   const storageProvider = providerOf(principalId);
-  const latestByChat = db
-    .select({
-      chatId: hookGroupMessages.chatId,
-      latestId: sql<number>`max(${hookGroupMessages.id})`.as('latest_id'),
-    })
-    .from(hookGroupMessages)
-    .where(eq(hookGroupMessages.provider, storageProvider))
-    .groupBy(hookGroupMessages.chatId)
-    .as('latest_by_chat');
-  const rows = await db
+  const rankedGroups = db
     .select({
       chatId: hookGroupMessages.chatId,
       chatName: hookGroupMessages.chatName,
+      sentAt: hookGroupMessages.sentAt,
+      latestRank:
+        sql<number>`row_number() over (partition by ${hookGroupMessages.chatId} order by ${hookGroupMessages.sentAt} desc, ${hookGroupMessages.id} desc)`.as(
+          'latest_rank',
+        ),
     })
     .from(hookGroupMessages)
-    .innerJoin(
-      latestByChat,
-      and(
-        eq(hookGroupMessages.chatId, latestByChat.chatId),
-        eq(hookGroupMessages.id, latestByChat.latestId),
-      ),
-    )
-    .orderBy(desc(hookGroupMessages.sentAt))
+    .where(eq(hookGroupMessages.provider, storageProvider))
+    .as('ranked_groups');
+  const rows = await db
+    .select({
+      chatId: rankedGroups.chatId,
+      chatName: rankedGroups.chatName,
+    })
+    .from(rankedGroups)
+    .where(eq(rankedGroups.latestRank, 1))
+    .orderBy(desc(rankedGroups.sentAt))
     .limit(50);
   return rows.map((row) => ({ chatId: row.chatId, chatName: row.chatName }));
 }

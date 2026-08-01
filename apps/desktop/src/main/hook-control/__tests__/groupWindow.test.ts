@@ -187,6 +187,9 @@ describe('listTelegramKnownGroups', () => {
     await recordGroupMessage(
       frame({ chatId: '-901', chatName: 'Renamed', messageId: '4', sentAt: 4 }),
     );
+    await recordGroupMessage(
+      frame({ chatId: '-901', chatName: 'Stale delayed name', messageId: '6', sentAt: 3 }),
+    );
     await recordScopedGroupMessage(
       frame({ chatId: '-903', chatName: 'Other account', messageId: '5', sentAt: 5 }),
       '10',
