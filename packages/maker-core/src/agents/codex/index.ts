@@ -4515,7 +4515,13 @@ export class CodexAgent extends BaseAgent {
         autoReviewAction: {
           kind: 'exec',
           command: params.command ?? '',
-          cwd: params.cwd || opts.workingDir,
+          // 空串/空白 cwd 表示 server 上报了但内容不可用 → 按**未知**处理,不得回落成 workingDir
+          // 当"区内"(copilot 报:那样会把未知/区外 cwd 误判为区内而放行)。
+          ...(params.cwd?.trim()
+            ? { cwd: params.cwd }
+            : params.cwd === undefined
+              ? { cwd: opts.workingDir }
+              : { cwdUnknown: true }),
         },
       });
       return { decision };

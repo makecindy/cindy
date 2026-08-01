@@ -1741,6 +1741,52 @@ describe('参数形式的系统路径写入 / setsid 选项(第三十五批评�
   });
 });
 
+describe('target-directory / prlimit -o / 转义反引号 / 空 cwd(第三十六批评审)', () => {
+  it('cp/mv/install 的 -t 目标目录形态命中系统写红线', () => {
+    for (const c of [
+      'cp -t /etc payload',
+      'cp --target-directory=/etc payload',
+      'mv -t /etc payload',
+      'install -t /System/Library payload',
+      'cp -t/etc payload',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:-t 指向区内/普通目录 → 灰区,不误升。
+    expect(classifyShellCommand('cp -t dist src/a.ts', roots)).toBe('prompt');
+    expect(classifyShellCommand('cp -t /tmp/out src/a.ts', roots)).toBe('prompt');
+  });
+
+  it('prlimit -o/--output 分离值不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'prlimit -o RESOURCE rm -rf /outside',
+      'prlimit --output RESOURCE rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    expect(classifyShellCommand('prlimit -o RESOURCE ls', roots)).toBe('auto-approve');
+  });
+
+  it('转义反引号嵌套里的 eval 仍命中红线', () => {
+    expect(classifyShellCommand('echo `echo \\`eval "$X"\\``', roots)).toBe('prompt-each-time');
+    // 反例:转义反引号但内层良性 → 不误升。
+    expect(classifyShellCommand('echo `echo \\`date\\``', roots)).toBe('prompt');
+  });
+
+  it('exec 的 cwd 上报为空 = 未知,不得按区内放行', () => {
+    // 未提供 cwd(undefined)→ 按会话工作目录,只读命令仍放行。
+    expect(reviewAction({ kind: 'exec', command: 'ls -la' }, roots)).toBe('auto-approve');
+    // 上报了但为空 → 未知 → 至少升灰区。
+    expect(reviewAction({ kind: 'exec', command: 'ls -la', cwd: '' }, roots)).toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'ls -la', cwd: '   ' }, roots)).toBe('prompt');
+    expect(reviewAction({ kind: 'exec', command: 'ls -la', cwdUnknown: true }, roots)).toBe('prompt');
+    // 未知 cwd 下的相对递归删除不可证在区内 → 必问。
+    expect(reviewAction({ kind: 'exec', command: 'rm -rf build', cwd: '' }, roots)).toBe('prompt-each-time');
+    // 确定性红线不因 cwd 未知而降级。
+    expect(reviewAction({ kind: 'exec', command: 'sudo rm x', cwd: '' }, roots)).toBe('prompt-each-time');
+  });
+});
+
 describe('伪设备白名单:静音重定向不得打断(实机语料探针发现的误报)', () => {
   it('写标准伪设备(/dev/null 等)不算系统写 → 不打断', () => {
     // `> /dev/null` 是最高频写法;第三十一批把重定向接上系统红线后曾整片误升为硬弹窗。

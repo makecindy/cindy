@@ -52,7 +52,9 @@ export type ReviewableAction =
   | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
-  | { kind: 'exec'; command: string; cwd?: string }
+  // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
+  // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
+  | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
   | { kind: 'network'; target?: string; operation?: string }
   | { kind: 'other' };
 
@@ -99,10 +101,14 @@ export function reviewAction(
       return 'prompt';
     }
     case 'exec': {
+      const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
       const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
-        cwd: action.cwd,
+        cwd: cwdUnknown ? undefined : action.cwd,
+        cwdUnknown,
         platform: opts?.platform,
       });
+      // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
+      if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
       // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
       // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
       const writableRoots = workspaceRoots.slice(0, 1);
@@ -215,9 +221,21 @@ function redirectionTargets(command: string): string[] {
  */
 function argumentWriteTargets(tokens: string[]): string[] {
   const bin = executableName(tokens[0] ?? '');
-  const operands = positionalOperands(tokens.slice(1));
+  const args = tokens.slice(1);
+  const operands = positionalOperands(args);
   if (bin === 'tee' || bin === 'sponge') return operands;
   if (bin === 'cp' || bin === 'mv' || bin === 'install' || bin === 'rsync' || bin === 'ln') {
+    // `-t DIR` / `--target-directory=DIR`:目标目录由选项给出,**不是**末位操作数
+    // (codex 报 `cp -t /etc payload` 会把 payload 当目标、长选项形态则完全取不到目标)。
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (t === '-t' || t === '--target-directory') {
+        const dir = args[i + 1];
+        return dir ? [dir] : ['/']; // 缺目标 = 静态不可证 → 哨兵,必问
+      }
+      const attached = /^(?:--target-directory=|-t)(.+)$/.exec(t);
+      if (attached) return [attached[1]];
+    }
     return operands.length >= 2 ? [operands[operands.length - 1]] : [];
   }
   if (bin === 'dd') {
@@ -670,7 +688,11 @@ function unwrapCommand(
       // 资源限额多为 `--nofile=1024` 附加形态;-p/--pid 是改已有进程、不跑命令 → 不解包(fail-closed 留壳)。
       if (toks.slice(1).some((t) => /^(?:-p|--pid)$/.test(t) || /^--pid=/.test(t))) break;
       let i = 1;
-      while (i < toks.length && toks[i].startsWith('-')) i++;
+      while (i < toks.length && toks[i].startsWith('-')) {
+        // -o/--output <list> 是带独立值选项:不连值消费会停在 RESOURCE 而看不到内层命令(codex 报)。
+        if (/^(?:-o|--output)$/.test(toks[i])) { i += 2; continue; }
+        i++;
+      }
       toks = toks.slice(i);
     } else if (head === 'setarch') {
       // setarch [arch] [options] PROGRAM(codex 报 `setarch x86_64 rm -rf /outside`)。首个非选项若形似已知
@@ -986,8 +1008,18 @@ function substitutionBodies(text: string): string[] {
       continue;
     }
     if (text[i] === '`') {
-      const end = text.indexOf('`', i + 1);
-      if (end > i) { out.push(text.slice(i + 1, end)); i = end; }
+      // 找配对反引号时必须跳过**转义**反引号(`\``):嵌套反引号替换靠转义定界
+      // (`` `echo \`eval "$X"\`` ``),把 `\`` 当外层终点会截断替换体、漏掉内层 eval(greptile 报)。
+      let end = -1;
+      for (let j = i + 1; j < text.length; j++) {
+        if (text[j] === '\\') { j++; continue; }
+        if (text[j] === '`') { end = j; break; }
+      }
+      if (end > i) {
+        // 内层体里的 `\`` 还原成 `` ` ``,让递归能继续按普通反引号拆下一层。
+        out.push(text.slice(i + 1, end).replace(/\\`/g, '`'));
+        i = end;
+      }
     }
   }
   return out;
