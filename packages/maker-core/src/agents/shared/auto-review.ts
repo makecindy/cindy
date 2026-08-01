@@ -750,15 +750,14 @@ function serializeArgvForReview(tokens: string[]): string {
   return tokens.map((token) => JSON.stringify(token)).join(' ');
 }
 
-function substitutionRunsRemoteFetch(text: string, kind: 'command' | 'process'): boolean {
-  const pattern = kind === 'command' ? /\$\(([^()]*)\)/g : /<\(([^()]*)\)/g;
-  for (const match of text.matchAll(pattern)) {
-    if (commandRunsRemoteFetch(match[1] ?? '')) return true;
-  }
-  if (kind === 'command') {
-    for (const match of text.matchAll(/`([^`]*)`/g)) {
-      if (commandRunsRemoteFetch(match[1] ?? '')) return true;
-    }
+// kind 仅保留签名兼容:命令替换 `$()`/反引号 与进程替换 `<()` 里含 curl/wget 都是下载向量,一视同仁。
+// 用平衡取体 + 递归覆盖任意深度与跨类嵌套 —— 单层正则只抓最内层,漏掉实际下载的外层 curl
+// (greptile 报 `bash -c "$(curl $(echo url))"`、`source <(curl $(echo url))`)。
+function substitutionRunsRemoteFetch(text: string, _kind: 'command' | 'process', depth = 0): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到不可静态求证 → 保守当作远端下载
+  for (const body of substitutionBodies(text)) {
+    if (commandRunsRemoteFetch(body)) return true;
+    if (substitutionRunsRemoteFetch(body, _kind, depth + 1)) return true;
   }
   return false;
 }
@@ -814,9 +813,14 @@ function powerShellNeedsConsent(tokens: string[]): boolean {
     const name = raw.split('=')[0].toLowerCase();
     // -EncodedCommand(-e/-ec/-enc/…):base64 静态不可读 → 必问(不可只当灰区)。
     if (name.length >= 2 && '-encodedcommand'.startsWith(name)) return true;
-    // -Command(-c/-co/…)的明文载荷交给危险模式扫描。
+    // -Command(-c/-co/…)后的**全部**剩余 token 构成待执行命令(PowerShell 语义),不能只取紧邻一个:
+    // 非引号形态 `-Command Remove-Item -Recurse -Force C:\Users` 的 `-Recurse/-Force` 在后续 token 里
+    // (codex 报,现有回归都把载荷包成单引号 token 才命中)→ 拼接全部剩余 token 再交危险模式扫描。
     if (name.length >= 2 && '-command'.startsWith(name)) {
-      payload = raw.includes('=') ? raw.slice(raw.indexOf('=') + 1) : tokens[i + 1] ?? '';
+      payload = raw.includes('=')
+        ? [raw.slice(raw.indexOf('=') + 1), ...tokens.slice(i + 1)].join(' ')
+        : tokens.slice(i + 1).join(' ');
+      break;
     }
   }
   return payload !== null && POWERSHELL_DANGER_PATTERNS.some((re) => re.test(payload as string));
@@ -830,15 +834,18 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     const unwrapped = unwrapCommand(tokenize(normalized));
     const tokens = unwrapped.tokens;
     const bin = executableName(tokens[0] ?? '');
+    const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
+    // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
+    const rawBin = executableName(rawTokens[0] ?? '');
     if (fromPipe && !unwrapped.inspectionOnly) {
-      if (isPipeExecutor(bin)) return true;
+      if (isPipeExecutor(bin) || isPipeExecutor(rawBin)) return true;
       // An incomplete interpreter enum must never turn remote "download and
       // execute" into a model-allowable gray action. Only consumers proven
       // passive by the existing read-only classifier may keep the pipeline in Auto.
       if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
     }
-    if (bin === 'eval') return true;
-    const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    if (bin === 'eval' || rawBin === 'eval') return true;
     // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
     // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
     // 超出递归上限仍存在替换体 = 深层嵌套(`echo $(a $(b $(c $(eval …))))`)静态不可证清白 → fail-closed
@@ -1009,9 +1016,9 @@ function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; t
   return { changesDirectory: true };
 }
 
-/** 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段(到 `;`/`\;`/`+` 止)里的 shell `-c` 载荷字符串。 */
-function findExecShellPayloads(tokens: string[]): string[] {
-  const out: string[] = [];
+/** 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段的完整命令 argv(到 `;`/`\;`/`+` 止)。 */
+function findExecCommands(tokens: string[]): string[][] {
+  const out: string[][] = [];
   const execFlags = new Set(['-exec', '-execdir', '-ok', '-okdir']);
   for (let i = 0; i < tokens.length; i++) {
     if (!execFlags.has(tokens[i].toLowerCase())) continue;
@@ -1021,10 +1028,19 @@ function findExecShellPayloads(tokens: string[]): string[] {
       if (tok === ';' || tok === '\\;' || tok === '+') break;
       rest.push(tok);
     }
-    const payload = shellCommandPayload(rest);
-    if (payload !== null) out.push(payload);
+    if (rest.length > 0) out.push(rest);
   }
   return out;
+}
+
+/** 一个 -exec 命令 argv(直接 `rm -rf …` 或 `sh -c '…'` 载荷)里破坏性 rm 的目标操作数。 */
+function execCommandRmTargets(argv: string[], depth: number): string[] {
+  const targets: string[] = [];
+  const direct = destructiveRmTargets(argv); // 直接 `-exec rm -rf /outside`
+  if (direct) targets.push(...direct);
+  const payload = shellCommandPayload(argv); // `-exec sh -c 'rm -rf …'`
+  if (payload) targets.push(...(commandDestructiveRmTargets(payload, depth) ?? []));
+  return targets;
 }
 
 /**
@@ -1047,9 +1063,13 @@ function commandDestructiveRmTargets(command: string, depth = 0): string[] | nul
   return acc;
 }
 
-/** find -exec 载荷里引用被匹配路径的占位目标(`{}`、`$0`..`$9`、`$@`、`$*`):其删除作用域由遍历根决定。 */
+/**
+ * find -exec 载荷里引用被匹配路径的占位目标(`{}`、`$0`..`$9`、`$@`、`$*`):其删除作用域由遍历根决定。
+ * 注:分段器 stripShellControlTokens 会把段尾/段首 `{}` 的花括号当 shell 分组符剥掉,令占位符残成 `{`
+ * 或 `}`;find -exec 语境里它们只可能是被匹配路径占位,一并按占位处理(避免误当花括号动态目标升红线)。
+ */
 function isMatchedPathPlaceholder(target: string): boolean {
-  return target === '{}' || /^\$(?:\d+|[@*])$/.test(target);
+  return target === '{}' || target === '{' || target === '}' || /^\$(?:\d+|[@*])$/.test(target);
 }
 
 /** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
@@ -1082,19 +1102,16 @@ function scopedDestructionNeedsConsent(
     if (bin === 'find') {
       const findRoots = findDeleteRoots(tokens);
       const deletes = tokens.some((token) => token === '-delete');
-      const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
-      const directRm = nestedRm >= 0 && destructiveRmTargets(tokens.slice(nestedRm)) !== null;
-      // -exec/-execdir 经 shell 间接删除:载荷里的 rm 藏在引号内的单 token,直接 findIndex('rm') 命不中
-      // (codex 报 `find / -exec sh -c 'rm -rf "$0"' {} \;`)→ 抽出 -exec 的 shell -c 载荷取其 rm 目标。
-      const execRmTargets = findExecShellPayloads(tokens)
-        .flatMap((payload) => commandDestructiveRmTargets(payload, depth + 1) ?? []);
-      // 载荷里忽略 {} 直接删的字面/独立目标(`rm -rf /`)按其自身作用域判定 —— 即使遍历根在区内也必问
-      // (codex 报 `find build -maxdepth 0 -exec sh -c 'rm -rf /' {} \;`)。
+      // 每个 -exec 命令(直接 `rm -rf …` 或 `sh -c 'rm -rf …'`)取其破坏性 rm 目标;两种形态统一处理,
+      // 不再把直接 -exec rm 归约成布尔而丢掉操作数(codex 报 `find build -exec rm -rf /outside \;`)。
+      const execRmTargets = findExecCommands(tokens)
+        .flatMap((argv) => execCommandRmTargets(argv, depth + 1));
+      // 忽略 {} 直接删的字面/独立目标(`rm -rf /` / `/outside`)按其自身作用域判定 —— 即使遍历根在区内也必问。
       if (execRmTargets.some((target) => !isMatchedPathPlaceholder(target)
         && destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
-      // 载荷删的是被匹配到的路径(占位符),或 -delete/直接 -exec rm → 删除作用域由遍历根决定。
+      // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定。
       const execMatchedRm = execRmTargets.some(isMatchedPathPlaceholder);
-      if ((deletes || directRm || execMatchedRm) && findRoots.some((target) =>
+      if ((deletes || execMatchedRm) && findRoots.some((target) =>
         destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
     }
     // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
