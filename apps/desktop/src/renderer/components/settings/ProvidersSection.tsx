@@ -900,7 +900,9 @@ function BuiltinApiKeyHeader({
   }, [confirm, onChanged, provider.id, provider.name, t]);
 
   const trailing = (
-    <div className="flex shrink-0 items-center gap-2.5">
+    /* 三控件组自身可折行:最小窗口(内容区 ~235px)下「已连接 / 更换 key / 断开」
+       放不下时组内换行,不再作为整体溢出被裁(PR #1102 review 第九轮)。 */
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5 gap-y-2">
       {provider.connected && <ConnectedPill />}
       <PillButton
         label={t(
