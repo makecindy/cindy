@@ -1,5 +1,5 @@
 /**
- * session-agent-switch 的异步写入协调层(按 session,模块级)。
+ * session-agent-switch 与消息发送的异步协调层(按 session,模块级)。
  * ---------------------------------------------------------------------------
  * 跨引擎切换的每一次点选都会产生一个**跨越 await 的写入**:发 IPC → 等被控端 ack →
  * 落展示态。这条链上有三个归属问题,组件内的 ref 都兜不住:
@@ -143,6 +143,19 @@ export function beginAgentSendDispatch(sessionId: string): () => void {
     if (current.size === 0) pendingSendDispatches.delete(sessionId);
     emitPendingChange();
   };
+}
+
+/**
+ * 在没有完整切换操作占用该 session 时同步登记发送。
+ *
+ * 检查与登记必须收在同一个无 await 的原语里：调用方若先查再跨异步准备，切换可能在
+ * 中间插入；反过来，登记成功后切换入口会立刻看见 token 并拒绝，从而保持用户动作顺序。
+ * 已有发送 token 不构成拒绝条件——共享 store 发送边界可能嵌套在 ChatInput 从引用水合
+ * 阶段持有的外层 token 中，两层各自在自己的 finally 释放。
+ */
+export function tryBeginAgentSendDispatch(sessionId: string): (() => void) | null {
+  if (hasPendingAgentSwitchOperation(sessionId)) return null;
+  return beginAgentSendDispatch(sessionId);
 }
 
 export function hasPendingAgentSendDispatch(sessionId: string): boolean {

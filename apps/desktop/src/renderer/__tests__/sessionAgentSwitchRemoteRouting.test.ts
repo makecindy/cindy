@@ -297,7 +297,7 @@ describe('resolveAgentSwitchAckAction（ack 分派：两类守卫作用域不同
 
 describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件实例存活）', () => {
   const load = async () => {
-    const mod = await import('@/components/new-chat/agentSwitchCoordinator');
+    const mod = await import('@/lib/agentSwitchCoordinator');
     mod.__resetAgentSwitchCoordinatorForTests();
     return mod;
   };
@@ -472,6 +472,28 @@ describe('agentSwitchCoordinator（串行链与写序号按 session，跨组件�
     finishB();
     expect(hasPendingAgentSendDispatch('s1')).toBe(false);
   });
+
+  it('发送检查与登记原子化:切换在途时拒绝,外层准备 token 与共享发送边界可嵌套', async () => {
+    const {
+      beginAgentSwitchOperation,
+      hasPendingAgentSendDispatch,
+      tryBeginAgentSendDispatch,
+    } = await load();
+    const finishSwitch = beginAgentSwitchOperation('s1');
+    expect(tryBeginAgentSendDispatch('s1')).toBeNull();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(false);
+
+    finishSwitch();
+    const finishPreparation = tryBeginAgentSendDispatch('s1');
+    const finishSharedBoundary = tryBeginAgentSendDispatch('s1');
+    expect(finishPreparation).not.toBeNull();
+    expect(finishSharedBoundary).not.toBeNull();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(true);
+    finishPreparation?.();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(true);
+    finishSharedBoundary?.();
+    expect(hasPendingAgentSendDispatch('s1')).toBe(false);
+  });
 });
 
 describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
@@ -520,9 +542,38 @@ describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
   });
 });
 
+describe('makerChatStore 共享发送边界', () => {
+  it('切换在途时普通消息与 UI 续跑都 fail-closed,不会碰发送传输层', async () => {
+    const coordinator = await import('@/lib/agentSwitchCoordinator');
+    coordinator.__resetAgentSwitchCoordinatorForTests();
+    const finishSwitch = coordinator.beginAgentSwitchOperation('guarded-send');
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+
+    await expect(
+      makerChatStore.sendMessage(
+        'guarded-send',
+        'hello',
+        'claude-sonnet-4-6',
+        'medium',
+        'default',
+        '/tmp/workdir',
+      ),
+    ).resolves.toBe(false);
+    await expect(
+      makerChatStore.sendUiTrigger('guarded-send', '[UI_ACTION_TRIGGER] continue'),
+    ).rejects.toThrow('Agent switch is still in progress');
+    expect(coordinator.hasPendingAgentSendDispatch('guarded-send')).toBe(false);
+    finishSwitch();
+  });
+});
+
 describe('ChatInput 的入口门控与调用路由', () => {
   const source = readFileSync(
     resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
+    'utf8',
+  ).replace(/\r\n/g, '\n');
+  const storeSource = readFileSync(
+    resolve(process.cwd(), 'src/renderer/lib/makerChatStore.ts'),
     'utf8',
   ).replace(/\r\n/g, '\n');
 
@@ -634,12 +685,30 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('const agentSwitchInFlight = useSyncExternalStore(');
     expect(source).toContain('const finishAgentSwitchOperation = beginAgentSwitchOperation(');
     expect(source).toContain('finishAgentSwitchOperation();');
-    expect(source).toContain('if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;');
+    expect(source).toContain('? tryBeginAgentSendDispatch(sourceSessionId)');
     expect(source).toContain('agentSwitchInFlight ||');
+
+    // composer 之外的继续 / 编辑重发等入口最终都经过共享 store 边界，不能要求每个
+    // UI 调用点记得手工登记 token。
+    const sendMessage = storeSource.indexOf('function sendMessage(');
+    const sendMessageBegin = storeSource.indexOf('return withAgentSendDispatch(', sendMessage);
+    const sendUiTrigger = storeSource.indexOf('function sendUiTrigger(');
+    const uiTriggerBegin = storeSource.indexOf('return withAgentSendDispatch(', sendUiTrigger);
+    const sharedBegin = storeSource.indexOf(
+      'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
+    );
+    const sharedFinish = storeSource.indexOf(
+      'return task().finally(finishAgentSendDispatch);',
+      sharedBegin,
+    );
+    expect(sendMessageBegin).toBeGreaterThan(sendMessage);
+    expect(uiTriggerBegin).toBeGreaterThan(sendUiTrigger);
+    expect(sharedBegin).toBeGreaterThanOrEqual(0);
+    expect(sharedFinish).toBeGreaterThan(sharedBegin);
   });
 
   it('引用水合期间发送与切换双向互斥，并在真正发送前复核切换状态', () => {
-    const sendBegin = source.indexOf('beginAgentSendDispatch(sourceSessionId)');
+    const sendBegin = source.indexOf('tryBeginAgentSendDispatch(sourceSessionId)');
     const hydrate = source.indexOf('await resolveSessionMessageReferencesForSend(editor);');
     const sendRecheck = source.indexOf(
       'if (sourceSessionId && hasPendingAgentSwitchOperation(sourceSessionId)) return;',

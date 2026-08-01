@@ -107,7 +107,6 @@ import {
   resolveAgentSwitchAckAction,
 } from './agentSwitchConfirmation';
 import {
-  beginAgentSendDispatch,
   beginAgentSwitchOperation,
   getAgentSwitchWriteSeq,
   hasPendingAgentSendDispatch,
@@ -115,7 +114,8 @@ import {
   nextAgentSwitchWriteSeq,
   reserveAgentSwitchExclusive,
   subscribeAgentSwitchPending,
-} from './agentSwitchCoordinator';
+  tryBeginAgentSendDispatch,
+} from '@/lib/agentSwitchCoordinator';
 import {
   isSelectedSourceDisconnected,
   resolveEffort,
@@ -3528,13 +3528,13 @@ export function ChatInput({
       if (disabled) return;
       // React 的 disabled 状态可能尚未完成下一帧渲染；同步读协调器兜住点击、快捷键、
       // 语音发送等所有入口，确保 host 已登记切换意图后才允许 maker:send。
-      if (sessionId && hasPendingAgentSwitchOperation(sessionId)) return;
       if (sessionId && hasPendingAgentSendDispatch(sessionId)) return;
       if (dispatchSendInFlightRef.current) return;
       const sourceSessionId = sessionId;
       const finishAgentSendDispatch = sourceSessionId
-        ? beginAgentSendDispatch(sourceSessionId)
+        ? tryBeginAgentSendDispatch(sourceSessionId)
         : () => {};
+      if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
       dispatchSendInFlightRef.current = true;
       setSendDispatchInFlight(true);

@@ -104,6 +104,7 @@ import {
   emitPatch,
 } from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
+import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
@@ -7449,6 +7450,26 @@ function isRemoteMediaSession(sessionId: string): boolean {
   );
 }
 
+/**
+ * 共享发送边界：同步完成「无切换在途」检查与发送 token 登记，并保证同步抛错和
+ * Promise settle 两条路径都会释放。`task` 仍在当前调用栈内启动，保留 sendMessage
+ * 对 planMode 等点击时语义的同步定格。
+ */
+function withAgentSendDispatch<T>(
+  sessionId: string,
+  onSwitchPending: () => Promise<T>,
+  task: () => Promise<T>,
+): Promise<T> {
+  const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);
+  if (!finishAgentSendDispatch) return onSwitchPending();
+  try {
+    return task().finally(finishAgentSendDispatch);
+  } catch (err) {
+    finishAgentSendDispatch();
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
 function sendMessage(
   sessionId: string,
   text: string,
@@ -7465,37 +7486,46 @@ function sendMessage(
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
 
-  // 非破坏性标注:发送时刻才把矢量笔迹烧录成位图(模型只认位图)。仅在真的
-  // 存在待烧录附件时才走 async 物化——其余消息保持**全同步**发送路径,守住
-  // "planMode 点击即消耗 / enqueue 在点击同步栈内发生"的既有语义
-  // (planReviewDoneRace 测试守护;CI 曾因无条件 await 让步一拍而红)。
-  if (!needsAnnotationMaterialize(files)) {
-    return sendMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      files,
-      mentions,
-      opts,
-    );
-  }
-  return materializeAnnotatedAttachmentsForSend(files, sessionId, {
-    stripAnnotationMeta: isRemoteMediaSession(sessionId),
-  }).then((prepared) =>
-    sendMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      prepared,
-      mentions,
-      opts,
-    ),
+  // 共享发送边界兜住 composer 之外的入口（编辑重发、恢复等）。ChatInput 会从引用
+  // 水合阶段先持有一层 token；这里允许嵌套登记，确保未来新增调用方也不会绕过
+  // session-agent-switch 的双向互斥。检查与登记同步完成，不给切换插入空窗。
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => {
+      // 非破坏性标注:发送时刻才把矢量笔迹烧录成位图(模型只认位图)。仅在真的
+      // 存在待烧录附件时才走 async 物化——其余消息保持**全同步**发送路径,守住
+      // "planMode 点击即消耗 / enqueue 在点击同步栈内发生"的既有语义
+      // (planReviewDoneRace 测试守护;CI 曾因无条件 await 让步一拍而红)。
+      if (!needsAnnotationMaterialize(files)) {
+        return sendMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          files,
+          mentions,
+          opts,
+        );
+      }
+      return materializeAnnotatedAttachmentsForSend(files, sessionId, {
+        stripAnnotationMeta: isRemoteMediaSession(sessionId),
+      }).then((prepared) =>
+        sendMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          prepared,
+          mentions,
+          opts,
+        ),
+      );
+    },
   );
 }
 
@@ -9158,8 +9188,7 @@ export { UI_ACTION_TRIGGER_PREFIX };
  * error-tail banner) toasts or恢复红条。
  */
 
-function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
-  if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
+function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   const state = getOrCreateState(sessionId);
   const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
@@ -9239,6 +9268,15 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
       log.warn('sendUiTrigger failed', err);
       throw err instanceof Error ? err : new Error(String(err));
     });
+}
+
+function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
+  if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.reject(new Error('Agent switch is still in progress')),
+    () => sendUiTriggerCore(sessionId, prompt),
+  );
 }
 
 /**
