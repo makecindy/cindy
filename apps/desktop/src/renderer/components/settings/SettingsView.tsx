@@ -16,6 +16,7 @@ import { McpServersSection } from './McpServersSection';
 import { RemoteControlSection } from './RemoteControlSection';
 import { NotificationSection } from './NotificationSection';
 import { WindowBehaviorSection } from './WindowBehaviorSection';
+import { ComposerSendShortcutSection } from './ComposerSendShortcutSection';
 import { KeyboardShortcutsSection } from './KeyboardShortcutsSection';
 import { AgentIslandSection } from './AgentIslandSection';
 import { LanguageSection } from './LanguageSection';
@@ -290,6 +291,15 @@ export function SettingsView() {
                   aria-label={t('settings.sections.windowBehavior')}
                 >
                   <WindowBehaviorSection />
+                </section>
+
+                {/* Section — Composer send shortcut (应用级、本地输入偏好)。 */}
+                <section
+                  id="settings-composer"
+                  className="py-[18px]"
+                  aria-label={t('settings.sections.composer')}
+                >
+                  <ComposerSendShortcutSection />
                 </section>
 
                 {/* Section — Experimental (py 18)
