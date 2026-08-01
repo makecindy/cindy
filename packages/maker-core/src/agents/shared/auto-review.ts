@@ -835,11 +835,22 @@ function substitutionBodies(text: string): string[] {
     // `$(` 命令替换、`<(`/`>(` 进程替换(输入与**输出**两向都会起子进程执行,greptile 报 `echo >(eval "$X")`)。
     const opensParen = (text[i] === '$' || text[i] === '<' || text[i] === '>') && text[i + 1] === '(';
     if (opensParen) {
+      // 括号计数必须**跳过引号内的字面括号**:否则 `$(eval 'touch; #(')` 里引号内的 `(` 会抬高深度、
+      // 让外层 `$(` 永远闭合不了,替换体取不出、内层 eval 逃过红线(greptile 报)。
       let depth = 1;
       let j = i + 2;
+      let sq = false;
+      let dq = false;
+      let esc = false;
       for (; j < text.length && depth > 0; j++) {
-        if (text[j] === '(') depth++;
-        else if (text[j] === ')') depth--;
+        const c = text[j];
+        if (esc) { esc = false; continue; }
+        if (c === '\\' && !sq) { esc = true; continue; }
+        if (c === "'" && !dq) { sq = !sq; continue; }
+        if (c === '"' && !sq) { dq = !dq; continue; }
+        if (sq || dq) continue;
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
       }
       if (depth === 0) {
         out.push(text.slice(i + 2, j - 1));
@@ -1134,21 +1145,31 @@ function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; t
   return { changesDirectory: true };
 }
 
-/** 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段的完整命令 argv(到 `;`/`\;`/`+` 止)。 */
-function findExecCommands(tokens: string[]): string[][] {
-  const out: string[][] = [];
+/**
+ * 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段的完整命令 argv(到 `;`/`\;`/`+` 止)。
+ * `dirRelative` 标记 `-execdir`/`-okdir`:它们在**每个被匹配文件所在目录**里执行,相对目标的实际
+ * cwd 随匹配项变动、静态不可证(codex 报 `find /ws/x -execdir rm -rf x` 实际删的是 /ws/x 整体)。
+ */
+function findExecCommands(tokens: string[]): { argv: string[]; dirRelative: boolean }[] {
+  const out: { argv: string[]; dirRelative: boolean }[] = [];
   const execFlags = new Set(['-exec', '-execdir', '-ok', '-okdir']);
   for (let i = 0; i < tokens.length; i++) {
-    if (!execFlags.has(tokens[i].toLowerCase())) continue;
+    const flag = tokens[i].toLowerCase();
+    if (!execFlags.has(flag)) continue;
     const rest: string[] = [];
     for (let j = i + 1; j < tokens.length; j++) {
       const tok = tokens[j];
       if (tok === ';' || tok === '\\;' || tok === '+') break;
       rest.push(tok);
     }
-    if (rest.length > 0) out.push(rest);
+    if (rest.length > 0) out.push({ argv: rest, dirRelative: flag === '-execdir' || flag === '-okdir' });
   }
   return out;
+}
+
+/** find 是否用内容驱动、静态不可证的遍历根(`-files0-from FILE`/`-`):根来自文件内容而非命令行(codex 报)。 */
+function findHasDynamicRoots(tokens: string[]): boolean {
+  return tokens.some((t) => /^--?files0?-from$/i.test(t) || /^--files-from$/i.test(t));
 }
 
 /** 一个 -exec 命令 argv(直接 `rm -rf …` 或 `sh -c '…'` 载荷)里破坏性 rm 的目标操作数。 */
@@ -1233,17 +1254,28 @@ function scopedDestructionNeedsConsent(
     if (bin === 'find') {
       const findRoots = findDeleteRoots(tokens);
       const deletes = tokens.some((token) => token === '-delete');
-      // 每个 -exec 命令(直接 `rm -rf …` 或 `sh -c 'rm -rf …'`)取其破坏性 rm 目标;两种形态统一处理,
+      // -files0-from 等内容驱动的遍历根静态不可证(可能含区外/系统目录),findDeleteRoots 会回退成 ['.'] 误判
+      // 区内 → 只要有破坏动作(-delete 或 -exec 删)就必问(codex 报)。
+      const dynamicRoots = findHasDynamicRoots(tokens);
+      // 每个 -exec/-execdir 命令(直接 `rm -rf …` 或 `sh -c 'rm -rf …'`)取其破坏性 rm 目标;两种形态统一处理,
       // 不再把直接 -exec rm 归约成布尔而丢掉操作数(codex 报 `find build -exec rm -rf /outside \;`)。
-      const execRmTargets = findExecCommands(tokens)
-        .flatMap((argv) => execCommandRmTargets(argv, depth + 1));
-      // 忽略 {} 直接删的字面/独立目标(`rm -rf /` / `/outside`)按其自身作用域判定 —— 即使遍历根在区内也必问。
-      if (execRmTargets.some((target) => !isMatchedPathPlaceholder(target)
-        && destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
-      // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定。
-      const execMatchedRm = execRmTargets.some(isMatchedPathPlaceholder);
-      if ((deletes || execMatchedRm) && findRoots.some((target) =>
-        destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      let execMatchedRm = false;
+      for (const { argv, dirRelative } of findExecCommands(tokens)) {
+        const rmTargetsInExec = execCommandRmTargets(argv, depth + 1);
+        // -execdir 在每个匹配项所在目录执行,相对目标 cwd 随匹配项变动、不可静态证明在区内
+        // (codex 报 `find /ws/x -execdir rm -rf x` 实删 /ws/x 整体)→ 用 cwdUnknown 强制相对目标必问。
+        const execScope = dirRelative ? { ...segmentOpts, cwdUnknown: true } : segmentOpts;
+        // 忽略 {} 直接删的字面/独立目标(`rm -rf /` / `/outside` / -execdir 下的相对目标)按其作用域判定。
+        if (rmTargetsInExec.some((target) => !isMatchedPathPlaceholder(target)
+          && destructiveTargetNeedsConsent(target, workspaceRoots, execScope))) return true;
+        if (rmTargetsInExec.some(isMatchedPathPlaceholder)) execMatchedRm = true;
+      }
+      // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定;动态根一律必问。
+      if (deletes || execMatchedRm) {
+        if (dynamicRoots) return true;
+        if (findRoots.some((target) =>
+          destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      }
     }
     // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
     // (codex 报:parallel 与 xargs 同为执行器,`parallel rm -rf -- /outside` 也会跑 rm)。

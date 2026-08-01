@@ -1527,3 +1527,35 @@ describe('stdbuf 分离 MODE / watch·flock 执行包装器解包(第二十七�
     expect(classifyShellCommand('flock /tmp/lock ls', roots)).toBe('auto-approve');
   });
 });
+
+describe('引号内字面括号 / -execdir 相对目标 / -files0-from 动态根(第二十九批评审)', () => {
+  it('替换体里引号内的字面 ( 不破坏括号平衡,内层 eval 仍命中', () => {
+    for (const c of [
+      "echo $(eval 'touch /tmp/pwn; #(')",
+      'echo $(eval "rm -rf /outside )")',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:引号内字面括号 + 良性替换体 → 不误升。
+    expect(classifyShellCommand("echo $(cat 'a(b.txt')", roots)).toBe('prompt');
+  });
+
+  it('-execdir 的相对破坏目标 cwd 随匹配项变动、不可证 → 必问', () => {
+    const r = ['/repo'];
+    // -execdir 在匹配项目录执行,相对 `cindy` 实际可能删掉整个 /repo → 必问。
+    expect(classifyShellCommand('find /repo -maxdepth 0 -execdir rm -rf cindy \\;', r)).toBe('prompt-each-time');
+    // 反例:同样相对目标但用 -exec(会话 cwd 解析)且在区内 → 灰区。
+    expect(classifyShellCommand('find /repo -exec rm -rf sub \\;', r)).toBe('prompt');
+  });
+
+  it('-files0-from 内容驱动的遍历根不可证 + 破坏动作 → 必问', () => {
+    for (const c of [
+      'find -files0-from roots.txt -delete',
+      'find -files0-from list -exec rm -rf {} \\;',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:普通 -delete(静态根在区内)仍灰区。
+    expect(classifyShellCommand('find build -delete', roots)).toBe('prompt');
+  });
+});
