@@ -3591,6 +3591,56 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
     expect(latestProjection(h.projections).queueAbortPending).toBe(false);
   });
 
+  it.each([
+    { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
+    { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+  ])('retries abort reconciliation after $agentKind abort settles before the live turn is idle', async ({
+    agentKind,
+    providerId,
+    model,
+  }) => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = `stop-delayed-idle-${agentKind}`;
+    const first = makeItem('q-1', 'first', {
+      createOpts: { ...makeItem('tmp', 'tmp').createOpts, agentKind, providerId, model },
+    });
+    const second = makeItem('q-2', 'second', {
+      createOpts: { ...makeItem('tmp2', 'tmp2').createOpts, agentKind, providerId, model },
+    });
+    const abort = deferred<void>();
+    h.setAgentKind(agentKind);
+    h.abortSession.mockImplementationOnce(() => abort.promise);
+    h.reconcileTurnIdle
+      .mockReturnValueOnce(false)
+      .mockImplementationOnce(() => {
+        h.setRunning(false);
+        return true;
+      });
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    h.coordinator.stop(sid, { keepQueue: true, pauseQueue: true });
+    h.coordinator.resume(sid);
+    abort.resolve();
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(1);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).pendingQueue).toEqual([second]);
+
+    await vi.advanceTimersByTimeAsync(250);
+    await flush();
+
+    expect(h.reconcileTurnIdle).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'second' });
+    expect(latestProjection(h.projections).queueAbortPending).toBe(false);
+  });
+
   it('retains an abort lock when owner switching hides the agent kind and live idle cannot be confirmed', async () => {
     const h = createHarness();
     const sid = 'stop-owner-boundary-agent-unknown';

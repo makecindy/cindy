@@ -238,9 +238,10 @@ describe('maker:event hot path ordering', () => {
     expect(directAbortEnd).toBeGreaterThan(directAbortStart);
     expectOrder(
       directAbortSource,
-      'const sess = maker.getSession(sessionId);',
+      'const sess = getStableSessionForTurnBoundary(sessionId);',
       'if (!sess) return;',
     );
+    expect(directAbortSource).not.toContain('const sess = maker.getSession(sessionId);');
     expectOrder(
       directAbortSource,
       'if (!sess) return;',
@@ -250,6 +251,13 @@ describe('maker:event hot path ordering', () => {
       directAbortSource,
       'handleAgentIslandSessionStopped(sess);',
       'await sess.abort();',
+    );
+    expect(directAbortSource).toContain("reconcileSessionTurnIdle(sessionId, 'direct-abort');");
+    expect(directAbortSource).not.toContain('if (!sess.isTurnRunning())');
+    expectOrder(
+      directAbortSource,
+      "reconcileSessionTurnIdle(sessionId, 'direct-abort');",
+      "cleanupPendingInteractionsForSession(sessionId, 'session_aborted');",
     );
     expect(hookAbortStart).toBeGreaterThanOrEqual(0);
     expect(hookAbortEnd).toBeGreaterThan(hookAbortStart);

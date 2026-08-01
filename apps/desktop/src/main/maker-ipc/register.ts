@@ -1841,6 +1841,17 @@ const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
+function settlePendingCredentialSwitch(sessionId: string, source: string): void {
+  const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  if (!pending) return;
+  void pending.catch((err) => {
+    log.warn('pending credential switch settle failed', {
+      sessionId,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 // turn 收口时对远端 codex MCP 做一次 best-effort ensure 的钩子 (live turn
 // 期间被推迟的 daemon bootstrap 在 idle 时点补刀)。真实现定义在
 // registerMakerIpcs 闭包内 (依赖 maker / ensure 函数), 模块级 turn 收口
@@ -2518,7 +2529,7 @@ function settleSilentStopDone(sessionId: string, reason: 'exhausted' | 'skip' | 
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
-  void pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
   refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -2967,7 +2978,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 提前唤醒会让 apply/重试读到 isSessionInTurn=true 而空转,退化到 10s 兜底
       // (review P2 2026-07-04)。apply 内部串行 + 幂等,fire-and-forget 安全;
       // planned upgrade close 等场景多唤一次也只是 no-op。
-      void pendingCredentialSwitchHolder?.onTurnSettled(session.id);
+      settlePendingCredentialSwitch(session.id, `event:${event.type}`);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
@@ -7420,16 +7431,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // persistence. It may retry/settle after an owner boundary is available.
       markTurnEndedAfterPersistDrain(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
-      const pendingCredentialSwitchSettled = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
-      if (pendingCredentialSwitchSettled) {
-        void pendingCredentialSwitchSettled.catch((err) => {
-          log.warn('pending credential switch settle failed during reconciliation', {
-            sessionId,
-            source,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        });
-      }
+      settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -8354,7 +8356,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     silentStopAutoResumeGuard.noteSessionReset(sessionId);
     interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
     autoResumeBookkeeping.teardown(sessionId);
-    const sess = maker.getSession(sessionId);
+    const sess = getStableSessionForTurnBoundary(sessionId);
     if (!sess) return;
     handleAgentIslandSessionStopped(sess);
     // 用户 Stop 当前 turn → 若该会话有 active goal,先暂停目标(置 paused + 停续跑 + detach
@@ -8364,10 +8366,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     try {
       await sess.abort();
     } finally {
-      if (!sess.isTurnRunning()) {
+      // The stable lookup may still be inside an owner-boundary transition;
+      // reconciliation owns its own safe live-state lookup and must run even
+      // when the abort promise rejects or the Session reports a late idle.
+      try {
         reconcileSessionTurnIdle(sessionId, 'direct-abort');
+      } finally {
+        cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
       }
-      cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
     }
   });
 

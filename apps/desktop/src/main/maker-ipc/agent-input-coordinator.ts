@@ -374,6 +374,12 @@ interface SessionInputState {
    * turn's boundary or clear its activeTurn.
    */
   abortBoundaryToken: symbol | null;
+  /**
+   * Session.abort() may settle before maker-core publishes the idle state. Keep
+   * rechecking the same abort boundary until the live turn is idle or a newer
+   * state invalidates it.
+   */
+  abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
   /**
@@ -415,6 +421,7 @@ function createInitialInputState(generation = 0): SessionInputState {
     pendingExternalTerminalDone: false,
     pendingExternalTerminalDoneTimer: null,
     abortBoundaryToken: null,
+    abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
     credentialSwitchWait: null,
@@ -1390,6 +1397,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
     this.abortSteerTransactions(sessionId);
+    this.clearAbortReconcileRetry(state);
     // Stop 是用户显式收手:凭证切换等待随之取消(保留队列时队首仍在,恢复后会重新进入等待)。
     this.clearCredentialSwitchWait(state);
     if (!preserveQueue) {
@@ -1453,32 +1461,17 @@ export class AgentInputCoordinator {
           });
           return;
         }
-        // `Session.abort()` can reject after the vendor process has already
-        // stopped.  That is a real abort boundary, but status/terminal events
-        // are allowed to be lost (for example while the app-session owner is
-        // switching).  Reconcile the host's authoritative idle view before
-        // releasing the queue; otherwise the tracker stays busy forever and
-        // every later message is queued behind a dead turn.
-        let reconciledIdle = false;
-        try {
-          reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
-        } catch (err) {
-          // A best-effort reconciliation must never prevent the normal abort
-          // cleanup below from releasing the coordinator boundary.
-          log.warn('reconcileTurnIdle after abort failed', {
-            sessionId,
-            error: errorMessage(err),
-          });
-        }
-        // Codex normally keeps this lock until its terminal event because the
-        // abort RPC may resolve before the turn really stops. If the owner
-        // boundary also makes the agent kind unavailable, fail closed for the
-        // same reason instead of treating an unknown session as Claude. Once
-        // the live session is confirmed idle there is no terminal event left
-        // to wait for, so the preserved queue can safely be released.
-        const agentKind = this.deps.getAgentKind(sessionId);
-        if (!reconciledIdle && agentKind !== 'claude-code') return;
-        this.releaseAbortLockAndDrain(sessionId, 'abort-promise', { clearActiveTurn: true });
+        // `Session.abort()` can settle before the vendor process has actually
+        // published its idle state. Keep this boundary alive and recheck it
+        // instead of relying on a terminal event that may be lost during an
+        // owner switch.
+        this.reconcileAbortBoundary(
+          sessionId,
+          state,
+          abortBoundaryGeneration,
+          abortBoundaryToken,
+          'abort-promise',
+        );
       });
 
     return this.getProjection(sessionId);
@@ -1875,6 +1868,7 @@ export class AgentInputCoordinator {
   clearSession(sessionId: string, clearedAt: string | number = Date.now()): AgentInputProjection {
     this.deps.noteSessionClearBoundary?.(sessionId, clearedAt);
     const prev = this.getState(sessionId);
+    this.clearAbortReconcileRetry(prev);
     this.clearSessionRunningRetry(prev);
     this.clearCredentialSwitchWait(prev);
     this.clearPendingExternalTerminalDone(prev);
@@ -1904,6 +1898,7 @@ export class AgentInputCoordinator {
   ): void {
     const state = this.getState(sessionId);
     const active = state.activeTurn;
+    this.clearAbortReconcileRetry(state);
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
@@ -2063,6 +2058,7 @@ export class AgentInputCoordinator {
     const state = this.getState(sessionId);
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
+    this.clearAbortReconcileRetry(state);
     this.clearSessionRunningRetry(state);
     this.clearPendingExternalTerminalDone(state);
     this.abortSteerTransactions(sessionId);
@@ -2906,7 +2902,7 @@ export class AgentInputCoordinator {
   private releaseAbortLockAndDrain(
     sessionId: string,
     reason: string,
-    opts?: { clearActiveTurn?: boolean },
+    opts?: { clearActiveTurn?: boolean; preserveAbortBoundaryToken?: boolean },
   ): void {
     const state = this.getState(sessionId);
     if (opts?.clearActiveTurn) {
@@ -2917,7 +2913,10 @@ export class AgentInputCoordinator {
     }
     if (!state.queueAbortPending && !opts?.clearActiveTurn) return;
     state.queueAbortPending = false;
-    state.abortBoundaryToken = null;
+    if (!opts?.preserveAbortBoundaryToken) {
+      this.clearAbortReconcileRetry(state);
+      state.abortBoundaryToken = null;
+    }
     this.emit(sessionId);
     this.scheduleDrain(sessionId, reason);
   }
@@ -2930,7 +2929,122 @@ export class AgentInputCoordinator {
    * would pass the state/generation check and clear the replacement turn.
    */
   private invalidateAbortBoundaryForNewTurn(state: SessionInputState): void {
+    this.clearAbortReconcileRetry(state);
     state.abortBoundaryToken = null;
+  }
+
+  private reconcileAbortBoundary(
+    sessionId: string,
+    state: SessionInputState,
+    abortBoundaryGeneration: number,
+    abortBoundaryToken: symbol,
+    source: string,
+  ): void {
+    const current = this.states.get(sessionId);
+    if (
+      current !== state ||
+      current.generation !== abortBoundaryGeneration ||
+      current.abortBoundaryToken !== abortBoundaryToken
+    ) {
+      return;
+    }
+
+    let reconciledIdle = false;
+    try {
+      reconciledIdle = this.deps.reconcileTurnIdle?.(sessionId) === true;
+    } catch (err) {
+      // A best-effort reconciliation must never prevent the retry path from
+      // keeping the boundary fail-closed.
+      log.warn('reconcileTurnIdle after abort failed', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+    if (reconciledIdle) {
+      this.releaseAbortLockAndDrain(sessionId, 'abort-idle-reconciled', { clearActiveTurn: true });
+      return;
+    }
+
+    let agentKind: 'claude-code' | 'codex' | null = null;
+    try {
+      agentKind = this.deps.getAgentKind(sessionId);
+    } catch (err) {
+      log.warn('agent kind lookup failed during abort reconciliation', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+
+    let liveTurnRunning = true;
+    try {
+      liveTurnRunning = this.deps.isTurnRunning(sessionId);
+    } catch (err) {
+      log.warn('live turn-state lookup failed during abort reconciliation', {
+        sessionId,
+        source,
+        error: errorMessage(err),
+      });
+    }
+
+    // Claude can release its queue lock as soon as abort settles, but keep the
+    // boundary token while the live turn is still running so a delayed idle
+    // reconciliation can clear stale tracker state without touching a newer
+    // turn. Codex keeps queueAbortPending until idle is authoritative.
+    const shouldRetry = agentKind !== null && (current.queueAbortPending || liveTurnRunning);
+    if (agentKind === 'claude-code' && (current.queueAbortPending || current.activeTurn !== null)) {
+      this.releaseAbortLockAndDrain(sessionId, 'abort-promise', {
+        clearActiveTurn: true,
+        preserveAbortBoundaryToken: shouldRetry,
+      });
+    }
+    if (shouldRetry) {
+      this.scheduleAbortReconcileRetry(
+        sessionId,
+        current,
+        abortBoundaryGeneration,
+        abortBoundaryToken,
+      );
+    } else if (!current.queueAbortPending && current.activeTurn === null) {
+      // Nothing remains that this stop boundary can own. Do not leave a stale
+      // token behind after the one-shot Claude cleanup path has completed.
+      current.abortBoundaryToken = null;
+    }
+  }
+
+  private scheduleAbortReconcileRetry(
+    sessionId: string,
+    state: SessionInputState,
+    abortBoundaryGeneration: number,
+    abortBoundaryToken: symbol,
+  ): void {
+    if (state.abortReconcileRetryTimer) return;
+    state.abortReconcileRetryTimer = setTimeout(() => {
+      const current = this.states.get(sessionId);
+      if (current === state) current.abortReconcileRetryTimer = null;
+      if (
+        current !== state ||
+        current.generation !== abortBoundaryGeneration ||
+        current.abortBoundaryToken !== abortBoundaryToken
+      ) {
+        return;
+      }
+      this.reconcileAbortBoundary(
+        sessionId,
+        current,
+        abortBoundaryGeneration,
+        abortBoundaryToken,
+        'abort-retry',
+      );
+    }, SESSION_RUNNING_RETRY_DELAY_MS);
+  }
+
+  private clearAbortReconcileRetry(state: SessionInputState): void {
+    if (state.abortReconcileRetryTimer) {
+      clearTimeout(state.abortReconcileRetryTimer);
+    }
+    state.abortReconcileRetryTimer = null;
   }
 
   private registerSteerAbortController(sessionId: string, clientId: string, controller: AbortController): void {
