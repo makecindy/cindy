@@ -32,9 +32,7 @@
 
 import { promises as fs } from 'node:fs';
 
-import { createClaudeJsonlBackup } from './fork-jsonl-repair.js';
-
-type JsonObject = Record<string, unknown>;
+import { createClaudeJsonlBackup, isRecord } from './fork-jsonl-repair.js';
 
 /**
  * kimi 铸造器形态的 id:末段为纯数字。MCP 工具名带下划线
@@ -61,10 +59,6 @@ export interface NormalizeClaudeJsonlToolIdsResult {
   duplicateIdCount: number;
   /** 尾部畸形残行被原样保留时为 true(诊断用)。 */
   keptMalformedTailLine: boolean;
-}
-
-function isRecord(value: unknown): value is JsonObject {
-  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function isToolUseBlock(block: unknown): block is JsonObject & { id: string } {
@@ -137,7 +131,10 @@ function offsetMintedId(id: string, used: ReadonlySet<string>): string | null {
  * 兜底(放弃归一化也不阻断 resume)。
  */
 export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJsonlToolIdsResult {
-  const lineCount = text.length === 0 ? 0 : text.split('\n').length - (text.endsWith('\n') ? 1 : 0);
+  const hadTrailingNewline = text.endsWith('\n');
+  const rawLines = text.split('\n');
+  if (hadTrailingNewline) rawLines.pop();
+  const lineCount = rawLines.length;
   if (!SUSPECT_ID_RE.test(text)) {
     return {
       text,
@@ -150,10 +147,6 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       keptMalformedTailLine: false,
     };
   }
-
-  const hadTrailingNewline = text.endsWith('\n');
-  const rawLines = text.split('\n');
-  if (hadTrailingNewline) rawLines.pop();
   const entries: JsonObject[] = [];
   let keptMalformedTailLine = false;
   rawLines.forEach((line, index) => {
@@ -192,21 +185,10 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   //   - 超编 result(无未配对 call):指向首现 call 的终 id(与 compat-proxy
   //     dedupe 语义一致);全文件无同名 call 时按独立原 id 走偏移。
   // 占用判定 usedIds = 全量原 id ∪ 已产出终 id;配对 exchange 共享终 id 不算占用。
-  const counts = new Map<string, number>();
-  for (const entry of entries) {
-    if (entry.type !== 'assistant') continue;
-    for (const block of messageContentBlocks(entry) ?? []) {
-      if (isToolUseBlock(block)) counts.set(block.id, (counts.get(block.id) ?? 0) + 1);
-    }
-  }
-  let duplicateIdCount = 0;
-  for (const n of counts.values()) {
-    if (n > 1) duplicateIdCount += 1;
-  }
-
   const changedLineIndexes = new Set<number>();
   let dedupedBlockCount = 0;
   let offsetBlockCount = 0;
+  let duplicateIdCount = 0;
   const callSeen = new Map<string, number>();
   const openCalls = new Map<string, Array<{ originalId: string; finalId: string }>>();
   const firstFinalByOriginal = new Map<string, string>();
@@ -220,6 +202,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         const originalId = block.id;
         const n = (callSeen.get(originalId) ?? 0) + 1;
         callSeen.set(originalId, n);
+        if (n === 2) duplicateIdCount += 1;
         let finalId = originalId;
         if (n >= 2) {
           finalId = freeDupSuffix(originalId, usedIds);
@@ -319,15 +302,6 @@ export async function normalizeClaudeSessionJsonlToolIds(
       throw err;
     }
   }
-  return {
-    filePath,
-    changed: normalized.changed,
-    ...(backupPath ? { backupPath } : {}),
-    lineCount: normalized.lineCount,
-    skipped: normalized.skipped,
-    dedupedBlockCount: normalized.dedupedBlockCount,
-    offsetBlockCount: normalized.offsetBlockCount,
-    duplicateIdCount: normalized.duplicateIdCount,
-    keptMalformedTailLine: normalized.keptMalformedTailLine,
-  };
+  const { text: _, ...rest } = normalized;
+  return { filePath, ...rest, ...(backupPath ? { backupPath } : {}) };
 }

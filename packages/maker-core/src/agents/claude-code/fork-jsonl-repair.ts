@@ -34,7 +34,7 @@ export interface CompactMetadataRepair {
   removedPreservedMessages: boolean;
 }
 
-function isRecord(value: unknown): value is JsonObject {
+export function isRecord(value: unknown): value is JsonObject {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
