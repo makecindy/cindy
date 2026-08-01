@@ -671,14 +671,6 @@ export class GhostNodeRuntimeBroker {
     message: Extract<GhostNodeChildToHostMessage, { type: 'spawn-child' }>,
   ): Promise<void> {
     const ghostId = entry.ghost.manifest.id;
-    // stopAndWait 已开始后不得再 fork 新 child；否则它会落在本轮快照之外，
-    // 又把目录替换竞态带回来。
-    if (
-      this.stoppedGhosts.has(ghostId) ||
-      this.workers.get(GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel)) !== entry
-    ) {
-      return;
-    }
     const fail = (reason: string): void => {
       this.deps.log?.warn('ghost node child spawn rejected', { ghostId, reason });
       this.replyToWorker(entry, {
@@ -688,6 +680,16 @@ export class GhostNodeRuntimeBroker {
         message: reason,
       });
     };
+    // stopAndWait 已开始后不得再 fork 新 child；否则它会落在本轮快照之外，
+    // 又把目录替换竞态带回来。仍在世的 worker 必须收到拒绝回执，避免它白等
+    // 到自己的请求超时；已被移除的 worker 则不再可安全回信。
+    if (this.workers.get(GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel)) !== entry) {
+      return;
+    }
+    if (this.stoppedGhosts.has(ghostId)) {
+      fail('插件正在停止，不能再启动子进程');
+      return;
+    }
     const ghost = this.deps.getGhost(ghostId);
     const node = ghost?.enabled ? ghost.manifest.node : undefined;
     if (!node || node.childSpawn !== true) {

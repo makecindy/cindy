@@ -3291,11 +3291,13 @@ async function installOrUpdateMarketGhostPackageLocked(
 
     const runtime = getGhostRuntime();
     runtime.stop(expected.ghostId);
-    getGhostNodeRuntimeBroker().stop(expected.ghostId);
-    getGhostAgentSlot().clearGhost(expected.ghostId);
-    getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
+      // 市场更新同样会原位 rename 插件目录。Windows 上不能只发停止信号，
+      // 必须确认旧 utilityProcess 已离开，否则入口文件仍可能被占用而报 EPERM。
+      await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);
+      getGhostAgentSlot().clearGhost(expected.ghostId);
+      getGhostErrandSlot().clearGhost(expected.ghostId);
       // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
       result = await manager.update(cindyFilePath, {
         expectedPackageSha256: inspected.packageSha256,
@@ -4488,18 +4490,19 @@ export function registerGhostIpc(): void {
     return withGhostInstallLock(inspected.manifest.id, async () => {
       const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
       runtime.stop(inspected.manifest.id);
-      // Windows 上 stop() 只是发出终止信号；必须等旧 utilityProcess 真正退出，
-      // 否则它还会占用插件目录，接下来的原子 rename 可能报 EPERM。
-      await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
-      getGhostAgentSlot().clearGhost(inspected.manifest.id);
-      getGhostErrandSlot().clearGhost(inspected.manifest.id);
       let result: Awaited<ReturnType<typeof manager.update>>;
       try {
+        // Windows 上 stop() 只是发出终止信号；必须等旧 utilityProcess 真正退出，
+        // 否则它还会占用插件目录，接下来的原子 rename 可能报 EPERM。
+        await getGhostNodeRuntimeBroker().stopAndWait(inspected.manifest.id);
+        getGhostAgentSlot().clearGhost(inspected.manifest.id);
+        getGhostErrandSlot().clearGhost(inspected.manifest.id);
         result = await manager.update(lizFilePath, { expectedPackageSha256 });
       } catch (err) {
         // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
         if (previousGhost) spawnIfResident(previousGhost);
         throw err;
+      }
       if ('rejection' in result) {
         if (previousGhost) spawnIfResident(previousGhost);
         throwInstallError(result.rejection);
