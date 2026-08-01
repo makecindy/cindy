@@ -143,7 +143,7 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
   'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
-  'setsid', 'chrt', 'exec', 'watch', 'flock',
+  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset',
 ]);
 
 /**
@@ -583,6 +583,22 @@ function unwrapCommand(
       }
       toks = toks.slice(i);
       if ((shellForm || toks.length === 1) && toks.length >= 1 && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'taskset') {
+      // taskset [options] <mask> COMMAND 或 taskset -c/--cpu-list <list> COMMAND(codex 报 `taskset -c 0 rm …`)。
+      // -p/--pid 是改已有进程的亲和性、不跑新命令 → 不解包(fail-closed 留原样)。
+      if (toks.slice(1).some((t) => /^--pid$/.test(t) || /^-[a-z]*p[a-z]*$/i.test(t))) break;
+      let i = 1;
+      let cpuListGiven = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-c' || t === '--cpu-list') { cpuListGiven = true; i += 2; continue; }
+        if (/^--cpu-list=/.test(t) || /^-c.+/.test(t)) { cpuListGiven = true; i++; continue; }
+        if (t.startsWith('-')) { i++; continue; }
+        break;
+      }
+      if (!cpuListGiven && i < toks.length) i++; // 无 -c 时首个非选项是 mask 操作数,跳过
+      toks = toks.slice(i);
     } else {
       // nohup / setsid / builtin / setarch:直接跳过包裹器本身。
       toks = toks.slice(1);
@@ -849,6 +865,12 @@ function substitutionBodies(text: string): string[] {
         if (c === "'" && !dq) { sq = !sq; continue; }
         if (c === '"' && !sq) { dq = !dq; continue; }
         if (sq || dq) continue;
+        // shell 注释:`#` 在词首(行首/空白/分隔符/`(` 之后)起注释到行尾,其中的 `)` 是字面不是替换体终点
+        // (greptile 报 `$(echo ok # )\neval …\n)`)→ 跳到换行,避免注释里的 `)` 提前截断。
+        if (c === '#' && (j === i + 2 || /[\s(;&|]/.test(text[j - 1]))) {
+          while (j + 1 < text.length && text[j + 1] !== '\n') j++;
+          continue;
+        }
         if (c === '(') depth++;
         else if (c === ')') depth--;
       }

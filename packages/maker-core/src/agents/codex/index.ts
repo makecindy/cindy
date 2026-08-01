@@ -8214,8 +8214,11 @@ export class CodexAgent extends BaseAgent {
         log.debug('setModel', { from: mutableModel, to: newModel, providerId: mutableProviderId ?? null });
         mutableModel = newModel;
         autoReviewDecisionCache.clear();
-        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。
-        mutableCatalogModel = newModel;
+        // 用户显式选的一定是目录 id(选择器就是从目录渲染的)。但 'gpt-5' 是 server 默认哨兵、非可解析目录 id,
+        // 它会被 host 侧轻量 reviewer 当 request.model(及 activeTurnModel/窗口查找)用 —— 哨兵模式下 turn/start
+        // 不回带真实模型,写进去会让 reviewer 拿到不可解析 model → 静默失败 → 灰区一律被 block(copilot 报)。
+        // 切哨兵时保留上一次可解析的目录 model,由后续 thread/start/resume 的 resp.model 更新回真实值。
+        if (newModel !== 'gpt-5') mutableCatalogModel = newModel;
         try {
           refreshCodexAutoReviewerRoute(threadId);
           // thread 已启动 → 立即经 thread/settings/update 推给 server (sticky); 未启动则由

@@ -1559,3 +1559,25 @@ describe('引号内字面括号 / -execdir 相对目标 / -files0-from 动态根
     expect(classifyShellCommand('find build -delete', roots)).toBe('prompt');
   });
 });
+
+describe('替换体内 shell 注释 / taskset 执行包装器(第三十批评审)', () => {
+  it('替换体里注释中的 ) 不提前截断,后续实际执行的 eval 仍命中', () => {
+    expect(classifyShellCommand('echo $(echo ok # )\neval "$X"\n)', roots)).toBe('prompt-each-time');
+    // 反例:替换体含注释但全良性 → 不误升。
+    expect(classifyShellCommand('echo $(echo ok # )\necho done\n)', roots)).toBe('prompt');
+  });
+
+  it('taskset 执行的命令被解包,区外递归删除不漏', () => {
+    for (const c of [
+      'taskset -c 0 rm -rf /outside',
+      'taskset 0x3 rm -rf /outside',
+      'taskset --cpu-list 0-2 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:taskset 跑只读命令 → 放行;区内 scoped 删除 → 灰区;-p 改已有进程不跑命令 → 不误升。
+    expect(classifyShellCommand('taskset -c 0 ls', roots)).toBe('auto-approve');
+    expect(classifyShellCommand('taskset -c 0 rm -rf build', roots)).toBe('prompt');
+    expect(classifyShellCommand('taskset -pc 0x1 1234', roots)).not.toBe('prompt-each-time');
+  });
+});
