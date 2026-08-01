@@ -526,14 +526,16 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('codexCaps.capabilities?.supportsSessionAgentSwitch === true');
   });
 
-  it('Orca 会话(lead / worker)排除:被控端 handler 对 orcaRole 一律拒,不能暴露必失败的入口', () => {
-    expect(source).toContain('!sessionOrcaRole &&');
-    // 会话视图必须把角色喂进来,否则门控恒为「非协同」。
+  it('Orca 与角色未加载会话都 fail-closed:只有完整元数据确认非协同后开放入口', () => {
+    expect(source).toContain('sessionOrcaRole === null &&');
+    // 会话视图必须保留 undefined 未知态,不能在完整 session 回流前冒充「非协同」。
     const viewSource = readFileSync(
       resolve(process.cwd(), 'src/renderer/features/cc-agent/CCAgentSessionView.tsx'),
       'utf8',
     );
-    expect(viewSource).toContain('sessionOrcaRole={session?.orcaRole ?? null}');
+    expect(viewSource).toContain(
+      'sessionOrcaRole={session ? (session.orcaRole ?? null) : undefined}',
+    );
   });
 
   it('本地与远程会话打开时都读回 main 权威意图,并经新鲜度守卫过滤过期响应', () => {

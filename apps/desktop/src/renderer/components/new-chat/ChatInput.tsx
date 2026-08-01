@@ -334,7 +334,8 @@ interface ChatInputProps {
    */
   runtimeAgentKind?: AgentKind | null;
   /**
-   * 会话的 Orca 角色(lead / worker;null = 非协同会话)。协同运行时对 agent 形态有独立
+   * 会话的 Orca 角色(lead / worker;null = 已确认非协同;undefined = 元数据未加载)。
+   * 协同运行时对 agent 形态有独立
    * 契约(docs/dev-rules/orca-team-architecture.md),被控端的 session-agent-switch handler
    * 对任何带 orcaRole 的会话一律拒 UNSUPPORTED_CAPABILITY —— 入口据此隐藏,不给用户
    * 一个点了必失败的控件(与手机端 supportsMobileSessionAgentSwitch 同口径)。
@@ -1248,9 +1249,9 @@ export function ChatInput({
   // 同口径)。本机会话恒可用——main 就是实现方,不能因 capabilities 还没加载完而闪掉入口。
   // SSH 远程(remoteHostId)是另一套引擎生命周期,继续不支持,由调用点单独排除。
   // Orca 会话(lead / worker)同样排除:被控端 handler 对带 orcaRole 的会话一律拒
-  // UNSUPPORTED_CAPABILITY,暴露入口只会得到一个必然失败的控件。
+  // UNSUPPORTED_CAPABILITY。角色未加载(undefined)也 fail-closed,避免冷启动短暂露出入口。
   const sessionAgentSwitchSupported =
-    !sessionOrcaRole &&
+    sessionOrcaRole === null &&
     (!deviceLinkDeviceId ||
       ccCaps.capabilities?.supportsSessionAgentSwitch === true ||
       codexCaps.capabilities?.supportsSessionAgentSwitch === true);
