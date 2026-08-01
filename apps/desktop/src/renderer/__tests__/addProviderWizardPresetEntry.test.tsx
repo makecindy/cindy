@@ -5,6 +5,8 @@
  *   1. entry={kind:'preset',presetId}:presets 异步载入后直达表单步(step 2,
  *      名称预填预设名),一次性消费。
  *   2. presetId 在目录里不存在 → 回落目录第一步,不假装直达。
+ *   3. API Key 输入默认遮罩,但必须能显形核对——粘错 key / 多余空格 / 前缀不对
+ *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -174,6 +176,20 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     // 不在目录步(搜索框只在 step 1)。
     expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
+  });
+
+  it('API Key 默认遮罩,eye 能切明文再切回(粘贴后核对)', async () => {
+    renderWizard('deepseek');
+
+    const keyInput = await screen.findByPlaceholderText('sk-…');
+    expect(keyInput.getAttribute('type')).toBe('password');
+
+    // 遮罩态按钮语义是「显示密钥」,点击后翻转为「隐藏密钥」。
+    fireEvent.click(screen.getByLabelText('settings.apiKey.showKey'));
+    expect(keyInput.getAttribute('type')).toBe('text');
+
+    fireEvent.click(screen.getByLabelText('settings.apiKey.hideKey'));
+    expect(keyInput.getAttribute('type')).toBe('password');
   });
 
   it('OAuth 授权步提供「改用 API Key 接入」→ 切到官方 API 预设表单', async () => {
