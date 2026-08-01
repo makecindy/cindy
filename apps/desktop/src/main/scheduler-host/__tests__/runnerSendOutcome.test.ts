@@ -22,6 +22,13 @@ const mocks = vi.hoisted(() => ({
   isSessionInTurn: vi.fn(() => false),
   resolveWorkingDir: vi.fn(),
   backfillSessionMeta: vi.fn(),
+  schedulerRecoveryHandlers: new Map<string, (event: AgentEvent) => boolean>(),
+  registerSchedulerRecovery: vi.fn(),
+  claimSchedulerRecovery: vi.fn(),
+  registerSchedulerResumeOutcome: vi.fn(),
+  releaseSchedulerResumeOutcome: vi.fn(),
+  discardSchedulerSuppressedError: vi.fn(),
+  finalizeSchedulerSuppressedError: vi.fn(),
 }));
 
 vi.mock('../../localDb/ipc/messages.js', () => ({
@@ -44,6 +51,15 @@ vi.mock('../../maker-ipc/register.js', () => ({
   onSilentStopSettled: vi.fn(() => () => {}),
 }));
 
+vi.mock('../schedulerInterruptedTurnRecoveryBridge.js', () => ({
+  registerSchedulerInterruptedTurnRecovery: mocks.registerSchedulerRecovery,
+  claimSchedulerInterruptedTurnRecovery: mocks.claimSchedulerRecovery,
+  registerSchedulerInterruptedTurnResumeOutcome: mocks.registerSchedulerResumeOutcome,
+  releaseSchedulerInterruptedTurnResumeOutcome: mocks.releaseSchedulerResumeOutcome,
+  discardSchedulerInterruptedTurnSuppressedError: mocks.discardSchedulerSuppressedError,
+  finalizeSchedulerInterruptedTurnSuppressedError: mocks.finalizeSchedulerSuppressedError,
+}));
+
 vi.mock('../workdir-resolver', () => ({
   resolveWorkingDir: mocks.resolveWorkingDir,
 }));
@@ -54,6 +70,7 @@ vi.mock('../runners/_shared', () => ({
 
 import { MakerScheduleRunner } from '../runner';
 import { isHeadlessGhostSetupTurn } from '../../mcp-integrations/ghostSetupInteractionSurface';
+import { CONTINUE_AFTER_ERROR_PROMPT } from '../../../shared/interruptedTurn';
 
 type SessionSendOptions = Parameters<Session['send']>[1];
 type SendImpl = (
@@ -92,6 +109,12 @@ function createSessionHarness(sendImpl: SendImpl): FakeSessionHarness {
     send,
     off,
     emit(event: AgentEvent) {
+      // Production wireSessionToIpc subscribes before the runner waiter and gives Schedule
+      // recovery first refusal over a terminal error. Mirror that ordering here even though
+      // register.ts is intentionally mocked as a narrow dependency in this unit suite.
+      if (event.type === 'error') {
+        mocks.claimSchedulerRecovery('scheduler-session', event);
+      }
       for (const listener of [...listeners]) listener(event);
     },
     listenerCount() {
@@ -236,6 +259,21 @@ function expectSafeSendFailureLog(
 describe('MakerScheduleRunner send outcome policy', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    vi.useRealTimers();
+    mocks.schedulerRecoveryHandlers.clear();
+    mocks.registerSchedulerRecovery.mockImplementation(
+      (sessionId: string, handler: (event: AgentEvent) => boolean) => {
+        mocks.schedulerRecoveryHandlers.set(sessionId, handler);
+        return () => {
+          if (mocks.schedulerRecoveryHandlers.get(sessionId) === handler) {
+            mocks.schedulerRecoveryHandlers.delete(sessionId);
+          }
+        };
+      },
+    );
+    mocks.claimSchedulerRecovery.mockImplementation((sessionId: string, event: AgentEvent) =>
+      mocks.schedulerRecoveryHandlers.get(sessionId)?.(event) ?? false,
+    );
     mocks.createMessage.mockResolvedValue(undefined);
     mocks.backfillSessionMeta.mockResolvedValue(undefined);
     mocks.resolveWorkingDir.mockResolvedValue({ ok: true, path: 'F:\\XDMaker' });
@@ -266,7 +304,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'cancelled-before-dispatch',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
     expect(h.session.close).not.toHaveBeenCalled();
   });
 
@@ -281,7 +319,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
     await expect(runner.fire(baseSchedule(), ctx)).rejects.toThrow(/schedule fire aborted/);
     expect(notifier.notify).not.toHaveBeenCalled();
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
   });
 
   it('closes an accepted ephemeral turn before propagating an abort', async () => {
@@ -493,7 +531,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'Error',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
   });
 
   it('marks onAccepted rejection failed without waiting for terminal events and records the source', async () => {
@@ -519,7 +557,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'onAccepted-rejected',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
   });
 
   it('marks SESSION_RUNNING failed without waiting for terminal events and records the reason', async () => {
@@ -542,7 +580,7 @@ describe('MakerScheduleRunner send outcome policy', () => {
       reason: 'SESSION_RUNNING',
     });
     expect(h.off).toHaveBeenCalledTimes(1);
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
   });
 
   it('waits for the terminal event when send is accepted', async () => {
@@ -568,7 +606,172 @@ describe('MakerScheduleRunner send outcome policy', () => {
     const run = latestNotifiedRun(notifier);
     expect(run.status).toBe('success');
     expect(run.resultText).toBe('done text');
-    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(1);
+    expect(ctx.removeAbortListener).toHaveBeenCalledTimes(2);
+  });
+
+  it('continues a partially completed capacity-interrupted turn in the same schedule run', async () => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const beforeDispatchUserTurn = vi.fn(async () => undefined);
+    const { runner, notifier } = createRunnerHarness(h.session, { beforeDispatchUserTurn });
+    const schedule = baseSchedule();
+    const ctx = createFireContext();
+    const firePromise = runner.fire(schedule, ctx);
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+    // Some SDK paths pair the terminal error with the old turn's done. It must not close
+    // the Schedule run while the continuation is in backoff.
+    h.emit({ type: 'done', data: {} });
+
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(notifier.notify).not.toHaveBeenCalled();
+    await vi.advanceTimersByTimeAsync(4_000);
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(2));
+
+    expect(h.send.mock.calls[0]?.[0]).toEqual(
+      expect.objectContaining({ content: expect.stringContaining(schedule.prompt) }),
+    );
+    expect(h.send.mock.calls[1]?.[0]).toEqual({
+      type: 'user',
+      content: CONTINUE_AFTER_ERROR_PROMPT,
+    });
+    expect(h.send.mock.calls[1]?.[0]).not.toEqual(h.send.mock.calls[0]?.[0]);
+    expect(h.send.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        origin: {
+          kind: 'scheduler',
+          scheduleId: schedule.id,
+          scheduleName: schedule.name,
+          runId: ctx.runId,
+        },
+      }),
+    );
+    expect(mocks.createMessage).toHaveBeenNthCalledWith(
+      2,
+      'scheduler-session',
+      expect.objectContaining({
+        role: 'user',
+        content: CONTINUE_AFTER_ERROR_PROMPT,
+        agentMeta: expect.objectContaining({
+          delivery: 'turn',
+          autoResume: true,
+          autoResumeInfo: expect.objectContaining({
+            error: 'Selected model is at capacity. Please try a different model.',
+            attempt: 1,
+            maxAttempts: 5,
+            sessionTotal: 1,
+          }),
+        }),
+      }),
+    );
+    expect(beforeDispatchUserTurn).toHaveBeenCalledTimes(2);
+    expect(mocks.discardSchedulerSuppressedError).toHaveBeenCalledWith('scheduler-session');
+
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'completed after recovery', isFinal: true } });
+    h.emit({ type: 'done', data: {} });
+
+    await expect(firePromise).resolves.toEqual({
+      sessionId: 'scheduler-session',
+      resultText: 'completed after recovery',
+    });
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(latestNotifiedRun(notifier)).toEqual(
+      expect.objectContaining({ status: 'success', resultText: 'completed after recovery' }),
+    );
+  });
+
+  it('does not continue a capacity error when the turn produced no output', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+
+    await expect(firePromise).rejects.toThrow(/capacity/);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('does not continue deterministic errors after partial output', async () => {
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const firePromise = runner.fire(baseSchedule(), createFireContext());
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'invalid api key',
+        sdkError: 'authentication_failed',
+        isTerminal: true,
+      },
+    });
+
+    await expect(firePromise).rejects.toThrow(/invalid api key/);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
+  });
+
+  it('cancels a pending interrupted-turn continuation when the Schedule run is aborted', async () => {
+    vi.useFakeTimers();
+    const h = createSessionHarness(async (_message, opts) => {
+      await opts?.onAccepted?.();
+      return { accepted: true };
+    });
+    const { runner, notifier } = createRunnerHarness(h.session);
+    const ctx = createFireContext();
+    const firePromise = runner.fire(baseSchedule(), ctx);
+
+    await vi.waitFor(() => expect(h.send).toHaveBeenCalledTimes(1));
+    h.emit({ type: 'status', data: { isRunning: true } });
+    h.emit({ type: 'text', data: { text: 'partial output', isFinal: false } });
+    h.emit({
+      type: 'error',
+      data: {
+        message: 'Selected model is at capacity. Please try a different model.',
+        reason: 'upstream-overload',
+        isTerminal: true,
+      },
+    });
+    ctx.controller.abort();
+
+    await expect(firePromise).rejects.toThrow(/aborted/);
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(h.send).toHaveBeenCalledTimes(1);
+    expect(mocks.finalizeSchedulerSuppressedError).toHaveBeenCalledWith('scheduler-session');
+    expect(notifier.notify).toHaveBeenCalledTimes(1);
+    expect(latestNotifiedRun(notifier)).toEqual(expect.objectContaining({ status: 'failed' }));
   });
 
   it('marks a direct scheduler turn headless only after acceptance and releases it at terminal', async () => {

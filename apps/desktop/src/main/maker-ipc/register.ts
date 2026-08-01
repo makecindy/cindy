@@ -563,6 +563,10 @@ import {
 import { readSilentStopAutoResumeSettings } from '../maker-host/silent-stop-auto-resume-store.js';
 import { AutoResumeBookkeeping } from './autoResumeBookkeeping.js';
 import {
+  claimSchedulerInterruptedTurnRecovery,
+  configureSchedulerInterruptedTurnRecoveryLifecycle,
+} from '../scheduler-host/schedulerInterruptedTurnRecoveryBridge.js';
+import {
   InterruptedTurnAutoResumeGuard,
   isAutoResumeUserMessage,
   isInterruptedTurnError,
@@ -660,6 +664,16 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   abandonTakeover: (sessionId, message) =>
     agentInputCoordinatorHolder?.abandonAutoResume(sessionId, message),
   log: (message, fields) => log.debug(message, fields),
+});
+
+configureSchedulerInterruptedTurnRecoveryLifecycle({
+  registerOutcome: (sessionId, clientId) =>
+    autoResumeBookkeeping.registerPendingOutcome(sessionId, clientId),
+  releaseOutcome: (sessionId, clientId) =>
+    autoResumeBookkeeping.releasePendingOutcome(sessionId, clientId),
+  discardSuppressedError: (sessionId) => autoResumeBookkeeping.discardSuppressedError(sessionId),
+  finalizeSuppressedError: (sessionId) =>
+    autoResumeBookkeeping.finalizeSuppressedError(sessionId, { surfaceBanner: false }),
 });
 
 /**
@@ -2767,7 +2781,32 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         });
       }
     }
-    const broadcastEvent = redactEventForRenderer(attributedEvent);
+    let broadcastEvent = redactEventForRenderer(attributedEvent);
+    let schedulerInterruptedTurnRecoveryClaimed = false;
+    if (isTerminalTurnErrorEvent(attributedEvent)) {
+      try {
+        schedulerInterruptedTurnRecoveryClaimed = claimSchedulerInterruptedTurnRecovery(
+          session.id,
+          attributedEvent,
+        );
+      } catch (err) {
+        log.warn('scheduler interrupted-turn recovery handler threw', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      if (schedulerInterruptedTurnRecoveryClaimed && broadcastEvent.type === 'error') {
+        const data = broadcastEvent.data && typeof broadcastEvent.data === 'object'
+          ? (broadcastEvent.data as Record<string, unknown>)
+          : {};
+        // 对齐普通聊天：这是“正在恢复”的过程事件，不让 renderer 把本轮定格成红色
+        // terminal banner。原错误详情由下方 suppressed-error 簿记暂存。
+        broadcastEvent = {
+          ...broadcastEvent,
+          data: { ...data, isTerminal: false, willRetry: true },
+        };
+      }
+    }
     if (event.type === 'interaction_dismissed') {
       const data = event.data as { requestId?: unknown; reason?: unknown };
       if (typeof data.requestId === 'string') {
@@ -2932,7 +2971,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // sdkError === 'authentication_failed' 以及 message 命中 authentication_error /
       // invalid api key / 401 的情形。本地会话（无 remoteHostId）无 auto-retry，不跳过。
       isRemoteAuthRetry = isRemoteAuthRetryErrorEvent(session, event);
-      if (!isPlannedUpgradeClose) {
+      if (!isPlannedUpgradeClose && !schedulerInterruptedTurnRecoveryClaimed) {
         agentInputCoordinatorHolder?.onTurnEvent(
           session.id,
           'error',
@@ -3105,7 +3144,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 的出口回调 onResumableTurnErrorDiscarded 让它补落。
       const autoResumeSuppressesPersist =
         event.type === 'error' &&
-        (agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
+        (schedulerInterruptedTurnRecoveryClaimed ||
+          agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true ||
           agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true);
       if (
         event.type === 'error' &&
