@@ -403,17 +403,36 @@ describe('sendToSession ordering', () => {
       'applySetModelThenCancelAgentSwitchIntent(',
     );
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
+    expect(setModelBlock).toContain('if (atomicSelection) {');
+    expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
+    expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
+    expect(setModelBlock).toContain('await sess.setEffort(');
+    expect(setModelBlock).toContain('await sess.setFastMode(atomicSelection.fastMode);');
+    expect(setModelBlock).toContain('if (isDeviceLinkInvoke() || atomicSelection) {');
+    expect(setModelBlock).toContain('patch.effort = atomicSelection.effort;');
+    expect(setModelBlock).toContain('patch.fastMode = atomicSelection.fastMode;');
     expect(setModelBlock).toContain('await persistSessionFields(sessionId, patch);');
     expect(setModelBlock).toContain('markRemoteSettingPersistedInsideHandler(response);');
     expectOrder(
       setModelBlock,
       'applySetModelThenCancelAgentSwitchIntent(',
+      'setSessionEffort(sessionId, atomicSelection.effort);',
+    );
+    expectOrder(
+      setModelBlock,
+      'setSessionFastMode(sessionId, atomicSelection.fastMode);',
       'await persistSessionFields(sessionId, patch);',
     );
     expectOrder(
       setModelBlock,
       'await persistSessionFields(sessionId, patch);',
       'return response;',
+    );
+    expect(preloadSource).toContain('selection?: { effort: string; fastMode: boolean },');
+    expectOrder(
+      preloadSource,
+      'expectedAgentSwitchRevision,',
+      'selection,',
     );
     expect(source).toContain('withSessionLock: withSendToSessionLock,');
     expect(directSendSwitchBlock).toContain('const release = await acquireSendToSessionLock(sessionId);');

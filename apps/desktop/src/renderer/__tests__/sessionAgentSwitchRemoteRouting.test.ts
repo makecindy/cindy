@@ -552,7 +552,7 @@ describe('makerChatStore 意图修订号（ABA 识别的真源）', () => {
 });
 
 describe('makerChatStore 共享发送边界', () => {
-  it('切换在途时普通消息、UI 续跑与错误重试都 fail-closed,不会碰发送传输层', async () => {
+  it('切换在途时消息、UI 续跑、错误重试与压缩都 fail-closed', async () => {
     const coordinator = await import('@/lib/agentSwitchCoordinator');
     coordinator.__resetAgentSwitchCoordinatorForTests();
     const finishSwitch = coordinator.beginAgentSwitchOperation('guarded-send');
@@ -574,6 +574,15 @@ describe('makerChatStore 共享发送边界', () => {
     await expect(makerChatStore.retryLastError('guarded-send')).rejects.toThrow(
       'Agent switch is still in progress',
     );
+    await expect(
+      makerChatStore.compactSession(
+        'guarded-send',
+        'claude-sonnet-4-6',
+        'medium',
+        'default',
+        '/tmp/workdir',
+      ),
+    ).resolves.toBe(false);
     expect(coordinator.hasPendingAgentSendDispatch('guarded-send')).toBe(false);
     finishSwitch();
   });
@@ -599,6 +608,31 @@ describe('makerChatStore 共享发送边界', () => {
     rejectRetry(new Error('retry failed'));
     await expect(retry).rejects.toThrow('retry failed');
     expect(coordinator.hasPendingAgentSendDispatch('retry-first')).toBe(false);
+  });
+
+  it('上下文压缩先发时从队列恢复开始占住发送 token，settle 后才允许切换', async () => {
+    const coordinator = await import('@/lib/agentSwitchCoordinator');
+    coordinator.__resetAgentSwitchCoordinatorForTests();
+    let rejectCompact!: (reason: Error) => void;
+    const compact = vi.fn(() => new Promise<never>((_resolve, reject) => {
+      rejectCompact = reject;
+    }));
+    vi.stubGlobal('window', { electronAPI: { maker: { input: { compact } } } });
+    const { makerChatStore } = await import('@/lib/makerChatStore');
+
+    const request = makerChatStore.compactSession(
+      'compact-first',
+      'claude-sonnet-4-6',
+      'medium',
+      'default',
+      '/tmp/workdir',
+    );
+    expect(compact).toHaveBeenCalledOnce();
+    expect(coordinator.hasPendingAgentSendDispatch('compact-first')).toBe(true);
+
+    rejectCompact(new Error('compact failed'));
+    await expect(request).resolves.toBe(false);
+    expect(coordinator.hasPendingAgentSendDispatch('compact-first')).toBe(false);
   });
 });
 
@@ -725,9 +759,15 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(source).toContain('expectedAgentSwitchRevision?: number');
     expect(source).toContain('expectedAgentSwitchRevision === undefined &&');
     expect(source.split('expectedAgentSwitchRevision === undefined &&')).toHaveLength(3);
-    expect(source).toContain('expectedAgentSwitchRevision,\n              );');
+    expect(source).toContain('remoteAtomicModelSelectionSupported');
+    expect(source).toContain(
+      'expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported',
+    );
+    expect(source).toContain('? { effort: newEffort, fastMode: restoredFast }');
+    expect(source).toContain('? { effort: targetEffort, fastMode: restoredFast }');
+    expect(source).toContain('if (!useAtomicSelection) {');
     expect(source).toContain('if (remoteSetModelResult?.superseded) {');
-    expect(source).toContain('if (setModelResult?.superseded) return false;');
+    expect(source).toContain('if (setModelResult?.superseded) {');
     expect(source).toContain('result.sameEngineRevision,');
   });
 
@@ -745,7 +785,32 @@ describe('ChatInput 的入口门控与调用路由', () => {
     const sendUiTrigger = storeSource.indexOf('function sendUiTrigger(');
     const uiTriggerBegin = storeSource.indexOf('return withAgentSendDispatch(', sendUiTrigger);
     const retryLastError = storeSource.indexOf('function retryLastError(');
-    const retryBegin = storeSource.indexOf('return withAgentSendDispatch(', retryLastError);
+    const retryBegin = storeSource.indexOf(
+      'return runAgentDispatchProjectionOperation(',
+      retryLastError,
+    );
+    const compactSession = storeSource.indexOf('function compactSession(');
+    const compactBegin = storeSource.indexOf(
+      'return runAgentDispatchProjectionOperation(',
+      compactSession,
+    );
+    const resumeQueue = storeSource.indexOf('function resumeQueue(');
+    const resumeBegin = storeSource.indexOf(
+      'runAgentDispatchProjectionOperation(',
+      resumeQueue,
+    );
+    const steerMessage = storeSource.indexOf('function steerMessage(');
+    const steerBegin = storeSource.indexOf('return withAgentSendDispatch(', steerMessage);
+    const steerQueuedMessage = storeSource.indexOf('function steerQueuedMessage(');
+    const queuedSteerBegin = storeSource.indexOf(
+      'return withAgentSendDispatch(',
+      steerQueuedMessage,
+    );
+    const resendBlockedMessage = storeSource.indexOf('async function resendBlockedMessage(');
+    const blockedResendBegin = storeSource.indexOf(
+      'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
+      resendBlockedMessage,
+    );
     const sharedBegin = storeSource.indexOf(
       'const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);',
     );
@@ -756,6 +821,11 @@ describe('ChatInput 的入口门控与调用路由', () => {
     expect(sendMessageBegin).toBeGreaterThan(sendMessage);
     expect(uiTriggerBegin).toBeGreaterThan(sendUiTrigger);
     expect(retryBegin).toBeGreaterThan(retryLastError);
+    expect(compactBegin).toBeGreaterThan(compactSession);
+    expect(resumeBegin).toBeGreaterThan(resumeQueue);
+    expect(steerBegin).toBeGreaterThan(steerMessage);
+    expect(queuedSteerBegin).toBeGreaterThan(steerQueuedMessage);
+    expect(blockedResendBegin).toBeGreaterThan(resendBlockedMessage);
     expect(sharedBegin).toBeGreaterThanOrEqual(0);
     expect(sharedFinish).toBeGreaterThan(sharedBegin);
   });

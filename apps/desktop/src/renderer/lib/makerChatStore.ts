@@ -5484,6 +5484,22 @@ function runInputProjectionOperation(
 }
 
 /**
+ * 会直接触发 Agent 工作的 input 操作统一入口。与纯投影操作分开，避免 setExpanded / 清锁
+ * 等内部收尾在切换期间被拒后残留状态；compact / retry / resume 这类用户派发则从 RPC
+ * 发起前直到 settle 全程占住发送 token，保持点击顺序。
+ */
+function runAgentDispatchProjectionOperation(
+  sessionId: string,
+  invoke: (input: RoutableMaker['input']) => Promise<AgentInputProjection>,
+): Promise<{ applied: boolean; projection: AgentInputProjection }> {
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.reject(new Error('Agent switch is still in progress')),
+    () => runInputProjectionOperation(sessionId, invoke),
+  );
+}
+
+/**
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
  * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)、
  * dropMessagesFromClientId(edit-last 截断)、removeMessagesByClientIds(分组删除)、
@@ -7198,7 +7214,7 @@ function setQueueExpanded(sessionId: string, expanded: boolean): void {
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  runInputProjectionOperation(sessionId, (input) => input.resume(sessionId))
+  runAgentDispatchProjectionOperation(sessionId, (input) => input.resume(sessionId))
     .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
@@ -7669,7 +7685,7 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
-  return runInputProjectionOperation(sessionId, (input) =>
+  return runAgentDispatchProjectionOperation(sessionId, (input) =>
     input.compact(sessionId, createOpts, { userName: currentUserName }),
   )
     // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
@@ -7719,34 +7735,40 @@ function steerMessage(
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }
-  // 同 sendMessage:无待烧录附件走全同步路径;有则物化后进同一核心。
-  if (!needsAnnotationMaterialize(files)) {
-    return steerMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      files,
-      mentions,
-      opts,
-    );
-  }
-  return materializeAnnotatedAttachmentsForSend(files, sessionId, {
-    stripAnnotationMeta: isRemoteMediaSession(sessionId),
-  }).then((prepared) =>
-    steerMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      prepared,
-      mentions,
-      opts,
-    ),
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => {
+      // 同 sendMessage:无待烧录附件走全同步路径;有则物化后进同一核心。
+      if (!needsAnnotationMaterialize(files)) {
+        return steerMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          files,
+          mentions,
+          opts,
+        );
+      }
+      return materializeAnnotatedAttachmentsForSend(files, sessionId, {
+        stripAnnotationMeta: isRemoteMediaSession(sessionId),
+      }).then((prepared) =>
+        steerMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          prepared,
+          mentions,
+          opts,
+        ),
+      );
+    },
   );
 }
 
@@ -7860,6 +7882,9 @@ async function resendBlockedMessage(
   const state = getOrCreateState(sessionId);
   const msg = state.messages.find((m) => m.clientId === clientId && m.blockedByGhost);
   if (!msg) throw new Error('resendBlockedMessage: message not found');
+  // 会话行读取也是本次用户重发的一部分；token 必须在第一个 await 前登记。
+  const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);
+  if (!finishAgentSendDispatch) throw new Error('Agent switch is still in progress');
   resendBlockedInFlight.add(clientId);
   try {
     const row = await sessionService.get(sessionId);
@@ -7910,6 +7935,7 @@ async function resendBlockedMessage(
     }
   } finally {
     resendBlockedInFlight.delete(clientId);
+    finishAgentSendDispatch();
   }
 }
 
@@ -7937,25 +7963,29 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }
-  return makerApiFor(sessionId)
-    .input.steer(sessionId, queued, { removeFromQueue: true })
-    .then((ok) => {
-      requestInputProjection(sessionId);
-      return ok;
-    })
-    .catch((err) => {
-      // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
-      setState(sessionId, (s) => ({
-        ...s,
-        error: message,
-        usageLimitRecovery: null,
-        recoverableError: null,
-        errorRetryText: null,
-      }));
-      return false;
-    });
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => makerApiFor(sessionId)
+      .input.steer(sessionId, queued, { removeFromQueue: true })
+      .then((ok) => {
+        requestInputProjection(sessionId);
+        return ok;
+      })
+      .catch((err) => {
+        // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
+        // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
+        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+        setState(sessionId, (s) => ({
+          ...s,
+          error: message,
+          usageLimitRecovery: null,
+          recoverableError: null,
+          errorRetryText: null,
+        }));
+        return false;
+      }),
+  );
 }
 
 /**
@@ -8121,12 +8151,10 @@ function retryLastError(sessionId: string): Promise<void> {
   // renderer 不传文案、不做判定。
   // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
   // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
-  return withAgentSendDispatch(
+  return runAgentDispatchProjectionOperation(
     sessionId,
-    () => Promise.reject(new Error('Agent switch is still in progress')),
-    () => runInputProjectionOperation(sessionId, (input) => input.retryLastError(sessionId))
-      .then(() => undefined),
-  );
+    (input) => input.retryLastError(sessionId),
+  ).then(() => undefined);
 }
 
 /**

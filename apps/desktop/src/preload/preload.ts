@@ -4680,6 +4680,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
       model: string,
       providerId?: string | null,
       expectedAgentSwitchRevision?: number,
+      selection?: { effort: string; fastMode: boolean },
     ): Promise<{ deferred: boolean; superseded?: boolean } | undefined> =>
       ipcRenderer.invoke(
         'maker:set-model',
@@ -4687,6 +4688,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
         model,
         providerId,
         expectedAgentSwitchRevision,
+        selection,
       ),
     // session-agent-switch:同一会话切换 agent 引擎(claude-code ↔ codex)。
     // 与 setModel 的边界:同引擎换模型走 setModel,跨引擎必须走本方法。

@@ -1257,6 +1257,12 @@ export function ChatInput({
   const codexSupportsSessionAgentSwitch =
     codexCaps.capabilities?.supportsSessionAgentSwitch === true &&
     codexCaps.capabilities.supportsSessionAgentSwitchCas === true;
+  // 此能力与原子 model-selection payload 同版发布。旧被控端会忽略 SET_MODEL 第 5 参，
+  // 因此缺能力位时保留原来的 SET_MODEL → SET_EFFORT → SET_FAST 兼容链；同引擎
+  // reselect 入口本就要求 CAS=true，不会退回这条非原子路径。
+  const remoteAtomicModelSelectionSupported =
+    ccCaps.capabilities?.supportsSessionAgentSwitchCas === true ||
+    codexCaps.capabilities?.supportsSessionAgentSwitchCas === true;
   const sessionAgentSwitchSupported =
     sessionOrcaRole === null &&
     (!deviceLinkDeviceId || ccSupportsSessionAgentSwitch || codexSupportsSessionAgentSwitch);
@@ -4336,14 +4342,9 @@ export function ChatInput({
           // 已创建会话会在成功切换后同步 New Maker 草稿默认,使下一次新建聊天复用本次选择。
           const restoredFast = resolveFast(newModelId, effectiveSourceId);
           if (sourceRemoteDeviceId) {
-            // device-link 远程会话:控制端纯镜像 —— **await** 运行时隧道 setX,被控端持久化(Phase 5)后
-            // 广播 sessions:patched 回流到分片(display 经回流更新);send/resume 由被控端 DB(已 persist
-            // 新 model/effort)保证正确。Fast 恢复成功后再写穿被控端草稿默认;控制端本地默认仍不被污染。
-            // New-K:await 而非 fire-and-forget —— relay 重连中 / 已被撤销 / effort 那半失败时,被控端
-            // 运行时/DB 根本没变(或只变一半),不能照报成功、污染 controller 默认偏好。失败 → toast 提示
-            // 并 return,不跑下方 onModelDidChange/onEffortDidChange 成功收尾。
-            // Fast 恢复失败只代表 restoredFast 未落盘:不回滚已经成功的 model/effort 切换,也不向
-            // 用户展示「远程切换失败」。草稿默认仍同步已落盘的 model/effort,Fast 保留当前真实值。
+            // device-link 远程会话:控制端纯镜像。把 model/effort/fast 作为一个选择快照交给
+            // 被控端 SET_MODEL；host 会在同一 session 锁内完成 runtime + DB 后才回 ack，避免
+            // close/wake 的 queue drain 在独立 SET_EFFORT/SET_FAST 之前抢锁。
             // 乐观显示目标 (model, effort) + 置灰 selector,等被控端 echo 回流;失败回滚。
             setPendingRemoteSwitch({
               model: newModelId,
@@ -4355,19 +4356,31 @@ export function ChatInput({
             // 老被控端返回 undefined = 立即生效。deferred 时给控制端同款提示,消除"切没切成"疑惑。
             let remoteDeferred = false;
             const remoteMaker = makerApiForDevice(sourceRemoteDeviceId);
+            let fastPersisted = true;
+            const useAtomicSelection =
+              expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported;
             try {
               const remoteSetModelResult = await remoteMaker.setModel(
                 sessionId,
                 newModelId,
                 undefined,
                 expectedAgentSwitchRevision,
+                useAtomicSelection
+                  ? { effort: newEffort, fastMode: restoredFast }
+                  : undefined,
               );
               if (remoteSetModelResult?.superseded) {
                 if (isSourceSessionCurrent()) setPendingRemoteSwitch(null);
                 return false;
               }
               remoteDeferred = remoteSetModelResult?.deferred === true;
-              await remoteMaker.setEffort(sessionId, newEffort);
+              if (!useAtomicSelection) {
+                await remoteMaker.setEffort(sessionId, newEffort);
+                fastPersisted = await persistFastModeChange(restoredFast, {
+                  silent: true,
+                  remoteDeviceId: sourceRemoteDeviceId,
+                });
+              }
             } catch (err) {
               if (isSourceSessionCurrent()) {
                 setPendingRemoteSwitch(null);
@@ -4382,16 +4395,9 @@ export function ChatInput({
               // 被控端 ack(成功)/ 失败 return 都解除禁用,不等 mirror 三元回流。
               if (isSourceSessionCurrent()) setRemoteSwitchInFlight(false);
             }
-            const fastPersisted = await persistFastModeChange(restoredFast, {
-              silent: true,
-              remoteDeviceId: sourceRemoteDeviceId,
-            });
             syncSessionDraftModelPrefs(
               newModelId,
-              {
-                effort: newEffort,
-                fast: fastPersisted ? restoredFast : fastMode,
-              },
+              { effort: newEffort, fast: fastPersisted ? restoredFast : fastMode },
               { remoteDeviceId: sourceRemoteDeviceId },
             );
             if (remoteDeferred && isSourceSessionCurrent()) {
@@ -4405,52 +4411,43 @@ export function ChatInput({
             const switchSeqBySession = localRuntimeSwitchSeqBySessionRef.current;
             const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
             switchSeqBySession.set(sessionId, rollbackSeq);
+            rollbackModelAfterPersistFailure = { model: activeModel, seq: rollbackSeq };
             const setModelResult = await window.electronAPI.maker.setModel(
               sessionId,
               newModelId,
               undefined,
               expectedAgentSwitchRevision,
+              { effort: newEffort, fastMode: restoredFast },
             );
-            if (setModelResult?.superseded) return false;
+            if (setModelResult?.superseded) {
+              rollbackModelAfterPersistFailure = null;
+              return false;
+            }
             const deferredUntilTurnEnd = setModelResult?.deferred === true;
-            rollbackModelAfterPersistFailure = { model: activeModel, seq: rollbackSeq };
-            await sessionService.update(sessionId, {
-              model: newModelId,
-              effort: newEffort,
-              fastMode: restoredFast,
-            });
             rollbackModelAfterPersistFailure = null;
             const effortCoordinator = effortChangeCoordinatorRef.current;
             effortCoordinator.setCommittedEffort(sessionId, newEffort);
-            // model-switch-effort-runtime-sync (2026-05-09): MAKER_INVOKE.SEND 在 session
-            // 已 spawn 时不使用 createOpts.effort, runtime 沿用上次 setEffort 设的值。
-            // runtime promise 不阻塞 commit lane；旧调用晚完成时 coordinator 会重放最新 effort。
-            if (!deferredUntilTurnEnd) {
-              effortCoordinator.publishRuntimeEffort(
-                sessionId,
-                newEffort,
-                (targetSessionId, effort) =>
-                  window.electronAPI.maker.setEffort(targetSessionId, effort),
-              );
-              // fast 同理:切模型后把恢复的 fast 同步进 runtime。无条件下发 —— codex 走 agent fast
-              // runtime;claude-code 由 main 记 bridge 会话态(chatgpt/ 模型经订阅 handler prefs 生效,
-              // 不下发会让 main 内存态滞留旧值);其余在 main 侧安全 no-op。
-              window.electronAPI.maker.setFastMode(sessionId, restoredFast).catch(() => {});
-            } else {
+            if (deferredUntilTurnEnd) {
               effortCoordinator.suppressRuntimeEffort(sessionId);
               // 默认 success 1200ms 读不完这句;拉长到 4s。
               toast.success(t('newChat.chatInput.credentialSwitchDeferred'), { duration: 4000 });
             }
             syncSessionDraftModelPrefs(newModelId, { effort: newEffort, fast: restoredFast });
-            // fast live 同步:DB 已写 restoredFast,但驱动 chip ⚡ 的 makerChatStore 快照不会被
-            // sessionService.update 更新(它只写会话行)。目标模型支持 fast 时把恢复值推进快照,否则切到
+            if (currentModelAgentKind && effectiveSourceId) {
+              modelMemory?.setFast(
+                currentModelAgentKind,
+                effectiveSourceId,
+                newModelId,
+                restoredFast,
+              );
+            }
+            // fast live 同步:host 已原子落 DB/runtime,这里只更新驱动 chip ⚡ 的 renderer 快照。
+            // 目标模型支持 fast 时把恢复值推进快照,否则切到
             // 「该来源记过 fast=on」的模型 chip 读不到、⚡ 掉档(本次修的 bug)。不支持 fast 的模型不在
             // 此动 —— 交给下方 onModelDidChange → handleModelDidChange 的关闭路径(保留「模型不支持已关闭
-            // Fast」toast)。onFastModeChange = makerChatStore.setFastMode:乐观 setState(同步进快照)+ 落盘。
-            // deferred 时跳过:它会经 maker:set-fast-mode 推给仍在跑的旧 turn(与上面跳过
-            // setEffort/setFastMode 同因);DB 已持久化 restoredFast,会话重建时生效。
+            // Fast」toast)。deferred 时由 sessions:patched 回流，避免提前改当前 turn 的展示。
             if (!deferredUntilTurnEnd && modelFastSupported(newModelId, effectiveSourceId)) {
-              void handleFastModeChange(restoredFast, newModelId, newEffort, false);
+              makerChatStore.mirrorSessionFields(sessionId, { fastMode: restoredFast });
             }
           }
           // SSoT: server persisted → ask parent to refresh `session` so the
@@ -4479,7 +4476,13 @@ export function ChatInput({
           !getSessionDeviceId(sessionId)
         ) {
           await window.electronAPI.maker
-            .setModel(sessionId, rollbackModelAfterPersistFailure.model)
+            .setModel(
+              sessionId,
+              rollbackModelAfterPersistFailure.model,
+              undefined,
+              undefined,
+              { effort: activeEffort, fastMode },
+            )
             .catch((rollbackErr) => {
               log.warn('model change rollback failed:', rollbackErr);
             });
@@ -4513,6 +4516,7 @@ export function ChatInput({
       fastMode,
       confirmModelSwitchContextGuard,
       performAgentSwitch,
+      remoteAtomicModelSelectionSupported,
     ],
   );
 
@@ -4752,12 +4756,18 @@ export function ChatInput({
         // deferred 语义同 handleModelChange 远程分支(被控端会话在跑 → pending、turn 结束生效)。
         let remoteDeferred = false;
         const remoteMaker = makerApiForDevice(sourceRemoteDeviceId);
+        let fastPersisted = true;
+        const useAtomicSelection =
+          expectedAgentSwitchRevision !== undefined || remoteAtomicModelSelectionSupported;
         try {
           const remoteSetModelResult = await remoteMaker.setModel(
             sessionId,
             targetModel,
             newProviderId,
             expectedAgentSwitchRevision,
+            useAtomicSelection
+              ? { effort: targetEffort, fastMode: restoredFast }
+              : undefined,
           );
           if (remoteSetModelResult?.superseded) {
             if (isSourceSessionCurrent()) {
@@ -4767,7 +4777,13 @@ export function ChatInput({
             return false;
           }
           remoteDeferred = remoteSetModelResult?.deferred === true;
-          await remoteMaker.setEffort(sessionId, targetEffort);
+          if (!useAtomicSelection) {
+            await remoteMaker.setEffort(sessionId, targetEffort);
+            fastPersisted = await persistFastModeChange(restoredFast, {
+              silent: true,
+              remoteDeviceId: sourceRemoteDeviceId,
+            });
+          }
         } catch (err) {
           if (isSourceSessionCurrent()) {
             setPendingRemoteSwitch(null);
@@ -4780,16 +4796,6 @@ export function ChatInput({
         } finally {
           if (isSourceSessionCurrent()) setRemoteSwitchInFlight(false);
         }
-        // 把恢复的 fast 经隧道推给被控端 —— onFastModeChange = makerChatStore.setFastMode,远程会话内部
-        // 走「乐观 setState(同步)+ maker:set-fast-mode 隧道 + echo 回流」,被控端 set-fast-mode 仅 codex
-        // 生效、其余 no-op。放在 onModelDidChange 前:setFastMode 的乐观 setState 同步先行,使随后
-        // handleModelDidChange 据已恢复的 fast 判断,避免误触发「模型已切、Fast 关闭」重置 toast + 多一次隧道。
-        // Fast 恢复失败只代表 restoredFast 未落盘;model/effort/provider 已在被控端成功落盘,
-        // 仍正常收尾并同步草稿默认,Fast 保留当前真实值。
-        const fastPersisted = await persistFastModeChange(restoredFast, {
-          silent: true,
-          remoteDeviceId: sourceRemoteDeviceId,
-        });
         syncSessionDraftModelPrefs(
           targetModel,
           { effort: targetEffort, fast: fastPersisted ? restoredFast : fastMode },
@@ -4823,6 +4829,11 @@ export function ChatInput({
           const switchSeqBySession = localRuntimeSwitchSeqBySessionRef.current;
           const rollbackSeq = (switchSeqBySession.get(sessionId) ?? 0) + 1;
           switchSeqBySession.set(sessionId, rollbackSeq);
+          rollbackProviderAfterPersistFailure = {
+            model: activeModel,
+            providerId: selectedProviderId ?? null,
+            seq: rollbackSeq,
+          };
           // deferred = 会话自己在跑,main 已登记 pending、turn 结束自动生效(选择不丢);
           // DB 照常落盘(重启也生效),但跳过 runtime setEffort/setFastMode —— 会话
           // turn 结束会被关闭重建,别去动还在跑的旧 turn。
@@ -4831,32 +4842,17 @@ export function ChatInput({
             modelId,
             newProviderId,
             expectedAgentSwitchRevision,
+            { effort: eff, fastMode: restoredFast },
           );
-          if (setModelResult?.superseded) return false;
+          if (setModelResult?.superseded) {
+            rollbackProviderAfterPersistFailure = null;
+            return false;
+          }
           const deferredUntilTurnEnd = setModelResult?.deferred === true;
-          rollbackProviderAfterPersistFailure = {
-            model: activeModel,
-            providerId: selectedProviderId ?? null,
-            seq: rollbackSeq,
-          };
-          await sessionService.update(sessionId, {
-            model: modelId,
-            effort: eff,
-            providerId: newProviderId,
-            fastMode: restoredFast,
-          });
           rollbackProviderAfterPersistFailure = null;
           const effortCoordinator = effortChangeCoordinatorRef.current;
           effortCoordinator.setCommittedEffort(sessionId, eff);
-          if (!deferredUntilTurnEnd) {
-            effortCoordinator.publishRuntimeEffort(sessionId, eff, (targetSessionId, effort) =>
-              window.electronAPI.maker.setEffort(targetSessionId, effort),
-            );
-            // fast 无条件下发,与 handleModelChange 本地分支同口径 —— codex 走 agent fast runtime;
-            // claude-code 由 main 记 bridge 会话态(切到 chatgpt/ 模型时恢复的 fast 经订阅 handler
-            // prefs 生效,只在 codex 下发会让 main 内存态滞留旧值);其余在 main 侧安全 no-op。
-            window.electronAPI.maker.setFastMode(sessionId, restoredFast).catch(() => {});
-          } else {
+          if (deferredUntilTurnEnd) {
             effortCoordinator.suppressRuntimeEffort(sessionId);
             toast.success(t('newChat.chatInput.credentialSwitchDeferred'), { duration: 4000 });
           }
@@ -4866,12 +4862,20 @@ export function ChatInput({
             { effort: eff, fast: restoredFast },
             { activeProviderId: newProviderId, memoryProviderId: newProviderId },
           );
-          // fast live 同步:同 handleModelChange —— sessionService.update 写了 DB 但不更新驱动 chip 的
-          // makerChatStore 快照。目标模型支持 fast 时把恢复值推进快照(切来源 / 同来源换模型都覆盖);
+          if (currentModelAgentKind && newProviderId) {
+            modelMemory?.setFast(
+              currentModelAgentKind,
+              newProviderId,
+              modelId,
+              restoredFast,
+            );
+          }
+          // fast live 同步:host 已原子落 DB/runtime,这里只更新 renderer 快照。
+          // 目标模型支持 fast 时把恢复值推进快照(切来源 / 同来源换模型都覆盖);
           // 不支持 fast 的模型交给 onModelDidChange 的关闭路径(保留 toast)。
-          // deferred 时跳过:runtime 推送会打到仍在跑的旧 turn;DB 已持久化,重建时生效。
+          // deferred 时由 sessions:patched 回流。
           if (!deferredUntilTurnEnd && modelFastSupported(modelId, newProviderId)) {
-            void handleFastModeChange(restoredFast, modelId, eff, false, newProviderId);
+            makerChatStore.mirrorSessionFields(sessionId, { fastMode: restoredFast });
           }
         }
         onModelDidChange?.(modelId);
@@ -4925,7 +4929,13 @@ export function ChatInput({
           !isRemoteSession
         ) {
           await window.electronAPI.maker
-            .setModel(sessionId, rollbackProvider.model, rollbackProvider.providerId)
+            .setModel(
+              sessionId,
+              rollbackProvider.model,
+              rollbackProvider.providerId,
+              undefined,
+              { effort: activeEffort, fastMode },
+            )
             .catch((rollbackErr) => {
               log.warn('provider change rollback failed:', rollbackErr);
             });
@@ -4958,6 +4968,7 @@ export function ChatInput({
       t,
       confirmModelSwitchContextGuard,
       performAgentSwitch,
+      remoteAtomicModelSelectionSupported,
     ],
   );
 

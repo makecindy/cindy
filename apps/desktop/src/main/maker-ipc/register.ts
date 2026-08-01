@@ -8777,6 +8777,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     model: unknown,
     providerId?: unknown,
     expectedAgentSwitchRevision?: unknown,
+    selection?: unknown,
   ) => {
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
@@ -8796,6 +8797,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedAgentSwitchRevision must be a non-negative integer');
     }
+    if (
+      selection !== undefined &&
+      (
+        selection === null ||
+        typeof selection !== 'object' ||
+        Array.isArray(selection) ||
+        typeof (selection as { effort?: unknown }).effort !== 'string' ||
+        typeof (selection as { fastMode?: unknown }).fastMode !== 'boolean'
+      )
+    ) {
+      throwIpcError('INVALID_PARAMS', 'selection must contain effort + fastMode');
+    }
+    const atomicSelection = selection as
+      | { effort: string; fastMode: boolean }
+      | undefined;
     // 与 send 事务共用 session 锁:发送时刻执行的跨引擎切换必须先落定,
     // 后到的 SET_MODEL 才能写 route。否则切换 DB await 恢复后会用旧 provider
     // 覆盖用户刚选的新 route，形成 DB 与进程内路由分叉。
@@ -8855,19 +8871,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // deferred = 会话自己在跑,选择已登记、turn 结束自动生效。renderer 据此提示
         // "任务结束后生效"而不是当成已即时切换。
         const response = { deferred: result.status === 'deferred', superseded: false };
-        if (isDeviceLinkInvoke()) {
-          // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后。
-          // 凭证形态切换会在 runtime 阶段 close + wake 队列，等锁的 drain 可能先按
-          // 旧 DB route 重建会话。因此远程 model/provider 必须在同一锁内先落 DB。
+        if (atomicSelection) {
+          // model/provider/effort/fast 是一次选择快照，必须在同一把 session 锁内收敛。
+          // applyRuntimeSetModelChange 可能 close + wake；若 effort/fast 留给 renderer
+          // 后续独立调用，queue drain 会用新 model + 旧偏好重建，跨控制端时还会发生
+          // 旧请求尾写覆盖新选择。
+          setSessionEffort(sessionId, atomicSelection.effort);
+          setSessionFastMode(sessionId, atomicSelection.fastMode);
+          const sess = maker.getSession(sessionId);
+          if (
+            sess &&
+            result.status !== 'deferred' &&
+            !pendingCredentialSwitchHolder?.has(sessionId)
+          ) {
+            await sess.setEffort(
+              atomicSelection.effort as
+                | 'minimal'
+                | 'low'
+                | 'medium'
+                | 'high'
+                | 'xhigh'
+                | 'max'
+                | 'ultra',
+            );
+            if (sess.agentKind === 'codex') {
+              await sess.setFastMode(atomicSelection.fastMode);
+            }
+          }
+        }
+        if (isDeviceLinkInvoke() || atomicSelection) {
+          // device-link 的通用持久化原本发生在 handler 返回、session 锁释放之后；
+          // 本地 renderer 的 sessionService.update 也有同一窗口。凡携带 selection 的
+          // 新调用都由 host 在解锁前一次落定全部字段。
           const patch: Record<string, unknown> = { model };
           if (effectiveProviderId !== undefined) {
             patch.providerId = normalizeSessionProviderId(
               typeof effectiveProviderId === 'string' ? effectiveProviderId : null,
             );
           }
+          if (atomicSelection) {
+            patch.effort = atomicSelection.effort;
+            patch.fastMode = atomicSelection.fastMode;
+          }
           await persistSessionFields(sessionId, patch);
-          // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
-          markRemoteSettingPersistedInsideHandler(response);
+          if (isDeviceLinkInvoke()) {
+            // dispatch 继续兼容最小/旧 handler 的锁外回流；标记本结果避免重复写。
+            markRemoteSettingPersistedInsideHandler(response);
+          }
         }
         return response;
       } catch (err) {
