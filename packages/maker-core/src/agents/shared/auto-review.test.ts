@@ -1613,3 +1613,27 @@ describe('注释右括号前置 / 重定向系统目标 / GNU time -f(第三十�
     }
   });
 });
+
+describe('超深包装器链 fail-closed / ionice 命名 class(第三十二批评审)', () => {
+  it('包装器嵌套在上限内正常解包;超上限仍是包装器 → fail-closed 必问', () => {
+    // 6 层 env 在 16 上限内 → 解到 rm、区外目标命中。
+    expect(classifyShellCommand('env env env env env env rm -rf /outside', roots)).toBe('prompt-each-time');
+    // 超上限(20 层)仍是包装器、看不到真实命令 → fail-closed 必问(即便内层是良性 ls)。
+    const deep = `${'env '.repeat(20)}ls`;
+    expect(classifyShellCommand(deep, roots)).toBe('prompt-each-time');
+    // 正常 1-2 层良性包装仍放行。
+    expect(classifyShellCommand('env nice -n 10 ls', roots)).toBe('auto-approve');
+  });
+
+  it('ionice -c/--class 命名 class 值不遮蔽内层破坏命令', () => {
+    for (const c of [
+      'ionice -c idle rm -rf /outside',
+      'ionice --class best-effort rm -rf /outside',
+      'ionice -c 2 -n 4 rm -rf /outside',
+    ]) {
+      expect(classifyShellCommand(c, roots), c).toBe('prompt-each-time');
+    }
+    // 反例:ionice 跑只读命令 → 放行。
+    expect(classifyShellCommand('ionice -c idle ls', roots)).toBe('auto-approve');
+  });
+});

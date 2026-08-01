@@ -435,7 +435,13 @@ type UnwrappedCommand = {
   cwd?: string;
   cwdUnknown: boolean;
   inspectionOnly: boolean;
+  /** 达到剥壳上限时首 token 仍是包装器 = 未能看到真实命令(超深嵌套 `env env … rm`)→ 消费方 fail-closed。 */
+  wrapperUnresolved: boolean;
 };
+
+// 透明包装器剥壳的递归上限。取 16:现实里嵌 1-2 层(`env timeout … cmd`),16 足够;更深属对抗构造,
+// 到上限仍是包装器则 fail-closed 必问(codex 报 `env env env env env env rm -rf /outside`)。
+const MAX_WRAPPER_UNWRAP_DEPTH = 16;
 
 function resolveCwdTarget(
   target: string | undefined,
@@ -469,7 +475,8 @@ function unwrapCommand(
     cwd = next.cwd;
     cwdUnknown = next.cwdUnknown;
   };
-  for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
+  let depth = 0;
+  for (; depth < MAX_WRAPPER_UNWRAP_DEPTH && toks.length > 0; depth++) {
     // 前置环境赋值:bash simple-command 展开把 `NAME=val` 应用到命令环境后照常执行后面的命令
     // (`FOO=1 rm -rf /outside`)。不消费它们会把 `FOO=1` 当可执行名而看不到真正的 rm(codex 报)→
     // 先剥掉所有前导 assignment word,再识别真实执行器/包裹器。
@@ -563,6 +570,9 @@ function unwrapCommand(
         // GNU time -f/--format FORMAT、-o/--output FILE 带值:分离形态不连值消费会停在 FORMAT(如 `%e`)漏掉
         // 内层命令(codex 报 `/usr/bin/time -f '%e' rm -rf /outside`)。bash 内建 time 无此选项、不受影响。
         if (head === 'time' && /^(?:-f|--format|-o|--output)$/.test(t)) { i += 2; continue; }
+        // ionice -c/--class <class>:class 可为名字(idle/best-effort/realtime/none)或数字;命名值非数字,
+        // 不连值消费会停在 `idle` 漏掉内层命令(codex 报 `ionice -c idle rm -rf /outside`)。
+        if (head === 'ionice' && /^(?:-c|--class)$/.test(t)) { i += 2; continue; }
         // 时长可为浮点(timeout 文档:DURATION 是浮点数,`timeout 0.5 rm …`),整数正则会停在 0.5 漏掉内层
         // 命令(codex 报)→ 接受 `0.5` / `1.5s` / `.5` 等小数时长。
         if (t.startsWith('-') || /^\d*\.?\d+[smhd]?$/.test(t)) { i++; continue; }
@@ -622,7 +632,12 @@ function unwrapCommand(
       toks = toks.slice(1);
     }
   }
-  return { tokens: toks, cwd, cwdUnknown, inspectionOnly };
+  // 仅当**跑满剥壳上限**(depth 到 MAX,而非分支主动 break 的正常完成/fail-closed 留壳)且首 token 仍是
+  // 包装器 → 超深链没剥完、真实命令没露出来,标记 fail-closed(消费方必问)。分支主动 bail(如 taskset -p、
+  // env -S)在 depth<MAX 处 break,不算未解析,避免误升。
+  const wrapperUnresolved = depth >= MAX_WRAPPER_UNWRAP_DEPTH
+    && toks.length > 0 && COMMAND_WRAPPERS.has(executableName(toks[0]));
+  return { tokens: toks, cwd, cwdUnknown, inspectionOnly, wrapperUnresolved };
 }
 
 /** 无需 cwd 语义的调用点只取剥壳后的真实 argv。 */
@@ -948,6 +963,8 @@ function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
     const normalized = text.replace(/['"\\]/g, '');
     const unwrapped = unwrapCommand(tokenize(normalized));
     const tokens = unwrapped.tokens;
+    // 超深包装器链剥不完 → 看不到真实命令,fail-closed 必问(codex 报)。
+    if (unwrapped.wrapperUnresolved) return true;
     const bin = executableName(tokens[0] ?? '');
     const rawTokens = unwrapCommand(tokenize(text)).tokens;
     // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
@@ -1267,6 +1284,8 @@ function scopedDestructionNeedsConsent(
   for (const { text: segment, separatorAfter } of splitExecutableSegments(command)) {
     const unwrapped = unwrapCommand(tokenize(segment), currentCwd, currentCwdUnknown);
     const tokens = unwrapped.tokens;
+    // 超深包装器链剥不完 → 看不到真实命令(可能是区外破坏),fail-closed 必问(codex 报)。
+    if (unwrapped.wrapperUnresolved) return true;
     const segmentOpts: ShellReviewOptions = {
       ...opts,
       cwd: unwrapped.cwd,
