@@ -513,6 +513,27 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('drops untranslatable file_id images from replayed history on image-url routes', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', file_id: 'file_1' },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'describe this' },
+      { role: 'user', content: 'continue in text' },
+    ]);
+  });
+
   it('drops image-only replayed turns but keeps the newest unsupported image fail-closed', () => {
     const imageUrl = 'data:image/png;base64,aW1hZ2U=';
     const out = translateResponsesRequest(base({

@@ -96,6 +96,13 @@ function hasImageSource(part: Record<string, unknown>): boolean {
     );
 }
 
+function isImagePartTranslatable(
+  part: Record<string, unknown>,
+  capabilities: ChatMediaCapabilities,
+): boolean {
+  return capabilities.imageInput === 'image_url' && part.file_id === undefined;
+}
+
 function hasFileSource(part: Record<string, unknown>): boolean {
   const source = isPlainObject(part.file) ? part.file : part;
   return source.file_id !== undefined
@@ -180,10 +187,11 @@ function messageContent(
       && normalizedRole === 'user'
       && isResponsesImageContentPartType(rawPart.type)
       && hasImageSource(rawPart)
-      && mediaCapabilities.imageInput !== 'image_url'
+      && !isImagePartTranslatable(rawPart, mediaCapabilities)
     ) {
       // Codex replays failed user input in later Responses requests. A Chat-only provider that
       // rejected that image once would otherwise reject every subsequent text turn as well.
+      // Provider-scoped file IDs remain untranslatable even when the route accepts image URLs.
       // Only replayed images are removed: the newest user turn remains fail-closed below.
       continue;
     }
