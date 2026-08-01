@@ -8,21 +8,7 @@ import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeS
 const mocks = vi.hoisted(() => ({
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   displaySnapshot: {
-    messages: [
-      {
-        role: 'assistant',
-        turnMoney: { amount: 0.46, currency: 'USD' },
-        turnUsageDetails: {
-          inputTokens: 2,
-          outputTokens: 16,
-          cacheReadTokens: 0,
-          cacheCreateTokens: 74_000,
-          totalTokens: 74_018,
-          cacheHitRate: 0,
-          model: 'claude-opus-5[1m]',
-        },
-      },
-    ],
+    messages: [] as Array<Record<string, unknown>>,
   },
   openExternal: vi.fn(() => Promise.resolve()),
   refreshCodexRateLimits: vi.fn(),
@@ -47,11 +33,17 @@ vi.mock('react-i18next', () => ({
         'quotaCard.usedPercent': '已用 {{percent}}%',
         'quotaCard.resetAt': '{{at}} 重置',
         'quotaCard.turnCost': '本轮消耗',
+        'quotaCard.turnCostUnavailable': '本轮费用暂无法估算',
         'quotaCard.tokenLabel': 'Token',
         'quotaCard.tokenBreakdown': '（输入 {{input}} · 输出 {{output}}）',
         'quotaCard.cacheLabel': '缓存',
         'quotaCard.modelLabel': '模型',
         'quotaCard.waiting': '等待额度数据',
+        'todaySpend.tooltip.latestUserTurnTitle': '最近一轮用户请求累计',
+        'chat.messageActionBar.userTurnCostDetailsTitle': '最后一个 SDK 分段',
+        'usageDetails.costLine': '本轮消耗：{{cost}}',
+        'usageDetails.valueLine': '本轮 token 价值：{{cost}}',
+        'usageDetails.noBilledCost': '本轮费用暂不可用，仅显示用量',
         'usageDetails.cacheLine': '缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}',
         'usageDetails.cacheLineNoRate': '缓存拆分：读取 {{read}} · 写入 {{create}}',
         'usageDetails.multipleModels': '{{count}} 个模型',
@@ -114,6 +106,35 @@ vi.mock('@/lib/makerChatStore', () => ({
 import { TodaySpendChip } from '../TodaySpendChip';
 
 const CLAUDE_USAGE_URL = 'https://claude.ai/settings/usage';
+const TURN_USAGE_DETAILS = {
+  inputTokens: 2,
+  outputTokens: 16,
+  cacheReadTokens: 0,
+  cacheCreateTokens: 74_000,
+  totalTokens: 74_018,
+  cacheHitRate: 0,
+  model: 'claude-opus-5[1m]',
+};
+
+function usdMoney(amount: number, kind: 'actual-cost' | 'value-estimate' = 'actual-cost') {
+  return {
+    amount,
+    currency: 'USD',
+    approximate: kind === 'value-estimate',
+    kind,
+  };
+}
+
+function setLatestUsageMessage(overrides: Record<string, unknown> = {}) {
+  mocks.displaySnapshot.messages = [
+    {
+      role: 'assistant',
+      turnMoney: usdMoney(0.46),
+      turnUsageDetails: TURN_USAGE_DETAILS,
+      ...overrides,
+    },
+  ];
+}
 
 function renderClaudeSubscriptionChip() {
   return render(
@@ -135,6 +156,7 @@ function openCardFromHover() {
 
 beforeEach(() => {
   vi.useFakeTimers();
+  setLatestUsageMessage();
   mocks.claudeSnapshot = {
     source: 'oauth-endpoint',
     subscriptionType: 'max',
@@ -165,12 +187,27 @@ describe('TodaySpendChip Claude subscription popover', () => {
     act(() => vi.advanceTimersByTime(1));
     expect(screen.getByTestId('quota-hover-card')).toBeTruthy();
     expect(screen.getByRole('progressbar')).toBeTruthy();
-    expect(screen.getByText('$0.46')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
     expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
     expect(screen.getByText('缓存命中率偏低，本轮较多上下文重新计费')).toBeTruthy();
+    expect(document.activeElement).toBe(document.body);
+  });
+
+  it('键盘聚焦打开时把焦点移入卡片，关闭后归还 trigger', () => {
+    renderClaudeSubscriptionChip();
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+
+    act(() => trigger.focus());
+    const card = screen.getByTestId('quota-hover-card');
+    const dashboardButton = within(card).getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(document.activeElement).toBe(dashboardButton);
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(document.activeElement).toBe(trigger);
   });
 
   it('指针可在宽限期内移入卡片并点击看板动作', () => {
@@ -226,6 +263,69 @@ describe('TodaySpendChip Claude subscription popover', () => {
     fireEvent.click(screen.getByRole('button', { name: '打开 Claude 用量页面' }));
     expect(mocks.openExternal).toHaveBeenCalledTimes(1);
     expect(mocks.openExternal).toHaveBeenCalledWith(CLAUDE_USAGE_URL);
+  });
+
+  it('把精确费用与估算 token 价值映射成不同文案', () => {
+    setLatestUsageMessage({
+      turnMoney: usdMoney(0.46),
+      turnCostIsEstimate: false,
+    });
+    const exact = renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
+    expect(screen.queryByText('本轮 token 价值：$0.46')).toBeNull();
+
+    exact.unmount();
+    vi.clearAllTimers();
+    setLatestUsageMessage({
+      turnMoney: usdMoney(0.46, 'value-estimate'),
+      turnCostIsEstimate: true,
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
+    expect(screen.queryByText('本轮消耗：$0.46')).toBeNull();
+  });
+
+  it('单分段不加冗余标题，多分段则分开累计金额与最后分段明细', () => {
+    setLatestUsageMessage({
+      turnMoney: usdMoney(0.46, 'value-estimate'),
+      userTurnMoney: usdMoney(0.46, 'value-estimate'),
+      turnCostIsEstimate: true,
+      userTurnCostIsEstimate: true,
+    });
+    const single = renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
+    expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
+
+    single.unmount();
+    vi.clearAllTimers();
+    setLatestUsageMessage({
+      turnMoney: usdMoney(0.20),
+      userTurnMoney: usdMoney(0.70),
+      turnCostIsEstimate: false,
+      userTurnCostIsEstimate: false,
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
+    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.20')).toBeTruthy();
+    expect(screen.getByText(/^74\.0k/)).toBeTruthy();
+  });
+
+  it('无报价时说明费用不可用并保留 Token、缓存和模型明细', () => {
+    setLatestUsageMessage({ turnMoney: undefined });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+
+    expect(screen.getByText('本轮费用暂无法估算')).toBeTruthy();
+    expect(screen.getByText(/^74\.0k/)).toBeTruthy();
+    expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
+    expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
   });
 
   it('非 Claude 订阅形态继续使用旧 Tip，不挂载额度卡片', () => {

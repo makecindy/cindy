@@ -13,6 +13,9 @@ export interface QuotaBarProps {
   size?: 'regular' | 'mini';
   /** 调用方已合并本地阈值与上游信号后的展示级别。 */
   severity?: QuotaSeverity;
+  /** 进度条的可访问名称；也可由 aria-labelledby 指向可见标题。 */
+  ariaLabel?: string;
+  'aria-labelledby'?: string;
   className?: string;
 }
 
@@ -39,6 +42,8 @@ export function QuotaBar({
   usedPercent,
   size = 'regular',
   severity: severityOverride,
+  ariaLabel,
+  'aria-labelledby': ariaLabelledBy,
   className,
 }: QuotaBarProps) {
   const clampedPercent = clampPercent(usedPercent);
@@ -51,6 +56,8 @@ export function QuotaBar({
       aria-valuemin={0}
       aria-valuemax={100}
       aria-valuenow={Math.round(clampedPercent)}
+      aria-label={ariaLabel}
+      aria-labelledby={ariaLabelledBy}
       data-severity={severity}
       className={cn(
         'overflow-hidden rounded-full bg-[var(--quota-bar-track)]',

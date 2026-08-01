@@ -17,6 +17,12 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
+      if (key === 'usageDetails.costLine') return `本轮消耗：${options.cost}`;
+      if (key === 'usageDetails.valueLine') return `本轮 token 价值：${options.cost}`;
+      if (key === 'usageDetails.noBilledCost') return '本轮费用暂不可用，仅显示用量';
+      if (key === 'quotaCard.turnCostUnavailable') return '本轮费用暂无法估算';
+      if (key === 'todaySpend.tooltip.latestUserTurnTitle') return '最近一轮用户请求累计';
+      if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '最后一个 SDK 分段';
       if (key === 'quotaCard.staleData') return `quotaCard.staleData:${options.minutes}`;
       return key;
     },
@@ -79,6 +85,10 @@ describe('QuotaHoverCard', () => {
     );
 
     expect(screen.getAllByRole('progressbar')).toHaveLength(4);
+    expect(screen.getByRole('progressbar', { name: '5 小时' })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: '周限' })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Fable 周限' })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Opus 周限' })).toBeTruthy();
     expect(screen.getByText('5 小时')).toBeTruthy();
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getByText('Fable 周限')).toBeTruthy();
@@ -124,6 +134,39 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByText('5 小时')).toBeNull();
     expect(screen.getByText('周限')).toBeTruthy();
     expect(screen.getAllByRole('progressbar')).toHaveLength(1);
+  });
+
+  it('drops windows with string, null, or non-finite utilization while keeping valid siblings', () => {
+    render(
+      <QuotaHoverCard
+        nowMs={NOW_MS}
+        snapshot={makeSnapshot({
+          fiveHour: { utilization: '67' as unknown as number },
+          sevenDay: { utilization: 24 },
+          scoped: [
+            {
+              modelDisplayName: 'Null model',
+              utilization: null as unknown as number,
+            },
+            {
+              modelDisplayName: 'Infinite model',
+              utilization: Number.POSITIVE_INFINITY,
+            },
+            {
+              modelDisplayName: 'Valid model',
+              utilization: 45,
+            },
+          ],
+        })}
+      />,
+    );
+
+    expect(screen.queryByText('5 小时')).toBeNull();
+    expect(screen.queryByText('Null model 周限')).toBeNull();
+    expect(screen.queryByText('Infinite model 周限')).toBeNull();
+    expect(screen.getByRole('progressbar', { name: '周限' })).toBeTruthy();
+    expect(screen.getByRole('progressbar', { name: 'Valid model 周限' })).toBeTruthy();
+    expect(screen.getAllByRole('progressbar')).toHaveLength(2);
   });
 
   it('renders the no-windows line when every window is absent', () => {
@@ -258,8 +301,7 @@ describe('QuotaHoverCard', () => {
       />,
     );
 
-    expect(screen.getByText('quotaCard.turnCost')).toBeTruthy();
-    expect(screen.getByText('$0.46')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
     expect(screen.getByText('74.1K', { exact: false })).toBeTruthy();
     expect(screen.getByText('（输入 2 · 输出 16）')).toBeTruthy();
     expect(screen.getByText('读 0 · 写 74.0K · 命中 0%')).toBeTruthy();
@@ -278,6 +320,63 @@ describe('QuotaHoverCard', () => {
     );
     expect(screen.getByTestId('quota-turn-usage')).toBeTruthy();
     expect(screen.queryByTestId('quota-suggestion')).toBeNull();
+  });
+
+  it('marks estimated value and separates cumulative totals from final-segment details', () => {
+    const { rerender } = render(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        turnUsage={{
+          costText: '$0.46',
+          costIsEstimate: true,
+          totalTokensText: '74.1K',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
+    expect(screen.queryByText('最后一个 SDK 分段')).toBeNull();
+
+    rerender(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        turnUsage={{
+          costText: '$0.70',
+          isUserTurnTotal: true,
+          finalSegment: { costText: '$0.20' },
+          totalTokensText: '74.1K',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('最近一轮用户请求累计')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.70')).toBeTruthy();
+    expect(screen.getByText('最后一个 SDK 分段')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.20')).toBeTruthy();
+  });
+
+  it('states that cost is unavailable while retaining token, cache, and model rows', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        turnUsage={{
+          costText: null,
+          totalTokensText: '74.1K',
+          inputTokens: 2,
+          outputTokens: 16,
+          cacheLineText: '读 0 · 写 74.0K · 命中 0%',
+          model: 'claude-unknown',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('本轮费用暂无法估算')).toBeTruthy();
+    expect(screen.getByText('74.1K', { exact: false })).toBeTruthy();
+    expect(screen.getByText('读 0 · 写 74.0K · 命中 0%')).toBeTruthy();
+    expect(screen.getByText('claude-unknown')).toBeTruthy();
   });
 
   it('fires the dashboard callback from a real button and hides it for a null label', () => {

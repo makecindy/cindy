@@ -70,8 +70,10 @@ describe('QuotaBar', () => {
   });
 
   it('exposes the progressbar role and rounded aria values', () => {
-    const { getByRole } = render(<QuotaBar usedPercent={42.6} />);
-    const progressbar = getByRole('progressbar');
+    const { getByRole } = render(
+      <QuotaBar usedPercent={42.6} ariaLabel="5 小时" />,
+    );
+    const progressbar = getByRole('progressbar', { name: '5 小时' });
 
     expect(progressbar.getAttribute('aria-valuemin')).toBe('0');
     expect(progressbar.getAttribute('aria-valuemax')).toBe('100');

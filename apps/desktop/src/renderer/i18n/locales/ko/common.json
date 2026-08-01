@@ -3849,6 +3849,7 @@
     "limitWarning": "플랜 한도에 근접했습니다",
     "extraUsageEnabled": "추가 사용량 활성화됨",
     "turnCost": "이번 턴 비용",
+    "turnCostUnavailable": "이번 턴의 비용을 현재 추정할 수 없습니다",
     "tokenLabel": "Token",
     "tokenBreakdown": "(입력 {{input}} · 출력 {{output}})",
     "cacheLabel": "캐시",

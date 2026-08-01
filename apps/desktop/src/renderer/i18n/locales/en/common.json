@@ -3851,6 +3851,7 @@
     "limitWarning": "Approaching plan limit",
     "extraUsageEnabled": "Extra usage enabled",
     "turnCost": "Cost this turn",
+    "turnCostUnavailable": "Cost unavailable for this turn",
     "tokenLabel": "Tokens",
     "tokenBreakdown": "(input {{input}} · output {{output}})",
     "cacheLabel": "Cache",

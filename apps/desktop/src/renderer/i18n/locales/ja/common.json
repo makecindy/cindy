@@ -3849,6 +3849,7 @@
     "limitWarning": "プランの上限に近づいています",
     "extraUsageEnabled": "追加使用量が有効です",
     "turnCost": "このターンの消費",
+    "turnCostUnavailable": "このターンの料金は現在見積もれません",
     "tokenLabel": "Token",
     "tokenBreakdown": "（入力 {{input}} · 出力 {{output}}）",
     "cacheLabel": "キャッシュ",

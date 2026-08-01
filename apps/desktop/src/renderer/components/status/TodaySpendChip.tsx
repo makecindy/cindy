@@ -724,6 +724,21 @@ function quotaTurnModel(details: TurnUsageDetails, t: TFunction): string | null 
   return null;
 }
 
+/** 累计金额与当前分段金额一致时，Token 明细就是整轮明细，无需额外分段标题。 */
+function hasSeparateFinalSegment(summary: LatestTurnUsageSummary): boolean {
+  if (!summary.isUserTurnTotal) return false;
+  if (summary.money && summary.segmentMoney) {
+    return summary.money.currency !== summary.segmentMoney.currency
+      || Math.abs(summary.money.amount - summary.segmentMoney.amount) > 1e-10
+      || Boolean(summary.isEstimate) !== Boolean(summary.segmentIsEstimate);
+  }
+  if (summary.costUsd != null && summary.segmentCostUsd != null) {
+    return Math.abs(summary.costUsd - summary.segmentCostUsd) > 1e-10
+      || Boolean(summary.isEstimate) !== Boolean(summary.segmentIsEstimate);
+  }
+  return true;
+}
+
 function toQuotaHoverCardTurnUsage(
   summary: LatestTurnUsageSummary | null,
   t: TFunction,
@@ -735,9 +750,25 @@ function toQuotaHoverCardTurnUsage(
     : summary.costUsd != null
       ? formatTurnCostUsd(summary.costUsd)
       : null;
+  const separateFinalSegment = hasSeparateFinalSegment(summary);
+  const finalSegmentCostText = summary.segmentMoney
+    ? formatTurnCostMoney(summary.segmentMoney)
+    : summary.segmentCostUsd != null
+      ? formatTurnCostUsd(summary.segmentCostUsd)
+      : null;
 
   return {
     costText,
+    costIsEstimate: summary.isEstimate,
+    isUserTurnTotal: summary.isUserTurnTotal,
+    ...(separateFinalSegment
+      ? {
+          finalSegment: {
+            costText: finalSegmentCostText,
+            costIsEstimate: summary.segmentIsEstimate,
+          },
+        }
+      : {}),
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
     inputTokens: details.inputTokens,
     outputTokens: details.outputTokens,
@@ -758,6 +789,7 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
     const userTurnCostUsd = typeof message.userTurnCostUsd === 'number' && message.userTurnCostUsd > 0
       ? message.userTurnCostUsd
       : undefined;
+    const displayedMoney = userTurnMoney ?? message.turnMoney;
     return {
       ...(userTurnMoney
         ? { money: userTurnMoney }
@@ -770,11 +802,16 @@ function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSum
         : {}),
       ...((userTurnMoney || userTurnCostUsd != null
         ? message.userTurnCostIsEstimate
-        : message.turnCostIsEstimate) === true ? { isEstimate: true } : {}),
+        : message.turnCostIsEstimate) === true
+        || displayedMoney?.kind === 'value-estimate'
+        ? { isEstimate: true }
+        : {}),
       ...((userTurnMoney || userTurnCostUsd != null) && message.turnMoney?.amount
         ? {
             segmentMoney: message.turnMoney,
-            segmentIsEstimate: message.turnCostIsEstimate === true,
+            segmentIsEstimate:
+              message.turnCostIsEstimate === true
+              || message.turnMoney.kind === 'value-estimate',
           }
         : userTurnCostUsd != null && typeof message.turnCostUsd === 'number' && message.turnCostUsd > 0
         ? {
@@ -1175,6 +1212,11 @@ export function TodaySpendChip({
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
   const quotaPopoverCloseTimerRef = React.useRef<number | null>(null);
+  const quotaPopoverOpenSourceRef = React.useRef<'hover' | 'focus' | null>(null);
+  const quotaPopoverFocusTakenRef = React.useRef(false);
+  const quotaPopoverRestoringFocusRef = React.useRef(false);
+  const quotaPopoverTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const quotaPopoverDashboardButtonRef = React.useRef<HTMLButtonElement>(null);
 
   const clearQuotaPopoverOpenTimer = React.useCallback(() => {
     if (quotaPopoverOpenTimerRef.current === null) return;
@@ -1190,19 +1232,32 @@ export function TodaySpendChip({
     clearQuotaPopoverOpenTimer();
     clearQuotaPopoverCloseTimer();
   }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  const restoreQuotaPopoverFocus = React.useCallback(() => {
+    const shouldRestoreFocus = quotaPopoverFocusTakenRef.current;
+    quotaPopoverFocusTakenRef.current = false;
+    quotaPopoverOpenSourceRef.current = null;
+    if (!shouldRestoreFocus) return;
+    quotaPopoverRestoringFocusRef.current = true;
+    quotaPopoverTriggerRef.current?.focus({ preventScroll: true });
+    quotaPopoverRestoringFocusRef.current = false;
+  }, []);
   const openQuotaPopoverImmediately = React.useCallback(() => {
     keepQuotaPopoverOpen();
+    quotaPopoverOpenSourceRef.current = 'focus';
     setQuotaPopoverOpen(true);
   }, [keepQuotaPopoverOpen]);
   const closeQuotaPopoverImmediately = React.useCallback(() => {
     keepQuotaPopoverOpen();
     setQuotaPopoverOpen(false);
-  }, [keepQuotaPopoverOpen]);
+    // 受控关闭不保证 Radix 在内容卸载前触发 close-autofocus，先归还已接管的焦点。
+    restoreQuotaPopoverFocus();
+  }, [keepQuotaPopoverOpen, restoreQuotaPopoverFocus]);
   const scheduleQuotaPopoverOpen = React.useCallback(() => {
     clearQuotaPopoverCloseTimer();
     clearQuotaPopoverOpenTimer();
     quotaPopoverOpenTimerRef.current = window.setTimeout(() => {
       quotaPopoverOpenTimerRef.current = null;
+      quotaPopoverOpenSourceRef.current = 'hover';
       setQuotaPopoverOpen(true);
     }, QUOTA_POPOVER_OPEN_DELAY_MS);
   }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
@@ -1212,8 +1267,9 @@ export function TodaySpendChip({
     quotaPopoverCloseTimerRef.current = window.setTimeout(() => {
       quotaPopoverCloseTimerRef.current = null;
       setQuotaPopoverOpen(false);
+      restoreQuotaPopoverFocus();
     }, QUOTA_POPOVER_CLOSE_GRACE_MS);
-  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer]);
+  }, [clearQuotaPopoverCloseTimer, clearQuotaPopoverOpenTimer, restoreQuotaPopoverFocus]);
 
   React.useEffect(() => () => {
     clearQuotaPopoverOpenTimer();
@@ -1541,6 +1597,7 @@ export function TodaySpendChip({
           <PopoverTrigger asChild>
             {isDashboardClickable ? (
               <button
+                ref={quotaPopoverTriggerRef}
                 type="button"
                 onClick={(event) => {
                   // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
@@ -1549,7 +1606,10 @@ export function TodaySpendChip({
                 }}
                 onMouseEnter={scheduleQuotaPopoverOpen}
                 onMouseLeave={scheduleQuotaPopoverClose}
-                onFocus={openQuotaPopoverImmediately}
+                onFocus={() => {
+                  if (quotaPopoverRestoringFocusRef.current) return;
+                  openQuotaPopoverImmediately();
+                }}
                 onBlur={scheduleQuotaPopoverClose}
                 onKeyDown={(event) => {
                   if (event.key !== 'Escape') return;
@@ -1576,8 +1636,17 @@ export function TodaySpendChip({
             align="end"
             sideOffset={8}
             collisionPadding={8}
-            onOpenAutoFocus={(event) => event.preventDefault()}
-            onCloseAutoFocus={(event) => event.preventDefault()}
+            onOpenAutoFocus={(event) => {
+              event.preventDefault();
+              if (quotaPopoverOpenSourceRef.current !== 'focus') return;
+              const dashboardButton = quotaPopoverDashboardButtonRef.current;
+              dashboardButton?.focus({ preventScroll: true });
+              quotaPopoverFocusTakenRef.current = document.activeElement === dashboardButton;
+            }}
+            onCloseAutoFocus={(event) => {
+              event.preventDefault();
+              restoreQuotaPopoverFocus();
+            }}
             onEscapeKeyDown={closeQuotaPopoverImmediately}
             onMouseEnter={keepQuotaPopoverOpen}
             onMouseLeave={scheduleQuotaPopoverClose}
@@ -1594,6 +1663,7 @@ export function TodaySpendChip({
               turnUsage={quotaCardTurnUsage}
               dashboardLabel={usageDashboardLabel}
               onOpenDashboard={handleClick}
+              dashboardButtonRef={quotaPopoverDashboardButtonRef}
             />
           </PopoverContent>
         </Popover>

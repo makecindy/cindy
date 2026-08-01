@@ -17,6 +17,12 @@ import { QuotaBar, quotaSeverity, type QuotaSeverity } from './QuotaBar';
 
 export interface QuotaHoverCardTurnUsage {
   costText?: string | null;
+  costIsEstimate?: boolean;
+  isUserTurnTotal?: boolean;
+  finalSegment?: {
+    costText?: string | null;
+    costIsEstimate?: boolean;
+  } | null;
   totalTokensText?: string | null;
   inputTokens?: number | null;
   outputTokens?: number | null;
@@ -30,6 +36,7 @@ export interface QuotaHoverCardProps {
   turnUsage?: QuotaHoverCardTurnUsage | null;
   dashboardLabel?: string | null;
   onOpenDashboard?: () => void;
+  dashboardButtonRef?: React.Ref<HTMLButtonElement>;
   nowMs?: number;
 }
 
@@ -44,6 +51,13 @@ const STALE_AFTER_MS = 5 * 60_000;
 function clampPercent(value: number): number {
   if (!Number.isFinite(value)) return 0;
   return Math.min(100, Math.max(0, value));
+}
+
+/** 旧快照可能绕过类型边界；利用率不是有限数值时整窗不展示。 */
+function isDisplayableWindow(value: unknown): value is ClaudeUsageWindow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const utilization = (value as { utilization?: unknown }).utilization;
+  return typeof utilization === 'number' && Number.isFinite(utilization);
 }
 
 const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
@@ -151,7 +165,11 @@ function WindowBlock({
       >
         {title}
       </div>
-      <QuotaBar usedPercent={window.utilization} severity={severity} />
+      <QuotaBar
+        usedPercent={window.utilization}
+        severity={severity}
+        ariaLabel={title}
+      />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
         <span className="font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
@@ -172,18 +190,47 @@ function TurnUsageSection({ turnUsage, t }: {
 }) {
   const hasTokenBreakdown = turnUsage.inputTokens != null && turnUsage.outputTokens != null;
 
+  const renderCostLine = (
+    costText: string | null | undefined,
+    isEstimate: boolean | undefined,
+    unavailableKey: string,
+  ) => (
+    <div className="text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+      {costText != null
+        ? t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', { cost: costText })
+        : t(unavailableKey)}
+    </div>
+  );
+
   return (
     <section data-testid="quota-turn-usage" className="px-4 pb-1 pt-2">
-      <div className="flex items-baseline justify-between gap-3 tabular-nums">
-        <span className="text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
-          {t('quotaCard.turnCost')}
-        </span>
-        {turnUsage.costText != null ? (
-          <span className="text-right text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
-            {turnUsage.costText}
-          </span>
-        ) : null}
+      {turnUsage.isUserTurnTotal ? (
+        <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          {t('todaySpend.tooltip.latestUserTurnTitle')}
+        </div>
+      ) : null}
+      <div className="tabular-nums">
+        {renderCostLine(
+          turnUsage.costText,
+          turnUsage.costIsEstimate,
+          'quotaCard.turnCostUnavailable',
+        )}
       </div>
+
+      {turnUsage.finalSegment ? (
+        <div className="mt-2">
+          <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+            {t('chat.messageActionBar.userTurnCostDetailsTitle')}
+          </div>
+          <div className="tabular-nums">
+            {renderCostLine(
+              turnUsage.finalSegment.costText,
+              turnUsage.finalSegment.costIsEstimate,
+              'usageDetails.noBilledCost',
+            )}
+          </div>
+        </div>
+      ) : null}
 
       {turnUsage.totalTokensText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
@@ -250,6 +297,7 @@ export function QuotaHoverCard({
   turnUsage = null,
   dashboardLabel = null,
   onOpenDashboard,
+  dashboardButtonRef,
   nowMs = Date.now(),
 }: QuotaHoverCardProps) {
   const { t, i18n } = useTranslation();
@@ -258,14 +306,14 @@ export function QuotaHoverCard({
   const planLabel = formatPlanType(snapshot?.subscriptionType);
 
   const windows: DisplayWindow[] = [];
-  if (snapshot?.fiveHour) {
+  if (isDisplayableWindow(snapshot?.fiveHour)) {
     windows.push({
       key: 'five-hour',
       title: t('quotaCard.fiveHourLabel'),
       window: snapshot.fiveHour,
     });
   }
-  if (snapshot?.sevenDay) {
+  if (isDisplayableWindow(snapshot?.sevenDay)) {
     windows.push({
       key: 'seven-day',
       title: t('quotaCard.weeklyLabel'),
@@ -273,6 +321,7 @@ export function QuotaHoverCard({
     });
   }
   for (const [index, scoped] of (snapshot?.scoped ?? []).entries()) {
+    if (!isDisplayableWindow(scoped)) continue;
     windows.push({
       key: `scoped-${scoped.modelId ?? scoped.modelDisplayName}-${index}`,
       title: t('quotaCard.modelWeeklyLabel', { model: scoped.modelDisplayName }),
@@ -380,6 +429,7 @@ export function QuotaHoverCard({
         <>
           <CardDivider />
           <button
+            ref={dashboardButtonRef}
             type="button"
             onClick={onOpenDashboard}
             className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-lg px-2 py-[7px] text-left font-medium transition-colors hover:bg-[var(--quota-card-hover-bg,var(--surface-hover,rgba(0,0,0,0.05)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring,#417CDD)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] active:scale-[0.98]"
