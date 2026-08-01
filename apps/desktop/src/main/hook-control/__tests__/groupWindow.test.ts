@@ -26,6 +26,7 @@ import {
   recordGroupMessage as recordScopedGroupMessage,
   resetGroupContextCursors,
   sweepGroupWindowExpired,
+  WINDOW_KEEP_PER_PRINCIPAL,
 } from '../groupWindow.js';
 
 const PRINCIPAL_ID = '9';
@@ -109,10 +110,47 @@ describe('recordGroupMessage', () => {
       .get() as { message_id: string };
     expect(oldest.message_id).toBe('m2');
   });
+
+  it('每个 principal 跨群和 topic 只保留最近的总量上限', async () => {
+    sqlite
+      .prepare(
+        `WITH RECURSIVE seq(n) AS (
+           SELECT 1
+           UNION ALL
+           SELECT n + 1 FROM seq WHERE n < ?
+         )
+         INSERT INTO hook_group_messages
+           (provider, chat_id, thread_id, message_id, chat_name, author, is_bot, text, file_names, sent_at, created_at)
+         SELECT 'telegram:9', '-' || n, '', 'old-' || n, 'Group ' || n, '@x', 0, 'old', NULL, n, n
+         FROM seq`,
+      )
+      .run(WINDOW_KEEP_PER_PRINCIPAL);
+
+    await recordGroupMessage(frame({ chatId: '-new', messageId: 'newest' }));
+
+    const count = sqlite
+      .prepare("SELECT COUNT(*) AS n FROM hook_group_messages WHERE provider = 'telegram:9'")
+      .get() as { n: number };
+    expect(count.n).toBe(WINDOW_KEEP_PER_PRINCIPAL);
+    expect(
+      sqlite
+        .prepare(
+          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'old-1'",
+        )
+        .get(),
+    ).toBeUndefined();
+    expect(
+      sqlite
+        .prepare(
+          "SELECT 1 FROM hook_group_messages WHERE provider = 'telegram:9' AND message_id = 'newest'",
+        )
+        .get(),
+    ).toBeDefined();
+  });
 });
 
 describe('sweepGroupWindowExpired', () => {
-  it('兼容启动入口不再删除旧群历史', async () => {
+  it('保留新账号命名空间，并清除无法安全归属的旧 telegram 命名空间', async () => {
     const fresh = frame({ messageId: 'fresh' });
     await recordGroupMessage(fresh);
     // 直接落一条 8 天前的过期行, 模拟群早已不活跃(无按键 GC 机会)。
@@ -127,7 +165,7 @@ describe('sweepGroupWindowExpired', () => {
     const ids = sqlite
       .prepare('SELECT message_id AS id FROM hook_group_messages ORDER BY id ASC')
       .all() as Array<{ id: string }>;
-    expect(ids.map((row) => row.id)).toEqual(['fresh', 'stale']);
+    expect(ids.map((row) => row.id)).toEqual(['fresh']);
   });
 });
 

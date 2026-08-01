@@ -60,14 +60,14 @@ export interface IMHost {
     discordMediaDir?: string;
     /** Root for downloaded telegram media. Optional — only hosts that wire the telegram channel provide it. */
     telegramMediaDir?: string;
+    /** Root for downloaded WeCom files and legacy image fallback. */
+    wecomMediaDir?: string;
   };
 
   /**
-   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后
-   * 入站**图片**改走 host 内容寻址仓(按 token 免重下、全局去重、吃缓存回收
-   * 策略);缺省时回落 `paths.*MediaDir` 的老目录写盘。非图片文件始终走老
-   * 目录(host 侧规则 25 边界:非媒体不进字节仓)。包侧只摸字节和字符串,
-   * 落盘/记账细节全在 host(规则 2)。
+   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后入站图片及
+   * host 明确支持的其它媒体改走内容寻址仓;非媒体文件仍走
+   * `paths.*MediaDir`。包侧只摸字节和字符串,落盘/记账细节全在 host。
    */
   media?: IMHostMediaCache;
 
@@ -85,16 +85,38 @@ export interface IMHost {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk';
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
     /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
     mimeType: string;
-  }): Promise<{ absPath: string; url: string }>;
+    /** Keep the blob reclaimable until the transport confirms account ownership after the write. */
+    staging?: boolean;
+  }): Promise<{ absPath: string; url: string; discard?: () => Promise<void> }>;
+  /**
+   * 其它 Cindy 托管媒体入总仓。未提供时 transport 必须降级为 unsupported，
+   * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
+   */
+  cacheMedia?(params: {
+    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    token: string;
+    buffer: Uint8Array;
+    mimeType: string;
+  }): Promise<{
+    absPath: string;
+    url: string;
+    mimeType: string;
+    /** Release host-side staging when the originating account becomes stale. */
+    discard?: () => Promise<void>;
+  }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk',
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
     token: string,
+    options?: {
+      /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
+      shouldReuse?: () => boolean;
+    },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
   resolveMediaUrl(url: string): string | null;

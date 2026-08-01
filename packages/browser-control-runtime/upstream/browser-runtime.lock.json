@@ -16,11 +16,15 @@
   "patches": [
     {
       "file": "extension/src/browser/config.ts",
+      "desc": "preserve narrow fake-IP SSRF allowances from the host config without enabling general private-network access"
+    },
+    {
+      "file": "extension/src/browser/config.ts",
       "desc": "skip upstream auto-injected \"openclaw\"/\"user\" profiles when the host provides its own (avoids CDP port 18800 collision with the managed profile + never drives the user's Chrome)"
     }
   ],
   "fileCount": 335,
-  "contentHash": "3b9b7006ff975c85aa03602bc6021840e65acab2fb5783da51b061337f8cfd69",
+  "contentHash": "1bc2c6ddddf76824846b6e14ce5bf27e3b222b3283c9fbf2beda1d4283d3040a",
   "fsSafe": {
     "package": "@openclaw/fs-safe",
     "version": "0.4.0"

@@ -65,6 +65,12 @@
     user-select: text;
   }
 
+  /* 原生选区默认会在宿主失去焦点后变成深色,看起来像选中被取消。
+     选中范围仍然存在,这里固定提示色,让用户切到插件/webview 后仍能看见。 */
+  ::selection {
+    background: var(--text-selection-bg);
+  }
+
   button,
   [role='button'],
   [role='menuitem'],

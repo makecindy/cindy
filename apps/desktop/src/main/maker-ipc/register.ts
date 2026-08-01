@@ -290,6 +290,7 @@ import {
   codexUsageToTokens,
   recordSchedulerTurnCost,
   recordTurnCostOnMessage,
+  recordTurnUsageOnMessage,
 } from '../turnCostBroadcaster.js';
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
@@ -1727,6 +1728,45 @@ interface WiredSessionRegistration {
 const wiredSessionsById = new Map<string, WiredSessionRegistration>();
 
 /**
+ * Monotonic logical-turn generation used by direct abort reconciliation.
+ * Session ids survive owner-boundary replacement, so the Session object alone
+ * is not enough to reject a late retry for a newer turn on the same instance.
+ */
+const sessionTurnBoundaryGenerationById = new Map<string, number>();
+
+interface DirectAbortReconcileBoundary {
+  session: WiredSession;
+  generation: number;
+  turnId: string | null;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+}
+
+/** One direct ABORT_SESSION retry chain per session; a newer abort supersedes the old one. */
+const directAbortReconcileBoundaries = new Map<string, DirectAbortReconcileBoundary>();
+const DIRECT_ABORT_RECONCILE_RETRY_DELAY_MS = 250;
+
+function currentSessionTurnBoundaryGeneration(sessionId: string): number {
+  return sessionTurnBoundaryGenerationById.get(sessionId) ?? 0;
+}
+
+function advanceSessionTurnBoundaryGeneration(sessionId: string): number {
+  const next = currentSessionTurnBoundaryGeneration(sessionId) + 1;
+  sessionTurnBoundaryGenerationById.set(sessionId, next);
+  return next;
+}
+
+function cancelDirectAbortReconciliation(
+  sessionId: string,
+  expected?: DirectAbortReconcileBoundary,
+): void {
+  const boundary = directAbortReconcileBoundaries.get(sessionId);
+  if (!boundary || (expected && boundary !== expected)) return;
+  if (boundary.retryTimer) clearTimeout(boundary.retryTimer);
+  boundary.retryTimer = null;
+  directAbortReconcileBoundaries.delete(sessionId);
+}
+
+/**
  * SDK result 事件的 total_cost_usd 是 session 累计 (不是 per-turn) ——
  * 老 vendor/claude/usageExtractor.ts:72-74 也确认过。要算"这一 turn 花了多少"
  * 就要拿这次累计减上次累计。这里 per-session 记一下上次报上来的累计值。
@@ -1841,6 +1881,17 @@ const rewindInputSessions = new Set<string>();
 const SESSION_REWIND_INPUT_LOCK_ID = 'session-rewind';
 const SESSION_REWIND_STOP_TIMEOUT_MS = 15_000;
 let pendingCredentialSwitchHolder: PendingCredentialSwitchService | null = null;
+function settlePendingCredentialSwitch(sessionId: string, source: string): void {
+  const pending = pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  if (!pending) return;
+  void pending.catch((err) => {
+    log.warn('pending credential switch settle failed', {
+      sessionId,
+      source,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  });
+}
 // turn 收口时对远端 codex MCP 做一次 best-effort ensure 的钩子 (live turn
 // 期间被推迟的 daemon bootstrap 在 idle 时点补刀)。真实现定义在
 // registerMakerIpcs 闭包内 (依赖 maker / ensure 函数), 模块级 turn 收口
@@ -2518,7 +2569,7 @@ function settleSilentStopDone(sessionId: string, reason: 'exhausted' | 'skip' | 
   sessionTurnActivityTracker.scheduleIdleAfterTerminalBroadcast(sessionId);
   noteClaudeSessionTurnState(sessionId, false);
   agentInputCoordinatorHolder?.onTurnEvent(sessionId, 'done');
-  void pendingCredentialSwitchHolder?.onTurnSettled(sessionId);
+  settlePendingCredentialSwitch(sessionId, `silent-stop:${reason}`);
   deferredCodexRestartHolder?.onSessionSettled();
   agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
   refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
@@ -2649,9 +2700,13 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     return;
   }
   if (existing) {
+    // A runtime replacement invalidates any delayed direct-abort callback that
+    // still belongs to the old Session instance.
+    cancelDirectAbortReconciliation(session.id);
     for (const dispose of existing.disposers) dispose();
     existing.session.setInteractionListener(null);
   }
+  advanceSessionTurnBoundaryGeneration(session.id);
   const registration: WiredSessionRegistration = { session, disposers: [] };
   wiredSessionsById.set(session.id, registration);
 
@@ -2756,6 +2811,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         interruptedTurnAutoResumeGuard.noteTurnStarted(session.id);
         const wasInTurn = sessionTurnActivityTracker.isSessionInTurn(session.id);
         sessionTurnActivityTracker.setSessionInTurn(session.id, data.isRunning);
+        if (!wasInTurn) advanceSessionTurnBoundaryGeneration(session.id);
         // 后台活动检测:turn 开始 → 该会话的 API 流量回归主线,后台横幅熄灭。
         noteClaudeSessionTurnState(session.id, true);
         if (!wasInTurn) {
@@ -2967,7 +3023,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // 提前唤醒会让 apply/重试读到 isSessionInTurn=true 而空转,退化到 10s 兜底
       // (review P2 2026-07-04)。apply 内部串行 + 幂等,fire-and-forget 安全;
       // planned upgrade close 等场景多唤一次也只是 no-op。
-      void pendingCredentialSwitchHolder?.onTurnSettled(session.id);
+      settlePendingCredentialSwitch(session.id, `event:${event.type}`);
       deferredCodexRestartHolder?.onSessionSettled();
       agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
       refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
@@ -3297,8 +3353,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               estimatedValues.length > 0
                 ? addRegionalMoney(estimatedValues)
                 : null;
+            const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
             if (turnEstimatedValue && turnEstimatedValue.amount > 0) {
-              const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, deltas, 'unknown', perModel);
               const changedScheduleId = await recordSchedulerTurnCost({
                 sessionId: session.id,
                 clientId: turnAssistantPersistId,
@@ -3307,6 +3363,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 turnOrigin: event.turnOrigin,
               });
               if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            } else {
+              // 真实计费与订阅估值都拿不到(典型:网关目录整体不下发价格、模型不在价表)
+              // —— 钱没有,但 token 明细是算好的,落下来让 UI 退回显示本轮 token。
+              await recordTurnUsageOnMessage({
+                sessionId: session.id,
+                clientId: turnAssistantPersistId,
+                turnUsageDetails,
+              });
             }
           }
         })();
@@ -3314,46 +3378,65 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // 窄兜底: 罕见地 done 只带 total_cost_usd、没 modelUsage —— 拆不了 daily_model_usage,
         // 但至少用累计差把总额 / session / message 记上, 别漏整轮 (review #4)。
         const rawDelta = Math.max(0, cumulative - prevReportedCost);
-        if (rawDelta > 0) {
-          void (async () => {
-            let resolvedModel = 'unknown';
-            try {
-              const model = await modelPromise;
-              resolvedModel = model;
-            } catch { /* non-fatal: 保留 SDK 原始 cost */ }
-            // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
-            // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
-            // 避免把订阅 SDK 自报 cost 误记进计费)。
-            if (isSubscriptionDirectModel(resolvedModel)) return;
-            const providerId = getSessionProvider(session.id);
-            const observedRoute =
-              providerId == null ? readClaudeSessionRoute(session.id) : null;
-            const route: BillingRoute = session.remoteHostId
-              ? 'unknown'
-              : providerId === 'anthropic' || observedRoute === 'subscription'
-                ? 'subscription'
-                : providerId === 'xd' || observedRoute === 'gateway'
-                  ? 'xd-gateway'
-                  : providerId
-                    ? 'provider-api'
-                    : 'unknown';
-            if (route === 'subscription' || route === 'xd-gateway') return;
-            const ledgerCurrency =
-              (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
-            const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
-            const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
-            recordTurnSpend(money);
-            recordSessionTurnSpend(session.id, money);
-            const changedScheduleId = await recordSchedulerTurnCost({
+        void (async () => {
+          let resolvedModel = 'unknown';
+          try {
+            const model = await modelPromise;
+            resolvedModel = model;
+          } catch { /* non-fatal: 保留 SDK 原始 cost */ }
+          const turnUsageDetails = buildClaudeTurnUsageDetails(doneData?.usage, undefined, resolvedModel);
+          // 本分支有三个"记不了钱"的出口(本轮 cost 未增长 / 订阅直连 / 订阅与网关路由),
+          // 账本口径一个字不改,但都把本轮 token 明细落下来 —— 钱算不出来不代表用量
+          // 算不出来,UI 那一格据此退回显示 token 而不是空着。
+          const recordUsageOnly = async () => {
+            if (!turnAssistantPersistId) return;
+            await recordTurnUsageOnMessage({
               sessionId: session.id,
               clientId: turnAssistantPersistId,
-              money,
               turnUsageDetails,
-              turnOrigin: event.turnOrigin,
             });
-            if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
-          })();
-        }
+          };
+          if (rawDelta <= 0) {
+            await recordUsageOnly();
+            return;
+          }
+          // 订阅直连轮(chatgpt/ / xai/)走窄兜底时: 真实计费恒 0, 不写 daily_spend /
+          // sessions.total_cost_usd(与主路径 resolveTurnCost 的 subscription gate 同口径,
+          // 避免把订阅 SDK 自报 cost 误记进计费)。
+          if (isSubscriptionDirectModel(resolvedModel)) {
+            await recordUsageOnly();
+            return;
+          }
+          const providerId = getSessionProvider(session.id);
+          const observedRoute =
+            providerId == null ? readClaudeSessionRoute(session.id) : null;
+          const route: BillingRoute = session.remoteHostId
+            ? 'unknown'
+            : providerId === 'anthropic' || observedRoute === 'subscription'
+              ? 'subscription'
+              : providerId === 'xd' || observedRoute === 'gateway'
+                ? 'xd-gateway'
+                : providerId
+                  ? 'provider-api'
+                  : 'unknown';
+          if (route === 'subscription' || route === 'xd-gateway') {
+            await recordUsageOnly();
+            return;
+          }
+          const ledgerCurrency =
+            (await getGatewayAccountCurrency()) ?? currentLedgerCurrency();
+          const money = usdToLedgerCurrency(rawDelta, ledgerCurrency);
+          recordTurnSpend(money);
+          recordSessionTurnSpend(session.id, money);
+          const changedScheduleId = await recordSchedulerTurnCost({
+            sessionId: session.id,
+            clientId: turnAssistantPersistId,
+            money,
+            turnUsageDetails,
+            turnOrigin: event.turnOrigin,
+          });
+          if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+        })();
       }
       // 与 spend 记账并列的另一个 turn-done side-effect: 刷新 Claude 账号月度配额
       // (LiteLLM /v2/user/info)。fire-and-forget, 模块内 2s 超时 + 10s 节流。
@@ -3456,7 +3539,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           // 避免 scheduler 的 Cost 汇总混入订阅价值或远端账号消耗。
           // fire-and-forget 不阻塞事件循环;价格表走 main 端内存 + 磁盘缓存,
           // stale 快返并后台刷新,
-          // 拉不到 / 模型无条目 → 本轮不显示。
+          // 拉不到 / 模型无条目 → 只落 token 明细,UI 退回显示本轮 token。
+          // 明细在 try 外构造:它只依赖上面已拿到的 token 数,价格请求抛错时也要能落。
+          const turnUsageDetails = buildTurnUsageDetails({
+            inputTokens: promptTokens,
+            outputTokens: completionTokens,
+            cacheReadTokens: cachedTokens,
+            cacheCreateTokens: 0,
+            model: turnModel,
+          });
+          const recordCodexUsageOnly = async () => {
+            if (!turnAssistantPersistId) return;
+            await recordTurnUsageOnMessage({
+              sessionId: session.id,
+              clientId: turnAssistantPersistId,
+              turnUsageDetails,
+            });
+          };
           try {
             const pricing = isSubscriptionValue && !isCodexXaiProviderRoute
               ? await getModelPricing()
@@ -3486,13 +3585,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 cacheCreateTokensDelta: 0,
               });
             }
-            const turnUsageDetails = buildTurnUsageDetails({
-              inputTokens: promptTokens,
-              outputTokens: completionTokens,
-              cacheReadTokens: cachedTokens,
-              cacheCreateTokens: 0,
-              model: turnModel,
-            });
             if (money && money.amount > 0) {
               if (!isSubscriptionValue) {
                 void recordTurnSpend(money);
@@ -3506,9 +3598,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 turnOrigin: event.turnOrigin,
               });
               if (changedScheduleId) broadcastSchedulerChanged(changedScheduleId);
+            } else {
+              await recordCodexUsageOnly();
             }
           } catch {
             // token row 已在价格请求前落库;价格失败只影响 API cost / message cost。
+            // 消息那一格仍要有事实可看:补落一次 token 明细。patch 是 agent_meta merge、
+            // 写的又是同一份明细,所以与上面成功分支重复执行也是幂等的(自身失败只 warn)。
+            await recordCodexUsageOnly();
           }
         })();
       }
@@ -3544,38 +3641,80 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
   }));
   registration.disposers.push(session.onStatusChange((status) => {
     if (wiredSessionsById.get(session.id)?.session !== session) return;
-    broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
+    // The local window broadcast is best-effort, but keep this guard here as
+    // well because status callbacks are a lifecycle boundary: a third-party
+    // bridge must not be able to skip session cleanup by throwing.
+    try {
+      broadcastToAllWindows(MAKER_PUSH.STATUS_CHANGED, { sessionId: session.id, status });
+    } catch (err) {
+      log.warn('session status broadcast failed', {
+        sessionId: session.id,
+        status,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
     if (status === 'closed') {
-      cleanupPendingInteractionsForSession(session.id, 'session_closed');
-      // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
-      // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
-      // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
-      // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
-      autoResumeBookkeeping.teardown(session.id);
-      agentInputCoordinatorHolder?.onSessionClosed(session.id);
-      // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
-      pendingCredentialSwitchHolder?.onSessionClosed(session.id);
-      deferredCodexRestartHolder?.onSessionSettled();
-      agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
-      refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
-      gitSnapshotCoordinator?.onSessionClosed(session.id);
-      wiredSessionsById.delete(session.id);
-      for (const dispose of registration.disposers) dispose();
-      session.setInteractionListener(null);
-      clearOrcaMcpHydrated(session.id);
-      knownNonOrcaSessionIds.delete(session.id);
-      lastReportedCostUsdBySession.delete(session.id);
-      lastReportedModelUsageBySession.delete(session.id);
-      turnModelPromiseBySession.delete(session.id);
-      sessionTurnActivityTracker.deleteSession(session.id);
-      markSessionTurnEnded(session.id);
-      // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
-      clearClaudeSessionBackgroundActivity(session.id);
-      clearSessionPersistState(session.id);
-      // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
-      // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
-      // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。
-      handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');
+      try {
+        cleanupPendingInteractionsForSession(session.id, 'session_closed');
+        // 会话关闭同样是"终止":退避窗口有 3–20 秒,期间会话可能被独立关掉(切 agent、
+        // 远端断开、宿主回收)。只清 coordinator 不够 —— 排期中的定时器与悬空的重连记录
+        // 都还活着,前者会到点往已关闭的会话补发消息(coordinator 关闭路径保留 recovery,
+        // 补发会把用户关掉的会话重新拉起来),后者会把结果错绑到下一个会话实例(codex P1)。
+        autoResumeBookkeeping.teardown(session.id);
+        agentInputCoordinatorHolder?.onSessionClosed(session.id);
+        // 会话关闭:兑现延迟凭证切换(直接写 route),并唤醒被它挡住的等待者。
+        pendingCredentialSwitchHolder?.onSessionClosed(session.id);
+        deferredCodexRestartHolder?.onSessionSettled();
+        agentInputCoordinatorHolder?.onExternalTurnSettled(session.id);
+        refreshRemoteCodexMcpOnTurnSettledHolder?.(session.id);
+        gitSnapshotCoordinator?.onSessionClosed(session.id);
+        clearOrcaMcpHydrated(session.id);
+        knownNonOrcaSessionIds.delete(session.id);
+        lastReportedCostUsdBySession.delete(session.id);
+        lastReportedModelUsageBySession.delete(session.id);
+        turnModelPromiseBySession.delete(session.id);
+        // 后台活动检测:会话进程已关闭(closeSession / 删除),清账并广播横幅熄灭。
+        clearClaudeSessionBackgroundActivity(session.id);
+        clearSessionPersistState(session.id);
+        // 进程关闭 ≠ 通知作废:临时会话调度(非 heartbeat / 非 persistentSession)在 run
+        // 终态后立刻 closeSession,此刻完成卡片刚在灵动岛上弹出来。硬删条目会让它当场
+        // 消失,所以这条路径保留仍在展示的卡片,由 dwell 到期或用户 ack 收掉。
+        handleAgentIslandSessionClosedAfterCleanup(session.id, 'process-closed');
+      } catch (err) {
+        log.warn('session close cleanup failed; forcing idle reconciliation', {
+          sessionId: session.id,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      } finally {
+        // Wiring teardown is independent of the best-effort product cleanup
+        // above. A single disposer or listener error must not leave a closed
+        // session reachable from the in-memory routing map.
+        cancelDirectAbortReconciliation(session.id);
+        wiredSessionsById.delete(session.id);
+        for (const dispose of registration.disposers) {
+          try {
+            dispose();
+          } catch (err) {
+            log.warn('session disposer failed during close teardown', {
+              sessionId: session.id,
+              error: err instanceof Error ? err.message : String(err),
+            });
+          }
+        }
+        try {
+          session.setInteractionListener(null);
+        } catch (err) {
+          log.warn('session interaction listener teardown failed', {
+            sessionId: session.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+        // This must run even when an owner-boundary-sensitive cleanup above
+        // rejects. A closed Session cannot keep the desktop turn boundary busy.
+        sessionTurnActivityTracker.deleteSession(session.id);
+        sessionTurnBoundaryGenerationById.delete(session.id);
+        markSessionTurnEnded(session.id);
+      }
     }
   }));
 
@@ -7315,6 +7454,188 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   });
 
+  /**
+   * Reconcile the in-memory turn boundary after a vendor abort/close when the
+   * normal terminal event was lost. The vendor Session is authoritative for
+   * whether work is still running; the desktop tracker is only an event-driven
+   * view and can remain stale across owner-boundary teardown.
+   */
+  const getStableSessionForTurnBoundary = (sessionId: string): WiredSession | null => {
+    const wired = wiredSessionsById.get(sessionId)?.session;
+    if (wired) return wired;
+    try {
+      return maker.getSession(sessionId) ?? null;
+    } catch (err) {
+      // Dynamic Maker intentionally fails closed while an account owner is
+      // being replaced. A missing stable wiring snapshot means we cannot
+      // authoritatively reconcile this session yet; callers must retain their
+      // boundary and wait for the normal close/settle path.
+      log.warn('session lookup unavailable during turn-boundary reconciliation', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
+
+  const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
+    const sess = getStableSessionForTurnBoundary(sessionId);
+    if (!sess) return false;
+    let liveSessionIdle = false;
+    try {
+      liveSessionIdle = !sess.isTurnRunning();
+    } catch (err) {
+      log.warn('live session turn-state lookup failed during reconciliation', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return false;
+    }
+    if (!liveSessionIdle) return false;
+    const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
+      sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
+    const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
+    if (trackerStale || hadZombieInteraction) {
+      log.warn('reconciling stale session turn boundary', {
+        sessionId,
+        source,
+        trackerStale,
+        hadZombieInteraction,
+        liveSessionIdle,
+      });
+    } else {
+      // The owner-boundary wiring guard can drop the isRunning=true event
+      // entirely. In that case the live Session being idle is still the
+      // authoritative proof that this abort boundary can be released.
+      log.info('confirmed live session idle during turn-boundary reconciliation', {
+        sessionId,
+        source,
+      });
+    }
+    sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
+    try {
+      // The marker write is best-effort and ordered behind pending message
+      // persistence. It may retry/settle after an owner boundary is available.
+      markTurnEndedAfterPersistDrain(sessionId);
+      noteClaudeSessionTurnState(sessionId, false);
+      settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
+      deferredCodexRestartHolder?.onSessionSettled();
+      agentInputCoordinatorHolder?.onExternalTurnSettled(sessionId);
+      refreshRemoteCodexMcpOnTurnSettledHolder?.(sessionId);
+    } catch (err) {
+      log.warn('stale session turn side-effect cleanup failed', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (hadZombieInteraction) {
+      try {
+        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
+      } catch (err) {
+        log.warn('stale session interaction cleanup failed', {
+          sessionId,
+          source,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+    }
+    return true;
+  };
+
+  const readDirectAbortTurnId = (session: WiredSession, sessionId: string): string | null => {
+    try {
+      return session.getCurrentTurnId?.() ?? null;
+    } catch (err) {
+      log.warn('direct abort turn-id lookup failed', {
+        sessionId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return null;
+    }
+  };
+
+  const isDirectAbortBoundaryCurrent = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+  ): boolean => {
+    if (directAbortReconcileBoundaries.get(sessionId) !== boundary) return false;
+    if (wiredSessionsById.get(sessionId)?.session !== boundary.session) return false;
+    if (currentSessionTurnBoundaryGeneration(sessionId) !== boundary.generation) return false;
+
+    // Codex exposes a provider turn id. Compare only when both sides have an
+    // id: after an abort the old id legitimately becomes null, while a new
+    // turn with a different non-null id must invalidate this retry chain.
+    const currentTurnId = readDirectAbortTurnId(boundary.session, sessionId);
+    return boundary.turnId === null || currentTurnId === null || boundary.turnId === currentTurnId;
+  };
+
+  const scheduleDirectAbortReconciliation = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+  ): void => {
+    if (boundary.retryTimer) return;
+    boundary.retryTimer = setTimeout(() => {
+      boundary.retryTimer = null;
+      if (!isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+        cancelDirectAbortReconciliation(sessionId, boundary);
+        return;
+      }
+      reconcileDirectAbortBoundary(sessionId, boundary, 'direct-abort-retry');
+    }, DIRECT_ABORT_RECONCILE_RETRY_DELAY_MS);
+  };
+
+  const reconcileDirectAbortBoundary = (
+    sessionId: string,
+    boundary: DirectAbortReconcileBoundary,
+    source: string,
+  ): void => {
+    if (!isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+      return;
+    }
+
+    let reconciledIdle = false;
+    try {
+      reconciledIdle = reconcileSessionTurnIdle(sessionId, source);
+    } catch (err) {
+      log.warn('direct abort idle reconciliation failed', {
+        sessionId,
+        source,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    if (reconciledIdle) {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+      return;
+    }
+
+    // Keep the boundary fail-closed until the same Session instance and turn
+    // generation prove idle. Owner replacement, a new turn, or close cancels
+    // this chain through the identity/generation guards above.
+    if (isDirectAbortBoundaryCurrent(sessionId, boundary)) {
+      scheduleDirectAbortReconciliation(sessionId, boundary);
+    } else {
+      cancelDirectAbortReconciliation(sessionId, boundary);
+    }
+  };
+
+  const beginDirectAbortReconciliation = (
+    sessionId: string,
+    session: WiredSession,
+  ): DirectAbortReconcileBoundary => {
+    cancelDirectAbortReconciliation(sessionId);
+    const boundary: DirectAbortReconcileBoundary = {
+      session,
+      generation: currentSessionTurnBoundaryGeneration(sessionId),
+      turnId: readDirectAbortTurnId(session, sessionId),
+      retryTimer: null,
+    };
+    directAbortReconcileBoundaries.set(sessionId, boundary);
+    return boundary;
+  };
+
   const inputCoordinator: AgentInputCoordinator = new AgentInputCoordinator({
     sendToAgent: async (sessionId, message, createOpts, sendOpts) => {
       try {
@@ -7419,42 +7740,29 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       steerToAgentAccepted(sessionId, message, sendOpts),
     abortSession: async (sessionId) => {
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
-      const sess = maker.getSession(sessionId);
+      const sess = getStableSessionForTurnBoundary(sessionId);
       if (!sess) return;
       handleAgentIslandSessionStopped(sess);
-      await sess.abort();
-      cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+      try {
+        await sess.abort();
+      } finally {
+        // The coordinator owns idle reconciliation after this promise settles,
+        // so its boolean result is not consumed twice. Interaction waiters are
+        // still always released even when the vendor abort rejects.
+        cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+      }
     },
     isTurnRunning: (sessionId) => {
-      const sess = maker.getSession(sessionId);
+      const sess = getStableSessionForTurnBoundary(sessionId);
       return isSessionTurnDispatchBoundaryBusy(sessionTurnActivityTracker, sessionId, sess);
     },
     reconcileTurnIdle: (sessionId) => {
-      // steer 拿到 maker-core 权威 NO_ACTIVE_TURN 后校准本地 busy 视图。
-      // tracker 只靠事件流维护, turn 异常死亡 (没发 done / terminal error) 时会
-      // stale 为 in-turn, 让 coordinator 的 fallback drain 永久卡死 —— 插话点击
-      // 表现为"毫无反应"。复核 live session 真没在跑后, 清 tracker + 清僵尸
-      // interaction (两者都是 getDrainableHead 的 busy 门)。
-      const sess = maker.getSession(sessionId);
-      if (sess?.isTurnRunning()) return;
-      const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
-        sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
-      const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
-      if (!trackerStale && !hadZombieInteraction) return;
-      log.warn('reconcileTurnIdle: clearing stale busy state after authoritative NO_ACTIVE_TURN', {
-        sessionId,
-        trackerStale,
-        hadZombieInteraction,
-      });
-      sessionTurnActivityTracker.setSessionInTurn(sessionId, false);
-      markSessionTurnEnded(sessionId);
-      noteClaudeSessionTurnState(sessionId, false);
-      if (hadZombieInteraction) {
-        cleanupPendingAgentInteractionsForSession(sessionId, 'turn_idle_reconcile');
-      }
+      // steer 拿到 maker-core 权威 NO_ACTIVE_TURN、或 abort 已让 vendor 停止
+      // 但终态事件丢失时，都走同一条收口路径。
+      return reconcileSessionTurnIdle(sessionId, 'authoritative-idle');
     },
     hasPendingInteraction: hasPendingAgentInteractionForSession,
-    getAgentKind: (sessionId) => maker.getSession(sessionId)?.agentKind ?? null,
+    getAgentKind: (sessionId) => getStableSessionForTurnBoundary(sessionId)?.agentKind ?? null,
     getSdkSessionId: async (sessionId) => {
       const meta = await maker.getSessionMeta(sessionId).catch(() => null);
       return meta?.sdkSessionId;
@@ -8228,15 +8536,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     silentStopAutoResumeGuard.noteSessionReset(sessionId);
     interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
     autoResumeBookkeeping.teardown(sessionId);
-    const sess = maker.getSession(sessionId);
+    const sess = getStableSessionForTurnBoundary(sessionId);
     if (!sess) return;
     handleAgentIslandSessionStopped(sess);
     // 用户 Stop 当前 turn → 若该会话有 active goal,先暂停目标(置 paused + 停续跑 + detach
     // 监听),**再** abort。这样 abort 产生的终止事件到来时目标已暂停、监听已摘,不会被误判成
     // 续跑(原本依赖 error 文案正则判 paused/blocked,不可靠)。null-safe;无 active goal 时 no-op。
     await goalStopObserver?.(sessionId);
-    await sess.abort();
-    cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+    const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);
+    try {
+      await sess.abort();
+    } finally {
+      // The stable lookup may still be inside an owner-boundary transition;
+      // reconciliation owns its own safe live-state lookup and must run even
+      // when the abort promise rejects or the Session reports a late idle.
+      try {
+        reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');
+      } finally {
+        cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+      }
+    }
   });
 
   ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION, async (_e, sessionId: unknown, opts?: unknown) => {
@@ -9201,7 +9520,17 @@ function redactEventForRenderer(event: AgentEvent): AgentEvent {
 function broadcastToAllWindows(channel: string, payload: unknown): void {
   // device-link 被控端旁路:命中转发白名单且存在控制链路时,把事件转发给控制端
   // (无 link 时 O(1) no-op,不进 maker-core 热路径成本)
-  tapWindowBroadcast(channel, payload);
+  // 旁路永远不能反向阻断本机生命周期。owner boundary 切换期间远端链路
+  // 可能暂不可用；如果异常冒泡，Session 的 status/terminal listener 会在
+  // 清理前中止，最终留下 tracker busy + 死进程，所有后续消息永久排队。
+  try {
+    tapWindowBroadcast(channel, payload);
+  } catch (err) {
+    log.warn('device-link broadcast tap failed; keeping local broadcast alive', {
+      channel,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
     try {

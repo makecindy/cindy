@@ -29,6 +29,7 @@ const SESSION_SOURCES = [
   'discord',
   'wechat',
   'dingtalk',
+  'wecom',
   'scheduler',
   'learn',
   'shared',
@@ -778,6 +779,7 @@ export const schedules = sqliteTable(
     }),
     notifyDesktop: integer('notify_desktop', { mode: 'boolean' }).notNull().default(true),
     notifyFeishu: integer('notify_feishu', { mode: 'boolean' }).notNull().default(false),
+    notifyWecomGroup: integer('notify_wecom_group', { mode: 'boolean' }).notNull().default(false),
     status: text('status', { enum: ['active', 'paused', 'expired'] })
       .notNull()
       .default('active'),

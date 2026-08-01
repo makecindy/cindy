@@ -257,6 +257,18 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 
 个人微信连接的产品名称，沿用微信官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。
 
+### WeCom
+
+企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。
+
+### WeCom group bot
+
+企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。
+
+### WeCom Intelligent Bot
+
+企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。
+
 ## 怎么加一条术语
 
 1. 在 `i18n/glossary.json` 的 `terms` 里加条目，`note` 必填——写清楚**为什么**这么定，

@@ -44,6 +44,7 @@ export interface MobileScheduleDraft {
   useWorktree: boolean;
   notifyDesktop: boolean;
   notifyFeishu: boolean;
+  notifyWecomGroup?: boolean;
   targetSessionId: string;
   persistentSession: boolean;
   silentWhenIdle: boolean;
@@ -106,6 +107,7 @@ export function createMobileScheduleDraft(
     useWorktree: workspaceKind === 'project' && !!schedule.useWorktree,
     notifyDesktop: schedule.notify?.desktop !== false,
     notifyFeishu: schedule.notify?.feishu === true,
+    ...(schedule.notify?.wecomGroup === true ? { notifyWecomGroup: true } : {}),
     targetSessionId: schedule.targetSessionId ?? '',
     persistentSession: !!schedule.persistentSession,
     silentWhenIdle: !!schedule.silentWhenIdle,
@@ -150,6 +152,9 @@ export function applyTemplateToMobileScheduleDraft(
     persistentSession: template.persistentSession ?? draft.persistentSession,
     notifyDesktop: template.notify?.desktop ?? draft.notifyDesktop,
     notifyFeishu: template.notify?.feishu ?? draft.notifyFeishu,
+    ...((template.notify?.wecomGroup ?? draft.notifyWecomGroup) !== undefined
+      ? { notifyWecomGroup: template.notify?.wecomGroup ?? draft.notifyWecomGroup }
+      : {}),
   };
 }
 
@@ -253,6 +258,7 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     notify: {
       desktop: draft.notifyDesktop,
       feishu: draft.notifyFeishu,
+      wecomGroup: draft.notifyWecomGroup === true,
     },
   };
 

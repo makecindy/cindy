@@ -104,7 +104,9 @@ vi.mock('../device-link', () => ({
 
 // mobile 正文素材:最近一条 assistant 内容(真实实现走 localDb)。默认空 = 无摘要,
 // 既有用例的调用断言不带 detail;内容用例单独 mockResolvedValueOnce。
-const latestMessageText = vi.fn(async (_sessionId: string, _role: string) => '');
+const latestMessageText = vi.fn<
+  (sessionId: string, role: string) => Promise<string>
+>(async () => '');
 vi.mock('../localDb/latestMessageText', () => ({
   latestMessageText: (sessionId: string, role: string) => latestMessageText(sessionId, role),
 }));

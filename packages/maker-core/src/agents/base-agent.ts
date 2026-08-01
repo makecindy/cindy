@@ -836,7 +836,11 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk'; taskId?: string }
+  | {
+      kind: 'im';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      taskId?: string;
+    }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 

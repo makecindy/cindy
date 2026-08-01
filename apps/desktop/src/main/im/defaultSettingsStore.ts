@@ -20,7 +20,6 @@ import {
   isImDefaultAgentKind,
   isImDefaultEffort,
   isImDefaultPermissionMode,
-  isWechatUnsupportedPermissionMode,
 } from '../../shared/imDefaultSettings.js';
 import { desktopMakerLogger } from '../maker-host/logger-adapter.js';
 import {
@@ -76,6 +75,10 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
   };
 }
 
+function normalizeChannelSettings(raw: unknown): ImDefaultSettings {
+  return normalizeSettings(raw);
+}
+
 function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
   const record = isRecord(raw) ? raw : {};
 
@@ -122,7 +125,10 @@ function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
       schemaVersion: SETTINGS_SCHEMA_VERSION,
       global: cloneSettings(legacy),
       channels: Object.fromEntries(
-        IM_DEFAULT_SETTINGS_CHANNELS.map((channel) => [channel, cloneSettings(legacy)]),
+        IM_DEFAULT_SETTINGS_CHANNELS.map((channel) => [
+          channel,
+          normalizeChannelSettings(legacy),
+        ]),
       ) as Record<ImDefaultSettingsChannel, ImDefaultSettings>,
     };
   }
@@ -134,7 +140,7 @@ function normalizeDocument(raw: unknown): ImDefaultSettingsDocument {
     channels: Object.fromEntries(
       IM_DEFAULT_SETTINGS_CHANNELS.map((channel) => [
         channel,
-        normalizeSettings(rawChannels[channel]),
+        normalizeChannelSettings(rawChannels[channel]),
       ]),
     ) as Record<ImDefaultSettingsChannel, ImDefaultSettings>,
   };
@@ -219,9 +225,6 @@ export function writeImDefaultSettingsPatch(
   patch: ImDefaultSettingsPatch,
   channel?: ImDefaultSettingsChannel,
 ): OverrideSettingsState<ImDefaultSettings> {
-  if (channel === 'wechat' && isWechatUnsupportedPermissionMode(patch.permissionMode)) {
-    throw new Error('WECHAT_PERMISSION_MODE_UNSUPPORTED');
-  }
   const document = store.read();
   const current = channel ? document.channels[channel] : document.global;
   const next = mergeSettingsPatch(current, patch);

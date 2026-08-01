@@ -1,3 +1,5 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -119,17 +121,17 @@ describe('resolveImportInstallPath', () => {
 
   it('defaults to global ~/.agents/skills/<name>', () => {
     expect(resolveImportInstallPath('demo', undefined, home)).toEqual({
-      finalDir: '/Users/sam/.agents/skills/demo',
+      finalDir: path.join(home, '.agents', 'skills', 'demo'),
     });
     expect(resolveImportInstallPath('demo', '  ', home)).toEqual({
-      finalDir: '/Users/sam/.agents/skills/demo',
+      finalDir: path.join(home, '.agents', 'skills', 'demo'),
     });
   });
 
   it('accepts absolute project .agents/skills paths', () => {
     expect(
       resolveImportInstallPath('demo', '/repo/.agents/skills/demo', home),
-    ).toEqual({ finalDir: '/repo/.agents/skills/demo' });
+    ).toEqual({ finalDir: path.normalize('/repo/.agents/skills/demo') });
   });
 
   it('rejects relative paths, basename mismatch, and non-skill roots', () => {

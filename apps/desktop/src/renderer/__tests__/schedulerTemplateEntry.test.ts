@@ -64,7 +64,8 @@ vi.mock('@radix-ui/react-dialog', async () => {
   return {
     Root: ({ open, children }: { open: boolean; children: ReactNode }) =>
       React.createElement(DialogContext.Provider, { value: open }, open ? children : null),
-    Portal: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    Portal: ({ children }: { children: ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
     Overlay: (props: Record<string, unknown>) => React.createElement('div', props),
     Content: ({
       children,
@@ -95,7 +96,8 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 vi.mock('@/components/ui/tooltip', async () => {
   const React = await import('react');
   return {
-    Tip: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    Tip: ({ children }: { children: ReactNode }) =>
+      React.createElement(React.Fragment, null, children),
   };
 });
 
@@ -194,6 +196,12 @@ beforeEach(() => {
     },
   });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    wecomGroupNotification: {
+      getState: vi.fn(async () => ({ configured: false })),
+      saveAndTest: vi.fn(),
+      test: vi.fn(),
+      clear: vi.fn(),
+    },
     maker: {
       schedule: {
         listTemplates: vi.fn(async () => [template]),
@@ -230,7 +238,9 @@ describe('Scheduler template entry', () => {
     expect(screen.getByTestId('agent-kind').textContent).toBe('claude-code');
     expect(screen.getByTestId('model-value').textContent).toBe('claude-sonnet-4-6');
 
-    fireEvent.click(screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }));
+    fireEvent.click(
+      screen.getByRole('button', { name: 'scheduler.editor.promptDialog.createAria' }),
+    );
 
     await waitFor(() => expect(createSchedule).toHaveBeenCalledTimes(1));
     expect(createSchedule).toHaveBeenCalledWith(
@@ -242,7 +252,7 @@ describe('Scheduler template entry', () => {
         recurring: true,
         agentKind: 'claude-code',
         model: 'claude-sonnet-4-6',
-        notify: { desktop: true, feishu: false },
+        notify: { desktop: true, feishu: false, wecomGroup: false },
       }),
     );
   });

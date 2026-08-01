@@ -16,7 +16,7 @@
  * 跨渠道互不影响。
  */
 
-import type { ChannelIM, IMMessageEvent } from '@cindy/im';
+import type { IMMessageEvent, TextChannelIM } from '@cindy/im';
 
 import { createLogger } from '../../logger';
 import {
@@ -27,6 +27,7 @@ import {
 } from '../accountBoundary';
 
 import { getControlScope, isInControl } from './controlState';
+import { isStopCommand } from './controlCommands';
 import type { ImSlashHandlers } from './slashCommands';
 import { looksLikeSlashCommand } from './slashCommands';
 import type { ImTurnRunner } from './turnRunner';
@@ -37,16 +38,13 @@ import type { ImChannelAdapter } from './types';
  * 用 `!` 而非 slash 前缀: Slack 会把 `/` 开头的输入截为原生 slash command,
  * 普通 DM 文本里只有 `!` 前缀能原样到达 bot。
  */
-export function isStopCommand(text: string): boolean {
-  const normalized = text.trim().toLowerCase();
-  return normalized === '!stop' || normalized === '！stop';
-}
+export { isStopCommand } from './controlCommands';
 
 export function createMessageHandler(
   adapter: ImChannelAdapter,
   slash: ImSlashHandlers,
   turnRunner: ImTurnRunner,
-): (im: ChannelIM) => () => void {
+): (im: TextChannelIM) => () => void {
   const { ui, channel, threadScoped } = adapter;
   const log = createLogger(`im:${channel}:msg`);
 
@@ -54,7 +52,7 @@ export function createMessageHandler(
   const userLocks = new Map<string, Promise<void>>();
 
   async function processOne(
-    im: ChannelIM,
+    im: TextChannelIM,
     event: IMMessageEvent,
     accountGeneration: ImAccountGeneration,
   ): Promise<void> {
@@ -223,7 +221,7 @@ export function createMessageHandler(
     }
   }
 
-  return function attachMessageHandler(im: ChannelIM): () => void {
+  return function attachMessageHandler(im: TextChannelIM): () => void {
     return im.onMessage((event) => {
       // Capture synchronously, before entering the per-user queue. A boolean
       // check at execution time could accept old-account work after relogin.

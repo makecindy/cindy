@@ -15,7 +15,7 @@
  */
 
 import type { InteractiveCardSpec } from '../types.js';
-import { XDT_IMAGE_REGEX } from '../xdtRefs.js';
+import { collectXdtImageRefs } from '../xdtRefs.js';
 
 /**
  * 去掉 markdown inline code 的反引号，保留 fenced code block（```）不动。
@@ -167,11 +167,10 @@ export function buildMixedMarkdownCardV2(
 ): unknown {
   const elements: unknown[] = [];
   let lastIdx = 0;
-  for (const m of text.matchAll(XDT_IMAGE_REGEX)) {
-    const before = text.slice(lastIdx, m.index);
+  for (const ref of collectXdtImageRefs(text)) {
+    const before = text.slice(lastIdx, ref.start);
     if (before) elements.push({ tag: 'markdown', content: stripInlineCode(before) });
-    const alt = m[1] || '';
-    const url = m[2];
+    const { alt, url } = ref;
     const key = imageMap.get(url);
     if (key) {
       elements.push({
@@ -185,7 +184,7 @@ export function buildMixedMarkdownCardV2(
         content: `_[图片加载失败:${alt || url}]_`,
       });
     }
-    lastIdx = (m.index ?? 0) + m[0].length;
+    lastIdx = ref.end;
   }
   const tail = text.slice(lastIdx);
   if (tail) elements.push({ tag: 'markdown', content: stripInlineCode(tail) });

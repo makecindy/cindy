@@ -26,6 +26,8 @@ const log = createLogger('hook-group-window');
 
 /** 每个 principal + 群/topic 窗口永久保留的最近行数。 */
 const WINDOW_KEEP_PER_KEY = 500;
+/** 每个 principal 跨全部群/topic 永久保留的最近行数。 */
+export const WINDOW_KEEP_PER_PRINCIPAL = 10_000;
 /** 单次上下文拼装最多读取的增量行数。 */
 const CONTEXT_READ_LIMIT = 500;
 /** 拼进 prompt 的上下文字符预算(保新丢旧, 与 Slack 通道同策略)。 */
@@ -113,15 +115,37 @@ export async function recordGroupMessage(
   if (threshold !== undefined) {
     await db.delete(hookGroupMessages).where(and(keyFilter, lt(hookGroupMessages.id, threshold)));
   }
+
+  const oldestPrincipalRowKept = await db
+    .select({ id: hookGroupMessages.id })
+    .from(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, storageProvider))
+    .orderBy(desc(hookGroupMessages.id))
+    .limit(1)
+    .offset(WINDOW_KEEP_PER_PRINCIPAL - 1);
+  const principalThreshold = oldestPrincipalRowKept[0]?.id;
+  if (principalThreshold !== undefined) {
+    await db
+      .delete(hookGroupMessages)
+      .where(
+        and(
+          eq(hookGroupMessages.provider, storageProvider),
+          lt(hookGroupMessages.id, principalThreshold),
+        ),
+      );
+  }
   return true;
 }
 
 /**
- * 兼容旧生命周期入口。群窗口改为永久本地记忆后不再做 TTL 清扫；保留 async
- * API，避免账号启动编排出现不必要分叉。
+ * 兼容旧生命周期入口。新命名空间的群窗口不做 TTL 清扫；旧版无法可靠归属
+ * principal 的 provider='telegram' 行在升级启动时显式清除，避免敏感孤儿数据
+ * 永久残留。删除幂等，后续启动没有额外副作用。
  */
 export async function sweepGroupWindowExpired(): Promise<void> {
-  await Promise.resolve();
+  await getDbClient()
+    .drizzle.delete(hookGroupMessages)
+    .where(eq(hookGroupMessages.provider, 'telegram'));
 }
 
 /**

@@ -7,6 +7,7 @@ import {
   formatMessageAbsoluteTime,
   formatMessageRelativeTime,
   formatMessageTurnCost,
+  formatMessageTurnTokens,
   mobileMessageShowsActionBar,
 } from '@/session/messageActions';
 import type { NormalizedRemoteMessage } from '@/session/messageNormalize';
@@ -156,6 +157,18 @@ describe('messageActions', () => {
     expect(formatMessageTurnCost(money(0.034, 'USD', true))).toBe('价值 $0.03');
     expect(formatMessageTurnCost(money(0.034, 'CNY'))).toBe('¥0.03');
     expect(formatMessageTurnCost(money(0))).toBe('');
+  });
+
+  // 金额缺席时(桌面算不出模型报价)操作行退回显示本轮 token,数字口径与桌面同源。
+  it('formats the per-turn token fallback like the desktop action bar', () => {
+    expect(formatMessageTurnTokens(2_107_700)).toBe('2.1M tokens');
+    expect(formatMessageTurnTokens(12_400)).toBe('12.4k tokens');
+    expect(formatMessageTurnTokens(842)).toBe('842 tokens');
+    // 没有可展示的事实时给空串,由调用方决定不渲染那一格。
+    expect(formatMessageTurnTokens(0)).toBe('');
+    expect(formatMessageTurnTokens(-1)).toBe('');
+    expect(formatMessageTurnTokens(undefined)).toBe('');
+    expect(formatMessageTurnTokens(Number.NaN)).toBe('');
   });
 });
 

@@ -116,6 +116,7 @@ export type JobType = 'prompt' | 'issue-triage';
 export interface ScheduleNotifyConfig {
   desktop: boolean;
   feishu: boolean;
+  wecomGroup?: boolean;
 }
 
 /**

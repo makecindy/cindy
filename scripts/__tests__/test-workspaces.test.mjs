@@ -39,7 +39,6 @@ import {
 	planRuns,
 	printSummary,
 	readAllFiles,
-	resolvePnpmInvocation,
 	resolveOutputStream,
 	runCommand,
 	runPlannedTests,
@@ -48,6 +47,10 @@ import {
 	validateManifest,
 	validateManifestCoverage,
 } from "../test-workspaces.mjs";
+import {
+	resolvePnpmInvocation,
+	usablePnpmExecPath,
+} from "../shared/pnpm-invocation.mjs";
 
 const ROOT = path.resolve(fileURLToPath(new URL("../..", import.meta.url)));
 
@@ -1105,7 +1108,7 @@ test("test gate lock timeout uses a distinct temporary-failure exit code", async
 	}
 });
 
-test("resolvePnpmInvocation uses current pnpm through node when npm_execpath is present on any platform", () => {
+test("resolvePnpmInvocation uses current pnpm through node when npm_execpath points at a JS entry on any platform", () => {
 	assert.deepEqual(
 		resolvePnpmInvocation(["--dir", "apps/server", "run", "test"], {
 			execPath: "C:/node/node.exe",
@@ -1138,17 +1141,162 @@ test("resolvePnpmInvocation uses current pnpm through node when npm_execpath is 
 	);
 });
 
+test("resolvePnpmInvocation runs a native pnpm binary directly instead of feeding it to node", () => {
+	// pnpm 的原生二进制发行版（standalone 安装）把 npm_execpath 指向可执行文件本身；
+	// 交给 node 会抛 SyntaxError: Invalid or unexpected token，把整轮测试变成假失败。
+	assert.deepEqual(
+		resolvePnpmInvocation(["--dir", "/repo/apps/server", "run", "test"], {
+			execPath: "/usr/local/bin/node",
+			npmExecPath:
+				"/Users/dev/Library/pnpm/.tools/@pnpm+macos-arm64/10.33.2/node_modules/@pnpm/macos-arm64/pnpm",
+			platform: "darwin",
+		}),
+		{
+			command:
+				"/Users/dev/Library/pnpm/.tools/@pnpm+macos-arm64/10.33.2/node_modules/@pnpm/macos-arm64/pnpm",
+			args: ["--dir", "/repo/apps/server", "run", "test"],
+			shell: false,
+		},
+	);
+	assert.deepEqual(
+		resolvePnpmInvocation(["--version"], {
+			execPath: "/usr/bin/node",
+			npmExecPath: "/home/dev/.local/share/pnpm/pnpm",
+			platform: "linux",
+		}),
+		{
+			command: "/home/dev/.local/share/pnpm/pnpm",
+			args: ["--version"],
+			shell: false,
+		},
+	);
+	assert.deepEqual(
+		resolvePnpmInvocation(["--version"], {
+			execPath: "C:/node/node.exe",
+			npmExecPath: "C:/Users/dev/AppData/Local/pnpm/pnpm.exe",
+			platform: "win32",
+		}),
+		{
+			command: "C:/Users/dev/AppData/Local/pnpm/pnpm.exe",
+			args: ["--version"],
+			shell: false,
+		},
+	);
+});
+
+test("resolvePnpmInvocation invokes Windows command wrappers through cmd.exe", () => {
+	// .cmd／.bat 通过 cmd.exe 执行，同时逐字传递 /c 命令串。
+	for (const npmExecPath of [
+		"C:/Program Files/nodejs/pnpm.cmd",
+		"C:/Program Files/nodejs/pnpm.bat",
+	]) {
+		assert.deepEqual(
+			resolvePnpmInvocation(["--version"], {
+				execPath: "C:/node/node.exe",
+				npmExecPath,
+				platform: "win32",
+				comSpec: "C:/Windows/System32/cmd.exe",
+			}),
+			{
+				command: "C:/Windows/System32/cmd.exe",
+				args: [
+					"/d",
+					"/s",
+					"/v:off",
+					"/c",
+					'""%CINDY_PNPM_CMD_ARG_0%" "%CINDY_PNPM_CMD_ARG_1%""',
+				],
+				env: {
+					CINDY_PNPM_CMD_ARG_0: npmExecPath,
+					CINDY_PNPM_CMD_ARG_1: "--version",
+				},
+				shell: false,
+				windowsVerbatimArguments: true,
+			},
+		);
+	}
+});
+
+test("resolvePnpmInvocation quotes Windows command wrapper arguments", () => {
+	assert.deepEqual(
+		resolvePnpmInvocation(
+			[
+				"--dir",
+				'C:/Users/First Last/repo & "tools"!/%literal%/apps/server',
+				"run",
+				"test",
+			],
+			{
+				npmExecPath: "C:/Program Files/nodejs/pnpm.cmd",
+				platform: "win32",
+				comSpec: "C:/Windows/System32/cmd.exe",
+			},
+		),
+		{
+			command: "C:/Windows/System32/cmd.exe",
+			args: [
+				"/d",
+				"/s",
+				"/v:off",
+				"/c",
+				'""%CINDY_PNPM_CMD_ARG_0%" "%CINDY_PNPM_CMD_ARG_1%" "%CINDY_PNPM_CMD_ARG_2%" "%CINDY_PNPM_CMD_ARG_3%" "%CINDY_PNPM_CMD_ARG_4%""',
+			],
+			env: {
+				CINDY_PNPM_CMD_ARG_0: "C:/Program Files/nodejs/pnpm.cmd",
+				CINDY_PNPM_CMD_ARG_1: "--dir",
+				CINDY_PNPM_CMD_ARG_2: 'C:/Users/First Last/repo & ""tools""!/%literal%/apps/server',
+				CINDY_PNPM_CMD_ARG_3: "run",
+				CINDY_PNPM_CMD_ARG_4: "test",
+			},
+			shell: false,
+			windowsVerbatimArguments: true,
+		},
+	);
+});
+
+test("usablePnpmExecPath rejects paths that are not a present pnpm entry", () => {
+	const present = () => true;
+	assert.equal(usablePnpmExecPath(undefined, present), undefined);
+	assert.equal(usablePnpmExecPath("", present), undefined);
+	// 名字不是 pnpm：npm_execpath 可能残留自 npm／yarn 的生命周期脚本。
+	assert.equal(usablePnpmExecPath("/usr/local/bin/npm-cli.js", present), undefined);
+	// 路径不存在：Windows 的 restart 管线新开 cmd.exe 时见过残留的旧路径。
+	assert.equal(usablePnpmExecPath("/gone/pnpm.cjs", () => false), undefined);
+	assert.equal(
+		usablePnpmExecPath("/home/dev/.local/share/pnpm/pnpm", present),
+		"/home/dev/.local/share/pnpm/pnpm",
+	);
+});
+
 test("resolvePnpmInvocation fallback shell behavior is explicit per platform", () => {
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "win32",
+			comSpec: "C:/Windows/System32/cmd.exe",
 		}),
-		{ command: "pnpm", args: ["--version"], shell: true },
+		{
+			command: "C:/Windows/System32/cmd.exe",
+			args: [
+				"/d",
+				"/s",
+				"/v:off",
+				"/c",
+				'""%CINDY_PNPM_CMD_ARG_0%" "%CINDY_PNPM_CMD_ARG_1%""',
+			],
+			env: {
+				CINDY_PNPM_CMD_ARG_0: "pnpm",
+				CINDY_PNPM_CMD_ARG_1: "--version",
+			},
+			shell: false,
+			windowsVerbatimArguments: true,
+		},
 	);
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "darwin",
 		}),
 		{ command: "pnpm", args: ["--version"], shell: false },
@@ -1156,6 +1304,7 @@ test("resolvePnpmInvocation fallback shell behavior is explicit per platform", (
 	assert.deepEqual(
 		resolvePnpmInvocation(["--version"], {
 			execPath: "node",
+			npmExecPath: undefined,
 			platform: "linux",
 		}),
 		{ command: "pnpm", args: ["--version"], shell: false },

@@ -930,7 +930,7 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('Telegram 群复用 Full access 会话时先切到可执行逐轮策略的安全权限档', async () => {
+  it('Telegram 群复用 Full access 会话时仅在该轮临时切换安全权限档', async () => {
     const runner = createMakerHookSessionRunner({ log });
     const outcome = await runner.run(
       baseReq({
@@ -945,7 +945,26 @@ describe('进度快照(turn.progress 链路)', () => {
       expect.objectContaining({ permissionMode: 'ask' }),
     );
     const session = await fakeMaker.createSession.mock.results[0].value;
-    expect(session.setPermissionMode).toHaveBeenCalledWith('ask');
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
+  });
+
+  it('Telegram 群复用会话发送失败时也恢复原权限档', async () => {
+    const session = makeFakeSession('sess-old');
+    session.send.mockRejectedValueOnce(new Error('send failed'));
+    fakeMaker.createSession.mockResolvedValueOnce(session);
+    const runner = createMakerHookSessionRunner({ log });
+
+    const outcome = await runner.run(
+      baseReq({
+        sessionId: 'sess-old',
+        isNew: false,
+        source: { im: 'telegram', userText: 'hi' },
+        laneKind: 'group',
+      }),
+    );
+
+    expect(outcome).toMatchObject({ status: 'error', errorMessage: 'send failed' });
+    expect(session.setPermissionMode.mock.calls).toEqual([['ask'], ['bypassPermissions']]);
   });
 
   it('thinking/tool_use/text 驱动友好快照,过程文字持续保留;done 后停止', async () => {

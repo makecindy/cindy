@@ -12,6 +12,7 @@
     "sentTime": "보낸 시간 {{time}}",
     "linkCopied": "링크를 복사했습니다",
     "turnCostEstimate": "이번 턴 {{cost}}",
+    "turnTokens": "이번 턴 소비 {{tokens}}",
     "turnCost": "이번 턴 소비 {{cost}}",
     "messageGenerating": "메시지 생성 중",
     "generating": "생성 중",
@@ -121,7 +122,8 @@
     "justNow": "방금",
     "minutesAgo": "{{n}}분 전",
     "hoursAgo": "{{n}}시간 전",
-    "turnCostValue": "예상 {{value}}"
+    "turnCostValue": "예상 {{value}}",
+    "turnTokens": "{{tokens}} tokens"
   },
   "lightbox": {
     "cancelAnnotation": "주석 취소",

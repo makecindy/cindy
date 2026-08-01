@@ -96,10 +96,10 @@ function buildBody(kind: SessionEventKind): string {
 }
 
 /**
- * 飞书私聊文案 — 单行纯文本(lark_md 渲染),保持极简,与桌面 toast 信息一致。
- * 标题 + 状态合并到一行,避免飞书消息列表里显得空荡。
+ * 外部通知通用文案 — 单行纯文本，保持极简并与桌面 toast 信息一致。
+ * 标题 + 状态合并到一行，适用于飞书私聊和企微群消息列表。
  */
-function buildFeishuText(title: string, kind: SessionEventKind): string {
+function buildExternalNotificationText(title: string, kind: SessionEventKind): string {
   const status = kind === 'needs-reply'
     ? '需要你回复'
     : kind === 'error'
@@ -309,7 +309,7 @@ async function sendFeishuMessage(
     return;
   }
   try {
-    await feishuIm.sendMarkdownText(ownerOpenId, buildFeishuText(safeTitle, kind));
+    await feishuIm.sendMarkdownText(ownerOpenId, buildExternalNotificationText(safeTitle, kind));
   } catch (err) {
     // 飞书 SDK 包了一层 axios; 400 等业务错误的真正 message 在 response.data 里,
     // 显式拆出来 log。与 scheduler-host/notifier.ts 的 catch 写法对齐。

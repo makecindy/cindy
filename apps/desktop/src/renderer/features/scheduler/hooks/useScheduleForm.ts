@@ -58,6 +58,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   preRunHookTimeoutSec: '',
   notifyDesktop: true,
   notifyFeishu: false,
+  notifyWecomGroup: false,
 };
 
 const SCHEDULE_FORM_PREFS_KEY = 'xdt:scheduleFormPrefs:v1';
@@ -244,6 +245,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
       : '',
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
+    notifyWecomGroup: s.notify.wecomGroup === true,
   };
 }
 

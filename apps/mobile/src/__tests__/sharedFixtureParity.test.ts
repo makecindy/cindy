@@ -42,7 +42,10 @@ describe('shared remote-control fixture parity', () => {
       .toBe(JSON.stringify({ ok: true, message: 'Lead replied: continue with UI parity.' }));
     expect(normalized.find((message) => message.key === 'raw-final')).toMatchObject({
       turnCostUsd: 0.042,
-      turnCostIsEstimate: true,
+      turnMoney: {
+        approximate: true,
+        kind: 'value-estimate',
+      },
     });
     expect(normalized.find((message) => message.key === 'raw-ask-answered')?.body)
       .toBe('Q: Deploy?\nA: yes\n\nQ: Notify?\nA: (skipped)');

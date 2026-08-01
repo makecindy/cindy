@@ -112,6 +112,7 @@ describe('automation-generated sessions', () => {
       'discord',
       'wechat',
       'dingtalk',
+      'wecom',
       'scheduler',
       'learn',
       'shared',
@@ -130,6 +131,7 @@ describe('automation-generated sessions', () => {
     expect(normalizeSessionSource('telegram')).toBe('telegram');
     expect(normalizeSessionSource('discord')).toBe('discord');
     expect(normalizeSessionSource('dingtalk')).toBe('dingtalk');
+    expect(normalizeSessionSource('wecom')).toBe('wecom');
     expect(normalizeSessionSource('plugin')).toBe('plugin');
     expect(normalizeSessionSource(null)).toBe('desktop');
     expect(normalizeSessionSource('unknown')).toBe('desktop');

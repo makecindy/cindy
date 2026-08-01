@@ -110,6 +110,39 @@
       "note": "钉钉机器人连接的产品名称，沿用官方品牌写法；先登记为 proposed，待产品术语评审后再决定是否固化。"
     },
     {
+      "id": "wecom",
+      "status": "proposed",
+      "en": "WeCom",
+      "translations": {
+        "zh-CN": "企业微信",
+        "ja": "WeCom",
+        "ko": "WeCom"
+      },
+      "note": "企业微信官方英文品牌名，用于智能机器人和群机器人能力；先登记为 proposed，待产品术语评审后再决定是否固化。"
+    },
+    {
+      "id": "wecom-intelligent-bot",
+      "status": "proposed",
+      "en": "WeCom Intelligent Bot",
+      "translations": {
+        "zh-CN": "企业微信智能机器人",
+        "ja": "WeCom インテリジェントボット",
+        "ko": "WeCom 지능형 봇"
+      },
+      "note": "企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。"
+    },
+    {
+      "id": "wecom-group-bot",
+      "status": "proposed",
+      "en": "WeCom group bot",
+      "translations": {
+        "zh-CN": "企微群机器人",
+        "ja": "WeCom グループボット",
+        "ko": "WeCom 그룹 봇"
+      },
+      "note": "企业微信群 Webhook 单向通知能力的名称；先登记为 proposed。"
+    },
+    {
       "id": "openclaw",
       "status": "proposed",
       "en": "OpenClaw",

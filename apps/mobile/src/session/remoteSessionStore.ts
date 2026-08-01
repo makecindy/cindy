@@ -2052,17 +2052,47 @@ export const remoteSessionStore = {
       const clientId = readString(payload, 'clientId');
       const turnMoney = normalizeRemoteMoney(payload.turnMoney);
       const turnCostUsd = readNumber(payload, 'turnCostUsd');
+      // 用量明细与金额各自独立:桌面算不出报价时只推 turnUsageDetails,操作行据此
+      // 退回显示本轮 token(与 messageNormalize.readTurnCost 同口径)。
+      const turnUsageDetails = isRecord(payload.turnUsageDetails)
+        ? payload.turnUsageDetails
+        : undefined;
+      // 用户轮累计与当前 segment 金额是两个独立事实:自动续跑的收尾轮只带 userTurnMoney
+      // (前面的 segment 记了账、收尾这个缺报价)。所以独立投影,由
+      // messageNormalize.readTurnCost 单点决定操作行显示哪一个
+      // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+      const userTurnMoney = normalizeRemoteMoney(payload.userTurnMoney);
+      const userTurnCostUsd = readNumber(payload, 'userTurnCostUsd');
+      const userTurnCostIsEstimate = payload.userTurnCostIsEstimate === true;
+      const basePatch: Record<string, unknown> = {
+        ...(turnUsageDetails ? { turnUsageDetails } : {}),
+      };
+      if (userTurnMoney && userTurnMoney.amount > 0) {
+        basePatch.userTurnCost = userTurnMoney;
+        if (userTurnMoney.currency === 'USD') {
+          basePatch.userTurnCostUsd = userTurnMoney.amount;
+        }
+        basePatch.userTurnCostIsEstimate =
+          userTurnCostIsEstimate || userTurnMoney.kind === 'value-estimate';
+      } else if (userTurnCostUsd !== null && userTurnCostUsd > 0) {
+        basePatch.userTurnCostUsd = userTurnCostUsd;
+        basePatch.userTurnCostIsEstimate = userTurnCostIsEstimate;
+      }
       if (sessionId && clientId && turnMoney && turnMoney.amount > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
+          ...basePatch,
           turnCost: turnMoney,
           ...(turnMoney.currency === 'USD' ? { turnCostUsd: turnMoney.amount } : {}),
           turnCostIsEstimate: turnMoney.kind === 'value-estimate',
         });
       } else if (sessionId && clientId && turnCostUsd !== null && turnCostUsd > 0) {
         this.patchMessageAgentMeta(sessionId, clientId, {
+          ...basePatch,
           turnCostUsd,
           turnCostIsEstimate: payload.turnCostIsEstimate === true,
         });
+      } else if (sessionId && clientId && Object.keys(basePatch).length > 0) {
+        this.patchMessageAgentMeta(sessionId, clientId, basePatch);
       }
       return;
     }

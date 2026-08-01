@@ -29,7 +29,17 @@ import type { ImSessionRepo } from '../shared/sessionRepo';
 import type { ImOrchestratorConfig } from '../shared/types';
 import type { ImFinalOutput } from '@cindy/im';
 import type { ImTurnRunner } from '../shared/turnRunner';
-import { createWechatTurnPermissionPolicy } from './permissionPolicy';
+import {
+  createWechatTurnPermissionPolicyForMode,
+  WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED,
+} from './permissionPolicy';
+import {
+  permissionModeCommandContext,
+  renderTextPermissionModePicker,
+  renderTextPermissionModeResult,
+  resolvePermissionMode,
+} from '../shared/permissionModeControl';
+import { ui } from './uiText';
 import { WechatTaskStore, type WechatActiveBinding, type WechatTask } from './taskStore';
 import type { DbClient } from '../../localDb/client/DbClient';
 import {
@@ -1028,18 +1038,27 @@ export class WechatIM extends BaseIM implements RichChannelIM {
             active.routeSessionId = sessionId;
           }
         },
-        turnPermissionPolicy: createWechatTurnPermissionPolicy(task.id, {
-          onInteractionStateChange: (state) => {
-            if (state === 'waiting') {
-              void this.#requireStore().setWaitingDesktop(task.bindingEpoch, task.id, true);
-            } else {
-              void this.#requireStore().setWaitingDesktop(task.bindingEpoch, task.id, false);
-            }
-          },
-        }),
+        turnPermissionPolicyForRoute: (row, capabilities) =>
+          createWechatTurnPermissionPolicyForMode(task.id, capabilities, row.permissionMode, {
+            onInteractionStateChange: (state) => {
+              void this.#requireStore().setWaitingDesktop(
+                task.bindingEpoch,
+                task.id,
+                state === 'waiting',
+              );
+            },
+          }),
       });
     } catch (error) {
       await stopTyping();
+      if (
+        error instanceof Error &&
+        error.message.startsWith(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED)
+      ) {
+        this.#activeTasks.delete(task.peerId);
+        await this.#commitPreDispatchFailure(task, error.message);
+        return;
+      }
       throw error;
     }
 
@@ -1203,6 +1222,10 @@ export class WechatIM extends BaseIM implements RichChannelIM {
   async #processCommand(task: WechatTask, command: string): Promise<void> {
     const runtime = this.#turnRuntime;
     if (!runtime) throw new Error('WECHAT_TURN_RUNTIME_NOT_ATTACHED');
+    if (/^\/permission(?:\s|$)/.test(command)) {
+      await this.#processPermissionCommand(task, command, runtime);
+      return;
+    }
     switch (command) {
       case '/help':
         await this.#commitSimpleReply(
@@ -1264,6 +1287,48 @@ export class WechatIM extends BaseIM implements RichChannelIM {
     }
   }
 
+  async #processPermissionCommand(
+    task: WechatTask,
+    command: string,
+    runtime: TurnRuntime,
+  ): Promise<void> {
+    const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
+    if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
+
+    const botContextId = this.#epoch?.credentials.ilinkBotId ?? '';
+    const target = await runtime.runner.resolveRouteTarget(botContextId, task.peerId);
+    let reply: string;
+    if (!target) {
+      reply = ui.agent.apiKeyMissing;
+    } else {
+      const context = permissionModeCommandContext(
+        target.row.id,
+        target.row.permissionMode,
+        runtime.runner.getPermissionModes(target.row.agentKind),
+      );
+      const [, rawMode, rawConfirmation] = command.split(/\s+/);
+      if (!rawMode) {
+        reply = renderTextPermissionModePicker(ui, context);
+      } else {
+        const mode = resolvePermissionMode(context.modes, rawMode);
+        if (!mode) {
+          reply = renderTextPermissionModePicker(ui, context);
+        } else {
+          const result = await runtime.runner.changePermissionMode({
+            sessionId: target.row.id,
+            mode: mode.id,
+            modes: context.modes,
+            confirmedFullAccess: ['confirm', '确认'].includes(rawConfirmation?.toLowerCase()),
+          });
+          reply = renderTextPermissionModeResult(ui, result);
+        }
+      }
+    }
+
+    await this.#commitAcceptedReply(task, reply);
+    await this.#flushCurrentOutbox(task.bindingEpoch);
+  }
+
   async #commitSimpleReply(task: WechatTask, text: string): Promise<void> {
     const accepted = await this.#requireStore().markAccepted(task.bindingEpoch, task.id);
     if (!accepted) throw new Error('WECHAT_ACCEPT_CAS_REJECTED');
@@ -1288,9 +1353,9 @@ export class WechatIM extends BaseIM implements RichChannelIM {
 
   async #commitPreDispatchFailure(task: WechatTask, reason: string): Promise<void> {
     const text =
-      reason.includes('TURN_PERMISSION_POLICY_UNSUPPORTED') ||
+      reason.includes(WECHAT_TURN_PERMISSION_POLICY_UNSUPPORTED) ||
       reason.includes('unsupported_turn_permission')
-        ? '当前任务使用“完全访问”权限，个人微信暂不支持该模式。请在 Cindy 中改为“自动”或“每次询问”。'
+        ? '当前 Agent 无法在个人微信中安全使用此权限模式。请在 Cindy 中切换权限模式；若仍失败，请改用支持个人微信权限确认的 Agent。'
         : reason === 'missing_auth'
           ? '当前 Agent 尚未完成授权，请先在 Cindy 中连接模型服务。'
           : '这条消息暂时无法启动，请稍后重试。';
