@@ -49,14 +49,20 @@ describe('resolveBundledCliPath', () => {
 });
 
 describe('buildInstallShellCommand', () => {
-  it('mkdir -p 链接目录后 ln -sf 目标到 source', () => {
+  it('mkdir -p 链接目录、拒绝真实目录后 ln -sfn 目标到 source', () => {
     const cmd = buildInstallShellCommand(
       '/Applications/Cindy.app/Contents/Resources/cli/cindy',
       CLI_LINK_PATH,
     );
     expect(cmd).toBe(
-      `mkdir -p '/usr/local/bin' && ln -sf '/Applications/Cindy.app/Contents/Resources/cli/cindy' '/usr/local/bin/cindy'`,
+      `mkdir -p '/usr/local/bin' && if [ -d '/usr/local/bin/cindy' ] && [ ! -L '/usr/local/bin/cindy' ]; then echo '/usr/local/bin/cindy is a directory' >&2; exit 1; fi && ln -sfn '/Applications/Cindy.app/Contents/Resources/cli/cindy' '/usr/local/bin/cindy'`,
     );
+  });
+
+  it('用 -sfn 而非 -sf(macOS 上替换指向目录的旧 symlink,不解引用进目录)', () => {
+    const cmd = buildInstallShellCommand('/App/Cindy.app/Contents/Resources/cli/cindy', CLI_LINK_PATH);
+    expect(cmd).toContain(`ln -sfn `);
+    expect(cmd).not.toContain(`ln -sf `);
   });
 
   it('含单引号的路径被安全转义', () => {
@@ -66,16 +72,16 @@ describe('buildInstallShellCommand', () => {
 });
 
 describe('buildUninstallShellCommand', () => {
-  it('仅当目标是 symlink 时才 rm(不误删同路径普通文件)', () => {
+  it('仅当目标是 symlink 时才 rm -f(不误删同路径普通文件,并发移除也幂等)', () => {
     expect(buildUninstallShellCommand(CLI_LINK_PATH)).toBe(
-      `if [ -L '/usr/local/bin/cindy' ]; then rm '/usr/local/bin/cindy'; fi`,
+      `if [ -L '/usr/local/bin/cindy' ]; then rm -f '/usr/local/bin/cindy'; fi`,
     );
   });
 
   it('含单引号的路径两处引用都被安全转义', () => {
     const cmd = buildUninstallShellCommand(`/usr/local/bin/o'brien`);
     expect(cmd).toBe(
-      `if [ -L '/usr/local/bin/o'\\''brien' ]; then rm '/usr/local/bin/o'\\''brien'; fi`,
+      `if [ -L '/usr/local/bin/o'\\''brien' ]; then rm -f '/usr/local/bin/o'\\''brien'; fi`,
     );
   });
 });

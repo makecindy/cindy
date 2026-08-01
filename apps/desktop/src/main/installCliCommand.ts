@@ -79,24 +79,37 @@ function shellSingleQuote(value: string): string {
 }
 
 /**
- * 安装用 shell 命令:先确保 /usr/local/bin 存在,再强制建 symlink(-f 覆盖旧的/坏的)。
- * 交给 osascript「以管理员身份」执行。与 VS Code 的命令串一致。
+ * 安装用 shell 命令:先确保 /usr/local/bin 存在,再强制建 symlink,交给 osascript
+ * 「以管理员身份」执行。
+ *
+ * macOS(BSD)ln 的坑:当链接路径已是「目录」或「指向目录的 symlink」时,`ln -sf`
+ * 会把链接建进 <目录>/<basename> 里并**成功退出**,原路径仍是那个目录、非可执行,
+ * 却会被我们当成安装成功。两道防护:
+ *   - `-n`(macOS 上等价 `-h`):已存在的 symlink 本身被 `-f` 替换,不再被解引用进目录,
+ *     覆盖「坏的/指向目录的旧 symlink」这一常见的残留安装。
+ *   - 真实目录(非 symlink)`-f` 无法 unlink,`ln` 仍会往里建 —— 故先显式判空并 `exit 1`,
+ *     让上层走错误弹窗,绝不误报成功。
  */
 export function buildInstallShellCommand(target: string, source: string): string {
+  const q = shellSingleQuote;
   const dir = path.dirname(source);
-  return `mkdir -p ${shellSingleQuote(dir)} && ln -sf ${shellSingleQuote(target)} ${shellSingleQuote(
-    source,
-  )}`;
+  return (
+    `mkdir -p ${q(dir)} && ` +
+    `if [ -d ${q(source)} ] && [ ! -L ${q(source)} ]; then echo ${q(`${source} is a directory`)} >&2; exit 1; fi && ` +
+    `ln -sfn ${q(target)} ${q(source)}`
+  );
 }
 
 /**
  * 卸载用 shell 命令(仅在直接 unlink 遇 EACCES 时才走管理员分支)。
  * 只在目标是 symlink 时才删除:即便上层已 lstat 把关,elevated `rm` 也不越权误删
  * 同路径上用户自己放的普通文件。非 symlink / 不存在时 `if` 直接跳过,退出码为 0。
+ * `rm -f`:`[ -L ]` 与 `rm` 之间若链接被并发移除,-f 不报错,卸载保持幂等
+ * (与非提权分支容忍 ENOENT 同一取舍);-L 把关仍在,只删 symlink 不误删普通文件。
  */
 export function buildUninstallShellCommand(source: string): string {
   const quoted = shellSingleQuote(source);
-  return `if [ -L ${quoted} ]; then rm ${quoted}; fi`;
+  return `if [ -L ${quoted} ]; then rm -f ${quoted}; fi`;
 }
 
 function isPermissionError(err: unknown): boolean {
