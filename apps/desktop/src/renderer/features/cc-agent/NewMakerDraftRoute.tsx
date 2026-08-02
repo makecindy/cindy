@@ -63,7 +63,7 @@ import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard
 import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
-import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
@@ -3497,11 +3497,10 @@ export function NewMakerDraftRoute() {
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}
                     middleToolbarSlot={
-                      <VendorSegmentedSwitcher
+                      <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={225}
-                        dense
+                        width={112}
                         visualVariant="create-agent"
                         className="shrink-0"
                         disabled={wtCreating}
@@ -3554,11 +3553,9 @@ export function NewMakerDraftRoute() {
                         : undefined
                     }
                     compactMiddleToolbarSlot={
-                      <VendorSegmentedSwitcher
+                      <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={108}
-                        dense
                         iconOnly
                         visualVariant="create-agent"
                         className="shrink-0"

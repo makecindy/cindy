@@ -251,6 +251,37 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
   });
 
+  it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
+    const m1 = await loadModule();
+    expect(m1.getDraft().vendor).toBe('cc');
+    m1.switchVendor('codex', m1.getDraft().lastByVendor.cc);
+    expect(m1.getDraft().vendor).toBe('codex');
+
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().vendor).toBe('codex');
+  });
+
+  it('sanitize:引擎白名单按 SELECTABLE_VENDORS 校验,表内的值一律保留', async () => {
+    const { SELECTABLE_VENDORS } = await import('@/lib/agentVendors');
+    for (const vendor of SELECTABLE_VENDORS) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      // 逐个写死白名单时,新上线的引擎在这里会被静默重置回 'cc' —— 用户选中后重启就丢。
+      expect(getDraft().vendor).toBe(vendor);
+    }
+  });
+
+  it("sanitize:表外的引擎值(历史 'orca' / 未知 / 非字符串)回退默认", async () => {
+    for (const vendor of ['orca', 'unknown-engine', '', 42, null]) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().vendor).toBe('cc');
+    }
+  });
+
   it('switchVendor:相同 vendor 不变(no-op,避免误覆盖)', async () => {
     const { getDraft, switchVendor } = await loadModule();
     const before = getDraft().lastByVendor.cc;

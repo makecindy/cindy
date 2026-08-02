@@ -21,6 +21,7 @@
 import { useSyncExternalStore } from 'react';
 
 import type { MakerVendor } from '@/lib/ccAgent.types';
+import { isSelectableVendor } from '@/lib/agentVendors';
 import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getDefaultModelForVendor } from '@/lib/modelDefinitions';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir';
@@ -241,10 +242,12 @@ function sanitize(raw: unknown): NewMakerDraft {
   const def = makeDefault();
   if (!raw || typeof raw !== 'object') return def;
   const r = raw as Partial<NewMakerDraft>;
-  // F-COLLAB (2026-05): 'orca' vendor 已被 ChatInput 底部的 toggle 取代,
-  // sanitize 时把历史 localStorage 残留的 'orca' 自动迁移到 'cc',避免空白入口。
-  const vendor: MakerVendor =
-    r.vendor === 'codex' || r.vendor === 'pi' ? r.vendor : 'cc';
+  // 引擎白名单按 SELECTABLE_VENDORS(选择器同一张表的来源)校验 —— 新增引擎时这里零改动。
+  // 曾经是逐个写死的三元(`r.vendor === 'codex' || r.vendor === 'pi' ? … : 'cc'`),
+  // 每上线一个引擎都得手工补一次;漏补则用户选中新引擎、重启后被静默重置回 Claude。
+  // F-COLLAB (2026-05): 'orca' 不在表内,历史 localStorage 残留会走同一条回退路径
+  // 迁到 'cc'(它已被 ChatInput 底部的协同 toggle 取代),避免空白入口。
+  const vendor: MakerVendor = isSelectableVendor(r.vendor) ? r.vendor : def.vendor;
   const workingDir = normalizeDraftWorkingDir(r.workingDir);
   const remoteHostId =
     typeof r.remoteHostId === 'string' && r.remoteHostId.trim().length > 0

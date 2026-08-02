@@ -2734,14 +2734,22 @@
           "behavior": {
             "title": "回应与引用",
             "emojiLabel": "表情回应",
-            "emojiOption": { "off": "关闭", "minimal": "基础", "expressive": "生动" },
+            "emojiOption": {
+              "off": "关闭",
+              "minimal": "基础",
+              "expressive": "生动"
+            },
             "emojiHint": {
               "off": "不放任何表情回应。",
               "minimal": "收到消息 👀，完成 👍，失败 👎。",
               "expressive": "完成与失败分别从正向、负向表情池随机选择。"
             },
             "groupQuoteLabel": "群里回复时引用提问",
-            "quoteOption": { "off": "不引用", "first": "首条引用", "all": "每条引用" },
+            "quoteOption": {
+              "off": "不引用",
+              "first": "首条引用",
+              "all": "每条引用"
+            },
             "groupQuoteHint": {
               "off": "群里的回答不挂回提问消息。",
               "first": "每次触发的第一条回答挂回提问（推荐）。",
@@ -2770,7 +2778,10 @@
               "save": "群参与模式未保存，已恢复上次确认的模式。",
               "retry": "重新读取"
             },
-            "mode": { "mention": "仅 @", "always": "全响应" }
+            "mode": {
+              "mention": "仅 @",
+              "always": "全响应"
+            }
           }
         },
         "x": {
@@ -5166,6 +5177,12 @@
         }
       }
     },
+    "agentSelect": {
+      "label": "引擎",
+      "trigger": {
+        "aria": "选择引擎：{{agent}}"
+      }
+    },
     "atMention": {
       "scanFailed": "扫描工作目录失败",
       "retry": "重试",
@@ -6391,7 +6408,13 @@
         "filesWarning": "切换只改变对话上下文，不会回滚工作区文件。",
         "summarize": "离开当前分支时生成摘要（会调用模型）",
         "summaryFocus": "可选：摘要重点，例如保留错误处理结论",
-        "role": { "user": "用户", "assistant": "Agent", "tool": "工具", "summary": "分支摘要", "system": "状态" }
+        "role": {
+          "user": "用户",
+          "assistant": "Agent",
+          "tool": "工具",
+          "summary": "分支摘要",
+          "system": "状态"
+        }
       },
       "projectAction": {
         "rename": "重命名项目",

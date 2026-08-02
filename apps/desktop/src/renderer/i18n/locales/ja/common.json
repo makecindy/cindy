@@ -2734,14 +2734,22 @@
           "behavior": {
             "title": "リアクションと引用",
             "emojiLabel": "絵文字リアクション",
-            "emojiOption": { "off": "オフ", "minimal": "ベーシック", "expressive": "生き生き" },
+            "emojiOption": {
+              "off": "オフ",
+              "minimal": "ベーシック",
+              "expressive": "生き生き"
+            },
             "emojiHint": {
               "off": "絵文字リアクションを付けません。",
               "minimal": "受信時 👀、成功 👍、失敗 👎。",
               "expressive": "成功と失敗で分けたリアクションプールからランダムに選びます。"
             },
             "groupQuoteLabel": "グループで質問を引用して返信",
-            "quoteOption": { "off": "しない", "first": "最初のみ", "all": "毎回" },
+            "quoteOption": {
+              "off": "しない",
+              "first": "最初のみ",
+              "all": "毎回"
+            },
             "groupQuoteHint": {
               "off": "グループの回答を質問に紐付けません。",
               "first": "回答の最初のメッセージが質問を引用します（推奨）。",
@@ -2770,7 +2778,10 @@
               "save": "グループ参加モードを保存できませんでした。最後に確認されたモードへ戻しました。",
               "retry": "再読み込み"
             },
-            "mode": { "mention": "@ のみ", "always": "アクティブ" }
+            "mode": {
+              "mention": "@ のみ",
+              "always": "アクティブ"
+            }
           }
         },
         "x": {
@@ -5166,6 +5177,12 @@
         }
       }
     },
+    "agentSelect": {
+      "label": "エンジン",
+      "trigger": {
+        "aria": "エンジンを選択：{{agent}}"
+      }
+    },
     "atMention": {
       "scanFailed": "作業ディレクトリのスキャンに失敗しました",
       "retry": "再試行",
@@ -6391,7 +6408,13 @@
         "filesWarning": "切り替わるのは会話コンテキストだけで、作業ファイルは巻き戻りません。",
         "summarize": "離れる分岐を要約する（モデルを使用）",
         "summaryFocus": "任意：要約の重点（例：エラー処理の結論を残す）",
-        "role": { "user": "ユーザー", "assistant": "Agent", "tool": "ツール", "summary": "分岐要約", "system": "状態" }
+        "role": {
+          "user": "ユーザー",
+          "assistant": "Agent",
+          "tool": "ツール",
+          "summary": "分岐要約",
+          "system": "状態"
+        }
       },
       "projectAction": {
         "rename": "プロジェクト名を変更",
