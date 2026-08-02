@@ -271,6 +271,7 @@ describe('ProvidersSection — 双栏管理', () => {
   });
 
   it('首次记录可见项，并用方向键提交新的可见顺序', async () => {
+    providerSnapshotState.order = ['anthropic', 'xd'];
     const view = render(
       React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
     );
@@ -278,7 +279,7 @@ describe('ProvidersSection — 双栏管理', () => {
     const handles = await screen.findAllByRole('button', {
       name: 'settings.providers.order.handle',
     });
-    expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['xd', 'custom']);
+    expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['custom']);
     await act(async () => {
       fireEvent.keyDown(handles[0]!, { key: 'ArrowDown' });
       await Promise.resolve();
@@ -311,12 +312,23 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(providerRows[1]?.textContent).toContain('Custom');
   });
 
+  it('已有顺序快照挂载时不自动回写，避免旧窗口覆盖显式排序', async () => {
+    providerSnapshotState.order = ['anthropic', 'custom', 'xd'];
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    await screen.findAllByRole('button', {
+      name: 'settings.providers.order.handle',
+    });
+    expect(setProviderOrderSpy).not.toHaveBeenCalled();
+  });
+
   it('切换数据 owner 后会按新 owner 重新记录可见项', async () => {
+    providerSnapshotState.order = ['anthropic', 'xd'];
     const view = render(
       React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
     );
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['xd', 'custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['custom']);
     });
     setProviderOrderSpy.mockClear();
 
@@ -329,11 +341,12 @@ describe('ProvidersSection — 双栏管理', () => {
 
     await act(async () => {
       providerSnapshotState.dataOwnerId = 'owner-2';
+      providerSnapshotState.order = ['xd'];
       view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
       await Promise.resolve();
     });
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-2', ['xd', 'custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-2', ['custom']);
     });
   });
 });

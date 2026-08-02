@@ -41,4 +41,12 @@ describe('provider-order-store', () => {
     setProviderOrder(['openai', 'xd']);
     expect(readProviderOrder()).toEqual(['openai', 'anthropic', 'xd']);
   });
+
+  it('does not reorder an already recorded provider when observing it alone', () => {
+    setProviderOrder(['xd', 'custom', 'openai']);
+    setProviderOrder(['openai', 'custom', 'xd']);
+
+    expect(setProviderOrder(['custom'])).toBe(false);
+    expect(readProviderOrder()).toEqual(['openai', 'custom', 'xd']);
+  });
 });

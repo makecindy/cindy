@@ -1611,7 +1611,8 @@ export function ProvidersSection() {
     }
   }, [dataOwnerId, orderedVisibleProviders, pendingProviderOrder, pendingProviderOrderIds]);
 
-  // Main 只持久化曾经真正进入过左栏的供应商。首次出现的新项按当前可见顺序追加；
+  // Main 只持久化曾经真正进入过左栏的供应商。自动观察只逐个提交权威快照里缺失的
+  // 新项：singleton 写入只会追加，另一窗口刚保存的显式排序不会被旧快照重排。
   // 已记录但暂时隐藏的项由 store 保留，因此断开重连不会丢失用户排位。
   useEffect(() => {
     if (observedProviderIdsRef.current.dataOwnerId !== dataOwnerId) {
@@ -1619,13 +1620,17 @@ export function ProvidersSection() {
     }
     const observedProviderIds = observedProviderIdsRef.current.ids;
     const visibleIds = listProviders.map((provider) => provider.id);
-    const hasNewProvider = visibleIds.some((id) => !observedProviderIds.has(id));
+    const persistedIds = new Set(providerOrder);
+    const unrecordedIds = visibleIds.filter(
+      (id) => !observedProviderIds.has(id) && !persistedIds.has(id),
+    );
     visibleIds.forEach((id) => observedProviderIds.add(id));
-    if (!hasNewProvider || visibleIds.length === 0) return;
-    void window.electronAPI.maker
-      .setProviderOrder(dataOwnerId, visibleIds)
+    if (unrecordedIds.length === 0) return;
+    void Promise.all(
+      unrecordedIds.map((id) => window.electronAPI.maker.setProviderOrder(dataOwnerId, [id])),
+    )
       .catch(() => toast.error(t('settings.providers.order.saveFailed')));
-  }, [dataOwnerId, listProviders, t]);
+  }, [dataOwnerId, listProviders, providerOrder, t]);
 
   const persistVisibleProviderOrder = useCallback(
     (reorderedVisibleIds: string[]): void => {
