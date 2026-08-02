@@ -11,6 +11,8 @@ export interface MessageRenderSourceMessageLike {
   role?: string | null;
   content?: unknown;
   createdAt?: string;
+  /** Renderer-local time of the latest in-place plan payload update. */
+  planUpdatedAtMs?: number;
   toolName?: string | null;
   toolInput?: unknown;
   /** SDK tool-use id — used to link a Task/collab tool-call to its live `agent_task_update`. */
@@ -187,6 +189,7 @@ export interface MessageRenderTodoInsertion {
   key: string;
   todos: MessageRenderTodoItem[];
   createdAt?: string;
+  updatedAtMs?: number;
   source: MessageRenderTodoSource;
 }
 
@@ -467,6 +470,7 @@ export function findMessageTodoInsertions<TMessage extends MessageRenderSourceMe
       key: `${keyPrefix}-${sourceClientId(first)}`,
       todos: session.todos,
       createdAt: messages[session.lastIndex]?.createdAt,
+      updatedAtMs: messages[session.lastIndex]?.planUpdatedAtMs,
       source: session.source,
     });
   }
@@ -537,6 +541,7 @@ export function applyCodexPlanSnapshotOnDone<
   snapshot: unknown,
   turnId?: string | null,
   terminalStatus?: unknown,
+  planUpdatedAtMs?: number,
 ): CodexPlanSnapshotApplyResult<TMessage> {
   const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
   const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
@@ -584,6 +589,9 @@ export function applyCodexPlanSnapshotOnDone<
     const next = [...messages];
     next[index] = {
       ...message,
+      ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
+        ? { planUpdatedAtMs }
+        : {}),
       ...(message.toolInput !== undefined
         ? { toolInput: { ...input, plan: nextSnapshot } }
         : {}),

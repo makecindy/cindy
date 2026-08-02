@@ -234,6 +234,7 @@ describe('plan_review 与 done 的时序', () => {
   afterEach(() => {
     makerChatStore.__teardownGlobalListeners();
     makerChatStore.purgeSession(SESSION_ID);
+    vi.restoreAllMocks();
   });
 
   it('codex:done 使用携带的权威快照收口最新结构化计划', () => {
@@ -269,12 +270,22 @@ describe('plan_review 与 done 的时序', () => {
   });
 
   it('codex:成功完成但缺少最终 plan 快照时收口计划卡片', () => {
+    const startedAtMs = 1_700_000_000_000;
+    const completedAtMs = startedAtMs + 5_000;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(startedAtMs);
     makerChatStore.setSessionRuntime(SESSION_ID, { agentKind: 'codex' });
     emitPlanUpdate('codex', ['in_progress', 'pending']);
 
+    now.mockReturnValue(completedAtMs);
     emitDone('codex', undefined, 'turn-1', 'completed');
 
     expect(latestPlanStatuses()).toEqual(['completed', 'completed']);
+    const completedPlan = makerChatStore
+      .getSnapshot(SESSION_ID)
+      .messages.findLast(
+        (message) => message.role === 'tool_use' && message.toolName === 'update_plan',
+      );
+    expect(completedPlan).toMatchObject({ planUpdatedAtMs: completedAtMs });
   });
 
   it('claude:done 不改 Codex update_plan 展示状态', () => {
