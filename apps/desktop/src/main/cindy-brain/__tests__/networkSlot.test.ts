@@ -207,6 +207,35 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
     expect(noteCredentialRejected).toHaveBeenCalledTimes(1);
   });
 
+  it('response.url 存在但不可解析:归因退回最终一跳,不退回初始请求 host', async () => {
+    // 重定向后初始 host 与最终一跳不同。response.url 拿得到却解析不了(非绝对
+    // 地址)时,若退回初始 host 就会把 401 记到没实际注入的那份凭证上——正是
+    // 「宁可漏记不可错杀」要防的。这里初始 host 是 brave 域、最终一跳是 tavily 域,
+    // 断言只记 tavily_api_key。
+    const noteCredentialRejected = vi.fn();
+    const { slot } = makeSlot({
+      fetchImpl: vi.fn(async (input: unknown) => {
+        const target = String((input as { url?: string })?.url ?? input);
+        if (target.startsWith('https://api.search.brave.com')) {
+          return fakeResponse({
+            status: 302,
+            headers: { location: 'https://api.tavily.com/search' },
+          });
+        }
+        return Object.assign(fakeResponse({ status: 401 }), { url: '/relative-not-absolute' });
+      }) as never,
+      noteCredentialRejected,
+    });
+
+    await slot.handleFetchRequest('web-search', {
+      type: 'fetch-request',
+      url: 'https://api.search.brave.com/res/v1/web/search',
+    });
+
+    expect(noteCredentialRejected).toHaveBeenCalledWith('web-search', 'tavily_api_key');
+    expect(noteCredentialRejected).not.toHaveBeenCalledWith('web-search', 'brave_api_key');
+  });
+
   it('台账写入失败不覆盖原始 401 响应', async () => {
     const { slot } = makeSlot({
       fetchImpl: vi.fn(async () => fakeResponse({ status: 401, body: '{"error":"bad key"}' })) as never,

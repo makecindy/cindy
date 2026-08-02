@@ -1329,14 +1329,17 @@ export class GhostNetworkSlot {
       // 最终 host 以 response.url 为准(经重定向后);取不到(测试假体等)
       // 退回重定向链最后一跳的请求 URL——此时所有重定向已校验在放行域内,
       // 比退回初始请求 host 更贴近真实出局面。
-      let responseHost = url.hostname;
+      // 缺省即兜底值:response.url 缺失(测试假体)与存在但不可解析(非绝对
+      // 地址)两种情况都退回最终一跳,不能退回初始请求 host —— 重定向后两者
+      // 不同,拿初始 host 去匹配 decl 会把 401 归因到没实际注入的那份凭证,
+      // 正是上面「不可错杀」要防的。
+      let responseHost = lastHopUrl.hostname;
       try {
         const finalUrl = (response as { url?: string }).url;
         if (finalUrl) responseHost = new URL(finalUrl).hostname;
       } catch {
-        /* 非绝对地址等异常:退回最终一跳的请求 host */
+        responseHost = lastHopUrl.hostname;
       }
-      if (!((response as { url?: string }).url)) responseHost = lastHopUrl.hostname;
       // 台账可记的 user 源直连 key(exchange 401 归交换源凭证,走
       // performExchange 自己的记账链路,不在这里重复记)。
       const trackableKeys = (net.secrets ?? [])
