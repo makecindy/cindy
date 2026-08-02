@@ -20,9 +20,11 @@ vi.mock('node:fs/promises', () => ({
 }));
 
 const copyFromPath = vi.hoisted(() => vi.fn());
+const removeFile = vi.hoisted(() => vi.fn(async () => {}));
 const resolveSafe = vi.hoisted(() => vi.fn());
 vi.mock('../imageCacheStore.js', () => ({
   copyFromPath,
+  removeFile,
   resolveSafe,
   collectSessionImageUrls: vi.fn(() => []),
 }));
@@ -32,8 +34,13 @@ const BLOB_HASH = 'a'.repeat(64);
 const BLOB_URL = `cindy-media://blobs/${BLOB_HASH}.png`;
 const ingestMedia = vi.hoisted(() => vi.fn());
 vi.mock('../cindy-media/ingest.js', () => ({ ingestMedia }));
+const removeRefById = vi.hoisted(() => vi.fn(async () => 1));
+const deleteZeroRefBlobRecord = vi.hoisted(() => vi.fn(async () => false));
+vi.mock('../cindy-media/ledger.js', () => ({ removeRefById, deleteZeroRefBlobRecord }));
 const blobResolveSafe = vi.hoisted(() => vi.fn());
+const deleteBlobFile = vi.hoisted(() => vi.fn(async () => {}));
 vi.mock('../cindy-media/blobStore.js', () => ({
+  deleteBlobFile,
   resolveSafe: blobResolveSafe,
   mimeForExt: (ext: string) =>
     (
@@ -104,6 +111,8 @@ beforeEach(() => {
     deduplicated: false,
     refIds: ['ref-1'],
   });
+  removeRefById.mockResolvedValue(1);
+  deleteZeroRefBlobRecord.mockResolvedValue(false);
   blobResolveSafe.mockImplementation((url: string) => ({
     absPath: `/blobs/${url.slice('cindy-media://blobs/'.length)}`,
     mimeType: 'image/png',
@@ -431,6 +440,9 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
     const removeCalls = removeRemote.mock.calls as unknown[][];
     assert.equal(removeCalls.length, 1);
     assert.equal(removeCalls[0]?.[0], 'oss/setup.bin');
+    assert.equal(typeof out.cleanupBeforeAcceptance, 'function');
+    await out.cleanupBeforeAcceptance?.();
+    expect(removeFile).toHaveBeenCalledWith('xdt-image://sess-1/cached-setup.exe.bin');
 
     const block = (out.message as { content: Array<{ path?: string }> }).content[1];
     assert.equal(block.path, '/cache/sess-1/cached-setup.exe.bin');
@@ -443,6 +455,27 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
       size: 15,
       sha256: ATTACHMENT_SHA256,
     });
+  });
+
+  it('cleans a cindy-media materialization and its ref before an unaccepted send', async () => {
+    const ref = buildAttachmentOssRef({
+      ossKey: 'oss/photo.png',
+      mimeType: 'image/png',
+      originalName: 'photo.png',
+    });
+    deleteZeroRefBlobRecord.mockResolvedValue(true);
+
+    const out = await materializeDirectSendOssAttachments(
+      'sess-1',
+      { type: 'user', content: [{ type: 'file', path: ref, mimeType: 'image/png' }] },
+      undefined,
+    );
+
+    await out.cleanupBeforeAcceptance?.();
+
+    expect(removeRefById).toHaveBeenCalledWith('ref-1');
+    expect(deleteZeroRefBlobRecord).toHaveBeenCalledWith(BLOB_HASH, expect.any(Number));
+    expect(deleteBlobFile).toHaveBeenCalledWith(BLOB_HASH, '.png');
   });
 
   it('没有 OSS 引用时保持原对象，不产生文件 IO', async () => {

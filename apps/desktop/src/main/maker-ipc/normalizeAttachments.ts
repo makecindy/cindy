@@ -24,6 +24,7 @@ import { randomUUID } from 'node:crypto';
 
 import * as imageCacheStore from '../imageCacheStore.js';
 import * as cindyMediaBlobStore from '../cindy-media/blobStore.js';
+import * as cindyMediaLedger from '../cindy-media/ledger.js';
 import { ingestMedia } from '../cindy-media/ingest.js';
 import { createLogger } from '../logger.js';
 import { isAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachmentOssRef.js';
@@ -263,6 +264,7 @@ function persistedContentNeedsMaterialize(json: string): boolean {
 
 /** 物化结果:被控端 image cache 里的 `xdt-image://` url(渲染用)+ 其绝对路径(file chip / agent 用)。 */
 type MaterializedRef = { url: string; absPath: string };
+type MaterializedCleanup = () => void | Promise<void>;
 
 /**
  * 用 materialize(OSS 引用串 → image cache 物化结果)改写 persistedContent JSON 串。
@@ -330,7 +332,11 @@ async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
   deferCleanup: boolean,
-): Promise<{ item: unknown; cleanupAfterAcceptance?: () => void }> {
+): Promise<{
+  item: unknown;
+  cleanupAfterAcceptance?: () => void;
+  cleanupBeforeAcceptance?: () => Promise<void>;
+}> {
   if (!item || typeof item !== 'object') return { item };
   const it = item as { files?: unknown; persistedContent?: unknown };
   const files = Array.isArray(it.files) ? it.files : null;
@@ -354,6 +360,23 @@ async function materializeQueuedOssAttachmentsInternal(
     cleanedUp = true;
     for (const key of ossKeys) void removeRemote(key);
   };
+  const localCleanupCallbacks: MaterializedCleanup[] = [];
+  let localCleanedUp = false;
+  const cleanupLocalMaterializations = async (): Promise<void> => {
+    if (localCleanedUp) return;
+    localCleanedUp = true;
+    for (const cleanup of localCleanupCallbacks) {
+      try {
+        await cleanup();
+      } catch (e) {
+        log.warn('local OSS materialization cleanup failed', { error: String(e) });
+      }
+    }
+  };
+  const cleanupBeforeAcceptance = async (): Promise<void> => {
+    await cleanupLocalMaterializations();
+    cleanupOss();
+  };
   // 可入总仓的媒体(图片等白名单 mime)→ ingest 进 cindy-media 并直接挂
   // session-attachment 引用(入队消息没有草稿期,等价老 lifecycle committed);
   // 媒体附件统一走总仓 ingest(规则 25)。
@@ -374,6 +397,14 @@ async function materializeQueuedOssAttachmentsInternal(
         },
       ],
     });
+    const refId = written.refIds[0];
+    if (refId) {
+      localCleanupCallbacks.push(async () => {
+        await cindyMediaLedger.removeRefById(refId);
+        const removed = await cindyMediaLedger.deleteZeroRefBlobRecord(written.hash, Date.now() + 1);
+        if (removed) await cindyMediaBlobStore.deleteBlobFile(written.hash, written.ext);
+      });
+    }
     return { url: written.url, absPath: cindyMediaBlobStore.resolveSafe(written.url).absPath };
   };
   // 物化:被控端本机绝对路径图片(手机文件浏览器发送)读字节入总仓;OSS 引用走
@@ -429,6 +460,7 @@ async function materializeQueuedOssAttachmentsInternal(
           originalName,
           lifecycle: 'committed',
         });
+        localCleanupCallbacks.push(() => imageCacheStore.removeFile(url));
         entry = { url, absPath: imageCacheStore.resolveSafe(url).absPath };
       }
       byRef.set(refStr, entry);
@@ -486,8 +518,16 @@ async function materializeQueuedOssAttachmentsInternal(
     };
     return {
       item: materializedItem,
-      ...(deferCleanup && ossKeys.size > 0 ? { cleanupAfterAcceptance: cleanupOss } : {}),
+      ...(deferCleanup && (ossKeys.size > 0 || localCleanupCallbacks.length > 0)
+        ? {
+            cleanupAfterAcceptance: cleanupOss,
+            cleanupBeforeAcceptance,
+          }
+        : {}),
     };
+  } catch (err) {
+    await cleanupBeforeAcceptance();
+    throw err;
   } finally {
     if (!deferCleanup) cleanupOss();
   }
@@ -518,6 +558,7 @@ export async function materializeDirectSendOssAttachments(
   message: unknown;
   sendOpts: unknown;
   cleanupAfterAcceptance?: () => void;
+  cleanupBeforeAcceptance?: () => Promise<void>;
 }> {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return { message, sendOpts };
@@ -621,6 +662,9 @@ export async function materializeDirectSendOssAttachments(
     sendOpts: nextSendOpts,
     ...(materialized.cleanupAfterAcceptance
       ? { cleanupAfterAcceptance: materialized.cleanupAfterAcceptance }
+      : {}),
+    ...(materialized.cleanupBeforeAcceptance
+      ? { cleanupBeforeAcceptance: materialized.cleanupBeforeAcceptance }
       : {}),
   };
 }

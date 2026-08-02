@@ -125,6 +125,7 @@ export interface MakerSendTransactionDeps {
     message: unknown;
     sendOpts: unknown;
     cleanupAfterAcceptance?: () => void;
+    cleanupBeforeAcceptance?: () => void | Promise<void>;
   }>;
   createDbMessage(
     sessionId: string,
@@ -479,6 +480,8 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       let outgoingMessage = message;
       let outgoingSendOpts = sendOpts;
       let cleanupAfterAcceptance: (() => void) | undefined;
+      let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
+      let sendAccepted = false;
       if (deps.materializeDirectSendOssAttachments) {
         const materialized = await deps.materializeDirectSendOssAttachments(
           sessionId,
@@ -488,8 +491,26 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         outgoingMessage = materialized.message;
         outgoingSendOpts = materialized.sendOpts;
         cleanupAfterAcceptance = materialized.cleanupAfterAcceptance;
+        cleanupBeforeAcceptance = materialized.cleanupBeforeAcceptance;
       }
-      const normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+      const cleanupBeforeAcceptanceIfNeeded = async (): Promise<void> => {
+        if (!cleanupBeforeAcceptance) return;
+        try {
+          await cleanupBeforeAcceptance();
+        } catch (err) {
+          deps.log.warn('send: direct OSS materialization cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      let normalized: IpcUserMessage;
+      try {
+        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+      } catch (err) {
+        await cleanupBeforeAcceptanceIfNeeded();
+        throw err;
+      }
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
@@ -608,7 +629,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         });
-        if (sendResult.accepted) cleanupAfterAcceptance?.();
+        sendAccepted = sendResult.accepted;
+        if (sendAccepted) cleanupAfterAcceptance?.();
+        else await cleanupBeforeAcceptanceIfNeeded();
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
@@ -646,6 +669,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           }),
         );
       } catch (err) {
+        if (!sendAccepted) await cleanupBeforeAcceptanceIfNeeded();
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           deps.rollbackUserPromptPreview?.(
             userPromptPreviewSessionId,

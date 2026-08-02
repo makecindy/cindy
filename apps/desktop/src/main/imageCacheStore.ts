@@ -701,8 +701,10 @@ export async function removeFile(url: string): Promise<void> {
     return; // invalid url → nothing to delete
   }
   // `force: true` already silently ignores ENOENT — no extra catch needed for
-  // missing files. Other I/O errors propagate naturally.
+  // missing files. Remove the sidecar too; otherwise a direct-send rejection
+  // would leave an unreferenced committed cache entry behind.
   await fs.rm(absPath, { force: true });
+  await fs.rm(metaPathFor(absPath), { force: true });
 }
 
 export async function removeSession(sessionId: string): Promise<void> {
