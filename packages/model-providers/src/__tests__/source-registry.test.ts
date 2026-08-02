@@ -410,6 +410,42 @@ describe('loadCatalog', () => {
       .toBe('NEWER-LKG-XAI');
   });
 
+  it('rejects a remote registry that republishes the same updatedAt with different content (keeps LKG)', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
+    const updatedAt = '2026-08-01T00:00:00.000Z';
+    const cached: Catalog = {
+      ...MINIMAL,
+      modelRegistry: { ...registry, updatedAt },
+    };
+    // 同 updatedAt、内容被悄悄改写 = 非法重发(纠错必须 forward-fix 抬 updatedAt)。
+    const mutatedRemote: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt,
+        models: registry.models.slice(1),
+      },
+    };
+    const warns: string[] = [];
+
+    const loaded = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => JSON.stringify(mutatedRemote)),
+        readCache: vi.fn(async () => JSON.stringify(cached)),
+        writeCache: vi.fn(async () => undefined),
+        log: (level, msg) => {
+          if (level === 'warn') warns.push(msg);
+        },
+      },
+    );
+
+    expect(loaded.source).toBe('remote');
+    expect(loaded.catalog.modelRegistry?.models).toHaveLength(registry.models.length);
+    expect(warns.some((msg) => msg.includes('republished the same updatedAt'))).toBe(true);
+  });
+
   it('adopts the newer snapshot returned by a serialized LKG commit', async () => {
     const url = 'https://catalog.example.test/providers.json';
     const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));

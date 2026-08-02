@@ -115,7 +115,7 @@ vi.mock('../model-discovery/anthropic.js', () => ({
 }));
 
 import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
-import { getActiveCatalog } from '../active-catalog.js';
+import { getActiveCatalog, setActiveCatalogChangedListener } from '../active-catalog.js';
 import {
   __testing,
   ensureActiveCatalogLoaded,
@@ -367,5 +367,43 @@ describe('provider catalog realm reload', () => {
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
     ).toEqual(activeXaiModels);
+  });
+
+  it('原子模型平面:成功刷新恰 1 revision;同 updatedAt 同 digest=no-op、异 digest=拒收,均 0 revision', async () => {
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => {
+      events.push(revision);
+    });
+    try {
+      // 更高 updatedAt:xai 清单 + registry 单次 swap → 恰 1 次 markChanged(旧实现是
+      // 2 个 setter + wrapper 广播 = 3 次可观测通知,本用例是 3→1 收敛的回归门)。
+      const next = structuredClone(catalogNamed('catalog-plane-v3', '2026-07-31T15:00:00.000Z'));
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: next, source: 'remote' });
+      await refresh;
+      expect(events).toHaveLength(1);
+
+      // 同 updatedAt 同 digest → 纯 no-op,零 revision 零广播。
+      const noop = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: structuredClone(next), source: 'remote' });
+      await noop;
+      expect(events).toHaveLength(1);
+
+      // 同 updatedAt 异 digest = 非法重发 → 拒收保当前快照,零 revision。
+      const mutated = structuredClone(next);
+      mutated.modelRegistry!.models = mutated.modelRegistry!.models.slice(1);
+      const rejected = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: mutated, source: 'remote' });
+      await rejected;
+      expect(events).toHaveLength(1);
+      expect(getActiveCatalog().modelRegistry?.models).toHaveLength(
+        next.modelRegistry!.models.length,
+      );
+    } finally {
+      setActiveCatalogChangedListener(null);
+    }
   });
 });

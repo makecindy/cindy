@@ -56,6 +56,7 @@ export {
 
 export {
   findModelRegistryRoute,
+  modelRegistryCanonicalJson,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
 export type {

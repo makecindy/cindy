@@ -140,3 +140,23 @@ export function resolveModelReferencePrice(
   }
   return undefined;
 }
+
+function sortKeysDeep(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(sortKeysDeep);
+  if (value && typeof value === "object") {
+    const source = value as Record<string, unknown>;
+    const out: Record<string, unknown> = {};
+    for (const key of Object.keys(source).sort()) out[key] = sortKeysDeep(source[key]);
+    return out;
+  }
+  return value;
+}
+
+/**
+ * Registry 快照的规范化序列化(键排序后的 JSON)。用作「同 updatedAt 必须同内容」
+ * 守卫的 digest:updatedAt 相等时规范串不等 = 非法重发(线上纠错必须 forward-fix
+ * 抬高 updatedAt),消费方应拒收并告警,保留当前快照。
+ */
+export function modelRegistryCanonicalJson(registry: ModelRegistry): string {
+  return JSON.stringify(sortKeysDeep(registry));
+}

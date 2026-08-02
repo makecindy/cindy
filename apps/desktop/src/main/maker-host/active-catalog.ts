@@ -33,6 +33,20 @@ import {
 } from '@cindy/model-providers';
 
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
+import {
+  applyLocalOverridesToRoot,
+  hasLocalAddition,
+  EMPTY_MODEL_CATALOG_OVERRIDES,
+  type ModelCatalogOverrides,
+} from './model-plane/localCatalogOverrides.js';
+import {
+  applyRootRegistryPlan,
+  planRegistryRoots,
+  rootPlanKey,
+  type ModelPlaneRegistryPlan,
+  type RegistryPlanWarning,
+  type RootAgentKind,
+} from './model-plane/modelPlanePolicy.js';
 
 /** OSS / bundled 加载来的基础目录;null = 尚未加载(回落 BUNDLED_CATALOG)。 */
 let base: Catalog | null = null;
@@ -123,12 +137,23 @@ let xdGatewayModels: XdGatewayModelInfo[] = [];
 let xdCodexAnthropicBridgeModelIds = new Set<string>();
 
 /**
- * Anthropic(Claude.ai 订阅)的**权威模型清单**(2026-07-19 统一重构):由 host 的
- * anthropic 发现流程注入(登录时 HTTP `/v1/models` + 会话 init 时 SDK supportedModels
- * 捕获,见 maker-host/model-discovery/anthropic.ts)。未登录 / 未发现时保持空数组,
- * anthropic 供应商不暴露任何模型——绝不用静态目录冒充。
+ * Anthropic(Claude.ai 订阅)的**发现清单**:由 host 的 anthropic 发现流程注入
+ * (登录时 HTTP `/v1/models` + 会话 init 时 SDK supportedModels 捕获,见
+ * maker-host/model-discovery/anthropic.ts)。2026-08-02 起 discovery 是「已验证
+ * 可用性」证据层,不再独占存在性:registry 显式实体化条目(policy 门禁见
+ * model-plane/modelPlanePolicy.ts)即使未被发现也进目录——presence 与
+ * entitlement 分离,选不选得中由连接态与运行期共同决定。
  */
 let anthropicModels: CatalogModel[] = [];
+
+/**
+ * 用户本地目录 override(model-catalog-override-store 读入的已清洗快照)。
+ * local 永远最高:远端刷新只换 base/registry 层,合并期最后作用于 root。
+ */
+let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
+
+/** 最近一次合并的 registry 实体化告警(单 route 隔离不拖垮其余;刷新路径读走打日志)。 */
+let lastPlanWarnings: RegistryPlanWarning[] = [];
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -293,8 +318,15 @@ function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
 /**
  * 以生效 Codex 列表校正 bridge 的展示名称 / 排序，同时保留 bridge 自己的 context、effort、
  * defaultEnabled 等 runtime 能力。这样旧远端目录里曾固化的本地化后缀也不会继续泄漏。
+ *
+ * claude-code bridge 受 registry membership 门控(route.agents 不含 claude-code 的
+ * 模型经 `claudeExcluded` 排除);Pi 恒定从 codex root 派生、不受门控——投影拓扑
+ * 见 model-plane/modelPlanePolicy.ts。
  */
-function projectCodexModelsToBridges(p: Provider): Provider {
+function projectCodexModelsToBridges(
+  p: Provider,
+  claudeExcluded: ReadonlySet<string> = new Set(),
+): Provider {
   const codex = p.models.codex ?? [];
   const canonical = new Map(codex.map((model) => [model.id, model]));
   const existing = p.models['claude-code'] ?? [];
@@ -310,10 +342,11 @@ function projectCodexModelsToBridges(p: Provider): Provider {
   const withAligned = aligned
     ? { ...p, models: { ...p.models, 'claude-code': alignedExisting } }
     : p;
+  const claudeSource = codex.filter((model) => !claudeExcluded.has(model.id));
   const withClaude = augmentModels(
     withAligned,
     'claude-code',
-    codex.map(toChatgptBridgeModel),
+    claudeSource.map(toChatgptBridgeModel),
     true,
   );
   return augmentModels(withClaude, 'pi', codex.map(toChatgptBridgeModel), true);
@@ -436,59 +469,6 @@ export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBa
   return { efforts, defaultEffort };
 }
 
-/**
- * 把元数据基线的展示字段覆盖到发现条目上(基线在场即胜出;不在场保留上游值)。
- * 典型修正:订阅 `/v1/models` / SDK 捕获给的家族级名字("Fable")→ 产品命名
- * ("Fable 5");上游无排序 → 产品排序。
- */
-function overlayRegistryMeta(
-  model: CatalogModel,
-  fields: RegistryMetaFields | undefined,
-): CatalogModel {
-  if (!fields) return model;
-  return {
-    ...model,
-    ...(fields.name !== undefined ? { name: fields.name } : {}),
-    ...(fields.group !== undefined ? { group: fields.group } : {}),
-    ...(fields.description !== undefined ? { description: fields.description } : {}),
-    ...(fields.sortOrder !== undefined ? { sortOrder: fields.sortOrder } : {}),
-    ...(fields.defaultEnabled !== undefined ? { defaultEnabled: fields.defaultEnabled } : {}),
-  };
-}
-
-function overlayModelRegistry(
-  providerId: string,
-  agent: AgentKind,
-  models: CatalogModel[],
-): CatalogModel[] {
-  return sortModelsByOrder(
-    models.map((model) => {
-      const fields = modelRegistryMetaFields(providerId, agent, model.id);
-      const overlaid = overlayRegistryMeta(model, fields);
-      if (!fields) return overlaid;
-      if (DYNAMIC_LIST_PROVIDER_IDS.has(providerId)) {
-        return {
-          ...overlaid,
-          ...(fields.status !== undefined ? { status: fields.status } : {}),
-        };
-      }
-      return {
-        ...overlaid,
-        ...(fields.contextWindow !== undefined
-          ? { contextWindow: fields.contextWindow, contextWindowVerified: true }
-          : {}),
-        ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
-        ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
-        ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
-        ...(fields.supportsFastMode !== undefined
-          ? { supportsFastMode: fields.supportsFastMode }
-          : {}),
-        ...(fields.status !== undefined ? { status: fields.status } : {}),
-      };
-    }),
-  );
-}
-
 /** 按 sortOrder 稳定排序(无 sortOrder 排最后,按进入序)——与 augmentModels 同口径。 */
 function sortModelsByOrder(models: CatalogModel[]): CatalogModel[] {
   return models
@@ -499,6 +479,33 @@ function sortModelsByOrder(models: CatalogModel[]): CatalogModel[] {
           (b.model.sortOrder ?? Number.MAX_SAFE_INTEGER) || a.index - b.index,
     )
     .map(({ model }) => model);
+}
+
+/**
+ * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 本地 override
+ * (addition 整条胜 + patch 逐字段)→ retired 复标——patch 改 status 也压不掉
+ * 远端 tombstone,唯一复活通道是完整 local addition(hasLocalAddition 豁免)。
+ * 追加了新实体时按 sortOrder 稳定重排,否则保持输入序(顺序契约不漂移)。
+ */
+function assembleRoot(
+  providerId: string,
+  agent: RootAgentKind,
+  models: readonly CatalogModel[],
+  plan: ModelPlaneRegistryPlan,
+): CatalogModel[] {
+  const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
+  let out = applyRootRegistryPlan(models, rootPlan);
+  out = applyLocalOverridesToRoot(providerId, agent, out, localOverrides);
+  if (rootPlan && rootPlan.retired.size > 0) {
+    out = out.map((m) =>
+      rootPlan.retired.has(m.id) &&
+      m.status !== 'retired' &&
+      !hasLocalAddition(localOverrides, providerId, m.id, agent)
+        ? { ...m, status: 'retired' as const }
+        : m,
+    );
+  }
+  return out.length !== models.length ? sortModelsByOrder(out) : out;
 }
 
 /** 把 provider 的全部 per-agent 模型清单清零(保留身份卡);已为空则原样返回。 */
@@ -512,6 +519,10 @@ function withEmptyModels(p: Provider): Provider {
 
 function computeMerged(): Catalog {
   const b = base ?? BUNDLED_CATALOG;
+  // registry 消费计划(实体化/overlay/retired/bridge 门控)一次算好;单 route 的
+  // 作者错误隔离进 warnings,由刷新路径读走打日志,不拖垮其余条目。
+  const plan = planRegistryRoots(b.modelRegistry);
+  lastPlanWarnings = plan.warnings;
   let providers: Provider[] = b.providers.map((provider): Provider => {
     if (provider.id !== 'xai') return provider;
     const claudeRoute = provider.routing['claude-code'];
@@ -535,15 +546,13 @@ function computeMerged(): Catalog {
   );
   if (normalized.some((p, index) => p !== providers[index])) providers = normalized;
 
-  // 同一份规范快照先进入 Codex,再从「静态 first-wins 后的生效 Codex 列表」投影 bridge。
-  // 即使 cache 不可用,静态 Codex 新模型也会自动出现在 Claude tab,不会再维护两份名单。
-  const withCodexProjection = providers.map((p) => {
-    if (p.id !== 'openai') return p;
-    const withDiscovered = augmentModels(p, 'codex', discoveredCodex, true);
-    return projectCodexModelsToBridges(withDiscovered);
-  });
-  if (withCodexProjection.some((p, index) => p !== providers[index])) {
-    providers = withCodexProjection;
+  // 同一份规范快照先进入 Codex root;bridge/Pi 投影移到 root 装配(registry 实体化 +
+  // 本地 override)之后统一做——派生端永远从最终 root 重算,不再维护两份名单。
+  const withCodexDiscovery = providers.map((p) =>
+    p.id === 'openai' ? augmentModels(p, 'codex', discoveredCodex, true) : p,
+  );
+  if (withCodexDiscovery.some((p, index) => p !== providers[index])) {
+    providers = withCodexDiscovery;
   }
 
   // 自定义供应商先追加、再做通用发现 augment——顺序反了的话,自定义 OAuth 供应商
@@ -562,49 +571,46 @@ function computeMerged(): Catalog {
       return next;
     });
   }
-  // Anthropic 权威模型清单重建(2026-07-19 统一重构):清单唯一来源是 SDK / 登录时
-  // HTTP 发现(host 经 setAnthropicDiscoveredModels 注入),目录静态段已退役(bundled
-  // 恒为空数组)。空 = 未发现,anthropic 供应商保留但不暴露任何模型,不用静态数据冒充。
-  // 展示元数据(名字/分组/排序/默认可见)以目录 modelRegistry 为基线覆盖(2026-07-21
-  // 三层合并:存在性=发现,展示=产品目录,用户 override 永远最高)——订阅通道返回的
-  // 家族级名字("Fable")在此归位为产品命名("Fable 5");能力字段仍以发现为准。
-  if (anthropicModels.length > 0) {
-    const metaIndex = buildEffectiveRegistryMetaIndex();
-    const overlaid = sortModelsByOrder(
-      anthropicModels.map((m) => overlayRegistryMeta(m, metaIndex.get(m.id))),
-    );
-    const codexBridgeModels = overlaid.map((model) => ({
-      ...model,
-      supportsFastMode: false,
-    }));
-    providers = providers.map((p) =>
-      p.id === 'anthropic'
-        ? {
-            ...p,
-            models: {
-              ...p.models,
-              'claude-code': overlaid,
-              codex: codexBridgeModels,
-              pi: overlaid,
-            },
-          }
-        : p,
-    );
-  }
-
-  providers = providers.map((provider) => {
-    if (provider.id === 'xd') return provider;
-    let changed = false;
-    const models: Provider['models'] = { ...provider.models };
-    for (const [agent, entries] of Object.entries(provider.models) as [
-      AgentKind,
-      CatalogModel[],
-    ][]) {
-      const overlaid = overlayModelRegistry(provider.id, agent, entries);
-      if (overlaid.some((model, index) => model !== entries[index])) changed = true;
-      models[agent] = overlaid;
+  // ── root 装配 + 投影(2026-08-02 模型平面收敛,拓扑见 model-plane/modelPlanePolicy.ts)。
+  // 每个 allowlist 供应商:registry presence 实体化/overlay + retired 标记 → 本地
+  // override(local 永远最高)→ 派生端(bridge/Pi)从最终 root 统一重算。
+  // 优先级:local addition/patch > registry 显式字段 > discovery 显式值 > 静态兜底。
+  // 注:anthropic 的 discovery 快照非空时整表以它为基线(登录态权威);registry
+  // 实体化条目在未登录时也保持 presence——能否选中由连接态门控,presence ≠ entitlement。
+  providers = providers.map((p) => {
+    if (p.id === 'openai') {
+      const root = assembleRoot('openai', 'codex', p.models.codex ?? [], plan);
+      const withRoot: Provider = { ...p, models: { ...p.models, codex: root } };
+      const excluded = plan.roots.get(rootPlanKey('openai', 'codex'))?.bridgeExcluded;
+      return projectCodexModelsToBridges(withRoot, excluded ?? new Set());
     }
-    return changed ? { ...provider, models } : provider;
+    if (p.id === 'anthropic') {
+      const seed = anthropicModels.length > 0 ? anthropicModels : (p.models['claude-code'] ?? []);
+      const root = sortModelsByOrder(assembleRoot('anthropic', 'claude-code', seed, plan));
+      const excluded =
+        plan.roots.get(rootPlanKey('anthropic', 'claude-code'))?.bridgeExcluded ??
+        new Set<string>();
+      // codex bridge 受 membership 门控且 fast=false(硬约束);Pi 恒定镜像 root。
+      const codexBridge = root
+        .filter((m) => !excluded.has(m.id))
+        .map((model) => ({ ...model, supportsFastMode: false }));
+      return { ...p, models: { ...p.models, 'claude-code': root, codex: codexBridge, pi: root } };
+    }
+    if (p.id === 'xai') {
+      const claudeRoot = assembleRoot('xai', 'claude-code', p.models['claude-code'] ?? [], plan);
+      const codexRoot = assembleRoot('xai', 'codex', p.models.codex ?? [], plan);
+      return {
+        ...p,
+        models: {
+          ...p.models,
+          'claude-code': claudeRoot,
+          codex: codexRoot,
+          // Pi 恒定镜像 claude-code root(拿满 root 能力,如 grok-4.20 的 xhigh 档)。
+          ...(p.agents.includes('pi') ? { pi: claudeRoot } : {}),
+        },
+      };
+    }
+    return p;
   });
 
   // XD 网关权威模型清单重建。即使实时清单为空也必须重建为空:不能证明某个模型
@@ -772,6 +778,45 @@ export function setModelRegistryFromCatalog(catalog: Catalog): void {
   const current = base ?? BUNDLED_CATALOG;
   base = { ...current, modelRegistry: catalog.modelRegistry };
   markChanged();
+}
+
+/**
+ * **原子模型平面提交**:把一次刷新目录里的 xAI 双 root 静态清单与 modelRegistry
+ * 组装成单次 base swap + 单次 markChanged。替代刷新路径串行调
+ * setProviderModelsFromCatalog('xai') + setModelRegistryFromCatalog 的旧写法——
+ * 那会产生两个 revision、两次 capabilities 重算/广播,且中间存在
+ * 「xai 新表 + registry 旧表」的可观测混态窗口。
+ * 目标不变量:成功且有变化 = 恰 1 revision / 1 broadcast;no-op/拒收 = 0。
+ */
+export function commitModelPlaneFromCatalog(catalog: Catalog): void {
+  const current = base ?? BUNDLED_CATALOG;
+  const incomingXai = catalog.providers.find((provider) => provider.id === 'xai');
+  const providers =
+    incomingXai && current.providers.some((provider) => provider.id === 'xai')
+      ? current.providers.map((provider) =>
+          provider.id === 'xai' ? { ...provider, models: incomingXai.models } : provider,
+        )
+      : current.providers;
+  base = {
+    ...current,
+    providers,
+    ...(catalog.modelRegistry ? { modelRegistry: catalog.modelRegistry } : {}),
+  };
+  markChanged();
+}
+
+/**
+ * 注入用户本地目录 override 快照(model-catalog-override-store 已清洗)。
+ * 调用方(createDesktopProviderService)负责变更判定,避免无谓 revision。
+ */
+export function setLocalCatalogOverrides(overrides: ModelCatalogOverrides): void {
+  localOverrides = overrides;
+  markChanged();
+}
+
+/** 最近一次合并的 registry 实体化告警(单 route 隔离;刷新路径读走打日志/计数)。 */
+export function getModelPlaneWarnings(): readonly RegistryPlanWarning[] {
+  return lastPlanWarnings;
 }
 
 /**

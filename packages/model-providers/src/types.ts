@@ -325,7 +325,13 @@ export interface CatalogModel {
     temperature?: boolean;
   };
   releaseDate?: string;
-  status?: 'active' | 'alpha' | 'deprecated';
+  /**
+   * 生命周期状态。'retired' 是**客户端本地**取值:wire(服务端 Catalog/CatalogModel)
+   * 永远不下发它——registry 的 retired 条目由服务端投影时剔除、由客户端在合并期把
+   * 「discovery 仍能发现但远端已判死」的条目标记为 'retired',供 modelList 准入过滤
+   * (新选择禁止,keepSelected 运行会话豁免;完整 local addition 可显式复活)。
+   */
+  status?: 'active' | 'alpha' | 'deprecated' | 'retired';
   /**
    * 该模型在「设置 → 模型供应商」展开列表里**默认是否开启显示**（缺省 ⇒ true，即默认开）。
    *

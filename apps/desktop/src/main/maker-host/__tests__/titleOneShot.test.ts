@@ -53,7 +53,7 @@ import {
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
-import { setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
 async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -75,7 +75,7 @@ async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
     setDiscoveredCodexModels([]);
   }
 }
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type Catalog, type ProviderView } from '@cindy/model-providers';
 
 /** 造一个 fetch 替身:按传入 handler 返回类 Response 对象,并记录调用。 */
 function fakeFetch(
@@ -234,12 +234,21 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       });
     });
   });
-  it('openai 注册表未注入(清单为空)→ effort=null(SDK 默认档),标题请求仍可发', () => {
-    expect(buildTitleTarget('openai')).toMatchObject({
-      providerId: 'openai',
-      model: 'gpt-5.4-mini',
-      effort: null,
-    });
+  it('openai 注册表未注入(清单为空、无 registry)→ effort=null(SDK 默认档),标题请求仍可发', () => {
+    // registry-free:bundled registry 的实体化条目会带出 efforts(那是 modelPlane
+    // 的预期行为);本用例守的是「零能力信息也能发标题请求」的兜底语义。
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    delete catalog.modelRegistry;
+    setActiveCatalog(catalog);
+    try {
+      expect(buildTitleTarget('openai')).toMatchObject({
+        providerId: 'openai',
+        model: 'gpt-5.4-mini',
+        effort: null,
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
   it('xd → gpt-5.4-mini / 网关 chat-completions(/v1 upstream)', () => {
     // xd 模型以网关实时清单为准(默认空):注入 titleModel 同 id 条目,

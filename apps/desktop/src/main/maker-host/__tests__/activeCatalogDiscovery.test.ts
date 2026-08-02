@@ -41,9 +41,20 @@ const fake = (id: string, sortOrder = 16.999): CatalogModel => ({
   defaultEnabled: true,
 });
 
+/**
+ * 去 registry 的 bundled 目录:本文件多数用例只验 discovery/投影**机制**,用
+ * registry-free 基线隔离——registry 实体化/overlay 层(2026-08-02 模型平面收敛,
+ * registry presence 可独立长实体、显式字段压过 discovery)由 modelPlane.test.ts 专测。
+ */
+function bundledWithoutRegistry(): Catalog {
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  delete catalog.modelRegistry;
+  return catalog;
+}
+
 /** legacy v1 远端目录形态:openai 仍带静态 codex/bridge 条目(过渡期兼容)。 */
 function legacyCatalog(): Catalog {
-  const legacy = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  const legacy = bundledWithoutRegistry();
   const openai = legacy.providers.find((p) => p.id === 'openai');
   if (!openai) throw new Error('fixture missing openai');
   openai.models.codex = [
@@ -97,7 +108,7 @@ describe('active-catalog discovered augment', () => {
   });
 
   it('bridge 投影剔除 max/ultra:codex 侧保留、claude-code 侧封顶 xhigh(issue #352)', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setDiscoveredCodexModels([
       {
         ...fake('gpt-5.6-sol', 17),
@@ -119,7 +130,7 @@ describe('active-catalog discovered augment', () => {
   });
 
   it('动态清单契约:注册表快照即清单本身(bundled 零静态,快照全量呈现)', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setDiscoveredCodexModels([fake('gpt-5.7', 17), fake('gpt-5.5', 20)]);
     expect(openaiIds('codex')).toEqual(['gpt-5.7', 'gpt-5.5']);
     expect(openaiIds('claude-code')).toEqual(['chatgpt/gpt-5.7', 'chatgpt/gpt-5.5']);
@@ -143,7 +154,7 @@ describe('active-catalog discovered augment', () => {
   });
 
   it('paired projection 使用同一纯名称和 sortOrder,且按 sortOrder 稳定排序', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setDiscoveredCodexModels([fake('gpt-5.8', 18), fake('gpt-5.7', 17)]);
     const openai = getActiveCatalog().providers.find((p) => p.id === 'openai');
     const codex = (openai?.models.codex ?? []).find((m) => m.id === 'gpt-5.7');
@@ -175,7 +186,7 @@ describe('active-catalog discovered augment', () => {
   });
 
   it('空 discovered + bundled 零静态 → openai 两个 tab 都为空(不用假数据冒充)', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setDiscoveredCodexModels([]);
     expect(openaiIds('codex')).toEqual([]);
     expect(openaiIds('claude-code')).toEqual([]);
@@ -309,7 +320,7 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
     expect(anthropicList().find((m) => m.id === 'claude-sonnet-4-5')?.defaultEnabled).toBe(false);
   });
 
-  it('active overlay 不覆盖能力;发现模块可单独读取 effort 基线', () => {
+  it('registry 显式字段压过 discovery(2026-08-02 优先级收敛);未登记条目保留上游原值', () => {
     setActiveCatalog(
       withAnthropicRegistry([
         {
@@ -334,12 +345,15 @@ describe('anthropic 发现条目的 modelRegistry 元数据基线', () => {
       anthro('claude-unknown', 'Unknown Raw', 1),
     ]);
     const known = anthropicList().find((m) => m.id === 'claude-known');
-    // 展示字段覆盖;active overlay 不直接改能力,避免覆盖上游显式声明。
+    // 旧契约「上游显式能力优先」已反转:local > registry 显式 > discovery 显式。
+    // registry 是策展权威,能力字段在场即胜出;discovery 降为可用性证据层。
     expect(known).toMatchObject({
       name: 'Known Pro',
       defaultEnabled: false,
-      contextWindow: 1_000_000,
-      efforts: ['low', 'medium', 'high'],
+      contextWindow: 123,
+      contextWindowVerified: true,
+      efforts: ['max'],
+      defaultEffort: 'max',
     });
     expect(getCindyModelEffortBaseline('claude-known')).toEqual({
       efforts: ['max'],

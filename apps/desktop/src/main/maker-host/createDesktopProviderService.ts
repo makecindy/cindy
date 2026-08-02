@@ -27,6 +27,7 @@ import {
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
+  modelRegistryCanonicalJson,
   parseCatalog,
   type Catalog,
   type CatalogIO,
@@ -37,13 +38,15 @@ import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
+  commitModelPlaneFromCatalog,
   getActiveCatalog,
+  getModelPlaneWarnings,
   setActiveCatalog,
   setCustomProviders,
   setDiscoveredCodexModels,
-  setModelRegistryFromCatalog,
-  setProviderModelsFromCatalog,
+  setLocalCatalogOverrides,
 } from './active-catalog.js';
+import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
@@ -444,7 +447,12 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
     allowSideEffects: false,
     catalog: getActiveCatalog(),
   }));
-  if (activeLoaded) return Promise.resolve(getActiveCatalog());
+  if (activeLoaded) {
+    // 幂等路径也重同步本地 override:手改文件 / 换 owner 后,任何经过这里的
+    // 刷新触发都会带出新快照(store 内 mtime/路径守卫,未变零开销)。
+    syncLocalCatalogOverridesIntoActiveCatalog();
+    return Promise.resolve(getActiveCatalog());
+  }
   if (!activeInflight) {
     const source = buildSource();
     const sourceKey = catalogSourceKey(source);
@@ -454,6 +462,7 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
         setActiveCatalog(catalog);
+        syncLocalCatalogOverridesIntoActiveCatalog();
         broadcastEffectiveModelPricing();
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
@@ -526,9 +535,13 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 }
 
 /**
- * 手动重载 xAI 模型目录与统一 modelRegistry。先确保启动期动态发现已完成，再复用同一
- * `loadCatalog` 源选择与 bundled fallback；xAI 只投影静态模型列表，当前 routing/auth
- * 以及其它 provider 保持不变；modelRegistry 仅接受不旧于当前版本的快照。
+ * 重载模型平面(xAI 双 root 静态清单 + 统一 modelRegistry)。先确保启动期动态发现
+ * 已完成,再复用同一 `loadCatalogWithSource` 源选择;bundled fallback 视为失败保
+ * LKG。守卫序:realm/generation → updatedAt 单调 → 同 updatedAt 规范化 digest
+ * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
+ * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
+ * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
+ * no-op/失败/拒收 = 0。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -552,19 +565,31 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       }
       const currentRegistry = getActiveCatalog().modelRegistry;
       const incomingRegistry = catalog.modelRegistry;
-      if (
-        currentRegistry &&
-        incomingRegistry &&
-        incomingRegistry.updatedAt < currentRegistry.updatedAt
-      ) {
-        return getActiveCatalog();
+      if (currentRegistry && incomingRegistry) {
+        if (incomingRegistry.updatedAt < currentRegistry.updatedAt) {
+          return getActiveCatalog();
+        }
+        if (incomingRegistry.updatedAt === currentRegistry.updatedAt) {
+          const incomingDigest = modelRegistryCanonicalJson(incomingRegistry);
+          const currentDigest = modelRegistryCanonicalJson(currentRegistry);
+          if (incomingDigest === currentDigest) {
+            // 同版同内容:纯 no-op,不 commit、零 revision 零广播。
+            return getActiveCatalog();
+          }
+          // 同 updatedAt 异内容 = 非法重发:拒收保当前快照并告警(telemetry 走日志管道)。
+          log.warn('model registry republished the same updatedAt with different content; rejecting', {
+            updatedAt: incomingRegistry.updatedAt,
+          });
+          return getActiveCatalog();
+        }
       }
-      setProviderModelsFromCatalog('xai', catalog);
-      if (
-        incomingRegistry &&
-        (!currentRegistry || incomingRegistry.updatedAt >= currentRegistry.updatedAt)
-      ) {
-        setModelRegistryFromCatalog(catalog);
+      commitModelPlaneFromCatalog(catalog);
+      const planWarnings = getModelPlaneWarnings();
+      if (planWarnings.length > 0) {
+        log.warn('model registry materialization skipped inconsistent routes', {
+          count: planWarnings.length,
+          samples: planWarnings.slice(0, 5),
+        });
       }
       broadcastEffectiveModelPricing();
       return getActiveCatalog();
@@ -574,6 +599,20 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
     });
   catalogRefreshInflight = { sourceKey, promise: flight };
   return flight;
+}
+
+/**
+ * 把 owner-scoped 本地目录 override 快照同步进 active-catalog。mtime/路径守卫在
+ * store 内(手改文件、换 owner 都会现读);内容未变时不触发 revision。
+ * 调用点:启动装载、目录刷新、realm 重载——owner 切换后任一路径都会带出新快照。
+ */
+let lastSyncedOverridesJson: string | null = null;
+export function syncLocalCatalogOverridesIntoActiveCatalog(): void {
+  const overrides = readModelCatalogOverrides();
+  const serialized = JSON.stringify(overrides);
+  if (serialized === lastSyncedOverridesJson) return;
+  lastSyncedOverridesJson = serialized;
+  setLocalCatalogOverrides(overrides);
 }
 
 /**

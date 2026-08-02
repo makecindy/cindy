@@ -67,8 +67,10 @@ describe('active catalog revision', () => {
   });
 
   it('refreshes one provider model snapshot without replacing live routing or other providers', () => {
+    // registry-free 克隆:本用例只验「换模型快照不换路由」机制,隔离 registry 实体化层。
     const current = structuredClone(BUNDLED_CATALOG);
-    const incoming = structuredClone(BUNDLED_CATALOG);
+    delete (current as { modelRegistry?: unknown }).modelRegistry;
+    const incoming = structuredClone(current);
     const currentXai = current.providers.find((provider) => provider.id === 'xai');
     const incomingXai = incoming.providers.find((provider) => provider.id === 'xai');
     const currentOpenAi = current.providers.find((provider) => provider.id === 'openai');
