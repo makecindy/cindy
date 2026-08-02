@@ -44,6 +44,10 @@ interface FakeGit {
   psDelayFromCall: number;
   psDelayMs: number;
   psCalls: number;
+  /** 每次 powershell 调用收到的 execFile timeout 值。 */
+  psTimeouts: number[];
+  /** true = 查询永不应答,只在自身 execFile timeout 到点报错(模拟 WMI 挂死)。 */
+  psHangUntilTimeout: boolean;
 }
 
 /** git 调用返回假 child 并捕获回调与 spawn 选项;powershell 调用按 psTable 应答。 */
@@ -61,11 +65,19 @@ function installExecFileMock(): FakeGit {
     psDelayFromCall: 0,
     psDelayMs: 0,
     psCalls: 0,
+    psTimeouts: [],
+    psHangUntilTimeout: false,
   };
   mocks.execFile.mockImplementation(
-    (file: string, _args: string[], opts: FakeGit['gitOpts'], cb?: ExecCb) => {
+    (file: string, _args: string[], opts: FakeGit['gitOpts'] & { timeout?: number }, cb?: ExecCb) => {
       if (file === 'powershell.exe') {
         state.psCalls += 1;
+        state.psTimeouts.push(opts?.timeout ?? -1);
+        if (state.psHangUntilTimeout) {
+          // 模拟 WMI 挂死:只有 execFile 自身的 timeout 到点才以错误收口
+          setTimeout(() => cb!(new Error('powershell query timed out'), '', ''), opts?.timeout ?? 3_000);
+          return {};
+        }
         const answer = () => {
           if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
           else cb!(null, JSON.stringify(state.psTable), '');
@@ -320,6 +332,34 @@ describe('gitExec timeoutMs', () => {
     expect(s.settled).toBe(false);
 
     await vi.advanceTimersByTimeAsync(3_000);
+    await expectation;
+  });
+
+  it('Windows 血缘快照挂死 → 独立短预算(1s)失效后树杀仍在总看门狗到期前启动', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psHangUntilTimeout = true; // WMI 挂死:快照只能靠自身 timeout 结束
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('cleanup unconfirmed'),
+    });
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // 快照使用独立短预算,不与总看门狗(3s)同预算
+    expect(state.psTimeouts[0]).toBe(1_000);
+    expect(mocks.killProcessTree).not.toHaveBeenCalled();
+
+    // 快照 1s 到点失败 → 树杀立刻启动,距总看门狗(+3s)还有 2s 余量
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
+
+    // 进程表不可用 → 降级 stdio 等待;放手后按 cleanup unconfirmed 收口
+    state.gitCb!(new Error('killed'), '', '');
     await expectation;
   });
 

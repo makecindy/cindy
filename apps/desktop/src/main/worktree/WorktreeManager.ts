@@ -358,16 +358,19 @@ const STAGE_CHECKOUT_PATHS = [
  */
 async function stageCheckout(
   worktreePath: string,
-  baseRepo: string,
 ): Promise<{ fullCheckoutPromise: Promise<void> }> {
   const t0 = Date.now();
 
-  // 1. 找出白名单中实际存在于 HEAD 的路径(没的就跳过, 避免 git checkout 报错)
+  // 1. 找出白名单中实际存在于 HEAD 的路径(没的就跳过, 避免 git checkout 报错)。
+  //    必须在 **worktree** 里解析 HEAD(= 新分支/sourceBranch 的树),不能用
+  //    baseRepo 的当前 checkout:sourceBranch 可能是刚 fetch 的远端默认分支,
+  //    与 baseRepo 本地 HEAD 相差可以很远——规则文件只存在于新基底时,按旧树
+  //    枚举会漏检,agent 就会在 AGENTS.md/CLAUDE.md 落盘前启动。
   let existingPaths: string[] = [];
   try {
     const { stdout } = await gitExec(
       ['ls-tree', '--name-only', 'HEAD', '--', ...STAGE_CHECKOUT_PATHS],
-      baseRepo,
+      worktreePath,
     );
     existingPaths = stdout
       .split(/\r?\n/)
@@ -691,7 +694,7 @@ async function createWorktreeInner(
     //     失败仅日志, 不阻塞 IPC 返回。
     let bgPromise: Promise<void> | undefined;
     try {
-      const stageRes = await timed('stage checkout', () => stageCheckout(worktreePath, baseRepo));
+      const stageRes = await timed('stage checkout', () => stageCheckout(worktreePath));
       bgPromise = stageRes.fullCheckoutPromise;
     } catch (err) {
       // stageCheckout 内部已记 warn, 这里再保险记一条; 不视为致命

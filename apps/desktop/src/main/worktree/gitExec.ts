@@ -84,6 +84,12 @@ const POSIX_GROUP_POLL_INTERVAL_MS = 100;
 export const KILL_CLEANUP_BUDGET_MS = 3_000;
 /** Windows 进程表查询(PowerShell Get-CimInstance)自身的超时。 */
 const WIN32_PS_QUERY_TIMEOUT_MS = 3_000;
+/**
+ * 杀前血缘快照的独立短预算:必须显著小于 KILL_CLEANUP_BUDGET_MS——快照与总
+ * 看门狗同预算时,快照挂满会让 killProcessTree 在看门狗收口前根本来不及启动,
+ * 卡住的 git 进程原样存活。
+ */
+const WIN32_SNAPSHOT_TIMEOUT_MS = 1_000;
 /** Windows 确认快照后代退净的轮询间隔。 */
 const WIN32_DESCENDANT_POLL_INTERVAL_MS = 250;
 
@@ -99,7 +105,9 @@ interface Win32ProcRow {
  * 看门狗),不存在误杀风险;pid+CreationDate 双键匹配基本免疫复用误判。
  * PowerShell 缺失/超时/输出异常一律返回 null(调用方降级)。
  */
-function queryWin32ProcessTable(): Promise<Win32ProcRow[] | null> {
+function queryWin32ProcessTable(
+  timeoutMs: number = WIN32_PS_QUERY_TIMEOUT_MS,
+): Promise<Win32ProcRow[] | null> {
   return new Promise((resolve) => {
     let done = false;
     const finish = (v: Win32ProcRow[] | null) => {
@@ -116,7 +124,7 @@ function queryWin32ProcessTable(): Promise<Win32ProcRow[] | null> {
           '-Command',
           'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress',
         ],
-        { maxBuffer: 16 * 1024 * 1024, timeout: WIN32_PS_QUERY_TIMEOUT_MS, windowsHide: true },
+        { maxBuffer: 16 * 1024 * 1024, timeout: timeoutMs, windowsHide: true },
         (err, stdout) => {
           if (err) {
             finish(null);
@@ -294,8 +302,12 @@ function execFileOnce(
           // (无 PowerShell/查询超时)只剩单一信号,按 cleanup unconfirmed 收口。
           void (async () => {
             const rootPid = child.pid;
-            const preKillTable = rootPid != null ? await queryWin32ProcessTable() : null;
-            if (settled) return;
+            // 快照用独立短预算(WIN32_SNAPSHOT_TIMEOUT_MS):保证即便快照挂满,
+            // killProcessTree 也在总看门狗到期前启动。快照返回后**不检查
+            // settled 直接进树杀**——清理义务独立于 Promise 状态,即使看门狗已
+            // 按 unconfirmed 收口,树杀也必须执行,否则卡住的 fetch 原样存活。
+            const preKillTable =
+              rootPid != null ? await queryWin32ProcessTable(WIN32_SNAPSHOT_TIMEOUT_MS) : null;
             if (preKillTable === null || rootPid == null) {
               killProcessTree(child.pid, child, () => {
                 if (settled) return;
