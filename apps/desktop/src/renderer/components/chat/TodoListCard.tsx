@@ -150,6 +150,7 @@ export function TodoListCard({
               }
             >
               <div
+                aria-hidden={!revealed}
                 className={cn(
                   'w-full origin-bottom overflow-hidden rounded-[12px]',
                   'border border-[var(--msg-tool-card-border)]',

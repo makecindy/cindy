@@ -84,4 +84,24 @@ describe('TodoListCard flyout interaction', () => {
     expect(animatedContent.classList.contains('animate-float-in')).toBe(true);
     expect(animatedContent.classList.contains('-translate-x-1/2')).toBe(false);
   });
+
+  it('hides the flyout from assistive technology while its exit animation remains mounted', () => {
+    render(<TodoListCard todos={TODOS} animated={false} />);
+
+    const trigger = screen.getByRole('button', { name: 'Step 1 / 2' });
+    const hoverRegion = trigger.parentElement as HTMLElement;
+
+    fireEvent.mouseEnter(hoverRegion);
+
+    const flyoutId = trigger.getAttribute('aria-controls') as string;
+    const positioner = document.getElementById(flyoutId) as HTMLElement;
+    const animatedContent = positioner.firstElementChild as HTMLElement;
+
+    expect(animatedContent.getAttribute('aria-hidden')).toBe('false');
+
+    fireEvent.mouseLeave(hoverRegion);
+
+    expect(document.getElementById(flyoutId)).toBe(positioner);
+    expect(animatedContent.getAttribute('aria-hidden')).toBe('true');
+  });
 });

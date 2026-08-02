@@ -14,7 +14,10 @@ vi.mock('@/components/chat/TodoListCard', () => ({
 
 const T0 = 1_700_000_000_000;
 
-function planMessage(status: 'pending' | 'in_progress' | 'completed'): ChatMessage {
+function planMessage(
+  status: 'pending' | 'in_progress' | 'completed',
+  createdAtMs: number | null = T0,
+): ChatMessage {
   return {
     clientId: 'plan-1',
     role: 'tool_use',
@@ -22,7 +25,7 @@ function planMessage(status: 'pending' | 'in_progress' | 'completed'): ChatMessa
     toolName: 'update_plan',
     toolUseId: 'plan:turn-1',
     toolInput: { plan: [{ step: 'Finish work', status }] },
-    createdAt: new Date(T0).toISOString(),
+    ...(createdAtMs === null ? {} : { createdAt: new Date(createdAtMs).toISOString() }),
   };
 }
 
@@ -114,7 +117,7 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
     view.rerender(
       <PinnedPlanPanel
         sessionId="running-completes"
-        messages={[planMessage('completed')]}
+        messages={[planMessage('completed', T0 + 5_000)]}
         animated={false}
         width={400}
       />,
@@ -162,6 +165,36 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
         width={400}
       />,
     );
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('keeps an already-expired historical completion hidden without retaining session state', () => {
+    vi.setSystemTime(T0 + 10_000);
+
+    render(
+      <PinnedPlanPanel
+        sessionId="historical-completion"
+        messages={[planMessage('completed')]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).toBeNull();
+  });
+
+  it('falls back to a component-local lifetime when the completion timestamp is missing', () => {
+    render(
+      <PinnedPlanPanel
+        sessionId="missing-completion-timestamp"
+        messages={[planMessage('completed', null)]}
+        animated={false}
+        width={400}
+      />,
+    );
+
+    expect(screen.queryByTestId('plan-pill')).not.toBeNull();
+    act(() => vi.advanceTimersByTime(2_000));
     expect(screen.queryByTestId('plan-pill')).toBeNull();
   });
 });

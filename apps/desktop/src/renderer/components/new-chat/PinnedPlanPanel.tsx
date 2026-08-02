@@ -17,15 +17,6 @@ import type { ChatMessage } from '@/lib/makerChatStore';
 
 const COMPLETED_PLAN_VISIBLE_MS = 2_000;
 
-interface CompletedPlanVisibility {
-  insertionKey: string;
-  deadlineMs: number;
-}
-
-// Session views remount when the user switches sessions. Keep the short completed-plan
-// lifetime outside the component so remounting cannot restart the full two-second window.
-const completedPlanVisibilityBySession = new Map<string, CompletedPlanVisibility>();
-
 export function PinnedPlanPanel({
   sessionId,
   messages,
@@ -48,43 +39,43 @@ export function PinnedPlanPanel({
     insertion.todos.length > 0 &&
     insertion.todos.every((todo) => todo.status === 'completed'),
   );
-  const visibilityKey = insertion ? (sessionId ?? insertion.key) : null;
-  const cachedVisibility = visibilityKey
-    ? completedPlanVisibilityBySession.get(visibilityKey)
-    : undefined;
+  const completedAtMs = Date.parse(insertion?.createdAt ?? '');
+  const persistedCompletionDeadlineMs =
+    allDone && Number.isFinite(completedAtMs)
+      ? completedAtMs + COMPLETED_PLAN_VISIBLE_MS
+      : null;
+  const [fallbackCompletionVisibility, setFallbackCompletionVisibility] = useState<{
+    identity: string;
+    deadlineMs: number;
+  } | null>(null);
+  const completionIdentity = insertion ? `${sessionId ?? 'unknown'}:${insertion.key}` : null;
+  const completionDeadlineMs =
+    persistedCompletionDeadlineMs ??
+    (allDone && fallbackCompletionVisibility?.identity === completionIdentity
+      ? fallbackCompletionVisibility.deadlineMs
+      : null);
   const completedPlanExpired = Boolean(
-    allDone &&
-    insertion &&
-    cachedVisibility?.insertionKey === insertion.key &&
-    cachedVisibility.deadlineMs <= Date.now(),
+    completionDeadlineMs !== null && completionDeadlineMs <= Date.now(),
   );
   const [hiddenInsertionKey, setHiddenInsertionKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!insertion || !allDone) {
       setHiddenInsertionKey(null);
-      if (insertion && visibilityKey) {
-        const current = completedPlanVisibilityBySession.get(visibilityKey);
-        if (current?.insertionKey === insertion.key) {
-          completedPlanVisibilityBySession.delete(visibilityKey);
-        }
-      }
+      setFallbackCompletionVisibility(null);
       return;
     }
 
-    const current = visibilityKey ? completedPlanVisibilityBySession.get(visibilityKey) : undefined;
-    const visibility =
-      current?.insertionKey === insertion.key
-        ? current
-        : {
-            insertionKey: insertion.key,
-            deadlineMs: Date.now() + COMPLETED_PLAN_VISIBLE_MS,
-          };
-    if (visibilityKey && visibility !== current) {
-      completedPlanVisibilityBySession.set(visibilityKey, visibility);
+    if (completionDeadlineMs === null) {
+      setHiddenInsertionKey(null);
+      setFallbackCompletionVisibility({
+        identity: completionIdentity ?? insertion.key,
+        deadlineMs: Date.now() + COMPLETED_PLAN_VISIBLE_MS,
+      });
+      return;
     }
 
-    const remainingMs = Math.max(0, visibility.deadlineMs - Date.now());
+    const remainingMs = Math.max(0, completionDeadlineMs - Date.now());
     if (remainingMs === 0) {
       setHiddenInsertionKey(insertion.key);
       return;
@@ -95,7 +86,7 @@ export function PinnedPlanPanel({
       setHiddenInsertionKey(insertion.key);
     }, remainingMs);
     return () => window.clearTimeout(timer);
-  }, [allDone, insertion?.key, visibilityKey]);
+  }, [allDone, completionDeadlineMs, completionIdentity, insertion?.key]);
 
   if (
     !visible ||
