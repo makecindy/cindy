@@ -12,11 +12,9 @@
 import { act, cleanup, render, renderHook } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import {
-  SEARCH_SORT_BY_KEY,
-  __resetSearchSortByStoreForTests,
-} from '../conversationSearchPrefs';
+import { SEARCH_SORT_BY_KEY, __resetSearchSortByStoreForTests } from '../conversationSearchPrefs';
 import { SearchFilterMenu, useConversationSearch } from '../ConversationSearchBox';
+import { searchConversations } from '@/lib/conversationSearchService';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -37,6 +35,8 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   __resetSearchSortByStoreForTests();
+  vi.useRealTimers();
+  vi.clearAllMocks();
 });
 
 function renderSearch() {
@@ -114,6 +114,45 @@ describe('useConversationSearch sort persistence', () => {
     });
     // 非法值回落默认排序,而不是把 'bogus' 塞进请求。
     expect(result.current.sortBy).toBe('relevance');
+  });
+});
+
+describe('useConversationSearch visibility scope', () => {
+  it('bounds all-project searches and refreshes when the allowed scope changes', async () => {
+    vi.useFakeTimers();
+    const searchMock = vi.mocked(searchConversations);
+    const { result, rerender } = renderHook(
+      ({ allowedSessionIds }: { allowedSessionIds: string[] }) =>
+        useConversationSearch({
+          enabled: true,
+          navigate: vi.fn() as never,
+          allKnownProjects: [],
+          allowedSessionIds,
+        }),
+      { initialProps: { allowedSessionIds: ['dialogue', 'visible-project'] } },
+    );
+
+    act(() => result.current.setQuery('needle'));
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251);
+    });
+    expect(searchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        semanticMode: 'keyword',
+        filters: expect.objectContaining({ sessionIds: ['dialogue', 'visible-project'] }),
+      }),
+    );
+
+    searchMock.mockClear();
+    rerender({ allowedSessionIds: ['dialogue'] });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(251);
+    });
+    expect(searchMock).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        filters: expect.objectContaining({ sessionIds: ['dialogue'] }),
+      }),
+    );
   });
 });
 

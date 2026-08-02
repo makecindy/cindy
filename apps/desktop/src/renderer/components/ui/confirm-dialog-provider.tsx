@@ -7,6 +7,8 @@ export interface ConfirmOptions {
   description?: string;
   /** 可选的标题与正文样式；仅调用方显式传入时生效。 */
   textClassName?: string;
+  /** Destructive actions use the shared semantic danger treatment. */
+  confirmVariant?: 'default' | 'destructive';
   /** 富内容区(渲染在 description 之后;见 ConfirmDialogProps.content)。 */
   content?: ReactNode;
   /** 弹窗最大宽度(px),缺省 400;见 ConfirmDialogProps.maxWidth。 */
@@ -245,6 +247,7 @@ export function ConfirmDialogProvider({ children }: { children: ReactNode }) {
           showCancel={currentItem.options.showCancel}
           tertiaryText={currentItem.options.tertiaryText}
           autoFocusConfirm={currentItem.options.autoFocusConfirm}
+          confirmVariant={currentItem.options.confirmVariant}
           dontShowAgainLabel={
             currentItem.options.dontShowAgainKey
               ? currentItem.options.dontShowAgainLabel ?? '下次不再提示'

@@ -7,16 +7,21 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import Store from 'electron-store';
 
+import { normalizeProjectKey } from '../shared/projectKeys.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
 
 interface SidebarSettingsShape {
   pinnedOrder: string[];
+  /** 用户明确从侧栏移除的项目；缺省为空，不影响任务本身。 */
+  hiddenProjectKeys: string[];
 }
 
 const MAX_PINNED_ORDER_ENTRIES = 10_000;
 const MAX_PINNED_ORDER_ENTRY_LENGTH = 4_096;
+const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
+const MAX_PROJECT_KEY_LENGTH = 4_096;
 
 let storeInstance: Store<SidebarSettingsShape> | null = null;
 
@@ -24,8 +29,20 @@ function getStore(): Store<SidebarSettingsShape> {
   if (!storeInstance) {
     storeInstance = new Store<SidebarSettingsShape>({
       name: 'sidebar-settings',
-      defaults: { pinnedOrder: [] },
-      schema: { pinnedOrder: { type: 'array', items: { type: 'string' } } },
+      defaults: { pinnedOrder: [], hiddenProjectKeys: [] },
+      schema: {
+        pinnedOrder: { type: 'array', items: { type: 'string' } },
+        hiddenProjectKeys: {
+          type: 'array',
+          maxItems: MAX_HIDDEN_PROJECT_ENTRIES,
+          uniqueItems: true,
+          items: {
+            type: 'string',
+            minLength: 1,
+            maxLength: MAX_PROJECT_KEY_LENGTH,
+          },
+        },
+      },
       clearInvalidConfig: true,
     });
   }
@@ -38,6 +55,25 @@ export function loadPinnedOrder(): string[] {
 
 export function savePinnedOrder(order: readonly string[]): void {
   getStore().set('pinnedOrder', Array.from(order));
+}
+
+export function loadHiddenProjectKeys(): string[] {
+  const stored = getStore().get('hiddenProjectKeys', []);
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const entry of stored) {
+    const projectKey = normalizeProjectKey(entry);
+    if (projectKey == null || projectKey.length > MAX_PROJECT_KEY_LENGTH || seen.has(projectKey)) {
+      continue;
+    }
+    seen.add(projectKey);
+    normalized.push(projectKey);
+  }
+  return normalized;
+}
+
+export function saveHiddenProjectKeys(projectKeys: readonly string[]): void {
+  getStore().set('hiddenProjectKeys', Array.from(projectKeys));
 }
 
 function requirePinnedOrder(raw: unknown): string[] {
@@ -56,6 +92,30 @@ function requirePinnedOrder(raw: unknown): string[] {
   return Array.from(raw);
 }
 
+function requireProjectKey(raw: unknown): string {
+  if (typeof raw !== 'string' || raw.length === 0 || raw.length > MAX_PROJECT_KEY_LENGTH) {
+    throwIpcError('INVALID_PARAMS', 'invalid sidebar project key');
+  }
+  const projectKey = normalizeProjectKey(raw);
+  if (
+    projectKey == null ||
+    projectKey.length > MAX_PROJECT_KEY_LENGTH ||
+    (!projectKey.startsWith('local:') &&
+      !projectKey.startsWith('remote:') &&
+      !projectKey.startsWith('device:'))
+  ) {
+    throwIpcError('INVALID_PARAMS', 'invalid sidebar project key');
+  }
+  return projectKey;
+}
+
+function requireHidden(raw: unknown): boolean {
+  if (typeof raw !== 'boolean') {
+    throwIpcError('INVALID_PARAMS', 'invalid sidebar project hidden state');
+  }
+  return raw;
+}
+
 function broadcastPinnedOrderChanged(order: readonly string[]): void {
   for (const window of BrowserWindow.getAllWindows()) {
     // order 中的项目 entry 含 workingDir，只发给 Cindy 登记过的内容窗口；
@@ -63,6 +123,34 @@ function broadcastPinnedOrderChanged(order: readonly string[]): void {
     if (!isAppContentWindow(window)) continue;
     window.webContents.send('sidebar-settings:pinned-order-changed', Array.from(order));
   }
+}
+
+function broadcastHiddenProjectKeysChanged(projectKeys: readonly string[]): void {
+  for (const window of BrowserWindow.getAllWindows()) {
+    // 项目 key 可能含本地路径；与 pinnedOrder 一样，只允许 Cindy 内容窗口接收。
+    if (!isAppContentWindow(window)) continue;
+    window.webContents.send(
+      'sidebar-settings:hidden-project-keys-changed',
+      Array.from(projectKeys),
+    );
+  }
+}
+
+function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
+  const projectKey = requireProjectKey(rawProjectKey);
+  const hidden = requireHidden(rawHidden);
+  // intent 更新每次都从 main 的最新快照计算，避免两个窗口用各自旧数组互相覆盖。
+  const current = loadHiddenProjectKeys();
+  const alreadyHidden = current.includes(projectKey);
+  if (alreadyHidden === hidden) return false;
+  if (hidden && current.length >= MAX_HIDDEN_PROJECT_ENTRIES) {
+    throwIpcError('INVALID_PARAMS', 'too many hidden sidebar projects');
+  }
+
+  const next = hidden ? [...current, projectKey] : current.filter((entry) => entry !== projectKey);
+  saveHiddenProjectKeys(next);
+  broadcastHiddenProjectKeysChanged(next);
+  return true;
 }
 
 export function registerSidebarSettingsIpc(): void {
@@ -79,4 +167,19 @@ export function registerSidebarSettingsIpc(): void {
     // 窗口即时跟进，避免下一次操作拿旧顺序覆盖刚写入的项目置顶。
     broadcastPinnedOrderChanged(order);
   });
+  // 与 pinnedOrder 一样同步首帧读取，避免启动后侧栏先闪出已移除项目。
+  ipcMain.on('sidebar-settings:load-hidden-project-keys-sync', (event) => {
+    assertTrustedAppRendererEvent(event);
+    event.returnValue = loadHiddenProjectKeys();
+  });
+  ipcMain.handle(
+    'sidebar-settings:set-project-hidden',
+    (event, rawProjectKey: unknown, rawHidden: unknown) => {
+      assertTrustedAppRendererEvent(event);
+      // Return whether this intent changed the latest main-process snapshot.
+      // Add Project uses an atomic unhide attempt to distinguish restoring an
+      // existing project from creating a new draft after a long-open picker.
+      return setProjectHidden(rawProjectKey, rawHidden);
+    },
+  );
 }

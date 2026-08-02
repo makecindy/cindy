@@ -167,6 +167,7 @@ const projects: ProjectNodeData[] = [
 ];
 
 const navigate = vi.fn() as unknown as NavigateFunction;
+const hiddenProjectKeys = new Set<string>();
 
 function renderSearchBox({
   requestId = null,
@@ -179,6 +180,13 @@ function renderSearchBox({
 } = {}) {
   return render(
     createElement(ConversationSearchBox, {
+      allowedSessionIds: Array.from(
+        new Set([
+          ...allKnownProjects.flatMap((project) => project.sessions.map((session) => session.id)),
+          ...sessionIds,
+        ]),
+      ),
+      hiddenProjectKeys,
       navigate,
       allKnownProjects,
       projectFilterRequest:
@@ -380,6 +388,10 @@ describe('ConversationSearchBox live search', () => {
       createElement(ConversationSearchBox, {
         navigate,
         allKnownProjects: projects,
+        allowedSessionIds: projects.flatMap((project) =>
+          project.sessions.map((session) => session.id),
+        ),
+        hiddenProjectKeys,
         projectFilterRequest: {
           projectKey: 'local:/repo-a',
           projectName: 'Repo A',

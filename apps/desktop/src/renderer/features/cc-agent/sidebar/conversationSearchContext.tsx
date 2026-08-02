@@ -13,14 +13,27 @@
  * CollapsedView 里独立的 ConversationSearchBox 图标弹窗,不走本 context。
  */
 
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useState,
+  type ReactNode,
+} from 'react';
 import { useNavigate } from 'react-router-dom';
 
 import { useCCSessions } from '@/hooks/useCCSessions';
 import { isOrcaWorkerSession } from '@/lib/orcaSessionIdentity';
 import { useConversationSearchRequest } from '@/state/conversationSearchRequest';
 import { useProjectAliases } from '../hooks/useProjectAliases';
+import { useHiddenProjects } from '../hooks/useHiddenProjects';
 import { useProjectGroups } from '../hooks/useProjectGroups';
+import {
+  sidebarSessionsWithHiddenProjectsAsDialogues,
+  visibleSidebarProjects,
+} from '../lib/sidebarProjectVisibility';
 import { useConversationSearch } from './ConversationSearchBox';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 
@@ -43,11 +56,20 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   // allKnownProjects:全量会话(含归档)、排除 Orca worker,与 CCAgentSidebarUpper 同口径。
   const { sessions } = useCCSessions({ includeArchived: 'all' });
   const { aliases } = useProjectAliases();
-  const searchSessions = useMemo(
-    () => sessions.filter((s) => !isOrcaWorkerSession(s)),
-    [sessions],
-  );
+  const { hiddenProjectKeys } = useHiddenProjects();
+  const searchSessions = useMemo(() => sessions.filter((s) => !isOrcaWorkerSession(s)), [sessions]);
   const { projects } = useProjectGroups(searchSessions, aliases);
+  const visibleProjects = useMemo(
+    () => visibleSidebarProjects(projects, hiddenProjectKeys),
+    [projects, hiddenProjectKeys],
+  );
+  const allowedSessionIds = useMemo(
+    () =>
+      sidebarSessionsWithHiddenProjectsAsDialogues(searchSessions, hiddenProjectKeys).map(
+        (session) => session.id,
+      ),
+    [searchSessions, hiddenProjectKeys],
+  );
 
   // 「在此项目内搜索」到达 → 自增信号,SidebarInlineSearch 据此展开搜索框并聚焦输入。
   // useCallback 稳定引用,避免 hook 内 lock effect 因回调每帧变化而反复触发。
@@ -55,10 +77,35 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   const search = useConversationSearch({
     enabled: true,
     navigate,
-    allKnownProjects: projects,
+    allKnownProjects: visibleProjects,
+    allowedSessionIds,
     projectFilterRequest,
     onProgrammaticOpen: handleProgrammaticOpen,
   });
+
+  // A project removed in this or another window must disappear from an
+  // already-open search too. Clear a locked hidden project, and prune hidden
+  // keys from a normal multi-project filter instead of retaining stale IDs.
+  useEffect(() => {
+    const visibleKeys = new Set(visibleProjects.map((project) => project.projectKey));
+    if (search.lockedProjectKey && hiddenProjectKeys.has(search.lockedProjectKey)) {
+      search.reset();
+      search.clearLock();
+      return;
+    }
+    if (search.projectSelection === 'all') return;
+    const next = search.projectSelection.filter((projectKey) => visibleKeys.has(projectKey));
+    if (next.length === search.projectSelection.length) return;
+    search.setProjectSelection(next.length > 0 ? next : 'all');
+  }, [
+    hiddenProjectKeys,
+    visibleProjects,
+    search.clearLock,
+    search.lockedProjectKey,
+    search.projectSelection,
+    search.reset,
+    search.setProjectSelection,
+  ]);
 
   // 展开态结果 overlay 的「点外部收起」:仅在有查询(overlay 可见)时挂 document 级 pointerdown 监听。
   //   - 命中搜索界面内部([data-conversation-search-surface] = 搜索输入行 + 结果 overlay)→ 不收起,
@@ -81,8 +128,8 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   }, [trimmed, reset]);
 
   const value = useMemo<ConversationSearchContextValue>(
-    () => ({ search, allKnownProjects: projects, openSignal }),
-    [search, projects, openSignal],
+    () => ({ search, allKnownProjects: visibleProjects, openSignal }),
+    [search, visibleProjects, openSignal],
   );
 
   return (

@@ -6384,12 +6384,23 @@
         "filesWarning": "切换只改变对话上下文，不会回滚工作区文件。",
         "summarize": "离开当前分支时生成摘要（会调用模型）",
         "summaryFocus": "可选：摘要重点，例如保留错误处理结论",
-        "role": { "user": "用户", "assistant": "Agent", "tool": "工具", "summary": "分支摘要", "system": "状态" }
+        "role": {
+          "user": "用户",
+          "assistant": "Agent",
+          "tool": "工具",
+          "summary": "分支摘要",
+          "system": "状态"
+        }
       },
       "projectAction": {
         "rename": "重命名项目",
         "pin": "置顶项目",
         "unpin": "取消置顶项目",
+        "removeFromSidebar": "从侧栏移除项目",
+        "removeFromSidebarConfirmTitle": "移除“{{name}}”？",
+        "removeFromSidebarConfirmDescription": "这会从侧栏移除该项目。电脑上的文件不会被删除，现有任务会按“对话”归属继续保留并可用。",
+        "removeFromSidebarConfirmAction": "移除项目",
+        "removeFromSidebarFailed": "无法从侧栏移除项目，请重试",
         "showFiles": "查看文件",
         "archivedAll": "全部归档",
         "unarchiveAll": "全部取消归档",

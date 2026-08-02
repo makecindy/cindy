@@ -6384,12 +6384,23 @@
         "filesWarning": "전환은 대화 컨텍스트만 변경하며 작업 파일은 되돌리지 않습니다.",
         "summarize": "떠나는 분기 요약 생성(모델 사용)",
         "summaryFocus": "선택 사항: 요약 초점(예: 오류 처리 결론 유지)",
-        "role": { "user": "사용자", "assistant": "Agent", "tool": "도구", "summary": "분기 요약", "system": "상태" }
+        "role": {
+          "user": "사용자",
+          "assistant": "Agent",
+          "tool": "도구",
+          "summary": "분기 요약",
+          "system": "상태"
+        }
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",
         "pin": "프로젝트 고정",
         "unpin": "프로젝트 고정 해제",
+        "removeFromSidebar": "사이드바에서 프로젝트 제거",
+        "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
+        "removeFromSidebarConfirmDescription": "대화에 표시되며 계속 사용할 수 있습니다.‘대화’에 표시되며 계속 사용할 수 있습니다.",
+        "removeFromSidebarConfirmAction": "프로젝트 제거",
+        "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",
         "syncCodexDone": "Codex 동기화 완료: 링크 {{inserted}}개, 업데이트 {{updated}}개",
         "syncCodexAlreadyLinked": "이 프로젝트의 Codex 세션은 이미 링크되어 있습니다",

@@ -6395,12 +6395,23 @@
         "filesWarning": "Switching changes conversation context only; workspace files are not rolled back.",
         "summarize": "Summarize the branch you leave (uses the model)",
         "summaryFocus": "Optional summary focus, e.g. preserve error-handling conclusions",
-        "role": { "user": "User", "assistant": "Agent", "tool": "Tool", "summary": "Branch summary", "system": "State" }
+        "role": {
+          "user": "User",
+          "assistant": "Agent",
+          "tool": "Tool",
+          "summary": "Branch summary",
+          "system": "State"
+        }
       },
       "projectAction": {
         "rename": "Rename project",
         "pin": "Pin project",
         "unpin": "Unpin project",
+        "removeFromSidebar": "Remove Project from Sidebar",
+        "removeFromSidebarConfirmTitle": "Remove {{name}}?",
+        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions remain available as Chat sessions.",
+        "removeFromSidebarConfirmAction": "Remove Project",
+        "removeFromSidebarFailed": "Couldn’t remove the project from the sidebar — try again.",
         "showFiles": "Show Files",
         "archivedAll": "Archive all",
         "unarchiveAll": "Restore all",

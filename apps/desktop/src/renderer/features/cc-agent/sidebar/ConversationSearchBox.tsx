@@ -127,6 +127,8 @@ export interface UseConversationSearchParams {
   enabled: boolean;
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
+  /** Hard visibility boundary. Undefined preserves the legacy unbounded search. */
+  allowedSessionIds?: readonly string[];
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -149,6 +151,7 @@ export function useConversationSearch({
   enabled,
   navigate,
   allKnownProjects,
+  allowedSessionIds,
   projectFilterRequest,
   onProgrammaticOpen,
   onResultChosen,
@@ -180,10 +183,16 @@ export function useConversationSearch({
   const requestId = projectFilterRequest?.requestId ?? 0;
 
   const trimmed = query.trim();
+  const allowedSessionIdSet = useMemo(
+    () => (allowedSessionIds == null ? null : new Set(allowedSessionIds)),
+    [allowedSessionIds],
+  );
   const selectedProjectSessionIds = useMemo(() => {
-    if (projectSelection === 'all') return null;
+    if (projectSelection === 'all') {
+      return allowedSessionIdSet == null ? null : Array.from(allowedSessionIdSet);
+    }
     const selected = new Set(projectSelection);
-    const indexedSessionIds = allKnownProjects
+    let indexedSessionIds = allKnownProjects
       .filter((project) => selected.has(project.projectKey))
       .flatMap((project) => project.sessions.map((session) => session.id));
     if (
@@ -193,10 +202,17 @@ export function useConversationSearch({
       selected.has(lockedProjectKey) &&
       lockedProjectSessionIds.length > 0
     ) {
-      return lockedProjectSessionIds;
+      indexedSessionIds = lockedProjectSessionIds;
     }
-    return indexedSessionIds;
-  }, [allKnownProjects, lockedProjectKey, lockedProjectSessionIds, projectSelection]);
+    if (allowedSessionIdSet == null) return indexedSessionIds;
+    return indexedSessionIds.filter((sessionId) => allowedSessionIdSet.has(sessionId));
+  }, [
+    allKnownProjects,
+    allowedSessionIdSet,
+    lockedProjectKey,
+    lockedProjectSessionIds,
+    projectSelection,
+  ]);
   const activeFilterCount = useMemo(() => {
     let count = 0;
     if (statusFilter !== 'all') count += 1;
@@ -443,6 +459,8 @@ export function SearchResultsBody({
 export interface ConversationSearchBoxProps {
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
+  allowedSessionIds: readonly string[];
+  hiddenProjectKeys: ReadonlySet<string>;
   projectFilterRequest?: {
     projectKey: string;
     projectName: string;
@@ -463,6 +481,8 @@ export interface ConversationSearchBoxProps {
 export function ConversationSearchBox({
   navigate,
   allKnownProjects,
+  allowedSessionIds,
+  hiddenProjectKeys,
   projectFilterRequest,
   triggerClassName,
   onOpenChange,
@@ -490,12 +510,19 @@ export function ConversationSearchBox({
   const search = useConversationSearch({
     enabled: open,
     navigate,
+    allowedSessionIds,
     allKnownProjects,
     projectFilterRequest,
     onProgrammaticOpen: handleProgrammaticOpen,
     onResultChosen: handleResultChosen,
   });
   searchResetRef.current = search.reset;
+  useEffect(() => {
+    const lockedProjectKey = search.lockedProjectKey;
+    if (!lockedProjectKey || !hiddenProjectKeys.has(lockedProjectKey)) return;
+    search.reset();
+    search.clearLock();
+  }, [hiddenProjectKeys, search.clearLock, search.lockedProjectKey, search.reset]);
 
   useEffect(() => {
     if (!open) return;
