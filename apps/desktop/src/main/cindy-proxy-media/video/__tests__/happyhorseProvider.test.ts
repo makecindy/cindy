@@ -33,6 +33,12 @@ describe('happyhorse provider · capabilities', () => {
       reference_image: 9,
     });
   });
+  it('没有音频开关:audio_setting 只属于未接入的 video-edit 变体', () => {
+    // t2v / i2v / r2v 的参数表里压根没有 audio_setting,所以这里必须是 false ——
+    // 声明成 true 会让显式传 audio 的单子静默出一条没人要的片子还照样计费。
+    // 接 video-edit 时连同这里一起放开。
+    expect(p.capabilities.supportsAudio).toBe(false);
+  });
   it('declares supported durations / resolutions / ratios', () => {
     expect(p.capabilities.supportedDurations).toContain(5);
     expect(p.capabilities.supportedResolutions).toContain('720p');

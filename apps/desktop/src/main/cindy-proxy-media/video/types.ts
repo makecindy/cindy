@@ -54,6 +54,13 @@ export interface VideoGenerationRequest {
   /** Frames per second. Provider declares supported set. */
   fps?: number;
   /**
+   * 要不要同时生成音频(对白 / 音效 / 背景音乐)。**三态,缺省有语义**:
+   * 缺省 = provider 不得往请求体里写任何音频字段,出声与否随上游默认——
+   * 这条是存量兼容的落点(在本字段出现之前,链上从来不提音频)。
+   * provider 声明 `supportsAudio: false` 时执行器已在提交前明拒,不会走到这里。
+   */
+  audio?: boolean;
+  /**
    * Reference images, base64 data URIs (`data:image/png;base64,...`). 张数
    * 上限随 `refMode` 变化,provider 在 `capabilities.maxImagesByRefMode` 里
    * 逐模式声明,handler 据此预拒。
@@ -81,6 +88,12 @@ export interface VideoResultMeta {
   resolution?: string;
   ratio?: string;
   fps?: number;
+  /**
+   * 上游上报的音轨状态。当前两家上游的轮询响应都不报这个(只报
+   * status / video_url),所以实际上没人填——留着是为了上游哪天报了就能
+   * 优先采信,而不必再动一遍执行器。
+   */
+  audio?: boolean;
   /** Free-form vendor usage data (token counts, etc.). */
   usage?: Record<string, unknown>;
 }
@@ -125,6 +138,19 @@ export interface VideoProviderCapabilities {
    * `-r2v`(换了个上游模型,上限 9)——两者是不同模型,不是同模型换参数。
    */
   maxImagesByRefMode: Readonly<Partial<Record<VideoRefMode, number>>>;
+  /**
+   * 这家上游有没有"要不要出声"的开关。false = 没有,执行器对**显式**传
+   * `audio` 的单子明拒(不静默忽略:插件以为静音了、上游照样出声,或反过来,
+   * 都是出了没人要的片子还照样计费)。
+   */
+  supportsAudio: boolean;
+  /**
+   * 不传 `audio` 时上游自己的音轨默认(仅 `supportsAudio` 为 true 时有意义)。
+   * **只用于回执**,不参与请求组装——请求侧缺省必须保持"一个字段都不写"。
+   * 例:Seedance 2.0 的 `generate_audio` 默认 true(原生音画同生),所以
+   * 不传音频开关的单子本来就是有声的,回执要如实这么报。
+   */
+  audioDefault?: boolean;
   /**
    * Approximate generation time in seconds, keyed by alias. Used by the
    * placeholder card to render "≈Xmin" hints and by the handler to compute

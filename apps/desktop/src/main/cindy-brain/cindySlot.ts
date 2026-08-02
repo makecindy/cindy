@@ -11,9 +11,9 @@
  *     → 模型白名单校验(意识只能从主机菜单里挑,挑不了菜单外的任何路由;
  *       图像/视频各一份白名单与默认,同来自 providers.json 目录;该类目清单
  *       为空 = 能力暂不可用,直接拒单)
- *     → 画面参数校验(图像 aspectRatio / 视频 ratio·resolution·duration·fps):
- *       协议层值域粗筛 + 按解析出的型号二次校验;一项都不传 = 与老协议逐字节
- *       同形,后端走该型号出厂默认
+ *     → 画面参数校验(图像 aspectRatio / 视频 ratio·resolution·duration·fps,
+ *       外加视频的音频开关 audio):协议层值域粗筛 + 按解析出的型号二次校验;
+ *       一项都不传 = 与老协议逐字节同形,后端走该型号出厂默认
  *     → 吃源图的代办(改图/图生视频):指纹逐张查账验归属(只能用自己名下的媒体)
  *     → 主机走统一媒体通道干活(字节从头到尾在主机手里;视频为分钟级长任务)
  *     → 落 blob(SHA-256 主机算)+ 账本记账(出生=该意识)
@@ -90,6 +90,11 @@ export interface CindyVideoParams {
   resolution?: GhostVideoResolution;
   duration?: number;
   fps?: number;
+  /**
+   * 要不要同时生成音频(三态,见协议侧注释):缺省 = 这个键根本不出现,
+   * 执行链据此一路不向上游传音频字段,出声与否随型号的上游默认。
+   */
+  audio?: boolean;
 }
 
 /** 某个视频型号的实际支持集(provider capabilities 的投影,用于按型号二次校验)。 */
@@ -103,6 +108,12 @@ export interface CindyVideoCapabilities {
    * 整个字段缺席(老注入实现)= 跳过按型号校验,只剩协议层粗筛。
    */
   maxImagesByRefMode?: Readonly<Partial<Record<GhostVideoRefMode, number>>>;
+  /**
+   * 该型号有没有"要不要出声"这个开关。false = 没有,显式传 audio 的单子在
+   * 读源图与出网之前明拒。字段缺席(老注入实现)= 跳过按型号校验,值仍会
+   * 被执行器兜底拦下,只是话术不如这里友好。
+   */
+  supportsAudio?: boolean;
 }
 
 /** 某个图像型号的 provider 实际编辑能力，用于通用 1–4 图契约的二次校验。 */
@@ -388,6 +399,11 @@ function describeUnsupportedVideoParams(
   if (params.fps !== undefined && !caps.fps.includes(params.fps)) {
     return `帧率 ${params.fps}fps(可用:${caps.fps.join(' / ')})`;
   }
+  // 音频只在**显式传**时才可能被拒:不传的单子一律放行(它压根不向上游提音频,
+  // 出声与否随型号默认)。supportsAudio 缺席 = 老注入实现,不在这里判。
+  if (params.audio !== undefined && caps.supportsAudio === false) {
+    return '指定是否出声(该型号没有音频开关,不传这项即按它自己的默认出片)';
+  }
   return null;
 }
 
@@ -436,6 +452,7 @@ export class GhostCindySlot {
       resolution?: unknown;
       duration?: unknown;
       fps?: unknown;
+      audio?: unknown;
       hashes?: unknown;
       refMode?: unknown;
       callId?: unknown;
@@ -542,7 +559,7 @@ export class GhostCindySlot {
     // 视频画面参数(可选,仅视频类代办):协议层只做值域/形状粗筛,按型号
     // 的可用集在选型解析之后二次校验(各型号支持的时长差异很大)。图像类
     // 带了这几项 = 用错协议,明拒。
-    const videoParamKeys = ['ratio', 'resolution', 'duration', 'fps'] as const;
+    const videoParamKeys = ['ratio', 'resolution', 'duration', 'fps', 'audio'] as const;
     const presentVideoKeys = videoParamKeys.filter((k) => p[k] !== undefined);
     if (presentVideoKeys.length > 0 && info.category !== 'video') {
       return {
@@ -565,11 +582,17 @@ export class GhostCindySlot {
     if (p.fps !== undefined && !isPositiveIntWithin(p.fps, GHOST_VIDEO_MAX_FPS)) {
       return { ok: false, message: `fps 不合法(1–${GHOST_VIDEO_MAX_FPS} 的整数)` };
     }
+    // 音频开关是真三态:只收 boolean。'true' / 1 / null 这类近似值一律拒,
+    // 不做真值转换——猜错方向就是出一条用户没要的片子还照样计费。
+    if (p.audio !== undefined && typeof p.audio !== 'boolean') {
+      return { ok: false, message: 'audio 不合法(true = 要音轨 / false = 静音 / 不传 = 随型号默认)' };
+    }
     const videoParams: CindyVideoParams = {
       ...(p.ratio !== undefined ? { ratio: p.ratio as GhostVideoRatio } : {}),
       ...(p.resolution !== undefined ? { resolution: p.resolution as GhostVideoResolution } : {}),
       ...(p.duration !== undefined ? { duration: p.duration as number } : {}),
       ...(p.fps !== undefined ? { fps: p.fps as number } : {}),
+      ...(p.audio !== undefined ? { audio: p.audio } : {}),
     };
 
     // 参考图用法(可选,仅 edit_video):协议层做值域粗筛,该型号支不支持这种

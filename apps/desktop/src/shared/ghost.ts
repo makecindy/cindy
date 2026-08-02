@@ -5127,6 +5127,24 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /**
+       * 要不要同时生成音频(对白 / 音效 / 背景音乐;2026-08 加法)。
+       *
+       * **三态,不传与传 false 不是一回事**:
+       *   - 不传(**缺省**):主机不向上游传递任何音频字段,出声与否随该型号
+       *     的上游默认——与本字段出现之前逐字节同形。存量插件不改一行代码,
+       *     产出不变。
+       *   - `true`:显式要求带音轨。台词/音效/配乐的具体内容写在 prompt 里
+       *     (主机遵守提示词 passthrough,不代写)。
+       *   - `false`:显式要求静音。
+       *
+       * 不是所有型号都有音轨能力:主机按解析出的选型二次校验,不支持的型号
+       * 上**显式传**本字段即明拒(不静默忽略——静默出一条无声/有声都不是
+       * 用户要的片子,还照样计费)。不传则永远不会因此被拒。
+       *
+       * 实际生效值随结果回传(见 GhostVideoResultParams 的 audio)。
+       */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /**
@@ -5162,6 +5180,8 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /** 音频开关(同 gen_video 分支的三态语义;参考图不改变它的含义)。 */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
@@ -5256,6 +5276,13 @@ export interface GhostVideoResultParams {
   resolution?: string;
   ratio?: string;
   fps?: number;
+  /**
+   * 本单是否带音轨。缺省 = 主机说不上来(该型号没有音轨能力,或老宿主根本
+   * 不认识这个字段),**不等于"无声"**——想确认有没有兑现就看这个字段在不在,
+   * 别把缺省读成 false。当前上游任务不回报音频状态,所以这里的值来自主机
+   * 提交值 / 该型号的已知默认,不是上游上报的实测结果。
+   */
+  audio?: boolean;
 }
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */

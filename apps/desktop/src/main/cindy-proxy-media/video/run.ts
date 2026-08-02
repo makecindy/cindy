@@ -91,6 +91,13 @@ export interface SubmitAndAwaitVideoParams {
   resolution?: string;
   ratio?: string;
   fps?: number;
+  /**
+   * 音频开关(可选,2026-08 加法)。与上面四项**规则不同**:那四项不传时
+   * 执行器会回落该型号的出厂默认并显式提交,音频不传时**一个字段都不写**,
+   * 出声与否随上游默认——本字段出现之前链上从来不提音频,这是存量产出不变的
+   * 唯一保证。目标型号没有音频开关时抛错,不静默丢弃。
+   */
+  audio?: boolean;
   signal?: AbortSignal;
 }
 
@@ -100,6 +107,12 @@ export interface SubmitAndAwaitVideoEffectiveParams {
   resolution: string;
   ratio: string;
   fps: number;
+  /**
+   * 本单是否带音轨。缺省 = 说不上来(该型号没有音频开关,或它支持但没登记
+   * 上游默认),**不是"无声"**。没有上游上报可采信时,取提交值 → 型号登记的
+   * 上游默认这个顺序。
+   */
+  audio?: boolean;
 }
 
 /** 逐项核对画面参数是否在该模型的支持集内;不支持即抛(话术含可用值)。 */
@@ -155,6 +168,13 @@ export async function submitAndAwaitVideo(
   assertParamSupported(params.alias, 'resolution', params.resolution, caps.supportedResolutions);
   assertParamSupported(params.alias, 'ratio', params.ratio, caps.supportedRatios);
   assertParamSupported(params.alias, 'fps', params.fps, caps.supportedFps);
+  // 音频开关走不掉 assertParamSupported(它比对值域,这里比对"有没有这个旋钮")。
+  // 只在显式传时判:不传的单子压根不提音频,任何型号都放行。
+  if (params.audio !== undefined && !caps.supportsAudio) {
+    throw new Error(
+      `art: model '${params.alias}' has no audio toggle (omit 'audio' to use the model's own default)`,
+    );
+  }
 
   const submitted: SubmitAndAwaitVideoEffectiveParams = {
     duration: params.duration ?? caps.defaults.duration,
@@ -162,9 +182,18 @@ export async function submitAndAwaitVideo(
     ratio: params.ratio ?? caps.defaults.ratio,
     fps: params.fps ?? caps.defaults.fps,
   };
+  /**
+   * 回执用的推定音轨状态:插件表过态就用它的,没表态就用该型号登记的上游
+   * 默认(没登记就说不上来)。**刻意不放进 `submitted`**——那个对象会整体摊进
+   * 请求体,推定值一旦漏进去就等于替插件表了态,存量产出的兼容也就破了。
+   */
+  const effectiveAudio =
+    params.audio ?? (caps.supportsAudio ? caps.audioDefault : undefined);
   const req: VideoGenerationRequest = {
     prompt: params.prompt,
     ...submitted,
+    // 三态:只有插件显式表态才写这个键,否则请求体里连键都没有。
+    ...(params.audio !== undefined ? { audio: params.audio } : {}),
     images: images.length > 0 ? images : undefined,
     refMode,
   };
@@ -175,6 +204,9 @@ export async function submitAndAwaitVideo(
     ...(params.signal ? { signal: params.signal } : {}),
   });
   const dl = await resolved.provider.download(status.videoUrl, params.signal);
+  // 音轨回执:上游报了就采信它(它才是真实产出),否则用上面那个推定值;
+  // 两头都没有就缺省 —— 缺省是"说不上来",不是"无声"。
+  const audioEcho = status.meta.audio ?? effectiveAudio;
   return {
     buffer: dl.buffer,
     mimeType: dl.mimeType,
@@ -184,6 +216,7 @@ export async function submitAndAwaitVideo(
       resolution: status.meta.resolution ?? submitted.resolution,
       ratio: status.meta.ratio ?? submitted.ratio,
       fps: status.meta.fps ?? submitted.fps,
+      ...(audioEcho !== undefined ? { audio: audioEcho } : {}),
     },
   };
 }
