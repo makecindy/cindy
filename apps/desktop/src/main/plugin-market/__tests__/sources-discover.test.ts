@@ -302,6 +302,8 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.displayName).toBeNull();
   });
 
+  // 无宿主 symlink 权限时跳过集成夹具；Windows lstat 回退由 readBoundedFile.test.ts
+  // 的注入用例继续覆盖，不会随这里的 capability skip 一起消失。
   it.skipIf(!canSymlink)('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
     const root = makeRoot();
     const outside = makeRoot();

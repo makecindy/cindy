@@ -62,6 +62,25 @@ describe('readBoundedFileNoFollow', () => {
     expect((await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null }))?.toString('utf8')).toBe('{"ok":1}');
   });
 
+  it('无 O_NOFOLLOW 的平台:lstat 报告符号链接时拒绝,不依赖宿主 symlink 权限', async () => {
+    const file = path.join(workDir, 'link-shaped.json');
+    await fs.promises.writeFile(file, '{"ok":1}');
+    const realStat = await fs.promises.lstat(file, { bigint: true });
+    const linkStat = new Proxy(realStat, {
+      get(target, key) {
+        if (key === 'isSymbolicLink') return () => true;
+        const value = Reflect.get(target, key);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const lstatSpy = vi.spyOn(fs.promises, 'lstat').mockResolvedValue(linkStat as never);
+    try {
+      expect(await readBoundedFileNoFollow(file, 1024, { noFollowFlag: null })).toBeNull();
+    } finally {
+      lstatSpy.mockRestore();
+    }
+  });
+
   it.runIf(process.platform !== 'win32')(
     'containWithin:中间目录被换成根外链接时拒绝(最终分量是普通文件,O_NOFOLLOW 拦不住)',
     async () => {
