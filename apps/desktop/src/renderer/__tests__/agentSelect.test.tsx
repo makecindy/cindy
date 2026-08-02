@@ -178,9 +178,10 @@ describe('AgentSelect', () => {
     expect(screen.queryByTestId('agent-select-panel')).toBeNull();
   });
 
-  it('触发器宽度 hug 内容:不设定宽,短引擎名后面不留空白', () => {
-    // 曾经写死 width=112,「Pi」这种短名后面拖一大截空白、chevron 被顶到最右
-    // (用户实测反馈 2026-08-02)。
+  it('触发器不设内联定宽,名称也不 flex-1(两者都会让短名后面留空白)', () => {
+    // jsdom 没有布局,测不了像素;这里锁的是「造成空白的两个成因」不再出现:
+    // 曾经写死 width=112 + 名称 flex-1,「Pi」这种短名后面拖一大截空白、
+    // chevron 被顶到最右(用户实测反馈 2026-08-02)。实际观感以人工目检为准。
     render(<AgentSelect value="pi" onChange={() => {}} />);
     const trigger = screen.getByRole('button', { name: '选择引擎：Pi' });
     expect(trigger.style.width).toBe('');
