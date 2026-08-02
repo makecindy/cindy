@@ -56,9 +56,9 @@ export {
 
 export {
   findModelRegistryRoute,
-  modelRegistryCanonicalJson,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
+export { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,

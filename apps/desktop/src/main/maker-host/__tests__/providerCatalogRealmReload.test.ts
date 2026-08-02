@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
+  owner: 'owner-default',
   loads: [] as Array<{
     source: Record<string, unknown>;
     resolve: (catalog: unknown) => void;
@@ -55,8 +56,9 @@ vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
 }));
 vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
-  ownerScopedUserDataPath: (...segments: string[]) => path.join(os.tmpdir(), ...segments),
+  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
+  ownerScopedUserDataPath: (...segments: string[]) =>
+    path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
@@ -122,6 +124,7 @@ import {
   refreshActiveCatalogFromSource,
   reloadActiveCatalogForEndpointChange,
   shouldDisableCatalogFetch,
+  syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
 
 function catalogNamed(name: string, updatedAt?: string): Catalog {
@@ -208,6 +211,19 @@ describe('provider catalog realm reload', () => {
     }
   });
 
+  it('keeps the LKG when the same registry revision is republished with different content', () => {
+    const updatedAt = '2026-08-01T00:00:00.000Z';
+    const currentCatalog = catalogNamed('CURRENT', updatedAt);
+    const incomingCatalog = structuredClone(currentCatalog);
+    const registryEntry = incomingCatalog.modelRegistry?.models[0];
+    if (!registryEntry) throw new Error('expected bundled model registry entry');
+    registryEntry.name = `${registryEntry.name} (republished)`;
+    const current = JSON.stringify(currentCatalog);
+    const incoming = JSON.stringify(incomingCatalog);
+
+    expect(__testing.selectCatalogLkgSnapshot(incoming, current)).toBe(current);
+  });
+
   it('replaces an existing LKG through a Windows-safe backup path', async () => {
     const files = new Set(['/catalog.json', '/catalog.tmp']);
     const calls: Array<[string, string]> = [];
@@ -245,7 +261,9 @@ describe('provider catalog realm reload', () => {
       async rename(from: string, to: string) {
         if (from === '/catalog.tmp') {
           temporaryAttempts += 1;
-          throw Object.assign(new Error('locked'), { code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY' });
+          throw Object.assign(new Error('locked'), {
+            code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY',
+          });
         }
         if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
         files.delete(from);
@@ -339,21 +357,22 @@ describe('provider catalog realm reload', () => {
   });
 
   it('does not downgrade the active catalog when refresh falls back to an older cache', async () => {
-    const activeXaiModels = getActiveCatalog().providers
-      .find((provider) => provider.id === 'xai')
+    const activeXaiModels = getActiveCatalog().providers.find((provider) => provider.id === 'xai')
       ?.models.codex;
     const staleCatalog = structuredClone(
       catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
     );
     const staleXai = staleCatalog.providers.find((provider) => provider.id === 'xai');
     if (!staleXai) throw new Error('expected bundled xai provider');
-    staleXai.models.codex = [{
-      id: 'xai/stale-cache-only',
-      name: 'Stale cache only',
-      contextWindow: 1,
-      efforts: [],
-      defaultEffort: null,
-    }];
+    staleXai.models.codex = [
+      {
+        id: 'xai/stale-cache-only',
+        name: 'Stale cache only',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
     const refresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
     const load = h.refreshLoads.at(-1)!;
@@ -404,6 +423,52 @@ describe('provider catalog realm reload', () => {
       );
     } finally {
       setActiveCatalogChangedListener(null);
+    }
+  });
+
+  it('owner 切换即使 endpoint 未变也会清掉上一账号的本地模型 override', async () => {
+    const root = path.join(os.tmpdir(), 'provider-catalog-realm-reload');
+    h.owner = 'owner-a';
+    const ownerAFile = path.join(root, h.owner, 'model-catalog-overrides.json');
+    await fsp.mkdir(path.dirname(ownerAFile), { recursive: true });
+    await fsp.writeFile(
+      ownerAFile,
+      JSON.stringify({
+        version: 1,
+        additions: {
+          'openai:owner-a-only': {
+            agents: ['codex'],
+            base: {
+              name: 'Owner A only',
+              contextWindow: 32_000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    try {
+      syncLocalCatalogOverridesIntoActiveCatalog();
+      expect(
+        getActiveCatalog()
+          .providers.find((provider) => provider.id === 'openai')
+          ?.models.codex?.some((model) => model.id === 'owner-a-only'),
+      ).toBe(true);
+
+      h.owner = 'owner-b';
+      await reloadActiveCatalogForEndpointChange();
+      expect(
+        getActiveCatalog()
+          .providers.find((provider) => provider.id === 'openai')
+          ?.models.codex?.some((model) => model.id === 'owner-a-only'),
+      ).toBe(false);
+    } finally {
+      h.owner = 'owner-default';
+      await fsp.rm(root, { recursive: true, force: true });
+      syncLocalCatalogOverridesIntoActiveCatalog();
     }
   });
 });

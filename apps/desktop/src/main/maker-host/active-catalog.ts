@@ -34,17 +34,20 @@ import {
 
 import { CHATGPT_MODEL_PREFIX } from '../../shared/subscriptionModels.js';
 import {
+  applyLocalConsumerOverrides,
   applyLocalOverridesToRoot,
   hasLocalAddition,
   EMPTY_MODEL_CATALOG_OVERRIDES,
+  resolveLocalBridgeExclusions,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
 import {
+  applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
   planRegistryRoots,
   rootPlanKey,
+  type ModelPlaneWarning,
   type ModelPlaneRegistryPlan,
-  type RegistryPlanWarning,
   type RootAgentKind,
 } from './model-plane/modelPlanePolicy.js';
 
@@ -153,7 +156,7 @@ let anthropicModels: CatalogModel[] = [];
 let localOverrides: ModelCatalogOverrides = EMPTY_MODEL_CATALOG_OVERRIDES;
 
 /** 最近一次合并的 registry 实体化告警(单 route 隔离不拖垮其余;刷新路径读走打日志)。 */
-let lastPlanWarnings: RegistryPlanWarning[] = [];
+let lastPlanWarnings: ModelPlaneWarning[] = [];
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
@@ -168,9 +171,8 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
 type Effort = CatalogModel['efforts'][number];
 
 function xdGatewayTargetAgents(model: XdGatewayModelInfo): AgentKind[] {
-  const agents: AgentKind[] = model.agents && model.agents.length > 0
-    ? [...model.agents]
-    : ['claude-code'];
+  const agents: AgentKind[] =
+    model.agents && model.agents.length > 0 ? [...model.agents] : ['claude-code'];
   // Pi 走网关 anthropic-messages 协议，可达面与 claude-code 相同；服务端目录
   // 尚无 pi 概念时按 claude-code 归属镜像，显式声明 pi 后自然不重复。
   if (agents.includes('claude-code') && !agents.includes('pi')) agents.push('pi');
@@ -326,6 +328,7 @@ function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
 function projectCodexModelsToBridges(
   p: Provider,
   claudeExcluded: ReadonlySet<string> = new Set(),
+  prepareClaudeModel: (model: CatalogModel) => CatalogModel = (model) => model,
 ): Provider {
   const codex = p.models.codex ?? [];
   const canonical = new Map(codex.map((model) => [model.id, model]));
@@ -346,20 +349,19 @@ function projectCodexModelsToBridges(
   const withClaude = augmentModels(
     withAligned,
     'claude-code',
-    claudeSource.map(toChatgptBridgeModel),
+    claudeSource.map((model) => toChatgptBridgeModel(prepareClaudeModel(model))),
     true,
   );
   return augmentModels(withClaude, 'pi', codex.map(toChatgptBridgeModel), true);
 }
 
-/** 清单来源唯一化的动态供应商:目录(bundled/远端)里的静态模型一律忽略,清单只来自运行时注入。 */
+/** 静态段被淘汰的供应商：先清空 providers.models，再由 discovery + Registry/local root 装配。 */
 const DYNAMIC_LIST_PROVIDER_IDS: ReadonlySet<string> = new Set(['anthropic', 'openai', 'xd']);
 
 /**
- * modelRegistry 里客户端认识的字段子集。展示字段直接覆盖发现条目；context / effort
- * 字段只在 Anthropic 动态通道**没有能力信息**时作为基线，由
- * model-discovery/anthropic 消费。上游显式能力始终优先，meta 不在 active catalog
- * overlay 阶段改写能力。
+ * Anthropic discovery 映射阶段读取的 Registry 字段子集：上游缺字段时先用它补齐，
+ * 随后的 root 装配仍按统一优先级 local > Registry 显式 > discovery 显式。
+ * 这只是 discovery 适配器的同步查询索引，不是另一套合并权威。
  */
 interface RegistryMetaFields {
   name?: string;
@@ -453,7 +455,7 @@ export function getCindyModelContextWindow(modelId: string): number | null {
 
 /**
  * 返回当前目录的模型 effort 基线。只供动态发现缺少 capability 字段时兜底；
- * 模型是否存在仍完全由 HTTP / SDK 动态清单决定。
+ * 模型存在性由 discovery 证据或通过 policy 门禁的 Registry presence 决定。
  */
 export function getCindyModelEffortBaseline(modelId: string): CindyModelEffortBaseline | null {
   const fields = buildEffectiveRegistryMetaIndex().get(modelId);
@@ -485,17 +487,19 @@ function sortModelsByOrder(models: CatalogModel[]): CatalogModel[] {
  * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 本地 override
  * (addition 整条胜 + patch 逐字段)→ retired 复标——patch 改 status 也压不掉
  * 远端 tombstone,唯一复活通道是完整 local addition(hasLocalAddition 豁免)。
- * 追加了新实体时按 sortOrder 稳定重排,否则保持输入序(顺序契约不漂移)。
+ * 追加了新实体时默认按 sortOrder 稳定重排；xAI legacy 根保留 Registry 声明顺序，
+ * 与服务端投影给旧客户端的数组保持逐项兼容。
  */
 function assembleRoot(
   providerId: string,
   agent: RootAgentKind,
   models: readonly CatalogModel[],
   plan: ModelPlaneRegistryPlan,
+  preserveDeclarationOrder = false,
 ): CatalogModel[] {
   const rootPlan = plan.roots.get(rootPlanKey(providerId, agent));
   let out = applyRootRegistryPlan(models, rootPlan);
-  out = applyLocalOverridesToRoot(providerId, agent, out, localOverrides);
+  out = applyLocalOverridesToRoot(providerId, agent, out, localOverrides, plan.warnings);
   if (rootPlan && rootPlan.retired.size > 0) {
     out = out.map((m) =>
       rootPlan.retired.has(m.id) &&
@@ -505,7 +509,7 @@ function assembleRoot(
         : m,
     );
   }
-  return out.length !== models.length ? sortModelsByOrder(out) : out;
+  return !preserveDeclarationOrder && out.length !== models.length ? sortModelsByOrder(out) : out;
 }
 
 /** 把 provider 的全部 per-agent 模型清单清零(保留身份卡);已为空则原样返回。 */
@@ -538,9 +542,9 @@ function computeMerged(): Catalog {
     };
   });
 
-  // 动态清单供应商先清零静态模型(2026-07-19 统一重构):无论目录来自 bundled 还是
-  // 远端(含仍带静态段的旧版 v1 OSS 文件),这三家的清单**只信运行时注入**——
-  // 否则过渡期旧 OSS 文件会让静态清单复活,违反「无可用性证明不展示」。
+  // 先清零已退役的静态 providers.models 段：无论目录来自 bundled 还是远端，
+  // OpenAI/Anthropic 的 root 都只由 discovery 证据 + Registry presence + local
+  // addition 重新装配；XD 随后仍由 Gateway /models 独占重建。
   const normalized = providers.map((p) =>
     DYNAMIC_LIST_PROVIDER_IDS.has(p.id) ? withEmptyModels(p) : p,
   );
@@ -581,24 +585,62 @@ function computeMerged(): Catalog {
     if (p.id === 'openai') {
       const root = assembleRoot('openai', 'codex', p.models.codex ?? [], plan);
       const withRoot: Provider = { ...p, models: { ...p.models, codex: root } };
-      const excluded = plan.roots.get(rootPlanKey('openai', 'codex'))?.bridgeExcluded;
-      return projectCodexModelsToBridges(withRoot, excluded ?? new Set());
+      const remoteExcluded =
+        plan.roots.get(rootPlanKey('openai', 'codex'))?.bridgeExcluded ?? new Set<string>();
+      const excluded = resolveLocalBridgeExclusions(
+        'openai',
+        'claude-code',
+        remoteExcluded,
+        localOverrides,
+      );
+      const prepareClaudeModel = (model: CatalogModel): CatalogModel =>
+        applyLocalConsumerOverrides(
+          'openai',
+          'claude-code',
+          model.id,
+          applyRegistryConsumerOverlay(model, 'openai', 'claude-code', model.id, plan),
+          localOverrides,
+          plan.warnings,
+        );
+      return projectCodexModelsToBridges(withRoot, excluded, prepareClaudeModel);
     }
     if (p.id === 'anthropic') {
       const seed = anthropicModels.length > 0 ? anthropicModels : (p.models['claude-code'] ?? []);
       const root = sortModelsByOrder(assembleRoot('anthropic', 'claude-code', seed, plan));
-      const excluded =
+      const remoteExcluded =
         plan.roots.get(rootPlanKey('anthropic', 'claude-code'))?.bridgeExcluded ??
         new Set<string>();
+      const excluded = resolveLocalBridgeExclusions(
+        'anthropic',
+        'codex',
+        remoteExcluded,
+        localOverrides,
+      );
       // codex bridge 受 membership 门控且 fast=false(硬约束);Pi 恒定镜像 root。
       const codexBridge = root
         .filter((m) => !excluded.has(m.id))
+        .map((model) =>
+          applyLocalConsumerOverrides(
+            'anthropic',
+            'codex',
+            model.id,
+            applyRegistryConsumerOverlay(model, 'anthropic', 'codex', model.id, plan),
+            localOverrides,
+            plan.warnings,
+          ),
+        )
         .map((model) => ({ ...model, supportsFastMode: false }));
       return { ...p, models: { ...p.models, 'claude-code': root, codex: codexBridge, pi: root } };
     }
     if (p.id === 'xai') {
-      const claudeRoot = assembleRoot('xai', 'claude-code', p.models['claude-code'] ?? [], plan);
-      const codexRoot = assembleRoot('xai', 'codex', p.models.codex ?? [], plan);
+      const claudeRoot = assembleRoot(
+        'xai',
+        'claude-code',
+        p.models['claude-code'] ?? [],
+        plan,
+        true,
+      );
+      const codexRoot = assembleRoot('xai', 'codex', p.models.codex ?? [], plan, true);
       return {
         ...p,
         models: {
@@ -751,36 +793,6 @@ export function setActiveCatalog(catalog: Catalog): void {
 }
 
 /**
- * 只把一次新目录里的模型快照投影到当前基础目录，保留当前 provider 的 routing/auth
- * 与其它 provider。手动模型刷新可因此即时更新列表，而不会在活跃 turn 中途替换
- * 上游、鉴权策略、modelPrefixes 或 rewrite 等运行时路由字段。
- */
-export function setProviderModelsFromCatalog(providerId: string, catalog: Catalog): void {
-  const incoming = catalog.providers.find((provider) => provider.id === providerId);
-  if (!incoming) {
-    throw new Error(`catalog does not contain provider '${providerId}'`);
-  }
-  const current = base ?? BUNDLED_CATALOG;
-  if (!current.providers.some((provider) => provider.id === providerId)) {
-    throw new Error(`active catalog does not contain provider '${providerId}'`);
-  }
-  base = {
-    ...current,
-    providers: current.providers.map((provider) =>
-      provider.id === providerId ? { ...provider, models: incoming.models } : provider,
-    ),
-  };
-  markChanged();
-}
-
-export function setModelRegistryFromCatalog(catalog: Catalog): void {
-  if (!catalog.modelRegistry) return;
-  const current = base ?? BUNDLED_CATALOG;
-  base = { ...current, modelRegistry: catalog.modelRegistry };
-  markChanged();
-}
-
-/**
  * **原子模型平面提交**:把一次刷新目录里的 xAI 双 root 静态清单与 modelRegistry
  * 组装成单次 base swap + 单次 markChanged。替代刷新路径串行调
  * setProviderModelsFromCatalog('xai') + setModelRegistryFromCatalog 的旧写法——
@@ -815,7 +827,7 @@ export function setLocalCatalogOverrides(overrides: ModelCatalogOverrides): void
 }
 
 /** 最近一次合并的 registry 实体化告警(单 route 隔离;刷新路径读走打日志/计数)。 */
-export function getModelPlaneWarnings(): readonly RegistryPlanWarning[] {
+export function getModelPlaneWarnings(): readonly ModelPlaneWarning[] {
   return lastPlanWarnings;
 }
 

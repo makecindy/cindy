@@ -27,10 +27,10 @@ export type ConnectionState = Record<string, boolean>;
 /**
  * 动态清单发现的失败归因。
  *
- * 只有「清单唯一来源是动态发现」的供应商才会有（如 Anthropic 订阅：静态目录段已退役，
- * 拉不到 `/v1/models` 就是零模型）。这类供应商一旦发现失败，UI 若继续说「已连接，正在
- * 发现模型」就是在骗用户——直连不通的网络环境下它永远不会自己好转。`kind` 决定 UI 说
- * 什么，`detail` 只进日志与诊断，不直接展示（可能含上游原始错误文本）。
+ * 只有 live entitlement 证据依赖动态发现的供应商才会有（如 Anthropic 订阅）。
+ * Registry presence 可能仍让目录展示模型，但发现失败意味着当前账号尚未得到可用性
+ * 证明；UI 若继续说「已连接，正在发现模型」就是在骗用户。`kind` 决定 UI 说什么，
+ * `detail` 只进日志与诊断，不直接展示（可能含上游原始错误文本）。
  */
 export interface ProviderModelDiscoveryFailure {
   /**
@@ -80,7 +80,8 @@ export type ProviderModelDiscoveryFailureView = Omit<ProviderModelDiscoveryFailu
 /**
  * 各供应商最近一次的清单发现失败，由 host 注入；成功即清除。
  *
- * 稀疏 map：只有「清单唯一来源是动态发现」且当前确实失败了的供应商才有键，缺省是 `{}`。
+ * 稀疏 map：只有 live entitlement 证据依赖动态发现且当前确实失败的供应商才有键，
+ * 缺省是 `{}`。
  * 因此必须是 `Partial` —— 写成全量 `Record` 会让 `state[id]` 的类型谎称不可能是
  * `undefined`，读 `.kind` 的调用方迟早在运行时炸。
  */

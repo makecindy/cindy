@@ -15,8 +15,9 @@
  * active-catalog 合并,是路由/能力派生的输入,MCP create_worker / scheduler 等
  * 无窗口路径也要一致生效,真源必须 main 可靠可读。
  *
- * 本轮(PR-C)刻意**不加 IPC**:设置 UI 是后续 PR,现在没有 renderer 消费者,
- * 提前开 channel 只会扩大 attack surface;店内 typed API 已够 main 侧与测试用。
+ * 本轮(PR-C)刻意**不加 IPC/写 API**:设置 UI 是后续 PR,现在没有 renderer
+ * 消费者,提前开 channel 或留死写入口只会扩大 attack surface。用户仍可直接编辑
+ * 文件；坏 JSON/超限文件原样保留，修正后下一次同步自动恢复。
  */
 
 import { desktopMakerLogger } from './logger-adapter.js';
@@ -24,12 +25,14 @@ import { createOverrideSettingsFile } from './override-settings-file.js';
 import {
   EMPTY_MODEL_CATALOG_OVERRIDES,
   sanitizeModelCatalogOverrides,
-  type ModelCatalogOverrideEntry,
   type ModelCatalogOverrides,
 } from './model-plane/localCatalogOverrides.js';
 import { ownerScopedUserDataPath } from '../appSessionState.js';
 
 const log = desktopMakerLogger.child('model-catalog-overrides');
+
+/** main 同步读取的硬上限；目录 override 正常只有数 KB。 */
+export const MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES = 1_048_576;
 
 function normalize(raw: unknown): ModelCatalogOverrides {
   const { overrides, invalid } = sanitizeModelCatalogOverrides(raw);
@@ -48,27 +51,12 @@ const store = createOverrideSettingsFile<ModelCatalogOverrides>({
   normalize,
   log,
   label: 'model-catalog-overrides',
+  maxBytes: MAX_MODEL_CATALOG_OVERRIDE_FILE_BYTES,
+  preserveUnreadableFile: true,
 });
 
 /** 当前 override 快照(注入 active-catalog 合并;mtime 守卫让手改文件下次读取生效)。 */
 export function readModelCatalogOverrides(): ModelCatalogOverrides {
   store.invalidateIfChanged();
   return store.read();
-}
-
-/**
- * 写/删一条 override(entry=null 即删除)。未来设置 UI(独立 PR)与测试的
- * 唯一写入口;写完由调用方触发 active-catalog 重同步。
- */
-export function writeModelCatalogOverrideEntry(
-  section: 'additions' | 'patches',
-  key: string,
-  entry: ModelCatalogOverrideEntry | null,
-): void {
-  store.invalidateIfChanged();
-  const current = store.read();
-  const nextSection = { ...current[section] };
-  if (entry === null) delete nextSection[key];
-  else nextSection[key] = entry;
-  store.writePatch({ [section]: nextSection } as Partial<ModelCatalogOverrides>);
 }

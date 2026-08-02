@@ -13,8 +13,8 @@
  * 保证包可独立单测，也保证跨平台路径 / CORS 等细节留在 host。
  */
 
+import { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
-import { modelRegistryCanonicalJson } from './modelRegistry.js';
 import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
@@ -285,6 +285,18 @@ function selectNewerModelRegistry(
   const primaryUpdatedAt = registryUpdatedAt(primary);
   const fallbackUpdatedAt = registryUpdatedAt(fallback);
   if (
+    primary.modelRegistry &&
+    fallback.modelRegistry &&
+    primaryUpdatedAt !== null &&
+    primaryUpdatedAt === fallbackUpdatedAt &&
+    modelRegistryCanonicalJson(primary.modelRegistry) !==
+      modelRegistryCanonicalJson(fallback.modelRegistry)
+  ) {
+    // 同 revision 异内容是非法重发；fallback 是已经随客户端发布/缓存验证过的
+    // LKG，启动期也必须保它，不能只在在线 refresh 路径防守。
+    return { modelRegistry: fallback.modelRegistry, fromFallback: true };
+  }
+  if (
     fallback.modelRegistry &&
     fallbackUpdatedAt !== null &&
     (primaryUpdatedAt === null || fallbackUpdatedAt > primaryUpdatedAt)
@@ -315,8 +327,6 @@ function preserveNewerCachedCatalog(
   remote: Catalog,
   cached: Catalog,
 ): { catalog: Catalog; tieConflict: boolean } {
-  const modelRegistry = newerModelRegistry(remote, cached);
-  if (modelRegistry !== remote.modelRegistry) return { catalog: cached, tieConflict: false };
   if (
     remote.modelRegistry &&
     cached.modelRegistry &&
@@ -326,6 +336,8 @@ function preserveNewerCachedCatalog(
   ) {
     return { catalog: cached, tieConflict: true };
   }
+  const modelRegistry = newerModelRegistry(remote, cached);
+  if (modelRegistry !== remote.modelRegistry) return { catalog: cached, tieConflict: false };
   return { catalog: remote, tieConflict: false };
 }
 

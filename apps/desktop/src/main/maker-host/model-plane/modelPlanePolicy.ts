@@ -21,10 +21,9 @@
  */
 
 import {
-  findModelRegistryRoute,
-  type AgentKind,
   type CatalogModel,
   type ModelRegistry,
+  type ModelRegistryEntry,
 } from '@cindy/model-providers';
 
 /** registry 路由与本地 override 可作用的 root agent(wire enum 子集,不含 pi)。 */
@@ -72,7 +71,8 @@ export interface RootRegistryPlan {
   bridgeExcluded: Set<string>;
 }
 
-export interface RegistryPlanWarning {
+export interface ModelPlaneWarning {
+  source: 'registry' | 'local';
   providerId: string;
   agent: RootAgentKind;
   modelId: string;
@@ -82,10 +82,16 @@ export interface RegistryPlanWarning {
 export interface ModelPlaneRegistryPlan {
   /** key = `${providerId}:${rootAgent}`。 */
   roots: Map<string, RootRegistryPlan>;
-  warnings: RegistryPlanWarning[];
+  /** key = `${providerId}:${bridgeAgent}`；目标消费端的 perAgent overlay。 */
+  consumers: Map<string, Map<string, Partial<CatalogModel>>>;
+  warnings: ModelPlaneWarning[];
 }
 
 export function rootPlanKey(providerId: string, agent: RootAgentKind): string {
+  return `${providerId}:${agent}`;
+}
+
+export function consumerPlanKey(providerId: string, agent: RootAgentKind): string {
   return `${providerId}:${agent}`;
 }
 
@@ -124,21 +130,28 @@ interface EffectiveRouteFields {
 
 /** entry 基线 + perAgent[agent] 覆盖后的有效字段(仅 wire enum agent 有 perAgent)。 */
 function effectiveRouteFields(
-  registry: ModelRegistry,
-  providerId: string,
-  modelId: string,
+  entry: ModelRegistryEntry,
   agent: RootAgentKind,
-): EffectiveRouteFields | null {
-  const matched = findModelRegistryRoute(registry, providerId, modelId, agent);
-  if (!matched) return null;
-  const { entry } = matched;
+): EffectiveRouteFields {
   const override = entry.perAgent?.[agent];
   const efforts = override?.efforts ?? entry.efforts;
-  const defaultEffort = override?.defaultEffort ?? entry.defaultEffort;
+  const candidateDefaultEffort = override?.defaultEffort ?? entry.defaultEffort;
   const filteredEfforts =
     efforts !== undefined
       ? (efforts.filter((e): e is Effort => VALID_EFFORTS.has(e)) as Effort[])
       : undefined;
+  const defaultEffort: Effort | null | undefined =
+    filteredEfforts === undefined
+      ? candidateDefaultEffort !== undefined && VALID_EFFORTS.has(candidateDefaultEffort)
+        ? (candidateDefaultEffort as Effort)
+        : undefined
+      : filteredEfforts.length === 0
+        ? null
+        : candidateDefaultEffort !== undefined &&
+            VALID_EFFORTS.has(candidateDefaultEffort) &&
+            filteredEfforts.includes(candidateDefaultEffort as Effort)
+          ? (candidateDefaultEffort as Effort)
+          : undefined;
   return {
     name: entry.name,
     ...(entry.group !== undefined ? { group: entry.group } : {}),
@@ -149,9 +162,7 @@ function effectiveRouteFields(
       : {}),
     ...(entry.maxOutputTokens !== undefined ? { maxOutput: entry.maxOutputTokens } : {}),
     ...(filteredEfforts !== undefined ? { efforts: filteredEfforts } : {}),
-    ...(defaultEffort !== undefined && VALID_EFFORTS.has(defaultEffort)
-      ? { defaultEffort: defaultEffort as Effort }
-      : {}),
+    ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     ...(override?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
       ? { supportsFastMode: override?.supportsFastMode ?? entry.supportsFastMode }
       : {}),
@@ -175,37 +186,62 @@ function effectiveRouteFields(
  * status 缺失的 metadata-only 条目);deprecated 实体化强制 defaultEnabled=false。
  */
 export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPlaneRegistryPlan {
-  const plan: ModelPlaneRegistryPlan = { roots: new Map(), warnings: [] };
+  const plan: ModelPlaneRegistryPlan = { roots: new Map(), consumers: new Map(), warnings: [] };
   if (!registry) return plan;
+  const claimedRootRoutes = new Set<string>();
   for (const entry of registry.models) {
     const status = materializableStatus(entry.status);
     for (const route of entry.routes) {
       const policy = MODEL_PLANE_POLICIES.get(route.providerId);
       if (!policy) continue;
       const routeAgents = route.agents as readonly RootAgentKind[];
-      for (const agent of policy.roots) {
+      const memberRoots = policy.roots.filter((agent) => routeAgents.includes(agent));
+      // 有 lifecycle presence、却没有 canonical root 的 route 无法产生任何实体或
+      // 投影源。把它当作者错误隔离，而不是留下一个看似授权 bridge、实际永远不生效
+      // 的幽灵配置。metadata-only 旧条目不升级为 presence，因此保持静默兼容。
+      if (entry.status !== undefined && memberRoots.length === 0) {
+        plan.warnings.push({
+          source: 'registry',
+          providerId: route.providerId,
+          agent: policy.roots[0]!,
+          modelId: route.modelId,
+          reason: 'route has no canonical root agent membership',
+        });
+        continue;
+      }
+      let acceptedRoot = false;
+      for (const agent of memberRoots) {
+        const claimKey = `${route.providerId}\u0000${agent}\u0000${route.modelId}`;
+        if (claimedRootRoutes.has(claimKey)) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent,
+            modelId: route.modelId,
+            reason: 'multiple registry entries claim the same provider root route',
+          });
+          continue;
+        }
+        claimedRootRoutes.add(claimKey);
+        acceptedRoot = true;
         const key = rootPlanKey(route.providerId, agent);
         let rootPlan = plan.roots.get(key);
         if (!rootPlan) {
           rootPlan = emptyRootPlan();
           plan.roots.set(key, rootPlan);
         }
-        if (!routeAgents.includes(agent)) {
-          // root 无 membership:不实体化也不 overlay(该消费端未被授权)。
-          continue;
-        }
         if (entry.status === 'retired') {
           rootPlan.retired.add(route.modelId);
           continue;
         }
-        const fields = effectiveRouteFields(registry, route.providerId, route.modelId, agent);
-        if (!fields) continue;
+        const fields = effectiveRouteFields(entry, agent);
         const overlay = toOverlay(fields, status);
         if (Object.keys(overlay).length > 0) rootPlan.overlays.set(route.modelId, overlay);
         if (status === null) continue; // metadata-only:overlay 已登记,不长实体。
         const materialized = toMaterializedModel(route.modelId, fields, status);
         if (typeof materialized === 'string') {
           plan.warnings.push({
+            source: 'registry',
             providerId: route.providerId,
             agent,
             modelId: route.modelId,
@@ -215,6 +251,37 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
         }
         rootPlan.additions.push(materialized);
       }
+      if (!acceptedRoot) continue;
+      // 目标 bridge 的 effective fields = entry base + perAgent[bridge]。metadata-only
+      // 仍可 overlay 已存在的 discovery bridge，但不能在下面改变投影拓扑。
+      for (const bridgeAgent of policy.membershipGatedBridges) {
+        if (!routeAgents.includes(bridgeAgent)) continue;
+        const fields = effectiveRouteFields(entry, bridgeAgent);
+        if (
+          fields.efforts !== undefined &&
+          fields.efforts.length > 0 &&
+          (fields.defaultEffort == null || !fields.efforts.includes(fields.defaultEffort))
+        ) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent: bridgeAgent,
+            modelId: route.modelId,
+            reason: 'bridge consumer has efforts but no self-consistent defaultEffort',
+          });
+          continue;
+        }
+        const key = consumerPlanKey(route.providerId, bridgeAgent);
+        let overlays = plan.consumers.get(key);
+        if (!overlays) {
+          overlays = new Map();
+          plan.consumers.set(key, overlays);
+        }
+        overlays.set(route.modelId, toOverlay(fields, status));
+      }
+      // status 缺失是严格 metadata-only：可以 overlay 已存在 root/bridge，但不得改变
+      // 实体存在或投影拓扑；否则旧 registry 会在新客户端上意外缩减模型清单。
+      if (entry.status === undefined) continue;
       // membership 门控 bridge:registry 登记了该模型、但 route.agents 不含 bridge
       // agent ⇒ 从对应 bridge 排除(纯 discovery 模型不受影响)。
       for (const bridgeAgent of policy.membershipGatedBridges) {
@@ -234,6 +301,19 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
   return plan;
 }
 
+/** root 投影到 bridge 后，应用目标消费端的 Registry perAgent；bridge 硬约束由调用方最后收口。 */
+export function applyRegistryConsumerOverlay(
+  model: CatalogModel,
+  providerId: string,
+  consumer: RootAgentKind,
+  rootModelId: string,
+  plan: ModelPlaneRegistryPlan,
+): CatalogModel {
+  const overlay = plan.consumers.get(consumerPlanKey(providerId, consumer))?.get(rootModelId);
+  if (!overlay) return model;
+  return { ...model, ...overlay };
+}
+
 /** registry 显式字段 → 已存在条目的 overlay(在场即胜出,不在场不触碰)。 */
 function toOverlay(
   fields: EffectiveRouteFields,
@@ -250,9 +330,7 @@ function toOverlay(
     ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
     ...(fields.efforts !== undefined ? { efforts: fields.efforts } : {}),
     ...(fields.defaultEffort !== undefined ? { defaultEffort: fields.defaultEffort } : {}),
-    ...(fields.supportsFastMode !== undefined
-      ? { supportsFastMode: fields.supportsFastMode }
-      : {}),
+    ...(fields.supportsFastMode !== undefined ? { supportsFastMode: fields.supportsFastMode } : {}),
     ...(status === 'deprecated'
       ? { status, defaultEnabled: false }
       : status !== null
@@ -295,9 +373,7 @@ function toMaterializedModel(
     ...(fields.maxOutput !== undefined ? { maxOutput: fields.maxOutput } : {}),
     efforts: fields.efforts,
     defaultEffort,
-    ...(fields.supportsFastMode !== undefined
-      ? { supportsFastMode: fields.supportsFastMode }
-      : {}),
+    ...(fields.supportsFastMode !== undefined ? { supportsFastMode: fields.supportsFastMode } : {}),
     status,
     ...(status === 'deprecated'
       ? { defaultEnabled: false }
@@ -320,14 +396,26 @@ export function applyRootRegistryPlan(
   const existingIds = new Set(models.map((m) => m.id));
   const out = models.map((m) => {
     const overlay = rootPlan.overlays.get(m.id);
-    const overlaid = overlay ? { ...m, ...overlay } : m;
-    return rootPlan.retired.has(m.id)
-      ? { ...overlaid, status: 'retired' as const }
-      : overlaid;
+    let overlaid = overlay ? { ...m, ...overlay } : m;
+    // 只有已有 discovery/静态证据的条目允许确定性修复缺失默认档。纯远端新实体
+    // 仍由 toMaterializedModel 严格要求显式自洽，不在这里猜。
+    if (overlay?.efforts !== undefined) {
+      const efforts = overlaid.efforts;
+      const defaultEffort = overlaid.defaultEffort;
+      if (efforts.length === 0) overlaid = { ...overlaid, defaultEffort: null };
+      else if (defaultEffort === null || !efforts.includes(defaultEffort)) {
+        overlaid = {
+          ...overlaid,
+          defaultEffort: efforts.includes('high') ? 'high' : efforts[efforts.length - 1]!,
+        };
+      }
+    }
+    return rootPlan.retired.has(m.id) ? { ...overlaid, status: 'retired' as const } : overlaid;
   });
   for (const addition of rootPlan.additions) {
     if (existingIds.has(addition.id)) continue; // 已有条目走 overlay,不重复追加。
     out.push(addition);
+    existingIds.add(addition.id);
   }
   return out;
 }
