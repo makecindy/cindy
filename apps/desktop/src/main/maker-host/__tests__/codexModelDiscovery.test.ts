@@ -43,6 +43,53 @@ describe('mapCodexModelsToCatalog', () => {
     expect(out.find((m) => m.id.includes('auto-review'))).toBeUndefined();
   });
 
+  it('cache 即使把内部 ID 标成 list/api:true 也过滤 codex-auto-review', () => {
+    const out = mapCodexModelsToCatalog({
+      models: [
+        {
+          slug: 'codex-auto-review',
+          display_name: 'GPT-5.6-Luna',
+          visibility: 'list',
+          supported_in_api: true,
+          supported_reasoning_levels: [{ effort: 'medium' }],
+        },
+      ],
+    });
+
+    expect(out).toEqual([]);
+  });
+
+  it('真实 gpt-5.6-luna 即使与内部别名同展示名也在 cache/live 两路保留', () => {
+    const cache = mapCodexModelsToCatalog({
+      models: [
+        {
+          slug: 'gpt-5.6-luna',
+          display_name: 'GPT-5.6-Luna',
+          visibility: 'list',
+          supported_in_api: true,
+          supported_reasoning_levels: [{ effort: 'high' }],
+        },
+      ],
+    });
+    const live = mapCodexAppServerModelsToCatalog([
+      {
+        id: 'gpt-5.6-luna',
+        model: 'gpt-5.6-luna',
+        displayName: 'GPT-5.6-Luna',
+        description: '',
+        hidden: false,
+        supportedReasoningEfforts: [{ reasoningEffort: 'high', description: '' }],
+        defaultReasoningEffort: 'high',
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        isDefault: false,
+      },
+    ] as CodexModelListItem[]);
+
+    expect(cache.map((model) => model.id)).toEqual(['gpt-5.6-luna']);
+    expect(live.map((model) => model.id)).toEqual(['gpt-5.6-luna']);
+  });
+
   it('未来新模型(gpt-5.6)自动纳入并带正确 capability —— 印证"下周出 5.6 零手改"', () => {
     const m56 = mapCodexModelsToCatalog(SAMPLE).find((m) => m.id === 'gpt-5.6');
     expect(m56).toBeDefined();
@@ -116,6 +163,25 @@ describe('mapCodexModelsToCatalog', () => {
 });
 
 describe('mapCodexAppServerModelsToCatalog', () => {
+  it('live 即使把内部 ID 标成 hidden:false 也过滤 codex-auto-review', () => {
+    const out = mapCodexAppServerModelsToCatalog([
+      {
+        id: 'codex-auto-review',
+        model: 'codex-auto-review',
+        displayName: 'GPT-5.6-Luna',
+        description: '',
+        hidden: false,
+        supportedReasoningEfforts: [{ reasoningEffort: 'medium', description: '' }],
+        defaultReasoningEffort: 'medium',
+        additionalSpeedTiers: [],
+        serviceTiers: [],
+        isDefault: false,
+      },
+    ] as CodexModelListItem[]);
+
+    expect(out).toEqual([]);
+  });
+
   it('保留 app-server 顺序、过滤隐藏/重复项并映射 effort 与 fast tier', () => {
     const out = mapCodexAppServerModelsToCatalog([
       {
