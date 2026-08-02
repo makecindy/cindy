@@ -199,6 +199,11 @@ import {
   REMOTE_IMAGE_MAX_BYTES,
 } from './lightboxMediaActions';
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
+import { createChatAttachmentStageHandler } from './chatAttachmentStage';
+import {
+  getRemoteFileCacheRoot,
+  stageLocalFileToCache,
+} from './file-browser/remote-file-cache';
 import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -5049,13 +5054,42 @@ const registerIpcHandlers = () => {
     getDownloadsDir: () => app.getPath('downloads'),
     getAllowedSourceRoots: () => [
       imageCacheStore.getCacheRoot(),
-      path.join(app.getPath('userData'), 'remote-file-cache'),
+      getRemoteFileCacheRoot(),
     ],
   });
+  const stageChatAttachment = createChatAttachmentStageHandler({
+    isPathAllowed,
+    realpath: (filePath) => fs.promises.realpath(filePath),
+    stat: (filePath) => fs.promises.stat(filePath, { bigint: true }),
+    openSource: async (filePath) => {
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | noFollow);
+      return {
+        stat: () => handle.stat({ bigint: true }),
+        copyTo: async (targetPath) => {
+          await pipeline(
+            handle.createReadStream({ autoClose: false, start: 0 }),
+            fs.createWriteStream(targetPath, { flags: 'wx' }),
+          );
+        },
+        close: () => handle.close(),
+      };
+    },
+    stageCopy: (params) => stageLocalFileToCache(params),
+  });
+  ipcMain.handle(
+    'chat-attachment:stage',
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return stageChatAttachment(params);
+    },
+  );
   ipcMain.handle(
     'chat-attachment:save-as',
-    (_event, params: { sourcePath?: unknown; suggestedName?: unknown }) =>
-      saveChatAttachment(params),
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return saveChatAttachment(params);
+    },
   );
 
   // Settings → About: 打开 <userData>/logs 在系统文件管理器。

@@ -12,6 +12,10 @@ import {
 function makeDeps(overrides: Partial<ChatAttachmentSaveDeps> = {}): ChatAttachmentSaveDeps {
   return {
     platform: 'win32',
+    stageDangerous: vi.fn(async () => ({
+      success: true as const,
+      path: 'C:\\cache\\staged-setup.exe.bin',
+    })),
     fetchRemoteFile: vi.fn(async () => 'C:\\cache\\remote.bin'),
     saveAs: vi.fn(async () => ({
       status: 'saved' as const,
@@ -25,7 +29,13 @@ function makeDeps(overrides: Partial<ChatAttachmentSaveDeps> = {}): ChatAttachme
 }
 
 describe('safe attachment routing', () => {
-  it('only treats a mismatched .bin materialization as safety-downgraded', () => {
+  it('treats dangerous names and historical mismatched .bin materializations as download-only', () => {
+    expect(isSafetyDowngradedAttachment({ name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' })).toBe(
+      true,
+    );
+    expect(isSafetyDowngradedAttachment({ name: 'attachment', path: 'C:\\Downloads\\setup.exe' })).toBe(
+      true,
+    );
     expect(isSafetyDowngradedAttachment({ name: 'setup.exe', path: 'C:\\cache\\random.bin' })).toBe(
       true,
     );
@@ -70,12 +80,31 @@ describe('saveChatAttachmentWithToasts', () => {
       deps,
     );
     expect(deps.fetchRemoteFile).not.toHaveBeenCalled();
+    expect(deps.stageDangerous).not.toHaveBeenCalled();
     expect(deps.saveAs).toHaveBeenCalledWith({
       sourcePath: 'C:\\cache\\random.bin',
       suggestedName: 'setup.exe',
     });
     expect(deps.success).toHaveBeenCalledOnce();
     expect(deps.warning).not.toHaveBeenCalled();
+    expect(result).toBe('saved');
+  });
+
+  it('stages a legacy local executable path before Save As', async () => {
+    const deps = makeDeps();
+    const result = await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(deps.stageDangerous).toHaveBeenCalledWith({
+      sourcePath: 'C:\\Downloads\\setup.exe',
+      suggestedName: 'setup.exe',
+    });
+    expect(deps.saveAs).toHaveBeenCalledWith({
+      sourcePath: 'C:\\cache\\staged-setup.exe.bin',
+      suggestedName: 'setup.exe',
+    });
     expect(result).toBe('saved');
   });
 

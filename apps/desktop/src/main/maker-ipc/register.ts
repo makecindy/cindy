@@ -382,7 +382,11 @@ import {
   installInteractionLifecycleObserver,
 } from './interactionRouter.js';
 import { registerMakerMessageDeleteHandler } from './messageDeleteHandler.js';
-import { normalizeUserMessage, materializeQueuedOssAttachments } from './normalizeAttachments.js';
+import {
+  normalizeUserMessage,
+  materializeDirectSendOssAttachments,
+  materializeQueuedOssAttachments,
+} from './normalizeAttachments.js';
 import { AGENT_ISLAND_DISPLAY_CONFIG } from '../agent-island/displayConfig.js';
 import {
   shouldClearAgentIslandSessionForOrcaWorker,
@@ -7746,10 +7750,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     log,
   });
-  const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = (...args) => {
-    const [sessionId] = args;
-    if (typeof sessionId !== 'string') return sendToAgentAcceptedUnlocked(...args);
-    return withSendToSessionLock(sessionId, () => sendToAgentAcceptedUnlocked(...args));
+  const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
+    const [sessionId, message, createOpts, sendOpts] = args;
+    if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
+    return await withSendToSessionLock(sessionId, async () => {
+      const materialized = await materializeDirectSendOssAttachments(
+        sessionId,
+        message,
+        sendOpts,
+      );
+      return await sendToAgentAcceptedUnlocked(
+        sessionId,
+        materialized.message,
+        createOpts,
+        materialized.sendOpts,
+      );
+    });
   };
 
   /**

@@ -30,6 +30,7 @@ import { isAttachmentOssRef, parseAttachmentOssRef } from '../../shared/attachme
 import type { AttachmentIntegrity, AttachmentOssRef } from '../../shared/attachmentOssRef.js';
 import { downloadToFile, removeRemote } from '../device-link/mediaTransfer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { isDangerousAttachmentName } from '../../shared/attachmentSafety.js';
 
 const log = createLogger('maker-ipc/normalize');
 
@@ -404,7 +405,12 @@ export async function materializeQueuedOssAttachments(
       // 只收图片进总仓:ingestIntoBlobStore 是整读内存(readFile + sha256),
       // 手机传的大视频/音频若走这条会让 main 进程内存翻倍(review P1);
       // 等 blobStore 流式入口落地再放开非图片媒体,现阶段维持老文件级拷贝。
-      if (mime && mime.startsWith('image/') && cindyMediaBlobStore.supportedMime(mime)) {
+      if (
+        mime &&
+        mime.startsWith('image/') &&
+        cindyMediaBlobStore.supportedMime(mime) &&
+        !isDangerousAttachmentName(ref.originalName ?? '')
+      ) {
         entry = await ingestIntoBlobStore(tmp, mime);
       } else {
         // 非媒体附件维持历史兼容路径落地;规则 25 明确非媒体不进字节仓。
@@ -470,6 +476,118 @@ export async function materializeQueuedOssAttachments(
   } finally {
     for (const k of ossKeys) void removeRemote(k);
   }
+}
+
+/**
+ * Direct maker:send carries attachment references in two parallel shapes:
+ * the user-message blocks consumed by the agent and
+ * sendOpts.persistUserMessage.content stored in the local transcript.
+ *
+ * Reuse the queued materializer through a temporary files[] projection so both
+ * shapes share one download per OSS reference and remote objects are removed
+ * only after both projections point at durable local copies.
+ */
+export async function materializeDirectSendOssAttachments(
+  sessionId: string,
+  message: unknown,
+  sendOpts: unknown,
+): Promise<{ message: unknown; sendOpts: unknown }> {
+  if (!message || typeof message !== 'object' || Array.isArray(message)) {
+    return { message, sendOpts };
+  }
+  const msg = message as { type?: unknown; content?: unknown };
+  if (msg.type !== 'user' || !Array.isArray(msg.content)) {
+    return { message, sendOpts };
+  }
+
+  const attachmentIndexes: number[] = [];
+  const projectedFiles: Array<Record<string, unknown>> = [];
+  for (let index = 0; index < msg.content.length; index += 1) {
+    const raw = msg.content[index];
+    if (
+      raw &&
+      typeof raw === 'object' &&
+      !Array.isArray(raw) &&
+      (((raw as { type?: unknown }).type === 'image') ||
+        (raw as { type?: unknown }).type === 'file')
+    ) {
+      attachmentIndexes.push(index);
+      const block = raw as Record<string, unknown>;
+      projectedFiles.push({
+        ...block,
+        ...(typeof block.path === 'string' ? { url: block.path } : {}),
+      });
+    }
+  }
+
+  const persist =
+    sendOpts && typeof sendOpts === 'object' && !Array.isArray(sendOpts)
+      ? (sendOpts as { persistUserMessage?: unknown }).persistUserMessage
+      : undefined;
+  const persistedContent =
+    persist && typeof persist === 'object' && !Array.isArray(persist)
+      ? (persist as { content?: unknown }).content
+      : undefined;
+  const hasProjectedOss = projectedFiles.some(
+    (file) => isOssRefField(file.url) || isOssRefField(file.path),
+  );
+  const persistedNeedsMaterialize =
+    typeof persistedContent === 'string' && persistedContentNeedsMaterialize(persistedContent);
+  if (!hasProjectedOss && !persistedNeedsMaterialize) {
+    return { message, sendOpts };
+  }
+
+  const projected = (await materializeQueuedOssAttachments(sessionId, {
+    files: projectedFiles,
+    ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
+  })) as { files?: unknown; persistedContent?: unknown };
+  const materializedFiles = Array.isArray(projected.files) ? projected.files : projectedFiles;
+  const nextContent = [...msg.content];
+  for (let index = 0; index < attachmentIndexes.length; index += 1) {
+    const original = msg.content[attachmentIndexes[index]];
+    const materialized = materializedFiles[index];
+    if (!original || typeof original !== 'object' || !materialized || typeof materialized !== 'object') {
+      continue;
+    }
+    const originalPath = (original as { path?: unknown }).path;
+    const pathValue = (materialized as { path?: unknown }).path;
+    if (
+      isOssRefField(originalPath) &&
+      typeof pathValue === 'string' &&
+      pathValue !== originalPath
+    ) {
+      nextContent[attachmentIndexes[index]] = {
+        ...(original as object),
+        path: pathValue,
+        base64: undefined,
+      };
+    }
+  }
+
+  let nextSendOpts = sendOpts;
+  if (
+    typeof projected.persistedContent === 'string' &&
+    projected.persistedContent !== persistedContent &&
+    sendOpts &&
+    typeof sendOpts === 'object' &&
+    !Array.isArray(sendOpts) &&
+    persist &&
+    typeof persist === 'object' &&
+    !Array.isArray(persist)
+  ) {
+    nextSendOpts = {
+      ...(sendOpts as object),
+      persistUserMessage: {
+        ...(persist as object),
+        content: projected.persistedContent,
+      },
+    };
+  }
+
+  return {
+    message: { ...msg, content: nextContent },
+    sendOpts: nextSendOpts,
+  };
 }
 
 export async function cleanupSessionTempAttachments(sessionId: string): Promise<void> {

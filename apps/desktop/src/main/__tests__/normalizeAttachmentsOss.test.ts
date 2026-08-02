@@ -56,6 +56,7 @@ vi.mock('../logger.js', () => ({
 }));
 
 import {
+  materializeDirectSendOssAttachments,
   normalizeUserMessage,
   materializeQueuedOssAttachments,
 } from '../maker-ipc/normalizeAttachments';
@@ -371,5 +372,172 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
         }),
       }),
     ).rejects.toThrow(/完整性校验失败/);
+  });
+});
+
+describe('materializeDirectSendOssAttachments — message + persistUserMessage 一次性物化', () => {
+  it('同一危险文件只下载一次，agent path 与持久路径同时落到 .bin 后再删 OSS', async () => {
+    const ref = buildAttachmentOssRef({
+      ossKey: 'oss/setup.bin',
+      mimeType: 'application/octet-stream',
+      originalName: 'setup.exe',
+      size: 15,
+      sha256: ATTACHMENT_SHA256,
+    });
+    copyFromPath.mockImplementation(async ({ originalName }: { originalName: string }) => ({
+      url: `xdt-image://sess-1/cached-${originalName}.bin`,
+      filename: `cached-${originalName}.bin`,
+    }));
+    resolveSafe.mockImplementation((url: string) => ({
+      absPath: `/cache/${url.replace('xdt-image://', '')}`,
+      mimeType: 'application/octet-stream',
+    }));
+    const persistedContent = JSON.stringify({
+      text: 'run check',
+      images: [],
+      files: [{
+        name: 'setup.exe',
+        path: ref,
+        size: 15,
+        sha256: ATTACHMENT_SHA256,
+      }],
+    });
+
+    const out = await materializeDirectSendOssAttachments(
+      'sess-1',
+      {
+        type: 'user',
+        content: [
+          { type: 'text', text: 'run check' },
+          {
+            type: 'file',
+            path: ref,
+            mimeType: 'application/octet-stream',
+            originalName: 'setup.exe',
+          },
+        ],
+      },
+      { persistUserMessage: { clientId: 'c1', content: persistedContent } },
+    );
+
+    expect(downloadToFile).toHaveBeenCalledTimes(1);
+    expect(copyFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({ originalName: 'setup.exe' }),
+    );
+    expect(removeRemote).toHaveBeenCalledTimes(1);
+    expect(removeRemote).toHaveBeenCalledWith('oss/setup.bin');
+
+    const block = (out.message as { content: Array<{ path?: string }> }).content[1];
+    expect(block.path).toBe('/cache/sess-1/cached-setup.exe.bin');
+    const pc = JSON.parse(
+      (out.sendOpts as { persistUserMessage: { content: string } }).persistUserMessage.content,
+    ) as { files: Array<{ name: string; path: string }> };
+    expect(pc.files[0]).toEqual({
+      name: 'setup.exe',
+      path: '/cache/sess-1/cached-setup.exe.bin',
+      size: 15,
+      sha256: ATTACHMENT_SHA256,
+    });
+  });
+
+  it('没有 OSS 引用时保持原对象，不产生文件 IO', async () => {
+    const message = {
+      type: 'user',
+      content: [{ type: 'file', path: 'C:\\cache\\local.pdf', mimeType: 'application/pdf' }],
+    };
+    const sendOpts = {
+      persistUserMessage: {
+        content: JSON.stringify({
+          text: '',
+          images: [],
+          files: [{ name: 'local.pdf', path: 'C:\\cache\\local.pdf' }],
+        }),
+      },
+    };
+    const out = await materializeDirectSendOssAttachments('sess-1', message, sendOpts);
+    expect(out).toEqual({ message, sendOpts });
+    expect(downloadToFile).not.toHaveBeenCalled();
+  });
+
+  it('materializing another OSS file does not strip an unrelated base64 image', async () => {
+    const fileRef = buildAttachmentOssRef({
+      ossKey: 'oss/doc.pdf',
+      mimeType: 'application/pdf',
+      originalName: 'doc.pdf',
+    });
+    copyFromPath.mockResolvedValue({
+      url: 'xdt-image://sess-1/cached-doc.pdf',
+      filename: 'cached-doc.pdf',
+    });
+    resolveSafe.mockReturnValue({
+      absPath: '/cache/sess-1/cached-doc.pdf',
+      mimeType: 'application/pdf',
+    });
+    const message = {
+      type: 'user',
+      content: [
+        { type: 'image', base64: 'inline-image', mimeType: 'image/png' },
+        { type: 'file', path: fileRef, mimeType: 'application/pdf' },
+      ],
+    };
+    const out = await materializeDirectSendOssAttachments(
+      'sess-1',
+      message,
+      {
+        persistUserMessage: {
+          content: JSON.stringify({
+            text: '',
+            images: [],
+            files: [{ name: 'doc.pdf', path: fileRef }],
+          }),
+        },
+      },
+    );
+    expect((out.message as typeof message).content[0]).toEqual({
+      type: 'image',
+      base64: 'inline-image',
+      mimeType: 'image/png',
+    });
+  });
+
+  it('dangerous original names stay .bin even when a remote MIME claims image/png', async () => {
+    const ref = buildAttachmentOssRef({
+      ossKey: 'oss/spoofed.png',
+      mimeType: 'image/png',
+      originalName: 'setup.exe',
+      size: 3,
+      sha256: ATTACHMENT_SHA256,
+    });
+    copyFromPath.mockResolvedValue({
+      url: 'xdt-image://sess-1/cached-setup.bin',
+      filename: 'cached-setup.bin',
+    });
+    resolveSafe.mockReturnValue({
+      absPath: '/cache/sess-1/cached-setup.bin',
+      mimeType: 'application/octet-stream',
+    });
+    const out = await materializeDirectSendOssAttachments(
+      'sess-1',
+      {
+        type: 'user',
+        content: [{ type: 'file', path: ref, mimeType: 'image/png', originalName: 'setup.exe' }],
+      },
+      {
+        persistUserMessage: {
+          content: JSON.stringify({
+            text: '',
+            images: [],
+            files: [{ name: 'setup.exe', path: ref, size: 3, sha256: ATTACHMENT_SHA256 }],
+          }),
+        },
+      },
+    );
+    expect(ingestMedia).not.toHaveBeenCalled();
+    expect(copyFromPath).toHaveBeenCalledWith(
+      expect.objectContaining({ originalName: 'setup.exe' }),
+    );
+    expect((out.message as { content: Array<{ path: string }> }).content[0].path).toBe(
+      '/cache/sess-1/cached-setup.bin',
+    );
   });
 });

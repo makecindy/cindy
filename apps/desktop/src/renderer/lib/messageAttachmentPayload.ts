@@ -30,6 +30,7 @@ export type SdkAttachmentBlock = {
   path?: string;
   base64?: string;
   mimeType?: string;
+  originalName?: string;
   /**
    * 显式文件附件的原始磁盘路径(path 为 xdt-image:// 缓存 URL 时携带):
    * device-link 出方向据此识别「字节精确」语义跳过压缩;上传后即被剥掉,
@@ -81,7 +82,8 @@ export function serializeAttachedFiles(
       size: file.size,
       category: file.category,
       mimeType: file.mimeType,
-      ...(file.url ? { url: file.url, originalName: file.originalName ?? file.name } : {}),
+      originalName: file.originalName ?? file.name,
+      ...(file.url ? { url: file.url } : {}),
       ...(file.annotated ? { annotated: true } : {}),
       ...(legacy.base64 ? { base64: legacy.base64 } : {}),
       ...(legacy.textContent !== undefined ? { textContent: legacy.textContent } : {}),
@@ -148,15 +150,31 @@ function buildAttachmentBlock(file: SerializedAttachedFile): SdkAttachmentBlock 
     const originalPath = file.path && !file.path.startsWith('clipboard://') && !file.path.startsWith('xdt-image://')
       ? file.path
       : undefined;
-    return { type, path: file.url, mimeType: file.mimeType, ...(originalPath ? { originalPath } : {}) };
+    return {
+      type,
+      path: file.url,
+      mimeType: file.mimeType,
+      originalName: file.originalName ?? file.name,
+      ...(originalPath ? { originalPath } : {}),
+    };
   }
   if (file.path && !file.path.startsWith('clipboard://')) {
-    return { type, path: file.path, mimeType: file.mimeType };
+    return {
+      type,
+      path: file.path,
+      mimeType: file.mimeType,
+      originalName: file.originalName ?? file.name,
+    };
   }
 
   const legacyBase64 = readLegacyInlineFields(file).base64;
   if (legacyBase64) {
-    return { type, base64: legacyBase64, mimeType: file.mimeType };
+    return {
+      type,
+      base64: legacyBase64,
+      mimeType: file.mimeType,
+      originalName: file.originalName ?? file.name,
+    };
   }
 
   return null;

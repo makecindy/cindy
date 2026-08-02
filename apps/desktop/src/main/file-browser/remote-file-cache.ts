@@ -16,7 +16,7 @@
  * caller 侧完成(这里每片/每 chunk 都回调)。
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
@@ -46,6 +46,10 @@ export type FetchExecutor = (destPath: string, onProgress: FetchProgressFn) => P
 
 function cacheDir(): string {
   return path.join(app.getPath('userData'), CACHE_DIR_NAME);
+}
+
+export function getRemoteFileCacheRoot(): string {
+  return cacheDir();
 }
 
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */
@@ -204,6 +208,39 @@ export async function fetchRemoteFileToCache(
     return await run;
   } finally {
     inflight.delete(dest);
+  }
+}
+
+/**
+ * Dangerous local chat attachments are copied here before entering renderer
+ * state. The display name is retained separately, while the physical cache
+ * filename always ends in `.bin` so a stale/open-by-path path cannot execute it.
+ */
+export async function stageLocalFileToCache(params: {
+  suggestedName: string;
+  expectedSize: bigint;
+  copyTo(targetPath: string): Promise<void>;
+}): Promise<string> {
+  await fs.mkdir(cacheDir(), { recursive: true });
+  const base = shortenKeepExt(
+    sanitizeBaseName(path.basename(params.suggestedName)) || 'attachment',
+    80,
+  );
+  const dest = path.join(cacheDir(), `${randomUUID()}-${base}.bin`);
+  const tmp = `${dest}.part`;
+  try {
+    await params.copyTo(tmp);
+    const got = await fs.stat(tmp, { bigint: true });
+    if (!got.isFile() || got.size !== params.expectedSize) {
+      throw new Error(
+        `staged size mismatch: got ${got.size.toString()}, expect ${params.expectedSize.toString()}`,
+      );
+    }
+    await fs.rename(tmp, dest);
+    await evictLru(dest);
+    return dest;
+  } finally {
+    await fs.rm(tmp, { force: true }).catch(() => undefined);
   }
 }
 

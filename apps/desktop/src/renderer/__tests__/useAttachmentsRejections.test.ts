@@ -14,6 +14,7 @@ import { act, renderHook } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const toastWarning = vi.hoisted(() => vi.fn());
+const stageChatAttachment = vi.hoisted(() => vi.fn());
 
 vi.mock('react-i18next', () => ({
   initReactI18next: { type: '3rdParty', init: vi.fn() },
@@ -38,8 +39,11 @@ function fileListOf(files: Array<{ name: string; size: number }>): FileList {
 
 beforeEach(() => {
   toastWarning.mockClear();
+  stageChatAttachment.mockReset();
+  stageChatAttachment.mockResolvedValue({ success: true, path: '/cache/setup.exe.bin' });
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     getFilePath: (f: { name: string }) => `/tmp/${f.name}`,
+    stageChatAttachment,
   };
 });
 
@@ -97,5 +101,40 @@ describe('useAttachments inline rejections', () => {
     // Switching to another session must not leave A's pill above B's composer.
     act(() => rerender({ sid: 'session-B' }));
     expect(result.current.rejections).toHaveLength(0);
+  });
+
+  it('stages a dangerous attachment under an inert path before adding it', async () => {
+    const { result } = renderHook(() => useAttachments());
+
+    await act(async () => {
+      await result.current.addFiles(fileListOf([{ name: 'setup.exe', size: 64 }]));
+    });
+
+    expect(stageChatAttachment).toHaveBeenCalledWith({
+      sourcePath: '/tmp/setup.exe',
+      suggestedName: 'setup.exe',
+    });
+    expect(result.current.rejections).toHaveLength(0);
+    expect(result.current.attachments).toHaveLength(1);
+    expect(result.current.attachments[0]).toMatchObject({
+      name: 'setup.exe',
+      path: '/cache/setup.exe.bin',
+      ext: '.exe',
+      category: 'file',
+    });
+  });
+
+  it('fails closed when dangerous attachment staging fails', async () => {
+    stageChatAttachment.mockResolvedValue({ success: false, code: 'copy_failed' });
+    const { result } = renderHook(() => useAttachments());
+
+    await act(async () => {
+      await result.current.addFiles(fileListOf([{ name: 'setup.exe', size: 64 }]));
+    });
+
+    expect(result.current.attachments).toHaveLength(0);
+    expect(result.current.rejections).toHaveLength(1);
+    expect(result.current.rejections[0].message).toContain('setup.exe');
+    expect(result.current.rejections[0].message).toContain('copy_failed');
   });
 });
