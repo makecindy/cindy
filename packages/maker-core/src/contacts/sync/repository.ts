@@ -38,6 +38,15 @@ function mergeRedirectMap(state: ContactsSyncState): Map<string, string> {
   );
 }
 
+function confirmedDeletionIds(state: ContactsSyncState): Set<string> {
+  const mergeSources = new Set((state.merges ?? []).map((merge) => merge.id));
+  return new Set(
+    (state.deletions ?? [])
+      .map((deletion) => deletion.id)
+      .filter((contactId) => !mergeSources.has(contactId)),
+  );
+}
+
 function normalizeSyncState(state: ContactsSyncState): ContactsSyncState {
   const mergeClocks = state.mergeClocks ?? [];
   const derivedMergeClocks = new Map(
@@ -194,114 +203,7 @@ export class ContactsSyncRepository {
       if (!row)
         throw new ContactsError("io-error", "contacts sync activation failed");
       const local = this.reconcile(row);
-      let remote = normalizeSyncState(raw);
-      {
-        // source tombstone 可能经过旧客户端而丢失配套 redirect。显式删除意图
-        // 直接放行；只有旧式 merge 的 stamp + 名称迁移形态才延后删除，发送端会
-        // 继续重发未确认 redirect，供后续原子迁移本机锚点。
-        const anchoredContactIds = new Set(
-          (
-            this.db
-              .prepare(
-                `SELECT contact_id FROM contact_identities
-                 WHERE platform = 'apple-contacts'`,
-              )
-              .all() as Array<{ contact_id: string }>
-          ).map((row) => row.contact_id),
-        );
-        const explicitMergeSources = new Set(
-          (remote.merges ?? []).map((merge) => merge.id),
-        );
-        const explicitDeletionSources = new Set(
-          (remote.deletions ?? []).map((deletion) => deletion.id),
-        );
-        // 旧 merge 捕获会用同一普通 stamp 删除 source、更新 target，并把 source
-        // 显示名并入 target 的别名（同名时保留为显示名）。三项同时命中才延后；
-        // 这里只保留 source，不据此选择 target 或迁移锚点。
-        const mergeShapedSources = new Set<string>();
-        for (const source of remote.contacts) {
-          if (!source.deleted) continue;
-          const sourceName = source.displayName.value.trim().toLowerCase();
-          const correlatedTargets = remote.contacts.filter((candidate) => {
-            const carriesSourceName =
-              candidate.displayName.value.trim().toLowerCase() === sourceName ||
-              candidate.aliases.value.some(
-                (alias) => alias.trim().toLowerCase() === sourceName,
-              );
-            const aliasesChangedWithDeletion =
-              candidate.aliases.stamp.nodeId === source.deleted!.nodeId &&
-              candidate.aliases.stamp.counter === source.deleted!.counter;
-            const updatedWithDeletion =
-              candidate.updatedAt.stamp.nodeId === source.deleted!.nodeId &&
-              candidate.updatedAt.stamp.counter === source.deleted!.counter;
-            return (
-              candidate.id !== source.id &&
-              carriesSourceName &&
-              (aliasesChangedWithDeletion || updatedWithDeletion)
-            );
-          });
-          if (correlatedTargets.length === 1) {
-            mergeShapedSources.add(source.id);
-          }
-        }
-        const remoteEvidenceTargets = new Map<string, string>();
-        for (const identity of remote.identities) {
-          if (!identity.deleted) {
-            remoteEvidenceTargets.set(
-              `identity:${identity.id}`,
-              identity.value.value.contactId,
-            );
-          }
-        }
-        for (const event of remote.events) {
-          if (!event.deleted) {
-            remoteEvidenceTargets.set(
-              `event:${event.id}`,
-              event.value.value.contactId,
-            );
-          }
-        }
-        const legacyMergeCandidates = new Map<string, Set<string>>();
-        const localEvidence = this.db
-          .prepare(
-            `SELECT contact_id, 'identity:' || id AS evidence_id
-               FROM contact_identities WHERE platform <> 'apple-contacts'
-             UNION ALL
-             SELECT contact_id, 'event:' || id AS evidence_id FROM contact_events`,
-          )
-          .all() as Array<{ contact_id: string; evidence_id: string }>;
-        for (const evidence of localEvidence) {
-          const remoteTarget = remoteEvidenceTargets.get(evidence.evidence_id);
-          if (remoteTarget && remoteTarget !== evidence.contact_id) {
-            const targets =
-              legacyMergeCandidates.get(evidence.contact_id) ??
-              new Set<string>();
-            targets.add(remoteTarget);
-            legacyMergeCandidates.set(evidence.contact_id, targets);
-          }
-        }
-        const legacyMergeSources = new Set(
-          [...legacyMergeCandidates]
-            .filter(([, targets]) => targets.size === 1)
-            .map(([sourceId]) => sourceId),
-        );
-        remote = {
-          ...remote,
-          contacts: remote.contacts.map((contact) => {
-            const shouldDelaySuspectedLegacyMerge =
-              contact.deleted &&
-              anchoredContactIds.has(contact.id) &&
-              !explicitMergeSources.has(contact.id) &&
-              !explicitDeletionSources.has(contact.id) &&
-              !legacyMergeSources.has(contact.id) &&
-              mergeShapedSources.has(contact.id);
-            if (!shouldDelaySuspectedLegacyMerge) return contact;
-            const preserved = { ...contact };
-            delete preserved.deleted;
-            return preserved;
-          }),
-        };
-      }
+      const remote = normalizeSyncState(raw);
       const merged = mergeContactsSyncStates(local.state, remote);
       if (!isValidContactsSyncState(merged)) {
         throw new ContactsError(
@@ -318,7 +220,12 @@ export class ContactsSyncRepository {
       // 赢家后续改名后可能重新可见。只有状态和当前投影都一致才可以幂等返回。
       if (stateUnchanged && projectionUnchanged) return local.materialized;
 
-      writeContactsSnapshot(this.db, projection, mergeRedirectMap(merged));
+      writeContactsSnapshot(
+        this.db,
+        projection,
+        mergeRedirectMap(merged),
+        confirmedDeletionIds(merged),
+      );
       this.updateRow(row.node_id, merged, projection);
       return true;
     });
@@ -352,6 +259,7 @@ export class ContactsSyncRepository {
         this.db,
         projection,
         mergeRedirectMap(captured.state),
+        confirmedDeletionIds(captured.state),
       );
     }
     if (captured.changed || projectionChanged || materializationRequired) {

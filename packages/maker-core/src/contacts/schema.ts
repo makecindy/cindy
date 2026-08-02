@@ -125,6 +125,21 @@ const MIGRATIONS: string[] = [
     projection_json TEXT NOT NULL
   );
   `,
+  // v4: 无操作证据的远端 tombstone 仍正常收敛，但先把本机 Contacts.app 锚点
+  // 留在本地 pending 区；若独立 merge redirect 稍后到达，再恢复到最终 target。
+  `
+  CREATE TABLE contacts_sync_pending_anchors (
+    identity_id TEXT PRIMARY KEY,
+    source_contact_id TEXT NOT NULL,
+    value TEXT NOT NULL,
+    normalized_value TEXT NOT NULL,
+    label TEXT NOT NULL DEFAULT '',
+    note TEXT NOT NULL DEFAULT '',
+    created_at TEXT NOT NULL
+  );
+  CREATE INDEX idx_contacts_sync_pending_anchors_source
+    ON contacts_sync_pending_anchors(source_contact_id);
+  `,
 ];
 
 /**

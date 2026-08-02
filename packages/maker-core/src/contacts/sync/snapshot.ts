@@ -202,6 +202,7 @@ export function writeContactsSnapshot(
   db: Database.Database,
   snapshot: ContactsDataSnapshot,
   mergeRedirects: ReadonlyMap<string, string> = new Map(),
+  confirmedDeletions: ReadonlySet<string> = new Set(),
 ): void {
   // 同步快照替换主表前先保住本机系统通讯录锚点。远端快照即使来自旧版、
   // 仍带 apple-contacts，也不得写进来；本机锚保留在存活档案上，若 source
@@ -213,9 +214,25 @@ export function writeContactsSnapshot(
        WHERE platform = 'apple-contacts' ORDER BY created_at, id`,
     )
     .all() as IdentityRow[];
+  const deletePendingAnchor = db.prepare(
+    `DELETE FROM contacts_sync_pending_anchors WHERE source_contact_id = ?`,
+  );
+  for (const contactId of confirmedDeletions) deletePendingAnchor.run(contactId);
+  const pendingSystemAnchors = db
+    .prepare(
+      `SELECT identity_id AS id, source_contact_id AS contact_id,
+              'apple-contacts' AS platform, value, normalized_value, label, note, created_at
+       FROM contacts_sync_pending_anchors ORDER BY created_at, identity_id`,
+    )
+    .all() as IdentityRow[];
+  const anchorsById = new Map(
+    pendingSystemAnchors.map((anchor) => [anchor.id, anchor]),
+  );
+  for (const anchor of localSystemAnchors) anchorsById.set(anchor.id, anchor);
+  const allSystemAnchors = [...anchorsById.values()];
   const liveContactIds = new Set(snapshot.contacts.map((contact) => contact.id));
   const orphanContactIds = new Set(
-    localSystemAnchors
+    allSystemAnchors
       .map((anchor) => anchor.contact_id)
       .filter((contactId) => !liveContactIds.has(contactId)),
   );
@@ -238,6 +255,35 @@ export function writeContactsSnapshot(
       liveContactIds,
     )) {
       migratedAnchorTargets.set(sourceId, targetId);
+    }
+  }
+  const stashPendingAnchor = db.prepare(
+    `INSERT INTO contacts_sync_pending_anchors(
+       identity_id, source_contact_id, value, normalized_value, label, note, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT(identity_id) DO UPDATE SET
+       source_contact_id = excluded.source_contact_id,
+       value = excluded.value,
+       normalized_value = excluded.normalized_value,
+       label = excluded.label,
+       note = excluded.note,
+       created_at = excluded.created_at`,
+  );
+  for (const anchor of localSystemAnchors) {
+    if (
+      !liveContactIds.has(anchor.contact_id) &&
+      !migratedAnchorTargets.has(anchor.contact_id) &&
+      !confirmedDeletions.has(anchor.contact_id)
+    ) {
+      stashPendingAnchor.run(
+        anchor.id,
+        anchor.contact_id,
+        anchor.value,
+        anchor.normalized_value,
+        anchor.label,
+        anchor.note,
+        anchor.created_at,
+      );
     }
   }
   db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
@@ -290,12 +336,14 @@ export function writeContactsSnapshot(
     );
   }
   const directlyAnchoredContacts = new Set(
-    localSystemAnchors
+    allSystemAnchors
       .map((anchor) => anchor.contact_id)
       .filter((contactId) => liveContactIds.has(contactId)),
   );
   const migratedAnchors = new Set<string>();
-  for (const row of localSystemAnchors) {
+  const restoredPendingAnchorIds: string[] = [];
+  const pendingAnchorIds = new Set(pendingSystemAnchors.map((anchor) => anchor.id));
+  for (const row of allSystemAnchors) {
     let targetContactId = row.contact_id;
     if (!liveContactIds.has(targetContactId)) {
       const migratedTarget = migratedAnchorTargets.get(targetContactId);
@@ -319,6 +367,13 @@ export function writeContactsSnapshot(
       row.note,
       row.created_at,
     );
+    if (pendingAnchorIds.has(row.id)) restoredPendingAnchorIds.push(row.id);
+  }
+  const removeRestoredPendingAnchor = db.prepare(
+    `DELETE FROM contacts_sync_pending_anchors WHERE identity_id = ?`,
+  );
+  for (const identityId of restoredPendingAnchorIds) {
+    removeRestoredPendingAnchor.run(identityId);
   }
 
   const insertEvent = db.prepare(
