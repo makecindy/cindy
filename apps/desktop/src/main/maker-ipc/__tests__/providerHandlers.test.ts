@@ -83,6 +83,7 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     broadcastChanged: vi.fn(() => {}),
     listProviderIds: () => [],
     setProviderOrder: vi.fn(() => true),
+    getProviderOrder: () => [],
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
@@ -133,22 +134,32 @@ afterEach(() => {
 });
 
 describe('provider:list IPC handler', () => {
-  it('wraps the injected service result as { providers } + visibility overrides snapshot', async () => {
+  it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
     const listProviders = vi.fn(async () => views);
     const overrides = { 'claude-code:xd:claude-opus-4-8': false };
+    const providerOrder = ['anthropic', 'xd'];
     registerProviderHandlers(
       harness,
-      makeDeps({ listProviders, getModelVisibilityOverrides: () => overrides }),
+      makeDeps({
+        listProviders,
+        getModelVisibilityOverrides: () => overrides,
+        getProviderOrder: () => providerOrder,
+        currentOwnerId: () => 'owner-a',
+      }),
     );
 
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
-    expect(result).toEqual({ providers: views, modelVisibilityOverrides: overrides });
+    expect(result).toEqual({
+      dataOwnerId: 'owner-a',
+      providers: views,
+      providerOrder,
+      modelVisibilityOverrides: overrides,
+    });
     expect(listProviders).toHaveBeenCalledOnce();
     expect(listProviders).toHaveBeenCalledWith({
       allowSideEffects: false,
-      sortForDisplay: true,
     });
   });
 

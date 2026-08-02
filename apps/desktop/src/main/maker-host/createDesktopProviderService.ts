@@ -55,7 +55,6 @@ import {
 } from './model-discovery/anthropic.js';
 import { createProviderService, type ProviderService } from './provider-service.js';
 import { readModelDisableOverrides } from './model-disable-store.js';
-import { sortProvidersForDisplay } from './provider-order-store.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import {
   setCustomProviderKeyReader,
@@ -754,9 +753,6 @@ export function getDesktopProviderService(): ProviderService {
     // 「模型 / 供应商停用」override:main 侧持久化真源,烘焙进 ProviderView 后
     // renderer / IM / Orca / device-link 全部消费同一份准入事实。
     getModelAccess: readModelDisableOverrides,
-    // 仅 provider:list 显式请求显示顺序；main 内部路由继续使用目录原序，避免用户
-    // 拖动设置列表意外改变默认模型解析或 first-match 路由行为。
-    sortForDisplay: sortProvidersForDisplay,
   });
   return singleton;
 }

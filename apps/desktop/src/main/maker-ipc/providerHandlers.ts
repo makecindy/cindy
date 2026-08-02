@@ -201,7 +201,6 @@ export interface ProviderHandlerDeps {
    */
   listProviders(opts?: {
     allowSideEffects?: boolean;
-    sortForDisplay?: boolean;
   }): Promise<ProviderView[]>;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
@@ -222,6 +221,8 @@ export interface ProviderHandlerDeps {
   listProviderIds(): string[];
   /** Merge the currently visible order into the persisted observed-provider order. */
   setProviderOrder(providerIds: readonly string[]): boolean;
+  /** Persisted Settings display order, returned as metadata without reordering ProviderView[]. */
+  getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
@@ -815,7 +816,9 @@ export function registerProviderHandlers(
     async (
       event,
     ): Promise<{
+      dataOwnerId: string | null;
       providers: ProviderView[];
+      providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
@@ -823,14 +826,19 @@ export function registerProviderHandlers(
       const trusted = deps.isTrustedSender?.(event) === true;
       const providers = await deps.listProviders({
         allowSideEffects: trusted,
-        sortForDisplay: true,
       });
+      // Capture owner + owner-scoped order synchronously after the async provider read. The
+      // renderer rejects this snapshot if its owner generation no longer matches.
+      const dataOwnerId = deps.currentOwnerId?.() ?? null;
+      const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
       // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
       // 请求头,update 由 main 侧保留旧值(planProviderHeaderMutations 'update' 分支)。
       return {
+        dataOwnerId,
         providers: providers.map(withoutProviderHeaderCredentials),
+        providerOrder,
         modelVisibilityOverrides: deps.getModelVisibilityOverrides(),
       };
     },

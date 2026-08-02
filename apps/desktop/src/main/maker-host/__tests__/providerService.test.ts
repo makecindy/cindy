@@ -20,29 +20,6 @@ describe('createProviderService', () => {
     expect(byId).toEqual({ anthropic: false, openai: false, xai: false, xd: true, gemini: false });
   });
 
-  it('applies user order only to display reads and preserves catalog order for routing reads', async () => {
-    const sortForDisplay = vi.fn((providers) => [...providers].reverse());
-    const svc = createProviderService({
-      getCatalog: bundledCatalog,
-      connection: {
-        xd: () => false,
-        anthropic: () => false,
-        openai: () => false,
-        xai: () => false,
-      },
-      sortForDisplay,
-    });
-
-    const routingOrder = (await svc.listProviders()).map((provider) => provider.id);
-    const displayOrder = (
-      await svc.listProviders({ sortForDisplay: true })
-    ).map((provider) => provider.id);
-
-    expect(routingOrder).toEqual(BUNDLED_CATALOG.providers.map((provider) => provider.id));
-    expect(displayOrder).toEqual([...routingOrder].reverse());
-    expect(sortForDisplay).toHaveBeenCalledOnce();
-  });
-
   it('builtin API-key provider connection follows builtinApiKeyConnected (2026-07 图像多来源)', async () => {
     const svc = createProviderService({
       getCatalog: bundledCatalog,

@@ -19,10 +19,12 @@ import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
   getCachedProvidersSnapshot,
   subscribeProvidersSnapshot,
+  type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
 
 export interface UseProvidersReturn {
   providers: ProviderView[];
+  providerOrder: string[];
   loading: boolean;
   refetch: () => void;
 }
@@ -41,16 +43,15 @@ export interface UseProvidersReturn {
  */
 export function useProviders(): UseProvidersReturn {
   const { dataOwnerId } = getDataOwnerGeneration();
-  const [snapshot, setSnapshot] = useState<{
-    dataOwnerId: string | null;
-    providers: ProviderView[] | null;
-  }>(() => ({ dataOwnerId, providers: getCachedProvidersSnapshot() }));
+  const [snapshot, setSnapshot] = useState<ProvidersSnapshot | null>(() =>
+    getCachedProvidersSnapshot(),
+  );
 
   // AuthContext 会先同步切换全局 data owner 代际、再提交 React state。owner 改变后的
   // 首次 render 不能继续暴露旧 state；只接受同 owner state 或 owner-scoped 模块缓存。
-  const currentProviders =
-    snapshot.dataOwnerId === dataOwnerId
-      ? snapshot.providers
+  const currentSnapshot =
+    snapshot?.dataOwnerId === dataOwnerId
+      ? snapshot
       : getCachedProvidersSnapshot();
 
   const refetch = useCallback(() => {
@@ -58,16 +59,15 @@ export function useProviders(): UseProvidersReturn {
   }, []);
 
   useEffect(() => {
-    setSnapshot({ dataOwnerId, providers: getCachedProvidersSnapshot() });
-    const onRefresh = (next: ProviderView[]): void => {
-      setSnapshot({ dataOwnerId, providers: next });
-    };
+    setSnapshot(getCachedProvidersSnapshot());
+    const onRefresh = (next: ProvidersSnapshot): void => setSnapshot(next);
     return subscribeProvidersSnapshot(onRefresh);
   }, [dataOwnerId]);
 
   return {
-    providers: currentProviders ?? [],
-    loading: currentProviders == null,
+    providers: currentSnapshot?.providers ?? [],
+    providerOrder: currentSnapshot?.providerOrder ?? [],
+    loading: currentSnapshot == null,
     refetch,
   };
 }

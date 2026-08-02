@@ -4,8 +4,6 @@ import path from 'node:path';
 
 import { afterAll, afterEach, describe, expect, it, vi } from 'vitest';
 
-import type { ProviderView } from '@cindy/model-providers';
-
 const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'provider-order-store-test-'));
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/never-used-here' } }));
@@ -16,7 +14,7 @@ vi.mock('../../appSessionState.js', () => ({
   ownerScopedUserDataPath: (name: string) => path.join(tmpDir, name),
 }));
 
-const { __testing, readProviderOrder, setProviderOrder, sortProvidersForDisplay } =
+const { __testing, readProviderOrder, setProviderOrder } =
   await import('../provider-order-store.js');
 
 afterEach(() => __testing.reset());
@@ -42,14 +40,5 @@ describe('provider-order-store', () => {
     setProviderOrder(['xd', 'anthropic', 'openai']);
     setProviderOrder(['openai', 'xd']);
     expect(readProviderOrder()).toEqual(['openai', 'anthropic', 'xd']);
-  });
-
-  it('puts Cindy AI first, then appends catalog entries not observed yet', () => {
-    const providers = [{ id: 'openai' }, { id: 'anthropic' }, { id: 'xd' }] as ProviderView[];
-    expect(sortProvidersForDisplay(providers).map((provider) => provider.id)).toEqual([
-      'xd',
-      'openai',
-      'anthropic',
-    ]);
   });
 });

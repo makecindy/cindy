@@ -95,10 +95,11 @@ vi.mock('@/hooks/useProviders', () => ({
     return {
       providers:
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
-          ? providerSnapshotState.order.flatMap((id) => {
-              const provider = byId.get(id);
-              return provider ? [provider] : [];
-            })
+          ? [...byId.values()]
+          : [],
+      providerOrder:
+        providerSnapshotState.dataOwnerId === authState.dataOwnerId
+          ? providerSnapshotState.order
           : [],
       loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
       refetch: vi.fn(),

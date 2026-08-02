@@ -7,10 +7,7 @@
  * every other newly visible provider appends at the end.
  */
 
-import type { ProviderView } from '@cindy/model-providers';
-
 import {
-  applyProviderOrder,
   mergeObservedProviderOrder,
   normalizeProviderOrder,
 } from '../../shared/providerOrder.js';
@@ -46,10 +43,6 @@ export function readProviderOrder(): string[] {
   store.invalidateIfChanged();
   const order = [...store.read().providerOrder];
   return order.includes(CINDY_AI_PROVIDER_ID) ? order : [CINDY_AI_PROVIDER_ID, ...order];
-}
-
-export function sortProvidersForDisplay(providers: readonly ProviderView[]): ProviderView[] {
-  return applyProviderOrder(providers, readProviderOrder());
 }
 
 export function setProviderOrder(visibleProviderIds: readonly string[]): boolean {

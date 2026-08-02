@@ -8,7 +8,12 @@ const mocks = vi.hoisted(() => ({
   authState: { dataOwnerId: 'owner-a' as string | null },
   cachedOwnerId: 'owner-a' as string | null,
   cachedProviders: [] as ProviderView[],
-  latestListener: null as null | ((providers: ProviderView[]) => void),
+  cachedProviderOrder: [] as string[],
+  latestListener: null as null | ((snapshot: {
+    dataOwnerId: string | null;
+    providers: ProviderView[];
+    providerOrder: string[];
+  }) => void),
   refreshLocalCatalogSnapshot: vi.fn(async () => true),
   getCachedProvidersSnapshot: vi.fn(),
   subscribeProvidersSnapshot: vi.fn(),
@@ -35,12 +40,19 @@ describe('useProviders', () => {
     mocks.authState.dataOwnerId = 'owner-a';
     mocks.cachedOwnerId = 'owner-a';
     mocks.cachedProviders = [];
+    mocks.cachedProviderOrder = [];
     mocks.latestListener = null;
     mocks.getCachedProvidersSnapshot.mockImplementation(() =>
-      mocks.cachedOwnerId === mocks.authState.dataOwnerId ? mocks.cachedProviders : null,
+      mocks.cachedOwnerId === mocks.authState.dataOwnerId
+        ? {
+            dataOwnerId: mocks.cachedOwnerId,
+            providers: mocks.cachedProviders,
+            providerOrder: mocks.cachedProviderOrder,
+          }
+        : null,
     );
     mocks.subscribeProvidersSnapshot.mockImplementation(
-      (listener: (providers: ProviderView[]) => void) => {
+      (listener: typeof mocks.latestListener) => {
         mocks.latestListener = listener;
         return () => {
           if (mocks.latestListener === listener) mocks.latestListener = null;
@@ -63,6 +75,7 @@ describe('useProviders', () => {
     mocks.cachedProviders = [ownerAProvider];
     const { result, rerender } = renderHook(() => useProviders());
     expect(result.current.providers).toEqual([ownerAProvider]);
+    expect(result.current.providerOrder).toEqual([]);
     expect(result.current.loading).toBe(false);
 
     act(() => {
@@ -75,9 +88,15 @@ describe('useProviders', () => {
     act(() => {
       mocks.cachedOwnerId = 'owner-b';
       mocks.cachedProviders = [ownerBProvider];
-      mocks.latestListener?.([ownerBProvider]);
+      mocks.cachedProviderOrder = ['owner-b-provider'];
+      mocks.latestListener?.({
+        dataOwnerId: 'owner-b',
+        providers: [ownerBProvider],
+        providerOrder: ['owner-b-provider'],
+      });
     });
     expect(result.current.providers).toEqual([ownerBProvider]);
+    expect(result.current.providerOrder).toEqual(['owner-b-provider']);
     expect(result.current.loading).toBe(false);
   });
 });

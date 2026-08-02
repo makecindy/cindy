@@ -25,17 +25,44 @@ describe('providersSnapshotStore owner isolation', () => {
 
     setDataOwnerGeneration('owner-a');
     const ownerAToken = beginProvidersRefresh();
-    expect(commitProvidersSnapshot(ownerAToken, [ownerAProvider])).toBe(true);
-    expect(getCachedProvidersSnapshot()).toEqual([ownerAProvider]);
+    expect(commitProvidersSnapshot(ownerAToken, {
+      dataOwnerId: 'owner-a',
+      providers: [ownerAProvider],
+      providerOrder: ['owner-a-provider'],
+    })).toBe(true);
+    expect(getCachedProvidersSnapshot()).toEqual({
+      dataOwnerId: 'owner-a',
+      providers: [ownerAProvider],
+      providerOrder: ['owner-a-provider'],
+    });
 
     const staleOwnerAToken = beginProvidersRefresh();
     setDataOwnerGeneration('owner-b');
     expect(getCachedProvidersSnapshot()).toBeNull();
     expect(isProvidersRefreshCurrent(staleOwnerAToken)).toBe(false);
-    expect(commitProvidersSnapshot(staleOwnerAToken, [ownerAProvider])).toBe(false);
+    expect(commitProvidersSnapshot(staleOwnerAToken, {
+      dataOwnerId: 'owner-a',
+      providers: [ownerAProvider],
+      providerOrder: ['owner-a-provider'],
+    })).toBe(false);
 
     const ownerBToken = beginProvidersRefresh();
-    expect(commitProvidersSnapshot(ownerBToken, [ownerBProvider])).toBe(true);
-    expect(getCachedProvidersSnapshot()).toEqual([ownerBProvider]);
+    const mismatchedOwnerSnapshot = {
+      dataOwnerId: 'owner-a',
+      providers: [ownerBProvider],
+      providerOrder: ['owner-b-provider'],
+    };
+    expect(isProvidersRefreshCurrent(ownerBToken, mismatchedOwnerSnapshot)).toBe(false);
+    expect(commitProvidersSnapshot(ownerBToken, mismatchedOwnerSnapshot)).toBe(false);
+    expect(commitProvidersSnapshot(ownerBToken, {
+      dataOwnerId: 'owner-b',
+      providers: [ownerBProvider],
+      providerOrder: ['owner-b-provider'],
+    })).toBe(true);
+    expect(getCachedProvidersSnapshot()).toEqual({
+      dataOwnerId: 'owner-b',
+      providers: [ownerBProvider],
+      providerOrder: ['owner-b-provider'],
+    });
   });
 });

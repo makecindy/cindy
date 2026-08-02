@@ -16,19 +16,25 @@ interface ProvidersRefreshToken {
   owner: DataOwnerGeneration;
 }
 
-let cachedProviders: { dataOwnerId: string | null; providers: ProviderView[] } | null = null;
+export interface ProvidersSnapshot {
+  dataOwnerId: string | null;
+  providers: ProviderView[];
+  providerOrder: string[];
+}
+
+let cachedProviders: ProvidersSnapshot | null = null;
 let providersGeneration = 0;
-const providerListeners = new Set<(providers: ProviderView[]) => void>();
+const providerListeners = new Set<(snapshot: ProvidersSnapshot) => void>();
 
 /** 返回当前 data owner 最近一次完整 provider 快照；未加载或归属不符时为 null。 */
-export function getCachedProvidersSnapshot(): ProviderView[] | null {
+export function getCachedProvidersSnapshot(): ProvidersSnapshot | null {
   const { dataOwnerId } = getDataOwnerGeneration();
-  return cachedProviders?.dataOwnerId === dataOwnerId ? cachedProviders.providers : null;
+  return cachedProviders?.dataOwnerId === dataOwnerId ? cachedProviders : null;
 }
 
 /** 订阅完整 provider 快照提交。 */
 export function subscribeProvidersSnapshot(
-  listener: (providers: ProviderView[]) => void,
+  listener: (snapshot: ProvidersSnapshot) => void,
 ): () => void {
   providerListeners.add(listener);
   return () => providerListeners.delete(listener);
@@ -44,25 +50,33 @@ export function beginProvidersRefresh(): ProvidersRefreshToken {
 }
 
 /** 读取 provider 快照。失败向上抛，由联合刷新保留上一份有效缓存。 */
-export async function loadProvidersSnapshot(): Promise<ProviderView[]> {
+export async function loadProvidersSnapshot(): Promise<ProvidersSnapshot> {
   const result = await window.electronAPI.maker.listProviders();
-  return result.providers;
+  return {
+    dataOwnerId: result.dataOwnerId,
+    providers: result.providers,
+    providerOrder: result.providerOrder,
+  };
 }
 
-export function isProvidersRefreshCurrent(token: ProvidersRefreshToken): boolean {
+export function isProvidersRefreshCurrent(
+  token: ProvidersRefreshToken,
+  snapshot?: ProvidersSnapshot,
+): boolean {
   return (
     providersGeneration === token.generation
     && isDataOwnerGenerationCurrent(token.owner)
+    && (snapshot === undefined || snapshot.dataOwnerId === token.owner.dataOwnerId)
   );
 }
 
 /** 仅提交当前代际的完整快照，并一次通知所有 mounted hooks。 */
 export function commitProvidersSnapshot(
   token: ProvidersRefreshToken,
-  next: ProviderView[],
+  next: ProvidersSnapshot,
 ): boolean {
-  if (!isProvidersRefreshCurrent(token)) return false;
-  cachedProviders = { dataOwnerId: token.owner.dataOwnerId, providers: next };
+  if (!isProvidersRefreshCurrent(token, next)) return false;
+  cachedProviders = next;
   for (const listener of providerListeners) listener(next);
   return true;
 }

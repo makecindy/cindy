@@ -505,7 +505,7 @@ import {
   setProviderDisabled,
   stageProviderDisableOverridesClear,
 } from '../maker-host/model-disable-store.js';
-import { setProviderOrder } from '../maker-host/provider-order-store.js';
+import { readProviderOrder, setProviderOrder } from '../maker-host/provider-order-store.js';
 import { getCurrentDataOwnerId } from '../authManager.js';
 import {
   resolveLenientSessionRoute,
@@ -4440,6 +4440,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastChanged: () => broadcastToAllWindows(MAKER_PUSH.PROVIDER_CHANGED, {}),
     listProviderIds: () => getDesktopSelectableCatalog().providers.map((provider) => provider.id),
     setProviderOrder: (providerIds) => setProviderOrder(providerIds),
+    getProviderOrder: () => readProviderOrder(),
     listPresets: () => getActiveCatalog().presets ?? [],
     testConnection: (input) => testProviderConnection(input),
     fetchModels: (spec) => fetchProviderModels(spec),

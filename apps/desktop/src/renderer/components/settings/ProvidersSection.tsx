@@ -1475,7 +1475,7 @@ export function ProvidersSection() {
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
-  const { providers, loading, refetch } = useProviders();
+  const { providers, providerOrder, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -1551,8 +1551,9 @@ export function ProvidersSection() {
     return map;
   }, [providers]);
 
-  // 左栏实际供应商严格沿用 main 的显示顺序;未连接的内置渠道仍只在向导 / 检测建议
-  // 出现。Cindy 登录引导与检测建议是伪行,不进入持久化顺序。
+  // 共享 provider 快照保持目录原序，避免显示偏好影响模型来源推导；只有设置页左栏
+  // 应用 Main 并列下发的 owner-scoped 显示顺序。Cindy 登录引导与检测建议是伪行，
+  // 不进入持久化顺序。
   const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
     for (const p of providers) {
@@ -1581,12 +1582,17 @@ export function ProvidersSection() {
     return rows;
   }, [providers, openaiReconnectRequired]);
 
+  const orderedVisibleProviders = useMemo(
+    () => applyProviderOrder(visibleProviders, providerOrder),
+    [providerOrder, visibleProviders],
+  );
+
   const listProviders = useMemo(
     () =>
       pendingProviderOrderIds
-        ? applyProviderOrder(visibleProviders, pendingProviderOrderIds)
-        : visibleProviders,
-    [pendingProviderOrderIds, visibleProviders],
+        ? applyProviderOrder(orderedVisibleProviders, pendingProviderOrderIds)
+        : orderedVisibleProviders,
+    [orderedVisibleProviders, pendingProviderOrderIds],
   );
 
   useEffect(() => {
@@ -1596,14 +1602,14 @@ export function ProvidersSection() {
       return;
     }
     if (!pendingProviderOrderIds) return;
-    const incomingIds = visibleProviders.map((provider) => provider.id);
+    const incomingIds = orderedVisibleProviders.map((provider) => provider.id);
     const sameCatalog =
       incomingIds.length === pendingProviderOrderIds.length &&
       incomingIds.every((id) => pendingProviderOrderIds.includes(id));
     if (!sameCatalog || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])) {
       setPendingProviderOrder(null);
     }
-  }, [dataOwnerId, pendingProviderOrder, pendingProviderOrderIds, visibleProviders]);
+  }, [dataOwnerId, orderedVisibleProviders, pendingProviderOrder, pendingProviderOrderIds]);
 
   // Main 只持久化曾经真正进入过左栏的供应商。首次出现的新项按当前可见顺序追加；
   // 已记录但暂时隐藏的项由 store 保留，因此断开重连不会丢失用户排位。

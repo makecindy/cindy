@@ -39,8 +39,6 @@ export interface ProviderListOptions extends ConnectionReadOptions {
    * rather than the user-selectable projection. Never sourced from IPC input.
    */
   catalog?: Catalog;
-  /** Apply the persisted user-facing order. Internal routing callers leave this false. */
-  sortForDisplay?: boolean;
 }
 
 /** 内置三家供应商「是否已连接」的判定器（由 host 注入，读各自凭证存储）。 */
@@ -88,8 +86,6 @@ export interface ProviderServiceDeps {
    * 消费方(renderer / IM / Orca 路由 / device-link)拿到同一份准入事实。缺省 = 全启用。
    */
   getModelAccess?: () => ModelDisableOverrides;
-  /** User-facing projection only; never applied to internal routing/default resolution. */
-  sortForDisplay?: (providers: readonly ProviderView[]) => ProviderView[];
 }
 
 export interface ProviderService {
@@ -156,10 +152,7 @@ export function createProviderService(deps: ProviderServiceDeps): ProviderServic
         if (failure) discoveryFailures[p.id] = failure;
       }
     }
-    const providers = buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
-    return opts?.sortForDisplay === true && deps.sortForDisplay
-      ? deps.sortForDisplay(providers)
-      : providers;
+    return buildRegistry(catalog, connected, discoveryFailures, deps.getModelAccess?.());
   }
 
   return { listProviders };
