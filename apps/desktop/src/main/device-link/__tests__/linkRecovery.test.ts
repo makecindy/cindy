@@ -72,7 +72,7 @@ describe('device-link closed link recovery', () => {
     expect(reopen).toHaveBeenCalledTimes(1);
   });
 
-  it('reopen 后、第二次 invoke 前会重新执行本地控制守卫', async () => {
+  it('reopen 后守卫失败会清理链路且不发送第二次 invoke', async () => {
     const closed = new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     const disabled = new Error('[DEVICE_LINK_CONTROL_DISABLED] disabled while reopening');
     const invoke = vi.fn().mockRejectedValueOnce(closed);
@@ -80,19 +80,22 @@ describe('device-link closed link recovery', () => {
     const beforeRetry = vi.fn(() => {
       throw disabled;
     });
+    const cleanup = vi.fn();
 
     await expect(
-      invokeWithClosedLinkRecovery(invoke, reopen, beforeRetry),
+      invokeWithClosedLinkRecovery(invoke, reopen, beforeRetry, cleanup),
     ).rejects.toBe(disabled);
     expect(invoke).toHaveBeenCalledTimes(1);
     expect(reopen).toHaveBeenCalledTimes(1);
     expect(beforeRetry).toHaveBeenCalledTimes(1);
+    expect(cleanup).toHaveBeenCalledTimes(1);
   });
 
-  it('只把具体会话 topic 识别为需要 streaming link', () => {
+  it('只把具体会话或有效文件树 topic 识别为需要 streaming link', () => {
     expect(requiresSessionLink(['sessions'])).toBe(false);
     expect(requiresSessionLink(['session:'])).toBe(false);
-    expect(requiresSessionLink(['fs-watch:C:\\repo'])).toBe(false);
+    expect(requiresSessionLink(['fs-watch:'])).toBe(false);
     expect(requiresSessionLink(['sessions', 'session:s1'])).toBe(true);
+    expect(requiresSessionLink(['fs-watch:C:\\repo'])).toBe(true);
   });
 });

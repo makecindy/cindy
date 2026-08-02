@@ -912,6 +912,16 @@ export function closeRemoteLink(deviceId: string): void {
   client?.closeLink(deviceId, 'user');
 }
 
+/** 重开期间本地撤权时，撤销已成功建立的临时控制链路，保持 fail-closed。 */
+function assertRemoteControlTargetEnabledAfterReopen(deviceId: string): void {
+  try {
+    assertRemoteControlTargetEnabled(deviceId);
+  } catch (err) {
+    closeRemoteLink(deviceId);
+    throw err;
+  }
+}
+
 /**
  * 本机在 device-link 网络中的设备 id(relay ack 下发);未连接 / 未 ack 时 null。
  * 供会话引用解析等消费方识别「指向本机自己的 deviceId」——深链是可复制的字符串,
@@ -939,6 +949,7 @@ export async function remoteInvoke(
     invoke,
     () => openRemoteLink(deviceId),
     () => assertRemoteControlTargetEnabled(deviceId),
+    () => closeRemoteLink(deviceId),
   );
 }
 
@@ -956,7 +967,7 @@ export async function remoteSubscribe(
   if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
     await openRemoteLink(deviceId);
   }
-  assertRemoteControlTargetEnabled(deviceId);
+  assertRemoteControlTargetEnabledAfterReopen(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   return client.invoke(deviceId, {
     channel: DL_SUBSCRIBE_CHANNEL,

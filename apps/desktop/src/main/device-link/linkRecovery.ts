@@ -1,9 +1,10 @@
-import { DeviceLinkError } from '@cindy/device-link';
+import { DeviceLinkError, parseFsWatchTopic } from '@cindy/device-link';
 
-/** 打开具体远程会话时必须先建立 streaming link；轻量 sessions 列表订阅不依赖。 */
+/** 打开具体远程会话或文件树监听时必须先建立 streaming link；轻量 sessions 列表订阅不依赖。 */
 export function requiresSessionLink(topics: readonly string[]): boolean {
   return topics.some((topic) => (
-    topic.startsWith('session:') && topic.length > 'session:'.length
+    (topic.startsWith('session:') && topic.length > 'session:'.length)
+    || parseFsWatchTopic(topic) !== null
   ));
 }
 
@@ -15,6 +16,7 @@ export async function invokeWithClosedLinkRecovery<T>(
   invoke: () => Promise<T>,
   reopen: () => Promise<unknown>,
   beforeRetry?: () => void,
+  onRetryGuardFailure?: () => void,
 ): Promise<T> {
   try {
     return await invoke();
@@ -29,6 +31,15 @@ export async function invokeWithClosedLinkRecovery<T>(
   }
 
   await reopen();
-  beforeRetry?.();
+  try {
+    beforeRetry?.();
+  } catch (err) {
+    try {
+      onRetryGuardFailure?.();
+    } catch {
+      // 清理是 best-effort；保留撤权守卫错误作为调用方可见结果。
+    }
+    throw err;
+  }
   return invoke();
 }
