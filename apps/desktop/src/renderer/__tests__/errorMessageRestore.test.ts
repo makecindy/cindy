@@ -46,6 +46,16 @@ describe('mapServerMessages — persisted terminal error rows', () => {
     );
   });
 
+  it('maps Codex reconnect stalls to the existing upstream timeout copy', () => {
+    expect(ERROR_REASON_I18N_KEYS.codex_reconnect_stalled).toBe(
+      'logic.errors.upstreamResponseIdleTimeout',
+    );
+  });
+
+  it('maps an event-loop crash to the generic terminal failure copy', () => {
+    expect(ERROR_REASON_I18N_KEYS.session_event_loop_crashed).toBe('logic.errors.turnFailed');
+  });
+
   it('restores the overload reason from persisted rows so history can localize it', () => {
     const mapped = makerChatStore.__mapServerMessagesForTest([
       errorRow('e-overload', {

@@ -114,9 +114,11 @@ import {
 } from './translator.js';
 import {
   TurnRetryTracker,
+  RETRY_ESCALATION_MAX_ELAPSED_MS,
   buildBackendUnreachableMessage,
   type OutboundPathFact,
 } from './retry-escalation.js';
+import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError } from './app-server/client.js';
@@ -813,6 +815,20 @@ const CODEX_UPSTREAM_IDLE_SLICE_MS = 60_000;
 
 /** 分片实际耗时超出片长这么多 → 判为进程被系统挂起过,该片不计入额度。 */
 const CODEX_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
+
+/**
+ * Codex app-server `Reconnecting... N/M` 的总等待上限。复用 retry-escalation
+ * 的 120s 语义，避免有限重连提示在最后一档之后静默卡住；这是整个重连序列的
+ * deadline，不会因为后续的 `2/5`、`3/5` 提示重新计时。
+ */
+const CODEX_RECONNECT_STALL_TIMEOUT_MS = RETRY_ESCALATION_MAX_ELAPSED_MS;
+
+/** 只含空白、格式字符或控制字符的 text delta 不算重连已经恢复。 */
+const CODEX_INVISIBLE_TEXT_PATTERN = /[\s\p{Cf}\p{Cc}]/gu;
+
+function hasVisibleCodexText(text: unknown): boolean {
+  return typeof text === 'string' && text.replace(CODEX_INVISIBLE_TEXT_PATTERN, '').length > 0;
+}
 
 function parseCodexIdleTimeoutMs(raw: string | undefined): number {
   if (raw === undefined || raw === '') return CODEX_UPSTREAM_IDLE_TIMEOUT_DEFAULT_MS;
@@ -4314,6 +4330,13 @@ export class CodexAgent extends BaseAgent {
     let upstreamIdleTimer: ReturnType<typeof setTimeout> | null = null;
     let upstreamIdleLastEventType: string | null = null;
     let upstreamIdleLastEventAt = 0;
+    /**
+     * 当前 `Reconnecting... N/M` 序列的总 deadline。这个看门狗与 upstream-idle
+     * 不同：它只在 Codex 明确上报有限重连时启动，后续 attempt 不延长同一轮总时限。
+     */
+    let reconnectStallTimer: ReturnType<typeof setTimeout> | null = null;
+    let reconnectStallTurnId: string | null = null;
+    let reconnectStallTurnGeneration = 0;
     /** 还需要"清醒地"静默多久才判上游哑火;按分片递减(见 armUpstreamIdleSlice)。 */
     let upstreamIdleRemainingMs = 0;
     /** 当前分片的起始壁钟时刻;片尾据此识别系统挂起。 */
@@ -4325,6 +4348,14 @@ export class CodexAgent extends BaseAgent {
       }
       upstreamIdleRemainingMs = 0;
       upstreamIdleSliceStartedAt = 0;
+    }
+    function clearReconnectStall(): void {
+      if (reconnectStallTimer) {
+        clearTimeout(reconnectStallTimer);
+        reconnectStallTimer = null;
+      }
+      reconnectStallTurnId = null;
+      reconnectStallTurnGeneration = 0;
     }
     function armUpstreamIdle(): void {
       clearUpstreamIdle();
@@ -4395,6 +4426,7 @@ export class CodexAgent extends BaseAgent {
     /** turn 结束 / 中断时收表并清工具项(终态可能先于 item completed 到达)。 */
     function resetUpstreamIdleForTurnEnd(): void {
       clearUpstreamIdle();
+      clearReconnectStall();
       pendingToolItemIds.clear();
     }
     /**
@@ -4412,19 +4444,111 @@ export class CodexAgent extends BaseAgent {
       // 停/起表边界变了,立即重算(最后一个工具收工 → 球回上游,开始计时)。
       armUpstreamIdle();
     }
+
+    function armReconnectStall(turnId = currentTurnId): void {
+      if (closed || (!isTurnInFlight && !isTurnStartPending) || !turnId) return;
+      // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不重置整个重连序列的 deadline。
+      if (reconnectStallTimer) return;
+      reconnectStallTurnId = turnId;
+      reconnectStallTurnGeneration = turnStartGeneration;
+      reconnectStallTimer = setTimeout(() => {
+        reconnectStallTimer = null;
+        const pendingTurnStart =
+          !isTurnInFlight &&
+          isTurnStartPending &&
+          currentTurnId === null &&
+          reconnectStallTurnId !== null;
+        if (
+          closed ||
+          (!isTurnInFlight && !pendingTurnStart) ||
+          (isTurnInFlight && currentTurnId !== reconnectStallTurnId) ||
+          turnStartGeneration !== reconnectStallTurnGeneration
+        ) {
+          clearReconnectStall();
+          return;
+        }
+        onUpstreamIdleTimeout({
+          reason: 'codex_reconnect_stalled',
+          timeoutMs: CODEX_RECONNECT_STALL_TIMEOUT_MS,
+          ignorePendingTools: true,
+          allowPendingTurnStart: pendingTurnStart,
+          logLabel: 'codex reconnect watchdog tripped — interrupting stalled turn',
+          message:
+            `Codex app-server has been reconnecting for ${Math.round(CODEX_RECONNECT_STALL_TIMEOUT_MS / 1000)}s ` +
+            'without making progress; the turn was interrupted automatically. ' +
+            'You can send the next message to continue.',
+        });
+      }, CODEX_RECONNECT_STALL_TIMEOUT_MS);
+      (reconnectStallTimer as unknown as { unref?: () => void }).unref?.();
+    }
+
+    function isReconnectRecoveryEvent(event: AgentEvent): boolean {
+      if (event.type === 'text') {
+        const text = (event.data as { text?: unknown } | null | undefined)?.text;
+        return hasVisibleCodexText(text);
+      }
+      if (
+        event.type === 'thinking' ||
+        event.type === 'tool_use' ||
+        event.type === 'tool_result' ||
+        event.type === 'tool_result_full' ||
+        event.type === 'agent_task_update' ||
+        event.type === 'image' ||
+        event.type === 'done'
+      ) {
+        return true;
+      }
+      if (event.type === 'status') {
+        return (event.data as { isRunning?: unknown } | null | undefined)?.isRunning === false;
+      }
+      if (event.type !== 'error') return false;
+      const data = event.data as { isTerminal?: unknown; willRetry?: unknown } | null | undefined;
+      return data?.isTerminal === true || data?.willRetry === false ||
+        (data?.isTerminal === undefined && data?.willRetry === undefined);
+    }
+
+    function observeReconnectStallEvent(event: AgentEvent): void {
+      const data = event.data as { message?: unknown; isTerminal?: unknown; willRetry?: unknown } | null | undefined;
+      const message = typeof data?.message === 'string' ? data.message : null;
+      const isReconnectNotice =
+        event.type === 'error' &&
+        data?.isTerminal !== true &&
+        data?.willRetry !== false &&
+        message !== null &&
+        parseReconnectAttemptMessage(message) !== null;
+      if (isReconnectNotice) {
+        armReconnectStall();
+        return;
+      }
+      if (reconnectStallTimer && isReconnectRecoveryEvent(event)) {
+        clearReconnectStall();
+      }
+    }
     /**
      * 上游连续静默超阈值:daemon 对我们彻底哑火。推一条终态 error 收口(renderer 停
      * 转圈 / scheduler 把 run 记 failed / IM 转播 finalize),再 turn/interrupt 让
      * daemon 侧那个 turn 停掉(与用户手动 Stop 同路径,thread 保持可用)。
      */
-    function onUpstreamIdleTimeout(): void {
-      if (closed || !isTurnInFlight) return;
-      if (pendingToolItemIds.size > 0) return;
-      const idleMs = upstreamIdleTimeoutMs;
+    function onUpstreamIdleTimeout(opts?: {
+      reason?: string;
+      timeoutMs?: number;
+      message?: string;
+      logLabel?: string;
+      ignorePendingTools?: boolean;
+      allowPendingTurnStart?: boolean;
+    }): void {
+      if (closed) return;
+      const pendingTurnId =
+        opts?.allowPendingTurnStart && !isTurnInFlight && isTurnStartPending
+          ? reconnectStallTurnId
+          : null;
+      if (!isTurnInFlight && !pendingTurnId) return;
+      if (!opts?.ignorePendingTools && pendingToolItemIds.size > 0) return;
+      const idleMs = opts?.timeoutMs ?? upstreamIdleTimeoutMs;
       const msSinceLast =
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
-      const turnId = currentTurnId;
-      log.warn('upstream-response-idle watchdog tripped — interrupting current turn', {
+      const turnId = currentTurnId ?? pendingTurnId;
+      log.warn(opts?.logLabel ?? 'upstream-response-idle watchdog tripped — interrupting current turn', {
         idleMs,
         threadId,
         turnId,
@@ -4439,11 +4563,11 @@ export class CodexAgent extends BaseAgent {
         data: {
           // reason 与 claude-code 侧共用同一稳定 key(renderer i18n 映射,规则 18);
           // message 仅作非 renderer 消费方(IM / orca / 日志)的英文兜底。
-          reason: 'upstream_response_idle_timeout',
-          message:
-            `The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
-            'the turn was interrupted automatically to avoid hanging forever. ' +
-            'You can send the next message to continue.',
+          reason: opts?.reason ?? 'upstream_response_idle_timeout',
+          message: opts?.message ??
+            (`The upstream response has been silent for ${Math.round(idleMs / 1000)}s; ` +
+              'the turn was interrupted automatically to avoid hanging forever. ' +
+              'You can send the next message to continue.'),
           isTerminal: true,
           idleMs,
           lastEventType: upstreamIdleLastEventType,
@@ -4451,6 +4575,51 @@ export class CodexAgent extends BaseAgent {
         },
         source: 'codex',
       });
+      if (pendingTurnId) {
+        // 重连提示可能早于 turnStarted 到达。此时 turn/start 仍在飞，不能只清掉
+        // 看门狗：迟到的 response / turnStarted 必须被隔离，否则用户已经看到终态后
+        // server 侧的 turn 仍可能被重新激活；同时关闭当前 handle，让下一次 send
+        // 通过 Maker 的 lazy create 重建 transport。
+        terminalErroredTurnIds.add(pendingTurnId);
+        markInFlightStartsTerminallySettled();
+        quarantineAllInFlightStarts();
+        resetUpstreamIdleForTurnEnd();
+        eventQueue.push({
+          type: 'status',
+          data: { status: 'Done', ...usageTracker.snapshot(), isRunning: false },
+          source: 'codex',
+        });
+        void (async () => {
+          // pending turn/start 只证明这一轮 admission 卡住，不等于共享 app-server
+          // 控制面已经死掉。沿用 active-turn watchdog 的双次有界 interrupt 判据：
+          // ACK 成功时只关闭本 handle；只有两次 ACK 都失败才退役共享 host，避免连带
+          // 杀掉同 host 上其它健康 session。
+          const interruptPromise = interruptTurnForPermissionTighten(pendingTurnId, {
+            suppressFailureEvent: true,
+          });
+          try {
+            await handle.close();
+          } catch (error: unknown) {
+            log.warn('codex reconnect watchdog pending turn close threw', {
+              turnId: pendingTurnId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+          const interrupted = await interruptPromise;
+          if (interrupted) return;
+          try {
+            await retireUnresponsiveHost(
+              `codex app-server unresponsive: reconnecting for ${Math.round(idleMs / 1000)}s before turn/start completed`,
+            );
+          } catch (error: unknown) {
+            log.warn('codex reconnect watchdog pending host retire threw', {
+              turnId: pendingTurnId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          }
+        })();
+        return;
+      }
       resetUpstreamIdleForTurnEnd();
       if (!turnId) return;
       // **先把本地 turn 状态收干净,再去 interrupt**(review #944 第二轮 P1)。
@@ -4552,6 +4721,7 @@ export class CodexAgent extends BaseAgent {
       upstreamIdleLastEventType = ev.type;
       upstreamIdleLastEventAt = Date.now();
       armUpstreamIdle();
+      observeReconnectStallEvent(ev);
       return rawEventQueuePush(ev);
     };
 
@@ -5840,6 +6010,7 @@ export class CodexAgent extends BaseAgent {
 
     function handleTurnCompleted(params: TurnCompletedParams): void {
       const turn = params.turn;
+      if (reconnectStallTurnId === turn.id) clearReconnectStall();
       let recoveryState = overloadRetry;
       let pendingRecovery =
         recoveryState?.pendingHttpRecovery?.deadTurnId === turn.id
@@ -6833,6 +7004,13 @@ export class CodexAgent extends BaseAgent {
         currentTurnId = params.turn.id;
         isTurnInFlight = true;
         turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
+        if (!wasSameTurn) {
+          if (reconnectStallTimer && reconnectStallTurnId === params.turn.id) {
+            reconnectStallTurnGeneration = turnStartGeneration;
+          } else {
+            clearReconnectStall();
+          }
+        }
         // turn 开始 → 球在上游,起 idle 表(后续任何事件都会重置它)。
         armUpstreamIdle();
         // turn/start 在飞期间权限被收紧 (turnStarted 通知可能先于 turn/start resp
@@ -7142,6 +7320,16 @@ export class CodexAgent extends BaseAgent {
             && (!idLessCapacityError || idLessCapacityTargetsActiveTurn))
           || targetsPendingTurn
           || targetsIdLessPendingStart;
+        if (
+          !isTerminalError &&
+          targetsCurrentTurn &&
+          parseReconnectAttemptMessage(params.error?.message ?? '') !== null
+        ) {
+          // error notification 可能抢在 turnStarted / turn/start response 前到达；这里
+          // 先按 params.turnId 绑定 deadline，turnStarted 随后会把 generation 重新绑定
+          // 到已接受的 turn，不让这类乱序事件漏掉静默重连卡死。
+          armReconnectStall(params.turnId || currentTurnId);
+        }
         if (isTerminalError && isTransportError && !targetsCurrentTurn) {
           translateErrorNotification(effectiveParams, eventQueue, { rt: translatorRt, log });
           return;
@@ -7334,6 +7522,8 @@ export class CodexAgent extends BaseAgent {
         if (rejectClosedOrCancelledSend(sendOpts, 'before start')) {
           return;
         }
+        // 用户开启新 turn = 旧重连序列作废；deadline 不得跨 turn 误伤新请求。
+        clearReconnectStall();
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
         const capabilitySelectionText =
@@ -7611,6 +7801,11 @@ export class CodexAgent extends BaseAgent {
               currentTurnId = resp.turn.id;
               isTurnInFlight = true;
               turnStartGeneration += 1; // 见声明处:延迟善后靠它判断"期间起过新 turn"
+              if (reconnectStallTimer && reconnectStallTurnId === resp.turn.id) {
+                reconnectStallTurnGeneration = turnStartGeneration;
+              } else {
+                clearReconnectStall();
+              }
               currentTurnPlanModeActive = turnStartsInPlanMode;
               pendingTurnStartPlanMode = null;
               startRolloutPlanFallback(resp.turn.id);
@@ -8164,6 +8359,7 @@ export class CodexAgent extends BaseAgent {
       },
 
       async abort() {
+        clearReconnectStall();
         // 用户点 Stop = 明确不想继续这一轮，挂起的过载重投必须一起撤掉。
         // 放在 currentTurnId 判空之前：重投等待期间 turn 已死、currentTurnId 为
         // null，此时正是最需要响应 Stop 的时刻（否则计时器到点又发一个新 turn）。
@@ -8224,6 +8420,7 @@ export class CodexAgent extends BaseAgent {
       async close() {
         if (closed) return;
         closed = true;
+        clearReconnectStall();
         resetUpstreamIdleForTurnEnd();
         unregisterCodexMcpContext(threadId);
         unregisterDescendantCodexMcpContexts();

@@ -34,6 +34,8 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   // 卡死自愈的两层看门狗(agent 层上游静默 / Session 层 turn 零事件)。两者的
   // maker-core 侧 message 是英文兜底,renderer 一律走这里的本地化文案。
   upstream_response_idle_timeout: 'logic.errors.upstreamResponseIdleTimeout',
+  codex_reconnect_stalled: 'logic.errors.upstreamResponseIdleTimeout',
+  session_event_loop_crashed: 'logic.errors.turnFailed',
   turn_no_event_timeout: 'logic.errors.turnNoEventTimeout',
   // 上游过载(重投预算耗尽后的终态)。**复用尾部 banner 的同一条文案**, 正是本表
   // 注释说的那个一致性: 不映射的话同一条过载错误会出现「尾部红条本地化、历史静态
