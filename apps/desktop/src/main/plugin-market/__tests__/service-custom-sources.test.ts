@@ -997,7 +997,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 的目录"这种永久错误,按内容非法跳过才对(否则这类市场永久阻塞默认安装)。
     // 路径必须按 realpath 拼:发现层用的是 realpath(macOS 上 /var → /private/var),
     // 用 mkdtemp 原样路径做匹配会让 mock 永不命中。
-    const target = path.join(fs.realpathSync(dir), 'plugins', 'srv', 'ghost.json');
+    const target = path.join(await fs.promises.realpath(dir), 'plugins', 'srv', 'ghost.json');
     const realOpen = fs.promises.open;
     const spy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
       ...args: Parameters<typeof fs.promises.open>

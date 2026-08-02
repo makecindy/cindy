@@ -478,7 +478,7 @@ describe('MarketSourceManager git sources', () => {
         ? discovered.result.marketplace.plugins[0]!.dir
         : '';
       // discover 返回 realpath(macOS 下 /var → /private/var),按 realpath 比对。
-      expect(pluginDir.startsWith(fs.realpathSync(heldDir))).toBe(true);
+      expect(pluginDir.startsWith(await fs.promises.realpath(heldDir))).toBe(true);
 
       await refresher.refreshSource('hub');
       const switched = fs.readFileSync(path.join(slot, 'current'), 'utf8').trim();
