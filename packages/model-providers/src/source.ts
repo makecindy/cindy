@@ -14,7 +14,10 @@
  */
 
 import { BUNDLED_CATALOG, parseCatalog } from './catalog.js';
-import { compareModelRegistryRevisions } from './modelRegistry.js';
+import {
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
+} from './modelRegistry.js';
 import type { AgentKind, Catalog, Provider, ProviderPreset } from './types.js';
 
 /** 公共模型目录 API 路径。发布版由 model-access-server 匿名提供完整 Catalog。 */
@@ -311,15 +314,11 @@ function preserveNewerCachedCatalog(
   remote: Catalog,
   cached: Catalog,
 ): { catalog: Catalog; tieConflict: boolean } {
-  if (remote.modelRegistry && cached.modelRegistry) {
-    const relation = compareModelRegistryRevisions(remote.modelRegistry, cached.modelRegistry);
-    if (relation === 'conflict') return { catalog: cached, tieConflict: true };
-    if (relation === 'older' || relation === 'invalid-incoming') {
-      return { catalog: cached, tieConflict: false };
-    }
-    return { catalog: remote, tieConflict: false };
+  const decision = decideModelRegistrySnapshot(remote.modelRegistry, cached.modelRegistry);
+  if (decision === 'preserve-current-conflict') {
+    return { catalog: cached, tieConflict: true };
   }
-  if (!remote.modelRegistry && cached.modelRegistry) {
+  if (decision === 'preserve-current') {
     return { catalog: cached, tieConflict: false };
   }
   return { catalog: remote, tieConflict: false };

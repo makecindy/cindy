@@ -56,6 +56,7 @@ export {
 
 export {
   compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
@@ -64,6 +65,7 @@ export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
   ModelRegistryRevisionRelation,
+  ModelRegistrySnapshotDecision,
 } from './modelRegistry.js';
 export type {
   ModelReferencePrice,

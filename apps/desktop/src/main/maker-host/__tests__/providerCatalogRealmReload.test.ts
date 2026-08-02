@@ -284,6 +284,16 @@ describe('provider catalog realm reload', () => {
     expect(__testing.selectCatalogLkgSnapshot(incoming, current)).toBe(current);
   });
 
+  it('keeps a Registry-bearing LKG when a later serialized write omits Registry', () => {
+    const currentCatalog = catalogNamed('CURRENT', '2026-08-01T00:00:00.000Z');
+    const incomingCatalog = structuredClone(currentCatalog);
+    delete incomingCatalog.modelRegistry;
+    const current = JSON.stringify(currentCatalog);
+    const incoming = JSON.stringify(incomingCatalog);
+
+    expect(__testing.selectCatalogLkgSnapshot(incoming, current)).toBe(current);
+  });
+
   it('replaces an existing LKG through a Windows-safe backup path', async () => {
     const files = new Set(['/catalog.json', '/catalog.tmp']);
     const calls: Array<[string, string]> = [];

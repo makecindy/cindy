@@ -25,6 +25,7 @@ import {
   BUNDLED_CATALOG,
   buildUserProvider,
   compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
@@ -276,13 +277,11 @@ function selectCatalogLkgSnapshot(incoming: string, current: string | null): str
   try {
     const incomingRegistry = parseCatalog(incoming).modelRegistry;
     const currentRegistry = parseCatalog(current).modelRegistry;
-    if (incomingRegistry && currentRegistry) {
-      const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
-      if (relation === 'older' || relation === 'conflict' || relation === 'invalid-incoming') {
-        // 同 revision 异 Registry 不能覆盖磁盘 LKG；否则下一次启动已经失去可对照的
-        // last-good，source 层的 tie guard 也无法再救回旧快照。
-        return current;
-      }
+    const decision = decideModelRegistrySnapshot(incomingRegistry, currentRegistry);
+    if (decision !== 'accept-incoming') {
+      // Registry 缺失、revision 回退或同 revision 异内容都不能覆盖磁盘 LKG；否则
+      // 下一次启动已经失去可对照的 last-good，source 层的守卫也无法再救回旧快照。
+      return current;
     }
   } catch {
     // An invalid current envelope payload is not an LKG; replace it with the already-validated input.

@@ -171,6 +171,61 @@ describe('generateTitleViaProvider — provider 解析', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('凭证等待期间热刷新为 retired → 派发紧前重验并跳过请求', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+    const anthropic = providerStub('anthropic');
+    anthropic.models['claude-code'] = [
+      {
+        id: 'claude-haiku-4-5',
+        name: 'Claude Haiku 4.5',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'active',
+      },
+    ];
+    let releaseCredential!: () => void;
+    const credentialGate = new Promise<void>((resolve) => {
+      releaseCredential = resolve;
+    });
+    const readAnthropicOAuth = vi.fn(async () => {
+      await credentialGate;
+      return { accessToken: 'tok' };
+    });
+
+    setActiveCatalog(BUNDLED_CATALOG);
+    const titlePromise = generateTitleViaProvider(
+      { sessionId: 's-retired-race', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [anthropic],
+        readAnthropicOAuth,
+      },
+    );
+    await vi.waitFor(() => expect(readAnthropicOAuth).toHaveBeenCalledOnce());
+
+    const retiredCatalog = structuredClone(BUNDLED_CATALOG);
+    const retiredEntry = retiredCatalog.modelRegistry?.models.find((entry) =>
+      entry.routes.some(
+        (route) => route.providerId === 'anthropic' && route.modelId === 'claude-haiku-4-5',
+      ),
+    );
+    expect(retiredEntry).toBeDefined();
+    retiredEntry!.status = 'retired';
+    setActiveCatalog(retiredCatalog);
+    releaseCredential();
+
+    try {
+      await expect(titlePromise).resolves.toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
+  });
+
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { choices: [{ message: { content: '网关标题' } }] },

@@ -15,6 +15,11 @@ export type ModelRegistryRevisionRelation =
   | "conflict"
   | "invalid-incoming";
 
+export type ModelRegistrySnapshotDecision =
+  | "accept-incoming"
+  | "preserve-current"
+  | "preserve-current-conflict";
+
 /**
  * Compares immutable Registry revisions by instant, then compares equal-revision content after
  * normalizing equivalent timestamp representations. The protocol parser still requires canonical
@@ -36,6 +41,23 @@ export function compareModelRegistryRevisions(
   const incomingDigest = modelRegistryCanonicalJson({ ...incoming, updatedAt: canonicalUpdatedAt });
   const currentDigest = modelRegistryCanonicalJson({ ...current, updatedAt: canonicalUpdatedAt });
   return incomingDigest === currentDigest ? "same" : "conflict";
+}
+
+/**
+ * Chooses between two complete Catalog snapshots using the Registry as the only monotonic
+ * revision. A registry-less incoming snapshot must never erase a current snapshot that already
+ * carries Registry state; callers preserve the complete current Catalog rather than mixing layers.
+ */
+export function decideModelRegistrySnapshot(
+  incoming: ModelRegistry | undefined,
+  current: ModelRegistry | undefined,
+): ModelRegistrySnapshotDecision {
+  if (!incoming && current) return "preserve-current";
+  if (!incoming || !current) return "accept-incoming";
+  const relation = compareModelRegistryRevisions(incoming, current);
+  if (relation === "conflict") return "preserve-current-conflict";
+  if (relation === "older" || relation === "invalid-incoming") return "preserve-current";
+  return "accept-incoming";
 }
 
 export interface ResolvedModelReferencePrice {
