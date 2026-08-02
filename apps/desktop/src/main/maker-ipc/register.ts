@@ -266,6 +266,7 @@ import {
   getLastAssistantTranscriptUuid,
   getSessionDbAgentKind,
   markAssistantTurnCompleted,
+  markAssistantTurnFailed,
   noteAgentMeta,
   noteSessionAgentKind,
   noteSessionClearBoundary,
@@ -3186,9 +3187,10 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     //
     // 可重试 error 仍属于同一 turn，不能 reset lastAgentMeta / tool_result 配对状态；
     // 否则未来出现 turn 中途的非终止型 error 时会打断后续 tool_result 关联。
-    // 本 turn 最后一条 assistant 的 persistId(挂 per-turn 费用用)。terminal error
-    // 也 consume(丢弃),防 persistId 串到下一轮;纯 tool 轮为 undefined。
+    // 本 turn 最后一条 assistant 的 persistId(挂 per-turn 费用 / turn 边界用)。terminal
+    // error 同样 consume，写失败 seal 后再按需交接给 paired done；纯 tool 轮为 undefined。
     let turnAssistantPersistId: string | undefined;
+    let isPairedFailedTurnDone = false;
     if (event.type === 'done' || isTerminalTurnErrorEvent(event)) {
       flushAssistantBlock(session.id, eventAgentMeta);
       turnAssistantPersistId = consumeLastAssistantPersistId(session.id);
@@ -3201,14 +3203,23 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else {
         // done: 优先本事件 consume 的 id, 失败 turn 场景回收交接的 id;
         // 无论用没用到都清掉, 防残留错配下一轮。
-        turnAssistantPersistId ??= pendingFailedTurnAssistantPersistId.get(session.id);
+        const pendingFailedPersistId = pendingFailedTurnAssistantPersistId.get(session.id);
+        if (!turnAssistantPersistId && pendingFailedPersistId) {
+          turnAssistantPersistId = pendingFailedPersistId;
+          isPairedFailedTurnDone = true;
+        }
         pendingFailedTurnAssistantPersistId.delete(session.id);
       }
       flushOrphanToolResults(session.id, eventAgentMeta);
-      if (event.type === 'done' && turnAssistantPersistId) {
+      if (turnAssistantPersistId) {
         // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
-        // 更新后的完整行；无需新增 IPC / device-link channel。
-        void markAssistantTurnCompleted(session.id, turnAssistantPersistId);
+        // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
+        // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
+        if (event.type !== 'done') {
+          void markAssistantTurnFailed(session.id, turnAssistantPersistId);
+        } else if (!isPairedFailedTurnDone) {
+          void markAssistantTurnCompleted(session.id, turnAssistantPersistId);
+        }
       }
       // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
       // error 行之前(历史时间线:tool 输出 → 错误卡,而非错误卡插到 tool 输出之前)。

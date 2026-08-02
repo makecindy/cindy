@@ -205,19 +205,44 @@ describe('selectRecentTitleMessages', () => {
     expect(selected[0]?.role).toBe('user');
   });
 
-  it('treats steer and automatic-resume user rows as continuation, not new turns', () => {
+  it('keeps visible steer text in the current turn while hiding automatic resume rows', () => {
     const rows = [
       row('user', 1, '原始任务'),
       row('assistant', 2, '已完成', { turnCompleted: true }),
-      row('user', 3, '内部 steer', { delivery: 'steer' }),
-      row('assistant', 4, '续跑中的播报', { uuid: 'resume-progress' }),
-      row('user', 5, '隐藏续跑', { autoResume: true }),
-      row('assistant', 6, '续跑完成', { turnCompleted: true }),
+      row('user', 3, '改为处理计费', { delivery: 'steer' }),
+      row('assistant', 4, '续跑中的播报', { uuid: 'resume-progress-1' }),
+      row('user', 5, '最终只检查退款', { delivery: 'steer' }),
+      row('assistant', 6, '继续施工', { uuid: 'resume-progress-2' }),
+      row('user', 7, '隐藏续跑', { autoResume: true }),
+      row('assistant', 8, '续跑完成', { turnCompleted: true }),
     ];
 
     expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
       '原始任务',
+      '改为处理计费',
+      '最终只检查退款',
       '续跑完成',
+    ]);
+  });
+
+  it('keeps a failed modern turn excluded after a later turn succeeds', () => {
+    const rows = [
+      row('user', 1, '修复登录问题'),
+      row('assistant', 2, '我先检查鉴权日志', { uuid: 'failed-progress' }),
+      row('assistant', 3, '仍在排查 token', {
+        uuid: 'failed-final-progress',
+        turnCompleted: false,
+        turnCostUsd: 0.2,
+        turnUsageDetails: { inputTokens: 100 },
+      }),
+      row('user', 4, '重试并改为检查计费'),
+      row('assistant', 5, '已完成', { turnCompleted: true }),
+    ];
+
+    expect(selectRecentTitleMessages(rows, 8).map((message) => message.text)).toEqual([
+      '修复登录问题',
+      '重试并改为检查计费',
+      '已完成',
     ]);
   });
 

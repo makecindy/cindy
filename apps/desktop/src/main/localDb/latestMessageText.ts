@@ -11,13 +11,14 @@
  * → maker-host/index → maker-ipc 的静态模块环。
  */
 
-import { and, asc, desc, eq, gt, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, gt, inArray, isNull, lt, lte, or, sql } from 'drizzle-orm';
 
 import { extractText } from '../sessionTaskSummary.logic.js';
 
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import {
+  isTitleTurnBoundaryUser,
   selectRecentTitleMessages,
   type TitleMessageCandidate,
 } from './latestMessageText.logic.js';
@@ -57,6 +58,55 @@ const messageRowid = sql<number>`rowid`;
 
 /** 开场扫描窗口:会话开头可能连续多条纯附件等抽不出正文的消息,按序多看一批。 */
 const OPENING_SCAN_LIMIT = 15;
+
+/** 标题素材分页扫描边界:按 128 行翻页，最多读取 4096 条原始 user/assistant 行。 */
+const TITLE_MESSAGE_PAGE_SIZE = 128;
+const TITLE_MESSAGE_MAX_RAW_SCAN = 4096;
+
+interface RecentTitleDbRow {
+  role: string;
+  content: string;
+  toolUseId: string | null;
+  createdAt: number;
+  agentMeta: string | null;
+  rowid: number;
+}
+
+function toTitleMessageCandidate(row: RecentTitleDbRow): TitleMessageCandidate | null {
+  const role = row.role === 'user' ? 'user' : 'assistant';
+  const text = extractText(row.content, role);
+  if (!text) return null;
+
+  let agentMeta: Record<string, unknown> | null = null;
+  if (row.agentMeta) {
+    try {
+      const parsed: unknown = JSON.parse(row.agentMeta);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        agentMeta = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Malformed legacy metadata must not make title regeneration fail.
+    }
+  }
+  return {
+    role,
+    text,
+    createdAt: row.createdAt ?? null,
+    rowid: row.rowid,
+    toolUseId: row.toolUseId ?? null,
+    agentMeta,
+  };
+}
+
+function selectionStartsAtCompleteTurn(
+  selected: readonly RecentMessage[],
+  candidates: readonly TitleMessageCandidate[],
+): boolean {
+  const first = selected[0];
+  if (!first || first.role !== 'user') return false;
+  const source = candidates.find((candidate) => candidate.rowid === first.rowid);
+  return source ? isTitleTurnBoundaryUser(source.agentMeta) : false;
+}
 
 /** 读会话 clearedAt(/clear 可见性边界)。会话不存在 → null。 */
 async function sessionClearedAt(sessionId: string): Promise<number | null> {
@@ -108,6 +158,7 @@ async function recentMessagesWithClearedAt(
   clearedAt: number | null,
   latestTurnIsInFlight: boolean,
 ): Promise<RecentMessage[]> {
+  if (limit <= 0) return [];
   const db = getDbClient().drizzle;
   const conds = [
     eq(messages.sessionId, sessionId),
@@ -115,77 +166,101 @@ async function recentMessagesWithClearedAt(
     isNull(messages.rewindAt),
   ];
   if (clearedAt != null) conds.push(gt(messages.createdAt, clearedAt));
-  const rows = await db
-    .select({
-      role: messages.role,
-      content: messages.content,
-      toolUseId: messages.toolUseId,
-      createdAt: messages.createdAt,
-      agentMeta: messages.agentMeta,
-      rowid: messageRowid,
-    })
-    .from(messages)
-    .where(and(...conds))
-    .orderBy(desc(messages.createdAt), desc(messageRowid))
-    // One real turn can contain dozens of assistant progress rows. The opening is
-    // queried separately, so a bounded raw scan cannot lose the session subject.
-    .limit(Math.max(128, limit * 64));
+  // Freeze one rowid upper bound before paging. New concurrent writes receive a
+  // larger rowid and therefore cannot shift the later pages under this scan.
+  const [snapshot] = await db
+    .select({ rowid: sql<number | null>`max(${messageRowid})` })
+    .from(messages);
+  const snapshotUpperRowid = snapshot?.rowid;
+  if (snapshotUpperRowid == null) return [];
 
+  let cursor: { createdAt: number; rowid: number } | null = null;
+  let scannedRawRows = 0;
   const candidates: TitleMessageCandidate[] = [];
-  for (const row of rows) {
-    const role = row.role === 'user' ? 'user' : 'assistant';
-    const text = extractText(row.content, role);
-    if (!text) continue;
+  const knownToolUseIds = new Set<string>();
+  const checkedParentIds = new Set<string>();
+  let selected: RecentMessage[] = [];
 
-    let agentMeta: Record<string, unknown> | null = null;
-    if (row.agentMeta) {
-      try {
-        const parsed: unknown = JSON.parse(row.agentMeta);
-        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-          agentMeta = parsed as Record<string, unknown>;
-        }
-      } catch {
-        // Malformed legacy metadata must not make title regeneration fail.
+  while (scannedRawRows < TITLE_MESSAGE_MAX_RAW_SCAN) {
+    const pageLimit = Math.min(
+      TITLE_MESSAGE_PAGE_SIZE,
+      TITLE_MESSAGE_MAX_RAW_SCAN - scannedRawRows,
+    );
+    const cursorCond = cursor
+      ? or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(eq(messages.createdAt, cursor.createdAt), lt(messageRowid, cursor.rowid)),
+        )
+      : undefined;
+    const rows = (await db
+      .select({
+        role: messages.role,
+        content: messages.content,
+        toolUseId: messages.toolUseId,
+        createdAt: messages.createdAt,
+        agentMeta: messages.agentMeta,
+        rowid: messageRowid,
+      })
+      .from(messages)
+      .where(
+        and(...conds, lte(messageRowid, snapshotUpperRowid), ...(cursorCond ? [cursorCond] : [])),
+      )
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(pageLimit)) as RecentTitleDbRow[];
+
+    if (rows.length === 0) break;
+    scannedRawRows += rows.length;
+    cursor = {
+      createdAt: rows[rows.length - 1].createdAt,
+      rowid: rows[rows.length - 1].rowid,
+    };
+
+    const pageCandidates = rows
+      .map(toTitleMessageCandidate)
+      .filter((candidate): candidate is TitleMessageCandidate => candidate !== null);
+    candidates.push(...pageCandidates);
+    for (const candidate of pageCandidates) {
+      if (candidate.toolUseId) knownToolUseIds.add(candidate.toolUseId);
+    }
+
+    const uncheckedParentIds: string[] = [];
+    for (const candidate of pageCandidates) {
+      const parentUuid = candidate.agentMeta?.parentUuid;
+      if (typeof parentUuid !== 'string' || !parentUuid || checkedParentIds.has(parentUuid)) {
+        continue;
+      }
+      checkedParentIds.add(parentUuid);
+      uncheckedParentIds.push(parentUuid);
+    }
+    if (uncheckedParentIds.length > 0) {
+      const toolRows = await db
+        .select({ toolUseId: messages.toolUseId })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.sessionId, sessionId),
+            inArray(messages.role, ['tool_use', 'tool_result']),
+            inArray(messages.toolUseId, uncheckedParentIds),
+            isNull(messages.rewindAt),
+            lte(messageRowid, snapshotUpperRowid),
+            ...(clearedAt != null ? [gt(messages.createdAt, clearedAt)] : []),
+          ),
+        );
+      for (const row of toolRows) {
+        if (row.toolUseId) knownToolUseIds.add(row.toolUseId);
       }
     }
-    candidates.push({
-      role,
-      text,
-      createdAt: row.createdAt ?? null,
-      rowid: row.rowid,
-      toolUseId: row.toolUseId ?? null,
-      agentMeta,
-    });
+
+    selected = selectRecentTitleMessages(candidates, limit, knownToolUseIds, latestTurnIsInFlight);
+    // A page can start in the middle of an older turn. Do not stop on an
+    // assistant-only or steer-only partial group merely because it fills the
+    // effective budget; continue until the oldest selected group has its real
+    // user boundary, the snapshot ends, or the raw safety cap is reached.
+    if (selected.length >= limit && selectionStartsAtCompleteTurn(selected, candidates)) break;
+    if (rows.length < pageLimit) break;
   }
 
-  const parentIds = [
-    ...new Set(
-      candidates
-        .map((row) => row.agentMeta?.parentUuid)
-        .filter((value): value is string => typeof value === 'string' && value.length > 0),
-    ),
-  ];
-  const toolRows =
-    parentIds.length > 0
-      ? await db
-          .select({ toolUseId: messages.toolUseId })
-          .from(messages)
-          .where(
-            and(
-              eq(messages.sessionId, sessionId),
-              inArray(messages.role, ['tool_use', 'tool_result']),
-              inArray(messages.toolUseId, parentIds),
-              isNull(messages.rewindAt),
-              ...(clearedAt != null ? [gt(messages.createdAt, clearedAt)] : []),
-            ),
-          )
-      : [];
-  const knownToolUseIds = new Set(
-    [...candidates.map((row) => row.toolUseId), ...toolRows.map((row) => row.toolUseId)].filter(
-      (value): value is string => typeof value === 'string' && value.length > 0,
-    ),
-  );
-  return selectRecentTitleMessages(candidates, limit, knownToolUseIds, latestTurnIsInFlight);
+  return selected;
 }
 
 /** 第一条非空文本的用户消息;开头连续附件超过扫描窗口时退化为空(调用方按无开场处理)。 */

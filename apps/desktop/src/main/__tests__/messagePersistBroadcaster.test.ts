@@ -58,6 +58,7 @@ import {
   clearSessionPersistState,
   consumeLastAssistantPersistId,
   markAssistantTurnCompleted,
+  markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
   enqueueDurableWrite,
@@ -853,8 +854,19 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-final');
   });
 
+  it('terminal error seal 以 durable patch 写 false', async () => {
+    await expect(markAssistantTurnFailed(SESSION, 'assistant-failed')).resolves.toBe(true);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'assistant-failed',
+      { turnCompleted: false },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-failed');
+  });
+
   it('纯 tool turn 没有 assistant 时不写 seal', async () => {
     await expect(markAssistantTurnCompleted(SESSION, undefined)).resolves.toBe(false);
+    await expect(markAssistantTurnFailed(SESSION, undefined)).resolves.toBe(false);
     expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
   });
 });

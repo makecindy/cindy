@@ -65,7 +65,9 @@ export function hasTitleTurnBoundaryMeta(meta: Record<string, unknown> | null): 
 /** Equivalent terminal signals used by the renderer's turn-final selection. */
 export function isTitleTurnCompleted(meta: Record<string, unknown> | null): boolean {
   if (!meta) return false;
-  if (meta.turnCompleted === true) return true;
+  if (Object.prototype.hasOwnProperty.call(meta, 'turnCompleted')) {
+    return meta.turnCompleted === true;
+  }
   if (typeof meta.turnCostUsd === 'number' && meta.turnCostUsd > 0) return true;
   if (
     meta.turnMoney &&
@@ -89,8 +91,8 @@ function isInternalTitleAssistant(meta: Record<string, unknown> | null): boolean
   );
 }
 
-/** Steer/automatic continuation rows are not new user turns for title purposes. */
-function isTitleTurnBoundaryUser(meta: Record<string, unknown> | null): boolean {
+/** Only an explicit user send starts a new title turn; steer stays inside the current turn. */
+export function isTitleTurnBoundaryUser(meta: Record<string, unknown> | null): boolean {
   return meta?.delivery !== 'steer' && meta?.autoResume !== true;
 }
 
@@ -101,7 +103,7 @@ function compareTitleRows(a: TitleMessageCandidate, b: TitleMessageCandidate): n
 }
 
 interface TitleTurn {
-  user: TitleMessageCandidate | null;
+  users: TitleMessageCandidate[];
   assistants: TitleMessageCandidate[];
 }
 
@@ -147,7 +149,7 @@ function pickTurnAssistant(
 /**
  * Select recent effective title messages from chronologically ordered (or sortable) DB rows.
  * `limit` is a soft effective-message budget, not a raw-row cutoff. Complete
- * user/assistant groups are kept intact, so the result may exceed it by one.
+ * user/steer/assistant groups are kept intact, so one selected group may exceed it.
  */
 export function selectRecentTitleMessages(
   inputRows: readonly TitleMessageCandidate[],
@@ -163,16 +165,21 @@ export function selectRecentTitleMessages(
   for (const row of rows) {
     if (!row.text) continue;
     if (row.role === 'user') {
-      if (!isTitleTurnBoundaryUser(row.agentMeta)) continue;
+      if (row.agentMeta?.autoResume === true) continue;
+      if (row.agentMeta?.delivery === 'steer') {
+        current ??= { users: [], assistants: [] };
+        current.users.push(row);
+        continue;
+      }
       if (current) turns.push(current);
-      current = { user: row, assistants: [] };
+      current = { users: [row], assistants: [] };
     } else if (current) {
       current.assistants.push(row);
     } else {
       // Imported/worker sessions can contain assistant rows without a visible
       // user row. Keep them in an assistant-only group instead of dropping the
       // entire session from Magic rename.
-      current = { user: null, assistants: [row] };
+      current = { users: [], assistants: [row] };
     }
   }
   if (current) turns.push(current);
@@ -198,18 +205,14 @@ export function selectRecentTitleMessages(
     const unsealedTurnIsInFlight =
       (lastCompletedTurnIndex >= 0 && index > lastCompletedTurnIndex) ||
       (latestTurnIsInFlight && index === latestTurnIndex);
-    const assistant = pickTurnAssistant(
-      turn,
-      unsealedTurnIsInFlight,
-      knownToolUseIds,
-    );
+    const assistant = pickTurnAssistant(turn, unsealedTurnIsInFlight, knownToolUseIds);
     const selected: SelectedTitleMessage[] = [];
-    if (turn.user) {
+    for (const user of turn.users) {
       selected.push({
         role: 'user',
-        text: turn.user.text,
-        createdAt: turn.user.createdAt,
-        rowid: turn.user.rowid,
+        text: user.text,
+        createdAt: user.createdAt,
+        rowid: user.rowid,
       });
     }
     if (assistant) selected.push(assistant);

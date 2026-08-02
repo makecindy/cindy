@@ -211,7 +211,7 @@ function notePersistedMessage(sessionId: string, role: string, persistId: string
  * 每会话"本 turn 最后一条已入队落库的 assistant 文本"的 persistId。turn 结束(done)
  * 时由 register.ts 经 consumeLastAssistantPersistId 取走,用于把 per-turn 费用挂到该
  * 条消息的 agent_meta 上。consume 即清(get + delete):纯 tool 轮取到 undefined 不挂;
- * terminal error 结束的轮也 consume 丢弃,防 persistId 串到下一轮。
+ * terminal error 调用方用同一 id 写失败边界，并可交接给稍后的 paired done。
  */
 const lastAssistantPersistIdBySession = new Map<string, string>();
 
@@ -220,6 +220,21 @@ export function consumeLastAssistantPersistId(sessionId: string): string | undef
   const id = lastAssistantPersistIdBySession.get(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   return id;
+}
+
+function markAssistantTurnBoundary(
+  sessionId: string,
+  clientId: string | undefined,
+  completed: boolean,
+): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async () => {
+    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+      turnCompleted: completed,
+    });
+    if (!patched) return false;
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+  });
 }
 
 /**
@@ -231,14 +246,18 @@ export function markAssistantTurnCompleted(
   sessionId: string,
   clientId: string | undefined,
 ): Promise<boolean> {
-  if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`turn-completed:${sessionId}:${clientId}`, async () => {
-    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
-      turnCompleted: true,
-    });
-    if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
-  });
+  return markAssistantTurnBoundary(sessionId, clientId, true);
+}
+
+/**
+ * Terminal error 没有可选作正式答复的 Assistant，但仍需留下现代 turn 边界，
+ * 防止后续成功轮次出现后把失败轮的最后一条施工播报误当成 legacy final。
+ */
+export function markAssistantTurnFailed(
+  sessionId: string,
+  clientId: string | undefined,
+): Promise<boolean> {
+  return markAssistantTurnBoundary(sessionId, clientId, false);
 }
 
 /**

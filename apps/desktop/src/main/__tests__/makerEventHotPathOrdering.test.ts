@@ -157,6 +157,28 @@ describe('maker:event hot path ordering', () => {
     expect(abortContext).toContain('isTerminalTurnErrorEvent(event)');
   });
 
+  it('writes one durable Assistant boundary for both success and terminal error', () => {
+    const wireSessionSource = extractWireSessionSource();
+    const boundaryStart = wireSessionSource.indexOf('let turnAssistantPersistId: string | undefined;');
+    const boundaryEnd = wireSessionSource.indexOf('const autoResumeSuppressesPersist', boundaryStart);
+    const boundaryBlock = wireSessionSource.slice(boundaryStart, boundaryEnd);
+
+    expect(boundaryStart).toBeGreaterThanOrEqual(0);
+    expect(boundaryEnd).toBeGreaterThan(boundaryStart);
+    expectOrder(boundaryBlock, 'flushAssistantBlock(session.id, eventAgentMeta);', 'consumeLastAssistantPersistId(session.id);');
+    expectOrder(boundaryBlock, 'consumeLastAssistantPersistId(session.id);', 'flushOrphanToolResults(session.id, eventAgentMeta);');
+    expect(boundaryBlock).toContain("event.type === 'done'");
+    expect(boundaryBlock).toContain('markAssistantTurnCompleted(session.id, turnAssistantPersistId)');
+    expect(boundaryBlock).toContain('markAssistantTurnFailed(session.id, turnAssistantPersistId)');
+    expect(boundaryBlock).toContain('pendingFailedTurnAssistantPersistId.get(session.id)');
+    expect(boundaryBlock).toContain('isPairedFailedTurnDone = true');
+    expectOrder(
+      boundaryBlock,
+      'isPairedFailedTurnDone = true',
+      "else if (!isPairedFailedTurnDone)",
+    );
+  });
+
   it('rejects stale Agent Island interactions before renderer delivery', () => {
     const interactionListenerSource = extractInstallDesktopInteractionListenerSource();
     const epochCaptureIndex = interactionListenerSource.indexOf(
