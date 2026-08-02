@@ -936,9 +936,12 @@ export class GhostNodeRuntimeBroker {
     const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
     children.add(entry);
     this.startingChildren.set(ghostId, children);
-    const finish = () => this.forgetStartingChild(entry);
-    proc.once('exit', finish);
-    proc.once('error', finish);
+    // error 不是进程已退出的证明。若更新正在停止它，仍要保留 SIGKILL
+    // 兜底；否则仅发 error 不发 exit 的 child 会永远占住旧插件目录。
+    proc.once('exit', () => this.forgetStartingChild(entry));
+    proc.once('error', () => {
+      if (!entry.stopping) this.forgetStartingChild(entry);
+    });
     return entry;
   }
 

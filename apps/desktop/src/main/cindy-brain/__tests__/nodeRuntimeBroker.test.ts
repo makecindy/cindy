@@ -1363,4 +1363,30 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
     await stopping;
     expect(settled).toBe(true);
   });
+
+  it('启动中子进程报错时仍保留停止后的 SIGKILL 兜底', async () => {
+    vi.useFakeTimers();
+    const startingChild = new FakeRawChild();
+    const kill = vi.spyOn(startingChild, 'kill').mockImplementation(() => {
+      startingChild.killed = true;
+      return true;
+    });
+    const { broker, worker, spawned } = await bootWorker(
+      childSpawnGhost(),
+      () => startingChild,
+      false,
+    );
+    worker.emitControl({ type: 'spawn-child', reqId: 'r1', entry: 'node/maker.cjs' });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow(
+      '插件 Node 进程停止失败',
+    );
+    startingChild.emit('error', new Error('child transport broke'));
+    await stopping;
+    await vi.advanceTimersByTimeAsync(2_000);
+
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
+  });
 });
