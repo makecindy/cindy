@@ -5363,6 +5363,7 @@
     },
     "agentTask": {
       "emptyTitle": "サブエージェントタスク",
+      "subagentStarted": "サブエージェント {{name}} を起動しました",
       "showDetails": "サブエージェント詳細を表示",
       "hideDetails": "サブエージェント詳細を隠す",
       "provider": {
@@ -6028,6 +6029,7 @@
       "searchingWeb": "ウェブを検索中…",
       "generatingImage": "画像を生成中…",
       "compacting": "コンテキストを圧縮中…",
+      "spawningAgent": "サブエージェントを起動中…",
       "done": "完了",
       "waiting": "少々お待ちください…",
       "working": "作業中…",

@@ -41,6 +41,7 @@
     "statusStopped": "Stopped",
     "toolUseCount": "{{n}} tool calls",
     "subagentTaskTitle": "Subagent task",
+    "subagentStarted": "Subagent {{name}} started",
     "recentTool": "Latest tool: {{name}}",
     "outputFile": "Output: {{file}}",
     "noMoreDetail": "No more details",

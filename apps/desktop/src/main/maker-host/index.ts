@@ -82,6 +82,7 @@ import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
+  resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
@@ -1319,6 +1320,8 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
+      resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
     });

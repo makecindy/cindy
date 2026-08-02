@@ -5363,6 +5363,7 @@
     },
     "agentTask": {
       "emptyTitle": "Subagent 任务",
+      "subagentStarted": "Subagent {{name}} 已启动",
       "showDetails": "展开 Subagent 详情",
       "hideDetails": "收起 Subagent 详情",
       "provider": {
@@ -6028,6 +6029,7 @@
       "searchingWeb": "正在搜索网页…",
       "generatingImage": "正在生成图片…",
       "compacting": "正在压缩上下文…",
+      "spawningAgent": "正在启动 Subagent…",
       "done": "已完成",
       "waiting": "请稍候…",
       "working": "正在工作…",

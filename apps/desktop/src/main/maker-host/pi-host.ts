@@ -221,6 +221,7 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -369,5 +370,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
     registerPiProxySession,
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
+    resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
   });
 }

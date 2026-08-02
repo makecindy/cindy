@@ -194,7 +194,7 @@ const CODEX_MINIMAL_EFFORT_MODELS = new Set([
  * item.type → chip status 文案 (对齐 claude-code 6 类). null = 该 item 不触发 chip 切换
  * (imageView/plan/userMessage/hookPrompt 等是 completed-only 或 UI 不暴露的 item)。
  */
-function statusTextForItem(item: { type?: string; command?: string; tool?: string }): string | null {
+function statusTextForItem(item: { type?: string; command?: string; tool?: string; kind?: string }): string | null {
   switch (item.type) {
     case 'reasoning':            return 'Thinking...';
     case 'agentMessage':         return 'Generating...';
@@ -211,6 +211,9 @@ function statusTextForItem(item: { type?: string; command?: string; tool?: strin
     case 'mcpToolCall':          return `${item.tool ?? 'mcp'} running...`;
     case 'dynamicToolCall':      return `${item.tool ?? 'tool'} running...`;
     case 'collabAgentToolCall':  return `${item.tool ?? 'agent'} running...`;
+    // interacted/interrupted 活动(followup/send/interrupt 的伴生事件)不是新代理
+    // 启动,不闪启动状态 —— itemStarted 在 translator 静默这些 kind 之前就会推 chip。
+    case 'subAgentActivity':     return item.kind === 'started' ? 'Spawning agent...' : null;
     case 'webSearch':            return 'Searching web...';
     case 'imageGeneration':      return 'Generating image...';
     case 'contextCompaction':    return 'Compacting...';

@@ -297,4 +297,28 @@ describe('buildAgentTaskCardModel', () => {
     expect(model.status).toBe('running');
     expect(model.provider).toBe('claude-code');
   });
+
+  it('surfaces the codex spawn receipt as structured spawnedAgentName, not raw summary', () => {
+    // translator 约定:collab:spawn 的 tool_result 只放 agentPath(= input.name)。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+    });
+    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('codex');
+  });
+
+  it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup' },
+      result: 'thread-2: done',
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    expect(model.summary).toBe('thread-2: done');
+  });
 });

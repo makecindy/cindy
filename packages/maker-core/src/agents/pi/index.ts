@@ -348,12 +348,17 @@ export class PiAgent extends BaseAgent {
   private async writeModelsJson(
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
+    retainedRuntimeModel?: ModelDescriptor,
   ): Promise<void> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
     }
-    const models = this.capabilities.availableModels
+    const publicModels = this.capabilities.availableModels;
+    const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
+      ? [...publicModels, retainedRuntimeModel]
+      : publicModels;
+    const models = runtimeModels
       .map((m: ModelDescriptor) => ({
       id: m.id,
       name: m.displayName,
@@ -499,6 +504,28 @@ export class PiAgent extends BaseAgent {
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
 
+    // availableModels 是公开的新选择面,retired/disabled 会被有意过滤;但恢复中的旧 Pi
+    // 会话仍需要 models.json 内存在当前模型,Pi 才能解析持久化的 --model。仅对真实 resume
+    // 且公开清单缺失的 compat 模型请求 host 补一个私有描述符;不回写 capabilities,也不
+    // 放宽 setModel / route guard。
+    let retainedRuntimeModel: ModelDescriptor | undefined;
+    if (
+      opts.resumeSessionId &&
+      initialProvider === PI_PROVIDER_ID &&
+      !this.capabilities.availableModels.some((model) => model.id === opts.model)
+    ) {
+      retainedRuntimeModel = this.deps.resolvePiRuntimeModelDescriptor?.(
+        opts.providerId,
+        opts.model,
+      ) ?? undefined;
+      if (!retainedRuntimeModel) {
+        this.deps.logger.warn('pi: selected model missing from public and retained runtime catalogs', {
+          model: opts.model,
+          providerId: opts.providerId ?? null,
+        });
+      }
+    }
+
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
     const authProviderId =
@@ -540,7 +567,7 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    await this.writeModelsJson(configHome, nativeProviders);
+    await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel);
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
 

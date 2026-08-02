@@ -192,6 +192,9 @@ export function translateItemNotification(
     case 'contextCompaction':
       handleContextCompaction(phase, item as unknown as ContextCompactionItem, queue, ctx);
       return;
+    case 'subAgentActivity':
+      handleSubAgentActivity(phase, item as unknown as SubAgentActivityItem, queue, ctx);
+      return;
     // 以下 v2 item 类型故意不消费 (无 UI 对应概念, 不是 bug):
     //   userMessage:  SDK echo 用户输入, claude-code translator 也只挑 tool_result 包装的
     //   hookPrompt:   codex 用户配置 hook 注入的 prompt, UI 不展示
@@ -1500,6 +1503,64 @@ function handleCollabAgentToolCall(
   queue.push({
     type: 'agent_task_update',
     data: toCodexTaskUpdate(item, isError ? 'failed' : 'completed', fullText),
+    source: 'codex',
+  });
+}
+
+// ── subAgentActivity → tool_use + tool_result(spawn 可见性) ────────────────
+// codex 0.145 multi-agent v2:spawn_agent 不发 collabAgentToolCall,只发瞬时
+// SubAgentActivityItem(kind=started/interacted/interrupted,无完成事件——子代理
+// 的等待与收口由后续 wait_agent 的 collab 卡承载)。不处理它,子代理启动在 UI
+// 完全不可见(实测:探索型任务 spawn 3 个子代理,等待窗口内聊天流零卡片)。
+// started 渲染成一张即时收口的「子代理已启动」卡;interacted 是 followup/send
+// 调用的伴生事件、interrupted 由 interrupt 调用自身承载,均显式静默不再落
+// unhandled 告警。协议只给 id/kind/agentThreadId/agentPath,没有 prompt/model/
+// effort(上游 main 已改为 spawn 直发 collabAgentToolCall 富卡,vendored codex
+// 升级后自动走上面 handleCollabAgentToolCall,本函数届时按 id 去重自然让位)。
+
+interface SubAgentActivityItem {
+  type: 'subAgentActivity';
+  id: string;
+  kind: string;
+  agentThreadId?: string;
+  agentPath?: string;
+}
+
+function handleSubAgentActivity(
+  phase: ItemPhase,
+  item: SubAgentActivityItem,
+  queue: AsyncQueue<AgentEvent>,
+  ctx: CodexTranslateContext,
+): void {
+  if (item.kind !== 'started' || phase === 'updated') return;
+  // 瞬时 item:started/completed phase 各到一次,按 item.id 去重只发一张卡;
+  // completed 到达即清 Set(与 collab handler 同规——不清会随 spawn 次数无限增长)。
+  if (ctx.rt.emittedToolUse.has(item.id)) {
+    if (phase === 'completed') ctx.rt.emittedToolUse.delete(item.id);
+    return;
+  }
+  // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
+  if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
+  const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
+  const input: Record<string, unknown> = {};
+  if (agentPath) input.name = agentPath;
+  if (item.agentThreadId) input.agentThreadId = item.agentThreadId;
+  queue.push({
+    type: 'tool_use',
+    data: { toolUseId: item.id, toolName: 'collab:spawn', input },
+    source: 'codex',
+  });
+  // fullText 只放结构化数据(agentPath 原文):用户可见的「已启动」句子由 renderer
+  // 按 locale 组装(AgentTaskCard 以 result===input.name 识别本卡),translator 不
+  // 合成任何语言的句子——否则英文回执会持久化进历史(review r3698558356)。
+  queue.push({
+    type: 'tool_result_full',
+    data: { toolUseId: item.id, fullText: agentPath ?? '', isError: false },
+    source: 'codex',
+  });
+  queue.push({
+    type: 'tool_result',
+    data: { summary: 'started', toolUseIds: [item.id] },
     source: 'codex',
   });
 }

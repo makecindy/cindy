@@ -41,6 +41,7 @@
     "statusStopped": "停止",
     "toolUseCount": "ツール呼び出し {{n}} 回",
     "subagentTaskTitle": "サブエージェントタスク",
+    "subagentStarted": "サブエージェント {{name}} を起動しました",
     "recentTool": "最近のツール：{{name}}",
     "outputFile": "出力：{{file}}",
     "noMoreDetail": "詳細はありません",

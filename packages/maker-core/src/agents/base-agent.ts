@@ -304,6 +304,15 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
+   * Pi-only:解析已持久化模型的私有运行时描述符(例如恢复已 retired 的会话)。结果只写入
+   * 当前 session 的 models.json,不得进入公开 availableModels 或授予新选择准入。
+   */
+  resolvePiRuntimeModelDescriptor?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => ModelDescriptor | null;
+
+  /**
    * Host-provided capability descriptor additions.
    *
    * This is append-only: additions with ids already present in the agent's built-in

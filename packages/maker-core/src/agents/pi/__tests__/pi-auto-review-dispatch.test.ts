@@ -9,7 +9,7 @@
  *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效)。
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -189,7 +189,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('models.json carries real cost and maxTokens from the model descriptor', async () => {
     await start();
-    const { readFileSync } = await import('node:fs');
     const config = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
     ) as {
@@ -208,6 +207,67 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
     });
     expect(JSON.stringify(config)).not.toContain(captured.env.CINDY_PI_SESSION_TOKEN);
+  });
+
+  it('只把 resumed retired 模型补进私有 models.json,不暴露到公开能力', async () => {
+    const resolver = vi.fn(() => ({
+      id: 'chatgpt/gpt-retired',
+      displayName: 'GPT Retired',
+      contextWindow: 300_000,
+      efforts: ['minimal', 'low'] as const,
+      defaultEffort: 'low' as const,
+      maxOutputTokens: 96_000,
+    }));
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = resolver;
+    const agent = new PiAgent(deps);
+    const resumeFile = path.join(agentHome, 'retired-session.jsonl');
+    writeFileSync(resumeFile, '{}\n');
+
+    const handle = await agent.startSession({
+      sessionId: 'retired-resume',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-retired',
+      providerId: 'openai',
+      resumeSessionId: resumeFile,
+    });
+    const config = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: { cindy: { models: Array<{ id: string; maxTokens: number }> } } };
+
+    expect(resolver).toHaveBeenCalledWith('openai', 'chatgpt/gpt-retired');
+    expect(config.providers.cindy.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'm' }),
+      expect.objectContaining({ id: 'chatgpt/gpt-retired', maxTokens: 96_000 }),
+    ]));
+    expect(agent.capabilities.availableModels.map((model) => model.id)).toEqual(['m']);
+    await handle.close();
+  });
+
+  it('新会话缺少公开模型时不调用私有续跑解析器', async () => {
+    const resolver = vi.fn(() => ({
+      id: 'chatgpt/gpt-retired',
+      displayName: 'GPT Retired',
+      contextWindow: 300_000,
+      efforts: [] as const,
+      defaultEffort: null,
+    }));
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = resolver;
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'fresh-retired',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-retired',
+      providerId: 'openai',
+    });
+    const config = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: { cindy: { models: Array<{ id: string }> } } };
+
+    expect(resolver).not.toHaveBeenCalled();
+    expect(config.providers.cindy.models.some((model) => model.id === 'chatgpt/gpt-retired')).toBe(false);
+    await handle.close();
   });
 
   it('auto mode silently approves in-workspace writes without consulting the resolver', async () => {

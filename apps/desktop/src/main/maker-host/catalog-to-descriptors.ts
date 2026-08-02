@@ -19,12 +19,14 @@
  */
 
 import {
+  isAgentSelectableModel,
   isModelSelectableForNewRoute,
   type Catalog,
   type CatalogModel,
   type AgentKind,
 } from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
+import { resolveRetiredRegistryModelForPi } from './model-plane/modelPlanePolicy.js';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
 interface ModelCapabilitiesTarget {
@@ -82,6 +84,33 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
     }
   }
   return out;
+}
+
+/**
+ * 解析 Pi 当前持久化选择所需的运行时描述符,不参与公开模型清单或新路由准入。
+ * 优先使用完整目录中的实际来源实体(允许 disabled/retired 供续跑);纯 Registry retired
+ * 没有目录实体时,再按统一 model-plane policy 从其完整能力字段重建 Pi 投影。
+ */
+export function resolvePiRuntimeModelDescriptor(
+  catalog: Catalog,
+  providerId: string | null | undefined,
+  modelId: string,
+): ModelDescriptor | null {
+  const providers = providerId && providerId !== 'cindy'
+    ? catalog.providers.filter((provider) => provider.id === providerId)
+    : catalog.providers;
+  for (const provider of providers) {
+    const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
+    if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
+      return toDescriptor(model, 'pi');
+    }
+  }
+
+  for (const provider of providers) {
+    const retired = resolveRetiredRegistryModelForPi(catalog.modelRegistry, provider.id, modelId);
+    if (retired) return toDescriptor(retired, 'pi');
+  }
+  return null;
 }
 
 /**

@@ -9,7 +9,7 @@
  *    清单——root ∩ membership 决定实体化落点,非 root 的 membership 只授权投影
  *    可达(如 anthropic route 含 codex = 允许进 codex bridge)。
  *  - transforms:投影期的 ID/能力变换(chatgpt/ 前缀、effort 封顶、fast=false),
- *    硬约束最后收口,活在 active-catalog 的投影函数里,本表只声明拓扑。
+ *    硬约束最后收口。共享变换与拓扑都集中在本模块,目录装配和续跑描述符不得各写一套。
  *
  * Pi 不在 wire enum(protocol MODEL_ACCESS_AGENTS 只有 claude-code/codex),
  * 恒定由客户端投影派生,route 永远无法点名 pi:
@@ -28,12 +28,16 @@ import {
   type ModelRegistryEntry,
 } from '@cindy/model-providers';
 
+import { CHATGPT_MODEL_PREFIX } from '../../../shared/subscriptionModels.js';
+
 /** registry 路由与本地 override 可作用的 root agent(wire enum 子集,不含 pi)。 */
 export type RootAgentKind = 'claude-code' | 'codex';
 
 export interface BuiltinModelPlanePolicy {
   /** canonical 实体列表所在 agent。 */
   roots: readonly RootAgentKind[];
+  /** Pi 恒定投影使用的 canonical root;Pi 不进入 wire membership。 */
+  piRoot: RootAgentKind;
   /**
    * membership 门控的派生端:root 模型是否进入该 bridge 由 registry route.agents
    * 是否包含该 agent 决定;registry 没登记的模型(纯 discovery)不受门控,维持
@@ -44,9 +48,9 @@ export interface BuiltinModelPlanePolicy {
 
 /** 实体化 allowlist:只有这三家允许由 registry presence 长出可选实体。 */
 export const MODEL_PLANE_POLICIES: ReadonlyMap<string, BuiltinModelPlanePolicy> = new Map([
-  ['openai', { roots: ['codex'], membershipGatedBridges: ['claude-code'] }],
-  ['anthropic', { roots: ['claude-code'], membershipGatedBridges: ['codex'] }],
-  ['xai', { roots: ['claude-code', 'codex'], membershipGatedBridges: [] }],
+  ['openai', { roots: ['codex'], piRoot: 'codex', membershipGatedBridges: ['claude-code'] }],
+  ['anthropic', { roots: ['claude-code'], piRoot: 'claude-code', membershipGatedBridges: ['codex'] }],
+  ['xai', { roots: ['claude-code', 'codex'], piRoot: 'claude-code', membershipGatedBridges: [] }],
   // xd 有意不在表内:Gateway 独占存在性(见文件头)。
 ]);
 
@@ -91,6 +95,42 @@ const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'ultra',
 ]);
 type Effort = CatalogModel['efforts'][number];
+
+/** Claude/Pi 的 OpenAI bridge 默认收起的旧型号;与既有目录行为保持一致。 */
+const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
+
+/** anthropic-responses bridge 不会兑现的 GPT 思考档,投影时必须在客户端硬封顶。 */
+const CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS: ReadonlySet<Effort> = new Set(['max', 'ultra']);
+
+/** OpenAI Codex root → Claude/Pi bridge;目录装配与 retired 续跑共同复用。 */
+export function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
+  const bridgeEfforts = model.efforts.filter((effort) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(effort));
+  const cappedDefault: Effort | null =
+    model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
+      ? bridgeEfforts.includes('xhigh')
+        ? 'xhigh'
+        : (bridgeEfforts[bridgeEfforts.length - 1] ?? null)
+      : model.defaultEffort;
+  return {
+    ...model,
+    id: `${CHATGPT_MODEL_PREFIX}${model.id}`,
+    ...(bridgeEfforts.length !== model.efforts.length
+      ? { efforts: bridgeEfforts, defaultEffort: cappedDefault }
+      : {}),
+    ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
+  };
+}
+
+/** canonical root → Pi;Pi 始终从 policy 指定 root 派生,永不读取 wire agent membership。 */
+export function projectRootModelToPi(
+  providerId: string,
+  rootAgent: RootAgentKind,
+  model: CatalogModel,
+): CatalogModel | null {
+  const policy = MODEL_PLANE_POLICIES.get(providerId);
+  if (!policy || policy.piRoot !== rootAgent) return null;
+  return providerId === 'openai' ? toChatgptBridgeModel(model) : model;
+}
 
 /** 单 root 的 registry 消费计划:先算好,合并期零决策。 */
 export interface RootRegistryPlan {
@@ -438,6 +478,37 @@ function toMaterializedModel(
         ? { defaultEnabled: fields.defaultEnabled }
         : {}),
   };
+}
+
+/**
+ * 为已持久化 Pi 会话重建 retired 模型的运行时描述实体。
+ *
+ * 这不是可选目录实体化:调用方只可把结果补进当前会话私有的 models.json;公开
+ * availableModels / 新路由准入仍过滤 retired。这样纯 Registry 模型在退役并重启后
+ * 仍能按旧选择续跑,同时保持 MODEL_REGISTRY.md 的“不得新实体化”契约。
+ */
+export function resolveRetiredRegistryModelForPi(
+  registry: ModelRegistry | null | undefined,
+  providerId: string,
+  piModelId: string,
+): CatalogModel | null {
+  const policy = MODEL_PLANE_POLICIES.get(providerId);
+  if (!registry || !policy) return null;
+  const rootAgent = policy.piRoot;
+  const rootModelId = providerId === 'openai'
+    ? piModelId.startsWith(CHATGPT_MODEL_PREFIX)
+      ? piModelId.slice(CHATGPT_MODEL_PREFIX.length)
+      : null
+    : piModelId;
+  if (!rootModelId) return null;
+
+  const matched = findModelRegistryRoute(registry, providerId, rootModelId, rootAgent);
+  if (!matched || matched.entry.status !== 'retired') return null;
+  const fields = effectiveRouteFields(matched.entry, rootAgent);
+  if (fields.validationError) return null;
+  const root = toMaterializedModel(rootModelId, fields, 'active');
+  if (typeof root === 'string') return null;
+  return projectRootModelToPi(providerId, rootAgent, { ...root, status: 'retired' });
 }
 
 /**

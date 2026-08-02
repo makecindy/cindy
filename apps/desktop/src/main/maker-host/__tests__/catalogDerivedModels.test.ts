@@ -19,6 +19,7 @@ import type { ModelDescriptor } from '@cindy/maker-core';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
+  resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from '../catalog-to-descriptors.js';
 
@@ -190,6 +191,35 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(deriveAvailableModels(catalog, 'claude-code').some((entry) => entry.id === retired.id))
       .toBe(false);
     expect(provider!.models['claude-code']!.some((entry) => entry.id === retired.id)).toBe(true);
+  });
+
+  it('纯 Registry retired 不进入公开清单,但可按统一投影重建 Pi 续跑描述符', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.modelRegistry = {
+      schemaVersion: 1,
+      updatedAt: '2026-08-02T00:00:00.000Z',
+      models: [{
+        id: 'openai/gpt-retired',
+        name: 'GPT Retired',
+        status: 'retired',
+        contextWindow: 300_000,
+        maxOutputTokens: 96_000,
+        efforts: ['low', 'max'],
+        defaultEffort: 'max',
+        routes: [{ providerId: 'openai', modelId: 'gpt-retired', agents: ['codex'] }],
+      }],
+    };
+
+    expect(deriveAvailableModels(catalog, 'pi').some((m) => m.id === 'chatgpt/gpt-retired')).toBe(false);
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'openai', 'chatgpt/gpt-retired')).toMatchObject({
+      id: 'chatgpt/gpt-retired',
+      displayName: 'GPT Retired',
+      contextWindow: 300_000,
+      maxOutputTokens: 96_000,
+      efforts: ['minimal', 'low'],
+      defaultEffort: 'low',
+    });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'anthropic', 'chatgpt/gpt-retired')).toBeNull();
   });
 
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {

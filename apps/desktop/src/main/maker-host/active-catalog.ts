@@ -45,6 +45,7 @@ import {
   applyRegistryConsumerOverlay,
   applyRootRegistryPlan,
   planRegistryRoots,
+  toChatgptBridgeModel,
   rootPlanKey,
   type ModelPlaneWarning,
   type ModelPlaneRegistryPlan,
@@ -281,40 +282,6 @@ function augmentModels(
         .map(({ model }) => model)
     : combined;
   return { ...p, models: { ...p.models, [agent]: models } };
-}
-
-/**
- * bridge tab 默认收起的原始 slug(旧产品目录 chatgpt/* 条目 defaultEnabled:false 的
- * 延续):cc tab 上 ChatGPT 订阅直连只默认露出旗舰,legacy 模型收起——与 codex tab
- * 的可见性策略(见 codex-model-discovery DEFAULT_HIDDEN_SLUGS)按 tab 各自维护。
- */
-const BRIDGE_DEFAULT_HIDDEN_SLUGS: ReadonlySet<string> = new Set(['gpt-5.4', 'gpt-5.4-mini']);
-
-/**
- * Claude bridge(anthropic-responses)对这些 GPT 模型的推理档封顶 xhigh —— max/ultra
- * 会被 bridge 降级(见 anthropic-responses-bridge normalizeReasoningEffort)。投影到
- * claude-code tab 时剔除 max/ultra,避免暴露实际不被 honored 的档(issue #352)。
- */
-const CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS: ReadonlySet<Effort> = new Set(['max', 'ultra']);
-
-/** Codex 规范模型 → Claude bridge 路由模型；显示元数据保持一致，只改路由 id + effort 封顶。 */
-function toChatgptBridgeModel(model: CatalogModel): CatalogModel {
-  const bridgeEfforts = model.efforts.filter((e) => !CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(e));
-  const cappedDefault: Effort | null =
-    model.defaultEffort && CLAUDE_BRIDGE_UNSUPPORTED_EFFORTS.has(model.defaultEffort)
-      ? bridgeEfforts.includes('xhigh')
-        ? 'xhigh'
-        : (bridgeEfforts[bridgeEfforts.length - 1] ?? null)
-      : model.defaultEffort;
-  return {
-    ...model,
-    id: `${CHATGPT_MODEL_PREFIX}${model.id}`,
-    // 仅当模型确有 max/ultra 时才改写 efforts/defaultEffort,其余模型逐字节不变。
-    ...(bridgeEfforts.length !== model.efforts.length
-      ? { efforts: bridgeEfforts, defaultEffort: cappedDefault }
-      : {}),
-    ...(BRIDGE_DEFAULT_HIDDEN_SLUGS.has(model.id) ? { defaultEnabled: false } : {}),
-  };
 }
 
 /**
