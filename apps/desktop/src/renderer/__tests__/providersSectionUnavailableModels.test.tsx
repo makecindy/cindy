@@ -7,7 +7,7 @@
  *   3. 本机 CLI 检测命中且渠道未连接时,左栏出现建议行,点击直达向导授权步。
  */
 
-import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import React from 'react';
 import { MemoryRouter } from 'react-router-dom';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -18,11 +18,13 @@ const {
   refreshBuiltinModelsSpy,
   requestAutoRefreshSpy,
   setProviderOrderSpy,
+  authState,
   wizardSpy,
 } = vi.hoisted(() => ({
   refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
+  authState: { dataOwnerId: 'owner-1' as string | null },
   wizardSpy: vi.fn(),
 }));
 
@@ -90,7 +92,11 @@ vi.mock('@/hooks/useProviders', () => ({
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
-  useAuth: () => ({ mode: 'cloud', exitLocalMode: vi.fn(async () => undefined) }),
+  useAuth: () => ({
+    mode: 'cloud',
+    dataOwnerId: authState.dataOwnerId,
+    exitLocalMode: vi.fn(async () => undefined),
+  }),
 }));
 
 vi.mock('@/hooks/useCodexAuth', () => ({
@@ -158,6 +164,7 @@ type ScanResult = { detections: unknown[] };
 let scanResult: ScanResult;
 
 beforeEach(() => {
+  authState.dataOwnerId = 'owner-1';
   scanResult = { detections: [] };
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
@@ -258,6 +265,30 @@ describe('ProvidersSection — 双栏管理', () => {
     });
     // Renderer 只提交左栏顺序；Main 负责保留曾出现但当前隐藏的供应商槽位。
     expect(setProviderOrderSpy).toHaveBeenLastCalledWith(['custom', 'xd']);
+    const selectedRows = screen
+      .getAllByRole('button')
+      .filter((button) => button.getAttribute('aria-current') === 'true');
+    expect(selectedRows).toHaveLength(1);
+    expect(selectedRows[0]?.textContent).toContain('settings.providers.xd.title');
     expect(screen.queryByRole('button', { name: 'settings.providers.order.reset' })).toBeNull();
+  });
+
+  it('切换数据 owner 后会按新 owner 重新记录可见项', async () => {
+    const view = render(
+      React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
+    );
+    await waitFor(() => {
+      expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+    });
+    setProviderOrderSpy.mockClear();
+
+    await act(async () => {
+      authState.dataOwnerId = 'owner-2';
+      view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+    });
+
+    await waitFor(() => {
+      expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+    });
   });
 });

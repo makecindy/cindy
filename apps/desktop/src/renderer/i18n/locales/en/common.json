@@ -1216,7 +1216,7 @@
         "hint": "Drag to reorder",
         "handle": "Reorder {{provider}}, position {{position}} of {{total}}. Use the arrow keys to move.",
         "moved": "{{provider}} moved to position {{position}} of {{total}}.",
-        "saveFailed": "Provider order wasn’t saved. Try again."
+        "saveFailed": "Provider order wasn't saved. Try again."
       },
       "pill": {
         "connected": "Connected",
