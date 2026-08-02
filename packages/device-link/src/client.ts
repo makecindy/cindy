@@ -45,6 +45,7 @@ const SLOW_REQUEST_WARN_MS = 1_000;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
 const MAX_LEGACY_INBOUND_BYTES = 16 * 1024 * 1024;
 const MAX_PENDING_INBOUND_LINK_OFFERS = 64;
+const MAX_UNLINKED_LEGACY_RESPONSE_IDS = 128;
 
 type DeviceLinkCrypto = {
   randomUUID?: () => string;
@@ -262,6 +263,8 @@ interface PeerTransportState {
   reliable: boolean;
   linkReady: boolean;
   explicitlyClosed: boolean;
+  /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
+  unlinkedLegacyResponseIds: Set<string>;
   pending: Map<number, PendingReliableMessage>;
   pendingBytes: number;
   retryTimer: ReturnType<typeof setInterval> | null;
@@ -462,6 +465,11 @@ export class DeviceLinkClient {
     return this.status;
   }
 
+  /** 目标设备是否已完成 link-open / link-accept，可安全进入 streaming tier。 */
+  isLinkReady(dst: string): boolean {
+    return this.peerTransport.get(dst)?.linkReady === true;
+  }
+
   onStatusChange(cb: (s: DeviceLinkStatus) => void): () => void {
     this.statusHandlers.add(cb);
     return () => this.statusHandlers.delete(cb);
@@ -550,6 +558,7 @@ export class DeviceLinkClient {
     if (peer) {
       peer.linkReady = false;
       peer.explicitlyClosed = true;
+      peer.unlinkedLegacyResponseIds.clear();
       // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
       // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
       peer.reliable = false;
@@ -586,7 +595,13 @@ export class DeviceLinkClient {
 
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
-    this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload });
+    const peer = this.peerTransport.get(dst);
+    const allowClosedLegacyResponse = peer?.unlinkedLegacyResponseIds.has(requestId) === true;
+    this.sendPeerEnvelope(
+      { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload },
+      allowClosedLegacyResponse,
+    );
+    if (allowClosedLegacyResponse) peer?.unlinkedLegacyResponseIds.delete(requestId);
   }
 
   /** 被控端:回 link-accept */
@@ -1355,6 +1370,7 @@ export class DeviceLinkClient {
           const peer = this.getPeerTransport(env.src);
           peer.linkReady = false;
           peer.explicitlyClosed = true;
+          peer.unlinkedLegacyResponseIds.clear();
           // 对端关闭与本地 closeLink 语义对称：撤掉 streaming 可靠层，
           // 后续不依赖 link-open 的 listing/control invoke 可回退 legacy。
           peer.reliable = false;
@@ -1362,6 +1378,16 @@ export class DeviceLinkClient {
           peer.remoteBaseSeq = 1;
           peer.receive.clear();
           this.abandonReliablePending(env.src, 'control link closed by peer');
+        } else if (
+          env.kind === 'invoke'
+          && env.src
+          && env.id
+          && isUnlinkedLegacyEnvelope(env)
+        ) {
+          const peer = this.getPeerTransport(env.src);
+          if (peer.explicitlyClosed && !peer.linkReady) {
+            this.rememberUnlinkedLegacyResponse(peer, env.id);
+          }
         }
         return this.emitFrame(env);
     }
@@ -1668,13 +1694,18 @@ export class DeviceLinkClient {
     );
   }
 
-  private sendPeerEnvelope(env: Envelope): boolean {
+  private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
     if (!env.dst || !isReliableKind(env.kind)) {
       this.sendEnvelope(env);
       return false;
     }
     const peer = this.getPeerTransport(env.dst);
-    if (peer.explicitlyClosed && !peer.linkReady && !isUnlinkedLegacyEnvelope(env)) {
+    if (
+      peer.explicitlyClosed
+      && !peer.linkReady
+      && !isUnlinkedLegacyEnvelope(env)
+      && !allowClosedLegacyResponse
+    ) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     }
     if (!peer.reliable) {
@@ -1848,6 +1879,7 @@ export class DeviceLinkClient {
         reliable: false,
         linkReady: false,
         explicitlyClosed: false,
+        unlinkedLegacyResponseIds: new Set(),
         pending: new Map(),
         pendingBytes: 0,
         retryTimer: null,
@@ -1858,6 +1890,16 @@ export class DeviceLinkClient {
       this.peerTransport.set(dst, peer);
     }
     return peer;
+  }
+
+  private rememberUnlinkedLegacyResponse(peer: PeerTransportState, requestId: string): void {
+    peer.unlinkedLegacyResponseIds.delete(requestId);
+    peer.unlinkedLegacyResponseIds.add(requestId);
+    while (peer.unlinkedLegacyResponseIds.size > MAX_UNLINKED_LEGACY_RESPONSE_IDS) {
+      const oldest = peer.unlinkedLegacyResponseIds.values().next().value as string | undefined;
+      if (!oldest) break;
+      peer.unlinkedLegacyResponseIds.delete(oldest);
+    }
   }
 
   private getReceiveStream(

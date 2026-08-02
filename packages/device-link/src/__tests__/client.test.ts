@@ -894,7 +894,18 @@ describe('DeviceLinkClient', () => {
       },
     });
     await open;
+    expect(h.client.isLinkReady('dev-b')).toBe(true);
     h.client.closeLink('dev-b', 'user');
+    expect(h.client.isLinkReady('dev-b')).toBe(false);
+
+    const sentBeforeBlockedInvoke = h.current().sent.length;
+    const blockedInvoke = await h.client.invoke(
+      'dev-b',
+      { channel: 'maker:send', args: [] },
+    ).catch((err: unknown) => err);
+    expect(blockedInvoke).toMatchObject({ code: 'LINK_NOT_OPEN' });
+    expect((blockedInvoke as DeviceLinkError).inFlight).not.toBe(true);
+    expect(h.current().sent).toHaveLength(sentBeforeBlockedInvoke);
 
     const listing = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
     const sentListing = h.current().sent.at(-1)!;
@@ -913,6 +924,54 @@ describe('DeviceLinkClient', () => {
       payload: { ok: true, result: ['session-1'] },
     });
     await expect(listing).resolves.toMatchObject({ ok: true, result: ['session-1'] });
+    h.client.stop();
+  });
+
+  it('显式 close 后只放行已接收的 legacy listing invoke-result 回程', async () => {
+    const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'controller-stream');
+    h.client.closeLink('dev-b', 'toggle-off');
+
+    h.client.onFrame((env) => {
+      if (
+        env.kind !== 'invoke'
+        || env.id !== 'listing-after-close'
+        || env.src !== 'dev-b'
+      ) return;
+      h.client.sendInvokeResult(env.src, env.id, {
+        ok: true,
+        result: ['session-after-close'],
+      });
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke',
+      id: 'listing-after-close',
+      src: 'dev-b',
+      payload: { channel: 'local-db:sessions:list', args: [] },
+    });
+    await tick();
+
+    const response = h.current().sent.find((env) => (
+      env.kind === 'invoke-result' && env.id === 'listing-after-close'
+    ));
+    expect(response).toMatchObject({
+      kind: 'invoke-result',
+      dst: 'dev-b',
+      payload: { ok: true, result: ['session-after-close'] },
+    });
+    expect(parseTransportPayload(response?.payload)).toBeNull();
+    expect(() => h.client.sendInvokeResult('dev-b', 'unknown-request', {
+      ok: true,
+      result: null,
+    })).toThrow(expect.objectContaining({ code: 'LINK_NOT_OPEN' }));
+    expect(() => h.client.sendInvokeResult('dev-b', 'listing-after-close', {
+      ok: true,
+      result: null,
+    })).toThrow(expect.objectContaining({ code: 'LINK_NOT_OPEN' }));
     h.client.stop();
   });
 
