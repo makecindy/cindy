@@ -106,8 +106,17 @@ export async function resolveFreshSourceBranch(
   const fetchBudgetMs = remainingBudgetMs();
   if (fetchBudgetMs > 0) {
     try {
+      // 显式目标 refspec:--single-branch 或收窄 remote.<name>.fetch 的 clone 里,
+      // 裸 `fetch <remote> <branch>` 只更新 FETCH_HEAD 不建 remote-tracking ref,
+      // 后续 rev-parse 查不到该 ref 就会退回陈旧基底(远端默认分支改名场景必踩)。
+      // `+` 前缀允许非快进更新,与标准 clone refspec 语义一致。
       await gitExec(
-        ['fetch', '--quiet', remote, defaultBranch],
+        [
+          'fetch',
+          '--quiet',
+          remote,
+          `+refs/heads/${defaultBranch}:refs/remotes/${remote}/${defaultBranch}`,
+        ],
         baseRepo,
         boundedNetworkGitOpts(fetchBudgetMs),
       );

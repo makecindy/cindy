@@ -46,7 +46,7 @@ describe('resolveFreshSourceBranch', () => {
       if (key === 'remote get-url upstream') return 'git@github.com:up/repo.git';
       if (key === 'ls-remote --symref upstream HEAD')
         return 'ref: refs/heads/main\tHEAD\nabc123\tHEAD';
-      if (key === 'fetch --quiet upstream main') return '';
+      if (key === 'fetch --quiet upstream +refs/heads/main:refs/remotes/upstream/main') return '';
       if (key === 'rev-parse --verify refs/remotes/upstream/main') return 'abc123';
       return undefined;
     };
@@ -67,13 +67,22 @@ describe('resolveFreshSourceBranch', () => {
       if (key === 'symbolic-ref --short refs/remotes/upstream/HEAD') return 'upstream/main';
       if (key === 'ls-remote --symref upstream HEAD')
         return 'ref: refs/heads/trunk\tHEAD\ndef456\tHEAD';
-      if (key === 'fetch --quiet upstream trunk') return '';
+      if (key === 'fetch --quiet upstream +refs/heads/trunk:refs/remotes/upstream/trunk') return '';
       if (key === 'rev-parse --verify refs/remotes/upstream/trunk') return 'def456';
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
     expect(res.sourceBranch).toBe('upstream/trunk');
     expect(res.fetched).toBe(true);
+    // 回归:必须用显式目标 refspec——--single-branch/窄 refspec clone 里裸
+    // `fetch <remote> trunk` 只更新 FETCH_HEAD 不建 refs/remotes/<remote>/trunk,
+    // 后续 rev-parse 查不到就会退回陈旧基底
+    expect(call('fetch')?.args).toEqual([
+      'fetch',
+      '--quiet',
+      'upstream',
+      '+refs/heads/trunk:refs/remotes/upstream/trunk',
+    ]);
   });
 
   it('ls-remote 失败(离线)→ 退本地 symbolic-ref,fetch 成功', async () => {
@@ -81,7 +90,7 @@ describe('resolveFreshSourceBranch', () => {
       const key = args.join(' ');
       if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
-      if (key === 'fetch --quiet origin main') return '';
+      if (key === 'fetch --quiet origin +refs/heads/main:refs/remotes/origin/main') return '';
       if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
       return undefined;
     };
@@ -95,7 +104,7 @@ describe('resolveFreshSourceBranch', () => {
       const key = args.join(' ');
       if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
       if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
-      if (key === 'fetch --quiet origin main') return '';
+      if (key === 'fetch --quiet origin +refs/heads/main:refs/remotes/origin/main') return '';
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
@@ -197,7 +206,7 @@ describe('resolveFreshSourceBranch', () => {
           return undefined;
         }
         if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
-        if (key === 'fetch --quiet origin main') return '';
+        if (key === 'fetch --quiet origin +refs/heads/main:refs/remotes/origin/main') return '';
         if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
         return undefined;
       };

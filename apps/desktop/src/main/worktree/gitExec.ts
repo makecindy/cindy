@@ -11,7 +11,9 @@
  * 这里只把 raw stderr/code/cause 暴露出去。
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, type ExecFileOptions } from 'node:child_process';
+
+import { killProcessTree } from '../scheduler-host/proc-util';
 
 export interface GitExecResult {
   stdout: string;
@@ -53,15 +55,20 @@ export interface GitExecOpts {
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
-   * 超时毫秒数, 到点终止 git 子进程并让 Promise 以 GitExecError 稳定收口。
-   * Windows 用 `taskkill /T /F` 终止**整棵进程树**(execFile 内建 timeout 只
-   * SIGTERM 直接的 git.exe, 卡住的 git-remote-http 或 credential helper 后代
-   * 会带着继承的 stdio 活下来——既拖过 deadline 又留孤儿进程); 非 Windows 维持
-   * SIGTERM 直接子进程的语义。两个平台都保证超时后不残留后台 git 进程与
-   * 紧随其后的其它 git 操作争抢同一仓库的 .lock。省略 = 不超时。
+   * 超时毫秒数, 到点终止 git 的**整棵进程树**并让 Promise 以 GitExecError 稳定
+   * 收口(execFile 内建 timeout 只 SIGTERM 直接的 git 进程, 卡住的 git-remote-http
+   * 或 credential helper 后代会带着继承的 stdio 活下来——既拖过 deadline 又留
+   * 孤儿进程)。Windows 走 proc-util killProcessTree 的 taskkill /T /F(带重试与
+   * 后代兜底); POSIX 让 git 以 detached 自成进程组长, deadline 处对整组 SIGTERM
+   * (git 收 TERM 会清理 .lock), 宽限期后仍存活的由整组 SIGKILL 兜底。两个平台
+   * 都保证超时后不残留后台 git 进程与紧随其后的其它 git 操作争抢同一仓库的
+   * .lock。省略 = 不超时。
    */
   timeoutMs?: number;
 }
+
+/** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
+const POSIX_KILL_GRACE_MS = 1_500;
 
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
@@ -74,7 +81,7 @@ function execFileOnce(
   return new Promise((resolve, reject) => {
     // 超时不走 execFile 内建 timeout:它只终止直接子进程,且回调要等 stdout/stderr
     // 流关闭——被后代进程继承并占住时回调可能远超 deadline 才来。这里自管定时器,
-    // 超时先终止进程树(Windows)/直接子进程(其余平台),再显式收口 Promise。
+    // 超时先终止整棵进程树/进程组(两个平台都含后代),再显式收口 Promise。
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const settle = (fn: () => void) => {
@@ -84,16 +91,23 @@ function execFileOnce(
       fn();
     };
 
+    // ExecFileOptions 类型没收录 detached,但 execFile 运行时把 options 原样传给
+    // spawn,detached 照常生效——用交叉类型补上缺口。
+    const spawnOptions: ExecFileOptions & { detached: boolean } = {
+      cwd,
+      // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
+      maxBuffer: 16 * 1024 * 1024,
+      env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
+      // POSIX 让 git 自成进程组长:超时收口可对**整组**发信号,连
+      // git-remote-http/credential helper 后代一起;Windows 的 detached 语义是
+      // 脱离控制台,树杀走 taskkill /T,不需要也不该开。
+      detached: process.platform !== 'win32',
+      // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
+    };
     const child = execFile(
       'git',
       [...args],
-      {
-        cwd,
-        // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
-        maxBuffer: 16 * 1024 * 1024,
-        env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
-        // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
-      },
+      spawnOptions,
       (err, stdout, stderr) => {
         // execFile 默认 encoding 是 'utf8' → stdout/stderr 是 string;
         // 但若上层未来传了 encoding:'buffer', 兜底转字符串避免崩溃。
@@ -151,19 +165,41 @@ function execFileOnce(
               }),
             ),
           );
-        if (process.platform === 'win32' && child.pid != null) {
-          // 终止整棵进程树(同仓库 claude-code.ts 的 taskkill 做法);taskkill 退出
-          // (无论成败,进程可能已自行结束)后再收口,保证后续 worktree git 操作
-          // 不会与残留后代并发。
-          execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => failTimeout());
+        if (process.platform === 'win32') {
+          // 复用 proc-util killProcessTree:taskkill /pid <pid> /T /F 整树终止,
+          // 带重试与后代兜底枚举;树杀流程收尾后再收口,保证后续 worktree git
+          // 操作不会与残留后代并发。
+          killProcessTree(child.pid, child, () => failTimeout());
+          return;
+        }
+        // POSIX:git 以 detached 自成进程组长——deadline 处对整组 SIGTERM,
+        // git-remote-http/credential helper 后代一并收到,git 收 TERM 会清理
+        // .lock;随即收口 Promise。忽略 SIGTERM 的顽固存活者由宽限期后的整组
+        // SIGKILL(killProcessTree)兜底,不留孤儿。
+        if (child.pid != null) {
+          try {
+            process.kill(-child.pid, 'SIGTERM');
+          } catch {
+            try {
+              child.kill('SIGTERM');
+            } catch {
+              /* 进程可能已退出 */
+            }
+          }
         } else {
           try {
             child.kill('SIGTERM');
           } catch {
             /* 进程可能已退出 */
           }
-          failTimeout();
         }
+        const reaper = setTimeout(() => {
+          if (child.exitCode === null && child.signalCode === null) {
+            killProcessTree(child.pid, child);
+          }
+        }, POSIX_KILL_GRACE_MS);
+        reaper.unref?.();
+        failTimeout();
       }, timeoutMs);
     }
   });
