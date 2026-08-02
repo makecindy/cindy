@@ -146,7 +146,7 @@ describe('provider:list IPC handler', () => {
         listProviders,
         getModelVisibilityOverrides: () => overrides,
         getProviderOrder: () => providerOrder,
-        currentOwnerId: () => 'owner-a',
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
       }),
     );
 
@@ -163,9 +163,9 @@ describe('provider:list IPC handler', () => {
     });
   });
 
-  it('rejects a catalog snapshot when the active owner changes during the async read', async () => {
+  it('rejects a catalog snapshot after an A→B→A owner round trip during the async read', async () => {
     const harness = new IpcHarness();
-    let owner = 'owner-a';
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
     let releaseList!: (providers: ProviderView[]) => void;
     const listProviders = vi.fn(
       () =>
@@ -179,12 +179,13 @@ describe('provider:list IPC handler', () => {
       makeDeps({
         listProviders,
         getProviderOrder,
-        currentOwnerId: () => owner,
+        currentOwnerSession: () => ownerSession,
       }),
     );
 
     const request = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
-    owner = 'owner-b';
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
     releaseList([fakeView('xd', true)]);
 
     await expect(request).rejects.toThrow(/INTERNAL/);
@@ -261,7 +262,7 @@ describe('provider:order:set handler', () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
       listProviderIds: () => ['xd', 'anthropic', 'openai'],
-      currentOwnerId: () => 'owner-a',
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
     });
     registerProviderHandlers(harness, deps);
 
@@ -298,7 +299,7 @@ describe('provider:order:set handler', () => {
     const deps = makeDeps({
       listProviderIds: () => ['xd', 'anthropic', 'openai'],
       setProviderOrder: vi.fn(() => false),
-      currentOwnerId: () => 'owner-a',
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
     });
     registerProviderHandlers(harness, deps);
 
@@ -316,7 +317,7 @@ describe('provider:order:set handler', () => {
     const harness = new IpcHarness();
     const deps = makeDeps({
       listProviderIds: () => ['xd', 'openai'],
-      currentOwnerId: () => 'owner-b',
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-b', generation: 2 }),
     });
     registerProviderHandlers(harness, deps);
 
@@ -441,14 +442,19 @@ describe('model-disable:set handler', () => {
     expect(order).toEqual(['disable', 'enable']);
   });
 
-  it('异步窗口内切账号 → INTERNAL 拒写:A 的点击不落进 B 的 owner-scoped 偏好', async () => {
+  it('异步窗口内 A→B→A → INTERNAL 拒写:旧会话点击不落进新会话', async () => {
     const harness = new IpcHarness();
-    let owner = 'owner-a';
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let shouldRoundTrip = true;
     const deps = makeDeps({
-      currentOwnerId: () => owner,
-      // 目录校验的 await 窗口内发生账号切换。
+      currentOwnerSession: () => ownerSession,
+      // 目录校验的 await 窗口内发生 A→B→A；owner id 最终相同但 generation 已变。
       listProviders: async () => {
-        owner = 'owner-b';
+        if (shouldRoundTrip) {
+          shouldRoundTrip = false;
+          ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+          ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
+        }
         return xdCatalog();
       },
     });
@@ -1304,11 +1310,11 @@ describe('provider:custom:* CRUD handlers', () => {
     // Authorization 或 API key 按 B 的 owner-scoped storage key 落盘。
     mountDb();
     const harness = new IpcHarness();
-    let owner: string | null = 'owner-a';
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
     const storeCustomProviderKey = vi.fn(() => true);
     const storeCustomProviderHeaders = vi.fn(() => true);
     const deps = makeDeps({
-      currentOwnerId: () => owner,
+      currentOwnerSession: () => ownerSession,
       storeCustomProviderKey,
       storeCustomProviderHeaders,
     });
@@ -1340,7 +1346,7 @@ describe('provider:custom:* CRUD handlers', () => {
         },
       },
     }, { pi: 'owner-a-new-key' });
-    owner = 'owner-b';
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
 
     await expect(update).rejects.toThrow(/active account changed during provider mutation/);
     expect(storeCustomProviderKey).not.toHaveBeenCalled();

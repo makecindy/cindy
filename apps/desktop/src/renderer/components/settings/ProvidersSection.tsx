@@ -1485,9 +1485,12 @@ export function ProvidersSection() {
   const [pendingProviderOrder, setPendingProviderOrder] = useState<{
     dataOwnerId: string | null;
     ids: string[];
+    providerOrderAtMutationEnd?: string[];
   } | null>(null);
   const [orderAnnouncement, setOrderAnnouncement] = useState('');
   const providerOrderMutationRef = useRef(0);
+  const latestProviderOrderRef = useRef(providerOrder);
+  latestProviderOrderRef.current = providerOrder;
   const observedProviderIdsRef = useRef<{
     dataOwnerId: string | null;
     ids: Set<string>;
@@ -1606,10 +1609,25 @@ export function ProvidersSection() {
     const sameCatalog =
       incomingIds.length === pendingProviderOrderIds.length &&
       incomingIds.every((id) => pendingProviderOrderIds.includes(id));
-    if (!sameCatalog || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])) {
+    // 每次权威快照都会携带新的 providerOrder 数组引用。写结束后首个新快照无论顺序
+    // 是否仍等于本窗口目标，都要结束 pending：另一窗口可能已经成为最后写入者。
+    const hasSnapshotAfterMutation =
+      pendingProviderOrder?.providerOrderAtMutationEnd !== undefined
+      && providerOrder !== pendingProviderOrder.providerOrderAtMutationEnd;
+    if (
+      !sameCatalog
+      || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])
+      || hasSnapshotAfterMutation
+    ) {
       setPendingProviderOrder(null);
     }
-  }, [dataOwnerId, orderedVisibleProviders, pendingProviderOrder, pendingProviderOrderIds]);
+  }, [
+    dataOwnerId,
+    orderedVisibleProviders,
+    pendingProviderOrder,
+    pendingProviderOrderIds,
+    providerOrder,
+  ]);
 
   // Main 只持久化曾经真正进入过左栏的供应商。自动观察只逐个提交权威快照里缺失的
   // 新项：singleton 写入只会追加，另一窗口刚保存的显式排序不会被旧快照重排。
@@ -1648,7 +1666,16 @@ export function ProvidersSection() {
       void window.electronAPI.maker
         .setProviderOrder(dataOwnerId, reorderedVisibleIds)
         .then(() => {
-          if (providerOrderMutationRef.current === generation) refetch();
+          if (providerOrderMutationRef.current !== generation) return;
+          setPendingProviderOrder((current) =>
+            current?.dataOwnerId === dataOwnerId
+              ? {
+                  ...current,
+                  providerOrderAtMutationEnd: latestProviderOrderRef.current,
+                }
+              : current,
+          );
+          refetch();
         })
         .catch(() => {
           if (providerOrderMutationRef.current !== generation) return;

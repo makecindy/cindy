@@ -332,13 +332,12 @@ export interface ProviderHandlerDeps {
    */
   stageClearProviderDisableOverrides?(providerId: string): () => boolean;
   /**
-   * 当前数据归属账号 id(生产 = getCurrentDataOwnerId)。停用写入是 owner-scoped
-   * 持久化(model-disable-prefs.json 按账号分目录),而 handler 内有异步窗口(串行
-   * 队列排队 + 目录校验的 listProviders await)—— 期间切了账号,写入会落进**新**账号
-   * 的偏好文件。在入口捕获、持久化前复核,变了就拒(PR #744 review 第七轮)。
+   * 当前数据归属会话(生产 = getActiveAppSession)。provider handler 内有异步窗口
+   * (串行队列排队 + 目录读取 await),必须同时比较 owner id 与单调 generation；只比 id
+   * 会漏掉 A→B→A 往返，让旧操作在第二个 A 会话里继续返回或落盘。
    * 可选:未注入(单测最小桩)= 不做归属校验。
    */
-  currentOwnerId?(): string | null;
+  currentOwnerSession?(): { dataOwnerId: string | null; generation: number };
   /** Active account ledger currency; used to reject unsupported reverse-FX overrides. */
   getLedgerCurrency(): MoneyCurrency;
   readModelPriceOverride(target: ModelPriceOverrideTarget): ModelPriceOverrideView;
@@ -813,10 +812,30 @@ export function registerProviderHandlers(
   // Owner-scoped provider reads and writes must stay bound to the account that was active at
   // ingress. Several provider operations cross async boundaries; reject instead of mixing an
   // earlier catalog snapshot with a later owner's preferences or persisting into that owner.
-  const providerMutationOwnerMatches = (ownerAtIngress: string | null): boolean =>
-    !deps.currentOwnerId || (deps.currentOwnerId() ?? null) === ownerAtIngress;
-  const assertProviderMutationOwner = (ownerAtIngress: string | null): void => {
+  const captureProviderOwnerSession = () => deps.currentOwnerSession?.();
+  const providerMutationOwnerMatches = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+  ): boolean => {
+    if (!deps.currentOwnerSession || !ownerAtIngress) return true;
+    const current = deps.currentOwnerSession();
+    return (
+      current.dataOwnerId === ownerAtIngress.dataOwnerId
+      && current.generation === ownerAtIngress.generation
+    );
+  };
+  const assertProviderMutationOwner = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+    message = 'active account changed during provider mutation',
+  ): void => {
     if (!providerMutationOwnerMatches(ownerAtIngress)) {
+      throwIpcError('INTERNAL', message);
+    }
+  };
+  const assertRequestedProviderOwner = (requestedDataOwnerId: string | null): void => {
+    if (
+      deps.currentOwnerSession
+      && deps.currentOwnerSession().dataOwnerId !== requestedDataOwnerId
+    ) {
       throwIpcError('INTERNAL', 'active account changed during provider mutation');
     }
   };
@@ -834,12 +853,13 @@ export function registerProviderHandlers(
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
-      const dataOwnerId = deps.currentOwnerId?.() ?? null;
+      const ownerAtIngress = captureProviderOwnerSession();
+      const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
       const trusted = deps.isTrustedSender?.(event) === true;
       const providers = await deps.listProviders({
         allowSideEffects: trusted,
       });
-      assertProviderMutationOwner(dataOwnerId);
+      assertProviderMutationOwner(ownerAtIngress);
       const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
@@ -933,7 +953,7 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
     }
-    assertProviderMutationOwner(requestedDataOwnerId as string | null);
+    assertRequestedProviderOwner(requestedDataOwnerId as string | null);
     const catalogIds = new Set(deps.listProviderIds());
     const requestedIds = ids as string[];
     if (requestedIds.some((id) => !catalogIds.has(id))) {
@@ -1034,11 +1054,12 @@ export function registerProviderHandlers(
     // 归属捕获:store 路径按账号分目录且在 run() 执行时才解析,队列排队 + 目录校验
     // 的 await 窗口内切账号会把 A 的点击写进 B 的偏好 —— 持久化前复核,变了就拒
     // (PR #744 review 第七轮)。
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     const assertSameOwner = (): void => {
-      if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-        throwIpcError('INTERNAL', 'active account changed before persisting model disable override');
-      }
+      assertProviderMutationOwner(
+        ownerAtIngress,
+        'active account changed before persisting model disable override',
+      );
     };
     const run = async () => {
       if (i.kind === 'reset') {
@@ -1174,13 +1195,14 @@ export function registerProviderHandlers(
     if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
       throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
     }
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
         await requirePriceTargetModel(target);
-        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-          throwIpcError('INTERNAL', 'active account changed before persisting price override');
-        }
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before persisting price override',
+        );
         try {
           deps.writeModelPriceOverride(target, desired);
         } catch (err) {
@@ -1201,12 +1223,13 @@ export function registerProviderHandlers(
   registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const target = parsePriceTarget(input);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
-        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-          throwIpcError('INTERNAL', 'active account changed before resetting price override');
-        }
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before resetting price override',
+        );
         try {
           deps.clearModelPriceOverride(target);
         } catch (err) {
@@ -1232,7 +1255,7 @@ export function registerProviderHandlers(
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
     const separated = splitCustomProviderHeaders(config);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
       assertProviderMutationOwner(ownerAtIngress);
       if (await customProviderExists(config.id)) {
@@ -1274,7 +1297,7 @@ export function registerProviderHandlers(
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
     const separated = splitCustomProviderHeaders(config);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
       let generation: symbol | null = null;
       try {
@@ -1355,7 +1378,7 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async () => {
       // 同类 delete 也会在 per-provider 队列后写 owner-scoped 凭证。
       assertProviderMutationOwner(ownerAtIngress);

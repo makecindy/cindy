@@ -146,7 +146,7 @@ const providersRef = vi.hoisted(() => {
   return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers }),
+  useProviders: () => ({ providers: providersRef.providers, providerOrder: [] }),
 }));
 
 vi.mock('@/hooks/useDeviceProviders', () => ({

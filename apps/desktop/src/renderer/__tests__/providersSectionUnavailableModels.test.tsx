@@ -18,6 +18,7 @@ const {
   refreshBuiltinModelsSpy,
   requestAutoRefreshSpy,
   setProviderOrderSpy,
+  refetchProvidersSpy,
   authState,
   providerSnapshotState,
   wizardSpy,
@@ -25,6 +26,7 @@ const {
   refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
+  refetchProvidersSpy: vi.fn(),
   authState: { dataOwnerId: 'owner-1' as string | null },
   providerSnapshotState: {
     dataOwnerId: 'owner-1' as string | null,
@@ -102,7 +104,7 @@ vi.mock('@/hooks/useProviders', () => ({
           ? providerSnapshotState.order
           : [],
       loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
-      refetch: vi.fn(),
+      refetch: refetchProvidersSpy,
     };
   },
 }));
@@ -320,6 +322,46 @@ describe('ProvidersSection — 双栏管理', () => {
       name: 'settings.providers.order.handle',
     });
     expect(setProviderOrderSpy).not.toHaveBeenCalled();
+  });
+
+  it('写入结束后的同目录权威快照会结束乐观排序，以另一窗口的后写结果为准', async () => {
+    let resolveOrderWrite!: (value: { ok: true }) => void;
+    const orderWrite = new Promise<{ ok: true }>((resolve) => {
+      resolveOrderWrite = resolve;
+    });
+    setProviderOrderSpy.mockReturnValueOnce(orderWrite);
+    const view = render(
+      React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
+    );
+
+    const handles = await screen.findAllByRole('button', {
+      name: 'settings.providers.order.handle',
+    });
+    fireEvent.keyDown(handles[0]!, { key: 'ArrowDown' });
+    let providerRows = screen
+      .getAllByRole('button')
+      .filter((button) => button.hasAttribute('aria-current'));
+    expect(providerRows[0]?.textContent).toContain('Custom');
+    expect(providerRows[1]?.textContent).toContain('settings.providers.xd.title');
+
+    await act(async () => {
+      resolveOrderWrite({ ok: true });
+      await orderWrite;
+      await Promise.resolve();
+    });
+    expect(refetchProvidersSpy).toHaveBeenCalledOnce();
+
+    // B 窗口后写成为 Main 最终顺序；目录成员没变，但新快照必须结束 A 的 pending。
+    await act(async () => {
+      providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
+      view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+      await Promise.resolve();
+    });
+    providerRows = screen
+      .getAllByRole('button')
+      .filter((button) => button.hasAttribute('aria-current'));
+    expect(providerRows[0]?.textContent).toContain('settings.providers.xd.title');
+    expect(providerRows[1]?.textContent).toContain('Custom');
   });
 
   it('切换数据 owner 后会按新 owner 重新记录可见项', async () => {
