@@ -115,6 +115,7 @@ describe('isInterruptedTurnError', () => {
       'connect ECONNREFUSED 127.0.0.1:9',
       'socket hang up',
       'Request timed out',
+      'API Error: The operation timed out.',
       'Connection error',
       'upstream unreachable',
       '502 Bad Gateway',
