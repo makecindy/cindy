@@ -4382,6 +4382,53 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(projection.recovery).toBeNull();
   });
 
+  it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-active-error';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'original turn failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Switching to an image-capable model is represented by the next host send succeeding.
+    // Only the explicit Retry may consume the preserved steer, and it must do so once.
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
   it('screens same-turn steers through ghost hooks: block discards without injecting or persisting', async () => {
     // review #939 第四轮:steer 直达 steerToAgent 不经 drain,必须补同一道
     // will-user-message 筛查,否则被拦消息可经插话原样注入并落库。

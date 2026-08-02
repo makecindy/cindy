@@ -2085,6 +2085,20 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      if (
+        active &&
+        state.recovery?.kind === 'queue-head' &&
+        isPiImageInputUnsupportedError(state.error)
+      ) {
+        // A Pi capability guard rejected a newer steer before RPC and restored it as the
+        // recoverable queue head. The terminal error belongs to the original active turn: close
+        // that old boundary, but do not replace the newer queue-head recovery/banner with an
+        // active-turn retry. The paired done path below preserves the same recovery as well.
+        state.activeTurn = null;
+        state.stickyError = null;
+        this.emit(sessionId);
+        return;
+      }
       if (active?.persisted) {
         state.activeTurn = null;
         state.stickyError = null;
