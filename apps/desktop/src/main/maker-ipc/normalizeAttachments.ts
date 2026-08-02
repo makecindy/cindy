@@ -374,8 +374,9 @@ async function materializeQueuedOssAttachmentsInternal(
     }
   };
   const cleanupBeforeAcceptance = async (): Promise<void> => {
+    // Keep the remote OSS object retryable until the direct send is accepted.
+    // Only the local materialization belongs to this rejection cleanup path.
     await cleanupLocalMaterializations();
-    cleanupOss();
   };
   // 可入总仓的媒体(图片等白名单 mime)→ ingest 进 cindy-media 并直接挂
   // session-attachment 引用(入队消息没有草稿期,等价老 lifecycle committed);

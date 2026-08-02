@@ -574,7 +574,8 @@ describe('maker SEND transaction', () => {
   });
 
   it('rejects a non-boolean interrupted-turn dispatch ack option before vendor dispatch', async () => {
-    const { deps, session } = createDeps();
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps, session } = createDeps({ materializeDirectSendOssAttachments });
     const transaction = createMakerSendTransaction(deps);
 
     await expect(
@@ -584,6 +585,7 @@ describe('maker SEND transaction', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 
     expect(session.send).not.toHaveBeenCalled();
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
   });
 
   it('rolls back the prompt preview if accepted persistence fails before dispatch', async () => {

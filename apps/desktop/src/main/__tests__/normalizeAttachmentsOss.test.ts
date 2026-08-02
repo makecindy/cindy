@@ -436,13 +436,14 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
     assert.equal(copyArgs?.originalName, 'setup.exe');
     assert.equal(removeRemote.mock.calls.length, 0);
     assert.equal(typeof out.cleanupAfterAcceptance, 'function');
+    assert.equal(typeof out.cleanupBeforeAcceptance, 'function');
+    await out.cleanupBeforeAcceptance?.();
+    expect(removeRemote).not.toHaveBeenCalled();
+    expect(removeFile).toHaveBeenCalledWith('xdt-image://sess-1/cached-setup.exe.bin');
     out.cleanupAfterAcceptance?.();
     const removeCalls = removeRemote.mock.calls as unknown[][];
     assert.equal(removeCalls.length, 1);
     assert.equal(removeCalls[0]?.[0], 'oss/setup.bin');
-    assert.equal(typeof out.cleanupBeforeAcceptance, 'function');
-    await out.cleanupBeforeAcceptance?.();
-    expect(removeFile).toHaveBeenCalledWith('xdt-image://sess-1/cached-setup.exe.bin');
 
     const block = (out.message as { content: Array<{ path?: string }> }).content[1];
     assert.equal(block.path, '/cache/sess-1/cached-setup.exe.bin');
@@ -476,6 +477,10 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
     expect(removeRefById).toHaveBeenCalledWith('ref-1');
     expect(deleteZeroRefBlobRecord).toHaveBeenCalledWith(BLOB_HASH, expect.any(Number));
     expect(deleteBlobFile).toHaveBeenCalledWith(BLOB_HASH, '.png');
+    expect(removeRemote).not.toHaveBeenCalled();
+
+    out.cleanupAfterAcceptance?.();
+    expect(removeRemote).toHaveBeenCalledWith('oss/photo.png');
   });
 
   it('没有 OSS 引用时保持原对象，不产生文件 IO', async () => {

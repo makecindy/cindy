@@ -477,6 +477,13 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
+      if (
+        requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
+        typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
+      ) {
+        throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
+      }
       let outgoingMessage = message;
       let outgoingSendOpts = sendOpts;
       let cleanupAfterAcceptance: (() => void) | undefined;
@@ -519,12 +526,6 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         : normalized;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
-      if (
-        so.ackInterruptedTurnOnDispatch !== undefined &&
-        typeof so.ackInterruptedTurnOnDispatch !== 'boolean'
-      ) {
-        throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
-      }
       const persistUserMessage = readPersistUserMessageOption(so);
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;
