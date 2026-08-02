@@ -292,6 +292,7 @@ import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from '.
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
 import {
@@ -2611,8 +2612,13 @@ const registerIpcHandlers = () => {
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
   })?.setAppFocused(hasFocusedAppWindow());
-  setSessionsSubscribedListener(() => {
-    getAgentIslandService()?.replaySessionActivity();
+  // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
+  // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
+  // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  setSessionsSubscribedListener((controllerDeviceId) => {
+    getAgentIslandService()?.replaySessionActivity((payload) => {
+      pushSessionActivityToController(controllerDeviceId, payload);
+    });
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。

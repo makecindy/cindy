@@ -98,17 +98,26 @@ export class SessionActivityRelay {
     this.emit(payload);
   }
 
-  /** Replays current list activity without changing throttle state. */
-  replay(list: readonly AgentIslandSessionActivity[]): void {
+  /**
+   * Replays current list activity without changing throttle state.
+   *
+   * `emit` 可覆盖为**定向 sink**(只投给刚订阅的那一台控制端):replay 是按需的
+   * 全量快照补发,若沿默认广播通道扇出,每次有控制端 subscribe 都会把 O(会话数)
+   * 的帧重复灌给其它所有控制端,在多控制端重连风暴中互相挤爆对方的传输窗口。
+   */
+  replay(
+    list: readonly AgentIslandSessionActivity[],
+    emit: (payload: SessionActivityPayload) => void = this.emit,
+  ): void {
     const seenSessionIds = new Set<string>();
     for (const activity of list) {
       if (!activity.sessionId) continue;
       seenSessionIds.add(activity.sessionId);
       const payload = toSessionActivityPayload(activity);
-      this.emit(isPublishableActivity(payload) ? payload : toTerminalActivityPayload(activity.sessionId));
+      emit(isPublishableActivity(payload) ? payload : toTerminalActivityPayload(activity.sessionId));
     }
     for (const [sessionId, payload] of this.terminalReplayPayloads) {
-      if (!seenSessionIds.has(sessionId)) this.emit(payload);
+      if (!seenSessionIds.has(sessionId)) emit(payload);
     }
   }
 

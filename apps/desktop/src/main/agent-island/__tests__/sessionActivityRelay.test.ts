@@ -136,6 +136,34 @@ describe('SessionActivityRelay', () => {
     }));
   });
 
+  it('replays through a scoped emit override without touching the default broadcast sink', () => {
+    const emit = vi.fn();
+    const scopedEmit = vi.fn();
+    const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });
+
+    relay.publish([activity('s1', 'Thinking')]);
+    emit.mockClear();
+
+    // 定向 replay:快照只进 scoped sink(刚订阅的控制端),默认广播通道零流量
+    relay.replay([activity('s1', 'Thinking')], scopedEmit);
+    expect(scopedEmit).toHaveBeenCalledTimes(1);
+    expect(scopedEmit).toHaveBeenCalledWith(expect.objectContaining({
+      sessionId: 's1',
+      compactDetail: 'Thinking',
+    }));
+    expect(emit).not.toHaveBeenCalled();
+
+    // replay 不改变节流状态:窗口内的后续 publish 仍按原节奏走默认通道
+    relay.publish([activity('s1', 'Editing README')]);
+    expect(emit).not.toHaveBeenCalled();
+    vi.advanceTimersByTime(1_500);
+    expect(emit).toHaveBeenCalledTimes(1);
+    expect(emit).toHaveBeenLastCalledWith(expect.objectContaining({
+      sessionId: 's1',
+      compactDetail: 'Editing README',
+    }));
+  });
+
   it('replays terminal clears that late subscribers may have missed', () => {
     const emit = vi.fn();
     const relay = new SessionActivityRelay(emit, { minIntervalMs: 1_500 });

@@ -642,6 +642,16 @@ export class DeviceLinkClient {
     this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: { channel, payload } });
   }
 
+  /**
+   * 指定 peer 可靠发送队列中未确认的逻辑消息数(0 = 无积压或未建立可靠传输)。
+   * 供上层做**软背压**:可整流的状态镜像流量(如会话活动快照)在窗口
+   * (MAX_TRANSPORT_PENDING_MESSAGES)被占满、BACKPRESSURE 变成硬失败之前提前停手,
+   * 给 invoke-result 等控制面帧留出余量。只读,不改变任何传输状态。
+   */
+  getReliableSendQueueDepth(dst: string): number {
+    return this.peerTransport.get(dst)?.pending.size ?? 0;
+  }
+
   // ─── 内部:请求配对 ─────────────────────────────────────────────────────────
 
   /** 发送请求帧并等待同 id 响应;同 id relay-error 转成 DeviceLinkError reject */
