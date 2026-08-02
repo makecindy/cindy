@@ -1,5 +1,44 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { createTransportTimeoutReopenLoop } from '../transportTimeoutReopen';
+import {
+  createTransportTimeoutReopenLoop,
+  routeLinkCloseForReopen,
+  shouldAbortTransportTimeoutReopen,
+} from '../transportTimeoutReopen';
+
+describe('shouldAbortTransportTimeoutReopen', () => {
+  const base = { clientOnline: true, isOwner: true, controlDisabledLocally: false };
+
+  it('本机禁用控制/离线/待命才终止;授权输入里没有「对方被本机撤权」维度', () => {
+    expect(shouldAbortTransportTimeoutReopen(base)).toBe(false);
+    expect(shouldAbortTransportTimeoutReopen({ ...base, clientOnline: false })).toBe(true);
+    expect(shouldAbortTransportTimeoutReopen({ ...base, isOwner: false })).toBe(true);
+    expect(shouldAbortTransportTimeoutReopen({ ...base, controlDisabledLocally: true })).toBe(true);
+    // 互控且仅反向撤权(本机 revokedControllers 含对方 = 对方不能控制本机):
+    // 与本机主动控制对方无关,输入契约上根本不存在该维度——重建照常。
+    // (目标侧撤销本机控制权走入站 link-close('revoked') → cancel,见下组。)
+    const keys = Object.keys(base);
+    expect(keys).toEqual(['clientOnline', 'isOwner', 'controlDisabledLocally']);
+  });
+});
+
+describe('routeLinkCloseForReopen', () => {
+  it.each(['user', 'toggle-off', 'shutdown', 'revoked', 'future-unknown-reason', undefined])(
+    '永久关闭 reason(%s)终止重开循环',
+    (reason) => {
+      const loop = { trigger: vi.fn(), cancel: vi.fn() };
+      routeLinkCloseForReopen(reason as string | undefined, loop, 'dev-a');
+      expect(loop.cancel).toHaveBeenCalledWith('dev-a');
+      expect(loop.trigger).not.toHaveBeenCalled();
+    },
+  );
+
+  it('transport-timeout 触发重建且不 cancel', () => {
+    const loop = { trigger: vi.fn(), cancel: vi.fn() };
+    routeLinkCloseForReopen('transport-timeout', loop, 'dev-a');
+    expect(loop.trigger).toHaveBeenCalledWith('dev-a');
+    expect(loop.cancel).not.toHaveBeenCalled();
+  });
+});
 
 describe('createTransportTimeoutReopenLoop', () => {
   beforeEach(() => {

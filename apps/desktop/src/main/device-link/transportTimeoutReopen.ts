@@ -44,6 +44,51 @@ export interface TransportTimeoutReopenLoop {
 const DEFAULT_MAX_ATTEMPTS = 5;
 const DEFAULT_BASE_DELAY_MS = 1_000;
 
+/**
+ * 重开循环的授权边界(纯函数,供 index.ts 接线 + 单测固化契约)。
+ *
+ * 输入里**刻意没有**「对方是否被本机撤权」(revokedControllers):那个名单的
+ * 语义是「目标设备不再允许控制**本机**」——与本机主动控制对方无关,互控
+ * 且仅反向撤权时不得阻断本机控制链路的 transport-timeout 重建。目标侧
+ * 撤销本机控制权的信号是入站 link-close('revoked'),由
+ * routeLinkCloseForReopen 的永久关闭分支终止循环。
+ */
+export interface ReopenAuthorizationInputs {
+  /** relay 在线且 client 存在。 */
+  clientOnline: boolean;
+  /** 本实例持有 device-link 所有权(非待命态)。 */
+  isOwner: boolean;
+  /** 本机已对该设备关闭控制(disabledControlDeviceIds,与 openRemoteLink 的
+   * fail-closed 门同源)。 */
+  controlDisabledLocally: boolean;
+}
+
+export function shouldAbortTransportTimeoutReopen(
+  inputs: ReopenAuthorizationInputs,
+): boolean {
+  return !inputs.clientOnline || !inputs.isOwner || inputs.controlDisabledLocally;
+}
+
+/**
+ * 入站 link-close 的 reason → 重开循环动作路由(纯函数)。
+ *
+ * transport-timeout 是唯一的可恢复瞬时重置 → 触发重建;其它一切 reason
+ * (user/toggle-off/shutdown/revoked 及未知新值)都是永久关闭 → 必须终止
+ * 已在进行的重开循环,否则刚被(对端或本地)断开的控制链会被退避重试
+ * 重新建起。
+ */
+export function routeLinkCloseForReopen(
+  reason: string | undefined,
+  loop: Pick<TransportTimeoutReopenLoop, 'trigger' | 'cancel'>,
+  deviceId: string,
+): void {
+  if (reason === 'transport-timeout') {
+    loop.trigger(deviceId);
+    return;
+  }
+  loop.cancel(deviceId);
+}
+
 export function createTransportTimeoutReopenLoop(
   deps: TransportTimeoutReopenDeps,
 ): TransportTimeoutReopenLoop {

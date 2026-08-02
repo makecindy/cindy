@@ -42,7 +42,11 @@ import {
   type OwnershipStore,
 } from './ownership';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
-import { createTransportTimeoutReopenLoop } from './transportTimeoutReopen';
+import {
+  createTransportTimeoutReopenLoop,
+  routeLinkCloseForReopen,
+  shouldAbortTransportTimeoutReopen,
+} from './transportTimeoutReopen';
 import {
   readDeviceLinkSettings,
   rememberLastKnownDeviceName,
@@ -118,15 +122,17 @@ let client: DeviceLinkClient | null = null;
  */
 const transportTimeoutReopen = createTransportTimeoutReopenLoop({
   reopen: (deviceId) => openRemoteLink(deviceId),
-  shouldAbort: (deviceId) => (
-    !client
-    || client.getStatus() !== 'online'
-    || (arbiter !== null && !arbiter.isOwner())
-    || isDeviceRevoked(deviceId)
-    // 与 openRemoteLink 的 fail-closed 门对齐(#1408):本机已对该设备关闭控制
-    // 时不重建链路,避免重开循环把被禁用的链路反复拉起又失败空转。
-    || readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)
-  ),
+  // 授权边界见 shouldAbortTransportTimeoutReopen 注释:刻意**不看**
+  // revokedControllers——那是「对方不再允许控制本机」,与本机主动控制对方
+  // 无关;互控且仅反向撤权时重建必须照常。目标侧撤销本机控制权由入站
+  // link-close('revoked') 经 routeLinkCloseForReopen 的永久关闭分支终止循环。
+  shouldAbort: (deviceId) => shouldAbortTransportTimeoutReopen({
+    clientOnline: client !== null && client.getStatus() === 'online',
+    isOwner: arbiter === null || arbiter.isOwner(),
+    // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制
+    // 时不重建,避免把被禁用的链路反复拉起又失败空转。
+    controlDisabledLocally: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+  }),
   log: {
     info: (msg) => log.info(msg),
     warn: (msg) => log.warn(msg),
@@ -398,17 +404,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 标记「已撤销」(presence 不变 —— 被控端仍在线且全局允许被控,故必须靠这条信号)。
     if (env.kind === 'link-close') {
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
+      // reason → 重开循环动作统一路由:transport-timeout(可恢复瞬时重置,
+      // 可靠层保留 stream/pending,被控端保留订阅与在途回包,link-accept 后
+      // 双向同 seq 续传)触发有界退避重建;其它一切 reason(user/toggle-off/
+      // shutdown/revoked/未知新值)都是永久关闭——必须终止已在进行的重开
+      // 循环,否则刚被断开的控制链会被退避重试重新建起。
+      routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
       if (reason === 'revoked') {
-        transportTimeoutReopen.cancel(env.src);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
-      } else if (reason === 'transport-timeout') {
-        // 被控端对本机的可靠重试耗尽,做了 peer 级瞬时重置(relay 保持在线,
-        // 无 presence 变化可依赖)。立即重开链路:可靠层已按瞬时重置保留
-        // stream/pending(见 client dispatchEnvelope),被控端也保留了订阅注册
-        // 表与在途回包 —— link-accept 后双向同 seq 续传,renderer 远程视图无感
-        // 恢复。单次失败不放弃:有界退避重试到成功/终止条件(见
-        // transportTimeoutReopen 模块注释)。
-        transportTimeoutReopen.trigger(env.src);
       }
       return;
     }
@@ -945,6 +948,9 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
+  // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
+  // 链路建回来。
+  transportTimeoutReopen.cancel(deviceId);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }
