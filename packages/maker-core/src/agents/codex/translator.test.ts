@@ -1065,6 +1065,71 @@ describe('translateItemNotification collabAgentToolCall', () => {
   });
 });
 
+describe('translateItemNotification subAgentActivity', () => {
+  function activityParams(kind: string, id = 'spawn-1') {
+    return {
+      threadId: 'thread-1',
+      turnId: 'turn-1',
+      item: {
+        type: 'subAgentActivity',
+        id,
+        kind,
+        agentThreadId: 'thread-2',
+        agentPath: '/root/survey_startup',
+      },
+    };
+  }
+
+  it('renders a self-closing spawn card for kind=started (0.145 v2 emits no collab item)', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('started', activityParams('started'), q, ctx);
+
+    const events = await collect(q);
+    expect(events.map((event) => event.type)).toEqual([
+      'tool_use',
+      'tool_result_full',
+      'tool_result',
+    ]);
+    expect(events[0].data).toMatchObject({
+      toolUseId: 'spawn-1',
+      toolName: 'collab:spawn',
+      input: { name: '/root/survey_startup', agentThreadId: 'thread-2' },
+    });
+    expect(events[1].data).toMatchObject({
+      toolUseId: 'spawn-1',
+      fullText: '/root/survey_startup started (thread thread-2)',
+      isError: false,
+    });
+  });
+
+  it('dedupes the started/completed phase pair to a single card', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('started', activityParams('started'), q, ctx);
+    translateItemNotification('completed', activityParams('started'), q, ctx);
+
+    const events = await collect(q);
+    expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+  });
+
+  it('stays silent for interacted/interrupted kinds', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    const ctx = makeCtx(rt);
+
+    translateItemNotification('completed', activityParams('interacted', 'act-1'), q, ctx);
+    translateItemNotification('completed', activityParams('interrupted', 'act-2'), q, ctx);
+
+    const events = await collect(q);
+    expect(events).toEqual([]);
+  });
+});
+
 describe('translateItemNotification plan', () => {
   it('emits update_plan on started and completed, with result only on completed', async () => {
     const rt = newCodexRuntimeState();

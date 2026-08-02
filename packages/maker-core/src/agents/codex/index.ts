@@ -211,6 +211,7 @@ function statusTextForItem(item: { type?: string; command?: string; tool?: strin
     case 'mcpToolCall':          return `${item.tool ?? 'mcp'} running...`;
     case 'dynamicToolCall':      return `${item.tool ?? 'tool'} running...`;
     case 'collabAgentToolCall':  return `${item.tool ?? 'agent'} running...`;
+    case 'subAgentActivity':     return 'Spawning agent...';
     case 'webSearch':            return 'Searching web...';
     case 'imageGeneration':      return 'Generating image...';
     case 'contextCompaction':    return 'Compacting...';

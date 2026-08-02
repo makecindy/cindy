@@ -28,6 +28,7 @@ import {
 import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNavigation';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
+import { isCodexSubagentEffort } from '../../../shared/subagentModelSettings';
 
 interface AgentTaskCardProps {
   toolCall?: ChatMessage;
@@ -127,9 +128,18 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   const { t } = useTranslation();
   const blockId = `task:${toolCall?.clientId ?? update?.taskId ?? 'unknown'}`;
   // subagent-model-chip: 子代理模型 —— 实时态优先 update.model(progress 事件
-  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel。两者皆无
-  // (如 codex collab 任务 / 旧数据)则不渲染 chip。
-  const modelLabel = formatModelShortLabel(update?.model ?? subagentModel);
+  // 带),历史重载(update 缺省)回退到从子消息反查的 subagentModel;两者皆无时
+  // 再回退 spawn 参数里显式指定的 model(codex collab 卡,translator 透传
+  // item.model)。默认继承主模型时 spawn 无 model 字段——不猜继承值,不渲染。
+  const modelLabel = formatModelShortLabel(
+    update?.model ?? subagentModel ?? readInputString(toolCall?.toolInput, ['model']),
+  );
+  // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
+  // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。
+  const effortRaw = readInputString(toolCall?.toolInput, ['reasoningEffort']);
+  const effortLabel =
+    effortRaw && isCodexSubagentEffort(effortRaw) ? t(`effortLevels.${effortRaw}`) : undefined;
+  const chipLabel = [modelLabel, effortLabel].filter(Boolean).join(' · ');
   const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
   const toggle = useCallback(() => setExpanded((v) => !v), [setExpanded]);
 
@@ -331,16 +341,16 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
               {meta.map((part) => (
                 <Fragment key={part.key}>
                   <span>{part.text}</span>
-                  {/* subagent-model-chip: 模型 chip 紧跟在 provider(Claude Code)之后,
-                      与 meta 文本同处第二行。 */}
-                  {part.key === 'provider' && modelLabel && (
+                  {/* subagent-model-chip: 模型(codex 卡可另含思考强度)chip 紧跟在
+                      provider 之后,与 meta 文本同处第二行。 */}
+                  {part.key === 'provider' && chipLabel && (
                     <span
                       data-agent-task-model-chip="true"
                       // 字体不特殊处理:size / weight / color 全部继承 meta 行
                       // (text-12 / normal / --text-tertiary),只保留 chip 的底色与圆角。
                       className="inline-flex items-center rounded-[4px] bg-[var(--surface-chip)] px-1.5 py-0.5"
                     >
-                      {modelLabel}
+                      {chipLabel}
                     </span>
                   )}
                 </Fragment>
