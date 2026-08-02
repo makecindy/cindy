@@ -1,7 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  buildProjectKeyComparisonSet,
+  isProjectHidden,
   isSessionInHiddenProject,
+  projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
 } from '@/features/cc-agent/lib/sidebarProjectVisibility';
@@ -100,6 +103,69 @@ describe('sidebar project visibility', () => {
         new Set(['local:/repo']),
       ),
     ).toBe(true);
+  });
+
+  it('matches local Windows project and session keys regardless of path casing', () => {
+    const hidden = new Set(['local:C:/Users/Lee/Repo']);
+
+    expect(isProjectHidden('local:c:/users/lee/repo', hidden)).toBe(true);
+    expect(
+      isSessionInHiddenProject(
+        session({ workingDir: 'c:\\users\\lee\\repo' }),
+        hidden,
+      ),
+    ).toBe(true);
+  });
+
+  it('uses Windows comparison keys for bulk projections without folding other scopes', () => {
+    const hidden = new Set([
+      'local:C:/Repo',
+      'remote:host-a:C:/Repo',
+      'device:device-a:C:/Repo',
+      'local:/Users/Lee/Repo',
+    ]);
+    const projects = [
+      project('local:c:/repo'),
+      project('remote:host-a:c:/repo'),
+      project('device:device-a:c:/repo'),
+      project('local:/users/lee/repo'),
+    ];
+    const hiddenComparisonKeys = buildProjectKeyComparisonSet(hidden);
+
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:c:/repo')).toBe(true);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'remote:host-a:c:/repo')).toBe(false);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'device:device-a:c:/repo')).toBe(false);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:/users/lee/repo')).toBe(false);
+
+    expect(
+      visibleSidebarProjects(projects, hidden).map((entry) => entry.projectKey),
+    ).toEqual([
+      'remote:host-a:c:/repo',
+      'device:device-a:c:/repo',
+      'local:/users/lee/repo',
+    ]);
+
+    const localWindowsSession = session({ workingDir: 'c:\\repo' }) as Session;
+    const remoteSession = session({
+      workingDir: 'c:\\repo',
+      remoteHostId: 'host-a',
+    }) as Session;
+    const deviceSession = session({
+      workingDir: 'c:\\repo',
+      deviceLinkDeviceId: 'device-a',
+    }) as Session;
+    const posixSession = session({ workingDir: '/users/lee/repo' }) as Session;
+
+    const presented = sidebarSessionsWithHiddenProjectsAsDialogues(
+      [localWindowsSession, remoteSession, deviceSession, posixSession],
+      hidden,
+    );
+    expect(presented[0]).toEqual(
+      expect.objectContaining({ workspaceKind: 'dialogue' }),
+    );
+    expect(presented[1]).toBe(remoteSession);
+    expect(presented[2]).toBe(deviceSession);
+    expect(presented[3]).toBe(posixSession);
   });
 
   it('filters only hidden projects from a project catalogue', () => {

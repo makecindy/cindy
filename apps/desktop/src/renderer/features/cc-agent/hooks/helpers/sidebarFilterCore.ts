@@ -1,5 +1,5 @@
 import { createLogger } from '@/lib/logger';
-import { normalizeProjectKey } from '../../lib/projectGrouping';
+import { normalizeProjectKey, projectKeyComparisonKey } from '../../lib/projectGrouping';
 
 const log = createLogger('SidebarFilterCore');
 /**
@@ -193,10 +193,17 @@ export function removeProjectsFromFilter(
   projectKeys: ReadonlySet<string>,
 ): FilterProjects {
   if (prev === 'all' || projectKeys.size === 0) return prev;
-  const normalizedHidden = new Set(normalizeProjectKeyList(Array.from(projectKeys)));
-  if (normalizedHidden.size === 0) return prev;
+  const hiddenComparisonKeys = new Set(
+    normalizeProjectKeyList(Array.from(projectKeys))
+      .map((projectKey) => projectKeyComparisonKey(projectKey))
+      .filter((projectKey): projectKey is string => projectKey != null),
+  );
+  if (hiddenComparisonKeys.size === 0) return prev;
   const normalizedPrev = normalizeProjectKeyList(prev);
-  const filtered = normalizedPrev.filter((projectKey) => !normalizedHidden.has(projectKey));
+  const filtered = normalizedPrev.filter((projectKey) => {
+    const comparisonKey = projectKeyComparisonKey(projectKey);
+    return comparisonKey == null || !hiddenComparisonKeys.has(comparisonKey);
+  });
   if (filtered.length === 0) return 'all';
   if (filtered.length === normalizedPrev.length) {
     return arraysEqual(normalizedPrev, prev) ? prev : normalizedPrev;

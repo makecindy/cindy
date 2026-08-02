@@ -7,7 +7,7 @@
 import { BrowserWindow, ipcMain } from 'electron';
 import Store from 'electron-store';
 
-import { normalizeProjectKey } from '../shared/projectKeys.js';
+import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
@@ -63,10 +63,16 @@ export function loadHiddenProjectKeys(): string[] {
   const normalized: string[] = [];
   for (const entry of stored) {
     const projectKey = normalizeProjectKey(entry);
-    if (projectKey == null || projectKey.length > MAX_PROJECT_KEY_LENGTH || seen.has(projectKey)) {
+    const comparisonKey = projectKeyComparisonKey(projectKey);
+    if (
+      projectKey == null ||
+      projectKey.length > MAX_PROJECT_KEY_LENGTH ||
+      comparisonKey == null ||
+      seen.has(comparisonKey)
+    ) {
       continue;
     }
-    seen.add(projectKey);
+    seen.add(comparisonKey);
     normalized.push(projectKey);
   }
   return normalized;
@@ -141,13 +147,18 @@ function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
   const hidden = requireHidden(rawHidden);
   // intent 更新每次都从 main 的最新快照计算，避免两个窗口用各自旧数组互相覆盖。
   const current = loadHiddenProjectKeys();
-  const alreadyHidden = current.includes(projectKey);
+  const comparisonKey = projectKeyComparisonKey(projectKey) ?? projectKey;
+  const alreadyHidden = current.some(
+    (entry) => projectKeyComparisonKey(entry) === comparisonKey,
+  );
   if (alreadyHidden === hidden) return false;
   if (hidden && current.length >= MAX_HIDDEN_PROJECT_ENTRIES) {
     throwIpcError('INVALID_PARAMS', 'too many hidden sidebar projects');
   }
 
-  const next = hidden ? [...current, projectKey] : current.filter((entry) => entry !== projectKey);
+  const next = hidden
+    ? [...current, projectKey]
+    : current.filter((entry) => projectKeyComparisonKey(entry) !== comparisonKey);
   saveHiddenProjectKeys(next);
   broadcastHiddenProjectKeysChanged(next);
   return true;

@@ -1,6 +1,10 @@
 import type { Session } from '@/lib/ccAgent.types';
 
-import { projectIdentityKeyForSession, type ProjectNode } from './projectGrouping';
+import {
+  projectIdentityKeyForSession,
+  projectKeyComparisonKey,
+  type ProjectNode,
+} from './projectGrouping';
 
 type SidebarProjectSession = Pick<
   Session,
@@ -17,7 +21,12 @@ export function isProjectHidden(
   projectKey: string,
   hiddenProjectKeys: ReadonlySet<string>,
 ): boolean {
-  return hiddenProjectKeys.has(projectKey);
+  const comparisonKey = projectKeyComparisonKey(projectKey);
+  if (comparisonKey == null) return false;
+  for (const hiddenProjectKey of hiddenProjectKeys) {
+    if (projectKeyComparisonKey(hiddenProjectKey) === comparisonKey) return true;
+  }
+  return false;
 }
 
 export function isSessionInHiddenProject(
@@ -28,7 +37,35 @@ export function isSessionInHiddenProject(
   // user-added project and must never be hidden by a project tombstone.
   if (session.workspaceKind === 'dialogue') return false;
   const projectKey = projectIdentityKeyForSession(session);
-  return projectKey != null && hiddenProjectKeys.has(projectKey);
+  return projectKey != null && isProjectHidden(projectKey, hiddenProjectKeys);
+}
+
+export function buildProjectKeyComparisonSet(projectKeys: Iterable<string>): Set<string> {
+  const comparisonKeys = new Set<string>();
+  for (const projectKey of projectKeys) {
+    const comparisonKey = projectKeyComparisonKey(projectKey);
+    if (comparisonKey != null) comparisonKeys.add(comparisonKey);
+  }
+  return comparisonKeys;
+}
+
+export function projectKeyComparisonSetHas(
+  comparisonKeys: ReadonlySet<string>,
+  projectKey: string | null | undefined,
+): boolean {
+  const comparisonKey = projectKeyComparisonKey(projectKey);
+  return comparisonKey != null && comparisonKeys.has(comparisonKey);
+}
+
+function isSessionInHiddenProjectComparisonSet(
+  session: SidebarProjectSession,
+  hiddenProjectComparisonKeys: ReadonlySet<string>,
+): boolean {
+  if (session.workspaceKind === 'dialogue') return false;
+  return projectKeyComparisonSetHas(
+    hiddenProjectComparisonKeys,
+    projectIdentityKeyForSession(session),
+  );
 }
 
 export function visibleSidebarProjects(
@@ -36,7 +73,11 @@ export function visibleSidebarProjects(
   hiddenProjectKeys: ReadonlySet<string>,
 ): ProjectNode[] {
   if (hiddenProjectKeys.size === 0) return Array.from(projects);
-  return projects.filter((project) => !isProjectHidden(project.projectKey, hiddenProjectKeys));
+  const hiddenProjectComparisonKeys = buildProjectKeyComparisonSet(hiddenProjectKeys);
+  if (hiddenProjectComparisonKeys.size === 0) return Array.from(projects);
+  return projects.filter(
+    (project) => !projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey),
+  );
 }
 
 /**
@@ -52,8 +93,10 @@ export function sidebarSessionsWithHiddenProjectsAsDialogues(
   hiddenProjectKeys: ReadonlySet<string>,
 ): Session[] {
   if (hiddenProjectKeys.size === 0) return Array.from(sessions);
+  const hiddenProjectComparisonKeys = buildProjectKeyComparisonSet(hiddenProjectKeys);
+  if (hiddenProjectComparisonKeys.size === 0) return Array.from(sessions);
   return sessions.map((session) =>
-    isSessionInHiddenProject(session, hiddenProjectKeys)
+    isSessionInHiddenProjectComparisonSet(session, hiddenProjectComparisonKeys)
       ? { ...session, workspaceKind: 'dialogue' }
       : session,
   );

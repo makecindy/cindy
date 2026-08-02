@@ -128,6 +128,8 @@ import { sessionActivityMs } from './lib/dateSessionGrouping';
 import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarProjectSorting';
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
+  buildProjectKeyComparisonSet,
+  projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
 } from './lib/sidebarProjectVisibility';
@@ -394,12 +396,16 @@ export function CCAgentSidebarUpper() {
     () => resolveDocModeFilesSession(allSessionsForAttention, filesSessionId),
     [allSessionsForAttention, filesSessionId],
   );
+  const hiddenProjectComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(hiddenProjectKeys),
+    [hiddenProjectKeys],
+  );
   const docModeSwitchProjects = useMemo(() => {
     const switchableSessions = allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s));
     return buildDocModeSwitchProjects(switchableSessions).filter(
-      (project) => !hiddenProjectKeys.has(project.projectKey),
+      (project) => !projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey),
     );
-  }, [allSessionsForAttention, hiddenProjectKeys]);
+  }, [allSessionsForAttention, hiddenProjectComparisonKeys]);
   const filesProjectKey = filesSession ? projectIdentityKeyForSession(filesSession) : null;
 
   // Refresh sessions only when a NEW session appears (e.g. after index redirect
@@ -1183,6 +1189,10 @@ function ExpandedView({
   );
   const restorableProjectKeysRef = useRef(restorableProjectKeys);
   restorableProjectKeysRef.current = restorableProjectKeys;
+  const hiddenProjectComparisonKeys = useMemo(
+    () => buildProjectKeyComparisonSet(hiddenProjectKeys),
+    [hiddenProjectKeys],
+  );
 
   const visiblePinnedSessions = useMemo(() => {
     // 置顶段用 allGroups.pinned(未经"最近活跃 N 天"筛选)——置顶内容不受活跃时间过滤影响,
@@ -1200,7 +1210,7 @@ function ExpandedView({
   const visiblePinnedProjects = useMemo(() => {
     const allowedProjects = filter.projectsAsSet;
     return allProjectGroups.projects.flatMap((project) => {
-      if (hiddenProjectKeys.has(project.projectKey)) return [];
+      if (projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey)) return [];
       if (!pinnedProjectKeys.has(project.projectKey)) return [];
       if (allowedProjects !== null && !allowedProjects.has(project.projectKey)) return [];
 
@@ -1220,7 +1230,7 @@ function ExpandedView({
     });
   }, [
     allProjectGroups.projects,
-    hiddenProjectKeys,
+    hiddenProjectComparisonKeys,
     pinnedProjectKeys,
     filter.projectsAsSet,
     vendorPredicate,

@@ -182,6 +182,21 @@ describe('sidebarSettingsStore', () => {
     expect(harness.settings.pinnedOrder).toEqual(['project:local:/workspace/alpha', 'session-b']);
   });
 
+  it('restores a hidden Windows project across path casing differences', () => {
+    harness.settings.hiddenProjectKeys = ['local:C:/Workspace/Alpha'];
+    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+
+    expect(handler?.({}, 'local:c:/workspace/alpha', false)).toBe(true);
+
+    expect(harness.settings.hiddenProjectKeys).toEqual([]);
+    expect(harness.storeSet).toHaveBeenCalledWith('hiddenProjectKeys', []);
+    expect(harness.send).toHaveBeenCalledWith('sidebar-settings:hidden-project-keys-changed', []);
+    expect(harness.sendSecond).toHaveBeenCalledWith(
+      'sidebar-settings:hidden-project-keys-changed',
+      [],
+    );
+  });
+
   it('merges sequential window intents against the latest main-process snapshot', () => {
     const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
 
@@ -237,6 +252,19 @@ describe('sidebarSettingsStore', () => {
         },
       },
     });
+  });
+
+  it('deduplicates Windows hidden-project keys without changing the first normalized spelling', () => {
+    harness.settings.hiddenProjectKeys = [
+      'local:C:\\Workspace\\Alpha\\',
+      'local:c:/workspace/alpha',
+    ];
+    const listener = harness.listeners.get('sidebar-settings:load-hidden-project-keys-sync');
+    const event: { returnValue?: string[] } = {};
+
+    listener?.(event);
+
+    expect(event.returnValue).toEqual(['local:C:/Workspace/Alpha']);
   });
 
   it('checks the trusted sender before accepting a project-hidden intent', () => {

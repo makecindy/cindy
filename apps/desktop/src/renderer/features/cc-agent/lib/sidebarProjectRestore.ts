@@ -1,5 +1,6 @@
 import type { Session } from '@/lib/ccAgent.types';
 
+import { projectKeyComparisonKey } from '../../../../shared/projectKeys';
 import { sessionActivityMs } from './dateSessionGrouping';
 import { groupSessions, projectIdentityKeyForSession } from './projectGrouping';
 
@@ -72,12 +73,21 @@ export async function restoreHiddenProjectIfPresent({
   ensureProjectIncluded,
 }: RestoreHiddenProjectIfPresentOptions): Promise<boolean> {
   const hiddenStateChanged = await setProjectHidden(projectKey, false);
-  if (!hiddenStateChanged || !getCurrentProjectKeys().has(projectKey)) {
+  if (!hiddenStateChanged) {
     return false;
   }
 
+  const comparisonKey = projectKeyComparisonKey(projectKey);
+  const currentProjectKey =
+    comparisonKey == null
+      ? null
+      : Array.from(getCurrentProjectKeys()).find(
+          (candidate) => projectKeyComparisonKey(candidate) === comparisonKey,
+        ) ?? null;
+  if (currentProjectKey == null) return false;
+
   // A restored project must also be admitted by an explicit Project filter.
   // This operation is idempotent, unlike the user-facing filter toggle.
-  ensureProjectIncluded(projectKey);
+  ensureProjectIncluded(currentProjectKey);
   return true;
 }

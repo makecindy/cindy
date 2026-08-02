@@ -52,7 +52,14 @@ import type {
 import { conversationSearchTitle } from '../../../../shared/conversationSearch';
 import { highlightSegments } from '../lib/highlightSegments';
 import { resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
+import {
+  projectKeyComparisonKey,
+  type ProjectNode as ProjectNodeData,
+} from '../lib/projectGrouping';
+import {
+  buildProjectKeyComparisonSet,
+  isProjectHidden,
+} from '../lib/sidebarProjectVisibility';
 import {
   getRemoteProjectMachineIdentity,
   projectDisplayLabelWithMachine,
@@ -69,6 +76,30 @@ type Option<T extends string> = {
   value: T;
   labelKey: string;
 };
+
+export function reconcileProjectSelectionWithVisibleProjects(
+  selection: readonly string[],
+  visibleProjects: readonly Pick<ProjectNodeData, 'projectKey'>[],
+): string[] {
+  const currentProjectKeyByComparison = new Map<string, string>();
+  for (const project of visibleProjects) {
+    const comparisonKey = projectKeyComparisonKey(project.projectKey);
+    if (comparisonKey != null) currentProjectKeyByComparison.set(comparisonKey, project.projectKey);
+  }
+
+  const next: string[] = [];
+  const seen = new Set<string>();
+  for (const selectedProjectKey of selection) {
+    const comparisonKey = projectKeyComparisonKey(selectedProjectKey);
+    const currentProjectKey = comparisonKey == null
+      ? null
+      : currentProjectKeyByComparison.get(comparisonKey) ?? null;
+    if (currentProjectKey == null || seen.has(currentProjectKey)) continue;
+    seen.add(currentProjectKey);
+    next.push(currentProjectKey);
+  }
+  return next;
+}
 
 /**
  * 排序三选项。与其它筛选选项同款:纯文字 + 选中勾,不配图标——它们只出现在筛选菜单的
@@ -189,15 +220,19 @@ export function useConversationSearch({
   );
   const selectedProjectSessionIds = useMemo(() => {
     if (projectSelection === 'all') return null;
-    const selected = new Set(projectSelection);
+    const selected = buildProjectKeyComparisonSet(projectSelection);
     let indexedSessionIds = allKnownProjects
-      .filter((project) => selected.has(project.projectKey))
+      .filter((project) => {
+        const comparisonKey = projectKeyComparisonKey(project.projectKey);
+        return comparisonKey != null && selected.has(comparisonKey);
+      })
       .flatMap((project) => project.sessions.map((session) => session.id));
+    const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey);
     if (
       indexedSessionIds.length === 0 &&
-      lockedProjectKey &&
+      lockedProjectComparisonKey &&
       selected.size === 1 &&
-      selected.has(lockedProjectKey) &&
+      selected.has(lockedProjectComparisonKey) &&
       lockedProjectSessionIds.length > 0
     ) {
       indexedSessionIds = lockedProjectSessionIds;
@@ -517,10 +552,32 @@ export function ConversationSearchBox({
   searchResetRef.current = search.reset;
   useEffect(() => {
     const lockedProjectKey = search.lockedProjectKey;
-    if (!lockedProjectKey || !hiddenProjectKeys.has(lockedProjectKey)) return;
-    search.reset();
-    search.clearLock();
-  }, [hiddenProjectKeys, search.clearLock, search.lockedProjectKey, search.reset]);
+    if (lockedProjectKey) {
+      if (isProjectHidden(lockedProjectKey, hiddenProjectKeys)) {
+        search.reset();
+        search.clearLock();
+      }
+      return;
+    }
+    if (search.projectSelection === 'all') return;
+    const next = reconcileProjectSelectionWithVisibleProjects(
+      search.projectSelection,
+      allKnownProjects,
+    );
+    if (
+      next.length === search.projectSelection.length &&
+      next.every((projectKey, index) => projectKey === search.projectSelection[index])
+    ) return;
+    search.setProjectSelection(next.length > 0 ? next : 'all');
+  }, [
+    allKnownProjects,
+    hiddenProjectKeys,
+    search.clearLock,
+    search.lockedProjectKey,
+    search.projectSelection,
+    search.reset,
+    search.setProjectSelection,
+  ]);
 
   useEffect(() => {
     if (!open) return;
@@ -670,8 +727,11 @@ export function SearchFilterMenu({
   const agentValue = optionLabel(AGENT_OPTIONS, agentKind, t);
   const lastActivityValue = optionLabel(LAST_ACTIVITY_OPTIONS, lastActivity, t);
   const sortValue = optionLabel(SORT_OPTIONS, sortBy, t);
-  const lockedProject = lockedProjectKey
-    ? allKnownProjects.find((project) => project.projectKey === lockedProjectKey) ?? null
+  const lockedProjectComparisonKey = projectKeyComparisonKey(lockedProjectKey);
+  const lockedProject = lockedProjectComparisonKey
+    ? allKnownProjects.find(
+        (project) => projectKeyComparisonKey(project.projectKey) === lockedProjectComparisonKey,
+      ) ?? null
     : null;
   const lockedProjectLabel = lockedProject
     ? projectDisplayLabelWithMachine(lockedProject)
@@ -682,7 +742,7 @@ export function SearchFilterMenu({
       : projects === 'all'
       ? t('ccAgent.search.filter.allProjects')
       : t('ccAgent.sidebar.filterSelectedProjects', { count: projects.length });
-  const selectedProjects = projects === 'all' ? null : new Set(projects);
+  const selectedProjects = projects === 'all' ? null : buildProjectKeyComparisonSet(projects);
   const projectsLocked = lockedProjectKey !== null;
 
   return (
@@ -791,7 +851,8 @@ export function SearchFilterMenu({
           )}
           <div className="max-h-[280px] overflow-y-auto">
             {allKnownProjects.map((project) => {
-              const selected = selectedProjects?.has(project.projectKey) ?? false;
+              const comparisonKey = projectKeyComparisonKey(project.projectKey);
+              const selected = comparisonKey != null && (selectedProjects?.has(comparisonKey) ?? false);
               const remoteIdentity = getRemoteProjectMachineIdentity(project);
               return (
                 <DropdownMenuItem
@@ -909,8 +970,10 @@ function optionLabel<T extends string>(
 
 function nextProjectSelection(prev: ProjectSelection, projectKey: string): ProjectSelection {
   if (prev === 'all') return [projectKey];
-  if (prev.includes(projectKey)) {
-    const next = prev.filter((key) => key !== projectKey);
+  const comparisonKey = projectKeyComparisonKey(projectKey);
+  if (comparisonKey == null) return prev;
+  if (prev.some((key) => projectKeyComparisonKey(key) === comparisonKey)) {
+    const next = prev.filter((key) => projectKeyComparisonKey(key) !== comparisonKey);
     return next.length > 0 ? next : 'all';
   }
   return [...prev, projectKey];

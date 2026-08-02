@@ -31,10 +31,14 @@ import { useProjectAliases } from '../hooks/useProjectAliases';
 import { useHiddenProjects } from '../hooks/useHiddenProjects';
 import { useProjectGroups } from '../hooks/useProjectGroups';
 import {
+  isProjectHidden,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
 } from '../lib/sidebarProjectVisibility';
-import { useConversationSearch } from './ConversationSearchBox';
+import {
+  reconcileProjectSelectionWithVisibleProjects,
+  useConversationSearch,
+} from './ConversationSearchBox';
 import type { ProjectNode as ProjectNodeData } from '../lib/projectGrouping';
 
 interface ConversationSearchContextValue {
@@ -87,15 +91,23 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   // already-open search too. Clear a locked hidden project, and prune hidden
   // keys from a normal multi-project filter instead of retaining stale IDs.
   useEffect(() => {
-    const visibleKeys = new Set(visibleProjects.map((project) => project.projectKey));
-    if (search.lockedProjectKey && hiddenProjectKeys.has(search.lockedProjectKey)) {
+    if (
+      search.lockedProjectKey &&
+      isProjectHidden(search.lockedProjectKey, hiddenProjectKeys)
+    ) {
       search.reset();
       search.clearLock();
       return;
     }
     if (search.projectSelection === 'all') return;
-    const next = search.projectSelection.filter((projectKey) => visibleKeys.has(projectKey));
-    if (next.length === search.projectSelection.length) return;
+    const next = reconcileProjectSelectionWithVisibleProjects(
+      search.projectSelection,
+      visibleProjects,
+    );
+    if (
+      next.length === search.projectSelection.length &&
+      next.every((projectKey, index) => projectKey === search.projectSelection[index])
+    ) return;
     search.setProjectSelection(next.length > 0 ? next : 'all');
   }, [
     hiddenProjectKeys,

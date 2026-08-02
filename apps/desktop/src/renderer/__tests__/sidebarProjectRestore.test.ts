@@ -135,6 +135,24 @@ describe('restoreHiddenProjectIfPresent', () => {
     expect(ensureProjectIncluded).toHaveBeenCalledWith(PROJECT_KEY);
   });
 
+  it('restores an equivalent Windows project and includes its actual current key', async () => {
+    const selectedProjectKey = 'local:c:/workspace/cindy';
+    const currentProjectKey = 'local:C:/Workspace/Cindy';
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: selectedProjectKey,
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => new Set([currentProjectKey]),
+        ensureProjectIncluded,
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledOnce();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(currentProjectKey);
+  });
+
   it('continues draft creation when the hidden project no longer has tasks', async () => {
     const ensureProjectIncluded = vi.fn();
 

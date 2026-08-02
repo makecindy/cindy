@@ -384,6 +384,31 @@ describe('removeProjectsFromFilter', () => {
     expect(removeProjectsFromFilter(prev, new Set(['/a']))).toEqual(['local:/b']);
   });
 
+  it('matches Windows local paths case-insensitively without folding remote, device, or POSIX keys', () => {
+    const prev: FilterProjects = [
+      'local:C:/Repo',
+      'remote:host-a:C:/Repo',
+      'device:device-a:C:/Repo',
+      'local:/Users/Lee/Repo',
+    ];
+
+    expect(
+      removeProjectsFromFilter(
+        prev,
+        new Set([
+          'local:c:/repo',
+          'remote:host-a:c:/repo',
+          'device:device-a:c:/repo',
+          'local:/users/lee/repo',
+        ]),
+      ),
+    ).toEqual([
+      'remote:host-a:C:/Repo',
+      'device:device-a:C:/Repo',
+      'local:/Users/Lee/Repo',
+    ]);
+  });
+
   it("falls back to 'all' after removing the final explicit project", () => {
     const prev: FilterProjects = ['local:/a'];
     expect(removeProjectsFromFilter(prev, new Set(['local:/a']))).toBe('all');

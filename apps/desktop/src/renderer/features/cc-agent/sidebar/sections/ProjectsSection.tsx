@@ -163,7 +163,7 @@ export function ProjectsSection({
   // 我们就在 onReorder 里自动切到 manual 并持久化，避免"默认 recency 排序下永远拖不动"
   // 的反直觉体验。
   const projectDragEnabled = filter.groupBy === 'project';
-  const activeProjectWorkingDirs = allProjectKeysForOrder;
+  const projectKeysForOrderBaseline = allProjectKeysForOrder;
   const [isSectionCollapsed, setIsSectionCollapsed] = useState(false);
   const [showAllProjects, setShowAllProjects] = useCollapsibleShowAll(isSectionCollapsed);
 
@@ -175,21 +175,21 @@ export function ProjectsSection({
       // 不可见的 project(其它机器 / 被过滤掉的)必须**保持原位** —— 与置顶拖拽同一套「原位 merge」
       // 语义(mergeVisibleReorder),而不是把它们甩到末尾(否则切回「所有」时其它机器项目的相对
       // 位置会被无关拖拽悄悄打乱)。做法:先取全量规范顺序作 baseline,再把可见新序原位填回。
-      // activeProjectWorkingDirs = allKnownProjects(未过滤全量 universe)的 key,因此 baseline 含
+      // projectKeysForOrderBaseline 是未过滤全量 universe 的 key,因此 baseline 含
       // 隐藏项;setManualProjectOrder 内部会再归一化一次(对已规范的 merged 结果幂等)。
       const fullOrder = normalizeManualProjectOrder(
         filter.manualProjectOrder,
-        activeProjectWorkingDirs,
+        projectKeysForOrderBaseline,
       );
       const merged = mergeVisibleReorder(fullOrder, visibleNewOrder);
-      filter.setManualProjectOrder(merged, activeProjectWorkingDirs);
+      filter.setManualProjectOrder(merged, projectKeysForOrderBaseline);
       // 用户随手一拖即表达"我要手动排序"的意图；如果当前不是 manual，自动切过去
       // 并持久化，让拖拽结果立刻生效，不需要用户先去 Filter Popover 切换排序模式。
       if (filter.sortBy !== 'manual') {
         filter.setSortBy('manual');
       }
     },
-    [filter, activeProjectWorkingDirs],
+    [filter, projectKeysForOrderBaseline],
   );
 
   // F-PJ-10：即使 projects 因 filter 收窄到空，也要保留段头供用户切回 Filter。

@@ -317,6 +317,145 @@ describe('ConversationSearchBox live search', () => {
     }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
   });
 
+  it('prunes hidden projects from a normal rail project filter', async () => {
+    const view = renderSearchBox();
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    await screen.findByTestId('conversation-search-popover');
+
+    fireEvent.click(screen.getByText('Repo A').closest('button') as HTMLButtonElement);
+    fireEvent.click(screen.getByText('Repo B').closest('button') as HTMLButtonElement);
+    expect(screen.getByText('2 projects')).toBeTruthy();
+
+    view.rerender(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: projects.slice(1),
+        allowedSessionIds: ['session-b1'],
+        hiddenProjectKeys: new Set(['local:/repo-a']),
+        projectFilterRequest: null,
+      }),
+    );
+
+    await waitFor(() => expect(screen.getByText('1 projects')).toBeTruthy());
+
+    view.rerender(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [],
+        allowedSessionIds: [],
+        hiddenProjectKeys: new Set(['local:/repo-a', 'local:/repo-b']),
+        projectFilterRequest: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('filter').getAttribute('aria-pressed')).toBe('false');
+    });
+  });
+
+  it('keeps an equivalent Windows project selected when its visible key casing changes', async () => {
+    vi.mocked(searchConversations).mockResolvedValue({
+      query: 'needle',
+      results: [],
+      vectorUsed: false,
+      vectorSkipReason: null,
+      poolCapped: false,
+    });
+    const windowsProject = {
+      ...projects[0],
+      projectKey: 'local:C:/Repo-A',
+      workingDir: 'C:/Repo-A',
+      displayName: 'Windows Repo',
+    };
+    const recasedWindowsProject = {
+      ...windowsProject,
+      projectKey: 'local:c:/repo-a',
+      workingDir: 'c:/repo-a',
+    };
+    const view = renderSearchBox({ allKnownProjects: [windowsProject], sessionIds: [] });
+    fireEvent.click(screen.getByLabelText('ccAgent.search.open'));
+    await screen.findByTestId('conversation-search-popover');
+    fireEvent.click(screen.getByText('Windows Repo').closest('button') as HTMLButtonElement);
+    expect(screen.getByText('1 projects')).toBeTruthy();
+
+    view.rerender(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [recasedWindowsProject],
+        allowedSessionIds: ['session-a1', 'session-a2'],
+        hiddenProjectKeys,
+        projectFilterRequest: null,
+      }),
+    );
+
+    await waitFor(() => {
+      expect(screen.getByLabelText('filter').getAttribute('aria-pressed')).toBe('true');
+      expect(screen.getByText('1 projects')).toBeTruthy();
+    });
+
+    const recasedProjectButton = screen
+      .getByText('Windows Repo')
+      .closest('button') as HTMLButtonElement;
+    expect(recasedProjectButton.querySelector('.lucide-check')).not.toBeNull();
+
+    fireEvent.change(screen.getByLabelText('ccAgent.search.placeholder'), {
+      target: { value: 'needle' },
+    });
+    await waitFor(() => {
+      expect(searchConversations).toHaveBeenCalledWith(
+        expect.objectContaining({
+          semanticMode: 'keyword',
+          filters: expect.objectContaining({
+            sessionIds: ['session-a1', 'session-a2'],
+          }),
+        }),
+      );
+    }, { timeout: SEARCH_WAIT_TIMEOUT_MS });
+
+    fireEvent.click(recasedProjectButton);
+    await waitFor(() => {
+      expect(screen.getByLabelText('filter').getAttribute('aria-pressed')).toBe('false');
+      expect(screen.queryByText('2 projects')).toBeNull();
+    });
+  });
+
+  it('clears a locked Windows project when the hidden key uses different casing', async () => {
+    const windowsProject = {
+      ...projects[0],
+      projectKey: 'local:C:/Repo-A',
+      workingDir: 'C:/Repo-A',
+      displayName: 'Windows Repo',
+    };
+    const view = render(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [windowsProject],
+        allowedSessionIds: ['session-a1', 'session-a2'],
+        hiddenProjectKeys,
+        projectFilterRequest: {
+          projectKey: windowsProject.projectKey,
+          projectName: windowsProject.displayName,
+          sessionIds: ['session-a1', 'session-a2'],
+          requestId: 1,
+        },
+      }),
+    );
+    await screen.findByTestId('conversation-search-popover');
+    expect(allProjectsOption().disabled).toBe(true);
+
+    view.rerender(
+      createElement(ConversationSearchBox, {
+        navigate,
+        allKnownProjects: [],
+        allowedSessionIds: [],
+        hiddenProjectKeys: new Set(['local:c:/repo-a']),
+        projectFilterRequest: null,
+      }),
+    );
+
+    await waitFor(() => expect(allProjectsOption().disabled).toBe(false));
+  });
+
   // 搜索结果行是「列表之外」的第二个标题出口:本 PR 早前只投影了侧边栏 / 会话头 / tab,
   // 结果行仍渲染原始 title,于是列表写「未命名任务」、搜索结果写 "New Maker"。
   // 匹配串(main 算下标)与渲染串(这里)必须是同一个 conversationSearchTitle 的结果。
