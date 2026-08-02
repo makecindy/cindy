@@ -708,6 +708,24 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByTestId('quota-pace').textContent).toBe(originalText);
   });
 
+  it('hides weekly pace after reset until a fresh snapshot arrives', () => {
+    const resetsAtMs = NOW_MS - 60 * 60_000;
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          updatedAt: resetsAtMs - 24 * 60 * 60_000,
+          sevenDay: {
+            utilization: 30,
+            resetsAt: resetsAtMs / 1000,
+          },
+        })}
+        nowMs={NOW_MS}
+      />,
+    );
+
+    expect(screen.queryByTestId('quota-pace')).toBeNull();
+  });
+
   it('renders no pace for a scoped-only weekly snapshot', () => {
     // 分模型周限有意不做节奏预测（计划范围决定）。
     render(

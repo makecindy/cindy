@@ -196,14 +196,20 @@ function WindowBlock({
         ? t('quotaCard.limitWarning')
         : null;
   const resetAt = formatResetAt(window.resetsAt, nowMs, locale);
-  const pace = paceWindowMinutes === undefined
-    ? null
-    : computeQuotaPace({
-        utilization: window.utilization,
-        resetsAt: window.resetsAt,
-        windowMinutes: paceWindowMinutes,
-        nowMs: paceNowMs,
-      });
+  // 窗口已过重置点，旧观测的节奏失真，待新快照。
+  const resetPassed =
+    typeof window.resetsAt === 'number' &&
+    Number.isFinite(window.resetsAt) &&
+    nowMs > window.resetsAt * 1000;
+  const pace =
+    paceWindowMinutes === undefined || resetPassed
+      ? null
+      : computeQuotaPace({
+          utilization: window.utilization,
+          resetsAt: window.resetsAt,
+          windowMinutes: paceWindowMinutes,
+          nowMs: paceNowMs,
+        });
   const paceLine = pace === null ? null : formatPaceLine(pace, t);
 
   return (
