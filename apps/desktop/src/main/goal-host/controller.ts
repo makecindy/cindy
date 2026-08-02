@@ -318,12 +318,31 @@ interface TurnAccumulator {
   tokensThisTurn: number;
   /** 本轮是否已 finalize(去重 done / 终止 error 双触发)。 */
   finalized: boolean;
+  /** 正常 turn 换代只递增 generation，不替换整个 Goal 生命周期 owner。 */
+  generation: number;
   /** 显式 Stop 正在把 paused 落盘；迟到事件与自动恢复都必须停在这条边界外。 */
   cancelled: boolean;
+  /** 本生命周期已经发出、但尚未全部 settle 的 Goal 状态持久化写入。 */
+  pendingPersistence: Promise<void> | null;
+  /** 已进入“达成记录 → clear”顺序提交区；Stop 不等待，但新目标必须等旧 clear 结束。 */
+  pendingCompletion: Promise<void> | null;
 }
 
-function freshTurn(cancelled = false): TurnAccumulator {
-  return { text: '', sawToolUse: false, tokensThisTurn: 0, finalized: false, cancelled };
+function freshTurn(
+  cancelled = false,
+  pendingPersistence: Promise<void> | null = null,
+  pendingCompletion: Promise<void> | null = null,
+): TurnAccumulator {
+  return {
+    text: '',
+    sawToolUse: false,
+    tokensThisTurn: 0,
+    finalized: false,
+    generation: 0,
+    cancelled,
+    pendingPersistence,
+    pendingCompletion,
+  };
 }
 
 // ── 控制器 ──────────────────────────────────────────────────────────────────
@@ -374,13 +393,27 @@ export class GoalController {
     const sessionId = input.sessionId;
     const objective = input.objective.trim();
     if (!objective) throw new GoalControllerInputError('objective must not be empty');
-    const entryBoundary = this.turns.get(sessionId);
+    let entryBoundary = this.turns.get(sessionId);
     // 新建 / 编辑目标 → 重置"已澄清"闸门(新目标允许重新澄清改写一次)。
     this.clarificationApplied.delete(sessionId);
     // 连续过载计数是 per-goal 状态：换目标(含替换既有目标的编辑路径)必须清零，
     // 否则上一个目标撞过载上限变 blocked 后，新目标会继承耗尽的计数，第一次容量
     // 错误就直接 blocked、拿不到自己的重试预算。
     this.consecutiveOverloadTurns.delete(sessionId);
+    if (entryBoundary?.pendingCompletion) {
+      // 旧目标已经进入“达成记录 → clear”顺序提交区。新 /goal 先同步接管 owner，
+      // 等旧 clear 完成后再读行；否则旧 clear 可能在新目标 upsert 之后把它删掉。
+      const takeoverBoundary = freshTurn(
+        false,
+        entryBoundary.pendingPersistence,
+        entryBoundary.pendingCompletion,
+      );
+      this.stopSession(sessionId);
+      this.turns.set(sessionId, takeoverBoundary);
+      await this.awaitPendingLifecycle(takeoverBoundary);
+      if (this.turns.get(sessionId) !== takeoverBoundary) return null;
+      entryBoundary = takeoverBoundary;
+    }
     const existing = await this.deps.storage.get(sessionId);
     if (this.turns.get(sessionId) !== entryBoundary) return null;
     const ts = this.now();
@@ -401,23 +434,33 @@ export class GoalController {
         // 终止事件可能在 detach 前被 onEvent 消费 → 并发 finalizeTurn 把下面刚写的 active 覆盖成
         // paused(用户编辑目标后 chip 误显"暂停")。detach 在前,abort 的终止事件就不再触达裁决。
       }
+      const previousBoundary = this.turns.get(sessionId);
       this.stopSession(sessionId);
-      const editBoundary = freshTurn();
+      const editBoundary = freshTurn(
+        false,
+        previousBoundary?.pendingPersistence ?? null,
+        previousBoundary?.pendingCompletion ?? null,
+      );
       this.turns.set(sessionId, editBoundary);
       try {
         if (sessionWasBusy) {
           await session.abort();
           if (this.turns.get(sessionId) !== editBoundary) return null;
         }
+        await this.awaitPendingLifecycle(editBoundary);
+        if (this.turns.get(sessionId) !== editBoundary) return null;
         this.cancelUsageResume(sessionId);
-        const updated = await this.deps.storage.update(sessionId, {
-          objective,
-          status: 'active',
-          noProgressStreak: 0,
-          usageResetAt: null,
-          lastReason: null,
-          updatedAt: ts,
-        });
+        const updated = await this.trackPersistence(
+          editBoundary,
+          this.deps.storage.update(sessionId, {
+            objective,
+            status: 'active',
+            noProgressStreak: 0,
+            usageResetAt: null,
+            lastReason: null,
+            updatedAt: ts,
+          }),
+        );
         if (this.turns.get(sessionId) !== editBoundary) return null;
         if (!updated) {
           this.turns.delete(sessionId);
@@ -440,14 +483,21 @@ export class GoalController {
     }
 
     const limits = input.limits ?? this.deps.getDefaults();
+    const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
-    const createBoundary = freshTurn();
+    const createBoundary = freshTurn(
+      false,
+      previousBoundary?.pendingPersistence ?? null,
+      previousBoundary?.pendingCompletion ?? null,
+    );
     this.turns.set(sessionId, createBoundary);
     try {
       // 先活化(resume)会话,再据活化后的会话定 agentKind:dormant(重启后尚未活化)会话此刻
       // getSession 为空,若直接 fallback 'claude-code' 会把 Codex 目标错存成 claude-code,后续
       // getAccountLimit 读错账号配额快照 → Codex 限流目标的 reset/auto-resume 错位(reviewer #354)。
       const ensured = await this.deps.ensureSession(sessionId);
+      if (this.turns.get(sessionId) !== createBoundary) return null;
+      await this.awaitPendingLifecycle(createBoundary);
       if (this.turns.get(sessionId) !== createBoundary) return null;
       const agentKind = input.agentKind ?? ensured?.agentKind ?? this.deps.getSession(sessionId)?.agentKind ?? 'claude-code';
       const state: GoalState = {
@@ -466,7 +516,7 @@ export class GoalController {
         startedAt: ts,
         updatedAt: ts,
       };
-      await this.deps.storage.upsert(state);
+      await this.trackPersistence(createBoundary, this.deps.storage.upsert(state));
       if (this.turns.get(sessionId) !== createBoundary) return null;
       this.resetTurn(sessionId);
       const activeBoundary = this.turns.get(sessionId);
@@ -486,8 +536,16 @@ export class GoalController {
   }
 
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
-    const entryBoundary = this.turns.get(sessionId);
     const normalized = normalizeGoalUpdatePatch(patch);
+    const existingBoundary = this.turns.get(sessionId);
+    const operationBoundary = existingBoundary ?? freshTurn();
+    const ownsOperationBoundary = existingBoundary === undefined;
+    if (ownsOperationBoundary) this.turns.set(sessionId, operationBoundary);
+    let entryGeneration = operationBoundary.generation;
+    const entryChanged = (): boolean => {
+      const current = this.turns.get(sessionId);
+      return current !== operationBoundary || current.generation !== entryGeneration;
+    };
     let patchWritten = false;
     let objectiveChanged = false;
     let objectiveMarkerPersisted = false;
@@ -496,7 +554,16 @@ export class GoalController {
     // 本次 patch 仍在就按成功返回并广播最新状态；已被后续操作覆盖则明确报竞态，
     // 不能把生命周期取消伪装成 GOAL_NOT_FOUND，也不能把未应用的编辑谎报成功。
     const reconcileLifecycleChange = async (): Promise<GoalState | null> => {
-      let current = await this.deps.storage.get(sessionId);
+      const readSettledState = async (): Promise<GoalState | null> => {
+        while (true) {
+          const boundary = this.turns.get(sessionId);
+          await this.awaitPendingLifecycle(boundary);
+          if (this.turns.get(sessionId) !== boundary) continue;
+          const current = await this.deps.storage.get(sessionId);
+          if (this.turns.get(sessionId) === boundary) return current;
+        }
+      };
+      let current = await readSettledState();
       if (!current) return null;
       if (!goalStateMatchesPatch(current, normalized)) {
         throw new GoalUpdateSupersededError();
@@ -508,77 +575,160 @@ export class GoalController {
           goalObjective: { updated: true },
         });
         objectiveMarkerPersisted = true;
-        current = await this.deps.storage.get(sessionId);
+        current = await readSettledState();
         if (!current) return null;
         if (!goalStateMatchesPatch(current, normalized)) {
           throw new GoalUpdateSupersededError();
         }
       }
+      // 正常 turn 可能在本次编辑读完旧计数后才 finalize。patch 已成功并不代表后置
+      // 预算条件仍成立；必须用 settle 后的最新 counters 再判一次，不能返回超限 active。
+      if (current.status === 'active' && exceedsGoalBudget(current)) {
+        const previousBoundary = this.turns.get(sessionId);
+        this.stopSession(sessionId);
+        const limitBoundary = freshTurn(
+          true,
+          previousBoundary?.pendingPersistence ?? null,
+          previousBoundary?.pendingCompletion ?? null,
+        );
+        this.turns.set(sessionId, limitBoundary);
+        await this.awaitPendingLifecycle(limitBoundary);
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        const limited = await this.trackPersistence(
+          limitBoundary,
+          this.deps.storage.update(sessionId, {
+            status: 'budgetLimited',
+            lastReason: 'budget limit lowered below current usage',
+            updatedAt: this.now(),
+          }),
+        );
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        if (limited) {
+          this.stopSession(sessionId);
+          this.emit(limited);
+        }
+        return limited;
+      }
       this.emit(current);
       return current;
     };
 
-    const state = await this.deps.storage.get(sessionId);
-    if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
-    if (!state) return null;
-    objectiveChanged = normalized.objective != null && normalized.objective !== state.objective;
-    const ts = this.now();
-    const changed = await this.deps.storage.update(sessionId, {
-      ...normalized,
-      updatedAt: ts,
-    });
-    patchWritten = changed != null;
-    if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
-    if (!changed) return null;
-    // 改了目标内容 → 在对话里落一条「目标已更新」标记消息(气泡徽标),排在任何续轮之前。
-    if (objectiveChanged) {
-      await this.deps.persistUserMessage?.(sessionId, changed.objective, { goalObjective: { updated: true } });
-      objectiveMarkerPersisted = true;
-      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
-    }
-    let next = changed;
-    if (changed.status === 'budgetLimited' && !exceedsGoalBudget(changed)) {
-      const resumed = await this.deps.storage.update(sessionId, {
-        status: 'active',
-        lastReason: null,
-        updatedAt: this.now(),
-      });
-      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
-      if (resumed) {
-        next = resumed;
-        this.resetTurn(sessionId);
-        const resumeBoundary = this.turns.get(sessionId);
-        await this.deps.ensureSession(sessionId);
-        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
-        this.attachListener(sessionId);
+    try {
+      await this.awaitPendingLifecycle(operationBoundary);
+      if (this.turns.get(sessionId) !== operationBoundary) return reconcileLifecycleChange();
+      entryGeneration = operationBoundary.generation;
+      const state = await this.deps.storage.get(sessionId);
+      if (entryChanged()) return reconcileLifecycleChange();
+      if (!state) return null;
+      objectiveChanged = normalized.objective != null && normalized.objective !== state.objective;
+      const ts = this.now();
+      const preview = { ...state, ...normalized };
+      const shouldLimit = state.status === 'active' && exceedsGoalBudget(preview);
+
+      let changed: GoalState | null;
+      let limitBoundary: TurnAccumulator | undefined;
+      if (shouldLimit) {
+        // 降低上限是显式生命周期接管：同步摘掉旧 listener/timer，等旧 finalize 写完后，
+        // 用同一条 UPDATE 同时提交新上限与 budgetLimited，避免暴露可被旧写覆盖的 active 中间态。
+        const previousBoundary = this.turns.get(sessionId);
+        this.stopSession(sessionId);
+        limitBoundary = freshTurn(
+          true,
+          previousBoundary?.pendingPersistence ?? null,
+          previousBoundary?.pendingCompletion ?? null,
+        );
+        this.turns.set(sessionId, limitBoundary);
+        await this.awaitPendingLifecycle(limitBoundary);
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        changed = await this.trackPersistence(
+          limitBoundary,
+          this.deps.storage.update(sessionId, {
+            ...normalized,
+            status: 'budgetLimited',
+            lastReason: 'budget limit lowered below current usage',
+            updatedAt: ts,
+          }),
+        );
+        patchWritten = changed != null;
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        if (!changed) {
+          this.turns.delete(sessionId);
+          return null;
+        }
+      } else {
+        changed = await this.trackPersistence(
+          operationBoundary,
+          this.deps.storage.update(sessionId, {
+            ...normalized,
+            updatedAt: ts,
+          }),
+        );
+        patchWritten = changed != null;
+        if (entryChanged()) return reconcileLifecycleChange();
       }
-    } else if (next.status === 'active' && exceedsGoalBudget(next)) {
-      // 反向:把 active 目标的 maxTurns/budgetTokens 调小到已被 turnsUsed/tokensUsed 超过
-      // → 立即转 budgetLimited 并停续跑。否则 row 仍 active,下一轮 fireTurn 会越过新上限再
-      // 多跑一轮(预算守卫原本只在 turn 跑完后才生效;reviewer #354)。fireTurn preflight 再兜一层。
-      const limited = await this.deps.storage.update(sessionId, {
-        status: 'budgetLimited',
-        lastReason: 'budget limit lowered below current usage',
-        updatedAt: this.now(),
-      });
-      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
-      if (limited) {
-        next = limited;
+      if (!changed) return null;
+      // 改了目标内容 → 在对话里落一条「目标已更新」标记消息(气泡徽标),排在任何续轮之前。
+      if (objectiveChanged) {
+        await this.deps.persistUserMessage?.(sessionId, changed.objective, { goalObjective: { updated: true } });
+        objectiveMarkerPersisted = true;
+        if (shouldLimit) {
+          if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
+        } else if (entryChanged()) {
+          return reconcileLifecycleChange();
+        }
+      }
+      if (shouldLimit) {
+        if (this.turns.get(sessionId) !== limitBoundary) return reconcileLifecycleChange();
         this.stopSession(sessionId);
       }
+      let next = changed;
+      if (changed.status === 'budgetLimited' && !exceedsGoalBudget(changed)) {
+        const previousBoundary = this.turns.get(sessionId);
+        this.stopSession(sessionId);
+        const resumeBoundary = freshTurn(
+          false,
+          previousBoundary?.pendingPersistence ?? null,
+          previousBoundary?.pendingCompletion ?? null,
+        );
+        this.turns.set(sessionId, resumeBoundary);
+        await this.awaitPendingLifecycle(resumeBoundary);
+        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
+        const resumed = await this.trackPersistence(
+          resumeBoundary,
+          this.deps.storage.update(sessionId, {
+            status: 'active',
+            lastReason: null,
+            updatedAt: this.now(),
+          }),
+        );
+        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
+        if (resumed) {
+          next = resumed;
+          this.resetTurn(sessionId);
+          await this.deps.ensureSession(sessionId);
+          if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
+          this.attachListener(sessionId);
+        } else if (this.turns.get(sessionId) === resumeBoundary) {
+          this.turns.delete(sessionId);
+        }
+      }
+      if (
+        objectiveChanged &&
+        (changed.status === 'paused' || changed.status === 'blocked' || changed.status === 'usageLimited')
+      ) {
+        await this.resumeGoal(sessionId);
+        return reconcileLifecycleChange();
+      }
+      this.emit(next);
+      if (next.status === 'active' && state.status === 'budgetLimited' && !this.isBusy(sessionId)) {
+        this.scheduleContinuation(sessionId);
+      }
+      return next;
+    } finally {
+      if (ownsOperationBoundary && this.turns.get(sessionId) === operationBoundary) {
+        this.turns.delete(sessionId);
+      }
     }
-    if (
-      objectiveChanged &&
-      (changed.status === 'paused' || changed.status === 'blocked' || changed.status === 'usageLimited')
-    ) {
-      await this.resumeGoal(sessionId);
-      return reconcileLifecycleChange();
-    }
-    this.emit(next);
-    if (next.status === 'active' && state.status === 'budgetLimited' && !this.isBusy(sessionId)) {
-      this.scheduleContinuation(sessionId);
-    }
-    return next;
   }
 
   /**
@@ -601,19 +751,36 @@ export class GoalController {
     if (this.clarificationApplied.has(sessionId)) return; // 每目标只澄清改写一次
     const next = deriveObjectiveFromAnswers(answers);
     if (!next) return;
-    const state = await this.deps.storage.get(sessionId);
-    if (!state || state.status !== 'active') return;
-    if (state.turnsUsed !== 0) return;
-    // 确定性标记:只认 directive 约定形状的"目标澄清问题",否则不改写(见函数注释)。
-    if (!questionsLookLikeGoalClarification(questions, state.objective)) return;
-    if (next === state.objective) {
-      this.clarificationApplied.add(sessionId); // 选了"保持原目标"也算已澄清,封住后续覆盖
-      return;
+    const existingBoundary = this.turns.get(sessionId);
+    const operationBoundary = existingBoundary ?? freshTurn();
+    const ownsOperationBoundary = existingBoundary === undefined;
+    if (ownsOperationBoundary) this.turns.set(sessionId, operationBoundary);
+    try {
+      await this.awaitPendingLifecycle(operationBoundary);
+      if (this.turns.get(sessionId) !== operationBoundary) return;
+      const state = await this.deps.storage.get(sessionId);
+      if (this.turns.get(sessionId) !== operationBoundary) return;
+      if (!state || state.status !== 'active') return;
+      if (state.turnsUsed !== 0) return;
+      // 确定性标记:只认 directive 约定形状的"目标澄清问题",否则不改写(见函数注释)。
+      if (!questionsLookLikeGoalClarification(questions, state.objective)) return;
+      if (next === state.objective) {
+        this.clarificationApplied.add(sessionId); // 选了"保持原目标"也算已澄清,封住后续覆盖
+        return;
+      }
+      const updated = await this.trackPersistence(
+        operationBoundary,
+        this.deps.storage.update(sessionId, { objective: next, updatedAt: this.now() }),
+      );
+      if (this.turns.get(sessionId) !== operationBoundary) return;
+      if (updated) this.emit(updated);
+      this.clarificationApplied.add(sessionId);
+      await this.deps.persistUserMessage?.(sessionId, next, { goalObjective: { updated: true } });
+    } finally {
+      if (ownsOperationBoundary && this.turns.get(sessionId) === operationBoundary) {
+        this.turns.delete(sessionId);
+      }
     }
-    const updated = await this.deps.storage.update(sessionId, { objective: next, updatedAt: this.now() });
-    if (updated) this.emit(updated);
-    this.clarificationApplied.add(sessionId);
-    await this.deps.persistUserMessage?.(sessionId, next, { goalObjective: { updated: true } });
   }
 
   /** 清除目标(用户主动)。删行 + 停止一切续跑 + 取消 usage 自动续 + 通知 renderer 隐藏指示器。 */
@@ -621,9 +788,20 @@ export class GoalController {
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelUsageResume(sessionId);
+    const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
-    await this.deps.storage.clear(sessionId);
+    const clearBoundary = freshTurn(
+      true,
+      previousBoundary?.pendingPersistence ?? null,
+      previousBoundary?.pendingCompletion ?? null,
+    );
+    this.turns.set(sessionId, clearBoundary);
+    await this.awaitPendingLifecycle(clearBoundary);
+    if (this.turns.get(sessionId) !== clearBoundary) return;
+    await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
+    if (this.turns.get(sessionId) !== clearBoundary) return;
     this.deps.emitStatus({ sessionId, goal: null });
+    this.turns.delete(sessionId);
   }
 
   /**
@@ -637,32 +815,45 @@ export class GoalController {
     // continuation timer 与 firing 状态，再用同一 turns owner 留下 cancelled 边界，
     // 阻止 pause 落盘期间的 resume-on-open / 迟到事件重建旧生命周期。
     this.cancelUsageResume(sessionId);
+    const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
     // 每次 Stop 都换新对象身份：后来的 Stop 必须能超越已在 await 中的 Resume，
     // 不能复用旧 cancelled 对象形成 ABA。边界留到后续显式 Resume / setGoal / clearGoal，
     // 也让暂停落盘失败、乃至目标行尚未创建时的 Stop 都保持 fail-closed。
-    const pauseBoundary = freshTurn(true);
+    const pauseBoundary = freshTurn(
+      true,
+      previousBoundary?.pendingPersistence ?? null,
+      previousBoundary?.pendingCompletion ?? null,
+    );
     this.turns.set(sessionId, pauseBoundary);
+    await this.awaitPendingPersistence(pauseBoundary);
+    if (this.turns.get(sessionId) !== pauseBoundary) return;
     const state = await this.deps.storage.get(sessionId);
     if (this.turns.get(sessionId) !== pauseBoundary) return;
     if (!state) return;
     if (state.status === 'usageLimited') {
-      const updated = await this.deps.storage.update(sessionId, {
-        status: 'paused',
-        usageResetAt: null,
-        lastReason: reason ?? 'paused by user',
-        updatedAt: this.now(),
-      });
+      const updated = await this.trackPersistence(
+        pauseBoundary,
+        this.deps.storage.update(sessionId, {
+          status: 'paused',
+          usageResetAt: null,
+          lastReason: reason ?? 'paused by user',
+          updatedAt: this.now(),
+        }),
+      );
       if (this.turns.get(sessionId) !== pauseBoundary) return;
       if (updated) this.emit(updated);
       return;
     }
     if (state.status !== 'active') return;
-    const updated = await this.deps.storage.update(sessionId, {
-      status: 'paused',
-      lastReason: reason ?? 'paused by user',
-      updatedAt: this.now(),
-    });
+    const updated = await this.trackPersistence(
+      pauseBoundary,
+      this.deps.storage.update(sessionId, {
+        status: 'paused',
+        lastReason: reason ?? 'paused by user',
+        updatedAt: this.now(),
+      }),
+    );
     if (this.turns.get(sessionId) !== pauseBoundary) return;
     if (updated) this.emit(updated);
   }
@@ -677,12 +868,10 @@ export class GoalController {
     let state: GoalState | null | undefined;
     if (existingBoundary?.cancelled) {
       if (opts?.auto) return;
-      try {
-        state = await this.deps.storage.get(sessionId);
-      } catch (error) {
-        // Stop 持久化失败时保留 fail-closed 边界；读取失败也不能据此放行恢复。
-        throw error;
-      }
+      await this.awaitPendingLifecycle(existingBoundary);
+      if (this.turns.get(sessionId) !== existingBoundary) return;
+      // Stop 持久化失败时保留 fail-closed 边界；读取失败也不能据此放行恢复。
+      state = await this.deps.storage.get(sessionId);
       if (this.turns.get(sessionId) !== existingBoundary) return;
       if (
         !state ||
@@ -697,6 +886,8 @@ export class GoalController {
     const lookupBoundary = existingBoundary ?? freshTurn();
     const ownsLookupBoundary = existingBoundary === undefined;
     if (ownsLookupBoundary) this.turns.set(sessionId, lookupBoundary);
+    await this.awaitPendingLifecycle(lookupBoundary);
+    if (this.turns.get(sessionId) !== lookupBoundary) return;
     if (state === undefined) {
       try {
         state = await this.deps.storage.get(sessionId);
@@ -740,13 +931,16 @@ export class GoalController {
     }
     let updated: GoalState | null;
     try {
-      updated = await this.deps.storage.update(sessionId, {
-        status: 'active',
-        noProgressStreak: 0, // 给一次干净续跑机会(原暂停可能正是空轮触顶)
-        usageResetAt: null, // 恢复后清掉限额重置标记
-        lastReason: null,
-        updatedAt: this.now(),
-      });
+      updated = await this.trackPersistence(
+        lookupBoundary,
+        this.deps.storage.update(sessionId, {
+          status: 'active',
+          noProgressStreak: 0, // 给一次干净续跑机会(原暂停可能正是空轮触顶)
+          usageResetAt: null, // 恢复后清掉限额重置标记
+          lastReason: null,
+          updatedAt: this.now(),
+        }),
+      );
     } catch (error) {
       if (ownsLookupBoundary && this.turns.get(sessionId) === lookupBoundary) {
         this.turns.delete(sessionId);
@@ -760,9 +954,14 @@ export class GoalController {
       }
       return;
     }
-    this.resetTurn(sessionId);
-    const resumedBoundary = this.turns.get(sessionId);
-    if (!resumedBoundary) return;
+    // 并发 Resume 可能已经在同一个 lookup owner 上登记了另一笔 active 写；新 active
+    // owner 必须继承整个 barrier，后续 Stop 才能等所有较早 Resume settle 后最后写 paused。
+    const resumedBoundary = freshTurn(
+      false,
+      lookupBoundary.pendingPersistence,
+      lookupBoundary.pendingCompletion,
+    );
+    this.turns.set(sessionId, resumedBoundary);
     this.attachListener(sessionId);
     this.emit(updated);
     if (!this.isBusy(sessionId)) {
@@ -872,7 +1071,7 @@ export class GoalController {
         });
         continue;
       }
-      this.resetTurn(state.sessionId);
+      this.turns.set(state.sessionId, freshTurn());
       this.attachListener(state.sessionId);
       this.emit(state);
       resumed += 1;
@@ -930,8 +1129,82 @@ export class GoalController {
     this.turns.delete(sessionId);
   }
 
+  /**
+   * 开始下一轮时原地清 accumulator，保留稳定的 Goal 生命周期 owner。
+   * 显式 Stop / Resume / setGoal 会另建 owner；generation 只用于淘汰旧 turn finalizer。
+   */
   private resetTurn(sessionId: string): void {
-    this.turns.set(sessionId, freshTurn());
+    const turn = this.turns.get(sessionId);
+    if (!turn || turn.cancelled) return;
+    turn.text = '';
+    turn.sawToolUse = false;
+    turn.tokensThisTurn = 0;
+    turn.finalized = false;
+    turn.generation += 1;
+  }
+
+  /**
+   * 登记已经启动的 Goal 状态写入。显式生命周期接管会先同步换 owner，再等待这里的
+   * barrier，保证旧写全部 settle 后才提交自己的最终状态；写入本身仍可并发执行。
+   */
+  private trackPersistence<T>(turn: TurnAccumulator, operation: Promise<T>): Promise<T> {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    const previous = turn.pendingPersistence;
+    const barrier = previous
+      ? Promise.all([previous, settled]).then(() => undefined)
+      : settled;
+    turn.pendingPersistence = barrier;
+    void barrier.then(() => {
+      if (turn.pendingPersistence === barrier) turn.pendingPersistence = null;
+    });
+    return operation;
+  }
+
+  private async awaitPendingPersistence(turn: TurnAccumulator | undefined): Promise<void> {
+    while (turn?.pendingPersistence) {
+      const pending = turn.pendingPersistence;
+      await pending;
+      if (turn.pendingPersistence === pending) {
+        turn.pendingPersistence = null;
+        return;
+      }
+    }
+  }
+
+  /**
+   * completion commit 保持“达成记录 → clear”的耐久顺序，但不进入 Stop 的等待集合。
+   * setGoal / update / resume 等会等待它，确保旧 clear 绝不落在新目标写入之后。
+   */
+  private trackCompletion<T>(turn: TurnAccumulator, operation: Promise<T>): Promise<T> {
+    const settled = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    const previous = turn.pendingCompletion;
+    const barrier = previous
+      ? Promise.all([previous, settled]).then(() => undefined)
+      : settled;
+    turn.pendingCompletion = barrier;
+    void barrier.then(() => {
+      if (turn.pendingCompletion === barrier) turn.pendingCompletion = null;
+    });
+    return operation;
+  }
+
+  private async awaitPendingLifecycle(turn: TurnAccumulator | undefined): Promise<void> {
+    while (turn?.pendingPersistence || turn?.pendingCompletion) {
+      const persistence = turn.pendingPersistence;
+      const completion = turn.pendingCompletion;
+      await Promise.all([
+        persistence ?? Promise.resolve(),
+        completion ?? Promise.resolve(),
+      ]);
+      if (turn.pendingPersistence === persistence) turn.pendingPersistence = null;
+      if (turn.pendingCompletion === completion) turn.pendingCompletion = null;
+    }
   }
 
   private isBusy(sessionId: string): boolean {
@@ -1030,7 +1303,9 @@ export class GoalController {
     // 用户刚点 Stop 就立刻重新 Running。resume 会创建新 turn，因此也不能只检查 key 存在。
     if (!turn || turn.cancelled || turn.finalized) return;
     turn.finalized = true; // done + 终止 error 双触发去重(同步置位,后续 await 不影响去重)
-    const isCurrentTurn = (): boolean => this.turns.get(sessionId) === turn;
+    const generation = turn.generation;
+    const isCurrentTurn = (): boolean =>
+      this.turns.get(sessionId) === turn && turn.generation === generation;
 
     const state = await this.deps.storage.get(sessionId);
     if (!isCurrentTurn()) return;
@@ -1111,26 +1386,32 @@ export class GoalController {
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
-      // 从 completion 消息落库开始就是不可分割的 commit 区：此前的 turn 身份检查允许
-      // Stop 取消旧 finalize；一旦开始写“已达成”，就必须继续 clear + emit null。
-      // 中途返回会留下“已达成消息 + paused goal”或“行已清但 renderer chip 未清”的矛盾态。
+      // completion commit 保持“达成记录 → clear”的耐久顺序，但单独登记：Stop 会同步
+      // detach 并把 paused 落盘后立即返回；新 setGoal / update / resume 则必须等旧 clear，
+      // 防止旧目标的删除迟到并抹掉新目标。
       const elapsedMs = Math.max(0, this.now() - state.startedAt);
-      if (this.deps.persistGoalCompletion) {
-        try {
-          await this.deps.persistGoalCompletion(sessionId, {
-            turnsUsed: decision.turnsUsed,
-            tokensUsed: decision.tokensUsed,
-            elapsedMs,
-            reason: decision.lastReason,
-          });
-        } catch (e) {
-          this.deps.logger.warn('[goal] persistGoalCompletion failed', { sessionId, error: String(e) });
-        }
-      }
-      await this.deps.storage.clear(sessionId);
-      this.deps.emitStatus({ sessionId, goal: null });
-      this.resetTurn(sessionId);
-      this.stopSession(sessionId);
+      await this.trackCompletion(
+        turn,
+        (async () => {
+          if (this.deps.persistGoalCompletion) {
+            try {
+              await this.deps.persistGoalCompletion(sessionId, {
+                turnsUsed: decision.turnsUsed,
+                tokensUsed: decision.tokensUsed,
+                elapsedMs,
+                reason: decision.lastReason,
+              });
+            } catch (e) {
+              this.deps.logger.warn('[goal] persistGoalCompletion failed', { sessionId, error: String(e) });
+            }
+          }
+          await this.deps.storage.clear(sessionId);
+          // null emit 属于同一顺序提交；后续新目标必须在它之后再 emit active，
+          // 否则旧 completion 的迟到 null 会把新 chip 隐藏。
+          this.deps.emitStatus({ sessionId, goal: null });
+        })(),
+      );
+      if (isCurrentTurn()) this.stopSession(sessionId);
       return;
     }
 
@@ -1176,28 +1457,37 @@ export class GoalController {
         : null;
 
     if (!isCurrentTurn()) return;
-    const updated = await this.deps.storage.update(sessionId, {
-      status,
-      lastReason,
-      turnsUsed: decision.turnsUsed,
-      tokensUsed: decision.tokensUsed,
-      noProgressStreak: decision.noProgressStreak,
-      usageResetAt: status === 'usageLimited' ? usageResetAt : null,
-      ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
-      updatedAt: this.now(),
-    });
+    const updated = await this.trackPersistence(
+      turn,
+      (async () => {
+        const persisted = await this.deps.storage.update(sessionId, {
+          // active 是保持态，不是 transition；省略它可让迟到 continuation 写在任何
+          // 防线失效时仍只能补计数，绝不能把显式 Stop 的 paused 改回 active。
+          ...(status === 'active' ? {} : { status }),
+          lastReason,
+          turnsUsed: decision.turnsUsed,
+          tokensUsed: decision.tokensUsed,
+          noProgressStreak: decision.noProgressStreak,
+          usageResetAt: status === 'usageLimited' ? usageResetAt : null,
+          ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
+          updatedAt: this.now(),
+        });
+        // objective 与对应 marker 是同一个可观察提交；Stop 必须等二者都 settle，
+        // 不能留下“文案已改但更新标记缺失”的半提交。
+        if (objectiveRewrite && persisted) {
+          await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, {
+            goalObjective: { updated: true },
+          });
+        }
+        return persisted;
+      })(),
+    );
     if (!isCurrentTurn()) return;
     if (updated) this.emit(updated);
 
-    // 改写了目标 → 在对话里落一条「目标已更新」标记(气泡徽标),与 setGoal/updateGoal 改目标一致。
-    if (objectiveRewrite) {
-      await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, { goalObjective: { updated: true } });
-      if (!isCurrentTurn()) return;
-    }
-
     this.resetTurn(sessionId);
 
-    if (shouldFire) {
+    if (shouldFire && updated?.status === 'active') {
       this.scheduleContinuation(sessionId);
     } else {
       // 停:budgetLimited(终态)/ blocked / paused / usageLimited 都 detach。
@@ -1316,7 +1606,7 @@ export class GoalController {
       // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
       await this.resumeGoal(sessionId, { auto: true });
     } finally {
-      // 早退 / resume no-op 时释放自己；成功 resume 会 resetTurn 换代，Stop 会留下它的
+      // 早退 / resume no-op 时释放自己；成功 resume 会换成新的 active owner，Stop 会留下它的
       // cancelled owner，二者都不能被旧 timer 的 finally 删除。
       if (isCurrent()) this.turns.delete(sessionId);
     }
@@ -1325,25 +1615,31 @@ export class GoalController {
   private async fireTurn(sessionId: string): Promise<void> {
     const lifecycleBoundary = this.turns.get(sessionId);
     if (!lifecycleBoundary || lifecycleBoundary.cancelled) return;
+    const lifecycleGeneration = lifecycleBoundary.generation;
+    const isCurrentLifecycle = (): boolean =>
+      this.turns.get(sessionId) === lifecycleBoundary &&
+      lifecycleBoundary.generation === lifecycleGeneration;
     const state = await this.deps.storage.get(sessionId);
-    // stopSession 会同步删除本轮 accumulator；用对象身份充当既有生命周期边界，
-    // 可同时拒绝 Stop 后的旧 fire 与随后 resume 创建的新一代，不能只信上面读到的
-    // active 存档快照。
+    // owner 身份拒绝 Stop / Resume 换代，generation 拒绝另一轮正常推进后的旧 fire；
+    // 两者都不能只信上面读到的 active 存档快照。
     if (
       !state ||
       state.status !== 'active' ||
-      this.turns.get(sessionId) !== lifecycleBoundary
+      !isCurrentLifecycle()
     ) return;
     // preflight 预算守卫:用户可能把 maxTurns/budgetTokens 调小到已超当前用量(updateGoal 会即时
     // 转 budgetLimited,但调度链上可能仍有在途 fireTurn / continuation timer 指向旧 active 状态)。
     // 超(新)预算就转 budgetLimited 并停,绝不越过新上限再发一轮(reviewer #354)。
     if (exceedsGoalBudget(state)) {
-      const limited = await this.deps.storage.update(sessionId, {
-        status: 'budgetLimited',
-        lastReason: 'budget limit reached',
-        updatedAt: this.now(),
-      });
-      if (this.turns.get(sessionId) !== lifecycleBoundary) return;
+      const limited = await this.trackPersistence(
+        lifecycleBoundary,
+        this.deps.storage.update(sessionId, {
+          status: 'budgetLimited',
+          lastReason: 'budget limit reached',
+          updatedAt: this.now(),
+        }),
+      );
+      if (!isCurrentLifecycle()) return;
       this.stopSession(sessionId);
       if (limited) this.emit(limited);
       return;
@@ -1367,6 +1663,12 @@ export class GoalController {
     const firingOwner = {};
     this.firing.set(sessionId, firingOwner);
     let dispatchBoundary: TurnAccumulator | undefined;
+    let dispatchGeneration: number | undefined;
+    const isCurrentDispatch = (): boolean =>
+      dispatchBoundary != null &&
+      dispatchGeneration != null &&
+      this.turns.get(sessionId) === dispatchBoundary &&
+      dispatchBoundary.generation === dispatchGeneration;
     let releaseAgentSwitchLock = (): void => {};
     let baselineStarted = false;
     try {
@@ -1375,15 +1677,15 @@ export class GoalController {
       // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
-      if (this.turns.get(sessionId) !== lifecycleBoundary) return;
+      if (!isCurrentLifecycle()) return;
       const session = await this.deps.ensureSession(sessionId);
-      if (this.turns.get(sessionId) !== lifecycleBoundary) return;
+      if (!isCurrentLifecycle()) return;
       if (!session) {
         this.deps.logger.warn('[goal] no live session to fire (resume failed)', {
           sessionId,
           kind,
         });
-        if (this.turns.get(sessionId) === lifecycleBoundary) this.stopSession(sessionId);
+        if (isCurrentLifecycle()) this.stopSession(sessionId);
         return;
       }
       // deferred switch 可能刚把 live session 换成目标引擎的新对象;本会话若有 goal
@@ -1397,6 +1699,7 @@ export class GoalController {
       this.resetTurn(sessionId);
       dispatchBoundary = this.turns.get(sessionId);
       if (!dispatchBoundary) return;
+      dispatchGeneration = dispatchBoundary.generation;
       const content =
         kind === 'first'
           ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
@@ -1413,7 +1716,7 @@ export class GoalController {
       // 交接注入自己接——切换后 goal 循环的下一轮 directive 同样要带交接上下文
       // (2026-07-20 审计)。
       const pendingHandoff = await agentHandoffPending.peek(sessionId);
-      if (!dispatchBoundary || this.turns.get(sessionId) !== dispatchBoundary) {
+      if (!isCurrentDispatch()) {
         if (baselineStarted) {
           this.deps.onUndispatchedUserTurn?.(sessionId);
           baselineStarted = false;
@@ -1435,11 +1738,11 @@ export class GoalController {
           this.deps.onUndispatchedUserTurn?.(sessionId);
           baselineStarted = false;
         }
-        if (this.turns.get(sessionId) !== dispatchBoundary) return;
+        if (!isCurrentDispatch()) return;
         this.goalTurnsInFlight.delete(sessionId);
         this.deps.logger.warn('[goal] send not accepted', { sessionId, kind, reason: result.reason });
       } else {
-        if (this.turns.get(sessionId) !== dispatchBoundary) {
+        if (!isCurrentDispatch()) {
           baselineStarted = false;
           return;
         }
@@ -1451,8 +1754,7 @@ export class GoalController {
         this.deps.onUndispatchedUserTurn?.(sessionId);
         baselineStarted = false;
       }
-      const mutationBoundary = dispatchBoundary ?? lifecycleBoundary;
-      if (this.turns.get(sessionId) === mutationBoundary) {
+      if (dispatchBoundary ? isCurrentDispatch() : isCurrentLifecycle()) {
         this.goalTurnsInFlight.delete(sessionId);
       }
       // SESSION_RUNNING:会话已有 turn 在跑(用户抢发等);该 turn 的 done 会再触发裁决。

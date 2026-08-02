@@ -577,6 +577,49 @@ describe('GoalController', () => {
     expect(h.persistedLimits).toHaveLength(0);
   });
 
+  it('keeps a goal edit alive when a normal turn resets while session hydration is pending', async () => {
+    let ensureCalls = 0;
+    let releaseEnsure!: (session: SessionLike | undefined) => void;
+    const blockedEnsure = new Promise<SessionLike | undefined>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const liveSession = new FakeSession('s1');
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls === 3 ? blockedEnsure : liveSession;
+      },
+      continuationDebounceMs: 60_000,
+    });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+
+    const editPromise = local.controller.setGoal({ sessionId: 's1', objective: 'new objective' });
+    await vi.waitFor(() => expect(ensureCalls).toBe(3));
+
+    liveSession.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"normal turn finished"}\n```',
+      tokens: 25,
+    });
+    await vi.waitFor(async () => {
+      expect((await local.storage.get('s1'))?.turnsUsed).toBe(1);
+    });
+
+    releaseEnsure(liveSession);
+    await expect(editPromise).resolves.toMatchObject({
+      status: 'active',
+      objective: 'new objective',
+      turnsUsed: 1,
+    });
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'new objective',
+      turnsUsed: 1,
+    });
+    expect(liveSession.sends.at(-1)?.content).toContain('new objective');
+  });
+
   it('does not let a goal edit waiting for session hydration overwrite a later Stop', async () => {
     let ensureCalls = 0;
     let releaseEnsure!: (session: SessionLike | undefined) => void;
@@ -783,6 +826,120 @@ describe('GoalController', () => {
     });
     expect(h.userMessages).toHaveLength(0);
     expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('keeps a later setGoal authoritative over a dormant objective update already writing', async () => {
+    const local = makeController();
+    await local.storage.set(seededGoal({ status: 'active', objective: 'old objective' }));
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const staleUpdate = local.controller.updateGoal('s1', { objective: 'stale objective' });
+    await updateStarted;
+    const replacement = local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' });
+    await tick();
+    expect((await local.storage.get('s1'))?.objective).toBe('old objective');
+
+    releaseUpdate();
+    await Promise.allSettled([staleUpdate, replacement]);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'replacement objective',
+    });
+    expect(local.session.sends.at(-1)?.content).toContain('replacement objective');
+  });
+
+  it('keeps a later setGoal authoritative over a clarification objective write', async () => {
+    const local = makeController();
+    await local.storage.set(seededGoal({ status: 'active', objective: 'old objective', turnsUsed: 0 }));
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markUpdateStarted();
+      await blockedUpdate;
+      return originalUpdate(sessionId, patch);
+    });
+
+    const clarification = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'clarified objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'clarified objective' }] }],
+    );
+    await updateStarted;
+    const replacement = local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' });
+
+    releaseUpdate();
+    await Promise.allSettled([clarification, replacement]);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'replacement objective',
+    });
+    expect(local.userMessages.some((message) => message.content === 'clarified objective')).toBe(false);
+  });
+
+  it('does not emit an old budgetLimited snapshot after a newer setGoal wins during its marker write', async () => {
+    let releaseLimitedMarker!: () => void;
+    const blockedLimitedMarker = new Promise<void>((resolve) => {
+      releaseLimitedMarker = resolve;
+    });
+    let limitedMarkerStarted = false;
+    const local = makeController({
+      persistUserMessage: async (_sessionId, content, opts) => {
+        if (opts?.goalObjective?.updated && content === 'limited objective') {
+          limitedMarkerStarted = true;
+          await blockedLimitedMarker;
+        }
+      },
+    });
+    await startGoal(local, 'old objective');
+    const active = await local.storage.get('s1');
+    await local.storage.set({ ...active!, turnsUsed: 5, maxTurns: 10 });
+
+    const limitedUpdate = local.controller.updateGoal('s1', {
+      objective: 'limited objective',
+      maxTurns: 3,
+    });
+    await vi.waitFor(() => expect(limitedMarkerStarted).toBe(true));
+
+    await local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' });
+    const updatesAfterReplacement = local.updates.length;
+    releaseLimitedMarker();
+    await expect(limitedUpdate).rejects.toBeInstanceOf(GoalUpdateSupersededError);
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'budgetLimited',
+      objective: 'replacement objective',
+    });
+    expect(
+      local.updates
+        .slice(updatesAfterReplacement)
+        .some((update) => update.goal?.objective === 'limited objective'),
+    ).toBe(false);
+    expect(local.updates.at(-1)?.goal).toMatchObject({
+      status: 'budgetLimited',
+      objective: 'replacement objective',
+    });
   });
 
   it('returns the authoritative paused goal when Stop wins while a budget edit is hydrating the session', async () => {
@@ -1243,13 +1400,14 @@ describe('GoalController', () => {
 
     const staleFire = internals.fireTurn('s1');
     await updateStarted;
-    await local.controller.pauseGoal('s1');
+    const pausePromise = local.controller.pauseGoal('s1');
     const stopBoundary = internals.turns.get('s1');
     expect(stopBoundary?.cancelled).toBe(true);
 
     releaseUpdate();
-    await staleFire;
+    await Promise.all([staleFire, pausePromise]);
     expect(internals.turns.get('s1')).toBe(stopBoundary);
+    expect((await local.storage.get('s1'))?.status).toBe('budgetLimited');
     expect(local.session.sends).toHaveLength(1);
   });
 
@@ -1362,7 +1520,59 @@ describe('GoalController', () => {
     expect(local.session.sends).toHaveLength(sendsBeforeStop);
   });
 
-  it('finishes the completion commit if Stop arrives during completion persistence', async () => {
+  it('keeps repeated Stop behind an already-issued finalize write so paused wins last', async () => {
+    const local = makeController();
+    await startGoal(local);
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let markFinalizeWriteStarted!: () => void;
+    const finalizeWriteStarted = new Promise<void>((resolve) => {
+      markFinalizeWriteStarted = resolve;
+    });
+    let releaseFinalizeWrite!: () => void;
+    const blockedFinalizeWrite = new Promise<void>((resolve) => {
+      releaseFinalizeWrite = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markFinalizeWriteStarted();
+      await blockedFinalizeWrite;
+      return originalUpdate(sessionId, patch);
+    });
+    const sendsBeforeStop = local.session.sends.length;
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"late finalize"}\n```',
+      tokens: 20,
+    });
+    await finalizeWriteStarted;
+
+    const updatesBeforeStop = local.updates.length;
+    let firstSettled = false;
+    let secondSettled = false;
+    const firstStop = local.controller.pauseGoal('s1');
+    void firstStop.then(() => { firstSettled = true; });
+    const secondStop = local.controller.pauseGoal('s1');
+    void secondStop.then(() => { secondSettled = true; });
+    await tick();
+    expect(firstSettled).toBe(false);
+    expect(secondSettled).toBe(false);
+
+    releaseFinalizeWrite();
+    await Promise.all([firstStop, secondStop]);
+    await tick();
+
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      turnsUsed: 1,
+      tokensUsed: 20,
+    });
+    expect(local.session.sends).toHaveLength(sendsBeforeStop);
+    expect(
+      local.updates.slice(updatesBeforeStop).some((update) => update.goal?.status === 'active'),
+    ).toBe(false);
+  });
+
+  it('lets Stop persist paused while completion-message persistence is still pending', async () => {
     let completionCalls = 0;
     let releaseCompletion!: () => void;
     const blockedCompletion = new Promise<void>((resolve) => {
@@ -1384,11 +1594,14 @@ describe('GoalController', () => {
 
     await local.controller.pauseGoal('s1');
     expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(0);
+
     releaseCompletion();
     await tick();
 
     expect(await local.storage.get('s1')).toBeNull();
     expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+    expect(local.updates.filter((update) => update.goal === null)).toHaveLength(1);
   });
 
   it('finishes the completion commit if Stop arrives while clearing goal storage', async () => {
@@ -1421,6 +1634,53 @@ describe('GoalController', () => {
     expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
+  it('waits for an old completion clear before creating a replacement Goal', async () => {
+    const local = makeController();
+    const originalClear = local.storage.clear.bind(local.storage);
+    let clearCalls = 0;
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    vi.spyOn(local.storage, 'clear').mockImplementation(async (sessionId) => {
+      clearCalls += 1;
+      await blockedClear;
+      await originalClear(sessionId);
+    });
+    await startGoal(local, 'completed objective');
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(clearCalls).toBe(1));
+    await local.controller.pauseGoal('s1');
+
+    let replacementSettled = false;
+    const replacement = local.controller.setGoal({
+      sessionId: 's1',
+      objective: 'replacement objective',
+    });
+    void replacement.then(() => { replacementSettled = true; });
+    await tick();
+    expect(replacementSettled).toBe(false);
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+
+    releaseClear();
+    await expect(replacement).resolves.toMatchObject({
+      status: 'active',
+      objective: 'replacement objective',
+    });
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'replacement objective',
+    });
+    expect(local.updates.at(-1)?.goal).toMatchObject({
+      status: 'active',
+      objective: 'replacement objective',
+    });
+  });
+
   it('resumeGoal resumes a paused goal: preserves counters, fires a continuation', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ verdictJson: '```json\n{"goal_status":"continue","reason":""}\n```', tokens: 30 });
@@ -1434,6 +1694,49 @@ describe('GoalController', () => {
     expect(st?.tokensUsed).toBe(30);
     expect(st?.noProgressStreak).toBe(0);
     expect(h.session.sends.length).toBe(sendsBeforeResume + 1);
+  });
+
+  it('keeps Stop behind every active write from concurrent Resume calls', async () => {
+    const local = makeController();
+    await local.storage.set(seededGoal({ status: 'paused', lastReason: 'paused by user' }));
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let activeWrites = 0;
+    let releaseFirst!: () => void;
+    const blockedFirst = new Promise<void>((resolve) => {
+      releaseFirst = resolve;
+    });
+    let releaseSecond!: () => void;
+    const blockedSecond = new Promise<void>((resolve) => {
+      releaseSecond = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementation(async (sessionId, patch) => {
+      if (patch.status === 'active') {
+        activeWrites += 1;
+        await (activeWrites === 1 ? blockedFirst : blockedSecond);
+      }
+      return originalUpdate(sessionId, patch);
+    });
+
+    const firstResume = local.controller.resumeGoal('s1');
+    const secondResume = local.controller.resumeGoal('s1');
+    await vi.waitFor(() => expect(activeWrites).toBe(2));
+    releaseFirst();
+    await firstResume;
+
+    const updatesBeforeStop = local.updates.length;
+    let stopSettled = false;
+    const stop = local.controller.pauseGoal('s1');
+    void stop.then(() => { stopSettled = true; });
+    await tick();
+    expect(stopSettled).toBe(false);
+
+    releaseSecond();
+    await Promise.all([secondResume, stop]);
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(
+      local.updates.slice(updatesBeforeStop).some((update) => update.goal?.status === 'active'),
+    ).toBe(false);
   });
 
   it('does not bind Resume to the old vendor turn before Stop reaches idle', async () => {
@@ -1777,6 +2080,94 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(sendsBefore); // 不触发新一轮
   });
 
+  it('rechecks the latest counters before lowering an active maxTurns to budgetLimited', async () => {
+    const local = makeController();
+    await startGoal(local);
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let markFinalizeWriteStarted!: () => void;
+    const finalizeWriteStarted = new Promise<void>((resolve) => {
+      markFinalizeWriteStarted = resolve;
+    });
+    let releaseFinalizeWrite!: () => void;
+    const blockedFinalizeWrite = new Promise<void>((resolve) => {
+      releaseFinalizeWrite = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async (sessionId, patch) => {
+      markFinalizeWriteStarted();
+      await blockedFinalizeWrite;
+      return originalUpdate(sessionId, patch);
+    });
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"one turn used"}\n```',
+      tokens: 25,
+    });
+    await finalizeWriteStarted;
+
+    const limitUpdate = local.controller.updateGoal('s1', { maxTurns: 1 });
+    await tick();
+    expect((await local.storage.get('s1'))?.turnsUsed).toBe(0);
+
+    releaseFinalizeWrite();
+    await expect(limitUpdate).resolves.toMatchObject({
+      status: 'budgetLimited',
+      maxTurns: 1,
+      turnsUsed: 1,
+    });
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'budgetLimited',
+      maxTurns: 1,
+      turnsUsed: 1,
+    });
+  });
+
+  it('rechecks budget limits when a turn finalizes after the edit read but before its write', async () => {
+    const local = makeController();
+    await startGoal(local);
+    const originalUpdate = local.storage.update.bind(local.storage);
+    let updateCalls = 0;
+    let markLimitWriteStarted!: () => void;
+    const limitWriteStarted = new Promise<void>((resolve) => {
+      markLimitWriteStarted = resolve;
+    });
+    let releaseLimitWrite!: () => void;
+    const blockedLimitWrite = new Promise<void>((resolve) => {
+      releaseLimitWrite = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementation(async (sessionId, patch) => {
+      updateCalls += 1;
+      if (updateCalls === 1) {
+        markLimitWriteStarted();
+        await blockedLimitWrite;
+      }
+      return originalUpdate(sessionId, patch);
+    });
+
+    const limitUpdate = local.controller.updateGoal('s1', { maxTurns: 1 });
+    await limitWriteStarted;
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"finished concurrently"}\n```',
+      tokens: 25,
+    });
+    await vi.waitFor(async () => {
+      expect((await local.storage.get('s1'))?.turnsUsed).toBe(1);
+    });
+
+    releaseLimitWrite();
+    await expect(limitUpdate).resolves.toMatchObject({
+      status: 'budgetLimited',
+      maxTurns: 1,
+      turnsUsed: 1,
+    });
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'budgetLimited',
+      maxTurns: 1,
+      turnsUsed: 1,
+    });
+  });
+
   it('updateGoal transitions to budgetLimited when budgetTokens is lowered below tokensUsed', async () => {
     await h.storage.set(seededGoal({ status: 'active', budgetTokens: 5000, tokensUsed: 3000 }));
     const res = await h.controller.updateGoal('s1', { budgetTokens: 1000 });
@@ -1831,6 +2222,8 @@ describe('GoalController', () => {
     await expect(h.controller.updateGoal('s1', { maxTurns: 0 })).rejects.toThrow('positive number');
     await expect(h.controller.updateGoal('s1', { budgetTokens: Number.NaN })).rejects.toThrow('positive number');
     await expect(h.controller.updateGoal('s1', { objective: '   ' })).rejects.toThrow('objective must not be empty');
+    const internals = h.controller as unknown as { turns: Map<string, unknown> };
+    expect(internals.turns.has('s1')).toBe(false);
   });
 
   it('updateGoal accepts null as no limit and can unblock budgetLimited', async () => {
