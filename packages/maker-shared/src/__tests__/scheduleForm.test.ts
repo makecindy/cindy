@@ -85,6 +85,19 @@ describe('mobile schedule form model', () => {
     });
   });
 
+  it('writes an explicit false when mobile disables WeCom group notifications', () => {
+    const draft = createMobileScheduleDraft(schedule({
+      notify: { desktop: true, feishu: false, wecomGroup: true },
+    }));
+    const input = buildMobileScheduleInput({ ...draft, notifyWecomGroup: false });
+
+    expect(input.notify).toEqual({
+      desktop: true,
+      feishu: false,
+      wecomGroup: false,
+    });
+  });
+
   it('matches desktop heartbeat update semantics for bound sessions', () => {
     const draft = createMobileScheduleDraft(schedule({
       agentKind: 'codex',
@@ -158,6 +171,50 @@ describe('mobile schedule form model', () => {
 
     const claude = updateDraftAgentKind({ ...draft, fastMode: true }, 'claude-code');
     expect(buildMobileScheduleInput({ ...claude, name: 'Claude', prompt: 'run' })).not.toHaveProperty('fastMode');
+  });
+
+  it('supports Pi automations: blank default model (host-resolved) and explicit fast mode', () => {
+    // Pi 模型来自动态 BYOM 目录:切到 Pi 时 model 留空 → 序列化省略 → host 解析默认。
+    const draft = updateDraftAgentKind(createMobileScheduleDraft(null), 'pi');
+    expect(draft.model).toBe('');
+    const input = buildMobileScheduleInput({ ...draft, name: 'Pi task', prompt: 'run', fastMode: true });
+    expect(input).toMatchObject({ agentKind: 'pi', fastMode: true });
+    // 空模型不写入(host 解析默认),而非发一个空串把默认覆盖掉。
+    expect(hasOwn(input, 'model')).toBe(false);
+
+    // 用户在自由文本框显式指定 Pi 模型时照常带上。
+    const withModel = buildMobileScheduleInput({ ...draft, name: 'Pi task', prompt: 'run', model: 'my-local-model' });
+    expect(withModel).toMatchObject({ agentKind: 'pi', model: 'my-local-model' });
+  });
+
+  it('keeps an explicit Pi provider route through edit, templates, and fresh-task serialization', () => {
+    const existing = schedule({
+      agentKind: 'pi',
+      model: '',
+      providerId: 'byom-local',
+    });
+    const edited = createMobileScheduleDraft(existing);
+    expect(edited.providerId).toBe('byom-local');
+    expect(buildMobileScheduleInput({ ...edited, name: 'Pi task', prompt: 'run' }))
+      .toMatchObject({ agentKind: 'pi', providerId: 'byom-local' });
+
+    const template: RemoteScheduleTemplate = {
+      id: 'pi-local',
+      name: 'Pi local',
+      description: 'Use the connected local Pi provider',
+      category: 'developer-tools',
+      source: 'builtin',
+      agentKind: 'pi',
+      providerId: 'byom-template',
+      prompt: 'run',
+    };
+    const fromTemplate = applyTemplateToMobileScheduleDraft(createMobileScheduleDraft(null), template);
+    expect(fromTemplate.providerId).toBe('byom-template');
+    expect(buildMobileScheduleInput({ ...fromTemplate, name: 'Pi template' }))
+      .toMatchObject({ agentKind: 'pi', providerId: 'byom-template' });
+
+    // 切 agent 不得把前一个来源误带到新的 agent 默认路由。
+    expect(updateDraftAgentKind({ ...edited, providerId: 'byom-local' }, 'codex').providerId).toBe('');
   });
 
   it('validates required fields and supported interval-style cron presets', () => {

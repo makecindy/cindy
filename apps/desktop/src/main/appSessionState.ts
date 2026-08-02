@@ -11,6 +11,7 @@ import crypto from 'node:crypto';
 
 import { createLogger } from './logger.js';
 import { createOverrideSettingsFile } from './maker-host/override-settings-file.js';
+import { LOCAL_PROFILE_DATA_OWNER_ID } from './profile/profileRegistryModel.js';
 
 export type AppSessionMode = 'signed-out' | 'local' | 'cloud';
 
@@ -20,7 +21,8 @@ export interface ActiveAppSession {
   generation: number;
 }
 
-export const LOCAL_DATA_OWNER_ID = 'local-v1';
+/** Backward-compatible name for the canonical Profile model constant. */
+export const LOCAL_DATA_OWNER_ID = LOCAL_PROFILE_DATA_OWNER_ID;
 
 /** Filesystem/storage-safe opaque namespace for a data owner. */
 export function dataOwnerStorageKey(ownerId: string): string {

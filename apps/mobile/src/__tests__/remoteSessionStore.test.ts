@@ -49,7 +49,7 @@ function pushMakerStatus(sessionId: string, data: Record<string, unknown>): void
 function pushMakerTaskUpdate(
   sessionId: string,
   taskId: string,
-  opts: { source?: 'claude-code' | 'codex'; status?: string; description?: string } = {},
+  opts: { source?: 'claude-code' | 'codex' | 'pi'; status?: string; description?: string } = {},
 ): void {
   remoteSessionStore.applyRemotePush('dev-1', 'maker:event', {
     sessionId,
@@ -131,6 +131,32 @@ function pending(kind: string, requestId?: string, persistId?: string): PendingI
 
 describe('remoteSessionStore', () => {
   beforeEach(() => remoteSessionStore.clear());
+
+  it('normalizes same-timestamp messages by host rowid', () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...message('a-newer', 's1'), createdAt, rowid: 5 },
+      { ...message('z-older', 's1'), createdAt, rowid: 4 },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'z-older',
+      'a-newer',
+    ]);
+  });
+
+  it('preserves arrival order for same-timestamp messages without host rowid', () => {
+    const createdAt = '2026-01-01T00:00:00.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...message('z-first', 's1'), createdAt },
+      { ...message('a-second', 's1'), createdAt },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'z-first',
+      'a-second',
+    ]);
+  });
 
   it('stamps sessions with device-link origin and indexes session ids', () => {
     remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
@@ -1251,6 +1277,56 @@ describe('remoteSessionStore', () => {
     ]);
   });
 
+  it('keeps a same-timestamp live tail with a larger host rowid', () => {
+    const createdAt = '2026-01-01T10:00:02.000Z';
+    remoteSessionStore.setMessages('s1', [
+      { ...messageAt('old-1', 's1', '2026-01-01T00:00:01.000Z'), rowid: 1 },
+      { ...messageAt('live-3', 's1', createdAt), rowid: 3 },
+    ]);
+
+    remoteSessionStore.setLatestMessageWindow('s1', [
+      { ...messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'), rowid: 1 },
+      { ...messageAt('latest-2', 's1', createdAt), rowid: 2 },
+    ]);
+
+    expect(remoteSessionStore.getMessages('s1').map((item) => item.id)).toEqual([
+      'latest-1',
+      'latest-2',
+      'live-3',
+    ]);
+  });
+
+  it('keeps a same-timestamp pending live assistant during latest-window reconciliation', () => {
+    vi.useFakeTimers();
+    try {
+      const createdAt = '2026-01-01T10:00:02.000Z';
+      pushMakerText('s1', 'live-3', 'still streaming', false);
+      vi.runOnlyPendingTimers();
+      remoteSessionStore.setMessages('s1', remoteSessionStore.getMessages('s1').map((item) => ({
+        ...item,
+        createdAt,
+      })));
+
+      remoteSessionStore.setLatestMessageWindow('s1', [
+        { ...messageAt('latest-1', 's1', '2026-01-01T10:00:01.000Z'), rowid: 1 },
+        { ...messageAt('latest-2', 's1', createdAt), rowid: 2 },
+      ]);
+
+      const rows = remoteSessionStore.getMessages('s1');
+      expect(rows.map((item) => item.id)).toEqual([
+        'latest-1',
+        'live-3',
+        'latest-2',
+      ]);
+      expect(rows.find((item) => item.clientId === 'live-3')).toMatchObject({
+        content: 'still streaming',
+        agentMeta: { isStreaming: true },
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('丢弃无法确认相接的更早缓存段：本页上沿之外服务端还有历史时（#1222）', () => {
     // 「有交集」不等于「连续」:交集只说明两段有共同的行,不排除更早那一段与本页之间还隔着
     // 服务端仍有、本地从未加载的行。断连期间漏收几十上百条 push 时就是这样,而漏收的量不大时
@@ -1862,6 +1938,11 @@ describe('remoteSessionStore', () => {
     expect([...remoteSessionStore.getSessionTaskUpdates('s1').values()][0]?.taskId).toBe('task-new');
   });
 
+  it('preserves Pi as the source of agent task updates', () => {
+    pushMakerTaskUpdate('s1', 'pi-task', { source: 'pi' });
+    expect([...remoteSessionStore.getSessionTaskUpdates('s1').values()][0]?.provider).toBe('pi');
+  });
+
   it('sweeps everything on a side-task start too, recalling the worker on its next update', () => {
     // Leftovers from a finished turn: a claude sub-agent, a completed codex worker, and the
     // still-running collab worker (the side task's own subject).
@@ -2304,6 +2385,38 @@ describe('remoteSessionStore', () => {
     });
   });
 
+  // 无当前 segment 金额、只有整轮累计 + token 明细 = 桌面自动续跑的无价收尾轮。
+  // 累计金额必须一起落进 agentMeta,否则操作行会用 token 顶掉这一轮已经花掉的钱
+  // (不变量正本见 apps/desktop/src/shared/turnCostPayload.ts)。
+  it('keeps the user-round total from usage-only turn cost pushes', () => {
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+
+    remoteSessionStore.applyRemotePush('dev-1', 'usage:message-turn-cost', {
+      sessionId: 's1',
+      clientId: 'm1',
+      userTurnMoney: {
+        amount: 1.25,
+        currency: 'USD',
+        approximate: false,
+        kind: 'actual-cost',
+      },
+      userTurnCostUsd: 1.25,
+      userTurnCostIsEstimate: true,
+      turnUsageDetails: { totalTokens: 2_100_000 },
+    });
+
+    const meta = remoteSessionStore.getMessages('s1')[0].agentMeta;
+    expect(meta).toMatchObject({
+      userTurnCost: { amount: 1.25, currency: 'USD' },
+      userTurnCostUsd: 1.25,
+      userTurnCostIsEstimate: true,
+      turnUsageDetails: { totalTokens: 2_100_000 },
+    });
+    // 当前 segment 没有报价 → 不写任何 segment 金额字段(不记账)。
+    expect(meta?.turnCost).toBeUndefined();
+    expect(meta?.turnCostUsd).toBeUndefined();
+  });
+
   it('patches existing messages from realtime model mismatch pushes', () => {
     remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
 
@@ -2339,6 +2452,60 @@ describe('remoteSessionStore', () => {
       pendingQueue: [{ clientId: 'q-1', text: 'queued' }],
       queuePaused: true,
     });
+  });
+
+  it('soft-invalidates an offline device without deleting sessions or messages', () => {
+    const meta = session('s1', {
+      updatedAt: '2026-01-01T00:00:01.000Z',
+      _count: { messages: 1 },
+    });
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [meta]);
+    remoteSessionStore.setDeviceSessions('dev-2', 'Windows', [session('s2')]);
+    remoteSessionStore.setMessages('s1', [message('m1', 's1')]);
+    pushMakerText('s1', 'live-1', 'streaming', false);
+    remoteSessionStore.setMessages('s2', [message('m2', 's2')]);
+    remoteSessionStore.markSessionMessagesSynced('s1', meta);
+    remoteSessionStore.setPendingInteractions('s1', [{ request: { requestId: 'req-1' } }]);
+    remoteSessionStore.setInputProjection('s1', projection('s1'));
+    remoteSessionStore.setSessionRunning('s1', true);
+    remoteSessionStore.setGoalStatus('s1', { status: 'running' } as never);
+
+    remoteSessionStore.markDeviceOffline('dev-1');
+
+    expect(remoteSessionStore.getSessions().map((item) => item.id).sort()).toEqual(['s1', 's2']);
+    expect(remoteSessionStore.getSessionDeviceId('s1')).toBe('dev-1');
+    expect(remoteSessionStore.getMessages('s1')).toEqual([
+      expect.objectContaining({ id: 'm1' }),
+      expect.objectContaining({ content: 'streaming', agentMeta: expect.not.objectContaining({ isStreaming: true }) }),
+    ]);
+    expect(remoteSessionStore.isSessionMessageWindowSynced('s1', meta)).toBe(false);
+    expect(remoteSessionStore.getPendingInteractions('s1')).toEqual([]);
+    expect(remoteSessionStore.getInputProjection('s1').pendingQueue).toEqual([]);
+    expect(remoteSessionStore.getSessionRunStatus('s1').isRunning).toBe(false);
+    expect(remoteSessionStore.getGoalStatus('s1')).toBeUndefined();
+    expect(remoteSessionStore.getMessages('s2')).toHaveLength(1);
+
+    // 重复离线通知幂等,不会清掉保留的 last-known 内容。
+    remoteSessionStore.markDeviceOffline('dev-1');
+    expect(remoteSessionStore.getMessages('s1')).toHaveLength(2);
+  });
+
+  it('emits when soft offline only clears pending-refresh metadata', () => {
+    remoteSessionStore.setDeviceSessions('dev-1', 'Mac', [session('s1')]);
+    remoteSessionStore.applyRemotePush('dev-1', 'local-db:session:error-persisted', {
+      sessionId: 's1',
+    });
+    expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(true);
+
+    const notify = vi.fn();
+    const unsubscribe = remoteSessionStore.subscribe(notify);
+    try {
+      remoteSessionStore.markDeviceOffline('dev-1');
+      expect(remoteSessionStore.hasPendingRefresh('s1')).toBe(false);
+      expect(notify).toHaveBeenCalledTimes(1);
+    } finally {
+      unsubscribe();
+    }
   });
 
   it('removes a device shard with its messages and pending interactions', () => {

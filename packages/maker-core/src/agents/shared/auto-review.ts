@@ -3,27 +3,22 @@
  *
  * ## 为什么在这里(而非某个 agent 内)
  *
- * "Auto-review"(权限档 `auto`)要在**不依赖任何 CLI 原生 reviewer** 的前提下,自己判定
- * 一个动作该放行、升级还是必问。各 harness(Claude Code / Codex / 未来 pi …)的原生 auto
- * reviewer 只对自家模型校准,经 Cindy 网关接第三方模型时要么橡皮图章(#129)、要么撞不兼容
- * 路由(codex-auto-review 隐藏模型 #751/#772)。**统一到这一套 core、各 harness 只写薄
- * adapter 把自己的工具调用/审批请求翻译成归一化 `ReviewableAction`**,兼容特判就不必散落在
- * 每个 harness 里 —— harness 负责跑,review 归 Cindy。
+ * "Auto-review"(权限档 `auto`)先复用 harness 已验证可用的原生 reviewer；原生能力不存在或
+ * 运行期失效时，再由 Cindy 用当前会话模型做轻量 fallback。各 harness 只写薄 adapter，把
+ * 自己的工具调用/审批请求翻译成归一化 `ReviewableAction`，避免兼容特判散落。
  *
  * 与原生的分工(Chris 2026-07-29 定:原生优先、Cindy 兜底):harness 原生 reviewer 在已验证
  * 可用的路由上照用(如 Codex 在 OpenAI OAuth 直连的 auto_review);路由不支持/不可靠时落到
- * 本 core。Claude Code 的原生 auto 分类器对第三方模型不可靠,实际总走本 core。
+ * 本 core。Claude Code 第三方模型也走 Cindy fallback，不把原生分类器请求错误发给第三方。
  *
- * ## 判定档(借鉴 Hermes 的 green/red light + openclaw 的确定性规则,零 LLM 裁判)
+ * ## 两层判定
  *
- *   - **绿灯 → `auto-approve`**:只读、会话内状态、工作区内文件写、明确只读的 shell。静默放行。
- *   - **红灯 → `prompt`**:写工作区外、外发网络、无法判定的 shell。升级用户确认(可"本会话记住")。
- *   - **危险 → `prompt-each-time`**:destructive / 不可逆 / 触碰凭证 / 远程代码执行。必问、不可记住。
+ *   - **确定性绿灯 → `auto-approve`**：只读、会话内状态、工作区内文件写、明确只读 shell。
+ *   - **灰区 → `prompt`**：交当前会话模型判 allow / block / ask；reviewer 故障时静默 block。
+ *   - **确定性红线 → `prompt-each-time`**：凭证、提权、广泛破坏等极高风险动作才允许打扰用户。
  *
- * **不确定一律 fail-closed 升级**(返回 `prompt`),绝不因"没识别出危险"而放行(与 openclaw
- * 默认 fail-open 相反 —— auto-review 要 safe-by-default)。shell 越界只能靠命令字符串启发式
- * (shell 不可静态求解):明确只读放行、明确危险必问、其余(含一切写)一律升级;结构化 path
- * 参数的动作(file-write)才做精确的工作区边界判定。
+ * 这里的 `prompt` 是内部灰区标记，不等于 UI 弹窗。最终只有轻量 reviewer 明确返回 `ask`，
+ * 或本地规则命中确定性红线，才弹确认；拿不准与服务不可用都回主 Agent `block`，让它换安全做法。
  *
  * ## 已知静态残口(命令字符串层不可闭合,应在 env / OS / 会话配置层缓解,不在此兜底)
  *
@@ -42,6 +37,13 @@
  *   - **DNS 重绑定 / 符号链接**:见 isInternalFetchTarget / isInsideWorkspace 各自注释;属网络出口过滤 / fs.realpath 层。
  */
 
+import {
+  isSensitiveCredentialPath,
+  SENSITIVE_CREDENTIAL_PATH_PATTERNS,
+} from './sensitive-credential-paths.js';
+
+export { isSensitiveCredentialPath } from './sensitive-credential-paths.js';
+
 export type ReviewVerdict = 'auto-approve' | 'prompt' | 'prompt-each-time';
 
 /**
@@ -57,13 +59,16 @@ export type ReviewableAction =
   | { kind: 'read'; path?: string; scope?: 'file' | 'tree' }
   | { kind: 'session-state' }
   | { kind: 'file-write'; path: string | undefined }
-  | { kind: 'exec'; command: string }
+  // cwdUnknown:harness 上报了 cwd 字段但内容为空/不可解析 —— 与"未提供 cwd"(按会话工作目录)不同,
+  // 必须按未知处理:相对破坏目标不可证明在区内(copidot 报 `params.cwd || workingDir` 把空串当区内)。
+  | { kind: 'exec'; command: string; cwd?: string; cwdUnknown?: boolean }
   | { kind: 'network'; target?: string; operation?: string }
-  | { kind: 'other' };
+  | { kind: 'other'; description?: string };
 
 /**
  * 核心裁决。纯函数、确定性、无副作用(不触文件系统 —— 探文件存在性会变侧信道,且对远端
- * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots = cwd + 额外可写目录,绝对路径。
+ * 路径不可行;workspaceRoots 只做字符串前缀判定)。workspaceRoots[0] 是唯一可写工作目录，
+ * 后续项是 additionalDirectories 只读引用目录，均为绝对路径。
  */
 export function reviewAction(
   action: ReviewableAction,
@@ -90,17 +95,41 @@ export function reviewAction(
       // 写凭证文件必问、不可记住 —— 即便落在工作区内(如 /repo/.aws/credentials、/repo/.codex/auth.json):
       // 把 secret 写进 git-tracked checkout 与写区外同样危险,凭证性优先于工作区边界。
       if (isSensitiveCredentialPath(action.path)) return 'prompt-each-time';
+      const normalizedWriteTarget = normalizeTarget(action.path, workspaceRoots);
       // **只有工作目录(workspaceRoots[0])可写**;额外目录(additionalDirectories)是只读引用上下文
-      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写),写入其中须升级(codex 报)。相对路径仍
-      // 挂到 workspaceRoots[0] 解析,故边界集只取第一个 root。
+      // (base-agent 契约 / index.ts extraDirs 注释:可读不可写)。相对路径挂到 workspaceRoots[0] 解析。
+      // 区内一律放行 —— 即便工作区本身落在 /var、/root 等下,区内写也不该被系统红线误升(先判区内)。
       const writableRoots = workspaceRoots.slice(0, 1);
-      return isInsideWorkspace(normalizeTarget(action.path, workspaceRoots), writableRoots, aliasFirmlinks)
-        ? 'auto-approve'
-        : 'prompt';
+      if (isInsideWorkspace(normalizedWriteTarget, writableRoots, aliasFirmlinks)) return 'auto-approve';
+      // 区外写系统/受保护目录(/etc、/System、C:\Windows 等)是高影响系统级写入,不能交灰区 reviewer
+      // 静默 allow(copilot 报)→ 确定性必问。canonical(darwin 抹平 /private firmlink)后判,使
+      // `/private/etc/passwd` 也命中 `/etc`。其它区外写 → 灰区 reviewer。
+      if (isProtectedSystemPath(canonicalPath(normalizedWriteTarget, aliasFirmlinks))) return 'prompt-each-time';
+      return 'prompt';
     }
-    case 'exec':
-      return classifyShellCommand(action.command, workspaceRoots);
+    case 'exec': {
+      const cwdUnknown = action.cwdUnknown === true || (action.cwd !== undefined && action.cwd.trim() === '');
+      const shellVerdict = classifyShellCommand(action.command, workspaceRoots, {
+        cwd: cwdUnknown ? undefined : action.cwd,
+        cwdUnknown,
+        platform: opts?.platform,
+      });
+      // cwd 未知 → 相对目标无法证明落在工作区内,不能按"区内"放行(至少升到灰区交 reviewer)。
+      if (cwdUnknown) return shellVerdict === 'auto-approve' ? 'prompt' : shellVerdict;
+      // 额外目录是只读引用，不是可执行写入边界。先保留命令分类器识别出的确定性红线，
+      // 其它命令只要 cwd 不在首个可写根内就升级到 reviewer，避免相对写落进 additionalDirectories。
+      const writableRoots = workspaceRoots.slice(0, 1);
+      if (action.cwd
+        && !isInsideWorkspace(normalizeTarget(action.cwd, workspaceRoots), writableRoots, aliasFirmlinks)) {
+        return shellVerdict === 'prompt-each-time' ? shellVerdict : 'prompt';
+      }
+      return shellVerdict;
+    }
     case 'network':
+      // SSRF / 云 metadata(169.254.169.254)/ localhost / 内网抓取会把实例临时凭证或内网数据读进模型上下文,
+      // 不能交灰区 reviewer 静默 allow(codex 报 WebFetch 打 metadata)→ 复用 shell 分类器同款 isInternalFetchTarget,
+      // 命中即确定性必问。公网 target(及 WebSearch 的查询词)仍走灰区。
+      if (action.target && isInternalFetchTarget(action.target)) return 'prompt-each-time';
       return 'prompt';
     case 'other':
     default:
@@ -117,7 +146,7 @@ export function reviewAction(
 // 注意:`env`/`printenv` 不在此列 —— 裸调用会把整个进程环境(含注入子进程的 provider
 // API key,见 env-builder)dump 给模型,是凭证外泄面,不能静默放行。`env VAR=x cmd` 作为
 // 包裹器仍会剥壳按内层命令判定(见 COMMAND_WRAPPERS);裸 `env` 剥壳后为空段→fail-closed 升级。
-// `cat`/`grep`/`base64` 等能读文件的仍在列,但读**凭证文件**由 DANGEROUS_PATTERNS 先行拦成
+// `cat`/`grep`/`base64` 等能读文件的仍在列,但读**凭证文件**由 ALWAYS_ASK_PATTERNS 先行拦成
 // prompt-each-time(在 classifyShellCommand 里先于分段判定),读普通文件才放行。
 const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
   'ls', 'pwd', 'echo', 'cat', 'head', 'tail', 'wc', 'stat', 'file', 'which',
@@ -130,8 +159,15 @@ const SAFE_READONLY_BINS: ReadonlySet<string> = new Set([
 
 /** 命令包裹器:剥掉后信任绑定到内层真实命令。`sudo`/`doas` 不在此列(提权本身危险)。 */
 const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
-  'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command',
-  'setsid', 'chrt',
+  'env', 'nohup', 'nice', 'ionice', 'stdbuf', 'timeout', 'time', 'command', 'builtin',
+  'setsid', 'chrt', 'exec', 'watch', 'flock', 'taskset', 'prlimit', 'setarch',
+  // 命名空间/权限启动器:`unshare [opts] PROGRAM`、`nsenter [opts] PROGRAM`、`setpriv [opts] PROGRAM`
+  // 都会执行后面的程序(codex 报 `unshare -- rm -rf /outside` 只落灰区)。
+  'unshare', 'nsenter', 'setpriv',
+  // 其余「会执行后面命令」的启动器:script(`-c '<命令串>'` 或 BSD 形态的尾随 argv,codex 报
+  // `script -q -c 'rm -rf /outside' /dev/null` 只落灰区)、sg(`sg GROUP -c '<命令串>'`)、
+  // unbuffer(expect 的透明包装)、busybox(applet 多路复用器)、macOS 的 arch / caffeinate。
+  'script', 'sg', 'unbuffer', 'busybox', 'arch', 'caffeinate',
 ]);
 
 /**
@@ -141,49 +177,395 @@ const COMMAND_WRAPPERS: ReadonlySet<string> = new Set([
 // 前缀类含反斜杠 `\\`:Windows 路径(C:\Users\me\.ssh\id_rsa)的分隔符是 `\`。全部大小写不敏感(`i`):
 // Windows FS 大小写不敏感,`.AWS` 等同 `.aws`;Linux 上少量混合大小写误升级也是 fail-closed 方向。
 // 与 apps/desktop/src/main/filePathPolicy.ts 的 CREDENTIAL_HOME_DIRS/FILES 保持一致(codex 报的缺口)。
-const CREDENTIAL_PATH_PATTERNS: readonly RegExp[] = [
-  /(?:^|[\\/\s'"~])\.(?:ssh|aws|gnupg|kube|docker|azure|claude|codex)\b/i, // 凭证/密钥 + 云/agent 配置目录(含 OAuth 凭证)
-  /(?:^|[\\/\s'"~])\.(?:netrc|npmrc|pgpass|pypirc|git-credentials)\b/i,   // 含 token 的凭证配置文件
-  /[\\/]\.cargo[\\/]credentials(?:\.toml)?\b/i,           // cargo registry 凭证(新旧命名)
-  /[\\/]\.m2[\\/]settings(?:-security)?\.xml\b/i,         // Maven settings(可含 server 密码)
-  /\bapplication_default_credentials\b/i,                 // gcloud 默认凭证文件
-  /\bcredentials\.json\b/i,                               // Claude 等的 OAuth 凭证文件(.credentials.json)
-  /[\\/](?:codex|claude|gcloud|containers)[\\/]auth\.json\b/i, // agent/registry 认证文件(~/.config/codex|containers/auth.json 等)
-  /[\\/]\.config[\\/](?:gh|hub|glab|op|gcloud)\b/i,           // GitHub/GitLab/Op/gcloud CLI 的 OAuth/Token 凭证目录(~/.config/gh/hosts.yml、~/.config/gcloud/credentials.db 等)
-  /\/proc\/[^/\s]*\/environ\b/i,                          // procfs 环境变量(读 /proc/self/environ 即 dump 含凭证的环境)
-  /\bid_rsa\b|\bid_ed25519\b|\bid_ecdsa\b|\bid_dsa\b|\.pem\b|\.p12\b/i, // 私钥文件
+/**
+ * 系统 / 受保护目录:写入是高影响系统级操作,不能交给灰区模型 reviewer 静默 allow(copilot 报:
+ * 新语义下 `prompt` 可被 reviewer allow,写 /etc/passwd、/System/… 会绕过用户同意)。命中即确定性
+ * `prompt-each-time`。与 apps/desktop/src/main/filePathPolicy.ts 的系统 blocklist 对齐(POSIX 系统目录 +
+ * macOS /System·/Library + Windows %SystemRoot%/%ProgramFiles%/%ProgramData%)。判定针对已归一的绝对路径。
+ */
+const SYSTEM_WRITE_PATH_PATTERNS: readonly RegExp[] = [
+  /^\/(?:etc|proc|sys|dev|boot|root)(?:\/|$)/i,             // POSIX 系统目录
+  // 系统可执行/库目录:覆盖它们等于替换系统程序(codex 报 `cp payload /usr/bin/tool` 只落灰区)。
+  // **刻意排除 `/usr/local`**:FHS 里那是 local 层级、非 OS 管理(homebrew 前缀),把它一并红线会
+  // 把 `install -m 755 bin/x /usr/local/bin/x` 这类日常开发动作变成硬弹窗。
+  /^\/(?:bin|sbin|lib(?:32|64|exec)?)(?:\/|$)/i,            // /bin /sbin /lib /lib64 /libexec
+  /^\/usr\/(?!local(?:\/|$))(?:bin|sbin|lib(?:32|64|exec)?|share|include|libdata)(?:\/|$)/i, // /usr/* 但放行 /usr/local
+  /^\/var\/(?:log|db|root)(?:\/|$)/i,                       // 系统级 /var 子目录(filePathPolicy 一致)
+  /^\/(?:System|Library)(?:\/|$)/i,                         // macOS 系统目录(根级 /Library,非 ~/Library);大小写不敏感 —— 默认 HFS+/APFS 大小写不敏感,`/system`/`/library` 仍落真实系统目录(copilot 报)
+  /^[A-Za-z]:[\\/](?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:[\\/]|$)/i, // Windows 系统目录(带盘符)
+  /^\/(?:Windows|Program Files(?: \(x86\))?|ProgramData)(?:\/|$)/i, // Windows 当前盘根相对系统路径(`\Windows\…`→`/Windows/…`,path.win32.resolve 后落 C:\Windows\…,codex 报)
 ];
 
-/** 路径是否触碰已知凭证/密钥位置(shell 命令与内置 Read 工具共用同一判定)。 */
-export function isSensitiveCredentialPath(target: string): boolean {
-  return typeof target === 'string' && CREDENTIAL_PATH_PATTERNS.some((re) => re.test(target));
+/**
+ * 抽出 shell 输出重定向(`>`/`>>`/`N>`/`&>`/`>|`)的目标文件。用于把重定向写入复用 file-write 的系统红线
+ * (codex 报:`cat x > /etc/hosts` 只当灰区重定向会绕过系统写同意)。目标可带引号或裸,取到空白/分隔符止。
+ */
+function redirectionTargets(command: string): string[] {
+  const out: string[] = [];
+  const re = /(?:^|[\s;&|()])(?:\d*|&)>{1,2}\|?\s*("(?:[^"\\]|\\.)*"|'[^']*'|[^\s;&|<>()]+)/g;
+  for (const m of command.matchAll(re)) {
+    // shell 词拼接:相邻引号/裸片段拼成一个词(`/e'tc'/hosts` → `/etc/hosts`,codex 报)→ 去掉所有引号字符。
+    // **保留反斜杠**(Windows 路径分隔符);POSIX `\` 转义形态由调用点额外查去转义变体覆盖。
+    const t = m[1].replace(/['"]/g, '');
+    if (t) out.push(t);
+  }
+  return out;
 }
 
 /**
- * 危险命令模式(整段原文匹配,更抗变形)。命中即 `prompt-each-time`:必问、不可"总是允许"。
- * 覆盖:提权 / 递归删除 / 远程代码执行 / 凭证访问(路径 + keychain + 敏感环境变量展开)/ 磁盘设备 /
- * 系统控制 / 破坏性 git / fork bomb / 权限放宽。
+ * 常见"以位置参数指定写入目标"的命令的目标路径 —— 与 shell 重定向同为写通道,同样要过系统路径红线
+ * (codex 报:`cp payload /etc/hosts`、`install … /etc/hosts`、`… | tee /etc/hosts` 此前只当灰区)。
+ *   - cp/mv/install/rsync/ln:最后一个位置参数是 DEST(≥2 个操作数时),或 `-t DIR`;
+ *   - tee/sponge:所有位置参数都是写入文件;
+ *   - dd `of=FILE`;
+ *   - truncate / touch / mkdir / rmdir:FILE 操作数本身就是写目标;
+ *   - sed/perl/ruby/awk 的 `-i` 原地编辑:FILE 操作数被改写;
+ *   - tar `-C DIR`、unzip `-d DIR`、curl `-o FILE`/`--output-dir`、wget `-O FILE`/`-P DIR`:落地位置。
+ * 只取静态可见的字面目标;拿不准的形态交既有其它规则,不在此强判。**注意**:这里只产出"目标",
+ * 是否升级由调用点的 isProtectedSystemPath 决定 —— 所以日常写区内/临时目录不会被打断。
  */
-const DANGEROUS_PATTERNS: readonly RegExp[] = [
-  /\b(?:sudo|doas)\b/,                                   // 提权
-  /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除(含 -R / 长 flag)
+/**
+ * 写目标"静态不可证"的哨兵:目标由运行期内容决定(tar -P 的归档成员、缺失的 -t 目录),既不能证明
+ * 落在系统目录、也不能证明没落 —— 消费方见到它一律要求同意。用不可能出现在真实路径里的名字。
+ */
+const UNPROVABLE_WRITE_TARGET = '\u0000unprovable-write-target';
+
+/**
+ * 是否是"解压"模式(会往文件系统写),而非只列出/创建归档。
+ *   - tar:`-x`/`--extract`/`--get` 才解压;`-c`(创建)`-t`(列出)`-r/-u`(追加)不算写落地目录。
+ *   - unzip:默认就是解压;只有 `-l`/`-t`/`-v`/`-z`(列出/校验/注释)不写文件。
+ */
+function isArchiveExtraction(bin: string, args: readonly string[]): boolean {
+  if (bin === 'unzip') {
+    return !args.some((t) => /^-[a-zA-Z]*[ltvz]$/.test(t) && !t.startsWith('--'));
+  }
+  const oldStyle = tarOldStyleOptionWord(args);
+  return (oldStyle?.includes('x') ?? false)
+    || args.some((t) => t === '--extract' || t === '--get' || /^-[a-zA-Z]*x/.test(t));
+}
+
+/**
+ * tar 的**传统无横线选项词**(首个参数,如 `tar xCf /etc payload.tar` 里的 `xCf`)。GNU/BSD tar 都接受
+ * 这种历史写法,且带值字母**按出现顺序依次取后面的操作数**(与 getopt 簇的"附着值"语义不同:
+ * `xCf /etc p.tar` → C=/etc、f=p.tar)。只有首个参数按此解析(codex 报:原先只认 `-` 开头的 token,
+ * 既判不出解压模式也取不到写目标)。
+ */
+function tarOldStyleOptionWord(args: readonly string[]): string | null {
+  const first = args[0];
+  if (!first || !/^[A-Za-z]+$/.test(first)) return null;
+  // 传统选项词必须含一个功能字母(x/c/t/r/u/A/d),否则 `tar dist` 这类把目录名当选项词会误判。
+  return /[xctruAd]/.test(first) ? first : null;
+}
+
+/** tar 传统选项词里带值字母按顺序绑定后续操作数;返回 `letter` 绑定到的值。 */
+function tarOldStyleValues(
+  optionWord: string,
+  operands: readonly string[],
+  valueLetters: string,
+  letter: string,
+): string[] {
+  const out: string[] = [];
+  let oi = 0;
+  for (const ch of optionWord) {
+    if (!valueLetters.includes(ch)) continue;
+    const value = operands[oi];
+    oi += 1;
+    if (ch === letter && value) out.push(value);
+  }
+  return out;
+}
+
+/**
+ * 解析短选项簇里的**带值选项**(getopt 语义)。簇内第一个带值字母之后的字符就是它的值
+ * (`curl -so/etc/hosts` → `o` 的值是 `/etc/hosts`);若该字母在簇尾,值是下一个 argv
+ * (`tar -xC /etc` → `C` 的值是 `/etc`)。字母后的字符会被当成值吃掉,所以一簇最多解出一个带值选项
+ * —— 与真实 getopt 一致(`tar -Cf DIR FILE` 里 `C` 的值就是字面 `f`,DIR/FILE 是操作数)。
+ * `valueLetters` 必须是该命令**全部**带值短选项字母(大小写敏感),否则 `curl -do out URL` 会把
+ * `-d` 的值误当成输出文件。
+ */
+function shortClusterOption(
+  token: string,
+  next: string | undefined,
+  valueLetters: string,
+): { letter: string; value?: string; consumedNext: boolean } | null {
+  if (!/^-[A-Za-z]/.test(token)) return null; // 排除 `--long`、裸 `-` 与非字母簇
+  const cluster = token.slice(1);
+  for (let k = 0; k < cluster.length; k++) {
+    const ch = cluster[k];
+    if (!valueLetters.includes(ch)) continue;
+    const attached = cluster.slice(k + 1);
+    return attached.length > 0
+      ? { letter: ch, value: attached, consumedNext: false }
+      : { letter: ch, value: next, consumedNext: true };
+  }
+  return null;
+}
+
+function argumentWriteTargets(tokens: string[]): string[] {
+  const bin = executableName(tokens[0] ?? '');
+  const args = tokens.slice(1);
+  const operands = positionalOperands(args);
+  if (bin === 'tee' || bin === 'sponge') return operands;
+  if (bin === 'cp' || bin === 'mv' || bin === 'install' || bin === 'rsync' || bin === 'ln') {
+    // `install -d/--directory DIR...`:第四种用法只创建目录,**全部操作数都是写目标**、且可能只有一个
+    // (codex 报 `install -d /etc/cron.d` 因"至少两个操作数"的规则而取不到目标)。
+    // `-d` 可出现在短选项簇里(`install -dm755 /etc/x` = -d + -m 755),不能只匹配末位。
+    // 大小写敏感:`-D`(--create-leading-dirs)仍是"复制文件"语义,末位操作数才是目标,不能误入本分支。
+    if (bin === 'install' && args.some((t) => t === '--directory' || /^-[a-zA-Z]*d/.test(t))) {
+      return operands;
+    }
+    // `-t DIR` / `--target-directory=DIR`:目标目录由选项给出,**不是**末位操作数
+    // (codex 报 `cp -t /etc payload` 会把 payload 当目标、长选项形态则完全取不到目标)。
+    // 只对 coreutils 的 cp/mv/install/ln 生效:**rsync 的 `-t` 是 --times**(保留时间戳,不带值),
+    // 按目标目录解会把 `rsync -avt /etc/conf/ backup/` 的**读源**当成写目标而误拦。
+    if (bin !== 'rsync') {
+      const valueLetters = bin === 'install' ? 'tSmog' : 'tS';
+      for (let i = 0; i < args.length; i++) {
+        const t = args[i];
+        if (t === '--target-directory') {
+          const dir = args[i + 1];
+          return dir ? [dir] : [UNPROVABLE_WRITE_TARGET]; // 缺目标 = 静态不可证 → 哨兵,必问
+        }
+        const attached = /^--target-directory=(.+)$/.exec(t);
+        if (attached) return [attached[1]];
+        // 短选项:`-t /etc`、`-t/etc`、簇内 `-ft /etc`(codex 报的簇语义)。
+        const cluster = shortClusterOption(t, args[i + 1], valueLetters);
+        if (!cluster) continue;
+        if (cluster.consumedNext) i++;
+        if (cluster.letter !== 't') continue;
+        return cluster.value ? [cluster.value] : [UNPROVABLE_WRITE_TARGET];
+      }
+    }
+    // mv 的**源**操作数同样被销毁(搬走系统文件等于删掉它,`mv /usr/bin/node /tmp/`)→ 源与目标
+    // 都算写目标;cp/install/ln/rsync 的源是只读的,不在此列(自审补的同族缺口)。
+    if (bin === 'mv') return operands;
+    return operands.length >= 2 ? [operands[operands.length - 1]] : [];
+  }
+  // 删除本身就是写通道:`rm /etc/passwd`(无 -rf)只删单个文件,不进递归/强制路径,原先取不到目标、
+  // 只落灰区(codex 报)。所有删除目标都要过受保护系统路径判定;**区外批量破坏**仍由
+  // destructiveRmTargets 的递归/强制条件负责,故此处不改变 `rm -rf build` 这类区内删除的档位。
+  if (/^(?:rm|unlink|shred|srm)$/.test(bin)) {
+    const out: string[] = [];
+    let optionsEnded = false;
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (!optionsEnded) {
+        if (t === '--') { optionsEnded = true; continue; }
+        // shred 的带值选项(-n 次数 / -s 字节 / --random-source=FILE)不能当成删除目标。
+        if (bin === 'shred' && /^(?:-n|--iterations|-s|--size|--random-source)$/.test(t)) { i++; continue; }
+        if (t.startsWith('-') && t !== '-') continue;
+      }
+      out.push(t);
+    }
+    return out;
+  }
+  if (bin === 'del' || bin === 'erase') {
+    // cmd.exe 的开关形如 `/f` `/s` `/q` `/a:-h`;Windows 路径不会以单个 `/` + 字母起头。
+    return args.filter((t) => !/^\/[a-zA-Z](?::|$)/.test(t));
+  }
+  if (bin === 'dd') {
+    return tokens.slice(1).flatMap((t) => {
+      const m = /^of=(.+)$/i.exec(t);
+      return m ? [m[1]] : [];
+    });
+  }
+  // 直接以 FILE 操作数为写目标:truncate(-s 改大小,可清空)、touch(创建/改 mtime)、
+  // mkdir/rmdir(在系统目录下建删目录)。codex 报 `truncate -s 0 /etc/passwd`;此处把同类
+  // 写通道一并纳入,不逐条等报。带值选项先消费,避免把选项值当目标。
+  if (bin === 'truncate') {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (t === '-s' || t === '--size' || t === '-r' || t === '--reference') { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    return out;
+  }
+  if (bin === 'touch' || bin === 'mkdir' || bin === 'rmdir') {
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      // touch -r REF / -d DATE / -t STAMP;mkdir -m MODE 都带独立值。
+      if (/^(?:-r|--reference|-d|--date|-t|-m|--mode)$/.test(t)) { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    return out;
+  }
+  // 原地编辑:`sed -i`、`perl -i`(含 -pi/-i.bak)、`ruby -i` 直接改写 FILE 操作数。
+  if (bin === 'sed' || bin === 'perl' || bin === 'ruby' || /^(?:gawk|awk)$/.test(bin)) {
+    const inPlace = args.some((t) => /^-{1,2}i/.test(t) || /^-[a-zA-Z]*i/.test(t));
+    if (!inPlace) return [];
+    const out: string[] = [];
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      // sed -e SCRIPT / -f FILE、perl -e CODE 的值不是写目标。
+      if (/^(?:-e|--expression|-f|--file)$/.test(t)) { i++; continue; }
+      if (t.startsWith('-')) continue;
+      out.push(t);
+    }
+    // sed 的第一个非选项操作数可能是 script(`sed -i 's/a/b/' f`),多取一个目标只会更保守。
+    return out;
+  }
+  // 解压/下载的**落地目录或文件**:tar -C DIR、unzip -d DIR、curl -o FILE / --output-dir DIR、
+  // wget -O FILE / -P DIR —— 都能把内容写进系统目录。
+  if (bin === 'tar' || bin === 'unzip' || bin === 'curl' || bin === 'wget') {
+    const out: string[] = [];
+    // tar -P/--absolute-names:不剥成员路径的前导 `/`,归档里若含 `/etc/cron.d/job` 会直接写进系统路径。
+    // 归档内容静态不可见 → 无法证明成员安全,用哨兵 `/` 强制必问(codex 报)。
+    const tarOldStyle = bin === 'tar' ? tarOldStyleOptionWord(args) : null;
+    if (bin === 'tar' && (args.some((t) => t === '--absolute-names' || /^-[A-Za-z]*P/.test(t))
+      || (tarOldStyle?.includes('P') ?? false))) {
+      return [UNPROVABLE_WRITE_TARGET];
+    }
+    // 长选项(含 `=` 附加值)按整 token 匹配;短选项一律走**簇语义** —— 原先只认以 `-C`/`-o`/`-O`
+    // 开头的 token,漏掉合法且常见的 `tar -xC /etc -f p.tar`、`unzip -oqd /etc p.zip`、
+    // `curl -so/etc/hosts URL`、`wget -qO/etc/hosts URL`(codex 报,实机探针确认真会落盘)。
+    const never = /(?!)/; // unzip 的落地目录只有短选项 -d,没有长选项形态
+    const longFlags = bin === 'tar' ? /^--directory$/
+      : bin === 'unzip' ? never
+        : bin === 'curl' ? /^(?:--output|--output-dir)$/
+          : /^(?:--output-document|--directory-prefix)$/;
+    const longAttached = bin === 'tar' ? /^--directory=(.+)$/
+      : bin === 'unzip' ? never
+        : bin === 'curl' ? /^(?:--output=|--output-dir=)(.+)$/
+          : /^(?:--output-document=|--directory-prefix=)(.+)$/;
+    // 写目标字母 + 该命令全部带值短选项字母(后者用于定位簇内第一个带值选项,见 shortClusterOption)。
+    // wget 的 `-o LOGFILE` 也落盘(日志文件),同属写通道。
+    const targetLetters = bin === 'tar' ? 'C' : bin === 'unzip' ? 'd' : bin === 'curl' ? 'o' : 'OPo';
+    const valueLetters = bin === 'tar' ? 'CfTXbIKNLVgF'
+      : bin === 'unzip' ? 'dOPx'
+        : bin === 'curl' ? 'odFHuAebcCDEKTUwxyYzmMQ'
+          : 'OPoitTwQARDeUBI';
+    // tar 的传统无横线选项词:带值字母按顺序吃后面的操作数(`tar xCf /etc payload.tar` → C=/etc)。
+    if (tarOldStyle) {
+      out.push(...tarOldStyleValues(tarOldStyle, positionalOperands(args.slice(1)), valueLetters, 'C'));
+    }
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (longFlags.test(t)) { const v = args[i + 1]; if (v) out.push(v); i++; continue; }
+      const m = longAttached.exec(t);
+      if (m) { out.push(m[1]); continue; }
+      const cluster = shortClusterOption(t, args[i + 1], valueLetters);
+      if (!cluster) continue;
+      if (cluster.consumedNext) i++;
+      if (targetLetters.includes(cluster.letter) && cluster.value) out.push(cluster.value);
+    }
+    // 下载工具**不带落地选项**时按远端文件名写进当前目录(`curl -O URL`、`wget URL`),cwd 落系统目录
+    // 即写系统文件(与解压落 cwd 同类)。curl 默认写 stdout,只有 -O/--remote-name 系才落盘。
+    if (out.length === 0) {
+      const curlWritesCwd = bin === 'curl'
+        && args.some((t) => /^--remote-name(?:-all)?$/.test(t)
+          || (/^-[A-Za-z]/.test(t) && !t.startsWith('--') && t.slice(1).includes('O')));
+      const wgetWritesCwd = bin === 'wget'
+        && !args.some((t) => /^--output-document(?:=|$)/.test(t));
+      if (curlWritesCwd || wgetWritesCwd) return ['.'];
+    }
+    // 解压**不带落地目录选项**时写入当前目录:归档成员的相对路径(如 `hosts`)会落在有效 cwd 下,
+    // cwd=/etc 时即覆盖 /etc/hosts(codex 报;unzip 同缺口)。用 `.` 表示"当前目录",由调用方按
+    // 有效 cwd 解析 —— 区内解压照常留灰区,cwd 落系统目录才升红线。
+    if (out.length === 0 && (bin === 'tar' || bin === 'unzip') && isArchiveExtraction(bin, args)) {
+      return ['.'];
+    }
+    return out;
+  }
+  // 权限/属主/属性变更:改的是**访问控制**,与改内容同等危险(`chmod 000 /etc/passwd` 直接破坏系统
+  // 可用性、`chown me /etc/passwd` 把系统文件交给当前用户)。既有红线只覆盖 chmod 777 / 全局开放写
+  // 这一类"放宽"形态,收紧与换属主都没覆盖(codex 报)→ 把 FILE 操作数当写目标,复用系统路径判定。
+  if (/^(?:chmod|chown|chgrp|chflags|chattr|setfacl)$/.test(bin)) {
+    const out: string[] = [];
+    // 首个操作数是 MODE/OWNER/GROUP/FLAGS 规格而非文件;`--reference=RFILE`(chmod/chown)从参考文件
+    // 取规格,此时**没有**规格操作数,全部操作数都是目标。chattr 的属性词以 `+`/`-`/`=` 起头,已被
+    // 选项过滤跳过,故不占规格位。
+    const specFromReference = args.some((t) => /^--reference(?:=|$)/.test(t));
+    // 需要"规格操作数"的命令:chmod 的 MODE、chown 的 OWNER[:GROUP]、chgrp 的 GROUP、chflags 的 FLAGS、
+    // chattr 的属性词。setfacl 的 ACL 由 -m/-x 等选项给出,`--reference` 从参考文件取规格 → 无规格操作数,
+    // 此时全部操作数都是目标。
+    let needsSpec = bin !== 'setfacl' && !specFromReference;
+    let optionsEnded = false;
+    for (let i = 0; i < args.length; i++) {
+      const t = args[i];
+      if (!optionsEnded) {
+        if (t === '--') { optionsEnded = true; continue; }
+        // 带独立值的选项:chmod/chown `--reference RFILE`、chown `--from OLD`、setfacl `-m/-x/-M/-X ACL`。
+        if (/^(?:--reference|--from)$/.test(t)) { i++; continue; }
+        if (bin === 'setfacl' && /^(?:-m|-x|-M|-X|--modify|--remove|--set|--restore)$/.test(t)) { i++; continue; }
+        // chmod 的符号模式与 chattr 的属性词可以 `-`/`+`/`=` 起头(`chmod -w f`、`chmod +x f`、`chattr +i f`),
+        // 当成选项跳过会把后面的**真实目标**误当规格操作数吃掉 → 先正面识别规格词。
+        // 大小写敏感:`-R`(递归)不落进 `-[rwxXstugo]+`,仍按选项跳过。
+        const isSpecWord = needsSpec && (
+          (bin === 'chmod' && /^(?:[0-7]{1,4}|[-+=][rwxXstugo]+|[ugoa]*[-+=][rwxXstugo]*)$/.test(t))
+          || (bin === 'chattr' && /^[-+=][a-zA-Z]+$/.test(t)));
+        if (isSpecWord) { needsSpec = false; continue; }
+        if (t.startsWith('-')) continue;
+      }
+      if (needsSpec) { needsSpec = false; continue; } // 位置型规格(chown/chgrp/chflags 的首个操作数)
+      out.push(t);
+    }
+    return out;
+  }
+  return [];
+}
+
+/**
+ * 标准伪设备:写它们不是"系统写入",而是丢弃输出/写终端/取随机数,属日常最高频写法
+ * (`cmd > /dev/null`、`2>/dev/null`、`>/dev/null 2>&1`)。必须排除在系统红线外,否则 Auto 档会对
+ * 几乎每条带静音重定向的命令弹窗,严重违反"尽量不打扰"(实机语料探针发现:44 条良性命令误拦 9 条)。
+ * 块设备/内存设备(`/dev/sda`、`/dev/mem` 等)**不在**此列,仍按系统红线拦。
+ */
+const SAFE_DEVICE_PATH = /^\/dev\/(?:null|zero|full|random|urandom|std(?:in|out|err)|tty|fd\/\d+)$/i;
+
+/** 路径是否落在系统/受保护目录(写入需确定性用户同意)。入参应为已归一的目标路径。 */
+export function isProtectedSystemPath(target: string): boolean {
+  if (typeof target !== 'string' || target.length === 0) return false;
+  if (SAFE_DEVICE_PATH.test(toForwardSlashes(target))) return false;
+  // 先剥离 Windows extended-length / device namespace 前缀(`\\?\` `\\.\` `\\?\UNC\`):toForwardSlashes
+  // 后它们变成 `//?/C:/…` / `//./C:/…`,会绕过盘符系统目录匹配落入灰区(copilot 报;与 desktop
+  // filePathPolicy.stripWinNamespace 对齐)。UNC 前缀还原成 `//server/share`。
+  // 前缀可能是 `//?/`(toForwardSlashes 直转)或 `/?/`(normalizeTarget 折叠了双斜杠,copilot 报)→ 用
+  // `\/+` 兼容 1 个或多个前导斜杠。仅当其后是盘符或 UNC 才剥,避免误伤 POSIX `/./foo` 这类合法路径。
+  const fwd = toForwardSlashes(target)
+    .replace(/^\/+[?.]\/UNC\//i, '//')
+    .replace(/^\/+[?.]\/(?=[A-Za-z]:)/, '');
+  return SYSTEM_WRITE_PATH_PATTERNS.some((re) => re.test(fwd));
+}
+
+/**
+ * 无法由主 Agent 换安全做法绕开的高影响同意边界。命中才 `prompt-each-time`：
+ * 提权 / 系统与磁盘控制 / 凭证访问 / fork bomb / 全局权限放宽。
+ */
+const ALWAYS_ASK_PATTERNS: readonly RegExp[] = [
+  /\b(?:sudo|doas|runuser)\b/,                           // 提权(runuser 名字独特,直接词界)
+  // 裸 `su`(切换到其它用户/root)同属提权,但 "su" 常出现在无关文本里 → 只在命令位(段首/分隔符后,或
+  // 已知启动器后)匹配,避免 `git commit -m "su"` 之类误升(自审补:sudo/doas 已红线,漏了同级的 su)。
+  /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock)\s+(?:-\S+\s+)*)su\b(?![\w.-])/,
+  // chroot 与 sudo/su 同族:需要 CAP_SYS_CHROOT(实践中即 root),且换根后**绝对路径也重新指向新根下**
+  // (`chroot / rm -rf /outside` 会真删,`chroot /mnt rm -rf /repo` 删的是 /mnt/repo)→ 目标作用域静态
+  // 不可证,只能确定性同意(codex 报:chroot 既不在包装器集合也不在红线,内层命令完全没被看见)。
+  // 与 `su` 同样只在命令位匹配,避免 `git commit -m "fix chroot"` 之类文本误升。
+  /(?:^|[\n|&;(]\s*|\b(?:sudo|doas|xargs|nohup|setsid|env|command|exec|time|timeout|nice|ionice|stdbuf|chrt|builtin|watch|flock|unshare|nsenter|setpriv)\s+(?:-\S+\s+)*)chroot\b(?![\w.-])/,
   /\b(?:mkfs|fdisk|dd)\b/,                               // 磁盘/文件系统操作
-  /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除(不可逆)
   /(?:^|\s)>\s*\/dev\/[sh]d/,                            // 写块设备
   /\b(?:shutdown|reboot|halt|poweroff)\b/,               // 系统电源
   /:\s*\(\s*\)\s*\{.*\|.*&.*\}/,                          // fork bomb :(){ :|:& };:
-  /\b(?:curl|wget)\b[^|]*\|\s*(?:sudo\s+)?(?:ba|z|)sh\b/, // 下载 | sh(远程代码执行)
-  /\|\s*(?:sudo\s+)?(?:ba|z)?sh\b/,                       // 任意 | sh / | bash
-  /\beval\b/,                                            // eval 动态执行
   /\bchmod\b[^|;&]*\s(?:-R\s+)?[0-7]*7{2,3}\b/,           // chmod 777 之类数字放宽权限
   /\bchmod\b[^|;&]*\s[ugoa]*[oa][ugoa]*[-+=][^\s]*w/,     // chmod 符号型对 other/all 开放写(a+w / o+w / a+rwx)
-  ...CREDENTIAL_PATH_PATTERNS,                            // 凭证/密钥路径(见上)
+  ...SENSITIVE_CREDENTIAL_PATH_PATTERNS,                  // 凭证/密钥路径(见上)
   /\bsecurity\s+(?:find|dump|export|add)-/,               // macOS keychain
   /\$\{?[A-Za-z0-9_]*(?:KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|APIKEY|_PAT)[A-Za-z0-9_]*\}?/i, // 敏感环境变量展开(echo "$API_KEY" 等)
-  // 执行影响型环境变量赋值(env NAME=val cmd 或裸 NAME=val cmd):加载器注入 / 分页器 / 外部 diff /
-  // PATH 劫持 / 解释器启动钩子 —— 让"看似只读"的命令跑任意程序。unwrapWrappers 会剥掉 NAME=val,故在此
-  // 整条命令上先拦(env PAGER=./x git log、env LD_PRELOAD=./x true、PATH=./bin ls 等)。IFS= 太常见(read 循环)不列。
-  // GIT_ALLOW_PROTOCOL / GIT_PROTOCOL_FROM_USER 放开 ext:: 等远程助手协议(RCE 面);GIT_PROXY_COMMAND / GIT_SSH 直接跑外部程序。
+];
+
+/**
+ * 高风险但通常可由主 Agent 换一条安全做法的动作。它们进入当前模型 reviewer，而不是
+ * 直接打断用户：reviewer 可 allow（明确、范围受控）、block（让 Agent 重试）或只在确实
+ * 跨越高影响边界时 ask。
+ */
+const REVIEW_REQUIRED_PATTERNS: readonly RegExp[] = [
+  /\brm\b[^|;&]*(?:\s-\w*[rRfF]|\s--(?:recursive|force|dir))/, // rm 递归/强制删除
+  /\bfind\b[^|;&]*\s-delete\b/,                          // find -delete 批量删除
+
+  // 执行影响型环境变量赋值：让“看似只读”的命令运行其它程序，应由 reviewer 静默拦截或判定。
   /(?:^|\s)(?:LD_PRELOAD|LD_LIBRARY_PATH|LD_AUDIT|DYLD_[A-Z_]+|GIT_PAGER|PAGER|GIT_SSH(?:_COMMAND)?|GIT_PROXY_COMMAND|GIT_ALLOW_PROTOCOL|GIT_PROTOCOL_FROM_USER|GIT_EXTERNAL_DIFF|GIT_CONFIG_(?:GLOBAL|SYSTEM)|BASH_ENV|PROMPT_COMMAND|PS4|PERL5LIB|PYTHONPATH|PYTHONSTARTUP|PYTHONINSPECT|NODE_OPTIONS|RUBYOPT|PATH)=/,
   /\bgit\b[^|;&]*\bpush\b[^|;&]*(?:--force\b|--force-with-lease\b|\s-f\b|\+)/, // 强推
   /\bgit\b[^|;&]*\breset\b[^|;&]*--hard/,                 // git reset --hard
@@ -299,22 +681,139 @@ function splitTopLevelSegments(command: string): string[] {
     .filter((s) => s.length > 0);
 }
 
-/** 极简 tokenizer:按空白切,去掉包裹引号。够用于取首个命令 + flag 形状判定。 */
+/** 轻量 shell tokenizer：引号外按空白切，拼接相邻的 quoted/unquoted 片段并保留反斜杠。 */
 function tokenize(segment: string): string[] {
   const tokens: string[] = [];
-  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(segment)) !== null) {
-    tokens.push(m[1] ?? m[2] ?? m[3] ?? '');
+  let token = '';
+  let tokenStarted = false;
+  let quote: "'" | '"' | null = null;
+  let substitutionDepth = 0;
+  const flush = (): void => {
+    if (!tokenStarted) return;
+    tokens.push(token);
+    token = '';
+    tokenStarted = false;
+  };
+  for (let i = 0; i < segment.length; i++) {
+    const char = segment[i];
+    if (char === '\\' && quote !== "'" && i + 1 < segment.length) {
+      tokenStarted = true;
+      token += char + segment[i + 1];
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      tokenStarted = true;
+      continue;
+    }
+    if ((char === '$' || char === '<') && segment[i + 1] === '(') {
+      token += `${char}(`;
+      tokenStarted = true;
+      substitutionDepth += 1;
+      i++;
+      continue;
+    }
+    if (substitutionDepth > 0) {
+      token += char;
+      tokenStarted = true;
+      if (char === '(') substitutionDepth += 1;
+      else if (char === ')') substitutionDepth -= 1;
+      continue;
+    }
+    if (char === "'" || char === '"') {
+      // Preserve the ANSI-C quote marker so callers can distinguish $'…'
+      // (runtime escape decoding) from an ordinary single-quoted fragment.
+      if (char === "'" && token.endsWith('$')) token += char;
+      quote = char;
+      tokenStarted = true;
+    } else if (/\s/.test(char)) {
+      flush();
+    } else {
+      token += char;
+      tokenStarted = true;
+    }
   }
+  flush();
   return tokens;
 }
 
-/** 剥掉包裹器(env/timeout/…)及其自身参数,返回内层命令 token 数组。 */
-function unwrapWrappers(tokens: string[]): string[] {
-  let toks = tokens;
-  for (let depth = 0; depth < 5 && toks.length > 0; depth++) {
-    const head = baseName(toks[0]);
+/**
+ * 去掉分段后残留的 shell 分组/控制关键字，让组内真实命令继续参与安全判定。
+ * 含 `!`(否定退出码,但**命令照常执行** —— `! rm -rf /outside` 仍会删,codex 报)与 `elif`/`until`/
+ * `while`/`if` 等把真实命令挡在后面的关键字。
+ */
+function stripShellControlTokens(tokens: string[]): string[] {
+  const out = [...tokens];
+  while (out.length > 0 && /^(?:\{|\(|!|then|do|else|elif|if|while|until)$/.test(out[0])) out.shift();
+  if (out[0]) out[0] = out[0].replace(/^[({]+/, '');
+  while (out[0] === '') out.shift();
+  const last = out.length - 1;
+  if (last >= 0 && !/[$<]\(/.test(out[last])) {
+    out[last] = out[last].replace(/[)}]+$/, '');
+    if (out[last] === '') out.pop();
+  }
+  return out;
+}
+
+type UnwrappedCommand = {
+  tokens: string[];
+  cwd?: string;
+  cwdUnknown: boolean;
+  inspectionOnly: boolean;
+  /** 达到剥壳上限时首 token 仍是包装器 = 未能看到真实命令(超深嵌套 `env env … rm`)→ 消费方 fail-closed。 */
+  wrapperUnresolved: boolean;
+};
+
+// 透明包装器剥壳的递归上限。取 16:现实里嵌 1-2 层(`env timeout … cmd`),16 足够;更深属对抗构造,
+// 到上限仍是包装器则 fail-closed 必问(codex 报 `env env env env env env rm -rf /outside`)。
+const MAX_WRAPPER_UNWRAP_DEPTH = 16;
+
+function resolveCwdTarget(
+  target: string | undefined,
+  currentCwd: string | undefined,
+  currentCwdUnknown = false,
+): { cwd?: string; cwdUnknown: boolean } {
+  if (!target || target === '-' || /[$`~{}*?[\]]/.test(target)) {
+    return { cwdUnknown: true };
+  }
+  if (!isAbsolutePath(toForwardSlashes(target)) && (!currentCwd || currentCwdUnknown)) {
+    return { cwdUnknown: true };
+  }
+  return {
+    cwd: normalizeTarget(target, currentCwd ? [currentCwd] : []),
+    cwdUnknown: false,
+  };
+}
+
+/** 剥掉包裹器及其参数；同时保留 env -C/--chdir 对内层命令 cwd 的影响。 */
+function unwrapCommand(
+  tokens: string[],
+  initialCwd?: string,
+  initialCwdUnknown = false,
+): UnwrappedCommand {
+  let toks = stripShellControlTokens(tokens);
+  let cwd = initialCwd;
+  let cwdUnknown = initialCwdUnknown;
+  let inspectionOnly = false;
+  const applyCwd = (target: string | undefined): void => {
+    const next = resolveCwdTarget(target, cwd, cwdUnknown);
+    cwd = next.cwd;
+    cwdUnknown = next.cwdUnknown;
+  };
+  let depth = 0;
+  for (; depth < MAX_WRAPPER_UNWRAP_DEPTH && toks.length > 0; depth++) {
+    // 前置环境赋值:bash simple-command 展开把 `NAME=val` 应用到命令环境后照常执行后面的命令
+    // (`FOO=1 rm -rf /outside`)。不消费它们会把 `FOO=1` 当可执行名而看不到真正的 rm(codex 报)→
+    // 先剥掉所有前导 assignment word,再识别真实执行器/包裹器。
+    let assignEnd = 0;
+    while (assignEnd < toks.length && /^[A-Za-z_][A-Za-z0-9_]*=/.test(toks[assignEnd])) assignEnd++;
+    if (assignEnd > 0) toks = toks.slice(assignEnd);
+    if (toks.length === 0) break;
+    // executableName 归一 `.exe`/大小写:`env.exe`/`timeout.exe` 等包裹器也要剥壳,否则 `env.exe`(dump 环境)
+    // 或 `timeout.exe 5 rm -rf /outside`(内层破坏)会因包裹器没被识别而漏判。
+    const head = executableName(toks[0]);
     if (!COMMAND_WRAPPERS.has(head)) break;
     if (head === 'env') {
       // env [-i] [-u NAME]... [-C DIR] [NAME=val...] cmd args。**必须精确消费带独立参数的选项** ——
@@ -326,8 +825,17 @@ function unwrapWrappers(tokens: string[]): string[] {
       while (i < toks.length) {
         const t = toks[i];
         if (t === '-' || t === '-i' || t === '--ignore-environment' || t === '-0' || t === '--null' || t === '-v' || t === '--debug') { i++; continue; }
-        if (t === '-u' || t === '--unset' || t === '-C' || t === '--chdir') { i += 2; continue; } // 消费独立参数(NAME / DIR)
-        if (/^(?:--unset|--chdir)=/.test(t) || /^-[uC]./.test(t)) { i++; continue; }             // --unset=NAME / -uNAME / -C=DIR
+        if (t === '-u' || t === '--unset') { i += 2; continue; }
+        if (t === '-C' || t === '--chdir') {
+          applyCwd(toks[i + 1]);
+          i += 2;
+          continue;
+        }
+        const longChdir = /^--chdir=(.*)$/.exec(t);
+        if (longChdir) { applyCwd(longChdir[1]); i++; continue; }
+        const shortChdir = /^-C=?(.+)$/.exec(t);
+        if (shortChdir) { applyCwd(shortChdir[1]); i++; continue; }
+        if (/^--unset=/.test(t) || /^-u./.test(t)) { i++; continue; } // --unset=NAME / -uNAME
         if (/^[A-Za-z_][A-Za-z0-9_]*=/.test(t)) { i++; continue; }                                 // NAME=VALUE
         if (t.startsWith('-')) { bail = true; break; }  // -S/--split-string 及一切未建模选项 → 不剥,fail-closed
         break;                                          // 内层命令
@@ -335,23 +843,1124 @@ function unwrapWrappers(tokens: string[]): string[] {
       // bail 时 toks[i] 是可疑选项(如 -S),保留它作首 token → classifyShellSegment 认不出安全命令 → 升级。
       toks = toks.slice(i);
       if (bail) break;
+    } else if (head === 'command') {
+      // Bash builtin: command [-pVv] command [arg ...]. `-p` still executes the
+      // inner command, while -v/-V only inspect it. Consume supported options
+      // and `--` so a real executor cannot hide behind `command -p`.
+      let i = 1;
+      let bail = false;
+      let inspectsCommand = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (/^-[pVv]+$/.test(t)) {
+          if (/[Vv]/.test(t)) inspectsCommand = true;
+          i++;
+          continue;
+        }
+        if (t.startsWith('-')) { bail = true; break; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (bail) break;
+      if (inspectsCommand) {
+        toks = [];
+        inspectionOnly = true;
+        break;
+      }
+    } else if (head === 'exec') {
+      // POSIX shell builtin: exec [-cl] [-a name] [command [args…]]. 未建模选项不剥壳，
+      // 保持 fail-closed；已知选项后继续递归识别真实执行器。
+      let i = 1;
+      let bail = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-a') { i += 2; continue; }
+        if (/^-a.+/.test(t) || /^-[cl]+$/.test(t)) { i++; continue; }
+        if (t.startsWith('-')) { bail = true; break; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (bail) break;
     } else if (head === 'timeout' || head === 'time' || head === 'nice' || head === 'ionice' || head === 'chrt' || head === 'stdbuf') {
       // 带自身参数(timeout 5 / nice -n 10 / stdbuf -oL):跳过前导 `-*` 与紧随的数值/时长参数。
       let i = 1;
-      while (i < toks.length && (toks[i].startsWith('-') || /^[0-9]+[smhd]?$/.test(toks[i]))) i++;
+      while (i < toks.length) {
+        const t = toks[i];
+        // timeout -s/--signal SIG、-k/--kill-after DUR:带独立值选项,须连值一起消费 —— 否则停在 SIG(如 KILL)
+        // 把真正的内层命令(rm 等)当参数漏掉(codex 报 `timeout -s KILL 5 rm -rf /outside`)。
+        if (head === 'timeout' && /^(?:-s|--signal|-k|--kill-after)$/.test(t)) { i += 2; continue; }
+        // stdbuf -i/-o/-e MODE(分离形态):MODE(如 `L`/`0`/`4K`)是独立 token,不连值消费会停在 MODE
+        // 漏掉内层命令(codex 报 `stdbuf -o L rm -rf /outside`)。附加形态 `-oL`/`--output=L` 作单 token。
+        if (head === 'stdbuf' && /^(?:-[ioe]|--input|--output|--error)$/.test(t)) { i += 2; continue; }
+        // GNU time -f/--format FORMAT、-o/--output FILE 带值:分离形态不连值消费会停在 FORMAT(如 `%e`)漏掉
+        // 内层命令(codex 报 `/usr/bin/time -f '%e' rm -rf /outside`)。bash 内建 time 无此选项、不受影响。
+        if (head === 'time' && /^(?:-f|--format|-o|--output)$/.test(t)) { i += 2; continue; }
+        // ionice -c/--class <class>:class 可为名字(idle/best-effort/realtime/none)或数字;命名值非数字,
+        // 不连值消费会停在 `idle` 漏掉内层命令(codex 报 `ionice -c idle rm -rf /outside`)。
+        if (head === 'ionice' && /^(?:-c|--class)$/.test(t)) { i += 2; continue; }
+        // 时长可为浮点(timeout 文档:DURATION 是浮点数,`timeout 0.5 rm …`),整数正则会停在 0.5 漏掉内层
+        // 命令(codex 报)→ 接受 `0.5` / `1.5s` / `.5` 等小数时长。
+        if (t.startsWith('-') || /^\d*\.?\d+[smhd]?$/.test(t)) { i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+    } else if (head === 'watch') {
+      // watch [options] COMMAND:周期执行 COMMAND。`-n`/`--interval` 带值,其余 `-flag` 单 token,`--` 终结
+      // 选项(codex 报 `watch -- rm -rf /outside`)。COMMAND 若是带空格的单 token(`watch 'rm -rf x'`)则再拆。
+      let i = 1;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        // 带独立值选项:-n/--interval <secs>、-q/--equexit <cycles>(codex 报:漏了 equexit 会停在其值漏掉命令)。
+        if (t === '-n' || t === '--interval' || t === '-q' || t === '--equexit') { i += 2; continue; }
+        if (t.startsWith('-')) { i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (toks.length === 1 && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'flock') {
+      // flock [options] <file> COMMAND [args] 或 flock [options] <file> -c '<shell 命令串>'。
+      // 消费带值选项(-w/--timeout、-E/--conflict-exit-code),跳过一个 lockfile 操作数,其余为真实命令
+      // (codex 报 `flock /tmp/lock rm -rf /outside`)。-c 形态其后是 shell 命令串,再拆成 argv。
+      let i = 1;
+      let shellForm = false;
+      let consumedLockfile = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-w' || t === '--timeout' || t === '-E' || t === '--conflict-exit-code') { i += 2; continue; }
+        if (t === '-c' || t === '--command') { shellForm = true; i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!consumedLockfile) { consumedLockfile = true; i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if ((shellForm || toks.length === 1) && toks.length >= 1 && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'taskset') {
+      // taskset [options] <mask> COMMAND 或 taskset -c/--cpu-list <list> COMMAND(codex 报 `taskset -c 0 rm …`)。
+      // -p/--pid 是改已有进程的亲和性、不跑新命令 → 不解包(fail-closed 留原样)。
+      if (toks.slice(1).some((t) => /^--pid$/.test(t) || /^-[a-z]*p[a-z]*$/i.test(t))) break;
+      let i = 1;
+      let cpuListGiven = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-c' || t === '--cpu-list') { cpuListGiven = true; i += 2; continue; }
+        if (/^--cpu-list=/.test(t) || /^-c.+/.test(t)) { cpuListGiven = true; i++; continue; }
+        if (t.startsWith('-')) { i++; continue; }
+        break;
+      }
+      if (!cpuListGiven && i < toks.length) i++; // 无 -c 时首个非选项是 mask 操作数,跳过
+      toks = toks.slice(i);
+    } else if (head === 'prlimit') {
+      // prlimit [options] [--<resource>=<limit>] COMMAND(codex 报 `prlimit --nofile=1024 rm -rf /outside`)。
+      // 资源限额多为 `--nofile=1024` 附加形态;-p/--pid 是改已有进程、不跑命令 → 不解包(fail-closed 留壳)。
+      if (toks.slice(1).some((t) => /^(?:-p|--pid)$/.test(t) || /^--pid=/.test(t))) break;
+      let i = 1;
+      while (i < toks.length && toks[i].startsWith('-')) {
+        // -o/--output <list> 是带独立值选项:不连值消费会停在 RESOURCE 而看不到内层命令(codex 报)。
+        if (/^(?:-o|--output)$/.test(toks[i])) { i += 2; continue; }
+        i++;
+      }
+      toks = toks.slice(i);
+    } else if (head === 'setarch') {
+      // setarch [arch] [options] PROGRAM(codex 报 `setarch x86_64 rm -rf /outside`)。首个非选项若形似已知
+      // 架构名则作 arch 跳过(否则它就是 PROGRAM,不误跳);其余选项跳过后即真实命令。--list 无 PROGRAM。
+      let i = 1;
+      let archConsumed = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!archConsumed
+          && /^(?:x86_64|i[3456]86|ia64|s390x?|ppc(?:64(?:le)?)?|arm(?:v[0-9]+l?)?|aarch64|mips\w*|sparc\w*|riscv\w*|uname26|linux(?:32|64))$/i.test(t)) {
+          archConsumed = true; i++; continue;
+        }
+        break; // PROGRAM
+      }
+      toks = toks.slice(i);
+    } else if (head === 'unshare' || head === 'nsenter' || head === 'setpriv') {
+      // 只消费 `-…` 选项;**仅对确知带独立值的选项**多吃一个 token —— 宁可少吃(留下的值当命令名 →
+      // 未知 bin → 灰区,fail-closed)也不能多吃(会把真正的 rm 吞掉 → 漏红线)。
+      // `--wd/-w DIR` 改工作目录(同 env -C);`--root/-R/-r` 换根 → 路径语义不可静态求证 → cwdUnknown。
+      const valued = head === 'unshare'
+        ? /^(?:--setuid|--setgid|--propagation|--map-user|--map-group|--wd|--root|-S|-G|-w|-R)$/
+        : head === 'nsenter'
+          ? /^(?:--target|--wd|--root|--setuid|--setgid|-t|-w|-r|-S|-G)$/
+          // setpriv 的带值选项:除 --reuid/--regid,还有 --euid/--ruid/--egid/--rgid(codex 报:遗漏它们
+          // 会让解析停在 uid 值 `0` 而看不到内层 rm)。
+          : /^(?:--reuid|--regid|--euid|--ruid|--egid|--rgid|--groups|--securebits|--pdeathsig|--selinux-label|--apparmor-profile|--ambient-caps|--inh-caps|--bounding-set|--rlimit)$/;
+      let i = 1;
+      let rootChanged = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (!t.startsWith('-')) break;
+        if (/^(?:--root|-R|-r)(?:=|$)/.test(t)) rootChanged = true;
+        const wd = /^(?:--wd|-w)=(.+)$/.exec(t);
+        if (wd) { applyCwd(wd[1]); i++; continue; }
+        const rootAttached = /^(?:--root|-R|-r)=(.+)$/.exec(t);
+        if (rootAttached) { i++; continue; }
+        if (valued.test(t)) {
+          if (/^(?:--wd|-w)$/.test(t)) applyCwd(toks[i + 1]);
+          i += 2;
+          continue;
+        }
+        i++;
+      }
+      toks = toks.slice(i);
+      // 换根后 `/outside` 之类绝对路径指向新根下的位置,静态不可证 → 相对与绝对目标都按未知处理。
+      if (rootChanged) { cwd = undefined; cwdUnknown = true; }
+    } else if (head === 'script') {
+      // 两种形态都会跑命令:util-linux `script [opts] -c '<命令串>' [file]`(值经 shell 执行)与
+      // BSD/macOS `script [opts] [file [command ...]]`(尾随 argv)。带独立值的日志/管道选项要消费其值,
+      // 否则解析会停在文件名;`-t`(util-linux 的 --timing 可无值)刻意不消费 —— 少吃只会让它当成
+      // file 操作数被跳过,多吃则可能把真正的命令吞掉。
+      let i = 1;
+      let commandString: string | undefined;
+      let fileConsumed = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t.startsWith('-')) {
+          const attachedCmd = /^(?:--command=|-c)(.+)$/.exec(t);
+          if (attachedCmd) { commandString = attachedCmd[1]; i++; continue; }
+          if (/^(?:-c|--command)$/.test(t)) { commandString = toks[i + 1]; i += 2; continue; }
+          if (/^(?:-T|--log-timing|-I|--log-in|-B|--log-io|-O|--log-out|-m|--logging-format|-F)$/.test(t)) {
+            i += 2; continue;
+          }
+          i++;
+          continue;
+        }
+        if (!fileConsumed) { fileConsumed = true; i++; continue; } // typescript 输出文件
+        break; // BSD 形态的 command
+      }
+      if (commandString !== undefined) {
+        if (!commandString) break; // -c 缺值 → 形态不可解析,留壳 fail-closed
+        toks = tokenize(commandString);
+      } else {
+        if (i >= toks.length) break; // 没有内层命令(纯记录交互会话)→ 留壳
+        toks = toks.slice(i);
+      }
+    } else if (head === 'sg') {
+      // sg GROUP [-c] '<命令串>':以另一个组身份执行命令串(缺 -c 时最后一个操作数同样是命令串)。
+      let i = 1;
+      let groupConsumed = false;
+      let shellForm = false;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (t === '-c' || t === '--command') { shellForm = true; i++; break; }
+        if (t.startsWith('-')) { i++; continue; }
+        if (!groupConsumed) { groupConsumed = true; i++; continue; }
+        break;
+      }
+      toks = toks.slice(i);
+      if (toks.length === 0) break; // 只切组、没有命令(交互 shell)→ 留壳
+      if ((shellForm || toks.length === 1) && /\s/.test(toks[0])) toks = tokenize(toks[0]);
+    } else if (head === 'arch' || head === 'caffeinate') {
+      // macOS:`arch [-arch NAME] [-e VAR=VAL] … command args`、`caffeinate [-disu] [-t secs] [-w pid] command`。
+      // 只消费确知带独立值的选项(少吃 → 值当命令名 → 未知 bin → 灰区 fail-closed)。
+      const valued = head === 'arch'
+        ? /^(?:-arch|-e|-d|-l)$/
+        : /^(?:-t|-w)$/;
+      let i = 1;
+      while (i < toks.length) {
+        const t = toks[i];
+        if (t === '--') { i++; break; }
+        if (!t.startsWith('-')) break;
+        if (valued.test(t)) { i += 2; continue; }
+        i++;
+      }
+      if (i >= toks.length) break; // 裸 `arch`/`caffeinate` 不跑命令 → 留壳
+      toks = toks.slice(i);
+    } else if (head === 'setsid' || head === 'unbuffer') {
+      // setsid [-c] [-f] [-w] PROGRAM:选项在实际 program 之前,只删 setsid 会停在 `-f`/`--wait` 而看不到
+      // 内层命令(codex 报 `setsid -f rm -rf /outside`)。这些选项都不带值 → 逐个跳过,`--` 终结选项。
+      // unbuffer 同形(`unbuffer [-p] PROGRAM`,唯一选项 -p 不带值)。
+      let i = 1;
+      while (i < toks.length) {
+        if (toks[i] === '--') { i++; break; }
+        if (toks[i].startsWith('-')) { i++; continue; }
+        break;
+      }
       toks = toks.slice(i);
     } else {
-      // nohup / setsid / command / setarch:直接跳过包裹器本身。
+      // nohup / builtin 等无自身参数的包裹器:直接跳过包裹器本身。
       toks = toks.slice(1);
     }
   }
-  return toks;
+  // 仅当**跑满剥壳上限**(depth 到 MAX,而非分支主动 break 的正常完成/fail-closed 留壳)且首 token 仍是
+  // 包装器 → 超深链没剥完、真实命令没露出来,标记 fail-closed(消费方必问)。分支主动 bail(如 taskset -p、
+  // env -S)在 depth<MAX 处 break,不算未解析,避免误升。
+  const wrapperUnresolved = depth >= MAX_WRAPPER_UNWRAP_DEPTH
+    && toks.length > 0 && COMMAND_WRAPPERS.has(executableName(toks[0]));
+  return { tokens: toks, cwd, cwdUnknown, inspectionOnly, wrapperUnresolved };
+}
+
+/** 无需 cwd 语义的调用点只取剥壳后的真实 argv。 */
+function unwrapWrappers(tokens: string[]): string[] {
+  return unwrapCommand(tokens).tokens;
 }
 
 function baseName(p: string): string {
-  const cleaned = p.replace(/\/+$/, '');
-  const idx = cleaned.lastIndexOf('/');
+  // 同时按 `/` 与 `\` 取末段:Windows Codex 会话把命令以完整反斜杠路径传入
+  // (`C:\Program Files\…\pwsh.exe`、`C:\…\rm.exe`),只认 `/` 会把整条路径当文件名,
+  // 令 PowerShell / rm / git 等红线判定全部落空(codex 报,translator 已固定该形态)。
+  const cleaned = p.replace(/[\\/]+$/, '');
+  const idx = Math.max(cleaned.lastIndexOf('/'), cleaned.lastIndexOf('\\'));
   return idx >= 0 ? cleaned.slice(idx + 1) : cleaned;
+}
+
+/** Executable identity is case-insensitive on Windows; Git Bash commonly exposes `*.exe`. */
+function executableName(token: string): string {
+  return baseName(token).toLowerCase().replace(/\.exe$/, '');
+}
+
+type ShellSeparator = 'and' | 'or' | 'pipe' | 'sequence' | 'background' | 'end';
+type ExecutableSegment = { text: string; fromPipe: boolean; separatorAfter: ShellSeparator };
+
+/** 仅供高影响执行判定：识别引号外的 shell 分隔符，避免把 `echo 'x | sh'` 误当执行。 */
+function splitExecutableSegments(command: string): ExecutableSegment[] {
+  const out: ExecutableSegment[] = [];
+  let start = 0;
+  let fromPipe = false;
+  let singleQuoted = false;
+  let doubleQuoted = false;
+  let escaped = false;
+  let substitutionDepth = 0;
+  for (let i = 0; i < command.length; i++) {
+    const char = command[i];
+    if (escaped) { escaped = false; continue; }
+    if (char === '\\' && !singleQuoted) { escaped = true; continue; }
+    if (char === "'" && !doubleQuoted) { singleQuoted = !singleQuoted; continue; }
+    if (char === '"' && !singleQuoted) { doubleQuoted = !doubleQuoted; continue; }
+    if (singleQuoted || doubleQuoted) continue;
+    // `$(` 命令替换、`<(`/`>(` 进程替换都成组,组内的 `|`/`;` 不是顶层分隔符 → 一并按深度跳过
+    // (自审补:此前漏了输出进程替换 `>(`,`>(cmd1; cmd2)` 里的 `;` 会被误当顶层分隔)。
+    if ((char === '$' || char === '<' || char === '>') && command[i + 1] === '(') {
+      substitutionDepth += 1;
+      i++;
+      continue;
+    }
+    if (substitutionDepth > 0) {
+      if (char === '(') substitutionDepth += 1;
+      else if (char === ')') substitutionDepth -= 1;
+      continue;
+    }
+    let separatorLength = 0;
+    let nextFromPipe = false;
+    let separatorAfter: ShellSeparator = 'sequence';
+    if (char === '|') {
+      separatorLength = command[i + 1] === '|' || command[i + 1] === '&' ? 2 : 1;
+      nextFromPipe = command[i + 1] !== '|';
+      separatorAfter = nextFromPipe ? 'pipe' : 'or';
+    } else if (char === '&' && command[i - 1] !== '>' && command[i + 1] !== '>') {
+      separatorLength = command[i + 1] === '&' ? 2 : 1;
+      separatorAfter = command[i + 1] === '&' ? 'and' : 'background';
+    } else if (char === ';' || char === '\n') {
+      separatorLength = 1;
+      separatorAfter = 'sequence';
+    }
+    if (separatorLength === 0) continue;
+    const text = command.slice(start, i).trim();
+    if (text) out.push({ text, fromPipe, separatorAfter });
+    fromPipe = nextFromPipe;
+    i += separatorLength - 1;
+    start = i + 1;
+  }
+  const text = command.slice(start).trim();
+  if (text) out.push({ text, fromPipe, separatorAfter: 'end' });
+  return out;
+}
+
+const SHELL_EXECUTORS: ReadonlySet<string> = new Set([
+  'sh', 'bash', 'zsh', 'dash', 'ksh', 'fish', 'csh', 'tcsh',
+]);
+
+const PIPE_EXECUTORS: ReadonlySet<string> = new Set([
+  ...SHELL_EXECUTORS,
+  'node', 'nodejs', 'deno', 'bun',
+  'ruby', 'perl', 'php', 'lua', 'luajit',
+  'pwsh', 'pwsh.exe', 'powershell', 'powershell.exe',
+  'r', 'rscript', 'tclsh', 'wish', 'julia', 'groovy', 'swift', 'osascript',
+  'guile', 'racket', 'scheme', 'chezscheme', 'csi', 'gosh', 'mit-scheme',
+  'clisp', 'sbcl', 'ecl', 'qjs', 'xargs', 'parallel',
+]);
+
+function isPipeExecutor(bin: string): boolean {
+  const normalized = executableName(bin);
+  return PIPE_EXECUTORS.has(normalized)
+    || /^(?:python|pypy|ruby|perl|php|lua)\d*(?:\.\d+)*$/.test(normalized)
+    || /^(?:(?:g|m|n|go)?awk)\d*(?:\.\d+)*$/.test(normalized)
+    || /^(?:guile|racket)(?:-\d+(?:\.\d+)*)?$/.test(normalized);
+}
+
+/** shell 的 `-c` 可与其它短选项组合（如 `-lc` / `-xec`）；返回其命令字符串。 */
+function shellCommandPayload(tokens: string[]): string | null {
+  if (!SHELL_EXECUTORS.has(executableName(tokens[0] ?? ''))) return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token === '--') return null;
+    if (token === '--command' || /^-[^-]*c[^-]*$/.test(token)) {
+      return tokens[i + 1] ?? '';
+    }
+  }
+  return null;
+}
+
+/** 常见解释器把下一参数当源码执行的 flag / 子命令。 */
+function interpreterInlineCodePayload(tokens: string[]): string | null {
+  const bin = executableName(tokens[0] ?? '');
+  if (bin === 'deno' && tokens[1]?.toLowerCase() === 'eval') return tokens[2] ?? '';
+  const flags = /^(?:python|pypy)\d*(?:\.\d+)*$/.test(bin) ? ['-c']
+    : /^(?:node|nodejs|bun)$/.test(bin) ? ['-e', '--eval', '-p', '--print']
+      : /^(?:ruby|lua|luajit)\d*(?:\.\d+)*$/.test(bin) ? ['-e']
+        : bin === 'perl' ? ['-e', '-E']
+          : bin === 'php' ? ['-r']
+            : /^(?:pwsh|powershell)$/.test(bin) ? ['-c', '-command', '-e', '-encodedcommand']
+              : /^(?:r|rscript|julia|groovy|swift|osascript)$/.test(bin) ? ['-e', '--eval']
+                : [];
+  for (let i = 1; i < tokens.length; i++) {
+    const token = tokens[i];
+    const lower = token.toLowerCase();
+    for (const flag of flags) {
+      const normalizedFlag = flag.toLowerCase();
+      if (lower === normalizedFlag) return tokens[i + 1] ?? '';
+      if (normalizedFlag.startsWith('--') && lower.startsWith(`${normalizedFlag}=`)) {
+        return token.slice(flag.length + 1);
+      }
+      if (normalizedFlag.length === 2 && lower.startsWith(normalizedFlag) && token.length > 2) {
+        return token.slice(flag.length);
+      }
+    }
+  }
+  return null;
+}
+
+// 静态审查的递归深度上限:命令替换/shell -c/xargs·parallel 包装每层递增一次,超过即认定结构已
+// 不可静态求证,fail-closed(见各调用点)。取 6 兼顾现实嵌套(3-4 层已属极端)与 DoS 边界。
+const MAX_EXEC_REVIEW_DEPTH = 6;
+
+function commandRunsRemoteFetch(command: string, depth = 0): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到无法静态求证 → 保守当作远端下载
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    if (bin === 'curl' || bin === 'wget') return true;
+    const shellPayload = shellCommandPayload(tokens);
+    if (shellPayload && commandRunsRemoteFetch(shellPayload, depth + 1)) return true;
+    // xargs 结构化取被包装 argv 再判(`xargs -n1 curl …`);未建模选项(如 `-x`)令 xargsCommandTokens
+    // 返回 null,此时退回扫任意 token 是否 curl/wget,不放过下载传播(greptile 报 `xargs -x curl … | ./run`)。
+    if (bin === 'xargs') {
+      const nested = xargsCommandTokens(tokens);
+      if (nested === null) {
+        if (tokens.slice(1).some((t) => { const e = executableName(t); return e === 'curl' || e === 'wget'; })) return true;
+      } else if (nested.length > 0
+        && commandRunsRemoteFetch(serializeArgvForReview(nested), depth + 1)) return true;
+    }
+    // parallel 选项文法复杂(`-j1` / `-j 1` / `:::`),不做完整建模:直接下载看任意 token 是否 curl/wget
+    // (跳过前导选项对首 token 的干扰,greptile 报 `parallel -j1 curl … ::: 1`);shell 载荷则从首个
+    // shell 执行器处下探(`parallel [-j1] sh -c 'curl …'`)。
+    if (bin === 'parallel') {
+      const rest = tokens.slice(1);
+      if (rest.some((t) => { const e = executableName(t); return e === 'curl' || e === 'wget'; })) return true;
+      const shIdx = rest.findIndex((t) => SHELL_EXECUTORS.has(executableName(t)));
+      if (shIdx >= 0
+        && commandRunsRemoteFetch(serializeArgvForReview(rest.slice(shIdx)), depth + 1)) return true;
+    }
+  }
+  return false;
+}
+
+/**
+ * Return the COMMAND argv executed by common GNU/BSD xargs forms. `null` means
+ * an option shape we cannot safely model; an empty array means xargs' benign
+ * default `echo` command. Keeping argv structured preserves a shell `-c`
+ * payload as one token for recursive review.
+ */
+function xargsCommandTokens(tokens: string[]): string[] | null {
+  if (executableName(tokens[0] ?? '') !== 'xargs') return null;
+  const longFlags = new Set([
+    '--null', '--no-run-if-empty', '--verbose', '--interactive', '--exit',
+    '--show-limits', '--open-tty', '--help', '--version',
+  ]);
+  const longWithValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)$/;
+  const longAttachedValue = /^(?:--arg-file|--delimiter|--eof|--replace|--max-lines|--max-args|--max-procs|--max-chars|--process-slot-var)=/;
+  let i = 1;
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === '--') return tokens.slice(i + 1);
+    if (longFlags.has(token)) { i++; continue; }
+    if (longWithValue.test(token)) {
+      if (i + 1 >= tokens.length) return [];
+      i += 2;
+      continue;
+    }
+    if (longAttachedValue.test(token)) { i++; continue; }
+    // GNU no-argument switches may be clustered (for example `-0rt`).
+    if (/^-[0rtpxo]+$/.test(token)) { i++; continue; }
+    // These short options consume either the rest of the same token or the next token.
+    if (/^-(?:a|d|E|I|L|n|P|s|J|R|S)$/.test(token)) {
+      if (i + 1 >= tokens.length) return [];
+      i += 2;
+      continue;
+    }
+    if (/^-(?:a|d|E|I|L|n|P|s|J|R|S).+/.test(token)) { i++; continue; }
+    // Deprecated GNU -e/-i/-l take only an optional attached value.
+    if (/^-(?:e|i|l).*$/.test(token)) { i++; continue; }
+    if (token.startsWith('-')) return null;
+    return tokens.slice(i);
+  }
+  return [];
+}
+
+function serializeArgvForReview(tokens: string[]): string {
+  return tokens.map((token) => JSON.stringify(token)).join(' ');
+}
+
+// kind 仅保留签名兼容:命令替换 `$()`/反引号 与进程替换 `<()` 里含 curl/wget 都是下载向量,一视同仁。
+// 用平衡取体 + 递归覆盖任意深度与跨类嵌套 —— 单层正则只抓最内层,漏掉实际下载的外层 curl
+// (greptile 报 `bash -c "$(curl $(echo url))"`、`source <(curl $(echo url))`)。
+function substitutionRunsRemoteFetch(text: string, _kind: 'command' | 'process', depth = 0): boolean {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return true; // 深到不可静态求证 → 保守当作远端下载
+  for (const body of substitutionBodies(text)) {
+    if (commandRunsRemoteFetch(body)) return true;
+    if (substitutionRunsRemoteFetch(body, _kind, depth + 1)) return true;
+  }
+  return false;
+}
+
+/**
+ * 提取命令替换 `$(…)` / 进程替换 `<(…)` / 反引号 的**外层**内层文本,`$(`·`<(` 按括号深度取
+ * 平衡子串。单层正则只抓到最内层,令外层 eval/下载执行逃过确定性红线
+ * (greptile 报 `echo $(eval "$(echo payload)")`);返回外层体后,递归调用者会再拆其中的内层。
+ */
+function substitutionBodies(text: string): string[] {
+  const out: string[] = [];
+  for (let i = 0; i < text.length; i++) {
+    // `$(` 命令替换、`<(`/`>(` 进程替换(输入与**输出**两向都会起子进程执行,greptile 报 `echo >(eval "$X")`)。
+    const opensParen = (text[i] === '$' || text[i] === '<' || text[i] === '>') && text[i + 1] === '(';
+    if (opensParen) {
+      // 括号计数必须**跳过引号内的字面括号**:否则 `$(eval 'touch; #(')` 里引号内的 `(` 会抬高深度、
+      // 让外层 `$(` 永远闭合不了,替换体取不出、内层 eval 逃过红线(greptile 报)。
+      let depth = 1;
+      let j = i + 2;
+      let sq = false;
+      let dq = false;
+      let esc = false;
+      for (; j < text.length && depth > 0; j++) {
+        const c = text[j];
+        if (esc) { esc = false; continue; }
+        if (c === '\\' && !sq) { esc = true; continue; }
+        if (c === "'" && !dq) { sq = !sq; continue; }
+        if (c === '"' && !sq) { dq = !dq; continue; }
+        if (sq || dq) continue;
+        // shell 注释:`#` 在词首(行首/空白/**任一未引用 metacharacter** 之后:`( ) ; & | < >` 等)起注释到
+        // 行尾,其中的 `)` 是字面不是替换体终点(greptile 报 `$(echo ok # )…` 与 `$( (echo ok)# )…`,后者 `#`
+        // 前是 `)`)→ 跳到换行,避免注释里的 `)` 提前截断。
+        if (c === '#' && (j === i + 2 || /[\s(){}<>;&|]/.test(text[j - 1]))) {
+          while (j + 1 < text.length && text[j + 1] !== '\n') j++;
+          continue;
+        }
+        if (c === '(') depth++;
+        else if (c === ')') depth--;
+      }
+      if (depth === 0) {
+        out.push(text.slice(i + 2, j - 1));
+        i = j - 1; // 跳过整个外层替换,内层交给递归拆解
+      }
+      continue;
+    }
+    if (text[i] === '`') {
+      // 找配对反引号时必须跳过**转义**反引号(`\``):嵌套反引号替换靠转义定界
+      // (`` `echo \`eval "$X"\`` ``),把 `\`` 当外层终点会截断替换体、漏掉内层 eval(greptile 报)。
+      let end = -1;
+      for (let j = i + 1; j < text.length; j++) {
+        if (text[j] === '\\') { j++; continue; }
+        if (text[j] === '`') { end = j; break; }
+      }
+      if (end > i) {
+        // 内层体里的 `\`` 还原成 `` ` ``,让递归能继续按普通反引号拆下一层。
+        out.push(text.slice(i + 1, end).replace(/\\`/g, '`'));
+        i = end;
+      }
+    }
+  }
+  return out;
+}
+
+/**
+ * PowerShell 载荷的确定性红线(payload 语法与 POSIX 不同,scopedDestruction 的 rm/ 等规则识别不到):
+ *   - `-EncodedCommand`(及唯一前缀缩写 -e/-enc/…)= base64,静态不可读 → 必问;
+ *   - 明文 `-Command` 载荷含递归/强制删除、磁盘格式化、Invoke-Expression(eval)、下载 | iex → 必问。
+ * codex 报:此前只查了 PowerShell 载荷里的命令替换下载,没过破坏/系统控制检查。
+ */
+const POWERSHELL_DANGER_PATTERNS: readonly RegExp[] = [
+  /\b(?:remove-item|rm|ri|rd|rmdir|del|erase)\b[\s\S]*?-(?:recurse|r|force|f)\b/i, // 递归/强制删除(rm 是 Remove-Item 官方别名,codex 报)
+  /\b(?:format-volume|clear-disk|format-disk)\b/i,                              // 磁盘格式化/清空
+  /\b(?:invoke-expression|iex)\b/i,                                            // eval
+  /\b(?:invoke-webrequest|iwr|invoke-restmethod|irm)\b[\s\S]*\|\s*(?:iex|invoke-expression)\b/i, // 下载 | iex
+];
+
+function powerShellNeedsConsent(tokens: string[]): boolean {
+  if (!/^(?:pwsh|powershell)$/.test(executableName(tokens[0] ?? ''))) return false;
+  let payload: string | null = null;
+  for (let i = 1; i < tokens.length; i++) {
+    const raw = tokens[i];
+    const name = raw.split('=')[0].toLowerCase();
+    // -EncodedCommand(-e/-ec/-enc/…):base64 静态不可读 → 必问(不可只当灰区)。
+    if (name.length >= 2 && '-encodedcommand'.startsWith(name)) return true;
+    // -Command(-c/-co/…)后的**全部**剩余 token 构成待执行命令(PowerShell 语义),不能只取紧邻一个:
+    // 非引号形态 `-Command Remove-Item -Recurse -Force C:\Users` 的 `-Recurse/-Force` 在后续 token 里
+    // (codex 报,现有回归都把载荷包成单引号 token 才命中)→ 拼接全部剩余 token 再交危险模式扫描。
+    if (name.length >= 2 && '-command'.startsWith(name)) {
+      payload = raw.includes('=')
+        ? [raw.slice(raw.indexOf('=') + 1), ...tokens.slice(i + 1)].join(' ')
+        : tokens.slice(i + 1).join(' ');
+      break;
+    }
+  }
+  return payload !== null && POWERSHELL_DANGER_PATTERNS.some((re) => re.test(payload as string));
+}
+
+/** 管道/下载内容被直接解释执行或 eval 时，模型不得单独静默放行。 */
+function highImpactExecutionNeedsConsent(command: string, depth = 0): boolean {
+  let pipeCarriesRemoteContent = false;
+  for (const { text, fromPipe, separatorAfter } of splitExecutableSegments(command)) {
+    const normalized = text.replace(/['"\\]/g, '');
+    const unwrapped = unwrapCommand(tokenize(normalized));
+    const tokens = unwrapped.tokens;
+    // 超深包装器链剥不完 → 看不到真实命令,fail-closed 必问(codex 报)。
+    if (unwrapped.wrapperUnresolved) return true;
+    const bin = executableName(tokens[0] ?? '');
+    const rawTokens = unwrapCommand(tokenize(text)).tokens;
+    // 去引号+去反斜杠的 normalized 会抹掉 Windows 盘符路径的 `\` 分隔符,令 `"C:\…\pwsh.exe"` 这类
+    // 完整路径解释器识别不出(copilot 报)→ 额外用保留反斜杠的 rawTokens 求一次 bin,任一命中即算执行器。
+    const rawBin = executableName(rawTokens[0] ?? '');
+    if (fromPipe && !unwrapped.inspectionOnly) {
+      if (isPipeExecutor(bin) || isPipeExecutor(rawBin)) return true;
+      // An incomplete interpreter enum must never turn remote "download and
+      // execute" into a model-allowable gray action. Only consumers proven
+      // passive by the existing read-only classifier may keep the pipeline in Auto.
+      if (pipeCarriesRemoteContent && !isSafeReadonlyBin(bin, normalized, tokens)) return true;
+    }
+    if (bin === 'eval' || rawBin === 'eval') return true;
+    // 全环境导出(裸 set / export -p / declare -x 等,含凭证)= exfil 红线;cmd 载荷递归下探使
+    // `cmd /c set` 也命中(codex 报)。
+    if (dumpsFullEnvironmentCommand(rawTokens)) return true;
+    // 命令/进程替换体会作为副作用执行:其中的 eval / 下载即执行 / 破坏性载荷不能因外层是 echo 等普通
+    // 命令而降入灰区(greptile 报 `echo $(eval "$X")` / `bash <<< "$(eval "$X")"`)→ 递归审查每个替换体。
+    // 超出递归上限仍存在替换体 = 深层嵌套(`echo $(a $(b $(c $(eval …))))`)静态不可证清白 → fail-closed
+    // 必问,不得因到达深度上限而静默降灰(greptile 报)。
+    if (substitutionBodies(text).some(
+      (body) => depth + 1 >= MAX_EXEC_REVIEW_DEPTH
+        || highImpactExecutionNeedsConsent(body, depth + 1))) return true;
+    // PowerShell 载荷(-Command 明文的破坏/eval、-EncodedCommand 的 base64)过确定性红线(codex 报)。
+    if (powerShellNeedsConsent(rawTokens)) return true;
+    const payload = shellCommandPayload(rawTokens);
+    if (payload && (substitutionRunsRemoteFetch(payload, 'command')
+      || depth >= MAX_EXEC_REVIEW_DEPTH
+      || highImpactExecutionNeedsConsent(payload, depth + 1))) return true;
+    // cmd.exe /c "…" 载荷同样可包 powershell -enc / 下载即执行 → 递归下探(codex 报的 cmd 包装面)。
+    const cmdInner = cmdCommandPayload(rawTokens);
+    if (cmdInner && (depth >= MAX_EXEC_REVIEW_DEPTH
+      || highImpactExecutionNeedsConsent(cmdInner, depth + 1))) return true;
+    const inlineCode = interpreterInlineCodePayload(rawTokens);
+    if (inlineCode !== null && substitutionRunsRemoteFetch(inlineCode, 'command')) return true;
+    if (executableName(rawTokens[0] ?? '') === 'xargs') {
+      const nested = xargsCommandTokens(rawTokens);
+      if (nested === null) {
+        // Unknown xargs options only cross the deterministic boundary when a
+        // visible shell executor is present; otherwise the gray reviewer remains usable.
+        if (rawTokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
+      } else if (nested.length > 0 && (depth >= MAX_EXEC_REVIEW_DEPTH || highImpactExecutionNeedsConsent(
+        serializeArgvForReview(nested), depth + 1))) {
+        return true;
+      }
+    }
+    // 进程替换 `<(curl…)` 与命令替换 `$(curl…)`/反引号 都能把下载内容喂给 shell/解释器执行:
+    // `source <(curl…)`、`bash <<< "$(curl…)"`、`python <<< "$(curl…)"` 等 here-string/直参形态同属
+    // 远程代码执行红线(codex 报:此前只查了进程替换,漏了命令替换)。仅当 $() 内含 curl/wget 才命中,
+    // 本地 `$(cat f)` 不误伤。
+    if ((bin === 'source' || bin === '.' || isPipeExecutor(bin))
+      && (substitutionRunsRemoteFetch(text, 'process')
+        || substitutionRunsRemoteFetch(text, 'command'))) return true;
+    const segmentFetchesRemoteContent = commandRunsRemoteFetch(text);
+    pipeCarriesRemoteContent = separatorAfter === 'pipe'
+      && (pipeCarriesRemoteContent || segmentFetchesRemoteContent);
+  }
+  return false;
+}
+
+type ShellReviewOptions = {
+  cwd?: string;
+  cwdUnknown?: boolean;
+  platform?: NodeJS.Platform;
+};
+
+/** 提取普通位置参数；`--` 后即使以 `-` 开头也按目标处理。 */
+function positionalOperands(tokens: string[]): string[] {
+  const out: string[] = [];
+  let optionsEnded = false;
+  for (const token of tokens) {
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && token.startsWith('-')) continue;
+    out.push(token);
+  }
+  return out;
+}
+
+/** 破坏性目标是否无法证明被限制在首个可写根的子目录内。 */
+/**
+ * 破坏目标里的字符类 `[…]` 能否展开出路径穿越字符 `.`(0x2E)或 `/`(0x2F)——能则运行期可拼出 `..`/额外
+ * 分隔符逃出静态前缀(greptile 报 `rm -rf sub/[.-x][.-x]/etc/passwd`,`[.-x]` 范围含 `.`/`/`)。
+ * 含字面 `.`/`/`、跨越它们的范围(如 `[.-x]`)、或取反类(`[!…]`/`[^…]` 几乎匹配任意字符)都算。
+ */
+function charClassCanTraverse(target: string): boolean {
+  for (const m of target.matchAll(/\[([^\]]*)\]/g)) {
+    const body = m[1];
+    if (/^[!^]/.test(body)) return true;               // 取反类可匹配 . / 等
+    if (body.includes('.') || body.includes('/')) return true;
+    for (const rm of body.matchAll(/(.)-(.)/g)) {
+      if (rm[1].charCodeAt(0) <= 0x2f && rm[2].charCodeAt(0) >= 0x2e) return true; // 范围覆盖 . 或 /
+    }
+  }
+  return false;
+}
+
+function destructiveTargetNeedsConsent(
+  target: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  const writableRoot = workspaceRoots[0];
+  if (!writableRoot) return true;
+  // 变量、命令/花括号展开的运行期目标不可静态求值；`~` 也不能按 cwd 解析。
+  if (/[$`{}]/.test(target) || target.startsWith('~')) return true;
+  // 字符类能展开出 `.`/`/` → 运行期路径可穿越出静态前缀,不可静态证明在区内 → 必问(greptile 报)。
+  if (charClassCanTraverse(target)) return true;
+  if (opts.cwdUnknown && !isAbsolutePath(toForwardSlashes(target))) return true;
+  // glob 可保留，只用首个 glob 前的静态前缀证明作用域。前缀落在可写根本身仍是“清空整个
+  // workspace”级别；只有明确进入子目录（如 build/*）才交 reviewer 静默裁决。
+  const globIndex = target.search(/[*?[\]]/);
+  const staticTarget = globIndex >= 0 ? (target.slice(0, globIndex) || '.') : target;
+  const cwd = opts.cwd ?? writableRoot;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const normalizedRoot = canonicalPath(writableRoot, aliasFirmlinks);
+  if (normalizedRoot === '/' || /^[A-Za-z]:\/$/.test(normalizedRoot)) return true;
+  const candidates = [staticTarget];
+  if (globIndex >= 0) {
+    // A bracket expression may itself spell `..` (`[.].`). Check the same
+    // conservative de-glob form used by the credential classifier so a glob
+    // cannot make the runtime path escape farther than its literal prefix.
+    candidates.push(target.replace(/[[\]{}*?]/g, '') || '.');
+  }
+  return candidates.some((candidate) => {
+    const normalizedTarget = normalizeTarget(candidate, [cwd]);
+    if (!isInsideWorkspace(normalizedTarget, [writableRoot], aliasFirmlinks)) return true;
+    return canonicalPath(normalizedTarget, aliasFirmlinks) === normalizedRoot;
+  });
+}
+
+function findDeleteRoots(tokens: string[]): string[] {
+  let i = 1;
+  // find 的遍历选项先于路径；-D 额外消费一个 debug 参数。
+  while (i < tokens.length) {
+    const token = tokens[i];
+    if (token === '-D') { i += 2; continue; }
+    if (/^-(?:[HLP]|O\d*)$/.test(token)) { i++; continue; }
+    if (token === '--') { i++; break; }
+    break;
+  }
+  const roots: string[] = [];
+  for (; i < tokens.length; i++) {
+    const token = tokens[i];
+    if (token.startsWith('-') || token === '!' || token === '(') break;
+    roots.push(token);
+  }
+  return roots.length > 0 ? roots : ['.'];
+}
+
+function forcePushNeedsConsent(tokens: string[]): boolean {
+  // executableName 归一 `.exe`/大小写:`git.exe push --force`、`GIT.EXE …` 不得绕过受保护分支红线(codex 报)。
+  if (executableName(tokens[0] ?? '') !== 'git') return false;
+  const pushIndex = tokens.indexOf('push');
+  if (pushIndex < 0) return false;
+  const args = tokens.slice(pushIndex + 1);
+  const forced = args.some((token) =>
+    /^(?:--force(?:-with-lease|-if-includes)?)(?:=|$)/.test(token)
+    || /^-[^-]*f/.test(token)
+    || token.startsWith('+'));
+  if (!forced) return false;
+  if (args.some((token) => /^(?:--all|--mirror|--tags)$/.test(token))) return true;
+  const operands = positionalOperands(args);
+  const refspecs = operands.length >= 2 ? operands.slice(1) : [];
+  if (refspecs.length === 0) return true; // 隐含当前分支，无法证明不是受保护分支。
+  return refspecs.some((refspec) => {
+    const withoutForce = refspec.replace(/^\+/, '');
+    const destination = (withoutForce.includes(':')
+      ? withoutForce.slice(withoutForce.lastIndexOf(':') + 1)
+      : withoutForce).replace(/^refs\/heads\//, '');
+    if (!destination || /[$`*?[\]{}]/.test(destination)) return true;
+    if (/^(?:HEAD|@|refs\/tags\/)/i.test(destination)) return true;
+    return /^(?:main|master|trunk|develop(?:ment)?|prod(?:uction)?|staging|release(?:[/_-].*)?|hotfix(?:[/_-].*)?)$/i.test(destination);
+  });
+}
+
+/** destructive rm 的显式目标；不是递归/强制 rm 时返回 null。 */
+function destructiveRmTargets(tokens: string[]): string[] | null {
+  // executableName 归一 `.exe`/大小写:`rm.exe -rf …`、`RM.EXE …` 不得绕过区外破坏红线(codex 报)。
+  if (executableName(tokens[0] ?? '') !== 'rm') return null;
+  const args = tokens.slice(1);
+  const destructive = args.some((token) =>
+    /^-[^-]*[rRfF]/.test(token) || /^--(?:recursive|force|dir)(?:=|$)/.test(token));
+  return destructive ? positionalOperands(args) : null;
+}
+
+/**
+ * 无具名变量的全环境导出(含注入子进程的 provider API key/token)→ exfil 红线。覆盖:
+ *   - Windows cmd 裸 `set`(无参数);`set -e`/`set FOO=1`/`set /A x=1` 带参形态不算(codex 报)。
+ *   - Bash `export -p` / 裸 `export`(列出全部导出变量);`export FOO`/`export FOO=1` 具名不算(codex 报)。
+ *   - Bash `declare -x` / `declare -p` / `typeset -x`(带值列出全部);带 NAME 操作数具名不算。
+ * (POSIX 裸 `env`/`printenv` 的等价形态由 classifyShellSegment 另行处理。)
+ */
+function dumpsFullEnvironmentCommand(tokens: string[]): boolean {
+  const bin = executableName(tokens[0] ?? '');
+  const args = tokens.slice(1);
+  const operands = args.filter((a) => !a.startsWith('-'));
+  if (bin === 'set') return args.length === 0;
+  if (bin === 'export') return operands.length === 0;          // 裸 export / export -p
+  if (bin === 'declare' || bin === 'typeset') {
+    // 无具名操作数即列出全部变量+值:裸 `declare`/`typeset`(help declare:无 NAME 显示所有变量属性与值),
+    // 或带 -x/-p/-f 等列举选项(codex 报:此前漏了裸调用形态)。有 NAME 具名不算。
+    return operands.length === 0;
+  }
+  return false;
+}
+
+/** cmd.exe `/c`/`/k`/`/r` 后的载荷命令(其余全部构成待执行命令);非 cmd 启动器返回 null。 */
+function cmdCommandPayload(tokens: string[]): string | null {
+  if (executableName(tokens[0] ?? '') !== 'cmd') return null;
+  for (let i = 1; i < tokens.length; i++) {
+    const flag = tokens[i].toLowerCase();
+    if (flag === '/c' || flag === '/k' || flag === '/r') {
+      return tokens.slice(i + 1).join(' ');
+    }
+  }
+  return null;
+}
+
+/**
+ * Windows cmd.exe 广泛递归删除(`rd`/`rmdir`/`del`/`erase` 带 `/s`)的显式目标;非此形态返回 null。
+ * `/s` = 递归删整棵树(rmdir 文档),等价 POSIX `rm -rf` 的破坏面 → 交目标级作用域判定(codex 报)。
+ */
+function windowsDestructiveRmTargets(tokens: string[]): string[] | null {
+  const bin = executableName(tokens[0] ?? '');
+  if (bin !== 'rd' && bin !== 'rmdir' && bin !== 'del' && bin !== 'erase') return null;
+  const args = tokens.slice(1);
+  if (!args.some((token) => /^\/s$/i.test(token))) return null; // 无 /s 非广泛递归
+  const targets = args.filter((token) => !token.startsWith('/'));
+  return targets.length > 0 ? targets : null;
+}
+
+function directoryChangeTarget(tokens: string[]): { changesDirectory: boolean; target?: string } {
+  // executableName 归一大小写/.exe:Windows cmd/PowerShell 大小写不敏感,`CD /` 的 cwd 变更不能漏识别
+  // (copilot 报:漏了会把后续相对破坏目标误当仍在工作区内)。
+  const bin = executableName(tokens[0] ?? '');
+  if (bin === 'source' || bin === '.' || bin === 'popd') return { changesDirectory: true };
+  if (bin !== 'cd' && bin !== 'pushd') return { changesDirectory: false };
+  if (bin === 'pushd' && tokens.slice(1).includes('-n')) return { changesDirectory: false };
+  let optionsEnded = false;
+  for (const token of tokens.slice(1)) {
+    if (!optionsEnded && token === '--') {
+      optionsEnded = true;
+      continue;
+    }
+    if (!optionsEnded && token.startsWith('-') && token !== '-') continue;
+    // pushd +/-N rotates the directory stack; the resulting cwd is runtime state.
+    if (bin === 'pushd' && /^[+-]\d+$/.test(token)) {
+      return { changesDirectory: true };
+    }
+    return { changesDirectory: true, target: token };
+  }
+  return { changesDirectory: true };
+}
+
+/**
+ * 抽出 find `-exec`/`-execdir`/`-ok`/`-okdir` 各段的完整命令 argv(到 `;`/`\;`/`+` 止)。
+ * `dirRelative` 标记 `-execdir`/`-okdir`:它们在**每个被匹配文件所在目录**里执行,相对目标的实际
+ * cwd 随匹配项变动、静态不可证(codex 报 `find /ws/x -execdir rm -rf x` 实际删的是 /ws/x 整体)。
+ */
+function findExecCommands(tokens: string[]): { argv: string[]; dirRelative: boolean }[] {
+  const out: { argv: string[]; dirRelative: boolean }[] = [];
+  const execFlags = new Set(['-exec', '-execdir', '-ok', '-okdir']);
+  for (let i = 0; i < tokens.length; i++) {
+    const flag = tokens[i].toLowerCase();
+    if (!execFlags.has(flag)) continue;
+    const rest: string[] = [];
+    for (let j = i + 1; j < tokens.length; j++) {
+      const tok = tokens[j];
+      if (tok === ';' || tok === '\\;' || tok === '+') break;
+      rest.push(tok);
+    }
+    if (rest.length > 0) out.push({ argv: rest, dirRelative: flag === '-execdir' || flag === '-okdir' });
+  }
+  return out;
+}
+
+/** find 是否用内容驱动、静态不可证的遍历根(`-files0-from FILE`/`-`):根来自文件内容而非命令行(codex 报)。 */
+function findHasDynamicRoots(tokens: string[]): boolean {
+  return tokens.some((t) => /^--?files0?-from$/i.test(t) || /^--files-from$/i.test(t));
+}
+
+/** 一个 -exec 命令 argv(直接 `rm -rf …` 或 `sh -c '…'` 载荷)里破坏性 rm 的目标操作数。 */
+function execCommandRmTargets(argv: string[], depth: number): string[] {
+  const targets: string[] = [];
+  // 先剥透明包装器/前置赋值:find -exec 的 COMMAND 可以是 `env FOO=1 rm …`、`command rm …`、
+  // `timeout 5 rm …` 等,不解包会把 env/command 当可执行名而看不到 rm(codex 报)。
+  const unwrapped = unwrapCommand(argv).tokens;
+  const direct = destructiveRmTargets(unwrapped); // 直接(或解包后)`rm -rf /outside`
+  if (direct) targets.push(...direct);
+  const payload = shellCommandPayload(unwrapped); // `-exec sh -c 'rm -rf …'`
+  if (payload) targets.push(...(commandDestructiveRmTargets(payload, depth) ?? []));
+  return targets;
+}
+
+/**
+ * 命令(含 shell -c 载荷,有限深递归)里破坏性 rm(`-rf`/`--recursive`)的目标操作数;`null` = 没有
+ * 破坏性 rm。深到无法静态求证时返回 `['/']` 哨兵(始终触发同意)。用于 find -exec 载荷的目标级作用域判定。
+ */
+function commandDestructiveRmTargets(command: string, depth = 0): string[] | null {
+  if (depth >= MAX_EXEC_REVIEW_DEPTH) return ['/']; // 不可静态求证 → 哨兵目标始终需同意
+  let acc: string[] | null = null;
+  for (const { text } of splitExecutableSegments(command)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const direct = destructiveRmTargets(tokens);
+    if (direct) acc = [...(acc ?? []), ...direct];
+    const payload = shellCommandPayload(tokens);
+    if (payload) {
+      const inner = commandDestructiveRmTargets(payload, depth + 1);
+      if (inner) acc = [...(acc ?? []), ...inner];
+    }
+  }
+  return acc;
+}
+
+/**
+ * find -exec 载荷里引用被匹配路径的占位目标(`{}`、`$0`..`$9`、`$@`、`$*`):其删除作用域由遍历根决定。
+ * 注:分段器 stripShellControlTokens 会把段尾/段首 `{}` 的花括号当 shell 分组符剥掉,令占位符残成 `{`
+ * 或 `}`;find -exec 语境里它们只可能是被匹配路径占位,一并按占位处理(避免误当花括号动态目标升红线)。
+ */
+function isMatchedPathPlaceholder(target: string): boolean {
+  return target === '{}' || target === '{' || target === '}' || /^\$(?:\d+|[@*])$/.test(target);
+}
+
+/** 被匹配路径占位符具化后挂在遍历根下的静态叶名。 */
+const MATCHED_PATH_SENTINEL = '.cindy-matched-path';
+
+/**
+ * 内容驱动(`-files0-from`)的遍历根静态不可证:匹配项可能落在任何目录,含系统路径。具化占位符时
+ * 用这个受保护根 —— 写它/删它一律必问,而只读用法(`-exec grep foo {} +`)不含写通道,不受影响。
+ */
+const UNPROVABLE_MATCH_ROOT = '/etc/.cindy-unprovable-match';
+
+/** argv 里是否出现被匹配路径占位符(独立 token 或藏在 `sh -c` 载荷字符串里的 `{}`/`$1`)。 */
+function hasMatchedPathPlaceholder(argv: string[]): boolean {
+  return argv.some((t) => isMatchedPathPlaceholder(t) || /\{\}|\$(?:\d+|[@*])/.test(t));
+}
+
+/** 把 token(含载荷字符串内部)里的被匹配路径占位符换成具化后的静态路径。 */
+function substituteMatchedPath(token: string, sentinel: string): string {
+  if (isMatchedPathPlaceholder(token)) return sentinel;
+  return token.replace(/\{\}/g, sentinel).replace(/\$(?:\d+|[@*])/g, sentinel);
+}
+
+/**
+ * 把遍历根具化成一个静态的「被匹配路径」:根在区内 → 哨兵在区内;根是 `/etc` → 哨兵落 `/etc`,
+ * 从而让占位目标保持「作用域由遍历根决定」的语义。根本身不可静态解析(变量/glob/`~`,或相对根
+ * 且有效 cwd 未知)时返回 `null` → 调用方 fail-closed。
+ */
+/**
+ * 把 argv 还原成命令字符串给递归审查用。**逐 token 单引号**包裹:载荷本身通常已含双引号
+ * (`sh -c 'rm -rf "$1"'`),用 JSON 双引号序列化会把它们转义成 `\"`,再 tokenize 时反斜杠被保留、
+ * 目标残成 `\"/path\"` 而失真;单引号内 tokenize 不做反斜杠处理,能原样取回 token。
+ */
+function shellQuoteArgvForReview(tokens: string[]): string {
+  return tokens.map((t) => `'${t.replace(/'/g, "'\\''")}'`).join(' ');
+}
+
+function matchedPathSentinel(
+  root: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): string | null {
+  if (/[$`{}*?[\]]/.test(root) || root.startsWith('~')) return null;
+  const base = opts.cwd ?? workspaceRoots[0];
+  if (!isAbsolutePath(toForwardSlashes(root)) && (!base || opts.cwdUnknown)) return null;
+  const resolved = normalizeTarget(root, base ? [base] : []).replace(/\/+$/, '');
+  return `${resolved}/${MATCHED_PATH_SENTINEL}`;
+}
+
+/**
+ * 本段的写目标(shell 重定向 + 参数写通道)是否落在系统/受保护目录。相对目标按 `opts.cwd`
+ * (调用方已把包装器/`cd` 解析出的**有效 cwd** 放进来)解析;cwd 未知时相对目标不可静态求证 →
+ * 保守视为命中(fail-closed)。绝对目标不受 cwd 影响。
+ */
+function systemWriteTargetsInSegment(
+  segment: string,
+  tokens: string[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): boolean {
+  const targets = [...redirectionTargets(segment), ...argumentWriteTargets(tokens)];
+  if (targets.length === 0) return false;
+  // 静态不可证的写目标(tar -P 的归档成员等)一律要求同意。
+  if (targets.includes(UNPROVABLE_WRITE_TARGET)) return true;
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const base = opts.cwd ?? workspaceRoots[0];
+  return targets.some((t) =>
+    // 每个目标查两种形态:原样(保留 Windows `\` 分隔符)与去 POSIX `\` 转义(`/e\tc`→`/etc`)。
+    [t, t.replace(/\\(.)/g, '$1')].some((v) => {
+      const forward = toForwardSlashes(v);
+      // cwd 未知 + 相对目标 → 无法证明它没落进系统目录,fail-closed。
+      if (opts.cwdUnknown && !isAbsolutePath(forward)) return true;
+      return isProtectedSystemPath(canonicalPath(normalizeTarget(v, [base]), aliasFirmlinks));
+    }));
+}
+
+/** 系统/区外批量破坏与受保护分支强推不能只交给模型裁决。 */
+function scopedDestructionNeedsConsent(
+  command: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+  depth = 0,
+): boolean {
+  let currentCwd: string | undefined = opts.cwd ?? workspaceRoots[0];
+  let currentCwdUnknown = opts.cwdUnknown === true;
+  for (const { text: segment, separatorAfter } of splitExecutableSegments(command)) {
+    const unwrapped = unwrapCommand(tokenize(segment), currentCwd, currentCwdUnknown);
+    const tokens = unwrapped.tokens;
+    // 超深包装器链剥不完 → 看不到真实命令(可能是区外破坏),fail-closed 必问(codex 报)。
+    if (unwrapped.wrapperUnresolved) return true;
+    const segmentOpts: ShellReviewOptions = {
+      ...opts,
+      cwd: unwrapped.cwd,
+      cwdUnknown: unwrapped.cwdUnknown,
+    };
+    const bin = executableName(tokens[0] ?? '');
+    // 系统写目标(shell 重定向 + 参数写通道)按**本段有效 cwd** 解析:相对目标必须挂到 unwrapped.cwd
+    // (含 `cd /etc &&` 跨段传递与 `env -C /etc` 段内改目录),否则 `cp /tmp/payload hosts` 配 cwd=/etc
+    // 实际覆盖 /etc/hosts 却因按 workspaceRoots 解析而只落灰区(codex 报)。
+    if (systemWriteTargetsInSegment(segment, tokens, workspaceRoots, segmentOpts)) return true;
+    const rmTargets = destructiveRmTargets(tokens);
+    if (rmTargets?.some((target) =>
+      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+    // Windows cmd.exe 广泛递归删除(`rd`/`rmdir`/`del`/`erase` 带 `/s`)按目标作用域判定(codex 报)。
+    const winRmTargets = windowsDestructiveRmTargets(tokens);
+    if (winRmTargets?.some((target) =>
+      destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+    // shell -c（含 -lc 等组合短选项）内还有一层命令字符串；递归有限深，超过说明静态结构已不可靠。
+    const shellPayload = shellCommandPayload(tokens);
+    if (shellPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+      shellPayload, workspaceRoots, segmentOpts, depth + 1))) {
+      return true;
+    }
+    // cmd.exe /c "rd /s /q …" 把破坏性删除藏进 cmd 载荷,递归下探(codex 报)。
+    const cmdPayload = cmdCommandPayload(tokens);
+    if (cmdPayload && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+      cmdPayload, workspaceRoots, segmentOpts, depth + 1))) {
+      return true;
+    }
+    if (bin === 'find') {
+      const findRoots = findDeleteRoots(tokens);
+      const deletes = tokens.some((token) => token === '-delete');
+      // -files0-from 等内容驱动的遍历根静态不可证(可能含区外/系统目录),findDeleteRoots 会回退成 ['.'] 误判
+      // 区内 → 只要有破坏动作(-delete 或 -exec 删)就必问(codex 报)。
+      const dynamicRoots = findHasDynamicRoots(tokens);
+      // 每个 -exec/-execdir 命令(直接 `rm -rf …` 或 `sh -c 'rm -rf …'`)取其破坏性 rm 目标;两种形态统一处理,
+      // 不再把直接 -exec rm 归约成布尔而丢掉操作数(codex 报 `find build -exec rm -rf /outside \;`)。
+      let execMatchedRm = false;
+      for (const { argv, dirRelative } of findExecCommands(tokens)) {
+        const rmTargetsInExec = execCommandRmTargets(argv, depth + 1);
+        // -execdir 在每个匹配项所在目录执行,相对目标 cwd 随匹配项变动、不可静态证明在区内
+        // (codex 报 `find /ws/x -execdir rm -rf x` 实删 /ws/x 整体)→ 用 cwdUnknown 强制相对目标必问。
+        const execScope = dirRelative ? { ...segmentOpts, cwdUnknown: true } : segmentOpts;
+        // 忽略 {} 直接删的字面/独立目标(`rm -rf /` / `/outside` / -execdir 下的相对目标)按其作用域判定。
+        if (rmTargetsInExec.some((target) => !isMatchedPathPlaceholder(target)
+          && destructiveTargetNeedsConsent(target, workspaceRoots, execScope))) return true;
+        if (rmTargetsInExec.some(isMatchedPathPlaceholder)) execMatchedRm = true;
+        // rm 之外的危险面同样要审:受保护写通道(`-exec cp payload /etc/hosts \;`、`-exec tee /etc/x \;`、
+        // `-exec install -d /etc/cron.d \;`)、载荷里的重定向与 `cd /etc &&` 跨段(codex 报只查了 rm 目标)。
+        // 做法是把内层 argv 当独立命令整段复用完整审查,占位符先按遍历根具化 —— 否则 `{}`/`$1` 会被当成
+        // 不可静态求值的动态目标而误拦,且能顺带覆盖「写被匹配到的路径」(`find /etc -exec truncate -s0 {} \;`)。
+        const concreteRoots = hasMatchedPathPlaceholder(argv)
+          ? (dynamicRoots ? [UNPROVABLE_MATCH_ROOT] : findRoots)
+          : [null];
+        for (const root of concreteRoots) {
+          let innerArgv = argv;
+          if (root !== null) {
+            const sentinel = matchedPathSentinel(root, workspaceRoots, segmentOpts);
+            if (sentinel === null) return true; // 根不可静态解析 → 占位目标落哪不可证
+            innerArgv = argv.map((t) => substituteMatchedPath(t, sentinel));
+          }
+          if (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+            shellQuoteArgvForReview(innerArgv), workspaceRoots, execScope, depth + 1)) return true;
+        }
+      }
+      // 删的是被匹配到的路径(占位符 {}/$0/…),或 -delete → 删除作用域由遍历根决定;动态根一律必问。
+      if (deletes || execMatchedRm) {
+        if (dynamicRoots) return true;
+        if (findRoots.some((target) =>
+          destructiveTargetNeedsConsent(target, workspaceRoots, segmentOpts))) return true;
+      }
+    }
+    // xargs / parallel 动态补入的目标无法从 argv 证明在工作区内；递归/强制 rm 必须保留用户同意
+    // (codex 报:parallel 与 xargs 同为执行器,`parallel rm -rf -- /outside` 也会跑 rm)。
+    const nestedRm = tokens.findIndex((token) => executableName(token) === 'rm');
+    if ((bin === 'xargs' || bin === 'parallel') && nestedRm >= 0
+      && destructiveRmTargets(tokens.slice(nestedRm)) !== null) return true;
+    if (bin === 'xargs') {
+      const nested = xargsCommandTokens(tokens);
+      if (nested === null) {
+        // Unmodelled options plus an apparent shell command cannot be proven safe.
+        if (tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
+      } else if (nested.length > 0 && (depth >= MAX_EXEC_REVIEW_DEPTH || scopedDestructionNeedsConsent(
+        serializeArgvForReview(nested), workspaceRoots, segmentOpts, depth + 1))) {
+        return true;
+      }
+    }
+    // parallel 的选项文法与 xargs 不同,不做完整 argv 建模;但它跑 shell 执行器时同样无法静态证明安全 →
+    // 保留同意(如 `parallel sh -c '…'` / `parallel bash …`)。
+    if (bin === 'parallel'
+      && tokens.slice(1).some((token) => SHELL_EXECUTORS.has(executableName(token)))) return true;
+    if (forcePushNeedsConsent(tokens)) return true;
+
+    const cwdChange = directoryChangeTarget(tokens);
+    if (!cwdChange.changesDirectory || separatorAfter === 'pipe' || separatorAfter === 'background') {
+      continue;
+    }
+    if (separatorAfter === 'or') {
+      // The next branch may run after the directory change failed, while later
+      // sequence segments may also run after it succeeded. Keep both fail-closed.
+      currentCwd = undefined;
+      currentCwdUnknown = true;
+      continue;
+    }
+    const nextCwd = resolveCwdTarget(
+      cwdChange.target,
+      unwrapped.cwd,
+      unwrapped.cwdUnknown,
+    );
+    currentCwd = nextCwd.cwd;
+    currentCwdUnknown = nextCwd.cwdUnknown;
+  }
+  return false;
 }
 
 function isSafeReadonlyBin(bin: string, segment: string, tokens: string[]): boolean {
@@ -428,47 +2037,115 @@ function parseNumericHostComponent(p: string): number | null {
   return null;
 }
 
+/** host 归一用:NUL 及其后全部(curl 在 NUL 处截断);以及嵌入的控制字符/空白(curl 会剥掉)。 */
+const NUL_AND_REST = new RegExp(`${String.fromCharCode(0)}[\\s\\S]*$`);
+const HOST_CONTROL_CHARS = new RegExp('[\\s\\u0000-\\u001f\\u007f]', 'g');
+
+/**
+ * 内网判定必须在 **百分号解码后**的 host 上做:curl/浏览器把 `%31%36%39.%32%35%34.…` 归一成
+ * `169.254.169.254` 再发请求(codex 的 `curl -sv` 探针确认请求行与 Host 都已归一),而未解码的字符串
+ * 既不像 IPv4 也不像 localhost —— 会被 isSafeFetch **确定性 auto-approve**(静默放行,比降灰区更糟)。
+ * 逐轮解码(≤3 轮,覆盖 `%2531` 这类双重编码),任一形态命中内网即算内网;解码失败(`%zz` 等畸形
+ * 序列)静态不可证清白 → fail-closed。
+ */
 function isInternalFetchTarget(t: string): boolean {
-  const host = t
+  const forms: string[] = [t];
+  let cur = t;
+  for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(cur);
+    } catch {
+      return true;
+    }
+    if (decoded === cur) break;
+    cur = decoded;
+    forms.push(cur);
+  }
+  return forms.some(isInternalFetchHostForm);
+}
+
+/** 从 fetch 目标里取归一后的 host(去 scheme/path/userinfo/port、NUL 截断、控制字符、尾随点)。 */
+function fetchHostOf(t: string): string {
+  return t
     .replace(/^[a-z][\w+.-]*:\/\//i, '') // 去 scheme
     .replace(/[/?#].*$/, '')             // 去 path/query/fragment
     .replace(/^[^@]*@/, '')              // 去 userinfo
     .replace(/:\d+$/, '')                // 去端口
-    .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点):curl/DNS 视 `127.0.0.1.`=127.0.0.1、
-                                          // `metadata.google.internal.`=metadata.google.internal,不剥会漏判内网(SSRF)
+    // NUL 截断与控制字符/空白:解码后可能出现 `169.254.169.254\0.example.com` 或嵌入的
+    // TAB/CR/LF —— curl 在此截断或剥掉,不归一会让内网 host 伪装成外网域名(与编码同类绕过)。
+    .replace(NUL_AND_REST, '')
+    .replace(HOST_CONTROL_CHARS, '')
+    .replace(/\.+$/, '')                 // 去尾随点(FQDN 根点)
     .toLowerCase();
+}
+
+/**
+ * 取 host 的 IPv4 前两字节(内网/metadata 判定只需前两段)。支持点分、缩写形(127.1)、整数
+ * (2852039166)与十六进制(0xA9FEA9FE);每个分量按 curl/inet_aton 进制规则解析(前导 0=八进制)。
+ * `unprovable: true` 表示是数字型 host 但非规范(如畸形八进制 08)—— 调用方应 fail-closed。
+ */
+function fetchHostIpv4Prefix(host: string): { a: number; b: number; unprovable?: boolean } | null {
+  const NUMERIC = /^(?:0[xX][0-9a-fA-F]+|\d+)$/;
+  const parts = host.split('.');
+  if (parts.length >= 2 && parts.length <= 4 && parts.every((q) => NUMERIC.test(q))) {
+    const p0 = parseNumericHostComponent(parts[0]);
+    const p1 = parseNumericHostComponent(parts[1]);
+    if (p0 === null || p1 === null) return { a: -1, b: -1, unprovable: true };
+    // 两段式 a.B24:B24 高 8 位是第二字节(inet_aton 规则)。
+    return { a: p0, b: parts.length === 2 ? (p1 >>> 16) & 255 : p1 };
+  }
+  if (NUMERIC.test(host)) {
+    const n = parseNumericHostComponent(host);
+    if (n === null) return { a: -1, b: -1, unprovable: true };
+    if (n >= 0 && n <= 0xffffffff) return { a: (n >>> 24) & 255, b: (n >>> 16) & 255 };
+  }
+  return null;
+}
+
+/**
+ * 云 metadata 端点(而非泛内网):抓它等于读取实例的临时云凭证 —— 静态可证的高危,两条通道
+ * (内置 WebFetch 与 shell curl/wget)都必须确定性同意。
+ *
+ * **刻意只含 metadata、不含 localhost/私网**:`curl localhost:3000` 是开发日常,把它一并硬弹窗会
+ * 违反 Auto-review「尽量不打扰」的第一承诺;localhost/私网仍走灰区交模型裁决。
+ * 复用 isInternalFetchTarget 的百分号解码外壳,编码形态同样命中。
+ */
+function isCloudMetadataFetchTarget(t: string): boolean {
+  const forms: string[] = [t];
+  let cur = t;
+  for (let round = 0; round < 3 && /%[0-9a-fA-F]{2}/.test(cur); round++) {
+    let decoded: string;
+    try {
+      decoded = decodeURIComponent(cur);
+    } catch {
+      return false; // 畸形序列由 isInternalFetchTarget 兜成内网(灰区),这里不另判红线
+    }
+    if (decoded === cur) break;
+    cur = decoded;
+    forms.push(cur);
+  }
+  return forms.some((form) => {
+    const host = fetchHostOf(form);
+    if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
+    const ip = fetchHostIpv4Prefix(host);
+    return ip !== null && ip.a === 169 && ip.b === 254; // 链路本地:含 169.254.169.254
+  });
+}
+
+function isInternalFetchHostForm(t: string): boolean {
+  const host = fetchHostOf(t);
   if (host === 'localhost' || host.endsWith('.localhost') || host === '0.0.0.0' || host === '::1') return true;
   if (host === 'metadata.google.internal' || host.endsWith('.internal')) return true;
   if (host.startsWith('[')) return true; // IPv6 字面量(环回/私网难精确,保守升级)
-  // 取 32 位 IPv4:点分 a.b.c.d,或 SSRF 混淆用的整数(2852039166=169.254.169.254)/ 十六进制(0xA9FEA9FE)。
-  // **每个分量按 curl/inet_aton 进制规则解析**(前导 0=八进制、0x=十六进制、否则十进制):`0251.0376.0251.0376`
-  // = 169.254.169.254、`0177.0.0.1`=127.0.0.1(codex 报:Number('0251') 误按十进制得 251 而漏判)。
-  const NUMERIC = /^(?:0[xX][0-9a-fA-F]+|\d+)$/;
-  let a: number | null = null;
-  let b = 0;
-  const parts = host.split('.');
-  if (parts.length >= 2 && parts.length <= 4 && parts.every((p) => NUMERIC.test(p))) {
-    // 点分 IPv4,含缩写形(curl 接受 127.1=127.0.0.1、10.1=10.0.0.1):内网判定只看前两段即可。
-    const p0 = parseNumericHostComponent(parts[0]);
-    const p1 = parseNumericHostComponent(parts[1]);
-    if (p0 === null || p1 === null) return true; // 畸形八进制(如 08)等非规范数字 host → 保守视为内网升级
-    a = p0;
-    // 两段式 a.B24:B24 高 8 位是第二字节(inet_aton 规则);如 169.16689662 → b=(16689662>>>16)&255=254 → 命中 metadata(codex P1)。
-    b = parts.length === 2 ? (p1 >>> 16) & 255 : p1;
-  } else if (NUMERIC.test(host)) {
-    const n = parseNumericHostComponent(host);
-    if (n === null) return true;                 // 非规范数字 host → 保守升级
-    if (n >= 0 && n <= 0xffffffff) {
-      a = (n >>> 24) & 255;
-      b = (n >>> 16) & 255;
-    }
-  }
-  if (a !== null) {
-    if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
-    if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
-    if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12
-    if (a === 192 && b === 168) return true;              // 192.168.0.0-16
-  }
+  const ip = fetchHostIpv4Prefix(host);
+  if (ip === null) return false;
+  if (ip.unprovable) return true;        // 非规范数字 host → 保守视为内网升级
+  const { a, b } = ip;
+  if (a === 127 || a === 10 || a === 0) return true;    // 环回 / 10.0.0.0-8 / 0.0.0.0-8
+  if (a === 169 && b === 254) return true;              // 链路本地 + 云 metadata 169.254.169.254
+  if (a === 172 && b >= 16 && b <= 31) return true;     // 172.16.0.0-12
+  if (a === 192 && b === 168) return true;              // 192.168.0.0-16
   return false;
 }
 
@@ -526,7 +2203,7 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
 }
 
 function classifyGit(tokens: string[], segment: string): ReviewVerdict {
-  // 危险 git(强推/硬重置/clean -f)已在 DANGEROUS_PATTERNS 命中,这里分只读 vs 写。
+  // 高风险 git(强推/硬重置/clean -f)已在 REVIEW_REQUIRED_PATTERNS 命中,这里分只读 vs 写。
   // 写文件 / 跑外部程序的选项(即便子命令"只读")→ 升级:
   //   -o/--output(diff/format-patch/show 写文件,无 shell `>` 可捕获);
   //   --ext-diff(跑外部 diff 驱动=RCE);
@@ -591,10 +2268,33 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
 }
 
 function classifyShellSegment(segment: string): ReviewVerdict {
-  const tokens = unwrapWrappers(tokenize(segment));
+  const rawTokens = tokenize(segment);
+  const tokens = unwrapWrappers(rawTokens);
+  // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
+  // reviewer 自行静默 allow。`-0` / `--null` 只改分隔符，不缩小输出范围；只有存在非选项
+  // VARIABLE 参数时才算具名读取并留在灰区。`env FOO=bar cmd` 仍按内层命令分类。
+  const printenvArgs = executableName(tokens[0] ?? '') === 'printenv' ? tokens.slice(1) : [];
+  let printenvHasVariable = false;
+  let printenvOptionsEnded = false;
+  for (const token of printenvArgs) {
+    if (!printenvOptionsEnded && token === '--') {
+      printenvOptionsEnded = true;
+      continue;
+    }
+    if (printenvOptionsEnded || !token.startsWith('-')) {
+      printenvHasVariable = true;
+      break;
+    }
+  }
+  const dumpsFullEnvironment =
+    (tokens.length === 0 && rawTokens.some((token) => executableName(token) === 'env'))
+    || (executableName(tokens[0] ?? '') === 'printenv' && !printenvHasVariable);
+  if (dumpsFullEnvironment) return 'prompt-each-time';
   // 剥壳后为空段:裸 `env`/`printenv`(dump 环境变量,含凭证)、或纯包裹器无内层命令 —— fail-closed 升级。
   if (tokens.length === 0) return 'prompt';
-  const bin = baseName(tokens[0]);
+  // executableName 归一 `.exe`/大小写:Windows/Git Bash 下 `ls.exe`/`cat.exe`/`git.exe status` 等良性
+  // 只读命令不应平白落灰区弹窗(与"尽量不打扰"一致);PATH 污染是已存档残口,归一不新增风险。
+  const bin = executableName(tokens[0]);
   // 去引号标记 + 去反斜杠转义:防 -ex'ec' / -ex\ec / -'o' 这类把 flag/命令拆开的拼接绕过(bash 会把它们
   // 还原成 -exec 等)。再抹掉参数展开(-ex${UNSET}ec / --pr${UNSET}e=…,codex 报):否则 find/rg 等的
   // 执行 flag 被藏在展开里、审查漏放行、bash 展开成空后才执行。flag/命令检测都在此串上跑。
@@ -634,18 +2334,22 @@ function classifyShellSegment(segment: string): ReviewVerdict {
   if (bin === 'git') return classifyGit(tokens, deQuoted);
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
-  // 其余(含所有写操作、未知命令)fail-closed 升级 —— 交给用户确认(可本会话记住)。
+  // 其余(含所有写操作、未知命令)进入灰区，由轻量 reviewer 静默 allow/block/ask。
   return 'prompt';
 }
 
 /**
- * shell 命令整体判定:危险模式先在整条命令上查(跨段管道如 `curl … | sh` 拆段后就查不到了),
- * 再拆顶层段,每段都要过 —— 任一段危险→整体 prompt-each-time;任一段需升级→整体 prompt;
- * 全部只读→auto-approve。空/畸形命令 → prompt(fail-closed)。
+ * shell 命令整体判定:风险模式先在整条命令上查(跨段管道如 `curl … | sh` 拆段后就查不到了),
+ * 再拆顶层段,每段都要过 —— 任一段明确红线→prompt-each-time;任一段需 reviewer→prompt;
+ * 全部只读→auto-approve。空/畸形命令 → prompt(交 reviewer，故障时静默 block)。
  */
-export function classifyShellCommand(command: string, _workspaceRoots: string[]): ReviewVerdict {
+export function classifyShellCommand(
+  command: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions = {},
+): ReviewVerdict {
   if (typeof command !== 'string' || command.trim().length === 0) return 'prompt';
-  // 匹配危险模式时跑**三个变体**,任一命中即 prompt-each-time:
+  // 两档风险模式都跑以下变体；明确红线优先，命中才 prompt-each-time：
   //  - deEscaped(去引号 + 去反斜杠转义):防 su'do' / su\do / rm -r'f' 这类把关键词拆开的绕过。
   //  - quotesOnly(只去引号、保留 `\`):Windows `\` 路径的凭证检测 —— `cat C:\Users\me\.ssh\id_rsa`
   //    里反斜杠是分隔符,若一并去掉会让凭证正则(前缀含 `\`)失配(copilot 报)。
@@ -665,8 +2369,40 @@ export function classifyShellCommand(command: string, _workspaceRoots: string[])
   const deExpandedGlob = deExpanded.replace(/[[\]{}*?]/g, '');
   // deSubstituted:把 `${X:-sudo}` 等默认值代入,让藏在展开默认值里的危险关键词现形(codex 报)。
   const deSubstituted = substituteDefaults(deEscaped);
-  for (const re of DANGEROUS_PATTERNS) {
+  // 仅按引号外的真实执行结构识别 pipe→解释器 / eval / 下载即执行，避免把打印示例文本误升级。
+  if ([command, stripExpansions(command), substituteDefaults(command)]
+    .some((variant) => highImpactExecutionNeedsConsent(variant))) return 'prompt-each-time';
+  for (const re of ALWAYS_ASK_PATTERNS) {
     if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt-each-time';
+  }
+  // 抓云 metadata = 读实例临时云凭证,静态可证的高危 → 与内置 WebFetch(reviewAction network)一致地
+  // 确定性必问,不能一边硬问一边只给 shell curl 灰区(自审发现的两通道不一致)。
+  // 只认 metadata,不含 localhost/私网 —— `curl localhost:3000` 是开发日常,硬弹窗会违反"尽量不打扰"。
+  for (const { text } of splitExecutableSegments(quotesOnly)) {
+    const tokens = unwrapWrappers(tokenize(text));
+    const bin = executableName(tokens[0] ?? '');
+    if (bin !== 'curl' && bin !== 'wget') continue;
+    if (tokens.slice(1).some((t) => isFetchTargetToken(t) && isCloudMetadataFetchTarget(t))) {
+      return 'prompt-each-time';
+    }
+  }
+  // 写系统/受保护目录(重定向 `cat x > /etc/hosts` 与参数写通道 `cp payload /etc/hosts`、
+  // `| tee /etc/hosts`、`truncate -s 0 /etc/passwd`、`tar -C /etc` 等)= 高影响系统写,复用
+  // file-write 的系统红线。**判定放在 scopedDestructionNeedsConsent 的分段循环里**,因为那里已经
+  // 跨段跟踪有效 cwd(`cd /etc &&`)与包装器改目录(`env -C /etc`)—— 相对写目标必须按有效 cwd 解析
+  // (codex 报:按 workspaceRoots 解析会让 `cp /tmp/payload hosts` 配 cwd=/etc 漏成灰区)。
+  // 该循环的首个变体就是原始 command(保留引号),含空格的 DEST 靠引号定界不会被拆碎。
+  // 删除/强推需要结合目标范围判断，不能只按关键词一刀切：可证明局限在工作区子目录或普通
+  // feature ref 的操作进入 reviewer；系统级、区外、整工作区、动态目标和受保护/隐含分支必问。
+  // Windows 保留反斜杠路径，避免把 C:\repo\build 去斜杠后误判；POSIX 额外检查去转义形态。
+  const scopedVariants = [command, quotesOnly, stripExpansions(quotesOnly), substituteDefaults(quotesOnly)];
+  if ((opts.platform ?? process.platform) !== 'win32') {
+    scopedVariants.push(deEscaped, deExpanded, deSubstituted);
+  }
+  if (scopedVariants.some((variant) =>
+    scopedDestructionNeedsConsent(variant, workspaceRoots, opts))) return 'prompt-each-time';
+  for (const re of REVIEW_REQUIRED_PATTERNS) {
+    if (re.test(deEscaped) || re.test(quotesOnly) || re.test(deGlobbed) || re.test(deExpanded) || re.test(deExpandedGlob) || re.test(deSubstituted)) return 'prompt';
   }
   const segments = splitTopLevelSegments(command);
   if (segments.length === 0) return 'prompt';

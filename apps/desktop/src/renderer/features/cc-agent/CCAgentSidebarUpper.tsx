@@ -819,7 +819,11 @@ function ExpandedView({
       sessionId,
       title,
       kind,
-      channels: { desktop: desktopEnabled, feishu: feishuEnabled, mobile: true },
+      channels: {
+        desktop: desktopEnabled,
+        feishu: feishuEnabled,
+        mobile: true,
+      },
     });
   }, []);
   const handleSessionDone = useCallback(

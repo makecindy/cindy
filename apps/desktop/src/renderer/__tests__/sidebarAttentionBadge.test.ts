@@ -36,6 +36,8 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
 
 vi.mock('@/components/sidebar/VendorIcon', () => ({
   VendorIcon: () => createElement('span', { 'data-testid': 'vendor-icon' }),
+  agentKindToVendor: (kind: string | null | undefined) =>
+    kind === 'codex' ? 'codex' : kind === 'pi' ? 'pi' : 'cc',
 }));
 
 afterEach(() => {

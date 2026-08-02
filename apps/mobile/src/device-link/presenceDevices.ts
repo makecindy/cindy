@@ -1,4 +1,5 @@
 import type { DeviceView, PresenceSnapshot } from '@cindy/device-link';
+import type { DeviceAccessState } from '@cindy/maker-shared/device-list';
 import { isControllableDevice } from '@cindy/maker-shared/device-list';
 
 export interface PresenceDevicePatchResult {
@@ -6,6 +7,22 @@ export interface PresenceDevicePatchResult {
   device: DeviceView | null;
   changed: boolean;
   becameControllable: boolean;
+}
+
+export type DeviceMirrorCleanupDisposition = 'keep' | 'soft' | 'hard';
+
+/**
+ * 设备列表状态与本地会话镜像的清理边界:
+ * - offline 是可恢复的传输状态,只失效 live 投影,保留最后可见消息;
+ * - remote_disabled / access_revoked 是显式权限终态,必须硬清敏感镜像;
+ * - ready / busy / self 不触碰镜像。
+ */
+export function deviceMirrorCleanupDisposition(
+  state: DeviceAccessState,
+): DeviceMirrorCleanupDisposition {
+  if (state === 'offline') return 'soft';
+  if (state === 'remote_disabled' || state === 'access_revoked') return 'hard';
+  return 'keep';
 }
 
 export function patchDeviceViewsWithPresence(

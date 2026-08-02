@@ -135,6 +135,28 @@ describe('permission interaction IPC', () => {
     expect(snap.agentStatus.status).toBe('Running');
   });
 
+  it('rehydrates a running Pi turn instead of dropping the active snapshot', async () => {
+    listActive.mockResolvedValueOnce([
+      {
+        sessionId: SESSION_ID,
+        agentKind: 'pi',
+        workDir: '/tmp/project',
+        capabilities: {},
+        isTurnRunning: true,
+      },
+    ]);
+
+    makerChatStore.initGlobalListeners();
+    makerChatStore.syncActiveTurnsFromMain();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    const snap = makerChatStore.getSnapshot(SESSION_ID);
+    expect(snap.agentKind).toBe('pi');
+    expect(snap.isStreaming).toBe(true);
+    expect(snap.agentStatus.isRunning).toBe(true);
+  });
+
   it('preserves title, description, and suggestions from main to pendingPermission', () => {
     const suggestions = [
       {

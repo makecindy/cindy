@@ -386,19 +386,22 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     return {
       ...p,
       isEnabled: (ctx: LiziMcpSessionContext) => {
-        // Codex 的共享 app-server 在还没有 thread/workdir 的阶段构建 MCP
-        // 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
-        // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目。机器级工具
+        // Codex 与 Pi 的共享 app-server / bridge 在还没有 thread/workdir 的阶段构建
+        // MCP 工具清单。普通工具必须先全部注册，真正调用时由 HTTP bridge 按新会话
+        // 冻结的策略阻断；否则某个用户默认会错误地影响所有项目（空 workdir 快照被缓存后，
+        // 全局启用但项目停用的工具仍暴露、反向配置则永久缺席，codex review）。机器级工具
         // 仍沿用现有 spawn-time gate + 环境重建语义。
-        const deferOrdinaryCodexGate =
-          ctx.agentKind === 'codex' && !ctx.workingDir && !GLOBAL_PLUGIN_IDS.has(pluginId);
+        const deferOrdinaryGate =
+          (ctx.agentKind === 'codex' || ctx.agentKind === 'pi')
+          && !ctx.workingDir
+          && !GLOBAL_PLUGIN_IDS.has(pluginId);
         // Orca 工具面必须在会话生命周期内保持稳定：Claude query 不会在项目策略
         // 动态启用后重建 MCP。创建入口仍由 Main 按调用时的项目策略 fail closed。
         const keepOrcaProviderStable = pluginId === 'collab';
         // Plugin gate：registry 负责 essential / machine / project / user / default 判定。
         if (
           !keepOrcaProviderStable &&
-          !deferOrdinaryCodexGate &&
+          !deferOrdinaryGate &&
           !pluginRegistry.isEnabled(pluginId, ctx.workingDir)
         ) {
           return false;

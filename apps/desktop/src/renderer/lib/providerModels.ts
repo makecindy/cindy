@@ -193,6 +193,7 @@ export function selectVisibleModels(params: {
   providers: ProviderView[];
   deviceCcModels: ModelDescriptor[];
   deviceCodexModels: ModelDescriptor[];
+  devicePiModels?: ModelDescriptor[];
   /**
    * SSH 远程会话(remoteHostId)传 true:订阅直连模型(chatgpt/ / xai/)不再被过滤,
    * 而是保留在清单中由调用方按 isSubscriptionDirectModel 标记禁用(置灰 + 原因提示)。
@@ -209,7 +210,16 @@ export function selectVisibleModels(params: {
    */
   excludeChatBridgedCodex?: boolean;
 }): ModelDescriptor[] {
-  const { agentKind, deviceId, providers, deviceCcModels, deviceCodexModels, excludeSubscriptionDirect, excludeChatBridgedCodex } = params;
+  const {
+    agentKind,
+    deviceId,
+    providers,
+    deviceCcModels,
+    deviceCodexModels,
+    devicePiModels = [],
+    excludeSubscriptionDirect,
+    excludeChatBridgedCodex,
+  } = params;
   // excludeSubscriptionDirect 不再过滤(见参数文档):行保留,准入由调用方按
   // isSubscriptionDirectModel 打 disabled。保留参数是为了不破坏既有调用签名。
   const pass = (list: ModelDescriptor[]): ModelDescriptor[] => list;
@@ -218,14 +228,18 @@ export function selectVisibleModels(params: {
     : undefined;
   const cc = pass(deviceId ? deviceCcModels : deriveModelsFromProviders(providers, 'claude-code'));
   const codex = pass(deviceId ? deviceCodexModels : deriveModelsFromProviders(providers, 'codex', codexDeriveOpts));
+  const pi = pass(deviceId ? devicePiModels : deriveModelsFromProviders(providers, 'pi'));
   if (agentKind === 'claude-code') return cc;
   if (agentKind === 'codex') return codex;
+  if (agentKind === 'pi') return pi;
   const merged = [...cc];
   const seen = new Set(merged.map((m) => m.id));
-  for (const m of codex) {
-    if (seen.has(m.id)) continue;
-    seen.add(m.id);
-    merged.push(m);
+  for (const list of [codex, pi]) {
+    for (const m of list) {
+      if (seen.has(m.id)) continue;
+      seen.add(m.id);
+      merged.push(m);
+    }
   }
   return merged;
 }
@@ -240,17 +254,22 @@ export function resolveVisibleModelAgentKind(params: {
   agentKind: AgentKind | null;
   ccModels: ModelDescriptor[];
   codexModels: ModelDescriptor[];
+  piModels?: ModelDescriptor[];
   providers: ProviderView[];
 }): AgentKind | null {
-  const { modelId, agentKind, ccModels, codexModels, providers } = params;
+  const { modelId, agentKind, ccModels, codexModels, piModels = [], providers } = params;
   if (agentKind) return agentKind;
   if (ccModels.some((model) => model.id === modelId)) return 'claude-code';
   if (codexModels.some((model) => model.id === modelId)) return 'codex';
+  if (piModels.some((model) => model.id === modelId)) return 'pi';
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'claude-code'))) {
     return 'claude-code';
   }
   if (providers.some((provider) => providerOffersModel(provider, modelId, 'codex'))) {
     return 'codex';
+  }
+  if (providers.some((provider) => providerOffersModel(provider, modelId, 'pi'))) {
+    return 'pi';
   }
   return null;
 }

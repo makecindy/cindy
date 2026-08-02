@@ -459,7 +459,9 @@ async function ensureSessionFromMeta(
     agentKind: meta.agentKind,
     workingDir: meta.workingDir,
     model: meta.model,
-    providerId: meta.providerId ?? undefined,
+    // null 表示「清除显式来源，走 Cindy 默认路由」；不能塌缩成 undefined，后者会让
+    // Pi core 反查同名 BYOM provider。
+    providerId: meta.providerId,
     effort: meta.effort,
     permissionMode: meta.permissionMode,
     fastMode: meta.fastMode,
@@ -618,9 +620,19 @@ export function createOrcaWorkerBridgeMcpProvider(deps: OrcaBridgeMcpDeps): McpP
   const leadCaptures = new CapturedSessionRegistry();
   return {
     name: 'orca_worker_bridge',
-    isEnabled: (ctx) => ctx.vendorOptions?.orcaRole === 'worker' || ctx.agentKind === 'codex',
+    // Global HTTP bridges (Codex and Pi) bind the real session only at request time.
+    // Keep the server registered when a dynamic context resolver exists; every tool
+    // call still fails closed in resolveWorkerLink against that runtime identity.
+    isEnabled: (ctx) =>
+      ctx.vendorOptions?.orcaRole === 'worker'
+      || ctx.agentKind === 'codex'
+      || typeof ctx.getSessionContext === 'function',
     toClaudeSdkConfig: (ctx) => {
-      if (ctx.vendorOptions?.orcaRole !== 'worker' && ctx.agentKind !== 'codex') return null;
+      if (
+        ctx.vendorOptions?.orcaRole !== 'worker'
+        && ctx.agentKind !== 'codex'
+        && typeof ctx.getSessionContext !== 'function'
+      ) return null;
       const server = new McpServer({ name: 'orca_worker_bridge', version: '0.1.0' });
 
       async function resolveLead(workerId?: string) {

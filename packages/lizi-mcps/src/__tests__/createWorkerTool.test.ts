@@ -147,6 +147,23 @@ describe('create_worker tool', () => {
     });
   });
 
+  it('accepts pi as a first-class worker agent and passes it through to host', async () => {
+    const { registry, createWorker } = setup();
+
+    const res = await registry.call('create_worker', {
+      role: 'developer',
+      agent: 'pi',
+      label: 'pi_dev_1',
+    });
+
+    expect(res.isError).toBeUndefined();
+    expect(parse(res)).toMatchObject({ ok: true, label: 'pi_dev_1' });
+    expect(createWorker).toHaveBeenCalledWith(expect.objectContaining({
+      agent: 'pi',
+      label: 'pi_dev_1',
+    }));
+  });
+
   it('trims valid labels before validating and calling host', async () => {
     const { registry, createWorker } = setup();
 

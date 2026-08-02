@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, count, eq, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -87,6 +87,7 @@ export function registerMessageIpc(): void {
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
+    const after = (opts as { after?: string } | undefined)?.after;
     const db = getDbClient().drizzle;
 
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
@@ -96,11 +97,12 @@ export function registerMessageIpc(): void {
       sid,
       {},
       {
-        deviceLinkFirstPage: !before && beforeTs == null,
+        deviceLinkFirstPage: !before && beforeTs == null && !after,
       },
     );
 
     let beforeCursor: { createdAt: number; rowid: number } | null = null;
+    let afterCursor: { createdAt: number; rowid: number } | null = null;
     let beforeMs: number | null = null;
     if (typeof before === 'string' && before) {
       const beforeRow = await db
@@ -113,6 +115,14 @@ export function registerMessageIpc(): void {
       }
     } else if (typeof beforeTs === 'number' && Number.isFinite(beforeTs)) {
       beforeMs = beforeTs;
+    }
+    if (!beforeCursor && beforeMs === null && typeof after === 'string' && after) {
+      const afterRow = await db
+        .select({ createdAt: messages.createdAt, rowid: messageRowid })
+        .from(messages)
+        .where(and(eq(messages.id, after), eq(messages.sessionId, sid)))
+        .limit(1);
+      if (afterRow.length > 0) afterCursor = afterRow[0];
     }
 
     // /clear：过滤 createdAt > session.clearedAt，本地 DB 旧消息也遵守 clearedAt 边界
@@ -137,6 +147,13 @@ export function registerMessageIpc(): void {
       );
     } else if (beforeMs !== null) {
       conds.push(lt(messages.createdAt, beforeMs));
+    } else if (afterCursor) {
+      conds.push(
+        or(
+          gt(messages.createdAt, afterCursor.createdAt),
+          and(eq(messages.createdAt, afterCursor.createdAt), gt(messageRowid, afterCursor.rowid)),
+        ),
+      );
     }
     if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
     const whereExpr = and(...conds);
@@ -148,9 +165,13 @@ export function registerMessageIpc(): void {
       })
       .from(messages)
       .where(whereExpr)
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .orderBy(
+        afterCursor ? asc(messages.createdAt) : desc(messages.createdAt),
+        afterCursor ? asc(messageRowid) : desc(messageRowid),
+      )
       .limit(limit);
-    return hydrateLegacyUserTurnCosts(rows.map(messageToCamelWithRowid));
+    const orderedRows = afterCursor ? rows.slice().reverse() : rows;
+    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
   });
 
   ipcMain.handle(
@@ -513,7 +534,7 @@ export async function runMessagesListImportSideEffects(
  * handleMessageCreatedRaw 对已存在 clientId 走 merge/替换语义,因此**更新**行
  * (如 dismiss)复用同一事件即可让 peer 视图刷新,无需新增 onUpdated 通道。
  */
-function broadcastMessageRow(sessionId: string, msg: Message): void {
+export function broadcastMessageRow(sessionId: string, msg: Message): void {
   tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -712,7 +733,6 @@ export async function commitMessageDeletion(
   deletedClientIds: string[];
   updatedAt: number;
   preview: string | null;
-  messageCount: number;
 }> {
   const now = Date.now();
   const result = await getDbClient().tx('message.delete', {
@@ -747,11 +767,27 @@ export async function commitMessageDeletion(
   }
   void recomputePrRefsForSession(sessionId).catch(() => undefined);
 
-  // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出
-  // canonical session-list projection，避免其它窗口 / device-link 控制端继续显示
-  // 已删除的末条消息预览或旧 _count。count 口径与 sessions:list / preview 的可见消息保持一致。
+  // sessions:patched 的消费者只做 shallow merge，不会主动重拉。删除后同步带出 canonical
+  // preview，避免其它窗口 / device-link 控制端继续显示已删除的末条消息。preview 口径与
+  // sessions:list 的 LATEST_MSG_CONTENT_SQL 一致：可见 user/assistant，过滤 rewind_at /
+  // agentMeta.autoResume / cleared_at。
+  //
+  // 刻意**不**广播 `_count.messages`：列表里 `_count.messages` 的权威口径是该会话的全部
+  // messages 行数（sessions.ts 的 SESSION_MESSAGE_COUNT_SQL / MESSAGE_COUNT_COL，不过滤
+  // role / rewind_at / cleared_at），而下面这个可见投影只数 user/assistant 行——一个正常
+  // 会话里 tool_use / tool_result / thinking / error 行往往是它的几十倍，拿它去 patch 会把
+  // 侧栏与手机端卡片的「N 条消息」改成明显偏小的值，且 shallow merge 消费端不会自己纠正，
+  // 错值一直留到下次完整 reseed。
+  //
+  // 那为什么不顺手广播权威口径？因为删除对它的影响只有 0 或 +1，不值得每次删除多跑一次
+  // 全表 count：message.delete 事务（worker/opHandlers/tx.ts）先物理删掉该会话所有旧
+  // context_rebuild 行，再把目标行原地改成 message_tombstone（保留，不删行），最后插入
+  // 一个新的 context_rebuild 行——首次删除（无旧标记）净 +1，之后每次删旧插新、净 0。
+  // 差的这一行是用户看不见的隐藏派生行（普通列表 / 搜索 / 导出都按 rewind_at 过滤掉它），
+  // 下次完整 reseed 即收敛；而事务外单独查的标量本身也带竞态（并发落消息时它已不等于
+  // 「删除后那一刻」的值）。要真的同步就得广播不过滤的 count(*)，见 issue #1282 的讨论。
+  // 口径要动得连 maker-shared/sessionList 的 messageCountLabel 一起改。
   let preview: string | null = null;
-  let messageCount = 0;
   try {
     const db = getDbClient().drizzle;
     const [sessionRow] = await db
@@ -768,20 +804,13 @@ export async function commitMessageDeletion(
       sql`(${messages.agentMeta} IS NULL OR json_extract(${messages.agentMeta}, '$.autoResume') IS NOT 1)`,
       visibleAfterClear,
     );
-    const [[countRow], [latestRow]] = await Promise.all([
-      db
-        .select({ messageCount: count(messages.id) })
-        .from(messages)
-        .where(visibleMessageProjection),
-      db
-        .select({ content: messages.content, role: messages.role })
-        .from(messages)
-        .where(visibleMessageProjection)
-        .orderBy(desc(messages.createdAt), desc(messageRowid))
-        .limit(1),
-    ]);
+    const [latestRow] = await db
+      .select({ content: messages.content, role: messages.role })
+      .from(messages)
+      .where(visibleMessageProjection)
+      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .limit(1);
     preview = extractMessagePreview(latestRow?.content, latestRow?.role);
-    messageCount = countRow?.messageCount ?? 0;
   } catch (error) {
     // 删除已经原子提交；投影查询失败不能把成功操作伪装成失败。广播保守空值，
     // 后续 sessions:list / reseed 会按 DB 真相收敛。
@@ -796,7 +825,6 @@ export async function commitMessageDeletion(
     deletedClientIds: result.messages.map((message) => message.clientId),
     updatedAt: now,
     preview,
-    messageCount,
   };
 }
 
@@ -834,6 +862,98 @@ export async function dismissErrorMessage(
   // banner 判定即时熄灭;发起端自身的乐观更新早已生效,重复广播幂等。
   if (updated) broadcastMessageRow(sessionId, updated);
   return updated;
+}
+
+/**
+ * retry-supersede:零产出失败 turn 被「重试」克隆重发后,软删被取代的旧 user 行
+ * 与其后的 role='error' 行(coordinator 在克隆行落库且 vendor 派发成功之后调用,见
+ * AgentInputQueuedMessage.supersedesUserClientId)。
+ *
+ * 语义与守卫:
+ *  - 软删 = 置 rewind_at。普通历史读取、fork 复制、外部 transcript 导入、错误
+ *    尾行告警全部按 rewind_at IS NULL 过滤,行本体保留可审计——与 context_rebuild
+ *    借该列隐藏的既有先例同口径,不是 rewind-session 的回滚语义。
+ *  - error 行按 (created_at, rowid) 双键窗口定位:严格晚于旧 user 行、严格早于
+ *    克隆行。零产出失败的窗口内只可能有本次失败的 error 行;role 过滤兜底,
+ *    绝不触碰任何产出行。
+ *  - 旧行必须仍是可见的 user 行、克隆行必须已落库,任一缺失即整体 no-op(防御
+ *    误传参与 deferred error 补落竞态);UPDATE 带 rewind_at IS NULL,重复调用幂等。
+ *  - 单条 UPDATE 原子置位后经 messages:deleted 广播(本机各窗口 + device-link
+ *    转发),desktop / mobile 的移除处理复用消息删除的既有消费端。
+ *  - **刻意不广播 sessions:patched**(review 追问过):会话列表 `_count.messages` 的
+ *    权威口径是「该会话全部 messages 行数,不过滤 role / rewind_at / cleared_at」
+ *    (见 sessions.ts 的 SESSION_MESSAGE_COUNT_SQL),而软删只置 rewind_at 不删行,
+ *    总行数不变;preview 口径虽过滤 rewind_at,但克隆行 created_at 更大、始终是最新
+ *    可见行,也不变。两个值都没变,广播是多余的;拿「可见 user/assistant 数」去覆盖
+ *    _count 更会把侧栏与被控端的计数打成偏小值(消费端只 shallow merge,错到下次
+ *    reseed 才收敛)。
+ *
+ * @returns 实际软删的 clientIds(空数组 = no-op),仅供调用方与测试观察。
+ */
+export async function supersedeRetriedUserTurn(
+  sessionId: string,
+  args: { supersededUserClientId: string; retryUserClientId: string },
+): Promise<string[]> {
+  const db = getDbClient().drizzle;
+  const [oldRow] = await db
+    .select({
+      clientId: messages.clientId,
+      createdAt: messages.createdAt,
+      rowid: messageRowid,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.clientId, args.supersededUserClientId),
+        eq(messages.role, 'user'),
+        isNull(messages.rewindAt),
+      ),
+    )
+    .limit(1);
+  const [retryRow] = await db
+    .select({ createdAt: messages.createdAt, rowid: messageRowid })
+    .from(messages)
+    .where(
+      and(eq(messages.sessionId, sessionId), eq(messages.clientId, args.retryUserClientId)),
+    )
+    .limit(1);
+  if (!oldRow || !retryRow) return [];
+  // 窗口两端都用 (created_at, rowid) 双键:error 行的 createdAt 取"本轮最后行 + 1",
+  // 但历史数据与时钟边缘仍可能与相邻 user 行同毫秒。口径与 rewind / fork 的边界
+  // 比较一致(messageRowid + gt/lt 组合),orderBy 让返回顺序确定,不依赖执行计划。
+  const errorRows = await db
+    .select({ clientId: messages.clientId })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        eq(messages.role, 'error'),
+        isNull(messages.rewindAt),
+        or(
+          gt(messages.createdAt, oldRow.createdAt),
+          and(eq(messages.createdAt, oldRow.createdAt), gt(messageRowid, oldRow.rowid)),
+        ),
+        or(
+          lt(messages.createdAt, retryRow.createdAt),
+          and(eq(messages.createdAt, retryRow.createdAt), lt(messageRowid, retryRow.rowid)),
+        ),
+      ),
+    )
+    .orderBy(asc(messages.createdAt), asc(messageRowid));
+  const clientIds = [oldRow.clientId, ...errorRows.map((r) => r.clientId)];
+  await db
+    .update(messages)
+    .set({ rewindAt: Date.now() })
+    .where(
+      and(
+        eq(messages.sessionId, sessionId),
+        inArray(messages.clientId, clientIds),
+        isNull(messages.rewindAt),
+      ),
+    );
+  broadcastMessageDeleted({ sessionId, clientId: oldRow.clientId, clientIds });
+  return clientIds;
 }
 
 export async function updateMessageContent(
@@ -945,7 +1065,7 @@ export async function createMessage(
      * agentMeta 需要它;main 侧 SDK 事件落库路径必传,renderer pending echo 等
      * 无 SDK 元信息的行留空(null 回落 session.agentKind)。
      */
-    agentKind?: 'cc' | 'codex' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | null;
     createdAt?: number;
   },
   opts?: {
@@ -1680,7 +1800,7 @@ export interface ParkedEngineSession {
  */
 export async function findParkedEngineSession(
   sessionId: string,
-  targetDbKind: 'cc' | 'codex',
+  targetDbKind: 'cc' | 'codex' | 'pi',
 ): Promise<ParkedEngineSession | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db

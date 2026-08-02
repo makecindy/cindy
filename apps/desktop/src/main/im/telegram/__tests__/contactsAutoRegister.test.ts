@@ -1,9 +1,10 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
+  enabled: true,
   createContact: vi.fn(),
   emitLocalContactsChanged: vi.fn(),
-  resolve: vi.fn(() => []),
+  resolve: vi.fn(),
 }));
 
 vi.mock('../../../logger.js', () => ({
@@ -20,33 +21,47 @@ vi.mock('../../../maker-host/maker-contacts-host.js', () => ({
 }));
 
 vi.mock('../../../maker-host/contacts-settings-store.js', () => ({
-  readContactsSettingsState: () => ({ value: { enabled: true } }),
+  readContactsSettingsState: () => ({ value: { enabled: harness.enabled } }),
 }));
 
 vi.mock('../../../maker-host/contacts-change-events.js', () => ({
   emitLocalContactsChanged: harness.emitLocalContactsChanged,
 }));
 
-import { autoRegisterTelegramSpeaker } from '../contactsAutoRegister.js';
+import {
+  autoRegisterTelegramSpeaker,
+  resetTelegramSpeakerRegistrationCache,
+} from '../contactsAutoRegister.js';
 
 describe('Telegram contacts auto-register', () => {
   beforeEach(() => {
-    harness.createContact.mockReset();
-    harness.emitLocalContactsChanged.mockReset();
-    harness.resolve.mockReset().mockReturnValue([]);
+    vi.clearAllMocks();
+    harness.enabled = true;
+    harness.resolve.mockReturnValue([]);
+    resetTelegramSpeakerRegistrationCache();
   });
 
-  it('建档成功后触发共享本地变更事件', () => {
-    autoRegisterTelegramSpeaker(
-      { id: 'telegram-event-1', name: 'Alice', isOwner: false },
-      { chatName: '项目群' },
+  it('registers a non-owner once and emits the shared local change event', () => {
+    const speaker = { id: '12345', name: 'Alice', username: 'alice', isOwner: false };
+    autoRegisterTelegramSpeaker(speaker, { chatName: 'Ops' });
+    autoRegisterTelegramSpeaker(speaker, { chatName: 'Ops' });
+
+    expect(harness.resolve).toHaveBeenCalledOnce();
+    expect(harness.createContact).toHaveBeenCalledOnce();
+    expect(harness.createContact).toHaveBeenCalledWith(
+      expect.objectContaining({
+        displayName: 'Alice',
+        summary: 'Telegram 群「Ops」成员(bot 自动登记)',
+        identities: [
+          { platform: 'telegram', value: '12345' },
+          { platform: 'telegram', value: '@alice' },
+        ],
+      }),
     );
-
-    expect(harness.createContact).toHaveBeenCalledTimes(1);
-    expect(harness.emitLocalContactsChanged).toHaveBeenCalledTimes(1);
+    expect(harness.emitLocalContactsChanged).toHaveBeenCalledOnce();
   });
 
-  it('建档失败时不触发变更事件', () => {
+  it('does not emit a change event when contact creation fails', () => {
     harness.createContact.mockImplementationOnce(() => {
       throw new Error('database busy');
     });
@@ -57,5 +72,18 @@ describe('Telegram contacts auto-register', () => {
     );
 
     expect(harness.emitLocalContactsChanged).not.toHaveBeenCalled();
+  });
+
+  it('does not create contacts for the owner, when disabled, or for known identities', () => {
+    autoRegisterTelegramSpeaker({ id: '1', name: 'Owner', isOwner: true }, { chatName: 'Ops' });
+    harness.enabled = false;
+    autoRegisterTelegramSpeaker({ id: '2', name: 'Disabled', isOwner: false }, { chatName: 'Ops' });
+    harness.enabled = true;
+    harness.resolve.mockReturnValue([{ matchType: 'identity' }]);
+    autoRegisterTelegramSpeaker({ id: '3', name: 'Known', isOwner: false }, { chatName: 'Ops' });
+
+    expect(harness.createContact).not.toHaveBeenCalled();
+    expect(harness.emitLocalContactsChanged).not.toHaveBeenCalled();
+    expect(harness.resolve).toHaveBeenCalledOnce();
   });
 });

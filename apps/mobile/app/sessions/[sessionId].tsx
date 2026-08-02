@@ -12,6 +12,7 @@ import {
   Image,
   List,
   ListTodo,
+  Menu,
   Mic,
   Pencil,
   Pin,
@@ -32,11 +33,12 @@ import {
   setAudioModeAsync,
 } from 'expo-audio';
 import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from 'react';
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
   Alert,
   AppState,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -60,6 +62,7 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { useGuardedBack } from '@/utils/useGuardedBack';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
@@ -88,6 +91,7 @@ import { BlurBackdrop } from '@/session/BlurBackdrop';
 import { SheetModal } from '@/session/SheetModal';
 import { SheetGrabber, SheetSurface } from '@/session/SheetSurface';
 import { MobilePermissionPickerList } from '@/session/MobilePermissionPickerList';
+import { PiSessionTreeSheet } from '@/session/PiSessionTreeSheet';
 import { computeContextSheetSnapHeights, type ContextSheetSnap } from '@/session/contextSheetModel';
 import { permissionAccentColor, permissionPresentation } from '@/session/permissionPresentation';
 import {
@@ -222,6 +226,7 @@ import { confirmMobileSessionAgentSwitch } from '@/session/sessionAgentSwitchCon
 import {
   mobileAgentLabel,
   normalizeSessionAgentSwitchIntent,
+  sessionAgentKind as resolveSessionAgentKind,
   supportsMobileSessionAgentSwitch,
   type MobileSessionAgentKind,
 } from '@/session/sessionAgentSwitch';
@@ -393,6 +398,9 @@ import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
+import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
+import { SessionListDrawer } from '@/session/SessionListDrawer';
+import type { RemoteSessionListItem } from '@/session/sessionList';
 import {
   findMobileMessageSearchHits,
   nextMessageSearchIndex,
@@ -922,6 +930,8 @@ export default function SessionScreen() {
   const [searchOpen, setSearchOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [menuInitialView, setMenuInitialView] = useState<SessionMenuView>('menu');
+  const [sessionTreeOpen, setSessionTreeOpen] = useState(false);
+  const [sessionTreePendingOpen, setSessionTreePendingOpen] = useState(false);
   // inline 排队区:展开操作行的条目(同时只展开一条;null=全收起)。
   const [queueSelectedClientId, setQueueSelectedClientId] = useState<string | null>(null);
   // 排队消息「复用 composer 编辑」态:进入时把队列条目的文本/附件载入 composer,
@@ -1632,18 +1642,12 @@ export default function SessionScreen() {
   const canStopCurrentRun = (remoteSessionRunning || currentTurnStreaming)
     && !inputProjection.queueAbortPending;
   const canStopComposer = canStopQueue || canStopCurrentRun;
-  const sessionAgentKind: MobileSessionAgentKind = currentSession?.agentKind === 'codex'
-    ? 'codex'
+  const sessionAgentKind: MobileSessionAgentKind = currentSession
+    ? resolveSessionAgentKind(currentSession)
     : 'claude-code';
   const agentSwitchIntent = currentSession?.agentSwitchIntent ?? null;
   const sessionAgentSwitchSupported = !!currentSession
     && supportsMobileSessionAgentSwitch(currentSession, capabilities);
-  const alternateAgentKind: MobileSessionAgentKind = sessionAgentKind === 'codex'
-    ? 'claude-code'
-    : 'codex';
-  const resolvedAlternateCapabilities = alternateCapabilitiesAgentKind === alternateAgentKind
-    ? alternateCapabilities
-    : null;
   const runtimeOptions = useMemo(
     () => currentSession ? buildSessionRuntimeOptions(currentSession, capabilities) : null,
     [capabilities, currentSession],
@@ -1660,9 +1664,12 @@ export default function SessionScreen() {
       fastMode: agentSwitchIntent.fastMode ?? false,
     };
   }, [agentSwitchIntent, currentSession]);
-  const composerDisplayCapabilities = agentSwitchIntent?.targetAgentKind === alternateAgentKind
-    ? resolvedAlternateCapabilities
-    : capabilities;
+  const composerDisplayCapabilities = !agentSwitchIntent
+    || agentSwitchIntent.targetAgentKind === sessionAgentKind
+    ? capabilities
+    : alternateCapabilitiesAgentKind === agentSwitchIntent.targetAgentKind
+      ? alternateCapabilities
+      : null;
   const composerDisplayRuntimeOptions = useMemo(
     () => composerDisplaySession
       ? buildSessionRuntimeOptions(composerDisplaySession, composerDisplayCapabilities)
@@ -1681,7 +1688,7 @@ export default function SessionScreen() {
     () => currentSession
       ? buildMobileModelSections({
           providers: composerDeviceProviders.providers,
-          agentKind: currentSession.agentKind === 'codex' ? 'codex' : 'claude-code',
+          agentKind: sessionAgentKind,
           selectedModelId: currentSession.model,
           selectedProviderId: currentSession.providerId ?? null,
           visibilityOverrides: composerDeviceProviders.modelVisibilityOverrides,
@@ -1726,7 +1733,9 @@ export default function SessionScreen() {
   const modelSheetUsesIntent = agentSwitchIntent?.targetAgentKind === modelSheetAgentKind;
   const modelSheetCapabilities = modelSheetAgentKind === sessionAgentKind
     ? capabilities
-    : resolvedAlternateCapabilities;
+    : alternateCapabilitiesAgentKind === modelSheetAgentKind
+      ? alternateCapabilities
+      : null;
   const modelSheetCapabilitiesLoading = modelSheetAgentKind === sessionAgentKind
     ? capabilitiesLoading
     : alternateCapabilitiesLoading;
@@ -1911,6 +1920,68 @@ export default function SessionScreen() {
   const composerTouchLayout = useMemo(() => buildComposerTouchLayout({
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
+  // 宽屏导航形态(iPad / 安卓折叠屏与横屏大屏机):左上角三条杠 + 任务列表抽屉,
+  // 原地 replace 切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
+  // iPhone 不发)见 wideSessionNav.ts。
+  const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
+    iosPad: Platform.OS === 'ios' && Platform.isPad,
+    platform: Platform.OS,
+    windowHeight: windowDimensions.height,
+    windowWidth: windowDimensions.width,
+  }), [windowDimensions.height, windowDimensions.width]);
+  const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点(SessionListDrawer.returnFocusRef)。
+  const sessionListButtonRef = useRef<View>(null);
+  // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
+  useEffect(() => {
+    if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
+  }, [wideSessionNav.enabled]);
+  const openSessionListDrawer = useCallback(() => {
+    Keyboard.dismiss();
+    setSessionListDrawerOpen(true);
+  }, []);
+  const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
+  const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
+    const targetSession = item.session as RemoteSession;
+    if (targetSession.id === sessionId) {
+      setSessionListDrawerOpen(false);
+      return;
+    }
+    // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
+    // 回退物理 id / store 索引。校验先于关闭动画:失败时保持抽屉打开 + Alert 反馈
+    // (文案与首页同键)——先关再弹会让 200ms 后的读屏焦点归还从错误弹窗手里抢焦点,
+    // 且抽屉留在原地,用户可直接改选别的任务。
+    const targetDeviceId = targetSession.canonicalDeviceId
+      ?? targetSession.deviceLinkDeviceId
+      ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
+    if (!targetDeviceId) {
+      Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
+      return;
+    }
+    setSessionListDrawerOpen(false);
+    // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
+    router.replace({
+      pathname: '/sessions/[sessionId]',
+      params: {
+        deviceId: targetDeviceId,
+        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+        sessionId: targetSession.id,
+      },
+    });
+  }, [router, sessionId, t]);
+  // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
+  // 与首页各入口同一把 guardedPush 锁。
+  const guardedPush = useGuardedPush();
+  const handleDrawerNewSession = useCallback(() => {
+    setSessionListDrawerOpen(false);
+    guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+  }, [deviceId, deviceName, guardedPush]);
+  // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
+  // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
+  const handleDrawerGoHome = useCallback(() => {
+    setSessionListDrawerOpen(false);
+    router.dismissTo('/');
+  }, [router]);
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
   // 否则「拖回单行退出激活态」永远收不回去。
@@ -2038,6 +2109,15 @@ export default function SessionScreen() {
     setMenuInitialView(view);
     setSettingsOpen(true);
   }, []);
+  const openSessionTreeAfterMenu = useCallback(() => {
+    setSessionTreePendingOpen(true);
+    setSettingsOpen(false);
+  }, []);
+  const handleSessionMenuClosed = useCallback(() => {
+    if (!sessionTreePendingOpen) return;
+    setSessionTreePendingOpen(false);
+    setSessionTreeOpen(true);
+  }, [sessionTreePendingOpen]);
   const renderComposerResizeHandle = () => (
     <ComposerResizeGrabber
       onAdjust={composerResize.adjustByLine}
@@ -2797,7 +2877,21 @@ export default function SessionScreen() {
       setAlternateCapabilitiesError(null);
       return;
     }
-    const targetAgentKind = alternateAgentKind;
+    // 三 Agent 不能再用“当前 / 另一侧”的二元缓存。面板打开时跟随正在浏览的
+    // agent；面板关闭但已有 pending intent 时继续保有目标 agent 的能力快照。
+    const targetAgentKind = modelSheetOpen && modelSheetAgentKind !== sessionAgentKind
+      ? modelSheetAgentKind
+      : agentSwitchIntent?.targetAgentKind !== sessionAgentKind
+        ? agentSwitchIntent?.targetAgentKind ?? null
+        : null;
+    if (!targetAgentKind) {
+      alternateCapabilitiesLoadSeqRef.current += 1;
+      setAlternateCapabilities(null);
+      setAlternateCapabilitiesAgentKind(null);
+      setAlternateCapabilitiesLoading(false);
+      setAlternateCapabilitiesError(null);
+      return;
+    }
     const seq = ++alternateCapabilitiesLoadSeqRef.current;
     let cancelled = false;
     setAlternateCapabilitiesAgentKind(targetAgentKind);
@@ -2852,7 +2946,16 @@ export default function SessionScreen() {
       cancelled = true;
       unsubscribe();
     };
-  }, [alternateAgentKind, deviceId, maker, openLink, sessionAgentSwitchSupported]);
+  }, [
+    agentSwitchIntent?.targetAgentKind,
+    deviceId,
+    maker,
+    modelSheetAgentKind,
+    modelSheetOpen,
+    openLink,
+    sessionAgentKind,
+    sessionAgentSwitchSupported,
+  ]);
 
   useEffect(() => {
     if (!deviceId || !sessionAgentSwitchSupported) {
@@ -2973,7 +3076,7 @@ export default function SessionScreen() {
         });
         // 廉价对账:updatedAt 主信号(任何消息变化都会 bump),_count 仅在两侧都有时作辅助;
         // 另外要求消息窗口已被详情页同步到当前 meta,避免首页先刷新 session preview 后,
-        // 详情页把旧消息缓存误判成最新。任一变化 → 只拉最新小窗对账(store 旧消息保留 + 按 key 合并);
+        // 详情页把旧消息缓存误判成最新。任一变化 → 拉取权威最新窗口并对账;
         // 都没变 → 跳过整窗重拉(内容已是最新,新消息由 live subscribe 推送)。
         const freshCount = sessionMeta._count?.messages;
         const metaChanged = shouldRefreshLatestMessageWindowOnReopen({
@@ -2982,7 +3085,6 @@ export default function SessionScreen() {
           storedSession: storedSessionAtStart,
         });
         if (syncRun.isStale()) return;
-        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setActiveSessionSnapshots(
           deviceId,
           Array.isArray(activeSessionSnapshot.activeSessions)
@@ -3010,6 +3112,7 @@ export default function SessionScreen() {
           // 真实消息数推断(getSession 没给总数时退化为窗口启发式)。
           setHasOlderMessages(hasOlderMessagesAfterReopen(freshCount, remoteSessionStore.getMessages(sessionId)));
         }
+        remoteSessionStore.upsertDeviceSession(deviceId, deviceName, sessionMeta);
         remoteSessionStore.setPendingInteractions(sessionId, Array.isArray(pendingInteractions) ? pendingInteractions : []);
         remoteSessionStore.setInputProjection(sessionId, projection);
       }
@@ -7491,7 +7594,12 @@ export default function SessionScreen() {
   return (
     <View style={styles.safeArea} testID="session.screen">
       <KeyboardAvoidingView
+        // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
+        // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
+        // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
+        accessibilityElementsHidden={sessionListDrawerOpen}
         behavior={nativeShellLayout.keyboardAvoidingBehavior}
+        importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >
@@ -7505,6 +7613,8 @@ export default function SessionScreen() {
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
+              onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}
+              sessionListButtonRef={sessionListButtonRef}
               onOpenFiles={() => {
                 if (!currentSession?.workingDir) return;
                 router.push({
@@ -7561,6 +7671,7 @@ export default function SessionScreen() {
             keyboardAvoidingBehavior={nativeShellLayout.keyboardAvoidingBehavior}
             onArchive={() => patchSessionMeta({ status: 'archived' })}
             onClose={() => setSettingsOpen(false)}
+            onClosed={handleSessionMenuClosed}
             onDelete={() => patchSessionMeta({ status: 'deleted' })}
             onLoadExtraDirPath={(path) => void loadExtraDirBrowsePath(path)}
             onRefreshAccountUsage={() => void refreshAccountUsage()}
@@ -7574,6 +7685,9 @@ export default function SessionScreen() {
                 params: { sessionId, deviceId, deviceName },
               });
             }}
+            onOpenSessionTree={currentSession.agentKind === 'pi'
+              ? openSessionTreeAfterMenu
+              : undefined}
             onRegenerateTitle={() => maker.regenerateSessionTitle(sessionId)}
             onRename={(title) => patchSessionMeta({ title })}
             onRestore={() => patchSessionMeta({ status: 'active' })}
@@ -7591,6 +7705,20 @@ export default function SessionScreen() {
             visible={settingsOpen}
           />
         ) : null}
+        <PiSessionTreeSheet
+          disabledReason={remoteSessionRunning
+            ? t('session.menu.branchRunningBlocked')
+            : collaborationReadOnlyReason}
+          maker={maker}
+          onClose={() => setSessionTreeOpen(false)}
+          onNavigated={async (draftText) => {
+            if (draftText) applyComposerDocument(textComposerDocument(draftText));
+            setSessionTreeOpen(false);
+            await requestSync({ reason: 'session-tree-navigate', replaceMessages: true });
+          }}
+          sessionId={sessionId}
+          visible={sessionTreeOpen && currentSession?.agentKind === 'pi'}
+        />
         <SessionSearchSheet
           activeHit={activeSearchHit}
           activeIndex={activeSearchIndex}
@@ -8290,6 +8418,20 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      {wideSessionNav.enabled ? (
+        // 树内 overlay(zIndex 40)盖住顶部 chrome 与底部 composer;树内层叠而非 Modal 的
+        // 取舍见 SessionListDrawer 头注释。
+        <SessionListDrawer
+          currentSessionId={sessionId}
+          onClose={closeSessionListDrawer}
+          onGoHome={handleDrawerGoHome}
+          onNewSession={handleDrawerNewSession}
+          onSelectSession={handleDrawerSelectSession}
+          open={sessionListDrawerOpen}
+          returnFocusRef={sessionListButtonRef}
+          width={wideSessionNav.drawerWidth}
+        />
+      ) : null}
     </View>
   );
 }
@@ -8310,6 +8452,7 @@ function SessionHeaderBar({
   messageCount,
   onBack,
   onOpenFiles,
+  onOpenSessionList,
   onOpenSettings,
   onOpenUsage,
   onToggleSearch,
@@ -8319,6 +8462,7 @@ function SessionHeaderBar({
   readOnlyReason,
   remoteUnavailableReason,
   searchOpen,
+  sessionListButtonRef,
   title,
 }: {
   currentSession: RemoteSession | null;
@@ -8327,6 +8471,10 @@ function SessionHeaderBar({
   syncing: boolean;
   messageCount: number;
   onBack(): void;
+  /** 宽屏导航形态下提供:左上角改为三条杠,点击拉出任务列表抽屉(替代返回)。 */
+  onOpenSessionList?: () => void;
+  /** 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点。 */
+  sessionListButtonRef?: RefObject<View | null>;
   onOpenFiles(): void;
   onOpenSettings(): void;
   onOpenUsage(): void;
@@ -8377,12 +8525,26 @@ function SessionHeaderBar({
 
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
-      <ScreenBackButton
-        hitSlop={4}
-        onPress={onBack}
-        style={styles.sessionHeaderBackButton}
-        testID="session.backButton"
-      />
+      {onOpenSessionList ? (
+        // 宽屏(iPad / 折叠屏展开 / 横屏手机):三条杠拉任务列表抽屉,返回语义由抽屉里的
+        // 「主页」项与系统返回手势承担。
+        <SessionHeaderIconButton
+          accessibilityLabel={t('home.drawer.openA11y')}
+          active={false}
+          buttonRef={sessionListButtonRef}
+          hitSlop={4}
+          icon={Menu}
+          onPress={onOpenSessionList}
+          testID="session.sessionListButton"
+        />
+      ) : (
+        <ScreenBackButton
+          hitSlop={4}
+          onPress={onBack}
+          style={styles.sessionHeaderBackButton}
+          testID="session.backButton"
+        />
+      )}
 
       <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
@@ -8436,7 +8598,9 @@ function SessionHeaderIconButton({
   accessibilityLabel,
   active,
   attention = false,
+  buttonRef,
   disabled,
+  hitSlop,
   icon: Icon,
   onPress,
   testID,
@@ -8445,7 +8609,11 @@ function SessionHeaderIconButton({
   accessibilityLabel: string;
   active?: boolean;
   attention?: boolean;
+  /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
+  buttonRef?: RefObject<View | null>;
   disabled?: boolean;
+  /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
+  hitSlop?: PressableProps['hitSlop'];
   icon: SessionHeaderIcon;
   onPress?: () => void;
   testID: string;
@@ -8455,10 +8623,12 @@ function SessionHeaderIconButton({
   const color = colors.textPrimary;
   return (
     <RouteActionButton
+      ref={buttonRef}
       accessibilityHint={accessibilityHint}
       accessibilityLabel={accessibilityLabel}
       active={active}
       disabled={disabled}
+      hitSlop={hitSlop}
       onPress={onPress}
       pressedStyle={styles.sessionHeaderIconPressed}
       style={[

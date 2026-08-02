@@ -100,6 +100,7 @@ import { AutomationOriginBadge } from './AutomationOriginBadge';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
+import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 /**
  * image-local-cache: a user-message image can be in two shapes:
@@ -116,11 +117,6 @@ type UserImageItem =
       annotationStrokes?: Array<{ points: Array<{ x: number; y: number }> }>;
     }
   | { base64: string; mimeType: string; originalName?: string };
-
-type OrcaCommunicationContent = {
-  orcaSource: 'lead' | 'worker';
-  content: string;
-};
 
 interface UserMessageProps {
   /** F2: session cwd used to resolve relative paths in inline @-chip refs.
@@ -188,22 +184,6 @@ export function shouldBlockUserFork(
   delivery?: 'turn' | 'steer',
 ): boolean {
   return sessionRunning === true && delivery === 'steer';
-}
-
-function parseOrcaCommunicationContent(content: string): OrcaCommunicationContent | null {
-  try {
-    const parsed = JSON.parse(content) as unknown;
-    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
-    const record = parsed as Record<string, unknown>;
-    if (record.orcaSource !== 'lead' && record.orcaSource !== 'worker') return null;
-    if (typeof record.content !== 'string') return null;
-    return {
-      orcaSource: record.orcaSource,
-      content: record.content,
-    };
-  } catch {
-    return null;
-  }
 }
 
 /**
@@ -728,7 +708,7 @@ export function UserMessage({
   // Capability gate: 没传 agentKind (调用方未升级) → 默认两者都允许 (兼容旧路径)
   // 传了 agentKind → 按 capabilities.fork/rewind.supported 决定 icon 显示
   // renderer 'cc' ↔ maker 'claude-code' 别名映射 (DB / Session 用 'cc', maker IPC 用 'claude-code')
-  const makerKind: MakerAgentKind = agentKind === 'codex' ? 'codex' : 'claude-code';
+  const makerKind: MakerAgentKind = agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'claude-code';
   // device-link 远程会话:fork/rewind 能力按被控端读(本机会话 deviceId undefined,行为不变)。
   // 媒体来源(device/ssh)用于把附件/文件预览 URL 改写到 cindy-remote-media://(入方向媒体)。
   // 取自 ChatSessionFileContext(MessageStream 顶层订阅式构造,deviceId 迟到注册时
@@ -779,18 +759,10 @@ export function UserMessage({
   // rendered as a dedicated Chip-Row above the text bubble (per cc-agent-view
   // pen DLGJ9 / s2N4G). The text bubble itself only renders user-typed content.
   const orcaCommunication = parseOrcaCommunicationContent(content);
-  const rawDisplayContent = orcaCommunication?.content ?? content;
-  // hook 消息: 卡片正文优先用 source.userText(干净原文, 与 prompt 分离);
-  // 过渡期消息(有 hookSource 无 userText)回退正则剥 <thread_context> 块。
-  const displayContent = hookSource
-    ? (hookSource.userText ??
-      rawDisplayContent
-        .replace(
-          /^<thread_context>[\s\S]*?<\/thread_context>\s*(?:\(thread 历史中的.*?\)\s*)?/m,
-          '',
-        )
-        .trim())
-    : rawDisplayContent;
+  // 显示文本推导(Orca JSON 解包 / hook 消息取 userText 或剥 <thread_context>)
+  // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
+  // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
+  const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
   // ghost-summon-card:意识指令/提示的机器追加段从气泡正文尾部剥离,交给
   // GhostSummonCard 渲染(splitGhostDirective 与 expandGhostCommand 同模板,
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用

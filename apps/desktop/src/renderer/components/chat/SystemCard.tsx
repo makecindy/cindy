@@ -17,6 +17,11 @@ import { LearnStatusCard } from '@/features/learn/LearnStatusCard';
 interface SystemCardProps {
   cardType: 'help' | 'cost' | 'context' | 'pwd' | 'status' | 'compact' | 'cmd' | 'goal-complete' | 'goal-resumed' | 'learn' | 'auto-resume' | 'auto-resume-pending' | 'agent-switch';
   data?: Record<string, unknown>;
+  /**
+   * 这条自愈记录此刻是否真的在飞（会话有在跑的 turn，且它就是那个 turn 的发起者）。
+   * 由 MessageStream 注入，判据见那里的注释。只影响 `auto-resume` 卡。
+   */
+  autoResumeInFlight?: boolean;
   /** 卡片所在消息流的 sessionId(MessageStream 注入)。learn 卡按它路由 / 判定
    *  归属会话 —— 嵌入式视图(Orca split pane)里 URL 参数是 lead 而非本 pane,
    *  不能用 useParams(Codex review #548)。 */
@@ -844,23 +849,36 @@ function AutoResumeSeparator() {
 function AutoResumeActionRow({
   state,
   info,
+  inFlight,
 }: {
   /**
    * `live` = 退避窗口里的 ephemeral 行（一定是"正在重连"）。
-   * `recorded` = 落库的那条续跑记录，结果看 `info.outcome`：
-   * 缺省仍是"重新连接中"（已经发出去、还没等到产出），succeeded / failed 才定格。
+   * `recorded` = 落库的那条续跑记录，结果看 `info.outcome` 与 `inFlight`。
    */
   state: 'live' | 'recorded';
   info: AutoResumeCardInfo;
+  /**
+   * 落库记录**此刻是否真的在飞**：会话有在跑的 turn，且这条续跑指令就是那个 turn 的
+   * 发起者（判据在 MessageStream）。为真且结果还没回填时，这一行按"正在重连"呈现。
+   */
+  inFlight?: boolean;
 }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const hasProgress = info.attempt !== undefined && info.maxAttempts !== undefined;
-  // **只有 live 行才会转圈。** 落库记录一律静态:`outcome` 未回填只说明"结果还没回来"
-  // (app 在回填前退出就永远回不来了),不代表此刻真的在重连 —— 会话重开后让一堆历史
-  // 记录一直转圈是假的。未回填时用中性文案「重新连接」(无时态):它同时覆盖"续跑刚发出、
-  // 还在等模型响应"那几秒和"结果永远不会来了"两种情形,两边读起来都成立。
-  const live = state === 'live';
+  // **转圈的判据是"此刻真的有 turn 在跑",不是"是不是 ephemeral 行"。**
+  //
+  // 一次中断的进行中状态跨两种载体:退避那 3–20 秒是 ephemeral 行(state='live'),续跑
+  // 指令发出去之后交棒给落库的这一行 —— 那时任务确实在跑,只是还没吐出第一个可见字符。
+  // 早先把"落库行"一律做成静态,导致转圈在交棒那一刻断掉,用户看到一个静止的「重新连接」
+  // 却不知道是不是还在跑(实测截图)。
+  //
+  // 但也**不能**只看"结果未回填":app 在回填前退出的话 outcome 永远回不来,会话重开后
+  // 一堆历史记录会集体转圈,那是假的。所以由 `inFlight` 把两者分开:
+  //   - 未回填 + 正在飞 → 「重新连接中 N/5」+ 转圈(与退避那段文案连续,不跳变)
+  //   - 未回填 + 没在飞 → 静态 ⟳ +「重新连接」(中性、无时态,不骗人)
+  //   - 已回填          → ✓ / ✗ 定格,`inFlight` 不参与(终态优先)
+  const live = state === 'live' || (inFlight === true && info.outcome === undefined);
   const outcome = live ? undefined : info.outcome;
   const label = live
     ? hasProgress
@@ -1009,7 +1027,7 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   const { t } = useTranslation();
   const [expanded, setExpanded] = useState(false);
   const engineLabel = (kind: unknown): string =>
-    kind === 'codex' ? 'Codex' : 'Claude Code';
+    kind === 'codex' ? 'Codex' : kind === 'pi' ? 'Pi' : 'Claude Code';
   const fromLabel = engineLabel(data?.fromAgentKind);
   const toLabel = engineLabel(data?.toAgentKind);
   const toModel = typeof data?.toModel === 'string' ? data.toModel : '';
@@ -1081,7 +1099,7 @@ function AgentSwitchCard({ data }: { data?: Record<string, unknown> }) {
   );
 }
 
-export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
+export function SystemCard({ cardType, data, sessionId, autoResumeInFlight }: SystemCardProps) {
   switch (cardType) {
     case 'help':
       return <HelpCard data={data} />;
@@ -1106,7 +1124,7 @@ export function SystemCard({ cardType, data, sessionId }: SystemCardProps) {
       // 的「已自动继续」分隔条 —— 后者保持原形态原文案,不被重连三态改写(copilot review)。
       const info = readAutoResumeInfo(data);
       return hasInterruptionContext(info) ? (
-        <AutoResumeActionRow state="recorded" info={info} />
+        <AutoResumeActionRow state="recorded" info={info} inFlight={autoResumeInFlight === true} />
       ) : (
         <AutoResumeSeparator />
       );

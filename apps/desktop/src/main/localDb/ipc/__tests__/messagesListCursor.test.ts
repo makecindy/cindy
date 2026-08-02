@@ -154,6 +154,36 @@ describe('local-db:messages:list cursor', () => {
     expect((rows as Array<{ id: string; rowid: number }>).map((row) => row.rowid)).toEqual([1, 4]);
   });
 
+  it('lists only rows after a stable cursor, including same-timestamp inserts', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'row-z', createdAt: 1_000, content: 'cursor' });
+    insertMessage(sqlite, { id: 'row-a', createdAt: 1_000, content: 'same timestamp newer' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_001, content: 'newest' });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = await listHandler?.({}, 's1', { limit: 10, after: 'row-z' });
+
+    expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual([
+      'row-new',
+      'row-a',
+    ]);
+  });
+
+  it('falls back to the latest page when an after cursor is unknown', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    insertMessage(sqlite, { id: 'row-old', createdAt: 999, content: 'old' });
+    insertMessage(sqlite, { id: 'row-new', createdAt: 1_000, content: 'new' });
+
+    registerMessageIpc();
+    const listHandler = h.handlers.get('local-db:messages:list');
+    const rows = await listHandler?.({}, 's1', { limit: 1, after: 'missing' });
+
+    expect((rows as Array<{ id: string }>).map((row) => row.id)).toEqual(['row-new']);
+  });
+
   it('keeps around windows stable for same timestamp rows', async () => {
     const sqlite = createDb();
     sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');

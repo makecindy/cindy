@@ -157,6 +157,16 @@ describe('formatMobileSystemCard — 中断自动重连状态', () => {
   });
 });
 
+describe('formatMobileSystemCard — Agent 切换', () => {
+  it('keeps Pi distinct from Claude Code in persisted switch cards', () => {
+    expect(formatMobileSystemCard('agent-switch', {
+      fromAgentKind: 'pi',
+      toAgentKind: 'codex',
+      toModel: 'gpt-5.6',
+    }).title).toContain('Pi');
+  });
+});
+
 describe('commandNeedsRemoteSession', () => {
   // 新建会话的几秒窗口里 composer 全程可用(本 PR 的目的),于是用户可以在会话还没
   // 在被控端建成时发出 slash 命令。要远端的必须挡住(执行只会消费草稿再糊错误卡,

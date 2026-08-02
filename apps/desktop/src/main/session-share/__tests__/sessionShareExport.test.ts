@@ -230,6 +230,107 @@ describe('exportSessionShare', () => {
     expect(state.threads[0].id).toBe('thread-1');
   });
 
+  it('pi export replaces absolute session paths with portable ids', async () => {
+    const piSessionFile = path.join(tmpRoot, 'pi-agent-home', 'sessions', 'source-session.jsonl');
+    await fsp.mkdir(path.dirname(piSessionFile), { recursive: true });
+    await fsp.writeFile(piSessionFile, '{"type":"session"}\n');
+    sessionRowRef.row = {
+      ...baseSession(),
+      agentKind: 'pi',
+      sdkSessionId: piSessionFile,
+    };
+    messagesRef.rows = baseMessages().map((message, index) => ({
+      ...message,
+      agentKind: 'pi',
+      agentMeta: index === 1 ? JSON.stringify({ sdkSessionId: piSessionFile }) : null,
+    }));
+
+    const target = path.join(tmpRoot, 'out-pi.xdtshare');
+    const outcome = await exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target });
+    expect(outcome.status).toBe('ok');
+    if (outcome.status !== 'ok') return;
+    expect(outcome.fidelity).toBe('full');
+
+    const zip = await unzipOf(target);
+    const manifest = validateManifest(JSON.parse(await zip.file('manifest.json')!.async('string')));
+    expect(manifest.agentKind).toBe('pi');
+    expect(manifest.activeSdkSessionId).toMatch(/^pi-[a-f0-9]{32}\.jsonl$/);
+    expect(manifest.activeSdkSessionId).not.toContain(path.sep);
+    expect(manifest.sdkSessionIds).toEqual([manifest.activeSdkSessionId]);
+    const transcriptPath = `transcripts/pi/${manifest.activeSdkSessionId}`;
+    expect(await zip.file(transcriptPath)!.async('string')).toBe('{"type":"session"}\n');
+    expect(zip.file('codex-state/thread.json')).toBeNull();
+
+    const sessionJson = await zip.file('session.json')!.async('string');
+    const messagesJsonl = await zip.file('messages.jsonl')!.async('string');
+    expect(sessionJson).not.toContain(piSessionFile);
+    expect(messagesJsonl).not.toContain(piSessionFile);
+    expect(JSON.parse(messagesJsonl.split('\n')[1]).agentMeta).toContain(
+      manifest.activeSdkSessionId,
+    );
+  });
+
+  it('pi export changes the portable transcript id when the same session file content changes', async () => {
+    const piSessionFile = path.join(tmpRoot, 'pi-agent-home', 'sessions', 'changing-session.jsonl');
+    await fsp.mkdir(path.dirname(piSessionFile), { recursive: true });
+    sessionRowRef.row = { ...baseSession(), agentKind: 'pi', sdkSessionId: piSessionFile };
+    messagesRef.rows = baseMessages().map((message) => ({
+      ...message,
+      agentKind: 'pi',
+      agentMeta: JSON.stringify({ sdkSessionId: piSessionFile }),
+    }));
+
+    await fsp.writeFile(piSessionFile, '{"type":"session","revision":1}\n');
+    const firstTarget = path.join(tmpRoot, 'out-pi-content-v1.xdtshare');
+    await expect(exportSessionShare({ sessionId: 'xdt-session-1', targetPath: firstTarget }))
+      .resolves.toMatchObject({ status: 'ok', fidelity: 'full' });
+    const firstZip = await unzipOf(firstTarget);
+    const firstManifest = validateManifest(JSON.parse(
+      await firstZip.file('manifest.json')!.async('string'),
+    ));
+
+    await fsp.writeFile(piSessionFile, '{"type":"session","revision":2}\n');
+    const secondTarget = path.join(tmpRoot, 'out-pi-content-v2.xdtshare');
+    await expect(exportSessionShare({ sessionId: 'xdt-session-1', targetPath: secondTarget }))
+      .resolves.toMatchObject({ status: 'ok', fidelity: 'full' });
+    const secondZip = await unzipOf(secondTarget);
+    const secondManifest = validateManifest(JSON.parse(
+      await secondZip.file('manifest.json')!.async('string'),
+    ));
+
+    expect(secondManifest.activeSdkSessionId).not.toBe(firstManifest.activeSdkSessionId);
+    expect(await secondZip.file(`transcripts/pi/${secondManifest.activeSdkSessionId}`)!.async('string'))
+      .toContain('"revision":2');
+  });
+
+  it('pi export omits a missing transcript without leaking or hashing its absolute path', async () => {
+    const missingPiSessionFile = path.join(tmpRoot, 'private', 'missing-session.jsonl');
+    sessionRowRef.row = {
+      ...baseSession(),
+      agentKind: 'pi',
+      sdkSessionId: missingPiSessionFile,
+    };
+    messagesRef.rows = baseMessages().map((message) => ({
+      ...message,
+      agentKind: 'pi',
+      agentMeta: JSON.stringify({ sdkSessionId: missingPiSessionFile }),
+    }));
+
+    const target = path.join(tmpRoot, 'out-pi-missing.xdtshare');
+    await expect(exportSessionShare({ sessionId: 'xdt-session-1', targetPath: target }))
+      .resolves.toMatchObject({ status: 'ok', fidelity: 'db-only' });
+    const zip = await unzipOf(target);
+    const manifestText = await zip.file('manifest.json')!.async('string');
+    const sessionText = await zip.file('session.json')!.async('string');
+    const messagesText = await zip.file('messages.jsonl')!.async('string');
+    const manifest = validateManifest(JSON.parse(manifestText));
+
+    expect(manifest.sdkSessionIds).toEqual([]);
+    expect(manifest.activeSdkSessionId).toBeNull();
+    expect(Object.keys(zip.files).filter((name) => name.startsWith('transcripts/pi/'))).toEqual([]);
+    expect(`${manifestText}\n${sessionText}\n${messagesText}`).not.toContain(missingPiSessionFile);
+  });
+
   it('oversize returns structured outcome without writing file', async () => {
     const target = path.join(tmpRoot, 'out-oversize.xdtshare');
     const outcome = await exportSessionShare({

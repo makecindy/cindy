@@ -533,6 +533,224 @@ describe('db worker tx handlers', () => {
     });
   });
 
+  it('session.treeRehydrate atomically replaces the visible projection and preserves old branches', async () => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1', { contextTokens: 999, clearedAt: 50 });
+      await client.exec(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at, rewind_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'old-visible',
+          'shared-client',
+          's1',
+          'assistant',
+          JSON.stringify('old branch'),
+          null,
+          'pi',
+          100,
+          null,
+          'old-hidden',
+          'hidden-client',
+          's1',
+          'assistant',
+          JSON.stringify('already hidden'),
+          null,
+          'pi',
+          90,
+          500,
+        ],
+      );
+
+      await expect(client.tx('session.treeRehydrate', {
+        sessionId: 's1',
+        now: 1000,
+        contextTokens: 69,
+        contextWindow: 200000,
+        messages: [
+          {
+            id: 'ignored-on-upsert',
+            clientId: 'shared-client',
+            role: 'assistant',
+            content: JSON.stringify('active branch'),
+            toolUseId: null,
+            agentMeta: JSON.stringify({ uuid: 'assistant-a' }),
+            agentKind: 'pi',
+            createdAt: 200,
+          },
+          {
+            id: 'new-active',
+            clientId: 'new-client',
+            role: 'user',
+            content: JSON.stringify({ text: 'new path' }),
+            toolUseId: null,
+            agentMeta: JSON.stringify({ uuid: 'user-b' }),
+            agentKind: 'pi',
+            createdAt: 201,
+          },
+        ],
+      })).resolves.toEqual({
+        messageCount: 2,
+        // 隐藏动作那一刻的完整可见集(只有 shared-client 可见;hidden-client 早已 rewind),
+        // 供调用方作删除广播的权威集 —— 含导航期间并发落库的消息。
+        hiddenClientIds: ['shared-client'],
+      });
+
+      await expect(client.query(
+        'SELECT id, client_id, content, created_at, rewind_at FROM messages WHERE session_id = ? ORDER BY id',
+        ['s1'],
+      )).resolves.toEqual([
+        {
+          id: 'new-active', client_id: 'new-client', content: JSON.stringify({ text: 'new path' }),
+          created_at: 201, rewind_at: null,
+        },
+        {
+          id: 'old-hidden', client_id: 'hidden-client', content: JSON.stringify('already hidden'),
+          created_at: 90, rewind_at: 500,
+        },
+        {
+          id: 'old-visible', client_id: 'shared-client', content: JSON.stringify('active branch'),
+          created_at: 200, rewind_at: null,
+        },
+      ]);
+      await expect(client.queryOne(
+        'SELECT cleared_at, context_tokens, context_window, updated_at FROM sessions WHERE id = ?',
+        ['s1'],
+      )).resolves.toEqual({
+        cleared_at: null, context_tokens: 69, context_window: 200000, updated_at: 1000,
+      });
+    });
+  });
+
+  it('session.treeRehydrate returns every hidden clientId so a concurrently-persisted message is broadcast for removal', async () => {
+    // codex review 回归:导航前的陈旧快照会漏掉导航期间并发落库的消息,使它被 rewind
+    // 后仍留在 Renderer。事务内原子快照可见集,返回集须含这条并发消息的 clientId。
+    await withClient(async (client) => {
+      await seedSession(client, 's1', { contextTokens: 10 });
+      await client.exec(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at, rewind_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?), (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'pre-visible', 'client-pre', 's1', 'user', JSON.stringify('before navigation'),
+          null, 'pi', 100, null,
+          // 模拟导航进行中另一个窗口并发落库、导航前快照未见的消息。
+          'concurrent', 'client-concurrent', 's1', 'assistant', JSON.stringify('sent mid-navigation'),
+          null, 'pi', 150, null,
+        ],
+      );
+
+      const result = await client.tx('session.treeRehydrate', {
+        sessionId: 's1',
+        now: 2000,
+        contextTokens: 5,
+        contextWindow: 200000,
+        messages: [
+          {
+            id: 'active', clientId: 'client-active', role: 'assistant',
+            content: JSON.stringify('new active path'), toolUseId: null,
+            agentMeta: null, agentKind: 'pi', createdAt: 300,
+          },
+        ],
+      });
+
+      // 两条导航前可见的消息(含并发落库的 client-concurrent)都要进删除广播集。
+      expect(result.messageCount).toBe(1);
+      expect([...result.hiddenClientIds].sort()).toEqual(['client-concurrent', 'client-pre']);
+      // 并发消息确实被 rewind(不再可见),否则 Renderer 会继续显示 DB 里已隐藏的它。
+      await expect(client.query(
+        'SELECT client_id FROM messages WHERE session_id = ? AND rewind_at IS NULL ORDER BY client_id',
+        ['s1'],
+      )).resolves.toEqual([{ client_id: 'client-active' }]);
+    });
+  });
+
+  it.each([false, true])('session.treeRehydrate preserves Cindy-managed attachments across A→B→A (inline=%s)', async (useInlineWorker) => {
+    await withClient(async (client) => {
+      await seedSession(client, 's1');
+      const original = {
+        text: 'Review these assets',
+        images: [{ url: 'cindy-media://blobs/image-a.webp', name: 'design.webp' }],
+        files: [{ path: '/repo/spec.pdf', name: 'spec.pdf' }],
+      };
+      const hostAgentMeta = {
+        origin: { kind: 'scheduler', scheduleId: 'schedule-1', runId: 'run-1' },
+        autoResume: true,
+        autoResumeInfo: { reason: 'capacity', attempt: 2, maxAttempts: 5, sessionTotal: 3 },
+      };
+      await client.exec(
+        `INSERT INTO messages
+          (id, client_id, session_id, role, content, agent_meta, agent_kind, created_at, rewind_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+          'original-user', 'original-client', 's1', 'user', JSON.stringify(original),
+          JSON.stringify({
+            uuid: 'host-message-uuid',
+            piEntryId: 'pi-user-entry',
+            ...hostAgentMeta,
+          }), 'pi', 123, null,
+        ],
+      );
+
+      await client.tx('session.treeRehydrate', {
+        sessionId: 's1', now: 200, contextTokens: 1, contextWindow: 200000,
+        messages: [{
+          id: 'pi-reprojected-user', clientId: 'pi-tree-pi-user-entry-user', role: 'user',
+          // Pi's transcript keeps only model-consumable blocks; the native image is a placeholder.
+          content: JSON.stringify({ text: 'Review these assets\n\n[image]' }),
+          toolUseId: null, agentMeta: JSON.stringify({ uuid: 'pi-user-entry' }),
+          // DB createdAt=123 and Pi timestamp=100 are intentionally different: first navigation
+          // must restore by the persisted piEntryId, not by timestamp coincidence.
+          agentKind: 'pi', createdAt: 100,
+        }],
+      });
+
+      await expect(client.queryOne(
+        'SELECT content, agent_meta FROM messages WHERE session_id = ? AND client_id = ?',
+        ['s1', 'pi-tree-pi-user-entry-user'],
+      )).resolves.toEqual({
+        content: JSON.stringify({ text: 'Review these assets\n\n[image]', images: original.images, files: original.files }),
+        agent_meta: JSON.stringify({ uuid: 'pi-user-entry', ...hostAgentMeta }),
+      });
+
+      // 先切到不相关的 B 分支：旧活动分支的附件不能被模糊复制过去。
+      await client.tx('session.treeRehydrate', {
+        sessionId: 's1', now: 250, contextTokens: 1, contextWindow: 200000,
+        messages: [{
+          id: 'branch-b-user', clientId: 'pi-tree-branch-b-user', role: 'user',
+          content: JSON.stringify({ text: 'Different branch' }),
+          toolUseId: null, agentMeta: JSON.stringify({ uuid: 'branch-b' }),
+          agentKind: 'pi', createdAt: 150,
+        }],
+      });
+      await expect(client.queryOne(
+        'SELECT content, agent_meta FROM messages WHERE session_id = ? AND client_id = ?',
+        ['s1', 'pi-tree-branch-b-user'],
+      )).resolves.toEqual({
+        content: JSON.stringify({ text: 'Different branch' }),
+        agent_meta: JSON.stringify({ uuid: 'branch-b' }),
+      });
+
+      // B→A 切回时按 entry uuid 复用 A 的历史投影，附件仍在。
+      await client.tx('session.treeRehydrate', {
+        sessionId: 's1', now: 300, contextTokens: 1, contextWindow: 200000,
+        messages: [{
+          id: 'pi-reprojected-user', clientId: 'pi-tree-pi-user-entry-user', role: 'user',
+          content: JSON.stringify({ text: 'Review these assets\n\n[image]' }),
+          toolUseId: null, agentMeta: JSON.stringify({ uuid: 'pi-user-entry' }),
+          agentKind: 'pi', createdAt: 100,
+        }],
+      });
+      await expect(client.queryOne(
+        'SELECT content, agent_meta FROM messages WHERE session_id = ? AND client_id = ?',
+        ['s1', 'pi-tree-pi-user-entry-user'],
+      )).resolves.toEqual({
+        content: JSON.stringify({ text: 'Review these assets\n\n[image]', images: original.images, files: original.files }),
+        agent_meta: JSON.stringify({ uuid: 'pi-user-entry', ...hostAgentMeta }),
+      });
+    }, { useInlineWorker });
+  });
+
   it('sessions.renameTitles applies title changes atomically with preconditions', async () => {
     await withClient(async (client) => {
       await seedSession(client, 's1', {
@@ -1589,7 +1807,10 @@ describe('db worker tx handlers', () => {
   });
 });
 
-async function withClient(fn: (client: DbClient) => Promise<void>): Promise<void> {
+async function withClient(
+  fn: (client: DbClient) => Promise<void>,
+  opts: { useInlineWorker?: boolean } = {},
+): Promise<void> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'xdt-db-tx-'));
   const drizzleDir = path.join(dir, 'drizzle');
   const dbPath = path.join(dir, 'xdt-maker-test-user.db');
@@ -1603,7 +1824,7 @@ async function withClient(fn: (client: DbClient) => Promise<void>): Promise<void
       dbPath,
       drizzleDir,
       betterSqliteModulePath: require.resolve('better-sqlite3'),
-      workerScriptPath,
+      ...(opts.useInlineWorker ? { useInlineWorker: true } : { workerScriptPath }),
     });
     await fn(client);
   } finally {

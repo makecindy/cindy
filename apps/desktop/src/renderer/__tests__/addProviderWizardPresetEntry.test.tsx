@@ -5,6 +5,8 @@
  *   1. entry={kind:'preset',presetId}:presets 异步载入后直达表单步(step 2,
  *      名称预填预设名),一次性消费。
  *   2. presetId 在目录里不存在 → 回落目录第一步,不假装直达。
+ *   3. API Key 输入默认遮罩,但必须能显形核对——粘错 key / 多余空格 / 前缀不对
+ *      在遮罩下查不出来。向导曾漏掉这个切换,只有编辑弹窗有(见 SettingsTextInput)。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -174,6 +176,34 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     // 不在目录步(搜索框只在 step 1)。
     expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
+  });
+
+  it('API Key 默认遮罩,eye 能切明文再切回(粘贴后核对)', async () => {
+    renderWizard('deepseek');
+
+    const keyInput = await screen.findByPlaceholderText('sk-…');
+    expect(keyInput.getAttribute('type')).toBe('password');
+    // 密钥框要挡住密码管理器建议与拼写红线(普通文本字段则保留浏览器默认,不禁用)。
+    expect(keyInput.getAttribute('autocomplete')).toBe('off');
+    expect(keyInput.getAttribute('spellcheck')).toBe('false');
+
+    // 遮罩态按钮语义是「显示密钥」,点击后翻转为「隐藏密钥」。
+    fireEvent.click(screen.getByLabelText('settings.apiKey.showKey'));
+    expect(keyInput.getAttribute('type')).toBe('text');
+
+    fireEvent.click(screen.getByLabelText('settings.apiKey.hideKey'));
+    expect(keyInput.getAttribute('type')).toBe('password');
+  });
+
+  it('密钥框底色是 DESIGN.md §4 的 --surface-elevated,不是 settings 的 ivory', async () => {
+    renderWizard('deepseek');
+
+    // 共享化时把底色顺手换成 --settings-input-bg 会退化:该 token 解析到
+    // --surface-card-ivory,而 ProvidersSection 的卡片本身就是这个值,行内密钥框会与卡片
+    // 同色、只剩边框。DESIGN.md §4 input/text 规定 fill = --surface-elevated。
+    const cls = (await screen.findByPlaceholderText('sk-…')).className;
+    expect(cls).toContain('bg-[var(--surface-elevated)]');
+    expect(cls).not.toContain('bg-[var(--settings-input-bg)]');
   });
 
   it('OAuth 授权步提供「改用 API Key 接入」→ 切到官方 API 预设表单', async () => {
@@ -421,7 +451,7 @@ describe('AddProviderWizard — preset 直达', () => {
     // 同一 model id 在两端窗口可以不同(如 cc=1M / codex=272K):共享一个发现值
     // 会让其中一端显示与压缩阈值双错,必须按 agent 分槽各取各的端点上报值。
     vi.mocked(window.electronAPI.maker.fetchProviderModels).mockImplementation(
-      async ({ agent }: { agent: 'claude-code' | 'codex' }) => ({
+      async ({ agent }: { agent: 'claude-code' | 'codex' | 'pi' }) => ({
         ok: true,
         models: [
           {

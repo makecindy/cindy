@@ -241,10 +241,9 @@ export function useHookWorkspacePrefs(
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可。
     // **频道必须与派发侧同源**: session-runner 用
     // `readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined)` —— Slack 读
-    // channels.slack, Telegram 读 global, 两者各自独立归一化互不继承
-    // (im/defaultSettingsStore.ts; IM_DEFAULT_SETTINGS_CHANNELS 里根本没有 telegram)。
-    // 这里原先两个 provider 都写死 'slack', 于是 Telegram 卡片下的目录行显示的是
-    // Slack 频道的 agent/模型, 派发实际用 global —— 显示与实际不符(2026-07 实审发现)。
+    // channels.slack, 官方 Telegram 读 global；个人 Telegram Bot 才读
+    // channels.telegram。这里必须与官方派发侧同源，否则目录行会显示一套默认值、
+    // 实际会话却使用另一套。
     void window.electronAPI.maker
       .imDefaultSettingsGet(provider === 'slack' ? 'slack' : undefined)
       .then((state: ImDefaultSettingsState) => {
@@ -357,9 +356,7 @@ export function useHookWorkspacePrefs(
         })
         .catch((err: unknown) => {
           if (revision !== providerSourceRevisionRef.current) return;
-          toast.error(
-            extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'),
-          );
+          toast.error(extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'));
         });
     },
     [provider, multiTeam, selectedTeamId, t],
@@ -474,9 +471,9 @@ function PrefsField({
   );
 }
 
-/** hook prefs 的 agentKind('claude-code' | 'codex')→ 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'cc';
+/** hook prefs 的 agentKind → 选择器的 vendor key。 */
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 
 /**
@@ -487,10 +484,10 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
  */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
+  if (vendor === 'pi') return 'pi';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
-
 
 /** 目录卡片内的偏好编辑行(agent / 模型 / 权限三字段)。alias 为该行当前生效别名。 */
 export function WorkspacePrefsEditor({
@@ -505,13 +502,15 @@ export function WorkspacePrefsEditor({
   const { t } = useTranslation();
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
+  const piCaps = useAgentCapabilities('pi');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
+        pi: piCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>

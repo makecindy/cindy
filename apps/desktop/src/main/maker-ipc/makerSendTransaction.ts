@@ -123,6 +123,12 @@ export interface MakerSendTransactionDeps {
     },
     opts?: { shouldBroadcast?: () => boolean },
   ): Promise<unknown>;
+  /** 把 Pi 原生 user entry id 补到已落库的 Cindy user 行，供会话树恢复附件。 */
+  linkPiUserEntry?(
+    sessionId: string,
+    clientId: string,
+    piEntryId: string,
+  ): Promise<boolean | void>;
   beforeDispatchDirectUserTurn?: (sessionId: string) => void | Promise<void>;
   onUndispatchedDirectUserTurn?: (sessionId: string) => void;
   ackInterruptedTurnDispatched?: (sessionId: string, endedAt: number) => void | Promise<void>;
@@ -204,6 +210,30 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
       ? { onPersisted: persist.onPersisted as () => void | Promise<void> }
       : {}),
   };
+}
+
+function containsManagedAttachment(value: unknown): boolean {
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) return false;
+    try {
+      return containsManagedAttachment(JSON.parse(trimmed) as unknown);
+    } catch {
+      return false;
+    }
+  }
+  if (Array.isArray(value)) {
+    return value.some((item) => {
+      if (typeof item !== 'object' || item === null) return false;
+      const block = item as Record<string, unknown>;
+      return block.type === 'image' || block.type === 'file' || containsManagedAttachment(block.content);
+    });
+  }
+  if (typeof value !== 'object' || value === null) return false;
+  const record = value as Record<string, unknown>;
+  return (Array.isArray(record.images) && record.images.length > 0)
+    || (Array.isArray(record.files) && record.files.length > 0)
+    || containsManagedAttachment(record.content);
 }
 
 /**
@@ -477,6 +507,38 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           // (语义见 maker-core SendOptions.planMode;undefined = 旧的消耗武装态)。
           ...(typeof (createOpts as { planMode?: unknown } | undefined)?.planMode === 'boolean'
             ? { planMode: (createOpts as { planMode: boolean }).planMode }
+            : {}),
+          ...(sess.agentKind === 'pi'
+            && persistUserMessage
+            && containsManagedAttachment(persistUserMessage.content)
+            && deps.linkPiUserEntry
+            ? {
+                onTranscriptUserEntry: async (piEntryId: string) => {
+                  try {
+                    const linked = await deps.linkPiUserEntry?.(
+                      sessionId,
+                      persistUserMessage.clientId,
+                      piEntryId,
+                    );
+                    if (linked === false) {
+                      deps.log.warn('send: Pi transcript entry target row missing', {
+                        sessionId,
+                        clientId: persistUserMessage.clientId,
+                        piEntryId,
+                      });
+                    }
+                  } catch (err) {
+                    // provider 已接受 prompt；关联补丁失败只能降级为 legacy 恢复，不能
+                    // 把发送结果翻成 rejected，避免 UI 重发同一条消息。
+                    deps.log.warn('send: Pi transcript entry link failed (non-fatal)', {
+                      sessionId,
+                      clientId: persistUserMessage.clientId,
+                      piEntryId,
+                      err: err instanceof Error ? err.message : String(err),
+                    });
+                  }
+                },
+              }
             : {}),
           onAccepted: persistUserMessage
             ? async () => {

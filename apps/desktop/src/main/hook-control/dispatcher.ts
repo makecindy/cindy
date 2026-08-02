@@ -449,6 +449,13 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
  * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
  * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
  * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
+ *
+ * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
+ * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
+ * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
+ * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
+ * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
+ * 老 server 不下发时回退 prompt, 行为与此前一致。
  */
 export function buildHookSessionTitle(
   providerName: string,
@@ -1514,6 +1521,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
     const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
+    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
+    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
+    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
+    const sourceUserText = payload.source?.userText ?? '';
+    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
     return {
       run: {
         sessionId,
@@ -1528,7 +1540,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
-          payload.prompt,
+          titleText,
           bareKey,
           payload.source?.teamName ??
             (payload.source?.im === 'telegram' || payload.source?.im === 'x'

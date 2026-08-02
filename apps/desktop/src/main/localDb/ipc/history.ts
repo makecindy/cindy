@@ -21,7 +21,7 @@ import { sessions } from '../schema';
 import { readLatestSessionTerminal, type SessionTerminalHint } from '../sessionTerminal';
 import { requireObject, requireString, throwIpcError } from '../../utils/ipcValidate';
 
-const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex'];
+const VALID_AGENT_KINDS: readonly HistoryAgentKind[] = ['cc', 'codex', 'pi'];
 const VALID_ORDERS: readonly HistoryOrder[] = ['asc', 'desc'];
 const VALID_ROLES: readonly HistoryRole[] = [
   'user',

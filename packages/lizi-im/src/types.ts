@@ -8,6 +8,12 @@
 
 import type { Logger } from './logger.js';
 
+/** Result of a secret read when callers must distinguish absence from failure. */
+export type IMSecretReadResult =
+  | { kind: 'value'; value: string }
+  | { kind: 'missing' }
+  | { kind: 'error' };
+
 /**
  * Host-injected capabilities. Hosts must provide encrypted KV storage, an IPC
  * bridge, and a couple of derived paths. Optionally a logger factory; otherwise
@@ -20,6 +26,12 @@ export interface IMHost {
     write(name: string, plaintext: string): boolean;
     /** Read; missing or unavailable returns null. */
     read(name: string): string | null;
+    /**
+     * Read without collapsing a missing key and a storage/decryption failure.
+     * Optional for backwards-compatible hosts; callers that require certainty
+     * must treat an absent implementation as `error`.
+     */
+    readResult?(name: string): IMSecretReadResult;
     /** Remove (no-op if missing). */
     remove(name: string): void;
     /** Whether encryption is currently usable (e.g. Linux without keychain). */
@@ -28,6 +40,8 @@ export interface IMHost {
 
   /** IPC bridge (replaces electron.ipcMain + BrowserWindow). */
   ipc: {
+    /** Raise a host-standard, renderer-decodable IPC error. */
+    throwIpcError(code: 'INVALID_PARAMS', message: string): never;
     /** Register an `invoke` handler. @cindy/im owns channel names. */
     handle(
       channel: string,
@@ -60,14 +74,14 @@ export interface IMHost {
     discordMediaDir?: string;
     /** Root for downloaded telegram media. Optional — only hosts that wire the telegram channel provide it. */
     telegramMediaDir?: string;
+    /** Root for downloaded WeCom files and legacy image fallback. */
+    wecomMediaDir?: string;
   };
 
   /**
-   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后
-   * 入站**图片**改走 host 内容寻址仓(按 token 免重下、全局去重、吃缓存回收
-   * 策略);缺省时回落 `paths.*MediaDir` 的老目录写盘。非图片文件始终走老
-   * 目录(host 侧规则 25 边界:非媒体不进字节仓)。包侧只摸字节和字符串,
-   * 落盘/记账细节全在 host(规则 2)。
+   * host 托管的媒体缓存(cindy-media 媒体总仓)。可选——注入后入站图片及
+   * host 明确支持的其它媒体改走内容寻址仓;非媒体文件仍走
+   * `paths.*MediaDir`。包侧只摸字节和字符串,落盘/记账细节全在 host。
    */
   media?: IMHostMediaCache;
 
@@ -85,16 +99,38 @@ export interface IMHost {
 export interface IMHostMediaCache {
   /** 图片字节入 host 总仓;返回仓内绝对路径(喂 agent)+ 渲染 URL(cindy-media://)。 */
   cacheImage(params: {
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk';
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom';
     /** 平台侧稳定 token(feishu image_key / discord attachment id / telegram file_id),host 据此免重下。 */
     token: string;
     buffer: Uint8Array;
     mimeType: string;
-  }): Promise<{ absPath: string; url: string }>;
+    /** Keep the blob reclaimable until the transport confirms account ownership after the write. */
+    staging?: boolean;
+  }): Promise<{ absPath: string; url: string; discard?: () => Promise<void> }>;
+  /**
+   * 其它 Cindy 托管媒体入总仓。未提供时 transport 必须降级为 unsupported，
+   * 不得新增写入冻结的 `cc-agent/*-media` 历史目录。
+   */
+  cacheMedia?(params: {
+    integration: 'feishu' | 'discord' | 'telegram' | 'wecom';
+    token: string;
+    buffer: Uint8Array;
+    mimeType: string;
+  }): Promise<{
+    absPath: string;
+    url: string;
+    mimeType: string;
+    /** Release host-side staging when the originating account becomes stale. */
+    discard?: () => Promise<void>;
+  }>;
   /** 按 token 查已缓存图片;未缓存返回 null(调用方去真下载)。 */
   getCachedImage(
-    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk',
+    integration: 'feishu' | 'discord' | 'telegram' | 'dingtalk' | 'wecom',
     token: string,
+    options?: {
+      /** Re-check transport/account ownership after the async lookup, before host-side pinning. */
+      shouldReuse?: () => boolean;
+    },
   ): Promise<{ absPath: string; url: string; mimeType: string } | null>;
   /** host 托管媒体 URL(cindy-media://)→ 绝对路径;认不出返回 null(出站上传用)。 */
   resolveMediaUrl(url: string): string | null;
@@ -207,12 +243,33 @@ export interface IMCardActionEvent {
   scopeKey?: string;
 }
 
+/**
+ * 稳定的传输层错误分类。`reason` 是给日志/诊断看的原文(可能是英文技术串或
+ * 渠道原始描述), **不适合直接当 UI 文案**;渲染层按本枚举映射到 i18n key。
+ * 可选字段 —— 未标注 code 的渠道/旧路径由消费方回退到 reason。
+ */
+export type IMErrorCode =
+  /** token 无效 / 被吊销(401 / 404)。 */
+  | 'invalid-token'
+  /** 渠道 API 返回了其它失败码(限流、服务端错误等)。 */
+  | 'provider-api'
+  /** 网络不可达 / 请求异常。 */
+  | 'network'
+  /** 系统安全存储不可用或写入失败,凭证与状态无法落盘。 */
+  | 'secret-unavailable';
+
 export type IMStatus =
   | { kind: 'idle' }
   | { kind: 'connecting' }
   | { kind: 'connected'; appId: string }
   | { kind: 'conflict'; appId: string }
-  | { kind: 'error'; reason: string };
+  /**
+   * 凭证仍在、但用户主动下线 —— 不轮询、不收派发, 重启后保持。
+   * 与 idle 严格区分: idle = 没配置(无凭证), offline = 配好了但停用。
+   * 换机器时把另一端停掉而不清凭证, 之后随时可一键上线。
+   */
+  | { kind: 'offline'; appId: string }
+  | { kind: 'error'; reason: string; code?: IMErrorCode };
 
 // ── Outbound spec ─────────────────────────────────────────────────────────────
 // p2p only — outbound APIs always take a single openId: string.

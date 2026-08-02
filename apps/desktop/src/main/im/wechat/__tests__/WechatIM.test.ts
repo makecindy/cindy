@@ -383,6 +383,9 @@ function host(
       remove: vi.fn(),
     },
     ipc: {
+      throwIpcError: (code, message) => {
+        throw new Error(`[${code}] ${message}`);
+      },
       handle: vi.fn(),
       broadcast: vi.fn(),
     },

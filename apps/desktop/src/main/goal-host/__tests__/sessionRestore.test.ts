@@ -73,6 +73,24 @@ describe('Goal dormant session restore', () => {
     expect(deps.wireSession).toHaveBeenCalledOnce();
   });
 
+  it('preserves a persisted null provider route when restoring a Pi session', async () => {
+    const deps = baseDeps({
+      maker: {
+        getSession: vi.fn(),
+        getSessionMeta: vi.fn().mockResolvedValue({ ...META, agentKind: 'pi' }),
+        createSession: vi.fn().mockResolvedValue(fakeSession()),
+      },
+      getSessionRow: vi.fn().mockResolvedValue({ providerId: null }),
+    });
+
+    await restoreSessionForGoal('session-1', deps);
+
+    expect(deps.maker.createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'pi', providerId: null }),
+    );
+    expect(deps.hydrateProvider).toHaveBeenCalledWith('session-1', null);
+  });
+
   it('marks Orca hydration only after successful session creation', async () => {
     const markOrcaHydrated = vi.fn();
     const warn = vi.fn();

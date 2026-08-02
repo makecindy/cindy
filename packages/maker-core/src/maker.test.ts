@@ -6,7 +6,7 @@ import { Session } from './session.js';
 import { createAsyncQueue } from './agents/shared/async-queue.js';
 import type { AgentSessionHandle, BaseAgent } from './agents/base-agent.js';
 import type { SessionMeta, SessionStorage } from './interfaces/session-storage.js';
-import type { AgentKind } from './types/common.js';
+import type { AgentKind, PermissionMode } from './types/common.js';
 import type { AgentEvent } from './types/events.js';
 
 /** A generator that never completes — simulates a live session handle. */
@@ -63,6 +63,21 @@ function createLogger() {
   };
   return logger;
 }
+
+describe('Maker agent status', () => {
+  it('represents an optional unregistered runtime as binary-missing', async () => {
+    const maker = new Maker({
+      agents: {},
+      storage: createStorage(),
+      logger: createLogger(),
+    });
+    await expect(maker.getAgentStatus('pi')).resolves.toEqual({
+      binaryReady: false,
+      binaryPath: null,
+      authReady: false,
+    });
+  });
+});
 
 function createAgent(
   startSession: (opts: CreateSessionOptions) => Promise<unknown>,
@@ -810,6 +825,125 @@ describe('Session turn send guard', () => {
     expect(handle.send).not.toHaveBeenCalled();
   });
 
+  it('runs reservation state preparation before provider option preflight', async () => {
+    const order: string[] = [];
+    const handle = createHandle({ id: 'thread-reserved-preflight' });
+    handle.validateSendOptions = vi.fn(() => {
+      order.push('preflight');
+    });
+    handle.send = vi.fn(async () => {
+      order.push('provider');
+    });
+    const session = new Session({
+      id: 'reserved-preflight',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    await expect(
+      session.send('first', {
+        afterTurnReserved: () => {
+          order.push('reserved');
+        },
+      }),
+    ).resolves.toEqual({ accepted: true });
+
+    expect(order).toEqual(['reserved', 'preflight', 'provider']);
+  });
+
+  it('stops before validation or durable acceptance when cancelled during reservation preparation', async () => {
+    let releasePreparation!: () => void;
+    const preparation = new Promise<void>((resolve) => {
+      releasePreparation = resolve;
+    });
+    const handle = createHandle({ id: 'thread-reserved-cancelled' });
+    handle.validateSendOptions = vi.fn();
+    handle.send = vi.fn(async () => undefined);
+    handle.abort = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'reserved-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const beforeProviderStart = vi.fn();
+    const onAccepted = vi.fn();
+    const sending = session.send('first', {
+      afterTurnReserved: () => preparation,
+      beforeProviderStart,
+      onAccepted,
+    });
+    await Promise.resolve();
+
+    await session.abort();
+    releasePreparation();
+
+    await expect(sending).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    expect(handle.validateSendOptions).not.toHaveBeenCalled();
+    expect(beforeProviderStart).not.toHaveBeenCalled();
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
+  it('does not run reservation preparation when the external signal is already aborted', async () => {
+    const handle = createHandle({ id: 'thread-pre-cancelled' });
+    handle.send = vi.fn(handle.send);
+    const session = new Session({
+      id: 'reserved-pre-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const afterTurnReserved = vi.fn();
+    const controller = new AbortController();
+    controller.abort();
+
+    await expect(
+      session.send('first', { signal: controller.signal, afterTurnReserved }),
+    ).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(afterTurnReserved).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
+  });
+
+  it('does not run reservation state preparation when another turn is active', async () => {
+    let releaseSend!: () => void;
+    const sendBarrier = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    const handle = createHandle({ id: 'thread-reserved-busy' });
+    handle.send = vi.fn(async () => sendBarrier);
+    const session = new Session({
+      id: 'reserved-busy',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+
+    const firstSend = session.send('first');
+    await vi.waitFor(() => expect(handle.send).toHaveBeenCalledOnce());
+    const afterTurnReserved = vi.fn();
+
+    await expect(session.send('second', { afterTurnReserved })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    expect(afterTurnReserved).not.toHaveBeenCalled();
+
+    releaseSend();
+    await expect(firstSend).resolves.toEqual({ accepted: true });
+  });
+
   it('awaits beforeProviderStart before accepted persistence and provider dispatch', async () => {
     const order: string[] = [];
     let releaseBarrier!: () => void;
@@ -845,6 +979,40 @@ describe('Session turn send guard', () => {
     releaseBarrier();
     await expect(sending).resolves.toEqual({ accepted: true });
     expect(order).toEqual(['barrier-start', 'barrier-end', 'accepted', 'provider']);
+  });
+
+  it('does not persist acceptance when cancelled during the pre-provider barrier', async () => {
+    let releaseBarrier!: () => void;
+    const barrier = new Promise<void>((resolve) => {
+      releaseBarrier = resolve;
+    });
+    const handle = createHandle({ id: 'thread-before-provider-cancelled' });
+    handle.send = vi.fn(async () => undefined);
+    handle.abort = vi.fn(async () => undefined);
+    const session = new Session({
+      id: 'before-provider-cancelled',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const onAccepted = vi.fn();
+    const sending = session.send('first', {
+      beforeProviderStart: () => barrier,
+      onAccepted,
+    });
+    await Promise.resolve();
+
+    await session.abort();
+    releaseBarrier();
+
+    await expect(sending).resolves.toEqual({
+      accepted: false,
+      reason: 'cancelled-before-dispatch',
+    });
+    expect(onAccepted).not.toHaveBeenCalled();
+    expect(handle.send).not.toHaveBeenCalled();
   });
 
   it('runs onDispatching after acceptance and immediately before vendor send', async () => {
@@ -1190,6 +1358,172 @@ describe('Session turn send guard', () => {
     await expect(session.send('first')).rejects.toBe(firstError);
     await expect(session.send('second')).resolves.toEqual({ accepted: true });
     expect(handle.send).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('Session permission mode leases', () => {
+  it('serializes live changes and skips a stale conditional restore', async () => {
+    const handle = createHandle({ id: 'permission-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const temporary = await session.setPermissionModeTracked('ask');
+    const userChange = session.setPermissionMode('auto');
+    const restored = session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions');
+
+    await expect(userChange).resolves.toBeUndefined();
+    await expect(restored).resolves.toBe(false);
+    expect(applied).toEqual(['ask', 'auto']);
+    expect(session.permissionModeState).toEqual({ mode: 'auto', generation: 2 });
+  });
+
+  it('waits for an in-flight permission transition before reserving the next turn', async () => {
+    const handle = createHandle({ id: 'permission-transition-thread' });
+    handle.send = vi.fn(async () => undefined);
+    let releasePermission!: () => void;
+    handle.setPermissionMode = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releasePermission = resolve;
+        }),
+    );
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-transition-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const permissionChange = session.setPermissionModeTracked('ask');
+    const nextTurn = session.send('after permission restore');
+    await vi.waitFor(() => expect(handle.setPermissionMode).toHaveBeenCalledOnce());
+
+    expect(handle.send).not.toHaveBeenCalled();
+    releasePermission();
+    await expect(permissionChange).resolves.toMatchObject({ mode: 'ask' });
+    await expect(nextTurn).resolves.toEqual({ accepted: true });
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
+
+  it('defers an unsafe external permission switch until a host turn lease is released', async () => {
+    const handle = createHandle({ id: 'permission-host-lease-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    handle.send = vi.fn(async () => undefined);
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-host-lease-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const releaseLease = session.acquireTurnLease();
+    const temporary = await session.setPermissionModeTracked('ask');
+    const externalChange = session.setPermissionMode('bypassPermissions');
+    await Promise.resolve();
+
+    expect(applied).toEqual(['ask']);
+    await expect(
+      session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions'),
+    ).resolves.toBe(false);
+    expect(applied).toEqual(['ask']);
+
+    const nextTurn = session.send('after leased permission change');
+    releaseLease();
+    await expect(externalChange).resolves.toBeUndefined();
+    await expect(nextTurn).resolves.toEqual({ accepted: true });
+    expect(applied).toEqual(['ask', 'bypassPermissions']);
+    expect(handle.send).toHaveBeenCalledOnce();
+  });
+
+  it('allows a safe external permission switch during a host turn lease', async () => {
+    const handle = createHandle({ id: 'permission-safe-host-lease-thread' });
+    const applied: PermissionMode[] = [];
+    handle.setPermissionMode = vi.fn(async (mode: PermissionMode) => {
+      applied.push(mode);
+    });
+    const baseCapabilities = createAgent(async () => handle).capabilities;
+    const session = new Session({
+      id: 'permission-safe-host-lease-session',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: {
+        ...baseCapabilities,
+        permissionModes: [
+          { id: 'ask', displayName: 'Ask' },
+          { id: 'auto', displayName: 'Auto' },
+          { id: 'bypassPermissions', displayName: 'Full access' },
+        ],
+        setPermissionModeMidSession: { supported: true },
+        turnPermissionPolicy: {
+          supported: { supported: true },
+          unsupportedPermissionModes: ['bypassPermissions'],
+        },
+      },
+      logger: createLogger(),
+      permissionMode: 'bypassPermissions',
+    });
+
+    const releaseLease = session.acquireTurnLease();
+    const temporary = await session.setPermissionModeTracked('ask');
+    await expect(session.setPermissionMode('auto')).resolves.toBeUndefined();
+    await expect(
+      session.setPermissionModeIfUnchanged(temporary, 'bypassPermissions'),
+    ).resolves.toBe(false);
+    releaseLease();
+
+    expect(applied).toEqual(['ask', 'auto']);
+    expect(session.permissionModeState).toEqual({ mode: 'auto', generation: 2 });
   });
 });
 

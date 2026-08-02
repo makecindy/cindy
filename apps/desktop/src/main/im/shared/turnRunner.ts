@@ -56,8 +56,11 @@ import { isTerminalAgentErrorEvent } from '@cindy/maker-core';
 import type {
   AgentEvent,
   AgentKind,
+  Capabilities,
   InteractionDecision,
   InteractionRequest,
+  PermissionMode,
+  PermissionModeDescriptor,
   Session as MakerSession,
   TurnPermissionPolicy,
   UserMessage,
@@ -109,12 +112,18 @@ import {
 import { overloadRetryNotice, terminalErrorText } from './turnRetryNotice';
 import {
   toCoreAgentKind,
+  readPermissionMode,
   touchUserSent as repoTouchUserSent,
+  updatePermissionMode,
   type ImSessionRepo,
   type ImSessionRow,
 } from './sessionRepo';
 import type { ImCardBuilders } from './cardBuilders';
 import type { ImChannelAdapter } from './types';
+import {
+  changeSessionPermissionMode,
+  type PermissionModeChangeResult,
+} from './permissionModeControl';
 
 const PRE_DISPATCH_ACK_CLEANUP_TIMEOUT_MS = 1500;
 /** SESSION_RUNNING 竞态 / desktop turn 仍在跑时的兜底重试间隔。 */
@@ -140,6 +149,8 @@ interface TurnState {
   buffer: string;
   /** Managed images discovered in tool output for durable text channels. */
   mediaAbsPaths: string[];
+  /** Current session root used to confine model-authored local file links. */
+  workingDir: string;
   done: boolean;
   /** 过程展示(tool_use 时间线)状态 — 见 turnActivity.ts。 */
   activity: TurnActivityState;
@@ -178,6 +189,8 @@ interface TurnState {
   /** Terminal classification consumed by chunked-text commitFinal. */
   terminalKind: 'done' | 'aborted' | 'error';
   terminalErrorCode: string | null;
+  /** Whether a callback-bound text response has already been reserved. */
+  chunkedReplyBegun: boolean;
   queueMode: 'internal' | 'external';
   terminalPromise: Promise<ImTurnTerminal>;
   resolveTerminal: ((terminal: ImTurnTerminal) => void) | null;
@@ -303,6 +316,11 @@ export interface ImRunAgentTurnArgs {
   trackBackgroundTask?: (operation: () => Promise<void>) => void;
   /** Optional per-turn host policy (personal WeChat routes confirmations to Desktop). */
   turnPermissionPolicy?: TurnPermissionPolicy;
+  /** Resolve a channel safety policy after the concrete session route is known. */
+  turnPermissionPolicyForRoute?(
+    row: ImSessionRow,
+    capabilities: Capabilities,
+  ): TurnPermissionPolicy | undefined;
 }
 
 export interface ImTurnTerminal {
@@ -353,6 +371,14 @@ export interface ImTurnRunner {
   disposeOneSession(sessionId: string): Promise<void>;
   /** Get the live Maker Session for a given DB session id, or null. */
   getMakerSessionById(sessionId: string): MakerSession | null;
+  /** Permission choices exposed by the session's concrete Agent implementation. */
+  getPermissionModes(agentKind: AgentKind): PermissionModeDescriptor[];
+  changePermissionMode(args: {
+    sessionId: string;
+    mode: PermissionMode;
+    modes: readonly PermissionModeDescriptor[];
+    confirmedFullAccess?: boolean;
+  }): Promise<PermissionModeChangeResult>;
   /**
    * `!stop` 控制指令入口: 中止该路由 (bot, user[, scopeKey]) 对应 session 上
    * 正在跑的 turn, 并丢弃 sendQueue 里尚未派发的排队消息 — 不清队的话, abort
@@ -380,6 +406,7 @@ export function createTurnRunner(
   deps: ImTurnRunnerDeps = {},
 ): ImTurnRunner {
   const { im, output, ui, channel } = adapter;
+  const richIm = output.kind === 'rich-card' ? output.im : null;
   /** 过程区耗时显示的低频刷新(5s)— 单个长工具调用期间状态行不冻结。 */
   const ACTIVITY_TICK_MS = 5_000;
 
@@ -560,7 +587,6 @@ export function createTurnRunner(
     // commit 挂在它上面, 鉴权失败被拒的消息若先触发它, 这批群上下文会被游标
     // 永久跳过(prepareAgentTurnText 的契约: 路由失败不推进游标)。
     args.onRouteResolved?.(row.id);
-
     // ── thread 名片卡(threadScoped 新 thread 会话)─────────────────────────
     // 在 bot 第一条回复之前发进 thread, 让用户第一眼理解"这个 thread = 一条
     // 独立会话";首条消息的 oneshot 标题生成完成后, 名片原地升级为正式标题
@@ -568,6 +594,7 @@ export function createTurnRunner(
     let threadHeaderCardId: string | null = null;
     const threadUiPack = adapter.ui.thread;
     if (
+      richIm &&
       adapter.threadScoped &&
       threadUiPack &&
       !target.attached &&
@@ -575,7 +602,7 @@ export function createTurnRunner(
       target.scopeKey
     ) {
       try {
-        const r = await im.sendInteractiveCard(
+        const r = await richIm.sendInteractiveCard(
           userId,
           { ...threadUiPack.sessionHeaderCard, buttons: [] },
           { threadTs: target.scopeKey },
@@ -609,6 +636,7 @@ export function createTurnRunner(
       streamingHandlePromise: null,
       buffer: '',
       mediaAbsPaths: [],
+      workingDir: row.workingDir,
       done: false,
       activity: createTurnActivity(Date.now()),
       activityTicker: null,
@@ -623,6 +651,7 @@ export function createTurnRunner(
       interactionRouteLease: null,
       terminalKind: 'done',
       terminalErrorCode: null,
+      chunkedReplyBegun: false,
       queueMode: args.queueMode,
       terminalPromise,
       resolveTerminal,
@@ -685,6 +714,11 @@ export function createTurnRunner(
       startBackgroundTask(() => maybeGenerateImSessionTitle(row.id, text, threadHeaderCardId));
     }
 
+    const turnPermissionPolicy =
+      args.turnPermissionPolicyForRoute?.(
+        row,
+        getMaker().getCapabilities(row.agentKind),
+      ) ?? args.turnPermissionPolicy;
     const item: QueuedSend = {
       turn,
       userMessage: buildImUserMessage(args.agentText ?? text, attachments, target.attached),
@@ -694,7 +728,7 @@ export function createTurnRunner(
       notified: false,
       queueMode: args.queueMode,
       ...(args.beforeProviderStart ? { beforeProviderStart: args.beforeProviderStart } : {}),
-      ...(args.turnPermissionPolicy ? { turnPermissionPolicy: args.turnPermissionPolicy } : {}),
+      ...(turnPermissionPolicy ? { turnPermissionPolicy } : {}),
     };
 
     // turn 进行中(本 session 的本渠道 turn 未收口 / sendQueue 已有人排队 /
@@ -755,6 +789,7 @@ export function createTurnRunner(
     { kind: 'accepted'; acceptedAt: number } | { kind: 'busy' | 'rejected'; reason: string }
   > {
     const rowId = item.rowId;
+    await beginChunkedReply(item.turn);
     // 过程区耗时基准取真实派发时刻 — TurnState 创建时可能还要在 sendQueue 里
     // 等上一轮跑完, 排队等待不该计入"第 N 步 · 耗时"显示
     item.turn.activity.startedAt = Date.now();
@@ -882,6 +917,23 @@ export function createTurnRunner(
         if (i >= 0) state.queue.splice(i, 1);
         if (state.detachDrainPromise) {
           await completeTurnCallbackAfterAck(item.turn);
+          if (
+            item.turn.queueMode === 'internal' &&
+            output.kind === 'chunked-text' &&
+            item.turn.chunkedReplyBegun
+          ) {
+            try {
+              await output.commitFinal({
+                userId,
+                text: ui.agent.sendInternalError('session_detaching'),
+                terminal: 'error',
+                threadTs: state.scopeKey,
+                errorCode: 'session_detaching',
+              });
+            } catch {
+              /* The session is already detaching; reporting remains best-effort. */
+            }
+          }
           finishDeferredDetachIfIdle(state);
           return { kind: 'busy', reason: 'session_detaching' };
         }
@@ -907,6 +959,24 @@ export function createTurnRunner(
       return { kind: 'rejected', reason: normalized.reason };
     } finally {
       releaseAgentSwitchLock();
+    }
+  }
+
+  async function beginChunkedReply(turn: TurnState): Promise<void> {
+    if (
+      turn.chunkedReplyBegun ||
+      turn.queueMode !== 'internal' ||
+      output.kind !== 'chunked-text' ||
+      !output.beginReply
+    ) {
+      return;
+    }
+    turn.chunkedReplyBegun = true;
+    try {
+      await output.beginReply(turn.userId);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      log.warn(`chunked-text beginReply failed (active-send fallback): ${msg}`);
     }
   }
 
@@ -949,7 +1019,8 @@ export function createTurnRunner(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
-        providerId: row.providerId ?? undefined,
+        // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+        providerId: row.providerId,
         resumeSessionId: row.sdkSessionId ?? undefined,
         vendorOptions: state.attached
           ? undefined
@@ -1148,7 +1219,8 @@ export function createTurnRunner(
       effort: row.effort,
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
-      providerId: row.providerId ?? undefined,
+      // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+      providerId: row.providerId,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: attached ? undefined : adapter.sessions.defaultTitle(userId),
@@ -1248,6 +1320,30 @@ export function createTurnRunner(
       `publishMigrated kind=${req.kind} requestId=...${req.requestId.slice(-8)} session=...${localSessionId.slice(-8)}`,
     );
 
+    if (!richIm) {
+      try {
+        if (adapter.handleTextInteraction) {
+          resolve(await adapter.handleTextInteraction(userId, req));
+        } else {
+          const kind = req.kind as InteractionDecision['kind'];
+          resolve(
+            kind === 'ask_user_question'
+              ? { kind, answers: {} }
+              : { kind, behavior: 'deny', reason: 'rich_output_not_supported' },
+          );
+        }
+      } catch (err) {
+        const kind = req.kind as InteractionDecision['kind'];
+        const msg = err instanceof Error ? err.message : String(err);
+        resolve(
+          kind === 'ask_user_question'
+            ? { kind, answers: {} }
+            : { kind, behavior: 'deny', reason: `text interaction failed: ${msg}` },
+        );
+      }
+      return;
+    }
+
     let spec: InteractiveCardSpec | null = null;
     switch (req.kind) {
       case 'permission':
@@ -1279,7 +1375,7 @@ export function createTurnRunner(
 
     let messageId: string;
     try {
-      const result = await im.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+      const result = await richIm.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
       messageId = result.messageId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -1357,7 +1453,7 @@ export function createTurnRunner(
       // (此前是「新会话(刚建好)」占位), 顶层一眼能看出 thread 对应哪条会话。
       // 保留 🚪 退出按钮(updateInteractiveCard 是全量覆盖)。
       const threadUiPack = adapter.ui.thread;
-      if (!title || !adapter.threadScoped || !threadUiPack || !ctx?.scopeKey) return;
+      if (!richIm || !title || !adapter.threadScoped || !threadUiPack || !ctx?.scopeKey) return;
       const anchorId = bindingStore.getAttachCardMessageId({
         channel,
         botContextId: ctx.botContextId,
@@ -1366,7 +1462,7 @@ export function createTurnRunner(
       });
       if (!anchorId) return;
       const card = threadUiPack.takeoverCard(title, path.basename(ctx.workingDir));
-      await im.updateInteractiveCard(anchorId, {
+      await richIm.updateInteractiveCard(anchorId, {
         title: card.title,
         body: card.body,
         buttons: [
@@ -1403,8 +1499,8 @@ export function createTurnRunner(
     const prefix = typeof configuredPrefix === 'function' ? configuredPrefix() : configuredPrefix;
     try {
       const title = await generateAndPersistFbotTitle(sessionId, text, prefix);
-      if (!title || !headerCardId || !threadUiPack) return;
-      await im.updateInteractiveCard(headerCardId, {
+      if (!richIm || !title || !headerCardId || !threadUiPack) return;
+      await richIm.updateInteractiveCard(headerCardId, {
         ...threadUiPack.sessionHeaderTitled(title),
         buttons: [],
       });
@@ -1736,8 +1832,9 @@ export function createTurnRunner(
   ): Promise<StreamingTextHandle> {
     if (t.streamingHandle) return Promise.resolve(t.streamingHandle);
     if (t.streamingHandlePromise) return t.streamingHandlePromise;
+    if (!richIm) return Promise.reject(new Error('rich output is not available'));
     t.streamingHandlePromise = (async () => {
-      const handle = await im.startStreamingText(state.userId, undefined, {
+      const handle = await richIm.startStreamingText(state.userId, undefined, {
         threadTs: state.scopeKey,
       });
       t.streamingHandle = handle;
@@ -1986,9 +2083,23 @@ export function createTurnRunner(
     await completeTurnCallbackAfterAck(failure.turn);
     if (failure.turn.queueMode === 'internal') {
       try {
-        await im.sendText(userId, `❌ 启动 agent 失败：${failure.reason}`, {
-          threadTs: state.scopeKey,
-        });
+        const message = `❌ 启动 agent 失败：${failure.reason}`;
+        if (
+          output.kind === 'chunked-text' &&
+          failure.turn.chunkedReplyBegun
+        ) {
+          await output.commitFinal({
+            userId,
+            text: message,
+            terminal: 'error',
+            threadTs: state.scopeKey,
+            errorCode: failure.reason,
+          });
+        } else {
+          await im.sendText(userId, message, {
+            threadTs: state.scopeKey,
+          });
+        }
       } catch {
         /* 忽略失败：派发失败提示不能再阻塞收口。 */
       }
@@ -2036,6 +2147,7 @@ export function createTurnRunner(
   }
 
   function patchedCardHandle(messageId: string): StreamingTextHandle {
+    if (!richIm) throw new Error('rich output is not available');
     let closed = false;
     let buffer = '';
     let timer: ReturnType<typeof setTimeout> | null = null;
@@ -2043,7 +2155,7 @@ export function createTurnRunner(
     const flush = (): void => {
       timer = null;
       lastPatchAt = Date.now();
-      void im.patchMarkdownCard(messageId, buffer);
+      void richIm.patchMarkdownCard(messageId, buffer);
     };
     const schedule = (): void => {
       if (closed || timer) return;
@@ -2073,7 +2185,7 @@ export function createTurnRunner(
         closed = true;
         cancel();
         buffer = finalText;
-        await im.patchMarkdownCard(messageId, finalText);
+        await richIm.patchMarkdownCard(messageId, finalText);
       },
       close(): void {
         closed = true;
@@ -2141,6 +2253,7 @@ export function createTurnRunner(
             terminal: turn.terminalKind,
             threadTs: turn.scopeKey,
             ...(turn.mediaAbsPaths.length > 0 ? { mediaAbsPaths: turn.mediaAbsPaths } : {}),
+            allowedFileRoots: [turn.workingDir],
             ...(turn.terminalErrorCode ? { errorCode: turn.terminalErrorCode } : {}),
           });
         }
@@ -2473,7 +2586,7 @@ export function createTurnRunner(
 
       let messageId: string;
       try {
-        const result = await im.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+        const result = await output.im.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
         messageId = result.messageId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
@@ -2733,6 +2846,14 @@ export function createTurnRunner(
     disposeAllSessions,
     disposeOneSession,
     getMakerSessionById,
+    getPermissionModes: (agentKind) => getMaker().getCapabilities(agentKind).permissionModes,
+    changePermissionMode: (args) =>
+      changeSessionPermissionMode({
+        ...args,
+        readPreviousMode: () => readPermissionMode(args.sessionId),
+        getLiveSession: () => getMakerSessionById(args.sessionId),
+        persist: (mode) => updatePermissionMode(args.sessionId, mode),
+      }),
     stopActiveTurn,
   };
 }

@@ -50,6 +50,7 @@ import {
   setModelVisibility,
   useModelVisibilityVersion,
 } from '@/state/modelVisibilityPrefs';
+import { ModelPriceOverrideDialog } from './ModelPriceOverrideDialog';
 
 import { isAgentSelectableModel } from '@cindy/model-providers';
 import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-providers';
@@ -57,6 +58,7 @@ import type { AgentKind, CatalogModel, ProviderView } from '@cindy/model-provide
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  pi: 'Pi',
 };
 
 /**
@@ -290,8 +292,10 @@ export function UnifiedModelList({
   // useProviders 快照刷新,期间(可能上百毫秒,含凭证库读取)用本地覆盖顶住 —— 行在
   // 分组与「已停用」分区之间的迁移一次到位,不出现回跳帧(规则 7)。新快照到达即清空。
   const [pendingDisabled, setPendingDisabled] = useState<Record<string, boolean>>({});
+  const [priceRow, setPriceRow] = useState<UnionModelRow | null>(null);
   useEffect(() => {
     setPendingDisabled({});
+    setPriceRow(null);
   }, [provider]);
 
   // 折叠态:分组用 ModelCategory 作 key,「已停用」分区用 DISABLED_GROUP_KEY(默认展开)。
@@ -475,7 +479,7 @@ export function UnifiedModelList({
           type="button"
           aria-label={t('settings.providers.detail.moreActionsAria')}
           className={cn(
-            'flex h-6 w-6 shrink-0 items-center justify-center rounded-md opacity-0 transition-opacity',
+            'flex h-6 w-6 shrink-0 items-center justify-center rounded-full opacity-0 transition-opacity',
             'hover:bg-[var(--surface-hover)] focus-visible:opacity-100 group-hover:opacity-100 data-[state=open]:opacity-100',
           )}
           style={{ color: 'var(--text-tertiary)' }}
@@ -484,6 +488,12 @@ export function UnifiedModelList({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end">
+        {provider.id !== 'xd' &&
+          !isCapabilityRow(row, provider.source === 'user') && (
+            <DropdownMenuItem onClick={() => setPriceRow(row)}>
+              {t('settings.providers.models.priceOverride.menu')}
+            </DropdownMenuItem>
+          )}
         <DropdownMenuItem onClick={() => setRowDisabled(row, true)}>
           {t('settings.providers.models.disableModel')}
         </DropdownMenuItem>
@@ -492,16 +502,19 @@ export function UnifiedModelList({
   );
 
   return (
-    <div className="flex flex-col">
+    <div className="flex min-h-0 flex-1 flex-col">
       {/* 工具行:标题(开关语义的唯一说明,**常驻**,不被搜索框挤掉 —— 2026-07-28 用户
           反馈)+ 搜索 + 刷新(自定义) + 分别调整(双 agent) + 全部开关 */}
-      <div className="flex items-center gap-3 px-5 py-2.5">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-5 py-2.5">
         <span className="shrink-0 text-13 font-medium" style={{ color: 'var(--text-secondary)' }}>
           {t('settings.providers.models.available')}
         </span>
-        {showSearch ? (
+        <span className="min-w-0 flex-1" />
+        {showSearch && (
+          /* basis 200px 但允许收缩:窄窗口(右栏可被压到 ~270px)时先压缩搜索框,
+             不让右侧操作被 overflow-hidden 裁掉(PR #1102 review)。 */
           <div
-            className="flex h-8 min-w-0 flex-1 items-center gap-2 rounded-full px-3"
+            className="flex h-8 min-w-0 basis-[200px] items-center gap-2 rounded-full px-3"
             style={{ backgroundColor: 'var(--surface-elevated)', border: '1px solid var(--border-default)' }}
           >
             <Search size={14} className="shrink-0" style={{ color: 'var(--text-tertiary)' }} />
@@ -515,8 +528,6 @@ export function UnifiedModelList({
               style={{ color: 'var(--settings-section-title)' }}
             />
           </div>
-        ) : (
-          <span className="min-w-0 flex-1" />
         )}
         {onRefresh && (
           <button
@@ -564,8 +575,8 @@ export function UnifiedModelList({
             {provider.agents.map((a) => (
               <span
                 key={a}
-                className="w-[88px] text-center text-11 font-semibold uppercase"
-                style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+                className="w-20 text-center text-11 font-medium uppercase"
+                style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
               >
                 {AGENT_LABEL[a]}
               </span>
@@ -574,257 +585,302 @@ export function UnifiedModelList({
         </div>
       )}
 
-      {/* 分组 + 模型行 + 底部「已停用」分区 */}
-      <div className="flex flex-col gap-4 px-5 pb-4 pt-0.5">
-        {groups.length === 0 && disabledRows.length === 0 ? (
-          <div className="py-4 text-center text-13" style={{ color: 'var(--text-tertiary)' }}>
-            {query.trim()
-              ? t('settings.providers.models.noResults')
-              : (emptyMessage ?? t('settings.providers.models.noResults'))}
-          </div>
-        ) : (
-          groups.map((g) => {
-            // 搜索时强制展开(否则匹配项藏在折叠组里看不到);仅多组时才有折叠头。
-            const collapsed = showGroupHeaders && !query.trim() && isCollapsed(g.category);
-            // 能力语义按**行**判(isCapabilityRow,含自定义供应商的未知 group 豁免),
-            // 不能只看分组名:自定义对话模型(如 gpt-4o-audio-preview)会被 groupOf 的
-            // id 启发式落进 audio 组展示,但它有显示轴、必须有开关(PR #744 review)。
-            // 组级 hint 只在整组都是能力行时显示。
-            const userProvider = provider.source === 'user';
-            const wholeGroupCapability =
-              CAPABILITY_CATEGORIES.has(g.category) &&
-              g.rows.length > 0 &&
-              g.rows.every((r) => isCapabilityRow(r, userProvider));
-            return (
-            <div key={g.category} className="flex flex-col">
-              {showGroupHeaders && (
-                <button
-                  type="button"
-                  onClick={() => toggleCollapsed(g.category)}
-                  aria-expanded={!collapsed}
-                  className="flex items-center gap-1 self-start pb-0.5 text-left transition-opacity hover:opacity-80"
-                >
-                  {/* chevron 用 transform 旋转(compositor-only,规则 7);折叠时 -90°。 */}
-                  <span
-                    className="inline-flex transition-transform duration-150"
-                    style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
-                  >
-                    <ChevronDown size={12} />
-                  </span>
-                  <span
-                    className="text-11 font-semibold uppercase"
-                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
-                  >
-                    {t(CATEGORY_LABEL_KEY[g.category])}
-                  </span>
-                  <span
-                    className="text-11 tabular-nums"
-                    style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
-                  >
-                    {g.rows.length}
-                  </span>
-                </button>
-              )}
-              {/* 能力模型组的消歧说明:这组不参与对话模型选择、行内没有显示开关 ——
-                  语义与上面的对话模型组不同,必须就地讲清,不能指望用户猜。 */}
-              {wholeGroupCapability && !collapsed && (
-                <span
-                  className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[17px]')}
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  {t('settings.providers.models.capabilityGroupHint')}
-                </span>
-              )}
-              {!collapsed &&
-                g.rows.map((row) => {
-                const rep = row.byAgent[row.avail[0]]!;
-                const capability = isCapabilityRow(row, userProvider);
-                const diverged = !capability && isRowDiverged(provider.id, row);
-                const anyOn = rowAnyEnabled(provider.id, row);
-                // 能力注记:仅双 agent 供应商 + 单端模型才标(单 agent 供应商头部已说明);
-                // 能力模型行不标(它们本来就不参与 agent 维度)。
-                const capNote =
-                  !capability && multiAgent && row.avail.length === 1
-                    ? t('settings.providers.models.capabilityNote', {
-                        agent: AGENT_LABEL[row.avail[0] === 'claude-code' ? 'codex' : 'claude-code'],
-                      })
-                    : null;
-                // 上下文窗口取代表值;双端不同用原生 title 提示。
-                const ctxValues = row.avail
-                  .map((a) => row.byAgent[a]?.contextWindow)
-                  .filter((v): v is number => typeof v === 'number');
-                const ctxDiffers = new Set(ctxValues).size > 1;
-                const ctxTitle = ctxDiffers
-                  ? row.avail
-                      .map((a) => `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`)
-                      .join(' · ')
-                  : undefined;
-                const hiddenAgent = diverged
-                  ? row.avail.find((a) => rowEnabled(provider.id, row, a) === false)
-                  : undefined;
-                return (
-                  <div key={row.id} className="group flex items-center gap-3 py-[7px]">
-                    <span
-                      className="min-w-0 truncate text-14 font-medium"
-                      style={{
-                        color:
-                          capability || anyOn
-                            ? 'var(--settings-section-title)'
-                            : 'var(--text-tertiary)',
-                      }}
-                    >
-                      {rep.name}
-                    </span>
-                    {capNote && (
-                      <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-                        {capNote}
-                      </span>
-                    )}
-                    <span className="min-w-0 flex-1" />
-                    {!splitMode && diverged && hiddenAgent && (
-                      <button
-                        type="button"
-                        onClick={() => setSplitMode(true)}
-                        className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
-                        style={{
-                          backgroundColor: 'var(--surface-chip)',
-                          color: 'var(--text-secondary)',
-                        }}
-                      >
-                        {t('settings.providers.models.divergedChip', { agent: AGENT_LABEL[hiddenAgent] })}
-                      </button>
-                    )}
-                    {/* 合成媒体行(专属清单下发)没有上下文窗口元数据(=0),不显示。 */}
-                    {rep.contextWindow > 0 && (
-                      <span
-                        className="shrink-0 text-12 tabular-nums"
-                        style={{ color: 'var(--text-tertiary)' }}
-                        title={ctxTitle}
-                      >
-                        {formatContextWindow(rep.contextWindow)}
-                      </span>
-                    )}
-                    {rowMenu(row)}
-                    {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示)。 */}
-                    {!capability &&
-                      (splitMode ? (
-                        <div className="flex shrink-0 items-center">
-                          {provider.agents.map((a) => {
-                            const m = row.byAgent[a];
-                            return (
-                              <span key={a} className="flex w-[88px] items-center justify-center">
-                                {m ? (
-                                  <Switch
-                                    checked={isModelEnabled(a, provider.id, m)}
-                                    onCheckedChange={(v) => setModelVisibility(a, provider.id, m.id, v)}
-                                    aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
-                                  />
-                                ) : (
-                                  <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
-                                    —
-                                  </span>
-                                )}
-                              </span>
-                            );
-                          })}
-                        </div>
-                      ) : (
-                        <Switch checked={anyOn} onCheckedChange={() => toggleRow(row)} aria-label={rep.name} />
-                      ))}
-                  </div>
-                );
-              })}
+      {/* 分组 + 模型行 + 底部「已停用」分区:唯一滚动区,与上方固定工具行以
+          1px 细线分隔。视觉左右边距 20px = 容器 px-3 + 行 px-2(行悬停底色要包住内容)。 */}
+      <div
+        className="min-h-0 flex-1 overflow-y-auto border-t"
+        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+      >
+        <div className="flex flex-col gap-4 px-3 pb-4 pt-1.5">
+          {groups.length === 0 && disabledRows.length === 0 ? (
+            <div className="py-4 text-center text-13" style={{ color: 'var(--text-tertiary)' }}>
+              {query.trim()
+                ? t('settings.providers.models.noResults')
+                : (emptyMessage ?? t('settings.providers.models.noResults'))}
             </div>
-            );
-          })
-        )}
-
-        {/* 「已停用」分区:停用的行跨分组沉底;默认展开(区里有东西 = 用户主动停的,
-            找回路径要一眼可见),搜索时强制展开。行内「启用此模型」即飞回原分组;
-            头部「全部启用」= 组级恢复默认(kind:'reset' 删整组 override,含指向已
-            下架模型的陈旧条目 —— 逐行启用清不掉它们;configuration-and-overrides.md §4)。
-            渲染条件独立于当前渲染行:只剩陈旧条目(disabledRows 为空)或搜索过滤后
-            无匹配行时,恢复入口都不能消失(PR #744 review 第二十六轮)。 */}
-        {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) && (() => {
-          const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
-          return (
-            <div className="flex flex-col">
-              <div className="flex items-center gap-2 pb-0.5">
-                <button
-                  type="button"
-                  onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
-                  aria-expanded={!collapsed}
-                  className="flex items-center gap-1 text-left transition-opacity hover:opacity-80"
-                >
-                  <span
-                    className="inline-flex transition-transform duration-150"
-                    style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+          ) : (
+            groups.map((g) => {
+              // 搜索时强制展开(否则匹配项藏在折叠组里看不到);仅多组时才有折叠头。
+              const collapsed = showGroupHeaders && !query.trim() && isCollapsed(g.category);
+              // 能力语义按**行**判(isCapabilityRow,含自定义供应商的未知 group 豁免),
+              // 不能只看分组名:自定义对话模型(如 gpt-4o-audio-preview)会被 groupOf 的
+              // id 启发式落进 audio 组展示,但它有显示轴、必须有开关(PR #744 review)。
+              // 组级 hint 只在整组都是能力行时显示。
+              const userProvider = provider.source === 'user';
+              const wholeGroupCapability =
+                CAPABILITY_CATEGORIES.has(g.category) &&
+                g.rows.length > 0 &&
+                g.rows.every((r) => isCapabilityRow(r, userProvider));
+              return (
+              <div key={g.category} className="flex flex-col">
+                {showGroupHeaders && (
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(g.category)}
+                    aria-expanded={!collapsed}
+                    className="flex items-center gap-1 self-start px-2 pb-0.5 text-left transition-opacity hover:opacity-80"
                   >
-                    <ChevronDown size={12} />
-                  </span>
+                    {/* chevron 用 transform 旋转(compositor-only,规则 7);折叠时 -90°。 */}
+                    <span
+                      className="inline-flex transition-transform duration-150"
+                      style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+                    >
+                      <ChevronDown size={12} />
+                    </span>
+                    <span
+                      className="text-11 font-medium uppercase"
+                      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                    >
+                      {t(CATEGORY_LABEL_KEY[g.category])}
+                    </span>
+                    <span
+                      className="text-11 tabular-nums"
+                      style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}
+                    >
+                      {g.rows.length}
+                    </span>
+                  </button>
+                )}
+                {/* 能力模型组的消歧说明:这组不参与对话模型选择、行内没有显示开关 ——
+                    语义与上面的对话模型组不同,必须就地讲清,不能指望用户猜。 */}
+                {wholeGroupCapability && !collapsed && (
                   <span
-                    className="text-11 font-semibold uppercase"
-                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+                    className={cn('pb-1 text-11 leading-snug', showGroupHeaders && 'pl-[24px]')}
+                    style={{ color: 'var(--text-tertiary)' }}
                   >
-                    {t('settings.providers.models.disabledGroup')}
+                    {t('settings.providers.models.capabilityGroupHint')}
                   </span>
-                  <span className="text-11 tabular-nums" style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}>
-                    {/* 行数为 0 而 override 仍在(陈旧条目 / 搜索过滤)时显示 override 数,
-                        让「还有 N 条停用配置」可感知。 */}
-                    {disabledRows.length > 0 ? disabledRows.length : provider.disableOverrideCount ?? 0}
-                  </span>
-                </button>
-                <button
-                  type="button"
-                  onClick={resetDisableOverrides}
-                  className="rounded-md px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                  style={{ color: 'var(--text-tertiary)' }}
-                >
-                  {t('settings.providers.models.enableAllModels')}
-                </button>
-              </div>
-              {!collapsed &&
-                disabledRows.map((row) => {
+                )}
+                {!collapsed &&
+                  g.rows.map((row) => {
                   const rep = row.byAgent[row.avail[0]]!;
+                  const capability = isCapabilityRow(row, userProvider);
+                  const diverged = !capability && isRowDiverged(provider.id, row);
+                  const anyOn = rowAnyEnabled(provider.id, row);
+                  // 能力注记:多 agent 供应商里缺少任一通道就标(单 agent 供应商头部已说明);
+                  // 能力模型行不标(它们本来就不参与 agent 维度)。
+                  const missingAgents = provider.agents.filter(
+                    (agent) => !row.avail.includes(agent),
+                  );
+                  const capNote =
+                    !capability && multiAgent && missingAgents.length > 0
+                      ? t('settings.providers.models.capabilityNote', {
+                          agent: missingAgents.map((agent) => AGENT_LABEL[agent]).join(' / '),
+                        })
+                      : null;
+                  // 上下文窗口取代表值;双端不同用原生 title 提示。
+                  const ctxValues = row.avail
+                    .map((a) => row.byAgent[a]?.contextWindow)
+                    .filter((v): v is number => typeof v === 'number');
+                  const ctxDiffers = new Set(ctxValues).size > 1;
+                  const ctxTitle = ctxDiffers
+                    ? row.avail
+                        .map((a) => `${AGENT_LABEL[a]} ${formatContextWindow(row.byAgent[a]!.contextWindow)}`)
+                        .join(' · ')
+                    : undefined;
+                  const hiddenAgent = diverged
+                    ? row.avail.find((a) => rowEnabled(provider.id, row, a) === false)
+                    : undefined;
                   return (
-                    <div key={row.id} className="flex items-center gap-3 py-[7px]">
+                    <div
+                      key={row.id}
+                      className="group flex items-center gap-3 rounded-lg px-2 py-[7px] transition-colors hover:bg-[var(--surface-hover)]"
+                    >
                       <span
                         className="min-w-0 truncate text-14 font-medium"
-                        style={{ color: 'var(--text-disabled)' }}
+                        style={{
+                          color:
+                            capability || anyOn
+                              ? 'var(--settings-section-title)'
+                              : 'var(--text-tertiary)',
+                        }}
                       >
                         {rep.name}
                       </span>
-                      {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
-                      <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
-                        {t(CATEGORY_LABEL_KEY[rowCategory(row)])}
-                      </span>
-                      <span className="min-w-0 flex-1" />
-                      {rep.contextWindow > 0 && (
+                      {capNote && (
+                        /* 注记可收缩截断:窄栏(最小窗口右栏 ~275px)下先压缩次要
+                            元数据,保住右侧上下文/菜单/开关列(PR #1102 review 第五轮);
+                            截断时悬停可见全文。 */
                         <span
-                          className="shrink-0 text-12 tabular-nums"
-                          style={{ color: 'var(--text-disabled)' }}
+                          className="min-w-0 truncate text-12"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title={capNote}
                         >
-                          {formatContextWindow(rep.contextWindow)}
+                          {capNote}
                         </span>
                       )}
-                      <button
-                        type="button"
-                        onClick={() => setRowDisabled(row, false)}
-                        className="flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
-                        style={{
-                          borderColor: 'var(--settings-btn-secondary-border)',
-                          color: 'var(--settings-btn-secondary-text)',
-                        }}
-                      >
-                        {t('settings.providers.models.enableModel')}
-                      </button>
+                      <span className="min-w-0 flex-1" />
+                      {!splitMode && diverged && hiddenAgent && (
+                        <button
+                          type="button"
+                          onClick={() => setSplitMode(true)}
+                          className="flex h-[18px] shrink-0 items-center rounded-full px-2 text-11 font-medium transition-opacity hover:opacity-80"
+                          style={{
+                            backgroundColor: 'var(--surface-chip)',
+                            color: 'var(--text-secondary)',
+                          }}
+                        >
+                          {t('settings.providers.models.divergedChip', { agent: AGENT_LABEL[hiddenAgent] })}
+                        </button>
+                      )}
+                      {/* 固定 44px 右对齐列:上下扫读时数字齐成一条线;合成媒体行
+                          (专属清单下发)没有上下文窗口元数据(=0),留空占位保持列对齐。 */}
+                      {/* 分别调整模式隐藏上下文列:两列开关 + 菜单在最小窗口
+                          (右栏 ~275px)下必须完整可见,上下文是次要元数据,
+                          普通模式仍展示(PR #1102 review 第二轮)。 */}
+                      {!splitMode && (
+                        <span
+                          className="w-11 shrink-0 text-right text-12 tabular-nums"
+                          style={{ color: 'var(--text-tertiary)' }}
+                          title={ctxTitle}
+                        >
+                          {rep.contextWindow > 0 ? formatContextWindow(rep.contextWindow) : ''}
+                        </span>
+                      )}
+                      {rowMenu(row)}
+                      {/* 能力模型行没有显示轴 ⇒ 没有开关(全页开关语义唯一 = 显示);
+                          占同宽空位,保证开关/上下文列跨行对齐。 */}
+                      {capability && (
+                        <span
+                          className="shrink-0"
+                          style={{ width: splitMode ? provider.agents.length * 80 : 36 }}
+                        />
+                      )}
+                      {!capability &&
+                        (splitMode ? (
+                          <div className="flex shrink-0 items-center">
+                            {provider.agents.map((a) => {
+                              const m = row.byAgent[a];
+                              return (
+                                <span key={a} className="flex w-20 items-center justify-center">
+                                  {m ? (
+                                    <Switch
+                                      checked={isModelEnabled(a, provider.id, m)}
+                                      onCheckedChange={(v) => setModelVisibility(a, provider.id, m.id, v)}
+                                      aria-label={`${rep.name} · ${AGENT_LABEL[a]}`}
+                                    />
+                                  ) : (
+                                    <span className="text-12" style={{ color: 'var(--text-tertiary)' }}>
+                                      —
+                                    </span>
+                                  )}
+                                </span>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <Switch checked={anyOn} onCheckedChange={() => toggleRow(row)} aria-label={rep.name} />
+                        ))}
                     </div>
                   );
                 })}
-            </div>
-          );
-        })()}
+              </div>
+              );
+            })
+          )}
+
+          {/* 「已停用」分区:停用的行跨分组沉底;默认展开(区里有东西 = 用户主动停的,
+              找回路径要一眼可见),搜索时强制展开。行内「启用此模型」即飞回原分组;
+              头部「全部启用」= 组级恢复默认(kind:'reset' 删整组 override,含指向已
+              下架模型的陈旧条目 —— 逐行启用清不掉它们;configuration-and-overrides.md §4)。
+              渲染条件独立于当前渲染行:只剩陈旧条目(disabledRows 为空)或搜索过滤后
+              无匹配行时,恢复入口都不能消失(PR #744 review 第二十六轮)。 */}
+          {(disabledRows.length > 0 || (provider.disableOverrideCount ?? 0) > 0) && (() => {
+            const collapsed = !query.trim() && isCollapsed(DISABLED_GROUP_KEY);
+            return (
+              <div className="flex flex-col">
+                <div className="flex items-center gap-2 pb-0.5">
+                  <button
+                    type="button"
+                    onClick={() => toggleCollapsed(DISABLED_GROUP_KEY)}
+                    aria-expanded={!collapsed}
+                    className="flex items-center gap-1 px-2 text-left transition-opacity hover:opacity-80"
+                  >
+                    <span
+                      className="inline-flex transition-transform duration-150"
+                      style={{ color: 'var(--text-tertiary)', transform: collapsed ? 'rotate(-90deg)' : 'none' }}
+                    >
+                      <ChevronDown size={12} />
+                    </span>
+                    <span
+                      className="text-11 font-medium uppercase"
+                      style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
+                    >
+                      {t('settings.providers.models.disabledGroup')}
+                    </span>
+                    <span className="text-11 tabular-nums" style={{ color: 'var(--text-tertiary)', opacity: 0.6 }}>
+                      {/* 行数为 0 而 override 仍在(陈旧条目 / 搜索过滤)时显示 override 数,
+                          让「还有 N 条停用配置」可感知。 */}
+                      {disabledRows.length > 0 ? disabledRows.length : provider.disableOverrideCount ?? 0}
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={resetDisableOverrides}
+                    className="rounded-lg px-1.5 py-0.5 text-11 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                    style={{ color: 'var(--text-tertiary)' }}
+                  >
+                    {t('settings.providers.models.enableAllModels')}
+                  </button>
+                </div>
+                {!collapsed &&
+                  disabledRows.map((row) => {
+                    const rep = row.byAgent[row.avail[0]]!;
+                    // 可折行:最小窗口(右栏 ~275px)下「启用此模型」(日文更长)放
+                    // 不下时换行,恢复入口始终可达(PR #1102 review 第四轮)。
+                    return (
+                      <div
+                        key={row.id}
+                        className="flex flex-wrap items-center gap-x-3 gap-y-1 px-2 py-[7px]"
+                      >
+                        <span
+                          className="min-w-0 truncate text-14 font-medium"
+                          style={{ color: 'var(--text-disabled)' }}
+                        >
+                          {rep.name}
+                        </span>
+                        {/* 来源分组注记:启用后会回到哪个组,别让用户猜。 */}
+                        <span className="shrink-0 text-12" style={{ color: 'var(--text-tertiary)' }}>
+                          {t(CATEGORY_LABEL_KEY[rowCategory(row)])}
+                        </span>
+                        <span className="min-w-0 flex-1" />
+                        {rep.contextWindow > 0 && (
+                          <span
+                            className="w-11 shrink-0 text-right text-12 tabular-nums"
+                            style={{ color: 'var(--text-disabled)' }}
+                          >
+                            {formatContextWindow(rep.contextWindow)}
+                          </span>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => setRowDisabled(row, false)}
+                          className="ml-auto flex h-6 shrink-0 items-center rounded-full border px-2.5 text-12 font-medium transition-colors hover:bg-[var(--surface-hover)]"
+                          style={{
+                            borderColor: 'var(--settings-btn-secondary-border)',
+                            color: 'var(--settings-btn-secondary-text)',
+                          }}
+                        >
+                          {t('settings.providers.models.enableModel')}
+                        </button>
+                      </div>
+                    );
+                  })}
+              </div>
+            );
+          })()}
+        </div>
       </div>
+      {priceRow && (
+        <ModelPriceOverrideDialog
+          provider={provider}
+          row={priceRow}
+          open
+          onOpenChange={(next) => {
+            if (!next) setPriceRow(null);
+          }}
+        />
+      )}
     </div>
   );
 }

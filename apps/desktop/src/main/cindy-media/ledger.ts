@@ -153,6 +153,12 @@ export async function addRef(params: AddRefParams, db: LedgerDb = defaultDb()): 
   return id;
 }
 
+/** Remove exactly one reference row created by a staged operation. */
+export async function removeRefById(id: string, db: LedgerDb = defaultDb()): Promise<number> {
+  const result = await db.delete(mediaRefs).where(eq(mediaRefs.id, id)).run();
+  return result.changes;
+}
+
 /**
  * 集成缓存索引查询:cacheKey(`<集成名>:<token>`)→ 最近一次登记的指纹。
  * 同 key 多行(token 复用换内容)时取最新;无登记返回 null(调用方去真下载)。

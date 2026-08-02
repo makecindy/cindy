@@ -253,7 +253,7 @@ export interface XdtHelperMcpDeps {
  * 字段惰性创建, 工具 handler 闭包捕获这些值。
  */
 export interface XdtHelperMcpSessionCtx {
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   workingDir: string;
   sessionId?: string;
   vendorOptions?: Record<string, unknown>;

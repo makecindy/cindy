@@ -26,6 +26,7 @@ import {
   MemoryError,
   type MemoryConfig,
   type MemoryRecord,
+  type MemoryType,
   type SearchHit,
   type SearchOptions,
   type WriteOptions,
@@ -137,6 +138,16 @@ export class MakerMemoryStore {
         error: String(e),
       });
     }
+  }
+
+  /** 仅清空一种 memory；给 agent 私有的系统记忆（如 Pi digest）使用。 */
+  async resetType(type: MemoryType): Promise<{ removedCount: number }> {
+    await this.init();
+    const matching = (await this.storage.list()).filter((record) => record.frontmatter.type === type);
+    for (const record of matching) {
+      await this.delete(record.filename);
+    }
+    return { removedCount: matching.length };
   }
 
   // ── 检索 ─────────────────────────────────────────────────────────────────

@@ -270,7 +270,7 @@ describe('WorkspacePrefsEditor 复用标准选择器', () => {
     render(<WorkspacePrefsEditor alias="cindy" state={stateWith({ editable: false })} />);
 
     const tabs = screen.getAllByRole('tab');
-    expect(tabs.length).toBe(2);
+    expect(tabs.length).toBe(3);
     for (const tab of tabs) expect((tab as HTMLButtonElement).disabled).toBe(true);
 
     tabs.find((t) => t.getAttribute('aria-selected') === 'false')?.click();

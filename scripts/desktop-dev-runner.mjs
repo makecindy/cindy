@@ -8,6 +8,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
+import { resolvePnpmInvocation, usablePnpmExecPath } from './shared/pnpm-invocation.mjs';
+
 const rootDir = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const mode = process.argv[2];
 if (mode !== 'remote' && mode !== 'local') {
@@ -16,26 +18,23 @@ if (mode !== 'remote' && mode !== 'local') {
 }
 
 const devScript = mode === 'local' ? 'dev:desktop' : 'dev:desktop:remote';
-const pnpmExecPath = process.env.npm_execpath;
-const hasPnpmExecPath = Boolean(
-  pnpmExecPath && /pnpm/i.test(path.basename(pnpmExecPath)) && fs.existsSync(pnpmExecPath),
-);
 // The restart pipeline opens a fresh Windows cmd.exe. That environment does
-// not always carry npm_execpath, and Node cannot spawn a command shim with the
-// default shell:false behavior. Let cmd.exe resolve the extension-neutral
-// command through PATH/PATHEXT so both pnpm.cmd and standalone pnpm.exe
-// installations work.
-const command = hasPnpmExecPath ? process.execPath : 'pnpm';
-const args = hasPnpmExecPath
-  ? [pnpmExecPath, devScript]
-  : [devScript];
+// not always carry npm_execpath, and may carry a stale one, so the path is
+// validated before use; resolvePnpmInvocation then decides how to execute it
+// (JS entry via node, native binary directly, command wrapper through PATH),
+// and falls back to PATH/PATHEXT resolution when nothing usable is left.
+const invocation = resolvePnpmInvocation([devScript], {
+  npmExecPath: usablePnpmExecPath(process.env.npm_execpath, fs.existsSync),
+});
+const { command, args } = invocation;
 
 const child = spawn(command, args, {
   cwd: rootDir,
-  env: { ...process.env, COREPACK_ENABLE_AUTO_PIN: '0' },
+  env: { ...process.env, COREPACK_ENABLE_AUTO_PIN: '0', ...(invocation.env ?? {}) },
   stdio: 'inherit',
   windowsHide: false,
-  shell: process.platform === 'win32' && !hasPnpmExecPath,
+  shell: invocation.shell,
+  windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 });
 
 child.once('error', (error) => {

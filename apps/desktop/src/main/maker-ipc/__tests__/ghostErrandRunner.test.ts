@@ -15,11 +15,19 @@ import {
 import type { AgentEvent } from '@cindy/maker-core';
 
 /** 最小可观察会话替身:测试手动放事件。 */
+type FakeStatus = 'active' | 'aborting' | 'closed' | 'error';
+
 function fakeSession(id: string): {
-  session: { id: string; onEvent(listener: (ev: AgentEvent) => void): () => void };
+  session: {
+    id: string;
+    onEvent(listener: (ev: AgentEvent) => void): () => void;
+    onStatusChange(listener: (status: FakeStatus) => void): () => void;
+  };
   emit: (ev: AgentEvent) => void;
+  setStatus: (status: FakeStatus) => void;
 } {
   const listeners = new Set<(ev: AgentEvent) => void>();
+  const statusListeners = new Set<(status: FakeStatus) => void>();
   return {
     session: {
       id,
@@ -27,8 +35,13 @@ function fakeSession(id: string): {
         listeners.add(listener);
         return () => listeners.delete(listener);
       },
+      onStatusChange(listener) {
+        statusListeners.add(listener);
+        return () => statusListeners.delete(listener);
+      },
     },
     emit: (ev) => listeners.forEach((l) => l(ev)),
+    setStatus: (status) => statusListeners.forEach((l) => l(status)),
   };
 }
 
@@ -93,6 +106,28 @@ describe('权限档钳制', () => {
     expect(clampErrandPermissionMode('ask')).toBe('plan');
     expect(clampErrandPermissionMode('acceptEdits')).toBe('acceptEdits');
     expect(clampErrandPermissionMode('auto')).toBe('auto');
+  });
+});
+
+describe('Pi 代办路由', () => {
+  it('读取 Pi 草稿默认并创建 Pi 会话', async () => {
+    const createSession = vi.fn(async () => 'sess-pi');
+    const getDraftDefaults = vi.fn(() => ({ model: 'gpt-5.5' }));
+    const { deps, emitters } = makeDeps({
+      readConfig: () => ({ agentKind: 'pi' }),
+      createSession,
+      getDraftDefaults,
+    });
+    const runner = createGhostErrandRunner(deps);
+    const pending = runner(REQUEST);
+    await vi.waitFor(() => expect(emitters.has('sess-pi')).toBe(true));
+    emitters.get('sess-pi')!.emit(doneEvent());
+    await pending;
+
+    expect(getDraftDefaults).toHaveBeenCalledWith('pi');
+    expect(createSession).toHaveBeenCalledWith(
+      expect.objectContaining({ agentKind: 'pi', model: 'gpt-5.5' }),
+    );
   });
 });
 

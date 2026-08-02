@@ -4,6 +4,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolvePnpmInvocation } from "./shared/pnpm-invocation.mjs";
 import {
 	acquireTestGateLock,
 	shouldUseTestGateLock,
@@ -428,16 +429,6 @@ function describeTierStatus(manifestWorkspaces, tier) {
 	return entries.length ? entries.join(" ") : "Tier is not declared in manifest.";
 }
 
-export function resolvePnpmInvocation(args, env = process.env) {
-	const npmExecPath = env.npmExecPath ?? env.npm_execpath;
-	const execPath = env.execPath ?? process.execPath;
-	if (npmExecPath)
-		return { command: execPath, args: [npmExecPath, ...args], shell: false };
-	const platform = env.platform ?? process.platform;
-	const isWindows = platform === "win32";
-	return { command: "pnpm", args, shell: isWindows };
-}
-
 export function classifyFailure({ stage, exitCode, output }) {
 	if (stage === "preflight") return "PREFLIGHT_FAILED";
 	if (exitCode === 0) return null;
@@ -565,7 +556,9 @@ export function runCommand(command, args, options = {}) {
 	return new Promise((resolve) => {
 		const child = spawn(command, args, {
 			cwd: options.cwd,
+			env: options.env,
 			shell: options.shell,
+			windowsVerbatimArguments: options.windowsVerbatimArguments,
 			windowsHide: true,
 		});
 		const output = createBoundedOutputBuffer(options.maxOutputChars);
@@ -805,7 +798,9 @@ export async function runPlannedTests({
 					invocation.args,
 					{
 						cwd,
+						env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 						shell: invocation.shell,
+						windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 						stdout: reporter ? null : undefined,
 						stderr: reporter ? null : undefined,
 					},
@@ -848,7 +843,9 @@ export async function runPlannedTests({
 				invocation.args,
 				{
 					cwd,
+					env: invocation.env ? { ...process.env, ...invocation.env } : undefined,
 					shell: invocation.shell,
+					windowsVerbatimArguments: invocation.windowsVerbatimArguments,
 					stdout: reporter ? null : undefined,
 					stderr: reporter ? null : undefined,
 				},

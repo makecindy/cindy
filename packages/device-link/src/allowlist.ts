@@ -78,6 +78,38 @@ export const DL_VOICE_TRANSCRIBE_CHANNEL = 'device-link:voice:transcribe';
 export const DL_VOICE_CREDENTIAL_SYNC_CHANNEL = 'device-link:voice:credential-sync';
 
 /**
+ * 个人 Telegram bot 的跨设备上下线 channel(控制端 → 被控端)。
+ *
+ * 背景:个人 Telegram bot 是 BYO token 直连 Bot API 的 getUpdates 长轮询,
+ * 同一 token 同时只有一台设备能收消息(Telegram 侧 409),而两台设备之间**没有
+ * 任何通信通道**。换机器时想让另一端让位, 除了人肉去那台机器操作, 没有别的办法
+ * —— 这两个 channel 就是补这个缺口。
+ *
+ * 为什么不直接把 telegramBot:set-online 放进 allowlist: IM 的所有 IPC 在
+ * host.ipc.handle 里统一包了 assertTrustedAppRendererEvent(见 im/host.ts),
+ * 只认 Electron 持有的真实 sender; 而 dispatchLocalInvoke 用的是合成 event
+ * (sender: undefined), 必然判定不可信。那道闸是有意拦着的(IM 凭证/配置面全算
+ * 敏感面), 不该为远程下线放宽 —— 故与 media:fetch / voice:* 同款: 不是
+ * ipcMain handler, 由被控端 dispatch 在通用路由前拦截执行。
+ *
+ * 准入论证(对照本文件顶部三条判据):
+ *  1. 不依赖 event.sender / 窗口;
+ *  2. 无本机 UI / shell / 对话框副作用;
+ *  3. 语义只在被控端执行才正确 —— 要停的正是那台机器的轮询。
+ * 与"永不放行"的两类刻意划清界限:**不碰凭证**(token / owner id 不读不写不
+ * 外传, 下线只写一个布尔标志、解绑仍然只能本机操作), 也**不是通用设置写**
+ * (单一用途、只切轮询, 不是 *_SET 那种任意配置面)。
+ *
+ * status 是只读投影, 且刻意不含 ownerUserId —— 控制端只需要知道"哪台在用、
+ * 用的哪个 bot", 没有理由让 Telegram 用户 id 过网线。
+ *
+ * 老被控端不识别 → CHANNEL_NOT_ALLOWED, 控制端据此显示「该设备版本不支持」
+ * 而不是静默失败。
+ */
+export const DL_TELEGRAM_STATUS_CHANNEL = 'device-link:telegram:status';
+export const DL_TELEGRAM_SET_ONLINE_CHANNEL = 'device-link:telegram:set-online';
+
+/**
  * 手机端语音词典学习回写 channel。
  *
  * 手机端只负责检测用户是否把一次 voice refine 结果改成了专有名词/术语修正;
@@ -161,6 +193,10 @@ const CORE_INVOKE_CHANNELS: readonly string[] = [
   // 老被控端无 handler → CHANNEL_NOT_ALLOWED → 控制端 UI 本就按 capabilities.planMode 缺失隐藏入口。
   'maker:set-plan-mode',
   'maker:set-extra-dirs',
+  // Pi 原生分支树:只读快照 + 当前会话内导航。导航业务 handler 在被控端原子同步
+  // SDK leaf 与 SQLite 可见时间线，不依赖 sender/窗口，真相也只在被控端。
+  'maker:get-session-tree',
+  'maker:navigate-session-tree',
   // 会话「非选中模型」effort/fast 写穿(控制端 → 被控端):控制端纯显示,改非选中行的预设记忆时
   // 通知被控端,被控端调它原来的本地 setter(setSessionModelEffort/Fast)写真实存储。选中模型仍走
   // maker:set-model/effort/fast-mode + sessions:patched,不经此 channel。被控端转发给自身 renderer
@@ -430,6 +466,10 @@ const EXTENDED_INVOKE_CHANNELS: readonly string[] = [
   'worktree:create',
   'worktree:discard-precreated',
   'worktree:removal-preview',
+  // —— 个人 Telegram bot 跨设备上下线(准入论证见上方 DL_TELEGRAM_* 常量注释)——
+  // 两条都由被控端 dispatch 拦截执行, 不是 ipcMain handler。
+  DL_TELEGRAM_STATUS_CHANNEL,
+  DL_TELEGRAM_SET_ONLINE_CHANNEL,
 ];
 
 /** 远程可调用的 invoke channel 全集(被控端 dispatch 前的权威校验依据) */

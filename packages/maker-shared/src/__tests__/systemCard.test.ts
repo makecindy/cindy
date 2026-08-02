@@ -51,6 +51,22 @@ describe('shared system card presentation model', () => {
       ]),
     });
 
+    // codex review 回归:/status 的 agent 行不能把 Pi 会话映射成 Claude Code。
+    const piStatus = formatSystemCard('status', buildSystemCardData('status', {
+      session: {
+        agentKind: 'pi',
+        fastMode: false,
+        model: 'claude-sonnet-4-6',
+        permissionMode: 'ask',
+        status: 'active',
+        title: 'Pi Session',
+        workingDir: '/repo',
+      },
+    }));
+    expect(piStatus.rows).toEqual(
+      expect.arrayContaining([{ label: 'agent', value: 'Pi' }]),
+    );
+
     const context = formatSystemCard('context', buildSystemCardData('context', {
       contextUsage: {
         totalTokens: 12000,

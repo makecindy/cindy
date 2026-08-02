@@ -27,7 +27,15 @@ import {
   type SessionPermissionUpdate,
 } from '../types/permissions.js';
 import type { AgentKind, Effort, PermissionMode, ReasoningDisplay, UserMessage, WorkspaceKind } from '../types/common.js';
-import type { Capabilities, EffortDescriptor, ModelDescriptor } from '../types/capabilities.js';
+import type {
+  Capabilities,
+  EffortDescriptor,
+  ManualCompactResult,
+  ModelDescriptor,
+  NavigateSessionTreeOptions,
+  NavigateSessionTreeResult,
+  SessionTreeSnapshot,
+} from '../types/capabilities.js';
 import type { CapabilityRoutingPolicy } from '../types/capability-routing.js';
 import { NotSupportedError } from '../types/capabilities.js';
 import type { AgentCredentialMode, AuthLoginOptions } from '../interfaces/auth-adapter.js';
@@ -83,12 +91,6 @@ export interface CodexMcpThreadContextArgs {
   vendorOptions: Record<string, unknown>;
 }
 
-export interface CodexReviewerRouteContextArgs {
-  threadId: string;
-  sessionId: string;
-  model: string;
-}
-
 /**
  * Metadata for an MCP tool approval decision.
  *
@@ -108,6 +110,81 @@ export type McpToolApprovalPolicy =
   | 'auto-approve'
   | 'prompt'
   | 'prompt-each-time';
+
+/** pi spawn 附加配置:host 的 MCP HTTP bridge 出口(见 AgentDeps.preparePiExtraSpawnConfig)。 */
+export interface PiExtraSpawnConfig {
+  mcpBridge?: {
+    token: string;
+    servers: Array<{ name: string; url: string }>;
+  } | null;
+  /**
+   * 释放本 session 的 bridge lease；带 sessionId 时同时注销身份 ctx。PiAgent 在
+   * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
+   */
+  disposeSessionCtx?: () => void;
+}
+
+/** pi models.json 原生 provider 的 api 形态(BYOM 用;不过 anthropic-compat 代理)。 */
+export type PiNativeApi =
+  | 'anthropic-messages'
+  | 'openai-responses'
+  | 'openai-completions'
+  | 'google-generative-ai';
+
+/** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
+export interface PiNativeModelSpec {
+  id: string;
+  name?: string;
+  reasoning?: boolean;
+  contextWindow?: number;
+  maxTokens?: number;
+  input?: Array<'text' | 'image'>;
+}
+
+/**
+ * BYOM:一个**原生 pi provider**(用户自定义/本地模型)—— 直连用户端点,不经 Cindy 的
+ * anthropic-compat 代理(设计原则:pi 主导,禁双重转义)。host 从 custom-provider-store
+ * 解析产出;PiAgent 写进 models.json 的独立 provider 块,并按 model→provider 路由 set_model。
+ */
+export interface PiNativeProviderSpec {
+  /** provider id(slug,禁与网关 provider `cindy` 撞名)。 */
+  id: string;
+  name: string;
+  baseUrl: string;
+  api: PiNativeApi;
+  /**
+   * 存放该 provider api key 的 env 变量名;models.json 用 `$<envVar>` 插值引用(与网关
+   * CINDY_PI_API_KEY 同机制,密钥只进子进程 env、不落盘)。keyless(本机 Ollama 等)留空 →
+   * 写 dummy key(pi 要求有 key 才在 /model 显示)。
+   */
+  apiKeyEnvVar?: string;
+  headers?: Record<string, string>;
+  models: PiNativeModelSpec[];
+}
+
+/** host 解析出的 pi 原生 provider + 需注入子进程的 env(api keys)。 */
+export interface PiNativeProvidersResult {
+  providers: PiNativeProviderSpec[];
+  /** 注入 spawn env 的键值(通常是各 provider 的 api key,键名对应 spec.apiKeyEnvVar)。 */
+  env: Record<string, string>;
+}
+
+/**
+ * pi MCP 桥的 per-session 身份上下文(host 用它在 bridge 上注册当前 pi 会话)。
+ *
+ * 为什么需要:pi 是独立子进程,其 MCP 请求不带 codex 那样的 _meta.threadId。控制类
+ * 工具(orca start_team/create_worker、会话身份类)靠 `getLiziMcpSessionContext()`
+ * 拿"当前是哪个 session";没有身份注册时该 ctx 为空,工具回落 LEAD_NOT_SUPPORTED。
+ * host 据此把 sessionId 注册到 bridge 并给该 session 的 server URL 打 `?session=`
+ * 路由 —— 与远端 Claude Code 的身份通道同机制。
+ *
+ * sessionId 缺省 → host 不注册、URL 不带 query(匿名会话走无 ctx 兜底,行为同改动前)。
+ */
+export interface PiExtraSpawnConfigContext {
+  sessionId?: string;
+  workingDir: string;
+  vendorOptions?: Record<string, unknown>;
+}
 
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
@@ -180,6 +257,51 @@ export interface AgentDeps {
    * provider，并转换成底层 SDK 接受的 MCP 配置。
    */
   mcpProviders?: McpProvider[];
+
+  /**
+   * pi 专用:pi 配置目录(PI_CODING_AGENT_DIR,内含 models.json / sessions/ 等)
+   * 的解析器(host 注入)。文件落盘位置归 host 管;PiAgent 只在返回的目录里生成
+   * 配置与会话文件。缺省 → 落系统临时目录(数据不保久,仅兜底)。
+   * 其它 agent 不消费此字段。
+   */
+  resolvePiAgentHome?: () => string | undefined;
+
+  /**
+   * pi 专用钩子:把 mcpProviders 转成 pi 子进程可消费的 MCP 桥配置。
+   *
+   * 与 prepareCodexExtraSpawnConfig 同因:pi 是独立子进程,没法消费 in-process
+   * JS McpServer instance —— host 起 streamable-HTTP bridge 把 instance 暴露到
+   * localhost,PiAgent 把 {token, servers} 经 env(CINDY_PI_MCP_BRIDGE)交给
+   * agentHome/extensions/cindy-bridge.ts,由它在 pi 内注册成工具。
+   *
+   * 缺省 / 返回 null → pi 跑纯内置工具(read/bash/edit/write),仍能基础对话。
+   *
+   * ctx(可选):本次 session 的身份上下文。host 用它在 bridge 上注册 sessionId +
+   * 给该 session 的 server URL 打 `?session=` 路由,让 orca / 会话身份类工具能绑定
+   * 到当前 pi 会话(否则回落 LEAD_NOT_SUPPORTED)。缺省 → 匿名注入(无 ctx 兜底)。
+   */
+  preparePiExtraSpawnConfig?: (
+    providers: McpProvider[],
+    ctx?: PiExtraSpawnConfigContext,
+  ) => Promise<PiExtraSpawnConfig | null>;
+
+  /**
+   * Pi-only: authenticate a child process to the host's loopback model proxy.
+   * PiAgent creates a high-entropy token per session, registers it before spawn,
+   * and disposes the exact registration when startup fails or the session closes.
+   */
+  registerPiProxySession?: (sessionId: string, token: string) => (() => void) | void;
+
+  /**
+   * BYOM:host 解析出当前会话可用的 pi **原生 provider**(用户自定义/本地模型)+ 需注入的
+   * env(api keys)。PiAgent 把这些写进 models.json 的独立 provider 块(直连用户端点,不过
+   * anthropic-compat 代理),并按 model→provider 路由 set_model / 初始 --provider。
+   *
+   * 缺省 / 返回空 → 只有网关 provider `cindy`(现状,行为不变)。keyless provider 的 key 可省。
+   */
+  resolvePiNativeProviders?: (
+    ctx: { workingDir: string; remoteHostId?: string | null },
+  ) => Promise<PiNativeProvidersResult | null>;
 
   /**
    * Host-provided capability descriptor additions.
@@ -271,13 +393,6 @@ export interface AgentDeps {
   onCodexLocalModelsListed?: (
     models: readonly CodexModelListItem[],
   ) => void | Promise<void>;
-
-  /** @deprecated Kept until the Auto-review routing PR removes the persisted Auto→Ask fallback. */
-  onAutoPermissionClassifierUnavailable?: (args: {
-    sessionId: string;
-    agentKind: 'claude-code' | 'codex';
-    status: number;
-  }) => void;
 
   /**
    * Host-owned lightweight reviewer for routes without a healthy vendor-native
@@ -425,18 +540,6 @@ export interface AgentDeps {
     message: string;
     additionalDetails?: string | null;
   }) => string | null;
-
-  /**
-   * Codex 专用：登记 Guardian 子线程回到父业务 session 时应使用的主模型。
-   *
-   * Codex app-server 的模型目录由共享进程持有，不能代表单个 session 的实际
-   * Provider。host/proxy 通过 Guardian 请求的 x-codex-parent-thread-id 找回
-   * 此上下文，在非 OpenAI 路由把隐藏 codex-auto-review 改写为当前主模型。
-   *
-   * 只有明确返回 true 才表示路由已就绪；缺省、false 或抛错都必须继续使用
-   * user reviewer，不能让未知路由进入无人值守审批。
-   */
-  registerCodexReviewerRouteContext?: (args: CodexReviewerRouteContextArgs) => boolean;
 
   /**
    * Codex 专用：app-server 创建子 Agent thread 后，把明确的父子 thread 关系同步给宿主。
@@ -786,6 +889,12 @@ export interface SendOptions {
    */
   messageUuid?: string;
   /**
+   * Adapter 回报这条 user prompt 在原生 transcript 中的稳定 entry id。
+   * Host 可把它补到已落库的 Cindy user 行，供后续原生分支重投影精确恢复附件。
+   * 回调失败不得改变已经接受的 provider dispatch 结果。
+   */
+  onTranscriptUserEntry?: (entryId: string) => void | Promise<void>;
+  /**
    * 当前用户的展示名 (host / renderer 在调 send 时提供)。仅用于 turn-start 时
    * push status event 的文案 — agent 拼成 "<userName> Just Wait ..." 让 UI 个人化;
    * 缺省时 fallback "Just Wait ..."。不参与任何业务逻辑。
@@ -836,7 +945,11 @@ export interface SendOptions {
 
 export type TurnPermissionOrigin =
   | { kind: 'desktop' }
-  | { kind: 'im'; channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk'; taskId?: string }
+  | {
+      kind: 'im';
+      channel: 'feishu' | 'discord' | 'slack' | 'wechat' | 'telegram' | 'dingtalk' | 'wecom';
+      taskId?: string;
+    }
   | { kind: 'scheduler' }
   | { kind: 'hook'; source: string };
 
@@ -903,7 +1016,8 @@ export interface AgentSessionHandle {
 
   /**
    * Synchronous provider preflight called by Session after reserving the turn
-   * but before any product `beforeProviderStart` / `onAccepted` side effect.
+   * and the optional `afterTurnReserved` state-preparation hook, but before any
+   * durable `beforeProviderStart` / `onAccepted` side effect.
    * Direct handle callers are still validated again inside send().
    */
   validateSendOptions?(opts: SendOptions): void;
@@ -989,7 +1103,28 @@ export interface AgentSessionHandle {
   setPlanMode?(enabled: boolean): Promise<void>;
 
   /** 当前 maker 进程内记录的计划模式状态；不支持的 agent 不实现。 */
-  getPlanMode?(): boolean;
+  getPlanMode?(): boolean | null;
+
+  /**
+   * 把当前会话导出成 HTML 文件,返回写入的绝对路径。
+   * `outputPath` 省略时由 agent 决定默认落盘位置。仅 Capabilities.sessionHtmlExport
+   * 支持的 agent(pi)实现;不支持的 agent 不实现。
+   */
+  exportSessionHtml?(outputPath?: string): Promise<string>;
+
+  /**
+   * 手动压缩会话上下文(可带聚焦指令,由 agent 调 LLM 生成摘要,压缩边界经事件流
+   * 上报 —— pi 为 compaction_start/end → compact_boundary)。仅
+   * Capabilities.manualCompact 支持的 agent(pi)实现;不支持的 agent 不实现。
+   */
+  compactSession?(instructions?: string): Promise<ManualCompactResult>;
+
+  /** 读取 / 切换同一 SDK session 内的原生分支树。 */
+  getSessionTree?(): Promise<SessionTreeSnapshot>;
+  navigateSessionTree?(
+    entryId: string,
+    options?: NavigateSessionTreeOptions,
+  ): Promise<NavigateSessionTreeResult>;
 
   /** 运行时切换 Fast mode；不支持的 agent 不实现。 */
   setFastMode?(enabled: boolean): Promise<void>;

@@ -59,14 +59,24 @@ function injectedCatalog(): Catalog {
 }
 
 describe('deriveAvailableModels — dynamic-first catalog contract', () => {
+  it('adds native minimal thinking to reasoning-capable Pi models only', () => {
+    const pi = deriveAvailableModels(BUNDLED_CATALOG, 'pi');
+    expect(pi.find((m) => m.id === 'xai/grok-4.3')?.efforts[0]).toBe('minimal');
+    expect(pi.find((m) => m.id === 'xai/grok-code-fast')?.efforts).toEqual([]);
+  });
+
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');
     expect(cc.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
     ]);
     expect(codex.map((m) => m.id)).toEqual([
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
     ]);
   });
 
@@ -106,7 +116,9 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(ids).toEqual([
       'claude-opus-4-8',
       'chatgpt/gpt-5.5',
-      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-4.20', 'xai/grok-code-fast',
+      'xai/grok-4.5', 'xai/grok-4.3', 'xai/grok-build-0.1',
+      'xai/grok-4.20-multi-agent-0309', 'xai/grok-4.20-0309-reasoning',
+      'xai/grok-4.20-0309-non-reasoning', 'xai/grok-4.20', 'xai/grok-code-fast',
       'gpt-5.5',
     ]);
     // 首见胜出:opus 取 anthropic 条目(supportsFastMode=true),不是 xd 的 false。
@@ -171,10 +183,13 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
+    const piModels: ModelDescriptor[] = [{ id: 'stale-pi', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const claudeRef = claudeModels;
     const codexRef = codexModels;
+    const piRef = piModels;
     const target = {
-      getCapabilities(agent: 'claude-code' | 'codex') {
+      getCapabilities(agent: 'claude-code' | 'codex' | 'pi') {
+        if (agent === 'pi') return { availableModels: piModels };
         return { availableModels: agent === 'claude-code' ? claudeModels : codexModels };
       },
     };
@@ -183,8 +198,10 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
 
     expect(claudeModels).toBe(claudeRef);
     expect(codexModels).toBe(codexRef);
+    expect(piModels).toBe(piRef);
     expect(claudeModels).toEqual(deriveAvailableModels(injectedCatalog(), 'claude-code'));
     expect(codexModels).toEqual(deriveAvailableModels(injectedCatalog(), 'codex'));
+    expect(piModels).toEqual(deriveAvailableModels(injectedCatalog(), 'pi'));
   });
 });
 

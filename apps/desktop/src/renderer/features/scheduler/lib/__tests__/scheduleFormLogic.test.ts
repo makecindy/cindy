@@ -320,6 +320,17 @@ describe('buildScheduleInput — 非 heartbeat 分支(行为锁定,不动 create
     expect(input.fastMode).toBe(false);
   });
 
+  it('pi 也序列化 fastMode(runner 对 Codex/Pi 都生效,codex review)', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'pi', fastMode: true }));
+    expect(hasKey(input, 'fastMode')).toBe(true);
+    expect(input.fastMode).toBe(true);
+  });
+
+  it('claude-code 不序列化 fastMode(runner 忽略此字段)', () => {
+    const input = buildScheduleInput(makeForm({ agentKind: 'claude-code', fastMode: true }));
+    expect(hasKey(input, 'fastMode')).toBe(false);
+  });
+
   it('targetSessionId 空 → undefined(落库 null,解绑通道)', () => {
     const input = buildScheduleInput(makeForm());
     expect(input.targetSessionId).toBeUndefined();

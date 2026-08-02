@@ -19,6 +19,7 @@ import {
   createDingTalkIM,
   createFeishuIM,
   createTelegramIM,
+  createWecomIM,
   type IMHost,
 } from '@cindy/im';
 import { TencentIlinkTransport } from '@cindy/wechat-ilink';
@@ -44,6 +45,7 @@ import {
 } from './telegram/behaviorStore';
 import { listTelegramKnownGroups } from './telegram/groupWindow';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { throwIpcError } from '../utils/ipcValidate.js';
 import { imHostAccountScope } from './accountScopeBridge';
 import { ownerScopedImSecrets } from './ownerScopedStorage';
 import { captureImAccountGeneration, isImAccountGenerationCurrent } from './accountBoundary';
@@ -70,26 +72,51 @@ const host: IMHost = {
     feishuMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'feishu-media'),
     discordMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'discord-media'),
     telegramMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'telegram-media'),
+    wecomMediaDir: path.join(app.getPath('userData'), 'cc-agent', 'wecom-media'),
   },
   // cindy-media 媒体总仓回调(规则 25):IM 入站图片按平台 token
   // 免重下、内容寻址去重、isCache=true 吃缓存回收策略;包侧只摸字节和字符串。
   media: {
-    cacheImage: async ({ integration, token, buffer, mimeType }) => {
+    cacheImage: async ({ integration, token, buffer, mimeType, staging }) => {
       const hit = await integrationCachePut({
         cacheKey: integrationCacheKey(integration, token),
         integration,
         buffer,
         mimeType,
-        // IM 入站图是**用户附件**不是可再生缓存(review P1):discord CDN 地址
-        // 限时签名,被缓存 LRU 逐出后无法重下 = 弄丢用户的图。isCache=false +
-        // 落库挂 session-attachment 引用,与桌面粘贴附件同生命周期。
-        isCache: false,
+        // 常规入站图直接按用户附件保存；需要跨账户竞态保护的 transport 可先
+        // 以可回收 staging 写入，确认归属后由消息落库的 pinBlob 提升为用户附件。
+        isCache: staging === true,
       });
-      return { absPath: hit.absPath, url: hit.url };
+      return {
+        absPath: hit.absPath,
+        url: hit.url,
+        ...(staging ? { discard: hit.rollbackRef } : {}),
+      };
     },
-    getCachedImage: async (integration, token) => {
+    cacheMedia: async ({ integration, token, buffer, mimeType }) => {
+      const hit = await integrationCachePut({
+        cacheKey: integrationCacheKey(integration, token),
+        integration,
+        buffer,
+        mimeType,
+        // IM 入站媒体最终属于用户附件；在消息落库挂 session owner 前先按
+        // 可回收暂存处理，失效账户只回滚本次新增的 cache ref。
+        isCache: true,
+      });
+      return {
+        absPath: hit.absPath,
+        url: hit.url,
+        mimeType: hit.mimeType,
+        discard: hit.rollbackRef,
+      };
+    },
+    getCachedImage: async (integration, token, options) => {
       const hit = await integrationCacheGet(integrationCacheKey(integration, token));
       if (!hit) return null;
+      // Cache lookup can outlive logout/account replacement. Re-check the
+      // transport-owned boundary immediately before pinning so stale media is
+      // not promoted without a message/session owner.
+      if (options?.shouldReuse?.() === false) return null;
       // 命中路径不走 cacheImage,但 IM 复用的可能是 MCP 侧 isCache=true 的缓存
       // blob(feishu 两边有意共用 `feishu:<token>` 命名空间)——IM 语义是用户
       // 附件,同 cacheImage 口径降级为非 cache(review P1);降级失败只警告,
@@ -107,7 +134,9 @@ const host: IMHost = {
     },
     resolveMediaUrl: (url) => {
       try {
-        return url.startsWith('cindy-media://') ? resolveCindyMediaUrl(url).absPath : null;
+        return url.startsWith('cindy-media://') || url.startsWith('xdt-image://')
+          ? resolveManagedImageAbsPath(url)
+          : null;
       } catch {
         return null;
       }
@@ -116,6 +145,7 @@ const host: IMHost = {
   },
   secrets: ownerScopedImSecrets,
   ipc: {
+    throwIpcError,
     handle(channel, handler) {
       // IM 凭证/配置通道(set-config/get-status/disconnect 等)全部是敏感面:
       // 统一在适配器入口验可信 app renderer, 包侧 handler 拿不到 event 也
@@ -170,6 +200,7 @@ export const telegramIm = createTelegramIM(host, {
 export const dingtalkIm = createDingTalkIM(host, {
   fetcher: (input, init) => net.fetch(input instanceof URL ? input.toString() : input, init),
 });
+export const wecomIm = createWecomIM(host);
 /**
  * Telegram 个人 bot 的行为/人格/群参与配置 IPC(设置卡数据通道)。
  * 必须由 bootstrap 显式调用(与 im.registerIpc() 同期) — 不能放模块顶层:
@@ -272,4 +303,11 @@ wechatCompatibilityPolicy.subscribe((decision) => {
     log.warn('failed to apply personal WeChat compatibility policy');
   });
 });
-export const im = createIM([feishuIm, discordIm, wechatIm, telegramIm, dingtalkIm]);
+export const im = createIM([
+  feishuIm,
+  discordIm,
+  wechatIm,
+  telegramIm,
+  dingtalkIm,
+  wecomIm,
+]);

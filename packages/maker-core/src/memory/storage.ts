@@ -25,6 +25,7 @@ import * as path from 'node:path';
 import matter from 'gray-matter';
 
 import {
+  CURATED_MEMORY_TYPES,
   DEFAULT_MEMORY_CONFIG,
   isMemoryType,
   MemoryError,
@@ -321,8 +322,11 @@ export class MemoryStorage {
     if (records.length === 0) {
       lines.push('_(empty — no memories saved yet for this workdir)_', '');
     } else {
-      // 固定顺序 user → feedback → project → reference
-      for (const type of ['user', 'feedback', 'project', 'reference'] as MemoryType[]) {
+      // 固定顺序 user → feedback → project → reference。**只列 curated 类型** ——
+      // `digest`(系统内部,如 pi 压缩摘要)故意排除:进 FTS 可 memory_search,但不进
+      // MEMORY.md、不进 system prompt(见 types.ts MEMORY_TYPES 注释)。新增 curated
+      // 类型时改 CURATED_MEMORY_TYPES;不要把 digest 加进来。
+      for (const type of CURATED_MEMORY_TYPES) {
         const items = grouped.get(type);
         if (!items || items.length === 0) continue;
         lines.push(`## ${type}`);

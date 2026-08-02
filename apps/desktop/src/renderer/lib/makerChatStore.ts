@@ -22,8 +22,13 @@
  */
 
 import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
+import { dbToMakerAgentKind } from '../../shared/agentKindConversion';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
-import { applyCodexPlanSnapshotOnDone } from '@cindy/maker-shared/message-render';
+import {
+  applyCodexPlanSnapshotOnDone,
+  getLatestMessageTodoState,
+  isAgentPlanToolName,
+} from '@cindy/maker-shared/message-render';
 import {
   normalizeWorkflowProgressEntries,
   type WorkflowProgressEntry,
@@ -71,6 +76,7 @@ import {
   aroundMessagesByClientIdFor,
   dismissErrorMessageFor,
   isRemoteSession,
+  type RoutableMaker,
 } from '@/lib/makerTransport';
 import {
   remoteProjectsStore,
@@ -99,6 +105,7 @@ import {
   emitPatch,
 } from '@/lib/sessionsBus';
 import { createLogger } from '@/lib/logger';
+import { tryBeginAgentSendDispatch } from '@/lib/agentSwitchCoordinator';
 import { getUserPrompt } from '@/lib/userPromptStore';
 import { getMakerMemoryEnabled } from '@/lib/memorySettingsStore';
 import { buildUserMessageAttachmentPayload } from '@/lib/messageAttachmentPayload';
@@ -456,7 +463,7 @@ export interface ChatMessage {
 export type AgentTaskStatus = 'running' | 'completed' | 'failed' | 'stopped';
 
 export interface AgentTaskUpdate {
-  provider: 'claude-code' | 'codex';
+  provider: 'claude-code' | 'codex' | 'pi';
   taskId: string;
   parentToolUseId?: string;
   status: AgentTaskStatus;
@@ -726,12 +733,14 @@ export type MessageDeliveryMode = 'queue' | 'steer';
 
 /** 仅影响 selector/chip 的乐观展示；agentKind 始终保留真实 reducer 路由。 */
 export interface AgentSwitchIntentRecord {
-  target: 'claude-code' | 'codex';
+  target: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
   effort?: string;
   fastMode?: boolean;
 }
+
+export type ContinuationInFlightProjectionCapability = 'unknown' | 'supported' | 'legacy';
 
 export interface SessionChatState {
   /**
@@ -740,9 +749,16 @@ export interface SessionChatState {
    * Codex reducer。ensureInitialMessages 从 DB sessions.agent_kind 读出来灌进。
    * 默认 'claude-code' 兼容老路径(老 session row 没有此字段时按 Claude 处理)。
    */
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /** 下一条消息发送时才由 main 应用的跨引擎切换意图。 */
   agentSwitchIntent: AgentSwitchIntentRecord | null;
+  /**
+   * 意图的单调修订号:**任何来源**(本端登记/撤销、被控端 push 回流、另一窗口)真正改变
+   * 意图时 +1,只增不减。异步读回的新鲜度判定必须用它,不能比较意图值本身——外部把意图
+   * 从 null 改成非空又清回 null 时,值与引用都会回到相等,过期响应会被误判为新鲜而复活
+   * 已取消的意图(ABA)。
+   */
+  agentSwitchIntentRev: number;
   /**
    * Remote codex target (P2): SSH host alias from `@cindy/maker-remote-ssh`
    * pool。null/undefined = 本地 session。ensureInitialMessages 从 DB
@@ -816,6 +832,18 @@ export interface SessionChatState {
    * 保持熄灭，同时不影响用户取消仍在队列中的 Continue 后恢复横幅。
    */
   continuationInFlightClientId: string | null;
+  /**
+   * 当前 vendor turn 的续跑发起项 clientId。它由 main 绑定在 ActiveTurn 上，steer 顶替
+   * activeTurn 后仍保持原值，因此 Renderer 重载 / 新窗口也能恢复归属。
+   */
+  continuationTurnClientId: string | null;
+  /**
+   * 当前 projection 是否支持 `continuationTurnClientId`：
+   * unknown = 尚未收到投影；supported = 字段显式存在（值可以是 null）；
+   * legacy = 旧被控端完全缺省字段，只能回落到 running + 最后一条输入的兼容判据。
+   * 不能用 `?? null` 推断：新版显式 null 需要挡住无关 Goal turn，旧版缺省需要兼容。
+   */
+  continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
   isLoadingMore: boolean;
   hasMoreMessages: boolean;
   /**
@@ -1011,6 +1039,8 @@ export type SessionChatLightState = Pick<
   | 'errorRetryText'
   | 'credentialSwitchWait'
   | 'continuationInFlightClientId'
+  | 'continuationTurnClientId'
+  | 'continuationInFlightProjectionCapability'
   | 'isLoadingMore'
   | 'hasMoreMessages'
   | 'isFirstMessage'
@@ -1041,6 +1071,7 @@ function createInitialState(): SessionChatState {
   return {
     agentKind: 'claude-code',
     agentSwitchIntent: null,
+    agentSwitchIntentRev: 0,
     remoteHostId: null,
     messages: [],
     taskUpdates: EMPTY_TASK_UPDATES,
@@ -1062,6 +1093,8 @@ function createInitialState(): SessionChatState {
     errorRetryText: null,
     credentialSwitchWait: null,
     continuationInFlightClientId: null,
+    continuationTurnClientId: null,
+    continuationInFlightProjectionCapability: 'unknown',
     isLoadingMore: false,
     hasMoreMessages: true,
     historyWindowHasIsland: false,
@@ -1105,6 +1138,7 @@ function createInitialState(): SessionChatState {
 export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   agentKind: 'claude-code',
   agentSwitchIntent: null,
+  agentSwitchIntentRev: 0,
   remoteHostId: null,
   messages: [],
   taskUpdates: EMPTY_TASK_UPDATES,
@@ -1126,6 +1160,8 @@ export const EMPTY_SESSION_STATE: SessionChatState = Object.freeze({
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  continuationTurnClientId: null,
+  continuationInFlightProjectionCapability: 'unknown',
   isLoadingMore: false,
   hasMoreMessages: false,
   historyWindowHasIsland: false,
@@ -1267,6 +1303,7 @@ function _purgeSession(sessionId: string): void {
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
   bumpMessagesEpoch(sessionId);
+  invalidateInputProjectionRequests(sessionId);
   sessions.delete(sessionId);
   // 状态快照同步失效:该会话若有 running / pending / 待投递 transition 条目,
   // 不能在缓存里残留(purge 不走 setState,需单独置位)。
@@ -1359,12 +1396,21 @@ function _trimMessagesIfNeeded(sessionId: string): void {
     if (s.messages.length <= TRIM_THRESHOLD) {
       return s.isLoadingMore ? { ...s, isLoadingMore: false } : s;
     }
+    const preTrimPlanState = getLatestMessageTodoState(s.messages);
+    const trimmedMessages = s.messages.slice(-TRIM_TARGET);
+    const trimmedPlanState = getLatestMessageTodoState(trimmedMessages);
+    const needsPlanReloadAfterTrim =
+      s.historyLoaded &&
+      preTrimPlanState.insertion !== null &&
+      (!trimmedPlanState.hasPlanEvent || !trimmedPlanState.isResolved);
+
     return {
       ...s,
-      messages: s.messages.slice(-TRIM_TARGET),
+      messages: trimmedMessages,
       hasMoreMessages: true,
       oldestMessageId: null,
       isLoadingMore: false,
+      ...(needsPlanReloadAfterTrim ? { historyLoaded: false } : {}),
       // 孤岛标记**保持原值**:`slice(-TRIM_TARGET)` 只保证"取最新的 200 行",不保证这 200 行
       // 连续 —— 若先前几次深跳留下多个孤岛、而真正连续的尾段不足 200 行,裁剪结果里就还夹着
       // 孤岛。清掉标记会让 canFocusWithoutJumpLoad 把命中孤岛当成已覆盖直接 focus,而从孤岛
@@ -1538,8 +1584,21 @@ function shallowEqualRecord(
 
 const AUTO_RESUME_PENDING_CLIENT_ID = '__auto_resume_pending__';
 
-function applyInputProjection(projection: AgentInputProjection): void {
+function applyInputProjection(
+  projection: AgentInputProjection,
+  opts: { supersedeQueries?: boolean } = {},
+): void {
   if (!projection.sessionId) return;
+  if (opts.supersedeQueries !== false) {
+    supersedeInputProjectionRequests(projection.sessionId);
+  }
+  // wire 上「字段缺省」就是旧被控端的能力信号；新版没有续跑项时也会显式发 null。
+  // 必须在 `?? null` 归一化前按 own property 读取，不能让 undefined/null 混淆版本。
+  const continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability =
+    Object.prototype.hasOwnProperty.call(projection, 'continuationTurnClientId')
+      ? 'supported'
+      : 'legacy';
+  const projectedContinuationTurnClientId = projection.continuationTurnClientId ?? null;
   setState(projection.sessionId, (s) => {
     // Only trigger if the retried message is still stuck in the pending queue:
     // projection.error is queue-level (string | null, no clientId), so we correlate
@@ -1641,6 +1700,8 @@ function applyInputProjection(projection: AgentInputProjection): void {
       errorRetryText: projection.errorRetryText,
       credentialSwitchWait: projection.credentialSwitchWait ?? null,
       continuationInFlightClientId: projection.continuationInFlightClientId ?? null,
+      continuationTurnClientId: projectedContinuationTurnClientId,
+      continuationInFlightProjectionCapability,
       ...(authRetryProjectionError ? { _authRetryPersistOnProjectionError: undefined } : {}),
     };
   });
@@ -1655,9 +1716,16 @@ function markSessionHasUserMessage(sessionId: string): void {
 
 function requestInputProjection(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.getProjection(sessionId)
-    .then(applyInputProjection)
+  if (typeof window === 'undefined' || !window.electronAPI?.maker?.input?.getProjection) return;
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  const epoch = beginInputProjectionRequest(sessionId, origin);
+  const api = makerApiFor(sessionId);
+  api.input
+    .getProjection(sessionId)
+    .then((projection) => {
+      if (!isCurrentInputProjectionRequest(sessionId, origin, epoch)) return;
+      applyInputProjection(projection, { supersedeQueries: false });
+    })
     .catch((err) => log.warn('get input projection failed:', err));
 }
 
@@ -1908,7 +1976,7 @@ function isTerminalErrorData(data: unknown): boolean {
 
 function normalizeAgentTaskUpdate(
   data: unknown,
-  source?: 'claude-code' | 'codex',
+  source?: 'claude-code' | 'codex' | 'pi',
 ): AgentTaskUpdate | null {
   if (!data || typeof data !== 'object') return null;
   const raw = data as Record<string, unknown>;
@@ -1924,10 +1992,12 @@ function normalizeAgentTaskUpdate(
       ? rawStatus
       : 'running';
   const provider =
-    raw.provider === 'codex' || raw.provider === 'claude-code'
+    raw.provider === 'codex' || raw.provider === 'claude-code' || raw.provider === 'pi'
       ? raw.provider
       : source === 'codex'
         ? 'codex'
+        : source === 'pi'
+          ? 'pi'
         : 'claude-code';
   const usageRaw =
     raw.usage && typeof raw.usage === 'object' ? (raw.usage as Record<string, unknown>) : null;
@@ -2113,6 +2183,11 @@ function formatAskUserReply(answers: Record<string, string>): string {
  */
 export function isOmittedThinkingPlaceholder(text: string, durationMs: number): boolean {
   return text === '' && durationMs === 0;
+}
+
+/** pi 旧版 translator 把结构化 redacted 块误存成了这条可见占位文本。 */
+function isLegacyRedactedThinkingPlaceholder(m: Message, text: string): boolean {
+  return m.agentKind === 'pi' && text.trim() === '[Reasoning redacted]';
 }
 
 // F1-a: 所有 agent 消息(assistant/tool_use/tool_result/thinking/ask_user/plan_review)
@@ -2350,7 +2425,9 @@ export function handleStreamEvent(
         };
       }
 
-      // stage === 'redacted' —— 加密推理不进渲染列表。
+      // stage === 'redacted' —— 加密推理不进渲染列表。部分 vendor（如 pi）会先发
+      // thinking start、到 end 才能从 partial block 确认 redacted；因此还要删掉同
+      // blockId 的瞬时占位，不能只阻止新增。
       //
       // 这类块没有任何明文可读,卡片只能显示"无法显示的思考过程";上游(如 Grok 开了
       // 服务端搜索)一轮能产出十几条,会把真实产出淹掉。落库仍由 main(onThinkingEvent)
@@ -2360,7 +2437,19 @@ export function handleStreamEvent(
       // 不展示 ≠ 丢事件:仍按本函数开头的不变量刷新 lastAgentMeta(带 agentMeta 的事件都要刷,
       // mid-turn 抢救 assistant 累积流时拿它当 fallback)。否则这条事件携带的 model /
       // parentUuid 会被静默吞掉。
-      return incomingMeta ? { ...state, lastAgentMeta: incomingMeta } : state;
+      const hasLivePlaceholder = state.messages.some(
+        (m) => m.clientId === data.blockId && m.role === 'thinking',
+      );
+      if (!hasLivePlaceholder) {
+        return incomingMeta ? { ...state, lastAgentMeta: incomingMeta } : state;
+      }
+      return {
+        ...state,
+        messages: state.messages.filter(
+          (m) => !(m.clientId === data.blockId && m.role === 'thinking'),
+        ),
+        ...(incomingMeta ? { lastAgentMeta: incomingMeta } : {}),
+      };
     }
 
     case 'agent_task_update': {
@@ -2574,6 +2663,7 @@ export function handleStreamEvent(
         errorRetryText: finalized.error ? finalized.errorRetryText : null,
         pendingPermission: null,
         pendingAskUser: null,
+        continuationTurnClientId: null,
         // F-AUQ-MIN-5: viewerState lives with pendingAskUser — when the
         // pending question is gone, reset so the next one starts expanded.
         askUserViewerState: 'expanded',
@@ -2677,6 +2767,7 @@ export function handleStreamEvent(
         errorRetryText: derivedRetryText ?? preservedRetryText,
         isStreaming: false,
         activeTurnRetryText: null,
+        continuationTurnClientId: null,
         queueAbortPending: false,
         streamingText: '', // MEM-4: finalizeStreamingInState intentionally keeps streamingText for
         // the 'done' path to consume — reset it explicitly on error so the
@@ -3066,6 +3157,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     !state.messages.some((m) => m.isStreaming) &&
     !state.queueAbortPending &&
     state.steeringQueueClientIds.length === 0 &&
+    state.continuationTurnClientId === null &&
     !state.pendingTaskWake &&
     stoppedTasks === state.taskUpdates
   ) {
@@ -3112,6 +3204,7 @@ function forceFinalizeOnSessionClosed(state: SessionChatState): SessionChatState
     pendingGhostGrantConfirm: null,
     queueAbortPending: false,
     steeringQueueClientIds: [],
+    continuationTurnClientId: null,
     // session 都关了,后台任务事件流已断:running 残留任务标 stopped、唤醒桥接
     // 清零,否则 running 快照(折算了后台任务)会让 spinner 永久转下去。
     taskUpdates: stoppedTasks,
@@ -3209,6 +3302,7 @@ function handleStatusUpdate(
       startedAt,
     },
     activeTurnRetryText: isTurnComplete ? null : state.activeTurnRetryText,
+    continuationTurnClientId: update.isRunning ? state.continuationTurnClientId : null,
     // 新 turn 真正启动(isRunning false→true)时清掉上一轮残留的终态 error:
     // coordinator 路径的 send 经 projection error:null 清横幅,但 direct send
     // (scheduler / send-to-session / goal 等不走 coordinator 的路径)不发
@@ -3250,7 +3344,7 @@ type MakerEventPayload = {
   event?: {
     type: string;
     data: unknown;
-    source?: 'claude-code' | 'codex';
+    source?: 'claude-code' | 'codex' | 'pi';
     agentMeta?: Record<string, unknown>;
   };
   persistId?: string;
@@ -3259,7 +3353,7 @@ type MakerEventPayload = {
 
 type PendingTextDeltaBatch = {
   text: string;
-  source?: 'claude-code' | 'codex';
+  source?: 'claude-code' | 'codex' | 'pi';
   persistId?: string;
   agentMeta?: Record<string, unknown>;
 };
@@ -3299,17 +3393,17 @@ function dispatchStreamEventPayload(
   resolvedContent?: string,
 ): void {
   if (!event) return;
-  setState(sessionId, (s) =>
-    handleStreamEvent(s, {
-      sessionId,
-      type: event.type,
-      data: event.data,
-      source: event.source,
-      agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
-      persistId,
-      resolvedContent,
-    } as CCAgentStreamEvent),
-  );
+  const streamEvent = {
+    sessionId,
+    type: event.type,
+    data: event.data,
+    source: event.source,
+    agentMeta: event.agentMeta as import('./ccAgent.types').CcMeta | undefined,
+    persistId,
+    resolvedContent,
+  } as CCAgentStreamEvent;
+  supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent));
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -3647,6 +3741,9 @@ function initGlobalListeners(): void {
         sessionId,
         ...(event.data as Record<string, unknown>),
       } as CCAgentStatusUpdate;
+      if (!update.skipTurnReset && !update.isRunning) {
+        supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+      }
       setState(sessionId, (s) => handleStatusUpdate(s, update));
       return;
     }
@@ -3757,13 +3854,13 @@ function initGlobalListeners(): void {
                 event.data as Record<string, unknown> | null,
                 event.agentMeta ?? null,
               );
-              setState(sessionId, (s) =>
-                handleStreamEvent(s, {
-                  sessionId,
-                  type: 'error',
-                  data: event.data,
-                } as CCAgentStreamEvent),
-              );
+              const terminalErrorEvent = {
+                sessionId,
+                type: 'error',
+                data: event.data,
+              } as CCAgentStreamEvent;
+              supersedeInputProjectionOnTerminalEvent(sessionId, terminalErrorEvent);
+              setState(sessionId, (s) => handleStreamEvent(s, terminalErrorEvent));
             } finally {
               setState(sessionId, (s) => ({ ...s, _authRetryInFlight: false }));
             }
@@ -3860,14 +3957,21 @@ function initGlobalListeners(): void {
   const handleMakerStatusRaw = (raw: unknown) => {
     const payload = raw as { sessionId?: string; status?: string } | null;
     if (!payload?.sessionId || payload.status !== 'closed') return;
+    supersedeInputProjectionRequests(payload.sessionId, { supersedeOperations: true });
     flushPendingTextDelta(payload.sessionId);
     setState(payload.sessionId, forceFinalizeOnSessionClosed);
   };
   bindIpc(window.electronAPI.maker.onStatusChanged, handleMakerStatusRaw, 'maker-status-changed');
 
-  const handleInputProjectionRaw = (raw: unknown) => {
+  const handleInputProjectionRaw = (raw: unknown, sourceDeviceId?: string) => {
     const projection = raw as AgentInputProjection | null;
     if (!projection?.sessionId) return;
+    if (
+      sourceDeviceId !== undefined &&
+      remoteProjectsStore.getSessionDeviceId(projection.sessionId) !== sourceDeviceId
+    ) {
+      return;
+    }
     applyInputProjection(projection);
   };
   bindIpc(
@@ -4169,8 +4273,11 @@ function initGlobalListeners(): void {
       (legacyTurnCostUsd !== undefined
         ? legacyUsdMoney(legacyTurnCostUsd)
         : undefined);
-    if (!turnMoney || !(turnMoney.amount > 0)) return;
     const { sessionId, clientId } = p;
+    // 用户轮累计与当前 segment 金额是**两个独立事实**,必须各自判定 —— 一次用户请求
+    // 含多个 SDK segment 时,前面的 segment 有真实费用、收尾 segment 缺报价,payload
+    // 就只有 userTurnMoney + turnUsageDetails。把累计金额的解析放在 turnMoney 分支
+    // 之内,这一轮已经花掉的钱会被 token 顶掉(不变量正本见 shared/turnCostPayload.ts)。
     const userTurnMoney =
       normalizeRegionalMoney(p.userTurnMoney) ??
       (typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
@@ -4180,6 +4287,31 @@ function initGlobalListeners(): void {
       typeof p.userTurnCostUsd === 'number' && p.userTurnCostUsd > 0
         ? p.userTurnCostUsd
         : undefined;
+    const userTurnCostPatch = userTurnMoney
+      ? {
+          userTurnMoney,
+          ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
+          userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
+        }
+      : {};
+    // 无当前 segment 金额 = main 的 recordTurnUsageOnMessage(算不出报价的轮次):
+    // 更新明细 + 可能存在的整轮累计,让 action bar 优先显示已花的钱、否则退回 token。
+    // 三者都没有才是真的无事可做。
+    if (!turnMoney || !(turnMoney.amount > 0)) {
+      if (!turnUsageDetails && !userTurnMoney) return;
+      setState(sessionId, (s) => {
+        const idx = s.messages.findIndex((m) => m.clientId === clientId);
+        if (idx < 0) return s;
+        const msgs = s.messages.slice();
+        msgs[idx] = {
+          ...msgs[idx],
+          ...userTurnCostPatch,
+          ...(turnUsageDetails ? { turnUsageDetails } : {}),
+        };
+        return { ...s, messages: msgs };
+      });
+      return;
+    }
     const resolvedTurnCostUsd =
       turnMoney.currency === 'USD'
         ? turnMoney.amount
@@ -4195,13 +4327,7 @@ function initGlobalListeners(): void {
           ? { turnCostUsd: resolvedTurnCostUsd }
           : {}),
         turnCostIsEstimate,
-        ...(userTurnMoney
-          ? {
-              userTurnMoney,
-              ...(userTurnCostUsd ? { userTurnCostUsd } : {}),
-              userTurnCostIsEstimate: p.userTurnCostIsEstimate === true,
-            }
-          : {}),
+        ...userTurnCostPatch,
         ...(turnUsageDetails ? { turnUsageDetails } : {}),
       };
       return { ...s, messages: msgs };
@@ -4261,7 +4387,8 @@ function initGlobalListeners(): void {
           handleMakerStatusRaw(push.payload);
           break;
         case 'maker:input:projection':
-          handleInputProjectionRaw(push.payload);
+          if (!push.deviceId) break;
+          handleInputProjectionRaw(push.payload, push.deviceId);
           break;
         case 'maker:interaction-request':
           handleInteractionRequestRaw(push.payload);
@@ -4717,6 +4844,8 @@ function selectLightState(state: SessionChatState): SessionChatLightState {
     errorRetryText: state.errorRetryText,
     credentialSwitchWait: state.credentialSwitchWait,
     continuationInFlightClientId: state.continuationInFlightClientId,
+    continuationTurnClientId: state.continuationTurnClientId,
+    continuationInFlightProjectionCapability: state.continuationInFlightProjectionCapability,
     isLoadingMore: state.isLoadingMore,
     hasMoreMessages: state.hasMoreMessages,
     isFirstMessage: state.isFirstMessage,
@@ -4755,7 +4884,11 @@ function lightStateEquals(a: SessionChatLightState, b: SessionChatLightState): b
     a.errorRetryText === b.errorRetryText &&
     a.credentialSwitchWait === b.credentialSwitchWait &&
     a.continuationInFlightClientId === b.continuationInFlightClientId &&
+    a.continuationTurnClientId === b.continuationTurnClientId &&
+    a.continuationInFlightProjectionCapability ===
+      b.continuationInFlightProjectionCapability &&
     a.isLoadingMore === b.isLoadingMore &&
+
     a.hasMoreMessages === b.hasMoreMessages &&
     a.isFirstMessage === b.isFirstMessage &&
     a.historyLoaded === b.historyLoaded &&
@@ -5041,7 +5174,7 @@ setRemoteTerminalErrorProbe(hasSessionTerminalError);
 
 interface ActiveSessionSnapshot {
   sessionId: string;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   isTurnRunning: boolean;
 }
 
@@ -5050,7 +5183,7 @@ function isActiveSessionSnapshot(value: unknown): value is ActiveSessionSnapshot
   const item = value as Record<string, unknown>;
   return (
     typeof item.sessionId === 'string' &&
-    (item.agentKind === 'claude-code' || item.agentKind === 'codex') &&
+    (item.agentKind === 'claude-code' || item.agentKind === 'codex' || item.agentKind === 'pi') &&
     typeof item.isTurnRunning === 'boolean'
   );
 }
@@ -5225,6 +5358,170 @@ const _historyFetchInFlight = new Set<string>();
 const _historyLoadOrigin = new Map<string, string | undefined>();
 
 /**
+ * input projection 请求的来源与代际守卫。
+ *
+ * projection 查询可能跨过 device-link origin 切换:启动时先按本机来源发起的请求,可能在
+ * 远程来源已经接管后才返回。若无守卫,旧本机 projection 会覆盖远程 projection(尤其把
+ * continuationTurnClientId 从非空写回 null),让仍在运行的续跑行停止转圈。
+ *
+ * origin 变化时 epoch 单调递增,因此即使来源经历 A→undefined→A 的 ABA 也不会重新放行
+ * 更早请求。查询按 origin + epoch 丢弃旧响应；直接操作按 origin + authority epoch 拒绝
+ * 来源漂移或终态前发出的响应。实时 push 另在接收点按 source device 校验。
+ */
+const _inputProjectionOrigin = new Map<string, string | undefined>();
+const _inputProjectionEpoch = new Map<string, number>();
+const _inputProjectionAuthorityEpoch = new Map<string, number>();
+let _nextInputProjectionEpoch = 0;
+
+function nextInputProjectionEpoch(): number {
+  _nextInputProjectionEpoch += 1;
+  return _nextInputProjectionEpoch;
+}
+
+function supersedeInputProjectionRequests(
+  sessionId: string,
+  opts: { supersedeOperations?: boolean } = {},
+): void {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  _inputProjectionOrigin.set(sessionId, origin);
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  if (opts.supersedeOperations) {
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
+  }
+}
+
+function invalidateInputProjectionRequests(sessionId: string): void {
+  _inputProjectionOrigin.delete(sessionId);
+  _inputProjectionEpoch.delete(sessionId);
+  // authority 代际不能 delete：pre-purge 操作可能捕获 0，delete 后回落 0 会误放行，
+  // 并通过 setState 复活已 purge 的 session。保留单调墓碑，与 messagesEpoch 同理。
+  _inputProjectionAuthorityEpoch.set(sessionId, nextInputProjectionEpoch());
+}
+
+function beginInputProjectionRequest(sessionId: string, origin: string | undefined): number {
+  _inputProjectionOrigin.set(sessionId, origin);
+  const epoch = nextInputProjectionEpoch();
+  _inputProjectionEpoch.set(sessionId, epoch);
+  return epoch;
+}
+
+function noteInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): { epoch: number; changed: boolean } {
+  const previous = _inputProjectionOrigin.get(sessionId);
+  if (!_inputProjectionOrigin.has(sessionId) || previous !== origin) {
+    _inputProjectionOrigin.set(sessionId, origin);
+    const epoch = nextInputProjectionEpoch();
+    _inputProjectionEpoch.set(sessionId, epoch);
+    _inputProjectionAuthorityEpoch.set(sessionId, epoch);
+    return { epoch, changed: true };
+  }
+  return { epoch: _inputProjectionEpoch.get(sessionId)!, changed: false };
+}
+
+function isCurrentInputProjectionOrigin(
+  sessionId: string,
+  origin: string | undefined,
+): boolean {
+  return remoteProjectsStore.getSessionDeviceId(sessionId) === origin;
+}
+
+function isCurrentInputProjectionRequest(
+  sessionId: string,
+  origin: string | undefined,
+  epoch: number,
+): boolean {
+  return (
+    isCurrentInputProjectionOrigin(sessionId, origin) &&
+    (_inputProjectionEpoch.get(sessionId) ?? 0) === epoch
+  );
+}
+
+interface InputProjectionOperation {
+  api: RoutableMaker;
+  origin: string | undefined;
+  epoch: number;
+}
+
+/**
+ * 捕获一次会返回 projection 的操作路由。`api` 与 origin 必须在同一时刻定格：
+ * origin 漂移后重新调用 makerApiFor 会把同一业务意图错发到另一台设备。
+ * authority epoch 只由终态 / 来源切换推进；普通 push 与同源并发操作仍按响应到达顺序落地。
+ */
+function beginInputProjectionOperation(sessionId: string): InputProjectionOperation {
+  const origin = remoteProjectsStore.getSessionDeviceId(sessionId);
+  return {
+    api: makerApiFor(sessionId),
+    origin,
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+  };
+}
+
+function applyInputProjectionOperationResponse(
+  sessionId: string,
+  operation: InputProjectionOperation,
+  projection: AgentInputProjection,
+): boolean {
+  if (
+    !isCurrentInputProjectionOrigin(sessionId, operation.origin) ||
+    (_inputProjectionAuthorityEpoch.get(sessionId) ?? 0) !== operation.epoch
+  ) {
+    return false;
+  }
+  // 直接操作响应会 supersede 早先的查询；apply 的默认路径负责推进查询 epoch。
+  applyInputProjection(projection);
+  return true;
+}
+
+/**
+ * Renderer 收到权威 turn 终态时，同时作废所有此前发出的 projection 查询。
+ * reducer 本身保持纯函数；调用方在 setState 前执行这条时序屏障。
+ */
+function supersedeInputProjectionOnTerminalEvent(
+  sessionId: string,
+  event: Pick<CCAgentStreamEvent, 'type' | 'data'>,
+): void {
+  if (event.type === 'done') {
+    if ((event.data as { silentStop?: boolean } | null | undefined)?.silentStop !== true) {
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+    }
+    return;
+  }
+  if (event.type === 'error' && isTerminalErrorData(event.data)) {
+    supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  }
+}
+
+function runInputProjectionOperation(
+  sessionId: string,
+  invoke: (input: RoutableMaker['input']) => Promise<AgentInputProjection>,
+): Promise<{ applied: boolean; projection: AgentInputProjection }> {
+  const operation = beginInputProjectionOperation(sessionId);
+  return invoke(operation.api.input).then((projection) => ({
+    applied: applyInputProjectionOperationResponse(sessionId, operation, projection),
+    projection,
+  }));
+}
+
+/**
+ * 会直接触发 Agent 工作的 input 操作统一入口。与纯投影操作分开，避免 setExpanded / 清锁
+ * 等内部收尾在切换期间被拒后残留状态；compact / retry / resume 这类用户派发则从 RPC
+ * 发起前直到 settle 全程占住发送 token，保持点击顺序。
+ */
+function runAgentDispatchProjectionOperation(
+  sessionId: string,
+  invoke: (input: RoutableMaker['input']) => Promise<AgentInputProjection>,
+): Promise<{ applied: boolean; projection: AgentInputProjection }> {
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.reject(new Error('Agent switch is still in progress')),
+    () => runInputProjectionOperation(sessionId, invoke),
+  );
+}
+
+/**
  * 会话消息切片的代际号:整体重置切片的路径递增——reloadMessages(rewind / origin
  * 漂移重载)、clearSessionAfterGuard(/clear)、_purgeSession(删除 / 归档 / LRU 驱逐)、
  * dropMessagesFromClientId(edit-last 截断)、removeMessagesByClientIds(分组删除)、
@@ -5247,17 +5544,18 @@ function bumpMessagesEpoch(sessionId: string): void {
 }
 
 /**
- * DB sessions.agent_kind('cc' / 'codex')→ maker-core AgentKind 的唯一映射点。
+ * DB sessions.agent_kind('cc' / 'codex' / 'pi')→ maker-core AgentKind 的唯一映射点。
  * 缺失 / 异常值走 fallback(默认 'claude-code',老 row 兼容)。所有从 session
  * row 派生 agentKind 的地方必须走这里,不要在调用点手写三元(历史上多处各写
  * 一份,遗漏 fallback 语义差异被 review 逐个揪出)。
  */
 function dbAgentKindToMakerKind(
   dbKind: string | null | undefined,
-  fallback: 'claude-code' | 'codex' = 'claude-code',
-): 'claude-code' | 'codex' {
+  fallback: 'claude-code' | 'codex' | 'pi' = 'claude-code',
+): 'claude-code' | 'codex' | 'pi' {
   if (dbKind === 'codex') return 'codex';
   if (dbKind === 'cc') return 'claude-code';
+  if (dbKind === 'pi') return 'pi';
   return fallback;
 }
 
@@ -5303,11 +5601,16 @@ function hydrateRemoteMessagesFromCache(sessionId: string): void {
     // 而 CCAgentSessionView 又会因 messages 非空而收起 loading 覆盖层 —— 被控端离线时
     // 就是一片永久空白(review: codex P1)。这种页对首屏没有价值,让 loading 照常显示、
     // 交给 fresh 首拉的 no-anchor-backfill 往前翻页处理。
-    if (rows.every(isNonAnchorHistoryRow)) return;
     const mapped = mapServerMessages(rows).map((message) => ({
       ...message,
       cacheHydrated: true as const,
     }));
+    if (
+      rows.every(isNonAnchorHistoryRow) &&
+      getLatestMessageTodoState(mapped).insertion === null
+    ) {
+      return;
+    }
     if (mapped.length === 0) return;
     // 读缓存这一跳期间归属可能已经变了:设备被移除(mapping 消失)或会话换到了另一台设备。
     // 只看 chat state 挡不住这种情况 —— 于是 A 设备的历史会被种进一个已经不属于 A 的会话,
@@ -5458,16 +5761,23 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
 
-      // no-anchor-backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
+      // no-anchor / plan-boundary backfill: 初始页若全是"渲染后不留可见锚点"的行,映射结果就是空列表,
       // 而 MessageStream 在 visibleRenderItems.length === 0 时不触发自动翻页 —— 结果是
       // DB 里有 2000+ 条消息,重启后 ChatView 渲染 0 项,看起来"内容消失了"。
-      // 两类命中(见 isNonAnchorHistoryRow):
+      // 四类命中(见 isNonAnchorHistoryRow):
       //   - 全是 tool_result:配对的 tool_use 父消息在更老的页里,orphan 会被丢弃;
       //   - 全是被隐藏的 thinking 行:如一轮搜索密集、在产出可见正文前就失败的会话,
       //     最新 50 行可能全是加密推理;
-      //   - 合成指令行:渲染 null,混在上面两类里同样撑不出可见锚点。
-      // 这里继续往前翻页,直到出现可渲染锚点或翻完。
-      // 上限 10 页(500 行)防御异常长的连续无锚点队列。
+      //   - 计划工具行:计划只在输入框上方的胶囊呈现,不在消息流中留锚点;
+      //   - 合成指令行:渲染 null,混在这些行里同样撑不出可见锚点。
+      //
+      // PinnedPlanPanel 的唯一数据源同样是当前消息窗口。计划工具行不再在消息流中渲染,
+      // 所以冷开超过一页的会话时,如果最近一次 plan 在更早页,胶囊会直接消失。这里也继续
+      // 往前翻到最近 plan 边界,保证初始窗口能派生当前计划快照。
+      //
+      // 无锚点按 10 页(500 行)兜底。计划胶囊分两段:
+      //   - 当前窗口没有任何计划事件时,最多探测 10 页,避免从未使用计划的长会话全量拉历史;
+      //   - 已看到计划事件但最新 TaskUpdate 还缺创建/列表边界时,最多再补 10 页。
       let merged: Message[] = existing;
       let oldestRow = oldestMessageRow(merged, 'newest-first');
       if (!oldestRow) {
@@ -5481,14 +5791,26 @@ function ensureInitialMessages(sessionId: string): void {
         return;
       }
       let hasMore = serverMessagePageHasMore(existing);
-      const MAX_BACKFILL_PAGES = 10;
+      const MAX_NO_ANCHOR_BACKFILL_PAGES = 10;
+      const MAX_PLAN_DISCOVERY_BACKFILL_PAGES = 10;
+      const MAX_PLAN_RESOLUTION_BACKFILL_PAGES = 10;
       let pagesFetched = 0;
-      while (
-        hasMore &&
-        pagesFetched < MAX_BACKFILL_PAGES &&
-        merged.every(isNonAnchorHistoryRow)
-      ) {
+      let planResolutionPagesFetched = 0;
+      while (hasMore) {
+        const needsAnchorBackfill =
+          merged.every(isNonAnchorHistoryRow) && pagesFetched < MAX_NO_ANCHOR_BACKFILL_PAGES;
+        const planState = historyRowsPlanBackfillState(merged);
+        const needsPlanResolution =
+          planState.hasPlanEvent &&
+          !planState.isResolved &&
+          planResolutionPagesFetched < MAX_PLAN_RESOLUTION_BACKFILL_PAGES;
+        const needsPlanBackfill = planState.hasPlanEvent
+          ? needsPlanResolution
+          : pagesFetched < MAX_PLAN_DISCOVERY_BACKFILL_PAGES;
+        if (!needsAnchorBackfill && !needsPlanBackfill) break;
+
         pagesFetched += 1;
+        if (needsPlanResolution) planResolutionPagesFetched += 1;
         try {
           const older = await listMessagesFor(sessionId, {
             limit: 50,
@@ -5753,6 +6075,19 @@ function dropMessagesFromClientId(sessionId: string, clientId: string): void {
 function reconcileOpenSessionOrigins(): void {
   for (const sessionId of sessions.keys()) {
     const current = remoteProjectsStore.getSessionDeviceId(sessionId);
+    // 即使当前来源暂时为空也要推进 projection 代际:否则 A→断连→A 的 ABA 会让
+    // 最初按 A 发起的旧查询在来源恢复后重新通过检查,覆盖恢复后的权威投影。
+    const originChange = noteInputProjectionOrigin(sessionId, current);
+    if (originChange.changed) {
+      // 来源变更后旧设备的 owner / capability 都失效。在新来源 projection 回来前
+      // fail closed，不能让 B 的历史沿用 A 的精确 owner 或 legacy 兜底。
+      setState(sessionId, (state) => ({
+        ...state,
+        continuationInFlightClientId: null,
+        continuationTurnClientId: null,
+        continuationInFlightProjectionCapability: 'unknown',
+      }));
+    }
     if (current === undefined) continue;
     const loaded = _historyLoadOrigin.get(sessionId);
     if (current === loaded) continue;
@@ -6079,6 +6414,9 @@ function runRemoteReconcile(sessionId: string, opts?: { force?: boolean }): Prom
  */
 function finalizeStuckRemoteTurn(sessionId: string): void {
   if (!isRemoteSession(sessionId)) return;
+  // 看门狗确认被控端已停止 = 权威终态；在清本地 owner 前先作废所有旧查询，
+  // 防止 stall 期间悬挂的 getProjection 随后把已死 turn 重新点亮。
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
   flushPendingTextDelta(sessionId); // 收尾前把残留增量落定,避免丢最后一截文本
   setState(sessionId, forceFinalizeOnSessionClosed);
 }
@@ -6217,7 +6555,8 @@ function loadOlderMessages(sessionId: string): void {
  * 为什么不再按 role / 工具名折算:折算模型必须逐一追平 buildRenderItems 的每种 item
  * 展开规则,而那套规则会持续演化。#676 的 review 连着四轮各挖出一种被低估的展开路径:
  * agent_task 卡(每个 Agent/Task/Workflow 调用 1:1)、按空洞切段后的孤立单行调用、
- * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡、
+ * ghost_call 配卡后的独立 ghost_card、TodoWrite / update_plan 的 agent_plan 卡
+ * (该卡现已移出流内,计划改钉在 composer 上方的 PinnedPlanPanel;历史结论不变)、
  * 以及结果含媒体时额外产出的 tool_media —— 每次都是"某行额外产生 item",而折算恰恰
  * 假设"多行合成一个 item"。低估预算的方向是危险的那一侧(放进更多实际渲染量),所以
  * 不再猜比例:一行最多产出一个可见 item 的量级,直接按行数当上界。
@@ -6891,42 +7230,36 @@ function touchSessionUserSend(sessionId: string, workingDir: string, wasFirst: b
  */
 function setQueueExpanded(sessionId: string, expanded: boolean): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.setExpanded(sessionId, expanded)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueExpanded failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setExpanded(sessionId, expanded),
+  ).catch((err) => log.warn('setQueueExpanded failed:', err));
 }
 
 function resumeQueue(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.resume(sessionId)
-    .then(applyInputProjection)
+  runAgentDispatchProjectionOperation(sessionId, (input) => input.resume(sessionId))
     .catch((err) => log.warn('resumeQueue failed:', err));
 }
 
 function setQueueInteractionLock(sessionId: string, lockId: string, locked: boolean): void {
   if (!sessionId || !lockId) return;
-  makerApiFor(sessionId)
-    .input.setInteractionLock(sessionId, lockId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueInteractionLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setInteractionLock(sessionId, lockId, locked),
+  ).catch((err) => log.warn('setQueueInteractionLock failed:', err));
 }
 
 function setQueueEditLock(sessionId: string, clientId: string, locked: boolean): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.setEditLock(sessionId, clientId, locked)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('setQueueEditLock failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.setEditLock(sessionId, clientId, locked),
+  ).catch((err) => log.warn('setQueueEditLock failed:', err));
 }
 
 function moveQueueItem(sessionId: string, clientId: string, targetIndex: number): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.move(sessionId, clientId, targetIndex)
-    .then(applyInputProjection)
-    .catch((err) => log.warn('moveQueueItem failed:', err));
+  runInputProjectionOperation(sessionId, (input) =>
+    input.move(sessionId, clientId, targetIndex),
+  ).catch((err) => log.warn('moveQueueItem failed:', err));
 }
 
 /**
@@ -6938,9 +7271,7 @@ function moveQueueItem(sessionId: string, clientId: string, targetIndex: number)
  */
 function removeFromQueue(sessionId: string, clientId: string): void {
   if (!sessionId || !clientId) return;
-  makerApiFor(sessionId)
-    .input.remove(sessionId, clientId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.remove(sessionId, clientId))
     .catch((err) => log.warn('removeFromQueue failed:', err));
 }
 
@@ -6956,15 +7287,14 @@ function updateQueueItem(sessionId: string, clientId: string, newText: string): 
   const trimmed = newText.trim();
   if (!trimmed) return;
   const queued = getOrCreateState(sessionId).pendingQueue.find((q) => q.clientId === clientId);
-  makerApiFor(sessionId)
-    .input.updateText(
+  runInputProjectionOperation(sessionId, (input) =>
+    input.updateText(
       sessionId,
       clientId,
       newText,
       extractSessionRefs(newText, queued?.sessionRefs),
-    )
-    .then(applyInputProjection)
-    .catch((err) => log.warn('updateQueueItem failed:', err));
+    ),
+  ).catch((err) => log.warn('updateQueueItem failed:', err));
 }
 
 /**
@@ -7011,7 +7341,7 @@ function autoTitleFallbackLabels(): AutoTitleFallbackLabels {
 function scheduleAutoName(
   sessionId: string,
   text: string,
-  agentKind: 'claude-code' | 'codex',
+  agentKind: 'claude-code' | 'codex' | 'pi',
   isUserText = true,
 ): void {
   // 与 main 共用 normalizeAutoTitle,两端算出的占位串逐字一致,回流时不跳变。
@@ -7124,7 +7454,7 @@ function clearAutoTitlePreviewSafely(sessionId: string): void {
 function maybeAutoNameUnnamedSession(
   sessionId: string,
   seed: AutoTitleSeed | null,
-  agentKind: 'claude-code' | 'codex',
+  agentKind: 'claude-code' | 'codex' | 'pi',
 ): void {
   if (!seed?.isUserText) return;
   scheduleAutoName(sessionId, seed.text, agentKind, true);
@@ -7159,6 +7489,26 @@ function isRemoteMediaSession(sessionId: string): boolean {
   );
 }
 
+/**
+ * 共享发送边界：同步完成「无切换在途」检查与发送 token 登记，并保证同步抛错和
+ * Promise settle 两条路径都会释放。`task` 仍在当前调用栈内启动，保留 sendMessage
+ * 对 planMode 等点击时语义的同步定格。
+ */
+function withAgentSendDispatch<T>(
+  sessionId: string,
+  onSwitchPending: () => Promise<T>,
+  task: () => Promise<T>,
+): Promise<T> {
+  const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);
+  if (!finishAgentSendDispatch) return onSwitchPending();
+  try {
+    return task().finally(finishAgentSendDispatch);
+  } catch (err) {
+    finishAgentSendDispatch();
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)));
+  }
+}
+
 function sendMessage(
   sessionId: string,
   text: string,
@@ -7175,37 +7525,46 @@ function sendMessage(
   if ((!text.trim() && (!files || files.length === 0)) || !workingDir)
     return Promise.resolve(false);
 
-  // 非破坏性标注:发送时刻才把矢量笔迹烧录成位图(模型只认位图)。仅在真的
-  // 存在待烧录附件时才走 async 物化——其余消息保持**全同步**发送路径,守住
-  // "planMode 点击即消耗 / enqueue 在点击同步栈内发生"的既有语义
-  // (planReviewDoneRace 测试守护;CI 曾因无条件 await 让步一拍而红)。
-  if (!needsAnnotationMaterialize(files)) {
-    return sendMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      files,
-      mentions,
-      opts,
-    );
-  }
-  return materializeAnnotatedAttachmentsForSend(files, sessionId, {
-    stripAnnotationMeta: isRemoteMediaSession(sessionId),
-  }).then((prepared) =>
-    sendMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      prepared,
-      mentions,
-      opts,
-    ),
+  // 共享发送边界兜住 composer 之外的入口（编辑重发、恢复等）。ChatInput 会从引用
+  // 水合阶段先持有一层 token；这里允许嵌套登记，确保未来新增调用方也不会绕过
+  // session-agent-switch 的双向互斥。检查与登记同步完成，不给切换插入空窗。
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => {
+      // 非破坏性标注:发送时刻才把矢量笔迹烧录成位图(模型只认位图)。仅在真的
+      // 存在待烧录附件时才走 async 物化——其余消息保持**全同步**发送路径,守住
+      // "planMode 点击即消耗 / enqueue 在点击同步栈内发生"的既有语义
+      // (planReviewDoneRace 测试守护;CI 曾因无条件 await 让步一拍而红)。
+      if (!needsAnnotationMaterialize(files)) {
+        return sendMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          files,
+          mentions,
+          opts,
+        );
+      }
+      return materializeAnnotatedAttachmentsForSend(files, sessionId, {
+        stripAnnotationMeta: isRemoteMediaSession(sessionId),
+      }).then((prepared) =>
+        sendMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          prepared,
+          mentions,
+          opts,
+        ),
+      );
+    },
   );
 }
 
@@ -7261,7 +7620,7 @@ async function sendMessageCore(
     // 用会话真实 agentKind 起名 — 之前写死 'claude-code',导致 Codex 会话也
     // 用 Claude haiku 起标题:纯 Codex 用户(无 Claude 鉴权)会 oneShot 失败 →
     // fallback 原话,表现为"Codex 会话标题没有智能总结"。current.agentKind 已是
-    // maker 格式('claude-code' | 'codex'),直接透传。起名走立即占位 + 后台覆盖。
+    // maker 格式('claude-code' | 'codex' | 'pi'),直接透传。起名走立即占位 + 后台覆盖。
     if (autoTitleSeed) {
       scheduleAutoName(sessionId, autoTitleSeed.text, current.agentKind, autoTitleSeed.isUserText);
     }
@@ -7286,8 +7645,9 @@ async function sendMessageCore(
     );
   }
 
-  return makerApiFor(sessionId)
-    .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+  const operation = beginInputProjectionOperation(sessionId);
+  return operation.api.input
+    .enqueue(sessionId, queued, { sendAtMs: Date.now() })
     .then((projection) => {
       if (opts?.authRetryPersistOnProjectionError) {
         setState(sessionId, (s) => ({
@@ -7298,8 +7658,10 @@ async function sendMessageCore(
           },
         }));
       }
-      applyInputProjection(projection);
-      markSessionHasUserMessage(sessionId);
+      const applied = applyInputProjectionOperationResponse(sessionId, operation, projection);
+      if (applied) markSessionHasUserMessage(sessionId);
+      // RPC 已在发起时的设备上成功受理；origin 期间漂移只意味着旧 projection
+      // 不能写进当前镜像，不应向 composer 谎报发送失败并诱导用户重复发送。
       return true;
     })
     .catch((err) => {
@@ -7346,12 +7708,11 @@ function compactSession(
   // /compact 是控制 turn(上下文压缩), 与 sendUiTrigger 同口径: 显式普通执行,
   // 不进计划模式、不消耗用户的一次性勾选(false 语义见 SendOptions.planMode)。
   createOpts.planMode = false;
-  return makerApiFor(sessionId)
-    .input.compact(sessionId, createOpts, { userName: currentUserName })
-    .then((projection) => {
-      applyInputProjection(projection);
-      return projection.error === null;
-    })
+  return runAgentDispatchProjectionOperation(sessionId, (input) =>
+    input.compact(sessionId, createOpts, { userName: currentUserName }),
+  )
+    // RPC 已执行成功时保留既有返回语义；origin 漂移只丢控制端镜像回写。
+    .then(({ projection }) => projection.error === null)
     .catch((err) => {
       const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
       setState(sessionId, (s) => ({
@@ -7397,34 +7758,40 @@ function steerMessage(
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }
-  // 同 sendMessage:无待烧录附件走全同步路径;有则物化后进同一核心。
-  if (!needsAnnotationMaterialize(files)) {
-    return steerMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      files,
-      mentions,
-      opts,
-    );
-  }
-  return materializeAnnotatedAttachmentsForSend(files, sessionId, {
-    stripAnnotationMeta: isRemoteMediaSession(sessionId),
-  }).then((prepared) =>
-    steerMessageCore(
-      sessionId,
-      text,
-      model,
-      effort,
-      permissionMode,
-      workingDir,
-      prepared,
-      mentions,
-      opts,
-    ),
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => {
+      // 同 sendMessage:无待烧录附件走全同步路径;有则物化后进同一核心。
+      if (!needsAnnotationMaterialize(files)) {
+        return steerMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          files,
+          mentions,
+          opts,
+        );
+      }
+      return materializeAnnotatedAttachmentsForSend(files, sessionId, {
+        stripAnnotationMeta: isRemoteMediaSession(sessionId),
+      }).then((prepared) =>
+        steerMessageCore(
+          sessionId,
+          text,
+          model,
+          effort,
+          permissionMode,
+          workingDir,
+          prepared,
+          mentions,
+          opts,
+        ),
+      );
+    },
   );
 }
 
@@ -7479,8 +7846,11 @@ function steerMessageCore(
       // 由队列行接管显示,这里必须返回 true 让 composer 清空草稿,否则用户面前
       // 同时存在暂停行 + 草稿,再次发送会双份消费(review #939 第五轮)。
       try {
-        const latest = await makerApiFor(sessionId).input.getProjection(sessionId);
-        applyInputProjection(latest);
+        const operation = beginInputProjectionOperation(sessionId);
+        const latest = await operation.api.input.getProjection(sessionId);
+        if (!applyInputProjectionOperationResponse(sessionId, operation, latest)) {
+          return false;
+        }
         if (latest.pendingQueue.some((q) => q.clientId === queued.clientId)) {
           // 物化进队列 = 这条输入已被主端接管、日后会派发,与受理同等 —— 起名也要
           // 跟上,否则纯附件/fork 之后的第一句话恰好在这条不确定路径上不改名
@@ -7535,6 +7905,9 @@ async function resendBlockedMessage(
   const state = getOrCreateState(sessionId);
   const msg = state.messages.find((m) => m.clientId === clientId && m.blockedByGhost);
   if (!msg) throw new Error('resendBlockedMessage: message not found');
+  // 会话行读取也是本次用户重发的一部分；token 必须在第一个 await 前登记。
+  const finishAgentSendDispatch = tryBeginAgentSendDispatch(sessionId);
+  if (!finishAgentSendDispatch) throw new Error('Agent switch is still in progress');
   resendBlockedInFlight.add(clientId);
   try {
     const row = await sessionService.get(sessionId);
@@ -7585,6 +7958,7 @@ async function resendBlockedMessage(
     }
   } finally {
     resendBlockedInFlight.delete(clientId);
+    finishAgentSendDispatch();
   }
 }
 
@@ -7612,25 +7986,29 @@ function steerQueuedMessage(sessionId: string, clientId: string): Promise<boolea
     requestInputProjection(sessionId);
     return Promise.resolve(false);
   }
-  return makerApiFor(sessionId)
-    .input.steer(sessionId, queued, { removeFromQueue: true })
-    .then((ok) => {
-      requestInputProjection(sessionId);
-      return ok;
-    })
-    .catch((err) => {
-      // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
-      // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
-      const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
-      setState(sessionId, (s) => ({
-        ...s,
-        error: message,
-        usageLimitRecovery: null,
-        recoverableError: null,
-        errorRetryText: null,
-      }));
-      return false;
-    });
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.resolve(false),
+    () => makerApiFor(sessionId)
+      .input.steer(sessionId, queued, { removeFromQueue: true })
+      .then((ok) => {
+        requestInputProjection(sessionId);
+        return ok;
+      })
+      .catch((err) => {
+        // 远端 lazy-create/startSession 抛的 [REMOTE_*] 不可恢复错误走 IPC reject 落这里
+        // (不经 stream error event reducer),同样要解码成 i18n 文案,别裸显 bracket code。
+        const message = decodeRemoteErrorMessage(err instanceof Error ? err.message : String(err));
+        setState(sessionId, (s) => ({
+          ...s,
+          error: message,
+          usageLimitRecovery: null,
+          recoverableError: null,
+          errorRetryText: null,
+        }));
+        return false;
+      }),
+  );
 }
 
 /**
@@ -7650,9 +8028,21 @@ function stopSession(
 ): void {
   if (!sessionId) return;
   flushPendingTextDelta(sessionId);
-  makerApiFor(sessionId)
-    .input.stop(sessionId, opts)
-    .then(applyInputProjection)
+  const api = makerApiFor(sessionId);
+  // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
+  // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
+  // 让 Stop 自己的权威响应仍属于新代际。
+  supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+  const operation: InputProjectionOperation = {
+    api,
+    origin: remoteProjectsStore.getSessionDeviceId(sessionId),
+    epoch: _inputProjectionAuthorityEpoch.get(sessionId) ?? 0,
+  };
+  operation.api.input
+    .stop(sessionId, opts)
+    .then((projection) => {
+      applyInputProjectionOperationResponse(sessionId, operation, projection);
+    })
     .catch((err) => log.warn('maker.input.stop failed:', err));
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
@@ -7678,6 +8068,7 @@ function stopSession(
       activeTurnRetryText: null,
       errorRetryText: null,
       pendingPermission: null,
+      continuationTurnClientId: null,
       pendingAskUser: null,
       // F-AUQ-MIN-5: Stop session — pending question is gone, reset viewer.
       askUserViewerState: 'expanded',
@@ -7754,9 +8145,7 @@ function popQueueTail(sessionId: string): boolean {
  */
 function clearError(sessionId: string): void {
   if (!sessionId) return;
-  makerApiFor(sessionId)
-    .input.clearError(sessionId)
-    .then(applyInputProjection)
+  runInputProjectionOperation(sessionId, (input) => input.clearError(sessionId))
     .catch((err) => log.warn('clearError failed:', err));
   setState(sessionId, (s) => {
     if (
@@ -7783,11 +8172,12 @@ function retryLastError(sessionId: string): Promise<void> {
   // 续跑语义在 main:coordinator 判定失败 turn 已有 assistant 产出时,用共享英文
   // 常量 CONTINUE_AFTER_ERROR_PROMPT 替代重发原文(shared/interruptedTurn.ts),
   // renderer 不传文案、不做判定。
-  return makerApiFor(sessionId)
-    .input.retryLastError(sessionId)
-    .then((projection) => {
-      applyInputProjection(projection);
-    });
+  // retryLastError 在 main 内会先 await 历史查询再入队，必须从点击时刻起占住与
+  // Agent 切换共享的发送 token；否则后点的切换能越过这段查询，让重试改由新 Agent 执行。
+  return runAgentDispatchProjectionOperation(
+    sessionId,
+    (input) => input.retryLastError(sessionId),
+  ).then(() => undefined);
 }
 
 /**
@@ -7883,10 +8273,10 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     | { kind: 'projection'; projection: AgentInputProjection }
     | { kind: 'error'; err: unknown }
     | { kind: 'timeout' };
+  const clearOperation = beginInputProjectionOperation(sessionId);
   try {
     guardResult = await Promise.race([
-      makerApiFor(sessionId)
-        .input.clearSession(sessionId, clearedAt)
+      clearOperation.api.input.clearSession(sessionId, clearedAt)
         .then(
           (projection) => ({ kind: 'projection' as const, projection }),
           (err) => ({ kind: 'error' as const, err }),
@@ -7904,7 +8294,7 @@ async function clearSessionAfterGuard(sessionId: string, clearedAt: string): Pro
     if (guardTimeoutId) clearTimeout(guardTimeoutId);
   }
   if (guardResult.kind === 'projection') {
-    applyInputProjection(guardResult.projection);
+    applyInputProjectionOperationResponse(sessionId, clearOperation, guardResult.projection);
   } else if (guardResult.kind === 'error') {
     const err = guardResult.err;
     log.warn('maker.input.clearSession failed:', err);
@@ -8855,8 +9245,7 @@ export { UI_ACTION_TRIGGER_PREFIX };
  * error-tail banner) toasts or恢复红条。
  */
 
-function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
-  if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
+function sendUiTriggerCore(sessionId: string, prompt: string): Promise<void> {
   const state = getOrCreateState(sessionId);
   const originalTail = state.messages[state.messages.length - 1];
   // Freeze the row the user acted on before session lookup / dispatch. A fast
@@ -8925,10 +9314,11 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
         // 远端 SSH 会话:重启后 lazy-create 缺它会把远端 workingDir 当本地路径。
         ...(session.remoteHostId ? { remoteHostId: session.remoteHostId } : {}),
       };
-      return makerApiFor(sessionId)
-        .input.enqueue(sessionId, queued, { sendAtMs: Date.now() })
+      const operation = beginInputProjectionOperation(sessionId);
+      return operation.api.input
+        .enqueue(sessionId, queued, { sendAtMs: Date.now() })
         .then((projection) => {
-          applyInputProjection(projection);
+          applyInputProjectionOperationResponse(sessionId, operation, projection);
         });
     })
     .catch((err) => {
@@ -8937,18 +9327,36 @@ function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
     });
 }
 
+function sendUiTrigger(sessionId: string, prompt: string): Promise<void> {
+  if (!sessionId) return Promise.reject(new Error('sendUiTrigger: empty sessionId'));
+  return withAgentSendDispatch(
+    sessionId,
+    () => Promise.reject(new Error('Agent switch is still in progress')),
+    () => sendUiTriggerCore(sessionId, prompt),
+  );
+}
+
 /**
  * session-agent-switch:切换 IPC 成功后由 ChatInput 调用。翻转 in-memory
  * agentKind(事件 reducer 路由 + createOpts 派生都读它)并清掉旧引擎的
  * sdkSessionId——否则 buildCreateOpts 会把旧引擎的原生会话 id 当 resume 目标
  * (main 侧 reconcileCreateOptsWithDb 是兜底,这里是第一现场收敛)。
  */
-function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'): void {
+function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex' | 'pi'): void {
   if (!sessionId) return;
   setState(sessionId, (s) =>
     s.agentKind === agentKind && s.sdkSessionId === null && s.agentSwitchIntent === null
       ? s
-      : { ...s, agentKind, sdkSessionId: null, agentSwitchIntent: null },
+      : {
+          ...s,
+          agentKind,
+          sdkSessionId: null,
+          agentSwitchIntent: null,
+          // 意图被真实切换消费掉也是一次变更,在途读回据此作废。
+          ...(s.agentSwitchIntent === null
+            ? {}
+            : { agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }),
+        },
   );
 }
 
@@ -8960,7 +9368,7 @@ function noteAgentSwitched(sessionId: string, agentKind: 'claude-code' | 'codex'
  */
 function noteAgentSwitchIntent(
   sessionId: string,
-  target: 'claude-code' | 'codex',
+  target: 'claude-code' | 'codex' | 'pi',
   opts: { model: string; providerId: string | null; effort?: string; fastMode?: boolean },
 ): void {
   if (!sessionId) return;
@@ -8973,6 +9381,7 @@ function noteAgentSwitchIntent(
       effort: opts.effort,
       fastMode: opts.fastMode,
     },
+    agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
   }));
 }
 
@@ -8980,7 +9389,9 @@ function noteAgentSwitchIntent(
 function clearAgentSwitchIntent(sessionId: string): void {
   if (!sessionId) return;
   setState(sessionId, (s) =>
-    s.agentSwitchIntent === null ? s : { ...s, agentSwitchIntent: null },
+    s.agentSwitchIntent === null
+      ? s
+      : { ...s, agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 },
   );
 }
 
@@ -8988,9 +9399,78 @@ function getAgentSwitchIntent(sessionId: string): AgentSwitchIntentRecord | null
   return sessions.get(sessionId)?.agentSwitchIntent ?? null;
 }
 
+/**
+ * 意图的单调修订号(不存在的会话按 0)。异步读回的新鲜度判定读它——值比较会被 ABA
+ * (null → 已登记 → null)骗过,修订号不会。
+ */
+function getAgentSwitchIntentRev(sessionId: string): number {
+  return sessions.get(sessionId)?.agentSwitchIntentRev ?? 0;
+}
+
+/**
+ * main 的 pending 意图投影(PublicAgentSwitchIntent,字段名 targetAgentKind)收窄成
+ * store 记录(target)。形状不合法 / 非意图 → null,按「无意图」处理。
+ */
+function normalizeAgentSwitchIntent(value: unknown): AgentSwitchIntentRecord | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+  const item = value as Record<string, unknown>;
+  if (item.targetAgentKind !== 'claude-code' && item.targetAgentKind !== 'codex') return null;
+  if (typeof item.model !== 'string' || item.model.length === 0) return null;
+  // providerId 缺失按 null(与 main projectPendingAgentSwitchIntent 的 `?? null` 对齐);
+  // 只有出现非 string / 非空值的脏值才判非法,避免协议演进时静默丢掉合法意图。
+  if (item.providerId != null && typeof item.providerId !== 'string') return null;
+  if (item.effort !== undefined && typeof item.effort !== 'string') return null;
+  if (item.fastMode !== undefined && typeof item.fastMode !== 'boolean') return null;
+  return {
+    target: item.targetAgentKind,
+    model: item.model,
+    providerId: typeof item.providerId === 'string' ? item.providerId : null,
+    ...(typeof item.effort === 'string' && item.effort.length > 0 ? { effort: item.effort } : {}),
+    ...(typeof item.fastMode === 'boolean' ? { fastMode: item.fastMode } : {}),
+  };
+}
+
+function agentSwitchIntentEquals(
+  a: AgentSwitchIntentRecord | null,
+  b: AgentSwitchIntentRecord | null,
+): boolean {
+  if (a === b) return true;
+  if (!a || !b) return false;
+  return (
+    a.target === b.target &&
+    a.model === b.model &&
+    a.providerId === b.providerId &&
+    a.effort === b.effort &&
+    a.fastMode === b.fastMode
+  );
+}
+
+/**
+ * 「意图的权威态在会话所在端」:被控端(或本机另一个窗口)登记 / 清除 pending 意图后,
+ * main 经 sessions:patched 广播 agentSwitchIntent 字段;device-link 远程会话打开时
+ * 控制端还会主动读回一次。两条 sink 都汇到这里。
+ *
+ * 幂等:值等价即 no-op —— 本端乐观登记后收到自己的回声不会重建对象、不触发多余重渲染,
+ * 也不会与用户正在进行的选择打架。null / 非法值 = 无意图 → 清除。
+ */
+function mirrorAgentSwitchIntent(sessionId: string, value: unknown): void {
+  if (!sessionId) return;
+  const next = normalizeAgentSwitchIntent(value);
+  if (agentSwitchIntentEquals(sessions.get(sessionId)?.agentSwitchIntent ?? null, next)) return;
+  if (!next) {
+    clearAgentSwitchIntent(sessionId);
+    return;
+  }
+  setState(sessionId, (s) => ({
+    ...s,
+    agentSwitchIntent: next,
+    agentSwitchIntentRev: s.agentSwitchIntentRev + 1,
+  }));
+}
+
 function setSessionRuntime(
   sessionId: string,
-  opts: { agentKind?: 'claude-code' | 'codex'; fastMode?: boolean; planModeEnabled?: boolean },
+  opts: { agentKind?: 'claude-code' | 'codex' | 'pi'; fastMode?: boolean; planModeEnabled?: boolean },
 ): void {
   if (!sessionId) return;
   setState(sessionId, (s) => {
@@ -9050,6 +9530,7 @@ function mirrorSessionFields(
         fastMode?: unknown;
         planModeEnabled?: unknown;
         agentKind?: unknown;
+        agentSwitchIntent?: unknown;
         agentSwitchIntentCanceled?: unknown;
       }
     | null
@@ -9057,13 +9538,17 @@ function mirrorSessionFields(
 ): void {
   if (!sessionId || !patch) return;
   if (patch.agentSwitchIntentCanceled === true) clearAgentSwitchIntent(sessionId);
+  // 意图登记 / 覆盖 / 清除的回流(main onPendingSwitchChanged)。必须判字段存在性:
+  // 不带该字段的普通 patch(标题、preview、token 计数…)不能被当成「意图已清空」,
+  // 否则任何无关广播都会擦掉用户已登记的切换意图。
+  if ('agentSwitchIntent' in patch) mirrorAgentSwitchIntent(sessionId, patch.agentSwitchIntent);
   // session-agent-switch:引擎翻转必须镜像进 chat in-memory——maker:event 的
   // reducer 按 state.agentKind 分流(Claude / Codex 两套),非发起窗口若停在旧值,
   // 新引擎的事件会被旧引擎 reducer 错误处理(2026-07-20 审计实锤)。随引擎翻转
   // 同步清 sdkSessionId(旧引擎的原生会话 id 对新引擎无意义,与 noteAgentSwitched
   // 口径一致)。幂等:发起窗口已 noteAgentSwitched → 同值 no-op。
-  if (patch.agentKind === 'cc' || patch.agentKind === 'codex') {
-    const nextKind = patch.agentKind === 'codex' ? 'codex' : 'claude-code';
+  if (patch.agentKind === 'cc' || patch.agentKind === 'codex' || patch.agentKind === 'pi') {
+    const nextKind = dbToMakerAgentKind(patch.agentKind);
     setState(sessionId, (s) => {
       const intentApplied = s.agentSwitchIntent?.target === nextKind;
       if (s.agentKind === nextKind && !intentApplied) return s;
@@ -9071,7 +9556,10 @@ function mirrorSessionFields(
         ...s,
         agentKind: nextKind,
         sdkSessionId: null,
-        ...(intentApplied ? { agentSwitchIntent: null } : {}),
+        // 意图被真实切换消费 = 一次意图变更,推进修订号让在途读回作废。
+        ...(intentApplied
+          ? { agentSwitchIntent: null, agentSwitchIntentRev: s.agentSwitchIntentRev + 1 }
+          : {}),
       };
     });
   }
@@ -9172,6 +9660,10 @@ export const makerChatStore = {
   noteAgentSwitchIntent,
   clearAgentSwitchIntent,
   getAgentSwitchIntent,
+  /** 意图的单调修订号;异步读回的新鲜度判定用它,值比较会被 ABA 骗过。 */
+  getAgentSwitchIntentRev,
+  /** 会话所在端(被控端 / 另一窗口)的权威 pending 意图回流镜像;幂等,值等价即 no-op。 */
+  mirrorAgentSwitchIntent,
   /** Update the displayed context window immediately after local model switches. */
   setContextWindow,
   /** MEM-OPT-2: Mark a session view mounted; returns a disposer for unmount. */
@@ -9249,11 +9741,17 @@ export const makerChatStore = {
     autoNameAttempts.clear();
   },
   /** Exposed for tests only: 把 stream event 打进真实 store(驱动 getRunningSnapshot 等)。 */
-  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void =>
-    setState(sessionId, (s) => handleStreamEvent(s, event)),
+  __applyStreamEventForTest: (sessionId: string, event: CCAgentStreamEvent): void => {
+    supersedeInputProjectionOnTerminalEvent(sessionId, event);
+    setState(sessionId, (s) => handleStreamEvent(s, event));
+  },
   /** Exposed for tests only: 把 status update 打进真实 store。 */
-  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void =>
-    setState(sessionId, (s) => handleStatusUpdate(s, update)),
+  __applyStatusUpdateForTest: (sessionId: string, update: CCAgentStatusUpdate): void => {
+    if (!update.skipTurnReset && !update.isRunning) {
+      supersedeInputProjectionRequests(sessionId, { supersedeOperations: true });
+    }
+    setState(sessionId, (s) => handleStatusUpdate(s, update));
+  },
   /** Exposed for tests only. */
   __hydratePersistedMessageForTest: hydratePersistedMessage,
   /** Exposed for tests only. */
@@ -9544,6 +10042,17 @@ function serverMessagePageHasMore(rows: Message[], pageSize = 50): boolean {
   return rows.length >= pageSize || rows.some((row) => row.agentMeta?.remoteRowsTrimmed === true);
 }
 
+function historyRowsPlanBackfillState(rows: Message[]): {
+  hasPlanEvent: boolean;
+  isResolved: boolean;
+} {
+  const state = getLatestMessageTodoState(mapServerMessages(rows));
+  return {
+    hasPlanEvent: state.hasPlanEvent,
+    isResolved: state.isResolved,
+  };
+}
+
 function shouldStopRemoteReconciliationAtOverlap(
   rows: Message[],
   hasKnownOverlap: boolean,
@@ -9637,10 +10146,12 @@ function isSyntheticTriggerRow(m: Message): boolean {
 /**
  * 该 thinking 服务端行是否**不进渲染列表**(DB 行照旧保留,只是不展示)。
  *
- * 两类:
+ * 三类:
  *   - `isRedacted` 加密推理:没有任何明文可读,卡片只能显示"无法显示的思考过程",对用户是
  *     纯噪音;上游开服务端工具后一轮能出十几条,会淹掉真实产出。与 live 路径
  *     (handleStreamEvent 的 stage==='redacted')同判定。
+ *   - pi 旧版 translator 丢失 redacted 标记后落下的精确 `[Reasoning redacted]` 占位:
+ *     无需改库,历史恢复时按同一语义隐藏。
  *   - omitted-display 占位行(空文本 + 0 时长,非 redacted):不复原成 "Thought for 1s" 卡片。
  *     上游恢复明文下发后新数据自然不再命中。
  *
@@ -9652,6 +10163,7 @@ function isHiddenThinkingRow(m: Message): boolean {
   const c = m.content as Record<string, unknown>;
   if (c.isRedacted === true) return true;
   const text = typeof c.text === 'string' ? c.text : '';
+  if (isLegacyRedactedThinkingPlaceholder(m, text)) return true;
   const durationMs = typeof c.durationMs === 'number' ? c.durationMs : 0;
   return isOmittedThinkingPlaceholder(text, durationMs);
 }
@@ -9659,9 +10171,10 @@ function isHiddenThinkingRow(m: Message): boolean {
 /**
  * 该服务端行**渲染后不会留下可见锚点**(初始页全是这类行时必须继续往前翻页)。
  *
- * 三类:
+ * 四类:
  *   - `tool_result`:配对的 tool_use 父消息可能在更老的页里,MessageStream 会丢弃 orphan;
  *   - 被 `isHiddenThinkingRow` 过滤掉的行:直接不进渲染列表;
+ *   - 计划工具调用:MessageStream 会吞掉,只更新 composer 上方的计划胶囊;
  *   - 合成指令行(`isSyntheticTriggerRow`):MessageStream 渲染 null、content 置空,
  *     与 `loadOlderMessages` 的可见锚点判定同口径(见该处「合成指令行渲染 null,不算可见
  *     锚点」)。少了这一类,一页里只要混进一条合成 user 行就会被当成锚点提前停止回填,
@@ -9672,7 +10185,23 @@ function isHiddenThinkingRow(m: Message): boolean {
  * 再也拉不回来。
  */
 function isNonAnchorHistoryRow(m: Message): boolean {
-  return m.role === 'tool_result' || isHiddenThinkingRow(m) || isSyntheticTriggerRow(m);
+  return (
+    m.role === 'tool_result' ||
+    isHiddenThinkingRow(m) ||
+    isAgentPlanHistoryToolUseRow(m) ||
+    isSyntheticTriggerRow(m)
+  );
+}
+
+function isAgentPlanHistoryToolUseRow(m: Message): boolean {
+  if (m.role !== 'tool_use') return false;
+  return isAgentPlanToolName(historyToolName(m));
+}
+
+function historyToolName(m: Message): string | undefined {
+  if (!m.content || typeof m.content !== 'object') return undefined;
+  const toolName = (m.content as Record<string, unknown>).toolName;
+  return typeof toolName === 'string' ? toolName : undefined;
 }
 
 function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
@@ -10018,6 +10547,26 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
             ? legacyUsdMoney(legacyTurnCostUsd)
             : undefined)
         : undefined;
+    // 用户轮累计与当前 segment 费用各自独立读(不变量正本见 shared/turnCostPayload.ts):
+    // 收尾 segment 缺报价的轮次只落了 userTurnCost + turnUsageDetails,若把它嵌在
+    // persistedTurnMoney > 0 的分支里,重开会话后整轮已花的钱会被 token 顶掉。
+    const persistedUserTurnMoney =
+      m.role === 'assistant' && agentMeta
+        ? normalizeRegionalMoney(agentMeta.userTurnCost) ??
+          (typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+            ? legacyUsdMoney(agentMeta.userTurnCostUsd)
+            : undefined)
+        : undefined;
+    const persistedUserTurnCostPatch =
+      agentMeta && persistedUserTurnMoney
+        ? {
+            userTurnMoney: persistedUserTurnMoney,
+            ...(typeof agentMeta.userTurnCostUsd === 'number' && agentMeta.userTurnCostUsd > 0
+              ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
+              : {}),
+            userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
+          }
+        : {};
     return {
       clientId: m.clientId,
       role: m.role,
@@ -10028,12 +10577,20 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
         : {}),
       // SDK done turn seal:新数据用 turnCompleted；存量会话已有 turnCostUsd 的收尾
       // assistant 等价可推导，直接补投影让本修复对历史复现会话立即生效。
+      // turnUsageDetails 同样是 turn 结束才 patch 的字段(无报价轮只落它),因此
+      // 也是等价的收尾信号 —— 少了它,无金额轮重开会话就挂不出 action bar。
       ...(m.role === 'assistant' && (
         agentMeta?.turnCompleted === true ||
-        (persistedTurnMoney?.amount ?? 0) > 0
+        (persistedTurnMoney?.amount ?? 0) > 0 ||
+        turnUsageDetails !== undefined
       )
         ? { turnCompleted: true }
         : {}),
+      // 本轮 token 明细独立于金额挂载:Pi/新模型算不出报价的轮次只有它，
+      // UI 据此退回显示 token，历史加载不能把它绑在 money 分支。
+      ...(m.role === 'assistant' && turnUsageDetails ? { turnUsageDetails } : {}),
+      // 整轮累计费用同样独立挂载:无价收尾轮只有它,没有 turnCost。
+      ...persistedUserTurnCostPatch,
       // assistant 上挂的 per-turn 费用(main turn 结束时 patch 进 agent_meta)
       ...(m.role === 'assistant' &&
       agentMeta &&
@@ -10044,27 +10601,10 @@ function mapServerMessages(serverMsgs: Message[]): ChatMessage[] {
               persistedTurnMoney.currency === 'USD'
                 ? persistedTurnMoney.amount
                 : undefined;
-            const persistedUserTurnMoney =
-              normalizeRegionalMoney(agentMeta.userTurnCost) ??
-              (typeof agentMeta.userTurnCostUsd === 'number' &&
-              agentMeta.userTurnCostUsd > 0
-                ? legacyUsdMoney(agentMeta.userTurnCostUsd)
-                : undefined);
             return {
               turnMoney: persistedTurnMoney,
               ...(turnCostUsd !== undefined ? { turnCostUsd } : {}),
               turnCostIsEstimate: agentMeta.turnCostIsEstimate === true,
-              ...(persistedUserTurnMoney
-                ? {
-                    userTurnMoney: persistedUserTurnMoney,
-                    ...(typeof agentMeta.userTurnCostUsd === 'number' &&
-                    agentMeta.userTurnCostUsd > 0
-                      ? { userTurnCostUsd: agentMeta.userTurnCostUsd }
-                      : {}),
-                    userTurnCostIsEstimate: agentMeta.userTurnCostIsEstimate === true,
-                  }
-                : {}),
-              ...(turnUsageDetails ? { turnUsageDetails } : {}),
             };
           })()
         : {}),

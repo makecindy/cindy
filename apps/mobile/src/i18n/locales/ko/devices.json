@@ -249,6 +249,7 @@
       },
       "useWorktree": "worktree 사용",
       "modelPlaceholderBound": "세션 따르기",
+      "modelPlaceholderPiDefault": "비워두면 기본 모델",
       "fastMode": "Fast 모드",
       "notifyDesktop": "데스크톱 알림",
       "notifyFeishu": "Feishu 알림",

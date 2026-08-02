@@ -286,16 +286,25 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
   const rawPolicy = cfg?.ssrfPolicy as BrowserSsrFPolicyCompat | undefined;
   const allowPrivateNetwork = rawPolicy?.allowPrivateNetwork;
   const dangerouslyAllowPrivateNetwork = rawPolicy?.dangerouslyAllowPrivateNetwork;
+  // LOCAL PATCH (Cindy, via sync.mjs): upstream's config resolver currently
+  // drops the narrow fake-IP allowances even though the SSRF layer supports
+  // them. Preserve explicit booleans so hosts can allow only proxy fake-IP
+  // ranges without disabling protection for metadata, link-local, or RFC1918.
+  const allowRfc2544BenchmarkRange = rawPolicy?.allowRfc2544BenchmarkRange;
+  const allowIpv6UniqueLocalRange = rawPolicy?.allowIpv6UniqueLocalRange;
   const allowedHostnames = normalizeStringList(rawPolicy?.allowedHostnames);
   const hostnameAllowlist = normalizeStringList(rawPolicy?.hostnameAllowlist);
   const hasExplicitPrivateSetting =
     allowPrivateNetwork !== undefined || dangerouslyAllowPrivateNetwork !== undefined;
+  const hasExplicitFakeIpSetting =
+    allowRfc2544BenchmarkRange !== undefined || allowIpv6UniqueLocalRange !== undefined;
   const resolvedAllowPrivateNetwork =
     dangerouslyAllowPrivateNetwork === true || allowPrivateNetwork === true;
 
   if (
     !resolvedAllowPrivateNetwork &&
     !hasExplicitPrivateSetting &&
+    !hasExplicitFakeIpSetting &&
     !allowedHostnames &&
     !hostnameAllowlist
   ) {
@@ -310,6 +319,8 @@ function resolveBrowserSsrFPolicy(cfg: BrowserConfig | undefined): SsrFPolicy | 
     allowPrivateNetwork === false
       ? { dangerouslyAllowPrivateNetwork: resolvedAllowPrivateNetwork }
       : {}),
+    ...(allowRfc2544BenchmarkRange !== undefined ? { allowRfc2544BenchmarkRange } : {}),
+    ...(allowIpv6UniqueLocalRange !== undefined ? { allowIpv6UniqueLocalRange } : {}),
     ...(allowedHostnames ? { allowedHostnames } : {}),
     ...(hostnameAllowlist ? { hostnameAllowlist } : {}),
   };

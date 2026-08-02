@@ -92,6 +92,8 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
   it('rejects bad / reserved ids', () => {
     expect(validateCustomProviderConfig({ ...valid, id: 'Bad Id' }).ok).toBe(false);
     expect(validateCustomProviderConfig({ ...valid, id: 'xd' }).ok).toBe(false);
+    // 'cindy' 撞 pi 网关 provider id,必须保留
+    expect(validateCustomProviderConfig({ ...valid, id: 'cindy' }).ok).toBe(false);
   });
 
   it('rejects empty runtimes / invalid runtime key', () => {
@@ -145,6 +147,34 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
             baseUrl: 'https://x/v1',
             models: [{ id: 'm', name: 'M', contextWindow: 0 }],
           },
+        },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('accepts a pi runtime (BYOM) with any of pi wire protocols', () => {
+    for (const wp of ['anthropic-messages', 'openai-responses', 'openai-chat']) {
+      expect(
+        validateCustomProviderConfig({
+          id: 'localpi',
+          name: 'Local pi',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: wp, models: [{ id: 'm', name: 'M' }] },
+          },
+        }).ok,
+      ).toBe(true);
+    }
+  });
+
+  it('rejects an invalid wireProtocol on a pi runtime', () => {
+    expect(
+      validateCustomProviderConfig({
+        id: 'localpi',
+        name: 'Local pi',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: { baseUrl: 'http://127.0.0.1:11434/v1', wireProtocol: 'bogus-proto', models: [{ id: 'm', name: 'M' }] },
         },
       }).ok,
     ).toBe(false);
@@ -220,7 +250,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
     expect((await getCustomProvider('openrouter'))?.name).toBe('Edited in another window');
   });
 
-  it('round-trips headers + dedupes models on normalize', async () => {
+  it('never persists headers and still dedupes models on normalize', async () => {
     mountDb();
     await createCustomProvider({
       ...valid,
@@ -241,7 +271,7 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'a', name: 'A', contextWindow: 1_000_000 },
       { id: 'hidden', name: 'Hidden', defaultEnabled: false },
     ]);
-    expect(got?.runtimes.codex?.headers).toEqual({ 'X-Org': 'acme' });
+    expect(got?.runtimes.codex?.headers).toBeUndefined();
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {

@@ -5,11 +5,10 @@
  * `catalog/providers.json`(v2)只承载 xai 静态清单 + presets 模板——它仍是
  * ① OSS `cfg/providers.json` 的发布物 ② dev 直读的仓库文件。anthropic/openai/xd
  * 的模型清单运行时动态注入(见 apps/desktop maker-host active-catalog),不再进目录文件。
- * 目录文件顶层另有 `cindyModelMeta` 段:那是服务端 model-access-server 消费的
- * 网关模型元数据覆盖表(与客户端目录共用一份 OSS 文件)。客户端侧 parseCatalog 不校验
- * 内容、随目录透传(见 types.ts Catalog.cindyModelMeta);客户端消费点见 types.ts 注释
- * (anthropic 发现条目的展示元数据基线 + dev 模式 XD 元数据覆盖)。
+ * 所有跨端模型元数据统一进入严格版本化的 `modelRegistry`;目录顶层不接受旁路元数据块。
  */
+
+import { parseModelRegistry } from '@cindy/model-access-protocol';
 
 import type { Catalog, Provider, CatalogModel, AgentKind, Effort, ProviderPreset } from './types.js';
 import { withVerifiedStaticWindows } from './builtin.js';
@@ -18,7 +17,7 @@ import { isProviderRequestPath } from './provider-url.js';
 
 export { BUNDLED_CATALOG, BUILTIN_PROVIDERS } from './builtin.js';
 
-const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex'];
+const AGENT_KINDS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const EFFORTS: readonly Effort[] = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ultra'];
 const WIRE_PROTOCOLS = ['anthropic-messages', 'openai-responses', 'openai-chat'] as const;
 
@@ -504,6 +503,9 @@ export function sortPresetsForLocale(presets: ProviderPreset[], locale: string):
 export function parseCatalog(input: string | unknown): Catalog {
   const obj: unknown = typeof input === 'string' ? JSON.parse(input) : input;
   assert(obj && typeof obj === 'object', 'root is not an object');
+  const allowedRootFields = new Set(['version', 'providers', 'presets', 'modelRegistry']);
+  const unknownRootField = Object.keys(obj).find((field) => !allowedRootFields.has(field));
+  assert(!unknownRootField, `catalog.${unknownRootField} is not allowed`);
   const catalog = obj as Catalog;
   assert(typeof catalog.version === 'string', 'catalog.version missing');
   assert(Array.isArray(catalog.providers) && catalog.providers.length > 0, 'catalog.providers missing/empty');
@@ -513,6 +515,11 @@ export function parseCatalog(input: string | unknown): Catalog {
   const presets = sanitizePresets((catalog as { presets?: unknown }).presets);
   if (presets.length > 0) catalog.presets = presets;
   else delete catalog.presets;
+  if ((catalog as { modelRegistry?: unknown }).modelRegistry !== undefined) {
+    const registry = parseModelRegistry((catalog as { modelRegistry: unknown }).modelRegistry);
+    assert(registry.ok, registry.ok ? '' : registry.error);
+    catalog.modelRegistry = registry.value;
+  }
   // 远端下发目录与 bundled 同格式:静态条目的窗口是产品侧写定的真实上限,标记为已核实
   // (幂等;条目自己表过态时尊重原值)。动态发现的模型不经这里 —— 见 withVerifiedStaticWindows。
   //

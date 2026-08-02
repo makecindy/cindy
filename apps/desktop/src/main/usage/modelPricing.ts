@@ -16,21 +16,36 @@ import {
   gatewayLedgerCurrency,
   gatewayPricingCatalog,
   getModelPriceQuote,
+  providerReferencePriceQuote,
+  registryPricingCatalog,
   subscriptionDirectPriceQuote,
 } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
 import { providerSecretStorageKey } from '../../shared/providerSecrets.js';
 import {
-  gatewayCurrencyForRegion,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type MoneyCurrency,
 } from '../../shared/regionalMoney.js';
 import { getCurrentDbClientUserId } from '../localDb/client/current.js';
-import { setActiveLedgerCurrency } from './ledgerCurrency.js';
+import {
+  hydrateAccountCurrency,
+  noteActiveAccount,
+  rememberAccountCurrency,
+} from './accountCurrencyStore.js';
+import { currentLedgerCurrency, setActiveLedgerCurrency } from './ledgerCurrency.js';
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
+import { getActiveCatalog } from '../maker-host/active-catalog.js';
+import {
+  applyModelPriceOverrides,
+  mergeStoredModelPriceOverride,
+  type ModelPriceOverridesSnapshot,
+} from './modelPriceOverrideStore.js';
+
+export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
+export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -39,11 +54,14 @@ export type {
 } from '../../shared/regionalMoney.js';
 
 const log = createLogger('modelPricing');
+// v9:币种回落不再按构建区域猜，且猜出来的报价会带 currencyInferred。v8 快照里那些
+//    按区域兜底写入的 accountCurrency 与 quote 没有这个标记，复用它们会让「猜的币种」
+//    重新冒充精确报价 —— 离线或 /models 失败时正好绕过本次修复，必须整份作废重取。
 // v8:账号币种与报价同快照持久化；无报价模型也可能明确声明结算币种。
 // v7:币种改为优先使用 Model Access 明确声明，不能复用按 region 猜测的旧 quote。
 // v6:所有 Gateway 模型统一按服务端 costDiscount 计费。v5 的 codex/ quote 已
 // 硬编码乘过 0.15 且丢弃 costDiscount，不能继续复用。
-const DISK_CACHE_VERSION = 8;
+const DISK_CACHE_VERSION = 9;
 const DISK_CACHE_FILE = 'model-pricing.json';
 
 export const MODEL_PRICING_CHANGED_CHANNEL = 'usage:model-pricing-changed';
@@ -62,9 +80,19 @@ let cacheAt = 0;
 let modelSyncInflight: Promise<unknown> | null = null;
 let gatewayAccountCurrency: MoneyCurrency | null = null;
 let gatewayAccountCurrencyScope: string | null = null;
+/** 上一次观察到的**生效**账本币种(含回退结果),只用于把切换打进日志。 */
+let activeLedgerCurrencySnapshot: MoneyCurrency | null = null;
 const hydratedScopes = new Set<string>();
 const hydrateInflightByScope = new Map<string, Promise<ModelPricingCatalog | null>>();
 
+/**
+ * 目录**显式声明**的结算币种；没声明就返回 null，由 ledgerCurrency 的回退链接手。
+ *
+ * 这里曾经在没声明时回落 `gatewayCurrencyForRegion(CURRENT_CINDY_REGION)`。那是把
+ * 「服务端这次没告诉我」翻译成了「那按发行区域算」，而报价数值仍是服务端给的原口径 ——
+ * 一旦某次 /models 漏发 currency，整份目录的 USD 数值就会被盖上 CNY 戳。实测这让同一
+ * 账号的账本币种在一天内翻转多次，并连带把当天已累计的花费覆盖掉。
+ */
 function resolveGatewayAccountCurrency(
   models: readonly ModelAccessGatewayModel[],
 ): MoneyCurrency | null {
@@ -78,7 +106,14 @@ function resolveGatewayAccountCurrency(
     log.warn('xd gateway models returned mixed currencies; account quota currency unavailable');
     return null;
   }
-  return currencies.values().next().value ?? gatewayCurrencyForRegion(CURRENT_CINDY_REGION);
+  const declared = currencies.values().next().value ?? null;
+  if (!declared) {
+    log.warn(
+      `xd gateway models declared no currency (${models.length} models); ` +
+        'keeping last known ledger currency instead of guessing by region',
+    );
+  }
+  return declared;
 }
 
 function currentKeyCacheIdentity(): string {
@@ -109,6 +144,45 @@ function diskCachePath(): string {
 
 function isNonNegativeFinite(value: unknown): value is number {
   return typeof value === 'number' && Number.isFinite(value) && value >= 0;
+}
+
+function validateInputTokenPriceBands(
+  value: unknown,
+): ModelPriceQuote['inputTokenPriceBands'] {
+  if (!Array.isArray(value)) return undefined;
+  const bands: NonNullable<ModelPriceQuote['inputTokenPriceBands']> = [];
+  for (const raw of value.slice(0, 32)) {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) continue;
+    const band = raw as Record<string, unknown>;
+    if (
+      !isNonNegativeFinite(band.minInputTokens) ||
+      (band.maxInputTokens !== undefined &&
+        (!isNonNegativeFinite(band.maxInputTokens) ||
+          band.maxInputTokens <= band.minInputTokens))
+    ) {
+      continue;
+    }
+    const next: NonNullable<ModelPriceQuote['inputTokenPriceBands']>[number] = {
+      minInputTokens: band.minInputTokens,
+      ...(band.maxInputTokens !== undefined
+        ? { maxInputTokens: band.maxInputTokens as number }
+        : {}),
+    };
+    let hasPrice = false;
+    for (const field of [
+      'inputPerMtok',
+      'outputPerMtok',
+      'cacheReadPerMtok',
+      'cacheCreatePerMtok',
+    ] as const) {
+      if (isNonNegativeFinite(band[field])) {
+        next[field] = band[field];
+        hasPrice = true;
+      }
+    }
+    if (hasPrice) bands.push(next);
+  }
+  return bands.length > 0 ? bands : undefined;
 }
 
 function validateQuote(
@@ -144,6 +218,10 @@ function validateQuote(
   if (isNonNegativeFinite(quote.cacheCreatePerMtok)) {
     next.cacheCreatePerMtok = quote.cacheCreatePerMtok;
   }
+  const inputTokenPriceBands = validateInputTokenPriceBands(quote.inputTokenPriceBands);
+  if (inputTokenPriceBands) {
+    next.inputTokenPriceBands = inputTokenPriceBands;
+  }
   if (
     typeof quote.costDiscount === 'number' &&
     Number.isFinite(quote.costDiscount) &&
@@ -151,6 +229,10 @@ function validateQuote(
     quote.costDiscount <= 1
   ) {
     next.costDiscount = quote.costDiscount;
+  }
+  // 必须跨磁盘往返保留:丢了它,重启后用同一份缓存算出的金额会重新冒充精确账单。
+  if (quote.currencyInferred === true) {
+    next.currencyInferred = true;
   }
   return next;
 }
@@ -233,6 +315,8 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
       gatewayAccountCurrency = raw.accountCurrency;
       gatewayAccountCurrencyScope = scope;
       setActiveLedgerCurrency(raw.accountCurrency);
+      activeLedgerCurrencySnapshot = currentLedgerCurrency();
+      rememberAccountCurrency(getCurrentDbClientUserId(), raw.accountCurrency);
       log.debug(`hydrated model pricing cache: ${Object.keys(pricing.xd ?? {}).length} XD quotes`);
       return pricing;
     } catch (err) {
@@ -264,6 +348,23 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
   }
 }
 
+function effectivePricingCatalog(gatewayPricing: ModelPricingCatalog | null): ModelPricingCatalog {
+  const registry = getActiveCatalog().modelRegistry;
+  const reference = registryPricingCatalog(registry);
+  return applyModelPriceOverrides(
+    {
+      ...reference,
+      ...(gatewayPricing?.xd ? { xd: gatewayPricing.xd } : {}),
+    },
+    registry,
+  );
+}
+
+export function broadcastEffectiveModelPricing(): void {
+  const scope = currentScope();
+  broadcastPricing(effectivePricingCatalog(cacheScope === scope ? cache : null));
+}
+
 /**
  * 与模型同步同快照更新 XD quote。models 非空但没有标准 input/output 价格时，
  * 价格投影会被清空，不复活旧模型价格。
@@ -277,18 +378,38 @@ export function replaceGatewayModelPricing(
   // therefore passes the authenticated user captured when the request starts,
   // so a valid startup snapshot is never persisted under `anonymous`.
   const scope = currentScope(authenticatedUserId);
-  const pricing = gatewayPricingCatalog(models, CURRENT_CINDY_REGION);
-  cache = pricing;
-  cacheScope = scope;
-  cacheAt = Date.now();
+  // 账号边界判定必须先于下面的 setActiveLedgerCurrency：切号后新账号的目录若没声明
+  // 币种，回退链不能继续沿用上一个账号的结算币种。
+  noteActiveAccount(authenticatedUserId ?? getCurrentDbClientUserId());
   gatewayAccountCurrency = resolveGatewayAccountCurrency(models);
   gatewayAccountCurrencyScope = scope;
   // 账本写入层据此判断"这一笔是不是本账号的结算币种"。目录为空(登出 / clear)或混合
-  // 币种时 resolveGatewayAccountCurrency 返回 null，账本随之回落构建默认值。
+  // 币种时返回 null，账本回退到「上次已知 → USD」，绝不按区域猜。
+  //
+  // 顺序要紧：先落 active，下面的 catalog 兜底才能读到本次刚确认的币种；本次没确认时
+  // currentLedgerCurrency() 给出的也是上次已知值，而不是区域默认值。
   setActiveLedgerCurrency(gatewayAccountCurrency);
+  const previousLedgerCurrency = activeLedgerCurrencySnapshot;
+  activeLedgerCurrencySnapshot = currentLedgerCurrency();
+  if (previousLedgerCurrency && previousLedgerCurrency !== activeLedgerCurrencySnapshot) {
+    // 账本币种切换会改变后续每一笔的记账口径，也是历史上账本被覆盖的触发点。
+    // 它必须在默认日志级别可见 —— 此前只有 debug，10 次翻转在日志里一个字都没留下。
+    log.warn(
+      `ledger currency changed: ${previousLedgerCurrency} -> ${activeLedgerCurrencySnapshot}` +
+        `${gatewayAccountCurrency ? '' : ' (gateway declared none; using last known)'}`,
+    );
+  }
+  rememberAccountCurrency(
+    authenticatedUserId ?? getCurrentDbClientUserId(),
+    gatewayAccountCurrency,
+  );
+  const pricing = gatewayPricingCatalog(models, activeLedgerCurrencySnapshot);
+  cache = pricing;
+  cacheScope = scope;
+  cacheAt = Date.now();
   hydratedScopes.add(scope);
   void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt);
-  broadcastPricing(pricing);
+  broadcastPricing(effectivePricingCatalog(pricing));
   return pricing;
 }
 
@@ -314,8 +435,8 @@ export function isModelPricingRefreshInFlight(): boolean {
 
 export async function getModelPricing(): Promise<ModelPricingCatalog | null> {
   const scope = currentScope();
-  if (cacheScope === scope) return cache;
-  return hydrateFromDisk(scope);
+  const gatewayPricing = cacheScope === scope ? cache : await hydrateFromDisk(scope);
+  return effectivePricingCatalog(gatewayPricing);
 }
 
 /**
@@ -373,24 +494,148 @@ export async function getModelPricingForModel(
   return pricing;
 }
 
+/**
+ * Codex 订阅轮的估算价,按显式来源 provider 取该 provider 的 registry 参考价
+ * (含用户价格覆盖)。openai 之外的订阅来源(如内置 anthropic 的 Claude.ai 订阅)
+ * 也走各自的日期定价路由,不能一律套 OpenAI 价表。
+ */
+export function getCodexProviderSubscriptionValuePrice(
+  providerId: string,
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const effective = getModelPriceQuote(pricing, providerId, modelId, 'codex');
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 目录里烘焙的 user-override 是按当前日期合并的;历史窗口跨过参考价生效边界时,
+    // 未覆盖字段必须按 at 时点的参考价重新合并,不能直接回用当前合并结果。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId, agent: 'codex', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          providerId,
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'codex', at },
+        ),
+        overrides,
+      ) ?? effective
+    );
+  }
+  const reference = providerReferencePriceQuote(
+    providerId,
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'codex', at },
+  );
+  return reference ?? (at === undefined ? effective : undefined);
+}
+
 export function getCodexSubscriptionValuePrice(
   modelId: string,
   pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
 ): ModelPriceQuote | undefined {
-  return getModelPriceQuote(pricing, 'openai', modelId);
+  return getCodexProviderSubscriptionValuePrice('openai', modelId, pricing, at, overrides);
 }
 
-export function getSubscriptionDirectValuePrice(modelId: string): ModelPriceQuote | undefined {
-  return subscriptionDirectPriceQuote(modelId);
+export function getClaudeSubscriptionValuePrice(
+  modelId: string,
+  pricing: ModelPricingCatalog | null | undefined,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
+  if (effective?.source === 'user-override') {
+    if (at === undefined) return effective;
+    // 同 getCodexSubscriptionValuePrice:历史估值按 at 时点参考价重新合并稀疏覆盖。
+    return (
+      mergeStoredModelPriceOverride(
+        { providerId: 'anthropic', agent: 'claude-code', modelId: effective.modelId },
+        providerReferencePriceQuote(
+          'anthropic',
+          effective.modelId,
+          getActiveCatalog().modelRegistry,
+          { agent: 'claude-code', at },
+        ),
+        overrides,
+      ) ?? effective
+    );
+  }
+  const reference = providerReferencePriceQuote(
+    'anthropic',
+    modelId,
+    getActiveCatalog().modelRegistry,
+    { agent: 'claude-code', at },
+  );
+  return reference ?? (at === undefined ? effective : undefined);
 }
 
-/** 启动只读磁盘快照；真正的新价格仍由 /models 同步整体替换。 */
+export function getSubscriptionDirectValuePrice(
+  modelId: string,
+  agent?: 'claude-code' | 'codex',
+  pricing?: ModelPricingCatalog | null,
+  at?: string | Date,
+  overrides?: ModelPriceOverridesSnapshot,
+): ModelPriceQuote | undefined {
+  const registry = getActiveCatalog().modelRegistry;
+  const fallback = subscriptionDirectPriceQuote(
+    modelId,
+    registry,
+    agent,
+    at,
+  );
+  const routingQuote = fallback ?? subscriptionDirectPriceQuote(modelId, registry, agent);
+  if (!routingQuote) return undefined;
+  const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
+  const quote =
+    effective?.source === 'user-override'
+      ? at === undefined || agent === undefined
+        ? effective
+        : // 同上:历史窗口内的订阅直连估值也要按 at 时点参考价重新合并稀疏覆盖。
+          (mergeStoredModelPriceOverride(
+            { providerId: effective.providerId, agent, modelId: effective.modelId },
+            providerReferencePriceQuote(effective.providerId, effective.modelId, registry, {
+              agent,
+              at,
+            }),
+            overrides,
+          ) ?? effective)
+      : fallback;
+  if (!quote) return undefined;
+  return {
+    ...quote,
+    modelId,
+    source:
+      quote.source === 'provider-reference' ? 'subscription-reference' : quote.source,
+  };
+}
+
+/**
+ * 启动只读磁盘快照；真正的新价格仍由 /models 同步整体替换。
+ *
+ * 先恢复账号币种再读报价快照：币种的持久化不跟报价缓存共享 scope(见
+ * accountCurrencyStore)，凭证轮换或端点变化让报价快照作废时，币种仍然取得回来 ——
+ * 这样 /models 回来之前的那几轮记账不会落到兜底币种上。
+ */
 export async function prewarmModelPricing(): Promise<void> {
+  try {
+    await hydrateAccountCurrency();
+  } catch (err) {
+    log.debug(
+      'hydrate account currency failed:',
+      err instanceof Error ? err.message : String(err),
+    );
+  }
   try {
     await getModelPricing();
   } catch (err) {
     log.debug('prewarm model pricing failed:', err instanceof Error ? err.message : String(err));
   }
+  activeLedgerCurrencySnapshot = currentLedgerCurrency();
 }
 
 export function __resetModelPricingCacheForTesting(): void {
@@ -400,6 +645,7 @@ export function __resetModelPricingCacheForTesting(): void {
   modelSyncInflight = null;
   gatewayAccountCurrency = null;
   gatewayAccountCurrencyScope = null;
+  activeLedgerCurrencySnapshot = null;
   hydratedScopes.clear();
   hydrateInflightByScope.clear();
 }

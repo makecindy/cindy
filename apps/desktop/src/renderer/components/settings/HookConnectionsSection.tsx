@@ -64,6 +64,11 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import {
+  TelegramBehaviorSettings,
+  TelegramGroupActivationSettings,
+} from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
 type CindyImCard = 'slack' | 'telegram' | 'x';
@@ -304,12 +309,33 @@ export function HookConnectionsSection() {
     [applyView, t],
   );
 
+  /**
+   * X 的默认工作目录写入。
+   *
+   * 只有 X 有这个控件: Slack / Telegram 能在会话里当场挑目录, X 一次交互只允许
+   * 回一条公开推文, 没有承载选择面板的位置 —— 不预设的话所有任务都只能落在
+   * 「对话」上, 碰不到本地仓库。
+   */
+  const setXDefaultWorkspace = useCallback(
+    async (alias: string | null) => {
+      try {
+        const requestedAtRevision = ++viewRevisionRef.current;
+        const res = await window.electronAPI.hookControl.setXDefaultWorkspace(alias);
+        if (viewRevisionRef.current === requestedAtRevision) applyView(res.hook);
+      } catch (err) {
+        toast.error(
+          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.saveFailed'),
+        );
+      }
+    },
+    [applyView, t],
+  );
+
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
-      runHookAction(
-        () => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled),
-        { localizedErrorOnly: true },
-      );
+      runHookAction(() => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled), {
+        localizedErrorOnly: true,
+      });
     },
     [runHookAction],
   );
@@ -475,11 +501,13 @@ export function HookConnectionsSection() {
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
   ) => {
-    void window.electronAPI.hookControl.openProviderAction(provider, action).catch((err: unknown) => {
-      toast.error(
-        extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
-      );
-    });
+    void window.electronAPI.hookControl
+      .openProviderAction(provider, action)
+      .catch((err: unknown) => {
+        toast.error(
+          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
+        );
+      });
   };
 
   const handleCopyProviderLink = async (provider: NeutralCardProvider) => {
@@ -637,11 +665,9 @@ export function HookConnectionsSection() {
     // A configured endpoint is the rollout gate. Capability negotiation starts
     // only after the user enables the provider, so the disabled card cannot
     // depend on an already-received welcome to become discoverable.
-    const visible =
-      view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
+    const visible = view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
     const confirmed = state === 'confirmed';
-    const inProgress =
-      view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
+    const inProgress = view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
     const canStartLink =
       state === 'none' ||
       ((state === 'failed' ||
@@ -660,7 +686,10 @@ export function HookConnectionsSection() {
       : view.status === 'error'
         ? { tone: 'error', label: t('settings.remoteControl.hook.status.error') }
         : view.capabilityPending
-          ? { tone: 'progress', label: t(`settings.remoteControl.hook.${provider}.status.checking`) }
+          ? {
+              tone: 'progress',
+              label: t(`settings.remoteControl.hook.${provider}.status.checking`),
+            }
           : !view.available
             ? {
                 tone: 'attention',
@@ -684,7 +713,19 @@ export function HookConnectionsSection() {
       view.lastError === 'not logged in'
         ? t('settings.remoteControl.hook.loginRequired')
         : view.lastError;
-    return { binding, actions, state, visible, confirmed, inProgress, canStartLink, toggleChecked, badge, bindingLine, errorText };
+    return {
+      binding,
+      actions,
+      state,
+      visible,
+      confirmed,
+      inProgress,
+      canStartLink,
+      toggleChecked,
+      badge,
+      bindingLine,
+      errorText,
+    };
   };
   const workdirCount = Object.keys(hook.workspaces).length;
   const hasActiveSlackBinding = multiUi
@@ -701,6 +742,8 @@ export function HookConnectionsSection() {
   const renderWorkdirSection = (
     prefsState: ReturnType<typeof useHookWorkspacePrefs>,
     chatMaxVisibleModelRows?: number,
+    /** 非空 = 该卡显示「默认目录」选择器(目前只有 X 传)。 */
+    defaultWorkspace?: { value: string | null },
   ) => (
     <>
       <div className="h-px w-full bg-[var(--border-default)]" />
@@ -735,6 +778,33 @@ export function HookConnectionsSection() {
                     onClick={() => prefsState.selectTeam(tm.teamId)}
                   >
                     {tm.teamName ?? tm.teamId}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          ) : null}
+          {/* X 专属: 默认工作目录。X 一条推文里没有目录选择面板的位置, 不预设
+              就只能永远落在「对话」上、碰不到本地仓库(见 setXDefaultWorkspace)。 */}
+          {defaultWorkspace ? (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                aria-label={t('settings.remoteControl.hook.form.defaultWorkspaceAria')}
+                className="flex shrink-0 items-center gap-1 rounded-full bg-[var(--surface-chip)] px-2.5 py-1 text-11 text-[var(--text-secondary)] outline-none transition-colors hover:text-[var(--text-primary)]"
+              >
+                <span className="max-w-40 truncate">
+                  {t('settings.remoteControl.hook.form.defaultWorkspaceChip', {
+                    name: defaultWorkspace.value ?? t('settings.tina.chat.title'),
+                  })}
+                </span>
+                <ChevronDown size={12} />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={() => void setXDefaultWorkspace(null)}>
+                  {t('settings.tina.chat.title')}
+                </DropdownMenuItem>
+                {Object.keys(hook.workspaces).map((alias) => (
+                  <DropdownMenuItem key={alias} onClick={() => void setXDefaultWorkspace(alias)}>
+                    {alias}
                   </DropdownMenuItem>
                 ))}
               </DropdownMenuContent>
@@ -974,12 +1044,37 @@ export function HookConnectionsSection() {
           ) : null}
 
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
-          {view.enabled ? renderWorkdirSection(prefsState) : null}
+          {view.enabled
+            ? renderWorkdirSection(
+                prefsState,
+                undefined,
+                provider === 'x' ? { value: view.defaultWorkspace } : undefined,
+              )
+            : null}
+          {provider === 'telegram' && cs.confirmed ? (
+            <div
+              key={cs.binding?.bindingId ?? 'telegram-unbound'}
+              className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
+            >
+              <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
+              {view.behaviorAvailable === true ? (
+                <>
+                  <TelegramBehaviorSettings
+                    source="official"
+                    bindingId={cs.binding?.bindingId ?? undefined}
+                  />
+                  <TelegramGroupActivationSettings
+                    source="official"
+                    bindingId={cs.binding?.bindingId ?? undefined}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </ImChannelSettingsCard>
     );
   };
-
 
   return (
     <div className="flex flex-col gap-3">

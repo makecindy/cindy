@@ -210,24 +210,51 @@ function providers(): ProviderView[] {
       models: { codex: [model('gpt-5.5')] },
       connected: false,
     },
+    {
+      id: 'pi-native',
+      name: 'pi-native',
+      agents: ['pi'],
+      routing: { pi: {} },
+      models: { pi: [model('pi-model')] },
+      connected: true,
+      access: { kind: 'api' },
+    },
   ] as ProviderView[];
 }
 
 const SCENARIO = {
   agentKind: 'claude-code' as AgentKind,
-  modelFor: (agent: AgentKind) => (agent === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6'),
+  modelFor: (agent: AgentKind) =>
+    agent === 'codex' ? 'gpt-5.5' : agent === 'pi' ? 'pi-model' : 'claude-sonnet-4-6',
   noEffortFallback: undefined,
   permissionMode: 'bypassPermissions',
 };
 
 const PERM_MODES = (agent: AgentKind): readonly string[] =>
-  agent === 'codex' ? ['ask', 'auto', 'bypassPermissions'] : ['ask', 'acceptEdits', 'auto', 'bypassPermissions'];
+  agent === 'claude-code'
+    ? ['ask', 'acceptEdits', 'auto', 'bypassPermissions']
+    : ['ask', 'auto', 'bypassPermissions'];
 
 function ctx(over: Partial<InvocationCatalogContext> = {}): InvocationCatalogContext {
   return { providers: providers(), getPermissionModes: PERM_MODES, ...over };
 }
 
 describe('resolveModelInvocation — 六元组回落链', () => {
+  it('keeps an explicit Pi invocation instead of falling back to the scenario agent', () => {
+    const r = resolveModelInvocation(
+      { agentKind: 'pi', model: 'pi-model', permissionMode: 'auto' },
+      SCENARIO,
+      ctx(),
+    );
+    expect(r).toMatchObject({
+      agentKind: 'pi',
+      model: 'pi-model',
+      providerId: null,
+      permissionMode: 'auto',
+    });
+    expect(r.fallbacksApplied).not.toContain('agent:scenario-default');
+  });
+
   it('全显式且全可用 → 原样直传,零回落', () => {
     const r = resolveModelInvocation(
       {

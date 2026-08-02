@@ -16,6 +16,20 @@ import {
   pickVoiceInputDialogCopy,
   sourceReadyFromProviderList,
 } from '@/hooks/useVendorAuthGate';
+import { readinessFromBinaryStatus } from '@/hooks/useVendorReadiness';
+
+describe('readinessFromBinaryStatus（本地运行时就绪推导）', () => {
+  it('Codex 与 Pi 缺少本地二进制时都返回 binary-missing', () => {
+    expect(readinessFromBinaryStatus('codex', false)).toBe('binary-missing');
+    expect(readinessFromBinaryStatus('pi', false)).toBe('binary-missing');
+  });
+
+  it('Claude 不依赖该二进制轴，已就绪时不产生覆盖状态', () => {
+    expect(readinessFromBinaryStatus('cc', false)).toBeNull();
+    expect(readinessFromBinaryStatus('codex', true)).toBeNull();
+    expect(readinessFromBinaryStatus('pi', true)).toBeNull();
+  });
+});
 
 describe('deriveRemoteReadiness（被控端就绪推导）', () => {
   it('sourceReady 可用时是唯一真相(cc / codex 同构),authReady 不参与', () => {
@@ -64,6 +78,12 @@ describe('deriveRemoteReadiness（被控端就绪推导）', () => {
     expect(
       deriveRemoteReadiness('codex', { binaryReady: null, sourceReady: true, authReady: null }),
     ).toBe('ready');
+  });
+
+  it('pi:binaryReady=false 报组件缺失,不伪装成未授权', () => {
+    expect(
+      deriveRemoteReadiness('pi', { binaryReady: false, sourceReady: true, authReady: true }),
+    ).toBe('binary-missing');
   });
 
   it('cc:binary 随包,binaryReady 不参与判定', () => {
@@ -118,6 +138,7 @@ describe('pickVoiceInputDialogCopy（语音输入缺认证文案）', () => {
     'voice-direct-api-key-unauth': { title: 'direct-key', description: '', confirmText: '', cancelText: '', settingsTab: 'api-keys' },
     'codex-voice-unauth': { title: 'codex', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
     'codex-binary-missing': { title: 'binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
+    'pi-binary-missing': { title: 'pi-binary', description: '', confirmText: '', cancelText: '', settingsTab: 'providers' },
   };
 
   it('api-key + providers 使用 XD Gateway 文案', () => {
