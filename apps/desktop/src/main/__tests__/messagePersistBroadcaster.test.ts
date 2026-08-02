@@ -57,7 +57,9 @@ import {
   resetTurnPersistState,
   clearSessionPersistState,
   consumeLastAssistantPersistId,
+  consumeLastTopLevelAssistantPersistId,
   markAssistantTurnCompleted,
+  markAssistantTurnFailed,
   noteSessionClearBoundary,
   noteSessionAgentKind,
   enqueueDurableWrite,
@@ -832,6 +834,28 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(consumeLastAssistantPersistId(SESSION)).toBe(last);
   });
 
+  it('Subagent 文本最后落库时，usage 仍取最后一条但 title seal 锁定最后一条顶层 Assistant', () => {
+    const topLevel = onAssistantTextEvent(
+      SESSION,
+      { text: '顶层正式答复', isFinal: true },
+      { uuid: 'top-level' },
+    );
+    onToolUseEvent(
+      SESSION,
+      { toolUseId: 'toolu_subagent', toolName: 'Agent', input: {} },
+      null,
+    );
+    const subagent = onAssistantTextEvent(
+      SESSION,
+      { text: 'Subagent 内部文本', isFinal: true },
+      { uuid: 'subagent', parentUuid: 'toolu_subagent' },
+    );
+
+    expect(consumeLastAssistantPersistId(SESSION)).toBe(subagent);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBe(topLevel);
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBeUndefined();
+  });
+
   it('无 assistant 文本(纯 tool 轮)→ undefined', () => {
     onToolUseEvent(SESSION, { toolUseId: 'tu_only', toolName: 'Bash', input: {} }, null);
     expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
@@ -841,6 +865,7 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     onAssistantTextEvent(SESSION, { text: 'gone', isFinal: true }, null);
     clearSessionPersistState(SESSION);
     expect(consumeLastAssistantPersistId(SESSION)).toBeUndefined();
+    expect(consumeLastTopLevelAssistantPersistId(SESSION)).toBeUndefined();
   });
 
   it('done seal 以 durable patch 落库', async () => {
@@ -853,8 +878,19 @@ describe('consumeLastAssistantPersistId(per-turn 费用挂载的目标消息追�
     expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-final');
   });
 
+  it('terminal error seal 以 durable patch 写 false', async () => {
+    await expect(markAssistantTurnFailed(SESSION, 'assistant-failed')).resolves.toBe(true);
+    expect(patchMessageAgentMetaWithResult).toHaveBeenCalledWith(
+      SESSION,
+      'assistant-failed',
+      { turnCompleted: false },
+    );
+    expect(broadcastMessageAgentMetaUpdate).toHaveBeenCalledWith(SESSION, 'assistant-failed');
+  });
+
   it('纯 tool turn 没有 assistant 时不写 seal', async () => {
     await expect(markAssistantTurnCompleted(SESSION, undefined)).resolves.toBe(false);
+    await expect(markAssistantTurnFailed(SESSION, undefined)).resolves.toBe(false);
     expect(patchMessageAgentMetaWithResult).not.toHaveBeenCalled();
   });
 });

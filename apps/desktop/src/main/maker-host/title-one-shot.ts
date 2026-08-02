@@ -51,6 +51,7 @@ import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { validateTitleOutput } from './title-output-validation.js';
 
 const log = createLogger('maker-host:title-one-shot');
 
@@ -58,6 +59,8 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
+const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
  * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
  * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
@@ -90,9 +93,7 @@ export interface TitleOneShotDeps {
   /** 某 agent 下已连接的供应商视图列表(实时连接态)。用于无显式选择时取 WYSIWYG 默认。 */
   listConnectedProviders?: (agentKind: AgentKind) => Promise<ProviderView[]>;
   readAnthropicOAuth?: () =>
-    | Promise<{ accessToken: string } | null>
-    | { accessToken: string }
-    | null;
+    Promise<{ accessToken: string } | null> | { accessToken: string } | null;
   readCodexCreds?: () => { accessToken: string; accountId: string } | null;
   readGatewayKey?: () => string | null;
 }
@@ -116,7 +117,6 @@ function lowestEffort(efforts: Effort[]): Effort | null {
 function trimTrailingSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
-
 
 /** 在 provider 的所有 agent 模型清单里查某 model id 的目录条目(用于取 efforts)。 */
 function findCatalogModel(provider: Provider, modelId: string) {
@@ -172,7 +172,13 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
       // 就绪(空串)时返回 null,回落启发式起名。
       const base = effectiveXdGatewayBaseUrl().trim();
       return base
-        ? { providerId, model, effort, wire: 'gateway-chat', upstream: `${trimTrailingSlash(base)}/v1` }
+        ? {
+            providerId,
+            model,
+            effort,
+            wire: 'gateway-chat',
+            upstream: `${trimTrailingSlash(base)}/v1`,
+          }
         : null;
     }
     default:
@@ -436,7 +442,14 @@ export async function generateTitleViaProvider(
           return null;
         }
         if (!canDispatchNow('after-credential-refresh')) return null;
-        text = await fetchAnthropicTitle(target.upstream, target.model, args.prompt, oauth.accessToken, fetchImpl, controller.signal);
+        text = await fetchAnthropicTitle(
+          target.upstream,
+          target.model,
+          args.prompt,
+          oauth.accessToken,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
       case 'codex-responses': {
@@ -446,7 +459,15 @@ export async function generateTitleViaProvider(
           return null;
         }
         if (!canDispatchNow('after-credential-read')) return null;
-        text = await fetchCodexTitle(target.upstream, target.model, target.effort, args.prompt, creds, fetchImpl, controller.signal);
+        text = await fetchCodexTitle(
+          target.upstream,
+          target.model,
+          target.effort,
+          args.prompt,
+          creds,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
       case 'gateway-chat': {
@@ -456,19 +477,40 @@ export async function generateTitleViaProvider(
           return null;
         }
         if (!canDispatchNow('after-credential-read')) return null;
-        text = await fetchGatewayTitle(target.upstream, target.model, args.prompt, key, fetchImpl, controller.signal);
+        text = await fetchGatewayTitle(
+          target.upstream,
+          target.model,
+          args.prompt,
+          key,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
     }
-    const title = text.trim().slice(0, 40);
+    // The prompt is advisory; never persist a transcript continuation, role-labelled
+    // response, Markdown wrapper, or multiline answer. Validate the complete response
+    // before applying the historical 40-character auto-title truncation, so a bad suffix
+    // cannot hide beyond the slice boundary.
+    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
+    const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
+    if (!title) {
+      log.warn('title oneShot rejected invalid model output', {
+        providerId,
+        model: target.model,
+        wire: target.wire,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return null;
+    }
     log.info('title oneShot done', {
       providerId,
       model: target.model,
       wire: target.wire,
       elapsedMs: Date.now() - startedAt,
-      chars: title.length,
+      chars: Array.from(title).length,
     });
-    return title || null;
+    return title;
   } catch (err) {
     log.warn('title oneShot failed (swallowed)', {
       providerId,

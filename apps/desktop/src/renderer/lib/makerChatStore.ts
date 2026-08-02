@@ -1215,6 +1215,87 @@ const lightSnapshotCache = new Map<string, SessionChatLightState>();
  */
 const globalListeners = new Set<() => void>();
 
+// 工具事件风暴时仍同步写入权威 state，但把 React/sidebar 订阅通知压成每会话每帧一次。
+// Stop、terminal、interaction 等控制路径会取消该会话的待发通知并立即广播最新快照。
+const HIGH_FREQUENCY_NOTIFY_INTERVAL_MS = 32;
+const HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK = 8;
+const pendingDeferredStateNotifications = new Set<string>();
+const pendingMessageCreatedPatches = new Map<string, string>();
+let deferredStateNotificationTimer: ReturnType<typeof setTimeout> | null = null;
+
+function hasDeferredStateWork(): boolean {
+  return pendingDeferredStateNotifications.size > 0 || pendingMessageCreatedPatches.size > 0;
+}
+
+function clearDeferredStateNotificationTimer(): void {
+  if (!deferredStateNotificationTimer) return;
+  clearTimeout(deferredStateNotificationTimer);
+  deferredStateNotificationTimer = null;
+}
+
+function scheduleDeferredStateNotifications(): void {
+  if (deferredStateNotificationTimer) return;
+  deferredStateNotificationTimer = setTimeout(
+    flushDeferredStateNotifications,
+    HIGH_FREQUENCY_NOTIFY_INTERVAL_MS,
+  );
+}
+
+function emitStateNotifications(sessionId: string): void {
+  listeners.get(sessionId)?.forEach((cb) => {
+    cb();
+  });
+}
+
+function flushPendingMessageCreatedPatch(sessionId: string): void {
+  const updatedAt = pendingMessageCreatedPatches.get(sessionId);
+  if (!updatedAt) return;
+  pendingMessageCreatedPatches.delete(sessionId);
+  emitPatch(sessionId, { updatedAt });
+}
+
+function flushDeferredStateNotifications(): void {
+  deferredStateNotificationTimer = null;
+  const sessionIds = [
+    ...new Set([
+      ...pendingDeferredStateNotifications,
+      ...pendingMessageCreatedPatches.keys(),
+    ]),
+  ].slice(0, HIGH_FREQUENCY_NOTIFY_MAX_SESSIONS_PER_TICK);
+  let stateChanged = false;
+  for (const sessionId of sessionIds) {
+    if (pendingDeferredStateNotifications.delete(sessionId)) {
+      stateChanged = true;
+      emitStateNotifications(sessionId);
+    }
+  }
+  if (stateChanged) {
+    globalListeners.forEach((cb) => {
+      cb();
+    });
+  }
+  for (const sessionId of sessionIds) flushPendingMessageCreatedPatch(sessionId);
+  if (hasDeferredStateWork()) scheduleDeferredStateNotifications();
+}
+
+function queueDeferredStateNotification(sessionId: string): void {
+  pendingDeferredStateNotifications.add(sessionId);
+  scheduleDeferredStateNotifications();
+}
+
+function queueMessageCreatedPatch(sessionId: string, updatedAt: string): void {
+  pendingMessageCreatedPatches.set(sessionId, updatedAt);
+  // patch 也进入同一个 FIFO session 集合。否则 Map-only 的 no-op DB echo 会永远排在
+  // 持续活跃的前 8 个 state session 之后，slice 上限会让 sidebar patch 饥饿。
+  queueDeferredStateNotification(sessionId);
+}
+
+function discardDeferredStateWork(sessionId: string): void {
+  pendingDeferredStateNotifications.delete(sessionId);
+  pendingMessageCreatedPatches.delete(sessionId);
+  if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
+}
+
 /**
  * Per-session onTitleUpdate callback. Registered lazily by `useCCAgentChat`
  * and invoked on `done` / sendMessage (auto-naming, sidebar refresh). We keep
@@ -1299,6 +1380,7 @@ function isBeforeOrAtRendererClearBoundary(sessionId: string, createdAt: string)
  */
 function _purgeSession(sessionId: string): void {
   discardPendingTextDelta(sessionId);
+  discardDeferredStateWork(sessionId);
   clearIssueConfirmDraftsForSession(sessionId);
   // 代际递增(bump 而非 delete,原因见 _messagesEpoch 注释):作废 in-flight 翻页,
   // 避免其提交把旧窗口 merge 进 purge 后重建的空 slice。
@@ -1539,7 +1621,11 @@ function getOrCreateState(sessionId: string): SessionChatState {
   return state;
 }
 
-function setState(sessionId: string, updater: (prev: SessionChatState) => SessionChatState): void {
+function setState(
+  sessionId: string,
+  updater: (prev: SessionChatState) => SessionChatState,
+  opts: { deferNotification?: boolean } = {},
+): void {
   const prev = getOrCreateState(sessionId);
   const next = updater(prev);
   if (next === prev) return;
@@ -1551,19 +1637,25 @@ function setState(sessionId: string, updater: (prev: SessionChatState) => Sessio
   // running-status 快照缓存失效(getRunningSnapshot 纯 getter 契约:只有
   // mutation 才允许让下一次读重算)。必须在 notify 之前置位。
   markStatusSnapshotDirty();
-  listeners.get(sessionId)?.forEach((cb) => {
-    cb();
-  });
+  if (opts.deferNotification) {
+    queueDeferredStateNotification(sessionId);
+    return;
+  }
+  // 控制事件优先：当前通知已经包含此前同步写入的所有高频状态，撤掉迟到批次。
+  pendingDeferredStateNotifications.delete(sessionId);
+  if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
+  emitStateNotifications(sessionId);
   // F-SB-7: notify global listeners so Sidebar can track all sessions
   globalListeners.forEach((cb) => {
     cb();
   });
+  // messages:created 的侧栏时间戳与 chat state 保持原有先后：先通知消息，再 patch 列表。
+  flushPendingMessageCreatedPatch(sessionId);
+  if (!hasDeferredStateWork()) clearDeferredStateNotificationTimer();
 }
 
 function notify(sessionId: string): void {
-  listeners.get(sessionId)?.forEach((cb) => {
-    cb();
-  });
+  emitStateNotifications(sessionId);
 }
 
 /**
@@ -3386,11 +3478,24 @@ function isTextDeltaEvent(event: NonNullable<MakerEventPayload>['event']): boole
   return data?.isFinal === false && typeof data.text === 'string';
 }
 
+function isHighFrequencyStreamEvent(
+  event: NonNullable<MakerEventPayload>['event'],
+): boolean {
+  return (
+    !!event &&
+    (event.type === 'tool_use' ||
+      event.type === 'tool_result' ||
+      event.type === 'tool_result_full' ||
+      event.type === 'thinking')
+  );
+}
+
 function dispatchStreamEventPayload(
   sessionId: string,
   event: NonNullable<MakerEventPayload>['event'],
   persistId?: string,
   resolvedContent?: string,
+  deferNotification = false,
 ): void {
   if (!event) return;
   const streamEvent = {
@@ -3403,7 +3508,7 @@ function dispatchStreamEventPayload(
     resolvedContent,
   } as CCAgentStreamEvent;
   supersedeInputProjectionOnTerminalEvent(sessionId, streamEvent);
-  setState(sessionId, (s) => handleStreamEvent(s, streamEvent));
+  setState(sessionId, (s) => handleStreamEvent(s, streamEvent), { deferNotification });
 }
 
 function clearTextDeltaFlushTimer(): void {
@@ -3417,7 +3522,7 @@ function discardPendingTextDelta(sessionId: string): void {
   if (pendingTextDeltaBatches.size === 0) clearTextDeltaFlushTimer();
 }
 
-function flushPendingTextDelta(sessionId: string): void {
+function flushPendingTextDelta(sessionId: string, deferNotification = false): void {
   const pending = pendingTextDeltaBatches.get(sessionId);
   if (!pending) return;
   pendingTextDeltaBatches.delete(sessionId);
@@ -3432,6 +3537,8 @@ function flushPendingTextDelta(sessionId: string): void {
       ...(pending.agentMeta ? { agentMeta: pending.agentMeta } : {}),
     },
     pending.persistId,
+    undefined,
+    deferNotification,
   );
 }
 
@@ -3718,7 +3825,8 @@ function initGlobalListeners(): void {
       enqueueTextDeltaPayload(sessionId, event, persistId);
       return;
     }
-    flushPendingTextDelta(sessionId);
+    const deferNotification = isHighFrequencyStreamEvent(event);
+    flushPendingTextDelta(sessionId, deferNotification);
 
     // session_id: 老链路是单独 IPC channel, 新链路融进 maker:event (Claude / Codex 同源)
     if (event.type === 'session_id') {
@@ -3893,7 +4001,13 @@ function initGlobalListeners(): void {
       }
     }
 
-    dispatchStreamEventPayload(sessionId, event, persistId, resolvedContent);
+    dispatchStreamEventPayload(
+      sessionId,
+      event,
+      persistId,
+      resolvedContent,
+      deferNotification,
+    );
 
     // done / error 副作用 (从老 stream listener 搬过来)
     if (event.type === 'done') {
@@ -4199,30 +4313,62 @@ function initGlobalListeners(): void {
     if (isBeforeOrAtRendererClearBoundary(sessionId, message.createdAt)) return;
     const [mapped] = mapServerMessages([message]);
     if (!mapped) return;
-    setState(sessionId, (s) => {
-      const idx = s.messages.findIndex((m) => m.clientId === mapped.clientId);
-      if (idx >= 0) {
-        const nextMessages = mergeMessages([mapped], s.messages, {
+    const current = getOrCreateState(sessionId);
+    const existing = current.messages.find((candidate) => candidate.clientId === mapped.clientId);
+    const isLiveToolEcho =
+      existing?.role === mapped.role &&
+      (mapped.role === 'tool_use' || mapped.role === 'tool_result');
+    // Stop 会乐观置 Idle，但真正的 interrupt 可能还在 IPC 队列里；此时旧 turn 继续喷出的
+    // live tool + DB echo 仍必须走批通知，否则按钮一按下就退化回事故中的逐行 React fan-out。
+    const deferNotification =
+      current.agentStatus.isRunning || current.isStreaming || isLiveToolEcho;
+    setState(
+      sessionId,
+      (s) => {
+        const hydrateOptions = {
           preserveExistingToolResultContent: true,
           preserveExistingCodexPlanContent: true,
-        });
+        } as const;
+        const existingIdx = s.messages.findIndex((m) => m.clientId === mapped.clientId);
+        const existing = existingIdx >= 0 ? s.messages[existingIdx] : undefined;
+        const canHydrateInPlace =
+          existing !== undefined &&
+          existing.role === mapped.role &&
+          (mapped.role === 'tool_use' || mapped.role === 'tool_result');
+        if (canHydrateInPlace) {
+          // live tool 事件先建行、DB onCreated 随后回声是事故现场的绝大多数路径。
+          // 位置已经确定，直接原位 hydrate；旧实现仍调用 mergeMessages，导致每一条
+          // 回声都对不断增长的整段消息重新遍历并排序，1,500+ 行时拖死 Renderer。
+          // 仅限 tool 行：thinking 的 persisted createdAt 会回填块开始时间，必须让
+          // mergeMessages 重排；assistant 等其它角色也保留原有权威时间线语义。
+          const hydrated = hydratePersistedMessage(
+            existing,
+            mapped,
+            hydrateOptions,
+          );
+          if (hydrated === existing) return s;
+          const nextMessages = s.messages.slice();
+          nextMessages[existingIdx] = hydrated;
+          return {
+            ...s,
+            messages: nextMessages,
+            isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
+          };
+        }
+        const nextMessages = mergeMessages([mapped], s.messages, hydrateOptions);
+        if (nextMessages === s.messages) return s;
         return {
           ...s,
           messages: nextMessages,
           isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
         };
-      }
-      return {
-        ...s,
-        messages: mergeMessages([mapped], s.messages, {
-          preserveExistingToolResultContent: true,
-          preserveExistingCodexPlanContent: true,
-        }),
-        isFirstMessage: mapped.role === 'user' ? false : s.isFirstMessage,
-      };
-    });
+      },
+      { deferNotification },
+    );
     // sidebar 排序时间轴 — 让接管路径下新消息也能 bump session 顺序。
-    emitPatch(sessionId, { updatedAt: new Date().toISOString() });
+    const updatedAt = new Date().toISOString();
+    if (deferNotification) queueMessageCreatedPatch(sessionId, updatedAt);
+    else emitPatch(sessionId, { updatedAt });
   }
 
   // 消息本地删除推送:本机多窗口与 device-link 控制端共用同一 reducer。
@@ -4806,6 +4952,9 @@ function __teardownGlobalListeners(): void {
   _stopDemoteTimer();
   clearTextDeltaFlushTimer();
   pendingTextDeltaBatches.clear();
+  clearDeferredStateNotificationTimer();
+  pendingDeferredStateNotifications.clear();
+  pendingMessageCreatedPatches.clear();
   _pendingErrorClearOnLeave.clear();
   // Stage 2 C1: 老的 cc-agent:* fan-out 已退役, __resetCCAgentFanOuts 也跟着删了。
   // 新链路 maker:* fan-out 当前不会泄漏 (initGlobalListeners 顶部 if guard +
@@ -8027,7 +8176,6 @@ function stopSession(
   opts?: { keepQueue?: boolean; pauseQueue?: boolean },
 ): void {
   if (!sessionId) return;
-  flushPendingTextDelta(sessionId);
   const api = makerApiFor(sessionId);
   // Stop 的乐观终态必须立即作废此前同源查询与旧操作；不能等响应回来，
   // 否则旧结果会在 abort 往返期间把刚清掉的 owner 重新写回。先推进再捕获，
@@ -8044,6 +8192,9 @@ function stopSession(
       applyInputProjectionOperationResponse(sessionId, operation, projection);
     })
     .catch((err) => log.warn('maker.input.stop failed:', err));
+  // 控制请求必须先跨过 preload IPC。事故现场积压了 1,500+ 条大体积 tool/DB 事件；
+  // 本地文本与 DB 批次收口即便变慢，也不能把真正的 turn/interrupt 挡在它们后面。
+  flushPendingTextDelta(sessionId);
   setState(sessionId, (s) => {
     const id = s.streamingClientId;
     // F7.6 / FP-3: expire any pending ask_user + plan_review messages on stop

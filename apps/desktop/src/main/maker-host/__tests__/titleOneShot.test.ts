@@ -79,7 +79,10 @@ import { BUNDLED_CATALOG, type Catalog, type ProviderView } from '@cindy/model-p
 
 /** 造一个 fetch 替身:按传入 handler 返回类 Response 对象,并记录调用。 */
 function fakeFetch(
-  handler: (url: string, init: { headers?: Record<string, string>; body?: string }) => {
+  handler: (
+    url: string,
+    init: { headers?: Record<string, string>; body?: string },
+  ) => {
     ok?: boolean;
     status?: number;
     json?: unknown;
@@ -87,7 +90,10 @@ function fakeFetch(
   },
 ) {
   return vi.fn(async (url: unknown, init: unknown) => {
-    const r = handler(String(url), (init ?? {}) as { headers?: Record<string, string>; body?: string });
+    const r = handler(
+      String(url),
+      (init ?? {}) as { headers?: Record<string, string>; body?: string },
+    );
     return {
       ok: r.ok ?? true,
       status: r.status ?? 200,
@@ -99,7 +105,14 @@ function fakeFetch(
 
 /** 造一个最小 ProviderView stub(nativeDefaultSourceId 只用 .id)。 */
 function providerStub(id: string): ProviderView {
-  return { id, connected: true, name: id, agents: ['claude-code', 'codex'], models: {}, routing: {} } as unknown as ProviderView;
+  return {
+    id,
+    connected: true,
+    name: id,
+    agents: ['claude-code', 'codex'],
+    models: {},
+    routing: {},
+  } as unknown as ProviderView;
 }
 
 // ── Provider 解析(WYSIWYG)─────────────────────────────────────────────────
@@ -360,7 +373,9 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
 
 describe('generateTitleViaProvider — anthropic(Messages)', () => {
   it('200 → 解析 content[].text;请求形状正确', async () => {
-    const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: 'TS 编译报错排查' }] } }));
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: 'TS 编译报错排查' }] },
+    }));
     const title = await generateTitleViaProvider(
       { sessionId: 's1', agentKind: 'claude-code', prompt: '为这条消息起标题：编译报错' },
       {
@@ -372,7 +387,10 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     );
     expect(title).toBe('TS 编译报错排查');
     expect(fetchImpl).toHaveBeenCalledTimes(1);
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
+    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+      string,
+      { headers: Record<string, string>; body: string },
+    ];
     expect(url).toBe('https://api.anthropic.com/v1/messages');
     expect(init.headers.authorization).toBe('Bearer atok');
     expect(init.headers['anthropic-beta']).toBe('oauth-2025-04-20');
@@ -380,6 +398,50 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     expect(body.model).toBe('claude-haiku-4-5-20251001'); // 经 toSdkModelString 还原
     expect(body.messages).toEqual([{ role: 'user', content: '为这条消息起标题：编译报错' }]);
     expect(body.system).toBeUndefined(); // 不注入身份段
+  });
+  it('先验证完整响应再按旧契约截到 40 个 Unicode 字符', async () => {
+    const longTitle = '标题'.repeat(30);
+    const fetchImpl = fakeFetch(() => ({ json: { content: [{ type: 'text', text: longTitle }] } }));
+    const title = await generateTitleViaProvider(
+      { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'atok' }),
+      },
+    );
+    expect(title).toBe('标题'.repeat(20));
+  });
+  it('完整响应超过 256 个 Unicode 字符 → 拒绝而不是处理或截断', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '长'.repeat(257) }] },
+    }));
+    const title = await generateTitleViaProvider(
+      { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'atok' }),
+      },
+    );
+    expect(title).toBeNull();
+  });
+  it('响应后半段出现 transcript 标签也拒绝,不能被 40 字截断掩盖', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '正常标题'.padEnd(40, '好') + ' Assistant: 继续' }] },
+    }));
+    const title = await generateTitleViaProvider(
+      { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'atok' }),
+      },
+    );
+    expect(title).toBeNull();
   });
   it('无 OAuth → null,不发请求', async () => {
     const fetchImpl = fakeFetch(() => ({ json: {} }));
@@ -434,7 +496,10 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
       ),
     );
     expect(title).toBe('接力测试');
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
+    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+      string,
+      { headers: Record<string, string>; body: string },
+    ];
     expect(url).toBe('https://chatgpt.com/backend-api/codex/responses');
     expect(init.headers.authorization).toBe('Bearer ctok');
     expect(init.headers['chatgpt-account-id']).toBe('acc-1');
@@ -476,7 +541,9 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确', async () => {
-    const fetchImpl = fakeFetch(() => ({ json: { choices: [{ message: { content: '网关标题' } }] } }));
+    const fetchImpl = fakeFetch(() => ({
+      json: { choices: [{ message: { content: '网关标题' } }] },
+    }));
     const title = await generateTitleViaProvider(
       { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
       {
@@ -487,7 +554,10 @@ describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
       },
     );
     expect(title).toBe('网关标题');
-    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [string, { headers: Record<string, string>; body: string }];
+    const [url, init] = vi.mocked(fetchImpl).mock.calls[0] as [
+      string,
+      { headers: Record<string, string>; body: string },
+    ];
     expect(url).toBe(`${XD_GATEWAY_BASE_URL}/v1/chat/completions`);
     expect(init.headers.authorization).toBe('Bearer gk-1');
     expect(JSON.parse(init.body).model).toBe('gpt-5.4-mini');
