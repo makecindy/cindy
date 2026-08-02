@@ -538,6 +538,11 @@ export class GoalController {
    * reason 供 UI 展示(如 rewind 传 "paused: conversation rewound")。
    */
   async pauseGoal(sessionId: string, reason?: string): Promise<void> {
+    // Stop 的控制边界不能排在存储 IO 后面：读写一旦卡住，在途 turn 的终态事件仍会
+    // 落到旧 listener，idle 兜底会把 active goal 立即续起来。先同步 detach listener、
+    // continuation timer 与 firing 状态，再持久化 paused；stopSession 幂等，非 active
+    // 目标走到这里也不会改变存档语义。
+    this.stopSession(sessionId);
     const state = await this.deps.storage.get(sessionId);
     if (!state || state.status !== 'active') return;
     const updated = await this.deps.storage.update(sessionId, {
@@ -545,8 +550,6 @@ export class GoalController {
       lastReason: reason ?? 'paused by user',
       updatedAt: this.now(),
     });
-    // 停续跑(detach listener + 清 timer/firing)。在途 turn 即便后续 done 也不再触发续跑。
-    this.stopSession(sessionId);
     if (updated) this.emit(updated);
   }
 
@@ -817,10 +820,15 @@ export class GoalController {
 
   private async finalizeTurn(sessionId: string, event: AgentEvent, errored: boolean): Promise<void> {
     const turn = this.turns.get(sessionId);
-    if (turn?.finalized) return; // done + 终止 error 双触发去重(同步置位,后续 await 不影响去重)
-    if (turn) turn.finalized = true;
+    // Stop / Pause 会同步删除当前 turn。已经跨过 async 边界的旧 finalize 必须把这个
+    // 对象身份当作取消令牌：否则它可能在 paused 落库之后继续把状态写回 active，表现为
+    // 用户刚点 Stop 就立刻重新 Running。resume 会创建新 turn，因此也不能只检查 key 存在。
+    if (!turn || turn.finalized) return;
+    turn.finalized = true; // done + 终止 error 双触发去重(同步置位,后续 await 不影响去重)
+    const isCurrentTurn = (): boolean => this.turns.get(sessionId) === turn;
 
     const state = await this.deps.storage.get(sessionId);
+    if (!isCurrentTurn()) return;
     // goal 已不存在(被 clear)→ 收尾 detach。
     if (!state) {
       this.stopSession(sessionId);
@@ -898,6 +906,9 @@ export class GoalController {
     // 记录(role:'assistant' + agentMeta.goalCompletion,重开会话仍在),随后删 goal
     // 行让 chip 消失。视觉由 renderer 渲成"目标已达成 · N 轮 · 耗时 X"分隔条。
     if (decision.status === 'complete') {
+      // 从 completion 消息落库开始就是不可分割的 commit 区：此前的 turn 身份检查允许
+      // Stop 取消旧 finalize；一旦开始写“已达成”，就必须继续 clear + emit null。
+      // 中途返回会留下“已达成消息 + paused goal”或“行已清但 renderer chip 未清”的矛盾态。
       const elapsedMs = Math.max(0, this.now() - state.startedAt);
       if (this.deps.persistGoalCompletion) {
         try {
@@ -935,6 +946,7 @@ export class GoalController {
       const limit = this.deps.getAccountLimit
         ? await this.deps.getAccountLimit(state.agentKind).catch(() => null)
         : null;
+      if (!isCurrentTurn()) return;
       if (status === 'usageLimited') {
         usageResetAt = limit?.resetAtMs ?? null; // 被动:补 resetAt(可能拿不到→null,留待手动 resume)
         shouldFire = false;
@@ -958,6 +970,7 @@ export class GoalController {
         ? refined
         : null;
 
+    if (!isCurrentTurn()) return;
     const updated = await this.deps.storage.update(sessionId, {
       status,
       lastReason,
@@ -968,11 +981,13 @@ export class GoalController {
       ...(objectiveRewrite ? { objective: objectiveRewrite } : {}),
       updatedAt: this.now(),
     });
+    if (!isCurrentTurn()) return;
     if (updated) this.emit(updated);
 
     // 改写了目标 → 在对话里落一条「目标已更新」标记(气泡徽标),与 setGoal/updateGoal 改目标一致。
     if (objectiveRewrite) {
       await this.deps.persistUserMessage?.(sessionId, objectiveRewrite, { goalObjective: { updated: true } });
+      if (!isCurrentTurn()) return;
     }
 
     this.resetTurn(sessionId);
@@ -1086,8 +1101,17 @@ export class GoalController {
   }
 
   private async fireTurn(sessionId: string): Promise<void> {
+    const lifecycleBoundary = this.turns.get(sessionId);
+    if (!lifecycleBoundary) return;
     const state = await this.deps.storage.get(sessionId);
-    if (!state || state.status !== 'active') return;
+    // stopSession 会同步删除本轮 accumulator；用对象身份充当既有生命周期边界，
+    // 可同时拒绝 Stop 后的旧 fire 与随后 resume 创建的新一代，不能只信上面读到的
+    // active 存档快照。
+    if (
+      !state ||
+      state.status !== 'active' ||
+      this.turns.get(sessionId) !== lifecycleBoundary
+    ) return;
     // preflight 预算守卫:用户可能把 maxTurns/budgetTokens 调小到已超当前用量(updateGoal 会即时
     // 转 budgetLimited,但调度链上可能仍有在途 fireTurn / continuation timer 指向旧 active 状态)。
     // 超(新)预算就转 budgetLimited 并停,绝不越过新上限再发一轮(reviewer #354)。
@@ -1126,7 +1150,9 @@ export class GoalController {
       // session 创建后、send 前再次换 route，让本轮落到 UI 未显示的来源。
       releaseAgentSwitchLock =
         (await this.deps.acquirePendingAgentSwitch?.(sessionId)) ?? (() => {});
+      if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       const session = await this.deps.ensureSession(sessionId);
+      if (this.turns.get(sessionId) !== lifecycleBoundary) return;
       if (!session) {
         this.deps.logger.warn('[goal] no live session to fire (resume failed)', {
           sessionId,
@@ -1143,6 +1169,7 @@ export class GoalController {
       }
 
       this.resetTurn(sessionId);
+      const dispatchBoundary = this.turns.get(sessionId);
       const content =
         kind === 'first'
           ? buildFirstTurnDirective(state.objective, { maxTurns: state.maxTurns })
@@ -1159,6 +1186,13 @@ export class GoalController {
       // 交接注入自己接——切换后 goal 循环的下一轮 directive 同样要带交接上下文
       // (2026-07-20 审计)。
       const pendingHandoff = await agentHandoffPending.peek(sessionId);
+      if (!dispatchBoundary || this.turns.get(sessionId) !== dispatchBoundary) {
+        if (baselineStarted) {
+          this.deps.onUndispatchedUserTurn?.(sessionId);
+          baselineStarted = false;
+        }
+        return;
+      }
       const outgoing = pendingHandoff
         ? prependHandoffToUserMessage({ type: 'user', content }, pendingHandoff)
         : { type: 'user' as const, content };

@@ -29,9 +29,14 @@ export function registerStopSessionBackgroundTasksHandler(
       }
 
       deps.noteSessionReset(sessionId);
-      // Best-effort: goal pause must not block the emergency close path.
-      await Promise.resolve(deps.notifyGoalStop(sessionId)).catch(() => {});
-      await deps.closeSession(sessionId);
+      // notifyGoalStop 调用同步摘 listener/timer，paused 落库可与紧急 close 并行；
+      // 不能让存储等待挡住最终止损。
+      const goalPause = Promise.resolve(deps.notifyGoalStop(sessionId)).catch(() => {});
+      try {
+        await deps.closeSession(sessionId);
+      } finally {
+        await goalPause;
+      }
       // closed 事件的统一清理也会清账；这里显式清一次，确保 renderer 立即收到熄灭广播。
       deps.clearBackgroundActivity(sessionId);
       return { ok: true as const };

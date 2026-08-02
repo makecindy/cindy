@@ -97,6 +97,7 @@ vi.mock('@/lib/composerDraftStore', () => ({
 import { makerChatStore, type ChatMessage } from '@/lib/makerChatStore';
 import * as messageService from '@/lib/messageService';
 import * as sessionService from '@/lib/sessionService';
+import * as sessionsBus from '@/lib/sessionsBus';
 import { CONTINUE_AFTER_APP_EXIT_PROMPT } from '../../shared/interruptedTurn';
 
 const SESSION_ID = 'text-delta-batching';
@@ -998,6 +999,124 @@ describe('makerChatStore text delta batching', () => {
     unsubscribe();
   });
 
+  it('coalesces 1000 high-frequency thinking updates into one subscriber notification', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'thinking',
+        source: 'codex',
+        data: { stage: 'start', blockId: 'thinking-flood', startedAt: Date.now() },
+      },
+    });
+    for (let i = 0; i < 999; i++) {
+      onEvent?.({
+        sessionId: SESSION_ID,
+        event: {
+          type: 'thinking',
+          source: 'codex',
+          data: { stage: 'delta', blockId: 'thinking-flood', text: 'x' },
+        },
+      });
+    }
+
+    expect(notifyCount).toBe(0);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[0]).toMatchObject({
+      clientId: 'thinking-flood',
+      content: 'x'.repeat(999),
+    });
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
+    unsubscribe();
+  });
+
+  it('keeps coalescing live tool DB echoes after Stop has optimistically gone idle', () => {
+    emitStatus({ status: 'Running', isRunning: true });
+    makerChatStore.stopSession(SESSION_ID);
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+    const eventCount = 800;
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+    vi.mocked(sessionsBus.emitPatch).mockClear();
+
+    for (let i = 0; i < eventCount; i++) {
+      onEvent?.({
+        sessionId: SESSION_ID,
+        event: {
+          type: 'tool_use',
+          source: 'codex',
+          data: {
+            toolUseId: `tool-use-${i}`,
+            toolName: 'Read',
+            input: { file_path: `file-${i}.ts` },
+          },
+        },
+        persistId: `tool-row-${i}`,
+      });
+      emitDbMessageCreated({
+        clientId: `tool-row-${i}`,
+        role: 'tool_use',
+        content: {
+          toolUseId: `tool-use-${i}`,
+          toolName: 'Read',
+          input: { file_path: `file-${i}.ts` },
+        },
+        toolUseId: `tool-use-${i}`,
+        createdAt: new Date(Date.UTC(2026, 5, 15) + i).toISOString(),
+      });
+    }
+
+    expect(notifyCount).toBe(0);
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages).toHaveLength(eventCount);
+    expect(makerChatStore.getSnapshot(SESSION_ID).messages[eventCount - 1]).toMatchObject({
+      clientId: 'tool-row-799',
+      role: 'tool_use',
+      toolUseId: 'tool-use-799',
+      toolName: 'Read',
+    });
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
+    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
+    unsubscribe();
+  });
+
+  it('flushes a pending high-frequency batch immediately when terminal done arrives', () => {
+    let notifyCount = 0;
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      notifyCount += 1;
+    });
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: { toolUseId: 'tool-flood', toolName: 'exec', input: {} },
+      },
+      persistId: 'tool-flood-row',
+    });
+    expect(notifyCount).toBe(0);
+
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: { type: 'done', source: 'codex', data: {} },
+    });
+    expect(notifyCount).toBe(1);
+
+    vi.advanceTimersByTime(32);
+    expect(notifyCount).toBe(1);
+    unsubscribe();
+  });
+
   it('flushes at most 8 streaming sessions per timer tick', () => {
     for (const [index, sessionId] of MULTI_SESSION_IDS.entries()) {
       emitTextDelta(`s${index}`, sessionId);
@@ -1054,6 +1173,27 @@ describe('makerChatStore text delta batching', () => {
         isStreaming: false,
       }),
     ]);
+  });
+
+  it('sends Stop IPC before flushing pending renderer work', () => {
+    emitStatus({ status: 'Running', isRunning: true });
+    const order: string[] = [];
+    input.stop.mockImplementationOnce(async (sessionId: string) => {
+      order.push('ipc');
+      return projection(sessionId);
+    });
+    const unsubscribe = makerChatStore.subscribe(SESSION_ID, () => {
+      order.push('notify');
+    });
+    emitTextDelta('pending');
+
+    makerChatStore.stopSession(SESSION_ID);
+
+    expect(input.stop).toHaveBeenCalledWith(SESSION_ID, undefined);
+    expect(order[0]).toBe('ipc');
+    expect(order).toContain('notify');
+    expect(makerChatStore.getSnapshot(SESSION_ID).agentStatus.isRunning).toBe(false);
+    unsubscribe();
   });
 
   it('ignores placeholder 0/0 context snapshots on Done status', () => {

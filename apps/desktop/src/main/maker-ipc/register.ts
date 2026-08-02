@@ -751,6 +751,18 @@ const autoResumeBookkeeping = new AutoResumeBookkeeping({
   log: (message, fields) => log.debug(message, fields),
 });
 
+/**
+ * 用户明确停止会话时统一撤销两类自动续跑与它们的退避簿记。
+ *
+ * 这个边界必须早于 live Session 查询：owner 切换期间可能暂时拿不到 Session，
+ * 但已经排期的 timer / scheduler takeover 仍然存在，不能因此漏清后原地复活。
+ */
+function resetAutomaticRecoveryForExplicitStop(sessionId: string): void {
+  silentStopAutoResumeGuard.noteSessionReset(sessionId);
+  interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
+  autoResumeBookkeeping.teardown(sessionId);
+}
+
 function settleUndispatchedAutoResumeOutcome(
   sessionId: string,
   item: AgentInputQueuedMessage,
@@ -772,12 +784,11 @@ export function noteSilentStopUserSend(sessionId: string): void {
 }
 
 /**
- * 非 renderer 中止路径(IM `!stop` 等)调用:重置 silent-stop 守卫,让挂在
- * 1.5s 决策窗里的自动续跑判为 superseded(经 settle('skip') 收口),不在用户
- * 明确喊停后"原地复活"。renderer 走 ABORT_SESSION handler 内的同名调用。
+ * 非 renderer 中止路径(IM `!stop` 等)调用。历史名称保留给现有调用方；实际必须
+ * 同时撤掉 silent-stop、中断续跑及退避簿记，保证所有明确 Stop 入口同一语义。
  */
 export function noteSilentStopSessionReset(sessionId: string): void {
-  silentStopAutoResumeGuard.noteSessionReset(sessionId);
+  resetAutomaticRecoveryForExplicitStop(sessionId);
 }
 
 /**
@@ -2557,8 +2568,8 @@ export function anySessionInTurn(maker?: Pick<Maker, 'listActiveSessions'> | nul
  * /goal 生命周期旁路(setter 注入避免 register↔goal-host 环):
  *  - goalClearObserver:clear-context(INPUT_CLEAR_SESSION)时清除该会话目标(上下文已抹,目标失去依据)。
  *  - goalIdleObserver:会话 turn 收尾(idle)时让 controller 兜底续跑 active 目标(#9,race-free,见 controller.maybeContinueActiveGoal)。
- *  - goalStopObserver:用户 Stop 当前 turn(ABORT_SESSION)时把 active 目标暂停。**在 sess.abort()
- *    之前 await** —— 让 pauseGoal 先置 paused + detach 监听,abort 产生的终止事件不再触达目标续跑判定。
+ *  - goalStopObserver:用户 Stop 当前 turn(ABORT_SESSION)时把 active 目标暂停。调用 observer
+ *    会同步 detach 监听/续跑资格；paused 持久化与 vendor abort 并行，且只做有界等待。
  * bootstrap 在启动期接上 getGoalController()?.clearGoal / maybeContinueActiveGoal / pauseGoal。
  */
 let goalClearObserver: ((sessionId: string) => void) | null = null;
@@ -2574,6 +2585,38 @@ export function setGoalStopObserver(
   observer: ((sessionId: string) => void | Promise<void>) | null,
 ): void {
   goalStopObserver = observer;
+}
+
+const EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS = 1_000;
+
+/** Goal 的同步 detach 是 Stop 边界；异步持久化失败或卡住都不能挡住 vendor abort。 */
+async function pauseGoalBeforeExplicitStop(sessionId: string): Promise<void> {
+  const observer = goalStopObserver;
+  if (!observer) return;
+  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
+  let timedOut = false;
+  try {
+    const timeout = new Promise<void>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        timedOut = true;
+        resolve();
+      }, EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS);
+    });
+    await Promise.race([Promise.resolve(observer(sessionId)), timeout]);
+    if (timedOut) {
+      log.warn('goal pause persistence timed out during explicit stop; abort was already requested', {
+        sessionId,
+        timeoutMs: EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS,
+      });
+    }
+  } catch (err) {
+    log.warn('goal pause persistence failed during explicit stop; abort was already requested', {
+      sessionId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  } finally {
+    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
+  }
 }
 // (Option B)用户答完 AskUserQuestion 时,把结构化答案 + 本次问题(含选项)交给 goal controller
 // 即时改写目标(仅首轮、且确认这次问的就是"目标澄清问题"时,controller 内部再 guard)。
@@ -4186,13 +4229,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   registerStopSessionBackgroundTasksHandler(createElectronIpcHandlerRegistry(), {
     closeSession: (sessionId) => maker.closeSession(sessionId),
     clearBackgroundActivity: clearClaudeSessionBackgroundActivity,
-    noteSessionReset: (sessionId) => {
-      silentStopAutoResumeGuard.noteSessionReset(sessionId);
-      interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
-      // 「全部停止」是会话级止损:已排期的自动续跑必须撤掉,别在用户喊停后又补发一条。
-      autoResumeBookkeeping.teardown(sessionId);
-    },
-    notifyGoalStop: (sessionId) => goalStopObserver?.(sessionId),
+    // 「全部停止」是会话级止损:已排期的自动续跑必须撤掉,别在用户喊停后又补发一条。
+    noteSessionReset: resetAutomaticRecoveryForExplicitStop,
+    notifyGoalStop: pauseGoalBeforeExplicitStop,
   });
 
   // 单个后台任务的精确停止(消息流任务卡 / 状态栏停止按钮)。只停指定 taskId,
@@ -8162,6 +8201,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     steerToAgent: (sessionId, message, sendOpts) =>
       steerToAgentAccepted(sessionId, message, sendOpts),
     abortSession: async (sessionId) => {
+      resetAutomaticRecoveryForExplicitStop(sessionId);
       markWorkerManualInterruptIfKnown(sessionId, 'input_stop');
       const sess = getStableSessionForTurnBoundary(sessionId);
       if (!sess) return;
@@ -8847,10 +8887,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
 
   ipcMain.handle(MAKER_INVOKE.INPUT_STOP, async (_e, sessionId: unknown, opts?: unknown) => {
     const sid = requireSessionId(sessionId);
-    // 用户 Stop 当前 turn(composer Stop 走这条)→ 先暂停 active 目标(置 paused + 停续跑 +
-    // detach 监听 + 移除 unsubscriber),**再** stop。否则 turn 中止后 idle 兜底
-    // (maybeContinueActiveGoal)会因目标仍 active 把它又续起来。null-safe;无 active goal 时 no-op。
-    await goalStopObserver?.(sid);
+    // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
+    // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
+    resetAutomaticRecoveryForExplicitStop(sid);
+    // pauseGoal 调用同步 detach listener/timer，持久化可以与 vendor abort 并行；不能让
+    // 最长 1 秒的 DB 等待挡在真正的 turn/interrupt 前面。
+    const goalPause = pauseGoalBeforeExplicitStop(sid);
     const result = inputCoordinator.stop(
       sid,
       opts && typeof opts === 'object'
@@ -8863,6 +8905,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (!inputCoordinator.hasPendingQueuedWork(sid)) {
       getAgentIslandService()?.notifyQueueEmptied(sid);
     }
+    await goalPause;
     return result;
   });
 
@@ -8975,9 +9018,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       isRemoteInvoke: remoteInvoke,
     });
     const projection = inputCoordinator.clearSession(sid, clearBoundary);
-    silentStopAutoResumeGuard.noteSessionReset(sid);
-    interruptedTurnAutoResumeGuard.noteSessionReset(sid);
-    autoResumeBookkeeping.teardown(sid);
+    resetAutomaticRecoveryForExplicitStop(sid);
     // 丢弃缓存的待注入交接 / fork 来源标记:它们是按 clear 之前的历史算出来的,
     // DB 侧的 cleared_at 抑制拦不住已经落进 registry 内存的那一份(首发被拒后
     // 缓存仍在),下次 send 会把旧血缘灌进用户刚显式清空的上下文。
@@ -9022,16 +9063,15 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   ipcMain.handle(MAKER_INVOKE.ABORT_SESSION, async (_e, sessionId: unknown) => {
     if (typeof sessionId !== 'string') throwIpcError('INVALID_PARAMS', 'sessionId required');
     markWorkerManualInterruptIfKnown(sessionId, 'abort_session');
-    silentStopAutoResumeGuard.noteSessionReset(sessionId);
-    interruptedTurnAutoResumeGuard.noteSessionReset(sessionId);
-    autoResumeBookkeeping.teardown(sessionId);
+    resetAutomaticRecoveryForExplicitStop(sessionId);
+    // 调用本身先同步撤销 Goal 续跑资格；paused 落库与 vendor abort 并行。
+    const goalPause = pauseGoalBeforeExplicitStop(sessionId);
     const sess = getStableSessionForTurnBoundary(sessionId);
-    if (!sess) return;
+    if (!sess) {
+      await goalPause;
+      return;
+    }
     handleAgentIslandSessionStopped(sess);
-    // 用户 Stop 当前 turn → 若该会话有 active goal,先暂停目标(置 paused + 停续跑 + detach
-    // 监听),**再** abort。这样 abort 产生的终止事件到来时目标已暂停、监听已摘,不会被误判成
-    // 续跑(原本依赖 error 文案正则判 paused/blocked,不可靠)。null-safe;无 active goal 时 no-op。
-    await goalStopObserver?.(sessionId);
     const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);
     try {
       await sess.abort();
@@ -9043,6 +9083,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');
       } finally {
         cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
+        await goalPause;
       }
     }
   });

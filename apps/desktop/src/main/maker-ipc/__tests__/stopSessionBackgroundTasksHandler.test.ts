@@ -99,4 +99,29 @@ describe('stop session background tasks IPC handler', () => {
     expect(closeSession).toHaveBeenCalledWith('session-1');
     expect(clearBackgroundActivity).toHaveBeenCalledWith('session-1');
   });
+
+  it('starts the emergency close before goal persistence settles', async () => {
+    const harness = new IpcHarness();
+    let releaseGoalPause!: () => void;
+    const goalPause = new Promise<void>((resolve) => {
+      releaseGoalPause = resolve;
+    });
+    const closeSession = vi.fn().mockResolvedValue(undefined);
+    const clearBackgroundActivity = vi.fn();
+
+    registerStopSessionBackgroundTasksHandler(harness, {
+      closeSession,
+      clearBackgroundActivity,
+      noteSessionReset: vi.fn(),
+      notifyGoalStop: vi.fn(() => goalPause),
+    });
+
+    const stop = harness.invoke(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS, 'session-1');
+    await vi.waitFor(() => expect(closeSession).toHaveBeenCalledWith('session-1'));
+    expect(clearBackgroundActivity).not.toHaveBeenCalled();
+
+    releaseGoalPause();
+    await expect(stop).resolves.toEqual({ ok: true });
+    expect(clearBackgroundActivity).toHaveBeenCalledWith('session-1');
+  });
 });

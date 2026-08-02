@@ -827,6 +827,191 @@ describe('GoalController', () => {
     expect(h.session.sends.length).toBe(sendsAfterPause);
   });
 
+  it('detaches goal continuation synchronously before pause persistence can block', async () => {
+    await startGoal(h);
+    const active = await h.storage.get('s1');
+    expect(active?.status).toBe('active');
+
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    vi.spyOn(h.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const sendsBeforePause = h.session.sends.length;
+    const pausePromise = h.controller.pauseGoal('s1');
+
+    // 模拟 Stop 之后立刻到达旧 turn 的终态。即使 pause 的 DB 读仍悬着，listener
+    // 也必须已经摘掉，不能让 idle 兜底再 fire 一轮。
+    h.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"late done"}\n```',
+    });
+    await tick();
+    expect(h.session.sends).toHaveLength(sendsBeforePause);
+
+    releaseGet(active);
+    await pausePromise;
+    expect((await h.storage.get('s1'))?.status).toBe('paused');
+  });
+
+  it('cancels a goal fire that was already waiting across an async boundary', async () => {
+    const liveSession = new FakeSession('s1');
+    let ensureCalls = 0;
+    let releaseEnsure!: (session: SessionLike | undefined) => void;
+    const blockedEnsure = new Promise<SessionLike | undefined>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return ensureCalls <= 2 ? liveSession : blockedEnsure;
+      },
+    });
+    await startGoal(local);
+    expect(liveSession.sends).toHaveLength(1);
+
+    const firePromise = (
+      local.controller as unknown as { fireTurn(sessionId: string): Promise<void> }
+    ).fireTurn('s1');
+    await vi.waitFor(() => expect(ensureCalls).toBe(3));
+
+    await local.controller.pauseGoal('s1');
+    releaseEnsure(liveSession);
+    await firePromise;
+
+    expect(liveSession.sends).toHaveLength(1);
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+  });
+
+  it('does not rehydrate a session after Stop cancels a fire waiting on the route lock', async () => {
+    const liveSession = new FakeSession('s1');
+    let acquireCalls = 0;
+    let ensureCalls = 0;
+    let releaseAcquire!: (release: () => void) => void;
+    const blockedAcquire = new Promise<() => void>((resolve) => {
+      releaseAcquire = resolve;
+    });
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return liveSession;
+      },
+      acquirePendingAgentSwitch: async () => {
+        acquireCalls += 1;
+        return acquireCalls === 1 ? () => {} : blockedAcquire;
+      },
+    });
+    await startGoal(local);
+    expect(ensureCalls).toBe(2);
+
+    const firePromise = (
+      local.controller as unknown as { fireTurn(sessionId: string): Promise<void> }
+    ).fireTurn('s1');
+    await vi.waitFor(() => expect(acquireCalls).toBe(2));
+
+    await local.controller.pauseGoal('s1');
+    releaseAcquire(() => {});
+    await firePromise;
+
+    expect(ensureCalls).toBe(2);
+    expect(liveSession.sends).toHaveLength(1);
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+  });
+
+  it('cancels an in-flight turn finalizer when Stop pauses the goal', async () => {
+    let limitCalls = 0;
+    let releaseLimit!: (limit: AccountLimitInfo | null) => void;
+    const blockedLimit = new Promise<AccountLimitInfo | null>((resolve) => {
+      releaseLimit = resolve;
+    });
+    const local = makeController({
+      getAccountLimit: async () => {
+        limitCalls += 1;
+        return blockedLimit;
+      },
+    });
+    await startGoal(local);
+    const sendsBeforeStop = local.session.sends.length;
+
+    // continue 裁决会在账号限额查询处跨 async 边界。Stop 必须让这条旧 finalize
+    // 失效，查询回来后不能再以旧 active 快照覆盖 pauseGoal 写下的 paused。
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"late finalize"}\n```',
+      tokens: 20,
+    });
+    await vi.waitFor(() => expect(limitCalls).toBe(1));
+
+    await local.controller.pauseGoal('s1');
+    releaseLimit(null);
+    await tick();
+
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    expect(local.session.sends).toHaveLength(sendsBeforeStop);
+  });
+
+  it('finishes the completion commit if Stop arrives during completion persistence', async () => {
+    let completionCalls = 0;
+    let releaseCompletion!: () => void;
+    const blockedCompletion = new Promise<void>((resolve) => {
+      releaseCompletion = resolve;
+    });
+    const local = makeController({
+      persistGoalCompletion: async () => {
+        completionCalls += 1;
+        await blockedCompletion;
+      },
+    });
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(completionCalls).toBe(1));
+
+    await local.controller.pauseGoal('s1');
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    releaseCompletion();
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
+  it('finishes the completion commit if Stop arrives while clearing goal storage', async () => {
+    const local = makeController();
+    const originalClear = local.storage.clear.bind(local.storage);
+    let clearCalls = 0;
+    let releaseClear!: () => void;
+    const blockedClear = new Promise<void>((resolve) => {
+      releaseClear = resolve;
+    });
+    vi.spyOn(local.storage, 'clear').mockImplementation(async (sessionId) => {
+      clearCalls += 1;
+      await blockedClear;
+      await originalClear(sessionId);
+    });
+    await startGoal(local);
+
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"complete","reason":"done"}\n```',
+    });
+    await vi.waitFor(() => expect(clearCalls).toBe(1));
+
+    await local.controller.pauseGoal('s1');
+    expect((await local.storage.get('s1'))?.status).toBe('paused');
+    releaseClear();
+    await tick();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
   it('resumeGoal resumes a paused goal: preserves counters, fires a continuation', async () => {
     await startGoal(h);
     h.session.emitGoalTurn({ verdictJson: '```json\n{"goal_status":"continue","reason":""}\n```', tokens: 30 });
