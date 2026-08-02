@@ -11,6 +11,7 @@ import {
   useComposerSendShortcutPreference,
   type ComposerSendShortcutPreference,
 } from '../useComposerSendShortcutPreference';
+import { getDefaultVoiceInputSettings } from '../../../shared/voiceInputData';
 
 const KEY = 'chat.sendShortcutPreference';
 
@@ -24,6 +25,15 @@ describe('useComposerSendShortcutPreference', () => {
   beforeEach(() => {
     localStorage.clear();
     _resetComposerSendShortcutPreferenceForTests();
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        voiceInput: {
+          getDataSnapshot: () => ({ settings: getDefaultVoiceInputSettings('darwin') }),
+        },
+      },
+    });
   });
 
   it.each([
@@ -69,6 +79,36 @@ describe('useComposerSendShortcutPreference', () => {
     expect(localStorage.getItem(KEY)).toBeNull();
     expect(getComposerSendShortcutPreference()).toBe('enter');
     expect(result.current.isCustomized).toBe(false);
+  });
+
+  it('keeps the Composer preference unchanged when Voice Input owns Cmd+Enter', () => {
+    const settings = {
+      ...getDefaultVoiceInputSettings('darwin'),
+      shortcut: {
+        trigger: 'keyboard' as const,
+        code: 'Enter',
+        key: 'Enter',
+        modifiers: { meta: true, ctrl: false, alt: false, shift: false, fn: false },
+      },
+    };
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'darwin',
+        voiceInput: { getDataSnapshot: () => ({ settings }) },
+      },
+    });
+
+    const { result } = renderHook(() => useComposerSendShortcutPreference());
+    let updateResult: ReturnType<typeof result.current.setPreference> | undefined;
+
+    act(() => {
+      updateResult = result.current.setPreference('modifier-enter');
+    });
+
+    expect(updateResult).toEqual({ ok: false, conflict: 'composer-voice-input' });
+    expect(result.current.preference).toBe('enter');
+    expect(localStorage.getItem(KEY)).toBeNull();
   });
 
   it('updates mounted hooks when another renderer changes the preference', () => {

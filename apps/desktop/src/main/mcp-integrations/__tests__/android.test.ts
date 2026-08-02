@@ -1,8 +1,9 @@
 import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const { existsSyncMock, spawnMock } = vi.hoisted(() => ({
+const { existsSyncMock, outboundFetchMock, spawnMock } = vi.hoisted(() => ({
   existsSyncMock: vi.fn(),
+  outboundFetchMock: vi.fn(),
   spawnMock: vi.fn(),
 }));
 
@@ -39,6 +40,10 @@ vi.mock('electron', () => ({
     getPath: vi.fn((name: string) => (name === 'temp' ? '/tmp' : '/Users/tester')),
     getAppPath: vi.fn(() => '/repo/apps/desktop'),
   },
+}));
+
+vi.mock('../../maker-host/outbound-fetch.js', () => ({
+  outboundFetch: (...args: unknown[]) => outboundFetchMock(...args),
 }));
 
 import {
@@ -163,6 +168,7 @@ describe('android mcp integration', () => {
   beforeEach(() => {
     spawnMock.mockReset();
     existsSyncMock.mockReset();
+    outboundFetchMock.mockReset();
     existsSyncMock.mockReturnValue(false);
     clearAndroidStateSnapshotsForTest();
     setAndroidAutomationSettingsReaderForTest(null);
@@ -706,14 +712,13 @@ emulator-5554 device product:sdk_gphone64_arm64 model:Pixel_8 device:emu transpo
     const archSpy = vi.spyOn(process, 'arch', 'get').mockReturnValue('x64');
     setAndroidPlatformToolsDownloadTimeoutForTest(1);
     mockAdbSpawn({ error: Object.assign(new Error('spawn adb ENOENT'), { code: 'ENOENT' }) });
-    const fetchMock = vi.fn((_url: string, init?: { signal?: AbortSignal }) => (
+    outboundFetchMock.mockImplementation((_url: string, init?: { signal?: AbortSignal }) => (
       new Promise<Response>((_resolve, reject) => {
         init?.signal?.addEventListener('abort', () => {
           reject(Object.assign(new Error('download aborted'), { name: 'AbortError' }));
         }, { once: true });
       })
     ));
-    vi.stubGlobal('fetch', fetchMock);
 
     try {
       const result = await prepareAndroidAdb();
@@ -725,7 +730,7 @@ emulator-5554 device product:sdk_gphone64_arm64 model:Pixel_8 device:emu transpo
       });
       expect(slashPath(result.path)).toBe('/Users/tester/android-platform-tools/linux-x64/platform-tools/adb');
       expect(result.error).toContain('Android platform-tools download timed out after 1ms');
-      expect(fetchMock).toHaveBeenCalledWith(
+      expect(outboundFetchMock).toHaveBeenCalledWith(
         'https://dl.google.com/android/repository/platform-tools-latest-linux.zip',
         { signal: expect.any(AbortSignal) },
       );

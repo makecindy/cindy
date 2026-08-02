@@ -44,6 +44,12 @@ vi.mock('../nativeProviderAuthBinding.js', () => ({
   }),
 }));
 
+// The recovery tests inject global fetch responses; keep the production
+// proxy-aware transport out of this unit's network boundary.
+vi.mock('../outbound-fetch.js', () => ({
+  outboundFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
+
 import {
   logoutGrok,
   recoverGrokAuthAfterRejection,

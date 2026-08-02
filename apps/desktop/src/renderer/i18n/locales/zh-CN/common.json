@@ -2942,6 +2942,7 @@
         "systemReserved": "该组合键被系统保留",
         "conflict": "与「{{name}}」冲突",
         "voiceConflict": "与语音输入快捷键冲突",
+        "composerVoiceConflict": "与语音输入快捷键冲突，请修改发送或语音输入快捷键。",
         "menuAccelerator": "该组合键无法注册为菜单快捷键"
       },
       "items": {

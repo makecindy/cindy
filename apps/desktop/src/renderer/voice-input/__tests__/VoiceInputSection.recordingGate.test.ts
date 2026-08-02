@@ -15,6 +15,20 @@ describe('VoiceInputSection shortcut recording gate', () => {
     expect(source).toContain('window.electronAPI.appShortcuts.setRecording(false)');
   });
 
+  it('checks the active Composer binding before preview and persistence', () => {
+    const source = readFileSync(
+      new URL('../../components/settings/VoiceInputSection.tsx', import.meta.url),
+      'utf8',
+    );
+
+    expect(source).toContain('const hasComposerVoiceConflict = useCallback(');
+    expect(source).toContain('getComposerSendShortcutPreference()');
+    expect(source).toContain('findComposerVoiceInputConflict(');
+    expect(source).toContain("result.conflict === 'composer-voice-input'");
+    expect(source).toContain("settings.shortcuts.errors.composerVoiceConflict");
+    expect(source).toContain('findVoiceInputAppShortcutConflict(shortcut, getAppShortcutEntries())');
+  });
+
   it('waits for shortcut suspension before committing and restores the latest persisted shortcut', () => {
     const source = readFileSync(
       new URL('../../components/settings/VoiceInputSection.tsx', import.meta.url),
@@ -67,8 +81,12 @@ describe('VoiceInputSection shortcut recording gate', () => {
       'utf8',
     );
 
-    expect(source).toMatch(/const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[\]\);/);
-    expect(source).not.toMatch(/const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[t\]\);/);
+    expect(source).toMatch(
+      /const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[\]\);\n\n  \/\//,
+    );
+    expect(source).not.toMatch(
+      /const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[t\]\);\n\n  \/\//,
+    );
     expect(source).toContain('const translateRef = useRef(t);');
     expect(source).toContain('translateRef.current = t;');
   });

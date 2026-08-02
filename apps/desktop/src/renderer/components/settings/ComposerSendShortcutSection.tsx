@@ -42,7 +42,12 @@ export function ComposerSendShortcutSection() {
             <DefaultOverrideControls isCustomized={isCustomized} onReset={onReset} />
             <Switch
               checked={preference === 'modifier-enter'}
-              onCheckedChange={(enabled) => setPreference(enabled ? 'modifier-enter' : 'enter')}
+              onCheckedChange={(enabled) => {
+                const result = setPreference(enabled ? 'modifier-enter' : 'enter');
+                if (!result.ok && result.conflict === 'composer-voice-input') {
+                  toast.error(t('settings.shortcuts.errors.composerVoiceConflict'));
+                }
+              }}
               aria-label={t('settings.composer.sendShortcut.ariaLabel', { shortcut })}
             />
           </div>

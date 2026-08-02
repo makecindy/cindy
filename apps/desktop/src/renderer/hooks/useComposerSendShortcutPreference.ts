@@ -1,5 +1,8 @@
 import { useCallback, useEffect, useState } from 'react';
 
+import { getVoiceInputSettings } from './useVoiceInputSettings';
+import { findComposerVoiceInputConflict } from '@/voice-input/composerVoiceInputConflict';
+
 export type ComposerSendShortcutPreference = 'enter' | 'modifier-enter';
 
 export type ComposerEnterIntent = 'queue' | 'steer' | 'native' | 'ignore' | null;
@@ -8,6 +11,10 @@ export type ComposerEnterEvent = Pick<
   KeyboardEvent,
   'key' | 'shiftKey' | 'altKey' | 'metaKey' | 'ctrlKey' | 'repeat' | 'isComposing'
 >;
+
+export type ComposerSendShortcutUpdateResult =
+  | { ok: true }
+  | { ok: false; conflict: 'composer-voice-input' };
 
 export const COMPOSER_SEND_SHORTCUT_STORAGE_KEY = 'chat.sendShortcutPreference';
 export const DEFAULT_COMPOSER_SEND_SHORTCUT: ComposerSendShortcutPreference = 'enter';
@@ -71,13 +78,23 @@ export function getComposerSendShortcutPreference(): ComposerSendShortcutPrefere
 export function useComposerSendShortcutPreference(): {
   preference: ComposerSendShortcutPreference;
   isCustomized: boolean;
-  setPreference: (next: ComposerSendShortcutPreference) => void;
+  setPreference: (next: ComposerSendShortcutPreference) => ComposerSendShortcutUpdateResult;
 } {
   const [preference, setState] = useState<ComposerSendShortcutPreference>(
     getComposerSendShortcutPreference,
   );
 
-  const setPreference = useCallback((next: ComposerSendShortcutPreference) => {
+  const setPreference = useCallback((next: ComposerSendShortcutPreference): ComposerSendShortcutUpdateResult => {
+    if (
+      findComposerVoiceInputConflict(
+        next,
+        getVoiceInputSettings().shortcut,
+        window.electronAPI?.platform,
+      )
+    ) {
+      return { ok: false, conflict: 'composer-voice-input' };
+    }
+
     memoryValue = next;
     setState(next);
     try {
@@ -90,6 +107,7 @@ export function useComposerSendShortcutPreference(): {
       // The in-memory value still applies for this renderer.
     }
     listeners.forEach((fn) => fn());
+    return { ok: true };
   }, []);
 
   useEffect(() => {

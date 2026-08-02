@@ -2943,6 +2943,7 @@
         "systemReserved": "Reserved by the operating system",
         "conflict": "Conflicts with \"{{name}}\"",
         "voiceConflict": "Conflicts with the voice input shortcut",
+        "composerVoiceConflict": "Conflicts with the voice input shortcut. Change either the composer send shortcut or the voice input shortcut.",
         "menuAccelerator": "This combination cannot be registered as a menu shortcut"
       },
       "items": {
