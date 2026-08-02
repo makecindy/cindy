@@ -205,6 +205,26 @@ describe('mergeWithBundled', () => {
     );
   });
 
+  it('首次启动合并把等价时区表示视为同一 Registry revision', () => {
+    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const shifted = new Date(Date.parse(bundledRegistry.updatedAt) + 8 * 60 * 60 * 1_000)
+      .toISOString()
+      .replace('Z', '+08:00');
+    const remoteXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    remoteXai.name = 'REMOTE-XAI';
+    const primary: Catalog = {
+      ...MINIMAL,
+      providers: [...MINIMAL.providers, remoteXai],
+      modelRegistry: { ...bundledRegistry, updatedAt: shifted },
+    };
+
+    const merged = mergeWithBundled(primary);
+    expect(merged.modelRegistry?.updatedAt).toBe(shifted);
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('REMOTE-XAI');
+  });
+
   it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
     const bundledXai = BUNDLED_CATALOG.providers.find((p) => p.id === 'xai')!;
     const oldRemoteXai = JSON.parse(JSON.stringify(bundledXai)) as Provider;

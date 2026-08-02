@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { BUNDLED_CATALOG } from "../builtin.js";
 import {
+  compareModelRegistryRevisions,
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from "../modelRegistry.js";
@@ -9,6 +10,35 @@ import {
 const registry = BUNDLED_CATALOG.modelRegistry;
 
 describe("model registry", () => {
+  it("compares revision instants with normalized timestamps before checking content", () => {
+    if (!registry) throw new Error("missing bundled registry");
+    const current = { ...registry, updatedAt: "2026-08-02T02:00:00.000Z" };
+    const equivalent = { ...registry, updatedAt: "2026-08-02T10:00:00.000+08:00" };
+
+    expect(compareModelRegistryRevisions(equivalent, current)).toBe("same");
+    expect(
+      compareModelRegistryRevisions(
+        { ...equivalent, models: equivalent.models.slice(1) },
+        current,
+      ),
+    ).toBe("conflict");
+    expect(
+      compareModelRegistryRevisions(
+        { ...registry, updatedAt: "2026-08-02T01:59:59.999Z" },
+        current,
+      ),
+    ).toBe("older");
+    expect(
+      compareModelRegistryRevisions(
+        { ...registry, updatedAt: "2026-08-02T02:00:00.001Z" },
+        current,
+      ),
+    ).toBe("newer");
+    expect(compareModelRegistryRevisions({ ...registry, updatedAt: "invalid" }, current)).toBe(
+      "invalid-incoming",
+    );
+  });
+
   it("resolves exact provider/runtime routes without claiming availability", () => {
     expect(
       findModelRegistryRoute(

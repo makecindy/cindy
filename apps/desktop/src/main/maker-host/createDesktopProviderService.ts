@@ -24,15 +24,14 @@ import path from 'node:path';
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
+  compareModelRegistryRevisions,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
-  modelRegistryCanonicalJson,
   parseCatalog,
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
-  type ModelRegistry,
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
@@ -254,36 +253,6 @@ async function replaceCatalogLkgFile(
 
 function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
   return `${file}.${process.pid}.${nonce}.tmp`;
-}
-
-type ModelRegistryRevisionRelation = 'newer' | 'older' | 'same' | 'conflict' | 'invalid-incoming';
-
-/**
- * 按时间语义比较两个完整 Registry 快照。服务端应发送 canonical UTC ISO，但守卫仍
- * 接受 Date.parse 能表达的等价时区写法；同一时刻做 digest 时先把 updatedAt 归一化，
- * 避免仅表示法不同被误报成非法改写。
- */
-function compareModelRegistryRevisions(
-  incoming: ModelRegistry,
-  current: ModelRegistry,
-): ModelRegistryRevisionRelation {
-  const incomingRevision = Date.parse(incoming.updatedAt);
-  if (!Number.isFinite(incomingRevision)) return 'invalid-incoming';
-  const currentRevision = Date.parse(current.updatedAt);
-  if (!Number.isFinite(currentRevision)) return 'newer';
-  if (incomingRevision < currentRevision) return 'older';
-  if (incomingRevision > currentRevision) return 'newer';
-
-  const canonicalUpdatedAt = new Date(incomingRevision).toISOString();
-  const incomingDigest = modelRegistryCanonicalJson({
-    ...incoming,
-    updatedAt: canonicalUpdatedAt,
-  });
-  const currentDigest = modelRegistryCanonicalJson({
-    ...current,
-    updatedAt: canonicalUpdatedAt,
-  });
-  return incomingDigest === currentDigest ? 'same' : 'conflict';
 }
 
 /** Serialize the complete replace transaction per scope while leaving different scopes parallel. */

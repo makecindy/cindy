@@ -55,6 +55,7 @@ export {
 } from './source.js';
 
 export {
+  compareModelRegistryRevisions,
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
@@ -62,6 +63,7 @@ export { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
+  ModelRegistryRevisionRelation,
 } from './modelRegistry.js';
 export type {
   ModelReferencePrice,
