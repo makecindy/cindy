@@ -1944,14 +1944,22 @@ export default function SessionScreen() {
   // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
   // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
   const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
+  // pending 只能拦住「首击本身就是导航」的连点;遮罩/back/左滑/当前任务先关闭时 pending
+  // 仍为空。closing 从任一关闭入口同步置 true,完整覆盖退场 commit 前的快速二次点击。
+  const sessionListDrawerClosingRef = useRef(false);
   // 非导航关闭的焦点归还必须晚于父级 overlayMounted=false commit:否则按钮仍在
   // no-hide-descendants 子树里,VoiceOver/TalkBack 会忽略聚焦并丢失焦点。
   const returnDrawerFocusAfterCloseRef = useRef(false);
   const sessionListButtonRef = useRef<View>(null);
+  const closeSessionListDrawer = useCallback(() => {
+    if (sessionListDrawerClosingRef.current) return;
+    sessionListDrawerClosingRef.current = true;
+    setSessionListDrawerOpen(false);
+  }, []);
   // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
   useEffect(() => {
-    if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
-  }, [wideSessionNav.enabled]);
+    if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();
+  }, [closeSessionListDrawer, sessionListDrawerOverlayMounted, wideSessionNav.enabled]);
   // 抽屉打开时由 SessionListDrawer 消费 Android back 并发起关闭;open=false 后该监听会
   // 卸载,但 overlay 仍要退场约 motionDuration.exit。这个窗口临时吞掉 back,避免原生
   // Screen 返回与 GestureDetector/Reanimated 子树卸载再次挤进同一帧。onClosed 提交
@@ -1963,20 +1971,22 @@ export default function SessionScreen() {
   }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
   const openSessionListDrawer = useCallback(() => {
     pendingDrawerNavigationRef.current = null;
+    sessionListDrawerClosingRef.current = false;
     returnDrawerFocusAfterCloseRef.current = false;
     Keyboard.dismiss();
     setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
   }, []);
-  const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
   const queueDrawerNavigation = useCallback((action: () => void) => {
-    // 关闭动画期间 overlay 仍拦截点击;首个动作获胜,后续连点不覆盖目的地。
-    if (pendingDrawerNavigationRef.current) return;
+    // closing 覆盖所有关闭来源,包括 pending 为空的纯关闭;首个意图获胜。
+    if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;
+    sessionListDrawerClosingRef.current = true;
     pendingDrawerNavigationRef.current = action;
     setSessionListDrawerOpen(false);
   }, []);
   const handleSessionListDrawerClosed = useCallback(() => {
     const action = pendingDrawerNavigationRef.current;
+    sessionListDrawerClosingRef.current = false;
     if (!action) returnDrawerFocusAfterCloseRef.current = true;
     setSessionListDrawerOverlayMounted(false);
     if (!action) return;
@@ -1994,7 +2004,7 @@ export default function SessionScreen() {
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
     if (targetSession.id === sessionId) {
-      setSessionListDrawerOpen(false);
+      closeSessionListDrawer();
       return;
     }
     // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
@@ -2019,7 +2029,7 @@ export default function SessionScreen() {
         },
       });
     });
-  }, [queueDrawerNavigation, router, sessionId, t]);
+  }, [closeSessionListDrawer, queueDrawerNavigation, router, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();

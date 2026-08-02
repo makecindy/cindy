@@ -88,17 +88,23 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('router.replace({');
     // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
+    expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
     expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
-    expect(source).toContain('if (pendingDrawerNavigationRef.current) return;');
+    // 纯关闭(遮罩/back/左滑/当前任务)的 pending 仍为空,必须由独立 closing 闸门
+    // 同步锁住约 200ms 退场期;快速二次导航不能登记或改写首次关闭意图。
+    expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
+    expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
+    expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
+    expect(source).toContain('if (targetSession.id === sessionId) {\n      closeSessionListDrawer();');
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
-    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
+    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
     expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
     expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
-    expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
+    expect(source).toContain('if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
     // Android 退场期(open=false 但 overlay 仍 mounted)必须临时吞掉系统返回;
     // onClosed 解除 mounted 后 effect cleanup 恢复 useGuardedBack 等正常返回链。
     expect(source).toContain("if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;");
