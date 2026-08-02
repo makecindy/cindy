@@ -53,8 +53,11 @@ export interface GitExecOpts {
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
   /**
-   * 超时毫秒数, 到点由 execFile 内建 timeout 以 SIGTERM 终止 git 子进程。
-   * 与外层 Promise.race 的区别: 子进程被真正杀掉, 不会残留后台 git 进程与
+   * 超时毫秒数, 到点终止 git 子进程并让 Promise 以 GitExecError 稳定收口。
+   * Windows 用 `taskkill /T /F` 终止**整棵进程树**(execFile 内建 timeout 只
+   * SIGTERM 直接的 git.exe, 卡住的 git-remote-http 或 credential helper 后代
+   * 会带着继承的 stdio 活下来——既拖过 deadline 又留孤儿进程); 非 Windows 维持
+   * SIGTERM 直接子进程的语义。两个平台都保证超时后不残留后台 git 进程与
    * 紧随其后的其它 git 操作争抢同一仓库的 .lock。省略 = 不超时。
    */
   timeoutMs?: number;
@@ -69,14 +72,25 @@ function execFileOnce(
   opts?: GitExecOpts,
 ): Promise<GitExecResult> {
   return new Promise((resolve, reject) => {
-    execFile(
+    // 超时不走 execFile 内建 timeout:它只终止直接子进程,且回调要等 stdout/stderr
+    // 流关闭——被后代进程继承并占住时回调可能远超 deadline 才来。这里自管定时器,
+    // 超时先终止进程树(Windows)/直接子进程(其余平台),再显式收口 Promise。
+    let settled = false;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const settle = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      if (timer !== undefined) clearTimeout(timer);
+      fn();
+    };
+
+    const child = execFile(
       'git',
       [...args],
       {
         cwd,
         // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
         maxBuffer: 16 * 1024 * 1024,
-        timeout: opts?.timeoutMs,
         env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
         // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
       },
@@ -106,20 +120,52 @@ function execFileOnce(
           const numericCode = (err as unknown as { code?: unknown }).code;
           const exitCode =
             typeof numericCode === 'number' ? numericCode : null;
-          reject(
-            new GitExecError({
-              args,
-              exitCode,
-              stderr: stderrStr,
-              stdout: stdoutStr,
-              cause: errno,
-            }),
+          settle(() =>
+            reject(
+              new GitExecError({
+                args,
+                exitCode,
+                stderr: stderrStr,
+                stdout: stdoutStr,
+                cause: errno,
+              }),
+            ),
           );
           return;
         }
-        resolve({ stdout: stdoutStr, stderr: stderrStr });
+        settle(() => resolve({ stdout: stdoutStr, stderr: stderrStr }));
       },
     );
+
+    const timeoutMs = opts?.timeoutMs;
+    if (timeoutMs !== undefined && timeoutMs > 0) {
+      timer = setTimeout(() => {
+        const failTimeout = () =>
+          settle(() =>
+            reject(
+              new GitExecError({
+                args,
+                exitCode: null,
+                stderr: `timed out after ${timeoutMs}ms; process tree terminated`,
+                stdout: '',
+              }),
+            ),
+          );
+        if (process.platform === 'win32' && child.pid != null) {
+          // 终止整棵进程树(同仓库 claude-code.ts 的 taskkill 做法);taskkill 退出
+          // (无论成败,进程可能已自行结束)后再收口,保证后续 worktree git 操作
+          // 不会与残留后代并发。
+          execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => failTimeout());
+        } else {
+          try {
+            child.kill('SIGTERM');
+          } catch {
+            /* 进程可能已退出 */
+          }
+          failTimeout();
+        }
+      }, timeoutMs);
+    }
   });
 }
 
