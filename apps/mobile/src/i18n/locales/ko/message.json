@@ -41,6 +41,7 @@
     "statusStopped": "중지됨",
     "toolUseCount": "도구 호출 {{n}}회",
     "subagentTaskTitle": "하위 에이전트 작업",
+    "subagentStarted": "하위 에이전트 {{name}} 시작됨",
     "recentTool": "최근 도구: {{name}}",
     "outputFile": "출력: {{file}}",
     "noMoreDetail": "추가 세부 정보 없음",
