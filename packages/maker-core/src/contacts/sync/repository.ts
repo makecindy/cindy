@@ -170,9 +170,9 @@ export class ContactsSyncRepository {
       const local = this.reconcile(row);
       let remote = normalizeSyncState(raw);
       {
-        // source tombstone 可能经过旧客户端而丢失配套 redirect。对带本机系统锚点
-        // 的档案一律拒绝无显式 / 稳定子记录证据的远端删除；发送端会在 redirect
-        // 未确认时连同 tombstone 重发，届时再原子迁移，避免重复创建系统联系人。
+        // source tombstone 可能经过旧客户端而丢失配套 redirect。仅当作者未声明
+        // merge-aware 且同 stamp 存在唯一 target 更新时延后删除；普通远端删除仍
+        // 正常收敛，发送端则会继续重发未确认 redirect 供后续原子迁移锚点。
         const anchoredContactIds = new Set(
           (
             this.db
@@ -186,6 +186,25 @@ export class ContactsSyncRepository {
         const explicitMergeSources = new Set(
           (remote.merges ?? []).map((merge) => merge.id),
         );
+        const mergeAwareNodeIds = new Set(
+          (remote.mergeClocks ?? []).map((clock) => clock.nodeId),
+        );
+        // 旧 merge 捕获会用同一普通 stamp 删除 source 并更新 target。即使旧 hop
+        // 吞掉 redirect，这个事务形态仍能区分“疑似 merge”与单独的真实删除；
+        // 这里只据此延后删除，不据此选择 target 或迁移锚点。
+        const mergeShapedSources = new Set<string>();
+        for (const source of remote.contacts) {
+          if (!source.deleted) continue;
+          const correlatedTargets = remote.contacts.filter(
+            (candidate) =>
+              candidate.id !== source.id &&
+              candidate.updatedAt.stamp.nodeId === source.deleted!.nodeId &&
+              candidate.updatedAt.stamp.counter === source.deleted!.counter,
+          );
+          if (correlatedTargets.length === 1) {
+            mergeShapedSources.add(source.id);
+          }
+        }
         const remoteEvidenceTargets = new Map<string, string>();
         for (const identity of remote.identities) {
           if (!identity.deleted) {
@@ -230,15 +249,16 @@ export class ContactsSyncRepository {
         remote = {
           ...remote,
           contacts: remote.contacts.map((contact) => {
-            if (
-              !contact.deleted ||
-              !anchoredContactIds.has(contact.id) ||
-              explicitMergeSources.has(contact.id) ||
-              legacyMergeSources.has(contact.id)
-            ) {
-              return contact;
-            }
-            const { deleted: _deleted, ...preserved } = contact;
+            const shouldDelaySuspectedLegacyMerge =
+              contact.deleted &&
+              anchoredContactIds.has(contact.id) &&
+              !mergeAwareNodeIds.has(contact.deleted.nodeId) &&
+              !explicitMergeSources.has(contact.id) &&
+              !legacyMergeSources.has(contact.id) &&
+              mergeShapedSources.has(contact.id);
+            if (!shouldDelaySuspectedLegacyMerge) return contact;
+            const preserved = { ...contact };
+            delete preserved.deleted;
             return preserved;
           }),
         };

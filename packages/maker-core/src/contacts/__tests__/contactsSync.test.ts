@@ -232,12 +232,12 @@ describe("contacts device sync", () => {
     expect(() => b.getContact(source.id)).toThrow("contact not found");
   });
 
-  it("无 merge 证据的远端删除不会静默丢掉本机系统锚点", () => {
+  it("合法远端删除会删除带本机系统锚点的档案并保持收敛", () => {
     const a = createStore();
     const b = createStore();
     a.activateDeviceSync();
     b.activateDeviceSync();
-    const person = a.createContact({ kind: "person", displayName: "保守删除" });
+    const person = a.createContact({ kind: "person", displayName: "正常删除" });
     exchange(b, a);
     b.addIdentity(person.id, {
       platform: "apple-contacts",
@@ -245,14 +245,41 @@ describe("contacts device sync", () => {
     });
 
     a.deleteContact(person.id);
-    exchange(b, a);
+    const deleteState = stateOf(a);
+    const deleteAuthor = deleteState.contacts.find(
+      (contact) => contact.id === person.id,
+    )?.deleted?.nodeId;
+    expect(deleteState.mergeClocks).toContainEqual({
+      nodeId: deleteAuthor,
+      counter: 1,
+    });
+    b.mergeDeviceSyncState(deleteState);
 
-    expect(b.getContact(person.id).identities).toContainEqual(
-      expect.objectContaining({
-        platform: "apple-contacts",
-        value: "local-system-anchor",
-      }),
-    );
+    expect(() => b.getContact(person.id)).toThrow("contact not found");
+    exchange(a, b);
+    exchange(b, a);
+    expect(stateOf(b)).toEqual(stateOf(a));
+  });
+
+  it("旧客户端发来的单独删除没有 merge 形态时也正常生效", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const person = a.createContact({ kind: "person", displayName: "旧版删除" });
+    exchange(b, a);
+    b.addIdentity(person.id, {
+      platform: "apple-contacts",
+      value: "legacy-local-anchor",
+    });
+
+    a.deleteContact(person.id);
+    const legacyDelete = structuredClone(stateOf(a));
+    delete legacyDelete.merges;
+    delete legacyDelete.mergeClocks;
+    b.mergeDeviceSyncState(legacyDelete);
+
+    expect(() => b.getContact(person.id)).toThrow("contact not found");
   });
 
   it("兼容不含 merge 字段的既有 v1 同步状态", () => {

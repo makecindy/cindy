@@ -195,6 +195,20 @@ export function mergeContactsSyncStates(
   };
 }
 
+export function ensureContactsSyncMergeClockNode(
+  state: ContactsSyncState,
+  nodeId: string,
+): ContactsSyncState {
+  const existing = mergeClocksForRedirects(state);
+  if (existing.some((clock) => clock.nodeId === nodeId)) return state;
+  return {
+    ...state,
+    mergeClocks: [...existing, { nodeId, counter: 1 }].sort((left, right) =>
+      compareContactsSyncText(left.nodeId, right.nodeId),
+    ),
+  };
+}
+
 export function nextContactsSyncMergeStamp(
   state: ContactsSyncState,
   nodeId: string,

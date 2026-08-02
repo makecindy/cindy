@@ -7,6 +7,7 @@
 
 import {
   compareContactsSyncText,
+  ensureContactsSyncMergeClockNode,
   nextContactsSyncMergeStamp,
   nextContactsSyncStamp,
   stableContactsSyncJson,
@@ -197,7 +198,9 @@ export function captureContactsSnapshot(
     return { state, changed: false };
   }
 
-  let nextState = state;
+  let nextState = snapshotChanged
+    ? ensureContactsSyncMergeClockNode(state, nodeId)
+    : state;
   let dataStamp: ContactsSyncStamp | undefined;
   if (snapshotChanged) {
     const next = nextContactsSyncStamp(nextState, nodeId);
