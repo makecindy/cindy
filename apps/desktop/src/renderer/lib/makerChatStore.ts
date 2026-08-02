@@ -272,6 +272,12 @@ export interface ChatMessage {
   toolName?: string;
   toolInput?: unknown;
   /**
+   * Renderer-local timestamp for the latest in-place `update_plan` payload.
+   * `createdAt` remains the persisted message creation time and must not be
+   * rewritten because it also participates in message ordering.
+   */
+  planUpdatedAtMs?: number;
+  /**
    * 产生这条消息的模型 raw id(读自 agentMeta.model)。对 subagent 子消息而言
    * 即子代理实际跑的模型(如 'claude-haiku-4-5-20251001')。仅 SDK 带 model 的
    * 消息有值。用于在 Agent/Task 工具行上反查并渲染子代理模型 chip。
@@ -2618,6 +2624,7 @@ export function handleStreamEvent(
           ...messages[existingUpdatableToolIdx],
           content: formatToolUseSummary(toolName, input),
           toolInput: input,
+          ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
         };
         return {
           ...finalized,
@@ -2636,6 +2643,7 @@ export function handleStreamEvent(
             toolUseId,
             toolName,
             toolInput: input,
+            ...(toolName === 'update_plan' ? { planUpdatedAtMs: Date.now() } : {}),
             isStreaming: false,
             createdAt: new Date().toISOString(),
             // subagent-model-chip: 透传 SDK model / parent_tool_use_id,让
@@ -2737,6 +2745,7 @@ export function handleStreamEvent(
             terminalData?.plan,
             terminalTurnId,
             terminalTurnStatus,
+            Date.now(),
            ).messages
          : cleanedMessages;
 
