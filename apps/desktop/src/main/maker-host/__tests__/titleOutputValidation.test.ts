@@ -14,6 +14,11 @@ describe('validateTitleOutput', () => {
     ['根据对话内容这是一个标题', 'meta prefix without punctuation'],
     ['以下是标题：登录问题', 'Chinese meta prefix before title label'],
     ['以下是一个标题', 'Chinese meta prefix before ordinary characters'],
+    ['タイトル：ログイン問題', 'Japanese title label'],
+    ['제목: 로그인 문제', 'Korean title label'],
+    ['アシスタント：回帰テストを追加', 'Japanese role label'],
+    ['사용자: 계속해 주세요', 'Korean role label'],
+    ['助手：再补一个回归测试', 'Chinese role label'],
   ])('rejects %s (%s)', (value) => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });

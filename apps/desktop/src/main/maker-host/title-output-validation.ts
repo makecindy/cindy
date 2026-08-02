@@ -1,8 +1,9 @@
 /** Deterministic acceptance rules for model-produced session titles. */
 
 const META_PREFIX_RE =
-  /^(?:(?:according to (?:the )?conversation|based on (?:the )?conversation|here(?:'s| is) (?:the )?title)(?:\b|\s|[,:：，。.!！?？])|title\s*[:：]|标题\s*[:：]|以下是|根据对话内容)/iu;
-const ROLE_LABEL_RE = /(?:^|\s)(?:assistant|user)\s*(?::|：|[-—–]\s)/iu;
+  /^(?:(?:according to (?:the )?conversation|based on (?:the )?conversation|here(?:'s| is) (?:the )?title)(?:\b|\s|[,:：，。.!！?？])|(?:title|标题|タイトル|제목)\s*[:：]|以下是|根据对话内容)/iu;
+const ROLE_LABEL_RE =
+  /(?:^|\s)(?:assistant|user|助手|用户|アシスタント|ユーザー|어시스턴트|사용자)\s*(?::|：|[-—–]\s)/iu;
 
 function exceedsUnicodeCodePointLimit(value: string, maxChars: number): boolean {
   let count = 0;
