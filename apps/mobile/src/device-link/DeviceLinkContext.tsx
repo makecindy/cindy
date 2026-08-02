@@ -41,13 +41,21 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
+import {
+  handlePeerLinkCloseFrame,
+  invalidatePeerLinkState,
+} from '@/device-link/linkClose';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import {
   classifySnapshotBatchFailure,
   rehydrateDeviceLinkTopics,
   type DeviceLinkRehydrateSendOptions,
 } from '@/device-link/rehydrate';
-import { invalidateOfflineScheduleIndexFailureFor, invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
+import {
+  invalidateOfflineScheduleIndexFailureFor,
+  invalidateScheduleIndexForDevice,
+  invalidateTransientScheduleIndexFailures,
+} from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -96,6 +104,7 @@ import {
   schedulePresenceWipeTimer,
   updatePresenceAvailability,
 } from '@/device-link/presenceRecovery';
+import { hasMoreOlderMessages } from '@/session/messagePaging';
 import type { InputProjection, PendingInteraction, RemoteMessage } from '@/session/types';
 import { createVisualMockDeviceLinkContext, seedVisualMockStore } from '@/debug/visualMock';
 
@@ -182,6 +191,42 @@ const PRESENCE_OFFLINE_WIPE_GRACE_MS = 5_000;
  * 一次普通 invoke 往返,但只在旧 timer 剩余时间更短时向后延,不随抖动无限重置。
  */
 const RECONNECT_MIN_WIPE_GRACE_MS = 3_000;
+/**
+ * 断连补齐时拉的最新窗口大小。与 `hasMoreOlderMessages` 的判定共用同一个数:满页即说明这一页
+ * 上沿之外服务端还有历史,store 据此丢弃无法确认相接的更早缓存段(见 setLatestMessageWindow
+ * 与 #1222)。
+ */
+const RECONNECT_MESSAGE_WINDOW_LIMIT = 80;
+
+const SESSION_TOPIC_PREFIX = 'session:';
+
+/**
+ * `session:<id>` 订阅停了 = 该会话的实时行从此不再送到本端(退后台释放重量级订阅、离开会话
+ * 取消订阅)。窗口「已验证连续」区间的上界因此不能再被之后到达的 push 续算 —— 与它之间可能漏了
+ * 任意多行(见 remoteSessionStore 的 sessionWindowCoverage)。socket 掉线走不带 sessionId 的整体
+ * 失效:那影响所有订阅。
+ */
+function noteSessionLiveStreamsInterrupted(topics: readonly string[]): void {
+  for (const topic of topics) {
+    if (!topic.startsWith(SESSION_TOPIC_PREFIX)) continue;
+    const sessionId = topic.slice(SESSION_TOPIC_PREFIX.length);
+    if (sessionId) remoteSessionStore.noteLiveStreamInterrupted(sessionId);
+  }
+}
+
+/**
+ * `session:<id>` 订阅被远端 ACK = 从此刻起该会话的行会被推过来。屏幕侧刻意不等 ACK 就拉页
+ * (`void subscribe(...)`),所以「页落库时订阅是否已 ACK」正是 store 判断尾部可不可信的依据
+ * (见 remoteSessionStore 的 `liveTailTrusted`)。ACK 本身不点亮既有区间:ACK 之前的空窗里可能
+ * 已经漏了行。
+ */
+function noteSessionLiveStreamsAcked(topics: readonly string[]): void {
+  for (const topic of topics) {
+    if (!topic.startsWith(SESSION_TOPIC_PREFIX)) continue;
+    const sessionId = topic.slice(SESSION_TOPIC_PREFIX.length);
+    if (sessionId) remoteSessionStore.noteLiveStreamAcked(sessionId);
+  }
+}
 
 export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   if (MOBILE_VISUAL_MOCK_ENABLED) {
@@ -208,7 +253,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     isConfirmationInFlight: (deviceId: string) =>
-      openLinkInFlightRef.current.has(deviceId),
+      openLinkInFlightRef.current.get(deviceId)?.pending === true,
   }), []);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
@@ -235,6 +280,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteResponseEvidenceEpochs,
       deviceId,
       () => sendOpenLinkWithAccessHandling(client, deviceId),
+      { retainSuccessful: true },
     );
   }, []);
 
@@ -258,7 +304,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       || backgroundReleaseInFlightRef.current
       || backgroundReleaseGenerationRef.current !== releaseGeneration
     ) return;
-    markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend);
+    // 只有仍被持有、真正记进 ACK 表的 topic 才算订阅生效(中途被释放的那些不算)。
+    noteSessionLiveStreamsAcked(
+      markHeldRemoteTopicsSubscribed(remoteSubscribedTopicsRef.current, registryRef.current, deviceId, toSend),
+    );
   }, []);
 
   // 熔断 open 设备的显式代表性探测:openLink 建链(成功按不定论,不关熔断),
@@ -425,6 +474,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
                 // 目标端真实应答即可证明设备可达,取消上一代 unavailable 留下的宽限清理;
                 // 不伪造 presence=true,后续权威 false delta 仍可照常过滤并重新计时。
                 clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
+                remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+                invalidateOfflineScheduleIndexFailureFor(deviceId);
               },
               onDeviceRemoteDisabled: (deviceId) => {
                 // 被控端实时设置已明确关闭远控:这是当前 epoch 的权威终态,
@@ -571,6 +622,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       if (next !== 'online') {
         openLinkInFlightRef.current.clear();
         remoteSubscribedTopicsRef.current.clear();
+        // 掉线:所有会话的实时行都可能从此漏收,窗口连续性结论的上界不再可续算。
+        remoteSessionStore.noteLiveStreamInterrupted();
         // 掉线即取消挂起的补齐重试:重新 online 会触发全量补齐,无需旧计时器
         clearRehydrateRetry(true);
         return;
@@ -603,6 +656,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offPresence = client.onPresenceChanged((snap) => {
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
+      // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
+      // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
+      openLinkInFlightRef.current.delete(snap.deviceId);
       setLastPresenceSnapshot(snap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
@@ -653,6 +709,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
+      remoteScheduleEventStore.clearDeviceMirrorInvalidation(snap.deviceId);
       // 每个「可用」快照都清该设备的 DEVICE_OFFLINE 负缓存(review P1 ×2):
       // 主机在手机连上 relay 之前就离线时,presence 只在变化时广播,首个在线
       // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
@@ -662,6 +719,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
+      onLinkClosed: (deviceId) => invalidatePeerLinkState(
+        deviceId,
+        openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current,
+        noteSessionLiveStreamsInterrupted,
+      ),
       onProviderChanged: (deviceId) => {
         // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
@@ -731,9 +794,10 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     const releaseHeavyTopics = (): Promise<void>[] => {
       const releases: Promise<void>[] = [];
       for (const plan of registryRef.current.snapshot()) {
-        const heavy = plan.topics.filter((topic) => topic.startsWith('session:'));
+        const heavy = plan.topics.filter((topic) => topic.startsWith(SESSION_TOPIC_PREFIX));
         if (heavy.length === 0) continue;
         markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, plan.deviceId, heavy);
+        noteSessionLiveStreamsInterrupted(heavy);
         if (client.getStatus() === 'online') {
           releases.push(sendUnsubscribe(client, plan.deviceId, heavy));
         }
@@ -861,6 +925,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       isDeviceLinkTopic(topic) && !releasedSet.has(topic) && !registryRef.current.hasTopic(deviceId, topic));
     const toSend = normalizeDeviceLinkTopics([...new Set([...released, ...staleUnheld])]);
     markRemoteTopicsUnsubscribed(remoteSubscribedTopicsRef.current, deviceId, toSend);
+    noteSessionLiveStreamsInterrupted(toSend);
     if (toSend.length === 0) return;
     await sendUnsubscribe(requireClient(clientRef.current), deviceId, toSend);
   }, []);
@@ -900,14 +965,20 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
-function routeFrame(env: Envelope, handlers: {
+export function routeFrame(env: Envelope, handlers: {
   onAccessRevoked?: (deviceId: string) => void;
+  onLinkClosed?: (deviceId: string) => void;
   onProviderChanged?: (deviceId: string) => void;
 } = {}): void {
+  const peerLinkClosed = handlePeerLinkCloseFrame(
+    env,
+    (deviceId) => handlers.onLinkClosed?.(deviceId),
+  );
   if (applyAccessRevokedFrame(env)) {
     if (env.src) handlers.onAccessRevoked?.(env.src);
     return;
   }
+  if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
   if (push.channel === 'maker:provider:changed') {
@@ -925,14 +996,14 @@ function routeFrame(env: Envelope, handlers: {
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);
 }
 
-/** provider revision 后并行重拉两种 agent 的能力；旧代或异常结果都不触碰当前页面。 */
+/** provider revision 后并行重拉所有 agent 的能力；旧代或异常结果都不触碰当前页面。 */
 async function refreshDeviceCapabilities(
   client: DeviceLinkClient,
   deviceId: string,
 ): Promise<void> {
   const generation = getAgentCapabilitiesGeneration(deviceId);
   await Promise.allSettled(
-    (['claude-code', 'codex'] as const).map(async (agentKind) => {
+    (['claude-code', 'codex', 'pi'] as const).map(async (agentKind) => {
       const raw = await sendInvokeWithAccessHandling<unknown>(
         client,
         deviceId,
@@ -966,7 +1037,7 @@ async function rebuildSessionSnapshot(
   const [history, pending, projection, goal] = await Promise.allSettled([
     sendInvokeWithAccessHandling<RemoteMessage[]>(client, deviceId, 'local-db:messages:list', [
       sessionId,
-      { limit: 80 },
+      { limit: RECONNECT_MESSAGE_WINDOW_LIMIT },
     ], sendOpts),
     sendInvokeWithAccessHandling<PendingInteraction[]>(
       client,
@@ -991,7 +1062,12 @@ async function rebuildSessionSnapshot(
     ),
   ]);
   if (history.status === 'fulfilled' && Array.isArray(history.value)) {
-    remoteSessionStore.setLatestMessageWindow(sessionId, history.value);
+    // moreBeyondWindow:这一页上沿之外服务端还有历史(满 80 条,或被 device-link 裁过行)。为真时
+    // store 不保留早于本页的缓存段 —— 断连期间漏收的 push 可能正落在两段之间,保留就在窗口里
+    // 留下孤岛,而漏收的量不大时两侧时间差很小、时间阈值的空洞检测发现不了(#1222)。
+    remoteSessionStore.setLatestMessageWindow(sessionId, history.value, {
+      moreBeyondWindow: hasMoreOlderMessages(history.value, RECONNECT_MESSAGE_WINDOW_LIMIT),
+    });
   }
   if (pending.status === 'fulfilled' && Array.isArray(pending.value)) {
     remoteSessionStore.setPendingInteractions(sessionId, pending.value, { finalizeStreaming: true });
@@ -1255,9 +1331,23 @@ function requireClient(client: DeviceLinkClient | null): DeviceLinkClient {
   return client;
 }
 
+function markOfflineDeviceMirror(deviceId: string): void {
+  // 普通离线只清依赖在线连接的 live 投影,保留 session/messages。这样用户切回
+  // 刚看过的会话时先看到 last-known 内容,恢复后 marker 失效会触发后台窗口对账。
+  remoteSessionStore.markDeviceOffline(deviceId);
+  invalidateScheduleIndexForDevice(deviceId);
+  remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
+  evictDeviceProviders(deviceId);
+  evictDeviceModelMeta(deviceId);
+  evictAgentCapabilitiesForDevice(deviceId);
+  evictComposerPaletteCacheForDevice(deviceId);
+}
+
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);
+  remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
   // Drop the cached provider catalog so a returning/re-granted device re-fetches it
   // instead of serving a list frozen from a previous connection.
   evictDeviceProviders(deviceId);
@@ -1273,7 +1363,7 @@ const basePresenceWipeTimerDeps = {
   setTimer: (callback: () => void, delayMs: number) =>
     setTimeout(callback, delayMs),
   clearTimer: clearTimeout,
-  wipe: wipeUnavailableDeviceMirror,
+  wipe: markOfflineDeviceMirror,
 };
 
 function scheduleUnavailableDeviceMirrorWipe(

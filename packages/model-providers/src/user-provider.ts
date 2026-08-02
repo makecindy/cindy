@@ -18,6 +18,7 @@ import type {
   Effort,
   Provider,
   ProviderRuntimeModelConfig,
+  ProviderWireProtocol,
   RoutingDescriptor,
 } from './types.js';
 import { isLoopbackProviderUrl } from './provider-url.js';
@@ -36,12 +37,15 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh'],
+  // pi 经 thinking level 表达推理强度(off/minimal/low/medium/high/xhigh/max);选择器给
+  // 与 claude 同档,实际是否生效由自定义模型后端决定(BYOM 本地模型可能不支持,无害)。
+  pi: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
 };
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
 
 /** 固定 agent 顺序：保证派生出的 provider.agents / routing / models 顺序稳定。 */
-const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex'];
+const AGENT_ORDER: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 
 /** 单个用户填写的模型 → CatalogModel（补默认元数据；effort 按所属 agent 参考内置默认）。 */
 function toCatalogModel(
@@ -54,6 +58,12 @@ function toCatalogModel(
     id: m.id,
     name: m.name,
     contextWindow: m.contextWindow ?? DEFAULT_CUSTOM_CONTEXT_WINDOW,
+    // 用户自己填了才算显式声明;走 DEFAULT_CUSTOM_CONTEXT_WINDOW 兜底的不标记 ——
+    // 那是「仅用于展示」的保守默认,不能拿去收敛运行期上报的窗口。
+    ...(m.contextWindow !== undefined ? { contextWindowVerified: true } : {}),
+    // 显式配置的窗口打标:编辑表单回转配置时必须与「缺省物化成的默认值」可区分,
+    // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
+    ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),
     efforts,
     defaultEffort: efforts.length > 0 ? DEFAULT_CUSTOM_EFFORT : null,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
@@ -63,8 +73,13 @@ function toCatalogModel(
   };
 }
 
-function defaultWireProtocol(agent: AgentKind): 'anthropic-messages' | 'openai-responses' {
-  return agent === 'claude-code' ? 'anthropic-messages' : 'openai-responses';
+function defaultWireProtocol(agent: AgentKind): ProviderWireProtocol {
+  // pi 默认 openai-chat:BYOM 本地端点(Ollama/vLLM 的 /v1/chat/completions)最常见。
+  // 注:pi 走原生 provider 直连,routing.pi 不被 native 路径消费——此默认仅影响(未用的)
+  // 路由描述符里是否显式记 wireProtocol,pi 实际 api 由 pi-host resolvePiNativeProviders 定。
+  if (agent === 'claude-code') return 'anthropic-messages';
+  if (agent === 'pi') return 'openai-chat';
+  return 'openai-responses';
 }
 
 /** baseUrl + 自定义 headers → 路由描述符（**不含密钥**）。 */

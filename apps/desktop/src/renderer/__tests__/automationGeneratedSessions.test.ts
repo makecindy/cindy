@@ -101,15 +101,18 @@ describe('automation-generated sessions', () => {
   });
 
   it('keeps scheduler sessions in the desktop-visible source contract', () => {
-    // feishu / slack / telegram / discord 四个 IM 渠道均进 desktop sidebar
+    // 所有会生成本地会话的 IM 渠道均进入 desktop sidebar。
     // (feishu 2026-07-16 起以「对话」分组回归, 见 sessionSource.ts 注释)。
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toEqual([
       'desktop',
       'feishu',
       'slack',
       'telegram',
+      'x',
       'discord',
       'wechat',
+      'dingtalk',
+      'wecom',
       'scheduler',
       'learn',
       'shared',
@@ -118,6 +121,7 @@ describe('automation-generated sessions', () => {
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('feishu');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('telegram');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('discord');
+    expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('dingtalk');
     expect(DESKTOP_VISIBLE_SESSION_SOURCES).toContain('plugin');
 
     expect(normalizeSessionSource('desktop')).toBe('desktop');
@@ -126,6 +130,8 @@ describe('automation-generated sessions', () => {
     expect(normalizeSessionSource('feishu')).toBe('feishu');
     expect(normalizeSessionSource('telegram')).toBe('telegram');
     expect(normalizeSessionSource('discord')).toBe('discord');
+    expect(normalizeSessionSource('dingtalk')).toBe('dingtalk');
+    expect(normalizeSessionSource('wecom')).toBe('wecom');
     expect(normalizeSessionSource('plugin')).toBe('plugin');
     expect(normalizeSessionSource(null)).toBe('desktop');
     expect(normalizeSessionSource('unknown')).toBe('desktop');
@@ -757,8 +763,10 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('disabled={!latestSession}');
     // 自动任务组头首图标必须复用普通 SessionItem 的 15px 槽与 vendor 尺寸规则，
     // 否则裸 VendorIcon 会比其它会话向左偏约 1.5px，Claude mark 还会小 1px。
+    // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
     expect(source).toContain('className="flex w-[15px] shrink-0 items-center justify-center"');
-    expect(source).toContain("size={latestSession?.agentKind === 'codex' ? 12 : 13}");
+    expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
+    expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
     expect(source).toContain('<AutomationTimerIcon');
     expect(source).toContain('paused={isScheduleStopped}');
@@ -968,12 +976,12 @@ describe('automation-generated sessions', () => {
     expect(runHistoryCardSource).toContain("run.costAttribution === 'legacy'");
     expect(zh.scheduler.cell.totalCost).toBe('开销 {{cost}}');
     expect(zh.scheduler.cell.totalValue).toBe('价值 {{value}}');
-    expect(zh.scheduler.runs.sessionCost).toBe('对话开销 {{cost}}');
-    expect(zh.scheduler.runs.sessionValue).toBe('对话价值 {{value}}');
+    expect(zh.scheduler.runs.sessionCost).toBe('任务开销 {{cost}}');
+    expect(zh.scheduler.runs.sessionValue).toBe('任务价值 {{value}}');
     expect(zh.scheduler.runs.runCost).toBe('本次开销 {{cost}}');
     expect(zh.scheduler.runs.legacyCostUnavailable).toBe('历史费用无法拆分');
     expect(zh.scheduler.runs.persistentSessionGroup).toBe(
-      '持续对话 {{session}} · {{count}} 次运行',
+      '持续任务 {{session}} · {{count}} 次运行',
     );
     expect(zh.scheduler.runs.expandRemainingRuns).toBe('展开另外 {{count}} 次');
   });

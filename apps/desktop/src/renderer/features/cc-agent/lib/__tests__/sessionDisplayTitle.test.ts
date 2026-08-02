@@ -11,7 +11,7 @@ import {
   toStoredSessionTitle,
 } from '../sessionDisplayTitle';
 
-const UNNAMED = '未命名对话';
+const UNNAMED = '未命名任务';
 
 function session(over: Partial<Session> = {}): Session {
   return {

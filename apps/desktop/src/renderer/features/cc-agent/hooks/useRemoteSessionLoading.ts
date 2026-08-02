@@ -20,37 +20,42 @@ export const REMOTE_LOADING_DELAY_MS = 250;
  *  - isRemote=false(本机会话)→ 永不显示(零回归)。
  *  - historyLoaded=true → 已就位,不显示。
  *  - delayElapsed=false → 还在防闪窗口内,不显示(避免快隧道闪一下)。
+ *  - hasMessages=true → 屏上已经有内容(冷缓存 hydrate 出的最近一页,见
+ *    features/device-link/mirrorCacheClient.ts),覆盖层就没有存在意义了:
+ *    它会盖在已经可读的消息上,反而比空白更糟。
  */
 export function shouldShowRemoteLoading(
   isRemote: boolean,
   historyLoaded: boolean,
   delayElapsed: boolean,
+  hasMessages = false,
 ): boolean {
-  return isRemote && !historyLoaded && delayElapsed;
+  return isRemote && !historyLoaded && delayElapsed && !hasMessages;
 }
 
 /**
  * 远程会话首屏 loading 可见性。remoteDeviceId 为空(本机)恒为 false。
  * 进入「远程 + 未加载」条件后启动 delayMs 计时;到期才允许显示;条件离开(加载完成 /
- * 切到本机 / 换设备)立即复位 + 清计时,确保不残留、不闪。
+ * 切到本机 / 换设备 / 缓存已把内容画出来)立即复位 + 清计时,确保不残留、不闪。
  */
 export function useRemoteSessionLoading(
   remoteDeviceId: string | undefined,
   historyLoaded: boolean,
+  hasMessages = false,
   delayMs: number = REMOTE_LOADING_DELAY_MS,
 ): boolean {
   const isRemote = !!remoteDeviceId;
   const [delayElapsed, setDelayElapsed] = useState(false);
 
   useEffect(() => {
-    if (!isRemote || historyLoaded) {
+    if (!isRemote || historyLoaded || hasMessages) {
       setDelayElapsed(false);
       return;
     }
     setDelayElapsed(false);
     const timer = setTimeout(() => setDelayElapsed(true), delayMs);
     return () => clearTimeout(timer);
-  }, [isRemote, historyLoaded, remoteDeviceId, delayMs]);
+  }, [isRemote, historyLoaded, hasMessages, remoteDeviceId, delayMs]);
 
-  return shouldShowRemoteLoading(isRemote, historyLoaded, delayElapsed);
+  return shouldShowRemoteLoading(isRemote, historyLoaded, delayElapsed, hasMessages);
 }

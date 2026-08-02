@@ -216,6 +216,41 @@ export class ContactsFts {
       return -1;
     }
   }
+
+  /** 派生索引须与主表投影逐字段一致；仅比较行数会漏掉陈旧文本。 */
+  isConsistent(docs: readonly ContactFtsDoc[]): boolean {
+    try {
+      const rows = this.db
+        .prepare(
+          `SELECT contact_id AS contactId, kind, status, name, aliases, identities,
+                  summary, narrative, events, relations
+           FROM ${TABLE}
+           ORDER BY contact_id COLLATE BINARY`,
+        )
+        .all() as ContactFtsDoc[];
+      const expected = [...docs].sort((a, b) =>
+        a.contactId < b.contactId ? -1 : a.contactId > b.contactId ? 1 : 0,
+      );
+      if (rows.length !== expected.length) return false;
+      return rows.every((row, index) => {
+        const doc = expected[index]!;
+        return (
+          row.contactId === doc.contactId &&
+          row.kind === doc.kind &&
+          row.status === doc.status &&
+          row.name === doc.name &&
+          row.aliases === doc.aliases &&
+          row.identities === doc.identities &&
+          row.summary === doc.summary &&
+          row.narrative === doc.narrative &&
+          row.events === doc.events &&
+          row.relations === doc.relations
+        );
+      });
+    } catch {
+      return false;
+    }
+  }
 }
 
 /** 与 memory/fts.ts 同策略: 整体包 phrase, 内部双引号 escape, 防语法注入 */

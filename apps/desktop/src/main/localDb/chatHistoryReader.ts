@@ -29,7 +29,7 @@ const messageRowid = sql<number>`"messages"."rowid"`;
 // ── Types ───────────────────────────────────────────────────────────────────
 
 export type HistoryOrder = 'asc' | 'desc';
-export type HistoryAgentKind = 'cc' | 'codex';
+export type HistoryAgentKind = 'cc' | 'codex' | 'pi';
 
 export interface HistoryCursor {
   createdAt: number; // unix ms

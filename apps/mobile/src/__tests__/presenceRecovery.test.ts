@@ -207,6 +207,27 @@ describe('unavailable mirror wipe timer', () => {
     vi.useRealTimers();
   });
 
+  it('does not let a fulfilled retained link defer unavailable cleanup', async () => {
+    const { deps, timers, wipe } = timerHarness();
+    const tracked = new Map();
+    const request = getOrCreatePresenceTrackedRequest(
+      tracked,
+      createPresenceAvailabilityEpochs(),
+      createPresenceAvailabilityEpochs(),
+      'dev-1',
+      async () => 'accepted',
+      { retainSuccessful: true },
+    );
+    await request.request;
+    deps.isConfirmationInFlight = () => tracked.get('dev-1')?.pending === true;
+
+    vi.advanceTimersByTime(5_000);
+
+    expect(timers.has('dev-1')).toBe(false);
+    expect(wipe).toHaveBeenCalledWith('dev-1');
+    vi.useRealTimers();
+  });
+
   it('allows only an active confirmation to cross the maximum lifetime', () => {
     const { deps, states, timers, wipe } = timerHarness();
     let confirming = true;
@@ -363,6 +384,76 @@ describe('presence availability epochs', () => {
 
     resolveRequest();
     await request;
+  });
+
+  it('retains a successful tracked request for link reuse until the owner invalidates it', async () => {
+    const epochs = createPresenceAvailabilityEpochs();
+    const responseEvidenceEpochs = createPresenceAvailabilityEpochs();
+    const tracked = new Map();
+    const create = vi.fn(async () => 'accepted');
+
+    const first = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+    await expect(first.request).resolves.toBe('accepted');
+    const reused = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+
+    expect(reused).toBe(first);
+    expect(reused.pending).toBe(false);
+    expect(create).toHaveBeenCalledTimes(1);
+    tracked.delete('dev-1');
+    const reopened = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+    await reopened.request;
+    expect(create).toHaveBeenCalledTimes(2);
+  });
+
+  it('does not retain failed requests when successful reuse is enabled', async () => {
+    const epochs = createPresenceAvailabilityEpochs();
+    const responseEvidenceEpochs = createPresenceAvailabilityEpochs();
+    const tracked = new Map();
+    const create = vi.fn()
+      .mockRejectedValueOnce(new Error('offline'))
+      .mockResolvedValueOnce('accepted');
+
+    const failed = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+    await expect(failed.request).rejects.toThrow('offline');
+    await Promise.resolve();
+    const retried = getOrCreatePresenceTrackedRequest(
+      tracked,
+      epochs,
+      responseEvidenceEpochs,
+      'dev-1',
+      create,
+      { retainSuccessful: true },
+    );
+    await expect(retried.request).resolves.toBe('accepted');
+    expect(create).toHaveBeenCalledTimes(2);
   });
 
   it('resets epochs on logout or account change', () => {

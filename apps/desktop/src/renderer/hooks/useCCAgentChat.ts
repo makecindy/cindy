@@ -34,6 +34,7 @@ import {
   type AskUserDraft,
   type AskUserViewerState,
   type ChatMessage,
+  type ContinuationInFlightProjectionCapability,
   type PendingPermission,
   type PendingAskUser,
   type PendingPluginSetup,
@@ -54,6 +55,7 @@ import type { AttachedFile, MentionedResource } from '@/lib/fileTypes';
 import type { PastedTextRange, SlashCommandRange } from '@/lib/imageRef';
 import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
 import { createLogger } from '@/lib/logger';
+import type { UsageLimitRecoveryHint } from '@/lib/usageLimitRecovery';
 
 const log = createLogger('UseCCAgentChat');
 
@@ -63,6 +65,7 @@ export type {
   AskUserDraft,
   AskUserViewerState,
   ChatMessage,
+  ContinuationInFlightProjectionCapability,
   PendingPermission,
   PendingAskUser,
   PendingPlanReview,
@@ -156,7 +159,7 @@ interface UseCCAgentChatReturn {
   /** Dismiss the error banner without retrying. */
   clearError: () => void;
   /** Retry the main-owned typed recovery target. */
-  retryLastError: () => void;
+  retryLastError: () => Promise<void>;
   /** silent-stop 耗尽横幅「继续」:清横幅并发隐藏续跑指令(充值守卫额度)。 */
   continueAfterSilentStop: () => void;
   /** F-CMD: Insert a local-only system card */
@@ -169,6 +172,8 @@ interface UseCCAgentChatReturn {
   /** F-CMD: Patch a specific local-only system card in place */
   updateSystemCardData: (clientId: string, patch: Record<string, unknown>) => void;
   error: string | null;
+  /** 可恢复的账号用量限制；resetAtMs 识别失败时为 null。 */
+  usageLimitRecovery: UsageLimitRecoveryHint | null;
   /** 当前 terminal error 的稳定 reason key(如 'silent-stop-exhausted');ErrorBanner
    *  据此渲染专用 action。仅 error 非空时有意义。 */
   errorReason: string | null;
@@ -181,6 +186,10 @@ interface UseCCAgentChatReturn {
   credentialSwitchWait: { clientId?: string; blockedBySessionIds: string[] } | null;
   /** 已离队、正在 coordinator dispatch/turn 边界内的 Continue clientId。 */
   continuationInFlightClientId: string | null;
+  /** 当前 vendor turn 的续跑发起项 clientId，steer 后及 Renderer 重载仍保持。 */
+  continuationTurnClientId: string | null;
+  /** 续跑边界投影能力；legacy 时保留旧被控端的兼容兜底。 */
+  continuationInFlightProjectionCapability: ContinuationInFlightProjectionCapability;
   /** F-SYNC-2: Load older messages (prepend to top) */
   loadOlderMessages: () => void;
   isLoadingMore: boolean;
@@ -499,8 +508,8 @@ export function useCCAgentChat(
   }, [sessionId]);
 
   const retryLastError = useCallback(() => {
-    if (!sessionId) return;
-    makerChatStore.retryLastError(sessionId);
+    if (!sessionId) return Promise.resolve();
+    return makerChatStore.retryLastError(sessionId);
   }, [sessionId]);
 
   const insertSystemCard = useCallback(
@@ -815,6 +824,7 @@ export function useCCAgentChat(
     updateLastSystemCardData,
     updateSystemCardData,
     error: lightState.error ?? lightState.recoverableError,
+    usageLimitRecovery: lightState.error ? (lightState.usageLimitRecovery ?? null) : null,
     // 终止型沿用原语义(reason 只在 error 非空时有意义)。非终止型此前恒给 null ——
     // 那时 store 侧非终止分支也恒清 reason, 两边一致; 现在过载重投会在非终止态带上
     // 稳定 reason key(ErrorBanner 靠它渲染本地化重试进度), 必须透出, 否则 UI 只能
@@ -829,6 +839,9 @@ export function useCCAgentChat(
     errorRetryText: lightState.errorRetryText,
     credentialSwitchWait: lightState.credentialSwitchWait,
     continuationInFlightClientId: lightState.continuationInFlightClientId,
+    continuationTurnClientId: lightState.continuationTurnClientId,
+    continuationInFlightProjectionCapability:
+      lightState.continuationInFlightProjectionCapability,
     loadOlderMessages,
     isLoadingMore: lightState.isLoadingMore,
     hasMoreMessages: lightState.hasMoreMessages,

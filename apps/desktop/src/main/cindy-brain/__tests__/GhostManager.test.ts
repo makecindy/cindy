@@ -562,6 +562,28 @@ describe('GhostManager · author / icon(身份卡展示字段)', () => {
     await expectRejection(await manager.install(cindy), 'file-invalid');
   });
 
+  it.runIf(process.platform !== 'win32')(
+    '已装目录 icon 被换成指向目录外的符号链接 → list 降级为无图标,不外泄目标字节',
+    async () => {
+      const cindy = await makeCindy('icon3.cindy', iconManifest(), { 'assets/icon.png': 'PNGDATA' });
+      await manager.install(cindy);
+      // 装完后把 icon 换成指向插件目录外一个私密文件的符号链接:statSync 会
+      // 跟随链接对目标判 isFile/大小 → 通过,再 readFileSync 目标字节 → 经
+      // iconDataUrl 送进 Renderer。限量闸拒链接,list 只降级为无图标。
+      const secret = path.join(workDir, 'ssh-key');
+      await fs.promises.writeFile(secret, 'PRIVATE-KEY-BYTES');
+      const iconAbs = path.join(rootDir, 'hello', 'assets', 'icon.png');
+      await fs.promises.rm(iconAbs);
+      await fs.promises.symlink(secret, iconAbs);
+      const listed = manager.list();
+      expect(listed).toHaveLength(1);
+      expect(listed[0].iconDataUrl).toBeUndefined();
+      expect(JSON.stringify(listed[0])).not.toContain(
+        Buffer.from('PRIVATE-KEY-BYTES').toString('base64'),
+      );
+    },
+  );
+
   it('已装意识的 icon 文件事后丢失 → list 降级为无图标,不影响意识本体', async () => {
     const cindy = await makeCindy('icon2.cindy', iconManifest(), { 'assets/icon.png': 'PNGDATA' });
     await manager.install(cindy);

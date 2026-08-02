@@ -68,6 +68,7 @@ import {
   applyAgentIslandUserPrompt,
   buildAgentIslandDisplayState,
   buildAllSessionActivitySnapshots,
+  closeAgentIslandSessionPreservingUnread,
   completeAgentIslandSessionWithoutAttention,
   createAgentIslandUserPromptRollbackToken,
   createAgentIslandState,
@@ -147,6 +148,11 @@ interface AgentIslandUserPromptDebugMeta {
   source?: string;
   clientId?: string;
   notifiedAt?: number;
+}
+
+interface AgentIslandEventOptions {
+  /** The host is automatically recovering this failure, so this transition stays silent. */
+  suppressErrorSound?: boolean;
 }
 
 export interface AgentIslandServiceDeps {
@@ -241,6 +247,7 @@ export class AgentIslandService {
   private readonly silencedRunHadAttention = new Map<string, boolean>();
   private readonly silencedRunClearTimers = new Map<string, ReturnType<typeof setTimeout>>();
   private readonly mutedCompletionSoundSessionIds = new Set<string>();
+  private readonly mutedErrorSoundSessionIds = new Set<string>();
   private readonly stoppedSessionIds = new Set<string>();
   private readonly replacementTurnPendingSessionIds = new Set<string>();
   private readonly replacementTurnDispatchingSessionIds = new Set<string>();
@@ -508,6 +515,7 @@ export class AgentIslandService {
     this.hiddenPublished = false;
     if (!wasSynced && !enabled) {
       this.mutedCompletionSoundSessionIds.clear();
+      this.mutedErrorSoundSessionIds.clear();
       this.clearPublishTimer();
       this.hiddenPublished = true;
       return;
@@ -558,6 +566,7 @@ export class AgentIslandService {
     this.metadataLoading.clear();
     this.lastSoundDisplayState = null;
     this.soundCooldownUntilByEvent.clear();
+    this.mutedErrorSoundSessionIds.clear();
     this.silencedRunSessionIds.clear();
     this.silencedSessionRunIds.clear();
     this.silencedRunHadAttention.clear();
@@ -604,7 +613,11 @@ export class AgentIslandService {
     setAgentIslandAppFocused(this.state, focused, now);
   }
 
-  handleAgentEvent(meta: AgentIslandSessionMeta, event: AgentEvent): void {
+  handleAgentEvent(
+    meta: AgentIslandSessionMeta,
+    event: AgentEvent,
+    options: AgentIslandEventOptions = {},
+  ): void {
     const hydrated = this.hydrateMeta(meta);
     const providerTurnId = providerTurnIdFromAgentEvent(event);
     const replacementPending =
@@ -718,7 +731,24 @@ export class AgentIslandService {
       return;
     }
     this.clearStreamingPreviewPublishTimer();
+    if (isTerminalAgentErrorEvent(event) && options.suppressErrorSound === true) {
+      // Keep the mute through the initial enabled-state sync. A sound-capable
+      // publish consumes it immediately; no retry or delivery lifecycle is stored.
+      this.mutedErrorSoundSessionIds.add(hydrated.sessionId);
+    }
     this.publish();
+  }
+
+  /** Automatic recovery did not start; notify only while the failure still needs attention. */
+  restoreTaskFailureSound(sessionId: string): void {
+    this.mutedErrorSoundSessionIds.delete(sessionId);
+    if (!this.enabledSynced || !this.enabled) return;
+    const now = Date.now();
+    const displayState = buildAgentIslandDisplayState(this.state, now);
+    if (!displayState.visible || displayState.smartSuppressed) return;
+    const session = displayState.sessions.find((candidate) => candidate.sessionId === sessionId);
+    if (!session?.attention || session.phase !== 'error') return;
+    this.playConfiguredSound('error', now);
   }
 
   handleScheduleEvent(event: SchedulerEvent): void {
@@ -977,7 +1007,18 @@ export class AgentIslandService {
     }
   }
 
-  handleSessionClosed(sessionId: string): void {
+  /**
+   * @param options.reason
+   *   `'discarded'`(默认)= 这条记录不该再存在(会话归档 / 删除、Orca worker 被策略
+   *   清除),条目硬删。
+   *   `'process-closed'` = 只是 agent 进程收了(典型:临时会话调度 run 终态后的
+   *   closeSession),仍在展示的完成 / 错误卡片必须留着走完 dwell,否则刚弹出的卡片会
+   *   当场消失。见 `closeAgentIslandSessionPreservingUnread`。
+   */
+  handleSessionClosed(
+    sessionId: string,
+    options: { reason?: 'discarded' | 'process-closed' } = {},
+  ): void {
     this.stoppedSessionIds.delete(sessionId);
     this.replacementTurnPendingSessionIds.delete(sessionId);
     this.replacementTurnDispatchingSessionIds.delete(sessionId);
@@ -993,7 +1034,11 @@ export class AgentIslandService {
     this.deferredCompletions.delete(sessionId);
     // Remote auth retry closes the failed session before the renderer reports
     // whether its replacement turn started, so keep that deferred error here.
-    removeAgentIslandSession(this.state, sessionId);
+    if (options.reason === 'process-closed') {
+      closeAgentIslandSessionPreservingUnread(this.state, sessionId, Date.now());
+    } else {
+      removeAgentIslandSession(this.state, sessionId);
+    }
     this.deletePermissionRequestsForSession(sessionId);
     this.publish();
   }
@@ -1239,6 +1284,7 @@ export class AgentIslandService {
       next,
       this.mutedCompletionSoundSessionIds,
       new Set(this.silencedSessionRunIds.keys()),
+      this.mutedErrorSoundSessionIds,
     );
     if (!event) return;
     this.playConfiguredSound(event, now);
@@ -1385,6 +1431,7 @@ export class AgentIslandService {
     }
     if (!this.enabled) {
       this.mutedCompletionSoundSessionIds.clear();
+      this.mutedErrorSoundSessionIds.clear();
       this.clearStreamingPreviewPublishTimer();
       this.lastSoundDisplayState = withAgentIslandConfig(
         buildAgentIslandDisplayState(this.state, now),
@@ -1417,6 +1464,7 @@ export class AgentIslandService {
     this.scheduleNextPublish(now);
     this.playSoundForDisplayTransition(this.lastSoundDisplayState, displayState, now);
     this.mutedCompletionSoundSessionIds.clear();
+    this.mutedErrorSoundSessionIds.clear();
     this.lastSoundDisplayState = displayState;
 
     if (this.nativeHost.failed) {
@@ -1607,6 +1655,7 @@ export class AgentIslandService {
   private handleNativeScreenMetrics(metrics: {
     screens: AgentIslandNativeScreenMetrics[];
     preferredDisplayId: number | null;
+    forceRefresh: boolean;
   }): void {
     const signature = metrics.screens
       .map((item) => [
@@ -1617,7 +1666,11 @@ export class AgentIslandService {
         Math.round(item.topBarHeight),
       ].join(':'))
       .join('|');
-    if (signature === this.screenMetricsSignature && metrics.preferredDisplayId === this.nativePreferredDisplayId) {
+    if (
+      !metrics.forceRefresh
+      && signature === this.screenMetricsSignature
+      && metrics.preferredDisplayId === this.nativePreferredDisplayId
+    ) {
       return;
     }
     this.screenMetricsByDisplayId.clear();
@@ -2152,6 +2205,7 @@ function getAgentIslandSoundEventForTransition(
   next: AgentIslandDisplayState,
   mutedCompletionSessionIds: ReadonlySet<string> = new Set(),
   mutedStartSessionIds: ReadonlySet<string> = new Set(),
+  mutedErrorSessionIds: ReadonlySet<string> = new Set(),
 ): AgentIslandSoundEvent | null {
   const previousById = new Map(previous?.sessions.map((session) => [session.sessionId, session]) ?? []);
   for (const session of next.sessions) {
@@ -2161,6 +2215,7 @@ function getAgentIslandSoundEventForTransition(
   }
   for (const session of next.sessions) {
     if (!session.attention || session.phase !== 'error') continue;
+    if (mutedErrorSessionIds.has(session.sessionId)) continue;
     const prev = previousById.get(session.sessionId);
     if (prev?.phase !== 'error') return 'error';
   }
@@ -2248,4 +2303,3 @@ function isPlaceholderSessionTitle(title: string | null): boolean {
   const normalized = title.trim().toLowerCase();
   return normalized === '' || normalized === 'new maker' || normalized === 'untitled';
 }
-

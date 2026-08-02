@@ -1,13 +1,14 @@
 /**
  * Single-consumer async queue — many-producers push + single end().
  *
- * Copied verbatim from maker-core/src/agents/shared/async-queue.ts so this
+ * Kept in sync with maker-core/src/agents/shared/async-queue.ts so this
  * package stays zero-internal-deps (manager binary is esbuild-bundled and
  * shipped to remote SSH machines, can't pull in maker-core).
  */
 
 export interface AsyncQueue<T> extends AsyncIterable<T> {
-  push(item: T): void;
+  /** Returns false when the queue is already ended and did not accept input. */
+  push(item: T): boolean;
   end(): void;
 }
 
@@ -16,14 +17,15 @@ export function createAsyncQueue<T>(): AsyncQueue<T> {
   const waiters: Array<(done: boolean) => void> = [];
   let ended = false;
 
-  function push(item: T): void {
-    if (ended) return;
+  function push(item: T): boolean {
+    if (ended) return false;
     if (waiters.length > 0) {
       items.push(item);
       waiters.shift()!(false);
     } else {
       items.push(item);
     }
+    return true;
   }
 
   function end(): void {

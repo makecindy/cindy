@@ -4,6 +4,7 @@ import {
   dedupeToolMediaByUrl,
   extractPlanTodos,
   extractTodosFromSourceMessage,
+  findLatestMessageTodoInsertion,
   findMessageTodoInsertions,
   formatDuration,
   type MessageRenderItem,
@@ -248,6 +249,82 @@ describe('message render shared model', () => {
     ]);
 
     expect(items.map((item) => item.type)).toEqual(['work_group', 'message', 'message']);
+  });
+
+  // 交付正文与位置无关地留在折叠组外。原始形状(2026-07-31 定时巡检):agent 先输出
+  // 长篇简报,再调 notify 发通知,最后说一句「已触发通知」——SDK seal 只盖最后那句,
+  // 「最终答复」回溯又遇工具即停,简报会被整段折进「工作过程」。
+  it('keeps delivery prose outside the work fold even before a trailing side-effect tool', () => {
+    const brief = `本轮 7 条有活动。${'逐条核对了改动落在哪些产品面。'.repeat(50)}`;
+    expect(brief.length).toBeGreaterThanOrEqual(600);
+
+    const items = buildMessageRenderItems([
+      message({ kind: 'user', source: source('user', 'brief me', 1), body: 'brief me', label: 'user' }),
+      message({
+        kind: 'tool',
+        source: source('diff', { toolName: 'Bash', input: { command: 'gh pr diff' } }, 2),
+        body: 'Bash(gh pr diff)',
+        label: 'Bash',
+      }),
+      message({ kind: 'assistant', source: source('brief', brief, 3), body: brief, label: 'assistant' }),
+      message({
+        kind: 'tool',
+        source: source('notify', { toolName: 'schedule_notify_current_run', input: {} }, 4),
+        body: 'schedule_notify_current_run()',
+        label: 'schedule_notify_current_run',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('wrap', 'notified', 5),
+        body: '本轮有 3 条需要你决策,已触发通知。',
+        label: 'assistant',
+        turnCompleted: true,
+      }),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual([
+      'message',
+      'work_group',
+      'message',
+      'work_group',
+      'message',
+    ]);
+    expect(expectType(items[2], 'message').message.key).toBe('brief');
+    expect(expectType(items[4], 'message').message.key).toBe('wrap');
+  });
+
+  it('still folds short progress narration that precedes a trailing side-effect tool', () => {
+    const items = buildMessageRenderItems([
+      message({ kind: 'user', source: source('user', 'brief me', 1), body: 'brief me', label: 'user' }),
+      message({
+        kind: 'tool',
+        source: source('diff', { toolName: 'Bash', input: { command: 'gh pr diff' } }, 2),
+        body: 'Bash(gh pr diff)',
+        label: 'Bash',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('narration', 'reading', 3),
+        body: '读完了,现在写简报。',
+        label: 'assistant',
+      }),
+      message({
+        kind: 'tool',
+        source: source('notify', { toolName: 'schedule_notify_current_run', input: {} }, 4),
+        body: 'schedule_notify_current_run()',
+        label: 'schedule_notify_current_run',
+      }),
+      message({
+        kind: 'assistant',
+        source: source('wrap', 'notified', 5),
+        body: '本轮有 3 条需要你决策,已触发通知。',
+        label: 'assistant',
+        turnCompleted: true,
+      }),
+    ]);
+
+    expect(items.map((item) => item.type)).toEqual(['message', 'work_group', 'message']);
+    expect(expectType(items[2], 'message').message.key).toBe('wrap');
   });
 
   it('surfaces tool result media as a standalone tool_media item that stays outside the work fold', () => {
@@ -754,6 +831,146 @@ describe('message render todo grouping', () => {
     const insertions = findMessageTodoInsertions([done, next]);
 
     expect([...insertions.values()].map((item) => item.key)).toEqual(['todo-todo1', 'todo-todo2']);
+  });
+
+  // findLatestMessageTodoInsertion:桌面钉住式计划面板(PinnedPlanPanel)的数据源 ——
+  // 面板只展示"当前计划"一份,跨 source 取最近一次更新的 session 快照。
+
+  it('findLatestMessageTodoInsertion picks the most recently updated plan session across sources', () => {
+    const codex = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Check desktop', status: 'in_progress' }],
+    });
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+
+    const latest = findLatestMessageTodoInsertion([
+      codex,
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+    ]);
+
+    expect(latest).toMatchObject({ key: 'todo-task1', source: 'task' });
+  });
+
+  it('findLatestMessageTodoInsertion returns the merged session snapshot with the FIRST call key', () => {
+    const first = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'in_progress' }],
+    });
+    const second = tool('todo2', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'completed' }],
+    });
+
+    expect(findLatestMessageTodoInsertion([first, second])).toMatchObject({
+      key: 'todo-todo1',
+      todos: [{ content: 'Read code', status: 'completed' }],
+    });
+  });
+
+  it('findLatestMessageTodoInsertion returns null when the conversation has no plan calls', () => {
+    expect(findLatestMessageTodoInsertion([tool('t1', 'Bash', {})])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion treats empty plan updates as clearing the pinned plan', () => {
+    const first = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Read code', status: 'in_progress' }],
+    });
+    const clearTodo = tool('todo2', 'TodoWrite', { todos: [] });
+    const codex = tool('plan1', 'update_plan', {
+      plan: [{ step: 'Run tests', status: 'in_progress' }],
+    });
+    const clearCodex = tool('plan2', 'update_plan', { plan: [] });
+    const clearCodexObject = tool('plan3', 'update_plan', {});
+    const clearCodexText = tool('plan4', 'update_plan', { text: '  \n  ' });
+
+    expect(findLatestMessageTodoInsertion([first, clearTodo])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodex])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodexObject])).toBeNull();
+    expect(findLatestMessageTodoInsertion([codex, clearCodexText])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion does not fall back to an older source when the latest Task update is unresolved', () => {
+    const todo = tool('todo1', 'TodoWrite', {
+      todos: [{ content: 'Old todo source', status: 'in_progress' }],
+    });
+    const update = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'completed' }, 'update-1');
+
+    expect(findLatestMessageTodoInsertion([todo, update])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion clears the pinned plan when the latest Task update deletes the last task', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const remove = tool('task2', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      remove,
+    ])).toBeNull();
+  });
+
+  it('findLatestMessageTodoInsertion keeps remaining tasks when the latest Task update deletes one task', () => {
+    const first = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const second = tool('task2', 'TaskCreate', { subject: 'Write summary' }, 'create-2');
+    const remove = tool('task3', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-1');
+
+    expect(findLatestMessageTodoInsertion([
+      first,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      second,
+      result('create-2', 'Task #def created successfully: Write summary'),
+      remove,
+    ])).toMatchObject({
+      key: 'todo-task1',
+      source: 'task',
+      todos: [{ content: 'Write summary', status: 'pending' }],
+    });
+  });
+
+  it('keeps other completed tasks when the latest Task update deletes one completed task', () => {
+    const first = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const second = tool('task2', 'TaskCreate', { subject: 'Write summary' }, 'create-2');
+    const completeFirst = tool('task3', 'TaskUpdate', { taskId: 'abc', status: 'completed' }, 'update-1');
+    const completeSecond = tool('task4', 'TaskUpdate', { taskId: 'def', status: 'completed' }, 'update-2');
+    const removeFirst = tool('task5', 'TaskUpdate', { taskId: 'abc', status: 'deleted' }, 'update-3');
+
+    expect(findLatestMessageTodoInsertion([
+      first,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      second,
+      result('create-2', 'Task #def created successfully: Write summary'),
+      completeFirst,
+      completeSecond,
+      removeFirst,
+    ])).toMatchObject({
+      key: 'todo-task1',
+      source: 'task',
+      todos: [{ content: 'Write summary', status: 'completed' }],
+    });
+  });
+
+  it('treats TaskGet deleted results as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const getDeleted = tool('task2', 'TaskGet', { taskId: 'abc' }, 'get-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      getDeleted,
+      result('get-1', JSON.stringify({
+        task: { id: 'abc', subject: 'Collect logs', status: 'deleted' },
+      })),
+    ])).toBeNull();
+  });
+
+  it('treats explicit empty TaskList snapshots as clearing the latest task plan', () => {
+    const create = tool('task1', 'TaskCreate', { subject: 'Collect logs' }, 'create-1');
+    const listEmpty = tool('task2', 'TaskList', {}, 'list-1');
+
+    expect(findLatestMessageTodoInsertion([
+      create,
+      result('create-1', 'Task #abc created successfully: Collect logs'),
+      listEmpty,
+      result('list-1', JSON.stringify({ tasks: [] })),
+    ])).toBeNull();
   });
 
   it('parses Codex update_plan text and structured plan statuses', () => {

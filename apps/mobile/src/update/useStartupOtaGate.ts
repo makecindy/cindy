@@ -5,8 +5,49 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import * as Updates from 'expo-updates';
 import { IS_OTA_SELFHOST, OTA_SERVER_BASE_URL, REVIEW_MODE } from '@/config/env';
-import { runStartupOtaUpdate } from './startupOtaUpdate';
+import {
+  runEmergencyOtaRecovery,
+  runStartupOtaUpdate,
+  type StartupOtaOutcome,
+} from './startupOtaUpdate';
 import { updateChannelRequestHeaders } from './canaryChannelStore';
+import {
+  clearOtaReloadGuardIfLaunched,
+  readOtaReloadGuard,
+  recordOtaReload,
+  shouldBlockOtaReload,
+} from './otaReloadGuard';
+
+/**
+ * 启动闸门链全部走完(业务树可用)后调用:只有当次 reload 的目标 update 确实成为当前
+ * 运行版本时才清闸门记录。放在这里而不是热更门放行处——被闸门拦下也会放行进 App,
+ * 那时清记录等于每次冷启动都重新放开一次 reload,循环只会变成「每启动闪一轮」。
+ */
+export function markStartupOtaLaunchSuccess(): void {
+  void clearOtaReloadGuardIfLaunched(Updates.updateId);
+}
+
+/**
+ * 启动时把「本次跑的是哪份 JS」钉进日志流。
+ *
+ * 曾经排查一台无限转圈的设备时,客户端一行相关日志都没有,只能靠原生 dev.expo.updates
+ * 日志反推当前启动的是包内 bundle 还是热更包。这一行让同类问题一眼可判,
+ * 沿用 mobile 既有 `console.*` + `[tag]` 前缀约定。
+ */
+function logStartupOtaLaunch(outcome: StartupOtaOutcome): void {
+  console.info(
+    '[ota] startup gate',
+    JSON.stringify({
+      outcome,
+      updateId: Updates.updateId,
+      isEmbeddedLaunch: Updates.isEmbeddedLaunch,
+      isEmergencyLaunch: Updates.isEmergencyLaunch,
+      emergencyLaunchReason: Updates.emergencyLaunchReason,
+      createdAt: Updates.createdAt?.toISOString() ?? null,
+      runtimeVersion: Updates.runtimeVersion,
+    }),
+  );
+}
 
 export function useStartupOtaGate(isCanary = false): boolean {
   // 仅自建变体 + 非 dev + expo-updates 运行时可用才走热更门;其余一律直接放行。
@@ -49,16 +90,32 @@ export function useStartupOtaGate(isCanary = false): boolean {
     if (!enabled || started.current) return;
     started.current = true; // 只冷启一次(不随 resume 重跑)
     let cancelled = false;
-    void runStartupOtaUpdate({
+    const otaDeps = {
       enabled,
       configureUpdateUrl,
       checkForUpdateAsync: () => Updates.checkForUpdateAsync(),
       fetchUpdateAsync: () => Updates.fetchUpdateAsync(),
       reloadAsync: () => Updates.reloadAsync(),
-    }).then((outcome) => {
+      isEmergencyLaunch: () => Updates.isEmergencyLaunch,
+      currentUpdateId: () => Updates.updateId,
+      isReloadBlocked: async (targetUpdateId: string) =>
+        shouldBlockOtaReload(await readOtaReloadGuard(), targetUpdateId),
+      recordReload: recordOtaReload,
+    };
+    void runStartupOtaUpdate(otaDeps).then((outcome) => {
+      logStartupOtaLaunch(outcome);
+      // emergency launch:门已放行,修复版热更改在后台找(绝不 reload,见
+      // runEmergencyOtaRecovery)。fire-and-forget——它的结果不影响本次启动,
+      // 只是让下一次冷启动有机会跑上修复版,而不是等用户去清应用数据。
+      if (outcome === 'emergency-launch') {
+        void runEmergencyOtaRecovery(otaDeps).then((recovery) => {
+          console.info('[ota] emergency recovery', JSON.stringify({ recovery }));
+        });
+      }
       // 'reloading' 时 app 正在重启,保持 loading 门直到重启;其余情况放行进 App。
       if (!cancelled && outcome !== 'reloading') setReady(true);
     }).catch(() => {
+      logStartupOtaLaunch('error');
       // runStartupOtaUpdate 设计为永不 reject;万一意外 reject,兜底 fail-open 放行,
       // 否则 loading 门会永久卡住且不可自恢复(后续 OTA 也进不来),与全模块 fail-open 一致。
       if (!cancelled) setReady(true);

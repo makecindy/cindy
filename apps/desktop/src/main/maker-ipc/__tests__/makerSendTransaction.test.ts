@@ -1,4 +1,4 @@
-import type { AgentKind, SessionSendResult, UserMessage } from '@cindy/maker-core';
+import type { AgentKind, SessionSendOptions, SessionSendResult, UserMessage } from '@cindy/maker-core';
 import { describe, expect, it, vi } from 'vitest';
 import {
   createMakerSendTransaction,
@@ -17,9 +17,10 @@ function createSession(overrides: Partial<MakerSendTransactionSession> = {}): Ma
     isTurnRunning: vi.fn(() => false),
     send: vi.fn(async (
       _message: UserMessage | string,
-      opts?: { onAccepted?: () => Promise<void>; onDispatching?: () => void },
+      opts?: SessionSendOptions,
     ) => {
       await opts?.onAccepted?.();
+      await opts?.onTranscriptUserEntry?.('pi-user-entry');
       opts?.onDispatching?.();
       return { accepted: true } satisfies SessionSendResult;
     }),
@@ -55,6 +56,7 @@ function createDeps(overrides: Partial<MakerSendTransactionDeps> = {}) {
     broadcastSessionCreated: vi.fn(),
     prepareSendUserMessage: vi.fn(async (_sessionId, message) => message as UserMessage | string),
     createDbMessage: vi.fn(async () => {}),
+    linkPiUserEntry: vi.fn(async () => true),
     previewUserPrompt: vi.fn(),
     dispatchUserPromptPreview: vi.fn(),
     commitUserPromptPreview: vi.fn(),
@@ -151,6 +153,48 @@ describe('maker SEND transaction', () => {
     expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
+  });
+
+  it('links attachment messages to the accepted Pi transcript entry only for Pi attachments', async () => {
+    const { deps, session } = createDeps();
+    session.agentKind = 'pi';
+    const transaction = createMakerSendTransaction(deps);
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'Review the image' },
+      undefined,
+      {
+        messageUuid: 'host-message',
+        persistUserMessage: {
+          clientId: 'attachment-client',
+          content: JSON.stringify({
+            text: 'Review the image',
+            images: [{ url: 'cindy-media://blobs/image.webp' }],
+          }),
+        },
+      },
+    );
+
+    expect(deps.linkPiUserEntry).toHaveBeenCalledWith(
+      'session-1',
+      'attachment-client',
+      'pi-user-entry',
+    );
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'Plain text' },
+      undefined,
+      {
+        messageUuid: 'plain-message',
+        persistUserMessage: {
+          clientId: 'plain-client',
+          content: JSON.stringify({ text: 'Plain text', images: [], files: [] }),
+        },
+      },
+    );
+    expect(deps.linkPiUserEntry).toHaveBeenCalledTimes(1);
   });
 
   it('threads scheduler origin into session.send opts and persisted agentMeta', async () => {

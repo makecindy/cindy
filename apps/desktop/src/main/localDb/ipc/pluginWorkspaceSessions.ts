@@ -26,6 +26,7 @@ import { and, eq, isNull, isNotNull, ne, or } from 'drizzle-orm';
 import { getDbClient } from '../client/current';
 import { sessions } from '../schema';
 import { sessionCreateToRow } from '../mapper';
+import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import { upsertRecentWorkdir } from './recentWorkdirs';
@@ -73,7 +74,7 @@ export async function createPluginDraftSession(params: {
    * 由 mapper 兜底)——让插件建的 draft 跟随用户当前的模型/强度选择。
    */
   defaults?: {
-    agentKind?: 'cc' | 'codex';
+    agentKind?: 'cc' | 'codex' | 'pi';
     model?: string;
     effort?: string;
     fastMode?: boolean;
@@ -142,6 +143,90 @@ export async function createPluginDraftSession(params: {
   log.info('[plugin-workspace] draft session created', {
     sessionId: id,
     ghostId: params.ghostId,
+    workingDir: insertRow.workingDir,
+  });
+  return id;
+}
+
+/**
+ * 创建 agent 槽「派活取件(errand)」的专属会话行(不拉起 agent 进程)。
+ *
+ * 与 createPluginDraftSession 的分工:workspace 槽建的是用户项目里的普通
+ * draft;errand 会话是插件的干活间——缺省落在专属 dialogue 目录(不碰用户
+ * 项目),只有用户在插件详情页亲手选了项目目录才落 project。权限档由调用方
+ * (errand runner)按用户配置传入,缺省档 plan(只读,2026-07-31 定案)在
+ * runner 侧兜底,这里照传入值落库。source='plugin' 语义同上;Orca 字段
+ * 显式排除——errand 会话在侧边栏可见、可旁观,不做隐藏会话。
+ */
+export async function createGhostErrandSession(params: {
+  ghostId: string;
+  title: string | null;
+  agentKind?: 'cc' | 'codex' | 'pi';
+  model?: string;
+  effort?: string;
+  fastMode?: boolean;
+  providerId?: string | null;
+  permissionMode: 'plan' | 'acceptEdits' | 'auto';
+  /** 用户亲选的项目目录(绝对路径);缺省 = 专属 dialogue 目录。 */
+  workingDir?: string;
+  notifySessionCreated?: (info: { sessionId: string; workdir?: string }) => void;
+}): Promise<string> {
+  const db = getDbClient().drizzle;
+  const now = Date.now();
+  const id = randomUUID();
+  const projectDir = params.workingDir
+    ? (normalizeWorkingDirForStorage(params.workingDir) ?? undefined)
+    : undefined;
+  const workspaceKind = projectDir ? ('project' as const) : ('dialogue' as const);
+  const workingDir = projectDir ?? ensureDialogueWorkspaceDir(id, now);
+  const insertRow = {
+    ...sessionCreateToRow(
+      id,
+      {
+        workingDir,
+        workspaceKind,
+        permissionMode: params.permissionMode,
+        ...(params.agentKind ? { agentKind: params.agentKind } : {}),
+        ...(params.model ? { model: params.model } : {}),
+        ...(params.effort ? { effort: params.effort } : {}),
+        ...(params.fastMode !== undefined ? { fastMode: params.fastMode } : {}),
+        ...(params.providerId !== undefined ? { providerId: params.providerId } : {}),
+      },
+      now,
+    ),
+    source: 'plugin' as const,
+    ...(params.title ? { title: params.title } : {}),
+  };
+  // 与既有 create 同流程;dialogue 目录由 projectGitBootstrap 自带守卫跳过。
+  await ensureProjectGitInitialized({
+    workingDir: insertRow.workingDir,
+    workspaceKind: insertRow.workspaceKind,
+    remoteHostId: insertRow.remoteHostId,
+    sessionId: id,
+    autoSnapshotEnabled: readGitSafetySettings().autoSnapshotEnabled,
+    source: 'plugin-errand-session',
+  });
+  await db.insert(sessions).values(insertRow);
+  if (projectDir && insertRow.workingDir) {
+    // 项目目录是用户在插件详情页亲手选的,进"最近项目"合理;dialogue 目录
+    // 是 app 管理的临时间,不进。失败仅日志,不阻断创建。
+    void upsertRecentWorkdir(insertRow.workingDir, now);
+  }
+  try {
+    params.notifySessionCreated?.({
+      sessionId: id,
+      ...(insertRow.workingDir ? { workdir: insertRow.workingDir } : {}),
+    });
+  } catch (error) {
+    log.warn('[plugin-errand] notifySessionCreated failed', {
+      sessionId: id,
+      err: error instanceof Error ? error.message : String(error),
+    });
+  }
+  log.info('[plugin-errand] errand session created', {
+    sessionId: id,
+    ghostId: params.ghostId,
+    workspaceKind,
     workingDir: insertRow.workingDir,
   });
   return id;

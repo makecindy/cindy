@@ -22,6 +22,7 @@ import * as Dialog from '@radix-ui/react-dialog';
 import { X, Folder, FolderSymlink, ChevronLeft, RotateCw } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import type { MakerVendor } from '@/lib/ccAgent.types';
 import { Spinner } from '@/components/ui/spinner';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
@@ -59,6 +60,14 @@ interface Props {
    * 未指名(从通用入口打开)时才由用户自己在下拉里选。
    */
   initialDeviceId?: string | null;
+  /**
+   * 当前 draft 选中的 agent(由父层的 VendorSegmentedSwitcher 决定,dialog 不选 vendor)。
+   * Pi 是本地专属 agent:startSession 拒绝任何 remoteHostId(见 agents/pi/index.ts),
+   * 所以选中 Pi 时把 SSH 主机从可选目标里过滤掉 —— 用户根本选不到会建出「起不来的 SSH
+   * 会话」的目标(codex review P1)。device-link 不受影响:被控端跑自己的本地 Pi 进程,
+   * 不经 SSH remoteHostId。
+   */
+  agentVendor?: MakerVendor;
   /** vendor 不在 dialog 里选 —— 由父层根据当前 draft / segmented switcher 决定。 */
   onProjectAdded: (target: RemoteProjectTarget) => void | Promise<void>;
 }
@@ -67,6 +76,7 @@ export function AddRemoteProjectDialog({
   open,
   onOpenChange,
   initialDeviceId,
+  agentVendor,
   onProjectAdded,
 }: Props) {
   const { t } = useTranslation();
@@ -80,13 +90,17 @@ export function AddRemoteProjectDialog({
   // SSH「已有项目」数据源:本地 active 会话(按 host 过滤,见 sshExistingProjects)。
   const { sessions } = useCCSessions();
 
+  // 选中 Pi 时排除 SSH 主机:Pi 不支持 remoteHostId,选中即建出起不来的会话。
+  const excludeSsh = agentVendor === 'pi';
   const targets = useMemo<RemoteTarget[]>(() => {
-    const ssh: RemoteTarget[] = sshHosts.map((h) => ({
-      key: `ssh:${h.config.id}`,
-      kind: 'ssh',
-      hostId: h.config.id,
-      label: `${h.config.id} (${h.config.user}@${h.config.hostname})`,
-    }));
+    const ssh: RemoteTarget[] = excludeSsh
+      ? []
+      : sshHosts.map((h) => ({
+          key: `ssh:${h.config.id}`,
+          kind: 'ssh',
+          hostId: h.config.id,
+          label: `${h.config.id} (${h.config.user}@${h.config.hostname})`,
+        }));
     const dev: RemoteTarget[] = devices.map((d) => ({
       key: `device:${d.deviceId}`,
       kind: 'device',
@@ -95,7 +109,7 @@ export function AddRemoteProjectDialog({
       label: d.name,
     }));
     return [...ssh, ...dev];
-  }, [sshHosts, devices]);
+  }, [excludeSsh, sshHosts, devices]);
 
   const sshTargets = useMemo(() => targets.filter((tg) => tg.kind === 'ssh'), [targets]);
   const deviceTargets = useMemo(() => targets.filter((tg) => tg.kind === 'device'), [targets]);
@@ -313,6 +327,8 @@ export function AddRemoteProjectDialog({
   }, [selectedTarget, adapter, path, confirm, onProjectAdded, onOpenChange, t]);
 
   const noTargets = targets.length === 0;
+  // Pi 过滤掉 SSH 后无任何可用目标时,通用空态提示「加个 SSH 主机」是误导(Pi 用不了 SSH)。
+  const emptyIsPiSshFiltered = noTargets && excludeSsh && sshHosts.length > 0;
 
   return (
     <Dialog.Root open={open} onOpenChange={busy ? undefined : onOpenChange}>
@@ -372,7 +388,9 @@ export function AddRemoteProjectDialog({
           <div className="flex flex-col gap-3 px-5 py-4">
             {noTargets ? (
               <div className="text-13 py-8 text-center" style={{ color: 'var(--text-secondary)' }}>
-                {t('newChat.addRemoteProject.empty')}
+                {t(emptyIsPiSshFiltered
+                  ? 'newChat.addRemoteProject.emptyPiSshFiltered'
+                  : 'newChat.addRemoteProject.empty')}
               </div>
             ) : (
               <>

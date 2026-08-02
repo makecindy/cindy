@@ -118,4 +118,41 @@ describe('GhostSessionActivityTracker', () => {
   it('TTL 常量覆盖 mivo 单窗轮询(105s)', () => {
     expect(GHOST_SESSION_ACTIVITY_TTL_MS).toBeGreaterThan(105_000);
   });
+
+  // anySessionBusy 给「这个破坏性动作会不会打断正在干的活」这类全局判定用(更新重启前的
+  // 阻断探针)。那些调用方没有 sessionId 可传,而 renderer 侧的 store 只靠 0↔1 推送累积、
+  // 没有全量快照通道,不能当权威来源。
+  describe('anySessionBusy', () => {
+    it('没有任何在途活动时为 false', () => {
+      const { tracker } = makeTracker();
+      expect(tracker.anySessionBusy()).toBe(false);
+    });
+
+    it('任意会话有在途活动即为 true', () => {
+      const { tracker } = makeTracker();
+      tracker.begin('k1', 's1');
+      expect(tracker.anySessionBusy()).toBe(true);
+    });
+
+    it('多会话时要等最后一个结束才回到 false', () => {
+      const { tracker } = makeTracker();
+      tracker.begin('k1', 's1');
+      tracker.begin('k2', 's2');
+      tracker.end('k1');
+      expect(tracker.isSessionBusy('s1')).toBe(false);
+      // s2 还在干活 —— 此时重启仍会打断它。
+      expect(tracker.anySessionBusy()).toBe(true);
+      tracker.end('k2');
+      expect(tracker.anySessionBusy()).toBe(false);
+    });
+
+    it('TTL 兜底熄灭后也回到 false(意识崩了不会永久拦住重启)', () => {
+      const { tracker, pendingTimerIds, fire } = makeTracker();
+      tracker.begin('k1', 's1');
+      expect(tracker.anySessionBusy()).toBe(true);
+      const [ttl] = pendingTimerIds();
+      fire(ttl);
+      expect(tracker.anySessionBusy()).toBe(false);
+    });
+  });
 });

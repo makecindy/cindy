@@ -147,7 +147,7 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
   const GLOBAL_BASE = 'https://hotfix.cindy.app/cindy';
   const CN_BASE = 'https://hotfix.cindy.com.cn/cindy';
   const TRUSTED = Object.values(REGION_ENDPOINT_DOMAIN);
-  /** CN 构建的策略:非跨区端点锁 cindy.com.cn,slack/telegram hook 才允许 cindy.app。 */
+  /** CN 构建的策略:非跨区端点锁 cindy.com.cn,slack/telegram/x hook 才允许 cindy.app。 */
   const CN_POLICY = {
     regionDomain: REGION_ENDPOINT_DOMAIN.cn,
     crossRegionDomain: REGION_ENDPOINT_DOMAIN.global,
@@ -165,9 +165,13 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
     expect(REGION_ENDPOINT_DOMAIN.global).toBe('cindy.app');
   });
 
-  it('跨区例外只有 slack / telegram hook 两个 key', () => {
+  it('跨区例外只有 slack / telegram / x hook 三个 key', () => {
     // 每加一个 key 就等于允许该端点跨区,而跨区 token 误发正是要防的事。
-    expect([...CROSS_REGION_ENDPOINT_KEYS].sort()).toEqual(['slackHookWsUrl', 'telegramHookWsUrl']);
+    expect([...CROSS_REGION_ENDPOINT_KEYS].sort()).toEqual([
+      'slackHookWsUrl',
+      'telegramHookWsUrl',
+      'xHookWsUrl',
+    ]);
   });
 
   it('CN 构建拒绝换成 Global 真实服务的伪造缓存(跨区 token 误发)', () => {
@@ -223,6 +227,9 @@ describe('缓存端点的受信任域约束(安全边界)', () => {
           authApiBaseUrl: 'https://auth.cindy.com.cn',
           slackHookWsUrl: 'wss://slack-hook.cindy.app',
           telegramHookWsUrl: 'wss://telegram-hook.cindy.app',
+          // CN 清单按 Telegram 同款单部署模式放量 X 时,离线缓存回退必须仍受信
+          // (PR #1230 review:漏登记会让 CN 用户断网时失去缓存启动出口)。
+          xHookWsUrl: 'wss://x-hook.cindy.app',
           websiteUrl: 'https://cindy.com.cn',
           cdnBaseUrl: 'https://hotfix.cindy.com.cn/cindy',
           authDesktopCallbackUrl: 'https://auth.cindy.com.cn/api/auth/desktop/callback',

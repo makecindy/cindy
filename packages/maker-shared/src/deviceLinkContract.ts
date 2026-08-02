@@ -234,7 +234,7 @@ export interface MobileCodexRateLimitResetResult {
 
 /** 下一条消息发送时才会应用的跨 Agent 切换意图。 */
 export interface MobileSessionAgentSwitchIntent {
-  targetAgentKind: 'claude-code' | 'codex';
+  targetAgentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   providerId: string | null;
   effort?: string;
@@ -244,7 +244,7 @@ export interface MobileSessionAgentSwitchIntent {
 /** desktop 登记 / 取消跨 Agent 意图后的稳定结果。 */
 export interface MobileSessionAgentSwitchResult {
   switched: boolean;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   model: string;
   engineReady: boolean;
   deferred?: boolean;
@@ -280,6 +280,14 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   // CHANNEL_NOT_ALLOWED → 手机端吞掉降级,见 sessionModelMirror)。
   'maker:set-session-model-pref',
   'maker:apply-new-maker-draft-pref',
+  // 工作端「新建会话默认启用 worktree」勾选记忆的读 / 写:
+  //  - get-new-maker-defaults(只读):工作端草稿默认值镜像,手机新建页据 worktreeEnabled
+  //    播种 worktree 开关(桌面控制端早已消费同通道)。老被控端 CHANNEL_NOT_ALLOWED →
+  //    播种回落默认不勾选。
+  //  - apply-new-maker-worktree-pref:用户在手机上显式切换开关时写穿工作端 newMakerDraft
+  //    根字段。老被控端 CHANNEL_NOT_ALLOWED → 吞掉降级(勾选仅本次草稿生效)。
+  'maker:get-new-maker-defaults',
+  'maker:apply-new-maker-worktree-pref',
   // 模型选择列表元信息:被控端视角的模型单价表(只读;拉不到 → 隐藏价格)。
   'maker:usage:model-pricing',
   // Codex app-server 官方控制面:只读额度/reset 次数 + 人工确认后的单次 reset。
@@ -305,6 +313,8 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'maker:goal:resume',
   'maker:goal:update',
   'maker:fork',
+  'maker:get-session-tree',
+  'maker:navigate-session-tree',
   'maker:rewind:preview',
   'maker:rewind:commit',
   'maker:message:delete',
@@ -347,6 +357,19 @@ export const MOBILE_REMOTE_INVOKE_CHANNELS = [
   'fs:list-dir',
   'fs:stat-path',
   'fs:mkdir-p',
+  // —— Worktree(新建会话前在工作端预建隔离 worktree;git/fs 全在被控端执行)——
+  //  - detect-cwd:资格探测(git 已装 / 是 git 仓库 / 未在 worktree 内)+ repoRoot/currentBranch;
+  //  - suggest-name:工作端按仓库上下文生成 worktree 名;
+  //  - create:两步建会话第一步——同预生成 sessionId 先建 worktree 拿路径,再以该路径调
+  //    maker:create-session(与桌面控制端 NewMakerDraftRoute 的远程流程同构)；
+  //  - discard-precreated:第二步确定失败且用户放弃时，按 sessionId + 精确 path 补偿回收。
+  // 四者均已在被控端 REMOTE_INVOKE_ALLOWLIST(create / discard 的 60s 超时见
+  // INVOKE_TIMEOUT_OVERRIDES_MS,移动端 invoke 必须带同一映射)。
+  // 老被控端无这些 channel → CHANNEL_NOT_ALLOWED → 手机端按「worktree 不可用」降级。
+  'worktree:detect-cwd',
+  'worktree:suggest-name',
+  'worktree:create',
+  'worktree:discard-precreated',
   'text-file:read-preview',
   // 完整文件浏览(网格/预览/缩略图/大文件导出)走桌面同款聚合通道,
   // op 分发与响应形状见 apps/desktop/src/main/file-browser/device-op.ts。
@@ -369,6 +392,8 @@ const PERMANENT_REMOTE_ERROR_MARKERS = [
 const TRANSIENT_REMOTE_ERROR_MARKERS = [
   'DbClient not ready',
   'NOT_CONNECTED',
+  'LINK_NOT_OPEN',
+  'BACKPRESSURE',
   'DEVICE_OFFLINE',
   'DEVICE_LINK_TIMEOUT',
   'INVOKE_TIMEOUT',
@@ -405,9 +430,9 @@ export function relayStatusLabel(status: DeviceLinkRelayStatus): string {
 
 export function relayStatusHint(status: DeviceLinkRelayStatus, lastSyncedAt: number | null): string {
   if (status === 'online') {
-    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程会话。';
+    return lastSyncedAt ? `上次同步 ${formatClock(lastSyncedAt)}` : '可以同步远程任务。';
   }
-  if (status === 'connecting') return '网络恢复后会自动重新订阅远程会话。';
+  if (status === 'connecting') return '网络恢复后会自动重新订阅远程任务。';
   return '回到前台或重新登录后会恢复连接。';
 }
 
@@ -458,7 +483,7 @@ export function connectionIssueHint(kind: DeviceLinkConnectionIssueKind): string
  * 要给出可读提示只能按模板识别。formatRemoteError / throwIpcError 会给部分链路的
  * message 加 `[CODE] ` 头,识别时一并容忍。
  */
-const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex) not authenticated: ?(.*)$/;
+const AGENT_NOT_AUTHENTICATED_RE = /^(?:\[[A-Z_]+\] )?(claude-code|codex|pi) not authenticated: ?(.*)$/;
 
 /**
  * agent 未鉴权错误 → 手机端直出文案(桌面端走 i18n,不用这组)。
@@ -471,7 +496,7 @@ export function describeAgentAuthError(error: string | null | undefined): string
   if (!error) return null;
   const matched = AGENT_NOT_AUTHENTICATED_RE.exec(error.trim());
   if (!matched) return null;
-  const agentLabel = matched[1] === 'claude-code' ? 'Claude' : 'Codex';
+  const agentLabel = matched[1] === 'claude-code' ? 'Claude' : matched[1] === 'pi' ? 'Pi' : 'Codex';
   const goSettings = `请在电脑端 ${BRAND_NAME} 的「设置 → 模型供应商」`;
   switch (matched[2]) {
     case 'no_key':

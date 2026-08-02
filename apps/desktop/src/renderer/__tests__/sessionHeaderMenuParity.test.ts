@@ -18,16 +18,25 @@ const sessionItemSource = readFileSync(
 // 非菜单条目的 sessionMenu.* 用法,两边都排除后再比较:
 //   - moreActions:SessionItem 行内 ··· 按钮的 aria-label(header 用自己的
 //     ccAgent.sessionHeader.moreActions)
-//   - *Done / *Failed / *Blocked / *Unsupported:move 动作的 toast 反馈文案
-//     (header 的 move handler 内联在组件里,SessionItem 的在 CCAgentSidebarUpper)
-const NON_MENU_KEY_PATTERN = /(?:Done|Failed|Blocked|Unsupported)$/;
+//   - *Done / *Failed / *Blocked / *Unsupported / *Nothing:动作的 toast 反馈文案
+//     (header 的 move/compact/export handler 内联在组件里,非菜单项)
+const NON_MENU_KEY_PATTERN = /(?:Done|Failed|Blocked|Unsupported|Nothing)$/;
 const NON_MENU_KEYS = new Set(['moreActions']);
+
+// 头部专属菜单项:只对「当前打开的 live 会话」有意义(据 capability 门控,如 pi 原生
+// 导出 HTML / 手动压缩),侧栏右键菜单作用于任意列表会话、无对应能力,故不要求同步。
+// 连同各自的进行中/成功态反馈文案一并排除。
+const HEADER_ONLY_KEYS = new Set([
+  'exportHtml', 'exportHtmlSuccess',
+  'compact', 'compacting', 'compactSuccess', 'compactSuccessWithTokens',
+  'sessionBranches',
+]);
 
 function collectSessionMenuKeys(source: string): Set<string> {
   const keys = new Set<string>();
   for (const match of source.matchAll(/ccAgent\.sidebar\.sessionMenu\.(\w+)/g)) {
     const key = match[1];
-    if (NON_MENU_KEYS.has(key) || NON_MENU_KEY_PATTERN.test(key)) continue;
+    if (NON_MENU_KEYS.has(key) || HEADER_ONLY_KEYS.has(key) || NON_MENU_KEY_PATTERN.test(key)) continue;
     keys.add(key);
   }
   return keys;

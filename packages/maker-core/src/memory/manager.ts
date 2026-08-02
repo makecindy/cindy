@@ -25,7 +25,7 @@
 import * as path from 'node:path';
 import type Database from 'better-sqlite3';
 
-import { MakerMemoryStore, memoryScopeDirName } from './store.js';
+import { MakerMemoryStore, memoryScopeDirName, parseFilename } from './store.js';
 import {
   type MemoryConfig,
   type WriteOptions,
@@ -245,6 +245,55 @@ export class MakerMemoryManager {
   async resetWorkdir(absWorkdir: string): Promise<{ removedCount: number }> {
     const store = await this.getStore(absWorkdir);
     return store.resetAll();
+  }
+
+  /**
+   * 仅清空 Pi 压缩产生的 digest，绝不触碰用户维护的四类 curated memory。
+   *
+   * 已打开的 store 经 facade 删除以同步 FTS；未打开目录直接删 digest 文件，遗留的
+   * FTS 行会在下次打开时被 sanityCheck 的计数差异触发重建。digest 本来就不进入
+   * MEMORY.md，因此无需改写用户索引。
+   */
+  async resetDigests(): Promise<{ removedCount: number }> {
+    let total = 0;
+    const activeDirs = new Set<string>();
+    for (const [workdir, { store }] of this.stores) {
+      activeDirs.add(memoryScopeDirName(workdir));
+      total += (await store.resetType('digest')).removedCount;
+    }
+
+    const fs = await import('node:fs/promises');
+    const memoryRoot = path.join(this.deps.basePath, MEMORY_SUBDIR);
+    let entries: string[];
+    try {
+      entries = await fs.readdir(memoryRoot);
+    } catch {
+      return { removedCount: total };
+    }
+    for (const entry of entries) {
+      if (activeDirs.has(entry)) continue;
+      const dir = path.join(memoryRoot, entry);
+      let filenames: string[];
+      try {
+        if (!(await fs.stat(dir)).isDirectory()) continue;
+        filenames = await fs.readdir(dir);
+      } catch {
+        continue;
+      }
+      for (const filename of filenames) {
+        if (parseFilename(filename)?.type !== 'digest') continue;
+        try {
+          await fs.unlink(path.join(dir, filename));
+          total += 1;
+        } catch (error) {
+          this.logger.warn('resetDigests: failed to remove digest', {
+            filename,
+            error: String(error),
+          });
+        }
+      }
+    }
+    return { removedCount: total };
   }
 
   /** 清空所有 workdir 全部 memory. 慎用. */

@@ -22,19 +22,22 @@ import { Switch } from '@/components/ui/switch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
+import { PiMark } from '@/components/icons/PiMark';
 import { createLogger } from '@/lib/logger';
 import { useMemorySettings } from '@/hooks/useMemorySettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('MemorySection');
 
-type AgentKind = 'claude-code' | 'codex';
+type AgentKind = 'claude-code' | 'codex' | 'pi';
 
 interface AgentDescriptor {
   kind: AgentKind;
   /** 本地化展示用的稳定 key 段，与 i18n 表 settings.memory.agents.<key>.* 对齐。
       品牌名 (Claude / Codex) 不翻译，由 i18n 表里的 label 字段提供。 */
   Mark: () => ReactNode;
+  /** Pi 的压缩记忆写入 Cindy Memory；其开关仅在 Cindy Memory 启用时有意义。 */
+  requiresMaker?: boolean;
 }
 
 const AGENTS: readonly AgentDescriptor[] = [
@@ -45,6 +48,11 @@ const AGENTS: readonly AgentDescriptor[] = [
   {
     kind: 'codex',
     Mark: () => <CodexMark size={18} className="text-[var(--settings-section-title)]" />,
+  },
+  {
+    kind: 'pi',
+    Mark: () => <PiMark size={18} className="text-[var(--settings-section-title)]" />,
+    requiresMaker: true,
   },
 ] as const;
 
@@ -68,6 +76,7 @@ export function MemorySection() {
   const [slots, setSlots] = useState<Record<AgentKind, MemorySlotState>>({
     'claude-code': INITIAL,
     codex: INITIAL,
+    pi: INITIAL,
   });
   // pending 飞行中跳过 reload — 否则 toggle/reset 飞行期间 focus 触发 reload 会
   // 把用户刚改的乐观值或回滚状态覆盖掉。任一 slot pending 都跳过整轮 reload。
@@ -336,7 +345,8 @@ export function MemorySection() {
           const supported = slot.enabled !== null;
           const loading = slot.enabled === undefined;
           const checked = slot.enabled === true;
-          const disabled = makerEnabled || !supported || slot.pending || loading;
+          const disabled = (agent.requiresMaker ? !makerEnabled : makerEnabled)
+            || !supported || slot.pending || loading;
           // Agent label/description 来自 i18n 表 (品牌名 Claude / Codex 也走 i18n
           // —— 各语种都保留品牌原文，只方便统一管理)。
           const label = t(`settings.memory.agents.${agent.kind}.label`);
@@ -347,7 +357,7 @@ export function MemorySection() {
               className={cn(
                 'flex items-center justify-between gap-3 px-4 py-[14px]',
                 'border-t border-[var(--settings-theme-card-border)]',
-                makerEnabled && 'opacity-50',
+                (agent.requiresMaker ? !makerEnabled : makerEnabled) && 'opacity-50',
               )}
             >
               <div className="flex items-center gap-3">

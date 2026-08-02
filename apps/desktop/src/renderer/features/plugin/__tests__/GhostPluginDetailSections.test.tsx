@@ -105,6 +105,7 @@ const detail: GhostPluginDetail = {
   tools: [],
   hasSettingsUi: false,
   cindyCapabilities: [],
+  hasErrand: false,
   panelMinWidth: 320,
   installDir: '/tmp/cindy-brain/builtin.example',
   trust: {
@@ -151,13 +152,20 @@ describe('Ghost plugin detail sections', () => {
 
     const scrollSurface = container.querySelector('main');
     const detailFrame = container.querySelector('article');
-    const backButton = detailFrame?.querySelector(':scope > button');
+    // 返回按钮住在吸顶顶栏里(mac 的窗口拖拽区)。顶栏内层复用同一条 824px
+    // 内容框,与正文左缘对齐。
+    const topBar = container.querySelector('[data-testid="plugin-detail-top-bar"]');
+    const topBarFrame = topBar?.querySelector(':scope > div');
+    const backButton = topBar?.querySelector('button');
     const detailHero = detailFrame?.querySelector('.plugin-detail-hero');
     const detailActions = detailFrame?.querySelector('.plugin-detail-actions');
     expect(scrollSurface?.className).toContain('[scrollbar-gutter:stable_both-edges]');
     expect(detailFrame?.className).toContain('plugin-detail-frame');
     expect(detailFrame?.className).toContain('mx-auto');
     expect(detailFrame?.className).toContain('max-w-[824px]');
+    expect(topBar?.className).toContain('sticky');
+    expect(topBarFrame?.className).toContain('mx-auto');
+    expect(topBarFrame?.className).toContain('max-w-[824px]');
     expect(backButton?.className).toContain('-ml-3');
     expect(detailHero?.className).toContain('grid-cols-[64px_minmax(0,1fr)_auto]');
     expect(detailActions?.className).toContain('flex-nowrap');
@@ -271,6 +279,49 @@ describe('Ghost plugin detail sections', () => {
     expect(menuUpdate.getAttribute('aria-disabled')).toBe('true');
     fireEvent.click(menuUpdate);
     expect(onUpdate).not.toHaveBeenCalled();
+  });
+
+  it('renders an export menu item only when onExport is provided', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      },
+    );
+    const baseProps = {
+      ghost: null,
+      detail,
+      panelStatus: 'Docked',
+      onBack: vi.fn(),
+      onToggle: vi.fn(),
+      onUse: vi.fn(),
+      onUpdate: vi.fn(),
+      onUninstall: vi.fn(),
+      toggleDisabled: false,
+    };
+
+    // 未提供 onExport(纯市场视图):菜单里不出现导出项。
+    const { unmount } = render(<GhostPluginDetailView {...baseProps} />);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    expect(screen.queryByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' })).toBeNull();
+    unmount();
+
+    // 提供 onExport(已装插件):点击触发导出回调。
+    const onExport = vi.fn();
+    render(<GhostPluginDetailView {...baseProps} onExport={onExport} />);
+    fireEvent.pointerDown(
+      screen.getByRole('button', { name: 'settings.ghosts.detail.moreActions' }),
+      { button: 0, ctrlKey: false },
+    );
+    fireEvent.click(
+      screen.getByRole('menuitem', { name: 'settings.ghosts.detail.exportPackage' }),
+    );
+    expect(onExport).toHaveBeenCalledTimes(1);
   });
 
   it('uses one metadata color and orders author, then version', () => {

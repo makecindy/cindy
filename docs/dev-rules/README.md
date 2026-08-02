@@ -33,8 +33,8 @@
   的 Agent 能力归属、代码优先确定性、缓存率／性能／准确性指标不可回退，以及 system
   prompt 改动门禁。
 - [`plugin-security-and-authoring.md`](plugin-security-and-authoring.md)：插件（`.cindy`）
-  运行时沙箱与进程隔离、权限即授权边界、网络／凭证／资源交接，以及作者契约与
-  编写手册（`FORGE_GUIDE`）同步。
+  运行时沙箱与进程隔离、权限即授权边界、网络／凭证／资源交接、存量插件向下兼容红线
+  （升级不得要求用户重装或重新确认），以及作者契约与编写手册（`FORGE_GUIDE`）同步。
 - [`cindy-updater.md`](cindy-updater.md)：客户端自动更新链路的 owner 确认门禁与高风险
   约束。
 - [`engineering-conventions.md`](engineering-conventions.md)：统一日志、IPC 错误协议

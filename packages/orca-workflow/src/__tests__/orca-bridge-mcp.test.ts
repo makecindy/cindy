@@ -49,7 +49,7 @@ interface CreateSessionOpts {
   parentSessionId?: string;
   resumeSessionId?: string;
   userPrompt?: string;
-  providerId?: string;
+  providerId?: string | null;
   vendorOptions?: Record<string, unknown>;
 }
 
@@ -433,6 +433,28 @@ describe('orca_worker_bridge MCP helpers', () => {
     expect(createSessionCalls[0]).toMatchObject({ id: 'lead-1', providerId: 'anthropic' });
     expect(wired).toEqual(['lead-1']);
     expect(order).toEqual(['hydrate:lead-1:anthropic', 'create:lead-1:anthropic']);
+  });
+
+  it('preserves a persisted null Pi providerId when cold rehydrating the lead', async () => {
+    const workerLink: OrcaWorkerLink = {
+      workerId: 'worker-1', workflowId: 'workflow-1', workerSessionId: 'worker-session-1', leadSessionId: 'lead-1',
+      leadSession: { sessionId: 'lead-1', agentKind: 'pi', workingDir: '/repo', model: 'gpt-5', providerId: null },
+    };
+    const { createSessionCalls, maker } = makeProvider({ workerLink });
+    const provider = createOrcaWorkerBridgeMcpProvider({
+      getMaker: () => maker as unknown as Maker, logger: makeLogger() as never,
+      persistUserMessage: async () => {}, wireSession: () => {},
+      orcaTeamStore: { async getWorkerLink() { return workerLink; }, async updateWorkerStatus() {} },
+    });
+    const server = getServer(provider, {
+      agentKind: 'pi', workingDir: '/repo',
+      vendorOptions: { orcaRole: 'worker', orcaWorkerId: 'worker-1', orcaWorkerSessionId: 'worker-session-1' },
+    });
+
+    await server._registeredTools.send_to_lead.handler({ worker_id: 'worker-1', message: 'hello lead' });
+
+    expect(createSessionCalls).toHaveLength(1);
+    expect(createSessionCalls[0]).toMatchObject({ id: 'lead-1', agentKind: 'pi', providerId: null });
   });
 
   it('carries lead remoteHostId into rehydration createSession (remote worker → inactive remote lead)', async () => {

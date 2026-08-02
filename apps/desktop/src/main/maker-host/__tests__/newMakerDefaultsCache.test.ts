@@ -39,6 +39,7 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
       providerId: 'anthropic',
       effortByModel: { 'claude-opus-4-8': 'high' }, // 整表透传,供控制端切模型还原
       fastModeByModel: { 'claude-opus-4-8': true },
+      worktreeEnabled: false, // 旧 renderer 快照缺字段 → false 兜底
     });
   });
 
@@ -51,6 +52,7 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
       providerId: null,
       effortByModel: { 'claude-opus-4-8': 'high' }, // map 不按 vendor 过滤,按 model id 区分
       fastModeByModel: { 'claude-opus-4-8': true },
+      worktreeEnabled: false,
     });
   });
 
@@ -63,9 +65,16 @@ describe('getRemoteNewMakerDefaults (device-link 远程草稿镜像)', () => {
     expect(getRemoteNewMakerDefaults('claude-code').effort).toBe('high');
   });
 
-  it('该 vendor 无草稿 model → 返回空对象(控制端按 capabilities 默认兜底)', () => {
+  it('该 vendor 无草稿 model → 只回 vendor 无关字段(控制端按 capabilities 默认兜底)', () => {
     seed({ lastByVendor: {}, fastModeByModel: {}, effortByModel: {} });
-    expect(getRemoteNewMakerDefaults('claude-code')).toEqual({});
+    expect(getRemoteNewMakerDefaults('claude-code')).toEqual({ worktreeEnabled: false });
+  });
+
+  it('worktreeEnabled 勾选记忆:vendor 无关,该 vendor 无草稿 model 的早返回也必须携带', () => {
+    // 空草稿的工作端上手机/控制端也要能读到勾选态,否则永远播种不出 ON。
+    seed({ lastByVendor: {}, fastModeByModel: {}, effortByModel: {}, worktreeEnabled: true });
+    expect(getRemoteNewMakerDefaults('claude-code')).toEqual({ worktreeEnabled: true });
+    expect(getRemoteNewMakerDefaults('codex')).toEqual({ worktreeEnabled: true });
   });
 
   it('providerModelMemory 镜像就绪时随返回(device-link 草稿列表行的真实读源)', () => {

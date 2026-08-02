@@ -21,6 +21,7 @@
 
 import {
   computeAllowlistHash,
+  INVOKE_TIMEOUT_OVERRIDES_MS,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
   REMOTE_INVOKE_ALLOWLIST,
@@ -33,6 +34,8 @@ import {
   DL_VOICE_DICTIONARY_LEARNING_CHANNEL,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
   DL_VOICE_DICTIONARY_GET_CHANNEL,
+  DL_TELEGRAM_STATUS_CHANNEL,
+  DL_TELEGRAM_SET_ONLINE_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -59,13 +62,15 @@ import { dispatchLocalInvoke } from './invoke-registry';
 import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
+import { readTelegramRemoteStatus, setTelegramRemoteOnline } from './telegramRemoteControl';
 import { adviseAndRecordVoiceInputDictionaryLearning } from '../voice-input/index.js';
 import { readDictionaryProjectionForMobile } from '../voice-input/dictionarySyncDriver.js';
 import { setBroadcastTapListener } from './broadcast-tap';
+import { createOfflinePushQueue } from './offlinePushQueue';
 import * as subscriptions from './subscriptions';
 import { LEGACY_TOPIC, type ActiveController } from './subscriptions';
 import { MAKER_PUSH } from '../maker-ipc/channels.js';
-import { sanitizeGhostSetupRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
+import { projectInteractionRequestForRemote } from '../cindy-brain/ghostSetupInteractionBridge.js';
 import {
   remoteWorkingDirRejectionToIpcError,
   type RemoteWorkingDirCheckResult,
@@ -114,6 +119,22 @@ const UPDATE_RELAUNCH_NON_BLOCKING_INVOKE_CHANNELS: ReadonlySet<string> = new Se
   'local-db:sessions:list',
 ]);
 const textEncoder = new TextEncoder();
+const offlinePushQueue = createOfflinePushQueue();
+
+/** 只排队可由 session snapshot 对账、且不携带权限终态的会话域事件。 */
+const OFFLINE_QUEUEABLE_PUSH_CHANNELS: ReadonlySet<string> = new Set([
+  'local-db:messages:created',
+  'local-db:messages:deleted',
+  'local-db:session:error-persisted',
+  'maker:event',
+  'maker:status-changed',
+  'maker:interaction-request',
+  'maker:interaction-dismissed',
+  'maker:input:projection',
+  'maker:goal:status-changed',
+  'usage:message-turn-cost',
+  'usage:message-model-mismatch',
+]);
 
 /** wire 输入 fail-closed：未知形状视为空能力集，并限制数量/长度避免撑大常驻 registry。 */
 function sanitizeControllerCapabilities(value: unknown): string[] {
@@ -199,10 +220,11 @@ function extractGuardedPath(args: unknown[], field: 'workingDir' | 'baseRepo'): 
 }
 
 /**
- * 远程 set-* 成功后回流持久化(register.ts 在 maker 就绪后注入)。被控端 set-* 是
- * runtime-only,这里补一次写被控端 DB + 广播 sessions:patched,使控制端镜像收敛到被控端真相
- * (取代控制端乐观覆盖)。调用方会等待注入函数完成后才回 invoke-result,让控制端只在被控端
- * DB 已确认持久化后继续同步新聊天草稿默认值。
+ * 远程 set-* 成功后回流持久化(register.ts 在 maker 就绪后注入)。被控端大多数
+ * set-* 是 runtime-only,这里补一次写被控端 DB + 广播 sessions:patched。SET_MODEL
+ * 生产 handler 为了与队列 drain 原子化，会在 session 锁内先持久化并标记结果，
+ * 这里只保留给最小/旧 handler 的兼容回流。调用方会等待持久化完成后才回
+ * invoke-result，让控制端只在被控端 DB 已确认后同步新聊天草稿默认值。
  */
 type RemoteSettingsPersist = (
   sessionId: string,
@@ -210,6 +232,15 @@ type RemoteSettingsPersist = (
 ) => void | Promise<void>;
 
 let settingsPersist: RemoteSettingsPersist | null = null;
+
+// SET_MODEL 需要把 runtime + DB 持久化放在同一把 session 锁内。handler 会在锁内
+// 完成持久化后标记返回对象；dispatch 仍保留通用回流逻辑给其它 set-* 和
+// 最小/旧 handler，但不得对已原子持久化的结果再写一次。WeakSet 标记不进 wire。
+const settingsPersistedInsideHandler = new WeakSet<object>();
+
+export function markRemoteSettingPersistedInsideHandler(result: object): void {
+  settingsPersistedInsideHandler.add(result);
+}
 
 export function setRemoteSettingsPersist(fn: RemoteSettingsPersist | null): void {
   settingsPersist = fn;
@@ -228,6 +259,13 @@ const SET_CHANNEL_FIELD: Record<string, 'model' | 'effort' | 'permissionMode' | 
 async function persistRemoteSetting(channel: string, args: unknown[], result: unknown): Promise<void> {
   const field = SET_CHANNEL_FIELD[channel];
   if (!field || !settingsPersist) return;
+  if (
+    result !== null &&
+    typeof result === 'object' &&
+    settingsPersistedInsideHandler.has(result)
+  ) {
+    return;
+  }
   const sessionId = args[0];
   if (typeof sessionId !== 'string') return;
   // extraDirs 特例:set-extra-dirs handler 会按被控端 workingDir 校验、只应用 validation.valid,
@@ -244,6 +282,17 @@ async function persistRemoteSetting(channel: string, args: unknown[], result: un
   // (G2)。与被控端 handler 同语义:args[2]===undefined(老 2 参调用)不动 provider_id;string→写;
   // null/''→清除(回落默认路由)。写进 DB 后 mapper 自动带进 sessions:patched → 回流控制端镜像。
   if (channel === 'maker:set-model') {
+    // 同引擎重选的第二段带 host revision CAS。handler 返回 superseded 表示
+    // 另一控制端已在两段之间更新过意图：runtime 未应用，DB 也必须同样不落
+    // 这次请求参数，否则 sessions:patched 会把过期选择反向盖回控制端。
+    if (
+      result !== null &&
+      typeof result === 'object' &&
+      !Array.isArray(result) &&
+      (result as { superseded?: unknown }).superseded === true
+    ) {
+      return;
+    }
     const patch: Record<string, unknown> = { model: args[1] };
     if (args.length > 2) {
       patch.providerId = normalizeSessionProviderId(typeof args[2] === 'string' ? args[2] : null);
@@ -346,8 +395,68 @@ let onControllersChanged: ControllersChangedListener | null = null;
 type RemoteInvokeBusyChangedListener = (busy: boolean) => void;
 let onRemoteInvokeBusyChanged: RemoteInvokeBusyChangedListener | null = null;
 let inFlightRemoteInvokeCount = 0;
-/** Controllers that have successfully demonstrated topic-subscription support on this link. */
+const REMOTE_INVOKE_IN_FLIGHT_LIMIT = 64;
+/**
+ * Keep one slow controller from consuming the entire target-device budget.
+ * The global limit still protects the host, while this per-controller slice
+ * guarantees admission for other linked controllers.
+ */
+const REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT = 16;
+const REMOTE_INVOKE_IN_FLIGHT_BYTES = 16 * 1024 * 1024;
+const REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
+const REMOTE_INVOKE_RESULT_CACHE_LIMIT = 128;
+const REMOTE_INVOKE_RESULT_CACHE_BYTES = 16 * 1024 * 1024;
+/** 本地发送背压时保留已执行结果；与 transport pending 分层且同样严格有界。 */
+const REMOTE_INVOKE_RESULT_OUTBOX_LIMIT = 64;
+const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT = 16;
+const REMOTE_INVOKE_RESULT_OUTBOX_BYTES = 16 * 1024 * 1024;
+const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
+const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
+const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
+  30_000,
+  ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
+);
+/** 再保留一轮同等重连窗口后才放弃无人等待的回包。 */
+const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+/**
+ * ipcMain handler 没有统一 AbortSignal，不能在 30s 客户端超时时假装取消副作用。
+ * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
+ */
+const REMOTE_INVOKE_ORPHAN_TIMEOUT_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+interface CachedRemoteInvokeResult {
+  result: InvokeResultPayload;
+  bytes: number;
+  fingerprint: string;
+}
+const completedRemoteInvokeResults = new Map<string, CachedRemoteInvokeResult>();
+let completedRemoteInvokeResultBytes = 0;
+interface InFlightRemoteInvoke {
+  promise: Promise<InvokeResultPayload>;
+  bytes: number;
+  fingerprint: string;
+  linkEpoch: number;
+}
+const inFlightRemoteInvokeResults = new Map<string, InFlightRemoteInvoke>();
+let inFlightRemoteInvokeBytes = 0;
+interface QueuedRemoteInvokeResult {
+  src: string;
+  requestId: string;
+  result: InvokeResultPayload;
+  channel?: string;
+  args?: unknown[];
+  fingerprint?: string;
+  bytes: number;
+  queuedAt: number;
+}
+const remoteInvokeResultOutbox = new Map<string, QueuedRemoteInvokeResult>();
+let remoteInvokeResultOutboxBytes = 0;
+let remoteInvokeResultOutboxTimer: ReturnType<typeof setTimeout> | null = null;
+/** 显式 link-close/撤权世代；旧世代仍在执行的 IPC 完成后不得把结果送进新链路。 */
+const remoteInvokeLinkEpoch = new Map<string, number>();
+/** Controllers that have demonstrated topic-subscription support in this process/account epoch. */
 const topicSubscriptionControllers = new Set<string>();
+/** 已成功 accept、尚未显式 close 的控制端；可无 active topic(现代重连等待 subscribe)。 */
+const acceptedLinkControllers = new Set<string>();
 
 /** `sessions` 订阅出现时通知 host replay 当前列表级轻量状态。 */
 type SessionsSubscribedListener = (controllerDeviceId: string) => void;
@@ -434,20 +543,38 @@ function forwardPush(channel: string, payload: unknown): void {
   if (!activeClient) return;
   const topic = topicForPush(channel, payload);
   if (!topic) return;
-  const remotePayload =
+  let remotePayload = payload;
+  if (
     channel === MAKER_PUSH.INTERACTION_REQUEST &&
     payload &&
     typeof payload === 'object' &&
     'request' in payload
-      ? {
-          ...payload,
-          request: sanitizeGhostSetupRequestForRemote(
-            (payload as { request: unknown }).request,
-          ),
-        }
-      : payload;
+  ) {
+    const request = projectInteractionRequestForRemote(
+      (payload as { request: unknown }).request,
+    );
+    if (request === null) return;
+    remotePayload = { ...payload, request };
+  }
   const dsts = subscriptions.getControllersForTopic(topic);
-  for (const dst of dsts) {
+  // The active registry describes peer topic intent, not whether this host can
+  // currently write to the relay. During host-side reconnects sendPush is a
+  // silent no-op, so route queueable pushes through the offline backlog instead.
+  const relayOnline = activeClient.getStatus() === 'online';
+  const liveTargets = relayOnline ? dsts : [];
+  const offlineTargets = subscriptions
+    .getKnownControllersForTopic(topic)
+    .filter((dst) => !liveTargets.includes(dst));
+  for (const dst of offlineTargets) {
+    if (OFFLINE_QUEUEABLE_PUSH_CHANNELS.has(channel)) {
+      offlinePushQueue.enqueue(dst, {
+        channel,
+        payload: remotePayload,
+        topic,
+      });
+    }
+  }
+  for (const dst of liveTargets) {
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
@@ -568,12 +695,17 @@ function truncateRemoteString(value: string, state: TruncationState): string {
 
 /**
  * 同步「转发 tap 开关」与「被控横幅」到当前 registry 状态。任何 registry 变更后调用:
- *  - registry 非空 → 注册 forwardPush tap(无监听时 broadcast-tap 是 O(1) no-op);空 → 注销。
+ *  - active registry 或 remembered topic 非空 → 注册 forwardPush tap；两者均为空 → 注销。
+ *    remembered topic 让普通断线期间的广播仍可进入离线队列。
  *  - UI 活跃控制端集 = 持 session:<id> / legacy '*' 的订阅者。
  *  - 更新重启阻塞集额外包含 fs-watch:<workdir>，但不扩大 UI 被控横幅语义。
  */
 function syncForwarding(): void {
-  setBroadcastTapListener(subscriptions.isEmpty() ? null : forwardPush);
+  setBroadcastTapListener(
+    subscriptions.isEmpty() && !subscriptions.hasRememberedTopics()
+      ? null
+      : forwardPush,
+  );
   onControllersChanged?.(
     subscriptions.getControlControllers(),
     subscriptions.getUpdateRelaunchControllers(),
@@ -588,12 +720,21 @@ export function dropAllControllers(
   const controllerIds = new Set([
     ...subscriptions.getControllerIds(),
     ...topicSubscriptionControllers,
+    ...acceptedLinkControllers,
   ]);
   for (const dst of controllerIds) {
-    client.closeLink(dst, reason);
+    try {
+      client.closeLink(dst, reason);
+    } catch (err) {
+      // 本地授权/订阅清理不能依赖弱网下 link-close 真正写进 socket。
+      log.warn(`closeLink to ${shortId(dst)} failed during ${reason}: ${String(err)}`);
+    }
   }
+  clearAllRemoteInvokeState();
   subscriptions.clearAll();
   topicSubscriptionControllers.clear();
+  acceptedLinkControllers.clear();
+  offlinePushQueue.clear();
   syncForwarding();
 }
 
@@ -601,12 +742,27 @@ export function dropAllControllers(
  * host 收到对等控制端 presence-changed(online:false)→ 清其全部订阅。
  * server 把 presence-changed 广播给同账号所有连接(含本机),这是控制端崩溃 / 拔网
  * 后回收僵尸订阅的兜底信号(正常路径是控制端显式 unsubscribe / link-close)。
+ * 不清 invoke result/outbox：presence offline 可能只是弱网重连，控制端可靠请求仍在等回包。
  */
 export function handleControllerOffline(deviceId: string): void {
-  topicSubscriptionControllers.delete(deviceId);
+  acceptedLinkControllers.delete(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
+}
+
+/** 显式解链/撤权才丢弃该控制端的去重缓存与待发送结果。 */
+export function forgetControllerInvokeState(deviceId: string): void {
+  clearRemoteInvokeStateFor(deviceId);
+}
+
+/** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
+export function purgeRevokedController(deviceId: string): void {
+  offlinePushQueue.clear(deviceId);
+  subscriptions.forgetKnownController(deviceId);
+  topicSubscriptionControllers.delete(deviceId);
+  acceptedLinkControllers.delete(deviceId);
+  syncForwarding();
 }
 
 /**
@@ -616,6 +772,9 @@ export function handleControllerOffline(deviceId: string): void {
 export function wireInboundDispatch(client: DeviceLinkClient): () => void {
   activeClient = client;
   return client.onFrame((env: Envelope) => {
+    // 可靠传输的 ACK 边界是“已进入本地执行状态机”，不是“耗时 IPC 已执行完成”。
+    // handleInvoke 会在第一次 await 前登记 in-flight requestId 去重；这里不把它的
+    // Promise 交回 transport，避免一个慢查询把后续 stop/steer/push 全部堵在队头。
     void handleFrame(client, env).catch((err) => {
       log.error('inbound frame handling failed', err);
     });
@@ -631,10 +790,15 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       return;
     case 'link-close':
       if (!src) return;
-      topicSubscriptionControllers.delete(src);
-      if (subscriptions.clearController(src)) {
-        syncForwarding();
-      }
+      clearRemoteInvokeStateFor(src);
+      offlinePushQueue.clear(src);
+      acceptedLinkControllers.delete(src);
+      // Keep the protocol-capability marker, but discard all remembered routing.
+      // A modern controller must reconnect and explicitly subscribe; restoring the
+      // legacy wildcard here would silently re-enable broad delivery.
+      subscriptions.clearController(src);
+      subscriptions.forgetKnownController(src);
+      syncForwarding();
       log.info(`control link closed by ${shortId(src)}`);
       return;
     case 'invoke':
@@ -668,6 +832,7 @@ function handleLinkOpen(
   // (legacy openLink 仍会超时,但控制端据此 link-close 标记「已撤销」),不接受其 link-open。
   if (isControllerRevoked(src)) {
     log.warn(`link-open from ${shortId(src)} rejected: access revoked`);
+    purgeRevokedController(src);
     client.closeLink(src, 'revoked');
     return;
   }
@@ -678,16 +843,29 @@ function handleLinkOpen(
   // 老控制端无 subscribe 能力:link-open 视作订阅 legacy '*'(全量转发 + 横幅),向后兼容。
   // 已在当前 link 上证明支持 topic 的客户端可能重复 open;不能重新装回兼容 wildcard。
   const capabilities = sanitizeControllerCapabilities(payload?.capabilities);
-  if (topicSubscriptionControllers.has(src)) {
+  const rememberedModernTopics = subscriptions.hasRememberedModernTopics(src);
+  const knownModernController =
+    topicSubscriptionControllers.has(src)
+    || rememberedModernTopics;
+  // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
+  // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
+  client.sendLinkAccept(src, requestId, {
+    appVersion: app.getVersion(),
+    allowlistHash: computeAllowlistHash(),
+  });
+  acceptedLinkControllers.add(src);
+  if (knownModernController) {
     subscriptions.updateControllerMetadata(src, name, capabilities);
   } else {
     subscriptions.subscribe(src, [LEGACY_TOPIC], name, capabilities);
   }
   syncForwarding();
-  client.sendLinkAccept(src, requestId, {
-    appVersion: app.getVersion(),
-    allowlistHash: computeAllowlistHash(),
-  });
+  flushRemoteInvokeResultOutbox(src);
+  if (!knownModernController) {
+    for (const queued of offlinePushQueue.drain(src, [LEGACY_TOPIC])) {
+      sendPushBestEffort(src, queued.channel, queued.payload);
+    }
+  }
   log.info(`control link opened by ${shortId(src)} (${name})`);
 }
 
@@ -697,29 +875,358 @@ async function handleInvoke(
   requestId: string,
   payload: InvokePayload | undefined,
 ): Promise<void> {
-  // 订阅控制帧:用 env.src(server 填,防伪造)作 controllerDeviceId,不走通用 dispatch
-  // (dispatchLocalInvoke 的合成 event 拿不到 src,且 subscribe 不是真 ipcMain handler)。
-  if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
-    client.sendInvokeResult(src, requestId, handleSubscriptionFrame(src, payload));
+  const cacheKey = `${src}\u0000${requestId}`;
+  const invokeLinkEpoch = remoteInvokeLinkEpoch.get(src) ?? 0;
+  const fingerprint = JSON.stringify(payload) ?? '';
+  const admissionFailure = currentRemoteInvokeAdmissionFailure(src);
+  if (admissionFailure) {
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      admissionFailure,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'admission failure invoke-result could not be queued');
+    }
     return;
   }
+  const queued = remoteInvokeResultOutbox.get(cacheKey);
+  if (queued) {
+    if (queued.fingerprint !== undefined && queued.fingerprint !== fingerprint) {
+      sendRequestIdReuseError(client, src, requestId, payload);
+      return;
+    }
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      queued.result,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'queued invoke-result could not be retried');
+    }
+    return;
+  }
+  const cached = completedRemoteInvokeResults.get(cacheKey);
+  if (cached) {
+    if (cached.fingerprint !== fingerprint) {
+      sendRequestIdReuseError(client, src, requestId, payload);
+      return;
+    }
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      cached.result,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'cached invoke-result could not be queued');
+    }
+    return;
+  }
+  const inFlight = inFlightRemoteInvokeResults.get(cacheKey);
+  if (inFlight) {
+    if (inFlight.fingerprint !== fingerprint) {
+      sendRequestIdReuseError(client, src, requestId, payload);
+      return;
+    }
+    if (inFlight.linkEpoch !== invokeLinkEpoch) return;
+    const result = await inFlight.promise;
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      result,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'in-flight invoke-result could not be queued');
+    }
+    return;
+  }
+  if (payload && (payload.channel === DL_SUBSCRIBE_CHANNEL || payload.channel === DL_UNSUBSCRIBE_CHANNEL)) {
+    const result = handleSubscriptionFrame(src, payload);
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      result,
+      payload.channel,
+      payload.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'subscription invoke-result could not be queued');
+    }
+    return;
+  }
+
+  const invokeBytes = encodedByteLength(fingerprint);
+  const controllerAdmission = remoteInvokeAdmissionState(src);
+  const controllerAtLimit = (
+    controllerAdmission.messages >= REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT
+    || controllerAdmission.bytes + invokeBytes > REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_BYTES
+  );
+  const globalAtLimit = (
+    inFlightRemoteInvokeResults.size + remoteInvokeResultOutbox.size >= REMOTE_INVOKE_IN_FLIGHT_LIMIT
+    || inFlightRemoteInvokeBytes + remoteInvokeResultOutboxBytes + invokeBytes
+      > REMOTE_INVOKE_IN_FLIGHT_BYTES
+  );
+  if (controllerAtLimit || globalAtLimit) {
+    const result: InvokeResultPayload = {
+      ok: false,
+      error: {
+        code: 'BACKPRESSURE',
+        message: 'remote invoke execution queue is full',
+      },
+    };
+    if (!sendInvokeResultSafe(
+      client,
+      src,
+      requestId,
+      result,
+      payload?.channel,
+      payload?.args,
+      fingerprint,
+    )) {
+      throw new DeviceLinkError('BACKPRESSURE', 'overload invoke-result could not be queued');
+    }
+    return;
+  }
+
   const releaseBusyLease = shouldAcquireRemoteInvokeBusyLease(src, payload)
     ? acquireRemoteInvokeBusyLease()
     : () => undefined;
+  const executionPromise = Promise.resolve()
+    .then(() => executeInvoke(src, payload))
+    .catch((err): InvokeResultPayload => {
+      const message = err instanceof Error ? err.message : String(err);
+      log.error(`remote invoke escaped execution boundary from ${shortId(src)}: ${message}`);
+      return {
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message,
+        },
+      };
+    });
+  const resultPromise = settleRemoteInvokeWithOrphanDeadline(
+    executionPromise,
+    src,
+    payload?.channel,
+  ).finally(releaseBusyLease);
+  const inFlightEntry = {
+    promise: resultPromise,
+    bytes: invokeBytes,
+    fingerprint,
+    linkEpoch: invokeLinkEpoch,
+  };
+  inFlightRemoteInvokeResults.set(cacheKey, inFlightEntry);
+  inFlightRemoteInvokeBytes += invokeBytes;
+  let result: InvokeResultPayload;
   try {
-    const result = await runInvoke(src, payload);
-    sendInvokeResultSafe(client, src, requestId, result, payload?.channel, payload?.args);
+    result = normalizeInvokeResultForWire(await resultPromise);
+    if ((remoteInvokeLinkEpoch.get(src) ?? 0) !== invokeLinkEpoch) return;
   } finally {
-    releaseBusyLease();
+    if (inFlightRemoteInvokeResults.get(cacheKey) === inFlightEntry) {
+      inFlightRemoteInvokeResults.delete(cacheKey);
+      inFlightRemoteInvokeBytes -= invokeBytes;
+    }
+  }
+  if (!sendInvokeResultSafe(
+    client,
+    src,
+    requestId,
+    result,
+    payload?.channel,
+    payload?.args,
+    fingerprint,
+  )) {
+    throw new DeviceLinkError('BACKPRESSURE', 'invoke-result could not be queued');
   }
 }
 
+async function executeInvoke(
+  src: string,
+  payload: InvokePayload | undefined,
+): Promise<InvokeResultPayload> {
+  return await runInvoke(src, payload);
+}
+
+function settleRemoteInvokeWithOrphanDeadline(
+  execution: Promise<InvokeResultPayload>,
+  src: string,
+  channel: string | undefined,
+): Promise<InvokeResultPayload> {
+  let timer: ReturnType<typeof setTimeout> | null = null;
+  const timeout = new Promise<InvokeResultPayload>((resolve) => {
+    timer = setTimeout(() => {
+      timer = null;
+      log.warn(
+        `remote invoke orphan deadline exceeded for ${channel ?? '?'} from ${shortId(src)}; ` +
+        'underlying handler may still be running',
+      );
+      resolve({
+        ok: false,
+        error: {
+          code: 'IPC_ERROR',
+          message:
+            `[TIMEOUT] remote invoke exceeded ${REMOTE_INVOKE_ORPHAN_TIMEOUT_MS}ms; ` +
+            'the underlying operation may still be running',
+        },
+      });
+    }, REMOTE_INVOKE_ORPHAN_TIMEOUT_MS);
+    (timer as unknown as { unref?: () => void }).unref?.();
+  });
+  return Promise.race([execution, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  });
+}
+
+function currentRemoteInvokeAdmissionFailure(src: string): InvokeResultPayload | null {
+  if (!readDeviceLinkSettings().remoteControlEnabled) {
+    return { ok: false, error: { code: 'REMOTE_DISABLED', message: 'remote control disabled' } };
+  }
+  if (isControllerRevoked(src)) {
+    return { ok: false, error: { code: 'ACCESS_REVOKED', message: 'access revoked by target device' } };
+  }
+  return null;
+}
+
+function remoteInvokeAdmissionState(src: string): { messages: number; bytes: number } {
+  const prefix = `${src}\u0000`;
+  let messages = 0;
+  let bytes = 0;
+  for (const [key, entry] of inFlightRemoteInvokeResults) {
+    if (!key.startsWith(prefix)) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  for (const entry of remoteInvokeResultOutbox.values()) {
+    if (entry.src !== src) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  return { messages, bytes };
+}
+
+function sendRequestIdReuseError(
+  client: DeviceLinkClient,
+  src: string,
+  requestId: string,
+  payload: InvokePayload | undefined,
+): void {
+  const result: InvokeResultPayload = {
+    ok: false,
+    error: {
+      code: 'INTERNAL',
+      message: 'request id reused with different payload',
+    },
+  };
+  // 非法复用帧不能覆盖同 requestId 的 canonical success/error outbox；本地背压时宁可
+  // 丢掉这条诊断响应，也不能让它在稍后先到、错误 resolve 原请求。
+  const attempt = trySendInvokeResult(
+    client,
+    src,
+    requestId,
+    result,
+    payload?.channel,
+    payload?.args,
+  );
+  if (!attempt.sent) {
+    log.warn(`request-id reuse error could not be sent to ${shortId(src)}`);
+  }
+}
+
+function rememberRemoteInvokeResult(
+  key: string,
+  fingerprint: string,
+  result: InvokeResultPayload,
+): void {
+  const serialized = safeJsonStringify(result);
+  if (!serialized) return;
+  const bytes = encodedByteLength(serialized) + encodedByteLength(fingerprint);
+  const previous = completedRemoteInvokeResults.get(key);
+  if (previous) {
+    completedRemoteInvokeResultBytes -= previous.bytes;
+    completedRemoteInvokeResults.delete(key);
+  }
+  completedRemoteInvokeResults.set(key, { result, bytes, fingerprint });
+  completedRemoteInvokeResultBytes += bytes;
+  while (
+    completedRemoteInvokeResults.size > REMOTE_INVOKE_RESULT_CACHE_LIMIT
+    || completedRemoteInvokeResultBytes > REMOTE_INVOKE_RESULT_CACHE_BYTES
+  ) {
+    const oldestKey = completedRemoteInvokeResults.keys().next().value as string | undefined;
+    if (!oldestKey) break;
+    const oldest = completedRemoteInvokeResults.get(oldestKey);
+    completedRemoteInvokeResults.delete(oldestKey);
+    if (oldest) completedRemoteInvokeResultBytes -= oldest.bytes;
+  }
+}
+
+function clearRemoteInvokeResultsFor(deviceId: string): void {
+  const prefix = `${deviceId}\u0000`;
+  for (const [key, cached] of completedRemoteInvokeResults) {
+    if (!key.startsWith(prefix)) continue;
+    completedRemoteInvokeResults.delete(key);
+    completedRemoteInvokeResultBytes -= cached.bytes;
+  }
+}
+
+function clearRemoteInvokeStateFor(deviceId: string): void {
+  remoteInvokeLinkEpoch.set(deviceId, (remoteInvokeLinkEpoch.get(deviceId) ?? 0) + 1);
+  clearRemoteInvokeResultsFor(deviceId);
+  const prefix = `${deviceId}\u0000`;
+  for (const [key, queued] of remoteInvokeResultOutbox) {
+    if (!key.startsWith(prefix)) continue;
+    remoteInvokeResultOutbox.delete(key);
+    remoteInvokeResultOutboxBytes -= queued.bytes;
+  }
+  if (remoteInvokeResultOutbox.size === 0) clearRemoteInvokeResultOutboxTimer();
+}
+
+function clearAllRemoteInvokeState(): void {
+  const deviceIds = new Set<string>();
+  for (const key of completedRemoteInvokeResults.keys()) {
+    deviceIds.add(key.slice(0, key.indexOf('\u0000')));
+  }
+  for (const key of inFlightRemoteInvokeResults.keys()) {
+    deviceIds.add(key.slice(0, key.indexOf('\u0000')));
+  }
+  for (const queued of remoteInvokeResultOutbox.values()) {
+    deviceIds.add(queued.src);
+  }
+  for (const deviceId of deviceIds) clearRemoteInvokeStateFor(deviceId);
+}
+
+function normalizeInvokeResultForWire(result: InvokeResultPayload): InvokeResultPayload {
+  if (safeJsonStringify(result)) return result;
+  return {
+    ok: false,
+    error: {
+      code: 'IPC_ERROR',
+      message: '[SERIALIZATION_ERROR] remote invoke result is not JSON serializable',
+    },
+  };
+}
+
 /**
- * 发送 invoke-result,并对「结果帧超 MAX_FRAME_BYTES」兜底。
+ * 发送 invoke-result,并对「结果帧超 MAX_FRAME_BYTES」和本地发送背压兜底。
  * sendInvokeResult → sendEnvelope 在结果超限时抛 PAYLOAD_TOO_LARGE;若不接住,异常会冒泡到
  * handleFrame 的 .catch(只 log),控制端收不到任何 invoke-result,只能干等 30s 超时。常见触发:
  * 分页读到带超大 tool 输出的会话(local-db:messages:list / around)。消息页优先把超大消息内容
  * 裁剪成仍可渲染的 `ok:true` 结果;其它 channel 回紧凑错误,让控制端立即失败而非卡死。
+ * BACKPRESSURE / NOT_CONNECTED 等瞬态发送失败则保留原结果进有界 outbox；绝不能把已经成功
+ * 执行的 mutation 改写成 BACKPRESSURE error，否则控制端重试会重复副作用。
  */
 function sendInvokeResultSafe(
   client: DeviceLinkClient,
@@ -728,31 +1235,206 @@ function sendInvokeResultSafe(
   result: InvokeResultPayload,
   channel?: string,
   args?: unknown[],
-): void {
+  fingerprint?: string,
+): boolean {
+  const key = `${src}\u0000${requestId}`;
+  const normalized = normalizeInvokeResultForWire(result);
+  const attempt = trySendInvokeResult(client, src, requestId, normalized, channel, args);
+  // 以真正能上 wire 的结果作为去重真相：超限原结果若被 compact/改成结构化错误，
+  // 不能把缓存留在原始大对象上，否则缓存可能自淘汰且重复 requestId 会再次执行。
+  if (fingerprint !== undefined) {
+    rememberRemoteInvokeResult(key, fingerprint, attempt.result);
+  }
+  if (attempt.sent) {
+    removeRemoteInvokeResultOutboxEntry(key);
+    return true;
+  }
+  return enqueueRemoteInvokeResult({
+    src,
+    requestId,
+    result: attempt.result,
+    channel,
+    args,
+    fingerprint,
+    bytes: invokeResultOutboxBytes(attempt.result, fingerprint),
+    queuedAt: Date.now(),
+  });
+}
+
+function trySendInvokeResult(
+  client: DeviceLinkClient,
+  src: string,
+  requestId: string,
+  result: InvokeResultPayload,
+  channel?: string,
+  args?: unknown[],
+  logFailure = true,
+): { sent: true; result: InvokeResultPayload } | { sent: false; result: InvokeResultPayload } {
+  let candidate = result;
   try {
-    client.sendInvokeResult(src, requestId, result);
+    client.sendInvokeResult(src, requestId, candidate);
+    return { sent: true, result: candidate };
   } catch (err) {
     const code = err instanceof DeviceLinkError ? err.code : 'INTERNAL';
     const message = err instanceof Error ? err.message : String(err);
-    log.warn(`invoke-result send failed for ${channel ?? '?'} from ${shortId(src)}: ${message}`);
+    if (logFailure) {
+      log.warn(`invoke-result send failed for ${channel ?? '?'} from ${shortId(src)}: ${message}`);
+    }
     if (code === 'PAYLOAD_TOO_LARGE') {
       const compactResult = compactInvokeResultForDeviceLink(channel, result, { dst: src, requestId }, args);
       if (compactResult) {
+        candidate = compactResult;
         try {
-          client.sendInvokeResult(src, requestId, compactResult);
+          client.sendInvokeResult(src, requestId, candidate);
           log.warn(`sent compact message invoke-result for ${channel ?? '?'} to ${shortId(src)}`);
-          return;
+          return { sent: true, result: candidate };
         } catch (compactErr) {
-          log.warn(`compact message invoke-result failed from ${shortId(src)}: ${String(compactErr)}`);
+          if (logFailure) {
+            log.warn(`compact message invoke-result failed from ${shortId(src)}: ${String(compactErr)}`);
+          }
+          if (!isPayloadTooLargeError(compactErr)) {
+            return { sent: false, result: candidate };
+          }
         }
       }
+      candidate = { ok: false, error: { code, message } };
+      try {
+        client.sendInvokeResult(src, requestId, candidate);
+        return { sent: true, result: candidate };
+      } catch (fallbackErr) {
+        if (logFailure) {
+          log.error(
+            `fallback error invoke-result also failed from ${shortId(src)}: ${String(fallbackErr)}`,
+          );
+        }
+        return { sent: false, result: candidate };
+      }
     }
-    try {
-      client.sendInvokeResult(src, requestId, { ok: false, error: { code, message } });
-    } catch (err2) {
-      log.error(`fallback error invoke-result also failed from ${shortId(src)}: ${String(err2)}`);
-    }
+    return { sent: false, result: candidate };
   }
+}
+
+function invokeResultWireBytes(result: InvokeResultPayload): number {
+  const serialized = safeJsonStringify(result);
+  return serialized ? encodedByteLength(serialized) : 0;
+}
+
+function invokeResultOutboxBytes(
+  result: InvokeResultPayload,
+  fingerprint: string | undefined,
+): number {
+  return invokeResultWireBytes(result) + (fingerprint === undefined ? 0 : encodedByteLength(fingerprint));
+}
+
+function remoteInvokeResultOutboxState(src: string): { messages: number; bytes: number } {
+  let messages = 0;
+  let bytes = 0;
+  for (const entry of remoteInvokeResultOutbox.values()) {
+    if (entry.src !== src) continue;
+    messages += 1;
+    bytes += entry.bytes;
+  }
+  return { messages, bytes };
+}
+
+function enqueueRemoteInvokeResult(entry: QueuedRemoteInvokeResult): boolean {
+  const key = `${entry.src}\u0000${entry.requestId}`;
+  if (remoteInvokeResultOutbox.has(key)) {
+    scheduleRemoteInvokeResultOutboxFlush();
+    return true;
+  }
+  const controllerOutbox = remoteInvokeResultOutboxState(entry.src);
+  if (
+    entry.bytes <= 0
+    || controllerOutbox.messages >= REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT
+    || controllerOutbox.bytes + entry.bytes > REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES
+    || remoteInvokeResultOutbox.size >= REMOTE_INVOKE_RESULT_OUTBOX_LIMIT
+    || remoteInvokeResultOutboxBytes + entry.bytes > REMOTE_INVOKE_RESULT_OUTBOX_BYTES
+  ) {
+    log.error(
+      `invoke-result outbox full for ${entry.channel ?? '?'} to ${shortId(entry.src)} ` +
+      `(controllerMessages=${controllerOutbox.messages}, controllerBytes=${controllerOutbox.bytes}, ` +
+      `messages=${remoteInvokeResultOutbox.size}, bytes=${remoteInvokeResultOutboxBytes})`,
+    );
+    return false;
+  }
+  remoteInvokeResultOutbox.set(key, entry);
+  remoteInvokeResultOutboxBytes += entry.bytes;
+  log.warn(
+    `queued invoke-result after local send backpressure for ${entry.channel ?? '?'} ` +
+    `to ${shortId(entry.src)}`,
+  );
+  scheduleRemoteInvokeResultOutboxFlush();
+  return true;
+}
+
+function removeRemoteInvokeResultOutboxEntry(key: string): void {
+  const queued = remoteInvokeResultOutbox.get(key);
+  if (!queued) return;
+  remoteInvokeResultOutbox.delete(key);
+  remoteInvokeResultOutboxBytes -= queued.bytes;
+  if (remoteInvokeResultOutbox.size === 0) clearRemoteInvokeResultOutboxTimer();
+}
+
+function clearRemoteInvokeResultOutboxTimer(): void {
+  if (!remoteInvokeResultOutboxTimer) return;
+  clearTimeout(remoteInvokeResultOutboxTimer);
+  remoteInvokeResultOutboxTimer = null;
+}
+
+function scheduleRemoteInvokeResultOutboxFlush(): void {
+  if (remoteInvokeResultOutboxTimer || remoteInvokeResultOutbox.size === 0) return;
+  remoteInvokeResultOutboxTimer = setTimeout(() => {
+    remoteInvokeResultOutboxTimer = null;
+    flushRemoteInvokeResultOutbox();
+  }, REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS);
+  (remoteInvokeResultOutboxTimer as unknown as { unref?: () => void }).unref?.();
+}
+
+function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
+  const client = activeClient;
+  if (!client) {
+    scheduleRemoteInvokeResultOutboxFlush();
+    return;
+  }
+  const now = Date.now();
+  const blockedPeers = new Set<string>();
+  for (const [key, queued] of remoteInvokeResultOutbox) {
+    if (onlySrc && queued.src !== onlySrc) continue;
+    if (now - queued.queuedAt >= REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS) {
+      log.warn(
+        `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
+        `to ${shortId(queued.src)}`,
+      );
+      removeRemoteInvokeResultOutboxEntry(key);
+      continue;
+    }
+    if (blockedPeers.has(queued.src)) continue;
+    const attempt = trySendInvokeResult(
+      client,
+      queued.src,
+      queued.requestId,
+      queued.result,
+      queued.channel,
+      queued.args,
+      false,
+    );
+    if (!attempt.sent) {
+      blockedPeers.add(queued.src);
+      if (attempt.result !== queued.result) {
+        const bytes = invokeResultOutboxBytes(attempt.result, queued.fingerprint);
+        remoteInvokeResultOutboxBytes += bytes - queued.bytes;
+        queued.result = attempt.result;
+        queued.bytes = bytes;
+      }
+      continue;
+    }
+    removeRemoteInvokeResultOutboxEntry(key);
+    log.info(
+      `flushed queued invoke-result for ${queued.channel ?? '?'} to ${shortId(queued.src)}`,
+    );
+  }
+  if (remoteInvokeResultOutbox.size > 0) scheduleRemoteInvokeResultOutboxFlush();
 }
 
 function compactInvokeResultForDeviceLink(
@@ -1031,10 +1713,11 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     // until disconnect. Empty/fully-filtered frames leave legacy compatibility intact.
     // Add the modern topics first so replacing the last legacy topic does not discard the
     // controller metadata (including negotiated capabilities) with the registry entry.
+    const hadLegacyTopic = subscriptions.controllerHasTopic(src, LEGACY_TOPIC);
     subscriptions.subscribe(src, topics, name, optionalControllerCapabilities(o));
     if (topics.length > 0) {
       topicSubscriptionControllers.add(src);
-      subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
+      if (hadLegacyTopic) subscriptions.unsubscribe(src, [LEGACY_TOPIC]);
     }
   } else {
     subscriptions.unsubscribe(src, topics);
@@ -1042,6 +1725,11 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
     notifySessionsSubscribed(src);
+  }
+  if (isSub && topics.length > 0) {
+    for (const queued of offlinePushQueue.drain(src, topics)) {
+      sendPushBestEffort(src, queued.channel, queued.payload);
+    }
   }
   return { ok: true, result: { ok: true } };
 }
@@ -1082,6 +1770,24 @@ export async function runInvoke(
       const message = err instanceof Error ? err.message : String(err);
       log.warn(`media:fetch failed from ${shortId(src)}: ${message}`);
       return { ok: false, error: { code: 'MEDIA_FETCH_FAILED', message } };
+    }
+  }
+
+  // device-link:telegram:* 不是 ipcMain handler(IM 的 ipcMain 面统一挂了
+  // assertTrustedAppRendererEvent, 合成 event 必然不可信 —— 那道闸不该为远程下线
+  // 放宽), 故在此拦截。已过三道 gate, 等同受信本地访问。只切轮询、不碰凭证:
+  // 远程能让它停收消息, 但拿不走也删不掉绑定(解绑仍只能本机操作)。
+  if (payload.channel === DL_TELEGRAM_STATUS_CHANNEL) {
+    return { ok: true, result: readTelegramRemoteStatus() };
+  }
+  if (payload.channel === DL_TELEGRAM_SET_ONLINE_CHANNEL) {
+    try {
+      const result = await setTelegramRemoteOnline((payload.args ?? [])[0]);
+      return { ok: true, result };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`telegram:set-online failed from ${shortId(src)}: ${message}`);
+      return { ok: false, error: { code: 'IPC_ERROR', message } };
     }
   }
 
@@ -1273,9 +1979,19 @@ export const __testing = {
     onControllersChanged = null;
     onRemoteInvokeBusyChanged = null;
     inFlightRemoteInvokeCount = 0;
+    completedRemoteInvokeResults.clear();
+    completedRemoteInvokeResultBytes = 0;
+    inFlightRemoteInvokeResults.clear();
+    inFlightRemoteInvokeBytes = 0;
+    remoteInvokeResultOutbox.clear();
+    remoteInvokeResultOutboxBytes = 0;
+    clearRemoteInvokeResultOutboxTimer();
+    remoteInvokeLinkEpoch.clear();
     topicSubscriptionControllers.clear();
+    acceptedLinkControllers.clear();
     onSessionsSubscribed = null;
     activeClient = null;
+    offlinePushQueue.clear();
     setBroadcastTapListener(null);
   },
   getActiveControllers,
@@ -1285,7 +2001,20 @@ export const __testing = {
   optionalControllerCapabilities,
   sendInvokeResultSafe,
   projectInvokeResultForTunnel,
+  remoteInvokeInFlightLimit: REMOTE_INVOKE_IN_FLIGHT_LIMIT,
+  remoteInvokeInFlightPerControllerLimit: REMOTE_INVOKE_IN_FLIGHT_PER_CONTROLLER_LIMIT,
+  remoteInvokeOrphanTimeoutMs: REMOTE_INVOKE_ORPHAN_TIMEOUT_MS,
+  remoteInvokeResultOutboxLimit: REMOTE_INVOKE_RESULT_OUTBOX_LIMIT,
+  remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
+  remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,
+  flushRemoteInvokeResultOutbox,
   forwardPush,
+  queuedPushesFor(deviceId: string) {
+    return offlinePushQueue.snapshot(deviceId);
+  },
+  handleLinkOpen,
+  handleSubscriptionFrame,
+  purgeRevokedController,
   setActiveClient(c: DeviceLinkClient | null): void {
     activeClient = c;
   },

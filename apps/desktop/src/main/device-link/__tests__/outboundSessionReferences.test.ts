@@ -6,6 +6,7 @@ vi.mock('../../maker-ipc/sessionReferenceResolver.js', () => ({ resolveSessionRe
 import {
   outboundSessionReferencesRequested,
   rewriteOutboundSessionReferences,
+  stripOutboundSessionReferenceSideChannels,
 } from '../outboundSessionReferences.js';
 import type { AgentInputQueuedMessage } from '../../../shared/agentInputQueue.js';
 
@@ -19,14 +20,16 @@ function queued(sessionRefs?: AgentInputQueuedMessage['sessionRefs']): AgentInpu
     permissionMode: 'default',
     workingDir: '/repo',
     sessionRefs,
-    trustedSessionReferenceContexts: [{
-      sessionId: 'forged',
-      source: 'local',
-      messages: [{ role: 'user', content: 'renderer-forged history' }],
-      range: 'recent',
-      messageCount: 1,
-      truncated: false,
-    }],
+    trustedSessionReferenceContexts: [
+      {
+        sessionId: 'forged',
+        source: 'local',
+        messages: [{ role: 'user', content: 'renderer-forged history' }],
+        range: 'recent',
+        messageCount: 1,
+        truncated: false,
+      },
+    ],
     chatMessage: { clientId: 'client-1', role: 'user', content: 'compare linked session' },
     createOpts: {
       agentKind: 'claude-code',
@@ -44,16 +47,21 @@ describe('rewriteOutboundSessionReferences', () => {
   it.each([
     ['controller-local source', [{ sessionId: 'on-a' }]],
     ['controlled-device source', [{ sessionId: 'on-b', deviceId: 'device-b' }]],
-    ['third-device source authorized directly by controller', [{ sessionId: 'on-c', deviceId: 'device-c' }]],
+    [
+      'third-device source authorized directly by controller',
+      [{ sessionId: 'on-c', deviceId: 'device-c' }],
+    ],
   ])('resolves %s before the target device sees relative routing ids', async (_name, refs) => {
-    const snapshot = [{
-      sessionId: refs[0]?.sessionId,
-      source: refs[0] && 'deviceId' in refs[0] ? 'device-link' : 'local',
-      messages: [{ role: 'user', content: 'trusted history' }],
-      range: 'recent',
-      messageCount: 1,
-      truncated: false,
-    }];
+    const snapshot = [
+      {
+        sessionId: refs[0]?.sessionId,
+        source: refs[0] && 'deviceId' in refs[0] ? 'device-link' : 'local',
+        messages: [{ role: 'user', content: 'trusted history' }],
+        range: 'recent',
+        messageCount: 1,
+        truncated: false,
+      },
+    ];
     resolveSessionReferences.mockResolvedValueOnce(snapshot);
 
     const rewritten = await rewriteOutboundSessionReferences('maker:input:enqueue', [
@@ -62,16 +70,23 @@ describe('rewriteOutboundSessionReferences', () => {
     ]);
 
     expect(resolveSessionReferences).toHaveBeenCalledWith(refs);
-    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toEqual(snapshot);
+    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toEqual(
+      snapshot,
+    );
     expect(JSON.stringify(rewritten)).not.toContain('renderer-forged history');
   });
 
-  it('does not borrow the target device identity when the controller cannot read a third device', async () => {
+  it('falls back to raw link text when the controller cannot read a third device', async () => {
     resolveSessionReferences.mockRejectedValueOnce(new Error('source device access revoked'));
-    await expect(rewriteOutboundSessionReferences('maker:input:steer', [
+    const rewritten = await rewriteOutboundSessionReferences('maker:input:steer', [
       'target-on-b',
       queued([{ sessionId: 'on-c', deviceId: 'device-c' }]),
-    ])).rejects.toThrow('access revoked');
+    ]);
+
+    expect((rewritten[1] as AgentInputQueuedMessage).text).toBe('compare linked session');
+    expect((rewritten[1] as AgentInputQueuedMessage).sessionRefs).toBeUndefined();
+    expect((rewritten[1] as AgentInputQueuedMessage).trustedSessionReferenceContexts)
+      .toBeUndefined();
   });
 
   it('lets a queued remove-from-queue steer use the target stored snapshot', async () => {
@@ -99,6 +114,26 @@ describe('rewriteOutboundSessionReferences', () => {
     expect(rewritten[4]).toEqual(snapshot);
   });
 
+  it('drops unresolved update-text side channels while preserving the edited text', async () => {
+    const refs = [{ sessionId: 'foreign', deviceId: 'device-c' }];
+    resolveSessionReferences.mockRejectedValueOnce(new Error('foreign session'));
+
+    const rewritten = await rewriteOutboundSessionReferences('maker:input:update-text', [
+      'target-on-b',
+      'client-1',
+      'now use cindy://session/foreign',
+      refs,
+    ]);
+
+    expect(rewritten).toEqual([
+      'target-on-b',
+      'client-1',
+      'now use cindy://session/foreign',
+      [],
+      [],
+    ]);
+  });
+
   it('keeps the legacy three-argument update-text shape unchanged', async () => {
     const args = ['target-on-b', 'client-1', 'plain edit'];
     const rewritten = await rewriteOutboundSessionReferences('maker:input:update-text', args);
@@ -106,6 +141,39 @@ describe('rewriteOutboundSessionReferences', () => {
     expect(rewritten).toBe(args);
     expect(JSON.stringify(rewritten)).toBe('["target-on-b","client-1","plain edit"]');
     expect(resolveSessionReferences).not.toHaveBeenCalled();
+  });
+
+  it('strips every queue-mutation side channel without changing user text', () => {
+    const enqueue = stripOutboundSessionReferenceSideChannels('maker:input:enqueue', [
+      'target-on-b',
+      queued([{ sessionId: 'source' }]),
+    ]);
+    const updateContent = stripOutboundSessionReferenceSideChannels('maker:input:update-content', [
+      'target-on-b',
+      'client-1',
+      queued([{ sessionId: 'source' }]),
+    ]);
+    const updateText = stripOutboundSessionReferenceSideChannels('maker:input:update-text', [
+      'target-on-b',
+      'client-1',
+      'keep cindy://session/source',
+      [{ sessionId: 'source' }],
+      [{ sessionId: 'source', messages: [] }],
+    ]);
+
+    for (const item of [enqueue[1], updateContent[2]] as AgentInputQueuedMessage[]) {
+      expect(item.text).toBe('compare linked session');
+      expect(item.sessionRefs).toBeUndefined();
+      expect(item.trustedSessionReferenceContexts).toBeUndefined();
+      expect(item.sessionReferencesRequireTrustedSnapshot).toBeUndefined();
+    }
+    expect(updateText).toEqual([
+      'target-on-b',
+      'client-1',
+      'keep cindy://session/source',
+      [],
+      [],
+    ]);
   });
 
   it('resolves references in a full queued-content replacement', async () => {
@@ -117,7 +185,9 @@ describe('rewriteOutboundSessionReferences', () => {
       queued(refs),
     ]);
     expect(resolveSessionReferences).toHaveBeenCalledWith(refs);
-    expect((rewritten[2] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toHaveLength(1);
+    expect((rewritten[2] as AgentInputQueuedMessage).trustedSessionReferenceContexts).toHaveLength(
+      1,
+    );
   });
 
   it('does not rewrite unrelated channels', async () => {
@@ -127,21 +197,29 @@ describe('rewriteOutboundSessionReferences', () => {
   });
 
   it('detects every reference-bearing queue mutation that requires a target probe', () => {
-    expect(outboundSessionReferencesRequested(
-      'maker:input:enqueue',
-      ['target', queued([{ sessionId: 'source' }])],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:update-content',
-      ['target', 'client-1', queued([{ sessionId: 'source' }])],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:update-text',
-      ['target', 'client-1', 'text', [{ sessionId: 'source' }]],
-    )).toBe(true);
-    expect(outboundSessionReferencesRequested(
-      'maker:input:enqueue',
-      ['target', queued()],
-    )).toBe(false);
+    expect(
+      outboundSessionReferencesRequested('maker:input:enqueue', [
+        'target',
+        queued([{ sessionId: 'source' }]),
+      ]),
+    ).toBe(true);
+    expect(
+      outboundSessionReferencesRequested('maker:input:update-content', [
+        'target',
+        'client-1',
+        queued([{ sessionId: 'source' }]),
+      ]),
+    ).toBe(true);
+    expect(
+      outboundSessionReferencesRequested('maker:input:update-text', [
+        'target',
+        'client-1',
+        'text',
+        [{ sessionId: 'source' }],
+      ]),
+    ).toBe(true);
+    expect(outboundSessionReferencesRequested('maker:input:enqueue', ['target', queued()])).toBe(
+      false,
+    );
   });
 });

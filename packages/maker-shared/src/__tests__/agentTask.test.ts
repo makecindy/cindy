@@ -34,6 +34,8 @@ describe('normalizeAgentTaskUpdate', () => {
   it('defaults status to running and infers provider from source', () => {
     const update = normalizeAgentTaskUpdate({ taskId: 't1', status: 'weird' }, 'codex');
     expect(update).toMatchObject({ taskId: 't1', status: 'running', provider: 'codex' });
+    expect(normalizeAgentTaskUpdate({ taskId: 't2' }, 'pi'))
+      .toMatchObject({ taskId: 't2', provider: 'pi' });
   });
 
   it('keeps an explicit provider over the source hint and shapes usage', () => {

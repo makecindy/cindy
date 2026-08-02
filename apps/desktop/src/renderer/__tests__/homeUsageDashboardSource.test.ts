@@ -19,7 +19,7 @@ const heatmapSource = readFileSync(
 describe('HomeUsageDashboard source contract', () => {
   it('uses the Claude account daily spend for the visible today amount when available', () => {
     expect(source).toMatch(
-      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend\)\s+: null;/,
+      /const accountTodayMoney =\s+typeof claudeQuota\?\.todaySpend === 'number'\s+\? gatewayMoney\(claudeQuota\.todaySpend, claudeQuota\.currency\)\s+: null;/,
     );
     expect(source).toContain('const hasAccountTodaySpend = accountTodayMoney !== null;');
     expect(source).toContain('const layoutHistory = history ?? emptyLayoutHistory;');

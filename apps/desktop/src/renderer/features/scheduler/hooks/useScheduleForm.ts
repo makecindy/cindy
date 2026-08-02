@@ -58,6 +58,7 @@ const DEFAULT_FORM: ScheduleFormState = {
   preRunHookTimeoutSec: '',
   notifyDesktop: true,
   notifyFeishu: false,
+  notifyWecomGroup: false,
 };
 
 const SCHEDULE_FORM_PREFS_KEY = 'xdt:scheduleFormPrefs:v1';
@@ -83,6 +84,7 @@ function defaultScheduleFormPrefs(): ScheduleFormPrefs {
     lastByAgent: {
       'claude-code': EMPTY_AGENT_PREFS,
       codex: EMPTY_AGENT_PREFS,
+      pi: EMPTY_AGENT_PREFS,
     },
   };
 }
@@ -93,7 +95,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
     const raw = window.localStorage.getItem(SCHEDULE_FORM_PREFS_KEY);
     if (!raw) return defaultScheduleFormPrefs();
     const parsed = JSON.parse(raw) as Partial<ScheduleFormPrefs>;
-    const agentKind = parsed.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind = parsed.agentKind === 'codex' ? 'codex' : parsed.agentKind === 'pi' ? 'pi' : 'claude-code';
     const workingDir = typeof parsed.workingDir === 'string' ? parsed.workingDir : '';
     const workspaceKind = normalizePrefsWorkspaceKind(parsed.workspaceKind, workingDir);
     return {
@@ -104,6 +106,7 @@ function loadScheduleFormPrefs(): ScheduleFormPrefs {
       lastByAgent: {
         'claude-code': sanitizeAgentPrefs(parsed.lastByAgent?.['claude-code']),
         codex: sanitizeAgentPrefs(parsed.lastByAgent?.codex),
+        pi: sanitizeAgentPrefs(parsed.lastByAgent?.pi),
       },
     };
   } catch {
@@ -151,7 +154,8 @@ export function getScheduleAgentPrefs(agentKind: ScheduleFormState['agentKind'])
  * 的事故见 2026-06 踩坑:任务里看着选了 Opus 4.8,实际每次跑 4.7)。
  */
 export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']): string {
-  return agentKind === 'codex' ? 'gpt-5.5' : 'claude-sonnet-4-6';
+  // Pi 的来源/模型来自动态连接目录；没有能与 providerId 解耦的静态默认。
+  return agentKind === 'codex' ? 'gpt-5.5' : agentKind === 'pi' ? '' : 'claude-sonnet-4-6';
 }
 
 /**
@@ -164,7 +168,7 @@ export function schedulerFallbackModel(agentKind: ScheduleFormState['agentKind']
 export function getScheduleDefaultModel(agentKind: ScheduleFormState['agentKind']): string {
   const prefs = getScheduleAgentPrefs(agentKind);
   if (prefs.model.trim()) return prefs.model;
-  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : 'cc');
+  const chatLast = getPersistedVendorModel(agentKind === 'codex' ? 'codex' : agentKind === 'pi' ? 'pi' : 'cc');
   if (chatLast.trim()) return chatLast;
   return schedulerFallbackModel(agentKind);
 }
@@ -244,6 +248,7 @@ export function makeFormFromSchedule(s: Schedule | null): ScheduleFormState {
       : '',
     notifyDesktop: s.notify.desktop,
     notifyFeishu: s.notify.feishu,
+    notifyWecomGroup: s.notify.wecomGroup === true,
   };
 }
 
@@ -265,7 +270,7 @@ export interface UseScheduleFormResult {
   selectBoundSession: (session: Session | null) => void;
   /** 应用模板里的 agent/model/provider/effort/fast 字段,并在跨 agent 时重建成目标 agent 的默认组合。 */
   applyTemplateAgentFields: (template: ScheduleTemplate) => void;
-  reset: (s?: Schedule | null) => void;
+  reset: (s?: Schedule | null, overrides?: Partial<ScheduleFormState>) => void;
   /**
    * 把表单转成 CreateScheduleInput；
    * heartbeat 模式（targetSessionId 非空）只跳过 workingDir/useWorktree
@@ -297,8 +302,8 @@ export function useScheduleForm(initial: Schedule | null = null): UseScheduleFor
     [],
   );
 
-  const reset = useCallback((s: Schedule | null = null) => {
-    const next = makeFormFromSchedule(s);
+  const reset = useCallback((s: Schedule | null = null, overrides?: Partial<ScheduleFormState>) => {
+    const next = { ...makeFormFromSchedule(s), ...overrides };
     lastBindingRef.current = captureBinding(next);
     setForm(next);
   }, []);

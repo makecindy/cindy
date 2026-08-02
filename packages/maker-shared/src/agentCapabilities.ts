@@ -239,7 +239,7 @@ export function buildMobileModelSwitchConfirmation({
     toLabel,
     targetModelId,
     title: `切换到 ${toLabel} 模型?`,
-    description: `这个会话已有历史消息。${fromLabel} 和 ${toLabel} 的消息格式可能不兼容，切换后旧上下文可能无法继续使用。`,
+    description: `这个任务已有历史消息。${fromLabel} 和 ${toLabel} 的消息格式可能不兼容，切换后旧上下文可能无法继续使用。`,
   };
 }
 

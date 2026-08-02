@@ -352,3 +352,62 @@ describe('AddProviderWizard — OpenAI 授权边界', () => {
     });
   });
 });
+
+describe('AddProviderWizard — 关闭途径(DESIGN.md §4:取消 / Esc / 遮罩)', () => {
+  it('按 Esc 关闭向导', () => {
+    const onClose = vi.fn();
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('输入法组合期间按 Esc 不关闭向导(取消候选词,不是关闭命令)', () => {
+    const onClose = vi.fn();
+    render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    fireEvent.keyDown(window, { key: 'Escape', isComposing: true });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape', keyCode: 229 });
+    expect(onClose).not.toHaveBeenCalled();
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+
+  it('点击遮罩关闭向导;点击弹窗内部不关闭', () => {
+    const onClose = vi.fn();
+    const { container } = render(
+      <AddProviderWizard
+        providers={[OPENAI_PROVIDER]}
+        onOpenCustomForm={vi.fn()}
+        onClose={onClose}
+        onDone={vi.fn()}
+      />,
+    );
+    // 点弹窗内部(标题):target ≠ 遮罩本身,不得关闭。
+    fireEvent.click(screen.getByText('settings.providers.wizard.title'));
+    expect(onClose).not.toHaveBeenCalled();
+    const overlay = container.firstElementChild as HTMLElement;
+    // 从弹窗内部按下、拖出到遮罩松开:合成 click 落在遮罩,但按下不始于遮罩,
+    // 不得误关(防丢表单)。
+    fireEvent.mouseDown(screen.getByText('settings.providers.wizard.title'));
+    fireEvent.click(overlay);
+    expect(onClose).not.toHaveBeenCalled();
+    // 按下与松开都在遮罩上:关闭。
+    fireEvent.mouseDown(overlay);
+    fireEvent.click(overlay);
+    expect(onClose).toHaveBeenCalledTimes(1);
+  });
+});

@@ -34,7 +34,8 @@ vi.mock('../../ownerScopedStorage', () => ({
 import type { FeishuIM } from '@cindy/im';
 import { buildFeishuAdapter } from '../adapter';
 
-const fakeIm = {} as unknown as FeishuIM;
+const getService = vi.fn<() => 'feishu' | 'lark'>(() => 'feishu');
+const fakeIm = { getService } as unknown as FeishuIM;
 const CONFIG = {
   agentKind: 'claude-code' as const,
   defaultModel: 'claude-opus-4-7',
@@ -77,7 +78,15 @@ describe('feishu ImChannelAdapter characterization', () => {
 
   it('会话落「对话」分组(workspaceKind=dialogue) + oneshot 起名前缀 [飞书·DM]', () => {
     expect(adapter.sessions.workspaceKind).toBe('dialogue');
-    expect(adapter.sessions.generatedTitlePrefix).toBe('[飞书·DM] ');
+    expect(adapter.sessions.generatedTitlePrefix).toBeTypeOf('function');
+    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('[飞书·DM] ');
+  });
+
+  it('Lark 凭据使用独立的 Lark 会话标题', () => {
+    getService.mockReturnValueOnce('lark');
+    expect(adapter.sessions.defaultTitle('ou_1234567890')).toBe('[Lark·DM] 567890');
+    getService.mockReturnValueOnce('lark');
+    expect((adapter.sessions.generatedTitlePrefix as () => string)()).toBe('[Lark·DM] ');
   });
 
   it('workingDir = userData/im-working-dir/{botAppId}(同 bot 共享)', () => {

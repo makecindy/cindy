@@ -47,6 +47,20 @@ describe('shared session action strip model', () => {
     ]);
   });
 
+  it('labels pi sessions as Pi in the runtime subtitle', () => {
+    // codex review 回归:二元映射会把 Pi 会话副标题显示成 Claude Code。
+    const overview = buildSessionActionStrip({
+      messageCount: 1,
+      pendingCount: 0,
+      queueAvailable: false,
+      queueCount: 0,
+      queuePaused: false,
+      session: session({ agentKind: 'pi' }),
+    });
+
+    expect(overview.runtimeSubtitle).toBe('Pi · claude-sonnet-4-6 · ask');
+  });
+
   it('promotes pending interactions and keeps normal queue count as icon attention only', () => {
     const overview = buildSessionActionStrip({
       diffCount: 2,
@@ -95,9 +109,11 @@ describe('shared session action strip model', () => {
       { id: 'read-only', label: '只读', strong: true },
     ]);
     expect(overview.runtimeSubtitle).toBe('协作 Worker · Worktree app-worker · Codex · claude-sonnet-4-6 · plan · Fast');
+    // 这条 fixture 恰好证明禁用原因不能断言「因为不绑项目」: 它是 Orca Worker、
+    // 有 worktreePath, 只是 workingDir 为 null —— 判据只看 workingDir。
     expect(overview.actions.find((action) => action.id === 'files')).toMatchObject({
       disabled: true,
-      disabledReason: 'Dialogue 会话没有远程工作目录，不能浏览文件。',
+      disabledReason: '这个任务没有远程工作目录，不能浏览文件。',
     });
     expect(overview.actions.find((action) => action.id === 'search')).toMatchObject({
       disabled: true,

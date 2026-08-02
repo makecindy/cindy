@@ -3,7 +3,8 @@
  *
  * 解密后的 zip 驻留 main 内存 draft(TTL 10 分钟),避免向导每步重复解密/重复要
  * 密码;commit 前置校验全过才开始写,写入顺序「先文件后 DB」:
- *   媒体还原 → CC 转录落位(按 B 机 workdir 重新转码目录) / Codex rollout+state
+ *   媒体还原 → CC 转录落位(按 B 机 workdir 重新转码目录) / Codex rollout+state /
+ *   Pi 转录落入本机 pi-agent-home
  *   → 最后单事务落 DB(tx session.importShare,原子)。
  * 任何一步失败 → RollbackJournal 逆序清理已写文件(best-effort),DB 因 tx 原子
  * 天然无残留 —— 保证导入中断不留半截会话。
@@ -81,7 +82,7 @@ function sweepExpiredDrafts(): void {
 
 export interface SharePreview {
   title: string;
-  agentKind: 'cc' | 'codex';
+  agentKind: 'cc' | 'codex' | 'pi';
   workspaceKind: 'project' | 'dialogue';
   originalWorkingDir: string | null;
   exportedAt: string;
@@ -224,6 +225,8 @@ export interface CommitShareImportOptions {
   projectsRootOverride?: string;
   /** 仅测试用:覆盖 loose 媒体落盘根目录(默认 userData/cc-agent/shared-media)。 */
   sharedMediaRootOverride?: string;
+  /** 仅测试用:覆盖 Pi 分享转录根目录(默认 userData/pi-agent-home/sessions/shared)。 */
+  piSessionsRootOverride?: string;
   /** 冲突覆盖:同 resume id 的存活会话已存在时,软删旧会话后继续导入(替换而非叠加)。 */
   overwrite?: boolean;
 }
@@ -284,10 +287,43 @@ export async function commitShareImport(
   // activeSdkSessionId 同样是不可信输入,且会流入落盘路径:codex 侧
   // importSharedCodexThread 的 rollout 文件名兜底会把 threadId 拼进 filename,
   // CC 侧 resume 也按 `<id>.jsonl` 定位转录——非单路径段一律拒整包(审查 P0)。
-  const activeSdkSessionId = manifest.activeSdkSessionId;
-  if (activeSdkSessionId && !isSafePathSegment(activeSdkSessionId)) {
-    throw new XdtshareError('SHARE_FILE_INVALID', `unsafe activeSdkSessionId: ${activeSdkSessionId}`);
+  const portableActiveSdkSessionId = manifest.activeSdkSessionId;
+  if (portableActiveSdkSessionId && !isSafePathSegment(portableActiveSdkSessionId)) {
+    throw new XdtshareError('SHARE_FILE_INVALID', `unsafe activeSdkSessionId: ${portableActiveSdkSessionId}`);
   }
+  const bundledTranscripts = manifest.transcripts.filter(
+    (t): t is { sdkSessionId: string; path: string } => t.path !== null,
+  );
+  // .xdtshare 是他人给的不可信输入:sdkSessionId 会拼进落盘路径(`<id>.jsonl`),
+  // 恶意包塞 `../../evil` 可逃出转码目录写任意文件(review bot P1)。写盘/预检前
+  // 先整体校验为单路径段,非法直接拒绝整包。
+  for (const t of bundledTranscripts) {
+    if (!isSafePathSegment(t.sdkSessionId)) {
+      throw new XdtshareError('SHARE_FILE_INVALID', `unsafe sdkSessionId in transcripts: ${t.sdkSessionId}`);
+    }
+  }
+  const piSessionsRoot = path.resolve(
+    opts.piSessionsRootOverride ??
+      path.join(app.getPath('userData'), 'pi-agent-home', 'sessions', 'shared'),
+  );
+  const piTranscriptTargets = new Map<string, string>();
+  if (manifest.agentKind === 'pi') {
+    for (const transcript of bundledTranscripts) {
+      // 只有包内实际存在的转录才映射成可 resume 的本机绝对路径。
+      if (zip.file(transcript.path)) {
+        piTranscriptTargets.set(
+          transcript.sdkSessionId,
+          path.join(piSessionsRoot, transcript.sdkSessionId),
+        );
+      }
+    }
+  }
+  const activeSdkSessionId =
+    manifest.agentKind === 'pi'
+      ? (portableActiveSdkSessionId
+          ? (piTranscriptTargets.get(portableActiveSdkSessionId) ?? null)
+          : null)
+      : portableActiveSdkSessionId;
   // 互斥判定的唯一权威:DB 里是否已有同 agent + 同 resume id 的**存活**会话行。
   // 刻意排除 status='deleted'——删除会话不清理盘上的转录/rollout/state,重导同一
   // 分享包时下方文件层一律「存在即复用、绝不覆盖」,不把盘上残留当成冲突。
@@ -310,17 +346,6 @@ export async function commitShareImport(
 
   const projectsRoot =
     opts.projectsRootOverride ?? path.join(defaultClaudeConfigDirCandidates()[0], 'projects');
-  const bundledTranscripts = manifest.transcripts.filter(
-    (t): t is { sdkSessionId: string; path: string } => t.path !== null,
-  );
-  // .xdtshare 是他人给的不可信输入:sdkSessionId 会拼进落盘路径(`<id>.jsonl`),
-  // 恶意包塞 `../../evil` 可逃出转码目录写任意文件(review bot P1)。写盘/预检前
-  // 先整体校验为单路径段,非法直接拒绝整包。
-  for (const t of bundledTranscripts) {
-    if (!isSafePathSegment(t.sdkSessionId)) {
-      throw new XdtshareError('SHARE_FILE_INVALID', `unsafe sdkSessionId in transcripts: ${t.sdkSessionId}`);
-    }
-  }
   // codex:desktop state DB / rollout 里的残留 thread 不再单独当冲突拦截,
   // 存活会话行已由上方 DB 预检兜住;落位层 INSERT OR IGNORE + wx 复用。
 
@@ -478,6 +503,18 @@ export async function commitShareImport(
       }
     }
 
+    // 2a-2. Pi 转录恢复到本机 pi-agent-home；DB 与消息元数据在下方统一改写为
+    // 这里的绝对路径。wx 复用/回滚语义与 CC 一致。
+    if (manifest.agentKind === 'pi') {
+      for (const transcript of bundledTranscripts) {
+        const target = piTranscriptTargets.get(transcript.sdkSessionId);
+        const file = zip.file(transcript.path);
+        if (!target || !file) continue;
+        await writeIfMissing(target, Buffer.from(await file.async('nodebuffer')), journal);
+        transcriptsWritten += 1;
+      }
+    }
+
     // 2b. Codex rollout + state 落位
     let codexWritten: ImportSharedCodexThreadResult | null = null;
     if (manifest.agentKind === 'codex' && activeSdkSessionId) {
@@ -519,7 +556,10 @@ export async function commitShareImport(
       role: m.role,
       content: rewriteMediaUrls(m.content, rewriteRules),
       toolUseId: m.toolUseId,
-      agentMeta: m.agentMeta,
+      agentMeta:
+        manifest.agentKind === 'pi'
+          ? rewritePiAgentMetaForImport(m.agentMeta, piTranscriptTargets)
+          : m.agentMeta,
       agentKind: m.agentKind,
       createdAt: m.createdAt,
       rewindAt: m.rewindAt,
@@ -652,6 +692,26 @@ function isSafePathSegment(value: string): boolean {
     !value.includes('\0') &&
     path.basename(value) === value
   );
+}
+
+/** 将分享包中的 Pi 便携 id 改成本机 sessionFile；无对应转录的 id 不保留。 */
+function rewritePiAgentMetaForImport(
+  agentMeta: string | null,
+  transcriptTargets: ReadonlyMap<string, string>,
+): string | null {
+  if (!agentMeta) return agentMeta;
+  try {
+    const parsed = JSON.parse(agentMeta) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const meta = parsed as Record<string, unknown>;
+    if (typeof meta.sdkSessionId !== 'string') return agentMeta;
+    const target = transcriptTargets.get(meta.sdkSessionId);
+    if (target) meta.sdkSessionId = target;
+    else delete meta.sdkSessionId;
+    return JSON.stringify(meta);
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -804,9 +864,10 @@ const EFFORTS = new Set(['minimal', 'low', 'medium', 'high', 'xhigh', 'max', 'ul
 const PERMISSION_MODES = new Set(['ask', 'default', 'acceptEdits', 'plan', 'auto', 'bypassPermissions']);
 
 /** draftPrefs 缺省(旧调用方 / 测试)时按 agentKind 兜底的模型。 */
-const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex', string> = {
+const FALLBACK_MODEL_BY_AGENT: Record<'cc' | 'codex' | 'pi', string> = {
   cc: 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
+  pi: 'gpt-5.4',
 };
 
 /**

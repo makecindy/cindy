@@ -13,7 +13,7 @@ export interface WorkerInfo {
   workerId: string;
   sessionId: string;
   role: string;
-  agent: 'claude-code' | 'codex';
+  agent: 'claude-code' | 'codex' | 'pi';
   model: string;
   effort: string | null;
   label: string | null;
@@ -62,7 +62,8 @@ function mapWorkerRecord(raw: Record<string, unknown>): WorkerInfo {
     workerId: raw.id as string,
     sessionId: raw.sessionId as string,
     role: (raw.role as string) ?? 'developer',
-    agent: session?.agentKind === 'codex' ? 'codex' : 'claude-code',
+    agent:
+      session?.agentKind === 'codex' ? 'codex' : session?.agentKind === 'pi' ? 'pi' : 'claude-code',
     model: (session?.model as string) ?? 'claude-sonnet-4-6',
     effort: (session?.effort as string | null) ?? null,
     label: (raw.label as string | null) ?? null,

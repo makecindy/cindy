@@ -17,14 +17,24 @@ export interface MobileUpdateInfoRow {
 type MobileUpdateInfoInput = Pick<
   CurrentlyRunningInfo,
   'updateId' | 'channel' | 'createdAt' | 'isEmbeddedLaunch' | 'runtimeVersion'
->;
+> & Partial<Pick<CurrentlyRunningInfo, 'isEmergencyLaunch' | 'emergencyLaunchReason'>>;
 
-/** 当前实际运行的热更版本:OTA 用短 updateId,内置 bundle 明确标成随整包。 */
+/**
+ * 当前实际运行的热更版本:OTA 用短 updateId,内置 bundle 明确标成随整包。
+ *
+ * emergency launch(expo-updates 没找到可启动 update、退回内置 bundle)下 updateId 为空且
+ * isEmbeddedLaunch 也是 false —— 这不是"未知",而是确定跑着内置 bundle 且本次运行内热更
+ * 无法生效(reload 会被原生层拒绝)。单独出文案,免得看到"未知"以为是读不到版本。
+ */
 export function currentMobileOtaVersion(
-  currentlyRunning: Pick<CurrentlyRunningInfo, 'updateId' | 'isEmbeddedLaunch'>,
+  currentlyRunning: Pick<CurrentlyRunningInfo, 'updateId' | 'isEmbeddedLaunch'>
+    & Partial<Pick<CurrentlyRunningInfo, 'isEmergencyLaunch'>>,
 ): string {
   if (currentlyRunning.isEmbeddedLaunch) return i18n.t('settings.updateInfo.embedded');
-  return currentlyRunning.updateId?.trim().slice(0, 8) || i18n.t('settings.updateInfo.unknown');
+  const shortId = currentlyRunning.updateId?.trim().slice(0, 8);
+  if (shortId) return shortId;
+  if (currentlyRunning.isEmergencyLaunch) return i18n.t('settings.updateInfo.embeddedFallback');
+  return i18n.t('settings.updateInfo.unknown');
 }
 
 /**
@@ -33,24 +43,37 @@ export function currentMobileOtaVersion(
  * - 运行来源:isEmbeddedLaunch → 内置(随包),否则 OTA 热更新;
  * - 更新 ID:有就取前 8 位(canonical UUID 全小写),无(dev / expo-updates 未启用)显示 —;
  * - 更新时间:createdAt 本地时间 YYYY-MM-DD HH:mm,无则 —;
- * - Channel / Runtime:trim 后展示,空则 —。
+ * - Channel / Runtime:trim 后展示,空则 —;
+ * - 应急启动:仅 isEmergencyLaunch 时追加一行,带上原生给的原因(诊断"热更点了没反应"的第一现场)。
  */
 export function buildMobileUpdateInfoRows(currentlyRunning: MobileUpdateInfoInput): MobileUpdateInfoRow[] {
   const updateId = currentlyRunning.updateId;
   const createdAt = currentlyRunning.createdAt;
+  const emergencyReason = currentlyRunning.emergencyLaunchReason?.trim();
   return [
     {
       id: 'source',
       label: i18n.t('settings.updateInfo.source'),
+      // 应急启动跑的也是内置 bundle(只是没走 embedded update 记录,isEmbeddedLaunch 为 false),
+      // 报「OTA 热更新」会跟同一区块里的应急启动行、以及「热更版本」自相矛盾。
       value: currentlyRunning.isEmbeddedLaunch
         ? i18n.t('settings.updateInfo.sourceEmbedded')
-        : i18n.t('settings.updateInfo.sourceOta'),
+        : currentlyRunning.isEmergencyLaunch
+          ? i18n.t('settings.updateInfo.sourceEmergencyFallback')
+          : i18n.t('settings.updateInfo.sourceOta'),
     },
     { id: 'updateId', label: i18n.t('settings.updateInfo.updateId'), value: updateId ? updateId.slice(0, 8) : '—' },
     { id: 'updatedAt', label: i18n.t('settings.updateInfo.updatedAt'), value: createdAt ? formatMobileUpdateTime(createdAt) : '—' },
     { id: 'channel', label: i18n.t('settings.updateInfo.channel'), value: currentlyRunning.channel?.trim() || '—' },
     { id: 'runtimeVersion', label: i18n.t('settings.updateInfo.runtime'), value: currentlyRunning.runtimeVersion?.trim() || '—' },
     { id: 'otaMarker', label: i18n.t('settings.updateInfo.otaMarker'), value: OTA_VERIFY_MARKER },
+    ...(currentlyRunning.isEmergencyLaunch
+      ? [{
+        id: 'emergencyLaunch',
+        label: i18n.t('settings.updateInfo.emergencyLaunch'),
+        value: emergencyReason || i18n.t('settings.updateInfo.emergencyLaunchYes'),
+      }]
+      : []),
   ];
 }
 

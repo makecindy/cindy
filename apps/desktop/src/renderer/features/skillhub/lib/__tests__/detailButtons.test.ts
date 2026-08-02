@@ -278,6 +278,61 @@ describe('deriveDetailActionState', () => {
       },
     },
     {
+      name: 'imported skill can uninstall and never offers market update',
+      detail: {
+        origin: 'imported',
+        isMine: false,
+        localVersion: '0.1.0',
+        latestVersion: '2.0.0',
+      },
+      registryEntry: makeRegistryEntry({ origin: 'imported', version: '0.1.0', folderHash: 'same' }),
+      localFolderHash: 'same',
+      expected: {
+        showUninstall: true,
+        status: { kind: 'none' },
+        isOutdated: true,
+        isMineDirty: false,
+        showForeignDirtyBanner: false,
+      },
+    },
+    {
+      name: 'own imported skill sharing a market name prompts publish-new-version',
+      detail: {
+        origin: 'imported',
+        isMine: true,
+        localVersion: '0.1.0',
+        latestVersion: '1.0.0',
+      },
+      registryEntry: makeRegistryEntry({ origin: 'imported', version: '0.1.0', folderHash: 'same' }),
+      localFolderHash: 'same',
+      expected: {
+        showUninstall: true,
+        status: { kind: 'publish-new-version' },
+        isOutdated: true,
+        isMineDirty: false,
+        showForeignDirtyBanner: false,
+      },
+    },
+    {
+      name: 'imported skill with no market record can publish-to-market',
+      detail: {
+        origin: 'imported',
+        isMine: false,
+        localVersion: '0.1.0',
+        latestVersion: null,
+        marketDeleted: true,
+      },
+      registryEntry: makeRegistryEntry({ origin: 'imported', version: '0.1.0', folderHash: 'same' }),
+      localFolderHash: 'same',
+      expected: {
+        showUninstall: true,
+        status: { kind: 'publish-to-market' },
+        isOutdated: false,
+        isMineDirty: false,
+        showForeignDirtyBanner: false,
+      },
+    },
+    {
       name: 'own published clean skill shows published tag without uninstall',
       detail: {
         origin: 'published',

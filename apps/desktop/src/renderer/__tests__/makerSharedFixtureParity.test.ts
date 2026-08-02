@@ -82,6 +82,7 @@ function toDesktopScheduleFormState(schedule: RemoteSchedule): ScheduleFormState
     preRunHookTimeoutSec: '',
     notifyDesktop: schedule.notify?.desktop !== false,
     notifyFeishu: schedule.notify?.feishu === true,
+    ...(schedule.notify?.wecomGroup === true ? { notifyWecomGroup: true } : {}),
   };
 }
 

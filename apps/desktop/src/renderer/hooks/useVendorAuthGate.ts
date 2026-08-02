@@ -50,7 +50,8 @@ type CopyKey =
   | 'voice-api-key-unauth'
   | 'voice-direct-api-key-unauth'
   | 'codex-voice-unauth'
-  | 'codex-binary-missing';
+  | 'codex-binary-missing'
+  | 'pi-binary-missing';
 
 function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
   return {
@@ -92,6 +93,13 @@ function buildCopy(t: (key: string) => string): Record<CopyKey, DialogCopy> {
       cancelText: t('logic.confirm.cancel'),
       settingsTab: 'providers',
     },
+    'pi-binary-missing': {
+      title: t('logic.confirm.piBinaryMissingTitle'),
+      description: t('logic.confirm.piBinaryMissingDescription'),
+      confirmText: t('logic.confirm.goToSettings'),
+      cancelText: t('logic.confirm.cancel'),
+      settingsTab: 'providers',
+    },
   };
 }
 
@@ -110,6 +118,7 @@ function pickCopy(
   readiness: Readiness,
 ): DialogCopy | null {
   if (readiness === 'binary-missing' && vendor === 'codex') return copy['codex-binary-missing'];
+  if (readiness === 'binary-missing' && vendor === 'pi') return copy['pi-binary-missing'];
   if (readiness !== 'unauthenticated') return null;
   // 无可用来源:cc / codex 走同一条「连接来源」文案(send 门禁,与 agent 类型无关)。
   return copy['no-source'];
@@ -139,7 +148,9 @@ export function deriveRemoteReadiness(
     authReady: boolean | null;
   },
 ): Readiness {
-  if (vendor === 'codex' && input.binaryReady === false) return 'binary-missing';
+  if (vendor !== 'cc' && input.binaryReady === false) {
+    return 'binary-missing';
+  }
   if (input.sourceReady !== null) return input.sourceReady ? 'ready' : 'unauthenticated';
   if (input.authReady !== null) return input.authReady ? 'ready' : 'unauthenticated';
   return 'ready';
@@ -196,6 +207,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
   const copy = useMemo(() => buildCopy(t), [t]);
   const cc = useVendorReadiness('cc');
   const codex = useVendorReadiness('codex');
+  const pi = useVendorReadiness('pi');
 
   const checkAndConfirm = useCallback(
     async (
@@ -229,7 +241,8 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       // 全部失败放行交给被控端 create-session / send 做权威校验(host = 单一真相源)。
       const deviceId = options?.deviceId;
       if (deviceId) {
-        const providerAgent: ProviderAgentKind = vendor === 'codex' ? 'codex' : 'claude-code';
+        const providerAgent: ProviderAgentKind =
+          vendor === 'codex' ? 'codex' : vendor === 'pi' ? 'pi' : 'claude-code';
         const [statusRes, providersRes] = await Promise.allSettled([
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:agent:status', [providerAgent]),
           window.electronAPI.deviceLink.invoke(deviceId, 'maker:provider:list', []),
@@ -258,7 +271,9 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
         let title: string;
         let description: string;
         if (remoteReadiness === 'binary-missing') {
-          title = t('logic.confirm.remoteCodexBinaryMissingTitle');
+          title = t(vendor === 'pi'
+            ? 'logic.confirm.remotePiBinaryMissingTitle'
+            : 'logic.confirm.remoteCodexBinaryMissingTitle');
           description = t('logic.confirm.remoteAuthDescription', { device });
         } else if (vendor === 'codex') {
           title = t('logic.confirm.remoteCodexNoSourceTitle');
@@ -278,7 +293,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
 
       // 触发一次最新检查——避免 stale state 误放行。
-      const target = vendor === 'codex' ? codex : cc;
+      const target = vendor === 'codex' ? codex : vendor === 'pi' ? pi : cc;
       // 已建会话的发送门禁计入 suspended 来源(见 useVendorReadiness 注释);草稿不传。
       const readiness = await target.revalidate({
         includeSuspended: options?.existingSessionRoute === true,
@@ -300,7 +315,7 @@ export function useVendorAuthGate(): UseVendorAuthGateReturn {
       }
       return { proceed: false };
     },
-    [cc, codex, confirm, copy, navigate, t],
+    [cc, codex, pi, confirm, copy, navigate, t],
   );
 
   return { checkAndConfirm };

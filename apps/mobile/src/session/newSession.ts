@@ -4,8 +4,29 @@ import type { CreateSessionOptions, RemoteDirectoryEntry } from '@/device-link/m
 import { reconcileEffortForModel, type ProviderModelRow } from './providerModelSections';
 import type { RemoteSession } from './types';
 
-export type NewSessionAgentKind = 'claude-code' | 'codex';
+export type NewSessionAgentKind = 'claude-code' | 'codex' | 'pi';
 export type NewSessionWorkspaceKind = 'project' | 'dialogue';
+
+export const NEW_SESSION_AGENT_OPTIONS: readonly { kind: NewSessionAgentKind; label: string }[] = [
+  { kind: 'claude-code', label: 'Claude' },
+  { kind: 'codex', label: 'Codex' },
+  { kind: 'pi', label: 'Pi' },
+];
+
+/**
+ * 按被控端 runtime 已注册的 agent 集合过滤新建入口(maker:list-available-agents)。
+ * `available === null` = 尚未拉到 → fail-open 返回全部(避免异步期间误隐藏合法 agent);
+ * 拉到后只保留已注册的 kind —— Pi 二进制缺失时被控端无 pi,过滤掉可防用户建出最终
+ * requireAgent 报 not-registered 的会话(codex review P2)。
+ */
+export function availableNewSessionAgentOptions(
+  available: ReadonlySet<NewSessionAgentKind> | null,
+): readonly { kind: NewSessionAgentKind; label: string }[] {
+  if (!available) return NEW_SESSION_AGENT_OPTIONS;
+  const filtered = NEW_SESSION_AGENT_OPTIONS.filter((option) => available.has(option.kind));
+  // 防御:被控端异常返回空集时不至于把入口清空到无法创建(至少保留 Claude)。
+  return filtered.length > 0 ? filtered : NEW_SESSION_AGENT_OPTIONS.filter((o) => o.kind === 'claude-code');
+}
 
 export interface NewSessionDraft {
   agentKind: NewSessionAgentKind;
@@ -90,7 +111,7 @@ export function parseNewSessionDeviceOptions(
 }
 
 export function normalizeNewSessionAgentKind(value: unknown): NewSessionAgentKind | null {
-  return value === 'claude-code' || value === 'codex' ? value : null;
+  return value === 'claude-code' || value === 'codex' || value === 'pi' ? value : null;
 }
 
 export function pickNewSessionDefaultDevice(input: {
@@ -124,9 +145,10 @@ export const DEFAULT_NEW_SESSION_DRAFT: NewSessionDraft = {
 const DEFAULT_MODELS: Record<NewSessionAgentKind, string> = {
   'claude-code': 'claude-sonnet-4-6',
   codex: 'gpt-5.4',
+  pi: 'gpt-5.4',
 };
 
-/** 新建交互式会话的权限种子默认；两种 agent 都保留 Auto-review。 */
+/** 新建交互式会话的权限种子默认；三个 agent 都保留 Auto-review。 */
 export function defaultPermissionModeForNewSessionAgent(_agentKind: NewSessionAgentKind): string {
   return 'auto';
 }
@@ -143,7 +165,7 @@ export function withAgentDefaults(
     permissionMode: defaultPermissionModeForNewSessionAgent(agentKind),
     // 换 agent → 来源选择作废(各 agent 的供应商集不同),回到默认路由由被控端定。
     providerId: null,
-    fastMode: agentKind === 'codex' ? draft.fastMode : false,
+    fastMode: agentKind === 'claude-code' ? false : draft.fastMode,
   };
 }
 
@@ -180,7 +202,7 @@ export function summarizeNewSessionDraft(
   content: NewSessionDraftContentState = {},
 ): NewSessionDraftSummary {
   const validationMessage = validateNewSessionDraft(draft, content);
-  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : 'Claude';
+  const agentLabel = draft.agentKind === 'codex' ? 'Codex' : draft.agentKind === 'pi' ? 'Pi' : 'Claude';
   const model = draft.model.trim() || i18n.t('session.new.noModelSelected');
   const effort = draft.effort.trim();
   const workspaceLabel = draft.workspaceKind === 'dialogue'
@@ -301,7 +323,9 @@ export function pickMostRecentSessionRuntime(
     const model = session.model?.trim();
     if (!model) continue;
     if (options.deviceId && session.deviceLinkDeviceId && session.deviceLinkDeviceId !== options.deviceId) continue;
-    const agentKind: NewSessionAgentKind = session.agentKind === 'codex' ? 'codex' : 'claude-code';
+    const agentKind: NewSessionAgentKind = session.agentKind === 'codex' || session.agentKind === 'pi'
+      ? session.agentKind
+      : 'claude-code';
     if (options.agentKind && agentKind !== options.agentKind) continue;
     const activityAt = session.userSendAt ?? session.updatedAt ?? session.createdAt;
     if (!best || activityAt.localeCompare(best.activityAt) > 0) {
@@ -465,7 +489,7 @@ export function sessionFromCreateResult(
     permissionMode: fallback.permissionMode,
     fastMode: fallback.fastMode,
     status: 'active',
-    agentKind: fallback.agentKind === 'codex' ? 'codex' : 'cc',
+    agentKind: fallback.agentKind === 'claude-code' ? 'cc' : fallback.agentKind,
     userSendAt: iso,
     createdAt: iso,
     updatedAt: iso,

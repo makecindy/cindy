@@ -20,10 +20,10 @@ describe('shared system card presentation model', () => {
       { kind: 'agent-builtin', name: 'doctor', description: 'remote doctor' },
     ]).map((command) => [command.name, command.description])).toEqual([
       ['help', '显示手机端和远程 agent 命令'],
-      ['context', '查看当前会话上下文用量'],
-      ['cost', '查看当前会话消耗'],
+      ['context', '查看当前任务上下文用量'],
+      ['cost', '查看当前任务消耗'],
       ['pwd', '显示当前远程工作目录'],
-      ['status', '显示当前会话状态'],
+      ['status', '显示当前任务状态'],
       ['doctor', 'remote doctor'],
     ]);
   });
@@ -50,6 +50,22 @@ describe('shared system card presentation model', () => {
         { label: 'queue', value: '1 条 · 已暂停' },
       ]),
     });
+
+    // codex review 回归:/status 的 agent 行不能把 Pi 会话映射成 Claude Code。
+    const piStatus = formatSystemCard('status', buildSystemCardData('status', {
+      session: {
+        agentKind: 'pi',
+        fastMode: false,
+        model: 'claude-sonnet-4-6',
+        permissionMode: 'ask',
+        status: 'active',
+        title: 'Pi Session',
+        workingDir: '/repo',
+      },
+    }));
+    expect(piStatus.rows).toEqual(
+      expect.arrayContaining([{ label: 'agent', value: 'Pi' }]),
+    );
 
     const context = formatSystemCard('context', buildSystemCardData('context', {
       contextUsage: {

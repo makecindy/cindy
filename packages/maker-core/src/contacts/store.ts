@@ -11,7 +11,8 @@
  *  - db 文件路径与生命周期(manager 创建并持有 close)
  *  - 功能开关(host 设置层)与工具暴露(@cindy/mcps 层)
  *
- * 并发: better-sqlite3 同步 API + 单进程单实例(manager 池保证), 无跨进程写者。
+ * 并发: 常规调用由 manager 复用单实例；同步 worker 的跨连接写通过 SQLite
+ * IMMEDIATE 事务把主表快照与 FTS 更新串成一致提交。
  */
 
 import { randomUUID } from 'node:crypto';
@@ -21,6 +22,7 @@ import { findSimilarContacts, loadNameSnapshot, scanDuplicatePairs, type NameSna
 import { ContactsFts } from './fts.js';
 import { ContactsGroupsRepo } from './groups.js';
 import {
+  buildAllFtsDocs,
   buildFtsDoc,
   listEvents,
   listGroupsOf,
@@ -33,9 +35,13 @@ import {
   type IdentityRow,
 } from './rows.js';
 import { initContactsSchema } from './schema.js';
+import { ContactsSyncRepository } from './sync/repository.js';
+import type { ContactsSyncState } from './sync/types.js';
 import {
   ContactsError,
   DEFAULT_CONTACTS_CONFIG,
+  getMaxNormalizedIdentityValueLen,
+  getMaxSyncableIdentityValueLen,
   isContactKind,
   isContactSource,
   isContactStatus,
@@ -71,30 +77,39 @@ export interface MakerContactsStoreDeps {
   db: Database.Database;
   logger: Logger;
   config?: Partial<ContactsConfig>;
+  /** one-shot sync worker 已由 runtime cold prepare 做过维护时可跳过重复全表扫描。 */
+  skipStartupMaintenance?: boolean;
 }
 
 export class MakerContactsStore {
   private readonly db: Database.Database;
   private readonly fts: ContactsFts;
   private readonly groupsRepo: ContactsGroupsRepo;
+  private readonly syncRepo: ContactsSyncRepository;
   private readonly logger: Logger;
   private readonly config: ContactsConfig;
+  private readonly skipStartupMaintenance: boolean;
   private initialized = false;
+  private ftsDirty = false;
 
   constructor(deps: MakerContactsStoreDeps) {
     this.db = deps.db;
     this.fts = new ContactsFts(deps.db);
     this.logger = deps.logger;
     this.config = { ...DEFAULT_CONTACTS_CONFIG, ...(deps.config ?? {}) };
+    this.skipStartupMaintenance = deps.skipStartupMaintenance ?? false;
     this.groupsRepo = new ContactsGroupsRepo(deps.db, this.config);
+    this.syncRepo = new ContactsSyncRepository(deps.db, this.logger.child('sync'));
   }
 
   /** schema 迁移 + FTS sanity check. 幂等 */
   init(): void {
     if (this.initialized) return;
     initContactsSchema(this.db);
-    this.sanityCheck();
-    this.renormalizePhoneKeys();
+    if (!this.skipStartupMaintenance) {
+      this.sanityCheck();
+      this.renormalizePhoneKeys();
+    }
     this.initialized = true;
   }
 
@@ -139,8 +154,12 @@ export class MakerContactsStore {
       const value = i.value.trim();
       const normalized = normalizeIdentityValue(i.value, platform);
       if (!normalized) throw new ContactsError('invalid-params', 'identity value must not be empty');
-      if (value.length > this.config.maxIdentityValueLen) {
-        throw new ContactsError('invalid-params', `identity value too long (> ${this.config.maxIdentityValueLen})`);
+      const identityValueLimit = getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen);
+      if (value.length > identityValueLimit) {
+        throw new ContactsError('invalid-params', `identity value too long (> ${identityValueLimit})`);
+      }
+      if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+        throw new ContactsError('invalid-params', 'normalized identity value too long');
       }
       const key = `${platform}\n${normalized}`;
       if (seenIdentity.has(key)) continue;
@@ -249,11 +268,7 @@ export class MakerContactsStore {
     const affected = this.relatedContactIds(id);
     // ON DELETE CASCADE 带走 identities/events/group members/relations
     this.db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
-    try {
-      this.fts.delete(id);
-    } catch (e) {
-      this.logger.warn('contacts fts delete failed (row removed, rebuild will heal)', { id, error: String(e) });
-    }
+    this.reindexSafe(id);
     for (const otherId of affected) this.reindexSafe(otherId);
   }
 
@@ -395,8 +410,12 @@ export class MakerContactsStore {
     const value = input.value.trim();
     const normalized = normalizeIdentityValue(value, platform);
     if (!normalized) throw new ContactsError('invalid-params', 'identity value must not be empty');
-    if (value.length > this.config.maxIdentityValueLen) {
-      throw new ContactsError('invalid-params', `identity value too long (> ${this.config.maxIdentityValueLen})`);
+    const identityValueLimit = getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen);
+    if (value.length > identityValueLimit) {
+      throw new ContactsError('invalid-params', `identity value too long (> ${identityValueLimit})`);
+    }
+    if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+      throw new ContactsError('invalid-params', 'normalized identity value too long');
     }
     this.assertIdentityFree(platform, normalized, contactId);
     const count = (
@@ -556,9 +575,13 @@ export class MakerContactsStore {
     for (const i of input.identities ?? []) {
       try {
         normalizePlatform(i.platform);
-        if (!normalizeIdentityValue(i.value, i.platform)) throw new ContactsError('invalid-params', 'empty identity value');
-        if (i.value.trim().length > this.config.maxIdentityValueLen) {
+        const normalized = normalizeIdentityValue(i.value, i.platform);
+        if (!normalized) throw new ContactsError('invalid-params', 'empty identity value');
+        if (i.value.trim().length > getMaxSyncableIdentityValueLen(this.config.maxIdentityValueLen)) {
           throw new ContactsError('invalid-params', 'identity value too long');
+        }
+        if (normalized.length > getMaxNormalizedIdentityValueLen(this.config.maxIdentityValueLen)) {
+          throw new ContactsError('invalid-params', 'normalized identity value too long');
         }
         validIdentities.push(i);
       } catch {
@@ -717,11 +740,7 @@ export class MakerContactsStore {
     });
     tx();
 
-    try {
-      this.fts.delete(sourceId);
-    } catch (e) {
-      this.logger.warn('merge: fts delete of source failed', { sourceId, error: String(e) });
-    }
+    this.reindexSafe(sourceId);
     this.reindexSafe(targetId);
     for (const otherId of affected) this.reindexSafe(otherId);
     return {
@@ -766,6 +785,71 @@ export class MakerContactsStore {
     this.groupsRepo.removeFromGroup(groupId, contactIds);
   }
 
+  // ── 设备间同步状态 ──────────────────────────────────────────────────────
+
+  activateDeviceSync(): ContactsSyncState {
+    return this.activateDeviceSyncWithResult().state;
+  }
+
+  activateDeviceSyncWithResult(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } {
+    this.init();
+    const result = this.syncRepo.activate();
+    if (result.materialized || this.ftsDirty) this.rebuildFtsSafe();
+    return result;
+  }
+
+  readDeviceSyncState(): ContactsSyncState | null {
+    return this.readDeviceSyncStateWithResult()?.state ?? null;
+  }
+
+  readDeviceSyncStateWithResult(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } | null {
+    this.init();
+    const result = this.syncRepo.readState();
+    if (result && (result.materialized || this.ftsDirty)) this.rebuildFtsSafe();
+    return result;
+  }
+
+  /**
+   * Worker 专用：在同一个 IMMEDIATE 事务内协调同步状态与 FTS 投影。
+   * 先拿 SQLite 写锁再读取主表，避免另一个连接在快照读取与 FTS 重建之间插入写入。
+   */
+  prepareDeviceSyncStateForTransfer(): {
+    state: ContactsSyncState;
+    materialized: boolean;
+  } {
+    this.init();
+    const tx = this.db.transaction(() => {
+      const result = this.syncRepo.readState() ?? this.syncRepo.activate();
+      if (result.materialized || this.ftsDirty) this.rebuildFtsStrict();
+      return result;
+    });
+    return tx.immediate();
+  }
+
+  mergeDeviceSyncState(state: unknown): boolean {
+    this.init();
+    const changed = this.syncRepo.mergeRemoteState(state);
+    if (changed || this.ftsDirty) this.rebuildFtsSafe();
+    return changed;
+  }
+
+  /** Worker 专用：远端状态、SQLite 投影与 FTS 要么一起提交，要么一起回滚。 */
+  mergeDeviceSyncStateForTransfer(state: unknown): boolean {
+    this.init();
+    const tx = this.db.transaction(() => {
+      const changed = this.syncRepo.mergeRemoteState(state);
+      if (changed || this.ftsDirty) this.rebuildFtsStrict();
+      return changed;
+    });
+    return tx.immediate();
+  }
+
   // ── 统计 / 重置 ──────────────────────────────────────────────────────────
 
   stats(): ContactsStats {
@@ -782,17 +866,19 @@ export class MakerContactsStore {
   /** 清空整个通讯录(UI 二次确认后调). 慎用 */
   resetAll(): { removedCount: number } {
     this.init();
-    const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
     const tx = this.db.transaction(() => {
+      const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
       this.db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
+      try {
+        this.fts.rebuild([]);
+        this.ftsDirty = false;
+      } catch {
+        this.ftsDirty = true;
+        // 保持既有语义：主表是 source of truth，FTS 失败留给下次 sanity 自愈。
+      }
+      return c;
     });
-    tx();
-    try {
-      this.fts.rebuild([]);
-    } catch {
-      /* rebuild on next sanity */
-    }
-    return { removedCount: c };
+    return { removedCount: tx.immediate() };
   }
 
   // ── 内部 ─────────────────────────────────────────────────────────────────
@@ -864,12 +950,35 @@ export class MakerContactsStore {
     this.db.prepare(`UPDATE contacts SET updated_at = ? WHERE id = ?`).run(new Date().toISOString(), contactId);
   }
 
+  private rebuildFtsSafe(): void {
+    try {
+      const tx = this.db.transaction(() => this.rebuildFtsStrict());
+      tx.immediate();
+    } catch (e) {
+      this.ftsDirty = true;
+      this.logger.warn('contacts fts rebuild after sync failed (init sanity will heal)', {
+        error: String(e),
+      });
+    }
+  }
+
+  private rebuildFtsStrict(): void {
+    const docs = buildAllFtsDocs(this.db);
+    this.fts.rebuild(docs);
+    this.ftsDirty = false;
+  }
+
   /** 拍平一个 contact 的全部可检索文本, 重建其 FTS 行. 失败只 warn(rebuild 自愈) */
   private reindexSafe(contactId: string): void {
     try {
-      const doc = buildFtsDoc(this.db, contactId);
-      if (doc) this.fts.reindex(doc);
+      const tx = this.db.transaction(() => {
+        const doc = buildFtsDoc(this.db, contactId);
+        if (doc) this.fts.reindex(doc);
+        else this.fts.delete(contactId);
+      });
+      tx.immediate();
     } catch (e) {
+      this.ftsDirty = true;
       this.logger.warn('contacts fts reindex failed (will heal on next rebuild)', {
         contactId,
         error: String(e),
@@ -877,17 +986,18 @@ export class MakerContactsStore {
     }
   }
 
-  /** 主表与 FTS count 不一致 → 全量 rebuild */
+  /** 主表投影与 FTS 内容不一致 → 全量 rebuild */
   private sanityCheck(): void {
-    const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
-    const ftsCount = this.fts.count();
-    if (ftsCount === -1 || ftsCount !== total) {
-      this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
-      const ids = this.db.prepare(`SELECT id FROM contacts`).all() as Array<{ id: string }>;
-      const docs = ids
-        .map((r) => buildFtsDoc(this.db, r.id))
-        .filter((d): d is NonNullable<typeof d> => d !== null);
-      this.fts.rebuild(docs);
-    }
+    const tx = this.db.transaction(() => {
+      const total = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
+      const ftsCount = this.fts.count();
+      const docs = buildAllFtsDocs(this.db);
+      if (!this.fts.isConsistent(docs)) {
+        this.logger.info('contacts fts inconsistent, rebuilding', { total, ftsCount });
+        this.fts.rebuild(docs);
+      }
+      this.ftsDirty = false;
+    });
+    tx.immediate();
   }
 }

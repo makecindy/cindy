@@ -473,6 +473,21 @@ describe('resolveMobileNearBottomOnScroll', () => {
       scrollDelta: -10,
     })).toBe(true);
   });
+
+  it('命令式滚动 settling 时忽略瞬时 metrics', () => {
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: true,
+      metrics: metricsAt(500),
+      scrollDelta: -700,
+      programmaticScrollInFlight: true,
+    })).toBe(true);
+    expect(resolveMobileNearBottomOnScroll({
+      wasNearBottom: false,
+      metrics: metricsAt(1200),
+      scrollDelta: 300,
+      programmaticScrollInFlight: true,
+    })).toBe(false);
+  });
 });
 
 describe('evaluateMobileFollowEndContentSizePin (贴底补滚振荡断路器)', () => {

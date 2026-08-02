@@ -24,7 +24,7 @@ export interface AgentAuthGateInput {
   loading: boolean;
   /** 目录拉取失败(典型:旧被控端不识别通道)。 */
   error: string | null;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /**
    * true = 已建会话的发送门禁:计入 suspended 来源(停用是准入轴,不打断运行中
    * 会话,门禁只回答「凭证还连着吗」)。缺省 false = 新建草稿:suspended 不算可
@@ -45,7 +45,7 @@ export function agentAuthGateVerdict(input: AgentAuthGateInput): AgentAuthGateVe
 }
 
 /** 未鉴权时的提示文案(与 describeAgentAuthError 的引导口径一致)。 */
-export function agentAuthGateHint(agentKind: 'claude-code' | 'codex'): string {
-  const label = agentKind === 'claude-code' ? 'Claude' : 'Codex';
+export function agentAuthGateHint(agentKind: 'claude-code' | 'codex' | 'pi'): string {
+  const label = agentKind === 'claude-code' ? 'Claude' : agentKind === 'pi' ? 'Pi' : 'Codex';
   return i18n.t('session.row.authGateHint', { agent: label });
 }

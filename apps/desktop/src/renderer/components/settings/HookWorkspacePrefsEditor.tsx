@@ -126,7 +126,13 @@ export interface HookWorkspacePrefsState {
   showTeamChip: boolean;
 }
 
-export type HookPrefsProvider = 'slack' | 'telegram';
+export type HookPrefsProvider = 'slack' | 'telegram' | 'x';
+
+/** provider-neutral prefs 线(Telegram / X): 走 provider.bind/prefs 帧, 绑定按 bindingId 归属。 */
+type NeutralPrefsProvider = Exclude<HookPrefsProvider, 'slack'>;
+function isNeutralPrefsProvider(provider: HookPrefsProvider): provider is NeutralPrefsProvider {
+  return provider !== 'slack';
+}
 
 function isProviderPrefsView(view: HookPrefsView | ProviderPrefsView): view is ProviderPrefsView {
   return 'provider' in view;
@@ -150,24 +156,20 @@ export function useHookWorkspacePrefs(
   const [providerSources, setProviderSources] = useState<HookWorkspaceProviderSourceEntry[]>([]);
   // latest-wins 守卫(Copilot review): 快速连选/跨窗口广播时, 较慢的旧回复不得覆盖新状态。
   const providerSourceRevisionRef = useRef(0);
-  const telegramBindingId =
-    provider === 'telegram' && hook?.telegram.binding?.state === 'confirmed'
-      ? hook.telegram.binding.bindingId
-      : null;
-  const connected =
-    provider === 'telegram'
-      ? hook?.telegram.enabled === true &&
-        hook.telegram.available &&
-        hook.telegram.status === 'connected'
-      : hook?.enabled === true && hook.status === 'connected';
-  const providerBindingConfirmed =
-    provider !== 'telegram' || hook?.telegram.binding?.state === 'confirmed';
+  const neutral = isNeutralPrefsProvider(provider);
+  const neutralView = neutral && hook !== null ? hook[provider as NeutralPrefsProvider] : null;
+  const neutralBindingId =
+    neutralView?.binding?.state === 'confirmed' ? neutralView.binding.bindingId : null;
+  const connected = neutral
+    ? neutralView?.enabled === true && neutralView.available && neutralView.status === 'connected'
+    : hook?.enabled === true && hook.status === 'connected';
+  const providerBindingConfirmed = !neutral || neutralView?.binding?.state === 'confirmed';
   const readyIdentity =
     connected && providerBindingConfirmed
-      ? provider === 'telegram'
-        ? telegramBindingId === null
+      ? neutral
+        ? neutralBindingId === null
           ? null
-          : `telegram:${telegramBindingId}`
+          : `${provider}:${neutralBindingId}`
         : 'slack'
       : null;
   // Initialised to null (never a real identity) so the ready-edge effect below
@@ -177,23 +179,22 @@ export function useHookWorkspacePrefs(
   const lastReadyIdentityRef = useRef<string | null>(null);
   const fetchRevisionRef = useRef(0);
   const mutationRevisionRef = useRef(0);
-  const telegramBindingIdRef = useRef<string | null>(telegramBindingId);
-  telegramBindingIdRef.current = telegramBindingId;
+  const neutralBindingIdRef = useRef<string | null>(neutralBindingId);
+  neutralBindingIdRef.current = neutralBindingId;
 
   const fetchPrefs = useCallback(async () => {
     const revision = ++fetchRevisionRef.current;
     try {
-      const res =
-        provider === 'telegram'
-          ? await window.electronAPI.hookControl.getProviderWorkspacePrefs()
-          : await window.electronAPI.hookControl.getWorkspacePrefs();
+      const res = isNeutralPrefsProvider(provider)
+        ? await window.electronAPI.hookControl.getProviderWorkspacePrefs(provider)
+        : await window.electronAPI.hookControl.getWorkspacePrefs();
       if (revision !== fetchRevisionRef.current) return;
       const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
       if (
-        provider === 'telegram' &&
+        isNeutralPrefsProvider(provider) &&
         (!isProviderPrefsView(nextPrefs) ||
-          nextPrefs.provider !== 'telegram' ||
-          nextPrefs.bindingId !== telegramBindingIdRef.current)
+          nextPrefs.provider !== provider ||
+          nextPrefs.bindingId !== neutralBindingIdRef.current)
       ) {
         return;
       }
@@ -213,11 +214,11 @@ export function useHookWorkspacePrefs(
   useEffect(() => {
     let active = true;
     const applyIncoming = (view: HookPrefsView | ProviderPrefsView) => {
-      if (provider === 'telegram') {
+      if (isNeutralPrefsProvider(provider)) {
         if (
           !isProviderPrefsView(view) ||
-          view.provider !== 'telegram' ||
-          view.bindingId !== telegramBindingIdRef.current
+          view.provider !== provider ||
+          view.bindingId !== neutralBindingIdRef.current
         ) {
           return;
         }
@@ -229,22 +230,20 @@ export function useHookWorkspacePrefs(
       setPrefsView(view);
       setLoadError(null);
     };
-    const offPrefs =
-      provider === 'telegram'
-        ? window.electronAPI.hookControl.onProviderPrefsChanged((view) => {
-            if (view.provider === 'telegram') applyIncoming(view);
-          })
-        : window.electronAPI.hookControl.onPrefsChanged(applyIncoming);
+    const offPrefs = isNeutralPrefsProvider(provider)
+      ? window.electronAPI.hookControl.onProviderPrefsChanged((view) => {
+          if (view.provider === provider) applyIncoming(view);
+        })
+      : window.electronAPI.hookControl.onPrefsChanged(applyIncoming);
     // The ready-edge effect below performs the initial prefs fetch (only when
     // reachable). The subscription set up here just needs to exist first so no
     // server push is missed before that fetch resolves.
     // 桌面新会话默认设置: 未显式设置字段的生效值解析源, 面板打开时取一次即可。
     // **频道必须与派发侧同源**: session-runner 用
     // `readImDefaultSettings(sourceIm === 'slack' ? 'slack' : undefined)` —— Slack 读
-    // channels.slack, Telegram 读 global, 两者各自独立归一化互不继承
-    // (im/defaultSettingsStore.ts; IM_DEFAULT_SETTINGS_CHANNELS 里根本没有 telegram)。
-    // 这里原先两个 provider 都写死 'slack', 于是 Telegram 卡片下的目录行显示的是
-    // Slack 频道的 agent/模型, 派发实际用 global —— 显示与实际不符(2026-07 实审发现)。
+    // channels.slack, 官方 Telegram 读 global；个人 Telegram Bot 才读
+    // channels.telegram。这里必须与官方派发侧同源，否则目录行会显示一套默认值、
+    // 实际会话却使用另一套。
     void window.electronAPI.maker
       .imDefaultSettingsGet(provider === 'slack' ? 'slack' : undefined)
       .then((state: ImDefaultSettingsState) => {
@@ -306,17 +305,16 @@ export function useHookWorkspacePrefs(
   const selectedTeamId = teams.some((tm) => tm.teamId === selectedTeamRaw)
     ? selectedTeamRaw
     : (teams[0]?.teamId ?? null);
-  const activePrefsView: HookPrefsView | ProviderPrefsView | null =
-    provider === 'telegram'
-      ? prefsView !== null &&
-        isProviderPrefsView(prefsView) &&
-        prefsView.provider === 'telegram' &&
-        prefsView.bindingId === telegramBindingId
-        ? prefsView
-        : null
-      : prefsView !== null && !isProviderPrefsView(prefsView)
-        ? prefsView
-        : null;
+  const activePrefsView: HookPrefsView | ProviderPrefsView | null = neutral
+    ? prefsView !== null &&
+      isProviderPrefsView(prefsView) &&
+      prefsView.provider === provider &&
+      prefsView.bindingId === neutralBindingId
+      ? prefsView
+      : null
+    : prefsView !== null && !isProviderPrefsView(prefsView)
+      ? prefsView
+      : null;
 
   const prefsFor = useCallback(
     (alias: string): HookWorkspacePrefs => {
@@ -358,9 +356,7 @@ export function useHookWorkspacePrefs(
         })
         .catch((err: unknown) => {
           if (revision !== providerSourceRevisionRef.current) return;
-          toast.error(
-            extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'),
-          );
+          toast.error(extractIpcError(err)?.message ?? t('settings.tina.prefs.toast.saveFailed'));
         });
     },
     [provider, multiTeam, selectedTeamId, t],
@@ -379,14 +375,13 @@ export function useHookWorkspacePrefs(
       const revision = ++fetchRevisionRef.current;
       const mutationRevision = ++mutationRevisionRef.current;
       setPendingWs(workspace);
-      const request =
-        provider === 'telegram'
-          ? window.electronAPI.hookControl.setProviderWorkspacePrefs(workspace, patch)
-          : window.electronAPI.hookControl.setWorkspacePrefs(
-              workspace,
-              patch,
-              multiTeam ? selectedTeamId : undefined,
-            );
+      const request = isNeutralPrefsProvider(provider)
+        ? window.electronAPI.hookControl.setProviderWorkspacePrefs(provider, workspace, patch)
+        : window.electronAPI.hookControl.setWorkspacePrefs(
+            workspace,
+            patch,
+            multiTeam ? selectedTeamId : undefined,
+          );
       void request
         .then((res) => {
           // 来源落地在快照守卫**之前**(codex review): invoke 成功 = 远端已确认
@@ -399,10 +394,10 @@ export function useHookWorkspacePrefs(
           if (revision !== fetchRevisionRef.current) return;
           const nextPrefs: HookPrefsView | ProviderPrefsView = res.prefs;
           if (
-            provider === 'telegram' &&
+            isNeutralPrefsProvider(provider) &&
             (!isProviderPrefsView(nextPrefs) ||
-              nextPrefs.provider !== 'telegram' ||
-              nextPrefs.bindingId !== telegramBindingIdRef.current)
+              nextPrefs.provider !== provider ||
+              nextPrefs.bindingId !== neutralBindingIdRef.current)
           ) {
             return;
           }
@@ -429,7 +424,9 @@ export function useHookWorkspacePrefs(
   const providerLabel = t(
     provider === 'telegram'
       ? 'settings.tina.prefs.providerTelegram'
-      : 'settings.tina.prefs.providerSlack',
+      : provider === 'x'
+        ? 'settings.tina.prefs.providerX'
+        : 'settings.tina.prefs.providerSlack',
   );
   const hint = !connected
     ? t('settings.tina.prefs.requireConnected', { provider: providerLabel })
@@ -474,9 +471,9 @@ function PrefsField({
   );
 }
 
-/** hook prefs 的 agentKind('claude-code' | 'codex')→ 选择器的 vendor key。 */
-function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
-  return agentKind === 'codex' ? 'codex' : 'cc';
+/** hook prefs 的 agentKind → 选择器的 vendor key。 */
+function toVendorKey(agentKind: string | null): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'codex' || agentKind === 'pi' ? agentKind : 'cc';
 }
 
 /**
@@ -487,10 +484,10 @@ function toVendorKey(agentKind: string | null): 'cc' | 'codex' {
  */
 function toAgentKind(vendor: MakerVendor): KnownAgent {
   if (vendor === 'codex') return 'codex';
+  if (vendor === 'pi') return 'pi';
   if (vendor === 'cc') return 'claude-code';
   throw new Error(`WorkspacePrefsEditor: unsupported vendor '${vendor}' for hook prefs`);
 }
-
 
 /** 目录卡片内的偏好编辑行(agent / 模型 / 权限三字段)。alias 为该行当前生效别名。 */
 export function WorkspacePrefsEditor({
@@ -505,13 +502,15 @@ export function WorkspacePrefsEditor({
   const { t } = useTranslation();
   const claudeCaps = useAgentCapabilities('claude-code');
   const codexCaps = useAgentCapabilities('codex');
+  const piCaps = useAgentCapabilities('pi');
   const capsByAgent = useMemo(
     () =>
       ({
         'claude-code': claudeCaps.capabilities,
         codex: codexCaps.capabilities,
+        pi: piCaps.capabilities,
       }) as Record<KnownAgent, AgentCapabilities | null>,
-    [claudeCaps.capabilities, codexCaps.capabilities],
+    [claudeCaps.capabilities, codexCaps.capabilities, piCaps.capabilities],
   );
   const capsOf = useCallback(
     (agentKind: string): AgentCapabilities | null =>

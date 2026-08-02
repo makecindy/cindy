@@ -372,16 +372,16 @@ const MAX_PENDING_REOPENS = 200;
  * 对话选择重新指定原对话才接得回来 —— 两步缺一不可。
  */
 const NOTICE_SESSION_RECREATED =
-  'ℹ️ 原对话已不在可用的工作目录里，这条消息起换用了新对话，原对话的上下文不会带过来。' +
-  '想接回原对话：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
-  '再在这里用对话选择重新指定它。';
+  'ℹ️ 原任务已不在可用的工作目录里，这条消息起换用了新任务，原任务的上下文不会带过来。' +
+  '想接回原任务：先到 Cindy 的 设置 → 远程连接 → 工作目录映射 把它所在的目录加进来，' +
+  '再在这里选择任务重新指定它。';
 /**
  * 查不到原对话时的说明。措辞刻意留了余地: inspect 返回 null 是多义的 ——
  * 会话真的没了是 null, meta / DB 读取瞬时失败也被吞成 null(session-runner
  * 两路都 catch)。一口咬定"已被归档或删除"会在读库抖动时误导用户
  * (PR #733 review 指出)。
  */
-const NOTICE_SESSION_GONE = 'ℹ️ 原对话现在读不到（可能已被归档或删除），这条消息起换用了新对话。';
+const NOTICE_SESSION_GONE = 'ℹ️ 原任务现在读不到（可能已被归档或删除），这条消息起换用了新任务。';
 
 /** 标题里消息摘要的最大长度(字符), 超出截断加省略号。 */
 const TITLE_SNIPPET_MAX = 24;
@@ -449,6 +449,13 @@ export function normalizeTaskSource(source: TaskSource): TaskSource {
  * (`[XD Inc.·Slack·DM] ...`)—— 多绑定设备上区分「哪个 workspace 派来的」,
  * team 名在前便于列表扫读; 放括号内保持标题统一以 `[` 开头对齐
  * (老 server / 单绑定不下发, 无 teamName 分支格式不变)。
+ *
+ * **摘要取 `source.userText`, 而不是 `prompt`。** 二者通常一致, 但 server 会在
+ * prompt 前面挂 thread 上下文块(Slack 的 `injectThreadContext` 一直如此, X 也
+ * 刚接上): 那时 `prompt` 开头是 `<thread_context>` 加一串别人的发言, 截前 24
+ * 字得到的标题既看不出是什么任务, 同一 thread 里还条条雷同。`userText` 正是
+ * server 为 UI 单独下发的干净原文(协议 `TaskSource.userText`)。
+ * 老 server 不下发时回退 prompt, 行为与此前一致。
  */
 export function buildHookSessionTitle(
   providerName: string,
@@ -1139,7 +1146,7 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         status: 'error',
         finalText: '',
         errorMessage:
-          '这个对话所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
+          '这个任务所在的目录已不在工作目录映射里，本条消息没有执行。把它所在的目录加进 设置 → 远程连接 → 工作目录映射 后再发一次。',
         durationMs: 0,
       };
     } else {
@@ -1514,6 +1521,11 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
     const providerName =
       payload.source?.im?.trim() || (colon > 0 ? payload.externalKey.slice(0, colon) : config.name);
     const bareKey = colon > 0 ? payload.externalKey.slice(colon + 1) : payload.externalKey;
+    // 标题摘要用 server 单独下发的干净原文, 而不是 prompt —— prompt 可能带
+    // thread 上下文块(见 buildHookSessionTitle 注释)。空串按"没有"处理:
+    // 纯 @ 无正文时 server 的 userText 为空, 而 prompt 仍是原文, 回退它更有信息。
+    const sourceUserText = payload.source?.userText ?? '';
+    const titleText = sourceUserText.trim().length > 0 ? sourceUserText : payload.prompt;
     return {
       run: {
         sessionId,
@@ -1528,10 +1540,12 @@ export function createHookDispatcher(deps: HookDispatcherDeps): HookDispatcher {
         ...(payload.workspace ? { workspaceAlias: payload.workspace } : {}),
         title: buildHookSessionTitle(
           providerName,
-          payload.prompt,
+          titleText,
           bareKey,
           payload.source?.teamName ??
-            (payload.source?.im === 'telegram' ? payload.source.channelName : null),
+            (payload.source?.im === 'telegram' || payload.source?.im === 'x'
+              ? payload.source.channelName
+              : null),
         ),
         prompt: payload.prompt,
         attachments: payload.attachments,

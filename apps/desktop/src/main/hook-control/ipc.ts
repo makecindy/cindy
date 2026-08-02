@@ -33,7 +33,12 @@ import {
   onUiTurnDispatching,
   onUiTurnUndispatched,
 } from '../maker-ipc/uiContinuationSignal.js';
-import { throwIpcError, requireObject, requireString } from '../utils/ipcValidate.js';
+import {
+  throwIpcError,
+  requireObject,
+  requireNullableString,
+  requireString,
+} from '../utils/ipcValidate.js';
 import {
   listWorkspaceProviderSources,
   setWorkspaceProviderSource,
@@ -57,8 +62,11 @@ import {
   type HookPrefsView,
   type ProviderPrefsView,
   type SlackHookView,
+  type TelegramHookBehaviorPatch,
+  type TelegramHookBehaviorState,
 } from '../../shared/hookControlIpc.js';
 import {
+  DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
   createSlackHookStore,
   HookConnectionValidationError,
   type SlackHookStore,
@@ -73,15 +81,23 @@ import {
 import { createHookTransport } from './transport.js';
 import { registerSlackToolBridge, unregisterSlackToolBridge } from './slackToolBridge.js';
 import { createHookBindingStore } from './bindings.js';
-import { buildGroupContextPrefix, resetGroupContextCursors } from './groupWindow.js';
+import {
+  buildGroupContextPrefix,
+  listTelegramKnownGroupsForStableBinding,
+  mergeTelegramGroupActivationViews,
+  resetGroupContextCursors,
+} from './groupWindow.js';
 import { createHookDispatcher } from './dispatcher.js';
 import { createMakerHookSessionRunner } from './session-runner.js';
 import { resolveHookInteraction } from './interactions.js';
 import { listRecentHookSessions } from './recentSessions.js';
 import { validateTelegramExternalUrl } from './telegramDeepLink.js';
+import { validateXExternalUrl } from './xDeepLink.js';
 import { isAppContentWindow } from '../windowFocusClassifier.js';
+import { resetTelegramSpeakerRegistrationCache } from '../im/telegram/contactsAutoRegister.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { getAgentIslandService } from '../agent-island/service.js';
+import { setLifecycleAnnouncementFromIpc } from './lifecycleAnnouncementIpc.js';
 
 const log = createLogger('hook-control');
 
@@ -110,6 +126,7 @@ function requireHookControl(): void {
 function disabledHookView(): SlackHookView {
   return {
     enabled: false,
+    lifecycleAnnouncement: DEFAULT_SLACK_LIFECYCLE_ANNOUNCEMENT,
     url: getClientEndpoint('slackHookWsUrl'),
     workspaces: {},
     status: 'disabled',
@@ -126,6 +143,17 @@ function disabledHookView(): SlackHookView {
       available: false,
       capabilityPending: false,
       binding: null,
+      defaultWorkspace: null,
+    },
+    x: {
+      enabled: false,
+      url: getClientEndpoint('xHookWsUrl'),
+      status: 'disabled',
+      lastError: null,
+      available: false,
+      capabilityPending: false,
+      binding: null,
+      defaultWorkspace: null,
     },
   };
 }
@@ -205,6 +233,14 @@ function broadcastProviderPrefs(view: ProviderPrefsView): void {
   }
 }
 
+function broadcastTelegramBehavior(view: TelegramHookBehaviorState): void {
+  for (const w of BrowserWindow.getAllWindows()) {
+    if (!w.isDestroyed() && isAppContentWindow(w)) {
+      w.webContents.send(HOOK_CONTROL_EVENT.TELEGRAM_BEHAVIOR_CHANGED, view);
+    }
+  }
+}
+
 /** Never persist raw account identity; region also isolates shared dev userData. */
 function currentAccountFingerprint(): string | null {
   const userId = authManager.getCurrentUserId();
@@ -257,15 +293,39 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 两个 provider 复用 dispatcher，但连接身份和服务地址彼此隔离。
       getConnection: (connectionId) => {
         const config = store!.get();
-        const provider = connectionId.endsWith(':telegram') ? 'telegram' : 'slack';
+        // connectionId 形如 `slack:<账号指纹>:<provider>`(manager 的 dispatchId
+        // 拼装, 指纹是 base64url 不含冒号)或裸 id(Slack legacy 线, 末段即
+        // 'slack')—— 按末段解析 provider。未登记的 provider 返回 null,
+        // dispatcher 按连接不存在拒绝(fail closed): 回落到 Slack 会让它读到
+        // 错误的开关与端点。
+        const provider = connectionId.split(':').pop() ?? '';
+        const metaByProvider: Record<
+          string,
+          { name: string; url: string; enabled: boolean } | undefined
+        > = {
+          telegram: {
+            name: `${BRAND_NAME} Telegram`,
+            url: getClientEndpoint('telegramHookWsUrl'),
+            enabled: config.telegramEnabled,
+          },
+          x: {
+            name: `${BRAND_NAME} X`,
+            url: getClientEndpoint('xHookWsUrl'),
+            enabled: config.xEnabled,
+          },
+          slack: {
+            name: `${BRAND_NAME} Slack`,
+            url: store!.effectiveUrl(),
+            enabled: config.enabled,
+          },
+        };
+        const meta = metaByProvider[provider];
+        if (!meta) return null;
         return {
           id: connectionId,
-          name: `${BRAND_NAME} ${provider === 'telegram' ? 'Telegram' : 'Slack'}`,
-          url:
-            provider === 'telegram'
-              ? getClientEndpoint('telegramHookWsUrl')
-              : store!.effectiveUrl(),
-          enabled: provider === 'telegram' ? config.telegramEnabled : config.enabled,
+          name: meta.name,
+          url: meta.url,
+          enabled: meta.enabled,
           workspaces: config.workspaces,
           createdAt: 0,
         };
@@ -348,6 +408,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       isAvailable: hookControlAvailable,
       createTransport: createHookTransport,
       getTelegramUrl: () => getClientEndpoint('telegramHookWsUrl'),
+      getXUrl: () => getClientEndpoint('xHookWsUrl'),
       // 与 device-link 同款 token 源: 现值优先, 缺失 refresh 一次
       getAuthToken: async () => {
         if (!hookControlAvailable()) return null;
@@ -364,11 +425,14 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
         deviceId: authManager.getDeviceId(),
         deviceName: os.hostname(),
       }),
-      agents: ['claude-code', 'codex'],
+      // Only advertise runtimes that are actually registered on this build.
+      // Pi is optional on unsupported/unprepared platforms.
+      agents: getMaker().listAvailableAgents(),
       notifyStatus: broadcastStatus,
       onSlackToolProviderEnabledChanged: requestCodexMcpRefreshForSlackAvailability,
       notifyPrefs: broadcastPrefs,
       notifyProviderPrefs: broadcastProviderPrefs,
+      notifyTelegramBehavior: broadcastTelegramBehavior,
       dispatcher,
       getAccountFingerprint: currentAccountFingerprint,
       accountInitiallyActive: false,
@@ -381,7 +445,9 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       // 侧据此渲染权限档下拉(选中值经 dispatch options.permissionMode 回流)
       listAgentModels: async () => {
         const providers = await getDesktopProviderService().listProviders({ allowSideEffects: true });
-        return (['claude-code', 'codex'] as const).map((agentKind) => {
+        // 动态取 runtime 已注册的 agent(含 Pi,若已安装);上游此处硬编码 cc/codex(早于 Pi),
+        // 本 PR 的 Pi 接入以 listAvailableAgents() 为准 —— 与新建入口按注册结果门控同源。
+        return getMaker().listAvailableAgents().map((agentKind) => {
           const models = visibleModelUnion(providers, agentKind, (providerId, m) =>
             isModelVisible(
               getModelVisibilityOverride(agentKind, providerId, m.id),
@@ -411,6 +477,10 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
       },
       openTelegramUrl: (url) => {
         const safeUrl = validateTelegramExternalUrl(url);
+        return shell.openExternal(safeUrl);
+      },
+      openXUrl: (url) => {
+        const safeUrl = validateXExternalUrl(url);
         return shell.openExternal(safeUrl);
       },
       log,
@@ -497,61 +567,104 @@ export function registerHookControlIpc(): void {
     return { hook: m.snapshot() };
   });
 
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.SET_LIFECYCLE_ANNOUNCEMENT,
+    (_e, payload) => {
+      requireHookControl();
+      const { manager: m } = ensureInstances();
+      const p = requireObject(payload);
+      if (typeof p.enabled !== 'boolean') {
+        throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
+      }
+      return setLifecycleAnnouncementFromIpc(m, p.enabled, log);
+    },
+  );
+
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_PROVIDER_ENABLED, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
     const p = requireObject(payload);
-    if (p.provider !== 'telegram') {
-      throwIpcError('INVALID_PARAMS', 'provider must be telegram');
+    if (p.provider !== 'telegram' && p.provider !== 'x') {
+      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
     }
     if (typeof p.enabled !== 'boolean') throwIpcError('INVALID_PARAMS', 'enabled must be boolean');
-    m.setProviderEnabled('telegram', p.enabled);
+    m.setProviderEnabled(p.provider, p.enabled);
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, () => {
+  /** provider-neutral 绑定动作的 provider 形参校验(telegram / x)。 */
+  const requireNeutralProvider = (payload: unknown): 'telegram' | 'x' => {
+    const p = requireObject(payload);
+    if (p.provider !== 'telegram' && p.provider !== 'x') {
+      throwIpcError('INVALID_PARAMS', 'provider must be telegram or x');
+    }
+    return p.provider;
+  };
+  const providerDisplayName = (provider: 'telegram' | 'x'): string =>
+    provider === 'telegram' ? 'Telegram' : 'X';
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_START, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindStart('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram provider is not connected');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindStart(provider)) {
+      throwIpcError(
+        'HOOK_NOT_CONNECTED',
+        `${providerDisplayName(provider)} provider is not connected`,
+      );
     }
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_CANCEL, () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_CANCEL, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindCancel('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram binding attempt is not active');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindCancel(provider)) {
+      throwIpcError(
+        'HOOK_NOT_CONNECTED',
+        `${providerDisplayName(provider)} binding attempt is not active`,
+      );
     }
     return { hook: m.snapshot() };
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_REVOKE, () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_BIND_REVOKE, (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
-    if (!m.providerBindRevoke('telegram')) {
-      throwIpcError('HOOK_NOT_CONNECTED', 'Telegram binding is not connected');
+    const provider = requireNeutralProvider(payload);
+    if (!m.providerBindRevoke(provider)) {
+      throwIpcError(
+        'HOOK_NOT_CONNECTED',
+        `${providerDisplayName(provider)} binding is not connected`,
+      );
     }
     return { hook: m.snapshot() };
   });
 
   registerTrustedHookControlHandler(
-    HOOK_CONTROL_INVOKE.TELEGRAM_OPEN_ACTION,
+    HOOK_CONTROL_INVOKE.PROVIDER_OPEN_ACTION,
     async (_e, payload) => {
       requireHookControl();
       const { manager: m } = ensureInstances();
+      const provider = requireNeutralProvider(payload);
       const p = requireObject(payload);
       const action = requireString(p.action, 'action');
       if (action !== 'connect' && action !== 'provider' && action !== 'add-to-group') {
-        throwIpcError('INVALID_PARAMS', 'invalid Telegram open action');
+        throwIpcError('INVALID_PARAMS', `invalid ${providerDisplayName(provider)} open action`);
       }
       try {
-        if (!(await m.openTelegramAction(action))) {
-          throwIpcError('INVALID_PARAMS', 'Telegram action is not available');
+        if (!(await m.openProviderAction(provider, action))) {
+          throwIpcError(
+            'INVALID_PARAMS',
+            `${providerDisplayName(provider)} action is not available`,
+          );
         }
       } catch (err) {
-        if (err instanceof Error && err.name === 'TelegramDeepLinkValidationError') {
+        if (
+          err instanceof Error &&
+          (err.name === 'TelegramDeepLinkValidationError' || err.name === 'XLinkValidationError')
+        ) {
           throwIpcError('INVALID_PARAMS', err.message);
         }
         throw err;
@@ -569,6 +682,20 @@ export function registerHookControlIpc(): void {
     // 别名清单变更要让 server 侧感知: 在线时直接重发 hello(server 以最新
     // 一帧为准, 连接不动 —— 整条重建会让设置页状态/偏好区闪烁); 未连接时
     // 回退重建, 下次建连的 hello 自带新清单
+    if (!m.refreshHello()) m.sync();
+    return { hook: m.snapshot() };
+  });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.SET_X_DEFAULT_WORKSPACE, (_e, payload) => {
+    requireHookControl();
+    const { store: s, manager: m } = ensureInstances();
+    const p = requireObject(payload);
+    // 只认显式的 null 或字符串: 这里的 null 是「清空默认目录」这个破坏性动作,
+    // 把缺字段当 null 会让 renderer 的一次调用疏忽静默清掉用户已保存的设置。
+    const alias = requireNullableString(p.alias, 'alias');
+    translateValidation(() => s.setXDefaultWorkspace(alias));
+    // 与 SET_WORKSPACES 同款: 默认目录也走 hello, 在线时重发一帧即可让 server
+    // 感知(它以最新一帧为准), 不重建连接 —— 重建会让设置页状态与偏好区闪烁。
     if (!m.refreshHello()) m.sync();
     return { hook: m.snapshot() };
   });
@@ -683,11 +810,12 @@ export function registerHookControlIpc(): void {
     }
   });
 
-  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_GET, async () => {
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_GET, async (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
     try {
-      return { prefs: await m.getProviderWorkspacePrefs('telegram') };
+      return { prefs: await m.getProviderWorkspacePrefs(provider) };
     } catch (err) {
       throwHookPrefsError(err);
     }
@@ -696,6 +824,7 @@ export function registerHookControlIpc(): void {
   registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.PROVIDER_PREFS_SET, async (_e, payload) => {
     requireHookControl();
     const { manager: m } = ensureInstances();
+    const provider = requireNeutralProvider(payload);
     const p = requireObject(payload);
     const workspace = requireString(p.workspace, 'workspace');
     const rawPatch = requireObject(p.patch);
@@ -709,11 +838,113 @@ export function registerHookControlIpc(): void {
       patch[field] = value as string | null;
     }
     try {
-      return { prefs: await m.setProviderWorkspacePrefs('telegram', workspace, patch) };
+      return { prefs: await m.setProviderWorkspacePrefs(provider, workspace, patch) };
     } catch (err) {
       throwHookPrefsError(err);
     }
   });
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_GET, async (_e, payload) => {
+    requireHookControl();
+    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
+    try {
+      return { behavior: await ensureInstances().manager.getTelegramBehavior(bindingId) };
+    } catch (err) {
+      throwHookPrefsError(err);
+    }
+  });
+
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.TELEGRAM_BEHAVIOR_SET,
+    async (_e, payload) => {
+      requireHookControl();
+      const request = requireObject(payload);
+      const bindingId = requireString(request.bindingId, 'bindingId');
+      const raw = requireObject(request.patch);
+      const patch: TelegramHookBehaviorPatch = {};
+      if (raw.emojiReactions !== undefined) {
+        if (!['off', 'minimal', 'expressive'].includes(String(raw.emojiReactions))) {
+          throwIpcError('INVALID_PARAMS', 'emojiReactions is invalid');
+        }
+        patch.emojiReactions = raw.emojiReactions as TelegramHookBehaviorPatch['emojiReactions'];
+      }
+      if (raw.replyQuoteDm !== undefined) {
+        if (!['off', 'first'].includes(String(raw.replyQuoteDm))) {
+          throwIpcError('INVALID_PARAMS', 'replyQuoteDm is invalid');
+        }
+        patch.replyQuoteDm = raw.replyQuoteDm as TelegramHookBehaviorPatch['replyQuoteDm'];
+      }
+      if (raw.replyQuoteGroup !== undefined) {
+        if (!['off', 'first', 'all'].includes(String(raw.replyQuoteGroup))) {
+          throwIpcError('INVALID_PARAMS', 'replyQuoteGroup is invalid');
+        }
+        patch.replyQuoteGroup = raw.replyQuoteGroup as TelegramHookBehaviorPatch['replyQuoteGroup'];
+      }
+      if (Object.keys(patch).length === 0) {
+        throwIpcError('INVALID_PARAMS', 'behavior patch must not be empty');
+      }
+      try {
+        return { behavior: await ensureInstances().manager.setTelegramBehavior(bindingId, patch) };
+      } catch (err) {
+        throwHookPrefsError(err);
+      }
+    },
+  );
+
+  registerTrustedHookControlHandler(HOOK_CONTROL_INVOKE.TELEGRAM_GROUPS_LIST, async (_e, payload) => {
+    requireHookControl();
+    const bindingId = requireString(requireObject(payload).bindingId, 'bindingId');
+    try {
+      const { manager: m } = ensureInstances();
+      const behavior = await m.getTelegramBehavior(bindingId);
+      const binding = m.snapshot().telegram.binding;
+      if (
+        binding?.state !== 'confirmed' ||
+        binding.bindingId !== bindingId ||
+        binding.bindingId !== behavior.bindingId ||
+        !binding.principalId
+      ) {
+        throw new HookNotConnectedError('telegram');
+      }
+      const knownGroups = await listTelegramKnownGroupsForStableBinding(
+        { bindingId: binding.bindingId, principalId: binding.principalId },
+        () => m.snapshot().telegram.binding,
+      );
+      if (knownGroups === null) throw new HookNotConnectedError('telegram');
+      return {
+        groups: mergeTelegramGroupActivationViews(knownGroups, behavior.groupActivation),
+      };
+    } catch (err) {
+      throwHookPrefsError(err);
+    }
+  });
+
+  registerTrustedHookControlHandler(
+    HOOK_CONTROL_INVOKE.TELEGRAM_GROUP_ACTIVATION_SET,
+    async (_e, payload) => {
+      requireHookControl();
+      const p = requireObject(payload);
+      const bindingId = requireString(p.bindingId, 'bindingId');
+      const chatId = requireString(p.chatId, 'chatId');
+      if (chatId.length > 32 || !/^-?[0-9]+$/.test(chatId)) {
+        throwIpcError('INVALID_PARAMS', 'chatId is invalid');
+      }
+      if (p.mode !== 'mention' && p.mode !== 'always') {
+        throwIpcError('INVALID_PARAMS', 'mode must be mention or always');
+      }
+      try {
+        return {
+          behavior: await ensureInstances().manager.setTelegramGroupActivation(
+            bindingId,
+            chatId,
+            p.mode,
+          ),
+        };
+      } catch (err) {
+        throwHookPrefsError(err);
+      }
+    },
+  );
 
   // 工作目录模型来源偏好: 纯本地文件, 不经 WS(来源是纯客户端维度, server 零感知)。
   registerTrustedHookControlHandler(
@@ -726,8 +957,8 @@ export function registerHookControlIpc(): void {
     async (_e, payload) => {
       const p = requireObject(payload);
       const channel = requireString(p.channel, 'channel');
-      if (channel !== 'slack' && channel !== 'telegram') {
-        throwIpcError('INVALID_PARAMS', 'channel must be slack or telegram');
+      if (channel !== 'slack' && channel !== 'telegram' && channel !== 'x') {
+        throwIpcError('INVALID_PARAMS', 'channel must be slack, telegram or x');
       }
       // 输入设界(codex review): 即使 renderer 被攻破, 也不允许任意长度/格式的键
       // 无限追加条目撑爆本地文件 —— workspace 按别名正则(与 prefs 同规), 其余限长。
@@ -811,8 +1042,8 @@ export function registerHookControlIpc(): void {
 /** Called after the current account DB is ready; app:ready-for-bot may retry it. */
 export function startHookControlAccount(): void {
   if (!hookControlAvailable()) return;
-  // 群窗口 TTL 兜底清扫在 manager.activateAccount 内执行(纳入账号级
-  // pendingAccountOps, 登出/切号不打断在途落库)。
+  // 群窗口生命周期入口在 manager.activateAccount 内执行并纳入账号级
+  // pendingAccountOps；当前永久保留模式下该入口是兼容 no-op。
   ensureInstances().manager.activateAccount();
 }
 
@@ -825,6 +1056,7 @@ export async function stopHookControlAccount(): Promise<void> {
 export function resetHookControlOwnerBoundary(): void {
   unregisterSlackToolBridge();
   resetGroupContextCursors();
+  resetTelegramSpeakerRegistrationCache();
   manager?.dispose();
   manager = null;
   store = null;

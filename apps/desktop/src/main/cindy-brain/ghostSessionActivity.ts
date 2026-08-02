@@ -63,6 +63,20 @@ export class GhostSessionActivityTracker {
   }
 
   /**
+   * 是否有**任意**会话存在在途的意识后台活动。
+   *
+   * 给「这个破坏性动作会不会打断正在干的活」这类全局判定用(如更新重启前的阻断探针)——
+   * 那些调用方没有 sessionId 可传,而 renderer 侧的 ghostSessionActivityStore 只靠 0↔1
+   * 推送累积集合、没有全量快照通道,首次订阅时拿不到已在跑的活动,不能作为权威来源。
+   */
+  anySessionBusy(): boolean {
+    for (const keys of this.sessionKeys.values()) {
+      if (keys.size > 0) return true;
+    }
+    return false;
+  }
+
+  /**
    * 活动开始(card-action 派发成功时调;key = 衍生卡位 spawnCallId,兜底原
    * callId)。同 key 重复 begin 只续 TTL,不重复计数。
    */

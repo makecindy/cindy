@@ -114,9 +114,16 @@ describe('mobile session composer desktop-first surface', () => {
     expect(trailingActionsSource).toContain('<PaperPlaneIcon');
     expect(trailingActionsSource).toContain('color={composerSendDisabled ? colors.textSecondary : colors.ctaText}');
     expect(source).toContain('const composerCardActive = (canUseComposer && composerFocused)');
-    // 权限选择已合并进模型浮窗(ModelPickerSheet 二级视图);composer 底排只剩 [+][模型]。
+    expect(source).toContain('|| permissionSheetOpen');
+    // 2026-07-29 用户裁决(对齐 Codex):权限入口是 composer 左侧图标钮 + 独立浮窗
+    // (MobilePermissionPickerList 由本 screen 直挂 SheetSurface),模型药丸右对齐;
+    // 浮窗打开时仍属于 composer 激活态,不能因输入框失焦把底排收起。
+    // ModelPickerSheet 的 header 权限入口隐藏(hidePermissionTrigger),不再双入口。
     expect(source).not.toContain('testID="session.composerPermissionButton"');
-    expect(source).not.toContain('<MobilePermissionPickerList');
+    expect(source).toContain('testID="session.permissionIndicator"');
+    expect(source).toContain('<MobilePermissionPickerList');
+    expect(source).toContain('hidePermissionTrigger');
+    expect(source).toContain('setPermissionSheetOpen(false)');
     expect(source).toContain('testID="session.composerModelButton"');
     // 模型 + 权限浮窗:ContextSheet 同款独立 Modal(单 Modal 双 SheetSurface 叠层),
     // 不再是 composer 上方的 in-flow drop-up。
@@ -414,6 +421,11 @@ describe('mobile session composer desktop-first surface', () => {
     expect(source).toContain('top: voiceDraftCaretFrame.top');
     expect(source).not.toContain('voiceMicCaretInline');
     expect(source).not.toContain('<VoiceMicWaveCaret color={colors.statusReady} inline />');
+    // 语音态占位文案就是普通态 TextInput 的 placeholder,必须与 placeholderTextColor 同源,
+    // 否则一进语音态这行字会变色(2026-07-31 用户定案:不再用 statusReady 蓝绿)。
+    expect(source).toContain('placeholderTextColor={colors.textTertiary}');
+    expect(source).toContain('voiceDraftListeningText: {\n    color: colors.textTertiary,');
+    expect(source).not.toContain('voiceDraftListeningText: {\n    color: colors.statusReady,');
     expect(source).toContain('finishVoiceRecordingRef.current?.();');
     expect(source).toContain('const voiceStopInFlightRef = useRef(false);');
     expect(voiceSource).toContain('|| voiceStopInFlightRef.current');

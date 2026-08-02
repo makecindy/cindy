@@ -66,6 +66,7 @@ const userMessage = (id: string, text = id): ChatMessage => ({
 const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => ({
   agentKind: 'claude-code',
   agentSwitchIntent: null,
+  agentSwitchIntentRev: 0,
   remoteHostId: null,
   messages: [],
   isStreaming: false,
@@ -76,6 +77,8 @@ const state = (overrides: Partial<SessionChatState> = {}): SessionChatState => (
   errorRetryText: null,
   credentialSwitchWait: null,
   continuationInFlightClientId: null,
+  continuationTurnClientId: null,
+  continuationInFlightProjectionCapability: 'unknown',
   isLoadingMore: false,
   hasMoreMessages: false,
   isFirstMessage: false,

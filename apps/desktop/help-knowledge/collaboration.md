@@ -19,7 +19,7 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 **While collaborating:**
 
 - Each worker is a full session with its own history, tools, working directory, and model, and runs with permissions bypassed so it doesn't stop to ask. It inherits the lead's working directory by default (or shares the worktree when the lead uses one).
-- A worker's model defaults to your last "New Chat" choice for that vendor, falling back to the lead's model.
+- A worker's model defaults to your last new-session choice for that vendor, falling back to the lead's model.
 - Only one worker is **focused** (shown) at a time — switch between them with the worker tabs / dropdown. You can intervene in any worker directly, and archive workers individually.
 
 **Turning it off:**

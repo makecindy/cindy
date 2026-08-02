@@ -1,7 +1,7 @@
 {
   "version": "6",
   "dialect": "sqlite",
-  "id": "8dfb08d3-0976-4e0c-b457-fd2f138cdd19",
+  "id": "8344fb86-a506-45c9-bb6c-552a2482afa5",
   "prevId": "0976a82c-a80e-41e0-94aa-4ac5b3fc90a5",
   "tables": {
     "account_usage_snapshots": {
@@ -2129,6 +2129,14 @@
           "autoincrement": false,
           "default": false
         },
+        "notify_wecom_group": {
+          "name": "notify_wecom_group",
+          "type": "integer",
+          "primaryKey": false,
+          "notNull": true,
+          "autoincrement": false,
+          "default": false
+        },
         "status": {
           "name": "status",
           "type": "text",
@@ -2154,13 +2162,6 @@
         "last_fired_at": {
           "name": "last_fired_at",
           "type": "integer",
-          "primaryKey": false,
-          "notNull": false,
-          "autoincrement": false
-        },
-        "active_claim_run_id": {
-          "name": "active_claim_run_id",
-          "type": "text",
           "primaryKey": false,
           "notNull": false,
           "autoincrement": false

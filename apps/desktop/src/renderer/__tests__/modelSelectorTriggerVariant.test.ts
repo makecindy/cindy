@@ -28,6 +28,7 @@ vi.mock('react-i18next', async (importOriginal) => ({
       const translations: Record<string, string> = {
         'effortLevels.xhigh': '超高',
         'settings.providers.anthropic.title': 'Anthropic',
+        'settings.providers.xd.title': 'Cindy AI',
         'newChat.modelSelector.trigger.placeholder': '选择模型',
         'newChat.modelSelector.trigger.agent.claudeCode': 'Claude Code',
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
@@ -39,6 +40,9 @@ vi.mock('react-i18next', async (importOriginal) => ({
       }
       if (key === 'newChat.modelSelector.meta.context') {
         return `${options?.value} context`;
+      }
+      if (key === 'newChat.modelSelector.meta.codexCompatibilityMode') {
+        return 'Codex compatibility mode';
       }
       if (key === 'newChat.modelSelector.source.viaSource') {
         return `Source: ${options?.source}`;
@@ -282,6 +286,7 @@ interface VisibleModelFixture {
   defaultEffort: string | null;
   effortDisplayNames?: Record<string, string>;
   supportsFastMode?: boolean;
+  codexCompatibilityWireProtocol?: 'openai-chat' | 'anthropic-messages';
 }
 
 const visibleModelsRef = vi.hoisted(() => ({
@@ -416,6 +421,130 @@ describe('ModelSelector trigger variants', () => {
     );
     await clickTrigger();
     expect(requestProviderModelsAutoRefresh).not.toHaveBeenCalled();
+  });
+
+  it('keeps short model discovery out of the morph opening geometry', async () => {
+    vi.useFakeTimers();
+    let resolveRefresh!: (value: { ok: true }) => void;
+    const refresh = new Promise<{ ok: true }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    requestProviderModelsAutoRefresh.mockImplementationOnce(() => refresh);
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      expect(requestProviderModelsAutoRefresh).toHaveBeenCalledOnce();
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        resolveRefresh({ ok: true });
+        await refresh;
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('still explains a model discovery that remains in flight', async () => {
+    vi.useFakeTimers();
+    let resolveRefresh!: (value: { ok: true }) => void;
+    const refresh = new Promise<{ ok: true }>((resolve) => {
+      resolveRefresh = resolve;
+    });
+    requestProviderModelsAutoRefresh.mockImplementationOnce(() => refresh);
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      await act(async () => {
+        await vi.runAllTimersAsync();
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+
+      await act(async () => {
+        resolveRefresh({ ok: true });
+        await refresh;
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('restarts the discovery delay after a row closes and reopens the picker', async () => {
+    vi.useFakeTimers();
+    requestProviderModelsAutoRefresh
+      .mockImplementationOnce(() => new Promise(() => undefined))
+      .mockImplementationOnce(() => new Promise(() => undefined));
+
+    try {
+      render(
+        React.createElement(ModelSelector, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          useMorphPopover: true,
+        }),
+      );
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(300);
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+
+      fireEvent.click(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      act(() => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+      });
+      expect(requestProviderModelsAutoRefresh).toHaveBeenCalledTimes(2);
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(299);
+      });
+      expect(screen.queryByText('newChat.modelSelector.discovering')).toBeNull();
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1);
+      });
+      expect(screen.getByText('newChat.modelSelector.discovering')).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('keeps row-count caps finite and within the shared 300px ceiling', () => {
@@ -783,7 +912,7 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
   });
 
-  it('shows Gateway discount and free promotions in the selected-model trigger', () => {
+  it('does not show Gateway promotions in the selected-model trigger', () => {
     providersRef.providers = [
       {
         id: 'xd',
@@ -841,11 +970,11 @@ describe('ModelSelector trigger variants', () => {
           onProviderChange: vi.fn(),
         }),
       );
-      const discountTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
-      const discountBadge = within(discountTrigger).getByText('立省 50%');
-      expect(discountBadge.hasAttribute('data-model-promotion-badge')).toBe(true);
-      expect(discountBadge.className).toContain('bg-[var(--accent-cta-bg)]');
-      expect(discountBadge.className).toContain('text-[var(--accent-pure-cta-fg)]');
+      const promotionTrigger = screen.getByRole('button', { name: /Current: Opus 4\.8/ });
+      // 折扣和免费标签已从输入框 trigger 移除，仅在下拉菜单/详情里展示。
+      expect(within(promotionTrigger).queryByText('立省 50%')).toBeNull();
+      expect(within(promotionTrigger).queryByText('限时免费')).toBeNull();
+      expect(promotionTrigger.querySelector('[data-model-promotion-badge]')).toBeNull();
       discounted.unmount();
 
       pricingRef.pricing = {};
@@ -861,8 +990,8 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
       expect(
-        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).getByText('限时免费'),
-      ).toBeTruthy();
+        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText('限时免费'),
+      ).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
       pricingRef.pricing = pricingRef.DEFAULT_PRICING;
@@ -1179,6 +1308,116 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
+  it.each([
+    {
+      label: 'OpenAI Chat → Responses',
+      providerProtocol: 'openai-chat',
+      modelProtocol: undefined,
+      visible: true,
+    },
+    {
+      label: 'Anthropic Messages → Responses',
+      providerProtocol: 'anthropic-messages',
+      modelProtocol: undefined,
+      visible: true,
+    },
+    {
+      label: 'Cindy AI 模型级 Anthropic bridge',
+      providerProtocol: 'openai-responses',
+      modelProtocol: 'anthropic-messages',
+      visible: true,
+    },
+    {
+      label: '原生 Responses',
+      providerProtocol: 'openai-responses',
+      modelProtocol: undefined,
+      visible: false,
+    },
+  ] as const)(
+    '$label 的模型详情兼容模式标记 visible=$visible',
+    ({ providerProtocol, modelProtocol, visible }) => {
+      const currentModel: VisibleModelFixture = {
+        id: 'bridge-fixture-model',
+        displayName: 'Bridge Fixture',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+        ...(modelProtocol ? { codexCompatibilityWireProtocol: modelProtocol } : {}),
+      };
+      const originalCapabilities = agentCapabilitiesRef.capabilities;
+      visibleModelsRef.models = [currentModel];
+      agentCapabilitiesRef.capabilities = {
+        availableModels: [currentModel],
+        effortLevels: [{ id: 'high', displayName: 'High' }],
+        hasFastMode: false,
+      };
+      providersRef.providers = [
+        {
+          id: modelProtocol ? 'xd' : 'fixture',
+          name: modelProtocol ? 'Cindy AI' : 'Fixture',
+          source: modelProtocol ? 'builtin' : 'user',
+          connected: true,
+          agents: ['codex'],
+          auth: { method: 'none' },
+          routing: {
+            codex: {
+              upstream: 'https://example.test',
+              authStrategy: 'none',
+              wireProtocol: providerProtocol,
+            },
+          },
+          models: {
+            codex: [
+              {
+                ...currentModel,
+                name: currentModel.displayName,
+              },
+            ],
+          },
+        },
+      ];
+
+      try {
+        render(
+          React.createElement(ModelSelectorContent, {
+            modelId: currentModel.id,
+            effort: 'high',
+            onModelChange: vi.fn(),
+            onEffortChange: vi.fn(),
+            vendorKey: 'codex',
+            currentProviderId: modelProtocol ? 'xd' : 'fixture',
+            onProviderChange: vi.fn(),
+          }),
+        );
+
+        fireEvent.pointerEnter(screen.getByRole('option', { name: /Bridge Fixture/ }));
+        const details = screen.getByRole('group', { name: /Bridge Fixture/ });
+        const compatibilityLabel = within(details).queryByText('Codex compatibility mode');
+        if (visible) {
+          expect(compatibilityLabel).toBeTruthy();
+          const detailText = details.textContent ?? '';
+          const sourceText = modelProtocol ? 'Source: Cindy AI' : 'Source: Fixture';
+          expect(detailText.indexOf(sourceText)).toBeLessThan(detailText.indexOf('1M context'));
+          expect(detailText.indexOf('1M context')).toBeLessThan(
+            detailText.indexOf('Codex compatibility mode'),
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText(sourceText).parentElement,
+          );
+          expect(compatibilityLabel).not.toBe(
+            within(details).getByText('1M context').parentElement,
+          );
+        } else {
+          expect(compatibilityLabel).toBeNull();
+        }
+      } finally {
+        visibleModelsRef.models = null;
+        agentCapabilitiesRef.capabilities = originalCapabilities;
+        providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      }
+    },
+  );
+
   it('filters provider-ignored models from flat model-only selectors', () => {
     modelVisibilityRef.isEnabled = (_agent, _providerId, model) => model.id !== 'claude-sonnet-4-6';
     try {
@@ -1484,8 +1723,9 @@ describe('ModelSelector trigger variants', () => {
     expect(within(information).queryByRole('option')).toBeNull();
   });
 
-  it('lets inactive provider rows edit the injected preset without switching the model', () => {
+  it('selects an inactive provider row after its effort preset is clicked', () => {
     const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
     const setEffort = vi.fn();
     const modelMemory = {
       getEffort: vi.fn(),
@@ -1503,6 +1743,7 @@ describe('ModelSelector trigger variants', () => {
         vendorKey: 'cc',
         currentProviderId: 'anthropic',
         onProviderChange,
+        onDismiss,
         modelMemory,
       }),
     );
@@ -1520,7 +1761,175 @@ describe('ModelSelector trigger variants', () => {
     fireEvent.click(within(options).getByRole('option', { name: 'high' }));
 
     expect(setEffort).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', 'high');
-    expect(onProviderChange).not.toHaveBeenCalled();
+    expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+    expect(onDismiss).not.toHaveBeenCalled();
+    expect(setEffort.mock.invocationCallOrder[0]).toBeLessThan(
+      onProviderChange.mock.invocationCallOrder[0],
+    );
+  });
+
+  it('selects an inactive provider row after its Fast toggle is clicked', () => {
+    const onProviderChange = vi.fn();
+    const onDismiss = vi.fn();
+    const setFast = vi.fn();
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(() => false),
+      setFast,
+    };
+    agentCapabilitiesRef.capabilities = {
+      ...agentCapabilitiesRef.DEFAULT_CAPABILITIES,
+      hasFastMode: true,
+    };
+    providersRef.providers = [
+      {
+        ...(providersRef.DEFAULT_PROVIDERS[0] as Record<string, unknown>),
+        models: {
+          'claude-code': (
+            providersRef.DEFAULT_PROVIDERS[0] as { models: { 'claude-code': unknown[] } }
+          ).models['claude-code'].map((model) =>
+            (model as { id: string }).id === 'claude-sonnet-4-6'
+              ? { ...(model as Record<string, unknown>), supportsFastMode: true }
+              : model,
+          ),
+        },
+      },
+    ];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          fastMode: false,
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          onFastModeChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange,
+          onDismiss,
+          modelMemory,
+        }),
+      );
+
+      fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+      fireEvent.click(screen.getByRole('button', { name: 'Fast Mode' }));
+
+      expect(setFast).toHaveBeenCalledWith('claude-code', 'anthropic', 'claude-sonnet-4-6', true);
+      expect(onProviderChange).toHaveBeenCalledWith('anthropic', 'claude-sonnet-4-6');
+      expect(onDismiss).not.toHaveBeenCalled();
+      expect(setFast.mock.invocationCallOrder[0]).toBeLessThan(
+        onProviderChange.mock.invocationCallOrder[0],
+      );
+    } finally {
+      agentCapabilitiesRef.capabilities = agentCapabilitiesRef.DEFAULT_CAPABILITIES;
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+    }
+  });
+
+  it('keeps the model picker open after an inactive row configuration selects that model', async () => {
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(),
+      setFast: vi.fn(),
+    };
+
+    function Harness() {
+      const [selection, setSelection] = React.useState({
+        providerId: 'anthropic',
+        modelId: 'claude-opus-4-8',
+      });
+      return React.createElement(ModelSelector, {
+        modelId: selection.modelId,
+        effort: 'high',
+        onModelChange: (modelId: string) =>
+          setSelection((current) => ({ ...current, modelId })),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: selection.providerId,
+        onProviderChange: (providerId: string | null, modelId?: string) => {
+          if (providerId && modelId) setSelection({ providerId, modelId });
+        },
+        modelMemory,
+      });
+    }
+
+    render(React.createElement(Harness));
+    await clickTrigger();
+
+    fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+    const options = screen.getByRole('group', { name: /Sonnet 4\.6/ });
+    fireEvent.click(within(options).getByRole('option', { name: 'high' }));
+
+    expect(screen.getByRole('option', { name: /Sonnet 4\.6/ }).getAttribute('aria-selected')).toBe(
+      'true',
+    );
+    expect(screen.getByRole('option', { name: /Opus 4\.8/ })).toBeTruthy();
+  });
+
+  it('locks an open remote picker while its configuration selection is in flight', async () => {
+    const onProviderChange = vi.fn();
+    const modelMemory = {
+      getEffort: vi.fn(),
+      setEffort: vi.fn(),
+      getFast: vi.fn(),
+      setFast: vi.fn(),
+    };
+    function Harness() {
+      const [switching, setSwitching] = React.useState(false);
+      return React.createElement(ModelSelector, {
+        modelId: 'claude-opus-4-8',
+        effort: 'high',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        currentProviderId: 'anthropic',
+        onProviderChange: (providerId: string | null, modelId?: string) => {
+          onProviderChange(providerId, modelId);
+          setSwitching(true);
+        },
+        modelMemory,
+        switching,
+      });
+    }
+
+    render(React.createElement(Harness));
+    await clickTrigger();
+
+    fireEvent.pointerEnter(screen.getByRole('option', { name: /Sonnet 4\.6/ }));
+    fireEvent.click(
+      within(screen.getByRole('group', { name: /Sonnet 4\.6/ })).getByRole('option', {
+        name: 'high',
+      }),
+    );
+
+    expect(onProviderChange).toHaveBeenCalledTimes(1);
+    expect(
+      screen.getByRole('button', { name: /Current: Opus 4\.8/ }).hasAttribute('disabled'),
+    ).toBe(true);
+    const opusRow = screen.getByRole('option', { name: /Opus 4\.8/ });
+    expect(opusRow.getAttribute('aria-disabled')).toBe('true');
+    expect(screen.queryByRole('group', { name: /Sonnet 4\.6/ })).toBeNull();
+    const searchInput = screen.getByRole('textbox', {
+      name: 'newChat.modelSelector.search.placeholderAll',
+    });
+    expect(searchInput.hasAttribute('disabled')).toBe(true);
+    expect(searchInput.className).toContain('cursor-not-allowed');
+    expect(searchInput.className).toContain('text-[var(--text-disabled)]');
+    expect(searchInput.className).toContain(
+      'placeholder:text-[var(--text-disabled-tertiary)]',
+    );
+    expect(searchInput.parentElement?.className).toContain(
+      'bg-[var(--surface-elevated-soft)]',
+    );
+
+    fireEvent.click(opusRow);
+    fireEvent.pointerEnter(opusRow);
+    expect(onProviderChange).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('group', { name: /Opus 4\.8/ })).toBeNull();
   });
 
   it('keeps target-agent provider rows and effort memory configurable while browsing Codex', async () => {
@@ -1545,13 +1954,32 @@ describe('ModelSelector trigger variants', () => {
         },
       },
     ];
-    const setEffort = vi.fn();
+    let rememberedEffort: Effort = 'high';
+    const setEffort = vi.fn(
+      (_agent: string, _providerId: string, _modelId: string, nextEffort: Effort) => {
+        rememberedEffort = nextEffort;
+      },
+    );
+    const onDismiss = vi.fn();
     const confirmBrowseSwitch = vi.fn(async () => true);
-    const onSwitch = vi.fn();
+    let releaseFirstSwitch!: () => void;
+    const firstSwitch = new Promise<void>((resolve) => {
+      releaseFirstSwitch = resolve;
+    });
+    const observedSwitchEfforts: Effort[] = [];
+    const onSwitch = vi
+      .fn()
+      .mockImplementationOnce(async () => {
+        observedSwitchEfforts.push(rememberedEffort);
+        await firstSwitch;
+      })
+      .mockImplementationOnce(() => {
+        observedSwitchEfforts.push(rememberedEffort);
+      });
     const modelMemory = {
       getEffort: vi.fn((agent: string, providerId: string, modelId: string) =>
         agent === 'codex' && providerId === 'zeta-codex' && modelId === 'gpt-5.5'
-          ? 'high'
+          ? rememberedEffort
           : undefined,
       ),
       setEffort,
@@ -1569,6 +1997,7 @@ describe('ModelSelector trigger variants', () => {
           vendorKey: 'cc',
           currentProviderId: 'anthropic',
           onProviderChange: vi.fn(),
+          onDismiss,
           modelMemory,
           agentSwitch: { currentVendor: 'cc', confirmBrowseSwitch, onSwitch },
         }),
@@ -1591,11 +2020,37 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-
-      fireEvent.click(row);
-      expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex');
-      // 模型确认与意图期配置不再触发确认；确认门只在 Agent 分段切换。
+      await waitFor(() =>
+        expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'),
+      );
+      expect(onDismiss).not.toHaveBeenCalled();
+      // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
+
+      fireEvent.click(
+        within(screen.getByRole('group', { name: /GPT-5\.5/ })).getByRole('option', {
+          name: 'high',
+        }),
+      );
+      await act(async () => {
+        await Promise.resolve();
+      });
+      // 第一笔事务仍在途时，后一次配置也立即交给调用方；调用方会同步登记目标
+      // session 的 pending token，再由 session 级协调器保证同会话顺序。
+      expect(onSwitch).toHaveBeenCalledTimes(2);
+      expect(setEffort).toHaveBeenNthCalledWith(
+        2,
+        'codex',
+        'zeta-codex',
+        'gpt-5.5',
+        'high',
+      );
+
+      await act(async () => {
+        releaseFirstSwitch();
+        await firstSwitch;
+      });
+      expect(observedSwitchEfforts).toEqual(['low', 'high']);
 
       fireEvent.click(screen.getByRole('tab', { name: /Claude/ }));
       await waitFor(() =>

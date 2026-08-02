@@ -26,8 +26,18 @@ export interface CindyMediaProviderSlice {
 }
 
 export interface CindyMediaCatalogConfig {
-  /** 可选清单 = 白名单 + 显示名(按目录出现序去重,first-wins)。 */
-  models: Array<{ id: string; label: string }>;
+  /**
+   * 可选清单 = 白名单 + 显示名(按目录出现序去重,first-wins)。
+   * `providerId` = 该条目的归属来源(first-wins 定格)——图像多来源后派发端按它
+   * 从 imageChannelRegistry 取执行通道,不再默认全部发 XD 网关(2026-07)。
+   */
+  models: Array<{
+    id: string;
+    label: string;
+    providerId: string;
+    /** 该来源是否支持图像编辑。仅对 image 类目有意义;video 类目始终为 true。 */
+    supportsEdit: boolean;
+  }>;
   /**
    * 默认 / 档位选型。null = 目录没有该类目的任何模型(能力暂不可用);
    * 非 null 时 standard / draft / best 三个值必定在 models 里。
@@ -42,27 +52,40 @@ export interface CindyMediaCatalogConfig {
  * - 停用过滤:`isModelDisabled(providerId, modelId)` 为 true 的条目不进清单
  *   (用户在 设置 → 模型供应商 停用的媒体模型;缺省 = 不过滤)。被停用条目
  *   **不占** first-wins 的 seen;目录默认值指向被停用型号时同样回落清单首项。
- * - 默认:取**首个声明了默认段**的供应商(今天只有 xd 一家);目录写的默认值
- *   若不在册(型号已下架但默认没跟着改)→ 回落清单首项,不让能力卡死。
+ * - 就绪过滤:`isProviderReady(providerId)` 为 false 的供应商**整段跳过**
+ *   (含其 defaults 声明)——执行通道凭证未配置的来源(如 Gemini 没填 key)
+ *   不能进白名单,否则清单长出"可选但必失败"的型号(2026-07 图像多来源)。
+ *   缺省 = 全就绪。设置页展示不受此影响(那边走 buildRegistry,不经本函数)。
+ * - 默认:取**首个声明了默认段**的供应商(今天只有 xd 一家;契约测试锁定
+ *   非 xd 内置供应商不得声明 imageDefaults,防 BUILTIN 顺序把默认顶掉);
+ *   目录写的默认值若不在册(型号已下架但默认没跟着改)→ 回落清单首项。
  * - 清单为空 → `defaults: null`(调用方必须先判空再用 defaults)。
  */
 export function deriveCindyMediaConfig(
   providers: readonly CindyMediaProviderSlice[],
   kind: 'image' | 'video',
   isModelDisabled?: (providerId: string, modelId: string) => boolean,
+  isProviderReady?: (providerId: string) => boolean,
+  isProviderEditReady?: (providerId: string) => boolean,
 ): CindyMediaCatalogConfig {
-  const models: Array<{ id: string; label: string }> = [];
+  const models: Array<{ id: string; label: string; providerId: string; supportsEdit: boolean }> = [];
   const seen = new Set<string>();
   let rawDefaults: { standard: string; draft?: string; best?: string } | undefined;
   for (const p of providers) {
+    if (isProviderReady && !isProviderReady(p.id)) continue;
     const list = kind === 'image' ? p.imageModels : p.videoModels;
     for (const m of list ?? []) {
       if (seen.has(m.id)) continue;
       if (isModelDisabled?.(p.id, m.id)) continue;
       seen.add(m.id);
-      models.push({ id: m.id, label: m.name });
+      models.push({
+        id: m.id,
+        label: m.name,
+        providerId: p.id,
+        supportsEdit: isProviderEditReady ? isProviderEditReady(p.id) : true,
+      });
     }
-    // 多供应商时首个声明默认的生效(今天只有 xd 一家)。
+    // 多供应商时首个声明默认的生效(契约测试锁定只有 xd 声明)。
     const d = kind === 'image' ? p.imageDefaults : p.videoDefaults;
     if (!rawDefaults && d) rawDefaults = d;
   }

@@ -49,6 +49,7 @@ describe('im default settings logic', () => {
         model: 'gpt-5.5',
         effort: 'high',
       },
+      pi: IM_DEFAULT_SETTINGS.agents.pi,
     });
   });
 });

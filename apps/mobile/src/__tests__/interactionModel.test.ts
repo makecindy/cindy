@@ -97,7 +97,7 @@ describe('interactionModel', () => {
       riskSummary: null,
       canAlwaysAllow: true,
     })).toEqual({
-      title: '可以只允许一次，也可以本会话总是允许',
+      title: '可以只允许一次，也可以本任务总是允许',
       detail: '工具: Bash',
     });
     expect(buildPermissionDecisionSummary({
@@ -683,6 +683,22 @@ describe('resolveInteractionResilient', () => {
     }, 's1', 'req-1', { behavior: 'allow' }, { sleep: noSleep });
     expect(resolveCalls).toBe(3);
     expect(pendingCalls).toBe(0);
+  });
+
+  it('BACKPRESSURE 自动退避重试，被控端未执行时不误报失败', async () => {
+    let resolveCalls = 0;
+    await mobileInteractionModel.resolveInteractionResilient({
+      resolveInteraction: async () => {
+        resolveCalls++;
+        if (resolveCalls === 1) {
+          throw Object.assign(new Error('buffer full'), { code: 'BACKPRESSURE' });
+        }
+      },
+      getPendingInteractions: async () => {
+        throw new Error('权威查询不应触发');
+      },
+    }, 's1', 'req-1', { behavior: 'allow' }, { sleep: noSleep });
+    expect(resolveCalls).toBe(2);
   });
 
   it('歧义失败(超时)后 requestId 已不在 pending → 视为已生效,按成功收敛', async () => {

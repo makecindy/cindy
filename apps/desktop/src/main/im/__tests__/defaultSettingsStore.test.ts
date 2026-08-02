@@ -36,6 +36,7 @@ import {
   readImDefaultSettings,
   readImDefaultSettingsState,
   resetImDefaultSettings,
+  resetImDefaultSettingsGlobal,
   resetImDefaultSettingsChannel,
   writeImDefaultSettingsPatch,
 } from '../defaultSettingsStore';
@@ -102,6 +103,21 @@ describe('im default settings store', () => {
     expect(persisted.agents).toBeDefined();
   });
 
+  it('persists a Pi-specific default instead of dropping it from sparse overrides', () => {
+    writeImDefaultSettingsPatch({
+      agents: {
+        pi: { providerId: 'openai', model: 'chatgpt/gpt-5.6', effort: 'high' },
+      },
+    });
+
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.global.agents.pi).toEqual({
+      providerId: 'openai',
+      model: 'chatgpt/gpt-5.6',
+      effort: 'high',
+    });
+  });
+
   it('preserves existing agent overrides when another agent is updated', () => {
     writeImDefaultSettingsPatch({
       agents: {
@@ -152,6 +168,12 @@ describe('im default settings store', () => {
         model: 'gpt-5.5',
         effort: 'high',
       },
+      // legacy root mirror 是 resolved 满射快照(global 才做 diff),pi 槽为系统默认。
+      pi: {
+        providerId: null,
+        model: 'claude-sonnet-5',
+        effort: 'high',
+      },
     });
   });
 
@@ -199,6 +221,32 @@ describe('im default settings store', () => {
     expect(migrated.channels.wechat).toEqual(migrated.global);
   });
 
+  it.each(['acceptEdits', 'bypassPermissions'] as const)(
+    'preserves legacy and persisted channel %s permission defaults',
+    (permissionMode) => {
+      const migrated = __testing.normalizeDocument({
+        ...IM_DEFAULT_SETTINGS,
+        permissionMode,
+      });
+
+      expect(migrated.global.permissionMode).toBe(permissionMode);
+      expect(migrated.channels.feishu.permissionMode).toBe(permissionMode);
+      expect(migrated.channels.wechat.permissionMode).toBe(permissionMode);
+      expect(migrated.channels.wecom.permissionMode).toBe(permissionMode);
+
+      const persisted = __testing.normalizeDocument({
+        schemaVersion: 3,
+        global: IM_DEFAULT_SETTINGS,
+        channels: {
+          wechat: { ...IM_DEFAULT_SETTINGS, permissionMode },
+          wecom: { ...IM_DEFAULT_SETTINGS, permissionMode },
+        },
+      });
+      expect(persisted.channels.wechat.permissionMode).toBe(permissionMode);
+      expect(persisted.channels.wecom.permissionMode).toBe(permissionMode);
+    },
+  );
+
   it('migrates v2 documents to auto permission and seeds an independent WeChat route', () => {
     const withoutPermission = {
       agentKind: IM_DEFAULT_SETTINGS.agentKind,
@@ -220,13 +268,16 @@ describe('im default settings store', () => {
     expect(migrated.channels.wechat.agentKind).toBe(IM_DEFAULT_SETTINGS.agentKind);
   });
 
-  it.each(['acceptEdits', 'bypassPermissions'] as const)(
-    'rejects %s for personal WeChat without changing saved defaults',
-    (permissionMode) => {
-      expect(() =>
-        writeImDefaultSettingsPatch({ permissionMode }, 'wechat'),
-      ).toThrow('WECHAT_PERMISSION_MODE_UNSUPPORTED');
-      expect(readImDefaultSettings('wechat').permissionMode).toBe('auto');
+  it.each([
+    ['wechat', 'acceptEdits'],
+    ['wechat', 'bypassPermissions'],
+    ['wecom', 'acceptEdits'],
+    ['wecom', 'bypassPermissions'],
+  ] as const)(
+    'persists %s/%s using the same defaults contract as Feishu',
+    (channel, permissionMode) => {
+      writeImDefaultSettingsPatch({ permissionMode }, channel);
+      expect(readImDefaultSettings(channel).permissionMode).toBe(permissionMode);
     },
   );
 
@@ -328,5 +379,23 @@ describe('im default settings store', () => {
     expect(readImDefaultSettingsState('feishu').isCustomized).toBe(false);
     expect(readImDefaultSettings('feishu')).toEqual(IM_DEFAULT_SETTINGS);
     expect(readImDefaultSettings('discord').agents['claude-code'].model).toBe('claude-sonnet-4-8');
+  });
+
+  it('resets global defaults without deleting channel overrides', () => {
+    writeImDefaultSettingsPatch({ agentKind: 'codex' });
+    writeImDefaultSettingsPatch({ permissionMode: 'bypassPermissions' }, 'feishu');
+    writeImDefaultSettingsPatch({ agentKind: 'codex' }, 'slack');
+
+    resetImDefaultSettingsGlobal();
+
+    expect(readImDefaultSettingsState().isCustomized).toBe(false);
+    expect(readImDefaultSettings()).toEqual(IM_DEFAULT_SETTINGS);
+    expect(readImDefaultSettings('feishu').permissionMode).toBe('bypassPermissions');
+    expect(readImDefaultSettings('slack').agentKind).toBe('codex');
+
+    const persisted = JSON.parse(fs.readFileSync(settingsFile(), 'utf-8'));
+    expect(persisted.global).toBeUndefined();
+    expect(persisted.channels.feishu.permissionMode).toBe('bypassPermissions');
+    expect(persisted.channels.slack.agentKind).toBe('codex');
   });
 });

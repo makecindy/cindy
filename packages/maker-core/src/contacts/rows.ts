@@ -80,14 +80,14 @@ export function mapEntity(row: ContactRow): ContactEntity {
 
 export function listIdentities(db: Database.Database, contactId: string): ContactIdentity[] {
   const rows = db
-    .prepare(`SELECT * FROM contact_identities WHERE contact_id = ? ORDER BY created_at`)
+    .prepare(`SELECT * FROM contact_identities WHERE contact_id = ? ORDER BY created_at, rowid`)
     .all(contactId) as IdentityRow[];
   return rows.map(mapIdentity);
 }
 
 export function listEvents(db: Database.Database, contactId: string): ContactEvent[] {
   const rows = db
-    .prepare(`SELECT * FROM contact_events WHERE contact_id = ? ORDER BY date DESC, created_at DESC`)
+    .prepare(`SELECT * FROM contact_events WHERE contact_id = ? ORDER BY date DESC, created_at DESC, rowid`)
     .all(contactId) as Array<{
     id: string;
     contact_id: string;
@@ -123,15 +123,15 @@ export function listRelations(db: Database.Database, contactId: string): Related
     .prepare(
       `SELECT r.id AS relation_id, r.relation, r.note, 'out' AS direction,
               c.id AS other_id, c.display_name AS other_name, c.kind AS other_kind,
-              r.created_at AS sort_key
+              r.created_at AS sort_key, r.rowid AS relation_order
        FROM contact_relations r JOIN contacts c ON c.id = r.to_id
        WHERE r.from_id = ?
        UNION ALL
        SELECT r.id, r.relation, r.note, 'in',
-              c.id, c.display_name, c.kind, r.created_at
+              c.id, c.display_name, c.kind, r.created_at, r.rowid
        FROM contact_relations r JOIN contacts c ON c.id = r.from_id
        WHERE r.to_id = ?
-       ORDER BY sort_key`,
+       ORDER BY sort_key, relation_order`,
     )
     .all(contactId, contactId) as Array<{
     relation_id: string;
@@ -178,4 +178,78 @@ export function buildFtsDoc(db: Database.Database, contactId: string): ContactFt
     events,
     relations,
   };
+}
+
+function appendFtsText(partsByContact: Map<string, string[]>, contactId: string, text: string): void {
+  const parts = partsByContact.get(contactId);
+  if (parts) {
+    parts.push(text);
+  } else {
+    partsByContact.set(contactId, [text]);
+  }
+}
+
+/**
+ * 集合查询版全量 FTS 投影。启动一致性检查与同步后全量重建会走这里，避免对每个
+ * contact 重复查询 identities / events / relations；单联系人写路径仍用 buildFtsDoc。
+ */
+export function buildAllFtsDocs(db: Database.Database): ContactFtsDoc[] {
+  const contacts = db.prepare(`SELECT * FROM contacts`).all() as ContactRow[];
+  const identitiesByContact = new Map<string, string[]>();
+  const eventsByContact = new Map<string, string[]>();
+  const relationsByContact = new Map<string, string[]>();
+
+  const identities = db
+    .prepare(`SELECT contact_id, value, label FROM contact_identities ORDER BY contact_id, created_at, rowid`)
+    .all() as Array<{ contact_id: string; value: string; label: string }>;
+  for (const identity of identities) {
+    appendFtsText(identitiesByContact, identity.contact_id, `${identity.value} ${identity.label}`.trim());
+  }
+
+  const events = db
+    .prepare(
+      `SELECT contact_id, date, text FROM contact_events ORDER BY contact_id, date DESC, created_at DESC, rowid`,
+    )
+    .all() as Array<{ contact_id: string; date: string; text: string }>;
+  for (const event of events) {
+    appendFtsText(eventsByContact, event.contact_id, `${event.date} ${event.text}`);
+  }
+
+  const relations = db
+    .prepare(
+      `SELECT r.from_id AS contact_id, r.rowid AS relation_order, r.relation, r.note,
+              c.display_name AS other_name, r.created_at AS sort_key
+       FROM contact_relations r JOIN contacts c ON c.id = r.to_id
+       UNION ALL
+       SELECT r.to_id, r.rowid, r.relation, r.note,
+              c.display_name, r.created_at
+       FROM contact_relations r JOIN contacts c ON c.id = r.from_id
+       ORDER BY contact_id, sort_key, relation_order`,
+    )
+    .all() as Array<{
+    contact_id: string;
+    relation: string;
+    note: string;
+    other_name: string;
+  }>;
+  for (const relation of relations) {
+    appendFtsText(
+      relationsByContact,
+      relation.contact_id,
+      `${relation.relation} ${relation.other_name} ${relation.note}`.trim(),
+    );
+  }
+
+  return contacts.map((row) => ({
+    contactId: row.id,
+    kind: row.kind as ContactFtsDoc['kind'],
+    status: row.status as ContactFtsDoc['status'],
+    name: row.display_name,
+    aliases: parseAliases(row.aliases).join(' '),
+    identities: identitiesByContact.get(row.id)?.join(' ') ?? '',
+    summary: row.summary,
+    narrative: row.narrative,
+    events: eventsByContact.get(row.id)?.join('\n') ?? '',
+    relations: relationsByContact.get(row.id)?.join('\n') ?? '',
+  }));
 }

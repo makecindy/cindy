@@ -9,7 +9,7 @@
 export const messages = {
   lifecycle: {
     online: '🟢 已上线，可以开聊啦~',
-    offline: '🔴 Cindy 已离线，暂时无法通过飞书继续聊天。',
+    offline: '🔴 Cindy 已离线，暂时无法通过当前 IM 继续聊天。',
     offlineNotice: '🔔 我之前离线过一段时间，期间的消息可能没有收到哦~',
   },
   ownerBinding: {
@@ -44,6 +44,10 @@ export const messages = {
     },
     /** Finalize: card text empty AND no files (rare — agent emitted nothing useful). */
     emptyReply: '_(空回复)_',
+    replyTruncated:
+      '\n\n---\n⚠️ 回复过长，飞书仅展示前半部分；完整内容仍可在 Cindy 桌面端查看。',
+    deliveryFailed:
+      '⚠️ 这条回复过长或包含飞书暂不支持的内容，请在 Cindy 桌面端查看完整回复。',
   },
 } as const;
 

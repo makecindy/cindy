@@ -426,8 +426,8 @@ export interface AgentIslandStrings {
 
 export const DEFAULT_AGENT_ISLAND_STRINGS: AgentIslandStrings = {
   appName: BRAND_NAME,
-  newConversationTitle: 'New Chat',
-  newConversationHint: 'Start a new conversation',
+  newConversationTitle: 'New Session',
+  newConversationHint: 'Start a new session',
   muteSound: 'Mute Agent Island',
   enableSound: 'Enable Agent Island sound',
   settings: 'Agent Island settings',

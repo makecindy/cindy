@@ -34,23 +34,32 @@ interface PermissionPromptProps {
 // Tool input → display text
 // ---------------------------------------------------------------------------
 
-function formatToolInput(toolName: string, input: Record<string, unknown>): string {
-  switch (toolName) {
-    case 'Bash':
-      return typeof input.command === 'string' ? input.command : JSON.stringify(input, null, 2);
-    case 'Read':
-    case 'Edit':
-    case 'Write':
-      return typeof input.file_path === 'string' ? input.file_path : JSON.stringify(input, null, 2);
-    case 'Glob':
-      return typeof input.pattern === 'string' ? input.pattern : JSON.stringify(input, null, 2);
-    case 'Grep':
-      return typeof input.pattern === 'string' ? input.pattern : JSON.stringify(input, null, 2);
-    default: {
-      const text = JSON.stringify(input, null, 2);
-      return text.length > 500 ? text.slice(0, 500) + '...' : text;
-    }
+function firstString(input: Record<string, unknown>, keys: string[]): string | undefined {
+  for (const k of keys) {
+    const v = input[k];
+    if (typeof v === 'string' && v.length > 0) return v;
   }
+  return undefined;
+}
+
+// harness 无关:CC 工具名首字母大写 + file_path;pi 内置工具名小写 + path/command。
+// 按语义分组(命令 / 文件 / 模式)归一化,任一命名命中就抽出清爽正文,否则回退 JSON。
+export function formatToolInput(toolName: string, input: Record<string, unknown>): string {
+  const name = toolName.toLowerCase();
+  const fallback = () => {
+    const text = JSON.stringify(input, null, 2);
+    return text.length > 500 ? text.slice(0, 500) + '...' : text;
+  };
+  if (name === 'bash') {
+    return firstString(input, ['command']) ?? fallback();
+  }
+  if (name === 'read' || name === 'edit' || name === 'write') {
+    return firstString(input, ['file_path', 'path', 'notebook_path']) ?? fallback();
+  }
+  if (name === 'glob' || name === 'grep' || name === 'find' || name === 'ls') {
+    return firstString(input, ['pattern', 'path', 'query']) ?? fallback();
+  }
+  return fallback();
 }
 
 function filterSessionScopedSuggestions(suggestions?: unknown[]): unknown[] {

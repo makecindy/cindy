@@ -70,6 +70,21 @@ describe('buildModelsFetchRequest', () => {
     expect(codex['authorization']).toBe('Bearer sk-test');
   });
 
+  it('Codex Anthropic Messages bridge sends provider-owned x-api-key and Bearer', () => {
+    const headers = buildModelsFetchRequest(
+      spec({
+        agent: 'codex',
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com',
+        headers: { 'Anthropic-Version': 'custom-version' },
+      }),
+    ).init.headers as Record<string, string>;
+    expect(headers['anthropic-version']).toBe('custom-version');
+    expect(headers['Anthropic-Version']).toBeUndefined();
+    expect(headers['x-api-key']).toBe('sk-test');
+    expect(headers.authorization).toBe('Bearer sk-test');
+  });
+
   it('omits auth headers without apiKey and keeps custom headers', () => {
     const h = buildModelsFetchRequest(spec({ apiKey: null, headers: { 'x-extra': '1' } })).init
       .headers as Record<string, string>;
@@ -202,6 +217,25 @@ describe('fetchProviderModels', () => {
     );
     expect(seenUrl).toBe('https://api.moonshot.cn/v1/models');
     expect(seenHeaders['x-api-key']).toBe('sk-test');
+    expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
+  });
+
+  it('end-to-end Codex Anthropic discovery uses the Messages authentication headers', async () => {
+    let seenHeaders: Record<string, string> = {};
+    const result = await fetchProviderModels(
+      spec({
+        agent: 'codex',
+        wireProtocol: 'anthropic-messages',
+        baseUrl: 'https://api.anthropic.com',
+      }),
+      async (_url, init) => {
+        seenHeaders = (init?.headers ?? {}) as Record<string, string>;
+        return fakeResponse(200, JSON.stringify({ data: [{ id: 'claude-opus-5' }] }));
+      },
+    );
+    expect(result.ok).toBe(true);
+    expect(seenHeaders['x-api-key']).toBe('sk-test');
+    expect(seenHeaders.authorization).toBe('Bearer sk-test');
     expect(seenHeaders['anthropic-version']).toBe('2023-06-01');
   });
 });

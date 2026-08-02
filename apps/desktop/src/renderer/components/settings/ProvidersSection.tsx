@@ -39,6 +39,8 @@ import {
   updateCustomProvider,
 } from '@/lib/customProviders';
 import { providerMonogram } from '@/lib/providerModels';
+import { PROVIDER_SECRET_IDS, type ProviderSecretId } from '../../../shared/providerSecrets';
+
 import {
   customProviderSubtitleForDisplay,
   providerSubtitleForDisplay,
@@ -52,6 +54,7 @@ import {
 import { CustomProviderDialog } from './CustomProviderDialog';
 import { AddProviderWizard, type WizardEntry } from './AddProviderWizard';
 import { OAuthDeviceCodeCard } from './OAuthDeviceCodeCard';
+import { SettingsTextInput } from './SettingsTextInput';
 import { buildUnionRows, UnifiedModelList } from './UnifiedModelList';
 import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
@@ -93,7 +96,7 @@ function providerIcon(p: ProviderView, size: number): ReactNode {
   if (hasProviderLogo(p.id, p.routing)) {
     return <ProviderLogoMark providerId={p.id} routing={p.routing} size={size} />;
   }
-  return <span className="text-15 font-semibold leading-none">{providerMonogram(p.name)}</span>;
+  return <span className="text-15 font-medium leading-none">{providerMonogram(p.name)}</span>;
 }
 
 // ---------------------------------------------------------------------------
@@ -164,7 +167,7 @@ function PillButton({
       onClick={onClick}
       disabled={disabled}
       className={cn(
-        'flex h-8 shrink-0 items-center justify-center rounded-full px-[14px] text-13 font-medium transition-colors',
+        'flex h-8 shrink-0 items-center justify-center rounded-full px-6 text-13 font-medium transition-colors',
         'border',
         disabled && 'cursor-not-allowed opacity-60',
       )}
@@ -207,7 +210,7 @@ function RowIconButton({
       type="button"
       onClick={onClick}
       aria-label={label}
-      className="flex h-7 w-7 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+      className="flex h-7 w-7 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
       style={{ color: 'var(--text-tertiary)' }}
     >
       {icon}
@@ -249,13 +252,20 @@ function DetailHeader({
   const singleAgentNote =
     provider && provider.agents.length === 1
       ? t('settings.providers.detail.singleAgentNote', {
-          agent: provider.agents[0] === 'claude-code' ? 'Claude Code' : 'Codex',
+          agent:
+            provider.agents[0] === 'claude-code'
+              ? 'Claude Code'
+              : provider.agents[0] === 'pi'
+                ? 'Pi'
+                : 'Codex',
         })
       : null;
 
   return (
     <div className={cn('flex flex-col px-5 py-4', detail && 'gap-3')}>
-      <div className="flex items-center gap-3">
+      {/* 可折行:最小窗口(右栏 ~275px)放不下「状态 + 操作」时整组换行,
+          不被卡片 overflow-hidden 裁掉(PR #1102 review 第三轮)。 */}
+      <div className="flex flex-wrap items-center gap-3 gap-y-2">
         <div
           className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg"
           style={{
@@ -306,7 +316,7 @@ function DetailHeader({
               <button
                 type="button"
                 aria-label={t('settings.providers.detail.moreActionsAria')}
-                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md transition-colors hover:bg-[var(--surface-hover)]"
+                className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full transition-colors hover:bg-[var(--surface-hover)]"
                 style={{ color: 'var(--text-tertiary)' }}
               >
                 <MoreHorizontal size={15} />
@@ -442,6 +452,12 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
   const { state, triggerLogin, cancelLogin, logout } = useCodexAuth();
+  // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
+  // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
+  // 才渲染(远端目录可能撤掉该能力)。
+  const imagesKeyRow = (provider?.imageModels?.length ?? 0) > 0 && (
+    <ImageApiKeyRow secretId="openai-images" provider={provider} />
+  );
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
@@ -510,7 +526,111 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       subtitle={t('settings.providers.openai.subtitle')}
       trailing={trailing}
       provider={provider}
+      detail={imagesKeyRow || undefined}
     />
+  );
+}
+
+/**
+ * 「图像生成 API key」行(2026-07 图像多来源):订阅 OAuth 供应商(OpenAI/xAI)的
+ * 图像通道走独立的平台 key,与登录态解耦。已配置显示掩码尾巴 + 清除;未配置显示
+ * 输入 + 保存。key 是 MAIN_ONLY 键,走内置 API-key 专用 IPC(builtinApiKey*),
+ * renderer 只能查存在性/写/删,通用 safeStorage 桥读不到明文。
+ */
+function ImageApiKeyRow({
+  secretId,
+  provider,
+}: {
+  secretId: ProviderSecretId;
+  /**
+   * 供应商快照(useProviders)。别的窗口保存/清除 key 会广播 PROVIDER_CHANGED →
+   * 快照刷新 → 对象换新 → 本 effect 重查存在性,多窗口状态不滞留。
+   */
+  provider?: ProviderView;
+}) {
+  const { t } = useTranslation();
+  const [busy, setBusy] = useState(false);
+  const [configured, setConfigured] = useState<boolean | null>(null);
+  const [draftKey, setDraftKey] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    void window.electronAPI.builtinApiKeyHas(secretId).then((has) => {
+      if (!cancelled) setConfigured(has);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [secretId, provider]);
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(secretId, key);
+      toast.success(t('settings.providers.imagesKey.toast.saved'));
+      setDraftKey('');
+      setConfigured(true);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.saveFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, secretId, t]);
+
+  const handleClear = useCallback(async () => {
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(secretId);
+      toast.success(t('settings.providers.imagesKey.toast.cleared'));
+      setConfigured(false);
+    } catch {
+      toast.error(t('settings.providers.imagesKey.toast.clearFailed'));
+    } finally {
+      setBusy(false);
+    }
+  }, [secretId, t]);
+
+  if (configured === null) return null;
+  return (
+    /* 可折行:最小窗口(右栏 ~250px 内容区)下「标签 + 掩码/输入框 + 按钮」
+       放不下时换行,操作始终可达(PR #1102 review 第八轮;与详情头折行同口径)。 */
+    <div className="flex flex-wrap items-center gap-2 gap-y-2 pt-2">
+      <span className="shrink-0 text-12 font-medium" style={{ color: 'var(--text-secondary)' }}>
+        {t('settings.providers.imagesKey.label')}
+      </span>
+      {configured ? (
+        <>
+          <span className="font-mono text-12" style={{ color: 'var(--text-tertiary)' }}>
+            ••••••••
+          </span>
+          <PillButton
+            label={t('settings.providers.imagesKey.clear')}
+            onClick={() => void handleClear()}
+            disabled={busy}
+          />
+        </>
+      ) : (
+        <>
+          <SettingsTextInput
+            value={draftKey}
+            onChange={setDraftKey}
+            placeholder={t('settings.providers.imagesKey.placeholder')}
+            size="sm"
+            mono
+            secret
+            className="min-w-0 flex-1"
+          />
+          <PillButton
+            label={t('settings.providers.imagesKey.save')}
+            onClick={() => void handleSave()}
+            disabled={busy || draftKey.trim().length === 0}
+          />
+        </>
+      )}
+    </div>
   );
 }
 
@@ -718,6 +838,129 @@ function GenericOAuthHeader({
   );
 }
 
+/**
+ * 内置 API-key 供应商详情头(如 Gemini 图像来源,2026-07 图像多来源)。
+ * 连接态 = key 已存(provider-service builtinApiKeyConnected);「更换」重写 key,
+ * 「断开」删除 key(safeStorage),断开后左栏行按既有契约消失、重连入口回向导。
+ * **已存 key 永不回显**:它是 MAIN_ONLY 键,renderer 只能查存在性/写/删(见
+ * ImageApiKeyRow 注释),架构上拿不到明文。输入框的明文切换只显形用户本次输入的
+ * 草稿(草稿本就在 renderer state 里),不构成凭证下放。
+ */
+function BuiltinApiKeyHeader({
+  provider,
+  onChanged,
+}: {
+  provider: ProviderView;
+  onChanged: () => void;
+}) {
+  const { t } = useTranslation();
+  const { confirm } = useConfirmDialog();
+  const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [draftKey, setDraftKey] = useState('');
+
+  const handleSave = useCallback(async () => {
+    const key = draftKey.trim();
+    if (!key) return;
+    setBusy(true);
+    try {
+      // 失败经统一 IPC 错误协议抛出(throwIpcError),这里 catch 即失败。
+      await window.electronAPI.builtinApiKeyStore(provider.id, key);
+      toast.success(t('settings.providers.builtinApiKey.toast.saved', { name: provider.name }));
+      setEditing(false);
+      setDraftKey('');
+      onChanged();
+    } catch {
+      toast.error(t('settings.providers.builtinApiKey.toast.saveFailed', { name: provider.name }));
+    } finally {
+      setBusy(false);
+    }
+  }, [draftKey, onChanged, provider.id, provider.name, t]);
+
+  const handleDisconnect = useCallback(async () => {
+    const confirmed = await confirm({
+      title: t('settings.providers.builtinApiKey.disconnectConfirm.title', { name: provider.name }),
+      description: t('settings.providers.builtinApiKey.disconnectConfirm.description', {
+        name: provider.name,
+      }),
+      confirmText: t('settings.providers.builtinApiKey.disconnectConfirm.confirm'),
+      cancelText: t('settings.providers.builtinApiKey.disconnectConfirm.cancel'),
+    });
+    if (!confirmed) return;
+    setBusy(true);
+    try {
+      await window.electronAPI.builtinApiKeyRemove(provider.id);
+      toast.success(
+        t('settings.providers.builtinApiKey.toast.disconnected', { name: provider.name }),
+      );
+      onChanged();
+    } catch {
+      toast.error(
+        t('settings.providers.builtinApiKey.toast.disconnectFailed', { name: provider.name }),
+      );
+    } finally {
+      setBusy(false);
+    }
+  }, [confirm, onChanged, provider.id, provider.name, t]);
+
+  const trailing = (
+    /* 三控件组自身可折行:最小窗口(内容区 ~235px)下「已连接 / 更换 key / 断开」
+       放不下时组内换行,不再作为整体溢出被裁(PR #1102 review 第九轮)。 */
+    <div className="flex min-w-0 flex-wrap items-center justify-end gap-2.5 gap-y-2">
+      {provider.connected && <ConnectedPill />}
+      <PillButton
+        label={t(
+          editing
+            ? 'settings.providers.button.cancel'
+            : 'settings.providers.builtinApiKey.replaceKey',
+        )}
+        onClick={() => {
+          setDraftKey('');
+          setEditing((v) => !v);
+        }}
+        disabled={busy}
+      />
+      {provider.connected && (
+        <PillButton
+          label={t('settings.providers.button.disconnect')}
+          onClick={() => void handleDisconnect()}
+          disabled={busy}
+        />
+      )}
+    </div>
+  );
+
+  const detail = editing ? (
+    <div className="flex items-center gap-2 pt-2">
+      <SettingsTextInput
+        value={draftKey}
+        onChange={setDraftKey}
+        placeholder={t('settings.providers.builtinApiKey.keyPlaceholder')}
+        size="sm"
+        mono
+        secret
+        className="min-w-0 flex-1"
+      />
+      <PillButton
+        label={t('settings.providers.builtinApiKey.saveKey')}
+        onClick={() => void handleSave()}
+        disabled={busy || draftKey.trim().length === 0}
+      />
+    </div>
+  ) : undefined;
+
+  return (
+    <DetailHeader
+      icon={providerIcon(provider, 18)}
+      title={provider.name}
+      subtitle={t('settings.providers.builtinApiKey.subtitle')}
+      trailing={trailing}
+      provider={provider}
+      detail={detail}
+    />
+  );
+}
+
 // ---------------------------------------------------------------------------
 // XD 网关(Cindy AI)—— managed gateway key(useApiKey)。
 // 套餐引导 / 计费展示待服务端接口就绪后单独实现(2026-07-20 决策:本次剥离)。
@@ -858,7 +1101,7 @@ function XdGatewayHeader({
     connected && syncStatus.state !== 'unsupported' ? (
       <div className="flex items-center gap-2.5 pl-12">
         <span
-          className="flex shrink-0 items-center rounded-md px-2 py-1 text-12"
+          className="flex shrink-0 items-center rounded-lg px-2 py-1 text-12"
           style={{
             backgroundColor: 'var(--surface-chip)',
             border: '1px solid var(--settings-integration-avatar-border)',
@@ -1030,7 +1273,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1083,7 +1326,7 @@ function ListRow({
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1151,7 +1394,7 @@ function SuggestionRow({
       className="flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors hover:bg-[var(--surface-hover)]"
     >
       <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-md opacity-70"
+        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg opacity-70"
         style={{
           backgroundColor: 'var(--settings-integration-avatar-bg)',
           border: '1px solid var(--settings-integration-avatar-border)',
@@ -1255,7 +1498,10 @@ export function ProvidersSection() {
       if (p.id === 'xd') continue;
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
-        if (p.connected || (p.id === 'openai' && openaiReconnectRequired)) rows.push(p);
+        // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
+        // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
+        const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
+        if (p.connected || (p.id === 'openai' && openaiReconnectRequired) || openaiHasImageCap) rows.push(p);
         continue;
       }
       if (
@@ -1373,13 +1619,16 @@ export function ProvidersSection() {
                 : 'apiKey';
           const apiKey =
             authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
+          // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
+          // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
           const r = await window.electronAPI.maker.fetchProviderModels({
             agent,
             baseUrl: rt.baseUrl,
             authMethod,
+            ...(rt.wireProtocol ? { wireProtocol: rt.wireProtocol } : {}),
             modelsUrl: rt.modelsUrl ?? null,
             apiKey,
-            ...(rt.headers ? { headers: rt.headers } : {}),
+            savedProviderId: p.id,
           });
           if (!r.ok || !r.models) continue;
           anyOk = true;
@@ -1459,6 +1708,9 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
+    if (p.source === 'builtin' && p.auth.method === 'apiKey' && (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)) {
+      return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
+    }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
     return (
       <CustomProviderHeader
@@ -1518,8 +1770,8 @@ export function ProvidersSection() {
               {suggestions.length > 0 && (
                 <>
                   <span
-                    className="px-2.5 pb-1 pt-3 text-11 font-semibold uppercase"
-                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.4px' }}
+                    className="px-2.5 pb-1 pt-3 text-11 font-medium uppercase"
+                    style={{ color: 'var(--text-tertiary)', letterSpacing: '0.5px' }}
                   >
                     {t('settings.providers.detect.groupLabel')}
                   </span>
@@ -1555,8 +1807,9 @@ export function ProvidersSection() {
             </div>
           </div>
 
-          {/* 右栏详情 */}
-          <div className="flex min-w-0 flex-1 flex-col overflow-y-auto">
+          {/* 右栏详情:详情头/条带固定,仅模型列表(UnifiedModelList 内部)滚动 ——
+              长清单滚动时供应商名称、连接状态与工具行不随之滚走(2026-07 定稿)。 */}
+          <div className="flex min-w-0 flex-1 flex-col">
             {cindySigninActive ? (
               <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center">
                 <div

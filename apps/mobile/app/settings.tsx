@@ -277,6 +277,7 @@ export default function SettingsScreen() {
         checkOtaUpdate: () => Updates.checkForUpdateAsync(),
         fetchOtaUpdate: () => Updates.fetchUpdateAsync(),
         reload: () => Updates.reloadAsync(),
+        isEmergencyLaunch: () => currentlyRunning.isEmergencyLaunch,
         onPhase: (phase) => setUpdatePhase(phase),
       });
       setUpdateOutcome(outcome);
@@ -288,6 +289,9 @@ export default function SettingsScreen() {
         setUpdatePhase('uptodate');
       } else if (outcome.kind === 'reloading') {
         setUpdatePhase('downloading');
+      } else if (outcome.kind === 'restart-required') {
+        // 更新已经拿到了,只是本进程重启不了 —— 不是失败态,提示文案负责说明要手动重开。
+        setUpdatePhase('uptodate');
       } else if (outcome.kind === 'busy') {
         setUpdatePhase('idle');
       } else {
@@ -296,7 +300,14 @@ export default function SettingsScreen() {
     } finally {
       updateCheckInFlightRef.current = false;
     }
-  }, [bundleCheckEnabled, checkBundleUpdate, t, updateCheckEnabled, updatesEnabled]);
+  }, [
+    bundleCheckEnabled,
+    checkBundleUpdate,
+    currentlyRunning.isEmergencyLaunch,
+    t,
+    updateCheckEnabled,
+    updatesEnabled,
+  ]);
 
   const updateSelfDeviceNameDraft = useCallback((value: string) => {
     selfDeviceNameDraftRef.current = value;

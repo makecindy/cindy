@@ -115,9 +115,9 @@ export function registerGetChatHistoryTool(
         .optional()
         .describe('ISO 8601 (不含): 过滤 messages.createdAt < to。'),
       agent_kind: z
-        .enum(['cc', 'codex'])
+        .enum(['cc', 'codex', 'pi'])
         .optional()
-        .describe('按 session.agentKind 过滤; 不传 = 两者都返。'),
+        .describe('按 session.agentKind 过滤; 不传 = 全部返。'),
       roles: z
         .array(z.enum(ROLE_VALUES))
         .optional()

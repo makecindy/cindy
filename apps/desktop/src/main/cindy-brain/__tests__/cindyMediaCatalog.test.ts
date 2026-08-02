@@ -26,12 +26,12 @@ const XD: CindyMediaProviderSlice = {
 };
 
 describe('deriveCindyMediaConfig — 正常目录', () => {
-  it('清单按目录序、label 取 name;draft/best 缺省回落 standard', () => {
+  it('清单按目录序、label 取 name、providerId 记归属;draft/best 缺省回落 standard', () => {
     const image = deriveCindyMediaConfig([XD], 'image');
     expect(image.models).toEqual([
-      { id: 'gpt-image-2', label: 'GPT Image 2' },
-      { id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image' },
-      { id: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image' },
+      { id: 'gpt-image-2', label: 'GPT Image 2', providerId: 'xd', supportsEdit: true },
+      { id: 'gemini-3-pro-image', label: 'Gemini 3 Pro Image', providerId: 'xd', supportsEdit: true },
+      { id: 'gemini-3.1-flash-image', label: 'Gemini 3.1 Flash Image', providerId: 'xd', supportsEdit: true },
     ]);
     // best 没声明 → 回落 standard。
     expect(image.defaults).toEqual({
@@ -159,5 +159,71 @@ describe('deriveCindyMediaConfig — 停用过滤(model-disable override)', () =
 
   it('不传谓词 = 不过滤(既有调用方为空的兼容路径)', () => {
     expect(deriveCindyMediaConfig([XD], 'image').models).toHaveLength(3);
+  });
+});
+
+describe('deriveCindyMediaConfig — 就绪过滤(isProviderReady,2026-07 图像多来源)', () => {
+  const GEMINI: CindyMediaProviderSlice = {
+    id: 'gemini',
+    imageModels: [{ id: 'gemini/gemini-3-pro-image', name: 'Gemini 3 Pro Image' }],
+  };
+
+  it('未就绪的供应商整段跳过(含其 defaults 声明),不长出"可选但必失败"的型号', () => {
+    const cfg = deriveCindyMediaConfig([XD, GEMINI], 'image', undefined, (id) => id === 'xd');
+    expect(cfg.models.map((m) => m.id)).toEqual([
+      'gpt-image-2',
+      'gemini-3-pro-image',
+      'gemini-3.1-flash-image',
+    ]);
+    // 未就绪供应商若声明了 defaults,同样不参与选型。
+    const withDefaults = deriveCindyMediaConfig(
+      [{ ...GEMINI, imageDefaults: { standard: 'gemini/gemini-3-pro-image' } }, XD],
+      'image',
+      undefined,
+      (id) => id === 'xd',
+    );
+    expect(withDefaults.defaults?.standard).toBe('gpt-image-2');
+  });
+
+  it('全部未就绪 → 能力不可用;不传谓词 = 全就绪(既有调用方兼容路径)', () => {
+    const none = deriveCindyMediaConfig([XD, GEMINI], 'image', undefined, () => false);
+    expect(none.models).toEqual([]);
+    expect(none.defaults).toBeNull();
+    const all = deriveCindyMediaConfig([XD, GEMINI], 'image');
+    expect(all.models.map((m) => m.providerId)).toEqual(['xd', 'xd', 'xd', 'gemini']);
+  });
+
+  it('providerId 归属按 first-wins 定格:同 id 先到者得,后来的供应商不改归属', () => {
+    const clash: CindyMediaProviderSlice = {
+      id: 'other',
+      imageModels: [{ id: 'gpt-image-2', name: '重复条目' }],
+    };
+    const cfg = deriveCindyMediaConfig([XD, clash], 'image');
+    expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.providerId).toBe('xd');
+  });
+});
+
+describe('deriveCindyMediaConfig — supportsEdit(仅生成来源,2026-07)', () => {
+  const XAI: CindyMediaProviderSlice = {
+    id: 'xai',
+    imageModels: [{ id: 'xai/aurora', name: 'Aurora' }],
+  };
+
+  it('不传 isProviderEditReady → 所有条目 supportsEdit=true(兼容路径)', () => {
+    const cfg = deriveCindyMediaConfig([XD, XAI], 'image');
+    expect(cfg.models.every((m) => m.supportsEdit)).toBe(true);
+  });
+
+  it('isProviderEditReady 为 false 的来源条目 supportsEdit=false,仍进生成清单', () => {
+    const cfg = deriveCindyMediaConfig(
+      [XD, XAI],
+      'image',
+      undefined,
+      () => true,
+      (id) => id !== 'xai',
+    );
+    expect(cfg.models.map((m) => m.id)).toContain('xai/aurora');
+    expect(cfg.models.find((m) => m.id === 'xai/aurora')?.supportsEdit).toBe(false);
+    expect(cfg.models.find((m) => m.id === 'gpt-image-2')?.supportsEdit).toBe(true);
   });
 });

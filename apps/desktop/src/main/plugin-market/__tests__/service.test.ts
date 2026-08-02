@@ -57,12 +57,22 @@ vi.mock('../download.js', () => ({
 
 import type { VisiblePluginDetail, VisiblePluginSummary } from '@cindy/plugin-protocol';
 
+import { withGhostInstallLock } from '../../cindy-brain/ghostInstallLock';
 import { PluginMarketLedger } from '../ledger';
 import { PluginMarketService } from '../service';
 import type { PluginMarketApi } from '../api';
 
 const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
+
+/** 手动可控 deferred,用于精确编排"安装在飞行中"的交错。 */
+function deferred(): { promise: Promise<void>; resolve: () => void } {
+  let resolve!: () => void;
+  const promise = new Promise<void>((r) => {
+    resolve = r;
+  });
+  return { promise, resolve };
+}
 
 afterEach(() => {
   runtime.ghosts = [];
@@ -269,6 +279,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'authentication-required',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -285,6 +296,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'not-configured',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -296,6 +308,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: 'session-switching',
+      customSourceNames: [],
     });
     expect(h.api.listAll).not.toHaveBeenCalled();
   });
@@ -466,6 +479,43 @@ describe('PluginMarketService migration and defaultInstall', () => {
     });
   });
 
+  it('服务端安装持 ghostId 锁,覆盖落位到溯源写入整段', async () => {
+    // 少了这把锁,本地 .cindy 装入能在包检查窗口里落入同 id 的包,随后被本次安装
+    // 当作更新目标覆盖;账本写入若在锁外,本地装入还能插在"落位"与"写溯源"之间,
+    // 让账本认领一个已被替换的包(服务端记录不带 manifestDigest,投影判不出来)。
+    // 这里用真实的 withGhostInstallLock(service 直接 import,未被 mock)观察:
+    // 安装在飞行中时,外部同 id 请求必须进不来;账本已写入后才放行。
+    const item = summary();
+    const h = harness([item]);
+    const installGate = deferred();
+    runtime.install.mockImplementation(async () => {
+      await installGate.promise;
+      return { manifest: manifest(), dir: '/userData/cindy-brain/cindy-test', enabled: true };
+    });
+
+    const order: string[] = [];
+    const installing = h.service.install(item.id, {
+      expectedReleaseId: item.currentRelease.id,
+    });
+    // 等安装推进到持锁并阻塞在 runtime.install 上。
+    await vi.waitFor(() => expect(runtime.install).toHaveBeenCalled());
+    const outsider = withGhostInstallLock(item.ghostId, async () => {
+      // 进入临界区的那一刻,账本必须已经写完(写入在锁内)。
+      order.push(
+        h.ledger.installationForGhost(item.ghostId)?.installed === true
+          ? 'outsider:ledger-written'
+          : 'outsider:ledger-missing',
+      );
+    });
+    await Promise.resolve();
+    // 安装仍持锁(阻塞在落位上):外部同 id 请求不得进入。
+    expect(order).toEqual([]);
+    installGate.resolve();
+    await Promise.all([installing, outsider]);
+    // 进入时看到的是"账本已写",而不是"包已落位但溯源还没写"的中间态。
+    expect(order).toEqual(['outsider:ledger-written']);
+  });
+
   it('rejects a non-public plugin returned to account-free local mode', async () => {
     runtime.session = {
       mode: 'local',
@@ -496,6 +546,7 @@ describe('PluginMarketService migration and defaultInstall', () => {
     await expect(h.service.snapshot()).resolves.toEqual({
       items: [],
       unavailableReason: null,
+      customSourceNames: [],
     });
     expect(h.api.listAll).toHaveBeenCalledOnce();
   });

@@ -10,9 +10,10 @@ vi.mock('electron', () => ({
   safeStorage: { isEncryptionAvailable: vi.fn(() => false) },
 }));
 
-import { buildRouterPrompt, parseRouterOutput } from '../maker-ipc/help';
+import { buildRouterPrompt, parseRouterOutput, pickHelpAgent } from '../maker-ipc/help';
 import { HELP_KNOWLEDGE } from '../maker-ipc/helpKnowledge.generated';
 import type { HelpMessage } from '../../shared/helpTypes';
+import type { AgentKind } from '@cindy/maker-core';
 
 const KNOWN = new Set(HELP_KNOWLEDGE.map((d) => d.id));
 
@@ -37,6 +38,31 @@ describe('parseRouterOutput', () => {
 
   it('dedupes and tolerates whitespace, newlines and case', () => {
     expect(parseRouterOutput('  PROVIDERS\n providers ', KNOWN)).toEqual(['providers']);
+  });
+});
+
+describe('pickHelpAgent', () => {
+  const makeMaker = (available: AgentKind[], authed: AgentKind[]) => ({
+    listAvailableAgents: () => available,
+    getAgentAuthState: async (kind: AgentKind) => ({ authenticated: authed.includes(kind) }),
+  }) as unknown as Parameters<typeof pickHelpAgent>[0];
+
+  it('never selects Pi for the help oneShot even when it is the most recent / only-authed agent', async () => {
+    // PiAgent 未实现 oneShot;选中它会让 HELP_ASK 抛 not-implemented 而 no-answer。
+    // 即便 Pi 是最近会话(preferred)且已鉴权,只要 Claude/Codex 兜底可用就应选它们。
+    await expect(
+      pickHelpAgent(makeMaker(['pi', 'codex'], ['pi', 'codex']), 'pi'),
+    ).resolves.toBe('codex');
+    // 机器上只有 Pi(且已鉴权)时,宁可返回 null 走 no-answer,也不选会抛错的 Pi。
+    await expect(
+      pickHelpAgent(makeMaker(['pi'], ['pi']), 'pi'),
+    ).resolves.toBeNull();
+  });
+
+  it('still honors a supported preferred agent over the static priority', async () => {
+    await expect(
+      pickHelpAgent(makeMaker(['claude-code', 'codex'], ['claude-code', 'codex']), 'codex'),
+    ).resolves.toBe('codex');
   });
 });
 

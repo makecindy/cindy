@@ -709,7 +709,7 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('agent 详单必须与槽成对，且目前只接受 background: true', () => {
+  it('agent 详单必须与槽成对，且只接受 background / errand 两项加档', () => {
     expect(
       validateGhostManifest({
         ...goodChipManifest(),
@@ -735,6 +735,56 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         ...goodChipManifest(),
         slots: ['panel', 'agent'],
         agent: { background: true, command: 'hidden' },
+      }).ok,
+    ).toBe(false);
+  });
+
+  it('agent.errand 派活加档:单列高风险权限,可与 background 并存(2026-07-31)', () => {
+    const errand = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { errand: true },
+    });
+    expect(errand.ok).toBe(true);
+    if (!errand.ok) return;
+    expect(errand.manifest.agent).toEqual({ errand: true });
+    expect(ghostPermissionItems(errand.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'agent:errand',
+          kind: 'agent',
+          labelKey: 'agentErrand',
+          detailKey: 'agentErrandDetail',
+        }),
+      ]),
+    );
+
+    const both = validateGhostManifest({
+      ...goodChipManifest(),
+      slots: ['panel', 'agent'],
+      agent: { background: true, errand: true },
+    });
+    expect(both.ok).toBe(true);
+    if (!both.ok) return;
+    expect(both.manifest.agent).toEqual({ background: true, errand: true });
+    expect(ghostPermissionItems(both.manifest).map((item) => item.key)).toEqual(
+      expect.arrayContaining(['agent:user-action', 'agent:background', 'agent:errand']),
+    );
+
+    // errand: false 与 background 双双非 true = 详单没意义,拒(应省略字段)。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: false },
+      }).ok,
+    ).toBe(false);
+    // errand 非布尔 → 拒。
+    expect(
+      validateGhostManifest({
+        ...goodChipManifest(),
+        slots: ['panel', 'agent'],
+        agent: { errand: 'yes' },
       }).ok,
     ).toBe(false);
   });
@@ -1215,6 +1265,42 @@ describe('ghost · cindy 能力详单校验(字段旧名 model 别名兼容)', (
       media: ['deposit'],
     });
   });
+
+  // 2026-07-31 快问快答:text 类目独立落位(同 #784 的落位纪律),权限清单
+  // 单独成行(cindy:text.oneshot,带固定说明)。
+  it('text 类目落进 cindy.text,并生成 cindy:text.oneshot 权限行', () => {
+    const v = validateGhostManifest(chipWithModel({ text: ['oneshot'] }));
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    if (!v.ok) return;
+    expect(v.manifest.cindy).toEqual({ text: ['oneshot'] });
+    expect(v.manifest.cindy?.image).toBeUndefined();
+    expect(v.manifest.cindy?.video).toBeUndefined();
+    expect(ghostPermissionItems(v.manifest)).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          key: 'cindy:text.oneshot',
+          kind: 'cindy',
+          labelKey: 'cindyTextOneshot',
+          detailKey: 'cindyTextOneshotDetail',
+        }),
+      ]),
+    );
+  });
+
+  it('text 类目未知动作 / 空数组 → 拒;四类目可同时声明', () => {
+    expect(validateGhostManifest(chipWithModel({ text: ['complete'] })).ok).toBe(false);
+    expect(validateGhostManifest(chipWithModel({ text: [] })).ok).toBe(false);
+    const v = validateGhostManifest(
+      chipWithModel({ image: ['generate'], video: ['edit'], media: ['deposit'], text: ['oneshot'] }),
+    );
+    expect(v.ok, JSON.stringify(v)).toBe(true);
+    expect(v.ok && v.manifest.cindy).toEqual({
+      image: ['generate'],
+      video: ['edit'],
+      media: ['deposit'],
+      text: ['oneshot'],
+    });
+  });
 });
 
 describe('ghost · model → cindy 旧名兼容(2026-07-11 更名)', () => {
@@ -1253,9 +1339,9 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
   });
 
   it('topics 合法值放行并归一化进清单', () => {
-    const r = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    const r = validateGhostManifest(withSub({ topics: ['turn', 'session', 'activity'] }));
     expect(r.ok).toBe(true);
-    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session'] });
+    if (r.ok) expect(r.manifest.subscribe).toEqual({ topics: ['turn', 'session', 'activity'] });
   });
 
   it('hooks 必须搭配 launch:"resident",否则拒装', () => {
@@ -1300,6 +1386,57 @@ describe('ghost · subscribe 订阅详单校验(卡槽①,2026-07-12)', () => {
     const bare = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'subscribe'] });
     if (bare.ok) {
       expect(ghostPermissionItems(bare.manifest).some((i) => i.kind === 'subscribe')).toBe(false);
+    }
+  });
+
+  it('activity 单列一项权限,从 turn 加订阅 activity 计入扩张;turn/session 清单逐字不变', () => {
+    const turnOnly = validateGhostManifest(withSub({ topics: ['turn'] }));
+    const withActivity = validateGhostManifest(withSub({ topics: ['turn', 'activity'] }));
+    const turnAndSession = validateGhostManifest(withSub({ topics: ['turn', 'session'] }));
+    expect(turnOnly.ok && withActivity.ok && turnAndSession.ok).toBe(true);
+    if (!turnOnly.ok || !withActivity.ok || !turnAndSession.ok) return;
+
+    // activity 是独立一项(带自己的 label/detail),不并进固定的 subscribe:topics。
+    expect(ghostPermissionItems(withActivity.manifest).map((i) => i.key)).toContain(
+      'subscribe:topics:activity',
+    );
+    expect(
+      ghostPermissionItems(withActivity.manifest).find((i) => i.key === 'subscribe:topics:activity'),
+    ).toMatchObject({ labelKey: 'subscribeActivity', detailKey: 'subscribeActivityDetail' });
+
+    // 存量插件更新时新增 activity 必须被权限扩张检测抓到(plugin-market 要求复核)。
+    const added = diffGhostPermissionItems(turnOnly.manifest, withActivity.manifest).added;
+    expect(added.map((i) => i.key)).toEqual(['subscribe:topics:activity']);
+
+    // 只动 turn / session 的存量插件权限清单不 churn(批准状态不受影响)。
+    expect(diffGhostPermissionItems(turnOnly.manifest, turnAndSession.manifest).added).toEqual([]);
+    expect(ghostPermissionItems(turnAndSession.manifest).filter((i) => i.kind === 'subscribe')).toEqual(
+      ghostPermissionItems(turnOnly.manifest).filter((i) => i.kind === 'subscribe'),
+    );
+
+    // 取消订阅 activity 应报为 removed。
+    expect(
+      diffGhostPermissionItems(withActivity.manifest, turnOnly.manifest).removed.map((i) => i.key),
+    ).toEqual(['subscribe:topics:activity']);
+  });
+
+  it('纯 activity 订阅不显示 turn/session 那行:确认框不凭空多报能力', () => {
+    const activityOnly = validateGhostManifest(withSub({ topics: ['activity'] }));
+    expect(activityOnly.ok).toBe(true);
+    if (!activityOnly.ok) return;
+    const keys = ghostPermissionItems(activityOnly.manifest)
+      .filter((i) => i.kind === 'subscribe')
+      .map((i) => i.key);
+    // 网关不会给它投 turn / session,所以固定的 subscribe:topics 一行不该出现。
+    expect(keys).toEqual(['subscribe:topics:activity']);
+  });
+
+  it('订阅 session 或 turn 任一都产出旧 subscribe:topics(存量批准状态不 churn)', () => {
+    for (const topics of [['turn'], ['session'], ['turn', 'session'], ['session', 'activity']]) {
+      const v = validateGhostManifest(withSub({ topics }));
+      expect(v.ok).toBe(true);
+      if (!v.ok) return;
+      expect(ghostPermissionItems(v.manifest).map((i) => i.key)).toContain('subscribe:topics');
     }
   });
 

@@ -21,6 +21,11 @@ import { extractIpcError } from '@/utils/ipcError';
 import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import { getTabKind } from './registry';
 import { unmarkPopupSpawnedTab } from './lib/popupTabs';
+import {
+  clearGhostTabPinOnClose,
+  ghostIdOfTabKind,
+  markGhostTabOpened,
+} from './lib/pinnedGhostTabs';
 import type { TabKindId, TabState } from './types';
 
 const log = createLogger('rightSidebar.store');
@@ -486,13 +491,18 @@ export async function ensureHydrated(sessionId: string): Promise<void> {
  * 不需要对称的"回滚回调":IPC 失败回滚时 store 自己走 `forgetClosedTab(id)` 把
  * 挂在这个 tabId 上的旁路记录(含 popup 标记)清掉 —— 与关闭路径同一个收尾函数。
  * 否则 DB / IPC 异常期间反复触发 popup,标记集合会随进程生命周期无界增长。
+ *
+ * `opts.activate === false`:追加 tab 但**不抢激活位**(cache 与 DB 的 active 都
+ * 保持原样)。钉住面板的跨会话自动补挂用 —— 用户切到某会话时补挂的页签不该
+ * 把他正看着的 tab 顶掉。默认 true 维持既有语义(用户手动加 tab = 看它)。
  */
 export async function addTab(
   sessionId: string,
   kind: TabKindId,
   initialState: unknown = null,
-  opts?: { onOptimisticAdd?: (tabId: string) => void },
+  opts?: { onOptimisticAdd?: (tabId: string) => void; activate?: boolean },
 ): Promise<TabState> {
+  const activate = opts?.activate !== false;
   const prev = getBucket(sessionId);
   if (prev.tabs.length >= MAX_TABS_PER_SESSION) {
     throw new Error(`session ${sessionId} already has ${MAX_TABS_PER_SESSION} tabs (limit reached)`);
@@ -503,7 +513,10 @@ export async function addTab(
   const id = makeTabId();
   const position = prev.tabs.length;
   const newTab: TabState = { id, kind, state: initialState };
-  setBucket(sessionId, { tabs: [...prev.tabs, newTab], activeTabId: id });
+  setBucket(sessionId, {
+    tabs: [...prev.tabs, newTab],
+    activeTabId: activate ? id : prev.activeTabId,
+  });
   try {
     opts?.onOptimisticAdd?.(id);
   } catch {
@@ -520,7 +533,7 @@ export async function addTab(
       const create = (async () => {
         await ipc.upsert({ id, sessionId, kind, position, state: initialState });
         rowCommitted = true;
-        await ipc.setActive({ sessionId, id });
+        if (activate) await ipc.setActive({ sessionId, id });
       })();
       const persisted = create.then(
         () => true,
@@ -575,6 +588,11 @@ export async function addOrFocusSingletonTab(
   kind: TabKindId,
   initialState: unknown = null,
 ): Promise<TabState> {
+  // 用户显式打开插件面板的唯一汇聚点(「+」菜单 / EmptyState / agent
+  // open-ghost-tab 都走这里):首次打开按默认写入钉住条目(见 pinnedGhostTabs
+  // 的三态语义);已有显式 override(含 pinned:false)保持不动。
+  const openedGhostId = ghostIdOfTabKind(kind);
+  if (openedGhostId) markGhostTabOpened(openedGhostId);
   const bucket = getBucket(sessionId);
   const existing = bucket.tabs.find((t) => t.kind === kind);
   if (existing) {
@@ -666,7 +684,7 @@ export async function closeTab(
     }
   }
 
-  return enqueueCloseMutation(sessionId, async () => {
+  const mutation = enqueueCloseMutation(sessionId, async () => {
     // 队列内重取快照:排在前面的关闭可能已经动过这个 bucket(甚至已经关掉了本
     // tab)。用旧快照算 nextTabs / 回滚基线正是并发出错的根源。
     const prev = getBucket(sessionId);
@@ -799,6 +817,15 @@ export async function closeTab(
       }
       throw err;
     }
+  });
+  // 关闭钉住中的插件面板页签 = 取消钉住并关闭:不清的话 Shell 的自动补挂会把
+  // 它立刻加回来,页签"关不掉"。挂在变更段成功之后 —— close 失败回滚时 tab
+  // 还在,钉住状态必须原样保留。所有关闭入口(pill X / 右键菜单 / ⌘W /
+  // closeAllTabs / agent tab-op)都汇聚到本函数,语义不会因入口不同而漂移。
+  const closedGhostId = ghostIdOfTabKind(tab.kind);
+  if (!closedGhostId) return mutation;
+  return mutation.then(() => {
+    clearGhostTabPinOnClose(closedGhostId);
   });
 }
 

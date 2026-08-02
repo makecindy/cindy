@@ -12,6 +12,8 @@
 
 import {
   getModel,
+  connectedProvidersForAgent,
+  isAgentSelectableModel,
   isModelDisabled,
   isProviderDisabled,
   modelSupportsFastMode,
@@ -38,6 +40,30 @@ import {
  */
 async function listRouteGuardProviders(): Promise<ProviderView[]> {
   return getDesktopProviderService().listProviders({ catalog: getActiveCatalog() });
+}
+
+/**
+ * 无模型的 headless 调度不能给 Pi 硬塞 Claude 型号：Pi 的可用面由实时连接来源
+ * 决定。按模型选择器同一 rail（已连接、runtime 可用、未停用）取首个可聊天模型，
+ * 并把 providerId 与 model 成对返回，避免 BYOM 同名模型落到 Cindy 默认路由。
+ */
+export async function resolveDefaultScheduleRoute(
+  agent: AgentKind,
+  preferredProviderId?: string | null,
+): Promise<{ model: string; providerId: string } | null> {
+  const views = await listRouteGuardProviders();
+  const connected = connectedProvidersForAgent(views, agent);
+  const candidates = preferredProviderId
+    ? connected.filter((provider) => provider.id === preferredProviderId)
+    : connected;
+  for (const provider of candidates) {
+    for (const model of provider.models[agent] ?? []) {
+      if (model.disabled === true) continue;
+      if (!isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) continue;
+      return { model: model.id, providerId: provider.id };
+    }
+  }
+  return null;
 }
 
 /** 该 agent 的静态原生默认来源偏好(nativeDefaultSourceId 的无 rail 近似)。 */
@@ -194,6 +220,8 @@ export async function resolveRouteCopyCapabilities(
 const DEFAULT_ONESHOT_MODEL: Record<AgentKind, string> = {
   'claude-code': 'claude-haiku-4-5',
   codex: 'gpt-5.4-mini',
+  // pi oneShot 未实现(BaseAgent 默认抛 NotSupported);占位与 claude 同款网关小模型。
+  pi: 'claude-haiku-4-5',
 };
 
 /**

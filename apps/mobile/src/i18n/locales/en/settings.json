@@ -31,6 +31,7 @@
     "upToDate": "Already up to date",
     "bundleUpToDateNoOta": "App package is up to date; this version does not support OTA updates",
     "downloadedRestarting": "Update downloaded, restarting",
+    "downloadedRestartRequired": "Update downloaded. Fully quit the app and reopen it to apply.",
     "bundleCheckFailed": "Could not check for app package updates. Try again later.",
     "checkFailedDetail": "Update check failed: {{detail}}",
     "checkFailed": "Update check failed. Try again later."
@@ -76,15 +77,19 @@
   },
   "updateInfo": {
     "embedded": "With app package",
+    "embeddedFallback": "With app package (OTA not applied)",
     "unknown": "Unknown",
     "source": "Running Source",
     "sourceEmbedded": "Embedded (with app package)",
+    "sourceEmergencyFallback": "Embedded (emergency launch; OTA not applied)",
     "sourceOta": "OTA update",
     "updateId": "Update ID",
     "updatedAt": "Updated At",
     "channel": "Channel",
     "runtime": "Runtime",
-    "otaMarker": "OTA Marker"
+    "otaMarker": "OTA Marker",
+    "emergencyLaunch": "Emergency Launch",
+    "emergencyLaunchYes": "Yes (OTA cannot apply in this run)"
   },
   "legal": {
     "sectionTitle": "Legal",

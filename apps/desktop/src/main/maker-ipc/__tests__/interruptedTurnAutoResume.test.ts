@@ -195,6 +195,33 @@ describe('isSubstantiveProgressEvent', () => {
     expect(isSubstantiveProgressEvent({ type: 'text', data: { text: 123 } })).toBe(false);
   });
 
+  // 两侧 translator 转发的 text block / delta 内容是任意的,纯空白同样会原样透出。算成产出
+  // 的话:空白 delta 可以让连续失败计数永远停在 1/5(绕过上限),历史里还会显示成
+  // 「已重新连接」—— 而用户一个字都没看到(codex P1)。
+  it('rejects whitespace-only text (用户什么都没看到,不能算产出)', () => {
+    for (const text of [' ', '\n', '\n\n', '\t', '  \r\n  ']) {
+      expect(
+        isSubstantiveProgressEvent({ type: 'text', data: { text } }),
+        `text=${JSON.stringify(text)} 不该算产出`,
+      ).toBe(false);
+    }
+    // 夹着空白的真实产出仍然算:实义字符是唯一判据。
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: '\n好的' } })).toBe(true);
+  });
+
+  // 零宽字符是 trim() 的盲区(它只认 \s):只有零宽字符的 text 会被 trim 误判成有内容,
+  // 于是自动重连绕过 5 次上限、历史里还显示「已重新连接」(greptile P2)。判据已收敛到
+  // shared/visibleText.ts,这条锁的是 main 侧真的接上了它。
+  it('rejects zero-width-only text (trim 的盲区)', () => {
+    for (const text of ['\u200B', '\uFEFF', '\u200B\u200B\n \u200D', '\u00AD']) {
+      expect(
+        isSubstantiveProgressEvent({ type: 'text', data: { text } }),
+        `text=${JSON.stringify(text)} 用户看不见,不该算产出`,
+      ).toBe(false);
+    }
+    expect(isSubstantiveProgressEvent({ type: 'text', data: { text: '\u200B好' } })).toBe(true);
+  });
+
   it('rejects thinking / status / done and other event types', () => {
     for (const type of ['thinking', 'status', 'done', 'error', 'tool_result', undefined]) {
       expect(
@@ -278,7 +305,7 @@ describe('InterruptedTurnAutoResumeGuard', () => {
     expect(decision.action).toBe('resume');
     if (decision.action === 'resume') {
       expect(decision.attempt, '本轮计数已归零').toBe(1);
-      // 会话累计不重置 —— 它是"这个会话到底重连过多少次"的展示值。
+      // 会话累计不重置 —— 它是"这个任务到底重连过多少次"的展示值。
       expect(decision.sessionTotal).toBe(INTERRUPTED_TURN_MAX_CONSECUTIVE_ATTEMPTS + 1);
     }
   });
@@ -394,7 +421,7 @@ describe('InterruptedTurnAutoResumeGuard', () => {
       g.guard.onInterruptedTurn(SID, runInterruptedTurn(g));
     }
     expect(g.guard.onInterruptedTurn(SID, runInterruptedTurn(g)).action).toBe('exhausted');
-    // 另一个会话自己的账:第一次照常放行。
+    // 另一个任务自己的账:第一次照常放行。
     const otherDecision = g.guard.onInterruptedTurn(other, g.now());
     expect(otherDecision.action).toBe('resume');
     if (otherDecision.action === 'resume') expect(otherDecision.sessionTotal).toBe(1);

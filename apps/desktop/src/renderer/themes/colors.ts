@@ -1954,6 +1954,10 @@ registerColor('focus-ring-soft', {
   light: 'rgba(65, 124, 221, 0.5)',
   dark: 'rgba(65, 124, 221, 0.5)',
 }, '50% alpha focus ring(随 focus-ring #417CDD,定稿 2026-07-17)— 替代 ring-[#xxx]/50 写法');
+registerColor('text-selection-bg', {
+  light: 'var(--focus-ring-soft)',
+  dark: 'var(--focus-ring-soft)',
+}, '文字选中背景(焦点离开宿主窗口时仍保持清晰可见)');
 registerColor('shadow-menu', {
   light: '0 4px 16px rgba(0, 0, 0, 0.15)',
   dark: '0 4px 16px rgba(0, 0, 0, 0.5)',

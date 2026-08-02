@@ -18,6 +18,11 @@ import {
   getSessionDeviceId,
   remoteProjectsStore,
 } from '@/features/device-link/remoteProjectsStore';
+import {
+  invalidationAtRequestStart,
+  persistCachedMessages,
+  sessionCacheInvalidationToken,
+} from '@/features/device-link/mirrorCacheClient';
 import { getStickySessionDeviceId } from '@/features/device-link/stickySessionOrigin';
 import type { Message, Session } from '@/lib/ccAgent.types';
 import * as messageService from '@/lib/messageService';
@@ -34,10 +39,17 @@ type FullMaker = typeof window.electronAPI.maker;
 export interface RoutableMaker {
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
+  // session-agent-switch:跨引擎切换是**会话级**操作,数据真相(pending 意图注册表 +
+  // 引擎交接)都在会话所在端。远程会话必须隧道到被控端,否则打到控制端本机 maker 上
+  // 会因本机无此 session 直接失败。只读入口供重连 / 重开视图后恢复 main 权威意图。
+  switchSessionAgent: FullMaker['switchSessionAgent'];
+  getSessionAgentSwitchIntent: FullMaker['getSessionAgentSwitchIntent'];
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
   setPlanMode: FullMaker['setPlanMode'];
+  getSessionTree: FullMaker['getSessionTree'];
+  navigateSessionTree: FullMaker['navigateSessionTree'];
   resolveInteraction: FullMaker['resolveInteraction'];
   getPendingInteractions: FullMaker['getPendingInteractions'];
   deleteMessage: FullMaker['deleteMessage'];
@@ -87,10 +99,16 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     send: t('maker:send') as FullMaker['send'],
     setModel: t('maker:set-model') as FullMaker['setModel'],
+    switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
+    getSessionAgentSwitchIntent: t(
+      'maker:get-session-agent-switch-intent',
+    ) as FullMaker['getSessionAgentSwitchIntent'],
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
+    getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
+    navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
     resolveInteraction: t('maker:resolve-interaction') as FullMaker['resolveInteraction'],
     getPendingInteractions: t(
       'maker:get-pending-interactions',
@@ -146,6 +164,23 @@ export function makerApiFor(sessionId: string): RoutableMaker {
   return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
 }
 
+/**
+ * 粘滞归属版 maker 入口:曾解析到 deviceId 的会话,在 relay 瞬时重连清空注册表的窗口内
+ * 仍走隧道,不会退回本机。
+ *
+ * 用于「误判本机会产生副作用」的 **mutation**(与 isRemoteSessionSticky 同一判据,只是那条
+ * 服务于 gating、这条服务于调用)。协同开关就是典型:enableOrca / disableOrca 在瞬断窗口内
+ * 被误判成本机,会在**控制端本机**建出或销毁一个 team —— 本机恰好存在同 id 会话时还会操作
+ * 错对象,而用户看到的入口(按粘滞 remoteDeviceId 渲染)分明指向被控端(issue #1170 codex P2)。
+ *
+ * 普通高频操作(send / setModel / …)仍用 makerApiFor:它们本就跟随会话来源的实时判定,
+ * 且误判的代价是一次失败重试,不是在错误的机器上留下持久状态。
+ */
+export function makerApiForSticky(sessionId: string): RoutableMaker {
+  const deviceId = getStickySessionDeviceId(sessionId);
+  return deviceId ? makerApiForDevice(deviceId) : window.electronAPI.maker;
+}
+
 /** 是否远程(device-link)会话。 */
 export function isRemoteSession(sessionId: string): boolean {
   return getSessionDeviceId(sessionId) !== undefined;
@@ -192,14 +227,50 @@ export function isSessionTurnRunningFor(sessionId: string): Promise<boolean> {
   return invokeRemote(deviceId, 'maker:session-in-turn', [sessionId]) as Promise<boolean>;
 }
 
-/** 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。 */
+/**
+ * 读历史消息:远程走隧道 local-db:messages:list,返回形状与本地一致(camelCase Message[])。
+ *
+ * 远程会话取回**最新一页**(没有 before / beforeTs 游标)时顺手写进冷缓存
+ * (`mirrorCacheClient`),供下次冷启动 / 被控端离线时乐观渲染。这是缓存的**唯一写点**:
+ * 首拉、reconcileRemoteMessages、reconnect 重拉、turn 结束对账都经过这里,所以缓存
+ * 自然跟着最近一次对账保持新鲜。翻页(before/beforeTs)与本机会话都不写 ——
+ * 老窗口不是"最近一页",写进去会让下次冷开 hydrate 出一段历史中间的孤岛。
+ */
 export function listMessagesFor(
   sessionId: string,
   opts?: { limit?: number; before?: string; beforeTs?: number },
 ): Promise<Message[]> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return messageService.list(sessionId, opts);
-  return invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<Message[]>;
+  const promise = invokeRemote(deviceId, 'local-db:messages:list', [sessionId, opts]) as Promise<
+    Message[]
+  >;
+  if (!opts?.before && opts?.beforeTs == null) {
+    // 发起时的作废令牌:/clear、rewind、删消息都会自增它(见 clearCachedMessages)。
+    const invalidationAtStart = sessionCacheInvalidationToken(sessionId);
+    // 同时记下 main 侧的会话级作废计数(跨窗口 / 跨进程可见);落盘时交给 main 比对。
+    // 还没有已知值时**在这里**(与远端请求同时)补读一次 —— main 拒绝没带令牌的非空写入,
+    // 而补读若拖到落盘前做,拿到的是清理之后的值,屏障就失效了(见 invalidationAtRequestStart)。
+    const mainInvalidationAtStart = invalidationAtRequestStart(deviceId, sessionId);
+    void promise
+      .then((rows) => {
+        if (!Array.isArray(rows)) return;
+        // 请求在途期间权威侧作废过这个会话的历史 → 手里这批是作废前的行,丢弃这次写,
+        // 否则它会排在那次空写之后落地,把已被清掉的正文重新写回盘上(review: pr-code-review)。
+        if (sessionCacheInvalidationToken(sessionId) !== invalidationAtStart) return;
+        // 请求在途期间这台设备可能已被撤销 / 关闭被控 / 本机停用控制,那条路径已经
+        // clearCachedDevice 清过盘了。迟到的响应若照写,会用清理**之后**的 main 代际
+        // 把被撤销对端的明文重新落盘,main 侧的作废闸挡不住它(review: codex P1)。
+        // 落盘前重核归属:mapping 已经不在(或已换设备)就直接丢弃这次写入。
+        if (getSessionDeviceId(sessionId) !== deviceId) return;
+        // 把"我取到内容时 main 侧的会话级作废计数"一起交上去:main 会再比对一次,于是
+        // **另一个窗口 / 另一个进程**的作废也能挡住这次写(renderer 令牌只在本进程内可见)。
+        persistCachedMessages(deviceId, sessionId, rows, mainInvalidationAtStart);
+      })
+      // 拉取失败由调用方处理;这里只是不写缓存(旧缓存保留,离线时正好还能用)。
+      .catch(() => undefined);
+  }
+  return promise;
 }
 
 // 已确认不支持 maker:get-workflow-progress 的被控设备(收到过 CHANNEL_NOT_ALLOWED):
@@ -282,6 +353,31 @@ export function estimatedSessionValueFor(sessionId: string): Promise<{
   ]) as ReturnType<typeof estimatedSessionValueFor>;
 }
 
+/**
+ * 插件启停状态(只读):**按目标设备**读项目级 / 用户级 collab 等开关。
+ *
+ * device-link 会话与草稿的 workingDir 是**被控端**机器上的路径,拿它在控制端本机查
+ * `.cindy/plugins.json` 读到的是控制端自己的用户级开关 —— 与被控端 main 的权威授权
+ * (assertCollabProjectEnabled)可能相反,于是入口看得见却开不起来(issue #1170)。
+ * 所以这里按 deviceId 分流:本机 → 真 IPC;远程 → 隧道到被控端读它自己的真相。
+ *
+ * 路径归一化由调用方在控制端完成:normalizeWorkingDirForProjectSettings 是纯路径形态
+ * 推导(不依赖 process.platform / 本机 userData),跨 macOS ↔ Windows 控制同样成立。
+ *
+ * 老被控端未收录该 channel 时隧道回 DEVICE_LINK_CHANNEL_NOT_ALLOWED,调用方据此
+ * fail-closed 置灰入口并说明「设备版本过旧」,不会放行到 enableOrca 才撞错。
+ */
+export function pluginEnableStateFor(
+  deviceId: string | null | undefined,
+  pluginId: string,
+  workingDir?: string,
+): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
+  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
+  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+    typeof window.electronAPI.maker.plugins.getState
+  >;
+}
+
 /** 会话内搜索跳转定位:远程走隧道 local-db:messages:around(否则查控制端空库,跳转必失败)。 */
 export function aroundMessagesFor(
   sessionId: string,
@@ -324,11 +420,10 @@ export function deleteMessageFor(
 ): Promise<MessageDeletionResult> {
   const deviceId = getSessionDeviceId(sessionId);
   if (!deviceId) return window.electronAPI.maker.deleteMessage(sessionId, clientId);
-  return invokeRemote(
-    deviceId,
-    'maker:message:delete',
-    [sessionId, clientId],
-  ) as Promise<MessageDeletionResult>;
+  return invokeRemote(deviceId, 'maker:message:delete', [
+    sessionId,
+    clientId,
+  ]) as Promise<MessageDeletionResult>;
 }
 
 /** interrupted-turn-resume:中断提示「忽略」的显式确认(写一次 last_turn_ended_at),
@@ -532,6 +627,15 @@ function remoteOrcaWorkflows(deviceId: string): RoutableOrcaWorkflows {
 export function orcaWorkflowsFor(contextSessionId: string): RoutableOrcaWorkflows {
   const deviceId = getSessionDeviceId(contextSessionId);
   return deviceId ? remoteOrcaWorkflows(deviceId) : window.electronAPI.localDb.orcaWorkflows;
+}
+
+/**
+ * 已知稳定 deviceId 时直接返回远程 orca 适配器,不重新读取易失的 session origin
+ * (与 makerApiForDevice 同款)。用于「调用方手里已经握着权威 deviceId」的场景 ——
+ * 例如刚在该被控端建出会话、要回查它的权威团队终态。
+ */
+export function orcaWorkflowsForDevice(deviceId: string): RoutableOrcaWorkflows {
+  return remoteOrcaWorkflows(deviceId);
 }
 
 /**

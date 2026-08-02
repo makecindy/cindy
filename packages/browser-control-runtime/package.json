@@ -7,7 +7,8 @@
   "main": "./src/index.ts",
   "types": "./src/index.ts",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./ssrf-runtime": "./src/shim/ssrf-runtime.ts"
   },
   "scripts": {
     "build": "tsc --noEmit",

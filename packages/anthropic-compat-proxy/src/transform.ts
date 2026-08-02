@@ -1243,7 +1243,7 @@ const TOOL_EXCHANGE_ADJACENCY_RE =
 
 /**
  * invalid_encrypted_content 恢复规则: 剥掉请求体里所有 encrypted_content 重发。
- * 受 enabled() gate(由 host 接 silentEncryptedRetry 设置,默认关)。
+ * 受 enabled() gate(由 host 接 silentEncryptedRetry 设置,默认开,用户可关闭)。
  */
 export function createEncryptedContentRecoveryRule(opts: {
   enabled: () => boolean;

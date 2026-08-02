@@ -66,7 +66,7 @@ describe('mobile collaboration session fallback', () => {
 
     expect(sessionCollaborationLabel(custom)).toBe('协作 reviewer');
     expect(sessionCollaborationNotice(custom)).toContain('协作编排操作请先在电脑端完成');
-    expect(sessionCollaborationReadOnlyReason(custom)).toContain('会话写操作请先在电脑端完成');
+    expect(sessionCollaborationReadOnlyReason(custom)).toContain('任务写操作请先在电脑端完成');
     expect(sessionCollaborationLabel(session({ orcaRole: null }))).toBeNull();
     expect(isCollaborationSession(session({ orcaRole: null }))).toBe(false);
     expect(sessionCollaborationReadOnlyReason(session({ orcaRole: null }))).toBeNull();

@@ -1,1 +1,8 @@
-{}
+{
+  "drawer": {
+    "openA11y": "Open session list",
+    "closeA11y": "Close session list",
+    "home": "Home",
+    "empty": "No sessions yet"
+  }
+}

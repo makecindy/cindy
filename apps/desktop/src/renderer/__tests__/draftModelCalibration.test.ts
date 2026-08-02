@@ -114,6 +114,32 @@ describe('pickConnectedModelForAgent', () => {
     ).toBeNull();
   });
 
+  it('跳过非聊天模型(issue #882 第 3 点,2026-07 review):唯一调用方已预先过滤,但本函数是导出的公共工具,自己也要防', () => {
+    const withNonChat = provider('xd', true, {
+      'claude-code': [
+        { ...model('gpt-image-2'), mode: 'image_generation' },
+        model('claude-sonnet-5'),
+      ],
+    });
+    // preferredModelId 本身就是非聊天模型 → 不接受,落到第一个聊天模型
+    expect(pickId([withNonChat], 'claude-code', 'gpt-image-2')).toBe('claude-sonnet-5');
+    // 首个可用模型兜底同样跳过非聊天模型
+    expect(pickId([withNonChat], 'claude-code', 'claude-opus-4-8')).toBe('claude-sonnet-5');
+  });
+
+  it('用户自定义供应商显式配置的模型不被 id 启发式误杀(2026-07 review 第 25 轮)', () => {
+    // flux-image-x 的 id 撞上 /image/ 启发式,但它来自 source:'user' 的自定义供应商且
+    // group 是未知的 custom:*,isAgentSelectableModel 有意放行 —— 校准不得把它当能力模型跳过。
+    const userProvider = {
+      ...provider('custom-p', true, {
+        'claude-code': [model('flux-image-x', { group: 'custom:custom-p' })],
+      }),
+      source: 'user',
+    } as unknown as ProviderView;
+    expect(pickId([userProvider], 'claude-code', 'flux-image-x')).toBe('flux-image-x');
+    expect(pickId([userProvider], 'claude-code', 'claude-opus-4-8')).toBe('flux-image-x');
+  });
+
   it('取该供应商模型里排序第一个,而不是清单里排前面的那个', () => {
     // 产品定稿：「可用的里面选第一个」= 目录排序第一，不是数组顺序第一。
     const gateway = provider('xd', true, {

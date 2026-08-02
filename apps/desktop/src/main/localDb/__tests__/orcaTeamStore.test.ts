@@ -104,6 +104,18 @@ describe('orcaTeamStore', () => {
     });
   });
 
+  it('preserves Pi worker identity in Orca projections', async () => {
+    const { listWorkersByLead } = await import('../orcaTeamStore.js');
+    const client = createTestDbClient();
+    setCurrentDbClient(client, 'test-user');
+
+    await seedOrcaWorkers(client);
+    const workers = await listWorkersByLead('lead-session-1');
+
+    expect(workers.find((worker) => worker.sessionId === 'worker-session-2')?.session.agentKind)
+      .toBe('pi');
+  });
+
   it('executes worker status CAS updates and only rolls back idle acknowledgements', async () => {
     const { markWorkerIdleIfStatus, restoreWorkerDoneIfIdle } = await import('../orcaTeamStore.js');
     const client = createTestDbClient();
@@ -232,7 +244,7 @@ async function seedOrcaWorkers(client: DbClient): Promise<void> {
   );
   await client.exec(
     'INSERT INTO sessions (id, title, agent_kind, orca_role, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)',
-    ['worker-session-2', 'Worker 2', 'codex', 'worker', now, now],
+    ['worker-session-2', 'Worker 2', 'pi', 'worker', now, now],
   );
   await client.exec(
     'INSERT INTO orca_teams (id, lead_session_id, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?)',
