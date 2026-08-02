@@ -135,7 +135,9 @@ export interface LinkAcceptPayload {
  * 均如此)——新增枚举值对存量客户端是安全的 fail-generic。
  *
  * `transport-timeout`:被控端对该 peer 的可靠重试耗尽,单独重置这条 link
- * (不拆 relay 连接);存活的对端收到后应重新 link-open。
+ * (不拆 relay 连接)。接收端(控制端)必须按**可恢复的瞬时重置**处理而非永久
+ * 关闭:保留可靠层 stream/pending/在途请求,立即重新 link-open(或触发
+ * rehydrate);重建后按 reconnect-continuity 语义同 seq 续传。
  */
 export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked' | 'transport-timeout';
 

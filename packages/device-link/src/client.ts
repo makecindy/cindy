@@ -1341,8 +1341,23 @@ export class DeviceLinkClient {
             });
           }
         } else if (env.kind === 'link-close' && env.src) {
-          this.pendingInboundLinkOffers.delete(env.src);
           const close = env.payload as LinkClosePayload | undefined;
+          if (close?.reason === 'transport-timeout') {
+            // 对端(被控端)对本机的可靠重试耗尽,做了 peer 级瞬时重置。这不是
+            // 永久关闭:不置 explicitlyClosed、不拆可靠层、不拒在途请求——保留
+            // stream 与 pending,重新 link-open/link-accept 后按 reconnect-continuity
+            // 语义同 seq 续传,在途 invoke-result 仍可送达(超时由各请求自身的
+            // requestTimeout 兕底)。帧照常交给 app 层:mobile 据此立即发起 rehydrate,
+            // desktop 控制端据此立即重新 openLink(见各自 link-close 处理)。
+            const peer = this.getPeerTransport(env.src);
+            peer.linkReady = false;
+            if (peer.retryTimer) {
+              clearInterval(peer.retryTimer);
+              peer.retryTimer = null;
+            }
+            return this.emitFrame(env);
+          }
+          this.pendingInboundLinkOffers.delete(env.src);
           this.rejectPendingLinkOpen(
             env.src,
             close?.reason === 'revoked' ? 'ACCESS_REVOKED' : 'LINK_NOT_OPEN',
@@ -2170,8 +2185,11 @@ export class DeviceLinkClient {
    *   - linkReady=false + 停重试计时器;**不清 pending**——live invoke-result 等
    *     下次 link-accept 后按原 seq 重放(陈旧 push 前缀由重放前清扫丢弃),
    *     不丢在途回包,也不碰 dispatch 层的去重缓存与订阅状态;
-   *   - best-effort 发 link-close(transport-timeout):存活但卡流的对端据此
-   *     立即重开链路;真休眠的对端唤醒后自会 rehydrate → link-open。
+   *   - best-effort 发 link-close(transport-timeout):存活但卡流的对端在
+   *     接收端按**瞬时重置**处理(不置 explicitlyClosed、不拒在途请求,见
+   *     dispatchEnvelope 的 link-close 分支),并由 app 层立即重建:mobile
+   *     触发 rehydrate,desktop 控制端重新 openLink;真休眠的对端收不到
+   *     该帧,唤醒后自会 rehydrate → link-open。
    * - 出站发起的 link(本机是控制端,单 peer):维持原语义——整连接重连兼作
    *   恢复探测,与 mobile 现有 rehydrate/熔断流程耦合,不在此改变。
    */

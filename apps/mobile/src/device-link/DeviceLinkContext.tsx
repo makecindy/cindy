@@ -719,12 +719,20 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
-      onLinkClosed: (deviceId) => invalidatePeerLinkState(
-        deviceId,
-        openLinkInFlightRef.current,
-        remoteSubscribedTopicsRef.current,
-        noteSessionLiveStreamsInterrupted,
-      ),
+      onLinkClosed: (deviceId, reason) => {
+        invalidatePeerLinkState(
+          deviceId,
+          openLinkInFlightRef.current,
+          remoteSubscribedTopicsRef.current,
+          noteSessionLiveStreamsInterrupted,
+        );
+        // transport-timeout = 被控端对本机的可靠重试耗尽后的 peer 级瞬时重置
+        // (relay 保持在线,不会有 presence 变化来触发恢复)。立即 rehydrate
+        // 重建链路与订阅:入口自带 online 检查、in-flight 去重与退避,幂等。
+        // 其它 reason(user/toggle-off/shutdown/revoked)维持原语义:只失效,
+        // 不自动重建。
+        if (reason === 'transport-timeout') void rehydrateWithClient(client);
+      },
       onProviderChanged: (deviceId) => {
         // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
@@ -967,12 +975,12 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
 
 export function routeFrame(env: Envelope, handlers: {
   onAccessRevoked?: (deviceId: string) => void;
-  onLinkClosed?: (deviceId: string) => void;
+  onLinkClosed?: (deviceId: string, reason?: string) => void;
   onProviderChanged?: (deviceId: string) => void;
 } = {}): void {
   const peerLinkClosed = handlePeerLinkCloseFrame(
     env,
-    (deviceId) => handlers.onLinkClosed?.(deviceId),
+    (deviceId, reason) => handlers.onLinkClosed?.(deviceId, reason),
   );
   if (applyAccessRevokedFrame(env)) {
     if (env.src) handlers.onAccessRevoked?.(env.src);

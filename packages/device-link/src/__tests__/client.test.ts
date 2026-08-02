@@ -797,6 +797,103 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('控制端收到 transport-timeout link-close:瞬时重置而非永久关闭——在途请求不被拒,重开后同 seq 续传并可正常完成', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        requestTimeoutMs: 5_000,
+        transportRetryIntervalMs: 60_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 控制端视角:出站 openLink 建可靠链路
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'host-stream',
+      },
+    });
+    await open;
+
+    // 发一条 invoke(在途,尚无回包)
+    const invokeResult = h.client.invoke('dev-b', { channel: 'local-db:sessions:list', args: [] });
+    let settled = false;
+    void invokeResult.finally(() => { settled = true; });
+    const invokeFrame = h.current().sent.find((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ))!;
+    const invokeMeta = parseTransportPayload(invokeFrame.payload)!.meta;
+
+    // 被控端对本机可靠重试耗尽 → 发来 transport-timeout
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+    // 在途请求不被拒(瞬时重置 ≠ 永久关闭)
+    expect(settled).toBe(false);
+    // 可靠层未被拆:新的可靠发送不抛 LINK_NOT_OPEN,进入 pending 等重建
+    expect(() => h.client.sendPush('dev-b', 'maker:event', { queued: true })).not.toThrow();
+
+    // 重新 openLink → link-accept(同 stream)→ 在途 invoke 按原 seq 重放
+    const sentBefore = h.current().sent.length;
+    const reopen = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const reopenFrame = h.current().sent.slice(sentBefore).find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: reopenFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'host-stream',
+      },
+    });
+    await reopen;
+    const replayedInvokes = h.current().sent.slice(sentBefore).filter((env) => (
+      env.kind === 'invoke' && parseTransportPayload(env.payload)
+    ));
+    expect(replayedInvokes.length).toBeGreaterThanOrEqual(1);
+    expect(parseTransportPayload(replayedInvokes[0].payload)?.meta).toMatchObject({
+      streamId: invokeMeta.streamId,
+      seq: invokeMeta.seq,
+    });
+
+    // 回包送达 → 在途请求正常完成
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'invoke-result',
+      id: invokeFrame.id,
+      src: 'dev-b',
+      payload: { ok: true, result: [] },
+    });
+    await expect(invokeResult).resolves.toMatchObject({ ok: true });
+    h.client.stop();
+  });
+
   it('对端显式关闭 link 时终止可靠 pending，不留到未来重放', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();

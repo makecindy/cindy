@@ -1,4 +1,4 @@
-import type { Envelope } from '@cindy/device-link';
+import type { Envelope, LinkClosePayload } from '@cindy/device-link';
 
 type DeviceScopedState = Pick<Map<string, unknown>, 'delete'>;
 type DeviceTopicAckState = Pick<Map<string, Set<string>>, 'delete' | 'get'>;
@@ -17,9 +17,12 @@ export function invalidatePeerLinkState(
 
 export function handlePeerLinkCloseFrame(
   env: Envelope,
-  onLinkClosed: (deviceId: string) => void,
+  onLinkClosed: (deviceId: string, reason?: string) => void,
 ): boolean {
   if (env.kind !== 'link-close' || !env.src) return false;
-  onLinkClosed(env.src);
+  // reason 透传给上层:transport-timeout(被控端对本机的可靠重试耗尽后的
+  // peer 级瞬时重置)需要控制端立即重建链路,而不是等下一次外部 rehydrate。
+  const reason = (env.payload as LinkClosePayload | undefined)?.reason;
+  onLinkClosed(env.src, typeof reason === 'string' ? reason : undefined);
   return true;
 }

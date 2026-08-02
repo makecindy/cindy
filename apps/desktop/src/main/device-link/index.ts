@@ -368,6 +368,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
       if (reason === 'revoked') {
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
+      } else if (reason === 'transport-timeout') {
+        // 被控端对本机的可靠重试耗尽,做了 peer 级瞬时重置(relay 保持在线,
+        // 无 presence 变化可依赖)。立即重开链路:可靠层已按瞬时重置保留
+        // stream/pending(见 client dispatchEnvelope),被控端也保留了订阅注册
+        // 表与在途回包 —— link-accept 后双向同 seq 续传,renderer 远程视图无感
+        // 恢复。openRemoteLink 自带 in-flight 去重;失败(对端真离线/待命态)
+        // 由既有 presence 与重连路径兕底,不在此重试。
+        void openRemoteLink(env.src).catch((err) => {
+          log.debug(`transport-timeout re-open failed for ${env.src?.slice(0, 8)}: ${String(err)}`);
+        });
       }
       return;
     }

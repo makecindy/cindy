@@ -6,7 +6,7 @@ import {
 } from '@/device-link/linkClose';
 
 describe('handlePeerLinkCloseFrame', () => {
-  it.each(['user', 'toggle-off', 'shutdown', 'revoked'] as const)(
+  it.each(['user', 'toggle-off', 'shutdown', 'revoked', 'transport-timeout'] as const)(
     'invalidates retained links on peer link-close (%s)',
     (reason) => {
       const onLinkClosed = vi.fn();
@@ -18,9 +18,22 @@ describe('handlePeerLinkCloseFrame', () => {
       } as Envelope, onLinkClosed);
 
       expect(handled).toBe(true);
-      expect(onLinkClosed).toHaveBeenCalledWith('desktop-a');
+      // reason 透传:transport-timeout 需要上层立即 rehydrate 重建,其它 reason
+      // 维持只失效不重建的既有语义。
+      expect(onLinkClosed).toHaveBeenCalledWith('desktop-a', reason);
     },
   );
+
+  it('passes undefined reason for legacy frames without payload', () => {
+    const onLinkClosed = vi.fn();
+    const handled = handlePeerLinkCloseFrame({
+      v: 1,
+      kind: 'link-close',
+      src: 'desktop-a',
+    } as Envelope, onLinkClosed);
+    expect(handled).toBe(true);
+    expect(onLinkClosed).toHaveBeenCalledWith('desktop-a', undefined);
+  });
 
   it('ignores unrelated frames', () => {
     const onLinkClosed = vi.fn();
