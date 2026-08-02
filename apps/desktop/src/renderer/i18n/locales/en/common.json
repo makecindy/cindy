@@ -3729,9 +3729,9 @@
         "INTERNAL": "Operation failed. Please try again later."
       },
       "guide": {
-        "hint": "Build contact profiles, clean up duplicates, and maintain a dedicated system Contacts group after you approve access.",
+        "hint": "Build contact profiles and clean up duplicates. On macOS, AI can also maintain a dedicated system Contacts group after you approve access.",
         "cta": "Manage Contacts with AI",
-        "managementPrompt": "Help me manage my contacts. Check their current state, then guide me step by step through building the directory, creating a dedicated system Contacts group, and maintaining it. Ask me before every system write or automation."
+        "managementPrompt": "Help me manage my contacts. First check their current state and the capabilities available on this device, then guide me step by step through building, deduplicating, and maintaining the directory. On macOS, offer a dedicated system Contacts group; elsewhere, use the available export flow. Ask me before every system write or automation."
       }
     },
     "remotePermission": {

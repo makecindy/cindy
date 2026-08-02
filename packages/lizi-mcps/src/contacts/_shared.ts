@@ -29,6 +29,14 @@ export function buildJsonResult(payload: unknown, isError = false): ContactsTool
  * opts.mutates: write/manage 类工具传 true — 成功后触发 deps.onMutated
  * (MCP 直写同进程 store 不经 IPC 层, 不广播的话设置页列表/角标/统计全部不刷新)。
  */
+function notifyContactsMutated(deps: ContactsMcpDeps): void {
+  try {
+    deps.onMutated?.();
+  } catch {
+    /* 广播回调异常不拖垮工具结果 */
+  }
+}
+
 export async function withContacts(
   deps: ContactsMcpDeps,
   fn: (store: MakerContactsStore) => Promise<unknown> | unknown,
@@ -57,16 +65,12 @@ export async function withContacts(
   }
   try {
     const data = await fn(store);
-    if (opts?.mutates) {
-      try {
-        deps.onMutated?.();
-      } catch {
-        /* 广播回调异常不拖垮工具结果 */
-      }
-    }
+    if (opts?.mutates) notifyContactsMutated(deps);
     return buildJsonResult({ ok: true, data });
   } catch (err) {
-    const { code, message, conflictContactId, candidates } = classifyContactsError(err);
+    const { code, message, conflictContactId, candidates, data, notifyMutation } =
+      classifyContactsError(err);
+    if (notifyMutation) notifyContactsMutated(deps);
     return buildJsonResult(
       {
         ok: false,
@@ -74,6 +78,7 @@ export async function withContacts(
         message,
         ...(conflictContactId ? { conflictContactId } : {}),
         ...(candidates ? { candidates } : {}),
+        ...(data !== undefined ? { data } : {}),
       },
       true,
     );

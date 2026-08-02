@@ -24,6 +24,48 @@ function byId<T extends { id: string }>(a: T, b: T): number {
   return compareContactsSyncText(a.id, b.id);
 }
 
+/**
+ * 找出远端 merge 后本机已删除 contact 的最终落点。identity / event 的稳定 id
+ * 会随 store.merge 从 source 原样迁到 target，因此可作为明确证据；纯删除没有
+ * 对应证据，必须 fail closed 丢弃锚点，不能按名字猜测。
+ */
+function resolveLocalAnchorTargets(
+  db: Database.Database,
+  snapshot: ContactsDataSnapshot,
+  orphanContactIds: Set<string>,
+  liveContactIds: Set<string>,
+): Map<string, string> {
+  const remoteTargets = new Map<string, string>();
+  for (const identity of snapshot.identities) {
+    remoteTargets.set(`identity:${identity.id}`, identity.contactId);
+  }
+  for (const event of snapshot.events) {
+    remoteTargets.set(`event:${event.id}`, event.contactId);
+  }
+  const localEvidence = db
+    .prepare(
+      `SELECT 'identity:' || id AS evidence_id, contact_id
+         FROM contact_identities WHERE platform <> 'apple-contacts'
+       UNION ALL
+       SELECT 'event:' || id AS evidence_id, contact_id FROM contact_events`,
+    )
+    .all() as Array<{ evidence_id: string; contact_id: string }>;
+  const candidates = new Map<string, Set<string>>();
+  for (const row of localEvidence) {
+    if (!orphanContactIds.has(row.contact_id)) continue;
+    const targetId = remoteTargets.get(row.evidence_id);
+    if (!targetId || !liveContactIds.has(targetId)) continue;
+    const targets = candidates.get(row.contact_id) ?? new Set<string>();
+    targets.add(targetId);
+    candidates.set(row.contact_id, targets);
+  }
+  return new Map(
+    [...candidates]
+      .filter(([, targets]) => targets.size === 1)
+      .map(([sourceId, targets]) => [sourceId, [...targets][0]!] as const),
+  );
+}
+
 export function readContactsSnapshot(
   db: Database.Database,
 ): ContactsDataSnapshot {
@@ -143,10 +185,23 @@ export function writeContactsSnapshot(
   snapshot: ContactsDataSnapshot,
 ): void {
   // 同步快照替换主表前先保住本机系统通讯录锚点。远端快照即使来自旧版、
-  // 仍带 apple-contacts，也不得写进来；本机锚只在对应 contact 仍存在时恢复。
+  // 仍带 apple-contacts，也不得写进来；本机锚保留在存活档案上，若 source
+  // 被远端 merge 删除则凭稳定子记录 id 迁到最终 target，纯删除不猜测。
   const localSystemAnchors = db
-    .prepare(`SELECT * FROM contact_identities WHERE platform = 'apple-contacts'`)
+    .prepare(
+      `SELECT * FROM contact_identities
+       WHERE platform = 'apple-contacts' ORDER BY created_at, id`,
+    )
     .all() as IdentityRow[];
+  const liveContactIds = new Set(snapshot.contacts.map((contact) => contact.id));
+  const orphanContactIds = new Set(
+    localSystemAnchors
+      .map((anchor) => anchor.contact_id)
+      .filter((contactId) => !liveContactIds.has(contactId)),
+  );
+  const migratedAnchorTargets = orphanContactIds.size > 0
+    ? resolveLocalAnchorTargets(db, snapshot, orphanContactIds, liveContactIds)
+    : new Map<string, string>();
   db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
 
   const insertContact = db.prepare(
@@ -196,12 +251,29 @@ export function writeContactsSnapshot(
       row.createdAt,
     );
   }
-  const liveContactIds = new Set(snapshot.contacts.map((contact) => contact.id));
+  const directlyAnchoredContacts = new Set(
+    localSystemAnchors
+      .map((anchor) => anchor.contact_id)
+      .filter((contactId) => liveContactIds.has(contactId)),
+  );
+  const migratedAnchors = new Set<string>();
   for (const row of localSystemAnchors) {
-    if (!liveContactIds.has(row.contact_id)) continue;
+    let targetContactId = row.contact_id;
+    if (!liveContactIds.has(targetContactId)) {
+      const migratedTarget = migratedAnchorTargets.get(targetContactId);
+      if (
+        !migratedTarget ||
+        directlyAnchoredContacts.has(migratedTarget) ||
+        migratedAnchors.has(migratedTarget)
+      ) {
+        continue;
+      }
+      targetContactId = migratedTarget;
+      migratedAnchors.add(migratedTarget);
+    }
     insertIdentity.run(
       row.id,
-      row.contact_id,
+      targetContactId,
       row.platform,
       row.value,
       row.normalized_value,

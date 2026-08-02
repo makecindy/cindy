@@ -60,6 +60,7 @@ describe('cindy_contacts tools', () => {
   let writeCalls: SystemContactWriteItem[][];
   let groupSyncCalls: Array<{ groupName: string; appleIds: string[] }>;
   let systemGroupMembers: Map<string, Set<string>>;
+  let groupSyncFailure: Error | null;
   let mutations: number;
 
   beforeEach(() => {
@@ -73,6 +74,7 @@ describe('cindy_contacts tools', () => {
     writeCalls = [];
     groupSyncCalls = [];
     systemGroupMembers = new Map();
+    groupSyncFailure = null;
     mutations = 0;
     const deps: ContactsMcpDeps = {
       getManager: () => manager,
@@ -92,6 +94,7 @@ describe('cindy_contacts tools', () => {
       },
       syncSystemContactGroup: async (groupName, appleIds) => {
         groupSyncCalls.push({ groupName, appleIds: [...appleIds] });
+        if (groupSyncFailure && appleIds.length > 0) throw groupSyncFailure;
         const created = !systemGroupMembers.has(groupName);
         const members = systemGroupMembers.get(groupName) ?? new Set<string>();
         let added = 0;
@@ -432,6 +435,36 @@ describe('cindy_contacts tools', () => {
     };
     expect(second.systemGroup).toMatchObject({ created: false, added: 0, alreadyPresent: 1 });
     expect(groupSyncCalls.map((call) => call.appleIds.length)).toEqual([0, 1]);
+  });
+
+  it('系统回写: 锚点回填后分组失败仍广播一次并返回部分结果', async () => {
+    const neo = await createNeo();
+    groupSyncFailure = new Error('[PERMISSION_DENIED] Contacts automation was revoked');
+
+    const result = parseResult(
+      await registry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: 'Cindy 管理',
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(result.message).toContain('syncing macOS group "Cindy 管理" failed');
+    expect(result.data).toMatchObject({
+      partial: true,
+      created: 1,
+      anchorsAdded: 1,
+      systemGroup: {
+        name: 'Cindy 管理',
+        status: 'failed',
+        failedStep: 'add-members',
+      },
+    });
+    expect(manager.getStore().getContact(neo.id).identities).toContainEqual(
+      expect.objectContaining({ platform: 'apple-contacts' }),
+    );
+    expect(mutations).toBe(2); // createNeo 一次 + 部分成功补发一次，失败路径不重复通知
   });
 
   it('系统回写: host 未提供分组能力时拒绝 system_group, 普通回写不受影响', async () => {

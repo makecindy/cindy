@@ -142,6 +142,29 @@ describe("contacts device sync", () => {
     ).toEqual(["apple-on-b"]);
   });
 
+  it("远端 merge 删除 source 时把本机 apple-contacts 锚点迁到最终 target", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+
+    const target = a.createContact({ kind: "person", displayName: "合并目标" });
+    const source = a.createContact({ kind: "person", displayName: "待合并来源" });
+    a.addIdentity(source.id, { platform: "email", value: "merge-anchor@example.com" });
+    exchange(b, a);
+    b.addIdentity(source.id, { platform: "apple-contacts", value: "apple-on-source" });
+
+    a.merge(target.id, source.id);
+    exchange(b, a);
+
+    expect(
+      b.getContact(target.id).identities
+        .filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["apple-on-source"]);
+    expect(() => b.getContact(source.id)).toThrow("contact not found");
+  });
+
   it("接受小写映射扩展后仍在统一边界内的身份值", () => {
     const store = createStore();
     const contact = store.createContact({

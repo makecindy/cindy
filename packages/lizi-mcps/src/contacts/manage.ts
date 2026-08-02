@@ -23,6 +23,7 @@ import {
 } from '@cindy/maker-core';
 
 import { withContacts } from './_shared.js';
+import { ContactsPartialFailureSignal } from './errors.js';
 import type { ContactsMcpDeps } from '../types.js';
 import type { ContactsToolRegistry } from '../cindy_contactsToolRegistry.js';
 
@@ -371,16 +372,43 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
               .filter((r) => r.action === 'created' || r.action === 'updated')
               .map((r) => r.appleId)
               .filter((id): id is string => Boolean(id));
-            const grouped = await deps.syncSystemContactGroup!(systemGroupName, appleIds);
-            systemGroup.created ||= grouped.created;
-            systemGroup.added += grouped.added;
-            systemGroup.alreadyPresent += grouped.alreadyPresent;
-            const missingIds = new Set(grouped.missingAppleIds);
-            systemGroup.missingMembers.push(
-              ...batchResults
-                .filter((result) => result.appleId && missingIds.has(result.appleId))
-                .map((result) => result.name),
-            );
+            try {
+              const grouped = await deps.syncSystemContactGroup!(systemGroupName, appleIds);
+              systemGroup.created ||= grouped.created;
+              systemGroup.added += grouped.added;
+              systemGroup.alreadyPresent += grouped.alreadyPresent;
+              const missingIds = new Set(grouped.missingAppleIds);
+              systemGroup.missingMembers.push(
+                ...batchResults
+                  .filter((result) => result.appleId && missingIds.has(result.appleId))
+                  .map((result) => result.name),
+              );
+            } catch (error) {
+              const reason = error instanceof Error ? error.message : String(error);
+              throw new ContactsPartialFailureSignal(
+                error,
+                `system contacts were written, but syncing macOS group "${systemGroupName}" failed: ${reason}`,
+                {
+                  partial: true,
+                  created: results.filter((result) => result.action === 'created').length,
+                  updated: results.filter((result) => result.action === 'updated').length,
+                  missing: results
+                    .filter((result) => result.action === 'missing')
+                    .map((result) => result.name),
+                  errors: results
+                    .filter((result) => result.action === 'error')
+                    .map((result) => ({ name: result.name, error: result.error })),
+                  anchorsAdded,
+                  skippedPending,
+                  systemGroup: {
+                    ...systemGroup,
+                    status: 'failed' as const,
+                    failedStep: 'add-members' as const,
+                  },
+                },
+                anchorsAdded > 0,
+              );
+            }
           }
         }
         return {

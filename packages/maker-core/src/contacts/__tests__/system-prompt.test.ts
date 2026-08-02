@@ -22,6 +22,9 @@ describe('contacts system prompt segments', () => {
     expect(CONTACTS_RULES_ENABLED).toContain('contacts_export_system');
     expect(CONTACTS_RULES_ENABLED).toContain('dry_run:true');
     expect(CONTACTS_RULES_ENABLED).toContain('system_group');
+    expect(CONTACTS_RULES_ENABLED).toContain('Only if `contacts_export_system` is available (macOS)');
+    expect(CONTACTS_RULES_ENABLED).toContain('contacts_export_vcf');
+    expect(CONTACTS_RULES_ENABLED).toContain('without claiming it is supported');
     expect(CONTACTS_RULES_ENABLED).toContain('never silently delete system contacts');
     expect(CONTACTS_RULES_ENABLED).toContain('cindy_scheduler');
   });

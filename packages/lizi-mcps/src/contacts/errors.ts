@@ -32,6 +32,27 @@ export interface ContactsToolError {
   conflictContactId?: string;
   /** DUPLICATE_SUSPECT: 疑似同人候选列表 */
   candidates?: DuplicateCandidate[];
+  /** 外部副作用部分成功后的已完成结果，供 Agent 明确审阅而不是误判全量成功。 */
+  data?: unknown;
+  /** 错误返回前是否已有本地通讯录变更，需要补发一次 renderer 刷新通知。 */
+  notifyMutation?: boolean;
+}
+
+/**
+ * 外部写入部分成功、后续步骤失败的受控信号。
+ * withContacts 仍返回 ok:false，但同时携带已完成结果；只有本地 store 已变化时
+ * notifyMutation 才为 true，避免失败路径漏通知或成功路径重复通知。
+ */
+export class ContactsPartialFailureSignal extends Error {
+  constructor(
+    public readonly originalError: unknown,
+    message: string,
+    public readonly data: unknown,
+    public readonly notifyMutation: boolean,
+  ) {
+    super(message);
+    this.name = 'ContactsPartialFailureSignal';
+  }
 }
 
 /**
@@ -52,6 +73,15 @@ export class DuplicateSuspectSignal extends Error {
 /** 把 unknown error 分类成结构化 {code, message}. 纯函数, 不抛 */
 export function classifyContactsError(err: unknown): ContactsToolError {
   const message = err instanceof Error ? err.message : String(err);
+  if (err instanceof ContactsPartialFailureSignal) {
+    const original = classifyContactsError(err.originalError);
+    return {
+      ...original,
+      message,
+      data: err.data,
+      notifyMutation: err.notifyMutation,
+    };
+  }
   if (err instanceof DuplicateSuspectSignal) {
     return { code: 'DUPLICATE_SUSPECT', message, candidates: err.candidates };
   }
