@@ -972,6 +972,25 @@ export async function syncExternalCodexSessionFromDesktop(threadId: string): Pro
     return;
   }
 
+  // 版本门禁(#789):Cindy resume 生成的 desktop rollout 由 Cindy 捆绑的 Codex runtime 写出,
+  // 其事件格式(如 function_call.id 前缀:旧版 `call_*` vs 新版 `fc_*`)可能与创建这个外部
+  // 会话的 runtime 不兼容。把不兼容的 rollout 覆盖回源 ~/.codex,会让原 Codex 客户端后续重放
+  // 历史时被 API 拒(invalid_id_prefix),源会话就此无法继续。仅当两侧 rollout 的
+  // session_meta.cli_version 完全一致(= 同一 runtime 版本,格式可证兼容)时才回写;无法确认
+  // 一致时降级为不回写、保源会话原样(用户仍可在 Cindy 内继续该会话的私有副本)。
+  const desktopCliVersion = readRolloutCliVersion(desktopThread.rolloutPath);
+  const externalCliVersion = readRolloutCliVersion(externalThread.rolloutPath);
+  if (!desktopCliVersion || !externalCliVersion || desktopCliVersion !== externalCliVersion) {
+    log.info('skip external Codex sync-back: runtime version mismatch or unknown', {
+      threadId,
+      desktopCliVersion,
+      externalCliVersion,
+      sourceHome: desktopThread.sourceHome,
+      targetHome: externalThread.sourceHome,
+    });
+    return;
+  }
+
   let copiedRollout = false;
   if (
     desktopThread.rolloutPath &&
@@ -1422,6 +1441,25 @@ function rolloutThreadRowFromFirstLine(
     approval_mode: stringValue(payload.approval_mode),
     archived: isArchivedRolloutPath(file) ? 1 : 0,
   };
+}
+
+/**
+ * 读取 rollout 首行 session_meta 里的 `cli_version`(写出这份 rollout 的 Codex runtime 版本)。
+ * 文件缺失、首行非 session_meta、或 cli_version 缺失/为空 → null(调用方按「无法确认」处理)。
+ */
+function readRolloutCliVersion(rolloutPath: string | null | undefined): string | null {
+  if (!rolloutPath) return null;
+  const line = readFirstLineSync(rolloutPath);
+  if (!line) return null;
+  let obj: unknown;
+  try {
+    obj = JSON.parse(line);
+  } catch {
+    return null;
+  }
+  if (!isRecord(obj) || obj.type !== 'session_meta' || !isRecord(obj.payload)) return null;
+  const version = stringValue(obj.payload.cli_version).trim();
+  return version || null;
 }
 
 function readFirstLineSync(file: string): string | null {

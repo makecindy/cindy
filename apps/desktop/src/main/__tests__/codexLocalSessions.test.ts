@@ -35,6 +35,7 @@ import {
   parseCodexRolloutMessageLine,
   scanExternalCodexSessions,
   prepareExternalCodexSessionForResume,
+  syncExternalCodexSessionFromDesktop,
 } from '../maker-host/codex-local-sessions';
 import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/current';
 import type { DbClient } from '../localDb/client/DbClient';
@@ -1687,5 +1688,108 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     await prepareExternalCodexSessionForResume(threadId);
 
     expect(fs.existsSync(missingRollout)).toBe(false);
+  });
+});
+
+describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () => {
+  const desktopHome = () => path.join(targetUserData, 'codex-home');
+
+  /** 写一份含 session_meta 首行(带 cli_version)+ 一条消息的 rollout。 */
+  function writeRolloutWithCliVersion(file: string, cliVersion: string, body: string): void {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    const meta = JSON.stringify({
+      timestamp: '2026-07-28T00:00:00.000Z',
+      type: 'session_meta',
+      payload: {
+        id: threadId,
+        session_id: threadId,
+        timestamp: '2026-07-28T00:00:00.000Z',
+        cwd: '/tmp/project',
+        originator: 'codex',
+        cli_version: cliVersion,
+        source: 'cli',
+      },
+    });
+    fs.writeFileSync(file, `${meta}\n${body}\n`, 'utf-8');
+  }
+
+  /**
+   * 建一个「外部会话已导入并在 Cindy 里续过一轮」的链接现场:桌面端与外部各有一份 rollout
+   * (可分别指定写出它的 runtime cli_version)与 threads 行。
+   */
+  function setupLinkedThread(
+    desktopCliVersion: string,
+    externalCliVersion: string,
+  ): { externalRollout: string; externalDbPath: string; desktopRollout: string } {
+    const desktopRollout = path.join(desktopHome(), 'sessions', `rollout-desktop-${threadId}.jsonl`);
+    const externalRollout = path.join(externalHome, 'sessions', `rollout-external-${threadId}.jsonl`);
+    writeRolloutWithCliVersion(
+      desktopRollout,
+      desktopCliVersion,
+      rolloutLine('m-desktop', 'assistant', 'edited in Cindy', '2026-07-28T00:00:01.000Z'),
+    );
+    writeRolloutWithCliVersion(
+      externalRollout,
+      externalCliVersion,
+      rolloutLine('m-external', 'assistant', 'original external', '2026-07-27T00:00:01.000Z'),
+    );
+    const desktopDbPath = createStateDb(desktopHome());
+    insertThread(desktopDbPath, threadId, desktopRollout, { updatedAt: 3_000 });
+    const externalDbPath = createStateDb(externalHome);
+    insertThread(externalDbPath, threadId, externalRollout, { updatedAt: 2_000 });
+    return { externalRollout, externalDbPath, desktopRollout };
+  }
+
+  function readThreadRolloutPath(dbPath: string): string {
+    const db = new Database(dbPath, { readonly: true });
+    try {
+      const row = db
+        .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
+        .get(threadId) as { rolloutPath?: string } | undefined;
+      return row?.rolloutPath ?? '';
+    } finally {
+      db.close();
+    }
+  }
+
+  it('does not overwrite the source ~/.codex rollout when the runtime cli_version differs', async () => {
+    const { externalRollout, externalDbPath } = setupLinkedThread('0.145.0', '0.146.0-alpha.3.1');
+    const rolloutBefore = fs.readFileSync(externalRollout, 'utf-8');
+    const rolloutPathBefore = readThreadRolloutPath(externalDbPath);
+
+    await syncExternalCodexSessionFromDesktop(threadId);
+
+    // 版本不一致 → 源 rollout 与源 state 都不被改写。
+    expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(rolloutBefore);
+    expect(readThreadRolloutPath(externalDbPath)).toBe(rolloutPathBefore);
+  });
+
+  it('does not sync back when the source rollout has no parseable cli_version', async () => {
+    const desktopRollout = path.join(desktopHome(), 'sessions', `rollout-desktop-${threadId}.jsonl`);
+    const externalRollout = path.join(externalHome, 'sessions', `rollout-external-${threadId}.jsonl`);
+    writeRolloutWithCliVersion(
+      desktopRollout,
+      '0.145.0',
+      rolloutLine('m-desktop', 'assistant', 'edited in Cindy', '2026-07-28T00:00:01.000Z'),
+    );
+    // 外部 rollout 首行不是 session_meta(cli_version 无从判定)。
+    fs.mkdirSync(path.dirname(externalRollout), { recursive: true });
+    const externalContent = `${rolloutLine('m-external', 'assistant', 'original external', '2026-07-27T00:00:01.000Z')}\n`;
+    fs.writeFileSync(externalRollout, externalContent, 'utf-8');
+    insertThread(createStateDb(desktopHome()), threadId, desktopRollout, { updatedAt: 3_000 });
+    insertThread(createStateDb(externalHome), threadId, externalRollout, { updatedAt: 2_000 });
+
+    await syncExternalCodexSessionFromDesktop(threadId);
+
+    expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(externalContent);
+  });
+
+  it('syncs the desktop rollout back when both runtimes share the same cli_version', async () => {
+    const { externalRollout, desktopRollout } = setupLinkedThread('0.145.0', '0.145.0');
+
+    await syncExternalCodexSessionFromDesktop(threadId);
+
+    // 版本一致 → 回写照旧发生,源 rollout 被更新为桌面端内容。
+    expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(fs.readFileSync(desktopRollout, 'utf-8'));
   });
 });
