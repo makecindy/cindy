@@ -113,6 +113,7 @@ import {
   type QuotaHoverCardSessionUsage,
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
+import { quotaSeverity } from './QuotaBar';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -993,6 +994,29 @@ function renderSegmentedLabel(segments: React.ReactNode[]): React.ReactNode {
   ));
 }
 
+/** Claude 订阅额度段只按本窗口已用比例着色，不影响相邻窗口与会话金额。 */
+function renderClaudeQuotaSegment(content: React.ReactNode, usedPercent: number): React.ReactNode {
+  const severity = quotaSeverity(usedPercent);
+  const colorClass = severity === 'warn'
+    ? 'text-[var(--quota-bar-warn)]'
+    : severity === 'crit'
+      ? 'text-[var(--quota-bar-crit)]'
+      : undefined;
+
+  return (
+    <>
+      {severity === 'crit' && (
+        <span
+          aria-hidden="true"
+          data-quota-critical-dot
+          className="mr-1 inline-block size-1.5 rounded-full bg-[var(--quota-bar-crit)] align-middle animate-pulse motion-reduce:animate-none"
+        />
+      )}
+      <span data-quota-severity={severity} className={colorClass}>{content}</span>
+    </>
+  );
+}
+
 interface TodaySpendChipProps {
   vendorKey?: 'cc' | 'codex' | 'pi';
   /** 当前会话模型;codex/ 折扣 GPT 恒走 gateway API, 即使 oauth-bearer spawn 也按 API 形态显示。 */
@@ -1375,9 +1399,15 @@ export function TodaySpendChip({
   const windowSlotB = chipWindows[1] ?? null;
   const rollupA = useQuotaResetRollup(windowSlotA);
   const rollupB = useQuotaResetRollup(windowSlotB);
+  const usesClaudeQuotaChipSegments = isClaudeSubscription && !usesCodexQuotaForm;
   // 窗口段元素登记表(key → span): 撒花锚点用, 段消失时由 ref 回调置 null。
   const segmentElsRef = React.useRef<Record<string, HTMLSpanElement | null>>({});
   const windowSegments: React.ReactNode[] = chipWindows.map((window, index) => {
+    const renderWindowContent = (content: React.ReactNode) => (
+      usesClaudeQuotaChipSegments
+        ? renderClaudeQuotaSegment(content, 100 - window.remainingPercent)
+        : content
+    );
     if (window.resetPending) {
       // 悬念期: 倒计时已归零、新快照未落地 —— 旧百分比已失真, 换成「重置中…」,
       // 呼吸省略号 (HTML span + opacity, 仅悬念期挂载; motion-safe = 尊重
@@ -1385,8 +1415,12 @@ export function TodaySpendChip({
       // 动画从 0% 跳到新值揭晓。
       return (
         <React.Fragment key={window.key}>
-          {t('todaySpend.resetPendingSegment', { label: window.label })}
-          <span className="motion-safe:animate-pulse">…</span>
+          {renderWindowContent(
+            <>
+              {t('todaySpend.resetPendingSegment', { label: window.label })}
+              <span className="motion-safe:animate-pulse">…</span>
+            </>,
+          )}
         </React.Fragment>
       );
     }
@@ -1407,7 +1441,7 @@ export function TodaySpendChip({
           segmentElsRef.current[window.key] = el;
         }}
       >
-        {text}
+        {renderWindowContent(text)}
       </span>
     );
   });
@@ -1608,19 +1642,19 @@ export function TodaySpendChip({
     }
   }
 
-  // Claude 订阅告警态: 影响当前会话的窗口 (5h / 总周限 / 当前模型 scoped) 任一逼近 /
-  // 打满, 或 headers 报 rejected → chip 变 error 色 (语义豁免色, 跨主题一致)。
-  // 其它模型的周限吃紧不染红 —— chip 上没有那一段, 红了也无从解释 (见
-  // isClaudeSubscriptionAlerting 对 allowed_warning 的取舍)。
+  // Claude 订阅有窗口段时由各段 used% 独立着色，避免一段吃紧把其它段与会话金额一起
+  // 染红；窗口数据缺失时仍保留 rejected / 上游 severity 的整 chip 告警兜底。
   const claudeSubscriptionAlerting = isClaudeSubscription
     && isClaudeSubscriptionAlerting(claudeSubscriptionUsage, modelId);
+  const showClaudeSubscriptionFallbackAlert = claudeSubscriptionAlerting
+    && windowSegments.length === 0;
 
   // 与 ContextCapacityRing 视觉对齐 (h-5 = 20px) + reset button UA 默认 padding/border。
   // tabular-nums 让 "$306 / $1.2k" 这类数字段的字符宽度等宽, 段间数字落点对齐。
   const buttonClass = cn(
     'inline-flex h-5 shrink-0 items-center',
     'text-12 font-medium leading-none tabular-nums',
-    claudeSubscriptionAlerting
+    showClaudeSubscriptionFallbackAlert
       ? 'text-[var(--error-fg)] hover:text-[var(--error-fg-strong)]'
       // 不可点(网关账号)时不加 hover 变色,避免暗示可交互。
       : cn('text-[var(--msg-tool-card-chevron)]', isDashboardClickable && 'hover:text-foreground'),
