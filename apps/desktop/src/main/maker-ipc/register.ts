@@ -2594,10 +2594,11 @@ async function pauseGoalBeforeExplicitStop(sessionId: string): Promise<void> {
   try {
     await Promise.resolve(observer(sessionId));
   } catch (err) {
-    log.warn('goal pause persistence failed during explicit stop', {
+    log.error('goal pause persistence failed during explicit stop', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
+    throw err;
   }
 }
 // (Option B)用户答完 AskUserQuestion 时,把结构化答案 + 本次问题(含选项)交给 goal controller
@@ -9055,8 +9056,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
     handleAgentIslandSessionStopped(sess);
     const directAbortBoundary = beginDirectAbortReconciliation(sessionId, sess);
+    // Attach the rejection handler immediately: Goal storage can fail while a slow
+    // vendor abort is still settling, and that failure must not become unhandled.
+    const goalPauseResult = goalPause.then(
+      () => ({ ok: true as const }),
+      (error: unknown) => ({ ok: false as const, error }),
+    );
+    let abortFailed = false;
+    let abortError: unknown;
     try {
       await sess.abort();
+    } catch (error) {
+      abortFailed = true;
+      abortError = error;
     } finally {
       // The stable lookup may still be inside an owner-boundary transition;
       // reconciliation owns its own safe live-state lookup and must run even
@@ -9065,9 +9077,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         reconcileDirectAbortBoundary(sessionId, directAbortBoundary, 'direct-abort');
       } finally {
         cleanupPendingInteractionsForSession(sessionId, 'session_aborted');
-        await goalPause;
       }
     }
+    const settledGoalPause = await goalPauseResult;
+    if (abortFailed) {
+      if (!settledGoalPause.ok) {
+        log.error('goal pause persistence also failed after session abort failure', {
+          sessionId,
+          error:
+            settledGoalPause.error instanceof Error
+              ? settledGoalPause.error.message
+              : String(settledGoalPause.error),
+        });
+      }
+      throw abortError;
+    }
+    if (!settledGoalPause.ok) throw settledGoalPause.error;
   });
 
   ipcMain.handle(MAKER_INVOKE.CLOSE_SESSION, async (_e, sessionId: unknown, opts?: unknown) => {

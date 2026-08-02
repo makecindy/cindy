@@ -959,6 +959,22 @@ describe('GoalController', () => {
     expect((await h.storage.get('s1'))?.status).toBe('paused');
   });
 
+  it('keeps the Stop boundary fail-closed when reading Goal state fails', async () => {
+    await startGoal(h);
+    const sendsBeforeStop = h.session.sends.length;
+    const getSpy = vi
+      .spyOn(h.storage, 'get')
+      .mockRejectedValueOnce(new Error('goal storage read unavailable'));
+
+    await expect(h.controller.pauseGoal('s1')).rejects.toThrow('goal storage read unavailable');
+    await h.controller.resumeOnOpen('s1');
+    expect(h.session.sends).toHaveLength(sendsBeforeStop);
+
+    getSpy.mockRestore();
+    await h.controller.pauseGoal('s1');
+    expect((await h.storage.get('s1'))?.status).toBe('paused');
+  });
+
   it('persists an explicitly stopped usage-limited goal as paused so restart cannot auto-resume it', async () => {
     await h.storage.set(seededGoal({
       status: 'usageLimited',

@@ -343,8 +343,8 @@ describe('maker:event hot path ordering', () => {
       'const sess = getStableSessionForTurnBoundary(sessionId);',
     );
     // no-session 分支会先 await goalPause 后返回；有 live session 时真正的 abort 必须
-    // 立即启动，只在 finally 中等待 Goal 持久化收口。
-    expect(directAbortSource.lastIndexOf('await goalPause;')).toBeGreaterThan(
+    // 立即启动，只在 abort/reconcile 之后读取 Goal 持久化结果。
+    expect(directAbortSource.indexOf('const settledGoalPause = await goalPauseResult;')).toBeGreaterThan(
       directAbortSource.indexOf('await sess.abort();'),
     );
     expectOrder(
@@ -361,8 +361,13 @@ describe('maker:event hot path ordering', () => {
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
+    expect(goalPauseSource).toContain("log.error('goal pause persistence failed during explicit stop'");
+    expect(goalPauseSource).toContain('throw err;');
     expect(goalPauseSource).not.toContain('Promise.race');
     expect(goalPauseSource).not.toContain('setTimeout');
+    expect(directAbortSource).toContain('const goalPauseResult = goalPause.then(');
+    expectOrder(directAbortSource, 'await sess.abort();', 'const settledGoalPause = await goalPauseResult;');
+    expectOrder(directAbortSource, 'if (abortFailed)', 'if (!settledGoalPause.ok) throw settledGoalPause.error;');
   });
 
   it('commits a Goal state update before its post-write readback', () => {

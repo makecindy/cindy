@@ -31,14 +31,24 @@ export function registerStopSessionBackgroundTasksHandler(
       deps.noteSessionReset(sessionId);
       // notifyGoalStop 调用同步摘 listener/timer，paused 落库可与紧急 close 并行；
       // 不能让存储等待挡住最终止损。
-      const goalPause = Promise.resolve(deps.notifyGoalStop(sessionId)).catch(() => {});
+      let goalPause: Promise<void>;
       try {
-        await deps.closeSession(sessionId);
-      } finally {
-        await goalPause;
+        goalPause = Promise.resolve(deps.notifyGoalStop(sessionId));
+      } catch (error) {
+        goalPause = Promise.reject(error);
       }
-      // closed 事件的统一清理也会清账；这里显式清一次，确保 renderer 立即收到熄灭广播。
-      deps.clearBackgroundActivity(sessionId);
+      const [closeResult, goalPauseResult] = await Promise.allSettled([
+        deps.closeSession(sessionId),
+        goalPause,
+      ]);
+      if (closeResult.status === 'fulfilled') {
+        // closed 事件的统一清理也会清账；这里显式清一次，确保 renderer 立即收到熄灭广播。
+        deps.clearBackgroundActivity(sessionId);
+      }
+      // close 是主要止损动作：两边同时失败时保留它的原始错误；Goal pause 自身已经
+      // 在 register.ts 记录了可诊断日志。任一边失败都不得向 renderer 谎报成功。
+      if (closeResult.status === 'rejected') throw closeResult.reason;
+      if (goalPauseResult.status === 'rejected') throw goalPauseResult.reason;
       return { ok: true as const };
     },
   );
