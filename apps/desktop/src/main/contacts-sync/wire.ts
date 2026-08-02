@@ -76,6 +76,8 @@ export function isContactsSyncWireFrame(value: unknown): value is ContactsSyncWi
 export class ContactsSyncWireDecoder {
   private readonly pending = new Map<string, PendingTransfer>();
   private readonly decoding = new Map<string, symbol>();
+  /** capability epoch 失效时废弃的 transfer；TTL 内迟到分片不得跨 epoch 重组。 */
+  private readonly abandoned = new Map<string, number>();
   private decodeAbortController = new AbortController();
   private generation = 0;
 
@@ -102,7 +104,7 @@ export class ContactsSyncWireDecoder {
     }
 
     const key = `${options.srcDeviceId}\u0000${frame.transferId}`;
-    if (this.decoding.has(key)) return null;
+    if (this.abandoned.has(key) || this.decoding.has(key)) return null;
     let transfer = this.pending.get(key);
     if (!transfer) {
       const peerPrefix = `${options.srcDeviceId}\u0000`;
@@ -184,17 +186,35 @@ export class ContactsSyncWireDecoder {
     }
   }
 
+  discardPeer(srcDeviceId: string, now = Date.now()): void {
+    const prefix = `${srcDeviceId}\u0000`;
+    for (const key of this.pending.keys()) {
+      if (!key.startsWith(prefix)) continue;
+      this.pending.delete(key);
+      this.abandoned.set(key, now);
+    }
+    // 已进入 worker 的结果由 driver 的 per-peer epoch 丢弃；同时登记 transferId，
+    // 防止同一批迟到分片在 worker 完成后重新开一轮组装。
+    for (const key of this.decoding.keys()) {
+      if (key.startsWith(prefix)) this.abandoned.set(key, now);
+    }
+  }
+
   reset(): void {
     this.generation += 1;
     this.decodeAbortController.abort();
     this.decodeAbortController = new AbortController();
     this.pending.clear();
     this.decoding.clear();
+    this.abandoned.clear();
   }
 
   private prune(now: number): void {
     for (const [key, transfer] of this.pending) {
       if (now - transfer.lastActivityAt > TRANSFER_TTL_MS) this.pending.delete(key);
+    }
+    for (const [key, abandonedAt] of this.abandoned) {
+      if (now - abandonedAt > TRANSFER_TTL_MS) this.abandoned.delete(key);
     }
   }
 }

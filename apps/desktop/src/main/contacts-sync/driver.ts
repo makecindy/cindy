@@ -137,6 +137,7 @@ const outbound = new ContactsSyncOutbound({
 });
 
 function invalidatePeerMergeCapability(deviceId: string): void {
+  decoder.discardPeer(deviceId);
   peersSupportingMergeRedirects.delete(deviceId);
   peerDeliveryEpochs.set(deviceId, (peerDeliveryEpochs.get(deviceId) ?? 0) + 1);
 }

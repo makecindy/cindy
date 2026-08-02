@@ -189,6 +189,7 @@ vi.mock('../wire.js', () => ({
     async accept(...args: unknown[]): Promise<unknown> {
       return harness.decoderAccept(...args);
     }
+    discardPeer(): void {}
     reset(): void {}
   },
 }));
@@ -889,9 +890,7 @@ describe('contacts sync runtime ownership', () => {
       data: 'data',
     });
     await vi.waitFor(() =>
-      expect(harness.decoderAccept.mock.calls.length).toBe(
-        decoderCallsBeforeStaleFrame + 1,
-      ),
+      expect(harness.decoderAccept.mock.calls.length).toBe(decoderCallsBeforeStaleFrame + 1),
     );
 
     // 已协商设备离线后，旧版进程可能用同一 deviceId 与固定公钥重新上线。
@@ -920,9 +919,7 @@ describe('contacts sync runtime ownership', () => {
       capabilities: ['merge-redirects-v1'],
     });
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(harness.encodeContactsSyncMessage.mock.calls).toHaveLength(
-      sendsAfterReconnect,
-    );
+    expect(harness.encodeContactsSyncMessage.mock.calls).toHaveLength(sendsAfterReconnect);
     expect(
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,

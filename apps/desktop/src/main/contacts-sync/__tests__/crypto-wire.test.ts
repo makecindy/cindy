@@ -115,6 +115,64 @@ describe('contacts sync crypto and wire', () => {
     });
   });
 
+  it('peer 失效后不让未完成 transfer 的迟到分片跨 epoch 重组', async () => {
+    const a = generateContactsSyncIdentity();
+    const b = generateContactsSyncIdentity();
+    const frames = await encodeContactsSyncMessage(
+      {
+        message: {
+          version: 1,
+          type: 'state',
+          state: { opaqueTestData: randomBytes(300_000).toString('base64') },
+          capabilities: ['merge-redirects-v1'],
+        },
+        ownPrivateKey: a.privateKey,
+        ownPublicKey: a.publicKey,
+        peerPublicKey: b.publicKey,
+        srcDeviceId: 'device-a',
+        dstDeviceId: 'device-b',
+      },
+      inProcessContactsSyncCodec,
+    );
+    expect(frames.length).toBeGreaterThan(1);
+    const decoder = new ContactsSyncWireDecoder(inProcessContactsSyncCodec);
+    expect(
+      await decoder.accept({
+        srcDeviceId: 'device-a',
+        dstDeviceId: 'device-b',
+        frame: frames[0]!,
+        ownPrivateKey: b.privateKey,
+        expectedPeerPublicKey: a.publicKey,
+        now: 999,
+      }),
+    ).toBeNull();
+
+    decoder.discardPeer('device-a', 1_000);
+    for (const frame of frames.slice(1)) {
+      expect(
+        await decoder.accept({
+          srcDeviceId: 'device-a',
+          dstDeviceId: 'device-b',
+          frame,
+          ownPrivateKey: b.privateKey,
+          expectedPeerPublicKey: a.publicKey,
+          now: 1_001,
+        }),
+      ).toBeNull();
+    }
+    // 即使第一片随后重放，同 transferId 在 TTL 内仍保持废弃。
+    expect(
+      await decoder.accept({
+        srcDeviceId: 'device-a',
+        dstDeviceId: 'device-b',
+        frame: frames[0]!,
+        ownPrivateKey: b.privateKey,
+        expectedPeerPublicKey: a.publicKey,
+        now: 1_002,
+      }),
+    ).toBeNull();
+  });
+
   it('篡改目标设备、分片元数据或密文都会认证失败', async () => {
     const a = generateContactsSyncIdentity();
     const b = generateContactsSyncIdentity();
