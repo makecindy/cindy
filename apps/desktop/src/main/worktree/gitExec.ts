@@ -284,75 +284,84 @@ function execFileOnce(
           // 才按「terminated」收口——覆盖「git.exe 已退、credential helper 等
           // 后代仍活」的窗口。进程表不可用(PowerShell 缺失/超时)属「无法持续
           // 确认」:等 stdio 放手信号后仍按 cleanup unconfirmed 收口,不冒充确认。
-          const snapshotPromise = child.pid != null ? queryWin32ProcessTable() : Promise.resolve(null);
-          killProcessTree(child.pid, child, () => {
-            void snapshotPromise.then((table) => {
-              if (settled) return;
-              if (table === null || child.pid == null) {
-                // 进程表不可用(无 PowerShell/查询超时)→ 无法持续确认:等 stdio
-                // 放手信号后仍按 cleanup unconfirmed 收口,不冒充确认。
+          // 顺序:**先**拍血缘快照(树还活着,中间父进程可被捕获),**再**启动
+          // 树杀——两者并行时先被杀掉的中间父会从表中消失,其后代的 ppid 链断裂
+          // 导致漏追踪。快照之后仍有一个不可观测窗口:中间父在超时前就已自然
+          // 退出的孤儿后代无法靠血缘识别(纯 Node 造不出 Job Object,引原生依赖
+          // 远超本 PR 范围)——用继承 stdio 作补充信号封堵:execFile 回调未到 =
+          // 仍有进程持有继承句柄,即便血缘集已清空也不判 terminated。
+          // 「血缘集清空 + stdio 放手」两个信号都满足才算树退净;进程表不可用
+          // (无 PowerShell/查询超时)只剩单一信号,按 cleanup unconfirmed 收口。
+          void (async () => {
+            const rootPid = child.pid;
+            const preKillTable = rootPid != null ? await queryWin32ProcessTable() : null;
+            if (settled) return;
+            if (preKillTable === null || rootPid == null) {
+              killProcessTree(child.pid, child, () => {
+                if (settled) return;
                 if (stdioReleased) failTimeout(false);
                 else onStdioReleased = () => failTimeout(false);
-                return;
-              }
-              // 追踪 git 树的**派生闭包**,不是固定的初始快照:每轮把 ppid 命中
-              // 已知树成员的新进程并入(覆盖 credential helper 在两轮轮询之间
-              // fork 出的后代;pid+创建时间双键,仅观察不杀——ppid 撞上被复用的
-              // pid 只会让确认多等一会,由入口看门狗兜底,无误杀风险)。全部
-              // 已知成员从进程表消失才判定树退净。
-              const rootPid = child.pid;
-              const trackedKeys = new Set<string>();
-              const knownPids = new Set<number>([rootPid]);
-              const absorb = (t: Win32ProcRow[]) => {
-                const rootRow = t.find((r) => r.pid === rootPid);
-                if (rootRow) trackedKeys.add(`${rootRow.pid}:${rootRow.created}`);
-                // 闭包迭代:同一张表里可能有「新成员 → 其子进程」的链
-                let grew = true;
-                while (grew) {
-                  grew = false;
-                  for (const row of t) {
-                    const key = `${row.pid}:${row.created}`;
-                    if (knownPids.has(row.ppid) && !trackedKeys.has(key)) {
-                      trackedKeys.add(key);
-                      knownPids.add(row.pid);
-                      grew = true;
-                    }
+              });
+              return;
+            }
+            // 追踪 git 树的**派生闭包**,不是固定的初始快照:每轮把 ppid 命中
+            // 已知树成员的新进程并入(覆盖 credential helper 在两轮轮询之间
+            // fork 出的后代;pid+创建时间双键,仅观察不杀——ppid 撞上被复用的
+            // pid 只会让确认多等一会,由入口看门狗兜底,无误杀风险)。
+            const trackedKeys = new Set<string>();
+            const knownPids = new Set<number>([rootPid]);
+            const absorb = (t: Win32ProcRow[]) => {
+              const rootRow = t.find((r) => r.pid === rootPid);
+              if (rootRow) trackedKeys.add(`${rootRow.pid}:${rootRow.created}`);
+              // 闭包迭代:同一张表里可能有「新成员 → 其子进程」的链
+              let grew = true;
+              while (grew) {
+                grew = false;
+                for (const row of t) {
+                  const key = `${row.pid}:${row.created}`;
+                  if (knownPids.has(row.ppid) && !trackedKeys.has(key)) {
+                    trackedKeys.add(key);
+                    knownPids.add(row.pid);
+                    grew = true;
                   }
                 }
-              };
-              const treePresent = (t: Win32ProcRow[]): boolean => {
-                const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
-                for (const key of trackedKeys) if (present.has(key)) return true;
-                return false;
-              };
-              absorb(table);
-              if (!treePresent(table)) {
-                failTimeout(true);
-                return;
               }
-              // 串行轮询:上一轮查询完成后才调度下一轮——单次查询可耗到自身超时
-              // (3s),WMI 卡顿时 setInterval 会持续堆积 PowerShell 进程。收口
-              // (settle)清掉重调度定时器;在途的最后一次查询由其自身超时结束,
-              // 不会残留。
-              const scheduleNextPoll = () => {
-                groupPoll = setTimeout(() => {
-                  void queryWin32ProcessTable().then((t) => {
-                    if (settled) return;
-                    if (t !== null) {
-                      absorb(t);
-                      if (!treePresent(t)) {
-                        failTimeout(true);
-                        return;
-                      }
+            };
+            const treePresent = (t: Win32ProcRow[]): boolean => {
+              const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
+              for (const key of trackedKeys) if (present.has(key)) return true;
+              return false;
+            };
+            absorb(preKillTable);
+            const settleWhenStdioAlsoReleased = () => {
+              // 血缘集已清空;还要等 stdio 放手才判 terminated——封堵「中间父在
+              // 快照前已亡,其孤儿(血缘不可见)仍持继承句柄」的窗口。不放手由
+              // 入口看门狗按 cleanup unconfirmed 收口。
+              if (stdioReleased) failTimeout(true);
+              else onStdioReleased = () => failTimeout(true);
+            };
+            killProcessTree(child.pid, child, () => {
+              if (settled) return;
+              // 串行轮询:上一轮查询完成后才调度下一轮——单次查询可耗到自身
+              // 超时(3s),WMI 卡顿时 setInterval 会持续叠加 PowerShell 进程。
+              // 收口(settle)清掉重调度定时器;在途查询由其自身超时结束。
+              const pollOnce = () => {
+                void queryWin32ProcessTable().then((t) => {
+                  if (settled) return;
+                  if (t !== null) {
+                    absorb(t);
+                    if (!treePresent(t)) {
+                      settleWhenStdioAlsoReleased();
+                      return;
                     }
-                    scheduleNextPoll();
-                  });
-                }, WIN32_DESCENDANT_POLL_INTERVAL_MS);
-                groupPoll.unref?.();
+                  }
+                  groupPoll = setTimeout(pollOnce, WIN32_DESCENDANT_POLL_INTERVAL_MS);
+                  groupPoll.unref?.();
+                });
               };
-              scheduleNextPoll();
+              pollOnce();
             });
-          });
+          })();
           return;
         }
         // POSIX:git 以 detached 自成进程组长——deadline 处对整组 SIGTERM,

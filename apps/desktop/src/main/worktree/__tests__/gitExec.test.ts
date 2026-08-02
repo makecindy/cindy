@@ -200,7 +200,8 @@ describe('gitExec timeoutMs', () => {
     await vi.advanceTimersByTimeAsync(250);
     expect(s.settled).toBe(false);
 
-    // 新后代也退出 → 树退净,下一轮确认后收口
+    // 新后代也退出且 stdio 放手 → 血缘清空 + 句柄释放双信号,下一轮确认后收口
+    state.gitCb!(new Error('killed'), '', '');
     state.psTable = [];
     await vi.advanceTimersByTimeAsync(250);
     await expectation;
@@ -221,14 +222,15 @@ describe('gitExec timeoutMs', () => {
     probe(p);
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
-    expect(state.psCalls).toBe(1); // 快照
+    expect(state.psCalls).toBe(2); // 杀前血缘快照 + 树杀收尾后的首轮查询(在途,延迟应答)
 
-    // 首轮轮询 t=+250 启动,t=+850 才完成;若是 setInterval 会在 500/750/1000 叠加查询
+    // 首轮轮询 t≈+600 才完成,+850 启动第二轮(其应答 +1450);若是 setInterval
+    // 会在 250/500/750/1000 不断叠加新查询
     await vi.advanceTimersByTimeAsync(1_000);
-    expect(state.psCalls).toBe(2); // 串行:第二轮要等首轮完成后 +250 才启动(t=+1100)
+    expect(state.psCalls).toBe(3);
   });
 
-  it('Windows 超时,快照显示 git 树已无幸存者 → 树杀收尾即收口', async () => {
+  it('Windows 血缘集为空(树在表中不可见)≠ 树已清空 → 还要等 stdio 放手才判 terminated', async () => {
     setPlatform('win32');
     const state = installExecFileMock();
     state.psTable = [{ ProcessId: 9999, ParentProcessId: 1, CreationDate: '/Date(2)/' }];
@@ -237,8 +239,47 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
-    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    const s = probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('process tree terminated'),
+    });
     vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // trackedKeys 为空不等于树已退净:血缘不可见的孤儿可能仍持有继承句柄
+    expect(s.settled).toBe(false);
+
+    state.gitCb!(new Error('killed'), '', '');
+    await expectation;
+  });
+
+  it('Windows 中间父在快照前已亡 → 其孤儿后代血缘不可见,靠 stdio 信号封堵不误判', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    // 快照时 git.exe(4242)还在,但 credential helper(5002)的父 4700 已退出:
+    // 5002 的 ppid 链断裂,血缘追踪不到它
+    state.psTable = [
+      { ProcessId: 4242, ParentProcessId: 100, CreationDate: '/Date(0)/' },
+      { ProcessId: 5002, ParentProcessId: 4700, CreationDate: '/Date(3)/' },
+    ];
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('process tree terminated'),
+    });
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    // 树杀后 git.exe 消失,血缘集清空——但 5002(孤儿)仍在且持有继承的 stdio:
+    // 不得判 terminated
+    state.psTable = [{ ProcessId: 5002, ParentProcessId: 4700, CreationDate: '/Date(3)/' }];
+    await vi.advanceTimersByTimeAsync(250);
+    expect(s.settled).toBe(false);
+
+    // 孤儿退出并放开 stdio → 双信号满足,收口
+    state.gitCb!(new Error('killed'), '', '');
     await expectation;
   });
 
