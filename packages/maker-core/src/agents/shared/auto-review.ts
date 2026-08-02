@@ -2202,7 +2202,88 @@ function isSafeFetch(bin: string, segment: string, tokens: string[]): boolean {
   return true;
 }
 
-function classifyGit(tokens: string[], segment: string): ReviewVerdict {
+const SAFE_GIT_GLOBAL_FLAGS: ReadonlySet<string> = new Set([
+  '--no-pager', '--no-replace-objects', '--bare',
+  '--literal-pathspecs', '--glob-pathspecs', '--noglob-pathspecs',
+  '--icase-pathspecs', '--no-optional-locks',
+]);
+
+function isTrustedGitCwdPath(
+  target: string | undefined,
+  workspaceRoots: string[],
+  cwd: string | undefined,
+  cwdUnknown: boolean,
+  platform: NodeJS.Platform | undefined,
+): boolean {
+  // Git 会从 -C 指向的仓库读取配置；配置可激活外部 helper。纯词法检查无法确认工作区
+  // 子目录不是指向区外的 symlink，因此只允许它精确等于宿主已确认的 cwd（无 cwd 时为主工作区根）。
+  if (!target || /[$`~{}*?[\]]/.test(target) || cwdUnknown) return false;
+  const forward = toForwardSlashes(target);
+  // `chdir` 先跟随 symlink、再处理 `..`。词法 normalize 会把 `/repo/link/..` 错折成
+  // `/repo`，所以只允许不含 `.`/`..`/空分量的绝对路径，且必须精确等于宿主确认 cwd。
+  if (!isAbsolutePath(forward) || forward.split('/').slice(1).some((part) => part === '' || part === '.' || part === '..')) return false;
+  const base = cwd ?? workspaceRoots[0];
+  if (!base) return false;
+  const aliasFirmlinks = (platform ?? process.platform) === 'darwin';
+  return canonicalPath(forward, aliasFirmlinks) === canonicalPath(base, aliasFirmlinks);
+}
+
+function parseGitInvocation(
+  tokens: string[],
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): { sub?: string; args: string[] } | undefined {
+  // Git 的全局选项位于子命令之前。`git -C /repo show` 中 `/repo` 不是子命令；若直接
+  // 寻找第一个非 `-` token，会把它误判为子命令而把只读 show 降级为 prompt。
+  // 这里只消费能够静态确认的全局选项。未知/缺值选项一律返回 undefined，让调用方 fail-closed。
+  let index = 1;
+  while (index < tokens.length) {
+    const token = tokens[index];
+    if (token === '--') {
+      index++;
+      break;
+    }
+    if (!token.startsWith('-')) {
+      return { sub: token, args: tokens.slice(index + 1) };
+    }
+    if (token === '-C') {
+      if (!isTrustedGitCwdPath(tokens[index + 1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      index += 2;
+      continue;
+    }
+    if (token === '--git-dir' || token === '--work-tree') return undefined;
+    if (token === '--namespace') {
+      if (index + 1 >= tokens.length || tokens[index + 1] === '') return undefined;
+      index += 2;
+      continue;
+    }
+    const attachedCwd = /^-C=?(.*)$/.exec(token);
+    if (attachedCwd) {
+      if (!isTrustedGitCwdPath(attachedCwd[1], workspaceRoots, opts.cwd, opts.cwdUnknown === true, opts.platform)) return undefined;
+      index++;
+      continue;
+    }
+    if (/^--(?:git-dir|work-tree)=/.test(token)) return undefined;
+    if (/^--namespace=.+/.test(token)) {
+      index++;
+      continue;
+    }
+    if (SAFE_GIT_GLOBAL_FLAGS.has(token)) {
+      index++;
+      continue;
+    }
+    return undefined;
+  }
+  if (index >= tokens.length) return undefined;
+  return { sub: tokens[index], args: tokens.slice(index + 1) };
+}
+
+function classifyGit(
+  tokens: string[],
+  segment: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): ReviewVerdict {
   // 高风险 git(强推/硬重置/clean -f)已在 REVIEW_REQUIRED_PATTERNS 命中,这里分只读 vs 写。
   // 写文件 / 跑外部程序的选项(即便子命令"只读")→ 升级:
   //   -o/--output(diff/format-patch/show 写文件,无 shell `>` 可捕获);
@@ -2225,23 +2306,16 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
   // 远程助手传输 `ext::<cmd>` / `fd::` 会把 URL 里的命令交给 shell 执行(RCE);即便 ls-remote 最终报错,
   // 命令也已跑(codex 报:`git ls-remote 'ext::sh -c …'`)。任何 git 命令带 ext::/fd:: 传输 → 升级。
   if (/(?:^|[\s'"=])(?:ext|fd)::/.test(segment)) return 'prompt';
-  const rest = tokens.slice(1); // 'git' 之后
-  // 子命令**之前**的内联全局选项可执行任意程序(RCE)→ 升级:
-  //   -c core.pager=… / -c diff.external=… / --config-env[=…](内联 config);
-  //   --exec-path[=<dir>](把 git 子命令的查找目录指到可写目录 → `git --exec-path=/tmp/evil status` 跑 /tmp/evil/git-status)。
-  // 等号形式是单 token(如 `--config-env=…` / `--exec-path=…`),用 startsWith 一并拦。
-  const subIdx = rest.findIndex((t) => !t.startsWith('-'));
-  const preSub = subIdx >= 0 ? rest.slice(0, subIdx) : rest;
-  if (preSub.some((t) => t === '-c' || t.startsWith('--config-env') || t.startsWith('--exec-path'))) return 'prompt';
-  const sub = rest.find((t) => !t.startsWith('-'));
-  if (!sub || !SAFE_GIT_SUBCOMMANDS.has(sub)) {
+  const invocation = parseGitInvocation(tokens, workspaceRoots, opts);
+  if (!invocation?.sub || !SAFE_GIT_SUBCOMMANDS.has(invocation.sub)) {
     // `git config --get/--list` 只读;其它 git(commit/checkout/merge/fetch/config 写…)升级。
-    if (sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
+    if (invocation?.sub === 'config' && /--(?:get|list|get-all)\b/.test(segment)) return 'auto-approve';
     return 'prompt';
   }
+  const { sub, args } = invocation;
   // reflog 有破坏性写模式:expire / delete / drop 删除恢复历史(不可逆);只放行 show/exists/裸 reflog(默认 show)。
   if (sub === 'reflog') {
-    const next = rest.slice(rest.indexOf(sub) + 1).find((t) => !t.startsWith('-'));
+    const next = args.find((t) => !t.startsWith('-'));
     if (next && /^(?:expire|delete|drop)$/.test(next)) return 'prompt';
     return 'auto-approve'; // 裸 / show / exists
   }
@@ -2250,26 +2324,41 @@ function classifyGit(tokens: string[], segment: string): ReviewVerdict {
     // 删除/改名/复制/强制 flag,或子命令后带位置参数(= 新建分支/标签)→ 写。
     // --edit-description invokes $EDITOR(可执行任意外部程序)→ 升级(copilot P1)。
     if (/\s-(?:d|D|m|M|c|C)\b|\s--(?:delete|move|copy|force|edit-description)\b/.test(segment)) return 'prompt';
-    const after = rest.slice(rest.indexOf(sub) + 1).filter((t) => !t.startsWith('-'));
+    const after = args.filter((t) => !t.startsWith('-'));
     if (after.length > 0) return 'prompt';
     return 'auto-approve';
   }
   if (sub === 'remote') {
-    const afterRemote = rest.slice(rest.indexOf(sub) + 1);
-    const next = afterRemote.find((t) => !t.startsWith('-'));
+    const next = args.find((t) => !t.startsWith('-'));
     if (next && /^(?:add|remove|rm|rename|set-url|set-head|set-branches|prune|update)$/.test(next)) {
       return 'prompt';
     }
     // `remote show` 不带 -n 会联系远端(ext:://insteadOf 可执行 payload,codex P1)→ 升级;带 -n 只读本地配置放行。
-    if (next === 'show' && !afterRemote.includes('-n')) return 'prompt';
+    if (next === 'show' && !args.includes('-n')) return 'prompt';
     return 'auto-approve'; // bare / -v / get-url / show -n 等不触网的只读形态
   }
   return 'auto-approve';
 }
 
-function classifyShellSegment(segment: string): ReviewVerdict {
+function classifyShellSegment(
+  segment: string,
+  workspaceRoots: string[],
+  opts: ShellReviewOptions,
+): ReviewVerdict {
   const rawTokens = tokenize(segment);
-  const tokens = unwrapWrappers(rawTokens);
+  const unwrapped = unwrapCommand(
+    rawTokens,
+    opts.cwd ?? workspaceRoots[0],
+    opts.cwdUnknown === true,
+  );
+  const tokens = unwrapped.tokens;
+  // 包装器可改变内层 cwd（如 `env -C /extra git …`）。不能把该路径当作可信审批基准；
+  // 只要 Git 前经过改目录或 cwd 变得未知，保守交给 prompt。
+  const initialCwd = opts.cwd ?? workspaceRoots[0];
+  const aliasFirmlinks = (opts.platform ?? process.platform) === 'darwin';
+  const wrapperChangedCwd = unwrapped.cwdUnknown
+    || (unwrapped.cwd !== undefined && initialCwd !== undefined
+      && canonicalPath(unwrapped.cwd, aliasFirmlinks) !== canonicalPath(initialCwd, aliasFirmlinks));
   // 裸 env / 未指定 VARIABLE 的 printenv 会输出整个进程环境(含 provider API key)，不能交给
   // reviewer 自行静默 allow。`-0` / `--null` 只改分隔符，不缩小输出范围；只有存在非选项
   // VARIABLE 参数时才算具名读取并留在灰区。`env FOO=bar cmd` 仍按内层命令分类。
@@ -2331,7 +2420,10 @@ function classifyShellSegment(segment: string): ReviewVerdict {
         .join('/')
     : cmd0Raw;
   if (cmd0.includes('/') && !/^\/(?:usr\/s?bin|s?bin)\//.test(cmd0)) return 'prompt';
-  if (bin === 'git') return classifyGit(tokens, deQuoted);
+  if (bin === 'git') {
+    if (wrapperChangedCwd) return 'prompt';
+    return classifyGit(tokens, deQuoted, workspaceRoots, opts);
+  }
   if (isSafeFetch(bin, deQuoted, tokens)) return 'auto-approve';
   if (isSafeReadonlyBin(bin, deQuoted, tokens)) return 'auto-approve';
   // 其余(含所有写操作、未知命令)进入灰区，由轻量 reviewer 静默 allow/block/ask。
@@ -2408,7 +2500,7 @@ export function classifyShellCommand(
   if (segments.length === 0) return 'prompt';
   let needsPrompt = false;
   for (const seg of segments) {
-    const v = classifyShellSegment(seg);
+    const v = classifyShellSegment(seg, workspaceRoots, opts);
     if (v === 'prompt-each-time') return 'prompt-each-time';
     if (v === 'prompt') needsPrompt = true;
   }
