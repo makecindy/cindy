@@ -26,6 +26,7 @@
 
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
 import { createLogger } from '../logger.js';
+import { t } from '../i18n.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
@@ -583,7 +584,14 @@ function isSteerDeliveryUncertainError(err: unknown): boolean {
 }
 
 function errorMessage(err: unknown): string {
-  return err instanceof Error ? err.message : String(err);
+  const raw = err instanceof Error ? err.message : String(err);
+  const code = err && typeof err === 'object' && typeof (err as { code?: unknown }).code === 'string'
+    ? (err as { code: string }).code
+    : null;
+  if (code === 'PI_IMAGE_INPUT_UNSUPPORTED' || raw.includes('[PI_IMAGE_INPUT_UNSUPPORTED]')) {
+    return t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
+  }
+  return raw;
 }
 
 function isSessionRunningError(err: unknown): boolean {

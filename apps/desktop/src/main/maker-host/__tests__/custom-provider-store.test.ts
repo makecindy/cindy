@@ -132,6 +132,17 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       validateCustomProviderConfig({
         ...valid,
         runtimes: {
+          pi: {
+            baseUrl: 'https://x/v1',
+            models: [{ id: 'm', name: 'M', supportsImageInput: 'yes' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
           codex: {
             baseUrl: 'https://x/v1',
             models: [{ id: 'm', name: 'M', defaultEnabled: 'false' }],
@@ -272,6 +283,30 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'hidden', name: 'Hidden', defaultEnabled: false },
     ]);
     expect(got?.runtimes.codex?.headers).toBeUndefined();
+  });
+
+  it('round-trips only an explicitly enabled Pi image-input capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'visual-pi',
+      name: 'Visual Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [
+            { id: 'vision', name: 'Vision', supportsImageInput: true },
+            { id: 'legacy', name: 'Legacy' },
+            { id: 'explicit-text', name: 'Explicit text', supportsImageInput: false },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('visual-pi'))?.runtimes.pi?.models).toEqual([
+      { id: 'vision', name: 'Vision', supportsImageInput: true },
+      { id: 'legacy', name: 'Legacy' },
+      { id: 'explicit-text', name: 'Explicit text' },
+    ]);
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {

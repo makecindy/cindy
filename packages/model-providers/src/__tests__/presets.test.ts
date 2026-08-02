@@ -112,6 +112,29 @@ describe('sanitizePresets', () => {
     }])).toEqual([]);
   });
 
+  it('Pi 图片输入能力只接受显式布尔值', () => {
+    const visual = {
+      id: 'visual-pi',
+      name: 'Visual Pi',
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [{ id: 'vision', name: 'Vision', supportsImageInput: true }],
+        },
+      },
+    };
+    expect(sanitizePresets([visual])).toEqual([visual]);
+    expect(sanitizePresets([{
+      ...visual,
+      runtimes: {
+        pi: {
+          ...visual.runtimes.pi,
+          models: [{ id: 'vision', name: 'Vision', supportsImageInput: 'yes' }],
+        },
+      },
+    }])).toEqual([]);
+  });
+
   it('requestPath 合法时保留；跨主机、fragment 与 CRLF 形态剥字段但保留预设', () => {
     const runtime = (requestPath: unknown) => ({
       codex: {

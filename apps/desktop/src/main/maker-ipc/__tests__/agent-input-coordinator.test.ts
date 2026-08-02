@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
+import { setMainLocale } from '../../i18n.js';
 import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
@@ -368,6 +369,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  setMainLocale('en');
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -2774,6 +2776,26 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('localizes the Pi image-capability guard before projecting the recoverable error', async () => {
+    setMainLocale('zh-CN');
+    const h = createHarness();
+    const sid = 'pi-image-capability';
+    h.sendToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, makeItem('q-image', 'describe the screenshot'));
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe(
+      '当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。',
+    );
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-image']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
 
   it('retries a queue-head recovery when an external live reservation clears without a terminal event', async () => {

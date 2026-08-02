@@ -346,6 +346,12 @@ export interface CatalogModel {
    */
   defaultEnabled?: boolean;
   /**
+   * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
+   * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
+   * `modelSignature` 的同 id 跨供应商一致性校验。
+   */
+  supportsImageInput?: boolean;
+  /**
    * **视图层字段**:该 (供应商, 模型) 已被用户「停用」(准入关,与 `defaultEnabled` 的
    * 「显示」轴正交)。由 `buildRegistry` 按 host 注入的 ModelDisableOverrides 填充,
    * 目录数据本身**不携带**本字段,也不参与 `modelSignature` 一致性校验。
@@ -432,6 +438,8 @@ export interface ProviderRuntimeModelConfig {
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
+  /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
+  supportsImageInput?: boolean;
 }
 
 /**

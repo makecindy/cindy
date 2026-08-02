@@ -42,7 +42,15 @@ export function replaceCustomProviderModelId(
  * 推断（PR review P1）；无标记的旧视图快照回退等值判断,行为不变。
  */
 export function customProviderModelConfigFromCatalogModel(
-  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'contextWindowExplicit' | 'defaultEnabled'>,
+  model: Pick<
+    CatalogModel,
+    | 'id'
+    | 'name'
+    | 'contextWindow'
+    | 'contextWindowExplicit'
+    | 'defaultEnabled'
+    | 'supportsImageInput'
+  >,
 ): ProviderRuntimeModelConfig {
   return {
     id: model.id,
@@ -51,6 +59,7 @@ export function customProviderModelConfigFromCatalogModel(
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
+    ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
   };
 }
 

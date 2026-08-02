@@ -19,6 +19,7 @@ describe('replaceCustomProviderModelId', () => {
       id: 'MiniMax-M3',
       name: 'MiniMax M3',
       contextWindow: 1_000_000,
+      supportsImageInput: true,
     }, 'another-model')).toEqual({
       id: 'another-model',
       name: 'MiniMax M3',
@@ -84,6 +85,19 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       id: 'discovered',
       name: 'Discovered',
       defaultEnabled: false,
+    });
+  });
+
+  it('preserves an explicit Pi image-input capability through the edit round trip', () => {
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'vision-model',
+      name: 'Vision Model',
+      contextWindow: 200_000,
+      supportsImageInput: true,
+    })).toEqual({
+      id: 'vision-model',
+      name: 'Vision Model',
+      supportsImageInput: true,
     });
   });
 });
