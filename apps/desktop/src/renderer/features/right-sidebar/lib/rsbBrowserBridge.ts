@@ -434,6 +434,14 @@ async function handleTabOpRequest(
   const reqId = req.reqId;
   let result: RsbBrowserBridgeTabOpResult;
   try {
+    if (req.op === 'probe') {
+      // Reaching this listener proves preload fan-out and the live RSB
+      // renderer bridge are both available. Keep the probe side-effect free:
+      // it must not hydrate a session, materialize a webview or change focus.
+      result = { reqId, ok: true };
+      await api.tabOpResult(result);
+      return;
+    }
     // 先把该 session 的 bucket 水合到位(幂等,已水合时同步返回)。三个 op 都需要:
     //  - focus / close 同步读 getBucket —— 新 renderer(侧边栏子窗口刚 READY)或
     //    会话跟随切换后 bucket 可能还是空的,不水合会把存在的 tab 误报 "not found";

@@ -69,6 +69,10 @@ import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import type {
+  BrowserBackendHealth,
+  BrowserBackendRecoveryResult,
+} from '../shared/browserBackend';
+import type {
   ReviewBranchDiffData,
   ReviewCommitDiffData,
   ReviewCommitListData,
@@ -4140,6 +4144,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('browser-backend:set-kind', { kind }),
     /** Clear user override → follow current system default. */
     reset: (): Promise<unknown> => ipcRenderer.invoke('browser-backend:reset'),
+    /** Probe the active backend; main performs one automatic embedded recovery. */
+    getHealth: (): Promise<BrowserBackendHealth> =>
+      ipcRenderer.invoke('browser-backend:get-health'),
+    /** Force a fresh embedded backend instance and verify the new connection. */
+    recover: (): Promise<BrowserBackendRecoveryResult> =>
+      ipcRenderer.invoke('browser-backend:recover'),
   },
 
   // electronAPI.codex.* 已退役 —— auth / agent status / usage 全部走 electronAPI.maker.*(agentKind),

@@ -175,6 +175,7 @@ export class RsbWebviewArtifacts {
   private readonly artifactSessions = new Map<string, string>();
   private readonly preparedRoots = new Set<string>();
   private retainedBytes = 0;
+  private disposed = false;
 
   constructor(
     private readonly rootDir: () => string,
@@ -187,6 +188,7 @@ export class RsbWebviewArtifacts {
     context: { sessionId: string; timeoutMs?: number },
     action: () => Promise<T>,
   ): Promise<{ value: T; downloads: BrowserArtifact[] }> {
+    this.assertActive();
     if (this.captures.has(wc)) {
       throw new Error('another download-aware action is already running for this tab');
     }
@@ -196,14 +198,20 @@ export class RsbWebviewArtifacts {
     if (!this.preparedRoots.has(rootDir)) {
       await fs.promises.mkdir(rootDir, { recursive: true });
       await reclaimStaleProcessRoots(rootDir);
+      this.assertActive();
       this.preparedRoots.add(rootDir);
     }
     const parent = artifactSessionRoot(rootDir, context.sessionId);
     await fs.promises.mkdir(parent, { recursive: true });
+    this.assertActive();
     captureSequence += 1;
     const directory = await fs.promises.mkdtemp(
       path.join(parent, `${Date.now().toString(36)}-${captureSequence.toString(36)}-`),
     );
+    if (this.disposed) {
+      await this.removeDirectory(directory);
+      this.assertActive();
+    }
     const capture: ArtifactCapture = {
       id: `${Date.now().toString(36)}-${captureSequence.toString(36)}`,
       sessionId: context.sessionId,
@@ -220,6 +228,7 @@ export class RsbWebviewArtifacts {
     try {
       value = await action();
       await wait(this.downloadGraceMs);
+      this.assertActive();
     } catch (err) {
       capture.accepting = false;
       this.captures.delete(wc);
@@ -247,6 +256,7 @@ export class RsbWebviewArtifacts {
     let downloads: BrowserArtifact[];
     try {
       downloads = await Promise.race([completion, timeout]);
+      this.assertActive();
     } catch (err) {
       await this.removeDirectory(directory);
       throw err;
@@ -256,6 +266,7 @@ export class RsbWebviewArtifacts {
     for (const artifact of downloads) {
       if (artifact.state === 'completed' && artifact.path && artifact.bytes === undefined) {
         artifact.bytes = await this.fileSize(artifact.path);
+        this.assertActive();
       }
       this.recent.push(artifact);
       this.artifactSessions.set(artifact.id, context.sessionId);
@@ -281,6 +292,7 @@ export class RsbWebviewArtifacts {
   }
 
   async dispose(): Promise<void> {
+    this.disposed = true;
     for (const [session, listener] of this.sessionListeners) {
       session.removeListener('will-download', listener);
     }
@@ -298,6 +310,10 @@ export class RsbWebviewArtifacts {
     await Promise.all(retained.map((artifact) => (
       artifact.path ? this.removeArtifactFile(artifact.path) : Promise.resolve()
     )));
+  }
+
+  private assertActive(): void {
+    if (this.disposed) throw new Error('browser artifact capture is disposed');
   }
 
   private observeSession(session: SessionLike): void {

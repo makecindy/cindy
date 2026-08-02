@@ -115,10 +115,12 @@ function debuggerFor(wc: WebContents): ElectronDebugger {
  */
 export class RsbWebviewNetwork {
   private readonly states = new Map<WebContents, MonitorState>();
+  private disposed = false;
 
   constructor(private readonly logger: NetworkLogger) {}
 
   async observe(wc: WebContents): Promise<void> {
+    if (this.disposed) throw new Error('network monitor is disposed');
     let state = this.states.get(wc);
     if (!state) {
       state = this.createState(wc);
@@ -134,6 +136,7 @@ export class RsbWebviewNetwork {
       maxResourceBufferSize: 4 * 1024 * 1024,
       maxPostDataSize: 256 * 1024,
     });
+    this.assertActive(wc, state);
     state.enabled = true;
   }
 
@@ -170,12 +173,14 @@ export class RsbWebviewNetwork {
     await this.observe(wc);
     const state = this.states.get(wc);
     if (!state) throw new Error('network monitor unavailable');
+    this.assertActive(wc, state);
     const timeoutMs = boundedPositive(options.timeoutMs, DEFAULT_BODY_WAIT_MS, MAX_BODY_WAIT_MS);
     const maxChars = boundedPositive(options.maxChars, DEFAULT_BODY_CHARS, MAX_BODY_CHARS);
     const deadline = Date.now() + timeoutMs;
     const existingResponseIds = new Set(state.responses.keys());
 
     for (;;) {
+      this.assertActive(wc, state);
       const response = [...state.responses.values()]
         .reverse()
         .find((entry) => (
@@ -184,9 +189,11 @@ export class RsbWebviewNetwork {
           && urlMatches(pattern, entry.url)
         ));
       if (response) {
+        this.assertActive(wc, state);
         const raw = await state.debugger.sendCommand('Network.getResponseBody', {
           requestId: response.requestId,
         }) as { body?: unknown; base64Encoded?: unknown };
+        this.assertActive(wc, state);
         const encoded = text(raw.body);
         const body = raw.base64Encoded === true
           ? Buffer.from(encoded, 'base64').toString('utf8')
@@ -203,6 +210,7 @@ export class RsbWebviewNetwork {
         throw new Error(`response not found for URL pattern: ${pattern}`);
       }
       await new Promise((resolve) => setTimeout(resolve, 100));
+      this.assertActive(wc, state);
     }
   }
 
@@ -213,14 +221,17 @@ export class RsbWebviewNetwork {
     await this.observe(wc);
     const state = this.states.get(wc);
     if (!state) throw new Error('network monitor unavailable');
+    this.assertActive(wc, state);
     const timeoutMs = boundedPositive(options.timeoutMs, DEFAULT_BODY_WAIT_MS, MAX_BODY_WAIT_MS);
     const idleMs = boundedPositive(options.idleMs, DEFAULT_IDLE_WINDOW_MS, MAX_BODY_WAIT_MS);
     const deadline = Date.now() + timeoutMs;
     for (;;) {
+      this.assertActive(wc, state);
       const now = Date.now();
       if (state.inFlight.size === 0 && now - state.lastActivityAt >= idleMs) return;
       if (now >= deadline) throw new Error('network did not become idle before timeout');
       await new Promise((resolve) => setTimeout(resolve, 50));
+      this.assertActive(wc, state);
     }
   }
 
@@ -231,6 +242,7 @@ export class RsbWebviewNetwork {
   }
 
   dispose(): void {
+    this.disposed = true;
     for (const wc of [...this.states.keys()]) this.release(wc);
   }
 
@@ -251,6 +263,7 @@ export class RsbWebviewNetwork {
     };
     state.messageHandler = (...args: unknown[]) => {
       try {
+        if (this.disposed || this.states.get(wc) !== state) return;
         const method = text(args[1]);
         const params = args[2] && typeof args[2] === 'object'
           ? args[2] as Record<string, unknown>
@@ -271,6 +284,12 @@ export class RsbWebviewNetwork {
       once?: (event: string, listener: (...args: unknown[]) => void) => void;
     }).once?.('destroyed', state.destroyedHandler);
     return state;
+  }
+
+  private assertActive(wc: WebContents, state: MonitorState): void {
+    if (this.disposed || this.states.get(wc) !== state) {
+      throw new Error('network monitor is disposed');
+    }
   }
 
   private consumeMessage(

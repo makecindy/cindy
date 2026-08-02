@@ -103,9 +103,13 @@ export function registerTabOpResultHandler(opts: RendererBridgeOptions): void {
 export async function dispatchTabOp(
   op: RsbBrowserBridgeTabOp,
   opts: RendererBridgeOptions,
+  assertActive?: () => void,
+  dispatchOptions: { ensureHost?: boolean } = {},
 ): Promise<RsbBrowserBridgeTabOpResult> {
-  if (opts.ensureHost) {
+  assertActive?.();
+  if (dispatchOptions.ensureHost !== false && opts.ensureHost) {
     await opts.ensureHost();
+    assertActive?.();
   }
   const wc = opts.getHostWebContents();
   if (!wc || wc.isDestroyed()) {
@@ -128,6 +132,7 @@ export async function dispatchTabOp(
     }, timeoutMs);
     pending.set(reqId, { resolve, reject, timeout });
     try {
+      assertActive?.();
       wc.send(RSB_BROWSER_BRIDGE_TAB_OP_REQUEST_CHANNEL, fullReq);
     } catch (err) {
       if (pending.delete(reqId)) {
