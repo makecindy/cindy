@@ -273,6 +273,19 @@ export async function listBranches(baseRepo: string): Promise<ListBranchesResp> 
 }
 
 /**
+ * 把 ref(如 HEAD)解析为 commit SHA;repoDir 可以是主仓根或 linked worktree
+ * 路径。解析失败返回 null(调用方自行回退)。
+ */
+export async function revParseCommit(repoDir: string, ref: string): Promise<string | null> {
+  try {
+    const { stdout } = await gitExec(['rev-parse', '--verify', `${ref}^{commit}`], repoDir);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * 列出已被本仓库占用的名字: store 里 sessionId → name + git 分支 xdt/* 去前缀。
  * 用于 nameGenerator 冲突避让 + create 阶段二次校验。
  */

@@ -18,7 +18,9 @@ env:
   XDT_SKIP_AGENT_BIN_INSTALL: '1'
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   ELECTRON_OVERRIDE_DIST_PATH: '${{ github.workspace }}/.electron-stub-dist'
-  NODE_OPTIONS: '--max-old-space-size=4096'
+  # tsc 全仓 typecheck 的峰值堆已到 ~4040MB,4096 上限下 PR 合并引用的 verify 反复
+  # OOM(exit 134);ubuntu-latest 16GB 内存,放宽到 6144 留出增长余量。
+  NODE_OPTIONS: '--max-old-space-size=6144'
 
 jobs:
   verify:

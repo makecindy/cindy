@@ -74,8 +74,105 @@ export interface GitExecOpts {
 const POSIX_KILL_GRACE_MS = 1_500;
 /** POSIX 宽限期内探测进程组是否清空的轮询间隔。 */
 const POSIX_GROUP_POLL_INTERVAL_MS = 100;
-/** 硬杀完成后等待后代真正退净(stdio 放手/进程组消失)的有界看门狗。 */
+/**
+ * 硬杀完成后等待后代真正退净的有界看门狗。**不是**「后代已清空」的证明——正常
+ * 收口依赖组探测(POSIX)或进程表快照确认(Windows),看门狗只防极端不可杀进程
+ * 把 Promise 永远挂死。
+ */
 const DESCENDANT_SETTLE_WAIT_MS = 1_500;
+/** Windows 进程表查询(PowerShell Get-CimInstance)自身的超时。 */
+const WIN32_PS_QUERY_TIMEOUT_MS = 3_000;
+/** Windows 确认快照后代退净的轮询间隔。 */
+const WIN32_DESCENDANT_POLL_INTERVAL_MS = 250;
+
+interface Win32ProcRow {
+  pid: number;
+  ppid: number;
+  created: string;
+}
+
+/**
+ * Windows:一次性拉当前进程表(pid/ppid/创建时间),**仅观察**,用于确认超时后
+ * git 的后代已全部退出——绝不据此杀进程,pid 被复用最多让确认多等一会(直到
+ * 看门狗),不存在误杀风险;pid+CreationDate 双键匹配基本免疫复用误判。
+ * PowerShell 缺失/超时/输出异常一律返回 null(调用方降级)。
+ */
+function queryWin32ProcessTable(): Promise<Win32ProcRow[] | null> {
+  return new Promise((resolve) => {
+    let done = false;
+    const finish = (v: Win32ProcRow[] | null) => {
+      if (done) return;
+      done = true;
+      resolve(v);
+    };
+    try {
+      execFile(
+        'powershell.exe',
+        [
+          '-NoProfile',
+          '-NonInteractive',
+          '-Command',
+          'Get-CimInstance Win32_Process | Select-Object ProcessId,ParentProcessId,CreationDate | ConvertTo-Json -Compress',
+        ],
+        { maxBuffer: 16 * 1024 * 1024, timeout: WIN32_PS_QUERY_TIMEOUT_MS, windowsHide: true },
+        (err, stdout) => {
+          if (err) {
+            finish(null);
+            return;
+          }
+          try {
+            const raw: unknown = JSON.parse(String(stdout));
+            const rows = Array.isArray(raw) ? raw : [raw];
+            finish(
+              rows
+                .map((r) => {
+                  const row = r as { ProcessId?: unknown; ParentProcessId?: unknown; CreationDate?: unknown };
+                  return {
+                    pid: Number(row.ProcessId),
+                    ppid: Number(row.ParentProcessId),
+                    created: String(row.CreationDate ?? ''),
+                  };
+                })
+                .filter((r) => Number.isFinite(r.pid)),
+            );
+          } catch {
+            finish(null);
+          }
+        },
+      );
+    } catch {
+      finish(null);
+    }
+  });
+}
+
+/** 从进程表收集 rootPid 自身(若仍在)与全部多级后代,作为待确认退净的幸存者集合。 */
+function collectWin32TreeSurvivors(
+  table: Win32ProcRow[],
+  rootPid: number,
+): Array<{ pid: number; created: string }> {
+  const childrenByPpid = new Map<number, Win32ProcRow[]>();
+  for (const row of table) {
+    const list = childrenByPpid.get(row.ppid);
+    if (list) list.push(row);
+    else childrenByPpid.set(row.ppid, [row]);
+  }
+  const out: Array<{ pid: number; created: string }> = [];
+  const rootRow = table.find((r) => r.pid === rootPid);
+  if (rootRow) out.push({ pid: rootPid, created: rootRow.created });
+  const queue = [rootPid];
+  const seen = new Set<number>([rootPid]);
+  while (queue.length > 0) {
+    const cur = queue.shift()!;
+    for (const row of childrenByPpid.get(cur) ?? []) {
+      if (seen.has(row.pid)) continue;
+      seen.add(row.pid);
+      out.push({ pid: row.pid, created: row.created });
+      queue.push(row.pid);
+    }
+  }
+  return out;
+}
 
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
@@ -196,20 +293,43 @@ function execFileOnce(
             ),
           );
         if (process.platform === 'win32') {
-          // 复用 proc-util killProcessTree(taskkill /T /F,带重试与后代兜底)。
-          // 注意它在直接 git.exe 已退出时会按 pid 复用防线就地收束(不按 ppid
-          // 枚举后代,防误杀)——此时继承 stdio 的 credential helper 等后代可能
-          // 仍存活。这里用 execFile 回调作为「后代已放开继承句柄」的第一方
-          // 信号:回调已到才收口,否则等回调(或有界看门狗)再收口,保证收口时
-          // 后代不再持有继承的标准流,后续 git 操作不与之并发争锁。
+          // 终止走 proc-util killProcessTree(taskkill /T /F,带重试与后代兜底;
+          // git.exe 已退出时它按 pid 复用防线就地收束,不按 ppid 枚举杀,防误杀)。
+          // **确认**独立于终止:并行拉一次进程表快照,收集 git 树的幸存者
+          // (pid+创建时间双键,仅观察不杀),树杀收尾后轮询确认幸存者全部消失
+          // 才收口——覆盖「git.exe 已退、credential helper 等后代仍活」的窗口。
+          // 进程表不可用(PowerShell 缺失/超时)降级为 stdio 放手信号(execFile
+          // 回调 = 继承句柄全部释放);两条路都有看门狗防永悬(见常量注释,
+          // 看门狗不构成清空证明)。
+          const snapshotPromise = child.pid != null ? queryWin32ProcessTable() : Promise.resolve(null);
           killProcessTree(child.pid, child, () => {
-            if (stdioReleased) {
-              failTimeout();
-              return;
-            }
-            onStdioReleased = () => failTimeout();
-            finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
-            finishWatchdog.unref?.();
+            void snapshotPromise.then((table) => {
+              if (settled) return;
+              const survivors =
+                table !== null && child.pid != null ? collectWin32TreeSurvivors(table, child.pid) : null;
+              if (survivors !== null && survivors.length === 0) {
+                failTimeout();
+                return;
+              }
+              if (survivors !== null) {
+                const keys = survivors.map((s) => `${s.pid}:${s.created}`);
+                groupPoll = setInterval(() => {
+                  void queryWin32ProcessTable().then((t) => {
+                    if (settled || t === null) return;
+                    const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
+                    if (!keys.some((k) => present.has(k))) failTimeout();
+                  });
+                }, WIN32_DESCENDANT_POLL_INTERVAL_MS);
+                groupPoll.unref?.();
+              } else if (stdioReleased) {
+                failTimeout();
+                return;
+              } else {
+                onStdioReleased = () => failTimeout();
+              }
+              finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
+              finishWatchdog.unref?.();
+            });
           });
           return;
         }

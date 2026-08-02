@@ -28,6 +28,8 @@ export interface HandoffWorktreeDeps {
   suggestName: (baseRepo: string) => Promise<string>;
   /** 列分支 + 当前检出分支;repoDir 可以是主仓根,也可以是 linked worktree 路径。 */
   listBranches: (repoDir: string) => Promise<ListBranchesResp>;
+  /** 把 ref(如 HEAD)解析为 commit SHA,失败返回 null(WorktreeManager.revParseCommit)。 */
+  resolveCommit?: (repoDir: string, ref: string) => Promise<string | null>;
   createWorktree: (req: CreateWorktreeReq) => Promise<CreateWorktreeResp>;
   createId: () => string;
   /**
@@ -128,10 +130,17 @@ export async function prepareHandoffWorktree(
   let sourceBranch: string;
   if (continuingDispatcherWork) {
     // 派生子任务:源分支取 dispatcher worktree 里当前检出的分支——baseRepo 主 checkout
-    // 的 current 可能是另一条分支,用它会丢 dispatcher 分支上的在途提交。detached
-    // (rev-parse 返回字面量 HEAD)或读不到时退创建时登记的分支。
+    // 的 current 可能是另一条分支,用它会丢 dispatcher 分支上的在途提交。
     const { current } = await deps.listBranches(dispatcherWorktree.path);
-    sourceBranch = current && current !== 'HEAD' ? current : dispatcherWorktree.branch;
+    if (current && current !== 'HEAD') {
+      sourceBranch = current;
+    } else {
+      // detached HEAD(rev-parse --abbrev-ref 返回字面量 HEAD):跟随 dispatcher
+      // 实际检出的提交(rev-parse HEAD 的 SHA)——创建时登记的分支可能早已落后
+      // 实际工作位置,直接用会丢提交;解析失败才退登记分支。
+      const headSha = (await deps.resolveCommit?.(dispatcherWorktree.path, 'HEAD')) ?? null;
+      sourceBranch = headSha ?? dispatcherWorktree.branch;
+    }
   } else {
     const { current } = await deps.listBranches(baseRepo);
     const fallback = current || 'HEAD';

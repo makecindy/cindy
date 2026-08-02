@@ -5929,6 +5929,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 detectCwd: worktreeManager.detectCwd,
                 suggestName: worktreeManager.suggestName,
                 listBranches: worktreeManager.listBranches,
+                resolveCommit: worktreeManager.revParseCommit,
                 createWorktree: worktreeManager.createWorktree,
                 createId: () => randomUUID(),
                 resolveFreshSource: resolveFreshSourceBranch,

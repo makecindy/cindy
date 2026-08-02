@@ -38,18 +38,25 @@ interface FakeGit {
   child: FakeChild;
   gitOpts: { detached?: boolean } | undefined;
   gitCb: ExecCb | undefined;
+  /** powershell 进程表应答:null = 查询失败(降级路径),数组 = Win32_Process 行。 */
+  psTable: Array<{ ProcessId: number; ParentProcessId: number; CreationDate: string }> | null;
 }
 
-/** git 调用返回假 child 并捕获回调与 spawn 选项。 */
+/** git 调用返回假 child 并捕获回调与 spawn 选项;powershell 调用按 psTable 应答。 */
 function installExecFileMock(): FakeGit {
   const child = new EventEmitter() as FakeChild;
   child.pid = 4242;
   child.kill = vi.fn();
   child.exitCode = null;
   child.signalCode = null;
-  const state: FakeGit = { child, gitOpts: undefined, gitCb: undefined };
+  const state: FakeGit = { child, gitOpts: undefined, gitCb: undefined, psTable: null };
   mocks.execFile.mockImplementation(
     (file: string, _args: string[], opts: FakeGit['gitOpts'], cb?: ExecCb) => {
+      if (file === 'powershell.exe') {
+        if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
+        else cb!(null, JSON.stringify(state.psTable), '');
+        return {};
+      }
       if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
       state.gitOpts = opts;
       state.gitCb = cb;
@@ -116,9 +123,14 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
-  it('Windows 超时 → killProcessTree 后等 stdio 放手(execFile 回调)才收口', async () => {
+  it('Windows 超时 → 快照确认 git 树幸存者(含 git.exe 已退但后代仍活)全部消失才收口', async () => {
     setPlatform('win32');
     const state = installExecFileMock();
+    // git.exe(4242)已退出不在表里,但它的后代 credential helper(5001)仍存活
+    state.psTable = [
+      { ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' },
+      { ProcessId: 9999, ParentProcessId: 1, CreationDate: '/Date(2)/' }, // 无关进程
+    ];
     mocks.killProcessTree.mockImplementation(
       (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
     );
@@ -133,19 +145,37 @@ describe('gitExec timeoutMs', () => {
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
     expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
-    // taskkill 收尾但 stdio 未关(继承句柄的 credential helper 可能仍在)→ 不收口
+    // 后代 5001 仍在进程表 → 不收口;stdio 放手也不当作证明
+    state.gitCb!(new Error('killed'), '', '');
+    await flushMicrotasks();
     expect(s.settled).toBe(false);
 
-    // 回调到达 = 全部句柄持有者退出/放手 → 收口
-    state.gitCb!(new Error('killed'), '', '');
+    // 后代退出(从进程表消失)→ 下一轮轮询确认后收口
+    state.psTable = [{ ProcessId: 9999, ParentProcessId: 1, CreationDate: '/Date(2)/' }];
+    await vi.advanceTimersByTimeAsync(250);
     await expectation;
     // Windows 不开 detached(语义是脱离控制台,树杀走 taskkill /T)
     expect(state.gitOpts?.detached).toBe(false);
   });
 
-  it('Windows 超时且 stdio 一直不放手(git 回调永不到来)→ 有界看门狗兜底收口', async () => {
+  it('Windows 超时,快照显示 git 树已无幸存者 → 树杀收尾即收口', async () => {
     setPlatform('win32');
-    installExecFileMock();
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 9999, ParentProcessId: 1, CreationDate: '/Date(2)/' }];
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    vi.advanceTimersByTime(1000);
+    await expectation;
+  });
+
+  it('Windows 进程表不可用 → 降级 stdio 放手信号收口', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = null; // PowerShell 查询失败
     mocks.killProcessTree.mockImplementation(
       (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
     );
@@ -157,7 +187,26 @@ describe('gitExec timeoutMs', () => {
     await flushMicrotasks();
     expect(s.settled).toBe(false);
 
-    vi.advanceTimersByTime(1_500);
+    state.gitCb!(new Error('killed'), '', '');
+    await expectation;
+  });
+
+  it('Windows 幸存者始终不消失 → 有界看门狗兜底收口(防永悬,不当清空证明)', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' }];
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+
+    await vi.advanceTimersByTimeAsync(1_500);
     await expectation;
   });
 

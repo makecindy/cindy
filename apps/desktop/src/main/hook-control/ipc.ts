@@ -348,6 +348,7 @@ function ensureInstances(): { store: SlackHookStore; manager: HookControlManager
               detectCwd: WorktreeManager.detectCwd,
               suggestName: WorktreeManager.suggestName,
               listBranches: WorktreeManager.listBranches,
+              resolveCommit: WorktreeManager.revParseCommit,
               createWorktree: WorktreeManager.createWorktree,
               createId: () => randomUUID(),
               resolveFreshSource: resolveFreshSourceBranch,

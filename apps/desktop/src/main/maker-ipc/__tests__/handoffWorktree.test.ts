@@ -181,12 +181,30 @@ describe('prepareHandoffWorktree', () => {
     );
   });
 
-  it('派生子任务且 dispatcher worktree 处于 detached HEAD → 回退创建时登记的分支', async () => {
-    // rev-parse --abbrev-ref HEAD 在 detached 时返回字面量 "HEAD",不能当分支用
+  it('派生子任务且 dispatcher worktree 处于 detached HEAD → 用 rev-parse HEAD 的 SHA 为源', async () => {
+    // rev-parse --abbrev-ref HEAD 在 detached 时返回字面量 "HEAD",不能当分支用;
+    // 登记分支可能落后实际检出位置,必须跟随实际 HEAD 提交
     const listBranches = vi.fn(async () => ({ branches: ['main'], current: 'HEAD' }));
+    const resolveCommit = vi.fn(async () => 'abc123def456');
     const deps = makeDeps({
       getForSession: vi.fn(() => meta({ branch: 'xdt/auto-x1' })),
       listBranches,
+      resolveCommit,
+    });
+    await prepareHandoffWorktree(deps, 'disp-1', path.join(WT, 'sub'));
+    expect(resolveCommit).toHaveBeenCalledWith(WT, 'HEAD');
+    expect(deps.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBranch: 'abc123def456' }),
+    );
+  });
+
+  it('detached 且 rev-parse HEAD 解析失败 → 才回退创建时登记的分支', async () => {
+    const listBranches = vi.fn(async () => ({ branches: ['main'], current: 'HEAD' }));
+    const resolveCommit = vi.fn(async () => null);
+    const deps = makeDeps({
+      getForSession: vi.fn(() => meta({ branch: 'xdt/auto-x1' })),
+      listBranches,
+      resolveCommit,
     });
     await prepareHandoffWorktree(deps, 'disp-1', path.join(WT, 'sub'));
     expect(deps.createWorktree).toHaveBeenCalledWith(
