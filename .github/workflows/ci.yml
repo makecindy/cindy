@@ -98,7 +98,11 @@ jobs:
       - name: Check i18n glossary
         run: pnpm check:i18n-glossary
 
+      # Desktop 的完整 TS program 当前峰值已超过 4 GiB；只为这一步提高 heap，
+      # 避免 Linux runner 在产出类型诊断前被 V8 OOM 杀死，其他步骤仍沿用 job 默认值。
       - name: Typecheck desktop
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile

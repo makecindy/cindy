@@ -117,6 +117,17 @@ test("client CI owns the complete Desktop Git integration tier", () => {
 	);
 });
 
+test("client CI reserves a dedicated heap for Desktop typecheck", () => {
+	const workflow = fs.readFileSync(
+		path.join(ROOT, ".github", "workflows", "ci.yml"),
+		"utf8",
+	).replace(/\r\n/g, "\n");
+	assert.match(
+		workflow,
+		/^\s{6}- name: Typecheck desktop\n\s{8}env:\n\s{10}NODE_OPTIONS: '--max-old-space-size=6144'\n\s{8}run: pnpm --filter desktop typecheck$/m,
+	);
+});
+
 test("help groups copyable desktop, binary, and Mobile workflows", async () => {
 	const { printHelp } = await import("../help.mjs");
 	const lines = [];
