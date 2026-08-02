@@ -589,9 +589,15 @@ function drainSessionActivityStage(dst: string, stage: SessionActivityStage): vo
     stage.retryTimer = null;
   }
   if (!activeClient) return;
-  // relay 断开时不清暂存也不空转重试:恢复后的首个活动事件或 subscribe replay
-  // 会重新触发 drain;镜像数据自身 latest-wins,不会因等待而过期。
-  if (activeClient.getStatus() !== 'online') return;
+  // relay 离线时保持退避重试(不清暂存):若只等下一个活动事件/重订阅触发,
+  // 短暂 relay 闪断(控制端未察觉、不会重订阅)+ 无后续活动的场景下,暂存的
+  // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
+  // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
+  // handleControllerOffline 会清空暂存、终止重试。
+  if (activeClient.getStatus() !== 'online') {
+    scheduleSessionActivityRetry(dst, stage);
+    return;
+  }
   while (stage.queue.size > 0) {
     if (activeClient.getReliableSendQueueDepth(dst) >= SESSION_ACTIVITY_WINDOW_SOFT_CAP) {
       scheduleSessionActivityRetry(dst, stage);

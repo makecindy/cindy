@@ -1778,6 +1778,43 @@ describe('被控端订阅 registry + topic 转发', () => {
       expect(dispatchTesting.sessionActivityStageSize('ctrl-unknown')).toBe(0);
     });
 
+    it('relay 离线期间保持退避重试,恢复在线后无需新事件即自动投递暂存值', async () => {
+      vi.useFakeTimers();
+      try {
+        remoteControlEnabled = true;
+        const { client, calls, feed, setStatus, setReliableSendQueueDepth } = makeFakeClient();
+        wireInboundDispatch(client);
+        feed(subFrame('ctrl-a', SUB, ['sessions'], 'MacA'));
+        calls.push.length = 0;
+
+        // 背压下暂存 → 随后 relay 离线
+        setReliableSendQueueDepth(dispatchTesting.sessionActivityWindowSoftCap);
+        tapWindowBroadcast(SESSION_ACTIVITY_CHANNEL, { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false });
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+        setStatus('connecting');
+        setReliableSendQueueDepth(0);
+
+        // 离线期间定时器照常触发:不投递、不丢暂存、继续自我调度
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs * 3);
+        expect(calls.push).toEqual([]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(1);
+
+        // 恢复在线:无需新活动事件/重订阅,下一轮重试自动投递
+        setStatus('online');
+        await vi.advanceTimersByTimeAsync(dispatchTesting.sessionActivityDrainRetryMs);
+        expect(calls.push).toEqual([
+          {
+            dst: 'ctrl-a',
+            channel: SESSION_ACTIVITY_CHANNEL,
+            payload: { sessionId: 's1', phase: 'completed', compactDetail: '', attention: false },
+          },
+        ]);
+        expect(dispatchTesting.sessionActivityStageSize('ctrl-a')).toBe(0);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
     it('退订 sessions 清空该控制端暂存(含排期中的重试)', async () => {
       vi.useFakeTimers();
       try {
