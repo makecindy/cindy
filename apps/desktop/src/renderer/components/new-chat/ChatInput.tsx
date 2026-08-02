@@ -91,6 +91,7 @@ import {
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import {
   ModelSelector,
+  resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
   type ModelMemoryAccessors,
 } from './ModelSelector';
@@ -1375,11 +1376,25 @@ export function ChatInput({
   // 模型选择器 trigger 化成「连接来源」CTA、Send 禁用。useConnectedSource 仅用于
   // loading 态判定；实际「有没有可发送来源」独立走 sendProviders（已过滤 SSH remote
   // 排除项），两者职责分离以保留 remote guard。
-  // providersLoading 期间不判,避免有缓存的老用户首帧闪 CTA / 禁用态(规则 7)。
-  const { loading: providersLoading } = useConnectedSource(
+  // 本机沿用 useConnectedSource 的加载态；device-link 必须同时等待被控端 capabilities 与
+  // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
+  const { loading: localProvidersLoading } = useConnectedSource(
     currentModelAgentKind,
     activeModel,
   );
+  const remoteModelListStatus = resolveRemoteModelListStatus({
+    deviceId: deviceLinkDeviceId,
+    agentKind: currentModelAgentKind,
+    cc: ccCaps,
+    codex: codexCaps,
+    pi: piCaps,
+    providers: remoteProviders,
+  });
+  const providersLoading = deviceLinkDeviceId
+    ? remoteModelListStatus === 'loading'
+    : localProvidersLoading;
+  const remoteModelListBlocked =
+    !!deviceLinkDeviceId && remoteModelListStatus !== 'ready';
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -1392,7 +1407,14 @@ export function ChatInput({
         includeDisabled: !!sessionId,
       }).length > 0
     : false;
-  const noConnectedSource = !!currentModelAgentKind && !providersLoading && !hasConnectedSendSource;
+  const noConnectedSource =
+    !!currentModelAgentKind &&
+    !providersLoading &&
+    !remoteModelListBlocked &&
+    // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
+    // provider 镜像误判成权威的「没有已连接来源」。
+    (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
+    !hasConnectedSendSource;
 
   // 会话显式选中的来源已断开(如外部删除订阅 OAuth 凭证):trigger 显示「已断开」错误态 +
   // Send 禁用,不再静默回退默认来源图标(否则界面显示 XD、main 懒创建却按 DB 里的来源报
@@ -3573,6 +3595,17 @@ export function ChatInput({
         // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
         if (!text && !hasAttachments) return;
 
+        // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
+        // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
+        if (remoteModelListBlocked) {
+          if (remoteModelListStatus === 'error') {
+            toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+          } else {
+            toast.warning(t('newChat.modelSelector.remoteLoading'));
+          }
+          return;
+        }
+
         // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
         // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
         // 弹窗给出明确原因 + 去设置入口,而不是让请求出去撞一个原始错误码。
@@ -3598,7 +3631,12 @@ export function ChatInput({
         // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
         // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
-        if (currentModelAgentKind) {
+        if (
+          currentModelAgentKind &&
+          // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
+          // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
+          !(deviceLinkDeviceId && remoteProviders.unsupported)
+        ) {
           // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
           // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
           // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
@@ -3722,7 +3760,11 @@ export function ChatInput({
       storageKey,
       t,
       currentModelAgentKind,
+      deviceLinkDeviceId,
       providers,
+      remoteProviders.unsupported,
+      remoteModelListBlocked,
+      remoteModelListStatus,
       confirmDialog,
       navigate,
     ],
@@ -5103,6 +5145,9 @@ export function ChatInput({
     noConnectedSource ||
     // 会话显式选中的来源已断开 → Send 禁用(trigger 同步显示「已断开」错误态说明原因)。
     selectedSourceDisconnected ||
+    // device-link 模型目录仍在读取或真实失败 → 禁止旧快照继续发送；旧端明确
+    // unsupported 已由 remoteModelListStatus 归并为 ready，不会误伤兼容回退。
+    remoteModelListBlocked ||
     // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
     agentSwitchInFlight ||
     sendDispatchInFlight ||

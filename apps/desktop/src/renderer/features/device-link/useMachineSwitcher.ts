@@ -26,14 +26,12 @@
 import { useCallback, useMemo, useSyncExternalStore } from 'react';
 import {
   useRemoteBootstrapFailedDeviceIds,
+  useRemoteBootstrapLoadingDeviceIds,
   useRemoteDevices,
   type RemoteDeviceSummary,
 } from './remoteProjectsStore';
 import { revokedDevicesStore } from './revokedDevicesStore';
-import {
-  useDeviceLinkDeviceList,
-  useDeviceLinkDeviceListSettled,
-} from './useDeviceLinkDeviceList';
+import { useDeviceLinkDeviceList, useDeviceLinkDeviceListSettled } from './useDeviceLinkDeviceList';
 import { buildSwitcherDevices, selectableDeviceIds, type SwitcherDevice } from './switcherDevices';
 import {
   MACHINE_ALL,
@@ -58,6 +56,58 @@ export interface RemoteSessionBootstrapLoadingInput {
   devices: readonly SwitcherDevice[];
   syncedDevices: readonly RemoteDeviceSummary[];
   bootstrapFailedDeviceIds: ReadonlySet<string>;
+}
+
+export interface RemoteSessionBootstrapFailuresInput {
+  selectedMachineId: MachineSelection;
+  devices: readonly SwitcherDevice[];
+  bootstrapFailedDeviceIds: ReadonlySet<string>;
+}
+
+export interface RemoteSessionBootstrapLoadingDevicesInput {
+  selectedMachineId: MachineSelection;
+  devices: readonly SwitcherDevice[];
+  bootstrapLoadingDeviceIds: ReadonlySet<string>;
+}
+
+function selectRemoteSessionBootstrapDevices(
+  selectedMachineId: MachineSelection,
+  devices: readonly SwitcherDevice[],
+  deviceIds: ReadonlySet<string>,
+): SwitcherDevice[] {
+  if (deviceIds.size === 0) return [];
+  const selectedRemoteIds =
+    selectedMachineId === MACHINE_ALL
+      ? null
+      : new Set(selectedMachineId.filter((id) => id !== MACHINE_LOCAL));
+  if (selectedRemoteIds?.size === 0) return [];
+  return devices.filter(
+    (device) =>
+      deviceIds.has(device.deviceId) &&
+      device.status !== 'rejected' &&
+      (selectedRemoteIds === null || selectedRemoteIds.has(device.deviceId)),
+  );
+}
+
+/** 返回当前机器作用域里正在读取任务快照的远程设备。 */
+export function selectRemoteSessionBootstrapLoadingDevices({
+  selectedMachineId,
+  devices,
+  bootstrapLoadingDeviceIds,
+}: RemoteSessionBootstrapLoadingDevicesInput): SwitcherDevice[] {
+  return selectRemoteSessionBootstrapDevices(selectedMachineId, devices, bootstrapLoadingDeviceIds);
+}
+
+/**
+ * 返回当前机器作用域里首次任务快照读取失败的远程设备。
+ * 仅本机选择不受远端失败影响；「所有」覆盖全部失败设备；显式多选只看勾选范围。
+ */
+export function selectRemoteSessionBootstrapFailures({
+  selectedMachineId,
+  devices,
+  bootstrapFailedDeviceIds,
+}: RemoteSessionBootstrapFailuresInput): SwitcherDevice[] {
+  return selectRemoteSessionBootstrapDevices(selectedMachineId, devices, bootstrapFailedDeviceIds);
 }
 
 /**
@@ -208,23 +258,69 @@ export function useSelectedMachineConnecting(): boolean {
  * 「所有」作用域包含本机与全部远程源，因此远端设备清单或任一相关首快照未落地时，
  * 侧栏继续显示加载态，避免本地 sessions 先完成后短暂误报真实空态。
  */
-export function useRemoteSessionBootstrapLoading(
-  selectedMachineId: MachineSelection,
-): boolean {
+export function useRemoteSessionBootstrapLoading(selectedMachineId: MachineSelection): boolean {
   const deviceListSettled = useDeviceLinkDeviceListSettled();
   const devices = useSwitcherDevices();
   const synced = useRemoteDevices();
+  const bootstrapLoadingDeviceIds = useRemoteBootstrapLoadingDeviceIds();
   const bootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
-  return useMemo(
-    () =>
+  return useMemo(() => {
+    const explicitlyLoading = selectRemoteSessionBootstrapLoadingDevices({
+      selectedMachineId,
+      devices,
+      bootstrapLoadingDeviceIds,
+    });
+    return (
+      explicitlyLoading.length > 0 ||
       shouldWaitForRemoteSessionBootstrap({
         selectedMachineId,
         deviceListSettled,
         devices,
         syncedDevices: synced,
         bootstrapFailedDeviceIds,
+      })
+    );
+  }, [
+    selectedMachineId,
+    deviceListSettled,
+    devices,
+    synced,
+    bootstrapLoadingDeviceIds,
+    bootstrapFailedDeviceIds,
+  ]);
+}
+
+/** 当前可见机器范围内，正在读取任务快照的远程设备。 */
+export function useRemoteSessionBootstrapLoadingDevices(
+  selectedMachineId: MachineSelection,
+): SwitcherDevice[] {
+  const devices = useSwitcherDevices();
+  const bootstrapLoadingDeviceIds = useRemoteBootstrapLoadingDeviceIds();
+  return useMemo(
+    () =>
+      selectRemoteSessionBootstrapLoadingDevices({
+        selectedMachineId,
+        devices,
+        bootstrapLoadingDeviceIds,
       }),
-    [selectedMachineId, deviceListSettled, devices, synced, bootstrapFailedDeviceIds],
+    [selectedMachineId, devices, bootstrapLoadingDeviceIds],
+  );
+}
+
+/** 当前可见机器范围内，首次任务快照已终态失败的远程设备。 */
+export function useRemoteSessionBootstrapFailures(
+  selectedMachineId: MachineSelection,
+): SwitcherDevice[] {
+  const devices = useSwitcherDevices();
+  const bootstrapFailedDeviceIds = useRemoteBootstrapFailedDeviceIds();
+  return useMemo(
+    () =>
+      selectRemoteSessionBootstrapFailures({
+        selectedMachineId,
+        devices,
+        bootstrapFailedDeviceIds,
+      }),
+    [selectedMachineId, devices, bootstrapFailedDeviceIds],
   );
 }
 

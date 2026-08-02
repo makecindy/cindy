@@ -83,7 +83,10 @@ export async function loadDeviceLinkExistingProjects(
     'local-db:recent-workdirs:list',
     [],
   )) as RecentWorkdirRow[] | null | undefined;
-  return recentWorkdirsToProjects(rows ?? []);
+  // 只有明确返回数组才是权威结果；null / undefined 是协议或连接异常，不能伪装成
+  // 「对方确实没有项目」的空列表。
+  if (!Array.isArray(rows)) throw new Error('Invalid recent workdirs response');
+  return recentWorkdirsToProjects(rows);
 }
 
 /** device-link:从被控端最近项目列表移除一条,不删除会话或磁盘目录。 */
@@ -91,9 +94,7 @@ export async function removeDeviceLinkExistingProject(
   deviceId: string,
   path: string,
 ): Promise<void> {
-  await window.electronAPI.deviceLink.invoke(
-    deviceId,
-    'local-db:recent-workdirs:remove',
-    [{ path }],
-  );
+  await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:recent-workdirs:remove', [
+    { path },
+  ]);
 }

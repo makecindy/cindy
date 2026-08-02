@@ -120,18 +120,18 @@ describe('loadDeviceLinkExistingProjects', () => {
     ]);
   });
 
-  it('被控端返回 null/undefined → 空数组(不抛)', async () => {
+  it('被控端返回 null/undefined → 协议错误，不能伪装成权威空列表', async () => {
     invoke.mockResolvedValue(null);
-    expect(await loadDeviceLinkExistingProjects('dev-1')).toEqual([]);
+    await expect(loadDeviceLinkExistingProjects('dev-1')).rejects.toThrow(
+      'Invalid recent workdirs response',
+    );
   });
 
   it('从被控端最近项目列表移除路径,不调用本机 recent-workdirs API', async () => {
     invoke.mockResolvedValue({ deleted: true });
     await removeDeviceLinkExistingProject('dev-1', '/remote/app');
-    expect(invoke).toHaveBeenCalledWith(
-      'dev-1',
-      'local-db:recent-workdirs:remove',
-      [{ path: '/remote/app' }],
-    );
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'local-db:recent-workdirs:remove', [
+      { path: '/remote/app' },
+    ]);
   });
 });
