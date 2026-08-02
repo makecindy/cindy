@@ -982,7 +982,11 @@ export class MakerContactsStore {
     this.init();
     const tx = this.db.transaction(() => {
       const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
-      this.db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
+      this.db.exec(
+        `DELETE FROM contacts_sync_pending_anchors;
+         DELETE FROM contacts;
+         DELETE FROM contact_groups;`,
+      );
       try {
         this.fts.rebuild([]);
         this.ftsDirty = false;

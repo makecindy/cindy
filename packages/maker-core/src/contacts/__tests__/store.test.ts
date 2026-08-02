@@ -490,13 +490,33 @@ describe('MakerContactsStore', () => {
     });
 
     it('resetAll 清空全部并归零 FTS', () => {
-      createNeo();
+      const neo = createNeo();
       store.createGroup('G');
+      db.prepare(
+        `INSERT INTO contacts_sync_pending_anchors(
+           identity_id, source_contact_id, source_display_name,
+           value, normalized_value, label, note, created_at
+         ) VALUES (?, ?, ?, ?, ?, '', '', ?)`,
+      ).run(
+        'pending-anchor',
+        neo.id,
+        neo.displayName,
+        'local-apple-id',
+        'local-apple-id',
+        '2026-08-02T00:00:00.000Z',
+      );
       const res = store.resetAll();
       expect(res.removedCount).toBe(1);
       expect(store.listContacts()).toHaveLength(0);
       expect(store.listGroups()).toHaveLength(0);
       expect(store.search('林子航')).toHaveLength(0);
+      expect(
+        db
+          .prepare(
+            `SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`,
+          )
+          .get(),
+      ).toEqual({ count: 0 });
     });
   });
 
