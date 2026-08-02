@@ -2735,14 +2735,22 @@
           "behavior": {
             "title": "Reactions & quoting",
             "emojiLabel": "Emoji reactions",
-            "emojiOption": { "off": "Off", "minimal": "Basic", "expressive": "Lively" },
+            "emojiOption": {
+              "off": "Off",
+              "minimal": "Basic",
+              "expressive": "Lively"
+            },
             "emojiHint": {
               "off": "No emoji reactions at all.",
               "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
               "expressive": "Completed tasks pick randomly from separate positive and negative reaction pools."
             },
             "groupQuoteLabel": "Quote the question in groups",
-            "quoteOption": { "off": "Never", "first": "First reply", "all": "Every reply" },
+            "quoteOption": {
+              "off": "Never",
+              "first": "First reply",
+              "all": "Every reply"
+            },
             "groupQuoteHint": {
               "off": "Group answers are not attached to the question.",
               "first": "The first reply quotes the question (recommended).",
@@ -2771,7 +2779,10 @@
               "save": "The group mode was not saved. The last confirmed mode was restored.",
               "retry": "Retry loading"
             },
-            "mode": { "mention": "@ only", "always": "Active" }
+            "mode": {
+              "mention": "@ only",
+              "always": "Active"
+            }
           }
         },
         "x": {
@@ -5168,6 +5179,12 @@
         }
       }
     },
+    "agentSelect": {
+      "label": "Engine",
+      "trigger": {
+        "aria": "Select engine: {{agent}}"
+      }
+    },
     "atMention": {
       "scanFailed": "Failed to scan working directory",
       "retry": "Retry",
@@ -6402,7 +6419,13 @@
         "filesWarning": "Switching changes conversation context only; workspace files are not rolled back.",
         "summarize": "Summarize the branch you leave (uses the model)",
         "summaryFocus": "Optional summary focus, e.g. preserve error-handling conclusions",
-        "role": { "user": "User", "assistant": "Agent", "tool": "Tool", "summary": "Branch summary", "system": "State" }
+        "role": {
+          "user": "User",
+          "assistant": "Agent",
+          "tool": "Tool",
+          "summary": "Branch summary",
+          "system": "State"
+        }
       },
       "projectAction": {
         "rename": "Rename project",

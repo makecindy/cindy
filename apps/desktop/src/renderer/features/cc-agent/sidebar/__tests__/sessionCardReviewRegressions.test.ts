@@ -73,6 +73,15 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).toContain('ml-auto shrink-0'); // E1D 侧栏层级:time 色 conditional via cn,ml-auto shrink-0 保留
   });
 
+  it('keeps archive confirmation pills clear of time and ordinal overlays', () => {
+    expect(sessionCardSource).toContain('w-max min-w-14');
+    expect(sessionCardSource).toContain('whitespace-nowrap text-11 font-semibold');
+    expect(sessionCardSource).toContain(
+      '!isEditing && !archivePending && ordinalBadgeLabel != null',
+    );
+    expect(sessionCardSource).toContain("archivePending && 'invisible opacity-0'");
+  });
+
   it('keeps running card previews stable instead of streaming compact activity text', () => {
     expect(sessionCardSource).toContain('const listPreview = awaitingText ?? runningDetail ?? summaryPreview');
     expect(sessionCardSource).toContain('const cardPreview = awaitingText ?? summaryPreview');
@@ -84,12 +93,19 @@ describe('SessionCard review regressions', () => {
     expect(sessionCardSource).not.toContain("'h-full rounded-xl bg-[var(--surface-elevated)] border'");
   });
 
-  it('E1D 任务C: SessionCard active 反白链收全(title/time/RemoteProjectIcon 全切 sidebar-item-active-foreground)', () => {
-    // 阿梅 SIDEBAR-R 打回:SessionCard 漏网(title 700 + RemoteProjectIcon 556/735/753/941)未切反白,现收全
+  it('E1D 任务C: SessionCard active 反白链完整且运行态不降级文字颜色', () => {
     const re = /isActive \? 'text-sidebar-item-active-foreground'/g;
     const count = (sessionCardSource.match(re) || []).length;
     expect(count, 'isActive conditional active-foreground ≥7(title×2+time+RemoteProjectIcon×4)').toBeGreaterThanOrEqual(7);
-    expect(sessionCardSource).toContain("isActive ? 'text-sidebar-item-active-foreground' : isMuted ? 'text-[var(--text-disabled)]' : 'text-[var(--text-tertiary)]'");
+
+    // Running is already expressed by the status indicator, so its text keeps
+    // the same semantic colors as other non-active tasks.
+    expect(sessionCardSource).not.toContain('const isMuted = isRunning && !isActive');
+    expect(sessionCardSource).not.toContain("isMuted ? 'text-[var(--text-disabled)]'");
+    expect(sessionCardSource).not.toContain('transition-[color] duration-500');
+    expect(sessionCardSource).toContain(
+      "isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'",
+    );
   });
 
   it('keeps selected sidebar text bound to the active foreground token', () => {
@@ -193,6 +209,21 @@ describe('SessionCard review regressions', () => {
     );
     expect(automationGroupSource).toContain(
       ": 'text-foreground hover:bg-sidebar-item-hover'",
+    );
+  });
+
+  it('aligns list automation headers with regular tasks and indents only expanded children', () => {
+    expect(automationGroupSource).toMatch(
+      /sessionVariant === 'list'\s*\? 'px-2\.5'\s*: indented\s*\? 'pl-\[22px\] pr-2'\s*: 'pl-3 pr-2'/,
+    );
+    expect(automationGroupSource).toContain(
+      '<div className="flex flex-col gap-0.5 pl-3">',
+    );
+    expect(automationGroupSource).toContain(
+      "sessionVariant === 'list' ? 'w-3' : 'w-[15px]'",
+    );
+    expect(automationGroupSource).toContain(
+      "sessionVariant === 'list' && 'order-2'",
     );
   });
 });

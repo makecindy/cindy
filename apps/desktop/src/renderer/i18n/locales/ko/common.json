@@ -2734,14 +2734,22 @@
           "behavior": {
             "title": "리액션과 인용",
             "emojiLabel": "이모지 리액션",
-            "emojiOption": { "off": "끄기", "minimal": "기본", "expressive": "생동감" },
+            "emojiOption": {
+              "off": "끄기",
+              "minimal": "기본",
+              "expressive": "생동감"
+            },
             "emojiHint": {
               "off": "이모지 리액션을 달지 않습니다.",
               "minimal": "수신 시 👀, 성공 👍, 실패 👎.",
               "expressive": "성공과 실패로 나눈 리액션 풀에서 무작위로 선택합니다."
             },
             "groupQuoteLabel": "그룹에서 질문 인용해 답장",
-            "quoteOption": { "off": "안 함", "first": "첫 답장만", "all": "매번" },
+            "quoteOption": {
+              "off": "안 함",
+              "first": "첫 답장만",
+              "all": "매번"
+            },
             "groupQuoteHint": {
               "off": "그룹 답변을 질문에 연결하지 않습니다.",
               "first": "각 답변의 첫 메시지가 질문을 인용합니다(권장).",
@@ -2770,7 +2778,10 @@
               "save": "그룹 참여 모드를 저장하지 못했습니다. 마지막으로 확인된 모드로 복원했습니다.",
               "retry": "다시 불러오기"
             },
-            "mode": { "mention": "@만", "always": "활성" }
+            "mode": {
+              "mention": "@만",
+              "always": "활성"
+            }
           }
         },
         "x": {
@@ -5166,6 +5177,12 @@
         }
       }
     },
+    "agentSelect": {
+      "label": "엔진",
+      "trigger": {
+        "aria": "엔진 선택: {{agent}}"
+      }
+    },
     "atMention": {
       "scanFailed": "작업 디렉터리 스캔 실패",
       "retry": "재시도",
@@ -6391,7 +6408,13 @@
         "filesWarning": "전환은 대화 컨텍스트만 변경하며 작업 파일은 되돌리지 않습니다.",
         "summarize": "떠나는 분기 요약 생성(모델 사용)",
         "summaryFocus": "선택 사항: 요약 초점(예: 오류 처리 결론 유지)",
-        "role": { "user": "사용자", "assistant": "Agent", "tool": "도구", "summary": "분기 요약", "system": "상태" }
+        "role": {
+          "user": "사용자",
+          "assistant": "Agent",
+          "tool": "도구",
+          "summary": "분기 요약",
+          "system": "상태"
+        }
       },
       "projectAction": {
         "rename": "프로젝트 이름 변경",

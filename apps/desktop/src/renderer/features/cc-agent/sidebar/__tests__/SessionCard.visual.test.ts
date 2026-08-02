@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   worktreeSessionIds: new Set<string>(),
   runningDetailBySession: new Map<string, string>(),
   pendingPluginSetupSessionIds: new Set<string>(),
+  attentionKindBySession: new Map<string, 'done' | 'awaiting' | 'error'>(),
 }));
 
 vi.mock('react-router-dom', () => ({
@@ -113,6 +114,10 @@ vi.mock('@/hooks/useSessionPausedQueue', () => ({
   useSessionPausedQueue: () => false,
 }));
 
+vi.mock('@/lib/sessionAttentionStore', () => ({
+  useSessionAttentionKind: (sessionId: string) => mocks.attentionKindBySession.get(sessionId),
+}));
+
 vi.mock('../../lib/scrollIntoNearestView', () => ({
   scrollIntoNearestView: vi.fn(),
 }));
@@ -181,6 +186,7 @@ describe('SessionCard visual cases', () => {
     mocks.worktreeSessionIds.clear();
     mocks.runningDetailBySession.clear();
     mocks.pendingPluginSetupSessionIds.clear();
+    mocks.attentionKindBySession.clear();
   });
 
   afterEach(() => {
@@ -348,6 +354,39 @@ describe('SessionCard visual cases', () => {
     expect(screen.getByText('已归档的历史分析任务')).toBeTruthy();
   });
 
+  it.each(['list', 'card'] as const)('keeps the %s archive confirmation pill on one line', (variant) => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+    if (!visualCase) throw new Error('Missing idle visual case');
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        variant: variant === 'list' ? 'list' : undefined,
+        isActive: false,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: false,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: '归档' }));
+    const confirmPill = screen.getByRole('button', { name: '归档' });
+    expect(confirmPill.className).toContain('w-max');
+    expect(confirmPill.className).toContain('min-w-14');
+    expect(confirmPill.className).toContain('whitespace-nowrap');
+    expect(confirmPill.className).toContain('var(--surface-elevated)');
+    expect(confirmPill.className).not.toContain('transparent');
+    if (variant === 'list') {
+      expect(container.querySelector('time')?.parentElement?.className).toContain('invisible');
+    }
+  });
+
   it('keeps running card mode on the stable preview while list mode can show live detail', () => {
     const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
     if (!visualCase) throw new Error('Missing running visual case');
@@ -374,5 +413,153 @@ describe('SessionCard visual cases', () => {
 
     const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
     expect(listContainer.textContent).toContain('正在实时扫描并刷新当前执行步骤');
+  });
+
+  it.each(['list', 'card'] as const)('keeps running %s text colors identical to idle', (variant) => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'running-loading');
+    if (!visualCase) throw new Error('Missing running visual case');
+
+    const renderColors = (isRunning: boolean) => {
+      const { container } = render(
+        createElement(SessionCard, {
+          session: visualCase.session,
+          variant: variant === 'list' ? 'list' : undefined,
+          isActive: false,
+          isRunning,
+          isAttached: false,
+          hasAttentionNotification: false,
+          isSelected: false,
+          onClick: vi.fn(),
+          onAction: vi.fn(),
+          onRename: vi.fn(),
+          onTogglePin: vi.fn(),
+          projectOptions: [],
+        }),
+      );
+      const title =
+        variant === 'list'
+          ? Array.from(container.querySelectorAll('span')).find(
+              (node) => node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
+            )
+          : Array.from(container.querySelectorAll('div')).find((node) =>
+              node.className.includes('[-webkit-line-clamp:2]'),
+            );
+      const preview = Array.from(container.querySelectorAll('p')).find((node) =>
+        node.textContent?.includes('正在分析本周项目数据与异常波动。'),
+      );
+      const time = container.querySelector('time');
+      const colors = [title, preview, time].map((node) =>
+        node?.className
+          .split(' ')
+          .filter(
+            (className) =>
+              className === 'text-foreground' ||
+              className.startsWith('text-[var(--text-') ||
+              className === 'text-[var(--cmd-palette-item-meta)]',
+          ),
+      );
+      cleanup();
+      return colors;
+    };
+
+    expect(renderColors(true)).toEqual(renderColors(false));
+  });
+
+  it.each([
+    ['done', 'var(--card-status-done)'],
+    ['awaiting', 'var(--card-status-awaiting)'],
+    ['error', 'var(--card-status-error)'],
+  ] as const)('moves the %s attention dot to the list bottom-right corner', (kind, color) => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'attention-dot');
+    if (!visualCase) throw new Error('Missing attention visual case');
+    mocks.attentionKindBySession.set(visualCase.session.id, kind);
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        variant: 'list',
+        isActive: false,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: true,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    const rightStatus = container.querySelector(`[data-sidebar-right-status="${kind}"]`);
+    expect(rightStatus?.className).toContain('right-2.5');
+    expect(rightStatus?.className).toContain('bottom-2');
+    expect((rightStatus?.firstElementChild as HTMLElement | null)?.style.backgroundColor).toBe(color);
+
+    const title = Array.from(container.querySelectorAll('span')).find((node) =>
+      node.className.includes('truncate') && node.textContent?.includes(visualCase.session.title),
+    );
+    expect(
+      Array.from(title?.querySelectorAll('span') ?? []).some((node) =>
+        node.className.includes('bg-[var(--card-status-'),
+      ),
+    ).toBe(false);
+  });
+
+  it('uses the text-mode priority when a list session is both running and unread-done', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'attention-dot');
+    if (!visualCase) throw new Error('Missing attention visual case');
+    mocks.attentionKindBySession.set(visualCase.session.id, 'done');
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        variant: 'list',
+        isActive: false,
+        isRunning: true,
+        isAttached: false,
+        hasAttentionNotification: true,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    const rightStatus = container.querySelector('[data-sidebar-right-status="running"]');
+    expect(rightStatus?.className).toContain('right-2.5');
+    expect(rightStatus?.className).toContain('bottom-2');
+    expect(container.querySelector('[data-sidebar-right-status="done"]')).toBeNull();
+  });
+
+  it('keeps the attention dot on the status icon in card mode', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'attention-dot');
+    if (!visualCase) throw new Error('Missing attention visual case');
+    mocks.attentionKindBySession.set(visualCase.session.id, 'done');
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        isActive: false,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: true,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    expect(container.querySelector('[data-sidebar-right-status]')).toBeNull();
+    expect(
+      Array.from(container.querySelectorAll('span')).some((node) =>
+        node.className.includes('bg-[var(--card-status-done)]'),
+      ),
+    ).toBe(true);
   });
 });

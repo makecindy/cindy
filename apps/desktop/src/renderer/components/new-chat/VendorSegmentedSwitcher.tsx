@@ -1,5 +1,9 @@
 /**
- * VendorSegmentedSwitcher —— NewMaker 主区域内的 Agent 引擎切换控件。
+ * VendorSegmentedSwitcher —— Agent 引擎切换分段(定宽等分)。
+ *
+ * 2026-08:New Maker 工具条上的引擎切换已改用 AgentSelect(下拉,触发器定宽)——
+ * 本控件宽度被引擎数量整除,引擎多了每段就放不下文字。它现在服务模型面板内的
+ * 两步切换(ModelSelector 的 agentSwitch)与设置页 IM 目录偏好等定值场景。
  * ---------------------------------------------------------------------------
  * 视觉规格:
  *   - 容器:pill (9999px),宽 220,padding 3,gap 2
@@ -15,12 +19,10 @@
  * 召集 Worker。删 tab 后整体回到 2-tab 220 宽,与历史版本视觉对齐。
  */
 
-import type { ComponentType } from 'react';
 import { cn } from '@/lib/utils';
 import type { MakerVendor } from '@/lib/ccAgent.types';
-import { CodexMark } from '@/components/icons/CodexMark';
-import { ClaudeMark } from '@/components/icons/ClaudeMark';
-import { PiMark } from '@/components/icons/PiMark';
+
+import { AGENT_OPTIONS } from './agentOptions';
 
 interface VendorSegmentedSwitcherProps {
   value: MakerVendor;
@@ -59,18 +61,9 @@ interface VendorSegmentedSwitcherProps {
   hiddenVendors?: readonly MakerVendor[];
 }
 
-interface SegmentOption {
-  vendor: MakerVendor;
-  label: string;
-  Mark: ComponentType<{ size?: number; className?: string }>;
-  iconClassName?: string;
-}
-
-const OPTIONS: readonly SegmentOption[] = [
-  { vendor: 'cc', label: 'Claude', Mark: ClaudeMark },
-  { vendor: 'codex', label: 'Codex', Mark: CodexMark },
-  { vendor: 'pi', label: 'Pi', Mark: PiMark },
-] as const;
+// 引擎条目(vendor / label / mark)的单一来源在 ./agentOptions —— 与 AgentSelect
+// 共用一张表,新增引擎只改那里。
+const OPTIONS = AGENT_OPTIONS;
 
 export function VendorSegmentedSwitcher({
   value,
@@ -162,7 +155,7 @@ export function VendorSegmentedSwitcher({
                   ),
             )}
           >
-            <opt.Mark size={dense ? 13 : 14} className={cn('shrink-0', opt.iconClassName)} />
+            <opt.Mark size={dense ? 13 : 14} className="shrink-0" />
             {/* 文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 vendor mark
                 光学居中对齐微调,见 NewChat 视觉走查 2026-05-03。 */}
             {!iconOnly && <span className="translate-y-[0.5px] whitespace-nowrap">{opt.label}</span>}
