@@ -244,6 +244,63 @@ describe("contacts device sync", () => {
     ).toEqual({ count: 0 });
   });
 
+  it("redirect 指向已有锚点的 target 时清掉 pending loser 且不再复活", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const target = a.createContact({ kind: "person", displayName: "已有锚点" });
+    const source = a.createContact({ kind: "person", displayName: "待迁移锚点" });
+    exchange(b, a);
+    b.addIdentity(source.id, {
+      platform: "apple-contacts",
+      value: "pending-loser",
+    });
+    const targetAnchor = b.addIdentity(target.id, {
+      platform: "apple-contacts",
+      value: "target-winner",
+    });
+    const beforeMerge = stateOf(b);
+
+    a.merge(target.id, source.id);
+    const merged = stateOf(a);
+    const legacyHop = createContactsSyncDelta(merged, beforeMerge.clocks);
+    delete legacyHop.merges;
+    delete legacyHop.deletions;
+    delete legacyHop.mergeClocks;
+    b.mergeDeviceSyncState(legacyHop);
+    expect(() => b.getContact(source.id)).toThrow("contact not found");
+
+    b.mergeDeviceSyncState(
+      createContactsSyncDelta(merged, stateOf(b).clocks, []),
+    );
+    expect(
+      b
+        .getContact(target.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["target-winner"]);
+    const bDb = databases.at(-1)!;
+    expect(
+      bDb
+        .prepare(`SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`)
+        .get(),
+    ).toEqual({ count: 0 });
+
+    b.removeIdentity(targetAnchor.id);
+    a.enrichContact(target.id, {
+      kind: "person",
+      displayName: "已有锚点",
+      summary: "触发后续物化",
+    });
+    exchange(b, a);
+    expect(
+      b
+        .getContact(target.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts"),
+    ).toEqual([]);
+  });
+
   it("合法远端删除会删除带本机系统锚点的档案并保持收敛", () => {
     const a = createStore();
     const b = createStore();

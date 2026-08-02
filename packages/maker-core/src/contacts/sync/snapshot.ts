@@ -347,11 +347,14 @@ export function writeContactsSnapshot(
     let targetContactId = row.contact_id;
     if (!liveContactIds.has(targetContactId)) {
       const migratedTarget = migratedAnchorTargets.get(targetContactId);
+      if (!migratedTarget) continue;
       if (
-        !migratedTarget ||
         directlyAnchoredContacts.has(migratedTarget) ||
         migratedAnchors.has(migratedTarget)
       ) {
+        // target 已有本机锚点（或同批已有 pending 胜出）时丢弃 loser；否则用户
+        // 之后移除 target 锚点，残留 pending 会在下一次物化时把旧卡复活。
+        if (pendingAnchorIds.has(row.id)) restoredPendingAnchorIds.push(row.id);
         continue;
       }
       targetContactId = migratedTarget;
