@@ -180,6 +180,29 @@ describe('registry presence 实体化', () => {
     ]);
   });
 
+  it('非法 effort token 整条隔离并告警,不能静默过滤成固定档模型', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({ efforts: ['bogus'], defaultEffort: undefined }),
+        gpt6Entry({
+          id: 'openai/gpt-6-mini',
+          routes: [{ providerId: 'openai', modelId: 'gpt-6-mini', agents: ['codex'] }],
+        }),
+      ]),
+    );
+    expect(models('openai', 'codex').map((m) => m.id)).toEqual(['gpt-6-mini']);
+    expect(getModelPlaneWarnings()).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          providerId: 'openai',
+          agent: 'codex',
+          modelId: 'gpt-6',
+          reason: 'route has invalid effort token',
+        }),
+      ]),
+    );
+  });
+
   it('跨 entry 重复占用同一 root route 时 first-wins 并隔离重复项', () => {
     setActiveCatalog(
       baseCatalog([

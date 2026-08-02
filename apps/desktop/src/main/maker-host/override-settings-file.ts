@@ -84,7 +84,7 @@ export function createOverrideSettingsFile<T>(options: {
         const text = fs.readFileSync(file, 'utf-8');
         const parsed = JSON.parse(text);
         const overrides = isLoggableObject(parsed) ? parsed : {};
-        cachedFileMtimeMs = statFileMtimeMs();
+        cachedFileMtimeMs = stat.mtimeMs;
         cached = {
           value: options.normalize({ ...defaults(), ...overrides }),
           isCustomized: Object.keys(overrides).length > 0,

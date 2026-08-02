@@ -126,6 +126,8 @@ interface EffectiveRouteFields {
   defaultEffort?: Effort | null;
   supportsFastMode?: boolean;
   defaultEnabled?: boolean;
+  /** 运行时防御：typed caller 绕过 protocol parser 时也不能静默修复坏档位。 */
+  validationError?: string;
 }
 
 /** entry 基线 + perAgent[agent] 覆盖后的有效字段(仅 wire enum agent 有 perAgent)。 */
@@ -136,20 +138,21 @@ function effectiveRouteFields(
   const override = entry.perAgent?.[agent];
   const efforts = override?.efforts ?? entry.efforts;
   const candidateDefaultEffort = override?.defaultEffort ?? entry.defaultEffort;
-  const filteredEfforts =
-    efforts !== undefined
-      ? (efforts.filter((e): e is Effort => VALID_EFFORTS.has(e)) as Effort[])
-      : undefined;
+  const hasInvalidEffort =
+    efforts !== undefined &&
+    (!Array.isArray(efforts) || efforts.some((effort) => !VALID_EFFORTS.has(effort)));
+  const validatedEfforts =
+    efforts !== undefined && !hasInvalidEffort ? ([...efforts] as Effort[]) : undefined;
   const defaultEffort: Effort | null | undefined =
-    filteredEfforts === undefined
+    validatedEfforts === undefined
       ? candidateDefaultEffort !== undefined && VALID_EFFORTS.has(candidateDefaultEffort)
         ? (candidateDefaultEffort as Effort)
         : undefined
-      : filteredEfforts.length === 0
+      : validatedEfforts.length === 0
         ? null
         : candidateDefaultEffort !== undefined &&
             VALID_EFFORTS.has(candidateDefaultEffort) &&
-            filteredEfforts.includes(candidateDefaultEffort as Effort)
+            validatedEfforts.includes(candidateDefaultEffort as Effort)
           ? (candidateDefaultEffort as Effort)
           : undefined;
   return {
@@ -161,7 +164,7 @@ function effectiveRouteFields(
       ? { contextWindow: override?.contextWindow ?? entry.contextWindow }
       : {}),
     ...(entry.maxOutputTokens !== undefined ? { maxOutput: entry.maxOutputTokens } : {}),
-    ...(filteredEfforts !== undefined ? { efforts: filteredEfforts } : {}),
+    ...(validatedEfforts !== undefined ? { efforts: validatedEfforts } : {}),
     ...(defaultEffort !== undefined ? { defaultEffort } : {}),
     ...(override?.supportsFastMode !== undefined || entry.supportsFastMode !== undefined
       ? { supportsFastMode: override?.supportsFastMode ?? entry.supportsFastMode }
@@ -169,6 +172,7 @@ function effectiveRouteFields(
     ...(override?.defaultEnabled !== undefined || entry.defaultEnabled !== undefined
       ? { defaultEnabled: override?.defaultEnabled ?? entry.defaultEnabled }
       : {}),
+    ...(hasInvalidEffort ? { validationError: 'route has invalid effort token' } : {}),
   };
 }
 
@@ -235,6 +239,16 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
           continue;
         }
         const fields = effectiveRouteFields(entry, agent);
+        if (fields.validationError) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent,
+            modelId: route.modelId,
+            reason: fields.validationError,
+          });
+          continue;
+        }
         const overlay = toOverlay(fields, status);
         if (Object.keys(overlay).length > 0) rootPlan.overlays.set(route.modelId, overlay);
         if (status === null) continue; // metadata-only:overlay 已登记,不长实体。
@@ -257,6 +271,16 @@ export function planRegistryRoots(registry: ModelRegistry | undefined): ModelPla
       for (const bridgeAgent of policy.membershipGatedBridges) {
         if (!routeAgents.includes(bridgeAgent)) continue;
         const fields = effectiveRouteFields(entry, bridgeAgent);
+        if (fields.validationError) {
+          plan.warnings.push({
+            source: 'registry',
+            providerId: route.providerId,
+            agent: bridgeAgent,
+            modelId: route.modelId,
+            reason: fields.validationError,
+          });
+          continue;
+        }
         if (
           fields.efforts !== undefined &&
           fields.efforts.length > 0 &&
