@@ -153,6 +153,7 @@ export function selectRecentTitleMessages(
   inputRows: readonly TitleMessageCandidate[],
   limit: number,
   knownToolUseIds: ReadonlySet<string> = new Set(),
+  latestTurnIsInFlight = false,
 ): SelectedTitleMessage[] {
   if (limit <= 0 || inputRows.length === 0) return [];
 
@@ -192,10 +193,14 @@ export function selectRecentTitleMessages(
   });
 
   const groups: EffectiveTitleGroup[] = [];
+  const latestTurnIndex = turns.length - 1;
   for (const [index, turn] of turns.entries()) {
+    const unsealedTurnIsInFlight =
+      (lastCompletedTurnIndex >= 0 && index > lastCompletedTurnIndex) ||
+      (latestTurnIsInFlight && index === latestTurnIndex);
     const assistant = pickTurnAssistant(
       turn,
-      lastCompletedTurnIndex >= 0 && index > lastCompletedTurnIndex,
+      unsealedTurnIsInFlight,
       knownToolUseIds,
     );
     const selected: SelectedTitleMessage[] = [];

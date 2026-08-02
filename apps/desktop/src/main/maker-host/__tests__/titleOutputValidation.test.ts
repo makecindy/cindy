@@ -12,6 +12,8 @@ describe('validateTitleOutput', () => {
     ['# 标题', 'markdown heading'],
     ['根据对话内容，这是一个标题', 'meta prefix'],
     ['根据对话内容这是一个标题', 'meta prefix without punctuation'],
+    ['以下是标题：登录问题', 'Chinese meta prefix before title label'],
+    ['以下是一个标题', 'Chinese meta prefix before ordinary characters'],
   ])('rejects %s (%s)', (value) => {
     expect(validateTitleOutput(value, 20)).toBeNull();
   });

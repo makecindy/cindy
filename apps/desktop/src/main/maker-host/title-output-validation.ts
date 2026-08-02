@@ -1,8 +1,17 @@
 /** Deterministic acceptance rules for model-produced session titles. */
 
 const META_PREFIX_RE =
-  /^(?:according to (?:the )?conversation|based on (?:the )?conversation|here(?:'s| is) (?:the )?title|title\s*[:：]|标题\s*[:：]|以下是|根据对话内容)(?:\b|\s|[,:：，。.!！?？]|这)/iu;
+  /^(?:(?:according to (?:the )?conversation|based on (?:the )?conversation|here(?:'s| is) (?:the )?title)(?:\b|\s|[,:：，。.!！?？])|title\s*[:：]|标题\s*[:：]|以下是|根据对话内容)/iu;
 const ROLE_LABEL_RE = /(?:^|\s)(?:assistant|user)\s*(?::|：|[-—–]\s)/iu;
+
+function exceedsUnicodeCodePointLimit(value: string, maxChars: number): boolean {
+  let count = 0;
+  for (const _char of value) {
+    count += 1;
+    if (count > maxChars) return true;
+  }
+  return false;
+}
 
 function stripWrappingQuotes(value: string): string {
   const pairs: ReadonlyArray<readonly [string, string]> = [
@@ -37,6 +46,6 @@ export function validateTitleOutput(
   if (!title || title.includes('```')) return null;
   if (/^#{1,6}\s/u.test(title)) return null;
   if (ROLE_LABEL_RE.test(title) || META_PREFIX_RE.test(title)) return null;
-  if (Array.from(title).length > maxChars) return null;
+  if (exceedsUnicodeCodePointLimit(title, maxChars)) return null;
   return title;
 }

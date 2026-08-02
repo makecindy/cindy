@@ -11,6 +11,11 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
   run: vi.fn(async (_request: unknown) => ({ applied: true, done: true })),
+  regenerateMaterial: vi.fn(async () => ({
+    opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+    recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+  })),
+  generateTitle: vi.fn(async () => '任务标题'),
 }));
 
 vi.mock('electron', () => ({
@@ -27,12 +32,14 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../localDb/latestMessageText.js', () => ({
   latestMessage: vi.fn(),
   latestMessageText: vi.fn(),
-  regenerateTitleMaterial: vi.fn(),
+  regenerateTitleMaterial: h.regenerateMaterial,
 }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../maker-host/title-one-shot.js', () => ({ generateTitleViaProvider: vi.fn() }));
+vi.mock('../../maker-host/title-one-shot.js', () => ({
+  generateTitleViaProvider: h.generateTitle,
+}));
 vi.mock('../sessionAutoTitle.js', () => ({ runSessionAutoTitle: h.run }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: () => {
@@ -44,6 +51,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 
 import { registerMakerTitleIpc } from '../title.js';
+import { getDbClient } from '../../localDb/client/current.js';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
@@ -53,12 +61,44 @@ function invoke(request: unknown): Promise<unknown> {
   return Promise.resolve(handler(EVENT, request));
 }
 
+function invokeRegenerate(sessionId: string): Promise<unknown> {
+  const handler = h.handlers.get('maker:regenerate-title');
+  if (!handler) throw new Error('regenerate-title handler not registered');
+  return Promise.resolve(handler(EVENT, { sessionId }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
   h.trusted = true;
   h.run.mockResolvedValue({ applied: true, done: true });
+  h.regenerateMaterial.mockClear();
+  h.generateTitle.mockClear();
+  vi.mocked(getDbClient).mockReturnValue({
+    drizzle: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ agentKind: 'codex' }],
+          }),
+        }),
+      }),
+    },
+  } as unknown as ReturnType<typeof getDbClient>);
   registerMakerTitleIpc();
+});
+
+describe('maker:regenerate-title — 当前 turn 状态', () => {
+  it('把运行中的 session 状态传给标题素材筛选', async () => {
+    h.handlers.clear();
+    const isSessionInTurn = vi.fn(() => true);
+    registerMakerTitleIpc({ isSessionInTurn });
+
+    await expect(invokeRegenerate('s-running')).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionInTurn).toHaveBeenCalledWith('s-running');
+    expect(h.regenerateMaterial).toHaveBeenCalledWith('s-running', expect.any(Number), true);
+  });
 });
 
 describe('maker:auto-title — sender 断言', () => {

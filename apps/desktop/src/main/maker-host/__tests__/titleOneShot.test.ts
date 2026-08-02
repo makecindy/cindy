@@ -413,6 +413,21 @@ describe('generateTitleViaProvider — anthropic(Messages)', () => {
     );
     expect(title).toBe('标题'.repeat(20));
   });
+  it('完整响应超过 256 个 Unicode 字符 → 拒绝而不是处理或截断', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '长'.repeat(257) }] },
+    }));
+    const title = await generateTitleViaProvider(
+      { sessionId: 's1', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [providerStub('anthropic')],
+        readAnthropicOAuth: () => ({ accessToken: 'atok' }),
+      },
+    );
+    expect(title).toBeNull();
+  });
   it('响应后半段出现 transcript 标签也拒绝,不能被 40 字截断掩盖', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { content: [{ type: 'text', text: '正常标题'.padEnd(40, '好') + ' Assistant: 继续' }] },

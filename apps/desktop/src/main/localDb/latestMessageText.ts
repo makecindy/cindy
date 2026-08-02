@@ -106,6 +106,7 @@ async function recentMessagesWithClearedAt(
   sessionId: string,
   limit: number,
   clearedAt: number | null,
+  latestTurnIsInFlight: boolean,
 ): Promise<RecentMessage[]> {
   const db = getDbClient().drizzle;
   const conds = [
@@ -184,7 +185,7 @@ async function recentMessagesWithClearedAt(
       (value): value is string => typeof value === 'string' && value.length > 0,
     ),
   );
-  return selectRecentTitleMessages(candidates, limit, knownToolUseIds);
+  return selectRecentTitleMessages(candidates, limit, knownToolUseIds, latestTurnIsInFlight);
 }
 
 /** 第一条非空文本的用户消息;开头连续附件超过扫描窗口时退化为空(调用方按无开场处理)。 */
@@ -219,10 +220,11 @@ async function firstUserMessageWithClearedAt(
 export async function regenerateTitleMaterial(
   sessionId: string,
   recentLimit: number,
+  latestTurnIsInFlight = false,
 ): Promise<RegenerateTitleMaterial> {
   const clearedAt = await sessionClearedAt(sessionId);
   const [recent, opening] = await Promise.all([
-    recentMessagesWithClearedAt(sessionId, recentLimit, clearedAt),
+    recentMessagesWithClearedAt(sessionId, recentLimit, clearedAt, latestTurnIsInFlight),
     firstUserMessageWithClearedAt(sessionId, clearedAt),
   ]);
   return { recent, opening };

@@ -126,7 +126,11 @@ export interface RegenerateTitleDeps {
   /** 读会话 agentKind。会话不存在 → null(直接放弃)。 */
   readSessionAgentKind: (sessionId: string) => Promise<AgentKind | null>;
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
-  collectMaterial: (sessionId: string, recentLimit: number) => Promise<RegenerateTitleMaterial>;
+  collectMaterial: (
+    sessionId: string,
+    recentLimit: number,
+    latestTurnIsInFlight: boolean,
+  ) => Promise<RegenerateTitleMaterial>;
   /** 用给定 prompt 走 title oneShot 通道。 */
   generateTitle: (
     sessionId: string,
@@ -165,12 +169,17 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
 export async function regenerateMakerSessionTitle(
   sessionId: string,
   deps: RegenerateTitleDeps = defaultRegenerateDeps,
+  latestTurnIsInFlight = false,
 ): Promise<string | null> {
   if (!sessionId) return null;
   try {
     const agentKind = await deps.readSessionAgentKind(sessionId);
     if (!agentKind) return null;
-    const { recent, opening } = await deps.collectMaterial(sessionId, REGENERATE_RECENT_WINDOW);
+    const { recent, opening } = await deps.collectMaterial(
+      sessionId,
+      REGENERATE_RECENT_WINDOW,
+      latestTurnIsInFlight,
+    );
     // 空会话(草稿)没有素材,起不出有意义的标题
     if (recent.length === 0) return null;
     // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
@@ -239,7 +248,11 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
   };
 }
 
-export function registerMakerTitleIpc(): void {
+export interface RegisterMakerTitleIpcOptions {
+  isSessionInTurn?: (sessionId: string) => boolean;
+}
+
+export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}): void {
   // 这两条通道读供应商快照时会放行本机绑定自愈(写绑定文件、并为 Anthropic 起一次带凭证的
   // 清单发现),与下面的 AUTO_TITLE 同属特权入口,守卫口径也应当一致 —— 原先只有 AUTO_TITLE
   // 做了 sender 断言(PR #548 review)。两者都不在 device-link allowlist 里,可以直接用会抛的
@@ -265,7 +278,13 @@ export function registerMakerTitleIpc(): void {
       { sessionId }: { sessionId: string },
     ): Promise<{ title: string | null }> => {
       assertTrustedAppRendererEvent(event);
-      return { title: await regenerateMakerSessionTitle(sessionId) };
+      return {
+        title: await regenerateMakerSessionTitle(
+          sessionId,
+          defaultRegenerateDeps,
+          options.isSessionInTurn?.(sessionId) === true,
+        ),
+      };
     },
   );
   // 自动起名:renderer 只负责给素材,占位/条件写/归属表全在 main(单一真相源)。

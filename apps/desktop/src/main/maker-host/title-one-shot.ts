@@ -59,6 +59,8 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
+const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
  * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
  * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
@@ -490,7 +492,7 @@ export async function generateTitleViaProvider(
     // response, Markdown wrapper, or multiline answer. Validate the complete response
     // before applying the historical 40-character auto-title truncation, so a bad suffix
     // cannot hide beyond the slice boundary.
-    const normalized = validateTitleOutput(text, Number.MAX_SAFE_INTEGER);
+    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
     const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
     if (!title) {
       log.warn('title oneShot rejected invalid model output', {

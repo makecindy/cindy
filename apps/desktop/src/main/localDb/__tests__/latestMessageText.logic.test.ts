@@ -93,6 +93,18 @@ describe('selectRecentTitleMessages', () => {
     ]);
   });
 
+  it('drops first-turn progress when runtime reports the latest turn is still in flight', () => {
+    const rows = [
+      row('user', 1, '原始需求：修复任务标题'),
+      row('assistant', 2, '我先检查日志', { uuid: 'first-progress-1' }),
+      row('assistant', 3, '再读取相关代码', { uuid: 'first-progress-2' }),
+    ];
+
+    expect(
+      selectRecentTitleMessages(rows, 8, new Set(), true).map((message) => message.text),
+    ).toEqual(['原始需求：修复任务标题']);
+  });
+
   it('uses the old last-assistant fallback only when a turn has no boundary metadata', () => {
     const rows = [
       row('user', 1, '老会话'),
