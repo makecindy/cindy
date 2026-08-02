@@ -44,6 +44,8 @@ vi.mock('react-i18next', () => ({
         'usageDetails.costLine': '本轮消耗：{{cost}}',
         'usageDetails.valueLine': '本轮 token 价值：{{cost}}',
         'usageDetails.noBilledCost': '本轮费用暂不可用，仅显示用量',
+        'usageDetails.costBreakdownHeader': '按模型拆分：',
+        'usageDetails.modelCostLine': '· {{model}} {{cost}}',
         'usageDetails.cacheLine': '缓存拆分：读取 {{read}} · 写入 {{create}} · 命中率 {{rate}}',
         'usageDetails.cacheLineNoRate': '缓存拆分：读取 {{read}} · 写入 {{create}}',
         'usageDetails.multipleModels': '{{count}} 个模型',
@@ -210,6 +212,34 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(document.activeElement).toBe(trigger);
   });
 
+  it('Tab 离开卡片后自然保留下一控件的焦点', () => {
+    render(
+      <>
+        <TodaySpendChip
+          vendorKey="cc"
+          providerId="anthropic"
+          modelId="claude-opus-5[1m]"
+          sessionId="session-1"
+        />
+        <button type="button">下一控件</button>
+      </>,
+    );
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+
+    act(() => trigger.focus());
+    const dashboardButton = within(screen.getByTestId('quota-hover-card')).getByRole('button', {
+      name: '打开 Claude 用量页面',
+    });
+    const nextButton = screen.getByRole('button', { name: '下一控件' });
+    expect(document.activeElement).toBe(dashboardButton);
+
+    act(() => nextButton.focus());
+    act(() => vi.advanceTimersByTime(200));
+
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    expect(document.activeElement).toBe(nextButton);
+  });
+
   it('指针可在宽限期内移入卡片并点击看板动作', () => {
     renderClaudeSubscriptionChip();
     const { trigger, card } = openCardFromHover();
@@ -326,6 +356,26 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText(/^74\.0k/)).toBeTruthy();
     expect(screen.getByText('读 0 · 写 74.0k · 命中 0%')).toBeTruthy();
     expect(screen.getByText('claude-opus-5[1m]')).toBeTruthy();
+  });
+
+  it('保留最后 SDK 分段的逐模型费用拆分', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: {
+        ...TURN_USAGE_DETAILS,
+        models: ['claude-opus-4-8[1m]', 'claude-haiku-4-5-20251001'],
+        perModelCost: [
+          { model: 'claude-opus-4-8[1m]', money: usdMoney(0.35) },
+          { model: 'claude-haiku-4-5-20251001', money: usdMoney(0.11) },
+        ],
+      },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+
+    expect(screen.getByText('按模型拆分：')).toBeTruthy();
+    expect(screen.getByText('· Opus 4.8 $0.35')).toBeTruthy();
+    expect(screen.getByText('· Haiku 4.5 $0.11')).toBeTruthy();
+    expect(screen.queryByText('claude-opus-5[1m]')).toBeNull();
   });
 
   it('非 Claude 订阅形态继续使用旧 Tip，不挂载额度卡片', () => {

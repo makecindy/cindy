@@ -44,6 +44,7 @@ import {
   DAILY_SOFT_LIMIT_FACTOR,
   formatCompactMoney,
   formatCompactTokens,
+  formatModelShort,
   formatTurnCostMoney,
   formatTurnCostUsd,
 } from '@/lib/usageFormat';
@@ -774,6 +775,14 @@ function toQuotaHoverCardTurnUsage(
     outputTokens: details.outputTokens,
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),
+    ...(details.perModelCost
+      ? {
+          perModelCost: details.perModelCost.map((entry) => ({
+            model: formatModelShort(entry.model),
+            costText: formatTurnCostMoney(entry.money),
+          })),
+        }
+      : {}),
     suggestionText: getTurnUsageSuggestion(details, t),
   };
 }
@@ -1654,6 +1663,11 @@ export function TodaySpendChip({
             onBlurCapture={(event) => {
               const nextTarget = event.relatedTarget;
               if (nextTarget instanceof Node && event.currentTarget.contains(nextTarget)) return;
+              if (quotaPopoverRestoringFocusRef.current) return;
+              // Tab 已将焦点交给卡片外的控件；自然离开只关闭卡片，
+              // 不让延时器或 close-autofocus 再把焦点抢回 trigger。
+              quotaPopoverFocusTakenRef.current = false;
+              quotaPopoverOpenSourceRef.current = null;
               scheduleQuotaPopoverClose();
             }}
             className="w-[340px] border-0 bg-transparent p-0 shadow-none"

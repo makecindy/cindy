@@ -28,6 +28,10 @@ export interface QuotaHoverCardTurnUsage {
   outputTokens?: number | null;
   cacheLineText?: string | null;
   model?: string | null;
+  perModelCost?: ReadonlyArray<{
+    model: string;
+    costText: string;
+  }> | null;
   suggestionText?: string | null;
 }
 
@@ -66,13 +70,18 @@ const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
   crit: 2,
 };
 
-/** 只接纳已知服务端级别，未知值不改变本地阈值判定。 */
+/**
+ * 空值或 normal 才是无告警；未知非空值至少保留为 warn。
+ * 这与共享告警谓词“任何非 normal severity 均告警”保持一致，
+ * 避免新增的上游级别在卡片里被静默降成正常。
+ */
 function serverQuotaSeverity(value: string | null | undefined): QuotaSeverity {
   const normalized = value?.trim().toLowerCase();
+  if (!normalized || normalized === 'normal') return 'normal';
   if (normalized === 'warning') return 'warn';
   const parts = normalized?.split(/[^a-z]+/).filter(Boolean) ?? [];
   if (parts.includes('exceeded') || parts.includes('critical')) return 'crit';
-  return 'normal';
+  return 'warn';
 }
 
 function effectiveQuotaSeverity(window: ClaudeUsageWindow): QuotaSeverity {
@@ -185,6 +194,7 @@ function WindowBlock({
 
 function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage; t: TFunction }) {
   const hasTokenBreakdown = turnUsage.inputTokens != null && turnUsage.outputTokens != null;
+  const showModelCostBreakdown = (turnUsage.perModelCost?.length ?? 0) >= 2;
 
   const renderCostLine = (
     costText: string | null | undefined,
@@ -228,6 +238,24 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
         </div>
       ) : null}
 
+      {showModelCostBreakdown ? (
+        <div data-testid="quota-model-cost-breakdown" className="mt-2">
+          <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+            {t('usageDetails.costBreakdownHeader')}
+          </div>
+          <div className="space-y-0.5 tabular-nums text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+            {turnUsage.perModelCost?.map((entry, index) => (
+              <div key={`${entry.model}-${index}`}>
+                {t('usageDetails.modelCostLine', {
+                  model: entry.model,
+                  cost: entry.costText,
+                })}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
       {turnUsage.totalTokensText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
           <span className="text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
@@ -258,7 +286,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
         </div>
       ) : null}
 
-      {turnUsage.model != null ? (
+      {!showModelCostBreakdown && turnUsage.model != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3">
           <span className="text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
             {t('quotaCard.modelLabel')}
@@ -341,7 +369,7 @@ export function QuotaHoverCard({
   return (
     <div
       data-testid="quota-hover-card"
-      className="w-[340px] select-none overflow-hidden rounded-2xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 pt-[6px] text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
+      className="w-[340px] select-none overflow-hidden rounded-xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 pt-[6px] text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
       style={{
         boxShadow:
           'var(--quota-card-shadow, var(--shadow-menu, 0 18px 40px rgba(30, 20, 12, 0.14), 0 2px 8px rgba(30, 20, 12, 0.08)))',

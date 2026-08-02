@@ -20,6 +20,8 @@ vi.mock('react-i18next', () => ({
       if (key === 'usageDetails.costLine') return `本轮消耗：${options.cost}`;
       if (key === 'usageDetails.valueLine') return `本轮 token 价值：${options.cost}`;
       if (key === 'usageDetails.noBilledCost') return '本轮费用暂不可用，仅显示用量';
+      if (key === 'usageDetails.costBreakdownHeader') return '按模型拆分：';
+      if (key === 'usageDetails.modelCostLine') return `· ${options.model} ${options.cost}`;
       if (key === 'quotaCard.turnCostUnavailable') return '本轮费用暂无法估算';
       if (key === 'todaySpend.tooltip.latestUserTurnTitle') return '最近一轮用户请求累计';
       if (key === 'chat.messageActionBar.userTurnCostDetailsTitle') return '最后一个 SDK 分段';
@@ -50,6 +52,9 @@ describe('QuotaHoverCard', () => {
   it('renders only the waiting branch when snapshot is null', () => {
     render(<QuotaHoverCard snapshot={null} nowMs={NOW_MS} />);
 
+    const card = screen.getByTestId('quota-hover-card');
+    expect(card.classList.contains('rounded-xl')).toBe(true);
+    expect(card.classList.contains('rounded-2xl')).toBe(false);
     expect(screen.getByText('quotaCard.waiting')).toBeTruthy();
     expect(screen.queryByText('Claude')).toBeNull();
     expect(screen.queryAllByRole('progressbar')).toHaveLength(0);
@@ -357,6 +362,28 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('本轮消耗：$0.20')).toBeTruthy();
   });
 
+  it('多模型分段逐模型展示费用，不再重复笼统模型行', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        turnUsage={{
+          costText: '$0.46',
+          model: '2 个模型',
+          perModelCost: [
+            { model: 'Opus 4.8', costText: '$0.35' },
+            { model: 'Haiku 4.5', costText: '$0.11' },
+          ],
+        }}
+      />,
+    );
+
+    expect(screen.getByText('按模型拆分：')).toBeTruthy();
+    expect(screen.getByText('· Opus 4.8 $0.35')).toBeTruthy();
+    expect(screen.getByText('· Haiku 4.5 $0.11')).toBeTruthy();
+    expect(screen.queryByText('2 个模型')).toBeNull();
+  });
+
   it('states that cost is unavailable while retaining token, cache, and model rows', () => {
     render(
       <QuotaHoverCard
@@ -444,10 +471,13 @@ describe('QuotaHoverCard', () => {
     expect(screen.getByText('quotaCard.staleData:5')).toBeTruthy();
   });
 
+  // 共享告警谓词把任何非 normal severity 视为告警，卡片的防御性映射不得降级。
   it.each([
     { severity: 'warning', utilization: 50, expected: 'warn' },
     { severity: undefined, utilization: 50, expected: 'normal' },
-    { severity: 'unknown-upstream-value', utilization: 50, expected: 'normal' },
+    { severity: '', utilization: 50, expected: 'normal' },
+    { severity: 'unknown-upstream-value', utilization: 50, expected: 'warn' },
+    { severity: 'hard_limit', utilization: 50, expected: 'warn' },
     { severity: 'quota_exceeded', utilization: 50, expected: 'crit' },
     { severity: 'critical', utilization: 50, expected: 'crit' },
     { severity: 'normal', utilization: 93, expected: 'crit' },

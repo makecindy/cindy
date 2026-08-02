@@ -59,18 +59,18 @@
     --motion-ease-in: cubic-bezier(0.4, 0, 1, 1); /* 退场 */
     --motion-ease-move: cubic-bezier(0.4, 0, 0.2, 1); /* 位置/尺寸插值 */
 
-    /* Claude 额度条默认色；运行时由 ColorRegistry 同名 token 接管，首帧也保持完整。 */
-    --quota-bar-fill: #DE7B52;
-    --quota-bar-warn: #E09A2F;
-    --quota-bar-crit: #E5484D;
-    --quota-bar-track: rgba(0, 0, 0, 0.08);
+    /* Claude 额度条的首帧 alias 与 ColorRegistry 一致：只复用已批准语义槽。 */
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
   }
 
   .dark {
-    --quota-bar-fill: #DE7B52;
-    --quota-bar-warn: #E09A2F;
-    --quota-bar-crit: #E5484D;
-    --quota-bar-track: rgba(255, 255, 255, 0.13);
+    --quota-bar-fill: var(--text-secondary);
+    --quota-bar-warn: var(--warning-fg);
+    --quota-bar-crit: var(--error-flat);
+    --quota-bar-track: var(--surface-chip);
   }
 
   body {
