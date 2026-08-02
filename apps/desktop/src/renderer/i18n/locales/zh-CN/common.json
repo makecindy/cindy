@@ -1212,6 +1212,12 @@
     "providers": {
       "title": "模型供应商",
       "subtitle": "选择模型时的来源。每个来源提供它支持的模型与计费方式，可按任务分别切换。",
+      "order": {
+        "hint": "拖动排序",
+        "handle": "调整 {{provider}} 顺序，当前第 {{position}} 项，共 {{total}} 项。使用方向键移动。",
+        "moved": "已将 {{provider}} 移至第 {{position}} 项，共 {{total}} 项。",
+        "saveFailed": "未能保存供应商顺序，请重试。"
+      },
       "pill": {
         "connected": "已连接",
         "suspended": "已停用"
@@ -1317,13 +1323,21 @@
           "anthropic": "Anthropic Messages（Cindy 桥接）",
           "responsesHelp": "供应商原生支持 Responses API，Cindy 透明转发完整事件。",
           "chatHelp": "适用于仅提供 Chat Completions 的供应商。Cindy 转换流式文本和函数工具调用；部分高级 Responses 能力不可用。",
-          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。"
+          "anthropicHelp": "适用于提供 Anthropic Messages API 的供应商。Cindy 转换 Responses 消息、图片、工具、推理内容与流式事件。",
+          "piResponses": "OpenAI Responses",
+          "piChat": "OpenAI Chat Completions",
+          "piAnthropic": "Anthropic Messages",
+          "piResponsesHelp": "Pi 直接连接供应商的 OpenAI Responses API。",
+          "piChatHelp": "Pi 直接连接供应商的 OpenAI 兼容 Chat Completions API。",
+          "piAnthropicHelp": "Pi 直接连接供应商的 Anthropic Messages API。"
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code 遵循 Anthropic 协议(用 x-api-key 鉴权)。填该来源用于 Claude Code 的 baseURL、密钥与模型，留空则此来源不提供 Claude Code。",
           "codex": "Codex",
-          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。"
+          "codexDesc": "Codex 使用 OpenAI Responses 协议。上游可选择原生 Responses，或由 Cindy 桥接 Chat Completions、Anthropic Messages。填该来源用于 Codex 的 baseURL、密钥与模型，留空则此来源不提供 Codex。",
+          "pi": "Pi",
+          "piDesc": "Pi 是多协议 harness：你的自定义或本地模型（Ollama、vLLM、自建端点）原生直连，不经 Cindy 的兼容 Proxy。先在下方选 API 类型，再填该来源给 Pi 用的 base URL、密钥与模型；留空则本来源不配置 Pi。"
         },
         "errors": {
           "nameRequired": "请填写显示名称",
@@ -1879,11 +1893,16 @@
         "connecting": "连接中…",
         "connected": "已连接",
         "conflict": "已被另一台设备使用",
+        "offline": "已下线",
         "error": "连接失败"
       },
       "connected": {
         "heading": "已连接 Telegram Bot",
         "note": "私聊 Bot 或在群里 @ 它，消息会路由到本机的 {{appName}}；群里最近的消息会作为上下文一起带上。",
+        "headingOffline": "已在这台设备下线",
+        "noteOffline": "已停止接收消息。Bot Token 和绑定信息仍保留在本机，随时可以重新上线。",
+        "headingConflict": "已被另一台设备使用",
+        "noteConflict": "同一个 Bot 同时只能有一台设备接收消息，本机正在反复争抢。可以在下方让那台设备下线、由本机接管；或者点「本机下线」把位置让给它。",
         "botLabel": "Bot 账号",
         "ownerLabel": "我的用户 ID"
       },
@@ -1896,6 +1915,43 @@
       "formHint": "用户 ID 是纯数字；私聊 @userinfobot 可以查到自己的 ID。",
       "connect": "连接",
       "connectingAction": "连接中…",
+      "errorCode": {
+        "invalid-token": "Bot Token 无效或已被重置，请重新填写",
+        "provider-api": "Telegram 服务返回错误，请稍后重试",
+        "network": "网络不可达，连不上 Telegram",
+        "secret-unavailable": "系统安全存储不可用，凭证无法保存"
+      },
+      "goOffline": "本机下线",
+      "goingOfflineAction": "下线中…",
+      "goOnline": "本机上线",
+      "goingOnlineAction": "上线中…",
+      "remoteDevices": {
+        "title": "我的其他设备",
+        "refresh": "重新检查",
+        "hint": "让某台设备下线后，它就不再接收消息。它的 Token 和绑定不会被清除，之后在那台设备上随时能自己再上线。",
+        "takeOffline": "让它下线",
+        "state": {
+          "checking": "检查中…",
+          "connected": "正在使用这个 Bot",
+          "conflict": "正在争抢这个 Bot",
+          "offline": "已下线",
+          "connecting": "连接中…",
+          "idle": "未配置",
+          "error": "连接失败",
+          "notConfigured": "未配置 Telegram 机器人",
+          "otherBot": "绑的是另一个 Bot，不冲突",
+          "offlineDevice": "设备离线，无法远程操作",
+          "unreachable": "查不到状态",
+          "unsupported": "该设备版本不支持远程下线"
+        },
+        "failure": {
+          "remoteDisabled": "该设备已关闭远程控制",
+          "accessRevoked": "该设备已撤销本机的访问权限",
+          "controlDisabled": "本机已关闭对该设备的控制",
+          "unreachable": "该设备已离线或暂时无法连接",
+          "unknown": "远程请求失败，请检查设备状态后重试"
+        }
+      },
       "disconnect": "解绑",
       "disconnectingAction": "解绑中…",
       "disconnectAria": "解绑 Telegram 机器人",
@@ -1969,6 +2025,11 @@
         "dmQuoteHint": {
           "off": "私聊回答不引用你的消息（默认，更清爽）。",
           "first": "第一条回答引用你发的那条消息。"
+        },
+        "error": {
+          "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+          "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+          "retry": "重新读取"
         }
       },
       "persona": {
@@ -1992,6 +2053,11 @@
         "contactsOn": "群里说话的人会自动记入智能通讯录（总开关已开启）。",
         "contactsOff": "智能通讯录未开启，群里说话的人不会被自动记住。",
         "contactsEnable": "开启",
+        "error": {
+          "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+          "save": "群参与模式未保存，已恢复上次确认的模式。",
+          "retry": "重新读取"
+        },
         "mode": {
           "mention": "仅 @",
           "always": "全响应"
@@ -2077,6 +2143,10 @@
         "codex": {
           "label": "Codex",
           "description": "通过 Codex 入口使用的所有模型，会共享同一份记忆"
+        },
+        "pi": {
+          "label": "Pi",
+          "description": "将长任务的压缩摘要保存到 Cindy 记忆，供后续 Pi 任务继续使用"
         }
       },
       "agent": {
@@ -2208,6 +2278,13 @@
         "disabled": "对话记录语义索引已停止",
         "toggleFailed": "切换对话嵌入失败"
       }
+    },
+    "messageNavRail": {
+      "cell": {
+        "label": "显示提问导航条",
+        "description": "在对话正文左侧显示一列提问刻度：悬停预览提问和回答开头，点击跳回那一轮。仅在提问较多且窗口足够宽时出现。"
+      },
+      "toggleAria": "切换提问导航条"
     },
     "collaboration": {
       "loading": "正在加载协同设置…",
@@ -2659,12 +2736,75 @@
             "failed": "关联失败",
             "revoked": "已解除关联",
             "superseded": "已关联到另一台设备"
+          },
+          "behavior": {
+            "title": "回应与引用",
+            "emojiLabel": "表情回应",
+            "emojiOption": {
+              "off": "关闭",
+              "minimal": "基础",
+              "expressive": "生动"
+            },
+            "emojiHint": {
+              "off": "不放任何表情回应。",
+              "minimal": "收到消息 👀，完成 👍，失败 👎。",
+              "expressive": "完成与失败分别从正向、负向表情池随机选择。"
+            },
+            "groupQuoteLabel": "群里回复时引用提问",
+            "quoteOption": {
+              "off": "不引用",
+              "first": "首条引用",
+              "all": "每条引用"
+            },
+            "groupQuoteHint": {
+              "off": "群里的回答不挂回提问消息。",
+              "first": "每次触发的第一条回答挂回提问（推荐）。",
+              "all": "本次回答的每条消息都挂回提问。"
+            },
+            "dmQuoteLabel": "私聊回复时引用消息",
+            "dmQuoteHint": {
+              "off": "私聊回答不引用你的消息（默认）。",
+              "first": "第一条回答引用你发的那条消息。"
+            },
+            "error": {
+              "load": "未能读取 Telegram 行为设置，请检查连接后重试。",
+              "save": "Telegram 行为设置未保存，已恢复上次确认的设置。",
+              "retry": "重新读取"
+            }
+          },
+          "groups": {
+            "title": "群聊参与模式",
+            "hint": "官方 bot 见过的群会出现在这里。「全响应」仅对已绑定账号的每条发言生效；其他成员只进入本机群聊上下文，不会触发任务。",
+            "empty": "还没有群。把 bot 拉进群，并用已绑定账号发一条消息后就会出现在这里。",
+            "contactsOn": "群里其他发言人会自动记入智能通讯录。",
+            "contactsOff": "智能通讯录未开启，群里其他成员不会被自动记住。",
+            "contactsEnable": "开启",
+            "error": {
+              "load": "未能读取 Telegram 群列表，请检查连接后重试。",
+              "save": "群参与模式未保存，已恢复上次确认的模式。",
+              "retry": "重新读取"
+            },
+            "mode": {
+              "mention": "仅 @",
+              "always": "全响应"
+            }
           }
         },
         "x": {
           "description": "关联 X (Twitter) 账号，在 X 上 @提及 Cindy bot 即可派发任务。",
           "disabledHint": "打开开关后，按提示完成 X 账号授权。",
           "toggleAria": "切换 X 连接",
+          "guide": {
+            "usageLabel": "怎么用",
+            "usageBody": "在 X 上发一条推文 @askmycindy，任务就会派到这台设备上执行，结论以回帖发回给你。",
+            "riskLabel": "回帖是公开的",
+            "riskPublicBody": "我们的回复是一条公开推文，任何人都能看到。这个功能适合公开地找答案、解决问题，不适合处理私事 —— 那会有隐私暴露的风险。",
+            "riskWorkdirBody": "X 任务都落在 X 连接设置里的默认工作目录，Agent 能读写其中文件，而结论会公开回帖 —— 默认目录指到私密仓库时，文件内容可能随之公开。",
+            "withdrawLabel": "想撤回",
+            "withdrawBody": "提问者对着那条回答回复「/delete」（或「/删除」）就能删掉它。只删公开那条，本地任务记录照旧保留。",
+            "ackTitle": "X 已关联，先看一下用法与风险",
+            "ackConfirm": "我已了解风险"
+          },
           "connect": "关联 X",
           "openApp": "打开 X 完成授权",
           "cancel": "取消关联",
@@ -2791,9 +2931,8 @@
         "personal": "个人"
       },
       "tips": {
-        "cindy": "Cindy 是官方提供的共享机器人：无需申请任何凭证，连接 Slack 后 @Cindy 即可直接派活。",
-        "personal": "个人连接包括微信扫码，以及使用自有凭证接入企业微信 / 飞书 / Discord / Telegram；各渠道独立保存新对话配置。",
-        "personalFeishuOnly": "个人连接包括微信扫码，以及使用自有凭证接入企业微信、飞书和钉钉；各渠道独立保存新对话配置。"
+        "cindy": "由 Cindy 提供并维护。无需自行创建机器人或准备凭证，按引导连接后即可使用。",
+        "personal": "使用你自己的账号或机器人，由你提供并管理所需凭证；每个渠道的账号、权限和设置独立保存。"
       },
       "defaults": {
         "title": "新对话配置",
@@ -2966,7 +3105,8 @@
         "origin": {
           "public": "公开",
           "organization": "团队共享",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "emptyFiltered": "没有找到匹配的插件",
         "useAction": "使用",
@@ -2979,7 +3119,8 @@
           "public": "公开",
           "organization": "组织",
           "personal": "个人",
-          "local": "本地"
+          "local": "本地",
+          "custom": "自定义"
         },
         "install": "安装",
         "details": "详情",
@@ -3005,10 +3146,69 @@
         },
         "securityTitle": "安装与权限",
         "securityDescription": "安装包会在主进程中校验大小与 SHA-256，再经 Cindy 插件清单校验后原子安装。首次安装完成后即自动开启，可随时在插件页停用；更新会保留当前生效状态。",
+        "customSecurityDescription": "该插件来自你添加的自定义市场，未经 Cindy 服务端完整性校验。安装前会在主进程校验插件清单；首次安装完成后即自动开启，可随时在插件页停用。",
         "noPermissions": "此插件未声明额外能力。",
         "installConfirmTitle": "安装「{{name}}」？",
         "installConfirmDescription": "安装包将经过完整性与清单校验。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
-        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。"
+        "customInstallConfirmDescription": "插件来自自定义市场，未经服务端完整性校验，安装前将校验插件清单。安装完成后插件将自动开启，你可以随时在插件页停用或调整配置。",
+        "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。",
+        "sources": {
+          "addMarketplace": "添加插件市场…",
+          "dialogTitle": "添加插件市场",
+          "dialogDescription": "从 GitHub 仓库、Git URL 或本地文件夹添加插件市场。",
+          "learnMore": "了解更多",
+          "sourceLabel": "来源",
+          "sourcePlaceholder": "owner/repo 或 git@github.com:org/repo.git",
+          "refLabel": "Git 引用",
+          "refPlaceholder": "主分支",
+          "sparseLabel": "稀疏路径",
+          "sparsePlaceholder": "每行一个路径，如 team/tools",
+          "gitUnavailable": "未检测到 Git 或版本低于 2.25。Git 来源不可用，本地文件夹来源不受影响。",
+          "listTitle": "已添加的市场",
+          "pluginCount": "{{count}} 个插件",
+          "sourceError": "读取失败",
+          "localBadge": "本地",
+          "defaultRef": "默认分支",
+          "neverSynced": "尚未同步",
+          "refresh": "刷新",
+          "remove": "移除",
+          "removeConfirmTitle": "移除市场「{{name}}」？",
+          "removeConfirmDescription": "移除后，来自该市场的插件将不再显示；已安装的插件保留。",
+          "close": "关闭",
+          "add": "添加市场",
+          "errors": {
+            "invalidSource": "来源格式无效。支持 GitHub owner/repo、Git URL 或本地文件夹路径。",
+            "gitUnavailable": "未检测到 Git 或版本低于 2.25，无法添加 Git 来源。",
+            "cloneAuthFailed": "无法访问该仓库。私有仓库需要先在系统中配置 Git 认证（credential helper 或 SSH key）。",
+            "credentialsNotAllowed": "来源 URL 不能内嵌用户名或密码。请改用系统 Git 认证（credential helper 或 SSH key）。",
+            "cloneFailed": "克隆仓库失败，请检查网络连接后重试。",
+            "refNotFound": "找不到指定的 Git 引用，请检查分支或标签名是否正确。",
+            "manifestMissing": "该来源中找不到受支持的 marketplace.json 清单。",
+            "duplicate": "该市场已添加。",
+            "notFound": "该市场不存在或已被移除。"
+          },
+          "guide": {
+            "title": "自定义插件市场指南",
+            "intro": "插件市场是一个带有清单文件的 Git 仓库或本地文件夹，用来分发一组 Cindy 插件。",
+            "structureTitle": "目录结构",
+            "structureBody": "市场仓库需要一份清单文件，以及若干插件目录。每个插件目录必须包含合法的 ghost.json（插件身份卡）。",
+            "structureLabelManifest": "清单",
+            "structureLabelGhostCard": "插件身份卡",
+            "structureLabelEntry": "插件入口",
+            "structureNote": "清单可以放在以下位置之一：",
+            "manifestTitle": "清单格式",
+            "manifestBody": "name 是市场的唯一标识（添加后按它管理）。清单的插件数组里，每个条目的 source 指向仓库内的插件目录，使用相对路径；也支持 {\"source\": \"local\", \"path\": \"…\"} 的对象写法。",
+            "sourceTitle": "来源格式",
+            "sourceBody": "支持 GitHub 简写 owner/repo、完整 Git URL（https / ssh / git@）和本地文件夹路径（含 ~）。Git 引用可填分支、标签或 commit，不填则用默认分支。稀疏路径每行一个，只检出仓库的指定子目录，适合大型仓库。",
+            "authTitle": "私有仓库",
+            "authBody": "认证完全依赖系统的 Git 配置，Cindy 不保存任何 Git 凭证。SSH 方式：本机已配置可用的 key；若组织开启了 SAML SSO，还需在 GitHub 的 SSH key 设置里为该组织点 Configure SSO 授权。HTTPS 方式：使用 Personal Access Token，并由系统 credential helper 保存。",
+            "rulesTitle": "安装规则",
+            "rulesBody": "插件 id 全局唯一、先装先得——与已安装插件冲突时会明确提示。使用 cindy- 等官方保留前缀的插件不能从自定义市场安装。安装前会逐项展示插件声明的权限，确认后即完成安装并自动开启。",
+            "copy": "复制指南",
+            "copied": "指南已复制到剪贴板。",
+            "copyFailed": "复制失败，请重试。"
+          }
+        }
       },
       "install": "安装插件…",
       "empty": "还没有安装任何插件",
@@ -3135,6 +3335,8 @@
         "resident": "常驻运行(生效后即启动，不调用也保持后台进程)",
         "residentDetail": "空闲时也占用少量内存；停用或卸载后进程立即关闭。",
         "subscribeTopics": "旁听你的任务动态(每轮往来与任务事件，不含消息内容)",
+        "subscribeActivity": "旁听 AI 何时在思考、何时在等你",
+        "subscribeActivityDetail": "只知道时机：思考何时开始与结束，以及 AI 何时在等你批准或等你回答。看不到思考内容、待批准的操作、涉及的命令与文件、计划正文、问题与你的答案，也无法代你批准。",
         "subscribeHooks": "可读取、拦截或改写你发出的消息",
         "subscribeHooksDetail": "发送前先经它审阅：可拦下消息，也可能改写正文后再发出；被拦的消息可编辑后重发。",
         "subscribeAssistantReply": "可读取并重写 AI 的回复",
@@ -4655,6 +4857,7 @@
       "add": "添加项目",
       "cancel": "取消",
       "empty": "请先在「设置 → 远程连接」连接一台被控设备，或在「设置 → 远端机器」添加 SSH 主机。",
+      "emptyPiSshFiltered": "Pi 仅在本地运行，这里不显示 SSH 主机。请在「设置 → 远程连接」连接一台被控设备，或切换到 Claude / Codex 以使用 SSH 主机。",
       "loading": "加载中…",
       "noSubdirs": "此目录下没有子文件夹",
       "doubleClickHint": "双击进入此文件夹",
@@ -4713,6 +4916,7 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
+          "pi": "Pi",
           "pending": "下条：{{agent}}"
         }
       },
@@ -4773,7 +4977,7 @@
           },
           "auto": {
             "label": "自动审批",
-            "description": "允许在工作区内读写，并自动审批提权请求。能减少打断，但存在误判风险。"
+            "description": "允许在工作区内读写，并自动审批提权请求；高风险操作可能被拒绝或要求确认。能减少打断，但存在误判风险。"
           },
           "bypassPermissions": {
             "label": "完全访问",
@@ -4792,6 +4996,20 @@
           "bypassPermissions": {
             "label": "完全访问",
             "description": "允许修改任意文件并运行联网命令，无需再次确认。风险最高，只适合可信任务。"
+          }
+        },
+        "pi": {
+          "ask": {
+            "label": "默认权限",
+            "description": "只读工具直接执行；写文件、跑命令和 MCP 工具每次都询问。"
+          },
+          "auto": {
+            "label": "自动审批",
+            "description": "工作区内写文件与安全命令自动执行；越界写、危险命令和 MCP 工具仍会询问。"
+          },
+          "bypassPermissions": {
+            "label": "完全访问",
+            "description": "所有工具无需询问直接执行。风险最高，只适合可信任务。"
           }
         }
       }
@@ -4888,13 +5106,13 @@
       "startFailedContinue": "开启协同失败，已改为单任务继续",
       "createWorkerRefreshFailed": "Worker 状态刷新失败，请稍后重试",
       "openHint": "召集 Worker 协作",
-      "disabledHint": "当前项目已关闭协同模式，请在项目设置中重新启用",
-      "unavailableHint": "暂时无法确认当前项目的协同设置，请稍后重试",
+      "disabledHint": "协同模式已关闭，请在设置中重新启用",
+      "unavailableHint": "暂时无法确认协同设置，请稍后重试",
       "unsupportedRemoteHint": "被控设备的版本过旧，暂不支持协同",
       "remoteContinueNotice": "本条消息仍会以单任务继续发送。",
       "handoffRecoveredMessage": "上次开启协同时被中断，未发出的消息已恢复到输入框",
       "handoffRecoveredGoal": "上次开启协同时被中断，目标未启动，内容已恢复到输入框",
-      "loadingHint": "正在确认当前项目的协同设置，请稍后重试",
+      "loadingHint": "正在确认协同设置，请稍后重试",
       "stopHint": "停止协同",
       "stopAria": "停止协同",
       "toggleOnAria": "协同模式已开启，点击停止",
@@ -4921,8 +5139,8 @@
         "BUDGET_MODEL_REQUIRES_API_MODE": "此 Codex 模型需要先在设置中配置 API key 才能使用。请配置后重试。",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "此 Codex 模型需要先在设置中配置 API key；协同未开启，已改为单任务继续。请配置 API key 后重试。",
         "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "被控设备尚未配置此 Codex 模型所需的 API key。请在被控设备上配置后重试。",
-        "PRECONDITION_FAILED": "当前项目已关闭协同模式，或当前任务不支持协同。",
-        "PRECONDITION_FAILED_CONTINUE": "当前项目已关闭协同模式，已改为单任务继续。",
+        "PRECONDITION_FAILED": "协同模式已关闭，或当前任务暂不支持协同。",
+        "PRECONDITION_FAILED_CONTINUE": "协同模式未开启，已改为单任务继续。",
         "PRECONDITION_FAILED_REMOTE": "被控任务不支持协同。"
       }
     },
@@ -4974,6 +5192,12 @@
           "cancel": "保留当前 Agent",
           "dontShowAgain": "下次不再提醒"
         }
+      }
+    },
+    "agentSelect": {
+      "label": "引擎",
+      "trigger": {
+        "aria": "选择引擎：{{agent}}"
       }
     },
     "atMention": {
@@ -5108,6 +5332,20 @@
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
     "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
   },
+  "chatgptAuthRecovery": {
+    "title": "ChatGPT 登录已失效",
+    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请打开 ChatGPT App 重新登录后重试。",
+    "instanceIsolatedInvalidated": "Cindy 当前使用的是单独登录的 ChatGPT 账号。该登录已失效。请在 Cindy 中重新登录后重试。",
+    "unknownInvalidated": "Cindy 当前的 ChatGPT 登录已失效。请重新登录后重试。",
+    "recovered": "ChatGPT 登录已恢复，请重试。",
+    "openApp": "打开 ChatGPT App",
+    "relogin": "重新登录 ChatGPT",
+    "checking": "正在检测…",
+    "recheck": "重新检测",
+    "later": "稍后处理",
+    "openAppFailed": "无法打开 ChatGPT App，请手动打开后重新登录。",
+    "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
+  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "已跳过"
@@ -5139,6 +5377,7 @@
     },
     "agentTask": {
       "emptyTitle": "Subagent 任务",
+      "subagentStarted": "Subagent {{name}} 已启动",
       "showDetails": "展开 Subagent 详情",
       "hideDetails": "收起 Subagent 详情",
       "provider": {
@@ -5176,6 +5415,14 @@
       "aria": "回到底部，查看 {{count}} 条新消息",
       "label_one": "{{count}} 条新消息",
       "label_other": "{{count}} 条新消息"
+    },
+    "messageNavRail": {
+      "aria": "提问导航",
+      "jumpAria": "跳转到第 {{index}} 条提问：{{preview}}",
+      "attachmentOnly_one": "附件 {{count}} 件",
+      "attachmentOnly_other": "附件 {{count}} 件",
+      "hiddenEarlier_one": "更早还有 {{count}} 条提问",
+      "hiddenEarlier_other": "更早还有 {{count}} 条提问"
     },
     "messageActionBar": {
       "copy": "复制消息",
@@ -5221,12 +5468,6 @@
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
       "codexAuthMissingLocal": "Codex 凭证缺失或失效（401 Unauthorized）。请在 {{appName}} Settings → Codex 重新登录（登录后会自动重启 Codex app-server），或在终端跑 `codex login` + 在 Settings 切换一次鉴权模式来重启 app-server，然后新建任务再发。",
       "codexSessionExpired": "OpenAI 连接需要更新。重新连接 ChatGPT 后即可继续；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
-      "codexSessionExpiredDialog": {
-        "title": "OpenAI 连接需要更新",
-        "description": "{{appName}} 暂时无法使用你的 ChatGPT 账号。重新连接会同时恢复 Codex 和 Claude 的 OpenAI 能力；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
-        "confirm": "重新连接 ChatGPT",
-        "cancel": "稍后处理"
-      },
       "codexAuthSynced": "登录态已同步，请点击「重试」重新发送。",
       "syncAuth": "同步登录态",
       "syncAuthSyncing": "同步中…",
@@ -5796,6 +6037,7 @@
       "searchingWeb": "正在搜索网页…",
       "generatingImage": "正在生成图片…",
       "compacting": "正在压缩上下文…",
+      "spawningAgent": "正在启动 Subagent…",
       "done": "已完成",
       "waiting": "请稍候…",
       "working": "正在工作…",
@@ -5917,6 +6159,7 @@
     },
     "draft": {
       "createSessionFailed": "创建任务失败，请重试",
+      "piRemoteUnsupported": "Pi 仅在本地运行，无法使用 SSH 远程主机。请切换到 Claude 或 Codex 来使用该主机。",
       "remoteWorktreeCleanupPending": "上一次远程 worktree 仍待回收，请重新连接设备后再试。",
       "remoteProviderUpdating": "供应商凭证正在更新，请稍后重试",
       "remoteProviderUnsupported": "该供应商不支持 SSH 远程会话，请更换来源",
@@ -6164,7 +6407,41 @@
         "moveToProjectRemoteUnsupported": "暂不支持移动远程任务",
         "openInNewWindow": "在新窗口打开",
         "exportShare": "导出任务…",
+        "exportHtml": "导出为 HTML…",
+        "exportHtmlSuccess": "对话已导出为 HTML",
+        "exportHtmlFailed": "HTML 导出失败",
+        "compact": "压缩上下文",
+        "compacting": "正在压缩…",
+        "compactSuccess": "上下文已压缩",
+        "compactSuccessWithTokens": "上下文已压缩：{{before}}k → {{after}}k tokens",
+        "compactFailed": "压缩失败",
+        "compactNothing": "暂无可压缩内容",
+        "sessionBranches": "任务分支",
         "copySessionLink": "复制任务链接"
+      },
+      "sessionBranches": {
+        "title": "任务分支",
+        "close": "关闭任务分支",
+        "description": "Cindy 任务分叉与 Pi 任务内分支统一显示在这里。",
+        "current": "当前",
+        "empty": "当前任务还没有可切换的 Pi 分支。",
+        "emptyEntry": "无可见内容",
+        "loadFailed": "读取任务分支失败",
+        "switchFailed": "切换分支失败",
+        "switched": "已切换任务分支",
+        "switchedWithDraft": "已切换分支，原问题已放回输入框",
+        "runningBlocked": "当前轮结束后才能切换任务分支。",
+        "remoteBlocked": "请先重连或升级被控桌面端，再切换分支。",
+        "filesWarning": "切换只改变对话上下文，不会回滚工作区文件。",
+        "summarize": "离开当前分支时生成摘要（会调用模型）",
+        "summaryFocus": "可选：摘要重点，例如保留错误处理结论",
+        "role": {
+          "user": "用户",
+          "assistant": "Agent",
+          "tool": "工具",
+          "summary": "分支摘要",
+          "system": "状态"
+        }
       },
       "projectAction": {
         "rename": "重命名项目",
@@ -7828,6 +8105,12 @@
       "telegramBotSaveFailed": "保存失败：{{message}}",
       "telegramBotDisconnected": "已解绑 Telegram 机器人",
       "telegramBotDisconnectFailed": "解绑失败：{{message}}",
+      "telegramBotWentOffline": "已下线，绑定信息已保留",
+      "telegramBotWentOnline": "已上线",
+      "telegramBotToggleOnlineFailed": "切换失败：{{message}}",
+      "telegramRemoteWentOffline": "已让该设备下线",
+      "telegramRemoteUnsupported": "该设备的 Cindy 版本还不支持远程下线，需要先更新",
+      "telegramRemoteFailed": "远程下线失败：{{message}}",
       "dingtalkBotConnected": "钉钉机器人已连接",
       "dingtalkBotConnectFailed": "钉钉机器人连接失败，请检查凭证、Stream 模式和网络",
       "dingtalkBotAuthFailed": "钉钉未通过凭证校验，请确认 Client ID 和 Client Secret 来自同一个应用",
@@ -7884,8 +8167,11 @@
       "codexVoiceAuthDescription": "语音输入需要使用已连接的 ChatGPT 账号调用 GPT 实时语音识别。当前账号尚未连接或需要更新，是否前往「模型供应商」连接 ChatGPT？",
       "codexBinaryMissingTitle": "Codex 组件未就绪",
       "codexBinaryMissingDescription": "Codex 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Codex 连接状态。",
+      "piBinaryMissingTitle": "Pi 组件未就绪",
+      "piBinaryMissingDescription": "Pi 组件尚未准备好，暂时无法使用这个功能。请稍后重试，或前往「模型供应商」检查 Pi 连接状态。",
       "goToSettings": "前往设置",
       "remoteCodexBinaryMissingTitle": "被控端 Codex 组件未就绪",
+      "remotePiBinaryMissingTitle": "被控端 Pi 组件未就绪",
       "remoteAuthDescription": "需要在被控设备「{{device}}」上完成配置后，才能在这里新建并运行任务。请在该设备上配置后重试。",
       "remoteCodexNoSourceTitle": "被控端 Codex 暂无可用来源",
       "remoteCodexNoSourceDescription": "被控设备「{{device}}」尚未连接 Codex 可用的模型来源，无法在这里新建并运行任务。请在该设备上打开 {{appName}}，在「设置 → 模型供应商」登录 OpenAI 或连接其他来源后重试。",

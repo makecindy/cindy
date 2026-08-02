@@ -88,6 +88,9 @@ const host = {
     remove: () => {},
   },
   ipc: {
+    throwIpcError: (code: 'INVALID_PARAMS', message: string) => {
+      throw new Error(`[${code}] ${message}`);
+    },
     handle: (channel: string, handler: IpcHandler) => {
       handlers.set(channel, handler);
     },

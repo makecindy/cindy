@@ -1,11 +1,11 @@
 /**
- * Auto-review 接线集成测试:验证 permissionMode='auto' 下 canUseTool 真的走了 Cindy 的
- * 内置工具审查策略(auto-review-policy),而不是把 auto 透传给 CC 分类器。
+ * Auto-review 接线集成测试:官方 Claude OAuth 保留原生 Auto classifier；第三方路由
+ * 映射到 SDK default，让 canUseTool 走 Cindy 当前模型轻量 fallback。
  *
  * 覆盖(靶心是接线,而非策略本身 —— 策略逐规则由 auto-review-policy.test.ts 覆盖):
  *   - auto + 安全内置(只读 / 区内写 / 只读 shell)→ 静默 allow,不惊动 resolver
- *   - auto + 越界写 / 未知命令 → 弹窗(升级),会话级 suggestion 保留(可"总是允许")
- *   - auto + 危险命令 → 弹窗且 suggestion 被剥(不可持久化授权)
+ *   - auto + 灰区 → lightweight reviewer 的 allow/block 静默处理，只有 ask 才弹窗
+ *   - auto + 确定危险命令 → 弹窗且 suggestion 被剥(不可持久化授权)
  *   - default 档 → 内置工具不走 auto-review 策略(照旧弹窗),证明只作用于 auto
  */
 import { promises as fs } from 'node:fs';
@@ -39,9 +39,12 @@ function noopLogger(): Logger {
   return l;
 }
 
-function createDeps(): AgentDeps {
+function createDeps(options: {
+  authSource?: 'oauth' | 'api-key';
+  reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'];
+} = {}): AgentDeps {
   const auth: AuthAdapter = {
-    async getState() { return { authenticated: true }; },
+    async getState() { return { authenticated: true, authSource: options.authSource }; },
     async triggerLogin() { return { authenticated: true }; },
     async logout() {},
     async getAuthEnv() { return {}; },
@@ -52,6 +55,7 @@ function createDeps(): AgentDeps {
     binaryPath: process.execPath,
     logger: noopLogger(),
     mcpProviders: [],
+    reviewAutoPermissionAction: options.reviewAutoPermissionAction,
   };
 }
 
@@ -81,32 +85,60 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startSession(permissionMode: PermissionMode) {
+async function startSession(
+  permissionMode: PermissionMode,
+  options: {
+    providerId?: string;
+    authSource?: 'oauth' | 'api-key';
+    reviewVerdict?: 'allow' | 'block' | 'ask';
+    reviewer?: AgentDeps['reviewAutoPermissionAction'];
+    attachResolver?: boolean;
+  } = {},
+) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
   const fakeQuery = createFakeQuery();
   sdkMock.query.mockReturnValue(fakeQuery);
 
-  const agent = new ClaudeCodeAgent(createDeps());
+  const reviewAutoPermissionAction = options.reviewer ?? vi.fn(async () => ({
+    verdict: options.reviewVerdict ?? 'allow',
+    reason: 'reviewed',
+  }));
+  const agent = new ClaudeCodeAgent(createDeps({
+    authSource: options.authSource,
+    reviewAutoPermissionAction,
+  }));
   const handle = await agent.startSession({
     sessionId: 'session-auto-review',
     model: 'claude-opus-4-6',
+    providerId: options.providerId ?? 'xd',
     workingDir,
     permissionMode,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
-    | { canUseTool?: CanUseToolFn }
+    | { canUseTool?: CanUseToolFn; permissionMode?: string }
     | undefined;
   if (!queryOptions?.canUseTool) throw new Error('expected sdk query canUseTool');
 
   const seen: InteractionRequest[] = [];
-  handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
-    seen.push(req);
-    return { kind: 'permission', behavior: 'allow' };
-  });
+  if (options.attachResolver !== false) {
+    handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
+      seen.push(req);
+      return { kind: 'permission', behavior: 'allow' };
+    });
+  }
 
-  return { agent, handle, canUseTool: queryOptions.canUseTool, seen, workingDir };
+  return {
+    agent,
+    handle,
+    canUseTool: queryOptions.canUseTool,
+    fakeQuery,
+    queryPermissionMode: queryOptions.permissionMode,
+    reviewAutoPermissionAction,
+    seen,
+    workingDir,
+  };
 }
 
 function permissionRequests(seen: InteractionRequest[]) {
@@ -124,10 +156,64 @@ afterEach(async () => {
   await Promise.all(tempDirs.splice(0).map((d) => fs.rm(d, { recursive: true, force: true })));
 });
 
-describe('Auto-review wiring: permissionMode auto maps to SDK default', () => {
-  it('does not pass auto to the SDK — startSession uses default so canUseTool fires', () => {
-    // 由下面的用例间接验证:canUseTool 真的被调用(auto 透传给 CC 时它根本不触发)。
-    expect(true).toBe(true);
+describe('Auto-review wiring: native first, Cindy fallback', () => {
+  it('keeps SDK auto for official Claude OAuth', async () => {
+    const { handle, queryPermissionMode, reviewAutoPermissionAction } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    expect(queryPermissionMode).toBe('auto');
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('uses SDK default for a third-party route so Cindy can review callbacks', async () => {
+    const { handle, queryPermissionMode } = await startSession('auto', { providerId: 'xd' });
+    expect(queryPermissionMode).toBe('default');
+    await handle.close();
+  });
+
+  it('can silently allow a gray action without an interaction resolver', async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      providerId: 'xd',
+      reviewVerdict: 'allow',
+      attachResolver: false,
+    });
+    const result = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'typecheck-without-ui' },
+    );
+    expect(result.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    expect(seen).toHaveLength(0);
+    await handle.close();
+  });
+
+  it('keeps the product mode on Auto and switches only the runtime reviewer after native failure', async () => {
+    const {
+      handle,
+      canUseTool,
+      fakeQuery,
+      reviewAutoPermissionAction,
+      seen,
+    } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'allow',
+    });
+
+    await handle.useCindyAutoReviewFallback?.();
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    const result = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'fallback-typecheck' },
+    );
+    expect(result.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    expect(permissionRequests(seen)).toHaveLength(0);
+    await handle.close();
   });
 });
 
@@ -157,37 +243,86 @@ describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {
   });
 });
 
-describe('Auto-review wiring: escalations reach the resolver', () => {
-  it('out-of-workspace write → prompts (session suggestion preserved)', async () => {
-    const { handle, canUseTool, seen } = await startSession('auto');
+describe('Auto-review wiring: lightweight reviewer controls gray actions', () => {
+  it('re-checks the latest permission mode after an in-flight review', async () => {
+    let resolveReview: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const reviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveReview = resolve;
+    }));
+    const { handle, canUseTool, seen } = await startSession('auto', { reviewer });
+
+    const pending = canUseTool('Write', { file_path: '/tmp/late-mode.conf' }, { toolUseID: 'late-ask' });
+    await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
+    await handle.setPermissionMode!('ask');
+    resolveReview!({ verdict: 'allow', reason: 'reviewed' });
+    await expect(pending).resolves.toMatchObject({ behavior: 'allow' });
+    // allow 来自用户确认而非旧 reviewer verdict，且 session grant 已被剥离。
+    expect(permissionRequests(seen)).toHaveLength(1);
+    expect(permissionRequests(seen)[0]?.suggestions).toBeUndefined();
+
+    let resolveFull: ((value: { verdict: 'allow'; reason: string }) => void) | undefined;
+    const fullReviewer = vi.fn(() => new Promise<{ verdict: 'allow'; reason: string }>((resolve) => {
+      resolveFull = resolve;
+    }));
+    // 新建一个 auto 会话，避免上一段 Ask 的本地状态影响断言。
+    await handle.close();
+    const next = await startSession('auto', { reviewer: fullReviewer });
+    const fullPending = next.canUseTool('Write', { file_path: '/tmp/late-full.conf' }, { toolUseID: 'late-full' });
+    await vi.waitFor(() => expect(fullReviewer).toHaveBeenCalledOnce());
+    await next.handle.setPermissionMode!('bypassPermissions');
+    resolveFull!({ verdict: 'allow', reason: 'reviewed' });
+    await expect(fullPending).resolves.toMatchObject({ behavior: 'allow' });
+    expect(permissionRequests(next.seen)).toHaveLength(0);
+    await next.handle.close();
+  });
+
+  it('reviewer allow → proceeds silently without hitting the resolver', async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto', {
+      reviewVerdict: 'allow',
+    });
     const r = await canUseTool(
       'Write',
-      { file_path: '/etc/evil.conf' },
+      { file_path: '/tmp/gray-write.conf' },
       { toolUseID: 't4', suggestions: SESSION_SUGGESTION },
     );
-    expect(r.behavior).toBe('allow'); // resolver 默认 allow
-    const reqs = permissionRequests(seen);
-    expect(reqs).toHaveLength(1);
-    // 'prompt'(非 prompt-each-time)→ 会话级 suggestion 交给 UI(可"总是允许")。
-    expect(reqs[0]?.suggestions).toBeDefined();
-    expect(reqs[0]?.suggestions?.length).toBeGreaterThan(0);
+    expect(r.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+    expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
 
-  it('unknown / write shell command → prompts', async () => {
-    const { handle, canUseTool, seen } = await startSession('auto');
-    await canUseTool('Bash', { command: 'npm install left-pad' }, { toolUseID: 't5' });
-    expect(permissionRequests(seen)).toHaveLength(1);
+  it('reviewer block → denies silently and tells the agent to choose a safer action', async () => {
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewVerdict: 'block',
+    });
+    const result = await canUseTool('Bash', { command: 'npm install left-pad' }, { toolUseID: 't5' });
+    expect(result).toMatchObject({ behavior: 'deny', message: 'reviewed' });
+    expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
 
-  it('dangerous command → prompts with session suggestion stripped', async () => {
-    const { handle, canUseTool, seen } = await startSession('auto');
-    await canUseTool('Bash', { command: 'rm -rf build' }, { toolUseID: 't6', suggestions: SESSION_SUGGESTION });
+  it('reviewer ask → prompts once with session suggestions stripped', async () => {
+    const { handle, canUseTool, seen } = await startSession('auto', {
+      reviewVerdict: 'ask',
+    });
+    await canUseTool(
+      'Bash',
+      { command: 'npm install left-pad' },
+      { toolUseID: 't5-ask', suggestions: SESSION_SUGGESTION },
+    );
     const reqs = permissionRequests(seen);
     expect(reqs).toHaveLength(1);
-    // prompt-each-time → 即使 SDK 带了 suggestion 也剥掉(不许"总是允许"持久化高风险动作)。
     expect(reqs[0]?.suggestions).toBeUndefined();
+    await handle.close();
+  });
+
+  it('deterministic privilege boundary → prompts without calling the reviewer', async () => {
+    const { handle, canUseTool, reviewAutoPermissionAction, seen } = await startSession('auto');
+    await canUseTool('Bash', { command: 'sudo rm -rf build' }, { toolUseID: 't6', suggestions: SESSION_SUGGESTION });
+    const reqs = permissionRequests(seen);
+    expect(reqs).toHaveLength(1);
+    expect(reqs[0]?.suggestions).toBeUndefined();
+    expect(reviewAutoPermissionAction).not.toHaveBeenCalled();
     await handle.close();
   });
 });

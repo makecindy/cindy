@@ -389,4 +389,32 @@ describe('model price override sparse persistence', () => {
       }),
     ).toEqual({ version: 1, entries: {} });
   });
+
+  it('reloads a persisted Pi override instead of discarding it after restart', () => {
+    const target = { providerId: 'custom-pi', agent: 'pi' as const, modelId: 'grok-4' };
+    const key = __testing.overrideKey(target);
+    expect(
+      __testing.normalize({
+        version: 1,
+        entries: {
+          [key]: {
+            ...target,
+            values: { inputPerMtok: 3, outputPerMtok: 15, cacheReadPerMtok: 0.3 },
+            baseReference: null,
+            updatedAt: '2026-08-02T00:00:00.000Z',
+          },
+        },
+      }),
+    ).toEqual({
+      version: 1,
+      entries: {
+        [key]: {
+          ...target,
+          values: { inputPerMtok: 3, outputPerMtok: 15, cacheReadPerMtok: 0.3 },
+          baseReference: null,
+          updatedAt: '2026-08-02T00:00:00.000Z',
+        },
+      },
+    });
+  });
 });

@@ -23,7 +23,10 @@ import {
   providersForAgent,
   type ProviderView,
 } from './registry.js';
-import { isAgentSelectableModel } from './classification.js';
+import {
+  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
+} from './classification.js';
 
 /**
  * 标准派生的**内建准入过滤**(两条,先于 isVisible 判定):
@@ -35,6 +38,9 @@ import { isAgentSelectableModel } from './classification.js';
  *   2. `m.disabled` —— 用户停用的模型(buildRegistry 按停用 override(disableOverrides)
  *      烘焙的视图层标志)。停用 = 不可被任何新路由选中,与「隐藏」(isVisible,仅陈列)
  *      不同;keepSelected 豁免**保留**(正在用它的会话不打断、选中行不消失)。
+ *   3. `m.status === 'retired'` —— 远端 tombstone(registry 判死,active-catalog 合并期
+ *      烘焙,含 discovery 回补的同名条目)。语义与停用同型:新选择禁止、keepSelected
+ *      豁免;唯一复活通道是完整 local addition(见 model-plane/localCatalogOverrides)。
  * 本模块所有消费方(选择器 / IM / worker / hook 兜底)都是「可路由对话模型」语境,
  * 故直接内建,不做 opt-out。
  */
@@ -155,8 +161,11 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         if (provider.access !== undefined) entry.sourceAccess = provider.access;
         return entry;
       };
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
-      if (!selected && m.disabled === true) continue;
+      const userProvider = provider.source === 'user';
+      const selectable = selected
+        ? isAgentSelectableModel(m, { userProvider })
+        : isModelSelectableForNewRoute(m, { userProvider });
+      if (!selectable) continue;
       if (dedupe === 'first-wins' && seenIndex.has(m.id)) {
         // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
         // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
@@ -211,8 +220,11 @@ export function deriveModelSections(
     for (const m of provider.models[agent] ?? []) {
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
-      if (!selected && m.disabled === true) continue;
+      const userProvider = provider.source === 'user';
+      const selectable = selected
+        ? isAgentSelectableModel(m, { userProvider })
+        : isModelSelectableForNewRoute(m, { userProvider });
+      if (!selectable) continue;
       if (!selected && isVisible && !isVisible(provider.id, m)) continue;
       if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) continue;
       const entry: ModelListEntry = {

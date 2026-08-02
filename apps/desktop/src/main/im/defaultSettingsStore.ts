@@ -71,6 +71,12 @@ function normalizeSettings(raw: unknown): ImDefaultSettings {
         'codex',
         rawAgentOrLegacy(rawAgents, 'codex', agentKind, legacySettings),
       ),
+      // 键序必须与 IM_DEFAULT_SETTINGS.agents 一致:legacy 检测(信号 4)靠
+      // JSON.stringify 与系统默认整体比对,键序漂移会让检测失灵。
+      pi: normalizeAgentSettings(
+        'pi',
+        rawAgentOrLegacy(rawAgents, 'pi', agentKind, legacySettings),
+      ),
     },
   };
 }
@@ -246,6 +252,12 @@ export function resetImDefaultSettings(): ImDefaultSettings {
   return store.reset().global;
 }
 
+export function resetImDefaultSettingsGlobal(): OverrideSettingsState<ImDefaultSettings> {
+  store.writePatch({ global: cloneSettings(IM_DEFAULT_SETTINGS) });
+  log.info('im default settings reset', { channel: 'global' });
+  return readImDefaultSettingsState();
+}
+
 export function resetImDefaultSettingsChannel(
   channel: ImDefaultSettingsChannel,
 ): OverrideSettingsState<ImDefaultSettings> {
@@ -316,7 +328,7 @@ function settingsOverrides(
     overrides.permissionMode = value.permissionMode;
   }
   const agents: Partial<Record<ImDefaultAgentKind, ImDefaultAgentSettings>> = {};
-  for (const agentKind of ['claude-code', 'codex'] as const) {
+  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       agents[agentKind] = value.agents[agentKind];
     }
@@ -329,7 +341,7 @@ function settingsCustomizedKeys(value: ImDefaultSettings, defaults: ImDefaultSet
   const keys: string[] = [];
   if (value.agentKind !== defaults.agentKind) keys.push('agentKind');
   if (value.permissionMode !== defaults.permissionMode) keys.push('permissionMode');
-  for (const agentKind of ['claude-code', 'codex'] as const) {
+  for (const agentKind of ['claude-code', 'codex', 'pi'] as const) {
     if (!agentSettingsEqual(value.agents[agentKind], defaults.agents[agentKind])) {
       keys.push(`agents.${agentKind}`);
     }
@@ -348,6 +360,7 @@ function cloneSettings(settings: ImDefaultSettings): ImDefaultSettings {
     agents: {
       'claude-code': { ...settings.agents['claude-code'] },
       codex: { ...settings.agents.codex },
+      pi: { ...settings.agents.pi },
     },
   };
 }

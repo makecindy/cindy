@@ -1,5 +1,5 @@
 import {
-  effectiveSourceIdForModel,
+  actualSourceIdForModel,
   isAgentSelectableModel,
   type AgentKind,
   type ProviderView,
@@ -49,7 +49,8 @@ export function resolveBoundSessionGenerationRoute(input: {
     ? input.providers.find((provider) =>
       provider.id === explicitProviderId
       && provider.agents.includes(agentKind)
-      // 只按 id 匹配会漏检 mode:同一 id 在该来源下若是非聊天类型模型的具体条目,
+      // 这是 follow-session 的 resume 路径，不是新选择：保留已绑定会话的 retired 模型，
+      // 但只按 id 匹配仍会漏检 mode。同一 id 在该来源下若是非聊天类型模型的具体条目,
       // 请求会被 fail-open 送进 image/audio/embedding 端点(2026-07 review 第 17 轮)。
       && (provider.models[agentKind] ?? []).some(
         (candidate) =>
@@ -63,7 +64,7 @@ export function resolveBoundSessionGenerationRoute(input: {
   // the generation request to another gateway.
   const providerId = explicitProviderId
     ? explicitProvider?.id ?? null
-    : effectiveSourceIdForModel(input.providers, null, model, agentKind);
+    : actualSourceIdForModel(input.providers, null, model, agentKind);
   if (!providerId) return null;
   return { providerId, agentKind, model };
 }

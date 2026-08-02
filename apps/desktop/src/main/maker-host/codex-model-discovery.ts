@@ -20,6 +20,7 @@ import type { CatalogModel } from '@cindy/model-providers';
 import type { CodexModelListItem } from '@cindy/maker-core';
 
 import { shouldSuppressLocalCodexAuth } from './codex-auth-invalidation.js';
+import { isNativeProviderAuthBound } from './nativeProviderAuthBinding.js';
 
 interface CodexModelRaw {
   slug?: unknown;
@@ -208,6 +209,7 @@ function desktopCodexHome(): string {
 
 /** 仅在 Cindy 当前确有未被 disconnect marker 抑制的 OAuth token 时读取模型 cache。 */
 async function hasActiveDesktopCodexOAuth(codexHome: string): Promise<boolean> {
+  if (!isNativeProviderAuthBound('openai')) return false;
   const authPath = path.join(codexHome, 'auth.json');
   if (shouldSuppressLocalCodexAuth(codexHome, authPath)) return false;
   try {

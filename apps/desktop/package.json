@@ -162,6 +162,7 @@
     "smol-toml": "^1.6.1",
     "sortablejs": "^1.15.6",
     "tailwind-merge": "^2.6.0",
+    "tar": "^7.5.21",
     "undici": "^8.3.0",
     "unist-util-visit": "^5.1.0",
     "ws": "^8.18.3"

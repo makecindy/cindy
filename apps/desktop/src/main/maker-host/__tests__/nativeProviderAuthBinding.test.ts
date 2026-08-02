@@ -23,8 +23,10 @@ import {
   bindNativeProviderAuth,
   claimDetectedNativeProviderAuth,
   isNativeProviderAuthBound,
+  isNativeProviderAuthRevoked,
   isNativeProviderAuthSelfAuthorized,
   migrateLegacyNativeProviderAuthBindings,
+  restoreNativeProviderAuthForRecovery,
   unbindNativeProviderAuth,
 } from '../nativeProviderAuthBinding.js';
 
@@ -150,6 +152,14 @@ describe('claimDetectedNativeProviderAuth', () => {
 
     session.dataOwnerId = 'owner-b';
     expect(claimDetectedNativeProviderAuth('anthropic', () => true)).toBe(false);
+  });
+
+  it('撤销标记在还没有 active owner 的启动阶段也会阻断凭证', () => {
+    unbindNativeProviderAuth('openai', { revoked: true });
+    expect(isNativeProviderAuthRevoked('openai')).toBe(true);
+
+    session.dataOwnerId = null;
+    expect(isNativeProviderAuthBound('openai')).toBe(false);
   });
 
   it('一次性 legacy 迁移同样尊重撤销标记', () => {
@@ -282,6 +292,48 @@ describe('claimDetectedNativeProviderAuth', () => {
     fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: '' }));
     expect(claimDetectedNativeProviderAuth('openai', () => true)).toBe(false);
     expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({ legacyClaimOwner: '' });
+  });
+});
+
+describe('restoreNativeProviderAuthForRecovery', () => {
+  it('restores the invalidated owner even when another owner won the legacy claim', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
+    session.dataOwnerId = 'owner-b';
+
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-b', () => true)).toBe(true);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toMatchObject({
+      legacyClaimOwner: 'owner-a',
+      openai: 'owner-b',
+    });
+  });
+
+  it('does not restore after the active owner changes', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(bindingFile, JSON.stringify({ legacyClaimOwner: 'owner-a' }));
+    session.dataOwnerId = 'owner-c';
+
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-b', () => true)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).toEqual({
+      legacyClaimOwner: 'owner-a',
+    });
+  });
+
+  it('keeps explicit revocation and session boundaries fail-closed', () => {
+    fs.mkdirSync(userDataDir, { recursive: true });
+    fs.writeFileSync(
+      bindingFile,
+      JSON.stringify({
+        legacyClaimOwner: 'owner-a',
+        revoked: { openai: 'owner-b' },
+      }),
+    );
+    session.dataOwnerId = 'owner-b';
+
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-b', () => true)).toBe(false);
+    session.boundaryPending = true;
+    expect(restoreNativeProviderAuthForRecovery('openai', 'owner-b', () => true)).toBe(false);
+    expect(JSON.parse(fs.readFileSync(bindingFile, 'utf8'))).not.toHaveProperty('openai');
   });
 });
 

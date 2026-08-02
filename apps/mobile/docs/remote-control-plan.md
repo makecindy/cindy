@@ -243,7 +243,7 @@
   - `apps/desktop/src/renderer/features/scheduler/components/TaskListPane.tsx`
   - `apps/desktop/src/renderer/features/scheduler/components/ScheduleFormDialog.tsx`
 - 协作模式:
-  - `apps/desktop/src/renderer/components/new-chat/CollaborationModeToggle.tsx`
+  - `apps/desktop/src/renderer/components/new-chat/ExtraDirsButton.tsx`
   - `apps/desktop/src/renderer/features/cc-agent/OrcaSplitView.tsx`
   - `apps/desktop/src/renderer/features/cc-agent/OrcaWorkflowRoute.tsx`
   - `apps/desktop/src/renderer/features/cc-agent/CreateWorkerPopover.tsx`
@@ -281,7 +281,7 @@
 | Fork / Rewind | `MessageActionBar` + `useForkAtMessage` + `RewindPreviewDialog`;首条 user 不显示 rewind;commit 后用被控端快照替换。 | 消息动作行;fork 成功 upsert 并跳转;rewind preview 显示风险,commit 后替换消息并回填 composer draft。`rewindPreviewLayout.ts` 按屏宽控制 preview 面板 padding、可见文件行数和 40px action 触控高度,`RewindActionButton` 统一取消/确认/关闭反馈。 | fork/rewind 单测和 smoke;`rewindPreviewLayout.test` 覆盖 320/393/未就绪宽度。 |
 | 自动化 | `SchedulerPage` 是 master-detail;`TaskListPane` 按 workingDir/dialogue 分组;active 包含 expired;`RunHistoryPane` 折叠同 session runs;`ScheduleFormDialog` 包含模板、fresh/persistent/bound、project automation。 | V1B 已做任务列表/详情/runs/run now/pause/resume/delete/mark read/open session、新建/编辑普通 schedule、模板创建、生成会话删除三选项;fresh/persistent/bound 运行会话编辑第一刀已对齐桌面状态机;project automation 完整编辑后续继续对齐桌面。 | scheduleModel/remote event/form 单测;Maestro run now/pause/open session/create-edit flow。 |
 | 远程设置 | `ControlThisMacPanel` / `ControllableDevicesPanel` / `RemoteControlSection` 管本机允许被控、可控设备、撤销/重命名。 | 手机 Settings 显示登录、当前手机设备名、relay 状态、调试和退出;被控端允许开关仍在电脑端。 | `settings.yaml` + settings model 单测。 |
-| 协作 / Orca | `CollaborationModeToggle`、`OrcaSplitView`、`CreateWorkerPopover` 支持 lead/worker split/toggle、worker focus、attention、create/archive/stop;远程 Orca 合并 local + remote sessions。 | V1 只识别 lead/worker 和 worker 通信,只读安全显示,不提供创建/切 focus/停止协作;V2 做手机专属 lead/worker toggle pane。 | V1 Orca fixture 不崩;V2 另建 E2E。 |
+| 协作 / Orca | `ExtraDirsButton` 的协同模式项、`OrcaSplitView`、`CreateWorkerPopover` 支持 lead/worker split/toggle、worker focus、attention、create/archive/stop;远程 Orca 合并 local + remote sessions。 | V1 只识别 lead/worker 和 worker 通信,只读安全显示,不提供创建/切 focus/停止协作;V2 做手机专属 lead/worker toggle pane。 | V1 Orca fixture 不崩;V2 另建 E2E。 |
 
 Worktree 补充:
 
@@ -933,7 +933,7 @@ V1A 可以先只有 `Devices/Sessions/Settings`,但路由结构要给 `Automatio
 
 桌面协作能力:
 
-- `CollaborationModeToggle`: off/on,选择 Worker agent。
+- `ExtraDirsButton` 的协同模式项:off/on,并打开 Worker 配置。
 - Lead session + Worker session。
 - `OrcaSplitView`: split 或 toggle layout。
 - Worker toolbar:

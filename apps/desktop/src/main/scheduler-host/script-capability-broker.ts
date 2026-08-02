@@ -100,6 +100,13 @@ const SCRIPT_METHOD_CATALOG: ReadonlyArray<{
  * methods to current host APIs and rejects every method/action not listed here.
  */
 export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
+  constructor(private readonly deps: {
+    resolveDefaultModelRoute?: (
+      agent: Schedule['agentKind'],
+      preferredProviderId?: string | null,
+    ) => Promise<{ model: string; providerId: string } | null>;
+  } = {}) {}
+
   async call(
     request: ScriptCapabilityCall,
     granted: ReadonlySet<ScriptCapability>,
@@ -211,6 +218,17 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
         const service = tryGetOrcaCollabService();
         if (!service) fail('HOST_NOT_READY', 'session dispatch service is not ready');
         const schedule = context.schedule;
+        const explicitProviderId = schedule.providerId?.trim() || null;
+        const dynamicDefaultRoute = !schedule.model?.trim() && schedule.agentKind === 'pi'
+          ? await this.deps.resolveDefaultModelRoute?.(
+              schedule.agentKind,
+              explicitProviderId,
+            ) ?? null
+          : null;
+        const model = schedule.model?.trim()
+          || dynamicDefaultRoute?.model
+          || defaultModelFor(schedule.agentKind);
+        if (!model) fail('PRECONDITION_FAILED', 'Pi has no connected model source');
         const result = await service.sendToSession({
           targetSessionId:
             typeof params.target_session_id === 'string' && params.target_session_id.trim()
@@ -221,8 +239,8 @@ export class SchedulerScriptCapabilityBroker implements ScriptCapabilityBroker {
           useWorktree: false,
           createDefaults: {
             agentKind: schedule.agentKind,
-            model: schedule.model ?? defaultModelFor(schedule.agentKind),
-            providerId: schedule.providerId ?? null,
+            model,
+            providerId: explicitProviderId ?? dynamicDefaultRoute?.providerId ?? null,
             effort: schedule.effort as DispatchEffort | undefined,
             fastMode: !!schedule.fastMode,
             workingDir: schedule.workingDir ?? '',

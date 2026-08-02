@@ -26,6 +26,17 @@ function readJson(relativePath) {
 	return JSON.parse(readText(relativePath));
 }
 
+function workflowJob(workflow, jobId) {
+	const lines = workflow.split(/\r?\n/);
+	const start = lines.findIndex((line) => line === `  ${jobId}:`);
+	if (start === -1) return undefined;
+	const endOffset = lines
+		.slice(start + 1)
+		.findIndex((line) => /^  [a-zA-Z0-9_-]+:$/.test(line));
+	const end = endOffset === -1 ? lines.length : start + 1 + endOffset;
+	return lines.slice(start + 1, end).join("\n");
+}
+
 function shellLines(relativePath) {
 	const markdown = readText(relativePath);
 	return [...markdown.matchAll(/```(?:bash|sh)?\r?\n([\s\S]*?)```/g)]
@@ -124,4 +135,24 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.equal(rootPackage.engines.pnpm, ">=10.7 <11");
 	assert.match(rootPackage.packageManager, /^pnpm@10\./);
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
+});
+
+test("client CI keeps the complete two-shard unit gate on Windows", () => {
+	const workflow = readText(".github/workflows/ci.yml");
+	const shards = workflowJob(workflow, "windows-unit-shards");
+	assert.ok(shards, "client CI must define Windows unit shards");
+	assert.match(shards, /^    runs-on: windows-latest$/m);
+	assert.match(shards, /^      fail-fast: false$/m);
+	assert.match(shards, /^        shard: \[1, 2\]$/m);
+	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
+	assert.match(shards, /^        run: pnpm test:unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:unit\s+--/);
+
+	const gate = workflowJob(workflow, "windows-unit");
+	assert.ok(gate, "client CI must preserve the stable Windows unit check");
+	assert.match(gate, /^    name: Windows unit tests$/m);
+	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+	assert.match(gate, /^    needs: windows-unit-shards$/m);
+	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
+	assert.match(gate, /^        run: test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
 });

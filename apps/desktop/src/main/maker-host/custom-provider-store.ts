@@ -1,9 +1,10 @@
 /**
- * custom-provider-store —— 用户自定义供应商**配置**的 localDb CRUD（不含密钥）。
+ * custom-provider-store —— 用户自定义供应商**非凭证配置**的 localDb CRUD。
  *
  * 存储：localDb `custom_providers` 表。DB 文件本身按 userId 切片
  * （`<userData>/xdt-maker-<userId>.db`，换账号 closeDb 重开），故本表天然账号隔离、
- * 无 owner 列（与 `sessions` 一致）。API key 不在此——按 runtime 单独走 safeStorage（见 routing）。
+ * 无 owner 列（与 `sessions` 一致）。API key 与 runtime headers 均不在此——按 runtime
+ * 单独走 safeStorage（见 custom-provider-header-secrets / routing）。
  *
  * 形状：行 ↔ `@cindy/model-providers` 的 `CustomProviderConfig`（per-runtime）。`runtimes` 列以
  * TEXT 存 JSON，出入口转换、反序列化失败安全兜底（{}），不抛错。
@@ -32,8 +33,10 @@ import { customProviders } from '../localDb/schema.js';
 /** provider id slug 规则（与 safeStorage key 名 `provider_key_<id>_<agent>` 合法字符对齐）。 */
 export const CUSTOM_PROVIDER_ID_RE = /^[a-z0-9_-]+$/;
 /** 不可占用的内置来源 id。 */
-const RESERVED_IDS = new Set(['anthropic', 'openai', 'xd']);
-const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex'];
+// 'cindy' 是 pi models.json 里网关 provider 的保留 id;自定义 provider 撞名会让其模型
+// 既被排除出网关块又不写入原生块 → --model 校验失败,故一并保留。
+const RESERVED_IDS = new Set(['anthropic', 'openai', 'xd', 'cindy']);
+const VALID_AGENTS: readonly AgentKind[] = ['claude-code', 'codex', 'pi'];
 const MAX_ID_LEN = 40;
 const MAX_NAME_LEN = 60;
 
@@ -111,6 +114,8 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
   }
   if (r.wireProtocol !== undefined) {
+    // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
+    // Claude Code 只接受原生 Anthropic Messages。
     const allowed = agent === 'claude-code'
       ? ['anthropic-messages']
       : ['openai-responses', 'openai-chat', 'anthropic-messages'];
@@ -325,12 +330,9 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
       seen.add(m.id);
       return true;
     });
-  const headers =
-    rt.headers && Object.keys(rt.headers).length > 0 ? { ...rt.headers } : undefined;
   const out: CustomProviderRuntimeConfig = { baseUrl: rt.baseUrl.trim(), models };
   if (rt.wireProtocol) out.wireProtocol = rt.wireProtocol;
   if (rt.requestPath && rt.requestPath.trim()) out.requestPath = rt.requestPath.trim();
-  if (headers) out.headers = headers;
   if (rt.modelsUrl && rt.modelsUrl.trim()) out.modelsUrl = rt.modelsUrl.trim();
   return out;
 }

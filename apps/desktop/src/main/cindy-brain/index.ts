@@ -39,6 +39,7 @@ import { getLayoutStore } from '../layout/index.js';
 import { GhostManager, type InstallRejection, type UninstallRejection } from './GhostManager.js';
 import { exportGhostPackage } from './exportGhostPackage.js';
 import { GhostMutationCoordinator } from './ghostMutationCoordinator.js';
+import { withGhostInstallLock } from './ghostInstallLock.js';
 import {
   clearBuiltinTombstone,
   listEligibleBuiltinCommands,
@@ -164,9 +165,13 @@ import { getSessionFsSnapshot } from '../localDb/ipc/sessions.js';
 import { getDirDepositVault, getSaveDepositVault, isPathInsideDir } from './dirDeposit.js';
 import {
   GhostSubscriptionGateway,
+  GhostActivityTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  GhostTapPendingQueue,
+  GhostTurnOriginTracker,
   isGhostEligibleSessionRow,
+  type GhostInteractionActivityKind,
   type GhostScreenResult,
   type MinimalAgentEvent,
 } from './subscriptionGateway.js';
@@ -1186,35 +1191,75 @@ async function isGhostEligibleSession(
   }
 }
 
+type PendingActivityRequest = {
+  kind: GhostInteractionActivityKind;
+  requestId: string;
+};
+
 /**
  * 会话事件 tap 工厂(register.ts wireSessionToIpc 对每个新会话叠加一个
  * onEvent 监听):把 AgentEvent 折叠成 did-turn-* 发进网关。
  * - 只投用户主会话(desktop、非 orca;资格 DB 现查,判定期事件小缓冲回放);
- * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除。
+ * - 自动化轮次(turnOrigin 非 user)不投——hook-control 后台会话由此天然滤除;
+ * - interaction 侧同样只投用户 Desktop 面(见 GhostTurnOriginTracker):非 desktop
+ *   route 直接挡掉,route 缺省时按事件流上记下的轮次来源挡掉 goal / scheduler。
  *
  * 拆线必须调 `dispose()`:register.ts 的 disposer 一跑,事件源就没了,turn 在场时
  * 只有这里能给插件补上缺失的 did-turn-end(见 GhostTurnTranslator.dispose)。
  */
 export function createGhostSessionTap(sessionId: string): {
   handleEvent(ev: MinimalAgentEvent & { turnOrigin?: { kind?: string } }): void;
+  interactionObserver: {
+    onStart(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+    onEnd(
+      request: PendingActivityRequest,
+      route?: { origin?: { kind?: string } },
+    ): void;
+  };
   dispose(): void;
 } {
   let translator: GhostTurnTranslator | null = null;
+  let activity: GhostActivityTracker | null = null;
   /** 拆线不可逆:资格判定是异步的,回调必须知道自己已经没有归属会话了。 */
   let disposed = false;
   // 资格判定**惰性化 + 可重试**:接线发生在启动重连期,DbClient 可能还没
   // 就绪——判定挪到第一个事件到达时(用户已在交互,DB 必然可用);暂时性
   // 失败(retry)不定性,下个事件再试,封顶后放弃(防怪会话反复打 DB)。
   let state: 'unknown' | 'resolving' | 'eligible' | 'ineligible' = 'unknown';
+  // 轮次来源:interaction 侧只靠 route 判断不住 goal / scheduler(它们没 route),
+  // 得从事件流上记。语义与理由见 GhostTurnOriginTracker。资格无关,恒记。
+  const origin = new GhostTurnOriginTracker();
   let attempts = 0;
   const MAX_ATTEMPTS = 5;
-  const pending: MinimalAgentEvent[] = [];
+  const MAX_PENDING = 32;
+  // 有界缓冲,溢出丢最旧(留下的是到达序后缀,不留孤儿 start),语义见 GhostTapPendingQueue。
+  const pending = new GhostTapPendingQueue(MAX_PENDING, () => {
+    log.warn('ghost session tap pending overflow while resolving eligibility', {
+      sessionId,
+      cap: MAX_PENDING,
+    });
+  });
+
+  const applyActivity = (
+    phase: 'start' | 'end',
+    request: PendingActivityRequest,
+  ): void => {
+    if (!activity) {
+      pending.push({ type: 'activity', phase, request });
+      return;
+    }
+    if (phase === 'start') activity.startInteraction(request.kind, request.requestId);
+    else activity.endInteraction(request.kind, request.requestId);
+  };
 
   const kickResolve = (): void => {
     if (state !== 'unknown') return;
     if (attempts >= MAX_ATTEMPTS) {
       state = 'ineligible';
-      pending.length = 0;
+      pending.clear();
       return;
     }
     state = 'resolving';
@@ -1229,54 +1274,109 @@ export function createGhostSessionTap(sessionId: string): {
       }
       if (info.outcome === 'ineligible') {
         state = 'ineligible';
-        pending.length = 0;
+        pending.clear();
         return;
       }
       const gw = getGhostSubscriptionGateway();
+      activity = new GhostActivityTracker({
+        sessionId,
+        sink: { activity: (name, data) => gw.publish('activity', name, data) },
+      });
       translator = new GhostTurnTranslator({
         sessionId,
         agent: info.agentKind ?? 'unknown',
         now: () => Date.now(),
         sink: {
-          turnStart: (d) => gw.publish('turn', 'did-turn-start', d),
-          turnEnd: (d) => gw.publish('turn', 'did-turn-end', d),
+          turnStart: (d) => {
+            gw.publish('turn', 'did-turn-start', d);
+            activity?.beginTurn();
+          },
+          turnEnd: (d) => {
+            activity?.finishTurn();
+            gw.publish('turn', 'did-turn-end', d);
+          },
         },
       });
       state = 'eligible';
-      log.debug('ghost session tap eligible', { sessionId, replay: pending.length });
-      for (const ev of pending) translator.handleEvent(ev);
-      pending.length = 0;
+      // 先取快照再回放:applyActivity 在 activity 已就绪后直投,不会再回队。
+      const replay = pending.drain();
+      log.debug('ghost session tap eligible', {
+        sessionId,
+        replay: replay.length,
+        ...(pending.dropped > 0 ? { droppedPending: pending.dropped } : {}),
+      });
+      for (const item of replay) {
+        if (item.type === 'event') {
+          activity.handleEvent(item.event);
+          translator.handleEvent(item.event);
+        } else {
+          applyActivity(item.phase, item.request);
+        }
+      }
     });
   };
 
   return {
     handleEvent(ev) {
       if (disposed) return;
+      // 记来源要在过滤**之前**:自动化轮次的事件正是"当前轮次不是用户发起"的唯一线索。
+      origin.noteEvent(ev);
       if (ev.turnOrigin?.kind && ev.turnOrigin.kind !== 'user') return;
       if (state === 'eligible') {
+        activity?.handleEvent(ev);
         translator?.handleEvent(ev);
         return;
       }
       if (state === 'ineligible') return;
-      if (pending.length < 32) pending.push({ type: ev.type, data: ev.data, source: ev.source });
+      pending.push({
+        type: 'event',
+        event: { type: ev.type, data: ev.data, source: ev.source },
+      });
       kickResolve();
+    },
+    interactionObserver: {
+      onStart(request, route) {
+        if (state === 'ineligible') return;
+        if (!origin.acceptsInteraction(route)) return;
+        applyActivity('start', request);
+        if (state !== 'eligible') kickResolve();
+      },
+      onEnd(request, route) {
+        if (state === 'ineligible') return;
+        void route; // 见 acceptsInteraction 注释:end 只按 requestId 配对,不过滤来源
+        applyActivity('end', request);
+        if (state !== 'eligible') kickResolve();
+      },
     },
     dispose() {
       if (disposed) return; // 两条 disposer 路径都可能跑到,补发只做一次
       disposed = true;
-      // 补发 end 会走插件分发链路,它的异常不能打断 register.ts 的 disposer 队列
-      // ——实例替换路径是裸调用,后面还排着 onEvent 退订。
-      try {
-        translator?.dispose();
-      } catch (err) {
-        log.warn('ghost session tap dispose failed', {
-          sessionId,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+      // 补发都会走插件分发链路,它们的异常不能打断 register.ts 的 disposer 队列
+      // (实例替换路径是裸调用,后面还排着 onEvent 退订),也不能让 activity 侧的
+      // 失败吃掉 turn 侧的补发,所以两段各自兜住。
+      const guard = (stage: string, fn: () => void): void => {
+        try {
+          fn();
+        } catch (err) {
+          log.warn('ghost session tap dispose failed', {
+            sessionId,
+            stage,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      // 先收口 activity 再收口 turn:会话关闭 / Session 实例替换时,router 里可能还有
+      // interaction 等在 finally 前,而 observer 马上就会被摘掉——不补发 end 插件就会
+      // 永久停在"等待审批 / 等待用户输入"。顺序也是契约:未收口的 thinking end 必须
+      // 排在 did-turn-end 之前(回合边界只收口 thinking——审批可以跨回合终态,
+      // 见 GhostActivityTracker)。
+      guard('activity', () => activity?.finishAll());
+      guard('turn', () => translator?.dispose());
+      activity?.reset();
       translator = null;
+      activity = null;
+      pending.clear();
       state = 'ineligible';
-      pending.length = 0;
     },
   };
 }
@@ -2732,6 +2832,14 @@ function rejectReservedGhostId(id: string): void {
 }
 
 /**
+ * 自定义市场（Git / 本地源）装入前的保留前缀闸。与服务端市场不同，自定义源
+ * 的包字节未经 plugin-server 绑定，不享受官方前缀豁免，语义同本地 .cindy 装入。
+ */
+export function rejectReservedGhostIdForCustomMarket(id: string): void {
+  rejectReservedGhostId(id);
+}
+
+/**
  * tokenBroker 第一方门控·装入闸:oauth 详单声明了 tokenBroker 的意识,XDT
  * server 的授权 broker(带用户登录 JWT 的服务端资产)只对官方前缀 id 开放,
  * 第三方包声明即拒装(连接闸在 /oauth connect 端点二次兜底)。不区分
@@ -2785,17 +2893,38 @@ function throwUninstallError(rejection: UninstallRejection): never {
 export async function installAndDock(
   manager: GhostManager,
   lizFilePath: string,
-  opts?: { enable?: boolean; expectedPackageSha256?: string },
+  /**
+   * `ghostId` 必填:它同时是**按 id 互斥锁的键**。装入前已由调用方经 inspect
+   * 验明(市场路径核对 expected、本地路径核对 sha256 钉住的 probe),所以此处
+   * 可信。做成必填而不是可选,是为了让新增装入路径无法"忘记取锁"——签名逼着
+   * 它交出 id,锁在这里自动获取(外层已持有时按可重入 no-op)。
+   */
+  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
+): Promise<InstalledGhost> {
+  return withGhostInstallLock(opts.ghostId, () => installAndDockLocked(manager, lizFilePath, opts));
+}
+
+async function installAndDockLocked(
+  manager: GhostManager,
+  lizFilePath: string,
+  opts: { ghostId: string; enable?: boolean; expectedPackageSha256?: string },
 ): Promise<InstalledGhost> {
   // 默认沉睡(2026-07-09 Lizi 定案):装入 ≠ 授权运行,用户在确认框显式勾选
   // "立即开启"才带电;沉睡态面板不渲染、总机不列、沙箱不拉起。
   const result = await manager.install(lizFilePath, {
-    initiallyEnabled: opts?.enable ?? false,
-    ...(opts?.expectedPackageSha256
+    initiallyEnabled: opts.enable ?? false,
+    ...(opts.expectedPackageSha256
       ? { expectedPackageSha256: opts.expectedPackageSha256 }
       : {}),
   });
   if ('rejection' in result) throwInstallError(result.rejection);
+  // 纵深防御:调用方给错 id 意味着刚才那把锁上在了错误的键上(等于没上锁)。
+  // 宁可装完即报错让上层看见,也不要留下"以为串行、其实没有"的假象。
+  if (result.ghost.manifest.id !== opts.ghostId) {
+    throw new Error(
+      `装入包的 ghostId(${result.ghost.manifest.id})与加锁使用的 id(${opts.ghostId})不一致`,
+    );
+  }
   // 用户手动重装同 id 的内置意识 = 重新跟随包内版本(清墓碑,播种恢复对账)。
   clearBuiltinTombstone(brainRootDir(), result.ghost.manifest.id, log);
   // 声明了面板的意识装入后立即停进布局树(树上已有 = 重装,原位复活不动树)。
@@ -2821,6 +2950,21 @@ export async function installAndDock(
  * tokenBroker 门控、原子换目录、布局停靠与运行时重启保持和本地安装一致。
  */
 export async function installOrUpdateMarketGhostPackage(
+  cindyFilePath: string,
+  expected: {
+    ghostId: string;
+    version: string;
+  },
+): Promise<InstalledGhost> {
+  // 卡点:按 ghostId 上锁,覆盖 inspect → 落位整段。服务端与自定义两条市场路径
+  // 都经此出口,调用方漏取锁也被兜住;调用方已持有时按可重入 no-op(它们会把
+  // 复核与账本写入一起纳入同一把锁,范围比这里更大)。
+  return withGhostInstallLock(expected.ghostId, () =>
+    installOrUpdateMarketGhostPackageLocked(cindyFilePath, expected),
+  );
+}
+
+async function installOrUpdateMarketGhostPackageLocked(
   cindyFilePath: string,
   expected: {
     ghostId: string;
@@ -2858,7 +3002,15 @@ export async function installOrUpdateMarketGhostPackage(
       // 校验下载),且确认框如实展示权限清单,确认安装即授权运行;本地 .cindy
       // 文件装入的初始启用态仍由确认框勾选决定(勾选默认开启,main 侧
       // installAndDock 缺省不启用,授权判断始终来自 UI 显式值)。
-      return installAndDock(manager, cindyFilePath, { enable: true });
+      // expectedPackageSha256 把"检查过的字节"与"落位的字节"钉死为同一份:
+      // inspect 与 install 各自重读磁盘,临时 .cindy 在两读之间被替换时,
+      // 所有前置校验(保留前缀/审阅比对/签名/解压上限)都会作用在旧字节上。
+      // 本地 .cindy 装入通道已强制此对账,市场通道同一口径。
+      return installAndDock(manager, cindyFilePath, {
+        ghostId: expected.ghostId,
+        enable: true,
+        expectedPackageSha256: inspected.packageSha256,
+      });
     }
 
     const runtime = getGhostRuntime();
@@ -2868,7 +3020,10 @@ export async function installOrUpdateMarketGhostPackage(
     getGhostErrandSlot().clearGhost(expected.ghostId);
     let result: Awaited<ReturnType<typeof manager.update>>;
     try {
-      result = await manager.update(cindyFilePath);
+      // 与首装分支同一口径:钉住 inspect 时校验过的包字节(见上)。
+      result = await manager.update(cindyFilePath, {
+        expectedPackageSha256: inspected.packageSha256,
+      });
     } catch (error) {
       spawnIfResident(installed);
       throw error;
@@ -2918,6 +3073,15 @@ export function setGhostUninstallLedgerPreparer(
  * Plugin 市场和本地插件页共用；本地入口还会在成功后同步市场账本。
  */
 export async function uninstallGhostAndCleanup(
+  id: string,
+  options?: { skipMarketLedger?: boolean },
+): Promise<void> {
+  // 按 ghostId 与装入/更新互斥:卸载与同 id 的市场/本地装入不得交错,否则
+  // 市场装入的"目标是否已装"判定会被本卸载在其落位前抽走(反之亦然)。
+  return withGhostInstallLock(id, () => uninstallGhostAndCleanupLocked(id, options));
+}
+
+async function uninstallGhostAndCleanupLocked(
   id: string,
   options?: { skipMarketLedger?: boolean },
 ): Promise<void> {
@@ -3899,26 +4063,29 @@ export function registerGhostIpc(): void {
     const installOpts = opts as
       | { enable?: unknown; expectedPackageSha256?: unknown }
       | undefined;
+    const expectedPackageSha256 = installOpts?.expectedPackageSha256;
     if (
-      typeof installOpts?.expectedPackageSha256 !== 'string' ||
-      !/^[a-f0-9]{64}$/.test(installOpts.expectedPackageSha256)
+      typeof expectedPackageSha256 !== 'string' ||
+      !/^[a-f0-9]{64}$/.test(expectedPackageSha256)
     ) {
       throwIpcError('INVALID_PARAMS', 'expectedPackageSha256 must come from ghosts:inspect');
     }
     const probe = await manager.inspect(lizFilePath);
     if ('rejection' in probe) throwInstallError(probe.rejection);
-    if (probe.packageSha256 !== installOpts.expectedPackageSha256) {
+    if (probe.packageSha256 !== expectedPackageSha256) {
       throwIpcError('GHOST_FILE_INVALID', '插件文件在确认后发生了变化，请重新选择并确认');
     }
     rejectReservedGhostId(probe.manifest.id);
     rejectUnauthorizedTokenBroker(probe.manifest);
     // Node 高风险提示在 renderer 装入确认卡的权限清单里如实展示;
     // 2026-07-24 Lizi 定案:不再追加 Main 原生二次确认弹窗。
-    const enable = installOpts.enable === true;
+    const enable = installOpts?.enable === true;
+    // 锁由 installAndDock 按 ghostId 自动获取(卡点);这里传 id 即可。
     return {
       ghost: await installAndDock(manager, lizFilePath, {
+        ghostId: probe.manifest.id,
         enable,
-        expectedPackageSha256: installOpts.expectedPackageSha256,
+        expectedPackageSha256,
       }),
     };
   });
@@ -3946,34 +4113,38 @@ export function registerGhostIpc(): void {
     }
     rejectReservedGhostId(inspected.manifest.id);
     rejectUnauthorizedTokenBroker(inspected.manifest);
-    const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
-    runtime.stop(inspected.manifest.id);
-    getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
-    getGhostAgentSlot().clearGhost(inspected.manifest.id);
-    getGhostErrandSlot().clearGhost(inspected.manifest.id);
-    let result: Awaited<ReturnType<typeof manager.update>>;
-    try {
-      result = await manager.update(lizFilePath, { expectedPackageSha256 });
-    } catch (err) {
-      // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
-      if (previousGhost) spawnIfResident(previousGhost);
-      throw err;
-    }
-    if ('rejection' in result) {
-      if (previousGhost) spawnIfResident(previousGhost);
-      throwInstallError(result.rejection);
-    }
-    runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
-    const store = getLayoutStore();
-    const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
-    if (docked) {
-      const applied = store.setLayout(docked);
-      if ('rejection' in applied) {
-        log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
+    // 与市场装入/本地装入/卸载共用按 ghostId 的互斥:换目录期间同 id 的其它
+    // 装入/卸载不得插入(否则并发装入会与本次 rename 竞争、留下不一致态)。
+    return withGhostInstallLock(inspected.manifest.id, async () => {
+      const previousGhost = manager.list().find((g) => g.manifest.id === inspected.manifest.id);
+      runtime.stop(inspected.manifest.id);
+      getGhostNodeRuntimeBroker().stop(inspected.manifest.id);
+      getGhostAgentSlot().clearGhost(inspected.manifest.id);
+      getGhostErrandSlot().clearGhost(inspected.manifest.id);
+      let result: Awaited<ReturnType<typeof manager.update>>;
+      try {
+        result = await manager.update(lizFilePath, { expectedPackageSha256 });
+      } catch (err) {
+        // 更新失败:恢复旧版本的常驻 Node 工作进程(如果是 resident 且已启用)
+        if (previousGhost) spawnIfResident(previousGhost);
+        throw err;
       }
-    }
-    spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
-    return { ghost: result.ghost };
+      if ('rejection' in result) {
+        if (previousGhost) spawnIfResident(previousGhost);
+        throwInstallError(result.rejection);
+      }
+      runtime.resetFuse(inspected.manifest.id); // 换了代码,给新版本干净的熔断记账
+      const store = getLayoutStore();
+      const docked = layoutWithGhostPanel(store.getLayout(), result.ghost.manifest);
+      if (docked) {
+        const applied = store.setLayout(docked);
+        if ('rejection' in applied) {
+          log.warn('ghost panel dock rejected', { id: result.ghost.manifest.id, reason: applied.rejection });
+        }
+      }
+      spawnIfResident(result.ghost); // 常驻意识:换完代码立即用新版本点火
+      return { ghost: result.ghost };
+    });
   });
 
   // 设置页「装入意识…」第一步:系统文件选择框(按 .cindy 过滤),只选不装。

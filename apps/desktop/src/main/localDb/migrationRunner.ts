@@ -431,6 +431,24 @@ export function checkMigrationCompatibility(
   };
 }
 
+// 0084 落地时违背了「ALTER TABLE ADD COLUMN 不能直接写进 migration SQL」的可重放
+// 惯例(SQLite 无 IF NOT EXISTS 列语义;正确形态见 0075/0076:SQL 置空 + companion
+// 用 PRAGMA table_info 守卫),而文件本体已随 main 永久冻结、不可回改。这里在
+// runner 侧补等效守卫:目标列已存在时按已生效处理,跳过 SQL 本体,schema_version
+// 与 migration history 照常推进。只允许命中登记在册的冻结缺陷,不为后续 migration
+// 提供任何通用容错——新迁移必须自带守卫。
+const FROZEN_REPLAY_DEFECT_GUARDS: Record<string, (db: Database.Database) => boolean> = {
+  '0084_small_gwen_stacy.sql': (db) => {
+    const columns = db
+      .prepare(`PRAGMA table_info('schedules')`)
+      .all() as Array<{ name: string }>;
+    // 表不存在(仅合成/残缺库;真实库自 0010 起必有)时裸 ALTER 必然报错,
+    // 与其中断整条迁移链不如按 no-op 跳过;列已存在则为重放,同样跳过。
+    if (columns.length === 0) return true;
+    return columns.some((column) => column.name === 'notify_wecom_group');
+  },
+};
+
 export function runMigrationReplay(
   db: Database.Database,
   options: RunMigrationReplayOptions,
@@ -445,7 +463,9 @@ export function runMigrationReplay(
     const sql = fs.readFileSync(migration.sqlPath, 'utf-8');
     const contentHash = hashMigrationFile(migration.sqlPath);
     const tx = db.transaction(() => {
-      db.exec(sql);
+      if (!FROZEN_REPLAY_DEFECT_GUARDS[migration.fileName]?.(db)) {
+        db.exec(sql);
+      }
       if (migration.tsScriptPath) {
         const script = scriptLoader(migration.tsScriptPath) as {
           run?: (db: Database.Database) => void;

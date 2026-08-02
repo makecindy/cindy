@@ -55,6 +55,7 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.model.length).toBeGreaterThan(0);
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
     expect(d.lastByVendor.codex.effort).toBe('high');
+    expect(d.lastByVendor.pi.permissionMode).toBe('auto');
     // 种子模型不再写死在 store 里（原先是 'gpt-5.4'，与 modelDefinitions 写死的 'gpt-5.5'
     // 漂移，且两者在目录里都是默认隐藏的模型）。现在统一从 getDefaultModelForVendor 取，
     // capabilities 未加载时它给冷启动占位 id —— 这里只锁「非空且与那个入口同源」。
@@ -65,6 +66,15 @@ describe('newMakerDraft store', () => {
     expect(d.effortByModel).toEqual({});
     expect(d.worktreeEnabled).toBe(false);
     expect(d.worktreePreferenceCustomized).toBe(false);
+  });
+
+  it('persists an explicit Pi model choice across reload', async () => {
+    const m1 = await loadModule();
+    m1.patchVendorPrefs('pi', { model: 'chatgpt/gpt-5.6' });
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().modelChosenByVendor.pi).toBe(true);
+    expect(m2.getPersistedVendorModel('pi')).toBe('chatgpt/gpt-5.6');
   });
 
   it('Effort 按模型记忆:get/set + 同值短路 + 持久化', async () => {
@@ -239,6 +249,37 @@ describe('newMakerDraft store', () => {
     expect(d.lastByVendor.cc.permissionMode).toBe('plan');
     // 新 vendor(codex)的 prefs 不变(等待用户在 codex 下继续操作)
     expect(d.lastByVendor.codex.permissionMode).toBe('auto');
+  });
+
+  it('switchVendor:选中的引擎跨重启保留(模拟 app 重启后仍是上次选的)', async () => {
+    const m1 = await loadModule();
+    expect(m1.getDraft().vendor).toBe('cc');
+    m1.switchVendor('codex', m1.getDraft().lastByVendor.cc);
+    expect(m1.getDraft().vendor).toBe('codex');
+
+    vi.resetModules();
+    const m2 = await loadModule();
+    expect(m2.getDraft().vendor).toBe('codex');
+  });
+
+  it('sanitize:引擎白名单按 SELECTABLE_VENDORS 校验,表内的值一律保留', async () => {
+    const { SELECTABLE_VENDORS } = await import('@/lib/agentVendors');
+    for (const vendor of SELECTABLE_VENDORS) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      // 逐个写死白名单时,新上线的引擎在这里会被静默重置回 'cc' —— 用户选中后重启就丢。
+      expect(getDraft().vendor).toBe(vendor);
+    }
+  });
+
+  it("sanitize:表外的引擎值(历史 'orca' / 未知 / 非字符串)回退默认", async () => {
+    for (const vendor of ['orca', 'unknown-engine', '', 42, null]) {
+      memStorage.setItem('xdt:newMakerDraft:v1', JSON.stringify({ vendor }));
+      vi.resetModules();
+      const { getDraft } = await loadModule();
+      expect(getDraft().vendor).toBe('cc');
+    }
   });
 
   it('switchVendor:相同 vendor 不变(no-op,避免误覆盖)', async () => {
@@ -728,15 +769,13 @@ describe('newMakerDraft store', () => {
       expect(getDraft().deviceLinkDeviceName).toBeNull();
     });
 
-    // issue #1170:device-link 草稿曾被硬编码禁用协同,而同一个项目建成会话后入口又出现。
-    // 现在草稿与会话页共用同一份判定(resolveCollabEntryPolicy),device-link **项目**可开协同;
-    // 关掉协同的只剩「对话模式」这一条(workingDir == null)。
-    it('选设备但没选项目(对话模式)→ 协同仍然关闭', async () => {
+    // 协同与项目/对话形态正交:切设备后落到该设备的对话态也不能静默关掉用户选择。
+    it('选设备但没选项目(对话模式)→ 协同开关保留', async () => {
       const { getDraft, patchDraft } = await loadModule();
       patchDraft({ workingDir: '/local/proj' });
       patchDraft({ collab: { enabled: true, worker: 'cc' } });
       patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
-      expect(getDraft().collab.enabled).toBe(false);
+      expect(getDraft().collab.enabled).toBe(true);
     });
 
     it('选设备上的项目 → 协同开关保留(不再被 device-link 一刀切关掉)', async () => {

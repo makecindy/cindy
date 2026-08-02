@@ -13,10 +13,29 @@ import { execFileSync } from 'node:child_process';
 import {
   binFileFor,
   isValidBinary,
+  isValidDirDist,
   listSiblingWorktreeRoots,
   readInstalledVersion,
+  SUPPORTED_BINARY_KINDS,
+  supportsCdnFallback,
   tryReuseFromSiblingWorktree,
 } from '../ensure-agent-binaries.mjs';
+import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/dir-dist-manifest.mjs';
+
+test('directory distributions never use the single-binary CDN fallback', () => {
+  assert.equal(supportsCdnFallback('pi'), false);
+  assert.equal(supportsCdnFallback('codex'), true);
+});
+
+test('dev startup prepares every supported runtime, including Pi', () => {
+  assert.deepEqual(SUPPORTED_BINARY_KINDS, ['claude', 'codex', 'ripgrep', 'pi']);
+
+  const devGuard = fs.readFileSync(
+    new URL('../ensure-dev-runtime-assets.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(devGuard, /const AGENT_KINDS = SUPPORTED_BINARY_KINDS;/);
+});
 
 const LFS_POINTER = [
   'version https://git-lfs.github.com/spec/v1',
@@ -57,6 +76,78 @@ test('isValidBinary: rejects missing, LFS pointer, and tiny placeholder', () => 
 
 test('isValidBinary: accepts a non-pointer file >= 1024 bytes', () => {
   assert.equal(isValidBinary(tmpFile('claude', Buffer.alloc(2048, 1))), true);
+});
+
+// ── dirDist(目录分发)安装清单 ────────────────────────────────────────────────
+// codex review 回归:pi 缺 theme/ 等旁侧资产时 RPC 启动即崩,skip 判定只验主执行
+// 文件会把残缺目录当"已就位"打进安装包 → 就位判定必须整目录对清单校验。
+
+test('isValidDirDist: requires the manifest and every sidecar asset, not just the main binary', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-dirdist-'));
+  const binPath = path.join(dir, 'pi');
+  fs.writeFileSync(binPath, Buffer.alloc(4096, 1));
+  fs.mkdirSync(path.join(dir, 'theme'));
+  fs.writeFileSync(path.join(dir, 'theme', 'default.json'), '{"accent":"pi"}');
+  fs.writeFileSync(path.join(dir, '.version'), '0.82.1\n');
+
+  // 主执行文件合法但无清单(旧安装/半成品)→ 不算就位
+  assert.equal(isValidDirDist(dir, binPath), false);
+
+  assert.equal(writeDirDistManifest(dir) >= 2, true);
+  assert.equal(isValidDirDist(dir, binPath), true);
+
+  // 旁侧资产被删 → 清单校验失败,重新进入下载/promote
+  fs.rmSync(path.join(dir, 'theme'), { recursive: true, force: true });
+  assert.equal(isValidDirDist(dir, binPath), false);
+});
+
+test('verifyDirDistManifest: rejects size drift, empty manifests, and malformed entries', () => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensure-dirdist-verify-'));
+  fs.writeFileSync(path.join(dir, 'pi'), Buffer.alloc(4096, 1));
+  fs.writeFileSync(path.join(dir, 'photon.wasm'), Buffer.alloc(512, 2));
+  writeDirDistManifest(dir);
+  assert.equal(verifyDirDistManifest(dir), true);
+
+  // 同长度内容被替换/损坏(字节数不变)→ 现按 sha256 拒绝(供应链加固 P1)
+  writeDirDistManifest(dir);
+  assert.equal(verifyDirDistManifest(dir), true);
+  fs.writeFileSync(path.join(dir, 'photon.wasm'), Buffer.alloc(512, 9)); // 同长度、不同内容
+  assert.equal(verifyDirDistManifest(dir), false);
+
+  // 旧版本写的 size-only 清单(无 sha256)→ 一律不可信,拒绝(自愈重下)
+  fs.writeFileSync(path.join(dir, 'photon.wasm'), Buffer.alloc(512, 2)); // 复原内容
+  fs.writeFileSync(
+    path.join(dir, '.manifest'),
+    JSON.stringify({ files: [{ path: 'photon.wasm', size: 512 }] }),
+  );
+  assert.equal(verifyDirDistManifest(dir), false);
+
+  // 字节数漂移(截断/损坏)→ 拒绝
+  writeDirDistManifest(dir);
+  fs.writeFileSync(path.join(dir, 'photon.wasm'), Buffer.alloc(8, 2));
+  assert.equal(verifyDirDistManifest(dir), false);
+
+  // 清单之外的多余文件(旧构建残留 / 本地污染)→ 拒绝(不能作为未验证资产打进安装包)
+  fs.writeFileSync(path.join(dir, 'photon.wasm'), Buffer.alloc(512, 2)); // 复原
+  writeDirDistManifest(dir);
+  assert.equal(verifyDirDistManifest(dir), true);
+  fs.writeFileSync(path.join(dir, 'stray-residue.bin'), Buffer.alloc(16, 3));
+  assert.equal(verifyDirDistManifest(dir), false);
+  fs.rmSync(path.join(dir, 'stray-residue.bin'));
+  assert.equal(verifyDirDistManifest(dir), true); // 移除多余文件后恢复
+  // 嵌套子目录里的多余文件同样拒绝
+  fs.mkdirSync(path.join(dir, 'nested'), { recursive: true });
+  fs.writeFileSync(path.join(dir, 'nested', 'extra.json'), '{}');
+  assert.equal(verifyDirDistManifest(dir), false);
+  fs.rmSync(path.join(dir, 'nested'), { recursive: true, force: true });
+
+  // 空清单 / 非法结构 → 拒绝
+  fs.writeFileSync(path.join(dir, '.manifest'), JSON.stringify({ files: [] }));
+  assert.equal(verifyDirDistManifest(dir), false);
+  fs.writeFileSync(path.join(dir, '.manifest'), '{"files":"nope"}');
+  assert.equal(verifyDirDistManifest(dir), false);
+  fs.writeFileSync(path.join(dir, '.manifest'), 'not json');
+  assert.equal(verifyDirDistManifest(dir), false);
 });
 
 // ── 兄弟 worktree 本地复用 ────────────────────────────────────────────────────
@@ -140,7 +231,7 @@ test('listSiblingWorktreeRoots: lists other worktrees of the same repo, excludin
   git('worktree', 'add', wt, '-b', 'wt-a');
 
   const fromMain = listSiblingWorktreeRoots(repo);
-  assert.deepEqual(fromMain, [fs.realpathSync(wt)]);
+  assert.deepEqual(fromMain, [fs.realpathSync.native(wt)]);
   const fromWt = listSiblingWorktreeRoots(wt);
-  assert.deepEqual(fromWt, [fs.realpathSync(repo)]);
+  assert.deepEqual(fromWt, [fs.realpathSync.native(repo)]);
 });

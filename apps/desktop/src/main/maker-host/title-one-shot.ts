@@ -31,9 +31,12 @@ import { fetch as undiciFetch } from 'undici';
 
 import {
   type AgentKind,
+  type CatalogModel,
   type Effort,
   type Provider,
   type ProviderView,
+  findModelRegistryRoute,
+  isModelSelectableForNewRoute,
   nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
@@ -122,6 +125,17 @@ function findCatalogModel(provider: Provider, modelId: string) {
     if (hit) return hit;
   }
   return undefined;
+}
+
+type TitleRouteUnavailableReason = 'disabled' | 'retired' | 'capability-model';
+
+function titleRouteUnavailableReason(
+  model: CatalogModel,
+  userProvider: boolean,
+): TitleRouteUnavailableReason | null {
+  if (isModelSelectableForNewRoute(model, { userProvider })) return null;
+  if (model.status === 'retired') return 'retired';
+  return model.disabled === true ? 'disabled' : 'capability-model';
 }
 
 /**
@@ -353,10 +367,15 @@ export async function generateTitleViaProvider(
   // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
   // 第十一轮)。目录里完全找不到该模型时不额外拦。
   const railProvider = rail.find((p) => p.id === providerId);
-  if (railProvider && findCatalogModel(railProvider, target.model)?.disabled === true) {
-    log.debug('title oneShot skipped: title model disabled in settings', {
+  const titleCatalogModel = railProvider ? findCatalogModel(railProvider, target.model) : undefined;
+  const initialUnavailableReason = titleCatalogModel
+    ? titleRouteUnavailableReason(titleCatalogModel, railProvider?.source === 'user')
+    : null;
+  if (initialUnavailableReason) {
+    log.debug('title oneShot skipped: title model unavailable for new route', {
       providerId,
       model: target.model,
+      reason: initialUnavailableReason,
     });
     return null;
   }
@@ -369,16 +388,43 @@ export async function generateTitleViaProvider(
   args.signal?.addEventListener('abort', onExternalAbort);
 
   // 派发紧前重查(PR #744 review 第二十一轮):OAuth 刷新等凭证获取是可能数秒的
-  // await,期间该 (来源, 标题模型) 可能被用户停用 —— 凭证到手、请求发出的紧前按
-  // override store 同步再验一次(key 无 agent 维度,组合判定即精确口径)。
-  // 直查 override store(不经 oneShotCandidates:那条链模块加载期拖 runtime-configs
-  // / ripgrep 探测等 electron 面,污染轻量测试环境)。
-  const routeDisabledNow = (): boolean => {
+  // await,期间该 (来源, 标题模型) 可能被用户停用或被热刷新标成 retired —— 凭证
+  // 到手、请求发出的紧前同时重读 override store 与 active catalog。直查这两份同步
+  // 真源(不经 oneShotCandidates:那条链模块加载期拖 runtime-configs / ripgrep 探测等
+  // electron 面,污染轻量测试环境)。
+  const routeUnavailableNow = (): TitleRouteUnavailableReason | null => {
     const overrides = readModelDisableOverrides();
-    return (
+    if (
       isProviderDisabled(overrides, providerId) ||
       isModelDisabled(overrides, providerId, target.model)
-    );
+    ) {
+      return 'disabled';
+    }
+    const currentCatalog = getActiveCatalog();
+    const currentProvider = currentCatalog.providers.find((provider) => provider.id === providerId);
+    const currentModel = currentProvider
+      ? findCatalogModel(currentProvider, target.model)
+      : undefined;
+    if (currentModel) {
+      return titleRouteUnavailableReason(currentModel, currentProvider?.source === 'user');
+    }
+    // retired 且没有 discovery/local addition 时不会出现在 provider.models；仍要从
+    // Registry tombstone 本身识别，不能把“未实体化”误当成“没有限制”。
+    return findModelRegistryRoute(currentCatalog.modelRegistry, providerId, target.model)?.entry
+      .status === 'retired'
+      ? 'retired'
+      : null;
+  };
+  const canDispatchNow = (stage: string): boolean => {
+    const reason = routeUnavailableNow();
+    if (!reason) return true;
+    log.debug('title oneShot skipped: route unavailable before dispatch', {
+      providerId,
+      model: target.model,
+      reason,
+      stage,
+    });
+    return false;
   };
   try {
     let text = '';
@@ -389,10 +435,7 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled after credential refresh', { providerId });
-          return null;
-        }
+        if (!canDispatchNow('after-credential-refresh')) return null;
         text = await fetchAnthropicTitle(target.upstream, target.model, args.prompt, oauth.accessToken, fetchImpl, controller.signal);
         break;
       }
@@ -402,10 +445,7 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no codex creds', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
-          return null;
-        }
+        if (!canDispatchNow('after-credential-read')) return null;
         text = await fetchCodexTitle(target.upstream, target.model, target.effort, args.prompt, creds, fetchImpl, controller.signal);
         break;
       }
@@ -415,10 +455,7 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no gateway key', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
-          return null;
-        }
+        if (!canDispatchNow('after-credential-read')) return null;
         text = await fetchGatewayTitle(target.upstream, target.model, args.prompt, key, fetchImpl, controller.signal);
         break;
       }

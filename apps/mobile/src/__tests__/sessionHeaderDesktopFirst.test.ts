@@ -68,6 +68,36 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).not.toContain('minHeight: 54');
   });
 
+  it('switches the leading control to the session-list hamburger on wide-screen navigation', () => {
+    const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+
+    // 宽屏(iPad / 折叠屏展开 / 横屏手机)导航形态:断点判定走 wideSessionNav 纯函数,
+    // 左上角三条杠替代返回,抽屉原地 replace 切任务;窄屏保持 ScreenBackButton(上一用例已锁)。
+    expect(source).toContain("import { buildWideSessionNavLayout } from '@/session/wideSessionNav';");
+    expect(source).toContain("import { SessionListDrawer } from '@/session/SessionListDrawer';");
+    // 按平台分闸(发布策略):iOS 只发 iPad,iPhone 横屏也保持返回键;安卓纯宽度闸。
+    expect(source).toContain('iosPad: Platform.OS === \'ios\' && Platform.isPad,');
+    expect(source).toContain('platform: Platform.OS,');
+    expect(source).toContain('onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}');
+    expect(source).toContain('icon={Menu}');
+    expect(source).toContain('testID="session.sessionListButton"');
+    expect(source).toContain('{onOpenSessionList ? (');
+    // 抽屉切任务是「原地切换」:replace 保持导航栈 [主页, 会话],不逐层压栈。
+    expect(source).toContain("pathname: '/sessions/[sessionId]'");
+    expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
+    expect(source).toContain('router.replace({');
+    // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
+    expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
+    // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
+    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOpen(true);');
+    // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
+    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack)。
+    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
+    expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
+    // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    setSessionListDrawerOpen(false);");
+  });
+
   it('keeps pending history access as a lightweight control without message counters', () => {
     const source = readTextLf(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
     const start = source.indexOf('function MessageHistoryToggle');

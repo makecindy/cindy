@@ -209,6 +209,10 @@ describe('makerChatStore per-turn 费用', () => {
         },
       }),
       serverMessage({ clientId: 'a-no-cost' }),
+      serverMessage({
+        clientId: 'a-usage-only',
+        agentMeta: { turnUsageDetails: GPT_DETAILS },
+      }),
     ]);
     makerChatStore.ensureInitialMessages(SID);
     await flush();
@@ -220,6 +224,7 @@ describe('makerChatStore per-turn 费用', () => {
     const staleEstimateMetaModel = snap.messages.find((m) => m.clientId === 'a-stale-estimate-meta-model');
     const livePricingPreserved = snap.messages.find((m) => m.clientId === 'a-live-pricing-preserved');
     const noCost = snap.messages.find((m) => m.clientId === 'a-no-cost');
+    const usageOnly = snap.messages.find((m) => m.clientId === 'a-usage-only');
     expect(withCost?.turnMoney).toEqual(legacyMoney(0.05));
     expect(withCost?.turnCostIsEstimate).toBe(true);
     expect(withCost?.userTurnMoney).toEqual(legacyMoney(12.34));
@@ -232,6 +237,9 @@ describe('makerChatStore per-turn 费用', () => {
     expect(staleEstimateMetaModel?.turnMoney).toEqual(legacyMoney(2.011));
     expect(livePricingPreserved?.turnMoney).toEqual(legacyMoney(3.14));
     expect(noCost?.turnMoney).toBeUndefined();
+    expect(usageOnly?.turnMoney).toBeUndefined();
+    expect(usageOnly?.turnUsageDetails).toEqual(GPT_DETAILS);
+    expect(usageOnly?.turnCompleted).toBe(true);
   });
 
   it('device-link 旧历史:缺少持久化累计值时按完整用户轮投影', async () => {
@@ -386,6 +394,25 @@ describe('makerChatStore per-turn 费用', () => {
     const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-live-estimate');
     expect(msg?.turnMoney).toEqual(legacyMoney(2.011));
     expect(msg?.turnCostIsEstimate).toBe(true);
+  });
+
+  it('实时推送:没有价格时仍补 token/cache 明细', async () => {
+    vi.mocked(messageService.list).mockResolvedValueOnce([
+      serverMessage({ clientId: 'a-usage-only' }),
+    ]);
+    makerChatStore.ensureInitialMessages(SID);
+    await flush();
+    await flush();
+
+    getTurnCostCb()?.({
+      sessionId: SID,
+      clientId: 'a-usage-only',
+      turnUsageDetails: DETAILS,
+    });
+
+    const msg = makerChatStore.getSnapshot(SID).messages.find((m) => m.clientId === 'a-usage-only');
+    expect(msg?.turnUsageDetails).toEqual(DETAILS);
+    expect(msg?.turnMoney).toBeUndefined();
   });
 
   it('实时推送:订阅估算值不像旧 full-cache 口径时保留原始 live pricing 值', async () => {

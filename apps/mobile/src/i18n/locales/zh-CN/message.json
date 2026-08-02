@@ -41,6 +41,7 @@
     "statusStopped": "已停止",
     "toolUseCount": "{{n}} 次工具调用",
     "subagentTaskTitle": "Subagent 任务",
+    "subagentStarted": "Subagent {{name}} 已启动",
     "recentTool": "最近工具：{{name}}",
     "outputFile": "输出：{{file}}",
     "noMoreDetail": "暂无更多详情",

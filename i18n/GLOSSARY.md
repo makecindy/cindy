@@ -151,6 +151,10 @@ Anthropic Messages API / wire protocol 的用户可见名称。四语统一保�
 
 企业认证与业务服务所在区域的用户可见名称，用于组织登录检测到中国大陆服务区域时的确认文案；它描述连接的服务区域，不代表当前安装的是中国大陆版。先按现有四语文案登记为 proposed，避免后续出现“中国区／国内区／China region”等多套说法。
 
+### reply (the bot's public post on X)
+
+Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。
+
 ### Cindy Codex home
 
 远端主机上由 Cindy 管理的 Codex 凭证目录（~/.xdt-server/v1/codex-home/），与用户本机 ~/.codex 相区分。四语统一保留英文原词（home 小写），避免各语言自造「Codex 主目录」等不同说法；syncAuth 与 codexAuthMissing 等远端登录态文案使用。
@@ -272,6 +276,10 @@ macOS TCC 的 kTCCServiceListenEvent(系统设置里叫「输入监控」)在 Ci
 ### WeCom Intelligent Bot
 
 企业微信 WebSocket 长连接双向 IM 能力在设置页中的名称；先登记为 proposed。
+
+### withdraw (a reply)
+
+用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。
 
 ## 怎么加一条术语
 

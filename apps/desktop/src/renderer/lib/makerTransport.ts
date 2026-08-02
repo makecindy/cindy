@@ -39,10 +39,17 @@ type FullMaker = typeof window.electronAPI.maker;
 export interface RoutableMaker {
   send: FullMaker['send'];
   setModel: FullMaker['setModel'];
+  // session-agent-switch:跨引擎切换是**会话级**操作,数据真相(pending 意图注册表 +
+  // 引擎交接)都在会话所在端。远程会话必须隧道到被控端,否则打到控制端本机 maker 上
+  // 会因本机无此 session 直接失败。只读入口供重连 / 重开视图后恢复 main 权威意图。
+  switchSessionAgent: FullMaker['switchSessionAgent'];
+  getSessionAgentSwitchIntent: FullMaker['getSessionAgentSwitchIntent'];
   setEffort: FullMaker['setEffort'];
   setPermissionMode: FullMaker['setPermissionMode'];
   setFastMode: FullMaker['setFastMode'];
   setPlanMode: FullMaker['setPlanMode'];
+  getSessionTree: FullMaker['getSessionTree'];
+  navigateSessionTree: FullMaker['navigateSessionTree'];
   resolveInteraction: FullMaker['resolveInteraction'];
   getPendingInteractions: FullMaker['getPendingInteractions'];
   deleteMessage: FullMaker['deleteMessage'];
@@ -92,10 +99,16 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
   return {
     send: t('maker:send') as FullMaker['send'],
     setModel: t('maker:set-model') as FullMaker['setModel'],
+    switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
+    getSessionAgentSwitchIntent: t(
+      'maker:get-session-agent-switch-intent',
+    ) as FullMaker['getSessionAgentSwitchIntent'],
     setEffort: t('maker:set-effort') as FullMaker['setEffort'],
     setPermissionMode: t('maker:set-permission-mode') as FullMaker['setPermissionMode'],
     setFastMode: t('maker:set-fast-mode') as FullMaker['setFastMode'],
     setPlanMode: t('maker:set-plan-mode') as FullMaker['setPlanMode'],
+    getSessionTree: t('maker:get-session-tree') as FullMaker['getSessionTree'],
+    navigateSessionTree: t('maker:navigate-session-tree') as FullMaker['navigateSessionTree'],
     resolveInteraction: t('maker:resolve-interaction') as FullMaker['resolveInteraction'],
     getPendingInteractions: t(
       'maker:get-pending-interactions',
@@ -358,9 +371,18 @@ export function pluginEnableStateFor(
   deviceId: string | null | undefined,
   pluginId: string,
   workingDir?: string,
+  workspaceKind?: string | null,
 ): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
-  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
-  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+  if (!deviceId) {
+    return workspaceKind === undefined
+      ? window.electronAPI.maker.plugins.getState(pluginId, workingDir)
+      : window.electronAPI.maker.plugins.getState(pluginId, workingDir, workspaceKind);
+  }
+  const args =
+    workspaceKind === undefined
+      ? [pluginId, workingDir]
+      : [pluginId, workingDir, workspaceKind];
+  return invokeRemote(deviceId, 'maker:plugins:get-state', args) as ReturnType<
     typeof window.electronAPI.maker.plugins.getState
   >;
 }

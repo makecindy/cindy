@@ -373,12 +373,17 @@ export function registerContactsIpc(): void {
         throw err;
       }
       try {
-        const { shutdownCodexEnvironment } =
-          await import('../mcp-integrations/codexEnvironment.js');
+        // Codex 与 Pi 各自的 MCP bridge 都在首个会话冻结 server 集合;contacts 开关变更后
+        // 两者都要 invalidate,否则新会话仍暴露已禁用的 contacts server(Pi 侧 codex review P1)。
+        const [{ shutdownCodexEnvironment }, { invalidatePiEnvironment }] = await Promise.all([
+          import('../mcp-integrations/codexEnvironment.js'),
+          import('../mcp-integrations/piEnvironment.js'),
+        ]);
         await shutdownCodexEnvironment();
+        invalidatePiEnvironment();
       } catch (err) {
         log.warn(
-          'shutdownCodexEnvironment on contacts toggle failed — cached spawn config still stale',
+          'shutdown agent MCP environments on contacts toggle failed — cached spawn config still stale',
           {
             error: err instanceof Error ? err.message : String(err),
           },

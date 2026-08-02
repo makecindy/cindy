@@ -52,7 +52,7 @@ interface ModelPriceOverridePrefs {
 const DEFAULTS: ModelPriceOverridePrefs = { version: STORE_VERSION, entries: {} };
 
 function isAgent(value: unknown): value is AgentKind {
-  return value === 'claude-code' || value === 'codex';
+  return value === 'claude-code' || value === 'codex' || value === 'pi';
 }
 
 function isCurrency(value: unknown): value is MoneyCurrency {

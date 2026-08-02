@@ -63,7 +63,8 @@ import { ConnectProviderCard } from '@/components/onboarding/ConnectProviderCard
 import { InheritedSubscriptionNotice } from '@/components/onboarding/InheritedSubscriptionNotice';
 import { resolveDeviceLinkSubmission } from './deviceLinkCreateArgs';
 import { commitRemoteSessionHandoff } from './remoteSessionHandoff';
-import { VendorSegmentedSwitcher } from '@/components/new-chat/VendorSegmentedSwitcher';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
+import { dbToMakerAgentKind, normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import { TopRightChipStack, TopRightChipStackProvider } from '@/components/chat/TopRightChipStack';
 import { useProportionalWidth } from '@/hooks/useProportionalWidth';
 import { useCCSessions } from '@/hooks/useCCSessions';
@@ -184,6 +185,7 @@ import {
   type AgentCapabilities,
 } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
+import { useAvailableAgents } from '@/hooks/useAvailableAgents';
 import {
   useDeviceProviders,
   evictDeviceProviders,
@@ -203,7 +205,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, isAgentSelectableModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -224,8 +226,8 @@ const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
 // F-COLLAB (2026-05): 老的 vendor='orca' 入口已退役,OrcaHeaderStrip 组件随之
 // 删除(它是给 isOrca 分支的 ChatInput.topSlot 用的)。Lead/Worker 协作组合现在
-// 由 ChatInput 底部 CollaborationModeToggle 控制,Lead 是当前 vendor 本身,
-// Worker 通过 toggle popover 选 cc / codex。
+// 由 ChatInput「+」菜单里的协同模式项控制,Lead 是当前 vendor 本身,
+// Worker 通过完整配置弹窗选择 cc / codex / pi。
 
 function makeDraftSessionId(): string {
   return crypto.randomUUID();
@@ -301,8 +303,8 @@ function draftEnableOrcaOptions(
   providers: ProviderView[],
   providersReady: boolean,
 ) {
-  const preferredAgent: 'claude-code' | 'codex' =
-    collab.worker === 'codex' ? 'codex' : 'claude-code';
+  const preferredAgent: 'claude-code' | 'codex' | 'pi' =
+    collab.worker === 'codex' ? 'codex' : collab.worker === 'pi' ? 'pi' : 'claude-code';
   // Worker 类型也是**设备作用域**的(codex review P2):在只连了 Codex 的设备 A 选了 Codex
   // Worker,切到只连 Claude 的设备 B 时,workerConfig 虽然被清了,collab.worker 仍是 codex,
   // 透传过去必撞被控端的 NO_PROVIDER_FOR_AGENT 预检,协同又静默降级成单会话。
@@ -310,12 +312,13 @@ function draftEnableOrcaOptions(
   // 没有已连接供应商、而另一个有,就改用另一个;两个都没有则原样透传,由 main 的精确
   // preflight 报可操作错误(不在这里编一个同样跑不起来的值)。
   // 仅在目录就绪时收窄,理由同下方 providerId:未就绪的空快照会误判成"都没有"。
-  const workerAgent: 'claude-code' | 'codex' = (() => {
+  const workerAgent: 'claude-code' | 'codex' | 'pi' = (() => {
     if (!providersReady) return preferredAgent;
     if (connectedProvidersForAgent(providers, preferredAgent).length > 0) return preferredAgent;
-    const fallback: 'claude-code' | 'codex' =
-      preferredAgent === 'codex' ? 'claude-code' : 'codex';
-    return connectedProvidersForAgent(providers, fallback).length > 0 ? fallback : preferredAgent;
+    const fallback = (['claude-code', 'codex', 'pi'] as const).find(
+      (agent) => agent !== preferredAgent && connectedProvidersForAgent(providers, agent).length > 0,
+    );
+    return fallback ?? preferredAgent;
   })();
   const cfg = collab.workerConfig;
   if (!cfg) return { workerAgent };
@@ -349,8 +352,7 @@ function draftEnableOrcaOptions(
     // 非聊天模型不该被当成持久化草稿的有效来源(issue #882 第 3 点,2026-07 review),
     // 与 CreateWorkerPopover.narrowProviderSource 同规则同理由。
     return catalogModel &&
-      catalogModel.disabled !== true &&
-      isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+      isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
       ? cfg.providerId
       : undefined;
   })();
@@ -561,9 +563,9 @@ export function NewMakerDraftRoute() {
   // 当前 vendor 对应的 prefs(切 vendor 后这里自动重算 → 透传到 ChatInput initial*)
   const currentPrefs = draft.lastByVendor[draft.vendor];
   const chatPrefs = currentPrefs;
-  const persistedAgentKind: 'cc' | 'codex' = draft.vendor === 'codex' ? 'codex' : 'cc';
-  const authVendor: 'cc' | 'codex' = persistedAgentKind;
-  const capabilityAgentKind = persistedAgentKind === 'codex' ? 'codex' : 'claude-code';
+  const persistedAgentKind: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
+  const authVendor: 'cc' | 'codex' | 'pi' = persistedAgentKind;
+  const capabilityAgentKind = dbToMakerAgentKind(persistedAgentKind);
 
   // 品牌区跟随当前主题；icon / logo 的固定布局统一由 ThemeBrandLockup 负责。
   const [activeColorTheme, setActiveColorTheme] = useState<ColorTheme | null>(() =>
@@ -594,12 +596,8 @@ export function NewMakerDraftRoute() {
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(null);
   // F-COLLAB: 协同模式状态(enabled + worker 类型)直接读自 draft store,
   // 和 workingDir 走同一份 localStorage,重启 / 切走再回都能恢复。
-  // 互斥约束(本组件 enforce):
-  //   - draft.workingDir == null (对话模式) → 不向 ChatInput 传 collaboration prop,
-  //     CollaborationModeToggle 不渲染
-  //   - draft.collab.enabled = true → 工作区选择入口隐藏
-  //     "对话(不在项目中)"入口,workdir 不可能切到 null
-  // 兜底见 patchDraft: 任何把 workingDir 设回 null 的路径会自动关 collab。
+  // 协同与项目/对话形态正交:两种草稿都向 ChatInput 提供入口;项目读项目级策略,
+  // 对话只读用户级/全局级策略。发送成功后 resetDraftWorkspaceTargets 显式消费本次选择。
   const collab = draft.collab;
   // ChatInput 现在要求显式拥有 attachmentState。这条 transient 路由没有
   // sessionId(还没建会话),sessionId 仍传 undefined(图片本地缓存走 base64
@@ -655,6 +653,16 @@ export function NewMakerDraftRoute() {
   // 下面 isDeviceLinkDraft 与 create 分支的真值收窄对 undefined 同样成立)。
   const effectiveDeviceLinkDeviceId = draft.deviceLinkDeviceId ?? undefined;
   const effectiveDeviceLinkDeviceName = draft.deviceLinkDeviceName;
+  // 入口门控:只在 runtime 已注册的 agent 上开放创建入口(Pi 二进制缺失时 buildPiAgent 返回
+  // null,agent map 无 pi,但模型目录仍投影 Pi → 需按 maker:list-available-agents 过滤,
+  // 否则一路创建到 requireAgent 的 not-registered 报错,codex review P2)。远程草稿以被控端
+  // 的注册结果为准(hook 传 deviceId 走隧道)。未加载完成时不隐藏任何入口(fail-open)。
+  const { availableVendors, loaded: availableAgentsLoaded } =
+    useAvailableAgents(effectiveDeviceLinkDeviceId);
+  const hiddenSwitcherVendors = useMemo<MakerVendor[]>(() => {
+    if (!availableAgentsLoaded) return [];
+    return (['cc', 'codex', 'pi'] as const).filter((vendor) => !availableVendors.has(vendor));
+  }, [availableAgentsLoaded, availableVendors]);
   /**
    * 「这份草稿要建到对端设备上」—— 只看 deviceId,**不再要求 workingDir**(#807)。
    *
@@ -752,16 +760,18 @@ export function NewMakerDraftRoute() {
   // 协同入口判定与会话视图共用同一个 helper(issue #1170:两处各写一份判据,于是同一个
   // device-link 项目在草稿里没入口、进会话页又有)。草稿的 workspaceKind 显式按
   // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
+  const collabWorkspaceKind = effectiveWorkingDir ? 'project' : 'dialogue';
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: effectiveWorkingDir ? 'project' : 'dialogue',
+    workspaceKind: collabWorkspaceKind,
     workingDir: effectiveWorkingDir,
     remoteHostId: effectiveRemoteHostId,
     deviceLinkDeviceId: effectiveDeviceLinkDeviceId,
   });
   const collabPolicyEligible = collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible, {
-    // SSH 远端 draft 的 workingDir 是远端主机路径, 本机项目级查询无意义, 跳过;
-    // 用户级/全局级 collab 开关仍生效 (与 main 侧 remote 分支同口径)。
+    workspaceKind: collabWorkspaceKind,
+    // dialogue 没有用户项目,SSH 远端 draft 的 workingDir 又是远端主机路径;两者都跳过
+    // 本机项目级查询,但用户级/全局级 collab 开关仍生效。
     skipQuery: collabEntry.skipProjectQuery,
     // device-link draft:项目级开关的真相在被控端, 隧道过去查(控制端本机查那条远端
     // 路径只会读到自己的用户级开关, 可能与被控端 main 的授权相反)。
@@ -904,8 +914,7 @@ export function NewMakerDraftRoute() {
         const models = p.models[capabilityAgentKind] ?? [];
         const kept = models.filter(
           (m) =>
-            m.disabled !== true &&
-            isAgentSelectableModel(m, { userProvider: p.source === 'user' }) &&
+            isModelSelectableForNewRoute(m, { userProvider: p.source === 'user' }) &&
             !(effectiveRemoteHostId && isSubscriptionDirectModel(m.id)),
         );
         if (kept.length === models.length) return p;
@@ -1166,7 +1175,7 @@ export function NewMakerDraftRoute() {
   // (驱动镜像 effect + 选中行还原)。控制端是纯显示,这里只更新显示态、不回写被控端。
   useEffect(() => {
     if (!isDeviceLinkDraft || !effectiveDeviceLinkDeviceId) return;
-    const vendorSlot = capabilityAgentKind === 'codex' ? 'codex' : 'claudeCode';
+    const vendorSlot = capabilityAgentKind === 'claude-code' ? 'claudeCode' : capabilityAgentKind;
     return window.electronAPI.deviceLink.onRemotePush((push) => {
       if (push.deviceId !== effectiveDeviceLinkDeviceId) return;
       if (push.channel !== 'maker:new-maker-draft:changed') return;
@@ -1545,7 +1554,7 @@ export function NewMakerDraftRoute() {
   const handleRemoteProjectAdded = useCallback(
     async (target: RemoteProjectTarget) => {
       // vendor 由外层 VendorSegmentedSwitcher (draft.vendor) 单一决策 —— dialog 不再让用户选。
-      const draftVendor: 'cc' | 'codex' = draft.vendor === 'codex' ? 'codex' : 'cc';
+      const draftVendor: 'cc' | 'codex' | 'pi' = normalizeDbAgentKind(draft.vendor);
 
       if (target.kind === 'device-link') {
         // device-link:**不**像 SSH 立即建会话(会在被控端留空会话)。改为把当前草稿指向该被控
@@ -1591,6 +1600,14 @@ export function NewMakerDraftRoute() {
           prefetchDeviceGitSafetySettings(target.deviceId),
         ]);
         return;
+      }
+
+      // fail-closed:Pi 是本地专属 agent,PiAgent.startSession 拒绝任何 remoteHostId
+      // (agents/pi/index.ts)。SSH 目标会带 remoteHostId 建会话 → 首消息必然起不来。
+      // dialog 侧已按 agentVendor 过滤掉 SSH 主机,这里是防非 UI 路径(编程调用 / 未来回归)
+      // 漏进 Pi+SSH 的兜底,抛清晰错误由 dialog 呈现,而不是建出一条注定失败的会话(codex review P1)。
+      if (draftVendor === 'pi') {
+        throw new Error(t('ccAgent.draft.piRemoteUnsupported'));
       }
 
       // SSH:lazy-create(workspaceKind='project',第一条消息发出时 agent 进程才真正起),
@@ -1657,7 +1674,7 @@ export function NewMakerDraftRoute() {
         }
         if (effectivePlanMode) patchCurrentVendorPrefs({ planMode: false });
         makerChatStore.setSessionRuntime(newSession.id, {
-          agentKind: draftVendor === 'codex' ? 'codex' : 'claude-code',
+          agentKind: dbToMakerAgentKind(draftVendor),
           fastMode: sshFastMode,
           planModeEnabled: effectivePlanMode,
         });
@@ -1694,7 +1711,7 @@ export function NewMakerDraftRoute() {
           attachmentState.clearFiles();
         }
         resetDraftWorkspaceAfterSend();
-        // F-COLLAB: draft 阶段开了协同 toggle → 与 send/goal 路径同口径,
+        // F-COLLAB: draft 阶段开了协同模式 → 与 send/goal 路径同口径,
         // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
         // Lead 会话继续 navigate (用户可继续单 session, 不阻断)。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
@@ -1736,6 +1753,16 @@ export function NewMakerDraftRoute() {
     },
     [currentPrefs],
   );
+
+  // 当前草稿选中的 vendor 变为不可用(如 Pi 未注册 / 被控端无 Pi)时,coerce 到首个可用来源
+  // (优先 cc),避免 tablist 卡在被隐藏段、且防止创建出注定 requireAgent 报错的会话。
+  // 只在已加载可用性后收敛;fallback 一定可见,收敛一次即稳定(switchVendor 同值早返,不成环)。
+  useEffect(() => {
+    if (!availableAgentsLoaded) return;
+    if (!hiddenSwitcherVendors.includes(draft.vendor)) return;
+    const fallback = (['cc', 'codex', 'pi'] as const).find((vendor) => availableVendors.has(vendor));
+    if (fallback && fallback !== draft.vendor) handleVendorChange(fallback);
+  }, [availableAgentsLoaded, hiddenSwitcherVendors, availableVendors, draft.vendor, handleVendorChange]);
 
   // ─── 用户在 ChatInput 改 model/effort/permission 后,落进当前 vendor 的 prefs ──
   const patchActivePrefs = useCallback((patch: Partial<VendorPrefs>) => {
@@ -2446,10 +2473,10 @@ export function NewMakerDraftRoute() {
           // agent 启动时看到的工作区已是迁移后的状态。fail-soft：检测错误只 warn，不阻塞 send。
           try {
             const wd = effectiveWorkingDir;
-            if (wd && !isRemoteProjectDraft) {
+            if (wd && !isRemoteProjectDraft && persistedAgentKind !== 'pi') {
               const r = await crossAgentConvertService.detect(
                 wd,
-                persistedAgentKind === 'codex' ? 'codex' : 'claude-code',
+                persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
               );
               if (r.items.length > 0) {
                 // 阻塞等弹窗关闭（用户点不要 / 完成转换 / 失败）—— 都视为流程结束
@@ -2461,9 +2488,9 @@ export function NewMakerDraftRoute() {
           }
 
           // F-COLLAB (2026-05): 老的 vendor='orca' 创建分支已删除。协同模式现在
-          // 走 ChatInput 底部 toggle (CollaborationModeToggle):用户开了 toggle 后
+          // 走 ChatInput「+」菜单:用户开启后
           // Send 流程会先 createSession (本段下方) 创建 Lead,然后立刻调 enableOrca
-          // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同 toggle" 段)。
+          // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同模式" 段)。
 
           const sessionId = makeDraftSessionId();
           const workingDir = selectedWorkingDir;
@@ -2518,7 +2545,7 @@ export function NewMakerDraftRoute() {
               log.warn('[draft worktree send] touchUserSend failed', err);
             });
             makerChatStore.setSessionRuntime(newSession.id, {
-              agentKind: persistedAgentKind === 'codex' ? 'codex' : 'claude-code',
+              agentKind: persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind,
               fastMode: effectiveFastMode,
               planModeEnabled: effectivePlanMode,
             });
@@ -2707,7 +2734,7 @@ export function NewMakerDraftRoute() {
           // seed store,否则勾了计划模式的首条消息可能以 planMode:false 发出
           // (worktree 路径同款 seed;bot review P2)。
           makerChatStore.setSessionRuntime(newSession.id, {
-            agentKind: persistedAgentKind === 'codex' ? 'codex' : 'claude-code',
+            agentKind: capabilityAgentKind,
             fastMode: effectiveFastMode,
             planModeEnabled: effectivePlanMode,
           });
@@ -2729,7 +2756,7 @@ export function NewMakerDraftRoute() {
             }
           }
 
-          // F-COLLAB: draft 阶段开了协同 toggle → createSession 之后立刻 enableOrca
+          // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
           // 拉起 Worker。失败 toast 但保留 Lead session(用户可以继续单 session 聊),
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
@@ -3001,7 +3028,7 @@ export function NewMakerDraftRoute() {
           // autoNameSession 对位:先立即用目标文案截断占位(Codex 式,侧边栏不停留在
           // 'New Maker'),再经隧道生成智能标题窄口径覆盖。fire-and-forget;
           // 覆盖前 re-read,仅在标题仍是占位/默认时落盘(用户手动改名 wins)。
-          const titleAgentKind = persistedAgentKind === 'codex' ? 'codex' : 'claude-code';
+          const titleAgentKind = persistedAgentKind === 'cc' ? 'claude-code' : persistedAgentKind;
           // 先折叠空白并 trim 再截断,避免前导空白吃满 40 字符得到空占位(PR #296 review)。
           const placeholderTitle = objective.replace(/\s+/g, ' ').trim().slice(0, 40).trimEnd();
           void (async () => {
@@ -3439,8 +3466,6 @@ export function NewMakerDraftRoute() {
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"
                     compactToolbar
-                    // denseToolbar 去除(2026-07-22):hero 输入框够宽,协同 toggle 应显示「协同」文字
-                    // 与会话内主视图一致;窄窗口仍由 autoDenseToolbar 自动收成 icon-only。
                     placeholder="Hi Cindy!"
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
@@ -3460,25 +3485,22 @@ export function NewMakerDraftRoute() {
                     onEffortDidChange={handleEffortDidChange}
                     onPermissionModeDidChange={handlePermissionModeDidChange}
                     onProviderDidChange={handleProviderDidChange}
-                    vendorKey={draft.vendor === 'codex' ? 'codex' : 'cc'}
+                    vendorKey={normalizeDbAgentKind(draft.vendor)}
                     folderPickerOpen={folderPickerOpen}
                     onFolderPickerOpenChange={handleFolderPickerOpenChange}
                     showFolderPicker={false}
                     middleToolbarSlot={
-                      <VendorSegmentedSwitcher
+                      <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={150}
-                        dense
                         visualVariant="create-agent"
                         className="shrink-0"
                         disabled={wtCreating}
+                        hiddenVendors={hiddenSwitcherVendors}
                       />
                     }
-                    // 协同 toggle(与对话界面同一控件):本地 / SSH 远端 / device-link 项目 draft
-                    // 均可用 —— eligible 由 resolveCollabEntryPolicy 单点判定,与会话视图同一份
-                    // (issue #1170:两处各写一份判据造成入口前后不一致)。仍然不支持的只有对话
-                    // 模式(无 workingDir)。Lead = 当前
+                    // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
+                    // resolveCollabEntryPolicy 单点判定,与会话视图同一份(issue #1170)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。
@@ -3521,15 +3543,14 @@ export function NewMakerDraftRoute() {
                         : undefined
                     }
                     compactMiddleToolbarSlot={
-                      <VendorSegmentedSwitcher
+                      <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={72}
-                        dense
                         iconOnly
                         visualVariant="create-agent"
                         className="shrink-0"
                         disabled={wtCreating}
+                        hiddenVendors={hiddenSwitcherVendors}
                       />
                     }
                     narrowToolbar={isDraftToolbarNarrow}
@@ -3689,7 +3710,7 @@ export function NewMakerDraftRoute() {
           onCreate={(form: CreateWorkerForm) => {
             patchCollab({
               enabled: true,
-              worker: form.agent === 'codex' ? 'codex' : 'cc',
+              worker: form.agent === 'codex' ? 'codex' : form.agent === 'pi' ? 'pi' : 'cc',
               workerConfig: {
                 role: form.role,
                 model: form.model,
@@ -3716,6 +3737,9 @@ export function NewMakerDraftRoute() {
           open={addRemoteProjectOpen}
           onOpenChange={setAddRemoteProjectOpen}
           initialDeviceId={addRemoteProjectDeviceId}
+          // 选中 Pi 时 dialog 过滤掉 SSH 主机(Pi 不支持 remoteHostId);handleRemoteProjectAdded
+          // 里还有一道 fail-closed 兜底,防非 UI 路径漏进 Pi+SSH。
+          agentVendor={draft.vendor}
           onProjectAdded={handleRemoteProjectAdded}
         />
       </div>

@@ -13,9 +13,12 @@ import { WebSocketServer, type WebSocket as ServerSocket } from 'ws';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  HOOK_FEATURE_GROUP_RELAY,
+  HOOK_FEATURE_GROUP_RELAY_RECIPIENT,
   HOOK_FEATURE_LIFECYCLE_ANNOUNCEMENT,
   HOOK_FEATURE_MULTI_TEAM,
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_SESSION_PICKER,
@@ -26,6 +29,7 @@ import {
   makePrefsState,
   makeProviderBindState,
   makeProviderBindUpdate,
+  makeProviderBehaviorState,
   makeProviderPrefsState,
   makeQueryRequest,
   makeTaskDispatch,
@@ -34,6 +38,7 @@ import {
   parseHookMessage,
   serializeHookMessage,
   type HookMessage,
+  type GroupMessagePayload,
   type ProviderBindStatusPayload,
 } from '@cindy/slack-hook-protocol';
 
@@ -44,13 +49,10 @@ import {
   HookPrefsTimeoutError,
   providerForExternalKey,
   providerForTaskDispatch,
+  telegramGroupMessageOwner,
   type HookControlManagerDeps,
 } from '../manager';
-import {
-  computeBackoffDelayMs,
-  createHookTransport,
-  type HookTransportOpts,
-} from '../transport';
+import { computeBackoffDelayMs, createHookTransport, type HookTransportOpts } from '../transport';
 import type { SlackHookStore, SlackHookConfigState } from '../store';
 
 const noopLog = { info: () => {}, warn: () => {} };
@@ -1437,6 +1439,7 @@ describe('hook-control transport + manager(真实 ws server)', () => {
 
 const TELEGRAM_FEATURES = [
   HOOK_FEATURE_PROVIDER_BIND,
+  HOOK_FEATURE_PROVIDER_BEHAVIOR,
   HOOK_FEATURE_PROVIDER_PREFS,
   HOOK_FEATURE_PROVIDER_TELEGRAM,
   HOOK_FEATURE_SESSION_PICKER,
@@ -1505,6 +1508,112 @@ describe('Telegram provider capability, binding and prefs', () => {
       'open_provider',
       'add_to_group',
     ]);
+  });
+
+  it('迟到的旧 principal 群派发在读取本地群历史前被拒绝', async () => {
+    const { wss, url } = await startServer();
+    const handleDispatch = vi.fn();
+    const dispatcher = {
+      handleDispatch,
+      onConnected: vi.fn(),
+      onDisconnected: vi.fn(),
+      cancel: vi.fn(),
+      handleSessionArchive: vi.fn(),
+      handleInteractionDecision: vi.fn(),
+      activateAccount: vi.fn(),
+      deactivateAccount: vi.fn(async () => undefined),
+      dispose: vi.fn(),
+    } as NonNullable<HookControlManagerDeps['dispatcher']>;
+    const manager = makeManager(memoryStore({ url, enabled: false, telegramEnabled: true }), {
+      dispatcher,
+    });
+    cleanups.push(() => manager.dispose());
+
+    const connPromise = once(wss, 'connection') as Promise<[ServerSocket]>;
+    manager.sync();
+    const [sock] = await connPromise;
+    const server = collectFrames(sock);
+    await server.waitFor('hello');
+    sock.send(
+      serializeHookMessage(
+        makeWelcome({
+          serverName: 'telegram-server',
+          features: [...TELEGRAM_FEATURES, HOOK_FEATURE_GROUP_RELAY],
+        }),
+      ),
+    );
+    sock.send(serializeHookMessage(makeProviderBindState(TELEGRAM_CONFIRMED)));
+    await expect
+      .poll(() => manager.snapshot().telegram.binding?.state, { timeout: 3000 })
+      .toBe('confirmed');
+
+    sock.send(
+      serializeHookMessage(
+        makeTaskDispatch({
+          requestId: 'stale-principal-group-task',
+          externalKey: 'telegram:group:bot-1:-900:42:old-principal:g1',
+          workspace: 'chat',
+          prompt: 'must not read old principal history',
+          source: { im: 'telegram' },
+        }),
+      ),
+    );
+    const rejected = await server.waitFor('task.ack');
+    expect(rejected.type === 'task.ack' ? rejected.payload : null).toMatchObject({
+      requestId: 'stale-principal-group-task',
+      result: 'rejected',
+      reason: 'invalid',
+    });
+    expect(handleDispatch).not.toHaveBeenCalled();
+
+    sock.send(
+      serializeHookMessage(
+        makeTaskDispatch({
+          requestId: 'current-principal-group-task',
+          externalKey: 'telegram:group:bot-1:-900:42:telegram-user-1:g1',
+          workspace: 'chat',
+          prompt: 'current principal may dispatch',
+          source: { im: 'telegram' },
+        }),
+      ),
+    );
+    await expect.poll(() => handleDispatch).toHaveBeenCalledOnce();
+  });
+
+  it('group.message 只接受与当前 Telegram binding 代际一致的 recipient', () => {
+    const frame: GroupMessagePayload = {
+      provider: 'telegram',
+      recipient: { bindingId: 'binding-telegram-1', principalId: 'telegram-user-1' },
+      chatId: '-900',
+      threadId: null,
+      messageId: '1',
+      chatName: 'Ops',
+      author: { name: 'Alice', id: '101' },
+      text: 'hello',
+      sentAt: 1,
+    };
+    const binding = {
+      ...TELEGRAM_CONFIRMED,
+      remediationUrl: null,
+    };
+
+    expect(telegramGroupMessageOwner(frame, binding, true)).toBe('telegram-user-1');
+    expect(
+      telegramGroupMessageOwner(
+        { ...frame, recipient: { ...frame.recipient!, bindingId: 'binding-old' } },
+        binding,
+        true,
+      ),
+    ).toBeNull();
+    expect(
+      telegramGroupMessageOwner(
+        { ...frame, recipient: { ...frame.recipient!, principalId: 'old-principal' } },
+        binding,
+        true,
+      ),
+    ).toBeNull();
+    expect(telegramGroupMessageOwner({ ...frame, recipient: undefined }, binding, true)).toBeNull();
+    expect(telegramGroupMessageOwner(frame, binding, false)).toBeNull();
   });
 
   it('显式开启会等待服务端权威状态，缓存误报 confirmed 时仍自动发起绑定', async () => {
@@ -2442,10 +2551,12 @@ describe('Telegram provider capability, binding and prefs', () => {
     const { wss, url } = await startServer();
     const store = memoryStore({ url, enabled: false, telegramEnabled: true });
     const notified: unknown[] = [];
+    const behaviorNotified: unknown[] = [];
     const opened: string[] = [];
     let rejectOpen = false;
     const manager = makeManager(store, {
       notifyProviderPrefs: (view) => notified.push(view),
+      notifyTelegramBehavior: (view) => behaviorNotified.push(view),
       openTelegramUrl: async (value) => {
         if (rejectOpen) throw new Error('no system URL handler');
         opened.push(value);
@@ -2457,7 +2568,10 @@ describe('Telegram provider capability, binding and prefs', () => {
     manager.sync();
     const [sock] = await connPromise;
     const server = collectFrames(sock);
-    await server.waitFor('hello');
+    const hello = await server.waitFor('hello');
+    expect(hello.type === 'hello' ? hello.payload.features : []).toContain(
+      HOOK_FEATURE_PROVIDER_BEHAVIOR,
+    );
     sock.send(
       serializeHookMessage(
         makeWelcome({ serverName: 'telegram-server', features: TELEGRAM_FEATURES }),
@@ -2490,7 +2604,9 @@ describe('Telegram provider capability, binding and prefs', () => {
       'https://t.me/cindy_example_bot?startgroup=true',
     ]);
     rejectOpen = true;
-    await expect(manager.openProviderAction('telegram', 'provider')).rejects.toThrow('no system URL handler');
+    await expect(manager.openProviderAction('telegram', 'provider')).rejects.toThrow(
+      'no system URL handler',
+    );
 
     const prefs = {
       provider: 'telegram' as const,
@@ -2540,6 +2656,71 @@ describe('Telegram provider capability, binding and prefs', () => {
     );
     await expect(writePromise).resolves.toEqual(prefs);
     expect(notified).toEqual([prefs, prefs]);
+
+    const behavior = {
+      provider: 'telegram' as const,
+      bindingId: 'binding-telegram-1',
+      bound: true,
+      emojiReactions: 'minimal' as const,
+      replyQuoteDm: 'off' as const,
+      replyQuoteGroup: 'first' as const,
+      groupActivation: { '-1001': 'always' as const },
+    };
+    await expect(manager.getTelegramBehavior('stale-binding')).rejects.toBeInstanceOf(
+      HookNotConnectedError,
+    );
+    expect(server.frames.some((frame) => frame.type === 'provider.behavior.get')).toBe(false);
+
+    const behaviorRead = manager.getTelegramBehavior('binding-telegram-1');
+    const behaviorGet = await server.waitFor('provider.behavior.get');
+    if (behaviorGet.type !== 'provider.behavior.get') throw new Error('unreachable');
+    sock.send(
+      serializeHookMessage(
+        makeProviderBehaviorState({ ...behavior, replyTo: behaviorGet.payload.requestId }),
+      ),
+    );
+    await expect(behaviorRead).resolves.toEqual({
+      bindingId: 'binding-telegram-1',
+      bound: true,
+      emojiReactions: 'minimal',
+      replyQuoteDm: 'off',
+      replyQuoteGroup: 'first',
+      groupActivation: { '-1001': 'always' },
+    });
+
+    const behaviorWrite = manager.setTelegramBehavior('binding-telegram-1', {
+      emojiReactions: 'expressive',
+      replyQuoteGroup: 'all',
+    });
+    const behaviorSet = await server.waitFor('provider.behavior.set');
+    if (behaviorSet.type !== 'provider.behavior.set') throw new Error('unreachable');
+    expect(behaviorSet.payload).toMatchObject({
+      bindingId: 'binding-telegram-1',
+      emojiReactions: 'expressive',
+      replyQuoteGroup: 'all',
+    });
+    expect('replyQuoteDm' in behaviorSet.payload).toBe(false);
+    sock.send(
+      serializeHookMessage(
+        makeProviderBehaviorState({ ...behavior, replyTo: behaviorSet.payload.requestId }),
+      ),
+    );
+    await expect(behaviorWrite).resolves.toMatchObject({ bindingId: 'binding-telegram-1' });
+
+    const groupWrite = manager.setTelegramGroupActivation('binding-telegram-1', '-1002', 'mention');
+    await expect
+      .poll(() => server.frames.filter((frame) => frame.type === 'provider.behavior.set').length)
+      .toBe(2);
+    const groupSet = server.frames.filter((frame) => frame.type === 'provider.behavior.set').at(-1);
+    if (!groupSet || groupSet.type !== 'provider.behavior.set') throw new Error('unreachable');
+    expect(groupSet.payload.groupActivation).toEqual({ chatId: '-1002', value: null });
+    sock.send(
+      serializeHookMessage(
+        makeProviderBehaviorState({ ...behavior, replyTo: groupSet.payload.requestId }),
+      ),
+    );
+    await expect(groupWrite).resolves.toMatchObject({ bindingId: 'binding-telegram-1' });
+    expect(behaviorNotified).toHaveLength(3);
 
     expect(manager.providerBindRevoke('telegram')).toBe(true);
     await expect

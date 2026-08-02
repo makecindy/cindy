@@ -6,6 +6,7 @@ import type {
   AgentInputSendResult,
 } from '../agent-input-coordinator.js';
 import type {
+  AgentInputCreateOpts,
   AgentInputProjection,
   AgentInputQueuedMessage,
 } from '../../../shared/agentInputQueue.js';
@@ -155,7 +156,7 @@ function createHarness() {
   let running = false;
   let turnGeneration = 0;
   let pendingInteraction = false;
-  let agentKind: 'claude-code' | 'codex' | null = 'claude-code';
+  let agentKind: AgentInputCreateOpts['agentKind'] | null = 'claude-code';
   const projections: AgentInputProjection[] = [];
 
   const sendToAgent = vi.fn<AgentInputCoordinatorDeps['sendToAgent']>(async (sessionId, _message, _createOpts, sendOpts) => {
@@ -214,6 +215,9 @@ function createHarness() {
   >();
   const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
+  const onDiscardedQueuedMessage = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
+  >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -223,6 +227,7 @@ function createHarness() {
     abortSession,
     onUiRetry,
     onUserEnqueue,
+    onDiscardedQueuedMessage,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -276,6 +281,7 @@ function createHarness() {
     projections,
     onUiRetry,
     onUserEnqueue,
+    onDiscardedQueuedMessage,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -286,7 +292,7 @@ function createHarness() {
     setPendingInteraction(value: boolean) {
       pendingInteraction = value;
     },
-    setAgentKind(value: 'claude-code' | 'codex' | null) {
+    setAgentKind(value: AgentInputCreateOpts['agentKind'] | null) {
       agentKind = value;
     },
     setHasPendingCredentialSwitch(fn: (() => boolean) | null) {
@@ -498,6 +504,32 @@ describe('AgentInputCoordinator trusted session reference snapshots', () => {
     expect(h.resolveSessionReferences).toHaveBeenCalledTimes(1);
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
     expect(latestProjection(h.projections).error).toBeNull();
+  });
+
+  it('sends a foreign session link as ordinary Agent text when history enrichment fails', async () => {
+    const h = createHarness();
+    h.resolveSessionReferences.mockRejectedValueOnce(new Error('session belongs to another account'));
+    const text = 'inspect cindy://session/foreign-session';
+
+    h.coordinator.enqueue('target-session', makeItem('quoted-foreign', text, {
+      sessionRefs: [{ sessionId: 'foreign-session' }],
+    }));
+    await flush();
+
+    expect(h.resolveSessionReferences).toHaveBeenCalledWith([
+      { sessionId: 'foreign-session' },
+    ]);
+    expect(h.sendToAgent).toHaveBeenCalledWith(
+      'target-session',
+      { type: 'user', content: text },
+      expect.anything(),
+      expect.anything(),
+    );
+    expect(latestProjection(h.projections).error).toBeNull();
+    expect(mocks.logger.warn).toHaveBeenCalledWith(
+      'session reference enrichment skipped',
+      expect.objectContaining({ referenceCount: 1 }),
+    );
   });
 
   it('clears a stale trusted snapshot on a full-content rewrite without refs', () => {
@@ -1575,6 +1607,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.sendToAgent.mock.calls[0]?.[3].persistUserMessage).toBeUndefined();
     expect(mocks.createMessage).not.toHaveBeenCalled();
     expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
   });
 
   it('blocks queued turns while silent compact is active until Done', async () => {
@@ -2066,7 +2099,7 @@ describe('AgentInputCoordinator send transaction', () => {
     // 重发的是原文, 文本上与普通用户消息无异 —— 所以「用户显式重试」只能靠这个
     // 回调传出去。hook 侧的渠道回流(turn.reopen)依赖它: 零产出失败恰是上游过载
     // 最典型的形态, 也最需要把结果接回渠道那条消息。
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
@@ -2222,7 +2255,7 @@ describe('AgentInputCoordinator send transaction', () => {
       expect(h.onUiRetry).not.toHaveBeenCalled();
       await h.coordinator.retryLastError(sid);
       await flush();
-      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
       expect(h.onUiRetry).toHaveBeenCalledTimes(1);
     }
   });
@@ -2246,7 +2279,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String));
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
   });
 
@@ -2259,6 +2292,7 @@ describe('AgentInputCoordinator send transaction', () => {
     h.coordinator.enqueue(sid, makeItem('q-continue', CONTINUE_AFTER_APP_EXIT_PROMPT));
     await flush();
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, 'q-continue', 'manual');
 
     // 普通消息照常上报。
     h.coordinator.enqueue(sid, makeItem('q-normal', '顺手问个别的'));
@@ -3740,6 +3774,7 @@ describe('AgentInputCoordinator stop and drain boundaries', () => {
   it.each([
     { agentKind: 'claude-code' as const, providerId: 'xd', model: 'claude-opus-5' },
     { agentKind: 'codex' as const, providerId: 'xd', model: 'gpt-5.5' },
+    { agentKind: 'pi' as const, providerId: 'openai', model: 'gpt-5.5' },
   ])('retries abort reconciliation after $agentKind abort settles before the live turn is idle', async ({
     agentKind,
     providerId,
@@ -4640,6 +4675,7 @@ describe('AgentInputCoordinator steer transaction', () => {
       item.createOpts,
       expect.objectContaining({ throwOnStartFailure: true }),
     );
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
     expect(mocks.touchUserSendInDb).toHaveBeenCalledWith(sid, undefined);
   });
 
@@ -6459,29 +6495,119 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
   it('通知 host 时带上 message 与结构化信号', async () => {
     const h = createHarness();
     const sid = 'resumable-error-signals';
-    await failAfterDispatch(h, sid);
+    const item = makeItem('q-first', 'original long task');
+    await failAfterDispatch(h, sid, item);
 
     expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
     expect(h.onResumableTurnError).toHaveBeenCalledTimes(1);
     expect(h.onResumableTurnError.mock.calls[0]).toEqual([
       sid,
       { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: item.clientId }),
     ]);
   });
 
-  it('scheduler 来源的失败不通知(没有 recovery 就没有可续跑的目标)', async () => {
+  it('scheduler 来源复用同一套自动续跑并保留 run origin', async () => {
     const h = createHarness();
     const sid = 'resumable-error-scheduler';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const item = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
     await failAfterDispatch(
       h,
       sid,
-      makeItem('q-sched', 'heartbeat', {
-        origin: { kind: 'scheduler', scheduleId: 'sch-1', scheduleName: '任务 1' },
-      }),
+      item,
     );
 
-    expect(latestProjection(h.projections).recovery).toBeNull();
-    expect(h.onResumableTurnError).not.toHaveBeenCalled();
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+    expect(h.onResumableTurnError).toHaveBeenCalledWith(
+      sid,
+      { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: 'q-sched', origin: item.origin }),
+    );
+
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.origin).toEqual(item.origin);
+  });
+
+  it('用户接管会撤销已经离队但尚未派发的 scheduler 自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'cancel-pre-vendor-scheduler-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const schedulerItem = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
+    await failAfterDispatch(h, sid, schedulerItem);
+
+    // 自动 Continue 已离队成为 activeTurn，但仍卡在 user row 持久化；此时
+    // maker-core 已建立 reservation，vendor dispatch 仍未发生。
+    const persistGate = deferred<Record<string, never>>();
+    mocks.createMessage.mockImplementationOnce(() => persistGate.promise);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
+
+    const userItem = makeItem('q-user', 'take over');
+    h.coordinator.enqueue(sid, userItem);
+
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({
+        autoResume: true,
+        origin: schedulerItem.origin,
+      }),
+    );
+    expect(h.onUserEnqueue).toHaveBeenCalledWith(sid);
+
+    persistGate.resolve({});
+    await vi.waitFor(() => expect(h.sendToAgent).toHaveBeenCalledTimes(3));
+    expect(h.sendToAgent.mock.calls[2]?.[1]).toEqual({ type: 'user', content: 'take over' });
+  });
+
+  it('host 放弃接管会撤销仍在队列中的 scheduler 自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'abandon-queued-scheduler-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    const schedulerItem = makeItem('q-sched', 'heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    });
+    await failAfterDispatch(h, sid, schedulerItem);
+
+    // 模拟另一个 turn 占用会话：自动 Continue 已入队，但尚未离队派发。
+    h.setRunning(true);
+    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await flush();
+    expect(latestProjection(h.projections).pendingQueue).toEqual([
+      expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
+    ]);
+
+    h.coordinator.abandonAutoResume(sid);
+
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
+    );
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
 
   it('外部发起的 turn(无 active turn)失败不通知', async () => {
@@ -6520,7 +6646,35 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.onResumableTurnError.mock.calls[0]).toEqual([
       sid,
       { sdkError: 'server_error', message: truncationMessage },
+      expect.objectContaining({ clientId: 'q-first' }),
     ]);
+  });
+
+  it('scheduler 入队只排队，不冒充用户介入取消当前自动续跑', async () => {
+    const h = createHarness();
+    const sid = 'scheduler-does-not-cancel-auto-resume';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    await failAfterDispatch(h, sid);
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+    const userInterventionsBefore = h.onUserEnqueue.mock.calls.length;
+
+    h.coordinator.enqueue(
+      sid,
+      makeItem('q-sched-next', 'next heartbeat', {
+        origin: {
+          kind: 'scheduler',
+          scheduleId: 'sch-2',
+          scheduleName: '任务 2',
+          runId: 'run-2',
+        },
+      }),
+    );
+
+    expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
+    expect(h.onUserEnqueue).toHaveBeenCalledTimes(userInterventionsBefore);
+    expect(latestProjection(h.projections).pendingQueue.map((queued) => queued.clientId)).toContain(
+      'q-sched-next',
+    );
   });
 
   it('autoRetryLastError 在有产出时补发带 autoResume 的续跑指令', async () => {
@@ -6542,6 +6696,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     // autoResume 必须透到落库参数:renderer 靠它隐藏气泡,host 靠它跳过额度充值。
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'auto');
     // 自动补发不冒充人类动作(userSendAt 是「人最近发过消息」的语义)。
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });

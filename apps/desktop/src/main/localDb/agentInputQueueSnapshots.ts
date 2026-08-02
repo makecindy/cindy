@@ -124,7 +124,7 @@ export async function loadAllQueueSnapshotPayloads(): Promise<string[]> {
   return rows.map((r) => r.payload);
 }
 
-function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {
+export function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMessage {
   if (!value || typeof value !== 'object') return false;
   const msg = value as AgentInputQueuedMessage;
   return (
@@ -133,7 +133,9 @@ function isRestorableQueuedMessage(value: unknown): value is AgentInputQueuedMes
     typeof msg.persistedContent === 'string' &&
     !!msg.chatMessage && typeof msg.chatMessage === 'object' &&
     !!msg.createOpts && typeof msg.createOpts === 'object' &&
-    (msg.createOpts.agentKind === 'claude-code' || msg.createOpts.agentKind === 'codex')
+    (msg.createOpts.agentKind === 'claude-code' ||
+      msg.createOpts.agentKind === 'codex' ||
+      msg.createOpts.agentKind === 'pi')
   );
 }
 

@@ -441,6 +441,30 @@ export function classifyFailure({ stage, exitCode, output }) {
 	return "COMMAND_FAILED";
 }
 
+function undersizedVitestShardArgs(commandSpec, selectedFiles) {
+	if (commandSpec.type !== "packageBin" || commandSpec.bin !== "vitest")
+		return [];
+	const shardArg = (commandSpec.args ?? []).find((arg) =>
+		arg.startsWith("--shard="),
+	);
+	const match = /^--shard=(\d+)\/(\d+)$/.exec(shardArg ?? "");
+	if (!match) return [];
+	const index = Number(match[1]);
+	const count = Number(match[2]);
+	if (
+		!Number.isSafeInteger(index) ||
+		!Number.isSafeInteger(count) ||
+		index < 1 ||
+		count < 1 ||
+		index > count
+	)
+		return [];
+
+	// Vitest rejects every shard when there are fewer files than shards, before
+	// it assigns the files. Limit the compatibility flag to that known case.
+	return selectedFiles.length < count ? ["--passWithNoTests"] : [];
+}
+
 export function buildPnpmArgs(
 	root,
 	workspace,
@@ -470,6 +494,7 @@ export function buildPnpmArgs(
 			"exec",
 			commandSpec.bin,
 			...(commandSpec.args ?? []),
+			...undersizedVitestShardArgs(commandSpec, selectedFiles),
 			...selectedArgs,
 		];
 		for (const pattern of tierConfig.exclude ?? []) {

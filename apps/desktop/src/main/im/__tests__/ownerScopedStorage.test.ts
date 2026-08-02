@@ -26,7 +26,11 @@ vi.mock('electron', () => ({
   safeStorage: {
     isEncryptionAvailable: () => true,
     encryptString: (value: string) => Buffer.from(`encrypted:${value}`, 'utf-8'),
-    decryptString: (value: Buffer) => value.toString('utf-8').replace(/^encrypted:/, ''),
+    decryptString: (value: Buffer) => {
+      const raw = value.toString('utf-8');
+      if (raw === 'corrupt') throw new Error('cannot decrypt');
+      return raw.replace(/^encrypted:/, '');
+    },
   },
 }));
 
@@ -101,6 +105,26 @@ describe('IM owner-scoped storage', () => {
     expect(JSON.parse(fs.readFileSync(__testing.legacyOwnerMarkerPath(), 'utf-8'))).toEqual({
       ownerKey: 'key-cloud-a',
     });
+  });
+
+  it('readResult distinguishes missing secrets from I/O or decryption failures', () => {
+    setSession('local', 'local-v1');
+    expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({
+      kind: 'missing',
+    });
+
+    expect(ownerScopedImSecrets.write('telegram-bot-offline', '1')).toBe(true);
+    expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({
+      kind: 'value',
+      value: '1',
+    });
+
+    const target = __testing.scopedSecretPath('telegram-bot-offline');
+    expect(target).not.toBeNull();
+    fs.writeFileSync(target!, Buffer.from('corrupt').toString('base64'), 'utf-8');
+    expect(ownerScopedImSecrets.readResult?.('telegram-bot-offline')).toEqual({ kind: 'error' });
+    // 旧 read 契约保持兼容：调用方若不需要区分，错误仍折叠为 null。
+    expect(ownerScopedImSecrets.read('telegram-bot-offline')).toBeNull();
   });
 
   it('claims legacy working directories only for a verified cloud owner', () => {

@@ -38,6 +38,8 @@ export interface AutoResumeBookkeepingDeps {
   rollbackGuardPendingResume: (sessionId: string) => void;
   /** 清 coordinator 的接管态；带 message 时把红横幅回落出来。 */
   abandonTakeover: (sessionId: string, message?: string) => void;
+  /** 已接管的自动续跑最终没能继续；Schedule runner 用它结束同一个逻辑 run。 */
+  onAutoResumeFailed?: (sessionId: string) => void;
   log?: (message: string, fields?: Record<string, unknown>) => void;
 }
 
@@ -124,6 +126,7 @@ export class AutoResumeBookkeeping {
     this.suppressedErrors.delete(sessionId);
     if (suppressed) this.deps.persistSuppressedError(sessionId, suppressed);
     this.deps.abandonTakeover(sessionId, opts.surfaceBanner ? suppressed?.message : undefined);
+    this.deps.onAutoResumeFailed?.(sessionId);
   }
 
   // ── 待确认的重连记录 ───────────────────────────────────────────────────────
@@ -230,5 +233,6 @@ export class AutoResumeBookkeeping {
     // 不带 message：只清接管态，不弹横幅（会话已经被用户终止，再弹一条只是打扰）。
     this.deps.abandonTakeover(sessionId);
     this.settleOutcome(sessionId, 'failed');
+    this.deps.onAutoResumeFailed?.(sessionId);
   }
 }

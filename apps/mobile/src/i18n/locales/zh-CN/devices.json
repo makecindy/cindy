@@ -249,6 +249,7 @@
       },
       "useWorktree": "使用 worktree",
       "modelPlaceholderBound": "跟随任务",
+      "modelPlaceholderPiDefault": "留空使用默认模型",
       "fastMode": "Fast 模式",
       "notifyDesktop": "桌面通知",
       "notifyFeishu": "飞书通知",

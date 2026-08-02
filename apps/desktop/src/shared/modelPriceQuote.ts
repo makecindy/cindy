@@ -1,4 +1,3 @@
-import type { CindyRegion } from '@cindy/maker-shared/brand-identity';
 import {
   resolveModelReferencePrice,
   type AgentKind,
@@ -7,7 +6,6 @@ import {
 
 import type { ModelAccessGatewayModel } from './modelAccess.js';
 import {
-  gatewayCurrencyForRegion,
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type MoneyCurrency,
@@ -79,21 +77,22 @@ function gatewayInputTokenPriceBands(
   return thresholdBands.length > 0 ? thresholdBands : undefined;
 }
 
-/** Gateway 原生币种优先；旧服务端未声明时才按构建 region 回退。 */
 /** 该条目是否会产生报价(与币种无关;目录币种裁决与覆盖率统计共用此判定)。 */
 export function isPricedGatewayModel(model: ModelAccessGatewayModel): boolean {
-  // 币种不影响“是否有价格”的判断，这里显式传值，避免计费 API 隐式回落 Global。
-  return gatewayModelPriceQuote(model, 'global') !== undefined;
+  // 币种不影响“是否有价格”的判断，随便传一个具体币种即可。
+  return gatewayModelPriceQuote(model, 'USD') !== undefined;
 }
 
 /**
  * @param fallbackCurrency 该模型未声明 currency 时的回落币种。调用方(gatewayPricingCatalog)
- *   会传同一目录里已声明的币种，让整份目录保持单一币种；缺省才按区域回落。
+ *   先传同一目录里已声明的币种，让整份目录保持单一币种；整份都没声明时才传账本币种。
+ * @param fallbackIsInferred fallbackCurrency 本身是否是猜出来的。为 true 时产出的报价带
+ *   currencyInferred 标记，让下游金额降级成估算而不是冒充精确账单。
  */
 export function gatewayModelPriceQuote(
   model: ModelAccessGatewayModel,
-  region: CindyRegion,
-  fallbackCurrency?: MoneyCurrency,
+  fallbackCurrency: MoneyCurrency,
+  fallbackIsInferred = false,
 ): ModelPriceQuote | undefined {
   const modelId = model.id.trim();
   const inputPerMtok = perMtok(model.inputCostPerToken);
@@ -115,10 +114,11 @@ export function gatewayModelPriceQuote(
   // costDiscount 带入计费计算，CatalogModel.cost 继续承载折后展示价。
   const costDiscount = normalizedCostDiscount(model.costDiscount);
   const inputTokenPriceBands = gatewayInputTokenPriceBands(model);
+  const declaredCurrency = model.currency;
   return {
     providerId: 'xd',
     modelId,
-    currency: model.currency ?? fallbackCurrency ?? gatewayCurrencyForRegion(region),
+    currency: declaredCurrency ?? fallbackCurrency,
     source: 'gateway',
     approximate: false,
     inputPerMtok,
@@ -127,12 +127,19 @@ export function gatewayModelPriceQuote(
     ...(cacheCreatePerMtok !== undefined ? { cacheCreatePerMtok } : {}),
     ...(inputTokenPriceBands ? { inputTokenPriceBands } : {}),
     ...(costDiscount !== undefined ? { costDiscount } : {}),
+    ...(!declaredCurrency && fallbackIsInferred ? { currencyInferred: true } : {}),
   };
 }
 
+/**
+ * @param ledgerCurrency 整份目录都没声明币种时的回落值。传本账号的账本币种（见
+ *   main/usage/ledgerCurrency），**不要**传按区域推出来的值：服务端漏发 currency 时
+ *   按区域猜会把 USD 口径的报价数值盖上 CNY 戳，产生 6.7 倍量级的错账。这种回落出来的
+ *   报价一律带 currencyInferred 标记。
+ */
 export function gatewayPricingCatalog(
   models: readonly ModelAccessGatewayModel[],
-  region: CindyRegion,
+  ledgerCurrency: MoneyCurrency,
 ): ModelPricingCatalog {
   // 整份目录必须是单一币种。
   //
@@ -149,10 +156,11 @@ export function gatewayPricingCatalog(
       .filter((currency): currency is MoneyCurrency => currency === 'CNY' || currency === 'USD'),
   );
   if (declared.size > 1) return {};
-  const fallbackCurrency = declared.values().next().value ?? gatewayCurrencyForRegion(region);
+  const declaredCurrency = declared.values().next().value;
+  const fallbackCurrency = declaredCurrency ?? ledgerCurrency;
   const xd: Record<string, ModelPriceQuote> = {};
   for (const model of models) {
-    const quote = gatewayModelPriceQuote(model, region, fallbackCurrency);
+    const quote = gatewayModelPriceQuote(model, fallbackCurrency, declaredCurrency === undefined);
     if (quote) xd[quote.modelId] = quote;
   }
   return Object.keys(xd).length > 0 ? { xd } : {};
@@ -198,7 +206,12 @@ export function providerReferencePriceQuote(
     variant?: 'standard' | 'priority' | 'batch' | 'fast';
   } = {},
 ): ModelPriceQuote | undefined {
-  const resolved = resolveModelReferencePrice(registry, providerId, modelId, options);
+  // 参考价 registry 的 agent 维度只有 claude-code / codex;Pi(动态 BYOM,按 provider/模型
+  // 路由)在此按 agent 无关的参考价解析 —— pi 一律降级为 undefined 传给协议函数。
+  const resolved = resolveModelReferencePrice(registry, providerId, modelId, {
+    ...options,
+    agent: options.agent === 'pi' ? undefined : options.agent,
+  });
   if (!resolved) return undefined;
   const day = referencePriceCalendarDate(options.at);
   const variant = options.variant ?? 'standard';

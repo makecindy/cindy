@@ -53,11 +53,16 @@ function serializeUntrustedPayload(value: unknown): string {
  */
 export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): string {
   assertReviewableActionSize(request.action);
+  // workspaceRoots 位置语义(与 maker-core reviewAction 同契约):首元素是唯一可写的
+  // 工作目录,其余是只读引用目录(additionalDirectories)。prompt 必须保留这一区分,
+  // 否则「workspace edits 倾向 allow」会把写只读引用目录的灰区命令一并放行。
+  const [workspaceRoot, ...referenceRoots] = request.workspaceRoots;
   const payload = {
     userIntent: compactText(request.userIntent, MAX_USER_INTENT_CHARS),
     action: request.action,
-    workspaceRoots: request.workspaceRoots
-      .slice(0, MAX_WORKSPACE_ROOTS)
+    workspaceRoot: compactText(workspaceRoot ?? '', MAX_WORKSPACE_ROOT_CHARS),
+    readOnlyReferenceRoots: referenceRoots
+      .slice(0, MAX_WORKSPACE_ROOTS - 1)
       .map((root) => compactText(root, MAX_WORKSPACE_ROOT_CHARS)),
     platform: request.platform,
   };
@@ -70,10 +75,11 @@ export function buildAutoPermissionReviewPrompt(request: AutoReviewRequest): str
     '{"verdict":"allow|block|ask","reason":"short reason"}',
     '',
     'Decision policy:',
-    '- allow: routine, reversible development work aligned with the current user intent, especially normal reads, tests, lint, builds, package commands, workspace edits, ordinary HTTP fetches, and normal git operations.',
+    '- allow: routine, reversible development work aligned with the current user intent, especially normal reads, tests, lint, builds, package commands, edits inside workspaceRoot, ordinary HTTP fetches, and normal git operations.',
     '- block: the action is ambiguous or risky but the agent can choose a safer alternative. Blocking is silent to the user; give the main agent a useful short reason.',
     '- ask: only a genuinely high-impact consent boundary: credentials or data exfiltration, privilege/system-security changes, broad irreversible destruction, production deployment/IAM/financial action, external communication with real-world effect, or force-pushing a protected branch.',
-    '- Prefer allow over block for ordinary workspace-scoped coding. Prefer block over ask whenever a safer retry can avoid interrupting the user.',
+    '- readOnlyReferenceRoots are read-only reference context: reading them is routine, but never allow an action that writes, deletes, or modifies anything inside them — block it so the agent keeps its changes inside workspaceRoot.',
+    '- Prefer allow over block for ordinary coding scoped to workspaceRoot. Prefer block over ask whenever a safer retry can avoid interrupting the user.',
     '',
     '<review_input>',
     serializeUntrustedPayload(payload),

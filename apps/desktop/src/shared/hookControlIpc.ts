@@ -65,6 +65,14 @@ export const HOOK_CONTROL_INVOKE = {
   PROVIDER_PREFS_GET: 'maker:hook-control:provider-prefs-get',
   /** 更新 provider-neutral(Telegram / X)独立的 workspace 偏好。 */
   PROVIDER_PREFS_SET: 'maker:hook-control:provider-prefs-set',
+  /** 读取官方 Telegram bot 的回应、引用与群激活设置。 */
+  TELEGRAM_BEHAVIOR_GET: 'maker:hook-control:telegram-behavior-get',
+  /** 部分更新官方 Telegram bot 的回应或引用设置。 */
+  TELEGRAM_BEHAVIOR_SET: 'maker:hook-control:telegram-behavior-set',
+  /** 列出官方 Telegram bot 已见过的群，并合并服务端激活设置。 */
+  TELEGRAM_GROUPS_LIST: 'maker:hook-control:telegram-groups-list',
+  /** 更新一个官方 Telegram 群的参与模式。 */
+  TELEGRAM_GROUP_ACTIVATION_SET: 'maker:hook-control:telegram-group-activation-set',
   /** 读取工作目录模型来源偏好(纯本地, 不经 WS; 见 workspaceProviderSourceStore)。 */
   WORKSPACE_PROVIDER_SOURCE_GET: 'maker:hook-control:workspace-provider-source-get',
   /** 写/清一条工作目录模型来源偏好(纯本地)。 */
@@ -78,6 +86,8 @@ export const HOOK_CONTROL_EVENT = {
   PREFS_CHANGED: 'maker:hook-control:prefs-changed',
   /** provider-neutral 偏好快照推送（Telegram / X 消费）。 */
   PROVIDER_PREFS_CHANGED: 'maker:hook-control:provider-prefs-changed',
+  /** 官方 Telegram 行为配置快照推送（含其它客户端写入）。 */
+  TELEGRAM_BEHAVIOR_CHANGED: 'maker:hook-control:telegram-behavior-changed',
   /** 目录模型来源偏好全量推送(本地写入后广播全窗口, 多窗口设置页同步)。 */
   WORKSPACE_PROVIDER_SOURCE_CHANGED: 'maker:hook-control:workspace-provider-source-changed',
 } as const;
@@ -135,6 +145,8 @@ export interface ProviderHookView {
   available: boolean;
   /** 尚未收到任何 welcome；用于首开时先显示入口、连接后再权威收敛。 */
   capabilityPending: boolean;
+  /** Telegram 行为设置增量能力；旧 main 快照缺省时按 false。 */
+  behaviorAvailable?: boolean;
   binding: ProviderBindingView | null;
   /**
    * 派发任务时使用的默认工作目录别名(null = 内置「对话」伪目录)。
@@ -163,13 +175,7 @@ export type TelegramOpenAction = ProviderOpenAction;
  *   failed 流程失败(如老服务器、workspace 未安装) / revoked 被解除(含被新设备顶掉)
  */
 export type HookBindingState =
-  | 'none'
-  | 'pending'
-  | 'confirmed'
-  | 'denied'
-  | 'expired'
-  | 'failed'
-  | 'revoked';
+  'none' | 'pending' | 'confirmed' | 'denied' | 'expired' | 'failed' | 'revoked';
 
 /** Slack 绑定快照(server 经 bind.update 推送, main 缓存最新一帧)。 */
 export interface HookBindingView {
@@ -350,6 +356,33 @@ export interface ProviderPrefsView extends HookPrefsView {
   provider: HookProvider;
   bindingId: string | null;
   scopeId: string | null;
+}
+
+export type TelegramHookEmojiReactions = 'off' | 'minimal' | 'expressive';
+export type TelegramHookReplyQuoteDm = 'off' | 'first';
+export type TelegramHookReplyQuoteGroup = 'off' | 'first' | 'all';
+export type TelegramHookGroupActivationMode = 'mention' | 'always';
+
+/** 官方 Telegram bot 的有效行为快照；数据正本在 telegram-hook-server。 */
+export interface TelegramHookBehavior {
+  emojiReactions: TelegramHookEmojiReactions;
+  replyQuoteDm: TelegramHookReplyQuoteDm;
+  replyQuoteGroup: TelegramHookReplyQuoteGroup;
+}
+
+export interface TelegramHookBehaviorState extends TelegramHookBehavior {
+  bound: boolean;
+  bindingId: string;
+  /** 只列偏离默认值的群；缺席 = mention。 */
+  groupActivation: Record<string, 'always'>;
+}
+
+export type TelegramHookBehaviorPatch = Partial<TelegramHookBehavior>;
+
+export interface TelegramHookKnownGroup {
+  chatId: string;
+  chatName: string | null;
+  activation: TelegramHookGroupActivationMode;
 }
 
 /** 偏好部分更新 patch(undefined 不动, null 显式清空)。 */

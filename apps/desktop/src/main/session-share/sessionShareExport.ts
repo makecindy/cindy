@@ -1,12 +1,13 @@
 /**
- * 会话分享导出编排:把一个本机会话(cc / codex)打成 .xdtshare 文件。
+ * 会话分享导出编排:把一个本机会话(cc / codex / pi)打成 .xdtshare 文件。
  *
  * 数据三层的收集策略:
  *   1. 本地 DB:session 行(白名单字段)+ messages(含 rewind 链,忠实快照;
  *      但遵守 clearedAt 边界——/clear 之前的消息全应用都不可见,分享包同样
  *      不得携带,否则用户清掉敏感内容后分享会静默泄漏);
  *   2. vendor 转录:cc 按三源并集 sdkSessionId 逐个定位 jsonl(fork 链全带),
- *      codex dump state 三表行 + rollout 文件;找不到的记 manifest(保真度降档);
+ *      codex dump state 三表行 + rollout 文件;Pi 将本机绝对 JSONL 路径映射为
+ *      便携 id 后落包;找不到的记 manifest(保真度降档);
  *   3. 媒体:5 种协议 URL 全收集,托管缓存类(image/video/model)与绝对路径
  *      引用类(file/audio)分别解析落包,单文件失败记缺失不阻断。
  *
@@ -137,6 +138,38 @@ function codedError(code: string, message: string): Error {
   return Object.assign(new Error(message), { code });
 }
 
+function portablePiSessionId(buffer: Buffer): string {
+  // 纳入**转录内容摘要**而非仅绝对路径:同一 Pi 会话后续产生消息后再导出时,路径不变但内容
+  // 已变。旧实现只散列路径 → id 不变,接收端若曾导入旧包、软删后再导入新包,导入器的
+  // writeIfMissing 会复用磁盘上同名旧转录,新 DB 消息被恢复到过期模型上下文(codex review P2)。
+  // 内容散列使「内容变 → id 变 → 落到新目标文件」,同内容仍同 id(重复导入正常去重)。
+  // ID 与真正打包的同一份冻结字节计算，避免“先 hash、后文件继续写、再 read”
+  // 的 TOCTOU 让清单 id 与包内内容不一致。读失败时不再用绝对路径摘要兜底：
+  // 那会复活 path-only 冲突，并把不可验证的转录伪装成可恢复。
+  const basis = createHash('sha256').update(buffer).digest('hex').slice(0, 32);
+  return `pi-${basis}.jsonl`;
+}
+
+/** Pi 的 agentMeta 不能把源机绝对 sessionFile 路径带进分享包。 */
+function rewritePiAgentMetaForExport(
+  agentMeta: string | null,
+  portableIds: ReadonlyMap<string, string>,
+): string | null {
+  if (!agentMeta) return agentMeta;
+  try {
+    const parsed = JSON.parse(agentMeta) as unknown;
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    const meta = parsed as Record<string, unknown>;
+    if (typeof meta.sdkSessionId !== 'string') return agentMeta;
+    const portable = portableIds.get(meta.sdkSessionId);
+    if (portable) meta.sdkSessionId = portable;
+    else delete meta.sdkSessionId;
+    return JSON.stringify(meta);
+  } catch {
+    return null;
+  }
+}
+
 export async function exportSessionShare(
   opts: SessionShareExportOptions,
 ): Promise<SessionShareExportOutcome> {
@@ -153,7 +186,7 @@ export async function exportSessionShare(
   if (session.orcaRole) {
     throw codedError('PRECONDITION_FAILED', 'orca team sessions cannot be exported');
   }
-  if (session.agentKind !== 'cc' && session.agentKind !== 'codex') {
+  if (session.agentKind !== 'cc' && session.agentKind !== 'codex' && session.agentKind !== 'pi') {
     throw codedError('PRECONDITION_FAILED', `unsupported agentKind: ${session.agentKind}`);
   }
 
@@ -166,6 +199,7 @@ export async function exportSessionShare(
   //    (review bot 指出:先读后判会让超限媒体先把内存吃满,门禁形同虚设)。──
   let sdkSessionIds: string[] = [];
   let activeSdkSessionId: string | null = null;
+  let bundleMessages = messages;
   const transcriptCandidates: Array<{ sdkSessionId: string; zipPath: string; absPath: string; bytes: number }> = [];
   const transcriptRefs: XdtshareTranscriptRef[] = [];
   let codexState: CodexThreadStateDump | null = null;
@@ -217,6 +251,30 @@ export async function exportSessionShare(
         transcriptRefs.push({ sdkSessionId: sid, path: zipPath });
       } else {
         transcriptRefs.push({ sdkSessionId: sid, path: null });
+      }
+    }
+  } else if (session.agentKind === 'pi') {
+    // Pi SDK 返回的是本机 JSONL 绝对路径。分享包必须使用单路径段的便携 id，
+    // 否则既泄露源机 userData，又会在导入端被路径安全校验拒绝。
+    const absoluteIds = new Set<string>();
+    if (session.sdkSessionId && path.isAbsolute(session.sdkSessionId)) {
+      absoluteIds.add(session.sdkSessionId);
+    }
+    for (const message of messages) {
+      if (!message.agentMeta) continue;
+      try {
+        const sid = (JSON.parse(message.agentMeta) as { sdkSessionId?: unknown }).sdkSessionId;
+        if (typeof sid === 'string' && path.isAbsolute(sid)) absoluteIds.add(sid);
+      } catch {
+        // 历史坏 JSON 与其它 agentMeta 读取路径同口径容忍。
+      }
+    }
+    for (const absPath of absoluteIds) {
+      const bytes = await statSize(absPath);
+      if (bytes) {
+        // Pi 的便携 id 必须由阶段 B 真正打包的冻结 buffer 计算；此处只登记
+        // 尺寸候选，不提前读/散列，也不让绝对路径进入最终 manifest。
+        transcriptCandidates.push({ sdkSessionId: absPath, zipPath: '', absPath, bytes });
       }
     }
   } else {
@@ -298,7 +356,7 @@ export async function exportSessionShare(
   }
 
   // ── 体积门禁(未压缩总量,基于 stat 尺寸,此时尚未读任何大文件) ──
-  const messagesBytes = messages.reduce((sum, m) => sum + Buffer.byteLength(m.content), 0);
+  const messagesBytes = bundleMessages.reduce((sum, m) => sum + Buffer.byteLength(m.content), 0);
   const transcriptBytes = transcriptCandidates.reduce((sum, f) => sum + f.bytes, 0);
   const mediaBytes = mediaCandidates.reduce((sum, f) => sum + f.bytes, 0);
   const totalBytes = messagesBytes + transcriptBytes + mediaBytes;
@@ -311,14 +369,41 @@ export async function exportSessionShare(
   //    不让单文件问题炸掉整次导出;转录读失败同步把 ref 回落 null,保真度按
   //    实际落包结果判。──
   const transcriptFiles: Array<{ zipPath: string; buffer: Buffer }> = [];
+  const piPortableIds = new Map<string, string>();
+  const seenPiPortableIds = new Set<string>();
   for (const candidate of transcriptCandidates) {
     const buffer = await fsp.readFile(candidate.absPath).catch(() => null);
     if (buffer && buffer.length > 0) {
-      transcriptFiles.push({ zipPath: candidate.zipPath, buffer });
+      if (session.agentKind === 'pi') {
+        const portableId = portablePiSessionId(buffer);
+        piPortableIds.set(candidate.absPath, portableId);
+        if (!seenPiPortableIds.has(portableId)) {
+          seenPiPortableIds.add(portableId);
+          const zipPath = `transcripts/pi/${portableId}`;
+          sdkSessionIds.push(portableId);
+          transcriptRefs.push({ sdkSessionId: portableId, path: zipPath });
+          transcriptFiles.push({ zipPath, buffer });
+        }
+      } else {
+        transcriptFiles.push({ zipPath: candidate.zipPath, buffer });
+      }
     } else {
-      const ref = transcriptRefs.find((r) => r.path === candidate.zipPath);
-      if (ref) ref.path = null;
+      // Pi 读失败时没有内容可生成安全便携 id，直接省略该转录并把 message meta
+      // 的 sdkSessionId 清掉；其它 agent 保持既有“ref path=null”降档语义。
+      if (session.agentKind !== 'pi') {
+        const ref = transcriptRefs.find((r) => r.path === candidate.zipPath);
+        if (ref) ref.path = null;
+      }
     }
+  }
+  if (session.agentKind === 'pi') {
+    activeSdkSessionId = session.sdkSessionId
+      ? (piPortableIds.get(session.sdkSessionId) ?? null)
+      : null;
+    bundleMessages = messages.map((message) => ({
+      ...message,
+      agentMeta: rewritePiAgentMetaForExport(message.agentMeta, piPortableIds),
+    }));
   }
   const mediaFiles: Array<{ zipPath: string; buffer: Buffer }> = [];
   let mediaIndex = 0;
@@ -367,7 +452,7 @@ export async function exportSessionShare(
     'session.json',
     JSON.stringify(buildSessionSnapshot(session, activeSdkSessionId), null, 2),
   );
-  await addEntry('messages.jsonl', messages.map((m) => JSON.stringify(m)).join('\n'));
+  await addEntry('messages.jsonl', bundleMessages.map((m) => JSON.stringify(m)).join('\n'));
   for (const f of transcriptFiles) await addEntry(f.zipPath, f.buffer);
   if (codexState) {
     await addEntry(
@@ -392,14 +477,14 @@ export async function exportSessionShare(
     appVersion: safeAppVersion(),
     platform: process.platform,
     exportedAt: new Date().toISOString(),
-    agentKind: session.agentKind as 'cc' | 'codex',
+    agentKind: session.agentKind as 'cc' | 'codex' | 'pi',
     title: session.title,
     workspaceKind: session.workspaceKind === 'dialogue' ? 'dialogue' : 'project',
     originalWorkingDir: session.workingDir,
     sdkSessionIds,
     activeSdkSessionId,
     exportFidelity: fidelity,
-    counts: { messages: messages.length, media: mediaFiles.length },
+    counts: { messages: bundleMessages.length, media: mediaFiles.length },
     entries,
     transcripts: transcriptRefs,
   };
@@ -459,7 +544,12 @@ function buildSessionSnapshot(
     model: session.model,
     effort: session.effort,
     permissionMode: session.permissionMode,
-    sdkSessionId: activeSdkSessionId ?? session.sdkSessionId,
+    // Pi 的 DB 值是源机绝对路径，只能写入上面生成的便携 id。转录缺失时
+    // 保持 null，避免 fallback 又把绝对路径塞回包内。
+    sdkSessionId:
+      session.agentKind === 'pi'
+        ? activeSdkSessionId
+        : (activeSdkSessionId ?? session.sdkSessionId),
     totalTokenUsage: session.totalTokenUsage,
     totalCostUsd: session.totalCostUsd,
     contextTokens: session.contextTokens,

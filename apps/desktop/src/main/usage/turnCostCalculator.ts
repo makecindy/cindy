@@ -16,6 +16,7 @@ import {
   type ModelPriceQuote,
   type ModelPricingCatalog,
   type MoneyCurrency,
+  type MoneyEstimateReason,
   type RegionalMoney,
 } from '../../shared/regionalMoney.js';
 import { buildTurnUsageDetails, type TurnUsageDetails } from '../../shared/turnUsageDetails.js';
@@ -145,18 +146,26 @@ export function computePriceQuoteTurnMoney(
     price.source === 'subscription-reference' ||
     price.source === 'provider-reference' ||
     price.source === 'user-override';
-  const estimateReasons =
+  // 币种是本地推断出来的时候，金额仍是真实计费(kind 保持 actual-cost，否则会被并进
+  // 订阅价值统计)，但不能再自称精确：报价数值来自服务端、币种却是猜的，这一笔与账单
+  // 能不能对上取决于猜得对不对。标 approximate + 原因，让 UI 与对账口径看得见。
+  const currencyInferred = price.currencyInferred === true;
+  const baseReasons =
     price.source === 'subscription-reference'
       ? (['subscription-value', 'reference-price'] as const)
       : valueEstimate || price.approximate
         ? (['reference-price'] as const)
         : undefined;
+  const estimateReasons: MoneyEstimateReason[] = [
+    ...(baseReasons ?? []),
+    ...(currencyInferred ? (['inferred-currency'] as const) : []),
+  ];
   const money: RegionalMoney = {
     amount: Math.max(0, amount),
     currency: price.currency,
-    approximate: price.approximate || valueEstimate,
+    approximate: price.approximate || valueEstimate || currencyInferred,
     kind: valueEstimate ? 'value-estimate' : 'actual-cost',
-    ...(estimateReasons ? { estimateReasons: [...estimateReasons] } : {}),
+    ...(estimateReasons.length > 0 ? { estimateReasons } : {}),
   };
   // Gateway 报价的币种就是该账号的实际结算币种,原样记账才能与账单对账 —— 不做任何换算。
   // 否则以 USD 结算的账号在 CN 构建上,turn 会被 USD_TO_CNY_FIXED_RATE 折成 CNY,而同一
@@ -197,6 +206,9 @@ export function resolveTurnCost(args: {
   const ledgerCurrency = gatewayLedgerCurrency(pricing) ?? currentLedgerCurrency();
 
   if (context.billingRoute === 'xd-gateway') {
+    // 长上下文档不看模型 id 后缀：computeGatewayTurnCost 按本轮实际 input token 落进
+    // quote 的 inputTokenPriceBands，比 `[1m]` 这类后缀更权威（后缀只表示会话开了大
+    // 窗口，不代表这一轮真的超过阈值）。
     const quote = getModelPriceQuote(pricing, 'xd', model);
     if (!quote) {
       // 该模型没有报价(上游未登记,或目录还没同步下来)。SDK 的 costDelta 是 USD,

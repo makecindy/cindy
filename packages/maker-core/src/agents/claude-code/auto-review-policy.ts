@@ -7,7 +7,12 @@
  * `default` 让 canUseTool 生效后,非 MCP 内置工具在此分类(见 claude-code/index.ts 的 dispatcher)。
  */
 
-import { reviewAction, isSensitiveCredentialPath, type ReviewVerdict } from '../shared/auto-review.js';
+import {
+  reviewAction,
+  isSensitiveCredentialPath,
+  type ReviewableAction,
+  type ReviewVerdict,
+} from '../shared/auto-review.js';
 
 export type BuiltinAutoReviewVerdict = ReviewVerdict;
 
@@ -74,6 +79,14 @@ function extractReadPath(toolName: string, input: unknown): string | undefined {
   return candidates.find((c) => isSensitiveCredentialPath(c)) ?? candidates[0];
 }
 
+function extractNetworkTarget(toolName: string, input: unknown): string | undefined {
+  if (!input || typeof input !== 'object' || Array.isArray(input)) return undefined;
+  const obj = input as Record<string, unknown>;
+  const key = toolName === 'WebFetch' ? 'url' : 'query';
+  const value = obj[key];
+  return typeof value === 'string' && value.trim() ? value : undefined;
+}
+
 /**
  * Auto-review 下对一个**内置工具调用**给出审查档位。仅在权限档为 `auto` 时调用
  * (见 claude-code/index.ts 的 canUseTool dispatcher)。纯映射,判定逻辑全在 core。
@@ -81,26 +94,37 @@ function extractReadPath(toolName: string, input: unknown): string | undefined {
 export function classifyBuiltinToolForAutoReview(
   ctx: BuiltinAutoReviewContext,
 ): BuiltinAutoReviewVerdict {
-  const { toolName, input, workspaceRoots } = ctx;
+  const action = normalizeBuiltinToolForAutoReview(ctx.toolName, ctx.input);
   const opts = ctx.platform ? { platform: ctx.platform } : undefined;
+  return reviewAction(action, ctx.workspaceRoots, opts);
+}
 
+/** 把 Claude 内置工具翻译成共享动作；判定与 AI fallback 都复用这一份归一化结果。 */
+export function normalizeBuiltinToolForAutoReview(
+  toolName: string,
+  input: unknown,
+): ReviewableAction {
   if (READ_ONLY_TOOLS.has(toolName)) {
     // Read/NotebookRead 读单个具名文件(scope='file');Grep/Glob/LS 是目录级递归读(scope='tree'),
     // 根在工作区外时能遍历进区外凭证子路径 → 由 core 按边界升级(见 reviewAction 的 read 分支)。
     const scope: 'file' | 'tree' = toolName === 'Read' || toolName === 'NotebookRead' ? 'file' : 'tree';
-    return reviewAction({ kind: 'read', path: extractReadPath(toolName, input), scope }, workspaceRoots, opts);
+    return { kind: 'read', path: extractReadPath(toolName, input), scope };
   }
-  if (SAFE_STATEFUL_TOOLS.has(toolName)) return reviewAction({ kind: 'session-state' }, workspaceRoots, opts);
+  if (SAFE_STATEFUL_TOOLS.has(toolName)) return { kind: 'session-state' };
   if (FILE_WRITE_TOOLS.has(toolName)) {
-    return reviewAction({ kind: 'file-write', path: extractFilePath(toolName, input) }, workspaceRoots, opts);
+    return { kind: 'file-write', path: extractFilePath(toolName, input) };
   }
   if (toolName === 'Bash') {
-    return reviewAction({ kind: 'exec', command: extractCommand(input) }, workspaceRoots, opts);
+    return { kind: 'exec', command: extractCommand(input) };
   }
   // WebFetch/WebSearch:把 URL/搜索词送往外部(exfil 面)→ 升级。
   if (toolName === 'WebFetch' || toolName === 'WebSearch') {
-    return reviewAction({ kind: 'network' }, workspaceRoots, opts);
+    return {
+      kind: 'network',
+      operation: toolName,
+      target: extractNetworkTarget(toolName, input),
+    };
   }
   // 未知 / 其它一切工具 → fail-closed 升级。
-  return reviewAction({ kind: 'other' }, workspaceRoots, opts);
+  return { kind: 'other' };
 }

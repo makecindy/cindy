@@ -359,7 +359,7 @@ export function buildThemeColorsFromPalette(
     'search-match-fg': textPrimaryHsl,
     secondary: pick(elevatedHsl, chipHsl),
     // send 底用反相中性而非 accent:共享 send token 还渲染 10-12px 文本
-    // (VoiceInputOverlay / CollaborationModeToggle / SessionHandoffCard),accent 底
+    // (VoiceInputOverlay / SessionHandoffCard),accent 底
     // 配白/黑字难稳定过 4.5:1 小字线,反相中性双模式均满足。
     'send-btn-bg': pick(textPrimary, surface),
     'send-btn-icon': pick(surface, textPrimary),

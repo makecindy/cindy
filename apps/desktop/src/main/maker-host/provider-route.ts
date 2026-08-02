@@ -20,7 +20,7 @@
  */
 
 import {
-  effectiveSourceIdForModel,
+  actualSourceIdForModel,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -307,7 +307,7 @@ export function buildRouteDecision(
       // 走 XD 网关(= proxy 默认上游,不 override),鉴权头换成网关 key。
       if (!gatewayKey) return null; // 没 key 可换 → passthrough(调用方记 warn)
       const headerOverride: Record<string, string> =
-        agent === 'claude-code'
+        agent !== 'codex'
           ? { 'x-api-key': gatewayKey, authorization: `Bearer ${gatewayKey}` }
           : { authorization: `Bearer ${gatewayKey}` };
       if (routing.headerOverride) Object.assign(headerOverride, routing.headerOverride);
@@ -329,7 +329,7 @@ export function buildRouteDecision(
         ? withoutClientAuthHeaders(routing.headerOverride)
         : normalizeLegacyClientAuthHeaders(routing.headerOverride);
       if (apiKey) {
-        if (agent === 'claude-code') {
+        if (agent !== 'codex') {
           // cc 子进程在 oauth-spawn 下会带订阅的 `authorization: Bearer <Claude token>`——必须连它一起
           // 覆盖，否则订阅 token 泄漏到自定义上游，且被「按 Bearer 鉴权」的兼容网关（如 mimo 的
           // /anthropic：OpenAI 式鉴权）当成无效 key → 401。两个头都置成用户 key：x-api-key 覆盖标准
@@ -346,7 +346,7 @@ export function buildRouteDecision(
         if (!hasLegacyAuthorization) {
           headerOverride.authorization = `Bearer ${MISSING_CUSTOM_PROVIDER_API_KEY}`;
         }
-        if (agent === 'claude-code' && !hasLegacyApiKey) {
+        if (agent !== 'codex' && !hasLegacyApiKey) {
           headerOverride['x-api-key'] = MISSING_CUSTOM_PROVIDER_API_KEY;
         }
       }
@@ -675,7 +675,9 @@ function providersForModel(modelId: string, agent: AgentKind) {
 
 async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
   const providers = await providerViewsReader();
-  const defaultId = effectiveSourceIdForModel(providers, null, modelId, agent);
+  // This runs while dispatching an already-created implicit-source session. Admission for new
+  // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
+  const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
   return providers.find((provider) => provider.id === defaultId) ?? null;
 }
 

@@ -1212,6 +1212,12 @@
     "providers": {
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
+      "order": {
+        "hint": "Drag to reorder",
+        "handle": "Reorder {{provider}}, position {{position}} of {{total}}. Use the arrow keys to move.",
+        "moved": "{{provider}} moved to position {{position}} of {{total}}.",
+        "saveFailed": "Provider order wasn't saved. Try again."
+      },
       "pill": {
         "connected": "Connected",
         "suspended": "Disabled"
@@ -1317,13 +1323,21 @@
           "anthropic": "Anthropic Messages (Cindy bridge)",
           "responsesHelp": "The provider supports the Responses API natively, so Cindy forwards its event stream unchanged.",
           "chatHelp": "For providers that only expose Chat Completions. Cindy converts streaming text and function tool calls; some advanced Responses features are unavailable.",
-          "anthropicHelp": "For providers that expose the Anthropic Messages API. Cindy converts Responses messages, images, tools, reasoning, and streaming events."
+          "anthropicHelp": "For providers that expose the Anthropic Messages API. Cindy converts Responses messages, images, tools, reasoning, and streaming events.",
+          "piResponses": "OpenAI Responses",
+          "piChat": "OpenAI Chat Completions",
+          "piAnthropic": "Anthropic Messages",
+          "piResponsesHelp": "Pi connects directly to the provider's OpenAI Responses API.",
+          "piChatHelp": "Pi connects directly to the provider's OpenAI-compatible Chat Completions API.",
+          "piAnthropicHelp": "Pi connects directly to the provider's Anthropic Messages API."
         },
         "protocol": {
           "claude": "Claude Code",
           "claudeDesc": "Claude Code follows the Anthropic protocol (auth via x-api-key). Enter this source's baseURL, key, and models for Claude Code; leave blank to skip Claude Code for this source.",
           "codex": "Codex",
-          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose native Responses, or let Cindy bridge Chat Completions or Anthropic Messages. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source."
+          "codexDesc": "Codex speaks the OpenAI Responses protocol. Choose native Responses, or let Cindy bridge Chat Completions or Anthropic Messages. Enter this source's base URL, key, and models for Codex; leave blank to skip Codex for this source.",
+          "pi": "Pi",
+          "piDesc": "Pi is a multi-protocol harness: your custom or local models connect natively (Ollama, vLLM, self-hosted endpoints), without going through Cindy's compatibility proxy. Pick the API type below, then enter this source's base URL, key, and models for Pi; leave blank to skip Pi for this source."
         },
         "errors": {
           "nameRequired": "Display name is required",
@@ -1880,11 +1894,16 @@
         "connecting": "Connecting…",
         "connected": "Connected",
         "conflict": "In use by another device",
+        "offline": "Offline",
         "error": "Connection failed"
       },
       "connected": {
         "heading": "Telegram bot connected",
         "note": "DM your bot or @mention it in a group and messages are routed to {{appName}} on this machine; recent group chatter is included as context.",
+        "headingOffline": "Offline on this device",
+        "noteOffline": "Not receiving messages. Your bot token and binding are still saved on this machine — go back online any time.",
+        "headingConflict": "In use by another device",
+        "noteConflict": "Only one device can receive messages for the same bot, and this one keeps contending for it. Take that device offline below to let this one take over, or choose \"Go offline here\" to leave the slot to it.",
         "botLabel": "Bot account",
         "ownerLabel": "My user ID"
       },
@@ -1897,6 +1916,43 @@
       "formHint": "The user ID is numeric; DM @userinfobot to look up your own ID.",
       "connect": "Connect",
       "connectingAction": "Connecting…",
+      "errorCode": {
+        "invalid-token": "Bot token is invalid or was reset — enter it again",
+        "provider-api": "Telegram returned an error — try again shortly",
+        "network": "Network unreachable — can't connect to Telegram",
+        "secret-unavailable": "System secure storage is unavailable, credentials cannot be saved"
+      },
+      "goOffline": "Go offline here",
+      "goingOfflineAction": "Going offline…",
+      "goOnline": "Go online here",
+      "goingOnlineAction": "Going online…",
+      "remoteDevices": {
+        "title": "My other devices",
+        "refresh": "Check again",
+        "hint": "Taking a device offline stops it from receiving messages. Its token and binding stay intact, so it can come back online on its own at any time.",
+        "takeOffline": "Take offline",
+        "state": {
+          "checking": "Checking…",
+          "connected": "Using this bot",
+          "conflict": "Contending for this bot",
+          "offline": "Offline",
+          "connecting": "Connecting…",
+          "idle": "Not set up",
+          "error": "Connection failed",
+          "notConfigured": "No Telegram bot configured",
+          "otherBot": "Bound to a different bot — no conflict",
+          "offlineDevice": "Device offline — can't control it remotely",
+          "unreachable": "Status unavailable",
+          "unsupported": "This device's version can't be taken offline remotely"
+        },
+        "failure": {
+          "remoteDisabled": "Remote control is turned off on that device",
+          "accessRevoked": "That device has revoked this device's access",
+          "controlDisabled": "Control of that device is turned off on this device",
+          "unreachable": "That device is offline or unreachable",
+          "unknown": "The remote request failed. Check the device status and try again"
+        }
+      },
       "disconnect": "Unbind",
       "disconnectingAction": "Unbinding…",
       "disconnectAria": "Unbind Telegram bot",
@@ -1953,7 +2009,7 @@
         "emojiHint": {
           "off": "No emoji reactions at all.",
           "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
-          "expressive": "Finishes pick randomly from the full reaction set (positive/negative pools kept separate)."
+          "expressive": "Completed tasks pick randomly from the full reaction set (positive and negative pools stay separate)."
         },
         "groupQuoteLabel": "Quote the question in groups",
         "quoteOption": {
@@ -1970,6 +2026,11 @@
         "dmQuoteHint": {
           "off": "DM answers are sent without quoting (default, cleaner).",
           "first": "The first reply quotes the message you sent."
+        },
+        "error": {
+          "load": "Telegram behavior could not be loaded. Check the connection and retry.",
+          "save": "Telegram behavior was not saved. The last confirmed settings were restored.",
+          "retry": "Retry loading"
         }
       },
       "persona": {
@@ -1993,6 +2054,11 @@
         "contactsOn": "People who speak in groups are auto-added to Smart Contacts (master switch is on).",
         "contactsOff": "Smart Contacts is off — people who speak in groups won't be remembered automatically.",
         "contactsEnable": "Turn on",
+        "error": {
+          "load": "Telegram groups could not be loaded. Check the connection and retry.",
+          "save": "The group mode was not saved. The last confirmed mode was restored.",
+          "retry": "Retry loading"
+        },
         "mode": {
           "mention": "@ only",
           "always": "Active"
@@ -2078,6 +2144,10 @@
         "codex": {
           "label": "Codex",
           "description": "All models used through the Codex entry share the same memory."
+        },
+        "pi": {
+          "label": "Pi",
+          "description": "Saves long-session compression summaries to Cindy memory for future Pi sessions."
         }
       },
       "agent": {
@@ -2209,6 +2279,13 @@
         "disabled": "Chat semantic indexing stopped",
         "toggleFailed": "Failed to toggle chat embedding"
       }
+    },
+    "messageNavRail": {
+      "cell": {
+        "label": "Show question navigation rail",
+        "description": "Shows a column of tick marks beside the chat, one per question: hover to preview the question and the start of its answer, click to jump back to that turn. Appears only when there are enough questions and the window is wide enough."
+      },
+      "toggleAria": "Toggle question navigation rail"
     },
     "collaboration": {
       "loading": "Loading collaboration settings…",
@@ -2660,12 +2737,75 @@
             "failed": "Linking failed",
             "revoked": "Link removed",
             "superseded": "Linked to another device"
+          },
+          "behavior": {
+            "title": "Reactions & quoting",
+            "emojiLabel": "Emoji reactions",
+            "emojiOption": {
+              "off": "Off",
+              "minimal": "Basic",
+              "expressive": "Lively"
+            },
+            "emojiHint": {
+              "off": "No emoji reactions at all.",
+              "minimal": "👀 on receipt, 👍 on success, 👎 on failure.",
+              "expressive": "Completed tasks pick randomly from separate positive and negative reaction pools."
+            },
+            "groupQuoteLabel": "Quote the question in groups",
+            "quoteOption": {
+              "off": "Never",
+              "first": "First reply",
+              "all": "Every reply"
+            },
+            "groupQuoteHint": {
+              "off": "Group answers are not attached to the question.",
+              "first": "The first reply quotes the question (recommended).",
+              "all": "Every message in the answer quotes the question."
+            },
+            "dmQuoteLabel": "Quote your message in DM",
+            "dmQuoteHint": {
+              "off": "DM answers are sent without quoting (default).",
+              "first": "The first reply quotes your message."
+            },
+            "error": {
+              "load": "Telegram behavior could not be loaded. Check the connection and retry.",
+              "save": "Telegram behavior was not saved. The last confirmed settings were restored.",
+              "retry": "Retry loading"
+            }
+          },
+          "groups": {
+            "title": "Group participation",
+            "hint": "Groups seen by the official bot appear here. Active mode applies to every message from your linked account only; other members add local context but cannot trigger tasks.",
+            "empty": "No groups yet. Add the bot to a group and send a message from your linked account.",
+            "contactsOn": "Other people who speak in groups are auto-added to Smart Contacts.",
+            "contactsOff": "Smart Contacts is off, so other group members will not be remembered automatically.",
+            "contactsEnable": "Turn on",
+            "error": {
+              "load": "Telegram groups could not be loaded. Check the connection and retry.",
+              "save": "The group mode was not saved. The last confirmed mode was restored.",
+              "retry": "Retry loading"
+            },
+            "mode": {
+              "mention": "@ only",
+              "always": "Active"
+            }
           }
         },
         "x": {
           "description": "Link your X (Twitter) account and dispatch tasks by mentioning the Cindy bot on X.",
           "disabledHint": "Turn on the switch, then follow the prompts to authorize your X account.",
           "toggleAria": "Toggle X connection",
+          "guide": {
+            "usageLabel": "How to Use It",
+            "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
+            "riskLabel": "Replies Are Public",
+            "riskPublicBody": "Our reply is a public post that anyone can read. This suits questions and problems you are happy to work through in the open — not private matters, where it risks exposing them.",
+            "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
+            "withdrawLabel": "To Withdraw a Reply",
+            "withdrawBody": "Whoever asked can delete a reply by replying \"/delete\" to it. Only the public reply is deleted — the local task record is kept.",
+            "ackTitle": "X Is Linked — How It Works and What to Watch For",
+            "ackConfirm": "I Understand the Risks"
+          },
           "connect": "Link X",
           "openApp": "Open X to authorize",
           "cancel": "Cancel linking",
@@ -2792,9 +2932,8 @@
         "personal": "Personal"
       },
       "tips": {
-        "cindy": "Cindy is the official shared bot — no credentials needed. Connect Slack and just @Cindy to hand off tasks.",
-        "personal": "Personal connections include WeChat scan authorization and your own WeCom / Feishu / Discord / Telegram credentials. Each channel keeps independent new-conversation settings.",
-        "personalFeishuOnly": "Personal connections include WeChat scan authorization plus your own WeCom, Feishu, and DingTalk credentials. Each channel keeps independent new-conversation settings."
+        "cindy": "Provided and maintained by Cindy. No need to create a bot or supply credentials—follow the connection steps to get started.",
+        "personal": "Use your own account or bot and manage the required credentials yourself. Each channel keeps its own account, permissions, and settings."
       },
       "defaults": {
         "title": "New Conversation Configuration",
@@ -2967,7 +3106,8 @@
         "origin": {
           "public": "Public",
           "organization": "Team shared",
-          "local": "Local"
+          "local": "Local",
+          "custom": "Custom"
         },
         "emptyFiltered": "No matching plugins",
         "useAction": "Use",
@@ -2980,7 +3120,8 @@
           "public": "Public",
           "organization": "Organization",
           "personal": "Personal",
-          "local": "Local"
+          "local": "Local",
+          "custom": "Custom"
         },
         "install": "Install",
         "details": "Details",
@@ -3006,10 +3147,69 @@
         },
         "securityTitle": "Install and permissions",
         "securityDescription": "Cindy verifies package size and SHA-256 in the main process, validates the plugin manifest, then installs atomically. First-time installs are enabled automatically and can be disabled anytime on the Plugins page; updates keep the current enabled state.",
+        "customSecurityDescription": "This plugin comes from a custom marketplace you added and has not been verified by the Cindy server. Its manifest is validated in the main process before install. First-time installs are enabled automatically and can be disabled anytime on the Plugins page.",
         "noPermissions": "This plugin declares no additional capabilities.",
         "installConfirmTitle": "Install “{{name}}”?",
         "installConfirmDescription": "The package will be verified for integrity and manifest compatibility. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
-        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged."
+        "customInstallConfirmDescription": "This plugin comes from a custom marketplace and has not been verified for integrity by the server; its manifest will be validated before install. The plugin is enabled automatically after install; you can disable it or adjust its setup anytime.",
+        "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged.",
+        "sources": {
+          "addMarketplace": "Add Plugin Marketplace…",
+          "dialogTitle": "Add Plugin Marketplace",
+          "dialogDescription": "Add a plugin marketplace from a GitHub repository, Git URL, or local folder.",
+          "learnMore": "Learn more",
+          "sourceLabel": "Source",
+          "sourcePlaceholder": "openai/plugins or git@github.com:org/repo.git",
+          "refLabel": "Git Ref",
+          "refPlaceholder": "Main branch",
+          "sparseLabel": "Sparse Paths",
+          "sparsePlaceholder": "One path per line, e.g. plugins/codex",
+          "gitUnavailable": "Git is not installed or is older than 2.25. Git sources are unavailable; local folder sources still work.",
+          "listTitle": "Added Marketplaces",
+          "pluginCount": "{{count}} plugins",
+          "sourceError": "Unavailable",
+          "localBadge": "Local",
+          "defaultRef": "Default branch",
+          "neverSynced": "Never synced",
+          "refresh": "Refresh",
+          "remove": "Remove",
+          "removeConfirmTitle": "Remove marketplace \"{{name}}\"?",
+          "removeConfirmDescription": "Plugins from this marketplace will no longer be listed. Installed plugins are kept.",
+          "close": "Close",
+          "add": "Add Marketplace",
+          "errors": {
+            "invalidSource": "Invalid source. Use a GitHub owner/repo, a Git URL, or a local folder path.",
+            "gitUnavailable": "Git is not installed or is older than 2.25, so Git sources cannot be added.",
+            "cloneAuthFailed": "Cannot access this repository. For private repositories, configure Git authentication on this machine first (credential helper or SSH key).",
+            "credentialsNotAllowed": "The source URL cannot contain a username or password. Use system Git authentication instead (credential helper or SSH key).",
+            "cloneFailed": "Failed to clone the repository. Check your network or proxy settings and try again.",
+            "refNotFound": "The specified Git ref was not found. Check the branch or tag name.",
+            "manifestMissing": "No supported marketplace.json manifest was found in this source.",
+            "duplicate": "This marketplace has already been added.",
+            "notFound": "This marketplace does not exist or has been removed."
+          },
+          "guide": {
+            "title": "Custom Plugin Marketplace Guide",
+            "intro": "A plugin marketplace is a Git repository or local folder with a manifest file, used to distribute a set of Cindy plugins.",
+            "structureTitle": "Directory Structure",
+            "structureBody": "A marketplace needs one manifest file plus one directory per plugin. Every plugin directory must contain a valid ghost.json (the plugin identity card).",
+            "structureLabelManifest": "manifest",
+            "structureLabelGhostCard": "Plugin card",
+            "structureLabelEntry": "Plugin entry",
+            "structureNote": "The manifest can live in one of these locations:",
+            "manifestTitle": "Manifest Format",
+            "manifestBody": "name is the unique identity of the marketplace (you manage it by this name after adding). Each source in the plugins array points to a plugin directory inside the repository as a relative path; the object form {\"source\": \"local\", \"path\": \"…\"} is also supported.",
+            "sourceTitle": "Source Formats",
+            "sourceBody": "Accepted sources: GitHub shorthand owner/repo, full Git URLs (https / ssh / git@), and local folder paths (~ supported). Git ref accepts a branch, tag, or commit; leave empty for the default branch. Sparse paths (one per line) check out only the listed subdirectories — useful for large repositories.",
+            "authTitle": "Private Repositories",
+            "authBody": "Authentication relies entirely on your system Git configuration — Cindy never stores Git credentials. SSH: a working key must be configured on this machine; if the organization enforces SAML SSO, authorize the key for that organization via Configure SSO in your GitHub SSH key settings. HTTPS: use a Personal Access Token stored by the system credential helper.",
+            "rulesTitle": "Install Rules",
+            "rulesBody": "Plugin ids are globally unique, first come first served — conflicts with installed plugins are called out explicitly. Plugins using officially reserved prefixes like cindy- cannot be installed from custom marketplaces. Before install, every permission the plugin declares is shown for review; confirming completes the install and enables the plugin.",
+            "copy": "Copy guide",
+            "copied": "Guide copied to clipboard.",
+            "copyFailed": "Copy failed. Please try again."
+          }
+        }
       },
       "install": "Install Plugin…",
       "empty": "No plugins installed yet",
@@ -3136,6 +3336,8 @@
         "resident": "Always-on (starts when enabled, keeps a background process even when idle)",
         "residentDetail": "Uses a small amount of memory while idle; the process stops immediately when it is disabled or uninstalled.",
         "subscribeTopics": "Observes your session activity (turn and session events, no message content)",
+        "subscribeActivity": "Observes when the AI is thinking and when it is waiting on you",
+        "subscribeActivityDetail": "Sees only the timing: when thinking starts and ends, and when the AI is waiting for your approval or your answer. It never sees the reasoning text, the action awaiting approval, the command or file involved, the plan, the question, or your answer — and it cannot approve anything on your behalf.",
         "subscribeHooks": "Can read, block, or rewrite the messages you send",
         "subscribeHooksDetail": "Reviews each message before sending: it may block it or rewrite the text before it goes out; blocked messages can be edited and resent.",
         "subscribeAssistantReply": "Can read and rewrite the AI's replies",
@@ -4657,6 +4859,7 @@
       "add": "Add project",
       "cancel": "Cancel",
       "empty": "Connect a controllable device under Settings → Remote connection, or add an SSH host under Settings → Remote machines first.",
+      "emptyPiSshFiltered": "Pi runs locally only, so SSH hosts aren't shown here. Connect a controllable device under Settings → Remote connection, or switch to Claude or Codex to use an SSH host.",
       "loading": "Loading…",
       "noSubdirs": "No subfolders here",
       "doubleClickHint": "Double-click to enter",
@@ -4715,6 +4918,7 @@
         "agent": {
           "claudeCode": "Claude Code",
           "codex": "Codex",
+          "pi": "Pi",
           "pending": "Next: {{agent}}"
         }
       },
@@ -4775,7 +4979,7 @@
           },
           "auto": {
             "label": "Auto-review",
-            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests. This reduces interruptions, but can make mistakes."
+            "description": "Allows read/write access inside the workspace and automatically reviews escalation requests; high-risk actions may still be denied or require confirmation. This reduces interruptions, but can make mistakes."
           },
           "bypassPermissions": {
             "label": "Full access",
@@ -4794,6 +4998,20 @@
           "bypassPermissions": {
             "label": "Full access",
             "description": "Allows editing any file and running networked commands without another confirmation. Highest risk; use only for trusted tasks."
+          }
+        },
+        "pi": {
+          "ask": {
+            "label": "Default permissions",
+            "description": "Read-only tools run directly; writing files, running commands, and MCP tools ask each time."
+          },
+          "auto": {
+            "label": "Auto-review",
+            "description": "In-workspace writes and safe commands run automatically; out-of-workspace writes, risky commands, and MCP tools still ask."
+          },
+          "bypassPermissions": {
+            "label": "Full access",
+            "description": "Every tool runs without asking. Highest risk; use only for trusted tasks."
           }
         }
       }
@@ -4890,13 +5108,13 @@
       "startFailedContinue": "Failed to start collaboration. Continuing as a single session.",
       "createWorkerRefreshFailed": "Unable to refresh Worker status. Please try again.",
       "openHint": "Bring in a Worker to help",
-      "disabledHint": "Collaboration is disabled for this project. Enable it in project settings.",
-      "unavailableHint": "Unable to verify this project's collaboration setting. Try again shortly.",
+      "disabledHint": "Collaboration is disabled. Enable it in settings.",
+      "unavailableHint": "Unable to verify the collaboration setting. Try again shortly.",
       "unsupportedRemoteHint": "The controlled device is too old to support collaboration.",
       "remoteContinueNotice": " This message is still being sent as a single session.",
       "handoffRecoveredMessage": "Collaboration startup was interrupted last time. Your unsent message has been restored to the composer.",
       "handoffRecoveredGoal": "Collaboration startup was interrupted last time. The goal was not started; its text has been restored to the composer.",
-      "loadingHint": "Still checking this project's collaboration setting. Try again shortly.",
+      "loadingHint": "Still checking the collaboration setting. Try again shortly.",
       "stopHint": "Stop collaboration",
       "stopAria": "Stop collaboration",
       "toggleOnAria": "Collaboration on — click to stop",
@@ -4923,8 +5141,8 @@
         "BUDGET_MODEL_REQUIRES_API_MODE": "This Codex model requires an API key. Configure it in Settings, then try again.",
         "BUDGET_MODEL_REQUIRES_API_MODE_CONTINUE": "This Codex model requires an API key. Collaboration was not started, and this message is continuing as a single session. Configure it in Settings, then try again.",
         "BUDGET_MODEL_REQUIRES_API_MODE_REMOTE": "The controlled device does not have the API key required for this Codex model. Configure it on that device, then retry.",
-        "PRECONDITION_FAILED": "Collaboration is disabled for this project or the session is not eligible.",
-        "PRECONDITION_FAILED_CONTINUE": "Collaboration is disabled for this project. Continuing as a single session.",
+        "PRECONDITION_FAILED": "Collaboration is disabled or the session is not eligible.",
+        "PRECONDITION_FAILED_CONTINUE": "Collaboration was not started. Continuing as a single session.",
         "PRECONDITION_FAILED_REMOTE": "The controlled session is not eligible for collaboration."
       }
     },
@@ -4976,6 +5194,12 @@
           "cancel": "Keep Current Agent",
           "dontShowAgain": "Don’t remind me again"
         }
+      }
+    },
+    "agentSelect": {
+      "label": "Engine",
+      "trigger": {
+        "aria": "Select engine: {{agent}}"
       }
     },
     "atMention": {
@@ -5110,6 +5334,20 @@
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
     "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
   },
+  "chatgptAuthRecovery": {
+    "title": "ChatGPT Sign-In Is No Longer Valid",
+    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Open the ChatGPT App, sign in again, then retry.",
+    "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
+    "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
+    "recovered": "ChatGPT sign-in has been restored. Please retry.",
+    "openApp": "Open ChatGPT App",
+    "relogin": "Sign In to ChatGPT Again",
+    "checking": "Checking…",
+    "recheck": "Check Again",
+    "later": "Later",
+    "openAppFailed": "Couldn’t open the ChatGPT App. Open it manually and sign in again.",
+    "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
+  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "Skipped"
@@ -5141,6 +5379,7 @@
     },
     "agentTask": {
       "emptyTitle": "Subagent task",
+      "subagentStarted": "Subagent {{name}} started",
       "showDetails": "Show subagent details",
       "hideDetails": "Hide subagent details",
       "provider": {
@@ -5178,6 +5417,14 @@
       "aria": "Back to bottom, view {{count}} new messages",
       "label_one": "{{count}} new message",
       "label_other": "{{count}} new messages"
+    },
+    "messageNavRail": {
+      "aria": "Prompt navigation",
+      "jumpAria": "Jump to prompt {{index}}: {{preview}}",
+      "attachmentOnly_one": "{{count}} attachment",
+      "attachmentOnly_other": "{{count}} attachments",
+      "hiddenEarlier_one": "{{count}} earlier prompt not shown",
+      "hiddenEarlier_other": "{{count}} earlier prompts not shown"
     },
     "messageActionBar": {
       "copy": "Copy message",
@@ -5223,12 +5470,6 @@
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
-      "codexSessionExpiredDialog": {
-        "title": "OpenAI Connection Needs an Update",
-        "description": "{{appName}} temporarily can’t use your ChatGPT account. Reconnecting restores OpenAI access for both Codex and Claude; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
-        "confirm": "Reconnect ChatGPT",
-        "cancel": "Later"
-      },
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
@@ -5807,6 +6048,7 @@
       "searchingWeb": "Searching the web…",
       "generatingImage": "Generating an image…",
       "compacting": "Compacting context…",
+      "spawningAgent": "Spawning a subagent…",
       "done": "Done",
       "waiting": "Just wait…",
       "working": "Working…",
@@ -5928,6 +6170,7 @@
     },
     "draft": {
       "createSessionFailed": "Failed to create session, please retry",
+      "piRemoteUnsupported": "Pi runs locally only and can't use SSH remote hosts. Switch to Claude or Codex to use this host.",
       "remoteWorktreeCleanupPending": "The previous remote worktree is still awaiting cleanup. Reconnect the device and try again.",
       "remoteProviderUpdating": "Provider credentials are being updated — retry in a moment",
       "remoteProviderUnsupported": "This provider is not supported in SSH remote sessions — pick another source",
@@ -6175,7 +6418,41 @@
         "moveToProjectRemoteUnsupported": "Moving remote sessions is not supported yet",
         "openInNewWindow": "Open in new window",
         "exportShare": "Export session…",
+        "exportHtml": "Export to HTML…",
+        "exportHtmlSuccess": "Session exported to HTML",
+        "exportHtmlFailed": "HTML export failed",
+        "compact": "Compact context",
+        "compacting": "Compacting…",
+        "compactSuccess": "Context compacted",
+        "compactSuccessWithTokens": "Context compacted: {{before}}k → {{after}}k tokens",
+        "compactFailed": "Compaction failed",
+        "compactNothing": "Nothing to compact yet",
+        "sessionBranches": "Session branches",
         "copySessionLink": "Copy session link"
+      },
+      "sessionBranches": {
+        "title": "Session branches",
+        "close": "Close session branches",
+        "description": "Cindy session forks and Pi's in-session branches live in one tree.",
+        "current": "Current",
+        "empty": "This session has no Pi branches to switch yet.",
+        "emptyEntry": "No visible content",
+        "loadFailed": "Failed to load session branches",
+        "switchFailed": "Failed to switch branch",
+        "switched": "Session branch switched",
+        "switchedWithDraft": "Branch switched and the original prompt was restored to the composer",
+        "runningBlocked": "Wait for the current turn to finish before switching branches.",
+        "remoteBlocked": "Reconnect or upgrade the controlled desktop before switching branches.",
+        "filesWarning": "Switching changes conversation context only; workspace files are not rolled back.",
+        "summarize": "Summarize the branch you leave (uses the model)",
+        "summaryFocus": "Optional summary focus, e.g. preserve error-handling conclusions",
+        "role": {
+          "user": "User",
+          "assistant": "Agent",
+          "tool": "Tool",
+          "summary": "Branch summary",
+          "system": "State"
+        }
       },
       "projectAction": {
         "rename": "Rename project",
@@ -7840,6 +8117,12 @@
       "telegramBotSaveFailed": "Save failed: {{message}}",
       "telegramBotDisconnected": "Telegram bot unbound",
       "telegramBotDisconnectFailed": "Unbind failed: {{message}}",
+      "telegramBotWentOffline": "Now offline — your binding is kept",
+      "telegramBotWentOnline": "Back online",
+      "telegramBotToggleOnlineFailed": "Could not switch: {{message}}",
+      "telegramRemoteWentOffline": "That device is now offline",
+      "telegramRemoteUnsupported": "That device's Cindy is too old for remote offline — update it first",
+      "telegramRemoteFailed": "Could not take it offline: {{message}}",
       "dingtalkBotConnected": "DingTalk bot connected",
       "dingtalkBotConnectFailed": "DingTalk bot connection failed; check credentials, Stream mode, and your network",
       "dingtalkBotAuthFailed": "DingTalk rejected the credentials. Confirm that the Client ID and Client Secret belong to the same app",
@@ -7896,8 +8179,11 @@
       "codexVoiceAuthDescription": "Voice input uses a connected ChatGPT account for GPT realtime speech recognition. The account is not connected or needs an update. Open Model Providers to connect ChatGPT?",
       "codexBinaryMissingTitle": "Codex component not ready",
       "codexBinaryMissingDescription": "The Codex component is not ready yet, so this feature cannot be used. Try again later or check the Codex connection in Settings → Providers.",
+      "piBinaryMissingTitle": "Pi component not ready",
+      "piBinaryMissingDescription": "The Pi component is not ready yet, so this feature cannot be used. Try again later or check the Pi connection in Settings → Providers.",
       "goToSettings": "Open Settings",
       "remoteCodexBinaryMissingTitle": "Codex component not ready on the remote device",
+      "remotePiBinaryMissingTitle": "Pi component not ready on the remote device",
       "remoteAuthDescription": "You need to finish setup on the controlled device \"{{device}}\" before you can start a session here. Configure it on that device and try again.",
       "remoteCodexNoSourceTitle": "No Codex source connected on the remote device",
       "remoteCodexNoSourceDescription": "\"{{device}}\" has no model source connected for Codex, so sessions can't be started from here. Open {{appName}} on that device, sign in to OpenAI or connect another source under Settings → Providers, then try again.",

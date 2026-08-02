@@ -2,17 +2,22 @@
  * subscriptionGateway.test.ts — 订阅槽网关单测(纯 DI,假时钟,无 Electron)。
  * 覆盖:did- 扇出(topic 白名单/停用忽略)、熄灯缓冲+唤醒补投+溢出丢最旧
  * 带 dropped、seq 单调;will- 串行短路、超时 fail-open、熔断降级、verdict
- * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化。
+ * 归属校验、reason 截断;turn 翻译器状态机与 usage 归一化;activity 边界配对与轮次来源过滤。
  */
 
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
   GhostSubscriptionGateway,
+  GhostActivityTracker,
+  GhostTapPendingQueue,
+  GhostTurnOriginTracker,
   GhostTurnTranslator,
   createGhostSessionFocusTracker,
+  ghostActivityId,
   isGhostEligibleSessionRow,
   normalizeTurnUsage,
+  readStatusIsRunning,
   type GhostSubscriptionGatewayDeps,
 } from '../subscriptionGateway';
 import {
@@ -80,8 +85,28 @@ describe('did- 旁听扇出', () => {
     running.add('b');
     gw.publish('turn', 'did-turn-start', TURN_DATA);
     gw.publish('turn', 'did-turn-end', { ...TURN_DATA, durationMs: 5, endReason: 'completed' });
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'ignored' });
     expect(sent.map((s) => s.ghostId)).toEqual(['a', 'a']);
     expect(sent.map((s) => (s.payload as { seq: number }).seq)).toEqual([1, 2]);
+  });
+
+  it('activity topic 复用同一扇出/seq/buffer/wake 管道', async () => {
+    const { gw, sent, running, deps } = makeGateway({
+      listGhosts: () => [ghost('a', { topics: ['activity'] })],
+    });
+    gw.publish('activity', 'did-thinking-start', { sessionId: 's1', blockId: 'b1' });
+    expect(sent).toHaveLength(0);
+    await vi.waitFor(() => expect(sent).toHaveLength(1));
+    expect(deps.wake).toHaveBeenCalledOnce();
+    expect(sent[0]?.payload).toMatchObject({
+      topic: 'activity',
+      name: 'did-thinking-start',
+      seq: 1,
+      data: { sessionId: 's1', blockId: 'b1' },
+    });
+    running.add('a');
+    gw.publish('activity', 'did-thinking-end', { sessionId: 's1', blockId: 'b1' });
+    expect(sent[1]?.payload).toMatchObject({ topic: 'activity', seq: 2 });
   });
 
   it('熄灯缓冲:事件触发唤醒,醒后按序补投', async () => {
@@ -115,6 +140,117 @@ describe('did- 旁听扇出', () => {
     // 补投保序:seq 严格递增
     const seqs = sent.map((s) => (s.payload as { seq: number }).seq);
     expect(seqs).toEqual([...seqs].sort((a, b) => a - b));
+  });
+});
+
+describe('GhostActivityTracker', () => {
+  /** 出网关的标识都是投影值(见 ghostActivityId);断言用同一个投影算,不写死哈希。 */
+  const aid = (upstreamId: string) => ghostActivityId('s1', upstreamId);
+
+  it('按 thinking blockId 边界只发元数据,不发正文', () => {
+    const events: Array<{ name: string; data: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: { activity: (name, data) => events.push({ name, data }) },
+    });
+    tracker.beginTurn();
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'delta', blockId: 'b1', text: 'secret reasoning' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'secret reasoning' } });
+    tracker.handleEvent({ type: 'thinking', data: { stage: 'final', blockId: 'b1', text: 'duplicate' } });
+    expect(events).toEqual([
+      { name: 'did-thinking-start', data: { sessionId: 's1', blockId: aid('b1') } },
+      { name: 'did-thinking-end', data: { sessionId: 's1', blockId: aid('b1') } },
+    ]);
+    expect(events.some((event) => JSON.stringify(event).includes('secret reasoning'))).toBe(false);
+    // 上游原值不外泄:投影后与 'b1' 不同(sessionId 保持明文,它是跨 topic 关联键)。
+    expect(events.some((event) => JSON.stringify(event).includes('"b1"'))).toBe(false);
+  });
+
+  it('approval 与 user-input 生命周期分别映射, finishAll 给所有在场请求兜底结束', () => {
+    const names: string[] = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: { activity: (name) => names.push(name) },
+    });
+    tracker.beginTurn();
+    tracker.startInteraction('permission', 'p1');
+    tracker.startInteraction('plan_review', 'p2');
+    tracker.startInteraction('ask_user_question', 'q1');
+    // 三个请求同时在场:开始阶段只有 start,谁都不被提前收口。
+    expect(names).toEqual([
+      'did-approval-start',
+      'did-approval-start',
+      'did-user-input-start',
+    ]);
+    // 回合收口不碰审批(用户可能还在批),只有会话级 finishAll 才兜底。
+    tracker.finishTurn();
+    expect(names).toHaveLength(3);
+    tracker.finishAll();
+    expect(names.slice(3)).toEqual([
+      'did-approval-end',
+      'did-approval-end',
+      'did-user-input-end',
+    ]);
+  });
+
+  it('codex 计划审批在回合终态之后开始也能完整配对', () => {
+    const events: Array<{ name: string; requestId: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: {
+        activity: (name, data) =>
+          events.push({ name, requestId: (data as { requestId?: unknown }).requestId }),
+      },
+    });
+    // codex 计划模式真实时序:计划 turn 的 done 先入队被消费(turn 收口),
+    // runPlanReviewFlow 之后才发起 plan_review。
+    tracker.beginTurn();
+    tracker.finishTurn();
+    tracker.startInteraction('plan_review', 'plan-1');
+    // 回合已收口也必须发 start:否则插件根本不知道用户正在批计划。
+    expect(events).toEqual([{ name: 'did-approval-start', requestId: aid('plan-1') }]);
+    // 期间新回合开始也不能把仍在等的审批抹掉(修订 turn 由审批结果触发)。
+    tracker.beginTurn();
+    expect(events).toHaveLength(1);
+    tracker.endInteraction('plan_review', 'plan-1');
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: aid('plan-1') },
+      { name: 'did-approval-end', requestId: aid('plan-1') },
+    ]);
+  });
+
+  it('并发审批按 requestId 各自配对:先结束的不抹掉仍在等的', () => {
+    const events: Array<{ name: string; requestId: unknown }> = [];
+    const tracker = new GhostActivityTracker({
+      sessionId: 's1',
+      sink: {
+        activity: (name, data) =>
+          events.push({ name, requestId: (data as { requestId?: unknown }).requestId }),
+      },
+    });
+    tracker.beginTurn();
+    tracker.startInteraction('permission', 'a');
+    tracker.startInteraction('permission', 'b');
+    tracker.startInteraction('permission', 'b'); // 同 id 重复进入不重发 start
+    tracker.endInteraction('permission', 'b');
+    // b 已收口而 a 仍在等:此刻绝不能出现 a 的 end。
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: aid('a') },
+      { name: 'did-approval-start', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('b') },
+    ]);
+    tracker.endInteraction('permission', 'b'); // 已收口不重发 end
+    tracker.endInteraction('permission', 'a');
+    expect(events).toEqual([
+      { name: 'did-approval-start', requestId: aid('a') },
+      { name: 'did-approval-start', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('b') },
+      { name: 'did-approval-end', requestId: aid('a') },
+    ]);
+    // 全部收口后 finishTurn 不再补发。
+    tracker.finishTurn();
+    expect(events).toHaveLength(4);
   });
 });
 
@@ -663,5 +799,162 @@ describe('GhostTurnTranslator(status/done/error → did-turn-*)', () => {
     ).toEqual({ inputTokens: 100, outputTokens: 40, cacheReadTokens: 60 });
     expect(normalizeTurnUsage({})).toBeUndefined();
     expect(normalizeTurnUsage('x')).toBeUndefined();
+  });
+});
+
+describe('readStatusIsRunning', () => {
+  it('只认 status 事件,data 形状不对按 false', () => {
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: true } })).toBe(true);
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: false } })).toBe(false);
+    // 非布尔真值不认(避免 'true' / 1 之类被当成在跑)
+    expect(readStatusIsRunning({ type: 'status', data: { isRunning: 'true' } })).toBe(false);
+    expect(readStatusIsRunning({ type: 'status', data: undefined })).toBe(false);
+    expect(readStatusIsRunning({ type: 'status', data: null })).toBe(false);
+    // null 表示"不是轮次起点判断的对象",与 false 语义不同
+    expect(readStatusIsRunning({ type: 'done', data: {} })).toBeNull();
+    expect(readStatusIsRunning({ type: 'thinking', data: {} })).toBeNull();
+  });
+});
+
+describe('ghostActivityId(标识对外投影)', () => {
+  it('确定性:同会话同上游 id 恒定同值 —— start / end 才能配上', () => {
+    expect(ghostActivityId('s1', 'req-1')).toBe(ghostActivityId('s1', 'req-1'));
+  });
+
+  it('不透传上游原值,也不含其中任何语义片段', () => {
+    // codex MCP elicitation 的真实形态(codex/index.ts:4699)——serverName 拼在里头
+    const upstream = 'mcp-elicitation:cindy-github:turn-7:3';
+    const projected = ghostActivityId('s1', upstream);
+    expect(projected).not.toBe(upstream);
+    expect(projected).not.toContain('cindy-github');
+    expect(projected).not.toContain('mcp-elicitation');
+    // codex 计划审批前缀同样不外泄("这是计划审批"本身也是信息)
+    expect(ghostActivityId('s1', 'codex-plan-review:turn-7:1')).not.toContain('plan-review');
+    expect(projected).toMatch(/^[0-9a-f]{16}$/);
+  });
+
+  it('掺 sessionId:同一个上游 id 在不同会话得到不同值,不给跨会话关联留口', () => {
+    expect(ghostActivityId('s1', 'req-1')).not.toBe(ghostActivityId('s2', 'req-1'));
+  });
+
+  it('不同上游 id 在同会话内不同值', () => {
+    expect(ghostActivityId('s1', 'req-1')).not.toBe(ghostActivityId('s1', 'req-2'));
+  });
+
+  it('带长度前缀拼接:边界组合不撞车', () => {
+    // 若直接用分隔符拼接,('s1:x','y') 与 ('s1','x:y') 之类可能拼出同一个串
+    expect(ghostActivityId('s1:x', 'y')).not.toBe(ghostActivityId('s1', 'x:y'));
+  });
+});
+
+describe('GhostTapPendingQueue', () => {
+  const ev = (n: number) => ({ type: 'event' as const, event: { type: `e${n}` } });
+  const act = (phase: 'start' | 'end', requestId: string) => ({
+    type: 'activity' as const,
+    phase,
+    request: { kind: 'permission' as const, requestId },
+  });
+
+  it('封顶前照收,drain 取快照并清空', () => {
+    const q = new GhostTapPendingQueue(3);
+    q.push(ev(1));
+    q.push(ev(2));
+    expect(q.size).toBe(2);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e1', 'e2']);
+    expect(q.size).toBe(0);
+    expect(q.dropped).toBe(0);
+  });
+
+  it('溢出丢最旧,首次溢出只回调一次', () => {
+    const onFirstOverflow = vi.fn();
+    const q = new GhostTapPendingQueue(2, onFirstOverflow);
+    q.push(ev(1));
+    q.push(ev(2));
+    q.push(ev(3));
+    q.push(ev(4));
+    expect(q.size).toBe(2);
+    expect(q.dropped).toBe(2);
+    expect(onFirstOverflow).toHaveBeenCalledOnce();
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : ''))).toEqual(['e3', 'e4']);
+  });
+
+  it('丢最旧不留孤儿 start:留下的一定是到达序的后缀', () => {
+    const q = new GhostTapPendingQueue(3);
+    q.push(act('start', 'p1'));
+    q.push(ev(1));
+    q.push(ev(2));
+    // 满了:挤掉队首的 start,end 照常入队 —— 落单的 end 在下游是 no-op。
+    q.push(act('end', 'p1'));
+    expect(q.dropped).toBe(1);
+    const items = q.drain();
+    expect(items.map((i) => (i.type === 'event' ? i.event.type : i.phase))).toEqual([
+      'e1',
+      'e2',
+      'end',
+    ]);
+  });
+
+  it('普通 event 与 activity 同规则:收口事件永远留在队尾,不必按类型配对压缩', () => {
+    const q = new GhostTapPendingQueue(2);
+    q.push(ev(1)); // thinking start
+    q.push(ev(2)); // delta…
+    q.push(act('start', 'p1'));
+    q.push(ev(3)); // status(false) / done 这类终态
+    expect(q.dropped).toBe(2);
+    expect(q.drain().map((i) => (i.type === 'event' ? i.event.type : i.phase))).toEqual([
+      'start',
+      'e3',
+    ]);
+  });
+});
+
+describe('GhostTurnOriginTracker', () => {
+  it('缺省放行用户 Desktop:首个轮次起点到达前也认', () => {
+    const origin = new GhostTurnOriginTracker();
+    expect(origin.acceptsInteraction(undefined)).toBe(true);
+    expect(origin.acceptsInteraction({ origin: { kind: 'desktop' } })).toBe(true);
+  });
+
+  it('非 desktop route 直接挡掉(IM / hook 的 channel-card / headless 面)', () => {
+    const origin = new GhostTurnOriginTracker();
+    expect(origin.acceptsInteraction({ origin: { kind: 'im' } })).toBe(false);
+    expect(origin.acceptsInteraction({ origin: { kind: 'hook' } })).toBe(false);
+    expect(origin.acceptsInteraction({ origin: { kind: 'scheduler' } })).toBe(false);
+  });
+
+  it('goal / scheduler 直发(无 route)靠事件流上的轮次来源挡掉', () => {
+    const origin = new GhostTurnOriginTracker();
+    // goal 续跑:GoalController 直发 session.send,router 侧没有 route
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+    // 轮次终态之后 origin 会被 Session 清空,但不能因此放行(codex 计划审批就在终态后)
+    origin.noteEvent({ type: 'status', data: { isRunning: false } });
+    origin.noteEvent({ type: 'done', data: {} });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+
+    origin.noteEvent({
+      type: 'status',
+      data: { isRunning: true },
+      turnOrigin: { kind: 'scheduler' },
+    });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+  });
+
+  it('自动化轮次之后的用户轮次要恢复放行(不带 turnOrigin = Desktop 直发)', () => {
+    const origin = new GhostTurnOriginTracker();
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
+    // Desktop 的 send 不传 origin,Session 就不会给事件打 turnOrigin
+    origin.noteEvent({ type: 'status', data: { isRunning: true } });
+    expect(origin.acceptsInteraction(undefined)).toBe(true);
+  });
+
+  it('只有轮次起点更新来源:轮次中途的事件不会把 goal 抹回 user', () => {
+    const origin = new GhostTurnOriginTracker();
+    origin.noteEvent({ type: 'status', data: { isRunning: true }, turnOrigin: { kind: 'goal' } });
+    // 中途事件在 Session 清空 origin 后不带 turnOrigin,逐事件更新就会误判
+    origin.noteEvent({ type: 'thinking', data: { stage: 'start', blockId: 'b1' } });
+    origin.noteEvent({ type: 'assistant', data: {} });
+    expect(origin.acceptsInteraction(undefined)).toBe(false);
   });
 });

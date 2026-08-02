@@ -124,7 +124,7 @@ describe('Dialogue sidebar section', () => {
   });
 
   it('creates a standalone dialogue without inheriting a project draft directory', () => {
-    expect(sidebarSource).toContain('patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] })');
+    expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
     expect(sidebarSource).toMatch(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/);
     expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
   });

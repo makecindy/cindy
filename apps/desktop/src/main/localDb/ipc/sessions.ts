@@ -21,6 +21,7 @@ import type { DbClient } from '../client/DbClient';
 import { sessions, messages } from '../schema';
 import { throwIpcError, requireString, requireObject } from '../../utils/ipcValidate';
 import { resolveBusinessSessionId } from '../../sessionIds';
+import { normalizeDbAgentKind } from '../../../shared/agentKindConversion';
 import {
   sessionToCamel,
   sessionCreateToRow,
@@ -57,6 +58,8 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const initialSessionListLogged = new Set<string>();
+const SLOW_SESSION_LIST_MS = 250;
 
 /**
  * 广播 sessions:patched 到本机所有窗口 + device-link tap。tap 让该 patch 经 topic 路由
@@ -192,7 +195,7 @@ const REMOTE_PERSIST_FIELDS = new Set([
 export async function applyAgentSwitchToSessionRow(
   sessionId: string,
   patch: {
-    agentKind: 'cc' | 'codex';
+    agentKind: 'cc' | 'codex' | 'pi';
     model: string;
     providerId: string | null | undefined;
     sdkSessionId?: string | null;
@@ -579,7 +582,7 @@ export interface OverwritableAutoTitleTarget {
    * `reconcileCreateOptsAgainstDb` 处理的正是同一类漂移),用错 agent 会让标题
    * 走错供应商 —— 纯 Codex / 纯 Claude 用户会因此只拿到 fallback 标题。
    */
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   /**
    * 是否仍停在建会话时的裸默认标题。合成占位(纯附件消息)只允许覆写这一种 ——
    * fork 占位与上一条附件写下的合成占位都要保留到用户真正打字为止。
@@ -594,7 +597,7 @@ export async function getOverwritableAutoTitle(
   const db = getDbClient().drizzle;
   const row = await selectSessionWithCount(db, id);
   if (!row) return null;
-  const agentKind = row.agentKind === 'codex' ? 'codex' : 'claude-code';
+  const agentKind = row.agentKind === 'codex' || row.agentKind === 'pi' ? row.agentKind : 'claude-code';
   const overwritable =
     row.title === DEFAULT_DRAFT_SESSION_TITLE ||
     (!!row.parentSessionId && row.title.startsWith(FORK_PLACEHOLDER_TITLE_PREFIX)) ||
@@ -686,7 +689,9 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
   });
 }
 
-export function registerSessionIpc(): void {
+export function registerSessionIpc(
+  readSessionListLogScope: () => string | null = () => null,
+): void {
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
   // 是在 turn 飞行中或「done → ended 落库」空窗里取的(startedAt > endedAt),此前
@@ -699,6 +704,7 @@ export function registerSessionIpc(): void {
   ipcMain.handle(
     'local-db:sessions:list',
     async (_e, limit: unknown, status: unknown, options: unknown) => {
+      const startedAt = performance.now();
       const db = getDbClient().drizzle;
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
@@ -730,7 +736,8 @@ export function registerSessionIpc(): void {
         mergedRows = mergeSessionListRows(rows, pinnedRows);
       }
 
-      return mergedRows.map((r) =>
+      const queryFinishedAt = performance.now();
+      const result = mergedRows.map((r) =>
         sessionToCamel({
           ...r.session,
           messageCount: r.messageCount,
@@ -738,6 +745,28 @@ export function registerSessionIpc(): void {
           latestMessageRole: r.latestMessageRole,
         }),
       );
+      const finishedAt = performance.now();
+      const filter = statusFilter ?? 'all';
+      const elapsedMs = Math.round(finishedAt - startedAt);
+      const fields = JSON.stringify({
+        event: 'localDb.sessions.list.done',
+        filter,
+        cap,
+        includePinned,
+        rows: result.length,
+        queryElapsedMs: Math.round(queryFinishedAt - startedAt),
+        mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
+        elapsedMs,
+      });
+      const logScope = readSessionListLogScope() ?? 'unscoped';
+      const logKey = `${logScope}:${filter}:${includePinned ? 'pinned' : 'plain'}`;
+      if (!initialSessionListLogged.has(logKey) || elapsedMs >= SLOW_SESSION_LIST_MS) {
+        initialSessionListLogged.add(logKey);
+        log.info(fields);
+      } else {
+        log.debug(fields);
+      }
+      return result;
     },
   );
 
@@ -748,7 +777,7 @@ export function registerSessionIpc(): void {
     const id = resolveBusinessSessionId(bodyObj.id);
     const createBody = bodyObj as Parameters<typeof sessionCreateToRow>[1];
     // M16: agentKind 白名单校验（防止 renderer 传非法值）
-    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex']);
+    const ALLOWED_AGENT_KINDS = new Set<string>(['cc', 'codex', 'pi']);
     if (bodyObj.agentKind !== undefined && !ALLOWED_AGENT_KINDS.has(bodyObj.agentKind as string)) {
       throwIpcError('INVALID_PARAMS', `invalid agentKind: ${String(bodyObj.agentKind)}`);
     }
@@ -961,7 +990,7 @@ export function registerSessionIpc(): void {
         state: row.status === 'deleted' ? 'deleted' : 'available',
         status: row.status,
         title: row.title,
-        agentKind: row.agentKind === 'codex' ? 'codex' : 'cc',
+        agentKind: normalizeDbAgentKind(row.agentKind),
       };
     });
   });

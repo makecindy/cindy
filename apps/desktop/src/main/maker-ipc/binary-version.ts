@@ -5,7 +5,8 @@
  * 把首行输出回给 renderer 的 About 面板。
  *
  * 设计:
- *   - 路径来源: getReadyBinaryPath() (prepare 成功后写入), 拿不到再退到 getCachedBinaryStatus()。
+ *   - Claude/Codex 在 prepare 成功后优先读 getReadyBinaryPath(),必要时可读受管缓存；
+ *     Pi 是可选资产，只允许使用本次 prepare 成功的路径，失败时不能复用旧缓存。
  *   - 进程内按 binaryPath 缓存结果, 同一 binary 只 spawn 一次。
  *   - 5s 超时, 失败时返回 { error }。
  */
@@ -36,12 +37,13 @@ export interface AgentBinaryVersionResult {
 const versionCache = new Map<string, string>();
 
 function isAgentBinaryKind(value: unknown): value is AgentBinaryKind {
-  return value === 'claude-code' || value === 'codex';
+  return value === 'claude-code' || value === 'codex' || value === 'pi';
 }
 
 function resolveBinaryPath(kind: AgentBinaryKind): string | null {
   const ready = getReadyBinaryPath(kind);
   if (ready) return ready;
+  if (kind === 'pi') return null;
   const cached = getCachedBinaryStatus(kind);
   return cached.binaryReady && cached.binaryPath ? cached.binaryPath : null;
 }
@@ -76,7 +78,7 @@ export function registerMakerBinaryVersionIpc(): void {
     MAKER_INVOKE.AGENT_BINARY_VERSION,
     async (_e, agentKind: unknown): Promise<AgentBinaryVersionResult> => {
       if (!isAgentBinaryKind(agentKind)) {
-        throwIpcError('INVALID_PARAMS', 'agentKind required (claude-code | codex)');
+        throwIpcError('INVALID_PARAMS', 'agentKind required (claude-code | codex | pi)');
       }
 
       const binaryPath = resolveBinaryPath(agentKind);

@@ -3,13 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BUNDLED_CATALOG } from '@cindy/model-providers';
 
 import {
+  commitModelPlaneFromCatalog,
   getActiveCatalog,
   getActiveCatalogRevision,
   setActiveCatalog,
   setActiveCatalogChangedListener,
   setAnthropicDiscoveredModels,
   setDiscoveredCodexModels,
-  setProviderModelsFromCatalog,
 } from '../active-catalog.js';
 
 describe('active catalog revision', () => {
@@ -24,19 +24,21 @@ describe('active catalog revision', () => {
     const start = getActiveCatalogRevision();
     const listener = vi.fn((revision: number) => ({
       revision,
-      ids: getActiveCatalog().providers
-        .find((provider) => provider.id === 'openai')
+      ids: getActiveCatalog()
+        .providers.find((provider) => provider.id === 'openai')
         ?.models.codex?.map((model) => model.id),
     }));
     setActiveCatalogChangedListener(listener);
 
-    setDiscoveredCodexModels([{
-      id: 'gpt-next-live',
-      name: 'GPT Next Live',
-      contextWindow: 300_000,
-      efforts: ['high'],
-      defaultEffort: 'high',
-    }]);
+    setDiscoveredCodexModels([
+      {
+        id: 'gpt-next-live',
+        name: 'GPT Next Live',
+        contextWindow: 300_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      },
+    ]);
 
     expect(listener).toHaveBeenCalledOnce();
     expect(listener.mock.results[0]?.value).toMatchObject({ revision: start + 1 });
@@ -47,19 +49,21 @@ describe('active catalog revision', () => {
     const start = getActiveCatalogRevision();
     const listener = vi.fn((revision: number) => ({
       revision,
-      ids: getActiveCatalog().providers
-        .find((provider) => provider.id === 'anthropic')
+      ids: getActiveCatalog()
+        .providers.find((provider) => provider.id === 'anthropic')
         ?.models['claude-code']?.map((model) => model.id),
     }));
     setActiveCatalogChangedListener(listener);
 
-    setAnthropicDiscoveredModels([{
-      id: 'claude-opus-next',
-      name: 'Claude Opus Next',
-      contextWindow: 1_000_000,
-      efforts: ['high'],
-      defaultEffort: 'high',
-    }]);
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-opus-next',
+        name: 'Claude Opus Next',
+        contextWindow: 1_000_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      },
+    ]);
 
     expect(listener).toHaveBeenCalledOnce();
     expect(listener.mock.results[0]?.value).toMatchObject({ revision: start + 1 });
@@ -67,8 +71,10 @@ describe('active catalog revision', () => {
   });
 
   it('refreshes one provider model snapshot without replacing live routing or other providers', () => {
+    // registry-free 克隆:本用例只验「换模型快照不换路由」机制,隔离 registry 实体化层。
     const current = structuredClone(BUNDLED_CATALOG);
-    const incoming = structuredClone(BUNDLED_CATALOG);
+    delete (current as { modelRegistry?: unknown }).modelRegistry;
+    const incoming = structuredClone(current);
     const currentXai = current.providers.find((provider) => provider.id === 'xai');
     const incomingXai = incoming.providers.find((provider) => provider.id === 'xai');
     const currentOpenAi = current.providers.find((provider) => provider.id === 'openai');
@@ -84,30 +90,37 @@ describe('active catalog revision', () => {
       ...incomingXai.routing.codex!,
       upstream: 'https://incoming-routing.example.com/v1',
     };
-    incomingXai.models.codex = [{
-      id: 'xai/new-model',
-      name: 'New xAI Model',
-      contextWindow: 256_000,
-      efforts: ['high'],
-      defaultEffort: 'high',
-    }];
-    incomingOpenAi.models.codex = [{
-      id: 'should-not-replace-openai',
-      name: 'Should Not Replace OpenAI',
-      contextWindow: 1,
-      efforts: [],
-      defaultEffort: null,
-    }];
+    incomingXai.models.codex = [
+      {
+        id: 'xai/new-model',
+        name: 'New xAI Model',
+        contextWindow: 256_000,
+        efforts: ['high'],
+        defaultEffort: 'high',
+      },
+    ];
+    incomingOpenAi.models.codex = [
+      {
+        id: 'should-not-replace-openai',
+        name: 'Should Not Replace OpenAI',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
 
     setActiveCatalog(current);
-    setProviderModelsFromCatalog('xai', incoming);
+    commitModelPlaneFromCatalog(incoming);
 
     const active = getActiveCatalog();
-    expect(active.providers.find((provider) => provider.id === 'xai')?.models.codex)
-      .toEqual(incomingXai.models.codex);
-    expect(active.providers.find((provider) => provider.id === 'xai')?.routing.codex)
-      .toEqual(currentXai.routing.codex);
-    expect(active.providers.find((provider) => provider.id === 'openai')?.models.codex)
-      .toEqual(currentOpenAi.models.codex);
+    expect(active.providers.find((provider) => provider.id === 'xai')?.models.codex).toEqual(
+      incomingXai.models.codex,
+    );
+    expect(active.providers.find((provider) => provider.id === 'xai')?.routing.codex).toEqual(
+      currentXai.routing.codex,
+    );
+    expect(active.providers.find((provider) => provider.id === 'openai')?.models.codex).toEqual(
+      currentOpenAi.models.codex,
+    );
   });
 });

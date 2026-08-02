@@ -87,6 +87,7 @@ export function registerMessageIpc(): void {
     const limit = clampLimit((opts as { limit?: number } | undefined)?.limit);
     const before = (opts as { before?: string } | undefined)?.before;
     const beforeTs = (opts as { beforeTs?: number } | undefined)?.beforeTs;
+    const after = (opts as { after?: string } | undefined)?.after;
     const db = getDbClient().drizzle;
 
     // 外部历史导入(Codex rollout / Claude transcript):device-link 隧道调用
@@ -96,11 +97,12 @@ export function registerMessageIpc(): void {
       sid,
       {},
       {
-        deviceLinkFirstPage: !before && beforeTs == null,
+        deviceLinkFirstPage: !before && beforeTs == null && !after,
       },
     );
 
     let beforeCursor: { createdAt: number; rowid: number } | null = null;
+    let afterCursor: { createdAt: number; rowid: number } | null = null;
     let beforeMs: number | null = null;
     if (typeof before === 'string' && before) {
       const beforeRow = await db
@@ -113,6 +115,14 @@ export function registerMessageIpc(): void {
       }
     } else if (typeof beforeTs === 'number' && Number.isFinite(beforeTs)) {
       beforeMs = beforeTs;
+    }
+    if (!beforeCursor && beforeMs === null && typeof after === 'string' && after) {
+      const afterRow = await db
+        .select({ createdAt: messages.createdAt, rowid: messageRowid })
+        .from(messages)
+        .where(and(eq(messages.id, after), eq(messages.sessionId, sid)))
+        .limit(1);
+      if (afterRow.length > 0) afterCursor = afterRow[0];
     }
 
     // /clear：过滤 createdAt > session.clearedAt，本地 DB 旧消息也遵守 clearedAt 边界
@@ -137,6 +147,13 @@ export function registerMessageIpc(): void {
       );
     } else if (beforeMs !== null) {
       conds.push(lt(messages.createdAt, beforeMs));
+    } else if (afterCursor) {
+      conds.push(
+        or(
+          gt(messages.createdAt, afterCursor.createdAt),
+          and(eq(messages.createdAt, afterCursor.createdAt), gt(messageRowid, afterCursor.rowid)),
+        ),
+      );
     }
     if (clearedAtMs !== null) conds.push(gt(messages.createdAt, clearedAtMs));
     const whereExpr = and(...conds);
@@ -148,9 +165,13 @@ export function registerMessageIpc(): void {
       })
       .from(messages)
       .where(whereExpr)
-      .orderBy(desc(messages.createdAt), desc(messageRowid))
+      .orderBy(
+        afterCursor ? asc(messages.createdAt) : desc(messages.createdAt),
+        afterCursor ? asc(messageRowid) : desc(messageRowid),
+      )
       .limit(limit);
-    return hydrateLegacyUserTurnCosts(rows.map(messageToCamelWithRowid));
+    const orderedRows = afterCursor ? rows.slice().reverse() : rows;
+    return hydrateLegacyUserTurnCosts(orderedRows.map(messageToCamelWithRowid));
   });
 
   ipcMain.handle(
@@ -513,7 +534,7 @@ export async function runMessagesListImportSideEffects(
  * handleMessageCreatedRaw 对已存在 clientId 走 merge/替换语义,因此**更新**行
  * (如 dismiss)复用同一事件即可让 peer 视图刷新,无需新增 onUpdated 通道。
  */
-function broadcastMessageRow(sessionId: string, msg: Message): void {
+export function broadcastMessageRow(sessionId: string, msg: Message): void {
   tapWindowBroadcast('local-db:messages:created', { sessionId, message: msg });
   for (const win of BrowserWindow.getAllWindows()) {
     if (win.isDestroyed()) continue;
@@ -1044,7 +1065,7 @@ export async function createMessage(
      * agentMeta 需要它;main 侧 SDK 事件落库路径必传,renderer pending echo 等
      * 无 SDK 元信息的行留空(null 回落 session.agentKind)。
      */
-    agentKind?: 'cc' | 'codex' | null;
+    agentKind?: 'cc' | 'codex' | 'pi' | null;
     createdAt?: number;
   },
   opts?: {
@@ -1779,7 +1800,7 @@ export interface ParkedEngineSession {
  */
 export async function findParkedEngineSession(
   sessionId: string,
-  targetDbKind: 'cc' | 'codex',
+  targetDbKind: 'cc' | 'codex' | 'pi',
 ): Promise<ParkedEngineSession | null> {
   const db = getDbClient().drizzle;
   const [sessRow] = await db

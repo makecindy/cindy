@@ -9,7 +9,7 @@ import type {
 import type { MobileAgentCapabilities } from './agentCapabilities';
 import type { RemoteSession } from './types';
 
-export type MobileSessionAgentKind = 'claude-code' | 'codex';
+export type MobileSessionAgentKind = 'claude-code' | 'codex' | 'pi';
 
 /** 将不可信 device-link payload 收窄为公开 intent；非法值按“无意图”处理。 */
 export function normalizeSessionAgentSwitchIntent(
@@ -17,7 +17,11 @@ export function normalizeSessionAgentSwitchIntent(
 ): MobileSessionAgentSwitchIntent | null {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
   const item = value as Record<string, unknown>;
-  if (item.targetAgentKind !== 'claude-code' && item.targetAgentKind !== 'codex') return null;
+  if (
+    item.targetAgentKind !== 'claude-code'
+    && item.targetAgentKind !== 'codex'
+    && item.targetAgentKind !== 'pi'
+  ) return null;
   if (typeof item.model !== 'string' || item.model.length === 0) return null;
   // providerId 缺失(undefined)按 null 处理,与桌面 projectPendingAgentSwitchIntent 的
   // `providerId ?? null` 语义对齐——只有出现非 string / 非 null / 非 undefined 的脏值才判非法,
@@ -38,7 +42,9 @@ export function normalizeSessionAgentSwitchIntent(
 
 /** DB 会话行的 cc/codex 映射到 maker agent kind。 */
 export function sessionAgentKind(session: Pick<RemoteSession, 'agentKind'>): MobileSessionAgentKind {
-  return session.agentKind === 'codex' ? 'codex' : 'claude-code';
+  return session.agentKind === 'codex' || session.agentKind === 'pi'
+    ? session.agentKind
+    : 'claude-code';
 }
 
 /** 手机是否应展示 Agent 分段；远程 SSH / Orca 会话继续保持单 Agent。 */
@@ -52,5 +58,13 @@ export function supportsMobileSessionAgentSwitch(
 }
 
 export function mobileAgentLabel(agentKind: MobileSessionAgentKind): string {
-  return agentKind === 'codex' ? 'Codex' : 'Claude Code';
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+}
+
+export function mobileAgentLabelFromUnknown(agentKind: unknown): string {
+  return agentKind === 'codex' ? 'Codex' : agentKind === 'pi' ? 'Pi' : 'Claude Code';
+}
+
+export function mobileAgentVendor(agentKind: MobileSessionAgentKind): 'cc' | 'codex' | 'pi' {
+  return agentKind === 'claude-code' ? 'cc' : agentKind;
 }

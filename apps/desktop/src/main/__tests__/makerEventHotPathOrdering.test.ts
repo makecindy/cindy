@@ -32,10 +32,14 @@ describe('maker:event hot path ordering', () => {
       'registration.disposers.push(session.onStatusChange((status) => {',
     );
     // #1286:拆线(实例替换 / 会话关闭)必须给插件补 did-turn-end,否则订阅方的
-    // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。
-    expect(wireSessionSource).toContain(
-      'registration.disposers.push(() => ghostSessionTap.dispose());',
-    );
+    // 「AI 在忙」外层状态永久卡在 working,除重启没有自愈手段。同一个 disposer 里
+    // 摘 interaction observer(#1283),不摘会让 activity 的审批边界发给已拆线的 tap。
+    const tapDisposerIndex = wireSessionSource.indexOf('ghostSessionTap.dispose();');
+    expect(tapDisposerIndex).toBeGreaterThanOrEqual(0);
+    expect(
+      wireSessionSource.lastIndexOf('registration.disposers.push(', tapDisposerIndex),
+    ).toBeGreaterThanOrEqual(0);
+    expect(wireSessionSource).toContain('installInteractionLifecycleObserver(session, null);');
   });
 
   it('broadcasts EVENT before usage/context/island/idle side effects', () => {

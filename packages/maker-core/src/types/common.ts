@@ -5,7 +5,7 @@
  * 故意保持兼容以便 desktop adapter 层零代码翻译。
  */
 
-export type AgentKind = 'claude-code' | 'codex';
+export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type WorkspaceKind = 'project' | 'dialogue';
 
 /**
@@ -16,8 +16,8 @@ export type WorkspaceKind = 'project' | 'dialogue';
  *   - Codex:  low | medium | high | xhigh | max | ultra
  *     （max/ultra 仅部分模型支持，如 GPT-5.6 Sol；旧模型仍只到 xhigh，由目录 efforts 决定）
  *
- * minimal 只作为历史数据 / 旧调用兼容输入保留，当前模型能力不应把它暴露为可选档。
- * adapter 收到后应按对应 agent 语义降级，而不是让新 UI / MCP schema 继续产生它。
+ * minimal 由原生支持它的 runtime（Pi，以及部分 Codex 模型）按 capability 暴露；
+ * 其他模型收到历史 minimal 值时应按自身语义降级。
  *
  * UI 应该读对应 agent 的 capabilities.effortLevels 渲染下拉，避免传不支持的值。
  */
@@ -60,4 +60,19 @@ export interface AuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  /**
+   * Codex OAuth 凭证当前的物理存储范围。
+   *
+   * - system-shared: Cindy 的 auth.json 与本机 ChatGPT/Codex App 共用同一文件。
+   * - instance-isolated: Cindy 使用自己的独立 auth.json。
+   * - unknown: 凭证已失效/丢失，无法可靠回推失效前的范围。
+   *
+   * 其它 agent 不返回该字段。
+   */
+  credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  /**
+   * A replacement Codex OAuth credential exists locally but must pass an account-level RPC before
+   * UI may declare the previous invalidation recovered.
+   */
+  recoveryRequiredReason?: string;
 }

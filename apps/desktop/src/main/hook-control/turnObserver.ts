@@ -10,7 +10,7 @@
  *      (见 dispatcher 的 pending-reopen 记账与协议阶段 18)。
  *
  * 收口语义有几处不是"看着像就行"的细节, 复制第二份必然漂移:
- *   - done 时若还有在途后台 subagent, 延迟定格并用静默超时兜底;
+ *   - done 时若还有在途后台 subagent, 延迟定格直到任务终态后的下一次 done;
  *   - silentStop done 不算收口, 挂到自动续跑守卫上, 只有 exhausted 才算失败;
  *   - 只有**终态** error 才失败 —— 非终态 error 是 agent 正在自愈(上游过载的
  *     自动重试), turn 还在跑, 但过程区必须留一行, 否则零产出的退避窗口里渠道
@@ -33,9 +33,6 @@ import {
 } from '../im/shared/turnActivity.js';
 import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
 
-/** 后台 subagent 事件静默兜底(同 scheduler BG_TASK_IDLE_FALLBACK_MS 语义)。 */
-const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
-
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
  *
@@ -48,6 +45,12 @@ const BG_TASK_IDLE_FALLBACK_MS = 10 * 60_000;
  * 它触发时 fan out 的是终态 error 事件, 本观察器对终态 error 本来就收口 ——
  * 所以「observer 永不 settle → dispatcher 的队列槽位永不释放」那条路早就被堵上,
  * 与控制连接是否还在无关。
+ *
+ * 后台任务同样不能在 hook 层按静默时长猜成完成:它结束后可能通过
+ * task_notification 自动续跑新 turn。观察器一旦提前 settle,Telegram 群轮次
+ * 就会恢复原权限档并释放 host-turn lease,后续自动续跑可与桌面 turn 并发且重新
+ * 获得 Full access。后台任务无论静默多久都保留观察器;任务终态后的 done、用户
+ * Stop 引发的终态事件或 session closed/error 才是可证明的收口信号。
  *
  * 本 PR 一度在这里另起了一个裸 setTimeout, 上面四条一条都没有: 等交互和跑后台
  * 任务时会误杀, 合盖睡眠会误杀, 而且只 reject 观察者、**不 abort 底层 turn** ——
@@ -141,7 +144,9 @@ export interface ObservableSession {
    * 判据是**状态**不是时间, 所以不会误杀等用户回应交互 / 跑后台任务 / 合盖睡眠
    * 那些合法静默 —— 那正是本 PR 删掉裸 setTimeout 的理由, 两者不冲突。
    */
-  onStatusChange(listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void): () => void;
+  onStatusChange(
+    listener: (status: 'active' | 'aborting' | 'closed' | 'error') => void,
+  ): () => void;
 }
 
 export interface HookTurnObserverDeps {
@@ -159,6 +164,8 @@ export interface HookTurnObserverDeps {
   onProgress?: (text: string) => void;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
   onToolResult?: (fullText: string) => void;
+  /** 完整 turn（含后台续跑）收口时同步通知，早于 finished settle。 */
+  onTurnTerminal?: () => void;
   /** silent-stop 自动续跑守卫的 settle 订阅(生产为 maker-ipc 的同名函数)。 */
   onSilentStopSettled: (
     sessionId: string,
@@ -194,7 +201,8 @@ export function observeHookTurn(
   session: ObservableSession,
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
-  const { answerOnlyProgress, onProgress, onToolResult, onSilentStopSettled, log } = deps;
+  const { answerOnlyProgress, onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } =
+    deps;
   // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
   // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
   // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
@@ -239,13 +247,16 @@ export function observeHookTurn(
   let stopListening: (() => void) | undefined;
   const finished = new Promise<void>((resolve, reject) => {
     const runningBgTasks = new Set<string>();
-    let waitingForBgTasks = false;
-    let bgFallbackTimer: NodeJS.Timeout | undefined;
+    let turnTerminalNotified = false;
     let pendingSettleUnsub: (() => void) | undefined;
-    const clearBgTimer = (): void => {
-      if (bgFallbackTimer) {
-        clearTimeout(bgFallbackTimer);
-        bgFallbackTimer = undefined;
+    const notifyTurnTerminal = (): void => {
+      if (turnTerminalNotified) return;
+      turnTerminalNotified = true;
+      try {
+        onTurnTerminal?.();
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        log.warn(`[hook-runner] onTurnTerminal failed: ${message}`);
       }
     };
     /**
@@ -253,7 +264,6 @@ export function observeHookTurn(
      * 走同一份拆装 —— 之前是三处各抄一遍, 新加一个定时器就得记着补三处。
      */
     const teardown = (): void => {
-      clearBgTimer();
       pendingSettleUnsub?.();
       pendingSettleUnsub = undefined;
       progress?.stop();
@@ -262,20 +272,14 @@ export function observeHookTurn(
       stopListening = undefined;
     };
     const finish = (): void => {
+      notifyTurnTerminal();
       teardown();
       resolve();
     };
     const failTurn = (err: Error): void => {
+      notifyTurnTerminal();
       teardown();
       reject(err);
-    };
-    const armBgTimer = (): void => {
-      clearBgTimer();
-      bgFallbackTimer = setTimeout(() => {
-        log.warn(`[hook-runner] bg task events silent, finalizing: ${session.id}`);
-        finish();
-      }, BG_TASK_IDLE_FALLBACK_MS);
-      bgFallbackTimer.unref?.();
     };
     // 会话已死(见 ObservableSession.onStatusChange)。终态事件永远不会来了,
     // 按失败收口 —— 已累积的正文不足以判定这一轮真的完成了。
@@ -284,7 +288,6 @@ export function observeHookTurn(
       failTurn(new Error(`hook turn session ended without a terminal event (${status})`));
     });
     const off = session.onEvent((ev: AgentEvent) => {
-      if (waitingForBgTasks) armBgTimer();
       if (ev.type === 'agent_task_update') {
         const data = ev.data as { taskId?: string; status?: string } | null;
         if (data && typeof data.taskId === 'string') {
@@ -304,14 +307,14 @@ export function observeHookTurn(
             //   (renderer 同款 raw concat), 不同消息之间空行分隔。
             // ② claude result 兜底 fallbackTail(刻意不带 agentMeta):
             //   只含 UI 缺的尾段, 与已流增量原样接上。
-            // ③ codex item.completed: 该条全文, 覆盖已流增量。
+            // ③ codex item.completed / pi message_end:该条全文,覆盖已流增量。
             // ④ 未知 source: 保守用前缀启发式。
             const src = (ev as { source?: string }).source;
             const meta = (ev as { agentMeta?: { uuid?: unknown; requestId?: unknown } }).agentMeta;
             const claudeTail = src === 'claude-code' && meta === undefined;
             const segment = claudeTail
               ? streamTail + data.text
-              : src === 'claude-code' || src === 'codex'
+              : src === 'claude-code' || src === 'codex' || src === 'pi'
                 ? data.text
                 : data.text.startsWith(streamTail)
                   ? data.text
@@ -424,15 +427,15 @@ export function observeHookTurn(
           return;
         }
         if (runningBgTasks.size > 0) {
-          waitingForBgTasks = true;
-          armBgTimer();
           return;
         }
         finish();
       } else if (isTerminalAgentErrorEvent(ev)) {
-        const data = ev.data as
-          | { message?: string; errorStatus?: number; codexErrorInfo?: string }
-          | null;
+        const data = ev.data as {
+          message?: string;
+          errorStatus?: number;
+          codexErrorInfo?: string;
+        } | null;
         const raw = data?.message ?? 'agent terminal error';
         // 过载重试耗尽: 渠道里发裸英文原文(server 侧再前缀成 "Task failed:")
         // 等于把内部串丢给用户, 且没说清"怎么才能真的重试"。换成可读说明,

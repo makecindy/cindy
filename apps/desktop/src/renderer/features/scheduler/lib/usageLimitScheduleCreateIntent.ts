@@ -4,7 +4,7 @@ export interface UsageLimitScheduleCreateIntent {
   kind: 'usage-limit-recovery';
   requestId: string;
   sessionId: string;
-  agentKind: 'claude-code' | 'codex';
+  agentKind: 'claude-code' | 'codex' | 'pi';
   resetAtMs: number | null;
 }
 
@@ -32,7 +32,7 @@ export function readUsageLimitScheduleCreateIntent(
     !value.requestId ||
     typeof value.sessionId !== 'string' ||
     !value.sessionId ||
-    (value.agentKind !== 'claude-code' && value.agentKind !== 'codex') ||
+    (value.agentKind !== 'claude-code' && value.agentKind !== 'codex' && value.agentKind !== 'pi') ||
     (value.resetAtMs !== null &&
       (typeof value.resetAtMs !== 'number' || !Number.isFinite(value.resetAtMs)))
   ) {

@@ -1,5 +1,5 @@
 /**
- * model-route-guard —— 「停用轴」在 main 会话路由边界的准入判定(纯逻辑,规则 14)。
+ * model-route-guard —— 本地停用与 Registry retired 在 main 新会话路由边界的准入判定。
  *
  * 背景(PR #744 review):停用标志烘焙进 ProviderView 后,renderer 选择器不会再列出
  * 停用模型,但 `maker:create-session` / `maker:set-model` / `maker:switch-session-agent`
@@ -17,7 +17,8 @@
  *     或该模型所有已连接拷贝都被停用。
  *
  * 判定只对**新的路由选择**执行(新建会话 / 切模型 / 跨引擎切换);resume 与运行中
- * 的会话不打断 —— 调用方负责场景收口。
+ * 的会话不打断 —— 它们走 `actualSourceIdForModel` / modelList `keepSelected`，调用方
+ * 负责场景收口。retired 与停用的区别是远端生命周期来源不同，准入结果同样禁止新选。
  *
  * 严格度口径(产品取舍,Dash 2026-07-29 拍板):停用是 **best-effort** 的产品开关,
  * 先可用最重要。裁决发生在路由选择/派发编排时点,「检查后、真正扣费前」的毫秒级
@@ -31,6 +32,7 @@ import {
   effectiveSourceIdForModel,
   getModel,
   isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   nativeDefaultSourceId,
   providerOffersModel,
   sourcesForModel,
@@ -43,18 +45,33 @@ export type ModelRouteVerdict =
   | { kind: 'reroute'; providerId: string }
   | {
       kind: 'reject';
-      reason: 'model-disabled' | 'explicit-source-disabled' | 'capability-model';
+      reason: 'model-disabled' | 'explicit-source-disabled' | 'capability-model' | 'model-retired';
     };
+
+export interface ModelRouteGuardOptions {
+  /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
+  isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+}
 
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
 function copyDisabled(p: ProviderView, modelId: string, agent: AgentKind): boolean {
   return p.suspended === true || getModel(p, modelId, agent)?.disabled === true;
 }
 
-/** 该来源下这份 (model, agent) 拷贝是否是 agent 可选的对话模型条目。 */
-function copyAgentSelectable(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+/** 该来源下这份 (model, agent) 拷贝是否是对话模型；运行中已选条目只要求这一层。 */
+function copyChatEligible(p: ProviderView, modelId: string, agent: AgentKind): boolean {
   const copy = getModel(p, modelId, agent);
   return !!copy && isAgentSelectableModel(copy, { userProvider: p.source === 'user' });
+}
+
+/** 该来源下这份条目能否成为一条新路由。 */
+function copySelectableForNewRoute(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+  const copy = getModel(p, modelId, agent);
+  return !!copy && isModelSelectableForNewRoute(copy, { userProvider: p.source === 'user' });
+}
+
+function copyRetired(p: ProviderView, modelId: string, agent: AgentKind): boolean {
+  return getModel(p, modelId, agent)?.status === 'retired';
 }
 
 export function checkModelRoute(
@@ -62,11 +79,23 @@ export function checkModelRoute(
   agent: AgentKind,
   modelId: string,
   providerId: string | null,
+  options: ModelRouteGuardOptions = {},
 ): ModelRouteVerdict {
   const offering = views.filter(
     (p) => p.agents.includes(agent) && providerOffersModel(p, modelId, agent),
   );
-  if (offering.length === 0) return { kind: 'pass' };
+  const explicit = providerId ? offering.find((p) => p.id === providerId) : undefined;
+  // A remote retired route intentionally has no provider-list entity. Old mobile/device-link
+  // clients can still name the stale pair explicitly, so consult the active Registry only when
+  // that provider has no current entity. A full local addition creates one and therefore wins.
+  if (providerId && !explicit && options.isRetiredTombstone?.(providerId, modelId, agent)) {
+    return { kind: 'reject', reason: 'model-retired' };
+  }
+  if (offering.length === 0) {
+    return options.isRetiredTombstone?.(null, modelId, agent)
+      ? { kind: 'reject', reason: 'model-retired' }
+      : { kind: 'pass' };
+  }
 
   // 能力模型(图像/音频/视频/向量)不能当 agent 对话模型 —— 选择器已硬排除,但
   // create/set-model/switch 这些 allowlisted 通道可被老控制端直接点名,必须在同一
@@ -76,9 +105,11 @@ export function checkModelRoute(
   // 落到它,PR #744 review 第五、六轮)。
 
   if (providerId) {
-    const explicit = offering.find((p) => p.id === providerId);
     if (explicit) {
-      if (!copyAgentSelectable(explicit, modelId, agent)) {
+      if (copyRetired(explicit, modelId, agent)) {
+        return { kind: 'reject', reason: 'model-retired' };
+      }
+      if (!copyChatEligible(explicit, modelId, agent)) {
         return { kind: 'reject', reason: 'capability-model' };
       }
       if (copyDisabled(explicit, modelId, agent)) {
@@ -101,7 +132,18 @@ export function checkModelRoute(
   if (!wouldRouteId) return { kind: 'pass' };
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
-  if (!copyAgentSelectable(wouldRoute, modelId, agent)) {
+  if (copyRetired(wouldRoute, modelId, agent)) {
+    const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
+    const alternativeProvider = alternative
+      ? views.find((p) => p.id === alternative)
+      : undefined;
+    return alternative &&
+      alternativeProvider &&
+      copySelectableForNewRoute(alternativeProvider, modelId, agent)
+      ? { kind: 'reroute', providerId: alternative }
+      : { kind: 'reject', reason: 'model-retired' };
+  }
+  if (!copyChatEligible(wouldRoute, modelId, agent)) {
     // 原生默认落点是能力模型拷贝:与停用轴同构,先解析聊天可用的替代来源
     // (effectiveSourceIdForModel 走 chat 准入 rail,已排除停用),有 ⇒ 显式改道;
     // 无 ⇒ reject。不能直接 reject 了事:UI 的发送检查(chatEligibleSourcesForModel)
@@ -115,7 +157,7 @@ export function checkModelRoute(
       : undefined;
     return chatAlternative &&
       chatAlternativeProvider &&
-      copyAgentSelectable(chatAlternativeProvider, modelId, agent) &&
+      copySelectableForNewRoute(chatAlternativeProvider, modelId, agent) &&
       !copyDisabled(chatAlternativeProvider, modelId, agent)
       ? { kind: 'reroute', providerId: chatAlternative }
       : { kind: 'reject', reason: 'capability-model' };
@@ -127,7 +169,7 @@ export function checkModelRoute(
   // 无 ⇒ 该模型在停用语义下不可用。
   const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
   const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
-  return alternative && alternativeProvider && copyAgentSelectable(alternativeProvider, modelId, agent)
+  return alternative && alternativeProvider && copySelectableForNewRoute(alternativeProvider, modelId, agent)
     ? { kind: 'reroute', providerId: alternative }
     : { kind: 'reject', reason: 'model-disabled' };
 }
@@ -148,10 +190,8 @@ export function pickEnabledFallbackModel(
     ? [...rail.filter((p) => p.id === defaultId), ...rail.filter((p) => p.id !== defaultId)]
     : rail;
   for (const p of ordered) {
-    const m = (p.models[agent] ?? []).find(
-      (candidate) =>
-        candidate.disabled !== true &&
-        isAgentSelectableModel(candidate, { userProvider: p.source === 'user' }),
+    const m = (p.models[agent] ?? []).find((candidate) =>
+      isModelSelectableForNewRoute(candidate, { userProvider: p.source === 'user' }),
     );
     if (m) return { model: m.id, providerId: p.id };
   }
@@ -177,7 +217,7 @@ export function resolveLenientRoute(
   agent: AgentKind,
   model: string | undefined,
   providerId: string | null,
-  opts: { fallbackModel?: string; desiredEffort?: string } = {},
+  opts: ModelRouteGuardOptions & { fallbackModel?: string; desiredEffort?: string } = {},
 ): { model?: string; providerId: string | null; degraded: boolean; effort?: string } {
   if (!model) return { model, providerId, degraded: false };
   // effort reconcile 的**唯一**出口(PR #744 review 第十一/二十三轮):调用方保存的
@@ -206,18 +246,18 @@ export function resolveLenientRoute(
     }
     return { model: resolvedModel, providerId: resolvedProviderId, degraded, effort };
   };
-  let verdict = checkModelRoute(views, agent, model, providerId);
+  let verdict = checkModelRoute(views, agent, model, providerId, opts);
   if (verdict.kind === 'pass') return { model, providerId, degraded: false };
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
   if (providerId) {
-    verdict = checkModelRoute(views, agent, model, null);
+    verdict = checkModelRoute(views, agent, model, null, opts);
     if (verdict.kind === 'pass') return withEffort(model, null, true);
     if (verdict.kind === 'reroute') {
       return withEffort(model, verdict.providerId, true);
     }
   }
   if (opts.fallbackModel && opts.fallbackModel !== model) {
-    const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null);
+    const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null, opts);
     if (fallback.model) {
       return withEffort(fallback.model, fallback.providerId, true);
     }

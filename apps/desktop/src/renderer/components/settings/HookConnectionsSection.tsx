@@ -49,6 +49,8 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
+import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
+import { XUsageGuide } from './XUsageGuide';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,
   HOOK_BIND_REASON_NOT_INSTALLED,
@@ -64,6 +66,11 @@ import {
 type NeutralCardProvider = 'telegram' | 'x';
 import { useHookWorkspacePrefs, WorkspacePrefsEditor } from './HookWorkspacePrefsEditor';
 import { ImChannelSettingsCard } from './ImChannelSettingsCard';
+import { ImDefaultSettingsSection } from './ImDefaultSettingsSection';
+import {
+  TelegramBehaviorSettings,
+  TelegramGroupActivationSettings,
+} from './TelegramBehaviorSettings';
 
 /** 「官方」栏的渠道手风琴卡(同刻最多展开一张, 交互对齐「个人」栏)。 */
 type CindyImCard = 'slack' | 'telegram' | 'x';
@@ -328,10 +335,9 @@ export function HookConnectionsSection() {
 
   const handleLifecycleAnnouncementToggle = useCallback(
     (enabled: boolean) => {
-      runHookAction(
-        () => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled),
-        { localizedErrorOnly: true },
-      );
+      runHookAction(() => window.electronAPI.hookControl.setLifecycleAnnouncement(enabled), {
+        localizedErrorOnly: true,
+      });
     },
     [runHookAction],
   );
@@ -425,6 +431,56 @@ export function HookConnectionsSection() {
     })();
   }, [awaitingInstall, confirm, handleToggle, runHookAction, t]);
 
+  /**
+   * X 的「用法与公开风险」确认门:绑定成功那一刻拦一次, 让用户明确点过「我明白」。
+   *
+   * 为什么不只靠卡内那一节:X 的回复是**公开推文**, 而且所有 X 任务都落在用户设的默认
+   * 工作目录里(agent 能读写其中文件, 结论会公开回帖)—— 这两条后果只写在展开区里,
+   * 不展开的人就永远看不到, 而它们恰恰是开启前就该知道的。
+   *
+   * 只在「未确认 → confirmed」那一沿弹一次:
+   *   - promptedPrincipalRef 记住正在弹或已弹过的 principalId, 状态广播导致的重渲染
+   *     不重复弹(同上方"等安装"确认框的 ref 用法);
+   *   - 记账落在 principalId 上, 所以换绑到另一个 X 账号会再确认一次(新账号 = 新的
+   *     公开面), 同账号解绑重绑则不打扰;
+   *   - **只有真的点了「我明白」才记账**。confirm-dialog 在 Esc / 点遮罩时 resolve 成
+   *     cancel(即 ok=false), 那种情况下用户并没有读到告知, 下次仍该弹。
+   */
+  const xBinding = hook?.x?.binding ?? null;
+  const xConfirmedPrincipalId =
+    xBinding !== null && xBinding.state === 'confirmed' ? xBinding.principalId : null;
+  const promptedXPrincipalRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (xConfirmedPrincipalId === null) {
+      // 解绑 / 转入非 confirmed: 清掉本沿的记录, 下次绑定成功可以重新判定
+      promptedXPrincipalRef.current = null;
+      return;
+    }
+    if (promptedXPrincipalRef.current === xConfirmedPrincipalId) return;
+    if (isXUsageAcknowledged(xConfirmedPrincipalId)) return;
+    promptedXPrincipalRef.current = xConfirmedPrincipalId;
+    void (async () => {
+      const ok = await confirm({
+        title: t('settings.remoteControl.hook.x.guide.ackTitle'),
+        content: <XUsageGuide />,
+        confirmText: t('settings.remoteControl.hook.x.guide.ackConfirm'),
+        showCancel: false,
+        // 主操作非破坏性(只是"我明白"), 焦点直接落在它上面
+        autoFocusConfirm: true,
+        maxWidth: 520,
+      });
+      if (!ok) {
+        // Esc / 遮罩关掉 = 没读到, 允许下次再弹
+        if (promptedXPrincipalRef.current === xConfirmedPrincipalId) {
+          promptedXPrincipalRef.current = null;
+        }
+        return;
+      }
+      // 卸载后也照常落盘: 用户确实点过了, 少记一次会让他下次再被拦一遍
+      acknowledgeXUsage(xConfirmedPrincipalId);
+    })();
+  }, [xConfirmedPrincipalId, confirm, t]);
+
   const handleAddWorkspace = async () => {
     const res = await window.electronAPI.showOpenDirectoryDialog();
     if (res.canceled || !res.path) return;
@@ -497,11 +553,13 @@ export function HookConnectionsSection() {
     provider: NeutralCardProvider,
     action: 'connect' | 'provider' | 'add-to-group',
   ) => {
-    void window.electronAPI.hookControl.openProviderAction(provider, action).catch((err: unknown) => {
-      toast.error(
-        extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
-      );
-    });
+    void window.electronAPI.hookControl
+      .openProviderAction(provider, action)
+      .catch((err: unknown) => {
+        toast.error(
+          extractIpcError(err)?.message ?? t('settings.remoteControl.hook.toast.actionFailed'),
+        );
+      });
   };
 
   const handleCopyProviderLink = async (provider: NeutralCardProvider) => {
@@ -659,11 +717,9 @@ export function HookConnectionsSection() {
     // A configured endpoint is the rollout gate. Capability negotiation starts
     // only after the user enables the provider, so the disabled card cannot
     // depend on an already-received welcome to become discoverable.
-    const visible =
-      view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
+    const visible = view.url.length > 0 || view.capabilityPending || view.available || view.enabled;
     const confirmed = state === 'confirmed';
-    const inProgress =
-      view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
+    const inProgress = view.enabled && (state === 'pending' || state === 'awaiting_confirmation');
     const canStartLink =
       state === 'none' ||
       ((state === 'failed' ||
@@ -682,7 +738,10 @@ export function HookConnectionsSection() {
       : view.status === 'error'
         ? { tone: 'error', label: t('settings.remoteControl.hook.status.error') }
         : view.capabilityPending
-          ? { tone: 'progress', label: t(`settings.remoteControl.hook.${provider}.status.checking`) }
+          ? {
+              tone: 'progress',
+              label: t(`settings.remoteControl.hook.${provider}.status.checking`),
+            }
           : !view.available
             ? {
                 tone: 'attention',
@@ -706,7 +765,19 @@ export function HookConnectionsSection() {
       view.lastError === 'not logged in'
         ? t('settings.remoteControl.hook.loginRequired')
         : view.lastError;
-    return { binding, actions, state, visible, confirmed, inProgress, canStartLink, toggleChecked, badge, bindingLine, errorText };
+    return {
+      binding,
+      actions,
+      state,
+      visible,
+      confirmed,
+      inProgress,
+      canStartLink,
+      toggleChecked,
+      badge,
+      bindingLine,
+      errorText,
+    };
   };
   const workdirCount = Object.keys(hook.workspaces).length;
   const hasActiveSlackBinding = multiUi
@@ -774,9 +845,7 @@ export function HookConnectionsSection() {
               >
                 <span className="max-w-40 truncate">
                   {t('settings.remoteControl.hook.form.defaultWorkspaceChip', {
-                    name:
-                      defaultWorkspace.value ??
-                      t('settings.tina.chat.title'),
+                    name: defaultWorkspace.value ?? t('settings.tina.chat.title'),
                   })}
                 </span>
                 <ChevronDown size={12} />
@@ -1026,6 +1095,15 @@ export function HookConnectionsSection() {
             </div>
           ) : null}
 
+          {/* X 专属: 用法与公开风险。两个刻意的选择 ——
+              · 放在工作目录区**之前**: 风险那条讲的就是这张卡上那个默认工作目录,
+                顺序必须是先看到后果再碰控件。注意这只是**排布**上的先后 ——
+                文案本身不许用方位指代(「下面」/「below」), 因为同一组件也渲染进
+                确认门弹窗, 那里根本没有目录选择器;
+              · **不按 view.enabled / cs.confirmed 收起**: 正在评估要不要打开的人
+                最需要看到「回帖是公开的」, 那时候两个条件都还不成立。 */}
+          {provider === 'x' ? <XUsageGuide /> : null}
+
           {/* 工作目录映射(清单共享, 偏好取本 provider 那份) */}
           {view.enabled
             ? renderWorkdirSection(
@@ -1034,11 +1112,30 @@ export function HookConnectionsSection() {
                 provider === 'x' ? { value: view.defaultWorkspace } : undefined,
               )
             : null}
+          {provider === 'telegram' && cs.confirmed ? (
+            <div
+              key={cs.binding?.bindingId ?? 'telegram-unbound'}
+              className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
+            >
+              <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
+              {view.behaviorAvailable === true ? (
+                <>
+                  <TelegramBehaviorSettings
+                    source="official"
+                    bindingId={cs.binding?.bindingId ?? undefined}
+                  />
+                  <TelegramGroupActivationSettings
+                    source="official"
+                    bindingId={cs.binding?.bindingId ?? undefined}
+                  />
+                </>
+              ) : null}
+            </div>
+          ) : null}
         </div>
       </ImChannelSettingsCard>
     );
   };
-
 
   return (
     <div className="flex flex-col gap-3">

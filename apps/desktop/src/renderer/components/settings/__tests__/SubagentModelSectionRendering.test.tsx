@@ -13,6 +13,7 @@
  *   5. 护栏三行写对 patch key;总开关关闭时其余护栏行禁用(值保留);
  *   6. codexRestartDeferred=true 时提示延迟生效;
  *   7. 两张卡的 DefaultOverrideControls 按各自键组判 isCustomized、恢复只写本卡键。
+ *   8. Codex 未选中模型行复用全局模型预设适配器,可直接修改 effort 并原子选中。
  */
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
@@ -48,6 +49,27 @@ vi.mock('@/lib/toast', () => ({ toast: toastMock }));
 // codex review)——若未来改回可见并集口径,下方多数 CTA 断言会在这里翻红。
 vi.mock('@/state/modelVisibilityPrefs', () => ({
   isModelEnabled: () => false,
+}));
+
+const modelMemoryMock = vi.hoisted(() => {
+  const effortByModel = new Map<string, string>();
+  return {
+    effortByModel,
+    getEffort: vi.fn((_agent: string, _providerId: string, modelId: string) =>
+      effortByModel.get(modelId),
+    ),
+    setEffort: vi.fn((_agent: string, _providerId: string, modelId: string, effort: string) => {
+      effortByModel.set(modelId, effort);
+    }),
+    getFast: vi.fn(),
+    setFast: vi.fn(),
+  };
+});
+vi.mock('@/state/providerModelMemory', () => ({
+  getProviderModelEffort: modelMemoryMock.getEffort,
+  setProviderModelEffort: modelMemoryMock.setEffort,
+  getProviderModelFast: modelMemoryMock.getFast,
+  setProviderModelFast: modelMemoryMock.setFast,
 }));
 
 // 已连接 anthropic(claude)与 openai(codex);ghost-provider 不存在。
@@ -135,6 +157,10 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
     onProviderChange?: (providerId: string | null, modelId?: string) => void;
     onModelChange: (modelId: string) => void;
     onEffortChange?: (effort: string) => void;
+    modelMemory?: {
+      getEffort: (agent: string, providerId: string, modelId: string) => string | undefined;
+      setEffort: (agent: string, providerId: string, modelId: string, effort: string) => void;
+    };
     configurationEnabled?: boolean;
     disabled?: boolean;
     excludeChatBridgedCodex?: boolean;
@@ -158,6 +184,7 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
         // sourcesEnabled = !!onProviderChange),这里暴露出来供断言。
         data-sources-enabled={String(props.onProviderChange !== undefined)}
         data-configuration-enabled={String(props.configurationEnabled !== false)}
+        data-model-memory={String(props.modelMemory !== undefined)}
         data-disabled={String(props.disabled === true)}
         data-exclude-bridged={String(props.excludeChatBridgedCodex === true)}
         data-unknown-label={props.unknownModelLabel?.('ghost-model-1') ?? ''}
@@ -191,6 +218,19 @@ vi.mock('@/components/new-chat/ModelSelector', () => ({
           type="button"
           data-testid={`${vendor}:pick-effort-high`}
           onClick={() => props.onEffortChange?.('high')}
+        />
+        <button
+          type="button"
+          data-testid={`${vendor}:configure-unselected-high`}
+          onClick={() => {
+            props.modelMemory?.setEffort(
+              vendor === 'codex' ? 'codex' : 'claude-code',
+              providerId,
+              modelId,
+              'high',
+            );
+            props.onProviderChange?.(providerId, modelId);
+          }}
         />
       </div>
     );
@@ -246,6 +286,7 @@ afterEach(() => {
   providersMock.loading = false;
   providersMock.claudeModels = [{ id: 'claude-opus-5' }, { id: 'claude-haiku-4-5' }];
   providersMock.codexModels = [{ id: 'gpt-5.6-terra' }, { id: 'gpt-5.5' }];
+  modelMemoryMock.effortByModel.clear();
   vi.clearAllMocks();
 });
 
@@ -444,6 +485,7 @@ describe('SubagentModelSection Codex row', () => {
     // Codex 派发通道有 effort 维度(agents.default_subagent_reasoning_effort):
     // 配置列必须开启,effort 回显已存档位。
     expect(selector.dataset.configurationEnabled).toBe('true');
+    expect(selector.dataset.modelMemory).toBe('true');
     expect(selector.dataset.effort).toBe('high');
     expect(selector.dataset.currentProvider).toBe('openai');
     expect(selector.dataset.model).toBe('gpt-5.6-terra');
@@ -467,6 +509,26 @@ describe('SubagentModelSection Codex row', () => {
     });
   });
 
+  it('configures and selects an unselected model effort through the shared panel', async () => {
+    // ModelSelector #1280 后,未选中行只在注入 modelMemory 时打开配置列;
+    // 点 effort 会先写预设、再选中该行。Subagent 必须把这两步收敛成
+    // 一次 (model, providerId, effort) patch,否则「不指定」状态下永远只能看档位、不能改。
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:configure-unselected-high'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(modelMemoryMock.setEffort).toHaveBeenCalledWith(
+      'codex',
+      'openai',
+      'gpt-5.6-terra',
+      'high',
+    );
+    expect(settingsSet).toHaveBeenCalledWith({
+      codex: 'gpt-5.6-terra',
+      codexProviderId: 'openai',
+      codexEffort: 'high',
+    });
+  });
+
   it('keeps a still-valid stored effort when switching models', async () => {
     settingsGet.mockResolvedValue(
       makeState({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'high' }),
@@ -478,6 +540,23 @@ describe('SubagentModelSection Codex row', () => {
       codex: 'gpt-5.5',
       codexProviderId: 'openai',
       codexEffort: 'high',
+    });
+  });
+
+  it('restores the target model preset instead of inheriting the current model effort', async () => {
+    // providerModelMemory 的 SSoT 语义是 per-model preset:当前模型受 live settings
+    // 保护,切到另一模型时必须采用目标行展示的 preset,否则非选中行编辑会被丢弃。
+    settingsGet.mockResolvedValue(
+      makeState({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'high' }),
+    );
+    modelMemoryMock.effortByModel.set('gpt-5.5', 'medium');
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-model-flat'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      codex: 'gpt-5.5',
+      codexProviderId: 'openai',
+      codexEffort: 'medium',
     });
   });
 
@@ -516,6 +595,28 @@ describe('SubagentModelSection Codex row', () => {
     fireEvent.click(await screen.findByTestId('codex:pick-effort-high'));
     await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
     expect(settingsSet).toHaveBeenCalledWith({ codexEffort: 'high' });
+    expect(modelMemoryMock.setEffort).toHaveBeenCalledWith(
+      'codex',
+      'openai',
+      'gpt-5.6-terra',
+      'high',
+    );
+  });
+
+  it('syncs an effort-only change through the effective source when provider is implicit', async () => {
+    settingsGet.mockResolvedValue(
+      makeState({ codex: 'gpt-5.6-terra', codexProviderId: null, codexEffort: 'medium' }),
+    );
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-effort-high'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ codexEffort: 'high' });
+    expect(modelMemoryMock.setEffort).toHaveBeenCalledWith(
+      'codex',
+      'openai',
+      'gpt-5.6-terra',
+      'high',
+    );
   });
 
   it('ignores effort changes while no codex model is stored', async () => {

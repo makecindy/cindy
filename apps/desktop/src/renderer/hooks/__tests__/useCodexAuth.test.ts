@@ -4,6 +4,7 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { isChatGptConnectionConnected, useCodexAuth } from '../useCodexAuth';
+import { acquireCodexLogin } from '../codexAuthLogin';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
@@ -18,6 +19,8 @@ type TestAuthState = {
   identity?: string;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  recoveryRequiredReason?: string;
 };
 
 function deferred<T>() {
@@ -29,6 +32,7 @@ function deferred<T>() {
 }
 
 function installAuthApi(logout: () => Promise<void>) {
+  const getCodexRateLimits = vi.fn(async () => ({ rateLimits: null, resetOffer: null }));
   const auth = {
     getState: vi.fn(async (): Promise<TestAuthState> => ({
       authenticated: true,
@@ -40,32 +44,47 @@ function installAuthApi(logout: () => Promise<void>) {
     logout: vi.fn(logout),
     onStateChanged: vi.fn(() => () => undefined),
     onLoginProgress: vi.fn(() => () => undefined),
+    getCodexRateLimits,
   };
-  (window as unknown as { electronAPI: { maker: { auth: typeof auth } } }).electronAPI = {
-    maker: { auth },
+  (
+    window as unknown as {
+      electronAPI: {
+        maker: { auth: typeof auth; usage: { getCodexRateLimits: typeof getCodexRateLimits } };
+      };
+    }
+  ).electronAPI = {
+    maker: { auth, usage: { getCodexRateLimits } },
   };
   return auth;
 }
 
 function stateChangedListener(auth: ReturnType<typeof installAuthApi>) {
   const calls = auth.onStateChanged.mock.calls as unknown as Array<
-    [(payload: { agentKind: string; authenticated: boolean; errorReason?: string }) => void]
+    [
+      (payload: {
+        agentKind: string;
+        authenticated: boolean;
+        errorReason?: string;
+        credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+        recoveryRequiredReason?: string;
+      }) => void,
+    ]
   >;
   return calls[0][0];
 }
 
 function loginProgressListener(auth: ReturnType<typeof installAuthApi>) {
   const calls = auth.onLoginProgress.mock.calls as unknown as Array<
-    [(
-      payload: {
+    [
+      (payload: {
         agentKind: string;
         phase: string;
         mode?: 'browser' | 'device-code';
         detail?: string;
         verificationUrl?: string;
         userCode?: string;
-      },
-    ) => void]
+      }) => void,
+    ]
   >;
   return calls[0][0];
 }
@@ -176,6 +195,7 @@ describe('useCodexAuth lifecycle', () => {
       authenticated: false,
       errorReason: 'refresh_token_reused',
       authSource: 'oauth' as const,
+      credentialScope: 'system-shared' as const,
     });
     const { result } = renderHook(() => useCodexAuth());
 
@@ -183,7 +203,398 @@ describe('useCodexAuth lifecycle', () => {
       expect(result.current.state).toEqual({
         kind: 'reconnect-required',
         reason: 'refresh_token_reused',
+        credentialScope: 'system-shared',
       });
+    });
+  });
+
+  it('verifies a fresh-mount authenticated recovery candidate before exposing connected', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const verification = deferred<{ rateLimits: null; resetOffer: null }>();
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+        recoveryRequiredReason: 'token_revoked',
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+      });
+    auth.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledOnce());
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+    expect(result.current.recoveryCheck).toBe('checking');
+
+    await act(async () => {
+      verification.resolve({ rateLimits: null, resetOffer: null });
+      await verification.promise;
+    });
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+  });
+
+  it('keeps recovery pending when the account probe succeeds but main has not committed it', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const pendingRecovery = {
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth' as const,
+      credentialScope: 'system-shared' as const,
+      recoveryRequiredReason: 'token_revoked',
+    };
+    auth.getState.mockResolvedValue(pendingRecovery);
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.recoveryCheck).toBe('failed'));
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+    expect(auth.getCodexRateLimits).toHaveBeenCalledOnce();
+    expect(auth.getState).toHaveBeenCalledTimes(2);
+  });
+
+  it('keeps a hinted recovery loading until the authoritative snapshot is known', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const initialState = deferred<TestAuthState>();
+    const verification = deferred<{ rateLimits: null; resetOffer: null }>();
+    auth.getState.mockImplementationOnce(() => initialState.promise);
+    auth.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    const { result } = renderHook(() =>
+      useCodexAuth({ recoveryHint: { reason: 'token_revoked' } }),
+    );
+
+    expect(result.current.state).toEqual({ kind: 'loading' });
+    expect(result.current.recoveryCheck).toBe('idle');
+
+    await act(async () => {
+      initialState.resolve({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+      });
+      await initialState.promise;
+    });
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledOnce());
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+    expect(result.current.recoveryCheck).toBe('checking');
+
+    await act(async () => {
+      verification.resolve({ rateLimits: null, resetOffer: null });
+      await verification.promise;
+    });
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+  });
+
+  it('shares one credential probe across observers with different recovery hints', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const verification = deferred<{ rateLimits: null; resetOffer: null }>();
+    auth.getState.mockResolvedValue({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      credentialScope: 'system-shared',
+    });
+    auth.getCodexRateLimits.mockImplementation(() => verification.promise);
+    const { result } = renderHook(() => ({
+      first: useCodexAuth({ recoveryHint: { reason: 'token_revoked' } }),
+      second: useCodexAuth({ recoveryHint: { reason: 'refresh_token_reused' } }),
+    }));
+
+    await waitFor(() => {
+      expect(result.current.first.recoveryCheck).toBe('checking');
+      expect(result.current.second.recoveryCheck).toBe('checking');
+    });
+    expect(auth.getCodexRateLimits).toHaveBeenCalledOnce();
+
+    await act(async () => {
+      verification.resolve({ rateLimits: null, resetOffer: null });
+      await verification.promise;
+    });
+
+    await waitFor(() => {
+      expect(result.current.first.state.kind).toBe('authenticated');
+      expect(result.current.second.state.kind).toBe('authenticated');
+    });
+    expect(auth.getCodexRateLimits).toHaveBeenCalledOnce();
+  });
+
+  it('keeps a fresh-mount recovery candidate actionable when its account probe fails', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValue({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      credentialScope: 'instance-isolated',
+      recoveryRequiredReason: 'token_revoked',
+    });
+    auth.getCodexRateLimits.mockRejectedValueOnce(new Error('network unavailable'));
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.recoveryCheck).toBe('failed'));
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'instance-isolated',
+    });
+  });
+
+  it('refreshes on window focus and exposes authenticated only after a server probe', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
+      })
+      .mockResolvedValue({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+      });
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('reconnect-required'));
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledOnce());
+    await waitFor(() => expect(result.current.state.kind).toBe('authenticated'));
+    expect(result.current.recoveryCheck).toBe('idle');
+  });
+
+  it('keeps reconnect-required and offers a manual recheck when verification is unavailable', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'instance-isolated',
+      })
+      .mockResolvedValue({
+        authenticated: true,
+        identity: 'user@example.com',
+        authSource: 'oauth',
+        credentialScope: 'instance-isolated',
+      });
+    auth.getCodexRateLimits.mockRejectedValueOnce(new Error('network unavailable'));
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('reconnect-required'));
+    act(() => window.dispatchEvent(new Event('focus')));
+
+    await waitFor(() => expect(result.current.recoveryCheck).toBe('failed'));
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'instance-isolated',
+    });
+
+    await act(async () => {
+      await result.current.refresh();
+    });
+    expect(result.current.state.kind).toBe('authenticated');
+    expect(result.current.recoveryCheck).toBe('idle');
+  });
+
+  it('leaves login-pending and restores recheck after a successful OAuth result cannot be verified', async () => {
+    const auth = installAuthApi(async () => undefined);
+    auth.getState.mockResolvedValueOnce({
+      authenticated: false,
+      errorReason: 'token_revoked',
+      credentialScope: 'instance-isolated',
+    });
+    auth.triggerLogin.mockResolvedValue({
+      authenticated: true,
+      identity: 'user@example.com',
+      authSource: 'oauth',
+      credentialScope: 'instance-isolated',
+    });
+    auth.getCodexRateLimits.mockRejectedValueOnce(new Error('network unavailable'));
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('reconnect-required'));
+    await act(async () => {
+      await expect(result.current.triggerLogin()).resolves.toBe('unverified');
+    });
+
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'instance-isolated',
+    });
+    expect(result.current.recoveryCheck).toBe('failed');
+  });
+
+  it('ignores a recovery probe that settles after the observer is disabled and re-enabled', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const verification = deferred<{ rateLimits: null; resetOffer: null }>();
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'stale@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+      })
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
+      });
+    auth.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    const hook = renderHook(({ enabled }) => useCodexAuth({ enabled }), {
+      initialProps: { enabled: true },
+    });
+
+    await waitFor(() => expect(hook.result.current.state.kind).toBe('reconnect-required'));
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledOnce());
+
+    hook.rerender({ enabled: false });
+    hook.rerender({ enabled: true });
+    await waitFor(() => expect(auth.getState).toHaveBeenCalledTimes(3));
+    await waitFor(() =>
+      expect(hook.result.current.state).toEqual({
+        kind: 'reconnect-required',
+        reason: 'token_revoked',
+        credentialScope: 'system-shared',
+      }),
+    );
+
+    await act(async () => {
+      verification.resolve({ rateLimits: null, resetOffer: null });
+      await verification.promise;
+    });
+    expect(hook.result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+  });
+
+  it('settles the current recovery check when another login makes its probe stale', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const verification = deferred<{ rateLimits: null; resetOffer: null }>();
+    const login = deferred<TestAuthState>();
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'candidate@example.com',
+        authSource: 'oauth',
+        credentialScope: 'system-shared',
+      });
+    auth.getCodexRateLimits.mockImplementationOnce(() => verification.promise);
+    auth.triggerLogin.mockImplementationOnce(() => login.promise);
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('reconnect-required'));
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(result.current.recoveryCheck).toBe('checking'));
+
+    const lease = acquireCodexLogin();
+    await waitFor(() => expect(auth.triggerLogin).toHaveBeenCalledOnce());
+    await act(async () => {
+      verification.resolve({ rateLimits: null, resetOffer: null });
+      await verification.promise;
+    });
+    await waitFor(() => expect(result.current.recoveryCheck).toBe('idle'));
+    expect(result.current.state).toEqual({
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    });
+
+    login.resolve({ authenticated: false, errorReason: 'login_cancelled' });
+    await lease.promise;
+    lease.release();
+  });
+
+  it('does not reuse a prior credential probe after same-reason invalidation and relogin', async () => {
+    const auth = installAuthApi(async () => undefined);
+    const firstProbe = deferred<{ rateLimits: null; resetOffer: null }>();
+    const secondProbe = deferred<{ rateLimits: null; resetOffer: null }>();
+    auth.getState
+      .mockResolvedValueOnce({
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'instance-isolated',
+      })
+      .mockResolvedValueOnce({
+        authenticated: true,
+        identity: 'old@example.com',
+        authSource: 'oauth',
+        credentialScope: 'instance-isolated',
+      });
+    auth.getCodexRateLimits
+      .mockImplementationOnce(() => firstProbe.promise)
+      .mockImplementationOnce(() => secondProbe.promise);
+    const loginResult = {
+      authenticated: true,
+      identity: 'new@example.com',
+      authSource: 'oauth' as const,
+      credentialScope: 'instance-isolated' as const,
+    };
+    auth.triggerLogin.mockResolvedValue(loginResult);
+    const { result } = renderHook(() => useCodexAuth());
+
+    await waitFor(() => expect(result.current.state.kind).toBe('reconnect-required'));
+    act(() => window.dispatchEvent(new Event('focus')));
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledTimes(1));
+
+    act(() => {
+      stateChangedListener(auth)({
+        agentKind: 'codex',
+        authenticated: false,
+        errorReason: 'token_revoked',
+        credentialScope: 'instance-isolated',
+      });
+    });
+    let loginOutcome!: Promise<string>;
+    act(() => {
+      loginOutcome = result.current.triggerLogin();
+    });
+    await waitFor(() => expect(auth.getCodexRateLimits).toHaveBeenCalledTimes(2));
+
+    await act(async () => {
+      firstProbe.resolve({ rateLimits: null, resetOffer: null });
+      await firstProbe.promise;
+    });
+    expect(result.current.state.kind).not.toBe('authenticated');
+    expect(result.current.recoveryCheck).toBe('checking');
+
+    await act(async () => {
+      secondProbe.resolve({ rateLimits: null, resetOffer: null });
+      await expect(loginOutcome).resolves.toBe('authenticated');
+    });
+    expect(result.current.state).toMatchObject({
+      kind: 'authenticated',
+      identity: 'new@example.com',
     });
   });
 
@@ -197,12 +608,14 @@ describe('useCodexAuth lifecycle', () => {
         agentKind: 'codex',
         authenticated: false,
         errorReason: 'token_revoked',
+        credentialScope: 'system-shared',
       });
     });
 
     expect(result.current.state).toEqual({
       kind: 'reconnect-required',
       reason: 'token_revoked',
+      credentialScope: 'system-shared',
     });
   });
 
@@ -287,6 +700,7 @@ describe('useCodexAuth lifecycle', () => {
         authenticated: false,
         errorReason: 'refresh_token_reused',
         authSource: 'oauth',
+        credentialScope: 'system-shared',
       });
       await initialState.promise;
     });
@@ -298,6 +712,7 @@ describe('useCodexAuth lifecycle', () => {
     expect(result.current.state).toEqual({
       kind: 'reconnect-required',
       reason: 'refresh_token_reused',
+      credentialScope: 'system-shared',
     });
   });
 

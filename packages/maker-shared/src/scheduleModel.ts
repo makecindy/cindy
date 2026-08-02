@@ -354,6 +354,7 @@ function formatRunDuration(ms: number): string {
 
 function humanizeAgentKind(agentKind: RemoteSchedule['agentKind']): string {
   if (agentKind === 'codex') return 'Codex';
+  if (agentKind === 'pi') return 'Pi';
   return 'Claude';
 }
 

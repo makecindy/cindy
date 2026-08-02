@@ -56,7 +56,7 @@ export async function create(body?: {
   fastMode?: boolean;
   /** 计划模式一级开关(与 permissionMode 正交); 草稿开着计划模式时随建会话落库。 */
   planModeEnabled?: boolean;
-  agentKind?: 'cc' | 'codex';
+  agentKind?: 'cc' | 'codex' | 'pi';
   orcaRole?: OrcaRole | null;
   /** 附加只读引用目录列表 (绝对路径); main 端 mapper 会 JSON.stringify 后写库。 */
   extraDirs?: string[];

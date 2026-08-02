@@ -36,11 +36,31 @@ const vitestBin = (...args) => ({ type: 'packageBin', bin: 'vitest', args });
 // short: at 1330 of this tier's 1845 files, desktop alone decides whether the
 // churn is a trickle or back to where it started.
 const UNIT_POOL_DEFAULT = 'threads';
+const UNIT_TEST_SHARD_ENV = 'XDT_UNIT_TEST_SHARD';
+
+/**
+ * Split every Vitest workspace by the same CI shard so the two Windows jobs
+ * still form one complete unit gate. The runner adds `passWithNoTests` only
+ * when a workspace has fewer selected files than the configured shard count.
+ */
+export function unitTestShardArgs(value = process.env[UNIT_TEST_SHARD_ENV]) {
+  if (value == null || String(value).trim() === '') return [];
+  const normalized = String(value).trim();
+  const match = /^(\d+)\/(\d+)$/.exec(normalized);
+  if (!match) throw new Error(`${UNIT_TEST_SHARD_ENV} must use <index>/<count>`);
+  const index = Number(match[1]);
+  const count = Number(match[2]);
+  if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index < 1 || count < 1 || index > count) {
+    throw new Error(`${UNIT_TEST_SHARD_ENV} must satisfy 1 <= index <= count`);
+  }
+  return [`--shard=${index}/${count}`];
+}
+
 // Workspace-level parallelism owns the global process budget. Keep ordinary
 // Vitest workspaces at one worker each so outer concurrency cannot multiply
 // every child process's default CPU-sized pool.
 const unitVitestCommand = (workers = 1, pool = UNIT_POOL_DEFAULT) =>
-  vitestBin('run', `--pool=${pool}`, `--maxWorkers=${workers}`);
+  vitestBin('run', `--pool=${pool}`, `--maxWorkers=${workers}`, ...unitTestShardArgs());
 const noCollectableTestsReason = 'No collectable tests yet. Add tests and mark a tier required when this workspace gains testable logic.';
 const desktopDbInclude = [
   'src/main/localDb/**/__tests__/*.test.ts',

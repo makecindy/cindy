@@ -34,6 +34,8 @@ describe('normalizeAgentTaskUpdate', () => {
   it('defaults status to running and infers provider from source', () => {
     const update = normalizeAgentTaskUpdate({ taskId: 't1', status: 'weird' }, 'codex');
     expect(update).toMatchObject({ taskId: 't1', status: 'running', provider: 'codex' });
+    expect(normalizeAgentTaskUpdate({ taskId: 't2' }, 'pi'))
+      .toMatchObject({ taskId: 't2', provider: 'pi' });
   });
 
   it('keeps an explicit provider over the source hint and shapes usage', () => {
@@ -294,5 +296,29 @@ describe('buildAgentTaskCardModel', () => {
     const model = buildAgentTaskCardModel({ toolName: 'Task', toolInput: { description: 'x' } });
     expect(model.status).toBe('running');
     expect(model.provider).toBe('claude-code');
+  });
+
+  it('surfaces the codex spawn receipt as structured spawnedAgentName, not raw summary', () => {
+    // translator 约定:collab:spawn 的 tool_result 只放 agentPath(= input.name)。
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup', agentThreadId: 't-2' },
+      result: '/root/survey_startup',
+    });
+    expect(model.spawnedAgentName).toBe('/root/survey_startup');
+    // 裸路径不进 summary,各端用 spawnedAgentName 按 locale 组装句子。
+    expect(model.summary).toBeUndefined();
+    expect(model.status).toBe('completed');
+    expect(model.provider).toBe('codex');
+  });
+
+  it('leaves future rich collab:spawn results (agentsStates summaries) untouched', () => {
+    const model = buildAgentTaskCardModel({
+      toolName: 'collab:spawn',
+      toolInput: { name: '/root/survey_startup' },
+      result: 'thread-2: done',
+    });
+    expect(model.spawnedAgentName).toBeUndefined();
+    expect(model.summary).toBe('thread-2: done');
   });
 });

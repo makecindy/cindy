@@ -17,6 +17,7 @@ import type { UnionModelRow } from './UnifiedModelList';
 const AGENT_LABEL: Record<AgentKind, string> = {
   'claude-code': 'Claude Code',
   codex: 'Codex',
+  pi: 'Pi',
 };
 
 interface Props {

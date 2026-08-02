@@ -1,5 +1,5 @@
 export type ScheduleKind = 'cron';
-export type AgentKind = 'claude-code' | 'codex';
+export type AgentKind = 'claude-code' | 'codex' | 'pi';
 export type ScheduleStatus = 'active' | 'paused' | 'expired';
 export type ScheduleWorkspaceKind = 'project' | 'dialogue';
 export type ScheduleExecutionMode = 'agent' | 'script';
@@ -304,7 +304,7 @@ export interface ScheduleRunMoney {
   approximate: boolean;
   kind: 'actual-cost' | 'value-estimate';
   estimateReasons?: Array<
-    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price'
+    'fixed-fx' | 'legacy-usd' | 'subscription-value' | 'reference-price' | 'inferred-currency'
   >;
 }
 

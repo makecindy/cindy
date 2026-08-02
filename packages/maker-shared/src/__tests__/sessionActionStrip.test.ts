@@ -47,6 +47,20 @@ describe('shared session action strip model', () => {
     ]);
   });
 
+  it('labels pi sessions as Pi in the runtime subtitle', () => {
+    // codex review 回归:二元映射会把 Pi 会话副标题显示成 Claude Code。
+    const overview = buildSessionActionStrip({
+      messageCount: 1,
+      pendingCount: 0,
+      queueAvailable: false,
+      queueCount: 0,
+      queuePaused: false,
+      session: session({ agentKind: 'pi' }),
+    });
+
+    expect(overview.runtimeSubtitle).toBe('Pi · claude-sonnet-4-6 · ask');
+  });
+
   it('promotes pending interactions and keeps normal queue count as icon attention only', () => {
     const overview = buildSessionActionStrip({
       diffCount: 2,

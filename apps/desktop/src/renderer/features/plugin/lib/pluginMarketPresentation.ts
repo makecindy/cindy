@@ -10,14 +10,17 @@ import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 export type PluginPresentationOrigin =
   | 'public'
   | 'organization'
-  | 'local';
+  | 'local'
+  | 'custom';
 
 export type PluginCatalogPresentationItem<TInstalled> =
   { kind: 'installed'; item: TInstalled } | { kind: 'market'; item: PluginMarketItem };
 
 export function pluginPresentationOrigin(
-  item: Pick<PluginMarketItem, 'scope'> | null | undefined,
+  item: Pick<PluginMarketItem, 'scope' | 'sourceType'> | null | undefined,
 ): PluginPresentationOrigin {
+  // 自定义市场（Git / 本地源）归 'custom'，与服务端 scope 正交。
+  if (item && item.sourceType !== 'server') return 'custom';
   if (item?.scope === 'public' || item?.scope === 'organization') {
     return item.scope;
   }

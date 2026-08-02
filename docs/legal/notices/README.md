@@ -3,9 +3,11 @@
 本目录位于 `docs/legal/notices/`。`pnpm licenses:generate` 根据锁定依赖生成
 以下合规产物：
 
-- `desktop-win.txt`：Windows x64 桌面安装包，包含 Rust updater 与 ADB。
-- `desktop-macos.txt`：macOS x64/arm64 桌面安装包。
-- `desktop-linux.txt`：Linux x64 glibc 桌面安装包。
+- `desktop-win.txt`：Windows x64 桌面分发，包含安装包内的 Rust updater 与 ADB。
+- `desktop-macos.txt`：macOS x64/arm64 桌面分发。
+- `desktop-linux.txt`：Linux x64/arm64 glibc 桌面分发。
+  三份桌面声明也覆盖启动后受管下载的 agent CLI；Claude Code、Codex 与 Pi
+  不包含在安装包内，而是下载到用户数据目录。
 - `mobile-ios.txt` / `mobile-android.txt`：移动端 JS 生产依赖与仓库显式声明的原生 SDK。
   按 app 实际分发到的设备过滤，不含只在开发机构建期使用的平台可选原生包（这些包的
   JS 主包本身仍在声明内，只是其 `darwin`/`linux`/`win32` 预编译二进制不随 app 分发）。

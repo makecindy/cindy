@@ -41,13 +41,21 @@ import { normalizeMobileAgentCapabilities } from '@/session/agentCapabilities';
 import { evictComposerPaletteCacheForDevice, resetComposerPaletteCache } from '@/session/composerPaletteCache';
 import { clearAllDeviceModelMeta, evictDeviceModelMeta } from '@/device-link/deviceModelMetaCache';
 import { dispatchFileBrowserWatchEvent } from '@/device-link/fileBrowserWatch';
+import {
+  handlePeerLinkCloseFrame,
+  invalidatePeerLinkState,
+} from '@/device-link/linkClose';
 import { resolveMobileInvokeTimeoutMs } from '@/device-link/invokeTimeouts';
 import {
   classifySnapshotBatchFailure,
   rehydrateDeviceLinkTopics,
   type DeviceLinkRehydrateSendOptions,
 } from '@/device-link/rehydrate';
-import { invalidateOfflineScheduleIndexFailureFor, invalidateTransientScheduleIndexFailures } from '@/session/scheduleIndex';
+import {
+  invalidateOfflineScheduleIndexFailureFor,
+  invalidateScheduleIndexForDevice,
+  invalidateTransientScheduleIndexFailures,
+} from '@/session/scheduleIndex';
 import { isTransientRemoteError } from '@/device-link/remoteRetry';
 import { createRnWebSocket } from '@/device-link/rnWebSocket';
 import type { MobileGoalStatusPayload } from '@cindy/maker-shared/device-link-contract';
@@ -245,7 +253,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
   const presenceWipeTimerDeps = useMemo(() => ({
     ...basePresenceWipeTimerDeps,
     isConfirmationInFlight: (deviceId: string) =>
-      openLinkInFlightRef.current.has(deviceId),
+      openLinkInFlightRef.current.get(deviceId)?.pending === true,
   }), []);
   const presenceAvailableByDeviceRef = useRef(new Map<string, boolean>());
   const presenceAvailabilityEpochsRef = useRef(createPresenceAvailabilityEpochs());
@@ -272,6 +280,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
       remoteResponseEvidenceEpochs,
       deviceId,
       () => sendOpenLinkWithAccessHandling(client, deviceId),
+      { retainSuccessful: true },
     );
   }, []);
 
@@ -465,6 +474,8 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
                 // 目标端真实应答即可证明设备可达,取消上一代 unavailable 留下的宽限清理;
                 // 不伪造 presence=true,后续权威 false delta 仍可照常过滤并重新计时。
                 clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
+                remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
+                invalidateOfflineScheduleIndexFailureFor(deviceId);
               },
               onDeviceRemoteDisabled: (deviceId) => {
                 // 被控端实时设置已明确关闭远控:这是当前 epoch 的权威终态,
@@ -645,6 +656,9 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offPresence = client.onPresenceChanged((snap) => {
       markPresenceAvailabilityEpoch(presenceAvailabilityEpochsRef.current, snap.deviceId);
+      // presence 变化代表目标链路代际变化(offline / remote-disabled / 恢复都一样):
+      // 上一代成功 link 不能跨代复用,下一次请求必须重新 link-open 确认。
+      openLinkInFlightRef.current.delete(snap.deviceId);
       setLastPresenceSnapshot(snap);
       setPresenceVersion((n) => n + 1);
       const presence = updatePresenceAvailability(
@@ -695,6 +709,7 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         return;
       }
       clearOnePresenceWipeTimer(wipeTimers, snap.deviceId);
+      remoteScheduleEventStore.clearDeviceMirrorInvalidation(snap.deviceId);
       // 每个「可用」快照都清该设备的 DEVICE_OFFLINE 负缓存(review P1 ×2):
       // 主机在手机连上 relay 之前就离线时,presence 只在变化时广播,首个在线
       // 快照 recovered=false——只挂 recovered 会漏掉这次恢复,徽标停留到无关
@@ -704,6 +719,12 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
     });
     const offFrame = client.onFrame((env) => routeFrame(env, {
       onAccessRevoked: (deviceId) => remoteSubscribedTopicsRef.current.delete(deviceId),
+      onLinkClosed: (deviceId) => invalidatePeerLinkState(
+        deviceId,
+        openLinkInFlightRef.current,
+        remoteSubscribedTopicsRef.current,
+        noteSessionLiveStreamsInterrupted,
+      ),
       onProviderChanged: (deviceId) => {
         // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。
         // 同时驱逐并后台重拉；页面保留旧画面，当前代完整快照提交后由订阅一次性更新。
@@ -944,14 +965,20 @@ function VisualMockDeviceLinkProvider({ children }: { children: ReactNode }) {
   return <DeviceLinkContext.Provider value={value}>{children}</DeviceLinkContext.Provider>;
 }
 
-function routeFrame(env: Envelope, handlers: {
+export function routeFrame(env: Envelope, handlers: {
   onAccessRevoked?: (deviceId: string) => void;
+  onLinkClosed?: (deviceId: string) => void;
   onProviderChanged?: (deviceId: string) => void;
 } = {}): void {
+  const peerLinkClosed = handlePeerLinkCloseFrame(
+    env,
+    (deviceId) => handlers.onLinkClosed?.(deviceId),
+  );
   if (applyAccessRevokedFrame(env)) {
     if (env.src) handlers.onAccessRevoked?.(env.src);
     return;
   }
+  if (peerLinkClosed) return;
   if (env.kind !== 'push' || !env.src) return;
   const push = env.payload as PushPayload;
   if (push.channel === 'maker:provider:changed') {
@@ -969,14 +996,14 @@ function routeFrame(env: Envelope, handlers: {
   remoteSessionStore.applyRemotePush(env.src, push.channel, push.payload);
 }
 
-/** provider revision 后并行重拉两种 agent 的能力；旧代或异常结果都不触碰当前页面。 */
+/** provider revision 后并行重拉所有 agent 的能力；旧代或异常结果都不触碰当前页面。 */
 async function refreshDeviceCapabilities(
   client: DeviceLinkClient,
   deviceId: string,
 ): Promise<void> {
   const generation = getAgentCapabilitiesGeneration(deviceId);
   await Promise.allSettled(
-    (['claude-code', 'codex'] as const).map(async (agentKind) => {
+    (['claude-code', 'codex', 'pi'] as const).map(async (agentKind) => {
       const raw = await sendInvokeWithAccessHandling<unknown>(
         client,
         deviceId,
@@ -1304,9 +1331,23 @@ function requireClient(client: DeviceLinkClient | null): DeviceLinkClient {
   return client;
 }
 
+function markOfflineDeviceMirror(deviceId: string): void {
+  // 普通离线只清依赖在线连接的 live 投影,保留 session/messages。这样用户切回
+  // 刚看过的会话时先看到 last-known 内容,恢复后 marker 失效会触发后台窗口对账。
+  remoteSessionStore.markDeviceOffline(deviceId);
+  invalidateScheduleIndexForDevice(deviceId);
+  remoteScheduleEventStore.invalidateDeviceMirror(deviceId);
+  evictDeviceProviders(deviceId);
+  evictDeviceModelMeta(deviceId);
+  evictAgentCapabilitiesForDevice(deviceId);
+  evictComposerPaletteCacheForDevice(deviceId);
+}
+
 function wipeUnavailableDeviceMirror(deviceId: string): void {
+  invalidateScheduleIndexForDevice(deviceId);
   remoteSessionStore.removeDevice(deviceId);
   remoteScheduleEventStore.clearDevice(deviceId);
+  remoteScheduleEventStore.clearDeviceMirrorInvalidation(deviceId);
   // Drop the cached provider catalog so a returning/re-granted device re-fetches it
   // instead of serving a list frozen from a previous connection.
   evictDeviceProviders(deviceId);
@@ -1322,7 +1363,7 @@ const basePresenceWipeTimerDeps = {
   setTimer: (callback: () => void, delayMs: number) =>
     setTimeout(callback, delayMs),
   clearTimer: clearTimeout,
-  wipe: wipeUnavailableDeviceMirror,
+  wipe: markOfflineDeviceMirror,
 };
 
 function scheduleUnavailableDeviceMirrorWipe(

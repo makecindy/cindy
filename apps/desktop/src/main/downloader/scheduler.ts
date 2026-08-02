@@ -38,6 +38,7 @@ interface QueuedTask {
   opts: DownloadOptions;
   resolve: (r: DownloadResult) => void;
   reject: (e: Error) => void;
+  onAbort?: () => void;
 }
 
 export interface SchedulerOptions {
@@ -68,11 +69,19 @@ export class Scheduler {
     if (existing !== undefined) return existing;
 
     const promise = new Promise<DownloadResult>((resolve, reject) => {
-      this.queue.push({ key, opts, resolve, reject });
+      const task: QueuedTask = { key, opts, resolve, reject };
+      task.onAbort = () => this.abortQueuedTask(task);
+      opts.signal?.addEventListener('abort', task.onAbort, { once: true });
+      this.queue.push(task);
       this.tryStart();
     });
     this.inflight.set(key, promise);
-    promise.finally(() => this.inflight.delete(key));
+    // 用双分支 then 做清理，避免 finally 返回的 rejected Promise 在调用方
+    // 尚未来得及接住时触发 unhandledRejection。
+    void promise.then(
+      () => this.inflight.delete(key),
+      () => this.inflight.delete(key),
+    );
     return promise;
   }
 
@@ -98,6 +107,11 @@ export class Scheduler {
       const task = this.queue.shift();
       if (task === undefined) return;
 
+      if (task.onAbort) {
+        task.opts.signal?.removeEventListener('abort', task.onAbort);
+        task.onAbort = undefined;
+      }
+
       // Aborted while queued.
       if (task.opts.signal?.aborted === true) {
         task.reject(new DownloadError('ABORTED', 'aborted while queued'));
@@ -106,6 +120,17 @@ export class Scheduler {
 
       void this.run(task);
     }
+  }
+
+  private abortQueuedTask(task: QueuedTask): void {
+    const index = this.queue.indexOf(task);
+    if (index < 0) return;
+    this.queue.splice(index, 1);
+    task.onAbort = undefined;
+    task.reject(new DownloadError('ABORTED', 'aborted while queued'));
+    // The aborted task did not consume an active slot, but another queued task
+    // may now be startable when this callback races with a slot becoming free.
+    this.tryStart();
   }
 
   private async run(task: QueuedTask): Promise<void> {

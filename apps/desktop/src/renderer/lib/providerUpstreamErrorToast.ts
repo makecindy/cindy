@@ -16,7 +16,7 @@ import { toast } from './toast';
 import type { ProviderErrorCode } from '../../shared/providerErrors';
 
 interface ProviderUpstreamErrorPayload {
-  agent: 'claude-code' | 'codex';
+  agent: 'claude-code' | 'codex' | 'pi';
   providerId: string;
   providerName?: string;
   code: ProviderErrorCode;

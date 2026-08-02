@@ -20,7 +20,7 @@ SCOPE NOTES:
 Restricted or proprietary components are disclosed in the companion file.
 
 ==============================================================================
-SECTION 1: Bundled components (non-npm)
+SECTION 1: Non-npm components
 ==============================================================================
 
 ------------------------------------------------------------------------------

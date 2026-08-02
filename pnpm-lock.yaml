@@ -394,6 +394,9 @@ importers:
       tailwind-merge:
         specifier: ^2.6.0
         version: 2.6.1
+      tar:
+        specifier: ^7.5.21
+        version: 7.5.22
       undici:
         specifier: ^8.3.0
         version: 8.7.0
@@ -13797,9 +13800,7 @@ snapshots:
       metro-runtime: 0.84.4
     transitivePeerDependencies:
       - '@babel/core'
-      - bufferutil
       - supports-color
-      - utf-8-validate
 
   '@react-native/normalize-colors@0.74.89': {}
 

@@ -18,9 +18,7 @@ describe('triggerCodexLoginOnce', () => {
   it('coalesces only the same mode and serializes a conflicting mode after cancellation', async () => {
     const browser = deferred<{ authenticated: boolean }>();
     const triggerLogin = vi.fn((_: string, options?: { mode?: string; ownerId?: string }) =>
-      options?.mode === 'device-code'
-        ? Promise.resolve({ authenticated: true })
-        : browser.promise,
+      options?.mode === 'device-code' ? Promise.resolve({ authenticated: true }) : browser.promise,
     );
     const cancelLogin = vi.fn(async () => undefined);
     Object.assign(window, {
@@ -77,12 +75,33 @@ describe('triggerCodexLoginOnce', () => {
     expect(triggerLogin).toHaveBeenCalledTimes(1);
   });
 
+  it('isolates login-start listener failures from later listeners and the login IPC', async () => {
+    const triggerLogin = vi.fn(async () => ({ authenticated: true }));
+    const cancelLogin = vi.fn(async () => undefined);
+    Object.assign(window, {
+      electronAPI: {
+        maker: { auth: { triggerLogin, cancelLogin } },
+      },
+    });
+    const { onCodexLoginStarted, triggerCodexLoginOnce } = await import('../codexAuthLogin');
+    const laterListener = vi.fn();
+    const offThrowing = onCodexLoginStarted(() => {
+      throw new Error('observer failed');
+    });
+    const offLater = onCodexLoginStarted(laterListener);
+
+    await expect(triggerCodexLoginOnce('browser')).resolves.toEqual({ authenticated: true });
+
+    expect(laterListener).toHaveBeenCalledOnce();
+    expect(triggerLogin).toHaveBeenCalledOnce();
+    offThrowing();
+    offLater();
+  });
+
   it('continues a mode switch when cancellation throws synchronously', async () => {
     const browser = deferred<{ authenticated: boolean }>();
     const triggerLogin = vi.fn((_: string, options?: { mode?: string; ownerId?: string }) =>
-      options?.mode === 'device-code'
-        ? Promise.resolve({ authenticated: true })
-        : browser.promise,
+      options?.mode === 'device-code' ? Promise.resolve({ authenticated: true }) : browser.promise,
     );
     const cancelLogin = vi.fn(() => {
       throw new Error('bridge unavailable');

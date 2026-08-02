@@ -36,7 +36,6 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
-import { Spinner } from '@/components/ui/spinner';
 import type { Session } from '@/lib/ccAgent.types';
 import { WorktreeBadge } from '@/components/sidebar/WorktreeBadge';
 import { SessionStatusIcon } from './SessionStatusIcon';
@@ -90,6 +89,7 @@ import { useSessionAttentionUrgency } from '../contexts/SessionAttentionUrgencyC
 import { useRemoteSessionActivity } from '@/features/device-link/remoteSessionActivityStore';
 import { resolveSidebarRightStatus } from './sidebarRightStatus';
 import { AutomationTimerIcon } from './AutomationTimerIcon';
+import { SidebarRightStatusIndicator } from './SidebarRightStatusIndicator';
 
 // Module-level dedup cache for loadScheduleSidebarIndexRuns.
 // When many ungrouped automation rows mount simultaneously they all need the
@@ -774,58 +774,7 @@ export const SessionItem = memo(function SessionItem({
           >
             <WorktreeBadge sessionId={session.id} size={12} className="size-4" />
             {showRightStatus ? (
-              rightStatusKind === 'error' ? (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.error', 'Failed — click to view')}
-                  title={t('ccAgent.sidebar.status.error', 'Failed — click to view')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-error)' }}
-                    aria-hidden
-                  />
-                </span>
-              ) : rightStatusKind === 'awaiting' ? (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')}
-                  title={t('ccAgent.sidebar.status.needsAttention', 'Awaiting your input')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-awaiting)' }}
-                    aria-hidden
-                  />
-                </span>
-              ) : rightStatusKind === 'running' ? (
-                <Spinner
-                  role="img"
-                  size={12}
-                  strokeWidth={2}
-                  className={cn(
-                    'size-4',
-                    isActive ? 'text-sidebar-item-active-foreground' : 'text-sidebar-action-icon',
-                  )}
-                  aria-label={t('ccAgent.sidebar.status.running', 'Running')}
-                  title={t('ccAgent.sidebar.status.running', 'Running')}
-                />
-              ) : (
-                <span
-                  role="img"
-                  className="inline-flex size-4 items-center justify-center"
-                  aria-label={t('ccAgent.sidebar.status.done', 'Completed — click to view')}
-                  title={t('ccAgent.sidebar.status.done', 'Completed — click to view')}
-                >
-                  <span
-                    className="size-2 rounded-full"
-                    style={{ backgroundColor: isActive ? 'var(--sidebar-item-active-foreground)' : 'var(--card-status-done)' }}
-                    aria-hidden
-                  />
-                </span>
-              )
+              <SidebarRightStatusIndicator kind={rightStatusKind} isActive={isActive} />
             ) : (
               <time
                 dateTime={activityIso}

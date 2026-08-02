@@ -24,7 +24,7 @@
 | Pending interactions | `PermissionPrompt.tsx`, `AskUserQuestionPrompt.tsx`, `PlanViewerCard.tsx`, `PlanActionCard.tsx`;`IssueConfirmCard.tsx` 仅作为桌面 `/issue` 反馈链路参考 |
 | 自动化 / 计划 | `features/scheduler/SchedulerPage.tsx`, `TaskListPane.tsx`, `RunHistoryPane.tsx`, `ScheduleFormDialog.tsx`, `TemplateGallery.tsx` |
 | 文件页 / 选项卡 | `features/cc-agent/workdir-browse/WorkdirBrowseRoute.tsx`, `FileBodyView.tsx`, `SessionTabsBar.tsx`, `FileTabsBar.tsx` |
-| 协作模式 / Orca | `CollaborationModeToggle.tsx`, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `WorkerListToolbar.tsx` |
+| 协作模式 / Orca | `ExtraDirsButton.tsx`（「+」菜单协同项）, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `WorkerListToolbar.tsx` |
 
 ## 2. 产品边界
 
@@ -726,7 +726,7 @@ V1B 不做完整编辑器,但需要支持:
 
 协作模式不是一个简单开关。桌面 Orca 由这些部分组成:
 
-- `CollaborationModeToggle`: 在输入器里开启协作模式偏好。
+- `ExtraDirsButton` 的协同模式项:在输入器「+」菜单里开启协作模式偏好。
 - `OrcaWorkflowRoute`: lead session 的协作路由。
 - `OrcaSplitView`: Lead + Worker 双 pane。
 - `WorkerListToolbar`: worker 列表、focus、active count。

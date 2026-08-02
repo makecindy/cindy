@@ -13,7 +13,7 @@ vi.mock('../../logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../../maker-host/memory-settings-store', () => ({
-  readMemorySettings: vi.fn(() => ({ maker: true, claudeCode: true, codex: true })),
+  readMemorySettings: vi.fn(() => ({ maker: true, claudeCode: true, codex: true, pi: true })),
 }));
 
 import {
@@ -36,7 +36,7 @@ const shard = (over: Partial<ProfileShard> = {}): ProfileShard => ({
 
 beforeEach(async () => {
   await fs.promises.rm(TEST_ROOT, { recursive: true, force: true });
-  vi.mocked(readMemorySettings).mockReturnValue({ maker: true, claudeCode: true, codex: true });
+  vi.mocked(readMemorySettings).mockReturnValue({ maker: true, claudeCode: true, codex: true, pi: true });
 });
 
 describe('formatProfileBlock', () => {
@@ -77,7 +77,7 @@ describe('formatProfileBlock', () => {
 
 describe('collectUserProfile', () => {
   it('returns empty when Maker Memory is disabled', async () => {
-    vi.mocked(readMemorySettings).mockReturnValue({ maker: false, claudeCode: true, codex: true });
+    vi.mocked(readMemorySettings).mockReturnValue({ maker: false, claudeCode: true, codex: true, pi: true });
 
     const profile = await collectUserProfile(null);
 

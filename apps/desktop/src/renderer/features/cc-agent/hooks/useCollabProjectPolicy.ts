@@ -46,32 +46,41 @@ type ProjectRefreshTracker = {
  * 只会读到自己的用户级开关,可能与被控端 main 的 assertCollabProjectEnabled 相反 ——
  * 那正是 #1170 里「草稿没入口 / 会话有入口但走不完」的第二层来源。
  *
- * `skipQuery`(SSH 远端):workingDir 是远端主机上的路径, 在执行查询的那台机器的 fs 上查
- * 项目级既无意义又会误判 — 跳过项目级覆盖, 但仍查用户级/全局级 collab 开关
- * (与 main 侧 assertCollabProjectEnabled 的 remote 分支同口径): 用户全局禁用 Collab 时
- * UI toggle 同样置灰, 而不是放行到 enableOrca 才撞 PRECONDITION_FAILED。
+ * `skipQuery`(尚无运行目录的 dialogue 草稿 / SSH 远端):草稿没有可查目录,远端 workingDir
+ * 则不属于执行查询的本机 fs;两者都跳过项目级覆盖,但仍查用户级/全局级 collab 开关。
+ * 已创建的本地 dialogue 把 workspaceKind + workingDir 交给查询:Main 会用与最终授权相同
+ * 的可信判据把 app 托管 dialogue 目录强制收敛到全局级,显式真实目录继续尊重项目覆盖。
+ * 即使托管 cwd 里意外出现 `.cindy/plugins.json`,入口状态也不会与 mutation 判定漂移。
  */
 export function useCollabProjectPolicy(
   workingDir: string | null | undefined,
   eligible: boolean,
-  opts?: { skipQuery?: boolean; deviceId?: string | null },
+  opts?: { skipQuery?: boolean; deviceId?: string | null; workspaceKind?: string | null },
 ): CollabProjectPolicy {
   const skipQuery = opts?.skipQuery === true;
   // skipQuery 用 '' 作查询参数:'' 占位表示 "跳过项目级、只查用户级" 那一档。
   const requestedWorkingDir =
-    eligible && typeof workingDir === 'string'
-      ? skipQuery
+    !eligible
+      ? null
+      : skipQuery
         ? ''
-        : normalizeWorkingDirForProjectSettings(workingDir)
-      : null;
+        : typeof workingDir === 'string'
+          ? normalizeWorkingDirForProjectSettings(workingDir)
+          : null;
   const requestedDeviceId =
     eligible && typeof opts?.deviceId === 'string' && opts.deviceId.trim() !== ''
       ? opts.deviceId
       : null;
+  const requestedWorkspaceKind =
+    eligible && (opts?.workspaceKind === 'project' || opts?.workspaceKind === 'dialogue')
+      ? opts.workspaceKind
+      : undefined;
   // 键含 deviceId:两台被控设备完全可能出现同一个路径串(`/Users/me/proj`),只按路径
   // 做键会让 A 设备的答案被当成 B 设备的,入口据此置灰/放行都是错的。
   const requestKey =
-    requestedWorkingDir == null ? null : `${requestedDeviceId ?? ''}\u0000${requestedWorkingDir}`;
+    requestedWorkingDir == null
+      ? null
+      : `${requestedDeviceId ?? ''}\u0000${requestedWorkspaceKind ?? ''}\u0000${requestedWorkingDir}`;
   const [state, setState] = useState<PolicyState>({
     queryKey: null,
     enabled: requestKey == null ? false : null,
@@ -104,17 +113,33 @@ export function useCollabProjectPolicy(
           requestedDeviceId,
           'collab',
           requestedWorkingDir === '' ? undefined : requestedWorkingDir,
+          requestedWorkspaceKind,
         );
-        const result = { enabled: next.effectiveEnabled, unavailable: false, unsupported: false };
+        // 旧被控端虽然已有 get-state channel，却会忽略 workspaceKind，最终授权也不接受
+        // dialogue。只有被控端显式回显已接受 dialogue，远端 dialogue 入口才可放行。
+        const unsupported =
+          requestedDeviceId !== null &&
+          requestedWorkspaceKind === 'dialogue' &&
+          next.collabWorkspaceKind !== 'dialogue';
+        if (unsupported) {
+          log.info('remote device does not support dialogue collaboration policy', {
+            deviceId: requestedDeviceId,
+          });
+        }
+        const result = {
+          enabled: unsupported ? false : next.effectiveEnabled,
+          unavailable: false,
+          unsupported,
+        };
         if (requestId !== requestIdRef.current) {
           const latest = refreshTrackersByKeyRef.current.get(requestKey)?.latestPromise;
           return latest && latest !== requestPromise ? latest : result;
         }
         setState({
           queryKey: requestKey,
-          enabled: result.enabled,
+          enabled: unsupported ? null : result.enabled,
           unavailable: false,
-          unsupported: false,
+          unsupported,
         });
         return result;
       } catch (err) {
@@ -156,7 +181,7 @@ export function useCollabProjectPolicy(
       }
     });
     return requestPromise;
-  }, [requestKey, requestedDeviceId, requestedWorkingDir]);
+  }, [requestKey, requestedDeviceId, requestedWorkingDir, requestedWorkspaceKind]);
 
   useEffect(() => {
     if (!eligible) return;

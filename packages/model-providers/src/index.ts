@@ -55,12 +55,17 @@ export {
 } from './source.js';
 
 export {
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
   findModelRegistryRoute,
   resolveModelReferencePrice,
 } from './modelRegistry.js';
+export { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 export type {
   ResolvedModelReferencePrice,
   ResolveModelReferencePriceOptions,
+  ModelRegistryRevisionRelation,
+  ModelRegistrySnapshotDecision,
 } from './modelRegistry.js';
 export type {
   ModelReferencePrice,
@@ -145,6 +150,7 @@ export {
   isChatEligible,
   groupOf,
   isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   groupModelsForDisplay,
   isBudgetModel,
   modelBadges,

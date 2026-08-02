@@ -28,37 +28,53 @@ describe('gatewayPricingCatalog', () => {
     expect(
       gatewayPricingCatalog(
         [model('a', { currency: 'CNY' }), model('b', { currency: 'USD' }), model('c')],
-        'cn',
+        'CNY',
       ),
     ).toEqual({});
   });
 
   it('lets a single declared currency cover the models that omit it', () => {
     // 同一账号的目录币种是统一的:省略 currency 的条目跟随同目录已声明的币种，
-    // 而不是各自回落构建区域(那会产出跨币种目录)。
+    // 而不是各自回落账本币种(那会产出跨币种目录)。
     const catalog = gatewayPricingCatalog(
       [model('a', { currency: 'USD' }), model('b')],
-      'cn',
+      'CNY',
     );
     expect(Object.keys(catalog.xd ?? {})).toEqual(['a', 'b']);
     expect(Object.values(catalog.xd ?? {}).map((quote) => quote.currency)).toEqual([
       'USD',
       'USD',
     ]);
+    // 目录声明了币种,不是猜的 —— 下游金额仍按精确账单记。
+    expect(
+      Object.values(catalog.xd ?? {}).every((quote) => quote.currencyInferred === undefined),
+    ).toBe(true);
   });
 
-  it('falls back to the build region only when no model declares a currency', () => {
-    const catalog = gatewayPricingCatalog([model('a'), model('b')], 'cn');
+  it('falls back to the ledger currency and marks it inferred when no model declares one', () => {
+    // 服务端漏发 currency 时只能回落账本币种,但必须留下"这是猜的"的痕迹:报价数值来自
+    // 服务端、币种由本地推断,猜错就是把一个口径的数字盖上另一个口径的戳。
+    const catalog = gatewayPricingCatalog([model('a'), model('b')], 'USD');
     expect(Object.values(catalog.xd ?? {}).map((quote) => quote.currency)).toEqual([
-      'CNY',
-      'CNY',
+      'USD',
+      'USD',
     ]);
+    expect(
+      Object.values(catalog.xd ?? {}).every((quote) => quote.currencyInferred === true),
+    ).toBe(true);
+  });
+
+  it('never guesses the currency by build region', () => {
+    // 回归护栏:此前整份目录没声明 currency 时按构建区域猜 CNY,把 USD 口径的报价数值
+    // 盖上 CNY 戳,产生 6.7 倍量级的错账。回落值只能来自调用方给的账本币种。
+    const catalog = gatewayPricingCatalog([model('a')], 'USD');
+    expect(catalog.xd?.a?.currency).toBe('USD');
   });
 
   it('carries Gateway costDiscount uniformly for ordinary and codex models', () => {
     const catalog = gatewayPricingCatalog(
       [model('a', { costDiscount: 0.4 }), model('codex/gpt-5.5', { costDiscount: 0.4 })],
-      'cn',
+      'CNY',
     );
     expect(catalog.xd.a).toMatchObject({
       inputPerMtok: 2,

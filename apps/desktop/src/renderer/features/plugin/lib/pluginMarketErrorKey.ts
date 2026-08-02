@@ -21,3 +21,31 @@ export function pluginMarketErrorKey(error: unknown): string {
       return 'settings.ghosts.market.errors.generic';
   }
 }
+
+/** 自定义市场源管理（添加 / 刷新 / 移除）的 IPC 错误码 → 本地化文案 key。 */
+export function marketplaceSourceErrorKey(error: unknown): string {
+  switch (extractIpcError(error)?.code) {
+    case 'MARKET_SOURCE_INVALID':
+      // addSource 把 parse 的子码放进 detail 透传；内嵌凭证有独立引导文案。
+      if (extractIpcError(error)?.message === 'CREDENTIALS_NOT_ALLOWED') {
+        return 'settings.ghosts.market.sources.errors.credentialsNotAllowed';
+      }
+      return 'settings.ghosts.market.sources.errors.invalidSource';
+    case 'MARKET_GIT_UNAVAILABLE':
+      return 'settings.ghosts.market.sources.errors.gitUnavailable';
+    case 'MARKET_CLONE_AUTH_FAILED':
+      return 'settings.ghosts.market.sources.errors.cloneAuthFailed';
+    case 'MARKET_CLONE_FAILED':
+      return 'settings.ghosts.market.sources.errors.cloneFailed';
+    case 'MARKET_REF_NOT_FOUND':
+      return 'settings.ghosts.market.sources.errors.refNotFound';
+    case 'MARKET_MANIFEST_MISSING':
+      return 'settings.ghosts.market.sources.errors.manifestMissing';
+    case 'ALREADY_EXISTS':
+      return 'settings.ghosts.market.sources.errors.duplicate';
+    case 'NOT_FOUND':
+      return 'settings.ghosts.market.sources.errors.notFound';
+    default:
+      return pluginMarketErrorKey(error);
+  }
+}

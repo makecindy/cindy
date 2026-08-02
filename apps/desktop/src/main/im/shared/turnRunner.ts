@@ -1019,7 +1019,8 @@ export function createTurnRunner(
         effort: row.effort,
         permissionMode: row.permissionMode,
         fastMode: row.fastMode,
-        providerId: row.providerId ?? undefined,
+        // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+        providerId: row.providerId,
         resumeSessionId: row.sdkSessionId ?? undefined,
         vendorOptions: state.attached
           ? undefined
@@ -1218,7 +1219,8 @@ export function createTurnRunner(
       effort: row.effort,
       permissionMode: row.permissionMode,
       fastMode: row.fastMode,
-      providerId: row.providerId ?? undefined,
+      // 保留 DB 的 null 语义：Pi 用 null 表示清除显式 provider，不能退化为 undefined。
+      providerId: row.providerId,
       // 行总是先由 repo 建好, maker 复用已有 row 时该 title 不会生效 —
       // 仅作防御兜底(原 feishu 实现传 '飞书会话' 字面量, 语义等价)。
       title: attached ? undefined : adapter.sessions.defaultTitle(userId),

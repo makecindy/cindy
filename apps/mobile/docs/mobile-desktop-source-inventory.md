@@ -37,7 +37,7 @@ V1 的判断标准:
 | Pending interactions | `PermissionPrompt.tsx`, `AskUserQuestionPrompt.tsx`, `PlanViewerCard.tsx`, `PlanActionCard.tsx`;`IssueConfirmCard.tsx` 仅作桌面反馈链路参考 | 定义权限、提问、计划确认的决策 shape;Issue 确认在 mobile V1 只做 desktop-only 降级识别。 |
 | 自动化计划 | `SchedulerPage.tsx`, `TaskListPane.tsx`, `RunHistoryPane.tsx`, `ScheduleFormDialog.tsx`, `TemplateGallery.tsx` | 定义 schedules 列表、运行历史、运行/暂停/恢复/删除、创建/编辑。 |
 | 文件和选项卡 | `WorkdirBrowseRoute.tsx`, `FileBodyView.tsx`, `WorkdirBrowseSidebar.tsx`, `FileTabsBar.tsx`, `SessionTabsBar.tsx` | 定义文件树、文件预览、文件 tab、同目录 session tab、chat rail。 |
-| 协作 / Orca | `CollaborationModeToggle.tsx`, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `useWorkers.ts` | 定义 lead + worker + focus + split/toggle 的真实协作模型。 |
+| 协作 / Orca | `ExtraDirsButton.tsx`（「+」菜单协同项）, `OrcaWorkflowRoute.tsx`, `OrcaSplitView.tsx`, `CreateWorkerPopover.tsx`, `useWorkers.ts` | 定义 lead + worker + focus + split/toggle 的真实协作模型。 |
 
 ## 3. V1/V1B/V2 分层
 
@@ -573,7 +573,7 @@ V1B:
 
 桌面源码说明协作不是一个开关:
 
-- `CollaborationModeToggle` 只是 controlled pill。
+- `ExtraDirsButton` 中的协同模式项只是 controlled 入口。
 - `OrcaSplitView` 承载 lead + worker 双会话。
 - workerRatio 持久化。
 - split/toggle layout。

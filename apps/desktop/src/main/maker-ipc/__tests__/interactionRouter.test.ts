@@ -4,6 +4,7 @@ import type { InteractionDecision, InteractionRequest } from '@cindy/maker-core'
 import {
   beginInteractionRoute,
   installDesktopInteractionHandler,
+  installInteractionLifecycleObserver,
   type InteractionHandler,
 } from '../interactionRouter';
 
@@ -192,6 +193,60 @@ describe('session interaction router', () => {
     });
     expect(states).toEqual(['waiting', 'cancelled']);
     keepPending();
+  });
+
+  it('notifies lifecycle observer on resolve, timeout, release, and handler throw', async () => {
+    vi.useFakeTimers();
+    try {
+      const harness = makeSession();
+      const starts: string[] = [];
+      const ends: string[] = [];
+      installInteractionLifecycleObserver(harness.session, {
+        onStart: (request) => starts.push(request.requestId),
+        onEnd: (request) => ends.push(request.requestId),
+      });
+      installDesktopInteractionHandler(harness.session, async (request) => {
+        if (request.requestId === 'throw') throw new Error('boom');
+        if (request.requestId === 'release' || request.requestId === 'timeout') {
+          return new Promise<InteractionDecision>(() => {});
+        }
+        return { kind: 'permission', behavior: 'allow' };
+      });
+
+      await expect(harness.dispatch(permission('resolve'))).resolves.toMatchObject({ behavior: 'allow' });
+      await expect(harness.dispatch(permission('throw'))).resolves.toMatchObject({
+        reason: 'interaction_handler_failed',
+      });
+      const timeoutLease = beginInteractionRoute(harness.session, {
+        route: {
+          sessionId: 'session-1',
+          turnId: 'timeout-observer',
+          origin: { kind: 'im', channel: 'wechat' },
+          interactionSurface: 'desktop',
+          timeoutMs: 50,
+        },
+      });
+      const timeoutPromise = harness.dispatch(permission('timeout'));
+      await vi.advanceTimersByTimeAsync(50);
+      await expect(timeoutPromise).resolves.toMatchObject({ reason: 'interaction_timeout' });
+      timeoutLease.release();
+      const releaseLease = beginInteractionRoute(harness.session, {
+        route: {
+          sessionId: 'session-1',
+          turnId: 'release-observer',
+          origin: { kind: 'im', channel: 'wechat' },
+          interactionSurface: 'desktop',
+        },
+      });
+      const releasePromise = harness.dispatch(permission('release'));
+      await vi.waitFor(() => expect(starts).toContain('release'));
+      releaseLease.release('turn_terminal');
+      await expect(releasePromise).resolves.toMatchObject({ reason: 'turn_terminal' });
+      expect(starts).toEqual(['resolve', 'throw', 'timeout', 'release']);
+      expect(ends).toEqual(['resolve', 'throw', 'timeout', 'release']);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('rejects overlapping routes before provider dispatch', () => {

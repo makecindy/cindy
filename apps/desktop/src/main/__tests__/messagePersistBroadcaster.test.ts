@@ -497,6 +497,38 @@ describe('thinking persistence', () => {
       broadcastGuard(),
     );
   });
+
+  it('persists redacted thinking as a structured hidden row', async () => {
+    const finishedAt = Date.parse('2026-06-20T09:11:00.000Z');
+    const nowSpy = vi.spyOn(Date, 'now').mockReturnValue(finishedAt);
+    try {
+      onThinkingEvent(
+        SESSION,
+        { stage: 'redacted', blockId: 'thinking-redacted' },
+        null,
+      );
+      await flushWrites();
+    } finally {
+      nowSpy.mockRestore();
+    }
+
+    expect(createMessage).toHaveBeenCalledWith(
+      SESSION,
+      expect.objectContaining({
+        clientId: 'thinking-redacted',
+        role: 'thinking',
+        content: {
+          kind: 'thinking',
+          text: '',
+          durationMs: 0,
+          isRedacted: true,
+          finishedAt,
+        },
+        createdAt: finishedAt,
+      }),
+      broadcastGuard(),
+    );
+  });
 });
 
 describe('event timestamp persistence', () => {

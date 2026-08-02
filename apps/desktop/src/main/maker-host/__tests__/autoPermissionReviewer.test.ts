@@ -40,6 +40,19 @@ describe('buildAutoPermissionReviewPrompt', () => {
     expect(prompt).not.toContain('current-model');
   });
 
+  it('separates the writable workspace root from read-only reference roots', () => {
+    // Extra Dirs 是只读引用目录:prompt 拍平成一个 workspaceRoots 数组会让
+    // 「workspace edits 倾向 allow」把写入只读目录的灰区命令一并放行(codex-connector 报)。
+    const prompt = buildAutoPermissionReviewPrompt(request({
+      workspaceRoots: ['/repo', '/extra-docs'],
+    }));
+
+    expect(prompt).toContain('"workspaceRoot":"/repo"');
+    expect(prompt).toContain('"readOnlyReferenceRoots":["/extra-docs"]');
+    expect(prompt).toContain('never allow an action that writes, deletes, or modifies anything inside them');
+    expect(prompt).toContain('edits inside workspaceRoot');
+  });
+
   it('delimits the action as untrusted data so command text cannot rewrite the policy', () => {
     const prompt = buildAutoPermissionReviewPrompt(request({
       action: {

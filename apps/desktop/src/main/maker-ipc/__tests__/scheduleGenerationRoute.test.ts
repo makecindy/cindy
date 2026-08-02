@@ -47,6 +47,25 @@ describe('resolveBoundSessionGenerationRoute', () => {
     })).toEqual({ providerId: 'xd', agentKind: 'claude-code', model: 'claude-sonnet' });
   });
 
+  it('keeps the implicit source for a running session after its model is retired', () => {
+    const retiredProviders = providers.map((provider) => provider.id === 'xd'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': provider.models['claude-code']?.map((model) => ({
+            ...model,
+            status: 'retired' as const,
+          })),
+        },
+      }
+      : provider);
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: null,
+      providers: retiredProviders,
+    })).toEqual({ providerId: 'xd', agentKind: 'claude-code', model: 'claude-sonnet' });
+  });
+
   it('fails closed when the bound session has no routable model', () => {
     expect(resolveBoundSessionGenerationRoute({
       session: { agentKind: 'claude-code', model: '' },
@@ -70,6 +89,25 @@ describe('resolveBoundSessionGenerationRoute', () => {
       providers: providers.map((provider) => provider.id === 'xd'
         ? { ...provider, connected: false }
         : provider),
+    })).toBeNull();
+  });
+
+  it('does not relax the chat capability boundary for an implicit resumed source', () => {
+    const nonChatProviders = providers.map((provider) => provider.id === 'xd'
+      ? {
+        ...provider,
+        models: {
+          'claude-code': provider.models['claude-code']?.map((model) => ({
+            ...model,
+            mode: 'embedding',
+          })),
+        },
+      }
+      : provider);
+    expect(resolveBoundSessionGenerationRoute({
+      session: { agentKind: 'claude-code', model: 'claude-sonnet' },
+      sessionProviderId: null,
+      providers: nonChatProviders,
     })).toBeNull();
   });
 

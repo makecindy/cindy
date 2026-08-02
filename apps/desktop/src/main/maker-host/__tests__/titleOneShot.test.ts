@@ -53,7 +53,7 @@ import {
   parseResponsesSse,
   type TitleOneShotDeps,
 } from '../title-one-shot.js';
-import { setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import { setActiveCatalog, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
 
 /** openai 是动态清单供应商(2026-07-19 统一重构):注入 codex 注册表快照模拟运行时形态。 */
 async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
@@ -75,7 +75,7 @@ async function withDiscoveredMini<T>(fn: () => T | Promise<T>): Promise<T> {
     setDiscoveredCodexModels([]);
   }
 }
-import type { ProviderView } from '@cindy/model-providers';
+import { BUNDLED_CATALOG, type Catalog, type ProviderView } from '@cindy/model-providers';
 
 /** 造一个 fetch 替身:按传入 handler 返回类 Response 对象,并记录调用。 */
 function fakeFetch(
@@ -139,6 +139,91 @@ describe('generateTitleViaProvider — provider 解析', () => {
     );
     expect(title).toBeNull();
     expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(0);
+  });
+
+  it('标题模型已 retired → 作为新 one-shot 路由跳过，不影响会话本身续跑', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+    const anthropic = providerStub('anthropic');
+    anthropic.models['claude-code'] = [
+      {
+        id: 'claude-haiku-4-5',
+        name: 'Claude Haiku 4.5',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'retired',
+      },
+    ];
+
+    const title = await generateTitleViaProvider(
+      { sessionId: 's-retired', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [anthropic],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+
+    expect(title).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('凭证等待期间热刷新为 retired → 派发紧前重验并跳过请求', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+    const anthropic = providerStub('anthropic');
+    anthropic.models['claude-code'] = [
+      {
+        id: 'claude-haiku-4-5',
+        name: 'Claude Haiku 4.5',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'active',
+      },
+    ];
+    let releaseCredential!: () => void;
+    const credentialGate = new Promise<void>((resolve) => {
+      releaseCredential = resolve;
+    });
+    const readAnthropicOAuth = vi.fn(async () => {
+      await credentialGate;
+      return { accessToken: 'tok' };
+    });
+
+    setActiveCatalog(BUNDLED_CATALOG);
+    const titlePromise = generateTitleViaProvider(
+      { sessionId: 's-retired-race', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [anthropic],
+        readAnthropicOAuth,
+      },
+    );
+    await vi.waitFor(() => expect(readAnthropicOAuth).toHaveBeenCalledOnce());
+
+    const retiredCatalog = structuredClone(BUNDLED_CATALOG);
+    const retiredEntry = retiredCatalog.modelRegistry?.models.find((entry) =>
+      entry.routes.some(
+        (route) => route.providerId === 'anthropic' && route.modelId === 'claude-haiku-4-5',
+      ),
+    );
+    expect(retiredEntry).toBeDefined();
+    retiredEntry!.status = 'retired';
+    setActiveCatalog(retiredCatalog);
+    releaseCredential();
+
+    try {
+      await expect(titlePromise).resolves.toBeNull();
+      expect(fetchImpl).not.toHaveBeenCalled();
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
 
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
@@ -234,12 +319,21 @@ describe('buildTitleTarget(锁定 catalog titleModel 配置)', () => {
       });
     });
   });
-  it('openai 注册表未注入(清单为空)→ effort=null(SDK 默认档),标题请求仍可发', () => {
-    expect(buildTitleTarget('openai')).toMatchObject({
-      providerId: 'openai',
-      model: 'gpt-5.4-mini',
-      effort: null,
-    });
+  it('openai 注册表未注入(清单为空、无 registry)→ effort=null(SDK 默认档),标题请求仍可发', () => {
+    // registry-free:bundled registry 的实体化条目会带出 efforts(那是 modelPlane
+    // 的预期行为);本用例守的是「零能力信息也能发标题请求」的兜底语义。
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    delete catalog.modelRegistry;
+    setActiveCatalog(catalog);
+    try {
+      expect(buildTitleTarget('openai')).toMatchObject({
+        providerId: 'openai',
+        model: 'gpt-5.4-mini',
+        effort: null,
+      });
+    } finally {
+      setActiveCatalog(BUNDLED_CATALOG);
+    }
   });
   it('xd → gpt-5.4-mini / 网关 chat-completions(/v1 upstream)', () => {
     // xd 模型以网关实时清单为准(默认空):注入 titleModel 同 id 条目,

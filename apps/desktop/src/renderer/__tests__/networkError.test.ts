@@ -15,6 +15,7 @@ describe('isNetworkishErrorMessage', () => {
   it.each([
     // Anthropic SDK 重试耗尽后透传的终止型错误原文
     'Request timed out.',
+    'API Error: The operation timed out.',
     'Connection error.',
     // 网关 / errno / fetch 存量场景抽查
     'unexpected status 502 Bad Gateway: upstream unreachable: AggregateError',
@@ -31,6 +32,8 @@ describe('isNetworkishErrorMessage', () => {
     'Invalid API key',
     'thread not found',
     'context window exceeded',
+    'Local tool operation timed out.',
+    'Wrapped error: API Error: The operation timed out.',
     // 长数字不因包含 502 片段误伤(\b 词边界)
     'order id 15024 rejected',
   ])('does not match non-network message: %s', (msg) => {
