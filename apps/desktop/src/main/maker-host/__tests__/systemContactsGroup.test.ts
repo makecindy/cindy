@@ -56,8 +56,11 @@ describe('syncSystemContactGroup', () => {
     const script = argv[3] ?? '';
     expect(script).toContain('const groupName = "Cindy 管理";');
     expect(script).toContain('const appleIds = ["apple-1","apple-2"];');
+    expect(script).toContain('const allPersonIds = new Set');
+    expect(script).toContain('if (!allPersonIds.has(appleId))');
     expect(script).toContain('Contacts.add(person, { to: group })');
     expect(script).not.toContain('Contacts.delete(group)');
+    expect(script).not.toContain('catch (err) {\n      missingAppleIds.push(appleId)');
   });
 
   it('空名称和超过单批上限在启动 osascript 前拒绝', async () => {
@@ -77,12 +80,18 @@ describe('syncSystemContactGroup', () => {
     await expect(syncSystemContactGroup('Cindy', [])).rejects.toThrow('[PERMISSION_DENIED]');
   });
 
+  it('分组写入执行错误不会伪装成 missing 成功', async () => {
+    execFileAsyncMock.mockRejectedValue(
+      new Error('execution error: Contacts.add failed because the group is not writable'),
+    );
+
+    await expect(syncSystemContactGroup('Cindy', ['apple-1'])).rejects.toThrow('[INTERNAL]');
+  });
+
   it('非 macOS 平台 fail closed', async () => {
     vi.spyOn(process, 'platform', 'get').mockReturnValue('win32');
 
-    await expect(syncSystemContactGroup('Cindy', [])).rejects.toThrow(
-      '[UNSUPPORTED_CAPABILITY]',
-    );
+    await expect(syncSystemContactGroup('Cindy', [])).rejects.toThrow('[UNSUPPORTED_CAPABILITY]');
     expect(execFileAsyncMock).not.toHaveBeenCalled();
   });
 });

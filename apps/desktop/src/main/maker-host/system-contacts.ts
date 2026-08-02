@@ -35,7 +35,9 @@ const OSA_TIMEOUT_MS = 180_000;
  * 显式转义消掉这个引擎版本依赖的注入边界。
  */
 function jsonForScript(value: unknown): string {
-  return JSON.stringify(value).replace(/\u2028/g, '\\u2028').replace(/\u2029/g, '\\u2029');
+  return JSON.stringify(value)
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 // 批量拉取脚本: 每个属性一次 whose-less 全量取数, 组装成 JSON 输出。
@@ -312,6 +314,9 @@ function buildSystemContactGroupScript(groupName: string, appleIds: string[]): s
   }
 
   const existingIds = new Set((group.people.id() || []).map((id) => String(id)));
+  // 只把全量 id 快照中明确不存在的联系人归为 missing。读取 id、add 或 save 的
+  // 权限/JXA 错误必须抛给 host，不能伪装成“联系人不存在”后成功退出。
+  const allPersonIds = new Set((Contacts.people.id() || []).map((id) => String(id)));
   const missingAppleIds = [];
   let added = 0;
   let alreadyPresent = 0;
@@ -320,17 +325,16 @@ function buildSystemContactGroupScript(groupName: string, appleIds: string[]): s
       alreadyPresent += 1;
       continue;
     }
-    try {
-      const person = Contacts.people.byId(appleId);
-      person.name();
-      // Contacts.sdef 把 group.people 标为只读；成员关系必须走应用级
-      // add <entry> to <specifier> 命令，直接对 collection.push 会被拒。
-      Contacts.add(person, { to: group });
-      existingIds.add(appleId);
-      added += 1;
-    } catch (err) {
+    if (!allPersonIds.has(appleId)) {
       missingAppleIds.push(appleId);
+      continue;
     }
+    const person = Contacts.people.byId(appleId);
+    // Contacts.sdef 把 group.people 标为只读；成员关系必须走应用级
+    // add <entry> to <specifier> 命令，直接对 collection.push 会被拒。
+    Contacts.add(person, { to: group });
+    existingIds.add(appleId);
+    added += 1;
   }
   if (added > 0) Contacts.save();
   return JSON.stringify({

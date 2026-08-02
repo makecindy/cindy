@@ -626,11 +626,15 @@ function handleIncomingCipherFrame(
       // 缺字段表示旧客户端：不能把它对普通 clocks 的确认当作 merge redirect 确认。
       peerKnownMergeClocks.delete(srcDeviceId);
     }
-    if (message.capabilities?.includes(CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS)) {
+    const supportedMergeRedirectsBefore = peersSupportingMergeRedirects.has(srcDeviceId);
+    const declaresMergeRedirects = message.capabilities?.includes(
+      CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS,
+    );
+    if (declaresMergeRedirects) {
       peersSupportingMergeRedirects.add(srcDeviceId);
     } else {
       // 每条消息都重新确认，防止同一 deviceId 降级后沿用旧能力。
-      if (peersSupportingMergeRedirects.has(srcDeviceId)) {
+      if (supportedMergeRedirectsBefore) {
         invalidatePeerMergeCapability(srcDeviceId);
       }
     }
@@ -639,7 +643,11 @@ function handleIncomingCipherFrame(
       broadcastContactsChanged({ origin: 'remote' });
       log.info(`merged contacts state from ${shortId(srcDeviceId)} via ${route}`);
     }
-    if (message.changed || message.requestReply === true) {
+    const mergeCapabilityBecameAvailable =
+      declaresMergeRedirects === true && !supportedMergeRedirectsBefore;
+    if (message.changed || message.requestReply === true || mergeCapabilityBecameAvailable) {
+      // 第一次安全状态只负责能力握手；能力确认后必须主动完成第二阶段交付，
+      // 不能依赖对端 changed/requestReply 恰好为 true。
       runSyncTask(() => outbound.send(srcDeviceId, false));
     }
   });

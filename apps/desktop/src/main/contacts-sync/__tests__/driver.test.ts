@@ -838,7 +838,6 @@ describe('contacts sync runtime ownership', () => {
       changed: false,
       clocks: [],
       mergeClocks: [],
-      requestReply: true,
       capabilities: ['merge-redirects-v1'],
     });
     driver.handleIncomingContactsRelayFrame('peer-device', {
