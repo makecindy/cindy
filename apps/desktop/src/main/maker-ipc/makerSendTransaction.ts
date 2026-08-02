@@ -112,6 +112,20 @@ export interface MakerSendTransactionDeps {
     sessionId: string,
     message: unknown,
   ): Promise<IpcUserMessage>;
+  /**
+   * Direct device-link sends may carry OSS attachment references that need to
+   * become local paths before normalization. Keep this after the transaction's
+   * session/workdir preflight so rejected sends do not materialize local copies.
+   */
+  materializeDirectSendOssAttachments?: (
+    sessionId: string,
+    message: unknown,
+    sendOpts: unknown,
+  ) => Promise<{
+    message: unknown;
+    sendOpts: unknown;
+    cleanupAfterAcceptance?: () => void;
+  }>;
   createDbMessage(
     sessionId: string,
     message: {
@@ -462,7 +476,20 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const normalized = await deps.prepareSendUserMessage(sessionId, message);
+      let outgoingMessage = message;
+      let outgoingSendOpts = sendOpts;
+      let cleanupAfterAcceptance: (() => void) | undefined;
+      if (deps.materializeDirectSendOssAttachments) {
+        const materialized = await deps.materializeDirectSendOssAttachments(
+          sessionId,
+          outgoingMessage,
+          outgoingSendOpts,
+        );
+        outgoingMessage = materialized.message;
+        outgoingSendOpts = materialized.sendOpts;
+        cleanupAfterAcceptance = materialized.cleanupAfterAcceptance;
+      }
+      const normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
@@ -470,7 +497,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
-      const so = (sendOpts ?? {}) as MakerSendOptions;
+      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       if (
         so.ackInterruptedTurnOnDispatch !== undefined &&
         typeof so.ackInterruptedTurnOnDispatch !== 'boolean'
@@ -581,6 +608,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             }
           },
         });
+        if (sendResult.accepted) cleanupAfterAcceptance?.();
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);

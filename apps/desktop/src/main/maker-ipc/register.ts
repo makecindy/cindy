@@ -7671,6 +7671,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     broadcastSessionCreated,
     prepareSendUserMessage: (sessionId, message) =>
       prepareUserMessageForAgent(sessionId, message, 'send'),
+    materializeDirectSendOssAttachments,
     createDbMessage: async (sessionId, message, opts) => {
       // 真实用户消息(renderer 发送事务)→ 给两个自动续跑守卫充值额度。
       //
@@ -7750,26 +7751,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     applyPendingAgentSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     log,
   });
-  const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
-    const [sessionId, message, createOpts, sendOpts] = args;
-    if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
-    return await withSendToSessionLock(sessionId, async () => {
-      const materialized = await materializeDirectSendOssAttachments(
-        sessionId,
-        message,
-        sendOpts,
-      );
-      const result = await sendToAgentAcceptedUnlocked(
-        sessionId,
-        materialized.message,
-        createOpts,
-        materialized.sendOpts,
-      );
-      if (result.accepted) materialized.cleanupAfterAcceptance?.();
-      return result;
-    });
-  };
 
+  const sendToAgentAccepted: typeof sendToAgentAcceptedUnlocked = async (...args) => {
+    const [sessionId] = args;
+    if (typeof sessionId !== 'string') return await sendToAgentAcceptedUnlocked(...args);
+    return await withSendToSessionLock(sessionId, () => sendToAgentAcceptedUnlocked(...args));
+  };
   /**
    * Same-turn steer contract: resolved STEER means maker-core accepted the
    * inserted message into the active turn (Claude: streaming input push;

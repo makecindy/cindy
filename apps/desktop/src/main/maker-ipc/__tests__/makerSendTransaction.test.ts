@@ -310,6 +310,63 @@ describe('maker SEND transaction', () => {
     expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
   });
 
+  it('materializes direct OSS attachments after session/workdir preflight', async () => {
+    const events: string[] = [];
+    const materializeDirectSendOssAttachments = vi.fn(async (
+      _sessionId: string,
+      message: unknown,
+      sendOpts: unknown,
+    ) => {
+      events.push('materialize');
+      return {
+        message: { ...(message as object), materialized: true },
+        sendOpts: { ...(sendOpts as object), materialized: true },
+      };
+    });
+    const session = createSession({
+      send: vi.fn(async (message) => {
+        events.push('send');
+        expect(message).toMatchObject({ materialized: true });
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    deps.prepareSendUserMessage = vi.fn(async (_sessionId, message) => {
+      events.push('normalize');
+      return message as UserMessage;
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }, undefined, { marker: true }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(events).toEqual(['materialize', 'normalize', 'send']);
+    expect(materializeDirectSendOssAttachments).toHaveBeenCalledWith(
+      'session-1',
+      { type: 'user', content: 'hello' },
+      { marker: true },
+    );
+  });
+
+  it('does not materialize direct OSS attachments when workdir preflight rejects', async () => {
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps } = createDeps({
+      checkWorkDirExists: vi.fn(async () => false),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }),
+    ).resolves.toMatchObject({ accepted: false });
+
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
+  });
+
   it('consumes the direct-send baseline when vendor dispatch is not accepted', async () => {
     const beforeDispatchDirectUserTurn = vi.fn(async () => {});
     const onUndispatchedDirectUserTurn = vi.fn();
