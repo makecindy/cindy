@@ -29,6 +29,7 @@ import {
   sanitizeModelCatalogOverrides,
   type ModelCatalogOverrides,
 } from '../model-plane/localCatalogOverrides.js';
+import { isRegistryTombstoneForConsumer } from '../model-plane/modelPlanePolicy.js';
 
 type RegistryEntries = NonNullable<Catalog['modelRegistry']>['models'];
 
@@ -373,6 +374,17 @@ describe('retired tombstone 与 discovery 回补', () => {
     efforts: ['high'],
     defaultEffort: 'high',
   };
+
+  it('无 discovery 实体时仍可按 root/bridge/Pi 投影图查询 Registry tombstone', () => {
+    const registry = retiredRegistry().modelRegistry;
+    expect(isRegistryTombstoneForConsumer(registry, 'openai', 'gpt-dead', 'codex')).toBe(true);
+    expect(isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'pi')).toBe(true);
+    // route.agents 未授权 Claude bridge，不能把 root tombstone 扩成不存在的消费端。
+    expect(
+      isRegistryTombstoneForConsumer(registry, 'openai', 'chatgpt/gpt-dead', 'claude-code'),
+    ).toBe(false);
+    expect(isRegistryTombstoneForConsumer(registry, 'xd', 'gpt-dead', 'claude-code')).toBe(false);
+  });
 
   it('discovery 回补的 retired 条目被标记,标准派生禁止新选择,keepSelected 豁免', () => {
     setActiveCatalog(retiredRegistry());

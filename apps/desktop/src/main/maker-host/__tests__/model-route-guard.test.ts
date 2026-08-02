@@ -162,6 +162,45 @@ describe('checkModelRoute', () => {
     expect(pickEnabledFallbackModel(allRetired, 'claude-code')).toBeNull();
   });
 
+  it('显式来源只有 Registry tombstone、目录无实体时仍拒绝；完整本地实体可复活', () => {
+    const isRetiredTombstone = (providerId: string | null, modelId: string) =>
+      (providerId === null || providerId === 'anthropic') && modelId === 'claude-gone';
+    const otherSourceOnly = buildRegistry(
+      { providers: [provider('xd', [model('claude-gone')])] } as Catalog,
+      { xd: true },
+      {},
+    );
+    expect(
+      checkModelRoute(otherSourceOnly, 'claude-code', 'claude-gone', 'anthropic', {
+        isRetiredTombstone,
+      }),
+    ).toEqual({ kind: 'reject', reason: 'model-retired' });
+    expect(
+      checkModelRoute([], 'claude-code', 'claude-gone', null, { isRetiredTombstone }),
+    ).toEqual({ kind: 'reject', reason: 'model-retired' });
+    expect(
+      resolveLenientRoute([], 'claude-code', 'claude-gone', 'anthropic', {
+        isRetiredTombstone,
+      }),
+    ).toEqual({ model: undefined, providerId: null, degraded: true });
+
+    const withLocalRevival = buildRegistry(
+      {
+        providers: [
+          provider('xd', [model('claude-gone')]),
+          provider('anthropic', [model('claude-gone', { status: 'active' })]),
+        ],
+      } as Catalog,
+      { xd: true, anthropic: true },
+      {},
+    );
+    expect(
+      checkModelRoute(withLocalRevival, 'claude-code', 'claude-gone', 'anthropic', {
+        isRetiredTombstone,
+      }),
+    ).toEqual({ kind: 'pass' });
+  });
+
   it('隐式来源:原生默认拷贝是能力模型而他源有聊天拷贝 ⇒ reroute;显式点名非聊天拷贝仍 reject(2026-07 review 第 26 轮)', () => {
     // xd(原生默认)把 shared-id 标为图像生成,openai 的拷贝是 chat。UI 的发送检查
     // (chatEligibleSourcesForModel)因 openai 判定"能发",守卫若 reject 会与 UI 口径

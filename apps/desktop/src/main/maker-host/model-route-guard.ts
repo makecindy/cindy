@@ -48,6 +48,11 @@ export type ModelRouteVerdict =
       reason: 'model-disabled' | 'explicit-source-disabled' | 'capability-model' | 'model-retired';
     };
 
+export interface ModelRouteGuardOptions {
+  /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
+  isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+}
+
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
 function copyDisabled(p: ProviderView, modelId: string, agent: AgentKind): boolean {
   return p.suspended === true || getModel(p, modelId, agent)?.disabled === true;
@@ -74,11 +79,23 @@ export function checkModelRoute(
   agent: AgentKind,
   modelId: string,
   providerId: string | null,
+  options: ModelRouteGuardOptions = {},
 ): ModelRouteVerdict {
   const offering = views.filter(
     (p) => p.agents.includes(agent) && providerOffersModel(p, modelId, agent),
   );
-  if (offering.length === 0) return { kind: 'pass' };
+  const explicit = providerId ? offering.find((p) => p.id === providerId) : undefined;
+  // A remote retired route intentionally has no provider-list entity. Old mobile/device-link
+  // clients can still name the stale pair explicitly, so consult the active Registry only when
+  // that provider has no current entity. A full local addition creates one and therefore wins.
+  if (providerId && !explicit && options.isRetiredTombstone?.(providerId, modelId, agent)) {
+    return { kind: 'reject', reason: 'model-retired' };
+  }
+  if (offering.length === 0) {
+    return options.isRetiredTombstone?.(null, modelId, agent)
+      ? { kind: 'reject', reason: 'model-retired' }
+      : { kind: 'pass' };
+  }
 
   // 能力模型(图像/音频/视频/向量)不能当 agent 对话模型 —— 选择器已硬排除,但
   // create/set-model/switch 这些 allowlisted 通道可被老控制端直接点名,必须在同一
@@ -88,7 +105,6 @@ export function checkModelRoute(
   // 落到它,PR #744 review 第五、六轮)。
 
   if (providerId) {
-    const explicit = offering.find((p) => p.id === providerId);
     if (explicit) {
       if (copyRetired(explicit, modelId, agent)) {
         return { kind: 'reject', reason: 'model-retired' };
@@ -201,7 +217,7 @@ export function resolveLenientRoute(
   agent: AgentKind,
   model: string | undefined,
   providerId: string | null,
-  opts: { fallbackModel?: string; desiredEffort?: string } = {},
+  opts: ModelRouteGuardOptions & { fallbackModel?: string; desiredEffort?: string } = {},
 ): { model?: string; providerId: string | null; degraded: boolean; effort?: string } {
   if (!model) return { model, providerId, degraded: false };
   // effort reconcile 的**唯一**出口(PR #744 review 第十一/二十三轮):调用方保存的
@@ -230,18 +246,18 @@ export function resolveLenientRoute(
     }
     return { model: resolvedModel, providerId: resolvedProviderId, degraded, effort };
   };
-  let verdict = checkModelRoute(views, agent, model, providerId);
+  let verdict = checkModelRoute(views, agent, model, providerId, opts);
   if (verdict.kind === 'pass') return { model, providerId, degraded: false };
   if (verdict.kind === 'reroute') return withEffort(model, verdict.providerId, false);
   if (providerId) {
-    verdict = checkModelRoute(views, agent, model, null);
+    verdict = checkModelRoute(views, agent, model, null, opts);
     if (verdict.kind === 'pass') return withEffort(model, null, true);
     if (verdict.kind === 'reroute') {
       return withEffort(model, verdict.providerId, true);
     }
   }
   if (opts.fallbackModel && opts.fallbackModel !== model) {
-    const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null);
+    const fallback = resolveLenientRoute(views, agent, opts.fallbackModel, null, opts);
     if (fallback.model) {
       return withEffort(fallback.model, fallback.providerId, true);
     }

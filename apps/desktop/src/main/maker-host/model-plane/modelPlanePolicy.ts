@@ -21,6 +21,8 @@
  */
 
 import {
+  findModelRegistryRoute,
+  type AgentKind,
   type CatalogModel,
   type ModelRegistry,
   type ModelRegistryEntry,
@@ -47,6 +49,37 @@ export const MODEL_PLANE_POLICIES: ReadonlyMap<string, BuiltinModelPlanePolicy> 
   ['xai', { roots: ['claude-code', 'codex'], membershipGatedBridges: [] }],
   // xd 有意不在表内:Gateway 独占存在性(见文件头)。
 ]);
+
+/**
+ * Registry tombstone lookup for a concrete client consumer. This mirrors the same root/bridge
+ * graph used by materialization without requiring a CatalogModel entity: retired routes are
+ * intentionally absent from the assembled provider list, but legacy controllers may still name
+ * one explicitly. Pi maps to its canonical source root because it is client-projected and never
+ * appears in the wire agent enum.
+ */
+export function isRegistryTombstoneForConsumer(
+  registry: ModelRegistry | null | undefined,
+  providerId: string,
+  modelId: string,
+  agent: AgentKind,
+): boolean {
+  const policy = MODEL_PLANE_POLICIES.get(providerId);
+  if (!registry || !policy) return false;
+
+  let registryAgent: RootAgentKind | null;
+  if (agent === 'pi') {
+    registryAgent = providerId === 'openai' ? 'codex' : 'claude-code';
+  } else if (policy.roots.includes(agent) || policy.membershipGatedBridges.includes(agent)) {
+    registryAgent = agent;
+  } else {
+    registryAgent = null;
+  }
+  if (!registryAgent) return false;
+
+  return (
+    findModelRegistryRoute(registry, providerId, modelId, registryAgent)?.entry.status === 'retired'
+  );
+}
 
 const VALID_EFFORTS: ReadonlySet<string> = new Set([
   'minimal',
