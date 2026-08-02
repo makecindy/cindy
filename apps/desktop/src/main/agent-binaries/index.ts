@@ -59,8 +59,7 @@ import type {
 //     只装主二进制会在 RPC 启动期崩溃), CDN 资产是整包 tar.gz, 归档根即完整目录
 //     (与 apps/pi-bin/<platform>/ 同布局)。
 //   - optionalAsset: pi 是可选实验 agent。manifest 缺 pi 字段 / 下载失败都不阻塞
-//     启动 —— check-environment 的 pi 段静默降级, pi-host 回退安装包自带分发
-//     (resources/pi/<platform>), 再缺失则本次不注册 pi。
+//     启动 —— check-environment 的 pi 段静默降级，本次不注册 pi。
 
 export type AgentBinaryKind = 'claude-code' | 'codex' | 'pi';
 
@@ -184,7 +183,7 @@ export function getCachedBinaryStatus(kind: AgentBinaryKind): CachedBinaryStatus
   // packaged Linux 同步快查只看已知私有路径；不能在 renderer-facing 路径
   // 里执行 CLI --version 或 PATH shell lookup。系统 CLI 由 async prepare 发现。
   // pi 不走 Linux runtime fallback(那条链是 cc/codex 官方 CLI 专用),Linux 上的
-  // pi 与其它平台一致:manifest 下载 miss 后由 pi-host 回退安装包自带分发。
+  // pi 与其它平台一致:只使用 manifest 管理的 CDN 资产。
   if (kind !== 'pi') {
     const linuxFallbackPath = findCachedLinuxRuntimeFallbackBinary(kind);
     if (linuxFallbackPath) return { binaryReady: true, binaryPath: linuxFallbackPath };
@@ -301,7 +300,7 @@ export async function prepare(
 
   // ── 不广播 IPC 路径 (lazy 调用, 当前 desktop 不走) ────────────────────────
   if (!broadcastProgress) {
-    const result = await base.prepare();
+    const result = await base.prepare({ signal: opts.signal });
     if (result.ready) {
       lastReadyPath.set(kind, result.binaryPath);
       return { ready: true, path: result.binaryPath };
@@ -330,6 +329,7 @@ export async function prepare(
   });
 
   const result = await base.prepare({
+    signal: opts.signal,
     onProgress: (p: VendorRuntimeState) => {
       if (p.status === 'downloading') didDownload = true;
       if (p.downloadProgress) {

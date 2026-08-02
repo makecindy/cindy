@@ -81,6 +81,12 @@ const CAPABILITIES: VideoProviderCapabilities = {
     first_and_last_frame: 2,
     reference_image: 9,
   },
+  // Seedance 2.0 原生音画同生(对白 / 音效 / 音乐),开关是请求体顶层的
+  // `generate_audio`,**上游默认 true** —— 也就是说本 provider 在接入音频开关
+  // 之前出的片子本来就是有声的。所以 audioDefault 必须是 true:回执要如实报
+  // 现状,而请求侧不传就照旧一个字段都不写(见 run.ts 的三态)。
+  supportsAudio: true,
+  audioDefault: true,
   expectedSecondsByAlias: {
     'seedance-fast': 120,
     'seedance-pro': 300,
@@ -198,6 +204,11 @@ export function createSeedanceProvider(
     const body = {
       model: aliasInfo.internalModel,
       content: buildSeedanceContent(req),
+      // 音频开关是请求体**顶层布尔字段**,不是 content 文本里的 `--flag` 后缀
+      // (画面那四项走后缀是 1.0 时代的口径,音频没有对应的后缀写法)。
+      // 三态:调用方没表态就不写这个键,上游按自己的默认(true)出片,与本
+      // 字段出现之前的请求体逐字节同形。
+      ...(req.audio !== undefined ? { generate_audio: req.audio } : {}),
     };
     const res = await doFetch(submitUrl, {
       method: 'POST',

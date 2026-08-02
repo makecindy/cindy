@@ -6,7 +6,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   modelSupportsFastMode,
   providerOffersModel,
 } from '@cindy/model-providers';
@@ -215,8 +215,7 @@ export function CreateWorkerPopover({
       // 停用(disabled)判据同上方 routableProviders 注:隐藏不再收窄(2026-07
       // 启用/显示双轴拆分),故不查 isModelEnabled——记忆来源被隐藏仍合法可路由。
       return catalogModel &&
-        catalogModel.disabled !== true &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? candidate
         : null;
     },

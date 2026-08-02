@@ -632,17 +632,168 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
   verifyMacContactsPermissions(appPath);
 }
 
+const NOTARYTOOL_TIMEOUT_MS = 1800000;
+
+function spawnOutputText(value) {
+  if (Buffer.isBuffer(value)) return value.toString('utf8');
+  return value == null ? '' : String(value);
+}
+
+function redactApplePassword(value, applePassword) {
+  const text = spawnOutputText(value);
+  return applePassword ? text.split(applePassword).join('****') : text;
+}
+
+function logCapturedNotarytoolOutput(result, operation, identity, logger) {
+  const output = [result.stdout, result.stderr]
+    .map((value) => redactApplePassword(value, identity.applePassword).trim())
+    .filter(Boolean)
+    .join('\n');
+  if (output) {
+    logger.error(`    notarytool ${operation} output:`);
+    logger.error(output);
+  }
+}
+
+/**
+ * 把 notarytool 的原始输出挂到 error 上。notarytool 对 Invalid 提交的 exit code 随
+ * Xcode 版本变化(有的 0、有的非 0);非 0 那条路径也必须能从 stdout 里救回
+ * submission id,否则拿不到 Apple 的详细失败原因。
+ */
+function attachNotarytoolOutput(error, result) {
+  error.notarytoolStdout = spawnOutputText(result?.stdout);
+  error.notarytoolStderr = spawnOutputText(result?.stderr);
+  return error;
+}
+
+function runNotarytool(operation, args, identity, { spawnCommand, logger }) {
+  let result;
+  try {
+    result = spawnCommand('/usr/bin/xcrun', args, {
+      encoding: 'utf8',
+      timeout: NOTARYTOOL_TIMEOUT_MS,
+    });
+  } catch (error) {
+    const message = redactApplePassword(error?.message ?? error, identity.applePassword);
+    throw new Error(`notarytool ${operation} 无法执行:${message}`);
+  }
+
+  if (result.error || result.signal || result.status !== 0) {
+    logCapturedNotarytoolOutput(result, operation, identity, logger);
+  }
+  if (result.error) {
+    const message = redactApplePassword(result.error.message, identity.applePassword);
+    throw new Error(`notarytool ${operation} 无法执行:${message}`);
+  }
+  if (result.signal) {
+    throw attachNotarytoolOutput(
+      new Error(
+        `notarytool ${operation} 被信号 ${result.signal} 终止(可能公证超时);公证未通过。`,
+      ),
+      result,
+    );
+  }
+  if (result.status !== 0) {
+    throw attachNotarytoolOutput(
+      new Error(`notarytool ${operation} 失败(exit ${result.status});公证未通过。`),
+      result,
+    );
+  }
+  return {
+    stdout: spawnOutputText(result.stdout),
+    stderr: spawnOutputText(result.stderr),
+  };
+}
+
+function parseNotarytoolSubmitResponse(stdout) {
+  let response;
+  try {
+    response = JSON.parse(stdout);
+  } catch {
+    throw new Error('notarytool submit 未返回有效 JSON;公证结果无法确认。');
+  }
+  if (!response || typeof response !== 'object' || Array.isArray(response)) {
+    throw new Error('notarytool submit JSON 结构无效;公证结果无法确认。');
+  }
+  const status = typeof response.status === 'string' ? response.status.trim() : '';
+  const id = typeof response.id === 'string' ? response.id.trim() : '';
+  if (!status) {
+    throw new Error('notarytool submit JSON 缺少 status;公证结果无法确认。');
+  }
+  return { id, status };
+}
+
+/** 解析失败时返回 null(救援路径用):此时 exit code 已经说明公证没过。 */
+function tryParseNotarytoolSubmitResponse(stdout) {
+  try {
+    return parseNotarytoolSubmitResponse(stdout);
+  } catch {
+    return null;
+  }
+}
+
+function printNotarizationFailureLog(submissionId, status, identity, dependencies) {
+  const { logger } = dependencies;
+  if (!submissionId) {
+    logger.error(
+      `    Apple 公证返回 ${status}，但响应缺少 submission id，无法拉取详细日志。`,
+    );
+    return;
+  }
+
+  const logArgs = [
+    'notarytool',
+    'log',
+    submissionId,
+    '--apple-id',
+    identity.appleId,
+    '--password',
+    identity.applePassword,
+    '--team-id',
+    identity.teamId,
+  ];
+  logger.log(
+    `    $ /usr/bin/xcrun notarytool log ${JSON.stringify(submissionId)} ` +
+      `--apple-id ${JSON.stringify(identity.appleId)} --password "****" ` +
+      `--team-id ${JSON.stringify(identity.teamId)}`,
+  );
+  try {
+    const result = runNotarytool('log', logArgs, identity, dependencies);
+    const output = [result.stdout, result.stderr]
+      .map((value) => redactApplePassword(value, identity.applePassword).trim())
+      .filter(Boolean)
+      .join('\n');
+    logger.error('    Apple notarization log:');
+    logger.error(output || '(empty log)');
+  } catch (error) {
+    const message = redactApplePassword(error?.message ?? error, identity.applePassword);
+    logger.error(`    WARN: 无法获取 Apple notarization log: ${message}`);
+  }
+}
+
 /**
  * Apple notarytool 公证 + staple。
  * @param {{ appleId: string, teamId: string, applePassword: string }} identity
+ * @param {{
+ *   execCommand?: typeof exec,
+ *   spawnCommand?: typeof spawnSync,
+ *   unlinkFile?: typeof fs.unlinkSync,
+ *   logger?: Console,
+ * }} dependencies
  */
-export function notarizeMacApp(appPath, identity) {
+export function notarizeMacApp(appPath, identity, {
+  execCommand = exec,
+  spawnCommand = spawnSync,
+  unlinkFile = fs.unlinkSync,
+  logger = console,
+} = {}) {
   const zipPath = appPath + '.zip';
+  const dependencies = { spawnCommand, logger };
 
-  console.log('    Compressing for notarization...');
-  exec(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${zipPath}"`);
+  logger.log('    Compressing for notarization...');
+  execCommand(`/usr/bin/ditto -c -k --keepParent "${appPath}" "${zipPath}"`);
 
-  console.log('    Submitting to Apple notarization service (this may take a few minutes)...');
+  logger.log('    Submitting to Apple notarization service (this may take a few minutes)...');
   // 密码作为 --password 值直接传给 notarytool——不再用 --password @env:VAR 间接:
   // 旧版 notarytool 不认 @env: 前缀,会把字面量 "@env:..." 当密码本身发出去而 401。
   // 走 spawnSync 参数数组:避免 shell 参与(无插值/无注入面),且日志回显时对密码
@@ -661,31 +812,51 @@ export function notarizeMacApp(appPath, identity) {
     '--team-id',
     identity.teamId,
     '--wait',
+    '--output-format',
+    'json',
   ];
-  console.log(
-    `    $ /usr/bin/xcrun notarytool submit "${zipPath}" ` +
-      `--apple-id "${identity.appleId}" --password "****" --team-id "${identity.teamId}" --wait`,
+  logger.log(
+    `    $ /usr/bin/xcrun notarytool submit ${JSON.stringify(zipPath)} ` +
+      `--apple-id ${JSON.stringify(identity.appleId)} --password "****" ` +
+      `--team-id ${JSON.stringify(identity.teamId)} --wait --output-format json`,
   );
-  const submitResult = spawnSync('/usr/bin/xcrun', submitArgs, {
-    stdio: 'inherit',
-    timeout: 1800000, // 30 min
-  });
-  if (submitResult.error) {
-    throw new Error(`notarytool submit 无法执行:${submitResult.error.message}`);
+  let submitResult;
+  try {
+    submitResult = runNotarytool('submit', submitArgs, identity, dependencies);
+  } catch (error) {
+    // notarytool 自己以非 0 退出:原始输出已由 runNotarytool 打过一遍,这里再尽力从
+    // stdout 里救出 submission id 去拉 Apple 的详细失败原因。zip 保留不删。
+    const salvaged = tryParseNotarytoolSubmitResponse(error?.notarytoolStdout ?? '');
+    if (salvaged && salvaged.status !== 'Accepted') {
+      printNotarizationFailureLog(salvaged.id, salvaged.status, identity, dependencies);
+    }
+    throw error;
   }
-  if (submitResult.signal) {
-    // 被信号终止(如 30min 超时 kill → SIGTERM):status 为 null,单看 exit 会显示
-    // "exit null",这里显式报出 signal 便于定位。
-    throw new Error(`notarytool submit 被信号 ${submitResult.signal} 终止(可能公证超时);公证未通过。`);
+  let submission;
+  try {
+    submission = parseNotarytoolSubmitResponse(submitResult.stdout);
+  } catch (error) {
+    logCapturedNotarytoolOutput(submitResult, 'submit', identity, logger);
+    throw error;
   }
-  if (submitResult.status !== 0) {
-    throw new Error(`notarytool submit 失败(exit ${submitResult.status});公证未通过。`);
+  logger.log(
+    `    Apple notarization status: ${submission.status}` +
+      (submission.id ? ` (${submission.id})` : ''),
+  );
+
+  if (submission.status !== 'Accepted') {
+    printNotarizationFailureLog(submission.id, submission.status, identity, dependencies);
+    throw new Error(
+      `Apple 公证未通过: status=${submission.status}` +
+        (submission.id ? `, submission=${submission.id}` : '') +
+        '。',
+    );
   }
 
-  fs.unlinkSync(zipPath);
+  unlinkFile(zipPath);
 
-  console.log('    Stapling notarization ticket...');
-  exec(`/usr/bin/xcrun stapler staple "${appPath}"`);
+  logger.log('    Stapling notarization ticket...');
+  execCommand(`/usr/bin/xcrun stapler staple "${appPath}"`);
 }
 
 // ── DMG 安装界面(dmgbuild)─────────────────────────────────────────────────

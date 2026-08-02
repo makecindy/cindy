@@ -20,6 +20,7 @@ function makeFakeProvider(opts: {
   fps?: number[];
   maxImagesByRefMode?: Partial<Record<'first_and_last_frame' | 'reference_image', number>>;
   expectedSeconds?: number;
+  supportsAudio?: boolean;
 }): VideoProvider {
   return {
     id: opts.id,
@@ -34,6 +35,7 @@ function makeFakeProvider(opts: {
       supportedRatios: opts.ratios ?? ['16:9'],
       supportedFps: opts.fps ?? [24],
       maxImagesByRefMode: opts.maxImagesByRefMode ?? {},
+      supportsAudio: opts.supportsAudio ?? false,
       expectedSecondsByAlias: Object.fromEntries(
         opts.aliases.map((a) => [a.alias, opts.expectedSeconds ?? 60]),
       ),

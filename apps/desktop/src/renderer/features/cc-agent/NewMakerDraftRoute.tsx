@@ -204,7 +204,7 @@ import {
   deriveModelsFromProviders,
   filterChatBridgedCodexProviders,
 } from '@/lib/providerModels';
-import { effectiveSourceIdForModel, getModel, isAgentSelectableModel, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
+import { effectiveSourceIdForModel, getModel, isModelSelectableForNewRoute, providerOffersModel, sessionModelSupportsFastMode, connectedProvidersForAgent, type ProviderView } from '@cindy/model-providers';
 import { isSubscriptionDirectModel } from '../../../shared/subscriptionModels';
 import {
   resolveDeviceLinkDraftDefaults,
@@ -351,8 +351,7 @@ function draftEnableOrcaOptions(
     // 非聊天模型不该被当成持久化草稿的有效来源(issue #882 第 3 点,2026-07 review),
     // 与 CreateWorkerPopover.narrowProviderSource 同规则同理由。
     return catalogModel &&
-      catalogModel.disabled !== true &&
-      isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+      isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
       ? cfg.providerId
       : undefined;
   })();
@@ -914,8 +913,7 @@ export function NewMakerDraftRoute() {
         const models = p.models[capabilityAgentKind] ?? [];
         const kept = models.filter(
           (m) =>
-            m.disabled !== true &&
-            isAgentSelectableModel(m, { userProvider: p.source === 'user' }) &&
+            isModelSelectableForNewRoute(m, { userProvider: p.source === 'user' }) &&
             !(effectiveRemoteHostId && isSubscriptionDirectModel(m.id)),
         );
         if (kept.length === models.length) return p;
@@ -3496,7 +3494,6 @@ export function NewMakerDraftRoute() {
                       <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={112}
                         visualVariant="create-agent"
                         className="shrink-0"
                         disabled={wtCreating}

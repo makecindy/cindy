@@ -181,10 +181,26 @@ export function ErrorBanner({
   // AUTH_STATE_CHANGED 都会让现存横幅同步恢复 Retry；后续失效 / 登出广播也会撤销恢复态。
   // 非连接错误期间暂停订阅时 hook 会同时清掉旧快照；下次失效先保持“需重连”，直到
   // 新 getState() 或广播确认已恢复，避免跨 error 复用过期的 authenticated 状态。
-  const { state: openAiAuthState } = useCodexAuth({ enabled: isOpenAiConnectionExpired });
+  const {
+    state: openAiAuthState,
+    reconnectCredentialScope,
+    recoveryCheck: openAiRecoveryCheck,
+    refresh: refreshOpenAiAuth,
+  } = useCodexAuth({
+    enabled: isOpenAiConnectionExpired,
+    recoveryHint: isOpenAiConnectionExpired ? { reason: error } : undefined,
+  });
   const openAiConnectionRecoveredSinceError =
     isOpenAiConnectionExpired && isChatGptConnectionConnected(openAiAuthState, false);
   const openAiReconnectRequired = isOpenAiConnectionExpired && !openAiConnectionRecoveredSinceError;
+  const openAiAuthLoading = openAiAuthState.kind === 'loading';
+  const openAiLoginPending = openAiAuthState.kind === 'login-pending';
+  const openAiRecoveryBusy =
+    openAiAuthLoading || openAiRecoveryCheck === 'checking' || openAiLoginPending;
+  const openAiCredentialScope =
+    openAiAuthState.kind === 'reconnect-required'
+      ? (openAiAuthState.credentialScope ?? 'unknown')
+      : (reconnectCredentialScope ?? 'unknown');
   // 网络类错误(502/连接失败/fetch failed 等):友好文案 + 原始错误折叠可查。
   // Codex `Reconnecting... N/M` 额外解析次数，让 recoverable 状态持续更新而非裸英文。
   const reconnectAttempt = parseReconnectAttemptMessage(error);
@@ -236,8 +252,14 @@ export function ErrorBanner({
       : t('chat.errorBanner.codexAuthMissing');
   } else if (isOpenAiConnectionExpired) {
     displayError = openAiConnectionRecoveredSinceError
-      ? t('chat.errorBanner.codexSessionReconnected')
-      : t('chat.errorBanner.codexSessionExpired');
+      ? t('chatgptAuthRecovery.recovered')
+      : t(
+          openAiCredentialScope === 'system-shared'
+            ? 'chatgptAuthRecovery.systemSharedInvalidated'
+            : openAiCredentialScope === 'instance-isolated'
+              ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
+              : 'chatgptAuthRecovery.unknownInvalidated',
+        );
   } else if (isCodexLocalOAuthAuthMissing) {
     displayError = t('chat.errorBanner.codexAuthMissingLocal');
   } else if (isClaudeGatewayOpusPlanMismatch) {
@@ -256,11 +278,7 @@ export function ErrorBanner({
           attempt: overloadRetryProgress.attempt,
           maxAttempts: overloadRetryProgress.maxAttempts,
         })
-      : t(
-          safeRetryText
-            ? 'chat.errorBanner.overloadBusy'
-            : 'chat.errorBanner.overloadBusyNoRetry',
-        );
+      : t(safeRetryText ? 'chat.errorBanner.overloadBusy' : 'chat.errorBanner.overloadBusyNoRetry');
   } else if (isNetworkishError) {
     // 网络类错误:原始英文报错(502/ECONNREFUSED/fetch failed 等)对用户没有
     // 行动价值,换成友好文案;原始错误折叠可查(下方「查看原始错误」)。
@@ -311,6 +329,24 @@ export function ErrorBanner({
     } finally {
       setSwitchingClaudeSubscription(false);
     }
+  };
+
+  const handleOpenAiRecovery = async (): Promise<void> => {
+    if (openAiRecoveryBusy) return;
+    if (openAiRecoveryCheck === 'failed') {
+      await refreshOpenAiAuth();
+      return;
+    }
+    if (openAiCredentialScope === 'system-shared') {
+      try {
+        const result = await window.electronAPI.openChatGPTApp();
+        if (!result.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      }
+      return;
+    }
+    promptCodexSessionExpired(error);
   };
 
   // 走跟 Settings/RemoteHostDetail 同款的 check → confirm → sync 三步:
@@ -430,20 +466,38 @@ export function ErrorBanner({
         )}
       </div>
       {openAiReconnectRequired && (
-        // OAuth 更新是低打扰的内联恢复入口：错误出现时不抢焦点，用户明确点击后
-        // 才打开浏览器连接。历史尾部与当前错误使用同一行为。
+        // 系统共享凭证必须回 ChatGPT App 修复；Cindy 独立凭证才启动 Cindy OAuth。
+        // 登录候选出现后先走账号级服务端探测，探测成功前继续隐藏请求 Retry。
         <button
           type="button"
-          onClick={() => promptCodexSessionExpired(error)}
+          onClick={() => void handleOpenAiRecovery()}
+          disabled={openAiRecoveryBusy}
           className={cn(
             'shrink-0 flex select-none items-center gap-1 text-xs font-medium',
             'text-[var(--text-primary)]',
             'hover:opacity-70 transition-opacity',
+            'disabled:cursor-not-allowed disabled:opacity-50',
           )}
-          title={t('chat.errorBanner.codexSessionExpiredLogin')}
+          title={t(
+            openAiRecoveryCheck === 'failed'
+              ? 'chatgptAuthRecovery.recheck'
+              : openAiRecoveryBusy
+                ? 'chatgptAuthRecovery.checking'
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.openApp'
+                  : 'chatgptAuthRecovery.relogin',
+          )}
         >
-          <RefreshCw size={12} />
-          {t('chat.errorBanner.codexSessionExpiredLogin')}
+          <Spinner icon={RefreshCw} size={12} spinning={openAiRecoveryBusy} />
+          {t(
+            openAiRecoveryBusy
+              ? 'chatgptAuthRecovery.checking'
+              : openAiRecoveryCheck === 'failed'
+                ? 'chatgptAuthRecovery.recheck'
+                : openAiCredentialScope === 'system-shared'
+                  ? 'chatgptAuthRecovery.openApp'
+                  : 'chatgptAuthRecovery.relogin',
+          )}
         </button>
       )}
       {isClaudeGatewayOpusPlanMismatch && onSwitchToClaudeSubscription && (

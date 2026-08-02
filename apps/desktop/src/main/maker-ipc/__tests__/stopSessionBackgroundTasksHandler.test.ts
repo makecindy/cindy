@@ -79,12 +79,13 @@ describe('stop session background tasks IPC handler', () => {
     expect(clearBackgroundActivity).not.toHaveBeenCalled();
   });
 
-  it('still closes the session when notifyGoalStop rejects', async () => {
+  it('still closes the session but reports failure when notifyGoalStop rejects', async () => {
     const harness = new IpcHarness();
+    const error = new Error('goal observer crashed');
     const closeSession = vi.fn().mockResolvedValue(undefined);
     const clearBackgroundActivity = vi.fn();
     const noteSessionReset = vi.fn();
-    const notifyGoalStop = vi.fn().mockRejectedValue(new Error('goal observer crashed'));
+    const notifyGoalStop = vi.fn().mockRejectedValue(error);
 
     registerStopSessionBackgroundTasksHandler(harness, {
       closeSession,
@@ -95,8 +96,74 @@ describe('stop session background tasks IPC handler', () => {
 
     await expect(
       harness.invoke(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS, 'session-1'),
-    ).resolves.toEqual({ ok: true });
+    ).rejects.toBe(error);
     expect(closeSession).toHaveBeenCalledWith('session-1');
+    expect(clearBackgroundActivity).toHaveBeenCalledWith('session-1');
+  });
+
+  it('still closes the session and reports a synchronous notifyGoalStop failure', async () => {
+    const harness = new IpcHarness();
+    const error = new Error('goal observer failed synchronously');
+    const closeSession = vi.fn().mockResolvedValue(undefined);
+    const clearBackgroundActivity = vi.fn();
+
+    registerStopSessionBackgroundTasksHandler(harness, {
+      closeSession,
+      clearBackgroundActivity,
+      noteSessionReset: vi.fn(),
+      notifyGoalStop: vi.fn(() => {
+        throw error;
+      }),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS, 'session-1'),
+    ).rejects.toBe(error);
+    expect(closeSession).toHaveBeenCalledWith('session-1');
+    expect(clearBackgroundActivity).toHaveBeenCalledWith('session-1');
+  });
+
+  it('preserves the close failure when close and Goal persistence both reject', async () => {
+    const harness = new IpcHarness();
+    const closeError = new Error('close failed');
+    const goalError = new Error('goal persistence failed');
+    const clearBackgroundActivity = vi.fn();
+
+    registerStopSessionBackgroundTasksHandler(harness, {
+      closeSession: vi.fn().mockRejectedValue(closeError),
+      clearBackgroundActivity,
+      noteSessionReset: vi.fn(),
+      notifyGoalStop: vi.fn().mockRejectedValue(goalError),
+    });
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS, 'session-1'),
+    ).rejects.toBe(closeError);
+    expect(clearBackgroundActivity).not.toHaveBeenCalled();
+  });
+
+  it('starts the emergency close before goal persistence settles', async () => {
+    const harness = new IpcHarness();
+    let releaseGoalPause!: () => void;
+    const goalPause = new Promise<void>((resolve) => {
+      releaseGoalPause = resolve;
+    });
+    const closeSession = vi.fn().mockResolvedValue(undefined);
+    const clearBackgroundActivity = vi.fn();
+
+    registerStopSessionBackgroundTasksHandler(harness, {
+      closeSession,
+      clearBackgroundActivity,
+      noteSessionReset: vi.fn(),
+      notifyGoalStop: vi.fn(() => goalPause),
+    });
+
+    const stop = harness.invoke(MAKER_INVOKE.STOP_SESSION_BACKGROUND_TASKS, 'session-1');
+    await vi.waitFor(() => expect(closeSession).toHaveBeenCalledWith('session-1'));
+    expect(clearBackgroundActivity).not.toHaveBeenCalled();
+
+    releaseGoalPause();
+    await expect(stop).resolves.toEqual({ ok: true });
     expect(clearBackgroundActivity).toHaveBeenCalledWith('session-1');
   });
 });

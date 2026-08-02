@@ -6,8 +6,9 @@
  *
  * 结构取舍:
  * - **树内 overlay 而非 RN Modal**:会话页已有多个 sheet Modal,iOS 同级双 Modal
- *   有 present/dismiss 竞态(见 SheetSurface 头注释);树内层叠没有这些约束,选中任务
- *   后可立即导航(replace 卸载整屏,无需等 Modal 关闭动画)。代价是盖不住原生弹层,
+ *   有 present/dismiss 竞态(见 SheetSurface 头注释);树内层叠没有这些约束。导航动作
+ *   仍必须等 overlay 退场并真正卸载后执行:Android 原生 Screen 换页若与
+ *   GestureDetector/Reanimated 子树卸载挤在同一帧存在崩溃竞态。代价是盖不住原生弹层,
  *   但抽屉打开前页面会先收键盘,且其它 sheet 与抽屉互斥(都由页面状态驱动)。
  * - **数据直读全局 remoteSessionStore**:与首页同一份 store(进会话页前已水合,
  *   设备订阅继续推增量),经共享层 buildMobileHomePresentation 复用首页的排序 /
@@ -16,7 +17,7 @@
  *   (useReduceMotionEnabled === false 才播)。
  */
 import { House, LoaderCircle, SquarePen } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   BackHandler,
@@ -36,7 +37,6 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
@@ -79,21 +79,21 @@ const DRAWER_CLOSE_VELOCITY = -800;
 export function SessionListDrawer({
   currentSessionId,
   onClose,
+  onClosed,
   onGoHome,
   onNewSession,
   onSelectSession,
   open,
-  returnFocusRef,
   width,
 }: {
   currentSessionId: string;
   onClose(): void;
+  /** 关闭动画完成、overlay 真正卸载后触发。 */
+  onClosed?(): void;
   onGoHome(): void;
   onNewSession(): void;
   onSelectSession(item: RemoteSessionListItem): void;
   open: boolean;
-  /** 关闭后读屏焦点归还的触发钮(左上角三条杠);切任务导航整屏卸载时不消费。 */
-  returnFocusRef?: RefObject<View | null>;
   width: number;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -114,19 +114,23 @@ export function SessionListDrawer({
   // progress 0→1 = 收起→展开;dragX(≤0)是手势拖拽的临时位移,松手后归零或并入 progress。
   const progress = useSharedValue(open ? 1 : 0);
   const dragX = useSharedValue(0);
-  // 关闭收尾统一走这里(动画完成回调 / reduce-motion 直跳两条路径):卸载 overlay 并把
-  // 读屏焦点还给触发钮——三条杠在抽屉打开期间被遮罩挡住,不还焦点会落在任意节点。
-  const navigation = useNavigation();
+  // 关闭收尾统一走这里(动画完成回调 / reduce-motion 直跳两条路径):先只卸载 overlay。
+  // onClosed 必须等 mounted=false 的 commit 完成,否则导航会和 GestureDetector/
+  // Reanimated 子树卸载挤进同一帧(Android 原生 Screen 存在崩溃竞态)。背景焦点归还
+  // 则由父级在 accessibility 隔离解除后的 commit effect 中完成。
   const finishClose = useCallback(() => {
     if (openRef.current) return;
     setMounted(false);
-    // 只有「原地关闭」(本屏仍聚焦)才归还焦点:导航型关闭(新建 push / 深链下
-    // dismissTo 推入主页)收尾时本屏已失焦,把读屏焦点拉回背景页的三条杠会抢走
-    // 新屏焦点。isFocused 是确定性信号,不用枚举关闭原因。
-    if (!navigation.isFocused()) return;
-    const returnNode = returnFocusRef?.current ? findNodeHandle(returnFocusRef.current) : null;
-    if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
-  }, [navigation, returnFocusRef]);
+  }, []);
+  const onClosedRef = useRef(onClosed);
+  onClosedRef.current = onClosed;
+  const wasMountedRef = useRef(mounted);
+  useEffect(() => {
+    const wasMounted = wasMountedRef.current;
+    wasMountedRef.current = mounted;
+    if (!wasMounted || mounted) return;
+    onClosedRef.current?.();
+  }, [mounted]);
   // 打开后把读屏焦点移进面板首控件(新建任务):背后内容已按模态摘出读屏树,不移焦
   // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
   const newSessionButtonRef = useRef<View>(null);
@@ -310,7 +314,7 @@ export function SessionListDrawer({
   return (
     <View
       // iOS VoiceOver:抽屉开着时按模态处理,不让焦点跑到被遮住的会话内容上。
-      accessibilityViewIsModal={open}
+      accessibilityViewIsModal={mounted}
       // mounted 期间恒拦截(含 200ms 关闭动画):此时 scrim 仍半透明盖着内容,放行
       // 点击会穿透误触;落在 scrim 上的点击只是幂等地再触发一次 onClose。
       pointerEvents="auto"

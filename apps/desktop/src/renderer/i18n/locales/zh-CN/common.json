@@ -5332,6 +5332,20 @@
     "transcriptKept": "{{message}}（识别出的文字已经保留，可以直接编辑）",
     "transcriptKeptOverlay": "{{message}}（识别出的文字已经保留，可以复制后继续用）"
   },
+  "chatgptAuthRecovery": {
+    "title": "ChatGPT 登录已失效",
+    "systemSharedInvalidated": "Cindy 当前沿用了本机的 ChatGPT 登录。该登录已失效。请打开 ChatGPT App 重新登录后重试。",
+    "instanceIsolatedInvalidated": "Cindy 当前使用的是单独登录的 ChatGPT 账号。该登录已失效。请在 Cindy 中重新登录后重试。",
+    "unknownInvalidated": "Cindy 当前的 ChatGPT 登录已失效。请重新登录后重试。",
+    "recovered": "ChatGPT 登录已恢复，请重试。",
+    "openApp": "打开 ChatGPT App",
+    "relogin": "重新登录 ChatGPT",
+    "checking": "正在检测…",
+    "recheck": "重新检测",
+    "later": "稍后处理",
+    "openAppFailed": "无法打开 ChatGPT App，请手动打开后重新登录。",
+    "verificationFailed": "暂时无法确认 ChatGPT 登录是否已恢复，请重新检测。"
+  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "已跳过"
@@ -5454,12 +5468,6 @@
       "codexAuthMissing": "远端 Codex 还没同步登录态（401 Unauthorized）。点击右侧「同步登录态」把本机 Codex 凭证推到远端 Cindy Codex home，然后重试发送。",
       "codexAuthMissingLocal": "Codex 凭证缺失或失效（401 Unauthorized）。请在 {{appName}} Settings → Codex 重新登录（登录后会自动重启 Codex app-server），或在终端跑 `codex login` + 在 Settings 切换一次鉴权模式来重启 app-server，然后新建任务再发。",
       "codexSessionExpired": "OpenAI 连接需要更新。重新连接 ChatGPT 后即可继续；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
-      "codexSessionExpiredDialog": {
-        "title": "OpenAI 连接需要更新",
-        "description": "{{appName}} 暂时无法使用你的 ChatGPT 账号。重新连接会同时恢复 Codex 和 Claude 的 OpenAI 能力；{{appName}} 不会退出系统 Codex CLI，也不会要求你重新连接其他模型来源。",
-        "confirm": "重新连接 ChatGPT",
-        "cancel": "稍后处理"
-      },
       "codexAuthSynced": "登录态已同步，请点击「重试」重新发送。",
       "syncAuth": "同步登录态",
       "syncAuthSyncing": "同步中…",

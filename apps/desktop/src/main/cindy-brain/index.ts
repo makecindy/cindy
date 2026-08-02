@@ -2017,6 +2017,9 @@ async function runGhostVideo(
       resolution: r.effectiveParams.resolution,
       ratio: r.effectiveParams.ratio,
       fps: r.effectiveParams.fps,
+      // 音轨状态执行器可能给不出(型号没这个旋钮 / 支持但没登记上游默认):
+      // 给不出就不带这个键,别把"说不上来"写成 false。
+      ...(r.effectiveParams.audio !== undefined ? { audio: r.effectiveParams.audio } : {}),
     },
   };
 }
@@ -2036,6 +2039,7 @@ function getGhostVideoCapabilities(model: string): CindyVideoCapabilities | null
       ratios: caps.supportedRatios,
       fps: caps.supportedFps,
       maxImagesByRefMode: caps.maxImagesByRefMode,
+      supportsAudio: caps.supportsAudio,
     };
   } catch {
     return null;

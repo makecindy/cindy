@@ -5332,6 +5332,20 @@
     "transcriptKept": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 바로 이어서 편집할 수 있습니다.",
     "transcriptKeptOverlay": "{{message}} 지금까지 인식된 텍스트는 유지했습니다. 복사해서 이어가세요."
   },
+  "chatgptAuthRecovery": {
+    "title": "ChatGPT 로그인이 더 이상 유효하지 않습니다",
+    "systemSharedInvalidated": "Cindy는 현재 이 컴퓨터의 ChatGPT 로그인을 사용하고 있습니다. 이 로그인이 만료되었습니다. ChatGPT App을 열어 다시 로그인한 후 재시도하세요.",
+    "instanceIsolatedInvalidated": "Cindy는 현재 별도로 로그인한 ChatGPT 계정을 사용하고 있습니다. 이 로그인이 만료되었습니다. Cindy에서 다시 로그인한 후 재시도하세요.",
+    "unknownInvalidated": "Cindy의 현재 ChatGPT 로그인이 만료되었습니다. 다시 로그인한 후 재시도하세요.",
+    "recovered": "ChatGPT 로그인이 복구되었습니다. 다시 시도하세요.",
+    "openApp": "ChatGPT App 열기",
+    "relogin": "ChatGPT 다시 로그인",
+    "checking": "확인 중…",
+    "recheck": "다시 확인",
+    "later": "나중에",
+    "openAppFailed": "ChatGPT App을 열 수 없습니다. 직접 열어 다시 로그인해 주세요.",
+    "verificationFailed": "ChatGPT 로그인이 복구되었는지 확인할 수 없습니다. 다시 확인해 주세요."
+  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "건너뜀"
@@ -5454,12 +5468,6 @@
       "codexAuthMissing": "원격 Codex가 아직 로그인되지 않았습니다(401 Unauthorized). 「인증 동기화」를 클릭하여 로컬 Codex 자격 증명을 원격 Cindy Codex home으로 푸시한 후 다시 시도하세요.",
       "codexAuthMissingLocal": "Codex 자격 증명이 없거나 만료되었습니다(401 Unauthorized). {{appName}} Settings → Codex에서 다시 로그인하거나(로그인 시 app-server가 자동 재시작) 터미널에서 `codex login` 실행 후 Settings에서 인증 모드를 한 번 전환하여 app-server를 재시작한 다음 새 세션을 시작하세요.",
       "codexSessionExpired": "OpenAI 연결을 업데이트해야 합니다. ChatGPT를 다시 연결하면 계속할 수 있습니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
-      "codexSessionExpiredDialog": {
-        "title": "OpenAI 연결 업데이트 필요",
-        "description": "{{appName}}에서 현재 ChatGPT 계정을 사용할 수 없습니다. 다시 연결하면 Codex와 Claude의 OpenAI 기능이 함께 복구됩니다. {{appName}}에서 시스템 Codex CLI를 로그아웃하거나 다른 모델 소스의 재연결을 요구하지 않습니다.",
-        "confirm": "ChatGPT 다시 연결",
-        "cancel": "나중에"
-      },
       "codexAuthSynced": "인증이 동기화되었습니다. 「다시 시도」를 클릭하여 다시 보내세요.",
       "syncAuth": "인증 동기화",
       "syncAuthSyncing": "동기화 중…",

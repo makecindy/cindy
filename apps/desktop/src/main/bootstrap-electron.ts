@@ -37,12 +37,16 @@ import {
   markDesktopDevWindowReady,
 } from './devStartupStatus';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
+import { handleOpenChatGPTApp } from './chatgpt-app.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
 const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
+// Pi 是可选能力。首启可以给它一小段时间从 CDN 准备，但网络异常时不能让
+// 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
+const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
 
 if (
   process.platform === 'linux' &&
@@ -404,6 +408,7 @@ import {
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
   registerMakerIpc as registerMakerCoreIpc,
+  isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalIdleObserver,
@@ -3835,6 +3840,9 @@ const registerIpcHandlers = () => {
   // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
   // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
   let makerIpcsRegistered = false;
+  // Pi 是“本次启动可选”的能力：一旦首次准备失败，就算后续清单/CDN恢复，
+  // 也不再把 Pi 动态塞回已经构造好的 Maker，避免返回状态与实际能力不一致。
+  let piDisabledForLaunch = false;
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
@@ -3916,7 +3924,7 @@ const registerIpcHandlers = () => {
         waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
-      registerMakerTitleIpc();
+      registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
       registerMakerPlanWriteIpc();
@@ -4041,7 +4049,7 @@ const registerIpcHandlers = () => {
   // 提前 peekNeedsDownload 决定 (x/y) 标签：两个及以上需要下载时给 step/totalSteps，
   // 否则不带标签（splash 显示单一 "唤醒 Cindy 中..." 文案）。
   // pi 是可选实验 agent:清单无资产 / 下载失败都不算环境检查失败(失败不广播
-  // failed payload),pi-host 会回退安装包自带分发,再缺失则本次不注册 pi。
+  // failed payload),本次不注册 pi。
   ipcMain.handle('check-environment', async () => {
     // splash 首个 invoke = renderer 存活的强信号(与 renderer:log 双保险)。
     rendererBootGuard?.markAlive();
@@ -4143,28 +4151,41 @@ const registerIpcHandlers = () => {
     }
 
     // ── Phase 3: pi 段（可选,失败不阻塞启动）──────────────────────────────────
-    // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默降级,
-    // buildPiAgent 会依次回退 userData 已装版本 → 安装包自带分发(resources/pi)。
+    // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默禁用
+    // 本次 pi 注册，Claude Code / Codex 与 Cindy 本身仍照常可用。
+    // 只从 Pi 阶段开始计时，不能让前面的必需 binary 下载吃掉 Pi 自己的预算。
+    const piInstallSignal = app.isPackaged
+      ? AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS)
+      : undefined;
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    try {
-      const piRes = await binaryPrepare('pi', {
-        ...stepOptsFor('pi'),
-        broadcastFailure: false,
-      });
-      piInfo = piRes.ready && piRes.path
-        ? { status: 'passed' as const, path: piRes.path }
-        : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-    } catch (err: unknown) {
+    if (piDisabledForLaunch) {
       piInfo = {
         status: 'failed' as const,
-        error: err instanceof Error ? err.message : String(err),
+        error: 'pi disabled for this launch after an earlier prepare failure',
       };
+    } else {
+      try {
+        const piRes = await binaryPrepare('pi', {
+          ...stepOptsFor('pi'),
+          broadcastFailure: false,
+          signal: piInstallSignal,
+        });
+        piInfo = piRes.ready && piRes.path
+          ? { status: 'passed' as const, path: piRes.path }
+          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+      } catch (err: unknown) {
+        piInfo = {
+          status: 'failed' as const,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     if (piInfo.status === 'failed') {
+      piDisabledForLaunch = true;
       console.warn(
-        `[bootstrap-electron] pi binary prepare failed (non-fatal, falling back to bundled dist): ${piInfo.error}`,
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, pi disabled for this launch): ${piInfo.error}`,
       );
     }
 
@@ -4207,6 +4228,17 @@ const registerIpcHandlers = () => {
         return { success: false };
       }
     },
+  );
+
+  // ChatGPT Desktop 当前注册 `codex:` 协议（macOS bundle id com.openai.codex；
+  // Windows 安装包也由系统协议注册表接管）。独立无参 IPC 保持最小权限，不能借此
+  // 打开 renderer 提供的任意自定义 scheme / deep link。
+  ipcMain.handle(
+    'shell:open-chatgpt-app',
+    async (event): Promise<{ success: boolean }> => handleOpenChatGPTApp(event, {
+      assertTrustedSender: assertTrustedAppRendererEvent,
+      openExternal: (url) => shell.openExternal(url),
+    }),
   );
 
   // Show native directory picker dialog

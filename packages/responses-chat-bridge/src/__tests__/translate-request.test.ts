@@ -491,6 +491,88 @@ describe('translateResponsesRequest', () => {
     ]);
   });
 
+  it('drops unsupported images from replayed user history so a later text turn can recover', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'describe this' },
+      { role: 'user', content: 'continue in text' },
+    ]);
+  });
+
+  it('drops untranslatable file_id images from replayed history on image-url routes', () => {
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', file_id: 'file_1' },
+          ],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }), { capabilities: { imageInput: 'image_url' } });
+
+    expect(out.messages).toEqual([
+      { role: 'user', content: 'describe this' },
+      { role: 'user', content: 'continue in text' },
+    ]);
+  });
+
+  it('drops image-only replayed turns but keeps the newest unsupported image fail-closed', () => {
+    const imageUrl = 'data:image/png;base64,aW1hZ2U=';
+    const out = translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'continue in text' }] },
+      ],
+    }));
+
+    expect(out.messages).toEqual([{ role: 'user', content: 'continue in text' }]);
+    expect(() => translateResponsesRequest(base({
+      input: [
+        { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'history' }] },
+        {
+          type: 'message',
+          role: 'user',
+          content: [
+            { type: 'input_text', text: 'describe this' },
+            { type: 'input_image', image_url: imageUrl },
+          ],
+        },
+      ],
+    }))).toThrow("input content part 'input_image'");
+    expect(() => translateResponsesRequest(base({
+      input: [
+        {
+          type: 'message',
+          role: 'user',
+          content: [{ type: 'input_image', image_url: imageUrl }],
+        },
+        { type: 'message', role: 'latest_reminder', content: 'current-turn reminder' },
+      ],
+    }))).toThrow("input content part 'input_image'");
+  });
+
   it('drops empty user messages produced by auto-compact collapsing image-only turns', () => {
     // Codex auto-compact 的 replacement_history 把「无文字纯图片」用户消息折叠成单个
     // 空 input_text；桥接层若原样透传，Moonshot/Kimi 会以

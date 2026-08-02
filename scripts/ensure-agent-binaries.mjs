@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 /**
- * ensure-agent-binaries — 按需下载 agent CLI 二进制（claude / codex / ripgrep）。
+ * ensure-agent-binaries — 按需下载 Desktop runtime 二进制
+ * （claude / codex / ripgrep / pi）。
  *
  * 这些二进制不再进 git/LFS（见 .gitattributes / .gitignore）。本脚本在 dev 启动、
  * 打包、发版时按"当前/目标平台 + tools/<kind>/latest.json 里 pin 的版本"从上游按需
@@ -11,7 +12,7 @@
  * 的本地二进制（copy-on-write clone，秒级、不占双倍磁盘）→ 都没有才走网络下载。
  *
  * 既可 CLI 跑，也可被 import：
- *   CLI:    node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep --platform=current
+ *   CLI:    node scripts/ensure-agent-binaries.mjs --kinds=claude,codex,ripgrep,pi --platform=current
  *   import: import { ensureBinary } from './ensure-agent-binaries.mjs'
  */
 import fs from 'node:fs';
@@ -34,6 +35,12 @@ const KINDS = {
   ripgrep: { binDir: 'ripgrep-bin', base: 'rg', module: '../tools/ripgrep/update.mjs' },
   pi: { binDir: 'pi-bin', base: 'pi', module: '../tools/pi/update.mjs', dirDist: true },
 };
+
+/**
+ * Dev 启动 guard 与 postinstall 的共享真源。新增 runtime kind 时只改 KINDS，
+ * 避免“安装脚本已支持，但全新 checkout 的 dev 首启不会准备”。
+ */
+export const SUPPORTED_BINARY_KINDS = Object.freeze(Object.keys(KINDS));
 
 const log = (msg) => console.log(`\x1b[36m[ensure-agent-binaries]\x1b[0m ${msg}`);
 const warn = (msg) => console.log(`\x1b[33m[ensure-agent-binaries]\x1b[0m ${msg}`);
@@ -272,7 +279,9 @@ function parseArgs(argv) {
 
 async function main() {
   const { kinds, platform, force, bestEffort } = parseArgs(process.argv.slice(2));
-  const kindList = kinds ? kinds.split(',').map((k) => k.trim()).filter(Boolean) : Object.keys(KINDS);
+  const kindList = kinds
+    ? kinds.split(',').map((k) => k.trim()).filter(Boolean)
+    : SUPPORTED_BINARY_KINDS;
   const platformKey = !platform || platform === 'current' ? currentPlatformKey() : platform;
 
   // best-effort 模式（postinstall hook 用）：可被 XDT_SKIP_AGENT_BIN_INSTALL 跳过；

@@ -19,7 +19,7 @@ SCOPE NOTES:
 Restricted or proprietary components are disclosed in the companion file.
 
 ==============================================================================
-SECTION 1: Bundled components (non-npm)
+SECTION 1: Non-npm components
 ==============================================================================
 
 ------------------------------------------------------------------------------
@@ -3738,7 +3738,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 
 ------------------------------------------------------------------------------
-OpenAI Codex CLI (bundled binary) 0.145.0
+OpenAI Codex CLI (runtime-downloaded binary) 0.145.0
 License: Apache-2.0
 Source: https://github.com/openai/codex
 ------------------------------------------------------------------------------
@@ -3974,7 +3974,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE.
 
 ------------------------------------------------------------------------------
-pi coding agent (bundled binary) 0.83.0
+pi coding agent (runtime-downloaded binary) 0.83.0
 License: MIT
 Source: https://github.com/earendil-works/pi
 ------------------------------------------------------------------------------

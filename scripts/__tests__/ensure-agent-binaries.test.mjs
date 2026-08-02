@@ -16,6 +16,7 @@ import {
   isValidDirDist,
   listSiblingWorktreeRoots,
   readInstalledVersion,
+  SUPPORTED_BINARY_KINDS,
   supportsCdnFallback,
   tryReuseFromSiblingWorktree,
 } from '../ensure-agent-binaries.mjs';
@@ -24,6 +25,16 @@ import { verifyDirDistManifest, writeDirDistManifest } from '../../tools/shared/
 test('directory distributions never use the single-binary CDN fallback', () => {
   assert.equal(supportsCdnFallback('pi'), false);
   assert.equal(supportsCdnFallback('codex'), true);
+});
+
+test('dev startup prepares every supported runtime, including Pi', () => {
+  assert.deepEqual(SUPPORTED_BINARY_KINDS, ['claude', 'codex', 'ripgrep', 'pi']);
+
+  const devGuard = fs.readFileSync(
+    new URL('../ensure-dev-runtime-assets.mjs', import.meta.url),
+    'utf8',
+  );
+  assert.match(devGuard, /const AGENT_KINDS = SUPPORTED_BINARY_KINDS;/);
 });
 
 const LFS_POINTER = [

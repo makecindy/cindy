@@ -22,7 +22,7 @@
  */
 
 import type { AgentKind, CatalogModel } from './types.js';
-import { isAgentSelectableModel } from './classification.js';
+import { isModelSelectableForNewRoute } from './classification.js';
 import {
   connectedProvidersForAgent,
   nativeDefaultSourceId,
@@ -123,7 +123,7 @@ function availableModelsFor(
         // 数据源,不过滤的话非聊天模型会被 has()/fromNative/available[0] 选中当成
         // model,而后面的 providerId 步骤只能校验"选中的来源",无法撤销已经选错
         // 的模型 —— 那时再挡为时已晚。
-        if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' }))
+        if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' }))
           continue;
         if (ctx.isVisible && !ctx.isVisible(provider.id, m)) continue;
         seen.add(m.id);
@@ -235,7 +235,7 @@ export function resolveModelInvocation(
           native?.models[agentKind]?.find(
             (m) =>
               availableIds.has(m.id) &&
-              isAgentSelectableModel(m, { userProvider: native.source === 'user' }) &&
+              isModelSelectableForNewRoute(m, { userProvider: native.source === 'user' }) &&
               (!ctx.isVisible || ctx.isVisible(native.id, m)),
           )?.id ?? null;
       }
@@ -299,7 +299,7 @@ export function resolveModelInvocation(
     const chatModelOn = (p: (typeof rail)[number]): CatalogModel | undefined => {
       const cm = p.models[agentKind]?.find((m) => m.id === model);
       return cm !== undefined &&
-        isAgentSelectableModel(cm, { userProvider: p.source === 'user' })
+        isModelSelectableForNewRoute(cm, { userProvider: p.source === 'user' })
         ? cm
         : undefined;
     };

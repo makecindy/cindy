@@ -2,13 +2,16 @@
  * AgentSelect —— 新建对话工具条的 Agent 引擎(harness)选择器。
  * ---------------------------------------------------------------------------
  * 取代 VendorSegmentedSwitcher 在 New Maker 工具条上的位置。分段器是定宽等分,
- * 每加一个引擎每段就窄一截(2 段 150px 时每段 75px 刚好放下 13px 图标 + 6px 间隙
- * + 43px 文字;3 段就必须截断,再多只能退成 icon-only)。改成下拉后触发器定宽,
- * 引擎数量不再影响工具条布局。
+ * 每加一个引擎每段就窄一截(3 段 225px 时每段 75px 刚好放下 13px 图标 + 6px 间隙
+ * + 43px 文字;再加就必须截断,更多只能退成 icon-only)。改成下拉后**只渲染当前
+ * 引擎**,引擎数量不再影响工具条布局。
  *
  * 视觉规格:
  *   - trigger: pill h-30,px-2.5,gap-1.5;13px 引擎 mark + 12px/500 名称 +
- *     8px chevron(右对齐)。默认描边态(与协同按钮同族:有框 = 可操作控件),
+ *     8px chevron。**宽度 hug 内容**(与同排的权限 / 模型 / 协同 pill 一致)——
+ *     定宽会让「Pi」这种短名后面拖一大截空白,chevron 被顶到最右(用户实测反馈
+ *     2026-08-02)。默认不限名称宽度(引擎名都很短);确有超长名的调用方传
+ *     maxLabelWidth 截断。默认描边态(与协同按钮同族:有框 = 可操作控件),
  *     与右侧裸态的模型触发器区分。
  *   - 面板: MorphPopover,panelWidth 196,p-2;标题行「引擎」+ 单行选项 +
  *     15px Check。行 rounded-8 px-3 py-2,13px/500。
@@ -36,8 +39,11 @@ interface AgentSelectProps {
   /** disabled 状态(worktree 创建中等);整体降透明且不响应点击。 */
   disabled?: boolean;
   className?: string;
-  /** 触发器定宽(px)。引擎数量不影响它 —— 只需容纳最长的引擎名。 */
-  width?: number;
+  /**
+   * 触发器名称部分的**最大**宽度(px),超出截断。默认不设上限 —— 宽度 hug 内容,
+   * 短名(如 Pi)不留空白。工具条整体空间不足时由调用方改用 iconOnly。
+   */
+  maxLabelWidth?: number;
   /** 窄态工具栏只保留引擎 mark,名称通过 title / aria-label 提供。 */
   iconOnly?: boolean;
   /**
@@ -59,7 +65,7 @@ export function AgentSelect({
   onChange,
   disabled = false,
   className,
-  width = 112,
+  maxLabelWidth,
   iconOnly = false,
   visualVariant = 'default',
   hiddenVendors,
@@ -151,13 +157,16 @@ export function AgentSelect({
         disabled && 'pointer-events-none opacity-50',
         className,
       )}
-      style={iconOnly ? undefined : { width }}
     >
       <current.Mark size={13} className="shrink-0" />
       {!iconOnly && (
         <>
-          {/* 文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 mark 光学居中对齐 */}
-          <span className="min-w-0 flex-1 truncate text-left text-[12px] font-medium leading-none">
+          {/* 不用 flex-1:撑满会把 chevron 顶到最右,短引擎名后面拖一片空白。
+              文字下沉 0.5px —— Inter 在 leading-none 下视觉重心偏上,与 mark 光学居中对齐。 */}
+          <span
+            className="min-w-0 truncate text-left text-[12px] font-medium leading-none"
+            style={maxLabelWidth ? { maxWidth: maxLabelWidth } : undefined}
+          >
             <span className="inline-block translate-y-[0.5px]">{current.label}</span>
           </span>
           <ChevronDown

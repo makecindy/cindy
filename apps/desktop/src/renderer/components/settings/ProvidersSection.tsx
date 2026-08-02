@@ -20,15 +20,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import {
-  Check,
-  GripVertical,
-  MoreHorizontal,
-  Pencil,
-  Plus,
-  RefreshCw,
-  Trash2,
-} from 'lucide-react';
+import { Check, GripVertical, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
@@ -305,9 +297,7 @@ function DetailHeader({
                 })}
               />
             )}
-            {provider?.suspended && (
-              <CustomTag label={t('settings.providers.pill.suspended')} />
-            )}
+            {provider?.suspended && <CustomTag label={t('settings.providers.pill.suspended')} />}
             {badge}
           </div>
           <span
@@ -463,7 +453,15 @@ function AnthropicHeader({
 function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChanged: () => void }) {
   const { t } = useTranslation();
   const { confirm } = useConfirmDialog();
-  const { state, triggerLogin, cancelLogin, logout } = useCodexAuth();
+  const {
+    state,
+    reconnectCredentialScope,
+    recoveryCheck,
+    refresh,
+    triggerLogin,
+    cancelLogin,
+    logout,
+  } = useCodexAuth();
   // 图像 API key 行(2026-07 图像多来源):ChatGPT 订阅 OAuth 调不了平台 images API
   // (实测缺 scope),图像通道用独立的平台 key。仅当目录给 openai 声明了 imageModels
   // 才渲染(远端目录可能撤掉该能力)。
@@ -473,6 +471,9 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
   const reconnectRequired = state.kind === 'reconnect-required';
   const loggingIn = state.kind === 'login-pending';
   const connected = isChatGptConnectionConnected(state, provider?.connected ?? false);
+  const credentialScope = reconnectRequired
+    ? (state.credentialScope ?? 'unknown')
+    : (reconnectCredentialScope ?? 'unknown');
 
   const handleLogout = useCallback(async () => {
     const confirmed = await confirm({
@@ -496,10 +497,42 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     const outcome = await triggerLogin();
     if (outcome === 'authenticated') {
       onChanged();
+    } else if (outcome === 'unverified') {
+      toast.error(t('chatgptAuthRecovery.verificationFailed'));
     } else if (outcome === 'failed') {
       toast.error(t('settings.connections.codex.toast.loginFailed'));
     }
   }, [triggerLogin, onChanged, t]);
+
+  const handleRecovery = useCallback(async () => {
+    if (recoveryCheck === 'checking' || loggingIn) return;
+    if (recoveryCheck === 'failed') {
+      await refresh();
+      return;
+    }
+    if (credentialScope === 'system-shared') {
+      try {
+        const result = await window.electronAPI.openChatGPTApp();
+        if (!result.success) toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      } catch {
+        toast.error(t('chatgptAuthRecovery.openAppFailed'));
+      }
+      return;
+    }
+    await handleLogin();
+  }, [credentialScope, handleLogin, loggingIn, recoveryCheck, refresh, t]);
+
+  const recoveryDetail = reconnectRequired ? (
+    <p className="text-12 leading-relaxed text-[var(--settings-integration-subtitle)]">
+      {t(
+        credentialScope === 'system-shared'
+          ? 'chatgptAuthRecovery.systemSharedInvalidated'
+          : credentialScope === 'instance-isolated'
+            ? 'chatgptAuthRecovery.instanceIsolatedInvalidated'
+            : 'chatgptAuthRecovery.unknownInvalidated',
+      )}
+    </p>
+  ) : null;
 
   const trailing = connected ? (
     <div className="flex shrink-0 items-center gap-2.5">
@@ -513,8 +546,17 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
     <div className="flex shrink-0 items-center gap-2.5">
       <ReconnectRequiredPill />
       <PillButton
-        label={t('settings.providers.openai.reconnect')}
-        onClick={() => void handleLogin()}
+        label={t(
+          recoveryCheck === 'checking' || loggingIn
+            ? 'chatgptAuthRecovery.checking'
+            : recoveryCheck === 'failed'
+              ? 'chatgptAuthRecovery.recheck'
+              : credentialScope === 'system-shared'
+                ? 'chatgptAuthRecovery.openApp'
+                : 'chatgptAuthRecovery.relogin',
+        )}
+        onClick={() => void handleRecovery()}
+        disabled={recoveryCheck === 'checking' || loggingIn}
       />
     </div>
   ) : (
@@ -538,7 +580,14 @@ function OpenAiHeader({ provider, onChanged }: { provider?: ProviderView; onChan
       subtitle={t('settings.providers.openai.subtitle')}
       trailing={trailing}
       provider={provider}
-      detail={imagesKeyRow || undefined}
+      detail={
+        recoveryDetail || imagesKeyRow ? (
+          <div className="flex flex-col gap-3">
+            {recoveryDetail}
+            {imagesKeyRow}
+          </div>
+        ) : undefined
+      }
     />
   );
 }
@@ -751,10 +800,8 @@ function GenericOAuthHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const connected = provider.connected;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
-    provider.id,
-    { observeProgress: deviceFlow },
-  );
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
+    useProviderOAuthDeviceCode(provider.id, { observeProgress: deviceFlow });
 
   const handleLogin = useCallback(async () => {
     clearDeviceCode();
@@ -1168,10 +1215,8 @@ function CustomProviderHeader({
   const [loggingIn, setLoggingIn] = useState(false);
   const isOAuth = provider.auth.method === 'oauth' && !!provider.auth.oauth;
   const deviceFlow = provider.auth.oauth?.flow === 'device-code';
-  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } = useProviderOAuthDeviceCode(
-    isOAuth ? provider.id : null,
-    { observeProgress: deviceFlow },
-  );
+  const { deviceCode, clearDeviceCode, beginOwnedLogin, cancelOwnedLogin } =
+    useProviderOAuthDeviceCode(isOAuth ? provider.id : null, { observeProgress: deviceFlow });
   const handleOAuthClick = useCallback(async () => {
     if (provider.connected) {
       try {
@@ -1212,7 +1257,16 @@ function CustomProviderHeader({
       ownedLogin.finish();
       setLoggingIn(false);
     }
-  }, [beginOwnedLogin, cancelOwnedLogin, clearDeviceCode, loggingIn, provider.connected, provider.id, provider.name, t]);
+  }, [
+    beginOwnedLogin,
+    cancelOwnedLogin,
+    clearDeviceCode,
+    loggingIn,
+    provider.connected,
+    provider.id,
+    provider.name,
+    t,
+  ]);
 
   const trailing = (
     <div className="flex shrink-0 items-center gap-1">
@@ -1252,9 +1306,7 @@ function CustomProviderHeader({
       trailing={trailing}
       provider={provider}
       badge={<CustomTag label={t('settings.providers.custom.tag')} />}
-      detail={
-        loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined
-      }
+      detail={loggingIn && deviceFlow ? <OAuthDeviceCodeCard deviceCode={deviceCode} /> : undefined}
     />
   );
 }
@@ -1314,6 +1366,7 @@ function CindySigninRow({ selected, onSelect }: { selected: boolean; onSelect: (
 function ListRow({
   provider,
   selected,
+  reconnectRequired = false,
   onSelect,
   position,
   total,
@@ -1322,6 +1375,7 @@ function ListRow({
 }: {
   provider: ProviderView;
   selected: boolean;
+  reconnectRequired?: boolean;
   onSelect: () => void;
   position: number;
   total: number;
@@ -1381,21 +1435,29 @@ function ListRow({
         <span
           className="min-w-0 flex-1 truncate text-13 font-medium"
           style={{
-            color: provider.suspended
-              ? 'var(--text-tertiary)'
-              : 'var(--settings-section-title)',
+            color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
           }}
         >
           {title}
         </span>
-        {provider.suspended ? (
+        {reconnectRequired ? (
+          <span
+            className="shrink-0 select-none text-11"
+            style={{ color: 'var(--settings-integration-warning)' }}
+          >
+            {t('settings.providers.openai.reconnectRequired')}
+          </span>
+        ) : provider.suspended ? (
           // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
           <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
             {t('settings.providers.pill.suspended')}
           </span>
         ) : (
           modelCount !== null && (
-            <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+            <span
+              className="shrink-0 text-11 tabular-nums"
+              style={{ color: 'var(--text-tertiary)' }}
+            >
               {t('settings.providers.models.modelCount', { count: modelCount })}
             </span>
           )
@@ -1403,8 +1465,9 @@ function ListRow({
         <span
           className="h-1.5 w-1.5 shrink-0 rounded-full"
           style={{
-            backgroundColor:
-              provider.connected && !provider.suspended
+            backgroundColor: reconnectRequired
+              ? 'var(--remote-status-failed)'
+              : provider.connected && !provider.suspended
                 ? 'var(--remote-status-ready)'
                 : 'var(--border-default)',
           }}
@@ -1612,12 +1675,12 @@ export function ProvidersSection() {
     // 每次权威快照都会携带新的 providerOrder 数组引用。写结束后首个新快照无论顺序
     // 是否仍等于本窗口目标，都要结束 pending：另一窗口可能已经成为最后写入者。
     const hasSnapshotAfterMutation =
-      pendingProviderOrder?.providerOrderAtMutationEnd !== undefined
-      && providerOrder !== pendingProviderOrder.providerOrderAtMutationEnd;
+      pendingProviderOrder?.providerOrderAtMutationEnd !== undefined &&
+      providerOrder !== pendingProviderOrder.providerOrderAtMutationEnd;
     if (
-      !sameCatalog
-      || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])
-      || hasSnapshotAfterMutation
+      !sameCatalog ||
+      incomingIds.every((id, index) => id === pendingProviderOrderIds[index]) ||
+      hasSnapshotAfterMutation
     ) {
       setPendingProviderOrder(null);
     }
@@ -1646,9 +1709,9 @@ export function ProvidersSection() {
     if (unrecordedIds.length === 0 || ownerGeneration === null) return;
     void Promise.all(
       unrecordedIds.map((id) =>
-        window.electronAPI.maker.setProviderOrder(dataOwnerId, ownerGeneration, [id])),
-    )
-      .catch(() => toast.error(t('settings.providers.order.saveFailed')));
+        window.electronAPI.maker.setProviderOrder(dataOwnerId, ownerGeneration, [id]),
+      ),
+    ).catch(() => toast.error(t('settings.providers.order.saveFailed')));
   }, [dataOwnerId, listProviders, ownerGeneration, providerOrder, t]);
 
   const persistVisibleProviderOrder = useCallback(
@@ -1704,7 +1767,7 @@ export function ProvidersSection() {
           provider:
             provider?.id === 'xd'
               ? t('settings.providers.xd.title')
-              : provider?.name ?? providerId,
+              : (provider?.name ?? providerId),
           position: nextIndex + 1,
           total: currentIds.length,
         }),
@@ -1813,11 +1876,8 @@ export function ProvidersSection() {
           const rt = config.runtimes[agent];
           if (!rt?.baseUrl) continue;
           const authMethod =
-            p.auth.method === 'none' ? 'none'
-              : p.auth.method === 'oauth' ? 'oauth'
-                : 'apiKey';
-          const apiKey =
-            authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
+            p.auth.method === 'none' ? 'none' : p.auth.method === 'oauth' ? 'oauth' : 'apiKey';
+          const apiKey = authMethod === 'apiKey' ? await readCustomProviderKey(p.id, agent) : null;
           // 鉴权请求头是 main-only 密文,renderer 不回读;交由 main 按 savedProviderId
           // 注入已存请求头(否则仅靠请求头鉴权的端点刷新会因缺头 401,codex review)。
           const r = await window.electronAPI.maker.fetchProviderModels({
@@ -1907,7 +1967,11 @@ export function ProvidersSection() {
     if (p.id === 'anthropic') return <AnthropicHeader provider={p} onChanged={refetch} />;
     if (p.id === 'openai') return <OpenAiHeader provider={p} onChanged={refetch} />;
     if (p.id === 'xai') return <XaiHeader provider={p} onChanged={refetch} />;
-    if (p.source === 'builtin' && p.auth.method === 'apiKey' && (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)) {
+    if (
+      p.source === 'builtin' &&
+      p.auth.method === 'apiKey' &&
+      (PROVIDER_SECRET_IDS as readonly string[]).includes(p.id)
+    ) {
       return <BuiltinApiKeyHeader provider={p} onChanged={refetch} />;
     }
     if (p.source === 'builtin') return <GenericOAuthHeader provider={p} onChanged={refetch} />;
@@ -1973,6 +2037,7 @@ export function ProvidersSection() {
                   <ListRow
                     provider={provider}
                     selected={!cindySigninActive && effectiveSelected?.id === provider.id}
+                    reconnectRequired={provider.id === 'openai' && openaiReconnectRequired}
                     onSelect={() => setSelectedId(provider.id)}
                     position={index + 1}
                     total={listProviders.length}
@@ -2102,86 +2167,19 @@ export function ProvidersSection() {
                 {!effectiveSelected.suspended &&
                   effectiveSelected.modelDiscoveryFailure &&
                   providerHasModels(effectiveSelected) && (
-                  <div
-                    className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
-                    style={{ borderColor: 'var(--settings-theme-card-border)' }}
-                  >
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      {/* 有清单时必须换一套措辞:空态那套说的是「拿不到模型列表」,而列表就
+                    <div
+                      className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-t px-5 py-3 text-13"
+                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                    >
+                      <span style={{ color: 'var(--text-tertiary)' }}>
+                        {/* 有清单时必须换一套措辞:空态那套说的是「拿不到模型列表」,而列表就
                           显示在这条横幅下面 —— 照搬等于当着用户的面说一句他能一眼看穿的假话。
                           这里讲的是「没能刷新,你看到的是上次的结果」,每个归因各自的处置建议
                           照旧保留(DESIGN.md「Errors = what happened + what to do」)。 */}
-                      {t(
-                        `settings.providers.detail.discoveryFailedStale.${effectiveSelected.modelDiscoveryFailure.kind}`,
-                      )}
-                    </span>
-                    <PillButton
-                      label={t(
-                        rediscovering
-                          ? 'settings.providers.button.retrying'
-                          : 'settings.providers.button.retry',
-                      )}
-                      onClick={() => void handleRediscoverModels(effectiveSelected)}
-                      disabled={rediscovering}
-                    />
-                  </div>
-                )}
-                {!effectiveSelected.suspended &&
-                  (providerHasModels(effectiveSelected) ||
-                    (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
-                      !effectiveSelected.modelDiscoveryFailure)) && (
-                  <>
-                    <div
-                      className="border-t"
-                      style={{ borderColor: 'var(--settings-theme-card-border)' }}
-                    />
-                    <UnifiedModelList
-                      provider={effectiveSelected}
-                      emptyMessage={t(
-                        effectiveSelected.connected
-                          ? 'settings.providers.detail.emptyModelsConnected'
-                          : 'settings.providers.detail.emptyModels',
-                      )}
-                      {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
-                        ? {
-                            onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
-                            refreshing: refreshingProviderId === effectiveSelected.id,
-                            refreshDisabled: refreshingProviderId !== null,
-                            refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
-                          }
-                        : effectiveSelected.source === 'user' &&
-                            effectiveSelected.auth.method !== 'oauth'
-                          ? {
-                              onRefresh: () => void handleRefreshModels(effectiveSelected),
-                              refreshing: refreshingProviderId === effectiveSelected.id,
-                              refreshDisabled: refreshingProviderId !== null,
-                            }
-                          : {})}
-                    />
-                  </>
-                )}
-                {!effectiveSelected.suspended &&
-                  !providerHasModels(effectiveSelected) &&
-                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
-                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
-                  <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
-                    {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
-                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。
-                        动态发现明确失败时更进一步:讲清**发生了什么 + 下一步**并给出重试入口
-                        (DESIGN.md「Errors = what happened + what to do」)——被地域拒绝或凭证
-                        被拒的用户不会等来任何自动恢复,继续说「正在发现」就是假话。 */}
-                    <span style={{ color: 'var(--text-tertiary)' }}>
-                      {effectiveSelected.modelDiscoveryFailure
-                        ? t(
-                            `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
-                          )
-                        : t(
-                            effectiveSelected.connected
-                              ? 'settings.providers.detail.emptyModelsConnected'
-                              : 'settings.providers.detail.emptyModels',
-                          )}
-                    </span>
-                    {effectiveSelected.modelDiscoveryFailure && (
+                        {t(
+                          `settings.providers.detail.discoveryFailedStale.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                        )}
+                      </span>
                       <PillButton
                         label={t(
                           rediscovering
@@ -2191,9 +2189,76 @@ export function ProvidersSection() {
                         onClick={() => void handleRediscoverModels(effectiveSelected)}
                         disabled={rediscovering}
                       />
-                    )}
-                  </div>
-                )}
+                    </div>
+                  )}
+                {!effectiveSelected.suspended &&
+                  (providerHasModels(effectiveSelected) ||
+                    (isBuiltinRefreshableProviderId(effectiveSelected.id) &&
+                      !effectiveSelected.modelDiscoveryFailure)) && (
+                    <>
+                      <div
+                        className="border-t"
+                        style={{ borderColor: 'var(--settings-theme-card-border)' }}
+                      />
+                      <UnifiedModelList
+                        provider={effectiveSelected}
+                        emptyMessage={t(
+                          effectiveSelected.connected
+                            ? 'settings.providers.detail.emptyModelsConnected'
+                            : 'settings.providers.detail.emptyModels',
+                        )}
+                        {...(isBuiltinRefreshableProviderId(effectiveSelected.id)
+                          ? {
+                              onRefresh: () => void handleRefreshBuiltinModels(effectiveSelected),
+                              refreshing: refreshingProviderId === effectiveSelected.id,
+                              refreshDisabled: refreshingProviderId !== null,
+                              refreshIdleLabel: t('settings.providers.models.refreshBuiltinAria'),
+                            }
+                          : effectiveSelected.source === 'user' &&
+                              effectiveSelected.auth.method !== 'oauth'
+                            ? {
+                                onRefresh: () => void handleRefreshModels(effectiveSelected),
+                                refreshing: refreshingProviderId === effectiveSelected.id,
+                                refreshDisabled: refreshingProviderId !== null,
+                              }
+                            : {})}
+                      />
+                    </>
+                  )}
+                {!effectiveSelected.suspended &&
+                  !providerHasModels(effectiveSelected) &&
+                  (Boolean(effectiveSelected.modelDiscoveryFailure) ||
+                    !isBuiltinRefreshableProviderId(effectiveSelected.id)) && (
+                    <div className="flex flex-1 flex-col items-center justify-center gap-3 px-8 text-center text-13">
+                      {/* 已连接却无模型(如 Codex 刚登录、models_cache 未生成;或网关清单拉取失败)
+                        不能沿用未连接的「授权后…」文案——那对已连接供应商自相矛盾。
+                        动态发现明确失败时更进一步:讲清**发生了什么 + 下一步**并给出重试入口
+                        (DESIGN.md「Errors = what happened + what to do」)——被地域拒绝或凭证
+                        被拒的用户不会等来任何自动恢复,继续说「正在发现」就是假话。 */}
+                      <span style={{ color: 'var(--text-tertiary)' }}>
+                        {effectiveSelected.modelDiscoveryFailure
+                          ? t(
+                              `settings.providers.detail.discoveryFailed.${effectiveSelected.modelDiscoveryFailure.kind}`,
+                            )
+                          : t(
+                              effectiveSelected.connected
+                                ? 'settings.providers.detail.emptyModelsConnected'
+                                : 'settings.providers.detail.emptyModels',
+                            )}
+                      </span>
+                      {effectiveSelected.modelDiscoveryFailure && (
+                        <PillButton
+                          label={t(
+                            rediscovering
+                              ? 'settings.providers.button.retrying'
+                              : 'settings.providers.button.retry',
+                          )}
+                          onClick={() => void handleRediscoverModels(effectiveSelected)}
+                          disabled={rediscovering}
+                        />
+                      )}
+                    </div>
+                  )}
               </>
             ) : (
               <div

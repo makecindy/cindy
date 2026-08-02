@@ -11,14 +11,12 @@
  *    Responses bridge 翻译，Claude / Cindy AI 走透明 Anthropic 路由。
  *  - 二进制:与 cc/codex 同链 —— splash prepare 经 agent-binaries 按 CDN manifest
  *    的 pi 字段下载整目录 tar.gz 到 userData/pi/<version>/(SHA256 校验,清单一变
- *    下次启动即换新)。解析优先级:受管下载版(含 dev 期 apps/pi-bin,
- *    pnpm install:pi 产物)→ 安装包自带分发 resources/pi/<platform>(清单未发
- *    pi 资产或下载失败的兜底)。全部缺失 → buildPiAgent 返回 null,pi 不注册,
- *    对既有环境零影响。
+ *    下次启动即换新)。dev 期使用 apps/pi-bin 中 pnpm install:pi 的产物；正式版
+ *    不内置 Pi，清单缺失或下载失败时 buildPiAgent 返回 null，本次不注册 pi，
+ *    对 Cindy 启动零影响。
  */
 
 import path from 'node:path';
-import fs from 'node:fs';
 import { app } from 'electron';
 
 import { PiAgent, type AgentDeps, type AuthAdapter, type AuthState } from '@cindy/maker-core';
@@ -31,7 +29,7 @@ import type {
 } from '@cindy/maker-core';
 import type { ProviderWireProtocol } from '@cindy/model-providers';
 
-import { getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -58,49 +56,14 @@ const PI_PROVIDER_AUTH_PLACEHOLDER_KEY = 'cindy-pi-provider-auth-placeholder';
  */
 const PI_OAUTH_SUBSCRIPTION_PROVIDERS = new Set(['anthropic', 'openai', 'xai']);
 
-// ── 二进制解析(dev 短路)────────────────────────────────────────────────────
-
-function platformKey(): string {
-  return `${process.platform}-${process.arch}`;
-}
-
-function piBinaryName(): string {
-  return process.platform === 'win32' ? 'pi.exe' : 'pi';
-}
-
 /**
  * 解析 pi 主执行文件绝对路径;找不到返回 null(pi 为可选实验 agent,不阻塞启动)。
  * pi 产物是目录形态(主二进制 + theme/ 等运行时资产),路径指向其中的可执行文件。
- *
- * 优先级:
- *   1. agent-binaries 受管链 —— splash prepare 下载的 userData/pi/<version>/
- *      (packaged;清单一变下次启动自动换新),dev 期为 apps/pi-bin/<platform>/
- *      (pnpm install:pi 产物,经 dev-fallback 命中)。
- *   2. 安装包自带整目录分发 resources/pi/<platform> —— CDN 清单未发 pi 资产或
- *      下载失败时的兜底(离线首启也可用)。
+ * 路径只来自 agent-binaries 受管链：正式版是 CDN 下载到 userData/pi/<version>/
+ * 的已校验目录，dev 是 apps/pi-bin/<platform>/ 中 pnpm install:pi 的产物。
  */
 export function resolvePiBinaryPath(): string | null {
-  const managed = getCachedBinaryStatus('pi');
-  if (managed.binaryReady && managed.binaryPath) return managed.binaryPath;
-
-  const key = platformKey();
-  const file = piBinaryName();
-  const candidates = app.isPackaged
-    ? [path.join(process.resourcesPath, 'pi', key)]
-    : [
-        path.join(app.getAppPath(), '..', '..', 'apps', 'pi-bin', key),
-        path.join(process.cwd(), 'apps', 'pi-bin', key),
-        path.join(process.cwd(), '..', 'pi-bin', key),
-      ];
-  for (const dir of candidates) {
-    const bin = path.join(dir, file);
-    if (!fs.existsSync(bin)) continue;
-    if (process.platform !== 'win32') {
-      try { fs.chmodSync(bin, 0o755); } catch { /* ignore */ }
-    }
-    return bin;
-  }
-  return null;
+  return getReadyBinaryPath('pi') ?? null;
 }
 
 // ── AuthAdapter(XD 网关 key)─────────────────────────────────────────────────
@@ -221,6 +184,7 @@ export interface BuildPiAgentOpts {
   /** Cindy MCP providers(与 claude/codex 同源工厂产物);经 HTTP bridge 暴露给 pi。 */
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
+  resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -352,7 +316,7 @@ async function resolvePiNativeProviders(): Promise<PiNativeProvidersResult> {
 export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
   const binaryPath = resolvePiBinaryPath();
   if (!binaryPath) {
-    log.warn('pi binary not found (run `pnpm install:pi`); pi agent disabled for this launch');
+    log.warn('pi binary unavailable after managed prepare; pi agent disabled for this launch');
     return null;
   }
   log.info('pi agent enabled', { binaryPath });
@@ -369,5 +333,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     preparePiExtraSpawnConfig: (providers, ctx) => getPiExtraSpawnConfig(providers, opts.logger, ctx),
     registerPiProxySession,
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
+    resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
   });
 }

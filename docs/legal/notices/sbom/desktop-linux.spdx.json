@@ -3,9 +3,9 @@
   "dataLicense": "CC0-1.0",
   "SPDXID": "SPDXRef-DOCUMENT",
   "name": "cindy-desktop-linux",
-  "documentNamespace": "https://cindy.app/spdx/desktop-linux/79dc59f14f6dce4df3cb4fc99abf194a2bb7eb87e6061b760fa456a9991770b4",
+  "documentNamespace": "https://cindy.app/spdx/desktop-linux/156d44a61ecf03e9226484f8e891de84ed099853480e30fba697a651bf84af24",
   "creationInfo": {
-    "created": "2026-08-01T10:11:54Z",
+    "created": "2026-08-02T09:08:05Z",
     "creators": [
       "Tool: scripts/generate-third-party-notices.mjs"
     ]
@@ -72,8 +72,8 @@
       "copyrightText": "NOASSERTION"
     },
     {
-      "name": "OpenAI Codex CLI (bundled binary)",
-      "SPDXID": "SPDXRef-Package-2533cecb0b1ad2d4",
+      "name": "OpenAI Codex CLI (runtime-downloaded binary)",
+      "SPDXID": "SPDXRef-Package-4f22132a77577bcb",
       "versionInfo": "0.145.0",
       "downloadLocation": "https://github.com/openai/codex",
       "filesAnalyzed": false,
@@ -92,8 +92,8 @@
       "copyrightText": "NOASSERTION"
     },
     {
-      "name": "pi coding agent (bundled binary)",
-      "SPDXID": "SPDXRef-Package-47bf96d7e756f6b6",
+      "name": "pi coding agent (runtime-downloaded binary)",
+      "SPDXID": "SPDXRef-Package-04c1add3e48a9e5c",
       "versionInfo": "0.83.0",
       "downloadLocation": "https://github.com/earendil-works/pi",
       "filesAnalyzed": false,
@@ -13684,7 +13684,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-2533cecb0b1ad2d4"
+      "relatedSpdxElement": "SPDXRef-Package-4f22132a77577bcb"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
@@ -13694,7 +13694,7 @@
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
       "relationshipType": "DESCRIBES",
-      "relatedSpdxElement": "SPDXRef-Package-47bf96d7e756f6b6"
+      "relatedSpdxElement": "SPDXRef-Package-04c1add3e48a9e5c"
     },
     {
       "spdxElementId": "SPDXRef-DOCUMENT",
