@@ -130,7 +130,7 @@ export interface RegenerateTitleDeps {
   collectMaterial: (
     sessionId: string,
     recentLimit: number,
-    latestTurnIsInFlight: boolean,
+    latestTurnIsInFlight: boolean | (() => boolean),
   ) => Promise<RegenerateTitleMaterial>;
   /** 用给定 prompt 走 title oneShot 通道。 */
   generateTitle: (
@@ -170,12 +170,10 @@ const defaultRegenerateDeps: RegenerateTitleDeps = {
 export async function regenerateMakerSessionTitle(
   sessionId: string,
   deps: RegenerateTitleDeps = defaultRegenerateDeps,
-  latestTurnIsInFlight = false,
+  latestTurnIsInFlight: boolean | (() => boolean) = false,
 ): Promise<string | null> {
   if (!sessionId) return null;
   try {
-    const agentKind = await deps.readSessionAgentKind(sessionId);
-    if (!agentKind) return null;
     const { recent, opening } = await deps.collectMaterial(
       sessionId,
       REGENERATE_RECENT_WINDOW,
@@ -183,6 +181,8 @@ export async function regenerateMakerSessionTitle(
     );
     // 空会话(草稿)没有素材,起不出有意义的标题
     if (recent.length === 0) return null;
+    const agentKind = await deps.readSessionAgentKind(sessionId);
+    if (!agentKind) return null;
     // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
     // 用 rowid 成员判断做精确判定——时间戳启发式在同毫秒批量落库(开场行被
     // 同时间戳的后续行挤出窗口)或 createdAt 为 null 时都会误判,review 已两次指出。
@@ -287,10 +287,15 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       const pendingCompletionBeforeDrain =
         options.isSessionTurnPendingCompletion?.(sessionId) === true;
       await drainPersistQueue();
-      const pendingCompletionAfterDrain =
-        options.isSessionTurnPendingCompletion?.(sessionId) === true;
-      const latestTurnIsPendingCompletion =
-        pendingCompletionBeforeDrain || pendingCompletionAfterDrain;
+      let pendingCompletionObserved = pendingCompletionBeforeDrain;
+      const latestTurnIsPendingCompletion = (): boolean => {
+        if (!pendingCompletionObserved) {
+          pendingCompletionObserved =
+            options.isSessionTurnPendingCompletion?.(sessionId) === true;
+        }
+        return pendingCompletionObserved;
+      };
+      latestTurnIsPendingCompletion();
       return {
         title: await regenerateMakerSessionTitle(
           sessionId,

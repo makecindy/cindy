@@ -259,6 +259,7 @@ import {
 import {
   clearSessionPersistState,
   consumeLastAssistantPersistId,
+  consumeLastTopLevelAssistantPersistId,
   drainPersistQueue,
   enqueueDurableWrite,
   flushAssistantBlock,
@@ -3190,10 +3191,12 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
     // 本 turn 最后一条 assistant 的 persistId(挂 per-turn 费用 / turn 边界用)。terminal
     // error 同样 consume，写失败 seal 后再按需交接给 paired done；纯 tool 轮为 undefined。
     let turnAssistantPersistId: string | undefined;
+    let turnBoundaryAssistantPersistId: string | undefined;
     let isPairedFailedTurnDone = false;
     if (event.type === 'done' || isTerminalTurnErrorEvent(event)) {
       flushAssistantBlock(session.id, eventAgentMeta);
       turnAssistantPersistId = consumeLastAssistantPersistId(session.id);
+      turnBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(session.id);
       if (isTerminalTurnErrorEvent(event) && event.type !== 'done') {
         // 失败 turn: 记账发生在稍后的配对 done(usage 在那条事件上), 把这里
         // consume 到的 persistId 交接过去(见 pendingFailedTurnAssistantPersistId)。
@@ -3211,14 +3214,14 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         pendingFailedTurnAssistantPersistId.delete(session.id);
       }
       flushOrphanToolResults(session.id, eventAgentMeta);
-      if (turnAssistantPersistId) {
+      if (turnBoundaryAssistantPersistId) {
         // 在同一 durable FIFO 内先盖 turn seal、再复用 local-db:messages:created 广播
         // 更新后的完整行。失败轮的 paired done 只复用 id 做 usage 记账，不能把
         // terminal error 已写的 false seal 覆盖成 true、让施工播报重新进入标题素材。
         if (event.type !== 'done') {
-          void markAssistantTurnFailed(session.id, turnAssistantPersistId);
+          void markAssistantTurnFailed(session.id, turnBoundaryAssistantPersistId);
         } else if (!isPairedFailedTurnDone) {
-          void markAssistantTurnCompleted(session.id, turnAssistantPersistId);
+          void markAssistantTurnCompleted(session.id, turnBoundaryAssistantPersistId);
         }
       }
       // error 行在 flushOrphanToolResults 之后入队,保证 orphan tool_result 排在
@@ -4050,6 +4053,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
         // above. A single disposer or listener error must not leave a closed
         // session reachable from the in-memory routing map.
         cancelDirectAbortReconciliation(session.id);
+        pendingFailedTurnAssistantPersistId.delete(session.id);
         wiredSessionsById.delete(session.id);
         for (const dispose of registration.disposers) {
           try {
@@ -7919,6 +7923,21 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return false;
     }
     if (!liveSessionIdle) return false;
+    // The vendor is authoritative that this turn is over, but no terminal event
+    // reached the host. Flush and fail-seal the latest top-level Assistant before
+    // releasing the boundary; otherwise its last progress line is later treated
+    // as a legacy final answer by title regeneration. Preserve the last Assistant
+    // id for a rare late paired done so usage attribution still has a target.
+    flushAssistantBlock(sessionId, null);
+    const abortedAssistantPersistId = consumeLastAssistantPersistId(sessionId);
+    const abortedBoundaryAssistantPersistId = consumeLastTopLevelAssistantPersistId(sessionId);
+    flushOrphanToolResults(sessionId, null);
+    if (abortedAssistantPersistId) {
+      pendingFailedTurnAssistantPersistId.set(sessionId, abortedAssistantPersistId);
+    }
+    if (abortedBoundaryAssistantPersistId) {
+      void markAssistantTurnFailed(sessionId, abortedBoundaryAssistantPersistId);
+    }
     const trackerStale = sessionTurnActivityTracker.isSessionInTurn(sessionId) ||
       sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
     const hadZombieInteraction = hasPendingAgentInteractionForSession(sessionId);
@@ -7944,6 +7963,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // The marker write is best-effort and ordered behind pending message
       // persistence. It may retry/settle after an owner boundary is available.
       markTurnEndedAfterPersistDrain(sessionId);
+      resetTurnPersistState(sessionId);
       noteClaudeSessionTurnState(sessionId, false);
       settlePendingCredentialSwitch(sessionId, `reconcile:${source}`);
       deferredCodexRestartHolder?.onSessionSettled();

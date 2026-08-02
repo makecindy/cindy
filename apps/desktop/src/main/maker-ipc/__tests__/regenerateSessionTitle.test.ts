@@ -206,6 +206,27 @@ describe('regenerateMakerSessionTitle', () => {
     expect(deps.collectMaterial).toHaveBeenCalledWith('s1', expect.any(Number), true);
   });
 
+  it('先冻结标题素材，再异步读取 agent kind，避免状态检查与 DB 快照之间留窗口', async () => {
+    const order: string[] = [];
+    const deps = makeDeps({
+      collectMaterial: vi.fn(async () => {
+        order.push('material');
+        return {
+          opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+          recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+        };
+      }),
+      readSessionAgentKind: vi.fn(async () => {
+        order.push('agent-kind');
+        return 'codex' as const;
+      }),
+    });
+
+    await regenerateMakerSessionTitle('s1', deps, () => false);
+
+    expect(order).toEqual(['material', 'agent-kind']);
+  });
+
   it('只有助手消息(用户消息被过滤/缺失)→ 仍能用窗口素材生成', async () => {
     const deps = makeDeps({
       collectMaterial: vi.fn(async () => ({

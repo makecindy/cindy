@@ -93,7 +93,12 @@ function isInternalTitleAssistant(meta: Record<string, unknown> | null): boolean
 
 /** Only an explicit user send starts a new title turn; steer stays inside the current turn. */
 export function isTitleTurnBoundaryUser(meta: Record<string, unknown> | null): boolean {
-  return meta?.delivery !== 'steer' && meta?.autoResume !== true;
+  return meta?.delivery !== 'steer' && isVisibleTitleUser(meta);
+}
+
+/** Hidden host-authored continuation prompts are never user-visible title evidence. */
+export function isVisibleTitleUser(meta: Record<string, unknown> | null): boolean {
+  return meta?.autoResume !== true;
 }
 
 function compareTitleRows(a: TitleMessageCandidate, b: TitleMessageCandidate): number {
@@ -165,7 +170,7 @@ export function selectRecentTitleMessages(
   for (const row of rows) {
     if (!row.text) continue;
     if (row.role === 'user') {
-      if (row.agentMeta?.autoResume === true) continue;
+      if (!isVisibleTitleUser(row.agentMeta)) continue;
       if (row.agentMeta?.delivery === 'steer') {
         current ??= { users: [], assistants: [] };
         current.users.push(row);

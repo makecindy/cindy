@@ -19,6 +19,7 @@ import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
 import {
   isTitleTurnBoundaryUser,
+  isVisibleTitleUser,
   selectRecentTitleMessages,
   type TitleMessageCandidate,
 } from './latestMessageText.logic.js';
@@ -77,17 +78,7 @@ function toTitleMessageCandidate(row: RecentTitleDbRow): TitleMessageCandidate |
   const text = extractText(row.content, role);
   if (!text) return null;
 
-  let agentMeta: Record<string, unknown> | null = null;
-  if (row.agentMeta) {
-    try {
-      const parsed: unknown = JSON.parse(row.agentMeta);
-      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-        agentMeta = parsed as Record<string, unknown>;
-      }
-    } catch {
-      // Malformed legacy metadata must not make title regeneration fail.
-    }
-  }
+  const agentMeta = parseTitleAgentMeta(row.agentMeta);
   return {
     role,
     text,
@@ -96,6 +87,21 @@ function toTitleMessageCandidate(row: RecentTitleDbRow): TitleMessageCandidate |
     toolUseId: row.toolUseId ?? null,
     agentMeta,
   };
+}
+
+function parseTitleAgentMeta(raw: string | null): Record<string, unknown> | null {
+  let agentMeta: Record<string, unknown> | null = null;
+  if (raw) {
+    try {
+      const parsed: unknown = JSON.parse(raw);
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+        agentMeta = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Malformed legacy metadata must not make title regeneration fail.
+    }
+  }
+  return agentMeta;
 }
 
 function selectionStartsAtCompleteTurn(
@@ -156,9 +162,10 @@ async function recentMessagesWithClearedAt(
   sessionId: string,
   limit: number,
   clearedAt: number | null,
+  snapshotUpperRowid: number | null,
   latestTurnIsInFlight: boolean,
 ): Promise<RecentMessage[]> {
-  if (limit <= 0) return [];
+  if (limit <= 0 || snapshotUpperRowid == null) return [];
   const db = getDbClient().drizzle;
   const conds = [
     eq(messages.sessionId, sessionId),
@@ -166,14 +173,6 @@ async function recentMessagesWithClearedAt(
     isNull(messages.rewindAt),
   ];
   if (clearedAt != null) conds.push(gt(messages.createdAt, clearedAt));
-  // Freeze one rowid upper bound before paging. New concurrent writes receive a
-  // larger rowid and therefore cannot shift the later pages under this scan.
-  const [snapshot] = await db
-    .select({ rowid: sql<number | null>`max(${messageRowid})` })
-    .from(messages);
-  const snapshotUpperRowid = snapshot?.rowid;
-  if (snapshotUpperRowid == null) return [];
-
   let cursor: { createdAt: number; rowid: number } | null = null;
   let scannedRawRows = 0;
   const candidates: TitleMessageCandidate[] = [];
@@ -267,21 +266,30 @@ async function recentMessagesWithClearedAt(
 async function firstUserMessageWithClearedAt(
   sessionId: string,
   clearedAt: number | null,
+  snapshotUpperRowid: number | null,
 ): Promise<OpeningMessage> {
+  if (snapshotUpperRowid == null) return { text: '', createdAt: null, rowid: null };
   const db = getDbClient().drizzle;
   const conds = [
     eq(messages.sessionId, sessionId),
     eq(messages.role, 'user'),
     isNull(messages.rewindAt),
+    lte(messageRowid, snapshotUpperRowid),
   ];
   if (clearedAt != null) conds.push(gt(messages.createdAt, clearedAt));
   const rows = await db
-    .select({ content: messages.content, createdAt: messages.createdAt, rowid: messageRowid })
+    .select({
+      content: messages.content,
+      createdAt: messages.createdAt,
+      rowid: messageRowid,
+      agentMeta: messages.agentMeta,
+    })
     .from(messages)
     .where(and(...conds))
     .orderBy(asc(messages.createdAt), asc(messageRowid))
     .limit(OPENING_SCAN_LIMIT);
   for (const row of rows) {
+    if (!isVisibleTitleUser(parseTitleAgentMeta(row.agentMeta))) continue;
     const text = extractText(row.content, 'user');
     if (text) return { text, createdAt: row.createdAt ?? null, rowid: row.rowid };
   }
@@ -295,12 +303,38 @@ async function firstUserMessageWithClearedAt(
 export async function regenerateTitleMaterial(
   sessionId: string,
   recentLimit: number,
-  latestTurnIsInFlight = false,
+  latestTurnIsInFlight: boolean | (() => boolean) = false,
 ): Promise<RegenerateTitleMaterial> {
-  const clearedAt = await sessionClearedAt(sessionId);
+  const readLatestTurnIsInFlight = (): boolean =>
+    typeof latestTurnIsInFlight === 'function'
+      ? latestTurnIsInFlight() === true
+      : latestTurnIsInFlight;
+  // Sample the in-memory turn state and submit the rowid snapshot query before
+  // the first await. A turn that starts later receives a larger rowid and cannot
+  // enter this material snapshot; a turn already pending is filtered below.
+  const inFlightBeforeSnapshot = readLatestTurnIsInFlight();
+  const snapshotPromise = getDbClient()
+    .drizzle.select({ rowid: sql<number | null>`max(${messageRowid})` })
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId))
+    .get();
+  const inFlightAfterSnapshotSubmit = readLatestTurnIsInFlight();
+  const [clearedAt, snapshot] = await Promise.all([
+    sessionClearedAt(sessionId),
+    snapshotPromise,
+  ]);
+  const snapshotUpperRowid = snapshot?.rowid ?? null;
+  const snapshotLatestTurnIsInFlight =
+    inFlightBeforeSnapshot || inFlightAfterSnapshotSubmit;
   const [recent, opening] = await Promise.all([
-    recentMessagesWithClearedAt(sessionId, recentLimit, clearedAt, latestTurnIsInFlight),
-    firstUserMessageWithClearedAt(sessionId, clearedAt),
+    recentMessagesWithClearedAt(
+      sessionId,
+      recentLimit,
+      clearedAt,
+      snapshotUpperRowid,
+      snapshotLatestTurnIsInFlight,
+    ),
+    firstUserMessageWithClearedAt(sessionId, clearedAt, snapshotUpperRowid),
   ]);
   return { recent, opening };
 }

@@ -11,10 +11,16 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
   run: vi.fn(async (_request: unknown) => ({ applied: true, done: true })),
-  regenerateMaterial: vi.fn(async () => ({
-    opening: { text: '原始需求', createdAt: 1, rowid: 1 },
-    recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
-  })),
+  regenerateMaterial: vi.fn(
+    async (
+      _sessionId: string,
+      _limit: number,
+      _latestTurnIsInFlight: boolean | (() => boolean),
+    ) => ({
+      opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+      recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+    }),
+  ),
   generateTitle: vi.fn(async () => '任务标题'),
   drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
 }));
@@ -117,10 +123,13 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
     resolveDrain();
     await expect(result).resolves.toEqual({ title: '任务标题' });
 
-    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
-    expect(isSessionTurnPendingCompletion).toHaveBeenNthCalledWith(1, 's-running');
-    expect(isSessionTurnPendingCompletion).toHaveBeenNthCalledWith(2, 's-running');
-    expect(h.regenerateMaterial).toHaveBeenCalledWith('s-running', expect.any(Number), true);
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(1);
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledWith('s-running');
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-running',
+      expect.any(Number),
+      expect.any(Function),
+    );
   });
 
   it('terminal 已到时先等待 pending seal 落库，再按 completed 状态读取素材', async () => {
@@ -142,7 +151,11 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
     await expect(result).resolves.toEqual({ title: '任务标题' });
 
     expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
-    expect(h.regenerateMaterial).toHaveBeenCalledWith('s-completed', expect.any(Number), false);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-completed',
+      expect.any(Number),
+      expect.any(Function),
+    );
   });
 
   it('drain 期间新 turn 启动时以后置快照过滤新一轮未封存 Assistant', async () => {
@@ -168,7 +181,36 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
     await expect(result).resolves.toEqual({ title: '任务标题' });
 
     expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
-    expect(h.regenerateMaterial).toHaveBeenCalledWith('s-new-turn', expect.any(Number), true);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-new-turn',
+      expect.any(Number),
+      expect.any(Function),
+    );
+  });
+
+  it('drain 后到素材快照前新 turn 启动时，动态状态读取仍会过滤施工播报', async () => {
+    h.handlers.clear();
+    let pendingCompletion = false;
+    const isSessionTurnPendingCompletion = vi.fn(() => pendingCompletion);
+    h.regenerateMaterial.mockImplementationOnce(async (_sessionId, _limit, signal) => {
+      pendingCompletion = true;
+      expect(typeof signal).toBe('function');
+      expect((signal as () => boolean)()).toBe(true);
+      return {
+        opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+        recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+      };
+    });
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    await expect(invokeRegenerate('s-snapshot-race')).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(3);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-snapshot-race',
+      expect.any(Number),
+      expect.any(Function),
+    );
   });
 });
 

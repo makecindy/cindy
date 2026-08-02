@@ -39,6 +39,7 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
@@ -214,11 +215,24 @@ function notePersistedMessage(sessionId: string, role: string, persistId: string
  * terminal error 调用方用同一 id 写失败边界，并可交接给稍后的 paired done。
  */
 const lastAssistantPersistIdBySession = new Map<string, string>();
+/**
+ * 标题 turn seal 必须落在最后一条顶层 Assistant；Subagent 行会被标题选择器过滤，
+ * 若 seal 写到它上面，顶层施工播报仍会退回 legacy final。
+ */
+const lastTopLevelAssistantPersistIdBySession = new Map<string, string>();
+const EMPTY_TOOL_USE_IDS: ReadonlySet<string> = new Set<string>();
 
 /** 取出并清除本 turn 最后一条 assistant 的 persistId(没有则 undefined)。 */
 export function consumeLastAssistantPersistId(sessionId: string): string | undefined {
   const id = lastAssistantPersistIdBySession.get(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
+  return id;
+}
+
+/** 取出并清除本 turn 最后一条顶层 Assistant 的 persistId。 */
+export function consumeLastTopLevelAssistantPersistId(sessionId: string): string | undefined {
+  const id = lastTopLevelAssistantPersistIdBySession.get(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   return id;
 }
 
@@ -376,6 +390,14 @@ function enqueuePersistAssistant(
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
+  if (
+    isTopLevelTitleAssistant(
+      agentMeta as Record<string, unknown> | null,
+      knownToolUseIdsBySession.get(sessionId) ?? EMPTY_TOOL_USE_IDS,
+    )
+  ) {
+    lastTopLevelAssistantPersistIdBySession.set(sessionId, clientId);
+  }
 }
 
 /**
@@ -934,6 +956,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
 
 /**
@@ -1202,6 +1225,7 @@ export function clearSessionPersistState(sessionId: string): void {
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);

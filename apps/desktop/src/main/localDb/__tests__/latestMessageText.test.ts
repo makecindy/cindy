@@ -106,4 +106,55 @@ describe('regenerateTitleMaterial pagination', () => {
     );
     expect(descendingRecentQueries).toHaveLength(5);
   });
+
+  it('excludes autoResume from both recent transcript and conversation opening', async () => {
+    const { sqlite } = createHarness();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (?, ?, 's1', ?, ?, NULL, ?, ?, NULL)
+    `);
+    insert.run('m1', 'c1', 'user', JSON.stringify({ text: '继续' }), JSON.stringify({ autoResume: true }), 1);
+    insert.run('m2', 'c2', 'user', JSON.stringify({ text: '真实需求：修复标题' }), null, 2);
+    insert.run('m3', 'c3', 'assistant', JSON.stringify('已完成修复'), JSON.stringify({ turnCompleted: true }), 3);
+
+    const material = await regenerateTitleMaterial('s1', 8);
+
+    expect(material.opening).toMatchObject({ text: '真实需求：修复标题', rowid: 2 });
+    expect(material.recent.map((message) => message.text)).toEqual([
+      '真实需求：修复标题',
+      '已完成修复',
+    ]);
+  });
+
+  it('rechecks live turn state at the rowid snapshot boundary', async () => {
+    const { sqlite } = createHarness();
+    sqlite.prepare('INSERT INTO sessions (id, cleared_at) VALUES (?, NULL)').run('s1');
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, tool_use_id, agent_meta, created_at, rewind_at
+      ) VALUES (?, ?, 's1', ?, ?, NULL, ?, ?, NULL)
+    `);
+    insert.run('m1', 'c1', 'user', JSON.stringify({ text: '原始需求' }), null, 1);
+    insert.run('m2', 'c2', 'assistant', JSON.stringify('历史答复'), JSON.stringify({ turnCompleted: true }), 2);
+
+    let stateReads = 0;
+    const material = await regenerateTitleMaterial('s1', 8, () => {
+      stateReads += 1;
+      if (stateReads === 1) {
+        insert.run('m3', 'c3', 'user', JSON.stringify({ text: '新一轮需求' }), null, 3);
+        insert.run('m4', 'c4', 'assistant', JSON.stringify('施工播报'), JSON.stringify({ uuid: 'progress' }), 4);
+      }
+      return true;
+    });
+
+    expect(stateReads).toBe(2);
+    expect(material.recent.map((message) => message.text)).toEqual([
+      '原始需求',
+      '历史答复',
+      '新一轮需求',
+    ]);
+    expect(material.recent.some((message) => message.text === '施工播报')).toBe(false);
+  });
 });
