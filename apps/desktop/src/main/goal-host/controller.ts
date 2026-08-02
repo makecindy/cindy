@@ -45,6 +45,16 @@ export class GoalControllerInputError extends Error {
   readonly code = 'INVALID_PARAMS';
 }
 
+/** Goal 仍存在，但本次编辑已被更新的生命周期或状态覆盖。 */
+export class GoalUpdateSupersededError extends Error {
+  readonly code = 'PRECONDITION_FAILED';
+
+  constructor() {
+    super('goal changed while the update was being saved; review the latest state and try again');
+    this.name = 'GoalUpdateSupersededError';
+  }
+}
+
 function resolveLimitPatchValue(value: number | null | undefined): number | null {
   if (value === null) return null;
   if (typeof value === 'number' && Number.isFinite(value) && value > 0) {
@@ -113,6 +123,15 @@ export function normalizeGoalUpdatePatch(patch: GoalUpdatePatch): GoalUpdatePatc
   if ('budgetTokens' in patch) next.budgetTokens = resolveLimitPatchValue(patch.budgetTokens);
   if ('noProgressLimit' in patch) next.noProgressLimit = resolveLimitPatchValue(patch.noProgressLimit);
   return next;
+}
+
+function goalStateMatchesPatch(state: GoalState, patch: GoalUpdatePatch): boolean {
+  return (
+    (!('objective' in patch) || state.objective === patch.objective) &&
+    (!('maxTurns' in patch) || state.maxTurns === patch.maxTurns) &&
+    (!('budgetTokens' in patch) || state.budgetTokens === patch.budgetTokens) &&
+    (!('noProgressLimit' in patch) || state.noProgressLimit === patch.noProgressLimit)
+  );
 }
 
 function exceedsGoalBudget(state: Pick<GoalState, 'maxTurns' | 'turnsUsed' | 'budgetTokens' | 'tokensUsed'>): boolean {
@@ -469,21 +488,53 @@ export class GoalController {
   async updateGoal(sessionId: string, patch: GoalUpdatePatch): Promise<GoalState | null> {
     const entryBoundary = this.turns.get(sessionId);
     const normalized = normalizeGoalUpdatePatch(patch);
+    let patchWritten = false;
+    let objectiveChanged = false;
+    let objectiveMarkerPersisted = false;
+
+    // `null` 只表示权威存储里确实没有 Goal。turn 收尾 / Stop 换代时重读当前行：
+    // 本次 patch 仍在就按成功返回并广播最新状态；已被后续操作覆盖则明确报竞态，
+    // 不能把生命周期取消伪装成 GOAL_NOT_FOUND，也不能把未应用的编辑谎报成功。
+    const reconcileLifecycleChange = async (): Promise<GoalState | null> => {
+      let current = await this.deps.storage.get(sessionId);
+      if (!current) return null;
+      if (!goalStateMatchesPatch(current, normalized)) {
+        throw new GoalUpdateSupersededError();
+      }
+      // patch 已由本调用写入时，目标更新 marker 仍须恰好落一次；Stop 只接管续跑生命周期，
+      // 不应让已提交的目标文案缺少对应的持久记录。
+      if (patchWritten && objectiveChanged && !objectiveMarkerPersisted) {
+        await this.deps.persistUserMessage?.(sessionId, current.objective, {
+          goalObjective: { updated: true },
+        });
+        objectiveMarkerPersisted = true;
+        current = await this.deps.storage.get(sessionId);
+        if (!current) return null;
+        if (!goalStateMatchesPatch(current, normalized)) {
+          throw new GoalUpdateSupersededError();
+        }
+      }
+      this.emit(current);
+      return current;
+    };
+
     const state = await this.deps.storage.get(sessionId);
-    if (this.turns.get(sessionId) !== entryBoundary) return null;
+    if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
     if (!state) return null;
-    const objectiveChanged = normalized.objective != null && normalized.objective !== state.objective;
+    objectiveChanged = normalized.objective != null && normalized.objective !== state.objective;
     const ts = this.now();
     const changed = await this.deps.storage.update(sessionId, {
       ...normalized,
       updatedAt: ts,
     });
-    if (this.turns.get(sessionId) !== entryBoundary) return null;
+    patchWritten = changed != null;
+    if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
     if (!changed) return null;
     // 改了目标内容 → 在对话里落一条「目标已更新」标记消息(气泡徽标),排在任何续轮之前。
     if (objectiveChanged) {
       await this.deps.persistUserMessage?.(sessionId, changed.objective, { goalObjective: { updated: true } });
-      if (this.turns.get(sessionId) !== entryBoundary) return null;
+      objectiveMarkerPersisted = true;
+      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
     }
     let next = changed;
     if (changed.status === 'budgetLimited' && !exceedsGoalBudget(changed)) {
@@ -492,13 +543,13 @@ export class GoalController {
         lastReason: null,
         updatedAt: this.now(),
       });
-      if (this.turns.get(sessionId) !== entryBoundary) return null;
+      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
       if (resumed) {
         next = resumed;
         this.resetTurn(sessionId);
         const resumeBoundary = this.turns.get(sessionId);
         await this.deps.ensureSession(sessionId);
-        if (this.turns.get(sessionId) !== resumeBoundary) return null;
+        if (this.turns.get(sessionId) !== resumeBoundary) return reconcileLifecycleChange();
         this.attachListener(sessionId);
       }
     } else if (next.status === 'active' && exceedsGoalBudget(next)) {
@@ -510,7 +561,7 @@ export class GoalController {
         lastReason: 'budget limit lowered below current usage',
         updatedAt: this.now(),
       });
-      if (this.turns.get(sessionId) !== entryBoundary) return null;
+      if (this.turns.get(sessionId) !== entryBoundary) return reconcileLifecycleChange();
       if (limited) {
         next = limited;
         this.stopSession(sessionId);
@@ -521,7 +572,7 @@ export class GoalController {
       (changed.status === 'paused' || changed.status === 'blocked' || changed.status === 'usageLimited')
     ) {
       await this.resumeGoal(sessionId);
-      return this.deps.storage.get(sessionId);
+      return reconcileLifecycleChange();
     }
     this.emit(next);
     if (next.status === 'active' && state.status === 'budgetLimited' && !this.isBusy(sessionId)) {
@@ -1201,57 +1252,74 @@ export class GoalController {
    */
   private async autoResumeFromUsageLimit(sessionId: string): Promise<void> {
     this.usageResumeTimers.delete(sessionId);
-    const state = await this.deps.storage.get(sessionId).catch(() => null);
-    if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
-    // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
-    // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
-    // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。
-    // 判据与 fireTurn 用的是同一个 exceedsGoalBudget，结论必然一致；仍照常走 resumeGoal，
-    // 由它把状态转成 budgetLimited。
-    const budgetAlreadyExhausted = exceedsGoalBudget(state);
-    // 同理的第二种"这条重试根本没发生":会话此刻拿不到 live session(已关闭 / 暂时 hydrate
-    // 不出来)。resumeGoal 忽略 ensureSession 的结果、照样把目标转 active,而 fireTurn 拿不到
-    // session 就直接 return —— 既没有 listener 也没有续跑 timer,目标停在 active 不动,而卡片
-    // 已经落库说"正在重试目标"(review #844 codex P1)。
-    //
-    // 这里先探一次:拿不到就**原样留在 usageLimited**(可恢复态)——存档里 usageResetAt 还在,
-    // 用户手动 resume 或下次启动的 usageLimited 重排(见 start() 里按 listUsageLimited 补排
-    // timer)都会再试一次;既不落假卡片,也不把目标推进一个停滞的 active。
-    // 刻意不在这里重排 timer:hydrate 不出来通常不是几十秒能自愈的,循环重排只会空转。
-    // ensureSession 是幂等的 ensure 语义,下面 resumeGoal 再调一次拿到的是同一个 session。
-    // **预算已耗尽的目标不需要 live session 就能收口**: fireTurn 的预算 preflight 跑在
-    // ensureSession 之前, 会把状态转成 budgetLimited(终态)并 stopSession。把下面的
-    // hydrate 守卫排在它前面, 会让这种目标停在 usageLimited + 已过期的 usageResetAt,
-    // 直到手动 resume 或进程重启才收口(review #844 codex P1)。
-    const liveSession = budgetAlreadyExhausted
-      ? null
-      : await this.deps.ensureSession(sessionId).catch(() => null);
-    if (!budgetAlreadyExhausted && !liveSession) {
-      this.deps.logger.warn('[goal] skipped auto resume — no live session; staying usageLimited', {
-        sessionId,
-        lastReason: state.lastReason ?? null,
-      });
-      return;
-    }
-    if (this.deps.persistGoalNotice && !budgetAlreadyExhausted) {
-      // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
-      // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。
-      // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
-      // usageLimited 目标恰好会在重启后按存档的 usageResetAt 重排 timer。
-      const noticeKind =
-        state.lastReason === OVERLOAD_LAST_REASON ? 'capacity-resumed' : 'usage-resumed';
-      try {
-        await this.deps.persistGoalNotice(sessionId, noticeKind);
-      } catch (e) {
-        this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
+    // usageLimited 停驻态正常没有 turn owner。为本次 timer 建一代临时 owner，所有 await
+    // 都用对象身份复核；Stop 会同步换成 fresh cancelled owner，旧自动恢复因而不能落提示、
+    // 不能恢复，也不会误删 Stop 的新边界。已有 owner 表示其它生命周期操作正在接管。
+    if (this.turns.has(sessionId)) return;
+    const lifecycleBoundary = freshTurn();
+    this.turns.set(sessionId, lifecycleBoundary);
+    const isCurrent = (): boolean => this.turns.get(sessionId) === lifecycleBoundary;
+
+    try {
+      const state = await this.deps.storage.get(sessionId).catch(() => null);
+      if (!isCurrent()) return;
+      if (!state || state.status !== 'usageLimited') return; // 用户可能已 clear / 手动 resume
+      // 预算已经用尽时一条都不该说：下面的 resumeGoal → fireTurn 有 preflight 预算守卫，
+      // 会立刻把目标转成 budgetLimited、一轮都不发，而这张卡片已经落库，会在会话里永久
+      // 留下一句「正在重试目标 / 用量已恢复」——那次重试根本没发生（review #844 codex P1）。
+      // 判据与 fireTurn 用的是同一个 exceedsGoalBudget，结论必然一致；仍照常走 resumeGoal，
+      // 由它把状态转成 budgetLimited。
+      const budgetAlreadyExhausted = exceedsGoalBudget(state);
+      // 同理的第二种"这条重试根本没发生":会话此刻拿不到 live session(已关闭 / 暂时 hydrate
+      // 不出来)。resumeGoal 忽略 ensureSession 的结果、照样把目标转 active,而 fireTurn 拿不到
+      // session 就直接 return —— 既没有 listener 也没有续跑 timer,目标停在 active 不动,而卡片
+      // 已经落库说"正在重试目标"(review #844 codex P1)。
+      //
+      // 这里先探一次:拿不到就**原样留在 usageLimited**(可恢复态)——存档里 usageResetAt 还在,
+      // 用户手动 resume 或下次启动的 usageLimited 重排(见 start() 里按 listUsageLimited 补排
+      // timer)都会再试一次;既不落假卡片,也不把目标推进一个停滞的 active。
+      // 刻意不在这里重排 timer:hydrate 不出来通常不是几十秒能自愈的,循环重排只会空转。
+      // ensureSession 是幂等的 ensure 语义,下面 resumeGoal 再调一次拿到的是同一个 session。
+      // **预算已耗尽的目标不需要 live session 就能收口**: fireTurn 的预算 preflight 跑在
+      // ensureSession 之前, 会把状态转成 budgetLimited(终态)并 stopSession。把下面的
+      // hydrate 守卫排在它前面, 会让这种目标停在 usageLimited + 已过期的 usageResetAt,
+      // 直到手动 resume 或进程重启才收口(review #844 codex P1)。
+      const liveSession = budgetAlreadyExhausted
+        ? null
+        : await this.deps.ensureSession(sessionId).catch(() => null);
+      if (!isCurrent()) return;
+      if (!budgetAlreadyExhausted && !liveSession) {
+        this.deps.logger.warn('[goal] skipped auto resume — no live session; staying usageLimited', {
+          sessionId,
+          lastReason: state.lastReason ?? null,
+        });
+        return;
       }
-    } else if (budgetAlreadyExhausted) {
-      this.deps.logger.info('[goal] skipped resume notice — budget already exhausted', {
-        sessionId,
-      });
+      if (this.deps.persistGoalNotice && !budgetAlreadyExhausted) {
+        // 过载与账号限流共用 usageLimited 状态和这同一个 timer，但说法必须分开：
+        // 账号从没被限流时报「额度已重置」是假信息（review #844 codex P1）。
+        // 判据用存档的 lastReason 而不是内存计数——后者在进程重启后会丢，而
+        // usageLimited 目标恰好会在重启后按存档的 usageResetAt 重排 timer。
+        const noticeKind =
+          state.lastReason === OVERLOAD_LAST_REASON ? 'capacity-resumed' : 'usage-resumed';
+        try {
+          await this.deps.persistGoalNotice(sessionId, noticeKind);
+        } catch (e) {
+          this.deps.logger.warn('[goal] persistGoalNotice failed', { sessionId, error: String(e) });
+        }
+        if (!isCurrent()) return;
+      } else if (budgetAlreadyExhausted) {
+        this.deps.logger.info('[goal] skipped resume notice — budget already exhausted', {
+          sessionId,
+        });
+      }
+      // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
+      await this.resumeGoal(sessionId, { auto: true });
+    } finally {
+      // 早退 / resume no-op 时释放自己；成功 resume 会 resetTurn 换代，Stop 会留下它的
+      // cancelled owner，二者都不能被旧 timer 的 finally 删除。
+      if (isCurrent()) this.turns.delete(sessionId);
     }
-    // auto:true —— 这是到点自动续跑，不是用户显式恢复，不得清零连续过载计数。
-    await this.resumeGoal(sessionId, { auto: true });
   }
 
   private async fireTurn(sessionId: string): Promise<void> {

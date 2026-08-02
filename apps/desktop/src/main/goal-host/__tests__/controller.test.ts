@@ -2,7 +2,15 @@ import { describe, expect, it, beforeEach, vi } from 'vitest';
 
 import type { AgentEvent, SessionSendResult } from '@cindy/maker-core';
 
-import { GoalController, decideNextGoalState, deriveObjectiveFromAnswers, questionsLookLikeGoalClarification, type TurnOutcome, type GoalCounters } from '../controller';
+import {
+  GoalController,
+  GoalUpdateSupersededError,
+  decideNextGoalState,
+  deriveObjectiveFromAnswers,
+  questionsLookLikeGoalClarification,
+  type TurnOutcome,
+  type GoalCounters,
+} from '../controller';
 import { buildContinuationDirective, buildFirstTurnDirective } from '../directive';
 import { MAX_CONSECUTIVE_OVERLOAD_TURNS } from '../usageLimit';
 import type {
@@ -738,12 +746,161 @@ describe('GoalController', () => {
     await local.controller.pauseGoal('s1');
     releasePersist();
 
-    await expect(updatePromise).resolves.toBeNull();
+    await expect(updatePromise).resolves.toMatchObject({
+      status: 'paused',
+      objective: 'updated objective',
+    });
     expect(await local.storage.get('s1')).toMatchObject({
       status: 'paused',
       objective: 'updated objective',
     });
+    expect(persistCalls).toBe(1);
+    expect(local.updates.at(-1)?.goal).toMatchObject({
+      status: 'paused',
+      objective: 'updated objective',
+    });
     expect(local.session.sends).toHaveLength(0);
+  });
+
+  it('reports a superseded update instead of GOAL_NOT_FOUND when Stop wins before the patch is written', async () => {
+    const initial = seededGoal({ status: 'active', objective: 'old objective' });
+    await h.storage.set(initial);
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    const getSpy = vi.spyOn(h.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const updatePromise = h.controller.updateGoal('s1', { objective: 'stale objective' });
+    await vi.waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+    await h.controller.pauseGoal('s1');
+    releaseGet(initial);
+
+    await expect(updatePromise).rejects.toBeInstanceOf(GoalUpdateSupersededError);
+    expect(await h.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+    expect(h.userMessages).toHaveLength(0);
+    expect(h.session.sends).toHaveLength(0);
+  });
+
+  it('returns the authoritative paused goal when Stop wins while a budget edit is hydrating the session', async () => {
+    let ensureCalls = 0;
+    let releaseEnsure!: (session: SessionLike | undefined) => void;
+    const blockedEnsure = new Promise<SessionLike | undefined>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const liveSession = new FakeSession('s1');
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return blockedEnsure;
+      },
+    });
+    await local.storage.set(seededGoal({
+      status: 'budgetLimited',
+      maxTurns: 5,
+      turnsUsed: 5,
+      lastReason: 'max turns reached',
+    }));
+
+    const updatePromise = local.controller.updateGoal('s1', { maxTurns: 6 });
+    await vi.waitFor(() => expect(ensureCalls).toBe(1));
+    await local.controller.pauseGoal('s1');
+    releaseEnsure(liveSession);
+
+    await expect(updatePromise).resolves.toMatchObject({
+      status: 'paused',
+      maxTurns: 6,
+    });
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      maxTurns: 6,
+    });
+    expect(local.updates.at(-1)?.goal).toMatchObject({ status: 'paused', maxTurns: 6 });
+    expect(liveSession.sends).toHaveLength(0);
+  });
+
+  it('returns and re-emits the committed objective when a turn finalizes during marker persistence', async () => {
+    let updatedMarkerCalls = 0;
+    let releaseMarker!: () => void;
+    const blockedMarker = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    const local = makeController({
+      persistUserMessage: async (_sessionId, _content, opts) => {
+        if (opts?.goalObjective?.updated) {
+          updatedMarkerCalls += 1;
+          await blockedMarker;
+        }
+      },
+    });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+
+    const updatePromise = local.controller.updateGoal('s1', { objective: 'updated objective' });
+    await vi.waitFor(() => expect(updatedMarkerCalls).toBe(1));
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```',
+      tokens: 25,
+    });
+    await vi.waitFor(async () => {
+      expect((await local.storage.get('s1'))?.turnsUsed).toBe(1);
+    });
+    releaseMarker();
+
+    await expect(updatePromise).resolves.toMatchObject({
+      objective: 'updated objective',
+      turnsUsed: 1,
+    });
+    expect(updatedMarkerCalls).toBe(1);
+    expect(local.updates.at(-1)?.goal).toMatchObject({
+      objective: 'updated objective',
+      turnsUsed: 1,
+    });
+  });
+
+  it('rejects a committed update when a turn refinement supersedes its objective', async () => {
+    let requestedMarkerCalls = 0;
+    let refinedMarkerCalls = 0;
+    let releaseRequestedMarker!: () => void;
+    const blockedRequestedMarker = new Promise<void>((resolve) => {
+      releaseRequestedMarker = resolve;
+    });
+    const local = makeController({
+      persistUserMessage: async (_sessionId, content, opts) => {
+        if (!opts?.goalObjective?.updated) return;
+        if (content === 'requested objective') {
+          requestedMarkerCalls += 1;
+          await blockedRequestedMarker;
+        } else if (content === 'refined by turn') {
+          refinedMarkerCalls += 1;
+        }
+      },
+    });
+    await local.controller.setGoal({ sessionId: 's1', objective: 'old objective' });
+
+    const updatePromise = local.controller.updateGoal('s1', { objective: 'requested objective' });
+    await vi.waitFor(() => expect(requestedMarkerCalls).toBe(1));
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson:
+        '```json\n{"goal_status":"continue","reason":"clarified","refined_objective":"refined by turn"}\n```',
+      tokens: 25,
+    });
+    await vi.waitFor(async () => {
+      expect((await local.storage.get('s1'))?.objective).toBe('refined by turn');
+      expect(refinedMarkerCalls).toBe(1);
+    });
+    releaseRequestedMarker();
+
+    await expect(updatePromise).rejects.toBeInstanceOf(GoalUpdateSupersededError);
+    expect(await local.storage.get('s1')).toMatchObject({
+      objective: 'refined by turn',
+      turnsUsed: 1,
+    });
   });
 
   // ── active-goal lifecycle ──
@@ -1719,6 +1876,74 @@ describe('GoalController', () => {
     expect(st?.status).toBe('active');
     expect(st?.usageResetAt).toBeNull(); // resume 清掉
     expect(h.session.sends.length).toBeGreaterThanOrEqual(2); // 自动续了一轮
+  });
+
+  it('Stop cancels auto-resume while session hydration is pending without persisting a recovery notice', async () => {
+    let ensureCalls = 0;
+    let releaseEnsure!: (session: SessionLike | undefined) => void;
+    const blockedEnsure = new Promise<SessionLike | undefined>((resolve) => {
+      releaseEnsure = resolve;
+    });
+    const liveSession = new FakeSession('s1');
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => {
+        ensureCalls += 1;
+        return blockedEnsure;
+      },
+    });
+    await local.storage.set(seededGoal({
+      status: 'usageLimited',
+      usageResetAt: 1_000,
+      lastReason: 'usage limit reached',
+    }));
+
+    const autoResume = (
+      local.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await vi.waitFor(() => expect(ensureCalls).toBe(1));
+    await local.controller.pauseGoal('s1');
+    releaseEnsure(liveSession);
+    await autoResume;
+
+    expect(local.notices).toEqual([]);
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'paused' });
+    expect(local.updates.at(-1)?.goal?.status).toBe('paused');
+    expect(liveSession.sends).toHaveLength(0);
+  });
+
+  it('Stop prevents resume and dispatch when recovery notice persistence is pending', async () => {
+    let noticeCalls = 0;
+    let releaseNotice!: () => void;
+    const blockedNotice = new Promise<void>((resolve) => {
+      releaseNotice = resolve;
+    });
+    const liveSession = new FakeSession('s1');
+    const local = makeController({
+      getSession: () => liveSession,
+      ensureSession: async () => liveSession,
+      persistGoalNotice: async () => {
+        noticeCalls += 1;
+        await blockedNotice;
+      },
+    });
+    await local.storage.set(seededGoal({
+      status: 'usageLimited',
+      usageResetAt: 1_000,
+      lastReason: 'usage limit reached',
+    }));
+
+    const autoResume = (
+      local.controller as unknown as { autoResumeFromUsageLimit(id: string): Promise<void> }
+    ).autoResumeFromUsageLimit('s1');
+    await vi.waitFor(() => expect(noticeCalls).toBe(1));
+    await local.controller.pauseGoal('s1');
+    releaseNotice();
+    await autoResume;
+
+    expect(await local.storage.get('s1')).toMatchObject({ status: 'paused' });
+    expect(local.updates.at(-1)?.goal?.status).toBe('paused');
+    expect(liveSession.sends).toHaveLength(0);
   });
 
   it('resumeGoal recovers a usageLimited goal (manual), preserving counts', async () => {
