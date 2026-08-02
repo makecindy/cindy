@@ -38,16 +38,21 @@ const harness = vi.hoisted(() => {
     syncMaterialized: false,
     activateSync: vi.fn(() => emptyState),
     prepareDatabase: vi.fn(async () => ({ materialized: harness.syncMaterialized })),
-    decoderAccept: vi.fn(async (...args: unknown[]) => {
+    decoderAccept: vi.fn(async (...args: unknown[]): Promise<unknown> => {
       void args;
       return null;
     }),
     broadcastContactsChanged: vi.fn(),
     wireFrames,
-    encodeContactsSyncMessage: vi.fn(async (options?: { signal?: AbortSignal }) => {
-      void options;
-      return { frames: wireFrames, materialized: false };
-    }),
+    encodeContactsSyncMessage: vi.fn(
+      async (options?: {
+        database?: { peerSupportsMergeRedirects?: boolean };
+        signal?: AbortSignal;
+      }) => {
+        void options;
+        return { frames: wireFrames, materialized: false };
+      },
+    ),
     peerPublicKey: 'peer-public' as string | null,
     prepareKeyStore: vi.fn(async (): Promise<void> => undefined),
     pinPeerPublicKey: vi.fn(async (_: string, publicKey: string) => {
@@ -181,7 +186,7 @@ vi.mock('../wire.js', () => ({
   isContactsSyncWireFrame: (raw: unknown) =>
     typeof raw === 'object' && raw !== null && 'type' in raw,
   ContactsSyncWireDecoder: class {
-    async accept(...args: unknown[]): Promise<null> {
+    async accept(...args: unknown[]): Promise<unknown> {
       return harness.decoderAccept(...args);
     }
     reset(): void {}
@@ -808,6 +813,78 @@ describe('contacts sync runtime ownership', () => {
     await Promise.resolve();
 
     expect(harness.relaySend).not.toHaveBeenCalled();
+  });
+
+  it('sends merge redirects only after the peer declares support in this runtime', async () => {
+    harness.settings.set('owner-a', true);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      mergeClocks: [],
+      requestReply: true,
+      capabilities: ['merge-redirects-v1'],
+    });
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'capable-peer',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(true);
+
+    // 同一 deviceId 若换成旧版运行，缺失 capability 的回包必须立即降级。
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      requestReply: true,
+    });
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'legacy-peer',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
   });
 
   it('responds to an incoming key even after a recent proactive announcement', async () => {

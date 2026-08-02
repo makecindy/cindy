@@ -5,5 +5,5 @@
  * 拉进独立 worker bundle。
  */
 export { MakerContactsStore } from '../store.js';
-export { createContactsSyncDelta } from './merge.js';
+export { createContactsSyncDeliveryState } from './merge.js';
 export type { ContactsSyncState } from './types.js';

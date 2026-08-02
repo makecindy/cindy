@@ -26,7 +26,10 @@ import {
   resolveBetterSqliteModuleEntry,
   resolveBetterSqliteNativeBinding,
 } from '../localDb/betterSqliteFactory.js';
-import type { ContactsSyncDatabaseSource } from './contactsSyncCodec.js';
+import {
+  CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS,
+  type ContactsSyncDatabaseSource,
+} from './contactsSyncCodec.js';
 import { prepareContactsSyncDatabase } from './contactsSyncCodecWorkerClient.js';
 import { contactsSyncKeyStore } from './keyStore.js';
 import { LanContactsSyncTransport } from './lanTransport.js';
@@ -83,6 +86,7 @@ let lan: LanContactsSyncTransport | null = null;
 const decoder = new ContactsSyncWireDecoder();
 const peerKnownClocks = new Map<string, ContactsSyncClock[]>();
 const peerKnownMergeClocks = new Map<string, ContactsSyncClock[]>();
+const peersSupportingMergeRedirects = new Set<string>();
 let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
 let syncAttemptTimer: NodeJS.Timeout | null = null;
@@ -124,6 +128,7 @@ const outbound = new ContactsSyncOutbound({
   getDatabaseSource: getContactsSyncDatabaseSource,
   getKnownClocks: (deviceId) => peerKnownClocks.get(deviceId),
   getKnownMergeClocks: (deviceId) => peerKnownMergeClocks.get(deviceId),
+  peerSupportsMergeRedirects: (deviceId) => peersSupportingMergeRedirects.has(deviceId),
   onLocalMaterialized: () => broadcastContactsChanged({ origin: 'remote' }),
   announceKey,
   onError: recordError,
@@ -180,6 +185,7 @@ export function stopContactsDeviceSyncRuntime(): void {
   respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
   peerKnownMergeClocks.clear();
+  peersSupportingMergeRedirects.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);
@@ -412,6 +418,8 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
   if (requestReply) {
     peerKnownClocks.clear();
     peerKnownMergeClocks.clear();
+    // 强制同步也承担重新协商：同一 deviceId 可能已降级为旧版客户端。
+    peersSupportingMergeRedirects.clear();
   }
   // DB-bound encode 有意串行：N 台在线设备不应把正常 fan-out 塞爆全局 worker 队列。
   for (const peer of peers) {
@@ -555,6 +563,8 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
       const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
       if (!isCurrent() || !deviceLinkOwnerActive || !transport?.isPeerAllowed(srcDeviceId)) return;
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
+      // key 握手表示新的运行连接；不能沿用该 deviceId 上一次运行的能力。
+      peersSupportingMergeRedirects.delete(srcDeviceId);
       respondToKey(srcDeviceId);
       startLan();
       runSyncTask(() => outbound.send(srcDeviceId, true));
@@ -603,6 +613,12 @@ function handleIncomingCipherFrame(
     } else {
       // 缺字段表示旧客户端：不能把它对普通 clocks 的确认当作 merge redirect 确认。
       peerKnownMergeClocks.delete(srcDeviceId);
+    }
+    if (message.capabilities?.includes(CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS)) {
+      peersSupportingMergeRedirects.add(srcDeviceId);
+    } else {
+      // 每条消息都重新确认，防止同一 deviceId 降级后沿用旧能力。
+      peersSupportingMergeRedirects.delete(srcDeviceId);
     }
     recordSuccessfulSync(srcDeviceId, route);
     if (message.changed) {
@@ -936,6 +952,7 @@ function ensureCurrentOwnerStatus(): void {
   respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
   peerKnownMergeClocks.clear();
+  peersSupportingMergeRedirects.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);

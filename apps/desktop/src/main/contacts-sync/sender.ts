@@ -34,6 +34,7 @@ interface ContactsSyncOutboundDependencies {
   getDatabaseSource(): ContactsSyncDatabaseSource;
   getKnownClocks(deviceId: string): ContactsSyncClock[] | undefined;
   getKnownMergeClocks(deviceId: string): ContactsSyncClock[] | undefined;
+  peerSupportsMergeRedirects(deviceId: string): boolean;
   onLocalMaterialized(): void;
   announceKey(deviceId: string): void;
   onError(error: unknown): void;
@@ -111,6 +112,7 @@ export class ContactsSyncOutbound {
         source: this.deps.getDatabaseSource(),
         ...(knownClocks ? { knownClocks } : {}),
         ...(knownMergeClocks ? { knownMergeClocks } : {}),
+        peerSupportsMergeRedirects: this.deps.peerSupportsMergeRedirects(deviceId),
         ...(requestReply ? { requestReply: true } : {}),
       },
       ownPrivateKey: identity.privateKey,

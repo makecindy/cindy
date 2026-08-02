@@ -6,6 +6,7 @@ import type { Logger } from "../../interfaces/logger.js";
 import { MakerContactsStore } from "../store.js";
 import {
   createContactsSyncDelta,
+  createContactsSyncDeliveryState,
   mergeContactsSyncStates,
 } from "../sync/merge.js";
 import { materializeContactsSyncState } from "../sync/materialize.js";
@@ -155,6 +156,114 @@ describe("contacts device sync", () => {
     ).toEqual(["apple-on-b"]);
   });
 
+  it("未知旧端先保留 merge source，升级声明能力后再原子迁移本机锚点", () => {
+    const current = createStore();
+    const legacy = createStore();
+    current.activateDeviceSync();
+    legacy.activateDeviceSync();
+
+    const target = current.createContact({
+      kind: "person",
+      displayName: "合并目标",
+    });
+    const source = current.createContact({
+      kind: "person",
+      displayName: "旧端锚点来源",
+    });
+    exchange(legacy, current);
+    legacy.addIdentity(source.id, {
+      platform: "apple-contacts",
+      value: "apple-on-legacy",
+    });
+    const legacyBeforeMerge = stateOf(legacy);
+
+    current.merge(target.id, source.id);
+    const currentAfterMerge = stateOf(current);
+    const fullSafeForUnknownPeer = createContactsSyncDeliveryState(
+      currentAfterMerge,
+      { peerSupportsMergeRedirects: false },
+    );
+    expect(fullSafeForUnknownPeer.merges).toBeUndefined();
+    expect(fullSafeForUnknownPeer.mergeClocks).toBeUndefined();
+    expect(
+      fullSafeForUnknownPeer.contacts.some(
+        (contact) => contact.id === source.id && contact.deleted !== undefined,
+      ),
+    ).toBe(false);
+
+    const safeForUnknownPeer = createContactsSyncDeliveryState(
+      currentAfterMerge,
+      {
+        knownClocks: legacyBeforeMerge.clocks,
+        peerSupportsMergeRedirects: false,
+      },
+    );
+    expect(safeForUnknownPeer.merges).toBeUndefined();
+    expect(safeForUnknownPeer.mergeClocks).toBeUndefined();
+    expect(
+      safeForUnknownPeer.contacts.some(
+        (contact) => contact.id === source.id && contact.deleted !== undefined,
+      ),
+    ).toBe(false);
+
+    // 模拟旧客户端：会忽略能力字段，但能安全物化这个删去新字段的状态。
+    legacy.mergeDeviceSyncState(safeForUnknownPeer);
+    expect(
+      legacy
+        .getContact(source.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["apple-on-legacy"]);
+    expect(
+      legacy
+        .getContact(target.id)
+        .identities.filter(
+          (identity) => identity.platform === "apple-contacts",
+        ),
+    ).toEqual([]);
+
+    // 同一设备升级并明确声明能力后，独立 merge 时钟尚未确认，sender 会把
+    // redirect、mergeClocks 与 source tombstone 作为一个交付单元补发。
+    const legacyAfterUpgrade = stateOf(legacy);
+    const safeForUpgradedPeer = createContactsSyncDeliveryState(
+      currentAfterMerge,
+      {
+        knownClocks: legacyAfterUpgrade.clocks,
+        knownMergeClocks: legacyAfterUpgrade.mergeClocks,
+        peerSupportsMergeRedirects: true,
+      },
+    );
+    expect(safeForUpgradedPeer.merges?.map((merge) => merge.id)).toContain(
+      source.id,
+    );
+    expect(safeForUpgradedPeer.mergeClocks).toEqual(
+      currentAfterMerge.mergeClocks,
+    );
+    expect(
+      safeForUpgradedPeer.contacts.some(
+        (contact) => contact.id === source.id && contact.deleted !== undefined,
+      ),
+    ).toBe(true);
+    legacy.mergeDeviceSyncState(safeForUpgradedPeer);
+
+    expect(() => legacy.getContact(source.id)).toThrow("contact not found");
+    expect(
+      legacy
+        .getContact(target.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["apple-on-legacy"]);
+    const legacyDb = databases.at(-1)!;
+    expect(
+      legacyDb
+        .prepare(
+          `SELECT contact_id, value FROM contact_identities
+           WHERE platform = 'apple-contacts'`,
+        )
+        .all(),
+    ).toEqual([{ contact_id: target.id, value: "apple-on-legacy" }]);
+  });
+
   it("只有姓名与本机锚点的 source 也凭显式 merge 证据迁到最终 target", () => {
     const a = createStore();
     const b = createStore();
@@ -250,7 +359,10 @@ describe("contacts device sync", () => {
     a.activateDeviceSync();
     b.activateDeviceSync();
     const target = a.createContact({ kind: "person", displayName: "已有锚点" });
-    const source = a.createContact({ kind: "person", displayName: "待迁移锚点" });
+    const source = a.createContact({
+      kind: "person",
+      displayName: "待迁移锚点",
+    });
     exchange(b, a);
     b.addIdentity(source.id, {
       platform: "apple-contacts",
@@ -297,7 +409,9 @@ describe("contacts device sync", () => {
     expect(
       b
         .getContact(target.id)
-        .identities.filter((identity) => identity.platform === "apple-contacts"),
+        .identities.filter(
+          (identity) => identity.platform === "apple-contacts",
+        ),
     ).toEqual([]);
   });
 
@@ -359,10 +473,16 @@ describe("contacts device sync", () => {
     });
 
     a.deleteContact(person.id);
-    const legacyDelete = structuredClone(stateOf(a));
-    delete legacyDelete.merges;
-    delete legacyDelete.deletions;
-    delete legacyDelete.mergeClocks;
+    const legacyDelete = createContactsSyncDeliveryState(stateOf(a), {
+      peerSupportsMergeRedirects: false,
+    });
+    expect(legacyDelete.deletions).toBeUndefined();
+    expect(legacyDelete.mergeClocks).toBeUndefined();
+    expect(
+      legacyDelete.contacts.some(
+        (contact) => contact.id === person.id && contact.deleted !== undefined,
+      ),
+    ).toBe(true);
     b.mergeDeviceSyncState(legacyDelete);
 
     expect(() => b.getContact(person.id)).toThrow("contact not found");
@@ -415,7 +535,9 @@ describe("contacts device sync", () => {
         appleId: "anchor-before-upgrade",
       }),
     ]);
-    expect(b.recoverPendingSystemAnchor(pending[0]!.id, target.id)).toMatchObject({
+    expect(
+      b.recoverPendingSystemAnchor(pending[0]!.id, target.id),
+    ).toMatchObject({
       pendingId: pending[0]!.id,
       targetContactId: target.id,
       action: "recovered",

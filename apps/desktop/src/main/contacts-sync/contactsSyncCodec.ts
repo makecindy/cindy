@@ -24,12 +24,15 @@ import {
 export const CONTACTS_SYNC_MAX_COMPRESSED_BYTES =
   CONTACTS_SYNC_CHUNK_BYTES * CONTACTS_SYNC_MAX_CHUNKS;
 export const CONTACTS_SYNC_MAX_DECOMPRESSED_BYTES = 128 * 1024 * 1024;
+export const CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS = 'merge-redirects-v1';
 
 export interface ContactsSyncStateMessage {
   version: 1;
   type: 'state';
   state: unknown;
   requestReply?: boolean;
+  /** 可选以兼容旧客户端；每条消息都声明本次运行实际支持的能力。 */
+  capabilities?: string[];
 }
 
 interface ContactsSyncEncodeCommonOptions {
@@ -57,6 +60,8 @@ export interface ContactsSyncDatabaseEncodeOptions extends ContactsSyncEncodeCom
     source: ContactsSyncDatabaseSource;
     knownClocks?: ContactsSyncClock[];
     knownMergeClocks?: ContactsSyncClock[];
+    /** 未提供时按未知旧端处理，禁止发送 merge redirect 交付单元。 */
+    peerSupportsMergeRedirects?: boolean;
     requestReply?: boolean;
   };
 }
@@ -84,6 +89,7 @@ export interface ContactsSyncAppliedStateResult {
   clocks: ContactsSyncClock[];
   mergeClocks?: ContactsSyncClock[];
   requestReply?: boolean;
+  capabilities?: string[];
 }
 
 export type ContactsSyncDecodeResult = ContactsSyncStateMessage | ContactsSyncAppliedStateResult;
@@ -229,7 +235,8 @@ export function isContactsSyncStateMessage(value: unknown): value is ContactsSyn
     value.version === 1 &&
     value.type === 'state' &&
     value.state !== undefined &&
-    (value.requestReply === undefined || typeof value.requestReply === 'boolean')
+    (value.requestReply === undefined || typeof value.requestReply === 'boolean') &&
+    isContactsSyncCapabilities(value.capabilities)
   );
 }
 
@@ -240,6 +247,22 @@ export const inProcessContactsSyncCodec: ContactsSyncCodec = {
   },
   decode: async (options) => decodeContactsSyncMessageInProcess(options),
 };
+
+export function isContactsSyncCapabilities(value: unknown): value is string[] | undefined {
+  return (
+    value === undefined ||
+    (Array.isArray(value) &&
+      value.length <= 16 &&
+      new Set(value).size === value.length &&
+      value.every(
+        (capability) =>
+          typeof capability === 'string' &&
+          capability.length >= 1 &&
+          capability.length <= 64 &&
+          /^[a-z0-9-]+$/.test(capability),
+      ))
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null && !Array.isArray(value);

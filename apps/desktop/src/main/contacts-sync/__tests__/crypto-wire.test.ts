@@ -76,7 +76,13 @@ describe('contacts sync crypto and wire', () => {
     const state = { opaqueTestData: randomBytes(600_000).toString('base64') };
     const frames = await encodeContactsSyncMessage(
       {
-        message: { version: 1, type: 'state', state, requestReply: true },
+        message: {
+          version: 1,
+          type: 'state',
+          state,
+          requestReply: true,
+          capabilities: ['merge-redirects-v1'],
+        },
         ownPrivateKey: a.privateKey,
         ownPublicKey: a.publicKey,
         peerPublicKey: b.publicKey,
@@ -100,7 +106,13 @@ describe('contacts sync crypto and wire', () => {
           expectedPeerPublicKey: a.publicKey,
         })) ?? result;
     }
-    expect(result).toEqual({ version: 1, type: 'state', state, requestReply: true });
+    expect(result).toEqual({
+      version: 1,
+      type: 'state',
+      state,
+      requestReply: true,
+      capabilities: ['merge-redirects-v1'],
+    });
   });
 
   it('篡改目标设备、分片元数据或密文都会认证失败', async () => {

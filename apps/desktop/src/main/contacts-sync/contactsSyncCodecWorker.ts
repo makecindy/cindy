@@ -3,12 +3,13 @@ import { parentPort } from 'node:worker_threads';
 import { createRequire } from 'node:module';
 import type Database from 'better-sqlite3';
 import {
-  createContactsSyncDelta,
+  createContactsSyncDeliveryState,
   MakerContactsStore,
   type ContactsSyncState,
 } from '@cindy/maker-core/contacts-sync-worker';
 
 import {
+  CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS,
   decodeContactsSyncMessageInProcess,
   encodeContactsSyncJsonInProcess,
   type ContactsSyncDatabaseSource,
@@ -72,18 +73,19 @@ function encodeRequest(
   return withContactsStore(options.database.source, (store) => {
     throwIfCancelled(request);
     const result = store.prepareDeviceSyncStateForTransfer();
-    const state = options.database.knownClocks
-      ? createContactsSyncDelta(
-          result.state,
-          options.database.knownClocks,
-          options.database.knownMergeClocks,
-        )
-      : result.state;
+    const state = createContactsSyncDeliveryState(result.state, {
+      ...(options.database.knownClocks ? { knownClocks: options.database.knownClocks } : {}),
+      ...(options.database.knownMergeClocks
+        ? { knownMergeClocks: options.database.knownMergeClocks }
+        : {}),
+      peerSupportsMergeRedirects: options.database.peerSupportsMergeRedirects === true,
+    });
     throwIfCancelled(request);
     const message = {
       version: 1 as const,
       type: 'state' as const,
       state,
+      capabilities: [CONTACTS_SYNC_CAPABILITY_MERGE_REDIRECTS],
       ...(options.database.requestReply ? { requestReply: true } : {}),
     };
     return encodeContactsSyncJsonInProcess(
@@ -115,6 +117,7 @@ function decodeRequest(
         ? { mergeClocks: state.mergeClocks.map((clock) => ({ ...clock })) }
         : {}),
       ...(message.requestReply ? { requestReply: true } : {}),
+      ...(message.capabilities ? { capabilities: [...message.capabilities] } : {}),
     };
   });
 }

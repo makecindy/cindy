@@ -109,6 +109,7 @@ describe('contacts sync codec worker client', () => {
         source: { dbPath: '/tmp/contacts.db' },
         knownClocks: [{ nodeId: 'node-a', counter: 2 }],
         knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
+        peerSupportsMergeRedirects: true,
         requestReply: true,
       },
       ownPrivateKey: own.privateKey,
@@ -125,6 +126,7 @@ describe('contacts sync codec worker client', () => {
         database: {
           source: { dbPath: '/tmp/contacts.db' },
           knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
+          peerSupportsMergeRedirects: true,
         },
       },
     });
@@ -175,6 +177,34 @@ describe('contacts sync codec worker client', () => {
       type: 'applied-state',
       changed: true,
       clocks,
+    };
+    const own = generateContactsSyncIdentity();
+    const peer = generateContactsSyncIdentity();
+
+    await expect(
+      workerContactsSyncCodec.decode({
+        ciphertext: new Uint8Array([1, 2, 3]),
+        iv: Buffer.alloc(12).toString('base64'),
+        tag: Buffer.alloc(16).toString('base64'),
+        ownPrivateKey: own.privateKey,
+        expectedPeerPublicKey: peer.publicKey,
+        srcDeviceId: 'device-b',
+        dstDeviceId: 'device-a',
+        transferId: randomUUID(),
+        totalChunks: 1,
+        databaseSource: { dbPath: '/tmp/contacts.db' },
+      }),
+    ).rejects.toThrow(/invalid contacts sync decode result/);
+  });
+
+  it('rejects malformed applied-state capabilities', async () => {
+    harness.respond = true;
+    harness.responseData = {
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      capabilities: ['merge-redirects-v1', 'merge-redirects-v1'],
     };
     const own = generateContactsSyncIdentity();
     const peer = generateContactsSyncIdentity();

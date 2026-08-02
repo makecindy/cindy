@@ -13,6 +13,7 @@ import { isValidContactsSyncPublicKey } from './crypto.js';
 import {
   CONTACTS_SYNC_MAX_COMPRESSED_BYTES,
   createContactsSyncFrames,
+  isContactsSyncCapabilities,
   isContactsSyncStateMessage,
   type ContactsSyncAppliedStateResult,
   type ContactsSyncCodec,
@@ -363,7 +364,8 @@ function isAppliedStateResult(value: unknown): value is ContactsSyncAppliedState
     typeof result.changed === 'boolean' &&
     isClockArray(result.clocks) &&
     (result.mergeClocks === undefined || isClockArray(result.mergeClocks)) &&
-    (result.requestReply === undefined || typeof result.requestReply === 'boolean')
+    (result.requestReply === undefined || typeof result.requestReply === 'boolean') &&
+    isContactsSyncCapabilities(result.capabilities)
   );
 }
 

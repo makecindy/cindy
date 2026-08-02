@@ -304,3 +304,49 @@ export function createContactsSyncDelta(
     deletions,
   };
 }
+
+export interface ContactsSyncDeliveryOptions {
+  knownClocks?: ContactsSyncClock[];
+  knownMergeClocks?: ContactsSyncClock[];
+  /** 只有对端本次运行明确声明能力后，才允许发送 merge redirect 交付单元。 */
+  peerSupportsMergeRedirects: boolean;
+}
+
+/**
+ * 为单个对端生成安全交付状态。
+ *
+ * merge redirect、独立确认时钟与 source tombstone 是一个不可拆分的交付单元。
+ * 未知或旧客户端会忽略前两项却物化 tombstone，因此在对端明确声明能力前，
+ * 必须同时隐藏三者。普通真实删除仍按既有 tombstone 语义向旧客户端收敛；
+ * 新客户端完成能力握手后会收到对应 deletion evidence。
+ */
+export function createContactsSyncDeliveryState(
+  state: ContactsSyncState,
+  options: ContactsSyncDeliveryOptions,
+): ContactsSyncState {
+  const delivery = options.knownClocks
+    ? createContactsSyncDelta(
+        state,
+        options.knownClocks,
+        options.knownMergeClocks,
+      )
+    : state;
+  if (options.peerSupportsMergeRedirects) return delivery;
+
+  const mergeSourceIds = new Set(
+    (state.merges ?? [])
+      .filter((merge) => merge.deleted === undefined)
+      .map((merge) => merge.id),
+  );
+  const legacySafeDelivery = { ...delivery };
+  delete legacySafeDelivery.mergeClocks;
+  delete legacySafeDelivery.merges;
+  delete legacySafeDelivery.deletions;
+  return {
+    ...legacySafeDelivery,
+    contacts: delivery.contacts.filter(
+      (contact) =>
+        contact.deleted === undefined || !mergeSourceIds.has(contact.id),
+    ),
+  };
+}
