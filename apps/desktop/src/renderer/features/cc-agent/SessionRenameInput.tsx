@@ -182,7 +182,12 @@ export function SessionRenameInput({
           if (applyingInitialFocusRef.current) return;
           setKeyboardFocusVisible(!pointerFocusRef.current);
         }}
-        onBlur={() => setKeyboardFocusVisible(false)}
+        onBlur={() => {
+          // pointerup 可能落在 input 外（例如按下后拖出再松开），因此不能只靠
+          // onPointerUp / onPointerCancel 清理；否则后续 Shift+Tab 回来会被误判为鼠标聚焦。
+          pointerFocusRef.current = false;
+          setKeyboardFocusVisible(false);
+        }}
         onPointerDown={() => {
           pointerFocusRef.current = true;
           setKeyboardFocusVisible(false);

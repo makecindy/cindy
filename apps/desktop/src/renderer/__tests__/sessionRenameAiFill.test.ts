@@ -117,6 +117,35 @@ describe('SessionRenameInput AI rename fills edit state', () => {
     expect(button.classList.contains('hover:text-sidebar-item-active-foreground')).toBe(true);
   });
 
+  it('clears a stale pointer-focus marker when the input blurs before pointerup', () => {
+    const onCommit = vi.fn();
+    const { container } = render(
+      createElement(SessionRenameInput, {
+        sessionId: 's1',
+        value: '旧标题',
+        onValueChange: () => {},
+        onCommit,
+        onCancel: () => {},
+      }),
+    );
+
+    const input = container.querySelector('input')!;
+    const button = container.querySelector('button')!;
+
+    // 指针在 input 按下后拖出，pointerup 不再落回 input；Tab 到 Magic 时的 blur
+    // 必须清掉该标记，Shift+Tab 回来仍应识别为键盘聚焦并显示蓝环。
+    fireEvent.pointerDown(input);
+    fireEvent.blur(input, { relatedTarget: button });
+    fireEvent.focus(button);
+    fireEvent.pointerUp(button);
+    fireEvent.blur(button, { relatedTarget: input });
+    fireEvent.focus(input);
+
+    expect(input.classList.contains('ring-2')).toBe(true);
+    expect(input.classList.contains('ring-[var(--focus-ring-soft)]')).toBe(true);
+    expect(onCommit).not.toHaveBeenCalled();
+  });
+
   it('generated title fills the input without committing; Enter commits it', async () => {
     const onCommit = vi.fn();
     const { input, container } = await renderAndGenerate(onCommit, () => {});
