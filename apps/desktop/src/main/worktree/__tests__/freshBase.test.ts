@@ -116,6 +116,55 @@ describe('resolveFreshSourceBranch', () => {
     expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
   });
 
+  it('ls-remote 挂满耗尽总预算 → 不再发起 fetch,退用本地已有远端 ref', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.impl = (args) => {
+        const key = args.join(' ');
+        if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+        if (key.startsWith('ls-remote')) {
+          // 模拟离线挂满:整个总预算被 ls-remote 耗光
+          vi.setSystemTime(Date.now() + 15_000);
+          return undefined;
+        }
+        if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+        if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+        return undefined;
+      };
+      const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+      expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+      // 预算耗尽后不得以全新预算发起第二次网络操作
+      expect(call('fetch')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('ls-remote 耗掉部分预算 → fetch 只拿剩余预算,不是全新 15s', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.impl = (args) => {
+        const key = args.join(' ');
+        if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+        if (key.startsWith('ls-remote')) {
+          vi.setSystemTime(Date.now() + 10_000);
+          return undefined;
+        }
+        if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+        if (key === 'fetch --quiet origin main') return '';
+        if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+        return undefined;
+      };
+      const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+      expect(res.fetched).toBe(true);
+      const fetchOpts = call('fetch')?.opts;
+      expect(fetchOpts?.timeoutMs).toBeGreaterThan(0);
+      expect(fetchOpts?.timeoutMs).toBeLessThanOrEqual(5_000);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('无任何 remote → 回退 fallback', async () => {
     mocks.impl = () => undefined;
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');

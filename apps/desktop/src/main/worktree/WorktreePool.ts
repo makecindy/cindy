@@ -13,6 +13,7 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 
 import { gitExec } from './gitExec';
+import { boundedNetworkGitOpts, NET_TOTAL_BUDGET_MS } from './freshBase';
 import { isWorktreeDirty } from './dirty';
 import { copyClaudeSiviDirs } from './WorktreeManager';
 import * as WorktreeManager from './WorktreeManager';
@@ -54,6 +55,11 @@ function repoKey(baseRepo: string): string {
  */
 export async function acquireWorktree(
   req: CreateWorktreeReq,
+  opts?: {
+    /** 调用方(如 scheduler 路径的 resolveFreshSourceBranch)刚 fetch 过 sourceBranch:
+     * 池复用重置时跳过二次 fetch,避免重复网络请求。 */
+    sourceBranchFreshlyFetched?: boolean;
+  },
 ): Promise<CreateWorktreeResp> {
   const key = repoKey(req.baseRepo);
   inflight.add(key);
@@ -65,7 +71,7 @@ export async function acquireWorktree(
 
       const newBranch = getBranchName(req.name);
       try {
-        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch);
+        await resetWorktree(entry.meta.path, entry.meta.baseRepo, req.sourceBranch, newBranch, opts);
 
         const meta: WorktreeMeta = {
           ...entry.meta,
@@ -115,17 +121,25 @@ async function resetWorktree(
   baseRepo: string,
   sourceBranch: string,
   newBranch: string,
+  opts?: { sourceBranchFreshlyFetched?: boolean },
 ): Promise<void> {
   // 防御性断言：池中 worktree 理论上必定 clean
   if (await isWorktreeDirty(worktreePath)) {
     throw new Error(`[WorktreePool] BUG: attempted to reset dirty worktree at ${worktreePath}`);
   }
 
-  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新
-  if (sourceBranch.startsWith('origin/')) {
+  // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新。
+  //    调用方声明刚 fetch 过时跳过(scheduler 路径 freshBase 数百 ms 前刚拉过,二次
+  //    fetch 纯浪费);fetch 本身受限(真超时 + 禁终端凭证提问),失败非致命退 stale
+  //    ref——池化复用不允许被网络或凭证 helper 无限卡住。
+  if (!opts?.sourceBranchFreshlyFetched && sourceBranch.startsWith('origin/')) {
     const remoteBranch = sourceBranch.slice('origin/'.length);
     try {
-      await gitExec(['fetch', 'origin', remoteBranch], baseRepo);
+      await gitExec(
+        ['fetch', 'origin', remoteBranch],
+        baseRepo,
+        boundedNetworkGitOpts(NET_TOTAL_BUDGET_MS),
+      );
     } catch (err) {
       log.warn(
         `[WorktreePool] git fetch failed (non-fatal, using stale ref):`,

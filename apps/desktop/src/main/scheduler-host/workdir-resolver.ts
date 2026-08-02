@@ -49,13 +49,17 @@ export async function resolveWorkingDir(
   const sourceBranch = fresh.sourceBranch;
 
   const name = `sched-${sessionId.slice(0, 8)}`;
-  const res = await WorktreePool.acquireWorktree({
-    sessionId,
-    name,
-    baseRepo: schedule.workingDir,
-    sourceBranch,
-    ephemeral: true,
-  });
+  const res = await WorktreePool.acquireWorktree(
+    {
+      sessionId,
+      name,
+      baseRepo: schedule.workingDir,
+      sourceBranch,
+      ephemeral: true,
+    },
+    // freshBase 刚 fetch 过时,池复用路径不再二次 fetch
+    { sourceBranchFreshlyFetched: fresh.fetched },
+  );
   if (!res.ok) return { ok: false, error: res.error.message };
   return {
     ok: true,
