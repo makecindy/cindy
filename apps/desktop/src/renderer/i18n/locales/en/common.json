@@ -2356,7 +2356,7 @@
         "toggleFailed": "Failed to switch browser target",
         "health": {
           "ready": "Embedded browser control is connected.",
-          "error": "Embedded browser connection failed: {{reason}}. Choose “Recover” to rebuild the control connection.",
+          "error": "Embedded browser connection failed: {{reason}}. Choose “Recover Browser” to rebuild the control connection.",
           "reasons": {
             "disposing": "the previous shutdown has not completed",
             "hostUnavailable": "the embedded browser interface is not ready or its connection was lost",
@@ -2364,9 +2364,9 @@
             "statusFailed": "the controller status check failed",
             "recoveryFailed": "the control connection could not be rebuilt"
           },
-          "reconnect": "Reconnect",
-          "recover": "Recover",
-          "recovering": "Recovering…",
+          "reconnect": "Reconnect Browser",
+          "recover": "Recover Browser",
+          "recovering": "Recovering Browser…",
           "recovered": "Embedded browser reconnected",
           "recoverFailed": "Failed to recover the embedded browser. Review the reason and try again."
         },
