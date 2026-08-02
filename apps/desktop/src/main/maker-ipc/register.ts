@@ -2598,7 +2598,7 @@ async function pauseGoalBeforeExplicitStop(sessionId: string): Promise<void> {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
-    throw err;
+    throwIpcError('INTERNAL', 'Failed to persist the stopped Goal state');
   }
 }
 // (Option B)用户答完 AskUserQuestion 时,把结构化答案 + 本次问题(含选项)交给 goal controller

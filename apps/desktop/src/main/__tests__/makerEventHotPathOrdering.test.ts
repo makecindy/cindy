@@ -362,7 +362,10 @@ describe('maker:event hot path ordering', () => {
     expect(goalPauseSource).toContain('catch (err)');
     expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
     expect(goalPauseSource).toContain("log.error('goal pause persistence failed during explicit stop'");
-    expect(goalPauseSource).toContain('throw err;');
+    expect(goalPauseSource).toContain(
+      "throwIpcError('INTERNAL', 'Failed to persist the stopped Goal state');",
+    );
+    expect(goalPauseSource).not.toContain('throw err;');
     expect(goalPauseSource).not.toContain('Promise.race');
     expect(goalPauseSource).not.toContain('setTimeout');
     expect(directAbortSource).toContain('const goalPauseResult = goalPause.then(');
