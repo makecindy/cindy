@@ -88,6 +88,13 @@ describe('AgentTaskCard subagent model chip (codex collab)', () => {
     expect(chipText(container)).toBeNull();
   });
 
+  it('keeps the minimal effort badge (protocol-legal even though settings whitelist omits it)', () => {
+    const { container } = render(
+      <AgentTaskCard toolCall={collabToolCall({ prompt: 'p', reasoningEffort: 'minimal' })} />,
+    );
+    expect(chipText(container)).toBe('effortLevels.minimal');
+  });
+
   it('ignores unknown effort values instead of leaking raw strings into the UI', () => {
     const { container } = render(
       <AgentTaskCard toolCall={collabToolCall({ prompt: 'p', reasoningEffort: 'bogus' })} />,

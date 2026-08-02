@@ -28,8 +28,11 @@ import {
 import { useSidebarPanelReachable } from '@/features/cc-agent/embeddedSessionNavigation';
 import { cn } from '@/lib/utils';
 import { formatModelShortLabel } from '@/lib/modelShortLabel';
-import { isCodexSubagentEffort } from '../../../shared/subagentModelSettings';
+import { CODEX_SUBAGENT_EFFORTS } from '../../../shared/subagentModelSettings';
 import { subagentSpawnReceiptName } from '@cindy/maker-shared/agent-task';
+
+// 徽标可显示的思考强度档:协议全部合法档(效果词表 effortLevels 四语齐)。
+const EFFORT_BADGE_LEVELS = new Set<string>(['minimal', ...CODEX_SUBAGENT_EFFORTS]);
 
 interface AgentTaskCardProps {
   toolCall?: ChatMessage;
@@ -137,9 +140,11 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
   );
   // codex spawn 可为子代理显式指定思考强度(translator 透传 reasoningEffort);
   // 已知档位才走 effortLevels 词表,未知值不显示。CC 无此参数,行为不变。
+  // 显示集合含 minimal:设置页白名单(CODEX_SUBAGENT_EFFORTS)刻意不含它,但
+  // seed/glm 系模型的 spawn 参数可显式给 minimal(协议合法档),徽标不静默降级。
   const effortRaw = readInputString(toolCall?.toolInput, ['reasoningEffort']);
   const effortLabel =
-    effortRaw && isCodexSubagentEffort(effortRaw) ? t(`effortLevels.${effortRaw}`) : undefined;
+    effortRaw && EFFORT_BADGE_LEVELS.has(effortRaw) ? t(`effortLevels.${effortRaw}`) : undefined;
   const chipLabel = [modelLabel, effortLabel].filter(Boolean).join(' · ');
   const { expanded, setExpanded } = useExpandedBlockMemory(blockId);
   const toggle = useCallback(() => setExpanded((v) => !v), [setExpanded]);
