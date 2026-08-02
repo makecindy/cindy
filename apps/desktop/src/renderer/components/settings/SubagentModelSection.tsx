@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { connectedProvidersForAgent, getModel, isAgentSelectableModel, visibleModelUnion } from '@cindy/model-providers';
+import { connectedProvidersForAgent, effectiveSourceIdForModel, getModel, isAgentSelectableModel, visibleModelUnion } from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -246,12 +246,19 @@ export function SubagentModelSection() {
       if (!isCodexSubagentEffort(effort) || effort === current.codexEffort) return;
       const saved = await persistPatch({ codexEffort: effort });
       // 活跃行编辑走 onEffortChange,ModelSelector 不会代写 modelMemory。保存成功后
-      // 同步全局模型预设,否则切走再切回会恢复旧档位。
-      if (saved && current.codexProviderId) {
-        setProviderModelEffort('codex', current.codexProviderId, current.codex, effort);
+      // 按选择器同一准入口径解析实际来源并同步全局模型预设;providerId=null 是合法
+      // 隐式来源,不能因此漏写,否则切走再切回会恢复旧档位。
+      const memoryProviderId = effectiveSourceIdForModel(
+        providers,
+        current.codexProviderId,
+        current.codex,
+        'codex',
+      );
+      if (saved && memoryProviderId) {
+        setProviderModelEffort('codex', memoryProviderId, current.codex, effort);
       }
     },
-    [persistPatch],
+    [persistPatch, providers],
   );
 
   const resetCard = useCallback(

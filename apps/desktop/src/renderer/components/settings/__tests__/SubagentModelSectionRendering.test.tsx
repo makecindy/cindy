@@ -543,6 +543,23 @@ describe('SubagentModelSection Codex row', () => {
     });
   });
 
+  it('restores the target model preset instead of inheriting the current model effort', async () => {
+    // providerModelMemory 的 SSoT 语义是 per-model preset:当前模型受 live settings
+    // 保护,切到另一模型时必须采用目标行展示的 preset,否则非选中行编辑会被丢弃。
+    settingsGet.mockResolvedValue(
+      makeState({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'high' }),
+    );
+    modelMemoryMock.effortByModel.set('gpt-5.5', 'medium');
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-model-flat'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({
+      codex: 'gpt-5.5',
+      codexProviderId: 'openai',
+      codexEffort: 'medium',
+    });
+  });
+
   it('narrows an unavailable codex provider to null instead of persisting it', async () => {
     render(<SubagentModelSection />);
     fireEvent.click(await screen.findByTestId('codex:pick-stale-provider-row'));
@@ -573,6 +590,22 @@ describe('SubagentModelSection Codex row', () => {
   it('persists an effort-only change for the stored model', async () => {
     settingsGet.mockResolvedValue(
       makeState({ codex: 'gpt-5.6-terra', codexProviderId: 'openai', codexEffort: 'medium' }),
+    );
+    render(<SubagentModelSection />);
+    fireEvent.click(await screen.findByTestId('codex:pick-effort-high'));
+    await waitFor(() => expect(settingsSet).toHaveBeenCalledTimes(1));
+    expect(settingsSet).toHaveBeenCalledWith({ codexEffort: 'high' });
+    expect(modelMemoryMock.setEffort).toHaveBeenCalledWith(
+      'codex',
+      'openai',
+      'gpt-5.6-terra',
+      'high',
+    );
+  });
+
+  it('syncs an effort-only change through the effective source when provider is implicit', async () => {
+    settingsGet.mockResolvedValue(
+      makeState({ codex: 'gpt-5.6-terra', codexProviderId: null, codexEffort: 'medium' }),
     );
     render(<SubagentModelSection />);
     fireEvent.click(await screen.findByTestId('codex:pick-effort-high'));
