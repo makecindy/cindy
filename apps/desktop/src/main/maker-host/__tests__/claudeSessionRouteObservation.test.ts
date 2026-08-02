@@ -44,24 +44,17 @@ vi.mock('../provider-route', () => ({
     gatewayKey ? { headerOverride: { 'x-api-key': gatewayKey } } : null),
 }));
 // bridge 分流用例需要 handler 存在(真模块懒装配依赖订阅凭证环境)。
-// handle 按 bridgeHandleImpl 可编程:失败归因用例需要它写不同的响应状态码。
+// handle 按 bridgeHandleImpl 可编程,用于验证单次 transport 失败不提前落账。
 const bridgeMock = vi.hoisted(() => ({
   bridgeHandleImpl: undefined as
     | ((args: { res: { statusCode: number } }) => Promise<void>)
     | undefined,
-  // SSE 流内错误但 HTTP 状态码仍是 200 的场景(真实包只在 res 走完整个真实
-  // node:http ServerResponse 时才会标记,这里的合成 res 对象拿不到那条真实路径,
-  // 改由本 mock 直接控制返回值,验证 localHandler 确实会去查这个信号)。
-  streamFailure: false,
 }));
 vi.mock('../anthropic-responses-bridge-host', () => ({
   getResponsesBridgeHandler: () => ({
     handle: (args: { res: { statusCode: number } }) =>
       bridgeMock.bridgeHandleImpl ? bridgeMock.bridgeHandleImpl(args) : Promise.resolve(),
   }),
-}));
-vi.mock('@cindy/anthropic-responses-bridge', () => ({
-  wasBridgeStreamFailure: () => bridgeMock.streamFailure,
 }));
 
 import {
@@ -92,7 +85,6 @@ describe('claude session route observation (routing transform ② 段)', () => {
     routeMocks.resolveSessionRouteDecision.mockReset();
     routeMocks.resolveSessionRouteDecision.mockReturnValue(null);
     bridgeMock.bridgeHandleImpl = undefined;
-    bridgeMock.streamFailure = false;
     setClaudeProxyGatewayKeyReader(() => gatewayKey);
     setClaudeProxySessionIdResolver((sdkId) => (sdkId === 'sdk-abc' ? 'sess-1' : null));
   });
@@ -207,9 +199,10 @@ describe('claude session route observation (routing transform ② 段)', () => {
     expect(readClaudeSessionRoute('sess-1')).toBe('gateway');
   });
 
-  it('attributes a failed bridge (chatgpt/) response without clobbering the session route', async () => {
-    // 失败归因在响应侧:bridge handler 写出 ≥400 才记 lastFailedRequestBridge=true;
-    // 会话主路由(chip 计费形态)不被 bridge 覆写改判(PR review P1 ×2)。
+  it('does not attribute retryable bridge transport failures before a terminal turn error', async () => {
+    // localHandler 只代表 SDK 的一次 HTTP 尝试。429/529、throw 或流内错误都
+    // 可能被 SDK 重试成功,不能在这里污染 lastFailedRequestBridge；真正 surface
+    // 的 terminal error 由 register.ts 按 agentMeta.model 统一归因(review P1)。
     gatewayKey = 'sk-live';
     const transform = createModelRoutingTransform();
     transform(
@@ -221,62 +214,28 @@ describe('claude session route observation (routing transform ② 段)', () => {
       ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
     ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
     expect(decision).toHaveProperty('localHandler');
-    // 请求发起本身不改归因(并发时按发起序置/清会误归因,PR review P1)。
     expect(readClaudeSessionRouteState('sess-1')).toEqual({
       route: 'gateway',
       lastFailedRequestBridge: false,
     });
-    // bridge 响应失败(429)→ 归因 bridge;主路由不变。
     bridgeMock.bridgeHandleImpl = async ({ res }) => {
       res.statusCode = 429;
     };
     await decision.localHandler({ res: { statusCode: 0 } });
     expect(readClaudeSessionRouteState('sess-1')).toEqual({
       route: 'gateway',
-      lastFailedRequestBridge: true,
+      lastFailedRequestBridge: false,
     });
-  });
 
-  it('does not attribute a successful bridge response, and handler throws count as bridge failures', async () => {
-    const transform = createModelRoutingTransform();
-    const okDecision = transform(
-      { model: 'chatgpt/gpt-5.5' },
-      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
-    ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
-    bridgeMock.bridgeHandleImpl = async ({ res }) => {
-      res.statusCode = 200;
-    };
-    await okDecision.localHandler({ res: { statusCode: 0 } });
-    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
-
-    // handler 抛错 → runLocalHandler 会写 502,同样归因 bridge 失败。
+    // 抛错也只是一次 transport 尝试；保持原样向 SDK 传播,但不提前落账。
     bridgeMock.bridgeHandleImpl = async () => {
       throw new Error('upstream 429');
     };
-    await expect(okDecision.localHandler({ res: { statusCode: 0 } })).rejects.toThrow();
-    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
+    await expect(decision.localHandler({ res: { statusCode: 0 } })).rejects.toThrow();
+    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(false);
   });
 
-  it('attributes a bridge failure carried in-stream even when the HTTP status stays 200', async () => {
-    // SSE 一开始就 writeHead(200)(约定,不能等翻出结果才定状态码),上游流中途报
-    // response.failed / error 时状态码仍是 200——只看 statusCode 会漏掉,必须叠加
-    // wasBridgeStreamFailure 查流本身是否以错误帧收尾(PR review P1)。
-    const transform = createModelRoutingTransform();
-    const decision = transform(
-      { model: 'chatgpt/gpt-5.5' },
-      ctxWith({ ...SESSION_HEADER, authorization: 'Bearer sk-ant-oat01' }),
-    ) as { localHandler: (args: { res: { statusCode: number } }) => Promise<void> };
-    bridgeMock.bridgeHandleImpl = async ({ res }) => {
-      res.statusCode = 200;
-    };
-    bridgeMock.streamFailure = true;
-    await decision.localHandler({ res: { statusCode: 0 } });
-    expect(readClaudeSessionRouteState('sess-1').lastFailedRequestBridge).toBe(true);
-  });
-
-  it('attributes bridge failures for sessions with an explicit provider too', async () => {
-    // 显式 XD/自定义会话的子代理 bridge 覆写同样绕过会话来源:失败归因不限
-    // 默认路由会话(PR review P1);但 route 槽仍只记默认路由请求 → 保持 null。
+  it('does not pre-attribute bridge transport failures for explicit-provider sessions', async () => {
     setSessionProvider('sess-1', 'xd');
     try {
       const transform = createModelRoutingTransform();
@@ -290,15 +249,14 @@ describe('claude session route observation (routing transform ② 段)', () => {
       await decision.localHandler({ res: { statusCode: 0 } });
       expect(readClaudeSessionRouteState('sess-1')).toEqual({
         route: null,
-        lastFailedRequestBridge: true,
+        lastFailedRequestBridge: false,
       });
     } finally {
       setSessionProvider('sess-1', null);
     }
   });
 
-  // forward 路径不再有独立的"failed request"观察器:单次 HTTP 响应无法可靠
-  // 区分"SDK 还会重试"与"真正终止、即将 surface 给用户"(429/529 尤其如此),
-  // false 侧改在 register.ts 的 isTerminalTurnErrorEvent 分支里记(见该文件
-  // 对应的单测,这里只保留 bridge 侧 true 的记账,由本文件其它用例覆盖)。
+  // bridge / forward 两侧都不再有独立的 transport-level 失败观察器:单次 HTTP
+  // 响应无法可靠区分 SDK 还会重试与真正终止。两侧统一由 register.ts 的
+  // isTerminalTurnErrorEvent 分支按最终失败模型记 true / false / null。
 });

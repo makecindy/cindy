@@ -95,7 +95,7 @@ const RATE_QUOTA_RE =
   /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day|sec|min|hr|s)\b|\b[rt]p[smhd]\b|quota metric|rate.{0,8}limit/i;
 /** makerChatStore 会把结构化 errorStatus 保留为原文中的状态码或 `(HTTP N)` 后缀。 */
 const HTTP_402_MESSAGE_RE =
-  /(?:^\s*402\b|\bHTTP\s*402\b|\bstatus(?:\s+code)?\s*[:=]?\s*402\b)/i;
+  /(?:^\s*402\b|\bHTTP\s*402\b|\b(?:status|error)\s+code\s*[:=]?\s*402\b|\bstatus\s*[:=]?\s*402\b)/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;

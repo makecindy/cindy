@@ -42,7 +42,6 @@ import {
 import { ANTHROPIC_DIRECT_UPSTREAM, CLAUDE_PROVIDER_AUTH_PLACEHOLDER_KEY, anthropicCatalogModelIds, isAnthropicWireModel } from './claude-gateway-config.js';
 import { getActiveCatalog } from './active-catalog.js';
 import { getResponsesBridgeHandler } from './anthropic-responses-bridge-host.js';
-import { wasBridgeStreamFailure } from '@cindy/anthropic-responses-bridge';
 import { getSessionEffort, getSessionFastMode } from './session-effort-store.js';
 import { isSubscriptionDirectModel } from '../../shared/subscriptionModels.js';
 import {
@@ -52,7 +51,6 @@ import {
 import {
   noteClaudeSessionRequest,
   recordClaudeRequestRoute,
-  recordClaudeSessionFailedRequestSource,
   recordClaudeSessionRoute,
   type ClaudeSessionBillingRoute,
 } from './claude-session-route-registry.js';
@@ -228,30 +226,15 @@ export function createModelRoutingTransform(): RoutingTransform {
       const effort = sessionId ? getSessionEffort(sessionId) : null;
       const fast = sessionId ? getSessionFastMode(sessionId) : false;
       return {
-        // 失败归因在**响应侧**落账(而非请求发起时):bridge 子代理与主会话请求可
-        // 并发,按发起序置/清标志会被后续请求误清(PR review P1)。bridge 花个人
-        // 订阅额度,失败要记 lastFailedRequestBridge=true,让错误横幅不把它的配额
-        // 错误贴成 Cindy 点数耗尽;**不限默认路由会话**——显式 XD 会话的子代理
-        // bridge 覆写同样绕过会话来源,一样要归因(PR review P1)。localHandler
-        // 响应不经 responseObserver 链,故在此按 res 终态判定;SSE 流一开始就
-        // 200(约定,不能等翻出结果才定状态码),上游流中途报 response.failed /
-        // error 时状态码仍是 200——只看 statusCode 会漏掉,须叠加
-        // wasBridgeStreamFailure 查 SSE 流本身是否以错误帧收尾(PR review P1)。
-        localHandler: async (args) => {
-          try {
-            await bridgeHandler.handle({
-              ...args,
-              prefs: { reasoningEffort: effort ?? undefined, fast },
-            });
-            if (sessionId && (args.res.statusCode >= 400 || wasBridgeStreamFailure(args.res))) {
-              recordClaudeSessionFailedRequestSource(sessionId, true);
-            }
-          } catch (err) {
-            // handler 抛错 → runLocalHandler 会写 502,同样是该 bridge 请求的失败。
-            if (sessionId) recordClaudeSessionFailedRequestSource(sessionId, true);
-            throw err;
-          }
-        },
+        // 这里只转发单次 bridge 尝试,不写 lastFailedRequestBridge:HTTP 429/529、
+        // handler throw 与 SSE error 都可能被 SDK 退避后重试成功,提前落账会让
+        // 瞬时失败污染下一条真正 surface 的错误。失败来源统一在 register.ts
+        // 收到 terminal turn error 后按 event.agentMeta.model 写入;拿不到模型时
+        // 写 null,也不会继承旧值(PR review P1 / P2)。
+        localHandler: (args) => bridgeHandler.handle({
+          ...args,
+          prefs: { reasoningEffort: effort ?? undefined, fast },
+        }),
       };
     }
 

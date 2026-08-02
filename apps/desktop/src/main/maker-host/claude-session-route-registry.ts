@@ -20,11 +20,11 @@
  *   - session route 记录的是**最近一个默认路由请求**的生效路由;凭证中途变化后,
  *     下一个请求会在
  *     transform 里按新状态重判并自动纠正记录。
- *   - `lastFailedRequestBridge` 独立槽在**响应侧**落账, 归因到失败的那笔请求:
- *     bridge(chatgpt/ / xai/ 覆写, 含子代理)响应失败 → true;forward 路径的
- *     默认/显式路由 POST 失败 → false。请求可并发, 按请求发起序清标志会在
- *     bridge 在途时被后续请求误清(PR review P1);响应序覆写与「横幅显示的
- *     是最后落地的失败」一致。bridge 花个人订阅额度, 错误横幅靠本槽避免把
+ *   - `lastFailedRequestBridge` 独立槽在 SDK 确认**终止且不再重试**的 turn error
+ *     落账,归因到最终展示的那笔失败:bridge(chatgpt/ / xai/ 覆写,含子代理)
+ *     → true;forward 路径 → false;缺少可靠模型 → null。不能在 proxy 单次响应
+ *     侧写入:429/529、连接错误或 SSE error 都可能退避后成功,会留下过期归因
+ *     (PR review P1)。bridge 花个人订阅额度, 错误横幅靠本槽避免把
  *     bridge 配额错误贴成 Cindy 点数耗尽;拿不到可靠失败模型时写 null,让 UI
  *     宁可不显示计费入口也不继承上一笔失败的 true/false 归因。会话主计费
  *     形态(chip)仍由 route 驱动, 不读本槽 —— 网关会话跑 bridge 子代理不改判
@@ -119,8 +119,8 @@ export function recordClaudeSessionRoute(
   notify(sessionId);
 }
 
-/** 响应侧失败归因:bridge localHandler 失败记 true, forward 路径 POST 失败记 false;
- *  同值幂等。后续失败按响应落地序覆写(最后落地的失败即横幅显示的错误)。 */
+/** terminal turn error 侧失败归因:true = bridge,false = forward,null = 未知;
+ *  同值幂等。每个最终失败都覆写,避免沿用上一笔失败的过期归因。 */
 export function recordClaudeSessionFailedRequestSource(
   sessionId: string,
   bridge: boolean | null,
