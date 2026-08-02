@@ -60,7 +60,9 @@ export interface GitExecOpts {
    * 或 credential helper 后代会带着继承的 stdio 活下来——既拖过 deadline 又留
    * 孤儿进程)。Windows 走 proc-util killProcessTree 的 taskkill /T /F(带重试与
    * 后代兜底); POSIX 让 git 以 detached 自成进程组长, deadline 处对整组 SIGTERM
-   * (git 收 TERM 会清理 .lock), 等直接 git 进程退出后才收口, 宽限期内未退出的
+   * (git 收 TERM 会清理 .lock), 等**进程组清空**后才收口(直接 git 进程退出 ≠
+   * 组清空, 幸存的 git-remote-http 或 credential helper 后代仍可能持锁), 宽限期
+   * 内未清空的
    * 由整组 SIGKILL 兜底后再收口。两个平台都保证收口时进程树已终止——调用方拿到
    * 超时错误后立刻发起的下一个 git 操作不会与残留进程争抢同一仓库的 .lock。
    * 省略 = 不超时。
@@ -70,6 +72,8 @@ export interface GitExecOpts {
 
 /** POSIX 超时后 SIGTERM → SIGKILL 的宽限期:给 git 留出清理 .lock 的时间窗。 */
 const POSIX_KILL_GRACE_MS = 1_500;
+/** POSIX 宽限期内探测进程组是否清空的轮询间隔。 */
+const POSIX_GROUP_POLL_INTERVAL_MS = 100;
 
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
@@ -85,10 +89,14 @@ function execFileOnce(
     // 超时先终止整棵进程树/进程组(两个平台都含后代),再显式收口 Promise。
     let settled = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
+    let reaper: ReturnType<typeof setTimeout> | undefined;
+    let groupPoll: ReturnType<typeof setInterval> | undefined;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
+      if (reaper !== undefined) clearTimeout(reaper);
+      if (groupPoll !== undefined) clearInterval(groupPoll);
       fn();
     };
 
@@ -175,49 +183,49 @@ function execFileOnce(
         }
         // POSIX:git 以 detached 自成进程组长——deadline 处对整组 SIGTERM,
         // git-remote-http/credential helper 后代一并收到,git 收 TERM 会清理
-        // .lock。**不立即收口**:先等直接 git 进程真正退出(它才是持有仓库锁、
-        // 更新 ref 的主体)再 failTimeout,否则调用方立刻发起的 rev-parse/
-        // createWorktree 会与尚未退净的 fetch 并发抢锁;宽限期内仍未退出则整组
-        // SIGKILL(killProcessTree)兜底后收口。等待有界(≤ POSIX_KILL_GRACE_MS),
-        // freshBase 的网络预算按绝对 deadline 扣减,不会因此重开预算。
-        if (child.exitCode !== null || child.signalCode !== null) {
-          // 进程已经退出(典型:回调只是被后代占住的 stdio 拖住了)→ 直接收口
-          failTimeout();
-          return;
-        }
-        if (child.pid != null) {
+        // .lock。**收口判定按进程组是否清空**(kill(-pid, 0) 探测),不按直接
+        // git 进程的 exit:直接进程退出 ≠ 组已清空,组里幸存的 git-remote-* 或
+        // credential helper 仍可能持有仓库锁或继续更新 ref,提前收口会让调用方
+        // 立刻发起的 rev-parse/createWorktree 与之并发。组未清空时短间隔轮询
+        // 等待;宽限期到点仍有存活者则整组 SIGKILL(killProcessTree),在其收尾
+        // 回调里收口——保证收口时组内进程必已终止,不留孤儿。等待有界
+        // (≤ POSIX_KILL_GRACE_MS),freshBase 的网络预算按绝对 deadline 扣减,
+        // 不会因此重开预算。
+        const groupEmpty = (): boolean => {
+          if (child.pid == null) return true;
           try {
-            process.kill(-child.pid, 'SIGTERM');
+            process.kill(-child.pid, 0);
+            return false;
+          } catch {
+            return true;
+          }
+        };
+        if (!groupEmpty()) {
+          try {
+            process.kill(-child.pid!, 'SIGTERM');
           } catch {
             try {
               child.kill('SIGTERM');
             } catch {
-              /* 进程可能已退出 */
+              /* 进程可能刚好退出 */
             }
           }
-        } else {
-          try {
-            child.kill('SIGTERM');
-          } catch {
-            /* 进程可能已退出 */
-          }
         }
-        const onExit = () => {
-          if (reaper !== undefined) clearTimeout(reaper);
+        if (groupEmpty()) {
+          // 组已清空(直接进程与全部后代都已退出,回调只是被继承的 stdio 拖住)
           failTimeout();
-        };
-        const reaper: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
-          child.removeListener('exit', onExit);
-          if (child.exitCode === null && child.signalCode === null) {
-            // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL(内核级立即生效),收尾
-            // 回调里再收口——保证收口时进程树已终止,不留孤儿。
-            killProcessTree(child.pid, child, () => failTimeout());
-          } else {
-            failTimeout();
-          }
+          return;
+        }
+        groupPoll = setInterval(() => {
+          if (groupEmpty()) failTimeout();
+        }, POSIX_GROUP_POLL_INTERVAL_MS);
+        groupPoll.unref?.();
+        reaper = setTimeout(() => {
+          // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL(内核级立即生效),收尾
+          // 回调里再收口。
+          killProcessTree(child.pid, child, () => failTimeout());
         }, POSIX_KILL_GRACE_MS);
         reaper.unref?.();
-        child.once('exit', onExit);
       }, timeoutMs);
     }
   });
