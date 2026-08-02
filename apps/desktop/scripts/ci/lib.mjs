@@ -602,13 +602,23 @@ export function signMacAppWithIdentity(appPath, helperEntitlementsPath, mainEnti
     exec(`find "${asarUnpackedDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
   }
 
-  // 0b. Contents/Resources/tools/ 下的 CLI 工具(extraResource 拷入,公证要求显式签)。
-  const resourceToolsDir = path.join(appPath, 'Contents', 'Resources', 'tools');
-  if (fs.existsSync(resourceToolsDir)) {
-    console.log('    Signing bundled CLI tools in Contents/Resources/tools/...');
-    exec(`find "${resourceToolsDir}" -type f | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
+  // 0b. Contents/Resources/ 下 extraResource 拷入的第三方产物(CLI 工具、Pi 目录分发
+  //     等)公证要求逐个显式签。这里扫**整个 Resources**而不是逐目录白名单:此前只签
+  //     tools/,漏了 resources/pi/ —— Pi 是目录分发(pi 主执行文件 + 3 个 .node),
+  //     bun 产物只自带 adhoc/linker 签名,Apple 公证对主执行文件报 "signature is
+  //     invalid"、对 .node 报 "not signed with a valid Developer ID",直接 Invalid。
+  //     (Windows 侧 forge.config.ts 已单独递归签 resources/pi,mac 这条链路没跟上。)
+  //     注意 codesign --verify --deep --strict 拦不住这类问题:--deep 只递归嵌套
+  //     bundle,不校验 Resources 下散装的 Mach-O,公证才严格。extraResource 里还有
+  //     cc-manager / anthropic-compat-proxy / remote-file-service /
+  //     android-platform-tools,任一将来带上原生产物都会重演,故整体扫描、新增资源
+  //     免维护。app.asar.unpacked 已在上一步签过,prune 掉避免重复签。
+  const resourcesDir = path.join(appPath, 'Contents', 'Resources');
+  if (fs.existsSync(resourcesDir)) {
+    console.log('    Signing bundled Mach-O in Contents/Resources/...');
+    exec(`find "${resourcesDir}" -name app.asar.unpacked -prune -o -type f -print | while IFS= read -r f; do if file "$f" | grep -qE "Mach-O"; then ${signBase} "$f"; fi; done`);
     console.log('    Signing bundled resource app bundles...');
-    exec(`find "${resourceToolsDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
+    exec(`find "${resourcesDir}" -depth -type d -name "*.app" -exec ${signBase} "{}" \\;`);
   }
 
   // 1. 全部 Mach-O(库、chrome_crashpad_handler、ShipIt 等)
@@ -661,15 +671,31 @@ export function notarizeMacApp(appPath, identity) {
     '--team-id',
     identity.teamId,
     '--wait',
+    // JSON 输出换取"可判定的最终结论":notarytool submit --wait 对「提交成功但结论
+    // Invalid」同样返回 exit 0,只判 exit code 会放过公证失败、继续往下 staple,最终
+    // 报成一句莫名的 stapler "Record not found" / Error 65,真实原因(哪些二进制没签)
+    // 被完全掩盖。代价是 --wait 期间不再打进度点,输出改为结束后一次性回显。
+    '--output-format',
+    'json',
   ];
   console.log(
     `    $ /usr/bin/xcrun notarytool submit "${zipPath}" ` +
-      `--apple-id "${identity.appleId}" --password "****" --team-id "${identity.teamId}" --wait`,
+      `--apple-id "${identity.appleId}" --password "****" --team-id "${identity.teamId}" --wait --output-format json`,
   );
   const submitResult = spawnSync('/usr/bin/xcrun', submitArgs, {
-    stdio: 'inherit',
+    encoding: 'utf8',
+    stdio: ['ignore', 'pipe', 'pipe'],
     timeout: 1800000, // 30 min
   });
+  const submitOutput = `${submitResult.stdout ?? ''}${submitResult.stderr ?? ''}`.trim();
+  if (submitOutput) {
+    console.log(
+      submitOutput
+        .split('\n')
+        .map((line) => `    ${line}`)
+        .join('\n'),
+    );
+  }
   if (submitResult.error) {
     throw new Error(`notarytool submit 无法执行:${submitResult.error.message}`);
   }
@@ -680,6 +706,42 @@ export function notarizeMacApp(appPath, identity) {
   }
   if (submitResult.status !== 0) {
     throw new Error(`notarytool submit 失败(exit ${submitResult.status});公证未通过。`);
+  }
+
+  // exit 0 只代表"提交与轮询本身成功",结论还得看 status:Accepted / Invalid /
+  // Rejected。非 Accepted 一律在此中止,并自动把 Apple 的逐文件裁决(notarytool log)
+  // 打进构建日志——公证失败十有八九是某个第三方二进制没签 Developer ID,日志里直接
+  // 给出路径,不必再手工拿 submission id 去捞。
+  let submission;
+  try {
+    submission = JSON.parse(submitResult.stdout ?? '');
+  } catch {
+    throw new Error(`notarytool submit 输出无法解析为 JSON,公证结论未知:\n${submitOutput}`);
+  }
+  if (submission.status !== 'Accepted') {
+    if (submission.id) {
+      console.log(`    Fetching notarization log for ${submission.id} ...`);
+      spawnSync(
+        '/usr/bin/xcrun',
+        [
+          'notarytool',
+          'log',
+          submission.id,
+          '--apple-id',
+          identity.appleId,
+          '--password',
+          identity.applePassword,
+          '--team-id',
+          identity.teamId,
+        ],
+        { stdio: 'inherit', timeout: 300000 },
+      );
+    }
+    throw new Error(
+      `公证未通过:status=${submission.status ?? '(unknown)'}` +
+        `${submission.id ? `,submission id=${submission.id}` : ''}。` +
+        '常见原因是 Contents/Resources 下某个第三方二进制未签 Developer ID(见上方 notarytool log)。',
+    );
   }
 
   fs.unlinkSync(zipPath);
