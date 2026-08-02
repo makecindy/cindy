@@ -96,6 +96,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
+import { resetXUsageNoticeMemoryState } from '../../../state/xUsageNotice';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
 async function expandChannelCard(titleKey: RegExp) {
@@ -141,6 +142,10 @@ const BASE_HOOK: SlackHookView = {
 describe('HookConnectionsSection Telegram binding actions', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // X 用法确认门按 principalId 记账在 localStorage 里, 而 jsdom 的 localStorage
+    // 跨用例保留 —— 不清就会被前一条用例的记账吃掉, 后面的用例白绿。
+    localStorage.clear();
+    resetXUsageNoticeMemoryState();
     ipc.onStatusChanged.mockReturnValue(() => {});
     ipc.setEnabled.mockResolvedValue({ hook: BASE_HOOK });
     ipc.setLifecycleAnnouncement.mockResolvedValue({ hook: BASE_HOOK });
@@ -345,6 +350,7 @@ describe('HookConnectionsSection Telegram binding actions', () => {
   it('hides the X card entirely while the endpoint manifest leaves xHookWsUrl empty', async () => {
     // BASE_HOOK 的 x.url 为空且未启用/不可用 —— 端点清单缺失即灰度关闭,
     // 设置页不得出现 X 入口(providerCardState.visible 语义)。
+    // 这一条必须用空 url 的 BASE_HOOK 本体, 不能换成 xUnboundHook()。
     ipc.get.mockResolvedValue({ hook: BASE_HOOK });
 
     render(<HookConnectionsSection />);
@@ -970,5 +976,183 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     expect(
       screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
     ).toBeNull();
+  });
+
+  /**
+   * 「服务端已开放端点、但用户还没打开开关」的 X 卡 —— 评估阶段的真实形态。
+   *
+   * 不能直接用 BASE_HOOK: 它的 x.url 是空串, 而空端点会让整张卡不渲染
+   * (见上面「hides the X card entirely while the endpoint manifest leaves
+   * xHookWsUrl empty」那条), 于是用法与风险小节根本没有宿主。
+   */
+  function xUnboundHook(): SlackHookView {
+    return {
+      ...BASE_HOOK,
+      x: { ...BASE_HOOK.x, url: 'wss://x-hook.example.test' },
+    };
+  }
+
+  /** confirmed 态的 X binding, 只有 principalId 不同(确认门按它记账)。 */
+  function xConfirmedHook(principalId: string): SlackHookView {
+    return {
+      ...BASE_HOOK,
+      x: {
+        enabled: true,
+        url: 'wss://x-hook.example.test',
+        status: 'connected',
+        lastError: null,
+        available: true,
+        capabilityPending: false,
+        defaultWorkspace: null,
+        binding: {
+          provider: 'x',
+          state: 'confirmed',
+          attemptId: null,
+          bindingId: `x-binding-${principalId}`,
+          principalId,
+          principalName: '@dash',
+          scopeId: 'bot-x',
+          scopeName: 'CindyBot',
+          connectUrl: null,
+          expiresAt: null,
+          reason: null,
+          remediationUrl: 'https://x.com/CindyBot',
+          actions: ['open_provider', 'revoke'],
+        },
+      },
+    };
+  }
+
+  it('用法与风险小节只出现在 X 卡: Telegram 是私密通道, 没有这条性质差异', async () => {
+    // X 的回复是一条**公开推文**, Slack / Telegram 不是 —— 这一节的存在理由就是
+    // 这个差异, 所以它不该跟着渲染进别的渠道卡。
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    expect(
+      await screen.findByText('settings.remoteControl.hook.x.guide.riskPublicBody'),
+    ).toBeTruthy();
+
+    cleanup();
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(TELEGRAM_CARD);
+    expect(
+      screen.queryByText('settings.remoteControl.hook.x.guide.riskPublicBody'),
+    ).toBeNull();
+  });
+
+  it('三组都在场, 且「默认工作目录」那条风险必须写出来', async () => {
+    // 「X 任务都落在默认工作目录、agent 能读写其中文件、结论会公开回帖」是
+    // 「回帖公开」的直接后果, 也是用户判断该不该把默认目录指到工作仓库的唯一依据
+    // (Dash 2026-08-02 明确要求写出来) —— 少了它这一节就等于没说清风险。
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    for (const key of [
+      'usageLabel',
+      'usageBody',
+      'riskLabel',
+      'riskPublicBody',
+      'riskWorkdirBody',
+      'withdrawLabel',
+      'withdrawBody',
+    ]) {
+      expect(
+        await screen.findByText(`settings.remoteControl.hook.x.guide.${key}`),
+      ).toBeTruthy();
+    }
+  });
+
+  it('X 未启用、未绑定时小节照样显示: 评估阶段最需要看到风险', async () => {
+    // BASE_HOOK 的 x 是 enabled:false / available:false / binding:null。工作目录区
+    // 按 view.enabled 门控, 这一节刻意不跟 —— 决定要不要打开的人才最需要读它。
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    expect(
+      await screen.findByText('settings.remoteControl.hook.x.guide.riskWorkdirBody'),
+    ).toBeTruthy();
+    // 同一张卡上工作目录区确实是收起的, 证明两者门控独立
+    expect(
+      screen.queryByLabelText('settings.remoteControl.hook.form.defaultWorkspaceAria'),
+    ).toBeNull();
+  });
+
+  it('首次绑定成功弹一次确认门: 单按钮、不可用取消绕过', async () => {
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+    expect(dialog.confirm.mock.calls[0][0]).toMatchObject({
+      title: 'settings.remoteControl.hook.x.guide.ackTitle',
+      confirmText: 'settings.remoteControl.hook.x.guide.ackConfirm',
+      // 告知不该有「取消」这个出口 —— 它不是一个可选操作
+      showCancel: false,
+    });
+  });
+
+  it('点过「我明白」之后不再弹: 一次性告知, 不是每次开设置都拦', async () => {
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+
+    cleanup();
+    dialog.confirm.mockClear();
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    // 给 effect 一个真实的机会跑完再断言"没弹"
+    await waitFor(() =>
+      expect(screen.queryByText('settings.remoteControl.hook.x.guide.usageBody')).toBeTruthy(),
+    );
+    expect(dialog.confirm).not.toHaveBeenCalled();
+  });
+
+  it('换绑到另一个 X 账号会再确认一次: 新账号 = 新的公开面', async () => {
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+
+    cleanup();
+    dialog.confirm.mockClear();
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-2') });
+    render(<HookConnectionsSection />);
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+  });
+
+  it('Esc / 点遮罩关掉不算已知晓: 下次仍然弹', async () => {
+    // confirm-dialog 在 Esc / 遮罩点击时 resolve 成 cancel(ok=false)。那种情况下
+    // 用户并没有读到告知, 记账就等于把风险悄悄咽掉了。
+    dialog.confirm.mockResolvedValue(false);
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+
+    cleanup();
+    dialog.confirm.mockClear();
+    dialog.confirm.mockResolvedValue(true);
+    ipc.get.mockResolvedValue({ hook: xConfirmedHook('x-user-1') });
+    render(<HookConnectionsSection />);
+    await waitFor(() => expect(dialog.confirm).toHaveBeenCalledTimes(1));
+  });
+
+  it('未绑定 / 绑定中不弹确认门: 只在转入 confirmed 那一沿', async () => {
+    const pending = xConfirmedHook('x-user-1');
+    ipc.get.mockResolvedValue({
+      hook: {
+        ...pending,
+        x: {
+          ...pending.x,
+          binding: { ...pending.x.binding!, state: 'pending' as const },
+        },
+      },
+    });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    await waitFor(() =>
+      expect(screen.queryByText('settings.remoteControl.hook.x.guide.usageBody')).toBeTruthy(),
+    );
+    expect(dialog.confirm).not.toHaveBeenCalled();
   });
 });
