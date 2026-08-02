@@ -117,7 +117,9 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
     resolveDrain();
     await expect(result).resolves.toEqual({ title: '任务标题' });
 
-    expect(isSessionTurnPendingCompletion).toHaveBeenCalledWith('s-running');
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
+    expect(isSessionTurnPendingCompletion).toHaveBeenNthCalledWith(1, 's-running');
+    expect(isSessionTurnPendingCompletion).toHaveBeenNthCalledWith(2, 's-running');
     expect(h.regenerateMaterial).toHaveBeenCalledWith('s-running', expect.any(Number), true);
   });
 
@@ -139,7 +141,34 @@ describe('maker:regenerate-title — 当前 turn 状态', () => {
     resolveDrain();
     await expect(result).resolves.toEqual({ title: '任务标题' });
 
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
     expect(h.regenerateMaterial).toHaveBeenCalledWith('s-completed', expect.any(Number), false);
+  });
+
+  it('drain 期间新 turn 启动时以后置快照过滤新一轮未封存 Assistant', async () => {
+    h.handlers.clear();
+    let pendingCompletion = false;
+    let resolveDrain!: () => void;
+    h.drainPersistQueue.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDrain = () => {
+            pendingCompletion = true;
+            resolve();
+          };
+        }),
+    );
+    const isSessionTurnPendingCompletion = vi.fn(() => pendingCompletion);
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    const result = invokeRegenerate('s-new-turn');
+    await vi.waitFor(() => expect(h.drainPersistQueue).toHaveBeenCalledOnce());
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    resolveDrain();
+    await expect(result).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith('s-new-turn', expect.any(Number), true);
   });
 });
 

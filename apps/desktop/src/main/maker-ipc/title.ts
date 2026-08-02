@@ -280,13 +280,17 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       { sessionId }: { sessionId: string },
     ): Promise<{ title: string | null }> => {
       assertTrustedAppRendererEvent(event);
-      // Snapshot before awaiting the durable FIFO. If `done` arrives during the
-      // drain, the captured true still excludes the unsealed Assistant. If it is
-      // already false, `done` has synchronously enqueued its flush + turn seal and
-      // the drain makes both durable before the DB material read begins.
-      const latestTurnIsPendingCompletion =
+      // Snapshot on both sides of the durable FIFO. The pre-drain value preserves
+      // a pending terminal boundary that settles while we wait; the post-drain
+      // value catches a new turn that starts during the same window. OR keeps
+      // either unsealed Assistant out of the DB material read.
+      const pendingCompletionBeforeDrain =
         options.isSessionTurnPendingCompletion?.(sessionId) === true;
       await drainPersistQueue();
+      const pendingCompletionAfterDrain =
+        options.isSessionTurnPendingCompletion?.(sessionId) === true;
+      const latestTurnIsPendingCompletion =
+        pendingCompletionBeforeDrain || pendingCompletionAfterDrain;
       return {
         title: await regenerateMakerSessionTitle(
           sessionId,
