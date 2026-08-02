@@ -101,6 +101,17 @@ describe('claude-session-route-registry', () => {
     });
   });
 
+  it('replaces stale bridge attribution with unknown when a later failure cannot be classified', () => {
+    recordClaudeSessionRoute('s1', 'gateway');
+    recordClaudeSessionFailedRequestSource('s1', true);
+    recordClaudeSessionFailedRequestSource('s1', null);
+
+    expect(readClaudeSessionRouteState('s1')).toEqual({
+      route: 'gateway',
+      lastFailedRequestBridge: null,
+    });
+  });
+
   it('isolates listener exceptions from the routing hot path and other listeners', () => {
     const bad = vi.fn(() => { throw new Error('boom'); });
     const good = vi.fn();

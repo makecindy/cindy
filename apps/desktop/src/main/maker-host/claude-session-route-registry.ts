@@ -25,8 +25,10 @@
  *     默认/显式路由 POST 失败 → false。请求可并发, 按请求发起序清标志会在
  *     bridge 在途时被后续请求误清(PR review P1);响应序覆写与「横幅显示的
  *     是最后落地的失败」一致。bridge 花个人订阅额度, 错误横幅靠本槽避免把
- *     bridge 配额错误贴成 Cindy 点数耗尽;会话主计费形态(chip)仍由 route
- *     驱动, 不读本槽 —— 网关会话跑 bridge 子代理不改判形态(PR review P1 ×2)。
+ *     bridge 配额错误贴成 Cindy 点数耗尽;拿不到可靠失败模型时写 null,让 UI
+ *     宁可不显示计费入口也不继承上一笔失败的 true/false 归因。会话主计费
+ *     形态(chip)仍由 route 驱动, 不读本槽 —— 网关会话跑 bridge 子代理不改判
+ *     形态(PR review P1 ×2)。
  *     本槽**不限默认路由会话**:显式 XD 会话的 bridge 子代理失败同样要归因
  *     (PR review P1)。
  *   - 会话尚未发过请求(新会话 / app 重启后未活动)→ 无记录, 消费方回落
@@ -48,14 +50,14 @@ export interface ClaudeRequestRoute {
 export interface ClaudeSessionRouteState {
   /** 最近一个 ② 段默认路由请求的生效路由;未观察到 → null。 */
   route: ClaudeSessionBillingRoute | null;
-  /** 最近一笔**失败**请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账)。 */
-  lastFailedRequestBridge: boolean;
+  /** 最近一笔**失败**请求是否订阅直连 bridge;null = 本次失败无法可靠归因。 */
+  lastFailedRequestBridge: boolean | null;
 }
 
 type RouteChangeListener = (sessionId: string, state: ClaudeSessionRouteState) => void;
 
 const routes = new Map<string, ClaudeSessionBillingRoute>();
-const failedBridge = new Map<string, boolean>();
+const failedBridge = new Map<string, boolean | null>();
 const listeners = new Set<RouteChangeListener>();
 const requestRoutes = new Map<number, ClaudeRequestRoute>();
 const latestRequestIds = new Map<string, number>();
@@ -121,7 +123,7 @@ export function recordClaudeSessionRoute(
  *  同值幂等。后续失败按响应落地序覆写(最后落地的失败即横幅显示的错误)。 */
 export function recordClaudeSessionFailedRequestSource(
   sessionId: string,
-  bridge: boolean,
+  bridge: boolean | null,
 ): void {
   if (failedBridge.get(sessionId) === bridge) return;
   failedBridge.set(sessionId, bridge);
@@ -137,7 +139,7 @@ export function readClaudeSessionRoute(sessionId: string): ClaudeSessionBillingR
 export function readClaudeSessionRouteState(sessionId: string): ClaudeSessionRouteState {
   return {
     route: routes.get(sessionId) ?? null,
-    lastFailedRequestBridge: failedBridge.get(sessionId) ?? false,
+    lastFailedRequestBridge: failedBridge.has(sessionId) ? failedBridge.get(sessionId)! : false,
   };
 }
 

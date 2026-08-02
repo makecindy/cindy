@@ -4717,13 +4717,13 @@ interface ElectronAPI {
      *  请求是订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账,不覆盖 route)。 */
     claudeSessionRouteGet: (sessionId: string) => Promise<{
       route: 'gateway' | 'subscription' | null;
-      lastFailedRequestBridge: boolean;
+      lastFailedRequestBridge: boolean | null;
     } | null>;
     onClaudeSessionRouteChanged: (
       cb: (payload: {
         sessionId: string;
         route: 'gateway' | 'subscription' | null;
-        lastFailedRequestBridge: boolean;
+        lastFailedRequestBridge: boolean | null;
       }) => void,
     ) => () => void;
 

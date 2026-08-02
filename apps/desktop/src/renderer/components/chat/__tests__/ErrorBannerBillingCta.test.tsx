@@ -21,7 +21,7 @@ const mocks = vi.hoisted(() => ({
   claudeRoute: vi.fn(
     (): {
       route: 'gateway' | 'subscription' | null;
-      lastFailedRequestBridge: boolean;
+      lastFailedRequestBridge: boolean | null;
       resolved: boolean;
     } => ({ route: null, lastFailedRequestBridge: false, resolved: true }),
   ),
@@ -186,6 +186,13 @@ describe('ErrorBanner billing CTA', () => {
     // 但失败归因(响应侧落账)指向 bridge 花个人订阅额度——不得引导购买
     // Cindy 点数(PR review P1)。
     mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: true, resolved: true });
+    renderBanner({ providerId: null });
+    expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+  });
+
+  it('hides the CTA when the latest failure source is unknown instead of reusing stale attribution', () => {
+    mocks.claudeRoute.mockReturnValue({ route: 'gateway', lastFailedRequestBridge: null, resolved: true });
     renderBanner({ providerId: null });
     expect(screen.queryByText('chat.errorBanner.openBilling')).toBeNull();
     expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();

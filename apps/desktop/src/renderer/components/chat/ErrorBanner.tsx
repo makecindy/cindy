@@ -259,7 +259,10 @@ export function ErrorBanner({
   // (chatgpt/ / xai/,花个人订阅额度;proxy 响应侧落账,归因到失败那笔而非
   // 发起序)——顶层模型与会话来源都看不出它,默认路由与显式 XD 的 cc 会话
   // 都必须据此闭嘴,不把 bridge 配额错误引导去充值(PR review P1 ×2)。
-  const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge;
+  // null = 本次失败没有可靠模型归因。与 bridge=true 一样 fail closed:不能沿用
+  // 旧 false 或按会话顶层模型猜成网关,否则会给未知来源的余额错误展示 Cindy
+  // 充值入口(PR review P2)。只有明确 false 才允许 cc 计费来源子句继续判定。
+  const ccBridgeFailureVeto = agentKind === 'cc' && ccLastFailedRequestBridge !== false;
   // 显式来源子句统一要求 !persistedError:历史错误的来源归因不可回溯(快照
   // 也只是重开时的当前值),按现值分类必然张冠李戴;持久化错误仅剩 cc 会话
   // 观察值路径(绑定该会话实际流量,同 run 可信)可放行引导(PR review P1)。

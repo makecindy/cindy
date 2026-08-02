@@ -5,8 +5,8 @@ export type ClaudeSessionBillingRoute = 'gateway' | 'subscription';
 export interface ClaudeSessionRouteState {
   /** 最近一个 ② 段默认路由请求的生效路由;null = 未观察到。 */
   route: ClaudeSessionBillingRoute | null;
-  /** 最近一笔**失败**请求是否订阅直连 bridge(chatgpt/ / xai/ 覆写;响应侧落账)。 */
-  lastFailedRequestBridge: boolean;
+  /** 最近一笔**失败**请求是否订阅直连 bridge;null = 本次失败无法可靠归因。 */
+  lastFailedRequestBridge: boolean | null;
   /**
    * 本轮启用期内 GET / push 是否已落地。false 时 route / lastFailedRequestBridge
    * 只是占位默认,**不是权威的「无观察 / 非 bridge」**——计费引导等消费方必须
@@ -49,7 +49,7 @@ export function useClaudeSessionRoute(
   const [observation, setObservation] = useState<{
     sessionId: string;
     route: ClaudeSessionBillingRoute | null;
-    lastFailedRequestBridge: boolean;
+    lastFailedRequestBridge: boolean | null;
   } | null>(null);
   // 禁用即失效(渲染期,setState-in-render 惯用法):enabled 随错误形态翻转
   // (如 ErrorBanner 的 wantCcRouteState),false → true(同 sessionId)期间

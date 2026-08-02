@@ -12,7 +12,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { useClaudeSessionRoute } from '../useClaudeSessionRoute';
 
-type RouteState = { route: 'gateway' | 'subscription' | null; lastFailedRequestBridge: boolean };
+type RouteState = {
+  route: 'gateway' | 'subscription' | null;
+  lastFailedRequestBridge: boolean | null;
+};
 // GET/push payload 不含 resolved(它是 hook 对「本轮启用期已落地」的本地判定)。
 type Deferred = { promise: Promise<RouteState | null>; resolve: (v: RouteState | null) => void };
 

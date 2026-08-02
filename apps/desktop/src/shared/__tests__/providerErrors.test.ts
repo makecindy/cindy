@@ -122,6 +122,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     // makerChatStore 从结构化 errorStatus 保留的稳定后缀:正文即使只有通用
     // Payment Required,消息级 ErrorBanner 也必须识别为余额耗尽(review P2)。
     'Payment Required (HTTP 402)',
+    // 原文已经含状态码时 store 会去重、不追加后缀,这两类同样要命中(review P2 ×2)。
+    '402 Payment Required',
+    'Request failed with status code 402',
   ])('matches quota wording: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(true);
   });

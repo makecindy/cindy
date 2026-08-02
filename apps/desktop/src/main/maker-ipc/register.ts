@@ -3109,19 +3109,22 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       // (translator.ts extractAssistantMeta 读 msg.message.model,不是会话
       // 静态选择),按它判断才对;拿不到 agentMeta 时(极少数无 envelope 的
       // 兜底错误分支,SDKAPIRetryMessage 本身不带 parent_tool_use_id)translator
-      // 已经在"本 session 从未启动过 subagent"这一无歧义场景下用当前
-      // ctx.getModel()(而非可能已过期的 lastAssistantMeta)兜底填了 agentMeta
-      // (见 translator.ts api_retry 分支注释,PR review P1 / P2);仍然拿不到
-      // (并发 subagent 场景,归因给哪个 lane 有歧义)时才真正跳过、不覆写——
-      // 没有可靠信号时不应该断言分类。
+      // 已经在"本 session 从未启动过 subagent + turn 首次 API 调用"这一
+      // 无歧义场景下用 dispatch 前快照兜底填了 agentMeta(见 translator.ts
+      // api_retry 分支注释,PR review P1 / P2)。仍然拿不到时不能跳过并沿用
+      // 上一笔失败的 true/false:顺序执行的下一笔网关失败会继承旧 bridge=true,
+      // 错误横幅因此错误隐藏充值入口。这里显式写 null 表示本次失败来源未知,
+      // UI 宁可不显示计费入口也不猜模型或复用旧证据(PR review P2 ×2)。
       const failingModel = (event as { agentMeta?: { model?: string } | null }).agentMeta?.model;
       if (
         event.source === 'claude-code' &&
         !isPlannedUpgradeClose &&
-        !isRemoteAuthRetry &&
-        typeof failingModel === 'string'
+        !isRemoteAuthRetry
       ) {
-        recordClaudeSessionFailedRequestSource(session.id, isSubscriptionDirectModel(failingModel));
+        recordClaudeSessionFailedRequestSource(
+          session.id,
+          typeof failingModel === 'string' ? isSubscriptionDirectModel(failingModel) : null,
+        );
       }
       if (!isPlannedUpgradeClose) {
         agentInputCoordinatorHolder?.onTurnEvent(
