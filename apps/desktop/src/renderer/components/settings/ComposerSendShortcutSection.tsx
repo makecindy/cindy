@@ -2,14 +2,17 @@ import { useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 
 import { Switch } from '@/components/ui/switch';
-import { useComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import {
+  getComposerModifierShortcutLabel,
+  useComposerSendShortcutPreference,
+} from '@/hooks/useComposerSendShortcutPreference';
 import { toast } from '@/lib/toast';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 export function ComposerSendShortcutSection() {
   const { t } = useTranslation();
   const { preference, isCustomized, setPreference } = useComposerSendShortcutPreference();
-  const shortcut = window.electronAPI?.platform === 'darwin' ? '⌘+Enter' : 'Ctrl+Enter';
+  const shortcut = getComposerModifierShortcutLabel(window.electronAPI?.platform);
 
   const onReset = useCallback(() => {
     setPreference('enter');

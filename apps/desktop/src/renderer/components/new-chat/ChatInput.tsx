@@ -195,7 +195,9 @@ import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import {
   getComposerSendShortcutPreference,
+  getComposerSendShortcutLabel,
   resolveComposerEnterIntent,
+  useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
 import { createLogger } from '@/lib/logger';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
@@ -911,7 +913,12 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
+  const composerSendShortcutLabel = getComposerSendShortcutLabel(
+    composerSendShortcutPreference,
+    window.electronAPI?.platform,
+  );
   const steerShortcutLabel = useMemo(
     () => (window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'),
     [],
@@ -2485,22 +2492,23 @@ export function ChatInput({
         }
       }
 
+      const enterIntent = resolveComposerEnterIntent(
+        event,
+        getComposerSendShortcutPreference(),
+        { turnRunning: showStopButtonRef.current },
+      );
+      const isModifiedEnter = event.metaKey || event.ctrlKey;
       if (
-        showStopButtonRef.current &&
         isComposerEnterTarget(event.target) &&
-        event.key === 'Enter' &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        !event.altKey &&
-        !event.repeat &&
-        !event.isComposing &&
+        isModifiedEnter &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
         currentState !== 'listening'
       ) {
         event.preventDefault();
         event.stopPropagation();
         clearPressTimer();
         voiceShortcutPressRef.current = null;
-        void dispatchSendRef.current('steer');
+        void dispatchSendRef.current(enterIntent);
         return;
       }
 
@@ -2508,24 +2516,14 @@ export function ChatInput({
         currentState === 'listening' &&
         voiceInputCanStopAndSendRef.current &&
         isVoiceInputEnterTarget(event.target) &&
-        event.key === 'Enter' &&
-        !event.shiftKey &&
-        !event.altKey &&
-        !event.repeat &&
-        !event.isComposing &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
         !isVoiceInputShortcutMatch(event, voiceShortcutRef.current)
       ) {
         event.preventDefault();
         event.stopPropagation();
         clearPressTimer();
         voiceShortcutPressRef.current = null;
-        const deliveryMode =
-          (event.metaKey || event.ctrlKey) &&
-          showStopButtonRef.current &&
-          composerCanSubmitRef.current
-            ? 'steer'
-            : 'queue';
-        void voiceInputStopAndSendRef.current(deliveryMode);
+        void voiceInputStopAndSendRef.current(enterIntent);
         return;
       }
 
@@ -5784,13 +5782,17 @@ export function ChatInput({
                           voiceReleaseToSendActive
                             ? t('newChat.chatInput.voiceInput.releaseToSend')
                             : voiceInput.isListening && !sendButtonDisabled
-                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`
+                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                               : showStopButton
-                                ? t('newChat.sendButton.queueTooltip', {
-                                    shortcut: steerShortcutLabel,
-                                  })
+                                ? composerSendShortcutPreference === 'modifier-enter'
+                                  ? t('newChat.sendButton.queueTooltipSendMode', {
+                                      shortcut: composerSendShortcutLabel,
+                                    })
+                                  : t('newChat.sendButton.queueTooltip', {
+                                      shortcut: steerShortcutLabel,
+                                    })
                                 : !sendButtonDisabled
-                                  ? `${t('newChat.sendButton.send')} · Enter`
+                                  ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
                                   : selectedSourceDisconnected
                                     ? t('newChat.sourceDisconnected.sendBlocked')
                                     : null

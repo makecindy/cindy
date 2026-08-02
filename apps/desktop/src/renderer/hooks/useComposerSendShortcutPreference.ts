@@ -12,6 +12,17 @@ export type ComposerEnterEvent = Pick<
 export const COMPOSER_SEND_SHORTCUT_STORAGE_KEY = 'chat.sendShortcutPreference';
 export const DEFAULT_COMPOSER_SEND_SHORTCUT: ComposerSendShortcutPreference = 'enter';
 
+export function getComposerModifierShortcutLabel(platform: string | undefined): string {
+  return platform === 'darwin' ? '⌘+Enter' : 'Ctrl+Enter';
+}
+
+export function getComposerSendShortcutLabel(
+  preference: ComposerSendShortcutPreference,
+  platform: string | undefined,
+): string {
+  return preference === 'modifier-enter' ? getComposerModifierShortcutLabel(platform) : 'Enter';
+}
+
 function parsePreference(raw: string | null): ComposerSendShortcutPreference | null {
   return raw === 'modifier-enter' ? raw : null;
 }

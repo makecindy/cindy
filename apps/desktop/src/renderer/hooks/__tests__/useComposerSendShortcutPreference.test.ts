@@ -6,6 +6,7 @@ import { act, renderHook } from '@testing-library/react';
 import {
   _resetComposerSendShortcutPreferenceForTests,
   getComposerSendShortcutPreference,
+  getComposerSendShortcutLabel,
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
   type ComposerSendShortcutPreference,
@@ -23,6 +24,15 @@ describe('useComposerSendShortcutPreference', () => {
   beforeEach(() => {
     localStorage.clear();
     _resetComposerSendShortcutPreferenceForTests();
+  });
+
+  it.each([
+    ['enter', 'darwin', 'Enter'],
+    ['enter', 'win32', 'Enter'],
+    ['modifier-enter', 'darwin', '⌘+Enter'],
+    ['modifier-enter', 'linux', 'Ctrl+Enter'],
+  ] as const)('formats the send shortcut label for %s on %s', (preference, platform, expected) => {
+    expect(getComposerSendShortcutLabel(preference, platform)).toBe(expected);
   });
 
   it('defaults to Enter and treats the default as not customized', () => {

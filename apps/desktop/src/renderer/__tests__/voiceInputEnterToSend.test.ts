@@ -28,14 +28,15 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(keydownBlock).toContain("currentState === 'listening'");
     expect(keydownBlock).toContain('voiceInputCanStopAndSendRef.current');
     expect(keydownBlock).toContain('isVoiceInputEnterTarget(event.target)');
-    expect(keydownBlock).toContain("event.key === 'Enter'");
+    expect(keydownBlock).toContain('resolveComposerEnterIntent(');
+    expect(keydownBlock).toContain('getComposerSendShortcutPreference()');
+    expect(keydownBlock).toContain('turnRunning: showStopButtonRef.current');
+    expect(keydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(keydownBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
-    expect(keydownBlock).toContain(
-      "(event.metaKey || event.ctrlKey) &&\n          showStopButtonRef.current &&\n          composerCanSubmitRef.current\n            ? 'steer'\n            : 'queue'",
-    );
     expect(keydownBlock).toContain('event.preventDefault();');
     expect(keydownBlock).toContain('event.stopPropagation();');
-    expect(keydownBlock).toContain('void voiceInputStopAndSendRef.current(deliveryMode);');
+    expect(keydownBlock).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
+    expect(keydownBlock).not.toContain('composerCanSubmitRef.current');
   });
 
   it('allows voice Enter-to-send only when the event target itself falls back to the document body', () => {
@@ -84,9 +85,26 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(chatInputSource).toContain('void voiceInputStopAndSendRef.current(enterIntent);');
   });
 
-  it('shows Enter shortcuts in the same label-dot-shortcut tooltip style as the voice input button', () => {
-    expect(chatInputSource).toContain("`${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`");
-    expect(chatInputSource).toContain("`${t('newChat.sendButton.send')} · Enter`");
+  it('uses the configured composer shortcut in send and voice tooltips', () => {
+    expect(chatInputSource).toContain(
+      'const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();',
+    );
+    expect(chatInputSource).toContain(
+      'const composerSendShortcutLabel = getComposerSendShortcutLabel(',
+    );
+    expect(chatInputSource).toContain('window.electronAPI?.platform');
+    expect(chatInputSource).toContain(
+      "`${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`",
+    );
+    expect(chatInputSource).toContain(
+      "`${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`",
+    );
+    expect(chatInputSource).toContain("t('newChat.sendButton.queueTooltipSendMode', {");
+    expect(chatInputSource).toContain('shortcut: composerSendShortcutLabel');
+    expect(chatInputSource).not.toContain(
+      "`${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`",
+    );
+    expect(chatInputSource).not.toContain("`${t('newChat.sendButton.send')} · Enter`");
   });
 
   it('allows release-to-send while listening before ASR draft arrives', () => {

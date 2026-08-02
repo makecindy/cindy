@@ -16,6 +16,10 @@ const pendingQueuePanelSource = readFileSync(
   resolve(__dirname, '..', 'components', 'new-chat', 'PendingQueuePanel.tsx'),
   'utf8',
 ).replace(/\r\n?/g, '\n');
+const composerSettingsSource = readFileSync(
+  resolve(__dirname, '..', 'components', 'settings', 'ComposerSendShortcutSection.tsx'),
+  'utf8',
+).replace(/\r\n?/g, '\n');
 
 describe('ChatInput steer shortcut contract', () => {
   it('routes Cmd/Ctrl+Enter in the composer through steer while a turn is running', () => {
@@ -29,20 +33,21 @@ describe('ChatInput steer shortcut contract', () => {
       '// Resolve the configurable send shortcut after structured list handling.',
       'return false;\n      },\n    },',
     );
-    const windowComposerSteerBlock = extractBetween(
+    const windowComposerCaptureBlock = extractBetween(
       windowKeydownBlock,
-      'if (\n        showStopButtonRef.current &&',
+      'const enterIntent = resolveComposerEnterIntent(',
       "if (\n        currentState === 'listening'",
     );
     expect(chatInputSource).toContain('const composerCanSubmitRef = useRef(false);');
     expect(chatInputSource).toContain('composerCanSubmitRef.current = !sendButtonDisabled;');
     expect(windowKeydownBlock).toContain('showStopButtonRef.current');
     expect(windowKeydownBlock).toContain('isComposerEnterTarget(event.target)');
-    expect(windowKeydownBlock).toContain("event.key === 'Enter'");
-    expect(windowKeydownBlock).toContain('event.metaKey || event.ctrlKey');
-    expect(windowKeydownBlock).toContain('!event.altKey');
+    expect(windowKeydownBlock).toContain('resolveComposerEnterIntent(');
+    expect(windowKeydownBlock).toContain('getComposerSendShortcutPreference()');
+    expect(windowKeydownBlock).toContain('const isModifiedEnter = event.metaKey || event.ctrlKey;');
+    expect(windowKeydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(windowKeydownBlock).toContain("currentState !== 'listening'");
-    expect(windowKeydownBlock).toContain("void dispatchSendRef.current('steer');");
+    expect(windowKeydownBlock).toContain('void dispatchSendRef.current(enterIntent);');
     expect(chatInputSource).toContain("'Alt-Enter': () => this.editor.commands.setHardBreak()");
     expect(chatInputSource).toContain('ComposerHardBreak');
     expect(chatInputSource).toContain('turnRunning={showStopButton}');
@@ -55,7 +60,7 @@ describe('ChatInput steer shortcut contract', () => {
     expect(editorEnterBlock).toContain('void dispatchSendRef.current(enterIntent);');
     // Tiptap's document is current before React's send-button effect updates
     // composerCanSubmitRef. The resolver must not use that lagging UI mirror.
-    expect(windowComposerSteerBlock).not.toContain('composerCanSubmitRef.current');
+    expect(windowComposerCaptureBlock).not.toContain('composerCanSubmitRef.current');
     expect(editorEnterBlock).not.toContain('composerCanSubmitRef.current');
   });
 
@@ -106,6 +111,18 @@ describe('ChatInput steer shortcut contract', () => {
     expect(modeB(makeEnterEvent({ altKey: true }))).toBeNull();
     expect(modeB(makeEnterEvent({ isComposing: true }))).toBe('native');
     expect(modeB(makeEnterEvent({ repeat: true }))).toBe('ignore');
+  });
+
+  it('wires Settings preference updates to ChatInput copy while preserving row-level steer', () => {
+    expect(composerSettingsSource).toContain('useComposerSendShortcutPreference()');
+    expect(composerSettingsSource).toContain("setPreference(enabled ? 'modifier-enter' : 'enter')");
+    expect(composerSettingsSource).toContain("setPreference('enter');");
+    expect(chatInputSource).toContain('useComposerSendShortcutPreference()');
+    expect(chatInputSource).toContain('getComposerSendShortcutLabel(');
+    expect(chatInputSource).toContain("composerSendShortcutPreference === 'modifier-enter'");
+    expect(chatInputSource).toContain('newChat.sendButton.queueTooltipSendMode');
+    expect(pendingQueuePanelSource).toContain('isPendingQueueSteerShortcut');
+    expect(pendingQueuePanelSource).toContain('void onSteer(entry.clientId);');
   });
 });
 
