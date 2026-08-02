@@ -21,6 +21,7 @@ vi.mock('../../logger.js', () => ({
 }));
 
 const {
+  cleanupOwnedUnpersistedStagedChatAttachments,
   cleanupStagedChatAttachments,
   getChatAttachmentCacheRoot,
   getChatAttachmentOwnerCacheRoot,
@@ -57,6 +58,19 @@ describe('chat attachment staging cache', () => {
 
     await expect(fs.stat(stagedPath)).resolves.toMatchObject({ size: payload.byteLength });
     await expect(fs.stat(disposablePart)).rejects.toMatchObject({ code: 'ENOENT' });
+  });
+
+  it('supports the reserved owner used by account-free local mode', async () => {
+    const payload = Buffer.from('local-installer');
+    const stagedPath = await stageLocalFileToCache({
+      ownerId: 'local-v1',
+      suggestedName: 'setup.exe',
+      expectedSize: BigInt(payload.byteLength),
+      copyTo: (targetPath) => fs.writeFile(targetPath, payload),
+    });
+
+    expect(path.dirname(stagedPath)).toBe(getChatAttachmentOwnerCacheRoot('local-v1'));
+    await expect(fs.readFile(stagedPath)).resolves.toEqual(payload);
   });
 
   it('sweeps only old, unreferenced files for the current owner', async () => {
@@ -120,6 +134,53 @@ describe('chat attachment staging cache', () => {
     await expect(fs.stat(safeNamePath)).resolves.toBeDefined();
     await expect(fs.stat(directoryPath)).resolves.toBeDefined();
     await expect(fs.stat(outsidePath)).resolves.toBeDefined();
+  });
+
+  it('renderer cleanup removes only current-owner files not retained by messages', async () => {
+    const ownerId = 'owner-a';
+    const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
+    const otherOwnerRoot = getChatAttachmentOwnerCacheRoot('owner-b');
+    await fs.mkdir(ownerRoot, { recursive: true });
+    await fs.mkdir(otherOwnerRoot, { recursive: true });
+    const draftPath = path.join(ownerRoot, 'draft.bin');
+    const persistedPath = path.join(ownerRoot, 'persisted.bin');
+    const otherOwnerPath = path.join(otherOwnerRoot, 'other.bin');
+    const nestedPath = path.join(ownerRoot, 'nested', 'nested.bin');
+    await fs.mkdir(path.dirname(nestedPath), { recursive: true });
+    await Promise.all([
+      fs.writeFile(draftPath, 'draft'),
+      fs.writeFile(persistedPath, 'persisted'),
+      fs.writeFile(otherOwnerPath, 'other'),
+      fs.writeFile(nestedPath, 'nested'),
+    ]);
+
+    await cleanupOwnedUnpersistedStagedChatAttachments({
+      ownerId,
+      filePaths: [draftPath, persistedPath, otherOwnerPath, nestedPath],
+      protectedPaths: [persistedPath],
+    });
+
+    await expect(fs.stat(draftPath)).rejects.toMatchObject({ code: 'ENOENT' });
+    await expect(fs.stat(persistedPath)).resolves.toBeDefined();
+    await expect(fs.stat(otherOwnerPath)).resolves.toBeDefined();
+    await expect(fs.stat(nestedPath)).resolves.toBeDefined();
+  });
+
+  it('renderer cleanup rechecks the active owner before unlinking', async () => {
+    const ownerId = 'owner-a';
+    const ownerRoot = getChatAttachmentOwnerCacheRoot(ownerId);
+    const draftPath = path.join(ownerRoot, 'draft.bin');
+    await fs.mkdir(ownerRoot, { recursive: true });
+    await fs.writeFile(draftPath, 'draft');
+
+    await cleanupOwnedUnpersistedStagedChatAttachments({
+      ownerId,
+      filePaths: [draftPath],
+      protectedPaths: [],
+      canRemove: () => false,
+    });
+
+    await expect(fs.stat(draftPath)).resolves.toBeDefined();
   });
 
   it('is idempotent when the staged file is already gone', async () => {

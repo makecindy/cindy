@@ -21,6 +21,7 @@ import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { app } from 'electron';
 
+import { dataOwnerStorageKey } from '../appSessionState.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('file-browser/remote-cache');
@@ -58,8 +59,7 @@ function chatAttachmentCacheDir(): string {
 }
 
 function chatAttachmentOwnerCacheDir(ownerId: string): string {
-  const ownerHash = createHash('sha256').update(ownerId).digest('hex').slice(0, 32);
-  return path.join(chatAttachmentCacheDir(), ownerHash);
+  return path.join(chatAttachmentCacheDir(), dataOwnerStorageKey(ownerId));
 }
 
 export function getChatAttachmentOwnerCacheRoot(ownerId: string): string {
@@ -135,6 +135,49 @@ export async function cleanupStagedChatAttachments(
 function normalizePathForComparison(filePath: string): string {
   const resolved = path.resolve(filePath);
   return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+/**
+ * Remove renderer-owned draft copies without crossing owner or persisted-message
+ * boundaries. The optional guard is checked immediately before unlink so an
+ * account switch that happens while filesystem metadata is being read cancels
+ * the destructive step.
+ */
+export async function cleanupOwnedUnpersistedStagedChatAttachments(params: {
+  ownerId: string;
+  filePaths: readonly string[];
+  protectedPaths: readonly string[];
+  canRemove?: () => boolean;
+}): Promise<void> {
+  const ownerDir = normalizePathForComparison(chatAttachmentOwnerCacheDir(params.ownerId));
+  const protectedPaths = new Set(params.protectedPaths.map(normalizePathForComparison));
+  await Promise.all(
+    params.filePaths.map(async (filePath) => {
+      if (
+        typeof filePath !== 'string' ||
+        !path.isAbsolute(filePath) ||
+        path.extname(filePath).toLowerCase() !== '.bin' ||
+        normalizePathForComparison(path.dirname(filePath)) !== ownerDir ||
+        protectedPaths.has(normalizePathForComparison(filePath))
+      ) {
+        return;
+      }
+      try {
+        const stat = await fs.lstat(filePath);
+        if (!stat.isFile() && !stat.isSymbolicLink()) return;
+        if (params.canRemove && !params.canRemove()) return;
+        await fs.unlink(filePath);
+      } catch (err) {
+        const code = (err as NodeJS.ErrnoException | null)?.code;
+        if (code !== 'ENOENT') {
+          log.warn('owned staged chat attachment cleanup failed', {
+            filePath,
+            error: String(err),
+          });
+        }
+      }
+    }),
+  );
 }
 
 export interface StartupStagedChatAttachmentSweepResult {

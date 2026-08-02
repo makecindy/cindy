@@ -201,7 +201,7 @@ import {
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
 import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
-  cleanupStagedChatAttachments,
+  cleanupOwnedUnpersistedStagedChatAttachments,
   getChatAttachmentCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
@@ -5081,8 +5081,8 @@ const registerIpcHandlers = () => {
       };
     },
     stageCopy: (params) => {
-      const ownerId = authManager.getAuthState().user?.id;
-      if (!ownerId) throw new Error('Cannot stage an attachment without an authenticated owner');
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId) throw new Error('Cannot stage an attachment without an active data owner');
       return stageLocalFileToCache({ ...params, ownerId });
     },
   });
@@ -5095,10 +5095,22 @@ const registerIpcHandlers = () => {
   );
   ipcMain.handle(
     'chat-attachment:cleanup',
-    (event, filePaths: readonly string[]) => {
+    async (event, filePaths: readonly string[]) => {
       assertTrustedAppRendererEvent(event);
-      if (!Array.isArray(filePaths)) return Promise.resolve();
-      return cleanupStagedChatAttachments(filePaths);
+      if (!Array.isArray(filePaths)) return;
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) return;
+      const protectedPaths = await listPersistedChatAttachmentPaths();
+      const isCurrentOwner = () =>
+        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
+      if (!isCurrentOwner()) return;
+      await cleanupOwnedUnpersistedStagedChatAttachments({
+        ownerId,
+        filePaths,
+        protectedPaths,
+        canRemove: isCurrentOwner,
+      });
     },
   );
   ipcMain.handle(
