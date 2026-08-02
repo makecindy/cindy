@@ -42,6 +42,7 @@ import {
   type OwnershipStore,
 } from './ownership';
 import { DEVICE_LINK_PUSH } from '../../shared/deviceLinkIpc';
+import { createTransportTimeoutReopenLoop } from './transportTimeoutReopen';
 import {
   readDeviceLinkSettings,
   rememberLastKnownDeviceName,
@@ -104,6 +105,26 @@ export function deviceLinkApiBase(): string {
 }
 
 let client: DeviceLinkClient | null = null;
+
+/**
+ * transport-timeout 重开循环(控制端):被控端瞬时重置后 relay/presence 都不会
+ * 再来事件,一次 openRemoteLink 失败就放弃会让在途回包与实时订阅长期挂起。
+ * 退避重试 + per-device 去重,终止于:成功 / 撤权 / 待命态 / relay 离线(断线后
+ * 由 presence 闪断路径接管恢复) / 次数耗尽(用户下次打开远程视图惰性重建)。
+ */
+const transportTimeoutReopen = createTransportTimeoutReopenLoop({
+  reopen: (deviceId) => openRemoteLink(deviceId),
+  shouldAbort: (deviceId) => (
+    !client
+    || client.getStatus() !== 'online'
+    || (arbiter !== null && !arbiter.isOwner())
+    || isDeviceRevoked(deviceId)
+  ),
+  log: {
+    info: (msg) => log.info(msg),
+    warn: (msg) => log.warn(msg),
+  },
+});
 let arbiter: DeviceLinkOwnershipArbiter | null = null;
 let observedAuthRealm: ReturnType<typeof authManager.getActiveAuthRealm> | null = null;
 let authRealmReconnectGeneration = 0;
@@ -283,7 +304,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
 
   client.onStatusChange((status) => {
-    if (status !== 'online') openLinkInFlight.clear();
+    if (status !== 'online') {
+      openLinkInFlight.clear();
+      // relay 离线:重开循环全部终止,恢复交给断线重连后的 presence 闪断路径。
+      transportTimeoutReopen.dispose();
+    }
     // 断线期间 relay 不会为对端补发 offline presence,重连后同一台电脑仍以
     // online 到达,`wasOnline` 还是 true —— 上线握手不会触发,而断线这段时间的
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
@@ -367,17 +392,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (env.kind === 'link-close') {
       const reason = (env.payload as LinkClosePayload | undefined)?.reason;
       if (reason === 'revoked') {
+        transportTimeoutReopen.cancel(env.src);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       } else if (reason === 'transport-timeout') {
         // 被控端对本机的可靠重试耗尽,做了 peer 级瞬时重置(relay 保持在线,
         // 无 presence 变化可依赖)。立即重开链路:可靠层已按瞬时重置保留
         // stream/pending(见 client dispatchEnvelope),被控端也保留了订阅注册
         // 表与在途回包 —— link-accept 后双向同 seq 续传,renderer 远程视图无感
-        // 恢复。openRemoteLink 自带 in-flight 去重;失败(对端真离线/待命态)
-        // 由既有 presence 与重连路径兕底,不在此重试。
-        void openRemoteLink(env.src).catch((err) => {
-          log.debug(`transport-timeout re-open failed for ${env.src?.slice(0, 8)}: ${String(err)}`);
-        });
+        // 恢复。单次失败不放弃:有界退避重试到成功/终止条件(见
+        // transportTimeoutReopen 模块注释)。
+        transportTimeoutReopen.trigger(env.src);
       }
       return;
     }

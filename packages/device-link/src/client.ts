@@ -19,6 +19,7 @@ import {
 } from './protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_CHUNK_BYTES,
   MAX_TRANSPORT_PENDING_BYTES,
@@ -268,6 +269,8 @@ interface PeerTransportState {
    * 超时 peer 的 link;控制端(出站 openLink)维持整连接重连兼作恢复探测。
    */
   linkAcceptedInbound: boolean;
+  /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
+  supportsTransportTimeoutClose: boolean;
   pending: Map<number, PendingReliableMessage>;
   pendingBytes: number;
   retryTimer: ReturnType<typeof setInterval> | null;
@@ -1866,6 +1869,7 @@ export class DeviceLinkClient {
         linkReady: false,
         explicitlyClosed: false,
         linkAcceptedInbound: false,
+        supportsTransportTimeoutClose: false,
         pending: new Map(),
         pendingBytes: 0,
         retryTimer: null,
@@ -1952,6 +1956,10 @@ export class DeviceLinkClient {
       Array.isArray(capabilities)
       && capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     );
+    peer.supportsTransportTimeoutClose = (
+      Array.isArray(capabilities)
+      && capabilities.includes(DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE)
+    );
     const nextRemoteStreamId = reliable && typeof remoteStreamId === 'string' && remoteStreamId
       ? remoteStreamId
       : null;
@@ -1982,6 +1990,7 @@ export class DeviceLinkClient {
       ...payload,
       capabilities: this.mergeCapabilities(payload.capabilities, [
         DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+        DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
       ]),
       transportStreamId: typeof payload.transportStreamId === 'string'
         ? payload.transportStreamId
@@ -2200,7 +2209,10 @@ export class DeviceLinkClient {
   private handleReliableRetryExhausted(dst: string, seq: number): void {
     if (this.stopped || this.status !== 'online') return;
     const peer = this.peerTransport.get(dst);
-    if (!peer?.linkAcceptedInbound) {
+    // 能力门:旧控制端(未声明 transport-timeout-close-v1)把未知 reason 当永久
+    // 关闭且不会自动重开——relay/presence 保持在线时订阅与在途请求会静默挂死。
+    // 对这类对端保留整连接重连的兼容恢复路径(presence 闪断触发其既有 rehydrate)。
+    if (!peer?.linkAcceptedInbound || !peer.supportsTransportTimeoutClose) {
       this.forceReconnectForReliableTimeout(dst, seq);
       return;
     }

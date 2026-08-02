@@ -7,6 +7,7 @@ import { DeviceLinkClient, type WsLike } from '../client.js';
 import { PROTOCOL_VERSION, DeviceLinkError, type Envelope } from '../protocol.js';
 import {
   DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+  DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
   DEVICE_LINK_TRANSPORT_ACK_CHANNEL,
   MAX_TRANSPORT_PENDING_MESSAGES,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
@@ -108,6 +109,12 @@ async function establishInboundReliableLink(
   streamId: string,
   transportBaseSeq = 1,
   src = 'dev-b',
+  // 默认模拟新版控制端(addLocalCapabilities 会自动声明两项);传入仅
+  // RELIABLE 可模拟旧版控制端(不认识 transport-timeout 的瞬时重置语义)。
+  capabilities: string[] = [
+    DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+    DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+  ],
 ): Promise<void> {
   const id = `inbound-link-${++inboundLinkId}`;
   const off = h.client.onFrame((env) => {
@@ -126,7 +133,7 @@ async function establishInboundReliableLink(
       controllerName: 'Remote',
       protocolVersion: 1,
       appVersion: '1',
-      capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+      capabilities,
       transportStreamId: streamId,
       transportBaseSeq,
     },
@@ -794,6 +801,39 @@ describe('DeviceLinkClient', () => {
       env.kind === 'push'
       && parseTransportPayload(env.payload)
     ))).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    // 旧版控制端:只声明 reliable,不声明 transport-timeout-close-v1
+    await establishInboundReliableLink(
+      h,
+      'legacy-stream',
+      1,
+      'dev-b',
+      [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+    );
+
+    const firstSocket = h.current();
+    h.client.sendInvokeResult('dev-b', 'legacy-replay', { ok: true, result: [] });
+
+    // 对旧对端不能发它不理解的 reason(会被当永久关闭且永不重开):
+    // 回退到旧的整连接重连,靠 presence 闪断触发对端既有 rehydrate。
+    await vi.waitFor(() => expect(firstSocket.terminated).toBe(true));
+    await vi.waitFor(() => expect(h.sockets.length).toBe(2));
+    expect(firstSocket.sent.some((env) => env.kind === 'link-close')).toBe(false);
     h.client.stop();
   });
 
