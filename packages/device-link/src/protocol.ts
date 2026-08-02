@@ -129,7 +129,15 @@ export interface LinkAcceptPayload {
   transportBaseSeq?: number;
 }
 
-export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked';
+/**
+ * link-close 的关闭原因。wire 兼容:接收方只特判 `'revoked'`(撤权),其它值
+ * 一律走通用关闭路径(mobile `handlePeerLinkCloseFrame` / client `dispatchEnvelope`
+ * 均如此)——新增枚举值对存量客户端是安全的 fail-generic。
+ *
+ * `transport-timeout`:被控端对该 peer 的可靠重试耗尽,单独重置这条 link
+ * (不拆 relay 连接);存活的对端收到后应重新 link-open。
+ */
+export type LinkCloseReason = 'user' | 'toggle-off' | 'shutdown' | 'revoked' | 'transport-timeout';
 
 export interface LinkClosePayload {
   reason: LinkCloseReason;

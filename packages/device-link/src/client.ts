@@ -262,6 +262,12 @@ interface PeerTransportState {
   reliable: boolean;
   linkReady: boolean;
   explicitlyClosed: boolean;
+  /**
+   * 该 link 最近一次是否由对端发起、本机 accept(= 本机在这条 link 上是被控端)。
+   * 可靠重试耗尽的止损分级依据:被控端同一条 relay 连接服务多个控制端,只重置
+   * 超时 peer 的 link;控制端(出站 openLink)维持整连接重连兼作恢复探测。
+   */
+  linkAcceptedInbound: boolean;
   pending: Map<number, PendingReliableMessage>;
   pendingBytes: number;
   retryTimer: ReturnType<typeof setInterval> | null;
@@ -636,6 +642,7 @@ export class DeviceLinkClient {
         matchingOffer.transportBaseSeq,
       );
     }
+    peer.linkAcceptedInbound = true;
     if (peerSupportsReliable) {
       const resumedLink = !peer.linkReady;
       peer.linkReady = true;
@@ -1251,6 +1258,7 @@ export class DeviceLinkClient {
             const peer = this.getPeerTransport(env.src);
             const resumedLink = !peer.linkReady;
             peer.linkReady = true;
+            peer.linkAcceptedInbound = false;
             this.resumeReceiveStreams(env.src, peer);
             this.replayPending(env.src, resumedLink);
           }
@@ -1838,6 +1846,7 @@ export class DeviceLinkClient {
         reliable: false,
         linkReady: false,
         explicitlyClosed: false,
+        linkAcceptedInbound: false,
         pending: new Map(),
         pendingBytes: 0,
         retryTimer: null,
@@ -2119,7 +2128,7 @@ export class DeviceLinkClient {
     for (const pending of peer.pending.values()) {
       if (!force && now - pending.lastSentAt < this.timing.transportRetryIntervalMs) continue;
       if (pending.attempts >= this.timing.transportMaxRetryAttempts) {
-        this.forceReconnectForReliableTimeout(dst, pending.seq);
+        this.handleReliableRetryExhausted(dst, pending.seq);
         return;
       }
       try {
@@ -2149,6 +2158,49 @@ export class DeviceLinkClient {
     }
     this.retryPending(dst, true);
     this.ensureRetryTimer(dst);
+  }
+
+  /**
+   * 可靠重试耗尽的**止损分级**:
+   *
+   * - 入站接受的 link(本机是被控端,同一条 relay 连接服务多个控制端):只重置
+   *   该 peer 的 link,不炸整条 relay 连接。v0.1.26 线上:一台休眠 iPhone 的 ACK
+   *   耗尽单日把整条 relay 连接强拆 38 次,其它 peer(另一台手机 / 飞书 hook)全部
+   *   陪葬,重连风暴又放大成订阅风暴。重置语义:
+   *   - linkReady=false + 停重试计时器;**不清 pending**——live invoke-result 等
+   *     下次 link-accept 后按原 seq 重放(陈旧 push 前缀由重放前清扫丢弃),
+   *     不丢在途回包,也不碰 dispatch 层的去重缓存与订阅状态;
+   *   - best-effort 发 link-close(transport-timeout):存活但卡流的对端据此
+   *     立即重开链路;真休眠的对端唤醒后自会 rehydrate → link-open。
+   * - 出站发起的 link(本机是控制端,单 peer):维持原语义——整连接重连兼作
+   *   恢复探测,与 mobile 现有 rehydrate/熔断流程耦合,不在此改变。
+   */
+  private handleReliableRetryExhausted(dst: string, seq: number): void {
+    if (this.stopped || this.status !== 'online') return;
+    const peer = this.peerTransport.get(dst);
+    if (!peer?.linkAcceptedInbound) {
+      this.forceReconnectForReliableTimeout(dst, seq);
+      return;
+    }
+    this.log.warn(
+      `reliable transport ACK timeout for ${dst.slice(0, 8)} seq=${seq}; resetting peer link (relay connection kept alive)`,
+    );
+    peer.linkReady = false;
+    if (peer.retryTimer) {
+      clearInterval(peer.retryTimer);
+      peer.retryTimer = null;
+    }
+    try {
+      this.sendEnvelope({
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        dst,
+        payload: { reason: 'transport-timeout' } satisfies LinkClosePayload,
+      });
+    } catch (err) {
+      // fire-and-forget:通知失败只记日志,重置本身已完成,对端重开链路后恢复。
+      this.log.debug(`transport-timeout link-close notification failed for ${dst.slice(0, 8)}`, err);
+    }
   }
 
   private forceReconnectForReliableTimeout(dst: string, seq: number): void {

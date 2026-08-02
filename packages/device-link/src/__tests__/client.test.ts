@@ -741,6 +741,62 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站 link 的可靠重试耗尽只重置该 peer link:relay 连接不拆,发 transport-timeout link-close,重开后 live 帧按原 seq 重放', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+
+    const firstSocket = h.current();
+    // 可丢弃前缀(陈旧实时镜像) + 不可丢弃的 live invoke-result
+    h.client.sendPush('dev-b', 'maker:event', { drop: 'me' });
+    h.client.sendInvokeResult('dev-b', 'keep-me', { ok: true, result: [] });
+    const firstReliable = firstSocket.sent.find((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ))!;
+    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+
+    // 对端永不 ACK → 重试耗尽 → 只重置该 peer 的 link 并通知对端
+    await vi.waitFor(() => {
+      expect(firstSocket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // relay 连接毫发无损:既没 terminate,也没新建 socket(其它 peer 零感知)
+    expect(firstSocket.terminated).toBe(false);
+    expect(firstSocket.closed).toBeNull();
+    expect(h.sockets).toHaveLength(1);
+
+    // 对端重开链路 → 陈旧 push 前缀被清扫,live invoke-result 按原 seq 重放
+    const sentBefore = firstSocket.sent.length;
+    await establishInboundReliableLink(h, 'inbound-timeout-stream');
+    const replayed = firstSocket.sent.slice(sentBefore);
+    const replays = replayed.filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ));
+    expect(replays).toHaveLength(1);
+    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+      streamId: firstMeta.streamId,
+      seq: firstMeta.seq,
+    });
+    expect(replayed.filter((env) => (
+      env.kind === 'push'
+      && parseTransportPayload(env.payload)
+    ))).toHaveLength(0);
+    h.client.stop();
+  });
+
   it('对端显式关闭 link 时终止可靠 pending，不留到未来重放', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 1_000 } });
     h.client.start();
