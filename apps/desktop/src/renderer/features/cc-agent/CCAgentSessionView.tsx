@@ -3528,6 +3528,7 @@ export function CCAgentSessionView({
                  胶囊的悬停浮层向上展开,会盖住交互卡内容(条件集与下方 ternary
                  的静默判定保持一致)。 */}
               <PinnedPlanPanel
+                sessionId={sessionId ?? null}
                 messages={messages}
                 animated={isStreaming}
                 width={inputWidth}
