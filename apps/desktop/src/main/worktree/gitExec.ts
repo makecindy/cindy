@@ -88,6 +88,10 @@ function execFileOnce(
     // 流关闭——被后代进程继承并占住时回调可能远超 deadline 才来。这里自管定时器,
     // 超时先终止整棵进程树/进程组(两个平台都含后代),再显式收口 Promise。
     let settled = false;
+    // 超时收口流程一旦启动就接管最终 settle:execFile 回调只代表 stdio 流关闭,
+    // 不代表进程组已清空——此后回调不得再 settle,否则会在 credential helper 等
+    // 后代还活着时提前结束 Promise,调用方随即发起的 git 操作与残留进程争锁。
+    let timedOut = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reaper: ReturnType<typeof setTimeout> | undefined;
     let groupPoll: ReturnType<typeof setInterval> | undefined;
@@ -118,6 +122,11 @@ function execFileOnce(
       [...args],
       spawnOptions,
       (err, stdout, stderr) => {
+        if (timedOut) {
+          // 超时路径已接管:最终 reject 只在进程组确认清空或硬杀收尾后发生,
+          // 这里直接丢弃迟到结果(操作已按超时定性),绝不提前 settle。
+          return;
+        }
         // execFile 默认 encoding 是 'utf8' → stdout/stderr 是 string;
         // 但若上层未来传了 encoding:'buffer', 兜底转字符串避免崩溃。
         const stdoutAny = stdout as unknown;
@@ -163,6 +172,7 @@ function execFileOnce(
     const timeoutMs = opts?.timeoutMs;
     if (timeoutMs !== undefined && timeoutMs > 0) {
       timer = setTimeout(() => {
+        timedOut = true;
         const failTimeout = () =>
           settle(() =>
             reject(

@@ -215,6 +215,30 @@ describe('gitExec timeoutMs', () => {
     expect(mocks.killProcessTree).not.toHaveBeenCalled();
   });
 
+  it('超时后 execFile 回调先到而组未清空 → 不提前 settle,组清空才 reject', async () => {
+    setPlatform('linux');
+    const state = installExecFileMock();
+    const { group } = installProcessKillMock();
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('timed out'),
+    });
+
+    vi.advanceTimersByTime(500);
+    await flushMicrotasks();
+    // leader 退出、stdio 关闭 → execFile 回调到了,但 credential helper 还活着:
+    // 回调不得抢先 settle,否则调用方与幸存后代并发争锁
+    state.gitCb!(new Error('killed'), '', '');
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+
+    group.alive = false;
+    vi.advanceTimersByTime(100);
+    await expectation;
+  });
+
   it('超时收口后迟到的 git 回调不覆盖结果', async () => {
     setPlatform('linux');
     const state = installExecFileMock();
