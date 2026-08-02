@@ -58,9 +58,11 @@ const messageRowid = sql<number>`rowid`;
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 
-const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT content
-   FROM messages
-  WHERE content LIKE '%chat-attachment-cache%'`;
+const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT m.content
+   FROM messages AS m
+   JOIN sessions AS s ON s.id = m.session_id
+  WHERE s.status != 'deleted'
+    AND m.content LIKE '%chat-attachment-cache%'`;
 
 export interface EstimatedSessionValueEntry {
   clientId: string;

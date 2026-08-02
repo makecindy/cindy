@@ -9,6 +9,10 @@ const h = vi.hoisted(() => ({
   sqlite: null as Database.Database | null,
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   cleanupStagedChatAttachments: vi.fn(async (_filePaths: readonly string[]) => undefined),
+  query: vi.fn(async (query: string): Promise<Array<{ content: string }>> => {
+    if (!h.sqlite) throw new Error('test sqlite not initialized');
+    return h.sqlite.prepare(query).all() as Array<{ content: string }>;
+  }),
   tx: vi.fn(
     async (
       _name: string,
@@ -86,7 +90,7 @@ vi.mock('../../../file-browser/remote-file-cache', () => ({
   },
 }));
 vi.mock('../../client/current', () => ({
-  getDbClient: () => ({ drizzle: h.db, tx: h.tx }),
+  getDbClient: () => ({ drizzle: h.db, query: h.query, tx: h.tx }),
 }));
 
 import {
@@ -97,6 +101,7 @@ import {
   getMessageDeletionTarget,
   commitMessageDeletion,
   listDeletableSessionPersistedChatAttachmentPaths,
+  listPersistedChatAttachmentPaths,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -258,6 +263,44 @@ describe('staged chat attachment retention', () => {
     await commitMessageDeletion('parent', ['parent-client'], 'handoff');
 
     expect(h.cleanupStagedChatAttachments).toHaveBeenCalledWith([parentOnlyPath]);
+  });
+
+  it('does not protect staged paths referenced only by deleted sessions', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('active', 'active');
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('deleted', 'deleted');
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('archived', 'archived');
+
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, created_at
+      ) VALUES (
+        @id, @id, @sessionId, 'user', @content, @createdAt
+      )
+    `);
+    insert.run({
+      id: 'active-message',
+      sessionId: 'active',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\active.bin' }] }),
+      createdAt: 1,
+    });
+    insert.run({
+      id: 'deleted-message',
+      sessionId: 'deleted',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\deleted.bin' }] }),
+      createdAt: 2,
+    });
+    insert.run({
+      id: 'archived-message',
+      sessionId: 'archived',
+      content: JSON.stringify({ files: [{ path: 'C:\\chat-attachment-cache\\archived.bin' }] }),
+      createdAt: 3,
+    });
+
+    await expect(listPersistedChatAttachmentPaths()).resolves.toEqual([
+      'C:\\chat-attachment-cache\\active.bin',
+      'C:\\chat-attachment-cache\\archived.bin',
+    ]);
   });
 });
 
