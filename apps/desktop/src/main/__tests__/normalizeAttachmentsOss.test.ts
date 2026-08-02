@@ -2,6 +2,8 @@
  * normalizeAttachmentsOss.test.ts — 被控端入方向物化:device-link 出方向 OSS 引用 →
  * presign-get 下载 → 写临时文件 → block.path 变本地路径 → 用后删 OSS。失败丢该附件。
  */
+import assert from 'node:assert/strict';
+
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
 vi.mock('electron', () => ({ app: { getPath: () => '/tmp/test-attach' } }));
@@ -420,19 +422,19 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
       { persistUserMessage: { clientId: 'c1', content: persistedContent } },
     );
 
-    expect(downloadToFile).toHaveBeenCalledTimes(1);
-    expect(copyFromPath).toHaveBeenCalledWith(
-      expect.objectContaining({ originalName: 'setup.exe' }),
-    );
-    expect(removeRemote).toHaveBeenCalledTimes(1);
-    expect(removeRemote).toHaveBeenCalledWith('oss/setup.bin');
+    assert.equal(downloadToFile.mock.calls.length, 1);
+    const copyArgs = copyFromPath.mock.calls[0]?.[0] as { originalName?: unknown } | undefined;
+    assert.equal(copyArgs?.originalName, 'setup.exe');
+    const removeCalls = removeRemote.mock.calls as unknown[][];
+    assert.equal(removeCalls.length, 1);
+    assert.equal(removeCalls[0]?.[0], 'oss/setup.bin');
 
     const block = (out.message as { content: Array<{ path?: string }> }).content[1];
-    expect(block.path).toBe('/cache/sess-1/cached-setup.exe.bin');
+    assert.equal(block.path, '/cache/sess-1/cached-setup.exe.bin');
     const pc = JSON.parse(
       (out.sendOpts as { persistUserMessage: { content: string } }).persistUserMessage.content,
     ) as { files: Array<{ name: string; path: string }> };
-    expect(pc.files[0]).toEqual({
+    assert.deepEqual(pc.files[0], {
       name: 'setup.exe',
       path: '/cache/sess-1/cached-setup.exe.bin',
       size: 15,
@@ -455,8 +457,8 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
       },
     };
     const out = await materializeDirectSendOssAttachments('sess-1', message, sendOpts);
-    expect(out).toEqual({ message, sendOpts });
-    expect(downloadToFile).not.toHaveBeenCalled();
+    assert.deepEqual(out, { message, sendOpts });
+    assert.equal(downloadToFile.mock.calls.length, 0);
   });
 
   it('materializing another OSS file does not strip an unrelated base64 image', async () => {
@@ -493,7 +495,7 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
         },
       },
     );
-    expect((out.message as typeof message).content[0]).toEqual({
+    assert.deepEqual((out.message as typeof message).content[0], {
       type: 'image',
       base64: 'inline-image',
       mimeType: 'image/png',
@@ -532,11 +534,11 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
         },
       },
     );
-    expect(ingestMedia).not.toHaveBeenCalled();
-    expect(copyFromPath).toHaveBeenCalledWith(
-      expect.objectContaining({ originalName: 'setup.exe' }),
-    );
-    expect((out.message as { content: Array<{ path: string }> }).content[0].path).toBe(
+    assert.equal(ingestMedia.mock.calls.length, 0);
+    const copyArgs = copyFromPath.mock.calls[0]?.[0] as { originalName?: unknown } | undefined;
+    assert.equal(copyArgs?.originalName, 'setup.exe');
+    assert.equal(
+      (out.message as { content: Array<{ path: string }> }).content[0].path,
       '/cache/sess-1/cached-setup.bin',
     );
   });
