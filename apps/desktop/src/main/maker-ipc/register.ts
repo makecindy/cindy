@@ -4067,6 +4067,10 @@ export interface RegisterMakerIpcOptions {
   onAnySessionTurnKeepaliveChange?: (isRunning: boolean) => void;
   /** 由 bootstrap 注入，避免 maker-ipc → model-access → maker-host 的循环依赖。 */
   refreshXdGatewayModels(): Promise<void>;
+  /** DB 可读后仍在后台运行的账号模型发现；新建 / 懒恢复路由前必须等待。 */
+  waitForAccountProviderModelsReady(): Promise<void>;
+  /** Provider 刷新协调器已可用；紧跟 configure 发出，避免后续 handler 失败造成永久等待。 */
+  onProviderModelAutoRefreshConfigured(): void;
 }
 
 export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions): void {
@@ -4429,6 +4433,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         },
       }),
   });
+  options.onProviderModelAutoRefreshConfigured();
 
   registerProviderHandlers(createElectronIpcHandlerRegistry(), {
     listProviders: (opts) => getDesktopProviderService().listProviders(opts),
@@ -4991,6 +4996,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     didInjectOrcaInstructions: boolean;
     didInjectProjectContext: boolean;
   }> {
+    await options.waitForAccountProviderModelsReady();
     const didInjectOrcaInstructions = applyOrcaInstructions(o);
     const didInjectProjectContext = await applyProjectContextInjection(o);
 

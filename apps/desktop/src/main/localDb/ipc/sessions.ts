@@ -58,6 +58,8 @@ import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer
 
 const log = createLogger('sessions');
 const REMOTE_EDITABLE_META = new Set(['status', 'title', 'pinnedAt']);
+const initialSessionListLogged = new Set<string>();
+const SLOW_SESSION_LIST_MS = 250;
 
 /**
  * 广播 sessions:patched 到本机所有窗口 + device-link tap。tap 让该 patch 经 topic 路由
@@ -700,6 +702,7 @@ export function registerSessionIpc(): void {
   ipcMain.handle(
     'local-db:sessions:list',
     async (_e, limit: unknown, status: unknown, options: unknown) => {
+      const startedAt = performance.now();
       const db = getDbClient().drizzle;
       // sidebar-card-mode: 首次 list(db 必然 ready)触发一次置顶摘要回填——
       // 老置顶会话没有 turn-done 触发点。模块内部 once 守卫 + 串行 + swallow。
@@ -731,7 +734,8 @@ export function registerSessionIpc(): void {
         mergedRows = mergeSessionListRows(rows, pinnedRows);
       }
 
-      return mergedRows.map((r) =>
+      const queryFinishedAt = performance.now();
+      const result = mergedRows.map((r) =>
         sessionToCamel({
           ...r.session,
           messageCount: r.messageCount,
@@ -739,6 +743,27 @@ export function registerSessionIpc(): void {
           latestMessageRole: r.latestMessageRole,
         }),
       );
+      const finishedAt = performance.now();
+      const filter = statusFilter ?? 'all';
+      const elapsedMs = Math.round(finishedAt - startedAt);
+      const fields = JSON.stringify({
+        event: 'localDb.sessions.list.done',
+        filter,
+        cap,
+        includePinned,
+        rows: result.length,
+        queryElapsedMs: Math.round(queryFinishedAt - startedAt),
+        mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
+        elapsedMs,
+      });
+      const logKey = `${filter}:${includePinned ? 'pinned' : 'plain'}`;
+      if (!initialSessionListLogged.has(logKey) || elapsedMs >= SLOW_SESSION_LIST_MS) {
+        initialSessionListLogged.add(logKey);
+        log.info(fields);
+      } else {
+        log.debug(fields);
+      }
+      return result;
     },
   );
 

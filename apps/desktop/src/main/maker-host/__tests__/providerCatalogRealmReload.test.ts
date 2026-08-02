@@ -16,6 +16,7 @@ const h = vi.hoisted(() => ({
     source: Record<string, unknown>;
     resolve: (result: unknown) => void;
   }>,
+  customProviderRead: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -113,13 +114,22 @@ vi.mock('../model-discovery/anthropic.js', () => ({
   loadAnthropicModelsFromDiskCache: async () => undefined,
   refreshAnthropicModelsFromHttp: async () => undefined,
 }));
+vi.mock('../custom-provider-header-secrets.js', () => ({
+  listCustomProvidersWithSecureHeaders: () => h.customProviderRead(),
+}));
 
-import { BUNDLED_CATALOG, type Catalog } from '@cindy/model-providers';
-import { getActiveCatalog } from '../active-catalog.js';
+import {
+  BUNDLED_CATALOG,
+  buildUserProvider,
+  type Catalog,
+  type CustomProviderConfig,
+} from '@cindy/model-providers';
+import { getActiveCatalog, setCustomProviders } from '../active-catalog.js';
 import {
   __testing,
   ensureActiveCatalogLoaded,
   refreshActiveCatalogFromSource,
+  refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
   shouldDisableCatalogFetch,
 } from '../createDesktopProviderService.js';
@@ -141,6 +151,38 @@ function activeMarker(): string | undefined {
 }
 
 describe('provider catalog realm reload', () => {
+  it('drops a stale owner custom-provider read and clears the current snapshot on failure', async () => {
+    const provider: CustomProviderConfig = {
+      id: 'owner-a-provider',
+      name: 'Owner A Provider',
+      runtimes: {
+        'claude-code': {
+          baseUrl: 'https://owner-a.example/anthropic',
+          models: [{ id: 'owner-a-model', name: 'Owner A Model' }],
+        },
+      },
+    };
+    let resolveOwnerA!: (configs: CustomProviderConfig[]) => void;
+    const ownerALoad = new Promise<CustomProviderConfig[]>((resolve) => {
+      resolveOwnerA = resolve;
+    });
+    h.customProviderRead.mockReturnValueOnce(ownerALoad);
+    let ownerAIsCurrent = true;
+    const staleRefresh = refreshCustomProvidersIntoCatalog(() => ownerAIsCurrent);
+
+    setCustomProviders([]);
+    ownerAIsCurrent = false;
+    resolveOwnerA([provider]);
+    await staleRefresh;
+    expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
+
+    setCustomProviders([buildUserProvider(provider)]);
+    h.customProviderRead.mockRejectedValueOnce(new Error('owner B DB read failed'));
+    await refreshCustomProvidersIntoCatalog();
+    expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
+    h.customProviderRead.mockReset();
+  });
+
   it('persists only a digest of a catalog scope that may contain URL credentials', () => {
     const scope = 'https://catalog.example/models?access_token=do-not-persist';
     const envelope = __testing.catalogLkgEnvelope(scope, '{"schemaVersion":1}');
