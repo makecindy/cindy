@@ -2,10 +2,9 @@
  * SessionCard — sidebar-card-mode 下的单条会话卡片（SessionItem 的瀑布流形态）
  * ---------------------------------------------------------------------------
  * 设计来源：用户 Claude design 稿（XDT-sidebar-redesign，xdtsb-card 系）。
- * 视觉：白底 Card + 1px Board 圆角 12；标题左侧保留与 SessionItem 同源的
- *   SessionStatusIcon（agent 标识 + running 呼吸 + attention 状态点 + 草稿铅笔），
- *   标题最多 2 行，摘要 / 最近消息随内容最多 1~3 行；底部 metadata 槽放短进度条、
- *   worktree 标识和时间。
+ * 视觉：白底 Card + 1px Board 圆角 12；标题最多 2 行且保持纯文字，摘要 / 最近消息
+ *   随内容最多 1~3 行；SessionStatusIcon（agent 标识 + running 呼吸 + attention
+ *   状态点 + 草稿铅笔）、自动化 / 远程 / worktree 标识与时间统一放在底部 metadata 槽。
  *
  * 交互 100% 对齐 SessionItem（props 签名完全一致，sections 内按 cardMode 二选一渲染）：
  *   - 单击导航 / 双击重命名（标题原位变 input）
@@ -13,8 +12,8 @@
  *     archived / draft 变体同款分支）
  *   - hover 右上角仅 More（⋮）快捷钮；存档收进 ⋮ / 右键展开菜单的 Archive 项
  *     （卡片不再出现独立的存档快捷钮）。已归档卡片保留"取消归档"快捷钮。
- *   - card / list 变体:标题左侧复用 SessionStatusIcon(含 agent 图标、运行呼吸、草稿铅笔)
- *     list 的状态点 / spinner 与文字模式同口径，统一放在右下角
+ *   - list 变体保留标题左侧 SessionStatusIcon / 自动化前缀；card 变体标题不带前缀，
+ *     状态 / Agent / 自动化图标留在底部 meta 行
  *   - remote 会话标识复用 RemoteProjectIcon,继续区分 device-link / ssh
  *   - matchIndices 模糊搜索高亮沿用 highlightSegments
  *
@@ -569,54 +568,59 @@ export function SessionCard({
             />
           )}
           <div className="flex items-center gap-1.5">
-            {isEditing ? (
-              <SessionRenameInput
-                sessionId={session.id}
-                value={editValue}
-                onValueChange={setEditValue}
-                onCommit={commitTitle}
-                onCancel={() => {
-                  // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
-                  // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
-                  committedRef.current = true;
-                  setIsEditing(false);
-                }}
-                containerClassName="min-w-0 flex-1"
-                inputClassName="h-6 text-13 font-semibold text-foreground"
-                activeForeground={isActive}
-              />
-            ) : (
-              <div className="flex min-w-0 flex-1 items-center gap-1">
-                <span
-                  className={cn(
-                    'min-w-0 truncate',
-                    'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
-                    isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+            {/* 标题槽固定沿用常态时间槽的 20px 高度。改名框本身是 24px，编辑时
+                绝对定位居中覆盖文字槽位，不参与布局计算，避免整条置顶任务被撑高。
+                状态 / Agent / 自动化图标始终留在文字槽左侧，编辑态也不改变标题起点。 */}
+            <div className="relative flex h-5 min-w-0 flex-1 items-center gap-0">
+              <span className="flex shrink-0 items-center">{titlePrefixNode}</span>
+              {isEditing ? (
+                <SessionRenameInput
+                  sessionId={session.id}
+                  value={editValue}
+                  onValueChange={setEditValue}
+                  onCommit={commitTitle}
+                  onCancel={() => {
+                    // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
+                    // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
+                    committedRef.current = true;
+                    setIsEditing(false);
+                  }}
+                  containerClassName="relative min-w-0 flex-1 self-stretch"
+                  inputClassName="absolute inset-x-0 top-1/2 h-6 -translate-y-1/2 text-13 font-semibold text-foreground"
+                  activeForeground={isActive}
+                />
+              ) : (
+                <div className="flex min-w-0 flex-1 items-center gap-1">
+                  <span
+                    className={cn(
+                      'min-w-0 truncate',
+                      'text-13 font-semibold leading-[1.3] tracking-[-0.005em]',
+                      isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+                    )}
+                  >
+                    {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+                      ? highlightSegments(session.title, matchIndices, {
+                          highlightClassName: cn(
+                            'bg-transparent font-semibold',
+                            isActive
+                              ? 'text-[var(--sidebar-item-active-foreground)]'
+                              : 'text-[var(--msg-assistant-text)]',
+                          ),
+                        })
+                      : displayTitle}
+                  </span>
+                  {remoteIconKind && (
+                    <RemoteProjectIcon
+                      kind={remoteIconKind}
+                      size={11}
+                      strokeWidth={1.8}
+                      connectionStatus={remoteIconConnectionStatus}
+                      className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
+                    />
                   )}
-                >
-                  {titlePrefixNode}
-                  {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-                    ? highlightSegments(session.title, matchIndices, {
-                        highlightClassName: cn(
-                          'bg-transparent font-semibold',
-                          isActive
-                            ? 'text-[var(--sidebar-item-active-foreground)]'
-                            : 'text-[var(--msg-assistant-text)]',
-                        ),
-                      })
-                    : displayTitle}
-                </span>
-                {remoteIconKind && (
-                  <RemoteProjectIcon
-                    kind={remoteIconKind}
-                    size={11}
-                    strokeWidth={1.8}
-                    connectionStatus={remoteIconConnectionStatus}
-                    className={isActive ? 'text-sidebar-item-active-foreground' : 'text-[var(--text-tertiary)]'}
-                  />
-                )}
-              </div>
-            )}
+                </div>
+              )}
+            </div>
 
             {/* 时间槽位:hover/菜单打开让位给 More/Archive(逻辑同对话列表)。
                 Agent 身份图标留在标题左侧，状态指示器改由下方右下角承担。 */}
@@ -732,41 +736,15 @@ export function SessionCard({
           </button>
         )}
 
-        {/* 第 1 行:状态 / 自动化前缀在 list 与 card 变体共用同一段 titlePrefixNode，
-            保证 SessionStatusIcon、Timer 与标题在不同模式下的横向间距和基线一致。 */}
-        {isEditing ? (
-          <div className="flex items-start gap-1.5">
-            <span className="mt-[2px] shrink-0">
-              <SessionStatusIcon
-                session={session}
-                isRunning={isRunning}
-                isAttached={isAttached}
-                hasAttentionNotification={hasAttentionNotification}
-                isActive={isActive}
-              />
-            </span>
-            <SessionRenameInput
-              sessionId={session.id}
-              value={editValue}
-              onValueChange={setEditValue}
-              onCommit={commitTitle}
-              onCancel={() => {
-                // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
-                // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
-                committedRef.current = true;
-                setIsEditing(false);
-              }}
-              containerClassName="min-w-0 flex-1"
-              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
-              activeForeground={isActive}
-            />
-          </div>
-        ) : (
+        {/* 卡片标题始终保留原来的流式盒子；编辑时只把原标题隐藏，并以绝对定位的
+            24px 输入框覆盖。这样一行 / 两行标题都维持原高度，也不会凭空多出状态图标。 */}
+        <div className="relative">
           <div
             className={cn(
               'min-w-0 text-[12.5px] font-bold leading-[1.22] tracking-[-0.005em]',
               '[display:-webkit-box] [-webkit-box-orient:vertical] [-webkit-line-clamp:2] overflow-hidden',
               isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground',
+              isEditing && 'invisible',
             )}
             style={{ textIndent: 0, paddingLeft: 0 }}
           >
@@ -781,7 +759,24 @@ export function SessionCard({
                 })
               : displayTitle}
           </div>
-        )}
+          {isEditing && (
+            <SessionRenameInput
+              sessionId={session.id}
+              value={editValue}
+              onValueChange={setEditValue}
+              onCommit={commitTitle}
+              onCancel={() => {
+                // Esc 取消视为终态:置 committedRef 拦掉 input 卸载触发的 blur 提交
+                // 与生成中迟到的 AI 结果(Codex review P2:取消后不应再被 AI 改名)。
+                committedRef.current = true;
+                setIsEditing(false);
+              }}
+              containerClassName="absolute inset-x-0 top-1/2 -translate-y-1/2"
+              inputClassName="h-6 text-[12.5px] font-bold text-foreground"
+              activeForeground={isActive}
+            />
+          )}
+        </div>
 
         {/* 预览:等待交互文案优先,否则显示稳定任务总结 / 最近消息。图标全部下沉到底部 meta 行,
             此处只放正文文字。 */}

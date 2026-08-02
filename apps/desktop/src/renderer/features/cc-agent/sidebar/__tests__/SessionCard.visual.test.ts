@@ -342,11 +342,105 @@ describe('SessionCard visual cases', () => {
 
     // list 变体保持原有标题前缀契约不变:自动化图标仍在标题里。
     const { container: listContainer } = render(createElement(SessionCard, { ...commonProps, variant: 'list' }));
-    const listTitle = Array.from(listContainer.querySelectorAll('span')).find((node) =>
-      node.className.includes('truncate') && node.textContent?.includes('自动化日报巡检'),
+    const listTitleRow = Array.from(listContainer.querySelectorAll<HTMLElement>('div')).find(
+      (node) =>
+        node.classList.contains('h-5') &&
+        node.textContent?.includes('自动化日报巡检') &&
+        node.querySelector('[aria-label="查看自动化任务"]'),
     );
-    expect(listTitle?.textContent).toContain('自动化日报巡检');
-    expect(listTitle?.querySelector('[aria-label="查看自动化任务"]')).not.toBeNull();
+    expect(listTitleRow?.textContent).toContain('自动化日报巡检');
+    expect(listTitleRow?.querySelector('[aria-label="查看自动化任务"]')).not.toBeNull();
+  });
+
+  it('keeps the list title row height stable while the rename editor overlays it', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+    if (!visualCase) throw new Error('Missing idle visual case');
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        variant: 'list',
+        isActive: false,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: false,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
+    const titleRow = Array.from(card.querySelectorAll<HTMLElement>('div')).find(
+      (node) =>
+        node.classList.contains('h-5') && node.textContent?.includes(visualCase.session.title),
+    );
+    expect(titleRow).toBeTruthy();
+    const statusIconSlot = Array.from(titleRow!.querySelectorAll<HTMLElement>('span')).find(
+      (node) => node.className.includes('w-3') && node.querySelector('svg'),
+    );
+    expect(statusIconSlot).toBeTruthy();
+
+    fireEvent.doubleClick(card);
+
+    const input = card.querySelector<HTMLInputElement>('input')!;
+    const editor = input.parentElement!;
+    expect(editor.parentElement).toBe(titleRow);
+    expect(editor.classList.contains('relative')).toBe(true);
+    expect(editor.classList.contains('self-stretch')).toBe(true);
+    expect(input.classList.contains('absolute')).toBe(true);
+    expect(input.classList.contains('inset-x-0')).toBe(true);
+    expect(input.classList.contains('top-1/2')).toBe(true);
+    expect(input.classList.contains('-translate-y-1/2')).toBe(true);
+    expect(input.classList.contains('h-6')).toBe(true);
+    expect(titleRow!.contains(statusIconSlot!)).toBe(true);
+  });
+
+  it('keeps the card title flow box mounted while the rename editor overlays it without a duplicate status icon', () => {
+    const visualCase = sessionCardVisualCases.find((item) => item.id === 'short-idle-cc');
+    if (!visualCase) throw new Error('Missing idle visual case');
+
+    const { container } = render(
+      createElement(SessionCard, {
+        session: visualCase.session,
+        isActive: false,
+        isRunning: false,
+        isAttached: false,
+        hasAttentionNotification: false,
+        isSelected: false,
+        onClick: vi.fn(),
+        onAction: vi.fn(),
+        onRename: vi.fn(),
+        onTogglePin: vi.fn(),
+        projectOptions: [],
+      }),
+    );
+
+    const card = container.querySelector<HTMLElement>('[data-sidebar-session-row="true"]')!;
+    const title = Array.from(card.querySelectorAll<HTMLElement>('div')).find((node) =>
+      node.className.includes('[-webkit-line-clamp:2]'),
+    )!;
+    expect(title.classList.contains('invisible')).toBe(false);
+
+    fireEvent.doubleClick(card);
+
+    const input = card.querySelector<HTMLInputElement>('input')!;
+    const overlay = input.parentElement!;
+    const titleSlot = title.parentElement!;
+    expect(card.contains(title)).toBe(true);
+    expect(title.classList.contains('invisible')).toBe(true);
+    expect(titleSlot).toBe(overlay.parentElement);
+    expect(titleSlot.classList.contains('relative')).toBe(true);
+    expect(overlay.classList.contains('absolute')).toBe(true);
+    expect(overlay.classList.contains('inset-x-0')).toBe(true);
+    expect(overlay.classList.contains('top-1/2')).toBe(true);
+    expect(overlay.classList.contains('-translate-y-1/2')).toBe(true);
+    expect(titleSlot.querySelectorAll('svg')).toHaveLength(1);
+    expect(titleSlot.querySelector('.lucide-sparkles')).not.toBeNull();
+    expect(input.classList.contains('h-6')).toBe(true);
   });
 
   it('keeps archived sessions on the archive visual branch', () => {
