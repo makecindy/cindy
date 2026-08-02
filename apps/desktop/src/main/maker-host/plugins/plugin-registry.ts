@@ -30,6 +30,8 @@ export interface PluginEnableState {
   projectOverride?: { enabled: boolean; workingDir: string } | null;
   userOverride?: { enabled: boolean } | null;
   globalOverride?: { enabled: boolean } | null;
+  /** collab 查询对 workspaceKind 的显式确认；旧被控端缺省，控制端据此关闭 dialogue 入口。 */
+  collabWorkspaceKind?: 'project' | 'dialogue';
 }
 
 export interface PluginListItem {

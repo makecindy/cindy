@@ -346,10 +346,15 @@ describe('useCollabProjectPolicy', () => {
     expect(getState).not.toHaveBeenCalled();
     // 被控端说这个项目关了协同 → 入口置灰,而不是照控制端自己的开关放行。
     expect(result.current.enabled).toBe(false);
+    // 旧项目入口在 get-state channel 已存在时仍保持原行为；新握手只约束 dialogue。
+    expect(result.current.unsupported).toBe(false);
   });
 
   it('device-link 对话草稿:无 workingDir 也会隧道查询被控端用户/全局级', async () => {
-    const invoke = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    const invoke = vi.fn().mockResolvedValue({
+      effectiveEnabled: true,
+      collabWorkspaceKind: 'dialogue',
+    });
     const { getState } = stubDeviceLink(invoke);
 
     const { result } = renderHook(() =>
@@ -367,6 +372,25 @@ describe('useCollabProjectPolicy', () => {
       'dialogue',
     ]);
     expect(getState).not.toHaveBeenCalled();
+  });
+
+  it('device-link 对话:旧被控端未确认 workspaceKind 时 fail-closed 为 unsupported', async () => {
+    // 旧端已有 get-state channel，所以调用成功；但它忽略第三参且不支持 dialogue 最终授权。
+    const invoke = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    stubDeviceLink(invoke);
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy(null, true, {
+        skipQuery: true,
+        deviceId: 'dev-old',
+        workspaceKind: 'dialogue',
+      }),
+    );
+
+    await waitFor(() => expect(result.current.unsupported).toBe(true));
+    expect(result.current.enabled).toBe(false);
+    expect(result.current.unavailable).toBe(false);
+    expect(result.current.loading).toBe(false);
   });
 
   it('同一路径串在两台设备上不串台(查询键含 deviceId)', async () => {

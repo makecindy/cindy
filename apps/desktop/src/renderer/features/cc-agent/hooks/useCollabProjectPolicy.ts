@@ -115,16 +115,31 @@ export function useCollabProjectPolicy(
           requestedWorkingDir === '' ? undefined : requestedWorkingDir,
           requestedWorkspaceKind,
         );
-        const result = { enabled: next.effectiveEnabled, unavailable: false, unsupported: false };
+        // 旧被控端虽然已有 get-state channel，却会忽略 workspaceKind，最终授权也不接受
+        // dialogue。只有被控端显式回显已接受 dialogue，远端 dialogue 入口才可放行。
+        const unsupported =
+          requestedDeviceId !== null &&
+          requestedWorkspaceKind === 'dialogue' &&
+          next.collabWorkspaceKind !== 'dialogue';
+        if (unsupported) {
+          log.info('remote device does not support dialogue collaboration policy', {
+            deviceId: requestedDeviceId,
+          });
+        }
+        const result = {
+          enabled: unsupported ? false : next.effectiveEnabled,
+          unavailable: false,
+          unsupported,
+        };
         if (requestId !== requestIdRef.current) {
           const latest = refreshTrackersByKeyRef.current.get(requestKey)?.latestPromise;
           return latest && latest !== requestPromise ? latest : result;
         }
         setState({
           queryKey: requestKey,
-          enabled: result.enabled,
+          enabled: unsupported ? null : result.enabled,
           unavailable: false,
-          unsupported: false,
+          unsupported,
         });
         return result;
       } catch (err) {

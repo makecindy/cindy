@@ -124,7 +124,7 @@ describe('sendToSession ordering', () => {
     );
   });
 
-  it('uses the same trusted collab scope helper for renderer policy reads', () => {
+  it('uses the same trusted collab scope helper and acknowledges the accepted workspace kind', () => {
     const pluginStateBlock = extractBetween(
       source,
       'ipcMain.handle(MAKER_INVOKE.PLUGINS_GET_STATE',
@@ -137,6 +137,10 @@ describe('sendToSession ordering', () => {
       'matchDialogueWorkspacePath(candidate, dialogueWorkspaceRootDir()) !== null',
     );
     expect(pluginStateBlock).toContain('getEnableState(id, policyWorkingDir)');
+    expect(pluginStateBlock).toContain(
+      "workspaceKind === 'project' || workspaceKind === 'dialogue'",
+    );
+    expect(pluginStateBlock).toContain('collabWorkspaceKind: acceptedWorkspaceKind');
   });
 
   it('keeps non-composer direct sends from inheriting armed plan mode', () => {
