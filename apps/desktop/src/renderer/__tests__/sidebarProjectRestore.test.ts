@@ -109,6 +109,7 @@ describe('restoreHiddenProjectIfPresent', () => {
     await expect(
       restoreHiddenProjectIfPresent({
         projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: false,
         setProjectHidden,
         getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
         ensureProjectIncluded,
@@ -125,6 +126,7 @@ describe('restoreHiddenProjectIfPresent', () => {
     await expect(
       restoreHiddenProjectIfPresent({
         projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: true,
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
         ensureProjectIncluded,
@@ -143,6 +145,7 @@ describe('restoreHiddenProjectIfPresent', () => {
     await expect(
       restoreHiddenProjectIfPresent({
         projectKey: selectedProjectKey,
+        wasHiddenAtPickerOpen: true,
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set([currentProjectKey]),
         ensureProjectIncluded,
@@ -159,6 +162,7 @@ describe('restoreHiddenProjectIfPresent', () => {
     await expect(
       restoreHiddenProjectIfPresent({
         projectKey: PROJECT_KEY,
+        wasHiddenAtPickerOpen: true,
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set(),
         ensureProjectIncluded,
@@ -166,6 +170,24 @@ describe('restoreHiddenProjectIfPresent', () => {
     ).resolves.toBe(false);
 
     expect(ensureProjectIncluded).not.toHaveBeenCalled();
+  });
+
+  it('restores when another window unhides the project while this picker is open', async () => {
+    const currentProjectKey = 'local:C:/Workspace/Cindy';
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: 'local:c:/workspace/cindy',
+        wasHiddenAtPickerOpen: true,
+        setProjectHidden: vi.fn().mockResolvedValue(false),
+        getCurrentProjectKeys: () => new Set([currentProjectKey]),
+        ensureProjectIncluded,
+      }),
+    ).resolves.toBe(true);
+
+    expect(ensureProjectIncluded).toHaveBeenCalledOnce();
+    expect(ensureProjectIncluded).toHaveBeenCalledWith(currentProjectKey);
   });
 
   it('reads the latest project catalogue after awaiting the main-process update', async () => {
@@ -178,6 +200,7 @@ describe('restoreHiddenProjectIfPresent', () => {
 
     const result = restoreHiddenProjectIfPresent({
       projectKey: PROJECT_KEY,
+      wasHiddenAtPickerOpen: true,
       setProjectHidden: () => hiddenUpdate,
       getCurrentProjectKeys: () => projectKeys,
       ensureProjectIncluded,

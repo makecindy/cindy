@@ -54,6 +54,8 @@ export function collectRestorableProjectKeys({
 
 interface RestoreHiddenProjectIfPresentOptions {
   projectKey: string;
+  /** Whether this project was hidden before the directory picker opened. */
+  wasHiddenAtPickerOpen: boolean;
   setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
   getCurrentProjectKeys: () => ReadonlySet<string>;
   ensureProjectIncluded: (projectKey: string) => void;
@@ -64,16 +66,19 @@ interface RestoreHiddenProjectIfPresentOptions {
  *
  * The project catalogue is read only after the main-process update completes:
  * tasks may have moved or disappeared while the picker or IPC request was open.
+ * The picker-open snapshot distinguishes a normal visible-project selection
+ * from a concurrent restore whose main-process update already became a no-op.
  * Returning false tells the caller to continue with normal draft creation.
  */
 export async function restoreHiddenProjectIfPresent({
   projectKey,
+  wasHiddenAtPickerOpen,
   setProjectHidden,
   getCurrentProjectKeys,
   ensureProjectIncluded,
 }: RestoreHiddenProjectIfPresentOptions): Promise<boolean> {
   const hiddenStateChanged = await setProjectHidden(projectKey, false);
-  if (!hiddenStateChanged) {
+  if (!hiddenStateChanged && !wasHiddenAtPickerOpen) {
     return false;
   }
 

@@ -129,6 +129,7 @@ import { sortProjectsForSidebar, sortSessionsForSidebar } from './lib/sidebarPro
 import { isOrcaWorkerSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
 import {
   buildProjectKeyComparisonSet,
+  isProjectHidden,
   projectKeyComparisonSetHas,
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
@@ -1744,6 +1745,7 @@ function ExpandedView({
   );
 
   const handleCreateProject = useCallback(async () => {
+    const hiddenProjectKeysAtPickerOpen = new Set(hiddenProjectKeys);
     try {
       const result = await window.electronAPI.showOpenDirectoryDialog();
       if (result.canceled || !result.path) return;
@@ -1751,6 +1753,10 @@ function ExpandedView({
       if (localProjectKey?.startsWith('local:')) {
         const restored = await restoreHiddenProjectIfPresent({
           projectKey: localProjectKey,
+          wasHiddenAtPickerOpen: isProjectHidden(
+            localProjectKey,
+            hiddenProjectKeysAtPickerOpen,
+          ),
           setProjectHidden,
           getCurrentProjectKeys: () => restorableProjectKeysRef.current,
           ensureProjectIncluded: filter.ensureProjectIncluded,
@@ -1764,7 +1770,14 @@ function ExpandedView({
       log.warn('create project directory picker failed', err);
       toast.error(t('ccAgent.sidebar.createProjectFailed'));
     }
-  }, [filter.ensureProjectIncluded, handleClearSelection, navigate, setProjectHidden, t]);
+  }, [
+    filter.ensureProjectIncluded,
+    handleClearSelection,
+    hiddenProjectKeys,
+    navigate,
+    setProjectHidden,
+    t,
+  ]);
 
   const handleCreateDialogue = useCallback(() => {
     handleClearSelection();
