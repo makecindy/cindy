@@ -421,7 +421,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确', async () => {
-    const fetchImpl = fakeFetch(() => ({ json: { choices: [{ message: { content: '网关标题' } }] }));
+    const fetchImpl = fakeFetch(() => ({ json: { choices: [{ message: { content: '网关标题' } }] } }));
     const title = await generateTitleViaProvider(
       { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
       {
