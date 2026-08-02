@@ -26,7 +26,7 @@ import { finalizeCodexCitationText } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
-import { getReadyBinaryPath } from '../agent-binaries/index.js';
+import codexRuntimeManifest from '../../../../../tools/codex/latest.json';
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
@@ -1448,30 +1448,15 @@ function rolloutThreadRowFromFirstLine(
 }
 
 /**
- * Cindy 当前在用的 codex runtime 版本——写出 desktop 侧新事件的那个 runtime。
- * 覆盖各布局的 `.version` marker 位置:
- *   - dev bundle:二进制同级(apps/codex-bin/<platform>/.version);
- *   - Linux 受管 fallback:二进制上一级(userData/agent-runtime/codex/.version,bin 在 .../codex/bin/codex);
- *   - prod 安装:userData/codex/<version>/codex,无 marker 时取版本目录名。
- * 二进制未就绪、或系统 PATH codex 等拿不到版本标记的布局 → 返回 null,回写门禁据此按
- * 「无法确认」降级为不写(安全侧:宁可不回写,也不拿不确定版本覆盖源会话)。
+ * Cindy 当前发行/管理的 codex runtime 版本(= 写出 desktop 侧新事件的那个 runtime)。
+ * 取自随包固定的 tools/codex/latest.json——与 Linux runtime fallback 下载/校验所用的版本源
+ * 同一份(见 linux-runtime-fallback.ts 的 codexLatest),因此对 dev bundle / prod 安装 /
+ * Linux 受管 fallback(含 legacy standalone 布局)一律成立,无需再按二进制路径猜版本布局。
+ * manifest 恒在;拿不到合法版本串时返回 null,回写门禁据此按「无法确认」降级为不写(安全侧)。
  */
 function getBundledCodexRuntimeVersion(): string | null {
-  const binaryPath = getReadyBinaryPath('codex');
-  if (!binaryPath) return null;
-  const binDir = path.dirname(binaryPath);
-  // marker 可能在二进制同级(dev)或上一级(Linux 受管 fallback 的 <root>/bin/codex 布局)。
-  for (const markerDir of [binDir, path.dirname(binDir)]) {
-    try {
-      const marked = fs.readFileSync(path.join(markerDir, '.version'), 'utf-8').trim();
-      if (marked) return marked;
-    } catch {
-      /* 该布局此层无 .version marker,继续下一候选 */
-    }
-  }
-  // prod 安装:版本就是目录名(userData/codex/<version>/codex)。
-  const versionDir = path.basename(binDir);
-  return /^\d+\.\d+/.test(versionDir) ? versionDir : null;
+  const version = (codexRuntimeManifest as { version?: unknown }).version;
+  return typeof version === 'string' && version.trim() ? version.trim() : null;
 }
 
 /**
