@@ -2786,7 +2786,7 @@
             "withdrawLabel": "답장 철회하기",
             "withdrawBody": "질문한 본인이 그 답장에 \"/delete\"라고 답장하면 삭제됩니다. 공개 답장만 삭제되며 로컬 작업 기록은 그대로 남습니다.",
             "ackTitle": "X가 연결되었습니다 —— 사용법과 주의사항",
-            "ackConfirm": "이해했어요"
+            "ackConfirm": "위험을 이해했습니다"
           },
           "connect": "X 연결",
           "openApp": "X 열어 인증하기",

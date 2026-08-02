@@ -68,7 +68,11 @@ export function XUsageGuide() {
   const k = (name: string) => `settings.remoteControl.hook.x.guide.${name}`;
 
   return (
-    <div className="flex flex-col gap-3">
+    // select-text 是必须的, 不是顺手加的: 本组件也渲染进 ConfirmDialog, 而它的根节点
+    // 带 select-none(confirm-dialog.tsx 的 Content), 于是弹窗里 `@askmycindy` 与
+    // `/delete` 选不中、复制不了 —— 而这两个恰恰是用户要**打进 X** 的字符串。
+    // DESIGN.md §14.1 的判据就是「用户会不会想复制它」: 会 → 可选。
+    <div className="flex select-text flex-col gap-3">
       <GuideGroup label={t(k('usageLabel'))}>
         <GuideBody>{t(k('usageBody'))}</GuideBody>
       </GuideGroup>

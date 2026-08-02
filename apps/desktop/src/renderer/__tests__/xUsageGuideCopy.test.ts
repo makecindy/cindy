@@ -88,6 +88,38 @@ describe('X 用法与风险告知的四语言文案', () => {
     }
   });
 
+  it('确认按钮必须点名确认对象, 不能是泛化应答词', () => {
+    // DESIGN.md §11.1「Actions = verb + object, never a bare verb」明确禁 Confirm /
+    // OK / 确定 / 提交 这类无对象应答词, 并**点名 confirm-dialog 主按钮**必须带对象
+    // ——「so they read correctly out of context」。这个按钮是风险告知的同意门, 被读屏
+    // 单独播报时若只念「我明白」, 用户根本不知道自己在确认什么(#1347 review 由 codex
+    // 指出 P2; 初版四语分别是「我明白」/ Got it / 了解しました / 이해했어요)。
+    const BANNED: Record<string, readonly string[]> = {
+      'zh-CN': ['我明白', '知道了', '确定', '提交'],
+      en: ['Got it', 'Got It', 'OK', 'Confirm'],
+      ja: ['了解しました', 'OK'],
+      ko: ['이해했어요', '확인'],
+    };
+    // 对象 = 风险本身。四语各自的说法, 比"长度下限"之类的代理判据准确。
+    const OBJECT: Record<string, string> = {
+      'zh-CN': '风险',
+      en: 'Risk',
+      ja: 'リスク',
+      ko: '위험',
+    };
+    for (const [loc, guide] of Object.entries(LOCALES)) {
+      for (const word of BANNED[loc]) {
+        expect(guide.ackConfirm, `${loc}.ackConfirm 不能是泛化应答词「${word}」`).not.toContain(
+          word,
+        );
+      }
+      expect(
+        guide.ackConfirm,
+        `${loc}.ackConfirm 必须点名确认对象（${OBJECT[loc]}）`,
+      ).toContain(OBJECT[loc]);
+    }
+  });
+
   it('工作目录那条不能用方位指代: 同一份文案也渲染在弹窗里, 弹窗里没有目录选择器', () => {
     // XUsageGuide 被**两处**渲染:X 卡内的常驻小节, 以及首次绑定的确认门弹窗。
     // 卡内「下面设的默认工作目录」是对的(选择器就在下方), 但弹窗里下方只有撤回那组

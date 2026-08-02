@@ -2786,7 +2786,7 @@
             "withdrawLabel": "返信を取り消す",
             "withdrawBody": "質問した本人がその返信に「/delete」と返信すると削除できます。公開された返信だけが削除され、ローカルのタスク記録は残ります。",
             "ackTitle": "X を連携しました —— 使い方と注意点",
-            "ackConfirm": "了解しました"
+            "ackConfirm": "リスクを理解しました"
           },
           "connect": "X を連携",
           "openApp": "X を開いて認証",

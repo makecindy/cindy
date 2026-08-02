@@ -2786,7 +2786,7 @@
             "withdrawLabel": "想撤回",
             "withdrawBody": "提问者对着那条回答回复「/delete」（或「/删除」）就能删掉它。只删公开那条，本地任务记录照旧保留。",
             "ackTitle": "X 已关联，先看一下用法与风险",
-            "ackConfirm": "我明白"
+            "ackConfirm": "我已了解风险"
           },
           "connect": "关联 X",
           "openApp": "打开 X 完成授权",

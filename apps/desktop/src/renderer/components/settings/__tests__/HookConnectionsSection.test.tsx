@@ -1042,6 +1042,23 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     ).toBeNull();
   });
 
+  it('说明区可选可复制: 弹窗根节点带 select-none, 不覆盖就复制不了 @askmycindy', async () => {
+    // 本组件也渲染进 ConfirmDialog, 而它的 Content 根节点带 select-none
+    // (confirm-dialog.tsx)。DESIGN.md §14.1 的判据是「用户会不会想复制它」——
+    // `@askmycindy` 与 `/delete` 是用户要**打进 X** 的字符串, 当然会
+    // (#1347 review 由 codex 指出 P2)。
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    const body = await screen.findByText('settings.remoteControl.hook.x.guide.usageBody');
+    // 三组共同的祖先就是 XUsageGuide 的根
+    const root = body.closest('.select-text');
+    expect(root, 'XUsageGuide 根节点必须带 select-text 覆盖弹窗的 select-none').not.toBeNull();
+    expect(
+      root?.textContent?.includes('settings.remoteControl.hook.x.guide.withdrawBody'),
+    ).toBe(true);
+  });
+
   it('三组都在场, 且「默认工作目录」那条风险必须写出来', async () => {
     // 「X 任务都落在默认工作目录、agent 能读写其中文件、结论会公开回帖」是
     // 「回帖公开」的直接后果, 也是用户判断该不该把默认目录指到工作仓库的唯一依据
