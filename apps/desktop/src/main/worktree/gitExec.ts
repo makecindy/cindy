@@ -148,34 +148,6 @@ function queryWin32ProcessTable(): Promise<Win32ProcRow[] | null> {
   });
 }
 
-/** 从进程表收集 rootPid 自身(若仍在)与全部多级后代,作为待确认退净的幸存者集合。 */
-function collectWin32TreeSurvivors(
-  table: Win32ProcRow[],
-  rootPid: number,
-): Array<{ pid: number; created: string }> {
-  const childrenByPpid = new Map<number, Win32ProcRow[]>();
-  for (const row of table) {
-    const list = childrenByPpid.get(row.ppid);
-    if (list) list.push(row);
-    else childrenByPpid.set(row.ppid, [row]);
-  }
-  const out: Array<{ pid: number; created: string }> = [];
-  const rootRow = table.find((r) => r.pid === rootPid);
-  if (rootRow) out.push({ pid: rootPid, created: rootRow.created });
-  const queue = [rootPid];
-  const seen = new Set<number>([rootPid]);
-  while (queue.length > 0) {
-    const cur = queue.shift()!;
-    for (const row of childrenByPpid.get(cur) ?? []) {
-      if (seen.has(row.pid)) continue;
-      seen.add(row.pid);
-      out.push({ pid: row.pid, created: row.created });
-      queue.push(row.pid);
-    }
-  }
-  return out;
-}
-
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
  */
@@ -316,27 +288,69 @@ function execFileOnce(
           killProcessTree(child.pid, child, () => {
             void snapshotPromise.then((table) => {
               if (settled) return;
-              const survivors =
-                table !== null && child.pid != null ? collectWin32TreeSurvivors(table, child.pid) : null;
-              if (survivors !== null && survivors.length === 0) {
+              if (table === null || child.pid == null) {
+                // 进程表不可用(无 PowerShell/查询超时)→ 无法持续确认:等 stdio
+                // 放手信号后仍按 cleanup unconfirmed 收口,不冒充确认。
+                if (stdioReleased) failTimeout(false);
+                else onStdioReleased = () => failTimeout(false);
+                return;
+              }
+              // 追踪 git 树的**派生闭包**,不是固定的初始快照:每轮把 ppid 命中
+              // 已知树成员的新进程并入(覆盖 credential helper 在两轮轮询之间
+              // fork 出的后代;pid+创建时间双键,仅观察不杀——ppid 撞上被复用的
+              // pid 只会让确认多等一会,由入口看门狗兜底,无误杀风险)。全部
+              // 已知成员从进程表消失才判定树退净。
+              const rootPid = child.pid;
+              const trackedKeys = new Set<string>();
+              const knownPids = new Set<number>([rootPid]);
+              const absorb = (t: Win32ProcRow[]) => {
+                const rootRow = t.find((r) => r.pid === rootPid);
+                if (rootRow) trackedKeys.add(`${rootRow.pid}:${rootRow.created}`);
+                // 闭包迭代:同一张表里可能有「新成员 → 其子进程」的链
+                let grew = true;
+                while (grew) {
+                  grew = false;
+                  for (const row of t) {
+                    const key = `${row.pid}:${row.created}`;
+                    if (knownPids.has(row.ppid) && !trackedKeys.has(key)) {
+                      trackedKeys.add(key);
+                      knownPids.add(row.pid);
+                      grew = true;
+                    }
+                  }
+                }
+              };
+              const treePresent = (t: Win32ProcRow[]): boolean => {
+                const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
+                for (const key of trackedKeys) if (present.has(key)) return true;
+                return false;
+              };
+              absorb(table);
+              if (!treePresent(table)) {
                 failTimeout(true);
                 return;
               }
-              if (survivors !== null) {
-                const keys = survivors.map((s) => `${s.pid}:${s.created}`);
-                groupPoll = setInterval(() => {
+              // 串行轮询:上一轮查询完成后才调度下一轮——单次查询可耗到自身超时
+              // (3s),WMI 卡顿时 setInterval 会持续堆积 PowerShell 进程。收口
+              // (settle)清掉重调度定时器;在途的最后一次查询由其自身超时结束,
+              // 不会残留。
+              const scheduleNextPoll = () => {
+                groupPoll = setTimeout(() => {
                   void queryWin32ProcessTable().then((t) => {
-                    if (settled || t === null) return;
-                    const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
-                    if (!keys.some((k) => present.has(k))) failTimeout(true);
+                    if (settled) return;
+                    if (t !== null) {
+                      absorb(t);
+                      if (!treePresent(t)) {
+                        failTimeout(true);
+                        return;
+                      }
+                    }
+                    scheduleNextPoll();
                   });
                 }, WIN32_DESCENDANT_POLL_INTERVAL_MS);
                 groupPoll.unref?.();
-              } else if (stdioReleased) {
-                failTimeout(false);
-              } else {
-                onStdioReleased = () => failTimeout(false);
-              }
+              };
+              scheduleNextPoll();
             });
           });
           return;

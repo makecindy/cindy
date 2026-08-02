@@ -40,6 +40,10 @@ interface FakeGit {
   gitCb: ExecCb | undefined;
   /** powershell 进程表应答:null = 查询失败(降级路径),数组 = Win32_Process 行。 */
   psTable: Array<{ ProcessId: number; ParentProcessId: number; CreationDate: string }> | null;
+  /** ≥1 时:从第 N 次 powershell 调用起,应答延迟该毫秒数(模拟 WMI 卡顿)。 */
+  psDelayFromCall: number;
+  psDelayMs: number;
+  psCalls: number;
 }
 
 /** git 调用返回假 child 并捕获回调与 spawn 选项;powershell 调用按 psTable 应答。 */
@@ -49,12 +53,28 @@ function installExecFileMock(): FakeGit {
   child.kill = vi.fn();
   child.exitCode = null;
   child.signalCode = null;
-  const state: FakeGit = { child, gitOpts: undefined, gitCb: undefined, psTable: null };
+  const state: FakeGit = {
+    child,
+    gitOpts: undefined,
+    gitCb: undefined,
+    psTable: null,
+    psDelayFromCall: 0,
+    psDelayMs: 0,
+    psCalls: 0,
+  };
   mocks.execFile.mockImplementation(
     (file: string, _args: string[], opts: FakeGit['gitOpts'], cb?: ExecCb) => {
       if (file === 'powershell.exe') {
-        if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
-        else cb!(null, JSON.stringify(state.psTable), '');
+        state.psCalls += 1;
+        const answer = () => {
+          if (state.psTable === null) cb!(new Error('powershell unavailable'), '', '');
+          else cb!(null, JSON.stringify(state.psTable), '');
+        };
+        if (state.psDelayFromCall > 0 && state.psCalls >= state.psDelayFromCall) {
+          setTimeout(answer, state.psDelayMs);
+        } else {
+          answer();
+        }
         return {};
       }
       if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
@@ -156,6 +176,56 @@ describe('gitExec timeoutMs', () => {
     await expectation;
     // Windows 不开 detached(语义是脱离控制台,树杀走 taskkill /T)
     expect(state.gitOpts?.detached).toBe(false);
+  });
+
+  it('Windows 快照后新派生的后代按闭包并入追踪 → 初始成员消失但新后代仍活时不收口', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' }];
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('timed out'),
+    });
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+
+    // 5001 在两轮之间 fork 出 5002 后自己退出:初始快照键全部消失,但树未退净
+    state.psTable = [{ ProcessId: 5002, ParentProcessId: 5001, CreationDate: '/Date(9)/' }];
+    await vi.advanceTimersByTimeAsync(250);
+    expect(s.settled).toBe(false);
+
+    // 新后代也退出 → 树退净,下一轮确认后收口
+    state.psTable = [];
+    await vi.advanceTimersByTimeAsync(250);
+    await expectation;
+  });
+
+  it('Windows 进程表轮询串行化 → 上一轮查询未完成不叠加新的 PowerShell 查询', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' }];
+    // 从第 2 次查询(首轮轮询)起模拟 WMI 卡顿 600ms(> 250ms 轮询间隔)
+    state.psDelayFromCall = 2;
+    state.psDelayMs = 600;
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    probe(p);
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    expect(state.psCalls).toBe(1); // 快照
+
+    // 首轮轮询 t=+250 启动,t=+850 才完成;若是 setInterval 会在 500/750/1000 叠加查询
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(state.psCalls).toBe(2); // 串行:第二轮要等首轮完成后 +250 才启动(t=+1100)
   });
 
   it('Windows 超时,快照显示 git 树已无幸存者 → 树杀收尾即收口', async () => {
