@@ -210,21 +210,23 @@ export function writeContactsSnapshot(
   // 子记录 id 兜底；纯删除没有证据时不猜测。
   const localSystemAnchors = db
     .prepare(
-      `SELECT * FROM contact_identities
-       WHERE platform = 'apple-contacts' ORDER BY created_at, id`,
+      `SELECT i.*, c.display_name AS source_display_name
+       FROM contact_identities i
+       JOIN contacts c ON c.id = i.contact_id
+       WHERE i.platform = 'apple-contacts' ORDER BY i.created_at, i.id`,
     )
-    .all() as IdentityRow[];
+    .all() as Array<IdentityRow & { source_display_name: string }>;
   const deletePendingAnchor = db.prepare(
     `DELETE FROM contacts_sync_pending_anchors WHERE source_contact_id = ?`,
   );
   for (const contactId of confirmedDeletions) deletePendingAnchor.run(contactId);
   const pendingSystemAnchors = db
     .prepare(
-      `SELECT identity_id AS id, source_contact_id AS contact_id,
+      `SELECT identity_id AS id, source_contact_id AS contact_id, source_display_name,
               'apple-contacts' AS platform, value, normalized_value, label, note, created_at
        FROM contacts_sync_pending_anchors ORDER BY created_at, identity_id`,
     )
-    .all() as IdentityRow[];
+    .all() as Array<IdentityRow & { source_display_name: string }>;
   const anchorsById = new Map(
     pendingSystemAnchors.map((anchor) => [anchor.id, anchor]),
   );
@@ -259,10 +261,12 @@ export function writeContactsSnapshot(
   }
   const stashPendingAnchor = db.prepare(
     `INSERT INTO contacts_sync_pending_anchors(
-       identity_id, source_contact_id, value, normalized_value, label, note, created_at
-     ) VALUES (?, ?, ?, ?, ?, ?, ?)
+       identity_id, source_contact_id, source_display_name,
+       value, normalized_value, label, note, created_at
+     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT(identity_id) DO UPDATE SET
        source_contact_id = excluded.source_contact_id,
+       source_display_name = excluded.source_display_name,
        value = excluded.value,
        normalized_value = excluded.normalized_value,
        label = excluded.label,
@@ -278,6 +282,7 @@ export function writeContactsSnapshot(
       stashPendingAnchor.run(
         anchor.id,
         anchor.contact_id,
+        anchor.source_display_name,
         anchor.value,
         anchor.normalized_value,
         anchor.label,

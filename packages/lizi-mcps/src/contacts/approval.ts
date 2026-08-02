@@ -28,6 +28,7 @@ const AUTO_APPROVE_INNER_TOOLS = new Set([
   "contacts_append_event",
   "contacts_add_relation",
   "contacts_find_duplicates",
+  "contacts_list_pending_system_anchors",
   "contacts_create_group",
   "contacts_update_group",
 ]);
@@ -87,6 +88,10 @@ export function canAutoApproveContactsMcpTool(
     // only (no system read, no file write) — plan/statistics stay auto.
     case "contacts_export_system":
       return innerArgs.dry_run === true;
+    case "contacts_recover_pending_system_anchor":
+      // 未确认调用只生成 source→target 审阅计划；confirm:true 会移动/丢弃本机
+      // 系统锚点，必须再经过宿主权限确认。
+      return innerArgs.confirm !== true;
     case "contacts_export_vcf":
       // No path returns vCard text. Any path writes outside the Codex sandbox;
       // overwrite=true is destructive, while a new path is still an external

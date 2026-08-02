@@ -82,6 +82,24 @@ export interface ContactEntity {
 }
 
 /** 身份映射行 — 整个系统的枢纽, (platform, normalizedValue) 全局唯一 */
+export interface PendingSystemAnchor {
+  id: string;
+  sourceContactId: string;
+  sourceDisplayName: string;
+  /** 本机 Contacts.app 对象 id；只留本机，不进入设备同步。 */
+  appleId: string;
+  label: string;
+  note: string;
+  createdAt: string;
+}
+
+export interface PendingSystemAnchorRecoveryResult {
+  pendingId: string;
+  targetContactId: string;
+  action: 'recovered' | 'discarded-target-already-anchored';
+  appleId?: string;
+}
+
 export interface ContactIdentity {
   /** uuid */
   id: string;

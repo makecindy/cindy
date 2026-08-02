@@ -29,6 +29,7 @@ import {
   registerContactsListGroupsTool,
   registerContactsListTool,
   registerContactsMergeTool,
+  registerContactsPendingSystemAnchorTools,
   registerContactsFindDuplicatesTool,
   registerContactsImportSystemTool,
   registerContactsVcfTools,
@@ -131,7 +132,12 @@ function registerCallToolEntry(server: McpServer, registry: ContactsToolRegistry
       // agent 经 MCP 直写同进程 store, 绕过 IPC 层的变更广播 — 这里按类目
       // 兜底通知宿主(write/manage 均可能改库), 让设置页/管理浮层实时刷新
       const category = registry.get(name)?.category;
-      if (!result.isError && (category === 'write' || category === 'manage')) {
+      const recoveryPlanOnly =
+        name === 'contacts_recover_pending_system_anchor' && args.confirm !== true;
+      if (
+        !result.isError &&
+        (category === 'write' || (category === 'manage' && !recoveryPlanOnly))
+      ) {
         try {
           deps.onMutated?.();
         } catch {
@@ -168,6 +174,7 @@ export function createCindyContactsMcpServer(deps: ContactsMcpDeps): McpServer {
   registerContactsRelationTools(registry, deps);
   registerContactsDeleteTool(registry, deps);
   registerContactsMergeTool(registry, deps);
+  registerContactsPendingSystemAnchorTools(registry, deps);
   registerContactsFindDuplicatesTool(registry, deps);
   registerContactsImportSystemTool(registry, deps);
   registerContactsVcfTools(registry, deps);

@@ -79,6 +79,81 @@ export function registerContactsMergeTool(registry: ContactsToolRegistry, deps: 
   });
 }
 
+export function registerContactsPendingSystemAnchorTools(
+  registry: ContactsToolRegistry,
+  deps: ContactsMcpDeps,
+): void {
+  const RECOVERY_RULES =
+    'pending 系统锚点只表示“旧档已删除但本机 Contacts.app 卡片尚未确定归属”。' +
+    '绝不按姓名猜 target；先让用户核对 source 名称与候选 target 档案。' +
+    '必须先不传 confirm 获取恢复计划并展示给用户，用户明确确认后才能 confirm:true。';
+  registry.register({
+    name: 'contacts_list_pending_system_anchors',
+    category: 'read',
+    description:
+      '列出设备升级或旧版同步后尚未确定归属的本机系统通讯录锚点。' +
+      '有结果时用 contacts_search / contacts_get 找候选 target，并让用户确认；不要按姓名自动恢复。',
+    rules: [RECOVERY_RULES],
+    inputShape: {},
+    handler: async () =>
+      withContacts(deps, (store) => ({
+        pending: store.listPendingSystemAnchors().map((anchor) => ({
+          pendingId: anchor.id,
+          sourceContactId: anchor.sourceContactId,
+          sourceDisplayName: anchor.sourceDisplayName,
+          anchorCreatedAt: anchor.createdAt,
+        })),
+      })),
+  });
+  registry.register({
+    name: 'contacts_recover_pending_system_anchor',
+    category: 'manage',
+    description:
+      '把一个 pending 本机系统通讯录锚点恢复到用户指定的存活 target 档案。' +
+      '首次调用不传 confirm，只返回 source→target 计划；向用户展示并获得明确确认后再传 confirm:true。' +
+      'target 已有本机锚点时保留 target 并永久丢弃 pending loser。',
+    rules: [MANAGE_RULES, RECOVERY_RULES],
+    inputShape: {
+      pending_id: z.string().min(1),
+      target_id: z.string().min(1),
+      confirm: z.boolean().optional().describe('仅在用户确认该 source→target 后传 true'),
+    },
+    handler: async (args) => {
+      const confirmed = args.confirm === true;
+      return withContacts(
+        deps,
+        (store) => {
+          const pending = store
+            .listPendingSystemAnchors()
+            .find((anchor) => anchor.id === (args.pending_id as string));
+          if (!pending) {
+            throw new Error(`contacts:not-found pending system anchor not found: ${args.pending_id}`);
+          }
+          const target = store.getContact(args.target_id as string);
+          if (!confirmed) {
+            return {
+              requiresConfirmation: true,
+              pending: {
+                pendingId: pending.id,
+                sourceContactId: pending.sourceContactId,
+                sourceDisplayName: pending.sourceDisplayName,
+              },
+              target: {
+                id: target.id,
+                displayName: target.displayName,
+                kind: target.kind,
+                summary: target.summary,
+              },
+            };
+          }
+          return store.recoverPendingSystemAnchor(pending.id, target.id);
+        },
+        { mutates: confirmed },
+      );
+    },
+  });
+}
+
 export function registerContactsFindDuplicatesTool(registry: ContactsToolRegistry, deps: ContactsMcpDeps): void {
   registry.register({
     name: 'contacts_find_duplicates',
@@ -371,11 +446,16 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
             const hasSuccessfulWrites = results.some(
               (result) => result.action === 'created' || result.action === 'updated',
             );
-            if (!hasSuccessfulWrites) throw error;
+            // 指定 system_group 时，空列表 ensure 已经先于首批联系人写入执行。
+            // 即使首批就失败，也要把“分组已创建 / 已存在”作为结构化部分结果返回；
+            // 只有确实新建了分组才补发 mutation，复用既有分组不伪造变更通知。
+            if (!hasSuccessfulWrites && !systemGroup) throw error;
             const reason = error instanceof Error ? error.message : String(error);
             throw new ContactsPartialFailureSignal(
               error,
-              `earlier system contacts batches succeeded, but a later write failed: ${reason}`,
+              hasSuccessfulWrites
+                ? `earlier system contacts batches succeeded, but a later write failed: ${reason}`
+                : `macOS system group "${systemGroupName}" was ensured, but the first contacts write failed: ${reason}`,
               {
                 partial: true,
                 created: results.filter((result) => result.action === 'created').length,
@@ -398,7 +478,7 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
                     }
                   : {}),
               },
-              anchorsAdded > 0,
+              anchorsAdded > 0 || Boolean(systemGroup?.created),
             );
           }
           results.push(...batchResults);

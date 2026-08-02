@@ -368,7 +368,7 @@ describe("contacts device sync", () => {
     expect(() => b.getContact(person.id)).toThrow("contact not found");
   });
 
-  it("升级后补捕获的旧版 merge 不会被追溯标成真实删除", () => {
+  it("升级前只有姓名与本机锚点的旧版 merge 可经显式确认恢复到 target", () => {
     const a = createStore();
     const b = createStore();
     const aDb = databases.at(-2)!;
@@ -407,16 +407,20 @@ describe("contacts device sync", () => {
       value: "anchor-before-upgrade",
     });
 
-    const recoveredRedirect = structuredClone(upgradedCapture);
-    const redirectStamp = { nodeId: "recovered-redirect", counter: 1 };
-    recoveredRedirect.mergeClocks = [redirectStamp];
-    recoveredRedirect.merges = [
-      {
-        id: source.id,
-        value: { value: { targetId: target.id }, stamp: redirectStamp },
-      },
-    ];
-    b.mergeDeviceSyncState(recoveredRedirect);
+    const pending = b.listPendingSystemAnchors();
+    expect(pending).toEqual([
+      expect.objectContaining({
+        sourceContactId: source.id,
+        sourceDisplayName: "旧源档案",
+        appleId: "anchor-before-upgrade",
+      }),
+    ]);
+    expect(b.recoverPendingSystemAnchor(pending[0]!.id, target.id)).toMatchObject({
+      pendingId: pending[0]!.id,
+      targetContactId: target.id,
+      action: "recovered",
+      appleId: "anchor-before-upgrade",
+    });
     expect(b.getContact(target.id).identities).toContainEqual(
       expect.objectContaining({
         platform: "apple-contacts",

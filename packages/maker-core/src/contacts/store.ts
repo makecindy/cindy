@@ -66,6 +66,8 @@ import {
   type CreateContactInput,
   type ListContactsOptions,
   type MergeResult,
+  type PendingSystemAnchor,
+  type PendingSystemAnchorRecoveryResult,
   type ResolveHit,
   type ResolveOptions,
   type UpdateContactInput,
@@ -462,6 +464,110 @@ export class MakerContactsStore {
     this.db.prepare(`DELETE FROM contact_identities WHERE id = ?`).run(identityId);
     this.touch(row.contact_id);
     this.reindexSafe(row.contact_id);
+  }
+
+  listPendingSystemAnchors(): PendingSystemAnchor[] {
+    this.init();
+    return (
+      this.db
+        .prepare(
+          `SELECT identity_id, source_contact_id, source_display_name,
+                  value, label, note, created_at
+           FROM contacts_sync_pending_anchors
+           ORDER BY created_at, identity_id`,
+        )
+        .all() as Array<{
+        identity_id: string;
+        source_contact_id: string;
+        source_display_name: string;
+        value: string;
+        label: string;
+        note: string;
+        created_at: string;
+      }>
+    ).map((row) => ({
+      id: row.identity_id,
+      sourceContactId: row.source_contact_id,
+      sourceDisplayName: row.source_display_name,
+      appleId: row.value,
+      label: row.label,
+      note: row.note,
+      createdAt: row.created_at,
+    }));
+  }
+
+  recoverPendingSystemAnchor(
+    pendingId: string,
+    targetContactId: string,
+  ): PendingSystemAnchorRecoveryResult {
+    this.init();
+    this.requireContact(targetContactId);
+    const tx = this.db.transaction(() => {
+      const pending = this.db
+        .prepare(`SELECT * FROM contacts_sync_pending_anchors WHERE identity_id = ?`)
+        .get(pendingId) as
+        | {
+            identity_id: string;
+            value: string;
+            normalized_value: string;
+            label: string;
+            note: string;
+            created_at: string;
+          }
+        | undefined;
+      if (!pending) throw new ContactsError('not-found', `pending system anchor not found: ${pendingId}`);
+
+      const existingTargetAnchor = this.db
+        .prepare(
+          `SELECT id FROM contact_identities
+           WHERE contact_id = ? AND platform = 'apple-contacts' LIMIT 1`,
+        )
+        .get(targetContactId) as { id: string } | undefined;
+      if (existingTargetAnchor) {
+        this.db.prepare(`DELETE FROM contacts_sync_pending_anchors WHERE identity_id = ?`).run(pendingId);
+        return {
+          pendingId,
+          targetContactId,
+          action: 'discarded-target-already-anchored' as const,
+        };
+      }
+
+      this.assertIdentityFree('apple-contacts', pending.normalized_value, targetContactId);
+      const count = (
+        this.db.prepare(`SELECT COUNT(*) AS c FROM contact_identities WHERE contact_id = ?`).get(targetContactId) as {
+          c: number;
+        }
+      ).c;
+      if (count >= this.config.maxIdentitiesPerContact) {
+        throw new ContactsError('invalid-params', `identity limit reached (${this.config.maxIdentitiesPerContact})`);
+      }
+      this.db
+        .prepare(
+          `INSERT INTO contact_identities(
+             id, contact_id, platform, value, normalized_value, label, note, created_at
+           ) VALUES (?, ?, 'apple-contacts', ?, ?, ?, ?, ?)`,
+        )
+        .run(
+          pending.identity_id,
+          targetContactId,
+          pending.value,
+          pending.normalized_value,
+          pending.label,
+          pending.note,
+          pending.created_at,
+        );
+      this.db.prepare(`DELETE FROM contacts_sync_pending_anchors WHERE identity_id = ?`).run(pendingId);
+      this.touch(targetContactId);
+      return {
+        pendingId,
+        targetContactId,
+        action: 'recovered' as const,
+        appleId: pending.value,
+      };
+    });
+    const result = tx();
+    this.reindexSafe(targetContactId);
+    return result;
   }
 
   // ── 事件流 ───────────────────────────────────────────────────────────────

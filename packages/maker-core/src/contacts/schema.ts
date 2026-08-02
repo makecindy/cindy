@@ -131,6 +131,7 @@ const MIGRATIONS: string[] = [
   CREATE TABLE contacts_sync_pending_anchors (
     identity_id TEXT PRIMARY KEY,
     source_contact_id TEXT NOT NULL,
+    source_display_name TEXT NOT NULL,
     value TEXT NOT NULL,
     normalized_value TEXT NOT NULL,
     label TEXT NOT NULL DEFAULT '',

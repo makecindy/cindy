@@ -21,6 +21,7 @@ import {
   registerContactsListGroupsTool,
   registerContactsListTool,
   registerContactsMergeTool,
+  registerContactsPendingSystemAnchorTools,
   registerContactsFindDuplicatesTool,
   registerContactsVcfTools,
   registerContactsExportSystemTool,
@@ -131,6 +132,7 @@ describe('cindy_contacts tools', () => {
     registerContactsAppendEventTool(registry, deps);
     registerContactsDeleteTool(registry, deps);
     registerContactsMergeTool(registry, deps);
+    registerContactsPendingSystemAnchorTools(registry, deps);
     registerContactsFindDuplicatesTool(registry, deps);
     registerContactsVcfTools(registry, deps);
     registerContactsExportSystemTool(registry, deps);
@@ -160,8 +162,8 @@ describe('cindy_contacts tools', () => {
     return (res.data as { profile: { id: string } }).profile;
   };
 
-  it('注册面完整: 23 个工具 4 个类目(export_system 依赖 host 注入)', () => {
-    expect(registry.list()).toHaveLength(23);
+  it('注册面完整: 25 个工具 4 个类目(export_system 依赖 host 注入)', () => {
+    expect(registry.list()).toHaveLength(25);
     expect(new Set(registry.listCategories())).toEqual(new Set(['search', 'read', 'write', 'manage']));
   });
 
@@ -300,6 +302,72 @@ describe('cindy_contacts tools', () => {
     expect(del.ok).toBe(true);
     const stats = parseResult(await registry.call('contacts_stats', {})).data as { people: number };
     expect(stats.people).toBe(0);
+  });
+
+  it('pending 系统锚点必须先审阅计划并经用户确认后恢复到指定 target', async () => {
+    const neo = await createNeo();
+    const pendingId = 'pending-anchor-review';
+    const db = new DatabaseCtor(path.join(tmpDir, 'maker-contacts', 'contacts.db'));
+    db.prepare(
+      `INSERT INTO contacts_sync_pending_anchors(
+         identity_id, source_contact_id, source_display_name,
+         value, normalized_value, label, note, created_at
+       ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+    ).run(
+      pendingId,
+      'deleted-source-id',
+      '升级前旧档案',
+      'apple-pending-id',
+      'apple-pending-id',
+      '锚点',
+      '',
+      '2026-08-02T00:00:00.000Z',
+    );
+    db.close();
+
+    const listed = parseResult(
+      await registry.call('contacts_list_pending_system_anchors', {}),
+    ).data as {
+      pending: Array<{ pendingId: string; sourceDisplayName: string; appleId?: string }>;
+    };
+    expect(listed.pending).toEqual([
+      {
+        pendingId,
+        sourceContactId: 'deleted-source-id',
+        sourceDisplayName: '升级前旧档案',
+        anchorCreatedAt: '2026-08-02T00:00:00.000Z',
+      },
+    ]);
+    expect(listed.pending[0]!.appleId).toBeUndefined();
+
+    const mutationBeforePlan = mutations;
+    const plan = parseResult(
+      await registry.call('contacts_recover_pending_system_anchor', {
+        pending_id: pendingId,
+        target_id: neo.id,
+      }),
+    ).data as { requiresConfirmation: boolean; pending: unknown; target: { id: string } };
+    expect(plan).toMatchObject({
+      requiresConfirmation: true,
+      pending: { pendingId, sourceDisplayName: '升级前旧档案' },
+      target: { id: neo.id, displayName: '林子航' },
+    });
+    expect(mutations).toBe(mutationBeforePlan);
+    expect(manager.getStore().listPendingSystemAnchors()).toHaveLength(1);
+
+    const recovered = parseResult(
+      await registry.call('contacts_recover_pending_system_anchor', {
+        pending_id: pendingId,
+        target_id: neo.id,
+        confirm: true,
+      }),
+    ).data as { action: string; targetContactId: string };
+    expect(recovered).toMatchObject({ action: 'recovered', targetContactId: neo.id });
+    expect(mutations).toBe(mutationBeforePlan + 1);
+    expect(manager.getStore().listPendingSystemAnchors()).toEqual([]);
+    expect(manager.getStore().getContact(neo.id).identities).toContainEqual(
+      expect.objectContaining({ platform: 'apple-contacts', value: 'apple-pending-id' }),
+    );
   });
 
   it('关系边: add_relation 双向可见, remove_relation 清除', async () => {
@@ -465,6 +533,82 @@ describe('cindy_contacts tools', () => {
       expect.objectContaining({ platform: 'apple-contacts' }),
     );
     expect(mutations).toBe(2); // createNeo 一次 + 部分成功补发一次，失败路径不重复通知
+  });
+
+  it('系统回写: 建组后首批权限/超时/osascript 失败仍返回准确部分状态并按实际变更通知', async () => {
+    const neo = await createNeo();
+    const cases = [
+      {
+        name: 'permission-created',
+        created: true,
+        error: new Error('[PERMISSION_DENIED] Contacts automation was revoked'),
+        code: 'PERMISSION_DENIED',
+        expectedMutations: 1,
+      },
+      {
+        name: 'timeout-existing',
+        created: false,
+        error: new Error('system contacts write timed out'),
+        code: 'INTERNAL',
+        expectedMutations: 0,
+      },
+      {
+        name: 'osascript-created',
+        created: true,
+        error: new Error('[INTERNAL] osascript exited with code 1'),
+        code: 'INTERNAL',
+        expectedMutations: 1,
+      },
+    ];
+
+    for (const testCase of cases) {
+      let partialMutations = 0;
+      const failingDeps: ContactsMcpDeps = {
+        getManager: () => manager,
+        isEnabled: () => true,
+        writeSystemContacts: async () => {
+          throw testCase.error;
+        },
+        syncSystemContactGroup: async (groupName, appleIds) => ({
+          groupName,
+          created: testCase.created,
+          requested: appleIds.length,
+          added: 0,
+          alreadyPresent: 0,
+          missingAppleIds: [],
+        }),
+        onMutated: () => {
+          partialMutations += 1;
+        },
+      };
+      const failingRegistry = new ContactsToolRegistry();
+      registerContactsExportSystemTool(failingRegistry, failingDeps);
+
+      const result = parseResult(
+        await failingRegistry.call('contacts_export_system', {
+          ids: [neo.id],
+          system_group: `首批失败-${testCase.name}`,
+        }),
+      );
+      expect(result.ok).toBe(false);
+      expect(result.code).toBe(testCase.code);
+      expect(result.data).toMatchObject({
+        partial: true,
+        created: 0,
+        updated: 0,
+        missing: [],
+        errors: [],
+        anchorsAdded: 0,
+        systemGroup: {
+          created: testCase.created,
+          added: 0,
+          alreadyPresent: 0,
+          status: 'failed',
+          failedStep: 'write-contacts',
+        },
+      });
+      expect(partialMutations).toBe(testCase.expectedMutations);
+    }
   });
 
   it('系统回写: host 未提供分组能力时拒绝 system_group, 普通回写不受影响', async () => {

@@ -97,6 +97,31 @@ describe("cindy_contacts Codex approval policy", () => {
     ).toBe(false);
   });
 
+  it("pending anchor discovery/plan auto-approve, confirmed recovery requires approval", () => {
+    expect(
+      canAutoApproveContactsMcpTool(
+        callTool("contacts_list_pending_system_anchors"),
+      ),
+    ).toBe(true);
+    expect(
+      canAutoApproveContactsMcpTool(
+        callTool("contacts_recover_pending_system_anchor", {
+          pending_id: "p1",
+          target_id: "c1",
+        }),
+      ),
+    ).toBe(true);
+    expect(
+      canAutoApproveContactsMcpTool(
+        callTool("contacts_recover_pending_system_anchor", {
+          pending_id: "p1",
+          target_id: "c1",
+          confirm: true,
+        }),
+      ),
+    ).toBe(false);
+  });
+
   it("requires approval for every vCard file write, including overwrite", () => {
     expect(canAutoApproveContactsMcpTool(callTool("contacts_export_vcf"))).toBe(
       true,

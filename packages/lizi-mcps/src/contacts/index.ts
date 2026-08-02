@@ -24,6 +24,7 @@ export {
 export {
   registerContactsDeleteTool,
   registerContactsMergeTool,
+  registerContactsPendingSystemAnchorTools,
   registerContactsFindDuplicatesTool,
   registerContactsImportSystemTool,
   registerContactsVcfTools,
