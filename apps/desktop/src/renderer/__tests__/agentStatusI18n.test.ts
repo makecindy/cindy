@@ -18,6 +18,7 @@ describe('localizeAgentStatus', () => {
     expect(localizeAgentStatus('Editing files...', i18n.t)).toBe('正在编辑文件…');
     expect(localizeAgentStatus('Working', i18n.t)).toBe('正在工作…');
     expect(localizeAgentStatus('Running', i18n.t)).toBe('运行中…');
+    expect(localizeAgentStatus('Spawning agent...', i18n.t)).toBe('正在启动 Subagent…');
     expect(localizeAgentStatus('Done', i18n.t)).toBe('已完成');
   });
 

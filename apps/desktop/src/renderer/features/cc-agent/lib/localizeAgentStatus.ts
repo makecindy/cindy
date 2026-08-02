@@ -7,6 +7,7 @@ const STATUS_KEYS = new Map<string, string>([
   ['searching web', 'ccAgent.agentStatus.searchingWeb'],
   ['generating image', 'ccAgent.agentStatus.generatingImage'],
   ['compacting', 'ccAgent.agentStatus.compacting'],
+  ['spawning agent', 'ccAgent.agentStatus.spawningAgent'],
   ['done', 'ccAgent.agentStatus.done'],
   ['just wait', 'ccAgent.agentStatus.waiting'],
   ['working', 'ccAgent.agentStatus.working'],

@@ -95,6 +95,18 @@ describe('AgentTaskCard subagent model chip (codex collab)', () => {
     expect(chipText(container)).toBeNull();
   });
 
+  it('localizes the spawn receipt instead of echoing the raw agent path', () => {
+    // translator 的 fullText 是纯数据(=input.name);卡片按 locale 组装句子。
+    const { container } = render(
+      <AgentTaskCard
+        toolCall={collabToolCall({ name: '/root/survey_startup' })}
+        result="/root/survey_startup"
+      />,
+    );
+    expect(container.textContent).toContain('chat.agentTask.subagentStarted');
+    expect(container.textContent).not.toContain('/root/survey_startup started');
+  });
+
   it('keeps the claude-code path unchanged (subagentModel prop wins for cc cards)', () => {
     const ccToolCall = {
       clientId: 'c2',

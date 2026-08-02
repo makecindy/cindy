@@ -1532,10 +1532,15 @@ function handleSubAgentActivity(
   queue: AsyncQueue<AgentEvent>,
   ctx: CodexTranslateContext,
 ): void {
-  if (item.kind !== 'started') return;
-  // 瞬时 item:started/completed phase 可能各到一次,按 item.id 去重只发一次。
-  if (phase === 'updated' || ctx.rt.emittedToolUse.has(item.id)) return;
-  ctx.rt.emittedToolUse.add(item.id);
+  if (item.kind !== 'started' || phase === 'updated') return;
+  // 瞬时 item:started/completed phase 各到一次,按 item.id 去重只发一张卡;
+  // completed 到达即清 Set(与 collab handler 同规——不清会随 spawn 次数无限增长)。
+  if (ctx.rt.emittedToolUse.has(item.id)) {
+    if (phase === 'completed') ctx.rt.emittedToolUse.delete(item.id);
+    return;
+  }
+  // started phase 登记等 completed 清理;只收到 completed(防御)时无后续 phase,不登记。
+  if (phase === 'started') ctx.rt.emittedToolUse.add(item.id);
   const agentPath = typeof item.agentPath === 'string' ? item.agentPath : undefined;
   const input: Record<string, unknown> = {};
   if (agentPath) input.name = agentPath;
@@ -1545,12 +1550,12 @@ function handleSubAgentActivity(
     data: { toolUseId: item.id, toolName: 'collab:spawn', input },
     source: 'codex',
   });
-  const fullText = agentPath
-    ? `${agentPath} started${item.agentThreadId ? ` (thread ${item.agentThreadId})` : ''}`
-    : 'sub-agent started';
+  // fullText 只放结构化数据(agentPath 原文):用户可见的「已启动」句子由 renderer
+  // 按 locale 组装(AgentTaskCard 以 result===input.name 识别本卡),translator 不
+  // 合成任何语言的句子——否则英文回执会持久化进历史(review r3698558356)。
   queue.push({
     type: 'tool_result_full',
-    data: { toolUseId: item.id, fullText, isError: false },
+    data: { toolUseId: item.id, fullText: agentPath ?? '', isError: false },
     source: 'codex',
   });
   queue.push({

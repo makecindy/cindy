@@ -5365,6 +5365,7 @@
     },
     "agentTask": {
       "emptyTitle": "Subagent task",
+      "subagentStarted": "Subagent {{name}} started",
       "showDetails": "Show subagent details",
       "hideDetails": "Hide subagent details",
       "provider": {
@@ -6039,6 +6040,7 @@
       "searchingWeb": "Searching the web…",
       "generatingImage": "Generating an image…",
       "compacting": "Compacting context…",
+      "spawningAgent": "Spawning a subagent…",
       "done": "Done",
       "waiting": "Just wait…",
       "working": "Working…",

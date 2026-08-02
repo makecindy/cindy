@@ -1098,14 +1098,15 @@ describe('translateItemNotification subAgentActivity', () => {
       toolName: 'collab:spawn',
       input: { name: '/root/survey_startup', agentThreadId: 'thread-2' },
     });
+    // fullText 是纯数据(agentPath 原文),本地化句子由 renderer 组装,不持久化英文。
     expect(events[1].data).toMatchObject({
       toolUseId: 'spawn-1',
-      fullText: '/root/survey_startup started (thread thread-2)',
+      fullText: '/root/survey_startup',
       isError: false,
     });
   });
 
-  it('dedupes the started/completed phase pair to a single card', async () => {
+  it('dedupes the started/completed phase pair and releases the dedupe entry', async () => {
     const rt = newCodexRuntimeState();
     const q = createAsyncQueue<AgentEvent>();
     const ctx = makeCtx(rt);
@@ -1115,6 +1116,8 @@ describe('translateItemNotification subAgentActivity', () => {
 
     const events = await collect(q);
     expect(events.filter((event) => event.type === 'tool_use')).toHaveLength(1);
+    // completed 清理去重登记,长会话大量 spawn 不留内存增长(review r3698551514)。
+    expect(rt.emittedToolUse.has('spawn-1')).toBe(false);
   });
 
   it('stays silent for interacted/interrupted kinds', async () => {

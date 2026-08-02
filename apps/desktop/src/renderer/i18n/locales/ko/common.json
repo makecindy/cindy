@@ -5363,6 +5363,7 @@
     },
     "agentTask": {
       "emptyTitle": "하위 에이전트 작업",
+      "subagentStarted": "하위 에이전트 {{name}} 시작됨",
       "showDetails": "하위 에이전트 세부 정보 보기",
       "hideDetails": "하위 에이전트 세부 정보 숨기기",
       "provider": {
@@ -6028,6 +6029,7 @@
       "searchingWeb": "웹 검색 중…",
       "generatingImage": "이미지 생성 중…",
       "compacting": "컨텍스트 압축 중…",
+      "spawningAgent": "하위 에이전트 시작 중…",
       "done": "완료",
       "waiting": "잠시만 기다려 주세요…",
       "working": "작업 중…",

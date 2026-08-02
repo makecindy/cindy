@@ -199,7 +199,15 @@ export function AgentTaskCard({ toolCall, update, result, subagentModel, session
     update?.description ??
       readInputString(toolCall?.toolInput, ['prompt', 'description', 'task']),
   );
-  const summary = detailText(result, update?.summary);
+  const rawSummary = detailText(result, update?.summary);
+  // codex spawn 启动卡:translator 的 tool_result_full 只放结构化数据(fullText =
+  // agentPath 原文,恰等于 input.name),用户可见句子在这里按 locale 组装——判据
+  // result===input.name 由两端约定保证,未来富卡(agentsStates 摘要)不会命中。
+  const spawnName = readInputString(toolCall?.toolInput, ['name']);
+  const summary =
+    toolCall?.toolName === 'collab:spawn' && rawSummary && spawnName && rawSummary === spawnName
+      ? t('chat.agentTask.subagentStarted', { name: spawnName })
+      : rawSummary;
   const duration = formatDuration(update?.usage?.durationMs);
   const provider = update?.provider ?? (toolCall?.toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
   const providerLabel = isWorkflow
