@@ -8,7 +8,13 @@ vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: mockGetAppCapabilities,
 }));
 
-import { BUNDLED_CATALOG, buildUserProvider, type AgentKind, type RoutingDescriptor } from '@cindy/model-providers';
+import {
+  BUNDLED_CATALOG,
+  buildRegistry,
+  buildUserProvider,
+  type AgentKind,
+  type RoutingDescriptor,
+} from '@cindy/model-providers';
 
 import {
   beginProviderRouteMutation,
@@ -17,15 +23,23 @@ import {
   getSessionRoutingDescriptor,
   resolveSessionRoute,
   resolveSessionRouteDecision,
+  resolveImplicitLocalBridgeRoute,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
   setProviderOAuthTokenReader,
+  setProviderViewsReader,
   resolveImplicitProviderOAuthRouteDecision,
   rewriteImplicitModelIdForRoute,
   rewriteSessionModelIdForRoute,
 } from '../provider-route.js';
-import { setCustomProviders, setDiscoveredCodexModels, setXdGatewayModels } from '../active-catalog.js';
+import {
+  getActiveCatalog,
+  setAnthropicDiscoveredModels,
+  setCustomProviders,
+  setDiscoveredCodexModels,
+  setXdGatewayModels,
+} from '../active-catalog.js';
 import { setSessionProvider, clearSessionProvider } from '../session-provider-store.js';
 import { ANTHROPIC_DIRECT_UPSTREAM } from '../claude-gateway-config.js';
 
@@ -62,6 +76,32 @@ afterEach(() => {
   clearSessionProvider('s-anthropic-codex');
   clearSessionProvider('s-xd-model-wire');
   setXdGatewayModels([]);
+  setAnthropicDiscoveredModels([]);
+  setProviderViewsReader(async () => []);
+});
+
+describe('implicit local bridge resume routing', () => {
+  it('keeps the connected source when a running session model becomes retired', async () => {
+    setAnthropicDiscoveredModels([
+      {
+        id: 'claude-retired-live',
+        name: 'Claude Retired Live',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'retired',
+      },
+    ]);
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { anthropic: true }, {}),
+    );
+
+    await expect(resolveImplicitLocalBridgeRoute('claude-retired-live', 'codex')).resolves
+      .toMatchObject({
+        providerId: 'anthropic',
+        routing: { wireProtocol: 'anthropic-messages' },
+      });
+  });
 });
 
 describe('local mode Cindy gateway gate', () => {

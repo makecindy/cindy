@@ -338,7 +338,10 @@ export function actualSourceIdForModel(
   modelId: string,
   agent: AgentKind,
 ): string | null {
-  const sources = sourcesForModel(views, modelId, agent, { includeDisabled: true });
+  // Resume keeps disabled/retired copies, but never relaxes the agent/chat capability boundary:
+  // a catalog correction that reclassifies an id as image/audio must not make a running agent
+  // session dispatch into a non-chat endpoint.
+  const sources = chatEligibleSourcesForModel(views, modelId, agent, { includeDisabled: true });
   if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
   return nativeDefaultSourceId(sources, agent);
 }

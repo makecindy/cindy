@@ -1,5 +1,5 @@
 import {
-  effectiveSourceIdForModel,
+  actualSourceIdForModel,
   isAgentSelectableModel,
   type AgentKind,
   type ProviderView,
@@ -64,7 +64,7 @@ export function resolveBoundSessionGenerationRoute(input: {
   // the generation request to another gateway.
   const providerId = explicitProviderId
     ? explicitProvider?.id ?? null
-    : effectiveSourceIdForModel(input.providers, null, model, agentKind);
+    : actualSourceIdForModel(input.providers, null, model, agentKind);
   if (!providerId) return null;
   return { providerId, agentKind, model };
 }

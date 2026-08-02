@@ -20,7 +20,7 @@
  */
 
 import {
-  effectiveSourceIdForModel,
+  actualSourceIdForModel,
   type AgentKind,
   type Provider,
   type ProviderView,
@@ -675,7 +675,9 @@ function providersForModel(modelId: string, agent: AgentKind) {
 
 async function connectedDefaultProviderForModel(modelId: string, agent: AgentKind) {
   const providers = await providerViewsReader();
-  const defaultId = effectiveSourceIdForModel(providers, null, modelId, agent);
+  // This runs while dispatching an already-created implicit-source session. Admission for new
+  // sessions/model switches happened earlier; keep its retired/disabled source usable for resume.
+  const defaultId = actualSourceIdForModel(providers, null, modelId, agent);
   return providers.find((provider) => provider.id === defaultId) ?? null;
 }
 

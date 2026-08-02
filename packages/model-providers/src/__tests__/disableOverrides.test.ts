@@ -164,6 +164,7 @@ describe('retired tombstone 的新路由与运行中会话分层', () => {
       {},
     );
     expect(effectiveSourceIdForModel(allRetired, null, 'claude-opus-5', 'claude-code')).toBeNull();
+    expect(actualSourceIdForModel(allRetired, null, 'claude-opus-5', 'claude-code')).toBe('alpha');
     expect(deriveModelList({ providers: allRetired, agent: 'claude-code' })).toEqual([]);
     expect(
       deriveModelList({
