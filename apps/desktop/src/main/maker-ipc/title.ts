@@ -27,6 +27,7 @@ import { getDbClient } from '../localDb/client/current.js';
 import { sessions } from '../localDb/schema.js';
 import { getDesktopProviderService } from '../maker-host/createDesktopProviderService.js';
 import { generateTitleViaProvider } from '../maker-host/title-one-shot.js';
+import { validateTitleOutput } from '../maker-host/title-output-validation.js';
 import {
   regenerateTitleMaterial,
   type RegenerateTitleMaterial,
@@ -34,6 +35,7 @@ import {
 import { createLogger } from '../logger.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
+import { TITLE_LANGUAGE_BY_LOCALE, buildRegenerateTitlePrompt } from './title-prompt.js';
 
 import { MAKER_INVOKE } from './channels.js';
 import {
@@ -43,13 +45,6 @@ import {
 } from './sessionAutoTitle.js';
 
 const log = createLogger('maker-ipc/title');
-
-const TITLE_LANGUAGE_BY_LOCALE: Record<SupportedLocale, string> = {
-  'zh-CN': 'Simplified Chinese',
-  en: 'English',
-  ja: 'Japanese',
-  ko: 'Korean',
-};
 
 const TITLE_PROMPT_TEMPLATE = (msg: string, locale: SupportedLocale) =>
   [
@@ -75,22 +70,6 @@ const REGENERATE_ASSISTANT_SLICE = 400;
  * transcript 按时间正序,模型能自然看出最后一条是否只是"继续"式短追问,另用一句
  * 指令兜底,避免标题被短追问带偏。
  */
-const REGENERATE_TITLE_PROMPT = (
-  opening: string | null,
-  transcript: string,
-  locale: SupportedLocale,
-) =>
-  [
-    'Generate a concise title for the conversation below.',
-    `Write the title in ${TITLE_LANGUAGE_BY_LOCALE[locale]}.`,
-    'Use at most 20 characters. Output only the title, without quotation marks or ending punctuation.',
-    'Summarize the core topic of the whole conversation while reflecting the latest progress. If the final user message is only a brief confirmation such as "continue" or "okay", do not base the title on it.',
-    '',
-    ...(opening ? [`Conversation opening: ${opening}`, ''] : []),
-    'Recent conversation:',
-    transcript,
-  ].join('\n');
-
 /** 从 DB 读 sessions.provider_id(race-free 显式来源)。失败/空串 → null。 */
 async function readSessionProviderIdFromDb(sessionId: string): Promise<string | null> {
   if (!sessionId) return null;
@@ -149,7 +128,11 @@ export interface RegenerateTitleDeps {
   /** 素材包:对话开场 + 最近 limit 条非空消息(与 sessionTaskSummary 同可见性口径)。 */
   collectMaterial: (sessionId: string, recentLimit: number) => Promise<RegenerateTitleMaterial>;
   /** 用给定 prompt 走 title oneShot 通道。 */
-  generateTitle: (sessionId: string, agentKind: AgentKind, prompt: string) => Promise<string | null>;
+  generateTitle: (
+    sessionId: string,
+    agentKind: AgentKind,
+    prompt: string,
+  ) => Promise<string | null>;
 }
 
 async function readSessionAgentKindFromDb(sessionId: string): Promise<AgentKind | null> {
@@ -193,8 +176,7 @@ export async function regenerateMakerSessionTitle(
     // 最近窗口已经覆盖到会话开头时,开场消息就在 transcript 里,不再单独给出。
     // 用 rowid 成员判断做精确判定——时间戳启发式在同毫秒批量落库(开场行被
     // 同时间戳的后续行挤出窗口)或 createdAt 为 null 时都会误判,review 已两次指出。
-    const openingInWindow =
-      opening.rowid != null && recent.some((m) => m.rowid === opening.rowid);
+    const openingInWindow = opening.rowid != null && recent.some((m) => m.rowid === opening.rowid);
     const openingText =
       !openingInWindow && opening.text ? opening.text.slice(0, REGENERATE_OPENING_SLICE) : null;
     const transcript = recent
@@ -204,14 +186,15 @@ export async function regenerateMakerSessionTitle(
           : `Assistant: ${m.text.slice(0, REGENERATE_ASSISTANT_SLICE)}`,
       )
       .join('\n');
-    const title = (
-      await deps.generateTitle(
-        sessionId,
-        agentKind,
-        REGENERATE_TITLE_PROMPT(openingText, transcript, getResolvedMainLocale()),
-      )
-    )?.trim();
-    return title || null;
+    const generated = await deps.generateTitle(
+      sessionId,
+      agentKind,
+      buildRegenerateTitlePrompt(openingText, transcript, getResolvedMainLocale()),
+    );
+    // Regenerate has a stricter product contract than the shared auto-title path:
+    // one line, ≤20 Unicode characters, and no transcript/meta wrapper. The model is
+    // not trusted to enforce this by prompt alone.
+    return validateTitleOutput(generated, 20);
   } catch (err) {
     log.warn('regenerate session title failed (swallowed)', {
       sessionId,
@@ -265,7 +248,11 @@ export function registerMakerTitleIpc(): void {
     MAKER_INVOKE.GENERATE_TITLE,
     async (
       event: Electron.IpcMainInvokeEvent,
-      { message, agentKind, sessionId }: { message: string; agentKind: AgentKind; sessionId?: string },
+      {
+        message,
+        agentKind,
+        sessionId,
+      }: { message: string; agentKind: AgentKind; sessionId?: string },
     ): Promise<{ title: string | null }> => {
       assertTrustedAppRendererEvent(event);
       return { title: await generateMakerSessionTitle(message, agentKind, sessionId) };

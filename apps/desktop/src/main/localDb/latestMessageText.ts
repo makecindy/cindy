@@ -17,6 +17,10 @@ import { extractText } from '../sessionTaskSummary.logic.js';
 
 import { getDbClient } from './client/current.js';
 import { messages, sessions } from './schema.js';
+import {
+  selectRecentTitleMessages,
+  type TitleMessageCandidate,
+} from './latestMessageText.logic.js';
 
 export interface LatestMessage {
   text: string;
@@ -93,8 +97,10 @@ export async function latestMessageText(
 }
 
 /**
- * 最近 `limit` 条非空文本的 user / assistant 消息,时间正序。工具行等抽不出
- * 正文的消息会被跳过,所以 DB 侧多取 3 倍再过滤,保证长会话里也能凑满窗口。
+ * 最近 `limit` 条有效的 user / assistant 素材,时间正序。`limit` 现在按真实
+ * conversation turn 收口后的有效消息计数,不是原始 DB 行数；一个 turn 中的
+ * assistant 施工播报不会再挤掉用户消息。工具行等抽不出正文的消息会被跳过,
+ * DB 侧扫描更大的原始窗口后再做确定性筛选。
  */
 async function recentMessagesWithClearedAt(
   sessionId: string,
@@ -112,22 +118,73 @@ async function recentMessagesWithClearedAt(
     .select({
       role: messages.role,
       content: messages.content,
+      toolUseId: messages.toolUseId,
       createdAt: messages.createdAt,
+      agentMeta: messages.agentMeta,
       rowid: messageRowid,
     })
     .from(messages)
     .where(and(...conds))
     .orderBy(desc(messages.createdAt), desc(messageRowid))
-    .limit(limit * 3);
-  const picked: RecentMessage[] = [];
+    // One real turn can contain dozens of assistant progress rows. The opening is
+    // queried separately, so a bounded raw scan cannot lose the session subject.
+    .limit(Math.max(128, limit * 64));
+
+  const candidates: TitleMessageCandidate[] = [];
   for (const row of rows) {
     const role = row.role === 'user' ? 'user' : 'assistant';
     const text = extractText(row.content, role);
     if (!text) continue;
-    picked.push({ role, text, createdAt: row.createdAt ?? null, rowid: row.rowid });
-    if (picked.length >= limit) break;
+
+    let agentMeta: Record<string, unknown> | null = null;
+    if (row.agentMeta) {
+      try {
+        const parsed: unknown = JSON.parse(row.agentMeta);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+          agentMeta = parsed as Record<string, unknown>;
+        }
+      } catch {
+        // Malformed legacy metadata must not make title regeneration fail.
+      }
+    }
+    candidates.push({
+      role,
+      text,
+      createdAt: row.createdAt ?? null,
+      rowid: row.rowid,
+      toolUseId: row.toolUseId ?? null,
+      agentMeta,
+    });
   }
-  return picked.reverse();
+
+  const parentIds = [
+    ...new Set(
+      candidates
+        .map((row) => row.agentMeta?.parentUuid)
+        .filter((value): value is string => typeof value === 'string' && value.length > 0),
+    ),
+  ];
+  const toolRows =
+    parentIds.length > 0
+      ? await db
+          .select({ toolUseId: messages.toolUseId })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.sessionId, sessionId),
+              inArray(messages.role, ['tool_use', 'tool_result']),
+              inArray(messages.toolUseId, parentIds),
+              isNull(messages.rewindAt),
+              ...(clearedAt != null ? [gt(messages.createdAt, clearedAt)] : []),
+            ),
+          )
+      : [];
+  const knownToolUseIds = new Set(
+    [...candidates.map((row) => row.toolUseId), ...toolRows.map((row) => row.toolUseId)].filter(
+      (value): value is string => typeof value === 'string' && value.length > 0,
+    ),
+  );
+  return selectRecentTitleMessages(candidates, limit, knownToolUseIds);
 }
 
 /** 第一条非空文本的用户消息;开头连续附件超过扫描窗口时退化为空(调用方按无开场处理)。 */
