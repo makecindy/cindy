@@ -18,7 +18,10 @@ env:
   XDT_SKIP_AGENT_BIN_INSTALL: '1'
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   ELECTRON_OVERRIDE_DIST_PATH: '${{ github.workspace }}/.electron-stub-dist'
-  NODE_OPTIONS: '--max-old-space-size=4096'
+  # 8192: desktop tsc 全量 typecheck 峰值内存随仓体增长已突破 4GB(2026-08-02 起
+  # 所有 PR 的 verify 在 Typecheck desktop 步骤稳定 OOM,含纯 mobile 改动);
+  # 公开仓 ubuntu-latest runner 内存 16GB,8GB heap 安全。
+  NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
   verify:
