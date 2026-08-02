@@ -17,6 +17,7 @@ const T0 = 1_700_000_000_000;
 function planMessage(
   status: 'pending' | 'in_progress' | 'completed',
   createdAtMs: number | null = T0,
+  planUpdatedAtMs?: number,
 ): ChatMessage {
   return {
     clientId: 'plan-1',
@@ -26,6 +27,7 @@ function planMessage(
     toolUseId: 'plan:turn-1',
     toolInput: { plan: [{ step: 'Finish work', status }] },
     ...(createdAtMs === null ? {} : { createdAt: new Date(createdAtMs).toISOString() }),
+    ...(planUpdatedAtMs === undefined ? {} : { planUpdatedAtMs }),
   };
 }
 
@@ -117,7 +119,7 @@ describe('PinnedPlanPanel completed plan lifetime', () => {
     view.rerender(
       <PinnedPlanPanel
         sessionId="running-completes"
-        messages={[planMessage('completed', T0 + 5_000)]}
+        messages={[planMessage('completed', T0, T0 + 5_000)]}
         animated={false}
         width={400}
       />,

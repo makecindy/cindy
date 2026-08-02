@@ -39,7 +39,7 @@ export function PinnedPlanPanel({
     insertion.todos.length > 0 &&
     insertion.todos.every((todo) => todo.status === 'completed'),
   );
-  const completedAtMs = Date.parse(insertion?.createdAt ?? '');
+  const completedAtMs = insertion?.updatedAtMs ?? Date.parse(insertion?.createdAt ?? '');
   const persistedCompletionDeadlineMs =
     allDone && Number.isFinite(completedAtMs)
       ? completedAtMs + COMPLETED_PLAN_VISIBLE_MS
