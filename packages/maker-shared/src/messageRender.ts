@@ -541,6 +541,7 @@ export function applyCodexPlanSnapshotOnDone<
   snapshot: unknown,
   turnId?: string | null,
   terminalStatus?: unknown,
+  planUpdatedAtMs?: number,
 ): CodexPlanSnapshotApplyResult<TMessage> {
   const authoritativeSnapshot = Array.isArray(snapshot) ? snapshot : null;
   const hasAuthoritativeSnapshot = authoritativeSnapshot !== null;
@@ -588,6 +589,9 @@ export function applyCodexPlanSnapshotOnDone<
     const next = [...messages];
     next[index] = {
       ...message,
+      ...(typeof planUpdatedAtMs === 'number' && Number.isFinite(planUpdatedAtMs)
+        ? { planUpdatedAtMs }
+        : {}),
       ...(message.toolInput !== undefined
         ? { toolInput: { ...input, plan: nextSnapshot } }
         : {}),

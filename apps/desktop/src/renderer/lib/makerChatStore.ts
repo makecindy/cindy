@@ -2745,6 +2745,7 @@ export function handleStreamEvent(
             terminalData?.plan,
             terminalTurnId,
             terminalTurnStatus,
+            Date.now(),
            ).messages
          : cleanedMessages;
 
