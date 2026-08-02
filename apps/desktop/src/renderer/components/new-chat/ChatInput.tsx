@@ -196,6 +196,7 @@ import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
 import {
   getComposerSendShortcutPreference,
   getComposerSendShortcutLabel,
+  hasComposerModifier,
   resolveComposerEnterIntent,
   useComposerSendShortcutPreference,
 } from '@/hooks/useComposerSendShortcutPreference';
@@ -2026,7 +2027,7 @@ export function ChatInput({
         const enterIntent = resolveComposerEnterIntent(
           event,
           getComposerSendShortcutPreference(),
-          { turnRunning: showStopButtonRef.current },
+          { turnRunning: showStopButtonRef.current, platform: window.electronAPI?.platform },
         );
         if (enterIntent === 'native') return false;
         if (enterIntent === 'ignore') {
@@ -2478,6 +2479,7 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
+      const platform = window.electronAPI?.platform;
       if (event.key === 'Escape' && !event.repeat && !event.isComposing) {
         if (
           currentState === 'listening' ||
@@ -2495,9 +2497,9 @@ export function ChatInput({
       const enterIntent = resolveComposerEnterIntent(
         event,
         getComposerSendShortcutPreference(),
-        { turnRunning: showStopButtonRef.current },
+        { turnRunning: showStopButtonRef.current, platform },
       );
-      const isModifiedEnter = event.metaKey || event.ctrlKey;
+      const isModifiedEnter = hasComposerModifier(event, platform);
       if (
         isComposerEnterTarget(event.target) &&
         isModifiedEnter &&

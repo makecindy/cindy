@@ -30,6 +30,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(keydownBlock).toContain('isVoiceInputEnterTarget(event.target)');
     expect(keydownBlock).toContain('resolveComposerEnterIntent(');
     expect(keydownBlock).toContain('getComposerSendShortcutPreference()');
+    expect(keydownBlock).toContain('const platform = window.electronAPI?.platform;');
     expect(keydownBlock).toContain('turnRunning: showStopButtonRef.current');
     expect(keydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(keydownBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
@@ -80,6 +81,7 @@ describe('ChatInput voice input Enter-to-send contract', () => {
     expect(enterBlock).toContain('!isVoiceInputShortcutMatch(event, voiceShortcutRef.current)');
     expect(enterBlock).toContain('resolveComposerEnterIntent(');
     expect(enterBlock).toContain('getComposerSendShortcutPreference()');
+    expect(enterBlock).toContain('platform: window.electronAPI?.platform');
     expect(enterBlock).toContain('turnRunning: showStopButtonRef.current');
     expect(enterBlock).toContain('event.stopPropagation();');
     expect(chatInputSource).toContain('void voiceInputStopAndSendRef.current(enterIntent);');

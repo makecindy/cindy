@@ -41,10 +41,13 @@ describe('ChatInput steer shortcut contract', () => {
     expect(chatInputSource).toContain('const composerCanSubmitRef = useRef(false);');
     expect(chatInputSource).toContain('composerCanSubmitRef.current = !sendButtonDisabled;');
     expect(windowKeydownBlock).toContain('showStopButtonRef.current');
+    expect(windowKeydownBlock).toContain('const platform = window.electronAPI?.platform;');
     expect(windowKeydownBlock).toContain('isComposerEnterTarget(event.target)');
     expect(windowKeydownBlock).toContain('resolveComposerEnterIntent(');
     expect(windowKeydownBlock).toContain('getComposerSendShortcutPreference()');
-    expect(windowKeydownBlock).toContain('const isModifiedEnter = event.metaKey || event.ctrlKey;');
+    expect(windowKeydownBlock).toContain(
+      'const isModifiedEnter = hasComposerModifier(event, platform);',
+    );
     expect(windowKeydownBlock).toContain("(enterIntent === 'queue' || enterIntent === 'steer')");
     expect(windowKeydownBlock).toContain("currentState !== 'listening'");
     expect(windowKeydownBlock).toContain('void dispatchSendRef.current(enterIntent);');
@@ -55,6 +58,7 @@ describe('ChatInput steer shortcut contract', () => {
     expect(editorEnterBlock).toContain('resolveComposerEnterIntent(');
     expect(editorEnterBlock).toContain('getComposerSendShortcutPreference()');
     expect(editorEnterBlock).toContain('turnRunning: showStopButtonRef.current');
+    expect(editorEnterBlock).toContain('platform: window.electronAPI?.platform');
     expect(editorEnterBlock).toContain("if (enterIntent === 'native') return false;");
     expect(editorEnterBlock).toContain("if (enterIntent === 'ignore')");
     expect(editorEnterBlock).toContain('void dispatchSendRef.current(enterIntent);');
@@ -85,24 +89,32 @@ describe('ChatInput steer shortcut contract', () => {
   });
 
   it('keeps mode A queue and running-turn steer semantics on the Tiptap path', () => {
-    expect(resolveComposerEnterIntent(makeEnterEvent(), 'enter', { turnRunning: false })).toBe(
-      'queue',
-    );
+    expect(
+      resolveComposerEnterIntent(makeEnterEvent(), 'enter', {
+        turnRunning: false,
+        platform: 'darwin',
+      }),
+    ).toBe('queue');
     expect(
       resolveComposerEnterIntent(makeEnterEvent({ metaKey: true }), 'enter', {
         turnRunning: true,
+        platform: 'darwin',
       }),
     ).toBe('steer');
     expect(
       resolveComposerEnterIntent(makeEnterEvent({ ctrlKey: true }), 'enter', {
         turnRunning: false,
+        platform: 'darwin',
       }),
     ).toBe('queue');
   });
 
   it('maps mode B modifier send and native/boundary cases without list interception', () => {
     const modeB = (event: ComposerEnterEvent): ComposerEnterIntent =>
-      resolveComposerEnterIntent(event, 'modifier-enter', { turnRunning: true });
+      resolveComposerEnterIntent(event, 'modifier-enter', {
+        turnRunning: true,
+        platform: 'darwin',
+      });
 
     expect(modeB(makeEnterEvent())).toBe('native');
     expect(modeB(makeEnterEvent({ metaKey: true }))).toBe('queue');

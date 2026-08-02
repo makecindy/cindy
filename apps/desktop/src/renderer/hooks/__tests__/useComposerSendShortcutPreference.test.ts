@@ -131,6 +131,7 @@ describe('useComposerSendShortcutPreference', () => {
     const cases: Array<{
       name: string;
       preference: ComposerSendShortcutPreference;
+      platform: string;
       turnRunning: boolean;
       event: KeyboardEvent;
       expected: 'queue' | 'steer' | 'native' | 'ignore' | null;
@@ -138,6 +139,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'sends with plain Enter in Enter mode',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: false,
         event: enterEvent(),
         expected: 'queue',
@@ -145,6 +147,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'steers with Cmd/Ctrl+Enter while a turn is running in Enter mode',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: true,
         event: enterEvent({ metaKey: true }),
         expected: 'steer',
@@ -152,6 +155,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'queues with Cmd/Ctrl+Enter while idle in Enter mode',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: false,
         event: enterEvent({ ctrlKey: true }),
         expected: 'queue',
@@ -159,6 +163,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'uses native Enter for a newline in modifier-enter mode',
         preference: 'modifier-enter',
+        platform: 'darwin',
         turnRunning: true,
         event: enterEvent(),
         expected: 'native',
@@ -166,13 +171,31 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'queues with Cmd/Ctrl+Enter in modifier-enter mode',
         preference: 'modifier-enter',
+        platform: 'darwin',
         turnRunning: true,
         event: enterEvent({ metaKey: true }),
         expected: 'queue',
       },
       {
+        name: 'does not treat Win+Enter as the modifier shortcut on Windows',
+        preference: 'modifier-enter',
+        platform: 'win32',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true }),
+        expected: 'native',
+      },
+      {
+        name: 'does not treat Meta+Enter as the modifier shortcut on Linux',
+        preference: 'modifier-enter',
+        platform: 'linux',
+        turnRunning: true,
+        event: enterEvent({ metaKey: true }),
+        expected: 'native',
+      },
+      {
         name: 'ignores a repeated Enter send',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: true,
         event: enterEvent({ repeat: true }),
         expected: 'ignore',
@@ -180,6 +203,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'leaves IME composition to the native editor path',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: false,
         event: enterEvent({ isComposing: true }),
         expected: 'native',
@@ -187,6 +211,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'ignores Shift+Enter so list and hard-break handling can run',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: false,
         event: enterEvent({ shiftKey: true }),
         expected: null,
@@ -194,6 +219,7 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'ignores Alt+Enter so hard-break handling can run',
         preference: 'modifier-enter',
+        platform: 'darwin',
         turnRunning: false,
         event: enterEvent({ altKey: true }),
         expected: null,
@@ -201,14 +227,17 @@ describe('useComposerSendShortcutPreference', () => {
       {
         name: 'ignores other keys',
         preference: 'enter',
+        platform: 'darwin',
         turnRunning: false,
         event: new KeyboardEvent('keydown', { key: 'Escape' }),
         expected: null,
       },
     ];
 
-    it.each(cases)('$name', ({ preference, turnRunning, event, expected }) => {
-      expect(resolveComposerEnterIntent(event, preference, { turnRunning })).toBe(expected);
+    it.each(cases)('$name', ({ preference, platform, turnRunning, event, expected }) => {
+      expect(resolveComposerEnterIntent(event, preference, { turnRunning, platform })).toBe(
+        expected,
+      );
     });
   });
 });

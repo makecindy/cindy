@@ -19,6 +19,13 @@ export type ComposerSendShortcutUpdateResult =
 export const COMPOSER_SEND_SHORTCUT_STORAGE_KEY = 'chat.sendShortcutPreference';
 export const DEFAULT_COMPOSER_SEND_SHORTCUT: ComposerSendShortcutPreference = 'enter';
 
+export function hasComposerModifier(
+  event: Pick<ComposerEnterEvent, 'metaKey' | 'ctrlKey'>,
+  platform: string | undefined,
+): boolean {
+  return event.ctrlKey || (platform === 'darwin' && event.metaKey);
+}
+
 export function getComposerModifierShortcutLabel(platform: string | undefined): string {
   return platform === 'darwin' ? '⌘+Enter' : 'Ctrl+Enter';
 }
@@ -44,13 +51,13 @@ function parsePreference(raw: string | null): ComposerSendShortcutPreference | n
 export function resolveComposerEnterIntent(
   event: ComposerEnterEvent,
   preference: ComposerSendShortcutPreference,
-  options: { turnRunning: boolean },
+  options: { turnRunning: boolean; platform: string | undefined },
 ): ComposerEnterIntent {
   if (event.key !== 'Enter' || event.shiftKey || event.altKey) return null;
   if (event.isComposing) return 'native';
   if (event.repeat) return 'ignore';
 
-  const hasModifier = event.metaKey || event.ctrlKey;
+  const hasModifier = hasComposerModifier(event, options.platform);
   if (preference === 'modifier-enter') {
     return hasModifier ? 'queue' : 'native';
   }
