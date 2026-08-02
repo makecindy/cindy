@@ -236,7 +236,7 @@ function WindowBlock({
       {paceLine !== null ? (
         <div
           data-testid="quota-pace"
-          className="mt-[3px] text-xs tabular-nums text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]"
+          className="mt-[3px] text-xs tabular-nums text-[var(--text-secondary)]"
         >
           {paceLine}
         </div>

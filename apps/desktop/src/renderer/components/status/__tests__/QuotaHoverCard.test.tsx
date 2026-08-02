@@ -688,11 +688,7 @@ describe('QuotaHoverCard', () => {
     const pace = screen.getByTestId('quota-pace');
     expect(pace.textContent).toBe('按当前平均速度偏快（粗略趋势）');
     expect(pace.getAttribute('data-severity')).toBeNull();
-    expect(
-      pace.classList.contains(
-        'text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]',
-      ),
-    ).toBe(true);
+    expect(pace.classList.contains('text-[var(--text-secondary)]')).toBe(true);
     expect(pace.className).not.toContain('quota-bar-crit');
   });
 
