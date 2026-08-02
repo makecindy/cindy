@@ -2,10 +2,11 @@
  * gitExec 超时收口单测 —— child_process 与 proc-util 全 mock(不 spawn 真进程)。
  * 覆盖:Windows 超时走 killProcessTree(taskkill /T /F)且树杀收尾后 Promise 稳定
  * 收口(即使 git 回调因后代进程占住 stdio 永不到来)、POSIX 对整个进程组 SIGTERM
- * 并在 deadline 处收口 + 宽限期后 SIGKILL 兜底、正常完成清理定时器、超时后迟到
- * 回调不覆盖结果。
+ * 后**等进程退出才收口**(防调用方与未退净的 fetch 并发抢锁)+ 宽限期 SIGKILL
+ * 兜底、正常完成清理定时器、超时后迟到回调不覆盖结果。
  */
 
+import { EventEmitter } from 'node:events';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 type ExecCb = (err: Error | null, stdout: string, stderr: string) => void;
@@ -26,24 +27,27 @@ function setPlatform(p: NodeJS.Platform) {
   Object.defineProperty(process, 'platform', { value: p, configurable: true });
 }
 
+type FakeChild = EventEmitter & {
+  pid: number;
+  kill: ReturnType<typeof vi.fn>;
+  exitCode: number | null;
+  signalCode: string | null;
+};
+
 interface FakeGit {
-  child: {
-    pid: number;
-    kill: ReturnType<typeof vi.fn>;
-    exitCode: number | null;
-    signalCode: string | null;
-  };
+  child: FakeChild;
   gitOpts: { detached?: boolean } | undefined;
   gitCb: ExecCb | undefined;
 }
 
-/** git 调用返回假 child 并捕获回调与 spawn 选项。 */
+/** git 调用返回假 child(EventEmitter,可发 exit 事件)并捕获回调与 spawn 选项。 */
 function installExecFileMock(): FakeGit {
-  const state: FakeGit = {
-    child: { pid: 4242, kill: vi.fn(), exitCode: null, signalCode: null },
-    gitOpts: undefined,
-    gitCb: undefined,
-  };
+  const child = new EventEmitter() as FakeChild;
+  child.pid = 4242;
+  child.kill = vi.fn();
+  child.exitCode = null;
+  child.signalCode = null;
+  const state: FakeGit = { child, gitOpts: undefined, gitCb: undefined };
   mocks.execFile.mockImplementation(
     (file: string, _args: string[], opts: FakeGit['gitOpts'], cb?: ExecCb) => {
       if (file !== 'git') throw new Error(`unexpected execFile: ${file}`);
@@ -53,6 +57,25 @@ function installExecFileMock(): FakeGit {
     },
   );
   return state;
+}
+
+/** 探针:promise 是否已 settle(拒绝被吞掉,只记录状态)。 */
+function probe(p: Promise<unknown>) {
+  const s = { settled: false };
+  p.then(
+    () => {
+      s.settled = true;
+    },
+    () => {
+      s.settled = true;
+    },
+  );
+  return s;
+}
+
+async function flushMicrotasks() {
+  await Promise.resolve();
+  await Promise.resolve();
 }
 
 beforeEach(() => {
@@ -88,55 +111,71 @@ describe('gitExec timeoutMs', () => {
     expect(state.gitOpts?.detached).toBe(false);
   });
 
-  it('POSIX 超时 → 对整个进程组 SIGTERM 并在 deadline 处收口,不等 git 回调', async () => {
+  it('POSIX 超时 → 整组 SIGTERM 后等进程 exit 才收口(防与未退净的 fetch 并发抢锁)', async () => {
     setPlatform('linux');
     const state = installExecFileMock();
     const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
     try {
       const p = gitExec(['fetch', 'origin', 'main'], '/repo', { timeoutMs: 500 });
+      const s = probe(p);
       const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
-      vi.advanceTimersByTime(500);
-      await expectation;
 
+      vi.advanceTimersByTime(500);
+      await flushMicrotasks();
       // detached 自成进程组长 → kill(-pid) 连 git-remote-http/credential helper 后代一起
       expect(state.gitOpts?.detached).toBe(true);
       expect(killSpy).toHaveBeenCalledWith(-4242, 'SIGTERM');
+      // 进程还没退出 → 不许提前收口
+      expect(s.settled).toBe(false);
+
+      state.child.exitCode = null;
+      state.child.signalCode = 'SIGTERM';
+      state.child.emit('exit', null, 'SIGTERM');
+      await expectation;
       expect(mocks.killProcessTree).not.toHaveBeenCalled();
     } finally {
       killSpy.mockRestore();
     }
   });
 
-  it('POSIX 超时后进程组仍存活 → 宽限期到点 killProcessTree 整组 SIGKILL 兜底', async () => {
+  it('POSIX 宽限期内进程不退出 → killProcessTree 整组 SIGKILL,兜底收尾后才收口', async () => {
     setPlatform('linux');
     const state = installExecFileMock();
     const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
     try {
       const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+      const s = probe(p);
       const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
-      vi.advanceTimersByTime(500);
-      await expectation;
 
-      // 子进程状态仍是运行中(exitCode/signalCode 均 null)→ 宽限期后兜底整组硬杀
+      vi.advanceTimersByTime(500);
+      await flushMicrotasks();
+      expect(s.settled).toBe(false);
+
+      // 进程忽略 SIGTERM,宽限期到点 → 整组硬杀,收尾回调触发收口
       vi.advanceTimersByTime(1_500);
-      expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child);
+      await expectation;
+      expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
     } finally {
       killSpy.mockRestore();
     }
   });
 
-  it('POSIX 超时后进程已退出 → 宽限期到点不再兜底硬杀', async () => {
+  it('POSIX 超时时进程已退出(回调被后代占住的 stdio 拖住)→ 直接收口,不发信号', async () => {
     setPlatform('linux');
     const state = installExecFileMock();
     const killSpy = vi.spyOn(process, 'kill').mockReturnValue(true);
     try {
       const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
       const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+
+      state.child.exitCode = 0; // 进程早已退出,只是 close 回调没来
       vi.advanceTimersByTime(500);
       await expectation;
 
-      state.child.signalCode = 'SIGTERM'; // SIGTERM 已生效
-      vi.advanceTimersByTime(1_500);
+      expect(killSpy).not.toHaveBeenCalled();
       expect(mocks.killProcessTree).not.toHaveBeenCalled();
     } finally {
       killSpy.mockRestore();
@@ -166,6 +205,8 @@ describe('gitExec timeoutMs', () => {
         stderr: expect.stringContaining('timed out'),
       });
       vi.advanceTimersByTime(300);
+      state.child.signalCode = 'SIGTERM';
+      state.child.emit('exit', null, 'SIGTERM');
       await expectation;
 
       // 后代进程终于释放 stdio,回调姗姗来迟——结果必须仍是超时错误,且不抛未处理异常

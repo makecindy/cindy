@@ -60,9 +60,10 @@ export interface GitExecOpts {
    * 或 credential helper 后代会带着继承的 stdio 活下来——既拖过 deadline 又留
    * 孤儿进程)。Windows 走 proc-util killProcessTree 的 taskkill /T /F(带重试与
    * 后代兜底); POSIX 让 git 以 detached 自成进程组长, deadline 处对整组 SIGTERM
-   * (git 收 TERM 会清理 .lock), 宽限期后仍存活的由整组 SIGKILL 兜底。两个平台
-   * 都保证超时后不残留后台 git 进程与紧随其后的其它 git 操作争抢同一仓库的
-   * .lock。省略 = 不超时。
+   * (git 收 TERM 会清理 .lock), 等直接 git 进程退出后才收口, 宽限期内未退出的
+   * 由整组 SIGKILL 兜底后再收口。两个平台都保证收口时进程树已终止——调用方拿到
+   * 超时错误后立刻发起的下一个 git 操作不会与残留进程争抢同一仓库的 .lock。
+   * 省略 = 不超时。
    */
   timeoutMs?: number;
 }
@@ -174,8 +175,16 @@ function execFileOnce(
         }
         // POSIX:git 以 detached 自成进程组长——deadline 处对整组 SIGTERM,
         // git-remote-http/credential helper 后代一并收到,git 收 TERM 会清理
-        // .lock;随即收口 Promise。忽略 SIGTERM 的顽固存活者由宽限期后的整组
-        // SIGKILL(killProcessTree)兜底,不留孤儿。
+        // .lock。**不立即收口**:先等直接 git 进程真正退出(它才是持有仓库锁、
+        // 更新 ref 的主体)再 failTimeout,否则调用方立刻发起的 rev-parse/
+        // createWorktree 会与尚未退净的 fetch 并发抢锁;宽限期内仍未退出则整组
+        // SIGKILL(killProcessTree)兜底后收口。等待有界(≤ POSIX_KILL_GRACE_MS),
+        // freshBase 的网络预算按绝对 deadline 扣减,不会因此重开预算。
+        if (child.exitCode !== null || child.signalCode !== null) {
+          // 进程已经退出(典型:回调只是被后代占住的 stdio 拖住了)→ 直接收口
+          failTimeout();
+          return;
+        }
         if (child.pid != null) {
           try {
             process.kill(-child.pid, 'SIGTERM');
@@ -193,13 +202,22 @@ function execFileOnce(
             /* 进程可能已退出 */
           }
         }
-        const reaper = setTimeout(() => {
+        const onExit = () => {
+          if (reaper !== undefined) clearTimeout(reaper);
+          failTimeout();
+        };
+        const reaper: ReturnType<typeof setTimeout> | undefined = setTimeout(() => {
+          child.removeListener('exit', onExit);
           if (child.exitCode === null && child.signalCode === null) {
-            killProcessTree(child.pid, child);
+            // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL(内核级立即生效),收尾
+            // 回调里再收口——保证收口时进程树已终止,不留孤儿。
+            killProcessTree(child.pid, child, () => failTimeout());
+          } else {
+            failTimeout();
           }
         }, POSIX_KILL_GRACE_MS);
         reaper.unref?.();
-        failTimeout();
+        child.once('exit', onExit);
       }, timeoutMs);
     }
   });
