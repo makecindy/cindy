@@ -114,18 +114,25 @@ export async function listSessionPersistedChatAttachmentPaths(
 export async function listDeletableSessionPersistedChatAttachmentPaths(
   sessionId: string,
 ): Promise<string[]> {
-  const [sessionPaths, retainedRows] = await Promise.all([
+  const [sessionPaths, retainedPaths] = await Promise.all([
     listSessionPersistedChatAttachmentPaths(sessionId),
-    getDbClient().drizzle
-      .select({ content: messages.content })
-      .from(messages)
-      .innerJoin(sessions, eq(messages.sessionId, sessions.id))
-      .where(and(ne(messages.sessionId, sessionId), ne(sessions.status, 'deleted'))),
+    listPersistedChatAttachmentPathsForOtherSessions(sessionId),
   ]);
-  const retainedPaths = new Set(
-    retainedRows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  return sessionPaths.filter((filePath) => !retainedPaths.includes(filePath));
+}
+
+/** Return staged attachment paths referenced by other non-deleted sessions. */
+export async function listPersistedChatAttachmentPathsForOtherSessions(
+  sessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ content: messages.content })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(ne(messages.sessionId, sessionId), ne(sessions.status, 'deleted')));
+  return uniqueStrings(
+    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
   );
-  return sessionPaths.filter((filePath) => !retainedPaths.has(filePath));
 }
 
 /** Return all staged attachment paths retained by the current owner's message DB. */
@@ -822,8 +829,14 @@ export async function commitMessageDeletion(
       const remainingAttachmentPaths = new Set(
         await listSessionPersistedChatAttachmentPaths(sessionId),
       );
+      const retainedByOtherSessions = new Set(
+        await listPersistedChatAttachmentPathsForOtherSessions(sessionId),
+      );
       await cleanupStagedChatAttachments(
-        deletedAttachmentPaths.filter((filePath) => !remainingAttachmentPaths.has(filePath)),
+        deletedAttachmentPaths.filter(
+          (filePath) =>
+            !retainedByOtherSessions.has(filePath) && !remainingAttachmentPaths.has(filePath),
+        ),
       );
     } catch (error) {
       log.warn('message staged attachment cleanup failed', {
