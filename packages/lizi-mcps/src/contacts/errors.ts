@@ -80,6 +80,9 @@ export function classifyContactsError(err: unknown): ContactsToolError {
     if (tag[1] === 'already-exists') return { code: 'ALREADY_EXISTS', message };
     if (tag[1] === 'identity-conflict') return { code: 'IDENTITY_CONFLICT', message };
     if (tag[1] === 'invalid-params') return { code: 'INVALID_PARAMS', message };
+    if (tag[1] === 'unsupported-capability') {
+      return { code: 'UNSUPPORTED_CAPABILITY', message };
+    }
     if (tag[1] === 'io-error') return { code: 'INTERNAL', message };
   }
   // host 侧系统通讯录能力经 throwIpcError 的 "[CODE] message" 协议抛出(Electron 跨层

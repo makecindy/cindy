@@ -43,8 +43,13 @@ export function readContactsSnapshot(
     }))
     .sort(byId);
 
+  // apple-contacts 是本机 Contacts.app 的对象 id，同一人的 id 在另一台 Mac
+  // 完全不同。它只作本机回写锚点，进入设备同步会让另一台机器拿死 id 更新，
+  // 甚至在多台设备间反复覆盖锚点。因此同步投影明确排除它。
   const identities = (
-    db.prepare(`SELECT * FROM contact_identities`).all() as IdentityRow[]
+    db
+      .prepare(`SELECT * FROM contact_identities WHERE platform <> 'apple-contacts'`)
+      .all() as IdentityRow[]
   )
     .map<ContactsSnapshotIdentity>((row) => ({
       id: row.id,
@@ -137,6 +142,11 @@ export function writeContactsSnapshot(
   db: Database.Database,
   snapshot: ContactsDataSnapshot,
 ): void {
+  // 同步快照替换主表前先保住本机系统通讯录锚点。远端快照即使来自旧版、
+  // 仍带 apple-contacts，也不得写进来；本机锚只在对应 contact 仍存在时恢复。
+  const localSystemAnchors = db
+    .prepare(`SELECT * FROM contact_identities WHERE platform = 'apple-contacts'`)
+    .all() as IdentityRow[];
   db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
 
   const insertContact = db.prepare(
@@ -174,6 +184,7 @@ export function writeContactsSnapshot(
      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
   );
   for (const row of snapshot.identities) {
+    if (row.platform === 'apple-contacts') continue;
     insertIdentity.run(
       row.id,
       row.contactId,
@@ -183,6 +194,20 @@ export function writeContactsSnapshot(
       row.label,
       row.note,
       row.createdAt,
+    );
+  }
+  const liveContactIds = new Set(snapshot.contacts.map((contact) => contact.id));
+  for (const row of localSystemAnchors) {
+    if (!liveContactIds.has(row.contact_id)) continue;
+    insertIdentity.run(
+      row.id,
+      row.contact_id,
+      row.platform,
+      row.value,
+      row.normalized_value,
+      row.label,
+      row.note,
+      row.created_at,
     );
   }
 

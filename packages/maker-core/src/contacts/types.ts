@@ -349,7 +349,7 @@ export interface ImportContactRecord {
   note?: string;
   /** vCard CATEGORIES 回读的分组名(导入时按名 find-or-create 并归组), export→import 分组不丢 */
   groups?: string[];
-  /** 源系统锚点身份(增量同步/回写的对账锚), e.g. {platform:'apple-contacts', value:<id>} */
+  /** 源系统锚点身份(本机回写对账锚, 不进入设备同步), e.g. {platform:'apple-contacts', value:<id>} */
   anchor?: { platform: string; value: string };
 }
 
@@ -401,6 +401,18 @@ export interface SystemContactWriteResult {
   /** created 时的系统联系人 id(回填锚点) */
   appleId?: string;
   error?: string;
+}
+
+/** 把系统联系人加入 macOS 通讯录分组的幂等结果(只增不删)。 */
+export interface SystemContactGroupSyncResult {
+  groupName: string;
+  /** 本次是否新建了系统分组；false 表示复用同名分组。 */
+  created: boolean;
+  requested: number;
+  added: number;
+  alreadyPresent: number;
+  /** 锚点在系统通讯录里已不存在，未能加入分组。 */
+  missingAppleIds: string[];
 }
 
 export interface ContactsStats {

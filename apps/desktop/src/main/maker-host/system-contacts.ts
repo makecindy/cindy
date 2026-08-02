@@ -16,6 +16,7 @@ import { promisify } from 'node:util';
 
 import type {
   ImportContactRecord,
+  SystemContactGroupSyncResult,
   SystemContactWriteItem,
   SystemContactWriteResult,
 } from '@cindy/maker-core';
@@ -283,5 +284,106 @@ export async function writeSystemContacts(
       );
     }
     throwIpcError('INTERNAL', `write system contacts failed: ${msg.slice(0, 300)}`);
+  }
+}
+
+// ── 系统通讯录分组(幂等创建 + 只增成员) ───────────────────────────────────
+
+const MAX_GROUP_MEMBER_BATCH = 200;
+
+/** 构造单次 JXA 分组写入；输入已经过 host 校验与去重。 */
+function buildSystemContactGroupScript(groupName: string, appleIds: string[]): string {
+  return `
+(() => {
+  const Contacts = Application('Contacts');
+  const groupName = ${jsonForScript(groupName)};
+  const appleIds = ${jsonForScript(appleIds)};
+  const groupNames = Contacts.groups.name();
+  let group = null;
+  let created = false;
+  const groupIndex = groupNames.findIndex((name) => String(name) === groupName);
+  if (groupIndex >= 0) {
+    group = Contacts.groups[groupIndex];
+  } else {
+    group = Contacts.Group({ name: groupName });
+    Contacts.groups.push(group);
+    Contacts.save();
+    created = true;
+  }
+
+  const existingIds = new Set((group.people.id() || []).map((id) => String(id)));
+  const missingAppleIds = [];
+  let added = 0;
+  let alreadyPresent = 0;
+  for (const appleId of appleIds) {
+    if (existingIds.has(appleId)) {
+      alreadyPresent += 1;
+      continue;
+    }
+    try {
+      const person = Contacts.people.byId(appleId);
+      person.name();
+      // Contacts.sdef 把 group.people 标为只读；成员关系必须走应用级
+      // add <entry> to <specifier> 命令，直接对 collection.push 会被拒。
+      Contacts.add(person, { to: group });
+      existingIds.add(appleId);
+      added += 1;
+    } catch (err) {
+      missingAppleIds.push(appleId);
+    }
+  }
+  if (added > 0) Contacts.save();
+  return JSON.stringify({
+    groupName,
+    created,
+    requested: appleIds.length,
+    added,
+    alreadyPresent,
+    missingAppleIds,
+  });
+})()
+`;
+}
+
+/**
+ * 确保 macOS 通讯录存在指定分组，并把 appleIds 对应联系人加入其中。
+ * 语义刻意只增不删：这个入口用于圈定“由 Cindy 管理”的联系人，绝不把
+ * 系统分组里已有成员当作镜像差异擅自移除。空列表仍会创建/确认分组。
+ */
+export async function syncSystemContactGroup(
+  rawGroupName: string,
+  rawAppleIds: string[],
+): Promise<SystemContactGroupSyncResult> {
+  if (process.platform !== 'darwin') {
+    throwIpcError('UNSUPPORTED_CAPABILITY', 'system contacts groups are macOS-only');
+  }
+  const groupName = rawGroupName.trim();
+  if (!groupName || groupName.length > 60) {
+    throwIpcError('INVALID_PARAMS', 'system contacts group name must be 1-60 characters');
+  }
+  const appleIds = [...new Set(rawAppleIds.map((id) => id.trim()).filter(Boolean))];
+  if (appleIds.length > MAX_GROUP_MEMBER_BATCH) {
+    throwIpcError(
+      'INVALID_PARAMS',
+      `system contacts group batch too large (> ${MAX_GROUP_MEMBER_BATCH})`,
+    );
+  }
+
+  try {
+    const { stdout } = await execFileAsync(
+      'osascript',
+      ['-l', 'JavaScript', '-e', buildSystemContactGroupScript(groupName, appleIds)],
+      { timeout: OSA_TIMEOUT_MS, maxBuffer: 4 * 1024 * 1024 },
+    );
+    return JSON.parse(stdout.trim()) as SystemContactGroupSyncResult;
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes('-1743') || /not authori[sz]ed/i.test(msg)) {
+      throwIpcError(
+        'PERMISSION_DENIED',
+        'not authorized to manage Contacts groups — grant access in System Settings > Privacy & Security > Automation',
+      );
+    }
+    throwIpcError('INTERNAL', `sync system contacts group failed: ${msg.slice(0, 300)}`);
   }
 }

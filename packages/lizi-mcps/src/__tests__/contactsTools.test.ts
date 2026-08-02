@@ -58,6 +58,8 @@ describe('cindy_contacts tools', () => {
   let registry: ContactsToolRegistry;
   let enabled: boolean;
   let writeCalls: SystemContactWriteItem[][];
+  let groupSyncCalls: Array<{ groupName: string; appleIds: string[] }>;
+  let systemGroupMembers: Map<string, Set<string>>;
   let mutations: number;
 
   beforeEach(() => {
@@ -69,6 +71,8 @@ describe('cindy_contacts tools', () => {
     });
     enabled = true;
     writeCalls = [];
+    groupSyncCalls = [];
+    systemGroupMembers = new Map();
     mutations = 0;
     const deps: ContactsMcpDeps = {
       getManager: () => manager,
@@ -85,6 +89,29 @@ describe('cindy_contacts tools', () => {
           action: it.appleId ? ('updated' as const) : ('created' as const),
           appleId: it.appleId ?? `fake-apple-${it.contactId.slice(0, 8)}`,
         }));
+      },
+      syncSystemContactGroup: async (groupName, appleIds) => {
+        groupSyncCalls.push({ groupName, appleIds: [...appleIds] });
+        const created = !systemGroupMembers.has(groupName);
+        const members = systemGroupMembers.get(groupName) ?? new Set<string>();
+        let added = 0;
+        let alreadyPresent = 0;
+        for (const appleId of appleIds) {
+          if (members.has(appleId)) alreadyPresent += 1;
+          else {
+            members.add(appleId);
+            added += 1;
+          }
+        }
+        systemGroupMembers.set(groupName, members);
+        return {
+          groupName,
+          created,
+          requested: appleIds.length,
+          added,
+          alreadyPresent,
+          missingAppleIds: [],
+        };
       },
     };
     registry = new ContactsToolRegistry();
@@ -363,6 +390,81 @@ describe('cindy_contacts tools', () => {
     expect(run2.updated).toBe(1);
   });
 
+  it('系统回写: dry-run 展示专属分组计划, 真执行幂等建组并只增成员', async () => {
+    const neo = await createNeo();
+    const groupName = 'Cindy 管理';
+
+    const dry = parseResult(
+      await registry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: groupName,
+        dry_run: true,
+      }),
+    ).data as {
+      systemGroup: { name: string; action: string; memberCount: number };
+    };
+    expect(dry.systemGroup).toEqual({
+      name: groupName,
+      action: 'ensure-and-add',
+      memberCount: 1,
+    });
+    expect(groupSyncCalls).toEqual([]);
+
+    const first = parseResult(
+      await registry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: groupName,
+      }),
+    ).data as {
+      systemGroup: { created: boolean; added: number; alreadyPresent: number };
+    };
+    expect(first.systemGroup).toMatchObject({ created: true, added: 1, alreadyPresent: 0 });
+    expect(groupSyncCalls.map((call) => call.appleIds.length)).toEqual([0, 1]);
+
+    groupSyncCalls = [];
+    const second = parseResult(
+      await registry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: groupName,
+      }),
+    ).data as {
+      systemGroup: { created: boolean; added: number; alreadyPresent: number };
+    };
+    expect(second.systemGroup).toMatchObject({ created: false, added: 0, alreadyPresent: 1 });
+    expect(groupSyncCalls.map((call) => call.appleIds.length)).toEqual([0, 1]);
+  });
+
+  it('系统回写: host 未提供分组能力时拒绝 system_group, 普通回写不受影响', async () => {
+    const neo = await createNeo();
+    const noGroupDeps: ContactsMcpDeps = {
+      getManager: () => manager,
+      isEnabled: () => true,
+      writeSystemContacts: async (items) =>
+        items.map((item) => ({
+          contactId: item.contactId,
+          name: item.name,
+          action: 'created' as const,
+          appleId: `plain-${item.contactId}`,
+        })),
+    };
+    const noGroupRegistry = new ContactsToolRegistry();
+    registerContactsExportSystemTool(noGroupRegistry, noGroupDeps);
+
+    const unsupported = parseResult(
+      await noGroupRegistry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: 'Cindy',
+      }),
+    );
+    expect(unsupported.ok).toBe(false);
+    expect(unsupported.code).toBe('UNSUPPORTED_CAPABILITY');
+
+    const ordinary = parseResult(
+      await noGroupRegistry.call('contacts_export_system', { ids: [neo.id] }),
+    );
+    expect(ordinary.ok).toBe(true);
+  });
+
   it('回写/vcf 导出: 只有任职语义的 org 边才映射公司/职位(客户等非雇佣边不出卡)', async () => {
     // 回归: 曾取"第一条指向 org 的出边"当雇主, 先建的 客户/供应商 关系会污染
     // 系统联系人卡的 公司/职位 字段
@@ -429,10 +531,16 @@ describe('cindy_contacts tools', () => {
     }
     store.addToGroup(g.id, ids);
 
-    const res = parseResult(await registry.call('contacts_export_system', { group: '大组' }));
+    const res = parseResult(
+      await registry.call('contacts_export_system', {
+        group: '大组',
+        system_group: '系统大组',
+      }),
+    );
     expect(res.ok).toBe(true);
     expect((res.data as { created: number }).created).toBe(201);
     expect(writeCalls.map((batch) => batch.length)).toEqual([200, 1]);
+    expect(groupSyncCalls.map((call) => call.appleIds.length)).toEqual([0, 200, 1]);
   });
 
   it('系统回写: 锚点每批立即回填, 后续批失败时已建卡不失锚', async () => {

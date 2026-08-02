@@ -14,6 +14,18 @@ describe('contacts system prompt segments', () => {
     expect(CONTACTS_RULES_ENABLED).toContain('status:"pending"');
   });
 
+  it('enabled 段包含显式管理请求的分阶段流程与系统回写护栏', () => {
+    expect(CONTACTS_RULES_ENABLED).toContain('Guided contact management');
+    expect(CONTACTS_RULES_ENABLED).toContain('contacts_stats');
+    expect(CONTACTS_RULES_ENABLED).toContain('contacts_create_group');
+    expect(CONTACTS_RULES_ENABLED).toContain('contacts_set_group_members');
+    expect(CONTACTS_RULES_ENABLED).toContain('contacts_export_system');
+    expect(CONTACTS_RULES_ENABLED).toContain('dry_run:true');
+    expect(CONTACTS_RULES_ENABLED).toContain('system_group');
+    expect(CONTACTS_RULES_ENABLED).toContain('never silently delete system contacts');
+    expect(CONTACTS_RULES_ENABLED).toContain('cindy_scheduler');
+  });
+
   it('disabled 段给出设置路径与每会话至多一次的约束', () => {
     expect(CONTACTS_RULES_DISABLED).toContain('Settings → Personalization → Smart Contacts');
     expect(CONTACTS_RULES_DISABLED).toContain('设置 → 个性化 → 智能通讯录');

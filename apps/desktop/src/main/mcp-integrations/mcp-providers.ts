@@ -39,7 +39,11 @@ import type { PluginRegistry } from '../maker-host/plugins/plugin-registry.js';
 import { getDesktopContactsManager } from '../maker-host/maker-contacts-host.js';
 import { broadcastContactsChanged } from '../maker-host/contacts-change-broadcast.js';
 import { readContactsSettings } from '../maker-host/contacts-settings-store.js';
-import { readSystemContacts, writeSystemContacts } from '../maker-host/system-contacts.js';
+import {
+  readSystemContacts,
+  syncSystemContactGroup,
+  writeSystemContacts,
+} from '../maker-host/system-contacts.js';
 import { BUILTIN_LIZI_MCP_IDS, pluginIdForProviderName } from '../maker-host/plugins/builtin-plugins.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
 import {
@@ -252,7 +256,9 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
       isEnabled: () => readContactsSettings().enabled,
       // 系统通讯录读取仅 macOS 注入(JXA); 缺省时 contacts_import_system 工具不注册。
       // 静态 import(动态 import 的 vite chunk 副作用会二次注册 IPC handler)
-      ...(process.platform === 'darwin' ? { readSystemContacts, writeSystemContacts } : {}),
+      ...(process.platform === 'darwin'
+        ? { readSystemContacts, writeSystemContacts, syncSystemContactGroup }
+        : {}),
       // agent 经 MCP 直写 store 不经 IPC 层, 变更靠这个回调广播给 renderer
       // (设置页统计/待确认角标/管理浮层的实时刷新)
       onMutated: broadcastContactsChanged,

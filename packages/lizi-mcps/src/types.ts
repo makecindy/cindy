@@ -401,6 +401,15 @@ export interface ContactsMcpDeps {
     items: import('@cindy/maker-core').SystemContactWriteItem[],
   ) => Promise<import('@cindy/maker-core').SystemContactWriteResult[]>;
   /**
+   * 确保 macOS 系统通讯录里存在同名分组，并把指定系统联系人加入其中。
+   * 只增不删；空 appleIds 也会创建/确认分组。缺省时系统回写仍可用，
+   * 但 contacts_export_system 不接受 system_group 参数。
+   */
+  syncSystemContactGroup?: (
+    groupName: string,
+    appleIds: string[],
+  ) => Promise<import('@cindy/maker-core').SystemContactGroupSyncResult>;
+  /**
    * write/manage 类工具成功后的变更通知(host 注入, 用于广播 renderer 刷新)。
    * MCP 直写同进程 store 不经 IPC 层, 没有这个回调 UI 就收不到 agent 侧变更。
    */

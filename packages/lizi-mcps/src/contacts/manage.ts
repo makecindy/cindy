@@ -268,11 +268,19 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
       'pending 档案一律跳过。只写结构化字段(姓名/公司/职位/邮箱/电话), 关系叙事与 agent 指令永不出库; ' +
       '系统侧只增不删(邮箱/电话补缺, 不移除既有)。带 apple-contacts 锚点的更新原联系人, ' +
       '否则新建(org 档案建成公司卡片)并自动回填锚点, 下次回写即为更新。' +
-      '先 dry_run:true 看计划(每条是 create 还是 update)再执行。',
+      '传 system_group 时会幂等创建/复用同名 macOS 通讯录分组, 并把本次成功回写的联系人加入其中; ' +
+      '只增成员, 永不移除系统分组里的既有成员。先 dry_run:true 看联系人及分组计划再执行。',
     rules: [MANAGE_RULES],
     inputShape: {
       ids: z.array(z.string().min(1)).max(200).optional().describe('要回写的档案 id 列表'),
-      group: z.string().max(60).optional().describe('按分组名回写'),
+      group: z.string().max(60).optional().describe('按智能通讯录分组名回写'),
+      system_group: z
+        .string()
+        .trim()
+        .min(1)
+        .max(60)
+        .optional()
+        .describe('同时加入的 macOS 系统通讯录分组名(不存在则创建, 只增不删)'),
       dry_run: z.boolean().optional().describe('true = 只返回计划不写入'),
     },
     handler: async (args) =>
@@ -292,19 +300,53 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
         const profiles = idList.map((id) => store.getContact(id));
         const skippedPending = profiles.filter((p) => p.status === 'pending').map((p) => p.displayName);
         const plans = profiles.filter((p) => p.status !== 'pending').map(buildWritePlan);
+        const systemGroupName = args.system_group as string | undefined;
+        if (systemGroupName && !deps.syncSystemContactGroup) {
+          throw new Error('contacts:unsupported-capability system contacts groups unavailable');
+        }
         if (args.dry_run) {
           return {
             dryRun: true,
             toCreate: plans.filter((x) => !x.appleId).map((x) => x.name),
             toUpdate: plans.filter((x) => x.appleId).map((x) => x.name),
             skippedPending,
+            ...(systemGroupName
+              ? {
+                  systemGroup: {
+                    name: systemGroupName,
+                    action: 'ensure-and-add' as const,
+                    memberCount: plans.length,
+                  },
+                }
+              : {}),
           };
         }
-        // host 侧 writeSystemContacts 单批上限 200; ids 路径有 zod cap 而 group 路径
-        // 条数不受限 — 超限前分批执行, 否则 dry_run 能过、真执行整批被拒
+        // host 侧 writeSystemContacts / syncSystemContactGroup 单批上限 200;
+        // group 路径条数不受限 — 两条系统写链都按同一上限分批。
         const SYSTEM_WRITE_BATCH = 200;
         const results: SystemContactWriteResult[] = [];
         let anchorsAdded = 0;
+        let systemGroup:
+          | {
+              name: string;
+              created: boolean;
+              added: number;
+              alreadyPresent: number;
+              missingMembers: string[];
+            }
+          | undefined;
+        if (systemGroupName) {
+          // 先确保分组和权限再写联系人；空列表也会创建/复用分组。后续任一批失败时，
+          // 已回填锚点 + 已入组成员都可幂等重试，不会重复建卡或移除既有成员。
+          const ensured = await deps.syncSystemContactGroup!(systemGroupName, []);
+          systemGroup = {
+            name: ensured.groupName,
+            created: ensured.created,
+            added: 0,
+            alreadyPresent: 0,
+            missingMembers: [],
+          };
+        }
         // created 的锚点每批立即回填, 不等全部批次跑完: 后续批失败(权限中途被
         // 收回/超时/osascript 崩)时, 已建的系统卡不至于失锚 — 失锚意味着下次
         // 回写把同一人再建一张重复卡
@@ -324,6 +366,22 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
           const batchResults = await deps.writeSystemContacts!(plans.slice(i, i + SYSTEM_WRITE_BATCH));
           results.push(...batchResults);
           backfillAnchors(batchResults);
+          if (systemGroupName && systemGroup) {
+            const appleIds = batchResults
+              .filter((r) => r.action === 'created' || r.action === 'updated')
+              .map((r) => r.appleId)
+              .filter((id): id is string => Boolean(id));
+            const grouped = await deps.syncSystemContactGroup!(systemGroupName, appleIds);
+            systemGroup.created ||= grouped.created;
+            systemGroup.added += grouped.added;
+            systemGroup.alreadyPresent += grouped.alreadyPresent;
+            const missingIds = new Set(grouped.missingAppleIds);
+            systemGroup.missingMembers.push(
+              ...batchResults
+                .filter((result) => result.appleId && missingIds.has(result.appleId))
+                .map((result) => result.name),
+            );
+          }
         }
         return {
           created: results.filter((r) => r.action === 'created').length,
@@ -332,6 +390,7 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
           errors: results.filter((r) => r.action === 'error').map((r) => ({ name: r.name, error: r.error })),
           anchorsAdded,
           skippedPending,
+          ...(systemGroup ? { systemGroup } : {}),
         };
       }, { mutates: true }),
   });

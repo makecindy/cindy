@@ -27,7 +27,7 @@ interface Props {
   onSelect: (id: string) => void;
   onCreate: (displayName: string, kind: 'person' | 'org') => void;
   onLoadMore: () => void;
-  /** 空列表态的"让 AI 整理"引导入口(可选, 由管理浮层注入) */
+  /** 空列表态的"让 AI 管理"入口(可选, 由管理浮层注入) */
   onAiOrganize?: () => void;
 }
 

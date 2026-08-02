@@ -104,6 +104,44 @@ describe("contacts device sync", () => {
     expect(stateOf(b)).toEqual(stateOf(c));
   });
 
+  it("apple-contacts 锚点只留本机，不进入设备同步也不被远端覆盖", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+
+    const person = a.createContact({ kind: "person", displayName: "本机锚点" });
+    a.addIdentity(person.id, { platform: "email", value: "anchor@example.com" });
+    a.addIdentity(person.id, { platform: "apple-contacts", value: "apple-on-a" });
+
+    expect(
+      stateOf(a).identities.some(
+        (identity) => identity.value.value.platform === "apple-contacts",
+      ),
+    ).toBe(false);
+    exchange(b, a);
+    expect(
+      b.getContact(person.id).identities.some(
+        (identity) => identity.platform === "apple-contacts",
+      ),
+    ).toBe(false);
+
+    b.addIdentity(person.id, { platform: "apple-contacts", value: "apple-on-b" });
+    exchange(a, b);
+    exchange(b, a);
+
+    expect(
+      a.getContact(person.id).identities
+        .filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["apple-on-a"]);
+    expect(
+      b.getContact(person.id).identities
+        .filter((identity) => identity.platform === "apple-contacts")
+        .map((identity) => identity.value),
+    ).toEqual(["apple-on-b"]);
+  });
+
   it("接受小写映射扩展后仍在统一边界内的身份值", () => {
     const store = createStore();
     const contact = store.createContact({

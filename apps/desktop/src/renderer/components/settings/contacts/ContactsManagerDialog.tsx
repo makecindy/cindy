@@ -36,7 +36,7 @@ const PAGE_SIZE = 200;
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** "让 AI 整理"引导(空列表态展示): 由 ContactsSection 注入, 会关闭本浮层并跳新会话草稿 */
+  /** "让 AI 管理"入口(空列表态展示): 由 ContactsSection 注入, 会关闭本浮层并跳新任务草稿 */
   onAiOrganize?: () => void;
   syncStatus?: ContactsDeviceSyncStatus | null;
   syncPending?: boolean;
