@@ -760,14 +760,16 @@ export function NewMakerDraftRoute() {
   // 协同入口判定与会话视图共用同一个 helper(issue #1170:两处各写一份判据,于是同一个
   // device-link 项目在草稿里没入口、进会话页又有)。草稿的 workspaceKind 显式按
   // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
+  const collabWorkspaceKind = effectiveWorkingDir ? 'project' : 'dialogue';
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: effectiveWorkingDir ? 'project' : 'dialogue',
+    workspaceKind: collabWorkspaceKind,
     workingDir: effectiveWorkingDir,
     remoteHostId: effectiveRemoteHostId,
     deviceLinkDeviceId: effectiveDeviceLinkDeviceId,
   });
   const collabPolicyEligible = collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible, {
+    workspaceKind: collabWorkspaceKind,
     // dialogue 没有用户项目,SSH 远端 draft 的 workingDir 又是远端主机路径;两者都跳过
     // 本机项目级查询,但用户级/全局级 collab 开关仍生效。
     skipQuery: collabEntry.skipProjectQuery,

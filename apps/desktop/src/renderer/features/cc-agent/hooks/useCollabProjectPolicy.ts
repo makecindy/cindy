@@ -48,13 +48,14 @@ type ProjectRefreshTracker = {
  *
  * `skipQuery`(尚无运行目录的 dialogue 草稿 / SSH 远端):草稿没有可查目录,远端 workingDir
  * 则不属于执行查询的本机 fs;两者都跳过项目级覆盖,但仍查用户级/全局级 collab 开关。
- * 已创建的本地 dialogue 把 workingDir 交给查询:app 托管目录自然回落全局,显式真实目录
- * 尊重项目覆盖,避免 UI 放行后才撞 main 的 PRECONDITION_FAILED。
+ * 已创建的本地 dialogue 把 workspaceKind + workingDir 交给查询:Main 会用与最终授权相同
+ * 的可信判据把 app 托管 dialogue 目录强制收敛到全局级,显式真实目录继续尊重项目覆盖。
+ * 即使托管 cwd 里意外出现 `.cindy/plugins.json`,入口状态也不会与 mutation 判定漂移。
  */
 export function useCollabProjectPolicy(
   workingDir: string | null | undefined,
   eligible: boolean,
-  opts?: { skipQuery?: boolean; deviceId?: string | null },
+  opts?: { skipQuery?: boolean; deviceId?: string | null; workspaceKind?: string | null },
 ): CollabProjectPolicy {
   const skipQuery = opts?.skipQuery === true;
   // skipQuery 用 '' 作查询参数:'' 占位表示 "跳过项目级、只查用户级" 那一档。
@@ -70,10 +71,16 @@ export function useCollabProjectPolicy(
     eligible && typeof opts?.deviceId === 'string' && opts.deviceId.trim() !== ''
       ? opts.deviceId
       : null;
+  const requestedWorkspaceKind =
+    eligible && (opts?.workspaceKind === 'project' || opts?.workspaceKind === 'dialogue')
+      ? opts.workspaceKind
+      : undefined;
   // 键含 deviceId:两台被控设备完全可能出现同一个路径串(`/Users/me/proj`),只按路径
   // 做键会让 A 设备的答案被当成 B 设备的,入口据此置灰/放行都是错的。
   const requestKey =
-    requestedWorkingDir == null ? null : `${requestedDeviceId ?? ''}\u0000${requestedWorkingDir}`;
+    requestedWorkingDir == null
+      ? null
+      : `${requestedDeviceId ?? ''}\u0000${requestedWorkspaceKind ?? ''}\u0000${requestedWorkingDir}`;
   const [state, setState] = useState<PolicyState>({
     queryKey: null,
     enabled: requestKey == null ? false : null,
@@ -106,6 +113,7 @@ export function useCollabProjectPolicy(
           requestedDeviceId,
           'collab',
           requestedWorkingDir === '' ? undefined : requestedWorkingDir,
+          requestedWorkspaceKind,
         );
         const result = { enabled: next.effectiveEnabled, unavailable: false, unsupported: false };
         if (requestId !== requestIdRef.current) {
@@ -158,7 +166,7 @@ export function useCollabProjectPolicy(
       }
     });
     return requestPromise;
-  }, [requestKey, requestedDeviceId, requestedWorkingDir]);
+  }, [requestKey, requestedDeviceId, requestedWorkingDir, requestedWorkspaceKind]);
 
   useEffect(() => {
     if (!eligible) return;

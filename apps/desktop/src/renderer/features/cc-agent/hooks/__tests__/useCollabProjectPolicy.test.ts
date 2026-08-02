@@ -276,6 +276,43 @@ describe('useCollabProjectPolicy', () => {
     expect(getState).toHaveBeenCalledWith('collab', undefined);
   });
 
+  it('passes dialogue kind to Main so it can recognize an app-managed cwd', async () => {
+    const getState = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    (window as unknown as { electronAPI: { maker: { plugins: { getState: typeof getState } } } }).electronAPI = {
+      maker: { plugins: { getState } },
+    };
+    const workingDir = '/app-managed/dialogues/2026-08-02/session-1';
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy(workingDir, true, { workspaceKind: 'dialogue' }),
+    );
+
+    await waitFor(() => expect(result.current.enabled).toBe(true));
+    expect(getState).toHaveBeenCalledWith('collab', workingDir, 'dialogue');
+  });
+
+  it('includes workspace kind in the query key', async () => {
+    const getState = vi
+      .fn()
+      .mockResolvedValueOnce({ effectiveEnabled: true })
+      .mockResolvedValueOnce({ effectiveEnabled: false });
+    (window as unknown as { electronAPI: { maker: { plugins: { getState: typeof getState } } } }).electronAPI = {
+      maker: { plugins: { getState } },
+    };
+    const workingDir = '/app-managed/dialogues/2026-08-02/session-1';
+    const { result, rerender } = renderHook(
+      ({ workspaceKind }: { workspaceKind: 'dialogue' | 'project' }) =>
+        useCollabProjectPolicy(workingDir, true, { workspaceKind }),
+      { initialProps: { workspaceKind: 'dialogue' as 'dialogue' | 'project' } },
+    );
+
+    await waitFor(() => expect(result.current.enabled).toBe(true));
+    rerender({ workspaceKind: 'project' });
+    await waitFor(() => expect(result.current.enabled).toBe(false));
+    expect(getState).toHaveBeenNthCalledWith(1, 'collab', workingDir, 'dialogue');
+    expect(getState).toHaveBeenNthCalledWith(2, 'collab', workingDir, 'project');
+  });
+
   // ── device-link:项目级开关的真相在被控端(issue #1170)────────────────────────
   // 此前一律查控制端本机:拿被控端的路径在自己的 fs 上找 `.cindy/plugins.json` 必然落空,
   // 于是读到的是控制端自己的用户级开关,与被控端 main 的 assertCollabProjectEnabled 可能
@@ -294,13 +331,17 @@ describe('useCollabProjectPolicy', () => {
     const { getState } = stubDeviceLink(invoke);
 
     const { result } = renderHook(() =>
-      useCollabProjectPolicy('/host/proj', true, { deviceId: 'dev-1' }),
+      useCollabProjectPolicy('/host/proj', true, {
+        deviceId: 'dev-1',
+        workspaceKind: 'project',
+      }),
     );
 
     await waitFor(() => expect(result.current.loading).toBe(false));
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
       'collab',
       '/host/proj',
+      'project',
     ]);
     expect(getState).not.toHaveBeenCalled();
     // 被控端说这个项目关了协同 → 入口置灰,而不是照控制端自己的开关放行。
@@ -312,13 +353,18 @@ describe('useCollabProjectPolicy', () => {
     const { getState } = stubDeviceLink(invoke);
 
     const { result } = renderHook(() =>
-      useCollabProjectPolicy(null, true, { skipQuery: true, deviceId: 'dev-1' }),
+      useCollabProjectPolicy(null, true, {
+        skipQuery: true,
+        deviceId: 'dev-1',
+        workspaceKind: 'dialogue',
+      }),
     );
 
     await waitFor(() => expect(result.current.enabled).toBe(true));
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
       'collab',
       undefined,
+      'dialogue',
     ]);
     expect(getState).not.toHaveBeenCalled();
   });

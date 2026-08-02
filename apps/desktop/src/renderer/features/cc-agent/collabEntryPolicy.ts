@@ -40,9 +40,9 @@ export interface CollabEntryPolicyScope {
   /**
    * true = 跳过项目级查询,只落用户级/全局级。
    * 尚未分配运行目录的 dialogue 草稿自然只读用户级开关;已有 workingDir 的本地 dialogue
-   * 则把目录交给 Main 判断(托管目录回落全局,显式真实目录尊重项目覆盖)。SSH 远端会话的
-   * workingDir 属于远端机器,拿它在**执行查询的那台机器**的 fs 上找项目配置既无意义又会
-   * 误判。远端项目级 collab 配置机制尚未存在(main 侧 remote 分支同口径)。
+   * 则把 kind 与目录交给 Main 的可信判据(托管 dialogue 强制只读全局,显式真实目录尊重项目覆盖)。
+   * SSH 远端会话的 workingDir 属于远端机器,拿它在**执行查询的那台机器**的 fs 上找项目
+   * 配置既无意义又会误判。远端项目级 collab 配置机制尚未存在(main 侧 remote 分支同口径)。
    */
   skipProjectQuery: boolean;
 }

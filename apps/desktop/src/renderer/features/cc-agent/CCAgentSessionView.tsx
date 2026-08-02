@@ -1887,8 +1887,9 @@ export function CCAgentSessionView({
   // 注意:doc rail (isCompactRail) 也允许显示协同菜单项 —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
   // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
+  const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: session?.workspaceKind,
+    workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
     remoteHostId: session?.remoteHostId,
@@ -1898,6 +1899,7 @@ export function CCAgentSessionView({
   });
   const collabPolicyEligible = !orcaMode && collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
+    workspaceKind: collabWorkspaceKind,
     // SSH 远端会话的 workingDir 是远端主机路径, 跳过项目级查询; 用户级/全局级 collab
     // 开关仍生效 (与 main 侧 remote 分支同口径)。
     skipQuery: collabEntry.skipProjectQuery,

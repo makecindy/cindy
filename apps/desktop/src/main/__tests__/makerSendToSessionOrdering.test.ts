@@ -124,6 +124,21 @@ describe('sendToSession ordering', () => {
     );
   });
 
+  it('uses the same trusted collab scope helper for renderer policy reads', () => {
+    const pluginStateBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.PLUGINS_GET_STATE',
+      'ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED',
+    );
+
+    expect(pluginStateBlock).toContain('resolveLocalCollabPolicyWorkingDir(');
+    expect(pluginStateBlock).toContain("typeof workspaceKind === 'string' ? workspaceKind : null");
+    expect(pluginStateBlock).toContain(
+      'matchDialogueWorkspacePath(candidate, dialogueWorkspaceRootDir()) !== null',
+    );
+    expect(pluginStateBlock).toContain('getEnableState(id, policyWorkingDir)');
+  });
+
   it('keeps non-composer direct sends from inheriting armed plan mode', () => {
     const createWorkerReadyBlock = extractBetween(
       source,

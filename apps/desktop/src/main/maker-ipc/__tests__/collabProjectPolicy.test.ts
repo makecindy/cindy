@@ -1,6 +1,44 @@
 import { describe, expect, it } from 'vitest';
 
-import { assertCollabProjectEnabled } from '../collabProjectPolicy.js';
+import {
+  assertCollabProjectEnabled,
+  resolveLocalCollabPolicyWorkingDir,
+} from '../collabProjectPolicy.js';
+
+describe('resolveLocalCollabPolicyWorkingDir', () => {
+  const isManagedDialogueWorkspace = (workingDir: string) =>
+    workingDir.startsWith('/app-managed/dialogues/');
+
+  it('drops app-managed dialogue cwd so policy queries use only the user/global level', () => {
+    expect(
+      resolveLocalCollabPolicyWorkingDir(
+        '  /app-managed/dialogues/2026-08-02/session-1  ',
+        'dialogue',
+        isManagedDialogueWorkspace,
+      ),
+    ).toBeUndefined();
+  });
+
+  it('keeps and normalizes an explicitly bound real directory', () => {
+    expect(
+      resolveLocalCollabPolicyWorkingDir(
+        '  /projects/cindy  ',
+        'dialogue',
+        isManagedDialogueWorkspace,
+      ),
+    ).toBe('/projects/cindy');
+  });
+
+  it('keeps a project path even when it has the same shape as a managed dialogue cwd', () => {
+    expect(
+      resolveLocalCollabPolicyWorkingDir(
+        '/app-managed/dialogues/2026-08-02/session-1',
+        'project',
+        isManagedDialogueWorkspace,
+      ),
+    ).toBe('/app-managed/dialogues/2026-08-02/session-1');
+  });
+});
 
 describe('assertCollabProjectEnabled', () => {
   const neverManagedDialogue = () => false;
@@ -90,6 +128,25 @@ describe('assertCollabProjectEnabled', () => {
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
     expect(calls).toEqual([explicitWorkingDir]);
+  });
+
+  it('does not let a project session skip its override just because the path resembles a managed cwd', () => {
+    const calls: Array<string | undefined> = [];
+    expect(() =>
+      assertCollabProjectEnabled(
+        {
+          workingDir: '/app-managed/dialogues/2026-08-02/session-1',
+          workspaceKind: 'project',
+          remoteHostId: null,
+        },
+        (_pluginId, workingDir) => {
+          calls.push(workingDir);
+          return true;
+        },
+        (workingDir) => workingDir.startsWith('/app-managed/dialogues/'),
+      ),
+    ).not.toThrow();
+    expect(calls).toEqual(['/app-managed/dialogues/2026-08-02/session-1']);
   });
 
   it('rejects unsupported workspace kinds and missing runtime directories', () => {

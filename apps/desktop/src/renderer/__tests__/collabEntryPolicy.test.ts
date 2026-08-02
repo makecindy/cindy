@@ -151,6 +151,7 @@ describe('drift 守卫:两个入口共用同一份判定', () => {
       const src = read(f);
       expect(src, f).toContain('resolveCollabEntryPolicy({');
       expect(src, f).toContain('collabEntry.eligible');
+      expect(src, f).toContain('workspaceKind: collabWorkspaceKind');
       // 内联判据的两个历史形态:草稿的 `effectiveDeviceLinkDeviceId == null`(把
       // device-link 整个排除掉)与会话页的 `orcaRole !== 'worker'` 链。
       expect(src, f).not.toContain('effectiveDeviceLinkDeviceId == null');

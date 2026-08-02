@@ -8,6 +8,30 @@ export interface CollabProjectPolicyContext {
 }
 
 /**
+ * Main 侧唯一的本地 collab 策略作用域判据。
+ *
+ * app 托管的 dialogue cwd 属于运行时目录,其中即使出现 `.cindy/plugins.json` 也不能把它
+ * 当成用户项目覆盖；显式绑定的真实目录则继续尊重项目策略。只有 workspaceKind 明确为
+ * dialogue 且 Main 自己验证路径归属时才跳过项目级，不能靠自报 kind 单独越权；项目会话
+ * 即使选中同形路径也保留项目语义。查询入口与最终授权必须共用这个函数,否则 UI 会与
+ * mutation 的 PRECONDITION 判定漂移。
+ */
+export function resolveLocalCollabPolicyWorkingDir(
+  workingDir: string,
+  workspaceKind: string | null | undefined,
+  isManagedDialogueWorkspace: (workingDir: string) => boolean,
+): string | undefined {
+  const normalizedWorkingDir = workingDir.trim();
+  if (
+    normalizedWorkingDir === '' ||
+    (workspaceKind === 'dialogue' && isManagedDialogueWorkspace(normalizedWorkingDir))
+  ) {
+    return undefined;
+  }
+  return normalizedWorkingDir;
+}
+
+/**
  * 协同 Team 可由启用 collab 插件的普通 Lead 会话创建,项目与对话都支持;SSH 远端会话 codex 与
  * claude-code 均已接通 —— 远端 agent 经 SSH remote-forward 直连本机 HTTP
  * MCP bridge(codex 走 daemon config 注入 + persistent token,cc 走
@@ -56,17 +80,14 @@ export function assertCollabProjectEnabled(
     return;
   }
 
-  // 只有 Main 能确认属于 app 托管 dialogue root 的运行目录才跳过项目级策略。
-  // workspaceKind 来自会话创建输入,不能单独作为授权依据:显式绑定真实目录的 dialogue
-  // 仍需尊重该目录的 `.cindy/plugins.json`,否则伪造 kind 就能绕过项目级禁用。
-  if (context.workspaceKind === 'dialogue' && isManagedDialogueWorkspace(workingDir)) {
-    if (!isPluginEnabled('collab')) {
-      throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
-    }
-    return;
-  }
-
-  if (!isPluginEnabled('collab', workingDir)) {
+  // Main 按 dialogue kind + 路径归属解析策略作用域,不信任 workspaceKind 单独裁决。这个判据也被
+  // PLUGINS_GET_STATE 查询复用,保证入口置灰与最终授权读取同一层 override。
+  const policyWorkingDir = resolveLocalCollabPolicyWorkingDir(
+    workingDir,
+    context.workspaceKind,
+    isManagedDialogueWorkspace,
+  );
+  if (!isPluginEnabled('collab', policyWorkingDir)) {
     throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
   }
 }
