@@ -449,6 +449,25 @@ async function confirmDepositOutsideWorkdir(params: {
 }
 
 /**
+ * 熔断态判定:授权副作用之前的终局闸。
+ *
+ * 只拦 `fused`,不拦整个 `degraded`。两者在生命周期投影里都折成 degraded,
+ * 但运行期语义相反(见 pipeDispatcher 的资格审 + 按需拉起):
+ * - `fused` = 反复崩溃后熔断,派发一定被 GHOST_CRASHED 拒掉,直到重载/重新
+ *   启用。此时再做过户就是白发一张用户确认卡 + 落一条用不上的持久授权。
+ * - `crashed` = 单次崩溃,派发会按需重新拉起进程并正常成功。按 readiness
+ *   一刀拦 degraded 会把这条本该成功的路也堵死,那是回归而不是修复。
+ *
+ * 投影读取本身对单插件评估异常是内部兜底的(projectGhostLifecycles),这里
+ * 不再套 try/catch;拿不到条目视为未熔断,交由 pipeDispatcher 终裁。
+ */
+function isGhostFused(ghostId: string): boolean {
+  return (
+    getGhostLifecycleProjection().find((entry) => entry.id === ghostId)?.runtimeState === 'fused'
+  );
+}
+
+/**
  * attachments 过户全链路(普通调用与 grant_only 批量预授权共用同一条链):
  * 本地路径两层策略预处理(workdir 内直通 / 外部确认卡)→ 逐张解析(会话图
  * 缓存 / 总仓 blob + 出生闸 + 授权记忆 / 缩图缓存 / 本地旁路)→ 落仓记账,
@@ -777,6 +796,17 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           setup: finalAssessment,
         };
       }
+      // 熔断闸(与上面的配置闸同一卡点,普通调用与 grant_only 共用):花名册是
+      // 会话内恒定快照,插件在快照之后熔断时模型仍可能拿旧工具名进来,
+      // grant_only 更是完全不看工具名。派发已被 pipeDispatcher 终裁拒掉,
+      // 所以这里的意义是别在必失败之前先落持久授权、先弹用户确认卡。
+      if (isGhostFused(ghostId)) {
+        return {
+          ok: false,
+          errorCode: 'GHOST_CRASHED',
+          message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试`,
+        };
+      }
       // setup_plan 配置引导完成但未给出可派发的真实工具名(降级暴露下
       // ghost_list 对该插件 tools 为空,agent 只能占位):配置卡跑完即返回,
       // 不盲目派发占位 tool——agent 重新 ghost_list 拿到真实工具名后再调。
@@ -848,6 +878,15 @@ export function getCindyGhostsMcpDeps(sessionCtx?: LiziMcpSessionContext): Cindy
           }
         } catch {
           return { ok: false, errorCode: 'INTERNAL', message: t('newChat.pluginSetup.assessmentReadFailed') };
+        }
+        // 过户链路里含异步用户确认,确认期间才熔断的情况同样不许报成功:
+        // grant_only 没有后续派发兜底,ok:true 会让模型以为整批可用。
+        if (isGhostFused(ghostId)) {
+          return {
+            ok: false,
+            errorCode: 'GHOST_CRASHED',
+            message: `插件 ${ghostId} 已熔断(反复崩溃),重载或重新启用后再试`,
+          };
         }
         log.info('ghost grant-only: batch pre-granted', { ghostId, count: grant.hashes.length });
         return {

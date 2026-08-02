@@ -51,6 +51,7 @@ const lifecycleProjectionMock = vi.fn(
     name: string;
     enabled: boolean;
     readiness: 'ready' | 'needs_setup' | 'needs_reauth' | 'degraded' | 'blocked' | 'unknown';
+    runtimeState?: 'off' | 'starting' | 'running' | 'stopping' | 'crashed' | 'fused';
     setup?: unknown;
   }> => [
     { id: 'art', name: 'Ghost art', enabled: true, readiness: 'ready' },
@@ -357,6 +358,63 @@ describe('ghost_call 兜底拒绝', () => {
     expect(ensureReadyMock.mock.calls[0]?.[0]).not.toHaveProperty('tool');
     expect(grantAttachmentsMock).not.toHaveBeenCalled();
     expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  /**
+   * 熔断闸只拦 fused,不拦整个 degraded。花名册是会话内恒定快照,插件在快照
+   * 之后熔断时模型仍可能拿旧工具名进来,grant_only 更是完全不看工具名——
+   * 派发终裁在 pipeDispatcher,这里的意义是别在必失败之前先落持久授权。
+   */
+  it('fused:普通调用在过户前就被拦,不落授权也不派发', async () => {
+    lifecycleProjectionMock.mockReturnValue([
+      { id: 'art', name: 'Ghost art', enabled: true, readiness: 'degraded', runtimeState: 'fused' },
+      { id: 'other', name: 'Ghost other', enabled: true, readiness: 'ready' },
+    ]);
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'run',
+      args: {},
+      attachments: ['/tmp/a.png'],
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+    expect(dispatchMock).not.toHaveBeenCalled();
+  });
+
+  it('fused:grant_only 不报成功,也不落批量预授权', async () => {
+    lifecycleProjectionMock.mockReturnValue([
+      { id: 'art', name: 'Ghost art', enabled: true, readiness: 'degraded', runtimeState: 'fused' },
+    ]);
+
+    const result = await makeDeps().callGhostTool({
+      ghostId: 'art',
+      tool: 'whatever',
+      args: {},
+      attachments: ['/tmp/a.png', '/tmp/b.png'],
+      grantOnly: true,
+    });
+
+    expect(result).toMatchObject({ ok: false, errorCode: 'GHOST_CRASHED' });
+    expect(grantAttachmentsMock).not.toHaveBeenCalled();
+  });
+
+  it('crashed 不拦:派发按需重新拉起,拦掉才是回归', async () => {
+    lifecycleProjectionMock.mockReturnValue([
+      {
+        id: 'art',
+        name: 'Ghost art',
+        enabled: true,
+        readiness: 'degraded',
+        runtimeState: 'crashed',
+      },
+    ]);
+
+    const result = await makeDeps().callGhostTool({ ghostId: 'art', tool: 'run', args: {} });
+
+    expect(result).toMatchObject({ ok: true });
+    expect(dispatchMock).toHaveBeenCalled();
   });
 
   it('setup_plan + 占位 tool 名:配置卡可达(不报 TOOL_NOT_FOUND),完成后 setupCompleted 早退不派发', async () => {
