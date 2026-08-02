@@ -737,6 +737,9 @@ export class MakerContactsStore {
         .prepare(`UPDATE contacts SET aliases = ?, summary = ?, agent_notes = ?, narrative = ?, updated_at = ? WHERE id = ?`)
         .run(JSON.stringify(mergedAliases), mergedSummary, mergedAgentNotes, mergedNarrative, now, targetId);
       this.db.prepare(`DELETE FROM contacts WHERE id = ?`).run(sourceId);
+      // 仅靠迁移后的 identity/event 推断 merge 会漏掉“只有姓名 + 本机系统锚点”的
+      // 档案；同步激活时在同一事务写出显式 source→target 证据。
+      this.syncRepo.recordMerge(sourceId, targetId);
     });
     tx();
 

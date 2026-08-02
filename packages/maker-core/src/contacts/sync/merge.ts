@@ -170,6 +170,7 @@ export function mergeContactsSyncStates(
     groups: mergeById(a.groups, b.groups),
     memberships: mergeById(a.memberships, b.memberships),
     relations: mergeById(a.relations, b.relations),
+    merges: mergeById(a.merges ?? [], b.merges ?? []),
   };
 }
 
@@ -235,5 +236,6 @@ export function createContactsSyncDelta(
     groups: state.groups.filter(entityIsNew),
     memberships: state.memberships.filter(entityIsNew),
     relations: state.relations.filter(entityIsNew),
+    merges: (state.merges ?? []).filter(entityIsNew),
   };
 }

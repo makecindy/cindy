@@ -142,27 +142,54 @@ describe("contacts device sync", () => {
     ).toEqual(["apple-on-b"]);
   });
 
-  it("远端 merge 删除 source 时把本机 apple-contacts 锚点迁到最终 target", () => {
+  it("只有姓名与本机锚点的 source 也凭显式 merge 证据迁到最终 target", () => {
     const a = createStore();
     const b = createStore();
     a.activateDeviceSync();
     b.activateDeviceSync();
 
-    const target = a.createContact({ kind: "person", displayName: "合并目标" });
+    const finalTarget = a.createContact({ kind: "person", displayName: "最终目标" });
+    const intermediate = a.createContact({ kind: "person", displayName: "中间目标" });
     const source = a.createContact({ kind: "person", displayName: "待合并来源" });
-    a.addIdentity(source.id, { platform: "email", value: "merge-anchor@example.com" });
     exchange(b, a);
     b.addIdentity(source.id, { platform: "apple-contacts", value: "apple-on-source" });
+    const bKnownClocks = stateOf(b).clocks;
 
-    a.merge(target.id, source.id);
-    exchange(b, a);
+    a.merge(intermediate.id, source.id);
+    a.merge(finalTarget.id, intermediate.id);
+    const aAfter = stateOf(a);
+    expect(aAfter.merges).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: source.id,
+          value: expect.objectContaining({ value: { targetId: intermediate.id } }),
+        }),
+        expect.objectContaining({
+          id: intermediate.id,
+          value: expect.objectContaining({ value: { targetId: finalTarget.id } }),
+        }),
+      ]),
+    );
+    const delta = createContactsSyncDelta(aAfter, bKnownClocks);
+    expect(delta.merges?.map((merge) => merge.id)).toEqual(
+      expect.arrayContaining([source.id, intermediate.id]),
+    );
+    b.mergeDeviceSyncState(delta);
 
     expect(
-      b.getContact(target.id).identities
+      b.getContact(finalTarget.id).identities
         .filter((identity) => identity.platform === "apple-contacts")
         .map((identity) => identity.value),
     ).toEqual(["apple-on-source"]);
     expect(() => b.getContact(source.id)).toThrow("contact not found");
+  });
+
+  it("兼容不含 merges 字段的既有 v1 同步状态", () => {
+    const legacy = createEmptyContactsSyncState();
+    delete legacy.merges;
+
+    expect(isValidContactsSyncState(legacy)).toBe(true);
+    expect(mergeContactsSyncStates(legacy, createEmptyContactsSyncState()).merges).toEqual([]);
   });
 
   it("接受小写映射扩展后仍在统一边界内的身份值", () => {
@@ -703,6 +730,29 @@ describe("contacts device sync", () => {
     clock.counter = poisoned.contacts[0]!.summary.stamp.counter - 1;
     expect(clock.counter).toBeGreaterThan(0);
     expect(isValidContactsSyncState(poisoned)).toBe(false);
+  });
+
+  it("显式 merge 证据拒绝自环且要求时钟覆盖", () => {
+    const stamp = { counter: 1, nodeId: "node-a" };
+    const valid = {
+      ...createEmptyContactsSyncState(),
+      clocks: [{ nodeId: "node-a", counter: 1 }],
+      merges: [
+        {
+          id: "source-contact",
+          value: { value: { targetId: "target-contact" }, stamp },
+        },
+      ],
+    };
+    expect(isValidContactsSyncState(valid)).toBe(true);
+
+    const selfLoop = structuredClone(valid);
+    selfLoop.merges[0]!.value.value.targetId = "source-contact";
+    expect(isValidContactsSyncState(selfLoop)).toBe(false);
+
+    const uncovered = structuredClone(valid);
+    uncovered.clocks[0]!.counter = 0;
+    expect(isValidContactsSyncState(uncovered)).toBe(false);
   });
 
   it("磁盘 projection 对每张表执行行数上限", () => {

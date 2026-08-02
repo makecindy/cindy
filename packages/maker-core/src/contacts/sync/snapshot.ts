@@ -24,12 +24,30 @@ function byId<T extends { id: string }>(a: T, b: T): number {
   return compareContactsSyncText(a.id, b.id);
 }
 
+function resolveExplicitMergeTarget(
+  sourceId: string,
+  redirects: ReadonlyMap<string, string>,
+  liveContactIds: Set<string>,
+): string | undefined {
+  const seen = new Set<string>([sourceId]);
+  let currentId = sourceId;
+  while (redirects.has(currentId)) {
+    const targetId = redirects.get(currentId)!;
+    if (seen.has(targetId)) return undefined;
+    seen.add(targetId);
+    currentId = targetId;
+  }
+  return currentId !== sourceId && liveContactIds.has(currentId)
+    ? currentId
+    : undefined;
+}
+
 /**
- * 找出远端 merge 后本机已删除 contact 的最终落点。identity / event 的稳定 id
- * 会随 store.merge 从 source 原样迁到 target，因此可作为明确证据；纯删除没有
- * 对应证据，必须 fail closed 丢弃锚点，不能按名字猜测。
+ * 兼容显式 merge 证据上线前的状态：identity / event 的稳定 id 会随 store.merge
+ * 从 source 原样迁到 target，可作为旧状态的明确证据；纯删除没有对应证据，
+ * 必须 fail closed 丢弃锚点，不能按名字猜测。
  */
-function resolveLocalAnchorTargets(
+function resolveLegacyAnchorTargets(
   db: Database.Database,
   snapshot: ContactsDataSnapshot,
   orphanContactIds: Set<string>,
@@ -183,10 +201,12 @@ export function readContactsSnapshot(
 export function writeContactsSnapshot(
   db: Database.Database,
   snapshot: ContactsDataSnapshot,
+  mergeRedirects: ReadonlyMap<string, string> = new Map(),
 ): void {
   // 同步快照替换主表前先保住本机系统通讯录锚点。远端快照即使来自旧版、
   // 仍带 apple-contacts，也不得写进来；本机锚保留在存活档案上，若 source
-  // 被远端 merge 删除则凭稳定子记录 id 迁到最终 target，纯删除不猜测。
+  // 被远端 merge 删除则优先沿显式 redirect 迁到最终 target，旧状态再用稳定
+  // 子记录 id 兜底；纯删除没有证据时不猜测。
   const localSystemAnchors = db
     .prepare(
       `SELECT * FROM contact_identities
@@ -199,9 +219,27 @@ export function writeContactsSnapshot(
       .map((anchor) => anchor.contact_id)
       .filter((contactId) => !liveContactIds.has(contactId)),
   );
-  const migratedAnchorTargets = orphanContactIds.size > 0
-    ? resolveLocalAnchorTargets(db, snapshot, orphanContactIds, liveContactIds)
-    : new Map<string, string>();
+  const migratedAnchorTargets = new Map<string, string>();
+  const legacyOrphans = new Set<string>();
+  for (const sourceId of orphanContactIds) {
+    const explicitTarget = resolveExplicitMergeTarget(
+      sourceId,
+      mergeRedirects,
+      liveContactIds,
+    );
+    if (explicitTarget) migratedAnchorTargets.set(sourceId, explicitTarget);
+    else legacyOrphans.add(sourceId);
+  }
+  if (legacyOrphans.size > 0) {
+    for (const [sourceId, targetId] of resolveLegacyAnchorTargets(
+      db,
+      snapshot,
+      legacyOrphans,
+      liveContactIds,
+    )) {
+      migratedAnchorTargets.set(sourceId, targetId);
+    }
+  }
   db.exec(`DELETE FROM contacts; DELETE FROM contact_groups;`);
 
   const insertContact = db.prepare(

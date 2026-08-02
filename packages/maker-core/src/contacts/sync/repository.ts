@@ -32,6 +32,15 @@ interface PersistedSyncRow {
   projection_json: string;
 }
 
+function mergeRedirectMap(state: ContactsSyncState): Map<string, string> {
+  return new Map(
+    (state.merges ?? []).map((merge) => [
+      merge.id,
+      merge.value.value.targetId,
+    ]),
+  );
+}
+
 export class ContactsSyncRepository {
   constructor(
     private readonly db: Database.Database,
@@ -40,6 +49,30 @@ export class ContactsSyncRepository {
 
   isActive(): boolean {
     return Boolean(this.readRow());
+  }
+
+  /**
+   * 与 store.merge 的数据变更同事务记录 source→target 事实。同步未激活时无需
+   * 补记：其它设备从未见过这份本地 source。嵌套 transaction 使用 savepoint，
+   * 任一步失败都会随外层联系人合并一起回滚。
+   */
+  recordMerge(sourceId: string, targetId: string): void {
+    const tx = this.db.transaction(() => {
+      const row = this.readRow();
+      if (!row) return;
+      const state = this.parseState(row.state_json);
+      const previous = this.parseProjection(row.projection_json);
+      const current = readContactsSnapshot(this.db);
+      const captured = captureContactsSnapshot(
+        state,
+        previous,
+        current,
+        row.node_id,
+        [{ sourceId, targetId }],
+      );
+      if (captured.changed) this.updateRow(row.node_id, captured.state, current);
+    });
+    tx();
   }
 
   activate(): { state: ContactsSyncState; materialized: boolean } {
@@ -116,7 +149,7 @@ export class ContactsSyncRepository {
       // 赢家后续改名后可能重新可见。只有状态和当前投影都一致才可以幂等返回。
       if (stateUnchanged && projectionUnchanged) return local.materialized;
 
-      writeContactsSnapshot(this.db, projection);
+      writeContactsSnapshot(this.db, projection, mergeRedirectMap(merged));
       this.updateRow(row.node_id, merged, projection);
       return true;
     });
@@ -146,7 +179,11 @@ export class ContactsSyncRepository {
     const projectionChanged =
       JSON.stringify(previous) !== JSON.stringify(projection);
     if (materializationRequired) {
-      writeContactsSnapshot(this.db, projection);
+      writeContactsSnapshot(
+        this.db,
+        projection,
+        mergeRedirectMap(captured.state),
+      );
     }
     if (captured.changed || projectionChanged || materializationRequired) {
       this.updateRow(row.node_id, captured.state, projection);

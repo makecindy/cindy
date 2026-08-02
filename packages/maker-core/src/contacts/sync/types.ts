@@ -84,6 +84,11 @@ export interface ContactsSyncRelationValue {
   createdAt: string;
 }
 
+/** source 档案已显式并入 target；id 使用 sourceId，value 保存直接 target。 */
+export interface ContactsSyncMergeValue {
+  targetId: string;
+}
+
 /** 可直接 JSON 序列化、在设备间做状态式交换的完整同步状态。 */
 export interface ContactsSyncState {
   version: typeof CONTACTS_SYNC_VERSION;
@@ -94,6 +99,11 @@ export interface ContactsSyncState {
   groups: Array<ContactsSyncEntity<ContactsSyncGroupValue>>;
   memberships: Array<ContactsSyncEntity<ContactsSyncMembershipValue>>;
   relations: Array<ContactsSyncEntity<ContactsSyncRelationValue>>;
+  /**
+   * 显式 source→target 合并证据。可选用于兼容升级前已落盘 / 旧客户端发来的 v1 状态；
+   * 新状态始终写出数组。旧客户端会忽略未知字段，新客户端合并时不会丢本地记录。
+   */
+  merges?: Array<ContactsSyncEntity<ContactsSyncMergeValue>>;
 }
 
 /** 当前 SQLite 主表的无时间戳逻辑快照；FTS 是派生数据，不进入同步。 */
@@ -150,6 +160,7 @@ export function createEmptyContactsSyncState(): ContactsSyncState {
     groups: [],
     memberships: [],
     relations: [],
+    merges: [],
   };
 }
 

@@ -220,6 +220,10 @@ function isMembershipId(value: unknown): value is string {
   );
 }
 
+function isMerge(value: unknown): value is { targetId: string } {
+  return isRecord(value) && isId(value.targetId);
+}
+
 function isRelation(value: unknown): value is {
   fromId: string;
   toId: string;
@@ -406,6 +410,13 @@ export function isValidContactsSyncState(
       return false;
   }
   if (!isEntityArray(value.relations, isRelation)) return false;
+  if (value.merges !== undefined) {
+    if (!isEntityArray(value.merges, isMerge)) return false;
+    for (const merge of value.merges) {
+      const entry = merge as ContactsSyncEntity<{ targetId: string }>;
+      if (entry.id === entry.value.value.targetId || entry.deleted) return false;
+    }
+  }
   return clocksCoverEveryStamp(value as unknown as ContactsSyncState);
 }
 
@@ -438,6 +449,7 @@ function clocksCoverEveryStamp(state: ContactsSyncState): boolean {
     state.groups,
     state.memberships,
     state.relations,
+    state.merges ?? [],
   ]) {
     for (const record of records) {
       if (!covered(record.value.stamp) || !covered(record.deleted)) {

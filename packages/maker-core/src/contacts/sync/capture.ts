@@ -15,6 +15,7 @@ import {
   type ContactsSnapshotContact,
   type ContactsSyncContact,
   type ContactsSyncEntity,
+  type ContactsSyncMergeValue,
   type ContactsSyncStamp,
   type ContactsSyncState,
   type ContactsStampedValue,
@@ -122,6 +123,25 @@ function valueWithoutId<T extends RowWithId>(row: T): Omit<T, "id"> {
   ) as Omit<T, "id">;
 }
 
+function captureMergeRedirects(
+  state: Array<ContactsSyncEntity<ContactsSyncMergeValue>>,
+  redirects: Array<{ sourceId: string; targetId: string }>,
+  stamp: ContactsSyncStamp,
+): Array<ContactsSyncEntity<ContactsSyncMergeValue>> {
+  const records = new Map(state.map((record) => [record.id, record]));
+  for (const { sourceId, targetId } of redirects) {
+    const existing = records.get(sourceId);
+    if (existing?.value.value.targetId === targetId) continue;
+    records.set(sourceId, {
+      id: sourceId,
+      value: stamped({ targetId }, stamp),
+    });
+  }
+  return [...records.values()].sort((a, b) =>
+    compareContactsSyncText(a.id, b.id),
+  );
+}
+
 function captureEntities<T extends RowWithId>(
   state: Array<ContactsSyncEntity<Omit<T, "id">>>,
   previous: T[],
@@ -163,8 +183,11 @@ export function captureContactsSnapshot(
   previous: ContactsDataSnapshot,
   current: ContactsDataSnapshot,
   nodeId: string,
+  mergeRedirects: Array<{ sourceId: string; targetId: string }> = [],
 ): { state: ContactsSyncState; changed: boolean } {
-  if (equal(previous, current)) return { state, changed: false };
+  if (equal(previous, current) && mergeRedirects.length === 0) {
+    return { state, changed: false };
+  }
   const next = nextContactsSyncStamp(state, nodeId);
   return {
     changed: true,
@@ -205,6 +228,11 @@ export function captureContactsSnapshot(
         state.relations,
         previous.relations,
         current.relations,
+        next.stamp,
+      ),
+      merges: captureMergeRedirects(
+        state.merges ?? [],
+        mergeRedirects,
         next.stamp,
       ),
     },
