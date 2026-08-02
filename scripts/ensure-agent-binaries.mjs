@@ -107,7 +107,9 @@ export function listSiblingWorktreeRoots(rootDir) {
   }
   let selfReal = rootDir;
   try {
-    selfReal = fs.realpathSync(rootDir);
+    // Windows 的 TEMP 可能是 8.3 短路径，而 git worktree 输出长路径。native
+    // realpath 会把两种表示解析到同一物理目录，避免把当前 worktree 当成兄弟项。
+    selfReal = fs.realpathSync.native(rootDir);
   } catch {
     /* keep rootDir as-is */
   }
@@ -118,7 +120,7 @@ export function listSiblingWorktreeRoots(rootDir) {
     if (!raw) continue;
     let real;
     try {
-      real = fs.realpathSync(raw); // stale 的 worktree 条目（目录已删）直接跳过
+      real = fs.realpathSync.native(raw); // stale 的 worktree 条目（目录已删）直接跳过
     } catch {
       continue;
     }

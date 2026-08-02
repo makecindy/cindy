@@ -220,7 +220,7 @@ test('listSiblingWorktreeRoots: lists other worktrees of the same repo, excludin
   git('worktree', 'add', wt, '-b', 'wt-a');
 
   const fromMain = listSiblingWorktreeRoots(repo);
-  assert.deepEqual(fromMain, [fs.realpathSync(wt)]);
+  assert.deepEqual(fromMain, [fs.realpathSync.native(wt)]);
   const fromWt = listSiblingWorktreeRoots(wt);
-  assert.deepEqual(fromWt, [fs.realpathSync(repo)]);
+  assert.deepEqual(fromWt, [fs.realpathSync.native(repo)]);
 });
