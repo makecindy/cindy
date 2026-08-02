@@ -266,10 +266,13 @@ const providersRef = vi.hoisted(() => {
       },
     },
   ] as unknown[];
-  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS };
+  return { DEFAULT_PROVIDERS, providers: DEFAULT_PROVIDERS, providerOrder: [] as string[] };
 });
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersRef.providers }),
+  useProviders: () => ({
+    providers: providersRef.providers,
+    providerOrder: providersRef.providerOrder,
+  }),
 }));
 
 const deviceProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
@@ -377,6 +380,7 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
+  providersRef.providerOrder = [];
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
   };
@@ -390,6 +394,53 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
     });
   };
+
+  it('orders local provider sections by the Settings display preference', () => {
+    providersRef.providers = [
+      ...providersRef.DEFAULT_PROVIDERS,
+      {
+        id: 'zeta',
+        name: 'Zeta',
+        source: 'user',
+        connected: true,
+        agents: ['claude-code'],
+        routing: { 'claude-code': {} },
+        models: {
+          'claude-code': [
+            {
+              id: 'claude-zeta',
+              name: 'Zeta Model',
+              contextWindow: 100000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          ],
+        },
+      },
+    ];
+    providersRef.providerOrder = ['zeta', 'anthropic'];
+
+    try {
+      render(
+        React.createElement(ModelSelectorContent, {
+          modelId: 'claude-opus-4-8',
+          effort: 'high',
+          onModelChange: vi.fn(),
+          onEffortChange: vi.fn(),
+          vendorKey: 'cc',
+          currentProviderId: 'anthropic',
+          onProviderChange: vi.fn(),
+        }),
+      );
+
+      const modelRows = screen.getAllByRole('option');
+      expect(modelRows[0]?.textContent).toContain('Zeta Model');
+      expect(modelRows[1]?.textContent).toContain('Opus 4.8');
+    } finally {
+      providersRef.providers = providersRef.DEFAULT_PROVIDERS;
+      providersRef.providerOrder = [];
+    }
+  });
 
   it('requests a silent refresh when a local selector opens, but not for a remote device', async () => {
     const local = render(

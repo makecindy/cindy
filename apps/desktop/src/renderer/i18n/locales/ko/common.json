@@ -1212,6 +1212,12 @@
     "providers": {
       "title": "모델 제공자",
       "subtitle": "모델을 선택할 때의 소스입니다. 각 소스는 지원하는 모델과 과금 방식을 제공하며, 세션별로 전환할 수 있습니다.",
+      "order": {
+        "hint": "드래그하여 순서 변경",
+        "handle": "{{provider}} 순서를 변경합니다. 현재 {{total}}개 중 {{position}}번째입니다. 화살표 키로 이동할 수 있습니다.",
+        "moved": "{{provider}}을(를) {{total}}개 중 {{position}}번째로 이동했습니다.",
+        "saveFailed": "제공자 순서를 저장하지 못했습니다. 다시 시도하세요."
+      },
       "pill": {
         "connected": "연결됨",
         "suspended": "비활성화됨"
@@ -2788,6 +2794,17 @@
           "description": "X (Twitter) 계정을 연결하고 X에서 Cindy bot을 멘션해 작업을 요청하세요.",
           "disabledHint": "스위치를 켠 뒤 안내에 따라 X 계정 인증을 완료하세요.",
           "toggleAria": "X 연결 전환",
+          "guide": {
+            "usageLabel": "사용 방법",
+            "usageBody": "X에서 @askmycindy를 멘션해 게시글을 쓰면 작업이 이 기기로 전달되어 여기서 실행되고, 결과가 답장으로 돌아옵니다.",
+            "riskLabel": "답장은 공개됩니다",
+            "riskPublicBody": "Cindy의 답장은 공개 게시글이므로 누구나 볼 수 있습니다. 공개적으로 답을 찾거나 문제를 해결하는 데 적합하며, 사적인 일에는 적합하지 않습니다 —— 프라이버시가 노출될 위험이 있습니다.",
+            "riskWorkdirBody": "모든 X 작업은 X 연결 설정에서 지정한 기본 작업 디렉터리에서 실행됩니다. Agent는 그 안의 파일을 읽고 쓸 수 있으며, 결론은 공개로 답장됩니다 —— 해당 디렉터리가 비공개 리포지터리를 가리키면 파일 내용도 함께 공개될 수 있습니다.",
+            "withdrawLabel": "답장 철회하기",
+            "withdrawBody": "질문한 본인이 그 답장에 \"/delete\"라고 답장하면 삭제됩니다. 공개 답장만 삭제되며 로컬 작업 기록은 그대로 남습니다.",
+            "ackTitle": "X가 연결되었습니다 —— 사용법과 주의사항",
+            "ackConfirm": "위험을 이해했습니다"
+          },
           "connect": "X 연결",
           "openApp": "X 열어 인증하기",
           "cancel": "연결 취소",

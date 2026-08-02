@@ -684,13 +684,26 @@ export async function refreshDiscoveredCodexModels(
  *
  * best-effort：localDb 未就绪 / 读失败时清空 custom（不抛），不影响内置供应商与路由默认行为。
  */
-export async function refreshCustomProvidersIntoCatalog(): Promise<void> {
+export async function refreshCustomProvidersIntoCatalog(
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh');
+      return;
+    }
     setCustomProviders(configs.map((c) => buildUserProvider(c)));
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
-    log.warn('failed to load custom providers; keeping last valid active catalog snapshot', {
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh failure', {
+        err: String(err),
+      });
+      return;
+    }
+    setCustomProviders([]);
+    log.warn('failed to load custom providers; cleared current owner catalog snapshot', {
       err: String(err),
     });
   }

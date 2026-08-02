@@ -33,6 +33,10 @@ import type {
 } from '../../shared/modelPriceOverride.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
+  MAX_PROVIDER_ORDER_ID_LENGTH,
+  MAX_PROVIDER_ORDER_ITEMS,
+} from '../../shared/providerOrder.js';
+import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
   isProviderModelAutoRefreshRendererTrigger,
@@ -195,7 +199,9 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: {
+    allowSideEffects?: boolean;
+  }): Promise<ProviderView[]>;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -211,6 +217,12 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /** Current selectable catalog ids, used to validate visible provider order entries. */
+  listProviderIds(): string[];
+  /** Merge the currently visible order into the persisted observed-provider order. */
+  setProviderOrder(providerIds: readonly string[]): boolean;
+  /** Persisted Settings display order, returned as metadata without reordering ProviderView[]. */
+  getProviderOrder(): string[];
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
@@ -320,13 +332,12 @@ export interface ProviderHandlerDeps {
    */
   stageClearProviderDisableOverrides?(providerId: string): () => boolean;
   /**
-   * 当前数据归属账号 id(生产 = getCurrentDataOwnerId)。停用写入是 owner-scoped
-   * 持久化(model-disable-prefs.json 按账号分目录),而 handler 内有异步窗口(串行
-   * 队列排队 + 目录校验的 listProviders await)—— 期间切了账号,写入会落进**新**账号
-   * 的偏好文件。在入口捕获、持久化前复核,变了就拒(PR #744 review 第七轮)。
+   * 当前数据归属会话(生产 = getActiveAppSession)。provider handler 内有异步窗口
+   * (串行队列排队 + 目录读取 await),必须同时比较 owner id 与单调 generation；只比 id
+   * 会漏掉 A→B→A 往返，让旧操作在第二个 A 会话里继续返回或落盘。
    * 可选:未注入(单测最小桩)= 不做归属校验。
    */
-  currentOwnerId?(): string | null;
+  currentOwnerSession?(): { dataOwnerId: string | null; generation: number };
   /** Active account ledger currency; used to reject unsupported reverse-FX overrides. */
   getLedgerCurrency(): MoneyCurrency;
   readModelPriceOverride(target: ModelPriceOverrideTarget): ModelPriceOverrideView;
@@ -798,25 +809,75 @@ export function registerProviderHandlers(
     return headersRestored && keysRestored;
   };
 
+  // Owner-scoped provider reads and writes must stay bound to the account that was active at
+  // ingress. Several provider operations cross async boundaries; reject instead of mixing an
+  // earlier catalog snapshot with a later owner's preferences or persisting into that owner.
+  const captureProviderOwnerSession = () => deps.currentOwnerSession?.();
+  const providerMutationOwnerMatches = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+  ): boolean => {
+    if (!deps.currentOwnerSession || !ownerAtIngress) return true;
+    const current = deps.currentOwnerSession();
+    return (
+      current.dataOwnerId === ownerAtIngress.dataOwnerId
+      && current.generation === ownerAtIngress.generation
+    );
+  };
+  const assertProviderMutationOwner = (
+    ownerAtIngress: { dataOwnerId: string | null; generation: number } | undefined,
+    message = 'active account changed during provider mutation',
+  ): void => {
+    if (!providerMutationOwnerMatches(ownerAtIngress)) {
+      throwIpcError('INTERNAL', message);
+    }
+  };
+  const assertRequestedProviderOwner = (
+    requestedDataOwnerId: string | null,
+    requestedOwnerGeneration: number,
+  ): void => {
+    const current = deps.currentOwnerSession?.();
+    if (
+      current
+      && (
+        current.dataOwnerId !== requestedDataOwnerId
+        || current.generation !== requestedOwnerGeneration
+      )
+    ) {
+      throwIpcError('INTERNAL', 'active account changed during provider mutation');
+    }
+  };
+
   // 只读聚合：loadCatalog 永不抛（最差回退内置目录），故无需 throwIpcError 包裹。
   registry.handle(
     MAKER_INVOKE.PROVIDER_LIST,
     async (
       event,
     ): Promise<{
+      dataOwnerId: string | null;
+      ownerGeneration: number;
       providers: ProviderView[];
+      providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
+      const ownerAtIngress = captureProviderOwnerSession();
+      const dataOwnerId = ownerAtIngress?.dataOwnerId ?? null;
       const trusted = deps.isTrustedSender?.(event) === true;
-      const providers = await deps.listProviders({ allowSideEffects: trusted });
+      const providers = await deps.listProviders({
+        allowSideEffects: trusted,
+      });
+      assertProviderMutationOwner(ownerAtIngress);
+      const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
       // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
       // 请求头,update 由 main 侧保留旧值(planProviderHeaderMutations 'update' 分支)。
       return {
+        dataOwnerId,
+        ownerGeneration: ownerAtIngress?.generation ?? 0,
         providers: providers.map(withoutProviderHeaderCredentials),
+        providerOrder,
         modelVisibilityOverrides: deps.getModelVisibilityOverrides(),
       };
     },
@@ -874,16 +935,57 @@ export function registerProviderHandlers(
     deps.assertTrustedSender(event);
   }
 
-  // 自定义供应商的 DB 与 key/header 密文都按当前 data owner 选路径。CRUD 虽由
-  // per-provider 队列串行，但排队与 DB 读取均有 await：若 A 发起后切到 B，后续
-  // safeStorage 写会按 B 的 owner 路径落盘。入口捕获 owner，在异步边界和凭证写入前复核。
-  const providerMutationOwnerMatches = (ownerAtIngress: string | null): boolean =>
-    !deps.currentOwnerId || (deps.currentOwnerId() ?? null) === ownerAtIngress;
-  const assertProviderMutationOwner = (ownerAtIngress: string | null): void => {
-    if (!providerMutationOwnerMatches(ownerAtIngress)) {
-      throwIpcError('INTERNAL', 'active account changed during provider mutation');
+  // 供应商显示顺序是 owner-scoped 设置。Renderer 只提交当前左栏可见项；store 会
+  // 保留曾出现但当前隐藏的项，并把第一次出现的项追加到末尾。
+  registry.handle(MAKER_INVOKE.PROVIDER_ORDER_SET, (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'invalid provider order input');
     }
-  };
+    const value = input as Record<string, unknown>;
+    const keys = Object.keys(value);
+    const requestedDataOwnerId = value.dataOwnerId;
+    const requestedOwnerGeneration = value.ownerGeneration;
+    const ids = value.providerIds;
+    if (
+      keys.length !== 3 ||
+      (requestedDataOwnerId !== null && typeof requestedDataOwnerId !== 'string') ||
+      typeof requestedOwnerGeneration !== 'number' ||
+      !Number.isSafeInteger(requestedOwnerGeneration) ||
+      requestedOwnerGeneration < 0 ||
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAX_PROVIDER_ORDER_ITEMS ||
+      ids.some(
+        (id) =>
+          typeof id !== 'string' ||
+          id.length === 0 ||
+          id.length > MAX_PROVIDER_ORDER_ID_LENGTH,
+      ) ||
+      new Set(ids).size !== ids.length
+    ) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
+    }
+    assertRequestedProviderOwner(
+      requestedDataOwnerId as string | null,
+      requestedOwnerGeneration,
+    );
+    const catalogIds = new Set(deps.listProviderIds());
+    const requestedIds = ids as string[];
+    if (requestedIds.some((id) => !catalogIds.has(id))) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must belong to the current provider catalog');
+    }
+    try {
+      const changed = deps.setProviderOrder(requestedIds);
+      if (changed) deps.broadcastChanged();
+    } catch (err) {
+      log.warn('provider display order persist failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to persist provider order');
+    }
+    return { ok: true };
+  });
 
   // 「模型 / 供应商停用」override 写入。设置类写操作:仅本机主页面可调(device-link
   // 合成 event 与不受信 frame 一律拒绝 —— 远程改被控端全局设置越权);守卫缺席按拒绝
@@ -968,11 +1070,12 @@ export function registerProviderHandlers(
     // 归属捕获:store 路径按账号分目录且在 run() 执行时才解析,队列排队 + 目录校验
     // 的 await 窗口内切账号会把 A 的点击写进 B 的偏好 —— 持久化前复核,变了就拒
     // (PR #744 review 第七轮)。
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     const assertSameOwner = (): void => {
-      if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-        throwIpcError('INTERNAL', 'active account changed before persisting model disable override');
-      }
+      assertProviderMutationOwner(
+        ownerAtIngress,
+        'active account changed before persisting model disable override',
+      );
     };
     const run = async () => {
       if (i.kind === 'reset') {
@@ -1108,13 +1211,14 @@ export function registerProviderHandlers(
     if (desired.currency === 'CNY' && deps.getLedgerCurrency() === 'USD') {
       throwIpcError('INVALID_PARAMS', 'CNY price overrides cannot project into a USD ledger');
     }
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
         await requirePriceTargetModel(target);
-        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-          throwIpcError('INTERNAL', 'active account changed before persisting price override');
-        }
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before persisting price override',
+        );
         try {
           deps.writeModelPriceOverride(target, desired);
         } catch (err) {
@@ -1135,12 +1239,13 @@ export function registerProviderHandlers(
   registry.handle(MAKER_INVOKE.MODEL_PRICE_OVERRIDE_RESET, async (event, input: unknown) => {
     assertTrustedProviderMutationSender(event);
     const target = parsePriceTarget(input);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(target.providerId, () =>
       enqueuePriceMutation(async () => {
-        if (deps.currentOwnerId && (deps.currentOwnerId() ?? null) !== ownerAtIngress) {
-          throwIpcError('INTERNAL', 'active account changed before resetting price override');
-        }
+        assertProviderMutationOwner(
+          ownerAtIngress,
+          'active account changed before resetting price override',
+        );
         try {
           deps.clearModelPriceOverride(target);
         } catch (err) {
@@ -1166,7 +1271,7 @@ export function registerProviderHandlers(
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
     const separated = splitCustomProviderHeaders(config);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
       assertProviderMutationOwner(ownerAtIngress);
       if (await customProviderExists(config.id)) {
@@ -1208,7 +1313,7 @@ export function registerProviderHandlers(
     if (!keys) throwIpcError('INVALID_PARAMS', 'invalid provider runtime keys');
     const config = input as CustomProviderConfig;
     const separated = splitCustomProviderHeaders(config);
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(config.id, async () => {
       let generation: symbol | null = null;
       try {
@@ -1289,7 +1394,7 @@ export function registerProviderHandlers(
     if (typeof providerId !== 'string' || providerId.length === 0) {
       throwIpcError('INVALID_PARAMS', 'providerId required');
     }
-    const ownerAtIngress = deps.currentOwnerId?.() ?? null;
+    const ownerAtIngress = captureProviderOwnerSession();
     return withProviderConfigMutation(providerId, async () => {
       // 同类 delete 也会在 per-provider 队列后写 owner-scoped 凭证。
       assertProviderMutationOwner(ownerAtIngress);

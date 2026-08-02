@@ -38,6 +38,8 @@ const h = vi.hoisted(() => {
 
   return {
     ipcHandle: vi.fn(),
+    logDebug: vi.fn(),
+    logInfo: vi.fn(),
     queryResults,
     listQuery: withFn,
     fakeDb: {
@@ -53,7 +55,7 @@ vi.mock('electron', () => ({
   BrowserWindow: { getAllWindows: () => [] },
 }));
 vi.mock('../logger', () => ({
-  createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
+  createLogger: () => ({ debug: h.logDebug, info: h.logInfo, warn: vi.fn(), error: vi.fn() }),
 }));
 vi.mock('../localDb/client/current', () => ({ getDbClient: () => ({ drizzle: h.fakeDb }) }));
 vi.mock('../localDb/dialogueWorkspace', () => ({ ensureDialogueWorkspaceDir: vi.fn() }));
@@ -119,8 +121,8 @@ function listRow(id: string, patch: Record<string, unknown> = {}) {
   };
 }
 
-function sessionsListHandler() {
-  registerSessionIpc();
+function sessionsListHandler(readLogScope?: () => string | null) {
+  registerSessionIpc(readLogScope);
   const call = h.ipcHandle.mock.calls.find(([channel]) => channel === 'local-db:sessions:list');
   if (!call) throw new Error('local-db:sessions:list handler not registered');
   return call[1] as (
@@ -188,6 +190,29 @@ describe('local-db:sessions:list includePinned', () => {
     ]);
     expect(h.listQuery).toHaveBeenCalledTimes(2);
     expect(h.queryResults).toHaveLength(0);
+  });
+
+  it('logs the first list at info level for each DbClient owner', async () => {
+    let owner = 'session-list-log-owner-a';
+    const handler = sessionsListHandler(() => owner);
+    const now = vi.spyOn(performance, 'now').mockReturnValue(100);
+    h.queryResults.push(
+      [listRow('owner-a-first')],
+      [listRow('owner-a-again')],
+      [listRow('owner-b-first')],
+    );
+
+    try {
+      await handler({}, 20, 'active');
+      await handler({}, 20, 'active');
+      owner = 'session-list-log-owner-b';
+      await handler({}, 20, 'active');
+    } finally {
+      now.mockRestore();
+    }
+
+    expect(h.logInfo).toHaveBeenCalledTimes(2);
+    expect(h.logDebug).toHaveBeenCalledTimes(1);
   });
 });
 

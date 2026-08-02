@@ -215,6 +215,13 @@ export const MAKER_INVOKE = {
    * **不进 device-link allowlist**(远程改被控端全局设置越权,见 allowlist.ts 准入判据)。
    */
   MODEL_DISABLE_SET: 'maker:model-disable:set',
+  /**
+   * Owner-scoped provider display-order override.
+   * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
+   * Settings mutation: local trusted renderer only; deliberately excluded from the
+   * device-link allowlist.
+   */
+  PROVIDER_ORDER_SET: 'maker:provider:order:set',
   /** Visual Settings UI only: read/write/reset a per-provider × runtime × model price estimate. */
   MODEL_PRICE_OVERRIDE_GET: 'maker:model-price-override:get',
   MODEL_PRICE_OVERRIDE_SET: 'maker:model-price-override:set',

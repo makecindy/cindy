@@ -64,6 +64,7 @@ import {
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
@@ -904,6 +905,15 @@ function ModelSelectorContentView({
     if (!actual?.connected || !actual.agents.includes(currentAgentKind)) return connected;
     return [...connected, actual];
   }, [connected, providers, activeSourceId, currentAgentKind]);
+  // Provider order is a display preference. Apply it only to local picker sections so source
+  // resolution and first-wins catalog derivation keep their canonical catalog order.
+  const orderedSectionProviders = useMemo(
+    () =>
+      deviceId
+        ? sectionProviders
+        : applyProviderOrder(sectionProviders, localProviders.providerOrder),
+    [deviceId, localProviders.providerOrder, sectionProviders],
+  );
   const suspendedActiveSourceId =
     sectionProviders === connected ? null : activeSourceId;
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是外部可见性偏好的刷新信号,需要强制重算分段列表。
@@ -917,7 +927,7 @@ function ModelSelectorContentView({
     const restrictSuspended = (pid: string, mid: string): boolean =>
       !(suspendedActiveSourceId && pid === suspendedActiveSourceId && mid !== modelId);
     return buildProviderSections({
-      providers: sectionProviders,
+      providers: orderedSectionProviders,
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
@@ -950,6 +960,7 @@ function ModelSelectorContentView({
   }, [
     sourcesEnabled,
     sectionProviders,
+    orderedSectionProviders,
     suspendedActiveSourceId,
     currentAgentKind,
     modelId,

@@ -17,7 +17,7 @@ import type { ProviderView } from '@cindy/model-providers';
 
 const { wizardSpy, providersState } = vi.hoisted(() => ({
   wizardSpy: vi.fn(),
-  providersState: { providers: [] as unknown[] },
+  providersState: { providers: [] as unknown[], order: [] as string[] },
 }));
 
 vi.mock('react-i18next', () => ({
@@ -25,7 +25,13 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersState.providers, loading: false, refetch: vi.fn() }),
+  useProviders: () => ({
+    providers: providersState.providers,
+    providerOrder: providersState.order,
+    ownerGeneration: 1,
+    loading: false,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -144,6 +150,7 @@ beforeEach(() => {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
+      setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -249,6 +256,7 @@ describe('ProvidersSection — 深链定位', () => {
         providerOAuthLogin,
         providerOAuthCancel,
         onProviderOAuthProgress,
+        setProviderOrder: vi.fn(async () => ({ ok: true })),
       },
     };
 

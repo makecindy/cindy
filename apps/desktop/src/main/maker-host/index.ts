@@ -50,6 +50,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -104,6 +105,7 @@ import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   armCodexHttpRecovery,
@@ -1334,6 +1336,17 @@ export function getMaker(): Maker {
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
+          const providerScopeKey = activeOwnerScopeKey();
+          const providerReady = await accountProviderReadinessBarrier.waitForScope(providerScopeKey);
+          if (
+            !providerReady ||
+            activeOwnerScopeKey() !== providerScopeKey ||
+            isAppSessionBoundaryPending()
+          ) {
+            throw new Error(
+              'Account provider models are not ready for this app session; retry.',
+            );
+          }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
         },
         onBeforeStart: async ({ agentKind, workingDir, remoteHostId }) => {

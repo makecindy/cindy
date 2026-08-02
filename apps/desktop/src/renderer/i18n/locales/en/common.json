@@ -1212,6 +1212,12 @@
     "providers": {
       "title": "Providers",
       "subtitle": "The source used when picking a model. Each source offers its own models and billing, switchable per session.",
+      "order": {
+        "hint": "Drag to reorder",
+        "handle": "Reorder {{provider}}, position {{position}} of {{total}}. Use the arrow keys to move.",
+        "moved": "{{provider}} moved to position {{position}} of {{total}}.",
+        "saveFailed": "Provider order wasn't saved. Try again."
+      },
       "pill": {
         "connected": "Connected",
         "suspended": "Disabled"
@@ -2789,6 +2795,17 @@
           "description": "Link your X (Twitter) account and dispatch tasks by mentioning the Cindy bot on X.",
           "disabledHint": "Turn on the switch, then follow the prompts to authorize your X account.",
           "toggleAria": "Toggle X connection",
+          "guide": {
+            "usageLabel": "How to Use It",
+            "usageBody": "Post on X mentioning @askmycindy and the task is dispatched to this device to run here; the result comes back as a reply.",
+            "riskLabel": "Replies Are Public",
+            "riskPublicBody": "Our reply is a public post that anyone can read. This suits questions and problems you are happy to work through in the open — not private matters, where it risks exposing them.",
+            "riskWorkdirBody": "Every X task runs in the default working directory set in X connection settings. The Agent can read and write files there, and its conclusion is posted publicly — if that directory points at a private repository, file contents may become public with it.",
+            "withdrawLabel": "To Withdraw a Reply",
+            "withdrawBody": "Whoever asked can delete a reply by replying \"/delete\" to it. Only the public reply is deleted — the local task record is kept.",
+            "ackTitle": "X Is Linked — How It Works and What to Watch For",
+            "ackConfirm": "I Understand the Risks"
+          },
           "connect": "Link X",
           "openApp": "Open X to authorize",
           "cancel": "Cancel linking",

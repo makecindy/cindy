@@ -81,6 +81,9 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     refreshCatalog: vi.fn(async () => {}),
     beginRouteMutation: vi.fn(() => () => {}),
     broadcastChanged: vi.fn(() => {}),
+    listProviderIds: () => [],
+    setProviderOrder: vi.fn(() => true),
+    getProviderOrder: () => [],
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
@@ -131,19 +134,63 @@ afterEach(() => {
 });
 
 describe('provider:list IPC handler', () => {
-  it('wraps the injected service result as { providers } + visibility overrides snapshot', async () => {
+  it('keeps providers in catalog order and returns display order as owner-scoped metadata', async () => {
     const harness = new IpcHarness();
     const views = [fakeView('xd', true), fakeView('anthropic', false)];
     const listProviders = vi.fn(async () => views);
     const overrides = { 'claude-code:xd:claude-opus-4-8': false };
+    const providerOrder = ['anthropic', 'xd'];
     registerProviderHandlers(
       harness,
-      makeDeps({ listProviders, getModelVisibilityOverrides: () => overrides }),
+      makeDeps({
+        listProviders,
+        getModelVisibilityOverrides: () => overrides,
+        getProviderOrder: () => providerOrder,
+        currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+      }),
     );
 
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
-    expect(result).toEqual({ providers: views, modelVisibilityOverrides: overrides });
+    expect(result).toEqual({
+      dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
+      providers: views,
+      providerOrder,
+      modelVisibilityOverrides: overrides,
+    });
     expect(listProviders).toHaveBeenCalledOnce();
+    expect(listProviders).toHaveBeenCalledWith({
+      allowSideEffects: false,
+    });
+  });
+
+  it('rejects a catalog snapshot after an A→B→A owner round trip during the async read', async () => {
+    const harness = new IpcHarness();
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let releaseList!: (providers: ProviderView[]) => void;
+    const listProviders = vi.fn(
+      () =>
+        new Promise<ProviderView[]>((resolve) => {
+          releaseList = resolve;
+        }),
+    );
+    const getProviderOrder = vi.fn(() => ['xd']);
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        listProviders,
+        getProviderOrder,
+        currentOwnerSession: () => ownerSession,
+      }),
+    );
+
+    const request = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+    ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
+    releaseList([fakeView('xd', true)]);
+
+    await expect(request).rejects.toThrow(/INTERNAL/);
+    expect(getProviderOrder).not.toHaveBeenCalled();
   });
 
   it('propagates service errors to the caller', async () => {
@@ -208,6 +255,106 @@ describe('provider:list IPC handler', () => {
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
     // 非密字段仍完整回传,编辑表单据此渲染 endpoint/鉴权策略。
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
+  });
+});
+
+describe('provider:order:set handler', () => {
+  it('persists the visible provider order and broadcasts a display change', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'anthropic', 'openai'],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
+        providerIds: ['openai', 'xd', 'anthropic'],
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setProviderOrder).toHaveBeenCalledWith(['openai', 'xd', 'anthropic']);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: [] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'unknown'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'openai'], extra: true },
+    { dataOwnerId: 42, ownerGeneration: 1, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: -1, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1.5, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', providerIds: ['xd'] },
+    { ownerGeneration: 1, providerIds: ['xd'] },
+    { reset: true },
+  ])('rejects invalid visible order input: %j', async (input) => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviderIds: () => ['xd', 'openai'] });
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, input)).rejects.toThrow();
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('accepts a partial visible list and skips broadcasting an unchanged order', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'anthropic', 'openai'],
+      setProviderOrder: vi.fn(() => false),
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 1 }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
+        providerIds: ['xd', 'openai'],
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setProviderOrder).toHaveBeenCalledWith(['xd', 'openai']);
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delayed order write after the active owner changes', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'openai'],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-b', generation: 2 }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
+        providerIds: ['openai', 'xd'],
+      }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delayed order write after an A→B→A owner round trip', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'openai'],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 3 }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
+        providerIds: ['openai', 'xd'],
+      }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 });
 
@@ -321,14 +468,19 @@ describe('model-disable:set handler', () => {
     expect(order).toEqual(['disable', 'enable']);
   });
 
-  it('异步窗口内切账号 → INTERNAL 拒写:A 的点击不落进 B 的 owner-scoped 偏好', async () => {
+  it('异步窗口内 A→B→A → INTERNAL 拒写:旧会话点击不落进新会话', async () => {
     const harness = new IpcHarness();
-    let owner = 'owner-a';
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
+    let shouldRoundTrip = true;
     const deps = makeDeps({
-      currentOwnerId: () => owner,
-      // 目录校验的 await 窗口内发生账号切换。
+      currentOwnerSession: () => ownerSession,
+      // 目录校验的 await 窗口内发生 A→B→A；owner id 最终相同但 generation 已变。
       listProviders: async () => {
-        owner = 'owner-b';
+        if (shouldRoundTrip) {
+          shouldRoundTrip = false;
+          ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
+          ownerSession = { dataOwnerId: 'owner-a', generation: 3 };
+        }
         return xdCatalog();
       },
     });
@@ -1184,11 +1336,11 @@ describe('provider:custom:* CRUD handlers', () => {
     // Authorization 或 API key 按 B 的 owner-scoped storage key 落盘。
     mountDb();
     const harness = new IpcHarness();
-    let owner: string | null = 'owner-a';
+    let ownerSession = { dataOwnerId: 'owner-a' as string | null, generation: 1 };
     const storeCustomProviderKey = vi.fn(() => true);
     const storeCustomProviderHeaders = vi.fn(() => true);
     const deps = makeDeps({
-      currentOwnerId: () => owner,
+      currentOwnerSession: () => ownerSession,
       storeCustomProviderKey,
       storeCustomProviderHeaders,
     });
@@ -1220,7 +1372,7 @@ describe('provider:custom:* CRUD handlers', () => {
         },
       },
     }, { pi: 'owner-a-new-key' });
-    owner = 'owner-b';
+    ownerSession = { dataOwnerId: 'owner-b', generation: 2 };
 
     await expect(update).rejects.toThrow(/active account changed during provider mutation/);
     expect(storeCustomProviderKey).not.toHaveBeenCalled();

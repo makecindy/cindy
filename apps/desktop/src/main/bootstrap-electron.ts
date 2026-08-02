@@ -352,6 +352,7 @@ import {
   ensureActiveCatalogLoaded,
   refreshCustomProvidersIntoCatalog,
 } from './maker-host/createDesktopProviderService.js';
+import { setCustomProviders } from './maker-host/active-catalog.js';
 import { setClaudeSupportedModelsListener } from '@cindy/maker-core';
 import {
   noteAnthropicSdkSupportedModels,
@@ -420,6 +421,7 @@ import {
   resetProviderModelAutoRefreshCooldowns,
 } from './maker-host/provider-model-auto-refresh.js';
 import { refreshProviderModelsAfterAccountReady } from './maker-host/account-provider-model-refresh.js';
+import { accountProviderReadinessBarrier } from './maker-host/account-provider-readiness-barrier.js';
 import {
   readImDefaultSettingsState,
   resetImDefaultSettings,
@@ -664,6 +666,27 @@ import { registerLearnIpc, broadcastLearnEvent } from './learn-host/registerIpc.
 import { registerGoalHandlers, broadcastGoalStatus } from './maker-ipc/goal.js';
 import { createLogger as createSchedulerLogger } from './logger.js';
 
+let makerProviderRefreshConfigured = false;
+let startPendingAccountProviderReadiness: (() => void) | null = null;
+
+function markMakerProviderRefreshConfigured(): void {
+  makerProviderRefreshConfigured = true;
+  const startPending = startPendingAccountProviderReadiness;
+  startPendingAccountProviderReadiness = null;
+  startPending?.();
+}
+
+async function waitForCurrentAccountProviderModelsReady(): Promise<void> {
+  const scopeKey = activeOwnerScopeKey();
+  const ready = await accountProviderReadinessBarrier.waitForScope(scopeKey);
+  if (!ready || activeOwnerScopeKey() !== scopeKey || isAppSessionBoundaryPending()) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Account provider models are not ready for this app session; retry.',
+    );
+  }
+}
+
 /**
  * Phase 4: 不再用 `_schedulerStarted` flag —— `startScheduler()` 内部以 `_scheduler`
  * 单例为权威 source of truth（已 set 时直接返回原实例）。本函数只负责"两个前置就绪
@@ -675,10 +698,9 @@ import { createLogger as createSchedulerLogger } from './logger.js';
  * 本函数拿到 scheduler 后只调 `attachSchedulerEventListeners(scheduler, storage)`
  * 把 scheduler.on 挂上 + setSchedulerReady 喂入实例 + broadcast 'ready'。
  *
- * 重复 attempt 去重:本函数被 splash 和 localDb onReady 各调一次,startScheduler
- * 第二次返回同一实例,WeakSet 防止 scheduler.on 重复挂第二份 listener。切账号
- * 后 resetScheduler 把 _scheduler 置 null,下一次拿到新实例,WeakSet 里没有,
- * 自然会重新 attach 一次。
+ * 重复 attempt 去重:localDb onReady 可因重试或同 scope 复用再次触发，
+ * startScheduler 返回同一实例，WeakSet 防止 scheduler.on 重复挂 listener。切账号后
+ * resetScheduler 把 _scheduler 置 null，新实例不在 WeakSet 里，会重新 attach 一次。
  */
 async function attemptStartScheduler(): Promise<void> {
   // 两个前置条件必须满足才能启动：
@@ -720,8 +742,8 @@ async function attemptStartScheduler(): Promise<void> {
       ...automationGitBaselineHooks,
     });
     // scheduler 真正 ready 后挂 listener + 喂入 readiness holder。WeakSet 按实例
-    // 去重:splash + localDb onReady 各调一次,同实例第二次 no-op;切账号后新实例
-    // 不在 set 里,会重新 attach。
+    // 去重:localDb onReady 重试可能再次拿到同实例，此时 no-op；
+    // 切账号后新实例不在 set 里，会重新 attach。
     // 注意:schedule:* IPC handler 不在这里注册 — 它们在 registerMakerIpcsAfterSplash
     // 内通过 registerScheduleHandlers() 提前挂好,handler 内部 awaitReady 等本行
     // setSchedulerReady 调用。
@@ -888,6 +910,11 @@ async function ensureLifecycleDbClient(userId: string) {
 
 async function teardownAuthAccountBoundary(reason: string): Promise<void> {
   skillhubAutoSyncService.cancelInFlight();
+  // Custom provider routes are owner-scoped but the active catalog is process-global.
+  // Clear synchronously at the boundary; the next owner's tracked readiness reloads them
+  // before any Agent route can start. A failed DB read therefore stays fail-closed (empty)
+  // instead of retaining the previous owner's endpoint or model entries.
+  setCustomProviders([]);
   // 远程会话的镜像冷缓存里是别的设备的聊天内容。owner 命名空间已经保证下一个账号读不到
   // 它,但登出后不该在盘上留着 —— 这里 owner 还指向**旧账号**(commitActiveAppSession 在
   // teardown 之后才切),正是唯一能清准的时机。
@@ -3885,6 +3912,8 @@ const registerIpcHandlers = () => {
           notifyUpdateAutoRelaunchBusyStateChanged();
         },
         refreshXdGatewayModels,
+        waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
+        onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
       registerMakerTitleIpc();
       registerMakerHelpIpc(ipcMaker);
@@ -4002,10 +4031,9 @@ const registerIpcHandlers = () => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
     });
 
-    // Phase 4 Scheduler 启动尝试 —— attemptStartScheduler 是幂等的，
-    // 若 localDb 还没 ready (splash 跑得早于 user login)，本次 no-op；
-    // 等 'local-db:ensure-ready' IPC onReady 回调时会再触发一次。
-    await attemptStartScheduler();
+    // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
+    // DB 与 splash 无论谁先完成，上方 configured 信号都会解开同一条后台链；
+    // 这里不再直启，避免 scheduler 在账号模型发现完成前抢先选路由。
   };
 
   // Environment check IPC handler — 顺序检查 claude → codex 两个 vendor binary。
@@ -5698,9 +5726,8 @@ app.on('ready', async () => {
   registerMyIssuesIpc();
   // chat-data-localization F2/F5：注册 localDb IPC + 干净退出快照钩子。
   // 不立即开 db；ensureReady 由 AuthContext 在登录成功后通过 IPC 触发。
-  // onReady 回调 → scheduler-host 启动重试入口 (Phase 3)：splash 跑早于 user login
-  // 的话第一次 startScheduler 会因为 localDb 未 ready 而失败；这里在 ensureReady
-  // 完成后再触发一次幂等的 startScheduler，谁后到谁负责真正启动。
+  // onReady 回调是 owner DB 权威就绪点；它先放行本地读，再与 splash 端的
+  // provider coordinator 会合，后台完成账号路由初始化后才启动 scheduler。
   // 首登轻量数据迁移(mToc)的确认弹窗 IPC —— 必须先于 registerLocalDbIpc 注册,
   // 保证 beforeEnsureReady 推送 confirm 态时 renderer 已能 invoke 确认通道。
   registerLegacyMigrationIpc();
@@ -5710,6 +5737,16 @@ app.on('ready', async () => {
     discardStaleOwner: (userId) =>
       lifecycleDbClientManager.dispose(`stale-owner-after-ready:${userId}`),
     beforeEnsureReady: async (userId) => {
+      // Provider discovery is detached from DB read readiness for the same owner, but a
+      // different owner must not replace the DB while the previous account task can still
+      // update owner-scoped catalogs or agent environments.
+      const previousProviderTaskSettled = await accountProviderReadinessBarrier.waitForPreviousScope(
+        activeOwnerScopeKey(),
+      );
+      // The old task may have completed its owner-scoped DB read after teardown cleared the
+      // process-global catalog. Clear once more after joining it so a failed next-owner reload
+      // cannot inherit the old endpoint/model snapshot. Same-scope ensure retries skip this.
+      if (previousProviderTaskSettled) setCustomProviders([]);
       const user = authManager.getAuthState().user;
       if (user == null || user.id !== userId) return;
       // 首登轻量迁移(老 xdt-maker userData → Cindy):内部自带 marker 防重入与
@@ -5717,6 +5754,20 @@ app.on('ready', async () => {
       await runLegacyUserDataMigrationForUser(user.id);
     },
     onReady: async (userId) => {
+      const startupHooksStartedAt = performance.now();
+      let startupPhaseStartedAt = startupHooksStartedAt;
+      const logStartupPhase = (phase: string): void => {
+        const now = performance.now();
+        dbClientLog.info(
+          JSON.stringify({
+            event: 'localDb.startup.phase.done',
+            phase,
+            elapsedMs: Math.round(now - startupPhaseStartedAt),
+            totalElapsedMs: Math.round(now - startupHooksStartedAt),
+          }),
+        );
+        startupPhaseStartedAt = now;
+      };
       // 必须先 await ensureLifecycleDbClient(内部 await createDbClient → worker
       // spawn + db open + migration scan + smoke,约 1-2s),把 client 经
       // setCurrentDbClient 暴露给全局 getDbClient() 之后,后续 attemptStartScheduler /
@@ -5727,6 +5778,7 @@ app.on('ready', async () => {
       // attempt 全部撞 "DbClient not ready",scheduler/embedding 永不启动 → renderer
       // 卡在 IPC 等待 → 白屏。
       const dbClientTakeover = await ensureLifecycleDbClient(userId);
+      logStartupPhase('db-client-takeover');
       if (dbClientTakeover.mode === 'failed' || dbClientTakeover.mode === 'skipped') {
         dbClientLog.warn('[DbClient] lifecycle client unavailable; skip db-client startup hooks', {
           userId,
@@ -5743,19 +5795,7 @@ app.on('ready', async () => {
         localDbCloseDb({ preserveSchemaMigrationLease: true });
         dbClientLog.info('[DbClient] main-side _db released after worker takeover');
       }
-      // 自定义 MCP：先 await 刷新 provider 数组，确保 scheduler 启动时能看到已保存的
-      // custom MCP 配置。cold start 场景：getMaker 构造时 DB 未就绪，初始 refresh 为
-      // no-op，waitForInitialCustomMcpRefresh 立即 resolve；此处补刷，保证第一个
-      // scheduler fire / 用户会话都能拿到完整的 mcpProviders 数组。best-effort：失败仅
-      // warn，不阻塞后续初始化。
       const accountSwitchLog = createLogger('custom-mcp-account-switch');
-      try {
-        await refreshCustomMcpProviders();
-      } catch (err) {
-        accountSwitchLog.warn('refreshCustomMcpProviders on account switch failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
       // 身份翻转遗留的 dialogue 工作目录自愈:把 legacy userData 前缀的
       // sessions.working_dir 批量改写到当前 userData(详见 dialogueWorkdirSelfHeal.ts)。
       // 必须 await:ensure-ready IPC 返回后 renderer 才拉会话列表,在此之前改写完
@@ -5774,21 +5814,7 @@ app.on('ready', async () => {
           error: err instanceof Error ? err.message : String(err),
         });
       }
-      // Hook and personal IM both require the current owner's DbClient. Start
-      // them from this authoritative Main-side readiness point instead of
-      // relying only on the renderer's later fire-and-forget
-      // app:ready-for-bot signal. That signal can be lost during cold-start
-      // auto-login or an owner remount, leaving a saved Feishu bot disconnected
-      // and unable to claim the owner from its first p2p message.
-      startAccountIntegrationsAfterOwnerDbReady(userId, {
-        isOwnerCurrent: (ownerId) =>
-          isLocalDbOwnerCurrent(authManager.getAuthState(), ownerId, isAppSessionBoundaryPending()),
-        startHookControlAccount,
-        startImConnection,
-        log: dbClientLog,
-      });
-      attemptStartScheduler();
-      attemptStartEmbeddingHost();
+      logStartupPhase('dialogue-workdir-sweep');
       // 旧「资料本地覆写」方案退役(2026-07)的一次性清理:清当前账号名下的
       // profile-avatar 媒体引用与 override 条目(文件条目即幂等标记,失败下次登录重试)。
       void (async () => {
@@ -5822,49 +5848,115 @@ app.on('ready', async () => {
       });
       // 价格表作用域依赖当前 localDb 用户与 provider-secret owner;必须等用户 DB ready 后再预热。
       void prewarmModelPricing();
-      // 自定义供应商配置在按 userId 切片的 localDb 里：DB ready / 换账号后重新加载并
-      // 注入 active-catalog（让路由 / 来源栏 / 模型选择器跟随当前账号）。best-effort，不阻塞。
-      void refreshCustomProvidersIntoCatalog();
-      // 自定义 MCP：provider 数组已在上方刷新完成，失效 Codex cached spawn 配置，
-      // 使下一会话按新数组重建。
-      // 顺序约束与模型发现都保持 best-effort，但这里必须 await 到 settle：LocalDbGate
-      // 只有随后才放行主界面。否则用户能在 Anthropic 清单尚未回来时发送 Opus，
-      // 草稿会按 XD 默认路由建成 provider_id=NULL（issue #1196）。
+      // DB 可读与 Agent 可启动是两个不同的 readiness：现有任务列表只依赖前者，不能
+      // 被网络模型发现阻塞；新建 / 发送则经 registerMakerIpc 的中心入口等待下方 barrier，
+      // 保留 issue #1196 的路由正确性（Anthropic 清单回来前不能先按 XD 默认建 Opus）。
       //
       // 模型发现必须排在 Codex 重启序列之后：后者末尾会按 auth 边界重读
       // models_cache（cache miss 即清空防串号），并发跑会让刚发现的清单被空快照覆盖。
-      await refreshProviderModelsAfterAccountReady({
-        restartCodex: restartCodexAfterAuthModeChange,
-        shutdownCodexEnvironment,
-        refreshProviderModels: requestProviderModelAutoRefresh,
-        log: accountSwitchLog,
-      });
-      // Pi bridge 与 Codex 同源（HTTP bridge + gateway key），账号切换后也必须
-      // 清掉旧账号环境，让下一次 Pi 会话按新账号凭证重建。
-      try {
-        await shutdownPiEnvironment();
-      } catch (err) {
-        accountSwitchLog.warn('shutdownPiEnvironment on account switch failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-      void sweepStartupDraftImages({
-        dbClient: getDbClient(),
-        processStartedAtMs: PROCESS_STARTED_AT_MS,
-      })
-        .then((result) => {
-          if (result.removed === 0 && result.removedDanglingMeta === 0 && result.errors === 0)
-            return;
-          createLogger('image-cache-orphan-sweep').info(
-            'startup draft image sweep completed',
-            result,
-          );
-        })
-        .catch((err) => {
-          createLogger('image-cache-orphan-sweep').warn('startup draft image sweep failed', {
-            error: err instanceof Error ? err.message : String(err),
+      const providerScopeKey = activeOwnerScopeKey();
+      const startProviderReadiness = (): void => {
+        if (activeOwnerScopeKey() !== providerScopeKey || isAppSessionBoundaryPending()) return;
+        const providerReadiness = accountProviderReadinessBarrier.start(
+          providerScopeKey,
+          async () => {
+            const startedAt = performance.now();
+            try {
+              // 自定义 MCP 与自定义供应商都只服务 Agent 路由，不应该阻塞任务列表。
+              // 二者在内置模型发现前完成，确保后续 route consumer 只看当前账号。
+              try {
+                // 切号 teardown 会 reset Maker 和 MCP registry。先重建 Maker 以重新注册
+                // provider arrays，再等它的初始刷新；冷启动时初始刷新可能早于
+                // DB ready 而空跑，所以随后还要显式补刷一次当前 owner。
+                getMakerCore();
+                await waitForInitialCustomMcpRefresh();
+                await refreshCustomMcpProviders();
+              } catch (err) {
+                accountSwitchLog.warn('refreshCustomMcpProviders on account switch failed', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+              await refreshCustomProvidersIntoCatalog(
+                () =>
+                  activeOwnerScopeKey() === providerScopeKey &&
+                  !isAppSessionBoundaryPending(),
+              );
+              await refreshProviderModelsAfterAccountReady({
+                restartCodex: restartCodexAfterAuthModeChange,
+                shutdownCodexEnvironment,
+                refreshProviderModels: requestProviderModelAutoRefresh,
+                log: accountSwitchLog,
+              });
+              // Pi bridge 与 Codex 同源（HTTP bridge + gateway key），账号切换后也必须
+              // 清掉旧账号环境，让下一次 Pi 会话按新账号凭证重建。
+              try {
+                await shutdownPiEnvironment();
+              } catch (err) {
+                accountSwitchLog.warn('shutdownPiEnvironment on account switch failed', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              }
+            } catch (err) {
+              // 与旧 LocalDbGate 屏障一致：provider readiness 是 best-effort；意外失败只记账，
+              // 不把已经可读的本地 DB 误报成启动失败，也不让发送入口永久悬挂。
+              accountSwitchLog.warn('account provider readiness task failed (non-fatal)', {
+                error: err instanceof Error ? err.message : String(err),
+              });
+            } finally {
+              accountSwitchLog.info('account provider readiness settled', {
+                elapsedMs: Math.round(performance.now() - startedAt),
+              });
+            }
+            void sweepStartupDraftImages({
+              dbClient: getDbClient(),
+              processStartedAtMs: PROCESS_STARTED_AT_MS,
+            })
+              .then((result) => {
+                if (result.removed === 0 && result.removedDanglingMeta === 0 && result.errors === 0)
+                  return;
+                createLogger('image-cache-orphan-sweep').info(
+                  'startup draft image sweep completed',
+                  result,
+                );
+              })
+              .catch((err) => {
+                createLogger('image-cache-orphan-sweep').warn('startup draft image sweep failed', {
+                  error: err instanceof Error ? err.message : String(err),
+                });
+              });
+          },
+          (err) => {
+            accountSwitchLog.warn('account provider readiness rejected unexpectedly', {
+              error: err instanceof Error ? err.message : String(err),
+            });
+          },
+        );
+        // Hook / personal IM / scheduler can resolve routes before maker.createSession, so arm
+        // them only after discovery settles. The Maker lifecycle hook remains the final guard for
+        // every direct create path. The scope check prevents an old completion from reviving hosts
+        // after an account boundary.
+        void providerReadiness.then(() => {
+          if (activeOwnerScopeKey() !== providerScopeKey || isAppSessionBoundaryPending()) return;
+          startAccountIntegrationsAfterOwnerDbReady(userId, {
+            isOwnerCurrent: (ownerId) =>
+              isLocalDbOwnerCurrent(
+                authManager.getAuthState(),
+                ownerId,
+                isAppSessionBoundaryPending(),
+              ),
+            startHookControlAccount,
+            startImConnection,
+            log: dbClientLog,
           });
+          attemptStartScheduler();
+          attemptStartEmbeddingHost();
         });
+      };
+      // localDb 与 splash 可以任意先后完成。协调器已配置就立即开后台任务；
+      // 否则只登记当前 scope 的启动闭包，不创建一个可能永久 pending 的 Promise。
+      if (makerProviderRefreshConfigured) startProviderReadiness();
+      else startPendingAccountProviderReadiness = startProviderReadiness;
+      logStartupPhase('post-db-hooks-scheduled');
     },
   });
   // dev-only IPC for embedding-host smoke testing (status + sync embed). 安全:
@@ -5941,10 +6033,12 @@ app.on('ready', async () => {
   // handler。FeishuBot 的 WS 长连接必须等当前用户 localDb ready 后再启动。
   startImOrchestrators();
   // Renderer → main 的 "应用真正就绪" 兼容信号。LocalDbGate 在
-  // localDb.ensureReady 成功之后调一次。Hook 与 FeishuBot 已在 localDb onReady
-  // 的 Main 权威时点激活，这里为旧时序与瞬时失败保留幂等重试。
-  ipcMain.handle('app:ready-for-bot', (event) => {
+  // localDb.ensureReady 成功之后调一次。Hook 与 FeishuBot 的权威启动已由
+  // localDb onReady 排到 provider readiness 之后；这里同样等待屏障，再为旧时序
+  // 与瞬时失败保留幂等重试。
+  ipcMain.handle('app:ready-for-bot', async (event) => {
     assertTrustedAppRendererEvent(event);
+    await waitForCurrentAccountProviderModelsReady();
     startHookControlAccount();
     startImConnection();
     return { ok: true };
