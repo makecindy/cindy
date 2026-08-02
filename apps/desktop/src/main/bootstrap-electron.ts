@@ -37,6 +37,7 @@ import {
   markDesktopDevWindowReady,
 } from './devStartupStatus';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
+import { handleOpenChatGPTApp } from './chatgpt-app.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
@@ -4226,6 +4227,17 @@ const registerIpcHandlers = () => {
         return { success: false };
       }
     },
+  );
+
+  // ChatGPT Desktop 当前注册 `codex:` 协议（macOS bundle id com.openai.codex；
+  // Windows 安装包也由系统协议注册表接管）。独立无参 IPC 保持最小权限，不能借此
+  // 打开 renderer 提供的任意自定义 scheme / deep link。
+  ipcMain.handle(
+    'shell:open-chatgpt-app',
+    async (event): Promise<{ success: boolean }> => handleOpenChatGPTApp(event, {
+      assertTrustedSender: assertTrustedAppRendererEvent,
+      openExternal: (url) => shell.openExternal(url),
+    }),
   );
 
   // Show native directory picker dialog

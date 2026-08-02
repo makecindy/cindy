@@ -5334,6 +5334,20 @@
     "transcriptKept": "{{message}} The text recognized so far was kept — you can edit it directly.",
     "transcriptKeptOverlay": "{{message}} The text recognized so far was kept — copy it to continue."
   },
+  "chatgptAuthRecovery": {
+    "title": "ChatGPT Sign-In Is No Longer Valid",
+    "systemSharedInvalidated": "Cindy is currently using this computer’s ChatGPT sign-in. That sign-in is no longer valid. Open the ChatGPT App, sign in again, then retry.",
+    "instanceIsolatedInvalidated": "Cindy is currently using a separately signed-in ChatGPT account. That sign-in is no longer valid. Sign in again in Cindy, then retry.",
+    "unknownInvalidated": "Cindy’s current ChatGPT sign-in is no longer valid. Sign in again, then retry.",
+    "recovered": "ChatGPT sign-in has been restored. Please retry.",
+    "openApp": "Open ChatGPT App",
+    "relogin": "Sign In to ChatGPT Again",
+    "checking": "Checking…",
+    "recheck": "Check Again",
+    "later": "Later",
+    "openAppFailed": "Couldn’t open the ChatGPT App. Open it manually and sign in again.",
+    "verificationFailed": "Cindy couldn’t confirm whether the ChatGPT sign-in has recovered. Check again."
+  },
   "chat": {
     "askUserQuestion": {
       "skippedAnswer": "Skipped"
@@ -5456,12 +5470,6 @@
       "codexAuthMissing": "Remote Codex hasn't been signed in yet (401 Unauthorized). Click \"Sync auth\" to push your local Codex credentials to the remote Cindy Codex home, then retry.",
       "codexAuthMissingLocal": "Codex credentials missing or expired (401 Unauthorized). Re-login in {{appName}} Settings → Codex (the app-server will auto-restart on login), or run `codex login` in your terminal and toggle the auth mode in Settings once to restart the app-server. Then start a new session.",
       "codexSessionExpired": "The OpenAI connection needs an update. Reconnect ChatGPT to continue; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
-      "codexSessionExpiredDialog": {
-        "title": "OpenAI Connection Needs an Update",
-        "description": "{{appName}} temporarily can’t use your ChatGPT account. Reconnecting restores OpenAI access for both Codex and Claude; {{appName}} won’t sign your system Codex CLI out or ask you to reconnect other model sources.",
-        "confirm": "Reconnect ChatGPT",
-        "cancel": "Later"
-      },
       "codexAuthSynced": "Auth synced. Click \"Retry\" to resend.",
       "syncAuth": "Sync auth",
       "syncAuthSyncing": "Syncing…",
