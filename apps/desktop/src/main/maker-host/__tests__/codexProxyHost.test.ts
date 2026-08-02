@@ -2528,6 +2528,19 @@ describe('codex proxy host', () => {
       expect(reasoning.id).toBe('rs_keep_me');
     });
 
+    // 键名都在允许列表里、但 id 的值是空串:只数键名会判定「没变」,把原对象原样
+    // 发出去 —— 等于算出了规范形状又扔掉。
+    it('id 是空串时也要真的剥掉，而不是当作“没变”原样透传', async () => {
+      const out = await runXaiReasoningTransforms('empty-id', {
+        model: 'xai/grok-4.5',
+        input: [{ type: 'reasoning', id: '', summary: [], encrypted_content: 'BLOB-EMPTY-ID' }],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
+      expect(reasoning.encrypted_content).toBe('BLOB-EMPTY-ID');
+    });
+
     it('codex 不发 id 时不编造一个（实测 xAI 不需要 id 也能解开 blob）', async () => {
       const out = await runXaiReasoningTransforms('no-id', {
         model: 'xai/grok-4.5',

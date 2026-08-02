@@ -1177,9 +1177,14 @@ function normalizeXaiInputItem(item: unknown): { item: unknown; changed: boolean
     if (typeof base.id === 'string' && base.id.length > 0) next.id = base.id;
     next.summary = Array.isArray(base.summary) ? base.summary : [];
     if (typeof base.encrypted_content === 'string') next.encrypted_content = base.encrypted_content;
+    // changed 必须覆盖「键在允许列表里、但值被上面丢掉了」的情况(如 id 是空串
+    // 或非 string):只数键名会让这些项拿着原值原样发出去 —— 等于算出了规范形状
+    // 又扔掉。逐字段比对 next 与 base,判定和构造才是同一套口径。
     const changed =
       typedFromEasy ||
       !Array.isArray(base.summary) ||
+      ('id' in base && next.id !== base.id) ||
+      ('encrypted_content' in base && next.encrypted_content !== base.encrypted_content) ||
       Object.keys(base).some((key) => !['type', 'id', 'summary', 'encrypted_content'].includes(key));
     return changed ? { item: next, changed: true } : { item: base, changed: false };
   }
