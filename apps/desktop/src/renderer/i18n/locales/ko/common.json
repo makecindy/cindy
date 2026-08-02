@@ -5868,6 +5868,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "첨부: ",
+      "attachmentAttachedAria": "{{name}} 첨부됨",
       "saveAttachmentAs": "첨부 파일 {{name}} 다른 이름으로 저장",
       "attachmentSaved": "첨부 파일 {{name}} 저장됨",
       "attachmentSavedUnsupported": "첨부 파일 {{name}} 저장됨. 현재 플랫폼에서는 이 파일 형식을 직접 사용하지 못할 수 있습니다",

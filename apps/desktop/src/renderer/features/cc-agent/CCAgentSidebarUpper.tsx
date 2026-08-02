@@ -53,7 +53,7 @@ import {
 import { Tooltip } from '@/components/ui/tooltip';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
+import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
@@ -2120,7 +2120,7 @@ function ExpandedView({
           // patchMeta 按来源路由:远程会话经隧道写被控端 patch-meta(allowlist 内),本地仍走 update。
           await sessionService.patchMeta(session.id, { status: 'deleted' });
           makerChatStore.purgeSession(session.id);
-          clearComposerDraft(session.id);
+          discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
           // 本机概念,本地 + 远程 session 都要清(被控端的 localStorage 由被控端自己处理)。
           cleanupSessionLayoutPrefs(session.id);
@@ -2270,7 +2270,7 @@ function ExpandedView({
             patchLocal(session.id, { status: 'archived', pinnedAt: null });
           }
           makerChatStore.purgeSession(session.id);
-          clearComposerDraft(session.id);
+          discardComposerDraft(session.id);
         } catch (err) {
           log.error('[bulk session archive]', err);
           failed.push(session.id);
@@ -2455,7 +2455,7 @@ function ExpandedView({
           // 跨 bucket 同步:见 handleConfirm 同位置注释。
           patchLocal(s.id, { status: 'archived', pinnedAt: null });
           makerChatStore.purgeSession(s.id);
-          clearComposerDraft(s.id);
+          discardComposerDraft(s.id);
         } catch (err) {
           log.error('[archive all]', err);
           failed.push(s.id);

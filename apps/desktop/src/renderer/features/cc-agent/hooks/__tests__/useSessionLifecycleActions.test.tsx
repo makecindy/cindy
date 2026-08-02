@@ -42,7 +42,7 @@ vi.mock('@/lib/makerChatStore', () => ({
 }));
 
 vi.mock('@/lib/composerDraftStore', () => ({
-  clearDraft: mocks.clearComposerDraft,
+  discardDraft: mocks.clearComposerDraft,
 }));
 
 vi.mock('@/lib/sessionLayoutPrefs', () => ({

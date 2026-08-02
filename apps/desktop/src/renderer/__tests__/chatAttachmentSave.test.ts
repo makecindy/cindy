@@ -126,6 +126,31 @@ describe('saveChatAttachmentWithToasts', () => {
     expect(result).toBe('saved');
   });
 
+  it('cleans the temporary legacy staging copy after Save As completes', async () => {
+    const cleanupStaged = vi.fn(async () => {});
+    const deps = makeDeps({ cleanupStaged });
+    await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(cleanupStaged).toHaveBeenCalledWith(['C:\\cache\\staged-setup.exe.bin']);
+  });
+
+  it('cleans the temporary legacy staging copy when Save As fails', async () => {
+    const cleanupStaged = vi.fn(async () => {});
+    const deps = makeDeps({
+      cleanupStaged,
+      saveAs: vi.fn(async () => ({ status: 'error' as const, code: 'copy_failed' as const })),
+    });
+    await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'setup.exe', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(cleanupStaged).toHaveBeenCalledWith(['C:\\cache\\staged-setup.exe.bin']);
+  });
+
   it('fetches a remote copy first and warns when the type is unsupported locally', async () => {
     const deps = makeDeps({ platform: 'darwin' });
     const origin = { kind: 'device' as const, deviceId: 'device-1' };

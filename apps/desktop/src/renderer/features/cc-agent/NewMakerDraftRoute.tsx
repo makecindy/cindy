@@ -115,6 +115,7 @@ import * as sessionService from '@/lib/sessionService';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { emitAutoTitlePreview, emitAutoTitlePreviewCleared } from '@/lib/sessionsBus';
 import { NewGoalDialog } from '@/components/new-chat/NewGoalDialog';
+import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 import type { GoalLimitValues } from '@/components/new-chat/GoalAdvancedLimits';
 import { makerChatStore } from '@/lib/makerChatStore';
 import { worktreeCreationStore } from '@/lib/worktreeCreationStore';
@@ -1688,6 +1689,9 @@ export function NewMakerDraftRoute() {
           // SSH agent 无法读取控制端本地文件;只保留 image 类附件(可 rehome 到 cache URL),
           // 丢弃 path-based 非 image 附件(PDF / text 等)。
           const imageOnly = existingDraft.attachments.filter((f) => f.category === 'image');
+          cleanupStagedChatAttachmentFiles(
+            existingDraft.attachments.filter((attachment) => attachment.category !== 'image'),
+          );
           const rehomedAttachments = await rehomeDraftAttachments(imageOnly, newSession.id);
           let rehomedComments = existingDraft.browserComments;
           if (rehomedComments && rehomedComments.length > 0) {

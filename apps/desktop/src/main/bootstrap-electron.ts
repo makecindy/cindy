@@ -201,6 +201,7 @@ import {
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
 import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
+  cleanupStagedChatAttachments,
   getChatAttachmentCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
@@ -5084,6 +5085,14 @@ const registerIpcHandlers = () => {
     (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
       assertTrustedAppRendererEvent(event);
       return stageChatAttachment(params);
+    },
+  );
+  ipcMain.handle(
+    'chat-attachment:cleanup',
+    (event, filePaths: readonly string[]) => {
+      assertTrustedAppRendererEvent(event);
+      if (!Array.isArray(filePaths)) return Promise.resolve();
+      return cleanupStagedChatAttachments(filePaths);
     },
   );
   ipcMain.handle(

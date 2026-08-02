@@ -2847,6 +2847,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
       }
   > => ipcRenderer.invoke('chat-attachment:stage', params),
 
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]): Promise<void> =>
+    ipcRenderer.invoke('chat-attachment:cleanup', filePaths),
+
   // 安全降级聊天附件另存为。main 校验源路径并清洗 suggestedName；保存后
   // 只返回结果，不自动打开或执行目标文件。
   saveChatAttachmentAs: (params: {

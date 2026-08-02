@@ -5870,6 +5870,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "Attachments: ",
+      "attachmentAttachedAria": "Attached {{name}}",
       "saveAttachmentAs": "Save attachment {{name}} as",
       "attachmentSaved": "Attachment {{name}} saved",
       "attachmentSavedUnsupported": "Attachment {{name}} saved, but this file type may not work on the current platform",

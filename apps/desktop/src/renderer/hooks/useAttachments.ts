@@ -41,6 +41,7 @@ import {
   saveDraft as saveComposerDraft,
   subscribeDraft as subscribeComposerDraft,
 } from '@/lib/composerDraftStore';
+import { cleanupStagedChatAttachmentFiles } from '@/lib/chatAttachmentStageCleanup';
 
 /**
  * A single "this file did not get attached" rejection, surfaced inline in the
@@ -84,6 +85,8 @@ export interface UseAttachmentsReturn {
    * 就地更新一个附件(标注编辑保存后替换 url / 笔迹数据等)。id 不存在时 no-op。
    */
   updateFile: (id: string, patch: Partial<AttachedFile>) => void;
+  /** Discard unsent files and remove any staged dangerous copies. */
+  discardFiles: () => void;
   clearFiles: () => void;
 }
 
@@ -427,6 +430,7 @@ export function useAttachments(
     const currentSessionId = sessionIdRef.current;
 
     for (const item of valid) {
+      let stagedAttachmentPath: string | null = null;
       try {
         let attachmentPath = item.path;
         if (
@@ -447,6 +451,7 @@ export function useAttachments(
             continue;
           }
           attachmentPath = staged.path;
+          stagedAttachmentPath = staged.path;
         }
 
         if (item.category === 'image') {
@@ -486,6 +491,7 @@ export function useAttachments(
               encoding: 'base64',
             });
             if (!result.success) {
+              cleanupStagedChatAttachmentFiles([{ path: stagedAttachmentPath ?? '' }]);
               pushRejections([t('logic.toasts.attachmentReadFailed', { name: item.name, error: result.error })]);
               continue;
             }
@@ -534,6 +540,7 @@ export function useAttachments(
           });
         }
       } catch (err) {
+        cleanupStagedChatAttachmentFiles([{ path: stagedAttachmentPath ?? '' }]);
         pushRejections([t('logic.toasts.attachmentReadFailed', { name: item.name, error: err instanceof Error ? err.message : String(err) })]);
       }
     }
@@ -632,11 +639,23 @@ export function useAttachments(
     if (!removed?.cacheUrlShared) {
       cleanupRemovedCachedImage(removed);
     }
+    if (removed) cleanupStagedChatAttachmentFiles([removed]);
     setAttachments((prev) => prev.filter((f) => f.id !== id));
   }, []);
 
   const updateFile = useCallback((id: string, patch: Partial<AttachedFile>) => {
     setAttachments((prev) => prev.map((f) => (f.id === id ? { ...f, ...patch } : f)));
+  }, []);
+
+  const discardFiles = useCallback(() => {
+    const current = attachmentsRef.current;
+    for (const file of current) {
+      if (!file.cacheUrlShared) cleanupRemovedCachedImage(file);
+    }
+    cleanupStagedChatAttachmentFiles(current);
+    setAttachments([]);
+    attachmentsRef.current = [];
+    setRejections([]);
   }, []);
 
   const clearFiles = useCallback(() => {
@@ -663,6 +682,7 @@ export function useAttachments(
     consumePendingFileMentions,
     removeFile,
     updateFile,
+    discardFiles,
     clearFiles,
   };
 }

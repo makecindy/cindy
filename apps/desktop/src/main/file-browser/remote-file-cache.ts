@@ -65,6 +65,64 @@ export function getChatAttachmentCacheRoot(): string {
   return chatAttachmentCacheDir();
 }
 
+function isInsideChatAttachmentCache(p: string): boolean {
+  return path.resolve(p).startsWith(`${chatAttachmentCacheDir()}${path.sep}`);
+}
+
+/**
+ * Extract persisted file paths from a user-message content JSON document.
+ * This is deliberately format-tolerant: malformed/legacy content contributes
+ * no paths, and the actual deletion function still applies its cache-root and
+ * `.bin` guards before touching anything on disk.
+ */
+export function extractChatAttachmentPathsFromPersistedContent(content: string): string[] {
+  try {
+    const parsed = JSON.parse(content) as { files?: unknown };
+    if (!Array.isArray(parsed.files)) return [];
+    return parsed.files.flatMap((entry) => {
+      if (!entry || typeof entry !== 'object') return [];
+      const candidate = (entry as { path?: unknown }).path;
+      return typeof candidate === 'string' ? [candidate] : [];
+    });
+  } catch {
+    return [];
+  }
+}
+
+/** Remove one staged attachment if it is a safe, controlled cache file. */
+export async function removeStagedChatAttachment(filePath: string): Promise<boolean> {
+  if (
+    typeof filePath !== 'string' ||
+    !path.isAbsolute(filePath) ||
+    !isInsideChatAttachmentCache(filePath) ||
+    path.extname(filePath).toLowerCase() !== '.bin'
+  ) {
+    return false;
+  }
+  try {
+    const stat = await fs.lstat(filePath);
+    if (!stat.isFile() && !stat.isSymbolicLink()) return false;
+    await fs.unlink(filePath);
+    return true;
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException | null)?.code;
+    if (code !== 'ENOENT') {
+      log.warn('staged chat attachment cleanup failed', {
+        filePath,
+        error: String(err),
+      });
+    }
+    return false;
+  }
+}
+
+/** Best-effort batch cleanup used by draft/message/session lifecycle hooks. */
+export async function cleanupStagedChatAttachments(
+  filePaths: readonly string[],
+): Promise<void> {
+  await Promise.all(filePaths.map((filePath) => removeStagedChatAttachment(filePath)));
+}
+
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */
 function prefixHashFor(id: Pick<RemoteFileIdentity, 'transport' | 'endpointId' | 'workdir' | 'relPath'>): string {
   return createHash('sha1')

@@ -2346,6 +2346,9 @@ interface ElectronAPI {
       }
   >;
 
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]) => Promise<void>;
+
   /**
    * Save a safely materialized chat attachment under its sanitized original
    * filename. The main process validates the source and never opens the target.

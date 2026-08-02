@@ -5868,6 +5868,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "添付：",
+      "attachmentAttachedAria": "{{name}}を添付済み",
       "saveAttachmentAs": "添付ファイル {{name}} を別名で保存",
       "attachmentSaved": "添付ファイル {{name}} を保存しました",
       "attachmentSavedUnsupported": "添付ファイル {{name}} を保存しましたが、現在のプラットフォームではこのファイル形式を直接使用できない可能性があります",

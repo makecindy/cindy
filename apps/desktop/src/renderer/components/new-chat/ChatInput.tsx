@@ -500,6 +500,7 @@ interface ChatInputProps {
     consumePendingFileMentions: () => Array<{ type: 'file'; relPath: string; name: string }>;
     removeFile: (id: string) => void;
     updateFile: (id: string, patch: Partial<AttachedFile>) => void;
+    discardFiles: () => void;
     clearFiles: () => void;
   };
   /**
@@ -1073,6 +1074,7 @@ export function ChatInput({
     consumePendingFileMentions,
     removeFile,
     updateFile,
+    discardFiles,
     clearFiles,
   } = attachmentState;
   // browser-comment-chip:内置浏览器页面评论(结构化,不进草稿文本),渲染为
@@ -5554,7 +5556,7 @@ export function ChatInput({
                   } finally {
                     isRestoringRef.current = false;
                   }
-                  clearFiles();
+                  discardFiles();
                   // 页面评论走丢弃语义(清 state + 清截图缓存):目标不接管评论截图,
                   // 与发送后清空(消息接管截图,不清缓存)不同,这里不清会留磁盘孤儿。
                   clearBrowserComments();
@@ -6280,6 +6282,7 @@ function ThumbnailItem({
   onRemove: (id: string) => void;
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
+  const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
   const thumbRef = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -6369,7 +6372,11 @@ function ThumbnailItem({
         )}
         onClick={handleOpenPreview}
         disabled={isDownloadOnly}
-        aria-label={isDownloadOnly ? `Attached ${file.name}` : `Preview ${file.name}`}
+        aria-label={
+          isDownloadOnly
+            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
+            : `Preview ${file.name}`
+        }
       >
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">

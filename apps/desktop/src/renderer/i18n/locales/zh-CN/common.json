@@ -5868,6 +5868,7 @@
     },
     "userMessage": {
       "attachmentPrefix": "附件：",
+      "attachmentAttachedAria": "已附加 {{name}}",
       "saveAttachmentAs": "另存附件 {{name}}",
       "attachmentSaved": "附件 {{name}} 已保存",
       "attachmentSavedUnsupported": "附件 {{name}} 已保存，但当前平台可能无法直接使用此文件类型",

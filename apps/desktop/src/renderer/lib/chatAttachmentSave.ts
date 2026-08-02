@@ -30,6 +30,7 @@ export interface ChatAttachmentSaveDeps {
     sourcePath: string;
     suggestedName: string;
   }): ReturnType<typeof window.electronAPI.stageChatAttachment>;
+  cleanupStaged?: (filePaths: readonly string[]) => Promise<void>;
   fetchRemoteFile(
     origin: Exclude<SessionFileOrigin, { kind: 'local' }>,
     workingDir: string,
@@ -68,6 +69,7 @@ function defaultDeps(): ChatAttachmentSaveDeps {
   return {
     platform: window.electronAPI.platform,
     stageDangerous: (params) => window.electronAPI.stageChatAttachment(params),
+    cleanupStaged: (filePaths) => window.electronAPI.cleanupStagedChatAttachments(filePaths),
     fetchRemoteFile: fetchChatFileWithToasts,
     saveAs: (params) => window.electronAPI.saveChatAttachmentAs(params),
     success: (message) => {
@@ -95,6 +97,7 @@ export async function saveChatAttachmentWithToasts(
     ? await deps.fetchRemoteFile(ctx.origin, ctx.workingDir, file.path)
     : file.path;
   if (!sourcePath) return 'failed';
+  let stagedForSave: string | null = null;
 
   // Messages sent before the staging fix may still reference the user's
   // original executable path. Copy those legacy local sources into the inert
@@ -114,19 +117,28 @@ export async function saveChatAttachmentWithToasts(
         return 'failed';
       }
       sourcePath = staged.path;
+      stagedForSave = staged.path;
     } catch {
       deps.error(i18n.t('chat.userMessage.attachmentSaveFailed'));
       return 'failed';
     }
   }
 
+  const cleanupStagedForSave = () => {
+    if (!stagedForSave || !deps.cleanupStaged) return;
+    void deps.cleanupStaged([stagedForSave]).catch(() => undefined);
+  };
+
   let result: SaveResult;
   try {
     result = await deps.saveAs({ sourcePath, suggestedName: file.name });
   } catch {
+    cleanupStagedForSave();
     deps.error(i18n.t('chat.userMessage.attachmentSaveFailed'));
     return 'failed';
   }
+
+  cleanupStagedForSave();
 
   if (result.status === 'canceled') return 'canceled';
   if (result.status === 'saved') {

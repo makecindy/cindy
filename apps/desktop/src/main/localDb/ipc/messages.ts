@@ -29,6 +29,10 @@ import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
 import {
+  cleanupStagedChatAttachments,
+  extractChatAttachmentPathsFromPersistedContent,
+} from '../../file-browser/remote-file-cache';
+import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
 } from '../../../shared/interruptedTurn.js';
@@ -80,6 +84,23 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** Return staged attachment paths persisted by a session's messages. */
+export async function listSessionPersistedChatAttachmentPaths(
+  sessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ content: messages.content })
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId));
+  return uniqueStrings(
+    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
+}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
@@ -735,6 +756,15 @@ export async function commitMessageDeletion(
   preview: string | null;
 }> {
   const now = Date.now();
+  const db = getDbClient().drizzle;
+  const deletedAttachmentPaths = uniqueStrings(
+    (
+      await db
+        .select({ content: messages.content })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)))
+    ).flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
   const result = await getDbClient().tx('message.delete', {
     sessionId,
     clientIds,
@@ -746,6 +776,23 @@ export async function commitMessageDeletion(
     },
     updatedAt: now,
   });
+
+  if (deletedAttachmentPaths.length > 0) {
+    try {
+      const remainingAttachmentPaths = new Set(
+        await listSessionPersistedChatAttachmentPaths(sessionId),
+      );
+      await cleanupStagedChatAttachments(
+        deletedAttachmentPaths.filter((filePath) => !remainingAttachmentPaths.has(filePath)),
+      );
+    } catch (error) {
+      log.warn('message staged attachment cleanup failed', {
+        sessionId,
+        deletedClientIds: clientIds,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   // 当前生产聊天附件主要是 session-attachment 粗粒度引用，不能因删除一轮
   // 误删同 session 其它气泡仍在用的 blob。这里只释放明确以消息 id/clientId
