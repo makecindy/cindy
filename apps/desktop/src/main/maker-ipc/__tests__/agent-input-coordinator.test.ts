@@ -1,6 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { AgentInputCoordinator } from '../agent-input-coordinator.js';
-import { setMainLocale } from '../../i18n.js';
 import type {
   AgentInputCoordinatorDeps,
   AgentInputHostSendFailureCode,
@@ -369,7 +368,6 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  setMainLocale('en');
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -2778,8 +2776,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
   });
 
-  it('localizes the Pi image-capability guard before projecting the recoverable error', async () => {
-    setMainLocale('zh-CN');
+  it('preserves the Pi image-capability marker for display-side localization', async () => {
     const h = createHarness();
     const sid = 'pi-image-capability';
     h.sendToAgent.mockRejectedValueOnce(Object.assign(
@@ -2791,9 +2788,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await flush();
 
     const projection = latestProjection(h.projections);
-    expect(projection.error).toBe(
-      '当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。',
-    );
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
     expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-image']);
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
@@ -4337,6 +4332,54 @@ describe('AgentInputCoordinator steer transaction', () => {
     const afterDone = latestProjection(h.projections);
     expect(afterDone.queuePaused).toBe(true);
     expect(afterDone.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+  });
+
+  it('restores a capability-rejected steer to the queue head for retry after switching models', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-retry';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(projection.queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Capability rejection is pre-RPC, so finishing the old turn must not auto-send. Once the
+    // user has switched models, the explicit Retry consumes the preserved queue row exactly once.
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
   });
 
   it('screens same-turn steers through ghost hooks: block discards without injecting or persisting', async () => {

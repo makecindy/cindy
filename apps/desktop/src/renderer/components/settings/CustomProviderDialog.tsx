@@ -30,6 +30,7 @@ import {
   createCustomProvider,
   readCustomProviderKey,
   replaceCustomProviderModelId,
+  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
@@ -1469,15 +1470,17 @@ export function CustomProviderDialog({
                           <input
                             type="checkbox"
                             checked={m.supportsImageInput === true}
-                            onChange={(event) =>
+                            onChange={(event) => {
+                              const supportsImageInput = event.currentTarget.checked;
                               patch(activeTab, (x) => ({
                                 ...x,
-                                models: x.models.map((model, modelIndex) => {
-                                  if (modelIndex !== i) return model;
-                                  return { ...model, supportsImageInput: event.target.checked };
-                                }),
-                              }))
-                            }
+                                models: setCustomProviderModelSupportsImageInput(
+                                  x.models,
+                                  i,
+                                  supportsImageInput,
+                                ),
+                              }));
+                            }}
                             className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
                           />
                           <span className="flex flex-col gap-0.5 leading-snug">

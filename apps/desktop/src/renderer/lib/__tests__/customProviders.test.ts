@@ -6,6 +6,7 @@ import {
   customProviderModelConfigFromCatalogModel,
   providerViewToCustomProviderConfig,
   replaceCustomProviderModelId,
+  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
 } from '../customProviders';
 import type { ProviderView } from '@cindy/model-providers';
@@ -33,6 +34,19 @@ describe('replaceCustomProviderModelId', () => {
       contextWindow: 1_000_000,
     };
     expect(replaceCustomProviderModelId(model, model.id)).toBe(model);
+  });
+});
+
+describe('setCustomProviderModelSupportsImageInput', () => {
+  it('updates only the selected model row', () => {
+    const models = [
+      { id: 'text', name: 'Text' },
+      { id: 'vision', name: 'Vision' },
+    ];
+    expect(setCustomProviderModelSupportsImageInput(models, 1, true)).toEqual([
+      models[0],
+      { id: 'vision', name: 'Vision', supportsImageInput: true },
+    ]);
   });
 });
 
