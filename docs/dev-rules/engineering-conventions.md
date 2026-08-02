@@ -89,6 +89,32 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
 `scripts/__tests__/test-workspaces.test.mjs` 是 tier 边界的可执行契约；调整测试命名、include
 或 exclude 时必须同步更新并运行 `pnpm test:runner`。
 
+### 3.2 路径断言的跨平台宪法
+
+测试必须先区分路径代表的语义，不能把当前开发机的路径表示误当成跨平台事实：
+
+- **宿主文件系统路径**：传给或来自 Node `fs`、Electron、子进程 `cwd` 等本机 API 的路径，
+  期望值必须用 `path.join`／`path.resolve`／`path.relative` 构造；按被测语义使用
+  `path.normalize`，涉及软链、junction 或物理文件身份时使用 `realpath` 后比较。禁止在这类
+  断言中把 `/` 或 `\` 写成固定期望，也禁止只为让断言通过而把整段输出统一
+  `replace(/\\/g, '/')`——整段替换会掩盖产品代码返回了错误路径格式，并可能误改 URL、转义
+  内容或其它非路径文本。
+- **逻辑路径**：URL／URI、远程 POSIX 路径、归档条目、wire protocol，以及契约明确规定用
+  `/` 的 repo-relative 路径，不跟随宿主分隔符。这类测试可以固定写 `/`，但测试名称、类型或
+  邻近注释必须明确它是稳定协议格式，不能仅凭字符串“看起来像路径”就归入例外。
+- **模拟目标平台**：验证 Windows／POSIX 路径算法时使用 `path.win32`／`path.posix`，或把目标
+  platform／path API 注入被测函数；禁止只 mock `process.platform` 后继续调用由宿主系统决定的
+  默认 `path` 实现。Windows 大小写折叠也只在被测契约明确需要时进行，不能作为所有路径断言的
+  通用归一化。
+- **平台能力差异**：symlink、junction、文件权限等能力先做 capability probe。宿主确实不支持
+  时可以跳过真实文件系统用例，但核心语义必须在支持该能力的受控 CI 平台继续实跑，或通过
+  依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
+  失去相应回归保护。
+
+PR 门禁必须在 Windows 上运行完整 `pnpm test:unit`；`scripts/__tests__/dev-docs-contract.test.mjs`
+锁住该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分
+宿主路径与逻辑路径。
+
 ## 4. 跨平台双端兼容（macOS / Windows）
 
 任何功能都必须同时考虑 macOS / Windows，并在两端做到最优性能。

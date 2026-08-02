@@ -26,6 +26,17 @@ function readJson(relativePath) {
 	return JSON.parse(readText(relativePath));
 }
 
+function workflowJob(workflow, jobId) {
+	const lines = workflow.split(/\r?\n/);
+	const start = lines.findIndex((line) => line === `  ${jobId}:`);
+	if (start === -1) return undefined;
+	const endOffset = lines
+		.slice(start + 1)
+		.findIndex((line) => /^  [a-zA-Z0-9_-]+:$/.test(line));
+	const end = endOffset === -1 ? lines.length : start + 1 + endOffset;
+	return lines.slice(start + 1, end).join("\n");
+}
+
 function shellLines(relativePath) {
 	const markdown = readText(relativePath);
 	return [...markdown.matchAll(/```(?:bash|sh)?\r?\n([\s\S]*?)```/g)]
@@ -124,4 +135,13 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.equal(rootPackage.engines.pnpm, ">=10.7 <11");
 	assert.match(rootPackage.packageManager, /^pnpm@10\./);
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
+});
+
+test("client CI keeps the complete unit gate on Windows", () => {
+	const workflow = readText(".github/workflows/ci.yml");
+	const job = workflowJob(workflow, "windows-unit");
+	assert.ok(job, "client CI must define a windows-unit job");
+	assert.match(job, /^    runs-on: windows-latest$/m);
+	assert.match(job, /^        run: pnpm test:unit$/m);
+	assert.doesNotMatch(job, /pnpm test:unit\s+--/);
 });

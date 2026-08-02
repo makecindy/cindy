@@ -143,8 +143,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   }
 
   it('spawns with --append-system-prompt (default pi prompt preserved) and offline/no-proxy env', async () => {
-    process.env.no_proxy = 'corp.internal';
-    delete process.env.NO_PROXY;
+    if (process.platform === 'win32') {
+      // Windows 的环境变量键不区分大小写，无法同时构造“仅有小写键”的进程环境。
+      process.env.NO_PROXY = 'corp.internal';
+    } else {
+      process.env.no_proxy = 'corp.internal';
+      delete process.env.NO_PROXY;
+    }
     await start();
     expect(captured.args).not.toContain('--system-prompt');
     const idx = captured.args.indexOf('--append-system-prompt');

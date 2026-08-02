@@ -118,6 +118,66 @@ jobs:
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
 
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。Windows
+  # 单测独立并行运行，避免重复 typecheck / i18n 等平台无关检查；完整 test:unit
+  # 是工程规范中的跨平台可执行契约，不能缩成少量 smoke。
+  windows-unit:
+    name: Windows unit tests
+    runs-on: windows-latest
+    timeout-minutes: 40
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # GitHub-hosted Windows 带 Git Bash；复用 Linux job 的 fail-closed 来源校验，
+      # 同时保留 win32 Node / 文件系统语义供后续单测覆盖。
+      - name: Verify cindy-protocol submodule source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_url='https://github.com/makecindy/cindy-protocol.git'
+          expected_path='cindy-protocol'
+          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
+          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
+          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
+            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
+            exit 1
+          fi
+          echo "cindy-protocol submodule source verified: $actual_url"
+
+      - name: Fetch cindy-protocol submodule
+        shell: bash
+        run: |
+          git submodule sync -- cindy-protocol
+          git submodule update --init --force --recursive -- cindy-protocol
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Run client and package unit tests
+        run: pnpm test:unit
+
   git-integration:
     name: Desktop Git integration
     runs-on: ubuntu-latest

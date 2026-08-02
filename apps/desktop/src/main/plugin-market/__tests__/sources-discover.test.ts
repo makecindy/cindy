@@ -7,6 +7,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { discoverMarketplace } from '../sources/discover';
 
 const roots: string[] = [];
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -137,7 +152,7 @@ describe('discoverMarketplace', () => {
     const outside = makeRoot();
     writePlugin(outside, 'escaped', 'escaped');
     writePlugin(root, 'plugins/good', 'good-one');
-    fs.symlinkSync(outside, path.join(root, 'plugins', 'linked-out'), 'dir');
+    fs.symlinkSync(outside, path.join(root, 'plugins', 'linked-out'), directoryLinkType);
     writeManifest(root, {
       name: 'linked',
       plugins: [
@@ -287,7 +302,7 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.displayName).toBeNull();
   });
 
-  it('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
+  it.skipIf(!canSymlink)('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
     const root = makeRoot();
     const outside = makeRoot();
     // 市场外放一份**内容完全合法**的身份卡:只断言"被跳过"才有区分度——
@@ -351,10 +366,18 @@ describe('discoverMarketplace', () => {
     const root = makeRoot();
     const outside = makeRoot();
     // 恶意市场把清单做成指向根目录外的 symlink,借宿主之手读任意路径。
-    const secret = path.join(outside, 'secret.json');
-    fs.writeFileSync(secret, JSON.stringify({ name: 'stolen', plugins: [] }));
-    fs.mkdirSync(path.join(root, '.agents', 'plugins'), { recursive: true });
-    fs.symlinkSync(secret, path.join(root, '.agents', 'plugins', 'marketplace.json'));
+    const outsideManifestDir = path.join(outside, 'manifest');
+    fs.mkdirSync(outsideManifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideManifestDir, 'marketplace.json'),
+      JSON.stringify({ name: 'stolen', plugins: [] }),
+    );
+    fs.mkdirSync(path.join(root, '.agents'), { recursive: true });
+    fs.symlinkSync(
+      outsideManifestDir,
+      path.join(root, '.agents', 'plugins'),
+      directoryLinkType,
+    );
 
     const result = await discoverMarketplace(root);
     expect(result.ok).toBe(false);

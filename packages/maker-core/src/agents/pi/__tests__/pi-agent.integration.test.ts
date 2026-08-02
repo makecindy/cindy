@@ -42,6 +42,24 @@ const PREVIOUS_PI_BINARY = path.join(
 
 const piAvailable = existsSync(PI_BINARY);
 
+const canSymlink = (() => {
+  const probeDir = mkdtempSync(path.join(tmpdir(), 'pi-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    writeFileSync(target, 'probe');
+    symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+function jsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
 const noopLogger: Logger = {
   trace: () => {},
   debug: () => {},
@@ -576,8 +594,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         await done;
         const bodies = seenRequests.slice(before).map((request) => request.body).join('\n');
-        expect(bodies).toContain(filePath);
-        expect(bodies).toContain(referenceDir);
+        // 请求体是 JSON 文本；Windows 路径的反斜杠会按 JSON 规则转义。
+        expect(bodies).toContain(jsonStringContent(filePath));
+        expect(bodies).toContain(jsonStringContent(referenceDir));
         expect(agent.capabilities.multimodal.file.supported).toBe(true);
         expect(agent.capabilities.extraDirs.supported).toBe(true);
       } finally {
@@ -1075,7 +1094,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it(
+  it.skipIf(!canSymlink)(
     'full access blocks credential reads reached through a workspace symlink',
     { timeout: 60_000 },
     async () => {

@@ -187,3 +187,8 @@ export function __resetAccountCurrencyStoreForTesting(): void {
   writeChain = Promise.resolve();
   hydratedUserId = null;
 }
+
+/** 仅测试：等待 fire-and-forget 的串行写链完成，避免用固定延时猜测磁盘时序。 */
+export async function __flushAccountCurrencyStoreForTesting(): Promise<void> {
+  await writeChain;
+}

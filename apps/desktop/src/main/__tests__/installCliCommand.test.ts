@@ -145,7 +145,8 @@ describe('随包分发的启动器脚本 resources/cli/cindy', () => {
     fileURLToPath(import.meta.url),
     '../../../../resources/cli/cindy',
   );
-  const script = readFileSync(scriptPath, 'utf8');
+  // Git checkout 可能按平台写成 CRLF；这里验证的是 shell 内容，不是工作区换行策略。
+  const script = readFileSync(scriptPath, 'utf8').replaceAll('\r\n', '\n');
 
   it('是 sh 脚本', () => {
     expect(script.startsWith('#!/bin/sh\n')).toBe(true);

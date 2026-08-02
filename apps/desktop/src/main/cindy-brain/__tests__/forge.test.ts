@@ -22,6 +22,22 @@ import {
 } from '../forge';
 import { GhostManager } from '../GhostManager';
 
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+
 let workDir: string;
 
 beforeEach(async () => {
@@ -109,8 +125,8 @@ describe('packGhostDir', () => {
     }
   });
 
-  it('ghost.json 为符号链接或超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
-    // 符号链接:目标是合法清单也不放行——"符号链接一律不穿透"覆盖身份卡本身,
+  it.skipIf(!canSymlink)('ghost.json 为符号链接 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
+    // 符号链接:目标是合法清单也不放行——“符号链接一律不穿透”覆盖身份卡本身,
     // 否则打包输入目录里一根链接就能把目录外的文件读进打包管道。
     const outside = path.join(workDir, 'outside-ghost.json');
     await fs.promises.writeFile(outside, JSON.stringify(GOOD_MANIFEST));
@@ -122,7 +138,9 @@ describe('packGhostDir', () => {
       ok: false,
       errorCode: 'MANIFEST_INVALID',
     });
+  });
 
+  it('ghost.json 超限 → MANIFEST_INVALID(与市场发现/安装同一把闸)', async () => {
     // 超限:JSON 本身合法(合法清单 + 尾随空白撑体积),必须在读取层按大小拒,
     // 不能等到 JSON.parse/validate——那时数 GB 的文件已经进内存了。
     const big = path.join(workDir, 'src-big');
@@ -189,7 +207,11 @@ describe('packGhostDir', () => {
     const expectedRealDir = await fs.promises.realpath(pluginDir);
     // 校验之后被换成指向外部目录的链接(外部目录留着同样的 ghost.json)。
     await fs.promises.rm(pluginDir, { recursive: true, force: true });
-    await fs.promises.symlink(await fs.promises.realpath(outside), pluginDir);
+    await fs.promises.symlink(
+      await fs.promises.realpath(outside),
+      pluginDir,
+      directoryLinkType,
+    );
 
     const dest = path.join(workDir, 'out.cindy');
     const r = await packGhostDirToFile(pluginDir, dest, expectedRealDir);
