@@ -35,8 +35,16 @@ export interface QuotaHoverCardTurnUsage {
   suggestionText?: string | null;
 }
 
+export interface QuotaHoverCardSessionUsage {
+  costText: string;
+  costIsEstimate?: boolean;
+  actualCostText?: string | null;
+  estimatedValueText?: string | null;
+}
+
 export interface QuotaHoverCardProps {
   snapshot: ClaudeSubscriptionUsageSnapshot | null;
+  sessionUsage?: QuotaHoverCardSessionUsage | null;
   turnUsage?: QuotaHoverCardTurnUsage | null;
   dashboardLabel?: string | null;
   onOpenDashboard?: () => void;
@@ -312,9 +320,48 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
   );
 }
 
+/** 会话合计含真实费用与价值估算时，保留两条构成供用户核对。 */
+function SessionUsageSection({
+  sessionUsage,
+  t,
+}: {
+  sessionUsage: QuotaHoverCardSessionUsage;
+  t: TFunction;
+}) {
+  const hasMixedBreakdown = Boolean(
+    sessionUsage.actualCostText && sessionUsage.estimatedValueText,
+  );
+  const totalKey = hasMixedBreakdown
+    ? 'todaySpend.sessionCostLabel'
+    : sessionUsage.costIsEstimate
+      ? 'todaySpend.codex.sessionValueLabel'
+      : 'todaySpend.tooltip.sessionUsed';
+
+  return (
+    <section data-testid="quota-session-usage" className="px-4 pb-1 pt-2 tabular-nums">
+      <div className="text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+        {t(totalKey, { cost: sessionUsage.costText })}
+      </div>
+      {hasMixedBreakdown ? (
+        <div className="mt-1 space-y-0.5 text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <div>
+            {t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}
+          </div>
+          <div>
+            {t('todaySpend.codex.sessionValueLabel', {
+              cost: sessionUsage.estimatedValueText,
+            })}
+          </div>
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
 /** 按冻结的 v6 信息层级渲染 Claude 额度卡片。 */
 export function QuotaHoverCard({
   snapshot,
+  sessionUsage = null,
   turnUsage = null,
   dashboardLabel = null,
   onOpenDashboard,
@@ -369,85 +416,97 @@ export function QuotaHoverCard({
   return (
     <div
       data-testid="quota-hover-card"
-      className="w-[340px] select-none overflow-hidden rounded-xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 pt-[6px] text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
+      className="flex max-h-[calc(100vh-16px)] w-[340px] select-none flex-col overflow-hidden rounded-xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
       style={{
         boxShadow:
           'var(--quota-card-shadow, var(--shadow-menu, 0 18px 40px rgba(30, 20, 12, 0.14), 0 2px 8px rgba(30, 20, 12, 0.08)))',
       }}
     >
-      {snapshot ? (
-        <>
-          <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
-            <span className="font-medium">Claude</span>
-            {planLabel ? (
-              <span
-                data-testid="quota-plan-badge"
-                className="ml-auto rounded-full border border-[var(--quota-card-hairline,var(--border-default,rgba(0,0,0,0.08)))] px-[7px] py-px text-[11px] font-medium"
-              >
-                {planLabel}
-              </span>
-            ) : null}
-          </div>
-
-          <CardDivider />
-
-          {windows.length > 0 ? (
-            <div>
-              {windows.map((displayWindow) => (
-                <WindowBlock
-                  key={displayWindow.key}
-                  title={displayWindow.title}
-                  window={displayWindow.window}
-                  nowMs={nowMs}
-                  locale={locale}
-                  t={t}
-                />
-              ))}
+      <div
+        data-testid="quota-hover-card-scroll-content"
+        className="min-h-0 overflow-y-auto pt-[6px]"
+      >
+        {snapshot ? (
+          <>
+            <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+              <span className="font-medium">Claude</span>
+              {planLabel ? (
+                <span
+                  data-testid="quota-plan-badge"
+                  className="ml-auto rounded-full border border-[var(--quota-card-hairline,var(--border-default,rgba(0,0,0,0.08)))] px-[7px] py-px text-[11px] font-medium"
+                >
+                  {planLabel}
+                </span>
+              ) : null}
             </div>
-          ) : (
-            <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
-              {t('quotaCard.noWindows')}
-            </div>
-          )}
 
-          {status ? (
-            <>
-              <CardDivider />
-              <div
-                data-testid="quota-status"
-                className={cn(
-                  'px-4 py-2 font-medium',
-                  status.tone === 'crit'
-                    ? 'text-[var(--quota-bar-crit)]'
-                    : 'text-[var(--quota-bar-warn)]',
-                )}
-              >
-                {t(status.key)}
+            <CardDivider />
+
+            {windows.length > 0 ? (
+              <div>
+                {windows.map((displayWindow) => (
+                  <WindowBlock
+                    key={displayWindow.key}
+                    title={displayWindow.title}
+                    window={displayWindow.window}
+                    nowMs={nowMs}
+                    locale={locale}
+                    t={t}
+                  />
+                ))}
               </div>
-            </>
-          ) : null}
-
-          {showExtraUsage ? (
-            <>
-              <CardDivider />
+            ) : (
               <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
-                {t('quotaCard.extraUsageEnabled')}
+                {t('quotaCard.noWindows')}
               </div>
-            </>
-          ) : null}
-        </>
-      ) : (
-        <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
-          {t('quotaCard.waiting')}
-        </div>
-      )}
+            )}
 
-      {turnUsage ? (
-        <>
-          <CardDivider />
-          <TurnUsageSection turnUsage={turnUsage} t={t} />
-        </>
-      ) : null}
+            {status ? (
+              <>
+                <CardDivider />
+                <div
+                  data-testid="quota-status"
+                  className={cn(
+                    'px-4 py-2 font-medium',
+                    status.tone === 'crit'
+                      ? 'text-[var(--quota-bar-crit)]'
+                      : 'text-[var(--quota-bar-warn)]',
+                  )}
+                >
+                  {t(status.key)}
+                </div>
+              </>
+            ) : null}
+
+            {showExtraUsage ? (
+              <>
+                <CardDivider />
+                <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+                  {t('quotaCard.extraUsageEnabled')}
+                </div>
+              </>
+            ) : null}
+          </>
+        ) : (
+          <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+            {t('quotaCard.waiting')}
+          </div>
+        )}
+
+        {sessionUsage ? (
+          <>
+            <CardDivider />
+            <SessionUsageSection sessionUsage={sessionUsage} t={t} />
+          </>
+        ) : null}
+
+        {turnUsage ? (
+          <>
+            <CardDivider />
+            <TurnUsageSection turnUsage={turnUsage} t={t} />
+          </>
+        ) : null}
+      </div>
 
       {dashboardLabel ? (
         <>

@@ -231,6 +231,7 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('onMouseLeave={scheduleQuotaPopoverClose}');
     expect(source).toContain('<QuotaHoverCard');
     expect(source).toContain('snapshot={claudeSubscriptionUsage}');
+    expect(source).toContain('sessionUsage={quotaCardSessionUsage}');
     expect(source).toContain('turnUsage={quotaCardTurnUsage}');
     expect(source).toContain("'todaySpend.claude.windowSegment'");
     expect(source).toContain("t('todaySpend.claude.modelWeeklyLabel'");

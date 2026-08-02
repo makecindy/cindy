@@ -4,12 +4,19 @@ import { act, cleanup, fireEvent, render, screen, within } from '@testing-librar
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ClaudeSubscriptionUsageSnapshot } from '../../../../shared/claudeSubscriptionUsage';
+import type { RegionalMoney } from '../../../../shared/regionalMoney';
+import type { SessionUsageMoney } from '@/hooks/useSessionUsageMoney';
 
 const mocks = vi.hoisted(() => ({
   claudeSnapshot: null as ClaudeSubscriptionUsageSnapshot | null,
   displaySnapshot: {
     messages: [] as Array<Record<string, unknown>>,
   },
+  sessionUsage: {
+    actualMoney: null,
+    estimatedValueMoney: null,
+    totalMoney: null,
+  } as SessionUsageMoney,
   openExternal: vi.fn(() => Promise.resolve()),
   refreshCodexRateLimits: vi.fn(),
 }));
@@ -23,6 +30,8 @@ vi.mock('react-i18next', () => ({
         'todaySpend.claude.weeklyLabel': '周限',
         'todaySpend.claude.windowSegment': '{{label}} 剩余 {{remaining}}',
         'todaySpend.sessionCostLabel': '本任务 {{cost}}',
+        'todaySpend.tooltip.sessionUsed': '本任务已用 {{cost}}',
+        'todaySpend.codex.sessionValueLabel': '本任务价值 {{cost}}',
         'todaySpend.unit.day': '天',
         'todaySpend.unit.hour': '小时',
         'todaySpend.unit.minute': '分钟',
@@ -68,11 +77,7 @@ vi.mock('@/hooks/useClaudeSessionRoute', () => ({
   useClaudeSessionRoute: () => null,
 }));
 vi.mock('@/hooks/useSessionUsageMoney', () => ({
-  useSessionUsageMoney: () => ({
-    actualMoney: null,
-    estimatedValueMoney: null,
-    totalMoney: null,
-  }),
+  useSessionUsageMoney: () => mocks.sessionUsage,
 }));
 vi.mock('@/hooks/useSessionTokens', () => ({ useSessionTokens: () => null }));
 vi.mock('@/hooks/useAccountUsage', () => ({
@@ -118,7 +123,10 @@ const TURN_USAGE_DETAILS = {
   model: 'claude-opus-5[1m]',
 };
 
-function usdMoney(amount: number, kind: 'actual-cost' | 'value-estimate' = 'actual-cost') {
+function usdMoney(
+  amount: number,
+  kind: 'actual-cost' | 'value-estimate' = 'actual-cost',
+): RegionalMoney {
   return {
     amount,
     currency: 'USD',
@@ -159,6 +167,11 @@ function openCardFromHover() {
 beforeEach(() => {
   vi.useFakeTimers();
   setLatestUsageMessage();
+  mocks.sessionUsage = {
+    actualMoney: null,
+    estimatedValueMoney: null,
+    totalMoney: null,
+  };
   mocks.claudeSnapshot = {
     source: 'oauth-endpoint',
     subscriptionType: 'max',
@@ -315,6 +328,27 @@ describe('TodaySpendChip Claude subscription popover', () => {
     openCardFromHover();
     expect(screen.getByText('本轮 token 价值：$0.46')).toBeTruthy();
     expect(screen.queryByText('本轮消耗：$0.46')).toBeNull();
+  });
+
+  it('把混合会话合计及实际费用和价值估算拆分传入卡片', () => {
+    mocks.sessionUsage = {
+      actualMoney: usdMoney(0.25),
+      estimatedValueMoney: usdMoney(0.50, 'value-estimate'),
+      totalMoney: {
+        ...usdMoney(0.75),
+        approximate: true,
+        estimateReasons: ['subscription-value'],
+      },
+    };
+
+    renderClaudeSubscriptionChip();
+    const { card } = openCardFromHover();
+    const sessionSection = within(card).getByTestId('quota-session-usage');
+
+    expect(within(sessionSection).getByText('本任务 $0.75')).toBeTruthy();
+    expect(within(sessionSection).getByText('本任务已用 $0.25')).toBeTruthy();
+    expect(within(sessionSection).getByText('本任务价值 $0.50')).toBeTruthy();
+    expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
   });
 
   it('单分段不加冗余标题，多分段则分开累计金额与最后分段明细', () => {

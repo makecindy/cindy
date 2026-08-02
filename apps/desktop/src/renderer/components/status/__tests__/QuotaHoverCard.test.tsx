@@ -17,6 +17,9 @@ vi.mock('react-i18next', () => ({
       if (key === 'quotaCard.tokenBreakdown') {
         return `（输入 ${options.input} · 输出 ${options.output}）`;
       }
+      if (key === 'todaySpend.sessionCostLabel') return `本任务 ${options.cost}`;
+      if (key === 'todaySpend.tooltip.sessionUsed') return `本任务已用 ${options.cost}`;
+      if (key === 'todaySpend.codex.sessionValueLabel') return `本任务价值 ${options.cost}`;
       if (key === 'usageDetails.costLine') return `本轮消耗：${options.cost}`;
       if (key === 'usageDetails.valueLine') return `本轮 token 价值：${options.cost}`;
       if (key === 'usageDetails.noBilledCost') return '本轮费用暂不可用，仅显示用量';
@@ -327,6 +330,25 @@ describe('QuotaHoverCard', () => {
     expect(screen.queryByTestId('quota-suggestion')).toBeNull();
   });
 
+  it('保留混合会话金额的合计、实际费用与价值估算拆分', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={null}
+        nowMs={NOW_MS}
+        sessionUsage={{
+          costText: '$0.75',
+          costIsEstimate: true,
+          actualCostText: '$0.25',
+          estimatedValueText: '$0.50',
+        }}
+      />,
+    );
+
+    expect(screen.getByText('本任务 $0.75')).toBeTruthy();
+    expect(screen.getByText('本任务已用 $0.25')).toBeTruthy();
+    expect(screen.getByText('本任务价值 $0.50')).toBeTruthy();
+  });
+
   it('marks estimated value and separates cumulative totals from final-segment details', () => {
     const { rerender } = render(
       <QuotaHoverCard
@@ -431,6 +453,31 @@ describe('QuotaHoverCard', () => {
       />,
     );
     expect(screen.queryByRole('button')).toBeNull();
+  });
+
+  it('多窗口时限制卡片高度并只滚动内容区，动作行保持在滚动区外', () => {
+    render(
+      <QuotaHoverCard
+        snapshot={makeSnapshot({
+          fiveHour: { utilization: 10 },
+          sevenDay: { utilization: 20 },
+          scoped: Array.from({ length: 6 }, (_, index) => ({
+            modelDisplayName: `模型 ${index + 1}`,
+            utilization: 30 + index,
+          })),
+        })}
+        nowMs={NOW_MS}
+        dashboardLabel="打开 Claude 用量页面"
+      />,
+    );
+
+    const card = screen.getByTestId('quota-hover-card');
+    const scrollContent = screen.getByTestId('quota-hover-card-scroll-content');
+    const dashboardButton = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+    expect(card.classList.contains('max-h-[calc(100vh-16px)]')).toBe(true);
+    expect(scrollContent.classList.contains('min-h-0')).toBe(true);
+    expect(scrollContent.classList.contains('overflow-y-auto')).toBe(true);
+    expect(scrollContent.contains(dashboardButton)).toBe(false);
   });
 
   it('shows a ten-minute stale footnote but omits a one-minute age', () => {

@@ -107,6 +107,7 @@ import {
 } from './quotaResetRollup';
 import {
   QuotaHoverCard,
+  type QuotaHoverCardSessionUsage,
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
@@ -787,6 +788,26 @@ function toQuotaHoverCardTurnUsage(
   };
 }
 
+/** 把会话金额投影成卡片数据；混合合计保留实际费用与价值估算两条构成。 */
+function toQuotaHoverCardSessionUsage(
+  sessionUsage: SessionUsageMoney,
+): QuotaHoverCardSessionUsage | null {
+  const { actualMoney, estimatedValueMoney, totalMoney } = sessionUsage;
+  if (!totalMoney?.amount) return null;
+
+  return {
+    costText: formatTurnCostMoney(totalMoney),
+    costIsEstimate:
+      totalMoney.approximate || totalMoney.kind === 'value-estimate',
+    ...(actualMoney?.amount
+      ? { actualCostText: formatTurnCostMoney(actualMoney) }
+      : {}),
+    ...(estimatedValueMoney?.amount
+      ? { estimatedValueText: formatTurnCostMoney(estimatedValueMoney) }
+      : {}),
+  };
+}
+
 function findLatestTurnUsageSummary(messages: ChatMessage[]): LatestTurnUsageSummary | null {
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
@@ -1217,6 +1238,7 @@ export function TodaySpendChip({
     isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote,
   );
   const latestTurnUsage = useLatestTurnUsageSummary(sessionId);
+  const quotaCardSessionUsage = toQuotaHoverCardSessionUsage(sessionUsage);
   const quotaCardTurnUsage = toQuotaHoverCardTurnUsage(latestTurnUsage, t);
   const [quotaPopoverOpen, setQuotaPopoverOpen] = React.useState(false);
   const quotaPopoverOpenTimerRef = React.useRef<number | null>(null);
@@ -1674,6 +1696,7 @@ export function TodaySpendChip({
           >
             <QuotaHoverCard
               snapshot={claudeSubscriptionUsage}
+              sessionUsage={quotaCardSessionUsage}
               turnUsage={quotaCardTurnUsage}
               dashboardLabel={usageDashboardLabel}
               onOpenDashboard={handleClick}
