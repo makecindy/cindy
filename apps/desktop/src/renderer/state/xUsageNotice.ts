@@ -45,12 +45,19 @@ export function isXUsageAcknowledged(principalId: string): boolean {
 /** 标记这个 X 账号的告知为已确认(一次性,不再出现)。 */
 export function acknowledgeXUsage(principalId: string): void {
   if (principalId.length === 0) return;
-  const next = new Set([...readStored(), principalId]);
+  // **必须把 memoryAcknowledged 一起并进来**: localStorage 持续不可写时(隐私模式 /
+  // 配额, 本模块明确支持的场景)readStored() 恒为空, 只并 readStored 的话第二个账号
+  // 会把第一个从内存兜底里覆盖掉 —— 用户切回第一个账号时又被拦一次, 而那次确认本该
+  // 在本会话内一直有效(#1347 review 由 codex 指出)。读侧本来就是两者取并集
+  // (isXUsageAcknowledged), 写侧漏了同一个并集才出的错。
+  //
+  // 顺带一层收益: storage 从坏转好时, 第一次写成功会把内存里攒下的账号一并落盘。
+  const next = new Set([...readStored(), ...memoryAcknowledged, principalId]);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...next]));
     // 写成功则 storage 是唯一真值源,不置内存态 —— 否则跨窗口清 key 后本窗口会
     // 因内存态永远判定已确认(inheritedSubscriptionNotice / providerOnboardingDismissal
-    // 的既有教训)。
+    // 的既有教训)。此时 storage 已含内存那批, 清空不丢东西。
     memoryAcknowledged = new Set();
   } catch {
     memoryAcknowledged = next;
