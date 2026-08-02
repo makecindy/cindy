@@ -81,17 +81,26 @@ describe('pinned project sidebar integration', () => {
     expect(removeBlock.indexOf('if (!confirmed) return;')).toBeLessThan(
       removeBlock.indexOf('await setProjectHidden(project.projectKey, true);'),
     );
-    expect(removeBlock).toContain('filter.toggleProject(project.projectKey);');
+    expect(removeBlock).not.toContain('filter.toggleProject(project.projectKey);');
     expect(removeBlock.indexOf('await setProjectHidden(project.projectKey, true);')).toBeLessThan(
       removeBlock.indexOf('railPanelStore.closeAll();'),
     );
     expect(railRemoveBlock).not.toContain('railPanelStore.closeAll();');
   });
 
-  it('uses the main-process intent result to restore without creating a draft', () => {
+  it('restores against the latest project catalogue and re-admits the active filter', () => {
+    expect(sidebarSource).toContain('const filter = useSidebarFilter(hiddenProjectKeys);');
+    expect(sidebarSource).toContain('collectRestorableProjectKeys({');
+    expect(sidebarSource).toContain('sessions: scopedSidebarSessions,');
+    expect(sidebarSource).toContain('const restored = await restoreHiddenProjectIfPresent({');
     expect(sidebarSource).toContain(
-      'const restored = await setProjectHidden(localProjectKey, false);',
+      'getCurrentProjectKeys: () => restorableProjectKeysRef.current,',
     );
+    expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
     expect(sidebarSource).toContain('if (restored) return;');
+  });
+
+  it('prunes hidden projects from filters in every renderer hook', () => {
+    expect(filterHookSource).toContain('removeProjectsFromFilter(prev, hiddenProjectKeys)');
   });
 });

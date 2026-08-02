@@ -131,6 +131,10 @@ import {
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
 } from './lib/sidebarProjectVisibility';
+import {
+  collectRestorableProjectKeys,
+  restoreHiddenProjectIfPresent,
+} from './lib/sidebarProjectRestore';
 import { PinnedSection, type PinnedSidebarEntry } from './sidebar/sections/PinnedSection';
 import { ProjectNode as ProjectNodeView } from './sidebar/sections/ProjectNode';
 import {
@@ -274,9 +278,9 @@ export function CCAgentSidebarUpper() {
   // 并在收敛触发点重算 —— 横幅不被处置,红点就不消失。
   usePendingAlertAttention();
   // F-PJ-10：filter.status 决定后端 fetch 时是否带 ?status=archived|all
-  const filter = useSidebarFilter();
   const hiddenProjects = useHiddenProjects();
   const { hiddenProjectKeys } = hiddenProjects;
+  const filter = useSidebarFilter(hiddenProjectKeys);
   const includeArchived = filter.status;
   const sessionsHook = useCCSessions({ includeArchived });
   const { sessions: allSessionsForAttention } = useCCSessions({ includeArchived: 'all' });
@@ -995,14 +999,17 @@ function ExpandedView({
     },
     [filter.status, effectiveIncludeArchived],
   );
-  const sidebarSessions = useMemo(() => {
-    const scopedSessions = selectVisibleSessions(
-      sessions,
-      remoteProjectSessions,
-      selectedMachineId,
-    ).filter(passesOrcaAndStatus);
-    return sidebarSessionsWithHiddenProjectsAsDialogues(scopedSessions, hiddenProjectKeys);
-  }, [sessions, remoteProjectSessions, selectedMachineId, passesOrcaAndStatus, hiddenProjectKeys]);
+  const scopedSidebarSessions = useMemo(
+    () =>
+      selectVisibleSessions(sessions, remoteProjectSessions, selectedMachineId).filter(
+        passesOrcaAndStatus,
+      ),
+    [sessions, remoteProjectSessions, selectedMachineId, passesOrcaAndStatus],
+  );
+  const sidebarSessions = useMemo(
+    () => sidebarSessionsWithHiddenProjectsAsDialogues(scopedSidebarSessions, hiddenProjectKeys),
+    [scopedSidebarSessions, hiddenProjectKeys],
+  );
 
   const activityFilteredSessions = useMemo(() => {
     const cutoff = cutoffForLastActivity(filter.lastActivity);
@@ -1163,6 +1170,19 @@ function ExpandedView({
     }
     return keys;
   }, [filter.manualPinnedOrder]);
+
+  const restorableProjectKeys = useMemo(
+    () =>
+      collectRestorableProjectKeys({
+        sessions: scopedSidebarSessions,
+        lastActivityCutoff: cutoffForLastActivity(filter.lastActivity),
+        pinnedProjectKeys,
+        vendorPredicate,
+      }),
+    [filter.lastActivity, pinnedProjectKeys, scopedSidebarSessions, vendorPredicate],
+  );
+  const restorableProjectKeysRef = useRef(restorableProjectKeys);
+  restorableProjectKeysRef.current = restorableProjectKeys;
 
   const visiblePinnedSessions = useMemo(() => {
     // 置顶段用 allGroups.pinned(未经"最近活跃 N 天"筛选)——置顶内容不受活跃时间过滤影响,
@@ -1719,9 +1739,12 @@ function ExpandedView({
       if (result.canceled || !result.path) return;
       const localProjectKey = normalizeProjectKey(result.path);
       if (localProjectKey?.startsWith('local:')) {
-        const restored = await setProjectHidden(localProjectKey, false);
-        // Re-adding a hidden directory restores its existing project grouping.
-        // It must not create or navigate to an empty draft task.
+        const restored = await restoreHiddenProjectIfPresent({
+          projectKey: localProjectKey,
+          setProjectHidden,
+          getCurrentProjectKeys: () => restorableProjectKeysRef.current,
+          ensureProjectIncluded: filter.ensureProjectIncluded,
+        });
         if (restored) return;
       }
       handleClearSelection();
@@ -1731,7 +1754,7 @@ function ExpandedView({
       log.warn('create project directory picker failed', err);
       toast.error(t('ccAgent.sidebar.createProjectFailed'));
     }
-  }, [handleClearSelection, navigate, setProjectHidden, t]);
+  }, [filter.ensureProjectIncluded, handleClearSelection, navigate, setProjectHidden, t]);
 
   const handleCreateDialogue = useCallback(() => {
     handleClearSelection();
@@ -1893,9 +1916,6 @@ function ExpandedView({
       if (!confirmed) return;
       try {
         await setProjectHidden(project.projectKey, true);
-        if (filter.projectsAsSet?.has(project.projectKey)) {
-          filter.toggleProject(project.projectKey);
-        }
         handleClearSelection();
         railPanelStore.closeAll();
       } catch (err) {
@@ -1903,7 +1923,7 @@ function ExpandedView({
         toast.error(t('ccAgent.sidebar.projectAction.removeFromSidebarFailed'));
       }
     },
-    [confirmDialog, filter, handleClearSelection, setProjectHidden, t],
+    [confirmDialog, handleClearSelection, setProjectHidden, t],
   );
 
   /* ---- Pin / Unpin handler ---- */

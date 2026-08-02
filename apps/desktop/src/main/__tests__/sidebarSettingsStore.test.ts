@@ -10,6 +10,7 @@ const harness = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
   send: vi.fn(),
+  sendSecond: vi.fn(),
   untrustedSend: vi.fn(),
   destroyedSend: vi.fn(),
   assertTrusted: vi.fn(),
@@ -19,6 +20,7 @@ vi.mock('electron', () => ({
   BrowserWindow: {
     getAllWindows: () => [
       { appContent: true, isDestroyed: () => false, webContents: { send: harness.send } },
+      { appContent: true, isDestroyed: () => false, webContents: { send: harness.sendSecond } },
       {
         appContent: false,
         isDestroyed: () => false,
@@ -77,6 +79,7 @@ describe('sidebarSettingsStore', () => {
     harness.handlers.clear();
     harness.listeners.clear();
     harness.send.mockReset();
+    harness.sendSecond.mockReset();
     harness.untrustedSend.mockReset();
     harness.destroyedSend.mockReset();
     harness.assertTrusted.mockReset();
@@ -97,6 +100,7 @@ describe('sidebarSettingsStore', () => {
     expect(harness.assertTrusted).toHaveBeenCalledWith(event);
     expect(harness.settings.pinnedOrder).toEqual(order);
     expect(harness.send).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
+    expect(harness.sendSecond).toHaveBeenCalledWith('sidebar-settings:pinned-order-changed', order);
     expect(harness.untrustedSend).not.toHaveBeenCalled();
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });
@@ -136,6 +140,10 @@ describe('sidebarSettingsStore', () => {
     expect(harness.send).toHaveBeenCalledWith('sidebar-settings:hidden-project-keys-changed', [
       'local:C:/workspace/alpha',
     ]);
+    expect(harness.sendSecond).toHaveBeenCalledWith(
+      'sidebar-settings:hidden-project-keys-changed',
+      ['local:C:/workspace/alpha'],
+    );
     expect(harness.untrustedSend).not.toHaveBeenCalled();
     expect(harness.destroyedSend).not.toHaveBeenCalled();
   });

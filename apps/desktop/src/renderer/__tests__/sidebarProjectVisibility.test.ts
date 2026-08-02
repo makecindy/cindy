@@ -5,7 +5,7 @@ import {
   sidebarSessionsWithHiddenProjectsAsDialogues,
   visibleSidebarProjects,
 } from '@/features/cc-agent/lib/sidebarProjectVisibility';
-import type { ProjectNode } from '@/features/cc-agent/lib/projectGrouping';
+import { groupSessions, type ProjectNode } from '@/features/cc-agent/lib/projectGrouping';
 import type { Session } from '@/lib/ccAgent.types';
 
 type VisibilitySession = Pick<
@@ -70,6 +70,27 @@ describe('sidebar project visibility', () => {
     expect(presented[0]).not.toBe(projectTask);
     expect(presented[1]).toBe(dialogueTask);
     expect(projectTask.workspaceKind).toBe('project');
+  });
+
+  it('keeps a projected hidden-project task in the Pinned section', () => {
+    const pinnedTask = {
+      ...session({ workingDir: '/repo' }),
+      id: 'pinned-task',
+      status: 'active',
+      pinnedAt: '2026-08-02T08:00:00.000Z',
+      userSendAt: '2026-08-02T07:00:00.000Z',
+      updatedAt: '2026-08-02T07:00:00.000Z',
+    } as Session;
+
+    const [presented] = sidebarSessionsWithHiddenProjectsAsDialogues(
+      [pinnedTask],
+      new Set(['local:/repo']),
+    );
+
+    expect(presented).toEqual(
+      expect.objectContaining({ workspaceKind: 'dialogue', pinnedAt: pinnedTask.pinnedAt }),
+    );
+    expect(groupSessions([presented]).pinned).toEqual([presented]);
   });
 
   it('collapses managed worktrees to the hidden base project key', () => {
