@@ -19,12 +19,17 @@ const {
   requestAutoRefreshSpy,
   setProviderOrderSpy,
   authState,
+  providerSnapshotState,
   wizardSpy,
 } = vi.hoisted(() => ({
   refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
   setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
   authState: { dataOwnerId: 'owner-1' as string | null },
+  providerSnapshotState: {
+    dataOwnerId: 'owner-1' as string | null,
+    order: ['anthropic', 'xd', 'custom'],
+  },
   wizardSpy: vi.fn(),
 }));
 
@@ -33,8 +38,8 @@ vi.mock('react-i18next', () => ({
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({
-    providers: [
+  useProviders: () => {
+    const providers = [
       {
         id: 'anthropic',
         name: 'Anthropic',
@@ -85,10 +90,20 @@ vi.mock('@/hooks/useProviders', () => ({
         },
         connected: true,
       } satisfies ProviderView,
-    ],
-    loading: false,
-    refetch: vi.fn(),
-  }),
+    ];
+    const byId = new Map(providers.map((provider) => [provider.id, provider]));
+    return {
+      providers:
+        providerSnapshotState.dataOwnerId === authState.dataOwnerId
+          ? providerSnapshotState.order.flatMap((id) => {
+              const provider = byId.get(id);
+              return provider ? [provider] : [];
+            })
+          : [],
+      loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
+      refetch: vi.fn(),
+    };
+  },
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -165,6 +180,8 @@ let scanResult: ScanResult;
 
 beforeEach(() => {
   authState.dataOwnerId = 'owner-1';
+  providerSnapshotState.dataOwnerId = 'owner-1';
+  providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
   scanResult = { detections: [] };
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: {
@@ -253,7 +270,9 @@ describe('ProvidersSection — 双栏管理', () => {
   });
 
   it('首次记录可见项，并用方向键提交新的可见顺序', async () => {
-    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+    const view = render(
+      React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
+    );
 
     const handles = await screen.findAllByRole('button', {
       name: 'settings.providers.order.handle',
@@ -271,6 +290,24 @@ describe('ProvidersSection — 双栏管理', () => {
     expect(selectedRows).toHaveLength(1);
     expect(selectedRows[0]?.textContent).toContain('settings.providers.xd.title');
     expect(screen.queryByRole('button', { name: 'settings.providers.order.reset' })).toBeNull();
+
+    // Main 对未观察隐藏项的权威结果会把它放到末尾。pending 只比较左栏可见顺序，
+    // 收到该快照后应清除；后续 Main 顺序变化不得再被旧乐观状态覆盖。
+    await act(async () => {
+      providerSnapshotState.order = ['custom', 'xd', 'anthropic'];
+      view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+      await Promise.resolve();
+    });
+    await act(async () => {
+      providerSnapshotState.order = ['xd', 'custom', 'anthropic'];
+      view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+      await Promise.resolve();
+    });
+    const providerRows = screen
+      .getAllByRole('button')
+      .filter((button) => button.hasAttribute('aria-current'));
+    expect(providerRows[0]?.textContent).toContain('settings.providers.xd.title');
+    expect(providerRows[1]?.textContent).toContain('Custom');
   });
 
   it('切换数据 owner 后会按新 owner 重新记录可见项', async () => {
@@ -285,8 +322,15 @@ describe('ProvidersSection — 双栏管理', () => {
     await act(async () => {
       authState.dataOwnerId = 'owner-2';
       view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+      await Promise.resolve();
     });
+    expect(setProviderOrderSpy).not.toHaveBeenCalled();
 
+    await act(async () => {
+      providerSnapshotState.dataOwnerId = 'owner-2';
+      view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+      await Promise.resolve();
+    });
     await waitFor(() => {
       expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
     });

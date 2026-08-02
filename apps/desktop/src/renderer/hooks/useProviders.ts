@@ -14,6 +14,7 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
   getCachedProvidersSnapshot,
@@ -39,23 +40,34 @@ export interface UseProvidersReturn {
  * 只缓存"快照"不缓存"是否在拉取中",故不破坏 refetch 的现有刷新语义。
  */
 export function useProviders(): UseProvidersReturn {
-  const [providers, setProviders] = useState<ProviderView[]>(
-    () => getCachedProvidersSnapshot() ?? [],
-  );
-  // 有缓存即视为已就绪:重开时第一帧就有可用数据,不再走 loading 态。
-  const [loading, setLoading] = useState(getCachedProvidersSnapshot() == null);
+  const { dataOwnerId } = getDataOwnerGeneration();
+  const [snapshot, setSnapshot] = useState<{
+    dataOwnerId: string | null;
+    providers: ProviderView[] | null;
+  }>(() => ({ dataOwnerId, providers: getCachedProvidersSnapshot() }));
+
+  // AuthContext 会先同步切换全局 data owner 代际、再提交 React state。owner 改变后的
+  // 首次 render 不能继续暴露旧 state；只接受同 owner state 或 owner-scoped 模块缓存。
+  const currentProviders =
+    snapshot.dataOwnerId === dataOwnerId
+      ? snapshot.providers
+      : getCachedProvidersSnapshot();
 
   const refetch = useCallback(() => {
     void refreshLocalCatalogSnapshot();
   }, []);
 
   useEffect(() => {
+    setSnapshot({ dataOwnerId, providers: getCachedProvidersSnapshot() });
     const onRefresh = (next: ProviderView[]): void => {
-      setProviders(next);
-      setLoading(false);
+      setSnapshot({ dataOwnerId, providers: next });
     };
     return subscribeProvidersSnapshot(onRefresh);
-  }, []);
+  }, [dataOwnerId]);
 
-  return { providers, loading, refetch };
+  return {
+    providers: currentProviders ?? [],
+    loading: currentProviders == null,
+    refetch,
+  };
 }

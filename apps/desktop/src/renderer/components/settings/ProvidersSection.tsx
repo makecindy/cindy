@@ -74,10 +74,7 @@ import { SortableList } from '@/components/sidebar/SortableList';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
-import {
-  applyProviderOrder,
-  mergeVisibleProviderOrder,
-} from '../../../shared/providerOrder';
+import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -1541,46 +1538,24 @@ export function ProvidersSection() {
     };
   }, []);
 
-  // SortableJS drop 后先由 React 乐观铺新顺序，等 PROVIDER_CHANGED 回来的 main 快照
-  // 与目标一致再清掉覆盖；这样 DOM 回滚与 IPC 往返之间不会闪回旧顺序。
+  // SortableJS drop 后先由 React 乐观铺左栏可见顺序，等 PROVIDER_CHANGED 回来的 main
+  // 快照与目标一致再清掉覆盖；隐藏项是否有持久化槽位只由 Main 判定，Renderer 不猜。
   const pendingProviderOrderIds =
     pendingProviderOrder && pendingProviderOrder.dataOwnerId === dataOwnerId
       ? pendingProviderOrder.ids
       : null;
-  const orderedProviders = useMemo(
-    () =>
-      pendingProviderOrderIds
-        ? applyProviderOrder(providers, pendingProviderOrderIds)
-        : providers,
-    [pendingProviderOrderIds, providers],
-  );
-  useEffect(() => {
-    if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
-      providerOrderMutationRef.current += 1;
-      setPendingProviderOrder(null);
-      return;
-    }
-    if (!pendingProviderOrderIds) return;
-    const incomingIds = providers.map((provider) => provider.id);
-    const sameCatalog =
-      incomingIds.length === pendingProviderOrderIds.length &&
-      incomingIds.every((id) => pendingProviderOrderIds.includes(id));
-    if (!sameCatalog || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])) {
-      setPendingProviderOrder(null);
-    }
-  }, [dataOwnerId, pendingProviderOrder, pendingProviderOrderIds, providers]);
 
   const byId = useMemo(() => {
     const map = new Map<string, ProviderView>();
-    orderedProviders.forEach((p) => map.set(p.id, p));
+    providers.forEach((p) => map.set(p.id, p));
     return map;
-  }, [orderedProviders]);
+  }, [providers]);
 
   // 左栏实际供应商严格沿用 main 的显示顺序;未连接的内置渠道仍只在向导 / 检测建议
   // 出现。Cindy 登录引导与检测建议是伪行,不进入持久化顺序。
-  const listProviders = useMemo(() => {
+  const visibleProviders = useMemo(() => {
     const rows: ProviderView[] = [];
-    for (const p of orderedProviders) {
+    for (const p of providers) {
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
@@ -1604,7 +1579,31 @@ export function ProvidersSection() {
       }
     }
     return rows;
-  }, [orderedProviders, openaiReconnectRequired]);
+  }, [providers, openaiReconnectRequired]);
+
+  const listProviders = useMemo(
+    () =>
+      pendingProviderOrderIds
+        ? applyProviderOrder(visibleProviders, pendingProviderOrderIds)
+        : visibleProviders,
+    [pendingProviderOrderIds, visibleProviders],
+  );
+
+  useEffect(() => {
+    if (pendingProviderOrder && pendingProviderOrder.dataOwnerId !== dataOwnerId) {
+      providerOrderMutationRef.current += 1;
+      setPendingProviderOrder(null);
+      return;
+    }
+    if (!pendingProviderOrderIds) return;
+    const incomingIds = visibleProviders.map((provider) => provider.id);
+    const sameCatalog =
+      incomingIds.length === pendingProviderOrderIds.length &&
+      incomingIds.every((id) => pendingProviderOrderIds.includes(id));
+    if (!sameCatalog || incomingIds.every((id, index) => id === pendingProviderOrderIds[index])) {
+      setPendingProviderOrder(null);
+    }
+  }, [dataOwnerId, pendingProviderOrder, pendingProviderOrderIds, visibleProviders]);
 
   // Main 只持久化曾经真正进入过左栏的供应商。首次出现的新项按当前可见顺序追加；
   // 已记录但暂时隐藏的项由 store 保留，因此断开重连不会丢失用户排位。
@@ -1624,9 +1623,8 @@ export function ProvidersSection() {
 
   const persistVisibleProviderOrder = useCallback(
     (reorderedVisibleIds: string[]): void => {
-      const currentIds = orderedProviders.map((provider) => provider.id);
-      const nextIds = mergeVisibleProviderOrder(currentIds, reorderedVisibleIds);
-      if (nextIds.every((id, index) => id === currentIds[index])) return;
+      const currentIds = listProviders.map((provider) => provider.id);
+      if (reorderedVisibleIds.every((id, index) => id === currentIds[index])) return;
       if (
         selectedId !== CINDY_SIGNIN_ID &&
         !listProviders.some((provider) => provider.id === selectedId) &&
@@ -1635,7 +1633,7 @@ export function ProvidersSection() {
         setSelectedId(listProviders[0].id);
       }
       const generation = ++providerOrderMutationRef.current;
-      setPendingProviderOrder({ dataOwnerId, ids: nextIds });
+      setPendingProviderOrder({ dataOwnerId, ids: reorderedVisibleIds });
       void window.electronAPI.maker
         .setProviderOrder(reorderedVisibleIds)
         .then(() => {
@@ -1647,7 +1645,7 @@ export function ProvidersSection() {
           toast.error(t('settings.providers.order.saveFailed'));
         });
     },
-    [dataOwnerId, listProviders, orderedProviders, refetch, selectedId, t],
+    [dataOwnerId, listProviders, refetch, selectedId, t],
   );
 
   const moveProviderWithKeyboard = useCallback(

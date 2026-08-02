@@ -5,14 +5,25 @@
  * agent capabilities；这样 useProviders.refetch 可以复用联合刷新而不形成循环依赖。
  */
 import type { ProviderView } from '@cindy/model-providers';
+import {
+  getDataOwnerGeneration,
+  isDataOwnerGenerationCurrent,
+  type DataOwnerGeneration,
+} from '@/contexts/dataOwnerGeneration';
 
-let cachedProviders: ProviderView[] | null = null;
+interface ProvidersRefreshToken {
+  generation: number;
+  owner: DataOwnerGeneration;
+}
+
+let cachedProviders: { dataOwnerId: string | null; providers: ProviderView[] } | null = null;
 let providersGeneration = 0;
 const providerListeners = new Set<(providers: ProviderView[]) => void>();
 
-/** 返回最近一次完整 provider 快照；尚未成功加载时为 null。 */
+/** 返回当前 data owner 最近一次完整 provider 快照；未加载或归属不符时为 null。 */
 export function getCachedProvidersSnapshot(): ProviderView[] | null {
-  return cachedProviders;
+  const { dataOwnerId } = getDataOwnerGeneration();
+  return cachedProviders?.dataOwnerId === dataOwnerId ? cachedProviders.providers : null;
 }
 
 /** 订阅完整 provider 快照提交。 */
@@ -24,9 +35,12 @@ export function subscribeProvidersSnapshot(
 }
 
 /** 为一次 provider 快照读取分配代际；更早请求完成后不得再覆盖缓存。 */
-export function beginProvidersRefresh(): number {
+export function beginProvidersRefresh(): ProvidersRefreshToken {
   providersGeneration += 1;
-  return providersGeneration;
+  return {
+    generation: providersGeneration,
+    owner: getDataOwnerGeneration(),
+  };
 }
 
 /** 读取 provider 快照。失败向上抛，由联合刷新保留上一份有效缓存。 */
@@ -35,17 +49,27 @@ export async function loadProvidersSnapshot(): Promise<ProviderView[]> {
   return result.providers;
 }
 
-export function isProvidersRefreshCurrent(generation: number): boolean {
-  return providersGeneration === generation;
+export function isProvidersRefreshCurrent(token: ProvidersRefreshToken): boolean {
+  return (
+    providersGeneration === token.generation
+    && isDataOwnerGenerationCurrent(token.owner)
+  );
 }
 
 /** 仅提交当前代际的完整快照，并一次通知所有 mounted hooks。 */
 export function commitProvidersSnapshot(
-  generation: number,
+  token: ProvidersRefreshToken,
   next: ProviderView[],
 ): boolean {
-  if (!isProvidersRefreshCurrent(generation)) return false;
-  cachedProviders = next;
+  if (!isProvidersRefreshCurrent(token)) return false;
+  cachedProviders = { dataOwnerId: token.owner.dataOwnerId, providers: next };
   for (const listener of providerListeners) listener(next);
   return true;
 }
+
+export const __testing = {
+  reset(): void {
+    cachedProviders = null;
+    providersGeneration = 0;
+  },
+};
