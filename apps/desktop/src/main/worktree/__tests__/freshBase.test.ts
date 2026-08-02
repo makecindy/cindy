@@ -224,6 +224,22 @@ describe('resolveFreshSourceBranch', () => {
     }
   });
 
+  it('fetch 超时且清理未确认(cleanup unconfirmed)→ 仍按契约 fail-open 回退,不阻断创建', async () => {
+    mocks.impl = (args) => {
+      const key = args.join(' ');
+      if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+      if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+      if (key.startsWith('fetch'))
+        throw new Error('git fetch failed: timed out after 2000ms; process tree cleanup unconfirmed');
+      return undefined;
+    };
+    const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+    // 刻意的 fail-open(行为契约):残留进程若真持锁,后续 git 写操作会以锁错误
+    // 显式失败,解析层不把降级环境变成必失败
+    expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+  });
+
   it('总预算 ≤0 → 不发起任何网络操作(0/负数不传给 gitExec),纯本地元数据回退', async () => {
     mocks.impl = (args) => {
       const key = args.join(' ');

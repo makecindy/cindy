@@ -135,10 +135,15 @@ export async function resolveFreshSourceBranch(
       );
       fetched = true;
     } catch (err) {
-      log.warn(
-        `[freshBase] fetch ${remote}/${defaultBranch} 失败,退用本地已有远端 ref:`,
-        err instanceof Error ? err.message : String(err),
-      );
+      const msg = err instanceof Error ? err.message : String(err);
+      // 「cleanup unconfirmed」(超时且残留进程未确认退净,见 gitExec)也走同一
+      // 回退——这是**刻意的 fail-open 决策**,不是漏消费:本模块的行为契约是
+      // 新鲜基底解析的任何失败都回退旧行为,自动 worktree 创建不因此失败;改成
+      // fail-closed 会把降级环境(无 PowerShell、不可杀进程)变成必失败。残留
+      // 进程若真持有 ref/index 锁,后续 git 写操作会以锁错误**显式失败**,git 的
+      // 锁机制保证不会静默损坏。若产品决策改为 fail-closed,在此按 msg 含
+      // "cleanup unconfirmed" 返回独立结果即可(错误已可区分)。
+      log.warn(`[freshBase] fetch ${remote}/${defaultBranch} 失败,退用本地已有远端 ref:`, msg);
     }
   } else {
     // ls-remote 已把总预算耗尽(典型:离线挂满超时)——不再以新预算发起第二次网络操作。
