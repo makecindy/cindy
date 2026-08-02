@@ -144,6 +144,7 @@ beforeEach(() => {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
+      setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
   };
 });
@@ -249,6 +250,7 @@ describe('ProvidersSection — 深链定位', () => {
         providerOAuthLogin,
         providerOAuthCancel,
         onProviderOAuthProgress,
+        setProviderOrder: vi.fn(async () => ({ ok: true })),
       },
     };
 

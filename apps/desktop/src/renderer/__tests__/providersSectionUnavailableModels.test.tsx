@@ -2,7 +2,7 @@
 
 /**
  * ProvidersSection(双栏重构)关键不变量:
- *   1. Cindy AI(xd)固定置顶且默认选中;实时模型清单为空时仍保留手动刷新入口。
+ *   1. 首个可见供应商默认选中;Cindy AI 实时模型清单为空时仍保留手动刷新入口。
  *   2. 未连接的内置渠道不再常驻占行(入口在向导目录 + 检测建议)。
  *   3. 本机 CLI 检测命中且渠道未连接时,左栏出现建议行,点击直达向导授权步。
  */
@@ -14,9 +14,15 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { refreshBuiltinModelsSpy, requestAutoRefreshSpy, wizardSpy } = vi.hoisted(() => ({
+const {
+  refreshBuiltinModelsSpy,
+  requestAutoRefreshSpy,
+  setProviderOrderSpy,
+  wizardSpy,
+} = vi.hoisted(() => ({
   refreshBuiltinModelsSpy: vi.fn(async () => ({ ok: true, providerId: 'xd' as const })),
   requestAutoRefreshSpy: vi.fn(async () => ({ ok: true as const })),
+  setProviderOrderSpy: vi.fn(async () => ({ ok: true as const })),
   wizardSpy: vi.fn(),
 }));
 
@@ -56,6 +62,26 @@ vi.mock('@/hooks/useProviders', () => ({
         routing: {},
         models: { 'claude-code': [], codex: [] },
         connected: false,
+      } satisfies ProviderView,
+      {
+        id: 'custom',
+        name: 'Custom',
+        source: 'user',
+        agents: ['codex'],
+        auth: { method: 'apiKey' },
+        routing: {},
+        models: {
+          codex: [
+            {
+              id: 'custom-model',
+              name: 'Custom model',
+              contextWindow: 128_000,
+              efforts: [],
+              defaultEffort: null,
+            },
+          ],
+        },
+        connected: true,
       } satisfies ProviderView,
     ],
     loading: false,
@@ -138,6 +164,7 @@ beforeEach(() => {
       scanLocalCli: vi.fn(async () => scanResult),
       refreshBuiltinProviderModels: refreshBuiltinModelsSpy,
       requestProviderModelsAutoRefresh: requestAutoRefreshSpy,
+      setProviderOrder: setProviderOrderSpy,
     },
   };
 });
@@ -148,7 +175,7 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 双栏管理', () => {
-  it('Cindy AI 置顶默认选中;未连接内置渠道不占行;零模型仍可手动刷新', async () => {
+  it('首个可见供应商默认选中;未连接内置渠道不占行;零模型仍可手动刷新', async () => {
     // ProvidersSection 内部消费 useSearchParams(深链定位),测试需要 Router 上下文。
     render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
     expect(requestAutoRefreshSpy).toHaveBeenCalledWith('providers-open');
@@ -216,5 +243,21 @@ describe('ProvidersSection — 双栏管理', () => {
     // 向导以 entry 直达 anthropic。
     expect(screen.getByTestId('wizard-stub')).not.toBeNull();
     expect(wizardSpy).toHaveBeenCalledWith({ kind: 'builtin', providerId: 'anthropic' });
+  });
+
+  it('首次记录可见项，并用方向键提交新的可见顺序', async () => {
+    render(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
+
+    const handles = await screen.findAllByRole('button', {
+      name: 'settings.providers.order.handle',
+    });
+    expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+    await act(async () => {
+      fireEvent.keyDown(handles[0]!, { key: 'ArrowDown' });
+      await Promise.resolve();
+    });
+    // Renderer 只提交左栏顺序；Main 负责保留曾出现但当前隐藏的供应商槽位。
+    expect(setProviderOrderSpy).toHaveBeenLastCalledWith(['custom', 'xd']);
+    expect(screen.queryByRole('button', { name: 'settings.providers.order.reset' })).toBeNull();
   });
 });

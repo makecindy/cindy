@@ -81,6 +81,8 @@ function makeDeps(over: Partial<ProviderHandlerDeps> = {}): ProviderHandlerDeps 
     refreshCatalog: vi.fn(async () => {}),
     beginRouteMutation: vi.fn(() => () => {}),
     broadcastChanged: vi.fn(() => {}),
+    listProviderIds: () => [],
+    setProviderOrder: vi.fn(() => true),
     listPresets: () => [],
     testConnection: vi.fn(async () => ({ ok: true, latencyMs: 1 })),
     fetchModels: vi.fn(async () => ({ ok: true, models: [{ id: 'm1', name: 'M1' }] })),
@@ -144,6 +146,10 @@ describe('provider:list IPC handler', () => {
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
     expect(result).toEqual({ providers: views, modelVisibilityOverrides: overrides });
     expect(listProviders).toHaveBeenCalledOnce();
+    expect(listProviders).toHaveBeenCalledWith({
+      allowSideEffects: false,
+      sortForDisplay: true,
+    });
   });
 
   it('propagates service errors to the caller', async () => {
@@ -208,6 +214,53 @@ describe('provider:list IPC handler', () => {
     expect(result.providers[0].routing.pi?.headerOverride).toBeUndefined();
     // 非密字段仍完整回传,编辑表单据此渲染 endpoint/鉴权策略。
     expect(result.providers[0].routing.pi?.upstream).toBe('https://custom.example/v1');
+  });
+});
+
+describe('provider:order:set handler', () => {
+  it('persists the visible provider order and broadcasts a display change', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviderIds: () => ['xd', 'anthropic', 'openai'] });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        providerIds: ['openai', 'xd', 'anthropic'],
+      }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setProviderOrder).toHaveBeenCalledWith(['openai', 'xd', 'anthropic']);
+    expect(deps.broadcastChanged).toHaveBeenCalledOnce();
+  });
+
+  it.each([
+    { providerIds: [] },
+    { providerIds: ['xd', 'xd'] },
+    { providerIds: ['xd', 'unknown'] },
+    { providerIds: ['xd', 'openai'], extra: true },
+    { reset: true },
+  ])('rejects invalid visible order input: %j', async (input) => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({ listProviderIds: () => ['xd', 'openai'] });
+    registerProviderHandlers(harness, deps);
+
+    await expect(harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, input)).rejects.toThrow();
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('accepts a partial visible list and skips broadcasting an unchanged order', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'anthropic', 'openai'],
+      setProviderOrder: vi.fn(() => false),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, { providerIds: ['xd', 'openai'] }),
+    ).resolves.toEqual({ ok: true });
+    expect(deps.setProviderOrder).toHaveBeenCalledWith(['xd', 'openai']);
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 });
 

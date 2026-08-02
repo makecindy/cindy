@@ -2,7 +2,7 @@
  * ProvidersSection —— 设置 → 模型供应商页(2026-07 重构:双栏管理)。
  *
  * 布局:一张卡片内左右双栏 ——
- *   - 左栏:扁平供应商列表。Cindy AI(xd)固定置顶(产品自己的服务);其余行只在
+ *   - 左栏:可拖动排序的扁平供应商列表;供应商只在
  *     「已连接 / 已添加」后出现;底部「＋ 添加供应商」打开三步向导。未连接的内置
  *     渠道不再常驻占行 —— 入口在向导目录里,另有「检测建议」组:本机装了
  *     Claude Code / Codex CLI 时置一条建议行,点击直达该渠道的授权步。
@@ -20,13 +20,22 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { Check, MoreHorizontal, Pencil, Plus, RefreshCw, Trash2 } from 'lucide-react';
+import {
+  Check,
+  GripVertical,
+  MoreHorizontal,
+  Pencil,
+  Plus,
+  RefreshCw,
+  Trash2,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { useProviders } from '@/hooks/useProviders';
 import { isChatGptConnectionConnected, useCodexAuth } from '@/hooks/useCodexAuth';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useModelAccessStatus } from '@/hooks/useModelAccessStatus';
+import { useReducedMotion } from '@/hooks/useReducedMotion';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { useSignInToCindy } from '@/hooks/useSignInToCindy';
 import { useProviderOAuthDeviceCode } from '@/hooks/useProviderOAuthDeviceCode';
@@ -60,9 +69,14 @@ import { AnthropicMark } from '@/components/icons/AnthropicMark';
 import { OpenAIMark } from '@/components/icons/OpenAIMark';
 import { XDIncMark } from '@/components/icons/XDIncMark';
 import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLogoMark';
+import { SortableList } from '@/components/sidebar/SortableList';
 
 import type { LocalCliDetection } from '../../../shared/localCliDetect';
 import { isBuiltinRefreshableProviderId } from '../../../shared/providerModelRefresh';
+import {
+  applyProviderOrder,
+  mergeVisibleProviderOrder,
+} from '../../../shared/providerOrder';
 import type { CustomProviderConfig, ProviderView } from '@cindy/model-providers';
 
 // ---------------------------------------------------------------------------
@@ -1303,10 +1317,18 @@ function ListRow({
   provider,
   selected,
   onSelect,
+  position,
+  total,
+  onMove,
+  sortable,
 }: {
   provider: ProviderView;
   selected: boolean;
   onSelect: () => void;
+  position: number;
+  total: number;
+  onMove: (delta: -1 | 1) => void;
+  sortable: boolean;
 }) {
   const { t } = useTranslation();
   const modelCount = useMemo(
@@ -1315,56 +1337,82 @@ function ListRow({
   );
   const title = provider.id === 'xd' ? t('settings.providers.xd.title') : provider.name;
   return (
-    <button
-      type="button"
-      onClick={onSelect}
-      aria-current={selected}
+    <div
       className={cn(
-        'flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors',
+        'relative flex w-full items-center rounded-lg text-left transition-colors',
         !selected && 'hover:bg-[var(--surface-hover)]',
       )}
       style={selected ? { backgroundColor: 'var(--surface-chip)' } : undefined}
     >
-      <div
-        className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
-        style={{
-          backgroundColor: 'var(--settings-integration-avatar-bg)',
-          border: '1px solid var(--settings-integration-avatar-border)',
-          color: 'var(--settings-integration-avatar-icon)',
-        }}
-      >
-        {providerIcon(provider, 14)}
-      </div>
-      <span
-        className="min-w-0 flex-1 truncate text-13 font-medium"
-        style={{
-          color: provider.suspended ? 'var(--text-tertiary)' : 'var(--settings-section-title)',
-        }}
-      >
-        {title}
-      </span>
-      {provider.suspended ? (
-        // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
-        <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
-          {t('settings.providers.pill.suspended')}
-        </span>
-      ) : (
-        modelCount !== null && (
-          <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
-            {t('settings.providers.models.modelCount', { count: modelCount })}
-          </span>
-        )
+      {sortable && (
+        <button
+          type="button"
+          className="provider-order-handle absolute inset-y-0 left-0 z-[1] my-auto flex h-9 w-3 cursor-grab items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-[var(--focus-ring-soft)]"
+          aria-label={t('settings.providers.order.handle', {
+            provider: title,
+            position,
+            total,
+          })}
+          aria-keyshortcuts="ArrowUp ArrowDown"
+          onKeyDown={(event) => {
+            if (event.key !== 'ArrowUp' && event.key !== 'ArrowDown') return;
+            event.preventDefault();
+            onMove(event.key === 'ArrowUp' ? -1 : 1);
+          }}
+          style={{ color: 'var(--text-tertiary)' }}
+        >
+          <GripVertical size={12} />
+        </button>
       )}
-      <span
-        className="h-1.5 w-1.5 shrink-0 rounded-full"
-        style={{
-          backgroundColor:
-            provider.connected && !provider.suspended
-              ? 'var(--remote-status-ready)'
-              : 'var(--border-default)',
-        }}
-      />
-    </button>
+      <button
+        type="button"
+        onClick={onSelect}
+        aria-current={selected}
+        className="flex min-w-0 flex-1 items-center gap-2.5 py-2 pl-3 pr-2.5 text-left"
+      >
+        <div
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-lg"
+          style={{
+            backgroundColor: 'var(--settings-integration-avatar-bg)',
+            border: '1px solid var(--settings-integration-avatar-border)',
+            color: 'var(--settings-integration-avatar-icon)',
+          }}
+        >
+          {providerIcon(provider, 14)}
+        </div>
+        <span
+          className="min-w-0 flex-1 truncate text-13 font-medium"
+          style={{
+            color: provider.suspended
+              ? 'var(--text-tertiary)'
+              : 'var(--settings-section-title)',
+          }}
+        >
+          {title}
+        </span>
+        {provider.suspended ? (
+          // 已停用比模型数更要紧:窄栏(224px)只放得下一个注记,停用时以状态取代计数。
+          <span className="shrink-0 select-none text-11" style={{ color: 'var(--text-tertiary)' }}>
+            {t('settings.providers.pill.suspended')}
+          </span>
+        ) : (
+          modelCount !== null && (
+            <span className="shrink-0 text-11 tabular-nums" style={{ color: 'var(--text-tertiary)' }}>
+              {t('settings.providers.models.modelCount', { count: modelCount })}
+            </span>
+          )
+        )}
+        <span
+          className="h-1.5 w-1.5 shrink-0 rounded-full"
+          style={{
+            backgroundColor:
+              provider.connected && !provider.suspended
+                ? 'var(--remote-status-ready)'
+                : 'var(--border-default)',
+          }}
+        />
+      </button>
+    </div>
   );
 }
 
@@ -1425,6 +1473,7 @@ function SuggestionRow({
 
 export function ProvidersSection() {
   const { t } = useTranslation();
+  const reducedMotion = useReducedMotion();
   const signInToCindy = useSignInToCindy();
   const { confirm } = useConfirmDialog();
   const { providers, loading, refetch } = useProviders();
@@ -1434,6 +1483,10 @@ export function ProvidersSection() {
   const openaiReconnectRequired = codexAuth.state.kind === 'reconnect-required';
 
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [pendingProviderOrder, setPendingProviderOrder] = useState<string[] | null>(null);
+  const [orderAnnouncement, setOrderAnnouncement] = useState('');
+  const providerOrderMutationRef = useRef(0);
+  const observedProviderIdsRef = useRef(new Set<string>());
   // 向导:null = 关;{ entry } = 打开(entry 指定直达的供应商,来自检测建议)。
   const [wizard, setWizard] = useState<null | { entry?: WizardEntry }>(null);
   // 自定义供应商完整表单(编辑,或从向导「自定义端点」进入新建)。
@@ -1480,28 +1533,50 @@ export function ProvidersSection() {
     };
   }, []);
 
+  // SortableJS drop 后先由 React 乐观铺新顺序，等 PROVIDER_CHANGED 回来的 main 快照
+  // 与目标一致再清掉覆盖；这样 DOM 回滚与 IPC 往返之间不会闪回旧顺序。
+  const orderedProviders = useMemo(
+    () =>
+      pendingProviderOrder
+        ? applyProviderOrder(providers, pendingProviderOrder)
+        : providers,
+    [pendingProviderOrder, providers],
+  );
+  useEffect(() => {
+    if (!pendingProviderOrder) return;
+    const incomingIds = providers.map((provider) => provider.id);
+    const sameCatalog =
+      incomingIds.length === pendingProviderOrder.length &&
+      incomingIds.every((id) => pendingProviderOrder.includes(id));
+    if (!sameCatalog || incomingIds.every((id, index) => id === pendingProviderOrder[index])) {
+      setPendingProviderOrder(null);
+    }
+  }, [pendingProviderOrder, providers]);
+
   const byId = useMemo(() => {
     const map = new Map<string, ProviderView>();
-    providers.forEach((p) => map.set(p.id, p));
+    orderedProviders.forEach((p) => map.set(p.id, p));
     return map;
-  }, [providers]);
+  }, [orderedProviders]);
 
-  // 左栏行集合:xd 置顶;内置/通用 OAuth 渠道只在已连接后占行(未连接的入口在向导
-  // 目录 + 检测建议);自定义供应商保持既有过滤(有模型或 OAuth 形态)。
-  // 停用的供应商**沉底**(稳定分区,组内保持既有顺序)——「停用的东西往下沉、变灰、
-  // 离开活跃区」是本页的统一隐喻,与右栏模型列表的「已停用」分区同构。
+  // 左栏实际供应商严格沿用 main 的显示顺序;未连接的内置渠道仍只在向导 / 检测建议
+  // 出现。Cindy 登录引导与检测建议是伪行,不进入持久化顺序。
   const listProviders = useMemo(() => {
     const rows: ProviderView[] = [];
-    const xd = byId.get('xd');
-    if (xd) rows.push(xd);
-    for (const p of providers) {
-      if (p.id === 'xd') continue;
+    for (const p of orderedProviders) {
       if (p.source === 'builtin') {
         // reconnect-required 视同占行:凭证失效 ≠ 用户断开,重连入口必须保留。
         // OpenAI 图像 key 与 ChatGPT OAuth 两套凭证解耦:imageModels 已声明时,
         // 即使未做 OAuth 登录也需占行以便配置 / 管理图像 key。
         const openaiHasImageCap = p.id === 'openai' && (p.imageModels?.length ?? 0) > 0;
-        if (p.connected || (p.id === 'openai' && openaiReconnectRequired) || openaiHasImageCap) rows.push(p);
+        if (
+          p.id === 'xd' ||
+          p.connected ||
+          (p.id === 'openai' && openaiReconnectRequired) ||
+          openaiHasImageCap
+        ) {
+          rows.push(p);
+        }
         continue;
       }
       if (
@@ -1511,8 +1586,66 @@ export function ProvidersSection() {
         rows.push(p);
       }
     }
-    return [...rows.filter((p) => !p.suspended), ...rows.filter((p) => p.suspended)];
-  }, [providers, byId, openaiReconnectRequired]);
+    return rows;
+  }, [orderedProviders, openaiReconnectRequired]);
+
+  // Main 只持久化曾经真正进入过左栏的供应商。首次出现的新项按当前可见顺序追加；
+  // 已记录但暂时隐藏的项由 store 保留，因此断开重连不会丢失用户排位。
+  useEffect(() => {
+    const visibleIds = listProviders.map((provider) => provider.id);
+    const hasNewProvider = visibleIds.some((id) => !observedProviderIdsRef.current.has(id));
+    visibleIds.forEach((id) => observedProviderIdsRef.current.add(id));
+    if (!hasNewProvider || visibleIds.length === 0) return;
+    void window.electronAPI.maker
+      .setProviderOrder(visibleIds)
+      .catch(() => toast.error(t('settings.providers.order.saveFailed')));
+  }, [listProviders, t]);
+
+  const persistVisibleProviderOrder = useCallback(
+    (reorderedVisibleIds: string[]): void => {
+      const currentIds = orderedProviders.map((provider) => provider.id);
+      const nextIds = mergeVisibleProviderOrder(currentIds, reorderedVisibleIds);
+      if (nextIds.every((id, index) => id === currentIds[index])) return;
+      const generation = ++providerOrderMutationRef.current;
+      setPendingProviderOrder(nextIds);
+      void window.electronAPI.maker
+        .setProviderOrder(reorderedVisibleIds)
+        .then(() => {
+          if (providerOrderMutationRef.current === generation) refetch();
+        })
+        .catch(() => {
+          if (providerOrderMutationRef.current !== generation) return;
+          setPendingProviderOrder(null);
+          toast.error(t('settings.providers.order.saveFailed'));
+        });
+    },
+    [orderedProviders, refetch, t],
+  );
+
+  const moveProviderWithKeyboard = useCallback(
+    (providerId: string, delta: -1 | 1): void => {
+      const currentIds = listProviders.map((provider) => provider.id);
+      const index = currentIds.indexOf(providerId);
+      const nextIndex = index + delta;
+      if (index < 0 || nextIndex < 0 || nextIndex >= currentIds.length) return;
+      const nextIds = [...currentIds];
+      const [moved] = nextIds.splice(index, 1);
+      nextIds.splice(nextIndex, 0, moved!);
+      persistVisibleProviderOrder(nextIds);
+      const provider = byId.get(providerId);
+      setOrderAnnouncement(
+        t('settings.providers.order.moved', {
+          provider:
+            provider?.id === 'xd'
+              ? t('settings.providers.xd.title')
+              : provider?.name ?? providerId,
+          position: nextIndex + 1,
+          total: currentIds.length,
+        }),
+      );
+    },
+    [byId, listProviders, persistVisibleProviderOrder, t],
+  );
 
   // 检测建议:CLI 已安装 + 对应渠道存在于目录 + 未连接,且**未以任何形态占行**
   // (OpenAI reconnect-required 已在主列表时,不再重复出建议行)。
@@ -1759,14 +1892,37 @@ export function ProvidersSection() {
                   onSelect={() => setSelectedId(CINDY_SIGNIN_ID)}
                 />
               )}
-              {listProviders.map((p) => (
-                <ListRow
-                  key={p.id}
-                  provider={p}
-                  selected={!cindySigninActive && effectiveSelected?.id === p.id}
-                  onSelect={() => setSelectedId(p.id)}
-                />
-              ))}
+              {listProviders.length > 1 && (
+                <div className="select-none px-1.5 pb-1 pt-1">
+                  <span className="text-11" style={{ color: 'var(--text-tertiary)' }}>
+                    {t('settings.providers.order.hint')}
+                  </span>
+                </div>
+              )}
+              <SortableList
+                items={listProviders}
+                getId={(provider) => provider.id}
+                onReorder={persistVisibleProviderOrder}
+                renderItem={(provider, index) => (
+                  <ListRow
+                    provider={provider}
+                    selected={!cindySigninActive && effectiveSelected?.id === provider.id}
+                    onSelect={() => setSelectedId(provider.id)}
+                    position={index + 1}
+                    total={listProviders.length}
+                    onMove={(delta) => moveProviderWithKeyboard(provider.id, delta)}
+                    sortable={listProviders.length > 1}
+                  />
+                )}
+                disabled={listProviders.length < 2}
+                reducedMotion={reducedMotion}
+                filter="input, textarea, select, a, [data-no-drag]"
+                className="flex flex-col gap-0.5"
+                rowClassName="provider-settings-sortable-row"
+              />
+              <span className="sr-only" aria-live="polite" aria-atomic="true">
+                {orderAnnouncement}
+              </span>
               {suggestions.length > 0 && (
                 <>
                   <span

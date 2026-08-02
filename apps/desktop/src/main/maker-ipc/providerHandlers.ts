@@ -33,6 +33,10 @@ import type {
 } from '../../shared/modelPriceOverride.js';
 import type { MoneyCurrency } from '../../shared/regionalMoney.js';
 import {
+  MAX_PROVIDER_ORDER_ID_LENGTH,
+  MAX_PROVIDER_ORDER_ITEMS,
+} from '../../shared/providerOrder.js';
+import {
   BUILTIN_REFRESHABLE_PROVIDER_IDS,
   isBuiltinRefreshableProviderId,
   isProviderModelAutoRefreshRendererTrigger,
@@ -195,7 +199,10 @@ export interface ProviderHandlerDeps {
    * 服务 device-link（合成 event）与可能不受信的渲染上下文，所以默认纯读，只有确认 sender
    * 是本机主页面时才放行副作用（PR #548 review）。
    */
-  listProviders(opts?: { allowSideEffects?: boolean }): Promise<ProviderView[]>;
+  listProviders(opts?: {
+    allowSideEffects?: boolean;
+    sortForDisplay?: boolean;
+  }): Promise<ProviderView[]>;
   /**
    * 「模型显示/隐藏」override 快照(renderer → main 镜像,生产 = getModelVisibilityMirrorSnapshot)。
    * PROVIDER_LIST 附带回传,供 device-link 控制端(手机)按被控端用户开关过滤模型列表;
@@ -211,6 +218,10 @@ export interface ProviderHandlerDeps {
   beginRouteMutation(providerId: string): () => void;
   /** CRUD 成功后广播变更（生产 = 向所有窗口 send PROVIDER_CHANGED）。 */
   broadcastChanged(): void;
+  /** Current selectable catalog ids, used to validate visible provider order entries. */
+  listProviderIds(): string[];
+  /** Merge the currently visible order into the persisted observed-provider order. */
+  setProviderOrder(providerIds: readonly string[]): boolean;
   /** 目录 presets 段（生产 = () => getActiveCatalog().presets ?? []）。 */
   listPresets(): ProviderPreset[];
   /** 测试连接（生产 = testProviderConnection；单测注入 stub 不联网）。 */
@@ -810,7 +821,10 @@ export function registerProviderHandlers(
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
       const trusted = deps.isTrustedSender?.(event) === true;
-      const providers = await deps.listProviders({ allowSideEffects: trusted });
+      const providers = await deps.listProviders({
+        allowSideEffects: trusted,
+        sortForDisplay: true,
+      });
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
       // (codex review)。头凭证是 main-only 密文,renderer 从不回读:编辑时未显式改动
@@ -873,6 +887,48 @@ export function registerProviderHandlers(
     }
     deps.assertTrustedSender(event);
   }
+
+  // 供应商显示顺序是 owner-scoped 设置。Renderer 只提交当前左栏可见项；store 会
+  // 保留曾出现但当前隐藏的项，并把第一次出现的项追加到末尾。
+  registry.handle(MAKER_INVOKE.PROVIDER_ORDER_SET, (event, input: unknown) => {
+    assertTrustedProviderMutationSender(event);
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+      throwIpcError('INVALID_PARAMS', 'invalid provider order input');
+    }
+    const value = input as Record<string, unknown>;
+    const keys = Object.keys(value);
+    const ids = value.providerIds;
+    if (
+      keys.length !== 1 ||
+      !Array.isArray(ids) ||
+      ids.length === 0 ||
+      ids.length > MAX_PROVIDER_ORDER_ITEMS ||
+      ids.some(
+        (id) =>
+          typeof id !== 'string' ||
+          id.length === 0 ||
+          id.length > MAX_PROVIDER_ORDER_ID_LENGTH,
+      ) ||
+      new Set(ids).size !== ids.length
+    ) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
+    }
+    const catalogIds = new Set(deps.listProviderIds());
+    const requestedIds = ids as string[];
+    if (requestedIds.some((id) => !catalogIds.has(id))) {
+      throwIpcError('INVALID_PARAMS', 'providerIds must belong to the current provider catalog');
+    }
+    try {
+      const changed = deps.setProviderOrder(requestedIds);
+      if (changed) deps.broadcastChanged();
+    } catch (err) {
+      log.warn('provider display order persist failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      throwIpcError('INTERNAL', 'failed to persist provider order');
+    }
+    return { ok: true };
+  });
 
   // 自定义供应商的 DB 与 key/header 密文都按当前 data owner 选路径。CRUD 虽由
   // per-provider 队列串行，但排队与 DB 读取均有 await：若 A 发起后切到 B，后续
