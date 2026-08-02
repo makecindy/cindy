@@ -8,6 +8,7 @@
 
 import { app } from 'electron';
 import type Database from 'better-sqlite3';
+import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import { promises as fsp } from 'node:fs';
 import { createReadStream } from 'node:fs';
@@ -26,7 +27,7 @@ import { finalizeCodexCitationText } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
-import codexRuntimeManifest from '../../../../../tools/codex/latest.json';
+import { getReadyBinaryPath, getCachedBinaryStatus, isVettedAgentBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
@@ -973,21 +974,21 @@ export async function syncExternalCodexSessionFromDesktop(threadId: string): Pro
     return;
   }
 
-  // 版本门禁(#789):desktop 侧新事件由 Cindy 当前捆绑的 codex runtime 写出(app-server 以
+  // 版本门禁(#789):desktop 侧新事件由 Cindy 实际跑的 codex runtime 写出(app-server 以
   // CODEX_HOME=desktop 运行,新 rollout 落在 desktop home——见 findRolloutPath),回写是唯一
-  // 触碰源 ~/.codex 的通道。当捆绑 runtime 与创建源会话的 runtime 版本不同时,事件格式(如
+  // 触碰源 ~/.codex 的通道。当该 runtime 与创建源会话的 runtime 版本不同时,事件格式(如
   // function_call.id 前缀:旧版 `call_*` vs 新版 `fc_*`)可能不兼容,覆盖回源会让原 Codex
   // 客户端后续重放历史被 API 拒(invalid_id_prefix),源会话就此无法继续。
-  // 判据用「捆绑 runtime 版本 vs 源 session_meta.cli_version」——不用 desktop rollout 自身的
-  // session_meta(它可能沿用源会话的旧版本号,无法反映真正写出事件的 runtime)。仅两者完全
-  // 一致(格式可证兼容)才回写;拿不到版本或不一致时降级为不回写、保源会话原样(用户仍可在
-  // Cindy 内继续该会话的私有副本)。
-  const bundledCliVersion = getBundledCodexRuntimeVersion();
+  // 判据用「实际 runtime 版本(spawn --version)vs 源 session_meta.cli_version」——不用 desktop
+  // rollout 自身的 session_meta(可能沿用源旧版本号),也不用编译期 pin(prod 会从 CDN 动态选到
+  // 不同版本)。仅两者完全一致(格式可证兼容)才回写;拿不到版本或不一致时降级为不回写、保源
+  // 会话原样(用户仍可在 Cindy 内继续该会话的私有副本)。
+  const runtimeCliVersion = await getActiveCodexRuntimeVersion();
   const externalCliVersion = readRolloutCliVersion(externalThread.rolloutPath);
-  if (!bundledCliVersion || !externalCliVersion || bundledCliVersion !== externalCliVersion) {
+  if (!runtimeCliVersion || !externalCliVersion || runtimeCliVersion !== externalCliVersion) {
     log.info('skip external Codex sync-back: runtime version mismatch or unknown', {
       threadId,
-      bundledCliVersion,
+      runtimeCliVersion,
       externalCliVersion,
       sourceHome: desktopThread.sourceHome,
       targetHome: externalThread.sourceHome,
@@ -1447,16 +1448,49 @@ function rolloutThreadRowFromFirstLine(
   };
 }
 
+/** binaryPath → 解析出的 semver;同一 binary 只 spawn 一次 `--version`。 */
+const codexRuntimeVersionCache = new Map<string, string>();
+
+/** 当前实际会被 spawn 的 codex 二进制路径(prepare 成功后回填;无则读受管缓存)。 */
+function resolveActiveCodexBinaryPath(): string | null {
+  const ready = getReadyBinaryPath('codex');
+  if (ready) return ready;
+  const cached = getCachedBinaryStatus('codex');
+  return cached.binaryReady && cached.binaryPath ? cached.binaryPath : null;
+}
+
+/** 从 `codex --version` 首行抽取 semver(如 "codex-cli 0.145.0" → "0.145.0")。 */
+function parseCodexVersionOutput(output: string): string | null {
+  const match = output.trim().match(/\bv?(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)\b/i);
+  return match ? match[1] : null;
+}
+
 /**
- * Cindy 当前发行/管理的 codex runtime 版本(= 写出 desktop 侧新事件的那个 runtime)。
- * 取自随包固定的 tools/codex/latest.json——与 Linux runtime fallback 下载/校验所用的版本源
- * 同一份(见 linux-runtime-fallback.ts 的 codexLatest),因此对 dev bundle / prod 安装 /
- * Linux 受管 fallback(含 legacy standalone 布局)一律成立,无需再按二进制路径猜版本布局。
- * manifest 恒在;拿不到合法版本串时返回 null,回写门禁据此按「无法确认」降级为不写(安全侧)。
+ * 写出 desktop 侧新事件的那个 codex runtime 的**实际**版本——spawn 当前解析到的 codex
+ * 二进制 `--version` 得到,而非任何编译期 pin 或路径推断。这样才与真正跑的 runtime 一致:
+ * dev bundle(apps/codex-bin)、prod 从 CDN manifest 动态选中的版本、Linux 受管 fallback 各
+ * 布局都取到真值(#789 review:factory 按远端 asset.version 选二进制,pin/路径都可能与实际不符)。
+ * 结果按 binaryPath 进程内缓存。二进制未就绪 / 非受管路径 / --version 失败或无法解析 → null,
+ * 回写门禁据此按「无法确认」降级为不写(安全侧)。
  */
-function getBundledCodexRuntimeVersion(): string | null {
-  const version = (codexRuntimeManifest as { version?: unknown }).version;
-  return typeof version === 'string' && version.trim() ? version.trim() : null;
+async function getActiveCodexRuntimeVersion(): Promise<string | null> {
+  const binaryPath = resolveActiveCodexBinaryPath();
+  // 执行前复核确为受管二进制(与 binary-version.ts 同口径,CodeQL 命令注入防御纵深)。
+  if (!binaryPath || !isVettedAgentBinaryPath('codex', binaryPath)) return null;
+  const cached = codexRuntimeVersionCache.get(binaryPath);
+  if (cached) return cached;
+  const firstLine = await new Promise<string | null>((resolve) => {
+    execFile(binaryPath, ['--version'], { timeout: 5000, windowsHide: true }, (err, stdout, stderr) => {
+      if (err) {
+        resolve(null);
+        return;
+      }
+      resolve(((stdout || stderr || '').toString().split(/\r?\n/)[0] ?? '').trim() || null);
+    });
+  });
+  const version = firstLine ? parseCodexVersionOutput(firstLine) : null;
+  if (version) codexRuntimeVersionCache.set(binaryPath, version);
+  return version;
 }
 
 /**

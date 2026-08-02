@@ -7,6 +7,12 @@ import path from 'node:path';
 
 const electronMock = vi.hoisted(() => ({ userData: '' }));
 const dbMock = vi.hoisted(() => ({ current: null as Database.Database | null }));
+// 门禁通过 spawn `codex --version` 取实际 runtime 版本;这里控制解析到的二进制路径与
+// `--version` 输出。path 唯一化避免命中模块内的 binaryPath→version 进程缓存。
+const codexBinMock = vi.hoisted(() => ({
+  path: null as string | null,
+  versionOutput: null as string | null,
+}));
 
 vi.mock('electron', () => ({
   app: {
@@ -29,6 +35,31 @@ vi.mock('../logger.js', () => ({
   }),
 }));
 
+vi.mock('../agent-binaries/index.js', () => ({
+  getReadyBinaryPath: vi.fn((kind: string) => (kind === 'codex' ? codexBinMock.path ?? undefined : undefined)),
+  getCachedBinaryStatus: vi.fn(() => ({
+    binaryReady: !!codexBinMock.path,
+    binaryPath: codexBinMock.path ?? undefined,
+  })),
+  isVettedAgentBinaryPath: vi.fn((_kind: string, candidate: string) => !!codexBinMock.path && candidate === codexBinMock.path),
+}));
+
+vi.mock('node:child_process', async (importActual) => ({
+  ...(await importActual<typeof import('node:child_process')>()),
+  execFile: vi.fn((
+    _bin: string,
+    _args: string[],
+    _opts: unknown,
+    cb: (err: Error | null, stdout: string, stderr: string) => void,
+  ) => {
+    if (codexBinMock.versionOutput === null) {
+      cb(new Error('spawn failed'), '', '');
+      return;
+    }
+    cb(null, `${codexBinMock.versionOutput}\n`, '');
+  }),
+}));
+
 import {
   importExternalCodexSessions,
   importExternalCodexMessagesForSession,
@@ -41,11 +72,6 @@ import { clearCurrentDbClient, setCurrentDbClient } from '../localDb/client/curr
 import type { DbClient } from '../localDb/client/DbClient';
 import * as schema from '../localDb/schema';
 import { tx as runInprocTx } from '../localDb/worker/opHandlers/tx';
-import codexRuntimeManifest from '../../../../../tools/codex/latest.json';
-
-// 门禁比对的「捆绑 runtime 版本」取自这份随包 manifest;测试用它派生「与捆绑版本一致 / 不一致」
-// 的源版本,避免把版本号写死(随版本 bump 自动跟随)。
-const BUNDLED_CODEX_VERSION = (codexRuntimeManifest as { version: string }).version;
 
 const threadId = '019dcd5a-6e54-7960-95e0-aa68117a28d1';
 const execThreadId = '019dcd5a-6e54-7960-95e0-aa68117a28d2';
@@ -1698,8 +1724,28 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
 
 describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () => {
   const desktopHome = () => path.join(targetUserData, 'codex-home');
-  // 保证与「捆绑版本」确定不同的源版本(不写死版本号,随 manifest bump 跟随)。
-  const MISMATCHED_VERSION = `${BUNDLED_CODEX_VERSION}-mismatch.test`;
+  let codexPathCounter = 0;
+
+  /**
+   * 设定门禁 spawn `codex --version` 得到的实际 runtime 版本。
+   * 传 null 模拟「二进制未就绪 / --version 失败」→ 门禁按「无法确认」不回写。
+   * binaryPath 每次唯一,避开模块内 binaryPath→version 缓存,保证各 case 相互独立。
+   */
+  function setActiveCodexRuntime(version: string | null): void {
+    if (version === null) {
+      codexBinMock.path = null;
+      codexBinMock.versionOutput = null;
+      return;
+    }
+    codexPathCounter += 1;
+    codexBinMock.path = path.join(rootDir, `vetted-codex-${codexPathCounter}`, 'codex');
+    codexBinMock.versionOutput = `codex-cli ${version}`;
+  }
+
+  afterEach(() => {
+    codexBinMock.path = null;
+    codexBinMock.versionOutput = null;
+  });
 
   /** 写一份含 session_meta 首行(带 cli_version)+ 一条消息的 rollout。 */
   function writeRolloutWithCliVersion(file: string, cliVersion: string, body: string): void {
@@ -1722,8 +1768,8 @@ describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () =
 
   /**
    * 建一个「外部会话已导入并在 Cindy 里续过一轮」现场:桌面端有 app-server 新写的 rollout,
-   * 外部源保留原 rollout(带创建它的 runtime cli_version)。门禁比对的是「捆绑 runtime 版本」
-   * (来自随包 manifest)与外部源 cli_version,故桌面端 rollout 自身的版本号无关紧要。
+   * 外部源保留原 rollout(带创建它的 runtime cli_version)。门禁比对的是「实际 runtime 版本」
+   * (spawn --version)与外部源 cli_version,故桌面端 rollout 自身的版本号无关紧要。
    */
   function setupLinkedThread(
     externalCliVersion: string,
@@ -1759,24 +1805,36 @@ describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () =
     }
   }
 
-  it('does not overwrite the source ~/.codex rollout when the source version differs from bundled', async () => {
-    const { externalRollout, externalDbPath } = setupLinkedThread(MISMATCHED_VERSION);
+  it('does not overwrite the source ~/.codex rollout when the actual runtime version differs', async () => {
+    setActiveCodexRuntime('0.145.0');
+    const { externalRollout, externalDbPath } = setupLinkedThread('0.146.0-alpha.3.1');
     const rolloutBefore = fs.readFileSync(externalRollout, 'utf-8');
     const rolloutPathBefore = readThreadRolloutPath(externalDbPath);
 
     await syncExternalCodexSessionFromDesktop(threadId);
 
-    // 源版本与捆绑 runtime 不一致 → 源 rollout 与源 state 都不被改写。
+    // 实际 runtime 与源版本不一致 → 源 rollout 与源 state 都不被改写。
     expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(rolloutBefore);
     expect(readThreadRolloutPath(externalDbPath)).toBe(rolloutPathBefore);
   });
 
+  it('does not sync back when the runtime version cannot be determined', async () => {
+    setActiveCodexRuntime(null); // 二进制未就绪 / --version 失败 → 安全侧不回写
+    const { externalRollout } = setupLinkedThread('0.145.0');
+    const rolloutBefore = fs.readFileSync(externalRollout, 'utf-8');
+
+    await syncExternalCodexSessionFromDesktop(threadId);
+
+    expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(rolloutBefore);
+  });
+
   it('does not sync back when the source rollout has no parseable cli_version', async () => {
+    setActiveCodexRuntime('0.145.0');
     const desktopRollout = path.join(desktopHome(), 'sessions', `rollout-desktop-${threadId}.jsonl`);
     const externalRollout = path.join(externalHome, 'sessions', `rollout-external-${threadId}.jsonl`);
     writeRolloutWithCliVersion(
       desktopRollout,
-      BUNDLED_CODEX_VERSION,
+      '0.145.0',
       rolloutLine('m-desktop', 'assistant', 'edited in Cindy', '2026-07-28T00:00:01.000Z'),
     );
     // 外部 rollout 首行不是 session_meta(源 cli_version 无从判定)。
@@ -1791,12 +1849,13 @@ describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () =
     expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(externalContent);
   });
 
-  it('syncs the desktop rollout back when the source version matches the bundled runtime', async () => {
-    const { externalRollout, desktopRollout } = setupLinkedThread(BUNDLED_CODEX_VERSION);
+  it('syncs the desktop rollout back when the actual runtime version matches the source', async () => {
+    setActiveCodexRuntime('0.145.0');
+    const { externalRollout, desktopRollout } = setupLinkedThread('0.145.0');
 
     await syncExternalCodexSessionFromDesktop(threadId);
 
-    // 源版本 = 捆绑 runtime 版本(取自 manifest) → 回写照旧发生,源 rollout 被更新为桌面端内容。
+    // 实际 runtime 版本(spawn --version)= 源版本 → 回写照旧发生,源 rollout 被更新为桌面端内容。
     expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(fs.readFileSync(desktopRollout, 'utf-8'));
   });
 });
