@@ -137,11 +137,22 @@ test("runtime versions and the docs contract are code-owned", () => {
 	assert.match(rootPackage.scripts["test:runner"], /scripts\/__tests__\/dev-docs-contract\.test\.mjs/);
 });
 
-test("client CI keeps the complete unit gate on Windows", () => {
+test("client CI keeps the complete two-shard unit gate on Windows", () => {
 	const workflow = readText(".github/workflows/ci.yml");
-	const job = workflowJob(workflow, "windows-unit");
-	assert.ok(job, "client CI must define a windows-unit job");
-	assert.match(job, /^    runs-on: windows-latest$/m);
-	assert.match(job, /^        run: pnpm test:unit$/m);
-	assert.doesNotMatch(job, /pnpm test:unit\s+--/);
+	const shards = workflowJob(workflow, "windows-unit-shards");
+	assert.ok(shards, "client CI must define Windows unit shards");
+	assert.match(shards, /^    runs-on: windows-latest$/m);
+	assert.match(shards, /^      fail-fast: false$/m);
+	assert.match(shards, /^        shard: \[1, 2\]$/m);
+	assert.match(shards, /^      XDT_UNIT_TEST_SHARD: \$\{\{ matrix\.shard \}\}\/2$/m);
+	assert.match(shards, /^        run: pnpm test:unit$/m);
+	assert.doesNotMatch(shards, /pnpm test:unit\s+--/);
+
+	const gate = workflowJob(workflow, "windows-unit");
+	assert.ok(gate, "client CI must preserve the stable Windows unit check");
+	assert.match(gate, /^    name: Windows unit tests$/m);
+	assert.match(gate, /^    if: \$\{\{ always\(\) \}\}$/m);
+	assert.match(gate, /^    needs: windows-unit-shards$/m);
+	assert.match(gate, /^          WINDOWS_UNIT_SHARDS_RESULT: \$\{\{ needs\.windows-unit-shards\.result \}\}$/m);
+	assert.match(gate, /^        run: test "\$WINDOWS_UNIT_SHARDS_RESULT" = "success"$/m);
 });
