@@ -72,7 +72,7 @@ describe('market Ghost session boundary', () => {
     const waitIndex = body.indexOf(
       'await getGhostNodeRuntimeBroker().stopAndWait(expected.ghostId);',
     );
-    const updateIndex = body.indexOf('await manager.update(cindyFilePath)');
+    const updateIndex = body.indexOf('await manager.update(cindyFilePath,');
 
     expect(waitIndex).toBeGreaterThan(-1);
     expect(waitIndex).toBeLessThan(updateIndex);
