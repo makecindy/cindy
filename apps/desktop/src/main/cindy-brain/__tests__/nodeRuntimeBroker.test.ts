@@ -255,10 +255,11 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
     await stopping;
   });
 
-  it('stopAndWait 将没有 exit 的进程错误作为更新失败返回', async () => {
+  it('stopAndWait 在进程 error 后保留强杀并等待有界失败', async () => {
+    vi.useFakeTimers();
     const ghost = fakeGhost({ lifecycle: 'resident' });
     const child = new FakeNodeProcess();
-    vi.spyOn(child, 'kill').mockImplementation(() => {
+    const kill = vi.spyOn(child, 'kill').mockImplementation(() => {
       child.killed = true;
       return true;
     });
@@ -272,7 +273,10 @@ describe('nodeRuntimeBroker · 进程生命周期', () => {
       '插件 Node 进程停止失败',
     );
     child.emit('error', new Error('spawn transport broke'));
+    await vi.advanceTimersByTimeAsync(2_500);
     await stopping;
+    expect(kill).toHaveBeenCalledWith('SIGTERM');
+    expect(kill).toHaveBeenCalledWith('SIGKILL');
   });
 
   it('按需进程空闲两分钟后自动关闭', async () => {
@@ -1383,10 +1387,35 @@ describe('nodeRuntimeBroker · 宿主代启子进程(childSpawn,2026-07-23)', ()
       '插件 Node 进程停止失败',
     );
     startingChild.emit('error', new Error('child transport broke'));
+    await vi.advanceTimersByTimeAsync(2_500);
     await stopping;
-    await vi.advanceTimersByTimeAsync(2_000);
 
     expect(kill).toHaveBeenCalledWith('SIGTERM');
     expect(kill).toHaveBeenCalledWith('SIGKILL');
+  });
+
+  it('非停止状态的启动错误也会强杀并保留记账直到 exit', async () => {
+    vi.useFakeTimers();
+    const startingChild = new FakeRawChild();
+    const kill = vi.spyOn(startingChild, 'kill').mockImplementation(() => {
+      startingChild.killed = true;
+      return true;
+    });
+    const { broker, worker, spawned } = await bootWorker(
+      childSpawnGhost(),
+      () => startingChild,
+      false,
+    );
+    worker.emitControl({ type: 'spawn-child', reqId: 'r1', entry: 'node/maker.cjs' });
+    await vi.waitFor(() => expect(spawned).toHaveLength(1));
+
+    startingChild.emit('error', new Error('child transport broke'));
+    await vi.waitFor(() => expect(kill).toHaveBeenCalledWith('SIGKILL'));
+
+    const stopping = expect(broker.stopAndWait('node-ghost')).rejects.toThrow(
+      '插件 Node 进程停止超时',
+    );
+    await vi.advanceTimersByTimeAsync(2_500);
+    await stopping;
   });
 });

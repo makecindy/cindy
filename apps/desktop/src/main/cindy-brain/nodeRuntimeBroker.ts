@@ -774,11 +774,9 @@ export class GhostNodeRuntimeBroker {
         proc.once('exit', (code) => settle(() => reject(new Error(`子进程启动前退出(code=${code})`))));
       });
     } catch (error) {
-      try {
-        proc.kill('SIGKILL');
-      } catch {
-        // no-op
-      }
+      // error 只表示进程通道失败，不保证 OS 进程已经退出。保留 starting
+      // 记账直到真实 exit，并立即强杀；否则后续更新会漏掉仍持有文件句柄的进程。
+      this.stopStartingChild(startingChild, true);
       fail(error instanceof Error ? error.message : '子进程启动失败');
       return;
     }
@@ -910,6 +908,7 @@ export class GhostNodeRuntimeBroker {
   private waitForProcessExit(process: NodeWorkerProcess, ghostId: string): Promise<void> {
     return new Promise((resolve, reject) => {
       let settled = false;
+      let processError: Error | null = null;
       let timer: NodeJS.Timeout | null = null;
       const settle = (outcome: () => void) => {
         if (settled) return;
@@ -918,14 +917,23 @@ export class GhostNodeRuntimeBroker {
         outcome();
       };
       timer = this.setTimer(
-        () => settle(() => reject(new Error(`插件 Node 进程停止超时(${ghostId})`))),
+        () =>
+          settle(() =>
+            reject(
+              processError
+                ? new Error(`插件 Node 进程停止失败(${ghostId}): ${processError.message}`)
+                : new Error(`插件 Node 进程停止超时(${ghostId})`),
+            ),
+          ),
         PROCESS_STOP_WAIT_TIMEOUT_MS,
       );
       timer.unref?.();
       process.once('exit', () => settle(resolve));
-      process.once('error', (error) =>
-        settle(() => reject(new Error(`插件 Node 进程停止失败(${ghostId}): ${error.message}`))),
-      );
+      // error 不是进程退出证明。记住诊断，但继续等 exit 或有界超时，让
+      // stopWorker / stopStartingChild 的 SIGKILL 兜底保持生效。
+      process.once('error', (error) => {
+        processError = error;
+      });
     });
   }
 
@@ -936,12 +944,8 @@ export class GhostNodeRuntimeBroker {
     const children = this.startingChildren.get(ghostId) ?? new Set<StartingChildProcEntry>();
     children.add(entry);
     this.startingChildren.set(ghostId, children);
-    // error 不是进程已退出的证明。若更新正在停止它，仍要保留 SIGKILL
-    // 兜底；否则仅发 error 不发 exit 的 child 会永远占住旧插件目录。
+    // error 不是进程已退出的证明，任何路径都保留记账直到真实 exit。
     proc.once('exit', () => this.forgetStartingChild(entry));
-    proc.once('error', () => {
-      if (!entry.stopping) this.forgetStartingChild(entry);
-    });
     return entry;
   }
 
@@ -956,11 +960,11 @@ export class GhostNodeRuntimeBroker {
     if (children.size === 0) this.startingChildren.delete(entry.ghostId);
   }
 
-  private stopStartingChild(entry: StartingChildProcEntry): void {
+  private stopStartingChild(entry: StartingChildProcEntry, force = false): void {
     if (entry.stopping) return;
     entry.stopping = true;
     try {
-      entry.proc.kill('SIGTERM');
+      entry.proc.kill(force ? 'SIGKILL' : 'SIGTERM');
       entry.hardKillTimer = this.setTimer(() => {
         entry.hardKillTimer = null;
         try {
@@ -1448,11 +1452,19 @@ export class GhostNodeRuntimeBroker {
   ): void {
     const ghostId = entry.ghost.manifest.id;
     const key = GhostNodeRuntimeBroker.keyOf(ghostId, entry.entryRel);
+    if (this.workers.get(key) !== entry) {
+      // stopWorker 已先移除 map。只有真实 exit 才能取消强杀；error 仍可能
+      // 对应一个活着并占用插件目录的 utilityProcess。
+      if (!error && entry.hardKillTimer) {
+        this.clearTimer(entry.hardKillTimer);
+        entry.hardKillTimer = null;
+      }
+      return;
+    }
     if (entry.hardKillTimer) {
       this.clearTimer(entry.hardKillTimer);
       entry.hardKillTimer = null;
     }
-    if (this.workers.get(key) !== entry) return;
     this.workers.delete(key);
     this.clearIdleTimer(entry);
     // worker 意外死亡:孩子级联收掉,不留孤儿(silent——收件人已经不在了)。
