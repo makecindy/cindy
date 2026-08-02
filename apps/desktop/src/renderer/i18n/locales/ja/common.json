@@ -6398,7 +6398,7 @@
         "unpin": "プロジェクトのピン留めを解除",
         "removeFromSidebar": "サイドバーからプロジェクトを削除",
         "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
-        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「対話」として引き続き利用できます。",
+        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
         "removeFromSidebarConfirmAction": "プロジェクトを削除",
         "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
         "syncCodex": "このプロジェクトの Codex セッションを同期",

@@ -6398,7 +6398,7 @@
         "unpin": "프로젝트 고정 해제",
         "removeFromSidebar": "사이드바에서 프로젝트 제거",
         "removeFromSidebarConfirmTitle": "“{{name}}” 프로젝트를 제거할까요?",
-        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않으며, 기존 세션은 ‘대화’에 표시되어 계속 사용할 수 있습니다.",
+        "removeFromSidebarConfirmDescription": "이 프로젝트는 사이드바에서만 제거됩니다. 컴퓨터에 있는 파일은 삭제되지 않습니다. 기존 세션은 ‘대화’ 섹션으로 이동하며 계속 사용할 수 있습니다.",
         "removeFromSidebarConfirmAction": "프로젝트 제거",
         "removeFromSidebarFailed": "사이드바에서 프로젝트를 제거하지 못했습니다. 다시 시도해 주세요.",
         "syncCodex": "이 프로젝트의 Codex 세션 동기화",

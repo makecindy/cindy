@@ -6409,7 +6409,7 @@
         "unpin": "Unpin project",
         "removeFromSidebar": "Remove Project from Sidebar",
         "removeFromSidebarConfirmTitle": "Remove {{name}}?",
-        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions remain available as Chat sessions.",
+        "removeFromSidebarConfirmDescription": "This removes the project from the sidebar. Files on your computer won't be deleted. Existing sessions will move to the Chat section and remain available.",
         "removeFromSidebarConfirmAction": "Remove Project",
         "removeFromSidebarFailed": "Couldn’t remove the project from the sidebar — try again.",
         "showFiles": "Show Files",
