@@ -123,6 +123,9 @@ const transportTimeoutReopen = createTransportTimeoutReopenLoop({
     || client.getStatus() !== 'online'
     || (arbiter !== null && !arbiter.isOwner())
     || isDeviceRevoked(deviceId)
+    // 与 openRemoteLink 的 fail-closed 门对齐(#1408):本机已对该设备关闭控制
+    // 时不重建链路,避免重开循环把被禁用的链路反复拉起又失败空转。
+    || readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)
   ),
   log: {
     info: (msg) => log.info(msg),
