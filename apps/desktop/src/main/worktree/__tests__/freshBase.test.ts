@@ -103,17 +103,63 @@ describe('resolveFreshSourceBranch', () => {
     expect(res.fetched).toBe(true);
   });
 
-  it('fetch 失败但本地已有远端 ref → 退用 stale ref,不回退 fallback', async () => {
+  it('fetch 失败但本地已有远端 ref 且 fallback 未领先 → 退用 stale ref', async () => {
     mocks.impl = (args) => {
       const key = args.join(' ');
       if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
       if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
-      // ls-remote / fetch → undefined → 抛错(离线)
+      // ls-remote / fetch → undefined → 抛错(离线);
+      // merge-base --is-ancestor → 抛错 = 非祖先(fallback 未包含 stale ref,分叉/落后)
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
     expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+  });
+
+  it('fetch 失败且 fallback 已领先 stale ref → 保留 fallback,不丢本地提交', async () => {
+    mocks.impl = (args) => {
+      const key = args.join(' ');
+      if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+      if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+      // stale origin/main 是 fallback 的祖先(本地 main 有未推送提交)
+      if (key === 'merge-base --is-ancestor origin/main feature-x') return '';
+      return undefined;
+    };
+    const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+    expect(res).toEqual({
+      sourceBranch: 'feature-x',
+      fetched: false,
+      reason: 'stale-remote-ref-behind-fallback',
+    });
+  });
+
+  it('预算耗尽跳过 fetch 且 fallback 领先 → 同样保留 fallback', async () => {
+    vi.useFakeTimers();
+    try {
+      mocks.impl = (args) => {
+        const key = args.join(' ');
+        if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+        if (key.startsWith('ls-remote')) {
+          vi.setSystemTime(Date.now() + 15_000);
+          return undefined;
+        }
+        if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+        if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+        if (key === 'merge-base --is-ancestor origin/main feature-x') return '';
+        return undefined;
+      };
+      const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+      expect(res).toEqual({
+        sourceBranch: 'feature-x',
+        fetched: false,
+        reason: 'stale-remote-ref-behind-fallback',
+      });
+      expect(call('fetch')).toBeUndefined();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('ls-remote 挂满耗尽总预算 → 不再发起 fetch,退用本地已有远端 ref', async () => {

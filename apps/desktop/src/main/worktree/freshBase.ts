@@ -14,8 +14,9 @@
  *   3. fetch <remote> <默认分支>。超时经 gitExec timeoutMs 真正终止子进程,不会留下
  *      后台 fetch 与紧随其后的 createWorktree/acquireWorktree 争抢仓库锁;ls-remote
  *      与 fetch 共享 NET_TOTAL_BUDGET_MS 一个总预算,离线最坏回退耗时以其为上限。
- *   4. 本地存在 <remote>/<默认分支> ref → 用它作 sourceBranch(即便 fetch 失败,该 ref
- *      也不会比本地分支更旧);否则回退 fallback。
+ *   4. 本地存在 <remote>/<默认分支> ref → 用它作 sourceBranch;fetch 未成功时先比较
+ *      提交祖先关系,该 ref 已落后于 fallback(本地分支领先,如有未推送提交)则保留
+ *      fallback,保证回退基底永远不比旧行为更旧;无该 ref 时回退 fallback。
  */
 import { gitExec, type GitExecOpts } from './gitExec';
 import { createLogger } from '../logger';
@@ -124,7 +125,16 @@ export async function resolveFreshSourceBranch(
 
   const remoteRef = `${remote}/${defaultBranch}`;
   if ((await tryGit(['rev-parse', '--verify', `refs/remotes/${remote}/${defaultBranch}`], baseRepo)) !== null) {
-    return { sourceBranch: remoteRef, fetched, reason: fetched ? undefined : 'stale-remote-ref' };
+    if (fetched) return { sourceBranch: remoteRef, fetched: true };
+    // fetch 未成功时 remoteRef 可能陈旧:若它已是 fallback 的祖先(本地分支不落后于
+    // 它,如本地 main 有未推送提交而 origin/main 较旧),用它会丢 fallback 上的提交,
+    // 比旧行为还旧——此时保留 fallback。分叉或远端领先(非祖先)才值得用 stale ref。
+    const staleRefBehindFallback =
+      (await tryGit(['merge-base', '--is-ancestor', remoteRef, fallback], baseRepo)) !== null;
+    if (staleRefBehindFallback) {
+      return { sourceBranch: fallback, fetched: false, reason: 'stale-remote-ref-behind-fallback' };
+    }
+    return { sourceBranch: remoteRef, fetched: false, reason: 'stale-remote-ref' };
   }
   return { sourceBranch: fallback, fetched: false, reason: 'remote-ref-missing' };
 }
