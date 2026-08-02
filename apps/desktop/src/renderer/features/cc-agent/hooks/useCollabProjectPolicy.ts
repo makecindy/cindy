@@ -46,10 +46,10 @@ type ProjectRefreshTracker = {
  * 只会读到自己的用户级开关,可能与被控端 main 的 assertCollabProjectEnabled 相反 ——
  * 那正是 #1170 里「草稿没入口 / 会话有入口但走不完」的第二层来源。
  *
- * `skipQuery`(SSH 远端):workingDir 是远端主机上的路径, 在执行查询的那台机器的 fs 上查
- * 项目级既无意义又会误判 — 跳过项目级覆盖, 但仍查用户级/全局级 collab 开关
- * (与 main 侧 assertCollabProjectEnabled 的 remote 分支同口径): 用户全局禁用 Collab 时
- * UI toggle 同样置灰, 而不是放行到 enableOrca 才撞 PRECONDITION_FAILED。
+ * `skipQuery`(dialogue / SSH 远端):dialogue 没有用户项目,远端 workingDir 则不属于执行查询
+ * 的本机 fs;两者都跳过项目级覆盖,但仍查用户级/全局级 collab 开关
+ * (与 main 侧 assertCollabProjectEnabled 同口径):用户全局禁用 Collab 时 UI toggle 同样
+ * 置灰,而不是放行到 enableOrca 才撞 PRECONDITION_FAILED。
  */
 export function useCollabProjectPolicy(
   workingDir: string | null | undefined,
@@ -59,11 +59,13 @@ export function useCollabProjectPolicy(
   const skipQuery = opts?.skipQuery === true;
   // skipQuery 用 '' 作查询参数:'' 占位表示 "跳过项目级、只查用户级" 那一档。
   const requestedWorkingDir =
-    eligible && typeof workingDir === 'string'
-      ? skipQuery
+    !eligible
+      ? null
+      : skipQuery
         ? ''
-        : normalizeWorkingDirForProjectSettings(workingDir)
-      : null;
+        : typeof workingDir === 'string'
+          ? normalizeWorkingDirForProjectSettings(workingDir)
+          : null;
   const requestedDeviceId =
     eligible && typeof opts?.deviceId === 'string' && opts.deviceId.trim() !== ''
       ? opts.deviceId

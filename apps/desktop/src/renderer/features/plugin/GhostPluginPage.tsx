@@ -31,7 +31,7 @@ import {
   plainTextToTiptapDoc,
   saveDraft as saveComposerDraft,
 } from '@/lib/composerDraftStore';
-import { patchDraft } from '@/state/newMakerDraft';
+import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import { ghostInstallErrorKey } from '@/cindy-brain/installErrorKey';
 import { confirmAndInstallGhost, pickAndUpdateGhost } from '@/cindy-brain/installFlow';
 import { GhostPermissionList, GhostUpdateReview } from '@/cindy-brain/GhostPermissionList';
@@ -599,12 +599,7 @@ export function GhostPluginPage() {
       attachments: [],
       focusAtEnd: true,
     });
-    patchDraft({
-      workingDir: null,
-      remoteHostId: null,
-      deviceLinkDeviceId: null,
-      deviceLinkDeviceName: null,
-    });
+    resetDraftWorkspaceTargets();
     navigate('/cc-agent/new');
   }, [navigate, t]);
 
@@ -655,12 +650,7 @@ export function GhostPluginPage() {
         browserComments: existing?.browserComments ?? [],
         pendingGhostId: ghost.manifest.id,
       });
-      patchDraft({
-        workingDir: null,
-        remoteHostId: null,
-        deviceLinkDeviceId: null,
-        deviceLinkDeviceName: null,
-      });
+      resetDraftWorkspaceTargets();
       navigate('/cc-agent/new');
     },
     [confirm, ghosts, navigate, openGhostConfiguration, t],

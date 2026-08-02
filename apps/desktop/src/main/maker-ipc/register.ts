@@ -7143,6 +7143,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
         // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
         agentKind: dbToMakerAgentKind(leadRow.agentKind),
+        workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
         model: leadRow.model,
         effort: leadRow.effort,

@@ -262,6 +262,20 @@ describe('useCollabProjectPolicy', () => {
     expect(getState).toHaveBeenCalledWith('collab', undefined);
   });
 
+  it('skipQuery lets a dialogue draft without a workingDir read the user/global setting', async () => {
+    const getState = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    (window as unknown as { electronAPI: { maker: { plugins: { getState: typeof getState } } } }).electronAPI = {
+      maker: { plugins: { getState } },
+    };
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy(null, true, { skipQuery: true }),
+    );
+
+    await waitFor(() => expect(result.current.enabled).toBe(true));
+    expect(getState).toHaveBeenCalledWith('collab', undefined);
+  });
+
   // ── device-link:项目级开关的真相在被控端(issue #1170)────────────────────────
   // 此前一律查控制端本机:拿被控端的路径在自己的 fs 上找 `.cindy/plugins.json` 必然落空,
   // 于是读到的是控制端自己的用户级开关,与被控端 main 的 assertCollabProjectEnabled 可能
@@ -291,6 +305,22 @@ describe('useCollabProjectPolicy', () => {
     expect(getState).not.toHaveBeenCalled();
     // 被控端说这个项目关了协同 → 入口置灰,而不是照控制端自己的开关放行。
     expect(result.current.enabled).toBe(false);
+  });
+
+  it('device-link 对话草稿:无 workingDir 也会隧道查询被控端用户/全局级', async () => {
+    const invoke = vi.fn().mockResolvedValue({ effectiveEnabled: true });
+    const { getState } = stubDeviceLink(invoke);
+
+    const { result } = renderHook(() =>
+      useCollabProjectPolicy(null, true, { skipQuery: true, deviceId: 'dev-1' }),
+    );
+
+    await waitFor(() => expect(result.current.enabled).toBe(true));
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
+      'collab',
+      undefined,
+    ]);
+    expect(getState).not.toHaveBeenCalled();
   });
 
   it('同一路径串在两台设备上不串台(查询键含 deviceId)', async () => {

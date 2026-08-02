@@ -119,7 +119,7 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
   注:pi 斜杠转义后用户无法手输 `/compact`,此菜单是 pi 会话手动压缩的唯一入口。
 - ✅ **subagent 接 pi 轻量引擎**(已交付):Orca worker 可选 `pi` 引擎。核心链路(MCP
   schema / worker 创建服务 / 默认模型 claude-sonnet-4-6 / PiAgent 注册)本已按 AgentKind
-  接通;本次补齐 UI(CreateWorkerPopover / CollaborationModeToggle / draft 映射)、两个
+  接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
   main IPC coercion(WORKER_CREATE / SESSION_ENABLE_ORCA)、worker 展示(π 而非 Claude 脸)。
   注:pi 二进制缺失时 buildPiAgent 返回 null,pi 不进 agents map,建 pi worker 会抛错。
 - ✅ **压缩即记忆**(已交付):新增 `digest` 记忆类型(与 curated 解耦)。pi `compaction_end`

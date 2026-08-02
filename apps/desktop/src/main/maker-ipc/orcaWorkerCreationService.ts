@@ -16,6 +16,7 @@ export interface OrcaTeamSnapshot {
 export interface OrcaLeadSessionSnapshot {
   id: string;
   agentKind: AgentKind;
+  workspaceKind: 'project' | 'dialogue';
   workingDir: string | null;
   model: string;
   effort: string | null;
@@ -790,6 +791,9 @@ export function createOrcaWorkerCreationService(deps: OrcaWorkerCreationDeps): O
       const workerOpts = deps.buildCreateOptsWithStderr({
         id: workerSessionId,
         agentKind: params.agent,
+        // Worker 与 Lead 共享同一种 workspace 语义。dialogue Lead 虽然已有 main 自动分配
+        // 的运行目录,也不能把 Worker 落成 project,否则侧栏分组和项目能力都会误判。
+        workspaceKind: lead.workspaceKind,
         workingDir: lead.workingDir ?? '',
         // remote lead 的 worker 继承 remoteHostId:在同一台远端主机上 spawn,
         // 与 lead 共享远端 workingDir;本地 lead 不带此字段 (本地 worker)。

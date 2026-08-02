@@ -7,7 +7,7 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **Turning it on:**
 
-- In a project session — local or SSH remote — click the **Collab** pill in the composer toolbar. Both Claude Code and Codex sessions can be the lead, on either side.
+- In any regular project or dialogue session, open the composer's **+** menu and choose **Collaboration mode**. You can also choose it before sending the first message of a new task. Both Claude Code and Codex sessions can be the lead.
 - Pick the first worker's agent (Claude Code or Codex), and optionally its role / model / effort / an initial task.
 - Start. This creates the team plus that first worker.
 
@@ -28,5 +28,5 @@ Collaboration ("协同" / Collab) lets one session — the **lead** — bring in
 
 **Notes:**
 
-- The lead must be a Claude Code / Codex **project** session — local **or SSH remote**. On a remote lead, workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
+- The lead can be a Claude Code / Codex **project or dialogue** session. On an SSH remote lead, workers are spawned on the **same remote host**, and the collaboration MCP reaches the remote side over an SSH remote-forward to the local bridge (with a persistent bearer token). A worker can't start its own sub-collab (no nesting).
 - A lead can have only **one active collaboration workflow** at a time. If you have two clients open on the same account (e.g. dev + release) and start collab on the same session in both, the second fails with "开启协同失败" because a workflow is already active — close one client or end the existing collab.

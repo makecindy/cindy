@@ -15,7 +15,7 @@ describe('assertCollabProjectEnabled', () => {
 
   it('rejects a project with collab disabled', () => {
     expect(() => assertCollabProjectEnabled(project, () => false)).toThrow(
-      '[PRECONDITION_FAILED] collaboration is disabled for this project',
+      '[PRECONDITION_FAILED] collaboration is disabled for this session',
     );
   });
 
@@ -33,25 +33,61 @@ describe('assertCollabProjectEnabled', () => {
     expect(checkedPath).toBe('C:\\projects\\cindy');
   });
 
-  it('rejects dialogue sessions regardless of plugin policy', () => {
-    const isPluginEnabled = () => {
-      throw new Error('must not query project policy for an ineligible session');
-    };
+  it('allows dialogue sessions using only the user/global policy', () => {
+    for (const remoteHostId of [null, 'host-1'] as const) {
+      const calls: Array<string | undefined> = [];
+      expect(() =>
+        assertCollabProjectEnabled(
+          {
+            workingDir: '/app-managed/dialogues/2026-08-02/session-1',
+            workspaceKind: 'dialogue',
+            remoteHostId,
+          },
+          (_pluginId, workingDir) => {
+            calls.push(workingDir);
+            return true;
+          },
+        ),
+      ).not.toThrow();
+      expect(calls).toEqual([undefined]);
+    }
+  });
 
+  it('rejects dialogue sessions when collab is disabled at the user/global level', () => {
+    expect(() =>
+      assertCollabProjectEnabled(
+        {
+          workingDir: '/app-managed/dialogues/2026-08-02/session-1',
+          workspaceKind: 'dialogue',
+          remoteHostId: null,
+        },
+        () => false,
+      ),
+    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+  });
+
+  it('rejects unsupported workspace kinds and missing runtime directories', () => {
+    const mustNotQuery = () => {
+      throw new Error('must not query policy for an invalid session');
+    };
+    expect(() =>
+      assertCollabProjectEnabled(
+        { workingDir: '/tmp/session', workspaceKind: 'unknown', remoteHostId: null },
+        mustNotQuery,
+      ),
+    ).toThrow('[PRECONDITION_FAILED] collaboration requires a supported lead session');
     expect(() =>
       assertCollabProjectEnabled(
         { workingDir: null, workspaceKind: 'dialogue', remoteHostId: null },
-        isPluginEnabled,
+        mustNotQuery,
       ),
-    ).toThrow('[PRECONDITION_FAILED] collaboration requires an enabled local project session');
-
-    // 远端会话同样是项目会话才放行:无 workingDir 的远端 dialogue 照样拒绝。
+    ).toThrow('[PRECONDITION_FAILED] collaboration requires a session working directory');
     expect(() =>
       assertCollabProjectEnabled(
-        { workingDir: null, workspaceKind: 'dialogue', remoteHostId: 'host-1' },
-        isPluginEnabled,
+        { workingDir: '   ', workspaceKind: 'project', remoteHostId: null },
+        mustNotQuery,
       ),
-    ).toThrow('[PRECONDITION_FAILED] collaboration requires an enabled local project session');
+    ).toThrow('[PRECONDITION_FAILED] collaboration requires a session working directory');
   });
 
   it('allows remote project sessions for both agents without querying local fs policy', () => {
@@ -81,6 +117,6 @@ describe('assertCollabProjectEnabled', () => {
         { ...project, workingDir: '/remote/repo', remoteHostId: 'host-1', agentKind: 'codex' },
         () => false,
       ),
-    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this project');
+    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
   });
 });

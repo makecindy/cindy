@@ -47,15 +47,22 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
     expect(scope.skipProjectQuery).toBe(false);
   });
 
-  it('对话模式(无项目目录):不挂入口', () => {
+  it('对话模式:可挂入口,只查用户/全局级', () => {
     // dialogue 会话在 main 侧也会拿到一个自动分配的运行目录,所以必须靠 workspaceKind
-    // 判定,不能从 workingDir 反推。
+    // 判定策略层级,不能从 workingDir 反推成项目。
     expect(
       resolveCollabEntryPolicy({
         workspaceKind: 'dialogue',
         workingDir: '/Users/me/Library/.../dialogues/2026-07-31/s1',
-      }).eligible,
-    ).toBe(false);
+      }),
+    ).toEqual({ eligible: true, skipProjectQuery: true });
+    // 草稿还没创建 session,自然没有 main 分配的运行目录,入口同样应出现。
+    expect(
+      resolveCollabEntryPolicy({ workspaceKind: 'dialogue', workingDir: null }),
+    ).toEqual({ eligible: true, skipProjectQuery: true });
+  });
+
+  it('项目模式仍要求有效目录', () => {
     expect(
       resolveCollabEntryPolicy({ workspaceKind: 'project', workingDir: null }).eligible,
     ).toBe(false);
@@ -64,11 +71,28 @@ describe('resolveCollabEntryPolicy 五类场景', () => {
     ).toBe(false);
   });
 
+  it('device-link 对话:隧道到被控设备,并只查它的用户/全局级', () => {
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'dialogue',
+        workingDir: null,
+        deviceLinkDeviceId: 'dev-1',
+      }),
+    ).toEqual({ eligible: true, policyDeviceId: 'dev-1', skipProjectQuery: true });
+  });
+
   it('Orca Worker 子会话:不挂入口(worker 自己不能再开协同)', () => {
     expect(
       resolveCollabEntryPolicy({
         workspaceKind: 'project',
         workingDir: '/Users/me/proj',
+        orcaRole: 'worker',
+      }).eligible,
+    ).toBe(false);
+    expect(
+      resolveCollabEntryPolicy({
+        workspaceKind: 'dialogue',
+        workingDir: '/app-managed/dialogues/2026-08-02/worker-1',
         orcaRole: 'worker',
       }).eligible,
     ).toBe(false);

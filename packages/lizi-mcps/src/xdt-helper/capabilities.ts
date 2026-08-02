@@ -70,7 +70,7 @@ export const CAPABILITIES: readonly CapabilityEntry[] = [
       '【硬边界】Worker session 不能再开 team(嵌套禁止, 返 WORKER_CANNOT_NEST);Claude Code / Codex 本地项目 session 都可以作为 Lead 调 start_team;Worker 不能结束自己所在 team(返 WORKER_CANNOT_DISABLE);要求 Lead session 有 workingDir。',
       '【工具归属】13 个 team 工具(start_team / create_worker / create_workers / send_to_worker / list_worker_queue / update_queued_message / cancel_queued_message / list_workers / switch_focus / idle_worker / end_team / archive_worker / list_available_models)在独立的 cindy_orca server 直接顶层注册, 对应"协同模式"可关插件(Settings → Connections → Built-in Tools)。通用 session handoff 原语 send_to_session 在 essential 的 cindy_helper 的 handoff 类目下(走 call_tool, 常开, 供 skill 路由用)。',
       `【与 Claude Code Task tool / Codex subagent 的区别】Task / subagent 是 agent 框架内的子任务派发机制(子 agent 跑在同一 SDK 进程内、有限工具集、生命周期短、对话历史归属父 turn);${BRAND_NAME} 协同模式是业务层的 session 级编排(Lead/Worker 都是完整独立的 ${BRAND_NAME} session, 独立进程、UI 栏位、完整工具、独立对话历史, 长生命周期, 通过 main 进程 IPC + MCP bridge 通信)。两者不互斥, Worker 内部仍可用 Task/subagent 派子任务。`,
-      '【手动入口】ChatInput 工具行的橙色 puzzle pill(CollaborationModeToggle), 用户也能手动开/关, 与本工具走同一份业务代码。',
+      '【手动入口】ChatInput「+」菜单里的「协同模式」项,开启态用橙色 UsersRound 图标与文字标识;用户也能在这里手动开/关,与本工具走同一份业务代码。',
     ].join(' '),
   },
   {

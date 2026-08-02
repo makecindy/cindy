@@ -626,7 +626,7 @@ export function CreateWorkerPopover({
   if (!open) return null;
 
   return (
-    <div className={cn('fixed inset-0 z-50 flex items-start justify-center pt-[10vh]', className)}>
+    <div className={cn('fixed inset-0 z-50 flex items-center justify-center', className)}>
       <div className="absolute inset-0 bg-[var(--overlay-modal)]" onClick={onClose} />
       <div
         className="relative z-10 w-[500px] rounded-2xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-6"
@@ -684,87 +684,91 @@ export function CreateWorkerPopover({
           )}
         </div>
 
-        <div className="mb-4">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.agentLabel')}
-          </div>
-          {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
-              「不自建选择 UI」的组件复用原则)。 */}
-          <VendorSegmentedSwitcher
-            value={vendorKey}
-            width={220}
-            ariaLabel={t('orca.createWorker.agentLabel')}
-            onChange={(next) =>
-              updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
-            }
-          />
-        </div>
-
-        <div className="mb-4">
-          <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
-            {t('orca.createWorker.modelLabel')}
-          </div>
-          {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
-              处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
-              外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
-              精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
-              且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
-              外置 FastModeToggle,不能删。 */}
-          <div className="flex items-center gap-2">
-            {deviceId && currentModelSupportsFast && (
-              <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
-            )}
-            <ModelSelector
-              modelId={model}
-              effort={effort}
-              onModelChange={updateModel}
-              onEffortChange={updateEffort}
-              vendorKey={vendorKey}
-              deviceId={deviceId}
-              // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
-              // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
-              // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
-              excludeSubscriptionDirect={sshRemote === true}
-              excludeChatBridgedCodex={sshRemote === true}
-              popoverSide="bottom"
-              currentProviderId={
-                deviceId
-                  ? undefined
-                  : sshRemote === true
-                    ? narrowProviderSource(providerSource, model)
-                    : providerSource
+        <div className="mb-4 grid grid-cols-[220px_minmax(0,1fr)] gap-4">
+          <div className="min-w-0">
+            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.agentLabel')}
+            </div>
+            {/* 应用标准 Agent 分段控件(替换此前手写的按钮组;与 New Maker / IM 目录偏好同款,
+                「不自建选择 UI」的组件复用原则)。 */}
+            <VendorSegmentedSwitcher
+              value={vendorKey}
+              width={220}
+              ariaLabel={t('orca.createWorker.agentLabel')}
+              onChange={(next) =>
+                updateAgent(next === 'codex' ? 'codex' : next === 'pi' ? 'pi' : 'claude-code')
               }
-              onProviderChange={deviceId ? undefined : handleProviderChange}
-              // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
-              // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
-              // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
-              reselectEmitsChange
-              // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
-              // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
-              // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
-              onNavigateToProviders={
-                deviceId || isSidebarWindow()
-                  ? undefined
-                  : () => {
-                      onClose();
-                      navigate('/settings?tab=providers');
-                    }
-              }
-              modelMemory={modelMemory}
-              // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
-              // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
-              // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
-              fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
-              onFastModeChange={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast}
             />
           </div>
-          {noAvailableLocalModels ? (
-            <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
-              {t('orca.createWorker.noAvailableModels', {
-                agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
-              })}
-            </p>
-          ) : null}
+
+          <div className="min-w-0">
+            <div className="mb-2 text-12 font-medium uppercase tracking-[0.5px] text-[var(--text-tertiary)]">
+              {t('orca.createWorker.modelLabel')}
+            </div>
+            {/* composer 同款全功能标准面板(2026-07 用户定稿基准:全软件一个模型选择面板,
+                处处同行为):供应商分段、订阅来源、推理强度、Fast(行级配置列,替代此前的
+                外置开关)全开;选定来源随创建参数显式下发,由 OrcaWorkerCreationService
+                精确 preflight。device-link 远程创建维持既有退化:被控端纯列表、无来源维度,
+                且面板行级 Fast 依赖来源分段(fastEditable 走 connected 目录),故远程仍用
+                外置 FastModeToggle,不能删。 */}
+            <div className="flex min-w-0 items-center gap-2">
+              {deviceId && currentModelSupportsFast && (
+                <FastModeToggle enabled={fast} onToggle={() => setFast((v) => !v)} />
+              )}
+              <ModelSelector
+                modelId={model}
+                effort={effort}
+                onModelChange={updateModel}
+                onEffortChange={updateEffort}
+                vendorKey={vendorKey}
+                deviceId={deviceId}
+                // SSH 远程 Lead:与 ChatInput 同口径藏掉仅本地可桥接的模型/来源
+                // (订阅直连接本地 compat-proxy,openai-chat 桥接 Codex 接本地
+                // codex-proxy,远端都不经翻译)—— 否则提交才被 main 侧 guard 拒绝。
+                excludeSubscriptionDirect={sshRemote === true}
+                excludeChatBridgedCodex={sshRemote === true}
+                popoverSide="bottom"
+                currentProviderId={
+                  deviceId
+                    ? undefined
+                    : sshRemote === true
+                      ? narrowProviderSource(providerSource, model)
+                      : providerSource
+                }
+                onProviderChange={deviceId ? undefined : handleProviderChange}
+                // providerSource=null 时面板高亮的是**解析出来的生效默认来源**,点它的
+                // 语义是「把默认来源钉成显式偏好」,必须照常回调(codex review)——否则
+                // 用户点了没反应,之后默认路由一变创建就静默换来源。显式同值幂等无害。
+                reselectEmitsChange
+                // 分离侧栏窗口固定在 /sidebar-window 壳路由,本地 navigate 会把辅助
+                // 窗口整壳替换成主设置路由(codex review)——与 OrcaWorkerPanel 的
+                // settingsEnabled={!isSidebarWindow()} 同禁用口径,不接线跳转。
+                onNavigateToProviders={
+                  deviceId || isSidebarWindow()
+                    ? undefined
+                    : () => {
+                        onClose();
+                        navigate('/settings?tab=providers');
+                      }
+                }
+                modelMemory={modelMemory}
+                // worker 创建链的显式 Fast 派发支持 Codex 与 Pi(resolveWorkerConfig 对二者
+                // 消费 input.fast,并按模型 supportsFastMode 收口):cc 层面为 no-op,不接线,
+                // 面板就不显示 Fast 开关,避免「开关能开、提交被丢」的名不副实(codex review)。
+                fastMode={deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : fast}
+                onFastModeChange={
+                  deviceId || !(agent === 'codex' || agent === 'pi') ? undefined : updateFast
+                }
+              />
+            </div>
+            {noAvailableLocalModels ? (
+              <p className="mt-1.5 text-11 leading-snug text-[var(--error-fg)]" role="status">
+                {t('orca.createWorker.noAvailableModels', {
+                  agent: agent === 'codex' ? 'Codex' : agent === 'pi' ? 'Pi' : 'Claude Code',
+                })}
+              </p>
+            ) : null}
+          </div>
         </div>
 
         <div className="mb-5">
