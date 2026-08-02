@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -104,6 +104,28 @@ export async function listSessionPersistedChatAttachmentPaths(
   return uniqueStrings(
     rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
   );
+}
+
+/**
+ * Return the staged attachment paths that may be removed after deleting one
+ * session. Forked sessions copy persisted message content, so a path remains
+ * protected while any other non-deleted session still references it.
+ */
+export async function listDeletableSessionPersistedChatAttachmentPaths(
+  sessionId: string,
+): Promise<string[]> {
+  const [sessionPaths, retainedRows] = await Promise.all([
+    listSessionPersistedChatAttachmentPaths(sessionId),
+    getDbClient().drizzle
+      .select({ content: messages.content })
+      .from(messages)
+      .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+      .where(and(ne(messages.sessionId, sessionId), ne(sessions.status, 'deleted'))),
+  ]);
+  const retainedPaths = new Set(
+    retainedRows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
+  return sessionPaths.filter((filePath) => !retainedPaths.has(filePath));
 }
 
 /** Return all staged attachment paths retained by the current owner's message DB. */

@@ -55,7 +55,7 @@ import {
 } from '../sessionActiveTurn';
 import {
   dismissErrorMessage,
-  listSessionPersistedChatAttachmentPaths,
+  listDeletableSessionPersistedChatAttachmentPaths,
   rebroadcastAgentSwitchBoundary,
 } from './messages';
 import { cleanupStagedChatAttachments } from '../../file-browser/remote-file-cache';
@@ -1307,7 +1307,7 @@ export async function patchSessionMetaInDb(
         err: err instanceof Error ? err.message : String(err),
       });
     });
-    void listSessionPersistedChatAttachmentPaths(sessionId)
+    void listDeletableSessionPersistedChatAttachmentPaths(sessionId)
       .then((filePaths) => cleanupStagedChatAttachments(filePaths))
       .catch((err) => {
         log.warn('staged chat attachment cleanup failed', {

@@ -46,6 +46,7 @@ import {
   findForkParentSessionId,
   findPendingForkOrigin,
   getMessageDeletionTarget,
+  listDeletableSessionPersistedChatAttachmentPaths,
   markLatestAgentHandoffConsumed,
   readPriorUserRoundCost,
   registerMessageIpc,
@@ -58,6 +59,7 @@ function createDb(): Database.Database {
       id TEXT PRIMARY KEY,
       cleared_at INTEGER,
       parent_session_id TEXT,
+      status TEXT NOT NULL DEFAULT 'active',
       created_at INTEGER NOT NULL DEFAULT 0,
       total_token_usage INTEGER NOT NULL DEFAULT 0
     );
@@ -126,6 +128,50 @@ function insertCostMessage(
       rewindAt: input.rewindAt ?? null,
     });
 }
+
+describe('staged chat attachment retention', () => {
+  it('keeps a shared staged path until the last non-deleted fork is deleted', async () => {
+    const sqlite = createDb();
+    sqlite.prepare('INSERT INTO sessions (id, status) VALUES (?, ?)').run('parent', 'deleted');
+    sqlite
+      .prepare('INSERT INTO sessions (id, parent_session_id, status) VALUES (?, ?, ?)')
+      .run('fork', 'parent', 'active');
+
+    const sharedPath = 'C:\\chat-attachment-cache\\owner\\shared.bin';
+    const parentOnlyPath = 'C:\\chat-attachment-cache\\owner\\parent-only.bin';
+    const insert = sqlite.prepare(`
+      INSERT INTO messages (
+        id, client_id, session_id, role, content, created_at
+      ) VALUES (
+        @id, @id, @sessionId, 'user', @content, @createdAt
+      )
+    `);
+    insert.run({
+      id: 'parent-message',
+      sessionId: 'parent',
+      content: JSON.stringify({
+        files: [{ path: sharedPath }, { path: parentOnlyPath }],
+      }),
+      createdAt: 1,
+    });
+    insert.run({
+      id: 'fork-message',
+      sessionId: 'fork',
+      content: JSON.stringify({ files: [{ path: sharedPath }] }),
+      createdAt: 2,
+    });
+
+    await expect(listDeletableSessionPersistedChatAttachmentPaths('parent')).resolves.toEqual([
+      parentOnlyPath,
+    ]);
+
+    sqlite.prepare("UPDATE sessions SET status = 'deleted' WHERE id = 'fork'").run();
+    await expect(listDeletableSessionPersistedChatAttachmentPaths('parent')).resolves.toEqual([
+      sharedPath,
+      parentOnlyPath,
+    ]);
+  });
+});
 
 describe('local-db:messages:list cursor', () => {
   beforeEach(() => {
