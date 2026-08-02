@@ -33,6 +33,7 @@ describe('isNetworkishErrorMessage', () => {
     'thread not found',
     'context window exceeded',
     'Local tool operation timed out.',
+    'Wrapped error: API Error: The operation timed out.',
     // 长数字不因包含 502 片段误伤(\b 词边界)
     'order id 15024 rejected',
   ])('does not match non-network message: %s', (msg) => {
