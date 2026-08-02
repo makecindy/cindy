@@ -837,14 +837,8 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 
 test("unit CI shard arguments cover valid halves and reject malformed input", () => {
 	assert.deepEqual(unitTestShardArgs(""), []);
-	assert.deepEqual(unitTestShardArgs(" 1/2 "), [
-		"--shard=1/2",
-		"--passWithNoTests",
-	]);
-	assert.deepEqual(unitTestShardArgs("2/2"), [
-		"--shard=2/2",
-		"--passWithNoTests",
-	]);
+	assert.deepEqual(unitTestShardArgs(" 1/2 "), ["--shard=1/2"]);
+	assert.deepEqual(unitTestShardArgs("2/2"), ["--shard=2/2"]);
 	for (const value of ["1", "0/2", "3/2", "1/0", "a/b"]) {
 		assert.throws(() => unitTestShardArgs(value), /XDT_UNIT_TEST_SHARD/);
 	}
@@ -1821,6 +1815,30 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 				["packages/other/src/foo.test.ts"],
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
+	);
+});
+
+test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {
+	const root = "F:/repo";
+	const workspace = { cwd: "packages/example" };
+	const oneSelectedFile = ["packages/example/src/only.test.ts"];
+	const buildShard = (shard, selectedFiles = oneSelectedFile) =>
+		buildPnpmArgs(
+			root,
+			workspace,
+			{ type: "packageBin", bin: "vitest", args: ["run", `--shard=${shard}`] },
+			{},
+			selectedFiles,
+		);
+
+	assert.equal(buildShard("1/2").includes("--passWithNoTests"), true);
+	assert.equal(buildShard("2/2").includes("--passWithNoTests"), true);
+	assert.equal(
+		buildShard("2/2", [
+			"packages/example/src/first.test.ts",
+			"packages/example/src/second.test.ts",
+		]).includes("--passWithNoTests"),
+		false,
 	);
 });
 

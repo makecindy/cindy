@@ -40,10 +40,8 @@ const UNIT_TEST_SHARD_ENV = 'XDT_UNIT_TEST_SHARD';
 
 /**
  * Split every Vitest workspace by the same CI shard so the two Windows jobs
- * still form one complete unit gate. `passWithNoTests` is shard-local only:
- * the outer runner continues to reject workspaces that have no test files at
- * all, while a workspace with fewer files than shards may legitimately have
- * an empty half.
+ * still form one complete unit gate. The runner adds `passWithNoTests` only
+ * when a workspace has fewer selected files than the configured shard count.
  */
 export function unitTestShardArgs(value = process.env[UNIT_TEST_SHARD_ENV]) {
   if (value == null || String(value).trim() === '') return [];
@@ -55,7 +53,7 @@ export function unitTestShardArgs(value = process.env[UNIT_TEST_SHARD_ENV]) {
   if (!Number.isSafeInteger(index) || !Number.isSafeInteger(count) || index < 1 || count < 1 || index > count) {
     throw new Error(`${UNIT_TEST_SHARD_ENV} must satisfy 1 <= index <= count`);
   }
-  return [`--shard=${index}/${count}`, '--passWithNoTests'];
+  return [`--shard=${index}/${count}`];
 }
 
 // Workspace-level parallelism owns the global process budget. Keep ordinary
