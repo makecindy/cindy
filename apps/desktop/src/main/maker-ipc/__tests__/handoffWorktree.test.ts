@@ -149,6 +149,29 @@ describe('prepareHandoffWorktree', () => {
     );
   });
 
+  it('注入 resolveFreshSource 且非 dispatcher worktree 派发 → 以 fetch 后的远端默认分支为源', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'upstream/main' }));
+    const deps = makeDeps({ resolveFreshSource });
+    await prepareHandoffWorktree(deps, undefined, BASE);
+    expect(resolveFreshSource).toHaveBeenCalledWith(BASE, 'main');
+    expect(deps.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBranch: 'upstream/main' }),
+    );
+  });
+
+  it('dispatcher 是 worktree session(派生子任务)→ 不走 resolveFreshSource,跟随当前分支', async () => {
+    const resolveFreshSource = vi.fn(async () => ({ sourceBranch: 'upstream/main' }));
+    const deps = makeDeps({
+      getForSession: vi.fn(() => meta()),
+      resolveFreshSource,
+    });
+    await prepareHandoffWorktree(deps, 'disp-1', path.join(WT, 'sub'));
+    expect(resolveFreshSource).not.toHaveBeenCalled();
+    expect(deps.createWorktree).toHaveBeenCalledWith(
+      expect.objectContaining({ sourceBranch: 'main' }),
+    );
+  });
+
   it('baseRepo 解析失败 → ok=false 带原因,不调 createWorktree', async () => {
     const deps = makeDeps({
       detectCwd: vi.fn(async () => ({ isGitRepo: false, isInsideWorktree: false, gitInstalled: true })),

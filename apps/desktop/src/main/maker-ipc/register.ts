@@ -357,6 +357,7 @@ import { registerProjectPluginPolicyHandlers } from './projectPluginPolicyHandle
 import { registerPrecreatedWorktreeDiscardHandler } from './precreatedWorktreeDiscardHandler.js';
 import { registerNewMakerWorktreePreferenceHandler } from './newMakerWorktreePreferenceHandler.js';
 import {
+  resolveFreshSourceBranch,
   restoreMissingManagedWorktreeForSession,
   WorktreeManager as worktreeManager,
   worktreeStore,
@@ -5930,6 +5931,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
                 listBranches: worktreeManager.listBranches,
                 createWorktree: worktreeManager.createWorktree,
                 createId: () => randomUUID(),
+                resolveFreshSource: resolveFreshSourceBranch,
               },
               // working_dir 覆盖时不带 dispatcherSessionId:resolveHandoffBaseRepo
               // 的「dispatcher 自身 worktree」捷径按路径包含判定——覆盖目录若指向
