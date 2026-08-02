@@ -36,20 +36,44 @@ vi.mock('react-i18next', () => ({
   }),
 }));
 
-// MorphPopover 的形变动画依赖 getBoundingClientRect / rAF 测量,jsdom 下无意义。
-// 这里替换成「open 时直接渲染 children」的最小实现,只验证菜单语义与交互。
-vi.mock('@/components/ui/morph-popover', () => ({
-  MorphPopover: ({ open, trigger, children }: {
-    open: boolean;
-    trigger: React.ReactNode;
-    children: React.ReactNode;
-  }) => (
-    <div>
-      {trigger}
-      {open ? <div data-testid="agent-select-panel">{children}</div> : null}
-    </div>
-  ),
-}));
+// MorphPopover 的形变动画依赖 getBoundingClientRect / rAF 测量,jsdom 下无意义;
+// 但它的**聚焦优先级**是本组件的关键契约,必须如实复刻:形变结束后聚焦
+// [data-morph-autofocus] → input → 面板内第一个可交互项。只把动画摘掉、聚焦
+// 照搬,漏标记 data-morph-autofocus 时焦点会落到第一行,测试即刻失败
+// (真实实现见 components/ui/morph-popover.tsx 的 focus target 选择)。
+vi.mock('@/components/ui/morph-popover', async () => {
+  const React = await vi.importActual<typeof import('react')>('react');
+  return {
+    MorphPopover: ({ open, trigger, children }: {
+      open: boolean;
+      trigger: React.ReactNode;
+      children: React.ReactNode;
+    }) => {
+      const panelRef = React.useRef<HTMLDivElement>(null);
+      React.useEffect(() => {
+        if (!open) return;
+        const panel = panelRef.current;
+        if (!panel) return;
+        const target =
+          panel.querySelector<HTMLElement>('[data-morph-autofocus]:not([disabled])') ??
+          panel.querySelector<HTMLElement>('input, textarea') ??
+          panel.querySelector<HTMLElement>('button:not([disabled]), [role="option"]') ??
+          panel;
+        target.focus({ preventScroll: true });
+      }, [open]);
+      return (
+        <div>
+          {trigger}
+          {open ? (
+            <div ref={panelRef} data-testid="agent-select-panel">
+              {children}
+            </div>
+          ) : null}
+        </div>
+      );
+    },
+  };
+});
 
 describe('AgentSelect', () => {
   it('trigger 显示当前引擎;展开后每个引擎一行,当前项打勾', () => {
@@ -83,7 +107,7 @@ describe('AgentSelect', () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  it('打开时初始焦点落在当前选中行,不是第一行', async () => {
+  it('打开时初始焦点落在当前选中行,不是第一行(经 data-morph-autofocus)', async () => {
     render(<AgentSelect value="codex" onChange={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: '选择引擎：Codex' }));
 
@@ -91,6 +115,27 @@ describe('AgentSelect', () => {
       expect(document.activeElement).toBe(screen.getByTestId('agent-select-option-codex'));
     });
     expect(document.activeElement).not.toBe(screen.getByTestId('agent-select-option-cc'));
+    // 标记必须落在选中行上 —— MorphPopover 只认它,缺了就回落到第一行
+    expect(
+      screen.getByTestId('agent-select-option-codex').getAttribute('data-morph-autofocus'),
+    ).toBe('true');
+    expect(
+      screen.getByTestId('agent-select-option-cc').getAttribute('data-morph-autofocus'),
+    ).toBeNull();
+  });
+
+  it('中途 disabled 会收敛 open 状态,恢复可用后不会自己弹回来', () => {
+    const { rerender } = render(<AgentSelect value="cc" onChange={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    expect(screen.getByTestId('agent-select-panel')).toBeTruthy();
+
+    // worktree 创建中等场景:disabled 中途变 true
+    rerender(<AgentSelect value="cc" onChange={() => {}} disabled />);
+    expect(screen.queryByTestId('agent-select-panel')).toBeNull();
+
+    // 恢复可用 —— 面板不应未经点击自己打开
+    rerender(<AgentSelect value="cc" onChange={() => {}} />);
+    expect(screen.queryByTestId('agent-select-panel')).toBeNull();
   });
 
   it('↑↓ 在选项间循环移动,末项回首项', async () => {

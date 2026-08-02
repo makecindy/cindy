@@ -16,6 +16,8 @@
  * 选中态是持久的:调用方(NewMakerDraftRoute)把 vendor 存在 newMakerDraft 的
  * localStorage 快照里,切换即写盘,重启后 sanitize 读回 —— 打开菜单时初始焦点
  * 落在**当前选中项**而非第一项,与「记住上次用的引擎」是同一件事的两面。
+ * 该焦点由选中行上的 `data-morph-autofocus` 单点决定(MorphPopover 在形变结束后
+ * 按它聚焦);不要再叠一层自己的 rAF focus —— 两层会打架,后跑的那层说了算。
  */
 
 import { useEffect, useRef, useState } from 'react';
@@ -73,16 +75,12 @@ export function AgentSelect({
       ? AGENT_OPTIONS.filter((opt) => opt.vendor === value || !hiddenVendors.includes(opt.vendor))
       : AGENT_OPTIONS;
 
-  // 打开时焦点落在当前选中行(不是第一行)——键盘用户上来就站在「上次用的引擎」上,
-  // 与鼠标用户看到的勾选位置一致。
+  // disabled 中途变 true(如 worktree 创建中)时把 open 收敛掉 —— 只靠
+  // `open={open && !disabled}` 只是不渲染面板,本地 open 仍是 true,disabled
+  // 恢复后面板会自己弹回来(copilot review)。
   useEffect(() => {
-    if (!open) return;
-    const raf = requestAnimationFrame(() => {
-      const el = listRef.current?.querySelector<HTMLElement>('[data-agent-selected="true"]');
-      (el ?? listRef.current?.querySelector<HTMLElement>('[role="option"]'))?.focus();
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [open]);
+    if (disabled) setOpen(false);
+  }, [disabled]);
 
   const select = (next: MakerVendor) => {
     setOpen(false);
@@ -136,7 +134,20 @@ export function AgentSelect({
               'bg-[var(--composer-pill-bg,#FCFCFC)] dark:bg-[var(--composer-pill-bg,#393838)]',
               'text-[var(--text-primary)]',
             ],
-        'hover:bg-[var(--model-trigger-hover)]',
+        // 交互态按变体取:create-agent 有自己的 hover/pressed token(某些主题下
+        // 静止底色与 --model-trigger-hover 同色,共用会导致 hover 无反馈,codex review)。
+        isCreateAgent
+          ? [
+              'hover:bg-[var(--create-agent-control-bg-hover)]',
+              'active:bg-[var(--create-agent-control-bg-pressed)]',
+            ]
+          : ['hover:bg-[var(--model-trigger-hover)]', 'active:bg-[var(--surface-hover)]'],
+        // globals.css 全局移除了非输入控件的 outline,焦点反馈必须自己给
+        // (被替换的分段器原本靠 focus-within:ring-2 提供)。
+        'focus-visible:outline-none focus-visible:ring-2',
+        isCreateAgent
+          ? 'focus-visible:ring-[var(--create-agent-focus-ring)]'
+          : 'focus-visible:ring-[var(--focus-ring)]',
         disabled && 'pointer-events-none opacity-50',
         className,
       )}
@@ -200,6 +211,9 @@ export function AgentSelect({
               role="option"
               aria-selected={selected}
               data-agent-selected={selected ? 'true' : undefined}
+              // MorphPopover 形变结束后按此标记聚焦 —— 缺它会回落到"面板内第一个
+              // 可交互项",焦点跳到 Claude,回车就选错引擎(3 个 reviewer 同时指出)。
+              data-morph-autofocus={selected ? 'true' : undefined}
               data-testid={`agent-select-option-${opt.vendor}`}
               onClick={() => select(opt.vendor)}
               className={cn(
