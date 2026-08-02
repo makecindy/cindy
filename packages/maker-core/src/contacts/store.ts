@@ -266,8 +266,13 @@ export class MakerContactsStore {
     this.requireContact(id);
     // 对端 FTS 文档含本人名字, 删前收集受影响对端(删后关系行已级联消失查不到)
     const affected = this.relatedContactIds(id);
-    // ON DELETE CASCADE 带走 identities/events/group members/relations
-    this.db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
+    // ON DELETE CASCADE 带走 identities/events/group members/relations；同步已激活时
+    // 在同一事务写出“真实删除”证据，和 merge tombstone 明确区分。
+    const tx = this.db.transaction(() => {
+      this.db.prepare(`DELETE FROM contacts WHERE id = ?`).run(id);
+      this.syncRepo.recordDeletion(id);
+    });
+    tx();
     this.reindexSafe(id);
     for (const otherId of affected) this.reindexSafe(otherId);
   }

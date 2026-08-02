@@ -43,8 +43,11 @@ function normalizeSyncState(state: ContactsSyncState): ContactsSyncState {
   const derivedMergeClocks = new Map(
     mergeClocks.map((clock) => [clock.nodeId, clock.counter]),
   );
-  for (const merge of state.merges ?? []) {
-    const stamp = merge.value.stamp;
+  for (const evidence of [
+    ...(state.merges ?? []),
+    ...(state.deletions ?? []),
+  ]) {
+    const stamp = evidence.value.stamp;
     derivedMergeClocks.set(
       stamp.nodeId,
       Math.max(derivedMergeClocks.get(stamp.nodeId) ?? 0, stamp.counter),
@@ -61,6 +64,7 @@ function normalizeSyncState(state: ContactsSyncState): ContactsSyncState {
       (identity) => identity.value.value.platform !== "apple-contacts",
     ),
     merges: state.merges ?? [],
+    deletions: state.deletions ?? [],
   };
 }
 
@@ -103,6 +107,28 @@ export class ContactsSyncRepository {
         current,
         row.node_id,
         [{ sourceId, targetId }],
+      );
+      if (captured.changed)
+        this.updateRow(row.node_id, captured.state, current);
+    });
+    tx();
+  }
+
+  /** 与 store.deleteContact 的数据删除同事务记录“真实删除”而非 merge。 */
+  recordDeletion(contactId: string): void {
+    const tx = this.db.transaction(() => {
+      const row = this.readRow();
+      if (!row) return;
+      const state = this.parseState(row.state_json);
+      const previous = this.parseProjection(row.projection_json);
+      const current = readContactsSnapshot(this.db);
+      const captured = captureContactsSnapshot(
+        state,
+        previous,
+        current,
+        row.node_id,
+        [],
+        [contactId],
       );
       if (captured.changed)
         this.updateRow(row.node_id, captured.state, current);
@@ -170,9 +196,9 @@ export class ContactsSyncRepository {
       const local = this.reconcile(row);
       let remote = normalizeSyncState(raw);
       {
-        // source tombstone 可能经过旧客户端而丢失配套 redirect。仅当作者未声明
-        // merge-aware 且同 stamp 存在唯一 target 更新时延后删除；普通远端删除仍
-        // 正常收敛，发送端则会继续重发未确认 redirect 供后续原子迁移锚点。
+        // source tombstone 可能经过旧客户端而丢失配套 redirect。显式删除意图
+        // 直接放行；只有旧式 merge 的 stamp + 名称迁移形态才延后删除，发送端会
+        // 继续重发未确认 redirect，供后续原子迁移本机锚点。
         const anchoredContactIds = new Set(
           (
             this.db
@@ -186,21 +212,34 @@ export class ContactsSyncRepository {
         const explicitMergeSources = new Set(
           (remote.merges ?? []).map((merge) => merge.id),
         );
-        const mergeAwareNodeIds = new Set(
-          (remote.mergeClocks ?? []).map((clock) => clock.nodeId),
+        const explicitDeletionSources = new Set(
+          (remote.deletions ?? []).map((deletion) => deletion.id),
         );
-        // 旧 merge 捕获会用同一普通 stamp 删除 source 并更新 target。即使旧 hop
-        // 吞掉 redirect，这个事务形态仍能区分“疑似 merge”与单独的真实删除；
-        // 这里只据此延后删除，不据此选择 target 或迁移锚点。
+        // 旧 merge 捕获会用同一普通 stamp 删除 source、更新 target，并把 source
+        // 显示名并入 target 的别名（同名时保留为显示名）。三项同时命中才延后；
+        // 这里只保留 source，不据此选择 target 或迁移锚点。
         const mergeShapedSources = new Set<string>();
         for (const source of remote.contacts) {
           if (!source.deleted) continue;
-          const correlatedTargets = remote.contacts.filter(
-            (candidate) =>
-              candidate.id !== source.id &&
+          const sourceName = source.displayName.value.trim().toLowerCase();
+          const correlatedTargets = remote.contacts.filter((candidate) => {
+            const carriesSourceName =
+              candidate.displayName.value.trim().toLowerCase() === sourceName ||
+              candidate.aliases.value.some(
+                (alias) => alias.trim().toLowerCase() === sourceName,
+              );
+            const aliasesChangedWithDeletion =
+              candidate.aliases.stamp.nodeId === source.deleted!.nodeId &&
+              candidate.aliases.stamp.counter === source.deleted!.counter;
+            const updatedWithDeletion =
               candidate.updatedAt.stamp.nodeId === source.deleted!.nodeId &&
-              candidate.updatedAt.stamp.counter === source.deleted!.counter,
-          );
+              candidate.updatedAt.stamp.counter === source.deleted!.counter;
+            return (
+              candidate.id !== source.id &&
+              carriesSourceName &&
+              (aliasesChangedWithDeletion || updatedWithDeletion)
+            );
+          });
           if (correlatedTargets.length === 1) {
             mergeShapedSources.add(source.id);
           }
@@ -252,8 +291,8 @@ export class ContactsSyncRepository {
             const shouldDelaySuspectedLegacyMerge =
               contact.deleted &&
               anchoredContactIds.has(contact.id) &&
-              !mergeAwareNodeIds.has(contact.deleted.nodeId) &&
               !explicitMergeSources.has(contact.id) &&
+              !explicitDeletionSources.has(contact.id) &&
               !legacyMergeSources.has(contact.id) &&
               mergeShapedSources.has(contact.id);
             if (!shouldDelaySuspectedLegacyMerge) return contact;

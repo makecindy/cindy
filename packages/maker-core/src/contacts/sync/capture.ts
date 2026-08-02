@@ -7,7 +7,6 @@
 
 import {
   compareContactsSyncText,
-  ensureContactsSyncMergeClockNode,
   nextContactsSyncMergeStamp,
   nextContactsSyncStamp,
   stableContactsSyncJson,
@@ -16,6 +15,7 @@ import {
   type ContactsDataSnapshot,
   type ContactsSnapshotContact,
   type ContactsSyncContact,
+  type ContactsSyncDeletionValue,
   type ContactsSyncEntity,
   type ContactsSyncMergeValue,
   type ContactsSyncStamp,
@@ -144,6 +144,24 @@ function captureMergeRedirects(
   );
 }
 
+function captureDeletionIntents(
+  state: Array<ContactsSyncEntity<ContactsSyncDeletionValue>>,
+  contactIds: string[],
+  stamp: ContactsSyncStamp,
+): Array<ContactsSyncEntity<ContactsSyncDeletionValue>> {
+  const records = new Map(state.map((record) => [record.id, record]));
+  for (const contactId of contactIds) {
+    if (records.has(contactId)) continue;
+    records.set(contactId, {
+      id: contactId,
+      value: stamped({ contactId }, stamp),
+    });
+  }
+  return [...records.values()].sort((a, b) =>
+    compareContactsSyncText(a.id, b.id),
+  );
+}
+
 function captureEntities<T extends RowWithId>(
   state: Array<ContactsSyncEntity<Omit<T, "id">>>,
   previous: T[],
@@ -186,6 +204,7 @@ export function captureContactsSnapshot(
   current: ContactsDataSnapshot,
   nodeId: string,
   mergeRedirects: Array<{ sourceId: string; targetId: string }> = [],
+  deletionIntents: string[] = [],
 ): { state: ContactsSyncState; changed: boolean } {
   const snapshotChanged = !equal(previous, current);
   const mergeChanges = mergeRedirects.filter(({ sourceId, targetId }) =>
@@ -194,13 +213,18 @@ export function captureContactsSnapshot(
         merge.id !== sourceId || merge.value.value.targetId !== targetId,
     ),
   );
-  if (!snapshotChanged && mergeChanges.length === 0) {
+  const deletionChanges = deletionIntents.filter((contactId) =>
+    (state.deletions ?? []).every((deletion) => deletion.id !== contactId),
+  );
+  if (
+    !snapshotChanged &&
+    mergeChanges.length === 0 &&
+    deletionChanges.length === 0
+  ) {
     return { state, changed: false };
   }
 
-  let nextState = snapshotChanged
-    ? ensureContactsSyncMergeClockNode(state, nodeId)
-    : state;
+  let nextState = state;
   let dataStamp: ContactsSyncStamp | undefined;
   if (snapshotChanged) {
     const next = nextContactsSyncStamp(nextState, nodeId);
@@ -208,7 +232,7 @@ export function captureContactsSnapshot(
     dataStamp = next.stamp;
   }
   let mergeStamp: ContactsSyncStamp | undefined;
-  if (mergeChanges.length > 0) {
+  if (mergeChanges.length > 0 || deletionChanges.length > 0) {
     const next = nextContactsSyncMergeStamp(nextState, nodeId);
     nextState = next.state;
     mergeStamp = next.stamp;
@@ -270,6 +294,13 @@ export function captureContactsSnapshot(
       merges: mergeStamp
         ? captureMergeRedirects(state.merges ?? [], mergeChanges, mergeStamp)
         : (state.merges ?? []),
+      deletions: mergeStamp
+        ? captureDeletionIntents(
+            state.deletions ?? [],
+            deletionChanges,
+            mergeStamp,
+          )
+        : (state.deletions ?? []),
     },
   };
 }

@@ -154,8 +154,11 @@ function mergeClocksForRedirects(
 ): ContactsSyncClock[] {
   if (state.mergeClocks !== undefined) return state.mergeClocks;
   const clocks = new Map<string, number>();
-  for (const merge of state.merges ?? []) {
-    const stamp = merge.value.stamp;
+  for (const evidence of [
+    ...(state.merges ?? []),
+    ...(state.deletions ?? []),
+  ]) {
+    const stamp = evidence.value.stamp;
     clocks.set(
       stamp.nodeId,
       Math.max(clocks.get(stamp.nodeId) ?? 0, stamp.counter),
@@ -192,20 +195,7 @@ export function mergeContactsSyncStates(
     memberships: mergeById(a.memberships, b.memberships),
     relations: mergeById(a.relations, b.relations),
     merges: mergeById(a.merges ?? [], b.merges ?? []),
-  };
-}
-
-export function ensureContactsSyncMergeClockNode(
-  state: ContactsSyncState,
-  nodeId: string,
-): ContactsSyncState {
-  const existing = mergeClocksForRedirects(state);
-  if (existing.some((clock) => clock.nodeId === nodeId)) return state;
-  return {
-    ...state,
-    mergeClocks: [...existing, { nodeId, counter: 1 }].sort((left, right) =>
-      compareContactsSyncText(left.nodeId, right.nodeId),
-    ),
+    deletions: mergeById(a.deletions ?? [], b.deletions ?? []),
   };
 }
 
@@ -289,16 +279,21 @@ export function createContactsSyncDelta(
     entity.value.stamp.counter >
     (knownMerges.get(entity.value.stamp.nodeId) ?? 0);
   const merges = (state.merges ?? []).filter(mergeIsNew);
-  const mergeSourceIds = new Set(merges.map((merge) => merge.id));
+  const deletions = (state.deletions ?? []).filter(mergeIsNew);
+  const evidenceSourceIds = new Set([
+    ...merges.map((merge) => merge.id),
+    ...deletions.map((deletion) => deletion.id),
+  ]);
 
   return {
     version: CONTACTS_SYNC_VERSION,
     clocks: state.clocks.map((clock) => ({ ...clock })),
     mergeClocks: mergeClocksForRedirects(state).map((clock) => ({ ...clock })),
     // 旧客户端可能已确认 source tombstone 的普通时钟，却吞掉未知 redirect；
-    // redirect 尚未确认时必须把 source 一并重发，让升级后的接收端能原子迁移本机锚点。
+    // redirect / 删除意图尚未确认时必须把 tombstone 一并重发，让升级后的接收端
+    // 能原子迁移或删除本机锚点。
     contacts: state.contacts.filter(
-      (contact) => contactIsNew(contact) || mergeSourceIds.has(contact.id),
+      (contact) => contactIsNew(contact) || evidenceSourceIds.has(contact.id),
     ),
     identities: state.identities.filter(entityIsNew),
     events: state.events.filter(entityIsNew),
@@ -306,5 +301,6 @@ export function createContactsSyncDelta(
     memberships: state.memberships.filter(entityIsNew),
     relations: state.relations.filter(entityIsNew),
     merges,
+    deletions,
   };
 }

@@ -220,6 +220,10 @@ function isMerge(value: unknown): value is { targetId: string } {
   return isRecord(value) && isId(value.targetId);
 }
 
+function isDeletion(value: unknown): value is { contactId: string } {
+  return isRecord(value) && isId(value.contactId);
+}
+
 function isRelation(value: unknown): value is {
   fromId: string;
   toId: string;
@@ -428,6 +432,14 @@ export function isValidContactsSyncState(
         return false;
     }
   }
+  if (value.deletions !== undefined) {
+    if (!isEntityArray(value.deletions, isDeletion)) return false;
+    for (const deletion of value.deletions) {
+      const entry = deletion as ContactsSyncEntity<{ contactId: string }>;
+      if (entry.id !== entry.value.value.contactId || entry.deleted)
+        return false;
+    }
+  }
   return clocksCoverEveryStamp(value as unknown as ContactsSyncState);
 }
 
@@ -473,9 +485,11 @@ function clocksCoverEveryStamp(state: ContactsSyncState): boolean {
   );
   const mergeCovered = (stamp: ContactsSyncStamp | undefined): boolean =>
     !stamp || (mergeClocks.get(stamp.nodeId) ?? 0) >= stamp.counter;
-  for (const record of state.merges ?? []) {
-    if (!mergeCovered(record.value.stamp) || !mergeCovered(record.deleted)) {
-      return false;
+  for (const records of [state.merges ?? [], state.deletions ?? []]) {
+    for (const record of records) {
+      if (!mergeCovered(record.value.stamp) || !mergeCovered(record.deleted)) {
+        return false;
+      }
     }
   }
   return true;

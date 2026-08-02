@@ -89,15 +89,17 @@ export interface ContactsSyncMergeValue {
   targetId: string;
 }
 
+export interface ContactsSyncDeletionValue {
+  contactId: string;
+}
+
 /** 可直接 JSON 序列化、在设备间做状态式交换的完整同步状态。 */
 export interface ContactsSyncState {
   version: typeof CONTACTS_SYNC_VERSION;
   clocks: ContactsSyncClock[];
   /**
-   * merge redirect 使用独立时钟域：旧客户端会丢未知 merges，但不会因此确认其 stamp。
-   * 节点首次写普通状态时也以 counter=1 登记在此，声明该作者理解 redirect；这样
-   * 接收端可区分新版真实删除与经旧 hop 丢证据的 merge tombstone。字段可选用于
-   * 兼容升级前已落盘 / 旧客户端发来的 v1 状态。
+   * merge / deletion 证据使用独立时钟域：旧客户端会丢未知字段，但不会因此确认
+   * 其 stamp。字段可选用于兼容升级前已落盘 / 旧客户端发来的 v1 状态。
    */
   mergeClocks?: ContactsSyncClock[];
   contacts: ContactsSyncContact[];
@@ -111,6 +113,8 @@ export interface ContactsSyncState {
    * 新状态始终写出数组。旧客户端会忽略未知字段，新客户端合并时不会丢本地记录。
    */
   merges?: Array<ContactsSyncEntity<ContactsSyncMergeValue>>;
+  /** 显式的真实删除意图；与 merge redirect 互斥地解释联系人 tombstone。 */
+  deletions?: Array<ContactsSyncEntity<ContactsSyncDeletionValue>>;
 }
 
 /** 当前 SQLite 主表的无时间戳逻辑快照；FTS 是派生数据，不进入同步。 */
@@ -169,6 +173,7 @@ export function createEmptyContactsSyncState(): ContactsSyncState {
     memberships: [],
     relations: [],
     merges: [],
+    deletions: [],
   };
 }
 

@@ -202,6 +202,7 @@ describe("contacts device sync", () => {
     // 模拟旧客户端吞掉未知 redirect，却转发相同普通 clocks 与 source tombstone。
     const legacyHop = createContactsSyncDelta(aAfter, bBeforeMerge.clocks);
     delete legacyHop.merges;
+    delete legacyHop.deletions;
     delete legacyHop.mergeClocks;
     b.mergeDeviceSyncState(legacyHop);
     expect(b.getContact(source.id).identities).toContainEqual(
@@ -246,13 +247,23 @@ describe("contacts device sync", () => {
 
     a.deleteContact(person.id);
     const deleteState = stateOf(a);
-    const deleteAuthor = deleteState.contacts.find(
-      (contact) => contact.id === person.id,
-    )?.deleted?.nodeId;
-    expect(deleteState.mergeClocks).toContainEqual({
-      nodeId: deleteAuthor,
-      counter: 1,
-    });
+    expect(deleteState.deletions).toContainEqual(
+      expect.objectContaining({
+        id: person.id,
+        value: expect.objectContaining({ value: { contactId: person.id } }),
+      }),
+    );
+    const evidenceDelta = createContactsSyncDelta(
+      deleteState,
+      deleteState.clocks,
+      [],
+    );
+    expect(evidenceDelta.deletions?.map((entry) => entry.id)).toContain(
+      person.id,
+    );
+    expect(evidenceDelta.contacts.map((entry) => entry.id)).toContain(
+      person.id,
+    );
     b.mergeDeviceSyncState(deleteState);
 
     expect(() => b.getContact(person.id)).toThrow("contact not found");
@@ -276,10 +287,82 @@ describe("contacts device sync", () => {
     a.deleteContact(person.id);
     const legacyDelete = structuredClone(stateOf(a));
     delete legacyDelete.merges;
+    delete legacyDelete.deletions;
     delete legacyDelete.mergeClocks;
     b.mergeDeviceSyncState(legacyDelete);
 
     expect(() => b.getContact(person.id)).toThrow("contact not found");
+  });
+
+  it("升级后补捕获的旧版 merge 不会被追溯标成真实删除", () => {
+    const a = createStore();
+    const b = createStore();
+    const aDb = databases.at(-2)!;
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const source = a.createContact({ kind: "person", displayName: "旧源档案" });
+    const target = a.createContact({ kind: "person", displayName: "最终档案" });
+    exchange(b, a);
+    b.addIdentity(source.id, {
+      platform: "apple-contacts",
+      value: "anchor-before-upgrade",
+    });
+
+    const now = new Date().toISOString();
+    aDb.transaction(() => {
+      aDb
+        .prepare(`UPDATE contacts SET aliases = ?, updated_at = ? WHERE id = ?`)
+        .run(JSON.stringify([source.displayName]), now, target.id);
+      aDb.prepare(`DELETE FROM contacts WHERE id = ?`).run(source.id);
+    })();
+    const upgradedCapture = stateOf(a);
+    expect(upgradedCapture.merges).toEqual([]);
+    expect(upgradedCapture.deletions).toEqual([]);
+
+    b.mergeDeviceSyncState(upgradedCapture);
+    expect(b.getContact(source.id).identities).toContainEqual(
+      expect.objectContaining({
+        platform: "apple-contacts",
+        value: "anchor-before-upgrade",
+      }),
+    );
+  });
+
+  it("旧版真实删除与无关更新共享 capture stamp 时仍正常生效", () => {
+    const a = createStore();
+    const b = createStore();
+    const aDb = databases.at(-2)!;
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const victim = a.createContact({
+      kind: "person",
+      displayName: "应删除档案",
+    });
+    const unrelated = a.createContact({
+      kind: "person",
+      displayName: "无关档案",
+    });
+    exchange(b, a);
+    b.addIdentity(victim.id, {
+      platform: "apple-contacts",
+      value: "anchor-on-real-delete",
+    });
+
+    const now = new Date().toISOString();
+    aDb.transaction(() => {
+      aDb.prepare(`DELETE FROM contacts WHERE id = ?`).run(victim.id);
+      aDb
+        .prepare(`UPDATE contacts SET summary = ?, updated_at = ? WHERE id = ?`)
+        .run("离线更新", now, unrelated.id);
+    })();
+    const legacyBatch = stateOf(a);
+    delete legacyBatch.merges;
+    delete legacyBatch.deletions;
+    delete legacyBatch.mergeClocks;
+    b.mergeDeviceSyncState(legacyBatch);
+
+    expect(() => b.getContact(victim.id)).toThrow("contact not found");
+    expect(b.getContact(unrelated.id).summary).toBe("离线更新");
   });
 
   it("兼容不含 merge 字段的既有 v1 同步状态", () => {
@@ -292,6 +375,7 @@ describe("contacts device sync", () => {
       mergeContactsSyncStates(legacy, createEmptyContactsSyncState()),
     ).toMatchObject({
       merges: [],
+      deletions: [],
       mergeClocks: [],
     });
   });
@@ -891,7 +975,7 @@ describe("contacts device sync", () => {
     expect(isValidContactsSyncState(poisoned)).toBe(false);
   });
 
-  it("显式 merge 证据拒绝自环且要求时钟覆盖", () => {
+  it("显式 merge / deletion 证据校验结构且要求独立时钟覆盖", () => {
     const stamp = { counter: 1, nodeId: "node-a" };
     const valid = {
       ...createEmptyContactsSyncState(),
@@ -902,12 +986,22 @@ describe("contacts device sync", () => {
           value: { value: { targetId: "target-contact" }, stamp },
         },
       ],
+      deletions: [
+        {
+          id: "deleted-contact",
+          value: { value: { contactId: "deleted-contact" }, stamp },
+        },
+      ],
     };
     expect(isValidContactsSyncState(valid)).toBe(true);
 
     const selfLoop = structuredClone(valid);
     selfLoop.merges[0]!.value.value.targetId = "source-contact";
     expect(isValidContactsSyncState(selfLoop)).toBe(false);
+
+    const mismatchedDeletion = structuredClone(valid);
+    mismatchedDeletion.deletions[0]!.value.value.contactId = "other-contact";
+    expect(isValidContactsSyncState(mismatchedDeletion)).toBe(false);
 
     const uncovered = structuredClone(valid);
     uncovered.mergeClocks[0]!.counter = 0;
