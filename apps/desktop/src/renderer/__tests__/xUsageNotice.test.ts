@@ -6,7 +6,7 @@ import {
   acknowledgeXUsage,
   isXUsageAcknowledged,
   resetXUsageNoticeMemoryState,
-} from '../state/xUsageNotice';
+} from '@/state/xUsageNotice';
 
 const STORAGE_KEY = 'xUsageNotice.acknowledgedPrincipals';
 

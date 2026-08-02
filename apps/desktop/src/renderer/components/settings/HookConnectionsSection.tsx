@@ -49,7 +49,7 @@ import {
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { toast } from '@/lib/toast';
 import { extractIpcError } from '@/utils/ipcError';
-import { acknowledgeXUsage, isXUsageAcknowledged } from '../../state/xUsageNotice';
+import { acknowledgeXUsage, isXUsageAcknowledged } from '@/state/xUsageNotice';
 import { XUsageGuide } from './XUsageGuide';
 import {
   HOOK_BIND_REASON_ALREADY_BOUND,

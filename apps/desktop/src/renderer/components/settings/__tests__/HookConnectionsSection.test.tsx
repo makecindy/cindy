@@ -96,7 +96,7 @@ vi.mock('../TelegramBehaviorSettings', () => ({
 }));
 
 import { deriveAlias, HookConnectionsSection, workspaceRowsToMap } from '../HookConnectionsSection';
-import { resetXUsageNoticeMemoryState } from '../../../state/xUsageNotice';
+import { resetXUsageNoticeMemoryState } from '@/state/xUsageNotice';
 
 /** 渠道卡收起时内容卸载(Collapse), 交互前先点开对应卡的头部行。 */
 async function expandChannelCard(titleKey: RegExp) {
