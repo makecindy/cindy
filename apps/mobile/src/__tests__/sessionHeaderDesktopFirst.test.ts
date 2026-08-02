@@ -86,6 +86,14 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("pathname: '/sessions/[sessionId]'");
     expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
     expect(source).toContain('router.replace({');
+    // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
+    expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
+    expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
+    expect(source).toContain('if (pendingDrawerNavigationRef.current) return;');
+    expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
+    expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
     expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
     // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
@@ -95,7 +103,7 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
     expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
-    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    setSessionListDrawerOpen(false);");
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // replace");
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {

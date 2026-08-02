@@ -1930,6 +1930,9 @@ export default function SessionScreen() {
     windowWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
+  // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
+  const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
   // 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点(SessionListDrawer.returnFocusRef)。
   const sessionListButtonRef = useRef<View>(null);
   // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
@@ -1937,10 +1940,24 @@ export default function SessionScreen() {
     if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
   }, [wideSessionNav.enabled]);
   const openSessionListDrawer = useCallback(() => {
+    pendingDrawerNavigationRef.current = null;
     Keyboard.dismiss();
     setSessionListDrawerOpen(true);
   }, []);
   const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
+  const queueDrawerNavigation = useCallback((action: () => void) => {
+    // 关闭动画期间 overlay 仍拦截点击;首个动作获胜,后续连点不覆盖目的地。
+    if (pendingDrawerNavigationRef.current) return;
+    pendingDrawerNavigationRef.current = action;
+    setSessionListDrawerOpen(false);
+  }, []);
+  const handleSessionListDrawerClosed = useCallback(() => {
+    const action = pendingDrawerNavigationRef.current;
+    if (!action) return false;
+    pendingDrawerNavigationRef.current = null;
+    action();
+    return true;
+  }, []);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
     if (targetSession.id === sessionId) {
@@ -1958,30 +1975,31 @@ export default function SessionScreen() {
       Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
       return;
     }
-    setSessionListDrawerOpen(false);
     // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
-    router.replace({
-      pathname: '/sessions/[sessionId]',
-      params: {
-        deviceId: targetDeviceId,
-        deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
-        sessionId: targetSession.id,
-      },
+    queueDrawerNavigation(() => {
+      router.replace({
+        pathname: '/sessions/[sessionId]',
+        params: {
+          deviceId: targetDeviceId,
+          deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+          sessionId: targetSession.id,
+        },
+      });
     });
-  }, [router, sessionId, t]);
+  }, [queueDrawerNavigation, router, sessionId, t]);
   // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
   // 与首页各入口同一把 guardedPush 锁。
   const guardedPush = useGuardedPush();
   const handleDrawerNewSession = useCallback(() => {
-    setSessionListDrawerOpen(false);
-    guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
-  }, [deviceId, deviceName, guardedPush]);
+    queueDrawerNavigation(() => {
+      guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+    });
+  }, [deviceId, deviceName, guardedPush, queueDrawerNavigation]);
   // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
   // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
   const handleDrawerGoHome = useCallback(() => {
-    setSessionListDrawerOpen(false);
-    router.dismissTo('/');
-  }, [router]);
+    queueDrawerNavigation(() => router.dismissTo('/'));
+  }, [queueDrawerNavigation, router]);
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
   // 否则「拖回单行退出激活态」永远收不回去。
@@ -8424,6 +8442,7 @@ export default function SessionScreen() {
         <SessionListDrawer
           currentSessionId={sessionId}
           onClose={closeSessionListDrawer}
+          onClosed={handleSessionListDrawerClosed}
           onGoHome={handleDrawerGoHome}
           onNewSession={handleDrawerNewSession}
           onSelectSession={handleDrawerSelectSession}
