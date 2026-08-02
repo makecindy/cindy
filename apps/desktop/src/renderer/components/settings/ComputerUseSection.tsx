@@ -531,11 +531,11 @@ export function ComputerUseSection({
             error: String(err),
           } as ComputerDriverStatus;
         }),
-        window.electronAPI.browserBackend?.getState().catch((err) => {
+        window.electronAPI.browserBackend?.getState?.().catch((err) => {
           log.warn('browserBackend.getState failed', err);
           return null;
         }) ?? Promise.resolve(null),
-        window.electronAPI.browserBackend?.getHealth().catch((err) => {
+        window.electronAPI.browserBackend?.getHealth?.().catch((err) => {
           backendHealthError = err;
           log.warn('browserBackend.getHealth failed', err);
           return null;

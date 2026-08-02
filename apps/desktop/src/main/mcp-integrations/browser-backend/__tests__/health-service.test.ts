@@ -135,6 +135,35 @@ describe('BrowserBackendHealthService', () => {
     expect(result.health).not.toHaveProperty('message');
   });
 
+  it('classifies a replacement restart as disposing instead of a generic status failure', async () => {
+    const ctl = controller();
+    ctl.call
+      .mockResolvedValueOnce({
+        ok: true,
+        action: 'start',
+        status: 200,
+        data: { ready: true },
+      })
+      .mockResolvedValueOnce({
+        ok: false,
+        action: 'status',
+        errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+        message: 'embedded browser control is restarting; retry shortly',
+      });
+    const service = new BrowserBackendHealthService(ctl, logger());
+
+    await expect(service.recover()).resolves.toEqual({
+      ok: false,
+      health: {
+        active: 'rsb-webview',
+        status: 'error',
+        canRecover: true,
+        reason: 'disposing',
+        errorCode: 'BROWSER_RUNTIME_UNAVAILABLE',
+      },
+    });
+  });
+
   it('does not claim embedded recovery when a queued setting switch wins the race', async () => {
     const ctl = controller();
     ctl.getCurrentBackendKind.mockReturnValue('external');

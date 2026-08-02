@@ -149,7 +149,12 @@ export function BrowserBackendSubsection({
               'disabled:pointer-events-none disabled:opacity-50',
             )}
           >
-            <span className={cn('inline-flex shrink-0', recovering && 'motion-safe:animate-spin')}>
+            <span
+              className={cn(
+                'inline-flex shrink-0',
+                recovering && 'animate-spinner motion-reduce:animate-none',
+              )}
+            >
               <RefreshCw size={12} />
             </span>
             {recovering

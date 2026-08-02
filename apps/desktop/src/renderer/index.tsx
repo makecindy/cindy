@@ -195,7 +195,8 @@ void (async () => {
   // can own RSB tabs; other full-app windows must not publish an empty pool
   // snapshot into the primary registry.
   if (!isGhostPanelWindow() && !isSecondaryWindow()) {
-    initRsbBrowserBridge();
+    const disposeRsbBrowserBridge = initRsbBrowserBridge();
+    import.meta.hot?.dispose(disposeRsbBrowserBridge);
   }
 
   // 主视图挂载前完成 memory 真值同步与旧配置迁移，确保用户可交互的 toggle 不会和

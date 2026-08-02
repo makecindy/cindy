@@ -204,7 +204,8 @@ function enqueueGuestClose(sessionId: string, task: () => Promise<void>): Promis
  * call multiple times.
  *
  * Calling `initRsbBrowserBridge()` more than once is a no-op (returns the same
- * teardown). Tests should call `_resetForTests()` between runs.
+ * teardown) until that teardown runs. HMR teardown clears module ownership so
+ * the next evaluation can bind a fresh subscription set.
  */
 export function initRsbBrowserBridge(): () => void {
   if (initialized) {
@@ -335,14 +336,20 @@ export function initRsbBrowserBridge(): () => void {
     }
   });
 
-  teardown = () => {
+  const dispose = () => {
+    // A disposer retained by an old HMR generation must not tear down the
+    // subscriptions installed by a newer generation.
+    if (teardown !== dispose) return;
     unsubRelease();
     unsubGuestClose();
     unsubPin();
     unsubUnpin();
     unsubTabOp();
     unsubResource();
+    initialized = false;
+    teardown = null;
   };
+  teardown = dispose;
 
   // Initial snapshot — drop main-side rows that the renderer no longer
   // tracks (typically HMR / crash residue) and re-mirror the main-side pin

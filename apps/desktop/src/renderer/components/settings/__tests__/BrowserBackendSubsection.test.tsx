@@ -63,6 +63,27 @@ describe('BrowserBackendSubsection', () => {
     ).toBeTruthy();
   });
 
+  it('uses the semantic spinner motion and stays static under reduced motion', () => {
+    render(
+      <BrowserBackendSubsection
+        active="rsb-webview"
+        pending={false}
+        recovering
+        health={{ active: 'rsb-webview', status: 'ready', canRecover: true }}
+        onSelect={vi.fn()}
+        onRecover={vi.fn()}
+      />,
+    );
+
+    const button = screen.getByRole('button', {
+      name: 'settings.computerUse.browserBackend.health.recovering',
+    });
+    const spinner = button.querySelector('span');
+    expect(spinner?.classList.contains('animate-spinner')).toBe(true);
+    expect(spinner?.classList.contains('motion-reduce:animate-none')).toBe(true);
+    expect(spinner?.classList.contains('animate-spin')).toBe(false);
+  });
+
   it('does not show embedded recovery controls for the external backend', () => {
     render(
       <BrowserBackendSubsection

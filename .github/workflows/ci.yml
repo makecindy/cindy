@@ -99,6 +99,10 @@ jobs:
         run: pnpm check:i18n-glossary
 
       - name: Typecheck desktop
+        # Desktop's full TS program now exceeds the shared 4 GB heap ceiling.
+        # This step-only allowance changes no files or diagnostics in scope.
+        env:
+          NODE_OPTIONS: '--max-old-space-size=5120'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile

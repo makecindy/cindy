@@ -386,6 +386,22 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     expect(api.release).not.toHaveBeenCalled();
   });
 
+  it('teardown permits HMR re-init and a stale disposer cannot remove fresh listeners', () => {
+    const api = installFakeIpc();
+    const staleTeardown = initRsbBrowserBridge();
+
+    staleTeardown();
+    const currentTeardown = initRsbBrowserBridge();
+    expect(api.onPin).toHaveBeenCalledTimes(2);
+    expect(api.pinCb).not.toBeNull();
+
+    staleTeardown();
+    expect(api.pinCb).not.toBeNull();
+
+    currentTeardown();
+    expect(api.pinCb).toBeNull();
+  });
+
   it('init when electronAPI is missing is a silent no-op', () => {
     clearIpc();
     expect(() => initRsbBrowserBridge()).not.toThrow();

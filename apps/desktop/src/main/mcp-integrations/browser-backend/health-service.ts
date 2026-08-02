@@ -23,8 +23,14 @@ function errorText(err: unknown): string {
 function classifyFailure(
   message: string,
   fallback: BrowserBackendHealthReason,
+  errorCode?: string,
 ): BrowserBackendHealthReason {
-  if (/\bdisposing\b|generation was replaced/i.test(message)) return 'disposing';
+  if (
+    errorCode === 'BROWSER_RUNTIME_UNAVAILABLE' ||
+    /\b(?:disposing|restarting)\b|generation was replaced/i.test(message)
+  ) {
+    return 'disposing';
+  }
   if (/host renderer|tab-op 'probe' timed out|ready timeout/i.test(message)) {
     return 'host-unavailable';
   }
@@ -179,7 +185,7 @@ export class BrowserBackendHealthService {
           message,
         });
         return this.failure(
-          classifyFailure(message, 'status-failed'),
+          classifyFailure(message, 'status-failed', status.errorCode),
           status.errorCode,
         );
       }
