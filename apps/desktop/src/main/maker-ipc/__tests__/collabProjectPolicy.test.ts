@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { assertCollabProjectEnabled } from '../collabProjectPolicy.js';
 
 describe('assertCollabProjectEnabled', () => {
+  const neverManagedDialogue = () => false;
   const project = {
     workingDir: 'C:\\projects\\cindy',
     workspaceKind: 'project',
@@ -10,13 +11,15 @@ describe('assertCollabProjectEnabled', () => {
   } as const;
 
   it('allows an enabled local project', () => {
-    expect(() => assertCollabProjectEnabled(project, () => true)).not.toThrow();
+    expect(() =>
+      assertCollabProjectEnabled(project, () => true, neverManagedDialogue),
+    ).not.toThrow();
   });
 
   it('rejects a project with collab disabled', () => {
-    expect(() => assertCollabProjectEnabled(project, () => false)).toThrow(
-      '[PRECONDITION_FAILED] collaboration is disabled for this session',
-    );
+    expect(() =>
+      assertCollabProjectEnabled(project, () => false, neverManagedDialogue),
+    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
   });
 
   it('trims the working directory before checking the project policy', () => {
@@ -28,6 +31,7 @@ describe('assertCollabProjectEnabled', () => {
           checkedPath = workingDir;
           return true;
         },
+        neverManagedDialogue,
       ),
     ).not.toThrow();
     expect(checkedPath).toBe('C:\\projects\\cindy');
@@ -47,6 +51,7 @@ describe('assertCollabProjectEnabled', () => {
             calls.push(workingDir);
             return true;
           },
+          (workingDir) => workingDir.startsWith('/app-managed/dialogues/'),
         ),
       ).not.toThrow();
       expect(calls).toEqual([undefined]);
@@ -62,8 +67,29 @@ describe('assertCollabProjectEnabled', () => {
           remoteHostId: null,
         },
         () => false,
+        (workingDir) => workingDir.startsWith('/app-managed/dialogues/'),
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+  });
+
+  it('applies project policy to a local dialogue that explicitly binds a real directory', () => {
+    const explicitWorkingDir = '/projects/private-collab-disabled';
+    const calls: Array<string | undefined> = [];
+    expect(() =>
+      assertCollabProjectEnabled(
+        {
+          workingDir: explicitWorkingDir,
+          workspaceKind: 'dialogue',
+          remoteHostId: null,
+        },
+        (_pluginId, workingDir) => {
+          calls.push(workingDir);
+          return false;
+        },
+        neverManagedDialogue,
+      ),
+    ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
+    expect(calls).toEqual([explicitWorkingDir]);
   });
 
   it('rejects unsupported workspace kinds and missing runtime directories', () => {
@@ -74,18 +100,21 @@ describe('assertCollabProjectEnabled', () => {
       assertCollabProjectEnabled(
         { workingDir: '/tmp/session', workspaceKind: 'unknown', remoteHostId: null },
         mustNotQuery,
+        neverManagedDialogue,
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration requires a supported lead session');
     expect(() =>
       assertCollabProjectEnabled(
         { workingDir: null, workspaceKind: 'dialogue', remoteHostId: null },
         mustNotQuery,
+        neverManagedDialogue,
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration requires a session working directory');
     expect(() =>
       assertCollabProjectEnabled(
         { workingDir: '   ', workspaceKind: 'project', remoteHostId: null },
         mustNotQuery,
+        neverManagedDialogue,
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration requires a session working directory');
   });
@@ -103,6 +132,7 @@ describe('assertCollabProjectEnabled', () => {
             calls.push(workingDir);
             return true;
           },
+          neverManagedDialogue,
         ),
       ).not.toThrow();
       expect(calls).toEqual([undefined]);
@@ -116,6 +146,7 @@ describe('assertCollabProjectEnabled', () => {
       assertCollabProjectEnabled(
         { ...project, workingDir: '/remote/repo', remoteHostId: 'host-1', agentKind: 'codex' },
         () => false,
+        neverManagedDialogue,
       ),
     ).toThrow('[PRECONDITION_FAILED] collaboration is disabled for this session');
   });

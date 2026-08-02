@@ -26,6 +26,7 @@ export interface CollabProjectPolicyContext {
 export function assertCollabProjectEnabled(
   context: CollabProjectPolicyContext,
   isPluginEnabled: (pluginId: 'collab', workingDir?: string) => boolean,
+  isManagedDialogueWorkspace: (workingDir: string) => boolean,
 ): void {
   const workingDir = typeof context.workingDir === 'string' ? context.workingDir.trim() : null;
   if (context.workspaceKind !== 'project' && context.workspaceKind !== 'dialogue') {
@@ -40,15 +41,6 @@ export function assertCollabProjectEnabled(
     throwIpcError('PRECONDITION_FAILED', 'collaboration requires a session working directory');
   }
 
-  // dialogue 没有用户选择的项目,只读用户级/全局级开关。它在 main 内部仍有自动分配的
-  // workingDir,但那是运行目录,不能拿来当项目目录读取 `.cindy/plugins.json`。
-  if (context.workspaceKind === 'dialogue') {
-    if (!isPluginEnabled('collab')) {
-      throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
-    }
-    return;
-  }
-
   // 远端会话的 workingDir 是远端机器上的路径, 在本机 fs 上查项目级插件配置
   // (.cindy/plugins.json) 没有意义 —— 命中同路径的本机目录会误判, 查不到又
   // 会误拒。远端项目级 collab 配置暂无对应机制; 协同边界由 "session 已在
@@ -58,6 +50,16 @@ export function assertCollabProjectEnabled(
   // TODO(follow-up): 远端项目级 collab 开关 (远端 fs 的 .cindy/plugins.json
   // 或 per-host 设置) 有需求时再做。
   if (context.remoteHostId) {
+    if (!isPluginEnabled('collab')) {
+      throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
+    }
+    return;
+  }
+
+  // 只有 Main 能确认属于 app 托管 dialogue root 的运行目录才跳过项目级策略。
+  // workspaceKind 来自会话创建输入,不能单独作为授权依据:显式绑定真实目录的 dialogue
+  // 仍需尊重该目录的 `.cindy/plugins.json`,否则伪造 kind 就能绕过项目级禁用。
+  if (context.workspaceKind === 'dialogue' && isManagedDialogueWorkspace(workingDir)) {
     if (!isPluginEnabled('collab')) {
       throwIpcError('PRECONDITION_FAILED', 'collaboration is disabled for this session');
     }

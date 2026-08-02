@@ -119,6 +119,9 @@ describe('sendToSession ordering', () => {
     expectOrder(policyGuardBlock, 'leadRow?.workingDir', 'lead?.workDir');
     expect(policyGuardBlock).toContain(' : leadRow?.workspaceKind;');
     expectOrder(policyGuardBlock, 'const liveWorkspaceKind =', 'assertCollabProjectEnabled(');
+    expect(policyGuardBlock).toContain(
+      'matchDialogueWorkspacePath(workingDir, dialogueWorkspaceRootDir()) !== null',
+    );
   });
 
   it('keeps non-composer direct sends from inheriting armed plan mode', () => {

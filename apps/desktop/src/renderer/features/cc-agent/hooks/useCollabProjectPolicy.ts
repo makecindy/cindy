@@ -46,10 +46,10 @@ type ProjectRefreshTracker = {
  * 只会读到自己的用户级开关,可能与被控端 main 的 assertCollabProjectEnabled 相反 ——
  * 那正是 #1170 里「草稿没入口 / 会话有入口但走不完」的第二层来源。
  *
- * `skipQuery`(dialogue / SSH 远端):dialogue 没有用户项目,远端 workingDir 则不属于执行查询
- * 的本机 fs;两者都跳过项目级覆盖,但仍查用户级/全局级 collab 开关
- * (与 main 侧 assertCollabProjectEnabled 同口径):用户全局禁用 Collab 时 UI toggle 同样
- * 置灰,而不是放行到 enableOrca 才撞 PRECONDITION_FAILED。
+ * `skipQuery`(尚无运行目录的 dialogue 草稿 / SSH 远端):草稿没有可查目录,远端 workingDir
+ * 则不属于执行查询的本机 fs;两者都跳过项目级覆盖,但仍查用户级/全局级 collab 开关。
+ * 已创建的本地 dialogue 把 workingDir 交给查询:app 托管目录自然回落全局,显式真实目录
+ * 尊重项目覆盖,避免 UI 放行后才撞 main 的 PRECONDITION_FAILED。
  */
 export function useCollabProjectPolicy(
   workingDir: string | null | undefined,
