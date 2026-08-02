@@ -26,7 +26,8 @@ export interface HandoffWorktreeDeps {
   listAll: () => WorktreeMeta[];
   detectCwd: (cwd: string) => Promise<DetectCwdResp>;
   suggestName: (baseRepo: string) => Promise<string>;
-  listBranches: (baseRepo: string) => Promise<ListBranchesResp>;
+  /** 列分支 + 当前检出分支;repoDir 可以是主仓根,也可以是 linked worktree 路径。 */
+  listBranches: (repoDir: string) => Promise<ListBranchesResp>;
   createWorktree: (req: CreateWorktreeReq) => Promise<CreateWorktreeResp>;
   createId: () => string;
   /**
@@ -105,8 +106,8 @@ export function shouldRecycleHandoffWorktreeOnFailure(sessionCreated: boolean): 
  * 返回预生成的 sessionId(调用方必须用它作为新 session 的 id,worktreeStore 绑定已按它登记)。
  *
  * 源分支语义(2026-08-02 起):
- *  - dispatcher 自己是 worktree session 且 workingDir 在其下 → 视为「派生子任务」,
- *    沿用旧行为:以 dispatcher 当前分支为源,跟随其在途工作。
+ *  - dispatcher 自己是 worktree session 且 workingDir 在其下 → 视为「派生子任务」:
+ *    以 dispatcher worktree 当前检出的分支为源,跟随其在途工作。
  *  - 其它情况(从主仓 / 未绑定目录派发)→ 视为「新任务」:经 resolveFreshSource 取
  *    fetch 后的远端默认分支为源。主仓 checkout 常年停在旧工作分支时,旧行为切出的
  *    工作区可落后上游上千 commit(实踩),这是本分支语义的直接动因。
@@ -121,15 +122,23 @@ export async function prepareHandoffWorktree(
   const baseRepo = resolved.baseRepo;
 
   const name = await deps.suggestName(baseRepo);
-  const { current } = await deps.listBranches(baseRepo);
-  const fallback = current || 'HEAD';
   const dispatcherWorktree = dispatcherSessionId ? deps.getForSession(dispatcherSessionId) : null;
   const continuingDispatcherWork =
     !!dispatcherWorktree && isSamePathOrUnder(workingDir, dispatcherWorktree.path);
-  const sourceBranch =
-    !continuingDispatcherWork && deps.resolveFreshSource
+  let sourceBranch: string;
+  if (continuingDispatcherWork) {
+    // 派生子任务:源分支取 dispatcher worktree 里当前检出的分支——baseRepo 主 checkout
+    // 的 current 可能是另一条分支,用它会丢 dispatcher 分支上的在途提交。detached
+    // (rev-parse 返回字面量 HEAD)或读不到时退创建时登记的分支。
+    const { current } = await deps.listBranches(dispatcherWorktree.path);
+    sourceBranch = current && current !== 'HEAD' ? current : dispatcherWorktree.branch;
+  } else {
+    const { current } = await deps.listBranches(baseRepo);
+    const fallback = current || 'HEAD';
+    sourceBranch = deps.resolveFreshSource
       ? (await deps.resolveFreshSource(baseRepo, fallback)).sourceBranch
       : fallback;
+  }
   const sessionId = deps.createId();
   const resp = await deps.createWorktree({ sessionId, baseRepo, name, sourceBranch });
   if (!resp.ok) {

@@ -1,19 +1,21 @@
 /**
  * freshBase 单测 —— 自动 worktree 新鲜基底解析(resolveFreshSourceBranch)。
- * gitExec 全 mock(不碰真 git),覆盖 upstream/origin 选择、默认分支解析、
- * fetch 失败回退与 fail-open 各分支。
+ * gitExec 全 mock(不碰真 git),覆盖 upstream/origin 选择、远端默认分支真值查询
+ * (ls-remote --symref)、离线回退本地元数据、fetch 失败回退与 fail-open 各分支。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+import type { GitExecOpts } from '../gitExec';
+
 const mocks = vi.hoisted(() => ({
   impl: undefined as undefined | ((args: readonly string[]) => string | undefined),
-  calls: [] as string[][],
+  calls: [] as { args: string[]; opts?: { timeoutMs?: number } }[],
 }));
 
 vi.mock('../gitExec', () => ({
-  gitExec: async (args: readonly string[]) => {
-    mocks.calls.push([...args]);
+  gitExec: async (args: readonly string[], _cwd?: string, opts?: GitExecOpts) => {
+    mocks.calls.push({ args: [...args], opts });
     const out = mocks.impl?.(args);
     if (out === undefined) throw new Error(`git ${args.join(' ')} failed`);
     return { stdout: out, stderr: '' };
@@ -33,22 +35,62 @@ beforeEach(() => {
   mocks.calls = [];
 });
 
+function call(prefix: string) {
+  return mocks.calls.find((c) => c.args.join(' ').startsWith(prefix));
+}
+
 describe('resolveFreshSourceBranch', () => {
-  it('有 upstream → fetch 其默认分支并返回 upstream/<db>', async () => {
+  it('有 upstream → ls-remote 查远端默认分支真值,fetch 后返回 upstream/<db>', async () => {
     mocks.impl = (args) => {
       const key = args.join(' ');
       if (key === 'remote get-url upstream') return 'git@github.com:up/repo.git';
-      if (key === 'symbolic-ref --short refs/remotes/upstream/HEAD') return 'upstream/main';
+      if (key === 'ls-remote --symref upstream HEAD')
+        return 'ref: refs/heads/main\tHEAD\nabc123\tHEAD';
       if (key === 'fetch --quiet upstream main') return '';
       if (key === 'rev-parse --verify refs/remotes/upstream/main') return 'abc123';
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
     expect(res).toEqual({ sourceBranch: 'upstream/main', fetched: true, reason: undefined });
-    expect(mocks.calls).toContainEqual(['fetch', '--quiet', 'upstream', 'main']);
+    // 网络类命令必须带真超时(到点杀子进程,防与后续 createWorktree 抢仓库锁)
+    expect(call('ls-remote')?.opts?.timeoutMs).toBeGreaterThan(0);
+    expect(call('fetch')?.opts?.timeoutMs).toBeGreaterThan(0);
+    // 远端真值命中时不再读本地 symbolic-ref
+    expect(call('symbolic-ref')).toBeUndefined();
   });
 
-  it('无 upstream 有 origin,symbolic-ref 缺失 → 探测 refs/remotes/origin/main', async () => {
+  it('远端默认分支已改名 → 以 ls-remote 真值为准,不用本地过期的 remote HEAD', async () => {
+    mocks.impl = (args) => {
+      const key = args.join(' ');
+      if (key === 'remote get-url upstream') return 'git@github.com:up/repo.git';
+      // 本地 refs/remotes/upstream/HEAD 仍指旧的 main(不应被读到)
+      if (key === 'symbolic-ref --short refs/remotes/upstream/HEAD') return 'upstream/main';
+      if (key === 'ls-remote --symref upstream HEAD')
+        return 'ref: refs/heads/trunk\tHEAD\ndef456\tHEAD';
+      if (key === 'fetch --quiet upstream trunk') return '';
+      if (key === 'rev-parse --verify refs/remotes/upstream/trunk') return 'def456';
+      return undefined;
+    };
+    const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+    expect(res.sourceBranch).toBe('upstream/trunk');
+    expect(res.fetched).toBe(true);
+  });
+
+  it('ls-remote 失败(离线)→ 退本地 symbolic-ref,fetch 成功', async () => {
+    mocks.impl = (args) => {
+      const key = args.join(' ');
+      if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+      if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key === 'fetch --quiet origin main') return '';
+      if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+      return undefined;
+    };
+    const res = await resolveFreshSourceBranch(REPO, 'feature-x');
+    expect(res.sourceBranch).toBe('origin/main');
+    expect(res.fetched).toBe(true);
+  });
+
+  it('ls-remote 与 symbolic-ref 都缺 → 探测 refs/remotes/origin/main', async () => {
     mocks.impl = (args) => {
       const key = args.join(' ');
       if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
@@ -67,7 +109,7 @@ describe('resolveFreshSourceBranch', () => {
       if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
       if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
-      // fetch → undefined → 抛错
+      // ls-remote / fetch → undefined → 抛错(离线)
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
@@ -88,6 +130,6 @@ describe('resolveFreshSourceBranch', () => {
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
     expect(res).toEqual({ sourceBranch: 'feature-x', fetched: false, reason: 'no-default-branch' });
-    expect(mocks.calls.some((c) => c[0] === 'fetch')).toBe(false);
+    expect(call('fetch')).toBeUndefined();
   });
 });

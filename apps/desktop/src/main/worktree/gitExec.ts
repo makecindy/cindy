@@ -52,6 +52,12 @@ export class GitExecError extends Error {
 export interface GitExecOpts {
   /** 额外的环境变量, 会与 process.env 合并(后者优先级低)。常见: { LC_ALL: 'C' } */
   extraEnv?: Record<string, string>;
+  /**
+   * 超时毫秒数, 到点由 execFile 内建 timeout 以 SIGTERM 终止 git 子进程。
+   * 与外层 Promise.race 的区别: 子进程被真正杀掉, 不会残留后台 git 进程与
+   * 紧随其后的其它 git 操作争抢同一仓库的 .lock。省略 = 不超时。
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -70,6 +76,7 @@ function execFileOnce(
         cwd,
         // 防止超大输出炸内存。listBranches/listFiles 这类正常情况远低于此。
         maxBuffer: 16 * 1024 * 1024,
+        timeout: opts?.timeoutMs,
         env: opts?.extraEnv ? { ...process.env, ...opts.extraEnv } : undefined,
         // Windows 下 git 走 cmd shell, 不需要 shell:true(也安全, 用 args 数组传参不走 shell 解析)
       },
