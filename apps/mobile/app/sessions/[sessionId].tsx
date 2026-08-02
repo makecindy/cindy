@@ -39,6 +39,7 @@ import {
   AccessibilityInfo,
   Alert,
   AppState,
+  BackHandler,
   Keyboard,
   KeyboardAvoidingView,
   Linking,
@@ -1951,6 +1952,15 @@ export default function SessionScreen() {
   useEffect(() => {
     if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);
   }, [wideSessionNav.enabled]);
+  // 抽屉打开时由 SessionListDrawer 消费 Android back 并发起关闭;open=false 后该监听会
+  // 卸载,但 overlay 仍要退场约 motionDuration.exit。这个窗口临时吞掉 back,避免原生
+  // Screen 返回与 GestureDetector/Reanimated 子树卸载再次挤进同一帧。onClosed 提交
+  // overlayMounted=false 后自动移除,正常返回链(含 useGuardedBack)随即恢复。
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => subscription.remove();
+  }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
   const openSessionListDrawer = useCallback(() => {
     pendingDrawerNavigationRef.current = null;
     returnDrawerFocusAfterCloseRef.current = false;

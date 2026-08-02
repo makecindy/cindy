@@ -99,6 +99,11 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
     expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
+    // Android 退场期(open=false 但 overlay 仍 mounted)必须临时吞掉系统返回;
+    // onClosed 解除 mounted 后 effect cleanup 恢复 useGuardedBack 等正常返回链。
+    expect(source).toContain("if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;");
+    expect(source).toContain("BackHandler.addEventListener('hardwareBackPress', () => true)");
+    expect(source).toContain('}, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);');
     // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
     expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOverlayMounted(true);\n    setSessionListDrawerOpen(true);');
     // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
