@@ -32,10 +32,11 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
 import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
+  AccessibilityInfo,
   Alert,
   AppState,
   Keyboard,
@@ -46,6 +47,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  findNodeHandle,
   useWindowDimensions,
   type GestureResponderEvent,
   type LayoutChangeEvent,
@@ -747,6 +749,7 @@ export default function SessionScreen() {
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';
   const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
+  const navigation = useNavigation();
   const router = useRouter();
   const auth = useAuth();
   const windowDimensions = useWindowDimensions();
@@ -1940,7 +1943,9 @@ export default function SessionScreen() {
   // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
   // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
   const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
-  // 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点(SessionListDrawer.returnFocusRef)。
+  // 非导航关闭的焦点归还必须晚于父级 overlayMounted=false commit:否则按钮仍在
+  // no-hide-descendants 子树里,VoiceOver/TalkBack 会忽略聚焦并丢失焦点。
+  const returnDrawerFocusAfterCloseRef = useRef(false);
   const sessionListButtonRef = useRef<View>(null);
   // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
   useEffect(() => {
@@ -1948,6 +1953,7 @@ export default function SessionScreen() {
   }, [wideSessionNav.enabled]);
   const openSessionListDrawer = useCallback(() => {
     pendingDrawerNavigationRef.current = null;
+    returnDrawerFocusAfterCloseRef.current = false;
     Keyboard.dismiss();
     setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
@@ -1960,13 +1966,21 @@ export default function SessionScreen() {
     setSessionListDrawerOpen(false);
   }, []);
   const handleSessionListDrawerClosed = useCallback(() => {
-    setSessionListDrawerOverlayMounted(false);
     const action = pendingDrawerNavigationRef.current;
-    if (!action) return false;
+    if (!action) returnDrawerFocusAfterCloseRef.current = true;
+    setSessionListDrawerOverlayMounted(false);
+    if (!action) return;
     pendingDrawerNavigationRef.current = null;
     action();
-    return true;
   }, []);
+  useEffect(() => {
+    if (sessionListDrawerOverlayMounted || !returnDrawerFocusAfterCloseRef.current) return;
+    returnDrawerFocusAfterCloseRef.current = false;
+    // 导航型关闭不会登记归还请求;外部导航已让本页失焦时也不抢新屏焦点。
+    if (!navigation.isFocused()) return;
+    const returnNode = sessionListButtonRef.current ? findNodeHandle(sessionListButtonRef.current) : null;
+    if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
+  }, [navigation, sessionListDrawerOverlayMounted]);
   const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
     const targetSession = item.session as RemoteSession;
     if (targetSession.id === sessionId) {
@@ -8457,7 +8471,6 @@ export default function SessionScreen() {
           onNewSession={handleDrawerNewSession}
           onSelectSession={handleDrawerSelectSession}
           open={sessionListDrawerOpen}
-          returnFocusRef={sessionListButtonRef}
           width={sessionListDrawerWidthRef.current}
         />
       ) : null}

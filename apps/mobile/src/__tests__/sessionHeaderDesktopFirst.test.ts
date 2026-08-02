@@ -92,8 +92,8 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
     expect(source).toContain('if (pendingDrawerNavigationRef.current) return;');
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
-    expect(source).toContain('setSessionListDrawerOverlayMounted(false);\n    const action = pendingDrawerNavigationRef.current;');
-    expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();\n    return true;');
+    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
+    expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
     expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
@@ -105,6 +105,11 @@ describe('mobile session header desktop-first surface', () => {
     // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack);必须覆盖完整退场期。
     expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOverlayMounted}');
     expect(source).toContain("importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}");
+    // 非导航关闭的焦点归还必须由父级在背景隔离解除后的 commit effect 执行;
+    // 导航型关闭及页面已失焦时都不能把焦点抢回旧页面。
+    expect(source).toContain('if (sessionListDrawerOverlayMounted || !returnDrawerFocusAfterCloseRef.current) return;');
+    expect(source).toContain('if (!navigation.isFocused()) return;');
+    expect(source).toContain('AccessibilityInfo.setAccessibilityFocus(returnNode)');
     // 退场期间旋转/折叠/收窄不能直接卸载 Drawer:保留到 onClosed,三类 pending 导航
     // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
     expect(source).toContain('{wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (');

@@ -17,7 +17,7 @@
  *   (useReduceMotionEnabled === false 才播)。
  */
 import { House, LoaderCircle, SquarePen } from 'lucide-react-native';
-import { memo, useCallback, useEffect, useMemo, useRef, useState, type RefObject } from 'react';
+import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AccessibilityInfo,
   BackHandler,
@@ -37,7 +37,6 @@ import Animated, {
   withTiming,
 } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { useNavigation } from 'expo-router';
 import { useTranslation } from 'react-i18next';
 import { Text } from '@/components/AppText';
 import { Gesture, GestureDetector } from '@/platform/gestureHandler';
@@ -85,19 +84,16 @@ export function SessionListDrawer({
   onNewSession,
   onSelectSession,
   open,
-  returnFocusRef,
   width,
 }: {
   currentSessionId: string;
   onClose(): void;
-  /** 关闭动画完成、overlay 真正卸载后触发;返回 true 表示将导航,此时不归还背景焦点。 */
-  onClosed?(): boolean | void;
+  /** 关闭动画完成、overlay 真正卸载后触发。 */
+  onClosed?(): void;
   onGoHome(): void;
   onNewSession(): void;
   onSelectSession(item: RemoteSessionListItem): void;
   open: boolean;
-  /** 关闭后读屏焦点归还的触发钮(左上角三条杠);切任务导航整屏卸载时不消费。 */
-  returnFocusRef?: RefObject<View | null>;
   width: number;
 }) {
   const styles = useThemedStyles(makeStyles);
@@ -119,9 +115,9 @@ export function SessionListDrawer({
   const progress = useSharedValue(open ? 1 : 0);
   const dragX = useSharedValue(0);
   // 关闭收尾统一走这里(动画完成回调 / reduce-motion 直跳两条路径):先只卸载 overlay。
-  // onClosed 与焦点归还必须等 mounted=false 的 commit 完成,否则导航会和
-  // GestureDetector/Reanimated 子树卸载挤进同一帧(Android 原生 Screen 存在崩溃竞态)。
-  const navigation = useNavigation();
+  // onClosed 必须等 mounted=false 的 commit 完成,否则导航会和 GestureDetector/
+  // Reanimated 子树卸载挤进同一帧(Android 原生 Screen 存在崩溃竞态)。背景焦点归还
+  // 则由父级在 accessibility 隔离解除后的 commit effect 中完成。
   const finishClose = useCallback(() => {
     if (openRef.current) return;
     setMounted(false);
@@ -133,12 +129,8 @@ export function SessionListDrawer({
     const wasMounted = wasMountedRef.current;
     wasMountedRef.current = mounted;
     if (!wasMounted || mounted) return;
-    // 父级先消费待执行导航;导航型关闭不把焦点拉回马上要离开的背景页。
-    if (onClosedRef.current?.() === true) return;
-    if (!navigation.isFocused()) return;
-    const returnNode = returnFocusRef?.current ? findNodeHandle(returnFocusRef.current) : null;
-    if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
-  }, [mounted, navigation, returnFocusRef]);
+    onClosedRef.current?.();
+  }, [mounted]);
   // 打开后把读屏焦点移进面板首控件(新建任务):背后内容已按模态摘出读屏树,不移焦
   // VoiceOver/TalkBack 会停在已隐藏的节点上。延到入场动画结束再移,避免读出滑动中的几何。
   const newSessionButtonRef = useRef<View>(null);
