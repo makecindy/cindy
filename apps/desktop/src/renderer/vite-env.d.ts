@@ -4098,8 +4098,11 @@ interface ElectronAPI {
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
     ) => Promise<{ ok: true }>;
-    /** Persist the currently visible provider order for the active owner. */
-    setProviderOrder: (providerIds: string[]) => Promise<{ ok: true }>;
+    /** Persist the visible provider order only if the active owner still matches. */
+    setProviderOrder: (
+      dataOwnerId: string | null,
+      providerIds: string[],
+    ) => Promise<{ ok: true }>;
     getModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ) => Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView>;

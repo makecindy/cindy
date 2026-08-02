@@ -1,7 +1,7 @@
 /**
  * provider-order-store — owner-scoped provider display-order override.
  *
- * File: <userData>/provider-order-prefs.json
+ * File: the active owner's namespace via ownerScopedUserDataPath('provider-order-prefs.json').
  * The persisted list is the order in which providers have appeared in Settings,
  * subsequently adjusted by explicit drag operations. Cindy AI seeds an empty list;
  * every other newly visible provider appends at the end.

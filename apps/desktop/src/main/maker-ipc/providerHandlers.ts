@@ -810,6 +810,17 @@ export function registerProviderHandlers(
     return headersRestored && keysRestored;
   };
 
+  // Owner-scoped provider reads and writes must stay bound to the account that was active at
+  // ingress. Several provider operations cross async boundaries; reject instead of mixing an
+  // earlier catalog snapshot with a later owner's preferences or persisting into that owner.
+  const providerMutationOwnerMatches = (ownerAtIngress: string | null): boolean =>
+    !deps.currentOwnerId || (deps.currentOwnerId() ?? null) === ownerAtIngress;
+  const assertProviderMutationOwner = (ownerAtIngress: string | null): void => {
+    if (!providerMutationOwnerMatches(ownerAtIngress)) {
+      throwIpcError('INTERNAL', 'active account changed during provider mutation');
+    }
+  };
+
   // 只读聚合：loadCatalog 永不抛（最差回退内置目录），故无需 throwIpcError 包裹。
   registry.handle(
     MAKER_INVOKE.PROVIDER_LIST,
@@ -823,13 +834,12 @@ export function registerProviderHandlers(
     }> => {
       // 只有本机主页面能顺带触发绑定自愈与清单拉取:这条通道也服务 device-link(合成
       // event)和可能不受信的渲染上下文,它们只该拿到只读快照(PR #548 review)。
+      const dataOwnerId = deps.currentOwnerId?.() ?? null;
       const trusted = deps.isTrustedSender?.(event) === true;
       const providers = await deps.listProviders({
         allowSideEffects: trusted,
       });
-      // Capture owner + owner-scoped order synchronously after the async provider read. The
-      // renderer rejects this snapshot if its owner generation no longer matches.
-      const dataOwnerId = deps.currentOwnerId?.() ?? null;
+      assertProviderMutationOwner(dataOwnerId);
       const providerOrder = deps.getProviderOrder();
       // 运行期鉴权请求头(Authorization / x-api-key 等)一律不经 provider:list 下发任何
       // Renderer——即使本机主页面 trusted:任何 Renderer 注入(XSS)都能读走这些长期凭证
@@ -905,9 +915,11 @@ export function registerProviderHandlers(
     }
     const value = input as Record<string, unknown>;
     const keys = Object.keys(value);
+    const requestedDataOwnerId = value.dataOwnerId;
     const ids = value.providerIds;
     if (
-      keys.length !== 1 ||
+      keys.length !== 2 ||
+      (requestedDataOwnerId !== null && typeof requestedDataOwnerId !== 'string') ||
       !Array.isArray(ids) ||
       ids.length === 0 ||
       ids.length > MAX_PROVIDER_ORDER_ITEMS ||
@@ -921,6 +933,7 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
     }
+    assertProviderMutationOwner(requestedDataOwnerId as string | null);
     const catalogIds = new Set(deps.listProviderIds());
     const requestedIds = ids as string[];
     if (requestedIds.some((id) => !catalogIds.has(id))) {
@@ -937,17 +950,6 @@ export function registerProviderHandlers(
     }
     return { ok: true };
   });
-
-  // 自定义供应商的 DB 与 key/header 密文都按当前 data owner 选路径。CRUD 虽由
-  // per-provider 队列串行，但排队与 DB 读取均有 await：若 A 发起后切到 B，后续
-  // safeStorage 写会按 B 的 owner 路径落盘。入口捕获 owner，在异步边界和凭证写入前复核。
-  const providerMutationOwnerMatches = (ownerAtIngress: string | null): boolean =>
-    !deps.currentOwnerId || (deps.currentOwnerId() ?? null) === ownerAtIngress;
-  const assertProviderMutationOwner = (ownerAtIngress: string | null): void => {
-    if (!providerMutationOwnerMatches(ownerAtIngress)) {
-      throwIpcError('INTERNAL', 'active account changed during provider mutation');
-    }
-  };
 
   // 「模型 / 供应商停用」override 写入。设置类写操作:仅本机主页面可调(device-link
   // 合成 event 与不受信 frame 一律拒绝 —— 远程改被控端全局设置越权);守卫缺席按拒绝

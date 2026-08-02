@@ -163,6 +163,34 @@ describe('provider:list IPC handler', () => {
     });
   });
 
+  it('rejects a catalog snapshot when the active owner changes during the async read', async () => {
+    const harness = new IpcHarness();
+    let owner = 'owner-a';
+    let releaseList!: (providers: ProviderView[]) => void;
+    const listProviders = vi.fn(
+      () =>
+        new Promise<ProviderView[]>((resolve) => {
+          releaseList = resolve;
+        }),
+    );
+    const getProviderOrder = vi.fn(() => ['xd']);
+    registerProviderHandlers(
+      harness,
+      makeDeps({
+        listProviders,
+        getProviderOrder,
+        currentOwnerId: () => owner,
+      }),
+    );
+
+    const request = harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
+    owner = 'owner-b';
+    releaseList([fakeView('xd', true)]);
+
+    await expect(request).rejects.toThrow(/INTERNAL/);
+    expect(getProviderOrder).not.toHaveBeenCalled();
+  });
+
   it('propagates service errors to the caller', async () => {
     const harness = new IpcHarness();
     registerProviderHandlers(
@@ -231,11 +259,15 @@ describe('provider:list IPC handler', () => {
 describe('provider:order:set handler', () => {
   it('persists the visible provider order and broadcasts a display change', async () => {
     const harness = new IpcHarness();
-    const deps = makeDeps({ listProviderIds: () => ['xd', 'anthropic', 'openai'] });
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'anthropic', 'openai'],
+      currentOwnerId: () => 'owner-a',
+    });
     registerProviderHandlers(harness, deps);
 
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
         providerIds: ['openai', 'xd', 'anthropic'],
       }),
     ).resolves.toEqual({ ok: true });
@@ -244,10 +276,12 @@ describe('provider:order:set handler', () => {
   });
 
   it.each([
-    { providerIds: [] },
-    { providerIds: ['xd', 'xd'] },
-    { providerIds: ['xd', 'unknown'] },
-    { providerIds: ['xd', 'openai'], extra: true },
+    { dataOwnerId: 'owner-a', providerIds: [] },
+    { dataOwnerId: 'owner-a', providerIds: ['xd', 'xd'] },
+    { dataOwnerId: 'owner-a', providerIds: ['xd', 'unknown'] },
+    { dataOwnerId: 'owner-a', providerIds: ['xd', 'openai'], extra: true },
+    { dataOwnerId: 42, providerIds: ['xd'] },
+    { providerIds: ['xd'] },
     { reset: true },
   ])('rejects invalid visible order input: %j', async (input) => {
     const harness = new IpcHarness();
@@ -264,13 +298,35 @@ describe('provider:order:set handler', () => {
     const deps = makeDeps({
       listProviderIds: () => ['xd', 'anthropic', 'openai'],
       setProviderOrder: vi.fn(() => false),
+      currentOwnerId: () => 'owner-a',
     });
     registerProviderHandlers(harness, deps);
 
     await expect(
-      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, { providerIds: ['xd', 'openai'] }),
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        providerIds: ['xd', 'openai'],
+      }),
     ).resolves.toEqual({ ok: true });
     expect(deps.setProviderOrder).toHaveBeenCalledWith(['xd', 'openai']);
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delayed order write after the active owner changes', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'openai'],
+      currentOwnerId: () => 'owner-b',
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        providerIds: ['openai', 'xd'],
+      }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
     expect(deps.broadcastChanged).not.toHaveBeenCalled();
   });
 });

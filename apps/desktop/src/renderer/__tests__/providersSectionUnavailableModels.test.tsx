@@ -278,13 +278,13 @@ describe('ProvidersSection — 双栏管理', () => {
     const handles = await screen.findAllByRole('button', {
       name: 'settings.providers.order.handle',
     });
-    expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+    expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['xd', 'custom']);
     await act(async () => {
       fireEvent.keyDown(handles[0]!, { key: 'ArrowDown' });
       await Promise.resolve();
     });
     // Renderer 只提交左栏顺序；Main 负责保留曾出现但当前隐藏的供应商槽位。
-    expect(setProviderOrderSpy).toHaveBeenLastCalledWith(['custom', 'xd']);
+    expect(setProviderOrderSpy).toHaveBeenLastCalledWith('owner-1', ['custom', 'xd']);
     const selectedRows = screen
       .getAllByRole('button')
       .filter((button) => button.getAttribute('aria-current') === 'true');
@@ -316,7 +316,7 @@ describe('ProvidersSection — 双栏管理', () => {
       React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
     );
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['xd', 'custom']);
     });
     setProviderOrderSpy.mockClear();
 
@@ -333,7 +333,7 @@ describe('ProvidersSection — 双栏管理', () => {
       await Promise.resolve();
     });
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith(['xd', 'custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-2', ['xd', 'custom']);
     });
   });
 });

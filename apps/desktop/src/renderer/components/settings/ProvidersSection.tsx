@@ -1623,7 +1623,7 @@ export function ProvidersSection() {
     visibleIds.forEach((id) => observedProviderIds.add(id));
     if (!hasNewProvider || visibleIds.length === 0) return;
     void window.electronAPI.maker
-      .setProviderOrder(visibleIds)
+      .setProviderOrder(dataOwnerId, visibleIds)
       .catch(() => toast.error(t('settings.providers.order.saveFailed')));
   }, [dataOwnerId, listProviders, t]);
 
@@ -1641,7 +1641,7 @@ export function ProvidersSection() {
       const generation = ++providerOrderMutationRef.current;
       setPendingProviderOrder({ dataOwnerId, ids: reorderedVisibleIds });
       void window.electronAPI.maker
-        .setProviderOrder(reorderedVisibleIds)
+        .setProviderOrder(dataOwnerId, reorderedVisibleIds)
         .then(() => {
           if (providerOrderMutationRef.current === generation) refetch();
         })

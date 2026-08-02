@@ -4336,9 +4336,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:model-disable:set', input),
-    /** Persist the currently visible provider order for the active owner. */
-    setProviderOrder: (providerIds: string[]): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:order:set', { providerIds }),
+    /** Persist the visible provider order only if the active owner still matches. */
+    setProviderOrder: (
+      dataOwnerId: string | null,
+      providerIds: string[],
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:order:set', { dataOwnerId, providerIds }),
     getModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
