@@ -139,7 +139,9 @@ const BASE_HOOK: SlackHookView = {
   },
 };
 
-describe('HookConnectionsSection Telegram binding actions', () => {
+// 原名 'HookConnectionsSection Telegram binding actions' —— 本 suite 现在同时覆盖
+// Telegram 绑定动作与 X 的用法告知/确认门, 名字得跟上, 否则失败用例的定位会误导人。
+describe('HookConnectionsSection binding actions (Telegram / X)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     // X 用法确认门按 principalId 记账在 localStorage 里, 而 jsdom 的 localStorage
@@ -1057,6 +1059,33 @@ describe('HookConnectionsSection Telegram binding actions', () => {
     expect(
       root?.textContent?.includes('settings.remoteControl.hook.x.guide.withdrawBody'),
     ).toBe(true);
+  });
+
+  it('说明区没有任何小于 12px 的字号: 这是逐句阅读的正文, 不是辅助标签', async () => {
+    // DESIGN.md §3 把 Small(12px)定为 sans 的最小字号, 并对 Micro Label(10–13px)写明
+    // 「Auxiliary / non-reading labels only … Never used for body text or anything the
+    // user reads sentence-by-sentence」。这一节的正文既要逐句读、还要照着往 X 里打字
+    // (@askmycindy / delete 命令), 是正文而非标签(#1347 review 由 codex 指出 P2)。
+    //
+    // 刻意钉整个子树而不是单个 className: 初版只有 GuideBody 一处踩线, 但下一处新增的
+    // 说明同样会想「顺手用 text-11」—— 钉子树才拦得住第二次。
+    ipc.get.mockResolvedValue({ hook: xUnboundHook() });
+    render(<HookConnectionsSection />);
+    await expandChannelCard(X_CARD);
+    const root = (
+      await screen.findByText('settings.remoteControl.hook.x.guide.usageBody')
+    ).closest('.select-text');
+    expect(root).not.toBeNull();
+
+    const tooSmall: string[] = [];
+    for (const el of [root!, ...Array.from(root!.querySelectorAll('*'))]) {
+      for (const cls of Array.from(el.classList)) {
+        // 本仓的字号既有 `text-11` 这种自定义档, 也有 `text-[11px]` 这种字面量
+        const px = /^text-(\d+)$/.exec(cls)?.[1] ?? /^text-\[(\d+)px\]$/.exec(cls)?.[1];
+        if (px !== undefined && Number(px) < 12) tooSmall.push(cls);
+      }
+    }
+    expect(tooSmall, `说明区出现了小于 12px 的字号: ${tooSmall.join(', ')}`).toEqual([]);
   });
 
   it('三组都在场, 且「默认工作目录」那条风险必须写出来', async () => {

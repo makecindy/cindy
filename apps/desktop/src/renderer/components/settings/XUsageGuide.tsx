@@ -53,6 +53,13 @@ function GuideGroup({ label, children }: { label: string; children: React.ReactN
 /**
  * 普通说明正文。
  *
+ * **字号不得低于 12px。** DESIGN.md §3 的排版表把 Small(12px)定为「Smallest sans-serif
+ * text」,并对 Micro Label(10–13px)写明「**Auxiliary / non-reading** labels only …
+ * Never used for body text or anything the user reads sentence-by-sentence」。这两段是
+ * 用法与撤回方式 —— 用户要逐句读、还要照着往 X 里打字的正文,不是辅助标签,所以走 Small
+ * 而不是 Micro(初版误用 text-11,#1347 review 由 codex 指出 P2)。行高与本组件的风险
+ * 组统一取 1.45,让三组正文只有一套度量。
+ *
  * **刻意不加 line-clamp。** DESIGN.md 的说明/提示类槽位规则要求「顶对齐、槽高 = 行高 ×
  * 最大行数、折行只向下伸展」,它真正禁的是「固定小槽 + flex 垂直居中」那种会把超行文本
  * 上下双向外溢、压到相邻控件的写法 —— 这里是纯 flex 列、顶对齐、向下伸展,不会压到谁。
@@ -60,7 +67,7 @@ function GuideGroup({ label, children }: { label: string; children: React.ReactN
  * 某种语言偶尔跑到三行,也比截断安全。文案本身按 ≤2 行写。
  */
 function GuideBody({ children }: { children: React.ReactNode }) {
-  return <span className="text-11 leading-relaxed text-[var(--text-tertiary)]">{children}</span>;
+  return <span className="text-12 leading-[1.45] text-[var(--text-tertiary)]">{children}</span>;
 }
 
 export function XUsageGuide() {
