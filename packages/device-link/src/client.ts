@@ -265,16 +265,20 @@ interface PeerTransportState {
   linkReady: boolean;
   explicitlyClosed: boolean;
   /**
-   * 该 peer 是否**曾**以控制端身份被本机 accept(= 本机对它是被控端)。
-   * 可靠重试耗尽的止损分级依据:被控端同一条 relay 连接服务多个控制端,只重置
-   * 超时 peer 的 link;纯控制端(从未 accept 过入站,恒 false)维持整连接重连
-   * 兼作恢复探测。
+   * 该 peer 当前是否有**活动的入站控制方向**(对方作为控制端被本机 accept
+   * 且尚未永久关闭)。可靠重试耗尽的止损分级依据:被控端同一条 relay 连接
+   * 服务多个控制端,只重置超时 peer 的 link;纯控制端(恒 false)维持整连接
+   * 重连兼作恢复探测。
    *
-   * **粘性 true,出站 link-accept 不得覆盖**:PeerTransportState 按 deviceId 共享
-   * 两个方向,互控场景下若出站方向的 accept 把它改回 false,入站方向的重试
-   * 耗尽会误走整连接重连、拆掉共享 relay 波及其它 peer。粘性是安全偏好:
-   * 对声明了 transport-timeout-close-v1 的对端,peer 级瞬时重置总是可恢复的
-   * (能力门另行把关,见 handleReliableRetryExhausted),优于拆共享连接。
+   * 生命周期:
+   * - 置位:sendLinkAccept(接受入站 link-open)。
+   * - 撤销:永久关闭——收到对端永久 link-close(user/toggle-off/shutdown/
+   *   revoked 及未知新值)或本地 closeLink。入站方向被用户明确关闭后,出站
+   *   重试耗尽不得再发 transport-timeout 诱使对端自动重开已关闭的控制方向。
+   * - **不撤销**:transport-timeout(瞬时重置,方向仍活动)与出站 link-accept
+   *   (互控时两方向共享本状态,出站握手不得覆盖仍活动的入站方向)。
+   * 方向歧义处(如本地 closeLink 区分不了方向)一律保守撤销:代价只是回到
+   * 整连接重连语义(升级前行为),而错误的 true 会违背用户关闭意图。
    */
   linkAcceptedInbound: boolean;
   /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
@@ -577,6 +581,10 @@ export class DeviceLinkClient {
       peer.linkReady = false;
       peer.explicitlyClosed = true;
       peer.unlinkedLegacyResponseIds.clear();
+      // 本地显式关闭同样撤销活动入站标记(与收到永久 link-close 对称):
+      // 方向无法在此区分,保守撤销的代价只是回到整连接重连语义(安全侧),
+      // 而保留错误的 true 会让 transport-timeout 重开用户已关闭的控制方向。
+      peer.linkAcceptedInbound = false;
       // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
       // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
       peer.reliable = false;
@@ -1412,6 +1420,13 @@ export class DeviceLinkClient {
           peer.linkReady = false;
           peer.explicitlyClosed = true;
           peer.unlinkedLegacyResponseIds.clear();
+          // 永久关闭同时撤销「当前活动入站方向」标记:互控时入站方向被对方
+          // 用户明确关闭后,后续出站方向的重试耗尽不得再误判为「仍有活动
+          // 入站」而发 transport-timeout——那会让对端自动重开用户已关掉的控制
+          // 方向。回到整连接重连语义是安全侧;对方重新 link-open 时
+          // sendLinkAccept 会重新置位;transport-timeout(瞬时重置)不走本分支
+          // 也不清此标记。
+          peer.linkAcceptedInbound = false;
           // 对端关闭与本地 closeLink 语义对称：撤掉 streaming 可靠层，
           // 后续不依赖 link-open 的 listing/control invoke 可回退 legacy。
           peer.reliable = false;

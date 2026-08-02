@@ -126,6 +126,24 @@ describe('unavailable mirror wipe timer', () => {
     return { deps, states, timers, wipe };
   }
 
+  it('transport-timeout 直接可达证据清除 wipe timer 后,即使后续恢复瞬时失败、availability 停在 unknown,镜像也不会被误删', () => {
+    const { states, timers, wipe } = timerHarness();
+    vi.advanceTimersByTime(2_000);
+
+    // 收到 transport-timeout:可达性冲销回 unknown(非明确 true)+ 同步清
+    // 掉此前 unavailable 建的 wipe timer(context 分支调 clearPresenceWipeTimer)。
+    reconcileAvailabilityAfterInboundFrame(states, new Set(), new Map(), 'dev-1');
+    clearPresenceWipeTimer(timers, 'dev-1', clearTimeout);
+    expect(states.has('dev-1')).toBe(false); // unknown,不是明确 true
+
+    // 随后 open/subscribe/rehydrate 瞬时失败、没有任何恢复进展——旧 timer
+    // 若未被清除,到点时 availability 仍非明确 true,会把刚被直接证明可达
+    // 的设备镜像误删。
+    vi.advanceTimersByTime(60_000);
+    expect(wipe).not.toHaveBeenCalled();
+    vi.useRealTimers();
+  });
+
   it('keeps the original deadline when reconnect leaves enough confirmation time', () => {
     const { deps, states, timers, wipe } = timerHarness();
     vi.advanceTimersByTime(2_000);

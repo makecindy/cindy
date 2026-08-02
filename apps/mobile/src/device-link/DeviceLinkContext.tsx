@@ -747,6 +747,13 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
             presenceUnavailableVerdictsRef.current,
             deviceId,
           );
+          // 直接可达证据必须同步收口此前 unavailable presence 建的镜像清理
+          // 计时器:该 timer 的触发条件是 availability 非明确 true——若随后的
+          // open/subscribe/rehydrate 瞬时失败或停在 unknown,遗留 timer 仍会
+          // 把刚被本帧证明可达的设备的会话/调度/能力镜像误删。
+          // (markRemoteResponseEvidence 的证据链只在命中可推翻的 offline
+          // verdict 时才顺带清 timer,覆盖不了无 verdict 的 stale 路径。)
+          clearOnePresenceWipeTimer(presenceWipeTimersRef.current, deviceId);
           void rehydrateWithClient(client);
         }
       },

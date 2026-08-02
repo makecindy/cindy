@@ -867,6 +867,65 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('入站方向被永久关闭后,出站重试耗尽不得再发 transport-timeout(不诱使对端重开用户已关闭的方向)', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 1_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+        requestTimeoutMs: 5_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 1) 互控:对方作为控制端接入(活动入站标记置位)
+    await establishInboundReliableLink(h, 'perm-close-stream');
+
+    // 2) 对方用户明确关闭它对本机的控制(永久 link-close 'user')
+    const firstSocket = h.current();
+    firstSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'user' },
+    });
+    await tick();
+
+    // 3) 本机仍作为控制端 openLink 到对方,出站可靠帧耗尽重试
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = firstSocket.sent.filter((e) => e.kind === 'link-open').at(-1)!;
+    firstSocket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'perm-close-host-stream',
+      },
+    });
+    await open;
+    h.client.sendInvokeResult('dev-b', 'after-perm-close', { ok: true, result: [] });
+
+    // 入站方向已永久关闭 → 回退整连接重连语义,绝不发 transport-timeout
+    await vi.waitFor(() => expect(firstSocket.terminated).toBe(true));
+    expect(firstSocket.sent.some((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ))).toBe(false);
+    h.client.stop();
+  });
+
   it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
     const h = makeHarness({
       timing: {
