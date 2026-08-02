@@ -415,6 +415,44 @@ describe("contacts device sync", () => {
     ).toEqual([]);
   });
 
+  it("merge 链终点被显式删除时清掉 source 的本机锚点而不留 pending", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const target = a.createContact({ kind: "person", displayName: "稍后删除目标" });
+    const source = a.createContact({ kind: "person", displayName: "合并来源锚点" });
+    exchange(b, a);
+    b.addIdentity(source.id, {
+      platform: "apple-contacts",
+      value: "apple-on-merged-source",
+    });
+
+    // B 不接收中间 merge 状态；A 直接在同一最终状态中发布 source→target 和
+    // target deletion，B 必须沿 redirect 终点理解用户删除的是整条 lineage。
+    a.merge(target.id, source.id);
+    a.deleteContact(target.id);
+    exchange(b, a);
+
+    expect(b.listContacts()).toEqual([]);
+    const bDb = databases.at(-1)!;
+    expect(
+      bDb
+        .prepare(
+          `SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      bDb
+        .prepare(
+          `SELECT COUNT(*) AS count FROM contact_identities
+           WHERE platform = 'apple-contacts'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("合法远端删除会删除带本机系统锚点的档案并保持收敛", () => {
     const a = createStore();
     const b = createStore();

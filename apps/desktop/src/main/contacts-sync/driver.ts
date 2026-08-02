@@ -570,13 +570,13 @@ export function handleIncomingContactsRelayFrame(srcDeviceId: string, raw: unkno
     return;
   }
   if (raw.type === 'key') {
+    // 合法 key 帧本身就表示新的运行连接：在任何异步 pin/文件锁等待前同步
+    // 失效旧 capability 与在途 payload，不能给降级后的 peer 留竞态窗口。
+    invalidatePeerMergeCapability(srcDeviceId);
     prepareAndRun(async (isCurrent) => {
       const firstSeen = await contactsSyncKeyStore.pinPeerPublicKey(srcDeviceId, raw.publicKey);
       if (!isCurrent() || !deviceLinkOwnerActive || !transport?.isPeerAllowed(srcDeviceId)) return;
       if (firstSeen) log.info(`pinned contacts sync peer ${shortId(srcDeviceId)}`);
-      // key 握手表示新的运行连接；不能沿用该 deviceId 上一次运行的能力，
-      // 也不能让握手前已经编码的 capable 交付流入新进程。
-      invalidatePeerMergeCapability(srcDeviceId);
       respondToKey(srcDeviceId);
       startLan();
       runSyncTask(() => outbound.send(srcDeviceId, true));

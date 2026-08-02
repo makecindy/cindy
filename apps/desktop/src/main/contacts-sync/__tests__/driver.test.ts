@@ -931,6 +931,82 @@ describe('contacts sync runtime ownership', () => {
     ).toBe(false);
   });
 
+  it('invalidates negotiated capability before an asynchronous key pin finishes', async () => {
+    harness.settings.set('owner-a', true);
+    driver.initContactsDeviceSync({
+      getSelfDeviceId: () => 'self-device',
+      listOnlineDesktopDevices: () => [{ deviceId: 'peer-device', deviceName: 'Peer Desktop' }],
+      isPeerAllowed: (deviceId) => deviceId === 'peer-device',
+      sendRelayFrame: harness.relaySend,
+    });
+    driver.setContactsDeviceLinkOwnerActive(true);
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      mergeClocks: [],
+      capabilities: ['merge-redirects-v1'],
+    });
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'negotiate-before-key',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(true);
+
+    let releasePin: ((firstSeen: boolean) => void) | undefined;
+    harness.pinPeerPublicKey.mockImplementationOnce(
+      () =>
+        new Promise<boolean>((resolve) => {
+          releasePin = resolve;
+        }),
+    );
+    harness.encodeContactsSyncMessage.mockClear();
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'key',
+      publicKey: 'peer-public',
+    });
+    await vi.waitFor(() => expect(harness.pinPeerPublicKey).toHaveBeenCalled());
+
+    // pin 仍卡在异步锁上时，presence-online 可能主动发送；此时必须已降级。
+    driver.handleContactsPeerPresenceChanged({
+      deviceId: 'peer-device',
+      online: true,
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+    const callsBeforePinRelease = harness.encodeContactsSyncMessage.mock.calls.length;
+    releasePin?.(false);
+    await vi.waitFor(() =>
+      expect(harness.encodeContactsSyncMessage.mock.calls.length).toBeGreaterThan(
+        callsBeforePinRelease,
+      ),
+    );
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+  });
+
   it('responds to an incoming key even after a recent proactive announcement', async () => {
     harness.settings.set('owner-a', true);
     harness.peerPublicKey = null;

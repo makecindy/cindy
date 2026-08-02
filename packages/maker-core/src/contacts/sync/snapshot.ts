@@ -24,10 +24,9 @@ function byId<T extends { id: string }>(a: T, b: T): number {
   return compareContactsSyncText(a.id, b.id);
 }
 
-function resolveExplicitMergeTarget(
+function resolveExplicitMergeTerminal(
   sourceId: string,
   redirects: ReadonlyMap<string, string>,
-  liveContactIds: Set<string>,
 ): string | undefined {
   const seen = new Set<string>([sourceId]);
   let currentId = sourceId;
@@ -37,8 +36,17 @@ function resolveExplicitMergeTarget(
     seen.add(targetId);
     currentId = targetId;
   }
-  return currentId !== sourceId && liveContactIds.has(currentId)
-    ? currentId
+  return currentId !== sourceId ? currentId : undefined;
+}
+
+function resolveExplicitMergeTarget(
+  sourceId: string,
+  redirects: ReadonlyMap<string, string>,
+  liveContactIds: Set<string>,
+): string | undefined {
+  const terminalId = resolveExplicitMergeTerminal(sourceId, redirects);
+  return terminalId && liveContactIds.has(terminalId)
+    ? terminalId
     : undefined;
 }
 
@@ -216,10 +224,19 @@ export function writeContactsSnapshot(
        WHERE i.platform = 'apple-contacts' ORDER BY i.created_at, i.id`,
     )
     .all() as Array<IdentityRow & { source_display_name: string }>;
+  const deletedMergeLineageIds = new Set(confirmedDeletions);
+  for (const sourceId of mergeRedirects.keys()) {
+    const terminalId = resolveExplicitMergeTerminal(sourceId, mergeRedirects);
+    if (terminalId && confirmedDeletions.has(terminalId)) {
+      deletedMergeLineageIds.add(sourceId);
+    }
+  }
   const deletePendingAnchor = db.prepare(
     `DELETE FROM contacts_sync_pending_anchors WHERE source_contact_id = ?`,
   );
-  for (const contactId of confirmedDeletions) deletePendingAnchor.run(contactId);
+  for (const contactId of deletedMergeLineageIds) {
+    deletePendingAnchor.run(contactId);
+  }
   const pendingSystemAnchors = db
     .prepare(
       `SELECT identity_id AS id, source_contact_id AS contact_id, source_display_name,
@@ -247,7 +264,7 @@ export function writeContactsSnapshot(
       liveContactIds,
     );
     if (explicitTarget) migratedAnchorTargets.set(sourceId, explicitTarget);
-    else legacyOrphans.add(sourceId);
+    else if (!deletedMergeLineageIds.has(sourceId)) legacyOrphans.add(sourceId);
   }
   if (legacyOrphans.size > 0) {
     for (const [sourceId, targetId] of resolveLegacyAnchorTargets(
@@ -277,7 +294,7 @@ export function writeContactsSnapshot(
     if (
       !liveContactIds.has(anchor.contact_id) &&
       !migratedAnchorTargets.has(anchor.contact_id) &&
-      !confirmedDeletions.has(anchor.contact_id)
+      !deletedMergeLineageIds.has(anchor.contact_id)
     ) {
       stashPendingAnchor.run(
         anchor.id,
