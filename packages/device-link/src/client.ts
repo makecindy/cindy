@@ -264,9 +264,16 @@ interface PeerTransportState {
   linkReady: boolean;
   explicitlyClosed: boolean;
   /**
-   * 该 link 最近一次是否由对端发起、本机 accept(= 本机在这条 link 上是被控端)。
+   * 该 peer 是否**曾**以控制端身份被本机 accept(= 本机对它是被控端)。
    * 可靠重试耗尽的止损分级依据:被控端同一条 relay 连接服务多个控制端,只重置
-   * 超时 peer 的 link;控制端(出站 openLink)维持整连接重连兼作恢复探测。
+   * 超时 peer 的 link;纯控制端(从未 accept 过入站,恒 false)维持整连接重连
+   * 兼作恢复探测。
+   *
+   * **粘性 true,出站 link-accept 不得覆盖**:PeerTransportState 按 deviceId 共享
+   * 两个方向,互控场景下若出站方向的 accept 把它改回 false,入站方向的重试
+   * 耗尽会误走整连接重连、拆掉共享 relay 波及其它 peer。粘性是安全偏好:
+   * 对声明了 transport-timeout-close-v1 的对端,peer 级瞬时重置总是可恢复的
+   * (能力门另行把关,见 handleReliableRetryExhausted),优于拆共享连接。
    */
   linkAcceptedInbound: boolean;
   /** 对端是否声明理解 transport-timeout 的瞬时重置语义(能力协商,见 transport.ts)。 */
@@ -1265,7 +1272,10 @@ export class DeviceLinkClient {
             const peer = this.getPeerTransport(env.src);
             const resumedLink = !peer.linkReady;
             peer.linkReady = true;
-            peer.linkAcceptedInbound = false;
+            // 注意:不得在此将 linkAcceptedInbound 改回 false。互控场景下本机可能
+            // 既是对端的被控端(入站已 accept)又是其控制端(本帧 accept 出站
+            // link),两个方向共享同一份 PeerTransportState——覆盖会让入站方向
+            // 的重试耗尽误拆整条共享 relay(字段注释有完整语义)。
             this.resumeReceiveStreams(env.src, peer);
             this.replayPending(env.src, resumedLink);
           }

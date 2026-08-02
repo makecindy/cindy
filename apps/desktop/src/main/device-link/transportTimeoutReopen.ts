@@ -28,7 +28,6 @@ export interface TransportTimeoutReopenDeps {
 
 interface ReopenEntry {
   timer: Timer | null;
-  running: boolean;
 }
 
 export interface TransportTimeoutReopenLoop {
@@ -54,39 +53,51 @@ export function createTransportTimeoutReopenLoop(
   const clearTimer = deps.clearTimer ?? ((timer) => clearTimeout(timer));
   const entries = new Map<string, ReopenEntry>();
 
-  const finish = (deviceId: string): void => {
-    const entry = entries.get(deviceId);
-    if (entry?.timer) clearTimer(entry.timer);
+  /** 代际身份校验:只有当前登记的仍是本代 entry 才允许改变状态。
+   * cancel/dispose 后同设备可能已启动新一轮恢复——旧代 reopen Promise 的晚到
+   * 回调若按 deviceId 无条件 finish,会误删新一代 entry 并清掉其退避计时器,
+   * 让重建静默停止。 */
+  const isCurrent = (deviceId: string, entry: ReopenEntry): boolean =>
+    entries.get(deviceId) === entry;
+
+  const finishEntry = (deviceId: string, entry: ReopenEntry): void => {
+    if (!isCurrent(deviceId, entry)) return;
+    if (entry.timer) clearTimer(entry.timer);
     entries.delete(deviceId);
   };
 
-  const attempt = (deviceId: string, n: number): void => {
+  const removeCurrent = (deviceId: string): void => {
     const entry = entries.get(deviceId);
     if (!entry) return;
+    if (entry.timer) clearTimer(entry.timer);
+    entries.delete(deviceId);
+  };
+
+  const attempt = (deviceId: string, entry: ReopenEntry, n: number): void => {
+    if (!isCurrent(deviceId, entry)) return; // 旧代定时器晚触
     entry.timer = null;
     if (deps.shouldAbort(deviceId)) {
-      finish(deviceId);
+      finishEntry(deviceId, entry);
       return;
     }
-    entry.running = true;
     deps.reopen(deviceId).then(
       () => {
         // link-accept 已达成:被控端 sendLinkAccept 会清扫陈旧前缀并重放 live
-        // pending,双向续传由传输层接管,循环使命完成。
-        finish(deviceId);
+        // pending,双向续传由传输层接管,循环使命完成。仅限本代:晚到的
+        // 旧代成功不得关掉新一代正在进行的恢复。
+        finishEntry(deviceId, entry);
       },
       (err) => {
-        entry.running = false;
-        if (!entries.has(deviceId)) return; // 期间被 cancel/dispose
+        if (!isCurrent(deviceId, entry)) return; // 被 cancel/dispose 或已换代
         if (n >= maxAttempts) {
           deps.log?.warn(
             `transport-timeout reopen gave up for ${deviceId.slice(0, 8)} after ${n} attempts: ${String(err)}`,
           );
-          finish(deviceId);
+          finishEntry(deviceId, entry);
           return;
         }
         const delay = baseDelayMs * 2 ** (n - 1);
-        entry.timer = setTimer(() => attempt(deviceId, n + 1), delay);
+        entry.timer = setTimer(() => attempt(deviceId, entry, n + 1), delay);
       },
     );
   };
@@ -94,14 +105,15 @@ export function createTransportTimeoutReopenLoop(
   return {
     trigger(deviceId: string): void {
       if (entries.has(deviceId)) return;
-      entries.set(deviceId, { timer: null, running: false });
-      attempt(deviceId, 1);
+      const entry: ReopenEntry = { timer: null };
+      entries.set(deviceId, entry);
+      attempt(deviceId, entry, 1);
     },
     cancel(deviceId: string): void {
-      finish(deviceId);
+      removeCurrent(deviceId);
     },
     dispose(): void {
-      for (const deviceId of [...entries.keys()]) finish(deviceId);
+      for (const deviceId of [...entries.keys()]) removeCurrent(deviceId);
     },
     isActive(deviceId: string): boolean {
       return entries.has(deviceId);

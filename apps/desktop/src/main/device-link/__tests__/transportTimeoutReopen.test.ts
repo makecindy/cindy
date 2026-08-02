@@ -92,6 +92,46 @@ describe('createTransportTimeoutReopenLoop', () => {
     loop.dispose();
   });
 
+  it('旧代 reopen 晚到的回调不得影响新一代循环(cancel 后重触发)', async () => {
+    const pending: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
+    const reopen = vi.fn(() => new Promise<void>((resolve, reject) => {
+      pending.push({ resolve: () => resolve(), reject });
+    }));
+    const loop = createTransportTimeoutReopenLoop({
+      reopen,
+      shouldAbort: () => false,
+      baseDelayMs: 100,
+      maxAttempts: 3,
+    });
+
+    loop.trigger('dev-a'); // 第 1 代 attempt#1 in-flight → pending[0]
+    await vi.advanceTimersByTimeAsync(0);
+    loop.cancel('dev-a');
+    loop.trigger('dev-a'); // 第 2 代 attempt#1 in-flight → pending[1]
+    await vi.advanceTimersByTimeAsync(0);
+    expect(reopen).toHaveBeenCalledTimes(2);
+
+    // 旧代失败晚到:不得 finish 新代 entry,也不得为旧代再排定时器
+    pending[0].reject(new Error('stale failure'));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loop.isActive('dev-a')).toBe(true);
+
+    // 新代失败 → 其退避计时器仍然生效(未被旧代回调清掉)
+    pending[1].reject(new Error('busy'));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(reopen).toHaveBeenCalledTimes(3); // 第 2 代 attempt#2 → pending[2]
+
+    // 旧代**成功**晚到的变体:同样不得删掉新代 entry
+    loop.cancel('dev-a');
+    loop.trigger('dev-a'); // 第 3 代 attempt#1 → pending[3]
+    await vi.advanceTimersByTimeAsync(0);
+    pending[2].resolve(); // 第 2 代 attempt#2 的晚到成功
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loop.isActive('dev-a')).toBe(true);
+    loop.dispose();
+  });
+
   it('shouldAbort(撤权/待命/离线)与 cancel/dispose 都终止循环', async () => {
     let abort = false;
     const reopen = vi.fn().mockRejectedValue(new Error('busy'));

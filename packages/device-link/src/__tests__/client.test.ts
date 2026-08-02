@@ -804,6 +804,65 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('互控:出站 link-accept 不覆盖入站标记,重试耗尽仍走 peer 级重置不拆共享 relay', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+        requestTimeoutMs: 5_000,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 1) 对端作为控制端接入(入站 accept → linkAcceptedInbound=true)
+    await establishInboundReliableLink(h, 'mutual-stream');
+
+    // 2) 本机随后也作为控制端 openLink 到对端——出站 link-accept 到达
+    //    (回归点:曾把共享的入站标记覆盖回 false)
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.filter((e) => e.kind === 'link-open').at(-1)!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [
+          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
+          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
+        ],
+        transportStreamId: 'mutual-host-stream',
+      },
+    });
+    await open;
+
+    // 3) 入站方向的可靠帧对端不再 ACK → 重试耗尽 → 必须仍是 peer 级重置
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'mutual-replay', { ok: true, result: [] });
+    await vi.waitFor(() => {
+      expect(socket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // 共享 relay 连接完好:没有因互控覆盖误走整连接重连
+    expect(socket.terminated).toBe(false);
+    expect(h.sockets).toHaveLength(1);
+    h.client.stop();
+  });
+
   it('旧控制端(未声明 transport-timeout-close-v1)重试耗尽回退整连接重连,不发新 reason', async () => {
     const h = makeHarness({
       timing: {
