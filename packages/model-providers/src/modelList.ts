@@ -23,7 +23,10 @@ import {
   providersForAgent,
   type ProviderView,
 } from './registry.js';
-import { isAgentSelectableModel } from './classification.js';
+import {
+  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
+} from './classification.js';
 
 /**
  * 标准派生的**内建准入过滤**(两条,先于 isVisible 判定):
@@ -158,11 +161,11 @@ export function deriveModelList(opts: DeriveModelListOptions): ModelListEntry[] 
         if (provider.access !== undefined) entry.sourceAccess = provider.access;
         return entry;
       };
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
-      if (!selected && m.disabled === true) continue;
-      // 远端 tombstone(registry status=retired,合并期烘焙):禁止新选择,keepSelected
-      // 豁免与停用同型——正在用它的会话不打断、选中行不消失。
-      if (!selected && m.status === 'retired') continue;
+      const userProvider = provider.source === 'user';
+      const selectable = selected
+        ? isAgentSelectableModel(m, { userProvider })
+        : isModelSelectableForNewRoute(m, { userProvider });
+      if (!selectable) continue;
       if (dedupe === 'first-wins' && seenIndex.has(m.id)) {
         // 首见行已占坑。keepSelected 点名 provider 且选中行排在后面时,首见行必须让位——
         // 否则选中 (provider, model) 被去重丢弃,flat 列表带着错误来源/徽章(codex review):
@@ -217,9 +220,11 @@ export function deriveModelSections(
     for (const m of provider.models[agent] ?? []) {
       if (excludeModel?.(m, provider)) continue;
       const selected = matchesSelected(keepSelected, provider.id, m.id);
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
-      if (!selected && m.disabled === true) continue;
-      if (!selected && m.status === 'retired') continue;
+      const userProvider = provider.source === 'user';
+      const selectable = selected
+        ? isAgentSelectableModel(m, { userProvider })
+        : isModelSelectableForNewRoute(m, { userProvider });
+      if (!selectable) continue;
       if (!selected && isVisible && !isVisible(provider.id, m)) continue;
       if (q && !m.name.toLowerCase().includes(q) && !m.id.toLowerCase().includes(q)) continue;
       const entry: ModelListEntry = {

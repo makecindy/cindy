@@ -7,17 +7,23 @@
  * BUNDLED_CATALOG 派生每个 agent 的模型列表，经 capabilityAdditions 注入。
  *
  * union 规则：跳过 `routing[agent].disabled` 的 runtime，再按 `catalog.providers` 数组序
- * flatMap 各 provider 的 `models[agent]`，跳过非聊天模型(isAgentSelectableModel,issue #882 第 3 点:
- * 网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent availableModels,但仍在
- * 模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id **首见胜出**去重（provider 序即
- * anthropic → openai → xd）。禁用来源不占 seen，同 id 仍可由后续可用来源补上。
+ * flatMap 各 provider 的 `models[agent]`，按新路由统一准入跳过非聊天、停用与 retired 模型
+ * (issue #882 第 3 点:网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent
+ * availableModels,但仍在模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id
+ * **首见胜出**去重（provider 序即 anthropic → openai → xd）。不可选来源不占 seen，同 id
+ * 仍可由后续可用来源补上。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
  * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
  * 由 maker-host 的 catalogDerivedModels.test.ts 守。
  */
 
-import { isAgentSelectableModel, type Catalog, type CatalogModel, type AgentKind } from '@cindy/model-providers';
+import {
+  isModelSelectableForNewRoute,
+  type Catalog,
+  type CatalogModel,
+  type AgentKind,
+} from '@cindy/model-providers';
 import type { ModelDescriptor } from '@cindy/maker-core';
 
 /** Maker 能力读取面的最小形状；保留数组引用以让已创建 Session 同步看到新目录。 */
@@ -68,7 +74,9 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
       // provider-aware 谓词:合并目录里 source:'user' 的自定义供应商显式配置的模型带
       // 未知 group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第
       // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
-      if (!isAgentSelectableModel(m, { userProvider: provider.source === 'user' })) continue;
+      // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
+      // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
+      if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })) continue;
       seen.add(m.id);
       out.push(toDescriptor(m, agent));
     }

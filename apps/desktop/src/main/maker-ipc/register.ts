@@ -442,7 +442,7 @@ import {
 import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   type ProviderView,
 } from '@cindy/model-providers';
 import {
@@ -4989,7 +4989,9 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
           ? `provider "${providerId}" is disabled for model "${model}" in settings`
           : verdict.reason === 'capability-model'
             ? `model "${model}" is not an agent chat model`
-            : `model "${model}" is disabled in settings`,
+            : verdict.reason === 'model-retired'
+              ? `model "${model}" has been retired from the catalog`
+              : `model "${model}" is disabled in settings`,
       );
     }
     return verdict.kind === 'reroute' ? verdict.providerId : undefined;
@@ -7171,8 +7173,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // embedding/compression,issue #882 第 3 点)不进路由可用集 —— MCP
       // create_worker 点名它们会走既有的 INVALID_PARAMS / NO_PROVIDER 拒绝路径,
       // 而不是静默路由过去。停用的供应商已在 connectedProvidersForAgent(suspended)
-      // 一层出局。isAgentSelectableModel 现在就是 isChatEligible(+ userProvider
-      // 例外),这里的 models/fastModels/effortMetaByModel 都是
+      // 一层出局。isModelSelectableForNewRoute 同时收口 chat / disabled / retired，
+      // 这里的 models/fastModels/effortMetaByModel 都是
       // orcaWorkerCreationService 唯一能看到的 provider 快照 —— 一旦某个非聊天
       // mode 的模型混进这份 id 清单,service 内所有 `provider.models.includes(id)`
       // 式的 preflight 都只按 id 存在与否放行,永远不会知道这条模型其实是图片/
@@ -7180,10 +7182,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       // 下游 service 补(2026-07 review 第 16 轮:MCP create_worker / 缓存默认
       // 路由都走这条快照,不经过 renderer 侧选择器的过滤)。
       const routableModels = (provider: ProviderView, agent: AgentKind) =>
-        (provider.models[agent] ?? []).filter(
-          (model) =>
-            model.disabled !== true &&
-            isAgentSelectableModel(model, { userProvider: provider.source === 'user' }),
+        (provider.models[agent] ?? []).filter((model) =>
+          isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' }),
         );
       const availabilityFor = (agent: AgentKind) =>
         connectedProvidersForAgent(views, agent).map((provider) => {

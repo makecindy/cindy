@@ -13,7 +13,7 @@
 import {
   getModel,
   connectedProvidersForAgent,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   isModelDisabled,
   isProviderDisabled,
   modelSupportsFastMode,
@@ -58,8 +58,7 @@ export async function resolveDefaultScheduleRoute(
     : connected;
   for (const provider of candidates) {
     for (const model of provider.models[agent] ?? []) {
-      if (model.disabled === true) continue;
-      if (!isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) continue;
+      if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) continue;
       return { model: model.id, providerId: provider.id };
     }
   }

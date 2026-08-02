@@ -141,6 +141,36 @@ describe('generateTitleViaProvider — provider 解析', () => {
     expect(vi.mocked(fetchImpl).mock.calls).toHaveLength(0);
   });
 
+  it('标题模型已 retired → 作为新 one-shot 路由跳过，不影响会话本身续跑', async () => {
+    const fetchImpl = fakeFetch(() => ({
+      json: { content: [{ type: 'text', text: '不应出现' }] },
+    }));
+    const anthropic = providerStub('anthropic');
+    anthropic.models['claude-code'] = [
+      {
+        id: 'claude-haiku-4-5',
+        name: 'Claude Haiku 4.5',
+        contextWindow: 200_000,
+        efforts: [],
+        defaultEffort: null,
+        status: 'retired',
+      },
+    ];
+
+    const title = await generateTitleViaProvider(
+      { sessionId: 's-retired', agentKind: 'claude-code', prompt: 'x' },
+      {
+        fetchImpl,
+        readSessionProviderId: async () => 'anthropic',
+        listConnectedProviders: async () => [anthropic],
+        readAnthropicOAuth: () => ({ accessToken: 'tok' }),
+      },
+    );
+
+    expect(title).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it('DB 无显式 + xd 已连接 → 走 xd(cc 默认)', async () => {
     const fetchImpl = fakeFetch(() => ({
       json: { choices: [{ message: { content: '网关标题' } }] },
@@ -391,7 +421,7 @@ describe('generateTitleViaProvider — openai(codex Responses SSE)', () => {
 
 describe('generateTitleViaProvider — xd(网关 chat-completions)', () => {
   it('200 → 解析 choices[].message.content;请求形状正确', async () => {
-    const fetchImpl = fakeFetch(() => ({ json: { choices: [{ message: { content: '网关标题' } }] } }));
+    const fetchImpl = fakeFetch(() => ({ json: { choices: [{ message: { content: '网关标题' } }] }));
     const title = await generateTitleViaProvider(
       { sessionId: 's3', agentKind: 'claude-code', prompt: 'x' },
       {

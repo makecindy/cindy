@@ -311,6 +311,40 @@ describe('resolveModelInvocation — 六元组回落链', () => {
     expect(r2.fallbacksApplied).toContain('model:first-available');
   });
 
+  it('retired 模型不参与显式选择、场景默认或首个可用 fallback', () => {
+    const retiredOpus = providers().map((provider) => ({
+      ...provider,
+      models: {
+        ...provider.models,
+        'claude-code': (provider.models['claude-code'] ?? []).map((entry) =>
+          entry.id === 'claude-opus-5' ? { ...entry, status: 'retired' as const } : entry,
+        ),
+      },
+    })) as ProviderView[];
+    const explicit = resolveModelInvocation(
+      { model: 'claude-opus-5' },
+      SCENARIO,
+      ctx({ providers: retiredOpus }),
+    );
+    expect(explicit.model).toBe('claude-sonnet-4-6');
+
+    const retiredDefaults = retiredOpus.map((provider) => ({
+      ...provider,
+      models: {
+        ...provider.models,
+        'claude-code': (provider.models['claude-code'] ?? []).map((entry) =>
+          entry.id === 'claude-sonnet-4-6' ? { ...entry, status: 'retired' as const } : entry,
+        ),
+      },
+    })) as ProviderView[];
+    const noFallback = resolveModelInvocation(
+      { model: 'gone-model' },
+      SCENARIO,
+      ctx({ providers: retiredDefaults }),
+    );
+    expect(noFallback.fallbacksApplied).toContain('model:no-available-models');
+  });
+
   it('目录与 caps 全不可用 → 场景默认裸值(宁发可能非法的 id 不发空串,历史降级)', () => {
     const r = resolveModelInvocation({}, SCENARIO, ctx({ providers: null }));
     expect(r.model).toBe('claude-sonnet-4-6');

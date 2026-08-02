@@ -8,7 +8,7 @@
 import {
   connectedProvidersForAgent,
   getModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
 } from '@cindy/model-providers';
 import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
@@ -138,7 +138,7 @@ export function ImDefaultSettingsSection({
       // image/audio/embedding 端点。
       const catalogModel = getModel(provider, modelId, agentKind);
       return catalogModel &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },

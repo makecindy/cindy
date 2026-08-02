@@ -180,6 +180,18 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     expect(xd.models['claude-code']!.some((m) => m.id === 'text-embedding-3-large')).toBe(true);
   });
 
+  it('retired 模型不进面向旧客户端的新选择清单，但仍留在完整 catalog 供运行中会话解析', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    const provider = catalog.providers.find((entry) => entry.models['claude-code']?.length);
+    expect(provider).toBeDefined();
+    const retired = provider!.models['claude-code']![0]!;
+    retired.status = 'retired';
+
+    expect(deriveAvailableModels(catalog, 'claude-code').some((entry) => entry.id === retired.id))
+      .toBe(false);
+    expect(provider!.models['claude-code']!.some((entry) => entry.id === retired.id)).toBe(true);
+  });
+
   it('runtime refresh replaces both agent model lists in place so existing sessions keep the live reference', () => {
     const claudeModels: ModelDescriptor[] = [{ id: 'stale-claude', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];
     const codexModels: ModelDescriptor[] = [{ id: 'stale-codex', displayName: 'Stale', contextWindow: 1, efforts: [], defaultEffort: null }];

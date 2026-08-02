@@ -13,7 +13,10 @@
  */
 
 import type { Catalog, Provider, CatalogModel, AgentKind, RoutingDescriptor } from './types.js';
-import { isAgentSelectableModel } from './classification.js';
+import {
+  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
+} from './classification.js';
 import type { ProviderLogoKind } from './providerBranding.js';
 import {
   isModelDisabled,
@@ -301,7 +304,8 @@ export function nativeDefaultSourceId(rail: ProviderView[], agent: AgentKind | n
  * 来源选择必须先收窄到「已连接且确实提供当前模型」的集合，再应用显式选择 / 原生默认：
  * 否则当 XD key 被清除、但 OpenAI 仍连接时，Claude 会话会把 OpenAI 当成 agent 级兜底，
  * 拼出「OpenAI 图标 + Opus」这种不可能路由。显式来源失效时返回同模型的默认可用来源；
- * 当前模型没有任何已连接来源时返回 null。
+ * 当前模型没有任何已连接且可用于新路由的来源时返回 null。retired tombstone 与本地
+ * disabled 都不参与本函数；运行中会话的真实来源展示必须改用 actualSourceIdForModel。
  */
 export function effectiveSourceIdForModel(
   views: ProviderView[],
@@ -309,7 +313,13 @@ export function effectiveSourceIdForModel(
   modelId: string,
   agent: AgentKind,
 ): string | null {
-  const sources = chatEligibleSourcesForModel(views, modelId, agent);
+  const sources = chatEligibleSourcesForModel(views, modelId, agent).filter((provider) => {
+    const model = getModel(provider, modelId, agent);
+    return (
+      model !== undefined &&
+      isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })
+    );
+  });
   if (providerId && sources.some((provider) => provider.id === providerId)) return providerId;
   return nativeDefaultSourceId(sources, agent);
 }

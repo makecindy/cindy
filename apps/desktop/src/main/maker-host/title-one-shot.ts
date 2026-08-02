@@ -34,6 +34,7 @@ import {
   type Effort,
   type Provider,
   type ProviderView,
+  isModelSelectableForNewRoute,
   nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
@@ -353,10 +354,22 @@ export async function generateTitleViaProvider(
   // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
   // 第十一轮)。目录里完全找不到该模型时不额外拦。
   const railProvider = rail.find((p) => p.id === providerId);
-  if (railProvider && findCatalogModel(railProvider, target.model)?.disabled === true) {
-    log.debug('title oneShot skipped: title model disabled in settings', {
+  const titleCatalogModel = railProvider ? findCatalogModel(railProvider, target.model) : undefined;
+  if (
+    titleCatalogModel &&
+    !isModelSelectableForNewRoute(titleCatalogModel, {
+      userProvider: railProvider?.source === 'user',
+    })
+  ) {
+    log.debug('title oneShot skipped: title model unavailable for new route', {
       providerId,
       model: target.model,
+      reason:
+        titleCatalogModel.status === 'retired'
+          ? 'retired'
+          : titleCatalogModel.disabled === true
+            ? 'disabled'
+            : 'capability-model',
     });
     return null;
   }

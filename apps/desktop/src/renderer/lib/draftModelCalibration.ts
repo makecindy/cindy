@@ -13,7 +13,7 @@
 
 import {
   connectedProvidersForAgent,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   type AgentKind,
   type CatalogModel,
   type ProviderView,
@@ -45,7 +45,7 @@ function providersByPreference(
  * 默认收起的模型不参与：它们在选择器里根本不显示，选中了等于让用户面对一个自己找不到的默认
  * 模型。整组都收起时退回纯排序第一 —— 有个能用的默认，好过让这个供应商整体落空。
  *
- * 聊天准入(isAgentSelectableModel)是硬门槛,不参与"整组收起退回"的放宽:挑到的模型直接被
+ * 新路由准入(isModelSelectableForNewRoute)是硬门槛,不参与"整组收起退回"的放宽:挑到的模型直接被
  * 当成会话默认模型使用,非聊天模型(图像/向量/TTS 等,issue #882 第 3 点)漏进来就是"草稿
  * 默认模型选中一个不能聊天的模型"。用 provider-aware 谓词而非裸 isChatEligible:用户自定义
  * 供应商显式配置的模型(未知 group)是合法聊天模型,id 撞上能力启发式(如 flux-image-x)
@@ -54,7 +54,7 @@ function providersByPreference(
 function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogModel | undefined {
   const userProvider = provider.source === 'user';
   const chatModels = (provider.models[agent] ?? []).filter((m) =>
-    isAgentSelectableModel(m, { userProvider }),
+    isModelSelectableForNewRoute(m, { userProvider }),
   );
   if (chatModels.length === 0) return undefined;
   const visible = chatModels.filter((m) => m.defaultEnabled !== false);
@@ -113,7 +113,7 @@ export function pickConnectedModelForAgent(
     if (
       preferred &&
       preferred.defaultEnabled !== false &&
-      isAgentSelectableModel(preferred, { userProvider: provider.source === 'user' })
+      isModelSelectableForNewRoute(preferred, { userProvider: provider.source === 'user' })
     ) {
       return { model: preferredModelId, providerId: provider.id };
     }

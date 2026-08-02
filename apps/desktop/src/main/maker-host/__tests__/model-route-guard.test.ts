@@ -9,7 +9,11 @@ import { describe, expect, it } from 'vitest';
 
 import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
 
-import { checkModelRoute, resolveLenientRoute } from '../model-route-guard.js';
+import {
+  checkModelRoute,
+  pickEnabledFallbackModel,
+  resolveLenientRoute,
+} from '../model-route-guard.js';
 
 function model(id: string, extra: Partial<CatalogModel> = {}): CatalogModel {
   return { id, name: id, contextWindow: 200_000, efforts: [], defaultEffort: null, ...extra };
@@ -120,6 +124,42 @@ describe('checkModelRoute', () => {
       kind: 'reject',
       reason: 'capability-model',
     });
+  });
+
+  it('retired tombstone 拒绝新路由、跳过 fallback；同 id 有有效他源时仅隐式改道', () => {
+    const catalog = {
+      providers: [
+        provider('xd', [
+          model('claude-opus-5', { status: 'retired' }),
+          model('claude-sonnet-4-6'),
+        ]),
+        provider('anthropic', [model('claude-opus-5')]),
+      ],
+    } as Catalog;
+    const v = buildRegistry(catalog, { xd: true, anthropic: true }, {});
+    expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'xd')).toEqual({
+      kind: 'reject',
+      reason: 'model-retired',
+    });
+    expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', null)).toEqual({
+      kind: 'reroute',
+      providerId: 'anthropic',
+    });
+    expect(pickEnabledFallbackModel(v, 'claude-code')).toEqual({
+      model: 'claude-sonnet-4-6',
+      providerId: 'xd',
+    });
+
+    const allRetired = buildRegistry(
+      { providers: [provider('xd', [model('claude-opus-5', { status: 'retired' })])] } as Catalog,
+      { xd: true },
+      {},
+    );
+    expect(checkModelRoute(allRetired, 'claude-code', 'claude-opus-5', null)).toEqual({
+      kind: 'reject',
+      reason: 'model-retired',
+    });
+    expect(pickEnabledFallbackModel(allRetired, 'claude-code')).toBeNull();
   });
 
   it('隐式来源:原生默认拷贝是能力模型而他源有聊天拷贝 ⇒ reroute;显式点名非聊天拷贝仍 reject(2026-07 review 第 26 轮)', () => {
