@@ -738,7 +738,10 @@ function ModelSelectorContentView({
     if (!deviceId) return;
     evictDeviceCapabilities(deviceId);
     evictDeviceProviders(deviceId);
-    void Promise.all([prefetchDeviceCapabilities(deviceId), prefetchDeviceProviders(deviceId)]);
+    void Promise.allSettled([
+      prefetchDeviceCapabilities(deviceId),
+      prefetchDeviceProviders(deviceId),
+    ]);
   }, [deviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();

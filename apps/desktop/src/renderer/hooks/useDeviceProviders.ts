@@ -133,8 +133,21 @@ export function parseDeviceProvidersPayload(value: unknown): DeviceProvidersPayl
   ) {
     throw new Error('Invalid provider visibility response');
   }
+  // device-link 的 provider:list 是只读展示投影；旧/部分被控端可能省略 routing，
+  // 但 model-providers 的 connectedProvidersForAgent 需要每个声明的 agent 有一个
+  // routing entry 才会把供应商视为可用。只在远程解析边界补齐空 entry，不改变本机
+  // registry 对缺失 route 的严格语义，也保留已有 disabled 标记。
+  const providers = value.providers.map((provider) => {
+    const routing = { ...(provider.routing ?? {}) } as ProviderView['routing'];
+    for (const agent of provider.agents) {
+      if (routing[agent as keyof ProviderView['routing']] === undefined) {
+        Object.assign(routing, { [agent]: {} });
+      }
+    }
+    return { ...provider, routing };
+  });
   return {
-    providers: value.providers,
+    providers,
     ...(overrides !== undefined
       ? { modelVisibilityOverrides: overrides as Record<string, boolean> }
       : {}),

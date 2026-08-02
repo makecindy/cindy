@@ -5,7 +5,11 @@
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { ProviderView } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  visibleModelUnion,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 beforeEach(() => {
   vi.resetModules();
@@ -121,7 +125,35 @@ describe('useDeviceProviders deviceId-aware cache', () => {
 
     await mod.prefetchDeviceProviders('dev-projected');
 
-    expect(mod.getCachedDeviceProviders('dev-projected')).toEqual({ providers: [projected] });
+    const cached = mod.getCachedDeviceProviders('dev-projected');
+    expect(cached).toEqual({
+      providers: [{ ...projected, routing: { 'claude-code': {} } }],
+    });
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'claude-code')).toHaveLength(1);
+    expect(
+      visibleModelUnion(cached?.providers ?? [], 'claude-code', () => true).map((m) => m.id),
+    ).toEqual(['projected-model']);
+  });
+
+  it('补齐 agents 声明但缺失的远程 routing entry,保留已有 disabled 标记', async () => {
+    const projected = {
+      ...providerWithModel('partial-routing'),
+      agents: ['claude-code', 'codex'],
+      routing: { codex: { disabled: true } },
+    };
+    const invoke = vi.fn(async () => ({ providers: [projected] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders('dev-partial-routing');
+
+    const cached = mod.getCachedDeviceProviders('dev-partial-routing');
+    expect(cached?.providers[0]?.routing).toEqual({
+      codex: { disabled: true },
+      'claude-code': {},
+    });
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'claude-code')).toHaveLength(1);
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'codex')).toEqual([]);
   });
 
   it('嵌套模型损坏时整份 provider 响应失败', async () => {

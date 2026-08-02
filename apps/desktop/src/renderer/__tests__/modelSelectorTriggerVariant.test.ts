@@ -296,10 +296,12 @@ const deviceProvidersRef = vi.hoisted(() => ({
   loading: false,
   error: null as string | null,
   unsupported: false,
+  prefetch: vi.fn(async () => {}),
 }));
 vi.mock('@/hooks/useDeviceProviders', () => ({
   evictDeviceProviders: vi.fn(),
-  prefetchDeviceProviders: vi.fn(async () => {}),
+  prefetchDeviceProviders: (...args: Parameters<typeof deviceProvidersRef.prefetch>) =>
+    deviceProvidersRef.prefetch(...args),
   useDeviceProviders: () => ({
     providers: deviceProvidersRef.providers,
     loading: deviceProvidersRef.loading,
@@ -415,6 +417,8 @@ beforeEach(() => {
   deviceProvidersRef.loading = false;
   deviceProvidersRef.error = null;
   deviceProvidersRef.unsupported = false;
+  deviceProvidersRef.prefetch.mockReset();
+  deviceProvidersRef.prefetch.mockResolvedValue(undefined);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
   };
@@ -563,6 +567,12 @@ describe('ModelSelector trigger variants', () => {
       expect(screen.getByText('无法读取远程设备上的模型。请检查连接后重试。')).toBeTruthy();
       expect(screen.getByRole('button', { name: '重新读取模型' })).toBeTruthy();
       expect(screen.queryByText('没有匹配的模型')).toBeNull();
+      deviceProvidersRef.prefetch.mockRejectedValueOnce(new Error('offline'));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+        await Promise.resolve();
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
     } finally {
       view.unmount();
       agentCapabilitiesRef.capabilities = originalCapabilities;
