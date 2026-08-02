@@ -786,10 +786,16 @@ describe('GoalController', () => {
 
     const updatePromise = local.controller.updateGoal('s1', { objective: 'updated objective' });
     await vi.waitFor(() => expect(persistCalls).toBe(1));
-    await local.controller.pauseGoal('s1');
+    let stopSettled = false;
+    const stopPromise = local.controller.pauseGoal('s1').then(() => {
+      stopSettled = true;
+    });
+    await tick();
+    expect(stopSettled).toBe(false);
     releasePersist();
 
-    await expect(updatePromise).resolves.toMatchObject({
+    const [updated] = await Promise.all([updatePromise, stopPromise]);
+    expect(updated).toMatchObject({
       status: 'paused',
       objective: 'updated objective',
     });
@@ -895,7 +901,10 @@ describe('GoalController', () => {
       status: 'active',
       objective: 'replacement objective',
     });
-    expect(local.userMessages.some((message) => message.content === 'clarified objective')).toBe(false);
+    expect(local.userMessages.map((message) => message.content)).toEqual([
+      'clarified objective',
+      'replacement objective',
+    ]);
   });
 
   it('does not emit an old budgetLimited snapshot after a newer setGoal wins during its marker write', async () => {
@@ -922,9 +931,18 @@ describe('GoalController', () => {
     });
     await vi.waitFor(() => expect(limitedMarkerStarted).toBe(true));
 
-    await local.controller.setGoal({ sessionId: 's1', objective: 'replacement objective' });
-    const updatesAfterReplacement = local.updates.length;
+    let replacementSettled = false;
+    const replacement = local.controller
+      .setGoal({ sessionId: 's1', objective: 'replacement objective' })
+      .then((goal) => {
+        replacementSettled = true;
+        return goal;
+      });
+    await tick();
+    expect(replacementSettled).toBe(false);
     releaseLimitedMarker();
+    await replacement;
+    const updatesAfterReplacement = local.updates.length;
     await expect(limitedUpdate).rejects.toBeInstanceOf(GoalUpdateSupersededError);
 
     expect(await local.storage.get('s1')).toMatchObject({
@@ -1951,6 +1969,181 @@ describe('GoalController', () => {
     expect(st?.objective).toBe('整理工作环境');
     expect(h.userMessages.some((m) => m.updated === true && m.content === '整理工作环境')).toBe(true);
     expect(h.updates.at(-1)?.goal?.objective).toBe('整理工作环境');
+  });
+
+  it('keeps a clarification objective and marker committed before a later Stop settles', async () => {
+    const markers: string[] = [];
+    let releaseMarker!: () => void;
+    const blockedMarker = new Promise<void>((resolve) => {
+      releaseMarker = resolve;
+    });
+    const local = makeController({
+      persistUserMessage: async (_sessionId, content, opts) => {
+        if (!opts?.goalObjective?.updated) return;
+        markers.push(content);
+        await blockedMarker;
+      },
+    });
+    await local.storage.set(
+      seededGoal({ status: 'active', objective: 'old objective', turnsUsed: 0 }),
+    );
+
+    const clarification = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'clarified objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'clarified objective' }] }],
+    );
+    await vi.waitFor(() => expect(markers).toEqual(['clarified objective']));
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'clarified objective',
+    });
+
+    let stopSettled = false;
+    const stop = local.controller.pauseGoal('s1').then(() => {
+      stopSettled = true;
+    });
+    await tick();
+    expect(stopSettled).toBe(false);
+
+    releaseMarker();
+    await Promise.all([clarification, stop]);
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'clarified objective',
+    });
+    expect(markers).toEqual(['clarified objective']);
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'second objective' },
+      [{ options: [{ label: 'clarified objective' }, { label: 'second objective' }] }],
+    );
+    expect((await local.storage.get('s1'))?.objective).toBe('clarified objective');
+    expect(markers).toEqual(['clarified objective']);
+  });
+
+  it('releases only its own clarification claim when persistence fails after Stop takes over', async () => {
+    const local = makeController();
+    await local.storage.set(
+      seededGoal({ status: 'active', objective: 'old objective', turnsUsed: 0 }),
+    );
+    let markUpdateStarted!: () => void;
+    const updateStarted = new Promise<void>((resolve) => {
+      markUpdateStarted = resolve;
+    });
+    let releaseUpdate!: () => void;
+    const blockedUpdate = new Promise<void>((resolve) => {
+      releaseUpdate = resolve;
+    });
+    vi.spyOn(local.storage, 'update').mockImplementationOnce(async () => {
+      markUpdateStarted();
+      await blockedUpdate;
+      throw new Error('clarification write failed');
+    });
+
+    const clarification = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'failed objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'failed objective' }] }],
+    );
+    await updateStarted;
+    const stop = local.controller.pauseGoal('s1');
+    releaseUpdate();
+
+    await expect(clarification).rejects.toThrow('clarification write failed');
+    await stop;
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'paused',
+      objective: 'old objective',
+    });
+
+    await local.controller.resumeGoal('s1');
+    await local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'retry objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'retry objective' }] }],
+    );
+    expect(await local.storage.get('s1')).toMatchObject({
+      status: 'active',
+      objective: 'retry objective',
+    });
+    expect(local.userMessages.filter((message) => message.updated === true)).toEqual([
+      { sessionId: 's1', content: 'retry objective', updated: true },
+    ]);
+  });
+
+  it('ignores a clarification answer that arrives after its first turn has begun finalizing', async () => {
+    const local = makeController();
+    await startGoal(local, 'old objective');
+    const initial = await local.storage.get('s1');
+    let releaseGet!: (state: GoalState | null) => void;
+    const blockedGet = new Promise<GoalState | null>((resolve) => {
+      releaseGet = resolve;
+    });
+    const getSpy = vi.spyOn(local.storage, 'get').mockReturnValueOnce(blockedGet);
+
+    const clarification = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'late objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'late objective' }] }],
+    );
+    await vi.waitFor(() => expect(getSpy).toHaveBeenCalledTimes(1));
+    local.session.emitGoalTurn({
+      toolUse: true,
+      verdictJson: '```json\n{"goal_status":"continue","reason":"keep going"}\n```',
+      tokens: 10,
+    });
+    await vi.waitFor(async () => expect((await local.storage.get('s1'))?.turnsUsed).toBe(1));
+
+    releaseGet(initial);
+    await clarification;
+    expect(await local.storage.get('s1')).toMatchObject({
+      turnsUsed: 1,
+      objective: 'old objective',
+    });
+    expect(local.userMessages.filter((message) => message.updated === true)).toHaveLength(0);
+  });
+
+  it('allows only one concurrent clarification answer to commit per goal', async () => {
+    const local = makeController();
+    await startGoal(local, 'old objective');
+    const initial = await local.storage.get('s1');
+    let releaseFirstGet!: (state: GoalState | null) => void;
+    let releaseSecondGet!: (state: GoalState | null) => void;
+    const firstGet = new Promise<GoalState | null>((resolve) => {
+      releaseFirstGet = resolve;
+    });
+    const secondGet = new Promise<GoalState | null>((resolve) => {
+      releaseSecondGet = resolve;
+    });
+    const getSpy = vi
+      .spyOn(local.storage, 'get')
+      .mockReturnValueOnce(firstGet)
+      .mockReturnValueOnce(secondGet);
+
+    const first = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'first objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'first objective' }] }],
+    );
+    const second = local.controller.applyClarificationAnswer(
+      's1',
+      { q: 'second objective' },
+      [{ options: [{ label: 'old objective' }, { label: 'second objective' }] }],
+    );
+    await vi.waitFor(() => expect(getSpy).toHaveBeenCalledTimes(2));
+    releaseFirstGet(initial);
+    releaseSecondGet(initial);
+    await Promise.all([first, second]);
+
+    expect((await local.storage.get('s1'))?.objective).toBe('first objective');
+    expect(
+      local.userMessages
+        .filter((message) => message.updated === true)
+        .map((message) => message.content),
+    ).toEqual(['first objective']);
   });
 
   it('applyClarificationAnswer does NOT rewrite for an arbitrary first-turn work question (no verbatim-goal option)', async () => {
