@@ -11,7 +11,7 @@ const mocks = vi.hoisted(() => {
     initialize: vi.fn(),
     getLoginState: vi.fn(),
     dispatchLoginAction: vi.fn(),
-    logout: vi.fn(async () => undefined),
+    logout: vi.fn<() => Promise<void>>(async () => undefined),
     enterLocalMode: vi.fn(),
     exitLocalMode: vi.fn(),
     consumeAccountDeletionRestoredNotice: vi.fn(async () => true),
