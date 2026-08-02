@@ -16,6 +16,8 @@ const usageSourcePath = resolve(__dirname, '..', 'maker-ipc', 'usage.ts');
 const usageSource = readFileSync(usageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const hookControlSourcePath = resolve(__dirname, '..', 'hook-control', 'ipc.ts');
 const hookControlSource = readFileSync(hookControlSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const goalStorageSourcePath = resolve(__dirname, '..', 'goal-host', 'storage.ts');
+const goalStorageSource = readFileSync(goalStorageSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 
 describe('maker:event hot path ordering', () => {
   it('rewires a replacement Session instance that retains the same business id', () => {
@@ -358,9 +360,22 @@ describe('maker:event hot path ordering', () => {
     expectOrder(inputStopSource, 'inputCoordinator.stop(', 'await goalPause;');
     expect(goalPauseStart).toBeGreaterThanOrEqual(0);
     expect(goalPauseSource).toContain('catch (err)');
-    expect(goalPauseSource).toContain('EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS');
-    expect(goalPauseSource).toContain('goal pause persistence timed out during explicit stop');
-    expect(goalPauseSource).toContain('abort was already requested');
+    expect(goalPauseSource).toContain('await Promise.resolve(observer(sessionId));');
+    expect(goalPauseSource).not.toContain('Promise.race');
+    expect(goalPauseSource).not.toContain('setTimeout');
+  });
+
+  it('commits a Goal state update before its post-write readback', () => {
+    const updateStart = goalStorageSource.indexOf('async update(sessionId: string');
+    const updateEnd = goalStorageSource.indexOf('\n  async clear(', updateStart);
+    const updateSource = goalStorageSource.slice(updateStart, updateEnd);
+
+    expect(updateStart).toBeGreaterThanOrEqual(0);
+    expect(updateSource).not.toContain('const existing = await this.get(sessionId);');
+    const writeIndex = updateSource.indexOf('await this.getDb().update(sessionGoals)');
+    const postWriteReadIndex = updateSource.lastIndexOf('return this.get(sessionId);');
+    expect(writeIndex).toBeGreaterThanOrEqual(0);
+    expect(postWriteReadIndex).toBeGreaterThan(writeIndex);
   });
 
   it('uses the wired Session snapshot while reconciling owner-boundary aborts', () => {

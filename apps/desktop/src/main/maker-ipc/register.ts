@@ -2569,7 +2569,7 @@ export function anySessionInTurn(maker?: Pick<Maker, 'listActiveSessions'> | nul
  *  - goalClearObserver:clear-context(INPUT_CLEAR_SESSION)时清除该会话目标(上下文已抹,目标失去依据)。
  *  - goalIdleObserver:会话 turn 收尾(idle)时让 controller 兜底续跑 active 目标(#9,race-free,见 controller.maybeContinueActiveGoal)。
  *  - goalStopObserver:用户 Stop 当前 turn(ABORT_SESSION)时把 active 目标暂停。调用 observer
- *    会同步 detach 监听/续跑资格；paused 持久化与 vendor abort 并行，且只做有界等待。
+ *    会同步 detach 监听/续跑资格；paused 持久化与 vendor abort 并行，回执等落盘收口。
  * bootstrap 在启动期接上 getGoalController()?.clearGoal / maybeContinueActiveGoal / pauseGoal。
  */
 let goalClearObserver: ((sessionId: string) => void) | null = null;
@@ -2587,35 +2587,17 @@ export function setGoalStopObserver(
   goalStopObserver = observer;
 }
 
-const EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS = 1_000;
-
-/** Goal 的同步 detach 是 Stop 边界；异步持久化失败或卡住都不能挡住 vendor abort。 */
+/** Goal 的同步 detach 是 Stop 边界；vendor abort 先启动，IPC 回执等待 paused 落定。 */
 async function pauseGoalBeforeExplicitStop(sessionId: string): Promise<void> {
   const observer = goalStopObserver;
   if (!observer) return;
-  let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
-  let timedOut = false;
   try {
-    const timeout = new Promise<void>((resolve) => {
-      timeoutHandle = setTimeout(() => {
-        timedOut = true;
-        resolve();
-      }, EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS);
-    });
-    await Promise.race([Promise.resolve(observer(sessionId)), timeout]);
-    if (timedOut) {
-      log.warn('goal pause persistence timed out during explicit stop; abort was already requested', {
-        sessionId,
-        timeoutMs: EXPLICIT_STOP_GOAL_PAUSE_TIMEOUT_MS,
-      });
-    }
+    await Promise.resolve(observer(sessionId));
   } catch (err) {
-    log.warn('goal pause persistence failed during explicit stop; abort was already requested', {
+    log.warn('goal pause persistence failed during explicit stop', {
       sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
-  } finally {
-    if (timeoutHandle !== undefined) clearTimeout(timeoutHandle);
   }
 }
 // (Option B)用户答完 AskUserQuestion 时,把结构化答案 + 本次问题(含选项)交给 goal controller
@@ -8890,8 +8872,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 这三类续跑撤销都是同步操作，必须早于 goal/DB await；
     // 否则退避 timer 能在用户已点 Stop 后抢先发出下一轮。
     resetAutomaticRecoveryForExplicitStop(sid);
-    // pauseGoal 调用同步 detach listener/timer，持久化可以与 vendor abort 并行；不能让
-    // 最长 1 秒的 DB 等待挡在真正的 turn/interrupt 前面。
+    // pauseGoal 调用同步 detach listener/timer，持久化可以与 vendor abort 并行；真正的
+    // turn/interrupt 先启动，IPC 回执再等待 paused 落盘。
     const goalPause = pauseGoalBeforeExplicitStop(sid);
     const result = inputCoordinator.stop(
       sid,

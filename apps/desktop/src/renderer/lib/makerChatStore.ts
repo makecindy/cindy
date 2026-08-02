@@ -1285,7 +1285,9 @@ function queueDeferredStateNotification(sessionId: string): void {
 
 function queueMessageCreatedPatch(sessionId: string, updatedAt: string): void {
   pendingMessageCreatedPatches.set(sessionId, updatedAt);
-  scheduleDeferredStateNotifications();
+  // patch 也进入同一个 FIFO session 集合。否则 Map-only 的 no-op DB echo 会永远排在
+  // 持续活跃的前 8 个 state session 之后，slice 上限会让 sidebar patch 饥饿。
+  queueDeferredStateNotification(sessionId);
 }
 
 function discardDeferredStateWork(sessionId: string): void {

@@ -1144,6 +1144,66 @@ describe('makerChatStore text delta batching', () => {
     }
   });
 
+  it('does not starve a Map-only sidebar patch behind 8 continuously active sessions', () => {
+    const patchOnlySessionId = MULTI_SESSION_IDS[8];
+    onEvent?.({
+      sessionId: patchOnlySessionId,
+      event: {
+        type: 'tool_use',
+        source: 'codex',
+        data: { toolUseId: 'fair-tool', toolName: 'Read', input: { file_path: 'fair.ts' } },
+      },
+      persistId: 'fair-tool-row',
+    });
+    const persistedTool = {
+      clientId: 'fair-tool-row',
+      role: 'tool_use' as const,
+      content: {
+        toolUseId: 'fair-tool',
+        toolName: 'Read',
+        input: { file_path: 'fair.ts' },
+      },
+      toolUseId: 'fair-tool',
+      createdAt: '2026-06-15T00:00:00.000Z',
+    };
+    emitDbMessageCreated(persistedTool, patchOnlySessionId);
+    vi.advanceTimersByTime(32);
+    vi.mocked(sessionsBus.emitPatch).mockClear();
+
+    for (const sessionId of MULTI_SESSION_IDS.slice(0, 8)) {
+      onEvent?.({
+        sessionId,
+        event: {
+          type: 'thinking',
+          source: 'codex',
+          data: { stage: 'delta', blockId: 'fairness', text: 'a' },
+        },
+      });
+    }
+    // 完全相同的 DB echo 让 setState 走 no-op，只剩 sidebar patch 待发。
+    emitDbMessageCreated(persistedTool, patchOnlySessionId);
+
+    vi.advanceTimersByTime(32);
+    expect(sessionsBus.emitPatch).not.toHaveBeenCalled();
+
+    for (const sessionId of MULTI_SESSION_IDS.slice(0, 8)) {
+      onEvent?.({
+        sessionId,
+        event: {
+          type: 'thinking',
+          source: 'codex',
+          data: { stage: 'delta', blockId: 'fairness', text: 'b' },
+        },
+      });
+    }
+    vi.advanceTimersByTime(32);
+
+    expect(sessionsBus.emitPatch).toHaveBeenCalledTimes(1);
+    expect(sessionsBus.emitPatch).toHaveBeenCalledWith(patchOnlySessionId, {
+      updatedAt: expect.any(String),
+    });
+  });
+
   it('flushes pending text before a closed status finalizes the session', () => {
     emitTextDelta('a');
 
