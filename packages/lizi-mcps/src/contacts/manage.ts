@@ -478,7 +478,9 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
                     }
                   : {}),
               },
-              anchorsAdded > 0 || Boolean(systemGroup?.created),
+              anchorsAdded > 0 ||
+                Boolean(systemGroup?.created) ||
+                Boolean(systemGroup?.added),
             );
           }
           results.push(...batchResults);
@@ -522,7 +524,9 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
                     failedStep: 'add-members' as const,
                   },
                 },
-                anchorsAdded > 0 || Boolean(systemGroup.created),
+                anchorsAdded > 0 ||
+                  Boolean(systemGroup.created) ||
+                  Boolean(systemGroup.added),
               );
             }
           }

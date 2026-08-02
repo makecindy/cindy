@@ -753,6 +753,74 @@ describe('cindy_contacts tools', () => {
     expect(groupSyncCalls.map((call) => call.appleIds.length)).toEqual([0, 200, 1]);
   });
 
+  it('系统回写: 既有分组首批加成员后后续写入失败仍广播', async () => {
+    const store = manager.getStore();
+    let writeCall = 0;
+    let partialMutations = 0;
+    const failingDeps: ContactsMcpDeps = {
+      getManager: () => manager,
+      isEnabled: () => true,
+      writeSystemContacts: async (items): Promise<SystemContactWriteResult[]> => {
+        writeCall += 1;
+        if (writeCall > 1) throw new Error('[PERMISSION_DENIED] revoked mid-run');
+        return items.map((it) => ({
+          contactId: it.contactId,
+          name: it.name,
+          action: 'updated' as const,
+          appleId: it.appleId,
+        }));
+      },
+      syncSystemContactGroup: async (groupName, appleIds) => ({
+        groupName,
+        created: false,
+        requested: appleIds.length,
+        added: appleIds.length,
+        alreadyPresent: 0,
+        missingAppleIds: [],
+      }),
+      onMutated: () => {
+        partialMutations += 1;
+      },
+    };
+    const failingRegistry = new ContactsToolRegistry();
+    registerContactsExportSystemTool(failingRegistry, failingDeps);
+    registerContactsGroupTools(failingRegistry, failingDeps);
+    const g = parseResult(
+      await failingRegistry.call('contacts_create_group', { name: '既有系统分组批次' }),
+    ).data as { id: string };
+    const ids: string[] = [];
+    for (let i = 0; i < 201; i += 1) {
+      const contact = store.createContact({
+        kind: 'person',
+        displayName: `既有锚点成员${i}`,
+        source: 'agent',
+      });
+      store.addIdentity(contact.id, {
+        platform: 'apple-contacts',
+        value: `existing-apple-${i}`,
+      });
+      ids.push(contact.id);
+    }
+    store.addToGroup(g.id, ids);
+    const mutationsBeforeExport = partialMutations;
+
+    const res = parseResult(
+      await failingRegistry.call('contacts_export_system', {
+        group: '既有系统分组批次',
+        system_group: '已存在系统组',
+      }),
+    );
+    expect(res.ok).toBe(false);
+    expect(res.code).toBe('PERMISSION_DENIED');
+    expect(res.data).toMatchObject({
+      partial: true,
+      updated: 200,
+      anchorsAdded: 0,
+      systemGroup: { created: false, added: 200 },
+    });
+    expect(partialMutations).toBe(mutationsBeforeExport + 1);
+  });
+
   it('系统回写: 锚点每批立即回填, 后续批失败时已建卡不失锚', async () => {
     // 回归: 锚点回填曾等全部批次完成后统一做 — 第二批抛错(权限被收回/超时)时
     // 首批已建的 200 张系统卡失锚, 下次回写同一批人会重复建卡

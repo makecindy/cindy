@@ -600,6 +600,7 @@ function handleIncomingCipherFrame(
       announceKey(srcDeviceId);
       return;
     }
+    const peerDeliveryEpoch = peerDeliveryEpochs.get(srcDeviceId) ?? 0;
     const message = await decoder.accept({
       srcDeviceId,
       dstDeviceId: selfDeviceId,
@@ -608,7 +609,13 @@ function handleIncomingCipherFrame(
       expectedPeerPublicKey: peerKey,
       databaseSource: getContactsSyncDatabaseSource(),
     });
-    if (!message || !isCurrent()) return;
+    if (
+      !message ||
+      !isCurrent() ||
+      (peerDeliveryEpochs.get(srcDeviceId) ?? 0) !== peerDeliveryEpoch
+    ) {
+      return;
+    }
     if (message.type !== 'applied-state') {
       throw new Error('contacts sync worker did not apply the decoded state');
     }

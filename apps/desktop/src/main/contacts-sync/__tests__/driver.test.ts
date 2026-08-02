@@ -858,6 +858,42 @@ describe('contacts sync runtime ownership', () => {
         ?.peerSupportsMergeRedirects,
     ).toBe(true);
 
+    // 同时模拟旧连接的一帧仍在 worker 解码；离线后它的 capability 结果必须作废。
+    let releaseStaleDecode:
+      | ((result: {
+          version: 1;
+          type: 'applied-state';
+          changed: false;
+          clocks: [];
+          mergeClocks: [];
+          capabilities: string[];
+        }) => void)
+      | undefined;
+    harness.decoderAccept.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          releaseStaleDecode = resolve;
+        }),
+    );
+    const decoderCallsBeforeStaleFrame = harness.decoderAccept.mock.calls.length;
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'stale-capability-result',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() =>
+      expect(harness.decoderAccept.mock.calls.length).toBe(
+        decoderCallsBeforeStaleFrame + 1,
+      ),
+    );
+
     // 已协商设备离线后，旧版进程可能用同一 deviceId 与固定公钥重新上线。
     // presence-online 会在入站 key 之前主动发送，必须已按未知端降级。
     driver.handleContactsPeerPresenceChanged({
@@ -870,6 +906,23 @@ describe('contacts sync runtime ownership', () => {
       online: true,
     });
     await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+    const sendsAfterReconnect = harness.encodeContactsSyncMessage.mock.calls.length;
+    releaseStaleDecode?.({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      mergeClocks: [],
+      capabilities: ['merge-redirects-v1'],
+    });
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(harness.encodeContactsSyncMessage.mock.calls).toHaveLength(
+      sendsAfterReconnect,
+    );
     expect(
       harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
         ?.peerSupportsMergeRedirects,
