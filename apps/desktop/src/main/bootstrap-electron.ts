@@ -408,7 +408,7 @@ import {
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
   registerMakerIpc as registerMakerCoreIpc,
-  isSessionInTurn,
+  isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalIdleObserver,
@@ -3924,7 +3924,7 @@ const registerIpcHandlers = () => {
         waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
-      registerMakerTitleIpc({ isSessionInTurn });
+      registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
       registerMakerPlanWriteIpc();

@@ -2107,6 +2107,16 @@ export function isSessionInTurn(sessionId: string): boolean {
 }
 
 /**
+ * 标题素材读取需要覆盖 `status:isRunning=false` 到 terminal event 的短窗口：
+ * 逻辑 running 已结束，但最后一条 Assistant 还没有拿到 durable turn seal。
+ * dispatch boundary 正好在 terminal delivery 后才释放，不改变全局
+ * `isSessionInTurn` 的产品语义。
+ */
+export function isSessionTurnPendingCompletion(sessionId: string): boolean {
+  return sessionTurnActivityTracker.isSessionTurnDispatchBoundaryBusy(sessionId);
+}
+
+/**
  * 数据 owner 边界(登出 / 切账号)时丢弃跨 owner 的延迟 Codex 重启登记。
  * IPC handler 与本模块 holder 随进程存活,而具体 Maker 在 owner 边界被整体替换
  * (dynamic facade)—— 旧 owner 的记忆设置变更不得在新 owner 的 Maker 上兑现

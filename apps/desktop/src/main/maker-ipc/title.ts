@@ -33,6 +33,7 @@ import {
   type RegenerateTitleMaterial,
 } from '../localDb/latestMessageText.js';
 import { createLogger } from '../logger.js';
+import { drainPersistQueue } from '../messagePersistBroadcaster.js';
 import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
 import { throwIpcError } from '../utils/ipcValidate.js';
 import { TITLE_LANGUAGE_BY_LOCALE, buildRegenerateTitlePrompt } from './title-prompt.js';
@@ -249,7 +250,8 @@ function parseAutoTitleRequest(raw: unknown): SessionAutoTitleRequest {
 }
 
 export interface RegisterMakerTitleIpcOptions {
-  isSessionInTurn?: (sessionId: string) => boolean;
+  /** True from turn dispatch until terminal delivery, including status:false → done. */
+  isSessionTurnPendingCompletion?: (sessionId: string) => boolean;
 }
 
 export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}): void {
@@ -278,11 +280,18 @@ export function registerMakerTitleIpc(options: RegisterMakerTitleIpcOptions = {}
       { sessionId }: { sessionId: string },
     ): Promise<{ title: string | null }> => {
       assertTrustedAppRendererEvent(event);
+      // Snapshot before awaiting the durable FIFO. If `done` arrives during the
+      // drain, the captured true still excludes the unsealed Assistant. If it is
+      // already false, `done` has synchronously enqueued its flush + turn seal and
+      // the drain makes both durable before the DB material read begins.
+      const latestTurnIsPendingCompletion =
+        options.isSessionTurnPendingCompletion?.(sessionId) === true;
+      await drainPersistQueue();
       return {
         title: await regenerateMakerSessionTitle(
           sessionId,
           defaultRegenerateDeps,
-          options.isSessionInTurn?.(sessionId) === true,
+          latestTurnIsPendingCompletion,
         ),
       };
     },
