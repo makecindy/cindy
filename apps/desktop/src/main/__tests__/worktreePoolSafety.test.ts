@@ -224,7 +224,7 @@ describe('WorktreePool safety', () => {
     expect(opts?.extraEnv?.GIT_TERMINAL_PROMPT).toBe('0');
   });
 
-  it('skips the pool-reuse fetch when caller reports sourceBranch was freshly fetched', async () => {
+  it('skips the pool-reuse fetch when caller already attempted the source fetch (even a failed one)', async () => {
     const meta = {
       ...makeMeta(baseRepo, 'session-1', '2026-05-26T00:00:00.000Z'),
       sourceBranch: 'origin/main',
@@ -242,7 +242,7 @@ describe('WorktreePool safety', () => {
         sourceBranch: 'origin/main',
         ephemeral: true,
       },
-      { sourceBranchFreshlyFetched: true },
+      { sourceFetchAlreadyAttempted: true },
     );
     expect(res.ok).toBe(true);
     expect(gitExecMock.mock.calls.some((c) => (c[0] as string[])[0] === 'fetch')).toBe(false);

@@ -39,18 +39,18 @@ beforeEach(() => {
 });
 
 describe('resolveWorkingDir(useWorktree=true)', () => {
-  it('freshBase fetch 成功 → sourceBranch 用远端默认分支,fetched 状态传入池以跳过二次 fetch', async () => {
+  it('freshBase fetch 成功 → sourceBranch 用远端默认分支,并声明网络尝试已完成(池跳过二次 fetch)', async () => {
     mocks.resolveFreshSourceBranch.mockResolvedValue({ sourceBranch: 'origin/main', fetched: true });
     const res = await resolveWorkingDir(schedule, 'session-12345678');
     expect(res.ok).toBe(true);
     expect(mocks.resolveFreshSourceBranch).toHaveBeenCalledWith('/repo', 'work');
     expect(mocks.acquireWorktree).toHaveBeenCalledWith(
       expect.objectContaining({ sourceBranch: 'origin/main', ephemeral: true }),
-      { sourceBranchFreshlyFetched: true },
+      { sourceFetchAlreadyAttempted: true },
     );
   });
 
-  it('freshBase 离线回退 → fetched=false 如实传入池(池复用自行做受限 fetch)', async () => {
+  it('freshBase 离线回退(fetch 失败/预算耗尽)→ 同样声明已尝试,池不得再开一份新预算重试', async () => {
     mocks.resolveFreshSourceBranch.mockResolvedValue({
       sourceBranch: 'origin/main',
       fetched: false,
@@ -59,7 +59,7 @@ describe('resolveWorkingDir(useWorktree=true)', () => {
     const res = await resolveWorkingDir(schedule, 'session-12345678');
     expect(res.ok).toBe(true);
     expect(mocks.acquireWorktree).toHaveBeenCalledWith(expect.anything(), {
-      sourceBranchFreshlyFetched: false,
+      sourceFetchAlreadyAttempted: true,
     });
   });
 });

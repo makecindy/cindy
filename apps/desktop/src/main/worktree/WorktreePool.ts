@@ -56,9 +56,11 @@ function repoKey(baseRepo: string): string {
 export async function acquireWorktree(
   req: CreateWorktreeReq,
   opts?: {
-    /** 调用方(如 scheduler 路径的 resolveFreshSourceBranch)刚 fetch 过 sourceBranch:
-     * 池复用重置时跳过二次 fetch,避免重复网络请求。 */
-    sourceBranchFreshlyFetched?: boolean;
+    /** 调用方已在本次创建流程内完成对 sourceBranch 的网络刷新尝试(成功、失败或
+     * 预算耗尽放弃都算,如 scheduler 路径的 resolveFreshSourceBranch):池复用重置
+     * 时一律不再二次 fetch——离线时首次尝试已耗掉整份网络预算,这里再开一份新预算
+     * 就把总等待翻倍了。 */
+    sourceFetchAlreadyAttempted?: boolean;
   },
 ): Promise<CreateWorktreeResp> {
   const key = repoKey(req.baseRepo);
@@ -121,7 +123,7 @@ async function resetWorktree(
   baseRepo: string,
   sourceBranch: string,
   newBranch: string,
-  opts?: { sourceBranchFreshlyFetched?: boolean },
+  opts?: { sourceFetchAlreadyAttempted?: boolean },
 ): Promise<void> {
   // 防御性断言：池中 worktree 理论上必定 clean
   if (await isWorktreeDirty(worktreePath)) {
@@ -129,10 +131,11 @@ async function resetWorktree(
   }
 
   // 1. 如果 sourceBranch 引用远端（如 origin/main），先 fetch 确保本地有最新。
-  //    调用方声明刚 fetch 过时跳过(scheduler 路径 freshBase 数百 ms 前刚拉过,二次
-  //    fetch 纯浪费);fetch 本身受限(真超时 + 禁终端凭证提问),失败非致命退 stale
-  //    ref——池化复用不允许被网络或凭证 helper 无限卡住。
-  if (!opts?.sourceBranchFreshlyFetched && sourceBranch.startsWith('origin/')) {
+  //    调用方声明本次创建已做过网络刷新尝试时跳过——成功则二次 fetch 纯浪费,失败
+  //    (离线)则重试也会再挂满一份预算,把承诺的总等待上限翻倍;仅对未声明的调用方
+  //    保留该 fetch,且受限(真超时 + 禁终端凭证提问),失败非致命退 stale ref——池化
+  //    复用不允许被网络或凭证 helper 无限卡住。
+  if (!opts?.sourceFetchAlreadyAttempted && sourceBranch.startsWith('origin/')) {
     const remoteBranch = sourceBranch.slice('origin/'.length);
     try {
       await gitExec(

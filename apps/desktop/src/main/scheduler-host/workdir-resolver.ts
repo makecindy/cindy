@@ -57,8 +57,9 @@ export async function resolveWorkingDir(
       sourceBranch,
       ephemeral: true,
     },
-    // freshBase 刚 fetch 过时,池复用路径不再二次 fetch
-    { sourceBranchFreshlyFetched: fresh.fetched },
+    // freshBase 已为本次创建完成网络刷新尝试(成功或耗尽预算)——无论结果如何,
+    // 池复用路径都不得再开一份新预算做二次 fetch(离线时会把总等待翻倍到 ~30s)。
+    { sourceFetchAlreadyAttempted: true },
   );
   if (!res.ok) return { ok: false, error: res.error.message };
   return {
