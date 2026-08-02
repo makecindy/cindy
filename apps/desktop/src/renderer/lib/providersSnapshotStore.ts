@@ -24,7 +24,7 @@ export interface ProvidersSnapshot {
 
 let cachedProviders: ProvidersSnapshot | null = null;
 let providersGeneration = 0;
-const providerListeners = new Set<(snapshot: ProvidersSnapshot) => void>();
+const providerListeners = new Set<(snapshot: ProvidersSnapshot | null) => void>();
 
 /** 返回当前 data owner 最近一次完整 provider 快照；未加载或归属不符时为 null。 */
 export function getCachedProvidersSnapshot(): ProvidersSnapshot | null {
@@ -34,10 +34,17 @@ export function getCachedProvidersSnapshot(): ProvidersSnapshot | null {
 
 /** 订阅完整 provider 快照提交。 */
 export function subscribeProvidersSnapshot(
-  listener: (snapshot: ProvidersSnapshot) => void,
+  listener: (snapshot: ProvidersSnapshot | null) => void,
 ): () => void {
   providerListeners.add(listener);
   return () => providerListeners.delete(listener);
+}
+
+/** Owner 切换时同步清空旧快照，并通知已挂载的消费者立即隐藏旧 owner 数据。 */
+export function invalidateProvidersSnapshot(): void {
+  cachedProviders = null;
+  providersGeneration += 1;
+  for (const listener of providerListeners) listener(null);
 }
 
 /** 为一次 provider 快照读取分配代际；更早请求完成后不得再覆盖缓存。 */

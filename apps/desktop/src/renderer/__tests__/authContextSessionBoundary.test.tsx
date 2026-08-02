@@ -26,6 +26,7 @@ const mocks = vi.hoisted(() => {
     reset: vi.fn(),
     getMe: vi.fn(async () => ({ role: 'user' })),
     clearWorkersCache: vi.fn(),
+    invalidateProvidersSnapshot: vi.fn(),
     confirm: vi.fn(async () => true),
     emitAuth(state: unknown) {
       authStateListener?.(state);
@@ -52,6 +53,9 @@ vi.mock('@/lib/meService', () => ({ getMe: mocks.getMe }));
 vi.mock('@/features/cc-agent/hooks/useWorkers', () => ({
   clearWorkersCache: mocks.clearWorkersCache,
 }));
+vi.mock('@/lib/providersSnapshotStore', () => ({
+  invalidateProvidersSnapshot: mocks.invalidateProvidersSnapshot,
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: mocks.confirm }),
 }));
@@ -66,6 +70,7 @@ vi.mock('@/lib/toast', () => ({
 }));
 
 import { AuthProvider, useAuth } from '@/contexts/AuthContext';
+import { __testing as dataOwnerGenerationTesting } from '@/contexts/dataOwnerGeneration';
 
 function user(id: string) {
   return {
@@ -121,6 +126,8 @@ describe('AuthContext session cache boundaries', () => {
     mocks.reset.mockClear();
     mocks.getMe.mockClear();
     mocks.clearWorkersCache.mockClear();
+    mocks.invalidateProvidersSnapshot.mockClear();
+    dataOwnerGenerationTesting.reset();
     mocks.service.consumeAccountDeletionRestoredNotice.mockClear();
     restoredToast.mockClear();
     mocks.confirm.mockClear();
@@ -140,15 +147,19 @@ describe('AuthContext session cache boundaries', () => {
     const view = renderHook(() => useAuth(), { wrapper });
     await waitFor(() => expect(view.result.current.user?.id).toBe('account-a'));
     expect(mocks.reset).toHaveBeenCalledTimes(1);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(1);
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
 
     act(() => mocks.emitAuth(authState('account-b')));
     expect(mocks.reset).toHaveBeenCalledTimes(2);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(2);
 
     act(() => mocks.emitAuth(authState(null)));
     expect(mocks.reset).toHaveBeenCalledTimes(3);
+    expect(mocks.invalidateProvidersSnapshot).toHaveBeenCalledTimes(3);
 
     await act(async () => {
       await view.result.current.logout();

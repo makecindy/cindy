@@ -60,7 +60,7 @@ export function useProviders(): UseProvidersReturn {
 
   useEffect(() => {
     setSnapshot(getCachedProvidersSnapshot());
-    const onRefresh = (next: ProvidersSnapshot): void => setSnapshot(next);
+    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshot(next);
     return subscribeProvidersSnapshot(onRefresh);
   }, [dataOwnerId]);
 

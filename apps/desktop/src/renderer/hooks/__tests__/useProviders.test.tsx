@@ -13,7 +13,7 @@ const mocks = vi.hoisted(() => ({
     dataOwnerId: string | null;
     providers: ProviderView[];
     providerOrder: string[];
-  }) => void),
+  } | null) => void),
   refreshLocalCatalogSnapshot: vi.fn(async () => true),
   getCachedProvidersSnapshot: vi.fn(),
   subscribeProvidersSnapshot: vi.fn(),
@@ -73,14 +73,14 @@ describe('useProviders', () => {
     const ownerAProvider = { id: 'owner-a-provider' } as ProviderView;
     const ownerBProvider = { id: 'owner-b-provider' } as ProviderView;
     mocks.cachedProviders = [ownerAProvider];
-    const { result, rerender } = renderHook(() => useProviders());
+    const { result } = renderHook(() => useProviders());
     expect(result.current.providers).toEqual([ownerAProvider]);
     expect(result.current.providerOrder).toEqual([]);
     expect(result.current.loading).toBe(false);
 
     act(() => {
       mocks.authState.dataOwnerId = 'owner-b';
-      rerender();
+      mocks.latestListener?.(null);
     });
     expect(result.current.providers).toEqual([]);
     expect(result.current.loading).toBe(true);

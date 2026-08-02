@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 import {
@@ -10,7 +10,9 @@ import {
   beginProvidersRefresh,
   commitProvidersSnapshot,
   getCachedProvidersSnapshot,
+  invalidateProvidersSnapshot,
   isProvidersRefreshCurrent,
+  subscribeProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
 
 describe('providersSnapshotStore owner isolation', () => {
@@ -36,8 +38,13 @@ describe('providersSnapshotStore owner isolation', () => {
       providerOrder: ['owner-a-provider'],
     });
 
+    const listener = vi.fn();
+    const unsubscribe = subscribeProvidersSnapshot(listener);
     const staleOwnerAToken = beginProvidersRefresh();
     setDataOwnerGeneration('owner-b');
+    invalidateProvidersSnapshot();
+    expect(listener).toHaveBeenCalledOnce();
+    expect(listener).toHaveBeenCalledWith(null);
     expect(getCachedProvidersSnapshot()).toBeNull();
     expect(isProvidersRefreshCurrent(staleOwnerAToken)).toBe(false);
     expect(commitProvidersSnapshot(staleOwnerAToken, {
@@ -64,5 +71,6 @@ describe('providersSnapshotStore owner isolation', () => {
       providers: [ownerBProvider],
       providerOrder: ['owner-b-provider'],
     });
+    unsubscribe();
   });
 });
