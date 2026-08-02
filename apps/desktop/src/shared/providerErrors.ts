@@ -93,6 +93,8 @@ const QUOTA_RE =
  *  (review P1 ×5)。 */
 const RATE_QUOTA_RE =
   /per\s+(second|minute|hour|day)|per-(second|minute|hour|day)|\/(second|minute|hour|day|sec|min|hr|s)\b|\b[rt]p[smhd]\b|quota metric|rate.{0,8}limit/i;
+/** makerChatStore 会把结构化 errorStatus 以稳定后缀保留给只拿得到消息的 UI。 */
+const HTTP_402_SUFFIX_RE = /\s\(HTTP 402\)$/i;
 /** wire 兼容性：端点不认识请求里的字段 / 参数（典型：litellm/Azure 对 Anthropic-only 字段报错）。 */
 const WIRE_RE =
   /(unknown|unexpected|unsupported|extra|unrecognized).{0,16}(field|parameter|argument|inputs?|property|request param)|extra inputs are not permitted|invalid_request_error[^\n]{0,120}(field|param)/i;
@@ -101,11 +103,13 @@ const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorize
 
 /**
  * 消息级「余额 / 配额耗尽」判定:给只有错误文本、拿不到 HTTP status 的消费方用
- * (会话 ErrorBanner 的 turn 错误是 agent 透传的字符串)。与 classifyProviderError
- * 的 QUOTA_EXCEEDED 共用同一 pattern,避免两处口径漂移。
+ * (会话 ErrorBanner 的 turn 错误是 agent 透传的字符串)。正文为空或只有通用
+ * Payment Required 时,识别 makerChatStore 从结构化 errorStatus 保留的精确
+ * `(HTTP 402)` 后缀;其它情况与 classifyProviderError 的 QUOTA_EXCEEDED 共用
+ * 同一 pattern,避免两处口径漂移。
  */
 export function isQuotaExceededMessage(text: string): boolean {
-  return QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text);
+  return HTTP_402_SUFFIX_RE.test(text) || (QUOTA_RE.test(text) && !RATE_QUOTA_RE.test(text));
 }
 
 /**

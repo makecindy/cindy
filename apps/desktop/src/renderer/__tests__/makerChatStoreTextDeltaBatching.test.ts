@@ -1542,6 +1542,25 @@ describe('makerChatStore text delta batching', () => {
     );
   });
 
+  it('keeps structured payment-required status visible to the error banner', () => {
+    onEvent?.({
+      sessionId: SESSION_ID,
+      event: {
+        type: 'error',
+        source: 'codex',
+        data: {
+          errorStatus: 402,
+          message: 'Payment Required',
+          isTerminal: true,
+        },
+      },
+    });
+
+    expect(makerChatStore.getSnapshot(SESSION_ID).error).toBe(
+      'Payment Required (HTTP 402)',
+    );
+  });
+
   it('does not run the legacy remote auth retry path for Codex auth errors', async () => {
     vi.mocked(sessionService.get).mockResolvedValue({
       agentKind: 'codex',

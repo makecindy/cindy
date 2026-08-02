@@ -127,6 +127,13 @@ describe('ErrorBanner billing CTA', () => {
     expect(screen.getByText('chat.errorBanner.retry')).toBeTruthy();
   });
 
+  it('recognizes a structured HTTP 402 even when the body has no quota wording', () => {
+    renderBanner({ error: 'Payment Required (HTTP 402)' });
+    expect(screen.getByText('chat.errorBanner.gatewayQuotaExceeded')).toBeTruthy();
+    expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();
+    expect(screen.queryByText('Payment Required (HTTP 402)')).toBeNull();
+  });
+
   it('suppresses continue-after-reset when the billing recovery action is shown', () => {
     renderBanner({ onContinueAfterUsageReset: vi.fn() });
     expect(screen.getByText('chat.errorBanner.openBilling')).toBeTruthy();

@@ -119,6 +119,9 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
     'credits depleted',
     'credits exhausted',
     'credit balance too low',
+    // makerChatStore 从结构化 errorStatus 保留的稳定后缀:正文即使只有通用
+    // Payment Required,消息级 ErrorBanner 也必须识别为余额耗尽(review P2)。
+    'Payment Required (HTTP 402)',
   ])('matches quota wording: %s', (text) => {
     expect(isQuotaExceededMessage(text)).toBe(true);
   });
@@ -126,6 +129,7 @@ describe('isQuotaExceededMessage — message-level matcher (ErrorBanner 消费)'
   it.each([
     'fetch failed: ECONNREFUSED 127.0.0.1:50750',
     '401 Unauthorized: Missing bearer token',
+    'Payment Required (HTTP 403)',
     'model gpt-x not found',
     'prompt is too long: 250000 tokens',
     // 速率型配额(每分钟请求/token 上限):quota exceeded 字样但可等待恢复,
