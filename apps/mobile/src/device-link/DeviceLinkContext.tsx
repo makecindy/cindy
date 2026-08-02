@@ -95,6 +95,7 @@ import {
   isPresenceAvailabilityEpochCurrent,
   isPresenceEligibleForRemoteRequest,
   markPresenceAvailabilityEpoch,
+  reconcileAvailabilityAfterInboundFrame,
   reconcileOfflineVerdictAfterResponse,
   type PresenceTrackedRequest,
   type PresenceUnavailableVerdict,
@@ -731,7 +732,23 @@ export function DeviceLinkProvider({ children }: { children: ReactNode }) {
         // 重建链路与订阅:入口自带 online 检查、in-flight 去重与退避,幂等。
         // 其它 reason(user/toggle-off/shutdown/revoked)维持原语义:只失效,
         // 不自动重建。
-        if (reason === 'transport-timeout') void rehydrateWithClient(client);
+        if (reason === 'transport-timeout') {
+          // 收到该帧本身就是对端可达的直接证据:先冲销遗留的 presence=false /
+          // 离线判定(否则本轮 rehydrate 会把该设备从 availablePlans 排除,
+          // 重建根本不会发起)。两段冲销:markRemoteResponseEvidence 走既有
+          // 证据链(epoch 比较,推翻并发窗口内的 offline verdict);
+          // reconcileAvailabilityAfterInboundFrame 补盖无 verdict 的 stale
+          // presence=false(入站帧无时序歧义,disabled 判定仍保留)。
+          // revoked/熔断/in-flight 去重等保护由 rehydrate 自身的既有门把守。
+          markRemoteResponseEvidence(deviceId);
+          reconcileAvailabilityAfterInboundFrame(
+            presenceAvailableByDeviceRef.current,
+            presencePendingRecoveryDeviceIdsRef.current,
+            presenceUnavailableVerdictsRef.current,
+            deviceId,
+          );
+          void rehydrateWithClient(client);
+        }
       },
       onProviderChanged: (deviceId) => {
         // provider 目录与 capabilities.availableModels 是同一份 active catalog 的两种视图。

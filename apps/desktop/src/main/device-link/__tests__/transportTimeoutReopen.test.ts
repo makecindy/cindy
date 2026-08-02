@@ -92,6 +92,31 @@ describe('createTransportTimeoutReopenLoop', () => {
     loop.dispose();
   });
 
+  it('reopen 同步 throw 转入失败退避分支,不成为未捕获异常并最终收口', async () => {
+    let calls = 0;
+    const reopen = vi.fn((): Promise<unknown> => {
+      calls += 1;
+      if (calls === 1) throw new Error('sync throw'); // 同步抛(非 rejection)
+      if (calls === 2) return Promise.reject(new Error('async fail'));
+      return Promise.resolve(undefined);
+    });
+    const loop = createTransportTimeoutReopenLoop({
+      reopen,
+      shouldAbort: () => false,
+      baseDelayMs: 100,
+      maxAttempts: 5,
+    });
+
+    loop.trigger('dev-a'); // 第 1 次:同步 throw → 应进退避分支
+    await vi.advanceTimersByTimeAsync(0);
+    expect(loop.isActive('dev-a')).toBe(true); // 没有因未捕获异常中断,循环存活
+
+    await vi.advanceTimersByTimeAsync(100); // 第 2 次:异步失败
+    await vi.advanceTimersByTimeAsync(200); // 第 3 次:成功 → 收口
+    expect(reopen).toHaveBeenCalledTimes(3);
+    expect(loop.isActive('dev-a')).toBe(false);
+  });
+
   it('旧代 reopen 晚到的回调不得影响新一代循环(cancel 后重触发)', async () => {
     const pending: Array<{ resolve: () => void; reject: (e: Error) => void }> = [];
     const reopen = vi.fn(() => new Promise<void>((resolve, reject) => {

@@ -80,7 +80,16 @@ export function createTransportTimeoutReopenLoop(
       finishEntry(deviceId, entry);
       return;
     }
-    deps.reopen(deviceId).then(
+    // 同步 throw 统一转成 rejection:deps.reopen 的契约是返 Promise,但非 async
+    // 实现可能在入参校验/待命断言处同步抛——不能成为未捕获异常,应进入
+    // 同一套失败退避/终止分支。
+    let result: Promise<unknown>;
+    try {
+      result = Promise.resolve(deps.reopen(deviceId));
+    } catch (err) {
+      result = Promise.reject(err);
+    }
+    result.then(
       () => {
         // link-accept 已达成:被控端 sendLinkAccept 会清扫陈旧前缀并重放 live
         // pending,双向续传由传输层接管,循环使命完成。仅限本代:晚到的

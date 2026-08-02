@@ -611,16 +611,20 @@ describe('DeviceLinkClient', () => {
         data: JSON.stringify({ channel: 'maker:event', payload: { text: 'slow' } }),
       },
     });
-    // Windows 的零延时 timer 可能晚于两个 8ms 心跳周期才被调度；先启动 pong，
-    // 确保本用例验证的是慢业务 handler 与控制帧解耦，而不是测试端尚未开始响应。
-    const ponger = setInterval(() => {
-      ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
-    }, 4);
+    // 确定性回 pong:监听出站 ping、同步应答,彻底消除对真实计时器调度的依赖
+    // (旧写法用 4ms setInterval 自由跑,慢 CI/Windows 上会落后两个 8ms 心跳
+    // 周期触发误断网)。语义不变:若慢业务 handler 真堵住帧处理,push 进来的
+    // pong 不会被消费,pongMiss 照样触发断网,断言仍能抓住回归。
+    const originalSend = ws.send.bind(ws);
+    ws.send = (data: string) => {
+      originalSend(data);
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'ping') ws.push({ v: PROTOCOL_VERSION, kind: 'pong' });
+    };
     await tick();
     expect(release).toBeTypeOf('function');
 
     await tick(40);
-    clearInterval(ponger);
 
     expect(ws.terminated).toBe(false);
     expect(h.client.getStatus()).toBe('online');
@@ -838,10 +842,10 @@ describe('DeviceLinkClient', () => {
       payload: {
         appVersion: '1',
         allowlistHash: 'hash',
-        capabilities: [
-          DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT,
-          DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE,
-        ],
+        // 生产形态:对端 sendLinkAccept 只回显 reliable 能力,**不带**
+        // transport-timeout-close-v1——回归点:这样的反向 accept 曾把入站
+        // link-open 协商到的 supportsTransportTimeoutClose 覆盖回 false。
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
         transportStreamId: 'mutual-host-stream',
       },
     });

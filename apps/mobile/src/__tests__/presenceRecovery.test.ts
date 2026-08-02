@@ -10,6 +10,7 @@ import {
   isPresenceEligibleForRemoteRequest,
   markPresenceAvailabilityEpoch,
   PRESENCE_WIPE_MAX_LIFETIME_MS,
+  reconcileAvailabilityAfterInboundFrame,
   reconcileOfflineVerdictAfterResponse,
   type PresenceUnavailableVerdict,
   type PresenceWipeTimerEntry,
@@ -269,6 +270,56 @@ describe('invoke reachability evidence', () => {
       ok: false,
       error: { code: 'ACCESS_REVOKED', message: 'revoked' },
     })).toBe(false);
+  });
+});
+
+describe('inbound frame availability reconciliation (transport-timeout)', () => {
+  it('无 verdict 的 stale presence=false 被入站帧直接冲销,设备重新可发起远程请求', () => {
+    // 场景:增量 presence 漏掉恢复边,availability 遗留 false 但没有任何
+    // verdict——reconcileOfflineVerdictAfterResponse 对此无能为力(要求 verdict
+    // 存在),而收到 transport-timeout 本身已证明对端可达。
+    const states = new Map<string, boolean>([['dev-1', false]]);
+    const pendingRecovery = new Set<string>();
+    const verdicts = new Map<string, PresenceUnavailableVerdict>();
+
+    expect(isPresenceEligibleForRemoteRequest(states, 'dev-1')).toBe(false);
+    expect(reconcileAvailabilityAfterInboundFrame(states, pendingRecovery, verdicts, 'dev-1')).toBe(true);
+    // 回到 unknown 乐观补齐 → 本轮 rehydrate 的 availablePlans 不再排除它,
+    // link-open/订阅恢复得以发起
+    expect(isPresenceEligibleForRemoteRequest(states, 'dev-1')).toBe(true);
+    expect(pendingRecovery).toEqual(new Set(['dev-1']));
+  });
+
+  it('offline/presence 判定被入站帧推翻;disabled 判定保留且不碰可用性', () => {
+    for (const kind of ['offline', 'presence'] as const) {
+      const states = new Map<string, boolean>([['dev-1', false]]);
+      const pendingRecovery = new Set<string>();
+      const verdicts = new Map<string, PresenceUnavailableVerdict>([
+        ['dev-1', { kind, responseEvidenceEpoch: 3 }],
+      ]);
+      expect(reconcileAvailabilityAfterInboundFrame(states, pendingRecovery, verdicts, 'dev-1')).toBe(true);
+      expect(verdicts.has('dev-1')).toBe(false);
+      expect(isPresenceEligibleForRemoteRequest(states, 'dev-1')).toBe(true);
+    }
+
+    // disabled 与可达性无关(被控开关关闭),只能由权威 presence 恢复
+    const states = new Map<string, boolean>([['dev-1', false]]);
+    const pendingRecovery = new Set<string>();
+    const verdicts = new Map<string, PresenceUnavailableVerdict>([
+      ['dev-1', { kind: 'disabled', responseEvidenceEpoch: 3 }],
+    ]);
+    expect(reconcileAvailabilityAfterInboundFrame(states, pendingRecovery, verdicts, 'dev-1')).toBe(false);
+    expect(verdicts.get('dev-1')?.kind).toBe('disabled');
+    expect(isPresenceEligibleForRemoteRequest(states, 'dev-1')).toBe(false);
+  });
+
+  it('无遗留状态时为 no-op', () => {
+    const states = new Map<string, boolean>([['dev-1', true]]);
+    const pendingRecovery = new Set<string>();
+    const verdicts = new Map<string, PresenceUnavailableVerdict>();
+    expect(reconcileAvailabilityAfterInboundFrame(states, pendingRecovery, verdicts, 'dev-1')).toBe(false);
+    expect(states.get('dev-1')).toBe(true);
+    expect(pendingRecovery.size).toBe(0);
   });
 });
 

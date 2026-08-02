@@ -1268,6 +1268,7 @@ export class DeviceLinkClient {
               accepted?.capabilities,
               accepted?.transportStreamId,
               accepted?.transportBaseSeq,
+              'outbound-accept',
             );
             const peer = this.getPeerTransport(env.src);
             const resumedLink = !peer.linkReady;
@@ -1960,16 +1961,25 @@ export class DeviceLinkClient {
     capabilities?: readonly string[],
     remoteStreamId?: string,
     remoteBaseSeq?: number,
+    source: 'inbound-open' | 'outbound-accept' = 'inbound-open',
   ): void {
     const peer = this.getPeerTransport(dst);
     const reliable = (
       Array.isArray(capabilities)
       && capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     );
-    peer.supportsTransportTimeoutClose = (
-      Array.isArray(capabilities)
-      && capabilities.includes(DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE)
-    );
+    // supportsTransportTimeoutClose 只跟随**入站 link-open**的声明:它刷新的是
+    // 「对端作为控制端能否理解 transport-timeout」。出站 openLink 换回的
+    // link-accept 由对端 sendLinkAccept 生成,生产形态只回显 reliable 能力——
+    // 互控场景下若让它覆盖,会把入站方向已协商到的 true 清掉,入站重试耗尽
+    // 退回拆整条共享 relay。入站方向的重新声明(含对端降级为旧版后的
+    // 不再声明)仍正常刷新,降级安全。
+    if (source === 'inbound-open') {
+      peer.supportsTransportTimeoutClose = (
+        Array.isArray(capabilities)
+        && capabilities.includes(DEVICE_LINK_CAPABILITY_TRANSPORT_TIMEOUT_CLOSE)
+      );
+    }
     const nextRemoteStreamId = reliable && typeof remoteStreamId === 'string' && remoteStreamId
       ? remoteStreamId
       : null;
