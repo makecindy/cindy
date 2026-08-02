@@ -14,7 +14,7 @@ import { connectedProvidersForAgent, getModel, isAgentSelectableModel, visibleMo
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
-import { ModelSelector } from '@/components/new-chat/ModelSelector';
+import { ModelSelector, type ModelMemoryAccessors } from '@/components/new-chat/ModelSelector';
 import { Slider } from '@/components/ui/slider';
 import { Switch } from '@/components/ui/switch';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
@@ -22,6 +22,12 @@ import { useProviders } from '@/hooks/useProviders';
 import { createLogger } from '@/lib/logger';
 import { deriveModelsFromProviders } from '@/lib/providerModels';
 import { toast } from '@/lib/toast';
+import {
+  getProviderModelEffort,
+  getProviderModelFast,
+  setProviderModelEffort,
+  setProviderModelFast,
+} from '@/state/providerModelMemory';
 import {
   CODEX_SUBAGENT_CONCURRENCY_INITIAL,
   CODEX_SUBAGENT_CONCURRENCY_MAX,
@@ -37,6 +43,17 @@ import {
 import { DefaultOverrideControls } from './DefaultOverrideControls';
 
 const log = createLogger('SubagentModelSection');
+
+/**
+ * 标准模型面板把非选中行的配置写进模型级全局预设;Subagent 仍把实际派发值
+ * 原子落进自己的 settings store。Fast 回调未开启,这里只复用完整适配器契约。
+ */
+const CODEX_SUBAGENT_MODEL_MEMORY: ModelMemoryAccessors = {
+  getEffort: getProviderModelEffort,
+  setEffort: setProviderModelEffort,
+  getFast: getProviderModelFast,
+  setFast: setProviderModelFast,
+};
 
 type SubagentAgentKind = 'claude-code' | 'codex';
 
@@ -201,7 +218,15 @@ export function SubagentModelSection() {
         return;
       }
       const nextProviderId = providerId;
-      const nextEffort = resolveCodexEffort(model, current.codexEffort);
+      // 标准面板编辑非选中行时会先写模型级预设,再回调选中该行。这里必须优先
+      // 读取刚写入的 effort,才能把 (model, providerId, effort) 收敛成一次原子 patch。
+      const rememberedEffort = nextProviderId
+        ? getProviderModelEffort('codex', nextProviderId, model)
+        : undefined;
+      const nextEffort = resolveCodexEffort(
+        model,
+        isCodexSubagentEffort(rememberedEffort) ? rememberedEffort : current.codexEffort,
+      );
       if (
         model === current.codex &&
         nextProviderId === current.codexProviderId &&
@@ -219,7 +244,12 @@ export function SubagentModelSection() {
       const current = settingsRef.current;
       if (!current || !current.codex) return;
       if (!isCodexSubagentEffort(effort) || effort === current.codexEffort) return;
-      await persistPatch({ codexEffort: effort });
+      const saved = await persistPatch({ codexEffort: effort });
+      // 活跃行编辑走 onEffortChange,ModelSelector 不会代写 modelMemory。保存成功后
+      // 同步全局模型预设,否则切走再切回会恢复旧档位。
+      if (saved && current.codexProviderId) {
+        setProviderModelEffort('codex', current.codexProviderId, current.codex, effort);
+      }
     },
     [persistPatch],
   );
@@ -472,6 +502,7 @@ export function SubagentModelSection() {
             <ModelSelector
               modelId={settings.codex ?? ''}
               effort={settings.codexEffort ?? ''}
+              modelMemory={CODEX_SUBAGENT_MODEL_MEMORY}
               onModelChange={(modelId) => {
                 void setCodexModel(modelId, settings.codexProviderId);
               }}
