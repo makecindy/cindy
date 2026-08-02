@@ -797,6 +797,67 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('transport-timeout 通知首发失败后按退避重发;对端重开后仍同 seq 续传', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        reconnectBaseMs: 5,
+        reconnectMaxMs: 5,
+        transportRetryIntervalMs: 5,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'notify-retry-stream');
+
+    const firstSocket = h.current();
+    h.client.sendInvokeResult('dev-b', 'keep-me-2', { ok: true, result: [] });
+    const firstReliable = firstSocket.sent.find((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ))!;
+    const firstMeta = parseTransportPayload(firstReliable.payload)!.meta;
+
+    // 让 link-close 的首次发送失败(模拟 WebSocket 背压/发送异常),后续恢复
+    const originalSend = firstSocket.send.bind(firstSocket);
+    let failedOnce = false;
+    firstSocket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close' && !failedOnce) {
+        failedOnce = true;
+        throw new Error('simulated send backpressure');
+      }
+      originalSend(data);
+    };
+
+    // 对端永不 ACK → 重试耗尽 → 首发通知失败 → 退避重发成功
+    await vi.waitFor(() => {
+      expect(failedOnce).toBe(true);
+      expect(firstSocket.sent.some((env) => (
+        env.kind === 'link-close'
+        && env.dst === 'dev-b'
+        && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+      ))).toBe(true);
+    });
+    // 重发期间 relay 连接始终未被拆
+    expect(firstSocket.terminated).toBe(false);
+    expect(h.sockets).toHaveLength(1);
+
+    // 对端重开 → 保留的 live invoke-result 按原 seq 重放
+    const sentBefore = firstSocket.sent.length;
+    await establishInboundReliableLink(h, 'notify-retry-stream');
+    const replays = firstSocket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'invoke-result' && parseTransportPayload(env.payload)
+    ));
+    expect(replays).toHaveLength(1);
+    expect(parseTransportPayload(replays[0].payload)?.meta).toMatchObject({
+      streamId: firstMeta.streamId,
+      seq: firstMeta.seq,
+    });
+    h.client.stop();
+  });
+
   it('控制端收到 transport-timeout link-close:瞬时重置而非永久关闭——在途请求不被拒,重开后同 seq 续传并可正常完成', async () => {
     const h = makeHarness({
       timing: {

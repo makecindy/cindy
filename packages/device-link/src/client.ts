@@ -342,6 +342,8 @@ export class DeviceLinkClient {
   private readonly peerTransport = new Map<string, PeerTransportState>();
   /** 入站 link-open 只记录提议；host 真正 sendLinkAccept 后才提交能力/stream 基线。 */
   private readonly pendingInboundLinkOffers = new Map<string, PendingInboundLinkOffer>();
+  /** transport-timeout 重置通知的待重发计时器(per dst,有界重试)。 */
+  private readonly timeoutCloseNotifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
   /** 只串行旧协议业务帧；pong / ACK / 可靠 stream 各自独立，不被慢 handler 堵住。 */
   private legacyInboundChain: Promise<void> | null = null;
   private legacyInboundFrames = 0;
@@ -643,6 +645,8 @@ export class DeviceLinkClient {
       );
     }
     peer.linkAcceptedInbound = true;
+    // 对端已重开链路:若仍有待重发的 transport-timeout 通知,不再需要。
+    this.cancelTimeoutCloseNotify(dst);
     if (peerSupportsReliable) {
       const resumedLink = !peer.linkReady;
       peer.linkReady = true;
@@ -2208,6 +2212,22 @@ export class DeviceLinkClient {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
     }
+    this.notifyTransportTimeoutClose(dst, 1);
+  }
+
+  /**
+   * transport-timeout 重置通知的投递与有界重试。
+   *
+   * relay 保持在线意味着没有 presence/重连事件可依赖——若本地发送因 WebSocket
+   * 背压/异常失败就放弃,存活但卡流的对端永远收不到重建信号,保留的 pending
+   * 会无限停滞。故失败时按 transportRetryIntervalMs 退避重发,上限
+   * transportMaxRetryAttempts 次;重试回调中任一成立即停:对端已重开
+   * (linkReady 回 true,由 sendLinkAccept 取消)、relay 已断开(断线重连路径接管
+   * 恢复,presence 闪断会触发对端 rehydrate)、client 已 stop。耗尽后放弃本地
+   * 重试:对端若存活,其后续请求超时/自身重试耗尽会走它自己的恢复路径;若
+   * 休眠,唤醒重连即重开。两条兜底都不拆共享 relay 连接、不丢保留的 pending。
+   */
+  private notifyTransportTimeoutClose(dst: string, attempt: number): void {
     try {
       this.sendEnvelope({
         v: PROTOCOL_VERSION,
@@ -2215,9 +2235,37 @@ export class DeviceLinkClient {
         dst,
         payload: { reason: 'transport-timeout' } satisfies LinkClosePayload,
       });
+      this.cancelTimeoutCloseNotify(dst);
     } catch (err) {
-      // fire-and-forget:通知失败只记日志,重置本身已完成,对端重开链路后恢复。
-      this.log.debug(`transport-timeout link-close notification failed for ${dst.slice(0, 8)}`, err);
+      this.log.debug(
+        `transport-timeout link-close notification failed for ${dst.slice(0, 8)} (attempt ${attempt})`,
+        err,
+      );
+      if (attempt >= this.timing.transportMaxRetryAttempts) {
+        this.cancelTimeoutCloseNotify(dst);
+        return;
+      }
+      this.scheduleTimeoutCloseNotifyRetry(dst, attempt + 1);
+    }
+  }
+
+  private scheduleTimeoutCloseNotifyRetry(dst: string, attempt: number): void {
+    this.cancelTimeoutCloseNotify(dst);
+    const timer = setTimeout(() => {
+      this.timeoutCloseNotifyTimers.delete(dst);
+      if (this.stopped || this.status !== 'online') return;
+      const peer = this.peerTransport.get(dst);
+      if (!peer || peer.linkReady) return;
+      this.notifyTransportTimeoutClose(dst, attempt);
+    }, this.timing.transportRetryIntervalMs);
+    this.timeoutCloseNotifyTimers.set(dst, timer);
+  }
+
+  private cancelTimeoutCloseNotify(dst: string): void {
+    const timer = this.timeoutCloseNotifyTimers.get(dst);
+    if (timer) {
+      clearTimeout(timer);
+      this.timeoutCloseNotifyTimers.delete(dst);
     }
   }
 
@@ -2269,6 +2317,8 @@ export class DeviceLinkClient {
       if (peer.retryTimer) clearInterval(peer.retryTimer);
     }
     this.peerTransport.clear();
+    for (const timer of this.timeoutCloseNotifyTimers.values()) clearTimeout(timer);
+    this.timeoutCloseNotifyTimers.clear();
   }
 
   private rememberInboundLinkOffer(src: string, offer: PendingInboundLinkOffer): void {
