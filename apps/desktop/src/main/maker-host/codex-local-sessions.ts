@@ -26,6 +26,7 @@ import { finalizeCodexCitationText } from '@cindy/maker-core';
 
 import { getCurrentDbClientUserId, getDbClient } from '../localDb/client/current.js';
 import { createBetterSqliteDatabase } from '../localDb/betterSqliteFactory.js';
+import { getReadyBinaryPath } from '../agent-binaries/index.js';
 import { createLogger } from '../logger.js';
 import { normalizeWorkingDirForStorage } from '../../shared/workingDir.js';
 import { recordPrRefsForImportedMessages } from '../git-context/prRefsStore.js';
@@ -972,18 +973,21 @@ export async function syncExternalCodexSessionFromDesktop(threadId: string): Pro
     return;
   }
 
-  // 版本门禁(#789):Cindy resume 生成的 desktop rollout 由 Cindy 捆绑的 Codex runtime 写出,
-  // 其事件格式(如 function_call.id 前缀:旧版 `call_*` vs 新版 `fc_*`)可能与创建这个外部
-  // 会话的 runtime 不兼容。把不兼容的 rollout 覆盖回源 ~/.codex,会让原 Codex 客户端后续重放
-  // 历史时被 API 拒(invalid_id_prefix),源会话就此无法继续。仅当两侧 rollout 的
-  // session_meta.cli_version 完全一致(= 同一 runtime 版本,格式可证兼容)时才回写;无法确认
-  // 一致时降级为不回写、保源会话原样(用户仍可在 Cindy 内继续该会话的私有副本)。
-  const desktopCliVersion = readRolloutCliVersion(desktopThread.rolloutPath);
+  // 版本门禁(#789):desktop 侧新事件由 Cindy 当前捆绑的 codex runtime 写出(app-server 以
+  // CODEX_HOME=desktop 运行,新 rollout 落在 desktop home——见 findRolloutPath),回写是唯一
+  // 触碰源 ~/.codex 的通道。当捆绑 runtime 与创建源会话的 runtime 版本不同时,事件格式(如
+  // function_call.id 前缀:旧版 `call_*` vs 新版 `fc_*`)可能不兼容,覆盖回源会让原 Codex
+  // 客户端后续重放历史被 API 拒(invalid_id_prefix),源会话就此无法继续。
+  // 判据用「捆绑 runtime 版本 vs 源 session_meta.cli_version」——不用 desktop rollout 自身的
+  // session_meta(它可能沿用源会话的旧版本号,无法反映真正写出事件的 runtime)。仅两者完全
+  // 一致(格式可证兼容)才回写;拿不到版本或不一致时降级为不回写、保源会话原样(用户仍可在
+  // Cindy 内继续该会话的私有副本)。
+  const bundledCliVersion = getBundledCodexRuntimeVersion();
   const externalCliVersion = readRolloutCliVersion(externalThread.rolloutPath);
-  if (!desktopCliVersion || !externalCliVersion || desktopCliVersion !== externalCliVersion) {
+  if (!bundledCliVersion || !externalCliVersion || bundledCliVersion !== externalCliVersion) {
     log.info('skip external Codex sync-back: runtime version mismatch or unknown', {
       threadId,
-      desktopCliVersion,
+      bundledCliVersion,
       externalCliVersion,
       sourceHome: desktopThread.sourceHome,
       targetHome: externalThread.sourceHome,
@@ -1441,6 +1445,25 @@ function rolloutThreadRowFromFirstLine(
     approval_mode: stringValue(payload.approval_mode),
     archived: isArchivedRolloutPath(file) ? 1 : 0,
   };
+}
+
+/**
+ * Cindy 当前在用的 codex runtime 版本——写出 desktop 侧新事件的那个 runtime。
+ * dev bundle:二进制同级 `.version`(apps/codex-bin/<platform>/.version);
+ * prod 安装:userData/codex/<version>/codex 的版本目录名。
+ * 二进制未就绪 / 版本推断不出时返回 null,回写门禁据此按「无法确认」降级为不写(安全侧)。
+ */
+function getBundledCodexRuntimeVersion(): string | null {
+  const binaryPath = getReadyBinaryPath('codex');
+  if (!binaryPath) return null;
+  try {
+    const sidecar = fs.readFileSync(path.join(path.dirname(binaryPath), '.version'), 'utf-8').trim();
+    if (sidecar) return sidecar;
+  } catch {
+    /* 非 dev bundle:无 .version 同级文件,回退到版本目录名 */
+  }
+  const versionDir = path.basename(path.dirname(binaryPath));
+  return /^\d+\.\d+/.test(versionDir) ? versionDir : null;
 }
 
 /**
