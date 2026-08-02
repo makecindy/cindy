@@ -1449,20 +1449,28 @@ function rolloutThreadRowFromFirstLine(
 
 /**
  * Cindy 当前在用的 codex runtime 版本——写出 desktop 侧新事件的那个 runtime。
- * dev bundle:二进制同级 `.version`(apps/codex-bin/<platform>/.version);
- * prod 安装:userData/codex/<version>/codex 的版本目录名。
- * 二进制未就绪 / 版本推断不出时返回 null,回写门禁据此按「无法确认」降级为不写(安全侧)。
+ * 覆盖各布局的 `.version` marker 位置:
+ *   - dev bundle:二进制同级(apps/codex-bin/<platform>/.version);
+ *   - Linux 受管 fallback:二进制上一级(userData/agent-runtime/codex/.version,bin 在 .../codex/bin/codex);
+ *   - prod 安装:userData/codex/<version>/codex,无 marker 时取版本目录名。
+ * 二进制未就绪、或系统 PATH codex 等拿不到版本标记的布局 → 返回 null,回写门禁据此按
+ * 「无法确认」降级为不写(安全侧:宁可不回写,也不拿不确定版本覆盖源会话)。
  */
 function getBundledCodexRuntimeVersion(): string | null {
   const binaryPath = getReadyBinaryPath('codex');
   if (!binaryPath) return null;
-  try {
-    const sidecar = fs.readFileSync(path.join(path.dirname(binaryPath), '.version'), 'utf-8').trim();
-    if (sidecar) return sidecar;
-  } catch {
-    /* 非 dev bundle:无 .version 同级文件,回退到版本目录名 */
+  const binDir = path.dirname(binaryPath);
+  // marker 可能在二进制同级(dev)或上一级(Linux 受管 fallback 的 <root>/bin/codex 布局)。
+  for (const markerDir of [binDir, path.dirname(binDir)]) {
+    try {
+      const marked = fs.readFileSync(path.join(markerDir, '.version'), 'utf-8').trim();
+      if (marked) return marked;
+    } catch {
+      /* 该布局此层无 .version marker,继续下一候选 */
+    }
   }
-  const versionDir = path.basename(path.dirname(binaryPath));
+  // prod 安装:版本就是目录名(userData/codex/<version>/codex)。
+  const versionDir = path.basename(binDir);
   return /^\d+\.\d+/.test(versionDir) ? versionDir : null;
 }
 

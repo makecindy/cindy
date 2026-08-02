@@ -1714,6 +1714,17 @@ describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () =
     codexBinMock.path = path.join(binDir, 'codex');
   }
 
+  /**
+   * Linux 受管 fallback 布局:二进制在 <root>/bin/codex,.version marker 在上一级 <root>/.version。
+   * 用于验证门禁能读到非同级 marker(#789 review P2)。
+   */
+  function setBundledCodexVersionLinuxFallback(version: string): void {
+    const root = path.join(rootDir, 'agent-runtime', 'codex');
+    fs.mkdirSync(path.join(root, 'bin'), { recursive: true });
+    fs.writeFileSync(path.join(root, '.version'), `${version}\n`, 'utf-8');
+    codexBinMock.path = path.join(root, 'bin', 'codex');
+  }
+
   /** 写一份含 session_meta 首行(带 cli_version)+ 一条消息的 rollout。 */
   function writeRolloutWithCliVersion(file: string, cliVersion: string, body: string): void {
     fs.mkdirSync(path.dirname(file), { recursive: true });
@@ -1827,6 +1838,18 @@ describe('syncExternalCodexSessionFromDesktop runtime version gate (#789)', () =
     await syncExternalCodexSessionFromDesktop(threadId);
 
     // 版本一致 → 回写照旧发生,源 rollout 被更新为桌面端内容。
+    expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(fs.readFileSync(desktopRollout, 'utf-8'));
+  });
+
+  it('reads the version marker from the Linux managed-fallback layout (bin/ subdir)', async () => {
+    // 二进制在 <root>/bin/codex,.version 在上一级——门禁必须读到、不能误判为版本未知
+    // 而在 Linux 上永久禁用回写(#789 review P2)。
+    setBundledCodexVersionLinuxFallback('0.145.0');
+    const { externalRollout, desktopRollout } = setupLinkedThread('0.145.0');
+
+    await syncExternalCodexSessionFromDesktop(threadId);
+
+    // 成功读到上一级 marker、版本一致 → 回写照旧发生。
     expect(fs.readFileSync(externalRollout, 'utf-8')).toBe(fs.readFileSync(desktopRollout, 'utf-8'));
   });
 });
