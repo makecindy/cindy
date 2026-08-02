@@ -31,6 +31,7 @@ import { isInvalidEncryptedContentError } from '@/utils/encryptedContentError';
 import { isNetworkishErrorMessage, parseReconnectAttemptMessage } from '@/utils/networkError';
 import { isOverloadErrorMessage, parseOverloadRetryProgress } from '@/utils/overloadError';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
+import { isPiImageInputUnsupportedError } from '../../../shared/inputError';
 
 interface ErrorBannerProps {
   error: string;
@@ -240,7 +241,9 @@ export function ErrorBanner({
   // 加 else if, 标志自动保持 true, 折扣版提示不会误叠加 (无需记得同步维护条件表)。
   let displayError: string;
   let hasSpecialGuidance = true;
-  if (isCredentialSwitchBusy) {
+  if (isPiImageInputUnsupportedError(error)) {
+    displayError = t('ipcError.PI_IMAGE_INPUT_UNSUPPORTED');
+  } else if (isCredentialSwitchBusy) {
     displayError = t('chat.errorBanner.credentialSwitchBusy');
   } else if (isCodexThreadStale) {
     displayError = t('chat.errorBanner.codexThreadStale');

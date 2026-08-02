@@ -25,6 +25,7 @@
  */
 
 import { isUnsupportedResponsesImageErrorPayload } from '@cindy/responses-chat-bridge';
+import { isPiImageInputUnsupportedError } from '../../shared/inputError.js';
 import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
@@ -1417,12 +1418,23 @@ export class AgentInputCoordinator {
       if (markerStillPresent) {
         latest.error = errorMessage(err);
         latest.recovery = null;
+        // 视觉 capability 拒绝发生在 Pi RPC 之前，投递结果确定为“未接收”。把原消息
+        // 恢复到队首并留下 typed recovery；用户切换到视觉模型后可原样重试。与 ack
+        // 超时不同，这里不暂停队列，因为不存在重复投递风险。marker 已被 Stop/clear
+        // 清掉时不会进本分支，因此不会把显式丢弃的消息复活。
+        if (isPiImageInputUnsupportedError(err)) {
+          this.movePreparedItemToQueueFront(latest, item, true);
+          this.movePendingCompactWaitClientIdToFront(latest, item.clientId);
+          latest.recovery = { kind: 'queue-head', clientId: item.clientId };
+          latest.queuePaused = false;
+          latest.queuePausedByRestore = false;
+        }
         // 投递结果不确定(ack 超时 / post-send abort,见 isSteerDeliveryUncertainError):
         // 把该消息物化到队首(composer 入口的插话不在队列里,不物化则"结果不确定"
         // 没有落点——用户按草稿重发同一段文字时模型可能双份消费,review #939 第三轮)
         // 并暂停队列,不让 turn 结束后的自动 drain 把它再派发一遍。用户确认模型
         // 已回应就删行,没回应就点「继续发送」。队列行入口 prepend 幂等,无副作用。
-        if (isSteerDeliveryUncertainError(err)) {
+        else if (isSteerDeliveryUncertainError(err)) {
           this.prependQueueHeadIfMissing(latest, item);
           latest.queuePaused = true;
           // 不确定投递的保护性暂停必须由用户显式处置,不许新输入静默放行。
@@ -2073,6 +2085,20 @@ export class AgentInputCoordinator {
     state.queueAbortPending = false;
     state.abortBoundaryToken = null;
     if (type === 'error') {
+      if (
+        active &&
+        state.recovery?.kind === 'queue-head' &&
+        isPiImageInputUnsupportedError(state.error)
+      ) {
+        // A Pi capability guard rejected a newer steer before RPC and restored it as the
+        // recoverable queue head. The terminal error belongs to the original active turn: close
+        // that old boundary, but do not replace the newer queue-head recovery/banner with an
+        // active-turn retry. The paired done path below preserves the same recovery as well.
+        state.activeTurn = null;
+        state.stickyError = null;
+        this.emit(sessionId);
+        return;
+      }
       if (active?.persisted) {
         state.activeTurn = null;
         state.stickyError = null;
@@ -2218,10 +2244,10 @@ export class AgentInputCoordinator {
     // 同轮注入的 steer 在飞期间,老 turn 的 done 可能先到(注入前 turn 恰好收尾)。
     // marker 属于 steer 事务而不是老 turn,必须留到 steer() 自己 resolve/reject
     // 或 Stop/close 取消,这里不动 steeringQueueClientIds。
-    if (!active && state.recovery?.kind === 'queue-head') {
-      // A pre-accept rollback has already restored the failed head. A late
-      // done/closed-style wake from the old turn must not clear that recovery,
-      // otherwise the next drain tick would silently resend it without Retry.
+    if (state.recovery?.kind === 'queue-head') {
+      // A pre-accept rollback or a capability-rejected steer has already restored the failed
+      // head. The latter can still have the original active turn here; its done boundary must
+      // not clear the steer recovery, otherwise the next drain silently resends without Retry.
       this.emit(sessionId);
       return;
     }
@@ -3417,6 +3443,13 @@ export class AgentInputCoordinator {
       waitForClientIds: entry.waitForClientIds.includes(clientId)
         ? entry.waitForClientIds
         : [clientId, ...entry.waitForClientIds],
+    }));
+  }
+
+  private movePendingCompactWaitClientIdToFront(state: SessionInputState, clientId: string): void {
+    state.pendingCompacts = state.pendingCompacts.map((entry) => ({
+      ...entry,
+      waitForClientIds: [clientId, ...entry.waitForClientIds.filter((id) => id !== clientId)],
     }));
   }
 

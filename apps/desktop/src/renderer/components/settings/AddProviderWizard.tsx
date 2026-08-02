@@ -782,6 +782,7 @@ export function AddProviderWizard({
               id: m.id,
               name: m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
+              ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
             };
           });
         if (agentModels.length === 0) continue;

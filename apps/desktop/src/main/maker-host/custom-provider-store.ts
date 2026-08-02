@@ -112,6 +112,9 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     if (mm.defaultEnabled !== undefined && typeof mm.defaultEnabled !== 'boolean') {
       return invalid(`runtime '${agent}' model.defaultEnabled must be a boolean`);
     }
+    if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
+      return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
+    }
   }
   if (r.wireProtocol !== undefined) {
     // Pi 是多协议 harness；Codex 也具备 Responses / Chat / Anthropic bridge。
@@ -324,6 +327,7 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
       name: m.name.trim(),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+      ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
     }))
     .filter((m) => {
       if (!m.id || !m.name || seen.has(m.id)) return false;
@@ -463,6 +467,7 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
               ? { contextWindow: m.contextWindow }
               : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           }))
       : [];
     const entry: CustomProviderRuntimeConfig = {

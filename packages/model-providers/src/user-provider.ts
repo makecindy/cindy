@@ -70,6 +70,8 @@ function toCatalogModel(
     group: `custom:${providerId}`,
     // 手填模型保持历史默认可见；刷新发现的模型可显式声明默认隐藏。
     defaultEnabled: m.defaultEnabled ?? true,
+    // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
+    ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
   };
 }
 

@@ -7,6 +7,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 // 每个用例必须拿一份全新模块状态,否则上一个用例的 started=true 会让后面的用例不再拉取。
 beforeEach(() => {
   vi.resetModules();
+  window.localStorage.clear();
 });
 
 afterEach(() => {
@@ -154,5 +155,55 @@ describe('useDeviceLinkDeviceList initial request', () => {
 
     await act(async () => resolveRelogin?.({ devices: [] }));
     await waitFor(() => expect(result.current).toEqual({ devices: [], settled: true }));
+  });
+
+  it('relay stop after selecting a remote device falls back visibly and keeps the local escape action', async () => {
+    let statusChanged:
+      ((payload: { status: 'stopped' | 'connecting' | 'online' }) => void) | undefined;
+    const listDevices = vi.fn().mockResolvedValue({
+      devices: [
+        {
+          deviceId: 'dev-a',
+          name: 'Mac A',
+          platform: 'darwin',
+          online: true,
+          remoteControlEnabled: true,
+          controlEnabled: true,
+          isSelf: false,
+        } as unknown as DeviceLinkDeviceView,
+      ],
+    });
+    vi.stubGlobal('electronAPI', {
+      deviceLink: {
+        listDevices,
+        onPresenceChanged: vi.fn(),
+        onStatusChanged: vi.fn(
+          (callback: (payload: { status: 'stopped' | 'connecting' | 'online' }) => void) => {
+            statusChanged = callback;
+          },
+        ),
+        onControlTargetChanged: vi.fn(),
+      },
+    });
+    window.localStorage.setItem('cc-agent.sidebar.selectedMachines', JSON.stringify(['dev-a']));
+
+    const { useMachineSwitcher } = await import('@/features/device-link/useMachineSwitcher');
+    const { MACHINE_ALL, MACHINE_LOCAL } =
+      await import('@/features/device-link/selectedMachineStore');
+    const { result } = renderHook(useMachineSwitcher);
+
+    await waitFor(() => expect(result.current.devices).toHaveLength(1));
+    expect(result.current.selectedDeviceId).toEqual(['dev-a']);
+    expect(result.current.hasRemote).toBe(true);
+
+    act(() => statusChanged?.({ status: 'stopped' }));
+    expect(result.current.devices).toEqual([]);
+    expect(result.current.selectedDeviceId).toBe(MACHINE_ALL);
+    // raw 仍记着 dev-a，因此入口保留；菜单中可显式选「本机」。
+    expect(result.current.hasRemote).toBe(true);
+
+    act(() => result.current.select([MACHINE_LOCAL]));
+    expect(result.current.selectedDeviceId).toEqual([MACHINE_LOCAL]);
+    expect(result.current.hasRemote).toBe(false);
   });
 });

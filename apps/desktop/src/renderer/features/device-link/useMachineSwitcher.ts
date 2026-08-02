@@ -14,8 +14,10 @@
  * (selectedMachineStore 落 localStorage)。**store 始终持有原始勾选集(raw),不做写时清理**:
  * 展示与过滤走读时归一化(useEffectiveSelectedMachineId)——勾选的设备掉线 / 被拒 / 消失时
  * 仅在展示层裁掉、裁空回落「所有」,raw 与持久化值保留完整勾选集,设备重连 / 重启后自动生效。
- * 归一化在全量设备列表尚未加载(null)时不裁剪:启动瞬间列表为空,裁剪会把持久化恢复的选择
- * 误判成「设备已消失」而清成「所有」——这正是「重启后恢复成全部」的坑。
+ * 归一化在全量设备列表尚未加载且请求未结算时不裁剪:启动瞬间列表为空,
+ * 裁剪会把持久化恢复的选择误判成「设备已消失」而清成「所有」。但 relay 已停止 /
+ * 本轮请求已失败结算时,null 是当前终态,必须用空可选集让悬空远端选择回落,
+ * 否则本地会话被过滤为空。
  * toggle 同样基于 raw:点选只改「可见半」,暂时不可选的持久化设备原样保留
  * (toggleMachineSelection 内部拆分,防止一次无关点选把离线设备从落盘值里冲掉)。
  * 各 hook 共用 useSwitcherDevices(),读同一份共享设备列表,无重复拉取。
@@ -136,12 +138,44 @@ export function useSwitcherDevices(): SwitcherDevice[] {
 }
 
 /**
- * 归一化可选中集:全量设备列表尚未加载(null)时返回 null(= 不裁剪,保留持久化恢复的选择,
- * 避免启动瞬间列表为空把选择误判成「设备已消失」)。
+ * 归一化可选中集:
+ * - 设备列表仍在首拉(null + unsettled)→ null,不裁剪持久化选择;
+ * - 列表已落地,或 null 已是终态(settled)→ 按当前 switcher 设备归一化。
+ * 后一条是断网逃生口:relay stop 会清掉设备目录与远端分片,此时只选中远端的 raw
+ * 必须在展示层回落「所有」,否则本地会话也会被过滤掉。
  */
-function useSelectableIdsForNormalize(devices: readonly SwitcherDevice[]): readonly string[] | null {
-  const loaded = useDeviceLinkDeviceList() !== null;
-  return useMemo(() => (loaded ? selectableDeviceIds(devices) : null), [loaded, devices]);
+export function resolveSelectableIdsForNormalize(
+  deviceList: readonly DeviceLinkDeviceView[] | null,
+  deviceListSettled: boolean,
+  devices: readonly SwitcherDevice[],
+): readonly string[] | null {
+  if (deviceList === null && !deviceListSettled) return null;
+  return selectableDeviceIds(devices);
+}
+
+function useSelectableIdsForNormalize(
+  devices: readonly SwitcherDevice[],
+): readonly string[] | null {
+  const deviceList = useDeviceLinkDeviceList();
+  const deviceListSettled = useDeviceLinkDeviceListSettled();
+  return useMemo(
+    () => resolveSelectableIdsForNormalize(deviceList, deviceListSettled, devices),
+    [deviceList, deviceListSettled, devices],
+  );
+}
+
+/**
+ * 除了当前仍有远端设备可展示,只要 raw 选择仍引用远端设备,切换入口就不能消失。
+ * 断网后设备目录 / 远端分片可能同时被清空,这个入口是用户显式切回本机的唯一逃生口。
+ */
+export function shouldShowMachineSwitcher(
+  rawSelection: MachineSelection,
+  devices: readonly SwitcherDevice[],
+): boolean {
+  return (
+    devices.length > 0 ||
+    (rawSelection !== MACHINE_ALL && rawSelection.some((id) => id !== MACHINE_LOCAL))
+  );
 }
 
 /** 勾选的设备仍可选中(已连接 / 连接中)则保留,否则从勾选集裁掉(裁空回落「所有」)。供侧边栏合并点过滤用。 */
@@ -199,7 +233,7 @@ export interface MachineSwitcherState {
   devices: SwitcherDevice[];
   /** 归一化后的选择(MACHINE_ALL 或勾选集:MACHINE_LOCAL / 可选中设备 deviceId)。 */
   selectedDeviceId: MachineSelection;
-  /** 是否有 ≥1 台相关远程机器(切换栏是否应显示)。 */
+  /** 是否应显示切换栏:有远端设备,或当前 raw 选择仍需要断网逃生口。 */
   hasRemote: boolean;
   /** 直接设置选择(菜单「所有」项 / 深链回落用)。 */
   select: (next: MachineSelection) => void;
@@ -232,7 +266,7 @@ export function useMachineSwitcher(): MachineSwitcherState {
   return {
     devices,
     selectedDeviceId: effective,
-    hasRemote: devices.length > 0,
+    hasRemote: shouldShowMachineSwitcher(raw, devices),
     select: setSelectedMachineId,
     toggle,
   };

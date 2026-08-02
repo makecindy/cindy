@@ -88,6 +88,10 @@ import {
   pollContactsDeviceSyncSettingChange,
   setContactsDeviceLinkOwnerActive,
 } from '../contacts-sync/driver';
+import {
+  invokeWithClosedLinkRecovery,
+  requiresSessionLink,
+} from './linkRecovery';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
 export { setBusyProbe };
@@ -907,9 +911,17 @@ function assertNotStandby(): void {
   }
 }
 
+/** 本机主动关闭对某设备的控制后，所有新建链路与业务调用都必须继续 fail closed。 */
+function assertRemoteControlTargetEnabled(deviceId: string): void {
+  if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) {
+    throw new Error('[DEVICE_LINK_CONTROL_DISABLED] device control is disabled locally');
+  }
+}
+
 /** 控制端:向目标设备发起控制链路(link-open → link-accept) */
 export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayload> {
   assertNotStandby();
+  assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   const existing = openLinkInFlight.get(deviceId);
   if (existing) return existing;
@@ -934,6 +946,16 @@ export function closeRemoteLink(deviceId: string): void {
   client?.closeLink(deviceId, 'user');
 }
 
+/** 重开期间本地撤权时，撤销已成功建立的临时控制链路，保持 fail-closed。 */
+function assertRemoteControlTargetEnabledAfterReopen(deviceId: string): void {
+  try {
+    assertRemoteControlTargetEnabled(deviceId);
+  } catch (err) {
+    closeRemoteLink(deviceId);
+    throw err;
+  }
+}
+
 /**
  * 本机在 device-link 网络中的设备 id(relay ack 下发);未连接 / 未 ack 时 null。
  * 供会话引用解析等消费方识别「指向本机自己的 deviceId」——深链是可复制的字符串,
@@ -952,8 +974,17 @@ export async function remoteInvoke(
   args: unknown[],
 ): Promise<InvokeResultPayload> {
   assertNotStandby();
-  if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+  assertRemoteControlTargetEnabled(deviceId);
+  const invoke = (): Promise<InvokeResultPayload> => {
+    if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+  };
+  return invokeWithClosedLinkRecovery(
+    invoke,
+    () => openRemoteLink(deviceId),
+    () => assertRemoteControlTargetEnabled(deviceId),
+    () => closeRemoteLink(deviceId),
+  );
 }
 
 /**
@@ -965,6 +996,12 @@ export async function remoteSubscribe(
   topics: string[],
 ): Promise<InvokeResultPayload> {
   assertNotStandby();
+  assertRemoteControlTargetEnabled(deviceId);
+  if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+  if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
+    await openRemoteLink(deviceId);
+  }
+  assertRemoteControlTargetEnabledAfterReopen(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
   return client.invoke(deviceId, {
     channel: DL_SUBSCRIBE_CHANNEL,

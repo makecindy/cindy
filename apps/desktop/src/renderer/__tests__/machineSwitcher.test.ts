@@ -14,6 +14,8 @@ import {
 } from '@/features/device-link/selectedMachineStore';
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
 import {
+  resolveSelectableIdsForNormalize,
+  shouldShowMachineSwitcher,
   shouldShowSelectedMachineConnectingPlaceholder,
   shouldWaitForRemoteSessionBootstrap,
 } from '@/features/device-link/useMachineSwitcher';
@@ -118,6 +120,30 @@ describe('normalizeSelectedMachineId', () => {
     const raw = ['dev-a', MACHINE_LOCAL];
     expect(normalizeSelectedMachineId(raw, null)).toBe(raw);
     expect(normalizeSelectedMachineId(MACHINE_ALL, null)).toBe(MACHINE_ALL);
+  });
+});
+
+describe('断网后远端选择的逃生路径', () => {
+  it('设备目录尚未结算时保留 raw 选择；终态不可用时回落「所有」', () => {
+    const raw = ['dev-a'];
+    const loadingSelectable = resolveSelectableIdsForNormalize(null, false, []);
+    const stoppedSelectable = resolveSelectableIdsForNormalize(null, true, []);
+
+    expect(loadingSelectable).toBeNull();
+    expect(normalizeSelectedMachineId(raw, loadingSelectable)).toBe(raw);
+    expect(stoppedSelectable).toEqual([]);
+    expect(normalizeSelectedMachineId(raw, stoppedSelectable)).toBe(MACHINE_ALL);
+  });
+
+  it('目录不可用但仍记着远端选择时保留切换入口，用户可显式切回本机', () => {
+    expect(shouldShowMachineSwitcher(['dev-a'], [])).toBe(true);
+    expect(shouldShowMachineSwitcher([MACHINE_LOCAL], [])).toBe(false);
+    expect(shouldShowMachineSwitcher(MACHINE_ALL, [])).toBe(false);
+    expect(
+      shouldShowMachineSwitcher(MACHINE_ALL, [
+        { deviceId: 'dev-a', name: 'Mac A', status: 'connecting' },
+      ]),
+    ).toBe(true);
   });
 });
 

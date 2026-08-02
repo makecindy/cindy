@@ -246,6 +246,83 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('guards image prompts by the actual provider-model capability and follows model switches', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [
+        {
+          id: 'native-text',
+          name: 'Native Text',
+          baseUrl: 'http://text.test',
+          api: 'openai-completions',
+          models: [{ id: 'local-model', input: ['text'] }],
+        },
+        {
+          id: 'native-vision',
+          name: 'Native Vision',
+          baseUrl: 'http://vision.test',
+          api: 'openai-completions',
+          models: [{ id: 'local-model', input: ['text', 'image'] }],
+        },
+      ],
+      env: {},
+    })));
+    const handle = await agent.startSession({
+      sessionId: 'image-capability',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-text',
+    });
+    const imagePath = path.join(cwd, 'screenshot.png');
+    writeFileSync(
+      imagePath,
+      Buffer.from(
+        'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+        'base64',
+      ),
+    );
+    const imageMessage = {
+      type: 'user' as const,
+      content: [{ type: 'image' as const, path: imagePath }],
+    };
+
+    captured.requests.length = 0;
+    await expect(handle.send(imageMessage)).rejects.toMatchObject({
+      code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+    });
+    await expect(handle.steer!(imageMessage)).rejects.toMatchObject({
+      code: 'PI_IMAGE_INPUT_UNSUPPORTED',
+    });
+    expect(captured.requests.some((request) => request.type === 'prompt' || request.type === 'steer'))
+      .toBe(false);
+
+    await handle.setModel!('local-model', { providerId: 'native-vision' });
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'prompt',
+      images: [expect.objectContaining({ type: 'image', mimeType: 'image/png' })],
+    }));
+
+    // 显式清除来源后实际路由回到 cindy 网关；同名 BYOM 不能抢走能力判断。
+    await handle.setModel!('local-model', { providerId: null });
+    captured.requests.length = 0;
+    await handle.send(imageMessage);
+    expect(captured.requests.some((request) => request.type === 'prompt')).toBe(true);
+
+    // 文件读失败不会生成 image block，仍保留既有的“图片不可读”文本语义。
+    await handle.setModel!('local-model', { providerId: 'native-text' });
+    captured.requests.length = 0;
+    await handle.send({
+      type: 'user',
+      content: [{ type: 'image', path: path.join(cwd, 'missing.png') }],
+    });
+    expect(captured.requests).toContainEqual(expect.objectContaining({
+      type: 'prompt',
+      message: expect.stringContaining('(image unavailable:'),
+    }));
+    await handle.close();
+  });
+
   it('keeps a leading /skill: command at the prompt start even when Extra Dirs are configured', async () => {
     const agent = new PiAgent(byomDeps(async () => ({ providers: [], env: {} })));
     const handle = await agent.startSession({
