@@ -42,9 +42,9 @@ port.once('message', (request: ContactsSyncCodecWorkerRequest) => {
   port.postMessage(response, transferList);
 });
 
-function prepareRequest(
-  request: Extract<ContactsSyncCodecWorkerRequest, { type: 'prepare' }>,
-): { materialized: boolean } {
+function prepareRequest(request: Extract<ContactsSyncCodecWorkerRequest, { type: 'prepare' }>): {
+  materialized: boolean;
+} {
   throwIfCancelled(request);
   return withContactsStore(
     request.source,
@@ -73,7 +73,11 @@ function encodeRequest(
     throwIfCancelled(request);
     const result = store.prepareDeviceSyncStateForTransfer();
     const state = options.database.knownClocks
-      ? createContactsSyncDelta(result.state, options.database.knownClocks)
+      ? createContactsSyncDelta(
+          result.state,
+          options.database.knownClocks,
+          options.database.knownMergeClocks,
+        )
       : result.state;
     throwIfCancelled(request);
     const message = {
@@ -107,6 +111,9 @@ function decodeRequest(
       type: 'applied-state' as const,
       changed,
       clocks: state.clocks.map((clock) => ({ ...clock })),
+      ...(state.mergeClocks !== undefined
+        ? { mergeClocks: state.mergeClocks.map((clock) => ({ ...clock })) }
+        : {}),
       ...(message.requestReply ? { requestReply: true } : {}),
     };
   });
@@ -122,8 +129,7 @@ function withContactsStore<T>(
     typeof __filename === 'string' ? __filename : import.meta.url,
   );
   const loaded = workerRequire(source.betterSqliteModulePath ?? 'better-sqlite3') as
-    | typeof import('better-sqlite3')
-    | { default: typeof import('better-sqlite3') };
+    typeof import('better-sqlite3') | { default: typeof import('better-sqlite3') };
   const DatabaseConstructor = 'default' in loaded ? loaded.default : loaded;
   const options: Database.Options = source.nativeBinding
     ? { nativeBinding: source.nativeBinding }

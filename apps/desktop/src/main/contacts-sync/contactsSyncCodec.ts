@@ -56,13 +56,13 @@ export interface ContactsSyncDatabaseEncodeOptions extends ContactsSyncEncodeCom
   database: {
     source: ContactsSyncDatabaseSource;
     knownClocks?: ContactsSyncClock[];
+    knownMergeClocks?: ContactsSyncClock[];
     requestReply?: boolean;
   };
 }
 
 export type ContactsSyncEncodeOptions =
-  | ContactsSyncMessageEncodeOptions
-  | ContactsSyncDatabaseEncodeOptions;
+  ContactsSyncMessageEncodeOptions | ContactsSyncDatabaseEncodeOptions;
 
 export interface ContactsSyncDecodeOptions {
   ciphertext: Uint8Array;
@@ -82,6 +82,7 @@ export interface ContactsSyncAppliedStateResult {
   type: 'applied-state';
   changed: boolean;
   clocks: ContactsSyncClock[];
+  mergeClocks?: ContactsSyncClock[];
   requestReply?: boolean;
 }
 
@@ -115,12 +116,11 @@ export interface ContactsSyncCodec {
 export type ContactsSyncCodecWorkerRequest = {
   id: string;
   cancellation?: SharedArrayBuffer;
-} &
-  (
-    | { type: 'encode'; options: ContactsSyncEncodeOptions }
-    | { type: 'decode'; options: ContactsSyncDecodeOptions }
-    | { type: 'prepare'; source: ContactsSyncDatabaseSource }
-  );
+} & (
+  | { type: 'encode'; options: ContactsSyncEncodeOptions }
+  | { type: 'decode'; options: ContactsSyncDecodeOptions }
+  | { type: 'prepare'; source: ContactsSyncDatabaseSource }
+);
 
 export interface ContactsSyncCodecWorkerResponse {
   id: string;

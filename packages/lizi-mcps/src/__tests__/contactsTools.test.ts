@@ -581,6 +581,7 @@ describe('cindy_contacts tools', () => {
     // 首批已建的 200 张系统卡失锚, 下次回写同一批人会重复建卡
     const store = manager.getStore();
     let call = 0;
+    let partialMutations = 0;
     const failingDeps: ContactsMcpDeps = {
       getManager: () => manager,
       isEnabled: () => true,
@@ -593,6 +594,9 @@ describe('cindy_contacts tools', () => {
           action: 'created' as const,
           appleId: `fake-${it.contactId.slice(0, 8)}`,
         }));
+      },
+      onMutated: () => {
+        partialMutations += 1;
       },
     };
     const failingRegistry = new ContactsToolRegistry();
@@ -610,11 +614,19 @@ describe('cindy_contacts tools', () => {
 
     const res = parseResult(await failingRegistry.call('contacts_export_system', { group: '中断组' }));
     expect(res.ok).toBe(false); // 第二批失败照常报错
-    // 但首批 200 人的锚点已落库, 不会因后续批失败而丢
+    expect(res.code).toBe('PERMISSION_DENIED');
+    expect(res.data).toMatchObject({
+      partial: true,
+      created: 200,
+      updated: 0,
+      anchorsAdded: 200,
+    });
+    // 但首批 200 人的锚点已落库, 不会因后续批失败而丢；部分成功也要广播。
     const anchored = ids.filter((id) =>
       store.getContact(id).identities.some((i) => i.platform === 'apple-contacts'),
     );
     expect(anchored).toHaveLength(200);
+    expect(partialMutations).toBe(2); // 建组成功一次 + 锚点部分成功补发一次
   });
 
   it('write/manage 工具成功后触发 onMutated, 只读工具不触发(UI 刷新通道)', async () => {

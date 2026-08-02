@@ -33,6 +33,7 @@ interface ContactsSyncOutboundDependencies {
   getPeerPublicKey(deviceId: string): string | null;
   getDatabaseSource(): ContactsSyncDatabaseSource;
   getKnownClocks(deviceId: string): ContactsSyncClock[] | undefined;
+  getKnownMergeClocks(deviceId: string): ContactsSyncClock[] | undefined;
   onLocalMaterialized(): void;
   announceKey(deviceId: string): void;
   onError(error: unknown): void;
@@ -104,10 +105,12 @@ export class ContactsSyncOutbound {
       return;
     }
     const knownClocks = this.deps.getKnownClocks(deviceId);
+    const knownMergeClocks = this.deps.getKnownMergeClocks(deviceId);
     const encoded = await encodeContactsSyncDatabaseState({
       database: {
         source: this.deps.getDatabaseSource(),
         ...(knownClocks ? { knownClocks } : {}),
+        ...(knownMergeClocks ? { knownMergeClocks } : {}),
         ...(requestReply ? { requestReply: true } : {}),
       },
       ownPrivateKey: identity.privateKey,

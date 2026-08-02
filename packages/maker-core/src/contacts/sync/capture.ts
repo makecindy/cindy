@@ -7,6 +7,7 @@
 
 import {
   compareContactsSyncText,
+  nextContactsSyncMergeStamp,
   nextContactsSyncStamp,
   stableContactsSyncJson,
 } from "./merge.js";
@@ -185,56 +186,87 @@ export function captureContactsSnapshot(
   nodeId: string,
   mergeRedirects: Array<{ sourceId: string; targetId: string }> = [],
 ): { state: ContactsSyncState; changed: boolean } {
-  if (equal(previous, current) && mergeRedirects.length === 0) {
+  const snapshotChanged = !equal(previous, current);
+  const mergeChanges = mergeRedirects.filter(({ sourceId, targetId }) =>
+    (state.merges ?? []).every(
+      (merge) =>
+        merge.id !== sourceId || merge.value.value.targetId !== targetId,
+    ),
+  );
+  if (!snapshotChanged && mergeChanges.length === 0) {
     return { state, changed: false };
   }
-  const next = nextContactsSyncStamp(state, nodeId);
+
+  let nextState = state;
+  let dataStamp: ContactsSyncStamp | undefined;
+  if (snapshotChanged) {
+    const next = nextContactsSyncStamp(nextState, nodeId);
+    nextState = next.state;
+    dataStamp = next.stamp;
+  }
+  let mergeStamp: ContactsSyncStamp | undefined;
+  if (mergeChanges.length > 0) {
+    const next = nextContactsSyncMergeStamp(nextState, nodeId);
+    nextState = next.state;
+    mergeStamp = next.stamp;
+  }
+
   return {
     changed: true,
     state: {
-      ...next.state,
-      contacts: captureContacts(
-        state.contacts,
-        previous.contacts,
-        current.contacts,
-        next.stamp,
-      ),
-      identities: captureEntities(
-        state.identities,
-        previous.identities,
-        current.identities,
-        next.stamp,
-      ),
-      events: captureEntities(
-        state.events,
-        previous.events,
-        current.events,
-        next.stamp,
-      ),
-      groups: captureEntities(
-        state.groups,
-        previous.groups,
-        current.groups,
-        next.stamp,
-      ),
-      memberships: captureEntities(
-        state.memberships,
-        previous.memberships,
-        current.memberships,
-        next.stamp,
-        { reusableId: true },
-      ),
-      relations: captureEntities(
-        state.relations,
-        previous.relations,
-        current.relations,
-        next.stamp,
-      ),
-      merges: captureMergeRedirects(
-        state.merges ?? [],
-        mergeRedirects,
-        next.stamp,
-      ),
+      ...nextState,
+      contacts: dataStamp
+        ? captureContacts(
+            state.contacts,
+            previous.contacts,
+            current.contacts,
+            dataStamp,
+          )
+        : state.contacts,
+      identities: dataStamp
+        ? captureEntities(
+            state.identities,
+            previous.identities,
+            current.identities,
+            dataStamp,
+          )
+        : state.identities,
+      events: dataStamp
+        ? captureEntities(
+            state.events,
+            previous.events,
+            current.events,
+            dataStamp,
+          )
+        : state.events,
+      groups: dataStamp
+        ? captureEntities(
+            state.groups,
+            previous.groups,
+            current.groups,
+            dataStamp,
+          )
+        : state.groups,
+      memberships: dataStamp
+        ? captureEntities(
+            state.memberships,
+            previous.memberships,
+            current.memberships,
+            dataStamp,
+            { reusableId: true },
+          )
+        : state.memberships,
+      relations: dataStamp
+        ? captureEntities(
+            state.relations,
+            previous.relations,
+            current.relations,
+            dataStamp,
+          )
+        : state.relations,
+      merges: mergeStamp
+        ? captureMergeRedirects(state.merges ?? [], mergeChanges, mergeStamp)
+        : (state.merges ?? []),
     },
   };
 }

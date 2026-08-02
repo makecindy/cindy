@@ -36,7 +36,9 @@ describe("contacts device sync", () => {
     for (const db of databases.splice(0)) db.close();
   });
 
-  function createStore(config?: { maxIdentityValueLen: number }): MakerContactsStore {
+  function createStore(config?: {
+    maxIdentityValueLen: number;
+  }): MakerContactsStore {
     const db = new DatabaseCtor(":memory:");
     databases.push(db);
     const store = new MakerContactsStore({ db, logger: noopLogger(), config });
@@ -111,8 +113,14 @@ describe("contacts device sync", () => {
     b.activateDeviceSync();
 
     const person = a.createContact({ kind: "person", displayName: "本机锚点" });
-    a.addIdentity(person.id, { platform: "email", value: "anchor@example.com" });
-    a.addIdentity(person.id, { platform: "apple-contacts", value: "apple-on-a" });
+    a.addIdentity(person.id, {
+      platform: "email",
+      value: "anchor@example.com",
+    });
+    a.addIdentity(person.id, {
+      platform: "apple-contacts",
+      value: "apple-on-a",
+    });
 
     expect(
       stateOf(a).identities.some(
@@ -121,23 +129,28 @@ describe("contacts device sync", () => {
     ).toBe(false);
     exchange(b, a);
     expect(
-      b.getContact(person.id).identities.some(
-        (identity) => identity.platform === "apple-contacts",
-      ),
+      b
+        .getContact(person.id)
+        .identities.some((identity) => identity.platform === "apple-contacts"),
     ).toBe(false);
 
-    b.addIdentity(person.id, { platform: "apple-contacts", value: "apple-on-b" });
+    b.addIdentity(person.id, {
+      platform: "apple-contacts",
+      value: "apple-on-b",
+    });
     exchange(a, b);
     exchange(b, a);
 
     expect(
-      a.getContact(person.id).identities
-        .filter((identity) => identity.platform === "apple-contacts")
+      a
+        .getContact(person.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
         .map((identity) => identity.value),
     ).toEqual(["apple-on-a"]);
     expect(
-      b.getContact(person.id).identities
-        .filter((identity) => identity.platform === "apple-contacts")
+      b
+        .getContact(person.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
         .map((identity) => identity.value),
     ).toEqual(["apple-on-b"]);
   });
@@ -148,12 +161,24 @@ describe("contacts device sync", () => {
     a.activateDeviceSync();
     b.activateDeviceSync();
 
-    const finalTarget = a.createContact({ kind: "person", displayName: "最终目标" });
-    const intermediate = a.createContact({ kind: "person", displayName: "中间目标" });
-    const source = a.createContact({ kind: "person", displayName: "待合并来源" });
+    const finalTarget = a.createContact({
+      kind: "person",
+      displayName: "最终目标",
+    });
+    const intermediate = a.createContact({
+      kind: "person",
+      displayName: "中间目标",
+    });
+    const source = a.createContact({
+      kind: "person",
+      displayName: "待合并来源",
+    });
     exchange(b, a);
-    b.addIdentity(source.id, { platform: "apple-contacts", value: "apple-on-source" });
-    const bKnownClocks = stateOf(b).clocks;
+    b.addIdentity(source.id, {
+      platform: "apple-contacts",
+      value: "apple-on-source",
+    });
+    const bBeforeMerge = stateOf(b);
 
     a.merge(intermediate.id, source.id);
     a.merge(finalTarget.id, intermediate.id);
@@ -162,34 +187,141 @@ describe("contacts device sync", () => {
       expect.arrayContaining([
         expect.objectContaining({
           id: source.id,
-          value: expect.objectContaining({ value: { targetId: intermediate.id } }),
+          value: expect.objectContaining({
+            value: { targetId: intermediate.id },
+          }),
         }),
         expect.objectContaining({
           id: intermediate.id,
-          value: expect.objectContaining({ value: { targetId: finalTarget.id } }),
+          value: expect.objectContaining({
+            value: { targetId: finalTarget.id },
+          }),
         }),
       ]),
     );
-    const delta = createContactsSyncDelta(aAfter, bKnownClocks);
+    // 模拟旧客户端吞掉未知 redirect，却转发相同普通 clocks 与 source tombstone。
+    const legacyHop = createContactsSyncDelta(aAfter, bBeforeMerge.clocks);
+    delete legacyHop.merges;
+    delete legacyHop.mergeClocks;
+    b.mergeDeviceSyncState(legacyHop);
+    expect(b.getContact(source.id).identities).toContainEqual(
+      expect.objectContaining({
+        platform: "apple-contacts",
+        value: "apple-on-source",
+      }),
+    );
+
+    // 普通 tombstone 的 stamp 已被观察，redirect 独立时钟仍未确认；新版发送端
+    // 必须把 redirect 和 source tombstone 一并重发，才能原子迁移本机锚点。
+    const bAfterLegacyHop = stateOf(b);
+    const delta = createContactsSyncDelta(aAfter, bAfterLegacyHop.clocks, []);
     expect(delta.merges?.map((merge) => merge.id)).toEqual(
+      expect.arrayContaining([source.id, intermediate.id]),
+    );
+    expect(delta.contacts.map((contact) => contact.id)).toEqual(
       expect.arrayContaining([source.id, intermediate.id]),
     );
     b.mergeDeviceSyncState(delta);
 
     expect(
-      b.getContact(finalTarget.id).identities
-        .filter((identity) => identity.platform === "apple-contacts")
+      b
+        .getContact(finalTarget.id)
+        .identities.filter((identity) => identity.platform === "apple-contacts")
         .map((identity) => identity.value),
     ).toEqual(["apple-on-source"]);
     expect(() => b.getContact(source.id)).toThrow("contact not found");
   });
 
-  it("兼容不含 merges 字段的既有 v1 同步状态", () => {
+  it("无 merge 证据的远端删除不会静默丢掉本机系统锚点", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const person = a.createContact({ kind: "person", displayName: "保守删除" });
+    exchange(b, a);
+    b.addIdentity(person.id, {
+      platform: "apple-contacts",
+      value: "local-system-anchor",
+    });
+
+    a.deleteContact(person.id);
+    exchange(b, a);
+
+    expect(b.getContact(person.id).identities).toContainEqual(
+      expect.objectContaining({
+        platform: "apple-contacts",
+        value: "local-system-anchor",
+      }),
+    );
+  });
+
+  it("兼容不含 merge 字段的既有 v1 同步状态", () => {
     const legacy = createEmptyContactsSyncState();
     delete legacy.merges;
+    delete legacy.mergeClocks;
 
     expect(isValidContactsSyncState(legacy)).toBe(true);
-    expect(mergeContactsSyncStates(legacy, createEmptyContactsSyncState()).merges).toEqual([]);
+    expect(
+      mergeContactsSyncStates(legacy, createEmptyContactsSyncState()),
+    ).toMatchObject({
+      merges: [],
+      mergeClocks: [],
+    });
+  });
+
+  it("升级时剥离旧状态里的 apple 锚点但不生成同步 tombstone", () => {
+    const store = createStore();
+    const db = databases.at(-1)!;
+    store.activateDeviceSync();
+    const person = store.createContact({
+      kind: "person",
+      displayName: "旧版锚点",
+    });
+    const localAnchor = store.addIdentity(person.id, {
+      platform: "apple-contacts",
+      value: "legacy-local-apple-id",
+    });
+    const state = stateOf(store);
+    const projection = JSON.parse(
+      (
+        db
+          .prepare(
+            `SELECT projection_json FROM contacts_sync_state WHERE singleton = 1`,
+          )
+          .get() as { projection_json: string }
+      ).projection_json,
+    );
+    const stamp = state.contacts.find((contact) => contact.id === person.id)!
+      .displayName.stamp;
+    const legacyValue = {
+      contactId: person.id,
+      platform: "apple-contacts",
+      value: localAnchor.value,
+      normalizedValue: localAnchor.normalizedValue,
+      label: localAnchor.label,
+      note: localAnchor.note,
+      createdAt: localAnchor.createdAt,
+    };
+    state.identities.push({
+      id: localAnchor.id,
+      value: { value: legacyValue, stamp },
+    });
+    projection.identities.push({ id: localAnchor.id, ...legacyValue });
+    db.prepare(
+      `UPDATE contacts_sync_state SET state_json = ?, projection_json = ? WHERE singleton = 1`,
+    ).run(JSON.stringify(state), JSON.stringify(projection));
+
+    const migrated = stateOf(store);
+    expect(
+      migrated.identities.some((identity) => identity.id === localAnchor.id),
+    ).toBe(false);
+    expect(store.getContact(person.id).identities).toContainEqual(
+      expect.objectContaining({
+        id: localAnchor.id,
+        platform: "apple-contacts",
+        value: "legacy-local-apple-id",
+      }),
+    );
   });
 
   it("接受小写映射扩展后仍在统一边界内的身份值", () => {
@@ -736,7 +868,7 @@ describe("contacts device sync", () => {
     const stamp = { counter: 1, nodeId: "node-a" };
     const valid = {
       ...createEmptyContactsSyncState(),
-      clocks: [{ nodeId: "node-a", counter: 1 }],
+      mergeClocks: [{ nodeId: "node-a", counter: 1 }],
       merges: [
         {
           id: "source-contact",
@@ -751,7 +883,7 @@ describe("contacts device sync", () => {
     expect(isValidContactsSyncState(selfLoop)).toBe(false);
 
     const uncovered = structuredClone(valid);
-    uncovered.clocks[0]!.counter = 0;
+    uncovered.mergeClocks[0]!.counter = 0;
     expect(isValidContactsSyncState(uncovered)).toBe(false);
   });
 

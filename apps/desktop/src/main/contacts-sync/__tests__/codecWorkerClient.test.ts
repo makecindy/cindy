@@ -108,6 +108,7 @@ describe('contacts sync codec worker client', () => {
       database: {
         source: { dbPath: '/tmp/contacts.db' },
         knownClocks: [{ nodeId: 'node-a', counter: 2 }],
+        knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
         requestReply: true,
       },
       ownPrivateKey: own.privateKey,
@@ -121,7 +122,10 @@ describe('contacts sync codec worker client', () => {
     expect(harness.requests[0]).toMatchObject({
       type: 'encode',
       options: {
-        database: { source: { dbPath: '/tmp/contacts.db' } },
+        database: {
+          source: { dbPath: '/tmp/contacts.db' },
+          knownMergeClocks: [{ nodeId: 'node-a', counter: 1 }],
+        },
       },
     });
     expect((harness.requests[0]?.options as { message?: unknown }).message).toBeUndefined();

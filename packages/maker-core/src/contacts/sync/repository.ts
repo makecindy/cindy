@@ -13,7 +13,7 @@ import type { Logger } from "../../interfaces/logger.js";
 import { ContactsError } from "../types.js";
 import { captureContactsSnapshot } from "./capture.js";
 import { materializeContactsSyncState } from "./materialize.js";
-import { mergeContactsSyncStates } from "./merge.js";
+import { compareContactsSyncText, mergeContactsSyncStates } from "./merge.js";
 import { readContactsSnapshot, writeContactsSnapshot } from "./snapshot.js";
 import {
   createEmptyContactsSnapshot,
@@ -34,11 +34,45 @@ interface PersistedSyncRow {
 
 function mergeRedirectMap(state: ContactsSyncState): Map<string, string> {
   return new Map(
-    (state.merges ?? []).map((merge) => [
-      merge.id,
-      merge.value.value.targetId,
-    ]),
+    (state.merges ?? []).map((merge) => [merge.id, merge.value.value.targetId]),
   );
+}
+
+function normalizeSyncState(state: ContactsSyncState): ContactsSyncState {
+  const mergeClocks = state.mergeClocks ?? [];
+  const derivedMergeClocks = new Map(
+    mergeClocks.map((clock) => [clock.nodeId, clock.counter]),
+  );
+  for (const merge of state.merges ?? []) {
+    const stamp = merge.value.stamp;
+    derivedMergeClocks.set(
+      stamp.nodeId,
+      Math.max(derivedMergeClocks.get(stamp.nodeId) ?? 0, stamp.counter),
+    );
+  }
+  return {
+    ...state,
+    mergeClocks: [...derivedMergeClocks.entries()]
+      .map(([nodeId, counter]) => ({ nodeId, counter }))
+      .sort((a, b) => compareContactsSyncText(a.nodeId, b.nodeId)),
+    // 旧同步状态可能已把本机 Contacts.app 对象 id 写进 CRDT。升级时直接剥离，
+    // 不生成删除 tombstone；否则 tombstone 会传播回旧客户端并删除它的本机锚点。
+    identities: state.identities.filter(
+      (identity) => identity.value.value.platform !== "apple-contacts",
+    ),
+    merges: state.merges ?? [],
+  };
+}
+
+function normalizeProjection(
+  projection: ContactsDataSnapshot,
+): ContactsDataSnapshot {
+  return {
+    ...projection,
+    identities: projection.identities.filter(
+      (identity) => identity.platform !== "apple-contacts",
+    ),
+  };
 }
 
 export class ContactsSyncRepository {
@@ -70,7 +104,8 @@ export class ContactsSyncRepository {
         row.node_id,
         [{ sourceId, targetId }],
       );
-      if (captured.changed) this.updateRow(row.node_id, captured.state, current);
+      if (captured.changed)
+        this.updateRow(row.node_id, captured.state, current);
     });
     tx();
   }
@@ -133,7 +168,82 @@ export class ContactsSyncRepository {
       if (!row)
         throw new ContactsError("io-error", "contacts sync activation failed");
       const local = this.reconcile(row);
-      const merged = mergeContactsSyncStates(local.state, raw);
+      let remote = normalizeSyncState(raw);
+      {
+        // source tombstone 可能经过旧客户端而丢失配套 redirect。对带本机系统锚点
+        // 的档案一律拒绝无显式 / 稳定子记录证据的远端删除；发送端会在 redirect
+        // 未确认时连同 tombstone 重发，届时再原子迁移，避免重复创建系统联系人。
+        const anchoredContactIds = new Set(
+          (
+            this.db
+              .prepare(
+                `SELECT contact_id FROM contact_identities
+                 WHERE platform = 'apple-contacts'`,
+              )
+              .all() as Array<{ contact_id: string }>
+          ).map((row) => row.contact_id),
+        );
+        const explicitMergeSources = new Set(
+          (remote.merges ?? []).map((merge) => merge.id),
+        );
+        const remoteEvidenceTargets = new Map<string, string>();
+        for (const identity of remote.identities) {
+          if (!identity.deleted) {
+            remoteEvidenceTargets.set(
+              `identity:${identity.id}`,
+              identity.value.value.contactId,
+            );
+          }
+        }
+        for (const event of remote.events) {
+          if (!event.deleted) {
+            remoteEvidenceTargets.set(
+              `event:${event.id}`,
+              event.value.value.contactId,
+            );
+          }
+        }
+        const legacyMergeCandidates = new Map<string, Set<string>>();
+        const localEvidence = this.db
+          .prepare(
+            `SELECT contact_id, 'identity:' || id AS evidence_id
+               FROM contact_identities WHERE platform <> 'apple-contacts'
+             UNION ALL
+             SELECT contact_id, 'event:' || id AS evidence_id FROM contact_events`,
+          )
+          .all() as Array<{ contact_id: string; evidence_id: string }>;
+        for (const evidence of localEvidence) {
+          const remoteTarget = remoteEvidenceTargets.get(evidence.evidence_id);
+          if (remoteTarget && remoteTarget !== evidence.contact_id) {
+            const targets =
+              legacyMergeCandidates.get(evidence.contact_id) ??
+              new Set<string>();
+            targets.add(remoteTarget);
+            legacyMergeCandidates.set(evidence.contact_id, targets);
+          }
+        }
+        const legacyMergeSources = new Set(
+          [...legacyMergeCandidates]
+            .filter(([, targets]) => targets.size === 1)
+            .map(([sourceId]) => sourceId),
+        );
+        remote = {
+          ...remote,
+          contacts: remote.contacts.map((contact) => {
+            if (
+              !contact.deleted ||
+              !anchoredContactIds.has(contact.id) ||
+              explicitMergeSources.has(contact.id) ||
+              legacyMergeSources.has(contact.id)
+            ) {
+              return contact;
+            }
+            const { deleted: _deleted, ...preserved } = contact;
+            return preserved;
+          }),
+        };
+      }
+      const merged = mergeContactsSyncStates(local.state, remote);
       if (!isValidContactsSyncState(merged)) {
         throw new ContactsError(
           "invalid-params",
@@ -199,7 +309,7 @@ export class ContactsSyncRepository {
   private parseState(json: string): ContactsSyncState {
     try {
       const value: unknown = JSON.parse(json);
-      if (isValidContactsSyncState(value)) return value;
+      if (isValidContactsSyncState(value)) return normalizeSyncState(value);
     } catch {
       // 统一落到下面的 fail-closed 错误。
     }
@@ -212,7 +322,7 @@ export class ContactsSyncRepository {
   private parseProjection(json: string): ContactsDataSnapshot {
     try {
       const value: unknown = JSON.parse(json);
-      if (isValidContactsDataSnapshot(value)) return value;
+      if (isValidContactsDataSnapshot(value)) return normalizeProjection(value);
     } catch {
       // 统一落到下面的 fail-closed 错误。
     }

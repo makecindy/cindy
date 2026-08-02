@@ -149,6 +149,23 @@ function mergeClocks(
     .sort((left, right) => compareContactsSyncText(left.nodeId, right.nodeId));
 }
 
+function mergeClocksForRedirects(
+  state: ContactsSyncState,
+): ContactsSyncClock[] {
+  if (state.mergeClocks !== undefined) return state.mergeClocks;
+  const clocks = new Map<string, number>();
+  for (const merge of state.merges ?? []) {
+    const stamp = merge.value.stamp;
+    clocks.set(
+      stamp.nodeId,
+      Math.max(clocks.get(stamp.nodeId) ?? 0, stamp.counter),
+    );
+  }
+  return [...clocks.entries()]
+    .map(([nodeId, counter]) => ({ nodeId, counter }))
+    .sort((left, right) => compareContactsSyncText(left.nodeId, right.nodeId));
+}
+
 export function mergeContactsSyncStates(
   a: ContactsSyncState,
   b: ContactsSyncState,
@@ -164,6 +181,10 @@ export function mergeContactsSyncStates(
   return {
     version: CONTACTS_SYNC_VERSION,
     clocks: mergeClocks(a.clocks, b.clocks),
+    mergeClocks: mergeClocks(
+      mergeClocksForRedirects(a),
+      mergeClocksForRedirects(b),
+    ),
     contacts: mergeContacts(a.contacts, b.contacts),
     identities: mergeById(a.identities, b.identities),
     events: mergeById(a.events, b.events),
@@ -171,6 +192,26 @@ export function mergeContactsSyncStates(
     memberships: mergeById(a.memberships, b.memberships),
     relations: mergeById(a.relations, b.relations),
     merges: mergeById(a.merges ?? [], b.merges ?? []),
+  };
+}
+
+export function nextContactsSyncMergeStamp(
+  state: ContactsSyncState,
+  nodeId: string,
+): { state: ContactsSyncState; stamp: ContactsSyncStamp } {
+  let observedMax = 0;
+  const existing = mergeClocksForRedirects(state);
+  for (const clock of existing)
+    observedMax = Math.max(observedMax, clock.counter);
+  const counter = observedMax + 1;
+  const mergeClocks = existing.filter((clock) => clock.nodeId !== nodeId);
+  mergeClocks.push({ nodeId, counter });
+  mergeClocks.sort((left, right) =>
+    compareContactsSyncText(left.nodeId, right.nodeId),
+  );
+  return {
+    state: { ...state, mergeClocks },
+    stamp: { counter, nodeId },
   };
 }
 
@@ -206,9 +247,13 @@ export function nextContactsSyncStamp(
 export function createContactsSyncDelta(
   state: ContactsSyncState,
   knownClocks: ContactsSyncClock[],
+  knownMergeClocks: ContactsSyncClock[] = [],
 ): ContactsSyncState {
   const known = new Map(
     knownClocks.map((clock) => [clock.nodeId, clock.counter]),
+  );
+  const knownMerges = new Map(
+    knownMergeClocks.map((clock) => [clock.nodeId, clock.counter]),
   );
   const isNew = (stamp: ContactsSyncStamp | undefined): boolean =>
     Boolean(stamp && stamp.counter > (known.get(stamp.nodeId) ?? 0));
@@ -226,16 +271,26 @@ export function createContactsSyncDelta(
     isNew(contact.deleted);
   const entityIsNew = <T>(entity: ContactsSyncEntity<T>): boolean =>
     isNew(entity.value.stamp) || isNew(entity.deleted);
+  const mergeIsNew = (entity: ContactsSyncEntity<unknown>): boolean =>
+    entity.value.stamp.counter >
+    (knownMerges.get(entity.value.stamp.nodeId) ?? 0);
+  const merges = (state.merges ?? []).filter(mergeIsNew);
+  const mergeSourceIds = new Set(merges.map((merge) => merge.id));
 
   return {
     version: CONTACTS_SYNC_VERSION,
     clocks: state.clocks.map((clock) => ({ ...clock })),
-    contacts: state.contacts.filter(contactIsNew),
+    mergeClocks: mergeClocksForRedirects(state).map((clock) => ({ ...clock })),
+    // 旧客户端可能已确认 source tombstone 的普通时钟，却吞掉未知 redirect；
+    // redirect 尚未确认时必须把 source 一并重发，让升级后的接收端能原子迁移本机锚点。
+    contacts: state.contacts.filter(
+      (contact) => contactIsNew(contact) || mergeSourceIds.has(contact.id),
+    ),
     identities: state.identities.filter(entityIsNew),
     events: state.events.filter(entityIsNew),
     groups: state.groups.filter(entityIsNew),
     memberships: state.memberships.filter(entityIsNew),
     relations: state.relations.filter(entityIsNew),
-    merges: (state.merges ?? []).filter(entityIsNew),
+    merges,
   };
 }

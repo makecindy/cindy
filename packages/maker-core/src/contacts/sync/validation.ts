@@ -166,11 +166,7 @@ function isIdentity(value: unknown): value is {
     isString(value.platform, 32, false) &&
     /^[a-z0-9_-]+$/.test(value.platform) &&
     isString(value.value, DEFAULT_CONTACTS_CONFIG.maxIdentityValueLen, false) &&
-    isString(
-      value.normalizedValue,
-      MAX_NORMALIZED_IDENTITY_VALUE_LEN,
-      false,
-    ) &&
+    isString(value.normalizedValue, MAX_NORMALIZED_IDENTITY_VALUE_LEN, false) &&
     isUnboundedLocalText(value.label) &&
     isUnboundedLocalText(value.note) &&
     isString(value.createdAt, 64, false)
@@ -382,6 +378,20 @@ export function isValidContactsSyncState(
     if (clockNodes.has(clock.nodeId as string)) return false;
     clockNodes.add(clock.nodeId as string);
   }
+  if (value.mergeClocks !== undefined) {
+    if (!Array.isArray(value.mergeClocks) || value.mergeClocks.length > 256)
+      return false;
+    const mergeClockNodes = new Set<string>();
+    for (const clock of value.mergeClocks) {
+      if (
+        !isRecord(clock) ||
+        !isStamp({ counter: clock.counter, nodeId: clock.nodeId })
+      )
+        return false;
+      if (mergeClockNodes.has(clock.nodeId as string)) return false;
+      mergeClockNodes.add(clock.nodeId as string);
+    }
+  }
   if (
     !Array.isArray(value.contacts) ||
     value.contacts.length > CONTACTS_SYNC_MAX_ROWS_PER_TABLE
@@ -414,7 +424,8 @@ export function isValidContactsSyncState(
     if (!isEntityArray(value.merges, isMerge)) return false;
     for (const merge of value.merges) {
       const entry = merge as ContactsSyncEntity<{ targetId: string }>;
-      if (entry.id === entry.value.value.targetId || entry.deleted) return false;
+      if (entry.id === entry.value.value.targetId || entry.deleted)
+        return false;
     }
   }
   return clocksCoverEveryStamp(value as unknown as ContactsSyncState);
@@ -449,12 +460,22 @@ function clocksCoverEveryStamp(state: ContactsSyncState): boolean {
     state.groups,
     state.memberships,
     state.relations,
-    state.merges ?? [],
   ]) {
     for (const record of records) {
       if (!covered(record.value.stamp) || !covered(record.deleted)) {
         return false;
       }
+    }
+  }
+  const mergeClockValues = state.mergeClocks ?? state.clocks;
+  const mergeClocks = new Map(
+    mergeClockValues.map((clock) => [clock.nodeId, clock.counter]),
+  );
+  const mergeCovered = (stamp: ContactsSyncStamp | undefined): boolean =>
+    !stamp || (mergeClocks.get(stamp.nodeId) ?? 0) >= stamp.counter;
+  for (const record of state.merges ?? []) {
+    if (!mergeCovered(record.value.stamp) || !mergeCovered(record.deleted)) {
+      return false;
     }
   }
   return true;

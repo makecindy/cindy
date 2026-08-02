@@ -82,6 +82,7 @@ let deviceLinkOwnerActive = false;
 let lan: LanContactsSyncTransport | null = null;
 const decoder = new ContactsSyncWireDecoder();
 const peerKnownClocks = new Map<string, ContactsSyncClock[]>();
+const peerKnownMergeClocks = new Map<string, ContactsSyncClock[]>();
 let debounceTimer: NodeJS.Timeout | null = null;
 let intervalTimer: NodeJS.Timeout | null = null;
 let syncAttemptTimer: NodeJS.Timeout | null = null;
@@ -90,13 +91,11 @@ let initialized = false;
 let unsubscribeLocalChanges: (() => void) | null = null;
 let runtimeGeneration = 0;
 let codecAbortController = new AbortController();
-let localPreparation:
-  | {
-      generation: number;
-      ownerScopeKey: string;
-      promise: Promise<void>;
-    }
-  | null = null;
+let localPreparation: {
+  generation: number;
+  ownerScopeKey: string;
+  promise: Promise<void>;
+} | null = null;
 const announcedTo = new Map<string, number>();
 const respondedToKeyAnnouncement = new Map<string, number>();
 const statusListeners = new Set<(status: ContactsDeviceSyncStatus) => void>();
@@ -124,6 +123,7 @@ const outbound = new ContactsSyncOutbound({
   getPeerPublicKey: (deviceId) => contactsSyncKeyStore.getPeerPublicKey(deviceId),
   getDatabaseSource: getContactsSyncDatabaseSource,
   getKnownClocks: (deviceId) => peerKnownClocks.get(deviceId),
+  getKnownMergeClocks: (deviceId) => peerKnownMergeClocks.get(deviceId),
   onLocalMaterialized: () => broadcastContactsChanged({ origin: 'remote' }),
   announceKey,
   onError: recordError,
@@ -179,6 +179,7 @@ export function stopContactsDeviceSyncRuntime(): void {
   announcedTo.clear();
   respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
+  peerKnownMergeClocks.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);
@@ -408,7 +409,10 @@ export async function broadcastContactsNow(requestReply = true): Promise<void> {
   if (!context) return;
   setPhase('syncing');
   // 用户强制同步、重连和首次启用都做完整校准；普通本地变化走已知版本增量。
-  if (requestReply) peerKnownClocks.clear();
+  if (requestReply) {
+    peerKnownClocks.clear();
+    peerKnownMergeClocks.clear();
+  }
   // DB-bound encode 有意串行：N 台在线设备不应把正常 fan-out 塞爆全局 worker 队列。
   for (const peer of peers) {
     if (!outbound.isCurrent(context)) break;
@@ -525,6 +529,7 @@ export function handleContactsPeerPresenceChanged(peer: {
     announcedTo.delete(peer.deviceId);
     respondedToKeyAnnouncement.delete(peer.deviceId);
     peerKnownClocks.delete(peer.deviceId);
+    peerKnownMergeClocks.delete(peer.deviceId);
   }
   refreshOnlineCount();
   if (!peer.online || !isEnabled() || !transport?.isPeerAllowed(peer.deviceId)) return;
@@ -590,6 +595,15 @@ function handleIncomingCipherFrame(
       srcDeviceId,
       message.clocks.map((clock) => ({ ...clock })),
     );
+    if (message.mergeClocks !== undefined) {
+      peerKnownMergeClocks.set(
+        srcDeviceId,
+        message.mergeClocks.map((clock) => ({ ...clock })),
+      );
+    } else {
+      // 缺字段表示旧客户端：不能把它对普通 clocks 的确认当作 merge redirect 确认。
+      peerKnownMergeClocks.delete(srcDeviceId);
+    }
     recordSuccessfulSync(srcDeviceId, route);
     if (message.changed) {
       broadcastContactsChanged({ origin: 'remote' });
@@ -662,8 +676,7 @@ function prepareLocalSync(): Promise<void> {
 }
 
 let contactsSyncDatabaseRuntime:
-  | Pick<ContactsSyncDatabaseSource, 'betterSqliteModulePath' | 'nativeBinding'>
-  | undefined;
+  Pick<ContactsSyncDatabaseSource, 'betterSqliteModulePath' | 'nativeBinding'> | undefined;
 
 function getContactsSyncDatabaseSource(): ContactsSyncDatabaseSource {
   contactsSyncDatabaseRuntime ??= {
@@ -922,6 +935,7 @@ function ensureCurrentOwnerStatus(): void {
   announcedTo.clear();
   respondedToKeyAnnouncement.clear();
   peerKnownClocks.clear();
+  peerKnownMergeClocks.clear();
   if (debounceTimer) clearTimeout(debounceTimer);
   debounceTimer = null;
   if (syncAttemptTimer) clearTimeout(syncAttemptTimer);

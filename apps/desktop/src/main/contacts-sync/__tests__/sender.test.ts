@@ -54,6 +54,7 @@ describe('contacts sync outbound', () => {
       getPeerPublicKey: () => 'peer-public',
       getDatabaseSource: () => ({ dbPath: '/tmp/test-contacts.db' }),
       getKnownClocks: () => undefined,
+      getKnownMergeClocks: () => undefined,
       onLocalMaterialized: vi.fn(),
       announceKey: vi.fn(),
       onError: vi.fn(),

@@ -364,7 +364,43 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
           }
         };
         for (let i = 0; i < plans.length; i += SYSTEM_WRITE_BATCH) {
-          const batchResults = await deps.writeSystemContacts!(plans.slice(i, i + SYSTEM_WRITE_BATCH));
+          let batchResults: SystemContactWriteResult[];
+          try {
+            batchResults = await deps.writeSystemContacts!(plans.slice(i, i + SYSTEM_WRITE_BATCH));
+          } catch (error) {
+            const hasSuccessfulWrites = results.some(
+              (result) => result.action === 'created' || result.action === 'updated',
+            );
+            if (!hasSuccessfulWrites) throw error;
+            const reason = error instanceof Error ? error.message : String(error);
+            throw new ContactsPartialFailureSignal(
+              error,
+              `earlier system contacts batches succeeded, but a later write failed: ${reason}`,
+              {
+                partial: true,
+                created: results.filter((result) => result.action === 'created').length,
+                updated: results.filter((result) => result.action === 'updated').length,
+                missing: results
+                  .filter((result) => result.action === 'missing')
+                  .map((result) => result.name),
+                errors: results
+                  .filter((result) => result.action === 'error')
+                  .map((result) => ({ name: result.name, error: result.error })),
+                anchorsAdded,
+                skippedPending,
+                ...(systemGroup
+                  ? {
+                      systemGroup: {
+                        ...systemGroup,
+                        status: 'failed' as const,
+                        failedStep: 'write-contacts' as const,
+                      },
+                    }
+                  : {}),
+              },
+              anchorsAdded > 0,
+            );
+          }
           results.push(...batchResults);
           backfillAnchors(batchResults);
           if (systemGroupName && systemGroup) {

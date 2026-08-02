@@ -93,6 +93,11 @@ export interface ContactsSyncMergeValue {
 export interface ContactsSyncState {
   version: typeof CONTACTS_SYNC_VERSION;
   clocks: ContactsSyncClock[];
+  /**
+   * merge redirect 使用独立时钟域：旧客户端会丢未知 merges，但不会因此确认其 stamp。
+   * 可选用于兼容升级前已落盘 / 旧客户端发来的 v1 状态。
+   */
+  mergeClocks?: ContactsSyncClock[];
   contacts: ContactsSyncContact[];
   identities: Array<ContactsSyncEntity<ContactsSyncIdentityValue>>;
   events: Array<ContactsSyncEntity<ContactsSyncEventValue>>;
@@ -154,6 +159,7 @@ export function createEmptyContactsSyncState(): ContactsSyncState {
   return {
     version: CONTACTS_SYNC_VERSION,
     clocks: [],
+    mergeClocks: [],
     contacts: [],
     identities: [],
     events: [],

@@ -116,8 +116,7 @@ function releaseCodecWorkerSlot(databaseBound: boolean): void {
   if (databaseBound) activeDatabaseWorkers -= 1;
   while (waiters.length > 0) {
     const nextIndex = waiters.findIndex(
-      (waiter) =>
-        !waiter.databaseBound || activeDatabaseWorkers < MAX_CONCURRENT_DATABASE_WORKERS,
+      (waiter) => !waiter.databaseBound || activeDatabaseWorkers < MAX_CONCURRENT_DATABASE_WORKERS,
     );
     if (nextIndex < 0) return;
     const [waiter] = waiters.splice(nextIndex, 1);
@@ -178,8 +177,7 @@ async function runCodecWorker(
         if (databaseBound) {
           Atomics.store(cancellation!, 0, 1);
           deferDatabaseCancellation(error);
-        }
-        else finish(() => reject(error));
+        } else finish(() => reject(error));
       };
       const remaining = deadline - Date.now();
       const timer = setTimeout(
@@ -188,8 +186,7 @@ async function runCodecWorker(
           if (databaseBound) {
             Atomics.store(cancellation!, 0, 1);
             deferDatabaseCancellation(error);
-          }
-          else finish(() => reject(error));
+          } else finish(() => reject(error));
         },
         Math.max(1, remaining),
       );
@@ -335,33 +332,37 @@ function isDecodeResult(value: unknown): value is ContactsSyncDecodeResult {
   return isContactsSyncStateMessage(value) || isAppliedStateResult(value);
 }
 
+function isClockArray(value: unknown): value is ContactsSyncAppliedStateResult['clocks'] {
+  if (!Array.isArray(value) || value.length > 256) return false;
+  const seenNodeIds = new Set<string>();
+  return value.every((clock) => {
+    if (typeof clock !== 'object' || clock === null || Array.isArray(clock)) return false;
+    const candidate = clock as { nodeId?: unknown; counter?: unknown };
+    if (
+      typeof candidate.nodeId !== 'string' ||
+      candidate.nodeId.length < 1 ||
+      candidate.nodeId.length > 128 ||
+      !/^[A-Za-z0-9._:-]+$/.test(candidate.nodeId) ||
+      !Number.isSafeInteger(candidate.counter) ||
+      (candidate.counter as number) <= 0 ||
+      seenNodeIds.has(candidate.nodeId)
+    ) {
+      return false;
+    }
+    seenNodeIds.add(candidate.nodeId);
+    return true;
+  });
+}
+
 function isAppliedStateResult(value: unknown): value is ContactsSyncAppliedStateResult {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return false;
   const result = value as Partial<ContactsSyncAppliedStateResult>;
-  const seenNodeIds = new Set<string>();
   return (
     result.version === 1 &&
     result.type === 'applied-state' &&
     typeof result.changed === 'boolean' &&
-    Array.isArray(result.clocks) &&
-    result.clocks.length <= 256 &&
-    result.clocks.every((clock) => {
-      if (typeof clock !== 'object' || clock === null || Array.isArray(clock)) return false;
-      const candidate = clock as { nodeId?: unknown; counter?: unknown };
-      if (
-        typeof candidate.nodeId !== 'string' ||
-        candidate.nodeId.length < 1 ||
-        candidate.nodeId.length > 128 ||
-        !/^[A-Za-z0-9._:-]+$/.test(candidate.nodeId) ||
-        !Number.isSafeInteger(candidate.counter) ||
-        (candidate.counter as number) <= 0 ||
-        seenNodeIds.has(candidate.nodeId)
-      ) {
-        return false;
-      }
-      seenNodeIds.add(candidate.nodeId);
-      return true;
-    }) &&
+    isClockArray(result.clocks) &&
+    (result.mergeClocks === undefined || isClockArray(result.mergeClocks)) &&
     (result.requestReply === undefined || typeof result.requestReply === 'boolean')
   );
 }
