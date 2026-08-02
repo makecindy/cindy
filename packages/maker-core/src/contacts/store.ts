@@ -981,12 +981,18 @@ export class MakerContactsStore {
   resetAll(): { removedCount: number } {
     this.init();
     const tx = this.db.transaction(() => {
-      const c = (this.db.prepare(`SELECT COUNT(*) AS c FROM contacts`).get() as { c: number }).c;
+      const contactIds = this.db
+        .prepare(`SELECT id FROM contacts`)
+        .all()
+        .map((row) => (row as { id: string }).id);
       this.db.exec(
         `DELETE FROM contacts_sync_pending_anchors;
          DELETE FROM contacts;
          DELETE FROM contact_groups;`,
       );
+      // 同步已激活时，跨设备的 reset 也必须是显式真实删除；否则其它 Mac 会把
+      // 本机 Apple 锚点留进 pending，违背用户“清空整个通讯录”的明确意图。
+      this.syncRepo.recordDeletions(contactIds);
       try {
         this.fts.rebuild([]);
         this.ftsDirty = false;
@@ -994,7 +1000,7 @@ export class MakerContactsStore {
         this.ftsDirty = true;
         // 保持既有语义：主表是 source of truth，FTS 失败留给下次 sanity 自愈。
       }
-      return c;
+      return contactIds.length;
     });
     return { removedCount: tx.immediate() };
   }

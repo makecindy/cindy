@@ -460,6 +460,49 @@ describe("contacts device sync", () => {
     expect(stateOf(b)).toEqual(stateOf(a));
   });
 
+  it("resetAll 为全部联系人记录显式删除并清掉其它设备的本机锚点", () => {
+    const a = createStore();
+    const b = createStore();
+    a.activateDeviceSync();
+    b.activateDeviceSync();
+    const first = a.createContact({ kind: "person", displayName: "清空甲" });
+    const second = a.createContact({ kind: "person", displayName: "清空乙" });
+    exchange(b, a);
+    b.addIdentity(first.id, {
+      platform: "apple-contacts",
+      value: "apple-first",
+    });
+    b.addIdentity(second.id, {
+      platform: "apple-contacts",
+      value: "apple-second",
+    });
+
+    expect(a.resetAll()).toEqual({ removedCount: 2 });
+    const resetState = stateOf(a);
+    expect(resetState.deletions?.map((deletion) => deletion.id)).toEqual(
+      expect.arrayContaining([first.id, second.id]),
+    );
+    exchange(b, a);
+
+    expect(b.listContacts()).toEqual([]);
+    const bDb = databases.at(-1)!;
+    expect(
+      bDb
+        .prepare(
+          `SELECT COUNT(*) AS count FROM contacts_sync_pending_anchors`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+    expect(
+      bDb
+        .prepare(
+          `SELECT COUNT(*) AS count FROM contact_identities
+           WHERE platform = 'apple-contacts'`,
+        )
+        .get(),
+    ).toEqual({ count: 0 });
+  });
+
   it("旧客户端发来的单独删除没有操作证据也正常生效", () => {
     const a = createStore();
     const b = createStore();

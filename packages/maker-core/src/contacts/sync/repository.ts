@@ -123,8 +123,14 @@ export class ContactsSyncRepository {
     tx();
   }
 
-  /** 与 store.deleteContact 的数据删除同事务记录“真实删除”而非 merge。 */
+  /** 与 store 的数据删除同事务记录“真实删除”而非 merge。 */
   recordDeletion(contactId: string): void {
+    this.recordDeletions([contactId]);
+  }
+
+  /** resetAll 批量删除只捕获一次快照，避免按联系人重复解析整份同步状态。 */
+  recordDeletions(contactIds: string[]): void {
+    if (contactIds.length === 0) return;
     const tx = this.db.transaction(() => {
       const row = this.readRow();
       if (!row) return;
@@ -137,7 +143,7 @@ export class ContactsSyncRepository {
         current,
         row.node_id,
         [],
-        [contactId],
+        contactIds,
       );
       if (captured.changed)
         this.updateRow(row.node_id, captured.state, current);
