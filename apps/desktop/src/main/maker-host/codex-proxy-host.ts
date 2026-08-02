@@ -1165,6 +1165,25 @@ function normalizeXaiInputItem(item: unknown): { item: unknown; changed: boolean
     return changed ? { item: next, changed: true } : { item: base, changed: false };
   }
 
+  // 回放的 reasoning 项必须逐字回到上游签发时的形状 —— xAI 校验不过就整轮 400
+  // "Could not decode the compaction blob. Ensure it is unmodified from the compact response."
+  // codex 的结构体会把自己没用上的 `Option` 字段一并序列化(实测 `content: null`),
+  // 那是 xAI 从没发过的键;带着它回放等于「被改过」。这里收敛成 Responses 契约里
+  // reasoning 该有的四个键 —— 与 anthropic-responses-bridge 回放的形状同口径
+  // (那条路上的 grok-4.5 一直是通的)。
+  // encrypted_content / summary / id 原样搬,一个字节都不改写。
+  if (type === 'reasoning') {
+    const next: Record<string, unknown> = { type: 'reasoning' };
+    if (typeof base.id === 'string' && base.id.length > 0) next.id = base.id;
+    next.summary = Array.isArray(base.summary) ? base.summary : [];
+    if (typeof base.encrypted_content === 'string') next.encrypted_content = base.encrypted_content;
+    const changed =
+      typedFromEasy ||
+      !Array.isArray(base.summary) ||
+      Object.keys(base).some((key) => !['type', 'id', 'summary', 'encrypted_content'].includes(key));
+    return changed ? { item: next, changed: true } : { item: base, changed: false };
+  }
+
   if (type === 'message') {
     let changed = typedFromEasy;
     const next: Record<string, unknown> = { type: 'message' };
