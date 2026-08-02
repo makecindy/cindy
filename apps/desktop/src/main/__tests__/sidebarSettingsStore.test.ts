@@ -7,6 +7,7 @@ const harness = vi.hoisted(() => ({
   },
   storeOptions: undefined as unknown,
   storeSet: vi.fn(),
+  loggerError: vi.fn(),
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   listeners: new Map<string, (...args: unknown[]) => unknown>(),
   send: vi.fn(),
@@ -61,6 +62,10 @@ vi.mock('electron-store', () => ({
   },
 }));
 
+vi.mock('../logger', () => ({
+  createLogger: () => ({ error: harness.loggerError }),
+}));
+
 vi.mock('../security/trustedAppRenderer', () => ({
   assertTrustedAppRendererEvent: (...args: unknown[]) => harness.assertTrusted(...args),
 }));
@@ -76,6 +81,7 @@ describe('sidebarSettingsStore', () => {
     harness.settings.hiddenProjectKeys = [];
     harness.storeOptions = undefined;
     harness.storeSet.mockReset();
+    harness.loggerError.mockReset();
     harness.handlers.clear();
     harness.listeners.clear();
     harness.send.mockReset();
@@ -212,6 +218,33 @@ describe('sidebarSettingsStore', () => {
       'sidebar-settings:hidden-project-keys-changed',
       ['local:/workspace/alpha', 'local:/workspace/beta'],
     );
+  });
+
+  it('logs hidden-project persistence failures without exposing userData paths over IPC', () => {
+    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+    const sensitivePath = 'C:\\Users\\person\\AppData\\Roaming\\Cindy\\sidebar-settings.json';
+    const originalError = new Error(`EPERM: cannot write '${sensitivePath}'`);
+    harness.storeSet.mockImplementationOnce(() => {
+      throw originalError;
+    });
+
+    let thrown: unknown;
+    try {
+      handler?.({}, 'local:/workspace/alpha', true);
+    } catch (err) {
+      thrown = err;
+    }
+
+    expect(thrown).toBeInstanceOf(Error);
+    expect((thrown as Error).message).toBe('[INTERNAL] failed to persist sidebar settings');
+    expect((thrown as Error).message).not.toContain(sensitivePath);
+    expect(harness.loggerError).toHaveBeenCalledWith(
+      'failed to persist hidden sidebar projects',
+      originalError,
+    );
+    expect(harness.settings.hiddenProjectKeys).toEqual([]);
+    expect(harness.send).not.toHaveBeenCalled();
+    expect(harness.sendSecond).not.toHaveBeenCalled();
   });
 
   it('rejects hiding another project after the persisted limit is reached', () => {

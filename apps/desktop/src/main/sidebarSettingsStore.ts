@@ -8,6 +8,7 @@ import { BrowserWindow, ipcMain } from 'electron';
 import Store from 'electron-store';
 
 import { normalizeProjectKey, projectKeyComparisonKey } from '../shared/projectKeys.js';
+import { createLogger } from './logger';
 import { assertTrustedAppRendererEvent } from './security/trustedAppRenderer.js';
 import { throwIpcError } from './utils/ipcValidate.js';
 import { isAppContentWindow } from './windowFocusClassifier.js';
@@ -22,6 +23,8 @@ const MAX_PINNED_ORDER_ENTRIES = 10_000;
 const MAX_PINNED_ORDER_ENTRY_LENGTH = 4_096;
 const MAX_HIDDEN_PROJECT_ENTRIES = 10_000;
 const MAX_PROJECT_KEY_LENGTH = 4_096;
+
+const log = createLogger('sidebar-settings');
 
 let storeInstance: Store<SidebarSettingsShape> | null = null;
 
@@ -159,7 +162,14 @@ function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
   const next = hidden
     ? [...current, projectKey]
     : current.filter((entry) => projectKeyComparisonKey(entry) !== comparisonKey);
-  saveHiddenProjectKeys(next);
+  try {
+    saveHiddenProjectKeys(next);
+  } catch (err) {
+    // electron-store errors may contain the absolute userData path. Keep the
+    // original failure in main logs, but expose only a stable IPC error.
+    log.error('failed to persist hidden sidebar projects', err);
+    throwIpcError('INTERNAL', 'failed to persist sidebar settings');
+  }
   broadcastHiddenProjectKeysChanged(next);
   return true;
 }
