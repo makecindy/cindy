@@ -178,6 +178,25 @@ describe('AgentSelect', () => {
     expect(screen.queryByTestId('agent-select-panel')).toBeNull();
   });
 
+  it('触发器宽度 hug 内容:不设定宽,短引擎名后面不留空白', () => {
+    // 曾经写死 width=112,「Pi」这种短名后面拖一大截空白、chevron 被顶到最右
+    // (用户实测反馈 2026-08-02)。
+    render(<AgentSelect value="pi" onChange={() => {}} />);
+    const trigger = screen.getByRole('button', { name: '选择引擎：Pi' });
+    expect(trigger.style.width).toBe('');
+    // 名称不能 flex-1 撑满 —— 撑满等价于定宽,chevron 照样被顶到最右
+    const label = trigger.querySelector('span.truncate');
+    expect(label).not.toBeNull();
+    expect(label?.className).not.toContain('flex-1');
+  });
+
+  it('maxLabelWidth 只钳制名称,不给触发器定宽', () => {
+    render(<AgentSelect value="cc" onChange={() => {}} maxLabelWidth={60} />);
+    const trigger = screen.getByRole('button', { name: '选择引擎：Claude' });
+    expect(trigger.style.width).toBe('');
+    expect(trigger.querySelector<HTMLElement>('span.truncate')?.style.maxWidth).toBe('60px');
+  });
+
   it('iconOnly 窄态不渲染名称,可访问名仍来自 aria-label', () => {
     render(<AgentSelect value="cc" onChange={() => {}} iconOnly />);
     const trigger = screen.getByRole('button', { name: '选择引擎：Claude' });

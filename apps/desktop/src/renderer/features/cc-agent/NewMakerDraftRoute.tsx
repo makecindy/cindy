@@ -3494,7 +3494,6 @@ export function NewMakerDraftRoute() {
                       <AgentSelect
                         value={draft.vendor}
                         onChange={handleVendorChange}
-                        width={112}
                         visualVariant="create-agent"
                         className="shrink-0"
                         disabled={wtCreating}
