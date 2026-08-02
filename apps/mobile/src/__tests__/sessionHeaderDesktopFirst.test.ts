@@ -88,20 +88,28 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain('router.replace({');
     // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
     expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
+    expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
     expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
     expect(source).toContain('if (pendingDrawerNavigationRef.current) return;');
     expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
+    expect(source).toContain('setSessionListDrawerOverlayMounted(false);\n    const action = pendingDrawerNavigationRef.current;');
+    expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();\n    return true;');
     expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
     expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
     expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
     expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
     // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
-    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOpen(true);');
+    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOverlayMounted(true);\n    setSessionListDrawerOpen(true);');
     // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
-    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack)。
-    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
-    expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
+    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack);必须覆盖完整退场期。
+    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOverlayMounted}');
+    expect(source).toContain("importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}");
+    // 退场期间旋转/折叠/收窄不能直接卸载 Drawer:保留到 onClosed,三类 pending 导航
+    // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
+    expect(source).toContain('{wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (');
+    expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
+    expect(source).toContain('width={sessionListDrawerWidthRef.current}');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
     expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // replace");
   });

@@ -1930,6 +1930,13 @@ export default function SessionScreen() {
     windowWidth: windowDimensions.width,
   }), [windowDimensions.height, windowDimensions.width]);
   const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
+  // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
+  // 不会提前卸载 Drawer 而吞掉 pending 导航。
+  const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
+  // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
+  const sessionListDrawerWidthRef = useRef(wideSessionNav.drawerWidth);
+  if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;
   // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
   // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
   const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
@@ -1942,6 +1949,7 @@ export default function SessionScreen() {
   const openSessionListDrawer = useCallback(() => {
     pendingDrawerNavigationRef.current = null;
     Keyboard.dismiss();
+    setSessionListDrawerOverlayMounted(true);
     setSessionListDrawerOpen(true);
   }, []);
   const closeSessionListDrawer = useCallback(() => setSessionListDrawerOpen(false), []);
@@ -1952,6 +1960,7 @@ export default function SessionScreen() {
     setSessionListDrawerOpen(false);
   }, []);
   const handleSessionListDrawerClosed = useCallback(() => {
+    setSessionListDrawerOverlayMounted(false);
     const action = pendingDrawerNavigationRef.current;
     if (!action) return false;
     pendingDrawerNavigationRef.current = null;
@@ -7615,9 +7624,9 @@ export default function SessionScreen() {
         // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
         // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
         // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
-        accessibilityElementsHidden={sessionListDrawerOpen}
+        accessibilityElementsHidden={sessionListDrawerOverlayMounted}
         behavior={nativeShellLayout.keyboardAvoidingBehavior}
-        importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}
+        importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >
@@ -8436,9 +8445,10 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
-      {wideSessionNav.enabled ? (
+      {wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (
         // 树内 overlay(zIndex 40)盖住顶部 chrome 与底部 composer;树内层叠而非 Modal 的
-        // 取舍见 SessionListDrawer 头注释。
+        // 取舍见 SessionListDrawer 头注释。退出宽屏时也保留到 onClosed,否则退场期旋转/
+        // 收窄会直接卸载组件并吞掉已登记的导航动作。
         <SessionListDrawer
           currentSessionId={sessionId}
           onClose={closeSessionListDrawer}
@@ -8448,7 +8458,7 @@ export default function SessionScreen() {
           onSelectSession={handleDrawerSelectSession}
           open={sessionListDrawerOpen}
           returnFocusRef={sessionListButtonRef}
-          width={wideSessionNav.drawerWidth}
+          width={sessionListDrawerWidthRef.current}
         />
       ) : null}
     </View>
