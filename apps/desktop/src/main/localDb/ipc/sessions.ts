@@ -689,7 +689,9 @@ export async function clearSessionContextInDb(sessionId: string, atMs?: number):
   });
 }
 
-export function registerSessionIpc(): void {
+export function registerSessionIpc(
+  readSessionListLogScope: () => string | null = () => null,
+): void {
   // interrupted-turn-resume 假阳性修复:每次 last_turn_ended_at 真正落库(正常收尾 /
   // barrier 版收尾 / ack)都广播 lastTurnEndedAt patch —— renderer 的 session 快照可能
   // 是在 turn 飞行中或「done → ended 落库」空窗里取的(startedAt > endedAt),此前
@@ -756,7 +758,8 @@ export function registerSessionIpc(): void {
         mapElapsedMs: Math.round(finishedAt - queryFinishedAt),
         elapsedMs,
       });
-      const logKey = `${filter}:${includePinned ? 'pinned' : 'plain'}`;
+      const logScope = readSessionListLogScope() ?? 'unscoped';
+      const logKey = `${logScope}:${filter}:${includePinned ? 'pinned' : 'plain'}`;
       if (!initialSessionListLogged.has(logKey) || elapsedMs >= SLOW_SESSION_LIST_MS) {
         initialSessionListLogged.add(logKey);
         log.info(fields);

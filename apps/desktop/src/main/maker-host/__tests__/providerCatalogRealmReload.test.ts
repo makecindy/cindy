@@ -177,6 +177,10 @@ describe('provider catalog realm reload', () => {
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);
 
     setCustomProviders([buildUserProvider(provider)]);
+    h.customProviderRead.mockRejectedValueOnce(new Error('stale owner A DB read failed'));
+    await refreshCustomProvidersIntoCatalog(() => false);
+    expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(true);
+
     h.customProviderRead.mockRejectedValueOnce(new Error('owner B DB read failed'));
     await refreshCustomProvidersIntoCatalog();
     expect(getActiveCatalog().providers.some((entry) => entry.id === provider.id)).toBe(false);

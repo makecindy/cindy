@@ -617,7 +617,13 @@ export async function refreshCustomProvidersIntoCatalog(
     setCustomProviders(configs.map((c) => buildUserProvider(c)));
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
-    if (shouldApply()) setCustomProviders([]);
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh failure', {
+        err: String(err),
+      });
+      return;
+    }
+    setCustomProviders([]);
     log.warn('failed to load custom providers; cleared current owner catalog snapshot', {
       err: String(err),
     });

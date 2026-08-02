@@ -10,6 +10,7 @@
 import { ipcMain } from 'electron';
 
 import { closeDb, ensureReady, getCurrentUserId } from '../index';
+import { getCurrentDbClientUserId } from '../client/current';
 import { registerSessionIpc } from './sessions';
 import { registerMessageIpc } from './messages';
 import { registerOrcaWorkflowIpc } from './orcaTeams';
@@ -120,7 +121,7 @@ export function registerLocalDbIpc(opts: RegisterLocalDbIpcOpts = {}): void {
     return result;
   });
 
-  registerSessionIpc();
+  registerSessionIpc(getCurrentDbClientUserId);
   registerMessageIpc();
   registerRemoteHistoryIpc();
   registerSessionImportIpc();
