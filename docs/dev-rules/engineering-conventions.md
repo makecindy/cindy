@@ -111,9 +111,10 @@ UI 文案的语气与措辞另见 [`DESIGN.md`](../design-rules/DESIGN.md) 的 V
   依赖注入／纯函数用例保留等价覆盖；禁止按 `process.platform` 大面积跳过后让整个 CI 矩阵
   失去相应回归保护。
 
-PR 门禁必须在 Windows 上运行完整 `pnpm test:unit`；`scripts/__tests__/dev-docs-contract.test.mjs`
-锁住该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分
-宿主路径与逻辑路径。
+PR 门禁必须在 Windows 上用两个并行分片完整覆盖 `pnpm test:unit`；两个分片的并集必须等价于
+未分片的全量测试，且由稳定的汇总检查统一阻断。`scripts/__tests__/dev-docs-contract.test.mjs` 锁住
+该 CI 契约。不能用静态扫描“测试字符串是否含斜杠”代替 Windows 实跑，因为它无法可靠区分宿主
+路径与逻辑路径。
 
 ## 4. 跨平台双端兼容（macOS / Windows）
 

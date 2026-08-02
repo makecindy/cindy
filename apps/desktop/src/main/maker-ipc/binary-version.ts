@@ -36,7 +36,7 @@ export interface AgentBinaryVersionResult {
 const versionCache = new Map<string, string>();
 
 function isAgentBinaryKind(value: unknown): value is AgentBinaryKind {
-  return value === 'claude-code' || value === 'codex';
+  return value === 'claude-code' || value === 'codex' || value === 'pi';
 }
 
 function resolveBinaryPath(kind: AgentBinaryKind): string | null {
@@ -76,7 +76,7 @@ export function registerMakerBinaryVersionIpc(): void {
     MAKER_INVOKE.AGENT_BINARY_VERSION,
     async (_e, agentKind: unknown): Promise<AgentBinaryVersionResult> => {
       if (!isAgentBinaryKind(agentKind)) {
-        throwIpcError('INVALID_PARAMS', 'agentKind required (claude-code | codex)');
+        throwIpcError('INVALID_PARAMS', 'agentKind required (claude-code | codex | pi)');
       }
 
       const binaryPath = resolveBinaryPath(agentKind);

@@ -18,24 +18,28 @@ export function printHelp(log = console.log) {
   log('    # 连接本地 http://localhost:3333（只起客户端，不起 server）');
   log('    pnpm restart:desktop:local');
 
-  log('\n  Agent 二进制安装 / 升级（Claude Code、Codex、ripgrep）:');
+  log('\n  Agent 二进制安装 / 升级（Claude Code、Codex、ripgrep、Pi）:');
   log('    # 按 latest.json 当前 pin 安装到本机，不修改 pin');
-  log('    # 安装当前平台的全部三种二进制');
+  log('    # 安装当前平台的全部四种二进制');
   log('    pnpm install:agent-binaries');
   log('    # 只安装当前平台的指定二进制');
   log('    pnpm install:claude');
   log('    pnpm install:codex');
   log('    pnpm install:ripgrep');
+  log('    pnpm install:pi');
   log('    # 升级到上游最新版：下载全平台二进制，并修改对应 latest.json pin');
   log('    pnpm update:claude');
   log('    pnpm update:codex');
   log('    pnpm update:ripgrep');
-  log('    # 依次把三种二进制全部升级到上游最新版');
+  log('    pnpm update:pi');
+  log('    # 依次把四种二进制全部升级到上游最新版');
   log('    pnpm update:vendors');
   log('    # 固定到指定版本：下面是完整示例，会修改 latest.json pin');
   log('    pnpm update:claude 2.1.199');
   log('    pnpm update:codex 0.144.1');
   log('    pnpm update:ripgrep 15.1.0');
+  log('    pnpm update:pi 0.83.0');
+  log('    # 发布到 CDN 不在本仓：见同级 cindy-binary-release 工程（pnpm release:<kind>）');
 
   log('\n  Mobile 本地开发:');
   log('    # Cindy（Global，默认）：生成 iOS 工程、打开 Xcode 并启动 Metro');

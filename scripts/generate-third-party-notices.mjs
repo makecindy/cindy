@@ -6,8 +6,8 @@
  *
  * 范围:根目录及所有 pnpm workspace 包的生产依赖闭包(dependencies +
  * optionalDependencies,递归;workspace 内部包只穿透不收录),外加随安装包
- * 分发的非 npm 资产(ripgrep / Codex CLI / Electron / Android Platform-Tools /
- * vendored 代码)的手工条目。
+ * 分发的非 npm 资产(ripgrep / Codex CLI / pi coding agent / Electron /
+ * Android Platform-Tools / vendored 代码)的手工条目。
  *
  * 输出(均应提交进仓库,但依赖范围不同):
  *   - <repo>/docs/legal/notices/ (全工程、各分发产物及 SBOM)
@@ -646,6 +646,17 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
         (apacheText ||
           "Apache License 2.0 — full text: https://www.apache.org/licenses/LICENSE-2.0") +
         "\n\nCopyright (c) OpenAI",
+    }),
+  );
+
+  // pi coding agent — 随包分发的 agent 二进制(@earendil-works/pi-coding-agent)
+  entries.push(
+    bundledComponent({
+      name: "pi coding agent (bundled binary)",
+      version: readToolVersion("pi"),
+      license: "MIT",
+      url: "https://github.com/earendil-works/pi",
+      licenseText: MIT_TEXT("MIT License\n\nCopyright (c) 2025 Mario Zechner"),
     }),
   );
 

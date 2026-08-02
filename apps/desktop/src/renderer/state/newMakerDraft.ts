@@ -59,9 +59,8 @@ export interface VendorPrefs {
  * 现在并入 draft store: 协同 + workdir 都从 newMakerDraft 这一个 store 读写,
  * 行为统一,重启也能恢复上次选择。
  *
- * 互斥约束(由 NewMakerDraftRoute 强制,不在 store 层校验):
- *   - workingDir == null 时 collab 入口被隐藏,enabled 应保持 false
- *   - collab.enabled = true 时 picker 隐藏"对话"入口,workingDir 不会变 null
+ * 协同与工作区形态正交:项目和对话草稿都能开启;只有真正开始一次新草稿时才把
+ * enabled 复位为 false,避免把上一次发送的协同选择静默带到下一次。
  */
 /**
  * 「开启协同」弹窗(CreateWorkerPopover)收集的 Worker 详细配置。
@@ -282,8 +281,6 @@ function sanitize(raw: unknown): NewMakerDraft {
   // NewMakerDraftRoute mount 时也会清空(同一决定的双保险)。
   const extraDirs: string[] = [];
   // collab 校验: 老版本无此字段 → 默认 OFF + codex worker。
-  // 防御性互斥: workingDir==null 时 enabled 应该为 false (隐藏入口的兜底,
-  // 防止历史脏数据让用户看到协同 ON 但 workdir 为空的不可达状态)。
   const collabRaw = (r as { collab?: Partial<CollabDraft> }).collab;
   const collabWorker: CollabDraft['worker'] =
     collabRaw?.worker === 'cc' ? 'cc' : collabRaw?.worker === 'pi' ? 'pi' : 'codex';
@@ -291,8 +288,7 @@ function sanitize(raw: unknown): NewMakerDraft {
   // (在同一台远端主机 spawn,见 OrcaLeadSessionSnapshot.remoteHostId),两端
   // 远端 MCP 注入均已落地 (codex daemon config + cc per-query http 注入)。
   // 本地项目(remoteHostId==null)不受影响。
-  const collabEnabled =
-    collabRaw?.enabled === true && workingDir != null;
+  const collabEnabled = collabRaw?.enabled === true;
   // workerConfig 防御性解析:model 缺失/为空则整块丢弃(不存半截配置),createSession 回退默认。
   const workerConfig: CollabWorkerConfig | undefined = (() => {
     const wc = collabRaw?.workerConfig;
@@ -636,13 +632,6 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
         : null;
   }
   const next: NewMakerDraft = { ...currentDraft, ...normalizedPatch };
-  // 互斥兜底: 任何把 workingDir 改成 null 的路径,都把 collab 关掉。
-  // UI 已经在 collab.enabled 时隐藏"对话"入口,正常路径走不到这里;
-  // 这条只是防御性,避免外部调用者(将来的代码 / 测试)把 workingDir 清成 null
-  // 后留下 collab.enabled=true 的不可达状态。
-  if ('workingDir' in patch && next.workingDir == null && next.collab.enabled) {
-    next.collab = { ...next.collab, enabled: false };
-  }
   if ('workingDir' in patch && next.workingDir == null) {
     next.remoteHostId = null;
   } else if ('workingDir' in patch && !('remoteHostId' in patch)) {
@@ -675,10 +664,8 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
   if (currentDraft.deviceLinkDeviceId !== next.deviceLinkDeviceId && next.collab.workerConfig) {
     next.collab = { ...next.collab, workerConfig: undefined };
   }
-  // device-link 与 SSH remote 项目 draft 的协同都已接通(device-link 的 enableOrca /
-  // worker 创建 / 团队读写经隧道在被控端执行;SSH 的 worker 创建继承 remoteHostId、
-  // 远端 MCP 注入两端落地),不再按目标或 vendor 强制关闭。仍然关闭的只有「对话模式」
-  // (workingDir == null,见上方级联)与 Orca Worker 子会话(会话侧判定)。
+  // 协同与项目/对话形态正交,切 workingDir 不再改 enabled。device-link 与 SSH 的 Worker
+  // 创建和团队读写都在对应执行端完成;Worker 子会话不能嵌套协同,由会话侧入口判定兜住。
   currentDraft = next;
   scheduleWrite({
     preserveStoredWorktreePreference:
@@ -691,9 +678,9 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
 /**
  * 把草稿的「这次要跑在哪」复位成干净的本机对话态。
  *
- * 只需这两个字段:workingDir=null 经上面的兜底级联同时清掉 remoteHostId /
- * deviceLink* / collab.enabled。vendor / lastByVendor / fastModeByModel 等模型偏好
- * 保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
+ * workingDir=null 经 patchDraft 级联清掉 remoteHostId / deviceLink*;extraDirs 与
+ * collab.enabled 是本次草稿的一次性选择,这里显式清掉。vendor / lastByVendor /
+ * fastModeByModel 等模型偏好保持不变(那是「我常用哪个」的记忆,与「这次跑在哪」正交)。
  *
  * **任何「另起一段干净对话」的入口都必须走这里,不要各自手写字段清单。**
  * extraDirs 是单次草稿的**目录读取授权**,漏掉它会让新会话悄悄继承对无关本地目录的
@@ -701,7 +688,11 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  * 抄了一遍,却都漏了真正需要清的这一个)。新增工作区字段时只改这一处。
  */
 export function resetDraftWorkspaceTargets(): void {
-  patchDraft({ workingDir: null, extraDirs: [] });
+  patchDraft({
+    workingDir: null,
+    extraDirs: [],
+    collab: { ...currentDraft.collab, enabled: false },
+  });
 }
 
 /** 单字段写入 collab(便捷 setter,语义比 patchDraft({ collab: ... }) 更直接)。 */

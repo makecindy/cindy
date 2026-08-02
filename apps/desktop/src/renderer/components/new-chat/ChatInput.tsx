@@ -123,13 +123,12 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
-import { ExtraDirsButton } from './ExtraDirsButton';
+import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
-import { CollaborationModeToggle, type CollabWorkerKind } from './CollaborationModeToggle';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
 import {
@@ -273,7 +272,7 @@ const ComposerHardBreak = HardBreak.extend({
 
 // 工具行宽度自适应阈值（input card 像素宽）。低于阈值时自动收紧工具行，避免窄宽
 // 下换行 / 文字溢出，与 doc rail / orca 的显式 compactToolbar / denseToolbar 取 OR。
-// 两档：先 dense（控件字号 / 图标压一档、协同 pill 收成 logo），更窄再 compact
+// 两档：先 dense（控件字号 / 图标压一档），更窄再 compact
 // （左侧 permission 可 truncate 成 "完..."、右侧 shrink-0 防换行）。数值按主会话工具行
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
@@ -578,7 +577,7 @@ interface ChatInputProps {
   /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
-   * 工具行采用更紧凑的视觉密度 (字号 -1px, 协同 toggle 只剩 logo)。
+   * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
    *   - dense=true 把控件本身压瘦, 一般就够单行塞下
    *   - compactToolbar 是宽度极端时的 wrap 兜底, split-pane 仍然需要
@@ -598,21 +597,13 @@ interface ChatInputProps {
    */
   topSlot?: React.ReactNode;
   /**
-   * 协同模式开关 (Claude / Codex Lead session 中途 toggle Worker)。
-   * 提供时:底部工具行右侧渲染双人像 pill (CollaborationModeToggle),
-   *        ON 态点击 pill 即触发关闭 (由 parent 决定确认弹窗)。
-   * 不提供时:不渲染 (老调用方零迁移)。
+   * 协同模式入口 (Claude / Codex Lead session 中途 toggle Worker)。
+   * 提供时:与目标模式、计划模式同级渲染在 composer「+」菜单;
+   *        ON 态点击菜单项即触发关闭 (由 parent 决定确认弹窗)。
+   * 不提供时:菜单里不渲染该项。
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
-  collaboration?: {
-    enabled: boolean;
-    worker: CollabWorkerKind;
-    onChange: (next: { enabled: boolean; worker: CollabWorkerKind }) => void;
-    onOpenDetails?: () => void;
-    onDisabledActivate?: () => void;
-    disabled?: boolean;
-    disabledReason?: string;
-  };
+  collaboration?: CollaborationMenuConfig;
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
@@ -5598,7 +5589,7 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划/协同模式、
                 Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
                 交给远端 agent,因此不接本机文件选择器。 */}
                 <ExtraDirsButton
@@ -5606,6 +5597,7 @@ export function ChatInput({
                   workingDir={workingDir}
                   onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
                   planMode={planModeEntry}
+                  collaboration={collaboration}
                   plugins={pluginsForMenu}
                   pluginAvailableIds={pluginAvailableIds}
                   onPluginSelect={handlePluginSelect}
@@ -5652,34 +5644,13 @@ export function ChatInput({
                         : 'flex min-w-0 shrink items-center justify-end gap-1'
                       : 'flex items-center gap-2',
                   // compact 模式下所有输入框工具行保持单行;权限 / 模型 pill 内部截断承压,
-                  // vendor tab、圆形操作按钮与协同图标按钮保持固定宽,避免控件重叠或掉到第二行。
+                  // vendor tab 与圆形操作按钮保持固定宽,避免控件重叠或掉到第二行。
                 )}
               >
                 {(!useNarrowToolbar || useCompactMiddleToolbar) &&
                   (useCompactMiddleToolbar
                     ? compactMiddleToolbarSlot ?? <>{middleToolbarSlot}</>
                     : <>{middleToolbarSlot}</>)}
-                {collaboration && (
-                  <CollaborationModeToggle
-                    enabled={collaboration.enabled}
-                    worker={collaboration.worker}
-                    onChange={collaboration.onChange}
-                    onOpenDetails={collaboration.onOpenDetails}
-                    onDisabledActivate={
-                      !disabled && collaboration.disabled
-                        ? collaboration.onDisabledActivate
-                        : undefined
-                    }
-                    disabled={disabled || collaboration.disabled}
-                    disabledReason={
-                      !disabled && collaboration.disabled
-                        ? collaboration.disabledReason
-                        : undefined
-                    }
-                    dense={effectiveDenseToolbar}
-                    iconOnly={effectiveDenseToolbar}
-                  />
-                )}
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
                     modelId={activeModel}

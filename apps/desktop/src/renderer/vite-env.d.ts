@@ -47,6 +47,8 @@ type RemotePrecreatedWorktreeLedgerSnapshot =
 interface EnvCheckResult {
   claudeCode: { status: 'passed' | 'failed'; path?: string; error?: string };
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
+  /** pi 可选实验 agent:failed 不影响 allPassed(主进程会降级到安装包自带分发)。 */
+  pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
 }
@@ -348,14 +350,14 @@ interface BinaryDownloadProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX', 'manifest_failed'). */
   error?: string;
-  /** D 场景（两个都需要下载）: 当前阶段 1 或 2；B/C 场景缺省。 */
-  step?: 1 | 2;
-  /** D 场景下固定为 2；B/C 场景缺省。 */
-  totalSteps?: 2;
+  /** D 场景（两个及以上需要下载）: 当前阶段 1 / 2 / 3；B/C 场景缺省。 */
+  step?: 1 | 2 | 3;
+  /** D 场景 = 本次需要下载的二进制段数(2 或 3)；B/C 场景缺省。 */
+  totalSteps?: 2 | 3;
   /** step 切换瞬间的同步信号——splash 收到立即 set 进度=0，禁用 transition 动画。 */
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
-  vendor?: 'claude' | 'codex';
+  vendor?: 'claude' | 'codex' | 'pi';
 }
 
 /* ── App Update Progress ── */
@@ -873,6 +875,7 @@ interface PluginEnableState {
   projectOverride?: { enabled: boolean; workingDir: string } | null;
   userOverride?: { enabled: boolean } | null;
   globalOverride?: { enabled: boolean } | null;
+  collabWorkspaceKind?: 'project' | 'dialogue';
 }
 
 interface PluginEnableUpdateResult {
@@ -5047,7 +5050,11 @@ interface ElectronAPI {
 
     plugins: {
       list: (workingDir?: string) => Promise<PluginListItem[]>;
-      getState: (id: string, workingDir?: string) => Promise<PluginEnableState>;
+      getState: (
+        id: string,
+        workingDir?: string,
+        workspaceKind?: string | null,
+      ) => Promise<PluginEnableState>;
       setEnabled: (id: string, enabled: boolean) => Promise<PluginEnableUpdateResult>;
       clearEnabled: (id: string) => Promise<PluginEnableUpdateResult>;
       setProjectEnabled: (workingDir: string, id: string, enabled: boolean) => Promise<void>;

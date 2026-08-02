@@ -129,7 +129,10 @@ import {
   saveAgentInputQueueSnapshot,
 } from '../localDb/agentInputQueueSnapshots.js';
 import { ensureDialogueWorkspaceDir, dialogueWorkspaceRootDir } from '../localDb/dialogueWorkspace.js';
-import { healMissingDialogueWorkdir } from '../localDb/dialogueWorkdirSelfHeal.js';
+import {
+  healMissingDialogueWorkdir,
+  matchDialogueWorkspacePath,
+} from '../localDb/dialogueWorkdirSelfHeal.js';
 import {
   broadcastMessageRow,
   broadcastMessageDeleted,
@@ -215,7 +218,10 @@ import {
   writeMemorySetting,
 } from '../maker-host/memory-settings-store.js';
 import { GLOBAL_PLUGIN_IDS } from '../maker-host/plugins/types.js';
-import { assertCollabProjectEnabled } from './collabProjectPolicy.js';
+import {
+  assertCollabProjectEnabled,
+  resolveLocalCollabPolicyWorkingDir,
+} from './collabProjectPolicy.js';
 import type { GitSnapshotCoordinator } from '../git-snapshot/gitSnapshotCoordinator.js';
 import {
   getRemoteNewMakerDefaults,
@@ -5770,6 +5776,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         agentKind: lead?.agentKind ?? leadRow?.agentKind ?? null,
       },
       (pluginId, workingDir) => getPluginRegistry().isEnabled(pluginId, workingDir),
+      (workingDir) =>
+        matchDialogueWorkspacePath(workingDir, dialogueWorkspaceRootDir()) !== null,
     );
   }
 
@@ -7155,6 +7163,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         // 走转换正本:pi lead 不能被压成 claude-code,否则 input.agent===lead.agentKind
         // 判等失效,pi-lead 建 pi-worker 会走错默认分支(见 orcaWorkerCreationService)。
         agentKind: dbToMakerAgentKind(leadRow.agentKind),
+        workspaceKind: leadRow.workspaceKind,
         workingDir: leadRow.workingDir,
         model: leadRow.model,
         effort: leadRow.effort,
@@ -9815,12 +9824,39 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // Read one plugin's enable state by id. Unlike PLUGINS_LIST this does NOT skip
   // hidden (HOSTED_ELSEWHERE) plugins, so a dedicated Settings section (e.g.
   // 「电脑使用」for `browser`) can read its real project-override state.
-  ipcMain.handle(MAKER_INVOKE.PLUGINS_GET_STATE, async (_e, id: unknown, workingDir: unknown) => {
+  ipcMain.handle(MAKER_INVOKE.PLUGINS_GET_STATE, async (
+    _e,
+    id: unknown,
+    workingDir: unknown,
+    workspaceKind: unknown,
+  ) => {
     if (typeof id !== 'string') {
       throwIpcError('INVALID_PARAMS', 'id (string) required');
     }
     const wd = typeof workingDir === 'string' ? workingDir : undefined;
-    return getPluginRegistry().getEnableState(id, wd);
+    // collab 的 app 托管 dialogue cwd 只读取用户/全局级；显式真实目录仍读取项目覆盖。
+    // 这里与 mutation 最终授权共用「dialogue kind + Main 可信路径」判据，device-link
+    // 隧道到被控端后也由被控端自己的 dialogue root 解析，Renderer 无需知道或猜 userData。
+    const policyWorkingDir =
+      id === 'collab' && wd !== undefined
+        ? resolveLocalCollabPolicyWorkingDir(
+            wd,
+            typeof workspaceKind === 'string' ? workspaceKind : null,
+            (candidate) =>
+              matchDialogueWorkspacePath(candidate, dialogueWorkspaceRootDir()) !== null,
+          )
+        : wd;
+    const state = await getPluginRegistry().getEnableState(id, policyWorkingDir);
+    const acceptedWorkspaceKind =
+      id === 'collab' && (workspaceKind === 'project' || workspaceKind === 'dialogue')
+        ? workspaceKind
+        : undefined;
+    // 远端控制端不能只靠 channel 存在判断 dialogue 协同：旧被控端也已有这个 channel，
+    // 但它会忽略第三个参数，且最终授权不接受 dialogue。回显被 Main 接受的 kind 作为
+    // 同一次只读查询的向后兼容握手；旧端缺字段，新端即可 fail-closed。
+    return acceptedWorkspaceKind
+      ? { ...state, collabWorkspaceKind: acceptedWorkspaceKind }
+      : state;
   });
 
   ipcMain.handle(MAKER_INVOKE.PLUGINS_SET_ENABLED, async (_e, id: unknown, enabled: unknown) => {

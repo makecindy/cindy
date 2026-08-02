@@ -769,15 +769,13 @@ describe('newMakerDraft store', () => {
       expect(getDraft().deviceLinkDeviceName).toBeNull();
     });
 
-    // issue #1170:device-link 草稿曾被硬编码禁用协同,而同一个项目建成会话后入口又出现。
-    // 现在草稿与会话页共用同一份判定(resolveCollabEntryPolicy),device-link **项目**可开协同;
-    // 关掉协同的只剩「对话模式」这一条(workingDir == null)。
-    it('选设备但没选项目(对话模式)→ 协同仍然关闭', async () => {
+    // 协同与项目/对话形态正交:切设备后落到该设备的对话态也不能静默关掉用户选择。
+    it('选设备但没选项目(对话模式)→ 协同开关保留', async () => {
       const { getDraft, patchDraft } = await loadModule();
       patchDraft({ workingDir: '/local/proj' });
       patchDraft({ collab: { enabled: true, worker: 'cc' } });
       patchDraft({ deviceLinkDeviceId: 'dev-a', deviceLinkDeviceName: 'Studio Mac', workingDir: null });
-      expect(getDraft().collab.enabled).toBe(false);
+      expect(getDraft().collab.enabled).toBe(true);
     });
 
     it('选设备上的项目 → 协同开关保留(不再被 device-link 一刀切关掉)', async () => {

@@ -9,9 +9,12 @@
  *  - endpoint:统一走 anthropic-compat-proxy。pi 说标准 Anthropic Messages，
  *    proxy 按 x-cindy-pi-session-id 读取会话来源；ChatGPT / Grok 由现有
  *    Responses bridge 翻译，Claude / Cindy AI 走透明 Anthropic 路由。
- *  - 二进制:dev 期直接找 apps/pi-bin/<platform>/pi(pnpm install:pi 产物);
- *    缺失 → buildPiAgent 返回 null,pi 不注册,对既有环境零影响。
- *    packaged 分发链(manifest / splash prepare)后续接。
+ *  - 二进制:与 cc/codex 同链 —— splash prepare 经 agent-binaries 按 CDN manifest
+ *    的 pi 字段下载整目录 tar.gz 到 userData/pi/<version>/(SHA256 校验,清单一变
+ *    下次启动即换新)。解析优先级:受管下载版(含 dev 期 apps/pi-bin,
+ *    pnpm install:pi 产物)→ 安装包自带分发 resources/pi/<platform>(清单未发
+ *    pi 资产或下载失败的兜底)。全部缺失 → buildPiAgent 返回 null,pi 不注册,
+ *    对既有环境零影响。
  */
 
 import path from 'node:path';
@@ -28,6 +31,7 @@ import type {
 } from '@cindy/maker-core';
 import type { ProviderWireProtocol } from '@cindy/model-providers';
 
+import { getCachedBinaryStatus } from '../agent-binaries/index.js';
 import { getPiExtraSpawnConfig } from '../mcp-integrations/piEnvironment.js';
 import { listCustomProvidersWithSecureHeaders } from './custom-provider-header-secrets.js';
 import { readCustomProviderKey } from '../secrets/providerSecretStore.js';
@@ -67,8 +71,18 @@ function piBinaryName(): string {
 /**
  * 解析 pi 主执行文件绝对路径;找不到返回 null(pi 为可选实验 agent,不阻塞启动)。
  * pi 产物是目录形态(主二进制 + theme/ 等运行时资产),路径指向其中的可执行文件。
+ *
+ * 优先级:
+ *   1. agent-binaries 受管链 —— splash prepare 下载的 userData/pi/<version>/
+ *      (packaged;清单一变下次启动自动换新),dev 期为 apps/pi-bin/<platform>/
+ *      (pnpm install:pi 产物,经 dev-fallback 命中)。
+ *   2. 安装包自带整目录分发 resources/pi/<platform> —— CDN 清单未发 pi 资产或
+ *      下载失败时的兜底(离线首启也可用)。
  */
 export function resolvePiBinaryPath(): string | null {
+  const managed = getCachedBinaryStatus('pi');
+  if (managed.binaryReady && managed.binaryPath) return managed.binaryPath;
+
   const key = platformKey();
   const file = piBinaryName();
   const candidates = app.isPackaged

@@ -14,9 +14,9 @@
  *   - icon: 14×14 Agent 身份 mark (Claude Code / Codex CLI)
  *   - 文字: Inter 14, active weight 500,inactive weight 400
  *
- * F-COLLAB (2026-05): 原本第 3 个 "协同模式" tab 已被 ChatInput 底部的
- * CollaborationModeToggle 取代 — 用户先选 Claude 走单 session,需要时再 toggle
- * 召集 Worker。删 tab 后整体回到 2-tab 220 宽,与历史版本视觉对齐。
+ * F-COLLAB (2026-05): 原本第 3 个 "协同模式" tab 已移入 ChatInput 的「+」菜单 —
+ * 用户先选 Claude 走单 session,需要时再从菜单召集 Worker。删 tab 后整体回到
+ * 2-tab 220 宽,与历史版本视觉对齐。
  */
 
 import { cn } from '@/lib/utils';

@@ -19,6 +19,7 @@ import fs from 'node:fs';
 import { createGunzip } from 'node:zlib';
 import { pipeline } from 'node:stream/promises';
 import { app } from 'electron';
+import { extract as extractTar } from 'tar';
 
 import {
   type BinaryProvisioner,
@@ -84,6 +85,38 @@ async function decompressGz(srcGz: string, destBin: string): Promise<void> {
   const dest = fs.createWriteStream(destBin);
   const gunzip = createGunzip();
   await pipeline(src, gunzip, dest);
+}
+
+/**
+ * 整目录分发解压:tar.gz → destDir。CDN 约定归档根即完整运行时目录(与
+ * apps/<vendor>-bin/<platform>/ 同布局,主执行文件在根)。上游 Unix 包习惯把
+ * dist 嵌在与主执行文件同名的目录里,这里做与 tools 侧 flattenExtractedDir
+ * 一致的容错上移(嵌套目录与主执行文件同名会撞名,先改临时名再逐个上移),
+ * 避免发布侧忘记平铺时装出坏目录。解压/上移后主执行文件必须在根,否则抛错。
+ */
+async function extractTarGzDir(srcTarGz: string, destDir: string, binaryName: string): Promise<void> {
+  await extractTar({ file: srcTarGz, cwd: destDir });
+  const finalBin = path.join(destDir, binaryName);
+  // 注意用 isFile 判定:嵌套壳目录与主执行文件同名(Unix 包习惯),existsSync
+  // 会把"同名目录"误判成已就位。
+  const isFileAt = (p: string): boolean => {
+    try { return fs.statSync(p).isFile(); } catch { return false; }
+  };
+  if (!isFileAt(finalBin)) {
+    const nestedName = binaryName.replace(/\.exe$/i, '');
+    const nested = path.join(destDir, nestedName);
+    if (fs.existsSync(nested) && fs.statSync(nested).isDirectory()) {
+      const tmp = path.join(destDir, '.dist-extract-tmp');
+      fs.renameSync(nested, tmp);
+      for (const name of fs.readdirSync(tmp)) {
+        fs.renameSync(path.join(tmp, name), path.join(destDir, name));
+      }
+      fs.rmdirSync(tmp);
+    }
+  }
+  if (!isFileAt(finalBin)) {
+    throw new Error(`dir-dist archive missing main executable: ${binaryName}`);
+  }
 }
 
 // ── 唯一 export ────────────────────────────────────────────────────────────
@@ -164,13 +197,13 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         const versionDir = getVersionDir(config.installSubdir, asset.version);
         fs.mkdirSync(versionDir, { recursive: true });
 
-        // 5. 计算下载目标路径（gz 中间文件加 .gz 后缀，raw 直接落到 binaryName）
+        // 5. 计算下载目标路径（gz 中间文件加 .gz 后缀，tar-gz-dir 落整包归档，
+        //    raw 直接落到 binaryName）
         const url = resolveVendorAssetUrl(getBaseUrl(), asset);
-        const useGzMid = asset.file.endsWith('.gz');
-        const downloadDest = path.join(
-          versionDir,
-          useGzMid ? `${binaryName}.gz` : binaryName,
-        );
+        const useGzMid = config.artifact.kind === 'gz' && asset.file.endsWith('.gz');
+        const downloadDest = config.artifact.kind === 'tar-gz-dir'
+          ? path.join(versionDir, `${binaryName}.dist.tar.gz`)
+          : path.join(versionDir, useGzMid ? `${binaryName}.gz` : binaryName);
 
         // 6. 下载（含 SHA256 校验，由 downloader 内部完成）
         //
@@ -203,6 +236,11 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         switch (config.artifact.kind) {
           case 'gz': {
             await decompressGz(downloadDest, finalBinPath);
+            try { fs.unlinkSync(downloadDest); } catch { /* ignore */ }
+            break;
+          }
+          case 'tar-gz-dir': {
+            await extractTarGzDir(downloadDest, versionDir, binaryName);
             try { fs.unlinkSync(downloadDest); } catch { /* ignore */ }
             break;
           }
@@ -249,12 +287,15 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
     async peekNeedsDownload(): Promise<boolean> {
       // 不发起任何下载——只读 manifest（cache 优先）+ 本地 isInstalled 检查。
       // 任何异常 / manifest 缺失 → 返回 true（保守地走 prepare()，让其内部的完整错误处理接管）。
+      // optionalAsset vendor 例外:manifest 有但缺该字段 = 平台没发这个可选资产,
+      // 不存在可下载的东西,返回 false(不计入 splash 下载步数;prepare 会以
+      // asset_missing 快速失败交调用方降级)。
       try {
         let manifest = getCachedManifest();
         if (!manifest) manifest = await fetchManifest();
         if (!manifest) return true;
         const asset = getVendorAsset(manifest, config.manifestField);
-        if (!asset) return true;
+        if (!asset) return config.optionalAsset !== true;
         return !isInstalled(config.installSubdir, asset.version, deriveBinaryName());
       } catch {
         return true;

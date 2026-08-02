@@ -16,7 +16,8 @@
  * 网关标准短语、Node 网络 errno(ECONNREFUSED 等)、undici/fetch 失败短语、
  * AggregateError(Node 并发连接尝试全失败的聚合错误,几乎只出现在网络场景)、
  * Anthropic SDK 的 APIConnectionTimeoutError / APIConnectionError 原文
- * ("Request timed out" / "Connection error",SDK 重试耗尽后透传成终止型 turn error)。
+ * ("Request timed out" / "API Error: The operation timed out" / "Connection error",
+ * SDK 重试耗尽后透传成终止型 turn error)。
  */
 export interface ReconnectAttempt {
   attempt: number;
@@ -47,7 +48,7 @@ export function parseReconnectAttemptMessage(message: string): ReconnectAttempt 
 export function isNetworkishErrorMessage(message: string): boolean {
   return (
     parseReconnectAttemptMessage(message) !== null ||
-    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|Connection error/i.test(
+    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|Connection error/i.test(
       message,
     )
   );

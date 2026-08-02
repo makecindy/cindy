@@ -70,12 +70,25 @@ export interface RipgrepManifest {
   binarySha256?: string;
 }
 
+/**
+ * pi 是整目录分发:`file` 指向整包 tar.gz(归档根即完整运行时目录,主二进制 +
+ * theme/ 等旁侧资产,与 apps/pi-bin/<platform>/ 同布局),`sha256`/`size` 是该
+ * tar.gz 的。可选字段:清单未发 pi 资产时客户端回退安装包自带分发(resources/pi)。
+ */
+export interface PiManifest {
+  version: string;
+  file: string;
+  sha256: string;
+  size: number;
+}
+
 export interface Manifest {
   app: AppManifest;
   /** Linux manifests omit agent assets; packaged Linux uses its official runtime fallback. */
   claudeCode?: ClaudeCodeManifest;
   codex?: CodexManifest;
   ripgrep?: RipgrepManifest;
+  pi?: PiManifest;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────

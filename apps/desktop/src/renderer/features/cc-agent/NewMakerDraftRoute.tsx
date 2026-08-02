@@ -225,8 +225,8 @@ const log = createLogger('NewMakerDraftRoute');
 const IS_MAC_PLATFORM = typeof window !== 'undefined' && window.electronAPI?.platform === 'darwin';
 // F-COLLAB (2026-05): 老的 vendor='orca' 入口已退役,OrcaHeaderStrip 组件随之
 // 删除(它是给 isOrca 分支的 ChatInput.topSlot 用的)。Lead/Worker 协作组合现在
-// 由 ChatInput 底部 CollaborationModeToggle 控制,Lead 是当前 vendor 本身,
-// Worker 通过 toggle popover 选 cc / codex。
+// 由 ChatInput「+」菜单里的协同模式项控制,Lead 是当前 vendor 本身,
+// Worker 通过完整配置弹窗选择 cc / codex / pi。
 
 function makeDraftSessionId(): string {
   return crypto.randomUUID();
@@ -595,12 +595,8 @@ export function NewMakerDraftRoute() {
   const [wtSupportsRecoveryKeyDiscard, setWtSupportsRecoveryKeyDiscard] = useState<boolean | null>(null);
   // F-COLLAB: 协同模式状态(enabled + worker 类型)直接读自 draft store,
   // 和 workingDir 走同一份 localStorage,重启 / 切走再回都能恢复。
-  // 互斥约束(本组件 enforce):
-  //   - draft.workingDir == null (对话模式) → 不向 ChatInput 传 collaboration prop,
-  //     CollaborationModeToggle 不渲染
-  //   - draft.collab.enabled = true → 工作区选择入口隐藏
-  //     "对话(不在项目中)"入口,workdir 不可能切到 null
-  // 兜底见 patchDraft: 任何把 workingDir 设回 null 的路径会自动关 collab。
+  // 协同与项目/对话形态正交:两种草稿都向 ChatInput 提供入口;项目读项目级策略,
+  // 对话只读用户级/全局级策略。发送成功后 resetDraftWorkspaceTargets 显式消费本次选择。
   const collab = draft.collab;
   // ChatInput 现在要求显式拥有 attachmentState。这条 transient 路由没有
   // sessionId(还没建会话),sessionId 仍传 undefined(图片本地缓存走 base64
@@ -763,16 +759,18 @@ export function NewMakerDraftRoute() {
   // 协同入口判定与会话视图共用同一个 helper(issue #1170:两处各写一份判据,于是同一个
   // device-link 项目在草稿里没入口、进会话页又有)。草稿的 workspaceKind 显式按
   // "有没有选项目目录" 给出 —— 与它提交给 createSession 的值同源,不让 helper 反推。
+  const collabWorkspaceKind = effectiveWorkingDir ? 'project' : 'dialogue';
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: effectiveWorkingDir ? 'project' : 'dialogue',
+    workspaceKind: collabWorkspaceKind,
     workingDir: effectiveWorkingDir,
     remoteHostId: effectiveRemoteHostId,
     deviceLinkDeviceId: effectiveDeviceLinkDeviceId,
   });
   const collabPolicyEligible = collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(effectiveWorkingDir, collabPolicyEligible, {
-    // SSH 远端 draft 的 workingDir 是远端主机路径, 本机项目级查询无意义, 跳过;
-    // 用户级/全局级 collab 开关仍生效 (与 main 侧 remote 分支同口径)。
+    workspaceKind: collabWorkspaceKind,
+    // dialogue 没有用户项目,SSH 远端 draft 的 workingDir 又是远端主机路径;两者都跳过
+    // 本机项目级查询,但用户级/全局级 collab 开关仍生效。
     skipQuery: collabEntry.skipProjectQuery,
     // device-link draft:项目级开关的真相在被控端, 隧道过去查(控制端本机查那条远端
     // 路径只会读到自己的用户级开关, 可能与被控端 main 的授权相反)。
@@ -1714,7 +1712,7 @@ export function NewMakerDraftRoute() {
           attachmentState.clearFiles();
         }
         resetDraftWorkspaceAfterSend();
-        // F-COLLAB: draft 阶段开了协同 toggle → 与 send/goal 路径同口径,
+        // F-COLLAB: draft 阶段开了协同模式 → 与 send/goal 路径同口径,
         // createSession 后立刻 enableOrca 拉起 Worker;失败 toast 但保留
         // Lead 会话继续 navigate (用户可继续单 session, 不阻断)。
         let orcaWorkersRevealState: { focusWorkerSessionId: string } | null = null;
@@ -2491,9 +2489,9 @@ export function NewMakerDraftRoute() {
           }
 
           // F-COLLAB (2026-05): 老的 vendor='orca' 创建分支已删除。协同模式现在
-          // 走 ChatInput 底部 toggle (CollaborationModeToggle):用户开了 toggle 后
+          // 走 ChatInput「+」菜单:用户开启后
           // Send 流程会先 createSession (本段下方) 创建 Lead,然后立刻调 enableOrca
-          // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同 toggle" 段)。
+          // 拉起 Worker (见下方 "F-COLLAB: draft 阶段开了协同模式" 段)。
 
           const sessionId = makeDraftSessionId();
           const workingDir = selectedWorkingDir;
@@ -2759,7 +2757,7 @@ export function NewMakerDraftRoute() {
             }
           }
 
-          // F-COLLAB: draft 阶段开了协同 toggle → createSession 之后立刻 enableOrca
+          // F-COLLAB: draft 阶段开了协同模式 → createSession 之后立刻 enableOrca
           // 拉起 Worker。失败 toast 但保留 Lead session(用户可以继续单 session 聊),
           // 不阻断 send 流程。worker 类型由 popover 选择,失败回退到单 session 路由。
           let orcaNavTarget: string | null = null;
@@ -3469,8 +3467,6 @@ export function NewMakerDraftRoute() {
                     externalDragOver={pageDragOver}
                     visualVariant="create-agent"
                     compactToolbar
-                    // denseToolbar 去除(2026-07-22):hero 输入框够宽,协同 toggle 应显示「协同」文字
-                    // 与会话内主视图一致;窄窗口仍由 autoDenseToolbar 自动收成 icon-only。
                     placeholder="Hi Cindy!"
                     sessionId={undefined}
                     initialWorkingDir={effectiveWorkingDir}
@@ -3505,10 +3501,8 @@ export function NewMakerDraftRoute() {
                         hiddenVendors={hiddenSwitcherVendors}
                       />
                     }
-                    // 协同 toggle(与对话界面同一控件):本地 / SSH 远端 / device-link 项目 draft
-                    // 均可用 —— eligible 由 resolveCollabEntryPolicy 单点判定,与会话视图同一份
-                    // (issue #1170:两处各写一份判据造成入口前后不一致)。仍然不支持的只有对话
-                    // 模式(无 workingDir)。Lead = 当前
+                    // 「+」菜单协同模式项:普通 Lead 的项目/对话 draft 都可用 —— eligible 由
+                    // resolveCollabEntryPolicy 单点判定,与会话视图同一份(issue #1170)。Lead = 当前
                     // vendor(上方 VendorSegmentedSwitcher)。onOpenDetails 打开「开启协同」富弹窗
                     // (CreateWorkerPopover:role/agent/model/初始任务),与会话内完全一致;OFF 态点击
                     // 走它而非简单 worker popover。ON 态点击 onChange(enabled:false) 关闭协同。

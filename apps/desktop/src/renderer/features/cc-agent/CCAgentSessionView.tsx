@@ -1884,12 +1884,12 @@ export function CCAgentSessionView({
   // remote-forward 直连本机 MCP bridge、worker 创建继承 remoteHostId;device-link 会话的
   // Lead / Worker / team 真身都在被控端,enableOrca 与团队读写经隧道路由过去 ——
   // 三类都已接通,不再按 agent 或远端形态限流。
-  // 注意:doc rail (isCompactRail) 也允许显示 toggle —— WorkdirBrowseRoute 已经
+  // 注意:doc rail (isCompactRail) 也允许显示协同菜单项 —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
-  // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
-  // 工具行同时传 denseToolbar=true,协同 pill 自动收成 icon-only,窄 rail 视觉 OK。
+  // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
+  const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: session?.workspaceKind,
+    workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
     remoteHostId: session?.remoteHostId,
@@ -1899,6 +1899,7 @@ export function CCAgentSessionView({
   });
   const collabPolicyEligible = !orcaMode && collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
+    workspaceKind: collabWorkspaceKind,
     // SSH 远端会话的 workingDir 是远端主机路径, 跳过项目级查询; 用户级/全局级 collab
     // 开关仍生效 (与 main 侧 remote 分支同口径)。
     skipQuery: collabEntry.skipProjectQuery,
@@ -1972,7 +1973,7 @@ export function CCAgentSessionView({
   // navigate 触发条件:仅兼容 orca route 仍在场时需要跳回单 session 路由。
   // doc 模式 (isCompactRail=true) 下 OrcaSplitView 把 Lead pane 渲染为
   // <CCAgentSessionView ... orcaMode compact />,orcaMode 这里只是表"在 split-pane 里"的语义标,
-  // 不能当 navigate 判据 —— 否则用户在 doc rail 工具行点协同 pill 关协同会跳出 doc 模式。
+  // 不能当 navigate 判据 —— 否则用户在 doc rail 的「+」菜单关闭协同会跳出 doc 模式。
   // disableOrca 后 lead.orcaRole 被清掉,WorkdirBrowseRoute 的 isOrcaLeadSession 自动 fallback
   // 到单 CCAgentSessionView,留在 doc 模式即可。
   const { requestStop: requestStopCollab } = useStopOrcaCollab({
@@ -3620,21 +3621,18 @@ export function CCAgentSessionView({
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   compactToolbar={compactToolbar}
-                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把
-                  // 字号/控件压一档,同时让协同 toggle 只剩 logo。
+                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
                   denseToolbar={isCompactRail}
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
                   disableAutofocus={isCompactRail}
                   focusOnStorageKeyChange={ownsRoute}
-                  // F-COLLAB: 协同模式 toggle。在以下场景渲染:
-                  // - 普通主会话视图 (含 doc rail) 的 Claude / Codex 项目会话,本地 /
-                  //   SSH 远端 / device-link 被控端三类都算(判定见 collabEntry)。
-                  // 排除 worker 子会话(worker 自己不能再开协同)与对话模式(无项目目录)。
-                  // orcaMode 路由下 toggle 也保留显示 — ON 态的 orange pill 本身就是
+                  // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
+                  // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
+                  // (worker 自己不能再开协同)。
+                  // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
-                  // doc rail 的 denseToolbar=true 会把 pill 收成 icon-only 形态。
                   collaboration={
                     allowCollabToggle || (orcaMode && collabEnabled)
                       ? {

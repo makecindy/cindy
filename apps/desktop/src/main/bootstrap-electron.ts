@@ -152,7 +152,8 @@ import {
 import {
   prepare as binaryPrepare,
   peekNeedsDownload as binaryPeekNeedsDownload,
-  broadcastResetForStep2 as binaryBroadcastResetForStep2,
+  broadcastResetForStep as binaryBroadcastResetForStep,
+  type AgentBinaryKind,
   type PrepareResult,
 } from './agent-binaries';
 import { RendererBootGuard } from './renderer-boot-guard';
@@ -861,7 +862,7 @@ function attemptStartEmbeddingHost(): void {
   }
 }
 
-// Codex / Claude binary 下载 + 状态查询 全部走 agent-binaries (按 kind 分派)。
+// Codex / Claude / Pi binary 下载 + 状态查询 全部走 agent-binaries (按 kind 分派)。
 // vendor/{claude,codex}/binaryProvisioner.ts 已退役。
 
 // ── Unified logger init ─────────────────────────────────────────────────
@@ -4036,9 +4037,11 @@ const registerIpcHandlers = () => {
     // 这里不再直启，避免 scheduler 在账号模型发现完成前抢先选路由。
   };
 
-  // Environment check IPC handler — 顺序检查 claude → codex 两个 vendor binary。
-  // 提前 peekNeedsDownload 决定 (x/2) 标签：两个都需要下载时给 step/totalSteps，
+  // Environment check IPC handler — 顺序检查 claude → codex → pi 三个 vendor binary。
+  // 提前 peekNeedsDownload 决定 (x/y) 标签：两个及以上需要下载时给 step/totalSteps，
   // 否则不带标签（splash 显示单一 "唤醒 Cindy 中..." 文案）。
+  // pi 是可选实验 agent:清单无资产 / 下载失败都不算环境检查失败(失败不广播
+  // failed payload),pi-host 会回退安装包自带分发,再缺失则本次不注册 pi。
   ipcMain.handle('check-environment', async () => {
     // splash 首个 invoke = renderer 存活的强信号(与 renderer:log 双保险)。
     rendererBootGuard?.markAlive();
@@ -4051,35 +4054,43 @@ const registerIpcHandlers = () => {
         ? AbortSignal.timeout(LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS)
         : undefined;
 
-    // ── Phase 0: peek 两个 vendor 是否都需要下载（决定 (x/2) 标签）─────────────
-    let claudeNeeds = false;
-    let codexNeeds = false;
-    try {
-      claudeNeeds = await binaryPeekNeedsDownload('claude-code');
-    } catch {
-      /* 保守: peek 失败按 false 处理，进入 prepare 内部错误流程 */
+    // ── Phase 0: peek 各 vendor 是否需要下载（决定 (x/y) 标签）────────────────
+    const needySteps: AgentBinaryKind[] = [];
+    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+      try {
+        if (await binaryPeekNeedsDownload(kind)) needySteps.push(kind);
+      } catch {
+        /* 保守: peek 失败按 false 处理，进入 prepare 内部错误流程 */
+      }
     }
-    try {
-      codexNeeds = await binaryPeekNeedsDownload('codex');
-    } catch {
-      /* 同上 */
-    }
-    const isMultiDownload = claudeNeeds && codexNeeds;
+    const isMultiDownload = needySteps.length >= 2;
+    const totalSteps = Math.min(needySteps.length, 3) as 2 | 3;
+    const stepOptsFor = (kind: AgentBinaryKind): { step?: 1 | 2 | 3; totalSteps?: 2 | 3 } =>
+      isMultiDownload && needySteps.includes(kind)
+        ? { step: (needySteps.indexOf(kind) + 1) as 1 | 2 | 3, totalSteps }
+        : {};
+    // 上一段真的发生过下载、且当前段也要下载时,先广播 reset payload 让 splash
+    // 进度条瞬间归零(不走 transition 动画),随后当前段从 0% 开始正常累加。
+    const resetBeforeSegment = (kind: AgentBinaryKind, anyPreviousDownloaded: boolean): void => {
+      const stepOpts = stepOptsFor(kind);
+      if (anyPreviousDownloaded && stepOpts.step && stepOpts.totalSteps) {
+        binaryBroadcastResetForStep(kind, stepOpts.step, stepOpts.totalSteps);
+      }
+    };
 
     // ── Phase 1: claude 段 ───────────────────────────────────────────────────
     let claudeRes: PrepareResult;
     try {
-      claudeRes = await binaryPrepare(
-        'claude-code',
-        isMultiDownload
-          ? { step: 1, totalSteps: 2, signal: linuxInstallSignal }
-          : { signal: linuxInstallSignal },
-      );
+      claudeRes = await binaryPrepare('claude-code', {
+        ...stepOptsFor('claude-code'),
+        signal: linuxInstallSignal,
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         claudeCode: { status: 'failed' as const, error: message },
         codex: { status: 'skipped' as const },
+        pi: { status: 'skipped' as const },
         allPassed: false,
         platform,
       };
@@ -4092,6 +4103,7 @@ const registerIpcHandlers = () => {
           error: claudeRes.error ?? 'Claude Code binary not available',
         },
         codex: { status: 'skipped' as const },
+        pi: { status: 'skipped' as const },
         allPassed: false,
         platform,
       };
@@ -4101,25 +4113,20 @@ const registerIpcHandlers = () => {
     // 任何需要 claude binary 路径的地方一律走 getReadyBinaryPath('claude-code')。
 
     // ── Phase 2: codex 段 ────────────────────────────────────────────────────
-    // 如果 claude 真发生了下载且 codex 也要下载，先广播 reset payload 让 splash 进度条
-    // 瞬间归零（不走 transition 动画），随后 codex 段从 0% 开始正常累加。
-    if (isMultiDownload && claudeRes.downloaded) {
-      binaryBroadcastResetForStep2('codex');
-    }
+    resetBeforeSegment('codex', claudeRes.downloaded === true);
 
     let codexRes: PrepareResult;
     try {
-      codexRes = await binaryPrepare(
-        'codex',
-        isMultiDownload
-          ? { step: 2, totalSteps: 2, signal: linuxInstallSignal }
-          : { signal: linuxInstallSignal },
-      );
+      codexRes = await binaryPrepare('codex', {
+        ...stepOptsFor('codex'),
+        signal: linuxInstallSignal,
+      });
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : String(err);
       return {
         claudeCode: { status: 'passed' as const, path: claudeRes.path },
         codex: { status: 'failed' as const, error: message },
+        pi: { status: 'skipped' as const },
         allPassed: false,
         platform,
       };
@@ -4129,17 +4136,45 @@ const registerIpcHandlers = () => {
       return {
         claudeCode: { status: 'passed' as const, path: claudeRes.path },
         codex: { status: 'failed' as const, error: codexRes.error ?? 'Codex binary not available' },
+        pi: { status: 'skipped' as const },
         allPassed: false,
         platform,
       };
     }
 
-    // 两个 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
+    // ── Phase 3: pi 段（可选,失败不阻塞启动）──────────────────────────────────
+    // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默降级,
+    // buildPiAgent 会依次回退 userData 已装版本 → 安装包自带分发(resources/pi)。
+    resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
+
+    let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
+    try {
+      const piRes = await binaryPrepare('pi', {
+        ...stepOptsFor('pi'),
+        broadcastFailure: false,
+      });
+      piInfo = piRes.ready && piRes.path
+        ? { status: 'passed' as const, path: piRes.path }
+        : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+    } catch (err: unknown) {
+      piInfo = {
+        status: 'failed' as const,
+        error: err instanceof Error ? err.message : String(err),
+      };
+    }
+    if (piInfo.status === 'failed') {
+      console.warn(
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, falling back to bundled dist): ${piInfo.error}`,
+      );
+    }
+
+    // 必装 binary 都 ready,现在才能安全构造 Maker 单例并挂 maker:* / 相关 IPC。
     await registerMakerIpcsAfterSplash();
 
     return {
       claudeCode: { status: 'passed' as const, path: claudeRes.path },
       codex: { status: 'passed' as const, path: codexRes.path },
+      pi: piInfo,
       allPassed: true,
       platform,
     };
