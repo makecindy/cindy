@@ -535,6 +535,39 @@ describe('cindy_contacts tools', () => {
     expect(mutations).toBe(2); // createNeo 一次 + 部分成功补发一次，失败路径不重复通知
   });
 
+  it('系统回写: 已有锚点且新建分组后加成员失败仍广播分组变更', async () => {
+    const neo = await createNeo();
+    await registry.call('contacts_add_identity', {
+      contact_id: neo.id,
+      platform: 'apple-contacts',
+      value: 'existing-apple-id',
+    });
+    const mutationsBeforeExport = mutations;
+    groupSyncFailure = new Error('[PERMISSION_DENIED] Contacts automation was revoked');
+
+    const result = parseResult(
+      await registry.call('contacts_export_system', {
+        ids: [neo.id],
+        system_group: '新建后失败',
+      }),
+    );
+
+    expect(result.ok).toBe(false);
+    expect(result.code).toBe('PERMISSION_DENIED');
+    expect(result.data).toMatchObject({
+      partial: true,
+      updated: 1,
+      anchorsAdded: 0,
+      systemGroup: {
+        name: '新建后失败',
+        created: true,
+        status: 'failed',
+        failedStep: 'add-members',
+      },
+    });
+    expect(mutations).toBe(mutationsBeforeExport + 1);
+  });
+
   it('系统回写: 建组后首批权限/超时/osascript 失败仍返回准确部分状态并按实际变更通知', async () => {
     const neo = await createNeo();
     const cases = [

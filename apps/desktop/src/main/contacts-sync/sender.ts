@@ -35,6 +35,7 @@ interface ContactsSyncOutboundDependencies {
   getKnownClocks(deviceId: string): ContactsSyncClock[] | undefined;
   getKnownMergeClocks(deviceId: string): ContactsSyncClock[] | undefined;
   peerSupportsMergeRedirects(deviceId: string): boolean;
+  getPeerDeliveryEpoch(deviceId: string): number;
   onLocalMaterialized(): void;
   announceKey(deviceId: string): void;
   onError(error: unknown): void;
@@ -105,6 +106,7 @@ export class ContactsSyncOutbound {
       this.deps.announceKey(deviceId);
       return;
     }
+    const peerDeliveryEpoch = this.deps.getPeerDeliveryEpoch(deviceId);
     const knownClocks = this.deps.getKnownClocks(deviceId);
     const knownMergeClocks = this.deps.getKnownMergeClocks(deviceId);
     const encoded = await encodeContactsSyncDatabaseState({
@@ -122,11 +124,12 @@ export class ContactsSyncOutbound {
       dstDeviceId: deviceId,
       signal: context.codecAbortSignal,
     });
-    if (!this.canSend(context, deviceId)) return;
+    if (!this.isCurrent(context)) return;
     if (encoded.materialized) this.deps.onLocalMaterialized();
+    if (!this.canSend(context, deviceId, peerDeliveryEpoch)) return;
 
     for (const frame of encoded.frames) {
-      if (!this.canSend(context, deviceId)) return;
+      if (!this.canSend(context, deviceId, peerDeliveryEpoch)) return;
       let sentDirect: boolean | undefined;
       try {
         sentDirect = await context.directTransport?.send(deviceId, frame);
@@ -134,8 +137,10 @@ export class ContactsSyncOutbound {
         if (!this.isCurrent(context)) return;
         throw error;
       }
-      if (!this.canSend(context, deviceId)) return;
-      if (!sentDirect) await this.sendRelayFrame(context, deviceId, frame);
+      if (!this.canSend(context, deviceId, peerDeliveryEpoch)) return;
+      if (!sentDirect) {
+        await this.sendRelayFrame(context, deviceId, frame, peerDeliveryEpoch);
+      }
     }
   }
 
@@ -143,9 +148,10 @@ export class ContactsSyncOutbound {
     context: ContactsSyncOutboundContext,
     deviceId: string,
     frame: ContactsSyncWireFrame,
+    peerDeliveryEpoch: number,
   ): Promise<void> {
     const deadline = Date.now() + RELAY_BACKPRESSURE_TIMEOUT_MS;
-    while (this.canSend(context, deviceId)) {
+    while (this.canSend(context, deviceId, peerDeliveryEpoch)) {
       try {
         await context.transport.sendRelayFrame(deviceId, frame);
         return;
@@ -156,8 +162,17 @@ export class ContactsSyncOutbound {
     }
   }
 
-  private canSend(context: ContactsSyncOutboundContext, deviceId: string): boolean {
-    return this.isCurrent(context) && context.transport.isPeerAllowed(deviceId);
+  private canSend(
+    context: ContactsSyncOutboundContext,
+    deviceId: string,
+    peerDeliveryEpoch?: number,
+  ): boolean {
+    return (
+      this.isCurrent(context) &&
+      context.transport.isPeerAllowed(deviceId) &&
+      (peerDeliveryEpoch === undefined ||
+        this.deps.getPeerDeliveryEpoch(deviceId) === peerDeliveryEpoch)
+    );
   }
 }
 

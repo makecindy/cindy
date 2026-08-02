@@ -522,7 +522,7 @@ export function registerContactsExportSystemTool(registry: ContactsToolRegistry,
                     failedStep: 'add-members' as const,
                   },
                 },
-                anchorsAdded > 0,
+                anchorsAdded > 0 || Boolean(systemGroup.created),
               );
             }
           }
