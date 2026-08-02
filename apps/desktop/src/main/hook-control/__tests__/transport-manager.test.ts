@@ -2569,7 +2569,8 @@ describe('Telegram provider capability, binding and prefs', () => {
     const [sock] = await connPromise;
     const server = collectFrames(sock);
     const hello = await server.waitFor('hello');
-    expect(hello.type === 'hello' ? hello.payload.features : []).toEqual(
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.features).toEqual(
       expect.arrayContaining(TELEGRAM_FEATURES),
     );
     sock.send(
