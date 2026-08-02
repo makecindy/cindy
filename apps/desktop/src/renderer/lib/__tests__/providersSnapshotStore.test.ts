@@ -29,11 +29,13 @@ describe('providersSnapshotStore owner isolation', () => {
     const ownerAToken = beginProvidersRefresh();
     expect(commitProvidersSnapshot(ownerAToken, {
       dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
       providers: [ownerAProvider],
       providerOrder: ['owner-a-provider'],
     })).toBe(true);
     expect(getCachedProvidersSnapshot()).toEqual({
       dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
       providers: [ownerAProvider],
       providerOrder: ['owner-a-provider'],
     });
@@ -49,6 +51,7 @@ describe('providersSnapshotStore owner isolation', () => {
     expect(isProvidersRefreshCurrent(staleOwnerAToken)).toBe(false);
     expect(commitProvidersSnapshot(staleOwnerAToken, {
       dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
       providers: [ownerAProvider],
       providerOrder: ['owner-a-provider'],
     })).toBe(false);
@@ -56,6 +59,7 @@ describe('providersSnapshotStore owner isolation', () => {
     const ownerBToken = beginProvidersRefresh();
     const mismatchedOwnerSnapshot = {
       dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
       providers: [ownerBProvider],
       providerOrder: ['owner-b-provider'],
     };
@@ -63,11 +67,13 @@ describe('providersSnapshotStore owner isolation', () => {
     expect(commitProvidersSnapshot(ownerBToken, mismatchedOwnerSnapshot)).toBe(false);
     expect(commitProvidersSnapshot(ownerBToken, {
       dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
       providers: [ownerBProvider],
       providerOrder: ['owner-b-provider'],
     })).toBe(true);
     expect(getCachedProvidersSnapshot()).toEqual({
       dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
       providers: [ownerBProvider],
       providerOrder: ['owner-b-provider'],
     });

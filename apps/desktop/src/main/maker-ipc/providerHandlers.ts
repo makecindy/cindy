@@ -831,10 +831,17 @@ export function registerProviderHandlers(
       throwIpcError('INTERNAL', message);
     }
   };
-  const assertRequestedProviderOwner = (requestedDataOwnerId: string | null): void => {
+  const assertRequestedProviderOwner = (
+    requestedDataOwnerId: string | null,
+    requestedOwnerGeneration: number,
+  ): void => {
+    const current = deps.currentOwnerSession?.();
     if (
-      deps.currentOwnerSession
-      && deps.currentOwnerSession().dataOwnerId !== requestedDataOwnerId
+      current
+      && (
+        current.dataOwnerId !== requestedDataOwnerId
+        || current.generation !== requestedOwnerGeneration
+      )
     ) {
       throwIpcError('INTERNAL', 'active account changed during provider mutation');
     }
@@ -847,6 +854,7 @@ export function registerProviderHandlers(
       event,
     ): Promise<{
       dataOwnerId: string | null;
+      ownerGeneration: number;
       providers: ProviderView[];
       providerOrder: string[];
       modelVisibilityOverrides: Record<string, boolean>;
@@ -867,6 +875,7 @@ export function registerProviderHandlers(
       // 请求头,update 由 main 侧保留旧值(planProviderHeaderMutations 'update' 分支)。
       return {
         dataOwnerId,
+        ownerGeneration: ownerAtIngress?.generation ?? 0,
         providers: providers.map(withoutProviderHeaderCredentials),
         providerOrder,
         modelVisibilityOverrides: deps.getModelVisibilityOverrides(),
@@ -936,10 +945,14 @@ export function registerProviderHandlers(
     const value = input as Record<string, unknown>;
     const keys = Object.keys(value);
     const requestedDataOwnerId = value.dataOwnerId;
+    const requestedOwnerGeneration = value.ownerGeneration;
     const ids = value.providerIds;
     if (
-      keys.length !== 2 ||
+      keys.length !== 3 ||
       (requestedDataOwnerId !== null && typeof requestedDataOwnerId !== 'string') ||
+      typeof requestedOwnerGeneration !== 'number' ||
+      !Number.isSafeInteger(requestedOwnerGeneration) ||
+      requestedOwnerGeneration < 0 ||
       !Array.isArray(ids) ||
       ids.length === 0 ||
       ids.length > MAX_PROVIDER_ORDER_ITEMS ||
@@ -953,7 +966,10 @@ export function registerProviderHandlers(
     ) {
       throwIpcError('INVALID_PARAMS', 'providerIds must be a bounded unique non-empty string[]');
     }
-    assertRequestedProviderOwner(requestedDataOwnerId as string | null);
+    assertRequestedProviderOwner(
+      requestedDataOwnerId as string | null,
+      requestedOwnerGeneration,
+    );
     const catalogIds = new Set(deps.listProviderIds());
     const requestedIds = ids as string[];
     if (requestedIds.some((id) => !catalogIds.has(id))) {

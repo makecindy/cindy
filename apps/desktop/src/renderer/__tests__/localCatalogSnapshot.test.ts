@@ -68,6 +68,7 @@ describe('refreshLocalCatalogSnapshot', () => {
   it('does not commit capabilities when the provider snapshot owner is stale', async () => {
     const providers = {
       dataOwnerId: 'owner-b',
+      ownerGeneration: 2,
       providers: [{ id: 'owner-b-provider' }],
       providerOrder: ['owner-b-provider'],
     };

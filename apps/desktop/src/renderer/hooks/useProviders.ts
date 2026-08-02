@@ -25,6 +25,7 @@ import {
 export interface UseProvidersReturn {
   providers: ProviderView[];
   providerOrder: string[];
+  ownerGeneration: number | null;
   loading: boolean;
   refetch: () => void;
 }
@@ -67,6 +68,7 @@ export function useProviders(): UseProvidersReturn {
   return {
     providers: currentSnapshot?.providers ?? [],
     providerOrder: currentSnapshot?.providerOrder ?? [],
+    ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
     loading: currentSnapshot == null,
     refetch,
   };

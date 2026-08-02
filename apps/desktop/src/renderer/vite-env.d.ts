@@ -3925,6 +3925,7 @@ interface ElectronAPI {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: () => Promise<{
       dataOwnerId: string | null;
+      ownerGeneration: number;
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
     }>;
@@ -4101,6 +4102,7 @@ interface ElectronAPI {
     /** Persist the visible provider order only if the active owner still matches. */
     setProviderOrder: (
       dataOwnerId: string | null,
+      ownerGeneration: number,
       providerIds: string[],
     ) => Promise<{ ok: true }>;
     getModelPriceOverride: (

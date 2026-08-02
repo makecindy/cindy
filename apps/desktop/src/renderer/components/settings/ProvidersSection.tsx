@@ -1475,7 +1475,7 @@ export function ProvidersSection() {
   const signInToCindy = useSignInToCindy();
   const { dataOwnerId } = useAuth();
   const { confirm } = useConfirmDialog();
-  const { providers, providerOrder, loading, refetch } = useProviders();
+  const { providers, providerOrder, ownerGeneration, loading, refetch } = useProviders();
   // OpenAI 的 reconnect-required 是 useCodexAuth 独有状态(目录 connected 此时为 false):
   // 该状态下 OpenAI 行必须留在左栏,否则「重新连接」入口不可达,用户被迫从向导重发现。
   const codexAuth = useCodexAuth();
@@ -1643,17 +1643,19 @@ export function ProvidersSection() {
       (id) => !observedProviderIds.has(id) && !persistedIds.has(id),
     );
     visibleIds.forEach((id) => observedProviderIds.add(id));
-    if (unrecordedIds.length === 0) return;
+    if (unrecordedIds.length === 0 || ownerGeneration === null) return;
     void Promise.all(
-      unrecordedIds.map((id) => window.electronAPI.maker.setProviderOrder(dataOwnerId, [id])),
+      unrecordedIds.map((id) =>
+        window.electronAPI.maker.setProviderOrder(dataOwnerId, ownerGeneration, [id])),
     )
       .catch(() => toast.error(t('settings.providers.order.saveFailed')));
-  }, [dataOwnerId, listProviders, providerOrder, t]);
+  }, [dataOwnerId, listProviders, ownerGeneration, providerOrder, t]);
 
   const persistVisibleProviderOrder = useCallback(
     (reorderedVisibleIds: string[]): void => {
       const currentIds = listProviders.map((provider) => provider.id);
       if (reorderedVisibleIds.every((id, index) => id === currentIds[index])) return;
+      if (ownerGeneration === null) return;
       if (
         selectedId !== CINDY_SIGNIN_ID &&
         !listProviders.some((provider) => provider.id === selectedId) &&
@@ -1664,7 +1666,7 @@ export function ProvidersSection() {
       const generation = ++providerOrderMutationRef.current;
       setPendingProviderOrder({ dataOwnerId, ids: reorderedVisibleIds });
       void window.electronAPI.maker
-        .setProviderOrder(dataOwnerId, reorderedVisibleIds)
+        .setProviderOrder(dataOwnerId, ownerGeneration, reorderedVisibleIds)
         .then(() => {
           if (providerOrderMutationRef.current !== generation) return;
           setPendingProviderOrder((current) =>
@@ -1683,7 +1685,7 @@ export function ProvidersSection() {
           toast.error(t('settings.providers.order.saveFailed'));
         });
     },
-    [dataOwnerId, listProviders, refetch, selectedId, t],
+    [dataOwnerId, listProviders, ownerGeneration, refetch, selectedId, t],
   );
 
   const moveProviderWithKeyboard = useCallback(

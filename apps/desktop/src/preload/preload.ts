@@ -4160,6 +4160,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
     listProviders: (): Promise<{
       dataOwnerId: string | null;
+      ownerGeneration: number;
       providers: import('@cindy/model-providers').ProviderView[];
       providerOrder: string[];
     }> =>
@@ -4339,9 +4340,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Persist the visible provider order only if the active owner still matches. */
     setProviderOrder: (
       dataOwnerId: string | null,
+      ownerGeneration: number,
       providerIds: string[],
     ): Promise<{ ok: true }> =>
-      ipcRenderer.invoke('maker:provider:order:set', { dataOwnerId, providerIds }),
+      ipcRenderer.invoke('maker:provider:order:set', {
+        dataOwnerId,
+        ownerGeneration,
+        providerIds,
+      }),
     getModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>

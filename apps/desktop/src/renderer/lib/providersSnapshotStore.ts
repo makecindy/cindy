@@ -18,6 +18,8 @@ interface ProvidersRefreshToken {
 
 export interface ProvidersSnapshot {
   dataOwnerId: string | null;
+  /** Main app-session generation that leases owner-scoped provider writes. */
+  ownerGeneration: number;
   providers: ProviderView[];
   providerOrder: string[];
 }
@@ -61,6 +63,7 @@ export async function loadProvidersSnapshot(): Promise<ProvidersSnapshot> {
   const result = await window.electronAPI.maker.listProviders();
   return {
     dataOwnerId: result.dataOwnerId,
+    ownerGeneration: result.ownerGeneration,
     providers: result.providers,
     providerOrder: result.providerOrder,
   };

@@ -217,7 +217,7 @@ export const MAKER_INVOKE = {
   MODEL_DISABLE_SET: 'maker:model-disable:set',
   /**
    * Owner-scoped provider display-order override.
-   * Input = { dataOwnerId: string | null; providerIds: string[] }.
+   * Input = { dataOwnerId: string | null; ownerGeneration: number; providerIds: string[] }.
    * Settings mutation: local trusted renderer only; deliberately excluded from the
    * device-link allowlist.
    */

@@ -30,6 +30,7 @@ const {
   authState: { dataOwnerId: 'owner-1' as string | null },
   providerSnapshotState: {
     dataOwnerId: 'owner-1' as string | null,
+    ownerGeneration: 1,
     order: ['anthropic', 'xd', 'custom'],
   },
   wizardSpy: vi.fn(),
@@ -103,6 +104,10 @@ vi.mock('@/hooks/useProviders', () => ({
         providerSnapshotState.dataOwnerId === authState.dataOwnerId
           ? providerSnapshotState.order
           : [],
+      ownerGeneration:
+        providerSnapshotState.dataOwnerId === authState.dataOwnerId
+          ? providerSnapshotState.ownerGeneration
+          : null,
       loading: providerSnapshotState.dataOwnerId !== authState.dataOwnerId,
       refetch: refetchProvidersSpy,
     };
@@ -184,6 +189,7 @@ let scanResult: ScanResult;
 beforeEach(() => {
   authState.dataOwnerId = 'owner-1';
   providerSnapshotState.dataOwnerId = 'owner-1';
+  providerSnapshotState.ownerGeneration = 1;
   providerSnapshotState.order = ['anthropic', 'xd', 'custom'];
   scanResult = { detections: [] };
   (window as unknown as { electronAPI: unknown }).electronAPI = {
@@ -281,13 +287,13 @@ describe('ProvidersSection — 双栏管理', () => {
     const handles = await screen.findAllByRole('button', {
       name: 'settings.providers.order.handle',
     });
-    expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['custom']);
+    expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', 1, ['custom']);
     await act(async () => {
       fireEvent.keyDown(handles[0]!, { key: 'ArrowDown' });
       await Promise.resolve();
     });
     // Renderer 只提交左栏顺序；Main 负责保留曾出现但当前隐藏的供应商槽位。
-    expect(setProviderOrderSpy).toHaveBeenLastCalledWith('owner-1', ['custom', 'xd']);
+    expect(setProviderOrderSpy).toHaveBeenLastCalledWith('owner-1', 1, ['custom', 'xd']);
     const selectedRows = screen
       .getAllByRole('button')
       .filter((button) => button.getAttribute('aria-current') === 'true');
@@ -370,7 +376,7 @@ describe('ProvidersSection — 双栏管理', () => {
       React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)),
     );
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', ['custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-1', 1, ['custom']);
     });
     setProviderOrderSpy.mockClear();
 
@@ -383,12 +389,13 @@ describe('ProvidersSection — 双栏管理', () => {
 
     await act(async () => {
       providerSnapshotState.dataOwnerId = 'owner-2';
+      providerSnapshotState.ownerGeneration = 2;
       providerSnapshotState.order = ['xd'];
       view.rerender(React.createElement(MemoryRouter, null, React.createElement(ProvidersSection)));
       await Promise.resolve();
     });
     await waitFor(() => {
-      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-2', ['custom']);
+      expect(setProviderOrderSpy).toHaveBeenCalledWith('owner-2', 2, ['custom']);
     });
   });
 });

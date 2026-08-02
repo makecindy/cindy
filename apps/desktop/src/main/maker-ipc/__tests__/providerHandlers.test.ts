@@ -153,6 +153,7 @@ describe('provider:list IPC handler', () => {
     const result = await harness.invoke(MAKER_INVOKE.PROVIDER_LIST);
     expect(result).toEqual({
       dataOwnerId: 'owner-a',
+      ownerGeneration: 1,
       providers: views,
       providerOrder,
       modelVisibilityOverrides: overrides,
@@ -269,6 +270,7 @@ describe('provider:order:set handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
         dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
         providerIds: ['openai', 'xd', 'anthropic'],
       }),
     ).resolves.toEqual({ ok: true });
@@ -277,12 +279,15 @@ describe('provider:order:set handler', () => {
   });
 
   it.each([
-    { dataOwnerId: 'owner-a', providerIds: [] },
-    { dataOwnerId: 'owner-a', providerIds: ['xd', 'xd'] },
-    { dataOwnerId: 'owner-a', providerIds: ['xd', 'unknown'] },
-    { dataOwnerId: 'owner-a', providerIds: ['xd', 'openai'], extra: true },
-    { dataOwnerId: 42, providerIds: ['xd'] },
-    { providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: [] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'unknown'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1, providerIds: ['xd', 'openai'], extra: true },
+    { dataOwnerId: 42, ownerGeneration: 1, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: -1, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', ownerGeneration: 1.5, providerIds: ['xd'] },
+    { dataOwnerId: 'owner-a', providerIds: ['xd'] },
+    { ownerGeneration: 1, providerIds: ['xd'] },
     { reset: true },
   ])('rejects invalid visible order input: %j', async (input) => {
     const harness = new IpcHarness();
@@ -306,6 +311,7 @@ describe('provider:order:set handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
         dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
         providerIds: ['xd', 'openai'],
       }),
     ).resolves.toEqual({ ok: true });
@@ -324,6 +330,26 @@ describe('provider:order:set handler', () => {
     await expect(
       harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
         dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
+        providerIds: ['openai', 'xd'],
+      }),
+    ).rejects.toThrow(/INTERNAL/);
+    expect(deps.setProviderOrder).not.toHaveBeenCalled();
+    expect(deps.broadcastChanged).not.toHaveBeenCalled();
+  });
+
+  it('rejects a delayed order write after an A→B→A owner round trip', async () => {
+    const harness = new IpcHarness();
+    const deps = makeDeps({
+      listProviderIds: () => ['xd', 'openai'],
+      currentOwnerSession: () => ({ dataOwnerId: 'owner-a', generation: 3 }),
+    });
+    registerProviderHandlers(harness, deps);
+
+    await expect(
+      harness.invoke(MAKER_INVOKE.PROVIDER_ORDER_SET, {
+        dataOwnerId: 'owner-a',
+        ownerGeneration: 1,
         providerIds: ['openai', 'xd'],
       }),
     ).rejects.toThrow(/INTERNAL/);

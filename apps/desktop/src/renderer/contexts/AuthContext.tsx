@@ -34,6 +34,7 @@ import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
 import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
+import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
   getDataOwnerGeneration,
   setDataOwnerGeneration,
@@ -108,6 +109,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const activeUserIdRef = useRef<string | null>(null);
   const activeDataOwnerIdRef = useRef<string | null>(null);
   const authStateVersionRef = useRef(0);
+
+  // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
+  // the transition, restore the single authoritative owner ref (which successful siblings and
+  // newer pushes both update), then rebuild the cache because React state may never have changed.
+  const runDataOwnerBoundary = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    publishDataOwnerGeneration(null);
+    try {
+      return await operation();
+    } catch (error) {
+      publishDataOwnerGeneration(activeDataOwnerIdRef.current);
+      void preloadLocalCatalogSnapshot();
+      throw error;
+    }
+  }, []);
 
   /**
    * 身份即 auth-server membership(产品 role 水合已随 /api/me 退役,2026-07)。
@@ -286,16 +301,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    publishDataOwnerGeneration(null);
-    await authServiceRef.current!.logout();
+    await runDataOwnerBoundary(() => authServiceRef.current!.logout());
     sessionsStore.reset();
     clearWorkersCache();
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const enterLocalMode = useCallback(async () => {
-    publishDataOwnerGeneration(null);
-    const state = await authServiceRef.current!.enterLocalMode();
+    const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
     publishDataOwnerGeneration(state.dataOwnerId);
+    activeDataOwnerIdRef.current = state.dataOwnerId;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -303,12 +317,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCanEnterApp(state.canEnterApp);
     setIsAuthenticated(state.isAuthenticated);
     setUser(state.user);
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const exitLocalMode = useCallback(async () => {
-    publishDataOwnerGeneration(null);
-    const state = await authServiceRef.current!.exitLocalMode();
+    const state = await runDataOwnerBoundary(() => authServiceRef.current!.exitLocalMode());
     publishDataOwnerGeneration(state.dataOwnerId);
+    activeDataOwnerIdRef.current = state.dataOwnerId;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -316,7 +330,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCanEnterApp(state.canEnterApp);
     setIsAuthenticated(state.isAuthenticated);
     setUser(state.user);
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const getAccountDeletionAvailability = useCallback(
     () => authServiceRef.current!.getAccountDeletionAvailability(),

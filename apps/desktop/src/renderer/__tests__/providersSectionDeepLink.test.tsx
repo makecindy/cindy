@@ -28,6 +28,7 @@ vi.mock('@/hooks/useProviders', () => ({
   useProviders: () => ({
     providers: providersState.providers,
     providerOrder: providersState.order,
+    ownerGeneration: 1,
     loading: false,
     refetch: vi.fn(),
   }),
