@@ -191,7 +191,7 @@ describe('gitExec timeoutMs', () => {
     await expectation;
   });
 
-  it('Windows 幸存者始终不消失 → 有界看门狗兜底收口(防永悬,不当清空证明)', async () => {
+  it('Windows 幸存者始终不消失 → 总看门狗按 cleanup unconfirmed 收口(有界,不当清空证明)', async () => {
     setPlatform('win32');
     const state = installExecFileMock();
     state.psTable = [{ ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' }];
@@ -201,12 +201,34 @@ describe('gitExec timeoutMs', () => {
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
     const s = probe(p);
-    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('cleanup unconfirmed'),
+    });
     vi.advanceTimersByTime(1000);
     await flushMicrotasks();
     expect(s.settled).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(1_500);
+    await vi.advanceTimersByTimeAsync(3_000);
+    await expectation;
+  });
+
+  it('Windows taskkill 自身卡住(killProcessTree 收尾永不回调)→ 入口看门狗有界收口', async () => {
+    setPlatform('win32');
+    const state = installExecFileMock();
+    state.psTable = [{ ProcessId: 5001, ParentProcessId: 4242, CreationDate: '/Date(1)/' }];
+    mocks.killProcessTree.mockImplementation(() => {
+      /* 收尾回调永不触发:看门狗必须先于树杀武装,否则 Promise 永悬 */
+    });
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('cleanup unconfirmed'),
+    });
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+    await vi.advanceTimersByTimeAsync(3_000);
     await expectation;
   });
 
@@ -266,7 +288,7 @@ describe('gitExec timeoutMs', () => {
     await expectation;
   });
 
-  it('POSIX 硬杀后组始终不消失(不可杀进程)→ 有界看门狗收口,Promise 不永悬', async () => {
+  it('POSIX 硬杀后组始终不消失(不可杀进程)→ 入口看门狗按 cleanup unconfirmed 收口,不永悬', async () => {
     setPlatform('linux');
     installExecFileMock();
     installProcessKillMock(); // group.alive 始终 true
@@ -276,7 +298,9 @@ describe('gitExec timeoutMs', () => {
 
     const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
     const s = probe(p);
-    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    const expectation = expect(p).rejects.toMatchObject({
+      stderr: expect.stringContaining('cleanup unconfirmed'),
+    });
 
     vi.advanceTimersByTime(500 + 1_500);
     await flushMicrotasks();

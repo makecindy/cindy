@@ -18,7 +18,7 @@
  *      提交祖先关系,该 ref 已落后于 fallback(本地分支领先,如有未推送提交)则保留
  *      fallback,保证回退基底永远不比旧行为更旧;无该 ref 时回退 fallback。
  */
-import { gitExec, type GitExecOpts } from './gitExec';
+import { gitExec, KILL_CLEANUP_BUDGET_MS, type GitExecOpts } from './gitExec';
 import { createLogger } from '../logger';
 
 const log = createLogger('worktree');
@@ -74,14 +74,19 @@ export async function resolveFreshSourceBranch(
   if (!remote) return { sourceBranch: fallback, fetched: false, reason: 'no-remote' };
 
   // ls-remote 与 fetch 共享一个 deadline:任何一步耗掉的时间都从总预算里扣。
+  // 每步的 timeoutMs 还要预留 gitExec 超时清理预算(SIGTERM/SIGKILL/退净确认,
+  // KILL_CLEANUP_BUDGET_MS)——超时路径的清理墙钟也落在同一 deadline 内,
+  // 不在总预算之外追加。
   const netDeadline = Date.now() + totalBudgetMs;
   const remainingBudgetMs = () => netDeadline - Date.now();
+  const stepBudgetMs = (capMs: number) =>
+    Math.min(capMs, remainingBudgetMs() - KILL_CLEANUP_BUDGET_MS);
 
   // 远端真值:`ls-remote --symref <remote> HEAD` 首行形如 `ref: refs/heads/main\tHEAD`。
   // 预算必须为正才发起网络操作——0/负数传给 gitExec 语义是「不超时」,恰好把
   // 总预算击穿成无界等待;预算耗尽直接走下面的本地元数据回退。
   let defaultBranch: string | null = null;
-  const lsRemoteBudgetMs = Math.min(LS_REMOTE_TIMEOUT_MS, remainingBudgetMs());
+  const lsRemoteBudgetMs = stepBudgetMs(LS_REMOTE_TIMEOUT_MS);
   if (lsRemoteBudgetMs > 0) {
     defaultBranch =
       (
@@ -111,7 +116,7 @@ export async function resolveFreshSourceBranch(
   if (!defaultBranch) return { sourceBranch: fallback, fetched: false, reason: 'no-default-branch' };
 
   let fetched = false;
-  const fetchBudgetMs = remainingBudgetMs();
+  const fetchBudgetMs = stepBudgetMs(totalBudgetMs);
   if (fetchBudgetMs > 0) {
     try {
       // 显式目标 refspec:--single-branch 或收窄 remote.<name>.fetch 的 clone 里,

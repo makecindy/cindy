@@ -14,6 +14,8 @@ const mocks = vi.hoisted(() => ({
 }));
 
 vi.mock('../gitExec', () => ({
+  // 与真实实现保持一致:freshBase 用它从每步网络预算里预留超时清理时间
+  KILL_CLEANUP_BUDGET_MS: 3_000,
   gitExec: async (args: readonly string[], _cwd?: string, opts?: GitExecOpts) => {
     mocks.calls.push({ args: [...args], opts });
     const out = mocks.impl?.(args);
@@ -214,7 +216,9 @@ describe('resolveFreshSourceBranch', () => {
       expect(res.fetched).toBe(true);
       const fetchOpts = call('fetch')?.opts;
       expect(fetchOpts?.timeoutMs).toBeGreaterThan(0);
-      expect(fetchOpts?.timeoutMs).toBeLessThanOrEqual(5_000);
+      // 剩余 5s 还要预留 3s 超时清理预算(KILL_CLEANUP_BUDGET_MS)——超时路径的
+      // 清理墙钟也必须落在共享 deadline 内,fetch 实际只拿 ≤2s
+      expect(fetchOpts?.timeoutMs).toBeLessThanOrEqual(2_000);
     } finally {
       vi.useRealTimers();
     }

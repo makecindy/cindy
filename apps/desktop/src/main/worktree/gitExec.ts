@@ -75,11 +75,13 @@ const POSIX_KILL_GRACE_MS = 1_500;
 /** POSIX 宽限期内探测进程组是否清空的轮询间隔。 */
 const POSIX_GROUP_POLL_INTERVAL_MS = 100;
 /**
- * 硬杀完成后等待后代真正退净的有界看门狗。**不是**「后代已清空」的证明——正常
- * 收口依赖组探测(POSIX)或进程表快照确认(Windows),看门狗只防极端不可杀进程
- * 把 Promise 永远挂死。
+ * 超时后整套清理(SIGTERM/宽限/SIGKILL/退净确认)的总预算,也是超时路径下
+ * Promise 相对 timeoutMs 的最大额外墙钟。看门狗在任何树杀动作之前武装,到点
+ * 仍未确认清空按「cleanup unconfirmed」收口——它**不是**清空证明,只保证有界
+ * 返回;正常收口依赖组探测(POSIX)或进程表快照轮询(Windows)。调用方若受
+ * 共享 deadline 约束,应把这份预算从每步网络超时里预留(见 freshBase)。
  */
-const DESCENDANT_SETTLE_WAIT_MS = 1_500;
+export const KILL_CLEANUP_BUDGET_MS = 3_000;
 /** Windows 进程表查询(PowerShell Get-CimInstance)自身的超时。 */
 const WIN32_PS_QUERY_TIMEOUT_MS = 3_000;
 /** Windows 确认快照后代退净的轮询间隔。 */
@@ -281,26 +283,35 @@ function execFileOnce(
     if (timeoutMs !== undefined && timeoutMs > 0) {
       timer = setTimeout(() => {
         timedOut = true;
-        const failTimeout = () =>
+        const failTimeout = (treeConfirmedGone: boolean) =>
           settle(() =>
             reject(
               new GitExecError({
                 args,
                 exitCode: null,
-                stderr: `timed out after ${timeoutMs}ms; process tree terminated`,
+                stderr: treeConfirmedGone
+                  ? `timed out after ${timeoutMs}ms; process tree terminated`
+                  : `timed out after ${timeoutMs}ms; process tree cleanup unconfirmed`,
                 stdout: '',
               }),
             ),
           );
+        // 收尾总看门狗:在**任何树杀动作之前**武装——taskkill/进程表枚举自身
+        // 卡死也保证 Promise 在 timeoutMs + KILL_CLEANUP_BUDGET_MS 内返回。到点
+        // 仍未确认清空的,以「cleanup unconfirmed」这一可区分错误收口,不冒充
+        // 正常终止;确认路径(快照轮询/组探测)成功时会提前 settle 并清掉本
+        // 看门狗。调用方(freshBase)已把这份清理预算从共享网络 deadline 中
+        // 预留,总墙钟不超预算。
+        finishWatchdog = setTimeout(() => failTimeout(false), KILL_CLEANUP_BUDGET_MS);
+        finishWatchdog.unref?.();
         if (process.platform === 'win32') {
           // 终止走 proc-util killProcessTree(taskkill /T /F,带重试与后代兜底;
           // git.exe 已退出时它按 pid 复用防线就地收束,不按 ppid 枚举杀,防误杀)。
           // **确认**独立于终止:并行拉一次进程表快照,收集 git 树的幸存者
           // (pid+创建时间双键,仅观察不杀),树杀收尾后轮询确认幸存者全部消失
-          // 才收口——覆盖「git.exe 已退、credential helper 等后代仍活」的窗口。
-          // 进程表不可用(PowerShell 缺失/超时)降级为 stdio 放手信号(execFile
-          // 回调 = 继承句柄全部释放);两条路都有看门狗防永悬(见常量注释,
-          // 看门狗不构成清空证明)。
+          // 才按「terminated」收口——覆盖「git.exe 已退、credential helper 等
+          // 后代仍活」的窗口。进程表不可用(PowerShell 缺失/超时)属「无法持续
+          // 确认」:等 stdio 放手信号后仍按 cleanup unconfirmed 收口,不冒充确认。
           const snapshotPromise = child.pid != null ? queryWin32ProcessTable() : Promise.resolve(null);
           killProcessTree(child.pid, child, () => {
             void snapshotPromise.then((table) => {
@@ -308,7 +319,7 @@ function execFileOnce(
               const survivors =
                 table !== null && child.pid != null ? collectWin32TreeSurvivors(table, child.pid) : null;
               if (survivors !== null && survivors.length === 0) {
-                failTimeout();
+                failTimeout(true);
                 return;
               }
               if (survivors !== null) {
@@ -317,18 +328,15 @@ function execFileOnce(
                   void queryWin32ProcessTable().then((t) => {
                     if (settled || t === null) return;
                     const present = new Set(t.map((r) => `${r.pid}:${r.created}`));
-                    if (!keys.some((k) => present.has(k))) failTimeout();
+                    if (!keys.some((k) => present.has(k))) failTimeout(true);
                   });
                 }, WIN32_DESCENDANT_POLL_INTERVAL_MS);
                 groupPoll.unref?.();
               } else if (stdioReleased) {
-                failTimeout();
-                return;
+                failTimeout(false);
               } else {
-                onStdioReleased = () => failTimeout();
+                onStdioReleased = () => failTimeout(false);
               }
-              finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
-              finishWatchdog.unref?.();
             });
           });
           return;
@@ -365,25 +373,20 @@ function execFileOnce(
         }
         if (groupEmpty()) {
           // 组已清空(直接进程与全部后代都已退出,回调只是被继承的 stdio 拖住)
-          failTimeout();
+          failTimeout(true);
           return;
         }
         groupPoll = setInterval(() => {
-          if (groupEmpty()) failTimeout();
+          if (groupEmpty()) failTimeout(true);
         }, POSIX_GROUP_POLL_INTERVAL_MS);
         groupPoll.unref?.();
         reaper = setTimeout(() => {
           // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL。注意信号发送成功 ≠ 进程组
-          // 已消失——将死进程在被内核回收前仍可能短暂持有 Git 锁。硬杀收尾后
-          // 组已空才收口;未空则继续由 groupPoll 轮询确认清空,极端不可杀
-          // (如 D 状态)由有界看门狗收口,不让 Promise 永悬。
+          // 已消失——将死进程在被内核回收前仍可能短暂持有 Git 锁。硬杀后组是否
+          // 清空仍由 groupPoll 持续探测,清空按 terminated 收口;极端不可杀
+          // (如 D 状态)由入口处武装的总看门狗按 cleanup unconfirmed 收口。
           killProcessTree(child.pid, child, () => {
-            if (groupEmpty()) {
-              failTimeout();
-              return;
-            }
-            finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
-            finishWatchdog.unref?.();
+            if (groupEmpty()) failTimeout(true);
           });
         }, POSIX_KILL_GRACE_MS);
         reaper.unref?.();
