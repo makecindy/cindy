@@ -74,6 +74,8 @@ export interface GitExecOpts {
 const POSIX_KILL_GRACE_MS = 1_500;
 /** POSIX 宽限期内探测进程组是否清空的轮询间隔。 */
 const POSIX_GROUP_POLL_INTERVAL_MS = 100;
+/** 硬杀完成后等待后代真正退净(stdio 放手/进程组消失)的有界看门狗。 */
+const DESCENDANT_SETTLE_WAIT_MS = 1_500;
 
 /**
  * 执行一次 git, 不做 dubious-ownership 自动重试(底层用)。
@@ -95,12 +97,17 @@ function execFileOnce(
     let timer: ReturnType<typeof setTimeout> | undefined;
     let reaper: ReturnType<typeof setTimeout> | undefined;
     let groupPoll: ReturnType<typeof setInterval> | undefined;
+    let finishWatchdog: ReturnType<typeof setTimeout> | undefined;
+    // Windows 收尾用:execFile 回调已到 = 全部继承 stdio 的进程都已退出/放手。
+    let stdioReleased = false;
+    let onStdioReleased: (() => void) | undefined;
     const settle = (fn: () => void) => {
       if (settled) return;
       settled = true;
       if (timer !== undefined) clearTimeout(timer);
       if (reaper !== undefined) clearTimeout(reaper);
       if (groupPoll !== undefined) clearInterval(groupPoll);
+      if (finishWatchdog !== undefined) clearTimeout(finishWatchdog);
       fn();
     };
 
@@ -123,8 +130,12 @@ function execFileOnce(
       spawnOptions,
       (err, stdout, stderr) => {
         if (timedOut) {
-          // 超时路径已接管:最终 reject 只在进程组确认清空或硬杀收尾后发生,
-          // 这里直接丢弃迟到结果(操作已按超时定性),绝不提前 settle。
+          // 超时路径已接管:最终 reject 只在进程树确认退净后发生,这里直接丢弃
+          // 迟到结果(操作已按超时定性),绝不提前 settle。此刻回调的意义只剩一个
+          // 信号:stdio 流已关闭 = 全部继承句柄的后代都已退出/放手——通知
+          // Windows 收尾流程可以收口了。
+          stdioReleased = true;
+          onStdioReleased?.();
           return;
         }
         // execFile 默认 encoding 是 'utf8' → stdout/stderr 是 string;
@@ -185,10 +196,21 @@ function execFileOnce(
             ),
           );
         if (process.platform === 'win32') {
-          // 复用 proc-util killProcessTree:taskkill /pid <pid> /T /F 整树终止,
-          // 带重试与后代兜底枚举;树杀流程收尾后再收口,保证后续 worktree git
-          // 操作不会与残留后代并发。
-          killProcessTree(child.pid, child, () => failTimeout());
+          // 复用 proc-util killProcessTree(taskkill /T /F,带重试与后代兜底)。
+          // 注意它在直接 git.exe 已退出时会按 pid 复用防线就地收束(不按 ppid
+          // 枚举后代,防误杀)——此时继承 stdio 的 credential helper 等后代可能
+          // 仍存活。这里用 execFile 回调作为「后代已放开继承句柄」的第一方
+          // 信号:回调已到才收口,否则等回调(或有界看门狗)再收口,保证收口时
+          // 后代不再持有继承的标准流,后续 git 操作不与之并发争锁。
+          killProcessTree(child.pid, child, () => {
+            if (stdioReleased) {
+              failTimeout();
+              return;
+            }
+            onStdioReleased = () => failTimeout();
+            finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
+            finishWatchdog.unref?.();
+          });
           return;
         }
         // POSIX:git 以 detached 自成进程组长——deadline 处对整组 SIGTERM,
@@ -231,9 +253,18 @@ function execFileOnce(
         }, POSIX_GROUP_POLL_INTERVAL_MS);
         groupPoll.unref?.();
         reaper = setTimeout(() => {
-          // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL(内核级立即生效),收尾
-          // 回调里再收口。
-          killProcessTree(child.pid, child, () => failTimeout());
+          // 忽略 SIGTERM 的顽固存活者:整组 SIGKILL。注意信号发送成功 ≠ 进程组
+          // 已消失——将死进程在被内核回收前仍可能短暂持有 Git 锁。硬杀收尾后
+          // 组已空才收口;未空则继续由 groupPoll 轮询确认清空,极端不可杀
+          // (如 D 状态)由有界看门狗收口,不让 Promise 永悬。
+          killProcessTree(child.pid, child, () => {
+            if (groupEmpty()) {
+              failTimeout();
+              return;
+            }
+            finishWatchdog = setTimeout(() => failTimeout(), DESCENDANT_SETTLE_WAIT_MS);
+            finishWatchdog.unref?.();
+          });
         }, POSIX_KILL_GRACE_MS);
         reaper.unref?.();
       }, timeoutMs);

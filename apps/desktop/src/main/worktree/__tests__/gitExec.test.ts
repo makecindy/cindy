@@ -116,7 +116,7 @@ afterEach(() => {
 });
 
 describe('gitExec timeoutMs', () => {
-  it('Windows 超时 → killProcessTree 整树终止,树杀收尾后 Promise 稳定收口(git 回调永不到来)', async () => {
+  it('Windows 超时 → killProcessTree 后等 stdio 放手(execFile 回调)才收口', async () => {
     setPlatform('win32');
     const state = installExecFileMock();
     mocks.killProcessTree.mockImplementation(
@@ -124,17 +124,41 @@ describe('gitExec timeoutMs', () => {
     );
 
     const p = gitExec(['fetch', 'origin', 'main'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
     const expectation = expect(p).rejects.toMatchObject({
       name: 'GitExecError',
       exitCode: null,
       stderr: expect.stringContaining('timed out after 1000ms'),
     });
     vi.advanceTimersByTime(1000);
-    await expectation;
-
+    await flushMicrotasks();
     expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
+    // taskkill 收尾但 stdio 未关(继承句柄的 credential helper 可能仍在)→ 不收口
+    expect(s.settled).toBe(false);
+
+    // 回调到达 = 全部句柄持有者退出/放手 → 收口
+    state.gitCb!(new Error('killed'), '', '');
+    await expectation;
     // Windows 不开 detached(语义是脱离控制台,树杀走 taskkill /T)
     expect(state.gitOpts?.detached).toBe(false);
+  });
+
+  it('Windows 超时且 stdio 一直不放手(git 回调永不到来)→ 有界看门狗兜底收口', async () => {
+    setPlatform('win32');
+    installExecFileMock();
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 1000 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+    vi.advanceTimersByTime(1000);
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+
+    vi.advanceTimersByTime(1_500);
+    await expectation;
   });
 
   it('POSIX 超时 → 整组 SIGTERM;直接 git 已 exit 但后代仍存活 → 不提前收口,组清空才收口', async () => {
@@ -165,10 +189,10 @@ describe('gitExec timeoutMs', () => {
     expect(mocks.killProcessTree).not.toHaveBeenCalled();
   });
 
-  it('POSIX 宽限期到点组仍未清空 → killProcessTree 整组 SIGKILL,兜底收尾后才收口', async () => {
+  it('POSIX 宽限期到点整组 SIGKILL → 硬杀后组仍在(将死进程)不立即收口,组消失才收口', async () => {
     setPlatform('linux');
     const state = installExecFileMock();
-    installProcessKillMock(); // group.alive 始终 true
+    const { group } = installProcessKillMock(); // group.alive 始终 true
     mocks.killProcessTree.mockImplementation(
       (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
     );
@@ -181,10 +205,36 @@ describe('gitExec timeoutMs', () => {
     await flushMicrotasks();
     expect(s.settled).toBe(false);
 
-    // 组内进程忽略 SIGTERM,宽限期到点 → 整组硬杀,收尾回调触发收口
+    // 宽限期到点 → 整组硬杀;SIGKILL 发送成功 ≠ 组已消失,仍不许收口
+    vi.advanceTimersByTime(1_500);
+    await flushMicrotasks();
+    expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
+    expect(s.settled).toBe(false);
+
+    // 将死进程被内核回收、组消失 → 轮询确认后收口
+    group.alive = false;
+    vi.advanceTimersByTime(100);
+    await expectation;
+  });
+
+  it('POSIX 硬杀后组始终不消失(不可杀进程)→ 有界看门狗收口,Promise 不永悬', async () => {
+    setPlatform('linux');
+    installExecFileMock();
+    installProcessKillMock(); // group.alive 始终 true
+    mocks.killProcessTree.mockImplementation(
+      (_pid: number, _child: unknown, onSettled?: () => void) => onSettled?.(),
+    );
+
+    const p = gitExec(['fetch'], '/repo', { timeoutMs: 500 });
+    const s = probe(p);
+    const expectation = expect(p).rejects.toBeInstanceOf(GitExecError);
+
+    vi.advanceTimersByTime(500 + 1_500);
+    await flushMicrotasks();
+    expect(s.settled).toBe(false);
+
     vi.advanceTimersByTime(1_500);
     await expectation;
-    expect(mocks.killProcessTree).toHaveBeenCalledWith(4242, state.child, expect.any(Function));
   });
 
   it('POSIX 超时时进程组已清空(回调被继承的 stdio 拖住)→ 直接收口,不发终止信号', async () => {

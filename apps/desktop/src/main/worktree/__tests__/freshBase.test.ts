@@ -220,6 +220,20 @@ describe('resolveFreshSourceBranch', () => {
     }
   });
 
+  it('总预算 ≤0 → 不发起任何网络操作(0/负数不传给 gitExec),纯本地元数据回退', async () => {
+    mocks.impl = (args) => {
+      const key = args.join(' ');
+      if (key === 'remote get-url origin') return 'git@github.com:me/repo.git';
+      if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
+      if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
+      return undefined;
+    };
+    const res = await resolveFreshSourceBranch(REPO, 'feature-x', 0);
+    expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+    expect(call('ls-remote')).toBeUndefined();
+    expect(call('fetch')).toBeUndefined();
+  });
+
   it('无任何 remote → 回退 fallback', async () => {
     mocks.impl = () => undefined;
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');

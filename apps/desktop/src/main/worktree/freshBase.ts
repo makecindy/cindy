@@ -62,6 +62,8 @@ async function tryGit(
 export async function resolveFreshSourceBranch(
   baseRepo: string,
   fallback: string,
+  /** 网络总预算覆盖(测试注入/调优用);≤0 表示不做任何网络操作,纯本地回退。 */
+  totalBudgetMs: number = NET_TOTAL_BUDGET_MS,
 ): Promise<FreshSourceResolution> {
   let remote: 'upstream' | 'origin' | null = null;
   if ((await tryGit(['remote', 'get-url', 'upstream'], baseRepo)) !== null) {
@@ -72,18 +74,24 @@ export async function resolveFreshSourceBranch(
   if (!remote) return { sourceBranch: fallback, fetched: false, reason: 'no-remote' };
 
   // ls-remote 与 fetch 共享一个 deadline:任何一步耗掉的时间都从总预算里扣。
-  const netDeadline = Date.now() + NET_TOTAL_BUDGET_MS;
+  const netDeadline = Date.now() + totalBudgetMs;
   const remainingBudgetMs = () => netDeadline - Date.now();
 
   // 远端真值:`ls-remote --symref <remote> HEAD` 首行形如 `ref: refs/heads/main\tHEAD`。
-  let defaultBranch =
-    (
-      await tryGit(
-        ['ls-remote', '--symref', remote, 'HEAD'],
-        baseRepo,
-        boundedNetworkGitOpts(Math.min(LS_REMOTE_TIMEOUT_MS, remainingBudgetMs())),
-      )
-    )?.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m)?.[1] ?? null;
+  // 预算必须为正才发起网络操作——0/负数传给 gitExec 语义是「不超时」,恰好把
+  // 总预算击穿成无界等待;预算耗尽直接走下面的本地元数据回退。
+  let defaultBranch: string | null = null;
+  const lsRemoteBudgetMs = Math.min(LS_REMOTE_TIMEOUT_MS, remainingBudgetMs());
+  if (lsRemoteBudgetMs > 0) {
+    defaultBranch =
+      (
+        await tryGit(
+          ['ls-remote', '--symref', remote, 'HEAD'],
+          baseRepo,
+          boundedNetworkGitOpts(lsRemoteBudgetMs),
+        )
+      )?.match(/^ref:\s+refs\/heads\/(\S+)\s+HEAD$/m)?.[1] ?? null;
+  }
   // 离线/超时退本地元数据(可能过期,但仍好过本地工作分支)。
   if (!defaultBranch) {
     defaultBranch =
