@@ -859,7 +859,52 @@ describe('contacts sync runtime ownership', () => {
         ?.peerSupportsMergeRedirects,
     ).toBe(true);
 
-    // 同一 deviceId 若换成旧版运行，缺失 capability 的回包必须立即降级。
+    // 已协商设备离线后，旧版进程可能用同一 deviceId 与固定公钥重新上线。
+    // presence-online 会在入站 key 之前主动发送，必须已按未知端降级。
+    driver.handleContactsPeerPresenceChanged({
+      deviceId: 'peer-device',
+      online: false,
+    });
+    harness.encodeContactsSyncMessage.mockClear();
+    driver.handleContactsPeerPresenceChanged({
+      deviceId: 'peer-device',
+      online: true,
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(false);
+
+    // 重新协商后，再验证缺失 capability 的单条回包也会立即降级。
+    harness.encodeContactsSyncMessage.mockClear();
+    harness.decoderAccept.mockResolvedValueOnce({
+      version: 1,
+      type: 'applied-state',
+      changed: false,
+      clocks: [],
+      mergeClocks: [],
+      requestReply: true,
+      capabilities: ['merge-redirects-v1'],
+    });
+    driver.handleIncomingContactsRelayFrame('peer-device', {
+      version: 1,
+      type: 'cipher-chunk',
+      senderPublicKey: 'peer-public',
+      transferId: 'capable-peer-again',
+      index: 0,
+      total: 1,
+      iv: 'iv',
+      tag: 'tag',
+      compression: 'gzip',
+      data: 'data',
+    });
+    await vi.waitFor(() => expect(harness.encodeContactsSyncMessage).toHaveBeenCalled());
+    expect(
+      harness.encodeContactsSyncMessage.mock.calls.at(-1)?.[0]?.database
+        ?.peerSupportsMergeRedirects,
+    ).toBe(true);
+
     harness.encodeContactsSyncMessage.mockClear();
     harness.decoderAccept.mockResolvedValueOnce({
       version: 1,

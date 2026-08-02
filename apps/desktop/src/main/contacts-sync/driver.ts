@@ -538,6 +538,7 @@ export function handleContactsPeerPresenceChanged(peer: {
     respondedToKeyAnnouncement.delete(peer.deviceId);
     peerKnownClocks.delete(peer.deviceId);
     peerKnownMergeClocks.delete(peer.deviceId);
+    peersSupportingMergeRedirects.delete(peer.deviceId);
   }
   refreshOnlineCount();
   if (!peer.online || !isEnabled() || !transport?.isPeerAllowed(peer.deviceId)) return;
