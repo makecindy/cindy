@@ -76,6 +76,9 @@ describe('imageCacheStore.copyFromPath — extension preservation', () => {
     expect(await copiedExt('lib.jar')).toBe('.bin');
     expect(await copiedExt('script.cmd')).toBe('.bin');
     expect(await copiedExt('script.ps1')).toBe('.bin');
+    expect(await copiedExt('script.js')).toBe('.bin');
+    expect(await copiedExt('script.py')).toBe('.bin');
+    expect(await copiedExt('update.msu')).toBe('.bin');
   });
 
   it('round-trips setup.exe → .bin cache → Save As setup.exe without opening it', async () => {

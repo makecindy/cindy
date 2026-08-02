@@ -108,6 +108,24 @@ describe('saveChatAttachmentWithToasts', () => {
     expect(result).toBe('saved');
   });
 
+  it('stages a dangerous legacy source path even when its persisted display name is safe', async () => {
+    const deps = makeDeps();
+    const result = await saveChatAttachmentWithToasts(
+      { origin: { kind: 'local' }, workingDir: 'C:\\work' },
+      { name: 'attachment', path: 'C:\\Downloads\\setup.exe' },
+      deps,
+    );
+    expect(deps.stageDangerous).toHaveBeenCalledWith({
+      sourcePath: 'C:\\Downloads\\setup.exe',
+      suggestedName: 'attachment',
+    });
+    expect(deps.saveAs).toHaveBeenCalledWith({
+      sourcePath: 'C:\\cache\\staged-setup.exe.bin',
+      suggestedName: 'attachment',
+    });
+    expect(result).toBe('saved');
+  });
+
   it('fetches a remote copy first and warns when the type is unsupported locally', async () => {
     const deps = makeDeps({ platform: 'darwin' });
     const origin = { kind: 'device' as const, deviceId: 'device-1' };

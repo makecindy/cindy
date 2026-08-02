@@ -101,7 +101,7 @@ export async function saveChatAttachmentWithToasts(
   // cache on demand before invoking the cache-only Save As handler.
   if (
     !isRemoteFileOrigin(ctx.origin) &&
-    isDangerousAttachmentName(file.name) &&
+    (isDangerousAttachmentName(file.name) || isDangerousAttachmentName(sourcePath)) &&
     attachmentExtension(sourcePath) !== '.bin'
   ) {
     try {

@@ -201,6 +201,7 @@ import {
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
 import { createChatAttachmentStageHandler } from './chatAttachmentStage';
 import {
+  getChatAttachmentCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
 } from './file-browser/remote-file-cache';
@@ -5054,6 +5055,7 @@ const registerIpcHandlers = () => {
     getDownloadsDir: () => app.getPath('downloads'),
     getAllowedSourceRoots: () => [
       imageCacheStore.getCacheRoot(),
+      getChatAttachmentCacheRoot(),
       getRemoteFileCacheRoot(),
     ],
   });

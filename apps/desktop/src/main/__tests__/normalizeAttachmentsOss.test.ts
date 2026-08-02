@@ -378,7 +378,7 @@ describe('materializeQueuedOssAttachments — 出方向 files[] + persistedConte
 });
 
 describe('materializeDirectSendOssAttachments — message + persistUserMessage 一次性物化', () => {
-  it('同一危险文件只下载一次，agent path 与持久路径同时落到 .bin 后再删 OSS', async () => {
+  it('同一危险文件只下载一次，agent path 与持久路径同时落到 .bin，发送 accepted 后才删 OSS', async () => {
     const ref = buildAttachmentOssRef({
       ossKey: 'oss/setup.bin',
       mimeType: 'application/octet-stream',
@@ -425,6 +425,9 @@ describe('materializeDirectSendOssAttachments — message + persistUserMessage �
     assert.equal(downloadToFile.mock.calls.length, 1);
     const copyArgs = copyFromPath.mock.calls[0]?.[0] as { originalName?: unknown } | undefined;
     assert.equal(copyArgs?.originalName, 'setup.exe');
+    assert.equal(removeRemote.mock.calls.length, 0);
+    assert.equal(typeof out.cleanupAfterAcceptance, 'function');
+    out.cleanupAfterAcceptance?.();
     const removeCalls = removeRemote.mock.calls as unknown[][];
     assert.equal(removeCalls.length, 1);
     assert.equal(removeCalls[0]?.[0], 'oss/setup.bin');

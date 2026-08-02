@@ -26,6 +26,7 @@ import { createLogger } from '../logger.js';
 const log = createLogger('file-browser/remote-cache');
 
 const CACHE_DIR_NAME = 'remote-file-cache';
+const CHAT_ATTACHMENT_CACHE_DIR_NAME = 'chat-attachment-cache';
 /** LRU 字节上限:4GB——够放两个 2GB 文件,超出按最旧访问逐出。 */
 const MAX_CACHE_BYTES = 4 * 1024 * 1024 * 1024;
 
@@ -50,6 +51,18 @@ function cacheDir(): string {
 
 export function getRemoteFileCacheRoot(): string {
   return cacheDir();
+}
+
+function chatAttachmentCacheDir(): string {
+  return path.join(app.getPath('userData'), CHAT_ATTACHMENT_CACHE_DIR_NAME);
+}
+
+/**
+ * Chat history persists staged attachment paths, so this root must not share the
+ * bounded remote-file LRU whose entries are disposable fetch copies.
+ */
+export function getChatAttachmentCacheRoot(): string {
+  return chatAttachmentCacheDir();
 }
 
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */
@@ -221,12 +234,12 @@ export async function stageLocalFileToCache(params: {
   expectedSize: bigint;
   copyTo(targetPath: string): Promise<void>;
 }): Promise<string> {
-  await fs.mkdir(cacheDir(), { recursive: true });
+  await fs.mkdir(chatAttachmentCacheDir(), { recursive: true });
   const base = shortenKeepExt(
     sanitizeBaseName(path.basename(params.suggestedName)) || 'attachment',
     80,
   );
-  const dest = path.join(cacheDir(), `${randomUUID()}-${base}.bin`);
+  const dest = path.join(chatAttachmentCacheDir(), `${randomUUID()}-${base}.bin`);
   const tmp = `${dest}.part`;
   try {
     await params.copyTo(tmp);
@@ -237,7 +250,6 @@ export async function stageLocalFileToCache(params: {
       );
     }
     await fs.rename(tmp, dest);
-    await evictLru(dest);
     return dest;
   } finally {
     await fs.rm(tmp, { force: true }).catch(() => undefined);

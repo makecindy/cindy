@@ -7759,12 +7759,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         message,
         sendOpts,
       );
-      return await sendToAgentAcceptedUnlocked(
+      const result = await sendToAgentAcceptedUnlocked(
         sessionId,
         materialized.message,
         createOpts,
         materialized.sendOpts,
       );
+      if (result.accepted) materialized.cleanupAfterAcceptance?.();
+      return result;
     });
   };
 

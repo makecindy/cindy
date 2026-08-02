@@ -326,11 +326,12 @@ async function materializePersistedContent(
  * 无 OSS 引用(本机会话)→ 原样返回,零额外 IO。旧引用物化失败维持历史降级；新引用失败直接阻止入队。
  * OSS 删除放在 files[] + persistedContent 都物化之后,避免删早了另一副身取不到。
  */
-export async function materializeQueuedOssAttachments(
+async function materializeQueuedOssAttachmentsInternal(
   sessionId: string,
   item: unknown,
-): Promise<unknown> {
-  if (!item || typeof item !== 'object') return item;
+  deferCleanup: boolean,
+): Promise<{ item: unknown; cleanupAfterAcceptance?: () => void }> {
+  if (!item || typeof item !== 'object') return { item };
   const it = item as { files?: unknown; persistedContent?: unknown };
   const files = Array.isArray(it.files) ? it.files : null;
   const pcStr = typeof it.persistedContent === 'string' ? it.persistedContent : null;
@@ -343,10 +344,16 @@ export async function materializeQueuedOssAttachments(
         (isOssRefField((f as SerializedFileLike).url) ||
           isOssRefField((f as SerializedFileLike).path)),
     ) ?? false;
-  if (!filesHaveOss && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return item; // 无需物化 → 原样
+  if (!filesHaveOss && !(pcStr && persistedContentNeedsMaterialize(pcStr))) return { item }; // 无需物化 → 原样
 
   const byRef = new Map<string, MaterializedRef>(); // 引用串 → 物化结果(同串只下载/拷贝+入库一次)
   const ossKeys = new Set<string>();
+  let cleanedUp = false;
+  const cleanupOss = () => {
+    if (cleanedUp) return;
+    cleanedUp = true;
+    for (const key of ossKeys) void removeRemote(key);
+  };
   // 可入总仓的媒体(图片等白名单 mime)→ ingest 进 cindy-media 并直接挂
   // session-attachment 引用(入队消息没有草稿期,等价老 lifecycle committed);
   // 媒体附件统一走总仓 ingest(规则 25)。
@@ -472,10 +479,25 @@ export async function materializeQueuedOssAttachments(
       : it.persistedContent;
 
     // files[] 与 persistedContent 都物化完才删 OSS(每个 key 删一次,best-effort 不阻塞)。
-    return { ...(it as object), ...(files ? { files: nextFiles } : {}), persistedContent: nextPc };
+    const materializedItem = {
+      ...(it as object),
+      ...(files ? { files: nextFiles } : {}),
+      persistedContent: nextPc,
+    };
+    return {
+      item: materializedItem,
+      ...(deferCleanup && ossKeys.size > 0 ? { cleanupAfterAcceptance: cleanupOss } : {}),
+    };
   } finally {
-    for (const k of ossKeys) void removeRemote(k);
+    if (!deferCleanup) cleanupOss();
   }
+}
+
+export async function materializeQueuedOssAttachments(
+  sessionId: string,
+  item: unknown,
+): Promise<unknown> {
+  return (await materializeQueuedOssAttachmentsInternal(sessionId, item, false)).item;
 }
 
 /**
@@ -484,14 +506,19 @@ export async function materializeQueuedOssAttachments(
  * sendOpts.persistUserMessage.content stored in the local transcript.
  *
  * Reuse the queued materializer through a temporary files[] projection so both
- * shapes share one download per OSS reference and remote objects are removed
- * only after both projections point at durable local copies.
+ * shapes share one download per OSS reference. Cleanup is returned to the
+ * caller and must run only after maker:send reports accepted=true, so a
+ * pre-accept rejection can retry the original OSS references.
  */
 export async function materializeDirectSendOssAttachments(
   sessionId: string,
   message: unknown,
   sendOpts: unknown,
-): Promise<{ message: unknown; sendOpts: unknown }> {
+): Promise<{
+  message: unknown;
+  sendOpts: unknown;
+  cleanupAfterAcceptance?: () => void;
+}> {
   if (!message || typeof message !== 'object' || Array.isArray(message)) {
     return { message, sendOpts };
   }
@@ -537,10 +564,15 @@ export async function materializeDirectSendOssAttachments(
     return { message, sendOpts };
   }
 
-  const projected = (await materializeQueuedOssAttachments(sessionId, {
-    files: projectedFiles,
-    ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
-  })) as { files?: unknown; persistedContent?: unknown };
+  const materialized = await materializeQueuedOssAttachmentsInternal(
+    sessionId,
+    {
+      files: projectedFiles,
+      ...(typeof persistedContent === 'string' ? { persistedContent } : {}),
+    },
+    true,
+  );
+  const projected = materialized.item as { files?: unknown; persistedContent?: unknown };
   const materializedFiles = Array.isArray(projected.files) ? projected.files : projectedFiles;
   const nextContent = [...msg.content];
   for (let index = 0; index < attachmentIndexes.length; index += 1) {
@@ -587,6 +619,9 @@ export async function materializeDirectSendOssAttachments(
   return {
     message: { ...msg, content: nextContent },
     sendOpts: nextSendOpts,
+    ...(materialized.cleanupAfterAcceptance
+      ? { cleanupAfterAcceptance: materialized.cleanupAfterAcceptance }
+      : {}),
   };
 }
 
