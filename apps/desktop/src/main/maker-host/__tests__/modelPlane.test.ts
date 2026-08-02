@@ -424,6 +424,46 @@ describe('retired tombstone 与 discovery 回补', () => {
 });
 
 describe('本地 override(local 永远最高)', () => {
+  it('已有条目仅修改 sortOrder 也立即重排,但 xAI 双 root 保留声明顺序', () => {
+    setActiveCatalog(
+      baseCatalog([
+        gpt6Entry({
+          id: 'openai/gpt-a',
+          status: undefined,
+          sortOrder: 20,
+          routes: [{ providerId: 'openai', modelId: 'gpt-a', agents: ['codex'] }],
+        }),
+        gpt6Entry({
+          id: 'openai/gpt-b',
+          status: undefined,
+          sortOrder: 10,
+          routes: [{ providerId: 'openai', modelId: 'gpt-b', agents: ['codex'] }],
+        }),
+      ]),
+    );
+    setDiscoveredCodexModels([
+      { id: 'gpt-a', name: 'A', contextWindow: 1, efforts: [], defaultEffort: null },
+      { id: 'gpt-b', name: 'B', contextWindow: 1, efforts: [], defaultEffort: null },
+    ]);
+    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-b', 'gpt-a']);
+
+    const xaiOrder = models('xai', 'codex').map((model) => model.id);
+    const [firstXai, secondXai] = xaiOrder;
+    if (!firstXai || !secondXai) throw new Error('expected at least two bundled xAI models');
+    setLocalCatalogOverrides(
+      overridesOf({
+        patches: {
+          'openai:gpt-a': { base: { sortOrder: 1 } },
+          'openai:gpt-b': { base: { sortOrder: 30 } },
+          [`xai:${firstXai}`]: { base: { sortOrder: 999 } },
+          [`xai:${secondXai}`]: { base: { sortOrder: -1 } },
+        },
+      }),
+    );
+    expect(models('openai', 'codex').map((model) => model.id)).toEqual(['gpt-a', 'gpt-b']);
+    expect(models('xai', 'codex').map((model) => model.id)).toEqual(xaiOrder);
+  });
+
   it('一条 perAgent.codex patch 只修 xAI Codex 档位,claude root 与 pi 镜像不动', () => {
     setActiveCatalog(baseCatalog([grokEntry()]));
     setLocalCatalogOverrides(

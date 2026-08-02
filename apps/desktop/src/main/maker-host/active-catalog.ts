@@ -487,8 +487,8 @@ function sortModelsByOrder(models: CatalogModel[]): CatalogModel[] {
  * root 装配:registry plan(overlay / 实体化 / retired 标记)→ 本地 override
  * (addition 整条胜 + patch 逐字段)→ retired 复标——patch 改 status 也压不掉
  * 远端 tombstone,唯一复活通道是完整 local addition(hasLocalAddition 豁免)。
- * 追加了新实体时默认按 sortOrder 稳定重排；xAI legacy 根保留 Registry 声明顺序，
- * 与服务端投影给旧客户端的数组保持逐项兼容。
+ * overlay / 本地 patch 合并后始终按最终 sortOrder 稳定重排；xAI legacy 根保留
+ * Registry 声明顺序，与服务端投影给旧客户端的数组保持逐项兼容。
  */
 function assembleRoot(
   providerId: string,
@@ -509,7 +509,7 @@ function assembleRoot(
         : m,
     );
   }
-  return !preserveDeclarationOrder && out.length !== models.length ? sortModelsByOrder(out) : out;
+  return preserveDeclarationOrder ? out : sortModelsByOrder(out);
 }
 
 /** 把 provider 的全部 per-agent 模型清单清零(保留身份卡);已为空则原样返回。 */
@@ -606,7 +606,7 @@ function computeMerged(): Catalog {
     }
     if (p.id === 'anthropic') {
       const seed = anthropicModels.length > 0 ? anthropicModels : (p.models['claude-code'] ?? []);
-      const root = sortModelsByOrder(assembleRoot('anthropic', 'claude-code', seed, plan));
+      const root = assembleRoot('anthropic', 'claude-code', seed, plan);
       const remoteExcluded =
         plan.roots.get(rootPlanKey('anthropic', 'claude-code'))?.bridgeExcluded ??
         new Set<string>();

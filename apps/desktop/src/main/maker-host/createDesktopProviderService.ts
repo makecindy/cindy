@@ -32,6 +32,7 @@ import {
   type Catalog,
   type CatalogIO,
   type CatalogSourceConfig,
+  type ModelRegistry,
 } from '@cindy/model-providers';
 
 import { createLogger } from '../logger.js';
@@ -255,6 +256,36 @@ function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
   return `${file}.${process.pid}.${nonce}.tmp`;
 }
 
+type ModelRegistryRevisionRelation = 'newer' | 'older' | 'same' | 'conflict' | 'invalid-incoming';
+
+/**
+ * 按时间语义比较两个完整 Registry 快照。服务端应发送 canonical UTC ISO，但守卫仍
+ * 接受 Date.parse 能表达的等价时区写法；同一时刻做 digest 时先把 updatedAt 归一化，
+ * 避免仅表示法不同被误报成非法改写。
+ */
+function compareModelRegistryRevisions(
+  incoming: ModelRegistry,
+  current: ModelRegistry,
+): ModelRegistryRevisionRelation {
+  const incomingRevision = Date.parse(incoming.updatedAt);
+  if (!Number.isFinite(incomingRevision)) return 'invalid-incoming';
+  const currentRevision = Date.parse(current.updatedAt);
+  if (!Number.isFinite(currentRevision)) return 'newer';
+  if (incomingRevision < currentRevision) return 'older';
+  if (incomingRevision > currentRevision) return 'newer';
+
+  const canonicalUpdatedAt = new Date(incomingRevision).toISOString();
+  const incomingDigest = modelRegistryCanonicalJson({
+    ...incoming,
+    updatedAt: canonicalUpdatedAt,
+  });
+  const currentDigest = modelRegistryCanonicalJson({
+    ...current,
+    updatedAt: canonicalUpdatedAt,
+  });
+  return incomingDigest === currentDigest ? 'same' : 'conflict';
+}
+
 /** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
 async function serializeCatalogLkgWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
   const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
@@ -276,25 +307,13 @@ function selectCatalogLkgSnapshot(incoming: string, current: string | null): str
   try {
     const incomingRegistry = parseCatalog(incoming).modelRegistry;
     const currentRegistry = parseCatalog(current).modelRegistry;
-    const incomingUpdatedAt = incomingRegistry?.updatedAt;
-    const currentUpdatedAt = currentRegistry?.updatedAt;
-    const incomingRevision = incomingUpdatedAt ? Date.parse(incomingUpdatedAt) : Number.NaN;
-    const currentRevision = currentUpdatedAt ? Date.parse(currentUpdatedAt) : Number.NaN;
-    if (
-      incomingRegistry &&
-      currentRegistry &&
-      incomingUpdatedAt === currentUpdatedAt &&
-      modelRegistryCanonicalJson(incomingRegistry) !== modelRegistryCanonicalJson(currentRegistry)
-    ) {
-      // 同 revision 异 Registry 不能覆盖磁盘 LKG；否则下一次启动已经失去可对照的
-      // last-good，source 层的 tie guard 也无法再救回旧快照。
-      return current;
-    }
-    if (
-      Number.isFinite(currentRevision) &&
-      (!Number.isFinite(incomingRevision) || currentRevision > incomingRevision)
-    ) {
-      return current;
+    if (incomingRegistry && currentRegistry) {
+      const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
+      if (relation === 'older' || relation === 'conflict' || relation === 'invalid-incoming') {
+        // 同 revision 异 Registry 不能覆盖磁盘 LKG；否则下一次启动已经失去可对照的
+        // last-good，source 层的 tie guard 也无法再救回旧快照。
+        return current;
+      }
     }
   } catch {
     // An invalid current envelope payload is not an LKG; replace it with the already-validated input.
@@ -560,7 +579,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 /**
  * 重载模型平面(xAI 双 root 静态清单 + 统一 modelRegistry)。先确保启动期动态发现
  * 已完成,再复用同一 `loadCatalogWithSource` 源选择;bundled fallback 视为失败保
- * LKG。守卫序:realm/generation → updatedAt 单调 → 同 updatedAt 规范化 digest
+ * LKG。守卫序:realm/generation → updatedAt 时间单调 → 同一时刻规范化 digest
  * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
  * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
  * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
@@ -589,21 +608,25 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       const currentRegistry = getActiveCatalog().modelRegistry;
       const incomingRegistry = catalog.modelRegistry;
       if (currentRegistry && incomingRegistry) {
-        if (incomingRegistry.updatedAt < currentRegistry.updatedAt) {
+        const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
+        if (relation === 'older' || relation === 'same') {
+          // 旧版拒收；同版同内容纯 no-op。两者都不 commit，零 revision 零广播。
           return getActiveCatalog();
         }
-        if (incomingRegistry.updatedAt === currentRegistry.updatedAt) {
-          const incomingDigest = modelRegistryCanonicalJson(incomingRegistry);
-          const currentDigest = modelRegistryCanonicalJson(currentRegistry);
-          if (incomingDigest === currentDigest) {
-            // 同版同内容:纯 no-op,不 commit、零 revision 零广播。
-            return getActiveCatalog();
-          }
-          // 同 updatedAt 异内容 = 非法重发:拒收保当前快照并告警(telemetry 走日志管道)。
+        if (relation === 'invalid-incoming') {
+          log.warn('model registry updatedAt is invalid; rejecting', {
+            incomingUpdatedAt: incomingRegistry.updatedAt,
+            currentUpdatedAt: currentRegistry.updatedAt,
+          });
+          return getActiveCatalog();
+        }
+        if (relation === 'conflict') {
+          // 同一 revision 异内容 = 非法重发:拒收保当前快照并告警(telemetry 走日志管道)。
           log.warn(
-            'model registry republished the same updatedAt with different content; rejecting',
+            'model registry republished the same revision with different content; rejecting',
             {
-              updatedAt: incomingRegistry.updatedAt,
+              incomingUpdatedAt: incomingRegistry.updatedAt,
+              currentUpdatedAt: currentRegistry.updatedAt,
             },
           );
           return getActiveCatalog();

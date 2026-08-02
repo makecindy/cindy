@@ -18,6 +18,7 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -52,6 +53,14 @@ vi.mock('../../manifestService.js', () => ({
 vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
   getClientEndpoint: () => h.endpoint,
+}));
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: h.warn,
+    error: vi.fn(),
+  }),
 }));
 vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
@@ -128,6 +137,7 @@ import {
 } from '@cindy/model-providers';
 import {
   getActiveCatalog,
+  setActiveCatalog,
   setActiveCatalogChangedListener,
   setCustomProviders,
 } from '../active-catalog.js';
@@ -436,6 +446,40 @@ describe('provider catalog realm reload', () => {
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
     ).toEqual(activeXaiModels);
+  });
+
+  it('按时间语义守卫 offset/Z 等价 revision,拒收真实旧值和坏值,接受真实新值', async () => {
+    setActiveCatalog(catalogNamed('current-offset', '2026-08-02T10:00:00+08:00'));
+    h.warn.mockClear();
+
+    const refreshWith = async (name: string, updatedAt: string): Promise<void> => {
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: catalogNamed(name, updatedAt), source: 'remote' });
+      await refresh;
+    };
+
+    try {
+      // 同一时刻仅 ISO 表示不同：Registry 内容相同，应 no-op 且不误报警。
+      await refreshWith('equivalent-z', '2026-08-02T02:00:00.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(h.warn).not.toHaveBeenCalled();
+
+      await refreshWith('actually-older', '2026-08-02T01:59:59.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+
+      await refreshWith('actually-newer', '2026-08-02T03:00:00.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');
+
+      await refreshWith('invalid-revision', 'not-a-timestamp');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');
+      expect(h.warn).toHaveBeenCalledWith('model registry updatedAt is invalid; rejecting', {
+        incomingUpdatedAt: 'not-a-timestamp',
+        currentUpdatedAt: '2026-08-02T03:00:00.000Z',
+      });
+    } finally {
+      setActiveCatalog(catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'));
+    }
   });
 
   it('原子模型平面:成功刷新恰 1 revision;同 updatedAt 同 digest=no-op、异 digest=拒收,均 0 revision', async () => {
