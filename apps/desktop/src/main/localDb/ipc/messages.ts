@@ -58,6 +58,10 @@ const messageRowid = sql<number>`rowid`;
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
 
+const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT content
+   FROM messages
+  WHERE content LIKE '%chat-attachment-cache%'`;
+
 export interface EstimatedSessionValueEntry {
   clientId: string;
   money: RegionalMoney;
@@ -99,6 +103,20 @@ export async function listSessionPersistedChatAttachmentPaths(
     .where(eq(messages.sessionId, sessionId));
   return uniqueStrings(
     rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
+}
+
+/** Return all staged attachment paths retained by the current owner's message DB. */
+export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
+  const rows = await getDbClient().query<{ content: unknown }>(
+    PERSISTED_CHAT_ATTACHMENT_ROWS_SQL,
+  );
+  return uniqueStrings(
+    rows.flatMap((row) =>
+      typeof row.content === 'string'
+        ? extractChatAttachmentPathsFromPersistedContent(row.content)
+        : [],
+    ),
   );
 }
 

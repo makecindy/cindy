@@ -205,6 +205,7 @@ import {
   getChatAttachmentCacheRoot,
   getRemoteFileCacheRoot,
   stageLocalFileToCache,
+  sweepStagedChatAttachmentsOnStartup,
 } from './file-browser/remote-file-cache';
 import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
@@ -243,6 +244,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -5078,7 +5080,11 @@ const registerIpcHandlers = () => {
         close: () => handle.close(),
       };
     },
-    stageCopy: (params) => stageLocalFileToCache(params),
+    stageCopy: (params) => {
+      const ownerId = authManager.getAuthState().user?.id;
+      if (!ownerId) throw new Error('Cannot stage an attachment without an authenticated owner');
+      return stageLocalFileToCache({ ...params, ownerId });
+    },
   });
   ipcMain.handle(
     'chat-attachment:stage',
@@ -5901,6 +5907,26 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
+      try {
+        const protectedPaths = await listPersistedChatAttachmentPaths();
+        const result = await sweepStagedChatAttachmentsOnStartup({
+          ownerId: userId,
+          protectedPaths,
+          createdBeforeMs: PROCESS_STARTED_AT_MS,
+        });
+        if (result.removed > 0 || result.protected > 0) {
+          dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
+            ...result,
+            ownerId: userId,
+          });
+        }
+      } catch (err) {
+        dbClientLog.warn('[ChatAttachment] startup staged attachment sweep failed (non-fatal)', {
+          ownerId: userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。

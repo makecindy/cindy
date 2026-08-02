@@ -57,6 +57,15 @@ function chatAttachmentCacheDir(): string {
   return path.join(app.getPath('userData'), CHAT_ATTACHMENT_CACHE_DIR_NAME);
 }
 
+function chatAttachmentOwnerCacheDir(ownerId: string): string {
+  const ownerHash = createHash('sha256').update(ownerId).digest('hex').slice(0, 32);
+  return path.join(chatAttachmentCacheDir(), ownerHash);
+}
+
+export function getChatAttachmentOwnerCacheRoot(ownerId: string): string {
+  return chatAttachmentOwnerCacheDir(ownerId);
+}
+
 /**
  * Chat history persists staged attachment paths, so this root must not share the
  * bounded remote-file LRU whose entries are disposable fetch copies.
@@ -121,6 +130,65 @@ export async function cleanupStagedChatAttachments(
   filePaths: readonly string[],
 ): Promise<void> {
   await Promise.all(filePaths.map((filePath) => removeStagedChatAttachment(filePath)));
+}
+
+function normalizePathForComparison(filePath: string): string {
+  const resolved = path.resolve(filePath);
+  return process.platform === 'win32' ? resolved.toLowerCase() : resolved;
+}
+
+export interface StartupStagedChatAttachmentSweepResult {
+  inspected: number;
+  removed: number;
+  protected: number;
+}
+
+/**
+ * Remove abandoned dangerous-attachment staging files from the current
+ * account. Renderer drafts are intentionally in-memory only, so anything
+ * created by an earlier process and not referenced by persisted messages is
+ * unreachable after restart. Files created by this process are left alone to
+ * avoid racing a draft that is still being assembled.
+ */
+export async function sweepStagedChatAttachmentsOnStartup(params: {
+  ownerId: string;
+  protectedPaths: readonly string[];
+  createdBeforeMs: number;
+}): Promise<StartupStagedChatAttachmentSweepResult> {
+  const result: StartupStagedChatAttachmentSweepResult = {
+    inspected: 0,
+    removed: 0,
+    protected: 0,
+  };
+  const protectedPaths = new Set(params.protectedPaths.map(normalizePathForComparison));
+  const ownerDir = chatAttachmentOwnerCacheDir(params.ownerId);
+  const entries = await fs.readdir(ownerDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile() && !entry.isSymbolicLink()) continue;
+    if (!entry.name.endsWith('.bin') && !entry.name.endsWith('.bin.part')) continue;
+
+    const filePath = path.join(ownerDir, entry.name);
+    result.inspected += 1;
+    try {
+      const stat = await fs.lstat(filePath);
+      if (stat.mtimeMs >= params.createdBeforeMs) continue;
+      if (protectedPaths.has(normalizePathForComparison(filePath))) {
+        result.protected += 1;
+        continue;
+      }
+      await fs.unlink(filePath);
+      result.removed += 1;
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException | null)?.code;
+      if (code !== 'ENOENT') {
+        log.warn('startup staged chat attachment sweep failed for file', {
+          filePath,
+          error: String(err),
+        });
+      }
+    }
+  }
+  return result;
 }
 
 /** 路径身份前缀(不含 size/mtime):断线兜底按它捞最近副本。 */
@@ -288,16 +356,18 @@ export async function fetchRemoteFileToCache(
  * filename always ends in `.bin` so a stale/open-by-path path cannot execute it.
  */
 export async function stageLocalFileToCache(params: {
+  ownerId: string;
   suggestedName: string;
   expectedSize: bigint;
   copyTo(targetPath: string): Promise<void>;
 }): Promise<string> {
-  await fs.mkdir(chatAttachmentCacheDir(), { recursive: true });
+  const ownerDir = chatAttachmentOwnerCacheDir(params.ownerId);
+  await fs.mkdir(ownerDir, { recursive: true });
   const base = shortenKeepExt(
     sanitizeBaseName(path.basename(params.suggestedName)) || 'attachment',
     80,
   );
-  const dest = path.join(chatAttachmentCacheDir(), `${randomUUID()}-${base}.bin`);
+  const dest = path.join(ownerDir, `${randomUUID()}-${base}.bin`);
   const tmp = `${dest}.part`;
   try {
     await params.copyTo(tmp);
