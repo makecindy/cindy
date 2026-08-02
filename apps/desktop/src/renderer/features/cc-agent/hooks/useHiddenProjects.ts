@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useLayoutEffect, useMemo, useState } from 'react';
 
 import { normalizeProjectKey } from '../lib/projectGrouping';
 
@@ -26,13 +26,23 @@ export function useHiddenProjects(): UseHiddenProjectsReturn {
     normalizeHiddenProjectKeys(window.electronAPI.sidebarSettings.loadHiddenProjectKeys()),
   );
 
-  useEffect(
-    () =>
-      window.electronAPI.sidebarSettings.onHiddenProjectKeysChanged((projectKeys) => {
-        setHiddenProjectKeys(normalizeHiddenProjectKeys(projectKeys));
-      }),
-    [],
-  );
+  useLayoutEffect(() => {
+    const reconcile = (projectKeys: readonly string[]) => {
+      const next = normalizeHiddenProjectKeys(projectKeys);
+      setHiddenProjectKeys((current) => {
+        if (current.size !== next.size) return next;
+        for (const projectKey of next) {
+          if (!current.has(projectKey)) return next;
+        }
+        return current;
+      });
+    };
+    const unsubscribe = window.electronAPI.sidebarSettings.onHiddenProjectKeysChanged(reconcile);
+    // Subscribe before the second read so a change between render and effect
+    // is either delivered by the listener or recovered from this snapshot.
+    reconcile(window.electronAPI.sidebarSettings.loadHiddenProjectKeys());
+    return unsubscribe;
+  }, []);
 
   const setProjectHidden = useCallback(
     (projectKey: string, hidden: boolean) =>

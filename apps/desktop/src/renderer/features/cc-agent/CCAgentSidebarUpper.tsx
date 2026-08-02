@@ -1911,7 +1911,6 @@ function ExpandedView({
         description: t('ccAgent.sidebar.projectAction.removeFromSidebarConfirmDescription'),
         confirmText: t('ccAgent.sidebar.projectAction.removeFromSidebarConfirmAction'),
         autoFocusConfirm: true,
-        confirmVariant: 'destructive',
       });
       if (!confirmed) return;
       try {

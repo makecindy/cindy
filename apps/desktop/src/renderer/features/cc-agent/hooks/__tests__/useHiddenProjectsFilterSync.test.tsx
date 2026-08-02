@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 
-import { act, renderHook } from '@testing-library/react';
+import { act, renderHook, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PROJECTS_KEY, useSidebarFilter } from '../useSidebarFilter';
@@ -13,6 +13,7 @@ const PROJECT_B = 'local:/workspace/b';
 
 let hiddenProjectsListeners: HiddenProjectsListener[] = [];
 let initialHiddenProjectKeys: string[] = [];
+let hiddenProjectKeysBeforeListenerRegistration: string[] | null = null;
 
 function useSyncedSidebarFilter() {
   const { hiddenProjectKeys } = useHiddenProjects();
@@ -22,11 +23,15 @@ function useSyncedSidebarFilter() {
 beforeEach(() => {
   hiddenProjectsListeners = [];
   initialHiddenProjectKeys = [];
+  hiddenProjectKeysBeforeListenerRegistration = null;
   window.localStorage.clear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     sidebarSettings: {
       loadHiddenProjectKeys: () => initialHiddenProjectKeys,
       onHiddenProjectKeysChanged: (listener: HiddenProjectsListener) => {
+        if (hiddenProjectKeysBeforeListenerRegistration !== null) {
+          initialHiddenProjectKeys = hiddenProjectKeysBeforeListenerRegistration;
+        }
         hiddenProjectsListeners.push(listener);
         return () => {
           hiddenProjectsListeners = hiddenProjectsListeners.filter((entry) => entry !== listener);
@@ -95,5 +100,19 @@ describe('hidden-project filter synchronization', () => {
 
     expect(view.result.current.projects).toBe('all');
     expect(JSON.parse(window.localStorage.getItem(PROJECTS_KEY) ?? 'null')).toBe('all');
+  });
+
+  it('recovers a snapshot change that happened before listener registration', async () => {
+    hiddenProjectKeysBeforeListenerRegistration = [PROJECT_A];
+
+    const view = renderHook(() => useHiddenProjects());
+
+    await waitFor(() => {
+      expect([...view.result.current.hiddenProjectKeys]).toEqual([PROJECT_A]);
+    });
+    expect(hiddenProjectsListeners).toHaveLength(1);
+
+    view.unmount();
+    expect(hiddenProjectsListeners).toHaveLength(0);
   });
 });

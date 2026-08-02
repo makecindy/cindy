@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { SEARCH_SORT_BY_KEY, __resetSearchSortByStoreForTests } from '../conversationSearchPrefs';
 import { SearchFilterMenu, useConversationSearch } from '../ConversationSearchBox';
 import { searchConversations } from '@/lib/conversationSearchService';
+import type { ProjectNode as ProjectNodeData } from '../../lib/projectGrouping';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({
@@ -118,18 +119,32 @@ describe('useConversationSearch sort persistence', () => {
 });
 
 describe('useConversationSearch visibility scope', () => {
-  it('bounds all-project searches and refreshes when the allowed scope changes', async () => {
+  it('keeps global search unbounded while bounding an explicit project selection', async () => {
     vi.useFakeTimers();
     const searchMock = vi.mocked(searchConversations);
-    const { result, rerender } = renderHook(
-      ({ allowedSessionIds }: { allowedSessionIds: string[] }) =>
-        useConversationSearch({
-          enabled: true,
-          navigate: vi.fn() as never,
-          allKnownProjects: [],
-          allowedSessionIds,
-        }),
-      { initialProps: { allowedSessionIds: ['dialogue', 'visible-project'] } },
+    const project: ProjectNodeData = {
+      projectKey: 'local:/repo',
+      scope: 'local',
+      workingDir: '/repo',
+      remoteHostId: null,
+      deviceLinkDeviceId: null,
+      deviceLinkDeviceName: null,
+      deviceLinkConnectionStatus: null,
+      displayName: 'Repo',
+      segments: 1,
+      sessions: [
+        { id: 'loaded' } as ProjectNodeData['sessions'][number],
+        { id: 'outside-sidebar-cache' } as ProjectNodeData['sessions'][number],
+      ],
+      latestActivityAt: '2026-08-02T00:00:00.000Z',
+    };
+    const { result } = renderHook(() =>
+      useConversationSearch({
+        enabled: true,
+        navigate: vi.fn() as never,
+        allKnownProjects: [project],
+        allowedSessionIds: ['loaded'],
+      }),
     );
 
     act(() => result.current.setQuery('needle'));
@@ -139,18 +154,18 @@ describe('useConversationSearch visibility scope', () => {
     expect(searchMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
         semanticMode: 'keyword',
-        filters: expect.objectContaining({ sessionIds: ['dialogue', 'visible-project'] }),
+        filters: expect.objectContaining({ sessionIds: null }),
       }),
     );
 
     searchMock.mockClear();
-    rerender({ allowedSessionIds: ['dialogue'] });
+    act(() => result.current.setProjectSelection([project.projectKey]));
     await act(async () => {
       await vi.advanceTimersByTimeAsync(251);
     });
     expect(searchMock).toHaveBeenLastCalledWith(
       expect.objectContaining({
-        filters: expect.objectContaining({ sessionIds: ['dialogue'] }),
+        filters: expect.objectContaining({ sessionIds: ['loaded'] }),
       }),
     );
   });

@@ -127,7 +127,7 @@ export interface UseConversationSearchParams {
   enabled: boolean;
   navigate: NavigateFunction;
   allKnownProjects: ProjectNodeData[];
-  /** Hard visibility boundary. Undefined preserves the legacy unbounded search. */
+  /** Bounds explicit project-scoped searches; global search remains unbounded. */
   allowedSessionIds?: readonly string[];
   projectFilterRequest?: {
     projectKey: string;
@@ -188,9 +188,7 @@ export function useConversationSearch({
     [allowedSessionIds],
   );
   const selectedProjectSessionIds = useMemo(() => {
-    if (projectSelection === 'all') {
-      return allowedSessionIdSet == null ? null : Array.from(allowedSessionIdSet);
-    }
+    if (projectSelection === 'all') return null;
     const selected = new Set(projectSelection);
     let indexedSessionIds = allKnownProjects
       .filter((project) => selected.has(project.projectKey))

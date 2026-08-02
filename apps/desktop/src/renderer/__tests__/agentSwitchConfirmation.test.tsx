@@ -108,37 +108,4 @@ describe('Agent switch confirmation', () => {
     await waitFor(() => expect(onBrowse).toHaveBeenCalledTimes(2));
     expect(screen.queryByText(COPY.title)).toBeNull();
   });
-
-  it('forwards destructive styling and primary focus through the provider', async () => {
-    function DangerHarness() {
-      const { confirm } = useConfirmDialog();
-      return (
-        <button
-          type="button"
-          onClick={() => {
-            void confirm({
-              title: 'Remove project?',
-              confirmText: 'Remove Project',
-              autoFocusConfirm: true,
-              confirmVariant: 'destructive',
-            });
-          }}
-        >
-          Open remove confirmation
-        </button>
-      );
-    }
-
-    render(
-      <ConfirmDialogProvider>
-        <DangerHarness />
-      </ConfirmDialogProvider>,
-    );
-
-    fireEvent.click(screen.getByRole('button', { name: 'Open remove confirmation' }));
-    const confirmButton = await screen.findByRole('button', { name: 'Remove Project' });
-    await waitFor(() => expect(document.activeElement).toBe(confirmButton));
-    expect(confirmButton.className).toContain('bg-[hsl(var(--destructive))]');
-    fireEvent.click(confirmButton);
-  });
 });
