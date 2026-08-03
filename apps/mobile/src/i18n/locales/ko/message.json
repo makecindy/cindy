@@ -157,6 +157,7 @@
     "attachmentCount": "첨부파일 {{n}}개",
     "attachmentMessage": "첨부파일 메시지",
     "steeringLabel": "끼어들어 전송 중:{{text}}",
+    "queuedStatus": "대기 중",
     "queuedMessageLabel": "대기 중인 메시지 {{index}}:{{text}}",
     "editingInComposer": "아래 입력창에서 편집 중…",
     "cancel": "취소",

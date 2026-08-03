@@ -5,10 +5,10 @@
  * 「这就是你的消息,只是还没生效」;落定时提高不透明度,回流后同一个列表位置换成正式
  * 消息,原地变实。徽标语义:
  *  - 转圈 = 还没有「已被收下」这个事实(enqueue 在途 / 已出队待回流 / 附件上传中);
- *  - 「排入队尾 list-end」= 已确认入队,顺序由排列先后表达,不标数字;
+ *  - 「时钟 + 已排队」= 已确认入队,顺序由排列先后表达,不标数字;
  *  - ✎ = 正在底部 composer 编辑这一条;
  *  - ⚠ = 失败,可重试 / 删除。
- * 「排入队尾」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
+ * 「已排队」是个事实断言,未确认时画它就是谎报,所以未确认一律转圈。
  */
 import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
@@ -19,7 +19,7 @@ import { SentInlineAtomBody } from '@/session/SentInlineAtomBody';
 import {
   AlertCircle,
   ArrowUp,
-  ListEnd,
+  Clock3,
   Paperclip,
   Pencil,
   RotateCcw,
@@ -199,7 +199,12 @@ export function PendingSendBubble({
   return (
     <View style={styles.rowWrap} testID={`pendingSend.row.${item.clientId}`}>
       <View style={styles.bubbleRow}>
-        <View style={styles.badge} testID={`pendingSend.badge.${item.phase}`}>
+        <View
+          accessibilityElementsHidden
+          importantForAccessibility="no-hide-descendants"
+          style={styles.badge}
+          testID={`pendingSend.badge.${item.phase}`}
+        >
           {failed ? (
             <AlertCircle color={colors.errorText} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           ) : spinning ? (
@@ -207,8 +212,17 @@ export function PendingSendBubble({
           ) : editing ? (
             <Pencil color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
           ) : (
-            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用排队 icon。
-            <ListEnd color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+            // 暂停态不换 ⏸:组顶横幅已表达暂停,逐条再换会重复;行内恒用明确的排队标记。
+            <>
+              <Clock3 color={colors.textTertiary} size={iconSize.sm} strokeWidth={iconStroke.regular} />
+              <Text
+                numberOfLines={1}
+                style={styles.queuedStatusText}
+                testID={`pendingSend.queuedStatus.${item.clientId}`}
+              >
+                {t('message.queue.queuedStatus')}
+              </Text>
+            </>
           )}
         </View>
         <Pressable
@@ -384,13 +398,20 @@ const makeStyles = (colors: ThemeColors) => StyleSheet.create({
     justifyContent: 'flex-end',
     width: '100%',
   },
-  badge: { alignItems: 'center', flexDirection: 'row' },
+  badge: { alignItems: 'center', flexDirection: 'row', gap: spacing.xs },
+  queuedStatusText: {
+    color: colors.textTertiary,
+    fontSize: typeScale.caption,
+    fontWeight: fontWeight.medium,
+    lineHeight: lineHeight.caption,
+  },
   // 与已发送用户气泡同款,但整体半透明:「这就是你的消息,只是还没生效」。
   bubble: {
     backgroundColor: colors.surfaceElevated,
     borderColor: colors.borderStrong,
     borderRadius: radius.container,
     borderWidth: StyleSheet.hairlineWidth,
+    flexShrink: 1,
     gap: spacing.xs,
     maxWidth: '86%',
     opacity: 0.62,

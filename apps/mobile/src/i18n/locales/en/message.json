@@ -157,6 +157,7 @@
     "attachmentCount": "{{n}} attachments",
     "attachmentMessage": "Attachment message",
     "steeringLabel": "Interjecting: {{text}}",
+    "queuedStatus": "Queued",
     "queuedMessageLabel": "Queued message {{index}}: {{text}}",
     "editingInComposer": "Editing in the input box below…",
     "cancel": "Cancel",
