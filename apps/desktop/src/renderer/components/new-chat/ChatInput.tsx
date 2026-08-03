@@ -194,8 +194,10 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
+  AT_FILE_BROWSER_RESOURCE,
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   AT_MENTION_SEARCH_RESULT_LIMIT,
+  filterAtFileResources,
   getAtDirectoryCompletionQuery,
   scanAtResources,
   scanPluginAtResources,
@@ -3200,8 +3202,10 @@ export function ChatInput({
     provider: AtResourceItem;
     triggerFrom: number;
   } | null>(null);
+  const [atFileBrowserScopeFrom, setAtFileBrowserScopeFrom] = useState<number | null>(null);
+  const activeAtScopeFrom = atPluginScope?.triggerFrom ?? atFileBrowserScopeFrom ?? undefined;
   const trigger: TriggerState = editor
-    ? detectTrigger(editor, atPluginScope?.triggerFrom)
+    ? detectTrigger(editor, activeAtScopeFrom)
     : { kind: 'none' };
 
   // Slash commands — palette refactor 后改成 loadAllCommands 一次性拉三源(desktop +
@@ -3292,7 +3296,7 @@ export function ChatInput({
   );
 
   const runAtScan = useCallback(
-    (query?: string) => {
+    (query?: string, includeWorkspaceFiles = false) => {
       // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
       if (isRemoteSession) return;
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
@@ -3313,7 +3317,7 @@ export function ChatInput({
       scanAtResources(
         workingDir ?? '',
         paletteAgentKind,
-        normalizedQuery ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
+        normalizedQuery || includeWorkspaceFiles ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
         normalizedQuery || undefined,
         remoteDeviceId,
         {
@@ -3340,7 +3344,7 @@ export function ChatInput({
   );
 
   useEffect(() => {
-    if (!editor || !atPluginScope) return;
+    if (!editor || (!atPluginScope && atFileBrowserScopeFrom === null)) return;
     const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
       // A caret-only move makes the end of a multi-word query ambiguous.
       // Leave Plugin scope before the user can select a row against a prefix
@@ -3348,6 +3352,7 @@ export function ChatInput({
       if (!transaction.docChanged && transaction.selectionSet) {
         atScanSeqRef.current += 1;
         setAtPluginScope(null);
+        setAtFileBrowserScopeFrom(null);
         runAtScan();
       }
     };
@@ -3355,7 +3360,7 @@ export function ChatInput({
     return () => {
       editor.off('transaction', handleTransaction);
     };
-  }, [editor, atPluginScope, runAtScan]);
+  }, [editor, atPluginScope, atFileBrowserScopeFrom, runAtScan]);
 
   const runAtPluginScan = useCallback(
     (provider: AtResourceItem, query: string, reservedSeq?: number) => {
@@ -3417,15 +3422,25 @@ export function ChatInput({
     return () => window.clearTimeout(timer);
   }, [atPluginScope, trigger.kind, atTriggerFrom, atQuery, runAtPluginScan, runAtScan]);
 
+  useEffect(() => {
+    if (atFileBrowserScopeFrom === null) return;
+    if (trigger.kind === 'at' && atTriggerFrom === atFileBrowserScopeFrom) return;
+    setAtFileBrowserScopeFrom(null);
+    if (trigger.kind === 'at') runAtScan(atQuery);
+  }, [atFileBrowserScopeFrom, trigger.kind, atTriggerFrom, atQuery, runAtScan]);
+
   // Derive query string for stable memo deps — avoids re-filtering on
   // every editor tick when only the caret moved but the query didn't change.
   const filteredAt = useMemo(() => {
     if (!atQuery && trigger.kind !== 'at') return [];
     if (atState.kind !== 'ready') return [];
-    return atPluginScope
-      ? atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT)
-      : filterAtResources(atState.items, atQuery);
-  }, [atState, atQuery, trigger.kind, atPluginScope]);
+    if (atPluginScope) return atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
+    if (atFileBrowserScopeFrom !== null) return filterAtFileResources(atState.items, atQuery);
+    const items = workingDir
+      ? [AT_FILE_BROWSER_RESOURCE, ...atState.items]
+      : atState.items;
+    return filterAtResources(items, atQuery);
+  }, [atState, atQuery, trigger.kind, atPluginScope, atFileBrowserScopeFrom, workingDir]);
 
   // Focused row index for each palette
   const [slashFocus, setSlashFocus] = useState(0);
@@ -3439,8 +3454,8 @@ export function ChatInput({
     if (atFocus >= filteredAt.length) setAtFocus(0);
   }, [filteredAt.length, atFocus]);
   useEffect(() => {
-    if (atPluginScope) setAtFocus(0);
-  }, [atPluginScope?.provider.pluginId, atQuery]);
+    if (atPluginScope || atFileBrowserScopeFrom !== null) setAtFocus(0);
+  }, [atPluginScope?.provider.pluginId, atFileBrowserScopeFrom, atQuery]);
 
   useEffect(() => {
     if (atQueryScanTimerRef.current !== null) {
@@ -3453,7 +3468,7 @@ export function ChatInput({
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atQueryScanTimerRef.current = window.setTimeout(() => {
       atQueryScanTimerRef.current = null;
-      runAtScan(normalizedQuery);
+      runAtScan(normalizedQuery, atFileBrowserScopeFrom !== null);
     }, normalizedQuery ? 200 : 0);
     return () => {
       if (atQueryScanTimerRef.current !== null) {
@@ -3461,7 +3476,14 @@ export function ChatInput({
         atQueryScanTimerRef.current = null;
       }
     };
-  }, [trigger.kind, workingDir, atQuery, runAtScan, atPluginScope]);
+  }, [
+    trigger.kind,
+    workingDir,
+    atQuery,
+    runAtScan,
+    atPluginScope,
+    atFileBrowserScopeFrom,
+  ]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3539,7 +3561,7 @@ export function ChatInput({
             }
             // A scoped Plugin search owns Enter/Tab even while loading or
             // empty; keep accidental sends from bypassing resource selection.
-            if (atOpen && atPluginScope) return true;
+            if (atOpen && (atPluginScope || atFileBrowserScopeFrom !== null)) return true;
             return false;
           case 'Escape':
             if (slashOpen && trigger.kind === 'slash') {
@@ -3551,6 +3573,10 @@ export function ChatInput({
                 exitAtPluginScope(true);
                 return true;
               }
+              if (atFileBrowserScopeFrom !== null) {
+                exitAtFileBrowserScope(true);
+                return true;
+              }
               setSuppressedAtAt(trigger.from);
               return true;
             }
@@ -3559,6 +3585,10 @@ export function ChatInput({
           case 'Backspace':
             if (atOpen && atPluginScope && !atQuery) {
               exitAtPluginScope(false);
+              return true;
+            }
+            if (atOpen && atFileBrowserScopeFrom !== null && !atQuery) {
+              exitAtFileBrowserScope(false);
               return true;
             }
             return false;
@@ -3629,12 +3659,12 @@ export function ChatInput({
       const $from = editor.state.doc.resolve(from);
       const parent = $from.parent;
       const parentStart = $from.start();
-      // Scoped Plugin queries may contain spaces. Their explicit end is the
+      // Scoped Plugin/file-browser queries may contain spaces. Their explicit end is the
       // current caret, so ordinary composer text after the caret is preserved.
-      const isPluginScoped = atPluginScope?.triggerFrom === from;
-      let runEnd = isPluginScoped ? editor.state.selection.from : from + 1;
+      const isAtScoped = activeAtScopeFrom === from;
+      let runEnd = isAtScoped ? editor.state.selection.from : from + 1;
       const offset = from - parentStart + 1;
-      if (!isPluginScoped) {
+      if (!isAtScoped) {
         let stopped = false;
         parent.forEach((child, childOffset) => {
           if (stopped || childOffset + child.nodeSize <= offset) return;
@@ -3655,6 +3685,20 @@ export function ChatInput({
         });
       }
       const to = runEnd;
+      if (item.type === 'file-browser') {
+        editor
+          .chain()
+          .focus()
+          .command(({ tr }) => {
+            tr.replaceWith(from, to, editor.schema.text('@'));
+            return true;
+          })
+          .run();
+        setAtPluginScope(null);
+        setAtFileBrowserScopeFrom(from);
+        runAtScan(undefined, true);
+        return;
+      }
       if (item.type === 'plugin-provider') {
         if (!item.pluginId) return;
         editor
@@ -3668,11 +3712,15 @@ export function ChatInput({
           })
           .run();
         atScanSeqRef.current += 1;
+        setAtFileBrowserScopeFrom(null);
         setAtPluginScope({ provider: item, triggerFrom: from });
         setAtState({ kind: 'loading' });
         return;
       }
-      const directoryQuery = getAtDirectoryCompletionQuery(item);
+      const directoryQuery = getAtDirectoryCompletionQuery(
+        item,
+        atFileBrowserScopeFrom === from,
+      );
       if (directoryQuery) {
         editor
           .chain()
@@ -3720,8 +3768,16 @@ export function ChatInput({
         })
         .run();
       setAtPluginScope(null);
+      setAtFileBrowserScopeFrom(null);
     },
-    [editor, trigger, atPluginScope],
+    [
+      editor,
+      trigger,
+      activeAtScopeFrom,
+      atPluginScope,
+      atFileBrowserScopeFrom,
+      runAtScan,
+    ],
   );
 
   const exitAtPluginScope = useCallback((closePanel: boolean) => {
@@ -3748,6 +3804,30 @@ export function ChatInput({
     }
   }, [editor, trigger, runAtScan]);
 
+  const exitAtFileBrowserScope = useCallback((closePanel: boolean) => {
+    if (!editor || trigger.kind !== 'at') return;
+    const { from } = trigger;
+    if (!closePanel) {
+      const runEnd = editor.state.selection.from;
+      editor
+        .chain()
+        .focus()
+        .command(({ tr }) => {
+          tr.replaceWith(from, runEnd, editor.schema.text('@'));
+          return true;
+        })
+        .run();
+    }
+    setAtFileBrowserScopeFrom(null);
+    atScanSeqRef.current += 1;
+    if (closePanel) {
+      setAtState({ kind: 'loading' });
+      setSuppressedAtAt(from);
+    } else {
+      runAtScan();
+    }
+  }, [editor, trigger, runAtScan]);
+
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
@@ -3764,6 +3844,10 @@ export function ChatInput({
       if (atPluginScope) {
         atScanSeqRef.current += 1;
         setAtPluginScope(null);
+      }
+      if (atFileBrowserScopeFrom !== null) {
+        atScanSeqRef.current += 1;
+        setAtFileBrowserScopeFrom(null);
       }
       const sourceSessionId = sessionId;
       const finishAgentSendDispatch = sourceSessionId
@@ -4015,6 +4099,7 @@ export function ChatInput({
       confirmDialog,
       navigate,
       atPluginScope,
+      atFileBrowserScopeFrom,
     ],
   );
   useEffect(() => {
@@ -6159,15 +6244,23 @@ export function ChatInput({
                 if (trigger.kind !== 'at') return;
                 if (atPluginScope) {
                   exitAtPluginScope(true);
+                } else if (atFileBrowserScopeFrom !== null) {
+                  exitAtFileBrowserScope(true);
                 } else {
                   setSuppressedAtAt(trigger.from);
                 }
               }}
               onRetry={() => atPluginScope
                 ? runAtPluginScan(atPluginScope.provider, atQuery)
-                : runAtScan(atQuery)}
+                : runAtScan(atQuery, atFileBrowserScopeFrom !== null)}
               scopedProviderName={atPluginScope?.provider.name}
-              onBack={atPluginScope ? () => exitAtPluginScope(false) : undefined}
+              fileBrowserScope={atFileBrowserScopeFrom !== null}
+              fileBrowserEnabled={!!workingDir}
+              onBack={atPluginScope
+                ? () => exitAtPluginScope(false)
+                : atFileBrowserScopeFrom !== null
+                  ? () => exitAtFileBrowserScope(false)
+                  : undefined}
               maxHeight={paletteMaxHeight}
             />
           )}

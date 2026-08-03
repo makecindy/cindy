@@ -5280,6 +5280,7 @@
       }
     },
     "atMention": {
+      "filesAndFolders": "Files and folders",
       "browserTab": "Browser tab",
       "desktopWindow": "App window",
       "task": "Task",

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  AT_FILE_BROWSER_RESOURCE,
+  filterAtFileResources,
   filterAtResources,
   getAtDirectoryCompletionQuery,
   scanAtResources,
@@ -60,6 +62,7 @@ afterEach(() => {
 
 describe('filterAtResources', () => {
   const items = [
+    AT_FILE_BROWSER_RESOURCE,
     { type: 'file' as const, name: 'README.md', relPath: 'README.md' },
     { type: 'dir' as const, name: 'apps', relPath: 'apps' },
     { type: 'session' as const, name: 'Release planning', relPath: 'cindy://session/1' },
@@ -69,6 +72,7 @@ describe('filterAtResources', () => {
 
   it('hides files and directories until the user types a query', () => {
     expect(filterAtResources(items, '').map((item) => item.type)).toEqual([
+      'file-browser',
       'agent',
       'session',
       'plugin-provider',
@@ -98,6 +102,31 @@ describe('filterAtResources', () => {
   });
 });
 
+describe('filterAtFileResources', () => {
+  const workspaceItems = [
+    { type: 'file' as const, name: 'README.md', relPath: 'README.md' },
+    { type: 'dir' as const, name: 'apps', relPath: 'apps' },
+    { type: 'dir' as const, name: 'desktop', relPath: 'apps/desktop' },
+    { type: 'file' as const, name: 'package.json', relPath: 'apps/package.json' },
+    { type: 'file' as const, name: 'package.json', relPath: 'apps/desktop/package.json' },
+    { type: 'session' as const, name: 'Task', relPath: 'cindy://session/1' },
+  ];
+
+  it('starts with project root files and directories only', () => {
+    expect(filterAtFileResources(workspaceItems, '').map((item) => item.relPath)).toEqual([
+      'apps',
+      'README.md',
+    ]);
+  });
+
+  it('searches within a selected directory prefix', () => {
+    expect(filterAtFileResources(workspaceItems, 'apps/').map((item) => item.relPath)).toEqual([
+      'apps/desktop',
+      'apps/package.json',
+    ]);
+  });
+});
+
 describe('getAtDirectoryCompletionQuery', () => {
   it('turns a directory into a path prefix for continued search', () => {
     expect(getAtDirectoryCompletionQuery({
@@ -113,6 +142,11 @@ describe('getAtDirectoryCompletionQuery', () => {
       name: 'design notes',
       relPath: 'docs/design notes',
     })).toBeNull();
+    expect(getAtDirectoryCompletionQuery({
+      type: 'dir',
+      name: 'design notes',
+      relPath: 'docs/design notes',
+    }, true)).toBe('docs/design notes/');
   });
 });
 

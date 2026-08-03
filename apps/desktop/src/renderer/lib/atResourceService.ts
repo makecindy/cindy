@@ -16,6 +16,7 @@ const log = createLogger('AtResourceService');
  */
 
 export type AtResourceType =
+  | 'file-browser'
   | 'file'
   | 'dir'
   | 'agent'
@@ -59,10 +60,16 @@ export interface ScanResult {
 
 export const AT_MENTION_SEARCH_RESULT_LIMIT = 8;
 export const AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP = 3;
+export const AT_FILE_BROWSER_RESOURCE: AtResourceItem = {
+  type: 'file-browser',
+  name: '',
+  relPath: 'cindy://file-browser',
+};
 
 const EMPTY_QUERY_SECTION_LIMIT = 3;
 const EMPTY_QUERY_RESULT_LIMIT = 12;
 const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
+  new Set(['file-browser']),
   new Set(['browser-tab', 'desktop-window']),
   new Set(['agent']),
   new Set(['session']),
@@ -433,11 +440,60 @@ function emptyQueryResources(items: AtResourceItem[], limit: number): AtResource
 }
 
 /** Return a path prefix when a directory can remain inside the active @ query. */
-export function getAtDirectoryCompletionQuery(item: AtResourceItem): string | null {
+export function getAtDirectoryCompletionQuery(
+  item: AtResourceItem,
+  allowWhitespace = false,
+): string | null {
   if (item.type !== 'dir') return null;
   const relPath = item.relPath.replace(/\\/g, '/').replace(/\/+$/, '');
-  if (!relPath || /[\s"@]/.test(relPath)) return null;
+  if (!relPath || relPath.includes('@') || (!allowWhitespace && /\s/.test(relPath))) return null;
   return `${relPath}/`;
+}
+
+export function filterAtFileResources(
+  items: AtResourceItem[],
+  query: string,
+  limit = AT_MENTION_SEARCH_RESULT_LIMIT,
+): AtResourceItem[] {
+  const q = query.trim().toLowerCase();
+  const workspaceItems = items.filter((item) => item.type === 'file' || item.type === 'dir');
+  if (!q) {
+    return workspaceItems
+      .filter((item) => !item.relPath.replace(/\/+$/, '').includes('/'))
+      .sort((a, b) => (
+        Number(b.type === 'dir') - Number(a.type === 'dir')
+        || a.name.localeCompare(b.name)
+      ))
+      .slice(0, limit);
+  }
+
+  if (q.endsWith('/')) {
+    return workspaceItems
+      .filter((item) => {
+        const relPath = item.relPath.toLowerCase();
+        if (!relPath.startsWith(q)) return false;
+        const remainder = relPath.slice(q.length).replace(/\/+$/, '');
+        return !!remainder && !remainder.includes('/');
+      })
+      .sort((a, b) => (
+        Number(b.type === 'dir') - Number(a.type === 'dir')
+        || a.name.localeCompare(b.name)
+      ))
+      .slice(0, limit);
+  }
+
+  const scored: Array<{ item: AtResourceItem; score: number }> = [];
+  for (const item of workspaceItems) {
+    const score = scoreItem(item, q);
+    if (score >= 0) scored.push({ item, score });
+  }
+  scored.sort((a, b) => (
+    b.score - a.score
+    || Number(b.item.type === 'dir') - Number(a.item.type === 'dir')
+    || a.item.name.localeCompare(b.item.name)
+    || a.item.relPath.localeCompare(b.item.relPath)
+  ));
+  return scored.slice(0, limit).map(({ item }) => item);
 }
 
 /**
@@ -457,6 +513,7 @@ export function filterAtResources(
   if (!q) return emptyQueryResources(items, resultLimit);
   const scored: Array<{ item: AtResourceItem; score: number }> = [];
   for (const item of items) {
+    if (item.type === 'file-browser') continue;
     const s = scoreItem(item, q);
     if (s >= 0) scored.push({ item, score: s });
   }

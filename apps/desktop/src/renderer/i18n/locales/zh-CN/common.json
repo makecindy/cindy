@@ -5278,6 +5278,7 @@
       }
     },
     "atMention": {
+      "filesAndFolders": "文件和文件夹",
       "browserTab": "浏览器标签",
       "desktopWindow": "应用窗口",
       "task": "任务",

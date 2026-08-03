@@ -5278,6 +5278,7 @@
       }
     },
     "atMention": {
+      "filesAndFolders": "파일 및 폴더",
       "browserTab": "브라우저 탭",
       "desktopWindow": "앱 창",
       "task": "작업",

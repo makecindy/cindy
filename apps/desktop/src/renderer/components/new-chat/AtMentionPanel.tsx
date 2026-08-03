@@ -20,6 +20,7 @@ import {
   Globe2,
   History,
   Monitor,
+  Paperclip,
   Plug,
   Sparkles,
 } from 'lucide-react';
@@ -27,7 +28,9 @@ import {
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import {
+  AT_FILE_BROWSER_RESOURCE,
   AT_MENTION_SEARCH_RESULT_LIMIT,
+  filterAtFileResources,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
@@ -57,6 +60,9 @@ interface AtMentionPanelProps {
   onRetry: () => void;
   /** Selected Plugin provider; its query is scoped and never broadcast. */
   scopedProviderName?: string;
+  /** Project file/directory scope entered through the fixed leading action. */
+  fileBrowserScope?: boolean;
+  fileBrowserEnabled?: boolean;
   onBack?: () => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
@@ -71,6 +77,8 @@ export function AtMentionPanel({
   onClose,
   onRetry,
   scopedProviderName,
+  fileBrowserScope = false,
+  fileBrowserEnabled = false,
   onBack,
   maxHeight = 400,
 }: AtMentionPanelProps) {
@@ -88,11 +96,15 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    return scopedProviderName
-      ? state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT)
-      : filterAtResources(state.items, query);
-  }, [state, query, scopedProviderName]);
-  const isEmptyRootQuery = !scopedProviderName && !query.trim();
+    if (fileBrowserScope) return filterAtFileResources(state.items, query);
+    if (scopedProviderName) return state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
+    const items = fileBrowserEnabled
+      ? [AT_FILE_BROWSER_RESOURCE, ...state.items]
+      : state.items;
+    return filterAtResources(items, query);
+  }, [state, query, scopedProviderName, fileBrowserScope, fileBrowserEnabled]);
+  const hasScope = fileBrowserScope || !!scopedProviderName;
+  const isEmptyRootQuery = !hasScope && !query.trim();
 
   useEffect(() => {
     if (filtered.length === 0) return;
@@ -138,7 +150,7 @@ export function AtMentionPanel({
     const bottomBoundary = Math.min(panelRect.bottom, window.innerHeight - VIEWPORT_PAD);
     const maxTooltipHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - VIEWPORT_PAD));
     const measuredHeight = Math.min(tooltipHeight, maxTooltipHeight);
-    const rawTop = (scopedProviderName ? 46 : 6) + focusedIndex * 44 - panelScroll;
+    const rawTop = (hasScope ? 46 : 6) + focusedIndex * 44 - panelScroll;
     const minTop = VIEWPORT_PAD - rootRect.top;
     const bottomBoundaryInRoot = bottomBoundary - rootRect.top;
     const top = Math.max(minTop, Math.min(rawTop, bottomBoundaryInRoot - measuredHeight));
@@ -146,7 +158,7 @@ export function AtMentionPanel({
       top: Math.round(top),
       maxHeight: Math.round(maxTooltipHeight),
     });
-  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight, scopedProviderName]);
+  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight, hasScope]);
 
   const tooltipVisible = showTooltip && !!tooltipPos;
   useLayoutEffect(() => {
@@ -170,7 +182,9 @@ export function AtMentionPanel({
   const renderItemRow = (item: AtResourceItem, idx: number) => {
     const focused = idx === focusedIndex;
     let meta: string;
-    if (item.type === 'agent') {
+    if (item.type === 'file-browser') {
+      meta = '';
+    } else if (item.type === 'agent') {
       meta = 'Agent';
     } else if (item.type === 'browser-tab') {
       meta = t('newChat.atMention.browserTab');
@@ -186,8 +200,14 @@ export function AtMentionPanel({
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
     }
-    const displayName = item.type === 'dir' ? `${item.name}/` : item.name;
-    const Icon = item.type === 'agent'
+    const displayName = item.type === 'file-browser'
+      ? t('newChat.atMention.filesAndFolders')
+      : item.type === 'dir'
+        ? `${item.name}/`
+        : item.name;
+    const Icon = item.type === 'file-browser'
+      ? Paperclip
+      : item.type === 'agent'
       ? Sparkles
       : item.type === 'dir'
         ? FolderIcon
@@ -260,7 +280,7 @@ export function AtMentionPanel({
         )}
         style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
       >
-        {scopedProviderName && (
+        {hasScope && (
           <div className="sticky top-0 z-10 flex h-[40px] items-center gap-2 bg-[var(--cmd-palette-bg)] px-[4px]">
             <button
               type="button"
@@ -277,11 +297,15 @@ export function AtMentionPanel({
               <ArrowLeft size={16} />
             </button>
             <span className="min-w-0 truncate text-[13px] font-medium text-[var(--cmd-palette-item-text)]">
-              {scopedProviderName}
+              {fileBrowserScope
+                ? t('newChat.atMention.filesAndFolders')
+                : scopedProviderName}
             </span>
-            <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">
-              {t('newChat.atMention.pluginResources')}
-            </span>
+            {scopedProviderName && (
+              <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">
+                {t('newChat.atMention.pluginResources')}
+              </span>
+            )}
           </div>
         )}
         {state.kind === 'loading' && (
