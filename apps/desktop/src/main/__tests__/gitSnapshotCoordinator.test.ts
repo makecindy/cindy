@@ -16,6 +16,7 @@ function savepointResult(
   commit: string | null,
   skippedPaths: string[] = [],
   fingerprintSeed = 1,
+  ctimeSeed = fingerprintSeed,
 ): ShadowSavepointResult {
   return {
     commit,
@@ -29,8 +30,8 @@ function savepointResult(
       path,
       sizeBytes: 100 * fingerprintSeed,
       mtimeMs: 1_000 * fingerprintSeed,
-      ctimeMs: 2_000 * fingerprintSeed,
-      ino: 10 * fingerprintSeed,
+      ctimeMs: 2_000 * ctimeSeed,
+      ino: 10 * ctimeSeed,
     })),
   };
 }
@@ -329,6 +330,87 @@ describe('GitSnapshotCoordinator', () => {
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
+  it('appends a rewind gap marker when a persistent filter entry changes only ctime/inode', async () => {
+    // 等长且保留 mtime 的改写(或 replace-by-rename):size/mtime 全同,
+    // 只有 ctime/inode 变——必须同样打 gap。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1', ['big.bin'], 1, 1))
+        .mockResolvedValueOnce(savepointResult('hash2', ['big.bin'], 1, 2)),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn changes were partially filtered',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+  });
+
+  it('degrades overlapping turns of different sessions on the same repo to gaps', async () => {
+    // 同一仓库上两个 session 并发跑 turn:全工作区树无法归属改动,
+    // 双方的 after-edit 都必须降级为 gap 标记。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnStart('s2');
+    await coordinator.onTurnEnd('s2');
+    await coordinator.onTurnEnd('s1');
+
+    // 只有两次 turn-start,零 after-edit。
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    expect(deps.createShadowMarker).toHaveBeenCalledTimes(2);
+    for (const sid of ['s1', 's2']) {
+      expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+        sessionId: sid,
+        label: 'File rewind gap: concurrent session activity in the same repository',
+        meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+      });
+    }
+  });
+
+  it('keeps sequential turns of different sessions on the same repo unaffected', async () => {
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+    await coordinator.onTurnStart('s2');
+    await coordinator.onTurnEnd('s2');
+
+    // 两轮各自 turn-start + after-edit,无 gap。
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(4);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
+  it('does not treat concurrent turns on different repos as overlapping', async () => {
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockImplementation(async (sessionId: string) => ({
+        workingDir: sessionId === 's1' ? '/repo-a' : '/repo-b',
+        agentKind: 'codex',
+      })),
+      detectRepoRoot: vi.fn().mockImplementation(async (dir: string) => dir),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnStart('s2');
+    await coordinator.onTurnEnd('s1');
+    await coordinator.onTurnEnd('s2');
+
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(4);
     expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 

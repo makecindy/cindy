@@ -78,6 +78,17 @@ interface TurnStartState {
 interface TurnStartRecord extends Partial<TurnStartState> {
   autoSnapshotEnabled: boolean;
   promise: Promise<void>;
+  /** Owning session, for same-repo concurrency checks across sessions. */
+  ownerSessionId?: string;
+  /**
+   * Another session ran a turn on the same repository while this turn was in
+   * flight. Full-worktree trees cannot attribute changes to sessions, so an
+   * after-edit here would swallow the peer's files; the turn degrades to a
+   * rewind gap instead. Overlapping turns of the *same* session stay fine:
+   * their after-edits share one chain and conversation rewind drops them
+   * together, so attribution is consistent by construction.
+   */
+  overlappedWithPeer?: boolean;
 }
 
 interface TurnStartMetadata {
@@ -88,6 +99,8 @@ interface TurnStartMetadata {
 export class GitSnapshotCoordinator {
   private readonly sessionCache = new Map<string, ResolvedSnapshotSession>();
   private readonly turnStartQueues = new Map<string, TurnStartRecord[]>();
+  /** In-flight turn records per repo root, for same-repo concurrency checks. */
+  private readonly activeTurnRecordsByRepo = new Map<string, Set<TurnStartRecord>>();
 
   constructor(private readonly deps: GitSnapshotCoordinatorDeps) {}
 
@@ -99,6 +112,7 @@ export class GitSnapshotCoordinator {
     const record: TurnStartRecord = {
       autoSnapshotEnabled: this.deps.readAutoSnapshotEnabled(),
       promise: Promise.resolve(),
+      ownerSessionId: sessionId,
     };
     this.pushTurnStartRecord(sessionId, record);
     record.promise = this.captureTurnStart(sessionId, record);
@@ -121,6 +135,7 @@ export class GitSnapshotCoordinator {
       }
 
       record.repoRoot = resolved.repoRoot;
+      this.registerActiveTurn(resolved.repoRoot, record);
       const metadataPromise = this.resolveTurnStartMetadata(sessionId);
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
         const metadata = await metadataPromise;
@@ -235,6 +250,26 @@ export class GitSnapshotCoordinator {
 
     const metadata = turnStart?.metadata ?? await this.resolveTurnStartMetadata(sessionId);
 
+    if (turnStart?.overlappedWithPeer) {
+      // 另一个 session 在同一仓库上与本轮并发跑了 turn:全工作区树无法把
+      // 改动归属到 session,after-edit 会把对方的文件吞进本轮增量,回退时
+      // 再把对方的文件退回本轮基线。降级为 gap,而不是记错账。
+      this.deps.logger.warn('[git-snapshot] concurrent session turn on the same repo', {
+        sessionId,
+        repoRoot,
+      });
+      if (agentKind === 'codex' || agentKind === 'pi') {
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: concurrent session activity in the same repository',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
+      return;
+    }
+
     // Dirty detection is tree equality against the turn-start baseline: with
     // shadow savepoints the worktree stays dirty relative to HEAD, so a
     // status-based check would create an empty after-edit every turn.
@@ -303,7 +338,15 @@ export class GitSnapshotCoordinator {
       const changedSkips: string[] = [];
       for (const [skippedPath, fp] of after) {
         const base = baseline.get(skippedPath);
-        if (!base || base.sizeBytes !== fp.sizeBytes || base.mtimeMs !== fp.mtimeMs) {
+        if (
+          !base ||
+          base.sizeBytes !== fp.sizeBytes ||
+          base.mtimeMs !== fp.mtimeMs ||
+          // ctime 无法从用户态设定、inode 捕获 replace-by-rename:保留 mtime
+          // 的等长改写靠这两个字段识别。
+          base.ctimeMs !== fp.ctimeMs ||
+          base.ino !== fp.ino
+        ) {
           changedSkips.push(skippedPath);
         }
       }
@@ -432,6 +475,41 @@ export class GitSnapshotCoordinator {
     if (queue && queue.length === 0) {
       this.turnStartQueues.delete(sessionId);
     }
+    if (record?.repoRoot) {
+      this.unregisterActiveTurn(record.repoRoot, record);
+    }
     return record;
+  }
+
+  /**
+   * Same-repo concurrency bookkeeping: two sessions running turns against one
+   * repository make full-worktree trees unattributable, so every overlapping
+   * in-flight turn (existing peers included) is flagged for gap degradation.
+   */
+  private registerActiveTurn(repoRoot: string, record: TurnStartRecord): void {
+    const peers = this.activeTurnRecordsByRepo.get(repoRoot);
+    if (!peers) {
+      this.activeTurnRecordsByRepo.set(repoRoot, new Set([record]));
+      return;
+    }
+    const foreignPeers = [...peers].filter(
+      (peer) => peer.ownerSessionId !== record.ownerSessionId,
+    );
+    if (foreignPeers.length > 0) {
+      record.overlappedWithPeer = true;
+      for (const peer of foreignPeers) {
+        peer.overlappedWithPeer = true;
+      }
+    }
+    peers.add(record);
+  }
+
+  private unregisterActiveTurn(repoRoot: string, record: TurnStartRecord): void {
+    const peers = this.activeTurnRecordsByRepo.get(repoRoot);
+    if (!peers) return;
+    peers.delete(record);
+    if (peers.size === 0) {
+      this.activeTurnRecordsByRepo.delete(repoRoot);
+    }
   }
 }
