@@ -1,47 +1,25 @@
+import { EventEmitter } from 'node:events';
+
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
   createForgeIconConverter,
-  type ForgeSharpModule,
+  type ForgeIconConversionChildLike,
 } from '../forgeIconConversion.js';
+import type { ForgeIconConversionRequest } from '../forgeIconConversionProtocol.js';
 
-interface Deferred<T> {
-  promise: Promise<T>;
-  resolve: (value: T) => void;
-  reject: (reason: unknown) => void;
-}
+class FakeConversionChild extends EventEmitter implements ForgeIconConversionChildLike {
+  pid = 123;
+  readonly posted: unknown[] = [];
+  readonly kill = vi.fn(() => true);
 
-function deferred<T>(): Deferred<T> {
-  let resolve!: (value: T) => void;
-  let reject!: (reason: unknown) => void;
-  const promise = new Promise<T>((res, rej) => {
-    resolve = res;
-    reject = rej;
-  });
-  return { promise, resolve, reject };
-}
+  postMessage(message: unknown): void {
+    this.posted.push(message);
+  }
 
-function makeSharpFactory(outputs: Array<Promise<Buffer>>) {
-  const timeout = vi.fn();
-  const png = vi.fn();
-  const factory = vi.fn(() => {
-    const output = outputs.shift();
-    if (!output) throw new Error('missing fake sharp output');
-    const pipeline = {
-      rotate: vi.fn(() => pipeline),
-      resize: vi.fn(() => pipeline),
-      png: png.mockImplementation(() => pipeline),
-      timeout: timeout.mockImplementation(() => pipeline),
-      toBuffer: vi.fn(() => output),
-    };
-    return pipeline;
-  });
-  return {
-    sharp: factory as unknown as ForgeSharpModule,
-    factory,
-    png,
-    timeout,
-  };
+  request(): ForgeIconConversionRequest {
+    return this.posted[0] as ForgeIconConversionRequest;
+  }
 }
 
 afterEach(() => {
@@ -49,49 +27,76 @@ afterEach(() => {
 });
 
 describe('createForgeIconConverter', () => {
-  it('启用 sharp 原生超时、palette 量化并返回合规 PNG', async () => {
-    const fake = makeSharpFactory([Promise.resolve(Buffer.from('png'))]);
-    const convert = createForgeIconConverter({ loadSharp: () => fake.sharp });
+  it('返回隔离进程产出的合规 PNG，并终止一次性进程', async () => {
+    const child = new FakeConversionChild();
+    const convert = createForgeIconConverter({ fork: () => child });
 
-    await expect(convert('/tmp/icon.png')).resolves.toEqual(Buffer.from('png'));
-    expect(fake.timeout).toHaveBeenCalledWith({ seconds: 5 });
-    expect(fake.png).toHaveBeenCalledWith({
-      compressionLevel: 9,
-      palette: true,
-      colours: 256,
-      effort: 7,
+    const result = convert('/tmp/icon.png');
+    const request = child.request();
+    expect(request).toMatchObject({
+      kind: 'convert',
+      absPath: '/tmp/icon.png',
+      timeoutSeconds: 5,
     });
+    child.emit('message', {
+      kind: 'result',
+      id: request.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('png')),
+    });
+
+    await expect(result).resolves.toEqual(Buffer.from('png'));
+    expect(child.kill).toHaveBeenCalledTimes(1);
+
+    // The slot remains occupied until the utility process has actually exited.
+    await expect(convert('/tmp/overlap.png')).rejects.toThrow('转换繁忙');
+    child.emit('exit', 0);
   });
 
-  it('wall-clock 超时后保持单飞，直到原生任务真正 settle 才允许下一次转换', async () => {
+  it('超时会 kill 隔离进程；锁由 exit 释放，不依赖 Sharp promise settle', async () => {
     vi.useFakeTimers();
-    const firstNative = deferred<Buffer>();
-    const fake = makeSharpFactory([
-      firstNative.promise,
-      Promise.resolve(Buffer.from('next')),
-    ]);
-    const convert = createForgeIconConverter({ loadSharp: () => fake.sharp });
+    const first = new FakeConversionChild();
+    const second = new FakeConversionChild();
+    const fork = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const convert = createForgeIconConverter({ fork });
 
-    const first = convert('/tmp/slow.png');
-    const firstExpectation = expect(first).rejects.toThrow('转换超时');
+    const slow = convert('/tmp/slow.png');
+    const slowExpectation = expect(slow).rejects.toThrow('转换超时');
     await vi.advanceTimersByTimeAsync(5_000);
-    await firstExpectation;
+    await slowExpectation;
+    expect(first.kill).toHaveBeenCalledTimes(1);
 
     await expect(convert('/tmp/busy.png')).rejects.toThrow('转换繁忙');
-    expect(fake.factory).toHaveBeenCalledTimes(1);
+    expect(fork).toHaveBeenCalledTimes(1);
 
-    firstNative.reject(new Error('late native failure'));
-    await vi.runAllTicks();
-    await Promise.resolve();
-
-    await expect(convert('/tmp/next.png')).resolves.toEqual(Buffer.from('next'));
-    expect(fake.factory).toHaveBeenCalledTimes(2);
+    first.emit('exit', 0);
+    const next = convert('/tmp/next.png');
+    const request = second.request();
+    second.emit('message', {
+      kind: 'result',
+      id: request.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('next')),
+    });
+    await expect(next).resolves.toEqual(Buffer.from('next'));
+    expect(fork).toHaveBeenCalledTimes(2);
   });
 
-  it('转换结果超过安装器上限时回退失败，不把不可安装的 icon 交给 Forge', async () => {
-    const fake = makeSharpFactory([Promise.resolve(Buffer.alloc(512 * 1024 + 1))]);
-    const convert = createForgeIconConverter({ loadSharp: () => fake.sharp });
+  it('转换结果超过安装器上限时回退失败', async () => {
+    const child = new FakeConversionChild();
+    const convert = createForgeIconConverter({ fork: () => child });
+    const result = convert('/tmp/large.png');
+    const request = child.request();
+    child.emit('message', {
+      kind: 'result',
+      id: request.id,
+      ok: true,
+      png: new Uint8Array(512 * 1024 + 1),
+    });
 
-    await expect(convert('/tmp/large.png')).rejects.toThrow('转换结果必须在');
+    await expect(result).rejects.toThrow('转换结果必须在');
+    expect(child.kill).toHaveBeenCalledTimes(1);
   });
 });

@@ -70,36 +70,17 @@ import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
-import {
-  createForgeIconConverter,
-  type ForgeSharpModule,
-} from './forgeIconConversion.js';
+import { createForgeIconConverter } from './forgeIconConversion.js';
+import { forkForgeIconConversionHost } from './forgeIconConversionHost.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
 const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
 
-let forgeSharp: ForgeSharpModule | null = null;
-let forgeSharpLoadAttempted = false;
-
-function loadForgeSharp(): ForgeSharpModule | null {
-  if (forgeSharpLoadAttempted) return forgeSharp;
-  forgeSharpLoadAttempted = true;
-  try {
-    // 图标是可选能力：原生 sharp 加载失败不能影响普通插件创建/打包。
-    const req: NodeJS.Require =
-      typeof require !== 'undefined' ? require : (eval('require') as NodeJS.Require);
-    forgeSharp = req('sharp') as ForgeSharpModule;
-  } catch (err) {
-    log.warn('sharp unavailable, forge icon conversion disabled', {
-      error: err instanceof Error ? err.message : String(err),
-    });
-  }
-  return forgeSharp;
-}
-
-const convertForgeIconToPng = createForgeIconConverter({ loadSharp: loadForgeSharp });
+const convertForgeIconToPng = createForgeIconConverter({
+  fork: forkForgeIconConversionHost,
+});
 
 /* ────────────────────────────────────────────────────────────────────────
  * workdir 外过户确认:
