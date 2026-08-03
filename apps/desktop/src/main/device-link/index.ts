@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -1159,7 +1160,10 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
     controllerName: deviceName(),
     protocolVersion: 1,
     appVersion: app.getVersion(),
-    capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+    capabilities: [
+      CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+    ],
   });
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {
@@ -1249,7 +1253,10 @@ export async function remoteSubscribe(
         {
           topics,
           controllerName: deviceName(),
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+          capabilities: [
+            CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+            CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+          ],
         },
       ],
     });

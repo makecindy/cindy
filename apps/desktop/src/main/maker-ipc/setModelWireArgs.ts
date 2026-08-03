@@ -5,14 +5,14 @@
  * 也会留下一个多余的 null。这里把 Device Link wire 层的可选占位归一化回
  * 本地 IPC handler 期望的 undefined；本地 IPC 不应调用此 helper。
  *
- * 旧控制端始终发送完整的五个 positional 槽位，model-only 切换会是
- * `[sessionId, model, null, null, null]`。只有这个完整占位形状可以把
- * `providerId: null` 视为“未提供”；短参数调用里的 `providerId: null` 仍是
- * 明确清除 provider 的语义。
+ * `providerId: null` 的语义由控制端 capability 决定：旧控制端没有能力声明时，
+ * 它一律是 JSON positional 占位并还原成 undefined；新控制端明确声明能力后，
+ * null 才表示清除 provider。revision / selection 的 null 在 Device Link 中始终
+ * 是 optional 占位。
  */
 export function normalizeDeviceLinkSetModelWireArgs(
   isDeviceLink: boolean,
-  wireArgCount: number,
+  controllerSupportsExplicitProviderNull: boolean,
   providerId: unknown,
   expectedAgentSwitchRevision: unknown,
   selection: unknown,
@@ -26,10 +26,7 @@ export function normalizeDeviceLinkSetModelWireArgs(
   }
   return {
     providerId:
-      wireArgCount === 5 &&
-      providerId === null &&
-      expectedAgentSwitchRevision === null &&
-      selection === null
+      providerId === null && !controllerSupportsExplicitProviderNull
         ? undefined
         : providerId,
     expectedAgentSwitchRevision:

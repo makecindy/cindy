@@ -30,7 +30,10 @@ import type {
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
-import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
+import {
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+} from '@cindy/device-link';
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -566,7 +569,11 @@ import {
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
-import { isDeviceLinkInvoke, isMobileControllerInvoke } from '../device-link/invoke-context.js';
+import {
+  deviceLinkInvokeControllerSupports,
+  isDeviceLinkInvoke,
+  isMobileControllerInvoke,
+} from '../device-link/invoke-context.js';
 import {
   buildMobileClientPromptNote,
   stampMobileClientOrigin,
@@ -9405,21 +9412,22 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // session 不存在(被 close / 还没 send 创建出来)就 no-op 不报错, 让 renderer
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
-  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async function (
+  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async (
     _e,
     sessionId: unknown,
     model: unknown,
     providerId?: unknown,
     expectedAgentSwitchRevision?: unknown,
     selection?: unknown,
-  ) {
+  ) => {
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
-    const wireArgCount = arguments.length - 1;
     const normalizedWireArgs = normalizeDeviceLinkSetModelWireArgs(
       isDeviceLinkInvoke(),
-      wireArgCount,
+      deviceLinkInvokeControllerSupports(
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ),
       providerId,
       expectedAgentSwitchRevision,
       selection,

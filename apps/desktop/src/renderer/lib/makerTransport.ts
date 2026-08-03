@@ -98,6 +98,14 @@ type SetModelArgs = Parameters<FullMaker['setModel']>;
  */
 function buildRemoteSetModelArgs(args: SetModelArgs): unknown[] {
   const [sessionId, model, providerId, expectedAgentSwitchRevision, selection] = args;
+  if (
+    providerId === undefined &&
+    (expectedAgentSwitchRevision !== undefined || selection !== undefined)
+  ) {
+    throw new Error(
+      '[INVALID_PARAMS] providerId is required when expectedAgentSwitchRevision or selection is provided',
+    );
+  }
   const wireArgs: unknown[] = [sessionId, model];
   if (
     providerId !== undefined ||
@@ -124,7 +132,7 @@ function remoteMakerApi(deviceId: string): RoutableMaker {
       invokeRemote(deviceId, channel, args);
   return {
     send: t('maker:send') as FullMaker['send'],
-    setModel: ((...args: SetModelArgs) =>
+    setModel: (async (...args: SetModelArgs) =>
       invokeRemote(deviceId, 'maker:set-model', buildRemoteSetModelArgs(args))) as FullMaker['setModel'],
     switchSessionAgent: t('maker:switch-session-agent') as FullMaker['switchSessionAgent'],
     getSessionAgentSwitchIntent: t(
