@@ -276,10 +276,10 @@ describe('外部主题导入（main 侧编排）', () => {
     await expect(importExternalTheme()).rejects.toThrow('THEME_UNSUPPORTED_FILE');
   });
 
-  it('主题无法派生可辨认的 Switch 关闭态时按不支持处理，而不是内部错误', async () => {
+  it('主题无法派生可辨认的 Switch 关闭态时返回专用错误且不落盘', async () => {
     pickFile(writeSource('impossible.json', UNSATISFIABLE_SWITCH_CONTRAST_THEME));
 
-    await expect(importExternalTheme()).rejects.toThrow('THEME_UNSUPPORTED_FILE');
+    await expect(importExternalTheme()).rejects.toThrow('THEME_CONTRAST_UNSUPPORTED');
     expect(loadLocalThemesSync().themes).toEqual([]);
   });
 

@@ -395,6 +395,7 @@
         "importPartial": "已导入 {{name}}（{{themeCount}} 个方案）。{{skipped}} 项语义色按规范不变，{{unresolved}} 项取值无法识别，{{derived}} 项由邻近色近似推导",
         "importFailed": "导入失败：{{error}}",
         "importUnsupported": "这个文件不是可识别的 VSCode 或 Obsidian 主题",
+        "importContrastUnsupported": "主题配色无法清晰显示关闭状态的开关，调整背景色或次要文字颜色后重新导入",
         "importUsesInclude": "该 VSCode 主题通过 include 继承配色，无法独立导入",
         "importNotAFile": "选择一个文件，而非文件夹",
         "importTooLarge": "文件太大，无法作为主题导入",

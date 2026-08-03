@@ -23,6 +23,7 @@ const UNCHECKED_SURFACES = [
   'surface',
   'surface-elevated',
   'surface-card-ivory',
+  'surface-hover',
   'surface-hover-soft',
 ] as const;
 

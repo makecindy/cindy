@@ -395,6 +395,7 @@
         "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
         "importFailed": "Import failed: {{error}}",
         "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importContrastUnsupported": "The theme colors cannot keep unchecked switches visible. Adjust its background or secondary text colors, then import it again.",
         "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
         "importNotAFile": "Select a file, not a folder.",
         "importTooLarge": "File is too large to import as a theme.",

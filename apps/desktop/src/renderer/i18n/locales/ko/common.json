@@ -395,6 +395,7 @@
         "importPartial": "{{name}}({{themeCount}}개 구성)을 가져왔습니다. 의미가 정해진 색 {{skipped}}개는 규칙대로 그대로 두었고, {{unresolved}}개는 값을 읽을 수 없어 건너뛰었고, {{derived}}개는 인접색에서 추정했습니다.",
         "importFailed": "가져오기에 실패했습니다: {{error}}",
         "importUnsupported": "이 파일은 VSCode 또는 Obsidian 테마로 인식할 수 없습니다.",
+        "importContrastUnsupported": "테마 색상으로는 꺼진 스위치를 선명하게 표시할 수 없습니다. 배경색이나 보조 텍스트 색상을 조정한 뒤 다시 가져오세요.",
         "importUsesInclude": "이 VSCode 테마는 include를 통해 색상을 상속하므로 단독으로 가져올 수 없습니다.",
         "importNotAFile": "폴더가 아닌 파일을 선택해 주세요.",
         "importTooLarge": "파일이 너무 커서 테마로 가져올 수 없습니다.",

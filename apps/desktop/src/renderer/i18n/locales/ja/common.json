@@ -395,6 +395,7 @@
         "importPartial": "{{name}}（{{themeCount}} 種類）をインポートしました。意味を持つ色 {{skipped}} 件は規約どおり変更せず、{{unresolved}} 件は値を読み取れずスキップ、{{derived}} 件は近似色から推定しました。",
         "importFailed": "インポートに失敗しました: {{error}}",
         "importUnsupported": "このファイルは VSCode または Obsidian のテーマとして認識できません。",
+        "importContrastUnsupported": "テーマの配色ではオフ状態のスイッチを明瞭に表示できません。背景色またはサブテキストの色を調整してから、もう一度インポートしてください。",
         "importUsesInclude": "この VSCode テーマは include で配色を継承しているため、単独ではインポートできません。",
         "importNotAFile": "フォルダではなくファイルを選択してください。",
         "importTooLarge": "ファイルが大きすぎるため、テーマとしてインポートできません。",

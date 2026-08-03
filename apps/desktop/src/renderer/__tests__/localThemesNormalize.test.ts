@@ -156,4 +156,22 @@ describe('normalizeLocalThemeColors', () => {
     };
     expect(normalizeLocalThemeColors(input)).toBe(input);
   });
+
+  it('无解的旧导入主题恢复升级前的边框轨道与表面滑块，不静默倒退到默认别名', () => {
+    const input = {
+      surface: '#000000',
+      'surface-elevated': '#ffffff',
+      'surface-card-ivory': '#ffffff',
+      'surface-hover': '#777777',
+      'surface-hover-soft': '#777777',
+      'surface-on-card': '#ffffff',
+      'border-default': '#555555',
+      'text-secondary': '#777777',
+    };
+
+    const out = normalizeLocalThemeColors(input);
+
+    expect(out['switch-track-off']).toBe('#555555');
+    expect(out['switch-thumb-off']).toBe('#000000');
+  });
 });

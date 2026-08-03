@@ -265,7 +265,7 @@ export async function importExternalTheme(
     if (error instanceof UnsupportedThemePaletteError) {
       log.warn(`Unsupported theme palette: ${error.message}`);
       throwIpcError(
-        'THEME_UNSUPPORTED_FILE',
+        'THEME_CONTRAST_UNSUPPORTED',
         'theme colors cannot produce a visible unchecked Switch state',
       );
     }

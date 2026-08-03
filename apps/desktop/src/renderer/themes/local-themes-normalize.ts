@@ -31,6 +31,8 @@ const CONNECTED_BADGE_TEXT_KEY = 'settings-badge-connected-text';
 const LEGACY_CONNECTED_BADGE_DEFAULT = 'var(--text-primary)';
 const SWITCH_TRACK_OFF_KEY = 'switch-track-off';
 const SWITCH_THUMB_OFF_KEY = 'switch-thumb-off';
+const LEGACY_SWITCH_TRACK_KEY = 'border-default';
+const LEGACY_SWITCH_THUMB_KEY = 'surface';
 const UNCHECKED_SWITCH_SURFACE_KEYS = [
   'surface',
   'surface-elevated',
@@ -80,8 +82,17 @@ function normalizeUncheckedSwitchColors(
       [SWITCH_THUMB_OFF_KEY]: toHex(thumb),
     };
   } catch {
-    // 本地主题 bootstrap 必须 best-effort；极端/不可满足的手写色板继续走 registry default。
-    return colors;
+    // 旧导入模板里 unchecked Switch 实际是 bg-input + bg-background；这两者分别
+    // 来自同一色板的 border 与 surface。无解时冻结这对升级前颜色，避免掉到
+    // 未经约束的新 registry alias 后比升级前更差。本地主题 bootstrap 仍 best-effort。
+    const legacyTrack = parseThemeColor(colors, LEGACY_SWITCH_TRACK_KEY);
+    const legacyThumb = parseThemeColor(colors, LEGACY_SWITCH_THUMB_KEY);
+    if (!legacyTrack || !legacyThumb) return colors;
+    return {
+      ...colors,
+      [SWITCH_TRACK_OFF_KEY]: toHex(legacyTrack),
+      [SWITCH_THUMB_OFF_KEY]: toHex(legacyThumb),
+    };
   }
 }
 
