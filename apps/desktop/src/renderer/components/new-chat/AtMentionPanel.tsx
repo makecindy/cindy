@@ -17,6 +17,7 @@ import {
   File as FileIcon,
   Folder as FolderIcon,
   Globe2,
+  History,
   Monitor,
   Sparkles,
 } from 'lucide-react';
@@ -164,6 +165,8 @@ export function AtMentionPanel({
       meta = t('newChat.atMention.browserTab');
     } else if (item.type === 'desktop-window') {
       meta = item.description || t('newChat.atMention.desktopWindow');
+    } else if (item.type === 'session') {
+      meta = t('newChat.atMention.task');
     } else {
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
@@ -177,7 +180,9 @@ export function AtMentionPanel({
           ? Globe2
           : item.type === 'desktop-window'
             ? Monitor
-            : FileIcon;
+            : item.type === 'session'
+              ? History
+              : FileIcon;
 
     return (
       <button

@@ -5280,6 +5280,7 @@
     "atMention": {
       "browserTab": "Browser tab",
       "desktopWindow": "App window",
+      "task": "Task",
       "scanFailed": "Failed to load @ resources",
       "retry": "Retry",
       "searching": "Searching…",

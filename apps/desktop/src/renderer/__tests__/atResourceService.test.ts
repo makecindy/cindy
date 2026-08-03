@@ -5,8 +5,11 @@ import { scanAtResources } from '@/lib/atResourceService';
 function stubApi(options: {
   workspace?: unknown;
   context?: unknown;
+  tasks?: unknown;
+  deviceTasks?: unknown;
   workspaceError?: Error;
   contextError?: Error;
+  taskError?: Error;
 }) {
   vi.stubGlobal('window', {
     electronAPI: {
@@ -18,7 +21,20 @@ function stubApi(options: {
           ? vi.fn().mockRejectedValue(options.contextError)
           : vi.fn().mockResolvedValue(options.context),
       },
-      deviceLink: { invoke: vi.fn() },
+      deviceLink: {
+        invoke: vi.fn((_deviceId: string, channel: string) => (
+          channel === 'local-db:sessions:list'
+            ? Promise.resolve(options.deviceTasks)
+            : Promise.resolve(options.workspace)
+        )),
+      },
+      localDb: {
+        sessions: {
+          list: options.taskError
+            ? vi.fn().mockRejectedValue(options.taskError)
+            : vi.fn().mockResolvedValue(options.tasks),
+        },
+      },
     },
   });
 }
@@ -102,5 +118,72 @@ describe('scanAtResources context providers', () => {
 
     expect(result.success).toBe(true);
     expect(result.items.map((item) => item.type)).toEqual(['dir']);
+  });
+
+  it('lists historical tasks without a workspace and excludes the current task and empty drafts', async () => {
+    stubApi({
+      tasks: [
+        {
+          id: 'current',
+          title: 'Current',
+          status: 'active',
+          userSendAt: '2026-08-03T00:00:00.000Z',
+        },
+        {
+          id: 'history-1',
+          title: '  Release\nplanning ',
+          status: 'archived',
+          userSendAt: '2026-08-02T00:00:00.000Z',
+          summary: 'Plan\nthe release',
+          workingDir: 'D:\\repo',
+        },
+        {
+          id: 'empty-draft',
+          title: 'Empty',
+          status: 'active',
+          userSendAt: null,
+          _count: { messages: 0 },
+        },
+      ],
+    });
+
+    const result = await scanAtResources('', 'codex', 2000, undefined, undefined, {
+      sessionId: 'current',
+      includeTaskHistory: true,
+    });
+
+    expect(result).toMatchObject({
+      success: true,
+      items: [
+        {
+          type: 'session',
+          name: 'Release planning',
+          relPath: 'cindy://session/history-1',
+          description: 'Plan the release',
+        },
+      ],
+    });
+  });
+
+  it('lists device-link task history on the controlled device and freezes its device id', async () => {
+    stubApi({
+      deviceTasks: [{
+        id: 'remote-history',
+        title: 'Remote task',
+        status: 'active',
+        userSendAt: '2026-08-03T00:00:00.000Z',
+      }],
+    });
+
+    const result = await scanAtResources('', 'codex', 2000, undefined, 'device-1', {
+      includeTaskHistory: true,
+    });
+
+    expect(result.items).toMatchObject([
+      {
+        type: 'session',
+        relPath: 'cindy://session/remote-history?device=device-1',
+      },
+    ]);
   });
 });

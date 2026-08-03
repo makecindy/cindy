@@ -162,6 +162,7 @@ import {
   pastedSessionChipAttrs,
   resolveSessionMessageReferencesForSend,
   resolveSessionChipTitles,
+  sanitizeSessionChipTitle,
 } from './sessionLinkPaste';
 import {
   isLongPasteText,
@@ -3270,7 +3271,7 @@ export function ChatInput({
   const runAtScan = useCallback(
     (query?: string) => {
       // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
-      if (!workingDir || isRemoteSession) return;
+      if (isRemoteSession) return;
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
       // 本机会话 deviceId 为 undefined → 本地扫描。
       // 远程**草稿**(NewMakerDraftRoute)此时 sessionId 还是 undefined、但 deviceLinkDeviceId prop 已设——
@@ -3286,7 +3287,7 @@ export function ChatInput({
         return { kind: 'loading' };
       });
       scanAtResources(
-        workingDir,
+        workingDir ?? '',
         paletteAgentKind,
         2000,
         normalizedQuery || undefined,
@@ -3294,6 +3295,7 @@ export function ChatInput({
         {
           sessionId,
           includeLocalContext: !remoteDeviceId,
+          includeTaskHistory: true,
         },
       )
         .then((res) => {
@@ -3318,7 +3320,6 @@ export function ChatInput({
   // When `@` panel opens, rescan so newly created files/agents show immediately.
   useEffect(() => {
     if (trigger.kind !== 'at') return;
-    if (!workingDir) return;
     runAtScan();
   }, [trigger.kind, workingDir, runAtScan]);
 
@@ -3348,7 +3349,6 @@ export function ChatInput({
       atFallbackScanTimerRef.current = null;
     }
     if (trigger.kind !== 'at') return;
-    if (!workingDir) return;
     if (!atQuery.trim()) return;
     if (atState.kind !== 'ready') return;
     if (filteredAt.length > 0) return;
@@ -3389,7 +3389,7 @@ export function ChatInput({
 
   const slashOpen = trigger.kind === 'slash' && suppressedSlashAt !== trigger.from;
   const atOpen =
-    trigger.kind === 'at' && !!workingDir && !isRemoteSession && suppressedAtAt !== trigger.from;
+    trigger.kind === 'at' && !isRemoteSession && suppressedAtAt !== trigger.from;
 
   useEffect(() => {
     if (!slashOpen) return;
@@ -3546,6 +3546,9 @@ export function ChatInput({
       // canonical form.
       if (item.type === 'agent') {
         attrs.path = item.relPath; // .claude/agents/<name>.md
+      } else if (item.type === 'session') {
+        attrs.label = sanitizeSessionChipTitle(item.name);
+        attrs.titled = true;
       }
       editor
         .chain()

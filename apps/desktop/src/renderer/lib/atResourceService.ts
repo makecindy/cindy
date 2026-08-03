@@ -1,4 +1,6 @@
 import { createLogger } from '@/lib/logger';
+import type { Session } from '@/lib/ccAgent.types';
+import { buildSessionDeepLink } from '@/lib/deepLink';
 
 const log = createLogger('AtResourceService');
 /**
@@ -18,7 +20,8 @@ export type AtResourceType =
   | 'dir'
   | 'agent'
   | 'browser-tab'
-  | 'desktop-window';
+  | 'desktop-window'
+  | 'session';
 
 export interface AtResourceItem {
   type: AtResourceType;
@@ -28,7 +31,7 @@ export interface AtResourceItem {
    *  - agent → filename without `.md`
    */
   name: string;
-  /** workingDir-relative path, POSIX style. Used for:
+  /** Workspace-relative path or stable Cindy context deep link. Used for:
    *  - display "apps/server/src/routes" (minus basename) in right column
    *  - serialization on submit: `@relPath` / `@relPath/` / `@.claude/agents/<name>.md`
    */
@@ -55,6 +58,8 @@ export interface AtResourceScanContext {
   sessionId?: string;
   /** False for SSH/device-link so candidates never leak from the controller machine. */
   includeLocalContext?: boolean;
+  /** Historical tasks are read from the execution device's local database. */
+  includeTaskHistory?: boolean;
 }
 
 function browserTabReference(tabId: string, url: string): string {
@@ -69,10 +74,16 @@ function desktopWindowReference(
   return `cindy://desktop-window/${pid}/${windowId}?app=${encodeURIComponent(appName)}`;
 }
 
+function oneLineText(value: unknown, maxLength: number): string {
+  return typeof value === 'string'
+    ? value.replace(/\s+/g, ' ').trim().slice(0, maxLength)
+    : '';
+}
+
 /**
- * Load candidate @-resources from the active agent/workspace. Returns `success:false`
- * when workingDir is missing or IPC fails; panel should render the error
- * state with a retry action in that case.
+ * Load candidate @-resources from independent workspace/context providers.
+ * Partial provider failures keep the remaining candidates usable; the caller
+ * receives `success:false` only when every applicable provider failed.
  *
  * De-dup rule (F5 spec): when an agent and a file share the same `name`,
  * the agent wins. This is extremely rare in practice but we log a warning
@@ -91,7 +102,8 @@ export async function scanAtResources(
   context?: AtResourceScanContext,
 ): Promise<ScanResult> {
   const includeLocalContext = context?.includeLocalContext === true;
-  if (!workingDir && !includeLocalContext) {
+  const includeTaskHistory = context?.includeTaskHistory === true;
+  if (!workingDir && !includeLocalContext && !includeTaskHistory) {
     return { success: false, error: 'workingDir not bound', items: [], truncated: false };
   }
   type RawScan = Awaited<ReturnType<typeof window.electronAPI.maker.scanAtResources>>;
@@ -111,9 +123,19 @@ export async function scanAtResources(
         limit: 40,
       })
     : Promise.resolve(null);
-  const [workspaceSettled, contextSettled] = await Promise.allSettled([
+  const taskHistoryPromise: Promise<Session[] | null> = includeTaskHistory
+    ? deviceId
+      ? (window.electronAPI.deviceLink.invoke(
+          deviceId,
+          'local-db:sessions:list',
+          [100, 'all'],
+        ) as Promise<Session[]>)
+      : window.electronAPI.localDb.sessions.list(100, 'all')
+    : Promise.resolve(null);
+  const [workspaceSettled, contextSettled, taskHistorySettled] = await Promise.allSettled([
     workspacePromise,
     contextPromise,
+    taskHistoryPromise,
   ]);
   const res = workspaceSettled.status === 'fulfilled' ? workspaceSettled.value : null;
   const contextResult = contextSettled.status === 'fulfilled' ? contextSettled.value : null;
@@ -121,15 +143,30 @@ export async function scanAtResources(
     workspaceSettled.status === 'rejected' || !res?.success || !res.items
   );
   const contextFailed = includeLocalContext && contextSettled.status === 'rejected';
+  const taskHistoryFailed = includeTaskHistory && taskHistorySettled.status === 'rejected';
   if (workspaceFailed) {
-    log.warn('Workspace @ resource scan failed; keeping other providers available.',
-      workspaceSettled.status === 'rejected' ? workspaceSettled.reason : res?.error);
+    log.warn(
+      'Workspace @ resource scan failed; keeping other providers available.',
+      workspaceSettled.status === 'rejected' ? workspaceSettled.reason : res?.error,
+    );
   }
   if (contextFailed) {
-    log.warn('Local @ context scan failed; keeping other providers available.',
-      contextSettled.status === 'rejected' ? contextSettled.reason : undefined);
+    log.warn(
+      'Local @ context scan failed; keeping other providers available.',
+      contextSettled.status === 'rejected' ? contextSettled.reason : undefined,
+    );
   }
-  if ((!workingDir || workspaceFailed) && (!includeLocalContext || contextFailed)) {
+  if (taskHistoryFailed) {
+    log.warn(
+      'Historical @ task scan failed; keeping other providers available.',
+      taskHistorySettled.status === 'rejected' ? taskHistorySettled.reason : undefined,
+    );
+  }
+  if (
+    (!workingDir || workspaceFailed)
+    && (!includeLocalContext || contextFailed)
+    && (!includeTaskHistory || taskHistoryFailed)
+  ) {
     return {
       success: false,
       error: res?.error ?? 'scan failed',
@@ -207,10 +244,37 @@ export async function scanAtResources(
       _relPathLower: `${appWindow.appName} ${appWindow.pid} ${appWindow.windowId}`.toLowerCase(),
     });
   }
+  const historicalTasks: AtResourceItem[] = [];
+  const taskRows = taskHistorySettled.status === 'fulfilled'
+    && Array.isArray(taskHistorySettled.value)
+    ? taskHistorySettled.value
+    : [];
+  for (const session of taskRows) {
+    const taskId = oneLineText(session.id, 256);
+    if (
+      !taskId
+      || taskId === context?.sessionId
+      || session.status === 'deleted'
+      || (!session.userSendAt && (session._count?.messages ?? 0) === 0)
+    ) continue;
+    const title = oneLineText(session.title, 240);
+    if (!title) continue;
+    const description = oneLineText(session.summary || session.preview, 300);
+    const relPath = buildSessionDeepLink(taskId, { deviceId });
+    historicalTasks.push({
+      type: 'session',
+      name: title,
+      relPath,
+      ...(description ? { description } : {}),
+      _nameLower: title.toLowerCase(),
+      _relPathLower: `${title} ${description} ${oneLineText(session.workingDir, 2_000)}`
+        .toLowerCase(),
+    });
+  }
 
   return {
     success: true,
-    items: [...contextual, ...agents, ...dirs, ...files],
+    items: [...contextual, ...historicalTasks, ...agents, ...dirs, ...files],
     truncated: !!res?.truncated,
   };
 }
