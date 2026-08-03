@@ -477,6 +477,10 @@ export interface CopyClaudeSiviDirsOptions {
 interface CopyDirOptions extends CopyClaudeSiviDirsOptions {
   /** Top-level children under src that should not be copied. */
   excludeTopLevelDirs?: ReadonlySet<string>;
+  /** 仓库根相对(posix 分隔)路径黑名单:命中的文件不复制(受控内容由 checkout 提供)。 */
+  skipRepoRelPaths?: ReadonlySet<string>;
+  /** 计算 skipRepoRelPaths 相对路径所用的仓库根。 */
+  repoRoot?: string;
 }
 
 function shouldCopyPath(srcRoot: string, srcPath: string, opts?: CopyDirOptions): boolean {
@@ -509,6 +513,10 @@ export async function copyDirIfExists(
     force: true,
     filter: async (srcPath, destPath) => {
       if (!shouldCopyPath(src, srcPath, opts)) return false;
+      if (opts?.skipRepoRelPaths && opts.repoRoot) {
+        const rel = path.relative(opts.repoRoot, srcPath).split(path.sep).join('/');
+        if (opts.skipRepoRelPaths.has(rel)) return false;
+      }
       if (opts?.overwriteExisting !== false) return true;
       const srcStat = await fs.lstat(srcPath);
       if (srcStat.isDirectory()) return true;
@@ -522,16 +530,41 @@ export async function copyDirIfExists(
   });
 }
 
+/**
+ * baseRepo 中 .claude/.sivi 下被 git 跟踪的文件(仓库根相对路径,posix 分隔)。
+ * 查询失败(极罕见)返回空集 → 退回全量复制的旧行为,fail-open。
+ */
+async function listTrackedClaudeSiviPaths(baseRepo: string): Promise<ReadonlySet<string>> {
+  try {
+    const { stdout } = await gitExec(['ls-files', '-z', '--', '.claude', '.sivi'], baseRepo);
+    return new Set(stdout.split('\0').filter(Boolean));
+  } catch {
+    return new Set();
+  }
+}
+
 export async function copyClaudeSiviDirs(
   baseRepo: string,
   worktreePath: string,
   options: CopyClaudeSiviDirsOptions = {},
 ): Promise<void> {
+  // 只补复制 baseRepo 里**未被 git 跟踪**的本地配置(settings.local.json 之类):
+  // 被跟踪的受控内容已由 stageCheckout / 池 reset 按 worktree 的 sourceBranch
+  // 检出——用 baseRepo 旧 checkout 覆盖会让自动 worktree 带着旧 Agent 配置启动,
+  // 且这些文件与新 HEAD 不同时一创建就 dirty(后台完整 checkout 明确排除
+  // .claude/.sivi,永远不会修复)。
+  const tracked = await listTrackedClaudeSiviPaths(baseRepo);
   await copyDirIfExists(path.join(baseRepo, '.claude'), path.join(worktreePath, '.claude'), {
     excludeTopLevelDirs: CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS,
     overwriteExisting: options.overwriteExisting,
+    skipRepoRelPaths: tracked,
+    repoRoot: baseRepo,
   });
-  await copyDirIfExists(path.join(baseRepo, '.sivi'), path.join(worktreePath, '.sivi'), options);
+  await copyDirIfExists(path.join(baseRepo, '.sivi'), path.join(worktreePath, '.sivi'), {
+    overwriteExisting: options.overwriteExisting,
+    skipRepoRelPaths: tracked,
+    repoRoot: baseRepo,
+  });
 }
 
 /**
