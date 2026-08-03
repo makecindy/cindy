@@ -64,6 +64,30 @@ describe('messageTableLayout', () => {
 
     expect(widths.reduce((total, width) => total + width, 0)).toBeGreaterThan(329);
   });
+
+  it('fills wide mobile layouts beyond the intrinsic column width cap', () => {
+    const widths = buildMobileMarkdownTableColumnWidths({
+      header: inlineCells(['年份', 'GDP']),
+      rows: [row('r1', ['2025', '30.77 万亿美元'])],
+      availableWidth: 768,
+      minWidth: 112,
+    });
+
+    expect(widths.reduce((total, width) => total + width, 0)).toBe(768);
+    expect(widths.some((width) => width > 220)).toBe(true);
+  });
+
+  it('never expands past a fractional available width', () => {
+    const availableWidth = 329.5;
+    const widths = buildMobileMarkdownTableColumnWidths({
+      header: inlineCells(['年份', 'GDP']),
+      rows: [row('r1', ['2025', '30.77 万亿美元'])],
+      availableWidth,
+      minWidth: 112,
+    });
+
+    expect(widths.reduce((total, width) => total + width, 0)).toBeLessThanOrEqual(availableWidth);
+  });
 });
 
 function row(key: string, cells: string[]): MobileMarkdownTableRow {

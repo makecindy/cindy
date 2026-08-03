@@ -39,7 +39,7 @@ export function buildMobileMarkdownTableColumnWidths({
       normalizedMaxWidth,
     );
   });
-  return expandColumnWidthsToAvailableSpace(widths, availableWidth, normalizedMaxWidth);
+  return expandColumnWidthsToAvailableSpace(widths, availableWidth);
 }
 
 /**
@@ -49,30 +49,15 @@ export function buildMobileMarkdownTableColumnWidths({
 function expandColumnWidthsToAvailableSpace(
   widths: readonly number[],
   availableWidth: number | undefined,
-  maxWidth: number,
 ): number[] {
-  if (!Number.isFinite(availableWidth) || availableWidth === undefined || availableWidth <= 0) {
+  if (availableWidth === undefined || !Number.isFinite(availableWidth) || availableWidth <= 0) {
     return [...widths];
   }
-  const expanded = [...widths];
-  let remaining = Math.max(0, Math.ceil(availableWidth) - sum(expanded));
-  while (remaining > 0) {
-    const expandable = expanded
-      .map((width, index) => ({ capacity: Math.max(0, maxWidth - width), index }))
-      .filter(({ capacity }) => capacity > 0);
-    if (expandable.length === 0) break;
-    const share = Math.max(1, Math.floor(remaining / expandable.length));
-    let distributed = 0;
-    for (const { capacity, index } of expandable) {
-      const increment = Math.min(capacity, share, remaining - distributed);
-      expanded[index] += increment;
-      distributed += increment;
-      if (distributed >= remaining) break;
-    }
-    if (distributed <= 0) break;
-    remaining -= distributed;
-  }
-  return expanded;
+  const remaining = Math.max(0, Math.floor(availableWidth) - sum(widths));
+  if (remaining <= 0) return [...widths];
+  const share = Math.floor(remaining / widths.length);
+  const remainder = remaining % widths.length;
+  return widths.map((width, index) => width + share + (index < remainder ? 1 : 0));
 }
 
 function estimateInlineWidth(inlines: readonly MobileMarkdownInline[]): number {
