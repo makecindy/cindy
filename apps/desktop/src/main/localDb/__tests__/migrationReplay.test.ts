@@ -6,7 +6,11 @@ import type Database from 'better-sqlite3';
 import { describe, expect, it } from 'vitest';
 
 import { createBetterSqliteDatabase } from '../betterSqliteFactory';
-import { listMigrations, runMigrationReplay } from '../migrationRunner';
+import {
+  listMigrations,
+  runMigrationReplay as runMigrationReplayRaw,
+} from '../migrationRunner';
+import { loadCompanionMigrationForTest } from './companionMigrationTestLoader';
 
 const canRunMigrationReplay = process.platform === 'win32' || process.platform === 'darwin';
 const describeMigrationReplay = canRunMigrationReplay ? describe : describe.skip;
@@ -17,6 +21,16 @@ function desktopRoot(): string {
 
 function drizzleDir(): string {
   return path.join(desktopRoot(), 'drizzle');
+}
+
+function runMigrationReplay(
+  db: Database.Database,
+  options: Parameters<typeof runMigrationReplayRaw>[1],
+): ReturnType<typeof runMigrationReplayRaw> {
+  return runMigrationReplayRaw(db, {
+    scriptLoader: loadCompanionMigrationForTest,
+    ...options,
+  });
 }
 
 function sqliteVecFilename(): string {

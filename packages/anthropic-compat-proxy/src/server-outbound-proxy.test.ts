@@ -166,29 +166,37 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
   });
 
   it('falls back to direct connection when the resolver throws or returns unsupported urls', async () => {
+    const upstream = createHttpServer((_req, res) => {
+      res.writeHead(200, { 'content-type': 'application/json' });
+      res.end(JSON.stringify({ direct: true }));
+    });
+    const upstreamPort = await listenOnAvailableLoopbackPort(upstream);
+    cleanups.push(() => new Promise<void>((r) => upstream.close(() => r())));
+    // 0.0.0.0 不属于代理 bypass 的 loopback hostname，但作为连接目标仍指向本机。
+    // 这样既会执行 resolver，又能确定性验证回落直连，不依赖外部 DNS 超时。
+    const directUpstream = `http://0.0.0.0:${upstreamPort}`;
     const warns: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      upstream: 'http://upstream.invalid:8080',
+      upstream: directUpstream,
       transformRequest: [],
       resolveOutboundProxy: () => { throw new Error('resolver boom'); },
       logger: { warn: (msg) => { warns.push(msg); } },
     });
 
-    // 直连假域必然失败，但必须是上游连接的 502，而非 resolver 异常炸掉请求链路。
     const res = await fetch(`${proxy.url}/v1/messages`, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res.status).toBe(502);
-    expect((await res.json() as { error: { message: string } }).error.message).toContain('upstream unreachable');
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ direct: true });
     expect(warns.some((m) => m.includes('outbound proxy resolver threw'))).toBe(true);
 
     await proxy.dispose();
 
     const warns2: string[] = [];
     proxy = await createAnthropicCompatProxy({
-      upstream: 'http://upstream.invalid:8080',
+      upstream: directUpstream,
       transformRequest: [],
       // socks4 仍不支持(无认证、无 IPv6),按不支持的形态回落直连。
       resolveOutboundProxy: () => 'socks4://127.0.0.1:1080',
@@ -199,8 +207,8 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ model: 'x', messages: [] }),
     });
-    expect(res2.status).toBe(502);
-    expect((await res2.json() as { error: { message: string } }).error.message).toContain('upstream unreachable');
+    expect(res2.status).toBe(200);
+    expect(await res2.json()).toEqual({ direct: true });
     expect(warns2.some((m) => m.includes('unsupported outbound proxy url'))).toBe(true);
   });
 });

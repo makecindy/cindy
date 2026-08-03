@@ -13,6 +13,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import type { LedgerDb } from '../ledger';
+import { loadCompanionMigrationForTest } from '../../localDb/__tests__/companionMigrationTestLoader';
 
 let tmpUserData = '';
 
@@ -24,10 +25,9 @@ const schema = await import('../../localDb/schema');
 const integrationCache = await import('../integrationCache');
 
 const MIGRATION_0070 = path.resolve(__dirname, '../../../../drizzle/0070_woozy_harpoon.sql');
-// eslint-disable-next-line @typescript-eslint/no-require-imports
-const migration0071 = require('../../../../drizzle/scripts/0071_bright_ultron.ts') as {
-  run: (db: Database.Database) => void;
-};
+const migration0071 = loadCompanionMigrationForTest(
+  path.resolve(__dirname, '../../../../drizzle/scripts/0071_bright_ultron.ts'),
+);
 
 const BYTES_A = Buffer.from('feishu-image-bytes-a');
 const HASH_A = createHash('sha256').update(BYTES_A).digest('hex');
