@@ -426,7 +426,14 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       arbiter?.isOwner() === true &&
       presenceAvailableByDevice.get(deviceId) === true &&
       !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
-    recoverLink: (deviceId) => openRemoteLink(deviceId),
+    // observed:false 且是唯一豁免熔断快速拒绝的建链入口:recoverLink 是探测
+    // 周期的延伸(业务/探测超时已由 tracker 记账,不重复观测),且 open 期间
+    // 必须真正上线重建 link——否则「探测超时→重开 link→下次探测走新链路」的
+    // 恢复回路会被熔断门禁自己挡死(观测入口 observed:true 在 open 态快速
+    // 拒绝,review P2)。频度由探测退避与 openLinkInFlight 单飞约束。open
+    // 期间 transport-timeout 重建照旧让位(观测入口被快速拒绝,熔断关闭后
+    // 下一次触发生效),恢复统一由探测循环驱动。
+    recoverLink: (deviceId) => openRemoteLink(deviceId, { observed: false }),
     log: {
       info: (...args) => log.info(...args),
       warn: (...args) => log.warn(...args),
