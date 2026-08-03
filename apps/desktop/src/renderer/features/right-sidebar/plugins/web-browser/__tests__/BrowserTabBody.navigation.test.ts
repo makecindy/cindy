@@ -561,6 +561,7 @@ describe('BrowserTabBody navigation', () => {
     const openFileInBrowser = vi.fn().mockResolvedValue({
       success: false,
       error: '文件不存在',
+      errorCode: 'FILE_NOT_FOUND',
     });
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
@@ -580,7 +581,9 @@ describe('BrowserTabBody navigation', () => {
     );
     await Promise.resolve();
 
-    expect(toastMocks.error).toHaveBeenCalledWith('文件不存在');
+    expect(toastMocks.error).toHaveBeenCalledWith(
+      'chat.markdownRenderer.openInBrowserFileNotFound',
+    );
   });
 
   it('keeps HTTP pages on the external URL opener', async () => {

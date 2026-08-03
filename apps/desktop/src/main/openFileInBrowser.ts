@@ -2,6 +2,10 @@
 
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import type {
+  BrowserFileOpenErrorCode,
+  BrowserFileOpenResult,
+} from '../shared/openFileInBrowser';
 
 const INVALID_BROWSER_FILE_TARGET_ERROR = '路径必须是绝对路径或本地 file:// URL';
 const OPEN_BROWSER_FILE_ERROR = '无法在系统浏览器中打开该本地页面';
@@ -68,20 +72,28 @@ export interface OpenFileInBrowserDeps {
 export async function handleOpenFileInBrowser(
   value: string,
   deps: OpenFileInBrowserDeps,
-): Promise<{ success: boolean; error?: string }> {
+): Promise<BrowserFileOpenResult> {
   try {
     const target = resolveBrowserFileTarget(value);
     if (!target) {
-      return { success: false, error: INVALID_BROWSER_FILE_TARGET_ERROR };
+      return {
+        success: false,
+        error: INVALID_BROWSER_FILE_TARGET_ERROR,
+        errorCode: 'INVALID_TARGET',
+      };
     }
     if (!deps.isPathAllowed(target.filePath)) {
-      return { success: false, error: '不允许访问该路径' };
+      return { success: false, error: '不允许访问该路径', errorCode: 'PATH_NOT_ALLOWED' };
     }
     if (!deps.isBrowserOpenablePath(target.filePath)) {
-      return { success: false, error: '该文件类型不支持浏览器查看' };
+      return {
+        success: false,
+        error: '该文件类型不支持浏览器查看',
+        errorCode: 'UNSUPPORTED_FILE_TYPE',
+      };
     }
     if (!deps.existsSync(target.filePath)) {
-      return { success: false, error: '文件不存在' };
+      return { success: false, error: '文件不存在', errorCode: 'FILE_NOT_FOUND' };
     }
 
     try {
@@ -107,12 +119,14 @@ export async function handleOpenFileInBrowser(
             });
           }
         }
-        return { success: false, error: OPEN_BROWSER_FILE_ERROR };
+        return { success: false, error: OPEN_BROWSER_FILE_ERROR, errorCode: 'OPEN_FAILED' };
       }
       const errorMessage = await deps.openPath(target.filePath);
-      return errorMessage ? { success: false, error: errorMessage } : { success: true };
+      return errorMessage
+        ? { success: false, error: errorMessage, errorCode: 'OPEN_FAILED' }
+        : { success: true };
     }
   } catch (error) {
-    return { success: false, error: OPEN_BROWSER_FILE_ERROR };
+    return { success: false, error: OPEN_BROWSER_FILE_ERROR, errorCode: 'OPEN_FAILED' };
   }
 }

@@ -46,6 +46,7 @@ import { isLocalHtmlFileUrl } from '../../lib/openInSidebarBrowser';
 import { closeTab } from '../../store';
 import { useBrowserWebview } from '../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../types';
+import type { BrowserFileOpenErrorCode } from '../../../../../shared/openFileInBrowser';
 
 import { BrowserChrome, type BrowserChromeHandle } from './BrowserChrome';
 import { BrowserCommentPopover } from './BrowserCommentPopover';
@@ -54,6 +55,14 @@ import { useLocalHtmlAutoReload } from './useLocalHtmlAutoReload';
 import type { WebBrowserState } from './index';
 
 const log = createLogger('rightSidebar.browserTabBody');
+
+const browserFileOpenErrorMessages: Partial<Record<BrowserFileOpenErrorCode, string>> = {
+  INVALID_TARGET: 'chat.markdownRenderer.openInBrowserInvalidTarget',
+  PATH_NOT_ALLOWED: 'chat.markdownRenderer.openInBrowserPathNotAllowed',
+  UNSUPPORTED_FILE_TYPE: 'chat.markdownRenderer.openInBrowserUnsupportedFileType',
+  FILE_NOT_FOUND: 'chat.markdownRenderer.openInBrowserFileNotFound',
+  OPEN_FAILED: 'chat.markdownRenderer.openInBrowserFailed',
+};
 
 interface BrowserTabBodyProps {
   state: WebBrowserState;
@@ -418,7 +427,11 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     if (!url || url === 'about:blank') return;
     const localFileUrl =
       ctx.remoteHostId === null && deviceLinkDeviceId === null && isLocalHtmlFileUrl(url);
-    const openPromise: Promise<{ success: boolean; error?: string }> | null = localFileUrl
+    const openPromise: Promise<{
+      success: boolean;
+      error?: string;
+      errorCode?: BrowserFileOpenErrorCode;
+    }> | null = localFileUrl
       ? window.electronAPI.openFileInBrowser(url)
       : /^https?:\/\//i.test(url)
         ? window.electronAPI.openExternal(url)
@@ -427,7 +440,12 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     void openPromise
       .then((res) => {
         if (!res?.success) {
-          toast.error(res?.error || t('chat.markdownRenderer.openInBrowserFailed'));
+          const errorKey = res?.errorCode
+            ? browserFileOpenErrorMessages[res.errorCode]
+            : undefined;
+          toast.error(
+            errorKey ? t(errorKey) : res?.error || t('chat.markdownRenderer.openInBrowserFailed'),
+          );
         }
       })
       .catch(() => {

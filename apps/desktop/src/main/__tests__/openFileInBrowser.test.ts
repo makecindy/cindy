@@ -105,6 +105,7 @@ describe('handleOpenFileInBrowser', () => {
     await expect(handleOpenFileInBrowser(url.toString(), deps)).resolves.toEqual({
       success: false,
       error: '无法在系统浏览器中打开该本地页面',
+      errorCode: 'OPEN_FAILED',
     });
     expect(deps.openPath).not.toHaveBeenCalled();
   });
@@ -115,6 +116,7 @@ describe('handleOpenFileInBrowser', () => {
     ).resolves.toEqual({
       success: false,
       error: '路径必须是绝对路径或本地 file:// URL',
+      errorCode: 'INVALID_TARGET',
     });
   });
 });

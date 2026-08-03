@@ -24,6 +24,7 @@ type VoiceInputConnectionTestResult =
 type DesktopLoginAction = import('../shared/authIpc').DesktopLoginAction;
 type DesktopLoginActionResult = import('../shared/authIpc').DesktopLoginActionResult;
 type UtilityTextFailure = import('../shared/utilityTextResult').UtilityTextFailure;
+type BrowserFileOpenResult = import('../shared/openFileInBrowser').BrowserFileOpenResult;
 type MakerSessionTreeSnapshot = import('@cindy/maker-core').SessionTreeSnapshot;
 type BrowserBackendHealth = import('../shared/browserBackend').BrowserBackendHealth;
 type BrowserBackendRecoveryResult =
@@ -2212,7 +2213,7 @@ interface ElectronAPI {
   openChatGPTApp: () => Promise<{ success: boolean }>;
 
   // 绝对路径或完整本地 file:// URL;URL 形态用于保留 query/hash 页面状态。
-  openFileInBrowser: (filePathOrUrl: string) => Promise<{ success: boolean; error?: string }>;
+  openFileInBrowser: (filePathOrUrl: string) => Promise<BrowserFileOpenResult>;
 
   // ── 系统级通知（CC Agent session 状态变更）──
   /**
