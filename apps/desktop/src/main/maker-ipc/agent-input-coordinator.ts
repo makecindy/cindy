@@ -367,7 +367,8 @@ export interface AgentInputCoordinatorDeps {
    */
   onUiRetry?: (sessionId: string, clientId: string, source: 'manual' | 'auto') => void;
   /**
-   * 用户/上游用一条**新**消息接管了这个会话(enqueue 或 steer 回落为普通 turn)。
+   * 用户接管了这个会话（新消息 enqueue、steer 回落为普通 turn，或在自动退避中
+   * clearError 以继续既有队列）。
    *
    * hook-control 用它作废该会话的待续跑记账: 会话已经被别的内容推进, 再把结果接回
    * 渠道那条旧消息只会显示无关输出。判据刻意用**入口**而不是消息文本 ——
@@ -1843,6 +1844,9 @@ export class AgentInputCoordinator {
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
     const shouldDrainTail = state.recovery?.kind === 'active-turn';
+    // clearError can immediately wake an already queued turn. Release the old
+    // backoff owner before that drain, or its Island filter can swallow the new tail.
+    if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
     state.error = null;
     state.stickyError = null;
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery

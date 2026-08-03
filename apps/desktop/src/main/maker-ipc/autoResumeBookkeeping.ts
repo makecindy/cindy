@@ -42,6 +42,11 @@ interface SuppressedTurnErrorEntry {
   replacementDispatching: boolean;
 }
 
+export interface AutoResumeScheduleAttempt {
+  /** Still owns this session after the timer fires and while async retry work awaits. */
+  isCurrent: () => boolean;
+}
+
 export interface AutoResumeBookkeepingDeps {
   /** 把压住的 error 行补落进历史。**不负责横幅** —— 横幅由 abandonTakeover 决定。 */
   persistSuppressedError: (sessionId: string, detail: SuppressedTurnError) => void;
@@ -75,10 +80,10 @@ export class AutoResumeBookkeeping {
    */
   private readonly pendingOutcomes = new Map<string, string>();
 
-  /** 已排期、还没到点的退避定时器（sessionId → 句柄 + 排期令牌）。 */
+  /** 待触发或正在异步判定的退避 attempt（sessionId → 句柄 + ownership 令牌）。 */
   private readonly schedules = new Map<
     string,
-    { timer: ReturnType<typeof setTimeout>; token: number }
+    { timer: ReturnType<typeof setTimeout> | null; token: number }
   >();
 
   /** 排期令牌自增源（全局单调；只用来判「是不是我那次」，跨会话共享无妨）。 */
@@ -122,7 +127,14 @@ export class AutoResumeBookkeeping {
   }
 
   /** Bind the suppressed failure to the exact retry queue item that will replace it. */
-  claimSuppressedErrorForRetry(sessionId: string, clientId: string): boolean {
+  claimSuppressedErrorForRetry(
+    sessionId: string,
+    clientId: string,
+    source: 'manual' | 'auto' = 'auto',
+  ): boolean {
+    // Manual Retry transfers the failure to a user-owned queue item. Invalidate
+    // even an already-fired backoff attempt before assigning the new owner.
+    if (source === 'manual') this.cancelSchedule(sessionId);
     const entry = this.suppressedErrors.get(sessionId);
     if (!entry) return false;
     if (entry.retryOwnerClientId !== null && entry.retryOwnerClientId !== clientId) return false;
@@ -249,6 +261,18 @@ export class AutoResumeBookkeeping {
   }
 
   /**
+   * A new user action replaces an unclaimed backoff attempt. End the old
+   * ownership synchronously so the next turn cannot inherit its Island filters.
+   * Claimed entries remain owned by their exact queue-item disposition.
+   */
+  supersedeUnclaimedErrorForUserIntervention(sessionId: string): boolean {
+    this.cancelSchedule(sessionId);
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry || entry.retryOwnerClientId !== null) return false;
+    return this.flushSuppressedError(sessionId);
+  }
+
+  /**
    * 自愈没成 → 补落 error 行 + 结算待确认记录 + 清接管态，并按需把横幅回落出来。
    *
    * `surfaceError=false` 用于「退避窗口内用户自己接手了」：那时再弹错误只是打扰，
@@ -308,7 +332,11 @@ export class AutoResumeBookkeeping {
    * 每次排期带令牌，回调只认自己那次：否则旧回调会在它自己更早的到点时刻用新一轮的状态
    * 提前打出重试，还会把新句柄一起删掉，teardown 从此取消不了任何东西（codex P1）。
    */
-  schedule(sessionId: string, delayMs: number, run: () => void): void {
+  schedule(
+    sessionId: string,
+    delayMs: number,
+    run: (attempt: AutoResumeScheduleAttempt) => void | Promise<void>,
+  ): void {
     this.supersedeSchedule(sessionId);
     const token = ++this.scheduleSeq;
     const timer = setTimeout(() => {
@@ -317,8 +345,34 @@ export class AutoResumeBookkeeping {
         this.deps.log?.('interrupted-turn auto-resume callback superseded; ignoring', { sessionId });
         return;
       }
-      this.schedules.delete(sessionId);
-      run();
+      // Keep the lease cancellable while async retry classification is in flight.
+      scheduled.timer = null;
+      const attempt: AutoResumeScheduleAttempt = {
+        isCurrent: () => this.schedules.get(sessionId)?.token === token,
+      };
+      const complete = () => {
+        if (attempt.isCurrent()) this.schedules.delete(sessionId);
+      };
+      try {
+        const result = run(attempt);
+        if (result && typeof result.then === 'function') {
+          void Promise.resolve(result).then(complete, (error: unknown) => {
+            complete();
+            this.deps.log?.('interrupted-turn auto-resume callback rejected', {
+              sessionId,
+              error: error instanceof Error ? error.message : String(error),
+            });
+          });
+        } else {
+          complete();
+        }
+      } catch (error) {
+        complete();
+        this.deps.log?.('interrupted-turn auto-resume callback threw', {
+          sessionId,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
     }, delayMs);
     this.schedules.set(sessionId, { timer, token });
   }
@@ -327,22 +381,22 @@ export class AutoResumeBookkeeping {
   private supersedeSchedule(sessionId: string): void {
     const scheduled = this.schedules.get(sessionId);
     if (!scheduled) return;
-    clearTimeout(scheduled.timer);
+    if (scheduled.timer !== null) clearTimeout(scheduled.timer);
     this.schedules.delete(sessionId);
     this.deps.log?.('interrupted-turn auto-resume schedule superseded by a newer one', { sessionId });
   }
 
-  /** 会话终止 → 撤掉排期并把守卫的 pendingResume 回滚；没有排期时是 no-op。 */
+  /** 终止当前 attempt 并回滚守卫的 pendingResume；没有 attempt 时是 no-op。 */
   cancelSchedule(sessionId: string): void {
     const scheduled = this.schedules.get(sessionId);
     if (!scheduled) return;
-    clearTimeout(scheduled.timer);
+    if (scheduled.timer !== null) clearTimeout(scheduled.timer);
     this.schedules.delete(sessionId);
     this.deps.rollbackGuardPendingResume(sessionId);
-    this.deps.log?.('interrupted-turn auto-resume cancelled (session terminated)', { sessionId });
+    this.deps.log?.('interrupted-turn auto-resume attempt cancelled', { sessionId });
   }
 
-  /** 仅测试与诊断用：该会话此刻有没有排期。 */
+  /** 仅测试与诊断用：该会话此刻有没有待触发或正在判定的 attempt。 */
   hasSchedule(sessionId: string): boolean {
     return this.schedules.has(sessionId);
   }
@@ -357,9 +411,8 @@ export class AutoResumeBookkeeping {
    *     transient error 必须丢弃，否则同步新终态令 post-dispatch callback 早返后，teardown
    *     会把已被取代的旧错误复活。`/clear` 的补落由既有清空竞态 cap 兜住。
    *  2. 撤排期（含回滚守卫额度）。
-   *  3. 清 coordinator 接管态 —— 这也是「已经 fire、正在 await 读库」那次重试的**唯一
-   *     刹车**：定时器一 fire 就摘掉了，此后撤排期已无从取消，而会话关闭刻意保留
-   *     recovery（手动重试入口），只有接管态被清才能让 coordinator 在 await 后收手。
+   *  3. 清 coordinator 接管态 —— attempt lease 已能挡住 late completion；这一步继续作为
+   *     coordinator 自己在 await 后的复核，并撤掉用户看到的「重新连接中」。
    *  4. 把悬空的待确认记录钉成 failed。
    */
   teardown(sessionId: string): void {

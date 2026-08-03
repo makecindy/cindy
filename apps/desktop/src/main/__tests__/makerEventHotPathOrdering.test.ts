@@ -114,7 +114,11 @@ describe('maker:event hot path ordering', () => {
     expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
     expect(source).toContain("data: { ...detail, isTerminal: true }");
     expect(source).toContain(
-      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId);',
+      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
+    );
+    expect(source).toContain('if (!attempt.isCurrent()) {');
+    expect(source).toContain(
+      'autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);',
     );
     expect(source).toContain(
       'autoResumeBookkeeping.markReplacementDispatching(sessionId, clientId);',

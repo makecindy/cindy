@@ -7156,11 +7156,13 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const sid = 'takeover-cleared-by-clear-error';
     h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     await failAfterDispatch(h, sid);
+    h.onUserEnqueue.mockClear();
 
     h.coordinator.clearError(sid);
     await flush();
 
     expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(h.onUserEnqueue, 'host 必须先释放退避簿记与 Agent Island filter').toHaveBeenCalledWith(sid);
   });
 
   it('recovery 已被用户清掉时 autoRetryLastError 返回 false(调用方据此回滚额度)', async () => {

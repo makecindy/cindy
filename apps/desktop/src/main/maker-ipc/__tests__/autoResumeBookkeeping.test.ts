@@ -328,6 +328,61 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     setTimeoutSpy.mockRestore();
     clearTimeoutSpy.mockRestore();
   });
+
+  it('timer 已 fire 后 Manual Retry 接管 → 旧 async completion 不能终结新 owner', async () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.book.schedule('s1', 1_000, async (attempt) => {
+      await gate;
+      if (attempt.isCurrent()) {
+        h.book.finalizeSuppressedError('s1', { surfaceError: false });
+      }
+    });
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(h.book.hasSchedule('s1'), 'async 判定期间仍须保留可撤销 lease').toBe(true);
+
+    expect(h.book.claimSuppressedErrorForRetry('s1', 'manual-retry', 'manual')).toBe(true);
+    expect(h.book.hasSchedule('s1')).toBe(false);
+    expect(h.guardRollbacks).toEqual(['s1']);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.book.isSuppressedErrorClaimedByRetry('s1', 'manual-retry')).toBe(true);
+    expect(h.persisted, '旧 completion 不得补落或删除手动 replacement 的错误').toEqual([]);
+  });
+
+  it('clearError / 新输入接管 → 同步释放旧 Island filter，已 fire 回调随即失效', async () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.book.schedule('s1', 1_000, async (attempt) => {
+      await gate;
+      if (attempt.isCurrent()) {
+        h.book.finalizeSuppressedError('s1', { surfaceError: false });
+      }
+    });
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(h.book.supersedeUnclaimedErrorForUserIntervention('s1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(false);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(false);
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.persisted, '失效的旧回调不得重复 disposition').toHaveLength(1);
+    expect(h.surfaced).toEqual([]);
+  });
 });
 
 describe('会话终止收尾', () => {

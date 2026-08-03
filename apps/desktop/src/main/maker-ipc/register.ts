@@ -8246,42 +8246,53 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       if (schedulerRunId) beginSchedulerAutoResume(sessionId, schedulerRunId);
       // 排期的撤旧、补落与令牌都在 AutoResumeBookkeeping.schedule 里(带单测),这里只给
       // 退避时长和到点要干的事。
-      autoResumeBookkeeping.schedule(sessionId, decision.delayMs, () => {
-        void (async () => {
-          try {
-            // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
-            // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
-            // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
-            // pendingResume。
-            const outcome = await inputCoordinator.autoRetryLastError(sessionId);
-            if (outcome !== 'resumed') {
-              interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
-              // superseded = 用户自己接手了,别再弹横幅打扰(但中断要补进历史);
-              // no-progress = 零产出、按设计不自动续跑,这是一次没人接手的真失败,
-              // 必须把横幅还给用户,否则被静默吞掉(copilot review)。
-              autoResumeBookkeeping.finalizeSuppressedError(sessionId, {
-                surfaceError: outcome === 'no-progress',
-              });
-              log.debug('interrupted-turn auto-resume not dispatched', { sessionId, outcome });
-              return;
-            }
-            // resumed 只表示续跑项已经进队；被压住的错误继续由那条 item 的 clientId
-            // 持有，直到灵动岛建立 replacement-turn 边界并真正跨过 vendor dispatch。
-            // Schedule 的 run 接管标记也不能在这里清：它会在续跑项即将进入
-            // vendor 前清掉，让同步返回的新 terminal error 只能靠**本 attempt**重新接管；
-            // 派发前被 Stop / clear / ghost block 丢弃时仍由 discard/undispatched 回调
-            // 立即失败同一个 run。
-            log.info('interrupted-turn auto-resume dispatched', { sessionId });
-          } catch (err) {
-            interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
-            // 补发本身失败 → 回落成常规错误呈现,让用户能手点重试。
-            autoResumeBookkeeping.finalizeSuppressedError(sessionId, { surfaceError: true });
-            log.warn('interrupted-turn auto-resume failed', {
+      autoResumeBookkeeping.schedule(sessionId, decision.delayMs, async (attempt) => {
+        try {
+          // 退避窗口内用户可能已经自己发了消息 / 清了会话。判据是 coordinator 的 recovery
+          // 与**接管态**(enqueue / clearError / teardown 会清掉接管态,recovery 未必),
+          // autoRetryLastError 内部复核后会 no-op 并返回非 resumed —— 此时必须回滚
+          // pendingResume。
+          const outcome = await inputCoordinator.autoRetryLastError(sessionId);
+          // Timer fire 不是 ownership 终点。上面的 DB 判定 await 期间，用户可能已用
+          // Manual Retry / clearError / 新输入接管；旧回调不得再 disposition 新 owner。
+          if (!attempt.isCurrent()) {
+            log.debug('interrupted-turn auto-resume completion superseded', {
               sessionId,
-              error: err instanceof Error ? err.message : String(err),
+              outcome,
             });
+            return;
           }
-        })();
+          if (outcome !== 'resumed') {
+            interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+            // superseded = 用户自己接手了,别再弹横幅打扰(但中断要补进历史);
+            // no-progress = 零产出、按设计不自动续跑,这是一次没人接手的真失败,
+            // 必须把横幅还给用户,否则被静默吞掉(copilot review)。
+            autoResumeBookkeeping.finalizeSuppressedError(sessionId, {
+              surfaceError: outcome === 'no-progress',
+            });
+            log.debug('interrupted-turn auto-resume not dispatched', { sessionId, outcome });
+            return;
+          }
+          // resumed 只表示续跑项已经进队；被压住的错误继续由那条 item 的 clientId
+          // 持有，直到灵动岛建立 replacement-turn 边界并真正跨过 vendor dispatch。
+          // Schedule 的 run 接管标记也不能在这里清：它会在续跑项即将进入
+          // vendor 前清掉，让同步返回的新 terminal error 只能靠**本 attempt**重新接管；
+          // 派发前被 Stop / clear / ghost block 丢弃时仍由 discard/undispatched 回调
+          // 立即失败同一个 run。
+          log.info('interrupted-turn auto-resume dispatched', { sessionId });
+        } catch (err) {
+          if (!attempt.isCurrent()) {
+            log.debug('interrupted-turn auto-resume rejection superseded', { sessionId });
+            return;
+          }
+          interruptedTurnAutoResumeGuard.noteResumeSendFailed(sessionId);
+          // 补发本身失败 → 回落成常规错误呈现,让用户能手点重试。
+          autoResumeBookkeeping.finalizeSuppressedError(sessionId, { surfaceError: true });
+          log.warn('interrupted-turn auto-resume failed', {
+            sessionId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
       });
       // 回传展示信息:coordinator 存进 autoResumePending → projection → 活动行
       // (「重新连接中 attempt/maxAttempts」+ 展开详情里的原因与会话累计)。
@@ -8384,7 +8395,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 失败 turn 重试 → hook 侧把这一轮接回渠道那条已收口的消息。source 区分
     // 人工与自动续跑：只有真人接手才作废 scheduler waiter，自动路径不能取消自己。
     onUiRetry: (sessionId, clientId, source) => {
-      autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId);
+      autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);
       if (source === 'manual') {
         // UI continuation can dispatch before the scheduler backoff callback.
         // Retire that pending waiter first so it cannot consume the manual retry.
@@ -8396,6 +8407,8 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     // 用 enqueue 入口而不是消息文本: 零产出重试重发的是原文, 文本上无从区分,
     // 而它走 unshift 不经这里, 于是不会把自己的回流作废掉。
     onUserEnqueue: (sessionId) => {
+      // 同步撤掉 timer / in-flight lease 与未认领的 Island filter，新 turn 不继承旧失败。
+      autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);
       // The user turn can dispatch before the backoff callback observes that its
       // recovery was superseded. Fail the scheduler waiter synchronously so it
       // cannot consume that unrelated turn's text/done as this run's result.
