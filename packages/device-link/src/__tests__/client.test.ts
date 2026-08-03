@@ -3712,6 +3712,50 @@ describe('DeviceLinkClient', () => {
       h.client.stop();
     });
 
+    it('C4:方向证据访问器 —— 只认业务 invoke,显式关闭出站后一票否决', async () => {
+      const h = makeHarness();
+      h.client.start();
+      await tick();
+      h.current().ack();
+      await tick();
+      await establishInboundReliableLink(h, 'stream-intent', 1, 'peer-intent');
+
+      // 无在途请求 → 无业务证据
+      expect(h.client.hasPendingRequestsTo('peer-intent')).toBe(false);
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(false);
+
+      // 在途业务 invoke → 算证据
+      const pending = h.client.invoke('peer-intent', {
+        channel: 'local-db:sessions:list',
+        args: [1],
+      });
+      expect(h.client.hasPendingRequestsTo('peer-intent')).toBe(true);
+
+      // 在途 link-open(协议请求)不算证据:重开动作本身就是发 link-open,
+      // 算进来会形成「重开在途 → 因此有权重开」的自我论证闭环。
+      const linkPending = h.client.openLink('peer-other', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      expect(h.client.hasPendingRequestsTo('peer-other')).toBe(false);
+
+      // 用户显式断开出站控制 → 一票否决(残留在途请求不得把链路拉回来)
+      h.client.closeLink('peer-intent', 'user');
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(true);
+
+      // openLink 是「意图续新」→ 清除该标记
+      const reopen = h.client.openLink('peer-intent', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      expect(h.client.isOutboundExplicitlyClosed('peer-intent')).toBe(false);
+
+      h.client.stop();
+      await Promise.allSettled([pending, linkPending, reopen]);
+    });
+
     it('C2:link 恢复即清节流 —— 恢复后 30s 内再次丢 link 时新帧立刻再通知一次', async () => {
       const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
       let nowMs = 4_000_000;

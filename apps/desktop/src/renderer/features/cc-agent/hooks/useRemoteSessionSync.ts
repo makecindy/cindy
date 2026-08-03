@@ -258,12 +258,17 @@ export function createRemoteSessionSyncEngine(
         try {
           const stillRunning = await deps.queryTurnRunning!(sid);
           if (watchdogStopped) return;
+          // 核实**成功**本身就是「被控端可达」的证据 → 收起 suspect-stall 兜底
+          // (与看门狗路径对齐)。否则此前因查询失败挂起的兜底横幅会在连接已恢复后
+          // 继续要求用户手动处理,直到下一次看门狗巡检(退避后可能约 60s)才消失
+          // (review P2)。turn 仍在运行也照样清 —— 它只是「无法核实」的兜底态。
+          deps.onRecovered?.(sid);
           if (!stillRunning) {
             deps.finalize!(sid);
             deps.reconcileForce!(sid);
           }
         } catch {
-          // 不可达 → 不 auto-finalize,看门狗后续会覆盖
+          // 不可达 → 不 auto-finalize、不清兜底,看门狗后续会覆盖
         }
       })();
     }, MOUNT_RECONCILE_DELAY_MS);

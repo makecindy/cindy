@@ -565,6 +565,20 @@ export class DeviceLinkClient {
    * 只反映**出站**方向:pending 里只有本机发起、正在等对端响应的请求;对端控制本机
    * 的入站请求不在其中,所以不会把「纯被控端方向」误判成可重开。
    */
+  /**
+   * 本机是否已显式结束对该设备的**出站**控制(closeLink direction='outbound')。
+   *
+   * 供 host 一票否决自动重开:用户显式断开后,残留的在途请求(尤其走 legacy 路径、
+   * 不在可靠 pending 里因而不被 abandonReliablePending 清掉的那些)与残留订阅都不该
+   * 再把链路拉起来 —— 否则对端会再次出现非用户发起的受控横幅(review P1)。
+   *
+   * 只反映出站方向:入站撤权 / 踢控制端(direction='inbound')不置位,互控时仍存续
+   * 的主动控制方向保持可恢复。`openLink`(意图续新)与收到 link-accept 时自动清除。
+   */
+  isOutboundExplicitlyClosed(dst: string): boolean {
+    return this.peerTransport.get(dst)?.outboundExplicitlyClosed === true;
+  }
+
   hasPendingRequestsTo(dst: string): boolean {
     for (const request of this.pending.values()) {
       if (request.dst === dst && request.expectKind === 'invoke-result') return true;

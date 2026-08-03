@@ -183,8 +183,13 @@ let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
  * link-open,算进来会自我论证)。
  */
 function hasOutboundControlIntent(deviceId: string): boolean {
+  if (!client) return false;
+  // 用户显式断开出站控制后一票否决:残留的在途请求(走 legacy 路径的不在可靠
+  // pending 里,不会被 abandonReliablePending 清掉)与残留订阅都不得把链路拉回来
+  // (review P1)。openLink 是「意图续新」,client 侧会自动清除该标记。
+  if (client.isOutboundExplicitlyClosed(deviceId)) return false;
   if (snapshotSubscriptions(deviceId).length > 0) return true;
-  return client?.hasPendingRequestsTo(deviceId) === true;
+  return client.hasPendingRequestsTo(deviceId);
 }
 
 /**
