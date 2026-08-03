@@ -2956,7 +2956,7 @@
           "telegram": "Telegram 新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
           "dingtalk": "钉钉新对话会使用这组 Agent 和模型；已有对话发送 /new 后应用。",
           "wecom": "企业微信新对话会使用这组 Agent、模型和权限模式；已有对话发送 /new 后应用。",
-          "officialHook": "官方 bot 的新对话会使用这组 Agent、模型和权限模式；Telegram、Slack 与 X 共用同一组配置。已有对话发送 /new 后应用。"
+          "officialHook": "官方 bot 的新对话会使用这组 Agent 和模型；Telegram、Slack 与 X 共用同一组配置。权限模式按目录在上方「工作目录映射」里设置。已有对话发送 /new 后应用。"
         },
         "agentLabel": "Agent",
         "modelLabel": "模型配置",

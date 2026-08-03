@@ -2956,7 +2956,7 @@
           "telegram": "Telegram の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
           "dingtalk": "DingTalk の新規会話では、この Agent とモデルを使用します。既存の会話には /new で適用します。",
           "wecom": "WeCom の新規会話では、この Agent・モデル・権限モードを使用します。既存のチャットには /new で適用します。",
-          "officialHook": "公式 bot の新規会話では、この Agent・モデル・権限モードを使用します。Telegram・Slack・X は同じ設定を共有します。既存の会話には /new で適用します。"
+          "officialHook": "公式 bot の新規会話では、この Agent とモデルを使用します。Telegram・Slack・X は同じ設定を共有します。権限モードは上の「作業ディレクトリのマッピング」でディレクトリごとに設定します。既存の会話には /new で適用します。"
         },
         "agentLabel": "Agent",
         "modelLabel": "モデル設定",
