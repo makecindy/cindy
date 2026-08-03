@@ -1112,6 +1112,59 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('本地 closeLink 后迟到的 transport-timeout 被拦截:不交 app 层、不触发重建、不改变已关闭状态', async () => {
+    const h = makeHarness({
+      timing: { pingIntervalMs: 60_000, requestTimeoutMs: 5_000 },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+
+    // 控制端建链后用户显式断开(closeLink 的永久关闭帧可能因背压未送达对端)
+    const open = h.client.openLink(
+      'dev-b',
+      { controllerName: 'Test', protocolVersion: 1, appVersion: '1' },
+      100,
+    );
+    const openFrame = h.current().sent.find((e) => e.kind === 'link-open')!;
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-accept',
+      id: openFrame.id,
+      src: 'dev-b',
+      payload: {
+        appVersion: '1',
+        allowlistHash: 'hash',
+        capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+        transportStreamId: 'closed-host-stream',
+      },
+    });
+    await open;
+    h.client.closeLink('dev-b', 'user');
+
+    // 对端因保留消息耗尽重试,发来迟到的瞬时重置
+    const seenFrames: Envelope[] = [];
+    const off = h.client.onFrame((env) => {
+      seenFrames.push(env);
+    });
+    h.current().push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'transport-timeout' },
+    });
+    await tick();
+
+    // 不交 app 层(app 层看不到帧,就不会 openRemoteLink/rehydrate 重建)
+    expect(seenFrames.filter((env) => env.kind === 'link-close')).toHaveLength(0);
+    // 已关闭状态不变:后续可靠发送仍被挡(未被瞬时重置分支“激活”)
+    expect(() => h.client.sendInvokeResult('dev-b', 'x', { ok: true, result: [] })).toThrow(
+      expect.objectContaining({ code: 'LINK_NOT_OPEN' }),
+    );
+    off();
+    h.client.stop();
+  });
+
   it('控制端收到 transport-timeout link-close:瞬时重置而非永久关闭——在途请求不被拒,重开后同 seq 续传并可正常完成', async () => {
     const h = makeHarness({
       timing: {

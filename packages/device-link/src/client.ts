@@ -1397,6 +1397,19 @@ export class DeviceLinkClient {
         } else if (env.kind === 'link-close' && env.src) {
           const close = env.payload as LinkClosePayload | undefined;
           if (close?.reason === 'transport-timeout') {
+            // 本地已显式关闭该链路(closeLink 置了 explicitlyClosed):我们的永久
+            // link-close 可能因背压/发送异常未送达,对端为保留消息耗尽重试后
+            // 发来瞬时重置。本机已无主动控制意图,拦截不交 app 层——否则
+            // desktop 会 openRemoteLink/mobile 会 rehydrate,把用户刚关闭的控制链
+            // 重新建起。吞帧即稳态:对端通知重试自行终止,其保留 pending 等待
+            // 将来显式重开或其自身清理路径回收。
+            const existing = this.peerTransport.get(env.src);
+            if (existing?.explicitlyClosed) {
+              this.log.debug(
+                `ignoring late transport-timeout from ${env.src.slice(0, 8)} after local explicit close`,
+              );
+              return true;
+            }
             // 对端(被控端)对本机的可靠重试耗尽,做了 peer 级瞬时重置。这不是
             // 永久关闭:不置 explicitlyClosed、不拆可靠层、不拒在途请求——保留
             // stream 与 pending,重新 link-open/link-accept 后按 reconnect-continuity
