@@ -103,6 +103,9 @@ describe('interrupted continuation enqueue contract', () => {
       /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
     );
     expect(discardedHook).toMatch(
+      /finalizeUndispatchedClaimedRetry\(sessionId, item, ['"]cancelled['"]\)/,
+    );
+    expect(discardedHook).toMatch(
       /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId\)/,
     );
     expect(discardedHook).toMatch(
@@ -127,6 +130,24 @@ describe('interrupted continuation enqueue contract', () => {
     expect(undispatchedEnd).toBeGreaterThan(undispatchedStart);
     expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
       /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
+    );
+    expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
+      /finalizeUndispatchedClaimedRetry\(sessionId, item, disposition\)/,
+    );
+
+    const finalizeStart = registerSource.indexOf('const finalizeUndispatchedClaimedRetry = (');
+    const finalizeEnd = registerSource.indexOf('\n  };', finalizeStart);
+    expect(finalizeStart).toBeGreaterThan(-1);
+    expect(finalizeEnd).toBeGreaterThan(finalizeStart);
+    const finalizeHelper = registerSource.slice(finalizeStart, finalizeEnd);
+    expect(finalizeHelper).toMatch(
+      /surfaceSuppressedErrorForRetry\(sessionId, item\.clientId\)/,
+    );
+    expect(finalizeHelper).toMatch(
+      /flushSuppressedErrorForRetry\(\s*sessionId,\s*item\.clientId,?\s*\)/,
+    );
+    expect(finalizeHelper).toMatch(
+      /handleAgentIslandSessionStopped\(getStableSessionForTurnBoundary\(sessionId\) \?\? sessionId\)/,
     );
   });
 

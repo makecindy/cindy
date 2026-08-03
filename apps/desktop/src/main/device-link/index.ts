@@ -54,11 +54,13 @@ import {
   writeDeviceLinkSetting,
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
+import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  flushRemoteInvokeResultOutboxOnReconnect,
   forgetControllerInvokeState,
   handleControllerOffline,
   purgeRevokedController,
@@ -96,11 +98,17 @@ import {
   invokeWithClosedLinkRecovery,
   requiresSessionLink,
 } from './linkRecovery';
+import {
+  createResponsivenessTracker,
+  type DeviceResponsivenessTracker,
+} from './responsivenessTracker';
 
 // register.ts 从 device-link/index 导入 setBusyProbe;改用 busyReporter 后在此 re-export 保持其导入不变。
 export { setBusyProbe };
 
 const log = createLogger('device-link');
+// relay 建连专用的 DNS 回退(成功缓存 / 失败与慢解析回退最近成功地址)。
+const relayDnsLookup = createDnsFallbackLookup({ log });
 
 // device-link 独立部署后的 relay 地址:走运行期端点清单(烘焙值已含 dev fallback
 // localhost:3335)。惰性函数而非模块级常量——远程清单在 app.ready 内解析。
@@ -164,6 +172,14 @@ let appliedKeepAwake: boolean | null = null;
 let pendingQuitOwnershipRelease: Promise<void> | null = null;
 const openLinkInFlight = new Map<string, Promise<LinkAcceptPayload>>();
 const presenceAvailableByDevice = new Map<string, boolean>();
+/**
+ * 「目标设备无响应」熔断(弱网 / 对端卡死时收敛请求风暴,见 responsivenessTracker)。
+ * 随 initDeviceLinkService 创建;null(极早期)时门禁直通,不影响行为。
+ */
+let responsivenessTracker: DeviceResponsivenessTracker | null = null;
+/** 熔断探测的周期 tick(单飞探测由 tracker 内部的退避窗口控制,这里只是驱动时钟)。 */
+let responsivenessProbeTimer: ReturnType<typeof setInterval> | null = null;
+const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
 /**
  * 词典同步的对端选择只看「在线 + 是桌面」,不看 remoteControlEnabled ——
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
@@ -306,15 +322,62 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }),
     // agent:`ws` 不吃系统代理,relay 在代理网络下会连不上;直连时为 undefined,
     // 行为与不传一致(见 maker-host/outbound-fetch)。
+    // lookup:DNS 失败/慢解析时回退最近成功地址(弱网 VPN 下 DNS 单段可吃掉
+    // 大半个握手窗口);代理模式下由代理解析域名,本层自然旁路。
     createWebSocket: async (url, headers) =>
-      new WebSocket(url, { headers, agent: await createOutboundHttpAgent(url) }),
+      new WebSocket(url, {
+        headers,
+        agent: await createOutboundHttpAgent(url),
+        // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
+        // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
+        lookup: relayDnsLookup,
+      } as WebSocket.ClientOptions),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),
       warn: (...args) => log.warn(...args),
       error: (...args) => log.error(...args),
     },
+    // 弱网收紧:默认 20s ping × (2+1) tick 要 ~60s 才判死半开连接,期间所有请求黑洞。
+    // 15s ping 把判死缩到 ~45s;不动 pongMissLimit——高延迟链路(实测响应性可达 ~10s)
+    // 下更激进的宽限会把「慢但活着」误判成死链,造成重连循环(mobile 用 10s×1 是因为
+    // 手机端 TCP 半开假活远比桌面常见,桌面不照搬)。
+    timing: { pingIntervalMs: 15_000 },
   });
+
+  responsivenessTracker = createResponsivenessTracker({
+    // 探测直接走 client.invoke(guardInvoke 已在 tracker 内持有探测席位,不能再套
+    // remoteInvoke 的外层门禁,否则自旋)。sessions:list 属 UNLINKED legacy 通道,无需 link。
+    probeInvoke: (deviceId, channel, args) => {
+      if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+      return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
+    },
+    onUnresponsiveChanged: (deviceId, unresponsive) => {
+      broadcast(DEVICE_LINK_PUSH.RESPONSIVENESS_CHANGED, { deviceId, unresponsive });
+      // 恢复时主动重放该设备的订阅:熔断 open 期间 subscribe 都被快速失败挡掉了,
+      // 不重放的话 push 驱动的列表 / 会话镜像会一直缺流,直到用户手动重试。
+      // linkTornDown 闸:teardown 的 resetAll 也会触发本回调,那时不能再发订阅。
+      if (!unresponsive && !linkTornDown && client?.getStatus() === 'online') {
+        replayActiveSubscriptions(`responsiveness-recovered:${deviceId.slice(0, 8)}`, deviceId);
+      }
+    },
+    // 探测同样遵守本机「关闭对该设备的控制」的 fail-closed 偏好,不给禁用目标发任何帧。
+    isProbeEligible: (deviceId) =>
+      client?.getStatus() === 'online' &&
+      arbiter?.isOwner() === true &&
+      presenceAvailableByDevice.get(deviceId) === true &&
+      !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    log: {
+      info: (...args) => log.info(...args),
+      warn: (...args) => log.warn(...args),
+      debug: (...args) => log.debug(...args),
+    },
+  });
+  if (responsivenessProbeTimer) clearInterval(responsivenessProbeTimer);
+  responsivenessProbeTimer = setInterval(() => {
+    responsivenessTracker?.probeTick();
+  }, RESPONSIVENESS_PROBE_TICK_MS);
+  responsivenessProbeTimer.unref();
 
   client.onStatusChange((status) => {
     if (status !== 'online') {
@@ -328,7 +391,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (status !== 'online') presenceOnlineByDevice.clear();
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
-    if (status === 'online') replayActiveSubscriptions('ws-online');
+    if (status === 'online') {
+      replayActiveSubscriptions('ws-online');
+      // 重连即投递被控端积压的 invoke-result:离线期间 outbox 只做慢速 TTL 出清,
+      // 不再自旋重试,上线事件是它的主投递触发点。
+      flushRemoteInvokeResultOutboxOnReconnect();
+    }
   });
   // 连接问题(鉴权失效/被顶号/超限/版本不符)→ 推给 renderer,让设置页与
   // 远程会话 banner 能把「一直重连」的真实原因说清楚,而不是笼统的 connecting。
@@ -342,12 +410,27 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 鉴权失效不能只在设置页可见:主动 refresh,把「被顶下线」汇入全局会话过期出口。
     if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();
   });
+  // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
+  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。只对本机确实在控制
+  // (有活跃订阅)的设备主动重建链路;client 侧已 30s/peer 节流,openRemoteLink
+  // 自带 in-flight 去重。被控端方向(控制端给本机发帧)没有订阅记录,自然忽略。
+  client.onReliableFrameBeforeLink((deviceId) => {
+    if (snapshotSubscriptions(deviceId).length === 0) return;
+    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
+    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`);
+    openRemoteLink(deviceId).catch((err) => {
+      log.debug(`re-open link for ${deviceId.slice(0, 8)} failed`, err);
+    });
+  });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
     const available = snap.online && snap.remoteControlEnabled;
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
+    // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
+    // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
+    if (!available && wasAvailable === true) responsivenessTracker?.clearDevice(snap.deviceId);
     presencePlatformByDevice.set(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
@@ -411,6 +494,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 循环,否则刚被断开的控制链会被退避重试重新建起。
       routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
       if (reason === 'revoked') {
+        // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
+        // 作废在途结果(翻代),避免 unresponsive 状态与撤权状态并存(对齐 mobile 语义)。
+        responsivenessTracker?.clearDevice(env.src);
         broadcast(DEVICE_LINK_PUSH.ACCESS_REVOKED, { deviceId: env.src });
       }
       return;
@@ -560,6 +646,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       clearInterval(busyTimer);
       busyTimer = null;
     }
+    if (responsivenessProbeTimer) {
+      clearInterval(responsivenessProbeTimer);
+      responsivenessProbeTimer = null;
+    }
     // 先释放持有权(删行),幸存实例在下一轮 tick 内接管,无需等心跳过期。
     // sync 阶段只发起 DELETE(RPC 已入 worker 队列),真正的落盘等待交给下面
     // async 阶段的 disposer —— sync 阶段不 await,直接退出会与 DbClient
@@ -691,6 +781,10 @@ function teardownActiveLink(): void {
     relayAuthRecoveryRetryTimer = null;
   }
   dropAllControllers(client, 'shutdown');
+  // 熔断状态是账号 / 链路作用域的:登出或失去持有权后全部翻篇,不串到下一段链路。
+  responsivenessTracker?.resetAll();
+  for (const timer of subscriptionReplayRetryTimers.values()) clearTimeout(timer);
+  subscriptionReplayRetryTimers.clear();
   presenceAvailableByDevice.clear();
   // 词典同步驱动是进程级的,**不随单次链路起停**:多实例仲裁的 demote → acquire
   // 只会 client.start(),不会重跑 initDeviceLinkService,在这里 stop 掉它会让词典
@@ -712,16 +806,79 @@ function replayActiveSubscriptions(reason: string, deviceId?: string): void {
     `device-link replay subscriptions (${reason}): devices=${refs.length} topics=${topicCount}`,
   );
   for (const { deviceId, topics } of refs) {
-    void remoteSubscribe(deviceId, topics).catch((err) => {
-      log.warn(
-        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}: ${String(err)}`,
-      );
-    });
+    replayDeviceSubscription(deviceId, topics, reason, 0);
   }
+}
+
+/**
+ * 重放失败的有限重试(弱网修复,2026-08):重连后的 subscribe 若恰好赶上链路抖动
+ * 失败,此前只留一行 warn —— push 流静默缺失,直到下一次重连或用户手动操作。
+ * 每设备最多补 2 次(3s / 9s),重试前重新校验前置条件并取当前订阅快照;熔断 open
+ * 的设备不重试(恢复时 tracker 自会触发一次定向重放)。
+ */
+const SUBSCRIPTION_REPLAY_RETRY_DELAYS_MS = [3_000, 9_000] as const;
+const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function replayDeviceSubscription(
+  deviceId: string,
+  topics: string[],
+  reason: string,
+  attempt: number,
+): void {
+  // 新一轮重放顶掉该设备挂起的重试,避免多路触发(ws-online / presence / 熔断恢复)叠加。
+  const prev = subscriptionReplayRetryTimers.get(deviceId);
+  if (prev) {
+    clearTimeout(prev);
+    subscriptionReplayRetryTimers.delete(deviceId);
+  }
+  void remoteSubscribe(deviceId, topics).catch((err) => {
+    const delay = SUBSCRIPTION_REPLAY_RETRY_DELAYS_MS[attempt];
+    if (delay === undefined) {
+      log.warn(
+        `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, giving up: ${String(err)}`,
+      );
+      return;
+    }
+    log.warn(
+      `device-link replay subscriptions failed (${reason}) for ${deviceId.slice(0, 8)}, retrying in ${delay}ms: ${String(err)}`,
+    );
+    const timer = setTimeout(() => {
+      subscriptionReplayRetryTimers.delete(deviceId);
+      if (linkTornDown || client?.getStatus() !== 'online') return;
+      if (responsivenessTracker?.isUnresponsive(deviceId)) return;
+      if (presenceAvailableByDevice.get(deviceId) !== true) return;
+      // 快照可能已变(窗口退订 / 新增 topic):按该设备当前的订阅快照重放。
+      const current = snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId);
+      if (!current || current.topics.length === 0) return;
+      replayDeviceSubscription(deviceId, current.topics, `${reason}-retry`, attempt + 1);
+    }, delay);
+    timer.unref?.();
+    subscriptionReplayRetryTimers.set(deviceId, timer);
+  });
 }
 
 export function getDeviceLinkStatus(): DeviceLinkStatus {
   return client?.getStatus() ?? 'stopped';
+}
+
+/** 当前被熔断判定为「无响应」的目标设备(控制端本地判定,供 getState / UI 镜像)。 */
+export function getUnresponsiveDeviceIds(): string[] {
+  return responsivenessTracker?.getUnresponsiveDeviceIds() ?? [];
+}
+
+/**
+ * 系统睡眠唤醒:立即重建连接而不是干等退避计时器(最坏 30s)+ 心跳判死(~45s)。
+ * 状态仍是 online 也要重建 —— 睡眠期间 socket 大概率已半开假活(对端早没了,
+ * 本端没收到 close、心跳未累计到判死),此时只解除退避救不了半开黑洞
+ * (review P1/P2:connectNow 对 online 是空操作)。restartConnection 对 stopped
+ * client 不拉起,但持有权 / 登录双闸仍在前面,不绕过仲裁。
+ */
+export function handleDeviceLinkSystemResume(): void {
+  if (!client || linkTornDown) return;
+  if (arbiter && !arbiter.isOwner()) return;
+  if (!authManager.getAuthState().isAuthenticated) return;
+  log.info('system resume: rebuilding device-link connection immediately');
+  client.restartConnection('system-resume');
 }
 
 export function getDeviceLinkConnectionIssue(): DeviceLinkConnectionIssue | null {
@@ -988,12 +1145,17 @@ export async function remoteInvoke(
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.invoke(deviceId, { channel, args }, INVOKE_TIMEOUT_OVERRIDES_MS[channel]);
   };
-  return invokeWithClosedLinkRecovery(
-    invoke,
-    () => openRemoteLink(deviceId),
-    () => assertRemoteControlTargetEnabled(deviceId),
-    () => closeRemoteLink(deviceId),
-  );
+  const run = (): Promise<InvokeResultPayload> =>
+    invokeWithClosedLinkRecovery(
+      invoke,
+      () => openRemoteLink(deviceId),
+      () => assertRemoteControlTargetEnabled(deviceId),
+      () => closeRemoteLink(deviceId),
+    );
+  // 熔断门禁:目标设备连续超时判定无响应后,新请求立即以 DEVICE_UNRESPONSIVE 快速失败
+  // (不占管道、不等 12~30s 超时),恢复由周期单飞探测驱动。tracker 未初始化时直通。
+  if (!responsivenessTracker) return run();
+  return responsivenessTracker.guardInvoke(deviceId, channel, run);
 }
 
 /**
@@ -1007,21 +1169,28 @@ export async function remoteSubscribe(
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
-    await openRemoteLink(deviceId);
-  }
-  assertRemoteControlTargetEnabledAfterReopen(deviceId);
-  if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  return client.invoke(deviceId, {
-    channel: DL_SUBSCRIBE_CHANNEL,
-    args: [
-      {
-        topics,
-        controllerName: deviceName(),
-        capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
-      },
-    ],
-  });
+  const run = async (): Promise<InvokeResultPayload> => {
+    if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    if (requiresSessionLink(topics) && !client.isLinkReady(deviceId)) {
+      await openRemoteLink(deviceId);
+    }
+    assertRemoteControlTargetEnabledAfterReopen(deviceId);
+    if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
+    return client.invoke(deviceId, {
+      channel: DL_SUBSCRIBE_CHANNEL,
+      args: [
+        {
+          topics,
+          controllerName: deviceName(),
+          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+        },
+      ],
+    });
+  };
+  // 同一张熔断门禁盖住「重开 link + subscribe」整段(单席位,内部 openLink 的失败不
+  // 重复计 strike):设备无响应期间 bootstrap 快速失败,恢复后由 tracker 重放订阅。
+  if (!responsivenessTracker) return run();
+  return responsivenessTracker.guardInvoke(deviceId, DL_SUBSCRIBE_CHANNEL, run);
 }
 
 /** 控制端:取消订阅被控端某 topic。 */

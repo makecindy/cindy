@@ -103,6 +103,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
+      unresponsiveDeviceIds: [],
     }),
     setEnabled: vi.fn(),
     setKeepAwake: vi.fn(),
@@ -138,6 +139,7 @@ describe('device-link IPC handlers', () => {
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
+      unresponsiveDeviceIds: [],
     });
   });
 
@@ -157,6 +159,7 @@ describe('device-link IPC handlers', () => {
         controlledBy: [{ deviceId: 'controller-1', name: 'Other device' }],
         revokedControllers: ['revoked-1'],
         disabledControlDeviceIds: ['disabled-1'],
+        unresponsiveDeviceIds: ['unresponsive-1'],
       }),
     });
 
@@ -168,6 +171,7 @@ describe('device-link IPC handlers', () => {
       controlledBy: [],
       revokedControllers: [],
       disabledControlDeviceIds: [],
+      unresponsiveDeviceIds: [],
     });
   });
 
@@ -329,6 +333,7 @@ describe('device-link IPC handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-1'],
+        unresponsiveDeviceIds: [],
       }),
       apiFetch: vi.fn().mockResolvedValue({
         devices: [
@@ -424,6 +429,7 @@ describe('device-link controller handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-2'],
+        unresponsiveDeviceIds: [],
       }),
     });
 
@@ -528,6 +534,7 @@ describe('device-link controller handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: disabled ? ['dev-2'] : [],
+        unresponsiveDeviceIds: [],
       }),
       invoke,
       rewriteOutboundMedia: vi.fn().mockImplementation(async (_channel, args) => {

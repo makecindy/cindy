@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 计费",
+        "subtitle": "全部模型 · Claude Code / Codex 通用 · 按 token 从余额扣费",
         "modelLabel": "全部模型",
-        "billingLabel": "按 token 计费",
+        "billingLabel": "按 token 从余额扣费",
         "disconnectConfirm": {
           "title": "断开 Cindy AI？",
           "description": "断开后将清除本地保存的 Cindy AI Key，需要重新连接才能继续使用 Cindy AI 提供的模型。"
@@ -1280,7 +1280,14 @@
           "confirm": "轮换"
         },
         "rotateSuccess": "密钥已轮换",
-        "rotateFailed": "轮换失败，请稍后重试"
+        "rotateFailed": "轮换失败，请稍后重试",
+        "copyKeyAria": "复制 Cindy AI Key",
+        "copyKeySuccess": "已复制 Cindy AI Key",
+        "copyKeyFailed": "复制失败，请稍后重试",
+        "asset": {
+          "viewUsage": "查看用量",
+          "syncFailed": "凭据同步失败，暂时无法获取余额。已保存的模型配置不受影响。"
+        }
       },
       "custom": {
         "tag": "自定义",
@@ -1573,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "推荐",
-        "desc": "登录 Cindy 即可开通官方 Cindy AI 服务，全部模型开箱即用，无需管理任何 Key。",
+        "desc": "官方服务，全部模型开箱即用，无需管理任何 Key。",
+        "grantBadge": "新用户含赠送余额",
         "cta": "登录 Cindy"
       },
       "menu": {
@@ -2964,7 +2972,8 @@
         "saveFailed": "保存新对话配置失败",
         "agents": {
           "claude-code": "Claude Code",
-          "codex": "Codex"
+          "codex": "Codex",
+          "pi": "Pi"
         }
       }
     },
@@ -5305,7 +5314,7 @@
         "title": "Cindy AI",
         "desc": "官方服务 · 全部模型 · Claude Code / Codex 通用",
         "loginTitle": "登录 Cindy",
-        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型"
+        "loginDesc": "登录后自动开通 Cindy AI 官方服务，即可使用全部模型，新用户含赠送余额"
       },
       "othersToggle": "其他供应商({{count}})",
       "presetSub": "填入 API Key 即可连接",
@@ -5326,6 +5335,12 @@
       "openProviders": "打开模型供应商",
       "acknowledge": "知道了",
       "separator": "、"
+    },
+    "promotionalGrant": {
+      "title": "已为你开通 Cindy AI",
+      "desc": "赠送余额 {{amount}} 已到账，有效期至 {{date}}。用完或过期后可随时充值。",
+      "openBilling": "查看用量",
+      "acknowledge": "知道了"
     }
   },
   "voiceInputOverlay": {
@@ -5505,6 +5520,9 @@
       "retry": "重试",
       "continueAfterReset": "恢复后继续",
       "continueAfterResetTitle": "创建一次性自动化，在用量恢复后继续当前任务",
+      "gatewayQuotaExhausted": "Cindy AI 余额不足，请充值后继续",
+      "viewBalance": "查看余额",
+      "viewBalanceTitle": "打开「用量和计费」查看余额并充值",
       "credentialSwitchBusy": "Codex 正在其它任务中运行，暂时无法按本任务选择的模型来源切换（需要重启共享的 Codex 后台进程）。等它结束后点「重试」即可。",
       "codexThreadStale": "Codex 鉴权模式已切换，当前任务无法继续 —— 请新建任务后生效。",
       "claudeGatewayOpusPlanMismatch": "这次 Opus 请求实际走的是 XD Gateway，不是你的 Claude.ai 订阅；该网关路由拒绝了此模型。可切换到 Claude.ai 订阅后重试，或换一个模型。",
@@ -6098,6 +6116,7 @@
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
+      "degraded": "与被控设备的连接不稳定，正在自动重试…",
       "actionsUnavailable": "被控设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
       "loading": "正在从被控设备加载任务…",
@@ -6231,9 +6250,8 @@
         "localMachine": "本机",
         "connecting": "连接中…",
         "tasksLoading": "正在从 {{device}} 读取任务…",
-        "tasksLoadFailed": "无法读取 {{device}} 上的任务。请检查连接后重试。",
-        "tasksPartiallyFailed": "未能读取 {{device}} 上的任务，当前仅显示已加载的内容。",
-        "retryTasks": "重新读取任务",
+        "tasksLoadFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试…",
+        "tasksPartiallyFailed": "暂时读取不到 {{device}} 上的任务，正在自动重试；先显示已加载的内容",
         "devicesLoading": "正在读取远程设备…",
         "devicesLoadFailed": "无法读取远程设备列表。请检查连接后重试。",
         "devicesPartiallyFailed": "无法刷新远程设备列表，当前仅显示已加载的内容。",
@@ -8589,6 +8607,20 @@
           "expired": "已过期",
           "voided": "已作废"
         }
+      }
+    },
+    "orders": {
+      "title": "订单记录",
+      "description": "仅显示在 Cindy 内发起的充值与订阅订单。待支付订单超时后自动取消。",
+      "count": "{{count}} 笔",
+      "incomplete": "订单记录较多，当前仅显示最近的 {{count}} 笔。",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "已完成",
+        "awaitingPayment": "待支付",
+        "canceled": "已取消",
+        "expired": "已过期",
+        "failed": "支付失败"
       }
     },
     "dialogs": {

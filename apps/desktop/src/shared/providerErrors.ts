@@ -89,6 +89,19 @@ const WIRE_RE =
 const AUTH_RE = /invalid.{0,10}(api.?key|token)|authentication_error|unauthorized|api key not valid|令牌|鉴权失败/i;
 
 /**
+ * 单独暴露「余额 / 配额耗尽」的文案判定，供只拿得到一条错误 message、拿不到
+ * status 与响应体的消费方使用（会话内 ErrorBanner：错误经 IPC 投影成字符串后，
+ * classifyProviderError 的 status 分支已经用不上了）。
+ *
+ * 与 classifyProviderError 共用同一份 pattern，是为了不让「什么算余额耗尽」在两处
+ * 各写一遍后漂移；本函数不参与分类优先级，加它不改变 classifyProviderError 的行为。
+ * 新增 pattern 仍需真实错误体为证（见文件头注释）。
+ */
+export function matchesQuotaExhaustedText(text: string): boolean {
+  return QUOTA_RE.test(text);
+}
+
+/**
  * 分类一次供应商上游失败。确定性纯函数：同输入必同输出。
  * 优先级：网络层错误 > 明确 status > 错误体 pattern > UNKNOWN。
  */

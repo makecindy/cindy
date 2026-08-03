@@ -3,6 +3,7 @@
 import { act, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type {
+  BillingPaymentOrder,
   BillingSubscription,
   BillingSubscriptionPortalResult,
 } from '../../../../shared/billing';
@@ -20,10 +21,16 @@ const uiMocks = vi.hoisted(() => ({
 
 const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string | null }));
 
+/**
+ * 计费页只用 useSearchParams 消费 `?intent=topup` 深链，不需要真的挂 Router：
+ * 用一个可读写的 URLSearchParams 替身，既能驱动深链分支，也能断言参数被摘除。
+ */
+const routerState = vi.hoisted(() => ({ search: '' as string }));
+
 const checkout = {
   state: {
     open: false,
-    kind: null,
+    kind: null as 'CREDIT_TOPUP' | 'SUBSCRIPTION' | null,
     phase: 'IDLE',
     intent: null,
     order: null,
@@ -62,6 +69,17 @@ vi.mock('@/features/feature-context', () => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: authState.dataOwnerId }),
 }));
+// 只覆写 useSearchParams(深链 ?intent=topup 的读写口),其余导出保留真实实现 ——
+// 全量替换会让后续用到 Link / useNavigate 等导出的用例拿到 undefined 才炸在别处。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
+  useSearchParams: () => [
+    new URLSearchParams(routerState.search),
+    (next: URLSearchParams) => {
+      routerState.search = next.toString();
+    },
+  ],
+}));
 vi.mock('@/components/ui/confirm-dialog-provider', () => ({
   useConfirmDialog: () => ({ confirm: uiMocks.confirm }),
 }));
@@ -71,7 +89,10 @@ vi.mock('@/lib/toast', () => ({
     success: uiMocks.toastSuccess,
   },
 }));
-vi.mock('../useBillingCheckout', () => ({
+// 只替换 hook 本身:同模块的 phaseForOrder 是纯函数,订单记录的状态文案刻意复用它
+// (支付弹窗与列表必须由同一个判据推导),整模块 mock 掉会把那条依赖一起挖空。
+vi.mock('../useBillingCheckout', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../useBillingCheckout')>()),
   useBillingCheckout: () => checkout,
 }));
 vi.mock('qrcode', () => ({
@@ -86,6 +107,7 @@ beforeEach(() => {
   uiMocks.toastError.mockReset();
   uiMocks.toastSuccess.mockReset();
   authState.dataOwnerId = 'account-fixture';
+  routerState.search = '';
 });
 
 async function openSubscriptionManagementMenu() {
@@ -361,6 +383,7 @@ describe('BillingPage remote catalog rendering', () => {
             ],
           })),
           getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
+          listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
           openPaymentRedirect: vi.fn(async () => ({ success: true })),
         },
         openExternal: vi.fn(),
@@ -818,6 +841,25 @@ describe('BillingPage remote catalog rendering', () => {
       'disabled',
       false,
     );
+  });
+
+  it('深链 ?intent=topup 直接打开充值弹窗，并把参数摘掉防返回/刷新重复弹', async () => {
+    // 供应商设置页的账户资产模块「余额充值」走的就是这条深链：充值弹窗依赖本页的
+    // 目录 / 选项 / checkout 状态，跨 feature 只投递意图。
+    routerState.search = 'tab=billing&intent=topup';
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('Configured top-up')).toBeTruthy();
+    expect(new URLSearchParams(routerState.search).get('intent')).toBeNull();
+    expect(new URLSearchParams(routerState.search).get('tab')).toBe('billing');
+  });
+
+  it('没有 intent 参数时不自动弹充值弹窗', async () => {
+    render(<BillingPage />);
+
+    await screen.findByText('billing.settings.topupCard.action');
+    expect(screen.queryByText('Configured top-up')).toBeNull();
   });
 
   it('shows server-visible unavailable offers and only enables purchasable offers', async () => {
@@ -1373,6 +1415,7 @@ describe('BillingPage plan change', () => {
         subscription: activeSubscription(),
       }),
     ),
+    listOrders: vi.fn(async () => ({ orders: [], nextCursor: null })),
     cancelCurrentSubscription: vi.fn(),
     quotePlanChange: vi.fn(),
     confirmPlanChange: vi.fn(),
@@ -2108,5 +2151,203 @@ describe('BillingPage plan change', () => {
     await selectSubscriptionManagementAction('billing.settings.subscriptionCard.changeAction');
     expect(await screen.findByText('billing.planChange.targetTitle')).toBeTruthy();
     expect(billing.refreshPlanChange).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * 订单记录组。回归的是「页面只讲现在还有多少，不讲钱是怎么来的」——用户查不到上次充了多少、
+ * 那笔没付成的还在不在。三条判据在这里各有用例:空态整组不渲染(不加空壳)、状态文案与支付
+ * 弹窗同一判据(phaseForOrder)、服务端还有下一页时只出提示条不出分页器。
+ */
+describe('BillingPage order history', () => {
+  const order = (over: Partial<BillingPaymentOrder> = {}): BillingPaymentOrder => ({
+    orderId: 'ord_8f21c4de9a',
+    productCode: 'credit_topup',
+    offerCode: 'credit_topup_custom',
+    // 刻意与余额 / 赠送池的数字不同:同一页里重复的金额会让断言抓错节点。
+    amount: '33',
+    currency: 'cny',
+    status: 'SUCCEEDED',
+    paymentAction: null,
+    createdAt: '2026-08-01T13:07:00.000Z',
+    updatedAt: '2026-08-01T13:09:00.000Z',
+    ...over,
+  });
+
+  const install = (
+    orders: BillingPaymentOrder[],
+    nextCursor: string | null = null,
+  ): ReturnType<typeof vi.fn> => {
+    const listOrders = vi.fn(async () => ({ orders, nextCursor }));
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        billing: {
+          getCreditUsage: vi.fn(async () => ({
+            available: '20',
+            plan: { remaining: '0', used: '0', total: '0' },
+            purchased: { remaining: '0', used: '0', total: '0' },
+            promotional: { remaining: '20', used: '0', total: '20' },
+            promotionalGrants: [],
+            promotionalGrantsComplete: true,
+            promotionalGrantConsistency: 'OBSERVED' as const,
+            ledgerUpdatedAt: null,
+            scale: 9 as const,
+            observedAt: '2026-08-01T00:00:00.000Z',
+          })),
+          getBalance: vi.fn(),
+          getCatalog: vi.fn(async () => ({ products: [] })),
+          getCurrentSubscription: vi.fn(async () => ({ subscription: null })),
+          listOrders,
+          openPaymentRedirect: vi.fn(async () => ({ success: true })),
+        },
+        openExternal: vi.fn(),
+      },
+    });
+    return listOrders;
+  };
+
+  it('lists the most recent orders with amount, id and status', async () => {
+    install([order()]);
+
+    render(<BillingPage />);
+
+    expect(await screen.findByText('billing.orders.title')).toBeTruthy();
+    expect(screen.getByText('billing.orders.count:{"count":1}')).toBeTruthy();
+    expect(screen.getByText('billing.orders.description')).toBeTruthy();
+    // 订单号截断展示、完整值挂 title(客服场景要能复制全长)。
+    expect(screen.getByText('billing.orders.orderId:{"id":"ord_8f21"}').title).toBe(
+      'ord_8f21c4de9a',
+    );
+    expect(
+      screen.getByText(new Intl.NumberFormat('en', { style: 'currency', currency: 'CNY' }).format(33)),
+    ).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+  });
+
+  it('asks the server for exactly the ten most recent orders', async () => {
+    const listOrders = install([order()]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(listOrders).toHaveBeenCalledWith({ limit: 10 });
+  });
+
+  it('renders no group at all when there are no orders — the page keeps its current shape', async () => {
+    install([]);
+
+    render(<BillingPage />);
+    // 等页面其余部分落地,再断言这一组确实没渲染(不是还没到)。
+    await screen.findByText('billing.usage.promotionalDetails.title');
+    expect(screen.queryByText('billing.orders.title')).toBeNull();
+  });
+
+  it('renders no group when the order list cannot be fetched', async () => {
+    install([]);
+    window.electronAPI.billing.listOrders = vi.fn(async () => {
+      throw new Error('UNAVAILABLE');
+    });
+
+    render(<BillingPage />);
+    await screen.findByText('billing.usage.promotionalDetails.title');
+    expect(screen.queryByText('billing.orders.title')).toBeNull();
+  });
+
+  it('reloads the order history on every checkout phase landing, not only COMPLETED', async () => {
+    const listOrders = install([order()]);
+    const initialState = { ...checkout.state };
+
+    const { rerender } = render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    const baseline = listOrders.mock.calls.length;
+
+    // 订单一创建(AWAITING_PAYMENT)就已经是一条「待支付」记录,列表必须立刻能看到。
+    checkout.state = {
+      ...initialState,
+      open: true,
+      kind: 'CREDIT_TOPUP',
+      phase: 'AWAITING_PAYMENT',
+    };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 1));
+
+    // 轮询落到失败终态时,那一行的状态 chip 也变了 —— 不能等用户手动刷新。
+    checkout.state = { ...checkout.state, phase: 'FAILED' };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 2));
+
+    // 同一相位重复渲染不重拉:effect 只认「相位变化」,不是每次 render 都打接口。
+    rerender(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(listOrders.mock.calls.length).toBe(baseline + 2);
+
+    checkout.state = initialState;
+  });
+
+  it('maps every payment status onto the checkout wording, not a second vocabulary', async () => {
+    install([
+      order({ orderId: 'o-succeeded', status: 'SUCCEEDED' }),
+      order({ orderId: 'o-created', status: 'CREATED' }),
+      order({ orderId: 'o-pending', status: 'PENDING' }),
+      order({ orderId: 'o-canceled', status: 'CANCELED' }),
+      order({ orderId: 'o-expired', status: 'EXPIRED' }),
+      order({ orderId: 'o-failed', status: 'FAILED' }),
+    ]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+
+    expect(screen.getByText('billing.orders.states.completed')).toBeTruthy();
+    // CREATED 与 PENDING 都是「还没付成」,与 checkout 的 phaseForOrder 同一判据。
+    expect(screen.getAllByText('billing.orders.states.awaitingPayment')).toHaveLength(2);
+    expect(screen.getByText('billing.orders.states.canceled')).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.expired')).toBeTruthy();
+    expect(screen.getByText('billing.orders.states.failed')).toBeTruthy();
+  });
+
+  it('drops the payment-method column when no order still carries a payment action', async () => {
+    // 终态订单通常不再带 paymentAction;整批都没有时留一列破折号比不留更糟。
+    install([order({ paymentAction: null })]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.queryByText('billing.paymentActions.QR_CODE')).toBeNull();
+    expect(screen.queryByText('—')).toBeNull();
+  });
+
+  it('keeps the payment-method column when at least one order carries a payment action', async () => {
+    install([
+      order({
+        orderId: 'o-open',
+        status: 'CREATED',
+        paymentAction: {
+          type: 'QR_CODE',
+          value: 'https://example.invalid/qr',
+          expiresAt: '2026-08-01T14:07:00.000Z',
+        },
+      }),
+      order({ orderId: 'o-done' }),
+    ]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.getByText('billing.paymentActions.QR_CODE')).toBeTruthy();
+    // 缺支付方式的那一单占位,不把列整掉。
+    expect(screen.getByText('—')).toBeTruthy();
+  });
+
+  it('explains truncation instead of offering a pager when the server has older records', async () => {
+    install([order()], 'cursor-2');
+
+    render(<BillingPage />);
+    expect(await screen.findByText('billing.orders.incomplete:{"count":1}')).toBeTruthy();
+  });
+
+  it('does not explain truncation when the server has nothing older', async () => {
+    install([order()]);
+
+    render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(screen.queryByText('billing.orders.incomplete:{"count":1}')).toBeNull();
   });
 });

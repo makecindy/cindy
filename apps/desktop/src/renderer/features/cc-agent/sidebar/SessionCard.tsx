@@ -1011,13 +1011,13 @@ function TimeActionsSlot({
 }) {
   const { t } = useTranslation();
   return (
-    <div className="relative ml-auto flex h-5 shrink-0 items-center justify-end">
+    <div className="group/slot relative ml-auto flex h-5 shrink-0 items-center justify-end">
       {/* 默认内容:worktree + 时间;hover / 菜单打开 / archivePending 时淡出让位给操作钮。 */}
       <div
         className={cn(
           // duration 与操作钮的渐显同拍(120ms),让位/回归一进一出同步。
           'flex items-center gap-1 transition-opacity duration-[120ms]',
-          !archivePending && 'group-hover/card:opacity-0',
+          !archivePending && 'group-hover/card:opacity-0 group-focus-within/slot:opacity-0',
           (menuOpen || yieldToOrdinalBadge) && 'opacity-0',
           // 确认胶囊覆盖同一槽位时立即隐藏日期，避免 120ms 淡出期间文字叠在一起。
           archivePending && 'invisible opacity-0',
@@ -1069,22 +1069,34 @@ function TimeActionsSlot({
             'transition-opacity duration-[120ms]',
             menuOpen
               ? 'opacity-100'
-              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 focus-within:pointer-events-auto focus-within:opacity-100',
+              : 'pointer-events-none opacity-0 group-hover/card:pointer-events-auto group-hover/card:opacity-100 group-focus-within/slot:pointer-events-auto group-focus-within/slot:opacity-100',
           )}
         >
-          <CardAction label={t('ccAgent.sidebar.sessionMenu.moreActions')} onClick={onOpenMenu}>
-            <EllipsisVertical size={13} strokeWidth={2} />
+          <CardAction
+            variant="list"
+            isActive={isActive}
+            label={t('ccAgent.sidebar.sessionMenu.moreActions')}
+            onClick={onOpenMenu}
+          >
+            <EllipsisVertical size={14} strokeWidth={2} />
           </CardAction>
           {isArchived && canUnarchive ? (
-            <CardAction label={t('ccAgent.sidebar.sessionMenu.unarchive')} onClick={() => onUnarchive()}>
-              <Undo size={13} strokeWidth={2} />
+            <CardAction
+              variant="list"
+              isActive={isActive}
+              label={t('ccAgent.sidebar.sessionMenu.unarchive')}
+              onClick={() => onUnarchive()}
+            >
+              <Undo size={14} strokeWidth={2} />
             </CardAction>
           ) : canQuickArchive ? (
             <CardAction
+              variant="list"
+              isActive={isActive}
               label={t('ccAgent.sidebar.sessionMenu.archived')}
               onClick={() => setArchivePending(true)}
             >
-              <Archive size={13} strokeWidth={2} />
+              <Archive size={14} strokeWidth={2} />
             </CardAction>
           ) : null}
         </div>
@@ -1093,12 +1105,16 @@ function TimeActionsSlot({
   );
 }
 
-/** 卡片右上角 hover action 钮——白底小方钮，对照 redesign 稿 .xdtsb-act。 */
+/** 卡片右上角 hover action 钮；list 变体复用文字模式的轻量行内按钮。 */
 function CardAction({
+  variant = 'card',
+  isActive = false,
   label,
   onClick,
   children,
 }: {
+  variant?: 'card' | 'list';
+  isActive?: boolean;
   label: string;
   onClick: (e: ReactMouseEvent<HTMLButtonElement>) => void;
   children: ReactNode;
@@ -1114,10 +1130,20 @@ function CardAction({
       onPointerDown={(e) => e.stopPropagation()}
       onDoubleClick={(e) => e.stopPropagation()}
       className={cn(
-        'flex size-6 items-center justify-center rounded-[7px]',
-        'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
-        'border border-sidebar-border',
-        'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+        variant === 'list'
+          ? cn(
+              'shrink-0 size-5 flex items-center justify-center rounded-md',
+              'focus:outline-none',
+              isActive
+                ? 'text-sidebar-item-active-foreground hover:text-sidebar-item-active-foreground hover:bg-[color-mix(in_srgb,var(--sidebar-item-active-foreground)_14%,transparent)]'
+                : 'text-sidebar-action-icon hover:bg-sidebar-item-hover hover:text-foreground',
+            )
+          : cn(
+              'flex size-6 items-center justify-center rounded-[7px]',
+              'bg-[var(--cmd-palette-bg)] text-[var(--text-tertiary)]',
+              'border border-sidebar-border',
+              'hover:bg-sidebar-item-hover hover:text-foreground focus:outline-none',
+            ),
       )}
     >
       {children}

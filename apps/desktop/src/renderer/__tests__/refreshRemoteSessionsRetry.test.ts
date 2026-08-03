@@ -223,6 +223,37 @@ describe('refreshRemoteDeviceSessions retry', () => {
     expect(remoteProjectsStore.getMergedRemoteSessions()).toHaveLength(0);
   });
 
+  it('超时类失败只额外重试 1 次:每次都吃满隧道超时,不许按完整预算连打 6 个', async () => {
+    const d = did();
+    invoke.mockRejectedValue(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'));
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(2);
+  });
+
+  it('超时账本独立:一次超时不吞掉快速失败瞬态错误的完整预算', async () => {
+    const d = did();
+    invoke
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] no invoke-result within 12000ms'))
+      .mockRejectedValueOnce(new Error('DbClient not ready'))
+      .mockRejectedValueOnce(new Error('DbClient not ready'))
+      .mockResolvedValueOnce([session('s1')]);
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe('ok');
+    expect(invoke).toHaveBeenCalledTimes(4);
+  });
+
+  it('熔断快速失败(DEVICE_LINK_DEVICE_UNRESPONSIVE)→ 不重试,立即放弃', async () => {
+    const d = did();
+    invoke.mockRejectedValue(
+      new Error('[DEVICE_LINK_DEVICE_UNRESPONSIVE] target device is unresponsive (circuit open)'),
+    );
+    await expect(refreshRemoteDeviceSessions(d, 'Mac B', { sleep: noSleep })).resolves.toBe(
+      'gave-up',
+    );
+    expect(invoke).toHaveBeenCalledTimes(1);
+  });
+
   it('重试耗尽 → 放弃,不抛(返回 gave-up,尝试次数 = maxAttempts)', async () => {
     const d = did();
     invoke.mockRejectedValue(new Error('DbClient not ready'));

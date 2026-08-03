@@ -297,7 +297,11 @@ import { initHeartbeatService } from './heartbeatService';
 import { initAnalyticsSettingsService, noteAuthColdStartState } from './analyticsSettingsService';
 import { WindowManualDragController } from './windowManualDrag';
 // 设备互联(跨设备远程控制): relay 连接 host + 开关/设备列表 IPC
-import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from './device-link';
+import {
+  initDeviceLinkService,
+  releaseDeviceLinkOwnershipBeforeLogout,
+  handleDeviceLinkSystemResume,
+} from './device-link';
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
@@ -6269,6 +6273,8 @@ app.on('ready', async () => {
   powerMonitor.on('resume', () => {
     authManager.handleResume();
     handleProviderModelSystemResume();
+    // device-link:睡醒立即重连 relay,不干等退避计时器 + 心跳判死(最坏合计 ~75s)。
+    handleDeviceLinkSystemResume();
   });
   powerMonitor.on('unlock-screen', handleProviderModelScreenUnlock);
 
@@ -6524,14 +6530,12 @@ function parseImDefaultSettingsPatch(raw: unknown): ImDefaultSettingsPatch {
     }
     const agentInput = input.agents as Record<string, unknown>;
     const agentsPatch: NonNullable<ImDefaultSettingsPatch['agents']> = {};
-    if ('claude-code' in agentInput) {
-      agentsPatch['claude-code'] = parseImDefaultAgentSettings(
-        'claude-code',
-        agentInput['claude-code'],
-      );
-    }
-    if ('codex' in agentInput) {
-      agentsPatch.codex = parseImDefaultAgentSettings('codex', agentInput.codex);
+    // 三个 harness 必须对称解析；漏掉 pi 会让 IM 设置页切 Pi 后改模型静默丢弃
+    // (store 本身支持 pi，见 defaultSettingsStore / IM_DEFAULT_SETTINGS.agents.pi)。
+    for (const kind of ['claude-code', 'codex', 'pi'] as const) {
+      if (kind in agentInput) {
+        agentsPatch[kind] = parseImDefaultAgentSettings(kind, agentInput[kind]);
+      }
     }
     patch.agents = agentsPatch;
   }

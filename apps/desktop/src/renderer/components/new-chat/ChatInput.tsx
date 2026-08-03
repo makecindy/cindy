@@ -5743,6 +5743,9 @@ export function ChatInput({
                     // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
+                    // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
+                    reselectEmitsChange={selectedSourceDisconnected}
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
