@@ -141,15 +141,18 @@ export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): Model
  * 解析 Pi 当前持久化选择所需的运行时描述符,不参与公开模型清单或新路由准入。
  * 优先使用完整目录中的实际来源实体(允许 disabled/retired 供续跑);纯 Registry retired
  * 没有目录实体时,再按统一 model-plane policy 从其完整能力字段重建 Pi 投影。
+ * `cindy` 是内置 gateway 的复合路由：按内置 provider 顺序解析，明确排除同 id user/BYOM。
  */
 export function resolvePiRuntimeModelDescriptor(
   catalog: Catalog,
   providerId: string | null | undefined,
   modelId: string,
 ): ModelDescriptor | null {
-  const providers = providerId && providerId !== 'cindy'
-    ? catalog.providers.filter((provider) => provider.id === providerId)
-    : catalog.providers;
+  const providers = providerId === 'cindy'
+    ? catalog.providers.filter((provider) => provider.source !== 'user')
+    : providerId
+      ? catalog.providers.filter((provider) => provider.id === providerId)
+      : catalog.providers;
   for (const provider of providers) {
     const model = (provider.models.pi ?? []).find((candidate) => candidate.id === modelId);
     if (model && isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {

@@ -345,6 +345,13 @@ export interface AgentDeps {
   ) => ModelDescriptor | null;
 
   /**
+   * Pi-only:为 `cindy` gateway 的 models.json 块解析内置 provider-aware 描述符。
+   * 与上面的续跑私有解析器分开，避免生成 gateway 配置放宽 retired/disabled
+   * 准入或改变新会话的私有解析时机。缺省时 Pi 保留 flat descriptor fallback。
+   */
+  resolvePiGatewayModelDescriptor?: (modelId: string) => ModelDescriptor | null;
+
+  /**
    * Host-provided capability descriptor additions.
    *
    * This is append-only: additions with ids already present in the agent's built-in

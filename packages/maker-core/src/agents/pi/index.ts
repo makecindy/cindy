@@ -394,22 +394,28 @@ export class PiAgent extends BaseAgent {
     const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
       ? [...publicModels, retainedRuntimeModel]
       : publicModels;
-    const models = runtimeModels
-      .map((m: ModelDescriptor) => ({
-      id: m.id,
-      name: m.displayName,
-      reasoning: m.efforts.length > 0,
-      input: ['text', 'image'],
-      contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
-      maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
-      // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
-      cost: {
-        input: m.cost?.input ?? 0,
-        output: m.cost?.output ?? 0,
-        cacheRead: m.cost?.cacheRead ?? 0,
-        cacheWrite: m.cost?.cacheWrite ?? 0,
-      },
-    }));
+    const models = runtimeModels.map((publicModel: ModelDescriptor) => {
+      // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
+      // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
+      // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
+      // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
+      const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      return {
+        id: m.id,
+        name: m.displayName,
+        reasoning: m.efforts.length > 0,
+        input: ['text', 'image'],
+        contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
+        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
+        // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
+        cost: {
+          input: m.cost?.input ?? 0,
+          output: m.cost?.output ?? 0,
+          cacheRead: m.cost?.cacheRead ?? 0,
+          cacheWrite: m.cost?.cacheWrite ?? 0,
+        },
+      };
+    });
     const providers: Record<string, unknown> = {
       [PI_PROVIDER_ID]: {
         name: 'Cindy AI',

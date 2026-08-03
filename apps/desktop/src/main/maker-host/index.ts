@@ -1344,6 +1344,8 @@ export function getMaker(): Maker {
       },
       resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
         resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
+      resolvePiGatewayModelDescriptor: (modelId) =>
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), 'cindy', modelId),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
     });

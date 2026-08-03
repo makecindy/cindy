@@ -130,6 +130,74 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('keeps built-in gateway reasoning when a same-id non-reasoning BYOM empties the flat effort intersection', async () => {
+    const resolver = vi.fn((modelId: string) => {
+      if (modelId !== 'shared-model') return null;
+      return {
+        id: modelId,
+        displayName: 'Shared through Cindy',
+        contextWindow: 200_000,
+        efforts: ['minimal', 'low', 'high'] as const,
+        defaultEffort: 'high' as const,
+      };
+    });
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        // 模拟 flat availableModels 已因 non-reasoning BYOM 同 id 冲突收敛为空。
+        availableModels: [
+          { id: 'shared-model', displayName: 'Shared', contextWindow: 200_000, efforts: [], defaultEffort: null },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-responses',
+            models: [{ id: 'shared-model', reasoning: false }],
+          },
+        ],
+        env: {},
+      }),
+      resolvePiGatewayModelDescriptor: resolver,
+    };
+    const agent = new PiAgent(deps);
+
+    const handle = await agent.startSession({
+      sessionId: 'gateway-reasoning-collision',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'openai',
+      effort: 'high',
+    });
+
+    const models = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as {
+      providers: Record<string, { models: Array<{ id: string; reasoning: boolean }> }>;
+    };
+    expect(resolver).toHaveBeenCalledWith('shared-model');
+    expect(models.providers.cindy?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      reasoning: true,
+    });
+    expect(models.providers['native-a']?.models.find((model) => model.id === 'shared-model')).toMatchObject({
+      reasoning: false,
+    });
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'high' });
+    await handle.close();
+  });
+
   it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
     const resolver = vi.fn((providerId: string | null | undefined, modelId: string) => {
       if (providerId !== 'native-a' || modelId !== 'shared-model') return null;

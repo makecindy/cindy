@@ -147,6 +147,36 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('resolves the cindy gateway descriptor from built-ins when a non-reasoning BYOM claims the same id first', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.unshift(
+      buildUserProvider({
+        id: 'colliding-non-reasoning',
+        name: 'Colliding non-reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [{ id: 'xai/grok-4.5', name: 'Grok 4.5 without reasoning' }],
+          },
+        },
+      }),
+    );
+
+    expect(deriveAvailableModels(catalog, 'pi').find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-non-reasoning', 'xai/grok-4.5'),
+    ).toMatchObject({ efforts: [], defaultEffort: null });
+    expect(resolvePiRuntimeModelDescriptor(catalog, 'cindy', 'xai/grok-4.5')).toMatchObject({
+      efforts: ['minimal', 'low', 'medium', 'high'],
+      defaultEffort: 'high',
+    });
+  });
+
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');

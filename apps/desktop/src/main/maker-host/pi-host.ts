@@ -186,6 +186,7 @@ export interface BuildPiAgentOpts {
   mcpProviders?: AgentDeps['mcpProviders'];
   makerMemory?: AgentDeps['makerMemory'];
   resolvePiRuntimeModelDescriptor?: AgentDeps['resolvePiRuntimeModelDescriptor'];
+  resolvePiGatewayModelDescriptor?: AgentDeps['resolvePiGatewayModelDescriptor'];
 }
 
 /** Cindy wire protocol → pi models.json api 形态。 */
@@ -363,5 +364,6 @@ export function buildPiAgent(opts: BuildPiAgentOpts): PiAgent | null {
     registerPiProxySession,
     resolvePiNativeProviders: () => resolvePiNativeProviders(),
     resolvePiRuntimeModelDescriptor: opts.resolvePiRuntimeModelDescriptor,
+    resolvePiGatewayModelDescriptor: opts.resolvePiGatewayModelDescriptor,
   });
 }
