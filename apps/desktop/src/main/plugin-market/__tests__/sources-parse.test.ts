@@ -121,6 +121,13 @@ describe('parseMarketSource', () => {
     });
   });
 
+  it.each([
+    'git@-oProxyCommand=touch:org/repo.git',
+    'ssh://-oProxyCommand=touch%20/tmp/pwn/org/repo.git',
+  ])('rejects SSH hosts that can be parsed as options: %s', (source) => {
+    expect(parse({ source })).toEqual({ ok: false, code: 'INVALID_SOURCE_FORMAT' });
+  });
+
   it('rejects sparse paths that look like git options', () => {
     for (const opt of ['--stdin', '--no-cone', '--cone', '-x']) {
       expect(parse({ source: 'openai/plugins', sparsePaths: [opt] })).toEqual({

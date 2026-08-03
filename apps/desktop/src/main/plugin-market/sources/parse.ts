@@ -83,6 +83,18 @@ function hasEmbeddedCredentials(input: string): boolean {
   return false;
 }
 
+function hasUnsafeSshHost(input: string): boolean {
+  if (/^ssh:\/\//i.test(input)) {
+    try {
+      return new URL(input).hostname.startsWith('-');
+    } catch {
+      return true;
+    }
+  }
+  const scp = /^[^\s/@]+@([^\s:/]+):/.exec(input);
+  return scp?.[1]?.startsWith('-') ?? false;
+}
+
 /** 展开 ~ 并归一化；不解析符号链接（归属判断由安装管道负责）。 */
 export function resolveLocalSourcePath(input: string, homeDir: string): string {
   const expanded = input.startsWith('~')
@@ -135,6 +147,7 @@ export function parseMarketSource(
     // `https://TOKEN\@host/...` 在 new URL 里看不到 userinfo(凭证闸失明),
     // git 实际连的 host 也与校验层认定的不一致(供应链/视觉欺骗)。一律拒。
     if (trimmed.includes('\\')) return { ok: false, code: 'INVALID_SOURCE_FORMAT' };
+    if (hasUnsafeSshHost(trimmed)) return { ok: false, code: 'INVALID_SOURCE_FORMAT' };
     if (hasEmbeddedCredentials(trimmed)) {
       return { ok: false, code: 'CREDENTIALS_NOT_ALLOWED' };
     }
