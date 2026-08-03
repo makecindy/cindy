@@ -1382,7 +1382,37 @@ export class PiAgent extends BaseAgent {
             + '请检查运行目录是否可写后重试。',
           );
         }
-        const resp = await proc.request({ type: 'set_model', provider, modelId: model });
+        let resp;
+        try {
+          resp = await proc.request({ type: 'set_model', provider, modelId: model });
+        } catch (err) {
+          // RPC **reject / 超时 / 写 stdin 失败 / 进程已退出**:与 `success:false` 有本质区别 ——
+          // 那种情况我们**知道**没生效,可以回滚;这里我们**不知道** pi 侧到底切没切。
+          //
+          // 因此两条路都不能走:回滚可能与真实状态正好相反(RPC 其实生效了,回滚后父会话在新
+          // 模型、快照指向旧模型);放行则可能相反(RPC 没生效,快照却指向新模型)。任一方向都是
+          // 父子路由分叉 —— 下一次委派打到用户并未启用的端点(错误计费 + 提示词外泄)。
+          //
+          // 也没选"重新读取并校准":`get_state` 在本文件消费的形状里只暴露 `contextWindow`,
+          // 拿不到权威的 model / provider 身份;靠未经验证的字段去猜,比直接失败更糟。而且 RPC
+          // 刚超时,紧接着再发一条 RPC 很可能同样挂住。
+          //
+          // 所以按 fail-closed 收口:终止会话,让这个 pi 进程不再有下一次派发。
+          deps.logger.error('pi: set_model RPC did not confirm; terminating session to avoid split subagent routing', {
+            message: err instanceof Error ? err.message : String(err),
+          });
+          try {
+            await proc.close();
+          } catch (closeErr) {
+            deps.logger.warn('pi: session termination after unconfirmed set_model also failed', {
+              message: closeErr instanceof Error ? closeErr.message : String(closeErr),
+            });
+          }
+          throw new Error(
+            'pi: 模型切换请求未收到确认(超时或链路错误),无法确定 pi 侧是否已生效;'
+            + '已终止本会话以避免子代理按不确定的路由派发。请重开会话后再切换模型。',
+          );
+        }
         if (!resp.success) {
           // pi 侧没切成:快照必须回滚,否则子代理会按"新模型"跑而父会话还在旧模型上。
           if (!(await writeSubagentRuntimeFile(previousSnapshot))) {

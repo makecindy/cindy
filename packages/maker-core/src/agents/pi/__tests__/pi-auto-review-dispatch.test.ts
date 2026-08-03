@@ -22,6 +22,7 @@ const captured = vi.hoisted(() => ({
   proxyRegistration: null as { sessionId: string; token: string } | null,
   requests: [] as string[],
   failSetModel: false,
+  rejectSetModel: false,
   onAfterSetModel: null as null | (() => void),
   closed: false,
 }));
@@ -40,6 +41,9 @@ vi.mock('../rpc-client.js', () => ({
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
       captured.requests.push(cmd.type);
+      if (cmd.type === 'set_model' && captured.rejectSetModel) {
+        throw new Error('pi rpc timeout after 30000ms: set_model');
+      }
       if (cmd.type === 'set_model' && captured.failSetModel) {
         captured.onAfterSetModel?.();
         return { success: false };
@@ -84,6 +88,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.proxyRegistration = null;
     captured.requests = [];
     captured.failSetModel = false;
+    captured.rejectSetModel = false;
     captured.onAfterSetModel = null;
     captured.closed = false;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
@@ -249,6 +254,45 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     expect(captured.closed).toBe(true);
 
     rmSync(snapshotPath, { recursive: true, force: true });
+  });
+
+
+  it('terminates the session when set_model neither confirms nor rejects cleanly (reject/timeout)', async () => {
+    // reject / 超时与 `success:false` 有本质区别:后者我们**知道**没生效、可以回滚;前者我们
+    // **不知道** pi 侧切没切。两条路都不安全 —— 回滚可能与真实状态相反,放行也可能相反,任一
+    // 方向都是父子路由分叉(下一次委派打到用户并未启用的端点)。所以 fail-closed:终止会话。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+    const before = JSON.parse(readFileSync(snapshotPath, 'utf8')) as { model?: string; provider?: string };
+    // 启动快照必须是用户实际选的 provider(BYOM / 本地模型的直连约束)。
+    expect(before.provider).toBeTruthy();
+
+    captured.rejectSetModel = true;
+    await expect(handle.setModel('m')).rejects.toThrow(/未收到确认/);
+    // 会话必须真的被关掉:进程还活着就意味着"下一次委派"仍可能发生。
+    expect(captured.closed).toBe(true);
+  });
+
+  it('rolls back to the user-selected provider when set_model cleanly reports failure', async () => {
+    // 与上一条对照:success:false 是**确定**没生效 → 回滚,快照必须回到用户原本选定的
+    // provider/model,下一次委派才会继续直连那个 Pi 原生 provider(BYOM 约束)。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+    const before = JSON.parse(readFileSync(snapshotPath, 'utf8')) as { model?: string; provider?: string };
+
+    captured.failSetModel = true;
+    await expect(handle.setModel('m')).rejects.toThrow(/set_model failed/);
+    // 会话不该因为一次干净的失败被终止(那是 reject/超时才有的代价)。
+    expect(captured.closed).toBe(false);
+    // 快照已回滚到切换前的值 —— 父进程路由与下一次委派一致。
+    const after = JSON.parse(readFileSync(snapshotPath, 'utf8')) as { model?: string; provider?: string };
+    expect(after).toEqual(before);
+
+    await handle.close();
   });
 
   it('overrides the Pi bash tool and strips host credentials at its spawn boundary', async () => {
