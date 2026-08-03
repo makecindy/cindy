@@ -400,6 +400,25 @@ describe('buildGroupContextPrefix', () => {
     expect(topicPrefix).not.toContain('主群闲聊');
   });
 
+  it('主群流读得到被分进 reply-root 桶的发言(普通群的 reply 链不是 topic)', async () => {
+    await recordGroupMessage(frame({ messageId: '20', text: '主群里的话' }));
+    // Telegram 对**非 forum 群**的 reply 链也下发 message_thread_id(值 = reply root),
+    // server 曾把它当 topic 下发, 这条发言因此落进 threadId='19' 的桶 —— 但它属于主群流。
+    // 客户端拿不到 is_forum / is_topic_message, 只能在读取侧兜: 主群流不按 threadId 过滤。
+    await recordGroupMessage(frame({ messageId: '21', text: 'reply 链里的话', threadId: '19' }));
+    const prefix = (
+      await buildGroupContextPrefix({
+        requestId: 'r-reply-bucket',
+        externalKey: 'telegram:group:1:-900:9:g1',
+        workspace: 'chat',
+        sessionId: null,
+        prompt: 'q',
+      })
+    ).prefix;
+    expect(prefix).toContain('主群里的话');
+    expect(prefix).toContain('reply 链里的话');
+  });
+
   it('换绑 Telegram 主账号后不读取前一账号的群历史', async () => {
     await recordScopedGroupMessage(
       frame({ messageId: '30', text: '前一账号的私密上下文' }),
