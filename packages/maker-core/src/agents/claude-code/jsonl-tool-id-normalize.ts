@@ -295,16 +295,22 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // (translator 转发为 tool_result.data.toolUseIds)。归一化改名后必须同步, 否则
   // 关联断裂 / summary 挂不上归一化后的卡片。
   //
-  // 配对必须**按行作用域 + 同行 FIFO**: 每个引用记录指向「它所在位置之前最近的同名
-  // call」的终 id —— 同一原始 id 重铸多次时, 第 N 个 subagent/summary 挂第 N 次调用,
-  // 而非全部挂最后一个 duplicate(单一 last mapping 会把首个记录错误挂到后面的卡片上,
-  // codex-connector P2)。同一 assistant 行内同 id 并行调用(同行多 occurrence)时,
-  // 多条子记录按**内容顺序**各挂各次调用, 与 tool_result 的同批 FIFO 配对一致
-  // (codex-connector P2: Preserve same-line subagent occurrence refs —— 否则同行块被
-  // 折叠成单一 latest line mapping, 首个子记录错挂到块内最后一个调用)。
+  // 配对必须**按行作用域 + 同行 FIFO + 同 child 复用**: 每个引用记录指向「它所在位置
+  // 之前最近的同名 call」的终 id —— 同一原始 id 重铸多次时, 第 N 个 subagent/summary 挂
+  // 第 N 次调用, 而非全部挂最后一个 duplicate(单一 last mapping 会把首个记录错误挂到
+  // 后面的卡片上, codex-connector P2)。同一 assistant 行内同 id 并行调用(同行多
+  // occurrence)时, 多条子记录按**内容顺序**各挂各次调用, 与 tool_result 的同批 FIFO
+  // 配对一致(否则同行块被折叠成单一 latest line mapping, 首个子记录错挂到块内最后一个
+  // 调用)。**同一 child(共享 uuid)的多条 stream_event 记录必须复用首次解析的终 id**,
+  // 不按条推进 occPtr —— 否则同一条 subagent 流的每条事件都会消费一个 occurrence,
+  // 把同一个 subagent 拆散到多张 Agent/Task 卡片(codex-connector P2: Keep repeated
+  // subagent events on one occurrence)。
   if (occurrenceByOriginal.size > 0) {
     // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标。初始 -1。
     const occPtr = new Map<string, number>();
+    // childRef[uuid][origId] = 该 child 首次解析出的终 id。同一 child 的多条
+    // stream_event(共享 uuid)引用同一 parent id 时全部复用, 不再推进 occPtr。
+    const childRef = new Map<string, Map<string, string>>();
     // 单个原始 id → 终 id 的行作用域解析。推进规则:
     //   - 同行块内继续(当前 ptr 所在块行 < index 且块内还有下一个): 消费下一个
     //     (FIFO —— 同一条 assistant 消息内同 id 并行调用, 多条子记录按内容顺序);
@@ -333,24 +339,46 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       occPtr.set(val, ptr);
       return ptr < 0 ? undefined : occs[ptr].finalId;
     };
+    // 带 child 身份(顶层 uuid)的记录: 同一 child 复用已解析终 id(首次解析后缓存)。
+    const resolveForEntry = (entry: JsonObject, val: string, index: number): string | undefined => {
+      const uuid = entry.uuid;
+      if (typeof uuid === 'string' && uuid) {
+        let m = childRef.get(uuid);
+        if (m) {
+          const cached = m.get(val);
+          if (cached !== undefined) return cached;
+        }
+        const mapped = resolveOccurrence(val, index);
+        if (mapped !== undefined) {
+          if (!m) {
+            m = new Map();
+            childRef.set(uuid, m);
+          }
+          m.set(val, mapped);
+        }
+        return mapped;
+      }
+      return resolveOccurrence(val, index);
+    };
     entries.forEach((entry, index) => {
       let entryChanged = false;
       for (const field of ['parent_tool_use_id', 'tool_use_id'] as const) {
         const val = entry[field];
         if (typeof val !== 'string') continue;
-        const mapped = resolveOccurrence(val, index);
+        const mapped = resolveForEntry(entry, val, index);
         if (mapped !== undefined && mapped !== val) {
           entry[field] = mapped;
           entryChanged = true;
         }
       }
-      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写。
+      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写;
+      // 带 child 身份时同样复用(同一 child 内同 id 不重复消费 occurrence)。
       const arr = entry.preceding_tool_use_ids;
       if (Array.isArray(arr)) {
         for (let i = 0; i < arr.length; i += 1) {
           const item = arr[i];
           if (typeof item !== 'string') continue;
-          const mapped = resolveOccurrence(item, index);
+          const mapped = resolveForEntry(entry, item, index);
           if (mapped !== undefined && mapped !== item) {
             arr[i] = mapped;
             entryChanged = true;

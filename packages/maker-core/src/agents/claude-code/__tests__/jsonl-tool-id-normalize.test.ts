@@ -390,6 +390,39 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_210_dup2');
   });
 
+  it('同一 child(共享 uuid)的多条 stream_event 复用同一终 id, 不拆散到多卡片(codex-connector P2)', () => {
+    // 同行两个 Bash_210(并行) → Bash_x210 + Bash_210_dup2。
+    // 同一 uuid 的 child 发多条 stream_event(都引用 Bash_210): 必须全部挂同一终 id
+    // (Bash_x210), 而不是每条事件消费一个 occurrence(否则第一条挂 Bash_x210、
+    // 第二条被重新映射到 Bash_210_dup2, 同一 subagent 流被拆散到两张卡片)。
+    const childEvent = (uuid: string): string =>
+      JSON.stringify({
+        type: 'stream_event',
+        uuid,
+        parent_tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      });
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210'), toolUse('Bash_210')]),
+      childEvent('stream-child-1'),
+      childEvent('stream-child-1'), // 同一 child 的第二条事件
+      childEvent('stream-child-1'), // 第三条
+      childEvent('stream-child-2'), // 另一 child → 挂第二个调用
+      userEntry('u1', [toolResult('Bash_210'), toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // 同行两个并行调用分别定终
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Bash_x210', 'Bash_210_dup2']);
+    // 同一 child 的三条事件全部挂 Bash_x210(首次解析, 不按条推进)
+    expect((entries[1] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+    expect((entries[2] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+    expect((entries[3] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+    // 另一 child 挂第二个调用(各 child 独立消费)
+    expect((entries[4] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_210_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
