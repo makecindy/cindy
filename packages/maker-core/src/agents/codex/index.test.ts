@@ -17669,4 +17669,112 @@ describe('CodexAgent context window reporting', () => {
 
     await handle.close();
   });
+
+  it('closes out running subagent cards when the transport dies (app-server crash / IO disconnect)', async () => {
+    // 普通 transport 断连(app-server 崩溃 / stdio 断开)会作废订阅:后代通知**永远不会再到**,
+    // 而 tracker 的终态只由后代 turn/completed 写入。原来这条路径只广播 error 并清主线程缓存,
+    // 子代理卡就停在最后一帧 running —— 进程早死了,界面还在原地转圈(review)。close() 与
+    // cleanup-failure 已复用同一套终态快照 + 清 tracker,这里补的是断连入口。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-transport-drop',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemStarted || !handlers.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-sa' } });
+    handlers.itemStarted({
+      threadId: 'start-thread-id',
+      turnId: 'turn-sa',
+      item: {
+        id: 'spawn-item-1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread-1'],
+        status: 'inProgress',
+        agentsStates: [],
+      },
+    });
+    handlers.descendantThreadStarted({ thread: { id: 'child-thread-1', parentThreadId: 'start-thread-id' } });
+    handlers.descendantNotification('child-thread-1', 'item/started', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-1',
+      item: { id: 'child-tool-1', type: 'commandExecution' },
+    });
+    handlers.descendantNotification('child-thread-1', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-1',
+      tokenUsage: { total: { totalTokens: 1_234 } },
+    });
+
+    const cardFrames = () =>
+      events
+        .filter((e) => e.type === 'agent_task_update')
+        .map(
+          (e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } },
+        )
+        .filter((u) => u.taskId === 'spawn-item-1');
+    const flush = async () => {
+      await new Promise((resolve) => setTimeout(resolve, 0));
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    };
+
+    await vi.waitFor(() => {
+      expect(cardFrames().at(-1)?.status).toBe('running');
+    });
+
+    // app-server 崩了:willRetry=false + scope=transport,turnId 为空(server 已经说不出是哪个 turn)。
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: '',
+      willRetry: false,
+      scope: 'transport',
+      error: { message: 'app-server transport closed unexpectedly' },
+    });
+
+    await vi.waitFor(() => {
+      expect(cardFrames().at(-1)?.status).toBe('stopped');
+    });
+    // 收口帧必须带上已聚合的真实用量,不能退化成空快照(否则用户看到「已停止 + 0 token」)。
+    const terminal = cardFrames().at(-1);
+    expect(terminal?.usage?.toolUses).toBe(1);
+    expect(terminal?.usage?.totalTokens).toBe(1_234);
+
+    const afterTerminal = cardFrames().length;
+    // tracker 与 lineage 都已清:再来一次断连不重复投递终态;迟到的后代通知也不能让这张卡
+    // 复活回 running 继续转圈(断连后子线程 id 已无归属,通知只会落进缓冲区自然淘汰)。
+    handlers.error?.({
+      threadId: 'start-thread-id',
+      turnId: '',
+      willRetry: false,
+      scope: 'transport',
+      error: { message: 'app-server transport closed unexpectedly' },
+    });
+    handlers.descendantNotification('child-thread-1', 'turn/started', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-2',
+    });
+    handlers.descendantNotification('child-thread-1', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-2',
+      tokenUsage: { total: { totalTokens: 9_999 } },
+    });
+    await flush();
+    expect(cardFrames()).toHaveLength(afterTerminal);
+
+    // close() 走的是同一套 drain,清过之后必须幂等,不补第二帧终态。
+    await handle.close();
+    await flush();
+    expect(cardFrames()).toHaveLength(afterTerminal);
+  });
 });

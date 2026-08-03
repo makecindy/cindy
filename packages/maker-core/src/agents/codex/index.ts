@@ -7457,6 +7457,12 @@ export class CodexAgent extends BaseAgent {
         const isTransportError = params.scope === 'transport';
         if (isTransportError) {
           subscriptionInvalidatedByTransport = true;
+          // 订阅已作废(app-server 崩了 / IO 断开)→ 后代通知**永远不会再到**,而 tracker 只靠
+          // 后代 turn/completed 写终态。不在这里收口,渲染端会一直留着最后一帧 running:进程
+          // 早就死了,子代理卡还在原地转圈(review)。这条路径与 close() / cleanup-failure 是
+          // 同一类,只是入口不同 —— 复用同一套终态快照 + 清 tracker。
+          for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
+          subagentLiveCards.clear();
           dismissAllPendingUserInput('transport_error');
           activeToolContexts.clear();
           submittedUserInputByTurn.clear();
