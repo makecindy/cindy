@@ -5276,10 +5276,12 @@
       }
     },
     "atMention": {
-      "scanFailed": "작업 디렉터리 스캔 실패",
+      "browserTab": "브라우저 탭",
+      "desktopWindow": "앱 창",
+      "scanFailed": "@ 콘텐츠를 불러오지 못했습니다",
       "retry": "재시도",
       "searching": "검색 중…",
-      "noMatch": "일치하는 파일 없음",
+      "noMatch": "일치하는 항목 없음",
       "keepTyping": "계속 입력하여 범위 좁히기…"
     },
     "planReview": {

@@ -12,7 +12,9 @@ import {
   File,
   Folder,
   FolderOpen,
+  Globe2,
   MessageSquareQuote,
+  Monitor,
   Sparkles,
 } from 'lucide-react';
 
@@ -23,7 +25,15 @@ import { resolvePastedSessionMessageText } from './sessionLinkPaste';
 
 export interface MentionChipAttrs {
   /** Chip kind — decides icon + trailing slash behaviour + serialization. */
-  kind: 'file' | 'dir' | 'agent' | 'slash' | 'session' | 'project';
+  kind:
+    | 'file'
+    | 'dir'
+    | 'agent'
+    | 'slash'
+    | 'session'
+    | 'project'
+    | 'browser-tab'
+    | 'desktop-window';
   /** Visible basename, Agent name, command, conversation title/message or project name. */
   label: string;
   /** Serialization path/deep-link. */
@@ -47,6 +57,8 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   if (attrs.kind === 'dir') return <Folder aria-hidden />;
   if (attrs.kind === 'agent') return <Sparkles aria-hidden />;
   if (attrs.kind === 'project') return <FolderOpen aria-hidden />;
+  if (attrs.kind === 'browser-tab') return <Globe2 aria-hidden />;
+  if (attrs.kind === 'desktop-window') return <Monitor aria-hidden />;
   return parseSessionDeepLinkHref(attrs.path)?.messageClientId ? (
     <MessageSquareQuote aria-hidden />
   ) : (
@@ -229,6 +241,16 @@ const ICON_PATHS: Record<Exclude<MentionChipAttrs['kind'], 'slash'>, string[]> =
   session: ['M15 10l5 5-5 5', 'M4 4v7a4 4 0 0 0 4 4h12'],
   project: [
     'm6 14 1.45-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.55 6a2 2 0 0 1-1.94 1.5H4a2 2 0 0 1-2-2V5c0-1.1.9-2 2-2h3.93a2 2 0 0 1 1.66.9l.82 1.2a2 2 0 0 0 1.66.9H18a2 2 0 0 1 2 2v2',
+  ],
+  'browser-tab': [
+    'M12 22a10 10 0 1 0 0-20 10 10 0 0 0 0 20Z',
+    'M2 12h20',
+    'M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10Z',
+  ],
+  'desktop-window': [
+    'M20 3H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z',
+    'M8 21h8',
+    'M12 17v4',
   ],
 };
 

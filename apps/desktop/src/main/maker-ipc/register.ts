@@ -106,9 +106,11 @@ import {
   getComputerDriverStatus,
   grantComputerDriverPermissions,
   installComputerDriver,
+  listComputerWindowsForAtMention,
   pauseComputerDriverPermissionProbe,
   updateComputerDriver,
 } from '../mcp-integrations/computer.js';
+import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   closeComputerPermissionGuideWindow,
   finishComputerPermissionAppDrag,
@@ -122,6 +124,11 @@ import {
 } from '../computer-permission-guide/window.js';
 import { parseComputerPermissionGrantRequest } from '../computer-permission-guide/request.js';
 import { shouldUseComputerPermissionGuide } from './computerPermissionGuideEligibility.js';
+import {
+  listAtBrowserTabs,
+  parseAtContextCatalogRequest,
+  readAtDesktopWindows,
+} from './atContextCatalog.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
 import * as cindyChatAttachments from '../cindy-media/chatAttachments.js';
@@ -4977,6 +4984,44 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         truncated: false,
       };
     }
+  });
+
+  ipcMain.handle(MAKER_INVOKE.AT_CONTEXT_LIST, async (event, payload: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const request = parseAtContextCatalogRequest(payload);
+    if (!request) {
+      throwIpcError('INVALID_PARAMS', 'Invalid @ context catalog request');
+    }
+
+    const unavailable: Array<'browser-tabs' | 'desktop-windows'> = [];
+    let browserTabs: ReturnType<typeof listAtBrowserTabs> = [];
+    let desktopWindows: ReturnType<typeof readAtDesktopWindows> = [];
+    try {
+      browserTabs = listAtBrowserTabs(
+        getRsbBrowserBridge(),
+        request.sessionId,
+        request.query,
+        request.limit,
+      );
+    } catch (err) {
+      unavailable.push('browser-tabs');
+      log.warn('@ context browser-tab catalog failed', err);
+    }
+
+    if (getPluginRegistry().isEnabled('computer', request.workingDir)) {
+      try {
+        desktopWindows = readAtDesktopWindows(
+          await listComputerWindowsForAtMention(),
+          request.query,
+          request.limit,
+        );
+      } catch (err) {
+        unavailable.push('desktop-windows');
+        log.warn('@ context desktop-window catalog failed', err);
+      }
+    }
+
+    return { success: true, browserTabs, desktopWindows, unavailable };
   });
 
   ipcMain.handle(MAKER_INVOKE.LIST_CUSTOMIZATIONS, async (_e, params: unknown) => {

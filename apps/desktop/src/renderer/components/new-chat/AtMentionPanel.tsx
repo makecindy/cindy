@@ -13,7 +13,13 @@
  */
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
-import { File as FileIcon, Folder as FolderIcon, Sparkles } from 'lucide-react';
+import {
+  File as FileIcon,
+  Folder as FolderIcon,
+  Globe2,
+  Monitor,
+  Sparkles,
+} from 'lucide-react';
 
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
@@ -99,8 +105,7 @@ export function AtMentionPanel({
   }, [onClose]);
 
   const focusedItem = filtered[focusedIndex];
-  // Show tooltip only for agent items with a description
-  const showTooltip = focusedItem?.type === 'agent' && !!focusedItem.description;
+  const showTooltip = !!focusedItem?.description;
   const tooltipKey = showTooltip
     ? `${focusedItem.type}:${focusedItem.relPath}:${focusedItem.name}:${focusedItem.description ?? ''}`
     : null;
@@ -155,12 +160,24 @@ export function AtMentionPanel({
     let meta: string;
     if (item.type === 'agent') {
       meta = 'Agent';
+    } else if (item.type === 'browser-tab') {
+      meta = t('newChat.atMention.browserTab');
+    } else if (item.type === 'desktop-window') {
+      meta = item.description || t('newChat.atMention.desktopWindow');
     } else {
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
     }
     const displayName = item.type === 'dir' ? `${item.name}/` : item.name;
-    const Icon = item.type === 'agent' ? Sparkles : item.type === 'dir' ? FolderIcon : FileIcon;
+    const Icon = item.type === 'agent'
+      ? Sparkles
+      : item.type === 'dir'
+        ? FolderIcon
+        : item.type === 'browser-tab'
+          ? Globe2
+          : item.type === 'desktop-window'
+            ? Monitor
+            : FileIcon;
 
     return (
       <button

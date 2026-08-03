@@ -3291,6 +3291,10 @@ export function ChatInput({
         2000,
         normalizedQuery || undefined,
         remoteDeviceId,
+        {
+          sessionId,
+          includeLocalContext: !remoteDeviceId,
+        },
       )
         .then((res) => {
           if (atScanSeqRef.current !== seq) return;

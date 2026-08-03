@@ -4280,6 +4280,22 @@ interface ElectronAPI {
       >;
       truncated?: boolean;
     }>;
+    listAtContext: (params: {
+      sessionId?: string;
+      workingDir?: string;
+      query?: string;
+      limit?: number;
+    }) => Promise<{
+      success: true;
+      browserTabs: Array<{ tabId: string; title: string; url: string }>;
+      desktopWindows: Array<{
+        windowId: number;
+        pid: number;
+        appName: string;
+        title: string;
+      }>;
+      unavailable: Array<'browser-tabs' | 'desktop-windows'>;
+    }>;
 
     createSession: (opts: {
       /** 可选: 复用外部 sessionId(本端 chat 用 local-db:sessions:create 拿到的 id) */

@@ -5278,10 +5278,12 @@
       }
     },
     "atMention": {
-      "scanFailed": "Failed to scan working directory",
+      "browserTab": "Browser tab",
+      "desktopWindow": "App window",
+      "scanFailed": "Failed to load @ resources",
       "retry": "Retry",
       "searching": "Searching…",
-      "noMatch": "No matching files",
+      "noMatch": "No matching items",
       "keepTyping": "Keep typing to narrow down…"
     },
     "planReview": {

@@ -28,6 +28,7 @@ const CALL_TIMEOUT_MS = 45_000;
 const LIGHTWEIGHT_CALL_TIMEOUT_MS = 10_000;
 const CLI_FALLBACK_TIMEOUT_MS = 8_000;
 const WINDOWS_WIN32_FALLBACK_TIMEOUT_MS = 4_000;
+const AT_MENTION_WINDOW_CACHE_MS = 3_000;
 // 安装/更新超时按「活动」而非总时长计:上游安装脚本要从 GitHub Releases
 // 下载数十 MB 二进制,慢网下总时长不可预算(2026-07-02 实测固定 180s 超时
 // 误杀安装、还把内层脚本的安装锁留成死锁)。活动信号 = stdout/stderr 输出
@@ -308,6 +309,8 @@ let cachedProcessSnapshot: {
   expiresAt: number;
   result: ProcessSnapshotResult;
 } | null = null;
+
+let cachedAtMentionWindows: { expiresAt: number; result: unknown } | null = null;
 
 function clearProcessSnapshotCache(): void {
   cachedProcessSnapshot = null;
@@ -1760,6 +1763,58 @@ async function buildWindowsWin32ListAppsFallback(): Promise<unknown> {
     accessibility_unavailable: true,
     apps,
   };
+}
+
+/**
+ * Cheap, read-only window catalog for the Composer's `@` palette.
+ *
+ * Windows uses the bounded Win32 snapshot directly instead of starting a CUA
+ * MCP session. On macOS we only query when a prior passive/explicit permission
+ * check already proved Accessibility is granted, so opening the palette can
+ * never become a permission prompt. Results are briefly cached because the
+ * palette rescans while the user types.
+ */
+export async function listComputerWindowsForAtMention(): Promise<unknown> {
+  const now = Date.now();
+  if (cachedAtMentionWindows && cachedAtMentionWindows.expiresAt > now) {
+    return cachedAtMentionWindows.result;
+  }
+
+  let result: unknown;
+  if (process.platform === 'win32') {
+    result = await buildWindowsWin32ListWindowsFallback({});
+  } else {
+    if (
+      process.platform === 'darwin'
+      && cachedPermissionProbe?.state.accessibility !== 'granted'
+    ) {
+      result = { ok: true, windows: [] };
+    } else {
+      const response = await runDriver(
+        ['call', 'list_windows'],
+        WINDOWS_WIN32_FALLBACK_TIMEOUT_MS,
+        { stdin: '{}\n' },
+      );
+      if (response.exitCode !== 0) {
+        throw new ComputerDriverError(
+          response.stderr.trim()
+          || response.stdout.trim()
+          || `cua-driver call list_windows exited ${response.exitCode}`,
+        );
+      }
+      result = parseJsonOutput(response.stdout);
+    }
+  }
+
+  cachedAtMentionWindows = {
+    expiresAt: Date.now() + AT_MENTION_WINDOW_CACHE_MS,
+    result,
+  };
+  return result;
+}
+
+export function resetAtMentionWindowCacheForTests(): void {
+  cachedAtMentionWindows = null;
 }
 
 function normalizeToolArgsForDriver(

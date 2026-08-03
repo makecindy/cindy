@@ -13,7 +13,12 @@ const log = createLogger('AtResourceService');
  * This module is pure TS, no React. The panel component consumes it.
  */
 
-export type AtResourceType = 'file' | 'dir' | 'agent';
+export type AtResourceType =
+  | 'file'
+  | 'dir'
+  | 'agent'
+  | 'browser-tab'
+  | 'desktop-window';
 
 export interface AtResourceItem {
   type: AtResourceType;
@@ -45,6 +50,25 @@ export interface ScanResult {
 
 export type PaletteAgentKind = 'claude-code' | 'codex' | 'pi';
 
+export interface AtResourceScanContext {
+  /** Current local task. Its built-in browser tabs are the only tabs exposed. */
+  sessionId?: string;
+  /** False for SSH/device-link so candidates never leak from the controller machine. */
+  includeLocalContext?: boolean;
+}
+
+function browserTabReference(tabId: string, url: string): string {
+  return `cindy://browser-tab/${encodeURIComponent(tabId)}?url=${encodeURIComponent(url)}`;
+}
+
+function desktopWindowReference(
+  pid: number,
+  windowId: number,
+  appName: string,
+): string {
+  return `cindy://desktop-window/${pid}/${windowId}?app=${encodeURIComponent(appName)}`;
+}
+
 /**
  * Load candidate @-resources from the active agent/workspace. Returns `success:false`
  * when workingDir is missing or IPC fails; panel should render the error
@@ -64,23 +88,53 @@ export async function scanAtResources(
    * (workingDir 是被控端路径)。不传 = 本机扫描。channel 与本地完全一致,被控端跑同一 handler。
    */
   deviceId?: string,
+  context?: AtResourceScanContext,
 ): Promise<ScanResult> {
-  if (!workingDir) {
+  const includeLocalContext = context?.includeLocalContext === true;
+  if (!workingDir && !includeLocalContext) {
     return { success: false, error: 'workingDir not bound', items: [], truncated: false };
   }
   type RawScan = Awaited<ReturnType<typeof window.electronAPI.maker.scanAtResources>>;
-  const res: RawScan = deviceId
-    ? ((await window.electronAPI.deviceLink.invoke(deviceId, 'maker:scan-at-resources', [
-        agentKind,
-        { workingDir, cap, query },
-      ])) as RawScan)
-    : await window.electronAPI.maker.scanAtResources(agentKind, { workingDir, cap, query });
-  if (!res.success || !res.items) {
+  const workspacePromise: Promise<RawScan | null> = workingDir
+    ? deviceId
+      ? (window.electronAPI.deviceLink.invoke(deviceId, 'maker:scan-at-resources', [
+          agentKind,
+          { workingDir, cap, query },
+        ]) as Promise<RawScan>)
+      : window.electronAPI.maker.scanAtResources(agentKind, { workingDir, cap, query })
+    : Promise.resolve(null);
+  const contextPromise = includeLocalContext
+    ? window.electronAPI.maker.listAtContext({
+        sessionId: context?.sessionId,
+        workingDir: workingDir || undefined,
+        query,
+        limit: 40,
+      })
+    : Promise.resolve(null);
+  const [workspaceSettled, contextSettled] = await Promise.allSettled([
+    workspacePromise,
+    contextPromise,
+  ]);
+  const res = workspaceSettled.status === 'fulfilled' ? workspaceSettled.value : null;
+  const contextResult = contextSettled.status === 'fulfilled' ? contextSettled.value : null;
+  const workspaceFailed = !!workingDir && (
+    workspaceSettled.status === 'rejected' || !res?.success || !res.items
+  );
+  const contextFailed = includeLocalContext && contextSettled.status === 'rejected';
+  if (workspaceFailed) {
+    log.warn('Workspace @ resource scan failed; keeping other providers available.',
+      workspaceSettled.status === 'rejected' ? workspaceSettled.reason : res?.error);
+  }
+  if (contextFailed) {
+    log.warn('Local @ context scan failed; keeping other providers available.',
+      contextSettled.status === 'rejected' ? contextSettled.reason : undefined);
+  }
+  if ((!workingDir || workspaceFailed) && (!includeLocalContext || contextFailed)) {
     return {
       success: false,
-      error: res.error ?? 'scan failed',
+      error: res?.error ?? 'scan failed',
       items: [],
-      truncated: !!res.truncated,
+      truncated: !!res?.truncated,
     };
   }
 
@@ -92,7 +146,7 @@ export async function scanAtResources(
   const dirs: AtResourceItem[] = [];
   const agentNames = new Set<string>();
 
-  for (const item of res.items) {
+  for (const item of res?.items ?? []) {
     if (item.type === 'agent') {
       agentNames.add(item.name);
       agents.push({
@@ -103,7 +157,7 @@ export async function scanAtResources(
       });
     }
   }
-  for (const item of res.items) {
+  for (const item of res?.items ?? []) {
     if (item.type === 'file') {
       const bare = item.name.replace(/\.md$/, '');
       if (agentNames.has(bare)) {
@@ -126,10 +180,38 @@ export async function scanAtResources(
     }
   }
 
+  const contextual: AtResourceItem[] = [];
+  for (const tab of contextResult?.browserTabs ?? []) {
+    const relPath = browserTabReference(tab.tabId, tab.url);
+    contextual.push({
+      type: 'browser-tab',
+      name: tab.title,
+      relPath,
+      description: tab.url,
+      _nameLower: tab.title.toLowerCase(),
+      _relPathLower: `${tab.url} ${tab.tabId}`.toLowerCase(),
+    });
+  }
+  for (const appWindow of contextResult?.desktopWindows ?? []) {
+    const relPath = desktopWindowReference(
+      appWindow.pid,
+      appWindow.windowId,
+      appWindow.appName,
+    );
+    contextual.push({
+      type: 'desktop-window',
+      name: appWindow.title,
+      relPath,
+      description: appWindow.appName,
+      _nameLower: appWindow.title.toLowerCase(),
+      _relPathLower: `${appWindow.appName} ${appWindow.pid} ${appWindow.windowId}`.toLowerCase(),
+    });
+  }
+
   return {
     success: true,
-    items: [...agents, ...dirs, ...files],
-    truncated: !!res.truncated,
+    items: [...contextual, ...agents, ...dirs, ...files],
+    truncated: !!res?.truncated,
   };
 }
 

@@ -37,11 +37,30 @@ export interface AgentInputProjectReference extends AgentInputReferenceBase {
   workingDir: string;
 }
 
+/** One live tab in Cindy's built-in browser for the current task. */
+export interface AgentInputBrowserTabReference extends AgentInputReferenceBase {
+  kind: 'browser-tab';
+  tabId: string;
+  title?: string;
+  url: string;
+}
+
+/** One currently open operating-system application window. */
+export interface AgentInputDesktopWindowReference extends AgentInputReferenceBase {
+  kind: 'desktop-window';
+  windowId: number;
+  pid: number;
+  appName: string;
+  title?: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
   | AgentInputSessionReference
-  | AgentInputProjectReference;
+  | AgentInputProjectReference
+  | AgentInputBrowserTabReference
+  | AgentInputDesktopWindowReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -70,12 +89,77 @@ function nonEmptyString(value: unknown): value is string {
   return typeof value === 'string' && value.length > 0;
 }
 
-function stripDeepLinkPrefix(href: string, route: 'session/' | 'project/'): string | null {
+function stripDeepLinkPrefix(
+  href: string,
+  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/',
+): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+function decodeBoundedComponent(value: string, maxLength: number): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return decoded && decoded.length <= maxLength ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+function queryValue(query: string, key: string, maxLength: number): string | null {
+  for (const pair of query.split('&')) {
+    const equalsIndex = pair.indexOf('=');
+    if (equalsIndex <= 0 || pair.slice(0, equalsIndex) !== key) continue;
+    return decodeBoundedComponent(pair.slice(equalsIndex + 1), maxLength);
+  }
+  return null;
+}
+
+export function parseBrowserTabReferenceHref(
+  href: string,
+): { tabId: string; url: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'browser-tab/');
+  if (rest === null || rest.length > 5_000) return null;
+  const hashIndex = rest.indexOf('#');
+  const withoutHash = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
+  const queryIndex = withoutHash.indexOf('?');
+  if (queryIndex <= 0) return null;
+  const tabId = decodeBoundedComponent(withoutHash.slice(0, queryIndex), 256);
+  const url = queryValue(withoutHash.slice(queryIndex + 1), 'url', 4_096);
+  if (!tabId || !url) return null;
+  try {
+    const protocol = new URL(url).protocol;
+    return protocol === 'http:' || protocol === 'https:' ? { tabId, url } : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseDesktopWindowReferenceHref(
+  href: string,
+): { pid: number; windowId: number; appName: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'desktop-window/');
+  if (rest === null || rest.length > 1_000) return null;
+  const hashIndex = rest.indexOf('#');
+  const withoutHash = hashIndex >= 0 ? rest.slice(0, hashIndex) : rest;
+  const queryIndex = withoutHash.indexOf('?');
+  if (queryIndex <= 0) return null;
+  const [rawPid, rawWindowId, ...extra] = withoutHash.slice(0, queryIndex).split('/');
+  if (extra.length > 0) return null;
+  const pid = Number(rawPid);
+  const windowId = Number(rawWindowId);
+  const appName = queryValue(withoutHash.slice(queryIndex + 1), 'app', 200);
+  if (
+    !Number.isSafeInteger(pid)
+    || pid <= 0
+    || !Number.isSafeInteger(windowId)
+    || windowId < 0
+    || !appName
+  ) return null;
+  return { pid, windowId, appName };
 }
 
 /** Remove a trailing slash run in one linear pass over untrusted deep-link input. */
@@ -205,6 +289,33 @@ function readReference(
       workingDir: target.workingDir,
     };
   }
+  if (candidate.kind === 'browser-tab') {
+    const target = parseBrowserTabReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'browser-tab',
+      start,
+      end,
+      href: candidate.href,
+      tabId: target.tabId,
+      url: target.url,
+      ...(nonEmptyString(candidate.title) ? { title: candidate.title } : {}),
+    };
+  }
+  if (candidate.kind === 'desktop-window') {
+    const target = parseDesktopWindowReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'desktop-window',
+      start,
+      end,
+      href: candidate.href,
+      windowId: target.windowId,
+      pid: target.pid,
+      appName: target.appName,
+      ...(nonEmptyString(candidate.title) ? { title: candidate.title } : {}),
+    };
+  }
   return null;
 }
 
@@ -252,6 +363,25 @@ function formatReference(reference: AgentInputReference): string {
       `Title: ${oneLine(reference.title ?? '') || `Conversation ${reference.sessionId}`}`,
       `Session ID: ${reference.sessionId}`,
       '[/Referenced conversation]',
+    ].join('\n');
+  }
+  if (reference.kind === 'browser-tab') {
+    return [
+      '[Referenced browser tab]',
+      `Title: ${oneLine(reference.title ?? '') || reference.url}`,
+      `URL: ${reference.url}`,
+      `Tab ID: ${reference.tabId}`,
+      '[/Referenced browser tab]',
+    ].join('\n');
+  }
+  if (reference.kind === 'desktop-window') {
+    return [
+      '[Referenced desktop window]',
+      `Title: ${oneLine(reference.title ?? '') || reference.appName}`,
+      `Application: ${oneLine(reference.appName)}`,
+      `PID: ${reference.pid}`,
+      `Window ID: ${reference.windowId}`,
+      '[/Referenced desktop window]',
     ].join('\n');
   }
   return [
@@ -321,6 +451,10 @@ export function projectLiteralUserText(source: AgentFacingTextSource): string {
 export function describeAgentInputReference(reference: AgentInputReference): string | null {
   if (reference.kind === 'session') return oneLine(reference.title ?? '') || null;
   if (reference.kind === 'project') return oneLine(reference.name) || null;
+  if (reference.kind === 'browser-tab') return oneLine(reference.title ?? reference.url) || null;
+  if (reference.kind === 'desktop-window') {
+    return oneLine(reference.title ?? reference.appName) || null;
+  }
   return oneLine(reference.text ?? '') || null;
 }
 

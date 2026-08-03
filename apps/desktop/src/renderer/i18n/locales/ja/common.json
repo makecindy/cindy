@@ -5276,10 +5276,12 @@
       }
     },
     "atMention": {
-      "scanFailed": "作業ディレクトリのスキャンに失敗しました",
+      "browserTab": "ブラウザタブ",
+      "desktopWindow": "アプリウィンドウ",
+      "scanFailed": "@ コンテンツの読み込みに失敗しました",
       "retry": "再試行",
       "searching": "検索中…",
-      "noMatch": "一致するファイルがありません",
+      "noMatch": "一致する項目がありません",
       "keepTyping": "入力を続けて絞り込み…"
     },
     "planReview": {

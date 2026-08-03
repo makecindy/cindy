@@ -5276,10 +5276,12 @@
       }
     },
     "atMention": {
-      "scanFailed": "扫描工作目录失败",
+      "browserTab": "浏览器标签",
+      "desktopWindow": "应用窗口",
+      "scanFailed": "加载 @ 内容失败",
       "retry": "重试",
       "searching": "搜索中…",
-      "noMatch": "没有匹配的文件",
+      "noMatch": "没有匹配的内容",
       "keepTyping": "继续输入以缩小范围…"
     },
     "planReview": {
