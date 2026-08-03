@@ -6,8 +6,9 @@
  * 清单里的描述性字段不作为事实来源——展示与安装一律以 ghost.json 为准。
  *
  * 容错策略与 Codex 一致：单个插件条目非法只跳过并记日志，不让整个市场不可用。
- * 跳过在每次发现结束时汇总成**一行** warn（条目下标 + 相对路径 + 原因 + errno）——
- * 跳过是逐条发生的，逐条打会被反复调用的发现路径放大成日志洪水。
+ * 跳过在每次发现结束时汇总成**一个物理行**的 warn（条目下标 + 相对路径 + 原因 +
+ * errno，payload 自行 JSON 序列化，理由见调用处）——跳过是逐条发生的，逐条打会被
+ * 反复调用的发现路径放大成日志洪水。
  */
 import fs from 'node:fs';
 import path from 'node:path';
@@ -55,7 +56,7 @@ const MARKET_NAME_MAX_CHARS = 128;
 const SKIP_LOG_DETAIL_LIMIT = 20;
 
 /** 明细里相对路径的截断上限:清单自报的路径同样不受信,不能无界进日志。 */
-const SKIP_LOG_PATH_MAX_CHARS = 200;
+const SKIP_LOG_TEXT_MAX_CHARS = 200;
 
 /** 控制字符与双向文本控制符不允许出现在市场名里,防 UI 欺骗与日志注入。 */
 // eslint-disable-next-line no-control-regex
@@ -280,8 +281,9 @@ const LOG_UNSAFE_CHARS = new RegExp(
   'g',
 );
 
-function logSafeEntryPath(value: string): string {
-  return value.replace(LOG_UNSAFE_CHARS, '').slice(0, SKIP_LOG_PATH_MAX_CHARS);
+/** 清单自报的任意文本(条目路径、市场名)进日志前一律过这里。 */
+function logSafeText(value: string): string {
+  return value.replace(LOG_UNSAFE_CHARS, '').slice(0, SKIP_LOG_TEXT_MAX_CHARS);
 }
 
 /** 把 classifyFsFailure 的结论装成解析结果:kind 是变量,联合成员要显式分流。 */
@@ -477,7 +479,7 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
     // 类型变化漂移。明细固定为 index / path / reason / errno。
     skippedDetails.push({
       index,
-      ...(relPath === null ? {} : { path: logSafeEntryPath(relPath) }),
+      ...(relPath === null ? {} : { path: logSafeText(relPath) }),
       reason: info.reason,
       ...(info.errno ? { errno: info.errno } : {}),
     });
@@ -518,15 +520,27 @@ export async function discoverMarketplace(marketRoot: string): Promise<DiscoverR
   }
   if (skippedCount > 0 || unreadableCount > 0) {
     const detailsTruncated = skippedCount + unreadableCount - skippedDetails.length;
-    log.warn('marketplace skipped plugin entries', {
-      market: name,
-      declared: raw.plugins.length,
-      accepted: plugins.length,
-      skippedCount,
-      unreadableCount,
-      entries: skippedDetails,
-      ...(detailsTruncated > 0 ? { detailsTruncated } : {}),
-    });
+    // payload 必须**自己**序列化成紧凑单行:main logger 走 util.format,对象参数会经
+    // util.inspect 按 breakLength 展开 —— 实测 1 条明细写出 15 个物理行、20 条写出
+    // 129 行,且续行不带时间戳/级别/scope。那既是本改动声称要避免的日志洪水,也会
+    // 打断按行解析 main 日志的工具。字符串参数 util.format 直接拼接,恒为一行。
+    //
+    // 注意 JSON.stringify **不**转义 U+2028 / U+2029 / NEL(著名的 JSON-vs-JS 缺口),
+    // 所以 market 与 path 仍各自过 logSafeText,不能指望这一层兜住。
+    log.warn(
+      'marketplace skipped plugin entries',
+      JSON.stringify({
+        // name 与 path 同源(都来自不受信清单),消毒口径必须一致:市场名那道准入闸
+        // 不含 Unicode 换行类,带这些码位的名字能通过校验再原样进日志。
+        market: logSafeText(name),
+        declared: raw.plugins.length,
+        accepted: plugins.length,
+        skippedCount,
+        unreadableCount,
+        entries: skippedDetails,
+        ...(detailsTruncated > 0 ? { detailsTruncated } : {}),
+      }),
+    );
   }
 
   return {
