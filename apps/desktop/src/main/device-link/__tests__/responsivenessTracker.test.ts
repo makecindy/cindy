@@ -197,6 +197,49 @@ describe('responsivenessTracker', () => {
     expect(h.tracker.isUnresponsive(DEV)).toBe(false);
   });
 
+  it('多 peer 隔离:peer A 静默(熔断 open)期间,peer B 的在途请求、新请求与建链零感知', async () => {
+    // 故障半径回归(remote-and-mobile-adaptation「故障半径三问」):控制端的多个
+    // 目标设备共享本机唯一 relay 连接,单 peer 静默的全部恢复动作(熔断快速拒绝、
+    // 探测退避)必须收在该 deviceId 内——A 的 open 若泄漏到 B,就是把一台设备的
+    // 故障放大成所有设备不可用(#1187 判例的控制端对偶形态)。
+    const DEV_B = 'device-bystander';
+    const h = harness();
+    // A 发生故障时 B 正有请求在飞
+    let resolveB!: (v: unknown) => void;
+    const inflightB = h.tracker.guardInvoke(
+      DEV_B,
+      'local-db:sessions:list',
+      () =>
+        new Promise((res) => {
+          resolveB = res;
+        }),
+    );
+    await openBreaker(h); // A 连续超时至熔断 open
+    expect(h.tracker.getUnresponsiveDeviceIds()).toEqual([DEV]);
+
+    // B 的在途请求照常返回,B 熔断保持关闭
+    resolveB('ok');
+    await expect(inflightB).resolves.toBe('ok');
+    expect(h.tracker.isUnresponsive(DEV_B)).toBe(false);
+
+    // A open 期间,B 的新业务请求与建链(openLink 观测,本 PR 新增的门禁路径)
+    // 都照常直通上管道,不被 A 的 open 快速拒绝
+    const runB = vi.fn(async () => 'fresh');
+    await expect(h.tracker.guardInvoke(DEV_B, 'local-db:sessions:list', runB)).resolves.toBe(
+      'fresh',
+    );
+    const openLinkB = vi.fn(async () => 'accepted');
+    await expect(
+      h.tracker.guardInvoke(DEV_B, OPEN_LINK_OBSERVATION_CHANNEL, openLinkB),
+    ).resolves.toBe('accepted');
+    expect(runB).toHaveBeenCalledTimes(1);
+    expect(openLinkB).toHaveBeenCalledTimes(1);
+
+    // 状态翻转通知只发给 A,B 从未被标记
+    expect(h.onUnresponsiveChanged).toHaveBeenCalledWith(DEV, true);
+    expect(h.onUnresponsiveChanged).not.toHaveBeenCalledWith(DEV_B, expect.anything());
+  });
+
   it('resetAll 关闭所有 open 设备并通知恢复', async () => {
     const h = harness();
     await openBreaker(h);
