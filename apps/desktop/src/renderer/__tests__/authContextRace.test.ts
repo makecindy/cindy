@@ -34,14 +34,16 @@ describe('AuthContext auth-state races', () => {
   });
 
   it('publishes a data-owner generation at every auth boundary', () => {
-    expect(source).toContain('setDataOwnerGeneration(state.dataOwnerId);');
+    expect(source).toContain('setDataOwnerGeneration(dataOwnerId);');
+    expect(source).toContain('invalidateProvidersSnapshot();');
+    expect(source).toContain('publishDataOwnerGeneration(state.dataOwnerId);');
     expect(source).toContain('// Invalidate in-flight remote sends before the confirmation dialog resolves.');
-    expect(source.match(/setDataOwnerGeneration\(null\);/g)?.length).toBeGreaterThanOrEqual(2);
+    expect(source.match(/publishDataOwnerGeneration\(null\);/g)?.length).toBeGreaterThanOrEqual(2);
     const enterLocal = source.indexOf('const enterLocalMode = useCallback');
     const exitLocal = source.indexOf('const exitLocalMode = useCallback');
-    expect(source.indexOf('setDataOwnerGeneration(state.dataOwnerId);', enterLocal))
+    expect(source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', enterLocal))
       .toBeLessThan(exitLocal);
-    expect(source.indexOf('setDataOwnerGeneration(state.dataOwnerId);', exitLocal))
+    expect(source.indexOf('publishDataOwnerGeneration(state.dataOwnerId);', exitLocal))
       .toBeGreaterThan(exitLocal);
   });
 

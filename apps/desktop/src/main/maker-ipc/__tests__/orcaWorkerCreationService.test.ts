@@ -80,6 +80,7 @@ function createDeps(overrides: Partial<OrcaWorkerCreationDeps> = {}) {
     getLeadSessionRow: vi.fn(async () => ({
       id: 'lead-1',
       agentKind: 'codex' as const,
+      workspaceKind: 'project' as const,
       workingDir: 'C:\\repo',
       model: 'gpt-5.5',
       effort: 'medium',
@@ -296,6 +297,7 @@ describe('OrcaWorkerCreationService', () => {
     const remoteLeadRow = {
       id: 'lead-1',
       agentKind: 'codex' as const,
+      workspaceKind: 'project' as const,
       workingDir: '/srv/repo',
       model: 'gpt-5.5',
       effort: 'medium',
@@ -621,6 +623,7 @@ describe('OrcaWorkerCreationService', () => {
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1',
         agentKind: 'codex' as const,
+        workspaceKind: 'project' as const,
         workingDir: '/srv/repo',
         model: 'gpt-5.5',
         effort: 'medium',
@@ -663,11 +666,44 @@ describe('OrcaWorkerCreationService', () => {
     expect('remoteHostId' in arg).toBe(false);
   });
 
+  it('inherits dialogue workspace identity and the managed cwd from its lead', async () => {
+    const dialogueWorkingDir = '/app-managed/dialogues/2026-08-02/lead-1';
+    const { deps, service } = createDeps({
+      getLeadSessionRow: vi.fn(async () => ({
+        id: 'lead-1',
+        agentKind: 'codex' as const,
+        workspaceKind: 'dialogue' as const,
+        workingDir: dialogueWorkingDir,
+        model: 'gpt-5.5',
+        effort: 'medium',
+        permissionMode: 'default',
+        fastMode: false,
+        providerId: 'xd',
+        remoteHostId: null,
+      })),
+    });
+
+    await expect(
+      service.createWorker({
+        leadSessionId: 'lead-1',
+        role: 'reviewer',
+        agent: 'codex',
+        label: 'reviewer',
+      }),
+    ).resolves.toMatchObject({ ok: true });
+
+    expect(deps.buildCreateOptsWithStderr).toHaveBeenCalledWith(expect.objectContaining({
+      workspaceKind: 'dialogue',
+      workingDir: dialogueWorkingDir,
+    }));
+  });
+
   it('normalizes inherited minimal effort from the lead session to low for a Codex GPT worker', async () => {
     const { deps, service } = createDeps({
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1',
         agentKind: 'codex' as const,
+        workspaceKind: 'project' as const,
         workingDir: 'C:\\repo',
         model: 'gpt-5.4-mini',
         effort: 'minimal',
@@ -1734,6 +1770,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
   const remoteLeadRow = {
     id: 'lead-1',
     agentKind: 'codex' as const,
+    workspaceKind: 'project' as const,
     workingDir: '/srv/repo',
     model: 'gpt-5.5',
     effort: 'medium',
@@ -1847,6 +1884,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1',
         agentKind: 'codex' as const,
+        workspaceKind: 'project' as const,
         workingDir: '/srv/repo',
         model: 'gpt-5.5',
         effort: 'medium',
@@ -1888,6 +1926,7 @@ describe('SSH remote worker model/provider compatibility gate (R23 P2)', () => {
       getLeadSessionRow: vi.fn(async () => ({
         id: 'lead-1',
         agentKind: 'codex' as const,
+        workspaceKind: 'project' as const,
         workingDir: '/srv/repo',
         model: 'deepseek-v4',
         effort: 'medium',

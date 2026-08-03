@@ -16,7 +16,7 @@
 | `cindy-protocol/` | git submodule：客户端与服务端共享 wire protocol 的唯一权威源（`device-link-protocol` 中继层协议、`slack-hook-protocol` 任务协议）；升级规则见 [`protocol-and-submodules.md`](protocol-and-submodules.md) |
 | `config/` | 运行期端点清单（`endpoint.json` / `endpoint.dev.json` / `endpoint.global.json`：auth、device-link 等线上 base URL） |
 | `scripts/` | 仓库级工程脚本：dev 启动包装、agent 二进制拉取（`ensure-agent-binaries.mjs`）、i18n／endpoint／文档等校验 guard、worktree 管理 |
-| `tools/` | claude／codex／ripgrep 三个自带 CLI 的版本 pin（`latest.json`）与更新器（`update.mjs`） |
+| `tools/` | claude／codex／ripgrep／pi 四个 Desktop runtime 的版本 pin（`latest.json`）与更新器（`update.mjs`） |
 | `docs/` | 规则文档：`dev-rules/`（工程）、`product-rules/`（产品）、`design-rules/`（设计入口）、`legal/` 等 |
 
 ## apps/

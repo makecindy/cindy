@@ -35,7 +35,7 @@ export async function refreshLocalCatalogSnapshot(): Promise<boolean> {
     ]);
     if (
       refreshGeneration !== generation
-      || !isProvidersRefreshCurrent(providersGeneration)
+      || !isProvidersRefreshCurrent(providersGeneration, providers)
       || !isLocalCapabilitiesRefreshCurrent(capabilitiesGeneration)
     ) {
       return false;

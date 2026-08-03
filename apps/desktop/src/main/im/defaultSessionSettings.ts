@@ -12,7 +12,7 @@ import {
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   type ProviderView,
 } from '@cindy/model-providers';
 
@@ -281,7 +281,7 @@ function resolveProviderId(
     });
     return fallback;
   }
-  if (!isAgentSelectableModel(model, { userProvider: provider.source === 'user' })) {
+  if (!isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })) {
     // hasModel() 只证明"这个 id 在某个来源上是聊天模型"(any-source),不代表**这个**被
     // 保存的 providerId 本身也是——同一 id 若在不同来源上 mode 不一致(如 A 是
     // image_generation、B 是 chat),model 存在性校验会因 B 通过,但这里若只查
@@ -344,8 +344,7 @@ function findModel(
       const model = getModel(provider, modelId, agentKind);
       if (
         model &&
-        model.disabled !== true &&
-        isAgentSelectableModel(model, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(model, { userProvider: provider.source === 'user' })
       )
         return model;
     }

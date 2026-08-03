@@ -12,7 +12,7 @@
  */
 
 import {
-  isAgentSelectableModel,
+  isModelSelectableForNewRoute,
   isModelVisible,
   providerOffersModel,
   providersForAgent,
@@ -152,15 +152,12 @@ export function deriveModelsFromProviders(
     if (opts?.excludeProvider?.(provider)) continue;
     if (opts?.admissionFiltered && provider.suspended) continue;
     for (const m of provider.models[agent] ?? []) {
+      // chat / disabled / retired 准入与 main 侧 catalog-to-descriptors.ts 的
+      // deriveAvailableModels 同源，但只在 admissionFiltered 时生效：current-model
+      // 元数据查询必须继续保留运行中已选条目。
       if (
         opts?.admissionFiltered &&
-        (m.disabled === true ||
-          // 非聊天模型同样不进 picker(issue #882 第 3 点):isAgentSelectableModel 现在
-          // 内部就是 isChatEligible(+ userProvider 例外),与 main 侧
-          // catalog-to-descriptors.ts deriveAvailableModels 用的同一份权威判定
-          // 保持一致——但只在 admissionFiltered 时生效,不能无条件开(见上方函数
-          // 文档:current-model 元数据查询不能被这个轴过滤掉)。
-          !isAgentSelectableModel(m, { userProvider: provider.source === 'user' }))
+        !isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })
       ) {
         continue;
       }

@@ -11,6 +11,18 @@ const h = vi.hoisted(() => ({
   handlers: new Map<string, (...args: unknown[]) => unknown>(),
   trusted: true,
   run: vi.fn(async (_request: unknown) => ({ applied: true, done: true })),
+  regenerateMaterial: vi.fn(
+    async (
+      _sessionId: string,
+      _limit: number,
+      _latestTurnIsInFlight: boolean | (() => boolean),
+    ) => ({
+      opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+      recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+    }),
+  ),
+  generateTitle: vi.fn(async () => '任务标题'),
+  drainPersistQueue: vi.fn<() => Promise<void>>(async () => undefined),
 }));
 
 vi.mock('electron', () => ({
@@ -27,12 +39,17 @@ vi.mock('../../localDb/client/current.js', () => ({ getDbClient: vi.fn() }));
 vi.mock('../../localDb/latestMessageText.js', () => ({
   latestMessage: vi.fn(),
   latestMessageText: vi.fn(),
-  regenerateTitleMaterial: vi.fn(),
+  regenerateTitleMaterial: h.regenerateMaterial,
 }));
 vi.mock('../../maker-host/createDesktopProviderService.js', () => ({
   getDesktopProviderService: vi.fn(),
 }));
-vi.mock('../../maker-host/title-one-shot.js', () => ({ generateTitleViaProvider: vi.fn() }));
+vi.mock('../../maker-host/title-one-shot.js', () => ({
+  generateTitleViaProvider: h.generateTitle,
+}));
+vi.mock('../../messagePersistBroadcaster.js', () => ({
+  drainPersistQueue: h.drainPersistQueue,
+}));
 vi.mock('../sessionAutoTitle.js', () => ({ runSessionAutoTitle: h.run }));
 vi.mock('../../security/trustedAppRenderer.js', () => ({
   assertTrustedAppRendererEvent: () => {
@@ -44,6 +61,7 @@ vi.mock('../../security/trustedAppRenderer.js', () => ({
 }));
 
 import { registerMakerTitleIpc } from '../title.js';
+import { getDbClient } from '../../localDb/client/current.js';
 
 const EVENT = {} as Electron.IpcMainInvokeEvent;
 
@@ -53,12 +71,147 @@ function invoke(request: unknown): Promise<unknown> {
   return Promise.resolve(handler(EVENT, request));
 }
 
+function invokeRegenerate(sessionId: string): Promise<unknown> {
+  const handler = h.handlers.get('maker:regenerate-title');
+  if (!handler) throw new Error('regenerate-title handler not registered');
+  return Promise.resolve(handler(EVENT, { sessionId }));
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   h.handlers.clear();
   h.trusted = true;
   h.run.mockResolvedValue({ applied: true, done: true });
+  h.regenerateMaterial.mockClear();
+  h.generateTitle.mockClear();
+  h.drainPersistQueue.mockReset();
+  h.drainPersistQueue.mockResolvedValue(undefined);
+  vi.mocked(getDbClient).mockReturnValue({
+    drizzle: {
+      select: () => ({
+        from: () => ({
+          where: () => ({
+            limit: async () => [{ agentKind: 'codex' }],
+          }),
+        }),
+      }),
+    },
+  } as unknown as ReturnType<typeof getDbClient>);
   registerMakerTitleIpc();
+});
+
+describe('maker:regenerate-title — 当前 turn 状态', () => {
+  it('status idle 后仍捕获 pending completion，并在 drain 期间 terminal 到达时继续过滤未封存 Assistant', async () => {
+    h.handlers.clear();
+    let pendingCompletion = true;
+    let resolveDrain!: () => void;
+    h.drainPersistQueue.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDrain = () => {
+            pendingCompletion = false;
+            resolve();
+          };
+        }),
+    );
+    const isSessionTurnPendingCompletion = vi.fn(() => pendingCompletion);
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    const result = invokeRegenerate('s-running');
+    await vi.waitFor(() => expect(h.drainPersistQueue).toHaveBeenCalledOnce());
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    resolveDrain();
+    await expect(result).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(1);
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledWith('s-running');
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-running',
+      expect.any(Number),
+      expect.any(Function),
+    );
+  });
+
+  it('terminal 已到时先等待 pending seal 落库，再按 completed 状态读取素材', async () => {
+    h.handlers.clear();
+    let resolveDrain!: () => void;
+    h.drainPersistQueue.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDrain = resolve;
+        }),
+    );
+    const isSessionTurnPendingCompletion = vi.fn(() => false);
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    const result = invokeRegenerate('s-completed');
+    await vi.waitFor(() => expect(h.drainPersistQueue).toHaveBeenCalledOnce());
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    resolveDrain();
+    await expect(result).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-completed',
+      expect.any(Number),
+      expect.any(Function),
+    );
+  });
+
+  it('drain 期间新 turn 启动时以后置快照过滤新一轮未封存 Assistant', async () => {
+    h.handlers.clear();
+    let pendingCompletion = false;
+    let resolveDrain!: () => void;
+    h.drainPersistQueue.mockImplementationOnce(
+      () =>
+        new Promise<void>((resolve) => {
+          resolveDrain = () => {
+            pendingCompletion = true;
+            resolve();
+          };
+        }),
+    );
+    const isSessionTurnPendingCompletion = vi.fn(() => pendingCompletion);
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    const result = invokeRegenerate('s-new-turn');
+    await vi.waitFor(() => expect(h.drainPersistQueue).toHaveBeenCalledOnce());
+    expect(h.regenerateMaterial).not.toHaveBeenCalled();
+    resolveDrain();
+    await expect(result).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(2);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-new-turn',
+      expect.any(Number),
+      expect.any(Function),
+    );
+  });
+
+  it('drain 后到素材快照前新 turn 启动时，动态状态读取仍会过滤施工播报', async () => {
+    h.handlers.clear();
+    let pendingCompletion = false;
+    const isSessionTurnPendingCompletion = vi.fn(() => pendingCompletion);
+    h.regenerateMaterial.mockImplementationOnce(async (_sessionId, _limit, signal) => {
+      pendingCompletion = true;
+      expect(typeof signal).toBe('function');
+      expect((signal as () => boolean)()).toBe(true);
+      return {
+        opening: { text: '原始需求', createdAt: 1, rowid: 1 },
+        recent: [{ role: 'user' as const, text: '原始需求', createdAt: 1, rowid: 1 }],
+      };
+    });
+    registerMakerTitleIpc({ isSessionTurnPendingCompletion });
+
+    await expect(invokeRegenerate('s-snapshot-race')).resolves.toEqual({ title: '任务标题' });
+
+    expect(isSessionTurnPendingCompletion).toHaveBeenCalledTimes(3);
+    expect(h.regenerateMaterial).toHaveBeenCalledWith(
+      's-snapshot-race',
+      expect.any(Number),
+      expect.any(Function),
+    );
+  });
 });
 
 describe('maker:auto-title — sender 断言', () => {

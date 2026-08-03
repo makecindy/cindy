@@ -312,6 +312,28 @@ export function isAgentSelectableModel(
   return isChatEligible(model);
 }
 
+/**
+ * 新会话、切模型、worker 与自动 fallback 的统一准入。`isAgentSelectableModel` 只回答
+ * “是不是 agent 对话模型”；本函数再叠加本地停用与 Registry retired tombstone。
+ * 已在运行的会话需要展示/续跑当前选择时应继续调用前者，不能借此绕过新路由边界。
+ */
+export function isModelSelectableForNewRoute(
+  model: {
+    id: string;
+    group?: string;
+    mode?: string;
+    disabled?: boolean;
+    status?: string;
+  },
+  opts?: { userProvider?: boolean },
+): boolean {
+  return (
+    model.disabled !== true &&
+    model.status !== 'retired' &&
+    isAgentSelectableModel(model, opts)
+  );
+}
+
 /** groupModelsForDisplay 的最小模型形状(id + 可选 group / mode / sortOrder)。 */
 export interface DisplayModel {
   id: string;

@@ -8,11 +8,11 @@
  * 覆盖:
  *   - 标记读写与指纹匹配:写入后能读回、系统文件被改写(指纹变化)后不再匹配、损坏标记自愈删除
  *   - settleInvalidationMarkerAfterLogin(核心回归):系统文件未变 → keepSuppressed=true 且
- *     标记保留;系统文件已变 / 已删 / 无标记 → keepSuppressed=false 且标记被清
+ *     标记保留;系统文件已变 / 已删 → keepSuppressed=false，但标记保留到账号 RPC 验证成功
  *   - restoreInvalidationStateOnStartup:标记匹配 + 本地 auth.json 缺失 / 仍是坏 token
  *     → 恢复失效态;标记匹配 + 本地 auth.json 存在且是新 token(重启前已重新登录)
  *     → 只 suppress 不进失效态;
- *     标记过期 → 全清
+ *     标记过期 → 允许 reconcile，但保留待验证恢复原因
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
@@ -138,7 +138,7 @@ describe('settleInvalidationMarkerAfterLogin (2026-07-03 回归)', () => {
     expect(readInvalidatedSystemCodexAuthMarker(codexHome)).not.toBeNull();
   });
 
-  it('clears the marker and allows reconcile once the system auth.json changed', () => {
+  it('allows reconcile but retains recovery evidence once the system auth.json changed', () => {
     invalidateWithSystemAuthPresent();
     rewriteSystemAuth();
     fs.writeFileSync(localAuth, FRESH_LOCAL_CONTENT, 'utf-8');
@@ -146,17 +146,17 @@ describe('settleInvalidationMarkerAfterLogin (2026-07-03 回归)', () => {
     const { keepSuppressed } = settleInvalidationMarkerAfterLogin(codexHome, systemAuth);
 
     expect(keepSuppressed).toBe(false);
-    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason).toBe('token_invalidated');
   });
 
-  it('clears the marker when the system auth.json was deleted', () => {
+  it('allows reconcile but retains recovery evidence when the system auth.json was deleted', () => {
     invalidateWithSystemAuthPresent();
     fs.rmSync(systemAuth);
 
     const { keepSuppressed } = settleInvalidationMarkerAfterLogin(codexHome, systemAuth);
 
     expect(keepSuppressed).toBe(false);
-    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason).toBe('token_invalidated');
   });
 
   it('is a no-op pass-through when no marker exists', () => {
@@ -204,19 +204,20 @@ describe('restoreInvalidationStateOnStartup', () => {
     expect(restored.invalidatedReason).toBe('token_invalidated');
   });
 
-  it('suppresses reconcile but stays authenticated when a fresh local auth.json exists', () => {
+  it('suppresses reconcile and requires account verification when a fresh local auth.json exists', () => {
     invalidateWithSystemAuthPresent();
     // 上次运行里用户已重新授权成功 (settle 保留了标记), 然后重启应用。
     fs.writeFileSync(localAuth, FRESH_LOCAL_CONTENT, 'utf-8');
 
     const restored = restoreInvalidationStateOnStartup(codexHome, systemAuth, localAuth);
 
-    // 不能把已重新登录的用户重新打回「已失效」展示态; 但坏 token 仍要挡住。
+    // 不重新使用坏 token；但 fresh 文件只算候选，不能在账号 RPC 前宣称恢复。
     expect(restored.suppressReconcile).toBe(true);
     expect(restored.invalidatedReason).toBeNull();
+    expect(restored.recoveryRequiredReason).toBe('token_invalidated');
   });
 
-  it('clears everything when the system auth.json changed since invalidation', () => {
+  it('allows reconcile but retains a recovery requirement when system auth changed', () => {
     invalidateWithSystemAuthPresent();
     rewriteSystemAuth();
 
@@ -224,7 +225,8 @@ describe('restoreInvalidationStateOnStartup', () => {
 
     expect(restored.suppressReconcile).toBe(false);
     expect(restored.invalidatedReason).toBeNull();
-    expect(readInvalidatedSystemCodexAuthMarker(codexHome)).toBeNull();
+    expect(restored.recoveryRequiredReason).toBe('token_invalidated');
+    expect(readInvalidatedSystemCodexAuthMarker(codexHome)?.reason).toBe('token_invalidated');
   });
 
   it('returns a clean state when no marker exists', () => {

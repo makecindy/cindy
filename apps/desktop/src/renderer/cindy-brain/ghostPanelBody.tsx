@@ -15,8 +15,8 @@ import { GHOST_SCHEME, ghostPartition, type GhostManifest } from '../../shared/g
 import { createGhostThemeInjector, observeHostTheme } from './ghostPanelTheme';
 
 /**
- * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与右侧栏页签
- * (ghostTabPlugins)共用的渲染内核,从 ghostPanels.tsx 原样抽出:
+ * 意识面板体(webview 供片)—— 顶层停靠 pane(ghostPanels)与插件页内面板
+ * (features/plugin/GhostPagePanelHost)共用的渲染内核,从 ghostPanels.tsx 原样抽出:
  * 沙箱 webview 装载、主题注入、崩溃接管、媒体右键菜单,全部与宿主容器无关。
  * 安全边界不变:分区/地址由 main 侧 webview 附加闸验明正身(webview-security),
  * 本模块不因换容器多要任何特权。
@@ -81,7 +81,7 @@ export interface GhostPanelMediaMenuState {
  * 目录(showItemInFolder)。菜单是宿主自绘(webview 里的右键经 Electron
  * context-menu 事件转出,面板自己画不了也伪造不了),地址已过 main 闸换发,
  * 两个动作走与聊天媒体完全相同的通用 IPC。
- * (导出给 pooledGhostPanelBody 复用 —— 常驻池形态的面板体右键走同一套菜单。)
+ * (页签形态的面板体右键走同一套菜单。)
  */
 export function GhostPanelMediaMenu({
   menu,

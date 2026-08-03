@@ -5,16 +5,48 @@
  * 模块级缓存:每个用例 vi.resetModules() + 动态 import 拿干净模块。
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  connectedProvidersForAgent,
+  visibleModelUnion,
+  type ProviderView,
+} from '@cindy/model-providers';
 
 beforeEach(() => {
   vi.resetModules();
 });
 
 type Providers = {
-  providers: Array<{ id: string }>;
+  providers: ProviderView[];
   modelVisibilityOverrides?: Record<string, boolean>;
 };
-const result = (deviceId: string): Providers => ({ providers: [{ id: `${deviceId}-xd` }] });
+const provider = (id: string): ProviderView => ({
+  id,
+  name: id,
+  source: 'builtin',
+  agents: ['claude-code'],
+  auth: { method: 'none' },
+  routing: {
+    'claude-code': { upstream: 'https://example.invalid', authStrategy: 'none' },
+  },
+  models: { 'claude-code': [] },
+  connected: true,
+});
+const result = (deviceId: string): Providers => ({ providers: [provider(`${deviceId}-xd`)] });
+
+const providerWithModel = (id: string) => ({
+  ...provider(id),
+  models: {
+    'claude-code': [
+      {
+        id: `${id}-model`,
+        name: `${id} Model`,
+        contextWindow: 200_000,
+        efforts: ['medium'],
+        defaultEffort: 'medium',
+      },
+    ],
+  },
+});
 
 /** stub window.electronAPI.deviceLink.invoke,返回 spy。 */
 function stubDeviceLink() {
@@ -28,9 +60,217 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const invoke = stubDeviceLink();
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [{
-      capabilities: ['provider-logo-kinds-v2'],
-    }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
+      {
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    ]);
+  });
+
+  it('非法 provider 响应进入 error，不得把 null 当成权威空列表', async () => {
+    const invoke = vi.fn(async () => null);
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('dev-invalid', listener);
+
+    await mod.prefetchDeviceProviders('dev-invalid');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid provider list response',
+      unsupported: false,
+    });
+    expect(mod.getCachedDeviceProviders('dev-invalid')).toBeNull();
+  });
+
+  it('provider 数组混入非法元素时整份进入 error，不得部分发布或落缓存', async () => {
+    const invoke = vi.fn(async () => ({ providers: [provider('valid'), null] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('dev-invalid-item', listener);
+
+    await mod.prefetchDeviceProviders('dev-invalid-item');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid provider list response',
+      unsupported: false,
+    });
+    expect(mod.getCachedDeviceProviders('dev-invalid-item')).toBeNull();
+  });
+
+  it('接受不含执行字段的安全投影 provider', async () => {
+    const projected = {
+      id: 'projected',
+      name: 'Projected',
+      agents: ['claude-code'],
+      models: {
+        'claude-code': [
+          {
+            id: 'projected-model',
+            name: 'Projected Model',
+            contextWindow: 200_000,
+            efforts: ['medium'],
+            defaultEffort: 'medium',
+          },
+        ],
+      },
+      connected: true,
+    };
+    const invoke = vi.fn(async () => ({ providers: [projected] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders('dev-projected');
+
+    const cached = mod.getCachedDeviceProviders('dev-projected');
+    expect(cached).toEqual({
+      providers: [{ ...projected, routing: { 'claude-code': {} } }],
+    });
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'claude-code')).toHaveLength(1);
+    expect(
+      visibleModelUnion(cached?.providers ?? [], 'claude-code', () => true).map((m) => m.id),
+    ).toEqual(['projected-model']);
+  });
+
+  it('补齐 agents 声明但缺失的远程 routing entry,保留已有 disabled 标记', async () => {
+    const projected = {
+      ...providerWithModel('partial-routing'),
+      agents: ['claude-code', 'codex'],
+      routing: { codex: { disabled: true } },
+    };
+    const invoke = vi.fn(async () => ({ providers: [projected] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+
+    await mod.prefetchDeviceProviders('dev-partial-routing');
+
+    const cached = mod.getCachedDeviceProviders('dev-partial-routing');
+    expect(cached?.providers[0]?.routing).toEqual({
+      codex: { disabled: true },
+      'claude-code': {},
+    });
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'claude-code')).toHaveLength(1);
+    expect(connectedProvidersForAgent(cached?.providers ?? [], 'codex')).toEqual([]);
+  });
+
+  it('嵌套模型损坏时整份 provider 响应失败', async () => {
+    const malformed = {
+      ...provider('malformed-model'),
+      models: { 'claude-code': [null] },
+    };
+    const invoke = vi.fn(async () => ({ providers: [malformed] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('dev-malformed-model', listener);
+
+    await mod.prefetchDeviceProviders('dev-malformed-model');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid provider list response',
+      unsupported: false,
+    });
+    expect(mod.getCachedDeviceProviders('dev-malformed-model')).toBeNull();
+  });
+
+  it.each([
+    ['provider.suspended', { ...provider('bad-suspended'), suspended: 'true' }],
+    [
+      'routing.disabled',
+      {
+        ...provider('bad-route-disabled'),
+        routing: { 'claude-code': { disabled: 'true' } },
+      },
+    ],
+    [
+      'routing.wireProtocol',
+      {
+        ...provider('bad-wire-protocol'),
+        routing: { 'claude-code': { wireProtocol: 'future-protocol' } },
+      },
+    ],
+    [
+      'model.disabled',
+      {
+        ...providerWithModel('bad-model-disabled'),
+        models: {
+          'claude-code': [
+            {
+              ...providerWithModel('bad-model-disabled').models['claude-code'][0],
+              disabled: 'true',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'model.supportsFastMode',
+      {
+        ...providerWithModel('bad-fast-mode'),
+        models: {
+          'claude-code': [
+            {
+              ...providerWithModel('bad-fast-mode').models['claude-code'][0],
+              supportsFastMode: 'true',
+            },
+          ],
+        },
+      },
+    ],
+    [
+      'model.defaultEnabled',
+      {
+        ...providerWithModel('bad-default-enabled'),
+        models: {
+          'claude-code': [
+            {
+              ...providerWithModel('bad-default-enabled').models['claude-code'][0],
+              defaultEnabled: 'false',
+            },
+          ],
+        },
+      },
+    ],
+  ])('%s 类型损坏时整份 provider 响应失败', async (field, malformed) => {
+    const deviceId = `dev-invalid-${field}`;
+    const invoke = vi.fn(async () => ({ providers: [malformed] }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders(deviceId, listener);
+
+    await mod.prefetchDeviceProviders(deviceId);
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid provider list response',
+      unsupported: false,
+    });
+    expect(mod.getCachedDeviceProviders(deviceId)).toBeNull();
+  });
+
+  it('模型可见性 override 含非布尔值时不得缓存', async () => {
+    const invoke = vi.fn(async () => ({
+      providers: [provider('invalid-override')],
+      modelVisibilityOverrides: { 'claude-code:invalid-override:model': 'hidden' },
+    }));
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const listener = vi.fn();
+    mod.subscribeDeviceProviders('dev-invalid-override', listener);
+
+    await mod.prefetchDeviceProviders('dev-invalid-override');
+
+    expect(listener).toHaveBeenCalledWith({
+      status: 'error',
+      error: 'Invalid provider visibility response',
+      unsupported: false,
+    });
+    expect(mod.getCachedDeviceProviders('dev-invalid-override')).toBeNull();
   });
 
   it('缓存命中:同设备二次 prefetch 不再发请求', async () => {
@@ -55,12 +295,12 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     await mod.prefetchDeviceProviders('dev-1');
 
     expect(mod.getCachedDeviceProviders('dev-1')).toEqual({
-      providers: [{ id: 'dev-1-xd' }],
+      providers: [provider('dev-1-xd')],
       modelVisibilityOverrides: overrides,
     });
     expect(listener).toHaveBeenCalledWith({
       status: 'ready',
-      providers: [{ id: 'dev-1-xd' }],
+      providers: [provider('dev-1-xd')],
       modelVisibilityOverrides: overrides,
     });
   });
@@ -77,12 +317,16 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-1');
     await mod.prefetchDeviceProviders('dev-2');
-    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [{
-      capabilities: ['provider-logo-kinds-v2'],
-    }]);
-    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:provider:list', [{
-      capabilities: ['provider-logo-kinds-v2'],
-    }]);
+    expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:provider:list', [
+      {
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-2', 'maker:provider:list', [
+      {
+        capabilities: ['provider-logo-kinds-v2'],
+      },
+    ]);
     expect(invoke).toHaveBeenCalledTimes(2);
     // dev-2 已缓存:再 prefetch 不重拉(隔离 + 命中)。
     await mod.prefetchDeviceProviders('dev-2');
@@ -123,13 +367,55 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     let call = 0;
     const invoke = vi.fn(async () => {
       call += 1;
-      throw new Error("channel 'maker:provider:list' not allowed remotely");
+      throw new Error(
+        "[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel 'maker:provider:list' not allowed remotely",
+      );
     });
     vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
     const mod = await import('@/hooks/useDeviceProviders');
     await mod.prefetchDeviceProviders('dev-old'); // swallow
     await mod.prefetchDeviceProviders('dev-old'); // 上次失败未缓存 → 再发
     expect(call).toBe(2);
+  });
+
+  it('错误事件区分旧端不支持与真实连接失败', async () => {
+    const unsupported = new Error('[DEVICE_LINK_CHANNEL_NOT_ALLOWED] channel not allowed remotely');
+    const policyFailure = new Error('proxy policy: request not allowed remotely');
+    const invoke = vi
+      .fn()
+      .mockRejectedValueOnce(unsupported)
+      .mockRejectedValueOnce(new Error('[DEVICE_LINK_TIMEOUT] timed out'))
+      .mockRejectedValueOnce(policyFailure);
+    vi.stubGlobal('window', { electronAPI: { deviceLink: { invoke } } });
+    const mod = await import('@/hooks/useDeviceProviders');
+    const oldDeviceListener = vi.fn();
+    const offlineListener = vi.fn();
+    const policyFailureListener = vi.fn();
+    mod.subscribeDeviceProviders('dev-old', oldDeviceListener);
+    mod.subscribeDeviceProviders('dev-offline', offlineListener);
+    mod.subscribeDeviceProviders('dev-policy-failure', policyFailureListener);
+
+    await mod.prefetchDeviceProviders('dev-old');
+    await mod.prefetchDeviceProviders('dev-offline');
+    await mod.prefetchDeviceProviders('dev-policy-failure');
+
+    expect(mod.isDeviceProvidersUnsupportedError(unsupported)).toBe(true);
+    expect(mod.isDeviceProvidersUnsupportedError(policyFailure)).toBe(false);
+    expect(oldDeviceListener).toHaveBeenCalledWith({
+      status: 'error',
+      error: unsupported.message,
+      unsupported: true,
+    });
+    expect(offlineListener).toHaveBeenCalledWith({
+      status: 'error',
+      error: '[DEVICE_LINK_TIMEOUT] timed out',
+      unsupported: false,
+    });
+    expect(policyFailureListener).toHaveBeenCalledWith({
+      status: 'error',
+      error: policyFailure.message,
+      unsupported: false,
+    });
   });
 
   it('新快照只通知对应 deviceId 的已挂载订阅者', async () => {
@@ -141,7 +427,10 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     const off2 = mod.subscribeDeviceProviders('dev-2', dev2);
 
     await mod.prefetchDeviceProviders('dev-1');
-    expect(dev1).toHaveBeenCalledWith({ status: 'ready', providers: [{ id: 'dev-1-xd' }] });
+    expect(dev1).toHaveBeenCalledWith({
+      status: 'ready',
+      providers: [provider('dev-1-xd')],
+    });
     expect(dev2).not.toHaveBeenCalled();
 
     off1();
@@ -168,7 +457,7 @@ describe('useDeviceProviders deviceId-aware cache', () => {
     expect(listener).toHaveBeenNthCalledWith(1, { status: 'loading' });
     expect(listener).toHaveBeenNthCalledWith(2, {
       status: 'ready',
-      providers: [{ id: 'fresh-xd' }],
+      providers: [provider('fresh-xd')],
     });
   });
 });

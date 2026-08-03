@@ -88,9 +88,23 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 - [x] **平台分发**:pin 已升级到 Pi `v0.83.0`，darwin arm64/x64、linux arm64/x64、
       win32 arm64/x64 六份官方资产都进入 digest pin；下载器兼容 Unix `pi/` 嵌套包与
-      Windows 根目录平铺 zip。Forge 按目标平台下载、校验并把**完整目录分发**打进
-      `resources/pi/<platform>`，Windows `pi.exe` 进入签名扫描。当前 Mac 已完成六资产
-      SHA-256 下载验收；非本机 OS 的最终启动 smoke 仍由对应发布 runner 执行。
+      Windows 根目录平铺 zip。当前 Mac 已完成六资产 SHA-256 下载验收；非本机 OS 的
+      最终启动 smoke 仍由对应发布 runner 执行。2026-08 起 pi 与 cc/codex 一样只走
+      CDN 运行时分发链(`agent-binaries` + splash prepare):CDN manifest 的可选 `pi`
+      字段指向整包 tar.gz(归档根即完整目录分发,SHA256 为 tar.gz 的),启动时按
+      manifest 版本下载到 `userData/pi/<version>/` 并清旧版。正式安装包不内置 Pi；
+      manifest 缺字段或下载失败时**不阻塞启动**(splash 不进失败态),本次不注册 pi。
+      **不变量(刻意如此,别当 bug 改掉)**:`pi-host.resolvePiBinaryPath` 只读
+      `getReadyBinaryPath('pi')`——即本次启动 prepare 成功回填的路径,**不回落
+      `getCachedBinaryStatus`**,因此不会复用上一次启动下载的旧版本。`prepare()` 先取
+      CDN manifest、取不到就直接失败(不看本地存货),所以离线时 pi 本次不可用。这与
+      Claude Code 一致(同样只读 `getReadyBinaryPath`),但与 **Codex 不同**——codex 读
+      `getCachedBinaryStatus`,会接受早前已 `.verified` 的旧版本,离线仍可用。想让 pi
+      也离线可用属于行为变更,需先确认再改,不要以"和 codex 对齐"为由顺手改回。
+      发布入口**不在本仓**:
+      二进制发布统一走 cindy 同级目录的独立工程 `cindy-binary-release`
+      (`pnpm release:pi -- --region cn|global`,默认 canary 通道;配置与安全机制见
+      该工程 README)。本仓只保留版本 pin 与暂存(`pnpm update:pi` / `install:pi`)。
 - [x] **协议/模型兼容自动矩阵**:Anthropic Messages、OpenAI Responses、OpenAI Chat 三种
       Pi 原生 BYOM 映射均有契约测试；真实 Pi + fake gateway 覆盖 thinking/tool streaming、
       MCP bridge、redacted/usage 翻译，ChatGPT 订阅已做真实请求与 cacheRead 验收。发布账号的
@@ -119,7 +133,7 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
   注:pi 斜杠转义后用户无法手输 `/compact`,此菜单是 pi 会话手动压缩的唯一入口。
 - ✅ **subagent 接 pi 轻量引擎**(已交付):Orca worker 可选 `pi` 引擎。核心链路(MCP
   schema / worker 创建服务 / 默认模型 claude-sonnet-4-6 / PiAgent 注册)本已按 AgentKind
-  接通;本次补齐 UI(CreateWorkerPopover / CollaborationModeToggle / draft 映射)、两个
+  接通;本次补齐 UI(CreateWorkerPopover / composer「+」菜单协同项 / draft 映射)、两个
   main IPC coercion(WORKER_CREATE / SESSION_ENABLE_ORCA)、worker 展示(π 而非 Claude 脸)。
   注:pi 二进制缺失时 buildPiAgent 返回 null,pi 不进 agents map,建 pi worker 会抛错。
 - ✅ **压缩即记忆**(已交付):新增 `digest` 记忆类型(与 curated 解耦)。pi `compaction_end`

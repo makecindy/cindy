@@ -88,10 +88,14 @@ export class GoalStorage implements GoalStorageLike {
       .onConflictDoUpdate({ target: sessionGoals.sessionId, set: row });
   }
 
-  /** 部分更新;找不到行返回 null(不 throw),与 scheduler storage 契约一致。 */
+  /**
+   * 部分更新;找不到行返回 null(不 throw),与 scheduler storage 契约一致。
+   *
+   * 写操作必须先以单条 UPDATE 提交，再读回结果。写前先 get 会把一次状态提交拆成
+   * get → update → get 三个可交错步骤：旧 finalize 已经开始 update 后，显式 Stop
+   * 可能先写 paused，随后旧快照再把它覆盖回 active。
+   */
   async update(sessionId: string, patch: Partial<GoalState>): Promise<GoalState | null> {
-    const existing = await this.get(sessionId);
-    if (!existing) return null;
     // 只挑允许更新的列,避免把 sessionId/startedAt 等覆盖掉。
     const set: Partial<GoalInsert> = {};
     if (patch.objective !== undefined) set.objective = patch.objective;
@@ -105,7 +109,7 @@ export class GoalStorage implements GoalStorageLike {
     if (patch.usageResetAt !== undefined) set.usageResetAt = patch.usageResetAt;
     if (patch.lastReason !== undefined) set.lastReason = patch.lastReason;
     if (patch.updatedAt !== undefined) set.updatedAt = patch.updatedAt;
-    if (Object.keys(set).length === 0) return existing;
+    if (Object.keys(set).length === 0) return this.get(sessionId);
     await this.getDb().update(sessionGoals).set(set).where(eq(sessionGoals.sessionId, sessionId));
     return this.get(sessionId);
   }

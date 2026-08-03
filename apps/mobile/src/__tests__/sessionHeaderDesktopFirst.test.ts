@@ -86,16 +86,48 @@ describe('mobile session header desktop-first surface', () => {
     expect(source).toContain("pathname: '/sessions/[sessionId]'");
     expect(source).toContain('const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {');
     expect(source).toContain('router.replace({');
+    // Android 原生换屏必须等 drawer overlay 完整卸载;三个导航入口共用同一延后队列。
+    expect(source).toContain('const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);');
+    expect(source).toContain('const sessionListDrawerClosingRef = useRef(false);');
+    expect(source).toContain('const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);');
+    expect(source).toContain('const queueDrawerNavigation = useCallback((action: () => void) => {');
+    // 纯关闭(遮罩/back/左滑/当前任务)的 pending 仍为空,必须由独立 closing 闸门
+    // 同步锁住约 200ms 退场期;快速二次导航不能登记或改写首次关闭意图。
+    expect(source).toContain('if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;');
+    expect(source).toContain('sessionListDrawerClosingRef.current = true;\n    pendingDrawerNavigationRef.current = action;');
+    expect(source).toContain('const closeSessionListDrawer = useCallback(() => {\n    if (sessionListDrawerClosingRef.current) return;\n    sessionListDrawerClosingRef.current = true;');
+    expect(source).toContain('if (targetSession.id === sessionId) {\n      closeSessionListDrawer();');
+    expect(source).toContain('onClosed={handleSessionListDrawerClosed}');
+    expect(source).toContain('const action = pendingDrawerNavigationRef.current;\n    sessionListDrawerClosingRef.current = false;\n    if (!action) returnDrawerFocusAfterCloseRef.current = true;\n    setSessionListDrawerOverlayMounted(false);');
+    expect(source).toContain('pendingDrawerNavigationRef.current = null;\n    action();');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      router.replace({');
+    expect(source).toContain('queueDrawerNavigation(() => {\n      guardedPush({');
+    expect(source).toContain("queueDrawerNavigation(() => router.dismissTo('/'));");
     // 旋转 / 分屏收窄回窄屏时抽屉必须自动收起(没有入口的悬空 overlay)。
-    expect(source).toContain('if (!wideSessionNav.enabled) setSessionListDrawerOpen(false);');
+    expect(source).toContain('if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();');
+    // Android 退场期(open=false 但 overlay 仍 mounted)必须临时吞掉系统返回;
+    // onClosed 解除 mounted 后 effect cleanup 恢复 useGuardedBack 等正常返回链。
+    expect(source).toContain("if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;");
+    expect(source).toContain("BackHandler.addEventListener('hardwareBackPress', () => true)");
+    expect(source).toContain('}, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);');
     // 打开抽屉先收键盘(树内 overlay 盖不住键盘)。
-    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOpen(true);');
+    expect(source).toContain('Keyboard.dismiss();\n    setSessionListDrawerOverlayMounted(true);\n    setSessionListDrawerOpen(true);');
     // 读屏模态语义双平台配对:iOS accessibilityElementsHidden + Android importantForAccessibility
-    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack)。
-    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOpen}');
-    expect(source).toContain("importantForAccessibility={sessionListDrawerOpen ? 'no-hide-descendants' : 'auto'}");
+    // (accessibilityViewIsModal 只对 iOS 生效,安卓优先发布不能漏 TalkBack);必须覆盖完整退场期。
+    expect(source).toContain('accessibilityElementsHidden={sessionListDrawerOverlayMounted}');
+    expect(source).toContain("importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}");
+    // 非导航关闭的焦点归还必须由父级在背景隔离解除后的 commit effect 执行;
+    // 导航型关闭及页面已失焦时都不能把焦点抢回旧页面。
+    expect(source).toContain('if (sessionListDrawerOverlayMounted || !returnDrawerFocusAfterCloseRef.current) return;');
+    expect(source).toContain('if (!navigation.isFocused()) return;');
+    expect(source).toContain('AccessibilityInfo.setAccessibilityFocus(returnNode)');
+    // 退场期间旋转/折叠/收窄不能直接卸载 Drawer:保留到 onClosed,三类 pending 导航
+    // 才都能执行;宽屏 layout 失效后 drawerWidth=0,退场继续用最后有效宽度。
+    expect(source).toContain('{wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (');
+    expect(source).toContain('if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;');
+    expect(source).toContain('width={sessionListDrawerWidthRef.current}');
     // 选任务失败路径:校验先于关闭动画——先关再弹 Alert 会让焦点归还抢走弹窗焦点。
-    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    setSessionListDrawerOpen(false);");
+    expect(source).toContain("Alert.alert(t('devices.list.error.sessionDeviceNotFound'));\n      return;\n    }\n    // replace");
   });
 
   it('keeps pending history access as a lightweight control without message counters', () => {

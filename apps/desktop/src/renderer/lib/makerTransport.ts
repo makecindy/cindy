@@ -371,9 +371,18 @@ export function pluginEnableStateFor(
   deviceId: string | null | undefined,
   pluginId: string,
   workingDir?: string,
+  workspaceKind?: string | null,
 ): ReturnType<typeof window.electronAPI.maker.plugins.getState> {
-  if (!deviceId) return window.electronAPI.maker.plugins.getState(pluginId, workingDir);
-  return invokeRemote(deviceId, 'maker:plugins:get-state', [pluginId, workingDir]) as ReturnType<
+  if (!deviceId) {
+    return workspaceKind === undefined
+      ? window.electronAPI.maker.plugins.getState(pluginId, workingDir)
+      : window.electronAPI.maker.plugins.getState(pluginId, workingDir, workspaceKind);
+  }
+  const args =
+    workspaceKind === undefined
+      ? [pluginId, workingDir]
+      : [pluginId, workingDir, workspaceKind];
+  return invokeRemote(deviceId, 'maker:plugins:get-state', args) as ReturnType<
     typeof window.electronAPI.maker.plugins.getState
   >;
 }

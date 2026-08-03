@@ -57,8 +57,8 @@ interface SidebarWindowContext {
 export function SidebarWindowLayout() {
   const { t } = useTranslation();
   useDeviceLinkRemoteProjects();
-  // 意识页签注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板/页签注册表
-  // 并订阅 ghosts:changed,否则 open-ghost-tab 命令路由到这里时 kind 未注册。
+  // 意识面板注册:子窗口没有 LayoutRoot,必须自行初始化 ghost 面板注册表
+  // 并订阅 ghosts:changed(停靠形态所需;历史持久化的 ghost 页签也靠它识别 kind)。
   ensureGhostPanelsRegistered();
   useGhostPanelsSync();
   const isMac = window.electronAPI?.platform === 'darwin';

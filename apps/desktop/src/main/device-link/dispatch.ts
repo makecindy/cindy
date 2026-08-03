@@ -36,6 +36,7 @@ import {
   DL_VOICE_DICTIONARY_GET_CHANNEL,
   DL_TELEGRAM_STATUS_CHANNEL,
   DL_TELEGRAM_SET_ONLINE_CHANNEL,
+  SESSION_ACTIVITY_CHANNEL,
   DeviceLinkError,
   parseFsWatchTopic,
   type Envelope,
@@ -535,6 +536,127 @@ function notifySessionsSubscribed(controllerDeviceId: string): void {
   }
 }
 
+// ─── 会话活动出站整流(latest-wins 键控暂存) ────────────────────────────
+//
+// sessions:activity 是纯状态镜像:同一会话只有**最新值**有意义。把每个事件帧
+// 直接塞进 per-peer 可靠传输窗口(64 槽单 FIFO)会在 replay/爆发时占满窗口,
+// 把 subscribe 的 invoke-result(控制端判定被控端存活的唯一凭据)挤到饿死——
+// v0.1.26 线上:一毫秒 76 帧 replay → 回包排不进窗口 → 手机 15s 超时重订阅 →
+// 每次重订阅再触发一轮 replay,拥塞自放大。这里按 (控制端, sessionId) 键控暂存,
+// 只保留最新值,并在窗口占用超过软上限时停止灌入、退避重试:爆发量从
+// O(事件数) 收敛到 O(会话数),窗口始终给控制面帧留余量。
+const SESSION_ACTIVITY_STAGE_MAX_KEYS = 512;
+const SESSION_ACTIVITY_DRAIN_RETRY_MS = 250;
+/** 可靠窗口软上限:活动镜像最多占半窗,剩余留给 invoke-result 与其它推送。 */
+const SESSION_ACTIVITY_WINDOW_SOFT_CAP = 32;
+
+interface SessionActivityStage {
+  /** sessionId → 最新 payload;Map 插入序即更新序,超限时淘汰最旧键。 */
+  queue: Map<string, unknown>;
+  retryTimer: ReturnType<typeof setTimeout> | null;
+}
+const sessionActivityStages = new Map<string, SessionActivityStage>();
+
+function sessionActivityKey(payload: unknown): string | null {
+  if (!payload || typeof payload !== 'object') return null;
+  const sessionId = (payload as { sessionId?: unknown }).sessionId;
+  return typeof sessionId === 'string' && sessionId ? sessionId : null;
+}
+
+function stageSessionActivityPush(dst: string, payload: unknown): void {
+  const key = sessionActivityKey(payload);
+  // 无 sessionId 的活动帧无法键控(契约上不存在);丢弃而不是绕行,避免未知
+  // 形状绕过整流重新制造窗口竞争。
+  if (!key) return;
+  let stage = sessionActivityStages.get(dst);
+  if (!stage) {
+    stage = { queue: new Map(), retryTimer: null };
+    sessionActivityStages.set(dst, stage);
+  }
+  stage.queue.delete(key);
+  stage.queue.set(key, payload);
+  while (stage.queue.size > SESSION_ACTIVITY_STAGE_MAX_KEYS) {
+    const oldest = stage.queue.keys().next().value as string | undefined;
+    if (oldest === undefined) break;
+    stage.queue.delete(oldest);
+  }
+  drainSessionActivityStage(dst, stage);
+}
+
+function drainSessionActivityStage(dst: string, stage: SessionActivityStage): void {
+  if (stage.retryTimer) {
+    clearTimeout(stage.retryTimer);
+    stage.retryTimer = null;
+  }
+  if (!activeClient) return;
+  // relay 离线时保持退避重试(不清暂存):若只等下一个活动事件/重订阅触发,
+  // 短暂 relay 闪断(控制端未察觉、不会重订阅)+ 无后续活动的场景下,暂存的
+  // 收尾包会永久卡在内存里不再投递(远端列表行挂死在旧状态)。定时器成本
+  // 有界:每控制端至多一个 250ms 定时器,且控制端真正离线时
+  // handleControllerOffline 会清空暂存、终止重试。
+  if (activeClient.getStatus() !== 'online') {
+    scheduleSessionActivityRetry(dst, stage);
+    return;
+  }
+  while (stage.queue.size > 0) {
+    if (activeClient.getReliableSendQueueDepth(dst) >= SESSION_ACTIVITY_WINDOW_SOFT_CAP) {
+      scheduleSessionActivityRetry(dst, stage);
+      return;
+    }
+    const next = stage.queue.entries().next().value as [string, unknown] | undefined;
+    if (!next) return;
+    const [key, payload] = next;
+    try {
+      activeClient.sendPush(dst, SESSION_ACTIVITY_CHANNEL, payload);
+      stage.queue.delete(key);
+    } catch (err) {
+      if (err instanceof DeviceLinkError && err.code === 'BACKPRESSURE') {
+        scheduleSessionActivityRetry(dst, stage);
+        return;
+      }
+      // 其它错误(LINK_NOT_OPEN / PAYLOAD_TOO_LARGE 等)沿 best-effort 语义丢弃该条,
+      // 不让一条坏帧堵死整个暂存队列。
+      stage.queue.delete(key);
+      log.warn(`session activity push dropped for ${shortId(dst)}: ${String(err)}`);
+    }
+  }
+}
+
+function scheduleSessionActivityRetry(dst: string, stage: SessionActivityStage): void {
+  if (stage.retryTimer) return;
+  stage.retryTimer = setTimeout(() => {
+    stage.retryTimer = null;
+    const current = sessionActivityStages.get(dst);
+    if (current) drainSessionActivityStage(dst, current);
+  }, SESSION_ACTIVITY_DRAIN_RETRY_MS);
+}
+
+function clearSessionActivityStage(dst: string): void {
+  const stage = sessionActivityStages.get(dst);
+  if (!stage) return;
+  if (stage.retryTimer) clearTimeout(stage.retryTimer);
+  sessionActivityStages.delete(dst);
+}
+
+function clearAllSessionActivityStages(): void {
+  for (const dst of [...sessionActivityStages.keys()]) clearSessionActivityStage(dst);
+}
+
+/**
+ * 会话活动 replay 的**定向**投递:只发给刚完成 sessions 订阅的那一台控制端。
+ * 走同一条 latest-wins 暂存链路(与 tap 路径同 key 合并),不经 topic 扇出——
+ * 一台控制端 subscribe 不应把全量活动快照重复灌给其它所有控制端
+ * (v0.1.26 线上:两台手机互相被对方的 subscribe 风暴灌爆窗口)。
+ */
+export function pushSessionActivityToController(
+  controllerDeviceId: string,
+  payload: unknown,
+): void {
+  if (!activeClient) return;
+  if (!subscriptions.getControllersForTopic('sessions').includes(controllerDeviceId)) return;
+  stageSessionActivityPush(controllerDeviceId, payload);
+}
+
 /**
  * 按 topic 把一条本机广播转发给订阅了它的控制端。listener 注册后每条 tap 都过这里
  * (live 读 registry,topic 变化即时生效)。topic 算不出(无 session 标识)→ 丢弃。
@@ -575,6 +697,11 @@ function forwardPush(channel: string, payload: unknown): void {
     }
   }
   for (const dst of liveTargets) {
+    // 会话活动是高频状态镜像:走 latest-wins 暂存整流,不直接冲可靠传输窗口。
+    if (channel === SESSION_ACTIVITY_CHANNEL) {
+      stageSessionActivityPush(dst, remotePayload);
+      continue;
+    }
     // 转发是尽力而为的旁路:单个控制端的帧超限(PAYLOAD_TOO_LARGE,如大 tool 输出)/ 连接异常
     // 绝不能冒泡——它会经 tapWindowBroadcast 回到 broadcastToAllWindows,让被控端**本机** renderer
     // 漏收该事件(本地 UI 是第一优先);per-dst 接住也避免一个控制端坏帧拖垮其它控制端的转发。
@@ -735,6 +862,7 @@ export function dropAllControllers(
   topicSubscriptionControllers.clear();
   acceptedLinkControllers.clear();
   offlinePushQueue.clear();
+  clearAllSessionActivityStages();
   syncForwarding();
 }
 
@@ -746,6 +874,7 @@ export function dropAllControllers(
  */
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
+  clearSessionActivityStage(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -759,6 +888,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 /** 显式撤销时清理短时离线队列与 remembered topic，避免恢复后重放撤权期间数据。 */
 export function purgeRevokedController(deviceId: string): void {
   offlinePushQueue.clear(deviceId);
+  clearSessionActivityStage(deviceId);
   subscriptions.forgetKnownController(deviceId);
   topicSubscriptionControllers.delete(deviceId);
   acceptedLinkControllers.delete(deviceId);
@@ -792,6 +922,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       if (!src) return;
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
+      clearSessionActivityStage(src);
       acceptedLinkControllers.delete(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
       // A modern controller must reconnect and explicitly subscribe; restoring the
@@ -1721,6 +1852,8 @@ function handleSubscriptionFrame(src: string, payload: InvokePayload): InvokeRes
     }
   } else {
     subscriptions.unsubscribe(src, topics);
+    // 退订 sessions 后暂存里的活动快照不应再投递(含已排期的重试)。
+    if (topics.includes('sessions')) clearSessionActivityStage(src);
   }
   syncForwarding();
   if (isSub && topics.includes('sessions')) {
@@ -1992,6 +2125,7 @@ export const __testing = {
     onSessionsSubscribed = null;
     activeClient = null;
     offlinePushQueue.clear();
+    clearAllSessionActivityStages();
     setBroadcastTapListener(null);
   },
   getActiveControllers,
@@ -2012,6 +2146,12 @@ export const __testing = {
   queuedPushesFor(deviceId: string) {
     return offlinePushQueue.snapshot(deviceId);
   },
+  sessionActivityStageSize(deviceId: string): number {
+    return sessionActivityStages.get(deviceId)?.queue.size ?? 0;
+  },
+  sessionActivityWindowSoftCap: SESSION_ACTIVITY_WINDOW_SOFT_CAP,
+  sessionActivityStageMaxKeys: SESSION_ACTIVITY_STAGE_MAX_KEYS,
+  sessionActivityDrainRetryMs: SESSION_ACTIVITY_DRAIN_RETRY_MS,
   handleLinkOpen,
   handleSubscriptionFrame,
   purgeRevokedController,

@@ -47,6 +47,8 @@ type RemotePrecreatedWorktreeLedgerSnapshot =
 interface EnvCheckResult {
   claudeCode: { status: 'passed' | 'failed'; path?: string; error?: string };
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
+  /** pi 可选实验 agent:failed 不影响 allPassed；本次启动会禁用 pi。 */
+  pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
 }
@@ -348,14 +350,14 @@ interface BinaryDownloadProgressPayload {
   failed?: boolean;
   /** DownloadError code (e.g. 'NETWORK', 'CHECKSUM', 'HTTP_4XX', 'manifest_failed'). */
   error?: string;
-  /** D 场景（两个都需要下载）: 当前阶段 1 或 2；B/C 场景缺省。 */
-  step?: 1 | 2;
-  /** D 场景下固定为 2；B/C 场景缺省。 */
-  totalSteps?: 2;
+  /** D 场景（两个及以上需要下载）: 当前阶段 1 / 2 / 3；B/C 场景缺省。 */
+  step?: 1 | 2 | 3;
+  /** D 场景 = 本次需要下载的二进制段数(2 或 3)；B/C 场景缺省。 */
+  totalSteps?: 2 | 3;
   /** step 切换瞬间的同步信号——splash 收到立即 set 进度=0，禁用 transition 动画。 */
   reset?: boolean;
   /** 失败/调试文案使用，标识当前推进度的 vendor。 */
-  vendor?: 'claude' | 'codex';
+  vendor?: 'claude' | 'codex' | 'pi';
 }
 
 /* ── App Update Progress ── */
@@ -574,6 +576,8 @@ interface CodexAuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  recoveryRequiredReason?: string;
 }
 
 /** Codex progress event payload (binary download + login phases) */
@@ -873,6 +877,7 @@ interface PluginEnableState {
   projectOverride?: { enabled: boolean; workingDir: string } | null;
   userOverride?: { enabled: boolean } | null;
   globalOverride?: { enabled: boolean } | null;
+  collabWorkspaceKind?: 'project' | 'dialogue';
 }
 
 interface PluginEnableUpdateResult {
@@ -2202,6 +2207,7 @@ interface ElectronAPI {
   };
   showOpenDirectoryDialog: () => Promise<{ canceled: boolean; path?: string }>;
   openExternal: (url: string) => Promise<{ success: boolean }>;
+  openChatGPTApp: () => Promise<{ success: boolean }>;
 
   // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
   // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。
@@ -2347,6 +2353,27 @@ interface ElectronAPI {
    * TextLightbox toolbar Open-in-System button and the Oversize main button.
    */
   openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+
+  /** Copy a dangerous local attachment into the controlled inert cache. */
+  stageChatAttachment: (params: {
+    sourcePath: string;
+    suggestedName: string;
+  }) => Promise<
+    | { success: true; path: string }
+    | {
+        success: false;
+        code:
+          | 'invalid_source'
+          | 'forbidden'
+          | 'not_found'
+          | 'not_file'
+          | 'unsupported_type'
+          | 'copy_failed';
+      }
+  >;
+
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]) => Promise<void>;
 
   /**
    * Save a safely materialized chat attachment under its sanitized original
@@ -3949,7 +3976,12 @@ interface ElectronAPI {
     ) => Promise<import('../shared/workflow-progress').WorkflowProgress | null>;
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
-    listProviders: () => Promise<{ providers: import('@cindy/model-providers').ProviderView[] }>;
+    listProviders: () => Promise<{
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+      providers: import('@cindy/model-providers').ProviderView[];
+      providerOrder: string[];
+    }>;
     /** 复用各内置供应商既有真源刷新模型清单。 */
     refreshBuiltinProviderModels: (
       providerId: import('../shared/providerModelRefresh').BuiltinRefreshableProviderId,
@@ -4119,6 +4151,12 @@ interface ElectronAPI {
         | { kind: 'provider'; providerId: string; disabled: boolean }
         // reset = 恢复默认:删除该供应商整组停用 override(含指向已下架模型的陈旧条目)。
         | { kind: 'reset'; providerId: string },
+    ) => Promise<{ ok: true }>;
+    /** Persist the visible provider order only if the active owner still matches. */
+    setProviderOrder: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      providerIds: string[],
     ) => Promise<{ ok: true }>;
     getModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
@@ -5074,7 +5112,11 @@ interface ElectronAPI {
 
     plugins: {
       list: (workingDir?: string) => Promise<PluginListItem[]>;
-      getState: (id: string, workingDir?: string) => Promise<PluginEnableState>;
+      getState: (
+        id: string,
+        workingDir?: string,
+        workspaceKind?: string | null,
+      ) => Promise<PluginEnableState>;
       setEnabled: (id: string, enabled: boolean) => Promise<PluginEnableUpdateResult>;
       clearEnabled: (id: string) => Promise<PluginEnableUpdateResult>;
       setProjectEnabled: (workingDir: string, id: string, enabled: boolean) => Promise<void>;

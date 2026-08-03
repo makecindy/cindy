@@ -60,4 +60,19 @@ export interface AuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  /**
+   * Codex OAuth 凭证当前的物理存储范围。
+   *
+   * - system-shared: Cindy 的 auth.json 与本机 ChatGPT/Codex App 共用同一文件。
+   * - instance-isolated: Cindy 使用自己的独立 auth.json。
+   * - unknown: 凭证已失效/丢失，无法可靠回推失效前的范围。
+   *
+   * 其它 agent 不返回该字段。
+   */
+  credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  /**
+   * A replacement Codex OAuth credential exists locally but must pass an account-level RPC before
+   * UI may declare the previous invalidation recovered.
+   */
+  recoveryRequiredReason?: string;
 }

@@ -339,8 +339,7 @@ interface HookTurnTexts {
  *
  * X 的**公开正文**只取最后一条助手消息: 一次 mention 只有一条公开回帖的名额,
  * 而 agent 的常态是"先说一句要去看看 → 干活 → 给结论", 整轮拼接会把过程叙述
- * 原样发到公开时间线, 还挤占 280 字符里本就不够的额度(见
- * turnObserver.finalSegment)。
+ * 原样发到公开时间线, 稀释真正要公开的最终结论(见 turnObserver.finalSegment)。
  *
  * 其余渠道公开正文就是整轮, 不能跟着改: IM 里过程叙述有用, 且只取最后一条会
  * 丢掉"先答后补"型 turn 的正文(实踩: Telegram 群里最终答案丢失 —— 见

@@ -15,17 +15,37 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ProviderView } from '@cindy/model-providers';
 
-const { wizardSpy, providersState } = vi.hoisted(() => ({
-  wizardSpy: vi.fn(),
-  providersState: { providers: [] as unknown[] },
-}));
+const { wizardSpy, providersState, codexAuthState, codexAuthActions, toastError } = vi.hoisted(
+  () => ({
+    wizardSpy: vi.fn(),
+    providersState: { providers: [] as unknown[], order: [] as string[] },
+    codexAuthState: {
+      state: { kind: 'unauthenticated' } as Record<string, unknown>,
+      reconnectCredentialScope: undefined as string | undefined,
+      recoveryCheck: 'idle' as 'idle' | 'checking' | 'failed',
+    },
+    codexAuthActions: {
+      refresh: vi.fn(async () => undefined),
+      triggerLogin: vi.fn(async () => 'authenticated'),
+      cancelLogin: vi.fn(async () => undefined),
+      logout: vi.fn(async () => undefined),
+    },
+    toastError: vi.fn(),
+  }),
+);
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key, i18n: { language: 'zh-CN' } }),
 }));
 
 vi.mock('@/hooks/useProviders', () => ({
-  useProviders: () => ({ providers: providersState.providers, loading: false, refetch: vi.fn() }),
+  useProviders: () => ({
+    providers: providersState.providers,
+    providerOrder: providersState.order,
+    ownerGeneration: 1,
+    loading: false,
+    refetch: vi.fn(),
+  }),
 }));
 
 vi.mock('@/contexts/AuthContext', () => ({
@@ -35,10 +55,8 @@ vi.mock('@/contexts/AuthContext', () => ({
 vi.mock('@/hooks/useCodexAuth', () => ({
   isChatGptConnectionConnected: () => false,
   useCodexAuth: () => ({
-    state: { kind: 'unauthenticated' },
-    triggerLogin: vi.fn(),
-    cancelLogin: vi.fn(),
-    logout: vi.fn(),
+    ...codexAuthState,
+    ...codexAuthActions,
   }),
 }));
 
@@ -55,7 +73,7 @@ vi.mock('@/components/ui/confirm-dialog-provider', () => ({
 }));
 
 vi.mock('@/lib/toast', () => ({
-  toast: { error: vi.fn(), success: vi.fn() },
+  toast: { error: toastError, success: vi.fn() },
 }));
 
 vi.mock('@/lib/customProviders', () => ({
@@ -131,6 +149,10 @@ function renderAt(search: string) {
 }
 
 beforeEach(() => {
+  codexAuthState.state = { kind: 'unauthenticated' };
+  codexAuthState.reconnectCredentialScope = undefined;
+  codexAuthState.recoveryCheck = 'idle';
+  providersState.order = [];
   providersState.providers = [
     makeProvider('anthropic', { name: 'Anthropic' }),
     makeProvider('xd', {
@@ -144,7 +166,9 @@ beforeEach(() => {
     maker: {
       scanLocalCli: vi.fn(async () => ({ detections: [] })),
       requestProviderModelsAutoRefresh: vi.fn(async () => ({ ok: true })),
+      setProviderOrder: vi.fn(async () => ({ ok: true })),
     },
+    openChatGPTApp: vi.fn(async () => ({ success: true })),
   };
 });
 
@@ -154,6 +178,64 @@ afterEach(() => {
 });
 
 describe('ProvidersSection — 深链定位', () => {
+  it('ChatGPT 系统共享登录失效时显示来源说明并打开 ChatGPT App', async () => {
+    codexAuthState.state = {
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    };
+    codexAuthState.reconnectCredentialScope = 'system-shared';
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        agents: ['codex', 'claude-code'],
+        connected: false,
+        models: { codex: [], 'claude-code': [] },
+      }),
+    ];
+    renderAt('?tab=providers&connect=openai');
+
+    const openAiListRow = await screen.findByRole('button', { name: /OpenAI/ });
+    expect(openAiListRow.textContent).toContain('settings.providers.openai.reconnectRequired');
+    expect((openAiListRow.lastElementChild as HTMLElement).style.backgroundColor).toBe(
+      'var(--remote-status-failed)',
+    );
+    expect(await screen.findByText('chatgptAuthRecovery.systemSharedInvalidated')).not.toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+
+    await waitFor(() => expect(window.electronAPI.openChatGPTApp).toHaveBeenCalledOnce());
+    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
+  });
+
+  it('ChatGPT App 打开失败时保留恢复入口并提示用户', async () => {
+    codexAuthState.state = {
+      kind: 'reconnect-required',
+      reason: 'token_revoked',
+      credentialScope: 'system-shared',
+    };
+    codexAuthState.reconnectCredentialScope = 'system-shared';
+    providersState.providers = [
+      makeProvider('openai', {
+        name: 'OpenAI',
+        agents: ['codex', 'claude-code'],
+        connected: false,
+        models: { codex: [], 'claude-code': [] },
+      }),
+    ];
+    vi.mocked(window.electronAPI.openChatGPTApp).mockRejectedValueOnce(
+      new Error('bridge unavailable'),
+    );
+    renderAt('?tab=providers&connect=openai');
+
+    fireEvent.click(await screen.findByRole('button', { name: 'chatgptAuthRecovery.openApp' }));
+
+    await waitFor(() =>
+      expect(toastError).toHaveBeenCalledWith('chatgptAuthRecovery.openAppFailed'),
+    );
+    expect(screen.getByRole('button', { name: 'chatgptAuthRecovery.openApp' })).not.toBeNull();
+    expect(codexAuthActions.triggerLogin).not.toHaveBeenCalled();
+  });
+
   it('connect=anthropic(未占行内置渠道)→ 向导 builtin 直达;参数消费后清除', async () => {
     renderAt('?tab=providers&connect=anthropic');
 
@@ -249,6 +331,7 @@ describe('ProvidersSection — 深链定位', () => {
         providerOAuthLogin,
         providerOAuthCancel,
         onProviderOAuthProgress,
+        setProviderOrder: vi.fn(async () => ({ ok: true })),
       },
     };
 

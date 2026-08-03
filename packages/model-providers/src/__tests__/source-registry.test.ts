@@ -7,6 +7,7 @@
  */
 
 import { describe, it, expect, vi } from 'vitest';
+import { modelRegistryCanonicalJson } from '@cindy/model-access-protocol';
 
 import { BUNDLED_CATALOG } from '../catalog.js';
 import {
@@ -190,6 +191,38 @@ describe('mergeWithBundled', () => {
       providers: MINIMAL.providers.map((p) => ({ ...p, access: { kind: 'api' } })),
     };
     expect(mergeWithBundled(primary).providers.find((p) => p.id === 'anthropic')?.access).toEqual({ kind: 'api' });
+  });
+
+  it('同 updatedAt 异 Registry 内容在首次启动合并时保留 bundled 不可变快照', () => {
+    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const mutatedRegistry = structuredClone(bundledRegistry);
+    mutatedRegistry.models[0] = { ...mutatedRegistry.models[0]!, name: 'Mutated in place' };
+    const primary: Catalog = { ...MINIMAL, modelRegistry: mutatedRegistry };
+
+    const merged = mergeWithBundled(primary);
+    expect(modelRegistryCanonicalJson(merged.modelRegistry!)).toBe(
+      modelRegistryCanonicalJson(bundledRegistry),
+    );
+  });
+
+  it('首次启动合并把等价时区表示视为同一 Registry revision', () => {
+    const bundledRegistry = structuredClone(BUNDLED_CATALOG.modelRegistry!);
+    const shifted = new Date(Date.parse(bundledRegistry.updatedAt) + 8 * 60 * 60 * 1_000)
+      .toISOString()
+      .replace('Z', '+08:00');
+    const remoteXai = structuredClone(
+      BUNDLED_CATALOG.providers.find((provider) => provider.id === 'xai')!,
+    );
+    remoteXai.name = 'REMOTE-XAI';
+    const primary: Catalog = {
+      ...MINIMAL,
+      providers: [...MINIMAL.providers, remoteXai],
+      modelRegistry: { ...bundledRegistry, updatedAt: shifted },
+    };
+
+    const merged = mergeWithBundled(primary);
+    expect(merged.modelRegistry?.updatedAt).toBe(shifted);
+    expect(merged.providers.find((provider) => provider.id === 'xai')?.name).toBe('REMOTE-XAI');
   });
 
   it('旧远端未声明媒体能力时继承 bundled;显式空清单仍可停用', () => {
@@ -379,7 +412,7 @@ describe('loadCatalog', () => {
       providers: [...MINIMAL.providers, { ...xai, name: 'NEWER-LKG-XAI' }],
       modelRegistry: {
         ...registry,
-        updatedAt: '2026-08-01T00:00:00.000Z',
+        updatedAt: '2026-08-02T00:00:00.000Z',
         models: registry.models.map((entry: { id: string }) => (
           entry.id === 'openai/gpt-5.6-sol' ? { ...entry, name: 'NEWER-LKG' } : entry
         )),
@@ -398,16 +431,52 @@ describe('loadCatalog', () => {
 
     expect(loaded.source).toBe('remote');
     expect(loaded.catalog.providers[0]?.name).toBe(MINIMAL.providers[0]?.name);
-    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(loaded.catalog.modelRegistry?.updatedAt).toBe('2026-08-02T00:00:00.000Z');
     expect(
       loaded.catalog.modelRegistry?.models.find((entry) => entry.id === 'openai/gpt-5.6-sol')?.name,
     ).toBe('NEWER-LKG');
     expect(loaded.catalog.providers.find((provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
     const persisted = JSON.parse(writeCache.mock.calls[0]![1]);
-    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-01T00:00:00.000Z');
+    expect(persisted.modelRegistry.updatedAt).toBe('2026-08-02T00:00:00.000Z');
     expect(persisted.providers.find((provider: Provider) => provider.id === 'xai')?.name)
       .toBe('NEWER-LKG-XAI');
+  });
+
+  it('rejects a remote registry that republishes the same updatedAt with different content (keeps LKG)', async () => {
+    const url = 'https://catalog.example.test/providers.json';
+    const registry = JSON.parse(JSON.stringify(BUNDLED_CATALOG.modelRegistry));
+    const updatedAt = '2026-08-01T00:00:00.000Z';
+    const cached: Catalog = {
+      ...MINIMAL,
+      modelRegistry: { ...registry, updatedAt },
+    };
+    // 同 updatedAt、内容被悄悄改写 = 非法重发(纠错必须 forward-fix 抬 updatedAt)。
+    const mutatedRemote: Catalog = {
+      ...MINIMAL,
+      modelRegistry: {
+        ...registry,
+        updatedAt,
+        models: registry.models.slice(1),
+      },
+    };
+    const warns: string[] = [];
+
+    const loaded = await loadCatalogWithSource(
+      { url },
+      {
+        fetchText: vi.fn(async () => JSON.stringify(mutatedRemote)),
+        readCache: vi.fn(async () => JSON.stringify(cached)),
+        writeCache: vi.fn(async () => undefined),
+        log: (level, msg) => {
+          if (level === 'warn') warns.push(msg);
+        },
+      },
+    );
+
+    expect(loaded.source).toBe('remote');
+    expect(loaded.catalog.modelRegistry?.models).toHaveLength(registry.models.length);
+    expect(warns.some((msg) => msg.includes('republished the same updatedAt'))).toBe(true);
   });
 
   it('adopts the newer snapshot returned by a serialized LKG commit', async () => {

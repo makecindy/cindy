@@ -9,7 +9,7 @@ import { useNavigate } from 'react-router-dom';
 import { cn } from '@/lib/utils';
 import { plainTextToTiptapDoc, saveDraft as saveComposerDraft } from '@/lib/composerDraftStore';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/NewMakerDraftRoute';
-import { patchDraft } from '@/state/newMakerDraft';
+import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 import type { MarketSkill } from './hooks/useMarketList';
 import {
   buildPreviewTree,
@@ -242,13 +242,8 @@ export function SkillhubMarketPreviewPanel({
                         // 草稿目标重置为本地对话:残留的 device-link 远程草稿
                         // (workingDir/deviceId)会让 /learn 发进远程会话 —— 那里
                         // 该命令被剔除,会退化成普通消息(Codex review)。
-                        // workingDir 置 null 同时会自动关 collab(见 patchDraft)。
-                        patchDraft({
-                          workingDir: null,
-                          remoteHostId: null,
-                          deviceLinkDeviceId: null,
-                          deviceLinkDeviceName: null,
-                        });
+                        // /learn 是一份新草稿,统一复位工作区、远程目标和一次性协同选择。
+                        resetDraftWorkspaceTargets();
                         onClose();
                         navigate('/cc-agent/new');
                       }}

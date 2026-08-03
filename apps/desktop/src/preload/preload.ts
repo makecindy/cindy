@@ -569,6 +569,7 @@ interface PluginEnableState {
   projectOverride?: { enabled: boolean; workingDir: string } | null;
   userOverride?: { enabled: boolean } | null;
   globalOverride?: { enabled: boolean } | null;
+  collabWorkspaceKind?: 'project' | 'dialogue';
 }
 
 interface PluginEnableUpdateResult {
@@ -1039,6 +1040,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
         allowPermissionExpansion?: boolean;
+        /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
+        reviewedBaseline?: string;
       },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),
@@ -2641,6 +2644,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Open URL in system default browser
   openExternal: (url: string): Promise<{ success: boolean }> =>
     ipcRenderer.invoke('shell:open-external', url),
+  /** 打开本机 ChatGPT Desktop；main 端固定使用受限的 codex: 协议，不接收 URL。 */
+  openChatGPTApp: (): Promise<{ success: boolean }> =>
+    ipcRenderer.invoke('shell:open-chatgpt-app'),
 
   // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
   // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。main 端会再做
@@ -2836,6 +2842,29 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // the OS default application (the renderer never receives the blob path).
   openPath: (filePathOrUrl: string): Promise<{ success: boolean; error?: string }> =>
     ipcRenderer.invoke('shell:open-path', filePathOrUrl),
+
+  // 危险本地附件入托盘前先复制成受控缓存里的 `.bin` 副本。显示名仍由
+  // renderer 单独保留，后续只能经“另存为”恢复原始扩展名。
+  stageChatAttachment: (params: {
+    sourcePath: string;
+    suggestedName: string;
+  }): Promise<
+    | { success: true; path: string }
+    | {
+        success: false;
+        code:
+          | 'invalid_source'
+          | 'forbidden'
+          | 'not_found'
+          | 'not_file'
+          | 'unsupported_type'
+          | 'copy_failed';
+      }
+  > => ipcRenderer.invoke('chat-attachment:stage', params),
+
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]): Promise<void> =>
+    ipcRenderer.invoke('chat-attachment:cleanup', filePaths),
 
   // 安全降级聊天附件另存为。main 校验源路径并清洗 suggestedName；保存后
   // 只返回结果，不自动打开或执行目标文件。
@@ -4171,7 +4200,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('maker:get-workflow-progress', sessionId, taskId),
 
     // 模型供应商目录（只读）—— 内置目录元数据 + 各供应商实时连接状态。
-    listProviders: (): Promise<{ providers: import('@cindy/model-providers').ProviderView[] }> =>
+    listProviders: (): Promise<{
+      dataOwnerId: string | null;
+      ownerGeneration: number;
+      providers: import('@cindy/model-providers').ProviderView[];
+      providerOrder: string[];
+    }> =>
       ipcRenderer.invoke('maker:provider:list'),
     /** Refresh one built-in provider through its existing main-process discovery source. */
     refreshBuiltinProviderModels: (
@@ -4345,6 +4379,17 @@ contextBridge.exposeInMainWorld('electronAPI', {
         // configuration-and-overrides.md §4 的「删 override 跟随默认」语义。
         | { kind: 'reset'; providerId: string },
     ): Promise<{ ok: true }> => ipcRenderer.invoke('maker:model-disable:set', input),
+    /** Persist the visible provider order only if the active owner still matches. */
+    setProviderOrder: (
+      dataOwnerId: string | null,
+      ownerGeneration: number,
+      providerIds: string[],
+    ): Promise<{ ok: true }> =>
+      ipcRenderer.invoke('maker:provider:order:set', {
+        dataOwnerId,
+        ownerGeneration,
+        providerIds,
+      }),
     getModelPriceOverride: (
       target: import('../shared/modelPriceOverride').ModelPriceOverrideTarget,
     ): Promise<import('../shared/modelPriceOverride').ModelPriceOverrideView> =>
@@ -5415,8 +5460,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     plugins: {
       list: (workingDir?: string): Promise<PluginListItem[]> =>
         ipcRenderer.invoke('maker:plugins:list', workingDir),
-      getState: (id: string, workingDir?: string): Promise<PluginEnableState> =>
-        ipcRenderer.invoke('maker:plugins:get-state', id, workingDir),
+      getState: (
+        id: string,
+        workingDir?: string,
+        workspaceKind?: string | null,
+      ): Promise<PluginEnableState> =>
+        ipcRenderer.invoke('maker:plugins:get-state', id, workingDir, workspaceKind),
       setEnabled: (id: string, enabled: boolean): Promise<PluginEnableUpdateResult> =>
         ipcRenderer.invoke('maker:plugins:set-enabled', id, enabled),
       clearEnabled: (id: string): Promise<PluginEnableUpdateResult> =>

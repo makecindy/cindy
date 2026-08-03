@@ -42,7 +42,10 @@ import path from 'node:path';
 import fs from 'node:fs/promises';
 import { existsSync, readdirSync } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { SUPPORTED_TEXT_EXTS } from '../shared/textFileExts';
+import {
+  attachmentExtension,
+  isDangerousAttachmentName,
+} from '../shared/attachmentSafety';
 
 const SCHEME = 'xdt-image';
 const META_SUFFIX = '.xdt-meta.json';
@@ -99,21 +102,12 @@ const EXT_BY_MIME: Record<string, string> = {
   'image/jpeg': '.jpg',
   'image/gif': '.gif',
   'image/webp': '.webp',
+  'application/pdf': '.pdf',
+  'text/plain': '.txt',
 };
 
-// Document extensions (beyond images + text) whose original type we preserve when
-// materializing device-link attachments, so a phone-uploaded PDF/Office file isn't stored
-// as `.bin`. Deliberately an ALLOWLIST of the attachment categories the product supports —
-// it excludes OS-executable/installer extensions (.exe/.msi/.dmg/.app/.pkg/.jar/...), which
-// must NOT be preserved: a preserved executable extension would make the materialized file
-// chip open via `openPath` (OS default handler) and run. Anything outside image/text/doc
-// falls back to `.bin` (no auto-exec handler).
-const SUPPORTED_DOC_EXTS = new Set<string>(['.pdf', '.doc', '.docx', '.xls', '.xlsx', '.ppt', '.pptx']);
-
-/** True for extensions we preserve on materialization: images, readable-text/code, and docs. */
-function isPreservableAttachmentExt(ext: string): boolean {
-  return Boolean(MIME_BY_EXT[ext]) || SUPPORTED_TEXT_EXTS.has(ext) || SUPPORTED_DOC_EXTS.has(ext);
-}
+/** A bounded portable suffix; dangerous executable types are filtered separately. */
+const SAFE_ATTACHMENT_EXT_RE = /^\.[a-z0-9][a-z0-9+_-]{0,23}$/;
 
 // ---------------------------------------------------------------------------
 // Path helpers
@@ -158,18 +152,22 @@ function assertSafeCacheFilename(filename: string): void {
 }
 
 function inferExt(originalName?: string, mimeType?: string): string {
-  // A trusted image mimeType wins over the name's extension: `writeBuffer` passes the real
-  // content type, so a suggestedName like `clipboard.pdf` must not mislabel a PNG buffer.
+  // A dangerous display name always wins over MIME hints. Device-link refs are remote input;
+  // a spoofed image MIME must not restore an executable extension or make it image-openable.
+  if (originalName && isDangerousAttachmentName(originalName)) return '.bin';
+  // Otherwise a trusted image mimeType wins over the name's extension: `writeBuffer` passes
+  // the real content type, so a suggestedName like `clipboard.pdf` must not mislabel a PNG.
   if (mimeType && EXT_BY_MIME[mimeType]) return EXT_BY_MIME[mimeType];
   if (originalName) {
-    const dotIdx = originalName.lastIndexOf('.');
-    if (dotIdx > 0) {
-      const candidate = originalName.slice(dotIdx).toLowerCase();
-      // Preserve the original type for supported attachment categories (image / text / doc) —
-      // a phone-uploaded PDF/Office file keeps its extension instead of becoming `.bin`.
-      // Executable/installer extensions are intentionally NOT preserved (→ `.bin`) so the
-      // materialized file chip can't open via the OS default handler and run.
-      if (isPreservableAttachmentExt(candidate)) return candidate;
+    const candidate = attachmentExtension(originalName);
+    // Preserve every syntactically safe non-executable extension. A narrow format allowlist
+    // previously changed valid files such as .zip/.blend/.psd into .bin on the receiving side.
+    if (
+      candidate &&
+      SAFE_ATTACHMENT_EXT_RE.test(candidate) &&
+      !isDangerousAttachmentName(originalName)
+    ) {
+      return candidate;
     }
   }
   return '.bin';
@@ -703,8 +701,10 @@ export async function removeFile(url: string): Promise<void> {
     return; // invalid url → nothing to delete
   }
   // `force: true` already silently ignores ENOENT — no extra catch needed for
-  // missing files. Other I/O errors propagate naturally.
+  // missing files. Remove the sidecar too; otherwise a direct-send rejection
+  // would leave an unreferenced committed cache entry behind.
   await fs.rm(absPath, { force: true });
+  await fs.rm(metaPathFor(absPath), { force: true });
 }
 
 export async function removeSession(sessionId: string): Promise<void> {

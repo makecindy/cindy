@@ -95,6 +95,7 @@ function makeSlot(overrides: Partial<CindySlotDeps> = {}): {
           ratios: ['16:9', '9:16', '1:1', '4:3', '3:4'],
           fps: [24],
           maxImagesByRefMode: { first_and_last_frame: 2, reference_image: 9 },
+          supportsAudio: true,
         }
       : null,
   );
@@ -316,6 +317,100 @@ describe('视频画面参数', () => {
       ok: true,
       videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24 },
     });
+  });
+
+  it('音频开关三态:不传时载荷里连键都没有,true/false 各自原样透传', async () => {
+    const { slot, generateVideo } = makeSlot();
+
+    // 不传 = 存量行为:载荷里没有 audio 键,链上一路不向上游提音频。
+    // 这条是本字段的兼容底线——挂了就意味着存量插件的产出被改了。
+    await slot.handleModelRequest('art', VIDEO_REQ);
+    expect(generateVideo).toHaveBeenLastCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
+
+    for (const audio of [true, false]) {
+      const ok = await slot.handleModelRequest('art', { ...VIDEO_REQ, audio });
+      expect(ok, `audio=${audio}`).toMatchObject({ ok: true });
+      expect(generateVideo).toHaveBeenLastCalledWith({
+        prompt: '一只猫奔跑',
+        model: 'seedance-fast',
+        audio,
+      });
+    }
+  });
+
+  it('音频开关只收 boolean:近似真值一律拒且不触发生成', async () => {
+    const { slot, generateVideo } = makeSlot();
+    for (const bad of ['true', 'false', 1, 0, null, {}]) {
+      const r = await slot.handleModelRequest('art', { ...VIDEO_REQ, audio: bad });
+      expect(r, JSON.stringify(bad)).toMatchObject({ ok: false });
+      expect((r as { message: string }).message).toContain('audio');
+    }
+    expect(generateVideo).not.toHaveBeenCalled();
+  });
+
+  it('音频开关是视频专用:图像类代办带 audio → 明拒且不触发生成', async () => {
+    const { slot, generateImage } = makeSlot();
+    const r = await slot.handleModelRequest('art', {
+      type: 'cindy-request',
+      kind: 'gen_image',
+      prompt: '一只猫',
+      audio: true,
+    });
+    expect(r).toMatchObject({ ok: false });
+    expect((r as { message: string }).message).toContain('audio');
+    expect(generateImage).not.toHaveBeenCalled();
+  });
+
+  it('型号没有音频开关:显式传即明拒;不传照旧放行', async () => {
+    // happyhorse 的真实形态:接入的三个变体都没有音频旋钮。
+    const videoCapabilities = vi.fn(() => ({
+      durations: [5],
+      resolutions: ['720p', '1080p'],
+      ratios: ['16:9'],
+      fps: [24],
+      maxImagesByRefMode: { first_and_last_frame: 1, reference_image: 9 },
+      supportsAudio: false,
+    }));
+    const { slot, generateVideo } = makeSlot({ videoCapabilities } as Partial<CindySlotDeps>);
+
+    const denied = await slot.handleModelRequest('art', { ...VIDEO_REQ, audio: true });
+    expect(denied).toMatchObject({ ok: false });
+    // 拒绝话术要给出路(不传即按型号默认),不是光说一句不支持。
+    expect((denied as { message: string }).message).toContain('不传');
+    expect(generateVideo).not.toHaveBeenCalled();
+
+    // 不传的单子不受影响:没有音频能力的型号照样能出片。
+    const ok = await slot.handleModelRequest('art', VIDEO_REQ);
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({ prompt: '一只猫奔跑', model: 'seedance-fast' });
+  });
+
+  it('supportsAudio 缺席(老注入实现):跳过按型号校验,不误拒', async () => {
+    const videoCapabilities = vi.fn(() => ({
+      durations: [4],
+      resolutions: ['720p'],
+      ratios: ['16:9'],
+      fps: [24],
+    }));
+    const { slot, generateVideo } = makeSlot({ videoCapabilities } as Partial<CindySlotDeps>);
+    const ok = await slot.handleModelRequest('art', { ...VIDEO_REQ, audio: true });
+    expect(ok).toMatchObject({ ok: true });
+    expect(generateVideo).toHaveBeenLastCalledWith({
+      prompt: '一只猫奔跑',
+      model: 'seedance-fast',
+      audio: true,
+    });
+  });
+
+  it('音轨回执随结果带回(注入实现给了就透传)', async () => {
+    const generateVideo = vi.fn(async () => ({
+      buffer: new Uint8Array([7, 8, 9]),
+      mimeType: 'video/mp4',
+      videoParams: { durationSeconds: 4, resolution: '720p', ratio: '16:9', fps: 24, audio: true },
+    }));
+    const { slot } = makeSlot({ generateVideo } as Partial<CindySlotDeps>);
+    const ok = await slot.handleModelRequest('art', { ...VIDEO_REQ, audio: true });
+    expect(ok).toMatchObject({ ok: true, videoParams: { audio: true } });
   });
 
   it('部分传参:只展开传了的键,其余不出现在载荷里', async () => {

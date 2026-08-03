@@ -618,9 +618,6 @@ function signPackagedExes(buildPath: string): void {
     // 未签名第三方 exe,会被运行时 spawn(项目内 grep/search),未签同样被严格策略 /
     // EDR 拦。扩到整个 tools/ 一次覆盖,新增工具免维护。
     ...collectExeFilesRecursively(path.join(buildPath, 'resources', 'tools')),
-    // Pi 是目录分发；Windows 主程序 pi.exe 位于 resources/pi/<platform>/，
-    // 不在 tools/ 下，必须一并签名，否则 Smart App Control 会拦截 agent 启动。
-    ...collectExeFilesRecursively(path.join(buildPath, 'resources', 'pi')),
   );
 
   for (const exe of exes) {
@@ -709,45 +706,6 @@ function ripgrepBinaryName(targetPlatform: string): string {
   return targetPlatform === 'win32' ? 'rg.exe' : 'rg';
 }
 
-function piBinaryName(targetPlatform: string): string {
-  return targetPlatform === 'win32' ? 'pi.exe' : 'pi';
-}
-
-/**
- * 把目标平台的完整 Pi 目录分发加入安装包。Pi 与单文件 agent 不同，运行时还依赖
- * themes/examples/native prebuilds；只复制 pi(.exe) 会在 RPC 启动期崩溃。
- */
-function stagePi(targetPlatform: string, targetArch: string): void {
-  const key = targetPlatformKey(targetPlatform, targetArch);
-  const file = piBinaryName(targetPlatform);
-  const srcDir = path.join(__dirname, '..', 'pi-bin', key);
-  const src = path.join(srcDir, file);
-  const stagingRoot = path.join(__dirname, 'resources', 'pi');
-  const destDir = path.join(stagingRoot, key);
-  const ensureScript = path.join(__dirname, '..', '..', 'scripts', 'ensure-agent-binaries.mjs');
-
-  console.log(`[forge:prePackage] ensuring pinned pi ${key} via ${ensureScript}...`);
-  const result = spawnSync(process.execPath, [ensureScript, '--kinds=pi', `--platform=${key}`], {
-    stdio: 'inherit',
-  });
-  if (result.status !== 0) {
-    throw new Error(`[forge] failed to ensure pinned pi ${key}; run "pnpm update:pi -- --platform=${key}" before packaging`);
-  }
-  if (!fs.existsSync(src)) {
-    throw new Error(`[forge] pi distribution missing main executable at ${src} after ensure`);
-  }
-
-  // Forge 的 extraResource 会复制整个 resources/pi；连续构建其它 target 时必须
-  // 清掉上一轮暂存，避免单个平台安装包误带六个平台的完整分发。
-  fs.rmSync(stagingRoot, { recursive: true, force: true });
-  fs.mkdirSync(destDir, { recursive: true });
-  fs.cpSync(srcDir, destDir, { recursive: true });
-  const dest = path.join(destDir, file);
-  if (targetPlatform !== 'win32') fs.chmodSync(dest, 0o755);
-  const sizeMb = (fs.statSync(dest).size / (1024 * 1024)).toFixed(2);
-  console.log(`[forge:prePackage] pi ${key} -> ${destDir} (main ${sizeMb} MB)`);
-}
-
 function stageRipgrep(targetPlatform: string, targetArch: string): void {
   const key = targetPlatformKey(targetPlatform, targetArch);
   const file = ripgrepBinaryName(targetPlatform);
@@ -789,8 +747,6 @@ function extraResourcesForTarget(targetPlatform: string): string[] {
     'resources/cc-manager',
     'resources/anthropic-compat-proxy',
     'resources/remote-file-service',
-    // 目标平台完整 Pi 目录分发，由 prePackage/stagePi 写入。
-    'resources/pi',
     // .cindy 发布者/审核 Ed25519 公钥信任表(私钥永不进客户端)。
     'resources/ghost-trust.json',
     // 第三方开源声明,由 scripts/generate-third-party-notices.mjs 生成
@@ -1343,7 +1299,6 @@ const config: ForgeConfig = {
         buildCindyUpdater();
       }
       stageRipgrep(targetPlatform, targetArch);
-      stagePi(targetPlatform, targetArch);
       stageAndroidPlatformTools(targetPlatform, targetArch);
       buildMacVoiceInputTextInsertionHelper(platform, arch);
       buildMacVoiceInputModifierShortcutListener(platform, arch);

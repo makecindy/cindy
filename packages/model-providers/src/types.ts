@@ -325,7 +325,13 @@ export interface CatalogModel {
     temperature?: boolean;
   };
   releaseDate?: string;
-  status?: 'active' | 'alpha' | 'deprecated';
+  /**
+   * 生命周期状态。'retired' 是**客户端本地**取值:wire(服务端 Catalog/CatalogModel)
+   * 永远不下发它——registry 的 retired 条目由服务端投影时剔除、由客户端在合并期把
+   * 「discovery 仍能发现但远端已判死」的条目标记为 'retired',供 modelList 准入过滤
+   * (新选择禁止,keepSelected 运行会话豁免;完整 local addition 可显式复活)。
+   */
+  status?: 'active' | 'alpha' | 'deprecated' | 'retired';
   /**
    * 该模型在「设置 → 模型供应商」展开列表里**默认是否开启显示**（缺省 ⇒ true，即默认开）。
    *
@@ -339,6 +345,12 @@ export interface CatalogModel {
    * 新增模型缺省 = 默认开,符合「未自定义用户随版本吃到新默认」(CLAUDE.md 规则 20)。
    */
   defaultEnabled?: boolean;
+  /**
+   * 该来源下的模型是否已由用户确认支持图片输入。目前只供 Pi 自定义 provider 使用；
+   * 缺省按 false 处理，避免把纯文本端点误报成视觉模型。它是 per-provider 能力，不参与
+   * `modelSignature` 的同 id 跨供应商一致性校验。
+   */
+  supportsImageInput?: boolean;
   /**
    * **视图层字段**:该 (供应商, 模型) 已被用户「停用」(准入关,与 `defaultEnabled` 的
    * 「显示」轴正交)。由 `buildRegistry` 按 host 注入的 ModelDisableOverrides 填充,
@@ -426,6 +438,8 @@ export interface ProviderRuntimeModelConfig {
   contextWindow?: number;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
+  /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
+  supportsImageInput?: boolean;
 }
 
 /**

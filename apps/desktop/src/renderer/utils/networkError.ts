@@ -11,7 +11,7 @@
  *
  * `Reconnecting... N/M` 是 Codex streaming response 的有限重连状态；解析后的
  * attempt/maxAttempts 会显示在 recoverable banner。`Request timed out` /
- * `Connection error` 是 Anthropic SDK 的
+ * `API Error: The operation timed out` / `Connection error` 是 Anthropic SDK 的
  * APIConnectionTimeoutError / APIConnectionError 原文(SDK 重试耗尽后透传成
  * 终止型 turn error),同属重试可自愈的网络类(2026-07-13 超时横幅裸英文实锤)。
  */
@@ -39,7 +39,7 @@ export function parseReconnectAttemptMessage(message: string): ReconnectAttempt 
 export function isNetworkishErrorMessage(message: string): boolean {
   return (
     parseReconnectAttemptMessage(message) !== null ||
-    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|Connection error/i.test(
+    /\b50[234]\b|Bad Gateway|Service Unavailable|Gateway Time-?out|upstream unreachable|ECONNREFUSED|ECONNRESET|ETIMEDOUT|ENOTFOUND|ENETUNREACH|EHOSTUNREACH|EPIPE|EAI_AGAIN|fetch failed|network error|socket hang up|AggregateError|Request timed out|^API Error:\s*The operation timed out|Connection error/i.test(
       message,
     )
   );

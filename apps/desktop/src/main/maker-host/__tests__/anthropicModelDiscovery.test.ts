@@ -76,6 +76,20 @@ afterAll(async () => {
   await fsp.rm(TEST_USER_DATA, { recursive: true, force: true });
 });
 
+/**
+ * registry-free 基线:本文件验 discovery 登录门控/合并纪律,与 registry 实体化层
+ * (bundled registry 的 status=active 条目会独立长实体,见 modelPlane.test.ts)隔离。
+ */
+function bundledWithoutRegistry(): Catalog {
+  const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+  delete catalog.modelRegistry;
+  return catalog;
+}
+
+beforeEach(() => {
+  setActiveCatalog(bundledWithoutRegistry());
+});
+
 afterEach(() => {
   setActiveCatalog(BUNDLED_CATALOG);
 });
@@ -137,6 +151,8 @@ describe('mapAnthropicSdkModels', () => {
   });
 
   it('SDK 未下发窗口时使用目录中的官方窗口', () => {
+    setActiveCatalog(BUNDLED_CATALOG); // 这三例正要用 bundled registry 的官方窗口基线
+
     const out = mapAnthropicSdkModels([
       { value: 'claude-opus-5', displayName: 'Opus 5' },
       { value: 'claude-opus-4-5', displayName: 'Opus 4.5' },
@@ -150,7 +166,7 @@ describe('mapAnthropicSdkModels', () => {
   });
 
   it('active registry 快照提供窗口和 effort 基线', () => {
-    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const catalog = bundledWithoutRegistry();
     catalog.modelRegistry = {
       schemaVersion: 1,
       updatedAt: '2026-07-31T00:00:00.000Z',
@@ -316,6 +332,8 @@ describe('mapAnthropicHttpModels', () => {
   });
 
   it('HTTP 未下发 max_input_tokens 时使用目录中的官方窗口', () => {
+    setActiveCatalog(BUNDLED_CATALOG); // 这三例正要用 bundled registry 的官方窗口基线
+
     const out = mapAnthropicHttpModels([
       { id: 'claude-opus-5', display_name: 'Opus 5', type: 'model' },
       { id: 'claude-opus-4-5', display_name: 'Opus 4.5', type: 'model' },
@@ -846,6 +864,8 @@ describe('noteAnthropicSdkSupportedModels(登录态门控 + 合并纪律)', () =
   });
 
   it('磁盘缓存会按当前目录修正未明确声明的旧窗口', async () => {
+    setActiveCatalog(BUNDLED_CATALOG);
+
     const cacheDir = path.join(TEST_USER_DATA, 'model-discovery');
     await fsp.mkdir(cacheDir, { recursive: true });
     await fsp.writeFile(

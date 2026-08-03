@@ -295,13 +295,20 @@ describe('Anthropic 权威模型清单注入', () => {
     status: 'active',
   };
 
-  it('未注入时 anthropic 不暴露任何模型(不用静态数据冒充)', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+  /** registry-free 基线:本组验 discovery 注入机制;registry 实体化层见 modelPlane.test.ts。 */
+  function bundledWithoutRegistry() {
+    const catalog = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as typeof BUNDLED_CATALOG;
+    delete (catalog as { modelRegistry?: unknown }).modelRegistry;
+    return catalog;
+  }
+
+  it('未注入且无 registry 时 anthropic 不暴露任何模型(不用静态数据冒充)', () => {
+    setActiveCatalog(bundledWithoutRegistry());
     expect(anthropicModels()).toEqual([]);
   });
 
   it('注入后整体重建 claude-code 清单;清空后回到空', () => {
-    setActiveCatalog(BUNDLED_CATALOG);
+    setActiveCatalog(bundledWithoutRegistry());
     setAnthropicDiscoveredModels([opus]);
     expect(anthropicModels().map((m) => m.id)).toEqual(['claude-opus-4-8']);
     expect(anthropicModels()[0]).toMatchObject({ name: 'Opus 4.8', supportsFastMode: true });

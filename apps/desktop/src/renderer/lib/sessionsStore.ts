@@ -45,6 +45,7 @@
 import type { Session } from '@/lib/ccAgent.types';
 import * as sessionService from '@/lib/sessionService';
 import type { ListStatusFilter } from '@/lib/sessionService';
+import { createLogger } from '@/lib/logger';
 import {
   DEFAULT_DRAFT_SESSION_TITLE,
   isDefaultDraftSessionTitle,
@@ -60,6 +61,8 @@ import {
 // V1.7：取消 16 条上限，全量拉取由 Sidebar 中部滚动条承载。
 // 后端硬上限 1000，覆盖几乎所有真实用户的 Session 总数。
 const DEFAULT_LIMIT = 1000;
+const startupPerfLog = createLogger('perf/startup');
+const initialFetchLogged = new Set<ListStatusFilter>();
 
 const cache = new Map<ListStatusFilter, Session[]>();
 const inflight = new Map<ListStatusFilter, Promise<Session[]>>();
@@ -243,15 +246,29 @@ async function fetchFilter(filter: ListStatusFilter): Promise<Session[]> {
   // 不一致，必须把 filter 原样透传，由 IPC handler 决定过滤语义。
   const spendRevisionAtStart = sessionSpendRevision;
   const titleRevisionAtStart = sessionTitleRevision;
+  const startedAt = performance.now();
   const sessions = await sessionService.list(DEFAULT_LIMIT, filter);
   // 顺序:先把「请求发起之后到达的权威标题」补回去,再叠乐观预览。反过来的话预览会先
   // 盖在旧标题上、随后又被权威值挤掉,中间多一次跳变。
-  return applyAutoTitlePreviews(
+  const result = applyAutoTitlePreviews(
     applySessionTitleOverrides(
       applySessionSpendOverrides(sessions, spendRevisionAtStart),
       titleRevisionAtStart,
     ),
   );
+  const fields = {
+    event: 'renderer.sessions.initial-fetch.done',
+    filter,
+    rows: result.length,
+    elapsedMs: Math.round(performance.now() - startedAt),
+    rendererUptimeMs: Math.round(performance.now()),
+  };
+  if (initialFetchLogged.has(filter)) startupPerfLog.debug(fields);
+  else {
+    initialFetchLogged.add(filter);
+    startupPerfLog.info(fields);
+  }
+  return result;
 }
 
 export const sessionsStore = {
@@ -497,6 +514,7 @@ export const sessionsStore = {
     sessionSpendOverrides.clear();
     autoTitlePreviews.clear();
     sessionTitleOverrides.clear();
+    initialFetchLogged.clear();
     notify('reset');
   },
 };

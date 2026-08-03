@@ -40,7 +40,6 @@ import {
   invalidateSessionCaches,
 } from '@/features/right-sidebar/store';
 import { browserWebviewPool } from '@/features/right-sidebar/lib/browserWebviewPool';
-import { ghostPanelWebviewPool } from '@/cindy-brain/ghostPanelWebviewPool';
 import { markAllPtyDetached } from '@/features/right-sidebar/plugins/terminal/lib/xtermPool';
 import {
   bootstrapRsbWindowState,
@@ -263,9 +262,6 @@ export function MainLayout() {
   const [rightSidebarSessionId, setRightSidebarSessionId] = useState<string | null>(null);
   const rightSidebarSessionIdRef = useRef(rightSidebarSessionId);
   rightSidebarSessionIdRef.current = rightSidebarSessionId;
-  // 给树内远端消费方(如 GlobalDropImportListener 的装入编排)的稳定 getter:
-  // 读 ref 拿最新值,prop 身份不随会话切换变化,不触发下游 effect 重挂。
-  const getRightSidebarSessionId = useCallback(() => rightSidebarSessionIdRef.current, []);
   const declareRightSidebarSessionId = useCallback(
     (sessionId: string | null, opts: RightSidebarSessionDeclarationOptions = {}) => {
       rightSidebarSessionIdRef.current = sessionId;
@@ -836,9 +832,6 @@ export function MainLayout() {
     if (rsbDetached) {
       setIsRightSidebarMaximized(false);
       browserWebviewPool.releaseAll();
-      // 钉住插件面板的常驻池同场景同命运:宿主迁移后本 renderer 的面板 webview
-      // 全是僵尸,子窗口接管时按需重建。
-      ghostPanelWebviewPool.releaseAll();
       // 终端 entry 的 ptyAttached 是 per-renderer 标记:宿主迁移后本窗的标记必然
       // 过期(PTY sink 会被对方窗口 re-attach 抢走),两个方向都要复位,否则
       // "弹出 → 合并回主窗"往返后 guard 跳过 re-attach,终端失活。
@@ -1397,10 +1390,7 @@ export function MainLayout() {
       {/* FeiShu Bot conflict dialog -- subscribes to main process push and surfaces a global modal */}
       <FeishuConflictDialogHost />
       {/* 窗口级拖拽兜底:拖 .cshare 进窗口空白处 → 会话导入向导 */}
-      <GlobalDropImportListener
-        onOpenShareImport={openShareImport}
-        getRightSidebarSessionId={getRightSidebarSessionId}
-      />
+      <GlobalDropImportListener onOpenShareImport={openShareImport} />
       {shareImportRequest && (
         <SessionShareImportWizard
           key={shareImportRequest.id}

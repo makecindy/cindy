@@ -22,8 +22,12 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
+function readSource(...segments: string[]): string {
+  return readFileSync(resolve(process.cwd(), ...segments), 'utf8').replaceAll('\r\n', '\n');
+}
+
 describe('history window backfill wiring', () => {
-  const source = readFileSync(resolve(process.cwd(), 'app/sessions/[sessionId].tsx'), 'utf8');
+  const source = readSource('app/sessions/[sessionId].tsx');
 
   it('不变量 1：一轮的身份是单调 seq，取消不可撤销', () => {
     expect(source).toContain('const runSeq = backfillRunSeqRef.current + 1;');
@@ -110,7 +114,7 @@ describe('history window backfill wiring', () => {
  * (#1210 review)。
  */
 describe('live stream interruption wiring', () => {
-  const source = readFileSync(resolve(process.cwd(), 'src/device-link/DeviceLinkContext.tsx'), 'utf8');
+  const source = readSource('src/device-link/DeviceLinkContext.tsx');
 
   it('订阅被远端 ACK：按真正记进 ACK 表的 topic 生效', () => {
     const sendSubscribe = source.slice(

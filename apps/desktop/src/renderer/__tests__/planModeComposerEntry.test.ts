@@ -3,9 +3,9 @@
 /**
  * planModeComposerEntry.test.tsx
  * ---------------------------------------------------------------------------
- * issue #475 — 计划模式一级入口的 DOM 级渲染断言:
- *   - ExtraDirsButton:「计划模式」菜单项与「新建目标」同级;点击回调 toggle;
- *     勾选态 aria-checked;codex 也能只凭 planMode 渲染「+」按钮
+ * issue #475 — 模式菜单一级入口的 DOM 级渲染断言:
+ *   - ExtraDirsButton:「计划模式」/「协同模式」菜单项与「新建目标」同级;
+ *     勾选态 aria-checked;单独提供任一模式也能渲染「+」按钮
  *   - PlanModeIndicator:激活 chip 文案 + 退出按钮;disabled 时隐藏退出按钮
  *   - PlanActionCard:取消收敛为次级动作(仅 Esc,无独立行)与 ⏎ 去重
  *     (编辑反馈时批准行 ⏎ 隐藏,反馈 ⏎ 仅在有文字时出现且可点击发送)
@@ -73,7 +73,7 @@ afterEach(() => {
   vi.clearAllMocks();
 });
 
-describe('ExtraDirsButton 计划模式菜单项', () => {
+describe('ExtraDirsButton 模式菜单项', () => {
   it('附件接线单独存在时也渲染「+」入口，并把多选文件交给 composer', () => {
     const onAddFiles = vi.fn();
     const { container } = render(
@@ -153,6 +153,84 @@ describe('ExtraDirsButton 计划模式菜单项', () => {
     expect(item.getAttribute('aria-checked')).toBe('true');
     fireEvent.click(item);
     expect(onToggle).toHaveBeenCalledWith(false);
+  });
+
+  it('只凭协同模式也渲染「+」入口, 关闭态点击打开完整 Worker 配置', () => {
+    const onChange = vi.fn();
+    const onOpenDetails = vi.fn();
+    render(
+      createElement(ExtraDirsButton, {
+        extraDirs: [],
+        collaboration: {
+          enabled: false,
+          worker: 'codex',
+          onChange,
+          onOpenDetails,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
+    const item = screen.getByRole('menuitemcheckbox', {
+      name: 'newChat.collaboration.modeLabel',
+    });
+    expect(item.getAttribute('aria-checked')).toBe('false');
+    fireEvent.click(item);
+    expect(onOpenDetails).toHaveBeenCalledTimes(1);
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
+  it('协同开启态与目标/计划同级共存, 使用橙色状态并可直接关闭', () => {
+    const onChange = vi.fn();
+    render(
+      createElement(ExtraDirsButton, {
+        extraDirs: [],
+        onChange: () => {},
+        onNewGoal: vi.fn(),
+        planMode: { enabled: false, onToggle: vi.fn() },
+        collaboration: { enabled: true, worker: 'cc', onChange },
+      }),
+    );
+
+    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
+    expect(screen.getByText('goal.newGoalMenuItem')).toBeTruthy();
+    expect(screen.getByText('planMode.menuItem')).toBeTruthy();
+    const item = screen.getByRole('menuitemcheckbox', {
+      name: 'newChat.collaboration.modeLabel',
+    });
+    expect(item.getAttribute('aria-checked')).toBe('true');
+    expect(item.className).toContain('bg-[var(--model-item-hover)]');
+    expect(screen.getByText('newChat.collaboration.modeLabel').className).toContain(
+      'text-[var(--warning-accent)]',
+    );
+    expect(item.querySelector('svg.lucide-check')).toBeTruthy();
+    fireEvent.click(item);
+    expect(onChange).toHaveBeenCalledWith({ enabled: false, worker: 'cc' });
+  });
+
+  it('策略暂不可用时保留可重试的协同菜单项', () => {
+    const onDisabledActivate = vi.fn();
+    render(
+      createElement(ExtraDirsButton, {
+        extraDirs: [],
+        collaboration: {
+          enabled: false,
+          worker: 'pi',
+          onChange: vi.fn(),
+          disabled: true,
+          disabledReason: 'policy unavailable',
+          onDisabledActivate,
+        },
+      }),
+    );
+
+    fireEvent.click(screen.getByLabelText('extraDirs.menuAria'));
+    const item = screen.getByRole('menuitemcheckbox', {
+      name: 'newChat.collaboration.modeLabel: policy unavailable',
+    });
+    expect((item as HTMLButtonElement).disabled).toBe(false);
+    fireEvent.click(item);
+    expect(onDisabledActivate).toHaveBeenCalledTimes(1);
   });
 
   it('没有任何入口时保持不渲染', () => {

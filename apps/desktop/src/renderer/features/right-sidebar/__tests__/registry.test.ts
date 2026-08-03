@@ -20,7 +20,6 @@ import {
   _resetTabKindRegistry,
   getTabKind,
   hydrateTabState,
-  listGhostTabMenuMetas,
   listTabKindMenuMetas,
   registerTabKind,
   unregisterTabKind,
@@ -118,41 +117,6 @@ describe('TabKindRegistry', () => {
       unregisterTabKind('file-browser');
       expect(() => registerTabKind(makePlugin('file-browser', 99))).not.toThrow();
       expect(getTabKind('file-browser')?.menu.order).toBe(99);
-    });
-  });
-
-  describe('listGhostTabMenuMetas', () => {
-    it('only returns ghost:* kinds, sorted by labelText', () => {
-      registerTabKind(makePlugin('file-browser', 10));
-      registerTabKind(
-        makePlugin('ghost:zeta' as TabKindId, 100, {
-          menu: {
-            kind: 'ghost:zeta' as TabKindId,
-            labelKey: 'stub.ghost',
-            labelText: '备忘',
-            icon: Globe,
-            order: 100,
-            enabled: true,
-            singleton: true,
-          },
-        }),
-      );
-      registerTabKind(
-        makePlugin('ghost:alpha' as TabKindId, 100, {
-          menu: {
-            kind: 'ghost:alpha' as TabKindId,
-            labelKey: 'stub.ghost',
-            labelText: '画廊',
-            icon: Globe,
-            order: 100,
-            enabled: true,
-            singleton: true,
-          },
-        }),
-      );
-      expect(listGhostTabMenuMetas().map((m) => m.labelText)).toEqual(['备忘', '画廊']);
-      // 内置项不混入
-      expect(listGhostTabMenuMetas().some((m) => m.kind === 'file-browser')).toBe(false);
     });
   });
 

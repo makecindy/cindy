@@ -1,11 +1,64 @@
-import type {
-  ModelAgent,
-  ModelPriceVariant,
-  ModelReferencePrice,
-  ModelRegistry,
-  ModelRegistryEntry,
-  ModelRegistryRoute,
+import {
+  modelRegistryCanonicalJson,
+  type ModelAgent,
+  type ModelPriceVariant,
+  type ModelReferencePrice,
+  type ModelRegistry,
+  type ModelRegistryEntry,
+  type ModelRegistryRoute,
 } from "@cindy/model-access-protocol";
+
+export type ModelRegistryRevisionRelation =
+  | "newer"
+  | "older"
+  | "same"
+  | "conflict"
+  | "invalid-incoming";
+
+export type ModelRegistrySnapshotDecision =
+  | "accept-incoming"
+  | "preserve-current"
+  | "preserve-current-conflict";
+
+/**
+ * Compares immutable Registry revisions by instant, then compares equal-revision content after
+ * normalizing equivalent timestamp representations. The protocol parser still requires canonical
+ * UTC ISO; this defensive normalization keeps every LKG/refresh guard consistent for typed or
+ * previously persisted inputs that can be parsed as the same instant.
+ */
+export function compareModelRegistryRevisions(
+  incoming: ModelRegistry,
+  current: ModelRegistry,
+): ModelRegistryRevisionRelation {
+  const incomingRevision = Date.parse(incoming.updatedAt);
+  if (!Number.isFinite(incomingRevision)) return "invalid-incoming";
+  const currentRevision = Date.parse(current.updatedAt);
+  if (!Number.isFinite(currentRevision)) return "newer";
+  if (incomingRevision < currentRevision) return "older";
+  if (incomingRevision > currentRevision) return "newer";
+
+  const canonicalUpdatedAt = new Date(incomingRevision).toISOString();
+  const incomingDigest = modelRegistryCanonicalJson({ ...incoming, updatedAt: canonicalUpdatedAt });
+  const currentDigest = modelRegistryCanonicalJson({ ...current, updatedAt: canonicalUpdatedAt });
+  return incomingDigest === currentDigest ? "same" : "conflict";
+}
+
+/**
+ * Chooses between two complete Catalog snapshots using the Registry as the only monotonic
+ * revision. A registry-less incoming snapshot must never erase a current snapshot that already
+ * carries Registry state; callers preserve the complete current Catalog rather than mixing layers.
+ */
+export function decideModelRegistrySnapshot(
+  incoming: ModelRegistry | undefined,
+  current: ModelRegistry | undefined,
+): ModelRegistrySnapshotDecision {
+  if (!incoming && current) return "preserve-current";
+  if (!incoming || !current) return "accept-incoming";
+  const relation = compareModelRegistryRevisions(incoming, current);
+  if (relation === "conflict") return "preserve-current-conflict";
+  if (relation === "older" || relation === "invalid-incoming") return "preserve-current";
+  return "accept-incoming";
+}
 
 export interface ResolvedModelReferencePrice {
   entry: ModelRegistryEntry;

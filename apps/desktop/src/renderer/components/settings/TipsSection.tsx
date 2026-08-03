@@ -7,6 +7,7 @@
  * 当前 cell:
  *   1. SilentEncryptedRetryCell — 静默 invalid_encrypted_content 重试
  *   2. ChatEmbeddingCell — 启用聊天记录语义索引 (chat-history-embedder)
+ *   3. MessageNavRailCell — 显示提问导航条 (默认关闭)
  *
  * 新增 cell 直接加在 container 内, divider 由相邻选择器 `[&>*+*]:border-t` 自动
  * 应用, 不需要修改任何 cell 组件。
@@ -18,6 +19,7 @@ import { cn } from '@/lib/utils';
 import { useAuth } from '@/contexts/AuthContext';
 
 import { ChatEmbeddingCell } from './ChatEmbeddingCell';
+import { MessageNavRailCell } from './MessageNavRailCell';
 import { SilentEncryptedRetryCell } from './SilentEncryptedRetryCell';
 
 export function TipsSection() {
@@ -46,6 +48,7 @@ export function TipsSection() {
       >
         <SilentEncryptedRetryCell />
         {mode !== 'local' ? <ChatEmbeddingCell /> : null}
+        <MessageNavRailCell />
       </div>
     </div>
   );

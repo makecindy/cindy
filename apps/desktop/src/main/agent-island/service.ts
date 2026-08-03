@@ -1,7 +1,7 @@
 import { dialog, ipcMain, screen, BrowserWindow, type Display, type OpenDialogOptions } from 'electron';
 import path from 'node:path';
 import { release as getOsRelease } from 'node:os';
-import { SESSION_ACTIVITY_CHANNEL } from '@cindy/device-link';
+import { SESSION_ACTIVITY_CHANNEL, type SessionActivityPayload } from '@cindy/device-link';
 import {
   isTerminalAgentErrorEvent,
   type AgentEvent,
@@ -1160,8 +1160,12 @@ export class AgentIslandService {
     this.commitMetadata(sessionId, next);
   }
 
-  replaySessionActivity(): void {
-    this.sessionActivityRelay.replay(this.buildSessionActivityPayload());
+  /**
+   * 按需重放当前会话活动快照。`emit` 由调用方(bootstrap)注入定向 sink 时,
+   * 快照只投给刚完成 sessions 订阅的那一台控制端;不传则沿默认广播通道扇出。
+   */
+  replaySessionActivity(emit?: (payload: SessionActivityPayload) => void): void {
+    this.sessionActivityRelay.replay(this.buildSessionActivityPayload(), emit);
   }
 
   /**
