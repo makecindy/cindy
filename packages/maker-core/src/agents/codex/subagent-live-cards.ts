@@ -81,6 +81,15 @@ export interface SubagentLiveCardTracker {
     method: string,
     params: unknown,
   ): SubagentLiveCardUpdate | null;
+  /**
+   * 连接/会话收口前,为所有**仍在跑**的卡产出终态快照(`stopped`)。
+   *
+   * 必须在 `clear()` 之前调用并把返回的帧发出去:tracker 只靠后代的 `turn/completed` 写终态,
+   * 而 transport error / 强制 retire / thread cleanup failure 之后那些通知**永远不会再到**。
+   * 光清内部状态的话,桌面与手机的 task-update map 会一直留着最后一帧 `running` —— 进程早就
+   * 死了、或者用户已经重连,卡还在原地转圈(review)。
+   */
+  drainRunningForShutdown(): SubagentLiveCardUpdate[];
   /** 会话收口时清空(与 descendant MCP context 注销同点调用)。 */
   clear(): void;
   /** 诊断/测试用:当前跟踪的子代理卡数。 */
@@ -180,6 +189,29 @@ export function createSubagentLiveCardTracker(opts: {
    * 显示完成(review)。这里先记下,父线程一归属就**递归**补绑整条血缘链。
    */
   const pendingLineage = new Map<string, Set<string>>();
+  /**
+   * 子线程**第一次被看见**的时刻(第一条缓冲通知或第一条未归属血缘边)。
+   *
+   * 建卡时 `startedAt` 不能直接用 now():spawn 的 started/updated 阶段可能缺失或晚到,等到
+   * completed 才建卡时子线程其实已经跑了一段时间,而那段时间的通知都在缓冲里(没有时间戳)。
+   * 用 now() 会把已消耗的时长整段漏掉 —— 长跑子代理甚至显示接近 0ms(review)。既然这套实现
+   * 明确支持"通知早于 spawn 登记",起点就必须回溯到最早那条证据。
+   */
+  const firstSeenAt = new Map<string, number>();
+
+  const noteFirstSeen = (threadId: string): void => {
+    if (!firstSeenAt.has(threadId)) firstSeenAt.set(threadId, now());
+  };
+
+  /** 建卡时的起点:本次 spawn 的子线程里最早被看见的那个时刻,没有证据时才用当前时间。 */
+  const earliestSeen = (threadIds: readonly string[]): number => {
+    let earliest = now();
+    for (const id of threadIds) {
+      const seen = firstSeenAt.get(id);
+      if (seen !== undefined && seen < earliest) earliest = seen;
+    }
+    return earliest;
+  };
 
   const isTerminal = (status: SubagentLiveCardStatus): boolean => status !== 'running';
 
@@ -254,6 +286,7 @@ export function createSubagentLiveCardTracker(opts: {
 
   const bufferPending = (childThreadId: string, method: string, params: unknown): void => {
     if (!CONSUMED_METHODS.has(method)) return;
+    noteFirstSeen(childThreadId);
     let queue = pending.get(childThreadId);
     if (!queue) {
       if (pending.size >= MAX_PENDING_THREADS) {
@@ -270,6 +303,7 @@ export function createSubagentLiveCardTracker(opts: {
 
   /** 记下一条尚未能判断归属的血缘边,等父线程归属后补绑。 */
   const bufferLineage = (childThreadId: string, parentThreadId: string): void => {
+    noteFirstSeen(childThreadId);
     let children = pendingLineage.get(parentThreadId);
     if (!children) {
       if (pendingLineage.size >= MAX_PENDING_LINEAGE_PARENTS) {
@@ -389,7 +423,7 @@ export function createSubagentLiveCardTracker(opts: {
       const card: TrackedCard = existing ?? {
         taskId: registration.taskId,
         ...(registration.agentPath ? { agentPath: registration.agentPath } : {}),
-        startedAt: now(),
+        startedAt: earliestSeen(registration.childThreadIds),
         toolUses: 0,
         countedItemIds: new Set<string>(),
         threads: new Map<string, ThreadState>(),
@@ -476,11 +510,32 @@ export function createSubagentLiveCardTracker(opts: {
       return snapshot(card);
     },
 
+    drainRunningForShutdown(): SubagentLiveCardUpdate[] {
+      const out: SubagentLiveCardUpdate[] = [];
+      for (const card of cards.values()) {
+        if (isTerminal(aggregateStatus(card))) continue;
+        // 会话没了不代表子代理"失败"了 —— 它是被中断的,所以报 stopped 而不是 failed。
+        // 直接改线程状态而不是在 snapshot 里特判:这样 aggregateStatus 自然收敛到 stopped,
+        // 也保住了 spawnFailed 闩的优先级(派发本身失败过的卡仍报 failed)。
+        for (const thread of card.threads.values()) {
+          if (thread.status === 'running') thread.status = 'stopped';
+        }
+        if (card.threads.size === 0) {
+          // 一个线程都还没登记上的卡(spawn 刚认出、子线程尚未 started):补一个占位线程,
+          // 否则 aggregateStatus 对空集合返回 running,这张卡还是会留在转圈状态。
+          card.threads.set('__shutdown__', { status: 'stopped', totalTokens: 0 });
+        }
+        out.push(snapshot(card));
+      }
+      return out;
+    },
+
     clear(): void {
       cards.clear();
       taskIdByThread.clear();
       pending.clear();
       pendingLineage.clear();
+      firstSeenAt.clear();
     },
 
     get size(): number {

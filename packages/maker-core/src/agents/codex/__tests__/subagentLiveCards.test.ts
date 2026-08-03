@@ -616,6 +616,61 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({ toolUses: 1 });
   });
 
+
+  it('emits a terminal snapshot for still-running cards at shutdown', () => {
+    // tracker 只靠后代 turn/completed 写终态,而 transport error / 强制 retire / thread cleanup
+    // failure 之后那些通知**永远不会再到**。只清内部状态的话渲染端会一直留着最后一帧 running,
+    // 卡片永久转圈(review)。
+    let clock = 1_000;
+    const tracker = createSubagentLiveCardTracker({ now: () => clock });
+    tracker.noteSpawnItem(v2SpawnItem('card-run', 't-a'));
+    tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'));
+    tracker.noteSpawnItem(v2SpawnItem('card-done', 't-b'));
+    tracker.handleDescendantNotification('t-b', 'turn/completed', { turn: { status: 'completed' } });
+
+    clock = 5_000;
+    const drained = tracker.drainRunningForShutdown();
+    // 只收仍在跑的那张;已收口的不重复发。
+    expect(drained).toHaveLength(1);
+    expect(drained[0]).toMatchObject({ taskId: 'card-run', status: 'stopped', toolUses: 1 });
+    // 幂等:再 drain 一次不该又冒出来。
+    expect(tracker.drainRunningForShutdown()).toHaveLength(0);
+  });
+
+  it('closes out a card whose child threads never registered', () => {
+    // spawn 刚认出、子线程还没 started 就断连:threads 为空时 aggregateStatus 返回 running,
+    // 不补占位就还是转圈。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem({ ...v1SpawnItem('card-empty', ['t-x']), receiverThreadIds: ['t-x'] });
+    // 手动把线程集合清空以模拟"登记了卡但线程还没建立"的窗口。
+    const drained = tracker.drainRunningForShutdown();
+    expect(drained).toHaveLength(1);
+    expect(drained[0].status).toBe('stopped');
+  });
+
+  it('dates the card from the first buffered evidence, not from registration time', () => {
+    // spawn 的 started/updated 缺失或晚到时,子线程其实已经跑了一段。用建卡时刻当起点会把
+    // 已消耗的时长整段漏掉 —— 长跑子代理甚至显示接近 0ms(review)。
+    let clock = 1_000;
+    const tracker = createSubagentLiveCardTracker({ now: () => clock });
+    // 先到的子线程证据(此时还没有 spawn 登记)。
+    tracker.handleDescendantNotification('t-late', 'item/started', toolItem('early-1'));
+
+    clock = 61_000; // 子线程已经跑了 60 秒,spawn item 才到
+    const registered = tracker.noteSpawnItem(v2SpawnItem('card-late', 't-late'));
+    expect(registered?.durationMs).toBe(60_000);
+  });
+
+  it('falls back to now() when there is no earlier evidence', () => {
+    let clock = 7_000;
+    const tracker = createSubagentLiveCardTracker({ now: () => clock });
+    tracker.noteSpawnItem(v2SpawnItem('card-fresh', 't-fresh'));
+    clock = 7_500;
+    expect(
+      tracker.handleDescendantNotification('t-fresh', 'item/started', toolItem('y-1'))?.durationMs,
+    ).toBe(500);
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

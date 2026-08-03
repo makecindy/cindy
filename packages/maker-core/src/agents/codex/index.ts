@@ -3139,7 +3139,9 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
-      // 与 close() 同规:handle 被终止后子代理卡不会再有消费者,释放跟踪状态。
+      // 与 close() 同规:handle 被终止后子代理卡不会再有消费者。同样先收终态再清 ——
+      // 这条路径(thread cleanup failure / 强制 retire)恰恰是最容易留下永久转圈卡的。
+      for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
       subagentLiveCards.clear();
       abandonBufferedTurns(reason);
       abandonPendingCapabilitySteers();
@@ -7692,7 +7694,10 @@ export class CodexAgent extends BaseAgent {
       resetUpstreamIdleForTurnEnd();
       unregisterCodexMcpContext(threadId);
       unregisterDescendantCodexMcpContexts();
-      // 会话收口后子代理卡不再有消费者,释放跟踪状态(与 descendant MCP context 注销同点)。
+      // 会话收口后子代理卡不再有消费者。清状态**之前**必须先把仍在跑的卡收成终态:
+      // 之后后代通知永远不会再到,只清内部状态会让渲染端一直留着最后一帧 running,卡片
+      // 永久转圈(review)。
+      for (const update of subagentLiveCards.drainRunningForShutdown()) emitSubagentCardUpdate(update);
       subagentLiveCards.clear();
       // close 时 buffer 里可能还有等对账的挂起请求 (codex R17 P2):
       // 统一按拒绝释放, 否则 handler 永远悬挂, dispatchServerRequest
