@@ -337,6 +337,27 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[4] as Record<string, unknown>).tool_use_id).toBe('Bash_210_dup2');
   });
 
+  it('tool_use_summary 顶层 preceding_tool_use_ids 数组跟随改名(codex-connector P2)', () => {
+    // translator 把 preceding_tool_use_ids 转发为 tool_result.data.toolUseIds, 归一化
+    // 改名后数组必须同步, 否则 summary 事件挂不上归一化后的 tool 卡片。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+      JSON.stringify({
+        type: 'tool_use_summary',
+        summary: 'ran a command',
+        preceding_tool_use_ids: ['Bash_210'],
+      }),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // tool_use 被偏移为 Bash_x210
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x210');
+    // summary 数组项同步为 Bash_x210
+    expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_x210']);
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);

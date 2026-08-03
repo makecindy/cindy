@@ -289,34 +289,50 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     if (lineChanged) changedLineIndexes.add(index);
   });
 
-  // subagent 记录的顶层字段跟随 tool_use 改名: Claude subagent/task-notification
-  // 条目在顶层带 parent_tool_use_id / tool_use_id 引用父 agent 的调用 id
-  // (translator 用它们作 parentToolUseId 挂载)。归一化改名后必须同步, 否则
-  // subagent 关联断裂。
+  // 顶层引用字段跟随 tool_use 改名: Claude subagent/task-notification 条目在顶层带
+  // parent_tool_use_id / tool_use_id 引用父 agent 的调用 id(translator 用它们作
+  // parentToolUseId 挂载);tool_use_summary 条目在顶层带 preceding_tool_use_ids 数组
+  // (translator 转发为 tool_result.data.toolUseIds)。归一化改名后必须同步, 否则
+  // 关联断裂 / summary 挂不上归一化后的卡片。
   //
-  // 配对必须**按行作用域**: 每个 subagent 记录引用「它所在位置之前最近的同名 call」
-  // 的终 id —— 同一原始 id 重铸多次时, 第 N 个 subagent 挂第 N 次调用, 而非全部挂
-  // 最后一个 duplicate(单一 last mapping 会把首个 subagent 的消息错误挂到后面的
-  // Agent/Task 卡片上, codex-connector review P2)。
+  // 配对必须**按行作用域**: 每个引用记录指向「它所在位置之前最近的同名 call」的终 id ——
+  // 同一原始 id 重铸多次时, 第 N 个 subagent/summary 挂第 N 次调用, 而非全部挂最后一个
+  // duplicate(单一 last mapping 会把首个记录错误挂到后面的卡片上, codex-connector P2)。
   if (occurrenceByOriginal.size > 0) {
     // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标(其 line < 当前 index)。
     const occPtr = new Map<string, number>();
+    // 单个原始 id → 终 id 的行作用域解析(推进 occPtr 并返回最近的终 id;该行之前
+    // 无同名 call 时返回 undefined)。
+    const resolveOccurrence = (val: string, index: number): string | undefined => {
+      const occs = occurrenceByOriginal.get(val);
+      if (!occs || occs.length === 0) return undefined;
+      let ptr = occPtr.get(val) ?? -1;
+      while (ptr + 1 < occs.length && occs[ptr + 1].line < index) ptr += 1;
+      occPtr.set(val, ptr);
+      return ptr < 0 ? undefined : occs[ptr].finalId;
+    };
     entries.forEach((entry, index) => {
       let entryChanged = false;
       for (const field of ['parent_tool_use_id', 'tool_use_id'] as const) {
         const val = entry[field];
         if (typeof val !== 'string') continue;
-        const occs = occurrenceByOriginal.get(val);
-        if (!occs || occs.length === 0) continue;
-        // 推进到最后一个 line < index 的 occurrence(行作用域: 取最近的同名 call)。
-        let ptr = occPtr.get(val) ?? -1;
-        while (ptr + 1 < occs.length && occs[ptr + 1].line < index) ptr += 1;
-        occPtr.set(val, ptr);
-        if (ptr < 0) continue; // 该记录之前的转录里还没有同名 call —— 不改写。
-        const mapped = occs[ptr].finalId;
-        if (mapped !== val) {
+        const mapped = resolveOccurrence(val, index);
+        if (mapped !== undefined && mapped !== val) {
           entry[field] = mapped;
           entryChanged = true;
+        }
+      }
+      // tool_use_summary 的 preceding_tool_use_ids 数组: 逐项按同一行作用域改写。
+      const arr = entry.preceding_tool_use_ids;
+      if (Array.isArray(arr)) {
+        for (let i = 0; i < arr.length; i += 1) {
+          const item = arr[i];
+          if (typeof item !== 'string') continue;
+          const mapped = resolveOccurrence(item, index);
+          if (mapped !== undefined && mapped !== item) {
+            arr[i] = mapped;
+            entryChanged = true;
+          }
         }
       }
       if (entryChanged) changedLineIndexes.add(index);
