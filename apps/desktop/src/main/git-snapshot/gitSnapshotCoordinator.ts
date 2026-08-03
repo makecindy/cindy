@@ -9,7 +9,12 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import { createAfterEditLabel } from './gitSnapshotLabeler';
 import { enqueueGitRepoWrite } from './gitRepoWriteQueue';
-import type { CreateSnapshotInput, CreateSnapshotMarkerInput } from './gitSnapshotService';
+import type {
+  CreateShadowMarkerInput,
+  CreateShadowSavepointInput,
+  ShadowSavepointResult,
+  SkippedFileFingerprint,
+} from './gitSnapshotService';
 
 interface CoordinatorLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -35,18 +40,22 @@ export interface GitSnapshotCoordinatorDeps {
     context: GitSnapshotSessionContext,
     opts: { autoSnapshotEnabled: boolean },
   ) => Promise<{ repoRoot?: string | null } | null>;
-  /** Cheap dirty check used before createSnapshot does heavier staging work. */
-  isWorktreeDirty: (repoRoot: string) => Promise<boolean>;
   /** Session lookup used for workingDir detection and label-agent routing. */
   getSessionContext: (sessionId: string) => Promise<GitSnapshotSessionContext | null>;
-  /** Optional message anchor attached to the XDT trailer metadata. */
+  /** Optional message anchor attached to the savepoint trailer metadata. */
   resolveAnchor?: (sessionId: string) => Promise<string | undefined>;
   /** Optional last user prompt, used only as label context. */
   getLastUserPrompt?: (sessionId: string) => Promise<string | undefined>;
-  /** Snapshot kernel dependency, injected for tests. */
-  createSnapshot: (repoPath: string, input: CreateSnapshotInput) => Promise<string | null>;
-  /** Metadata-only snapshot marker dependency, injected for tests. */
-  createSnapshotMarker: (repoPath: string, input: CreateSnapshotMarkerInput) => Promise<string>;
+  /** Shadow savepoint kernel dependency, injected for tests. */
+  createShadowSavepoint: (
+    repoPath: string,
+    input: CreateShadowSavepointInput,
+  ) => Promise<ShadowSavepointResult>;
+  /** Metadata-only chain marker dependency, injected for tests. */
+  createShadowMarker: (
+    repoPath: string,
+    input: CreateShadowMarkerInput,
+  ) => Promise<string | null>;
   /** Out-of-band label generation dependency. */
   oneShot: (agentKind: AgentKind, prompt: string) => Promise<string>;
   logger: CoordinatorLogger;
@@ -59,14 +68,27 @@ interface ResolvedSnapshotSession {
 
 interface TurnStartState {
   repoRoot: string;
-  wasDirty: boolean;
-  beforeEditFailed: boolean;
+  /** Turn-start savepoint on the shadow chain; unset when creation failed. */
+  turnStartCommit: string;
+  /** Content-free fingerprints of paths the filter excluded at turn start. */
+  turnStartSkippedFingerprints: SkippedFileFingerprint[];
   metadata: TurnStartMetadata;
 }
 
 interface TurnStartRecord extends Partial<TurnStartState> {
   autoSnapshotEnabled: boolean;
   promise: Promise<void>;
+  /** Owning session, for same-repo concurrency checks across sessions. */
+  ownerSessionId?: string;
+  /**
+   * Another session ran a turn on the same repository while this turn was in
+   * flight. Full-worktree trees cannot attribute changes to sessions, so an
+   * after-edit here would swallow the peer's files; the turn degrades to a
+   * rewind gap instead. Overlapping turns of the *same* session stay fine:
+   * their after-edits share one chain and conversation rewind drops them
+   * together, so attribution is consistent by construction.
+   */
+  overlappedWithPeer?: boolean;
 }
 
 interface TurnStartMetadata {
@@ -77,17 +99,20 @@ interface TurnStartMetadata {
 export class GitSnapshotCoordinator {
   private readonly sessionCache = new Map<string, ResolvedSnapshotSession>();
   private readonly turnStartQueues = new Map<string, TurnStartRecord[]>();
+  /** In-flight turn records per repo root, for same-repo concurrency checks. */
+  private readonly activeTurnRecordsByRepo = new Map<string, Set<TurnStartRecord>>();
 
   constructor(private readonly deps: GitSnapshotCoordinatorDeps) {}
 
   /**
-   * Turn-start hook. Captures whether the repo was already dirty before the
-   * agent turn and snapshots safe pre-existing work before the agent can edit.
+   * Turn-start hook. Snapshots the current worktree state onto the session's
+   * shadow savepoint chain as the baseline for this turn's file rewind.
    */
   async onTurnStart(sessionId: string): Promise<void> {
     const record: TurnStartRecord = {
       autoSnapshotEnabled: this.deps.readAutoSnapshotEnabled(),
       promise: Promise.resolve(),
+      ownerSessionId: sessionId,
     };
     this.pushTurnStartRecord(sessionId, record);
     record.promise = this.captureTurnStart(sessionId, record);
@@ -110,24 +135,21 @@ export class GitSnapshotCoordinator {
       }
 
       record.repoRoot = resolved.repoRoot;
-      record.beforeEditFailed = false;
+      this.registerActiveTurn(resolved.repoRoot, record);
       const metadataPromise = this.resolveTurnStartMetadata(sessionId);
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
-        const wasDirty = await this.deps.isWorktreeDirty(resolved.repoRoot);
-        record.wasDirty = wasDirty;
-        if (!wasDirty) {
-          return;
-        }
-
         const metadata = await metadataPromise;
         record.metadata = metadata;
-        await this.createBeforeEditSnapshot(sessionId, resolved.repoRoot, metadata);
+        const turnStart = await this.createTurnStartSavepoint(
+          sessionId,
+          resolved.repoRoot,
+          metadata,
+        );
+        record.turnStartCommit = turnStart.commit;
+        record.turnStartSkippedFingerprints = turnStart.skippedFingerprints;
       });
       record.metadata ??= await metadataPromise;
     } catch (err) {
-      if (record.wasDirty) {
-        record.beforeEditFailed = true;
-      }
       this.deps.logger.warn('[git-snapshot] onTurnStart failed (swallowed)', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -171,6 +193,16 @@ export class GitSnapshotCoordinator {
   /** Clears per-session repo detection when the session is closed. */
   onSessionClosed(sessionId: string): void {
     this.sessionCache.delete(sessionId);
+    // 未被 turn-end/abort 消费的 record(运行中关会话)必须逐条注销同仓并发
+    // 记账,否则悬空 record 会让同仓其它会话的后续每一轮都被误判为并发。
+    const queue = this.turnStartQueues.get(sessionId);
+    if (queue) {
+      for (const record of queue) {
+        if (record.repoRoot) {
+          this.unregisterActiveTurn(record.repoRoot, record);
+        }
+      }
+    }
     this.turnStartQueues.delete(sessionId);
   }
 
@@ -204,102 +236,181 @@ export class GitSnapshotCoordinator {
     { repoRoot, agentKind }: ResolvedSnapshotSession,
     turnStart: TurnStartRecord | undefined,
   ): Promise<void> {
-    const hasTurnStartBaseline = turnStart?.repoRoot === repoRoot && typeof turnStart.wasDirty === 'boolean';
-    if (!hasTurnStartBaseline && agentKind === 'codex') {
+    const baseline =
+      turnStart?.repoRoot === repoRoot ? turnStart.turnStartCommit : undefined;
+    if (!baseline) {
       this.deps.logger.debug('[git-snapshot] missing turn-start baseline, skip', {
         sessionId,
         repoRoot,
       });
-      // No baseline means no reliable turn anchor; the planner scopes this marker by history position.
-      await this.createRewindBlockedMarker(
-        sessionId,
-        repoRoot,
-        'Codex rewind unavailable: missing turn-start baseline',
-        '[git-snapshot] missing-baseline rewind marker created',
-        {},
-      );
-      return;
-    }
-
-    if (hasTurnStartBaseline && turnStart.beforeEditFailed) {
-      this.deps.logger.debug('[git-snapshot] before-edit baseline failed, skip', {
-        sessionId,
-        repoRoot,
-      });
-      if (agentKind === 'codex') {
+      // Without a baseline this turn's delta is unrecoverable; append a gap
+      // marker so the file-rewind planner truncates ranges that cross it.
+      // Only codex/pi consume the savepoint chain for file rewind.
+      if (agentKind === 'codex' || agentKind === 'pi') {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
-          'Codex rewind unavailable: turn-start baseline failed',
-          '[git-snapshot] failed-baseline rewind marker created',
-          turnStart.metadata ?? {},
+          'File rewind gap: turn-start baseline unavailable',
+          '[git-snapshot] rewind gap marker created',
+          turnStart?.metadata ?? {},
         );
       }
       return;
     }
 
-    if (!(await this.deps.isWorktreeDirty(repoRoot))) {
-      this.deps.logger.debug('[git-snapshot] worktree clean, skip', { sessionId, repoRoot });
+    const metadata = turnStart?.metadata ?? await this.resolveTurnStartMetadata(sessionId);
+
+    if (turnStart?.overlappedWithPeer) {
+      // 另一个 session 在同一仓库上与本轮并发跑了 turn:全工作区树无法把
+      // 改动归属到 session,after-edit 会把对方的文件吞进本轮增量,回退时
+      // 再把对方的文件退回本轮基线。降级为 gap,而不是记错账。
+      this.deps.logger.warn('[git-snapshot] concurrent session turn on the same repo', {
+        sessionId,
+        repoRoot,
+      });
+      if (agentKind === 'codex' || agentKind === 'pi') {
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: concurrent session activity in the same repository',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
       return;
     }
 
-    const metadata = turnStart?.metadata ?? await this.resolveTurnStartMetadata(sessionId);
-
-    const commit = await this.deps.createSnapshot(repoRoot, {
-      label: (diff) =>
-        createAfterEditLabel(
-          { diff, userPrompt: metadata.userPrompt },
-          { oneShot: (prompt) => this.deps.oneShot(agentKind, prompt) },
-        ),
-      meta: {
+    // Dirty detection is tree equality against the turn-start baseline: with
+    // shadow savepoints the worktree stays dirty relative to HEAD, so a
+    // status-based check would create an empty after-edit every turn.
+    let result: ShadowSavepointResult;
+    try {
+      result = await this.deps.createShadowSavepoint(repoRoot, {
         sessionId,
-        kind: 'after-edit',
-        ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
-      },
-    });
+        label: (diff) =>
+          createAfterEditLabel(
+            { diff, userPrompt: metadata.userPrompt },
+            { oneShot: (prompt) => this.deps.oneShot(agentKind, prompt) },
+          ),
+        meta: {
+          kind: 'after-edit',
+          baselineCommit: baseline,
+          ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
+        },
+        skipIfTreeEquals: baseline,
+      });
+    } catch (err) {
+      this.deps.logger.warn('[git-snapshot] after-edit savepoint failed', {
+        sessionId,
+        repoRoot,
+        error: err instanceof Error ? err.message : String(err),
+      });
+      // This turn's delta is unrecorded; without a gap marker a later rewind
+      // across this turn would restore to a newer baseline and silently keep
+      // the failed turn's file changes while dropping its conversation.
+      if (agentKind === 'codex' || agentKind === 'pi') {
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: after-edit savepoint failed',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
+      return;
+    }
 
-    if (commit) {
+    if (result.commit) {
       this.deps.logger.info('[git-snapshot] after-edit savepoint created', {
         sessionId,
         repoRoot,
-        commit: commit.slice(0, 8),
+        commit: result.commit.slice(0, 8),
       });
     } else {
-      this.deps.logger.debug('[git-snapshot] no staged changes after add, skip', {
+      this.deps.logger.debug('[git-snapshot] worktree unchanged since turn start, skip', {
         sessionId,
         repoRoot,
       });
     }
+
+    // 被过滤路径在本 turn 两端不一致时补 gap 标记,覆盖三种情形:
+    // - after 新增(Agent 写入 .env、生成超限文件):本轮改动没进快照;
+    // - baseline 消失(被过滤文件本轮被缩小到可纳入或被删):它在基线树里
+    //   缺失,回退会删掉/改掉它,而 turn-start 时的原始内容从未被记录;
+    // - 两端都被过滤但 lstat 指纹(大小/mtime,不含内容)变化:文件本轮被
+    //   改写(如超限文件被 Agent 重写后仍超限),同样没有任何快照可恢复。
+    // 指纹完全一致的常驻过滤文件不打 gap,否则文件回退会被永久禁用。
+    if (agentKind === 'codex' || agentKind === 'pi') {
+      const baseline = new Map(
+        (turnStart?.turnStartSkippedFingerprints ?? []).map((fp) => [fp.path, fp]),
+      );
+      const after = new Map(result.skippedFingerprints.map((fp) => [fp.path, fp]));
+      const changedSkips: string[] = [];
+      for (const [skippedPath, fp] of after) {
+        const base = baseline.get(skippedPath);
+        if (
+          !base ||
+          base.sizeBytes !== fp.sizeBytes ||
+          base.mtimeMs !== fp.mtimeMs ||
+          // ctime 无法从用户态设定、inode 捕获 replace-by-rename:保留 mtime
+          // 的等长改写靠这两个字段识别。
+          base.ctimeMs !== fp.ctimeMs ||
+          base.ino !== fp.ino
+        ) {
+          changedSkips.push(skippedPath);
+        }
+      }
+      for (const skippedPath of baseline.keys()) {
+        if (!after.has(skippedPath)) changedSkips.push(skippedPath);
+      }
+      if (changedSkips.length > 0) {
+        this.deps.logger.warn('[git-snapshot] turn changes partially filtered', {
+          sessionId,
+          repoRoot,
+          skipped: changedSkips.slice(0, 5),
+        });
+        await this.createRewindBlockedMarker(
+          sessionId,
+          repoRoot,
+          'File rewind gap: turn changes were partially filtered',
+          '[git-snapshot] rewind gap marker created',
+          metadata,
+        );
+      }
+    }
   }
 
-  private async createBeforeEditSnapshot(
+  private async createTurnStartSavepoint(
     sessionId: string,
     repoRoot: string,
     metadata: TurnStartMetadata,
-  ): Promise<void> {
-    const commit = await this.deps.createSnapshot(repoRoot, {
-      label: '本轮开始前的未提交改动',
+  ): Promise<{ commit: string | undefined; skippedFingerprints: SkippedFileFingerprint[] }> {
+    // Always created, dirty or clean, so every turn has a uniform restore
+    // baseline; an unchanged tree costs almost nothing thanks to object reuse.
+    const result = await this.deps.createShadowSavepoint(repoRoot, {
+      sessionId,
+      label: '本轮开始时的工作区基线',
       meta: {
-        sessionId,
-        kind: 'before-edit',
+        kind: 'turn-start',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
 
-    if (commit) {
-      this.deps.logger.info('[git-snapshot] before-edit baseline created', {
+    if (result.commit) {
+      this.deps.logger.info('[git-snapshot] turn-start baseline created', {
         sessionId,
         repoRoot,
-        commit: commit.slice(0, 8),
+        commit: result.commit.slice(0, 8),
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       });
-      return;
+      return { commit: result.commit, skippedFingerprints: result.skippedFingerprints };
     }
 
-    this.deps.logger.debug('[git-snapshot] no staged turn-start changes after add, skip', {
+    this.deps.logger.warn('[git-snapshot] turn-start baseline missing commit', {
       sessionId,
       repoRoot,
     });
+    return { commit: undefined, skippedFingerprints: result.skippedFingerprints };
   }
 
   private async resolveTurnStartMetadata(sessionId: string): Promise<TurnStartMetadata> {
@@ -338,14 +449,19 @@ export class GitSnapshotCoordinator {
     logMessage: string,
     metadata: TurnStartMetadata,
   ): Promise<void> {
-    const commit = await this.deps.createSnapshotMarker(repoRoot, {
+    const commit = await this.deps.createShadowMarker(repoRoot, {
+      sessionId,
       label,
       meta: {
-        sessionId,
         kind: 'rewind-blocked',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
+    if (!commit) {
+      // Marker tree could not be built (git fully unavailable); the failure
+      // is logged by the kernel and the outer swallow keeps the turn alive.
+      return;
+    }
     this.deps.logger.info(logMessage, {
       sessionId,
       repoRoot,
@@ -369,6 +485,41 @@ export class GitSnapshotCoordinator {
     if (queue && queue.length === 0) {
       this.turnStartQueues.delete(sessionId);
     }
+    if (record?.repoRoot) {
+      this.unregisterActiveTurn(record.repoRoot, record);
+    }
     return record;
+  }
+
+  /**
+   * Same-repo concurrency bookkeeping: two sessions running turns against one
+   * repository make full-worktree trees unattributable, so every overlapping
+   * in-flight turn (existing peers included) is flagged for gap degradation.
+   */
+  private registerActiveTurn(repoRoot: string, record: TurnStartRecord): void {
+    const peers = this.activeTurnRecordsByRepo.get(repoRoot);
+    if (!peers) {
+      this.activeTurnRecordsByRepo.set(repoRoot, new Set([record]));
+      return;
+    }
+    const foreignPeers = [...peers].filter(
+      (peer) => peer.ownerSessionId !== record.ownerSessionId,
+    );
+    if (foreignPeers.length > 0) {
+      record.overlappedWithPeer = true;
+      for (const peer of foreignPeers) {
+        peer.overlappedWithPeer = true;
+      }
+    }
+    peers.add(record);
+  }
+
+  private unregisterActiveTurn(repoRoot: string, record: TurnStartRecord): void {
+    const peers = this.activeTurnRecordsByRepo.get(repoRoot);
+    if (!peers) return;
+    peers.delete(record);
+    if (peers.size === 0) {
+      this.activeTurnRecordsByRepo.delete(repoRoot);
+    }
   }
 }

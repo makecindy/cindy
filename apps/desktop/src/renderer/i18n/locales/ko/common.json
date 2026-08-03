@@ -1645,7 +1645,7 @@
     "gitSafety": {
       "title": "Git 안전",
       "autoSnapshotTitle": "Git 안전 저장점",
-      "description": "Agent 편집 후 저장점 commit을 자동으로 만듭니다. 켜져 있을 때만 Codex rewind를 표시합니다.",
+      "description": "Agent 편집 후 프로젝트 Git 저장소에 숨겨진 저장점을 자동으로 기록합니다. 브랜치에 commit이 추가되지 않습니다. 켜져 있을 때만 Codex rewind를 표시합니다.",
       "toggleAria": "Git 안전 저장점 전환",
       "saveFailed": "Git 안전 설정 저장에 실패했습니다"
     },
