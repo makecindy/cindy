@@ -71,12 +71,12 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
           state.timer = undefined;
         }
       };
-      const requestTermination = (): boolean => {
+      const requestTermination = (): void => {
         try {
-          return child.kill();
+          child.kill();
         } catch {
-          // 子进程已不可用时，调用方会立即释放槽位；不能把异常吞掉后永久 busy。
-          return false;
+          // 无论 kill 返回 false 还是抛错，都不能在 exit 前启动第二个
+          // Sharp 进程；当前请求已经失败，后续调用会走默认图标回退。
         }
       };
       const complete = (operation: () => void): void => {
@@ -86,7 +86,7 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
         // Keep the slot occupied until the child emits exit. The response can
         // arrive just before the process is reaped; releasing here could start
         // a second Sharp process while the first one is still shutting down.
-        if (!requestTermination()) release();
+        requestTermination();
         operation();
       };
       const failAndTerminate = (error: Error): void => {
@@ -94,9 +94,9 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
         state.settled = true;
         clearTimer();
         // 超时/请求失败时不能在 kill 请求后立刻释放：等 Electron 确认 exit，
-        // 防止旧 native 任务尚未停止时新请求又启动一个子进程。FatalError 的
-        // error 监听器另有无 exit 兜底，避免异常路径永久占槽。
-        if (!requestTermination()) release();
+        // 防止旧 native 任务尚未停止时新请求又启动一个子进程。当前请求已经
+        // 立即拒绝，由上层回退默认图标。
+        requestTermination();
         reject(error);
       };
 
@@ -119,10 +119,10 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
       child.on('error', (type, location) => {
         const error = new Error(`AI 图标转换进程异常:${type}${location ? `(${location})` : ''}`);
         if (!state.settled) failAndTerminate(error);
-        // Electron 通常会随后发 exit，但 FatalError 路径在测试/部分平台上
-        // 可能只有 error。把它视为同一终止路径，避免一次异常永久占住转换槽；
-        // exit 后的 release 仍是幂等的(active === state 才会清理)。
-        release();
+        // 当前请求已在 failAndTerminate 中立即拒绝；槽位仍等 exit 才释放，
+        // 防止 error 后旧进程尚未退出时启动第二个 Sharp 进程。Electron 的
+        // UtilityProcess 契约保证 FatalError 后会发 exit；测试覆盖无 exit 时
+        // 仍 fail-fast 且保持单飞，下一次调用由上层回退默认图标。
       });
       child.on('exit', (code) => {
         clearTimer();
