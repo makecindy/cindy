@@ -5291,7 +5291,7 @@
       "retry": "Retry",
       "searching": "Searching…",
       "noMatch": "No matching items",
-      "typeToSearchFiles": "Type to search project files",
+      "typeToSearchFiles": "Type a keyword to search files and sessions",
       "keepTyping": "Keep typing to narrow down…"
     },
     "planReview": {

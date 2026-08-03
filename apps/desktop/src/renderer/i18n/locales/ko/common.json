@@ -5289,7 +5289,7 @@
       "retry": "재시도",
       "searching": "검색 중…",
       "noMatch": "일치하는 항목 없음",
-      "typeToSearchFiles": "입력하여 프로젝트 파일 검색",
+      "typeToSearchFiles": "키워드를 입력해 파일과 세션 검색",
       "keepTyping": "계속 입력하여 범위 좁히기…"
     },
     "planReview": {

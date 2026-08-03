@@ -831,6 +831,7 @@
         "desktop:chat.userMessage.forkErrors.unsupportedHistory",
         "desktop:login.errors.INVALID_BIND_TICKET",
         "desktop:login.errors.INVALID_LOGIN_TICKET",
+        "desktop:newChat.atMention.typeToSearchFiles",
         "desktop:newChat.chatInput.agentSwitch.confirmation.description",
         "desktop:newChat.collaboration.archiveWorkerConfirmDesc",
         "desktop:newChat.collaboration.stopConfirmDesc",
