@@ -3244,7 +3244,10 @@ describe('DeviceLinkClient', () => {
     h.client.start();
     await tick();
     expect(h.sockets.length).toBe(1); // socket 建了但 open 一直不来
-    await tick(50);
+    // 负载下(全量并跑)事件循环调度可能远超名义毫秒数:单次固定 tick(50) 不足以
+    // 保证 15ms 握手看门狗 + 退避重连都已落地。有界等待到第二个 socket 出现,
+    // 断言语义不变(open 从未到来也必须换连接)。
+    for (let i = 0; i < 40 && h.sockets.length < 2; i++) await tick(10);
     expect(h.sockets.length).toBeGreaterThanOrEqual(2);
     h.client.stop();
   });
@@ -3637,7 +3640,13 @@ describe('DeviceLinkClient', () => {
     });
 
     it('C3:恢复动作(openLink)按 peer 隔离 —— 邻居的真实在途可靠请求照常完成、link 不被复位', async () => {
-      const h = makeHarness();
+      // 本例断言的是 peer 隔离,与心跳/超时无关:FakeWs 从不回 pong,若沿用
+      // harness 默认(pingIntervalMs 10 / pongMissLimit 2)则约 30ms 真实时间后
+      // 心跳看门狗就会拆连接、复位所有 peer link 并拒掉在途请求 —— 在负载高的
+      // CI runner 上会把隔离断言压成假失败。把这两个真实计时器推远。
+      const h = makeHarness({
+        timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000, transportRetryIntervalMs: 60_000 },
+      });
       h.client.start();
       await tick();
       h.current().ack();
@@ -3713,7 +3722,9 @@ describe('DeviceLinkClient', () => {
     });
 
     it('C4:方向证据访问器 —— 只认业务 invoke,显式关闭出站后一票否决', async () => {
-      const h = makeHarness();
+      // 同 C3:断言的是访问器语义。默认心跳会拆连接并拒掉在途 invoke,
+      // 使「在途业务 invoke → 算证据」在慢 runner 上假失败。
+      const h = makeHarness({ timing: { pingIntervalMs: 60_000, requestTimeoutMs: 60_000 } });
       h.client.start();
       await tick();
       h.current().ack();
@@ -3761,7 +3772,16 @@ describe('DeviceLinkClient', () => {
       let nowMs = 4_000_000;
       const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
       try {
-        const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+        // 断连由本例自己 emit('close') 驱动,不靠心跳:把心跳推远,避免慢 runner
+        // 上看门狗抢先拆连接把「恢复后 link 就绪」的中间断言压成假失败。
+        const h = makeHarness({
+          timing: {
+            reconnectBaseMs: 5,
+            reconnectMaxMs: 10,
+            pingIntervalMs: 60_000,
+            requestTimeoutMs: 60_000,
+          },
+        });
         const notified: string[] = [];
         h.client.onReliableFrameBeforeLink((deviceId) => notified.push(deviceId));
         h.client.start();
