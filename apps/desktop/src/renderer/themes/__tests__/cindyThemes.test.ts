@@ -170,14 +170,21 @@ describe('CINDY · ③ 值格式按消费契约', () => {
 
   it('baseline 外未列入决策表的新增 override 只能引用已治理 token', () => {
     const frozenIds = new Set(Object.keys(CINDY_EXPECTED_VALUES));
-    const tokenReference = /^var\(--[a-z0-9-]+\)$/;
+    const registeredIds = new Set(colorRegistry.getColors().map((color) => color.id));
+    const tokenReference = /^var\(--([a-z0-9-]+)\)$/;
     for (const [name, theme] of THEMES) {
       const preexistingLiteralIds = PREEXISTING_UNFROZEN_LITERAL_IDS[name] ?? new Set();
       for (const [id, value] of Object.entries(theme.colors)) {
         if (frozenIds.has(id) || preexistingLiteralIds.has(id)) continue;
+        const referencedId = value.match(tokenReference)?.[1];
         expect(
-          tokenReference.test(value),
+          referencedId,
           `${name}.${id} 未入决策表且不在 baseline，只能引用已治理 token，实际 ${value}`,
+        ).toBeTruthy();
+        if (!referencedId) continue;
+        expect(
+          registeredIds.has(referencedId),
+          `${name}.${id} 引用了未注册 token: ${referencedId}`,
         ).toBe(true);
       }
     }

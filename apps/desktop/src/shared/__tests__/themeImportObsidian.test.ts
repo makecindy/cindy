@@ -54,6 +54,43 @@ body {
 }
 `;
 
+const UNSATISFIABLE_MODE_VARS = `
+  --background-primary: #000000;
+  --background-secondary: #ffffff;
+  --background-modifier-hover: #777777;
+  --background-secondary-alt: #666666;
+  --background-modifier-border: #555555;
+  --text-normal: #dddddd;
+  --text-muted: #777777;
+  --text-faint: #777777;
+  --interactive-accent: #666666;
+`;
+
+const VALID_MODE_VARS = {
+  dark: `
+    --background-primary: #1e1e1e;
+    --background-secondary: #252525;
+    --background-modifier-hover: #2a2a2a;
+    --background-secondary-alt: #303030;
+    --background-modifier-border: #333333;
+    --text-normal: #dcddde;
+    --text-muted: #999999;
+    --text-faint: #666666;
+    --interactive-accent: #7b6cd9;
+  `,
+  light: `
+    --background-primary: #ffffff;
+    --background-secondary: #f5f5f5;
+    --background-modifier-hover: #eeeeee;
+    --background-secondary-alt: #e5e5e5;
+    --background-modifier-border: #d7d7d7;
+    --text-normal: #222222;
+    --text-muted: #6b6b6b;
+    --text-faint: #999999;
+    --interactive-accent: #7b6cd9;
+  `,
+} as const;
+
 describe('theme-import · CSS 规则扫描', () => {
   it('切出顶层规则并递归展开 at-rule', () => {
     const rules = collectCssRules(THEME_CSS);
@@ -247,6 +284,25 @@ describe('theme-import · Obsidian 端到端转换', () => {
     expect(single!.themes).toHaveLength(1);
     expect(single!.themes[0].type).toBe('light');
   });
+
+  it.each([
+    ['light', 'dark'],
+    ['dark', 'light'],
+  ] as const)(
+    '%s 模式色板不可满足时保留成功的 %s 模式',
+    (failedMode, successfulMode) => {
+      const css = `
+        .theme-${failedMode} { ${UNSATISFIABLE_MODE_VARS} }
+        .theme-${successfulMode} { ${VALID_MODE_VARS[successfulMode]} }
+      `;
+
+      const partial = convertObsidianTheme(css, 'Partial Theme');
+
+      expect(partial).not.toBeNull();
+      expect(partial!.themes.map((theme) => theme.type)).toEqual([successfulMode]);
+      expect(partial!.report.unresolved).toContain(`mode:${failedMode}`);
+    },
+  );
 
   it('没有任何主题变量的 CSS 返回 null', () => {
     expect(convertObsidianTheme('.foo { color: red; }', 'X')).toBeNull();

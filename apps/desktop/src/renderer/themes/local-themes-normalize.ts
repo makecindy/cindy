@@ -12,11 +12,13 @@
  * 当快照缺 `text-placeholder` 时,从旧 `settings-input-placeholder`(优先——历史上即
  * "读着像空"的淡色)或任一 per-surface 值播种出 `text-placeholder`,并丢弃 4 个旧
  * per-surface placeholder override,让四个输入面统一走新 slot。外部主题导入新增
- * Switch 安全 token 前保存的完整色板,也会在缺少二者时从旧语义色运行时补齐。
+ * Switch 安全 token 前保存的完整色板,也会在缺少二者时从旧语义色运行时补齐;
+ * 复制主题固化的 registry 默认别名同样按缺失处理。
  */
 
 import { parseCssColor, toHex, type Rgb } from '../../shared/theme-import/color';
 import { deriveUncheckedSwitchTrack } from '../../shared/theme-import/palette';
+import { colorRegistry } from './color-registry';
 
 /** 旧的 per-surface placeholder alias —— 归一化后由 `--text-placeholder` slot 统一接管。 */
 const PER_SURFACE_PLACEHOLDER_KEYS = [
@@ -46,17 +48,29 @@ function parseThemeColor(colors: Record<string, string>, key: string): Rgb | nul
   return value === undefined ? null : parseCssColor(value);
 }
 
+function isRegistryDefaultSwitchValue(key: string, value: string): boolean {
+  return (
+    colorRegistry.resolveDefault(key, 'light') === value
+    || colorRegistry.resolveDefault(key, 'dark') === value
+  );
+}
+
 /**
  * 旧导入产物没有 provenance/version 字段,不能靠文件名猜来源。仅当两个新 token
- * 都缺失、且完整的旧语义色可解析时补齐；任何显式新 token 或不完整手写主题原样保留。
+ * 都缺失或等于 registry 默认别名、且完整的旧语义色可解析时补齐；任何真正的
+ * 显式新 token 或不完整手写主题原样保留。
  */
 function normalizeUncheckedSwitchColors(
   colors: Record<string, string>,
 ): Record<string, string> {
-  if (
-    colors[SWITCH_TRACK_OFF_KEY] !== undefined
-    || colors[SWITCH_THUMB_OFF_KEY] !== undefined
-  ) {
+  const track = colors[SWITCH_TRACK_OFF_KEY];
+  const thumbOverride = colors[SWITCH_THUMB_OFF_KEY];
+  const hasExplicitTrack =
+    track !== undefined && !isRegistryDefaultSwitchValue(SWITCH_TRACK_OFF_KEY, track);
+  const hasExplicitThumb =
+    thumbOverride !== undefined
+    && !isRegistryDefaultSwitchValue(SWITCH_THUMB_OFF_KEY, thumbOverride);
+  if (hasExplicitTrack || hasExplicitThumb) {
     return colors;
   }
 
