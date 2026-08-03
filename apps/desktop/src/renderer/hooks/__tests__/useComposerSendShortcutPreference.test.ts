@@ -169,11 +169,19 @@ describe('useComposerSendShortcutPreference', () => {
         expected: 'native',
       },
       {
-        name: 'queues with Cmd/Ctrl+Enter in modifier-enter mode',
+        name: 'queues with Cmd+Enter in modifier-enter mode on macOS',
         preference: 'modifier-enter',
         platform: 'darwin',
         turnRunning: true,
         event: enterEvent({ metaKey: true }),
+        expected: 'queue',
+      },
+      {
+        name: 'queues with Ctrl+Enter in modifier-enter mode on macOS',
+        preference: 'modifier-enter',
+        platform: 'darwin',
+        turnRunning: true,
+        event: enterEvent({ ctrlKey: true }),
         expected: 'queue',
       },
       {

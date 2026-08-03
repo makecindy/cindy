@@ -1,4 +1,5 @@
 import type { ComposerSendShortcutPreference } from '@/hooks/useComposerSendShortcutPreference';
+import { hasComposerModifier } from './composerShortcut';
 import type { VoiceInputShortcut } from './shortcut';
 
 export type ShortcutConflict = 'composer-voice-input' | null;
@@ -17,12 +18,17 @@ export function findComposerVoiceInputConflict(
   if (voiceShortcut.code !== 'Enter' || voiceShortcut.key !== 'Enter') return null;
   if (voiceShortcut.modifiers.alt || voiceShortcut.modifiers.shift) return null;
 
-  const isMac = platform === 'darwin';
-  const hasPlatformModifier = isMac ? voiceShortcut.modifiers.meta : voiceShortcut.modifiers.ctrl;
-  const hasOtherPlatformModifier = isMac
-    ? voiceShortcut.modifiers.ctrl
-    : voiceShortcut.modifiers.meta;
-  if (!hasPlatformModifier || hasOtherPlatformModifier) return null;
+  if (
+    !hasComposerModifier(
+      {
+        metaKey: voiceShortcut.modifiers.meta,
+        ctrlKey: voiceShortcut.modifiers.ctrl,
+      },
+      platform,
+    )
+  ) {
+    return null;
+  }
 
   return 'composer-voice-input';
 }

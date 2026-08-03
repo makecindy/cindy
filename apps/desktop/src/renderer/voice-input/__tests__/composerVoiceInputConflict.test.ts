@@ -28,6 +28,7 @@ function shortcut(overrides: ShortcutOverrides = {}): VoiceInputShortcut {
 describe('findComposerVoiceInputConflict', () => {
   it.each([
     ['darwin', shortcut({ modifiers: { meta: true, ctrl: false } })],
+    ['darwin', shortcut()],
     ['win32', shortcut()],
     ['linux', shortcut()],
   ] as const)('detects the platform modifier+Enter conflict on %s', (platform, voiceShortcut) => {
@@ -64,13 +65,13 @@ describe('findComposerVoiceInputConflict', () => {
     expect(findComposerVoiceInputConflict(preference, voiceShortcut, platform)).toBeNull();
   });
 
-  it('requires the full platform modifier set', () => {
+  it('matches the Composer modifier logic when both platform modifiers are held', () => {
     expect(
       findComposerVoiceInputConflict(
         'modifier-enter',
         shortcut({ modifiers: { meta: true, ctrl: true } }),
         'darwin',
       ),
-    ).toBeNull();
+    ).toBe('composer-voice-input');
   });
 });
