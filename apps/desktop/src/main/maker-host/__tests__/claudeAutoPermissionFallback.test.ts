@@ -386,6 +386,38 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       expect(logger.warn).toHaveBeenCalledTimes(2);
     });
 
+    it('only lets Claude-attributable responses advance the drift streak', () => {
+      // observer 挂在共享 proxy 上。PI 只带 x-cindy-pi-session-id,拿它的故障推进 Claude
+      // 分类器的漂移判据 = 一次上游抖动就误报(codex P2)。
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+      const foreign = Buffer.from(JSON.stringify({ model: 'gpt-5.5', max_tokens: 64_000 }));
+
+      for (let i = 0; i < 80; i += 1) {
+        observer(ctx({
+          status: 500,
+          requestHeaders: { 'x-cindy-pi-session-id': 'pi-1' },
+          requestBody: foreign,
+        }));
+      }
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('restarts the streak after a long quiet gap', () => {
+      // 计数没有时效的话,进程跑得够久、稀疏的普通 turn 错误最终也会攒满阈值。
+      let t = 0;
+      const { logger, observer } = createObserver(() => 'session-1', () => t);
+      const notClassifier = requestBody({ system: 'ordinary assistant' });
+
+      for (let i = 0; i < 49; i += 1) {
+        t += 1_000;
+        observer(ctx({ status: 429, requestBody: notClassifier }));
+      }
+      // 静默超过 streak 窗口 → 重新起算,不该被历史累计推过阈值。
+      t += 30 * 60_000 + 1;
+      observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.warn).not.toHaveBeenCalled();
+    });
+
     it('resets the streak on every successful match instead of silencing forever', () => {
       const { logger, observer } = createObserver(() => 'session-1', () => 0);
       const notClassifier = requestBody({ system: 'ordinary assistant' });

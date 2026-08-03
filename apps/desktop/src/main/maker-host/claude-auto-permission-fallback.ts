@@ -185,8 +185,16 @@ const OBSERVER_WARN_THROTTLE_MS = 60_000;
  * 连续计数在每次成功识别时归零,所以既能发现整体失效,也能发现局部漂移。
  *
  * 取 50:普通 turn 的错误响应本就稀疏,连续 50 条都不是分类器才值得当信号。
+ *
+ * 两条收窄,防止无关流量把它推到误报(codex P2):
+ * - **只有带 `x-claude-code-session-id` 的响应才推进**。observer 挂在共享 proxy 上,PI 只带
+ *   `x-cindy-pi-session-id`(pi/index.ts),用它的 4xx 推进计数等于拿别的 runtime 的故障
+ *   报 Claude 分类器漂移;
+ * - **streak 有滑动窗口**。计数没有时效的话,进程跑得够久,稀疏的普通 turn 错误最终也会
+ *   攒满阈值。超过 IDENTITY_MISS_STREAK_WINDOW_MS 没有新的未命中就重新起算。
  */
 const IDENTITY_MISS_ALERT_THRESHOLD = 50;
+const IDENTITY_MISS_STREAK_WINDOW_MS = 30 * 60_000;
 
 /**
  * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
@@ -223,6 +231,8 @@ export function createClaudeAutoClassifierFailureObserver(
    * IDENTITY_MISS_ALERT_THRESHOLD 注释里的「一次历史命中不该永久关闭告警」。
    */
   let missesSinceLastMatch = 0;
+  /** 上一次未命中的时刻;超过 streak 窗口没有新增就把连续计数重新起算。 */
+  let lastIdentityMissAt = 0;
   /** 每个 reason 各自限流,免得高频的那个把另一个饿死。 */
   const lastLogAt = new Map<string, number>();
   const logThrottled = (
@@ -289,7 +299,6 @@ export function createClaudeAutoClassifierFailureObserver(
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
       counters.errorsNotClassifier += 1;
-      missesSinceLastMatch += 1;
       // 「识别规则本身失效」必须能独立落盘:一旦 CC 改了分类器的 system 前缀或 max_tokens
       // 上界,所有真实分类器请求都会掉进这个分支 —— 那时既没有漏检 warn(它们在身份判据
       // 之后)、也没有升级日志(永远识别不出来),整条链路重新完全静默,而这恰恰是这套记账
@@ -301,11 +310,19 @@ export function createClaudeAutoClassifierFailureObserver(
       //
       // 用阈值门控把噪音压住:只有「一条都没识别出来」且样本已经够多时才报。正常运行下
       // 只要分类器真的报过一次错,classifierFailures 就 > 0,这条永远不触发。
-      if (missesSinceLastMatch >= IDENTITY_MISS_ALERT_THRESHOLD) {
-        warnThrottled('classifier identity has not matched for a long streak', {
-          status: ctx.status,
-          missesSinceLastMatch,
-        });
+      // 只有「本来就该带 cc 会话头」的响应才算候选分类器请求 —— 其它 runtime 的故障
+      // 不能拿来推进 Claude 分类器的漂移判据。
+      if (ctx.requestHeaders['x-claude-code-session-id']) {
+        const missAt = now();
+        if (missAt - lastIdentityMissAt > IDENTITY_MISS_STREAK_WINDOW_MS) missesSinceLastMatch = 0;
+        lastIdentityMissAt = missAt;
+        missesSinceLastMatch += 1;
+        if (missesSinceLastMatch >= IDENTITY_MISS_ALERT_THRESHOLD) {
+          warnThrottled('classifier identity has not matched for a long streak', {
+            status: ctx.status,
+            missesSinceLastMatch,
+          });
+        }
       }
       return undefined;
     }
