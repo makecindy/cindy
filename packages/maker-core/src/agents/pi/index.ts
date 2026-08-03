@@ -1357,17 +1357,41 @@ export class PiAgent extends BaseAgent {
           );
         }
         const provider = resolveProviderForModel(model, requestedProviderId);
+        // 子代理路由快照必须**先落盘、再切 pi 侧模型**,顺序不能反(review)。
+        //
+        // 上一版是先 set_model 成功、再写快照,写失败就置 `subagentRoutingEnabled = false`。
+        // 那个撤销是**无效的**:该标志只在构造 spawnEnv 时读一次(会话启动、进程 spawn 之前),
+        // 进程起来之后改它既不能收回已注入的 env、也不能让扩展停止读那个文件。于是"写失败 +
+        // 删除也失败"(只读挂载 / 磁盘满)时,父会话已经切到新 provider,而子代理还在按**上一个
+        // 有效快照**跑 —— 委派请求发往旧 endpoint,提示词与代码随之外泄到用户并没选的目的地。
+        //
+        // 改为:写不成就**让整个模型切换失败**,一个字节都不改。父子路由要么一起前进、要么都
+        // 不动,不存在"父已切、子没切"的中间态。代价是只读文件系统下切不了模型 —— 那是显式
+        // 报错、用户看得见,远好过静默把委派发到错误端点。
+        const previousSnapshot = { model: mutableModel, provider: mutablePiProviderId };
+        if (!(await writeSubagentRuntimeFile({ model, provider }))) {
+          throw new Error(
+            'pi: 无法持久化子代理路由快照,已取消本次模型切换(避免父会话切到新 provider 而子代理仍按旧路由派发)。'
+            + '请检查运行目录是否可写后重试。',
+          );
+        }
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
-        if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
+        if (!resp.success) {
+          // pi 侧没切成:快照必须回滚,否则子代理会按"新模型"跑而父会话还在旧模型上。
+          // 回滚同样可能失败(同一个只读文件系统),此时才退到禁用路由 —— 那是最后一道闸。
+          if (!(await writeSubagentRuntimeFile(previousSnapshot))) {
+            subagentRoutingEnabled = false;
+            // 用闭包里的 deps,不是 this.deps —— setModel 是对象字面量的方法简写,
+            // 它的 this 是 handle 而不是 agent(本文件 1224 行起就是为此把 deps 提出来的)。
+            deps.logger.error(
+              'pi: set_model failed and the subagent routing snapshot could not be rolled back; '
+              + 'subagent routing may still point at the attempted model until the session restarts',
+            );
+          }
+          throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
+        }
         mutableModel = model;
         mutablePiProviderId = provider;
-        // 子代理读的是运行期文件,不是 spawn 时定型的 env —— 必须**等写入落盘**再返回,
-        // 否则切完模型立刻派子代理会读到旧值(review)。写失败时禁用子代理路由:模型切换
-        // 本身已在 server 侧生效,不该因此报错,但子代理不能再按过期路由跑(文件已被删,
-        // 扩展在使用点失败关闭)。
-        if (!(await writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId }))) {
-          subagentRoutingEnabled = false;
-        }
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };

@@ -164,10 +164,31 @@ describe('cindy-subagent extension source', () => {
     expect(guard).toBeGreaterThan(-1);
     expect(sigkill).toBeGreaterThan(guard);
     // close / error 两条退出路径都要清定时器。
-    for (const handler of ["child.on('close'", "child.on('error'"]) {
+    // 锚点必须是**真** error handler(带 err 形参);中止分支那个吞错 stub 是无形参的,
+    // 用它当锚点会让断言落在错误的位置(我加中止分支时就先踩了一次)。
+    for (const handler of ["child.on('close'", "child.on('error', function (err)"]) {
       const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
       expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 320)).toContain('clearTimeout(killTimer)');
     }
+  });
+
+
+  it('never spawns a child once the batch is aborted', () => {
+    // 批次取消时 worker 车道里可能还排着任务。原来它们照样先 spawn、再走 aborted 早返回,而那个
+    // return 在注册 stdout/error/close **之前**:子进程永留 liveChildren,且 spawn 失败会变成
+    // 无人监听的 'error' 事件 —— Node 里直接抛出,能把父 pi 进程带走(review)。
+    const source = CINDY_SUBAGENT_EXTENSION_SOURCE;
+    const runTaskAt = source.indexOf('function runTask(');
+    const preCheck = source.indexOf('if (signal && signal.aborted === true) {', runTaskAt);
+    const spawnAt = source.indexOf('child = spawn(binary, args', runTaskAt);
+    expect(preCheck).toBeGreaterThan(runTaskAt);
+    // 检查必须在 spawn **之前**。
+    expect(preCheck).toBeLessThan(spawnAt);
+    // 残余竞态(检查后、spawn 完成前才 abort)那条早返回要自己摘 liveChildren + 吞 error。
+    const innerAbort = source.indexOf('if (signal.aborted) {', spawnAt);
+    const innerBody = source.slice(innerAbort, innerAbort + 520);
+    expect(innerBody).toContain('liveChildren.delete(child)');
+    expect(innerBody).toContain("child.on('error'");
   });
 
   it('declares the watchdog constants exactly once in the composed module', () => {
@@ -198,7 +219,9 @@ describe('cindy-subagent extension source', () => {
     expect(finishStart).toBeGreaterThan(-1);
     expect(finishEnd).toBeGreaterThan(finishStart);
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(finishStart, finishEnd)).not.toContain('liveChildren.delete');
-    for (const handler of ["child.on('close'", "child.on('error'"]) {
+    // 锚点必须是**真** error handler(带 err 形参);中止分支那个吞错 stub 是无形参的,
+    // 用它当锚点会让断言落在错误的位置(我加中止分支时就先踩了一次)。
+    for (const handler of ["child.on('close'", "child.on('error', function (err)"]) {
       const at = CINDY_SUBAGENT_EXTENSION_SOURCE.indexOf(handler);
       expect(at).toBeGreaterThan(-1);
       expect(CINDY_SUBAGENT_EXTENSION_SOURCE.slice(at, at + 240)).toContain('liveChildren.delete(child)');

@@ -338,6 +338,15 @@ function mergeUsage(target, source) {
 /** 跑一个子代理,返回 { text, isError, toolUses, tokens }。 */
 function runTask(binary, task, runtime, signal, onProgress) {
   return new Promise(function (resolve) {
+    // 已中止就**根本不 spawn**。批次被取消时 worker 车道里可能还排着好几个任务,原来它们照样
+    // 先 spawn 出子进程、再走到下面那个 aborted 早返回 —— 而那个 return 发生在注册
+    // stdout / error / close 之前:子进程永远留在 liveChildren 里(父进程退出时才被清),
+    // 而一次 spawn 失败会变成**无人监听的 'error' 事件**,在 Node 里直接抛出、能把父 pi
+    // 进程带走。反复中断的批次因此既攒僵尸 handle 又有整进程崩掉的风险(review)。
+    if (signal && signal.aborted === true) {
+      resolve({ text: 'subagent aborted by user.', isError: true, toolUses: 0, tokens: 0, usage: emptyUsage() });
+      return;
+    }
     const profile = PROFILES[task.agent];
     const args = [
       '--mode', 'json',
@@ -421,6 +430,12 @@ function runTask(binary, task, runtime, signal, onProgress) {
     };
     if (signal && typeof signal.addEventListener === 'function') {
       if (signal.aborted) {
+        // 残余竞态:上面的 spawn 前检查过后、spawn 完成前信号才置位。此时进程已经存在,而这条
+        // 早返回仍在注册 stdout / error / close 之前 —— 必须自己把两件事做掉:从 liveChildren
+        // 摘除(否则僵尸 handle 留到父进程退出),以及挂一个吞掉 'error' 的监听(ChildProcess
+        // 的 'error' 无人监听会在 Node 里直接抛出,能把父 pi 进程带走)。
+        liveChildren.delete(child);
+        child.on('error', function () { /* 已中止,spawn 失败无需上报 */ });
         kill();
         finish({ text: 'subagent aborted by user.', isError: true, toolUses: 0, tokens: 0, usage: emptyUsage() });
         return;

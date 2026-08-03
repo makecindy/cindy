@@ -9,7 +9,7 @@
  *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效)。
  */
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -20,6 +20,7 @@ const captured = vi.hoisted(() => ({
   onEvent: null as ((event: unknown) => void) | null,
   sent: [] as Array<Record<string, unknown>>,
   proxyRegistration: null as { sessionId: string; token: string } | null,
+  requests: [] as string[],
 }));
 
 vi.mock('../rpc-client.js', () => ({
@@ -35,6 +36,7 @@ vi.mock('../rpc-client.js', () => ({
       captured.onEvent = opts.onEvent;
     }
     async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
+      captured.requests.push(cmd.type);
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
@@ -72,6 +74,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.onEvent = null;
     captured.sent = [];
     captured.proxyRegistration = null;
+    captured.requests = [];
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
     cwd = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-cwd-'));
     savedNoProxy = process.env.NO_PROXY;
@@ -178,6 +181,36 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
+  });
+
+
+  it('refuses the model switch when the subagent routing snapshot cannot be persisted', async () => {
+    // 顺序不能反:快照必须先落盘、再切 pi 侧模型。
+    //
+    // 上一版是先 set_model 成功、再写快照,写失败就置 subagentRoutingEnabled = false —— 而那个
+    // 撤销是**无效的**:该标志只在构造 spawnEnv 时读一次(spawn 之前),进程起来后改它既收不回
+    // 已注入的 env、也不能让扩展停止读那个文件。于是"写失败 + 删除也失败"(只读挂载/磁盘满)时,
+    // 父会话已切到新 provider,子代理仍按上一个有效快照跑 —— 委派发往旧 endpoint(review)。
+    const handle = await start();
+    const runtimeDir = path.join(agentHome, 'runtime');
+    const snapshot = readdirSync(runtimeDir).find((f) => f.startsWith('subagent-'));
+    expect(snapshot).toBeTruthy();
+    const snapshotPath = path.join(runtimeDir, snapshot as string);
+    const before = readFileSync(snapshotPath, 'utf8');
+
+    // 让写入必然失败:把快照文件换成同名目录(writeFile → EISDIR)。
+    rmSync(snapshotPath, { force: true });
+    mkdirSync(snapshotPath);
+    captured.requests = [];
+
+    await expect(handle.setModel('m')).rejects.toThrow(/子代理路由快照/);
+    // 关键:pi 侧的 set_model **根本没发出去** —— 父子路由不会出现"父已切、子没切"的中间态。
+    expect(captured.requests).not.toContain('set_model');
+
+    // 收尾:恢复成文件,别把目录留给 close()。
+    rmSync(snapshotPath, { recursive: true, force: true });
+    writeFileSync(snapshotPath, before);
+    await handle.close();
   });
 
   it('overrides the Pi bash tool and strips host credentials at its spawn boundary', async () => {
