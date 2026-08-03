@@ -277,6 +277,24 @@ describe('超时与收卷', () => {
     expect(late.accepted).toBe(false);
   });
 
+  it('可信宿主可为 UI 查询单独收短超时，不改变普通调用默认档', async () => {
+    const h = makeHarness({ timeoutMs: 1000 });
+    const short = h.dispatcher.callGhostTool({ ...CALL, timeoutMs: 50 });
+    const normal = h.dispatcher.callGhostTool(CALL);
+    expect(h.sent).toHaveLength(2);
+
+    vi.advanceTimersByTime(40);
+    expect(h.dispatcher.handleToolProgress('art', {
+      callId: h.sent[0].callId,
+    }).accepted).toBe(true);
+    vi.advanceTimersByTime(10);
+    await expect(short).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
+    expect(h.dispatcher.pendingCount()).toBe(1);
+
+    vi.advanceTimersByTime(950);
+    await expect(normal).resolves.toMatchObject({ ok: false, errorCode: 'TIMEOUT' });
+  });
+
   it('崩溃收卷 → GHOST_CRASHED;熄灯收卷 → GHOST_ASLEEP;只收本意识的', async () => {
     const h = makeHarness();
     const p1 = h.dispatcher.callGhostTool(CALL);

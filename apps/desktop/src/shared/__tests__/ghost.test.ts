@@ -10,6 +10,7 @@ import {
   ghostLocalePathFor,
   ghostNetworkHostMatches,
   ghostPanelKind,
+  ghostPermissionBaselineKey,
   ghostPreviewUrlAllowed,
   parseGhostNodeChildToHostMessage,
   ghostPartition,
@@ -1009,6 +1010,55 @@ describe('ghost · 芯片型清单(schemaVersion 2)', () => {
         Array.from({ length: 17 }, (_, i) => ({ name: `t${i}`, description: 'y' })),
       ).ok,
     ).toBe(false);
+  });
+
+  it('@ 资源入口只可引用一个已声明工具，并按已知字段收窄', () => {
+    const base = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const valid = validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(valid.ok).toBe(true);
+    expect(valid.ok && valid.manifest.atResourceProvider).toEqual({ tool: 'search_issues' });
+
+    expect(validateGhostManifest({ ...base, atResourceProvider: null }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'missing' },
+    }).ok).toBe(false);
+    expect(validateGhostManifest({
+      ...base,
+      atResourceProvider: { tool: 'search_issues', label: 'Issues' },
+    }).ok).toBe(false);
+  });
+
+  it('@ 资源入口复用原工具执行权，但作为新增调用入口单独披露', () => {
+    const raw = {
+      ...goodChipManifest(),
+      slots: ['panel', 'tool'],
+      tools: [{ name: 'search_issues', description: '只读搜索议题' }],
+    };
+    const before = validateGhostManifest(raw);
+    const after = validateGhostManifest({
+      ...raw,
+      atResourceProvider: { tool: 'search_issues' },
+    });
+    expect(before.ok && after.ok).toBe(true);
+    if (!before.ok || !after.ok) return;
+    expect(ghostPermissionBaselineKey(after.manifest)).not.toBe(
+      ghostPermissionBaselineKey(before.manifest),
+    );
+    expect(diffGhostPermissionItems(before.manifest, after.manifest).added).toEqual([
+      expect.objectContaining({
+        key: 'at-resource:search_issues',
+        kind: 'at-resource',
+        labelKey: 'atResourceProvider',
+      }),
+    ]);
   });
 
   it('会进入 locale 对象索引的清单 key 统一拒绝对象保留键名', () => {

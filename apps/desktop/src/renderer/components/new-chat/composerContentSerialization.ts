@@ -4,6 +4,7 @@ import { EditorState } from '@tiptap/pm/state';
 import {
   parseBrowserTabReferenceHref,
   parseDesktopWindowReferenceHref,
+  parsePluginResourceReferenceHref,
   type AgentInputReference,
 } from '@cindy/maker-shared/agent-input-projection';
 
@@ -112,6 +113,7 @@ function serializeComposerDocument(
       || attrs.kind === 'project'
       || attrs.kind === 'browser-tab'
       || attrs.kind === 'desktop-window'
+      || attrs.kind === 'plugin-resource'
     ) return;
     const key = `${attrs.kind}:${attrs.path}`;
     if (seenMentions.has(key)) return;
@@ -312,6 +314,26 @@ function serializeComposerDocument(
               pid: target.pid,
               appName: target.appName,
               ...(attrs.label ? { title: attrs.label } : {}),
+            });
+          }
+          return;
+        }
+        if (attrs.kind === 'plugin-resource') {
+          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const wire = `[${label || 'Plugin resource'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          const target = parsePluginResourceReferenceHref(attrs.path);
+          if (target) {
+            bufferAgentReferences.push({
+              kind: 'plugin-resource',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              ...target,
+              pluginName: attrs.sourceLabel || target.ghostId,
+              label: attrs.label || target.resourceId,
+              ...(attrs.sourceDescription ? { description: attrs.sourceDescription } : {}),
             });
           }
           return;

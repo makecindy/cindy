@@ -54,13 +54,25 @@ export interface AgentInputDesktopWindowReference extends AgentInputReferenceBas
   title?: string;
 }
 
+/** One opaque business object selected from an explicitly scoped Plugin search. */
+export interface AgentInputPluginResourceReference extends AgentInputReferenceBase {
+  kind: 'plugin-resource';
+  ghostId: string;
+  tool: string;
+  resourceId: string;
+  pluginName: string;
+  label: string;
+  description?: string;
+}
+
 /** Structured Composer references preserved beside the human-facing wire text. */
 export type AgentInputReference =
   | AgentInputMessageReference
   | AgentInputSessionReference
   | AgentInputProjectReference
   | AgentInputBrowserTabReference
-  | AgentInputDesktopWindowReference;
+  | AgentInputDesktopWindowReference
+  | AgentInputPluginResourceReference;
 
 /** Immutable inputs required to derive the text sent to semantic consumers. */
 export interface AgentFacingTextSource {
@@ -91,13 +103,45 @@ function nonEmptyString(value: unknown): value is string {
 
 function stripDeepLinkPrefix(
   href: string,
-  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/',
+  route: 'session/' | 'project/' | 'browser-tab/' | 'desktop-window/' | 'plugin-resource/',
 ): string | null {
   for (const scheme of allDeepLinkSchemes()) {
     const prefix = `${scheme}://${route}`;
     if (href.startsWith(prefix)) return href.slice(prefix.length);
   }
   return null;
+}
+
+export function buildPluginResourceReferenceHref(args: {
+  ghostId: string;
+  tool: string;
+  resourceId: string;
+}): string {
+  const scheme = allDeepLinkSchemes()[0];
+  const strictEncode = (value: string) => encodeURIComponent(value)
+    .replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`);
+  return `${scheme}://plugin-resource/${strictEncode(args.ghostId)}/${strictEncode(args.tool)}/${strictEncode(args.resourceId)}`;
+}
+
+export function parsePluginResourceReferenceHref(
+  href: string,
+): { ghostId: string; tool: string; resourceId: string } | null {
+  const rest = stripDeepLinkPrefix(href, 'plugin-resource/');
+  if (rest === null || rest.length > 1_500 || rest.includes('?') || rest.includes('#')) return null;
+  const [rawGhostId, rawTool, rawResourceId, ...extra] = rest.split('/');
+  if (extra.length > 0) return null;
+  const ghostId = decodeBoundedComponent(rawGhostId, 32);
+  const tool = decodeBoundedComponent(rawTool, 64);
+  const resourceId = decodeBoundedComponent(rawResourceId, 256);
+  if (
+    !ghostId
+    || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(ghostId)
+    || !tool
+    || !/^[a-z][a-z0-9_-]{0,63}$/.test(tool)
+    || !resourceId
+    || /[\u0000-\u001f\u007f\u2028\u2029]/.test(resourceId)
+  ) return null;
+  return { ghostId, tool, resourceId };
 }
 
 function decodeBoundedComponent(value: string, maxLength: number): string | null {
@@ -316,6 +360,28 @@ function readReference(
       ...(nonEmptyString(candidate.title) ? { title: candidate.title } : {}),
     };
   }
+  if (
+    candidate.kind === 'plugin-resource'
+    && nonEmptyString(candidate.pluginName)
+    && candidate.pluginName.length <= 128
+    && nonEmptyString(candidate.label)
+    && candidate.label.length <= 128
+  ) {
+    const target = parsePluginResourceReferenceHref(candidate.href);
+    if (!target) return null;
+    return {
+      kind: 'plugin-resource',
+      start,
+      end,
+      href: candidate.href,
+      ...target,
+      pluginName: oneLine(candidate.pluginName),
+      label: oneLine(candidate.label),
+      ...(nonEmptyString(candidate.description) && candidate.description.length <= 256
+        ? { description: oneLine(candidate.description) }
+        : {}),
+    };
+  }
   return null;
 }
 
@@ -341,6 +407,14 @@ export function readAgentInputReferences(
 
 function oneLine(value: string): string {
   return value.replace(/\s+/g, ' ').trim();
+}
+
+function quotedMetadata(value: string): string {
+  return JSON.stringify(value)
+    .replace(/\[/g, '\\u005b')
+    .replace(/\]/g, '\\u005d')
+    .replace(/\u2028/g, '\\u2028')
+    .replace(/\u2029/g, '\\u2029');
 }
 
 function formatReference(reference: AgentInputReference): string {
@@ -382,6 +456,20 @@ function formatReference(reference: AgentInputReference): string {
       `PID: ${reference.pid}`,
       `Window ID: ${reference.windowId}`,
       '[/Referenced desktop window]',
+    ].join('\n');
+  }
+  if (reference.kind === 'plugin-resource') {
+    return [
+      '[Referenced plugin resource]',
+      `Plugin: ${quotedMetadata(oneLine(reference.pluginName))} (${reference.ghostId})`,
+      `Resource ID: ${quotedMetadata(reference.resourceId)}`,
+      `Label: ${quotedMetadata(oneLine(reference.label))}`,
+      ...(reference.description
+        ? [`Summary: ${quotedMetadata(oneLine(reference.description))}`]
+        : []),
+      `Search tool: ${reference.tool}`,
+      'Resolution: call the search tool with query equal to the Resource ID.',
+      '[/Referenced plugin resource]',
     ].join('\n');
   }
   return [
@@ -455,6 +543,7 @@ export function describeAgentInputReference(reference: AgentInputReference): str
   if (reference.kind === 'desktop-window') {
     return oneLine(reference.title ?? reference.appName) || null;
   }
+  if (reference.kind === 'plugin-resource') return oneLine(reference.label) || null;
   return oneLine(reference.text ?? '') || null;
 }
 

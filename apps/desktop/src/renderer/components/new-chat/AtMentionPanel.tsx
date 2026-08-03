@@ -14,11 +14,13 @@
 import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
+  ArrowLeft,
   File as FileIcon,
   Folder as FolderIcon,
   Globe2,
   History,
   Monitor,
+  Plug,
   Sparkles,
 } from 'lucide-react';
 
@@ -52,6 +54,9 @@ interface AtMentionPanelProps {
   onSelect: (item: AtResourceItem) => void;
   onClose: () => void;
   onRetry: () => void;
+  /** Selected Plugin provider; its query is scoped and never broadcast. */
+  scopedProviderName?: string;
+  onBack?: () => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
 }
@@ -64,6 +69,8 @@ export function AtMentionPanel({
   onSelect,
   onClose,
   onRetry,
+  scopedProviderName,
+  onBack,
   maxHeight = 400,
 }: AtMentionPanelProps) {
   const { t } = useTranslation();
@@ -80,8 +87,8 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    return filterAtResources(state.items, query);
-  }, [state, query]);
+    return scopedProviderName ? state.items.slice(0, 25) : filterAtResources(state.items, query);
+  }, [state, query, scopedProviderName]);
 
   useEffect(() => {
     if (filtered.length === 0) return;
@@ -127,7 +134,7 @@ export function AtMentionPanel({
     const bottomBoundary = Math.min(panelRect.bottom, window.innerHeight - VIEWPORT_PAD);
     const maxTooltipHeight = Math.max(1, Math.min(maxHeight, bottomBoundary - VIEWPORT_PAD));
     const measuredHeight = Math.min(tooltipHeight, maxTooltipHeight);
-    const rawTop = 6 + focusedIndex * 44 - panelScroll; // 44px row height
+    const rawTop = (scopedProviderName ? 46 : 6) + focusedIndex * 44 - panelScroll;
     const minTop = VIEWPORT_PAD - rootRect.top;
     const bottomBoundaryInRoot = bottomBoundary - rootRect.top;
     const top = Math.max(minTop, Math.min(rawTop, bottomBoundaryInRoot - measuredHeight));
@@ -135,7 +142,7 @@ export function AtMentionPanel({
       top: Math.round(top),
       maxHeight: Math.round(maxTooltipHeight),
     });
-  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight]);
+  }, [showTooltip, focusedIndex, panelScroll, maxHeight, tooltipHeight, scopedProviderName]);
 
   const tooltipVisible = showTooltip && !!tooltipPos;
   useLayoutEffect(() => {
@@ -167,6 +174,10 @@ export function AtMentionPanel({
       meta = item.description || t('newChat.atMention.desktopWindow');
     } else if (item.type === 'session') {
       meta = t('newChat.atMention.task');
+    } else if (item.type === 'plugin-provider') {
+      meta = t('newChat.atMention.pluginResources');
+    } else if (item.type === 'plugin-resource') {
+      meta = item.sourceLabel || t('newChat.atMention.pluginResource');
     } else {
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
@@ -182,6 +193,8 @@ export function AtMentionPanel({
             ? Monitor
             : item.type === 'session'
               ? History
+              : item.type === 'plugin-provider' || item.type === 'plugin-resource'
+                ? Plug
               : FileIcon;
 
     return (
@@ -243,6 +256,30 @@ export function AtMentionPanel({
         )}
         style={{ boxShadow: 'var(--cmd-palette-shadow)', maxHeight }}
       >
+        {scopedProviderName && (
+          <div className="sticky top-0 z-10 flex h-[40px] items-center gap-2 bg-[var(--cmd-palette-bg)] px-[4px]">
+            <button
+              type="button"
+              aria-label={t('newChat.atMention.backToAll')}
+              onMouseDown={(event) => {
+                event.preventDefault();
+                onBack?.();
+              }}
+              className={cn(
+                'flex size-[32px] shrink-0 items-center justify-center rounded-[6px]',
+                'text-[var(--cmd-palette-item-meta)] hover:bg-[var(--cmd-palette-item-hover)]',
+              )}
+            >
+              <ArrowLeft size={16} />
+            </button>
+            <span className="min-w-0 truncate text-[13px] font-medium text-[var(--cmd-palette-item-text)]">
+              {scopedProviderName}
+            </span>
+            <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">
+              {t('newChat.atMention.pluginResources')}
+            </span>
+          </div>
+        )}
         {state.kind === 'loading' && (
           <div className="space-y-[4px] p-[4px]">
             {[0, 1, 2].map((i) => (

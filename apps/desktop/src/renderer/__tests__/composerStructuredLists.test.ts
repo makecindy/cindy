@@ -37,6 +37,8 @@ const TestMentionChip = Node.create({
       titled: { default: false },
       agentText: { default: undefined },
       agentTextTruncated: { default: undefined },
+      sourceLabel: { default: undefined },
+      sourceDescription: { default: undefined },
     };
   },
   renderHTML({ HTMLAttributes }) {
@@ -1752,5 +1754,41 @@ describe('composer structured list serialization', () => {
         title: 'Editor',
       },
     ]);
+  });
+
+  it('serializes Plugin business resources as opaque structured references', () => {
+    const href = 'cindy://plugin-resource/issues/search_issues/ISSUE-1';
+    const editor = makeEditor({
+      type: 'doc',
+      content: [{
+        type: 'paragraph',
+        content: [{
+          type: 'mentionChip',
+          attrs: {
+            kind: 'plugin-resource',
+            label: 'Fix login',
+            path: href,
+            sourceLabel: 'Issue Tracker',
+            sourceDescription: 'Open issue',
+          },
+        }],
+      }],
+    });
+
+    const serialized = serializeEditorContent(editor);
+    expect(serialized.text).toBe(`[Fix login](${href})`);
+    expect(serialized.mentions).toEqual([]);
+    expect(serialized.agentReferences).toEqual([{
+      kind: 'plugin-resource',
+      start: 0,
+      end: serialized.text.length,
+      href,
+      ghostId: 'issues',
+      tool: 'search_issues',
+      resourceId: 'ISSUE-1',
+      pluginName: 'Issue Tracker',
+      label: 'Fix login',
+      description: 'Open issue',
+    }]);
   });
 });

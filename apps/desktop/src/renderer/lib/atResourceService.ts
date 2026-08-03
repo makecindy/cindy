@@ -21,7 +21,9 @@ export type AtResourceType =
   | 'agent'
   | 'browser-tab'
   | 'desktop-window'
-  | 'session';
+  | 'session'
+  | 'plugin-provider'
+  | 'plugin-resource';
 
 export interface AtResourceItem {
   type: AtResourceType;
@@ -38,6 +40,10 @@ export interface AtResourceItem {
   relPath: string;
   /** Agent description from YAML frontmatter (agents only). */
   description?: string;
+  /** Plugin display name for provider/resource rows and Agent projection. */
+  sourceLabel?: string;
+  /** Stable Plugin id. Present on provider/resource rows only. */
+  pluginId?: string;
   /** @internal Pre-computed lowercase for filter performance. */
   _nameLower?: string;
   /** @internal Pre-computed lowercase for filter performance. */
@@ -132,10 +138,17 @@ export async function scanAtResources(
         ) as Promise<Session[]>)
       : window.electronAPI.localDb.sessions.list(100, 'all')
     : Promise.resolve(null);
-  const [workspaceSettled, contextSettled, taskHistorySettled] = await Promise.allSettled([
+  const pluginProvidersPromise = !deviceId
+    ? window.electronAPI.ghosts.listAtResourceProviders({
+        ...(context?.sessionId ? { sessionId: context.sessionId } : {}),
+        ...(workingDir ? { workingDir } : {}),
+      })
+    : Promise.resolve(null);
+  const [workspaceSettled, contextSettled, taskHistorySettled, pluginProvidersSettled] = await Promise.allSettled([
     workspacePromise,
     contextPromise,
     taskHistoryPromise,
+    pluginProvidersPromise,
   ]);
   const res = workspaceSettled.status === 'fulfilled' ? workspaceSettled.value : null;
   const contextResult = contextSettled.status === 'fulfilled' ? contextSettled.value : null;
@@ -144,6 +157,7 @@ export async function scanAtResources(
   );
   const contextFailed = includeLocalContext && contextSettled.status === 'rejected';
   const taskHistoryFailed = includeTaskHistory && taskHistorySettled.status === 'rejected';
+  const pluginProvidersFailed = !deviceId && pluginProvidersSettled.status === 'rejected';
   if (workspaceFailed) {
     log.warn(
       'Workspace @ resource scan failed; keeping other providers available.',
@@ -162,10 +176,17 @@ export async function scanAtResources(
       taskHistorySettled.status === 'rejected' ? taskHistorySettled.reason : undefined,
     );
   }
+  if (pluginProvidersFailed) {
+    log.warn(
+      'Plugin @ provider listing failed; keeping other providers available.',
+      pluginProvidersSettled.status === 'rejected' ? pluginProvidersSettled.reason : undefined,
+    );
+  }
   if (
     (!workingDir || workspaceFailed)
     && (!includeLocalContext || contextFailed)
     && (!includeTaskHistory || taskHistoryFailed)
+    && (deviceId !== undefined || pluginProvidersFailed)
   ) {
     return {
       success: false,
@@ -272,11 +293,80 @@ export async function scanAtResources(
     });
   }
 
+  const pluginProviders: AtResourceItem[] = [];
+  const providerRows = pluginProvidersSettled.status === 'fulfilled'
+    ? pluginProvidersSettled.value?.items ?? []
+    : [];
+  for (const provider of providerRows) {
+    const ghostId = oneLineText(provider.ghostId, 32);
+    const name = oneLineText(provider.name, 128);
+    if (!ghostId || !name) continue;
+    const description = oneLineText(provider.description, 256);
+    pluginProviders.push({
+      type: 'plugin-provider',
+      name,
+      relPath: ghostId,
+      pluginId: ghostId,
+      sourceLabel: name,
+      ...(description ? { description } : {}),
+      _nameLower: name.toLowerCase(),
+      _relPathLower: `${ghostId} ${name} ${description}`.toLowerCase(),
+    });
+  }
+
   return {
     success: true,
-    items: [...contextual, ...historicalTasks, ...agents, ...dirs, ...files],
+    items: [...contextual, ...historicalTasks, ...pluginProviders, ...agents, ...dirs, ...files],
     truncated: !!res?.truncated,
   };
+}
+
+/** Search exactly one provider after the user explicitly selected it. */
+export async function scanPluginAtResources(
+  provider: AtResourceItem,
+  query: string,
+  workingDir?: string,
+  sessionId?: string,
+): Promise<ScanResult> {
+  if (provider.type !== 'plugin-provider' || !provider.pluginId) {
+    return { success: false, error: 'Plugin resource provider unavailable', items: [], truncated: false };
+  }
+  const result = await window.electronAPI.ghosts.queryAtResources({
+    ghostId: provider.pluginId,
+    ...(sessionId ? { sessionId } : {}),
+    ...(workingDir ? { workingDir } : {}),
+    query: query.trim(),
+    limit: 20,
+  });
+  if (!result.success) {
+    return {
+      success: false,
+      error: result.error ?? 'Plugin resource search failed',
+      items: [],
+      truncated: false,
+    };
+  }
+  const sourceLabel = oneLineText(result.pluginName || provider.sourceLabel || provider.name, 128);
+  const items: AtResourceItem[] = [];
+  for (const row of result.items) {
+    const name = oneLineText(row.label, 128);
+    const relPath = typeof row.href === 'string' && row.href.length <= 1_500
+      ? oneLineText(row.href, 1_500)
+      : '';
+    if (!name || !relPath) continue;
+    const description = oneLineText(row.description, 256);
+    items.push({
+      type: 'plugin-resource',
+      name,
+      relPath,
+      pluginId: provider.pluginId,
+      sourceLabel,
+      ...(description ? { description } : {}),
+      _nameLower: name.toLowerCase(),
+      _relPathLower: `${name} ${description}`.toLowerCase(),
+    });
+  }
+  return { success: true, items, truncated: result.truncated };
 }
 
 /**

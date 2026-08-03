@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { scanAtResources } from '@/lib/atResourceService';
+import { scanAtResources, scanPluginAtResources } from '@/lib/atResourceService';
 
 function stubApi(options: {
   workspace?: unknown;
@@ -10,6 +10,8 @@ function stubApi(options: {
   workspaceError?: Error;
   contextError?: Error;
   taskError?: Error;
+  pluginProviders?: unknown;
+  pluginResources?: unknown;
 }) {
   vi.stubGlobal('window', {
     electronAPI: {
@@ -34,6 +36,14 @@ function stubApi(options: {
             ? vi.fn().mockRejectedValue(options.taskError)
             : vi.fn().mockResolvedValue(options.tasks),
         },
+      },
+      ghosts: {
+        listAtResourceProviders: vi.fn().mockResolvedValue(
+          options.pluginProviders ?? { items: [] },
+        ),
+        queryAtResources: vi.fn().mockResolvedValue(
+          options.pluginResources ?? { success: true, items: [], truncated: false },
+        ),
       },
     },
   });
@@ -185,5 +195,59 @@ describe('scanAtResources context providers', () => {
         relPath: 'cindy://session/remote-history?device=device-1',
       },
     ]);
+  });
+
+  it('lists Plugin entries without running them, then searches only the selected provider', async () => {
+    stubApi({
+      workspace: { success: true, items: [] },
+      pluginProviders: {
+        items: [{ ghostId: 'issues', name: 'Issue Tracker', description: 'Project issues' }],
+      },
+      pluginResources: {
+        success: true,
+        pluginName: 'Issue Tracker',
+        items: [{
+          id: 'ISSUE-1',
+          label: 'Fix login',
+          description: 'Open issue',
+          href: 'cindy://plugin-resource/issues/search_issues/ISSUE-1',
+        }],
+        truncated: false,
+      },
+    });
+
+    const catalog = await scanAtResources(
+      'D:\\repo',
+      'codex',
+      2000,
+      undefined,
+      undefined,
+      { sessionId: 'session-1' },
+    );
+    expect(catalog.items).toMatchObject([{
+      type: 'plugin-provider',
+      name: 'Issue Tracker',
+      pluginId: 'issues',
+    }]);
+    expect(window.electronAPI.ghosts.queryAtResources).not.toHaveBeenCalled();
+
+    const searched = await scanPluginAtResources(
+      catalog.items[0],
+      'login',
+      'D:\\repo',
+      'session-1',
+    );
+    expect(window.electronAPI.ghosts.queryAtResources).toHaveBeenCalledWith({
+      ghostId: 'issues',
+      sessionId: 'session-1',
+      workingDir: 'D:\\repo',
+      query: 'login',
+      limit: 20,
+    });
+    expect(searched.items).toMatchObject([{
+      type: 'plugin-resource',
+      name: 'Fix login',
+      sourceLabel: 'Issue Tracker',
+    }]);
   });
 });

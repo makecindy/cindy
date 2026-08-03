@@ -15,6 +15,7 @@ import {
   Globe2,
   MessageSquareQuote,
   Monitor,
+  Plug,
   Sparkles,
 } from 'lucide-react';
 
@@ -33,7 +34,8 @@ export interface MentionChipAttrs {
     | 'session'
     | 'project'
     | 'browser-tab'
-    | 'desktop-window';
+    | 'desktop-window'
+    | 'plugin-resource';
   /** Visible basename, Agent name, command, conversation title/message or project name. */
   label: string;
   /** Serialization path/deep-link. */
@@ -43,6 +45,10 @@ export interface MentionChipAttrs {
   /** Readable target message body for the agent-facing projection. */
   agentText?: string;
   agentTextTruncated?: boolean;
+  /** Plugin display name for an opaque business-resource reference. */
+  sourceLabel?: string;
+  /** Plugin-provided one-line resource summary. */
+  sourceDescription?: string;
 }
 
 function displayLabel(attrs: MentionChipAttrs): string {
@@ -59,6 +65,7 @@ function MentionIcon({ attrs }: { attrs: MentionChipAttrs }) {
   if (attrs.kind === 'project') return <FolderOpen aria-hidden />;
   if (attrs.kind === 'browser-tab') return <Globe2 aria-hidden />;
   if (attrs.kind === 'desktop-window') return <Monitor aria-hidden />;
+  if (attrs.kind === 'plugin-resource') return <Plug aria-hidden />;
   return parseSessionDeepLinkHref(attrs.path)?.messageClientId ? (
     <MessageSquareQuote aria-hidden />
   ) : (
@@ -101,6 +108,8 @@ function MentionChipNodeView({ node, selected }: NodeViewProps) {
       data-titled={attrs.titled ? 'true' : undefined}
       data-agent-text={attrs.agentText}
       data-agent-text-truncated={attrs.agentTextTruncated ? 'true' : undefined}
+      data-source-label={attrs.sourceLabel}
+      data-source-description={attrs.sourceDescription}
       data-drag-handle=""
       draggable={true}
       contentEditable={false}
@@ -169,6 +178,22 @@ export const MentionChipNode = Node.create<Record<string, never>, Record<string,
         parseHTML: (element) => element.getAttribute('data-agent-text-truncated') === 'true',
         renderHTML: (attrs) => (
           attrs.agentTextTruncated ? { 'data-agent-text-truncated': 'true' } : {}
+        ),
+      },
+      sourceLabel: {
+        default: undefined,
+        parseHTML: (element) => element.getAttribute('data-source-label'),
+        renderHTML: (attrs) => (
+          typeof attrs.sourceLabel === 'string' ? { 'data-source-label': attrs.sourceLabel } : {}
+        ),
+      },
+      sourceDescription: {
+        default: undefined,
+        parseHTML: (element) => element.getAttribute('data-source-description'),
+        renderHTML: (attrs) => (
+          typeof attrs.sourceDescription === 'string'
+            ? { 'data-source-description': attrs.sourceDescription }
+            : {}
         ),
       },
     };
@@ -251,6 +276,12 @@ const ICON_PATHS: Record<Exclude<MentionChipAttrs['kind'], 'slash'>, string[]> =
     'M20 3H4a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V5a2 2 0 0 0-2-2Z',
     'M8 21h8',
     'M12 17v4',
+  ],
+  'plugin-resource': [
+    'M12 22v-5',
+    'M9 8V2',
+    'M15 8V2',
+    'M18 8v5a6 6 0 0 1-12 0V8Z',
   ],
 };
 

@@ -17,4 +17,16 @@ describe('composer quote palette boundary wiring', () => {
     );
     expect(triggerSource).toContain("textSoFar = ''; // chips reset the @ / slash run");
   });
+
+  it('keeps Plugin scope out of persisted composer text', () => {
+    const source = readFileSync(
+      resolve(process.cwd(), 'src/renderer/components/new-chat/ChatInput.tsx'),
+      'utf8',
+    );
+
+    expect(source).toContain('detectTrigger(editor, atPluginScope?.triggerFrom)');
+    expect(source).toContain("tr.replaceWith(from, to, editor.schema.text('@'));");
+    expect(source).not.toContain('editor.schema.text(`@${item.pluginId}:`)');
+    expect(source).toContain('if (atPluginScope) {\n        atScanSeqRef.current += 1;');
+  });
 });
