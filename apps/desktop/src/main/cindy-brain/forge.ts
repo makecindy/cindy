@@ -559,7 +559,10 @@ async function buildGhostPackage(
    */
   expectedRealDir?: string,
 ): Promise<
-  | { ok: true; buf: Buffer; manifest: GhostManifest }
+  // manifestRaw = 校验前的原始清单对象。作者期严格校验(见 firstGhostAuthoringIssue)
+  // 需要它来分辨「作者写了但被校验器按老形态忽略掉」的字段——校验后的 manifest
+  // 里那些字段已经不见了,只看它无从判断。
+  | { ok: true; buf: Buffer; manifest: GhostManifest; manifestRaw: Record<string, unknown> }
   | Exclude<ForgePackResult, { ok: true }>
 > {
   try {
@@ -781,7 +784,12 @@ async function buildGhostPackage(
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    return { ok: true, buf, manifest };
+    return {
+      ok: true,
+      buf,
+      manifest,
+      manifestRaw: (manifestRaw ?? {}) as Record<string, unknown>,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -799,6 +807,10 @@ async function buildGhostPackage(
 export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
+  const authoringIssue = firstGhostAuthoringIssue(built.manifest, built.manifestRaw);
+  if (authoringIssue) {
+    return { ok: false, errorCode: 'MANIFEST_INVALID', message: authoringIssue };
+  }
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
@@ -812,6 +824,37 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     };
   }
   return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * **作者期严格校验**(只在 packGhostDir 这条打包出口上跑,不进任何安装路径)。
+ *
+ * 为什么要分成两套判据:`validateGhostManifest` 面对的是**已经在用户机器上的**
+ * 清单,那里的纪律是「解释不了就忽略」——它分不清「新声明写漏了」与「老包拿同名
+ * 字段做自定义扩展」,分不清就不能拒,否则升级会让存量插件整个消失(§5 红线)。
+ * 但作者**正在打包**的这一份没有存量问题:此刻拒绝只会让作者当场改对,不会伤到
+ * 任何已装插件。所以严格校验放在这里,而不是塞进共用的校验器或 packGhostDirToFile
+ * (后者是自定义市场安装管道,收紧它等于给安装路径加新拒绝面)。
+ *
+ * 手册(§4.9.1)承诺的「写错会被拦下」就由这一处兑现——作者契约与实际行为必须
+ * 对得上,否则 agent 会以为打包成功即正确,直到运行期发 badge 才发现没权限
+ * (codex review)。
+ */
+function firstGhostAuthoringIssue(
+  manifest: GhostManifest,
+  raw: Record<string, unknown>,
+): string | null {
+  const notifyRaw = raw.notify;
+  if (
+    notifyRaw !== null &&
+    typeof notifyRaw === 'object' &&
+    !Array.isArray(notifyRaw) &&
+    (notifyRaw as Record<string, unknown>).badge === true &&
+    manifest.notify?.badge !== true
+  ) {
+    return 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点(装入侧对老包按忽略处理,但新打包不放行)';
+  }
+  return null;
 }
 
 /**
@@ -2290,8 +2333,11 @@ await cindy.send({ type: 'badge', unread: false });
 
 规则(都由主机强制):
 
-- **必须同时声明 \`panel\`**,装入时校验,否则整个包装不进去。这是本档唯一的门槛:
-  未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,给了就是骗点击;
+- **必须同时声明 \`panel\`**,\`ghost_forge_pack\` 打包时校验,漏了直接打不出包。
+  这是本档唯一的门槛:未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,
+  给了就是骗点击。(装入侧对**已在用户机器上**的老包按忽略处理而不是拒装——那边
+  分不清"新声明写漏了"与"老包的同名自定义字段",分不清就不能让插件消失;所以这道
+  门开在打包期,那时还没有存量问题。)
 - 装入确认框里**单列一项**权限,已装插件加这一档会触发扩权重新确认——常驻的
   注意力入口值这一次打断;
 - \`summary\`(可选):**纯文本**,≤80 字符,换行会被坍缩成空格,超长直接拒

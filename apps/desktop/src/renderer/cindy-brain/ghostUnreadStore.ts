@@ -20,8 +20,7 @@ interface UnreadEntry {
 
 const unread = new Map<string, UnreadEntry>();
 const listeners = new Set<() => void>();
-let subscribed = false;
-let seeded = false;
+let ready = false;
 
 interface UnreadSnapshotEntry {
   ghostId: string;
@@ -46,44 +45,54 @@ function emit(): void {
   for (const cb of [...listeners]) cb();
 }
 
-/** 整表替换(首帧同步读与换账号快照共用一处落位)。 */
+function toEntry(entry: UnreadSnapshotEntry): UnreadEntry | null {
+  if (typeof entry?.ghostId !== 'string' || typeof entry.at !== 'number') return null;
+  return { ...(entry.summary ? { summary: entry.summary } : {}), at: entry.at };
+}
+
+/** 整表替换。**换账号**专用:新 owner 的账本就是全部事实,旧的必须整体作废。 */
 function applySnapshot(entries: UnreadSnapshotEntry[] | undefined): void {
   unread.clear();
   for (const entry of entries ?? []) {
-    if (typeof entry?.ghostId !== 'string' || typeof entry.at !== 'number') continue;
-    unread.set(entry.ghostId, {
-      ...(entry.summary ? { summary: entry.summary } : {}),
-      at: entry.at,
-    });
+    const value = toEntry(entry);
+    if (value) unread.set(entry.ghostId, value);
   }
 }
 
 /**
- * 首帧快照:**必须在第一次 getSnapshot 之前**完成,所以每个 getSnapshot 都先过这里,
- * 而不是只挂在 subscribe 上。
+ * 首次落位:**补齐缺的,不动已有的**。
  *
- * useSyncExternalStore 的顺序是 render 期先调 getSnapshot、mount 后才调 subscribe。
- * 把同步读放在 subscribe 里的话,首帧一定读到空表,要等 React 订阅后复查快照才纠正
- * ——绿点与摘要**晚一帧跳出来**,恰好抵消了当初做 `unreadSync` 同步读的全部意义
- * (codex review)。
- *
- * 幂等且只读一次;拿不到就按"全无未读"起步,后续推送照常生效(未读是提醒不是内容)。
+ * 不能复用整表替换:监听是在同步读之前绑好的(见 ensureReady),读取返回之前到达
+ * 的推送已经写进表里,整表替换会把它抹掉——等于换个姿势重新丢掉那条推送。
+ * 活推送比落盘快照新,冲突时以推送为准。
  */
-function ensureSeeded(): void {
-  if (seeded) return;
-  seeded = true;
-  try {
-    applySnapshot(api()?.unreadSync?.().entries);
-  } catch {
-    /* 读不到就空表起步 */
+function seedSnapshot(entries: UnreadSnapshotEntry[] | undefined): void {
+  for (const entry of entries ?? []) {
+    const value = toEntry(entry);
+    if (value && !unread.has(entry.ghostId)) unread.set(entry.ghostId, value);
   }
 }
 
-/** 首次被消费时才挂推送(模块导入零副作用;测试环境无 electronAPI 也安全)。 */
-function ensureSubscribed(): void {
-  ensureSeeded();
-  if (subscribed) return;
-  subscribed = true;
+/**
+ * 惰性就绪:**绑增量监听 → 取同步快照**,顺序不可颠倒,且必须在第一次
+ * getSnapshot 之前完成——所以每个 getSnapshot 都先过这里,不是只挂在 subscribe 上。
+ *
+ * 两条约束各自解决一个真问题:
+ *
+ * 1. **必须早于第一次 getSnapshot**。useSyncExternalStore 的顺序是 render 期先调
+ *    getSnapshot、mount 后才调 subscribe。把同步读放在 subscribe 里的话,首帧一定
+ *    读到空表,要等 React 订阅后复查快照才纠正——绿点与摘要**晚一帧跳出来**,
+ *    恰好抵消了当初做 `unreadSync` 同步读的全部意义。
+ * 2. **必须先绑监听再读快照**。反过来的话,两步之间插件恰好点亮角标,那条推送
+ *    无人接收,而就绪标记已置位不会再读——那颗点会一直缺到重启或换账号快照。
+ *    主机是「先落盘再广播」,所以绑定之后的这次读一定含得上窗口期内的变化。
+ *
+ * 幂等且只读一次;拿不到就按"全无未读"起步,后续推送照常生效(未读是提醒不是内容)。
+ * 模块导入零副作用;测试环境无 electronAPI 时整段是空转,同样安全。
+ */
+function ensureReady(): void {
+  if (ready) return;
+  ready = true;
   const ghosts = api();
   // 换账号:main 在 auth 状态变化后推一份新 owner 的全量快照,这里整表替换。
   // 只订阅增量的话,账号 A 的绿点与摘要会留在账号 B 的界面上(跨账号残留)。
@@ -103,10 +112,15 @@ function ensureSubscribed(): void {
     }
     emit();
   });
+  try {
+    seedSnapshot(ghosts?.unreadSync?.().entries);
+  } catch {
+    /* 读不到就空表起步 */
+  }
 }
 
 function subscribe(cb: () => void): () => void {
-  ensureSubscribed();
+  ensureReady();
   listeners.add(cb);
   return () => listeners.delete(cb);
 }
@@ -116,7 +130,7 @@ export function useGhostUnread(ghostId: string): boolean {
   return useSyncExternalStore(
     subscribe,
     () => {
-      ensureSeeded();
+      ensureReady();
       return unread.has(ghostId);
     },
     () => false,
@@ -128,7 +142,7 @@ export function useGhostUnreadSummary(ghostId: string): string | undefined {
   return useSyncExternalStore(
     subscribe,
     () => {
-      ensureSeeded();
+      ensureReady();
       return unread.get(ghostId)?.summary;
     },
     () => undefined,
@@ -143,7 +157,7 @@ export function useAnyGhostUnread(): boolean {
   return useSyncExternalStore(
     subscribe,
     () => {
-      ensureSeeded();
+      ensureReady();
       return unread.size > 0;
     },
     () => false,
@@ -222,7 +236,7 @@ export function useElementVisible(ref: { current: Element | null }): boolean {
  * 点还亮着半秒是可见的错;主机那边失败也只是下次重启又亮起来,不丢内容。
  */
 export function clearGhostUnread(ghostId: string): void {
-  ensureSubscribed();
+  ensureReady();
   if (unread.delete(ghostId)) emit();
   void api()?.clearUnread?.(ghostId)?.catch(() => undefined);
 }
@@ -232,9 +246,9 @@ export function __ingestGhostBadgeForTest(
   ghostId: string,
   payload: { unread: boolean; summary?: string; at?: number },
 ): void {
-  // 先把订阅落定(无 electronAPI 时是空转),否则灌进来的条目会被随后首个
-  // 消费者触发的 ensureSubscribed → applySnapshot 整表清掉。
-  ensureSubscribed();
+  // 先把就绪落定(无 electronAPI 时是空转),否则灌进来的条目会被随后首个
+  // 消费者触发的 ensureReady → applySnapshot 整表清掉。
+  ensureReady();
   if (payload.unread) {
     unread.set(ghostId, {
       ...(payload.summary ? { summary: payload.summary } : {}),
@@ -250,6 +264,5 @@ export function __ingestGhostBadgeForTest(
 export function __resetGhostUnreadForTest(): void {
   unread.clear();
   listeners.clear();
-  subscribed = false;
-  seeded = false;
+  ready = false;
 }

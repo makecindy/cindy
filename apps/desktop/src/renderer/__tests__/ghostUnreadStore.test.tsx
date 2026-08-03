@@ -97,6 +97,23 @@ describe('ghostUnreadStore', () => {
     expect(new Set(frames).size).toBe(1);
   });
 
+  it('先绑监听再取快照 —— 同步读期间到达的推送不会丢', async () => {
+    // 用 unreadSync 的执行时刻模拟那个窗口:它被调用时,监听如果已经绑好,
+    // 这条推送就能被接住;如果顺序反了(先读后绑),它无人接收,而就绪标记已置位
+    // 不会再读,那颗点会一直缺到重启。
+    unreadSync.mockImplementationOnce(() => {
+      for (const cb of [...listeners]) cb({ ghostId: 'mail', unread: true, at: 9 });
+      return { entries: [] };
+    });
+    const { useGhostUnread } = await loadStore();
+    function Probe() {
+      return <span data-testid="row">{useGhostUnread('mail') ? 'on' : 'off'}</span>;
+    }
+    render(<Probe />);
+    expect(listeners.length).toBeGreaterThan(0); // 读之前监听确实已绑上
+    expect(screen.getByTestId('row').textContent).toBe('on');
+  });
+
   it('推送点亮 / 熄灭都反映到订阅者;摘要跟着最新一次点亮走', async () => {
     const { useGhostUnread, useGhostUnreadSummary } = await loadStore();
     function Probe() {
