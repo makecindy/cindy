@@ -303,7 +303,7 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
    */
   describe('missed-detection visibility', () => {
     function createObserver(resolve: (sdkSessionId: string) => string | null, t: () => number) {
-      const logger = { debug: vi.fn(), warn: vi.fn() };
+      const logger = { info: vi.fn(), warn: vi.fn() };
       return { logger, observer: createClaudeAutoClassifierFailureObserver(resolve, { now: t, logger }) };
     }
 
@@ -359,91 +359,41 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
      * (它们在身份判据之后)、也没有升级 debug(永远识别不出来),整条链路重新全静默。
      * 所以这个计数要有自己的周期性快照(codex P2)。
      */
-    it('warns at a production-visible level after a long unmatched streak', () => {
+    /**
+     * 三条漏检 warn 都可能不触发(比如分类器前缀变了 → 全部落 errorsNotClassifier),
+     * 那时只有这条周期快照能保证「分类器在报错但我们没识别出来」在日志里留下痕迹。
+     *
+     * **刻意不做自动判定** —— 判定需要「本该被识别的请求数」作分母,而漏检时这个分母
+     * 拿不到:连续计数会被任意形态的命中清零、比例判据对部分形态漂移不敏感、全局计数又会
+     * 被共享 proxy 上无关 runtime 的错误推进。改为只落原始计数,判断交给看日志的人。
+     */
+    it('periodically snapshots the raw tallies at a production-visible level', () => {
       let t = 0;
       const { logger, observer } = createObserver(() => 'session-1', () => t);
       const notClassifier = requestBody({ system: 'ordinary assistant' });
 
-      // 样本不足 → 不报(普通 turn 的稀疏错误不该触发告警)。
-      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.warn).not.toHaveBeenCalled();
-
-      // 攒到阈值且一条都没识别出来 → 报,且必须是 warn:打包版默认 level=info,
-      // debug 会被 logger 的 shouldLog 直接丢掉,在生产环境等于没落盘。
       observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn.mock.calls[0][0]).toContain('has not matched for a long streak');
-      expect(warnCounters(logger)).toMatchObject({
-        classifierFailures: 0,
-        errorsNotClassifier: 50,
-      });
+      // info 级:打包版默认 level=info,debug 会被 logger 的 shouldLog 丢掉。
+      expect(logger.info).toHaveBeenCalledTimes(1);
+      expect(logger.info.mock.calls[0][0]).toContain('observation snapshot');
 
-      // 同窗口限流,越窗后重新可见。
-      observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      t += 60_000;
-      observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.warn).toHaveBeenCalledTimes(2);
-    });
-
-    it('only lets Claude-attributable responses advance the drift streak', () => {
-      // observer 挂在共享 proxy 上。PI 只带 x-cindy-pi-session-id,拿它的故障推进 Claude
-      // 分类器的漂移判据 = 一次上游抖动就误报(codex P2)。
-      const { logger, observer } = createObserver(() => 'session-1', () => 0);
-      const foreign = Buffer.from(JSON.stringify({ model: 'gpt-5.5', max_tokens: 64_000 }));
-
-      for (let i = 0; i < 80; i += 1) {
-        observer(ctx({
-          status: 500,
-          requestHeaders: { 'x-cindy-pi-session-id': 'pi-1' },
-          requestBody: foreign,
-        }));
-      }
-      expect(logger.warn).not.toHaveBeenCalled();
-    });
-
-    it('restarts the streak after a long quiet gap', () => {
-      // 计数没有时效的话,进程跑得够久、稀疏的普通 turn 错误最终也会攒满阈值。
-      let t = 0;
-      const { logger, observer } = createObserver(() => 'session-1', () => t);
-      const notClassifier = requestBody({ system: 'ordinary assistant' });
-
-      for (let i = 0; i < 49; i += 1) {
-        t += 1_000;
+      // 30 分钟窗口内限流,不刷屏。
+      for (let i = 0; i < 20; i += 1) {
+        t += 60_000;
         observer(ctx({ status: 429, requestBody: notClassifier }));
       }
-      // 静默超过 streak 窗口 → 重新起算,不该被历史累计推过阈值。
-      t += 30 * 60_000 + 1;
+      expect(logger.info).toHaveBeenCalledTimes(1);
+
+      // 越窗后再落一条,快照里 classifierFailures 恒为 0 而 errorsNotClassifier 在涨 ——
+      // 这就是排障时判断「身份判据变了」的依据,不需要代码替他判定。
+      t += 30 * 60_000;
       observer(ctx({ status: 429, requestBody: notClassifier }));
+      expect(logger.info).toHaveBeenCalledTimes(2);
+      // 快照在身份判据之前落 → 本次的 errorsNotClassifier 还没 +1。
+      expect((logger.info.mock.calls[1]?.[1] as { counters?: Record<string, number> })?.counters)
+        .toMatchObject({ classifierFailures: 0, errorsNotClassifier: 21 });
+      // 全程不刷 warn —— 它只留给真正的归属漏检。
       expect(logger.warn).not.toHaveBeenCalled();
-    });
-
-    it('resets the streak on every successful match instead of silencing forever', () => {
-      const { logger, observer } = createObserver(() => 'session-1', () => 0);
-      const notClassifier = requestBody({ system: 'ordinary assistant' });
-
-      // 攒到 49 条,然后成功识别一次 → 连续计数归零。
-      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
-      observer(ctx({ status: 429 }));
-      // 归零后再来 49 条仍不到阈值 —— 证明计数真的重置了,不是累计总数。
-      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
-      expect(logger.warn).not.toHaveBeenCalled();
-    });
-
-    it('still detects drift of one classifier shape after another shape matched', () => {
-      // 分类器有 fast / 2-stage / thinking 三种形态。判据若是「进程内从未命中」,任意
-      // 一种命中过就永久关闭告警,另一种形态漂移永远发现不了(codex P1)。
-      const { logger, observer } = createObserver(() => 'session-1', () => 0);
-      const drifted = requestBody({ system: 'You are a NEW security monitor prefix.' });
-
-      observer(ctx({ status: 429 })); // 某一形态仍能命中
-      expect(logger.warn).not.toHaveBeenCalled();
-
-      // 另一形态持续漂移 → 必须报出来。
-      for (let i = 0; i < 50; i += 1) observer(ctx({ status: 429, requestBody: drifted }));
-      expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn.mock.calls[0][0]).toContain('has not matched for a long streak');
-      expect(logger.warn.mock.calls[0][1]).toMatchObject({ missesSinceLastMatch: 50 });
     });
 
     /**
@@ -549,8 +499,12 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
 
       observer(ctx({ status: 400 })); // 确定性 4xx → 立即升级
       expect(signals).toHaveLength(1);
-      expect(logger.debug).toHaveBeenCalledTimes(1);
-      expect((logger.debug.mock.calls[0][1] as { counters?: Record<string, number> }).counters)
+      // info 上现在有两类:入口的周期快照 + 这条升级记录。按消息挑出升级那条。
+      const escalation = logger.info.mock.calls.find(
+        ([message]) => String(message).includes('escalated'),
+      );
+      expect(escalation).toBeDefined();
+      expect((escalation?.[1] as { counters?: Record<string, number> })?.counters)
         .toMatchObject({ classifierFailures: 1 });
 
       // 不注入 logger 时整段退化为纯计数,不得抛。

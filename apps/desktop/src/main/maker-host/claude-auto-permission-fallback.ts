@@ -140,9 +140,13 @@ function isTransientClassifierStatus(status: number): boolean {
   return status === 408 || status === 429 || status >= 500;
 }
 
-/** 观察器只需要这两级;coordinator 的 FallbackLogger 用 info/warn,两者刻意不共用。 */
+/**
+ * 观察器需要的日志面:warn 报漏检、info 落周期快照。两级都在打包版默认 level=info 下会
+ * 落盘(debug 会被 logger 的 shouldLog 丢掉,故不用)。与 coordinator 的 FallbackLogger
+ * 刻意不共用 —— 那边还需要 debug。
+ */
 interface ClassifierObserverLogger {
-  debug(message: string, fields?: Record<string, unknown>): void;
+  info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
 }
 
@@ -177,24 +181,19 @@ interface ClassifierObserverCounters {
 const OBSERVER_WARN_THROTTLE_MS = 60_000;
 
 /**
- * 身份漂移告警的样本下限 —— 判据是「**自上次成功识别以来**连续这么多条都没命中」,
- * 不是「进程启动至今一次都没命中」。
+ * 观测快照间隔。
  *
- * 后者会被一次历史命中永久关闭:分类器有 fast / 2-stage / thinking 三种形态,只要任意
- * 一种曾命中过,另一种形态因前缀或 max_tokens 变化而持续漏检就永远报不出来(codex P1)。
- * 连续计数在每次成功识别时归零,所以既能发现整体失效,也能发现局部漂移。
+ * **刻意不做「识别规则是否失效」的自动判定。** 那需要「本该被识别的请求数」当分母,而漏检
+ * 时这个分母恰恰拿不到 —— 前几轮 review 反复在这个精度上打转都是同一个原因:连续计数会被
+ * 任意一种形态的命中清零(交错到达时另一形态 100% 漂移也报不出来)、比例判据对部分形态漂移
+ * 不敏感、全局计数又会被共享 proxy 上无关 runtime 的错误推进。
  *
- * 取 50:普通 turn 的错误响应本就稀疏,连续 50 条都不是分类器才值得当信号。
- *
- * 两条收窄,防止无关流量把它推到误报(codex P2):
- * - **只有带 `x-claude-code-session-id` 的响应才推进**。observer 挂在共享 proxy 上,PI 只带
- *   `x-cindy-pi-session-id`(pi/index.ts),用它的 4xx 推进计数等于拿别的 runtime 的故障
- *   报 Claude 分类器漂移;
- * - **streak 有滑动窗口**。计数没有时效的话,进程跑得够久,稀疏的普通 turn 错误最终也会
- *   攒满阈值。超过 IDENTITY_MISS_STREAK_WINDOW_MS 没有新的未命中就重新起算。
+ * 所以改成只把原始计数定期落盘,判断交给看日志的人:`classifierFailures` 长期为 0 而
+ * `errorsNotClassifier` 在涨,就该怀疑身份判据(system 前缀 / max_tokens 上界)变了。
+ * 用 **info** 级 —— 打包版默认 level=info,debug 会被 logger 的 shouldLog 直接丢掉。
+ * 只在处理过错误响应时输出,30 分钟一条,正常运行噪音可忽略。
  */
-const IDENTITY_MISS_ALERT_THRESHOLD = 50;
-const IDENTITY_MISS_STREAK_WINDOW_MS = 30 * 60_000;
+const OBSERVER_SNAPSHOT_INTERVAL_MS = 30 * 60_000;
 
 /**
  * 创建只读响应观察器。成功路径(status < 400,含 2xx/3xx)几乎恒为 O(1) 短路——
@@ -226,24 +225,18 @@ export function createClaudeAutoClassifierFailureObserver(
     errorsNotClassifier: 0,
     recoveryMissingSessionHeader: 0,
   };
-  /**
-   * 自上次成功识别以来的连续未命中数(命中即归零)。用它判断身份漂移 —— 见
-   * IDENTITY_MISS_ALERT_THRESHOLD 注释里的「一次历史命中不该永久关闭告警」。
-   */
-  let missesSinceLastMatch = 0;
-  /** 上一次未命中的时刻;超过 streak 窗口没有新增就把连续计数重新起算。 */
-  let lastIdentityMissAt = 0;
   /** 每个 reason 各自限流,免得高频的那个把另一个饿死。 */
   const lastLogAt = new Map<string, number>();
   const logThrottled = (
-    level: 'warn' | 'debug',
+    level: 'warn' | 'info',
     reason: string,
     fields: Record<string, unknown>,
+    intervalMs: number = OBSERVER_WARN_THROTTLE_MS,
   ): void => {
     if (!logger) return;
     const ts = now();
     const last = lastLogAt.get(reason);
-    if (last !== undefined && ts - last < OBSERVER_WARN_THROTTLE_MS) return;
+    if (last !== undefined && ts - last < intervalMs) return;
     lastLogAt.set(reason, ts);
     logger[level](`auto classifier failure observer: ${reason}`, {
       ...fields,
@@ -252,6 +245,8 @@ export function createClaudeAutoClassifierFailureObserver(
   };
   const warnThrottled = (reason: string, fields: Record<string, unknown>): void =>
     logThrottled('warn', reason, fields);
+  const infoThrottled = (reason: string, fields: Record<string, unknown>, intervalMs: number): void =>
+    logThrottled('info', reason, fields, intervalMs);
 
   return (ctx: ResponseObserverCtx) => {
     if (ctx.status < 400) {
@@ -292,38 +287,22 @@ export function createClaudeAutoClassifierFailureObserver(
       }
       return undefined;
     }
+    // 周期性把原始计数落盘(见 OBSERVER_SNAPSHOT_INTERVAL_MS):漏检时三条 warn 都可能
+    // 不触发,只有这条能保证「分类器在报错但我们没识别出来」在日志里留下痕迹。
+    infoThrottled(
+      'classifier observation snapshot',
+      { status: ctx.status },
+      OBSERVER_SNAPSHOT_INTERVAL_MS,
+    );
     // 身份判据必须**最先**过:observer 挂在共享的 anthropic-compat-proxy 上,普通 turn、
     // PI 以及其它复用该 proxy 的 runtime 的 4xx/5xx 全都流经这里。若先按「缺会话头 /
     // 反解失败」记漏检,这些无关错误会把 errorsMissingSessionHeader / errorsUnresolvedSession
     // 顶满,识别率信号彻底失效 —— 而这两个计数存在的唯一目的就是回答「分类器在报错但我们
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
+      // 正常大头:非分类器的错误响应。只计数当分母 —— 判定交给上面 OBSERVER_SNAPSHOT
+      // 注释说明的周期快照,这里不做推断。
       counters.errorsNotClassifier += 1;
-      // 「识别规则本身失效」必须能独立落盘:一旦 CC 改了分类器的 system 前缀或 max_tokens
-      // 上界,所有真实分类器请求都会掉进这个分支 —— 那时既没有漏检 warn(它们在身份判据
-      // 之后)、也没有升级日志(永远识别不出来),整条链路重新完全静默,而这恰恰是这套记账
-      // 最该发现的事(codex P2)。
-      //
-      // 级别必须是 **warn**:打包版默认 level=info(logger.ts 的 initLogger),而 emit() 前的
-      // shouldLog 会直接丢掉 debug —— 用 debug 等于在生产环境里根本不落盘,要排查的场景
-      // 依旧查不到。
-      //
-      // 用阈值门控把噪音压住:只有「一条都没识别出来」且样本已经够多时才报。正常运行下
-      // 只要分类器真的报过一次错,classifierFailures 就 > 0,这条永远不触发。
-      // 只有「本来就该带 cc 会话头」的响应才算候选分类器请求 —— 其它 runtime 的故障
-      // 不能拿来推进 Claude 分类器的漂移判据。
-      if (ctx.requestHeaders['x-claude-code-session-id']) {
-        const missAt = now();
-        if (missAt - lastIdentityMissAt > IDENTITY_MISS_STREAK_WINDOW_MS) missesSinceLastMatch = 0;
-        lastIdentityMissAt = missAt;
-        missesSinceLastMatch += 1;
-        if (missesSinceLastMatch >= IDENTITY_MISS_ALERT_THRESHOLD) {
-          warnThrottled('classifier identity has not matched for a long streak', {
-            status: ctx.status,
-            missesSinceLastMatch,
-          });
-        }
-      }
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
@@ -347,8 +326,6 @@ export function createClaudeAutoClassifierFailureObserver(
       return undefined;
     }
     counters.classifierFailures += 1;
-    // 命中即归零:连续漏检才是漂移信号,累计总数会被一次历史命中永久淹掉。
-    missesSinceLastMatch = 0;
 
     if (isTransientClassifierStatus(ctx.status)) {
       const ts = now();
@@ -385,7 +362,8 @@ export function createClaudeAutoClassifierFailureObserver(
 
     // 识别成功且已过阈值的那一刻记一条,带完整计数 —— coordinator 侧的日志只覆盖
     // 「切换成功/失败」,看不到「识别到了但被 episode 阈值挡住」的那些。
-    logger?.debug('auto classifier failure escalated; notifying fallback coordinator', {
+    // info 级:这一刻本就低频(真的持续故障才走到),且打包版默认 level=info 会落盘。
+    logger?.info('auto classifier failure escalated; notifying fallback coordinator', {
       sessionId,
       status: ctx.status,
       counters: { ...counters },
