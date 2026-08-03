@@ -2,7 +2,7 @@ import { createServer as createHttpServer } from 'node:http';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { createAnthropicCompatProxy } from './server.js';
-import { listenOnAvailableLoopbackPort } from './test-loopback-server.js';
+import { listenOnAvailableLoopbackPort, listenOnAvailablePort } from './test-loopback-server.js';
 import { startSocks5Stub } from './test-socks5-stub.js';
 import type { ProxyHandle } from './types.js';
 
@@ -170,11 +170,14 @@ describe('anthropic-compat-proxy outbound proxy wiring', () => {
       res.writeHead(200, { 'content-type': 'application/json' });
       res.end(JSON.stringify({ direct: true }));
     });
-    const upstreamPort = await listenOnAvailableLoopbackPort(upstream);
+    // 0.0.0.0 is intentionally non-loopback here so the resolver path is exercised;
+    // bind the test server to the same address so the fallback remains a local connection.
+    const directHost = '0.0.0.0';
+    const upstreamPort = await listenOnAvailablePort(upstream, directHost);
     cleanups.push(() => new Promise<void>((r) => upstream.close(() => r())));
     // 0.0.0.0 不属于代理 bypass 的 loopback hostname，但作为连接目标仍指向本机。
     // 这样既会执行 resolver，又能确定性验证回落直连，不依赖外部 DNS 超时。
-    const directUpstream = `http://0.0.0.0:${upstreamPort}`;
+    const directUpstream = `http://${directHost}:${upstreamPort}`;
     const warns: string[] = [];
     proxy = await createAnthropicCompatProxy({
       upstream: directUpstream,
