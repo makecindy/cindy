@@ -152,7 +152,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -626,7 +626,10 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           onDispatching: () => {
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });

@@ -15,21 +15,30 @@
 import { useEffect, useState, useSyncExternalStore } from 'react';
 
 import { remoteProjectsStore } from '@/features/device-link/remoteProjectsStore';
+import { unresponsiveDevicesStore } from '@/features/device-link/unresponsiveDevicesStore';
 
 type LinkStatus = 'stopped' | 'connecting' | 'online';
 
-export type RemoteConnectionStatus = 'local' | 'connected' | 'reconnecting' | 'host-offline';
+export type RemoteConnectionStatus =
+  | 'local'
+  | 'connected'
+  | 'reconnecting'
+  | 'host-offline'
+  | 'degraded';
 
 /**
  * 纯派生:本机链路非 online → reconnecting(本机断链,优先级最高);本机在线但被控端不在线
- * → host-offline;都在线 → connected。便于单测。
+ * → host-offline;两端都「在线」但被控端被熔断判定无响应(连续 invoke 超时,弱网 / 对端
+ * 卡死)→ degraded;否则 connected。便于单测。
  */
 export function deriveRemoteConnectionStatus(
   linkStatus: LinkStatus,
   hostOnline: boolean,
+  hostUnresponsive = false,
 ): Exclude<RemoteConnectionStatus, 'local'> {
   if (linkStatus !== 'online') return 'reconnecting';
   if (!hostOnline) return 'host-offline';
+  if (hostUnresponsive) return 'degraded';
   return 'connected';
 }
 
@@ -112,6 +121,13 @@ export function useRemoteSessionConnection(deviceId: string | undefined): Remote
     () => (deviceId ? remoteProjectsStore.getDeviceIds().includes(deviceId) : false),
   );
 
+  // 「无响应」熔断镜像(main 权威,useDeviceLinkRemoteProjects 接线):presence 在线但
+  // 连续 invoke 超时 → degraded,让弱网不再表现为「界面不动 + 每次操作干等超时」。
+  const hostUnresponsive = useSyncExternalStore(
+    unresponsiveDevicesStore.subscribe,
+    () => (deviceId ? unresponsiveDevicesStore.getSnapshot().has(deviceId) : false),
+  );
+
   if (!deviceId) return 'local';
-  return deriveRemoteConnectionStatus(linkStatus, hostOnline);
+  return deriveRemoteConnectionStatus(linkStatus, hostOnline, hostUnresponsive);
 }

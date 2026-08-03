@@ -3218,6 +3218,40 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('连续 2 次握手超时后窗口翻倍(2×),hello-ack 上线后复位', async () => {
+    const warns: string[] = [];
+    const h = makeHarness({
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (...args: unknown[]) => warns.push(args.map(String).join(' ')),
+        error: () => {},
+      },
+      timing: { handshakeTimeoutMs: 15, reconnectBaseMs: 5, reconnectMaxMs: 10 },
+    });
+    const handshakeWarns = () => warns.filter((w) => w.includes('handshake not completed'));
+    h.client.start();
+    // 等满 3 次握手超时:前两次窗口 15ms,第三次(streak≥2)翻倍到 30ms
+    for (let i = 0; i < 200 && handshakeWarns().length < 3; i++) await tick(5);
+    const seen = handshakeWarns();
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    expect(seen[0]).toContain('within 15ms');
+    expect(seen[1]).toContain('within 15ms');
+    expect(seen[2]).toContain('within 30ms');
+    // 上线复位(负载下 ack 可能打在过期 socket 上,按既有模式有界重试)
+    for (let i = 0; i < 20 && h.client.getStatus() !== 'online'; i++) {
+      h.current().ack();
+      await tick();
+    }
+    expect(h.client.getStatus()).toBe('online');
+    // 掉线后下一次握手超时窗口回到基础值
+    const before = handshakeWarns().length;
+    h.current().emit('close', 1006);
+    for (let i = 0; i < 200 && handshakeWarns().length <= before; i++) await tick(5);
+    expect(handshakeWarns()[before]).toContain('within 15ms');
+    h.client.stop();
+  });
+
   it('心跳僵死时无 terminate 实现(RN WebSocket)→ fallback close 回收 socket', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
@@ -3226,10 +3260,44 @@ describe('DeviceLinkClient', () => {
     // 模拟 RN 适配层没有 terminate 的历史形态:删掉后必须退回 close,不能裸遗留
     (first as { terminate?: () => void }).terminate = undefined;
     first.ack();
-    await tick(40);
+    // 有界轮询替代固定窗口:CI 负载下(Windows 实测)真实计时器漂移会让 8ms×2 tick
+    // 的判死晚于固定 40ms 断言点,语义不变,只是等到事件发生。
+    for (let i = 0; i < 100 && first.closed === null; i++) await tick(10);
     expect(first.closed).not.toBeNull();
     expect(h.client.getStatus()).toBe('connecting');
     h.client.stop();
+  });
+
+  it('restartConnection:online(可能半开假活)也强制重建并复位 link 状态;stopped 不拉起', async () => {
+    const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await tick();
+    expect(h.client.getStatus()).toBe('online');
+    // 建一条 reliable link:重建后它的 linkReady 必须被复位,host 才会重新 openLink
+    await establishInboundReliableLink(h, 'resume-stream', 1, 'ctrl-resume');
+
+    const before = h.sockets.length;
+    h.client.restartConnection('system-resume');
+    await tick();
+    expect(h.sockets.length).toBe(before + 1); // 丢弃旧 socket,新建连接
+    h.current().ack();
+    await tick();
+    expect(h.client.getStatus()).toBe('online');
+    // linkReady 已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
+    // (若 linkReady 残留 true,这里会被包进 transport wrapper 走旧 stream)
+    h.client.sendInvokeResult('ctrl-resume', 'req-after-resume', { ok: true, result: 1 });
+    const resent = h.current().sent.filter((e) => e.kind === 'invoke-result');
+    expect(resent).toHaveLength(1);
+    expect(resent[0]!.payload).toMatchObject({ ok: true, result: 1 });
+
+    h.client.stop();
+    const count = h.sockets.length;
+    h.client.restartConnection('after-stop');
+    await tick(20);
+    expect(h.sockets.length).toBe(count); // 生命周期仍归 start/stop 管
+    expect(h.client.getStatus()).toBe('stopped');
   });
 
   it('stop 后不再重连', async () => {
@@ -3437,6 +3505,104 @@ describe('DeviceLinkClient', () => {
       });
       await expect(p).resolves.toMatchObject({ ok: true });
       h.client.stop();
+    });
+  });
+
+  describe('可靠传输死锁自愈(2026-08-03 线上实锤:被控端回程队列冻结)', () => {
+    /** 建 reliable link 后经历一次 relay 断线重连:peer.reliable=true 而 linkReady=false。 */
+    async function makeLinkDownPeer(h: Harness, src = 'ctrl-1'): Promise<void> {
+      await tick();
+      h.current().ack();
+      await tick();
+      await establishInboundReliableLink(h, `stream-${src}`, 1, src);
+      h.current().emit('close', 1006);
+      await tick(20); // 退避后重连
+      h.current().ack();
+      await tick();
+      expect(h.client.getStatus()).toBe('online');
+    }
+
+    it('B:link 未就绪且 relay 在线时,invoke-result 降级 legacy 裸帧直发', async () => {
+      const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+      h.client.start();
+      await makeLinkDownPeer(h);
+
+      h.client.sendInvokeResult('ctrl-1', 'req-legacy', { ok: true, result: 42 });
+      const sent = h.current().sent.filter((e) => e.kind === 'invoke-result');
+      expect(sent).toHaveLength(1);
+      expect(sent[0]!.id).toBe('req-legacy');
+      // 裸帧:payload 就是业务 payload,没有 transport wrapper
+      expect(sent[0]!.payload).toMatchObject({ ok: true, result: 42 });
+      h.client.stop();
+    });
+
+    it('A:link 断开状态下 pending 滞留超阈值 → 新帧入队前整队放弃,不再 BACKPRESSURE', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      let nowMs = 1_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        const h = makeHarness({
+          timing: { reconnectBaseMs: 5, reconnectMaxMs: 10, stalledLinkPendingMaxAgeMs: 50 },
+        });
+        h.client.start();
+        await makeLinkDownPeer(h);
+
+        // link down:push 只入队不发送,填满 pending(64 条)
+        for (let i = 0; i < MAX_TRANSPORT_PENDING_MESSAGES; i++) {
+          h.client.sendPush('ctrl-1', 'sessions', { i });
+        }
+        // 第 65 条:队头未过滞留阈值 → 仍是 BACKPRESSURE(原有语义不变)
+        expect(() => h.client.sendPush('ctrl-1', 'sessions', { overflow: true })).toThrow(
+          /reliable transport buffer is full/,
+        );
+        // 滞留超阈值后:入队前整队放弃,新帧不再被顶回
+        nowMs += 51;
+        expect(() => h.client.sendPush('ctrl-1', 'sessions', { after: true })).not.toThrow();
+        h.client.stop();
+      } finally {
+        clock.mockRestore();
+      }
+    });
+
+    it('C:link 未就绪收到可靠帧 → 通知 host(同 peer 节流,上线后重置无关)', async () => {
+      const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
+      let nowMs = 2_000_000;
+      const clock = vi.spyOn(proto, 'monotonicNow').mockImplementation(() => nowMs);
+      try {
+        const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
+        const notified: string[] = [];
+        h.client.onReliableFrameBeforeLink((deviceId) => notified.push(deviceId));
+        h.client.start();
+        await makeLinkDownPeer(h, 'dev-b');
+
+        const frame = encodeReliableFrames(
+          {
+            v: PROTOCOL_VERSION,
+            kind: 'push',
+            src: 'dev-b',
+            dst: 'dev-self',
+            payload: { channel: 'sessions', payload: {} },
+          },
+          'stream-dev-b',
+          1,
+          1,
+        )[0]!;
+        h.current().push({ ...frame, src: 'dev-b' });
+        await tick();
+        expect(notified).toEqual(['dev-b']);
+        // 节流窗口内的第二帧不重复通知
+        h.current().push({ ...frame, src: 'dev-b' });
+        await tick();
+        expect(notified).toEqual(['dev-b']);
+        // 越过节流窗口再来一帧 → 再次通知
+        nowMs += 30_001;
+        h.current().push({ ...frame, src: 'dev-b' });
+        await tick();
+        expect(notified).toEqual(['dev-b', 'dev-b']);
+        h.client.stop();
+      } finally {
+        clock.mockRestore();
+      }
     });
   });
 });
