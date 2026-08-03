@@ -183,6 +183,75 @@ describe('SaveDepositVault', () => {
     expect(fs.readFileSync(moved)).toHaveLength(0);
   });
 
+  it('写入完成后目标被移出批准目录时拒绝并清空原 inode', async () => {
+    if (process.platform === 'win32') return;
+
+    const vault = new SaveDepositVault();
+    const deposited = vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: workdir });
+    if (!deposited.ok) throw new Error('deposit failed');
+
+    const target = path.join(saveDir, 'post-write-move.bin');
+    const moved = `${target}.moved`;
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalWriteFile = handle.writeFile.bind(handle);
+      return {
+        stat: handle.stat.bind(handle),
+        writeFile: async (data: Uint8Array) => {
+          await originalWriteFile(data);
+          await fs.promises.rename(target, moved);
+        },
+        truncate: handle.truncate.bind(handle),
+        close: handle.close.bind(handle),
+      } as unknown as fs.promises.FileHandle;
+    });
+    try {
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'post-write-move.bin', new Uint8Array([1, 2, 3])),
+      ).resolves.toBeNull();
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(fs.existsSync(target)).toBe(false);
+    expect(fs.readFileSync(moved)).toHaveLength(0);
+  });
+
+  it('close 失败按统一 null 语义返回并清理已创建文件', async () => {
+    const vault = new SaveDepositVault();
+    const deposited = vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: workdir });
+    if (!deposited.ok) throw new Error('deposit failed');
+
+    const target = path.join(saveDir, 'close-failure.bin');
+    const originalOpen = fs.promises.open.bind(fs.promises);
+    const openSpy = vi.spyOn(fs.promises, 'open').mockImplementationOnce(async (...args) => {
+      const handle = await originalOpen(...args);
+      const originalWriteFile = handle.writeFile.bind(handle);
+      const originalClose = handle.close.bind(handle);
+      let closeCalls = 0;
+      return {
+        stat: handle.stat.bind(handle),
+        writeFile: (data: Uint8Array) => originalWriteFile(data),
+        truncate: handle.truncate.bind(handle),
+        close: async () => {
+          closeCalls += 1;
+          if (closeCalls === 1) throw new Error('simulated close failure');
+          await originalClose();
+        },
+      } as unknown as fs.promises.FileHandle;
+    });
+    try {
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'close-failure.bin', new Uint8Array([1, 2, 3])),
+      ).resolves.toBeNull();
+    } finally {
+      openSpy.mockRestore();
+    }
+
+    expect(fs.existsSync(target)).toBe(false);
+  });
+
   it('TTL 过期 / 次数写满自动作废', async () => {
     let now = 1_000_000;
     const vault = new SaveDepositVault(() => now);

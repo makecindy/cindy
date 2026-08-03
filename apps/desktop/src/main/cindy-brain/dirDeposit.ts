@@ -426,7 +426,8 @@ async function writeNewSaveFile(
     }
 
     let openedStat: fs.Stats | null = null;
-    let committed = false;
+    let result: string | null = null;
+    let closeFailed = false;
     try {
       openedStat = await handle.stat();
       const rootAfter = fs.realpathSync.native(dirRealPath);
@@ -442,25 +443,50 @@ async function writeNewSaveFile(
         return null;
       }
       await handle.writeFile(bytes);
-      committed = true;
-      return candidate;
+
+      // 写入本身也可能触发另一个进程的 rename / replace；提交成功前再
+      // 复核 canonical 根、目标父目录与句柄 identity，避免把已移出批准
+      // 目录的 inode 当成成功交接。
+      const writtenStat = await handle.stat();
+      const rootAfterWrite = fs.realpathSync.native(dirRealPath);
+      const targetAfterWrite = fs.realpathSync.native(target);
+      const pathStatAfterWrite = fs.statSync(target);
+      if (
+        !writtenStat.isFile() ||
+        !sameRealPath(rootAfterWrite, dirRealPath) ||
+        !sameRealPath(path.dirname(targetAfterWrite), dirRealPath) ||
+        writtenStat.dev !== openedStat.dev ||
+        writtenStat.ino !== openedStat.ino ||
+        pathStatAfterWrite.dev !== writtenStat.dev ||
+        pathStatAfterWrite.ino !== writtenStat.ino
+      ) {
+        return null;
+      }
+      result = candidate;
     } catch {
-      return null;
+      // result 保持 null；失败路径在 finally 中尽力清理。
     } finally {
       // 校验或写入失败时，先通过仍持有的句柄清空可能已经写入的字节。
       // 这样即使路径随后被替换，也不会把半成品字节留在原 inode 上。
-      if (!committed && openedStat?.isFile()) {
+      if (result !== null) {
+        // 保留成功路径原有的 close 语义；close 失败仍视为写盘失败。
         try {
-          await handle.truncate(0);
+          await handle.close();
         } catch {
-          // 清理失败不能覆盖原始失败结果。
+          closeFailed = true;
+          result = null;
         }
       }
 
-      if (committed) {
-        // 保留成功路径原有的 close 语义；close 失败仍视为写盘失败。
-        await handle.close();
-      } else {
+      if (result === null) {
+        if (openedStat?.isFile()) {
+          try {
+            await handle.truncate(0);
+          } catch {
+            // 清理失败不能覆盖原始失败结果。
+          }
+        }
+
         // Windows 下先关闭句柄再 unlink；失败路径的 close 只做 best effort，
         // 不能把原始 null 结果升级成异常。
         try {
@@ -486,6 +512,9 @@ async function writeNewSaveFile(
         }
       }
     }
+    if (closeFailed) return null;
+    if (result !== null) return result;
+    return null;
   }
   return null;
 }
