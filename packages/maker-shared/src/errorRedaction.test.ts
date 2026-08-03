@@ -34,6 +34,7 @@ describe('matchesDeterministicUsageExhaustionText', () => {
     'Too Many Requests',
     'rate limit exceeded',
     'retry budget exhausted',
+    'retry budget exceeded',
     'exhausted daemon retry budget',
     'exceeded retry limit, last status: 429 Too Many Requests',
   ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {

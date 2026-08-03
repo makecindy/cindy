@@ -49,7 +49,7 @@ const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
   /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
   /\b(?:exhausted|exceeded)\b.{0,24}\bquota\b/i,
   /\busage\s+limit\b/i,
-  /\b(?:exceeded[-_ ]?budget|budget[-_ ]?exceeded)\b/i,
+  /\b(?:exceeded[-_]?budget|budget[-_]?exceeded)\b/i,
   /\b(?:account|session|usage)\s+budget\b.{0,16}\b(?:exhausted|exceeded)\b/i,
   /\b(?:exhausted|exceeded)\b.{0,16}\b(?:account|session|usage)\s+budget\b/i,
   /余额不足|欠费/i,
