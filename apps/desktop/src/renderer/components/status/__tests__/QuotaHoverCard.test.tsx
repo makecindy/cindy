@@ -58,6 +58,10 @@ describe('QuotaHoverCard', () => {
     const card = screen.getByTestId('quota-hover-card');
     expect(card.classList.contains('rounded-xl')).toBe(true);
     expect(card.classList.contains('rounded-2xl')).toBe(false);
+    expect(card.classList.contains('border-[var(--border-default)]')).toBe(true);
+    expect(card.classList.contains('bg-[var(--surface-elevated)]')).toBe(true);
+    expect(card.classList.contains('text-[var(--text-primary)]')).toBe(true);
+    expect(card.style.boxShadow).toBe('var(--shadow-menu)');
     expect(screen.getByText('quotaCard.waiting')).toBeTruthy();
     expect(screen.queryByText('Claude')).toBeNull();
     expect(screen.queryAllByRole('progressbar')).toHaveLength(0);
@@ -300,8 +304,8 @@ describe('QuotaHoverCard', () => {
         turnUsage={{
           costText: '$0.46',
           totalTokensText: '74.1K',
-          inputTokens: 2,
-          outputTokens: 16,
+          inputTokensText: '2',
+          outputTokensText: '16',
           cacheLineText: '读 0 · 写 74.0K · 命中 0%',
           model: 'claude-opus-5 [1m]',
           suggestionText: '缓存命中率偏低，本轮较多上下文重新计费',
@@ -414,8 +418,8 @@ describe('QuotaHoverCard', () => {
         turnUsage={{
           costText: null,
           totalTokensText: '74.1K',
-          inputTokens: 2,
-          outputTokens: 16,
+          inputTokensText: '2',
+          outputTokensText: '16',
           cacheLineText: '读 0 · 写 74.0K · 命中 0%',
           model: 'claude-unknown',
         }}
@@ -441,6 +445,11 @@ describe('QuotaHoverCard', () => {
 
     const button = screen.getByRole('button', { name: '打开 Claude 用量页面' });
     expect(button.getAttribute('type')).toBe('button');
+    expect(button.classList.contains('hover:bg-[var(--surface-hover)]')).toBe(true);
+    expect(button.classList.contains('focus-visible:ring-[var(--focus-ring)]')).toBe(true);
+    expect(
+      button.classList.contains('focus-visible:ring-offset-[var(--surface-elevated)]'),
+    ).toBe(true);
     fireEvent.click(button);
     expect(onOpenDashboard).toHaveBeenCalledTimes(1);
 
@@ -558,7 +567,7 @@ describe('QuotaHoverCard', () => {
   });
 
   it('keeps an over-limit off-current-model scoped weekly window visible and critical', () => {
-    // 非当前模型的分模型周限爆量时,卡片必须可见地告警(不依赖 rateLimitStatus)——补 #1300 review advisory。
+    // 非当前模型的分模型周限爆量时,卡片必须可见地告警(不依赖 rateLimitStatus)——补 issue 1300 review advisory。
     render(
       <QuotaHoverCard
         snapshot={makeSnapshot({

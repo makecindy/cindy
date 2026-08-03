@@ -772,8 +772,8 @@ function toQuotaHoverCardTurnUsage(
         }
       : {}),
     totalTokensText: formatCompactTokens(Math.max(0, Math.floor(details.totalTokens))),
-    inputTokens: details.inputTokens,
-    outputTokens: details.outputTokens,
+    inputTokensText: formatCompactTokens(details.inputTokens),
+    outputTokensText: formatCompactTokens(details.outputTokens),
     cacheLineText: formatQuotaCacheLine(details, t),
     model: quotaTurnModel(details, t),
     ...(details.perModelCost

@@ -24,8 +24,8 @@ export interface QuotaHoverCardTurnUsage {
     costIsEstimate?: boolean;
   } | null;
   totalTokensText?: string | null;
-  inputTokens?: number | null;
-  outputTokens?: number | null;
+  inputTokensText?: string | null;
+  outputTokensText?: string | null;
   cacheLineText?: string | null;
   model?: string | null;
   perModelCost?: ReadonlyArray<{
@@ -150,7 +150,7 @@ function CardDivider() {
   return (
     <div
       aria-hidden="true"
-      className="mx-4 my-1.5 h-px bg-[var(--quota-card-hairline,var(--border-default,rgba(0,0,0,0.08)))]"
+      className="mx-4 my-1.5 h-px bg-[var(--border-default)]"
     />
   );
 }
@@ -180,18 +180,18 @@ function WindowBlock({
           'mb-2 text-sm font-medium tracking-[-0.005em]',
           severity === 'crit'
             ? 'text-[var(--quota-bar-crit)]'
-            : 'text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]',
+            : 'text-[var(--text-primary)]',
         )}
       >
         {title}
       </div>
       <QuotaBar usedPercent={window.utilization} severity={severity} ariaLabel={title} />
       <div className="mt-[7px] flex items-baseline justify-between gap-3 tabular-nums">
-        <span className="font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+        <span className="font-medium text-[var(--text-primary)]">
           {t('quotaCard.usedPercent', { percent: Math.round(usedPercent) })}
         </span>
         {resetAt !== null ? (
-          <span className="text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <span className="text-xs text-[var(--text-secondary)]">
             {t('quotaCard.resetAt', { at: resetAt })}
           </span>
         ) : null}
@@ -201,7 +201,8 @@ function WindowBlock({
 }
 
 function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage; t: TFunction }) {
-  const hasTokenBreakdown = turnUsage.inputTokens != null && turnUsage.outputTokens != null;
+  const hasTokenBreakdown =
+    turnUsage.inputTokensText != null && turnUsage.outputTokensText != null;
   const showModelCostBreakdown = (turnUsage.perModelCost?.length ?? 0) >= 2;
 
   const renderCostLine = (
@@ -209,7 +210,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
     isEstimate: boolean | undefined,
     unavailableKey: string,
   ) => (
-    <div className="text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+    <div className="text-sm font-medium text-[var(--text-primary)]">
       {costText != null
         ? t(isEstimate ? 'usageDetails.valueLine' : 'usageDetails.costLine', { cost: costText })
         : t(unavailableKey)}
@@ -219,7 +220,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
   return (
     <section data-testid="quota-turn-usage" className="px-4 pb-1 pt-2">
       {turnUsage.isUserTurnTotal ? (
-        <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+        <div className="mb-[3px] text-xs font-medium text-[var(--text-secondary)]">
           {t('todaySpend.tooltip.latestUserTurnTitle')}
         </div>
       ) : null}
@@ -233,7 +234,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {turnUsage.finalSegment ? (
         <div className="mt-2">
-          <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <div className="mb-[3px] text-xs font-medium text-[var(--text-secondary)]">
             {t('chat.messageActionBar.userTurnCostDetailsTitle')}
           </div>
           <div className="tabular-nums">
@@ -248,10 +249,10 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {showModelCostBreakdown ? (
         <div data-testid="quota-model-cost-breakdown" className="mt-2">
-          <div className="mb-[3px] text-xs font-medium text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <div className="mb-[3px] text-xs font-medium text-[var(--text-secondary)]">
             {t('usageDetails.costBreakdownHeader')}
           </div>
-          <div className="space-y-0.5 tabular-nums text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+          <div className="space-y-0.5 tabular-nums text-[var(--text-primary)]">
             {turnUsage.perModelCost?.map((entry, index) => (
               <div key={`${entry.model}-${index}`}>
                 {t('usageDetails.modelCostLine', {
@@ -266,16 +267,16 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {turnUsage.totalTokensText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
-          <span className="text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <span className="text-[var(--text-secondary)]">
             {t('quotaCard.tokenLabel')}
           </span>
-          <span className="text-right font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+          <span className="text-right font-medium text-[var(--text-primary)]">
             {turnUsage.totalTokensText}
             {hasTokenBreakdown ? (
-              <span className="font-normal text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+              <span className="font-normal text-[var(--text-secondary)]">
                 {t('quotaCard.tokenBreakdown', {
-                  input: turnUsage.inputTokens,
-                  output: turnUsage.outputTokens,
+                  input: turnUsage.inputTokensText,
+                  output: turnUsage.outputTokensText,
                 })}
               </span>
             ) : null}
@@ -285,10 +286,10 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {turnUsage.cacheLineText != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3 tabular-nums">
-          <span className="text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <span className="text-[var(--text-secondary)]">
             {t('quotaCard.cacheLabel')}
           </span>
-          <span className="text-right font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+          <span className="text-right font-medium text-[var(--text-primary)]">
             {turnUsage.cacheLineText}
           </span>
         </div>
@@ -296,10 +297,10 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
 
       {!showModelCostBreakdown && turnUsage.model != null ? (
         <div className="mt-[5px] flex items-baseline justify-between gap-3">
-          <span className="text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <span className="text-[var(--text-secondary)]">
             {t('quotaCard.modelLabel')}
           </span>
-          <span className="min-w-0 break-words text-right font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+          <span className="min-w-0 break-words text-right font-medium text-[var(--text-primary)]">
             {turnUsage.model}
           </span>
         </div>
@@ -308,7 +309,7 @@ function TurnUsageSection({ turnUsage, t }: { turnUsage: QuotaHoverCardTurnUsage
       {turnUsage.suggestionText != null ? (
         <div
           data-testid="quota-suggestion"
-          className="mt-2.5 flex items-start gap-[7px] rounded-lg bg-[var(--quota-card-callout-bg,var(--warning-bg-soft,rgba(224,154,47,0.12)))] px-2.5 py-[7px] text-xs text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
+          className="mt-2.5 flex items-start gap-[7px] rounded-lg bg-[var(--warning-bg-soft)] px-2.5 py-[7px] text-xs text-[var(--text-primary)]"
         >
           <span aria-hidden="true" className="shrink-0 text-[var(--quota-bar-warn)]">
             ●
@@ -339,11 +340,11 @@ function SessionUsageSection({
 
   return (
     <section data-testid="quota-session-usage" className="px-4 pb-1 pt-2 tabular-nums">
-      <div className="text-sm font-medium text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]">
+      <div className="text-sm font-medium text-[var(--text-primary)]">
         {t(totalKey, { cost: sessionUsage.costText })}
       </div>
       {hasMixedBreakdown ? (
-        <div className="mt-1 space-y-0.5 text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+        <div className="mt-1 space-y-0.5 text-xs text-[var(--text-secondary)]">
           <div>
             {t('todaySpend.tooltip.sessionUsed', { cost: sessionUsage.actualCostText })}
           </div>
@@ -416,11 +417,8 @@ export function QuotaHoverCard({
   return (
     <div
       data-testid="quota-hover-card"
-      className="flex max-h-[calc(100vh-16px)] w-[340px] select-none flex-col overflow-hidden rounded-xl border border-[var(--quota-card-border,var(--border-default,rgba(0,0,0,0.10)))] bg-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] pb-2 text-[13px] leading-5 text-[var(--quota-card-text,var(--text-primary,#1D1D1F))]"
-      style={{
-        boxShadow:
-          'var(--quota-card-shadow, var(--shadow-menu, 0 18px 40px rgba(30, 20, 12, 0.14), 0 2px 8px rgba(30, 20, 12, 0.08)))',
-      }}
+      className="flex max-h-[calc(100vh-16px)] w-[340px] select-none flex-col overflow-hidden rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] pb-2 text-[13px] leading-5 text-[var(--text-primary)]"
+      style={{ boxShadow: 'var(--shadow-menu)' }}
     >
       <div
         data-testid="quota-hover-card-scroll-content"
@@ -428,12 +426,12 @@ export function QuotaHoverCard({
       >
         {snapshot ? (
           <>
-            <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-xs text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+            <div className="flex items-center gap-2 px-4 pb-2 pt-3 text-xs text-[var(--text-secondary)]">
               <span className="font-medium">Claude</span>
               {planLabel ? (
                 <span
                   data-testid="quota-plan-badge"
-                  className="ml-auto rounded-full border border-[var(--quota-card-hairline,var(--border-default,rgba(0,0,0,0.08)))] px-[7px] py-px text-[11px] font-medium"
+                  className="ml-auto rounded-full border border-[var(--border-default)] px-[7px] py-px text-[11px] font-medium"
                 >
                   {planLabel}
                 </span>
@@ -456,7 +454,7 @@ export function QuotaHoverCard({
                 ))}
               </div>
             ) : (
-              <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+              <div className="px-4 py-2 text-[var(--text-secondary)]">
                 {t('quotaCard.noWindows')}
               </div>
             )}
@@ -481,14 +479,14 @@ export function QuotaHoverCard({
             {showExtraUsage ? (
               <>
                 <CardDivider />
-                <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+                <div className="px-4 py-2 text-[var(--text-secondary)]">
                   {t('quotaCard.extraUsageEnabled')}
                 </div>
               </>
             ) : null}
           </>
         ) : (
-          <div className="px-4 py-2 text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <div className="px-4 py-2 text-[var(--text-secondary)]">
             {t('quotaCard.waiting')}
           </div>
         )}
@@ -515,7 +513,7 @@ export function QuotaHoverCard({
             ref={dashboardButtonRef}
             type="button"
             onClick={onOpenDashboard}
-            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-full px-2 py-[7px] text-left font-medium transition-colors hover:bg-[var(--quota-card-hover-bg,var(--surface-hover,rgba(0,0,0,0.05)))] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring,#417CDD)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--quota-card-bg,var(--surface-elevated,#FFFFFF))] active:scale-[0.98]"
+            className="mx-2 mt-0.5 flex w-[calc(100%_-_16px)] items-center gap-[9px] rounded-full px-2 py-[7px] text-left font-medium transition-colors hover:bg-[var(--surface-hover)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)] focus-visible:ring-offset-2 focus-visible:ring-offset-[var(--surface-elevated)] active:scale-[0.98]"
           >
             <svg
               aria-hidden="true"
@@ -538,7 +536,7 @@ export function QuotaHoverCard({
       {staleMinutes !== null ? (
         <>
           <CardDivider />
-          <div className="px-4 py-1.5 text-xs tabular-nums text-[var(--quota-card-muted,var(--text-secondary,#7D7A76))]">
+          <div className="px-4 py-1.5 text-xs tabular-nums text-[var(--text-secondary)]">
             {t('quotaCard.staleData', { minutes: staleMinutes })}
           </div>
         </>

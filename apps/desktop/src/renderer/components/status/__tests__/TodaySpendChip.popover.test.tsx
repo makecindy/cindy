@@ -211,6 +211,24 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(document.activeElement).toBe(document.body);
   });
 
+  it('把输入与输出 Token 分别压缩后再传入卡片', () => {
+    setLatestUsageMessage({
+      turnUsageDetails: {
+        ...TURN_USAGE_DETAILS,
+        inputTokens: 74_000,
+        outputTokens: 16,
+        cacheCreateTokens: 0,
+        totalTokens: 74_016,
+      },
+    });
+    renderClaudeSubscriptionChip();
+    openCardFromHover();
+
+    expect(screen.getByText(/^74\.0k/)).toBeTruthy();
+    expect(screen.getByText('（输入 74.0k · 输出 16）')).toBeTruthy();
+    expect(screen.queryByText('（输入 74000 · 输出 16）')).toBeNull();
+  });
+
   it('键盘聚焦打开时把焦点移入卡片，关闭后归还 trigger', () => {
     renderClaudeSubscriptionChip();
     const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });

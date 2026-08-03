@@ -36,6 +36,8 @@ describe('TodaySpendChip dashboard routing', () => {
     expect(source).toContain('segmentCostUsd: message.turnCostUsd');
     expect(source).toContain('money: summary.isUserTurnTotal ? summary.segmentMoney : summary.money');
     expect(source).toContain("'chat.messageActionBar.userTurnCostDetailsTitle'");
+    expect(source).toContain('inputTokensText: formatCompactTokens(details.inputTokens)');
+    expect(source).toContain('outputTokensText: formatCompactTokens(details.outputTokens)');
   });
 
   it('routes codex-oauth / cc+chatgpt bridge to OpenAI usage, xai provider/bridge to xAI, claude subscription to claude.ai, and gateway / codex-api to no dashboard (internal console removed pre-OSS)', () => {
@@ -217,7 +219,7 @@ describe('TodaySpendChip dashboard routing', () => {
   });
 
   it('keeps Claude subscription details in the chip and tooltip (plan B: follows current model)', () => {
-    // 2026-08 结构化卡片替换纯文本 tooltip(上游 issue #1261),断言迁移至新契约。
+    // 2026-08 结构化卡片替换纯文本 tooltip(上游 issue 1261),断言迁移至新契约。
     // 方案 B: 第二栏跟随当前模型的 weekly_scoped 窗口, 匹配不到回退总周限
     expect(source).toContain('function getClaudeChipWindows(');
     expect(source).toContain('function resolveClaudeWeeklyWindow(');
