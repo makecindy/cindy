@@ -1,13 +1,18 @@
 /**
  * git-snapshot: commit message ⇄ 保存点元数据 的序列化/解析单测。
  *
- * 保存点用 git 原生 trailer (X-XDT-*) 把 {sessionId, kind, anchor} 落进 commit message,
+ * 保存点用 git 原生 trailer 把 {sessionId, kind, anchor, ...} 落进 commit message,
  * git log 就是唯一事实源。非保存点 commit 必须被识别为 null。
+ *
+ * 两代前缀并存: X-XDT-*(legacy, 直接 commit 到用户分支)与 X-Cindy-*
+ * (shadow savepoint 隐藏引用链)。parse 结果必带 source 区分代际,
+ * 两种前缀同现时 X-Cindy 优先。
  */
 
 import { describe, it, expect } from 'vitest';
 
 import {
+  buildCindyCommitMessage,
   buildCommitMessage,
   parseSnapshotCommit,
 } from '../git-snapshot/snapshotTrailers';
@@ -26,6 +31,7 @@ describe('snapshotTrailers', () => {
       sessionId: 'sess-123',
       kind: 'after-edit',
       anchor: 'msg-456',
+      source: 'legacy-xdt',
     });
   });
 
@@ -171,6 +177,107 @@ describe('snapshotTrailers', () => {
       reverts: ['c3', 'c2'],
       protectRef: 'refs/xdt/pre-rollback/rb-1',
       branch: 'main',
+      source: 'legacy-xdt',
+    });
+  });
+
+  it('buildCindyCommitMessage 往返: turn-start kind + baseHead', () => {
+    const msg = buildCindyCommitMessage('本轮开始时的工作区基线', {
+      sessionId: 'sess-9',
+      kind: 'turn-start',
+      anchor: 'msg-9',
+      branch: 'main',
+      baseHead: 'headsha0001',
+    });
+
+    expect(msg).toContain('X-Cindy-Session: sess-9');
+    expect(msg).not.toContain('X-XDT-');
+    expect(parseSnapshotCommit(msg)).toMatchObject({
+      label: '本轮开始时的工作区基线',
+      sessionId: 'sess-9',
+      kind: 'turn-start',
+      anchor: 'msg-9',
+      branch: 'main',
+      baseHead: 'headsha0001',
+      source: 'cindy',
+    });
+  });
+
+  it('buildCindyCommitMessage 往返: after-edit 带 baselineCommit → source=cindy', () => {
+    const msg = buildCindyCommitMessage('AI 修改后', {
+      sessionId: 'sess-9',
+      kind: 'after-edit',
+      anchor: 'msg-10',
+      baselineCommit: 'turnstart0001',
+    });
+
+    const parsed = parseSnapshotCommit(msg);
+    expect(parsed).toMatchObject({
+      label: 'AI 修改后',
+      sessionId: 'sess-9',
+      kind: 'after-edit',
+      anchor: 'msg-10',
+      baselineCommit: 'turnstart0001',
+      source: 'cindy',
+    });
+  });
+
+  it('buildCindyCommitMessage 往返: rollback marker 带 preRollbackCommit/reverts', () => {
+    const msg = buildCindyCommitMessage('rollback marker', {
+      sessionId: 'sess-9',
+      kind: 'rollback',
+      rollbackId: 'rb-9',
+      rollbackTarget: 'msg-2',
+      reverts: ['s3', 's2'],
+      preRollbackCommit: 'prerollback01',
+    });
+
+    expect(parseSnapshotCommit(msg)).toMatchObject({
+      label: 'rollback marker',
+      sessionId: 'sess-9',
+      kind: 'rollback',
+      rollbackId: 'rb-9',
+      rollbackTarget: 'msg-2',
+      reverts: ['s3', 's2'],
+      preRollbackCommit: 'prerollback01',
+      source: 'cindy',
+    });
+  });
+
+  it('两种前缀同现时 X-Cindy 优先 (构造性用例, 实际不会发生)', () => {
+    const msg = [
+      'mixed prefixes',
+      '',
+      'X-XDT-Session: legacy-sess',
+      'X-XDT-Kind: manual',
+      'X-Cindy-Session: cindy-sess',
+      'X-Cindy-Kind: after-edit',
+      'X-Cindy-Baseline: base-1',
+    ].join('\n');
+
+    expect(parseSnapshotCommit(msg)).toMatchObject({
+      label: 'mixed prefixes',
+      sessionId: 'cindy-sess',
+      kind: 'after-edit',
+      baselineCommit: 'base-1',
+      source: 'cindy',
+    });
+  });
+
+  it('X-Cindy 字段不完整时回退到同 commit 的合法 X-XDT 块', () => {
+    const msg = [
+      'partial cindy',
+      '',
+      'X-XDT-Session: legacy-sess',
+      'X-XDT-Kind: manual',
+      'X-Cindy-Baseline: base-1',
+    ].join('\n');
+
+    expect(parseSnapshotCommit(msg)).toMatchObject({
+      label: 'partial cindy',
+      sessionId: 'legacy-sess',
+      kind: 'manual',
+      source: 'legacy-xdt',
     });
   });
 });

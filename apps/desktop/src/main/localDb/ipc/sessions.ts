@@ -137,6 +137,12 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
     });
 }
 
+// shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
+// 即时清理:覆盖导入等流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复,
+// status 触发的 ref 删除与这类回滚天然竞态(删了就不可逆)。孤儿 ref 隐藏且
+// 极小,统一由启动期 reconcileSavepointRefsForDeletedSessions() 清理——启动期
+// 不存在进行中的瞬态软删流程。
+
 /**
  * 会话 status 变化的订阅槽①旁路通知(archived → did-session-archived)。
  * 与 worktree 回收共用同三个调用点(update / patch-meta / 批量 setStatus),

@@ -324,6 +324,8 @@ import {
   WorktreePool,
   reconcileWorktreesForDeletedSessions,
 } from './worktree';
+// shadow savepoint 链的启动期对账(孤儿 refs/cindy/savepoints/* 清理)
+import { reconcileSavepointRefsForDeletedSessions } from './git-snapshot/savepointCleanup';
 // session-git-pr-context: 会话分支感知 + PR 关联状态 IPC
 import { registerGitContextIpc, disposeGitContext } from './git-context';
 import { registerGitReviewIpc } from './git-review';
@@ -4075,6 +4077,11 @@ const registerIpcHandlers = () => {
     // (崩溃窗口/回收失败)的孤儿,启动期补一次回收。fire-and-forget,不阻塞启动。
     void reconcileWorktreesForDeletedSessions().catch((err) => {
       console.error('[bootstrap-electron] worktree reconcile failed (non-fatal):', err);
+    });
+    // 同窗口的 shadow savepoint 对账:owning session 已删除的孤儿保存点链
+    // (refs/cindy/savepoints/<sid>)启动期补删。fire-and-forget,不阻塞启动。
+    void reconcileSavepointRefsForDeletedSessions().catch((err) => {
+      console.error('[bootstrap-electron] savepoint reconcile failed (non-fatal):', err);
     });
 
     // Scheduler / Goal / Learn 统一由 localDb onReady 在 provider readiness settle 后启动。
