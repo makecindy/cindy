@@ -7,7 +7,13 @@ import { atomOneLight } from '../../renderer/themes/builtin/atom-one-light';
 import { githubDark } from '../../renderer/themes/builtin/github-dark';
 import { oneDarkPro } from '../../renderer/themes/builtin/one-dark-pro';
 import { solarizedLight } from '../../renderer/themes/builtin/solarized-light';
-import { parseCssColor, toHslTriplet, type Rgb } from '../theme-import/color';
+import {
+  contrastRatio,
+  parseCssColor,
+  toHex,
+  toHslTriplet,
+  type Rgb,
+} from '../theme-import/color';
 import {
   buildThemeColorsFromPalette,
   TEMPLATE_TOKEN_IDS,
@@ -127,8 +133,13 @@ function normalize(value: string): string {
 }
 
 describe('theme-import 模板 · key 集合与既有 builtin 主题一致', () => {
-  it('TEMPLATE_TOKEN_IDS 与 github-dark 的 colors key 集合完全相同', () => {
-    expect([...TEMPLATE_TOKEN_IDS].sort()).toEqual(Object.keys(githubDark.colors).sort());
+  it('TEMPLATE_TOKEN_IDS 覆盖 github-dark，并仅追加导入主题专用的 Switch token', () => {
+    const builtinIds = Object.keys(githubDark.colors);
+    expect(builtinIds.filter((id) => !TEMPLATE_TOKEN_IDS.includes(id))).toEqual([]);
+    expect(TEMPLATE_TOKEN_IDS.filter((id) => !builtinIds.includes(id)).sort()).toEqual([
+      'switch-thumb-off',
+      'switch-track-off',
+    ]);
   });
 
   it('模板 key 无重复', () => {
@@ -151,6 +162,57 @@ describe('theme-import 模板 · key 集合与既有 builtin 主题一致', () =
 
   it('模板不产出任何语义豁免族 token（登录/危险/警告/焦点/diff）', () => {
     expect(TEMPLATE_TOKEN_IDS.filter((id) => isProtectedToken(id))).toEqual([]);
+  });
+});
+
+describe.each([
+  [
+    'light',
+    {
+      ...ATOM_ONE_LIGHT_PALETTE,
+      surface: rgb('#ffffff'),
+      elevated: rgb('#ffffff'),
+      elevatedSoft: rgb('#fafafa'),
+      hover: rgb('#f8f8f8'),
+      chip: rgb('#f7f7f7'),
+      border: rgb('#eeeeee'),
+      textSecondary: rgb('#f0f0f0'),
+    } satisfies ThemePalette,
+  ],
+  [
+    'dark',
+    {
+      ...ONE_DARK_PRO_PALETTE,
+      surface: rgb('#000000'),
+      elevated: rgb('#050505'),
+      elevatedSoft: rgb('#050505'),
+      hover: rgb('#0a0a0a'),
+      chip: rgb('#0c0c0c'),
+      border: rgb('#111111'),
+      textSecondary: rgb('#101010'),
+    } satisfies ThemePalette,
+  ],
+] as const)('theme-import 模板 · %s 低对比度输入', (type, palette) => {
+  it('为关闭态 Switch 派生满足 3:1 的轨道与滑块色', () => {
+    const out = buildThemeColorsFromPalette(palette, type);
+    const track = rgb(out['switch-track-off']);
+    const thumb = rgb(out['switch-thumb-off']);
+
+    expect(out['switch-track-off']).not.toBe(normalize(toHex(palette.textSecondary)));
+    expect(contrastRatio(track, thumb), 'thumb x track').toBeGreaterThanOrEqual(3);
+
+    for (const surfaceId of [
+      'surface',
+      'surface-elevated',
+      'surface-card-ivory',
+      'surface-hover',
+      'surface-hover-soft',
+    ]) {
+      expect(
+        contrastRatio(track, rgb(out[surfaceId])),
+        `track x ${surfaceId}`,
+      ).toBeGreaterThanOrEqual(3);
+    }
   });
 });
 
