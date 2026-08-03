@@ -448,9 +448,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 改动谁也不会主动推。清空在线视图,让重连后的 presence 重新走一遍握手。
     // availability 同理(presence 是增量广播,verdict 只在连接代内有效,mobile
     // resetPresenceAvailabilityForConnection 同款):不清的话,断线期间目标离线
-    // → 重连首轮重放吃 DEVICE_OFFLINE 永久放弃 → 目标再上线时 wasAvailable
-    // 仍是 true,「不可用→可用」翻转永远不发生,推送流一直缺到下次无关恢复
-    // 事件(review P1)。
+    // → 重连首轮重放吃 DEVICE_OFFLINE、退避循环被 presence 门禁按住 → 目标再
+    // 上线时 wasAvailable 仍是 true,「不可用→可用」翻转永远不发生,推送流一直
+    // 缺到下次无关恢复事件(review P1)。
     if (status !== 'online') {
       presenceOnlineByDevice.clear();
       presenceAvailableByDevice.clear();
@@ -505,9 +505,10 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (!snap.online) handleControllerOffline(snap.deviceId);
     handleContactsPeerPresenceChanged({ deviceId: snap.deviceId, online: snap.online });
     // `!== true` 而非 `=== false`:断线时 availability 视图整体清空,重连后该设备
-    // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——它是
-    // DEVICE_OFFLINE 永久放弃后的唯一恢复事件。目标本就在线时 ws-online 重放已
-    // 先行,这里多发的一次 subscribe 幂等(重放代次翻代收敛)。
+    // 的首帧 presence(wasAvailable=undefined)同样是「不可用→可用」翻转——重放
+    // 循环在目标离线期间被 presence 门禁终止后,这里是唯一的恢复事件。目标本就
+    // 在线时 ws-online 重放已先行,这里多发的一次 subscribe 幂等(重放代次翻代
+    // 收敛)。
     if (available && wasAvailable !== true) {
       replayActiveSubscriptions(`presence-online:${snap.deviceId.slice(0, 8)}`, snap.deviceId);
     }
@@ -912,11 +913,15 @@ const subscriptionReplayRetryTimers = new Map<string, ReturnType<typeof setTimeo
 const PERMANENT_SUBSCRIPTION_REPLAY_CODES: ReadonlySet<string> = new Set([
   'VERSION_MISMATCH',
   'REMOTE_DISABLED',
-  'DEVICE_OFFLINE',
   'ACCESS_REVOKED',
   'CHANNEL_NOT_ALLOWED',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_STANDBY',
+  // DEVICE_OFFLINE 刻意不在列(MOBILE-PARITY-CHECKLIST §2 归瞬态):presence
+  // 滞后窗口内 subscribe 可能先吃到 DEVICE_OFFLINE,归永久会在「presence 仍
+  // available」期间放弃收敛;归瞬态则退避循环续跑,presence 补到 offline 时由
+  // 重试前置门(presenceAvailableByDevice !== true)自然终止,设备回归再由
+  // presence 翻转重放接棒——两个终止/恢复信号都已存在,无泄漏风险(review P2)。
 ]);
 
 function isPermanentSubscriptionReplayError(err: unknown): boolean {

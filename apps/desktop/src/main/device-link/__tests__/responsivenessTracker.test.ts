@@ -418,19 +418,19 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
     expect(run).not.toHaveBeenCalled();
   });
 
-  it('熔断 open 后收到终态 relay 应答 → 关熔断(任意 channel,含嵌套 openLink 冒泡)', async () => {
-    // presence 未及时翻转的竞态下,终态 UI 不再被「无响应」长期遮蔽;分类对
-    // 全部 channel 统一适用,observed:false 的嵌套 openLink 失败冒泡到外层业务
-    // channel 时同样命中,无需知道失败来源。
+  it('熔断 open 后探测收到终态 relay 应答 → 关熔断(终态 UI 不被「无响应」遮蔽)', async () => {
+    // presence 未及时翻转的竞态下,终态应答(DEVICE_OFFLINE 等)是「链路在明确
+    // 应答」的恢复证据。open 期间业务 guard 一律快速失败,探测是唯一上管道的
+    // 流量,终态应答经探测失败路径进入 classifyDeviceSendFailure 关熔断,让位
+    // 给对应终态自己的 UI。
     const h = harness();
     await openBreaker(h);
-    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS + 1);
-    await expect(
-      h.tracker.guardInvoke(DEV, 'local-db:sessions:list', () =>
-        Promise.reject(new DeviceLinkError('DEVICE_OFFLINE', 'target offline')),
-      ),
-    ).rejects.toThrow('target offline');
-    expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    h.advance(BREAKER_PROBE_BACKOFF_BASE_MS);
+    h.probeInvoke.mockRejectedValueOnce(new DeviceLinkError('DEVICE_OFFLINE', 'target offline'));
+    h.tracker.probeTick();
+    await vi.waitFor(() => {
+      expect(h.tracker.isUnresponsive(DEV)).toBe(false);
+    });
     expect(h.onUnresponsiveChanged).toHaveBeenLastCalledWith(DEV, false);
   });
 
