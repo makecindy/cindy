@@ -614,14 +614,16 @@ export class Session {
   }
 
   private async performClose(): Promise<void> {
+    let closeSucceeded = false;
     try {
       this.clearTurnStallWatchdog();
       this.cancelSendReservation(this.sendReservation);
       await this.handle.close();
+      closeSucceeded = true;
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus('closed');
+      this.setStatus(closeSucceeded ? 'closed' : 'error');
       this.eventListeners.clear();
       this.statusListeners.clear();
       this.interactionListener = null;
@@ -1378,9 +1380,7 @@ export class Session {
       // 先占住 closing gate：terminal error 的 listener 可能同步尝试 send，不能让它
       // 在底层 iterator 已经崩掉的窗口里重新进入 provider。复用 performClose，让
       // closePromise 代表真实的 handle.close()，并在底层资源释放后再发布 closed。
-      this.closePromise = this.performClose().catch((closeError) => {
-        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
-      });
+      this.closePromise = this.performClose();
       // 终态事件可能属于已结束的上一轮，但新 turn 已经在 event loop 崩溃前被
       // Session 接受。此时不能因为上一轮的 done/error 已观察过就吞掉本轮的
       // `session_event_loop_crashed`，否则新 turn 只有 closed 没有终态 error。
@@ -1395,7 +1395,11 @@ export class Session {
           source: this.agentKind,
         });
       }
-      await this.closePromise;
+      try {
+        await this.closePromise;
+      } catch (closeError) {
+        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+      }
       return;
     }
     // handle.events() 自然结束 (iterator return) = 底层 handle 已死、不会再发任何事件。
@@ -1417,6 +1421,7 @@ export class Session {
       this.logger.debug('event loop ended (handle dead), auto-closing session');
       this.clearTurnStallWatchdog();
       this.closePromise ??= Promise.resolve();
+      this.cancelSendReservation(this.sendReservation);
       this.sendReservation = null;
       this.currentTurnOrigin = null;
       this.setStatus('closed');

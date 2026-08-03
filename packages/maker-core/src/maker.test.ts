@@ -1497,6 +1497,51 @@ describe('Session turn send guard', () => {
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
+  it('does not publish closed when an iterator crash cannot close the handle', async () => {
+    const handle = createHandle({ id: 'thread-crash-close-failed' });
+    handle.close = vi.fn(async () => {
+      throw new Error('transport close failed');
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            throw new Error('events crashed');
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-crash-close-failed',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
+    const statusChanged = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'error') resolve();
+      });
+    });
+
+    await statusChanged;
+
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(session.getStatus()).toBe('error');
+    expect(handle.close).toHaveBeenCalledTimes(1);
+  });
+
   it('clears the turn stall watchdog when the event iterator ends naturally', async () => {
     vi.useFakeTimers();
     try {
@@ -1550,6 +1595,60 @@ describe('Session turn send guard', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('cancels an in-flight send when the event iterator ends naturally', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let sendEntered!: () => void;
+    const sendReady = new Promise<void>((resolve) => {
+      sendEntered = resolve;
+    });
+    const handle = createHandle({ id: 'thread-natural-end-pending-send' });
+    handle.send = vi.fn(async (_message, opts) => {
+      sendEntered();
+      await new Promise<void>((resolve) => {
+        if (opts?.signal?.aborted) {
+          resolve();
+          return;
+        }
+        opts?.signal?.addEventListener('abort', () => resolve(), { once: true });
+      });
+    });
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-pending-send',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    session.onEvent(() => undefined);
+    const sendPromise = session.send('first');
+    await sendEntered;
+    releaseEnd();
+    await closed;
+
+    await expect(sendPromise).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(session.getStatus()).toBe('closed');
   });
 
   it('does not revive a closed session when abort is called after the event iterator crashes', async () => {
