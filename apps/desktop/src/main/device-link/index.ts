@@ -101,6 +101,7 @@ import {
 } from './linkRecovery';
 import {
   createResponsivenessTracker,
+  markBreakerObserved,
   OPEN_LINK_OBSERVATION_CHANNEL,
   type DeviceResponsivenessTracker,
 } from './responsivenessTracker';
@@ -1137,6 +1138,9 @@ async function ensureOnlineForRequest(): Promise<void> {
   await client.waitUntilOnline(CONNECT_READY_TIMEOUT_MS);
 }
 
+/** closeRemoteLink 的取消代次(per-device):翻代使在途建链等待在发送前失效。 */
+const openLinkCloseEpochs = new Map<string, number>();
+
 /**
  * 控制端:向目标设备发起控制链路(link-open → link-accept)。
  *
@@ -1151,6 +1155,13 @@ async function ensureOnlineForRequest(): Promise<void> {
  * (remoteSubscribe 的按需建链 / remoteInvoke 的 LINK_NOT_OPEN 恢复):同一次
  * openLink 超时若内外层各记一次,单次失败消耗两个 strike,三批阈值退化成两批
  * 就误开熔断(review P2)——嵌套路径的失败由外层统一记账。
+ *
+ * 观测唯一性不变量(收敛检查点,review P2 ×2):**单次物理 openLink 失败恰好
+ * 结算一次**,与谁复用无关。observed 发起的请求失败时打 markBreakerObserved
+ * 标记——in-flight 复用会让同一 promise 的失败冒泡进加入者的业务 guard(跨
+ * 250ms cohort 窗口时不再同批),标记让后续 guard 一律按不定论结算。
+ * 反向(unobserved 发起、observed 加入)复用者在 in-flight 早退处直接返回,
+ * 不新增观测,失败由发起者所在的外层 guard 记账,同样恰好一次。
  */
 export async function openRemoteLink(
   deviceId: string,
@@ -1162,11 +1173,18 @@ export async function openRemoteLink(
   const existing = openLinkInFlight.get(deviceId);
   if (existing) return existing;
 
+  // 取消代次:closeRemoteLink 无法 abort 已在等待上线的 promise,只能翻代;
+  // 等待结束后复验代次,把「用户刚关闭的链路被迟到的建链重新建立」挡在发送前
+  // (review P2:close-during-reconnect)。
+  const closeEpoch = openLinkCloseEpochs.get(deviceId) ?? 0;
   const doOpen = async (): Promise<LinkAcceptPayload> => {
     await ensureOnlineForRequest();
     // fail-closed 边界不得跨 await 失效:1.5s 等待期间用户可能已在设置里关闭
-    // 对该设备的控制,发送前必须复验(review P1)。
+    // 对该设备的控制(复验授权),或显式 CLOSE_LINK(复验取消代次)(review P1/P2)。
     assertRemoteControlTargetEnabled(deviceId);
+    if ((openLinkCloseEpochs.get(deviceId) ?? 0) !== closeEpoch) {
+      throw new DeviceLinkError('LINK_NOT_OPEN', 'link closed while waiting to reconnect');
+    }
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     return client.openLink(deviceId, {
       controllerName: deviceName(),
@@ -1177,7 +1195,14 @@ export async function openRemoteLink(
   };
   const observed = opts?.observed !== false;
   const request = observed && responsivenessTracker
-    ? responsivenessTracker.guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
+    ? responsivenessTracker
+        .guardInvoke(deviceId, OPEN_LINK_OBSERVATION_CHANNEL, doOpen)
+        .catch((err: unknown) => {
+          // 该失败已由本观测席位结算:打标记,复用同一 promise 的外层 guard
+          // 不再重复计(见「观测唯一性不变量」)。
+          markBreakerObserved(err);
+          throw err;
+        })
     : doOpen();
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {
@@ -1192,6 +1217,9 @@ export function closeRemoteLink(deviceId: string): void {
   // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
   // 链路建回来。
   transportTimeoutReopen.cancel(deviceId);
+  // 在途建链可能正 park 在上线等待里(map 删除挡不住它):翻代,让它在等待
+  // 结束后的复验处自我取消。
+  openLinkCloseEpochs.set(deviceId, (openLinkCloseEpochs.get(deviceId) ?? 0) + 1);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }
@@ -1258,21 +1286,29 @@ export async function remoteSubscribe(
   assertNotStandby();
   assertRemoteControlTargetEnabled(deviceId);
   if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
-  const run = async (): Promise<InvokeResultPayload> => {
-    await ensureOnlineForRequest();
-    // 上线等待期间窗口可能已退订/销毁(refcount 引用已移除):按当前快照过滤,
-    // 只发仍被引用的 topics——照旧发送会在被控端留下本地已无引用、以后也不会
-    // 退订的幽灵订阅(mobile 等待后 shouldSend 复验同款,review P2)。全部失效
-    // 则幂等成功返回,不上管道。
+  // 等待期间(上线等待 / 建链等待)窗口可能已退订/销毁(refcount 引用已移除):
+  // 按当前快照过滤,只发仍被引用的 topics——照旧发送会在被控端留下本地已无
+  // 引用、以后也不会退订的幽灵订阅(mobile 等待后 shouldSend 复验同款)。
+  // 与授权复验同一条不变量:过滤必须发生在**最后一个 await 之后**、真正
+  // client.invoke 之前(review P2 ×2:首轮只滤在 openRemoteLink 之前,建链
+  // 最长还能再等一次完整 link-open,快照又过期了)。
+  const liveTopicsNow = (): string[] => {
     const live = new Set(
       snapshotSubscriptions(deviceId).find((ref) => ref.deviceId === deviceId)?.topics ?? [],
     );
-    const liveTopics = topics.filter((topic) => live.has(topic));
+    return topics.filter((topic) => live.has(topic));
+  };
+  const run = async (): Promise<InvokeResultPayload> => {
+    await ensureOnlineForRequest();
+    let liveTopics = liveTopicsNow();
     if (liveTopics.length === 0) return { ok: true, result: null };
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');
     if (requiresSessionLink(liveTopics) && !client.isLinkReady(deviceId)) {
       // 已在外层 guardInvoke 观测内(remoteSubscribe 整体被 guard):不重复观测。
       await openRemoteLink(deviceId, { observed: false });
+      // 建链是新的 await 边界:引用可能又变了,发送前按最新快照重取。
+      liveTopics = liveTopicsNow();
+      if (liveTopics.length === 0) return { ok: true, result: null };
     }
     assertRemoteControlTargetEnabledAfterReopen(deviceId);
     if (!client) throw new Error('[DEVICE_LINK_NOT_CONNECTED] device-link client not initialized');

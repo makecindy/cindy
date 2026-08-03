@@ -81,6 +81,26 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
 ]);
 
 /**
+ * 「该失败已被某个熔断观测席位结算」的本地标记(与 DeviceLinkError.inFlight 同
+ * 模式:错误对象上的进程内旁路字段,不进 wire)。openLink 的 in-flight 复用会让
+ * 同一个物理请求的失败冒泡进多个 guard(发起者的观测 + 加入者的业务 guard),
+ * 不打标记就双记 strike,三批阈值退化(review P2 ×2 收敛检查点:标记是「单次
+ * 物理失败恰好结算一次」不变量的唯一判据,所有 guard 共用)。
+ */
+const BREAKER_OBSERVED_MARKER = Symbol.for('cindy.deviceLink.breakerObserved');
+
+export function markBreakerObserved(err: unknown): void {
+  if (err instanceof Error) {
+    (err as Error & { [BREAKER_OBSERVED_MARKER]?: true })[BREAKER_OBSERVED_MARKER] = true;
+  }
+}
+
+export function isBreakerObservedError(err: unknown): boolean {
+  return err instanceof Error
+    && (err as Error & { [BREAKER_OBSERVED_MARKER]?: true })[BREAKER_OBSERVED_MARKER] === true;
+}
+
+/**
  * 失败 → 熔断信号:仅 INVOKE_TIMEOUT(等满超时无回包)计失败;**终态 relay 应答**
  * (DEVICE_OFFLINE / REMOTE_DISABLED / VERSION_MISMATCH)是「链路在明确应答」的
  * 恢复证据(responded)——「无响应」语义只对无回包成立,relay 已给出终态时应
@@ -90,6 +110,9 @@ export const BREAKER_NEUTRAL_INVOKE_CHANNELS: ReadonlySet<string> = new Set([
  * NOT_CONNECTED / 发送前本地中止是本机链路问题,不定论。纯函数,便于单测。
  */
 export function classifyDeviceSendFailure(error: unknown): BreakerSettleOutcome {
+  // 已被其它观测席位结算过的失败(openLink in-flight 复用冒泡)不重复计——
+  // 「单次物理失败恰好结算一次」不变量,见 markBreakerObserved。
+  if (isBreakerObservedError(error)) return 'inconclusive';
   if (!(error instanceof DeviceLinkError)) return 'inconclusive';
   if (error.code === 'INVOKE_TIMEOUT') return 'timeout';
   if (

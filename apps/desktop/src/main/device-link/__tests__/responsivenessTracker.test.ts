@@ -17,6 +17,7 @@ import {
   classifyDeviceSendFailure,
   classifyDeviceSendSuccess,
   createResponsivenessTracker,
+  markBreakerObserved,
 } from '../responsivenessTracker';
 
 const DEV = 'device-under-test';
@@ -224,6 +225,20 @@ describe('classifyDeviceSendFailure / classifyDeviceSendSuccess', () => {
       classifyDeviceSendFailure(new DeviceLinkError('NOT_CONNECTED', 'lost')),
     ).toBe('inconclusive');
     expect(classifyDeviceSendFailure(new Error('random'))).toBe('inconclusive');
+  });
+
+  it('已被观测席位结算的失败(openLink in-flight 复用冒泡)不重复计 strike', () => {
+    // 观测唯一性不变量:observed 发起的 openLink 失败打标记,复用同一 promise
+    // 的外层业务 guard 再 classify 时一律不定论——单次物理失败恰好结算一次,
+    // 三批阈值不因跨 250ms cohort 窗口的 in-flight 共享退化(review P2 收敛检查点)。
+    const markedTimeout = timeoutError();
+    markBreakerObserved(markedTimeout);
+    expect(classifyDeviceSendFailure(markedTimeout)).toBe('inconclusive');
+    const markedOffline = new DeviceLinkError('DEVICE_OFFLINE', 'target offline');
+    markBreakerObserved(markedOffline);
+    expect(classifyDeviceSendFailure(markedOffline)).toBe('inconclusive');
+    // 标记只影响熔断结算,不改变错误本体(上层错误协议照常)
+    expect(markedTimeout.code).toBe('INVOKE_TIMEOUT');
   });
 
   it('openLink 观测:成功不定论(link-accept 不作恢复证据),超时照常计失败', async () => {
