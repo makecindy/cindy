@@ -100,6 +100,53 @@ describe('deriveAvailableModels — dynamic-first catalog contract', () => {
     });
   });
 
+  it('intersects flat Pi efforts when a later BYOM provider reuses a built-in model id', () => {
+    const catalog = structuredClone(BUNDLED_CATALOG);
+    catalog.providers.push(
+      buildUserProvider({
+        id: 'colliding-reasoning',
+        name: 'Colliding reasoning',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: {
+            baseUrl: 'http://127.0.0.1:11434/v1',
+            wireProtocol: 'openai-responses',
+            models: [
+              {
+                id: 'xai/grok-4.3',
+                name: 'Grok 4.3 through BYOM',
+                reasoning: true,
+                reasoningEfforts: ['low'],
+              },
+              {
+                id: 'xai/grok-4.5',
+                name: 'Grok 4.5 without declared reasoning',
+              },
+            ],
+          },
+        },
+      }),
+    );
+
+    const flatModels = deriveAvailableModels(catalog, 'pi');
+    const flat = flatModels.filter((m) => m.id === 'xai/grok-4.3');
+    expect(flat).toHaveLength(1);
+    expect(flat[0]).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(
+      resolvePiRuntimeModelDescriptor(catalog, 'colliding-reasoning', 'xai/grok-4.3'),
+    ).toMatchObject({
+      efforts: ['low'],
+      defaultEffort: 'low',
+    });
+    expect(flatModels.find((m) => m.id === 'xai/grok-4.5')).toMatchObject({
+      efforts: [],
+      defaultEffort: null,
+    });
+  });
+
   it('bundled(未注入)派生 = 仅 xai 静态清单,动态供应商不贡献任何条目', () => {
     const cc = deriveAvailableModels(BUNDLED_CATALOG, 'claude-code');
     const codex = deriveAvailableModels(BUNDLED_CATALOG, 'codex');

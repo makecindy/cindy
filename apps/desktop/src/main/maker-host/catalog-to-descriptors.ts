@@ -11,7 +11,8 @@
  * (issue #882 第 3 点:网关多返回的图像/视频/TTS/STT/实时/Embedding/压缩模型不进 Agent
  * availableModels,但仍在模型管理设置页可见——那边走完整 catalog,不走这个函数),按 id
  * **首见胜出**去重（provider 序即 anthropic → openai → xd）。不可选来源不占 seen，同 id
- * 仍可由后续可用来源补上。
+ * 仍可由后续可用来源补上。唯一例外是 Pi 的同 id 冲突涉及 user provider：扁平能力没有
+ * provider provenance，effort 必须收敛为各可选来源的交集，不能宣称某条实际路由不支持的档位。
  *
  * 顺序契约（no-break）：派生结果必须逐字逐序复现迁移前的有效列表
  * （cc = 旧 CLAUDE_MODELS 序 then XD 追加序；codex = 旧 CODEX_MODELS 序 then 折扣追加序）。
@@ -35,6 +36,11 @@ interface ModelCapabilitiesTarget {
 
 interface DescriptorProjectionOptions {
   preserveExplicitPiEfforts?: boolean;
+}
+
+interface SeenModelProjection {
+  index: number;
+  includesUserProvider: boolean;
 }
 
 /** CatalogModel → ModelDescriptor。仅透传 ModelDescriptor 需要的字段；可选字段缺省时不写键。 */
@@ -79,26 +85,53 @@ function toDescriptor(
   return d;
 }
 
-/** 派生某 agent 的 availableModels：跨 provider union（数组序）+ 按 id 首见去重。 */
+/**
+ * Pi 的公开 availableModels 是按 id 拍平的旧协议，无法表达同 id 的 per-provider effort。
+ * 一旦冲突涉及 BYOM，只能公布各条可选路由都支持的交集；其余展示/窗口字段继续首见胜出。
+ * 内置来源之间仍由 catalog 一致性校验守住相同 effort，不改变其 legacy first-wins。
+ */
+function intersectPiEffortCapabilities(
+  first: ModelDescriptor,
+  next: ModelDescriptor,
+): ModelDescriptor {
+  const efforts = first.efforts.filter((effort) => next.efforts.includes(effort));
+  let defaultEffort = first.defaultEffort;
+  if (defaultEffort === null || !efforts.includes(defaultEffort)) {
+    defaultEffort =
+      next.defaultEffort !== null && efforts.includes(next.defaultEffort)
+        ? next.defaultEffort
+        : (efforts[0] ?? null);
+  }
+  return { ...first, efforts, defaultEffort };
+}
+
+/** 派生 availableModels：字段按 id 首见胜出；Pi + BYOM 同 id 时 effort 取安全交集。 */
 export function deriveAvailableModels(catalog: Catalog, agent: AgentKind): ModelDescriptor[] {
-  const seen = new Set<string>();
+  const seen = new Map<string, SeenModelProjection>();
   const out: ModelDescriptor[] = [];
   for (const provider of catalog.providers) {
     if (provider.routing[agent]?.disabled === true) continue;
     for (const m of provider.models[agent] ?? []) {
-      if (seen.has(m.id)) continue;
       // provider-aware 谓词:合并目录里 source:'user' 的自定义供应商显式配置的模型带
       // 未知 group,id 撞上能力启发式(如 flux-image-x)时不能被误杀(2026-07 review 第
       // 25 轮)。非聊天模型不占 seen,同 id 若被其它来源标为 chat 仍可补上。
       // availableModels 是旧 mobile / device-link 等消费方的新选择清单，不能依赖下游
       // 再理解 retired。运行中会话仍从持久化 model + 完整 catalog 解析实际路由。
-      if (!isModelSelectableForNewRoute(m, { userProvider: provider.source === 'user' })) continue;
-      seen.add(m.id);
-      out.push(
-        toDescriptor(m, agent, {
-          preserveExplicitPiEfforts: provider.source === 'user',
-        }),
-      );
+      const userProvider = provider.source === 'user';
+      if (!isModelSelectableForNewRoute(m, { userProvider })) continue;
+      const descriptor = toDescriptor(m, agent, {
+        preserveExplicitPiEfforts: userProvider,
+      });
+      const previous = seen.get(m.id);
+      if (previous) {
+        if (agent === 'pi' && (previous.includesUserProvider || userProvider)) {
+          out[previous.index] = intersectPiEffortCapabilities(out[previous.index], descriptor);
+          previous.includesUserProvider ||= userProvider;
+        }
+        continue;
+      }
+      seen.set(m.id, { index: out.length, includesUserProvider: userProvider });
+      out.push(descriptor);
     }
   }
   return out;
