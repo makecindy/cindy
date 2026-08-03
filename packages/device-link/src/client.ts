@@ -547,19 +547,27 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 本机是否有仍在等该设备回包的出站请求(invoke / link-open)。
+   * 本机是否有仍在等该设备回包的**业务**请求(invoke,等 invoke-result)。
    *
    * 供 host 判定「本机确实在控制该设备」这个**方向**:订阅快照是常态判据,但订阅
    * 可能先于在途请求被退掉(用户关掉最后一个会话视图而请求还没回包)。此时迟到的
    * 可靠 invoke-result —— 尤其大结果无法回退成单帧 legacy —— 仍需要重开链路才能
-   * 交付,否则只能一路丢弃到请求超时(review P2)。
+   * 交付,否则只能一路丢弃到请求超时。
+   *
+   * 刻意**排除协议请求**(link-open,等 link-accept):
+   * - 那不是业务意图的证据。用户在 openLink 等 accept 期间关掉最后一个远程会话
+   *   窗口时,退订只清订阅引用、不会取消在途的 link-open;把它算作证据会让之后的
+   *   before-link 帧继续重开链路,对端接受就凭空多出非用户发起的受控横幅
+   *   (review P1)。
+   * - 更根本地,host 的重开动作本身就是发 link-open;把它算进来会自我论证,
+   *   形成「重开在途 → 因此有权重开」的闭环。
    *
    * 只反映**出站**方向:pending 里只有本机发起、正在等对端响应的请求;对端控制本机
    * 的入站请求不在其中,所以不会把「纯被控端方向」误判成可重开。
    */
   hasPendingRequestsTo(dst: string): boolean {
     for (const request of this.pending.values()) {
-      if (request.dst === dst) return true;
+      if (request.dst === dst && request.expectKind === 'invoke-result') return true;
     }
     return false;
   }
