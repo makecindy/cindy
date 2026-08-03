@@ -2956,7 +2956,8 @@
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
           "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
           "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
+          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
+          "officialHook": "New conversations from the official bot use this Agent, model, and permission mode. Telegram, Slack, and X share this one setting. Send /new in an existing conversation to apply them."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",

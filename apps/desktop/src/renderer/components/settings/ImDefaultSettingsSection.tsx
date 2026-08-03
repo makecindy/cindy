@@ -35,7 +35,11 @@ import {
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
+import {
+  buildAgentSettingsPatch,
+  mergeSettingsPatch,
+  resolveAgentSwitchSettings,
+} from './imDefaultSettingsLogic';
 
 const AGENT_OPTIONS: Array<{
   kind: ImDefaultAgentKind;
@@ -63,8 +67,12 @@ export function ImDefaultSettingsSection({
 }: {
   /** Omit to edit the global defaults used by official hook channels. */
   channel?: ImDefaultSettingsChannel;
-  /** Channel-specific copy to show when the persisted scope is global. */
-  descriptionChannel?: ImDefaultSettingsChannel;
+  /**
+   * 只换说明文案的键(不影响读写 scope)。'officialHook' 给官方 bot 用:
+   * 它不传 channel(写 global scope), 读写的是 Telegram / Slack / X 共用的那
+   * 一份 —— 不能再拿「Telegram 新对话…」的文案让人以为只影响 Telegram。
+   */
+  descriptionChannel?: ImDefaultSettingsChannel | 'officialHook';
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
@@ -213,7 +221,16 @@ export function ImDefaultSettingsSection({
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
-    void persist({ agentKind });
+    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
+    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
+    const next = resolveAgentSwitchSettings({
+      current: settings.agents[agentKind],
+      available: modelsByAgent[agentKind],
+      fallbackEffort: IM_DEFAULT_SETTINGS.agents[agentKind].effort,
+      resolveProviderId: (modelId, providerId) =>
+        resolveProviderId(agentKind, modelId, providerId),
+    });
+    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
   };
 
   const changeModel = (model: string, providerId: string | null = activeSettings.providerId) => {
