@@ -1425,20 +1425,39 @@ export class Session {
     // activeSessions.delete + emit 'session:closed' + lifecycleHooks.onClose → 下次
     // send 自然走 IPC lazy create-session 路径, 重建 handle / transport / 远端连接。
     //
-    // iterator 自然结束同样表示底层 handle 已死。覆盖 aborting 竞态：若用户按 Stop
-    // 的同时 iterator return，不能让 abort finally 把已经死掉的 Session 改回 active。
-    if (this.status !== 'closed' && this.status !== 'error') {
-      this.logger.debug('event loop ended (handle dead), auto-closing session');
-      this.clearTurnStallWatchdog();
-      this.closePromise ??= Promise.resolve();
-      this.cancelSendReservation(this.sendReservation);
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.setStatus('closed');
-      this.eventListeners.clear();
-      this.statusListeners.clear();
-      this.interactionListener = null;
+    // iterator 自然结束同样表示底层 handle 已死。显式 close/detach 已经占有收口权时，
+    // 不能让这里提前发布 closed:performClose 必须等 transport 真正关闭后再发布，失败
+    // 则保持 error 以便调用方重试。若活跃 turn 还没有观察到终态，先补一条与 crash
+    // 分支一致的 terminal error，避免 Desktop 把这一轮静默丢掉。
+    if (this.terminationStarted || this.status === 'closed' || this.status === 'error') return;
+    const unfinishedTurn =
+      this.status === 'active' &&
+      this.isTurnRunning() &&
+      this.terminalEventObservedGeneration !== this.turnGeneration;
+    this.logger.debug('event loop ended (handle dead), auto-closing session', { unfinishedTurn });
+    this.terminationStarted = true;
+    // 先占住 closing gate：terminal error 的 listener 可能同步尝试 send，不能让它在
+    // 底层 iterator 已经结束的窗口里重新进入 provider。
+    this.closePromise = Promise.resolve();
+    if (unfinishedTurn) {
+      this.fanOutEvent({
+        type: 'error',
+        data: {
+          message: 'Session event loop stopped unexpectedly without a terminal event',
+          isTerminal: true,
+          reason: 'session_event_loop_crashed',
+        },
+        source: this.agentKind,
+      });
     }
+    this.clearTurnStallWatchdog();
+    this.cancelSendReservation(this.sendReservation);
+    this.sendReservation = null;
+    this.currentTurnOrigin = null;
+    this.setStatus('closed');
+    this.eventListeners.clear();
+    this.statusListeners.clear();
+    this.interactionListener = null;
   }
 
   private isHandleTurnRunning(): boolean {

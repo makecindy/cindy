@@ -1585,6 +1585,67 @@ describe('Session turn send guard', () => {
     expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
+  it('emits a terminal error before closing when the event iterator ends during an active turn', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let running = false;
+    const handle = createHandle({ id: 'thread-natural-end-active-turn' });
+    handle.send = vi.fn(async () => {
+      running = true;
+    });
+    handle.isTurnRunning = () => running;
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-active-turn',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const order: string[] = [];
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') {
+        terminalErrors.push(event);
+        order.push('error');
+      }
+    });
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') {
+          order.push('closed');
+          resolve();
+        }
+      });
+    });
+
+    await session.send('first');
+    releaseEnd();
+    await closed;
+
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(order).toEqual(['error', 'closed']);
+    expect(session.getStatus()).toBe('closed');
+  });
+
   it('clears the turn stall watchdog when the event iterator ends naturally', async () => {
     vi.useFakeTimers();
     try {
@@ -1600,12 +1661,13 @@ describe('Session turn send guard', () => {
       handle.isTurnRunning = () => running;
       handle.events = () => ({
         [Symbol.asyncIterator]() {
-          let first = true;
+          let ended = false;
           return {
-            async next(): Promise<IteratorResult<never>> {
-              if (first) {
-                first = false;
+            async next(): Promise<IteratorResult<AgentEvent>> {
+              if (!ended) {
+                ended = true;
                 await endReady;
+                return { done: false, value: { type: 'done', data: {}, source: 'codex' } };
               }
               return { done: true, value: undefined as never };
             },
@@ -1627,14 +1689,18 @@ describe('Session turn send guard', () => {
         });
       });
 
-      session.onEvent(() => undefined);
       await session.send('first');
+      const terminalErrors: AgentEvent[] = [];
+      session.onEvent((event) => {
+        if (event.type === 'error') terminalErrors.push(event);
+      });
       expect(vi.getTimerCount()).toBeGreaterThan(0);
 
       running = false;
       releaseEnd();
       await closed;
       expect(vi.getTimerCount()).toBe(0);
+      expect(terminalErrors).toEqual([]);
     } finally {
       vi.useRealTimers();
     }
@@ -1683,15 +1749,73 @@ describe('Session turn send guard', () => {
         if (status === 'closed') resolve();
       });
     });
+    const terminalErrors: AgentEvent[] = [];
 
-    session.onEvent(() => undefined);
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
     const sendPromise = session.send('first');
     await sendEntered;
     releaseEnd();
     await closed;
 
     await expect(sendPromise).resolves.toEqual({ accepted: false, reason: 'cancelled-before-dispatch' });
+    expect(terminalErrors).toContainEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
     expect(session.getStatus()).toBe('closed');
+  });
+
+  it('lets an explicit close own the closed status when the event iterator ends first', async () => {
+    let releaseEnd!: () => void;
+    const endReady = new Promise<void>((resolve) => {
+      releaseEnd = resolve;
+    });
+    let releaseClose!: () => void;
+    const closeReady = new Promise<void>((resolve) => {
+      releaseClose = resolve;
+    });
+    const handle = createHandle({ id: 'thread-natural-end-during-close' });
+    handle.close = vi.fn(async () => closeReady);
+    handle.events = () => ({
+      [Symbol.asyncIterator]() {
+        return {
+          async next(): Promise<IteratorResult<never>> {
+            await endReady;
+            return { done: true, value: undefined as never };
+          },
+        };
+      },
+    });
+    const session = new Session({
+      id: 'session-natural-end-during-close',
+      agentKind: 'codex',
+      workDir: '/repo',
+      handle,
+      capabilities: createAgent(async () => handle).capabilities,
+      logger: createLogger(),
+    });
+    const terminalErrors: AgentEvent[] = [];
+    session.onEvent((event) => {
+      if (event.type === 'error') terminalErrors.push(event);
+    });
+
+    const closePromise = session.close();
+    releaseEnd();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(session.getStatus()).toBe('active');
+    expect(terminalErrors).toEqual([]);
+
+    releaseClose();
+    await closePromise;
+    expect(session.getStatus()).toBe('closed');
+    expect(handle.close).toHaveBeenCalledTimes(1);
   });
 
   it('does not revive a closed session when abort is called after the event iterator crashes', async () => {
