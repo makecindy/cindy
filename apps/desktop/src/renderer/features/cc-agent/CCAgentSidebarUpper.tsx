@@ -31,9 +31,12 @@ import { createPortal } from 'react-dom';
 import {
   Archive,
   ChevronRight,
+  CircleAlert,
   CirclePlus,
   Folder,
+  Loader2,
   Plug,
+  RefreshCw,
   SquarePen,
   Timer,
   Trash2,
@@ -72,7 +75,7 @@ import {
 import { Tooltip } from '@/components/ui/tooltip';
 import * as sessionService from '@/lib/sessionService';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
+import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { cleanupSessionLayoutPrefs } from '@/lib/sessionLayoutPrefs';
 import {
   countDirtyWorktreesForRemoval,
@@ -92,7 +95,10 @@ import {
   useSessionAttentionKinds,
   useSessionAttentionSnapshot,
 } from '@/lib/sessionAttentionStore';
-import { patchDraft as patchNewMakerDraft } from '@/state/newMakerDraft';
+import {
+  patchDraft as patchNewMakerDraft,
+  resetDraftWorkspaceTargets,
+} from '@/state/newMakerDraft';
 import { consumePendingProjectFocus, usePendingProjectFocus } from '@/state/pendingProjectFocus';
 import { requestConversationSearch } from '@/state/conversationSearchRequest';
 
@@ -158,7 +164,10 @@ import type {
   AutomationScheduleSessionInfo,
   AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
-import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
+import {
+  getSessionDeviceId,
+  retryRemoteSessionBootstrap,
+} from '@/features/device-link/remoteProjectsStore';
 import {
   useRemoteSessionActivity,
   useRemoteSessionActivityRevision,
@@ -210,6 +219,7 @@ import {
   selectVisibleSessions,
   setSelectedMachineIdTransient,
   MACHINE_ALL,
+  MACHINE_LOCAL,
 } from '@/features/device-link/selectedMachineStore';
 import {
   isDeviceLinkWriteBlocked,
@@ -217,9 +227,15 @@ import {
 } from './lib/remoteSessionWriteGuard';
 import {
   useEffectiveSelectedMachineId,
+  useRemoteSessionBootstrapFailures,
   useRemoteSessionBootstrapLoading,
+  useRemoteSessionBootstrapLoadingDevices,
   useSelectedMachineConnecting,
 } from '@/features/device-link/useMachineSwitcher';
+import {
+  retryDeviceLinkDeviceList,
+  useDeviceLinkDeviceListRequestState,
+} from '@/features/device-link/useDeviceLinkDeviceList';
 import {
   useDeleteScheduleWithSessions,
   type DeletedScheduleGeneratedSessionResult,
@@ -256,6 +272,81 @@ const LAST_ACTIVITY_DAY_COUNTS: Record<
 const DAY_MS = 24 * 60 * 60 * 1000;
 
 type BulkSessionAction = 'archive' | 'delete';
+
+function RemoteSidebarLoadNotice({
+  kind,
+  status,
+  deviceLabel,
+  partial,
+  onRetry,
+}: {
+  kind: 'tasks' | 'devices';
+  status: 'loading' | 'error';
+  deviceLabel?: string;
+  partial: boolean;
+  onRetry?: () => void;
+}) {
+  const { t } = useTranslation();
+  const isError = status === 'error';
+  const messageKey =
+    kind === 'tasks'
+      ? status === 'loading'
+        ? 'ccAgent.sidebar.machineSwitcher.tasksLoading'
+        : partial
+          ? 'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'
+          : 'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'
+      : status === 'loading'
+        ? 'ccAgent.sidebar.machineSwitcher.devicesLoading'
+        : partial
+          ? 'ccAgent.sidebar.machineSwitcher.devicesPartiallyFailed'
+          : 'ccAgent.sidebar.machineSwitcher.devicesLoadFailed';
+  return (
+    <div
+      role={isError ? 'alert' : 'status'}
+      className={cn(
+        'border',
+        isError
+          ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
+          : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
+        partial
+          ? 'mx-3 flex items-start gap-2 rounded-[8px] px-3 py-2'
+          : 'mx-3 flex flex-col items-center gap-3 rounded-[12px] px-4 py-8 text-center',
+      )}
+    >
+      {isError ? (
+        <CircleAlert size={partial ? 14 : 20} className="shrink-0" />
+      ) : (
+        <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
+          <Loader2 size={partial ? 14 : 20} />
+        </span>
+      )}
+      <div className={cn('min-w-0', partial && 'flex-1')}>
+        <p className={cn(partial ? 'text-11 leading-[1.45]' : 'text-xs leading-relaxed')}>
+          {t(messageKey, { device: deviceLabel })}
+        </p>
+      </div>
+      {isError && onRetry && (
+        <button
+          type="button"
+          onClick={onRetry}
+          className={cn(
+            'inline-flex shrink-0 items-center gap-1 rounded-full font-medium',
+            'text-[var(--error-fg-strong)] transition-colors hover:bg-[var(--surface-hover)]',
+            'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring-soft)]',
+            partial ? 'h-6 px-2 text-11' : 'h-7 px-3 text-xs',
+          )}
+        >
+          <RefreshCw size={12} />
+          {t(
+            kind === 'tasks'
+              ? 'ccAgent.sidebar.machineSwitcher.retryTasks'
+              : 'ccAgent.sidebar.machineSwitcher.retryDevices',
+          )}
+        </button>
+      )}
+    </div>
+  );
+}
 
 function sameStringSet(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
   if (a.size !== b.size) return false;
@@ -675,7 +766,7 @@ function ExpandedView({
   projectAliases,
   scheduleSessionIndex,
 }: ExpandedProps) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const localPlatform = window.electronAPI.platform;
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
   const { hiddenProjectKeys, setProjectHidden } = hiddenProjects;
@@ -1009,7 +1100,39 @@ function ExpandedView({
   // 「所有」或含远程设备的作用域还要等 device-link 首次 sessions snapshot；
   // 否则本地 sessions 先完成时会把尚未知的远程空数组误报成真实空态。
   const remoteSessionBootstrapLoading = useRemoteSessionBootstrapLoading(selectedMachineId);
-  const isLoadingSidebarSessions = sessionsHook.isLoading || remoteSessionBootstrapLoading;
+  const remoteSessionBootstrapLoadingDevices =
+    useRemoteSessionBootstrapLoadingDevices(selectedMachineId);
+  const remoteSessionBootstrapFailures = useRemoteSessionBootstrapFailures(selectedMachineId);
+  const deviceListRequestState = useDeviceLinkDeviceListRequestState();
+  const remoteDeviceDirectoryRelevant =
+    selectedMachineId === MACHINE_ALL ||
+    selectedMachineId.some((deviceId) => deviceId !== MACHINE_LOCAL);
+  const remoteDeviceDirectoryStatus = remoteDeviceDirectoryRelevant
+    ? deviceListRequestState.status
+    : 'ready';
+  const loadingRemoteDeviceLabel = useMemo(
+    () =>
+      new Intl.ListFormat(i18n.language, { style: 'short', type: 'conjunction' }).format(
+        remoteSessionBootstrapLoadingDevices.map((device) => device.name),
+      ),
+    [i18n.language, remoteSessionBootstrapLoadingDevices],
+  );
+  const failedRemoteDeviceLabel = useMemo(
+    () =>
+      new Intl.ListFormat(i18n.language, { style: 'short', type: 'conjunction' }).format(
+        remoteSessionBootstrapFailures.map((device) => device.name),
+      ),
+    [i18n.language, remoteSessionBootstrapFailures],
+  );
+  const handleRetryRemoteTasks = useCallback(() => {
+    for (const device of remoteSessionBootstrapFailures) {
+      retryRemoteSessionBootstrap(device.deviceId);
+    }
+  }, [remoteSessionBootstrapFailures]);
+  const isLoadingSidebarSessions =
+    sessionsHook.isLoading ||
+    remoteSessionBootstrapLoading ||
+    remoteDeviceDirectoryStatus === 'loading';
   // 选中的远程机器尚在连接中(会话未同步)→ 用「连接中」占位替换空列表的「暂无对话」。
   const selectedMachineConnecting = useSelectedMachineConnecting();
   // orca worker + status 过滤(**不含**机器过滤)—— 抽出给「机器过滤后渲染」与「全量项目宇宙」共用。
@@ -1415,6 +1538,14 @@ function ExpandedView({
     });
   }, [activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]);
 
+  const hasVisibleSidebarContent =
+    visiblePinnedEntries.length > 0 ||
+    (filter.groupBy === 'date'
+      ? visibleDateSessions.length > 0
+      : visibleUnclassified.length > 0 ||
+        visibleProjectsWithVendor.length > 0 ||
+        visibleDialogues.length > 0);
+
   const [selectedSessionIds, setSelectedSessionIds] = useState<Set<string>>(() => new Set());
   const [selectionAnchorSessionId, setSelectionAnchorSessionId] = useState<string | null>(null);
   // 这三个值 handleSessionClick 只在「点击那一刻」读一次。留在它的 deps 里会让
@@ -1814,7 +1945,7 @@ function ExpandedView({
 
   const handleCreateDialogue = useCallback(() => {
     handleClearSelection();
-    patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] });
+    resetDraftWorkspaceTargets();
     navigate('/cc-agent/new', { state: makeNewMakerRouteState('dialogue') });
   }, [handleClearSelection, navigate]);
 
@@ -2298,7 +2429,7 @@ function ExpandedView({
           // patchMeta 按来源路由:远程会话经隧道写被控端 patch-meta(allowlist 内),本地仍走 update。
           await sessionService.patchMeta(session.id, { status: 'deleted' });
           makerChatStore.purgeSession(session.id);
-          clearComposerDraft(session.id);
+          discardComposerDraft(session.id);
           // RSB 布局偏好(fraction / treeWidth / collapsed)走 localStorage 是
           // 本机概念,本地 + 远程 session 都要清(被控端的 localStorage 由被控端自己处理)。
           cleanupSessionLayoutPrefs(session.id);
@@ -2448,7 +2579,7 @@ function ExpandedView({
             patchLocal(session.id, { status: 'archived', pinnedAt: null });
           }
           makerChatStore.purgeSession(session.id);
-          clearComposerDraft(session.id);
+          discardComposerDraft(session.id);
         } catch (err) {
           log.error('[bulk session archive]', err);
           failed.push(session.id);
@@ -2633,7 +2764,7 @@ function ExpandedView({
           // 跨 bucket 同步:见 handleConfirm 同位置注释。
           patchLocal(s.id, { status: 'archived', pinnedAt: null });
           makerChatStore.purgeSession(s.id);
-          clearComposerDraft(s.id);
+          discardComposerDraft(s.id);
         } catch (err) {
           log.error('[archive all]', err);
           failed.push(s.id);
@@ -2751,7 +2882,31 @@ function ExpandedView({
           className="flex flex-col gap-2 pt-2 pb-4 overflow-y-auto flex-1"
           style={{ scrollbarGutter: 'stable' }}
         >
-          {selectedMachineConnecting ? (
+          {remoteDeviceDirectoryStatus === 'error' && !hasVisibleSidebarContent ? (
+            <RemoteSidebarLoadNotice
+              kind="devices"
+              status="error"
+              partial={false}
+              onRetry={retryDeviceLinkDeviceList}
+            />
+          ) : remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent ? (
+            <RemoteSidebarLoadNotice
+              kind="tasks"
+              status="error"
+              deviceLabel={failedRemoteDeviceLabel}
+              partial={false}
+              onRetry={handleRetryRemoteTasks}
+            />
+          ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
+            <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
+          ) : remoteSessionBootstrapLoadingDevices.length > 0 && !hasVisibleSidebarContent ? (
+            <RemoteSidebarLoadNotice
+              kind="tasks"
+              status="loading"
+              deviceLabel={loadingRemoteDeviceLabel}
+              partial={false}
+            />
+          ) : selectedMachineConnecting ? (
             // 选中机器连接中:会话还没同步,显示「连接中」而非「暂无对话」。
             // 机器切换入口在上方固定行常驻,始终能切回「所有」、不会被困在占位页。
             <div className="flex flex-col items-center justify-center px-3 py-12 text-center">
@@ -2761,6 +2916,34 @@ function ExpandedView({
             </div>
           ) : (
             <>
+              {remoteDeviceDirectoryStatus === 'error' && (
+                <RemoteSidebarLoadNotice
+                  kind="devices"
+                  status="error"
+                  partial
+                  onRetry={retryDeviceLinkDeviceList}
+                />
+              )}
+              {remoteSessionBootstrapFailures.length > 0 && (
+                <RemoteSidebarLoadNotice
+                  kind="tasks"
+                  status="error"
+                  deviceLabel={failedRemoteDeviceLabel}
+                  partial
+                  onRetry={handleRetryRemoteTasks}
+                />
+              )}
+              {remoteDeviceDirectoryStatus === 'loading' && (
+                <RemoteSidebarLoadNotice kind="devices" status="loading" partial />
+              )}
+              {remoteSessionBootstrapLoadingDevices.length > 0 && (
+                <RemoteSidebarLoadNotice
+                  kind="tasks"
+                  status="loading"
+                  deviceLabel={loadingRemoteDeviceLabel}
+                  partial
+                />
+              )}
               <PinnedSection
                 entries={visiblePinnedEntries}
                 allKnownProjects={visibleProjectUniverse}

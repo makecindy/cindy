@@ -248,18 +248,25 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     invoke.mockResolvedValue({ effectiveEnabled: false });
     const { pluginEnableStateFor } = await import('@/lib/makerTransport');
 
-    await expect(pluginEnableStateFor('dev-1', 'collab', '/host/proj')).resolves.toEqual({
+    await expect(
+      pluginEnableStateFor('dev-1', 'collab', '/host/proj', 'project'),
+    ).resolves.toEqual({
       effectiveEnabled: false,
     });
     expect(invoke).toHaveBeenCalledWith('dev-1', 'maker:plugins:get-state', [
       'collab',
       '/host/proj',
+      'project',
     ]);
     expect(makerSpies.plugins.getState).not.toHaveBeenCalled();
 
     invoke.mockClear();
-    await pluginEnableStateFor(null, 'collab', '/local/proj');
-    expect(makerSpies.plugins.getState).toHaveBeenCalledWith('collab', '/local/proj');
+    await pluginEnableStateFor(null, 'collab', '/local/proj', 'project');
+    expect(makerSpies.plugins.getState).toHaveBeenCalledWith(
+      'collab',
+      '/local/proj',
+      'project',
+    );
     expect(invoke).not.toHaveBeenCalled();
 
     // skipQuery 档(SSH 远端):不传 workingDir → 落用户级/全局级,两条路由都要保持原样透传。

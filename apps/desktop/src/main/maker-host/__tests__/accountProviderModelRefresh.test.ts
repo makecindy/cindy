@@ -11,7 +11,7 @@ function deferred() {
 }
 
 describe('refreshProviderModelsAfterAccountReady', () => {
-  it('waits for Anthropic discovery but not unrelated provider refreshes', async () => {
+  it('keeps all account-scoped provider refreshes inside readiness', async () => {
     const anthropicRefresh = deferred();
     const backgroundRefresh = deferred();
     const events: string[] = [];
@@ -35,15 +35,21 @@ describe('refreshProviderModelsAfterAccountReady', () => {
     void operation.then(() => {
       settled = true;
     });
-    await vi.waitFor(() => expect(events).toEqual([
-      'restart',
-      'shutdown',
-      'refresh:startup:xd,openai,xai',
-      'refresh:startup:anthropic',
-    ]));
+    await vi.waitFor(() =>
+      expect(events).toEqual([
+        'restart',
+        'shutdown',
+        'refresh:startup:xd,openai,xai',
+        'refresh:startup:anthropic',
+      ]),
+    );
     expect(settled).toBe(false);
 
     anthropicRefresh.resolve();
+    await Promise.resolve();
+    expect(settled).toBe(false);
+
+    backgroundRefresh.resolve();
     await operation;
     expect(settled).toBe(true);
   });
@@ -83,6 +89,9 @@ describe('refreshProviderModelsAfterAccountReady', () => {
       }),
     ).resolves.toBeUndefined();
 
+    expect(warn).toHaveBeenCalledWith('background provider model startup refresh failed', {
+      error: 'discovery unavailable',
+    });
     expect(warn).toHaveBeenCalledWith('Anthropic model startup refresh failed', {
       error: 'discovery unavailable',
     });

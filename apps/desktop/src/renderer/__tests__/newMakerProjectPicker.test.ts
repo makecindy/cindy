@@ -207,26 +207,16 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain(
       'deviceLinkReconnectEpoch={remoteDraftRefreshEpoch}',
     );
-    expect(worktreeChipsSource).toContain(
-      "sourceBranch || branches.current || 'HEAD'",
-    );
-    expect(worktreeChipsSource).not.toContain(
-      "sourceBranch || branches.current || 'main'",
-    );
+    expect(worktreeChipsSource).toContain("sourceBranch || branches.current || 'HEAD'");
+    expect(worktreeChipsSource).not.toContain("sourceBranch || branches.current || 'main'");
   });
 
   it('invalidates worktree probe-derived fields when the selected project changes', () => {
     const start = newMakerDraftRouteSource.indexOf('const handleWorkingDirChange');
-    const end = newMakerDraftRouteSource.indexOf(
-      '// ─── 新草稿入场',
-      start,
-    );
+    const end = newMakerDraftRouteSource.indexOf('// ─── 新草稿入场', start);
     const handler = newMakerDraftRouteSource.slice(start, end);
     const actionStart = newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback(');
-    const actionEnd = newMakerDraftRouteSource.indexOf(
-      '// 弹窗确认添加后的落点',
-      actionStart,
-    );
+    const actionEnd = newMakerDraftRouteSource.indexOf('// 弹窗确认添加后的落点', actionStart);
     const action = newMakerDraftRouteSource.slice(actionStart, actionEnd);
 
     expect(handler).toContain('applyDraftTarget({');
@@ -251,6 +241,13 @@ describe('Shared create project picker', () => {
     expect(newMakerDraftRouteSource).toContain('deviceScope={folderPickerDeviceScope}');
     expect(deviceLinkProjectsHookSource).toContain('loadDeviceLinkExistingProjects(deviceId)');
     expect(deviceLinkProjectsHookSource).toContain('removeDeviceLinkExistingProject(');
+    expect(deviceLinkProjectsHookSource).toContain("status: 'error'");
+    expect(deviceLinkProjectsHookSource).toContain('retry: () => void');
+    expect(folderPickerPopoverSource).toContain("deviceScope?.status === 'error'");
+    expect(folderPickerPopoverSource).toContain(
+      "t('newChat.folderPicker.remoteProjectsLoadFailed'",
+    );
+    expect(folderPickerPopoverSource).toContain("t('newChat.folderPicker.retryRemoteProjects')");
     // 弹窗统一两类来源:SSH ready hosts + device-link 可控设备(optgroup 区分)。
     expect(addRemoteProjectDialogSource).toContain("res.hosts.filter((h) => h.status === 'ready')");
     expect(addRemoteProjectDialogSource).toContain('useControllableDevices()');
@@ -273,8 +270,10 @@ describe('Shared create project picker', () => {
   // requireAgent 的 not-registered。远程草稿以被控端注册结果为准(hook 传 deviceId 走隧道)。
   it('gates the vendor switcher by runtime-registered agents (list-available-agents)', () => {
     // hook 用权威的 runtime 注册来源,而非模型目录;远程走 device-link 隧道。
-    expect(availableAgentsHookSource).toContain("api.listAvailableAgents()");
-    expect(availableAgentsHookSource).toContain("dl.invoke(deviceId, 'maker:list-available-agents', [])");
+    expect(availableAgentsHookSource).toContain('api.listAvailableAgents()');
+    expect(availableAgentsHookSource).toContain(
+      "dl.invoke(deviceId, 'maker:list-available-agents', [])",
+    );
     // claude-code → cc 归一,fail-open(未加载不隐藏)。
     expect(availableAgentsHookSource).toContain("agent === 'claude-code' ? 'cc' : agent");
     // 未加载完成时不隐藏任何入口(loaded 保持 false → 空 hidden)。
@@ -282,10 +281,14 @@ describe('Shared create project picker', () => {
 
     // 开关按 hiddenVendors 过滤 OPTIONS,但保留当前选中段避免"无选中"过渡帧。
     expect(vendorSwitcherSource).toContain('hiddenVendors');
-    expect(vendorSwitcherSource).toMatch(/opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/);
+    expect(vendorSwitcherSource).toMatch(
+      /opt\.vendor === value \|\| !hiddenVendors\.includes\(opt\.vendor\)/,
+    );
 
     // 路由:以被控端(deviceId)为准计算 hidden;两处开关都传;选中值被隐藏时 coerce 到首个可用。
-    expect(newMakerDraftRouteSource).toContain('useAvailableAgents(effectiveDeviceLinkDeviceId)');
+    expect(newMakerDraftRouteSource).toMatch(
+      /useAvailableAgents\(\s*effectiveDeviceLinkDeviceId,?\s*\)/,
+    );
     expect(newMakerDraftRouteSource).toContain('hiddenVendors={hiddenSwitcherVendors}');
     expect(newMakerDraftRouteSource).toMatch(/hiddenSwitcherVendors\.includes\(draft\.vendor\)/);
   });
@@ -328,15 +331,11 @@ describe('Shared create project picker', () => {
       'if (isDeviceLinkDraft && effectiveDeviceLinkDeviceId) {',
     );
     // 远程纯对话没有 repo:即使 wtEnabled 残留 true 也必须跳过 worktree 分支。
-    expect(newMakerDraftRouteSource).toContain(
-      '&& wt.supportsRecoveryKeyDiscard === true',
-    );
+    expect(newMakerDraftRouteSource).toMatch(/&&\s*wt\.supportsRecoveryKeyDiscard === true/);
     expect(newMakerDraftRouteSource).toContain(
       'onRecoveryKeyDiscardSupportChange={handleWtRecoveryKeyDiscardSupportChange}',
     );
-    expect(worktreeChipsSource).toContain(
-      'detect.data.supportsRecoveryKeyDiscard === true',
-    );
+    expect(worktreeChipsSource).toContain('detect.data.supportsRecoveryKeyDiscard === true');
   });
 
   // #807 review 修复:新建目标必须与普通发送同口径 —— 远程纯对话下不能因为缺 workingDir 就抛错。
@@ -414,8 +413,8 @@ describe('Shared create project picker', () => {
     );
     // 上层仍要在已选设备时下发 onAddRemoteProject —— 入口 1 与空态入口都靠它,
     // 只是那个 Globe 项不再渲染。别顺手把这个 gate 一起收掉。
-    expect(newMakerDraftRouteSource).toContain(
-      'hasAnyRemoteTarget || folderPickerDeviceScope ? handleOpenRemoteProject : undefined',
+    expect(newMakerDraftRouteSource).toMatch(
+      /hasAnyRemoteTarget \|\|\s*folderPickerDeviceScope\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
     );
   });
 
@@ -472,10 +471,12 @@ describe('Shared create project picker', () => {
     );
     // memo 的归属守卫:这是把 deviceId 绑进状态的唯一目的。
     expect(deviceLinkProjectsHookSource).toContain('deviceId && loaded.deviceId === deviceId');
-    // 归属没对上时仍算加载中,避免切设备那一帧闪「没有项目」空态。
+    // 请求态也必须绑定归属设备：归属没对上或还没发起时仍算加载中，
+    // 避免切设备那一帧闪「没有项目」空态，也避免上一台的失败串过来。
     expect(deviceLinkProjectsHookSource).toContain(
-      'const effectiveLoading = loading || (deviceId != null && loaded.deviceId !== deviceId);',
+      "requestState.deviceId !== deviceId || requestState.status === 'idle'",
     );
+    expect(deviceLinkProjectsHookSource).toContain("loading: status === 'loading'");
   });
 
   // #807 review 第十四轮:恢复路径不能依赖 React 的调度时机。`setRows(updater)` 的 updater
@@ -630,18 +631,30 @@ describe('Shared create project picker', () => {
     );
   });
 
-  // #807 review 第十轮:两个创建 guard 必须把 remoteDraftState.loaded 一起看。换设备时我们把它
-  // 打回未加载(防上一台默认值串台),而 capabilities/providers 若已缓存则那两个 loading 立刻为
-  // false —— 只看它们会在 maker:get-new-maker-defaults 回来前放行,提交 capability 兜底值而不是
-  // 该设备保存的草稿值,会话建出来后晚到的响应也修不回去。
-  it('waits for remote defaults before allowing send or goal creation', () => {
-    const guards =
-      newMakerDraftRouteSource.match(
-        /capabilitiesLoading \|\| deviceProvidersLoading \|\| !remoteDraftState\.loaded/g,
-      ) ?? [];
-    expect(guards.length).toBe(2);
-    expect(newMakerDraftRouteSource).not.toContain(
-      'if (isDeviceLinkDraft && (capabilitiesLoading || deviceProvidersLoading)) return false;',
+  // 远程模型目录的 loading / error 与草稿默认值都是创建前置条件：任一路径没就绪
+  // 都不能把兜底值提交给对端；真实读取失败还必须告知用户，不能在 loading=false 后放行。
+  it('blocks send and goal creation until remote models/defaults are ready, including terminal errors', () => {
+    expect(newMakerDraftRouteSource).toContain(
+      'capabilitiesError || (deviceProvidersError && !deviceProvidersUnsupported)',
+    );
+    expect(newMakerDraftRouteSource.match(/remoteModelListStatus !== 'ready'/g)).toHaveLength(2);
+    expect(newMakerDraftRouteSource).toContain(
+      "toast.error(t('newChat.modelSelector.remoteLoadFailed'))",
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      "throw new Error(t('newChat.modelSelector.remoteLoadFailed'))",
+    );
+    expect(newMakerDraftRouteSource).toContain("remoteDraftState.status === 'error'");
+    expect(newMakerDraftRouteSource).toContain(
+      "toast.error(t('ccAgent.draft.remoteDefaultsLoadFailed'))",
+    );
+    expect(newMakerDraftRouteSource).toContain(
+      "throw new Error(t('ccAgent.draft.remoteDefaultsLoadFailed'))",
+    );
+    expect(newMakerDraftRouteSource).toContain('setRemoteDraftRetryEpoch((value) => value + 1)');
+    expect(newMakerDraftRouteSource).toContain("status: unsupported ? 'ready' : 'error'");
+    expect(newMakerDraftRouteSource).toContain(
+      "if (extractIpcError(error)?.code === 'DEVICE_LINK_CHANNEL_NOT_ALLOWED') return null;",
     );
   });
 
@@ -717,11 +730,11 @@ describe('Shared create project picker', () => {
       newMakerDraftRouteSource.indexOf('const applyDraftTarget = useCallback('),
     );
     const body = action.slice(0, action.indexOf('      patchDraft({'));
-    // 没有 inline 快照(设备 pill / 回落两条路径)且换了设备 → 打回未加载,交给 seed effect。
+    // 没有 inline 快照(设备 pill / 回落两条路径)且换了设备 → 打回 loading,交给 seed effect。
     const fallback = body.slice(body.indexOf('} else if (deviceChanged) {'));
     expect(fallback).toContain('setDlSel(null);');
     expect(fallback).toContain('dlSeedKeyRef.current = null;');
-    expect(fallback).toContain('setRemoteDraftState({ loaded: false, value: null });');
+    expect(fallback).toContain("setRemoteDraftState({ status: 'loading', value: null });");
     // 有 inline 快照(设备域浏览器)则当场 seed,并置 skip flag 避免 effect 再拉一次覆盖掉。
     expect(body).toContain('skipDefaultsRefetchRef.current = true;');
   });
@@ -733,8 +746,8 @@ describe('Shared create project picker', () => {
     expect(folderPickerPopoverSource).toContain('if (deviceScope) {');
     expect(folderPickerPopoverSource).toContain('onAddRemoteProject?.(deviceScope.deviceId);');
     // 已选定设备时无条件下发入口(设备离线也要能浏览它)。
-    expect(newMakerDraftRouteSource).toContain(
-      'hasAnyRemoteTarget || folderPickerDeviceScope ? handleOpenRemoteProject : undefined',
+    expect(newMakerDraftRouteSource).toMatch(
+      /hasAnyRemoteTarget \|\|\s*folderPickerDeviceScope\s*\?\s*handleOpenRemoteProject\s*:\s*undefined/,
     );
   });
 
@@ -787,11 +800,10 @@ describe('Shared create project picker', () => {
   // #807 review 第三轮:能力缓存命中时必须清掉上一目标遗留的 loading —— 漏了会让
   // capabilitiesLoading 永久为 true,而创建页的 send / goal guard 正是看它。
   it('clears inherited loading state when the capability cache hits', () => {
-    const cachedBranch = agentCapabilitiesHookSource.slice(
-      agentCapabilitiesHookSource.indexOf(
-        'const cached = cache.get(cacheKey(agentKind, deviceId));',
-      ),
+    const hookSource = agentCapabilitiesHookSource.slice(
+      agentCapabilitiesHookSource.indexOf('export function useAgentCapabilities('),
     );
+    const cachedBranch = hookSource.slice(hookSource.indexOf('const cached = cache.get(key);'));
     const untilReturn = cachedBranch.slice(0, cachedBranch.indexOf('return;'));
     expect(untilReturn).toContain('setLoading(false);');
     expect(untilReturn).toContain('setError(null);');

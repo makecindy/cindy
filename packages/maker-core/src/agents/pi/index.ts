@@ -95,10 +95,23 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
+const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
+
+class PiImageInputUnsupportedError extends Error {
+  readonly code = PI_IMAGE_INPUT_UNSUPPORTED_CODE;
+
+  constructor() {
+    super(
+      `[${PI_IMAGE_INPUT_UNSUPPORTED_CODE}] Image input is not enabled for the current Pi model. ` +
+        'Switch to an image-capable model, or enable image input for this custom model and start a new Pi task.',
+    );
+    this.name = 'PiImageInputUnsupportedError';
+  }
+}
 
 /**
  * digest 分片 body 的**字节**上限(硬上限 8192,留 headroom)。存储层按 UTF-8 字节
@@ -348,12 +361,17 @@ export class PiAgent extends BaseAgent {
   private async writeModelsJson(
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
+    retainedRuntimeModel?: ModelDescriptor,
   ): Promise<void> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
     }
-    const models = this.capabilities.availableModels
+    const publicModels = this.capabilities.availableModels;
+    const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
+      ? [...publicModels, retainedRuntimeModel]
+      : publicModels;
+    const models = runtimeModels
       .map((m: ModelDescriptor) => ({
       id: m.id,
       name: m.displayName,
@@ -499,6 +517,28 @@ export class PiAgent extends BaseAgent {
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
 
+    // availableModels 是公开的新选择面,retired/disabled 会被有意过滤;但恢复中的旧 Pi
+    // 会话仍需要 models.json 内存在当前模型,Pi 才能解析持久化的 --model。仅对真实 resume
+    // 且公开清单缺失的 compat 模型请求 host 补一个私有描述符;不回写 capabilities,也不
+    // 放宽 setModel / route guard。
+    let retainedRuntimeModel: ModelDescriptor | undefined;
+    if (
+      opts.resumeSessionId &&
+      initialProvider === PI_PROVIDER_ID &&
+      !this.capabilities.availableModels.some((model) => model.id === opts.model)
+    ) {
+      retainedRuntimeModel = this.deps.resolvePiRuntimeModelDescriptor?.(
+        opts.providerId,
+        opts.model,
+      ) ?? undefined;
+      if (!retainedRuntimeModel) {
+        this.deps.logger.warn('pi: selected model missing from public and retained runtime catalogs', {
+          model: opts.model,
+          providerId: opts.providerId ?? null,
+        });
+      }
+    }
+
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
     const authProviderId =
@@ -540,7 +580,7 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    await this.writeModelsJson(configHome, nativeProviders);
+    await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel);
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
 
@@ -737,6 +777,9 @@ export class PiAgent extends BaseAgent {
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     let interactionResolver: InteractionResolver | null = null;
     let mutableModel = opts.model;
+    // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
+    // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
+    let mutablePiProviderId = initialProvider;
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
@@ -1094,6 +1137,15 @@ export class PiAgent extends BaseAgent {
       }
     };
 
+    const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
+      if (images.length === 0 || mutablePiProviderId === PI_PROVIDER_ID) return;
+      const nativeModel = nativeProviderById
+        .get(mutablePiProviderId)
+        ?.models.find((candidate) => candidate.id === mutableModel);
+      if (nativeModel?.input?.includes('image')) return;
+      throw new PiImageInputUnsupportedError();
+    };
+
     const handle: AgentSessionHandle = {
       // getter 而非固定值:setModel / commitRewindFiles 会更新闭包里的 mutableModel /
       // sdkSessionId,Session.model / Session.sdkSessionId 直读这两个 handle 属性 ——
@@ -1117,9 +1169,10 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        setAutoReviewIntent(message.content);
         const { text, images } = await buildPiPrompt(message);
         rejectIfCancelled(sendOpts, 'send');
+        assertImageInputSupported(images);
+        setAutoReviewIntent(message.content);
         // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
         // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
@@ -1141,9 +1194,10 @@ export class PiAgent extends BaseAgent {
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'steer');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        setAutoReviewIntent(message.content);
         const { text, images } = await buildPiPrompt(message);
         rejectIfCancelled(sendOpts, 'steer');
+        assertImageInputSupported(images);
+        setAutoReviewIntent(message.content);
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
         const command: Record<string, unknown> = { type: 'steer', message: escapeLeadingSlashCommand(promptText) };
@@ -1209,6 +1263,7 @@ export class PiAgent extends BaseAgent {
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
+        mutablePiProviderId = provider;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };

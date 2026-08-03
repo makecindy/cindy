@@ -81,6 +81,20 @@ describe('createOverrideSettingsFile', () => {
     }
   });
 
+  it('reuses the initial stat snapshot when caching a readable file', () => {
+    const { dir, file, store } = createTempStore();
+    const statSync = vi.spyOn(fs, 'statSync');
+    try {
+      fs.writeFileSync(file, JSON.stringify({ enabled: false }), 'utf-8');
+      store.readState();
+      expect(statSync).toHaveBeenCalledTimes(1);
+      expect(statSync).toHaveBeenCalledWith(file);
+    } finally {
+      statSync.mockRestore();
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   it('writePatch persists only touched keys as overrides', () => {
     const { dir, file, store } = createTempStore();
     try {

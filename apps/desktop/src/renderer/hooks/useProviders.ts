@@ -14,14 +14,18 @@
 import { useCallback, useEffect, useState } from 'react';
 
 import type { ProviderView } from '@cindy/model-providers';
+import { getDataOwnerGeneration } from '@/contexts/dataOwnerGeneration';
 import { refreshLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
 import {
   getCachedProvidersSnapshot,
   subscribeProvidersSnapshot,
+  type ProvidersSnapshot,
 } from '@/lib/providersSnapshotStore';
 
 export interface UseProvidersReturn {
   providers: ProviderView[];
+  providerOrder: string[];
+  ownerGeneration: number | null;
   loading: boolean;
   refetch: () => void;
 }
@@ -39,23 +43,33 @@ export interface UseProvidersReturn {
  * 只缓存"快照"不缓存"是否在拉取中",故不破坏 refetch 的现有刷新语义。
  */
 export function useProviders(): UseProvidersReturn {
-  const [providers, setProviders] = useState<ProviderView[]>(
-    () => getCachedProvidersSnapshot() ?? [],
+  const { dataOwnerId } = getDataOwnerGeneration();
+  const [snapshot, setSnapshot] = useState<ProvidersSnapshot | null>(() =>
+    getCachedProvidersSnapshot(),
   );
-  // 有缓存即视为已就绪:重开时第一帧就有可用数据,不再走 loading 态。
-  const [loading, setLoading] = useState(getCachedProvidersSnapshot() == null);
+
+  // AuthContext 会先同步切换全局 data owner 代际、再提交 React state。owner 改变后的
+  // 首次 render 不能继续暴露旧 state；只接受同 owner state 或 owner-scoped 模块缓存。
+  const currentSnapshot =
+    snapshot?.dataOwnerId === dataOwnerId
+      ? snapshot
+      : getCachedProvidersSnapshot();
 
   const refetch = useCallback(() => {
     void refreshLocalCatalogSnapshot();
   }, []);
 
   useEffect(() => {
-    const onRefresh = (next: ProviderView[]): void => {
-      setProviders(next);
-      setLoading(false);
-    };
+    setSnapshot(getCachedProvidersSnapshot());
+    const onRefresh = (next: ProvidersSnapshot | null): void => setSnapshot(next);
     return subscribeProvidersSnapshot(onRefresh);
-  }, []);
+  }, [dataOwnerId]);
 
-  return { providers, loading, refetch };
+  return {
+    providers: currentSnapshot?.providers ?? [],
+    providerOrder: currentSnapshot?.providerOrder ?? [],
+    ownerGeneration: currentSnapshot?.ownerGeneration ?? null,
+    loading: currentSnapshot == null,
+    refetch,
+  };
 }

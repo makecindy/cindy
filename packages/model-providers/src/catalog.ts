@@ -378,6 +378,9 @@ function isValidPreset(v: unknown): v is ProviderPreset {
         mm.contextWindow !== undefined
         && (typeof mm.contextWindow !== 'number' || !Number.isFinite(mm.contextWindow) || mm.contextWindow <= 0)
       ) return false;
+      if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
+        return false;
+      }
     }
     if (r.wireProtocol !== undefined && !isWireProtocol(r.wireProtocol)) return false;
     if (agent === 'claude-code' && r.wireProtocol === 'openai-chat') return false;

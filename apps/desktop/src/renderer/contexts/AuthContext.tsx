@@ -33,7 +33,12 @@ import { isGhostPanelWindow } from '@/lib/ghostPanelWindow';
 import { setNewMakerDraftOwner } from '@/state/newMakerDraft';
 import { setComposerDraftOwner } from '@/lib/composerDraftStore';
 import { setPendingHandoffOwner } from '@/state/pendingFirstMessage';
-import { setDataOwnerGeneration } from './dataOwnerGeneration';
+import { invalidateProvidersSnapshot } from '@/lib/providersSnapshotStore';
+import { preloadLocalCatalogSnapshot } from '@/lib/localCatalogSnapshot';
+import {
+  getDataOwnerGeneration,
+  setDataOwnerGeneration,
+} from './dataOwnerGeneration';
 
 /**
  * 登录态上下文：user / isAuthenticated / isCanary / deviceId 全部来自 main 的
@@ -75,6 +80,12 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 
 const log = createLogger('AuthContext');
 
+function publishDataOwnerGeneration(dataOwnerId: string | null): void {
+  const previousOwnerId = getDataOwnerGeneration().dataOwnerId;
+  setDataOwnerGeneration(dataOwnerId);
+  if (previousOwnerId !== dataOwnerId) invalidateProvidersSnapshot();
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
   const [mode, setMode] = useState<'signed-out' | 'local' | 'cloud'>('signed-out');
@@ -99,6 +110,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const activeDataOwnerIdRef = useRef<string | null>(null);
   const authStateVersionRef = useRef(0);
 
+  // Auth mutations invalidate owner-bound in-flight reads before crossing IPC. If Main rejects
+  // the transition, restore the single authoritative owner ref (which successful siblings and
+  // newer pushes both update), then rebuild the cache because React state may never have changed.
+  const runDataOwnerBoundary = useCallback(async <T,>(operation: () => Promise<T>): Promise<T> => {
+    publishDataOwnerGeneration(null);
+    try {
+      return await operation();
+    } catch (error) {
+      publishDataOwnerGeneration(activeDataOwnerIdRef.current);
+      void preloadLocalCatalogSnapshot();
+      throw error;
+    }
+  }, []);
+
   /**
    * 身份即 auth-server membership(产品 role 水合已随 /api/me 退役,2026-07)。
    * 这里只负责账号切换时清 renderer 会话快照,防旧账号的在途响应/挂载态泄漏。
@@ -114,7 +139,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyIncomingState = useCallback(
     (state: AuthState) => {
       const ownerChanged = activeDataOwnerIdRef.current !== state.dataOwnerId;
-      setDataOwnerGeneration(state.dataOwnerId);
+      publishDataOwnerGeneration(state.dataOwnerId);
       if (ownerChanged) {
         sessionsStore.reset();
         clearWorkersCache();
@@ -187,7 +212,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setCanEnterApp(false);
         setMode('signed-out');
         setDataOwnerId(null);
-        setDataOwnerGeneration(null);
+        publishDataOwnerGeneration(null);
         activeDataOwnerIdRef.current = null;
         activeUserIdRef.current = null;
         setLoginState(null);
@@ -226,7 +251,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (handling) return;
       handling = true;
       // Invalidate in-flight remote sends before the confirmation dialog resolves.
-      setDataOwnerGeneration(null);
+      publishDataOwnerGeneration(null);
       // main 只给客户端内部分类(不透传服务端原文),按 reason 选本地化文案,
       // 让用户区分「被顶下线 / 凭证被外部实例清除 / 自然过期 / 账号不可用」。
       const descriptionKey =
@@ -276,16 +301,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   );
 
   const logout = useCallback(async () => {
-    setDataOwnerGeneration(null);
-    await authServiceRef.current!.logout();
+    await runDataOwnerBoundary(() => authServiceRef.current!.logout());
     sessionsStore.reset();
     clearWorkersCache();
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const enterLocalMode = useCallback(async () => {
-    setDataOwnerGeneration(null);
-    const state = await authServiceRef.current!.enterLocalMode();
-    setDataOwnerGeneration(state.dataOwnerId);
+    const state = await runDataOwnerBoundary(() => authServiceRef.current!.enterLocalMode());
+    publishDataOwnerGeneration(state.dataOwnerId);
+    activeDataOwnerIdRef.current = state.dataOwnerId;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -293,12 +317,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCanEnterApp(state.canEnterApp);
     setIsAuthenticated(state.isAuthenticated);
     setUser(state.user);
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const exitLocalMode = useCallback(async () => {
-    setDataOwnerGeneration(null);
-    const state = await authServiceRef.current!.exitLocalMode();
-    setDataOwnerGeneration(state.dataOwnerId);
+    const state = await runDataOwnerBoundary(() => authServiceRef.current!.exitLocalMode());
+    publishDataOwnerGeneration(state.dataOwnerId);
+    activeDataOwnerIdRef.current = state.dataOwnerId;
     setComposerDraftOwner(state.dataOwnerId);
     setPendingHandoffOwner(state.dataOwnerId);
     setMode(state.mode);
@@ -306,7 +330,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setCanEnterApp(state.canEnterApp);
     setIsAuthenticated(state.isAuthenticated);
     setUser(state.user);
-  }, []);
+  }, [runDataOwnerBoundary]);
 
   const getAccountDeletionAvailability = useCallback(
     () => authServiceRef.current!.getAccountDeletionAvailability(),

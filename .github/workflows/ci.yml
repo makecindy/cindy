@@ -18,7 +18,10 @@ env:
   XDT_SKIP_AGENT_BIN_INSTALL: '1'
   ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
   ELECTRON_OVERRIDE_DIST_PATH: '${{ github.workspace }}/.electron-stub-dist'
-  NODE_OPTIONS: '--max-old-space-size=4096'
+  # 8192: desktop tsc 全量 typecheck 峰值内存随仓体增长已突破 4GB(2026-08-02 起
+  # 所有 PR 的 verify 在 Typecheck desktop 步骤稳定 OOM,含纯 mobile 改动);
+  # 公开仓 ubuntu-latest runner 内存 16GB,8GB heap 安全。
+  NODE_OPTIONS: '--max-old-space-size=8192'
 
 jobs:
   verify:
@@ -98,7 +101,15 @@ jobs:
       - name: Check i18n glossary
         run: pnpm check:i18n-glossary
 
+      # desktop 的 tsc 峰值内存已经贴着全局 4096MB 上限(2026-08-03 本地实测
+      # 约 4.2GB,`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),
+      # 在 runner 上会随机 OOM(FATAL ERROR: Ineffective mark-compacts near heap
+      # limit)。已排除单点热点:移走最大的单个测试文件只省 ~5MB、移走 1400 行的
+      # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
+      # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
       - name: Typecheck desktop
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile
@@ -117,6 +128,83 @@ jobs:
 
       - name: Run mobile scope guard
         run: pnpm --filter mobile test:scope
+
+  # Linux 全绿不能覆盖 path separator、盘符、大小写和文件系统能力差异。两个
+  # Windows 分片并行运行，分片并集仍完整覆盖 test:unit，不能缩成少量 smoke。
+  windows-unit-shards:
+    name: Windows unit tests (${{ matrix.shard }}/2)
+    runs-on: windows-latest
+    timeout-minutes: 40
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [1, 2]
+    env:
+      XDT_UNIT_TEST_SHARD: ${{ matrix.shard }}/2
+
+    steps:
+      - name: Checkout client
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          lfs: true
+
+      # GitHub-hosted Windows 带 Git Bash；复用 Linux job 的 fail-closed 来源校验，
+      # 同时保留 win32 Node / 文件系统语义供后续单测覆盖。
+      - name: Verify cindy-protocol submodule source
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_url='https://github.com/makecindy/cindy-protocol.git'
+          expected_path='cindy-protocol'
+          actual_url="$(git config -f .gitmodules --get submodule.cindy-protocol.url || true)"
+          actual_path="$(git config -f .gitmodules --get submodule.cindy-protocol.path || true)"
+          if [ "$actual_url" != "$expected_url" ] || [ "$actual_path" != "$expected_path" ]; then
+            echo "::error file=.gitmodules::cindy-protocol source mismatch: url='$actual_url' path='$actual_path' (expected url='$expected_url' path='$expected_path')"
+            exit 1
+          fi
+          echo "cindy-protocol submodule source verified: $actual_url"
+
+      - name: Fetch cindy-protocol submodule
+        shell: bash
+        run: |
+          git submodule sync -- cindy-protocol
+          git submodule update --init --force --recursive -- cindy-protocol
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@0ebf47130e4866e96fce0953f49152a61190b271 # v6
+        with:
+          run_install: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Install bundled ripgrep
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: pnpm install:ripgrep
+
+      - name: Run client and package unit tests
+        run: pnpm test:unit
+
+  # 保留稳定的必需检查名，并确保任一分片失败或取消都会阻断汇总门禁。
+  windows-unit:
+    name: Windows unit tests
+    if: ${{ always() }}
+    needs: windows-unit-shards
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require both Windows unit shards
+        env:
+          WINDOWS_UNIT_SHARDS_RESULT: ${{ needs.windows-unit-shards.result }}
+        run: test "$WINDOWS_UNIT_SHARDS_RESULT" = "success"
 
   git-integration:
     name: Desktop Git integration

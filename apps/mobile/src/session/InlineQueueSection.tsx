@@ -24,6 +24,7 @@ import { Text } from '@/components/AppText';
 import { Pause, Play } from 'lucide-react-native';
 import { describeAgentAuthError } from '@/device-link/remoteStatus';
 import type { InputProjection } from '@/session/types';
+import { isPiImageInputUnsupportedProjectionError } from '@/session/inputProjectionError';
 import {
   fontWeight,
   iconSize,
@@ -63,13 +64,18 @@ export function InlineQueueSection({
   if (!hasBanner) return null;
 
   const controlsDisabled = busy || !!readOnlyReason;
+  const projectionError = projection.error
+    ? isPiImageInputUnsupportedProjectionError(projection.error)
+      ? t('message.queue.piImageInputUnsupported')
+      : (describeAgentAuthError(projection.error) ?? projection.error)
+    : null;
 
   return (
     <View style={styles.container} testID="queue.inline.section">
       {projection.error ? (
         <View style={styles.errorBox} testID="queue.inline.error">
-          {/* agent 未鉴权错误换成带引导的中文提示;其它错误维持原文 */}
-          <Text style={styles.errorText}>{describeAgentAuthError(projection.error) ?? projection.error}</Text>
+          {/* 稳定错误 marker 按当前显示端语言翻译；其它错误维持既有 auth 映射或原文。 */}
+          <Text style={styles.errorText}>{projectionError}</Text>
           <View style={styles.errorActions}>
             <ActionPill
               busy={busy}

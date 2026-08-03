@@ -23,9 +23,9 @@ describe('pinned project sidebar integration', () => {
     expect(sidebarSource).toContain(
       '<RailPanels\n        projects={visibleRailProjectsWithVendor}',
     );
-    expect(sidebarSource).toContain('<ProjectsSection');
-    expect(sidebarSource).toContain('unclassified={visibleUnclassified}');
-    expect(sidebarSource).toContain('projects={visibleProjectsWithVendor}');
+    expect(sidebarSource).toMatch(
+      /<ProjectsSection\s+unclassified=\{visibleUnclassified\}\s+projects=\{visibleProjectsWithVendor\}/,
+    );
   });
 
   it('keeps all-pinned projects available while omitting their pinned child rows', () => {
@@ -58,10 +58,9 @@ describe('pinned project sidebar integration', () => {
     expect(dateStart).toBeGreaterThanOrEqual(0);
     expect(dateEnd).toBeGreaterThan(dateStart);
     expect(dateBlock).toContain('pinnedProjectKeys.has(pinnedProjectKey)');
-    expect(dateBlock).toContain('activityFilteredSessions');
-    expect(dateBlock).toContain('vendorPredicate');
-    expect(dateBlock).toContain('filter.projectsAsSet');
-    expect(dateBlock).toContain('pinnedProjectKeys');
+    expect(dateBlock).toContain(
+      '[activityFilteredSessions, vendorPredicate, filter.projectsAsSet, pinnedProjectKeys]',
+    );
   });
 
   it('confirms before removing a project and keeps the rail open when cancelled', () => {

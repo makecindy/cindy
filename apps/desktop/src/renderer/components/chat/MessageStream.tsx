@@ -42,6 +42,7 @@ import type {
   ContinuationInFlightProjectionCapability,
 } from '@/hooks/useCCAgentChat';
 import { Spinner } from '@/components/ui/spinner';
+import { useMessageNavRailPreference } from '@/hooks/useMessageNavRailPreference';
 import { HISTORY_GAP_SPLIT_MS } from '@/lib/historyGap';
 import type { KnownLocalFileRef } from '@/lib/localPathResolver';
 import { createLogger } from '@/lib/logger';
@@ -3440,6 +3441,10 @@ export function MessageStream({
   // 派生 —— 导航条要给整段历史画刻度)。目标可能在渲染窗口外,跳转走下面的
   // layout effect:复用 focus-jump 的"先扩窗到目标、下一轮再滚动"两段式,
   // 以及 chip-jump 的 expandWindow/onLoadMore 抑制协议。
+  // 导航条是个性化可选功能(Settings → 个性化 → 小技巧),默认关闭;关闭时
+  // 不挂载组件(卸载时组件自会把 navRailCoversNav 报回 false,chip 兜底回归),
+  // 也不做下面的空闲补页。
+  const { enabled: navRailEnabled } = useMessageNavRailPreference();
   const navRailEntries = useMemo(() => deriveNavRailEntries(messages), [messages]);
 
   // 入口去重:导航条**完整覆盖导航**(出场且刻度未截断)时抑制"跳到上一条
@@ -3454,7 +3459,9 @@ export function MessageStream({
   // shouldBackfillForNavRail 一族常量注释)。与"跳转补齐"同属程序化翻页,
   // prepend 的滚动补偿照走 F-SYNC-2 协议:调用前快照 scrollHeight/scrollTop。
   // 即使当下窗口太窄导航条没出场,补到的历史对搜索/上滚阅读同样有用,
-  // 且有轮数预算封顶,不做 eligible 门控。
+  // 且有轮数预算封顶,不做 eligible 门控。但**用户显式关闭导航条**(个性化
+  // 开关,默认关)时跳过:为一个不存在的 UI 自动翻页不符合默认克制,开关
+  // 打开后本 effect 依赖变化会重新评估补页。
   // 调度 effect 的依赖含 sessionId(与 MessageNavRail 的 resetKey 同款惯例):
   // 两个会话的条目数 / hasMore 恰好相同且 onLoadMore 身份未变时,切会话也要
   // 取消旧会话待发的空闲回调、并按归零后的轮数预算为新会话重新评估
@@ -3464,6 +3471,7 @@ export function MessageStream({
     navRailBackfillRoundsRef.current = 0;
   }, [sessionId]);
   useEffect(() => {
+    if (!navRailEnabled) return;
     if (!onLoadMore) return;
     if (
       !shouldBackfillForNavRail({
@@ -3490,7 +3498,7 @@ export function MessageStream({
     }
     const id = window.setTimeout(run, 300);
     return () => window.clearTimeout(id);
-  }, [sessionId, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
+  }, [sessionId, navRailEnabled, navRailEntries.length, hasMoreMessages, isLoadingMore, onLoadMore]);
 
   const railJumpSeqRef = useRef(0);
   const [railJumpRequest, setRailJumpRequest] = useState<{ id: string; seq: number } | null>(null);
@@ -3878,17 +3886,20 @@ export function MessageStream({
             />
 
             {/* message-nav-rail: 左缘提问导航条(每条提问一根刻度,当前项加深,
-          hover 预览,点击跳转)。显隐由组件自判:提问数 ≥4 且内容列左侧留白
-          足够;窄窗口 / 嵌入面板自然隐藏,绝不压在气泡上。 */}
-            <MessageNavRail
-              entries={navRailEntries}
-              scrollRef={scrollRef}
-              contentMaxWidth={contentWidth ?? 880}
-              bottomOffset={resolvedBottomPadding}
-              onJump={handleNavRailJump}
-              onNavCoverageChange={setNavRailCoversNav}
-              resetKey={sessionId}
-            />
+          hover 预览,点击跳转)。个性化开关(默认关)决定挂不挂载;挂载后的
+          显隐仍由组件自判:提问数 ≥4 且内容列左侧留白足够;窄窗口 / 嵌入面板
+          自然隐藏,绝不压在气泡上。 */}
+            {navRailEnabled && (
+              <MessageNavRail
+                entries={navRailEntries}
+                scrollRef={scrollRef}
+                contentMaxWidth={contentWidth ?? 880}
+                bottomOffset={resolvedBottomPadding}
+                onJump={handleNavRailJump}
+                onNavCoverageChange={setNavRailCoversNav}
+                resetKey={sessionId}
+              />
+            )}
 
             {/* prev-user-msg-jump: 右上角"跳到上一条提问"icon 按钮。
           通过 createPortal 挂到祖先的 TopRightChipStack 容器里,与 DiffPanelToggle

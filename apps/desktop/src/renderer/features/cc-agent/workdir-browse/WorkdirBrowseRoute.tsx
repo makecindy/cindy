@@ -38,7 +38,7 @@ import { createLogger } from '@/lib/logger';
 import { toast } from '@/lib/toast';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { makerChatStore } from '@/lib/makerChatStore';
-import { clearDraft as clearComposerDraft } from '@/lib/composerDraftStore';
+import { discardDraft as discardComposerDraft } from '@/lib/composerDraftStore';
 import { fetchDirtyWorktreeForRemoval } from '@/lib/worktreeRemovalWarning';
 import * as sessionService from '@/lib/sessionService';
 import { getDraft, getFastModeForModel } from '@/state/newMakerDraft';
@@ -371,7 +371,7 @@ export function WorkdirBrowseRoute() {
       }
 
       makerChatStore.purgeSession(closingId);
-      clearComposerDraft(closingId);
+      discardComposerDraft(closingId);
       // 跨 bucket 同步:refreshSessions 只刷自己当前 filter 桶 ('all'),sidebar 的
       // 'active' 桶不会被刷,导致 sidebar 仍把已归档 session 当 active 渲染。
       // patchLocal 遍历所有桶就地合并字段,弥补单桶 refresh 的覆盖盲区。

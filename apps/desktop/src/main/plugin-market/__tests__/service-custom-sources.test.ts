@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -996,7 +997,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 的目录"这种永久错误,按内容非法跳过才对(否则这类市场永久阻塞默认安装)。
     // 路径必须按 realpath 拼:发现层用的是 realpath(macOS 上 /var → /private/var),
     // 用 mkdtemp 原样路径做匹配会让 mock 永不命中。
-    const target = path.join(fs.realpathSync(dir), 'plugins', 'srv', 'ghost.json');
+    const target = path.join(await fs.promises.realpath(dir), 'plugins', 'srv', 'ghost.json');
     const realOpen = fs.promises.open;
     const spy = vi.spyOn(fs.promises, 'open').mockImplementation((async (
       ...args: Parameters<typeof fs.promises.open>
@@ -1141,7 +1142,7 @@ describe('PluginMarketService 自定义市场 detail/install', () => {
     // 已安装目录同样可能被外部进程/同步盘改动,且摘要读取在每次市场快照都会
     // 执行;所有此类读取必须走 readBoundedFileNoFollow 系列(单句柄限量闸)。
     const source = await fs.promises.readFile(
-      path.join(path.dirname(new URL(import.meta.url).pathname), '..', 'service.ts'),
+      path.join(path.dirname(fileURLToPath(import.meta.url)), '..', 'service.ts'),
       'utf8',
     );
     expect(source).not.toMatch(/fs\.promises\.readFile\(/);

@@ -23,7 +23,7 @@ describe('model pricing prewarm ordering', () => {
     const failedGuard = source.indexOf("dbClientTakeover.mode === 'failed'");
     const earlyUsageIpc = source.indexOf('registerMakerUsageIpc(ipcMaker);');
     const prewarm = source.indexOf('void prewarmModelPricing();');
-    const refreshCatalog = source.indexOf('void refreshCustomProvidersIntoCatalog();');
+    const refreshCatalog = source.indexOf('await refreshCustomProvidersIntoCatalog(');
 
     expect(localDbReady).toBeGreaterThanOrEqual(0);
     expect(failedGuard).toBeGreaterThan(localDbReady);

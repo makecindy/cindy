@@ -76,6 +76,32 @@ describe('newMakerDraft remote host identity', () => {
     expect(getDraft().collab.enabled).toBe(true);
   });
 
+  it('keeps collab enabled when switching from a project to dialogue', async () => {
+    const { getDraft, patchDraft, patchCollab } = await loadModule();
+    patchDraft({ workingDir: '/local/app' });
+    patchCollab({ enabled: true });
+
+    patchDraft({ workingDir: null });
+
+    expect(getDraft().workingDir).toBeNull();
+    expect(getDraft().collab.enabled).toBe(true);
+  });
+
+  it('keeps collab on reload for a persisted dialogue draft', async () => {
+    memStorage.setItem(
+      'xdt:newMakerDraft:v1',
+      JSON.stringify({
+        vendor: 'cc',
+        workingDir: null,
+        collab: { enabled: true, worker: 'codex' },
+      }),
+    );
+    vi.resetModules();
+    const { getDraft } = await loadModule();
+    expect(getDraft().workingDir).toBeNull();
+    expect(getDraft().collab.enabled).toBe(true);
+  });
+
   it('keeps collab on reload when a persisted draft is remote', async () => {
     memStorage.setItem(
       'xdt:newMakerDraft:v1',

@@ -1256,6 +1256,28 @@
       },
       "checkCase": false,
       "note": "一次提问到一次回答结束。**内部概念，不作为界面术语**：面向用户一律说「消息」，只在确实要强调一次完整往返时说「一轮」（如「上一轮」）。不要引入「轮次」作为界面用词。"
+    },
+    {
+      "id": "withdraw-reply",
+      "status": "proposed",
+      "en": "withdraw (a reply)",
+      "translations": {
+        "zh-CN": "撤回",
+        "ja": "取り消す",
+        "ko": "철회"
+      },
+      "note": "用户在 X 上让 Cindy 删掉它那条公开回帖的动作(在回帖下回 /delete)。zh-CN 取「撤回」而不是「删除」——「删除」在本仓已大量用于删任务/删会话/删文件, 而这个动作的对象是「已经发出去的公开内容」, 与 IM 里的消息撤回同义。刻意登记为 proposed: X 撤回是新功能(server PR #288 / client 侧告知), 四语只有这一处用例, 等更多用例出现后再定 decided。"
+    },
+    {
+      "id": "bot-reply-post",
+      "status": "proposed",
+      "en": "reply (the bot's public post on X)",
+      "translations": {
+        "zh-CN": "回帖",
+        "ja": "返信",
+        "ko": "답장"
+      },
+      "note": "Cindy 在 X 上发出的那条公开回复。zh-CN 取「回帖」以强调它是**一条公开帖子**而不是私聊消息——这正是 X 与 Slack / Telegram 的性质差异, 也是风险告知的核心。与「消息」区分开: 后者按 task-and-conversation-naming 只用于任务内的单条往来。proposed 同上。"
     }
   ]
 }

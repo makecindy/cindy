@@ -761,10 +761,10 @@ describe('automation-generated sessions', () => {
     );
     expect(source).toContain("menuOpen && 'opacity-0'");
     expect(source).toContain('disabled={!latestSession}');
-    // 自动任务组头首图标必须复用普通 SessionItem 的 15px 槽与 vendor 尺寸规则，
-    // 否则裸 VendorIcon 会比其它会话向左偏约 1.5px，Claude mark 还会小 1px。
+    // 自动任务组头首图标按模式复用普通任务槽:list 对齐 SessionCard 的 12px，
+    // text 对齐 SessionItem 的 15px；vendor 尺寸规则保持一致。
     // vendor 经 agentKindToVendor 归一(pi 会话显示 π,而非 Claude 脸);尺寸规则:cc=13,其余(codex/pi)=12。
-    expect(source).toContain('className="flex w-[15px] shrink-0 items-center justify-center"');
+    expect(source).toContain("sessionVariant === 'list' ? 'w-3' : 'w-[15px]'");
     expect(source).toContain('vendor={agentKindToVendor(latestSession?.agentKind)}');
     expect(source).toContain("size={agentKindToVendor(latestSession?.agentKind) === 'cc' ? 13 : 12}");
     // 所有自动任务统一 Timer；暂停只叠角标，主图标和 12px 槽位不替换。
@@ -772,11 +772,13 @@ describe('automation-generated sessions', () => {
     expect(source).toContain('paused={isScheduleStopped}');
     expect(source).not.toContain('<Clock');
     expect(source).not.toContain('<Pause');
-    // 沿用原 Clock 的紧凑节奏：vendor → Timer、Timer → 标题均为 6px。
+    // text 沿用 vendor → Timer → 标题的 6px 节奏；list 把 Timer 排到标题后，
+    // 标题与普通列表任务落在同一列。
     expect(source).toContain(
       'className="flex min-w-0 items-center gap-1.5 text-left disabled:cursor-default"',
     );
     expect(source).toContain('className="flex min-w-0 items-center gap-1.5"');
+    expect(source).toContain("sessionVariant === 'list' && 'order-2'");
     expect(source).toContain('runningSessionIds,');
   });
 
@@ -1032,7 +1034,7 @@ describe('automation-generated sessions', () => {
     expect(deleteHookSource).toContain("sessionService.update(sessionId, { status: 'deleted' })");
     expect(deleteHookSource).toContain('window.electronAPI.cleanupSessionImages(sessionId)');
     expect(deleteHookSource).toContain('makerChatStore.closeSessionQuery(sessionId)');
-    expect(deleteHookSource).toContain('clearComposerDraft(sessionId)');
+    expect(deleteHookSource).toContain('discardComposerDraft(sessionId)');
     expect(deleteHookSource).toContain('scheduler.deleteDialog.option.keep.title');
     expect(deleteHookSource).toContain('scheduler.deleteDialog.option.archive.title');
     expect(deleteHookSource).toContain('scheduler.deleteDialog.option.delete.title');

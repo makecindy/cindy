@@ -117,6 +117,11 @@ const CAPABILITIES: VideoProviderCapabilities = {
     first_and_last_frame: 1,
     reference_image: 9,
   },
+  // 没有音频开关:阿里云的 `audio_setting`(auto / origin)只属于
+  // `-video-edit` 变体,而那个变体本仓没接(见文件头"仍未接入"那段);
+  // t2v / i2v / r2v 三个变体的参数表里压根没有这一项。显式传 audio 的单子
+  // 由执行器明拒,不静默丢弃。接 video-edit 时连同这里一起放开。
+  supportsAudio: false,
   expectedSecondsByAlias: {
     happyhorse: 180,
   },

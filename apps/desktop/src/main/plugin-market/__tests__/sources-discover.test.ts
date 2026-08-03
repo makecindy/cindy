@@ -7,6 +7,21 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { discoverMarketplace } from '../sources/discover';
 
 const roots: string[] = [];
+const directoryLinkType = process.platform === 'win32' ? 'junction' : 'dir';
+
+const canSymlink = (() => {
+  const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-market-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    fs.writeFileSync(target, 'probe');
+    fs.symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    fs.rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
 
 afterEach(() => {
   for (const root of roots.splice(0)) fs.rmSync(root, { recursive: true, force: true });
@@ -137,7 +152,7 @@ describe('discoverMarketplace', () => {
     const outside = makeRoot();
     writePlugin(outside, 'escaped', 'escaped');
     writePlugin(root, 'plugins/good', 'good-one');
-    fs.symlinkSync(outside, path.join(root, 'plugins', 'linked-out'), 'dir');
+    fs.symlinkSync(outside, path.join(root, 'plugins', 'linked-out'), directoryLinkType);
     writeManifest(root, {
       name: 'linked',
       plugins: [
@@ -287,7 +302,9 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.displayName).toBeNull();
   });
 
-  it('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
+  // 无宿主 symlink 权限时跳过集成夹具；Windows lstat 回退由 readBoundedFile.test.ts
+  // 的注入用例继续覆盖，不会随这里的 capability skip 一起消失。
+  it.skipIf(!canSymlink)('skips a plugin whose ghost.json is a symlink, even to a valid manifest outside', async () => {
     const root = makeRoot();
     const outside = makeRoot();
     // 市场外放一份**内容完全合法**的身份卡:只断言"被跳过"才有区分度——
@@ -316,7 +333,7 @@ describe('discoverMarketplace', () => {
     expect(result.marketplace.skippedCount).toBe(1);
   });
 
-  it('validates and reads ghost.json through one file handle, never by pathname', async () => {
+  it('validates and reads ghost.json through one file handle', async () => {
     const root = makeRoot();
     writePlugin(root, 'plugins/good', 'good-one');
     writeManifest(root, { name: 'lib', plugins: [{ name: 'good', source: 'plugins/good' }] });
@@ -335,10 +352,12 @@ describe('discoverMarketplace', () => {
     try {
       const result = await discoverMarketplace(root);
       expect(result.ok).toBe(true);
-      expect(pathReads.some((target) => target.endsWith('ghost.json'))).toBe(false);
-      expect(
-        lstatSpy.mock.calls.some((call) => String(call[0]).endsWith('ghost.json')),
-      ).toBe(false);
+      expect(pathReads.some((target) => path.basename(target) === 'ghost.json')).toBe(false);
+      const lstatByPath = lstatSpy.mock.calls.some(
+        (call) => path.basename(String(call[0])) === 'ghost.json',
+      );
+      // Windows 没有 O_NOFOLLOW，安全读取器必须用 lstat + inode 对账回退。
+      expect(lstatByPath).toBe(fs.constants.O_NOFOLLOW == null);
     } finally {
       readSpy.mockRestore();
       lstatSpy.mockRestore();
@@ -349,10 +368,18 @@ describe('discoverMarketplace', () => {
     const root = makeRoot();
     const outside = makeRoot();
     // 恶意市场把清单做成指向根目录外的 symlink,借宿主之手读任意路径。
-    const secret = path.join(outside, 'secret.json');
-    fs.writeFileSync(secret, JSON.stringify({ name: 'stolen', plugins: [] }));
-    fs.mkdirSync(path.join(root, '.agents', 'plugins'), { recursive: true });
-    fs.symlinkSync(secret, path.join(root, '.agents', 'plugins', 'marketplace.json'));
+    const outsideManifestDir = path.join(outside, 'manifest');
+    fs.mkdirSync(outsideManifestDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(outsideManifestDir, 'marketplace.json'),
+      JSON.stringify({ name: 'stolen', plugins: [] }),
+    );
+    fs.mkdirSync(path.join(root, '.agents'), { recursive: true });
+    fs.symlinkSync(
+      outsideManifestDir,
+      path.join(root, '.agents', 'plugins'),
+      directoryLinkType,
+    );
 
     const result = await discoverMarketplace(root);
     expect(result.ok).toBe(false);

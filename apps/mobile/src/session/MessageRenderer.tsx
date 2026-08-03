@@ -2577,7 +2577,9 @@ function AgentTaskCard({
     () => buildMessageHierarchyLayout({ screenWidth, summaryCount: 0 }),
     [screenWidth],
   );
-  const hasDetails = !!(model.description || model.summary || model.lastToolName || model.outputFile);
+  const hasDetails = !!(
+    model.description || model.summary || model.spawnedAgentName || model.lastToolName || model.outputFile
+  );
   return (
     <FoldablePanel
       blockId={item.key}
@@ -2593,6 +2595,12 @@ function AgentTaskCard({
       {hasDetails ? (
         <View style={[styles.stackSmall, { gap: layout.stackSmallGap }]}>
           {model.description ? <Text style={styles.detailText}>{model.description}</Text> : null}
+          {/* codex spawn 启动回执:shared model 只给结构化名字,句子按 locale 组装。 */}
+          {model.spawnedAgentName ? (
+            <Text style={styles.detailText}>
+              {t('message.renderer.subagentStarted', { name: model.spawnedAgentName })}
+            </Text>
+          ) : null}
           {model.summary ? <Text style={styles.detailText}>{model.summary}</Text> : null}
           {model.lastToolName ? <Text style={styles.detailText}>{t('message.renderer.recentTool', { name: model.lastToolName })}</Text> : null}
           {model.outputFile ? <Text style={styles.detailText}>{t('message.renderer.outputFile', { file: model.outputFile })}</Text> : null}

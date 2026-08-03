@@ -24,6 +24,7 @@ vi.mock('../../localDb/client/current', () => ({
 }));
 
 import {
+  __flushAccountCurrencyStoreForTesting,
   __resetAccountCurrencyStoreForTesting,
   hydrateAccountCurrency,
   noteActiveAccount,
@@ -50,8 +51,7 @@ async function writeStore(entries: Record<string, string>): Promise<void> {
 
 /** 等 rememberAccountCurrency 的串行写链跑完（它是 fire-and-forget）。 */
 async function flushWrites(): Promise<void> {
-  for (let i = 0; i < 20; i += 1) await Promise.resolve();
-  await new Promise((resolve) => setTimeout(resolve, 10));
+  await __flushAccountCurrencyStoreForTesting();
 }
 
 beforeEach(async () => {

@@ -314,11 +314,35 @@ export interface AgentTaskCardModel {
   title: string | null;
   description?: string;
   summary?: string;
+  /**
+   * Codex `collab:spawn` 启动回执:translator 的 tool_result 只放 agentPath 原文
+   * (恰等于 input.name,见 subagentSpawnReceiptName 判据)。命中时 summary 不携带
+   * 裸路径,各端用本字段按自己的 locale 组装「Subagent 已启动」句子。
+   */
+  spawnedAgentName?: string;
   lastToolName?: string;
   outputFile?: string;
   totalTokens?: number;
   toolUses?: number;
   durationMs?: number;
+}
+
+/**
+ * codex spawn 启动回执判据:translator(maker-core codex)约定 `collab:spawn` 卡的
+ * tool_result fullText 只放 agentPath 原文、且与 `input.name` 逐字相等。命中即返回
+ * 该名字,供各端替换为本地化句子;未来 vendored Codex 升级后的富卡(agentsStates
+ * 摘要)不会与 input.name 相等,自然不命中。桌面 AgentTaskCard 与本文件的
+ * buildAgentTaskCardModel 共用本判据,不要各自内联复制。
+ */
+export function subagentSpawnReceiptName(
+  toolName: string | undefined,
+  toolInput: unknown,
+  result: string | undefined,
+): string | undefined {
+  if (toolName !== 'collab:spawn') return undefined;
+  const name = readInputString(toolInput, ['name']);
+  const trimmed = result?.trim();
+  return name && trimmed && trimmed === name ? name : undefined;
 }
 
 export function buildAgentTaskCardModel(input: {
@@ -340,13 +364,17 @@ export function buildAgentTaskCardModel(input: {
   const description = compactText(
     update?.description ?? readInputString(toolInput, ['prompt', 'description', 'task']),
   );
-  const summary = detailText(result, update?.summary);
+  const spawnedAgentName = subagentSpawnReceiptName(toolName, toolInput, result);
+  // 启动回执命中时 summary 不携带裸路径(路径已在 spawnedAgentName / title 中),
+  // 否则手机端会把 agentPath 原样当摘要展示。
+  const summary = spawnedAgentName ? detailText(update?.summary) : detailText(result, update?.summary);
   return {
     status,
     provider,
     title: title ?? null,
     ...(description ? { description } : {}),
     ...(summary ? { summary } : {}),
+    ...(spawnedAgentName ? { spawnedAgentName } : {}),
     ...(update?.lastToolName ? { lastToolName: update.lastToolName } : {}),
     ...(update?.outputFile ? { outputFile: update.outputFile } : {}),
     ...(typeof update?.usage?.totalTokens === 'number' ? { totalTokens: update.usage.totalTokens } : {}),
