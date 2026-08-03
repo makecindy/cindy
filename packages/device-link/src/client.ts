@@ -43,6 +43,8 @@ import {
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
 /** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
 const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
+/** 「link 未就绪收到可靠帧」通知的 per-peer 节流(见 onReliableFrameBeforeLink)。 */
+const STALE_LINK_NOTIFY_THROTTLE_MS = 30_000;
 const SLOW_REQUEST_WARN_MS = 1_000;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
 const MAX_LEGACY_INBOUND_BYTES = 16 * 1024 * 1024;
@@ -162,6 +164,15 @@ export interface DeviceLinkTiming {
   transportMaxRetryAttempts: number;
   /** presence fire-and-forget 帧命中 WebSocket 背压后的合并重试间隔。 */
   presenceRetryIntervalMs: number;
+  /**
+   * link 断开状态下可靠 pending 的最长滞留时间;超过即整队放弃。
+   * 防死锁兜底:link-accept/link-open 丢失时,冻结的满队列会把之后所有
+   * invoke-result 顶成 BACKPRESSURE(2026-08-03 线上实锤:被控端队列冻结
+   * 30+ 分钟,每个执行成功的结果都进 outbox 等 120s 过期丢弃)。滞留超过
+   * 该阈值说明这不是「短断线等重放」而是链路重建失败,pending 里的 push
+   * 由重连 resync 补偿,invoke-result 的原请求方早已超时,整队放弃无损。
+   */
+  stalledLinkPendingMaxAgeMs: number;
 }
 
 const DEFAULT_TIMING: DeviceLinkTiming = {
@@ -176,6 +187,7 @@ const DEFAULT_TIMING: DeviceLinkTiming = {
   transportRetryIntervalMs: TRANSPORT_RETRY_INTERVAL_MS,
   transportMaxRetryAttempts: TRANSPORT_MAX_RETRY_ATTEMPTS,
   presenceRetryIntervalMs: 500,
+  stalledLinkPendingMaxAgeMs: 60_000,
 };
 
 export type DeviceLinkStatus = 'stopped' | 'connecting' | 'online';
@@ -355,6 +367,9 @@ export class DeviceLinkClient {
 
   // —— host 订阅 ——
   private statusHandlers = new Set<(s: DeviceLinkStatus) => void>();
+  /** 收到「link 未就绪」可靠帧的通知(30s/peer 节流);host 据此主动重建控制链路。 */
+  private staleLinkHandlers = new Set<(deviceId: string) => void>();
+  private staleLinkNotifiedAt = new Map<string, number>();
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
   private issueHandlers = new Set<(issue: DeviceLinkConnectionIssue | null) => void>();
@@ -449,6 +464,7 @@ export class DeviceLinkClient {
     this.failAllPending(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
     this.clearPeerTransport();
     this.pendingInboundLinkOffers.clear();
+    this.staleLinkNotifiedAt.clear();
     this.resetLegacyInboundQueue();
     this.clearPendingPresence();
     const ws = this.ws;
@@ -499,6 +515,31 @@ export class DeviceLinkClient {
   onFrame(cb: InboundFrameHandler): () => void {
     this.frameHandlers.add(cb);
     return () => this.frameHandlers.delete(cb);
+  }
+
+  /**
+   * 订阅「收到某设备的可靠帧但本端 link 未就绪」通知(同一设备 30s 节流)。
+   * 控制端 host 据此主动重建控制链路(openLink),打破「发送端等 ACK、
+   * 接收端等 link」的相互死锁;被控端 host 忽略即可(link 重建由控制端发起)。
+   */
+  onReliableFrameBeforeLink(cb: (deviceId: string) => void): () => void {
+    this.staleLinkHandlers.add(cb);
+    return () => this.staleLinkHandlers.delete(cb);
+  }
+
+  private notifyReliableFrameBeforeLink(deviceId: string): void {
+    if (this.staleLinkHandlers.size === 0) return;
+    const now = this.monotonicNow();
+    const last = this.staleLinkNotifiedAt.get(deviceId);
+    if (last !== undefined && now - last < STALE_LINK_NOTIFY_THROTTLE_MS) return;
+    this.staleLinkNotifiedAt.set(deviceId, now);
+    for (const cb of this.staleLinkHandlers) {
+      try {
+        cb(deviceId);
+      } catch (err) {
+        this.log.error('reliable-frame-before-link handler threw', err);
+      }
+    }
   }
 
   // ─── 出站 API ───────────────────────────────────────────────────────────────
@@ -601,11 +642,23 @@ export class DeviceLinkClient {
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
     const peer = this.peerTransport.get(dst);
+    const env: Envelope = { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload };
+    // 死锁绕行:relay 在线但控制链路未就绪时,result 不进可靠队列等一个可能永远
+    // 不来的 link-accept(2026-08-03 线上实锤:队列冻结 30+ 分钟,每个执行成功的
+    // 结果都等 120s 过期丢弃),改为 legacy 裸帧即时直发 —— 控制端按 id 配对
+    // 不依赖可靠层。送达失败(对端恰好离线)时对端本来就会超时,不比旧行为差。
+    // 超过单帧上限的大 result 只能靠可靠层分片,回落入队等 link 重建。
+    if (peer?.reliable && !peer.linkReady && this.status === 'online') {
+      try {
+        this.sendEnvelope(env);
+        peer.unlinkedLegacyResponseIds.delete(requestId);
+        return;
+      } catch (err) {
+        if (!(err instanceof DeviceLinkError && err.code === 'PAYLOAD_TOO_LARGE')) throw err;
+      }
+    }
     const allowClosedLegacyResponse = peer?.unlinkedLegacyResponseIds.has(requestId) === true;
-    this.sendPeerEnvelope(
-      { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload },
-      allowClosedLegacyResponse,
-    );
+    this.sendPeerEnvelope(env, allowClosedLegacyResponse);
     if (allowClosedLegacyResponse) peer?.unlinkedLegacyResponseIds.delete(requestId);
   }
 
@@ -1433,6 +1486,10 @@ export class DeviceLinkClient {
       // pub/sub 帧可能被投到同 deviceId 的新进程；提前执行会绕过新基线并重复副作用。
       // 不回 ACK，让仍存活的发送端在链路重新建立后按同 seq 重放。
       this.log.debug(`dropping reliable payload before link is ready from ${env.src.slice(0, 8)}`);
+      // 但发送端还在按可靠流发帧 = 它认为链路该通而本端没有 link ——
+      // 光靠沉默丢弃两边会互等(死锁的另一半)。节流通知 host,由控制端
+      // 决定是否主动重新 link-open 让双方 stream 重新对齐。
+      this.notifyReliableFrameBeforeLink(env.src);
       return { handled: true };
     }
     if (peer.remoteStreamId && peer.remoteStreamId !== parsed.meta.streamId) {
@@ -1732,6 +1789,23 @@ export class DeviceLinkClient {
     if (!peer.reliable) {
       this.sendEnvelope(env);
       return false;
+    }
+
+    // 死锁兜底:link 断开状态下 pending 冻结(不重试、不清理,只等 link 重建),
+    // 若 link-accept/link-open 丢失则永远等不到,满队列把所有新帧顶成 BACKPRESSURE。
+    // 队头滞留超过阈值即整队放弃 —— push 由重连 resync 补偿,invoke-result 的
+    // 原请求方早已超时;放弃后 baseSeq 前移,对端按新基线跳过这些 seq。
+    if (!peer.linkReady && peer.pending.size > 0) {
+      const oldest = peer.pending.values().next().value as PendingReliableMessage | undefined;
+      if (
+        oldest
+        && this.monotonicNow() - oldest.enqueuedAt > this.timing.stalledLinkPendingMaxAgeMs
+      ) {
+        this.log.warn(
+          `abandoning ${peer.pending.size} stalled reliable frame(s) for peer ${env.dst.slice(0, 8)} (link down > ${this.timing.stalledLinkPendingMaxAgeMs}ms)`,
+        );
+        this.abandonReliablePending(env.dst, 'reliable link stalled; pending abandoned');
+      }
     }
 
     const seq = peer.nextSeq;

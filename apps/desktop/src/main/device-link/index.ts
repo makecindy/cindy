@@ -370,6 +370,18 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 鉴权失效不能只在设置页可见:主动 refresh,把「被顶下线」汇入全局会话过期出口。
     if (issue?.kind === 'auth-failed') recoverFromRelayAuthFailure();
   });
+  // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
+  // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。只对本机确实在控制
+  // (有活跃订阅)的设备主动重建链路;client 侧已 30s/peer 节流,openRemoteLink
+  // 自带 in-flight 去重。被控端方向(控制端给本机发帧)没有订阅记录,自然忽略。
+  client.onReliableFrameBeforeLink((deviceId) => {
+    if (snapshotSubscriptions(deviceId).length === 0) return;
+    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
+    log.info(`re-opening control link for ${deviceId.slice(0, 8)} after before-link reliable frame`);
+    openRemoteLink(deviceId).catch((err) => {
+      log.debug(`re-open link for ${deviceId.slice(0, 8)} failed`, err);
+    });
+  });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
     const available = snap.online && snap.remoteControlEnabled;
