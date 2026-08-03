@@ -147,10 +147,10 @@ async function startSession(
 
 /** 取 reviewer 第 n 次调用收到的 AutoReviewRequest。 */
 function reviewedRequest(
-  reviewer: AgentDeps['reviewAutoPermissionAction'],
+  reviewer: NonNullable<AgentDeps['reviewAutoPermissionAction']>,
   callIndex = 0,
 ): AutoReviewRequest {
-  const request = vi.mocked(reviewer!).mock.calls[callIndex]?.[0];
+  const request = vi.mocked(reviewer).mock.calls[callIndex]?.[0];
   if (!request) throw new Error(`expected reviewer call #${callIndex}`);
   return request;
 }

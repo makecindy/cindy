@@ -7,7 +7,8 @@
  *   3. auto 档:区内写静默 confirmed:true;灰区交当前模型 reviewer,仅 reviewer 明确
  *      ask / 本地红线才弹 resolver;reviewer 缺失时 fail-closed deny;
  *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效);
- *   5. 送审阅器的 model 与 spawn 的 `--model` 同源(都是用户选中的目录 id)。
+ *   5. 送审阅器的 model 与 Pi 当前运行模型同源:启动取 `--model`,热切换取成功的
+ *      `set_model` id(都是用户选中的目录 id)。
  */
 
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
@@ -19,6 +20,7 @@ const captured = vi.hoisted(() => ({
   args: [] as string[],
   env: {} as Record<string, string | undefined>,
   onEvent: null as ((event: unknown) => void) | null,
+  requests: [] as Array<Record<string, unknown>>,
   sent: [] as Array<Record<string, unknown>>,
   proxyRegistration: null as { sessionId: string; token: string } | null,
 }));
@@ -35,7 +37,10 @@ vi.mock('../rpc-client.js', () => ({
       captured.env = opts.env;
       captured.onEvent = opts.onEvent;
     }
-    async request(cmd: { type: string }): Promise<{ success: boolean; data?: unknown }> {
+    async request(
+      cmd: Record<string, unknown> & { type: string },
+    ): Promise<{ success: boolean; data?: unknown }> {
+      captured.requests.push(cmd);
       if (cmd.type === 'get_state') {
         return { success: true, data: { sessionFile: '/mock/session.jsonl', model: { contextWindow: 200000 } } };
       }
@@ -71,6 +76,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
     captured.args = [];
     captured.env = {};
     captured.onEvent = null;
+    captured.requests = [];
     captured.sent = [];
     captured.proxyRegistration = null;
     agentHome = mkdtempSync(path.join(tmpdir(), 'pi-dispatch-home-'));
@@ -88,6 +94,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   function buildDeps(
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
+    includeNextModel = false,
   ): AgentDeps {
     return {
       auth: {
@@ -110,6 +117,15 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
             cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
             maxOutputTokens: 64_000,
           },
+          ...(includeNextModel ? [{
+            id: 'm-next',
+            displayName: 'M Next',
+            contextWindow: 200_000,
+            efforts: [],
+            defaultEffort: null,
+            cost: { input: 3, output: 15, cacheRead: 0.3, cacheWrite: 3.75 },
+            maxOutputTokens: 64_000,
+          }] : []),
         ],
       },
       resolvePiAgentHome: () => agentHome,
@@ -123,8 +139,9 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   async function start(
     permissionMode?: string,
     reviewAutoPermissionAction?: AgentDeps['reviewAutoPermissionAction'],
+    includeNextModel = false,
   ): Promise<AgentSessionHandle> {
-    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction));
+    const agent = new PiAgent(buildDeps(reviewAutoPermissionAction, includeNextModel));
     return agent.startSession({
       sessionId: 's1',
       workingDir: cwd,
@@ -321,7 +338,8 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   });
 
   /**
-   * 送审阅器的 model 必须与送给 pi 进程的 `--model` 是同一个目录 id。
+   * 送审阅器的 model 必须与 Pi 当前运行模型是同一个目录 id:启动时来自 `--model`,
+   * 热切换后来自成功的 `set_model` 请求。
    *
    * host reviewer 按 (providerId, model) 精确查目录条目定路由,查不到即 fail closed
    * (oneShotCandidates 的 no_candidate),灰区动作退化成没有 UI 提示的永久 block。
@@ -329,15 +347,29 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
    * 这条用例把「两者同源」钉成不变量:将来若给 pi 引入 wire 派生,必须像 Claude 那样
    * 单独派生、不回写运行期 model。见 issue #1575。
    */
-  it('reviews through the same catalog model id it spawned pi with', async () => {
+  it('keeps review routing aligned with the initial and hot-switched catalog model ids', async () => {
     const review = vi.fn(async () => ({ verdict: 'allow' as const }));
-    const handle = await start('auto', review);
+    const handle = await start('auto', review, true);
     await handle.send({ type: 'user', content: 'Touch a scratch file outside the workspace.' });
     firePermissionRequest('r8', 'write', { path: '/tmp/catalog-model.txt' });
     await flush();
-    const spawnedModel = captured.args[captured.args.indexOf('--model') + 1];
+    const modelArgIndex = captured.args.indexOf('--model');
+    expect(modelArgIndex).toBeGreaterThan(-1);
+    const spawnedModel = captured.args[modelArgIndex + 1];
     expect(spawnedModel).toBe('m');
-    expect(review).toHaveBeenCalledWith(expect.objectContaining({ model: spawnedModel }));
+    expect(review).toHaveBeenNthCalledWith(1, expect.objectContaining({ model: spawnedModel }));
+
+    await handle.setModel?.('m-next');
+    expect(captured.requests).toContainEqual({
+      type: 'set_model',
+      provider: 'cindy',
+      modelId: 'm-next',
+    });
+    await handle.send({ type: 'user', content: 'Touch another scratch file after switching models.' });
+    firePermissionRequest('r9', 'write', { path: '/tmp/catalog-model-switched.txt' });
+    await flush();
+    expect(review).toHaveBeenNthCalledWith(2, expect.objectContaining({ model: 'm-next' }));
+    await handle.close();
   });
 
   it('auto mode prompts only when the current-model reviewer explicitly asks', async () => {
