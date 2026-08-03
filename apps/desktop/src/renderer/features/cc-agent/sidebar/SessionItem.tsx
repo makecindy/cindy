@@ -29,7 +29,7 @@
  *   Agent → Timer 沿用原 Clock 的 gap-1.5(6px),Timer → 标题同为 6px。
  */
 
-import { memo, useCallback, useEffect, useRef, useState } from 'react';
+import { memo, useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import type { MouseEvent as ReactMouseEvent, ReactNode } from 'react';
 import { Archive, ChevronRight, EllipsisVertical, Play, Undo } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
@@ -123,6 +123,7 @@ interface SidebarTitleMarqueeProps {
 function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
   const containerRef = useRef<HTMLSpanElement>(null);
   const trackRef = useRef<HTMLSpanElement>(null);
+  const isHoveredRef = useRef(false);
 
   const stopMarquee = useCallback(() => {
     const container = containerRef.current;
@@ -134,7 +135,11 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
   const startMarquee = useCallback(() => {
     const container = containerRef.current;
     const track = trackRef.current;
-    if (!container || !track || track.scrollWidth <= container.clientWidth + 1) return;
+    if (!container || !track) return;
+
+    delete container.dataset.titleOverflowing;
+    container.style.removeProperty('--sidebar-title-marquee-shift');
+    if (track.scrollWidth <= container.clientWidth + 1) return;
 
     container.style.setProperty(
       '--sidebar-title-marquee-shift',
@@ -143,13 +148,23 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     container.dataset.titleOverflowing = 'true';
   }, []);
 
+  useLayoutEffect(() => {
+    if (isHoveredRef.current) startMarquee();
+  }, [startMarquee, title]);
+
   return (
     <span
       ref={containerRef}
       className="sidebar-title-marquee min-w-0 flex-1 overflow-hidden"
       title={title}
-      onMouseEnter={startMarquee}
-      onMouseLeave={stopMarquee}
+      onMouseEnter={() => {
+        isHoveredRef.current = true;
+        startMarquee();
+      }}
+      onMouseLeave={() => {
+        isHoveredRef.current = false;
+        stopMarquee();
+      }}
     >
       <span className={cn('sidebar-title-marquee__ellipsis', className)}>{children}</span>
       <span

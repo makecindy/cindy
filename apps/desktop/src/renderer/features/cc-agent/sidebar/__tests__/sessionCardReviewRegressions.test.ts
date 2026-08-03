@@ -46,6 +46,17 @@ describe('SessionCard review regressions', () => {
     );
   });
 
+  it('recalculates the marquee when a hovered title changes', () => {
+    expect(sessionItemSource).toContain('const isHoveredRef = useRef(false);');
+    expect(sessionItemSource).toContain('useLayoutEffect(() => {');
+    expect(sessionItemSource).toContain('if (isHoveredRef.current) startMarquee();');
+    expect(sessionItemSource).toContain('}, [startMarquee, title]);');
+    expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing;');
+    expect(sessionItemSource).toContain(
+      "container.style.removeProperty('--sidebar-title-marquee-shift');",
+    );
+  });
+
   it('keeps card titles to two lines with shared inline prefix alignment', () => {
     expect(sessionCardSource).toContain('[-webkit-line-clamp:2] overflow-hidden');
     expect(sessionCardSource).toContain('style={{ textIndent: 0, paddingLeft: 0 }}');
