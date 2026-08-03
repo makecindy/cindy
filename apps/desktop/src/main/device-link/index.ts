@@ -458,13 +458,19 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
   // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。client 侧已 30s/peer
-  // 节流,这里进有界退避队列(见 flushPendingPeerLinkReopens):一次 openRemoteLink
-  // 失败不放弃,直到成功 / 显式关闭 / 撤权 / 待命 / teardown 终止。
-  client.onReliableFrameBeforeLink((deviceId, info) => {
+  // 节流,这里进 flushPendingPeerLinkReopens 的重试队列(固定 5s 重排,一次
+  // openRemoteLink 失败不放弃;成功 / 显式关闭 / 撤权 / teardown 会出队,待命态
+  // 只是跳过执行、pending 集合保留,恢复持有权后继续)。
+  client.onReliableFrameBeforeLink((deviceId) => {
     if (linkTornDown) return;
-    // 显式关闭(本机 closeLink 或对端永久 link-close)后飞来的迟到帧不得把用户
-    // 关掉的链路自动建回来;这类 peer 的重开只能由用户显式操作重新发起。
-    if (info.explicitlyClosed) return;
+    // 方向判据:openRemoteLink 是「本机去控制对方」。只有本机确实在控制该设备
+    // (持有出站订阅)时才重开,否则纯被控端方向的入站帧会触发反向建链——对端
+    // 接受则凭空多出一条非用户发起的控制链与受控横幅,拒绝则队列每 5s 空转
+    // (review P1)。刻意**不看** client 的 peer.explicitlyClosed:那是双向共享位,
+    // 互控时对端仅关闭「它控制本机」的方向也会置位,据此抑制会连本机仍然有效的
+    // 出站方向一起掐死(review P2)。用户显式关闭本机对该设备的控制时,
+    // setDeviceControlEnabled 已同时清订阅 + 置 disabledControl,两道门都拦得住。
+    if (snapshotSubscriptions(deviceId).length === 0) return;
     // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制时
     // 不入队,避免队列在必然失败的 openRemoteLink 上按 5s 无限重试空转。
     if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;

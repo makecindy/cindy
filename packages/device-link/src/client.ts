@@ -397,9 +397,7 @@ export class DeviceLinkClient {
   // —— host 订阅 ——
   private statusHandlers = new Set<(s: DeviceLinkStatus) => void>();
   /** 收到「link 未就绪」可靠帧的通知(30s/peer 节流);host 据此主动重建控制链路。 */
-  private staleLinkHandlers = new Set<
-    (deviceId: string, info: { explicitlyClosed: boolean }) => void
-  >();
+  private staleLinkHandlers = new Set<(deviceId: string) => void>();
   private staleLinkNotifiedAt = new Map<string, number>();
   private presenceHandlers = new Set<(snap: PresenceSnapshot) => void>();
   private frameHandlers = new Set<InboundFrameHandler>();
@@ -580,18 +578,16 @@ export class DeviceLinkClient {
    * 接收端等 link」的相互死锁;被控端 host 忽略即可(link 重建由控制端发起)。
    *
    * 这是该事件的**唯一**出口(#1418 与 #1449 曾各自实现一条,同一代码点双发、
-   * 两套节流参数)。`info.explicitlyClosed` 供 host 区分「链路被显式关闭后飞来的
-   * 迟到帧」——那种情况不应自动把用户关掉的链路建回来;仍然通知是因为「收到帧」
-   * 本身是对端存活的直接证据,host 的可达性判定与缓存失效仍需要它(mobile 依赖)。
+   * 两套节流参数)。刻意只报 deviceId、不附带 peer 的 explicitlyClosed:那是双向
+   * 共享位(互控时对端仅关闭它控制本机的方向也会置位),不能用来判断本机的出站
+   * 方向该不该恢复 —— 方向判据在 host 侧(是否持有该设备的出站订阅)。
    */
-  onReliableFrameBeforeLink(
-    cb: (deviceId: string, info: { explicitlyClosed: boolean }) => void,
-  ): () => void {
+  onReliableFrameBeforeLink(cb: (deviceId: string) => void): () => void {
     this.staleLinkHandlers.add(cb);
     return () => this.staleLinkHandlers.delete(cb);
   }
 
-  private notifyReliableFrameBeforeLink(deviceId: string, explicitlyClosed: boolean): void {
+  private notifyReliableFrameBeforeLink(deviceId: string): void {
     if (this.staleLinkHandlers.size === 0) return;
     const now = this.monotonicNow();
     const last = this.staleLinkNotifiedAt.get(deviceId);
@@ -599,7 +595,7 @@ export class DeviceLinkClient {
     this.staleLinkNotifiedAt.set(deviceId, now);
     for (const cb of this.staleLinkHandlers) {
       try {
-        cb(deviceId, { explicitlyClosed });
+        cb(deviceId);
       } catch (err) {
         this.log.error('reliable-frame-before-link handler threw', err);
       }
@@ -1651,7 +1647,7 @@ export class DeviceLinkClient {
       // 但发送端还在按可靠流发帧 = 它认为链路该通而本端没有 link ——
       // 光靠沉默丢弃两边会互等(死锁的另一半)。节流通知 host,由控制端
       // 决定是否主动重新 link-open 让双方 stream 重新对齐。
-      this.notifyReliableFrameBeforeLink(env.src, peer.explicitlyClosed);
+      this.notifyReliableFrameBeforeLink(env.src);
       return { handled: true };
     }
     if (peer.remoteStreamId && peer.remoteStreamId !== parsed.meta.streamId) {
