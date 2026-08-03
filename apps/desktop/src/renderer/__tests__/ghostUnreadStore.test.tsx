@@ -255,6 +255,10 @@ describe('ghostUnreadStore', () => {
       );
     }
     const { unmount } = render(<Probe />);
+    // **首帧必须是"尚未观测到可见"**:IntersectionObserver 的首次结果下一拍才到,
+    // 这期间面板可能正躺在被邻居最大化压成零宽的容器里。初值若为可见,清零 effect
+    // 会在首帧就把未读消费掉(greptile review P1)。
+    expect(screen.getByTestId('vis').textContent).toBe('hidden');
     // 被最大化的邻居压成零宽:不相交、比例 0。
     act(() => fire?.([{ isIntersecting: false, intersectionRatio: 0 }]));
     expect(screen.getByTestId('vis').textContent).toBe('hidden');

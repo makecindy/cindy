@@ -191,11 +191,20 @@ export function useHostWindowForeground(): boolean {
  * fail-open 成 true,退回「窗口前台」那一层,不会比改动前更差。
  */
 export function useElementVisible(ref: { current: Element | null }): boolean {
-  const [visible, setVisible] = useState(true);
+  /**
+   * 初值必须是 **false = 尚未观测到可见**,不能图省事写 true。
+   *
+   * `IntersectionObserver` 的首次结果要下一拍才到。若初值为 true,面板一挂载
+   * (或恢复挂载)时清零 effect 就已经跑完了——而它此刻很可能正躺在被邻居
+   * 最大化压成零宽的容器里,用户没看到内容却已经丢了角标(greptile review P1)。
+   *
+   * 清零是**消费型**动作:宁可晚一拍,不可误清。观测结果到达后 effect 自会重跑。
+   */
+  const [visible, setVisible] = useState(false);
   useEffect(() => {
     const el = ref.current;
     if (!el || typeof IntersectionObserver === 'undefined') {
-      setVisible(true); // 不支持就退回上一层判据,不误判成"没看见"而永远不清零
+      setVisible(true); // 观测不了就 fail-open,退回「宿主窗口前台」那一层判据
       return;
     }
     const observer = new IntersectionObserver((entries) => {
