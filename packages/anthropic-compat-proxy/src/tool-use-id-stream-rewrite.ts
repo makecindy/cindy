@@ -103,20 +103,29 @@ export class ToolUseIdDedupeRewriter {
     private readonly onRename?: (from: string, to: string) => void,
     /** 每个 resolve 的 id(无论是否撞车)都回调 —— 线程缓存据此记录 fresh id。 */
     private readonly onObserved?: (id: string) => void,
+    /**
+     * 共享缓存检查:同一 thread 的并发响应流(如同步 subagent)各自持有本 rewriter,
+     * 都从请求开始时的快照构建 usedIds —— 若两个快照都空, 流 A 放行并缓存 Bash_210
+     * 后, 流 B 仍把它当 fresh 放行, CLI 追加重复 id 重新引入腐蚀。resolve 每个 id
+     * 时先问共享缓存: 别处已见过 → 按碰撞改名, 不重复放行(codex-connector P1:
+     * Check the live cache before accepting fresh IDs)。
+     */
+    private readonly sharedSeen?: (id: string) => boolean,
   ) {
     this.usedIds = new Set(historyIds);
   }
 
   /** 返回(可能)改写后的 id;不改写时返回原字符串(同引用)。 */
   resolve(id: string): string {
-    if (!this.usedIds.has(id)) {
+    // 本 rewriter usedIds 已见, 或共享缓存(别的并发流)已见 → 碰撞路径改名。
+    if (!this.usedIds.has(id) && !(this.sharedSeen ? this.sharedSeen(id) : false)) {
       this.usedIds.add(id);
       this.onObserved?.(id);
       return id;
     }
     let k = 2;
     let candidate = `${id}_dup${k}`;
-    while (this.usedIds.has(candidate)) {
+    while (this.usedIds.has(candidate) || (this.sharedSeen ? this.sharedSeen(candidate) : false)) {
       k += 1;
       candidate = `${id}_dup${k}`;
     }

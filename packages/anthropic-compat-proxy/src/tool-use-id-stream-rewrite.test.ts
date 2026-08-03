@@ -129,6 +129,43 @@ describe('ToolUseIdDedupeRewriter.resolve', () => {
     expect(observed).toEqual(['fresh_1', 'Bash_210_dup2']);
     expect(rewriter.renameCount).toBe(1);
   });
+
+  it('P1: sharedSeen 实时检查 —— 共享缓存(并发流)已见的 id 按碰撞改名, 不再放行', () => {
+    // 同一 thread 的两个并发响应流各持 rewriter, 都从空快照构建。流 A 放行 Bash_210
+    // 并写入共享缓存后, 流 B 的 rewriter(usedIds 仍空)resolve Bash_210 时, sharedSeen
+    // 返回 true → 必须改名, 否则 CLI 追加重复 id 重新引入 (no content) 腐蚀。
+    const sharedCache = new Set<string>();
+    const rewriterA = new ToolUseIdDedupeRewriter(new Set(), undefined, (id) => sharedCache.add(id));
+    const rewriterB = new ToolUseIdDedupeRewriter(
+      new Set(),
+      undefined,
+      (id) => sharedCache.add(id),
+      (id) => sharedCache.has(id),
+    );
+    // 流 A: fresh 放行, 写入共享缓存
+    expect(rewriterA.resolve('Bash_210')).toBe('Bash_210');
+    // 流 B: sharedSeen 命中 → 改名
+    expect(rewriterB.resolve('Bash_210')).toBe('Bash_210_dup2');
+    expect(rewriterB.renameCount).toBe(1);
+    // 流 B 再次看到 Bash_210(本流也缓存了) → 顺延 _dup3
+    expect(rewriterB.resolve('Bash_210')).toBe('Bash_210_dup3');
+  });
+
+  it('P1: sharedSeen 对改名产物同样设防 —— 并发流已占用的 _dupN 不重复产出', () => {
+    const sharedCache = new Set<string>();
+    const rewriterA = new ToolUseIdDedupeRewriter(new Set(), undefined, (id) => sharedCache.add(id));
+    const rewriterB = new ToolUseIdDedupeRewriter(
+      new Set(),
+      undefined,
+      (id) => sharedCache.add(id),
+      (id) => sharedCache.has(id),
+    );
+    // 流 A: Bash_210 已是历史 → _dup2, 共享缓存含 Bash_210_dup2
+    rewriterA.resolve('Bash_210'); // fresh 放行
+    rewriterA.resolve('Bash_210'); // 本流内撞车 → _dup2
+    // 流 B: Bash_210 也已是历史(sharedSeen) → 必须给 _dup3, 不能与流 A 的 _dup2 撞
+    expect(rewriterB.resolve('Bash_210')).toBe('Bash_210_dup3');
+  });
 });
 
 // ── ToolUseIdRewriteTransform(SSE 字节流) ────────────────────────────────

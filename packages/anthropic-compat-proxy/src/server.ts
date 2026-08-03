@@ -1179,6 +1179,9 @@ function forward(
       // 均明文 SSE, 属理论场景)。为压缩流做解压-改写-重压收益趋零、风险高,
       // 不做; 压缩透传的撞车 id 不会污染明文转录, 下一轮明文请求仍由缓存拦截)。
       delete respHeaders['content-length'];
+      // 响应流改写涉及线程缓存读(onObserved 写 / sharedSeen 读),二者必须用同一
+      // thread id,否则并发流 A 写入的 id 流 B 读不到,共享缓存检查形同虚设。
+      const streamThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
       const rewriter = new ToolUseIdDedupeRewriter(
         responseToolUseIds,
         (from, to) => {
@@ -1193,11 +1196,19 @@ function forward(
         // fresh id 首次出现即被 rewind 的场景(codex-connector review:
         // Persist every streamed tool ID in the thread cache)。
         (observed) => {
-          const renameThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
-          if (renameThreadId && threadMintedIdCache) {
-            addThreadMintedId(threadMintedIdCache, renameThreadId, observed);
+          if (streamThreadId && threadMintedIdCache) {
+            addThreadMintedId(threadMintedIdCache, streamThreadId, observed);
           }
         },
+        // 共享缓存实时检查:同一 thread 的并发响应流(如同步 subagent)各自持有本
+        // rewriter, 都从请求开始快照构建 —— 若快照都空, 流 A 放行并缓存 Bash_210
+        // 后, 流 B 仍当 fresh 放行, CLI 追加重复 id 重新引入腐蚀。resolve 时实时查
+        // 线程缓存: 别处已见 → 按碰撞改名(codex-connector P1: Check the live cache
+        // before accepting fresh IDs)。JS 单线程事件循环保证同 tick 内 check-then-
+        // add 原子; 跨 tick 的并发流由共享缓存拦截。
+        (id) => (streamThreadId && threadMintedIdCache
+          ? (threadMintedIdCache.get(streamThreadId)?.has(id) ?? false)
+          : false),
       );
       toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
