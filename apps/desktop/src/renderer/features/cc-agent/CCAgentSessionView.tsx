@@ -1293,6 +1293,19 @@ export function CCAgentSessionView({
   const handleViewBalance = useCallback(() => {
     navigate('/settings?tab=billing');
   }, [navigate]);
+  /**
+   * live 错误的来源 provider 快照:在错误**出现的那一刻**取 session.providerId,
+   * 之后用户切换 provider 不再跟随 —— 余额分类必须绑错误发生时的来源,否则
+   * 「xd 报余额不足 → 切到 OpenAI」会丢充值入口,「OpenAI 报配额 → 切到 xd」会
+   * 误挂 Cindy AI 充值入口。deps 刻意只跟 error:同一条错误存续期间不重取。
+   */
+  const [liveErrorSourceProviderId, setLiveErrorSourceProviderId] = useState<string | null>(null);
+  const sessionProviderIdForErrorSnapshot = session?.providerId ?? null;
+  useEffect(() => {
+    if (error) setLiveErrorSourceProviderId(sessionProviderIdForErrorSnapshot);
+    else setLiveErrorSourceProviderId(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 快照语义:只在错误出现/消失时取值
+  }, [error]);
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -3346,6 +3359,7 @@ export function CCAgentSessionView({
                   modelId={session?.model}
                   providerId={session?.providerId}
                   onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                  errorSourceProviderId={errorTailMsg?.errorProviderId ?? null}
                   onSwitchToClaudeSubscription={
                     canSwitchToClaudeSubscription
                       ? handleSwitchToClaudeSubscription
@@ -3400,6 +3414,7 @@ export function CCAgentSessionView({
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }
                 onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}

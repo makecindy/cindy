@@ -82,6 +82,14 @@ interface ErrorBannerProps {
    * 此时余额不足的错误保持原样文案、不加按钮（加一个点不出结果的按钮比不加更糟）。
    */
   onViewBalance?: () => void;
+  /**
+   * **产生这条错误的** provider(错误发生时刻的快照)。余额分类只认它,不认上面的
+   * `providerId` —— providerId 是会话当前值,任务中途可切换并持久化:历史错误恢复
+   * 或报错后切换 provider 时,用当前值会把别家的 insufficient_quota 误判成 Cindy AI
+   * 余额不足(或反向丢失充值入口)。null/undefined = 来源不明,不启用余额分类。
+   * live 路径由父组件在错误出现时刻快照;持久化路径读 error 行自带的 errorProviderId。
+   */
+  errorSourceProviderId?: string | null;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -108,6 +116,7 @@ export function ErrorBanner({
   providerId,
   onSwitchToClaudeSubscription,
   onViewBalance,
+  errorSourceProviderId,
   silentEncryptedRetryEnabled = false,
   onForkStripEncrypted,
   forkStripEncryptedRunning = false,
@@ -170,11 +179,14 @@ export function ErrorBanner({
   // 会话仍允许从非 provider-oauth runtime + 非 XD/xAI 前缀推断 OpenAI，守住旧数据兼容。
   const normalizedProviderId = providerId?.trim() || null;
   // Cindy AI 网关的余额耗尽:钱花完那一刻是用户最需要计费页的时刻,给一条能就地
-  // 跳过去的出口。判定刻意要求**显式** providerId === 'xd':其它供应商(以及来源
-  // 推断不出来的历史会话)在 Cindy 里没有可跳的余额页,给按钮点不出结果比不给更糟,
-  // 所以那些情况一个字都不改(保持原始上游文案与既有交互)。
+  // 跳过去的出口。判定绑定**错误来源** provider(errorSourceProviderId,错误发生
+  // 时刻的快照),不用会话当前的 providerId —— 报错后切换 provider / 恢复历史错误
+  // 时两者会分叉,用当前值会误判来源。来源不明确(null)或非 xd 的错误一个字都不改
+  // (保持原始上游文案与既有交互):没有可跳的余额页时,给按钮点不出结果比不给更糟。
   const isGatewayQuotaExhausted =
-    normalizedProviderId === 'xd' && Boolean(onViewBalance) && isQuotaExhaustedErrorMessage(error);
+    (errorSourceProviderId?.trim() || null) === 'xd' &&
+    Boolean(onViewBalance) &&
+    isQuotaExhaustedErrorMessage(error);
   const hasExplicitOpenAiProvider = normalizedProviderId === 'openai';
   const hasImplicitOpenAiProvider =
     normalizedProviderId === null &&

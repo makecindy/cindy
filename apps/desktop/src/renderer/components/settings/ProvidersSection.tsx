@@ -229,7 +229,10 @@ function CtaPillButton({
         className,
       )}
       style={{
-        backgroundColor: 'var(--accent-cta-bg)',
+        // Black Pill(最高强调档)按 DESIGN.md §4 用 pure 对:--accent-cta-bg-pure
+        // (Light 纯黑 / Dark 纯白反转)配 --accent-pure-cta-fg。--accent-cta-bg 在
+        // 默认 Light 下是 #262626,与规范的 #000000 差一档,不能混用。
+        backgroundColor: 'var(--accent-cta-bg-pure)',
         color: 'var(--accent-pure-cta-fg)',
       }}
     >

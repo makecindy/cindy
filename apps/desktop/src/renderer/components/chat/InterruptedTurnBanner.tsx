@@ -118,6 +118,7 @@ export function ErrorTailErrorBanner({
   providerId,
   onSwitchToClaudeSubscription,
   onViewBalance,
+  errorSourceProviderId,
   silentEncryptedRetryEnabled,
   onForkStripEncrypted,
   forkStripEncryptedRunning,
@@ -139,6 +140,8 @@ export function ErrorTailErrorBanner({
   onSwitchToClaudeSubscription?: () => Promise<void>;
   /** 网关余额耗尽的历史错误行同样要有计费页出口 —— 语义与 ErrorBanner 同名 prop 一致。 */
   onViewBalance?: () => void;
+  /** 产生该错误的 provider(error 行持久化的快照);undefined = 来源不明,不启用余额分类。 */
+  errorSourceProviderId?: string | null;
   silentEncryptedRetryEnabled?: boolean;
   onForkStripEncrypted?: () => void | Promise<void>;
   forkStripEncryptedRunning?: boolean;
@@ -162,6 +165,7 @@ export function ErrorTailErrorBanner({
       providerId={providerId}
       onSwitchToClaudeSubscription={onSwitchToClaudeSubscription}
       onViewBalance={onViewBalance}
+      errorSourceProviderId={errorSourceProviderId}
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}

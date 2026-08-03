@@ -57,6 +57,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onRetry: vi.fn(),
         agentKind: 'cc',
         providerId: 'xd',
+        errorSourceProviderId: 'xd',
         onViewBalance,
       }),
     );
@@ -77,6 +78,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onRetry,
         agentKind: 'cc',
         providerId: 'xd',
+        errorSourceProviderId: 'xd',
         onViewBalance: vi.fn(),
       }),
     );
@@ -92,6 +94,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onRetry: vi.fn(),
         agentKind: 'cc',
         providerId: 'anthropic',
+        errorSourceProviderId: 'anthropic',
         onViewBalance: vi.fn(),
       }),
     );
@@ -101,12 +104,14 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
 
-  it('来源推断不出来（历史会话无显式 providerId）时同样不动', () => {
+  it('错误来源不明(无 errorSourceProviderId)时不启用余额分类 —— 即使会话当前是 xd', () => {
     render(
       createElement(ErrorBanner, {
         error: QUOTA_ERROR,
         onRetry: vi.fn(),
         agentKind: 'cc',
+        // 会话当前 provider 是 xd,但这条错误的来源快照缺失(老数据):fail-closed。
+        providerId: 'xd',
         onViewBalance: vi.fn(),
       }),
     );
@@ -122,6 +127,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onRetry: vi.fn(),
         agentKind: 'cc',
         providerId: 'xd',
+        errorSourceProviderId: 'xd',
       }),
     );
 
@@ -137,6 +143,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onRetry: vi.fn(),
         agentKind: 'cc',
         providerId: 'xd',
+        errorSourceProviderId: 'xd',
         onViewBalance: vi.fn(),
       }),
     );
@@ -156,6 +163,7 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
         onDismiss: vi.fn(),
         agentKind: 'cc',
         providerId: 'xd',
+        errorSourceProviderId: 'xd',
         onViewBalance,
       }),
     );
@@ -163,5 +171,41 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(screen.getByText('chat.errorBanner.gatewayQuotaExhausted')).toBeTruthy();
     fireEvent.click(screen.getByTitle('chat.errorBanner.viewBalanceTitle'));
     expect(onViewBalance).toHaveBeenCalledTimes(1);
+  });
+
+  it('报错后切换 provider:来源快照是 xd、会话已切到 openai → 充值入口不丢', () => {
+    const onViewBalance = vi.fn();
+    render(
+      createElement(ErrorBanner, {
+        error: QUOTA_ERROR,
+        onRetry: vi.fn(),
+        agentKind: 'cc',
+        // 会话当前 provider 已经切走,但错误发生在 xd 上 —— 分类跟来源走。
+        providerId: 'openai',
+        errorSourceProviderId: 'xd',
+        onViewBalance,
+      }),
+    );
+
+    expect(screen.getByText('chat.errorBanner.gatewayQuotaExhausted')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('chat.errorBanner.viewBalanceTitle'));
+    expect(onViewBalance).toHaveBeenCalledOnce();
+  });
+
+  it('报错后切换 provider:来源快照是 openai、会话切到 xd → 不误挂 Cindy AI 充值入口', () => {
+    render(
+      createElement(ErrorBanner, {
+        error: QUOTA_ERROR,
+        onRetry: vi.fn(),
+        agentKind: 'cc',
+        providerId: 'xd',
+        errorSourceProviderId: 'openai',
+        onViewBalance: vi.fn(),
+      }),
+    );
+
+    expect(screen.getByText(QUOTA_ERROR)).toBeTruthy();
+    expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
+    expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
 });

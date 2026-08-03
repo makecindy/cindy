@@ -210,6 +210,13 @@ describe('ProvidersSection — Cindy AI 账户资产模块', () => {
     await waitFor(() =>
       expect(screen.getByTestId('search').textContent).toBe('/settings?tab=billing&intent=topup'),
     );
+
+    // Black Pill(最高强调档)必须用 pure 对(DESIGN.md §4 button/cta):
+    // --accent-cta-bg-pure + --accent-pure-cta-fg;--accent-cta-bg 在默认 Light
+    // 下是 #262626,差一档,回归防再犯。
+    const topupButton = screen.getByText('billing.settings.topupCard.action').closest('button');
+    expect(topupButton?.style.backgroundColor).toBe('var(--accent-cta-bg-pure)');
+    expect(topupButton?.style.color).toBe('var(--accent-pure-cta-fg)');
   });
 
   it('正常态版面上没有重试 / 轮换 / 重新获取凭据按钮(它们退进「···」菜单)', async () => {
