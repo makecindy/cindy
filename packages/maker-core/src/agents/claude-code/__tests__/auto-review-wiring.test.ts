@@ -509,6 +509,51 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('keeps the generation monotonic on push timeout so an in-flight probe cannot overwrite the unconfirmed mode', async () => {
+    // codex(本轮):超时分支若把代际回滚给上一个发起者,那个"上一个"通常正是仍在飞的回探。
+    // 它迟到 settle 时会重新满足代际匹配、把刚写的 cindy-unconfirmed 覆盖成 native ——
+    // 状态声称原生而 SDK 档位其实未知,漂移原样复发。超时必须保持代际单调。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    // 先进入已确认降级,好让下一个 send 触发回探。
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    vi.useFakeTimers();
+    let rejected: unknown;
+    try {
+      // 回探的 push 挂住:它成为"上一个发起者",代际停在回探那一代。
+      fakeQuery.setPermissionMode.mockReturnValueOnce(probeGate);
+      await handle.send({ type: 'user', content: 'probe hangs' });
+
+      // 紧接着的降级信号推进代际,它的 push 也挂住 → 超时。
+      fakeQuery.setPermissionMode.mockReturnValueOnce(new Promise<void>(() => {}));
+      const pending = handle.useCindyAutoReviewFallback?.({ scope: 'turn' })?.catch((e) => {
+        rejected = e;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(String(rejected)).toContain('timed out');
+
+    // 迟到的回探成功此刻才返回。代际保持单调 → 它已永久失去写入资格,只能走安全调和,
+    // 不得把状态改回 native。
+    releaseProbe();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 状态仍是"未确认" → 下一 turn 照常回探。若代际被回滚、状态被覆盖成 native,
+    // 这里就不会再回探(断言失败)。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
   it('times out a hanging default push so the signal can retry instead of pinning in-flight', async () => {
     // codex P1:降级方向的 await 没有上界时,悬挂的控制请求会让 coordinator 永久扣着该会话
     // 的 in-flight 记录,后续信号全被去重,而状态仍声称 native、SDK 可能还在 auto ——

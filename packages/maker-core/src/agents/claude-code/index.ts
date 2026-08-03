@@ -4785,9 +4785,13 @@ export class ClaudeCodeAgent extends BaseAgent {
               // 超时 ≠ 确定没落地:请求可能已送达、只是响应没回来,SDK 档位真正未知。
               // 保守降级成"未确认",让后续信号能重推、下一 turn 能回探(而不是留下
               // 声称 native 的状态,那才会让用户继续撞硬拒绝)。
-              if (turnAutoReviewGeneration === fallbackGeneration) {
-                turnAutoReviewGeneration = previousGeneration;
-              }
+              //
+              // **超时刻意不回滚代际**(与下面的 reject 分支相反)。回滚会把写入权交还给
+              // 上一个发起者,而那通常是仍在飞的回探 —— 它迟到 settle 时会重新"代际匹配"、
+              // 覆盖掉这里刚写的 cindy-unconfirmed,漂移原样复发(codex,本轮)。两个分支
+              // 的语义本就不同:reject 表示"确定没落地、SDK 未变",交还写入权是对的;超时
+              // 表示"档位未知、且请求可能迟到",必须保持代际单调,让所有更早的在飞请求
+              // 永久失去写入资格,只能经 demoteUnattributableModeWrite 安全调和。
               demoteUnattributableModeWrite();
               log.warn('Cindy fallback mode push timed out — SDK mode unconfirmed, signal may retry', {
                 scope,
