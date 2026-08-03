@@ -2270,6 +2270,41 @@ describe('GoalController', () => {
     expect(await local.storage.get('s1')).toBeNull();
   });
 
+  it.each(['done', 'error'] as const)(
+    'clearGoal does not interrupt a queued user turn after the goal %s terminal event',
+    async (terminalEvent) => {
+      const stopActiveGoalTurn = vi.fn();
+      const local = makeController({ stopActiveGoalTurn });
+      await startGoal(local);
+      const active = await local.storage.get('s1');
+      let releaseFinalizeGet!: (state: GoalState | null) => void;
+      const blockedFinalizeGet = new Promise<GoalState | null>((resolve) => {
+        releaseFinalizeGet = resolve;
+      });
+      vi.spyOn(local.storage, 'get').mockImplementationOnce(() => blockedFinalizeGet);
+
+      // The input coordinator can start the queued user turn as soon as it observes this
+      // terminal event, while GoalController's async persistence finalization is still pending.
+      if (terminalEvent === 'done') {
+        local.session.emitGoalTurn({
+          toolUse: true,
+          verdictJson: '```json\n{"goal_status":"continue","reason":"next"}\n```',
+          origin: 'goal',
+        });
+      } else {
+        local.session.emitErrorTurn({ message: 'goal turn failed' });
+      }
+      local.session.running = true;
+
+      await local.controller.clearGoal('s1');
+
+      expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+      expect(await local.storage.get('s1')).toBeNull();
+      releaseFinalizeGet(active);
+      await tick();
+    },
+  );
+
   it('clearGoal still removes persisted state when stopping the goal turn throws', async () => {
     const local = makeController({
       stopActiveGoalTurn: () => {

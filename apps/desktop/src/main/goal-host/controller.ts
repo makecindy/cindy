@@ -1320,6 +1320,13 @@ export class GoalController {
         return;
       }
       case 'done': {
+        // AgentInputCoordinator releases the input boundary on the same terminal
+        // event and may immediately start a queued user turn. Drop Goal ownership
+        // synchronously here, before finalizeTurn awaits storage, so Clear cannot
+        // mistake that new user turn for the completed Goal turn and abort it.
+        if (event.turnOrigin?.kind === 'goal') {
+          this.goalTurnsInFlight.delete(sessionId);
+        }
         // Codex 的 per-turn 真实用量在 done.data.usage(promptTokens/completionTokens,
         // 见 maker-core codex/index.ts task_complete:"永远是 per-turn 增量")。优先用它覆盖
         // status 带来的累积上下文快照,避免 Codex 目标的 token 预算随上下文增长过早触顶。
@@ -1334,6 +1341,9 @@ export class GoalController {
       }
       default: {
         if (isTerminalAgentErrorEvent(event)) {
+          if (event.turnOrigin?.kind === 'goal') {
+            this.goalTurnsInFlight.delete(sessionId);
+          }
           void this.finalizeTurn(sessionId, event, true);
         }
         return;
@@ -1412,8 +1422,6 @@ export class GoalController {
           ? { errorKind: 'usage_limit' as const }
           : {}),
     };
-    if (origin === 'goal') this.goalTurnsInFlight.delete(sessionId);
-
     const decision = decideNextGoalState(
       {
         status: state.status,
