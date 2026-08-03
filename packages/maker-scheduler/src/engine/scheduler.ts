@@ -1281,23 +1281,31 @@ export class Scheduler extends EventEmitter {
     //   - manual:true  → 强制清空 nextFireAt（不再自动 fire）
     //   - manual:false 且 触发字段变 → 按新表达式重算（intervalMs 优先于 cron）
     //   - manual:false 且 触发字段没动 → nextFireAt 保留（避免 update 副作用）
+    // intervalMs 按「key 是否在场」判定而不是「值是否 undefined」：显式清空
+    // （key 在、值 undefined）同样是触发字段变化，必须重算回 cron 槽位。
+    const intervalKeyPresent = Object.prototype.hasOwnProperty.call(patch, 'intervalMs');
     const needsRecompute =
       patch.cronExpr !== undefined ||
       patch.timezone !== undefined ||
       patch.manual !== undefined ||
-      patch.intervalMs !== undefined ||
+      intervalKeyPresent ||
       shouldReactivateExpired;
     let recomputeFromTo: { from: number | undefined; to: number | undefined } | null = null;
     if (needsRecompute) {
-      // cron 变更但 patch 未显式带 intervalMs（典型：MCP 工具只 patch cronExpr，
-      // 其 schema 不暴露 intervalMs）→ 一律清空 intervalMs（undefined，storage 落
-      // NULL），按字面壁钟语义执行。不清的话旧 intervalMs 永远获胜，改 cron 形同
-      // 虚设。也刻意**不做**"按形态推导 interval"：cron 就是 cron，interval 语义
-      // 只属于显式传 intervalMs 的调用方（GUI 表单）——推导会让 `0 */12 * * *`
-      // 这类壁钟意图被静默转成 interval，且与 create()（不推导）不对称。
-      if (patch.cronExpr !== undefined && !('intervalMs' in patch)) {
-        updates.intervalMs = undefined;
-      }
+      // intervalMs 遵循真 partial 契约：**patch 没带 key 就不动**。
+      //
+      // 历史上这里曾在「patch 带 cronExpr 但没带 intervalMs」时隐式清空 intervalMs——
+      // 那是 MCP 工具 schema 还不暴露 intervalMs 时代的权宜（不清的话旧 intervalMs
+      // 永远获胜，改 cron 形同虚设）。intervalMs 对所有调用方开放后，这个隐式清空
+      // 反过来成了静默事故源：调用方只更新 prompt + cronExpr（cadence 展示对齐的
+      // 常见形态）就把 interval 任务打回 cron 槽位语义（2026-07-29 #211 心跳实测
+      // 中招），所有调用方被迫记住「改 prompt 必须把 intervalMs 一起带上」。
+      //
+      // 现在清空只有一种表达：**显式带 key 且值为 undefined**（JSON 边界写 null，
+      // 由 MCP 工具层翻译成带 key 的 undefined），与 GUI 表单「恒带 key」的既有
+      // 行为一致。interval 任务只改 cronExpr 时，interval 语义保持权威（cron 仅作
+      // 展示），nextFireAt 按 now + intervalMs 重新起算。仍然刻意**不做**「按形态
+      // 推导 interval」：cron 就是 cron，与 create()（不推导）对称。
       const merged: Schedule = { ...existing, ...updates };
       if (merged.manual) {
         updates.nextFireAt = undefined;
@@ -1305,7 +1313,7 @@ export class Scheduler extends EventEmitter {
         patch.cronExpr !== undefined ||
         patch.timezone !== undefined ||
         patch.manual === false ||
-        patch.intervalMs !== undefined ||
+        intervalKeyPresent ||
         shouldReactivateExpired
       ) {
         // intervalMs 模式：把"修改"视作冷启动，从 now 起新一轮 N 倒计时。

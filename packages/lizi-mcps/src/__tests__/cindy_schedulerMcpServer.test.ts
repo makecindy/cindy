@@ -992,6 +992,72 @@ describe('schedule_create — bindToCurrentSession', () => {
   });
 });
 
+// ── schedule_update: intervalMs / preRunHook.timeoutMs 的真 partial 边界翻译 ─────
+
+describe('schedule_update — partial 语义的 JSON 边界翻译', () => {
+  function setup(existing: Partial<Schedule> = {}) {
+    const updated: { id?: string; patch?: Record<string, unknown> } = {};
+    const fakeScheduler = {
+      updateFromCurrent: async (
+        id: string,
+        buildPatch: (current: Schedule) => Promise<Record<string, unknown>>,
+      ) => {
+        const patch = await buildPatch({ id, ...existing } as Schedule);
+        updated.id = id;
+        updated.patch = patch;
+        return { id, ...existing, ...patch };
+      },
+    };
+    const registry = new SchedulerToolRegistry();
+    registerScheduleUpdateTool(registry, {
+      getScheduler: () => fakeScheduler as never,
+      // 身份 stabilizer:hook 用例只验证 timeoutMs 的 partial 语义,不测路径固化
+      hookScript: { stabilizeCommand: async ({ command }: { command: string }) => command },
+    } as never);
+    return { updated, registry };
+  }
+
+  async function callUpdate(registry: SchedulerToolRegistry, extra: Record<string, unknown>) {
+    const res = await registry.call('schedule_update', { id: 'sch-1', ...extra });
+    return JSON.parse((res.content[0] as { text: string }).text) as { ok: boolean; code?: string };
+  }
+
+  it('只改 prompt → patch 不含 intervalMs key(真 partial,不再需要三件套)', async () => {
+    const { updated, registry } = setup({ intervalMs: 600_000 });
+    const env = await callUpdate(registry, { prompt: 'new prompt' });
+    expect(env.ok).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(updated.patch ?? {}, 'intervalMs')).toBe(false);
+  });
+
+  it('intervalMs: null → 翻译成带 key 的 undefined(显式清空,回到 cron 语义)', async () => {
+    const { updated, registry } = setup({ intervalMs: 600_000 });
+    const env = await callUpdate(registry, { intervalMs: null });
+    expect(env.ok).toBe(true);
+    expect(Object.prototype.hasOwnProperty.call(updated.patch ?? {}, 'intervalMs')).toBe(true);
+    expect(updated.patch?.intervalMs).toBeUndefined();
+  });
+
+  it('preRunHook 只改 command → 沿用任务现有 timeoutMs,不再静默清成不限时', async () => {
+    const { updated, registry } = setup({
+      preRunHook: { command: 'node /abs/old.mjs', timeoutMs: 180_000 },
+    });
+    const env = await callUpdate(registry, { preRunHook: { command: 'node /abs/new.mjs' } });
+    expect(env.ok).toBe(true);
+    expect(updated.patch?.preRunHook).toEqual({ command: 'node /abs/new.mjs', timeoutMs: 180_000 });
+  });
+
+  it('preRunHook.timeoutMs: null → 显式清除超时(patch 里不带 timeoutMs)', async () => {
+    const { updated, registry } = setup({
+      preRunHook: { command: 'node /abs/old.mjs', timeoutMs: 180_000 },
+    });
+    const env = await callUpdate(registry, {
+      preRunHook: { command: 'node /abs/old.mjs', timeoutMs: null },
+    });
+    expect(env.ok).toBe(true);
+    expect(updated.patch?.preRunHook).toEqual({ command: 'node /abs/old.mjs' });
+  });
+});
+
 // ── schedule_update: bindToCurrentSession 同 create 语义 ────────────────────────
 
 describe('schedule_update — bindToCurrentSession', () => {
