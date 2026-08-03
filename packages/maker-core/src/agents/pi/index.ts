@@ -1414,7 +1414,14 @@ export class PiAgent extends BaseAgent {
         // auto 的差异在 Cindy 侧 dispatcher(handleExtensionUiRequest),bridge 无感知。
         const nextMode = normalizePermissionMode(mode);
         // 用户自己动过权限档 → 一次性提示重新武装(与 Claude / Codex 同口径)。
-        if (nextMode !== requestedPermissionSnapshot.mode) autoReviewUnavailableNotice.reset();
+        // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
+        // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
+        // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
+        // 值得再提醒一次。
+        if (nextMode !== requestedPermissionSnapshot.mode) {
+          autoReviewDecisionCache.clear();
+          autoReviewUnavailableNotice.reset();
+        }
         await writePermissionSnapshotOrFailClosed({
           ...requestedPermissionSnapshot,
           mode: nextMode,

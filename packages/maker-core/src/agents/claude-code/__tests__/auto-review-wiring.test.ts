@@ -463,6 +463,38 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  /**
+   * 裁决缓存的 key 不含 permissionMode。用户切离 Auto、等审阅器恢复、再切回 Auto 时,
+   * 同一个动作会命中先前那条 `unavailable` block —— 审阅器早就好了,动作还是被拒
+   * (greptile P1 of #1574)。切档必须连缓存一起清。
+   */
+  it('drops cached unavailable verdicts when the permission mode changes', async () => {
+    let reviewerBroken = true;
+    const reviewer = vi.fn(async () => {
+      if (reviewerBroken) throw new Error('reviewer offline');
+      return { verdict: 'allow' as const };
+    });
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer,
+      attachResolver: false,
+    });
+
+    const sameAction = { file_path: '/tmp/cached.conf' };
+    const denied = await canUseTool('Write', sameAction, { toolUseID: 'cache-1' });
+    expect(denied.behavior).toBe('deny');
+
+    // 用户接管 → 审阅器恢复 → 切回 Auto。
+    await handle.setPermissionMode?.('ask');
+    reviewerBroken = false;
+    await handle.setPermissionMode?.('auto');
+
+    const allowed = await canUseTool('Write', sameAction, { toolUseID: 'cache-2' });
+    expect(allowed.behavior).toBe('allow');
+    // 缓存真的清了才会有第二次 reviewer 调用。
+    expect(reviewer).toHaveBeenCalledTimes(2);
+    await handle.close();
+  });
+
   it('re-arms the notice after the user changes the permission mode', async () => {
     const { handle, canUseTool } = await startSession('auto', {
       reviewer: async () => {

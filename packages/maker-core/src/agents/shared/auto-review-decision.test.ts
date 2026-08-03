@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   AUTO_REVIEW_UNAVAILABLE_CODE,
   classifyLocalAutoReviewTier,
+  isAutoReviewUnavailableNotice,
   composeAutoReviewIntentWithApprovedPlan,
   composeAutoReviewIntentWithClarification,
   createAutoReviewUnavailableNotice,
@@ -243,6 +244,27 @@ describe('resolveAutoReviewDecision', () => {
       );
       expect(decision.unavailable).toBeUndefined();
     });
+  });
+});
+
+describe('isAutoReviewUnavailableNotice', () => {
+  it('只认本提示的 code 前缀,不误伤其它 bracket code', () => {
+    const notice = createAutoReviewUnavailableNotice(() => {});
+    let emitted = '';
+    createAutoReviewUnavailableNotice((m) => { emitted = m; }).notify();
+    void notice;
+
+    // 真实 emit 出来的那条必须被自己的判据认出来(消费方有 desktop 落库 / IM 渠道 /
+    // renderer i18n 三处,判据错位就会漏投)。
+    expect(isAutoReviewUnavailableNotice(emitted)).toBe(true);
+    expect(isAutoReviewUnavailableNotice(`[${AUTO_REVIEW_UNAVAILABLE_CODE}] anything`)).toBe(true);
+
+    expect(isAutoReviewUnavailableNotice('[REMOTE_LOCAL_ATTACHMENT_UNSUPPORTED] nope')).toBe(false);
+    // 前缀必须在开头,不接受夹在中间。
+    expect(isAutoReviewUnavailableNotice(`prefixed [${AUTO_REVIEW_UNAVAILABLE_CODE}]`)).toBe(false);
+    expect(isAutoReviewUnavailableNotice(undefined)).toBe(false);
+    expect(isAutoReviewUnavailableNotice(null)).toBe(false);
+    expect(isAutoReviewUnavailableNotice(123)).toBe(false);
   });
 });
 

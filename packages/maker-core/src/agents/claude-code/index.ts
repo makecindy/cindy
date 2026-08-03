@@ -4505,7 +4505,14 @@ export class ClaudeCodeAgent extends BaseAgent {
       async setPermissionMode(newMode) {
         // 用户自己动过权限档之后,「自动审核不可用」这条一次性提示重新武装:再回到 Auto
         // 又不可用时,他有权再看到一次(否则一个会话里只提示一次会显得像偶发)。
-        if (newMode !== mutablePermissionMode) autoReviewUnavailableNotice.reset();
+        // 档位变了 → 连**裁决缓存**一起清。缓存 key 不含 permissionMode,切离 Auto 再切回时
+        // 会命中先前那条 `unavailable` block —— 审阅器早就恢复了,同一个动作还是被拒
+        // (greptile P1 of #1574)。一次性提示同步重新武装:用户既然接管过,之后又不可用
+        // 值得再提醒一次。
+        if (newMode !== mutablePermissionMode) {
+          autoReviewDecisionCache.clear();
+          autoReviewUnavailableNotice.reset();
+        }
         // 计划模式武装中 / 本轮 plan turn 进行中 SDK 恒在 plan 档: 只记录底层权限档
         // (循环收尾切回时生效), 不 push SDK、不动挂起交互(挂着的多半是 plan_review)。
         if (mutablePlanMode || planTurnActive) {
