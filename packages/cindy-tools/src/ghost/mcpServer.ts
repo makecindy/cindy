@@ -89,7 +89,9 @@ const D_GHOST_FORGE_PACK = [
   "把一个插件源码目录校验并打包成 .cindy,随后主机会弹出装入确认框(同 id 已装则显示",
   '"更新 vX → vY")——装不装永远由用户在弹窗上决定,本工具不会私自装入。',
   "dir 传源码目录的绝对路径(目录里须有 ghost.json;打包自动跳过 .git / node_modules /",
-  "隐藏文件 / *.cindy)。失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
+  "隐藏文件 / *.cindy)。仅当用户明确选择 AI 生成图标时,可把图片工具结果的",
+  "xdt_image_url 取单张地址；若只有 xdt_image_urls 则取数组第一项，再把得到的 cindy-media:// 地址传给 icon_source;主机会 best-effort 嵌入,失败保留默认图标继续打包。",
+  "失败返回结构化错误(MANIFEST_INVALID 等,message 带具体原因),",
   "按 message 修正源码后重新打包即可。打包成功 ≠ 已装入:告知用户去点确认框。",
 ].join("\n");
 
@@ -699,10 +701,13 @@ export async function handleForgeScaffold(
 /** ghost_forge_pack 的 handler 主体(导出供单测)。 */
 export async function handleForgePack(
   deps: CindyGhostsMcpDeps,
-  input: { dir: string },
+  input: { dir: string; icon_source?: string },
 ): Promise<McpTextResult> {
   try {
-    const result = await deps.forgePack({ dir: input.dir });
+    const result = await deps.forgePack({
+      dir: input.dir,
+      ...(input.icon_source !== undefined ? { iconSource: input.icon_source } : {}),
+    });
     if (!result.ok) {
       deps.logger?.warn("ghost_forge_pack rejected", {
         dir: input.dir,
@@ -830,6 +835,12 @@ export function createCindyGhostsMcpServer(
     D_GHOST_FORGE_PACK,
     {
       dir: z.string().describe("插件源码目录的绝对路径(目录里须有 ghost.json)"),
+      icon_source: z
+        .string()
+        .optional()
+        .describe(
+          "可选；仅当用户明确选择 AI 生成图标时，传图片工具结果的 xdt_image_url，或 xdt_image_urls 数组第一项(cindy-media:// 地址)；失败会保留默认图标继续打包",
+        ),
     },
     async (input) => handleForgePack(deps, input),
   );

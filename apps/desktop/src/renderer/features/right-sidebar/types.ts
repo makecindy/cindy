@@ -88,6 +88,11 @@ export interface TabKindHostContext {
    * 远端 file-service。plugin 据此关闭本地-only 能力(watch / 系统打开 / 搜索)。
    */
   remoteHostId: string | null;
+  /**
+   * device-link 会话归属：字符串 = 被控设备，null = 已确认本机，undefined = 归属尚未解析。
+   * 本地-only 能力必须对 undefined fail closed，避免冷启动竞态把远端路径交给本机。
+   */
+  deviceLinkDeviceId?: string | null;
   patchState: (patch: unknown) => void;
   onVisibilityChange: (visible: boolean) => void;
   setCloseInterceptor: (interceptor: TabCloseInterceptor | null) => () => void;

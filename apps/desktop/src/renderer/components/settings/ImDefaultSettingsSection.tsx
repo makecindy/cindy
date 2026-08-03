@@ -14,9 +14,7 @@ import { MessageSquare } from 'lucide-react';
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 
-import { ClaudeMark } from '@/components/icons/ClaudeMark';
-import { CodexMark } from '@/components/icons/CodexMark';
-import { PiMark } from '@/components/icons/PiMark';
+import { AgentSelect } from '@/components/new-chat/AgentSelect';
 import { ModelSelector } from '@/components/new-chat/ModelSelector';
 import { type ModelDescriptor, useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { useProviders } from '@/hooks/useProviders';
@@ -35,19 +33,19 @@ import {
   isImDefaultEffort,
 } from '../../../shared/imDefaultSettings';
 import { DefaultOverrideControls } from './DefaultOverrideControls';
-import { buildAgentSettingsPatch, mergeSettingsPatch } from './imDefaultSettingsLogic';
-
-const AGENT_OPTIONS: Array<{
-  kind: ImDefaultAgentKind;
-  Mark: typeof ClaudeMark;
-}> = [
-  { kind: 'claude-code', Mark: ClaudeMark },
-  { kind: 'codex', Mark: CodexMark },
-  { kind: 'pi', Mark: PiMark },
-];
+import {
+  buildAgentSettingsPatch,
+  mergeSettingsPatch,
+  resolveAgentSwitchSettings,
+} from './imDefaultSettingsLogic';
 
 function vendorKeyFor(agentKind: ImDefaultAgentKind): 'cc' | 'codex' | 'pi' {
   return agentKind === 'claude-code' ? 'cc' : agentKind;
+}
+
+/** AgentSelect 的 vendor → IM 默认配置的 agentKind。 */
+function agentKindOfVendor(vendor: string): ImDefaultAgentKind {
+  return vendor === 'cc' ? 'claude-code' : vendor === 'pi' ? 'pi' : 'codex';
 }
 
 export interface ImDefaultSettingsSummary {
@@ -63,8 +61,12 @@ export function ImDefaultSettingsSection({
 }: {
   /** Omit to edit the global defaults used by official hook channels. */
   channel?: ImDefaultSettingsChannel;
-  /** Channel-specific copy to show when the persisted scope is global. */
-  descriptionChannel?: ImDefaultSettingsChannel;
+  /**
+   * 只换说明文案的键(不影响读写 scope)。'officialHook' 给官方 bot 用:
+   * 它不传 channel(写 global scope), 读写的是 Telegram / Slack / X 共用的那
+   * 一份 —— 不能再拿「Telegram 新对话…」的文案让人以为只影响 Telegram。
+   */
+  descriptionChannel?: ImDefaultSettingsChannel | 'officialHook';
   embedded?: boolean;
   onSummaryChange?: (summary: ImDefaultSettingsSummary | null) => void;
 }) {
@@ -213,7 +215,17 @@ export function ImDefaultSettingsSection({
 
   const changeAgent = (agentKind: ImDefaultAgentKind) => {
     if (agentKind === settings.agentKind) return;
-    void persist({ agentKind });
+    // 只写 agentKind 会把目标 agent 上一次的模型原样带回来 —— 那个模型可能已停用
+    // 或供应商已断开, UI 照显而派发时静默降级。与 changeModel 同口径收敛。
+    const next = resolveAgentSwitchSettings({
+      current: settings.agents[agentKind],
+      available: modelsByAgent[agentKind],
+      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
+      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
+      resolveProviderId: (modelId, providerId) =>
+        resolveProviderId(agentKind, modelId, providerId),
+    });
+    void persist({ agentKind, ...buildAgentSettingsPatch(agentKind, next) });
   };
 
   const changeModel = (model: string, providerId: string | null = activeSettings.providerId) => {
@@ -279,36 +291,18 @@ export function ImDefaultSettingsSection({
           <span className="text-[12px] font-medium text-[var(--text-secondary)]">
             {t('settings.imBot.defaults.agentLabel')}
           </span>
-          <div
-            className="flex h-10 items-center gap-0.5 rounded-full bg-[var(--surface-chip)] p-[3px]"
-            role="tablist"
-            aria-label={t('settings.imBot.defaults.agentLabel')}
-          >
-            {AGENT_OPTIONS.map(({ kind, Mark }) => {
-              const active = kind === settings.agentKind;
-              return (
-                <button
-                  key={kind}
-                  type="button"
-                  role="tab"
-                  aria-selected={active}
-                  disabled={pending}
-                  onClick={() => changeAgent(kind)}
-                  className={cn(
-                    'flex h-full min-w-0 flex-1 items-center justify-center gap-1.5 rounded-full px-3',
-                    'border text-[13px] leading-none transition-colors',
-                    active
-                      ? 'border-[var(--border-default)] bg-[var(--surface-elevated)] font-medium text-[var(--settings-section-title)]'
-                      : 'border-transparent font-normal text-[var(--text-secondary)] hover:text-[var(--text-primary)]',
-                    pending && 'cursor-not-allowed opacity-55',
-                  )}
-                >
-                  <Mark size={14} className="shrink-0" />
-                  <span className="truncate">{t(`settings.imBot.defaults.agents.${kind}`)}</span>
-                </button>
-              );
-            })}
-          </div>
+          {/* 与新建对话工具条同一个引擎下拉(AgentSelect, #1350): 手写三选一分段在
+              窄列里三等分 + truncate, 引擎一多就挤; 且未选中项置灰看着像不可用。 */}
+          <AgentSelect
+            value={vendorKeyFor(settings.agentKind)}
+            // 字段形态: 与右侧模型选择器同高同宽规格, 面板绑 trigger 宽度
+            // (DESIGN.md §4 Select & Dropdown 宽度铁则)。
+            triggerVariant="field"
+            side="bottom"
+            disabled={pending}
+            ariaContext={t('settings.imBot.defaults.agentLabel')}
+            onChange={(next) => changeAgent(agentKindOfVendor(next))}
+          />
         </div>
 
         <div className="flex flex-col gap-2">

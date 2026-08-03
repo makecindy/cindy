@@ -30,8 +30,9 @@ import {
   pushToolStep,
   renderActivity,
   setActivityNotice,
+  setInteractionNotice,
 } from '../im/shared/turnActivity.js';
-import { overloadFailureNotice, overloadRetryNotice } from '../im/shared/turnRetryNotice.js';
+import { overloadFailureNotice, turnRetryNotice } from '../im/shared/turnRetryNotice.js';
 
 /*
  * ── 为什么这里**没有**整轮静默兜底 ──────────────────────────────────────────
@@ -150,16 +151,6 @@ export interface ObservableSession {
 }
 
 export interface HookTurnObserverDeps {
-  /**
-   * true = 进度快照**只发正文**, 不掺过程区时间线。
-   *
-   * Telegram DM 的 Rich draft 是"部分终稿"动画, 过程时间线随 thinking / tool
-   * 事件反复重排会让 Telegram 整段清空重播 —— DM 因此只流单调增长的正文。
-   * 群/topic 的进度载体是可编辑消息(无 draft 动画), 与 Slack 过程卡同款:
-   * 时间线在上正文在下, 让群成员看到"正在干什么"而不是盯着一句旧话干等
-   * (2026-07-28 实踩)。调用方按 `isTelegram && laneKind !== 'group'` 计算。
-   */
-  answerOnlyProgress: boolean;
   /** 渲染快照出口(turn.progress); 省略 = 不发进度, 零开销路径。 */
   onProgress?: (text: string) => void;
   /** tool_result 全文旁路(出站图片收集留在调用方, 观察器不碰 IO)。 */
@@ -212,8 +203,7 @@ export function observeHookTurn(
   session: ObservableSession,
   deps: HookTurnObserverDeps,
 ): HookTurnObserver {
-  const { answerOnlyProgress, onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } =
-    deps;
+  const { onProgress, onToolResult, onTurnTerminal, onSilentStopSettled, log } = deps;
   // 文本累积语义(2026-07-28 修订): translator 的 isFinal 是**逐条**
   // agent_message 的完成信号(每条完成都携带该条全文), 不是整个 turn 的
   // 终稿 —— 用它整体替换累积文本, 会让"先回一句 → 思考 → 终答"的多消息
@@ -244,11 +234,6 @@ export function observeHookTurn(
   const activity = createTurnActivity(Date.now());
   const progress = onProgress
     ? createProgressEmitter(onProgress, () => {
-        // 只流正文的唯一例外: 还没有任何正文、而 agent 正在自动重试(上游过载)
-        // 时, 草稿本来就是空的 —— 此时给出那一行状态说明, 否则用户在整个退避
-        // 窗口里完全看不到任何反馈。有正文后仍只发正文, 不掺过程区。
-        // (群/topic 走下面的完整过程卡, notice 已在那条路径里渲染。)
-        if (answerOnlyProgress) return assistantText || (activity.notice ?? '');
         const act = renderActivity(activity, Date.now());
         if (!act) return assistantText;
         return assistantText ? `${act}\n\n${assistantText}` : act;
@@ -406,10 +391,10 @@ export function observeHookTurn(
         return;
       }
       if (ev.type === 'error' && !isTerminalAgentErrorEvent(ev)) {
-        // 非终止 error = agent 正在自愈(当前只透过载类的自动重试)。turn 没
+        // 非终止 error = agent 正在自愈(仅透已有本地化契约的自动重试)。turn 没
         // 结束, 不收口; 但必须在过程区留一行, 否则零产出的退避窗口里渠道那
         // 条消息整段静止(见 turnRetryNotice.ts 的模块注释)。
-        const notice = overloadRetryNotice(ev.data);
+        const notice = turnRetryNotice(ev.data);
         if (notice !== null && setActivityNotice(activity, notice)) {
           // ticker 让"第 N 步 · 42s"与这行状态一起走时间, 重试期间没有任何
           // 新事件也能看出还在动。
@@ -471,7 +456,10 @@ export function observeHookTurn(
       stopListening = undefined;
     },
     setNotice(notice: string | null): void {
-      if (!setActivityNotice(activity, notice)) return;
+      // 走**独立**的等交互通道, 不是瞬态 notice: 后者会被 pushToolStep /
+      // pushThinkingStep / markActivityWriting 的 clearNotice 抹掉, 而挂起期间
+      // agent 的其它子任务照样在吐这些事件。
+      if (!setInteractionNotice(activity, notice)) return;
       // ticker 让过程区的「第 N 步 · 42s」继续走时间: 等授权期间没有任何 agent
       // 事件, 不续 ticker 那条消息会连耗时都冻住。
       progress?.ensureTicker();

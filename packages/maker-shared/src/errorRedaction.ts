@@ -43,6 +43,28 @@ export interface NonSecretErrorSignals {
   usageLimit: boolean;
 }
 
+const DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS = [
+  /\binsufficient[-_ ]?quota\b/i,
+  /\binsufficient.{0,12}\b(?:balance|credit|funds)\b/i,
+  /\bquota\b.{0,24}\b(?:exhausted|exceeded)\b/i,
+  /\b(?:exhausted|exceeded)\b.{0,24}\bquota\b/i,
+  /\busage\s+limit\b/i,
+  /\b(?:exceeded[-_]?budget|budget[-_]?exceeded)\b/i,
+  /\b(?:account|session|usage)\s+budget\b.{0,16}\b(?:exhausted|exceeded)\b/i,
+  /\b(?:exhausted|exceeded)\b.{0,16}\b(?:account|session|usage)\s+budget\b/i,
+  /余额不足|欠费/i,
+];
+
+/**
+ * Match only explicit account/quota/budget exhaustion text whose recovery
+ * requires more capacity or a reset. Unlike `usageLimit` below, this strict
+ * signal deliberately excludes transient rate limiting (`429`, `Too Many
+ * Requests`, `rate limit`) and retry-budget exhaustion.
+ */
+export function matchesDeterministicUsageExhaustionText(input: string): boolean {
+  return DETERMINISTIC_USAGE_EXHAUSTION_PATTERNS.some((pattern) => pattern.test(input));
+}
+
 /**
  * Preserve explicit, non-secret routing signals before the surrounding error
  * text is redacted. Requiring a field/phrase boundary avoids interpreting

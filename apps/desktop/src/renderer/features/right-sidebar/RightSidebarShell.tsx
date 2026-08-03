@@ -76,6 +76,8 @@ interface RightSidebarShellProps {
   workdir: string;
   /** 非空 = SSH remote 会话(workdir 为远端路径);见 TabKindHostContext.remoteHostId。 */
   remoteHostId: string | null;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
   /** RightSidebar aside 当前是否真实展开。折叠时 keep-alive body 仍挂载但不可见。 */
   shellVisible?: boolean;
   isMac: boolean;
@@ -120,6 +122,7 @@ export function RightSidebarShell({
   sessionId,
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   shellVisible = true,
   isMac,
   unifiedTopbar = false,
@@ -519,6 +522,7 @@ export function RightSidebarShell({
               sessionId={sessionId}
               workdir={workdir}
               remoteHostId={remoteHostId}
+              deviceLinkDeviceId={deviceLinkDeviceId}
               shellVisible={shellVisible}
               t={t}
             />
@@ -535,6 +539,7 @@ interface PluginBodyHostProps {
   sessionId: string | null;
   workdir: string;
   remoteHostId: string | null;
+  deviceLinkDeviceId?: string | null;
   shellVisible: boolean;
   t: ReturnType<typeof useTranslation>['t'];
 }
@@ -554,6 +559,7 @@ function PluginBodyHost({
   sessionId,
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   shellVisible,
   t,
 }: PluginBodyHostProps) {
@@ -571,6 +577,7 @@ function PluginBodyHost({
       sessionId: sessionId ?? '',
       workdir,
       remoteHostId,
+      deviceLinkDeviceId,
       patchState: (patch: unknown) => {
         if (!sessionId) return;
         void patchTabState(sessionId, tab.id, (current) => {
@@ -597,7 +604,7 @@ function PluginBodyHost({
       setCloseInterceptor: (interceptor) =>
         setTabCloseInterceptor(tab.id, interceptor),
     }),
-    [sessionId, workdir, remoteHostId, tab.id],
+    [sessionId, workdir, remoteHostId, deviceLinkDeviceId, tab.id],
   );
 
   // active 切换:走 effect 通知 plugin(plugin 自己内部用 ctx.onVisibilityChange

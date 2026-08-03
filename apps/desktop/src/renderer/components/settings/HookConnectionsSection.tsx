@@ -1117,7 +1117,7 @@ export function HookConnectionsSection() {
               key={cs.binding?.bindingId ?? 'telegram-unbound'}
               className="mt-2 flex flex-col gap-5 border-t border-[var(--border-default)] pt-4"
             >
-              <ImDefaultSettingsSection descriptionChannel="telegram" embedded />
+              <ImDefaultSettingsSection descriptionChannel="officialHook" embedded />
               {view.behaviorAvailable === true ? (
                 <>
                   <TelegramBehaviorSettings

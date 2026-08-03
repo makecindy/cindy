@@ -159,6 +159,46 @@ describe('[1] link-accept 发送失败的有限重试', () => {
   });
 });
 
+describe('[4] 多控制端隔离:两个控制端共享同一被控端,一个静默不波及另一个', () => {
+  it('ctrl-a 停止收 accept(持续背压重试→耗尽)期间与之后,ctrl-b 建链/订阅/回包全程零感知', () => {
+    // 故障半径三问的被控端拓扑用例(remote-and-mobile-adaptation §3):被控端与
+    // relay 只有一条连接,ctrl-a 的 link 级故障(accept 送不出去 = peer 静默形态)
+    // 的全部恢复动作(有限重试→放弃)必须收在 ctrl-a 的 link 内。
+    const sendLinkAccept = vi.fn((dst: string) => {
+      if (dst === 'ctrl-a') throw backpressure();
+    });
+    const sendInvokeResult = vi.fn();
+    const client = mkClient({ sendLinkAccept, sendInvokeResult });
+    __testing.setActiveClient(client as never);
+
+    __testing.handleLinkOpen(client as never, 'ctrl-a', 'open-a', undefined);
+    expect(__testing.pendingLinkAcceptRetryCount()).toBe(1);
+
+    // a 的重试等待期间,b 建链立即成功、订阅提交
+    __testing.handleLinkOpen(client as never, 'ctrl-b', 'open-b', undefined);
+    expect(sendLinkAccept).toHaveBeenLastCalledWith('ctrl-b', 'open-b', expect.anything());
+    expect(__testing.getActiveControllers().map((c) => c.deviceId)).toEqual(['ctrl-b']);
+
+    // b 的在途回包照常投递,不被 a 的重试状态牵连
+    expect(
+      __testing.sendInvokeResultSafe(
+        client as never,
+        'ctrl-b',
+        'req-b',
+        { ok: true, result: 1 },
+        'local-db:sessions:list',
+      ),
+    ).toBe(true);
+    expect(__testing.remoteInvokeResultOutboxSize()).toBe(0);
+
+    // a 重试耗尽(500ms/1s/2s)后放弃:b 的订阅仍在,恢复动作从未升级到连接层
+    vi.advanceTimersByTime(4_000);
+    expect(__testing.pendingLinkAcceptRetryCount()).toBe(0);
+    expect(__testing.getActiveControllers().map((c) => c.deviceId)).toEqual(['ctrl-b']);
+    expect(client.closeLink).not.toHaveBeenCalled();
+  });
+});
+
 describe('[2] outbox 离线不自旋,上线事件驱动投递', () => {
   it('relay 离线期间 flush 不 trySend;ws-online 触发立即投递', () => {
     let status = 'connecting';

@@ -122,6 +122,11 @@ import { parseReconnectAttemptMessage } from '../shared/network-error.js';
 import { extractNonSecretErrorSignals } from '@cindy/maker-shared/error-redaction';
 import { AppServerHost, type ThreadEventHandlers, type ThreadSubscription } from './app-server/host.js';
 import { AppServerRequestTimeoutError } from './app-server/client.js';
+import {
+  isTerminalRateLimitRetryExhaustion,
+  TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
+  terminalRateLimitRetryDelayMs,
+} from './terminal-rate-limit-retry.js';
 import { createStdioTransport } from './app-server/stdioTransport.js';
 import { CodexInteractionBroker } from './interaction-broker.js';
 import { SYSTEM_PROMPT_APPEND as MAKER_CODEX_SYSTEM_PROMPT_APPEND } from './system-prompt-append.js';
@@ -185,6 +190,24 @@ import {
   type TurnStartResponse,
   type UserInput,
 } from './app-server/protocol.js';
+
+interface TurnReplayRetryPolicy {
+  kind: 'capacity' | 'terminal-rate-limit';
+  maxAttempts: number;
+  delayMs: (attempt: number) => number;
+}
+
+const CAPACITY_RETRY_POLICY: TurnReplayRetryPolicy = {
+  kind: 'capacity',
+  maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+  delayMs: overloadRetryDelayMs,
+};
+
+const TERMINAL_RATE_LIMIT_RETRY_POLICY: TurnReplayRetryPolicy = {
+  kind: 'terminal-rate-limit',
+  maxAttempts: TERMINAL_RATE_LIMIT_RETRY_MAX_ATTEMPTS,
+  delayMs: terminalRateLimitRetryDelayMs,
+};
 
 type CodexEffort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
@@ -2429,7 +2452,7 @@ export class CodexAgent extends BaseAgent {
      * 回包(那要按"有产出"处理), 标量写的是**当前**这一轮的账 —— 而新一轮的 turnStarted 若
      * 进过缓冲或作为同 turn 通知到达, 都不会把它清掉, 于是新消息一次本来安全的零产出容量
      * 重投被误判成"有产出, 不重投", 自动重试静默失效(review #844 codex P1)。
-     * 每个写入方都拿得到自己的 turnId, 读取方(scheduleOverloadRetry)拿得到死 turn 的 id,
+     * 每个写入方都拿得到自己的 turnId, 读取方(scheduleTurnReplayRetry)拿得到死 turn 的 id,
      * 按 id 记账后跨轮污染在结构上就不成立, 也不再需要"换 turn 才清零"这类时序守卫。
      */
     const producedOutputTurnIds = new Set<string>();
@@ -2440,6 +2463,12 @@ export class CodexAgent extends BaseAgent {
      */
     let overloadRetry: {
       retry: () => Promise<void>;
+      /**
+       * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
+       * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
+       * 用户输入最多重放 6 次，扩大请求量与重复副作用风险。各 policy 的
+       * maxAttempts 是它愿意接受的**总重放上限**，不是独立配额。
+       */
       attempt: number;
       /** 同一逻辑 send 最多接管一次 WS→HTTP body recovery，避免坏响应形成重投环。 */
       httpRecoveryRetryAttempted: boolean;
@@ -6413,7 +6442,7 @@ export class CodexAgent extends BaseAgent {
     /**
      * 彻底废弃当前的重投状态：清计时器、摘 signal 监听、置空引用。
      *
-     * 与 cancelOverloadRetry 的分工：后者只清计时器（scheduleOverloadRetry 排新档
+     * 与 cancelOverloadRetry 的分工：后者只清计时器（scheduleTurnReplayRetry 排新档
      * 前的 'superseded' 就靠它，那时状态本身还要继续用）。凡是**状态整体作废**的地方
      * 都必须走这个，否则 signal 的 abort 监听会残留在一个已废弃的闭包上。
      */
@@ -6616,9 +6645,9 @@ export class CodexAgent extends BaseAgent {
       eventQueue.push({
         type: 'error',
         data: {
-          message: 'Codex turn cancelled while waiting to retry a model-capacity failure',
+          message: 'Codex turn cancelled while waiting for an automatic retry',
           isTerminal: true,
-          reason: 'codex-overload-retry-cancelled',
+          reason: 'codex-turn-replay-retry-cancelled',
         },
         source: 'codex',
       });
@@ -6630,24 +6659,27 @@ export class CodexAgent extends BaseAgent {
     };
 
     /**
-     * 服务过载退避重投调度。
+     * 零产出 provider 终态错误的退避重投调度。
      *
      * 返回进度表示已接管本次错误，**调用方必须跳过终态收口**（不推 terminal
      * error、不推 Done status）——否则 UI 会先收口成失败再重投，用户看到一次假
      * 失败闪烁，非交互入口更会直接把这一轮判死。返回 null 表示不接管，按原
      * 终止路径报错。
      *
-     * 为什么必须由我们重投：`Selected model is at capacity` 是模型服务槽位不足，
+     * capacity 必须由我们重投：`Selected model is at capacity` 是模型服务槽位不足，
      * OpenAI 侧不做任何重试就把 turn 判死（openai/codex#22390 请求 backoff 重试
      * 至今 open），用户只能手动再发一次。这类抖动通常几秒内自愈，正是客户端该
      * 兜住的部分。
+     * terminal-rate-limit 则只接 daemon 已明确耗尽自身 retry budget 的 429，再给
+     * 两次较长退避；仍在 willRetry 的 429 与账号额度耗尽都不会进入本函数。
      *
      * 为什么不自动换模型：容量故障往往横扫同一模型的所有 effort 档
      * （2026-06-16 那次 medium/high/xhigh 全线不可用），换档无效；而换模型会
      * 悄悄改变输出的判断风格，属于隐蔽的质量变更。降级留给用户显式选择。
      */
-    const scheduleOverloadRetry = (
+    const scheduleTurnReplayRetry = (
       deadTurnId: string | null,
+      policy: TurnReplayRetryPolicy = CAPACITY_RETRY_POLICY,
     ): { attempt: number; maxAttempts: number } | null => {
       const state = overloadRetry;
       if (!state || closed) return null;
@@ -6670,7 +6702,8 @@ export class CodexAgent extends BaseAgent {
         // 两件事一起做才与 settleCancelledOverloadRetry 同构(它也是 mark + quarantine)。
         markInFlightStartsTerminallySettled();
         quarantineAllInFlightStarts();
-        log.info('codex not taking over a capacity failure for an already-cancelled send', {
+        log.info('codex not taking over a replayable failure for an already-cancelled send', {
+          kind: policy.kind,
           quarantinedStarts: inFlightStarts.size,
           threadId,
         });
@@ -6682,7 +6715,8 @@ export class CodexAgent extends BaseAgent {
       // 的新 turn 落墓碑并重放它的输入 → 副作用执行两遍(review #844 codex P1)。
       // 这里选择不接管: 代价只是这一轮要用户自己再发一次, 而错误的一侧是重复副作用。
       if (!deadTurnId && inFlightStarts.size > 1) {
-        log.warn('codex id-less capacity failure not attributable — declining takeover', {
+        log.warn('codex id-less replayable failure not attributable — declining takeover', {
+          kind: policy.kind,
           inFlightStarts: inFlightStarts.size,
           threadId,
         });
@@ -6702,7 +6736,8 @@ export class CodexAgent extends BaseAgent {
       // 名下(全被 stale 闸或缓冲挡住)。缓冲事件那种"看不见的产出"由
       // adoptUnidentifiedDeadTurn 在响应回来、id 已知时补记, 补排再查一次就拦住了。
       if (deadTurnId && producedOutputTurnIds.has(deadTurnId)) {
-        log.info('codex overload error after partial output — not auto-retrying', {
+        log.info('codex replayable error after partial output — not auto-retrying', {
+          kind: policy.kind,
           threadId,
           deadTurnId,
           inFlight: state.inFlight,
@@ -6714,6 +6749,17 @@ export class CodexAgent extends BaseAgent {
       // 的工具副作用就会执行两遍（review #844 codex P1）。在途那次自己会走完
       // 成功/失败路径，届时若仍缺容量会重新进入本函数。
       if (inFlightStarts.size > 0) {
+        // terminal 429 只在 turn 身份已经明确、没有其它 start 在途时接管。容量拒绝
+        // 才有完整的空 id / started-before-response 对账协议；把 429 塞进那套延后
+        // 状态会扩大错误归属面，猜错就可能重放已经执行过工具的 turn。
+        if (policy.kind !== 'capacity') {
+          log.warn('codex terminal rate-limit retry declined while turn/start is pending', {
+            inFlightStarts: inFlightStarts.size,
+            threadId,
+            deadTurnId,
+          });
+          return null;
+        }
         // 关键：**不能返回 null**。null 会让 translator 把这条错误报成终态，把逻辑
         // turn 判死（review #844 codex P1），而在途那次 RPC 随后还可能成功并激活
         // turn —— UI 已收口。这里返回当前进度：错误照样透成非终止状态（UI 继续显示
@@ -6736,7 +6782,8 @@ export class CodexAgent extends BaseAgent {
           isTurnInFlight = false;
           currentTurnId = null;
         }
-        log.info('codex overload retry already in flight — deferring this failure to it', {
+        log.info('codex turn replay retry already in flight — deferring this failure to it', {
+          kind: policy.kind,
           attempt: state.attempt,
           threadId,
           deadTurnId,
@@ -6745,11 +6792,14 @@ export class CodexAgent extends BaseAgent {
         // 延后的这条失败补排时会消耗第 1 档，所以下限取 1。
         return {
           attempt: Math.max(1, state.attempt),
-          maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+          maxAttempts: policy.maxAttempts,
         };
       }
-      if (state.attempt >= OVERLOAD_RETRY_MAX_ATTEMPTS) {
-        log.warn('codex overload retry budget exhausted — surfacing terminal error', {
+      // attempt 是 logical send 级共享预算，不按 failure kind 分桶。混合故障时沿用
+      // 已消耗次数，保证策略切换不会续满另一份外层重放额度。
+      if (state.attempt >= policy.maxAttempts) {
+        log.warn('codex turn replay retry budget exhausted — surfacing terminal error', {
+          kind: policy.kind,
           attempts: state.attempt,
           threadId,
         });
@@ -6759,7 +6809,7 @@ export class CodexAgent extends BaseAgent {
       cancelOverloadRetry('superseded');
       const attempt = state.attempt + 1;
       state.attempt = attempt;
-      const delayMs = overloadRetryDelayMs(attempt);
+      const delayMs = policy.delayMs(attempt);
       // 该 turn 在 app-server 侧确实已经死了：它挂起的审批 / user-input 必须清掉，
       // 否则重投出来的新 turn 会与旧 turn 的悬空交互混在一起。
       if (deadTurnId) {
@@ -6774,9 +6824,10 @@ export class CodexAgent extends BaseAgent {
       stopActiveRolloutPlanFallback();
       isTurnInFlight = false;
       currentTurnId = null;
-      log.info('codex model at capacity — scheduling turn/start retry', {
+      log.info('codex replayable provider failure — scheduling turn/start retry', {
+        kind: policy.kind,
         attempt,
-        maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS,
+        maxAttempts: policy.maxAttempts,
         delayMs,
         threadId,
         deadTurnId,
@@ -6837,7 +6888,7 @@ export class CodexAgent extends BaseAgent {
           });
         });
       }, delayMs);
-      return { attempt, maxAttempts: OVERLOAD_RETRY_MAX_ATTEMPTS };
+      return { attempt, maxAttempts: policy.maxAttempts };
     };
 
     /**
@@ -6953,7 +7004,7 @@ export class CodexAgent extends BaseAgent {
       // 否则又回到"两个 start 并存"的形状(review #844 codex P1)。
       if (inFlightStarts.size > 0) return;
       state.deferredCapacityFailure = null;
-      if (scheduleOverloadRetry(deferred.deadTurnId)) return;
+      if (scheduleTurnReplayRetry(deferred.deadTurnId)) return;
       log.warn('codex deferred capacity failure exhausted the retry budget', {
         attempt: state.attempt,
         threadId,
@@ -7400,7 +7451,7 @@ export class CodexAgent extends BaseAgent {
         // 告诉你是哪个 turn", 也就是容量在 admission 阶段被拒。活跃 turn 的 turn/start 若已
         // 经回包, 它早就过了 admission —— 之后真为它发的容量错误一定带得上 turnId。所以此时
         // 的空 id 通知只可能来自别处(最典型: 被 Stop 的旧 send, 它的 turn id 我们从没学到),
-        // 认在活跃 turn 头上的后果是: scheduleOverloadRetry 拿 currentTurnId 当死 turn, 把一
+        // 认在活跃 turn 头上的后果是: scheduleTurnReplayRetry 拿 currentTurnId 当死 turn, 把一
         // 个正常在跑的 turn 落墓碑、撤销重投、推 Done, 而 server 侧那个 turn 还在执行工具
         // (review #844 codex/greptile P1)。
         //
@@ -7534,7 +7585,7 @@ export class CodexAgent extends BaseAgent {
         }
         // 服务过载(模型容量不足)时接管重投：translator 命中 capacity 才回调，
         // 拿到进度就把错误透成非终止状态，本函数随后跳过 Done 收口。
-        let overloadRetryScheduled = false;
+        let turnReplayRetryScheduled = false;
         translateErrorNotification(effectiveParams, eventQueue, {
           rt: translatorRt,
           log,
@@ -7543,15 +7594,39 @@ export class CodexAgent extends BaseAgent {
             // TurnRetryTracker 把持续 retry 升级成终态的那条路径不接管：那说明
             // daemon 已经重试很久仍不行，我们再叠一层退避重投属于双层重试。
             if (params.willRetry === true) return null;
-            const progress = scheduleOverloadRetry(effectiveParams.turnId || currentTurnId);
-            if (progress) overloadRetryScheduled = true;
+            const progress = scheduleTurnReplayRetry(effectiveParams.turnId || currentTurnId);
+            if (progress) turnReplayRetryScheduled = true;
+            return progress;
+          },
+          tryTakeOverTerminalRateLimit: () => {
+            // willRetry=true 仍归 daemon 自己退避，绝不叠第二层。这里只接它已经明确
+            // 耗尽内部 retry budget 的终态 429；usageLimitExceeded 由判定器排除。
+            if (params.willRetry === true) return null;
+            const rawMessage = effectiveParams.error?.message ?? '';
+            const signals = extractNonSecretErrorSignals(rawMessage);
+            if (
+              !isTerminalRateLimitRetryExhaustion(
+                rawMessage,
+                signals.errorStatus,
+                effectiveParams.error?.codexErrorInfo,
+              )
+            ) {
+              return null;
+            }
+            const deadTurnId = effectiveParams.turnId || currentTurnId;
+            if (!deadTurnId || inFlightStarts.size > 0) return null;
+            const progress = scheduleTurnReplayRetry(
+              deadTurnId,
+              TERMINAL_RATE_LIMIT_RETRY_POLICY,
+            );
+            if (progress) turnReplayRetryScheduled = true;
             return progress;
           },
         });
         // 与 translator 的 terminal 判定保持一致：willRetry=false 或缺省都视为终态。
         if (!isTerminalError) return;
         const terminalTurnId = effectiveParams.turnId || currentTurnId;
-        if (overloadRetryScheduled) {
+        if (turnReplayRetryScheduled) {
           // 死掉的 turn **必须**落墓碑：app-server 随后还会为它发正常的
           // turn/completed(failed)，没有墓碑 handleTurnCompleted 就会 emit terminal
           // error + done，把 UI 与 goal turn 直接收口，我们刚透出的非终止重试状态
@@ -8526,7 +8601,7 @@ export class CodexAgent extends BaseAgent {
             data: {
               message: 'Codex turn stopped while waiting for an automatic retry',
               isTerminal: true,
-              reason: 'codex-overload-retry-aborted',
+              reason: 'codex-turn-replay-retry-aborted',
             },
             source: 'codex',
           });
