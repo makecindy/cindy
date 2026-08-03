@@ -154,6 +154,8 @@ import {
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
+import { contactsService } from '@/lib/contactsService';
+import { checkContactsAiSessionBeforeSend } from '@/components/settings/contacts/contactsAiSessionGuard';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
   createRemoteSessionWithPrecreatedWorktree,
@@ -2275,6 +2277,8 @@ export function NewMakerDraftRoute() {
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
       const selectedWorktree = { ...wtRef.current };
+      // 路由预填意图也按 Send 那一帧冻结；校验期间草稿仍可能因 owner 切换被重载。
+      const entryIntentAtSend = getDraft().entryIntent;
       const dataOwnerAtSend = getDataOwnerGeneration();
       const isCurrentDataOwner = () =>
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
@@ -2296,6 +2300,27 @@ export function NewMakerDraftRoute() {
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
+
+          // 鉴权弹窗可能停留任意久；必须在它结束后、真正 createSession 前重读最终项目的
+          // 工具面，不能复用入口点击时或弹窗前的快照。
+          const contactsBlockReason = await checkContactsAiSessionBeforeSend({
+            entryIntent: entryIntentAtSend,
+            vendor: authVendor,
+            workingDir: selectedWorkingDir,
+            isLocalTarget: !isDeviceLinkDraft && !effectiveRemoteHostId,
+            readReadiness: contactsService.settingsGet,
+          });
+          if (!isCurrentDataOwner()) return;
+          if (contactsBlockReason) {
+            toast.warning(
+              t(
+                contactsBlockReason === 'codex-deferred'
+                  ? 'settings.contacts.toast.codexRefreshDeferred'
+                  : 'settings.contacts.toast.aiUnavailable',
+              ),
+            );
+            return;
+          }
 
           // device-link 远程项目:在被控端走校验过的 maker:create-session 建会话(写被控 DB,
           // allowlist 内、非裸写),首条消息经 setPending 交给 SessionView 发送(与本地

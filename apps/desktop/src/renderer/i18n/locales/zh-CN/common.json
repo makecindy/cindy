@@ -3708,6 +3708,7 @@
         "enabled": "智能通讯录已启用",
         "disabled": "智能通讯录已关闭",
         "codexRefreshDeferred": "开关已保存，但 Codex 正忙：将在重启应用后对 Codex 任务生效",
+        "aiUnavailable": "所选范围未启用智能通讯录，请调整设置后重试。",
         "toggleFailed": "切换智能通讯录失败",
         "created": "已创建「{{name}}」",
         "createFailed": "创建失败",

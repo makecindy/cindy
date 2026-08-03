@@ -149,16 +149,24 @@ function clearCodexAppliedContactsSnapshot(): void {
  * 没有当前 owner 的 applied 快照时，下次 lazy spawn 会读取 live 设置，视为就绪；
  * 同 owner 有快照时必须服从实际应用值，避免开关已落盘但旧 app-server 仍无工具。
  */
-export function isCodexContactsMcpReady(): boolean {
-  return resolveCodexContactsMcpReady({
-    contactsEnabled: readContactsSettings().enabled,
-    // CTA 会把草稿工作区重置成本机对话态；按同一全局作用域读取有效插件开关，
-    // 不得让最近项目的 override 影响一个实际不会继承该项目的新任务。
-    pluginEnabled: getPluginRegistry().isEnabled('contacts'),
-    activeOwnerScope: activeOwnerScopeKey(),
-    appliedOwnerScope: codexAppliedContactsOwnerScope,
-    appliedEnabled: codexAppliedContactsEnabled,
-  });
+export function getContactsAiReadiness(workingDir?: string): {
+  enabled: boolean;
+  pluginEnabled: boolean;
+  codexMcpReady: boolean;
+} {
+  const enabled = readContactsSettings().enabled;
+  const pluginEnabled = getPluginRegistry().isEnabled('contacts', workingDir);
+  return {
+    enabled,
+    pluginEnabled,
+    codexMcpReady: resolveCodexContactsMcpReady({
+      contactsEnabled: enabled,
+      pluginEnabled,
+      activeOwnerScope: activeOwnerScopeKey(),
+      appliedOwnerScope: codexAppliedContactsOwnerScope,
+      appliedEnabled: codexAppliedContactsEnabled,
+    }),
+  };
 }
 import {
   registerCustomMcpArrays,
@@ -1001,10 +1009,12 @@ export function getMaker(): Maker {
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
       // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
       getContactsPromptState: ({ workingDir }) => {
-        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
-        const live = readContactsSettings().enabled;
-        if (!live) return 'disabled';
-        return isCodexContactsMcpReady() ? 'enabled' : 'unavailable';
+        // 与 thread provider gate、发送前 guard 共用同一 workingDir 的有效 override；
+        // 不能先通过项目显式启用，再被无 workingDir 的全局默认值覆盖。
+        const readiness = getContactsAiReadiness(workingDir);
+        if (!readiness.pluginEnabled) return 'unavailable';
+        if (!readiness.enabled) return 'disabled';
+        return readiness.codexMcpReady ? 'enabled' : 'unavailable';
       },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入

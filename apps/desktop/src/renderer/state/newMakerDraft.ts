@@ -84,7 +84,11 @@ export interface CollabDraft {
   workerConfig?: CollabWorkerConfig;
 }
 
+export type NewMakerEntryIntent = 'contacts-ai-management';
+
 export interface NewMakerDraft {
+  /** 路由预填入口的一次性意图；不跨重启，发送或另起干净草稿后清除。 */
+  entryIntent: NewMakerEntryIntent | null;
   /** 当前选中的 vendor。默认 'cc',用户切换后写回 + 持久化。 */
   vendor: MakerVendor;
   /** 选中的 workingDir;初次 null,Project 行内 + 会预填到此。 */
@@ -197,6 +201,7 @@ const DEFAULT_WORKTREE_ENABLED = false;
 
 function makeDefault(): NewMakerDraft {
   return {
+    entryIntent: null,
     vendor: 'cc',
     workingDir: null,
     remoteHostId: null,
@@ -358,6 +363,8 @@ function sanitize(raw: unknown): NewMakerDraft {
     ? r.worktreeEnabled === true
     : DEFAULT_WORKTREE_ENABLED;
   return {
+    // 路由意图不从 localStorage 恢复；重启后不能把一次旧预填误套到普通新任务。
+    entryIntent: null,
     vendor,
     workingDir,
     remoteHostId: workingDir == null ? null : remoteHostId,
@@ -689,6 +696,7 @@ export function patchDraft(patch: Partial<NewMakerDraft>): void {
  */
 export function resetDraftWorkspaceTargets(): void {
   patchDraft({
+    entryIntent: null,
     workingDir: null,
     extraDirs: [],
     collab: { ...currentDraft.collab, enabled: false },

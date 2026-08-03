@@ -67,6 +67,7 @@ beforeEach(() => {
   mocks.settingsGet.mockResolvedValue({
     enabled: true,
     isCustomized: true,
+    pluginEnabled: true,
     codexMcpReady: true,
   });
   mocks.settingsSet.mockResolvedValue({ enabled: true, codexMcpRefreshed: true });
@@ -94,7 +95,7 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByText('settings.contacts.guide.sources.import')).toBeNull();
   });
 
-  it('点击后按重置后的本机对话态检查，再写入统一管理意图并进入新任务页', async () => {
+  it('点击后写入统一管理意图并进入可选择 vendor / 项目的新任务页', async () => {
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
     render(<ContactsSection />);
 
@@ -111,6 +112,7 @@ describe('ContactsSection AI 管理入口', () => {
     mocks.settingsGet.mockResolvedValue({
       enabled: false,
       isCustomized: true,
+      pluginEnabled: false,
       codexMcpReady: false,
     });
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
@@ -120,40 +122,36 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByRole('button', { name: 'settings.contacts.guide.cta' })).toBeNull();
   });
 
-  it('忽略最近项目的相反 override，只服从 reset 后本机对话态的有效开关', async () => {
-    // 最近项目可单独启用，但新任务会 reset 该项目；全局关闭必须阻止启动。
+  it('Codex runtime 延迟时仍进入通用入口，由发送阶段按最终 vendor 决定', async () => {
     mocks.settingsGet.mockResolvedValue({
       enabled: true,
       isCustomized: true,
+      pluginEnabled: true,
       codexMcpReady: false,
     });
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
     render(<ContactsSection />);
 
-    const cta = await screen.findByRole('button', { name: 'settings.contacts.guide.cta' });
-    fireEvent.click(cta);
-    await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalledTimes(2));
-    expect(mocks.prefill).not.toHaveBeenCalled();
-    expect(mocks.navigate).not.toHaveBeenCalled();
-
-    // 反向场景：最近项目单独禁用，但 reset 后全局开启，应允许启动。
-    mocks.settingsGet.mockResolvedValue({
-      enabled: true,
-      isCustomized: true,
-      codexMcpReady: true,
-    });
-    fireEvent.click(cta);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
     await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
-    expect(mocks.settingsGet).toHaveBeenLastCalledWith();
+    expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
   });
 
-  it('切换数据所有者并重挂载后只服从 main 返回的当前 owner 就绪状态', async () => {
-    mocks.settingsGet.mockResolvedValue({
-      enabled: true,
-      isCustomized: true,
-      codexMcpReady: false,
-    });
+  it('入口点击仍现查总开关，切换数据所有者并重挂载后不沿用旧 owner 状态', async () => {
+    mocks.settingsGet
+      .mockResolvedValueOnce({
+        enabled: true,
+        isCustomized: true,
+        pluginEnabled: true,
+        codexMcpReady: true,
+      })
+      .mockResolvedValueOnce({
+        enabled: false,
+        isCustomized: true,
+        pluginEnabled: false,
+        codexMcpReady: false,
+      });
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
     const view = render(<ContactsSection />);
     const ownerACta = await screen.findByRole('button', {
@@ -167,6 +165,7 @@ describe('ContactsSection AI 管理入口', () => {
     mocks.settingsGet.mockResolvedValue({
       enabled: true,
       isCustomized: true,
+      pluginEnabled: true,
       codexMcpReady: true,
     });
     render(<ContactsSection />);

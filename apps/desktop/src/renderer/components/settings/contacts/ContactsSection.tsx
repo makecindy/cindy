@@ -91,7 +91,7 @@ export function ContactsSection() {
     [enabled, t],
   );
 
-  /** 常驻 AI 管理入口：启动前向 main 现查当前数据所有者的 Codex 工具面。 */
+  /** 常驻 AI 管理入口：这里只确认总开关；最终 vendor / workingDir 在发送阶段实时校验。 */
   const startAiSession = useCallback(async () => {
     if (togglePending || aiSessionPending) return;
     setAiSessionPending(true);
@@ -99,10 +99,6 @@ export function ContactsSection() {
       const settings = await contactsService.settingsGet();
       if (!settings.enabled) {
         setEnabled(false);
-        return;
-      }
-      if (!settings.codexMcpReady) {
-        toast.warning(t('settings.contacts.toast.codexRefreshDeferred'));
         return;
       }
       prefillContactsAiSessionDraft(t('settings.contacts.guide.managementPrompt'));

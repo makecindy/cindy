@@ -80,6 +80,7 @@ describe('contacts-ipc handlers', () => {
     expect(await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).toEqual({
       enabled: false,
       isCustomized: false,
+      pluginEnabled: false,
       codexMcpReady: false,
     });
     await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true);
@@ -99,7 +100,7 @@ describe('contacts-ipc handlers', () => {
         enabled = value;
       },
       broadcastChanged: () => {},
-      readCodexMcpReady: () => codexMcpReady,
+      readAiReadiness: () => ({ pluginEnabled: true, codexMcpReady }),
     });
 
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).resolves.toMatchObject({
@@ -115,7 +116,33 @@ describe('contacts-ipc handlers', () => {
     });
   });
 
-  it('Codex contacts 就绪判断服从本机对话态的有效插件、owner scope 和 applied 快照', () => {
+  it('设置读取按最终 workingDir 现查项目有效值与当前 owner 的 Codex 快照', async () => {
+    enabled = true;
+    const readAiReadiness = vi.fn((workingDir?: string) => ({
+      pluginEnabled: workingDir === '/project-enabled',
+      codexMcpReady: workingDir === '/project-enabled',
+    }));
+    handlers = createContactsIpcHandlers({
+      getManager: () => manager,
+      readSettingsState: () => ({ value: { enabled }, isCustomized: true }),
+      writeEnabled: (value) => {
+        enabled = value;
+      },
+      broadcastChanged: () => {},
+      readAiReadiness,
+    });
+
+    await expect(
+      handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/project-enabled'),
+    ).resolves.toMatchObject({ pluginEnabled: true, codexMcpReady: true });
+    await expect(
+      handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/project-disabled'),
+    ).resolves.toMatchObject({ pluginEnabled: false, codexMcpReady: false });
+    expect(readAiReadiness).toHaveBeenNthCalledWith(1, '/project-enabled');
+    expect(readAiReadiness).toHaveBeenNthCalledWith(2, '/project-disabled');
+  });
+
+  it('Codex contacts 就绪判断服从项目有效插件、owner scope 和 applied 快照', () => {
     const base = {
       contactsEnabled: true,
       pluginEnabled: true,
@@ -124,11 +151,10 @@ describe('contacts-ipc handlers', () => {
       appliedEnabled: null,
     };
 
-    // 最近项目即使单独禁用，reset 后的新任务仍应服从本机对话态的全局 enabled。
+    // 项目显式启用必须覆盖全局默认；master 设置关闭仍然 fail closed。
     expect(resolveCodexContactsMcpReady(base)).toBe(true);
     expect(resolveCodexContactsMcpReady({ ...base, contactsEnabled: false })).toBe(false);
-    // 新任务会 reset 项目目录；本机对话态的全局 override 关闭时，即使最近项目单独开启、
-    // 且当前 owner 还没有 applied 快照，也必须 fail closed。
+    // 项目有效 override 关闭时，即使当前 owner 还没有 applied 快照也不能放行。
     expect(resolveCodexContactsMcpReady({ ...base, pluginEnabled: false })).toBe(false);
     // 其他 owner 的失败快照不能污染当前 owner；当前 owner 的 applied=false 必须保留阻塞。
     expect(
@@ -145,6 +171,18 @@ describe('contacts-ipc handlers', () => {
         appliedEnabled: false,
       }),
     ).toBe(false);
+  });
+
+  it('Codex prompt 与 provider gate 共用最终 workingDir 的有效 contacts override', () => {
+    const source = fs.readFileSync(path.resolve(__dirname, '../../maker-host/index.ts'), 'utf8');
+    const codexPromptStart = source.indexOf('// 通讯录 prompt 段有效状态(codex 版)');
+    const codexPromptEnd = source.indexOf('// 模型清单 SSoT', codexPromptStart);
+    expect(codexPromptStart).toBeGreaterThanOrEqual(0);
+    expect(codexPromptEnd).toBeGreaterThan(codexPromptStart);
+
+    const codexPromptBody = source.slice(codexPromptStart, codexPromptEnd);
+    expect(codexPromptBody).toContain('getContactsAiReadiness(workingDir)');
+    expect(codexPromptBody).not.toContain('getPluginRegistry().isEnabled');
   });
 
   it('app-server 成功失效时即使 bridge 已清空也重置 contacts applied 快照', () => {
