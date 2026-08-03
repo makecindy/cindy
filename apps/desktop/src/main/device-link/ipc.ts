@@ -26,6 +26,7 @@ import {
   getDeviceLinkStatus,
   getDeviceLinkConnectionIssue,
   getUnresponsiveDeviceIds,
+  clearDeviceResponsiveness,
   setRemoteControlEnabled,
   setKeepAwakeEnabled,
   openRemoteLink,
@@ -98,6 +99,8 @@ export interface DeviceLinkIpcDeps {
   revoke(deviceId: string): Promise<void>;
   restore(deviceId: string): Promise<void>;
   setDeviceControlEnabled(deviceId: string, enabled: boolean): Promise<string[]>;
+  /** 清理本机禁用目标的响应性熔断状态。 */
+  clearDeviceResponsiveness?(deviceId: string): void;
   broadcast(channel: string, payload: unknown): void;
   readLastKnownDeviceNames(): Record<string, string>;
   rememberLastKnownDeviceName(deviceId: string, name: string): Promise<boolean>;
@@ -140,6 +143,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
     revoke: revokeController,
     restore: restoreController,
     setDeviceControlEnabled,
+    clearDeviceResponsiveness,
     broadcast,
     readLastKnownDeviceNames,
     rememberLastKnownDeviceName,
@@ -269,6 +273,7 @@ export async function handleSetDeviceControlEnabled(
   const disabledControlDeviceIds = await deps.setDeviceControlEnabled(normalizedDeviceId, enabled);
   if (!enabled) {
     resetSubscriptionRefcountForDevice(normalizedDeviceId);
+    deps.clearDeviceResponsiveness?.(normalizedDeviceId);
     deps.closeLink(normalizedDeviceId);
   }
   deps.broadcast(DEVICE_LINK_PUSH.CONTROL_TARGET_CHANGED, {

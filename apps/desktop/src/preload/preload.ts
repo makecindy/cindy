@@ -519,6 +519,7 @@ const fanOutMakerSessionBackgroundActivityChanged = createIpcFanOut('maker:sessi
 const fanOutMakerUsageTodaySpend = createIpcFanOut('usage:today-spend-changed');    // Claude USD
 const fanOutMakerUsageTodayTokens = createIpcFanOut('usage:today-tokens-changed');  // Codex token
 const fanOutMakerUsageModelPricing = createIpcFanOut('usage:model-pricing-changed');
+const fanOutMakerUsageReferenceModelPricing = createIpcFanOut('usage:reference-model-pricing-changed');
 const fanOutMakerUsageClaudeAccount = createIpcFanOut('usage:claude-account-changed'); // Claude 月度配额
 const fanOutMakerUsageCodexAccount = createIpcFanOut('usage:codex-account-changed'); // Codex 订阅用量
 const fanOutMakerUsageXaiRateLimit = createIpcFanOut('usage:xai-rate-limit-changed'); // xAI bridge 限流快照
@@ -5337,10 +5338,14 @@ contextBridge.exposeInMainWorld('electronAPI', {
       /** Claude 订阅账号余量 (5h/周/分模型窗口, cached-first, main 侧按需后台刷新)。 */
       getClaudeSubscription: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:claude-subscription'),
-      /** provider-scoped 模型单价表，由 model-access /models 同次快照更新。 */
+      /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: (): Promise<unknown | null> =>
         ipcRenderer.invoke('maker:usage:model-pricing-v2'),
       onModelPricingChanged: fanOutMakerUsageModelPricing,
+      /** 非 XD Provider 的 Catalog 参考价与用户覆盖。 */
+      getReferenceModelPricing: (): Promise<unknown> =>
+        ipcRenderer.invoke('maker:usage:reference-model-pricing'),
+      onReferenceModelPricingChanged: fanOutMakerUsageReferenceModelPricing,
       /** 用量历史聚合 (首页仪表盘: 热力图 + streak + 按模型拆分, main 侧算好)。 */
       getHistory: (opts?: { days?: number; forceRefresh?: boolean }): Promise<unknown> =>
         ipcRenderer.invoke('maker:usage:history', opts),

@@ -15,8 +15,10 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -42,6 +44,14 @@ type MakerSendOptions = {
    * 打到 sess.send 的 origin(本轮 turnOrigin)并合进落库 user 消息 agentMeta.origin。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 手机来源(coordinator 从队列项透传;**main 构造,不是 wire 输入**——直连 maker:send
+   * 的客户端 sendOpts 在 sessionSendHandler 边界被剥掉,见那里的说明)。
+   *
+   * 必须认这一条:手机会话页所有发送都走 input:enqueue / input:steer,drain 派发时
+   * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
@@ -179,6 +189,18 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
+   *
+   * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
+   * newMakerWorktreePreferenceHandler 把 isDeviceLinkInvoke 做成 deps 的写法)。
+   *
+   * ⚠️ 判据里的平台值是**对端设备在 hello 帧自报**的(经 presence 广播进本机缓存),
+   * 本仓没有服务端校验 —— 一台改过的同账号已配对设备可以声称自己是手机。它的唯一
+   * 后果是多追加一段体验说明,所以够用;但不得据它放行权限或跳过任何校验。
+   * 完整可信度说明见 device-link/invoke-context.ts。
+   */
+  isMobileClientInvoke?(): boolean;
   log: MakerSendTransactionLog;
 }
 
@@ -531,11 +553,23 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      const outgoing = pendingHandoff
+      const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
-      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
+      // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
+      // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
+      // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
+      // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
+      // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
+      const mobileClientNote = deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
+        ? buildMobileClientPromptNote()
+        : null;
+      const outgoing = mobileClientNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
+        : withHandoff;
+      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       const persistUserMessage = readPersistUserMessageOption(so);
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;

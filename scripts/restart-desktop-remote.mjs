@@ -448,7 +448,9 @@ function userDataDirNamed(dirName) {
 }
 
 function defaultIsolatedUserDataDir(isolationName) {
-  return userDataDirNamed(`${BRAND_USER_DATA_DIR_NAME}-dev${isolationName ? `-${isolationName}` : ''}`);
+  // 目录纪元 v2(-dev2),与 devCliFlags.ts 的派生保持一字不差:#871 起隔离沙箱用
+  // CindyDev 钥匙串身份,旧 -dev 目录留给旧 checkout(#912 review)。
+  return userDataDirNamed(`${BRAND_USER_DATA_DIR_NAME}-dev2${isolationName ? `-${isolationName}` : ''}`);
 }
 
 /** 非隔离 dev 与正式版共用的 userData 目录。 */
@@ -510,6 +512,7 @@ export function devEnvPrefix(env = process.env, platform = process.platform) {
     ['XDT_LOGIN_SCENARIO', env.XDT_LOGIN_SCENARIO],
     ['VITE_SPLASH_PHASE_FIXTURE', env.VITE_SPLASH_PHASE_FIXTURE],
     ['XDT_USER_DATA_DIR', env.XDT_USER_DATA_DIR],
+    ['XDT_USER_DATA_DIR_EPOCH', env.XDT_USER_DATA_DIR_EPOCH],
     ['XDT_DEVICE_ID_OVERRIDE', env.XDT_DEVICE_ID_OVERRIDE],
     ['XDT_SCHEDULER_PASSIVE', env.XDT_SCHEDULER_PASSIVE],
     ['XDT_ISOLATED', env.XDT_ISOLATED],
@@ -772,6 +775,11 @@ async function main() {
     if (isolationName) process.env.XDT_ISOLATED_NAME = isolationName;
     if (!process.env.XDT_USER_DATA_DIR) {
       process.env.XDT_USER_DATA_DIR = defaultIsolatedUserDataDir(isolationName);
+      // 可信纪元信号:仅当目录由本脚本按 -dev2 纪元派生时携带,主进程据此允许
+      // 显式 env 覆写命中纪元判定。用户手动设 XDT_USER_DATA_DIR(上面的分支不
+      // 进入)或旧 checkout 启动都不带该信号 → 观察模式,防旧代码对同一显式
+      // 路径以默认身份打开造成双身份互写(#912 review P1)。
+      process.env.XDT_USER_DATA_DIR_EPOCH = '1';
     }
     fs.mkdirSync(process.env.XDT_USER_DATA_DIR, { recursive: true });
     console.log(`==> Isolated dev user data${isolationName ? ` (sandbox "${isolationName}")` : ''}: ${process.env.XDT_USER_DATA_DIR}`);

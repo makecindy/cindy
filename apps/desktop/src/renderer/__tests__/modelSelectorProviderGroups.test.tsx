@@ -92,7 +92,8 @@ vi.mock('@/hooks/useConnectedSource', () => ({
 }));
 
 vi.mock('@/hooks/useModelPricing', () => ({
-  useModelPricing: () => ({}),
+  useGatewayModelPricing: () => ({}),
+  useReferenceModelPricing: () => ({}),
 }));
 
 const providersRef = vi.hoisted(() => {

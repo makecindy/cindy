@@ -1017,15 +1017,6 @@ registerColor('model-section-label', {
   light: 'var(--text-secondary)',
   dark: 'var(--text-secondary)',
 }, 'Stone — "Effort" header');
-registerColor('model-budget-badge-bg', {
-  light: '#dcfce7',
-  dark: '#14532d',
-}, 'Budget model badge background');
-registerColor('model-budget-badge-text', {
-  light: '#16a34a',
-  dark: '#86efac',
-}, 'Budget model badge text');
-
 // Permission selector
 registerColor('perm-item-selected-bg', {
   light: '#f8f8f6',

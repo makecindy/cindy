@@ -164,7 +164,10 @@ export function startRemoteSessionsReconciler(
     }
     backoff.retainOnly(seen);
   }, intervalMs);
-  return () => clearInterval(timer);
+  return () => {
+    clearInterval(timer);
+    inFlight.clear();
+  };
 }
 
 type IneligibleRemoteProjectAction = 'disconnect' | 'remove' | 'ignore';
@@ -267,6 +270,10 @@ export function useDeviceLinkRemoteProjects(): void {
         // 即使还有旧 shard 也必须标明本轮读取失败，不能把缓存伪装成刚返回的结果。
         // superseded 表示断连 / 清理使请求失效，必须等重连，不能误记成终态失败。
         remoteProjectsStore.markBootstrapFailed(deviceId);
+      } else if (result === 'superseded') {
+        // 断连或另一轮 refresh 会使本次快照失效；不要让本轮遗留的 loading
+        // 永久遮住侧边栏。连接恢复时 presence/status 会再次触发 bootstrap。
+        remoteProjectsStore.clearBootstrapLoading(deviceId);
       }
       // 预取被控端能力(model/effort/fast/permission/fork/rewind),使首次打开远程会话时
       // 模型下拉等不为空、modelDefinitions 同步层已热。fire-and-forget,失败不阻断。

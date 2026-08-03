@@ -30,7 +30,10 @@ import type {
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
-import { DL_SESSION_REFERENCE_CAPABILITY_CHANNEL } from '@cindy/device-link';
+import {
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+  DL_SESSION_REFERENCE_CAPABILITY_CHANNEL,
+} from '@cindy/device-link';
 import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 import { app, BrowserWindow, dialog, ipcMain, shell, type IpcMainInvokeEvent } from 'electron';
 import { getActiveAppSession } from '../appSessionState.js';
@@ -307,7 +310,8 @@ import {
 import { recordModelMismatchOnMessage } from '../modelMismatchBroadcaster.js';
 import { detectClaudeModelMismatch } from '../../shared/modelMismatch.js';
 import { triggerClaudeAccountUsageRefresh } from '../usage/claudeAccountUsage.js';
-import { broadcastEffectiveModelPricing, getCodexProviderSubscriptionValuePrice, getGatewayAccountCurrency, getModelPriceQuote, getModelPricing, getModelPricingForModel, getSubscriptionDirectValuePrice } from '../usage/modelPricing.js';
+import { getGatewayAccountCurrency, getGatewayModelPricingForModel, getModelPriceQuote } from '../usage/modelPricing.js';
+import { broadcastReferenceModelPricing, getCodexProviderSubscriptionValuePrice, getReferenceModelPricing, getSubscriptionDirectValuePrice } from '../usage/referenceModelPricing.js';
 import { clearModelPriceOverride, stageProviderModelPriceOverridesClear, readModelPriceOverrideView, setModelPriceOverride } from '../usage/modelPriceOverrideStore.js';
 import { computeModelUsageDeltas, detectOutputLag, type ModelUsageCumulative, type ModelUsageDeltaEntry } from '../usage/modelUsageDelta.js';
 import { claudeSubscriptionUsageModelKey, codexApiUsageModelKey, codexSubscriptionUsageModelKey, piSubscriptionUsageModelKey } from '../usage/usageHistory.js';
@@ -430,7 +434,11 @@ import {
   registerMakerSessionAgentSwitchHandler,
   type MakerSessionAgentSwitchHandlerDeps,
 } from './sessionAgentSwitchHandler.js';
-import { prependHandoffToUserMessage } from './agentHandoff.js';
+import {
+  prependNoteToWireUserMessage,
+  prependHandoffToUserMessage,
+  type HandoffWireMessage,
+} from './agentHandoff.js';
 import { hydrateQueuedAgentReferences } from './agentInputReferences.js';
 import { agentHandoffPending } from './agentHandoffPendingSingleton.js';
 import { type MakerSessionCreateOpts, withCreateSessionStderr } from './sessionRequest.js';
@@ -540,6 +548,7 @@ import {
 } from '../maker-host/codex-credential-switch.js';
 import { applyRuntimeSetModelChange } from './runtimeSetModel.js';
 import { applyRuntimeEffortWithRecovery } from './runtimeSetEffort.js';
+import { normalizeDeviceLinkSetModelWireArgs } from './setModelWireArgs.js';
 import { PendingCredentialSwitchService } from './pendingCredentialSwitch.js';
 import {
   DeferredCodexRestartService,
@@ -560,7 +569,16 @@ import {
   setRemoteWorkingDirGuard as setDeviceLinkRemoteWorkingDirGuard,
   setRemoteSettingsPersist as setDeviceLinkRemoteSettingsPersist,
 } from '../device-link/dispatch.js';
-import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
+import {
+  deviceLinkInvokeControllerSupports,
+  isDeviceLinkInvoke,
+  isMobileControllerInvoke,
+} from '../device-link/invoke-context.js';
+import {
+  buildMobileClientPromptNote,
+  stampMobileClientOrigin,
+  stripMainOnlySendOpts,
+} from './mobileClientPromptNote.js';
 import {
   assertResolveInteractionOrigin,
   isPluginSetupInteractionDecision,
@@ -3525,11 +3543,8 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
                 ?? (observedClaudeRoute === 'gateway' ? 'xd-gateway' : 'unknown');
           const pricing =
             billingRoute === 'xd-gateway'
-              ? await getModelPricingForModel(
-                  'xd',
-                  normalizeModelIdForPricing(deltas[0]?.model),
-                )
-              : await getModelPricing();
+              ? await getGatewayModelPricingForModel()
+              : getReferenceModelPricing();
           const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(
             deltas,
             pricing,
@@ -3613,7 +3628,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
               const claudeEstimated = estimateClaudeSubscriptionTurnValue(
                 perModel,
                 currentLedgerCurrency(),
-                await getModelPricing(),
+                pricing,
               );
               if (claudeEstimated?.amount) estimatedValues.push(claudeEstimated);
             }
@@ -3850,11 +3865,11 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           };
           try {
             const pricing = isSubscriptionValue
-              ? await getModelPricing()
+              ? getReferenceModelPricing()
               : hasEffectiveGatewayRoute
-                ? await getModelPricingForModel('xd', pricingModel)
+                ? await getGatewayModelPricingForModel()
                 : usesReferencePriceEstimate
-                  ? await getModelPricing()
+                  ? getReferenceModelPricing()
                   : null;
             // 订阅估值按显式来源取各自的日期定价路由:内置 anthropic 走 Anthropic
             // registry 参考价(含 codex 侧价格覆盖),默认/openai 保持 OpenAI 价表。
@@ -4010,7 +4025,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
             const pricing =
               isSubscriptionValue || isCustomProviderRoute
                 ? null
-                : await getModelPricingForModel('xd', pricingModel);
+                : await getGatewayModelPricingForModel();
             const price =
               effectiveProvider === 'openai'
               || effectiveProvider === 'anthropic'
@@ -4607,7 +4622,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       setModelPriceOverride(target, desired, getActiveCatalog().modelRegistry),
     clearModelPriceOverride,
     stageClearProviderModelPriceOverrides: stageProviderModelPriceOverridesClear,
-    broadcastPricingChanged: broadcastEffectiveModelPricing,
+    broadcastPricingChanged: broadcastReferenceModelPricing,
     // 通用 OAuth（目录 auth.oauth 描述符驱动）：login 成功后 best-effort 拉动态模型发现
     // (additions-only merge 进 active-catalog) 并广播 PROVIDER_CHANGED 让 UI 刷新连接态。
     oauthLogin: async (providerId, isCurrent) => {
@@ -7826,6 +7841,10 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     reconcileCreateOptsWithDb: reconcileCreateOptsAgainstDb,
     peekPendingHandoff: (sessionId) => agentHandoffPending.peek(sessionId),
     consumePendingHandoff: (sessionId) => agentHandoffPending.consume(sessionId),
+    // 手机客户端说明的开关:被控端盖章的来源判据(本机 renderer / 桌面控制端 / 平台
+    // 未知一律 false)。必须在这里现取,不能提前求值缓存——同一个装配好的事务会服务
+    // 后续所有 send,来源是逐次调用的属性。
+    isMobileClientInvoke: () => isMobileControllerInvoke(),
     applyPendingAgentSwitch: (sessionId) => applyPendingAgentSwitchIfIdle(agentSwitchDeps, sessionId),
     log,
   });
@@ -7888,9 +7907,23 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       throwIpcError('NO_ACTIVE_TURN', `Session ${sessionId} has no active turn`);
     }
     const meta = await maker.getSessionMeta(sessionId).catch(() => null);
-    const so = (sendOpts ?? {}) as { messageUuid?: string; userName?: string; signal?: AbortSignal };
+    const so = (sendOpts ?? {}) as {
+      messageUuid?: string;
+      userName?: string;
+      signal?: AbortSignal;
+      /** coordinator 从队列项透传的手机来源(main 构造,非 wire 输入)。 */
+      fromMobileClient?: boolean;
+    };
+    // 手机说明同样只进 wire payload(steer 路径不落库用户消息,天然不污染原话)。
+    // 两个来源都要认:IPC 直连 steer 时 async context 在;coordinator 投递时靠透传。
+    const steerNote = isMobileControllerInvoke() || so.fromMobileClient === true
+      ? buildMobileClientPromptNote()
+      : null;
+    const steerPayload = steerNote
+      ? prependNoteToWireUserMessage(normalized as HandoffWireMessage, steerNote)
+      : normalized;
     try {
-      await sess.steer(normalized as never, {
+      await sess.steer(steerPayload as never, {
         logTitle: meta?.title,
         messageUuid: so.messageUuid,
         userName: so.userName,
@@ -7923,7 +7956,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   ipcMain.handle(MAKER_INVOKE.STEER, async (_e, sessionId: unknown, message: unknown, sendOpts?: unknown) => {
-    await steerToAgentAccepted(sessionId, message, sendOpts);
+    // **wire sendOpts 必须消毒**(review P1/P2,两个 bot 各报一次):这个 channel 在
+    // device-link allowlist 里开放,`sendOpts` 是调用方可控输入。不剥的话,桌面 renderer
+    // 或任意获准远控的非手机客户端只要传 `{ fromMobileClient: true }`,就能让本轮拿到伪造
+    // 的手机环境说明、按错误的来源调整产物形态。
+    //
+    // 契约与 maker:send 一致(sessionSendHandler 同样在 IPC 边界剥):**该字段只由 main
+    // 盖章**。coordinator 的内部 steerToAgent 调用不经过这里,透传值不受影响。
+    await steerToAgentAccepted(sessionId, message, stripMainOnlySendOpts(sendOpts));
   });
 
   ipcMain.handle(MAKER_INVOKE.GET_CONTEXT_USAGE, async (_e, sessionId: unknown, createOpts?: unknown): Promise<ContextUsageData> => {
@@ -8976,7 +9016,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       sid,
       requireQueuedMessage(item),
     )) as AgentInputQueuedMessage;
-    const queued = await hydrateQueuedAgentReferences(queuedWithAttachments);
+    // 手机来源在**入队这一刻**盖章:drain 派发时已脱离本 invoke 的 async context。
+    // 无条件覆盖 —— item 来自 wire,客户端自填的 fromMobileClient 一律不生效。
+    const queued = stampMobileClientOrigin(
+      await hydrateQueuedAgentReferences(queuedWithAttachments),
+      isMobileControllerInvoke(),
+    );
     const commitAutoTitle = await prepareDeviceLinkAutoTitle(sid, queued);
 
     // 「继续任务」durable ack 延后到 vendor dispatch 成功（onDispatchedUserTurn）：
@@ -9026,7 +9071,11 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
         allowMissingTrustedContexts: isDeviceLinkInvoke() && steerOpts?.removeFromQueue === true,
       }),
     )) as AgentInputQueuedMessage;
-    const queued = await hydrateQueuedAgentReferences(queuedWithAttachments);
+    // 与 enqueue 同:steer 投递也在本 invoke 的 async context 之外发生。
+    const queued = stampMobileClientOrigin(
+      await hydrateQueuedAgentReferences(queuedWithAttachments),
+      isMobileControllerInvoke(),
+    );
     // 插话也补起名:远控用户完全可能趁这一轮还在跑就写下第一句话,只认入队的话
     // 标题会一直停在首条纯附件消息的合成占位上(PR #510 review P1)。是否真的该
     // 改名由 runSessionAutoTitle 权威判定。
@@ -9374,6 +9423,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const normalizedWireArgs = normalizeDeviceLinkSetModelWireArgs(
+      isDeviceLinkInvoke(),
+      deviceLinkInvokeControllerSupports(
+        CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+      ),
+      providerId,
+      expectedAgentSwitchRevision,
+      selection,
+    );
+    providerId = normalizedWireArgs.providerId;
+    expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;
+    selection = normalizedWireArgs.selection;
     if (
       providerId !== undefined &&
       providerId !== null &&

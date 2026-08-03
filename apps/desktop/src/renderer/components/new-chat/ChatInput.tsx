@@ -4469,7 +4469,7 @@ export function ChatInput({
               const remoteSetModelResult = await remoteMaker.setModel(
                 sessionId,
                 newModelId,
-                undefined,
+                selectedProviderId,
                 expectedAgentSwitchRevision,
                 useAtomicSelection
                   ? { effort: newEffort, fastMode: restoredFast }

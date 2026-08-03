@@ -16,6 +16,7 @@ import WebSocket from 'ws';
 import {
   DeviceLinkClient,
   CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_CONTACTS_SYNC_CHANNEL,
   DL_SUBSCRIBE_CHANNEL,
   DL_UNSUBSCRIBE_CHANNEL,
@@ -65,6 +66,11 @@ import {
   handleControllerOffline,
   purgeRevokedController,
 } from './dispatch';
+import {
+  clearControllerPlatforms,
+  getControllerPlatform,
+  setControllerPlatform,
+} from './controllerPlatform';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import {
   DL_VOICE_DICTIONARY_SYNC_CHANNEL,
@@ -152,6 +158,46 @@ let authRealmReconnectGeneration = 0;
 let unsubscribeAuthState: (() => void) | null = null;
 /** ownership store 按 DbClient 实例缓存(避免每 tick 建对象);换库(换账号)自动重建 */
 let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
+const pendingPeerLinkReopens = new Set<string>();
+let pendingPeerLinkReopenRetryTimer: ReturnType<typeof setTimeout> | null = null;
+
+function schedulePendingPeerLinkReopenRetry(): void {
+  if (pendingPeerLinkReopenRetryTimer !== null || linkTornDown || pendingPeerLinkReopens.size === 0) return;
+  if (arbiter && !arbiter.isOwner()) return;
+  pendingPeerLinkReopenRetryTimer = setTimeout(() => {
+    pendingPeerLinkReopenRetryTimer = null;
+    flushPendingPeerLinkReopens();
+  }, 5_000);
+  pendingPeerLinkReopenRetryTimer.unref?.();
+}
+
+function flushPendingPeerLinkReopens(): void {
+  if (linkTornDown || (arbiter && !arbiter.isOwner())) return;
+  for (const deviceId of pendingPeerLinkReopens) {
+    log.debug(`peer link stale-frame recovery for ${deviceId.slice(0, 8)}`);
+    void openRemoteLink(deviceId).then(
+      () => {
+        pendingPeerLinkReopens.delete(deviceId);
+        if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
+          clearTimeout(pendingPeerLinkReopenRetryTimer);
+          pendingPeerLinkReopenRetryTimer = null;
+        }
+      },
+      (err) => {
+        log.debug(`peer link stale-frame recovery failed for ${deviceId.slice(0, 8)}`, err);
+        schedulePendingPeerLinkReopenRetry();
+      },
+    );
+  }
+}
+
+function cancelPendingPeerLinkReopen(deviceId: string): void {
+  pendingPeerLinkReopens.delete(deviceId);
+  if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
+    clearTimeout(pendingPeerLinkReopenRetryTimer);
+    pendingPeerLinkReopenRetryTimer = null;
+  }
+}
 /**
  * 持有者已生效的授权快照(允许被控开关 + 撤销名单)。用于检测**其它实例**改写共享
  * settings 文件(被动实例的设置页也能改授权,见 settings-store 多实例语义):持有者
@@ -185,7 +231,7 @@ const RESPONSIVENESS_PROBE_TICK_MS = 5_000;
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
-const presencePlatformByDevice = new Map<string, string>();
+
 const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
@@ -338,6 +384,11 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       warn: (...args) => log.warn(...args),
       error: (...args) => log.error(...args),
     },
+    onPeerLinkNeedsReopen: (deviceId) => {
+      if (linkTornDown) return;
+      pendingPeerLinkReopens.add(deviceId);
+      flushPendingPeerLinkReopens();
+    },
     // 弱网收紧:默认 20s ping × (2+1) tick 要 ~60s 才判死半开连接,期间所有请求黑洞。
     // 15s ping 把判死缩到 ~45s;不动 pongMissLimit——高延迟链路(实测响应性可达 ~10s)
     // 下更激进的宽限会把「慢但活着」误判成死链,造成重连循环(mobile 用 10s×1 是因为
@@ -367,6 +418,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       arbiter?.isOwner() === true &&
       presenceAvailableByDevice.get(deviceId) === true &&
       !readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+    recoverLink: (deviceId) => openRemoteLink(deviceId),
     log: {
       info: (...args) => log.info(...args),
       warn: (...args) => log.warn(...args),
@@ -431,7 +483,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     // 权威 presence 已宣布不可用(离线 / 关被控):「响应性」判定失去意义,清熔断状态
     // 并作废在途结果,让离线态自己的 UI 接管;设备回来后首个请求再超时会重新累计。
     if (!available && wasAvailable === true) responsivenessTracker?.clearDevice(snap.deviceId);
-    presencePlatformByDevice.set(snap.deviceId, snap.platform);
+    setControllerPlatform(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
@@ -493,6 +545,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // shutdown/revoked/未知新值)都是永久关闭——必须终止已在进行的重开
       // 循环,否则刚被断开的控制链会被退避重试重新建起。
       routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
+      if (reason !== 'transport-timeout') {
+        cancelPendingPeerLinkReopen(env.src);
+      }
       if (reason === 'revoked') {
         // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
         // 作废在途结果(翻代),避免 unresponsive 状态与撤权状态并存(对齐 mobile 语义)。
@@ -512,7 +567,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (
         shouldExchangeDictionaryWith({
           online: true,
-          platform: presencePlatformByDevice.get(env.src),
+          platform: getControllerPlatform(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -524,7 +579,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (
         shouldExchangeDictionaryWith({
           online: true,
-          platform: presencePlatformByDevice.get(env.src),
+          platform: getControllerPlatform(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -549,7 +604,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         .filter(([deviceId, online]) =>
           shouldExchangeDictionaryWith({
             online,
-            platform: presencePlatformByDevice.get(deviceId),
+            platform: getControllerPlatform(deviceId),
             revoked: isDeviceRevoked(deviceId),
           }),
         )
@@ -564,7 +619,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
             deviceId !== client?.getSelfDeviceId() &&
             shouldExchangeDictionaryWith({
               online,
-              platform: presencePlatformByDevice.get(deviceId),
+              platform: getControllerPlatform(deviceId),
               revoked: isDeviceRevoked(deviceId),
             }),
         )
@@ -576,7 +631,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       deviceId !== client?.getSelfDeviceId() &&
       shouldExchangeDictionaryWith({
         online: presenceOnlineByDevice.get(deviceId) === true,
-        platform: presencePlatformByDevice.get(deviceId),
+        platform: getControllerPlatform(deviceId),
         revoked: isDeviceRevoked(deviceId),
       }),
     sendRelayFrame: (deviceId, frame) => {
@@ -615,6 +670,8 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (!authManager.getAuthState().isAuthenticated) return;
       linkTornDown = false;
       client?.start();
+      // 可靠帧可能在 ownership 接管前到达；接管后补发一次 link-open，避免启动竞态留下半开链路。
+      setTimeout(flushPendingPeerLinkReopens, 250);
       setContactsDeviceLinkOwnerActive(true);
       refreshAppliedSettingsSnapshot();
       pollContactsDeviceSyncSettingChange();
@@ -775,6 +832,11 @@ export function getMobileNotifyGeneration(): number {
 function teardownActiveLink(): void {
   if (!client || linkTornDown) return;
   linkTornDown = true;
+  if (pendingPeerLinkReopenRetryTimer !== null) {
+    clearTimeout(pendingPeerLinkReopenRetryTimer);
+    pendingPeerLinkReopenRetryTimer = null;
+  }
+  pendingPeerLinkReopens.clear();
   mobileNotifyGeneration += 1;
   if (relayAuthRecoveryRetryTimer !== null) {
     clearTimeout(relayAuthRecoveryRetryTimer);
@@ -791,7 +853,7 @@ function teardownActiveLink(): void {
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
-  presencePlatformByDevice.clear();
+  clearControllerPlatforms();
   presenceNameByDevice.clear();
   resetSubscriptionRefs();
   resetBusyDedupe(); // 重置 busy dedupe,避免重连后首个真实 busy 状态被旧值压掉
@@ -864,6 +926,11 @@ export function getDeviceLinkStatus(): DeviceLinkStatus {
 /** 当前被熔断判定为「无响应」的目标设备(控制端本地判定,供 getState / UI 镜像)。 */
 export function getUnresponsiveDeviceIds(): string[] {
   return responsivenessTracker?.getUnresponsiveDeviceIds() ?? [];
+}
+
+/** 本机禁用目标设备控制时清除响应性熔断，避免重新启用后继承旧的 open 状态。 */
+export function clearDeviceResponsiveness(deviceId: string): void {
+  responsivenessTracker?.clearDevice(deviceId);
 }
 
 /**
@@ -1093,7 +1160,10 @@ export async function openRemoteLink(deviceId: string): Promise<LinkAcceptPayloa
     controllerName: deviceName(),
     protocolVersion: 1,
     appVersion: app.getVersion(),
-    capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+    capabilities: [
+      CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+    ],
   });
   openLinkInFlight.set(deviceId, request);
   const cleanup = (): void => {
@@ -1108,6 +1178,7 @@ export function closeRemoteLink(deviceId: string): void {
   // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
   // 链路建回来。
   transportTimeoutReopen.cancel(deviceId);
+  cancelPendingPeerLinkReopen(deviceId);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }
@@ -1182,7 +1253,10 @@ export async function remoteSubscribe(
         {
           topics,
           controllerName: deviceName(),
-          capabilities: [CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2],
+          capabilities: [
+            CONTROLLER_CAPABILITY_PROVIDER_LOGO_KINDS_V2,
+            CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+          ],
         },
       ],
     });

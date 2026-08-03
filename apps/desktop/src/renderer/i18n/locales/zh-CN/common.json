@@ -1,5 +1,6 @@
 {
   "ipcError": {
+    "INVALID_PARAMS": "参数无效，请检查后重试。",
     "SESSION_RUNNING": "当前任务正在运行，请稍后再试。",
     "PI_IMAGE_INPUT_UNSUPPORTED": "当前 Pi 模型未启用图片输入。请切换到支持图片的模型；如果这是自定义模型，请在供应商设置中开启“支持图片输入”，然后新建 Pi 任务。",
     "CREDENTIAL_SWITCH_BUSY": "Codex 正在其它任务中运行，本次来源切换未生效（本任务仍使用原来源）。等它结束后再试。",
@@ -7,6 +8,7 @@
     "REMOTE_PROVIDER_UPDATING": "供应商凭证正在更新，请稍后重试",
     "REMOTE_PROVIDER_UNSUPPORTED": "该供应商不支持 SSH 远程会话，请更换来源",
     "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "未连接 Claude.ai 订阅，请先连接或选择网关模型",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "目标设备长时间无响应，请检查远程设备后重试",
     "REMOTE_WORKDIR_INVALID": "远程项目目录无效，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_FOUND": "远程项目目录不存在，请重新选择项目目录。",
     "REMOTE_WORKDIR_NOT_DIRECTORY": "远程项目路径不是文件夹，请重新选择项目目录。",
@@ -3802,16 +3804,9 @@
         "INTERNAL": "操作失败，请稍后重试"
       },
       "guide": {
-        "hint": "通讯录还是空的。从任一来源开始，让它第一天就认识你的联系人：",
-        "cta": "让 AI 整理通讯录",
-        "prompt": "帮我整理一下我的智能通讯录：先看看现在有什么，然后把值得记录的人补进去(可以从系统通讯录或 vCard 导入，也可以问我)，有重复的帮我确认后合并。",
-        "sources": {
-          "mail": "从邮件整理",
-          "im": "从 IM 整理",
-          "import": "导入通讯录"
-        },
-        "mailPrompt": "帮我从邮件建立智能通讯录：先看看我连接了哪些邮箱工具(没有的话告诉我该怎么连接)；扫描最近 6 个月的往来邮件，找出和我有双向往来的真实联系人建档——高频且信息明确的直接确认，拿不准的用 pending；营销邮件、通知机器人、一次性发件人跳过。最后汇报建了哪些档案。",
-        "imPrompt": "帮我从 IM 工具建立智能通讯录：先看看我连接了哪些 IM(飞书 / Slack / 微信等，没有的话告诉我该怎么连接)；把近期经常和我对话的联系人整理进通讯录，拿不准的用 pending，群机器人和一次性对话跳过。最后汇报建了哪些档案。"
+        "hint": "让 AI 帮你补充联系人档案、处理待确认项并整理重复信息。",
+        "cta": "让 AI 帮你管理通讯录",
+        "managementPrompt": "帮我管理智能通讯录。先检查当前状态和已有工具，再带我补充联系人、整理重复项和待确认项；任何写入、合并或删除前先让我确认。"
       }
     },
     "remotePermission": {
@@ -5018,8 +5013,7 @@
         "context": "{{value}} 上下文",
         "codexCompatibilityMode": "Codex 兼容模式",
         "price": "{{input}}/{{output}} / 百万",
-        "fastBadge": "快速",
-        "budgetDiscount": "特别折扣"
+        "fastBadge": "快速"
       },
       "source": {
         "railLabel": "来源",

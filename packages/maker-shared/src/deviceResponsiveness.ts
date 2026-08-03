@@ -71,9 +71,10 @@ export interface DeviceResponsivenessBreaker {
   createCohort(deviceId: string): number;
   /**
    * 发送前门禁:closed → 'allow';同一 fan-out 可传共享 cohort,省略则每次调用
-   * 创建独立 cohort。open 且探测窗口已到、无在途探测 → 'probe';其余 → 'reject'。
+   * 创建独立 cohort。open 且探测窗口已到、无在途探测,且调用方显式 allowProbe:true
+   * → 'probe';其余 → 'reject'。
    */
-  acquire(deviceId: string, cohort?: number): BreakerSendSlot;
+  acquire(deviceId: string, cohort?: number, options?: { allowProbe?: boolean }): BreakerSendSlot;
   /** 请求收尾上报。slot 必须是 acquire 返回的票据;代数不匹配的旧请求被忽略。 */
   settle(deviceId: string, slot: BreakerSendSlot, outcome: BreakerSettleOutcome): void;
   isOpen(deviceId: string): boolean;
@@ -129,7 +130,11 @@ export function createDeviceResponsivenessBreaker(
     return next;
   };
 
-  const acquire = (deviceId: string, cohort?: number): BreakerSendSlot => {
+  const acquire = (
+    deviceId: string,
+    cohort?: number,
+    options?: { allowProbe?: boolean },
+  ): BreakerSendSlot => {
     // 首次发放即登记(review):仅 acquire 过、还没有任何 settle/state 的设备也
     // 必须被 resetAll 的全量翻篇覆盖,否则登出前的在途请求会在切号后按当前代
     // 被采信,把旧账号的超时累进新账号的计数。
@@ -139,6 +144,11 @@ export function createDeviceResponsivenessBreaker(
     if (!state?.open) return { decision: 'allow', generation, cohort: cohort ?? newCohort(deviceId) };
     if (state.probeInFlight) return { decision: 'reject', generation, cohort: 0 };
     if (now() - state.openedAt < state.probeBackoffMs) {
+      return { decision: 'reject', generation, cohort: 0 };
+    }
+    // half-open 的唯一席位只能由代表性探测路径显式领取;普通业务请求即使
+    // 窗口到点也必须保持 reject,避免抢占探测并错误推进退避。
+    if (options?.allowProbe !== true) {
       return { decision: 'reject', generation, cohort: 0 };
     }
     state.probeInFlight = true;

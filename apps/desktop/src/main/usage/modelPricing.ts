@@ -1,5 +1,5 @@
 /**
- * modelPricing — Desktop 的 provider-scoped 价格投影。
+ * modelPricing — Cindy AI Gateway 的 XD 实际报价投影。
  *
  * XD 模型与价格只来自 model-access-server 的同一次 GET /models 响应。这里不再
  * 直接请求 LiteLLM；模型同步成功时整体替换 XD quote，失败时保留上一份成功快照。
@@ -12,14 +12,7 @@ import path from 'node:path';
 import { app, BrowserWindow } from 'electron';
 
 import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
-import {
-  gatewayLedgerCurrency,
-  gatewayPricingCatalog,
-  getModelPriceQuote,
-  providerReferencePriceQuote,
-  registryPricingCatalog,
-  subscriptionDirectPriceQuote,
-} from '../../shared/modelPriceQuote.js';
+import { gatewayLedgerCurrency, gatewayPricingCatalog } from '../../shared/modelPriceQuote.js';
 import type { ModelAccessGatewayModel } from '../../shared/modelAccess.js';
 import { providerSecretStorageKey } from '../../shared/providerSecrets.js';
 import {
@@ -37,15 +30,6 @@ import { currentLedgerCurrency, setActiveLedgerCurrency } from './ledgerCurrency
 import { createLogger } from '../logger.js';
 import { getClientEndpoint } from '../clientEndpointsService.js';
 import { resolveOwnerScopedSecretStorageKey } from '../secrets/providerSecretStore.js';
-import { getActiveCatalog } from '../maker-host/active-catalog.js';
-import {
-  applyModelPriceOverrides,
-  mergeStoredModelPriceOverride,
-  type ModelPriceOverridesSnapshot,
-} from './modelPriceOverrideStore.js';
-
-export type { ModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
-export { readModelPriceOverridesSnapshot } from './modelPriceOverrideStore.js';
 
 export { getModelPriceQuote } from '../../shared/modelPriceQuote.js';
 export type {
@@ -309,7 +293,7 @@ async function hydrateFromDisk(scope: string): Promise<ModelPricingCatalog | nul
       cacheAt = Number(raw.fetchedAt);
       // 账本币种必须在这里恢复,而不是只在 getGatewayAccountCurrency 里:那个函数只服务
       // 可选的账号配额查询,而计费热路径(register.ts 的 turn 记账、prewarm)走的是
-      // getModelPricing / getModelPricingForModel。冷启动只命中磁盘缓存(/models 尚未
+      // getGatewayModelPricing / getGatewayModelPricingForModel。冷启动只命中磁盘缓存(/models 尚未
       // 完成或失败)时若不在此同步,currentLedgerCurrency() 会回落构建默认币种,把该账号
       // 用缓存报价算出的金额当异币种丢弃 —— 等于这一段时间完全不计费。
       gatewayAccountCurrency = raw.accountCurrency;
@@ -348,23 +332,6 @@ function broadcastPricing(pricing: ModelPricingCatalog | null): void {
   }
 }
 
-function effectivePricingCatalog(gatewayPricing: ModelPricingCatalog | null): ModelPricingCatalog {
-  const registry = getActiveCatalog().modelRegistry;
-  const reference = registryPricingCatalog(registry);
-  return applyModelPriceOverrides(
-    {
-      ...reference,
-      ...(gatewayPricing?.xd ? { xd: gatewayPricing.xd } : {}),
-    },
-    registry,
-  );
-}
-
-export function broadcastEffectiveModelPricing(): void {
-  const scope = currentScope();
-  broadcastPricing(effectivePricingCatalog(cacheScope === scope ? cache : null));
-}
-
 /**
  * 与模型同步同快照更新 XD quote。models 非空但没有标准 input/output 价格时，
  * 价格投影会被清空，不复活旧模型价格。
@@ -386,7 +353,7 @@ export function replaceGatewayModelPricing(
   // 账本写入层据此判断"这一笔是不是本账号的结算币种"。目录为空(登出 / clear)或混合
   // 币种时返回 null，账本回退到「上次已知 → USD」，绝不按区域猜。
   //
-  // 顺序要紧：先落 active，下面的 catalog 兜底才能读到本次刚确认的币种；本次没确认时
+  // 顺序要紧：先落 active，下面的 XD 报价投影兜底才能读到本次刚确认的币种；本次没确认时
   // currentLedgerCurrency() 给出的也是上次已知值，而不是区域默认值。
   setActiveLedgerCurrency(gatewayAccountCurrency);
   const previousLedgerCurrency = activeLedgerCurrencySnapshot;
@@ -409,7 +376,7 @@ export function replaceGatewayModelPricing(
   cacheAt = Date.now();
   hydratedScopes.add(scope);
   void writeDiskCache(scope, pricing, gatewayAccountCurrency, cacheAt);
-  broadcastPricing(effectivePricingCatalog(pricing));
+  broadcastPricing(pricing);
   return pricing;
 }
 
@@ -433,10 +400,9 @@ export function isModelPricingRefreshInFlight(): boolean {
   return modelSyncInflight !== null;
 }
 
-export async function getModelPricing(): Promise<ModelPricingCatalog | null> {
+export async function getGatewayModelPricing(): Promise<ModelPricingCatalog | null> {
   const scope = currentScope();
-  const gatewayPricing = cacheScope === scope ? cache : await hydrateFromDisk(scope);
-  return effectivePricingCatalog(gatewayPricing);
+  return cacheScope === scope ? cache : await hydrateFromDisk(scope);
 }
 
 /**
@@ -475,143 +441,15 @@ export async function getGatewayAccountCurrency(
   // 本轮 /models 没跑成时，磁盘缓存里的报价同样能定出币种。hydrateFromDisk 内部会在
   // 落盘缓存生效的同时把币种写回缓存与账本事实源（那里才是所有取价路径的共同入口），
   // 所以这里只需触发一次 hydrate 再读结果。
-  await getModelPricing();
+  await getGatewayModelPricing();
   if (gatewayAccountCurrencyScope === scope) return gatewayAccountCurrency;
   return cacheScope === scope ? gatewayLedgerCurrency(cache) : null;
 }
 
-/**
- * 计费热路径等待模型同步已经落下的本地投影，不再自己联网。providerId 是必需的，
- * 同模型从 XD/OpenAI/订阅来源进入时不会串价。
- */
-export async function getModelPricingForModel(
-  providerId: string | null | undefined,
-  modelId: string,
-): Promise<ModelPricingCatalog | null> {
+/** 计费热路径只等待 `/models` 写入 XD 报价，不读取 Catalog。 */
+export async function getGatewayModelPricingForModel(): Promise<ModelPricingCatalog | null> {
   await waitForModelPricingSync();
-  const pricing = await getModelPricing();
-  void getModelPriceQuote(pricing, providerId, modelId);
-  return pricing;
-}
-
-/**
- * Codex 订阅轮的估算价,按显式来源 provider 取该 provider 的 registry 参考价
- * (含用户价格覆盖)。openai 之外的订阅来源(如内置 anthropic 的 Claude.ai 订阅)
- * 也走各自的日期定价路由,不能一律套 OpenAI 价表。
- */
-export function getCodexProviderSubscriptionValuePrice(
-  providerId: string,
-  modelId: string,
-  pricing: ModelPricingCatalog | null | undefined,
-  at?: string | Date,
-  overrides?: ModelPriceOverridesSnapshot,
-): ModelPriceQuote | undefined {
-  const effective = getModelPriceQuote(pricing, providerId, modelId, 'codex');
-  if (effective?.source === 'user-override') {
-    if (at === undefined) return effective;
-    // 目录里烘焙的 user-override 是按当前日期合并的;历史窗口跨过参考价生效边界时,
-    // 未覆盖字段必须按 at 时点的参考价重新合并,不能直接回用当前合并结果。
-    return (
-      mergeStoredModelPriceOverride(
-        { providerId, agent: 'codex', modelId: effective.modelId },
-        providerReferencePriceQuote(
-          providerId,
-          effective.modelId,
-          getActiveCatalog().modelRegistry,
-          { agent: 'codex', at },
-        ),
-        overrides,
-      ) ?? effective
-    );
-  }
-  const reference = providerReferencePriceQuote(
-    providerId,
-    modelId,
-    getActiveCatalog().modelRegistry,
-    { agent: 'codex', at },
-  );
-  return reference ?? (at === undefined ? effective : undefined);
-}
-
-export function getCodexSubscriptionValuePrice(
-  modelId: string,
-  pricing: ModelPricingCatalog | null | undefined,
-  at?: string | Date,
-  overrides?: ModelPriceOverridesSnapshot,
-): ModelPriceQuote | undefined {
-  return getCodexProviderSubscriptionValuePrice('openai', modelId, pricing, at, overrides);
-}
-
-export function getClaudeSubscriptionValuePrice(
-  modelId: string,
-  pricing: ModelPricingCatalog | null | undefined,
-  at?: string | Date,
-  overrides?: ModelPriceOverridesSnapshot,
-): ModelPriceQuote | undefined {
-  const effective = getModelPriceQuote(pricing, 'anthropic', modelId, 'claude-code');
-  if (effective?.source === 'user-override') {
-    if (at === undefined) return effective;
-    // 同 getCodexSubscriptionValuePrice:历史估值按 at 时点参考价重新合并稀疏覆盖。
-    return (
-      mergeStoredModelPriceOverride(
-        { providerId: 'anthropic', agent: 'claude-code', modelId: effective.modelId },
-        providerReferencePriceQuote(
-          'anthropic',
-          effective.modelId,
-          getActiveCatalog().modelRegistry,
-          { agent: 'claude-code', at },
-        ),
-        overrides,
-      ) ?? effective
-    );
-  }
-  const reference = providerReferencePriceQuote(
-    'anthropic',
-    modelId,
-    getActiveCatalog().modelRegistry,
-    { agent: 'claude-code', at },
-  );
-  return reference ?? (at === undefined ? effective : undefined);
-}
-
-export function getSubscriptionDirectValuePrice(
-  modelId: string,
-  agent?: 'claude-code' | 'codex',
-  pricing?: ModelPricingCatalog | null,
-  at?: string | Date,
-  overrides?: ModelPriceOverridesSnapshot,
-): ModelPriceQuote | undefined {
-  const registry = getActiveCatalog().modelRegistry;
-  const fallback = subscriptionDirectPriceQuote(
-    modelId,
-    registry,
-    agent,
-    at,
-  );
-  const routingQuote = fallback ?? subscriptionDirectPriceQuote(modelId, registry, agent);
-  if (!routingQuote) return undefined;
-  const effective = getModelPriceQuote(pricing, routingQuote.providerId, modelId, agent);
-  const quote =
-    effective?.source === 'user-override'
-      ? at === undefined || agent === undefined
-        ? effective
-        : // 同上:历史窗口内的订阅直连估值也要按 at 时点参考价重新合并稀疏覆盖。
-          (mergeStoredModelPriceOverride(
-            { providerId: effective.providerId, agent, modelId: effective.modelId },
-            providerReferencePriceQuote(effective.providerId, effective.modelId, registry, {
-              agent,
-              at,
-            }),
-            overrides,
-          ) ?? effective)
-      : fallback;
-  if (!quote) return undefined;
-  return {
-    ...quote,
-    modelId,
-    source:
-      quote.source === 'provider-reference' ? 'subscription-reference' : quote.source,
-  };
+  return await getGatewayModelPricing();
 }
 
 /**
@@ -631,7 +469,7 @@ export async function prewarmModelPricing(): Promise<void> {
     );
   }
   try {
-    await getModelPricing();
+    await getGatewayModelPricing();
   } catch (err) {
     log.debug('prewarm model pricing failed:', err instanceof Error ? err.message : String(err));
   }

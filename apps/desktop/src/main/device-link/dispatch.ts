@@ -61,6 +61,7 @@ import { createLogger } from '../logger';
 import { normalizeSessionProviderId } from '../maker-host/session-provider-store.js';
 import { readDeviceLinkSettings } from './settings-store';
 import { dispatchLocalInvoke } from './invoke-registry';
+import { getControllerPlatform } from './controllerPlatform';
 import { runDeviceLinkInvokeContext } from './invoke-context';
 import { fetchLocalMediaToOss } from './mediaFetch';
 import { transcribeRemoteVoiceInput } from './voiceTranscribe';
@@ -2127,7 +2128,13 @@ export async function runInvoke(
       ? invokeControllerCapabilities(payload)
       : [];
     const result = await runDeviceLinkInvokeContext(
-      { controllerDeviceId: src, channel: payload.channel },
+      {
+        controllerDeviceId: src,
+        channel: payload.channel,
+        // 平台按 server 盖章的 src 查本机 presence 登记表,不采信控制端自报的任何
+        // 帧内字段(allowlist 只挡 channel 不挡 args,见下方 dispatchLocalInvoke 前的说明)。
+        controllerPlatform: getControllerPlatform(src),
+      },
       // provider:list 的首参只承载隧道能力协商，不进入本机 IPC handler。
       () => dispatchLocalInvoke(
         payload.channel,

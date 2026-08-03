@@ -26,6 +26,7 @@ vi.mock('../serverApiClient', () => {
 });
 vi.mock('./index', () => ({
   getDeviceLinkStatus: () => 'online',
+  clearDeviceResponsiveness: vi.fn(),
   setRemoteControlEnabled: vi.fn(),
   openRemoteLink: vi.fn(),
   closeRemoteLink: vi.fn(),
@@ -117,6 +118,7 @@ function makeDeps(overrides?: Partial<DeviceLinkIpcDeps>): DeviceLinkIpcDeps {
     revoke: vi.fn(),
     restore: vi.fn(),
     setDeviceControlEnabled: vi.fn(async () => []),
+    clearDeviceResponsiveness: vi.fn(),
     broadcast: vi.fn(),
     readLastKnownDeviceNames: vi.fn(() => ({})),
     rememberLastKnownDeviceName: vi.fn(async () => false),
@@ -207,6 +209,7 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: ['dev-1'],
     });
     expect(deps.setDeviceControlEnabled).toHaveBeenCalledWith('dev-1', false);
+    expect(deps.clearDeviceResponsiveness).toHaveBeenCalledWith('dev-1');
     expect(deps.closeLink).toHaveBeenCalledWith('dev-1');
     expect(deps.broadcast).toHaveBeenCalledWith('device-link:control-target-changed', {
       deviceId: 'dev-1',
@@ -223,6 +226,7 @@ describe('device-link IPC handlers', () => {
       disabledControlDeviceIds: [],
     });
     expect(deps.closeLink).not.toHaveBeenCalled();
+    expect(deps.clearDeviceResponsiveness).not.toHaveBeenCalled();
     await expect(handleSetDeviceControlEnabled(deps, '', true)).rejects.toThrowError(/\[INVALID_PARAMS\]/);
     await expect(handleSetDeviceControlEnabled(deps, 'dev-1', 'yes')).rejects.toThrowError(/\[INVALID_PARAMS\]/);
   });

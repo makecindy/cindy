@@ -12,7 +12,9 @@
  * 也避免测试为了拿文案去 import 整个 Electron 主进程模块。
  *
  * 组装逻辑(buildEndpointManifestDialogContent)是纯函数:失败分类、按钮集合与
- * detail 排版都不碰 Electron,由 clientEndpointsService 负责真正弹框。
+ * detail 排版都不碰 Electron,由 clientEndpointsService 负责真正弹框。弹框直接展示
+ * 简短错误信息；清单来源、网络探针与本机路径默认只进日志，用户主动点击「复制诊断
+ * 信息」时才组装进剪贴板文本。
  */
 import type { SupportedLocale } from '../shared/locale.js';
 
@@ -32,16 +34,22 @@ export type EndpointManifestFailureKind = 'network' | 'config';
 
 /** 用户在弹框上做出的选择。 */
 export type EndpointManifestDialogChoice = 'retry' | 'offline' | 'exit';
+/** 弹框内部动作;复制诊断后仍停留在当前弹框,不会进入阻断循环。 */
+export type EndpointManifestDialogAction = EndpointManifestDialogChoice | 'copy-diagnostics';
+/** 复制诊断的结果,用于在同一个弹框里明确反馈成功或失败。 */
+export type EndpointManifestDialogCopyStatus = 'idle' | 'success' | 'failed';
 
 export interface EndpointManifestDialogCopy {
-  title: string;
+  networkTitle: string;
+  configTitle: string;
   networkBody: string;
   configBody: string;
-  /** 以下四条均带 {{}} 占位,由 buildEndpointManifestDialogContent 填充。 */
-  sourceLine: string;
-  reasonLine: string;
-  diagnosisLine: string;
-  logLine: string;
+  errorLine: string;
+  diagnosticsHint: string;
+  copyDiagnosticsButton: string;
+  copiedHint: string;
+  copyFailedHint: string;
+  noSavedConfigurationHint: string;
   offlineHint: string;
   retryButton: string;
   offlineButton: string;
@@ -53,66 +61,80 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
   EndpointManifestDialogCopy
 > = {
   'zh-CN': {
-    title: '无法获取服务器配置',
+    networkTitle: 'Cindy 暂时无法连接',
+    configTitle: 'Cindy 暂时无法启动',
     networkBody:
-      'Cindy 启动前需要先获取服务器配置，这次请求没有成功。请检查网络连接后重新获取。',
-    configBody:
-      '服务器没有返回可用的配置，重新获取不会改变结果。请稍后再试或联系我们。',
-    sourceLine: '配置来源：{{source}}',
-    reasonLine: '失败原因：{{reason}}',
-    diagnosisLine: '网络诊断：{{diagnosis}}',
-    logLine: '诊断日志位置：{{path}}',
+      '启动时未能连接到 Cindy 服务。请确认设备已联网，然后重新尝试启动。如果正在使用 Proxy 或公司网络，可以切换网络后再试。',
+    configBody: 'Cindy 暂时无法完成启动。请稍后重新尝试；如果问题持续出现，请联系技术支持。',
+    errorLine: '错误信息：{{error}}',
+    diagnosticsHint: '需要反馈时，可以复制诊断信息后粘贴给我们。',
+    copyDiagnosticsButton: '复制诊断信息',
+    copiedHint: '诊断信息已复制。请粘贴到反馈消息中。',
+    copyFailedHint: '诊断信息未能复制，请重试。',
+    noSavedConfigurationHint: '这台设备没有可用的历史配置，需要恢复连接后才能继续启动。',
     offlineHint:
       '也可以用上次成功获取的配置离线启动（获取于 {{savedAt}}），需要联网的功能会不可用。',
-    retryButton: '重新获取配置',
+    retryButton: '重试启动 Cindy',
     offlineButton: '用上次配置启动',
     quitButton: '退出 Cindy',
   },
   en: {
-    title: 'Cannot load server configuration',
+    networkTitle: "Cindy Couldn't Connect",
+    configTitle: "Cindy Couldn't Start",
     networkBody:
-      'Cindy needs the server configuration before it can start, and this request did not go through. Check your network connection and fetch it again.',
+      "Cindy couldn't connect to its services during startup. Check that this device is online, then try starting again. If you're using a proxy or company network, try switching networks.",
     configBody:
-      'The server did not return a usable configuration, so fetching it again will not change the result. Try later or contact us.',
-    sourceLine: 'Configuration source: {{source}}',
-    reasonLine: 'Failure reason: {{reason}}',
-    diagnosisLine: 'Network diagnosis: {{diagnosis}}',
-    logLine: 'Diagnostic log location: {{path}}',
+      "Cindy couldn't finish starting right now. Try again later. If the problem continues, contact support.",
+    errorLine: 'Error: {{error}}',
+    diagnosticsHint: 'If you need help, copy the diagnostics into your support message.',
+    copyDiagnosticsButton: 'Copy Diagnostics',
+    copiedHint: 'Diagnostics copied. Paste them into your support message.',
+    copyFailedHint: "Diagnostics couldn't be copied. Try again.",
+    noSavedConfigurationHint:
+      'This device has no saved configuration yet, so Cindy needs to reconnect before it can start.',
     offlineHint:
       'You can also start offline with the configuration Cindy last fetched ({{savedAt}}). Features that need a network connection will be unavailable.',
-    retryButton: 'Fetch Configuration',
+    retryButton: 'Try Starting Cindy Again',
     offlineButton: 'Use Last Configuration',
     quitButton: 'Quit Cindy',
   },
   ja: {
-    title: 'サーバー設定を取得できません',
+    networkTitle: 'Cindy に一時的に接続できません',
+    configTitle: 'Cindy を一時的に起動できません',
     networkBody:
-      'Cindy の起動にはサーバー設定の取得が必要ですが、今回のリクエストは失敗しました。ネットワーク接続を確認してから再取得してください。',
+      '起動時に Cindy のサービスへ接続できませんでした。デバイスがネットワークに接続されていることを確認して、もう一度起動してください。プロキシや社内ネットワークを使用している場合は、ネットワークを切り替えてお試しください。',
     configBody:
-      'サーバーから使用可能な設定を取得できませんでした。再取得しても結果は変わりません。時間をおいて試すか、お問い合わせください。',
-    sourceLine: '設定の取得先: {{source}}',
-    reasonLine: '失敗の原因: {{reason}}',
-    diagnosisLine: 'ネットワーク診断: {{diagnosis}}',
-    logLine: '診断ログの場所: {{path}}',
+      'Cindy の起動を完了できませんでした。時間をおいてもう一度お試しください。問題が続く場合は、サポートにお問い合わせください。',
+    errorLine: 'エラー情報: {{error}}',
+    diagnosticsHint: 'サポートが必要な場合は、診断情報をコピーしてメッセージに貼り付けてください。',
+    copyDiagnosticsButton: '診断情報をコピー',
+    copiedHint: '診断情報をコピーしました。サポートへのメッセージに貼り付けてください。',
+    copyFailedHint: '診断情報をコピーできませんでした。もう一度お試しください。',
+    noSavedConfigurationHint:
+      'このデバイスには利用できる保存済み設定がないため、接続が回復してから起動を続ける必要があります。',
     offlineHint:
       '前回取得できた設定でオフライン起動することもできます（取得日時: {{savedAt}}）。ネットワークが必要な機能は利用できません。',
-    retryButton: '設定を再取得',
+    retryButton: 'Cindy の起動を再試行',
     offlineButton: '前回の設定で起動',
     quitButton: 'Cindy を終了',
   },
   ko: {
-    title: '서버 설정을 가져올 수 없습니다',
+    networkTitle: 'Cindy에 일시적으로 연결할 수 없습니다',
+    configTitle: 'Cindy를 일시적으로 시작할 수 없습니다',
     networkBody:
-      'Cindy를 시작하려면 먼저 서버 설정을 가져와야 하지만 이번 요청이 실패했습니다. 네트워크 연결을 확인한 후 다시 가져오세요.',
+      '시작하는 동안 Cindy 서비스에 연결하지 못했습니다. 기기가 네트워크에 연결되어 있는지 확인한 후 다시 시작해 보세요. 프록시나 회사 네트워크를 사용 중이라면 다른 네트워크로 전환해 보세요.',
     configBody:
-      '서버에서 사용할 수 있는 설정을 가져오지 못했습니다. 다시 가져와도 결과는 바뀌지 않습니다. 잠시 후 다시 시도하거나 문의해 주세요.',
-    sourceLine: '설정 출처: {{source}}',
-    reasonLine: '실패 원인: {{reason}}',
-    diagnosisLine: '네트워크 진단: {{diagnosis}}',
-    logLine: '진단 로그 위치: {{path}}',
+      '지금은 Cindy 시작을 완료할 수 없습니다. 잠시 후 다시 시도해 주세요. 문제가 계속되면 지원팀에 문의해 주세요.',
+    errorLine: '오류 정보: {{error}}',
+    diagnosticsHint: '도움이 필요하면 진단 정보를 복사해 지원 메시지에 붙여 넣어 주세요.',
+    copyDiagnosticsButton: '진단 정보 복사',
+    copiedHint: '진단 정보를 복사했습니다. 지원 메시지에 붙여 넣어 주세요.',
+    copyFailedHint: '진단 정보를 복사하지 못했습니다. 다시 시도해 주세요.',
+    noSavedConfigurationHint:
+      '이 기기에는 사용할 수 있는 저장된 설정이 없어 연결이 복구된 후에 시작할 수 있습니다.',
     offlineHint:
       '마지막으로 가져온 설정으로 오프라인 시작할 수도 있습니다({{savedAt}} 기준). 네트워크가 필요한 기능은 사용할 수 없습니다.',
-    retryButton: '설정 다시 가져오기',
+    retryButton: 'Cindy 시작 다시 시도',
     offlineButton: '지난 설정으로 시작',
     quitButton: 'Cindy 종료',
   },
@@ -121,20 +143,13 @@ export const ENDPOINT_MANIFEST_DIALOG_COPY: Record<
 export interface EndpointManifestDialogInput {
   locale: EndpointManifestDialogLocale;
   kind: EndpointManifestFailureKind;
-  /** 错误码级别的短标识(fetch-failed:ERR_FAILED / invalid-json 等)。 */
+  /** 失败原因会以简短形态展示,并完整进入 diagnosticsText。 */
   reason: string;
-  /**
-   * 清单来源:CDN 路径是 URL,dev 的 file 模式是本地文件路径。四语文案因此用中性的
-   * 「来源 / source / 取得先 / 출처」,不写「URL / 地址」——否则 file 模式下名不副实。
-   */
-  source: string;
-  /** 网络分阶段诊断摘要;没跑或跑失败时省略。 */
+  source?: string;
   diagnosis?: string | null;
-  /**
-   * 诊断产物位置:netlog 抓成功时是那个文件,失败时回落成日志目录——所以文案用
-   * 「诊断日志位置」而不是「诊断日志」,不承诺一定是单个文件。
-   */
   logPath?: string | null;
+  /** 复制后在同一个弹框中显示成功或失败反馈。 */
+  copyStatus?: EndpointManifestDialogCopyStatus;
   /** 上次成功配置的获取时间(已格式化);有值即提供离线启动按钮。 */
   offlineSavedAt?: string | null;
 }
@@ -147,13 +162,34 @@ export interface EndpointManifestDialogContent {
   defaultId: number;
   cancelId: number;
   /** 按钮下标 → 语义,避免调用方按 index 猜。 */
-  choices: EndpointManifestDialogChoice[];
+  choices: EndpointManifestDialogAction[];
+  /** 复制按钮使用的技术文本;永远不放进 message/detail。 */
+  diagnosticsText: string;
 }
 
 function fill(template: string, values: Record<string, string>): string {
   return template.replace(/\{\{(\w+)\}\}/g, (match, key: string) =>
     key in values ? values[key] : match,
   );
+}
+
+/** 去掉内部传输包装,直接向用户展示真正有用的错误码或校验原因。 */
+export function formatEndpointManifestVisibleError(reason: string): string {
+  return reason.startsWith('fetch-failed:') ? reason.slice('fetch-failed:'.length) : reason;
+}
+
+/** 供复制按钮使用的完整技术上下文;不参与普通用户可见文案。 */
+export function buildEndpointManifestDiagnosticsText(
+  input: Pick<EndpointManifestDialogInput, 'kind' | 'reason' | 'source' | 'diagnosis' | 'logPath'>,
+): string {
+  return [
+    'Cindy startup diagnostics',
+    `kind=${input.kind}`,
+    `reason=${input.reason}`,
+    `source=${input.source ?? 'n/a'}`,
+    `diagnosis=${input.diagnosis ?? 'n/a'}`,
+    `logPath=${input.logPath ?? 'n/a'}`,
+  ].join('\n');
 }
 
 /**
@@ -166,24 +202,26 @@ export function buildEndpointManifestDialogContent(
   const copy = ENDPOINT_MANIFEST_DIALOG_COPY[input.locale];
   const offlineAvailable = input.kind === 'network' && Boolean(input.offlineSavedAt);
 
-  const lines = [
-    input.kind === 'network' ? copy.networkBody : copy.configBody,
-    '',
-    fill(copy.reasonLine, { reason: input.reason }),
-    fill(copy.sourceLine, { source: input.source }),
-  ];
-  if (input.diagnosis) {
-    lines.push(fill(copy.diagnosisLine, { diagnosis: input.diagnosis }));
+  const lines = [input.kind === 'network' ? copy.networkBody : copy.configBody];
+  if (input.kind === 'network' && !offlineAvailable) {
+    lines.push('', copy.noSavedConfigurationHint);
   }
-  if (input.logPath) {
-    lines.push(fill(copy.logLine, { path: input.logPath }));
+  lines.push(
+    '',
+    fill(copy.errorLine, { error: formatEndpointManifestVisibleError(input.reason) }),
+    copy.diagnosticsHint,
+  );
+  if (input.copyStatus === 'success') {
+    lines.push('', copy.copiedHint);
+  } else if (input.copyStatus === 'failed') {
+    lines.push('', copy.copyFailedHint);
   }
   if (offlineAvailable) {
     lines.push('', fill(copy.offlineHint, { savedAt: input.offlineSavedAt ?? '' }));
   }
 
-  const buttons = [copy.retryButton];
-  const choices: EndpointManifestDialogChoice[] = ['retry'];
+  const buttons = [copy.retryButton, copy.copyDiagnosticsButton];
+  const choices: EndpointManifestDialogAction[] = ['retry', 'copy-diagnostics'];
   if (offlineAvailable) {
     buttons.push(copy.offlineButton);
     choices.push('offline');
@@ -192,11 +230,12 @@ export function buildEndpointManifestDialogContent(
   choices.push('exit');
 
   return {
-    message: copy.title,
+    message: input.kind === 'network' ? copy.networkTitle : copy.configTitle,
     detail: lines.join('\n'),
     buttons,
     defaultId: 0,
     cancelId: buttons.length - 1,
     choices,
+    diagnosticsText: buildEndpointManifestDiagnosticsText(input),
   };
 }
