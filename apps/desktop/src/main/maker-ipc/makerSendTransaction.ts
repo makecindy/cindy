@@ -15,8 +15,10 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -177,6 +179,14 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 本次调用是否来自手机控制端(缺省 = 否)。
+   *
+   * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
+   * newMakerWorktreePreferenceHandler 把 isDeviceLinkInvoke 做成 deps 的写法)。
+   * 判据本身由被控端盖章、控制端无法伪造,见 device-link/invoke-context.ts。
+   */
+  isMobileClientInvoke?(): boolean;
   log: MakerSendTransactionLog;
 }
 
@@ -521,9 +531,19 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
       // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
       const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      const outgoing = pendingHandoff
+      const withHandoff = pendingHandoff
         ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
         : normalized;
+      // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
+      // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
+      // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
+      // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
+      const mobileClientNote = deps.isMobileClientInvoke?.() === true
+        ? buildMobileClientPromptNote()
+        : null;
+      const outgoing = mobileClientNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
+        : withHandoff;
       const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
       const persistUserMessage = readPersistUserMessageOption(so);

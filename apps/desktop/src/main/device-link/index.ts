@@ -63,6 +63,11 @@ import {
   handleControllerOffline,
   purgeRevokedController,
 } from './dispatch';
+import {
+  clearControllerPlatforms,
+  getControllerPlatform,
+  setControllerPlatform,
+} from './controllerPlatform';
 import { setBusyProbe, helloBusy, pollBusyChange, resetBusyDedupe } from './busyReporter';
 import {
   DL_VOICE_DICTIONARY_SYNC_CHANNEL,
@@ -169,7 +174,7 @@ const presenceAvailableByDevice = new Map<string, boolean>();
  * push 帧不属于 relay 的控制类帧,自己设备之间同步词典不该要求对方开放被控。
  */
 const presenceOnlineByDevice = new Map<string, boolean>();
-const presencePlatformByDevice = new Map<string, string>();
+
 const presenceNameByDevice = new Map<string, string>();
 let unsubscribeDictionaryChanged: (() => void) | null = null;
 
@@ -348,7 +353,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     const wasOnline = presenceOnlineByDevice.get(snap.deviceId);
     presenceAvailableByDevice.set(snap.deviceId, available);
     presenceOnlineByDevice.set(snap.deviceId, snap.online);
-    presencePlatformByDevice.set(snap.deviceId, snap.platform);
+    setControllerPlatform(snap.deviceId, snap.platform);
     presenceNameByDevice.set(snap.deviceId, snap.selfName || snap.deviceName);
     void rememberLastKnownDeviceName(snap.deviceId, snap.deviceName); // best-effort 名称缓存,不阻塞 presence 处理
     broadcast(DEVICE_LINK_PUSH.PRESENCE_CHANGED, snap);
@@ -426,7 +431,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (
         shouldExchangeDictionaryWith({
           online: true,
-          platform: presencePlatformByDevice.get(env.src),
+          platform: getControllerPlatform(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -438,7 +443,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       if (
         shouldExchangeDictionaryWith({
           online: true,
-          platform: presencePlatformByDevice.get(env.src),
+          platform: getControllerPlatform(env.src),
           revoked: isDeviceRevoked(env.src),
         })
       ) {
@@ -463,7 +468,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
         .filter(([deviceId, online]) =>
           shouldExchangeDictionaryWith({
             online,
-            platform: presencePlatformByDevice.get(deviceId),
+            platform: getControllerPlatform(deviceId),
             revoked: isDeviceRevoked(deviceId),
           }),
         )
@@ -478,7 +483,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
             deviceId !== client?.getSelfDeviceId() &&
             shouldExchangeDictionaryWith({
               online,
-              platform: presencePlatformByDevice.get(deviceId),
+              platform: getControllerPlatform(deviceId),
               revoked: isDeviceRevoked(deviceId),
             }),
         )
@@ -490,7 +495,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       deviceId !== client?.getSelfDeviceId() &&
       shouldExchangeDictionaryWith({
         online: presenceOnlineByDevice.get(deviceId) === true,
-        platform: presencePlatformByDevice.get(deviceId),
+        platform: getControllerPlatform(deviceId),
         revoked: isDeviceRevoked(deviceId),
       }),
     sendRelayFrame: (deviceId, frame) => {
@@ -697,7 +702,7 @@ function teardownActiveLink(): void {
   // 同步在降级过一次之后永久失效。清空 presence 就够了 —— 没有对端就不会发送,
   // client 为 null 时 sendPush 也是 no-op。
   presenceOnlineByDevice.clear();
-  presencePlatformByDevice.clear();
+  clearControllerPlatforms();
   presenceNameByDevice.clear();
   resetSubscriptionRefs();
   resetBusyDedupe(); // 重置 busy dedupe,避免重连后首个真实 busy 状态被旧值压掉
