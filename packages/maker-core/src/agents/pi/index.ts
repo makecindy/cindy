@@ -39,6 +39,11 @@ import {
   CINDY_BRIDGE_EXTENSION_FILENAME,
   CINDY_BRIDGE_EXTENSION_SOURCE,
 } from './cindy-bridge-source.js';
+import {
+  CINDY_SUBAGENT_ENV,
+  CINDY_SUBAGENT_EXTENSION_FILENAME,
+  CINDY_SUBAGENT_EXTENSION_SOURCE,
+} from './cindy-subagent-source.js';
 import { normalizePiToolForAutoReview } from './auto-review-policy.js';
 import {
   extractAutoReviewUserIntent,
@@ -592,6 +597,13 @@ export class PiAgent extends BaseAgent {
       path.join(extensionsDir, CINDY_BRIDGE_EXTENSION_FILENAME),
       CINDY_BRIDGE_EXTENSION_SOURCE,
     );
+    // cindy-subagent extension:与 bridge 并列的独立扩展(职责分离 —— bridge 管权限门与
+    // MCP 桥,这个只管子代理)。子进程继承 PI_CODING_AGENT_DIR,因此同样加载 bridge,
+    // 权限门对子代理照样生效;递归由扩展内的 depth env 自己截断。
+    await fs.writeFile(
+      path.join(extensionsDir, CINDY_SUBAGENT_EXTENSION_FILENAME),
+      CINDY_SUBAGENT_EXTENSION_SOURCE,
+    );
 
     // 权限档文件:extension 每次 tool_call 现读(热切换);读不到按 ask fail-closed。
     const runtimeDir = path.join(agentHome, 'runtime');
@@ -861,6 +873,11 @@ export class PiAgent extends BaseAgent {
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
         PI_CODING_AGENT_DIR: configHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
+        // 子代理:cindy-subagent 扩展据此 spawn 子 pi 进程。给二进制路径而不是让扩展猜
+        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。模型取本次启动时的
+        // 会话模型(会话中途 setModel 不回溯已注入的 env,子代理按启动模型跑)。
+        [CINDY_SUBAGENT_ENV.binary]: this.deps.binaryPath,
+        ...(mutableModel ? { [CINDY_SUBAGENT_ENV.model]: mutableModel } : {}),
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
         PI_OFFLINE: '1',

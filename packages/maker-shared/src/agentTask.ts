@@ -152,10 +152,21 @@ export interface AgentTaskUpdate {
   updatedAt?: string;
 }
 
-/** Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents. */
+/**
+ * Tool names that spawn a sub-agent task: Claude `Task`/`Agent`, Codex collab agents,
+ * PI `subagent`(Cindy 自有扩展注册的工具名,与 pi 社区惯例一致)。
+ *
+ * MCP 工具一律带 `mcp__` 前缀,不会与裸 `subagent` 撞名。
+ */
 export function isAgentTaskToolName(toolName: string): boolean {
-  return toolName === 'Agent' || toolName === 'Task' || toolName.startsWith('collab:');
+  return toolName === 'Agent'
+    || toolName === 'Task'
+    || toolName === PI_SUBAGENT_TOOL_NAME
+    || toolName.startsWith('collab:');
 }
+
+/** PI 子代理工具名 —— maker-core 的 pi 扩展注册端与本文件的卡片判据共用,不各写字面量。 */
+export const PI_SUBAGENT_TOOL_NAME = 'subagent';
 
 /**
  * Validate + shape a raw `agent_task_update` event payload into an `AgentTaskUpdate`.
@@ -354,7 +365,12 @@ export function buildAgentTaskCardModel(input: {
   const { toolName, toolInput, update, result } = input;
   const status: AgentTaskStatus = update?.status ?? (result ? 'completed' : 'running');
   const provider: 'claude-code' | 'codex' | 'pi' =
-    update?.provider ?? (toolName?.startsWith('collab:') ? 'codex' : 'claude-code');
+    update?.provider
+    ?? (toolName?.startsWith('collab:')
+      ? 'codex'
+      : toolName === PI_SUBAGENT_TOOL_NAME
+        ? 'pi'
+        : 'claude-code');
   const title = compactText(
     update?.title
       ?? readInputString(toolInput, ['description', 'task', 'name'])

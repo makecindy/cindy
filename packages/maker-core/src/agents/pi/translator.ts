@@ -19,6 +19,7 @@ import type { Logger } from '../../interfaces/logger.js';
 import type { AgentEvent, UsageSnapshot } from '../../types/index.js';
 import type { AsyncQueue } from '../shared/async-queue.js';
 import type { PiRpcEvent } from './rpc-client.js';
+import { parsePiSubagentProgress } from './subagent-progress.js';
 
 interface PiUsage {
   input?: number;
@@ -246,8 +247,16 @@ export function translatePiEvent(
       return;
     }
 
-    case 'tool_execution_update':
+    case 'tool_execution_update': {
+      // 子代理卡的实时状态:`subagent` 工具用 pi 原生的 onUpdate 流上报 tokens /
+      // 工具调用数 / 耗时(卡片的 tool_use / tool_result 由 start / end 分支承载)。
+      // 其它工具的流式中间结果照旧忽略 —— 载荷不带标记时 parse 返回 null。
+      const update = parsePiSubagentProgress(event.partialResult);
+      if (update) {
+        queue.push({ type: 'agent_task_update', data: update, source: 'pi' });
+      }
       return;
+    }
 
     case 'tool_execution_end': {
       const toolUseId = String(event.toolCallId ?? '');

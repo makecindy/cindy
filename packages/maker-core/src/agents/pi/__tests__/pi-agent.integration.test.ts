@@ -1226,4 +1226,76 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
       }
     },
   );
+  it(
+    'subagent tool spawns a real child pi, streams live card usage, and returns only its conclusion',
+    { timeout: 120_000 },
+    async () => {
+      // 端到端:父会话调 subagent → Cindy 自有扩展 spawn 真 pi 子进程 → 子进程走同一
+      // fake gateway → 结论回父模型;进度经工具原生 onUpdate 翻成 agent_task_update。
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-subagent-'));
+      try {
+        scriptedResponses.length = 0;
+        scriptedResponses.push(
+          anthropicToolUseBody('subagent', { agent: 'scout', task: 'find the auth entry point' }),
+          // 子进程这一轮:子代理的结论。
+          anthropicStreamBody('auth starts at src/auth/index.ts:42'),
+          anthropicStreamBody('parent turn finished'),
+        );
+
+        const agent = new PiAgent(buildDeps());
+        const resolverTools: string[] = [];
+        let handle: AgentSessionHandle | null = null;
+        const events: AgentEvent[] = [];
+        try {
+          handle = await agent.startSession({
+            sessionId: 'pi-subagent-e2e',
+            workingDir,
+            model: 'pi-test-model',
+            permissionMode: 'ask',
+          });
+          handle.setInteractionResolver?.(async (req) => {
+            resolverTools.push((req as { toolName?: string }).toolName ?? '?');
+            return {
+              kind: 'permission',
+              requestId: (req as { requestId: string }).requestId,
+              behavior: 'allow',
+            } as never;
+          });
+          const done = (async () => {
+            for await (const ev of handle!.events()) {
+              events.push(ev);
+              if (ev.type === 'done') break;
+            }
+          })();
+          await handle.send({ type: 'user', content: 'go' });
+          await done;
+        } finally {
+          await handle?.close();
+        }
+
+        // 派子代理本身要过审批门(它不是只读内置工具)—— 这是有意的安全属性。
+        expect(resolverTools).toContain('subagent');
+
+        // 卡片走的是与 Claude / Codex 同一条 agent_task_update 通道。
+        const cardUpdates = events
+          .filter((ev) => ev.type === 'agent_task_update')
+          .map((ev) => (ev as { data: Record<string, unknown> }).data);
+        expect(cardUpdates.length).toBeGreaterThan(0);
+        expect(cardUpdates.every((u) => u.provider === 'pi')).toBe(true);
+        expect(cardUpdates.at(0)?.status).toBe('running');
+        expect(cardUpdates.at(-1)?.status).toBe('completed');
+        expect(cardUpdates.at(-1)?.title).toBe('scout');
+        const finalUsage = cardUpdates.at(-1)?.usage as Record<string, number> | undefined;
+        // 真实用量来自子进程的 message_end.usage(fake gateway 上报 42 input tokens)。
+        expect(finalUsage?.totalTokens).toBeGreaterThan(0);
+        expect(typeof finalUsage?.durationMs).toBe('number');
+
+        // 子代理的结论确实回到了父模型(tool_result 出现在后续请求体里)。
+        expect(seenRequests.some((r) => r.body.includes('auth starts at src/auth/index.ts:42'))).toBe(true);
+      } finally {
+        rmSync(workingDir, { recursive: true, force: true });
+        scriptedResponses.length = 0;
+      }
+    },
+  );
 });
