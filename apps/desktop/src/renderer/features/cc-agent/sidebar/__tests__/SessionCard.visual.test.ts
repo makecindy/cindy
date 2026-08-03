@@ -465,12 +465,13 @@ describe('SessionCard visual cases', () => {
       onTogglePin: vi.fn(),
       projectOptions: [],
     };
+    const moreActionsName = /^(?:更多操作|ccAgent\.sidebar\.sessionMenu\.moreActions)$/;
 
     const { container: listContainer } = render(
       createElement(SessionCard, { ...commonProps, variant: 'list' }),
     );
     const listMore = within(listContainer).getByRole('button', {
-      name: 'ccAgent.sidebar.sessionMenu.moreActions',
+      name: moreActionsName,
     });
     const listArchive = within(listContainer).getByRole('button', { name: '归档' });
     for (const action of [listMore, listArchive]) {
@@ -491,7 +492,7 @@ describe('SessionCard visual cases', () => {
       createElement(SessionCard, { ...commonProps, variant: 'list', isActive: true }),
     );
     const activeListMore = within(activeListContainer).getByRole('button', {
-      name: 'ccAgent.sidebar.sessionMenu.moreActions',
+      name: moreActionsName,
     });
     expect(activeListMore.className).toContain('text-sidebar-item-active-foreground');
     expect(activeListMore.className).toContain(
@@ -501,7 +502,7 @@ describe('SessionCard visual cases', () => {
 
     const { container: cardContainer } = render(createElement(SessionCard, commonProps));
     const cardMore = within(cardContainer).getByRole('button', {
-      name: 'ccAgent.sidebar.sessionMenu.moreActions',
+      name: moreActionsName,
     });
     expect(cardMore.className).toContain('size-6');
     expect(cardMore.className).toContain('bg-[var(--cmd-palette-bg)]');
