@@ -2687,6 +2687,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       success: boolean;
       path: string | null;
     }> => ipcRenderer.invoke('dialog:show-open-file', params ?? {}),
+    /** 打开 @ 资源系统选择器；macOS 可选文件或目录，Windows/Linux 选择文件。 */
+    showOpenResource: (params?: { defaultPath?: string }): Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
+    }> => ipcRenderer.invoke('dialog:show-open-resource', params ?? {}),
   },
 
   // Open URL in system default browser

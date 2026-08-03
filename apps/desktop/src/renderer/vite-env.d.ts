@@ -3989,6 +3989,12 @@ interface ElectronAPI {
       success: boolean;
       path: string | null;
     }>;
+    /** 打开 @ 资源系统选择器；macOS 可选文件或目录，Windows/Linux 选择文件。 */
+    showOpenResource: (params?: { defaultPath?: string }) => Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
+    }>;
   };
 
   // electronAPI.codex 已退役 —— auth / binary status / usage / OAuth 登录进度 全部

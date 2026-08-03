@@ -28,9 +28,8 @@ import {
 import { cn } from '@/lib/utils';
 import { Tip } from '@/components/ui/tooltip';
 import {
-  AT_FILE_BROWSER_RESOURCE,
+  AT_FILE_PICKER_RESOURCE,
   AT_MENTION_SEARCH_RESULT_LIMIT,
-  filterAtFileResources,
   filterAtResources,
   type AtResourceItem,
 } from '@/lib/atResourceService';
@@ -60,9 +59,8 @@ interface AtMentionPanelProps {
   onRetry: () => void;
   /** Selected Plugin provider; its query is scoped and never broadcast. */
   scopedProviderName?: string;
-  /** Project file/directory scope entered through the fixed leading action. */
-  fileBrowserScope?: boolean;
-  fileBrowserEnabled?: boolean;
+  /** Whether the local task can launch the native file picker. */
+  filePickerEnabled?: boolean;
   onBack?: () => void;
   /** Panel max-height in px. Defaults to 400 (chat view); NewMaker passes a smaller value so the popover doesn't cover the logo. */
   maxHeight?: number;
@@ -77,8 +75,7 @@ export function AtMentionPanel({
   onClose,
   onRetry,
   scopedProviderName,
-  fileBrowserScope = false,
-  fileBrowserEnabled = false,
+  filePickerEnabled = false,
   onBack,
   maxHeight = 400,
 }: AtMentionPanelProps) {
@@ -96,14 +93,13 @@ export function AtMentionPanel({
 
   const filtered = useMemo(() => {
     if (state.kind !== 'ready') return [];
-    if (fileBrowserScope) return filterAtFileResources(state.items, query);
     if (scopedProviderName) return state.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
-    const items = fileBrowserEnabled
-      ? [AT_FILE_BROWSER_RESOURCE, ...state.items]
+    const items = filePickerEnabled
+      ? [AT_FILE_PICKER_RESOURCE, ...state.items]
       : state.items;
     return filterAtResources(items, query);
-  }, [state, query, scopedProviderName, fileBrowserScope, fileBrowserEnabled]);
-  const hasScope = fileBrowserScope || !!scopedProviderName;
+  }, [state, query, scopedProviderName, filePickerEnabled]);
+  const hasScope = !!scopedProviderName;
   const isEmptyRootQuery = !hasScope && !query.trim();
 
   useEffect(() => {
@@ -182,7 +178,7 @@ export function AtMentionPanel({
   const renderItemRow = (item: AtResourceItem, idx: number) => {
     const focused = idx === focusedIndex;
     let meta: string;
-    if (item.type === 'file-browser') {
+    if (item.type === 'file-picker') {
       meta = '';
     } else if (item.type === 'agent') {
       meta = 'Agent';
@@ -200,12 +196,12 @@ export function AtMentionPanel({
       const lastSlash = item.relPath.lastIndexOf('/');
       meta = lastSlash >= 0 ? item.relPath.slice(0, lastSlash) : '';
     }
-    const displayName = item.type === 'file-browser'
+    const displayName = item.type === 'file-picker'
       ? t('newChat.atMention.filesAndFolders')
       : item.type === 'dir'
         ? `${item.name}/`
         : item.name;
-    const Icon = item.type === 'file-browser'
+    const Icon = item.type === 'file-picker'
       ? Paperclip
       : item.type === 'agent'
       ? Sparkles
@@ -297,9 +293,7 @@ export function AtMentionPanel({
               <ArrowLeft size={16} />
             </button>
             <span className="min-w-0 truncate text-[13px] font-medium text-[var(--cmd-palette-item-text)]">
-              {fileBrowserScope
-                ? t('newChat.atMention.filesAndFolders')
-                : scopedProviderName}
+              {scopedProviderName}
             </span>
             {scopedProviderName && (
               <span className="ml-auto shrink-0 text-[12px] text-[var(--cmd-palette-item-meta)]">

@@ -1,8 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  AT_FILE_BROWSER_RESOURCE,
-  filterAtFileResources,
+  AT_FILE_PICKER_RESOURCE,
+  createAtResourceFromNativePath,
   filterAtResources,
   getAtDirectoryCompletionQuery,
   scanAtResources,
@@ -62,7 +62,7 @@ afterEach(() => {
 
 describe('filterAtResources', () => {
   const items = [
-    AT_FILE_BROWSER_RESOURCE,
+    AT_FILE_PICKER_RESOURCE,
     { type: 'file' as const, name: 'README.md', relPath: 'README.md' },
     { type: 'dir' as const, name: 'apps', relPath: 'apps' },
     { type: 'session' as const, name: 'Release planning', relPath: 'cindy://session/1' },
@@ -72,7 +72,7 @@ describe('filterAtResources', () => {
 
   it('hides files and directories until the user types a query', () => {
     expect(filterAtResources(items, '').map((item) => item.type)).toEqual([
-      'file-browser',
+      'file-picker',
       'agent',
       'plugin-provider',
     ]);
@@ -107,28 +107,41 @@ describe('filterAtResources', () => {
   });
 });
 
-describe('filterAtFileResources', () => {
-  const workspaceItems = [
-    { type: 'file' as const, name: 'README.md', relPath: 'README.md' },
-    { type: 'dir' as const, name: 'apps', relPath: 'apps' },
-    { type: 'dir' as const, name: 'desktop', relPath: 'apps/desktop' },
-    { type: 'file' as const, name: 'package.json', relPath: 'apps/package.json' },
-    { type: 'file' as const, name: 'package.json', relPath: 'apps/desktop/package.json' },
-    { type: 'session' as const, name: 'Task', relPath: 'cindy://session/1' },
-  ];
-
-  it('starts with project root files and directories only', () => {
-    expect(filterAtFileResources(workspaceItems, '').map((item) => item.relPath)).toEqual([
-      'apps',
-      'README.md',
-    ]);
+describe('createAtResourceFromNativePath', () => {
+  it('stores project files as workdir-relative POSIX paths on Windows', () => {
+    expect(createAtResourceFromNativePath(
+      'D:\\Repo\\src\\main.ts',
+      'file',
+      'd:\\repo',
+    )).toEqual({
+      type: 'file',
+      name: 'main.ts',
+      relPath: 'src/main.ts',
+    });
   });
 
-  it('searches within a selected directory prefix', () => {
-    expect(filterAtFileResources(workspaceItems, 'apps/').map((item) => item.relPath)).toEqual([
-      'apps/desktop',
-      'apps/package.json',
-    ]);
+  it('keeps files outside the workdir as absolute paths', () => {
+    expect(createAtResourceFromNativePath(
+      'D:\\Downloads\\notes.txt',
+      'file',
+      'D:\\Repo',
+    )).toEqual({
+      type: 'file',
+      name: 'notes.txt',
+      relPath: 'D:\\Downloads\\notes.txt',
+    });
+  });
+
+  it('creates directory resources selected in the macOS picker', () => {
+    expect(createAtResourceFromNativePath('/repo/docs', 'directory', '/repo')).toEqual({
+      type: 'dir',
+      name: 'docs',
+      relPath: 'docs',
+    });
+  });
+
+  it('rejects an empty picker result', () => {
+    expect(createAtResourceFromNativePath('  ', 'file', 'D:\\Repo')).toBeNull();
   });
 });
 

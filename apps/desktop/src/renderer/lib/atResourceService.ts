@@ -16,7 +16,7 @@ const log = createLogger('AtResourceService');
  */
 
 export type AtResourceType =
-  | 'file-browser'
+  | 'file-picker'
   | 'file'
   | 'dir'
   | 'agent'
@@ -34,7 +34,7 @@ export interface AtResourceItem {
    *  - agent → filename without `.md`
    */
   name: string;
-  /** Workspace-relative path or stable Cindy context deep link. Used for:
+  /** Workspace-relative path, an explicitly picked absolute path, or a stable Cindy context deep link. Used for:
    *  - display "apps/server/src/routes" (minus basename) in right column
    *  - serialization on submit: `@relPath` / `@relPath/` / `@.claude/agents/<name>.md`
    */
@@ -60,16 +60,16 @@ export interface ScanResult {
 
 export const AT_MENTION_SEARCH_RESULT_LIMIT = 8;
 export const AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP = 3;
-export const AT_FILE_BROWSER_RESOURCE: AtResourceItem = {
-  type: 'file-browser',
+export const AT_FILE_PICKER_RESOURCE: AtResourceItem = {
+  type: 'file-picker',
   name: '',
-  relPath: 'cindy://file-browser',
+  relPath: 'cindy://file-picker',
 };
 
 const EMPTY_QUERY_SECTION_LIMIT = 3;
 const EMPTY_QUERY_RESULT_LIMIT = 12;
 const EMPTY_QUERY_SECTIONS: ReadonlyArray<ReadonlySet<AtResourceType>> = [
-  new Set(['file-browser']),
+  new Set(['file-picker']),
   new Set(['browser-tab', 'desktop-window']),
   new Set(['agent']),
   new Set(['plugin-provider']),
@@ -449,50 +449,30 @@ export function getAtDirectoryCompletionQuery(
   return `${relPath}/`;
 }
 
-export function filterAtFileResources(
-  items: AtResourceItem[],
-  query: string,
-  limit = AT_MENTION_SEARCH_RESULT_LIMIT,
-): AtResourceItem[] {
-  const q = query.trim().toLowerCase();
-  const workspaceItems = items.filter((item) => item.type === 'file' || item.type === 'dir');
-  if (!q) {
-    return workspaceItems
-      .filter((item) => !item.relPath.replace(/\/+$/, '').includes('/'))
-      .sort((a, b) => (
-        Number(b.type === 'dir') - Number(a.type === 'dir')
-        || a.name.localeCompare(b.name)
-      ))
-      .slice(0, limit);
-  }
+/** Build an item returned by the native picker without importing Node path APIs. */
+export function createAtResourceFromNativePath(
+  selectedPath: string,
+  kind: 'file' | 'directory',
+  workingDir?: string | null,
+): AtResourceItem | null {
+  const trimmedPath = selectedPath.trim();
+  if (!trimmedPath) return null;
 
-  if (q.endsWith('/')) {
-    return workspaceItems
-      .filter((item) => {
-        const relPath = item.relPath.toLowerCase();
-        if (!relPath.startsWith(q)) return false;
-        const remainder = relPath.slice(q.length).replace(/\/+$/, '');
-        return !!remainder && !remainder.includes('/');
-      })
-      .sort((a, b) => (
-        Number(b.type === 'dir') - Number(a.type === 'dir')
-        || a.name.localeCompare(b.name)
-      ))
-      .slice(0, limit);
-  }
+  const normalizedPath = trimmedPath.replace(/\\/g, '/');
+  const normalizedWorkingDir = workingDir?.trim().replace(/\\/g, '/').replace(/\/+$/, '') ?? '';
+  const windowsPath = /^[A-Za-z]:\//.test(normalizedWorkingDir);
+  const comparablePath = windowsPath ? normalizedPath.toLowerCase() : normalizedPath;
+  const comparableWorkingDir = windowsPath
+    ? normalizedWorkingDir.toLowerCase()
+    : normalizedWorkingDir;
+  const isInsideWorkingDir = !!comparableWorkingDir
+    && comparablePath.startsWith(`${comparableWorkingDir}/`);
+  const relPath = isInsideWorkingDir
+    ? normalizedPath.slice(normalizedWorkingDir.length + 1)
+    : trimmedPath;
+  const name = normalizedPath.split('/').filter(Boolean).pop() ?? trimmedPath;
 
-  const scored: Array<{ item: AtResourceItem; score: number }> = [];
-  for (const item of workspaceItems) {
-    const score = scoreItem(item, q);
-    if (score >= 0) scored.push({ item, score });
-  }
-  scored.sort((a, b) => (
-    b.score - a.score
-    || Number(b.item.type === 'dir') - Number(a.item.type === 'dir')
-    || a.item.name.localeCompare(b.item.name)
-    || a.item.relPath.localeCompare(b.item.relPath)
-  ));
-  return scored.slice(0, limit).map(({ item }) => item);
+  return { type: kind === 'directory' ? 'dir' : 'file', name, relPath };
 }
 
 /**
@@ -512,7 +492,7 @@ export function filterAtResources(
   if (!q) return emptyQueryResources(items, resultLimit);
   const scored: Array<{ item: AtResourceItem; score: number }> = [];
   for (const item of items) {
-    if (item.type === 'file-browser') continue;
+    if (item.type === 'file-picker') continue;
     const s = scoreItem(item, q);
     if (s >= 0) scored.push({ item, score: s });
   }

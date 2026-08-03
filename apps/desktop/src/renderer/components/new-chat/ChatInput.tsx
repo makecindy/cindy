@@ -194,10 +194,10 @@ import * as sessionService from '@/lib/sessionService';
 import { getModelById } from '@/lib/modelDefinitions';
 import { loadAllCommands, filterSlashCommands, type UnifiedCommand } from '@/lib/slashCommands';
 import {
-  AT_FILE_BROWSER_RESOURCE,
+  AT_FILE_PICKER_RESOURCE,
   AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
   AT_MENTION_SEARCH_RESULT_LIMIT,
-  filterAtFileResources,
+  createAtResourceFromNativePath,
   getAtDirectoryCompletionQuery,
   scanAtResources,
   scanPluginAtResources,
@@ -3202,8 +3202,7 @@ export function ChatInput({
     provider: AtResourceItem;
     triggerFrom: number;
   } | null>(null);
-  const [atFileBrowserScopeFrom, setAtFileBrowserScopeFrom] = useState<number | null>(null);
-  const activeAtScopeFrom = atPluginScope?.triggerFrom ?? atFileBrowserScopeFrom ?? undefined;
+  const activeAtScopeFrom = atPluginScope?.triggerFrom;
   const trigger: TriggerState = editor
     ? detectTrigger(editor, activeAtScopeFrom)
     : { kind: 'none' };
@@ -3296,7 +3295,7 @@ export function ChatInput({
   );
 
   const runAtScan = useCallback(
-    (query?: string, includeWorkspaceFiles = false) => {
+    (query?: string) => {
       // SSH 远端会话不扫 @ 资源(无隧道);atOpen 也已对其关闭面板,这里再兜一层。
       if (isRemoteSession) return;
       // device-link 远程会话:带 deviceId 经隧道在被控端扫描(workingDir 是被控端路径);
@@ -3317,7 +3316,7 @@ export function ChatInput({
       scanAtResources(
         workingDir ?? '',
         paletteAgentKind,
-        normalizedQuery || includeWorkspaceFiles ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
+        normalizedQuery ? 2000 : AT_MENTION_EMPTY_WORKSPACE_SCAN_CAP,
         normalizedQuery || undefined,
         remoteDeviceId,
         {
@@ -3344,7 +3343,7 @@ export function ChatInput({
   );
 
   useEffect(() => {
-    if (!editor || (!atPluginScope && atFileBrowserScopeFrom === null)) return;
+    if (!editor || !atPluginScope) return;
     const handleTransaction = ({ transaction }: { transaction: Transaction }) => {
       // A caret-only move makes the end of a multi-word query ambiguous.
       // Leave Plugin scope before the user can select a row against a prefix
@@ -3352,7 +3351,6 @@ export function ChatInput({
       if (!transaction.docChanged && transaction.selectionSet) {
         atScanSeqRef.current += 1;
         setAtPluginScope(null);
-        setAtFileBrowserScopeFrom(null);
         runAtScan();
       }
     };
@@ -3360,7 +3358,7 @@ export function ChatInput({
     return () => {
       editor.off('transaction', handleTransaction);
     };
-  }, [editor, atPluginScope, atFileBrowserScopeFrom, runAtScan]);
+  }, [editor, atPluginScope, runAtScan]);
 
   const runAtPluginScan = useCallback(
     (provider: AtResourceItem, query: string, reservedSeq?: number) => {
@@ -3422,25 +3420,17 @@ export function ChatInput({
     return () => window.clearTimeout(timer);
   }, [atPluginScope, trigger.kind, atTriggerFrom, atQuery, runAtPluginScan, runAtScan]);
 
-  useEffect(() => {
-    if (atFileBrowserScopeFrom === null) return;
-    if (trigger.kind === 'at' && atTriggerFrom === atFileBrowserScopeFrom) return;
-    setAtFileBrowserScopeFrom(null);
-    if (trigger.kind === 'at') runAtScan(atQuery);
-  }, [atFileBrowserScopeFrom, trigger.kind, atTriggerFrom, atQuery, runAtScan]);
-
   // Derive query string for stable memo deps — avoids re-filtering on
   // every editor tick when only the caret moved but the query didn't change.
   const filteredAt = useMemo(() => {
     if (!atQuery && trigger.kind !== 'at') return [];
     if (atState.kind !== 'ready') return [];
     if (atPluginScope) return atState.items.slice(0, AT_MENTION_SEARCH_RESULT_LIMIT);
-    if (atFileBrowserScopeFrom !== null) return filterAtFileResources(atState.items, atQuery);
-    const items = workingDir
-      ? [AT_FILE_BROWSER_RESOURCE, ...atState.items]
+    const items = workingDir && localAttachmentPickerEnabled
+      ? [AT_FILE_PICKER_RESOURCE, ...atState.items]
       : atState.items;
     return filterAtResources(items, atQuery);
-  }, [atState, atQuery, trigger.kind, atPluginScope, atFileBrowserScopeFrom, workingDir]);
+  }, [atState, atQuery, trigger.kind, atPluginScope, workingDir, localAttachmentPickerEnabled]);
 
   // Focused row index for each palette
   const [slashFocus, setSlashFocus] = useState(0);
@@ -3454,8 +3444,8 @@ export function ChatInput({
     if (atFocus >= filteredAt.length) setAtFocus(0);
   }, [filteredAt.length, atFocus]);
   useEffect(() => {
-    if (atPluginScope || atFileBrowserScopeFrom !== null) setAtFocus(0);
-  }, [atPluginScope?.provider.pluginId, atFileBrowserScopeFrom, atQuery]);
+    if (atPluginScope) setAtFocus(0);
+  }, [atPluginScope?.provider.pluginId, atQuery]);
 
   useEffect(() => {
     if (atQueryScanTimerRef.current !== null) {
@@ -3468,7 +3458,7 @@ export function ChatInput({
     if (normalizedQuery === atLastScanQueryRef.current) return;
     atQueryScanTimerRef.current = window.setTimeout(() => {
       atQueryScanTimerRef.current = null;
-      runAtScan(normalizedQuery, atFileBrowserScopeFrom !== null);
+      runAtScan(normalizedQuery);
     }, normalizedQuery ? 200 : 0);
     return () => {
       if (atQueryScanTimerRef.current !== null) {
@@ -3476,14 +3466,7 @@ export function ChatInput({
         atQueryScanTimerRef.current = null;
       }
     };
-  }, [
-    trigger.kind,
-    workingDir,
-    atQuery,
-    runAtScan,
-    atPluginScope,
-    atFileBrowserScopeFrom,
-  ]);
+  }, [trigger.kind, workingDir, atQuery, runAtScan, atPluginScope]);
 
   // ── Panel-close flags (Esc cancelation) ────────────────────────────
   // Once the user cancels a panel (Esc), we must NOT reopen it until the
@@ -3561,7 +3544,7 @@ export function ChatInput({
             }
             // A scoped Plugin search owns Enter/Tab even while loading or
             // empty; keep accidental sends from bypassing resource selection.
-            if (atOpen && (atPluginScope || atFileBrowserScopeFrom !== null)) return true;
+            if (atOpen && atPluginScope) return true;
             return false;
           case 'Escape':
             if (slashOpen && trigger.kind === 'slash') {
@@ -3573,10 +3556,6 @@ export function ChatInput({
                 exitAtPluginScope(true);
                 return true;
               }
-              if (atFileBrowserScopeFrom !== null) {
-                exitAtFileBrowserScope(true);
-                return true;
-              }
               setSuppressedAtAt(trigger.from);
               return true;
             }
@@ -3585,10 +3564,6 @@ export function ChatInput({
           case 'Backspace':
             if (atOpen && atPluginScope && !atQuery) {
               exitAtPluginScope(false);
-              return true;
-            }
-            if (atOpen && atFileBrowserScopeFrom !== null && !atQuery) {
-              exitAtFileBrowserScope(false);
               return true;
             }
             return false;
@@ -3650,7 +3625,7 @@ export function ChatInput({
   );
 
   const insertAtResource = useCallback(
-    (item: AtResourceItem) => {
+    async (item: AtResourceItem) => {
       if (!editor || trigger.kind !== 'at') return;
       const { from } = trigger;
       // Extend replace-range to the end of the @-run (up to whitespace /
@@ -3659,7 +3634,7 @@ export function ChatInput({
       const $from = editor.state.doc.resolve(from);
       const parent = $from.parent;
       const parentStart = $from.start();
-      // Scoped Plugin/file-browser queries may contain spaces. Their explicit end is the
+      // Scoped Plugin queries may contain spaces. Their explicit end is the
       // current caret, so ordinary composer text after the caret is preserved.
       const isAtScoped = activeAtScopeFrom === from;
       let runEnd = isAtScoped ? editor.state.selection.from : from + 1;
@@ -3685,22 +3660,35 @@ export function ChatInput({
         });
       }
       const to = runEnd;
-      if (item.type === 'file-browser') {
-        editor
-          .chain()
-          .focus()
-          .command(({ tr }) => {
-            tr.replaceWith(from, to, editor.schema.text('@'));
-            return true;
-          })
-          .run();
-        setAtPluginScope(null);
-        setAtFileBrowserScopeFrom(from);
-        runAtScan(undefined, true);
-        return;
+      let selectedItem = item;
+      let selectedByNativePicker = false;
+      if (selectedItem.type === 'file-picker') {
+        try {
+          const picked = await window.electronAPI.dialog.showOpenResource(
+            workingDir ? { defaultPath: workingDir } : undefined,
+          );
+          if (!picked.success || !picked.path || !picked.kind || editor.isDestroyed) return;
+          const nativeResource = createAtResourceFromNativePath(
+            picked.path,
+            picked.kind,
+            workingDir,
+          );
+          if (!nativeResource) return;
+          selectedItem = nativeResource;
+          selectedByNativePicker = true;
+        } catch (error) {
+          log.warn(
+            'native @ file picker failed:',
+            error instanceof Error ? error.message : String(error),
+          );
+          return;
+        }
       }
-      if (item.type === 'plugin-provider') {
-        if (!item.pluginId) return;
+      // The synthetic action must always resolve to a concrete file/directory
+      // before it can reach mention serialization.
+      if (selectedItem.type === 'file-picker') return;
+      if (selectedItem.type === 'plugin-provider') {
+        if (!selectedItem.pluginId) return;
         editor
           .chain()
           .focus()
@@ -3712,15 +3700,13 @@ export function ChatInput({
           })
           .run();
         atScanSeqRef.current += 1;
-        setAtFileBrowserScopeFrom(null);
-        setAtPluginScope({ provider: item, triggerFrom: from });
+        setAtPluginScope({ provider: selectedItem, triggerFrom: from });
         setAtState({ kind: 'loading' });
         return;
       }
-      const directoryQuery = getAtDirectoryCompletionQuery(
-        item,
-        atFileBrowserScopeFrom === from,
-      );
+      const directoryQuery = selectedByNativePicker
+        ? null
+        : getAtDirectoryCompletionQuery(selectedItem);
       if (directoryQuery) {
         editor
           .chain()
@@ -3735,26 +3721,26 @@ export function ChatInput({
         return;
       }
       const attrs: MentionChipAttrs = {
-        kind: item.type,
-        label: item.name.replace(/\.md$/, ''),
+        kind: selectedItem.type,
+        label: selectedItem.name.replace(/\.md$/, ''),
         // For agent chips we stash the bare name so serialization can
         // degrade to `@{name}` if the host can't map it; for files/dirs
         // we stash the relative path as-is.
-        path: item.type === 'agent' ? item.name : item.relPath,
-        ...(item.type === 'plugin-resource' && item.sourceLabel
-          ? { sourceLabel: item.sourceLabel }
+        path: selectedItem.type === 'agent' ? selectedItem.name : selectedItem.relPath,
+        ...(selectedItem.type === 'plugin-resource' && selectedItem.sourceLabel
+          ? { sourceLabel: selectedItem.sourceLabel }
           : {}),
-        ...(item.type === 'plugin-resource' && item.description
-          ? { sourceDescription: item.description }
+        ...(selectedItem.type === 'plugin-resource' && selectedItem.description
+          ? { sourceDescription: selectedItem.description }
           : {}),
       };
       // For agent: store final canonical path in `path` if we know it maps
       // to an existing file. Here we DO know (we just scanned), so use the
       // canonical form.
-      if (item.type === 'agent') {
-        attrs.path = item.relPath; // .claude/agents/<name>.md
-      } else if (item.type === 'session') {
-        attrs.label = sanitizeSessionChipTitle(item.name);
+      if (selectedItem.type === 'agent') {
+        attrs.path = selectedItem.relPath; // .claude/agents/<name>.md
+      } else if (selectedItem.type === 'session') {
+        attrs.label = sanitizeSessionChipTitle(selectedItem.name);
         attrs.titled = true;
       }
       editor
@@ -3768,16 +3754,8 @@ export function ChatInput({
         })
         .run();
       setAtPluginScope(null);
-      setAtFileBrowserScopeFrom(null);
     },
-    [
-      editor,
-      trigger,
-      activeAtScopeFrom,
-      atPluginScope,
-      atFileBrowserScopeFrom,
-      runAtScan,
-    ],
+    [editor, trigger, activeAtScopeFrom, workingDir],
   );
 
   const exitAtPluginScope = useCallback((closePanel: boolean) => {
@@ -3804,30 +3782,6 @@ export function ChatInput({
     }
   }, [editor, trigger, runAtScan]);
 
-  const exitAtFileBrowserScope = useCallback((closePanel: boolean) => {
-    if (!editor || trigger.kind !== 'at') return;
-    const { from } = trigger;
-    if (!closePanel) {
-      const runEnd = editor.state.selection.from;
-      editor
-        .chain()
-        .focus()
-        .command(({ tr }) => {
-          tr.replaceWith(from, runEnd, editor.schema.text('@'));
-          return true;
-        })
-        .run();
-    }
-    setAtFileBrowserScopeFrom(null);
-    atScanSeqRef.current += 1;
-    if (closePanel) {
-      setAtState({ kind: 'loading' });
-      setSuppressedAtAt(from);
-    } else {
-      runAtScan();
-    }
-  }, [editor, trigger, runAtScan]);
-
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
@@ -3844,10 +3798,6 @@ export function ChatInput({
       if (atPluginScope) {
         atScanSeqRef.current += 1;
         setAtPluginScope(null);
-      }
-      if (atFileBrowserScopeFrom !== null) {
-        atScanSeqRef.current += 1;
-        setAtFileBrowserScopeFrom(null);
       }
       const sourceSessionId = sessionId;
       const finishAgentSendDispatch = sourceSessionId
@@ -4099,7 +4049,6 @@ export function ChatInput({
       confirmDialog,
       navigate,
       atPluginScope,
-      atFileBrowserScopeFrom,
     ],
   );
   useEffect(() => {
@@ -6244,23 +6193,18 @@ export function ChatInput({
                 if (trigger.kind !== 'at') return;
                 if (atPluginScope) {
                   exitAtPluginScope(true);
-                } else if (atFileBrowserScopeFrom !== null) {
-                  exitAtFileBrowserScope(true);
                 } else {
                   setSuppressedAtAt(trigger.from);
                 }
               }}
               onRetry={() => atPluginScope
                 ? runAtPluginScan(atPluginScope.provider, atQuery)
-                : runAtScan(atQuery, atFileBrowserScopeFrom !== null)}
+                : runAtScan(atQuery)}
               scopedProviderName={atPluginScope?.provider.name}
-              fileBrowserScope={atFileBrowserScopeFrom !== null}
-              fileBrowserEnabled={!!workingDir}
+              filePickerEnabled={!!workingDir && localAttachmentPickerEnabled}
               onBack={atPluginScope
                 ? () => exitAtPluginScope(false)
-                : atFileBrowserScopeFrom !== null
-                  ? () => exitAtFileBrowserScope(false)
-                  : undefined}
+                : undefined}
               maxHeight={paletteMaxHeight}
             />
           )}
