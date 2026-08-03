@@ -41,6 +41,8 @@ import {
 } from './transport.js';
 
 const DUPLICATE_CONNECTION_CLOSE_CODE = 4409;
+/** 连续握手超时达到该次数后,握手窗口翻倍(见 armHandshakeTimeout)。 */
+const HANDSHAKE_TIMEOUT_WIDEN_AFTER = 2;
 const SLOW_REQUEST_WARN_MS = 1_000;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
 const MAX_LEGACY_INBOUND_BYTES = 16 * 1024 * 1024;
@@ -317,6 +319,8 @@ export class DeviceLinkClient {
   private reconnectTimer: ReturnType<typeof setTimeout> | null = null;
   private reconnectStableTimer: ReturnType<typeof setTimeout> | null = null;
   private handshakeTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 连续握手超时次数;任一次 hello-ack 上线即复位(驱动握手窗口自适应放宽)。 */
+  private handshakeTimeoutStreak = 0;
   private pingTimer: ReturnType<typeof setInterval> | null = null;
   private pongMisses = 0;
   /** 当前连接的代号,用于丢弃过期 socket 的事件回调 */
@@ -441,6 +445,7 @@ export class DeviceLinkClient {
     if (this.stopped) return;
     this.stopped = true;
     this.clearTimers();
+    this.handshakeTimeoutStreak = 0;
     this.failAllPending(new DeviceLinkError('NOT_CONNECTED', 'client stopped'));
     this.clearPeerTransport();
     this.pendingInboundLinkOffers.clear();
@@ -962,22 +967,37 @@ export class DeviceLinkClient {
   }
 
   /**
-   * 握手 watchdog:socket 创建后若在 handshakeTimeoutMs 内没等到 hello-ack(online),
+   * 握手 watchdog:socket 创建后若在握手窗口内没等到 hello-ack(online),
    * 强制关掉这条连接走退避重连。覆盖两类弱网挂起:TCP/TLS 升级挂死(open 不来)、
    * upgrade 成功但 hello-ack 丢失。
+   *
+   * 窗口自适应:连续 HANDSHAKE_TIMEOUT_WIDEN_AFTER 次握手超时后窗口翻倍(封顶 2×)。
+   * 高 RTT 链路(实测网络响应性可达 ~10s)上 DNS + TCP + TLS + upgrade + hello 可能
+   * 恰好超过默认窗口,固定窗口会把「慢但能通」判成永远连不上;翻倍只在连续失败后
+   * 生效,一次成功上线即复位,不拖慢正常网络下对真死链的判定。
    */
   private armHandshakeTimeout(epoch: number): void {
     if (this.handshakeTimer) clearTimeout(this.handshakeTimer);
+    const timeoutMs = this.effectiveHandshakeTimeoutMs();
     this.handshakeTimer = setTimeout(() => {
       this.handshakeTimer = null;
       if (this.stopped || epoch !== this.connEpoch || this.status === 'online') return;
-      this.log.warn(`handshake not completed within ${this.timing.handshakeTimeoutMs}ms, forcing reconnect`);
+      this.handshakeTimeoutStreak++;
+      this.log.warn(
+        `handshake not completed within ${timeoutMs}ms, forcing reconnect (streak=${this.handshakeTimeoutStreak})`,
+      );
       const ws = this.ws;
       this.ws = null;
       this.connEpoch++;
       closeOrTerminate(ws);
       this.handleDisconnect(1006, 'handshake timeout');
-    }, this.timing.handshakeTimeoutMs);
+    }, timeoutMs);
+  }
+
+  private effectiveHandshakeTimeoutMs(): number {
+    return this.handshakeTimeoutStreak >= HANDSHAKE_TIMEOUT_WIDEN_AFTER
+      ? this.timing.handshakeTimeoutMs * 2
+      : this.timing.handshakeTimeoutMs;
   }
 
   private scheduleReconnect(): void {
@@ -1231,6 +1251,7 @@ export class DeviceLinkClient {
           clearTimeout(this.handshakeTimer);
           this.handshakeTimer = null;
         }
+        this.handshakeTimeoutStreak = 0;
         const wasOnline = this.status === 'online';
         this.setStatus('online');
         this.armReconnectStableReset();

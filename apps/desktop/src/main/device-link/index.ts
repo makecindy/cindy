@@ -49,6 +49,7 @@ import {
   writeDeviceLinkSetting,
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
+import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
   setControllersChangedListener,
@@ -100,6 +101,8 @@ import {
 export { setBusyProbe };
 
 const log = createLogger('device-link');
+// relay 建连专用的 DNS 回退(成功缓存 / 失败与慢解析回退最近成功地址)。
+const relayDnsLookup = createDnsFallbackLookup({ log });
 
 // device-link 独立部署后的 relay 地址:走运行期端点清单(烘焙值已含 dev fallback
 // localhost:3335)。惰性函数而非模块级常量——远程清单在 app.ready 内解析。
@@ -288,8 +291,16 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     }),
     // agent:`ws` 不吃系统代理,relay 在代理网络下会连不上;直连时为 undefined,
     // 行为与不传一致(见 maker-host/outbound-fetch)。
+    // lookup:DNS 失败/慢解析时回退最近成功地址(弱网 VPN 下 DNS 单段可吃掉
+    // 大半个握手窗口);代理模式下由代理解析域名,本层自然旁路。
     createWebSocket: async (url, headers) =>
-      new WebSocket(url, { headers, agent: await createOutboundHttpAgent(url) }),
+      new WebSocket(url, {
+        headers,
+        agent: await createOutboundHttpAgent(url),
+        // ClientOptions 类型未声明 lookup,但 ws 会把额外选项透传给
+        // http.request(其 RequestOptions 原生支持 lookup)→ net/tls 建连。
+        lookup: relayDnsLookup,
+      } as WebSocket.ClientOptions),
     logger: {
       debug: (...args) => log.debug(...args),
       info: (...args) => log.info(...args),

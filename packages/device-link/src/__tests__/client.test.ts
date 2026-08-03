@@ -2589,6 +2589,40 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('连续 2 次握手超时后窗口翻倍(2×),hello-ack 上线后复位', async () => {
+    const warns: string[] = [];
+    const h = makeHarness({
+      logger: {
+        debug: () => {},
+        info: () => {},
+        warn: (...args: unknown[]) => warns.push(args.map(String).join(' ')),
+        error: () => {},
+      },
+      timing: { handshakeTimeoutMs: 15, reconnectBaseMs: 5, reconnectMaxMs: 10 },
+    });
+    const handshakeWarns = () => warns.filter((w) => w.includes('handshake not completed'));
+    h.client.start();
+    // 等满 3 次握手超时:前两次窗口 15ms,第三次(streak≥2)翻倍到 30ms
+    for (let i = 0; i < 200 && handshakeWarns().length < 3; i++) await tick(5);
+    const seen = handshakeWarns();
+    expect(seen.length).toBeGreaterThanOrEqual(3);
+    expect(seen[0]).toContain('within 15ms');
+    expect(seen[1]).toContain('within 15ms');
+    expect(seen[2]).toContain('within 30ms');
+    // 上线复位(负载下 ack 可能打在过期 socket 上,按既有模式有界重试)
+    for (let i = 0; i < 20 && h.client.getStatus() !== 'online'; i++) {
+      h.current().ack();
+      await tick();
+    }
+    expect(h.client.getStatus()).toBe('online');
+    // 掉线后下一次握手超时窗口回到基础值
+    const before = handshakeWarns().length;
+    h.current().emit('close', 1006);
+    for (let i = 0; i < 200 && handshakeWarns().length <= before; i++) await tick(5);
+    expect(handshakeWarns()[before]).toContain('within 15ms');
+    h.client.stop();
+  });
+
   it('心跳僵死时无 terminate 实现(RN WebSocket)→ fallback close 回收 socket', async () => {
     const h = makeHarness({ timing: { pingIntervalMs: 8, pongMissLimit: 1 } });
     h.client.start();
