@@ -200,6 +200,9 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   // 最近一次 assistant 消息的 index —— result 的「同批」= 紧跟的那个 assistant 批。
   let lastAssistantBatch = -1;
   const firstFinalByOriginal = new Map<string, string>();
+  // 每个原始 id 的最终 id(同 id 多次出现取最近一次) —— 用于改写 subagent 记录
+  // 顶层 parent_tool_use_id / tool_use_id 字段(codex-connector review P2)。
+  const lastFinalByOriginal = new Map<string, string>();
   entries.forEach((entry, index) => {
     const blocks = messageContentBlocks(entry);
     if (!blocks) return;
@@ -229,6 +232,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           lineChanged = true;
         }
         if (!firstFinalByOriginal.has(originalId)) firstFinalByOriginal.set(originalId, finalId);
+        lastFinalByOriginal.set(originalId, finalId);
         let stack = openCalls.get(originalId);
         if (!stack) {
           stack = [];
@@ -276,6 +280,27 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     }
     if (lineChanged) changedLineIndexes.add(index);
   });
+
+  // subagent 记录的顶层字段跟随 tool_use 改名: Claude subagent/task-notification
+  // 条目在顶层带 parent_tool_use_id / tool_use_id 引用父 agent 的调用 id
+  // (translator 用它们作 parentToolUseId 挂载)。归一化改名后必须同步, 否则
+  // subagent 关联断裂(codex-connector review P2)。
+  if (lastFinalByOriginal.size > 0) {
+    entries.forEach((entry, index) => {
+      let entryChanged = false;
+      for (const field of ['parent_tool_use_id', 'tool_use_id'] as const) {
+        const val = entry[field];
+        if (typeof val === 'string') {
+          const mapped = lastFinalByOriginal.get(val);
+          if (mapped !== undefined && mapped !== val) {
+            entry[field] = mapped;
+            entryChanged = true;
+          }
+        }
+      }
+      if (entryChanged) changedLineIndexes.add(index);
+    });
+  }
 
   const changed = changedLineIndexes.size > 0;
   const nextText = changed

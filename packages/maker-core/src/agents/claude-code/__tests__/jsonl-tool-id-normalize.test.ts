@@ -274,6 +274,28 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((call.input as Record<string, unknown>).command).toBe('echo Bash_210');
   });
 
+  it('subagent 记录顶层 parent_tool_use_id 跟随 tool_use 改名(codex-connector P2)', () => {
+    // Claude subagent 记录在顶层带 parent_tool_use_id 引用父 agent 的 tool_use id,
+    // 归一化改名后必须同步, 否则 subagent 关联断裂(translator 用其作 parentToolUseId)。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        parent_tool_use_id: 'Bash_210',
+        event: { type: 'message_start', message: { model: 'kimi-k3', usage: {} } },
+      }),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    // tool_use 被偏移为 Bash_x210
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x210');
+    // 顶层 parent_tool_use_id 同步为 Bash_x210
+    expect((entries[2] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
