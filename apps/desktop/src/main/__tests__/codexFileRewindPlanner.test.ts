@@ -366,6 +366,27 @@ describe('buildCodexFileRewindPlan', () => {
       expect(result.tailTurnsToDrop).toBe(2);
     });
 
+    it('falls back to conversation-only when the shadow chain read was truncated', () => {
+      const result = plan({
+        repo: {
+          kind: 'local-git',
+          repoRoot: '/repo',
+          currentHead: 'head',
+          currentBranch: 'main',
+          shadowSavepointsTruncated: true,
+          // 窗口内仍有可入选的 after-edit,但窗口外的历史未知 → 不得部分回退。
+          savepointsNewestFirst: [
+            savepoint({ commit: 'sc2', sessionId: 's1', kind: 'after-edit', source: 'shadow', anchor: 'm2', baselineCommit: 'ts2' }),
+          ],
+        },
+      });
+
+      expect(result).toMatchObject({
+        mode: 'conversation-only',
+        fallbackReason: 'savepoint-history-truncated',
+      });
+    });
+
     it('selects shadow savepoints regardless of branch (no branch filter)', () => {
       const result = plan({
         repo: {

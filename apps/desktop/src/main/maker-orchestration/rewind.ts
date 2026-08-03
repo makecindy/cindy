@@ -493,15 +493,15 @@ async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; r
     // 两个来源:隐藏引用链上的 shadow savepoint(新)+ 分支历史里的 legacy
     // savepoint(旧版本写进用户分支的,升级后仍要可回退)。planner 分桶处理,
     // 不要求两者之间有全局时间序。
-    const [shadowSnapshots, legacySnapshots] = await Promise.all([
+    const [shadowResult, legacySnapshots] = await Promise.all([
       listShadowSavepoints(repoRoot, sessionId),
       listSnapshots(repoRoot),
     ]);
     const savepointsNewestFirst = [
-      ...shadowSnapshots.map(toPlannerSavepoint),
+      ...shadowResult.entries.map(toPlannerSavepoint),
       ...legacySnapshots.map(toPlannerSavepoint),
     ];
-    if (savepointsNewestFirst.length === 0) return { kind: 'local-git' as const, repoRoot, currentHead: '', currentBranch: '', savepointsNewestFirst: [] };
+    if (savepointsNewestFirst.length === 0 && !shadowResult.truncated) return { kind: 'local-git' as const, repoRoot, currentHead: '', currentBranch: '', savepointsNewestFirst: [] };
 
     // unborn HEAD(空仓库首轮)下 shadow 链可能已存在;HEAD/branch 只影响 legacy
     // 桶的过滤与展示,取不到就退化为空串。
@@ -516,6 +516,7 @@ async function loadCodexFileRewindRepoContext(makerSession: { workDir: string; r
       currentHead,
       currentBranch,
       savepointsNewestFirst,
+      ...(shadowResult.truncated ? { shadowSavepointsTruncated: true } : {}),
     };
   });
 }

@@ -439,7 +439,22 @@ export async function createShadowSavepoint(
     throw new SnapshotBlockedByGitStateError({ reason: 'conflict', conflictedFiles });
   }
 
-  const stagePathspecs = uniquePathspecs(plan.includedFiles.flatMap((file) => file.pathsForPathspec));
+  // `git add -- <path>` is fatal for a path that exists neither in the
+  // worktree nor in the temporary index (seeded from HEAD) — e.g. a file the
+  // user staged in their own index and then deleted from the worktree
+  // (status `AD`). Partition by lstat: present paths (files, symlinks, or a
+  // directory that replaced a file) go through `git add`, missing paths are
+  // recorded as deletions via `update-index --force-remove`, which is a
+  // silent no-op when the temporary index does not contain them either.
+  const presentFiles: SnapshotIncludedFile[] = [];
+  const missingPaths: string[] = [];
+  for (const file of plan.includedFiles) {
+    const abs = resolveSnapshotGitPath(repoPath, file.path);
+    if (!abs) continue;
+    if (await pathExists(abs)) presentFiles.push(file);
+    else missingPaths.push(file.path);
+  }
+  const stagePathspecs = uniquePathspecs(presentFiles.flatMap((file) => file.pathsForPathspec));
   const commitPathspecs = uniquePathspecs(plan.includedFiles.flatMap(commitPathspecsFor));
   const renameOldPaths = renameOldPathsToRemove(plan.includedFiles);
 
@@ -452,6 +467,9 @@ export async function createShadowSavepoint(
           { extraEnv },
         ),
       );
+    }
+    for (const chunk of chunkRawPaths(missingPaths)) {
+      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
     }
     await removeRenameOldPaths(repoPath, renameOldPaths, extraEnv);
 
@@ -558,41 +576,59 @@ export async function createShadowMarker(
   });
 }
 
+/** Result of reading one session's shadow savepoint chain. */
+export interface ListShadowSavepointsResult {
+  /** Listable savepoints, newest first. */
+  entries: SnapshotEntry[];
+  /**
+   * True when the chain holds more commits than the traversal window. Readers
+   * must not treat the window as the full history (a rewind planned on a
+   * truncated view would silently skip the truncated-away turns).
+   */
+  truncated: boolean;
+}
+
 /** Lists the session's shadow savepoint chain newest-first. Missing ref yields []. */
 export async function listShadowSavepoints(
   repoPath: string,
   sessionId: string,
   options: { maxCount?: number } = {},
-): Promise<SnapshotEntry[]> {
+): Promise<ListShadowSavepointsResult> {
   let ref: string;
   try {
     ref = savepointRefForSession(sessionId);
   } catch (err) {
-    if (err instanceof InvalidSavepointSessionIdError) return [];
+    if (err instanceof InvalidSavepointSessionIdError) return { entries: [], truncated: false };
     throw err;
   }
 
+  const maxCount = normalizeListSnapshotsMaxCount(options.maxCount);
   let stdout: string;
   try {
-    const maxCount = normalizeListSnapshotsMaxCount(options.maxCount);
+    // Fetch one extra record purely to detect truncation.
     ({ stdout } = await gitExec(
       [
         'log',
-        `--max-count=${maxCount}`,
+        `--max-count=${maxCount + 1}`,
         `--format=%H${FIELD_SEP}%P${FIELD_SEP}%cI${FIELD_SEP}%B${RECORD_SEP}`,
         ref,
       ],
       repoPath,
     ));
   } catch (err) {
-    if (err instanceof GitExecError && isUnbornHeadError(err)) return [];
+    if (err instanceof GitExecError && isUnbornHeadError(err)) {
+      return { entries: [], truncated: false };
+    }
     throw err;
   }
 
   const entries: SnapshotEntry[] = [];
+  let rawRecordCount = 0;
   for (const record of stdout.split(RECORD_SEP)) {
     const trimmed = record.replace(/^\s+/, '');
     if (!trimmed) continue;
+    rawRecordCount += 1;
+    if (rawRecordCount > maxCount) break;
     const [commit, parentsRaw, time, ...bodyParts] = trimmed.split(FIELD_SEP);
     if (!commit || !time) continue;
     const parsed = parseSnapshotCommit(bodyParts.join(FIELD_SEP));
@@ -613,7 +649,7 @@ export async function listShadowSavepoints(
       ...(parsed.baseHead ? { baseHead: parsed.baseHead } : {}),
     });
   }
-  return entries;
+  return { entries, truncated: rawRecordCount > maxCount };
 }
 
 /**
@@ -635,14 +671,22 @@ export async function writeWorktreeTreeForPaths(
     for (const rawPath of uniqueRawPaths(paths)) {
       const abs = resolveSnapshotGitPath(repoPath, rawPath);
       if (!abs) continue;
-      if (await pathExists(abs)) present.push(rawPath);
+      // A directory means the *file* at this path is gone (e.g. a turn
+      // replaced a file with a directory); update-index --add would be fatal
+      // on it, and tree-wise the right record is "absent" — the directory's
+      // children are their own paths in the affected set.
+      const stats = await fs.lstat(abs).catch(() => null);
+      if (stats && !stats.isDirectory()) present.push(rawPath);
       else absent.push(rawPath);
+    }
+    // Removals first: file ↔ directory conversions leave a conflicting stale
+    // entry in the HEAD-seeded index (e.g. blob `swap` vs `swap/child.txt`),
+    // and update-index --add refuses D/F conflicts it did not clear itself.
+    for (const chunk of chunkRawPaths(absent)) {
+      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
     }
     for (const chunk of chunkRawPaths(present)) {
       await gitExec(['update-index', '--add', '--', ...chunk], repoPath, { extraEnv });
-    }
-    for (const chunk of chunkRawPaths(absent)) {
-      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
     }
     return (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
   });

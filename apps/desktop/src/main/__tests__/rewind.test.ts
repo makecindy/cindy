@@ -105,7 +105,12 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
   getHead: getHeadMock,
   getCurrentBranch: getCurrentBranchMock,
   listSnapshots: listSnapshotsMock,
-  listShadowSavepoints: listShadowSavepointsMock,
+  // 真实实现返回 { entries, truncated };mock 站点允许直接给数组(默认不截断),
+  // 截断用例返回完整对象。
+  listShadowSavepoints: async (...args: unknown[]) => {
+    const value = await listShadowSavepointsMock(...args);
+    return Array.isArray(value) ? { entries: value, truncated: false } : value;
+  },
   writeWorktreeTreeForPaths: writeWorktreeTreeForPathsMock,
   // 单测里不需要真实拆块: preview 的 pathspec 数量远小于命令行上限。
   chunkPathspecArgs: (pathspecs: readonly string[]) =>
@@ -982,6 +987,39 @@ describe('commitRewindAtMessage', () => {
     expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
     expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
+  it('Codex commit: shadow 链被截断 → 降级 conversation-only(不做部分文件回退)', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    // 截断窗口内仍能看到可入选的 after-edit,但历史不完整 → 不得据此部分回退。
+    listShadowSavepointsMock.mockResolvedValueOnce({
+      entries: [
+        {
+          commit: 'sc1',
+          sessionId: 'sess-1',
+          kind: 'after-edit',
+          source: 'cindy',
+          parentCount: 1,
+          anchor: 'client-id',
+          baselineCommit: 'base1',
+          label: '本轮修改',
+          time: '2026-08-04T00:00:00+08:00',
+        },
+      ],
+      truncated: true,
+    });
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(executeCodexFileRewindPlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'conversation-only', fallbackReason: 'savepoint-history-truncated' }),
+      'sess-1',
+      expect.objectContaining({ commitThreadRollback: expect.any(Function) }),
+    );
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
   });
 
   it('Codex: waits for pending snapshot writes before reading savepoints', async () => {

@@ -339,6 +339,17 @@ async function makeWorktreeMatchCommit(
   }
 
   if (toRestore.length > 0) {
+    // A turn may have replaced a file with a directory; git restore cannot
+    // write a blob over an existing directory, so clear such collisions
+    // first (contents are recoverable from the pre-rollback savepoint).
+    for (const filePath of toRestore) {
+      const abs = resolveSnapshotGitPath(repoRoot, filePath);
+      if (!abs) continue;
+      const stats = await fs.lstat(abs).catch(() => null);
+      if (stats?.isDirectory()) {
+        await fs.rm(abs, { recursive: true, force: true });
+      }
+    }
     await withPathspecFile(
       toRestore.map((p) => `:(literal)${p}`),
       (pathspecFile) =>
@@ -358,7 +369,13 @@ async function makeWorktreeMatchCommit(
   for (const filePath of toDelete) {
     const abs = resolveSnapshotGitPath(repoRoot, filePath);
     if (!abs) continue;
-    await fs.rm(abs, { force: true });
+    // recursive: the path may be a directory in the worktree (e.g. a file →
+    // directory conversion the target tree does not have). ENOTDIR means a
+    // parent segment is a file again, so the old nested path is already gone.
+    await fs.rm(abs, { recursive: true, force: true }).catch((err: unknown) => {
+      if ((err as NodeJS.ErrnoException).code === 'ENOTDIR') return;
+      throw err;
+    });
     await pruneEmptyParents(repoRoot, abs);
   }
 

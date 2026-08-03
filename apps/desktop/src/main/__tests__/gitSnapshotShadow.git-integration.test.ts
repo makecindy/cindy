@@ -220,10 +220,36 @@ describe('createShadowSavepoint', () => {
     await expect(gitExec(['rev-parse', '--verify', 'HEAD'], repoPath)).rejects.toThrow();
     expect((await gitStdout(['rev-list', '--count', result.commit as string])).trim()).toBe('1');
 
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
     expect(entries).toHaveLength(1);
     expect(entries[0]).toMatchObject({ commit: result.commit, parentCount: 0 });
     expect(entries[0]?.baseHead).toBeUndefined();
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('tolerates a path staged in the user index but deleted from the worktree (status AD)', async () => {
+    await commitSeed();
+    // 用户自己 git add 了新文件,然后又从工作区删掉:status 为 `AD`,
+    // 该路径既不在 HEAD 也不在工作区,git add 会 fatal,必须走 force-remove。
+    await writeRepoFile('staged-then-deleted.txt', 'gone\n');
+    await gitExec(['add', 'staged-then-deleted.txt'], repoPath);
+    await fs.rm(path.join(repoPath, 'staged-then-deleted.txt'));
+    await writeRepoFile('normal.txt', 'normal\n');
+    const before = await captureUserVisibleState();
+    expect(before.status).toContain('AD staged-then-deleted.txt');
+
+    const result = await createShadowSavepoint(repoPath, {
+      sessionId: SESSION,
+      label: 'AD baseline',
+      meta: { kind: 'turn-start' },
+    });
+
+    expect(result.commit).toBeTruthy();
+    expect(await captureUserVisibleState()).toEqual(before);
+    const listed = (await gitStdout(['ls-tree', '-r', '--name-only', result.tree]))
+      .split('\n')
+      .filter(Boolean);
+    expect(listed).not.toContain('staged-then-deleted.txt');
+    expect(listed).toContain('normal.txt');
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('keeps sensitive and oversized file contents out of the savepoint tree', async () => {
@@ -296,8 +322,39 @@ describe('createShadowMarker', () => {
 describe('listShadowSavepoints', () => {
   it('returns [] when the session ref does not exist or the session id is invalid', async () => {
     await commitSeed();
-    expect(await listShadowSavepoints(repoPath, 'no-such-session')).toEqual([]);
-    expect(await listShadowSavepoints(repoPath, 'bad session id!')).toEqual([]);
+    expect(await listShadowSavepoints(repoPath, 'no-such-session')).toEqual({
+      entries: [],
+      truncated: false,
+    });
+    expect(await listShadowSavepoints(repoPath, 'bad session id!')).toEqual({
+      entries: [],
+      truncated: false,
+    });
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('reports truncation when the chain exceeds the traversal window', async () => {
+    await commitSeed();
+    const commits: string[] = [];
+    for (let i = 0; i < 3; i += 1) {
+      await writeRepoFile('a.txt', `v${i}\n`);
+      const result = await createShadowSavepoint(repoPath, {
+        sessionId: SESSION,
+        label: `turn ${i}`,
+        meta: { kind: 'turn-start' },
+      });
+      commits.push(result.commit as string);
+    }
+
+    const truncatedView = await listShadowSavepoints(repoPath, SESSION, { maxCount: 2 });
+    expect(truncatedView.truncated).toBe(true);
+    expect(truncatedView.entries.map((entry) => entry.commit)).toEqual([
+      commits[2],
+      commits[1],
+    ]);
+
+    const fullView = await listShadowSavepoints(repoPath, SESSION, { maxCount: 10 });
+    expect(fullView.truncated).toBe(false);
+    expect(fullView.entries).toHaveLength(3);
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('lists chain savepoints newest-first without X-XDT commits from the HEAD branch', async () => {
@@ -321,7 +378,7 @@ describe('listShadowSavepoints', () => {
       meta: { kind: 'after-edit', anchor: 'm1', baselineCommit: first.commit as string },
     });
 
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
 
     expect(entries.map((entry) => entry.commit)).toEqual([second.commit, first.commit]);
     expect(entries.map((entry) => entry.commit)).not.toContain(legacyMarker);
@@ -352,7 +409,7 @@ describe('listShadowSavepoints', () => {
     });
     expect(rollbackMarker).toBeTruthy();
 
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
 
     expect(entries.map((entry) => entry.commit)).toEqual([savepoint.commit]);
     expect(entries[0]?.kind).toBe('turn-start');
@@ -373,7 +430,7 @@ describe('listShadowSavepoints', () => {
       meta: { kind: 'turn-start' },
     });
 
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
     expect(entries.map((entry) => entry.commit)).toEqual([mine.commit]);
   }, REAL_GIT_TEST_TIMEOUT_MS);
 });
@@ -443,5 +500,23 @@ describe('writeWorktreeTreeForPaths', () => {
     expect(listed).not.toContain('del.txt');
     // 未列入 paths 的 HEAD 文件保持 HEAD 版本(临时 index 以 HEAD 播种)。
     expect(await gitStdout(['show', `${tree}:other.txt`])).toBe('other base\n');
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('treats a file replaced by a directory as absent instead of failing', async () => {
+    await writeRepoFile('swap', 'was a file\n');
+    await gitExec(['add', '-A'], repoPath);
+    await gitExec(['commit', '--no-gpg-sign', '-m', 'seed swap fixture'], repoPath);
+    // 某轮把文件 swap 换成了同名目录及其子文件:路径集合里旧文件路径仍在。
+    await fs.rm(path.join(repoPath, 'swap'));
+    await writeRepoFile('swap/child.txt', 'child\n');
+
+    const tree = await writeWorktreeTreeForPaths(repoPath, ['swap', 'swap/child.txt']);
+
+    const listed = (await gitStdout(['ls-tree', '-r', '--name-only', tree]))
+      .split('\n')
+      .filter(Boolean);
+    expect(listed).toContain('swap/child.txt');
+    expect(listed).not.toContain('swap');
+    expect(await gitStdout(['show', `${tree}:swap/child.txt`])).toBe('child\n');
   }, REAL_GIT_TEST_TIMEOUT_MS);
 });

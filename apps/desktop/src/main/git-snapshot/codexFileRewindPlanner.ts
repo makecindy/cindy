@@ -41,6 +41,12 @@ export type CodexFileRewindRepoContext =
       currentHead: string;
       currentBranch: string;
       savepointsNewestFirst: readonly CodexRewindSavepoint[];
+      /**
+       * The shadow chain read hit its traversal window: history beyond the
+       * window is unknown and any file plan built on it could silently skip
+       * truncated-away turns.
+       */
+      shadowSavepointsTruncated?: boolean;
     }
   | { kind: 'remote-session' }
   | { kind: 'non-git-workdir' };
@@ -53,7 +59,8 @@ export type CodexFileRewindFallbackReason =
   | 'blocked-by-dirty-start'
   | 'savepoint-gap'
   | 'mixed-savepoint-formats'
-  | 'missing-turn-start-baseline';
+  | 'missing-turn-start-baseline'
+  | 'savepoint-history-truncated';
 
 export interface BuildCodexFileRewindPlanInput {
   sessionId: string;
@@ -174,6 +181,12 @@ export function buildCodexFileRewindPlan(
   }
   if (input.repo.kind === 'non-git-workdir') {
     return { ...base, mode: 'conversation-only', fallbackReason: 'non-git-workdir' };
+  }
+  if (input.repo.shadowSavepointsTruncated) {
+    // The chain window is not the full history: turns beyond it may carry
+    // file changes we cannot see, so a partial restore would be silent data
+    // loss. Conversation rewind still proceeds.
+    return { ...base, mode: 'conversation-only', fallbackReason: 'savepoint-history-truncated' };
   }
 
   const repo = input.repo;

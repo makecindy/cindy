@@ -225,7 +225,7 @@ describe('executeCodexFileRestorePlan', () => {
     expect((await gitStdout(['rev-parse', `${preRollbackCommit}^{tree}`])).trim()).toBe(
       expectedTree,
     );
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
     expect(entries.map((entry) => entry.kind)).toContain('pre-rollback');
     expect(entries.find((entry) => entry.kind === 'pre-rollback')?.commit).toBe(
       preRollbackCommit,
@@ -251,8 +251,31 @@ describe('executeCodexFileRestorePlan', () => {
       reverts: [afterEdit],
     });
     // rollback marker 是链上纯记账,不进 listShadowSavepoints 可回退列表。
-    const entries = await listShadowSavepoints(repoPath, SESSION);
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
     expect(entries.map((entry) => entry.commit)).not.toContain(result?.rollbackCommit);
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
+  it('rewinds a turn that replaced a file with a directory', async () => {
+    await writeFile('swap', 'was a file\n');
+    await commitAll('seed swap');
+    const turnStart = await shadowSavepoint('turn-start');
+    // 本轮把文件 swap 替换成同名目录及子文件。
+    await fs.rm(path.join(repoPath, 'swap'));
+    await writeFile('swap/child.txt', 'child\n');
+    const afterEdit = await shadowSavepoint('after-edit', { baselineCommit: turnStart });
+    const plan = buildPlan([{ commit: afterEdit, baselineCommit: turnStart }], await head());
+
+    const result = await executeCodexFileRestorePlan(plan, {
+      createRollbackId: () => 'rb-swap',
+    });
+
+    // 目录被清掉,原文件按基线内容重建。swap 已是文件,子路径 lstat 报 ENOTDIR。
+    expect(await readFile('swap')).toBe('was a file\n');
+    await expect(fs.lstat(path.join(repoPath, 'swap/child.txt'))).rejects.toMatchObject({
+      code: 'ENOTDIR',
+    });
+    expect(result?.restoredFiles).toContain('swap');
+    expect(result?.deletedFiles).toContain('swap/child.txt');
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('compensates files back to the pre-restore state when thread rollback fails', async () => {
