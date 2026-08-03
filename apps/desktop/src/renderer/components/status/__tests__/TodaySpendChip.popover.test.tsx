@@ -260,6 +260,44 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(document.activeElement).toBe(dashboardButton);
   });
 
+  it('切出 Claude 订阅形态时关闭卡片、清理定时器并归还焦点', () => {
+    const { rerender } = renderClaudeSubscriptionChip();
+    const trigger = screen.getByRole('button', { name: '打开 Claude 用量页面' });
+
+    act(() => trigger.focus());
+    const dashboardButton = within(screen.getByTestId('quota-hover-card')).getByRole('button', {
+      name: '打开 Claude 用量页面',
+    });
+    expect(document.activeElement).toBe(dashboardButton);
+
+    // 卡片已开时再挂一个待执行的 hover-open timer，形态切换必须一并清掉。
+    fireEvent.mouseEnter(trigger);
+    rerender(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="xd"
+        modelId="claude-opus-5[1m]"
+        sessionId="session-1"
+      />,
+    );
+
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+    const gatewayChip = document.querySelector<HTMLElement>('[tabindex="-1"]');
+    expect(gatewayChip).toBeTruthy();
+    expect(document.activeElement).toBe(gatewayChip);
+
+    act(() => vi.advanceTimersByTime(300));
+    rerender(
+      <TodaySpendChip
+        vendorKey="cc"
+        providerId="anthropic"
+        modelId="claude-opus-5[1m]"
+        sessionId="session-1"
+      />,
+    );
+    expect(screen.queryByTestId('quota-hover-card')).toBeNull();
+  });
+
   it('Tab 离开卡片后自然保留下一控件的焦点', () => {
     render(
       <>

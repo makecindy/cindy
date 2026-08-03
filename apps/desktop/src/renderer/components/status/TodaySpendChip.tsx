@@ -1145,6 +1145,7 @@ export function TodaySpendChip({
   // codex-oauth 与 cc+chatgpt/ bridge 共用同一 ChatGPT 账户 → 同一套限额窗口 chip 渲染。
   const usesCodexQuotaForm = isCodexOauth || isChatgptBridge;
   const usesXaiQuotaForm = isCodexXaiProvider || isXaiBridge;
+  const usesClaudeSubscriptionPopover = isClaudeSubscription && !isSubscriptionBridge;
   // 远程会话不读本机账户快照 —— 额度事实在远端:SSH 用 remoteHostId 判,device-link 用
   // deviceLinkDeviceId 判(两者互斥,任一非空即远程,turn 消耗的是远端账号的额度)。
   const isAnyRemoteSession = Boolean(remoteHostId) || Boolean(deviceLinkDeviceId);
@@ -1237,8 +1238,11 @@ export function TodaySpendChip({
   const quotaPopoverOpenSourceRef = React.useRef<'hover' | 'focus' | null>(null);
   const quotaPopoverFocusTakenRef = React.useRef(false);
   const quotaPopoverRestoringFocusRef = React.useRef(false);
-  const quotaPopoverTriggerRef = React.useRef<HTMLButtonElement>(null);
+  const quotaPopoverTriggerRef = React.useRef<HTMLElement>(null);
   const quotaPopoverDashboardButtonRef = React.useRef<HTMLButtonElement>(null);
+  const setQuotaPopoverFocusTarget = React.useCallback((node: HTMLElement | null) => {
+    quotaPopoverTriggerRef.current = node;
+  }, []);
 
   const clearQuotaPopoverOpenTimer = React.useCallback(() => {
     if (quotaPopoverOpenTimerRef.current === null) return;
@@ -1309,6 +1313,27 @@ export function TodaySpendChip({
     quotaPopoverPointerInsideRef.current = true;
     scheduleQuotaPopoverOpen();
   }, [scheduleQuotaPopoverOpen]);
+
+  const quotaPopoverContextRef = React.useRef({
+    enabled: usesClaudeSubscriptionPopover,
+    sessionId,
+  });
+  React.useLayoutEffect(() => {
+    const previousContext = quotaPopoverContextRef.current;
+    const contextInvalidated = previousContext.enabled
+      && (!usesClaudeSubscriptionPopover || previousContext.sessionId !== sessionId);
+    quotaPopoverContextRef.current = {
+      enabled: usesClaudeSubscriptionPopover,
+      sessionId,
+    };
+    if (!contextInvalidated) return;
+
+    // provider / model 或任务切换会原地复用组件；在新 chip 节点挂载后同步收口旧弹窗，
+    // 清掉 hover / focus 残态与悬空 timer，并把卡片接管的键盘焦点交还给当前 chip。
+    quotaPopoverPointerInsideRef.current = false;
+    quotaPopoverFocusInsideRef.current = false;
+    closeQuotaPopoverImmediately();
+  }, [closeQuotaPopoverImmediately, sessionId, usesClaudeSubscriptionPopover]);
 
   React.useEffect(() => () => {
     clearQuotaPopoverOpenTimer();
@@ -1471,7 +1496,6 @@ export function TodaySpendChip({
 
   let labelNode: React.ReactNode;
   let tooltipNode: React.ReactNode = usageDashboardLabel;
-  let usesClaudeSubscriptionPopover = false;
   if (isDeviceLinkRemote) {
     // device-link 远程会话不读取本机账号形态；金额仍使用同一个会话合计投影。
     const chipSegments = sessionSegment ? [sessionSegment] : [];
@@ -1522,7 +1546,6 @@ export function TodaySpendChip({
     labelNode = chipSegments.length > 0
       ? renderSegmentedLabel(chipSegments)
       : <span className="tabular-nums opacity-60">{DEFAULT_MONEY_SYMBOL}</span>;
-    usesClaudeSubscriptionPopover = true;
   } else {
     const slots = computeMetricSlots(claudeQuota, creditTotals, sessionMoney, t);
     const chipSegments = getGatewayChipSegments(slots);
@@ -1636,7 +1659,7 @@ export function TodaySpendChip({
           <PopoverTrigger asChild>
             {isDashboardClickable ? (
               <button
-                ref={quotaPopoverTriggerRef}
+                ref={setQuotaPopoverFocusTarget}
                 type="button"
                 onClick={(event) => {
                   // 阻止 Radix 把 dashboard 点击解释成开关，chip 原动作保持不变。
@@ -1666,6 +1689,8 @@ export function TodaySpendChip({
               </button>
             ) : (
               <span
+                ref={setQuotaPopoverFocusTarget}
+                tabIndex={-1}
                 className={cn(buttonClass, 'cursor-default')}
                 onMouseEnter={handleQuotaPopoverTriggerMouseEnter}
                 onMouseLeave={handleQuotaPopoverMouseLeave}
@@ -1724,6 +1749,7 @@ export function TodaySpendChip({
         <Tip text={tooltipNode}>
           {isDashboardClickable ? (
             <button
+              ref={setQuotaPopoverFocusTarget}
               type="button"
               onClick={handleClick}
               className={buttonClass}
@@ -1734,7 +1760,13 @@ export function TodaySpendChip({
           ) : (
             // 网关 / 托管账号暂无看板可跳(见 usageDashboardUrl):渲染为非交互文本,
             // 点击无反应、不显示手型 / hover 态;用量指标与 tooltip 仍照常展示。
-            <span className={cn(buttonClass, 'cursor-default')}>{labelNode}</span>
+            <span
+              ref={setQuotaPopoverFocusTarget}
+              tabIndex={-1}
+              className={cn(buttonClass, 'cursor-default')}
+            >
+              {labelNode}
+            </span>
           )}
         </Tip>
       )}

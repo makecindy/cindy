@@ -227,7 +227,9 @@ describe('TodaySpendChip dashboard routing', () => {
     // bridge 模型形态优先(不消耗 Claude 订阅额度),订阅余量 hook 对 bridge 会话关闭;
     // device-link 远程会话同样不读本机订阅余量
     expect(source).toContain('isClaudeSubscription && !isSubscriptionBridge && !isDeviceLinkRemote');
-    expect(source).toContain('usesClaudeSubscriptionPopover = true;');
+    expect(source).toContain(
+      'const usesClaudeSubscriptionPopover = isClaudeSubscription && !isSubscriptionBridge;',
+    );
     expect(source).toContain('open={quotaPopoverOpen}');
     expect(source).toContain('onMouseEnter={handleQuotaPopoverTriggerMouseEnter}');
     expect(source).toContain('onMouseLeave={handleQuotaPopoverMouseLeave}');
