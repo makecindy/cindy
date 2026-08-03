@@ -54,7 +54,9 @@ export function parsePiSubagentProgress(partialResult: unknown): AgentTaskUpdate
   const raw = readProgressDetails(partialResult);
   if (!raw) return null;
 
-  const taskId = readString(raw.taskId, 200);
+  // taskId 是卡片/tool_use 的关联键,**只 trim 不截断**:截断+省略号会改写 id,
+  // 后续 update 再也命中不到同一张卡(表现为卡片不更新或另开一张)。
+  const taskId = typeof raw.taskId === 'string' ? raw.taskId.trim() : '';
   if (!taskId) return null;
 
   const status: PiSubagentStatus = STATUSES.has(raw.status as PiSubagentStatus)

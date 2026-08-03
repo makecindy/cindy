@@ -60,6 +60,24 @@ describe('cindy-subagent extension source', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('--no-extensions');
   });
 
+  it('reads model and provider from the runtime snapshot file, not from spawn-time env', () => {
+    // env 在 spawn 时定型:会话中途 setModel 后子代理会继续用旧模型;provider 不一起传还会
+    // 让网关与 BYOM 的同名模型落到默认 endpoint(pi-harness §3 要求 BYOM 直连原生 provider)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain('function readRuntimeSnapshot()');
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("const runtime = readRuntimeSnapshot();");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("args.push('--provider', runtime.provider)");
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain("args.push('--model', runtime.model)");
+    // 不得再从 env 直接取模型(那就是被 review 指出的 stale 源)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).not.toContain('CINDY_PI_SUBAGENT_MODEL');
+  });
+
+  it('reports failed when any parallel task failed, not only when all did', () => {
+    // 部分失败被报成 completed 会让界面把整批任务显示为成功(greptile P1)。
+    expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
+      "report(aborted ? 'stopped' : failed > 0 ? 'failed' : 'completed'",
+    );
+  });
+
   it('does not register the tool when the host did not provide a pi binary path', () => {
     expect(CINDY_SUBAGENT_EXTENSION_SOURCE).toContain(
       "if (typeof binary !== 'string' || binary.trim().length === 0) return;",

@@ -73,6 +73,18 @@ describe('parsePiSubagentProgress', () => {
     expect(parsePiSubagentProgress(payload({ toolUses: 2 }))?.usage).toEqual({ toolUses: 2 });
   });
 
+  it('never rewrites taskId — a truncated id would stop matching the same card', () => {
+    // taskId 是卡片/tool_use 的关联键。此前按 200 字符截断并追加省略号,超长 id 会被改写成
+    // 新值,后续 update 命中不到同一张卡(卡片停更或另开一张)。
+    const longId = 'sa-' + 'x'.repeat(500);
+    const update = parsePiSubagentProgress(payload({ taskId: longId }));
+    expect(update?.taskId).toBe(longId);
+    expect(update?.parentToolUseId).toBe(longId);
+    expect(update?.taskId).not.toContain('…');
+    // 仅 trim,不改内容。
+    expect(parsePiSubagentProgress(payload({ taskId: '  sa-9  ' }))?.taskId).toBe('sa-9');
+  });
+
   it('truncates long text so a chatty subagent cannot flood the event stream', () => {
     const update = parsePiSubagentProgress(payload({ task: 'x'.repeat(5_000) }));
     expect(update?.description?.length).toBe(2_000);

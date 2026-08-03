@@ -619,6 +619,14 @@ export class PiAgent extends BaseAgent {
       runtimeDir,
       `perm-${sid ?? `anon-${process.pid}-${Date.now()}`}.json`,
     );
+    // 子代理运行期快照(model + provider)。与权限档同机制:文件而非 env —— env 在 spawn
+    // 时定型,会话中途 setModel 后子代理会继续用启动时的旧模型(greptile P1),而 BYOM /
+    // 本地 provider 不一起传还会让同名模型落到错误 endpoint(codex P2,pi-harness §3 要求
+    // BYOM 直连原生 provider)。扩展每次派子代理现读本文件。
+    const subagentRuntimeFile = path.join(
+      runtimeDir,
+      `subagent-${sid ?? `anon-${process.pid}-${Date.now()}`}.json`,
+    );
     // auto 保留(Cindy 侧 dispatcher 用);bridge 只特判 bypassPermissions,auto 在
     // 桥内行为同 ask(非只读全部冒泡)。其余档(default/acceptEdits/plan)归 ask 最严。
     const normalizePermissionMode = (mode: string | undefined): 'ask' | 'auto' | 'bypassPermissions' =>
@@ -695,6 +703,30 @@ export class PiAgent extends BaseAgent {
       return run;
     };
     await writePermissionFile(requestedPermissionSnapshot);
+
+    // 子代理运行期快照的写入:代际串行,最新意图胜出(理由同权限档 —— 并发/连续 setModel
+    // 时无串行的 writeFile 可能让较早的模型写在较新的之后落盘,子代理就会读到过期模型)。
+    // 失败只告警不阻塞:读不到文件时扩展退回 pi 默认解析,不会拿 stale 值顶。
+    let subagentRuntimeWriteChain: Promise<void> = Promise.resolve();
+    let subagentRuntimeWriteGen = 0;
+    const writeSubagentRuntimeFile = (next: { model?: string; provider?: string }): void => {
+      const gen = ++subagentRuntimeWriteGen;
+      const snapshot = {
+        ...(next.model ? { model: next.model } : {}),
+        ...(next.provider ? { provider: next.provider } : {}),
+      };
+      subagentRuntimeWriteChain = subagentRuntimeWriteChain
+        .then(async () => {
+          if (gen !== subagentRuntimeWriteGen) return;
+          await fs.writeFile(subagentRuntimeFile, JSON.stringify(snapshot) + '\n');
+        })
+        // 链永不停在 rejected 上(同权限档):否则一次写失败后续写永远追加不进去。
+        .catch((error: unknown) => {
+          this.deps.logger.warn('pi subagent runtime snapshot write failed', {
+            message: error instanceof Error ? error.message : String(error),
+          });
+        });
+    };
 
     // MCP 桥:host 把 in-process MCP providers 暴露成 localhost streamable-HTTP。
     // 传 session 身份(sessionId/workingDir/vendorOptions)让 host 在 bridge 上注册
@@ -875,10 +907,10 @@ export class PiAgent extends BaseAgent {
         PI_CODING_AGENT_DIR: configHome,
         CINDY_PI_PERMISSION_FILE: permissionFile,
         // 子代理:cindy-subagent 扩展据此 spawn 子 pi 进程。给二进制路径而不是让扩展猜
-        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。模型取本次启动时的
-        // 会话模型(会话中途 setModel 不回溯已注入的 env,子代理按启动模型跑)。
+        // process.execPath —— host 本来就知道本次会话用的是哪个 pi。
         [CINDY_SUBAGENT_ENV.binary]: this.deps.binaryPath,
-        ...(mutableModel ? { [CINDY_SUBAGENT_ENV.model]: mutableModel } : {}),
+        // 只给文件路径:model/provider 由扩展每次现读,setModel 后立即生效。
+        [CINDY_SUBAGENT_ENV.runtimeFile]: subagentRuntimeFile,
         // 嵌入式 runtime 不做启动期联网:关掉 pi 的版本检查与安装遥测
         // (pi.dev/api/latest-version、report-install)。LLM 请求走 provider 通道不受影响。
         PI_OFFLINE: '1',
@@ -1282,6 +1314,8 @@ export class PiAgent extends BaseAgent {
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
         mutablePiProviderId = provider;
+        // 子代理读的是运行期文件,不是 spawn 时定型的 env —— 这里必须同步刷新。
+        writeSubagentRuntimeFile({ model: mutableModel, provider: mutablePiProviderId });
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };
