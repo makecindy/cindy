@@ -5,7 +5,7 @@
  * 只把运行期 reviewer 切到 Cindy，不改用户设置、不广播 Auto→Ask，也不弹确认。
  */
 
-import type { PermissionMode } from '@cindy/maker-core';
+import type { NativeAutoReviewRestoreOutcome, PermissionMode } from '@cindy/maker-core';
 import type { ResponseObserver, ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
 
 const CLASSIFIER_SYSTEM_PREFIX = 'You are a security monitor for autonomous AI coding agents.';
@@ -21,7 +21,7 @@ export interface ClaudeAutoClassifierUnavailableSignal {
 interface FallbackSession {
   agentKind: string;
   useCindyAutoReviewFallback?(): Promise<void>;
-  restoreNativeAutoReview?(): Promise<void>;
+  restoreNativeAutoReview?(): Promise<NativeAutoReviewRestoreOutcome>;
 }
 
 interface FallbackLogger {
@@ -259,10 +259,13 @@ interface FallbackCounters {
   failed: number;
   /** 冷却到期后真正把会话切回原生审阅的次数。 */
   restored: number;
-  /** 冷却到期但已不该恢复(会话没了 / 已离开 Auto / handle 不支持)。 */
+  /** 冷却到期但已不该恢复:会话没了 / 已离开 Auto / handle 不支持 / 路由服务不了原生 /
+   * 被新一轮 fallback 作废。都是终态,不重排。 */
   restoreSkipped: number;
   /** restoreNativeAutoReview 抛错。 */
   restoreFailed: number;
+  /** 因控制通道被占用 / 抛错而重新排期的次数(退避照常加倍)。 */
+  restoreRescheduled: number;
 }
 
 /**
@@ -282,7 +285,10 @@ const RESTORE_COOLDOWN_MAX_MS = 60 * 60_000;
 const RESTORE_STATE_MAX_SESSIONS = 256;
 
 interface SessionRestoreState {
-  /** 该会话累计切到 fallback 的次数,决定下一次冷却时长。 */
+  /**
+   * 该会话累计的「排期次数」,决定下一次冷却时长。降级与重排(控制通道被占用 / 抛错)
+   * 都会 +1 —— 两者都说明「上一次试探没起作用」,退避语义一致,不必分开计。
+   */
   switches: number;
   timer: FallbackRestoreTimer | null;
 }
@@ -318,6 +324,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
     restored: 0,
     restoreSkipped: 0,
     restoreFailed: 0,
+    restoreRescheduled: 0,
   };
 
   const runRestore = async (sessionId: string): Promise<void> => {
@@ -344,26 +351,57 @@ export function createClaudeAutoPermissionFallbackCoordinator(
         });
         return;
       }
-      // handle 侧自己判「路由是否支持原生审阅」并在不支持时静默 no-op —— 这里不重复
-      // 那套判定,免得两处口径分叉。
-      await session.restoreNativeAutoReview();
+      // handle 侧自己判「路由是否支持原生审阅」并在不支持时返回 'unsupported' —— 这里不
+      // 重复那套判定,免得两处口径分叉。
+      const outcome = await session.restoreNativeAutoReview();
+      // 'blocked' = 控制通道正被 rewind / query 重建占用,运行期状态没动。**必须重排**:
+      // 每次切到 fallback 只排一次试探,静默放弃等于让这个会话永久留在 fallback
+      // (greptile / copilot P1 of #1590)。
+      if (outcome === 'blocked') {
+        counters.restoreRescheduled += 1;
+        deps.logger.debug('native Auto reviewer restore blocked; rescheduling', {
+          sessionId,
+          switches: state?.switches ?? 0,
+          counters: { ...counters },
+        });
+        scheduleRestoreAttempt(sessionId, { reason: 'blocked' });
+        return;
+      }
+      // 'superseded' = 试探期间该会话又降级了,那一轮自己会排新的试探,这里不重复排。
+      // 'unsupported' / 'already-native' 是终态,重排不会变好。
+      if (outcome !== 'restored') {
+        counters.restoreSkipped += 1;
+        restoreStates.delete(sessionId);
+        deps.logger.debug('native Auto reviewer restore did not apply', {
+          sessionId,
+          outcome,
+          counters: { ...counters },
+        });
+        return;
+      }
       counters.restored += 1;
-      deps.logger.info('attempted restore of native Auto reviewer after cooldown', {
+      restoreStates.delete(sessionId);
+      deps.logger.info('restored native Auto reviewer after cooldown', {
         sessionId,
         switches: state?.switches ?? 0,
         counters: { ...counters },
       });
     } catch (error) {
+      // 抛错同样不算成功 —— 重排,否则一次偶发的 transport 异常就永久断掉恢复入口。
       counters.restoreFailed += 1;
-      deps.logger.warn('native Auto reviewer restore failed', {
+      deps.logger.warn('native Auto reviewer restore failed; rescheduling', {
         sessionId,
         error: error instanceof Error ? error.message : String(error),
         counters: { ...counters },
       });
+      scheduleRestoreAttempt(sessionId, { reason: 'error' });
     }
   };
 
-  const scheduleRestoreAttempt = (sessionId: string): void => {
+  const scheduleRestoreAttempt = (
+    sessionId: string,
+    opts: { reason: 'switched' | 'blocked' | 'error' } = { reason: 'switched' },
+  ): void => {
     let state = restoreStates.get(sessionId);
     if (!state) {
       if (restoreStates.size >= RESTORE_STATE_MAX_SESSIONS) {
@@ -394,6 +432,7 @@ export function createClaudeAutoPermissionFallbackCoordinator(
     }, delayMs);
     deps.logger.debug('scheduled native Auto reviewer restore attempt', {
       sessionId,
+      reason: opts.reason,
       switches: state.switches,
       delayMs,
     });

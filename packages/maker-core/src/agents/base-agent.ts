@@ -1053,6 +1053,25 @@ export interface BackgroundTaskSnapshot {
 }
 
 /**
+ * `restoreNativeAutoReview()` 的结果 —— host 靠它决定要不要再排一次试探。
+ *
+ * - `restored`：已切回原生审阅（幂等：本来就是原生时返回 `already-native`）；
+ * - `already-native`：这个会话不在 fallback 上，无事可做；
+ * - `unsupported`：当前路由（第三方 / 网关 / API key）服务不了原生审阅 —— **终态**，
+ *   重排不会变好；
+ * - `blocked`：控制通道暂时不可推（rewind / query 重建 / invalid-resume 恢复窗口），
+ *   运行期状态**未改动** —— host 必须按退避重排，否则这个会话永久留在 fallback；
+ * - `superseded`：试探期间同一会话又收到分类器不可用信号，本次作废 —— 不必重排，
+ *   新那一轮 fallback 自己会排。
+ */
+export type NativeAutoReviewRestoreOutcome =
+  | 'restored'
+  | 'already-native'
+  | 'unsupported'
+  | 'blocked'
+  | 'superseded';
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
@@ -1164,8 +1183,12 @@ export interface AgentSessionHandle {
    * already switched to the fallback no longer calls the native reviewer, so no
    * recovery signal can arrive on its own. Implementations must be idempotent
    * and must decline when the current route cannot serve the native reviewer.
+   *
+   * The outcome tells the host whether to schedule another attempt — a silently
+   * skipped attempt would leave the session permanently on the fallback, because
+   * the host only schedules one attempt per switch.
    */
-  restoreNativeAutoReview?(): Promise<void>;
+  restoreNativeAutoReview?(): Promise<NativeAutoReviewRestoreOutcome>;
 
   /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。

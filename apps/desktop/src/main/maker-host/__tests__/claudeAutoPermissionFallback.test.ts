@@ -10,6 +10,9 @@ import {
   type ClaudeAutoPermissionFallbackDeps,
 } from '../claude-auto-permission-fallback.js';
 
+/** deps.getSession 的返回形状（模块内部类型，测试里按结构声明即可）。 */
+type FallbackSession = NonNullable<ReturnType<ClaudeAutoPermissionFallbackDeps['getSession']>>;
+
 const CLASSIFIER_PREFIX = 'You are a security monitor for autonomous AI coding agents.';
 
 function requestBody(overrides: Record<string, unknown> = {}): Buffer {
@@ -474,7 +477,7 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
 describe('native Auto reviewer restore attempts', () => {
   function createRestorableDeps(overrides: Partial<ClaudeAutoPermissionFallbackDeps> = {}) {
     const useCindyAutoReviewFallback = vi.fn(async () => {});
-    const restoreNativeAutoReview = vi.fn(async () => {});
+    const restoreNativeAutoReview = vi.fn(async () => 'restored' as const);
     const { scheduled, scheduleRestore } = createManualRestoreScheduler();
     const { deps } = createDeps({
       getSession: vi.fn(() => ({
@@ -499,7 +502,7 @@ describe('native Auto reviewer restore attempts', () => {
     await runScheduled(scheduled[0]);
     expect(restoreNativeAutoReview).toHaveBeenCalledOnce();
     expect(deps.logger.info).toHaveBeenCalledWith(
-      'attempted restore of native Auto reviewer after cooldown',
+      'restored native Auto reviewer after cooldown',
       expect.objectContaining({ sessionId: 'session-1' }),
     );
   });
@@ -546,11 +549,11 @@ describe('native Auto reviewer restore attempts', () => {
 
   it('skips the attempt when the session is gone by the time the cooldown ends', async () => {
     const useCindyAutoReviewFallback = vi.fn(async () => {});
-    const restoreNativeAutoReview = vi.fn(async () => {});
+    const restoreNativeAutoReview = vi.fn(async () => 'restored' as const);
     const { scheduled, scheduleRestore } = createManualRestoreScheduler();
     let alive = true;
     const { deps } = createDeps({
-      getSession: vi.fn(() => (alive
+      getSession: vi.fn((): FallbackSession | undefined => (alive
         ? { agentKind: 'claude-code', useCindyAutoReviewFallback, restoreNativeAutoReview }
         : undefined)),
       scheduleRestore,
@@ -577,12 +580,12 @@ describe('native Auto reviewer restore attempts', () => {
     expect(scheduled).toHaveLength(0);
   });
 
-  it('logs and swallows a failing restore attempt', async () => {
+  it('reschedules a failing restore attempt instead of dropping it', async () => {
     const { deps, scheduled } = createRestorableDeps({
       getSession: vi.fn(() => ({
         agentKind: 'claude-code',
         useCindyAutoReviewFallback: vi.fn(async () => {}),
-        restoreNativeAutoReview: vi.fn(async () => {
+        restoreNativeAutoReview: vi.fn(async (): Promise<never> => {
           throw new Error('control channel closed');
         }),
       })),
@@ -593,8 +596,95 @@ describe('native Auto reviewer restore attempts', () => {
     await runScheduled(scheduled[0]);
 
     expect(deps.logger.warn).toHaveBeenCalledWith(
-      'native Auto reviewer restore failed',
+      'native Auto reviewer restore failed; rescheduling',
       expect.objectContaining({ error: 'control channel closed' }),
     );
+    // 一次偶发的 transport 异常不能永久断掉恢复入口。
+    expect(scheduled).toHaveLength(2);
+    expect(scheduled[1].delayMs).toBe(10 * 60_000);
+  });
+
+  /**
+   * coordinator 每次「切到 fallback」只排**一次**试探。若那一次恰好落在 rewind / query
+   * 重建 / invalid-resume 恢复窗口里，handle 推不动控制请求 —— 静默放弃就等于让这个会话
+   * 永久留在 Cindy fallback（greptile / copilot P1 of #1590）。所以 handle 明确返回
+   * `blocked`，coordinator 按退避重排。
+   */
+  describe('outcome drives whether another attempt is scheduled', () => {
+    function createDepsWithOutcomes(outcomes: readonly string[]) {
+      const restoreNativeAutoReview = vi.fn(async () => outcomes[
+        Math.min(restoreNativeAutoReview.mock.calls.length - 1, outcomes.length - 1)
+      ] as never);
+      const { scheduled, scheduleRestore } = createManualRestoreScheduler();
+      const { deps } = createDeps({
+        getSession: vi.fn(() => ({
+          agentKind: 'claude-code',
+          useCindyAutoReviewFallback: vi.fn(async () => {}),
+          restoreNativeAutoReview,
+        })),
+        scheduleRestore,
+      });
+      return { deps, restoreNativeAutoReview, scheduled };
+    }
+
+    it('reschedules with a doubled cooldown while the control channel stays blocked', async () => {
+      const { deps, restoreNativeAutoReview, scheduled } =
+        createDepsWithOutcomes(['blocked', 'blocked', 'restored']);
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      expect(scheduled).toHaveLength(1);
+
+      await runScheduled(scheduled[0]);
+      expect(scheduled).toHaveLength(2);
+      await runScheduled(scheduled[1]);
+      expect(scheduled).toHaveLength(3);
+      await runScheduled(scheduled[2]);
+
+      // 第三次返回 restored → 收口,不再排。
+      expect(scheduled).toHaveLength(3);
+      expect(restoreNativeAutoReview).toHaveBeenCalledTimes(3);
+      // 重排与降级共用退避:5 → 10 → 20 分钟。
+      expect(scheduled.map((entry) => entry.delayMs)).toEqual([
+        5 * 60_000,
+        10 * 60_000,
+        20 * 60_000,
+      ]);
+      expect(deps.logger.info).toHaveBeenCalledWith(
+        'restored native Auto reviewer after cooldown',
+        expect.objectContaining({ sessionId: 'session-1' }),
+      );
+    });
+
+    it('does not reschedule when a newer fallback superseded the attempt', async () => {
+      // 试探期间该会话又降级了 → 分类器还坏着,那一轮 fallback 自己会排新的试探,
+      // 这里重排只会白跑并把退避推高。
+      const { deps, scheduled } = createDepsWithOutcomes(['superseded']);
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      await runScheduled(scheduled[0]);
+
+      expect(scheduled).toHaveLength(1);
+      expect(deps.logger.debug).toHaveBeenCalledWith(
+        'native Auto reviewer restore did not apply',
+        expect.objectContaining({ outcome: 'superseded' }),
+      );
+    });
+
+    it('does not reschedule when the route cannot serve the native reviewer', async () => {
+      // 终态:重排不会让第三方 / 网关路由长出原生分类器。
+      const { deps, scheduled } = createDepsWithOutcomes(['unsupported']);
+      const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+      await fallback({ sessionId: 'session-1', status: 429 });
+      await runScheduled(scheduled[0]);
+
+      expect(scheduled).toHaveLength(1);
+      expect(deps.logger.debug).toHaveBeenCalledWith(
+        'native Auto reviewer restore did not apply',
+        expect.objectContaining({ outcome: 'unsupported' }),
+      );
+    });
   });
 });

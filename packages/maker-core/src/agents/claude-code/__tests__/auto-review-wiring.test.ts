@@ -399,7 +399,6 @@ describe('Auto-review wiring: only affects the auto mode', () => {
     expect(permissionRequests(seen)).toHaveLength(1);
     await handle.close();
   });
-  });
 });
 
 /**
@@ -450,9 +449,85 @@ describe('Auto-review wiring: native reviewer can be restored after a transient 
       authSource: 'oauth',
     });
 
-    await handle.restoreNativeAutoReview?.();
+    await expect(handle.restoreNativeAutoReview?.()).resolves.toBe('already-native');
 
     expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('reports the outcome so the host knows whether to try again', async () => {
+    const { handle } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.useCindyAutoReviewFallback?.();
+    // 'restored' 才算成功;coordinator 靠它决定收口还是重排。
+    await expect(handle.restoreNativeAutoReview?.()).resolves.toBe('restored');
+    await handle.close();
+  });
+
+  it('reports unsupported (not a silent no-op) on a route without a native reviewer', async () => {
+    const { handle } = await startSession('auto', { providerId: 'xd' });
+
+    await handle.useCindyAutoReviewFallback?.();
+    // 终态:重排不会让第三方 / 网关路由长出原生分类器。
+    await expect(handle.restoreNativeAutoReview?.()).resolves.toBe('unsupported');
+    await handle.close();
+  });
+
+  /**
+   * 恢复试探是异步的(要 await SDK 切档)。期间同一会话又收到分类器不可用信号 → 那一轮
+   * 说明分类器还坏着,已在飞的旧恢复绝不能把 SDK 推回原生:两个 push 的到达顺序不定,
+   * 旧的 'auto' 可能后到并盖掉新那轮的 'default'(greptile P1 of #1590)。
+   */
+  it('aborts and reverts the SDK when a newer fallback lands mid-restore', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.useCindyAutoReviewFallback?.();
+    fakeQuery.setPermissionMode.mockClear();
+
+    // 让切档挂住,在窗口里插入新一轮 fallback。
+    let releaseSwitch: (() => void) | undefined;
+    fakeQuery.setPermissionMode.mockImplementationOnce(
+      () => new Promise<void>((resolve) => {
+        releaseSwitch = () => resolve();
+      }),
+    );
+    const restoring = handle.restoreNativeAutoReview?.();
+    await vi.waitFor(() => expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto'));
+
+    await handle.useCindyAutoReviewFallback?.(); // 分类器又坏了
+    releaseSwitch!();
+
+    await expect(restoring).resolves.toBe('superseded');
+    // 收口:把 SDK 推回 default,不留「原生档 + 分类器仍故障」的窗口。
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    await handle.close();
+  });
+
+  it('reports blocked without touching runtime state so the host can retry', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.useCindyAutoReviewFallback?.();
+
+    // abort() 期间控制请求被封 —— 用它模拟 rewind / query 重建窗口。
+    await handle.abort?.();
+    fakeQuery.setPermissionMode.mockClear();
+
+    const outcome = await handle.restoreNativeAutoReview?.();
+    if (outcome === 'blocked') {
+      // 没推 SDK、也没改运行期状态 → 下一次冷却重试仍然有意义。
+      expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+      await expect(handle.restoreNativeAutoReview?.()).resolves.toBe('blocked');
+    } else {
+      // abort 未封控制请求(实现细节可能变)→ 至少要拿到一个明确的终态,不能是 undefined。
+      expect(['restored', 'superseded', 'unsupported']).toContain(outcome);
+    }
     await handle.close();
   });
 });

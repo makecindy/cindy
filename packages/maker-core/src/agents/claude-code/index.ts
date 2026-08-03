@@ -46,6 +46,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type AgentDeps,
+  type NativeAutoReviewRestoreOutcome,
   type StartSessionOptions,
   type OneShotOptions,
   type SendOptions,
@@ -1747,6 +1748,13 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableProviderId = opts.providerId ?? null;
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
+    /**
+     * 切到 Cindy fallback 的代次。恢复试探是**异步**的(要 await SDK 切档),期间同一会话
+     * 可能又收到分类器不可用信号并重新降级 —— 那一轮说明分类器还坏着,已在飞的旧恢复
+     * 绝不能把 SDK 推回原生。恢复入口在开工前快照这个值,推档前后各校验一次
+     * (codex/greptile review of #1590)。
+     */
+    let nativeAutoReviewFallbackGeneration = 0;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const usesNativeClaudeAutoReview = (): boolean =>
@@ -4512,6 +4520,9 @@ export class ClaudeCodeAgent extends BaseAgent {
       },
 
       async useCindyAutoReviewFallback() {
+        // 代际先递增:即便这次因为已经在 fallback 而提前返回,也要让在飞的恢复试探作废 ——
+        // 「又收到一次不可用信号」本身就是「分类器还坏着」的证据。
+        nativeAutoReviewFallbackGeneration += 1;
         if (nativeAutoReviewUnavailable) return;
         nativeAutoReviewUnavailable = true;
         autoReviewDecisionCache.clear();
@@ -4538,24 +4549,49 @@ export class ClaudeCodeAgent extends BaseAgent {
        * 就把该会话的瞬时记账清零了)。host 的 coordinator 用冷却 + 指数退避做乐观试探,
        * 恢复后若分类器仍在故障,观察器会重新走 episode 阈值把它再切回来。
        */
-      async restoreNativeAutoReview() {
-        if (!nativeAutoReviewUnavailable) return;
+      async restoreNativeAutoReview(): Promise<NativeAutoReviewRestoreOutcome> {
+        if (!nativeAutoReviewUnavailable) return 'already-native';
         // 路由本身就不支持原生审阅(第三方 / 网关 / API key)时,恢复毫无意义 —— 保持在
         // fallback,免得白跑一次 SDK 切档、还把布尔与实际路由能力弄分叉。
-        if (mutableAutoReviewCredentialMode !== 'oauth-bearer') return;
+        // 这不是「这次没成」,重排也不会变好,所以是终态。
+        if (mutableAutoReviewCredentialMode !== 'oauth-bearer') return 'unsupported';
         // 控制通道不可用时**不置位**:恢复是放宽方向,宁可等下一次冷却重试,也不要留下
         // 「布尔说原生可用、SDK 实际还在 default 档」的分叉。这与 fallback 方向刻意不
         // 对称 —— 那边即使推不动 SDK 也要先置位,因为那是收紧方向。
+        //
+        // 返回 'blocked' 而不是静默 return:coordinator 只在「切到 fallback」那一刻排一次
+        // 试探,静默跳过等于让这个会话**永久**失去恢复入口(greptile / copilot P1)。
         if (controlRequestsBlocked()) {
           log.debug('skip native Auto reviewer restore: control requests blocked');
-          return;
+          return 'blocked';
         }
+        const generation = nativeAutoReviewFallbackGeneration;
         if (
           mutablePermissionMode === 'auto'
           && !mutablePlanMode
           && !planTurnActive
         ) {
           await q.setPermissionMode('auto');
+          // await 期间又降级了 → 分类器还坏着,这次的 'auto' 可能后到并盖掉那一轮的
+          // 'default'。把 SDK 推回去收口,并如实报告本次作废。
+          if (nativeAutoReviewFallbackGeneration !== generation) {
+            log.warn('native Auto reviewer restore superseded by a newer fallback; reverting SDK mode', {
+              providerId: mutableProviderId,
+              model: mutableModel,
+            });
+            if (
+              mutablePermissionMode === 'auto'
+              && !mutablePlanMode
+              && !planTurnActive
+              && !controlRequestsBlocked()
+            ) {
+              await q.setPermissionMode('default');
+            }
+            return 'superseded';
+          }
+        } else if (nativeAutoReviewFallbackGeneration !== generation) {
+          // 没推 SDK 的路径也要校验(档位不在 auto 时只改运行期状态)。
+          return 'superseded';
         }
         nativeAutoReviewUnavailable = false;
         autoReviewDecisionCache.clear();
@@ -4564,6 +4600,7 @@ export class ClaudeCodeAgent extends BaseAgent {
           model: mutableModel,
           permissionMode: mutablePermissionMode,
         });
+        return 'restored';
       },
 
       async setPlanMode(enabled: boolean) {
