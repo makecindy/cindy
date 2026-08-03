@@ -215,6 +215,71 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     expect(permissionRequests(seen)).toHaveLength(0);
     await handle.close();
   });
+
+  it('probes the native classifier again on the next turn after a turn-scoped fallback (#1573)', async () => {
+    const { handle, canUseTool, fakeQuery, reviewAutoPermissionAction } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+      reviewVerdict: 'allow',
+    });
+
+    // 瞬时故障首次被观察到 → 试探性降级:SDK 立刻离开 auto 档,本 turn 剩余工具由
+    // Cindy reviewer 裁决,而不是继续撞原生分类器的"无法判定安全性"硬拒绝。
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    const duringFallback = await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'tentative-1' },
+    );
+    expect(duringFallback.behavior).toBe('allow');
+    expect(reviewAutoPermissionAction).toHaveBeenCalledOnce();
+
+    // 下一 turn 起点回探原生:一次上游抖动不该让整个会话余生失去原生 Auto(#596)。
+    // 降级后 SDK 不再发分类器请求,proxy 永远观察不到恢复,所以这是唯一的解除点。
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('auto');
+    await handle.close();
+  });
+
+  it('treats repeated turn-scoped signals within one turn as a no-op', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    // 一次动作的 retry storm 会让观察器连发多条 turn 级信号(它刻意不按 episode 去重),
+    // 收敛责任在这里:同一 turn 内只切一次档。返回值让 host 能把重复信号记成 no-op,
+    // 而不是把故障计数冲虚。
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(true);
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(false);
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(false);
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledTimes(1);
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
+  it('never probes back after a session-scoped fallback (#758 self-rescue stays sticky)', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    // 持续故障已确认 → 会话级终态。回探会让用户在每个 turn 各撞一次硬拒绝,
+    // 正是 #758 要关掉的死循环。
+    await handle.useCindyAutoReviewFallback?.({ scope: 'session' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+    fakeQuery.setPermissionMode.mockClear();
+
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
+    // 终态之后再来的 turn 级信号同样是 no-op(不得把会话级降级降回试探性)。
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(false);
+    await handle.send({ type: 'user', content: 'one more turn' });
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
 });
 
 describe('Auto-review wiring: safe builtin tools auto-approve silently', () => {

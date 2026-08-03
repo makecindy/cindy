@@ -4763,6 +4763,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   });
   // Claude 原生 Auto 分类器不可用 → 会话仍保持 Auto，只把后续审批切到 Cindy reviewer。
   // coordinator 内部复核 DB 仍为 auto 并按 session 去重；不改偏好、不弹提示。
+  // signal.scope 决定这次降级是 turn 级试探(下一 turn 回探原生)还是会话级终态。
   const handleClaudeAutoClassifierUnavailable = createClaudeAutoPermissionFallbackCoordinator({
     getSession: (sessionId) => maker.getSession(sessionId),
     getSessionMeta: (sessionId) => maker.getSessionMeta(sessionId),

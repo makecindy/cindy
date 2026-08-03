@@ -3,9 +3,13 @@
  *
  * 观察器只读 proxy 响应元数据，不改写响应；coordinator 在确认会话仍为 Auto 后，
  * 只把运行期 reviewer 切到 Cindy，不改用户设置、不广播 Auto→Ask，也不弹确认。
+ *
+ * 降级分两级(见 AutoReviewFallbackScope):瞬时故障**每次**都先做 turn 级试探性降级
+ * (立刻兜住当前 turn，下一 turn 由 agent 侧回探原生)；攒满 episode 阈值或遇到确定性
+ * 4xx 才升级为会话级终态。两级都不改用户偏好、不弹提示 —— 用户全程留在 Auto。
  */
 
-import type { PermissionMode } from '@cindy/maker-core';
+import type { AutoReviewFallbackScope, PermissionMode } from '@cindy/maker-core';
 import type { ResponseObserver, ResponseObserverCtx } from '@cindy/anthropic-compat-proxy';
 
 const CLASSIFIER_SYSTEM_PREFIX = 'You are a security monitor for autonomous AI coding agents.';
@@ -16,11 +20,21 @@ export interface ClaudeAutoClassifierUnavailableSignal {
   /** Legacy proxy signals omit this and default to Claude. */
   agentKind?: 'claude-code' | 'codex';
   status: number;
+  /**
+   * 降级作用范围。'turn' = 试探性(尚未判为持续故障,下一 turn 回探原生);
+   * 'session' = 已确认持续故障或确定性错误,本会话不再回探。
+   * Legacy proxy signals omit this and default to 'session'.
+   */
+  scope?: AutoReviewFallbackScope;
 }
 
 interface FallbackSession {
   agentKind: string;
-  useCindyAutoReviewFallback?(): Promise<void>;
+  /**
+   * 返回 false = 会话已处于该降级状态,本次是幂等 no-op(见 AgentSessionHandle)。
+   * 用 `boolean | void` 容忍不返回值的实现:只有显式 false 才算"没切"。
+   */
+  useCindyAutoReviewFallback?(opts?: { scope?: AutoReviewFallbackScope }): Promise<boolean | void>;
 }
 
 interface FallbackLogger {
@@ -112,14 +126,30 @@ export function isClaudeAutoClassifierRequest(requestBody: Buffer): boolean {
 }
 
 /**
- * 瞬时故障(408/429/5xx)的升级阈值 —— #596 与 #758 的平衡点:
+ * 瞬时故障(408/429/5xx)的**会话级**升级阈值 —— #596 与 #758 的平衡点:
  *
  * #596 的诉求成立:一次偶发限流不该永久改写用户的 Auto 偏好。但把瞬时状态码
  * **一律**静默吞掉,会让「确定性地返回 429」的故障(如 #758 归因块 429)把用户
  * 留在无限硬失败 + 零提示的死锁里 —— 降级兜底恰恰是那种场景唯一的自救通道。
  *
  * 折中:瞬时失败按「故障段(episode)」记账,连续 EPISODE_THRESHOLD 段且中间
- * 没有任何一次分类器成功 → 视为持续故障,交给协调器切 Cindy fallback。
+ * 没有任何一次分类器成功 → 视为持续故障,交给协调器切**会话级** Cindy fallback。
+ *
+ * 但阈值以下**不再是"什么都不做"**(issue #1573):原实现在攒够 3 段之前对每一次
+ * 分类器故障都只记账,而那段时间里 SDK 对写/执行类工具一律硬拒("cannot determine
+ * the safety of Bash"),用户零提示地连撞 60–90 秒。现在阈值以下改为通知**turn 级**
+ * 试探性降级:本 turn 剩余工具立刻走 Cindy reviewer(用户无感,也不弹授权),下一
+ * turn 起点由 agent 侧回探原生分类器。
+ *
+ * 由此**升级节奏的物理含义变了**,这是本改动最容易被误读的一点:试探性降级会把 SDK
+ * 切到 default 档,cc 随即停发分类器请求 —— 同一段里不会再有失败响应到达。所以段不再
+ * 靠"持续失败累计 60s"攒出来,而是靠"连续 3 个 turn 的回探都失败"。副作用是:
+ * - 用户若在 30s 内连发多个 turn,回探失败会落回同一个固定桶、段数不涨,会话可能长期
+ *   停在试探性降级。这**可以接受**:那种状态下每个 turn 也只在回探的第一个工具上撞一次,
+ *   而不是修复前整个窗口期的每个工具都被硬拒 —— 伤害已经小一个数量级;
+ * - 反过来,#596 的保护变得更强:偶发抖动更难被推到会话级终态。
+ * 真正持续的故障里 turn 间隔通常远大于 30s(用户要读回复、agent 要跑工具),3 段升级仍
+ * 会正常发生,#758 的自救通道保持有效。
  *
  * - EPISODE_MS:SDK 对 429/5xx 有自动重试,一次用户动作会在数秒内产生多个失败
  *   响应;30s 内的失败归并为一段,避免把一次动作的 retry storm 数成 N 次。
@@ -145,9 +175,11 @@ function isTransientClassifierStatus(status: number): boolean {
  * 仅当**该会话已有瞬时故障记账**时才 parse body 确认「分类器已恢复」并清零计数;
  * 无记账时不 parse、不返回 sink,不碰 SSE 热路径。
  *
- * fallback 信号分两类:
- * - 非瞬时 4xx(400/401/403/404/422 等确定性错误)→ 立即通知协调器(与 #596 前一致);
- * - 瞬时 408/429/5xx → 按上方 episode 阈值记账,持续故障才通知。
+ * fallback 信号按作用范围分两类:
+ * - 会话级(scope='session'):非瞬时 4xx(400/401/403/404/422 等确定性错误)立即通知
+ *   (与 #596 前一致);瞬时故障攒满 episode 阈值后升级;
+ * - turn 级(scope='turn'):瞬时 408/429/5xx 在阈值以下**每次**都通知,先用 Cindy
+ *   兜住当前 turn,避免 #1573 的硬拒绝窗口。
  */
 export function createClaudeAutoClassifierFailureObserver(
   resolveSessionId: (sdkSessionId: string) => string | null,
@@ -186,6 +218,19 @@ export function createClaudeAutoClassifierFailureObserver(
     const sessionId = resolveSessionId(sdkSessionId);
     if (!sessionId || !isClaudeAutoClassifierRequest(ctx.requestBody)) return undefined;
 
+    const notify = (scope: AutoReviewFallbackScope): void => {
+      try {
+        notifyAutoPermissionClassifierUnavailable({
+          sessionId,
+          agentKind: 'claude-code',
+          status: ctx.status,
+          scope,
+        });
+      } catch {
+        // observer 只能旁路通知；listener 异常不得影响上游响应 pipe。
+      }
+    };
+
     if (isTransientClassifierStatus(ctx.status)) {
       const ts = now();
       let episodes = transientEpisodes.get(sdkSessionId);
@@ -211,23 +256,24 @@ export function createClaudeAutoClassifierFailureObserver(
       if (episodes.length === 0 || ts - episodes[episodes.length - 1] >= TRANSIENT_EPISODE_MS) {
         episodes.push(ts);
       }
-      if (episodes.length < TRANSIENT_EPISODE_THRESHOLD) return undefined;
+      if (episodes.length < TRANSIENT_EPISODE_THRESHOLD) {
+        // 尚未判为持续故障 → 试探性降级,把这一 turn 交给 Cindy reviewer。
+        //
+        // 刻意**不按 episode 去重**(哪怕本段已通知过):试探性降级在 turn 边界自动解除,
+        // 而 turn 边界与 30s 固定桶不对齐 —— 用户在同一段内连发两条消息时,第二条已经
+        // 回探回原生,若因"本段通知过"而跳过,这一 turn 就重新裸奔在硬拒绝里。收敛交给
+        // 下游的幂等层:coordinator 有 in-flight 去重,agent 侧对同一 turn 的重复信号是
+        // no-op(只有回探后的首个信号会真正再切一次档)。
+        notify('turn');
+        return undefined;
+      }
     }
 
-    // 任何一次通知(瞬时升级或确定性 4xx 立即切 fallback)都清零该会话的瞬时记账:
+    // 任何一次会话级通知(瞬时升级或确定性 4xx 立即切 fallback)都清零该会话的瞬时记账:
     // 用户重开 Auto 时从零累计,不因残账被单次偶发失败提前推过阈值。协调器自身有
     // in-flight 去重 + 持久态 CAS,重复信号安全。
     transientEpisodes.delete(sdkSessionId);
-
-    try {
-      notifyAutoPermissionClassifierUnavailable({
-        sessionId,
-        agentKind: 'claude-code',
-        status: ctx.status,
-      });
-    } catch {
-      // observer 只能旁路通知；listener 异常不得影响上游响应 pipe。
-    }
+    notify('session');
     return undefined;
   };
 }
@@ -237,11 +283,17 @@ export function createClaudeAutoClassifierFailureObserver(
  * 用现有 logger 落到 apps/desktop/logs/,用于量化故障频率(不新建上报通道)。
  * detected 计每次进入 coordinator 的故障信号(含被 in-flight 去重的 retry storm),
  * switched 计真正切到 Cindy fallback 的会话,其余分别计各类跳过原因。
+ * switchedTentative 是 switched 的子集:turn 级试探性降级(#1573),下一 turn 会回探原生;
+ * 二者之差即会话级终态降级次数。两个数一起看才能区分"上游偶发抖动"与"持续故障"。
+ * skippedAlreadyFallback 计会话已在该降级状态、本次是幂等 no-op 的信号 —— turn 级信号
+ * 刻意不在观察器侧按 episode 去重(见上),重复量落在这里,不许混进 switched 把它冲虚。
  */
 interface FallbackCounters {
   detected: number;
   switched: number;
+  switchedTentative: number;
   dedupedRetries: number;
+  skippedAlreadyFallback: number;
   skippedNotAuto: number;
   skippedNonClaude: number;
   skippedUnsupported: number;
@@ -259,7 +311,9 @@ export function createClaudeAutoPermissionFallbackCoordinator(
   const counters: FallbackCounters = {
     detected: 0,
     switched: 0,
+    switchedTentative: 0,
     dedupedRetries: 0,
+    skippedAlreadyFallback: 0,
     skippedNotAuto: 0,
     skippedNonClaude: 0,
     skippedUnsupported: 0,
@@ -268,6 +322,8 @@ export function createClaudeAutoPermissionFallbackCoordinator(
 
   return async (signal) => {
     const signalAgentKind = signal.agentKind ?? 'claude-code';
+    // legacy proxy signal 不带 scope → 按会话级处理(旧行为不变)。
+    const scope: AutoReviewFallbackScope = signal.scope ?? 'session';
     counters.detected += 1;
     if (inFlight.has(signal.sessionId)) {
       counters.dedupedRetries += 1;
@@ -290,20 +346,34 @@ export function createClaudeAutoPermissionFallbackCoordinator(
         counters.skippedUnsupported += 1;
         return false;
       }
-      await session.useCindyAutoReviewFallback();
+      const switched = await session.useCindyAutoReviewFallback({ scope });
+      if (switched === false) {
+        // 会话已在该降级状态(同一 turn 内的重复信号 / 已是会话级终态)→ 不重复计数、
+        // 不重复打日志,否则一次上游抖动会在日志里放大成"降级了十几次"。
+        counters.skippedAlreadyFallback += 1;
+        return false;
+      }
       counters.switched += 1;
-      deps.logger.info('auto permission classifier unavailable; session kept on Auto with Cindy fallback', {
-        sessionId: signal.sessionId,
-        agentKind: signalAgentKind,
-        status: signal.status,
-        counters: { ...counters },
-      });
+      if (scope === 'turn') counters.switchedTentative += 1;
+      deps.logger.info(
+        scope === 'turn'
+          ? 'auto permission classifier unavailable; this turn falls back to Cindy review'
+          : 'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+        {
+          sessionId: signal.sessionId,
+          agentKind: signalAgentKind,
+          status: signal.status,
+          scope,
+          counters: { ...counters },
+        },
+      );
       return true;
     } catch (error) {
       counters.failed += 1;
       deps.logger.warn('auto permission fallback failed', {
         sessionId: signal.sessionId,
         status: signal.status,
+        scope,
         error: error instanceof Error ? error.message : String(error),
         counters: { ...counters },
       });

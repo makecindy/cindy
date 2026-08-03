@@ -1039,6 +1039,18 @@ export interface BackgroundTaskSnapshot {
 }
 
 /**
+ * 原生 Auto reviewer 降级的作用范围(useCindyAutoReviewFallback 的 scope):
+ *
+ * - `'turn'` —— **试探性**降级。瞬时故障(408/429/5xx)首次被观察到就立刻用它,让本
+ *   turn 剩余的工具调用直接走 Cindy reviewer,而不是继续撞原生分类器的硬拒绝
+ *   (issue #1573 的 60–90s 窗口)。下一 turn 起点自动回探原生:一次上游抖动不该让
+ *   整个会话余生失去原生 Auto(issue #596)。
+ * - `'session'` —— 已确认的持续故障(瞬时故障累计到升级阈值,或确定性 4xx)。本会话
+ *   不再回探,后续审批一律走 Cindy reviewer(issue #758 的自救通道)。
+ */
+export type AutoReviewFallbackScope = 'turn' | 'session';
+
+/**
  * 一个已启动的 agent 会话句柄。
  * 上层 Session 类持有此句柄并对外暴露 UI 友好的 API。
  */
@@ -1139,8 +1151,12 @@ export interface AgentSessionHandle {
   /**
    * Vendor-native Auto reviewer became unavailable. Keep the product mode at
    * Auto, but route subsequent approvals through Cindy's lightweight reviewer.
+   *
+   * `scope` 缺省 'session'(旧调用点语义不变)。返回值表示**本次调用是否真的改变了
+   * 运行期 reviewer**:一次上游故障会产生 retry storm 般的重复信号,调用方靠它区分
+   * "真的切了档"与"已在该状态、幂等 no-op",否则故障计数会虚高到没法排障。
    */
-  useCindyAutoReviewFallback?(): Promise<void>;
+  useCindyAutoReviewFallback?(opts?: { scope?: AutoReviewFallbackScope }): Promise<boolean>;
 
   /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。

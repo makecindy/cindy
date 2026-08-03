@@ -1747,10 +1747,20 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableProviderId = opts.providerId ?? null;
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
+    /**
+     * 试探性(turn 级)降级 —— 见 AutoReviewFallbackScope。原生分类器**首次**瞬时故障
+     * 就置位,本 turn 剩余工具立刻改走 Cindy reviewer(而不是继续撞 SDK 的"无法判定安全性"
+     * 硬拒绝);下一 turn 起点由 restoreNativeAutoReviewForNewTurn() 清零并回探原生。
+     * 与 nativeAutoReviewUnavailable(会话级,已确认持续故障)相互独立:后者置位后本标记
+     * 不再有意义,回探也不会重开原生。
+     */
+    let nativeAutoReviewTurnFallback = false;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const usesNativeClaudeAutoReview = (): boolean =>
-      !nativeAutoReviewUnavailable && mutableAutoReviewCredentialMode === 'oauth-bearer';
+      !nativeAutoReviewUnavailable
+      && !nativeAutoReviewTurnFallback
+      && mutableAutoReviewCredentialMode === 'oauth-bearer';
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
@@ -3621,6 +3631,40 @@ export class ClaudeCodeAgent extends BaseAgent {
     // 主动 close 并登记到 canceledBridgeQueries 时才阻塞 control request。
     const controlRequestsBlocked = (): boolean =>
       pendingRewindTo !== undefined || acceptingRebuiltSend || idleResumeRebuildGate !== null || canceledBridgeQueries.has(q);
+    /**
+     * 新 turn 起点回探原生 Auto 分类器 —— 试探性降级的**唯一**解除点。
+     *
+     * 为什么回探必须由这里驱动:降级会把 SDK 切到 default 档,此后 cc 不再发分类器请求,
+     * proxy 观察器也就永远看不到"分类器已恢复"的 2xx。所以恢复不可能被观察到,只能主动
+     * 回探。选 turn 边界而不是定时器:turn 内档位保持稳定(不会在工具调用之间翻转),也
+     * 不引入需要清理的 timer;代价是长 turn 会整轮留在 Cindy reviewer 上 —— 用户无感,
+     * 可接受。
+     *
+     * 会话级降级(持续故障已确认)不回探:此处只清 turn 级标记,`usesNativeClaudeAutoReview()`
+     * 仍会因 nativeAutoReviewUnavailable 保持 false,下面的 push 也被同一判据挡住。
+     */
+    const restoreNativeAutoReviewForNewTurn = async (): Promise<void> => {
+      if (!nativeAutoReviewTurnFallback) return;
+      nativeAutoReviewTurnFallback = false;
+      // 上一 turn 的裁决缓存出自 Cindy reviewer,不能带进回探后的 turn。
+      autoReviewDecisionCache.clear();
+      if (!usesNativeClaudeAutoReview() || mutablePermissionMode !== 'auto') return;
+      // plan 档优先级高于底层档(SDK 恒在 plan),此处不抢;plan turn 收尾会按
+      // effectiveSdkPermissionMode() 切回,那时判据已回到原生 auto。
+      if (mutablePlanMode || planTurnActive || controlRequestsBlocked()) return;
+      try {
+        await q.setPermissionMode('auto');
+        // 我们刚把 SDK 推离 plan 之外的档位,同步本地跟踪值(此路径下它本应已是 false)。
+        sdkInPlanMode = false;
+        log.debug('native Auto classifier probe: switched SDK back to auto for the new turn');
+      } catch (e) {
+        // 回探失败不阻塞 turn:SDK 仍停在 default,本 turn 继续由 Cindy reviewer 兜底。
+        log.warn('native Auto classifier probe failed — keeping Cindy fallback for this turn', {
+          error: String(e),
+        });
+        nativeAutoReviewTurnFallback = true;
+      }
+    };
     type QueryRuntimeSnapshot = {
       model: string;
       effort: Effort;
@@ -3721,6 +3765,15 @@ export class ClaudeCodeAgent extends BaseAgent {
         }
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
         activeTurnPermissionPolicy = sendOpts?.turnPermissionPolicy ?? null;
+        // 试探性降级只作用于触发它的那一 turn:新 turn 起点先回探原生分类器。必须放在
+        // 下面的 plan 档处理**之前** —— 那些分支会按 effectiveSdkPermissionMode() 推档,
+        // 标记清早一步就能让它们直接推出正确档位,不必额外来一次 control request。
+        //
+        // **先判标记、再 await**,不要图省事写成无条件 await:await 一个即使立即 return 的
+        // async 函数也会多让出一个 microtask tick,而 send 头部的 tick 数是 rewind /
+        // bridge-compact 重建窗口"哪些运行时切换落在窗口内"的判据基础(rewind-runtime-settings
+        // 用例对此敏感,实测会翻车)。没有降级在身时这里必须零开销直通。
+        if (nativeAutoReviewTurnFallback) await restoreNativeAutoReviewForNewTurn();
         // 仅用于诊断日志: 调用方每次 send 都可以带 logTitle (取自 storage 的最新值);
         // 缺省时保留上一次的值 (没传不等于"清空")。
         if (sendOpts?.logTitle !== undefined) lastSendTitle = sendOpts.logTitle;
@@ -4511,9 +4564,20 @@ export class ClaudeCodeAgent extends BaseAgent {
         mutablePermissionMode = newMode;
       },
 
-      async useCindyAutoReviewFallback() {
-        if (nativeAutoReviewUnavailable) return;
-        nativeAutoReviewUnavailable = true;
+      async useCindyAutoReviewFallback(fallbackOpts) {
+        const scope = fallbackOpts?.scope ?? 'session';
+        // 会话级降级是终态(更严):已在该状态下,任何 scope 的重复信号都是幂等 no-op。
+        if (nativeAutoReviewUnavailable) return false;
+        if (scope === 'session') {
+          nativeAutoReviewUnavailable = true;
+          // 终态已覆盖 turn 级语义,清掉以免出现两个标记同时置位的冗余状态。
+          nativeAutoReviewTurnFallback = false;
+        } else {
+          // 本 turn 已降级 → 幂等返回。注意:此时 SDK 档可能仍停在 auto(下方 push 被
+          // plan / rewind 窗口挡掉过),观察器会继续记账,最终由会话级升级再推一次。
+          if (nativeAutoReviewTurnFallback) return false;
+          nativeAutoReviewTurnFallback = true;
+        }
         autoReviewDecisionCache.clear();
         if (
           mutablePermissionMode === 'auto'
@@ -4526,7 +4590,9 @@ export class ClaudeCodeAgent extends BaseAgent {
         log.warn('Claude native Auto reviewer unavailable; keeping Auto with Cindy fallback', {
           providerId: mutableProviderId,
           model: mutableModel,
+          scope,
         });
+        return true;
       },
 
       async setPlanMode(enabled: boolean) {

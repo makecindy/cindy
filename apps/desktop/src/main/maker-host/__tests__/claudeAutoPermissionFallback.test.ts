@@ -7,10 +7,25 @@ import {
   createClaudeAutoPermissionFallbackCoordinator,
   isClaudeAutoClassifierRequest,
   setClaudeAutoClassifierUnavailableListener,
+  type ClaudeAutoClassifierUnavailableSignal,
   type ClaudeAutoPermissionFallbackDeps,
 } from '../claude-auto-permission-fallback.js';
 
 const CLASSIFIER_PREFIX = 'You are a security monitor for autonomous AI coding agents.';
+
+/**
+ * 收集观察器发出的降级信号。issue #1573 后一次瞬时故障会同时产出「turn 级试探性」
+ * 信号流与(达阈值时的)「会话级」终态信号,两者语义完全不同,断言必须按 scope 分开看:
+ * 会话级才是 #596 保护的"改变整个会话行为"的那一步。
+ */
+function collectSignals() {
+  const signals: ClaudeAutoClassifierUnavailableSignal[] = [];
+  setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+  return {
+    all: () => signals,
+    scoped: (scope: 'turn' | 'session') => signals.filter((s) => (s.scope ?? 'session') === scope),
+  };
+}
 
 function requestBody(overrides: Record<string, unknown> = {}): Buffer {
   return Buffer.from(
@@ -39,7 +54,8 @@ function ctx(overrides: Partial<ResponseObserverCtx> = {}): ResponseObserverCtx 
 }
 
 function createDeps(overrides: Partial<ClaudeAutoPermissionFallbackDeps> = {}) {
-  const useCindyAutoReviewFallback = vi.fn(async () => {});
+  // 返回类型显式带上 boolean:真实 handle 用 false 表示"已在该降级状态,幂等 no-op"。
+  const useCindyAutoReviewFallback = vi.fn(async (): Promise<boolean | void> => {});
   const deps: ClaudeAutoPermissionFallbackDeps = {
     getSession: vi.fn(() => ({ agentKind: 'claude-code', useCindyAutoReviewFallback })),
     getSessionMeta: vi.fn(async () => ({ permissionMode: 'auto' as const })),
@@ -120,11 +136,10 @@ describe('Claude Auto classifier request detection', () => {
 });
 
 describe('createClaudeAutoClassifierFailureObserver', () => {
-  it('keeps Auto for a single transient failure burst (one episode)', () => {
+  it('keeps the session on native Auto for a single transient failure burst (one episode)', () => {
     // 一次动作的 SDK retry storm:多个瞬时失败在数秒内到达 → 归并为一个 episode,
-    // 不触发降级(#596 保护的场景)。
-    const listener = vi.fn();
-    setClaudeAutoClassifierUnavailableListener(listener);
+    // 不触发**会话级**降级(#596 保护的场景)。
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -135,12 +150,36 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       expect(observer(ctx({ status }))).toBeUndefined();
     }
 
-    expect(listener).not.toHaveBeenCalled();
+    expect(signals.scoped('session')).toEqual([]);
+  });
+
+  it('tentatively falls back on every sub-threshold transient failure (#1573)', () => {
+    // #1573:阈值以下不再"什么都不做" —— 每一次分类器故障都立刻把当前 turn 交给
+    // Cindy reviewer,否则用户会在攒够 3 段之前连撞 60–90s 的硬拒绝。
+    //
+    // 刻意不按 episode 去重:试探性降级在 turn 边界自动解除,而 turn 边界与 30s 固定桶
+    // 不对齐 —— 同一段内用户连发两条消息时,第二条已回探到原生,漏发信号就等于让这一
+    // turn 重新裸奔。重复信号的收敛交给 coordinator 与 agent 侧的幂等层。
+    const signals = collectSignals();
+    let t = 0;
+    const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
+      now: () => t,
+    });
+
+    for (const status of [429, 503, 408]) {
+      t += 1000;
+      observer(ctx({ status }));
+    }
+
+    expect(signals.all()).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 429, scope: 'turn' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 503, scope: 'turn' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 408, scope: 'turn' },
+    ]);
   });
 
   it('escalates persistent transient failures after 3 episodes without a success (#758)', () => {
-    const signals: unknown[] = [];
-    setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -149,22 +188,24 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 429 })); // episode 1
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 2
-    expect(signals).toEqual([]);
+    expect(signals.scoped('session')).toEqual([]);
+    expect(signals.scoped('turn')).toHaveLength(2);
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 3 → 升级
-    expect(signals).toEqual([
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 429 },
+    expect(signals.scoped('session')).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 429, scope: 'session' },
     ]);
 
-    // 升级后记账清零:紧接着的失败重新从 episode 1 数起,不会连环降级。
+    // 升级后记账清零:紧接着的失败重新从 episode 1 数起,不会连环升级
+    // (但仍会继续试探性兜住每个 turn)。
     t += 31_000;
     observer(ctx({ status: 429 }));
-    expect(signals).toHaveLength(1);
+    expect(signals.scoped('session')).toHaveLength(1);
+    expect(signals.scoped('turn')).toHaveLength(3);
   });
 
   it('resets the episode counter when a classifier request succeeds in between', () => {
-    const listener = vi.fn();
-    setClaudeAutoClassifierUnavailableListener(listener);
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -179,7 +220,7 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 2
 
-    expect(listener).not.toHaveBeenCalled();
+    expect(signals.scoped('session')).toEqual([]);
 
     // 恢复清零只认分类器请求本身:普通主 turn 的成功响应不得清零其它会话记账。
     t += 31_000;
@@ -187,13 +228,12 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 200, requestBody: Buffer.from('{bad json') })); // 有记账时坏 body 也不得抛
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 3 → 升级(前两段仍在账上)
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(signals.scoped('session')).toHaveLength(1);
   });
 
   it('does not treat 3xx classifier responses as recovery', () => {
     // 3xx 不是分类器真正给出 verdict:若清账,「上游持续 3xx」的故障会永不升级。
-    const listener = vi.fn();
-    setClaudeAutoClassifierUnavailableListener(listener);
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -205,12 +245,11 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 302 })); // 分类器请求被重定向 → 不得清账
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 3 → 升级(证明前两段仍在账上)
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(signals.scoped('session')).toHaveLength(1);
   });
 
   it('expires episodes outside the 10-minute window', () => {
-    const listener = vi.fn();
-    setClaudeAutoClassifierUnavailableListener(listener);
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -223,15 +262,14 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 429 })); // 只剩这一段
     t += 31_000;
     observer(ctx({ status: 429 })); // 第二段
-    expect(listener).not.toHaveBeenCalled();
+    expect(signals.scoped('session')).toEqual([]);
     t += 31_000;
     observer(ctx({ status: 429 })); // 第三段 → 升级
-    expect(listener).toHaveBeenCalledTimes(1);
+    expect(signals.scoped('session')).toHaveLength(1);
   });
 
   it('clears pending transient episodes when a deterministic failure downgrades immediately', () => {
-    const signals: unknown[] = [];
-    setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(() => 'session-1', {
       now: () => t,
@@ -240,9 +278,9 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 429 })); // episode 1
     t += 31_000;
     observer(ctx({ status: 429 })); // episode 2
-    observer(ctx({ status: 401 })); // 确定性错误 → 立即降级,同时清零瞬时记账
-    expect(signals).toEqual([
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
+    observer(ctx({ status: 401 })); // 确定性错误 → 立即会话级降级,同时清零瞬时记账
+    expect(signals.scoped('session')).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 401, scope: 'session' },
     ]);
 
     // 用户重开 Auto 后:残账已清,单次偶发失败不得被推过阈值,要重新数满 3 段。
@@ -250,15 +288,14 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     observer(ctx({ status: 429 }));
     t += 31_000;
     observer(ctx({ status: 429 }));
-    expect(signals).toHaveLength(1);
+    expect(signals.scoped('session')).toHaveLength(1);
     t += 31_000;
     observer(ctx({ status: 429 }));
-    expect(signals).toHaveLength(2);
+    expect(signals.scoped('session')).toHaveLength(2);
   });
 
   it('tracks transient episodes per session independently', () => {
-    const listener = vi.fn();
-    setClaudeAutoClassifierUnavailableListener(listener);
+    const signals = collectSignals();
     let t = 0;
     const observer = createClaudeAutoClassifierFailureObserver(
       (sdkId) => (sdkId === 'sdk-1' ? 'session-1' : 'session-2'),
@@ -271,12 +308,14 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       observer(ctx({ status: 429, requestHeaders: { 'x-claude-code-session-id': 'sdk-2' } }));
       t += 31_000;
     }
-    expect(listener).not.toHaveBeenCalled();
+    expect(signals.scoped('session')).toEqual([]);
+    // 试探性降级是 per-session 各自发的,互不影响。
+    expect(signals.scoped('turn').filter((s) => s.sessionId === 'session-1')).toHaveLength(2);
+    expect(signals.scoped('turn').filter((s) => s.sessionId === 'session-2')).toHaveLength(2);
   });
 
   it('reports non-transient classifier failures with the resolved business session id', () => {
-    const signals: unknown[] = [];
-    setClaudeAutoClassifierUnavailableListener((signal) => signals.push(signal));
+    const signals = collectSignals();
     const observer = createClaudeAutoClassifierFailureObserver((sdkId) =>
       sdkId === 'sdk-1' ? 'session-1' : null,
     );
@@ -287,12 +326,13 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
     expect(observer(ctx({ status: 404 }))).toBeUndefined();
     expect(observer(ctx({ status: 422 }))).toBeUndefined();
 
-    expect(signals).toEqual([
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 400 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 401 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 403 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 404 },
-      { sessionId: 'session-1', agentKind: 'claude-code', status: 422 },
+    // 确定性错误一律会话级:重试不会让它变好,试探性降级只会让用户每个 turn 各撞一次。
+    expect(signals.all()).toEqual([
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 400, scope: 'session' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 401, scope: 'session' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 403, scope: 'session' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 404, scope: 'session' },
+      { sessionId: 'session-1', agentKind: 'claude-code', status: 422, scope: 'session' },
     ]);
   });
 
@@ -316,12 +356,91 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     const { deps, useCindyAutoReviewFallback } = createDeps();
     const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
 
+    // legacy proxy signal 不带 scope → 仍按会话级终态处理(旧行为不变)。
     await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(true);
-    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(1);
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledWith({ scope: 'session' });
     expect(deps.getSessionMeta).toHaveBeenCalledWith('session-1');
     expect(deps.logger.info).toHaveBeenCalledWith(
       'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
-      expect.objectContaining({ sessionId: 'session-1', status: 429 }),
+      expect.objectContaining({ sessionId: 'session-1', status: 429, scope: 'session' }),
+    );
+  });
+
+  it('forwards a turn-scoped signal as a tentative fallback and counts it separately (#1573)', async () => {
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await expect(
+      fallback({ sessionId: 'session-1', status: 429, scope: 'turn' }),
+    ).resolves.toBe(true);
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledWith({ scope: 'turn' });
+    // 试探性降级用独立文案 + 独立计数:排障时要能一眼分出"上游抖动"与"持续故障"。
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      'auto permission classifier unavailable; this turn falls back to Cindy review',
+      expect.objectContaining({
+        scope: 'turn',
+        counters: expect.objectContaining({ switched: 1, switchedTentative: 1 }),
+      }),
+    );
+
+    await expect(
+      fallback({ sessionId: 'session-1', status: 429, scope: 'session' }),
+    ).resolves.toBe(true);
+    expect(deps.logger.info).toHaveBeenLastCalledWith(
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+      expect.objectContaining({
+        scope: 'session',
+        counters: expect.objectContaining({ switched: 2, switchedTentative: 1 }),
+      }),
+    );
+  });
+
+  it('counts an idempotent runtime no-op separately instead of inflating switched', async () => {
+    // 观察器对同一 turn 的 retry storm 会连发 turn 级信号(刻意不去重),agent 侧只有第一条
+    // 真正切档、其余返回 false。若把它们都算进 switched,日志里一次抖动会变成"降级十几次",
+    // 而 counters 是这个模块唯一的排障通道。
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    useCindyAutoReviewFallback.mockResolvedValueOnce(true).mockResolvedValue(false);
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+    const signal = { sessionId: 'session-1', status: 429, scope: 'turn' as const };
+
+    await expect(fallback(signal)).resolves.toBe(true);
+    await expect(fallback(signal)).resolves.toBe(false);
+    await expect(fallback(signal)).resolves.toBe(false);
+
+    expect(useCindyAutoReviewFallback).toHaveBeenCalledTimes(3);
+    // 重复信号不重复打日志 —— 否则一次上游抖动在日志里会读成"降级了三次"。
+    expect(deps.logger.info).toHaveBeenCalledTimes(1);
+
+    // 下一次真正切档(升级为会话级)时回看计数:那两条被吞的信号落在 skippedAlreadyFallback,
+    // switched 只记真正改变了运行期 reviewer 的两次。
+    useCindyAutoReviewFallback.mockResolvedValueOnce(true);
+    await expect(
+      fallback({ sessionId: 'session-1', status: 429, scope: 'session' }),
+    ).resolves.toBe(true);
+    expect(deps.logger.info).toHaveBeenLastCalledWith(
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+      expect.objectContaining({
+        counters: expect.objectContaining({
+          detected: 4,
+          switched: 2,
+          switchedTentative: 1,
+          skippedAlreadyFallback: 2,
+        }),
+      }),
+    );
+  });
+
+  it('treats a runtime switch that returns no value as a successful switch', async () => {
+    // 兼容不返回值的实现(旧 handle / 其它 agent):只有显式 false 才算"没切"。
+    const { deps, useCindyAutoReviewFallback } = createDeps();
+    useCindyAutoReviewFallback.mockResolvedValue(undefined);
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(true);
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      'auto permission classifier unavailable; session kept on Auto with Cindy fallback',
+      expect.objectContaining({ counters: expect.objectContaining({ switched: 1 }) }),
     );
   });
 
