@@ -4337,6 +4337,12 @@ export class CodexAgent extends BaseAgent {
     let reconnectStallTimer: ReturnType<typeof setTimeout> | null = null;
     let reconnectStallTurnId: string | null = null;
     let reconnectStallTurnGeneration = 0;
+    // `codex_reconnect_stalled` is surfaced before the bounded interrupt
+    // handshake so Desktop can show the reconnect state immediately. Keep the
+    // provider turn busy until that handshake settles; otherwise the Desktop
+    // auto-resume backoff can admit a new turn while the old server turn is
+    // still running (PR #1410).
+    let reconnectStallCleanupTurnId: string | null = null;
     /** 还需要清醒等待的重连额度；系统挂起的片段不扣除。 */
     let reconnectStallRemainingMs = 0;
     /** 当前重连计时分片的起始壁钟时刻，用于识别系统挂起。 */
@@ -4512,7 +4518,12 @@ export class CodexAgent extends BaseAgent {
     }
 
     function armReconnectStall(turnId = currentTurnId): void {
-      if (closed || (!isTurnInFlight && !isTurnStartPending) || !turnId) return;
+      if (
+        closed ||
+        reconnectStallCleanupTurnId !== null ||
+        (!isTurnInFlight && !isTurnStartPending) ||
+        !turnId
+      ) return;
       // 同一 turn 的后续 `2/5`、`3/5` 只更新 UI，不重置整个重连序列的 deadline。
       if (reconnectStallTimer || reconnectStallRemainingMs > 0) return;
       reconnectStallTurnId = turnId;
@@ -4587,6 +4598,13 @@ export class CodexAgent extends BaseAgent {
       const msSinceLast =
         upstreamIdleLastEventAt > 0 ? Date.now() - upstreamIdleLastEventAt : null;
       const turnId = currentTurnId ?? pendingTurnId;
+      const deferTurnCleanupUntilInterrupt = opts?.reason === 'codex_reconnect_stalled';
+      if (deferTurnCleanupUntilInterrupt && !pendingTurnId && turnId) {
+        // Keep Session.isTurnRunning() true until the interrupt ACK (or the
+        // close/retire fallback) settles. Desktop may already have received
+        // the terminal error and queued a continuation by then.
+        reconnectStallCleanupTurnId = turnId;
+      }
       log.warn(opts?.logLabel ?? 'upstream-response-idle watchdog tripped — interrupting current turn', {
         idleMs,
         threadId,
@@ -4665,57 +4683,44 @@ export class CodexAgent extends BaseAgent {
       }
       resetUpstreamIdleForTurnEnd();
       if (!turnId) return;
-      // **先把本地 turn 状态收干净,再去 interrupt**(review #944 第二轮 P1)。
-      // interruptTurnForPermissionTighten 在 app-server 彻底哑火时会两次 ack 超时
-      // 后放弃,而它按设计不动 isTurnInFlight / currentTurnId —— 那对权限收紧场景是
-      // 对的(turn 还在正常跑),但对这里是致命的:我们刚推了终态 error 让上层收口,
-      // 若本地仍认为 turn 在跑,handle.isTurnRunning() 恒 true,之后每一条 send 都被
-      // in-flight guard 拒掉,会话彻底不可用 —— watchdog 报告"已恢复"实际没有。
-      //
-      // 合成一次本地 turn 收口:上面已立墓碑,故走 suppressTerminalUi 分支,只清
-      // isTurnInFlight / currentTurnId / plan 态并做 usage 收尾,不重复推终态 UI。
-      // 同步完成,会话立刻恢复可发。
-      handleTurnCompleted({
-        threadId,
-        turn: { id: turnId, status: 'failed' },
-      } as TurnCompletedParams);
-      // 再让 daemon 侧那个 turn 也停下。**必须看结果**:上面的本地收口把
-      // isTurnInFlight 清成 false,于是 handle.isTurnRunning() 变 false —— Session 层
-      // 的 recoverIfTurnStillRunning 正是以它为判据,现在会认为"abort 生效了,会话
-      // 仍可用"而放过这个 host。若中断其实没成功,这个已经哑火 30 分钟的 app-server
-      // 就被留下来给下一条 send 复用:要么再次超时,要么撞上服务端那个还在跑的 turn
-      // (review #944 第五轮 P1)。
-      //
-      // 所以中断确认失败 = daemon 确诊不可用 → 自己 close():eventQueue.end() 让
-      // Session 的事件循环自然收尾 → setStatus('closed') → Maker 摘掉 activeSessions
-      // → 下一条 send 走 lazy create 重建 handle 并按 sdkSessionId resume。这条路径
-      // 与 Session.recoverIfTurnStillRunning 用的是同一套恢复机制(见 session.ts
-      // "handle.events() 自然结束"注释),不需要各 agent 另造一套。
-      // 中断成功时什么都不做:daemon 既然 ack 了就还活着,会话继续可用。
-      // 在进入 interrupt 等待窗口**之前**取一次快照:窗口里起过的新 turn 即使已经正常
-      // 结束(瞬时状态被复位),也要靠它认出来(见 turnStartGeneration 声明处)。
+      // 普通 upstream-idle watchdog 仍立即收本地 turn；只有明确的重连停滞
+      // 路径延后这一步，直到 interrupt ACK 成功。
+      if (!deferTurnCleanupUntilInterrupt) {
+        handleTurnCompleted({
+          threadId,
+          turn: { id: turnId, status: 'failed' },
+        } as TurnCompletedParams);
+      }
+      // 再让 daemon 侧那个 turn 也停下。ACK 成功时才清本地 busy；两次 ACK
+      // 都失败则关闭当前 handle 并退役共享 host，期间排队的自动续跑不会
+      // 进入旧 transport。
       const turnGenBeforeInterrupt = turnStartGeneration;
       void (async () => {
         const interrupted = await interruptTurnForPermissionTighten(turnId, {
           suppressFailureEvent: true,
         });
-        if (interrupted || closed) return;
-        // **两次 ack 要等 20s,期间用户完全可能已经起了新 turn** —— 上面那次合成收口把
-        // isTurnInFlight 清成了 false,所以新的 send 不会被 in-flight guard 拒掉。此时
-        // 无条件 close 会掐死一条完全健康的新 turn,紧随其后的 host 退役还会连带终止同
-        // host 上的其它会话。isCurrentHost 只认得出"host 被换掉",认不出"同一 handle 上
-        // 起了新 turn"(review #944 第十七轮 P1;与第七轮 Session 的 turnGeneration、
-        // 第九轮的 host 身份闸是同一类错误:善后动作没绑定到发起它的那个实体)。
-        //
-        // 判据有两半,缺一不可:
-        // ① isTurnInFlight / currentTurnId —— 我们自己那次合成收口已把它们清空,所以
-        //    非空就一定是新活儿(新 turn 此刻仍在跑)。
-        // ② turnStartGeneration 与窗口前的快照不一致 —— 新 turn 在这 20s 里起来又**正常
-        //    结束**时,①的两个瞬时量会被 handleTurnCompleted 双双复位,只看①会误判成
-        //    "没人用了",照样关掉一个刚刚证明自己健康的 host,并连带退役同 host 上的其它
-        //    会话(review #944 第十八轮 P1)。单调计数器答得了"期间有没有发生过新活儿"。
-        // 两半都不成立才继续善后。留着这个 host 的风险由新 turn 自己的看门狗兜。
-        if (isTurnInFlight || currentTurnId !== null || turnStartGeneration !== turnGenBeforeInterrupt) {
+        if (interrupted) {
+          if (!closed && reconnectStallCleanupTurnId === turnId) {
+            reconnectStallCleanupTurnId = null;
+            handleTurnCompleted({
+              threadId,
+              turn: { id: turnId, status: 'failed' },
+            } as TurnCompletedParams);
+          } else {
+            reconnectStallCleanupTurnId = null;
+          }
+          return;
+        }
+        if (closed) {
+          reconnectStallCleanupTurnId = null;
+          return;
+        }
+        // 重连路径在等待窗口内仍保持原 turn busy；generation / turn 身份复核
+        // 仍保留，防止其它内部路径真的换了 turn 后误关健康 handle。
+        const reconnectCleanupTurnChanged = deferTurnCleanupUntilInterrupt
+          ? !isTurnInFlight || currentTurnId !== turnId || turnStartGeneration !== turnGenBeforeInterrupt
+          : isTurnInFlight || currentTurnId !== null || turnStartGeneration !== turnGenBeforeInterrupt;
+        if (reconnectCleanupTurnChanged) {
           log.warn(
             'upstream-idle watchdog: this handle served a newer turn during the interrupt window — skipping close/retire',
             {
@@ -4726,6 +4731,7 @@ export class CodexAgent extends BaseAgent {
               turnStartGeneration,
             },
           );
+          reconnectStallCleanupTurnId = null;
           return;
         }
         // 走到这里有两种可能,处置相同:两次 ack 都超时(daemon 哑火),或 host 已被
@@ -4755,6 +4761,8 @@ export class CodexAgent extends BaseAgent {
           );
         } catch (e) {
           log.warn('upstream-idle watchdog host retire threw', { error: String(e) });
+        } finally {
+          reconnectStallCleanupTurnId = null;
         }
       })();
     }
@@ -6053,6 +6061,16 @@ export class CodexAgent extends BaseAgent {
 
     function handleTurnCompleted(params: TurnCompletedParams): void {
       const turn = params.turn;
+      if (reconnectStallCleanupTurnId === turn.id) {
+        // The watchdog already published the terminal error and is still
+        // waiting for turn/interrupt. A late turn/completed must not clear
+        // the local busy guard before the ACK is known.
+        log.debug('deferring reconnect-stall turn completion until interrupt settles', {
+          threadId,
+          turnId: turn.id,
+        });
+        return;
+      }
       if (reconnectStallTurnId === turn.id) clearReconnectStall();
       let recoveryState = overloadRetry;
       let pendingRecovery =

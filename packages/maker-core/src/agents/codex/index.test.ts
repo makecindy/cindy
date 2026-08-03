@@ -16710,19 +16710,28 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     vi.unstubAllEnvs();
   });
 
-  function installReconnectHost(agent: CodexAgent, interruptHangs = false) {
+  function installReconnectHost(
+    agent: CodexAgent,
+    interruptHangs = false,
+    interruptAck?: Promise<unknown>,
+  ) {
     let turnSeq = 0;
     return installFakeHost(agent, (method) => {
       if (method === Method.TurnStart) return { turn: { id: `turn-${++turnSeq}` } };
       if (method === Method.TurnInterrupt) {
+        if (interruptAck) return interruptAck;
         return interruptHangs ? new Promise<never>(() => {}) : {};
       }
       return undefined;
     });
   }
 
-  async function startReconnectTurn(agent: CodexAgent, sessionId: string) {
-    const host = installReconnectHost(agent);
+  async function startReconnectTurn(
+    agent: CodexAgent,
+    sessionId: string,
+    interruptAck?: Promise<unknown>,
+  ) {
+    const host = installReconnectHost(agent, false, interruptAck);
     const handle = await agent.startSession({ sessionId, model: 'gpt-5.4', workingDir: '/repo' });
     const seen: AgentEvent[] = [];
     void (async () => {
@@ -16862,6 +16871,46 @@ describe('CodexAgent reconnect-stall watchdog', () => {
           (event.data as { reason?: unknown }).reason === 'codex_reconnect_stalled',
       )).toBe(false);
       expect(handle.isTurnRunning?.()).toBe(true);
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('重连停滞的 interrupt ACK 未到前保持 busy，迟到 completed 不得提前放行续跑', async () => {
+    vi.useFakeTimers();
+    try {
+      const interruptAck = deferred<Record<string, never>>();
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-deferred-ack',
+        interruptAck.promise,
+      );
+      emitReconnect(handlers, 1);
+
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      // Codex may report the old turn's terminal notification before the
+      // interrupt RPC response. It must not release the admission guard.
+      handlers.turnCompleted?.({
+        threadId: 'start-thread-id',
+        turn: { id: 'turn-1', status: 'failed' },
+      } as never);
+      expect(handle.isTurnRunning?.()).toBe(true);
+
+      interruptAck.resolve({});
+      await vi.advanceTimersByTimeAsync(0);
+      expect(handle.isTurnRunning?.()).toBe(false);
       await handle.close();
     } finally {
       vi.useRealTimers();
