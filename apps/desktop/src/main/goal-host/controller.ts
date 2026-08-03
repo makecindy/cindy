@@ -806,6 +806,10 @@ export class GoalController {
     this.clarificationApplied.delete(sessionId);
     this.consecutiveOverloadTurns.delete(sessionId);
     this.cancelUsageResume(sessionId);
+    // 只中断 GoalController 自己发起的 turn。目标仍挂着时，用户可能已经让一条普通
+    // 消息进入队列；clear 必须保留它，并在旧 goal turn 终止后让 coordinator 正常
+    // drain。反过来，若当前跑的是用户 turn，清目标不应误停用户正在做的工作。
+    const hasActiveGoalTurn = this.goalTurnsInFlight.has(sessionId);
     const previousBoundary = this.turns.get(sessionId);
     this.stopSession(sessionId);
     const clearBoundary = freshTurn(
@@ -814,6 +818,21 @@ export class GoalController {
       previousBoundary?.pendingCompletion ?? null,
     );
     this.turns.set(sessionId, clearBoundary);
+    if (hasActiveGoalTurn) {
+      try {
+        // detach listener / 换 cancelled owner 必须早于 abort。否则 abort 的终态事件可能
+        // 被旧 Goal listener 消费，并与下面的 clear 持久化并发重建状态。生产依赖走
+        // input coordinator 的 Stop 边界，同时收口 vendor、输入锁和迟到事件。
+        this.deps.stopActiveGoalTurn(sessionId);
+      } catch (error) {
+        // 删除持久目标比中断回调更重要：即便停止协调器异常，也不能把 active 行留到
+        // 下次启动继续诈尸。异常留日志，存储 clear 仍继续执行。
+        this.deps.logger.warn('[goal] failed to stop active turn while clearing goal', {
+          sessionId,
+          error: String(error),
+        });
+      }
+    }
     await this.awaitPendingLifecycle(clearBoundary);
     if (this.turns.get(sessionId) !== clearBoundary) return;
     await this.trackPersistence(clearBoundary, this.deps.storage.clear(sessionId));
@@ -1753,7 +1772,16 @@ export class GoalController {
         : { type: 'user' as const, content };
       const result = await session.send(
         outgoing as { type: 'user'; content: string },
-        { origin: { kind: 'goal', goalSessionId: sessionId }, planMode: false },
+        {
+          origin: { kind: 'goal', goalSessionId: sessionId },
+          planMode: false,
+          // Session.send 只在 vendor dispatch 前的最后一个同步边界调用它。不能等
+          // send Promise 返回后才登记：派发调用尚未返回时用户点清除，clearGoal 必须
+          // 已经知道这个 turn 属于目标模式，才能立即走 Stop 边界。
+          onDispatching: () => {
+            if (isCurrentDispatch()) this.goalTurnsInFlight.add(sessionId);
+          },
+        },
       );
       if (pendingHandoff && result.accepted) {
         agentHandoffPending.consume(sessionId);

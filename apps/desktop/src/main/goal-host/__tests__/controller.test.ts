@@ -223,10 +223,11 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string } },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
+    opts?.onDispatching?.();
     return { accepted: true };
   }
 
@@ -331,6 +332,7 @@ function makeController(depOverrides: Partial<GoalControllerDeps> = {}) {
     getSession: (id) => (id === 's1' ? session : undefined),
     ensureSession: async (id) => (hydratable && id === 's1' ? session : undefined),
     isSessionInTurn: () => false,
+    stopActiveGoalTurn: () => {},
     emitStatus: (u) => updates.push(u),
     getDefaults: () => ({ ...DEFAULT_LIMITS }),
     persistGoalSettingsOverride: (l) => persistedLimits.push(l),
@@ -530,6 +532,7 @@ describe('GoalController', () => {
       getSession: () => undefined, // dormant:此刻没有 live session
       ensureSession: async () => codexSession, // resume 出真正的 Codex 会话
       isSessionInTurn: () => false,
+      stopActiveGoalTurn: () => {},
       emitStatus: () => {},
       getDefaults: () => ({ ...DEFAULT_LIMITS }),
       persistGoalSettingsOverride: () => {},
@@ -2212,6 +2215,73 @@ describe('GoalController', () => {
     await h.controller.clearGoal('s1');
     expect(await h.storage.get('s1')).toBeNull();
     expect(h.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
+  it('clearGoal interrupts the in-flight goal turn before removing the goal', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    await startGoal(local);
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).toHaveBeenCalledOnce();
+    expect(stopActiveGoalTurn).toHaveBeenCalledWith('s1');
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
+  });
+
+  it('clearGoal interrupts a goal turn after vendor dispatch starts but before send resolves', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releaseSend!: () => void;
+    const sendPending = new Promise<void>((resolve) => {
+      releaseSend = resolve;
+    });
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      opts?.onDispatching?.();
+      await sendPending;
+      return { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).toHaveBeenCalledOnce();
+    releaseSend();
+    await setPromise;
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal does not interrupt a non-goal turn', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    await local.storage.set(seededGoal());
+    local.session.running = true;
+
+    await local.controller.clearGoal('s1');
+
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal still removes persisted state when stopping the goal turn throws', async () => {
+    const local = makeController({
+      stopActiveGoalTurn: () => {
+        throw new Error('stop coordinator unavailable');
+      },
+    });
+    await startGoal(local);
+
+    await expect(local.controller.clearGoal('s1')).resolves.toBeUndefined();
+
+    expect(await local.storage.get('s1')).toBeNull();
+    expect(local.updates.at(-1)).toEqual({ sessionId: 's1', goal: null });
   });
 
   // ── updateGoal(纯代码改目标 / 上限,不写默认 override) ──
