@@ -68,7 +68,10 @@ vi.mock('@/features/feature-context', () => ({
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ dataOwnerId: authState.dataOwnerId }),
 }));
-vi.mock('react-router-dom', () => ({
+// 只覆写 useSearchParams(深链 ?intent=topup 的读写口),其余导出保留真实实现 ——
+// 全量替换会让后续用到 Link / useNavigate 等导出的用例拿到 undefined 才炸在别处。
+vi.mock('react-router-dom', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('react-router-dom')>()),
   useSearchParams: () => [
     new URLSearchParams(routerState.search),
     (next: URLSearchParams) => {

@@ -3345,6 +3345,7 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                   onSwitchToClaudeSubscription={
                     canSwitchToClaudeSubscription
                       ? handleSwitchToClaudeSubscription

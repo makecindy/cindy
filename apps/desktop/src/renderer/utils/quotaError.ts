@@ -15,9 +15,14 @@
 
 import { matchesQuotaExhaustedText } from '../../shared/providerErrors';
 
-/** 裸状态码兜底：402 常以 `HTTP 402` / `status 402` 之类的形态透出到 message。
- *  与 overloadError.ts 认 `\b529\b` 同规 —— 结构化信息丢了以后只剩状态码可用。 */
-const HTTP_402_RE = /\b402\b/;
+/**
+ * 状态码兜底:402 常以 `HTTP 402` / `status 402` / `code: 402` / `(402)` /
+ * `402 Payment Required` 之类的形态透出到 message。只认**带状态码上下文**的 402 ——
+ * 裸 `\b402\b` 会把正文里恰好出现的独立数字(报价、行号、金额)也判成额度耗尽,
+ * 而这条判定会改写错误文案并挂上充值入口,误伤代价高。
+ */
+const HTTP_402_RE =
+  /(?:\b(?:http|status|code|error)\b[^0-9a-z]{0,10}402\b|\(\s*402\s*\)|\b402\s+payment\s+required\b)/i;
 
 export function isQuotaExhaustedErrorMessage(message: string): boolean {
   return matchesQuotaExhaustedText(message) || HTTP_402_RE.test(message);

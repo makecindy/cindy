@@ -144,4 +144,24 @@ describe('ErrorBanner — Cindy AI 余额不足导流', () => {
     expect(screen.queryByText('chat.errorBanner.gatewayQuotaExhausted')).toBeNull();
     expect(screen.queryByTitle('chat.errorBanner.viewBalanceTitle')).toBeNull();
   });
+
+  it('持久化错误行(ErrorTailErrorBanner)同样透传「查看余额」—— 重载后恢复的历史余额错误不退化', async () => {
+    const { ErrorTailErrorBanner } = await import('@/components/chat/InterruptedTurnBanner');
+    const onViewBalance = vi.fn();
+
+    render(
+      createElement(ErrorTailErrorBanner, {
+        errorText: QUOTA_ERROR,
+        onContinue: vi.fn(),
+        onDismiss: vi.fn(),
+        agentKind: 'cc',
+        providerId: 'xd',
+        onViewBalance,
+      }),
+    );
+
+    expect(screen.getByText('chat.errorBanner.gatewayQuotaExhausted')).toBeTruthy();
+    fireEvent.click(screen.getByTitle('chat.errorBanner.viewBalanceTitle'));
+    expect(onViewBalance).toHaveBeenCalledTimes(1);
+  });
 });
