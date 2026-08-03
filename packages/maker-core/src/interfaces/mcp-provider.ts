@@ -16,6 +16,13 @@ export interface McpProviderContext {
    */
   sessionId?: string;
   /**
+   * Maker 为本次内存 Session 实例铸造的唯一代号。business sessionId 可在
+   * close/rebuild 后复用；权限相关 MCP 不得只凭 sessionId 借用新实例状态。
+   * 宿主可把它作为 opaque route identity 放进 harness 的本地 MCP URL，
+   * 但不得下发成模型或插件可控的工具参数。
+   */
+  sessionInstanceId?: string;
+  /**
    * 返回当前 tool-call 绑定的真实 session ctx。
    *
    * Claude in-process MCP 通常直接闭包绑定 per-session ctx；Codex HTTP bridge

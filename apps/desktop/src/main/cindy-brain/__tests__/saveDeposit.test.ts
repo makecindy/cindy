@@ -105,7 +105,14 @@ describe('SaveDepositVault userGranted 旁路(workdir 外确认卡通过后)', (
     try {
       const vault = new SaveDepositVault();
       expect(vault.deposit({ ghostId: 'g1', dirAbs: outside, workdirAbs: workdir }).ok).toBe(false);
-      const r = vault.deposit({ ghostId: 'g1', dirAbs: outside, workdirAbs: workdir, userGranted: true });
+      const expectedRealPath = await fs.promises.realpath(outside);
+      const r = vault.deposit({
+        ghostId: 'g1',
+        dirAbs: expectedRealPath,
+        workdirAbs: workdir,
+        userGranted: true,
+        expectedRealPath,
+      });
       expect(r.ok).toBe(true);
       if (r.ok) {
         const written = await vault.write('g1', r.receipt.token, 'a.txt', new TextEncoder().encode('hi'));
@@ -121,5 +128,76 @@ describe('SaveDepositVault userGranted 旁路(workdir 外确认卡通过后)', (
     const vault = new SaveDepositVault();
     expect(vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: null }).ok).toBe(false);
     expect(vault.deposit({ ghostId: 'g1', dirAbs: saveDir, workdirAbs: null, userGranted: true }).ok).toBe(true);
+  });
+
+  it('授权后的 canonical 路径被换成 symlink 时拒绝出票', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'save-approved-dir-'));
+    try {
+      const approved = path.join(root, 'approved');
+      const replacement = path.join(root, 'replacement');
+      await fs.promises.mkdir(approved);
+      await fs.promises.mkdir(replacement);
+      const expectedRealPath = await fs.promises.realpath(approved);
+      const replacementRealPath = await fs.promises.realpath(replacement);
+      const moved = path.join(path.dirname(expectedRealPath), 'approved-moved');
+      await fs.promises.rename(expectedRealPath, moved);
+      try {
+        await fs.promises.symlink(
+          replacementRealPath,
+          expectedRealPath,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch {
+        return;
+      }
+
+      const result = new SaveDepositVault().deposit({
+        ghostId: 'g1',
+        dirAbs: expectedRealPath,
+        workdirAbs: workdir,
+        userGranted: true,
+        expectedRealPath,
+      });
+
+      expect(result).toEqual({ ok: false, message: '路径在授权后发生变化，请重新确认' });
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it('出票后目标根被换成外部 symlink:write 拒绝且不在外部落盘', async () => {
+    const root = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'save-ticket-swap-'));
+    try {
+      const approved = path.join(root, 'approved');
+      const outside = path.join(root, 'outside');
+      await fs.promises.mkdir(approved);
+      await fs.promises.mkdir(outside);
+      const vault = new SaveDepositVault();
+      const deposited = vault.deposit({
+        ghostId: 'g1',
+        dirAbs: approved,
+        workdirAbs: workdir,
+        userGranted: true,
+      });
+      if (!deposited.ok) throw new Error('deposit failed');
+
+      await fs.promises.rename(approved, `${approved}-moved`);
+      try {
+        await fs.promises.symlink(
+          outside,
+          approved,
+          process.platform === 'win32' ? 'junction' : 'dir',
+        );
+      } catch {
+        return;
+      }
+
+      await expect(
+        vault.write('g1', deposited.receipt.token, 'escaped.txt', new TextEncoder().encode('no')),
+      ).resolves.toBeNull();
+      await expect(fs.promises.stat(path.join(outside, 'escaped.txt'))).rejects.toThrow();
+    } finally {
+      await fs.promises.rm(root, { recursive: true, force: true });
+    }
   });
 });

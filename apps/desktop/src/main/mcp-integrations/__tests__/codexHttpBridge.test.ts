@@ -8,6 +8,7 @@ import {
   selectRemoteInjectableServerNames,
   startCodexHttpBridge,
   type CodexHttpBridge,
+  withMcpRouteIdentity,
 } from '../codexHttpBridge.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from '../codexBuiltinToolPolicy.js';
 
@@ -37,6 +38,19 @@ function createTestServer(): McpServer {
         {
           type: 'text' as const,
           text: getLiziMcpSessionContext()?.sessionId ?? 'no-session',
+        },
+      ],
+    }),
+  );
+  server.tool(
+    'current_instance',
+    'Return the active lizi MCP session context instance id.',
+    {},
+    async () => ({
+      content: [
+        {
+          type: 'text' as const,
+          text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
         },
       ],
     }),
@@ -111,6 +125,25 @@ describe('remote injection shared pure functions (R4 P3)', () => {
     expect(computeRemoteMcpFingerprint({ ...base, token: 'tok2', serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
     expect(computeRemoteMcpFingerprint({ ...base, bridgeInstanceId: 'b2', serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
     expect(computeRemoteMcpFingerprint({ ...base, remotePort: 47922, serverNames: ['cindy_orca', 'cindy_memory'] })).not.toBe(fp);
+    expect(computeRemoteMcpFingerprint({
+      ...base,
+      serverNames: ['cindy_orca', 'cindy_memory'],
+      sessionInstanceId: 'instance-1',
+    })).not.toBe(computeRemoteMcpFingerprint({
+      ...base,
+      serverNames: ['cindy_orca', 'cindy_memory'],
+      sessionInstanceId: 'instance-2',
+    }));
+  });
+
+  it('withMcpRouteIdentity preserves the base route and encodes opaque identity', () => {
+    const result = new URL(withMcpRouteIdentity('http://127.0.0.1:47921/mcp/cindy_orca', {
+      sessionId: 'session / 1',
+      sessionInstanceId: 'instance?1',
+    }));
+    expect(result.pathname).toBe('/mcp/cindy_orca');
+    expect(result.searchParams.get('session')).toBe('session / 1');
+    expect(result.searchParams.get('instance')).toBe('instance?1');
   });
 });
 
@@ -242,6 +275,92 @@ describe('codexHttpBridge', () => {
       result: {
         content: [{ type: 'text', text: 'session-a' }],
       },
+    });
+  });
+
+  it('binds local Codex tool calls to the registered Session instance', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_test: createTestServer },
+      logger: noopLogger(),
+    });
+    bridge.registerThreadContext('thread-instance', {
+      agentKind: 'codex',
+      sessionId: 'session-instance',
+      sessionInstanceId: 'instance-current',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+
+    const headers = {
+      authorization: `Bearer ${bridge.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const activeUrl = withMcpRouteIdentity(bridge.url('cindy_test'), {
+      sessionInstanceId: 'instance-current',
+    });
+    const initResp = await fetch(activeUrl, {
+      method: 'POST',
+      headers,
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'initialize',
+        params: {
+          protocolVersion: '2024-11-05',
+          capabilities: {},
+          clientInfo: { name: 'test-client', version: '1.0.0' },
+        },
+      }),
+    });
+    expect(initResp.status).toBe(200);
+    const mcpSessionId = initResp.headers.get('mcp-session-id');
+    expect(mcpSessionId).toBeTruthy();
+    await initResp.text();
+
+    const call = (url: string, id: number, name: string) =>
+      fetch(url, {
+        method: 'POST',
+        headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+        body: JSON.stringify({
+          jsonrpc: '2.0',
+          id,
+          method: 'tools/call',
+          params: {
+            name,
+            arguments: {},
+            _meta: { threadId: 'thread-instance' },
+          },
+        }),
+      });
+
+    const active = await call(activeUrl, 2, 'current_instance');
+    expect(active.status).toBe(200);
+    expect(await readRpcResponse(active)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'instance-current' }] },
+    });
+
+    const stale = await call(
+      withMcpRouteIdentity(bridge.url('cindy_test'), {
+        sessionInstanceId: 'instance-stale',
+      }),
+      3,
+      'current_instance',
+    );
+    expect(stale.status).toBe(401);
+    await stale.text();
+
+    // An old unbound URL keeps ordinary session-aware tools compatible, but
+    // deliberately removes the capability needed for Full Access auto-grants.
+    const legacySession = await call(bridge.url('cindy_test'), 4, 'current_session');
+    expect(legacySession.status).toBe(200);
+    expect(await readRpcResponse(legacySession)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'session-instance' }] },
+    });
+    const legacyInstance = await call(bridge.url('cindy_test'), 5, 'current_instance');
+    expect(legacyInstance.status).toBe(200);
+    expect(await readRpcResponse(legacyInstance)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'no-instance' }] },
     });
   });
 
@@ -619,7 +738,7 @@ describe('codexHttpBridge', () => {
     }
   });
 
-  it('resolves identity from ?session= query without _meta.threadId (remote cc)', async () => {
+  it('keeps legacy ?session= routing compatible without exposing the Session instance', async () => {
     bridge = await startCodexHttpBridge({
       // remote cc 走 persistent token, 仅限协同白名单 — 用白名单内的
       // cindy_orca 模拟真实 cc 流量 (scope 收窄后 cindy_test 会被 403)。
@@ -630,6 +749,7 @@ describe('codexHttpBridge', () => {
     bridge.registerSessionCtx('cc-session-1', {
       agentKind: 'claude-code',
       sessionId: 'cc-session-1',
+      sessionInstanceId: 'cc-instance-1',
       workingDir: '/remote/repo',
       vendorOptions: {},
     });
@@ -677,15 +797,92 @@ describe('codexHttpBridge', () => {
       result: { content: [{ type: 'text', text: 'cc-session-1' }] },
     });
 
+    const instanceResp = await fetch(sessionUrl, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'current_instance', arguments: {} },
+      }),
+    });
+    expect(instanceResp.status).toBe(200);
+    expect(await readRpcResponse(instanceResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'no-instance' }] },
+    });
+
     // 注销后 ?session= 未命中立刻 401 (fail-closed)。
     bridge.unregisterSessionCtx('cc-session-1');
     const after = await fetch(sessionUrl, {
       method: 'POST',
       headers,
-      body: initBody(3),
+      body: initBody(4),
     });
     expect(after.status).toBe(401);
     await after.text();
+  });
+
+  it('requires remote Claude and Pi routes to match both session and instance', async () => {
+    bridge = await startCodexHttpBridge({
+      serverFactories: { cindy_orca: createTestServer },
+      additionalBearerTokens: () => ['remote-persistent-token'],
+      logger: noopLogger(),
+    });
+    bridge.registerSessionCtx('remote-session', {
+      agentKind: 'pi',
+      sessionId: 'remote-session',
+      sessionInstanceId: 'remote-instance-current',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+
+    const headers = {
+      authorization: 'Bearer remote-persistent-token',
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+    const initBody = JSON.stringify({
+      jsonrpc: '2.0',
+      id: 1,
+      method: 'initialize',
+      params: {
+        protocolVersion: '2024-11-05',
+        capabilities: {},
+        clientInfo: { name: 'test-client', version: '1.0.0' },
+      },
+    });
+    const activeUrl = withMcpRouteIdentity(bridge.url('cindy_orca'), {
+      sessionId: 'remote-session',
+      sessionInstanceId: 'remote-instance-current',
+    });
+    const activeInit = await fetch(activeUrl, { method: 'POST', headers, body: initBody });
+    expect(activeInit.status).toBe(200);
+    const mcpSessionId = activeInit.headers.get('mcp-session-id');
+    await activeInit.text();
+
+    const activeCall = await fetch(activeUrl, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 2,
+        method: 'tools/call',
+        params: { name: 'current_instance', arguments: {} },
+      }),
+    });
+    expect(activeCall.status).toBe(200);
+    expect(await readRpcResponse(activeCall)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'remote-instance-current' }] },
+    });
+
+    const staleUrl = withMcpRouteIdentity(bridge.url('cindy_orca'), {
+      sessionId: 'remote-session',
+      sessionInstanceId: 'remote-instance-stale',
+    });
+    const stale = await fetch(staleUrl, { method: 'POST', headers, body: initBody });
+    expect(stale.status).toBe(401);
+    await stale.text();
   });
 
   it('rejects an unregistered ?session= query while leaving token-only requests untouched', async () => {
