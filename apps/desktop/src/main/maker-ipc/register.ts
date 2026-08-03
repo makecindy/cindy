@@ -9405,22 +9405,26 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   // session 不存在(被 close / 还没 send 创建出来)就 no-op 不报错, 让 renderer
   // 可以乐观调用 (UI 更新先行, IPC 失败也不会回滚 UI, 老 agentManager 同语义)。
 
-  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async (
+  ipcMain.handle(MAKER_INVOKE.SET_MODEL, async function (
     _e,
     sessionId: unknown,
     model: unknown,
     providerId?: unknown,
     expectedAgentSwitchRevision?: unknown,
     selection?: unknown,
-  ) => {
+  ) {
     if (typeof sessionId !== 'string' || typeof model !== 'string') {
       throwIpcError('INVALID_PARAMS', 'sessionId + model required');
     }
+    const wireArgCount = arguments.length - 1;
     const normalizedWireArgs = normalizeDeviceLinkSetModelWireArgs(
       isDeviceLinkInvoke(),
+      wireArgCount,
+      providerId,
       expectedAgentSwitchRevision,
       selection,
     );
+    providerId = normalizedWireArgs.providerId;
     expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;
     selection = normalizedWireArgs.selection;
     if (
