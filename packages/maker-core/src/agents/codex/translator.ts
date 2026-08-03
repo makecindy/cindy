@@ -37,6 +37,10 @@ import {
   formatOverloadRetryMessage,
   parseOverloadError,
 } from '../shared/overload-error.js';
+import {
+  CONTEXT_OVERFLOW_REASON,
+  isContextOverflowErrorMessage,
+} from '../shared/context-overflow-error.js';
 import { commandExecutionDisplayInput, type CommandExecutionDisplayInput } from './command-display.js';
 import { codexErrorInfoTag } from './app-server/protocol.js';
 import type {
@@ -337,6 +341,13 @@ export function translateErrorNotification(
   // 驱动)。不带的话 renderer 只能回退到文案匹配 —— codex 改一次措辞, 用户就会在整段
   // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
+  // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
+  // 它隐藏 Retry 并给出压缩 / 新开会话入口。与 capacity 互斥时 overload 优先 —— 它
+  // 还驱动退避重投接管, 语义更具体; pattern 上两者措辞集合不相交, 实际不会同时命中。
+  const contextOverflowReason =
+    !isCapacityError && isContextOverflowErrorMessage(safeMessage)
+      ? { reason: CONTEXT_OVERFLOW_REASON }
+      : {};
   if (!params.willRetry && isCapacityError) {
     const progress = ctx.tryTakeOverOverload?.();
     if (progress) {
@@ -360,6 +371,7 @@ export function translateErrorNotification(
     data: {
       ...safeErrorData,
       ...overloadReason,
+      ...contextOverflowReason,
       isTerminal: !params.willRetry,
       willRetry: params.willRetry,
     },
