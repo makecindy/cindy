@@ -1169,8 +1169,14 @@ export interface AgentSessionHandle {
    * `scope` 缺省 'session'(旧调用点语义不变)。返回值表示**本次调用是否真的改变了
    * 运行期 reviewer**:一次上游故障会产生 retry storm 般的重复信号,调用方靠它区分
    * "真的切了档"与"已在该状态、幂等 no-op",否则故障计数会虚高到没法排障。
+   *
+   * 返回类型刻意写成 `boolean | void` 而不是 `boolean`:约定是**只有显式 `false` 才算
+   * 幂等 no-op**,不返回值的实现(本字段加返回值之前的形态)按"已切换"处理。收窄成
+   * `boolean` 会让 `Promise<void>` 的实现在结构类型下直接不兼容 —— 对一个可选方法而言
+   * 那就是 breaking change,也与 desktop coordinator 侧已经声明的 `boolean | void`
+   * 不一致(copilot)。
    */
-  useCindyAutoReviewFallback?(opts?: { scope?: AutoReviewFallbackScope }): Promise<boolean>;
+  useCindyAutoReviewFallback?(opts?: { scope?: AutoReviewFallbackScope }): Promise<boolean | void>;
 
   /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。
