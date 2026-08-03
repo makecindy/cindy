@@ -31,6 +31,10 @@ describe('mobile sending queue badge', () => {
     expect(bubble).toContain('testID={`pendingSend.queuedStatus.${item.clientId}`}');
     expect(bubble).toContain("{t('message.queue.queuedStatus')}");
     expect(bubble).not.toContain('<ListEnd color={colors.textTertiary}');
+    // 状态徽标悬挂在 86% 气泡外,不能挤窄长消息并让落定前后重新换行。
+    expect(bubble).toContain("bubbleShell: { alignItems: 'flex-end', flexShrink: 1, maxWidth: '86%', position: 'relative' }");
+    expect(bubble).toContain("position: 'absolute',\n    right: '100%',");
+    expect(bubble).toContain("maxWidth: '100%',\n    opacity: 0.62,");
     // 在途条目的无障碍播报不能说「排队中第 N 条」。
     expect(bubble).toContain("t('message.queue.sendingMessage', { text: bubbleLabel })");
   });
