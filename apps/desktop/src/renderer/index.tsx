@@ -46,12 +46,14 @@ import { installRenderLoopWatchdog } from './lib/renderLoopWatchdog';
 import { installHiddenAnimationGate } from './lib/hiddenAnimationGate';
 import { installInteractionJankProbe } from './lib/interactionJankProbe';
 import { installSwallowActivationClick } from './lib/swallowActivationClick';
+import { installEarlyKeyDownCapture } from './lib/earlyKeyDownCapture';
 import { getSwallowActivationClickEnabled } from './hooks/useSwallowActivationClickSettings';
 import { bootstrapLocalThemesSync } from './themes/local-themes';
 import { themeService } from './themes/theme-service';
 import './styles/globals.css';
 import './styles/sortable.css';
 
+const disposeEarlyKeyDownCapture = installEarlyKeyDownCapture();
 installScrollbarAutoHide();
 const disposeForegroundRecoveryDiagnostics = installForegroundRecoveryDiagnostics();
 // 睡醒白屏取证:主线程阻塞漂移 + 可见无帧探针,只记日志(见模块头注释)。
@@ -120,6 +122,7 @@ if (import.meta.env.DEV) {
     disposeForegroundRecoveryDiagnostics();
     disposeRenderLoopWatchdog();
     disposeHiddenAnimationGate();
+    disposeEarlyKeyDownCapture();
     disposePerformanceTimelineCleanupInterval();
     disposeSwallowActivationClick();
     disposeInteractionJankProbe();
