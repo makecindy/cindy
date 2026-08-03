@@ -4773,7 +4773,10 @@ export class CodexAgent extends BaseAgent {
           { threadId, turnId },
         );
         try {
-          await handle.close();
+          // thread/unsubscribe 失败本身不能先强退共享 host：同 turn 的权威
+          // completion 仍可能在 close 等待期间到达。先只终止当前 handle，等下方
+          // completion 复核后再决定是否显式退役 host。
+          await closeSessionHandle({ retireHostOnCleanupFailure: false });
         } catch (e) {
           log.warn('upstream-idle watchdog close threw', { error: String(e) });
         }
@@ -4784,9 +4787,10 @@ export class CodexAgent extends BaseAgent {
           });
           return;
         }
-        // close() 只放掉本 thread 的订阅并结束自己的事件队列,**共享的 AppServerHost 仍
-        // 留在 this.hosts 缓存里** —— 下一次 lazy create 会经 getHost 拿到同一个已确诊
-        // 无响应的 app-server,立刻再卡一遍,等于没恢复(review #944 第八轮 P1)。
+        // closeSessionHandle(...false) 只放掉本 thread 的订阅并结束自己的事件队列,
+        // **共享的 AppServerHost 仍留在 this.hosts 缓存里** —— 下一次 lazy create
+        // 会经 getHost 拿到同一个已确诊无响应的 app-server,立刻再卡一遍,等于没恢复
+        // (review #944 第八轮 P1)。
         // turn/interrupt 是控制面 RPC,两次 ack 都超时说明整个 host 而不只是这个 thread
         // 出了问题,所以要连 host 一起退役。
         //

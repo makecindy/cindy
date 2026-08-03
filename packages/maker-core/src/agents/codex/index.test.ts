@@ -16975,7 +16975,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
-  it('handle close 等待期间到达的 completed 也会阻止退役共享 host', async () => {
+  it('handle close 的 subscription release 失败时，等待期间到达的 completed 仍会阻止退役共享 host', async () => {
     vi.useFakeTimers();
     try {
       const firstInterrupt = deferred<never>();
@@ -17029,7 +17029,7 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         threadId: 'start-thread-id',
         turn: { id: 'turn-1', status: 'failed' },
       } as never);
-      closeRelease.resolve();
+      closeRelease.reject(new Error('thread/unsubscribe failed'));
       await vi.advanceTimersByTimeAsync(0);
 
       expect(eventsEnded).toBe(true);
@@ -17055,6 +17055,10 @@ describe('CodexAgent reconnect-stall watchdog', () => {
         model: 'gpt-5.4',
         workingDir: '/repo',
       });
+      const subscription = host.subscribeThread.mock.results[0]?.value;
+      const release = subscription?.release;
+      if (!release) throw new Error('expected reconnect-stall subscription');
+      release.mockRejectedValueOnce(new Error('thread/unsubscribe failed'));
       let eventsEnded = false;
       void (async () => {
         for await (const event of handle.events()) void event;
@@ -17070,7 +17074,10 @@ describe('CodexAgent reconnect-stall watchdog', () => {
 
       expect(eventsEnded).toBe(true);
       expect(retireHostKey).toHaveBeenCalledTimes(1);
-      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({ failIfActive: false });
+      expect(retireHostKey.mock.calls[0]?.[2]).toMatchObject({
+        failIfActive: false,
+        logPrefix: 'codex upstream-idle watchdog',
+      });
     } finally {
       vi.useRealTimers();
     }
