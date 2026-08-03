@@ -12,6 +12,7 @@ import {
   X,
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
+import { useSearchParams } from 'react-router-dom';
 
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import {
@@ -36,7 +37,6 @@ import type {
   BillingPurchaseOption,
   BillingSubscription,
 } from '../../../shared/billing';
-import { CURRENT_CINDY_REGION } from '../../../shared/brandRegion';
 import type {
   ModelAccessBalance,
   ModelAccessCreditPoolUsage,
@@ -46,7 +46,7 @@ import type {
 import { AlipayIcon } from './AlipayIcon';
 import { billingApi } from './api';
 import { BillingCheckoutDialog } from './BillingCheckoutDialog';
-import { formatBillingAmount as formatMoney } from './money';
+import { BILLING_CURRENCY, formatBillingAmount as formatMoney } from './money';
 import {
   PlanChangeStatusDialog,
   PlanChangeTargetDialog,
@@ -326,6 +326,23 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
     setSelectedPurchaseOptionId(null);
     setCustomAmount('');
   }, []);
+
+  /**
+   * 深链 `?tab=billing&intent=topup` —— 别处（供应商设置页的账户资产模块）想触发
+   * 充值时唯一的入口。充值弹窗依赖本 section 的目录 / 选项 / checkout 会话状态，
+   * 跨 feature 直接复用会把这一大摊状态拉到调用方，所以外部只投递意图、由这里
+   * 打开弹窗。消费即从 URL 摘除（replace，防返回/刷新重复弹窗），与
+   * ProvidersSection 的 `?connect` 同款契约。
+   */
+  const [searchParams, setSearchParams] = useSearchParams();
+  useEffect(() => {
+    if (searchParams.get('intent') !== 'topup') return;
+    const next = new URLSearchParams(searchParams);
+    next.delete('intent');
+    setSearchParams(next, { replace: true });
+    resetSelection();
+    setTopupDialogOpen(true);
+  }, [resetSelection, searchParams, setSearchParams]);
 
   const loadBalance = useCallback(async () => {
     setLoadingBalance(true);
@@ -1270,8 +1287,6 @@ function PendingPlanChangeBanner({
     </div>
   );
 }
-
-const BILLING_CURRENCY = CURRENT_CINDY_REGION === 'global' ? 'usd' : 'cny';
 
 function BillingGroup({
   title,

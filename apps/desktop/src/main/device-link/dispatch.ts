@@ -414,12 +414,31 @@ const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT = 16;
 const REMOTE_INVOKE_RESULT_OUTBOX_BYTES = 16 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_BYTES = 4 * 1024 * 1024;
 const REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS = 500;
+/**
+ * relay 离线期间 outbox 不再按 500ms 盲自旋(每轮对每个 peer trySend → 必然抛
+ * NOT_CONNECTED,空转最长两分钟、日志噪音掩盖真问题):离线时只按慢节奏做 TTL
+ * 出清,真正的投递由事件驱动 —— ws-online 全量 flush(index.ts 接线)、link-open /
+ * subscribe 定向 flush(已有)。
+ */
+const REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS = 5_000;
 const REMOTE_INVOKE_MAX_CLIENT_WAIT_MS = Math.max(
   30_000,
   ...Object.values(INVOKE_TIMEOUT_OVERRIDES_MS),
 );
-/** 再保留一轮同等重连窗口后才放弃无人等待的回包。 */
+/** 再保留一轮同等重连窗口后才放弃无人等待的回包(全局上限;逐条按 channel 收窄)。 */
 const REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS = REMOTE_INVOKE_MAX_CLIENT_WAIT_MS * 2;
+
+/**
+ * outbox 条目的逐 channel 保留时长:控制端对该 channel 的等待预算(两端共享
+ * INVOKE_TIMEOUT_OVERRIDES_MS,缺省 30s)× 2(再留一轮重连窗口),封顶全局上限。
+ * 控制端超时后不会再认领旧 requestId 的回包(重发用新 id),listing 类回包在
+ * 弱网时段最多占 outbox 两分钟纯属浪费配额;长任务 channel(60s 预算)自动保留
+ * 更久。控制端可能配置更短的超时(mobile 15s),推断值只偏保守、不早丢。
+ */
+function outboxEntryMaxAgeMs(channel: string | undefined): number {
+  const budgetMs = (channel && INVOKE_TIMEOUT_OVERRIDES_MS[channel]) || 30_000;
+  return Math.min(budgetMs * 2, REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS);
+}
 /**
  * ipcMain handler 没有统一 AbortSignal，不能在 30s 客户端超时时假装取消副作用。
  * 这里只在远超控制端等待窗后回收本地 bookkeeping；底层 Promise 仍带 catch 并允许自行收尾。
@@ -864,6 +883,7 @@ export function dropAllControllers(
   acceptedLinkControllers.clear();
   offlinePushQueue.clear();
   clearAllSessionActivityStages();
+  cancelAllLinkAcceptRetries();
   syncForwarding();
 }
 
@@ -876,6 +896,7 @@ export function dropAllControllers(
 export function handleControllerOffline(deviceId: string): void {
   acceptedLinkControllers.delete(deviceId);
   clearSessionActivityStage(deviceId);
+  cancelLinkAcceptRetry(deviceId);
   if (subscriptions.clearController(deviceId)) {
     syncForwarding();
   }
@@ -890,6 +911,7 @@ export function forgetControllerInvokeState(deviceId: string): void {
 export function purgeRevokedController(deviceId: string): void {
   offlinePushQueue.clear(deviceId);
   clearSessionActivityStage(deviceId);
+  cancelLinkAcceptRetry(deviceId);
   subscriptions.forgetKnownController(deviceId);
   topicSubscriptionControllers.delete(deviceId);
   acceptedLinkControllers.delete(deviceId);
@@ -935,6 +957,7 @@ async function handleFrame(client: DeviceLinkClient, env: Envelope): Promise<voi
       clearRemoteInvokeStateFor(src);
       offlinePushQueue.clear(src);
       clearSessionActivityStage(src);
+      cancelLinkAcceptRetry(src);
       acceptedLinkControllers.delete(src);
       // Keep the protocol-capability marker, but discard all remembered routing.
       // A modern controller must reconnect and explicitly subscribe; restoring the
@@ -959,12 +982,65 @@ function isControllerRevoked(deviceId: string): boolean {
   return readDeviceLinkSettings().revokedControllers.includes(deviceId);
 }
 
+/**
+ * link-accept 发送失败(WS 背压 / 瞬时 socket 竞态)的有限重试。
+ *
+ * 控制端的 openLink 正拿着 30s 预算干等 accept;此前发送失败直接静默放弃,
+ * 控制端必然等满超时再靠订阅重放/熔断恢复兜底重开(2026-08-03 线上现场:
+ * 被控端上行拥塞时反复出现 no link-accept within 30000ms)。背压是瞬时状态,
+ * 短退避内发送缓冲大概率已排空;重试走完整 handleLinkOpen(复验开关/撤权),
+ * 每 src 只保留最新一次(新 link-open 顶掉旧重试)。耗尽后回到原语义:
+ * 等控制端重发 link-open。
+ */
+const LINK_ACCEPT_RETRY_DELAYS_MS: readonly number[] = [500, 1_000, 2_000];
+const linkAcceptRetryTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+function cancelLinkAcceptRetry(src: string): void {
+  const timer = linkAcceptRetryTimers.get(src);
+  if (!timer) return;
+  clearTimeout(timer);
+  linkAcceptRetryTimers.delete(src);
+}
+
+function cancelAllLinkAcceptRetries(): void {
+  for (const src of [...linkAcceptRetryTimers.keys()]) cancelLinkAcceptRetry(src);
+}
+
+/** @param failedAttempts 已失败的发送次数(≥1);第 n 次失败用 delays[n-1] 档退避。 */
+function scheduleLinkAcceptRetry(
+  client: DeviceLinkClient,
+  src: string,
+  requestId: string,
+  payload: LinkOpenPayload | undefined,
+  failedAttempts: number,
+): void {
+  if (failedAttempts > LINK_ACCEPT_RETRY_DELAYS_MS.length) {
+    log.warn(
+      `link-accept to ${shortId(src)} gave up after ${failedAttempts} attempts; waiting for controller to re-open`,
+    );
+    return;
+  }
+  cancelLinkAcceptRetry(src);
+  const timer = setTimeout(() => {
+    linkAcceptRetryTimers.delete(src);
+    // 世代/连接校验:client 已更换或 relay 已断线时放弃——断线会 fail 掉控制端
+    // 的 pending openLink,它必然重发 link-open,旧 requestId 的 accept 已无意义。
+    if (activeClient !== client || client.getStatus() !== 'online') return;
+    handleLinkOpen(client, src, requestId, payload, failedAttempts);
+  }, LINK_ACCEPT_RETRY_DELAYS_MS[failedAttempts - 1]);
+  (timer as unknown as { unref?: () => void }).unref?.();
+  linkAcceptRetryTimers.set(src, timer);
+}
+
 function handleLinkOpen(
   client: DeviceLinkClient,
   src: string,
   requestId: string,
   payload: LinkOpenPayload | undefined,
+  acceptAttempt = 0,
 ): void {
+  // 同 src 的新 link-open / 本轮执行顶掉遗留的 accept 重试(requestId 已过时)
+  cancelLinkAcceptRetry(src);
   // 第二道开关校验(server 已是第一道)
   if (!readDeviceLinkSettings().remoteControlEnabled) {
     // server 正常不会转发到这里;真到了说明状态不一致,静默不 accept
@@ -992,10 +1068,20 @@ function handleLinkOpen(
     || rememberedModernTopics;
   // 先确认 link-accept 已经进入 socket/可靠层，再提交本地订阅状态。弱网背压下
   // accept 发送失败时不能留下“控制端未连上、被控端却显示已受控”的幽灵订阅。
-  client.sendLinkAccept(src, requestId, {
-    appVersion: app.getVersion(),
-    allowlistHash: computeAllowlistHash(),
-  });
+  try {
+    client.sendLinkAccept(src, requestId, {
+      appVersion: app.getVersion(),
+      allowlistHash: computeAllowlistHash(),
+    });
+  } catch (err) {
+    // 背压等瞬时失败:短退避重试(见 LINK_ACCEPT_RETRY_DELAYS_MS 注释),
+    // 订阅状态不提交(幽灵订阅防护语义保持不变)。
+    log.warn(
+      `link-accept send failed for ${shortId(src)} (attempt ${acceptAttempt + 1}): ${String(err)}`,
+    );
+    scheduleLinkAcceptRetry(client, src, requestId, payload, acceptAttempt + 1);
+    return;
+  }
   acceptedLinkControllers.add(src);
   if (knownModernController) {
     subscriptions.updateControllerMetadata(src, name, capabilities);
@@ -1527,11 +1613,23 @@ function clearRemoteInvokeResultOutboxTimer(): void {
 
 function scheduleRemoteInvokeResultOutboxFlush(): void {
   if (remoteInvokeResultOutboxTimer || remoteInvokeResultOutbox.size === 0) return;
+  // relay 在线才值得 500ms 快重试;离线只保留慢节奏 TTL 出清,投递由事件驱动
+  // (ws-online 全量 / link-open、subscribe 定向)。
+  const delayMs = activeClient?.getStatus() === 'online'
+    ? REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS
+    : REMOTE_INVOKE_RESULT_OUTBOX_OFFLINE_SWEEP_MS;
   remoteInvokeResultOutboxTimer = setTimeout(() => {
     remoteInvokeResultOutboxTimer = null;
     flushRemoteInvokeResultOutbox();
-  }, REMOTE_INVOKE_RESULT_OUTBOX_RETRY_MS);
+  }, delayMs);
   (remoteInvokeResultOutboxTimer as unknown as { unref?: () => void }).unref?.();
+}
+
+/** ws-online 等连接级事件的全量 flush 入口(index.ts 接线);挂起的慢扫描立即换快挡。 */
+export function flushRemoteInvokeResultOutboxOnReconnect(): void {
+  if (remoteInvokeResultOutbox.size === 0) return;
+  clearRemoteInvokeResultOutboxTimer();
+  flushRemoteInvokeResultOutbox();
 }
 
 function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
@@ -1540,11 +1638,12 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
     scheduleRemoteInvokeResultOutboxFlush();
     return;
   }
+  const relayOnline = client.getStatus() === 'online';
   const now = Date.now();
   const blockedPeers = new Set<string>();
   for (const [key, queued] of remoteInvokeResultOutbox) {
     if (onlySrc && queued.src !== onlySrc) continue;
-    if (now - queued.queuedAt >= REMOTE_INVOKE_RESULT_OUTBOX_MAX_AGE_MS) {
+    if (now - queued.queuedAt >= outboxEntryMaxAgeMs(queued.channel)) {
       log.warn(
         `dropping expired invoke-result outbox entry for ${queued.channel ?? '?'} ` +
         `to ${shortId(queued.src)}`,
@@ -1552,6 +1651,8 @@ function flushRemoteInvokeResultOutbox(onlySrc?: string): void {
       removeRemoteInvokeResultOutboxEntry(key);
       continue;
     }
+    // 离线轮只做上面的 TTL 出清:trySend 必然 NOT_CONNECTED,不空转、不刷日志。
+    if (!relayOnline) continue;
     if (blockedPeers.has(queued.src)) continue;
     const attempt = trySendInvokeResult(
       client,
@@ -2138,6 +2239,7 @@ export const __testing = {
     activeClient = null;
     offlinePushQueue.clear();
     clearAllSessionActivityStages();
+    cancelAllLinkAcceptRetries();
     setBroadcastTapListener(null);
   },
   getActiveControllers,
@@ -2154,6 +2256,9 @@ export const __testing = {
   remoteInvokeResultOutboxPerControllerLimit: REMOTE_INVOKE_RESULT_OUTBOX_PER_CONTROLLER_LIMIT,
   remoteInvokeResultOutboxSize: () => remoteInvokeResultOutbox.size,
   flushRemoteInvokeResultOutbox,
+  outboxEntryMaxAgeMs,
+  linkAcceptRetryDelaysMs: LINK_ACCEPT_RETRY_DELAYS_MS,
+  pendingLinkAcceptRetryCount: () => linkAcceptRetryTimers.size,
   forwardPush,
   queuedPushesFor(deviceId: string) {
     return offlinePushQueue.snapshot(deviceId);

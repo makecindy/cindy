@@ -60,6 +60,7 @@ import {
   setControllersChangedListener,
   setRemoteInvokeBusyChangedListener,
   dropAllControllers,
+  flushRemoteInvokeResultOutboxOnReconnect,
   forgetControllerInvokeState,
   handleControllerOffline,
   purgeRevokedController,
@@ -390,7 +391,12 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
     if (status !== 'online') presenceOnlineByDevice.clear();
     broadcast(DEVICE_LINK_PUSH.STATUS_CHANGED, { status });
     handleContactsDeviceLinkStatusChanged(status === 'online');
-    if (status === 'online') replayActiveSubscriptions('ws-online');
+    if (status === 'online') {
+      replayActiveSubscriptions('ws-online');
+      // 重连即投递被控端积压的 invoke-result:离线期间 outbox 只做慢速 TTL 出清,
+      // 不再自旋重试,上线事件是它的主投递触发点。
+      flushRemoteInvokeResultOutboxOnReconnect();
+    }
   });
   // 连接问题(鉴权失效/被顶号/超限/版本不符)→ 推给 renderer,让设置页与
   // 远程会话 banner 能把「一直重连」的真实原因说清楚,而不是笼统的 connecting。

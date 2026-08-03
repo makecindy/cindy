@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン課金",
+        "subtitle": "すべてのモデル · Claude Code / Codex 共通 · トークン単位で残高から引き落とし",
         "modelLabel": "すべてのモデル",
-        "billingLabel": "トークン課金",
+        "billingLabel": "トークン単位で残高から引き落とし",
         "disconnectConfirm": {
           "title": "Cindy AI を切断しますか?",
           "description": "切断するとローカルに保存された Cindy AI Key が削除されます。Cindy AI のモデルを引き続き使うには再接続が必要です。"
@@ -1280,7 +1280,14 @@
           "confirm": "ローテーション"
         },
         "rotateSuccess": "キーをローテーションしました",
-        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください"
+        "rotateFailed": "ローテーションに失敗しました。後でもう一度お試しください",
+        "copyKeyAria": "Cindy AI Key をコピー",
+        "copyKeySuccess": "Cindy AI Key をコピーしました",
+        "copyKeyFailed": "コピーに失敗しました。後でもう一度お試しください",
+        "asset": {
+          "viewUsage": "使用量を見る",
+          "syncFailed": "認証情報の同期に失敗したため、残高を取得できません。保存済みのモデル設定には影響しません。"
+        }
       },
       "custom": {
         "tag": "カスタム",
@@ -1573,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "おすすめ",
-        "desc": "Cindy にサインインすると公式 Cindy AI サービスが有効になります。全モデルがすぐ使え、キー管理は不要です。",
+        "desc": "公式サービス。全モデルがすぐ使え、キー管理は不要です。",
+        "grantBadge": "新規ユーザーには特典残高付き",
         "cta": "Cindy にサインイン"
       },
       "menu": {
@@ -5306,7 +5314,7 @@
         "title": "Cindy AI",
         "desc": "公式サービス · 全モデル · Claude Code / Codex 対応",
         "loginTitle": "Cindy にサインイン",
-        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます"
+        "loginDesc": "サインインすると公式 Cindy AI サービスが有効になり、全モデルを利用できます。新規ユーザーには特典残高が付きます"
       },
       "othersToggle": "その他のプロバイダー({{count}})",
       "presetSub": "API キーを入力して接続",
@@ -5511,6 +5519,9 @@
       "retry": "再試行",
       "continueAfterReset": "リセット後に続行",
       "continueAfterResetTitle": "利用上限のリセット後にこのタスクを続行する一回限りの自動化を作成",
+      "gatewayQuotaExhausted": "Cindy AI の残高が不足しています。チャージすると続行できます。",
+      "viewBalance": "残高を見る",
+      "viewBalanceTitle": "「使用量と請求」を開いて残高を確認・チャージ",
       "credentialSwitchBusy": "他の Codex タスクが実行中のため、このセッションで選択したプロバイダーへまだ切り替えられません（共有 Codex プロセスの再起動が必要です）。他のタスクの終了後に「再試行」を押してください。",
       "codexThreadStale": "Codex の認証モードが切り替わりました。このセッションは続行できません。新しいセッションを開始してください。",
       "claudeGatewayOpusPlanMismatch": "この Opus リクエストは Claude.ai サブスクリプションではなく、XD Gateway 経由で送信され、このモデルが拒否されました。Claude.ai サブスクリプションに切り替えて再試行するか、別のモデルを選択してください。",
