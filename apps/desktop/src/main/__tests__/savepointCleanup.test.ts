@@ -1,17 +1,26 @@
 /**
- * savepointCleanup 单元测试(mock DB / detectCwd / savepointRefs):
+ * savepointCleanup 单元测试(mock DB / gitExec / savepointRefs):
  *   - 会话删除清理:只有 status='deleted' 且能定位到 git repoRoot 才删 ref;
  *     行缺失(无 workingDir 可定位)/ archived / active / 非 git / worktree 内
  *     一律不删;任何失败吞掉不抛。
  *   - 启动期对账:孤儿 ref(owner 行缺失或已删除)删除,存活 owner 保留,
  *     DB 查询失败整体跳过(零删除)。
+ *
+ * 仓库判定经 gitExec 的 rev-parse 而非 WorktreeManager.detectCwd:清理模块被
+ * localDb/ipc/sessions 静态导入,不能引入 WorktreeManager → worktreeStore →
+ * sessions 的模块环。
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const deleteRefMock = vi.fn();
 const listRefsMock = vi.fn();
-const detectCwdMock = vi.fn();
+const gitExecMock = vi.fn();
+
+/** 每个 workingDir 的仓库形态;Error 表示 git 调用抛错(git 缺失等)。 */
+type RepoBehavior = { repoRoot: string; insideWorktree?: boolean } | 'non-git' | Error;
+const repoByCwd = new Map<string, RepoBehavior>();
+let defaultRepoBehavior: RepoBehavior = { repoRoot: '/repo' };
 
 /** select().from().where() 每次调用按序消费一个结果;Error 表示该次查询抛错。 */
 const selectQueue: Array<unknown[] | Error> = [];
@@ -22,8 +31,8 @@ vi.mock('../git-snapshot/savepointRefs', () => ({
   listSavepointRefs: (...args: unknown[]) => listRefsMock(...args),
 }));
 
-vi.mock('../worktree/WorktreeManager', () => ({
-  detectCwd: (...args: unknown[]) => detectCwdMock(...args),
+vi.mock('../worktree/gitExec', () => ({
+  gitExec: (...args: unknown[]) => gitExecMock(...args),
 }));
 
 vi.mock('../localDb/client/current', () => ({
@@ -51,14 +60,28 @@ import {
   reconcileSavepointRefsForDeletedSessions,
 } from '../git-snapshot/savepointCleanup';
 
-function gitRepoInfo(repoRoot: string) {
-  return { gitInstalled: true, isGitRepo: true, isInsideWorktree: false, repoRoot };
+function installGitExecImpl(): void {
+  gitExecMock.mockImplementation(async (args: readonly string[], cwd: string) => {
+    const behavior = repoByCwd.get(cwd) ?? defaultRepoBehavior;
+    if (behavior instanceof Error) throw behavior;
+    if (behavior === 'non-git') throw new Error('fatal: not a git repository');
+    if (args.includes('--show-toplevel')) return { stdout: `${behavior.repoRoot}\n`, stderr: '' };
+    if (args.includes('--git-dir')) return { stdout: '.git\n', stderr: '' };
+    if (args.includes('--git-common-dir')) {
+      // linked worktree 的 common dir 指向主仓 .git,与 --git-dir 不同。
+      return { stdout: behavior.insideWorktree ? '/primary/.git\n' : '.git\n', stderr: '' };
+    }
+    throw new Error(`unexpected git call: ${args.join(' ')}`);
+  });
 }
 
 beforeEach(() => {
   deleteRefMock.mockReset().mockResolvedValue(undefined);
   listRefsMock.mockReset().mockResolvedValue([]);
-  detectCwdMock.mockReset().mockResolvedValue(gitRepoInfo('/repo'));
+  gitExecMock.mockReset();
+  repoByCwd.clear();
+  defaultRepoBehavior = { repoRoot: '/repo' };
+  installGitExecImpl();
   selectQueue.length = 0;
   getDbClientError = null;
 });
@@ -66,11 +89,14 @@ beforeEach(() => {
 describe('cleanupSavepointsForRemovedSession', () => {
   it('deletes the savepoint ref when the session row is deleted', async () => {
     selectQueue.push([{ status: 'deleted', workingDir: '/work/dir' }]);
-    detectCwdMock.mockResolvedValue(gitRepoInfo('/repo/root'));
+    repoByCwd.set('/work/dir', { repoRoot: '/repo/root' });
 
     await cleanupSavepointsForRemovedSession('s1');
 
-    expect(detectCwdMock).toHaveBeenCalledWith('/work/dir');
+    expect(gitExecMock).toHaveBeenCalledWith(
+      expect.arrayContaining(['--show-toplevel']),
+      '/work/dir',
+    );
     expect(deleteRefMock).toHaveBeenCalledTimes(1);
     expect(deleteRefMock).toHaveBeenCalledWith('/repo/root', 's1');
   });
@@ -80,7 +106,7 @@ describe('cleanupSavepointsForRemovedSession', () => {
 
     await cleanupSavepointsForRemovedSession('s-missing');
 
-    expect(detectCwdMock).not.toHaveBeenCalled();
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(deleteRefMock).not.toHaveBeenCalled();
   });
 
@@ -97,17 +123,13 @@ describe('cleanupSavepointsForRemovedSession', () => {
 
     await cleanupSavepointsForRemovedSession('s1');
 
-    expect(detectCwdMock).not.toHaveBeenCalled();
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(deleteRefMock).not.toHaveBeenCalled();
   });
 
   it('skips when the workingDir is not a git repository', async () => {
     selectQueue.push([{ status: 'deleted', workingDir: '/work/dir' }]);
-    detectCwdMock.mockResolvedValue({
-      gitInstalled: true,
-      isGitRepo: false,
-      isInsideWorktree: false,
-    });
+    repoByCwd.set('/work/dir', 'non-git');
 
     await cleanupSavepointsForRemovedSession('s1');
 
@@ -116,12 +138,7 @@ describe('cleanupSavepointsForRemovedSession', () => {
 
   it('skips when the workingDir is inside a managed worktree', async () => {
     selectQueue.push([{ status: 'deleted', workingDir: '/work/dir' }]);
-    detectCwdMock.mockResolvedValue({
-      gitInstalled: true,
-      isGitRepo: true,
-      isInsideWorktree: true,
-      repoRoot: '/repo/root',
-    });
+    repoByCwd.set('/work/dir', { repoRoot: '/repo/root', insideWorktree: true });
 
     await cleanupSavepointsForRemovedSession('s1');
 
@@ -136,9 +153,9 @@ describe('cleanupSavepointsForRemovedSession', () => {
     expect(deleteRefMock).not.toHaveBeenCalled();
   });
 
-  it('swallows detectCwd failures without throwing', async () => {
+  it('swallows git detection failures without throwing', async () => {
     selectQueue.push([{ status: 'deleted', workingDir: '/work/dir' }]);
-    detectCwdMock.mockRejectedValue(new Error('git missing'));
+    repoByCwd.set('/work/dir', new Error('git missing'));
 
     await expect(cleanupSavepointsForRemovedSession('s1')).resolves.toBeUndefined();
 
@@ -151,7 +168,7 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
     selectQueue.push([
       { id: 's-active', status: 'active', workingDir: '/work/dir' },
     ]);
-    detectCwdMock.mockResolvedValue(gitRepoInfo('/repo/root'));
+    repoByCwd.set('/work/dir', { repoRoot: '/repo/root' });
     listRefsMock.mockResolvedValue([
       { sessionId: 's-active', sha: 'a'.repeat(40) },
       { sessionId: 's-archived', sha: 'b'.repeat(40) },
@@ -179,7 +196,7 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
 
     await expect(reconcileSavepointRefsForDeletedSessions()).resolves.toBeUndefined();
 
-    expect(detectCwdMock).not.toHaveBeenCalled();
+    expect(gitExecMock).not.toHaveBeenCalled();
     expect(listRefsMock).not.toHaveBeenCalled();
     expect(deleteRefMock).not.toHaveBeenCalled();
   });
@@ -190,11 +207,9 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
       { id: 's2', status: 'deleted', workingDir: '/repo/sub-b' },
       { id: 's3', status: 'deleted', workingDir: '/plain/dir' },
     ]);
-    detectCwdMock.mockImplementation(async (workingDir: string) =>
-      workingDir === '/plain/dir'
-        ? { gitInstalled: true, isGitRepo: false, isInsideWorktree: false }
-        : gitRepoInfo('/repo'),
-    );
+    repoByCwd.set('/repo/sub-a', { repoRoot: '/repo' });
+    repoByCwd.set('/repo/sub-b', { repoRoot: '/repo' });
+    repoByCwd.set('/plain/dir', 'non-git');
     listRefsMock.mockResolvedValue([{ sessionId: 's1', sha: 'a'.repeat(40) }]);
     // 同一 repoRoot 只对账一次 → 只消费一次 owners 查询。
     selectQueue.push([]);
@@ -212,10 +227,8 @@ describe('reconcileSavepointRefsForDeletedSessions', () => {
       { id: 's1', status: 'deleted', workingDir: '/broken/dir' },
       { id: 's2', status: 'deleted', workingDir: '/ok/dir' },
     ]);
-    detectCwdMock.mockImplementation(async (workingDir: string) => {
-      if (workingDir === '/broken/dir') throw new Error('detect failed');
-      return gitRepoInfo('/ok/repo');
-    });
+    repoByCwd.set('/broken/dir', new Error('detect failed'));
+    repoByCwd.set('/ok/dir', { repoRoot: '/ok/repo' });
     listRefsMock.mockResolvedValue([{ sessionId: 's2', sha: 'a'.repeat(40) }]);
     selectQueue.push([]);
 

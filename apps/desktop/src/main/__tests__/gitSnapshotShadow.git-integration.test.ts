@@ -226,6 +226,39 @@ describe('createShadowSavepoint', () => {
     expect(entries[0]?.baseHead).toBeUndefined();
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
+  it('treats tracked files behind an out-of-repo symlinked parent as deleted', async () => {
+    if (process.platform === 'win32') return; // 符号链接在 Windows CI 上需要特权
+    await commitSeed();
+    await writeRepoFile('evil/target.txt', 'tracked base\n');
+    await gitExec(['add', '-A'], repoPath);
+    await gitExec(['commit', '--no-gpg-sign', '-m', 'seed evil dir'], repoPath);
+    // 用户把 evil 换成指向仓库外的符号链接,外部目录里有同名文件:
+    // status 会报 `D evil/target.txt` + 未跟踪的 evil(符号链接)。
+    const outside = await fs.mkdtemp(path.join(path.dirname(repoPath), 'outside-'));
+    try {
+      await fs.writeFile(path.join(outside, 'target.txt'), 'external secret\n', 'utf8');
+      await fs.rm(path.join(repoPath, 'evil'), { recursive: true });
+      await fs.symlink(outside, path.join(repoPath, 'evil'));
+
+      const result = await createShadowSavepoint(repoPath, {
+        sessionId: SESSION,
+        label: 'symlinked parent',
+        meta: { kind: 'turn-start' },
+      });
+
+      expect(result.commit).toBeTruthy();
+      const commit = result.commit as string;
+      // 真实父目录在仓库外 → 按删除记录,绝不把外部内容写进保存点树;
+      // 符号链接本身以 link 对象入树。
+      await expect(gitExec(['show', `${commit}:evil/target.txt`], repoPath)).rejects.toThrow();
+      const evilEntry = await gitStdout(['ls-tree', commit, 'evil']);
+      expect(evilEntry).toContain('120000');
+      expect(await gitStdout(['show', `${commit}:seed.txt`])).toBe('seed\n');
+    } finally {
+      await fs.rm(outside, { recursive: true, force: true });
+    }
+  }, REAL_GIT_TEST_TIMEOUT_MS);
+
   it('tolerates a path staged in the user index but deleted from the worktree (status AD)', async () => {
     await commitSeed();
     // 用户自己 git add 了新文件,然后又从工作区删掉:status 为 `AD`,

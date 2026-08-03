@@ -11,12 +11,14 @@
  * 回收;后续增强再考虑对空闲 repo 触发 git gc --auto。
  */
 
+import path from 'node:path';
+
 import { eq, inArray, isNotNull } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
 import { createLogger } from '../logger';
-import { detectCwd } from '../worktree/WorktreeManager';
+import { gitExec } from '../worktree/gitExec';
 import { deleteSavepointRef, listSavepointRefs } from './savepointRefs';
 
 const log = createLogger('git-snapshot');
@@ -24,12 +26,29 @@ const log = createLogger('git-snapshot');
 /** 启动期对账最多探测的 distinct 工作目录数,避免超大会话库拖慢启动。 */
 const RECONCILE_MAX_WORKDIRS = 200;
 
+/**
+ * 判定与 maker-host 的 defaultDetectRepoRoot 同口径:git 可用、是仓库、
+ * 非 linked worktree(linked worktree 会话全链路不产生保存点链)。
+ * 刻意不用 WorktreeManager.detectCwd:本模块被 localDb/ipc/sessions 静态
+ * 导入,经 WorktreeManager → worktreeStore 会绕回 sessions 形成模块环。
+ */
 async function resolveSavepointRepoRoot(workingDir: string): Promise<string | null> {
-  const info = await detectCwd(workingDir);
-  if (!info.gitInstalled || !info.isGitRepo || !info.repoRoot || info.isInsideWorktree) {
+  try {
+    const repoRoot = (await gitExec(['rev-parse', '--show-toplevel'], workingDir)).stdout.trim();
+    if (!repoRoot) return null;
+    const [gitDir, commonDir] = await Promise.all([
+      gitExec(['rev-parse', '--git-dir'], workingDir),
+      gitExec(['rev-parse', '--git-common-dir'], workingDir),
+    ]);
+    const isInsideWorktree =
+      path.resolve(repoRoot, gitDir.stdout.trim()) !==
+      path.resolve(repoRoot, commonDir.stdout.trim());
+    if (isInsideWorktree) return null;
+    return repoRoot;
+  } catch {
+    // git 不可用 / 非仓库 / 目录已被删除:都视为无可清理的保存点。
     return null;
   }
-  return info.repoRoot;
 }
 
 /**

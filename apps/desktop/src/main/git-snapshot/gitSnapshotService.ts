@@ -446,13 +446,26 @@ export async function createShadowSavepoint(
   // directory that replaced a file) go through `git add`, missing paths are
   // recorded as deletions via `update-index --force-remove`, which is a
   // silent no-op when the temporary index does not contain them either.
+  // Same realpath fence as the restore side: a path whose real parent left
+  // the repository (a parent segment became a symlink pointing outside) must
+  // be treated as deleted — never handed to `git add`, which would either
+  // refuse it or, worse, snapshot out-of-repo content.
+  const repoReal = await fs.realpath(repoPath);
   const presentFiles: SnapshotIncludedFile[] = [];
   const missingPaths: string[] = [];
   for (const file of plan.includedFiles) {
     const abs = resolveSnapshotGitPath(repoPath, file.path);
     if (!abs) continue;
-    if (await pathExists(abs)) presentFiles.push(file);
-    else missingPaths.push(file.path);
+    if (!(await pathExists(abs))) {
+      missingPaths.push(file.path);
+      continue;
+    }
+    const parentReal = await fs.realpath(path.dirname(abs)).catch(() => null);
+    if (!parentReal || (parentReal !== repoReal && !parentReal.startsWith(repoReal + path.sep))) {
+      missingPaths.push(file.path);
+      continue;
+    }
+    presentFiles.push(file);
   }
   const stagePathspecs = uniquePathspecs(presentFiles.flatMap((file) => file.pathsForPathspec));
   const commitPathspecs = uniquePathspecs(plan.includedFiles.flatMap(commitPathspecsFor));
