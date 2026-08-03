@@ -3609,6 +3609,7 @@ function MarkdownBody({
           const columnWidths = buildMobileMarkdownTableColumnWidths({
             header: block.header,
             rows: block.rows,
+            availableWidth: layout.markdownTableAvailableWidth,
             minWidth: layout.markdownTableCellMinWidth,
           });
           return (

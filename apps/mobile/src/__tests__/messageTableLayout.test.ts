@@ -34,6 +34,36 @@ describe('messageTableLayout', () => {
 
     expect(widths).toHaveLength(2);
   });
+
+  it('expands a compact table to the available message width', () => {
+    const widths = buildMobileMarkdownTableColumnWidths({
+      header: inlineCells(['年份', 'GDP']),
+      rows: [
+        row('r1', ['2025', '30.77 万亿美元']),
+        row('r2', ['2024', '29.30 万亿美元']),
+      ],
+      availableWidth: 329,
+      minWidth: 112,
+    });
+
+    expect(widths.reduce((total, width) => total + width, 0)).toBe(329);
+    expect(widths.every((width) => width >= 112)).toBe(true);
+  });
+
+  it('keeps wide tables wider than the viewport for horizontal scrolling', () => {
+    const widths = buildMobileMarkdownTableColumnWidths({
+      header: inlineCells(['第一列', '第二列', '第三列']),
+      rows: [row('r1', [
+        '一段明显超过单列最大宽度的内容',
+        '另一段明显超过单列最大宽度的内容',
+        '第三段明显超过单列最大宽度的内容',
+      ])],
+      availableWidth: 329,
+      minWidth: 112,
+    });
+
+    expect(widths.reduce((total, width) => total + width, 0)).toBeGreaterThan(329);
+  });
 });
 
 function row(key: string, cells: string[]): MobileMarkdownTableRow {
