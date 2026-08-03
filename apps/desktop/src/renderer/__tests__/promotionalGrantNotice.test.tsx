@@ -276,4 +276,39 @@ describe('PromotionalGrantNotice', () => {
 
     expect(screen.getByTestId('promotional-grant-notice')).toBeTruthy();
   });
+
+  it('最晚到期那笔已读时,更早到期的未读赠送仍会告知(未读过滤先于挑选)', async () => {
+    // 场景:运营补发了一笔更晚到期的赠送、用户读过;更早那笔从未告知。
+    // 若先挑「最晚一笔」再看已读,已读的最晚笔会把未读的早笔永远遮蔽掉。
+    const { acknowledgePromotionalGrant } = await import('@/state/promotionalGrantNotice');
+    acknowledgePromotionalGrant('account-a', 'grant-late');
+
+    ledger.getCreditUsage = vi.fn(async () =>
+      usage([
+        grant({ grantId: 'grant-late', expiresAt: '2026-09-30T15:59:00.000Z', originalAmount: '50' }),
+        grant({ grantId: 'grant-early', expiresAt: '2026-08-30T15:59:00.000Z', originalAmount: '20' }),
+      ]),
+    );
+    stubWindow();
+    await renderNotice();
+
+    // 出的是未读的早笔(金额 20),不是已读的晚笔,也不是不出。
+    expect(noticeText()).toContain('20.00');
+  });
+
+  it('localStorage 持续不可用时,同会话连续确认与跨账号确认都不丢(内存兜底做并集)', async () => {
+    storage.setItem = () => {
+      throw new Error('QuotaExceededError');
+    };
+    stubWindow();
+    const state = await import('@/state/promotionalGrantNotice');
+
+    state.acknowledgePromotionalGrant('account-a', 'grant-1');
+    // 第二次确认(换了账号)不能把第一次的内存记录整份覆盖掉。
+    state.acknowledgePromotionalGrant('account-b', 'grant-2');
+
+    const snapshot = state.getAcknowledgedPromotionalGrants();
+    expect(state.isPromotionalGrantAcknowledged(snapshot, 'account-a', 'grant-1')).toBe(true);
+    expect(state.isPromotionalGrantAcknowledged(snapshot, 'account-b', 'grant-2')).toBe(true);
+  });
 });

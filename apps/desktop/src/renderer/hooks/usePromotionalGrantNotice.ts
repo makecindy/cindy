@@ -41,9 +41,17 @@ export interface UsePromotionalGrantNoticeReturn {
   acknowledge: () => void;
 }
 
-/** 生效中且有效期最晚的那笔;并列按 grantId 定序保证结果稳定。 */
-function activeGrantOf(
+/**
+ * 生效中、**且尚未告知过**的赠送里有效期最晚的那笔;并列按 grantId 定序保证结果稳定。
+ *
+ * 「未读」过滤必须发生在挑选**之前**:若先挑最晚一笔再看它读没读,一笔已读的最晚
+ * 赠送会遮蔽其它仍未读的生效赠送(例如运营补发了一笔更晚到期的、用户读过,而更早
+ * 那笔从未告知)——那些赠送就永远失去了唯一的告知机会。
+ */
+function activeUnacknowledgedGrantOf(
   grants: readonly ModelAccessPromotionalGrantUsage[],
+  acknowledgedSnapshot: string,
+  accountId: string,
 ): ModelAccessPromotionalGrantUsage | null {
   let best: ModelAccessPromotionalGrantUsage | null = null;
   let bestExpiry = Number.NEGATIVE_INFINITY;
@@ -52,6 +60,7 @@ function activeGrantOf(
     // 解析不出有效期的行直接跳过:卡上要印这个日期,印不出来的不该命中。
     const expiry = Date.parse(grant.expiresAt);
     if (!Number.isFinite(expiry)) continue;
+    if (isPromotionalGrantAcknowledged(acknowledgedSnapshot, accountId, grant.grantId)) continue;
     if (best === null || expiry > bestExpiry || (expiry === bestExpiry && grant.grantId > best.grantId)) {
       best = grant;
       bestExpiry = expiry;
@@ -80,11 +89,11 @@ export function usePromotionalGrantNotice(enabled = true): UsePromotionalGrantNo
 
   const grant = useMemo(() => {
     if (!enabled || !billingVisible || !dataOwnerId || !creditUsage) return null;
-    const candidate = activeGrantOf(creditUsage.promotionalGrants);
-    if (!candidate) return null;
-    return isPromotionalGrantAcknowledged(acknowledgedSnapshot, dataOwnerId, candidate.grantId)
-      ? null
-      : candidate;
+    return activeUnacknowledgedGrantOf(
+      creditUsage.promotionalGrants,
+      acknowledgedSnapshot,
+      dataOwnerId,
+    );
   }, [enabled, billingVisible, dataOwnerId, creditUsage, acknowledgedSnapshot]);
 
   const acknowledge = useMemo(() => {

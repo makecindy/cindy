@@ -432,16 +432,29 @@ export function BillingSettingsSection({ accountId }: { accountId: string | null
       setCurrentSubscription(null);
       void loadSubscription();
     }
-  }, [checkout, loadSubscription]);
+    // 关弹窗也刷一次订单:用户可能在 AWAITING_PAYMENT 中途放弃 —— 那笔「待支付」
+    // 此刻就该出现在订单记录里,而不是等他手动点「刷新」才知道它还挂着。
+    void loadOrders();
+  }, [checkout, loadOrders, loadSubscription]);
 
   useEffect(() => {
     const previousPhase = previousCheckoutPhaseRef.current;
     previousCheckoutPhaseRef.current = checkout.state.phase;
+    if (previousPhase === checkout.state.phase) return;
+    // 订单记录跟着订单生命周期的每一次落位刷新,不只 COMPLETED:订单一创建(进入
+    // AWAITING_PAYMENT)就已经是一条「待支付」记录;轮询落到 FAILED / EXPIRED /
+    // CANCELED 时列表里那行的状态也变了。只刷 COMPLETED 会让其余终态全靠手动刷新。
+    if (
+      checkout.state.phase === 'AWAITING_PAYMENT' ||
+      checkout.state.phase === 'COMPLETED' ||
+      checkout.state.phase === 'FAILED' ||
+      checkout.state.phase === 'EXPIRED' ||
+      checkout.state.phase === 'CANCELED'
+    ) {
+      void loadOrders();
+    }
     if (previousPhase !== 'COMPLETED' && checkout.state.phase === 'COMPLETED') {
       void loadBalance();
-      // 刚付成的那一单必须立刻出现在订单记录里:让用户为了看到自己刚付的钱去点「刷新」,
-      // 恰好是这一组要消除的疑虑(「那笔到底成没成」)。
-      void loadOrders();
       if (checkout.state.kind === 'SUBSCRIPTION') {
         void loadSubscription(checkout.state.subscription);
       }

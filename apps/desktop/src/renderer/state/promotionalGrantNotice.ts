@@ -70,7 +70,14 @@ export function isPromotionalGrantAcknowledged(
 
 /** 标记这笔赠送的告知为已读(一次性,不再出现)。 */
 export function acknowledgePromotionalGrant(accountId: string, grantId: string): void {
-  const next = new Set([...readStored(), promotionalGrantNoticeKey(accountId, grantId)]);
+  // 三路合并:storage 里已有的 + 本会话内存兜底里已有的 + 本次新读的。少了中间那份,
+  // localStorage 持续不可用时(隐私模式/配额)同会话第二次 acknowledge 会把第一次的
+  // 内存记录整份覆盖掉 —— 切账号后前一个账号的已读也一并丢失,告知条复活。
+  const next = new Set([
+    ...readStored(),
+    ...memoryAcknowledged,
+    promotionalGrantNoticeKey(accountId, grantId),
+  ]);
   try {
     localStorage.setItem(STORAGE_KEY, JSON.stringify([...next]));
     // 写成功则 storage 是唯一真值源,不置内存态 —— 否则跨窗口清 key 后本窗口会

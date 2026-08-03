@@ -24,7 +24,7 @@ const authState = vi.hoisted(() => ({ dataOwnerId: 'account-fixture' as string |
 const checkout = {
   state: {
     open: false,
-    kind: null,
+    kind: null as 'CREDIT_TOPUP' | 'SUBSCRIPTION' | null,
     phase: 'IDLE',
     intent: null,
     order: null,
@@ -2214,6 +2214,37 @@ describe('BillingPage order history', () => {
     render(<BillingPage />);
     await screen.findByText('billing.usage.promotionalDetails.title');
     expect(screen.queryByText('billing.orders.title')).toBeNull();
+  });
+
+  it('reloads the order history on every checkout phase landing, not only COMPLETED', async () => {
+    const listOrders = install([order()]);
+    const initialState = { ...checkout.state };
+
+    const { rerender } = render(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    const baseline = listOrders.mock.calls.length;
+
+    // 订单一创建(AWAITING_PAYMENT)就已经是一条「待支付」记录,列表必须立刻能看到。
+    checkout.state = {
+      ...initialState,
+      open: true,
+      kind: 'CREDIT_TOPUP',
+      phase: 'AWAITING_PAYMENT',
+    };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 1));
+
+    // 轮询落到失败终态时,那一行的状态 chip 也变了 —— 不能等用户手动刷新。
+    checkout.state = { ...checkout.state, phase: 'FAILED' };
+    rerender(<BillingPage />);
+    await waitFor(() => expect(listOrders.mock.calls.length).toBe(baseline + 2));
+
+    // 同一相位重复渲染不重拉:effect 只认「相位变化」,不是每次 render 都打接口。
+    rerender(<BillingPage />);
+    await screen.findByText('billing.orders.title');
+    expect(listOrders.mock.calls.length).toBe(baseline + 2);
+
+    checkout.state = initialState;
   });
 
   it('maps every payment status onto the checkout wording, not a second vocabulary', async () => {
