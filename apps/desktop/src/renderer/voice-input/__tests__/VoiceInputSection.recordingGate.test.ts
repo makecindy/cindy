@@ -82,10 +82,10 @@ describe('VoiceInputSection shortcut recording gate', () => {
     );
 
     expect(source).toMatch(
-      /const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[\]\);\n\n  \/\//,
+      /const startFnKeyCapture = useCallback\([\s\S]*?\r?\n {2}\}, \[\]\);\r?\n\r?\n  \/\//,
     );
     expect(source).not.toMatch(
-      /const startFnKeyCapture = useCallback\([\s\S]*?\n {2}\}, \[t\]\);\n\n  \/\//,
+      /const startFnKeyCapture = useCallback\([\s\S]*?\r?\n {2}\}, \[t\]\);\r?\n\r?\n  \/\//,
     );
     expect(source).toContain('const translateRef = useRef(t);');
     expect(source).toContain('translateRef.current = t;');

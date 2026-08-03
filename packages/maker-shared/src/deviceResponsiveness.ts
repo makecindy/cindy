@@ -1,9 +1,13 @@
 /**
- * deviceResponsivenessBreaker.ts — per-device「目标设备无响应」熔断器(纯逻辑,node 可单测)。
+ * deviceResponsiveness.ts — per-device「目标设备无响应」熔断器(纯逻辑,node 可单测)。
  * ---------------------------------------------------------------------------
+ * desktop / mobile 控制端共享(原 apps/mobile/src/device-link/deviceResponsivenessBreaker.ts,
+ * 2026-08 提炼到 maker-shared 供桌面控制端复用;两端各自持有 UI 镜像 store 与接线)。
+ *
  * 事故链背景(2026-07 生产):桌面端进程活着(relay 心跳 / presence 全正常)但内部
  * 卡死(DB gate 失败),invoke 永不回包。手机端每个请求都等满超时,重试链 + 多触发源
  * 重放把请求堆成风暴,JS 线程停摆(实测最长 114s),期间连超时 timer 都被冻结。
+ * 弱网场景同理:请求到不了对端或响应回不来,同样表现为连续 INVOKE_TIMEOUT。
  * 本熔断器把「对同一台无响应设备的持续请求」收敛为周期性单飞探测:
  *
  *   - 失败信号:**仅** INVOKE_TIMEOUT(等满超时无回包)计入连续失败;

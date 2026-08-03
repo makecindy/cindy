@@ -403,6 +403,86 @@ describe('startup update relaunch safety', () => {
   });
 });
 
+describe('isUpdateRelaunchImminent', () => {
+  /** Boots the startup flow (staging a patch) and hands back the live module. */
+  async function bootWithStagedPatch(options: { enabled?: boolean } = {}) {
+    vi.useFakeTimers();
+    readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: options.enabled ?? true });
+    fetchManifest.mockResolvedValue(updateManifest());
+    download.mockImplementation(async ({ targetPath }: { targetPath: string }) => {
+      fs.mkdirSync(path.join(TEST_USER_DATA, 'updates'), { recursive: true });
+      fs.writeFileSync(targetPath, 'update');
+      return { path: targetPath, size: 123 };
+    });
+
+    const service = await freshUpdateService('darwin');
+    service.initUpdateService();
+    const handler = ipcHandlers.get('update-check-startup');
+    if (!handler) throw new Error('update-check-startup handler not registered');
+    await handler();
+    return service;
+  }
+
+  it('is false with nothing staged', async () => {
+    const service = await freshUpdateService('darwin');
+    try {
+      expect(service.getUpdateStatus()).toBe('idle');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  // Regression: a staged patch used to read as "about to relaunch" purely from
+  // status==='ready'. With auto-relaunch off the patch sits there indefinitely,
+  // so every cold boot re-observed 'ready' and callers (startImConnection) kept
+  // deferring to a "next cold boot" that behaved identically — the FeishuBot
+  // never came online and feishuBot:save failed with [IM_NOT_READY] forever.
+  it('is false for a patch staged while auto-relaunch is off', async () => {
+    const service = await bootWithStagedPatch({ enabled: false });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('is true for a patch staged while auto-relaunch is on', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('re-reads the auto-relaunch switch on every call', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: false });
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+      readAutoUpdateSettings.mockReturnValue({ autoRelaunchOnIdle: true });
+      expect(service.isUpdateRelaunchImminent()).toBe(true);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+
+  it('is false on a dev build even with a staged patch', async () => {
+    const service = await bootWithStagedPatch({ enabled: true });
+    try {
+      expect(service.getUpdateStatus()).toBe('ready');
+      isDev.mockReturnValue(true);
+      expect(service.isUpdateRelaunchImminent()).toBe(false);
+    } finally {
+      service.stopUpdateService();
+    }
+  });
+});
+
 describe('splash 启动下载 0% 显式广播', () => {
   interface SentIpc {
     channel: string;

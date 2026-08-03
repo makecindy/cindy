@@ -25,6 +25,7 @@ import {
 import {
   getDeviceLinkStatus,
   getDeviceLinkConnectionIssue,
+  getUnresponsiveDeviceIds,
   setRemoteControlEnabled,
   setKeepAwakeEnabled,
   openRemoteLink,
@@ -121,6 +122,7 @@ export function defaultDeps(): DeviceLinkIpcDeps {
         controlledBy: getActiveControllers(),
         revokedControllers: s.revokedControllers,
         disabledControlDeviceIds: s.disabledControlDeviceIds,
+        unresponsiveDeviceIds: getUnresponsiveDeviceIds(),
       };
     },
     setEnabled: setRemoteControlEnabled,
@@ -153,6 +155,7 @@ const DEVICE_LINK_CODE_MAP: Record<string, IpcErrorCode> = {
   CHANNEL_NOT_ALLOWED: 'DEVICE_LINK_CHANNEL_NOT_ALLOWED',
   ACCESS_REVOKED: 'DEVICE_LINK_ACCESS_REVOKED',
   INVOKE_TIMEOUT: 'DEVICE_LINK_TIMEOUT',
+  DEVICE_UNRESPONSIVE: 'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   VERSION_MISMATCH: 'DEVICE_LINK_VERSION_MISMATCH',
   NOT_CONNECTED: 'DEVICE_LINK_NOT_CONNECTED',
   LINK_NOT_OPEN: 'DEVICE_LINK_NOT_CONNECTED',
@@ -225,6 +228,7 @@ export function handleGetState(deps: DeviceLinkIpcDeps): DeviceLinkState {
     controlledBy: [],
     revokedControllers: [],
     disabledControlDeviceIds: [],
+    unresponsiveDeviceIds: [],
   };
 }
 

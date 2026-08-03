@@ -21,13 +21,15 @@ function createHarness() {
   const outcomes: Array<{ sessionId: string; clientId: string; outcome: AutoResumeOutcome }> = [];
   const guardRollbacks: string[] = [];
   const abandons: Array<{ sessionId: string; message?: string }> = [];
+  const surfaced: Array<{ sessionId: string; detail: SuppressedTurnError }> = [];
   const deps: AutoResumeBookkeepingDeps = {
     persistSuppressedError: (sessionId, detail) => persisted.push({ sessionId, detail }),
+    surfaceSuppressedError: (sessionId, detail) => surfaced.push({ sessionId, detail }),
     markOutcome: (sessionId, clientId, outcome) => outcomes.push({ sessionId, clientId, outcome }),
     rollbackGuardPendingResume: (sessionId) => guardRollbacks.push(sessionId),
     abandonTakeover: (sessionId, message) => abandons.push({ sessionId, ...(message !== undefined ? { message } : {}) }),
   };
-  return { book: new AutoResumeBookkeeping(deps), persisted, outcomes, guardRollbacks, abandons };
+  return { book: new AutoResumeBookkeeping(deps), persisted, surfaced, outcomes, guardRollbacks, abandons };
 }
 
 beforeEach(() => {
@@ -56,6 +58,7 @@ describe('被压住的错误详情:必有人补落', () => {
     ]);
     expect(h.book.flushSuppressedError('s1'), '已经落过就不该再落一遍').toBe(false);
     expect(h.persisted).toHaveLength(1);
+    expect(h.surfaced, '普通补落只恢复历史，不应通知其它错误表面').toEqual([]);
   });
 
   it('stash 只收字符串字段(非字符串一律丢弃,不把 undefined 写进 content)', () => {
@@ -68,28 +71,131 @@ describe('被压住的错误详情:必有人补落', () => {
   it('自愈成功 → discard 丢弃详情,历史里只留活动行', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'boom' });
+    expect(h.book.hasSuppressedError('s1')).toBe(true);
     h.book.discardSuppressedError('s1');
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
     expect(h.book.flushSuppressedError('s1')).toBe(false);
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+  });
+
+  it('surface:补落并只向其它错误表面通知一次', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'boom' });
+
+    expect(h.book.surfaceSuppressedError('s1')).toBe(true);
+    expect(h.book.surfaceSuppressedError('s1')).toBe(false);
+    expect(h.persisted).toEqual([{ sessionId: 's1', detail: { message: 'boom' } }]);
+    expect(h.surfaced).toEqual([{ sessionId: 's1', detail: { message: 'boom' } }]);
+  });
+
+  it('replacement 归属按 clientId 锁定，别的队列项不能释放旧错误', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+
+    expect(h.book.claimSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(h.book.claimSuppressedErrorForRetry('s1', 'retry-2')).toBe(false);
+    expect(h.book.isSuppressedErrorClaimedByRetry('s1', 'retry-1')).toBe(true);
+    expect(h.book.discardSuppressedErrorForRetry('s1', 'retry-2')).toBe(false);
+    expect(h.book.hasSuppressedError('s1')).toBe(true);
+
+    expect(h.book.discardSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
     expect(h.persisted).toEqual([]);
   });
 
-  it('finalize:补落 + 结算 failed + 清接管态;surfaceBanner 决定横幅带不带 message', () => {
+  it('preview 后把 completion tail 交给 Agent Island，rollback 后重新接回', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(true);
+    expect(h.book.markReplacementPreviewed('s1', 'retry-1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(false);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(true);
+
+    expect(h.book.rollbackReplacementPreview('s1', 'retry-1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(true);
+    expect(h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(true);
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+  });
+
+  it('Island preview 不可用时 dispatch 仍切开新错误归属，但继续兜住旧 completion tail', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+
+    expect(h.book.markReplacementDispatching('s1', 'retry-1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(false);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(true);
+
+    h.book.rollbackReplacementPreview('s1', 'retry-1');
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(true);
+  });
+
+  it('replacement dispatch 后新错误独立接管，旧 owner 不能删掉它', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    expect(h.book.markReplacementDispatching('s1', 'retry-1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(false);
+
+    // sendToAgent 可在返回前同步发出 replacement 自己的 retryable error。
+    h.book.stashSuppressedError('s1', { message: 'new interruption' });
+    expect(h.persisted, '旧 transient error 已被 replacement 取代，不应补回历史').toEqual([]);
+    expect(h.book.isSuppressedErrorClaimedByRetry('s1', 'retry-1')).toBe(false);
+    expect(h.book.discardSuppressedErrorForRetry('s1', 'retry-1')).toBe(false);
+
+    expect(h.book.surfaceSuppressedError('s1')).toBe(true);
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'new interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([
+      { sessionId: 's1', detail: { message: 'new interruption' } },
+    ]);
+  });
+
+  it('replacement 的同步不可续跑终态可直接丢弃旧 dispatch owner', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+
+    expect(h.book.discardReplacementProvenByProviderEvent('s1')).toBe(true);
+    expect(h.book.discardReplacementProvenByProviderEvent('s1')).toBe(false);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+  });
+
+  it('finalize:补落 + 呈现失败 + 结算 failed + 清接管态', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'boom' });
     h.book.registerPendingOutcome('s1', 'c-1');
 
-    h.book.finalizeSuppressedError('s1', { surfaceBanner: true });
+    h.book.finalizeSuppressedError('s1', { surfaceError: true });
 
     expect(h.persisted).toHaveLength(1);
+    expect(h.surfaced).toEqual([{ sessionId: 's1', detail: { message: 'boom' } }]);
     expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'c-1', outcome: 'failed' }]);
     expect(h.abandons).toEqual([{ sessionId: 's1', message: 'boom' }]);
   });
 
-  it('finalize(surfaceBanner=false):仍补落,但不把横幅弹回来(用户已自己接手)', () => {
+  it('finalize(surfaceError=false):仍补落,但不重新呈现错误(用户已自己接手)', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'boom' });
-    h.book.finalizeSuppressedError('s1', { surfaceBanner: false });
+    h.book.finalizeSuppressedError('s1', { surfaceError: false });
     expect(h.persisted).toHaveLength(1);
+    expect(h.surfaced).toEqual([]);
     expect(h.abandons).toEqual([{ sessionId: 's1' }]);
   });
 });
@@ -173,6 +279,7 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
 
     h.book.stashSuppressedError('s1', { message: 'second interruption' });
     expect(h.persisted.map((p) => p.detail.message)).toEqual(['first interruption']);
+    expect(h.surfaced, '被新一轮顶替只补历史，不能拿旧错误打扰用户').toEqual([]);
 
     h.book.schedule('s1', 3_000, vi.fn());
     // 第二条仍在压制中,等它自己的结局。
@@ -221,6 +328,61 @@ describe('退避排期:必可撤销、必只认自己那次', () => {
     setTimeoutSpy.mockRestore();
     clearTimeoutSpy.mockRestore();
   });
+
+  it('timer 已 fire 后 Manual Retry 接管 → 旧 async completion 不能终结新 owner', async () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.book.schedule('s1', 1_000, async (attempt) => {
+      await gate;
+      if (attempt.isCurrent()) {
+        h.book.finalizeSuppressedError('s1', { surfaceError: false });
+      }
+    });
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(h.book.hasSchedule('s1'), 'async 判定期间仍须保留可撤销 lease').toBe(true);
+
+    expect(h.book.claimSuppressedErrorForRetry('s1', 'manual-retry', 'manual')).toBe(true);
+    expect(h.book.hasSchedule('s1')).toBe(false);
+    expect(h.guardRollbacks).toEqual(['s1']);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.book.isSuppressedErrorClaimedByRetry('s1', 'manual-retry')).toBe(true);
+    expect(h.persisted, '旧 completion 不得补落或删除手动 replacement 的错误').toEqual([]);
+  });
+
+  it('clearError / 新输入接管 → 同步释放旧 Island filter，已 fire 回调随即失效', async () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    h.book.schedule('s1', 1_000, async (attempt) => {
+      await gate;
+      if (attempt.isCurrent()) {
+        h.book.finalizeSuppressedError('s1', { surfaceError: false });
+      }
+    });
+
+    vi.advanceTimersByTime(1_000);
+    await Promise.resolve();
+    expect(h.book.supersedeUnclaimedErrorForUserIntervention('s1')).toBe(true);
+    expect(h.book.shouldSuppressAgentIslandError('s1')).toBe(false);
+    expect(h.book.shouldSuppressAgentIslandCompletionTail('s1')).toBe(false);
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+
+    release();
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(h.persisted, '失效的旧回调不得重复 disposition').toHaveLength(1);
+    expect(h.surfaced).toEqual([]);
+  });
 });
 
 describe('会话终止收尾', () => {
@@ -237,6 +399,7 @@ describe('会话终止收尾', () => {
     expect(h.persisted, 'teardown 不能把压住的错误行悄悄丢掉').toEqual([
       { sessionId: 's1', detail: { message: 'boom' } },
     ]);
+    expect(h.surfaced, '会话已经终止，不应再向用户呈现旧错误').toEqual([]);
     expect(h.guardRollbacks).toEqual(['s1']);
     expect(h.abandons, '会话已被用户终止 → 只清接管态,不弹横幅').toEqual([{ sessionId: 's1' }]);
     expect(h.outcomes).toEqual([{ sessionId: 's1', clientId: 'c-1', outcome: 'failed' }]);
@@ -267,5 +430,53 @@ describe('会话终止收尾', () => {
     expect(h.persisted).toEqual([]);
     expect(h.outcomes).toEqual([]);
     expect(h.guardRollbacks).toEqual([]);
+  });
+
+  it('teardown 会补落仅进入 dispatching、尚无 accepted/provider 证明的旧错误', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+
+    h.book.teardown('s1');
+
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+  });
+
+  it('dispatching 后 teardown 与迟到 rollback 只补落旧错误一次', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+
+    h.book.teardown('s1');
+    expect(h.book.rollbackReplacementPreview('s1', 'retry-1')).toBe(false);
+    expect(h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(false);
+
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([]);
+  });
+
+  it('teardown 不复活已有 provider event 证明取代的旧错误', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+    h.book.discardReplacementProvenByProviderEvent('s1');
+
+    h.book.teardown('s1');
+
+    expect(h.persisted).toEqual([]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
   });
 });

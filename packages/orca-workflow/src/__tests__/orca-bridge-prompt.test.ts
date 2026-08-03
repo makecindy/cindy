@@ -33,9 +33,25 @@ describe('renderOrcaLeadSystemPrompt', () => {
 
     expect(prompt).toContain(workerRoutingRule);
     expect(prompt).toContain(nativeSubagentBoundary);
-    expect(prompt).toContain('Codex: spawn_agent; Claude Code: the Agent/Task tool');
+    expect(prompt).toContain('for example Codex spawn_agent, or the Claude Code Agent/Task tool');
     expect(prompt).not.toContain('followup_task');
     expect(prompt.indexOf(workerRoutingRule)).toBeLessThan(prompt.indexOf(nativeSubagentBoundary));
+  });
+
+  it('forbids substituting an Orca Worker for a subagent, and demands honesty when the harness has none', () => {
+    // Orca Worker 是 session 级协同者,subagent 是 agent 内部的一次性执行体 —— 两者
+    // 不可互换。此前引导只写了「native subagent 不满足 Orca 派单」这一半,缺了反方向,
+    // 且只列举 Codex / Claude Code 两家机制;没有原生机制的 harness(如 pi)因此被推向
+    // 它唯一看得见的 Orca 工具,表现为「误开协同模式」。
+    const prompt = renderOrcaLeadSystemPrompt(null);
+
+    expect(prompt).toContain('An Orca Worker is NEVER a substitute for a subagent.');
+    expect(prompt).toContain(
+      'If you have no native subagent mechanism, say so plainly and ask the user how to proceed',
+    );
+    expect(prompt).toContain('do NOT open or reuse an Orca Worker to satisfy a subagent request');
+    // 兜底路径也不许自己起进程冒充 subagent。
+    expect(prompt).toContain('do NOT improvise one by spawning processes yourself');
   });
 
   it('requires execution-channel disclosure and terminal-state verification', () => {
@@ -110,7 +126,7 @@ describe('renderOrcaLeadSystemPrompt', () => {
 
 describe('renderOrcaWorkerSystemPrompt', () => {
   const subagentHint =
-    'If the user asks for a "subagent" / "子代理", use your native subagent mechanism (Codex: spawn_agent; Claude Code: the Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers).';
+    'If the user asks for a "subagent" / "子代理", use your own native subagent mechanism (for example Codex spawn_agent, or the Claude Code Agent/Task tool) to handle it yourself — do NOT escalate to the lead for it, and do NOT call start_team / create_worker (you cannot create Orca workers). If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself; an Orca Worker is never a substitute for a subagent.';
 
   const workerMeta = {
     workerId: 'worker-1',
@@ -130,5 +146,15 @@ describe('renderOrcaWorkerSystemPrompt', () => {
 
     expect(prompt).toContain('worker_id=worker-1');
     expect(prompt).toContain(subagentHint);
+  });
+
+  it('tells a worker without a native subagent mechanism to be honest rather than substitute Orca', () => {
+    // worker 侧同规:没有原生机制时如实告知,不拿 Orca 顶替、不自己起进程。
+    const prompt = renderOrcaWorkerSystemPrompt(workerMeta);
+
+    expect(prompt).toContain(
+      'If you have no native subagent mechanism, tell the user so instead of substituting an Orca Worker or spawning processes yourself',
+    );
+    expect(prompt).toContain('an Orca Worker is never a substitute for a subagent');
   });
 });

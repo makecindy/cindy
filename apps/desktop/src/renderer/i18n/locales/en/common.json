@@ -5330,6 +5330,12 @@
       "openProviders": "Open Model Providers",
       "acknowledge": "Got it",
       "separator": ", "
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI is ready",
+      "desc": "A promotional balance of {{amount}} has been added and is valid until {{date}}. You can add funds any time after it runs out or expires.",
+      "openBilling": "View usage",
+      "acknowledge": "Got it"
     }
   },
   "voiceInputOverlay": {
@@ -6110,6 +6116,7 @@
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
+      "degraded": "Connection to the controlled device is unstable — retrying automatically…",
       "actionsUnavailable": "The controlled device is unavailable. Reconnect it before changing this session.",
       "resync": "Resync",
       "loading": "Loading session from the remote device…",
@@ -6243,9 +6250,8 @@
         "localMachine": "This device",
         "connecting": "Connecting…",
         "tasksLoading": "Loading sessions from {{device}}…",
-        "tasksLoadFailed": "Couldn't load sessions from {{device}}. Check the connection and try again.",
-        "tasksPartiallyFailed": "Sessions from {{device}} couldn't be loaded. Showing only content that loaded successfully.",
-        "retryTasks": "Reload sessions",
+        "tasksLoadFailed": "Can't reach sessions on {{device}} right now — retrying automatically…",
+        "tasksPartiallyFailed": "Can't reach sessions on {{device}} right now — retrying automatically; showing what's already loaded",
         "devicesLoading": "Loading remote devices…",
         "devicesLoadFailed": "Couldn't load the remote device list. Check the connection and try again.",
         "devicesPartiallyFailed": "The remote device list couldn't be refreshed. Showing only content that loaded successfully.",
@@ -8603,6 +8609,20 @@
           "expired": "Expired",
           "voided": "Voided"
         }
+      }
+    },
+    "orders": {
+      "title": "Order history",
+      "description": "Only top-up and subscription orders started inside Cindy are listed. Orders awaiting payment are canceled automatically once they time out.",
+      "count": "{{count}} orders",
+      "incomplete": "There are many order records. Only the latest {{count}} are shown.",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "Completed",
+        "awaitingPayment": "Awaiting payment",
+        "canceled": "Canceled",
+        "expired": "Expired",
+        "failed": "Payment failed"
       }
     },
     "dialogs": {

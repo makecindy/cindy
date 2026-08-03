@@ -122,6 +122,8 @@ function parseTurnStallMs(raw: string | undefined): number {
 
 export interface SessionOptions {
   id: string;
+  /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
+  sessionInstanceId?: string;
   agentKind: AgentKind;
   workDir: string;
   handle: AgentSessionHandle;
@@ -269,6 +271,8 @@ type SendReservation = {
 
 export class Session {
   readonly id: string;
+  /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
+  readonly instanceId: string;
   readonly agentKind: AgentKind;
   readonly workDir: string;
   readonly capabilities: Capabilities;
@@ -294,6 +298,8 @@ export class Session {
    * 同时请求关闭；所有调用方都必须等到 transport / 子进程真正释放后才能继续回收 worktree。
    */
   private closePromise: Promise<void> | null = null;
+  /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
+  private terminationStarted = false;
   private eventLoopStarted = false;
   private sendReservation: SendReservation | null = null;
   /**
@@ -330,6 +336,7 @@ export class Session {
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
+    this.instanceId = opts.sessionInstanceId ?? generateSessionId();
     this.agentKind = opts.agentKind;
     this.workDir = opts.workDir;
     this.handle = opts.handle;
@@ -580,6 +587,7 @@ export class Session {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
+    this.terminationStarted = true;
     this.closePromise = this.performClose();
     return this.closePromise;
   }
@@ -593,6 +601,7 @@ export class Session {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
+    this.terminationStarted = true;
     this.closePromise = this.performClose();
     return this.closePromise.then(() => true);
   }
@@ -614,6 +623,7 @@ export class Session {
 
   async detach(): Promise<void> {
     if (this.status === 'closed') return;
+    this.terminationStarted = true;
     try {
       if (this.handle.detach) {
         await this.handle.detach();
@@ -678,6 +688,22 @@ export class Session {
   /** Snapshot used by temporary host overrides to avoid undoing a newer user change. */
   get permissionModeState(): PermissionModeState {
     return { ...this.permissionModeStateValue };
+  }
+
+  /**
+   * 只在本 Session 仍活跃、未开始关闭、且没有权限切换在途时返回稳定快照。
+   * 权限边界读取方必须用本 getter，不能直接用 permissionModeState：底层切换
+   * 完成前旧 mode 仍会保留，而收紧操作一开始就应 fail closed。
+   */
+  get stablePermissionModeState(): PermissionModeState | null {
+    if (this.status !== 'active' || this.terminationStarted) return null;
+    if (
+      this.permissionModeChangesInFlight > 0 ||
+      this.externalPermissionModeChangesInFlight > 0
+    ) {
+      return null;
+    }
+    return this.permissionModeState;
   }
 
   /**

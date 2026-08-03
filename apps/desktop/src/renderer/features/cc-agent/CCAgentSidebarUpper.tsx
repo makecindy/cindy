@@ -151,10 +151,7 @@ import type {
   AutomationScheduleSessionInfo,
   AutomationSessionGroup,
 } from './lib/automationSidebarGrouping';
-import {
-  getSessionDeviceId,
-  retryRemoteSessionBootstrap,
-} from '@/features/device-link/remoteProjectsStore';
+import { getSessionDeviceId } from '@/features/device-link/remoteProjectsStore';
 import {
   useRemoteSessionActivity,
   useRemoteSessionActivityRevision,
@@ -275,6 +272,13 @@ function RemoteSidebarLoadNotice({
 }) {
   const { t } = useTranslation();
   const isError = status === 'error';
+  // tasks 的读取失败有完整自动恢复链路(10s 起对账退避重试 + 熔断探测恢复后自动重新
+  // bootstrap),失败态只是「自动重试进行中」的状态说明,不是要求用户行动的告警——
+  // 用中性样式 + role=status,且**不提供手动按钮**(2026-08 弱网实测反馈:重连必须
+  // 全自动,红色 alert + 按钮读起来像必须人工干预)。devices 目录失败没有等价的
+  // 自动重试,保持告警 + 手动重试。
+  const autoRetrying = isError && kind === 'tasks';
+  const alarming = isError && !autoRetrying;
   const messageKey =
     kind === 'tasks'
       ? status === 'loading'
@@ -289,10 +293,10 @@ function RemoteSidebarLoadNotice({
           : 'ccAgent.sidebar.machineSwitcher.devicesLoadFailed';
   return (
     <div
-      role={isError ? 'alert' : 'status'}
+      role={alarming ? 'alert' : 'status'}
       className={cn(
         'border',
-        isError
+        alarming
           ? 'border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]'
           : 'border-[var(--border-default)] bg-[var(--surface-chip)] text-[var(--text-secondary)]',
         partial
@@ -312,7 +316,7 @@ function RemoteSidebarLoadNotice({
           {t(messageKey, { device: deviceLabel })}
         </p>
       </div>
-      {isError && onRetry && (
+      {alarming && onRetry && (
         <button
           type="button"
           onClick={onRetry}
@@ -324,11 +328,7 @@ function RemoteSidebarLoadNotice({
           )}
         >
           <RefreshCw size={12} />
-          {t(
-            kind === 'tasks'
-              ? 'ccAgent.sidebar.machineSwitcher.retryTasks'
-              : 'ccAgent.sidebar.machineSwitcher.retryDevices',
-          )}
+          {t('ccAgent.sidebar.machineSwitcher.retryDevices')}
         </button>
       )}
     </div>
@@ -1063,11 +1063,6 @@ function ExpandedView({
       ),
     [i18n.language, remoteSessionBootstrapFailures],
   );
-  const handleRetryRemoteTasks = useCallback(() => {
-    for (const device of remoteSessionBootstrapFailures) {
-      retryRemoteSessionBootstrap(device.deviceId);
-    }
-  }, [remoteSessionBootstrapFailures]);
   const isLoadingSidebarSessions =
     sessionsHook.isLoading ||
     remoteSessionBootstrapLoading ||
@@ -2737,7 +2732,6 @@ function ExpandedView({
               status="error"
               deviceLabel={failedRemoteDeviceLabel}
               partial={false}
-              onRetry={handleRetryRemoteTasks}
             />
           ) : remoteDeviceDirectoryStatus === 'loading' && !hasVisibleSidebarContent ? (
             <RemoteSidebarLoadNotice kind="devices" status="loading" partial={false} />
@@ -2772,7 +2766,6 @@ function ExpandedView({
                   status="error"
                   deviceLabel={failedRemoteDeviceLabel}
                   partial
-                  onRetry={handleRetryRemoteTasks}
                 />
               )}
               {remoteDeviceDirectoryStatus === 'loading' && (

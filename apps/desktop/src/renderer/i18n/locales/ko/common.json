@@ -5328,6 +5328,12 @@
       "openProviders": "모델 제공자 열기",
       "acknowledge": "확인",
       "separator": ", "
+    },
+    "promotionalGrant": {
+      "title": "Cindy AI 사용이 시작되었습니다",
+      "desc": "프로모션 잔액 {{amount}}이 지급되었으며 {{date}}까지 사용할 수 있습니다. 모두 사용하거나 기간이 지난 뒤에도 언제든 충전할 수 있습니다.",
+      "openBilling": "사용량 보기",
+      "acknowledge": "확인"
     }
   },
   "voiceInputOverlay": {
@@ -6099,6 +6105,7 @@
     "remoteSession": {
       "reconnecting": "제어 대상 기기와 연결이 끊겼습니다. 다시 연결 중…",
       "hostOffline": "제어 대상 기기가 오프라인이라 지금은 동기화할 수 없습니다",
+      "degraded": "제어 대상 기기와 연결이 불안정합니다. 자동으로 다시 시도 중…",
       "actionsUnavailable": "제어 대상 기기를 사용할 수 없습니다. 다시 연결한 뒤 이 세션을 변경하세요.",
       "resync": "다시 동기화",
       "loading": "원격 기기에서 세션을 불러오는 중…",
@@ -6232,9 +6239,8 @@
         "localMachine": "이 기기",
         "connecting": "연결 중…",
         "tasksLoading": "{{device}}에서 세션을 불러오는 중…",
-        "tasksLoadFailed": "{{device}}의 세션을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
-        "tasksPartiallyFailed": "{{device}}의 세션을 불러오지 못했습니다. 불러온 내용만 표시합니다.",
-        "retryTasks": "세션 다시 불러오기",
+        "tasksLoadFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중…",
+        "tasksPartiallyFailed": "지금은 {{device}}의 세션을 불러올 수 없습니다. 자동으로 다시 시도 중이며 불러온 내용만 표시합니다",
         "devicesLoading": "원격 기기를 불러오는 중…",
         "devicesLoadFailed": "원격 기기 목록을 불러오지 못했습니다. 연결을 확인한 후 다시 시도하세요.",
         "devicesPartiallyFailed": "원격 기기 목록을 새로 고치지 못했습니다. 불러온 내용만 표시합니다.",
@@ -8590,6 +8596,20 @@
           "expired": "만료됨",
           "voided": "무효"
         }
+      }
+    },
+    "orders": {
+      "title": "주문 내역",
+      "description": "Cindy에서 시작한 잔액 충전 및 구독 주문만 표시합니다. 결제 대기 중인 주문은 시간이 지나면 자동으로 취소됩니다.",
+      "count": "{{count}}건",
+      "incomplete": "주문 내역이 많아 최근 {{count}}건만 표시합니다.",
+      "orderId": "NO. {{id}}",
+      "states": {
+        "completed": "완료",
+        "awaitingPayment": "결제 대기",
+        "canceled": "취소됨",
+        "expired": "만료됨",
+        "failed": "결제 실패"
       }
     },
     "dialogs": {

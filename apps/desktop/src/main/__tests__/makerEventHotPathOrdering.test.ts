@@ -88,6 +88,57 @@ describe('maker:event hot path ordering', () => {
     );
   });
 
+  it('keeps auto-resume-owned terminal errors out of Agent Island until they are final', () => {
+    const handler = source.match(
+      /function handleAgentIslandEventAfterBroadcast\([\s\S]*?\n}\n\nfunction surfaceSuppressedAutoResumeErrorInAgentIsland/,
+    )?.[0];
+    expect(handler).toBeTruthy();
+    if (!handler) return;
+
+    expectOrder(handler, 'service.deferRemoteAuthRetryError(meta, event);', 'const terminalError =');
+    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumePending(session.id) === true');
+    expect(handler).toContain('agentInputCoordinatorHolder?.isAutoResumeDeferred(session.id) === true');
+    expect(handler).toContain(
+      'autoResumeBookkeeping.shouldSuppressAgentIslandError(session.id)',
+    );
+    expect(handler).toContain(
+      'autoResumeBookkeeping.shouldSuppressAgentIslandCompletionTail(session.id)',
+    );
+    expect(handler).toContain('(terminalError && autoResumeOwnsError)');
+    expect(handler).toContain(
+      '(isAgentIslandCompletionTail(event) && autoResumeOwnsCompletionTail)',
+    );
+    expectOrder(handler, 'const autoResumeOwnsError =', 'service.handleAgentEvent(meta, event);');
+    expect(handler).not.toContain('suppressErrorSound');
+
+    expect(source).toContain('surfaceSuppressedAutoResumeErrorInAgentIsland(sessionId, detail)');
+    expect(source).toContain("data: { ...detail, isTerminal: true }");
+    expect(source).toContain(
+      'autoResumeBookkeeping.claimSuppressedErrorForRetry(sessionId, clientId, source);',
+    );
+    expect(source).toContain('if (!attempt.isCurrent()) {');
+    expect(source).toContain(
+      'autoResumeBookkeeping.supersedeUnclaimedErrorForUserIntervention(sessionId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.markReplacementDispatching(sessionId, clientId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);',
+    );
+    expect(source).toContain('onRejectedUserTurn: (sessionId, item) => {');
+    expect(source).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
+    expect(source).toContain(
+      'autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, clientId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);',
+    );
+    expect(source).not.toContain(
+      'autoResumeBookkeeping.discardSuppressedError(sessionId);',
+    );
+  });
+
   it('only status/done/error paths request idle restore', () => {
     const wireSessionSource = extractWireSessionSource();
     const statusIdleAssignments = [...wireSessionSource.matchAll(/shouldMarkTurnStatusIdleAfterBroadcast = true;/g)]

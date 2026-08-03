@@ -52,6 +52,19 @@ const MISSING_STATUS_PROBE_LIMIT = 8;
 /** 默认重试次数(含首次):退避 250→500→1000→2000→3000ms,总窗口 ~6.75s,覆盖被控端冷启动迁移。 */
 const DEFAULT_MAX_ATTEMPTS = 6;
 
+/**
+ * 超时类失败(DEVICE_LINK_TIMEOUT)的独立预算(含首次):超时不是快速失败——每次都
+ * 吃满隧道超时(sessions:list 现为 12s)。按 DEFAULT_MAX_ATTEMPTS 重试的话,一轮对账
+ * 最坏连打 6 个满超时请求(2026-08 弱网实测:30s 超时时代一轮 ~187s,单日 2253 次超时
+ * 堆成请求风暴)。超时说明链路不通,原地重试大概率还是超时:只再试 1 次,其余交给
+ * 下一轮 reconciler / push / 熔断探测兜底。DbClient not ready 等毫秒级快速失败仍走
+ * 完整预算(它们才是这条重试链的原始动机:覆盖被控端冷启动迁移窗口)。
+ */
+const MAX_TIMEOUT_ATTEMPTS = 2;
+
+/** 超时标记(renderer 看到的是 main IPC 层映射后的码,见 TRANSIENT_MARKERS 注释)。 */
+const TIMEOUT_MARKER = 'DEVICE_LINK_TIMEOUT';
+
 /** 永久错误标记:命中即立即放弃(被控开关关 / channel 不在白名单)—— 重试也不会变。 */
 const PERMANENT_MARKERS = ['REMOTE_DISABLED', 'CHANNEL_NOT_ALLOWED'] as const;
 
@@ -357,6 +370,7 @@ async function runRefreshRemoteDeviceSessions(
   const maxAttempts = opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS;
   const deviceName = name ?? remoteProjectsStore.getDeviceName(deviceId) ?? deviceId;
   const epoch = remoteProjectsStore.nextSnapshotEpoch(deviceId);
+  let timeoutAttempts = 0;
 
   for (let attempt = 0; attempt < maxAttempts; attempt++) {
     // 被一次更新的重拉取代(期间又发起了新的 refresh)→ 停手,交给那一次(也避免无谓重试)。
@@ -400,7 +414,12 @@ async function runRefreshRemoteDeviceSessions(
         log.debug(`refreshRemoteDeviceSessions access revoked for ${deviceId.slice(0, 8)}`);
         return 'revoked';
       }
-      const canRetry = attempt < maxAttempts - 1 && isTransientRemoteError(message);
+      // 超时单独记账:它每次都吃满隧道超时,不能像快速失败那样按完整预算原地重试。
+      if (message.includes(TIMEOUT_MARKER)) timeoutAttempts++;
+      const canRetry =
+        attempt < maxAttempts - 1 &&
+        timeoutAttempts < MAX_TIMEOUT_ATTEMPTS &&
+        isTransientRemoteError(message);
       if (!canRetry) {
         // 永久错误 / 重试耗尽:放弃(push / 下一次 reconnect 仍会兜底补上,只是慢一拍)。
         log.debug(`refreshRemoteDeviceSessions gave up for ${deviceId.slice(0, 8)}`, err);
