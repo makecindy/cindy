@@ -831,13 +831,26 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // renderer 只拿 overrides + platform, 生效值合并在 renderer 侧用同一份
   // shared 代码完成 —— 与 main 消费端判定不漂移。
   appShortcuts: {
-    getState: (): { overrides: Record<string, unknown>; platform: string } =>
+    getState: (): {
+      overrides: Record<string, unknown>;
+      platform: string;
+      unavailableIds?: string[];
+    } =>
       ipcRenderer.sendSync('app-shortcuts:get'),
-    setOverride: (id: string, combo: unknown): Promise<{ overrides: Record<string, unknown> }> =>
+    setOverride: (id: string, combo: unknown): Promise<{
+      overrides: Record<string, unknown>;
+      unavailableIds?: string[];
+    }> =>
       ipcRenderer.invoke('app-shortcuts:set-override', id, combo),
-    clearOverride: (id: string): Promise<{ overrides: Record<string, unknown> }> =>
+    clearOverride: (id: string): Promise<{
+      overrides: Record<string, unknown>;
+      unavailableIds?: string[];
+    }> =>
       ipcRenderer.invoke('app-shortcuts:clear-override', id),
-    resetAll: (): Promise<{ overrides: Record<string, unknown> }> =>
+    resetAll: (): Promise<{
+      overrides: Record<string, unknown>;
+      unavailableIds?: string[];
+    }> =>
       ipcRenderer.invoke('app-shortcuts:reset-all'),
     // 设置页录制态通知: main 侧据此暂停菜单 accelerator 注册与 before-input
     // 消费 (录制互斥的 main 半边; renderer 半边是 body dataset 旗标)。

@@ -3,6 +3,7 @@ import {
   BrowserWindow,
   clipboard,
   dialog,
+  globalShortcut,
   ipcMain,
   Menu,
   nativeImage,
@@ -634,10 +635,13 @@ import {
 } from '../shared/appShortcuts.js';
 import {
   getAppShortcutStore,
+  installGlobalMainWindowShortcutController,
   isAppShortcutRecordingActive,
   registerAppShortcutIpc,
+  setGlobalMainWindowShortcutUnavailable,
   subscribeAppShortcutRecording,
 } from './app-shortcuts/index.js';
+import { GlobalMainWindowShortcutController } from './app-shortcuts/global-main-window-shortcut.js';
 import { installNewMakerWindowShortcut } from './app-shortcuts/new-maker-window-shortcut.js';
 import { registerLayoutIpc } from './layout/index.js';
 import {
@@ -6213,6 +6217,21 @@ app.on('ready', async () => {
   initAnalyticsSettingsService();
   startupWindowCreationAllowed = true;
   createWindow();
+  const disposeGlobalMainWindowShortcut = installGlobalMainWindowShortcutController(
+    new GlobalMainWindowShortcutController({
+      platform: process.platform,
+      globalShortcut,
+      screen,
+      getMainWindow: () => mainWindowRef,
+      focusApp: () => {
+        if (process.platform === 'darwin') app.focus({ steal: true });
+      },
+      isRecording: isAppShortcutRecordingActive,
+      onAvailabilityChanged: setGlobalMainWindowShortcutUnavailable,
+      logger: createLogger('app-shortcuts:global-main-window'),
+    }),
+  );
+  app.once('will-quit', disposeGlobalMainWindowShortcut);
   // 预热仅服务 dev macOS，延迟执行避免和启动关键路径争用 CPU；失败由入口内部吞掉。
   setTimeout(() => {
     prewarmMacComputerPermissionGuideHelper();

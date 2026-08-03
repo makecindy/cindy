@@ -2,12 +2,22 @@ import { app, BrowserWindow, ipcMain } from 'electron';
 import path from 'node:path';
 
 import { throwIpcError } from '../utils/ipcValidate.js';
-import type { AppShortcutOverrides } from '../../shared/appShortcuts.js';
+import {
+  getAppShortcutDefinition,
+  normalizeAppShortcutCombo,
+  type AppShortcutCombo,
+  type AppShortcutId,
+  type AppShortcutOverrides,
+} from '../../shared/appShortcuts.js';
 import {
   AppShortcutStore,
   APP_SHORTCUTS_FILE_NAME,
   type AppShortcutOverrideRejection,
 } from './AppShortcutStore.js';
+import {
+  GLOBAL_MAIN_WINDOW_SHORTCUT_ID,
+  type GlobalMainWindowShortcutController,
+} from './global-main-window-shortcut.js';
 
 /**
  * 应用级快捷键 override 的进程级单例 + IPC 注册。
@@ -23,6 +33,8 @@ import {
 
 let storeSingleton: AppShortcutStore | null = null;
 let ipcRegistered = false;
+let globalMainWindowShortcutController: GlobalMainWindowShortcutController | null = null;
+let globalMainWindowShortcutUnavailable = false;
 
 // ── 录制态 gate ──────────────────────────────────────────────────────────
 // 设置页录制快捷键期间, renderer 的 useAppShortcut 靠 body dataset 让路,
@@ -69,25 +81,32 @@ export function registerAppShortcutIpc(): void {
     event.returnValue = {
       overrides: store.getOverrides(),
       platform: process.platform,
+      unavailableIds: getUnavailableShortcutIds(),
     };
   });
 
   ipcMain.handle('app-shortcuts:set-override', (_event, id: unknown, combo: unknown) => {
-    const rejection = runStoreMutation(() => store.setOverride(id, combo));
+    const rejection = store.validateOverride(id, combo);
     if (rejection) {
       throwIpcError('INVALID_PARAMS', rejectionMessage(rejection, id));
     }
-    return { overrides: store.getOverrides() };
+    const normalizedCombo = combo === null ? null : normalizeAppShortcutCombo(combo)!;
+    runCoordinatedMutation(id, normalizedCombo, () => store.setOverride(id, combo));
+    return appShortcutMutationResult(store);
   });
 
   ipcMain.handle('app-shortcuts:clear-override', (_event, id: unknown) => {
-    runStoreMutation(() => store.clearOverride(id));
-    return { overrides: store.getOverrides() };
+    runCoordinatedMutation(id, getGlobalMainWindowDefaultCombo(), () => store.clearOverride(id));
+    return appShortcutMutationResult(store);
   });
 
   ipcMain.handle('app-shortcuts:reset-all', () => {
-    runStoreMutation(() => store.resetAll());
-    return { overrides: store.getOverrides() };
+    runCoordinatedMutation(
+      GLOBAL_MAIN_WINDOW_SHORTCUT_ID,
+      getGlobalMainWindowDefaultCombo(),
+      () => store.resetAll(),
+    );
+    return appShortcutMutationResult(store);
   });
 
   ipcMain.on('app-shortcuts:set-recording', (event, active: unknown) => {
@@ -103,6 +122,80 @@ export function registerAppShortcutIpc(): void {
       event.sender.once('render-process-gone', reset);
     }
   });
+}
+
+/** app ready 后装入 Electron globalShortcut 协调器并注册当前生效键位。 */
+export function installGlobalMainWindowShortcutController(
+  controller: GlobalMainWindowShortcutController,
+): () => void {
+  globalMainWindowShortcutController?.dispose();
+  setGlobalMainWindowShortcutUnavailable(false);
+  globalMainWindowShortcutController = controller;
+  controller.initialize(
+    getAppShortcutStore().getEffectiveCombos(GLOBAL_MAIN_WINDOW_SHORTCUT_ID)[0] ?? null,
+  );
+  return () => {
+    if (globalMainWindowShortcutController !== controller) return;
+    controller.dispose();
+    globalMainWindowShortcutController = null;
+  };
+}
+
+/** controller 的注册结果进入同步快照与 changed 广播，启动失败不会静默。 */
+export function setGlobalMainWindowShortcutUnavailable(unavailable: boolean): void {
+  if (globalMainWindowShortcutUnavailable === unavailable) return;
+  globalMainWindowShortcutUnavailable = unavailable;
+  broadcastAppShortcutsChanged(getAppShortcutStore().getOverrides());
+}
+
+function runCoordinatedMutation(
+  id: unknown,
+  nextCombo: AppShortcutCombo | null,
+  mutation: () => AppShortcutOverrideRejection | void | null,
+): void {
+  if (id !== GLOBAL_MAIN_WINDOW_SHORTCUT_ID || !globalMainWindowShortcutController) {
+    runStoreMutation(mutation);
+    return;
+  }
+  const prepared = globalMainWindowShortcutController.prepare(nextCombo);
+  if (!prepared.ok) {
+    throwIpcError(
+      prepared.reason === 'unavailable'
+        ? 'APP_SHORTCUT_GLOBAL_UNAVAILABLE'
+        : 'INVALID_PARAMS',
+      prepared.reason === 'unavailable'
+        ? 'global shortcut is already in use by the operating system or another application'
+        : 'shortcut combo cannot be expressed as a global accelerator',
+    );
+  }
+  try {
+    runStoreMutation(mutation);
+    prepared.commit();
+  } catch (error) {
+    prepared.rollback();
+    throw error;
+  }
+}
+
+function getGlobalMainWindowDefaultCombo(): AppShortcutCombo | null {
+  const defaults = getAppShortcutDefinition(
+    GLOBAL_MAIN_WINDOW_SHORTCUT_ID,
+  ).getDefaultCombos(process.platform);
+  return defaults[0] ?? null;
+}
+
+function getUnavailableShortcutIds(): AppShortcutId[] {
+  return globalMainWindowShortcutUnavailable ? [GLOBAL_MAIN_WINDOW_SHORTCUT_ID] : [];
+}
+
+function appShortcutMutationResult(store: AppShortcutStore): {
+  overrides: AppShortcutOverrides;
+  unavailableIds: AppShortcutId[];
+} {
+  return {
+    overrides: store.getOverrides(),
+    unavailableIds: getUnavailableShortcutIds(),
+  };
 }
 
 function runStoreMutation<T>(mutation: () => T): T {
@@ -134,6 +227,8 @@ function rejectionMessage(rejection: AppShortcutOverrideRejection, id: unknown):
       return 'shortcut combo is reserved by the operating system';
     case 'menu-inexpressible':
       return 'shortcut combo cannot be expressed as a menu accelerator on macOS';
+    case 'global-inexpressible':
+      return 'shortcut combo cannot be expressed as a global accelerator';
     case 'conflict':
       return 'shortcut combo conflicts with another shortcut in an overlapping scope';
   }
@@ -142,6 +237,9 @@ function rejectionMessage(rejection: AppShortcutOverrideRejection, id: unknown):
 function broadcastAppShortcutsChanged(overrides: AppShortcutOverrides): void {
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;
-    window.webContents.send('app-shortcuts:changed', { overrides });
+    window.webContents.send('app-shortcuts:changed', {
+      overrides,
+      unavailableIds: getUnavailableShortcutIds(),
+    });
   });
 }

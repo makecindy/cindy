@@ -2991,9 +2991,15 @@
         "conflict": "Conflicts with \"{{name}}\"",
         "voiceConflict": "Conflicts with the voice input shortcut",
         "composerVoiceConflict": "Conflicts with the voice input shortcut. Change either the composer send shortcut or the voice input shortcut.",
-        "menuAccelerator": "This combination cannot be registered as a menu shortcut"
+        "menuAccelerator": "This combination cannot be registered as a menu shortcut",
+        "globalAccelerator": "This combination cannot be registered as a global shortcut",
+        "globalUnavailable": "This shortcut is in use by the system or another app. Choose a different key combination."
       },
       "items": {
+        "toggle-main-window": {
+          "label": "Show or Hide Cindy",
+          "description": "Show Cindy from other apps; hide it only when Cindy is already in front"
+        },
         "toggle-sidebar": {
           "label": "Toggle sidebar",
           "description": "Collapse or expand the session list sidebar"

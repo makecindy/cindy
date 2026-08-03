@@ -40,6 +40,7 @@ import {
   getAppShortcutCombos,
   getAppShortcutOverrides,
   getAppShortcutPlatform,
+  getUnavailableAppShortcutIds,
   subscribeAppShortcuts,
 } from '@/lib/appShortcutStore';
 import { getVoiceInputSettings } from '@/hooks/useVoiceInputSettings';
@@ -64,6 +65,10 @@ export function KeyboardShortcutsSection() {
   const overrides = JSON.parse(overridesJson) as Partial<
     Record<AppShortcutId, AppShortcutCombo | null>
   >;
+  const unavailableIdsJson = useSyncExternalStore(subscribeAppShortcuts, () =>
+    JSON.stringify(getUnavailableAppShortcutIds()),
+  );
+  const unavailableIds = new Set(JSON.parse(unavailableIdsJson) as AppShortcutId[]);
   const [recordingId, setRecordingId] = useState<AppShortcutId | null>(null);
   const [error, setError] = useState<RecordingError | null>(null);
   const [globalError, setGlobalError] = useState<string | null>(null);
@@ -74,9 +79,11 @@ export function KeyboardShortcutsSection() {
       // Decode the IPC envelope so persistence failures never look successful.
       const ipcError = extractIpcError(err);
       return t(
-        ipcError?.code === 'INVALID_PARAMS'
-          ? 'settings.shortcuts.errors.notBindable'
-          : 'settings.shortcuts.errors.saveFailed',
+        ipcError?.code === 'APP_SHORTCUT_GLOBAL_UNAVAILABLE'
+          ? 'settings.shortcuts.errors.globalUnavailable'
+          : ipcError?.code === 'INVALID_PARAMS'
+            ? 'settings.shortcuts.errors.notBindable'
+            : 'settings.shortcuts.errors.saveFailed',
       );
     },
     [t],
@@ -132,6 +139,9 @@ export function KeyboardShortcutsSection() {
         comboToElectronAccelerator(combo, 'darwin') === null
       ) {
         return t('settings.shortcuts.errors.menuAccelerator');
+      }
+      if (selfDef.global && comboToElectronAccelerator(combo, platform) === null) {
+        return t('settings.shortcuts.errors.globalAccelerator');
       }
       // 跨 id 冲突: 与 main store 写入兜底共用 shared 的 findAppShortcutConflict。
       const conflictId = findAppShortcutConflict(id, combo, getAppShortcutOverrides(), platform);
@@ -265,7 +275,11 @@ export function KeyboardShortcutsSection() {
           const isRecording = recordingId === def.id;
           const customized = def.id in overrides;
           const combos = getAppShortcutCombos(def.id);
-          const rowError = error?.id === def.id ? error.message : null;
+          const rowError = error?.id === def.id
+            ? error.message
+            : unavailableIds.has(def.id)
+              ? t('settings.shortcuts.errors.globalUnavailable')
+              : null;
           return (
             <div key={def.id} className="flex items-center gap-2 py-2">
               {/* 条目标题 + 说明双行: 标题主文字色 + 说明次级色,

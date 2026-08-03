@@ -2990,9 +2990,15 @@
         "conflict": "与「{{name}}」冲突",
         "voiceConflict": "与语音输入快捷键冲突",
         "composerVoiceConflict": "与语音输入快捷键冲突，请修改发送或语音输入快捷键。",
-        "menuAccelerator": "该组合键无法注册为菜单快捷键"
+        "menuAccelerator": "该组合键无法注册为菜单快捷键",
+        "globalAccelerator": "该组合键无法注册为全局快捷键",
+        "globalUnavailable": "该快捷键已被系统或其他应用占用，请换一个组合键"
       },
       "items": {
+        "toggle-main-window": {
+          "label": "显示或隐藏 Cindy",
+          "description": "从其他应用呼出 Cindy；仅在 Cindy 已处于前台时隐藏"
+        },
         "toggle-sidebar": {
           "label": "切换侧边栏",
           "description": "收起或展开左侧任务列表"

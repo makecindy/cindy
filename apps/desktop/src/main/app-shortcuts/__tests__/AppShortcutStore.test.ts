@@ -114,6 +114,19 @@ describe('AppShortcutStore', () => {
     expect(winStore.setOverride('new-maker', combo('IntlYen', { ctrl: true }))).toBeNull();
   });
 
+  it('rejects global shortcut combos that Electron cannot register', () => {
+    const store = makeStore('win32');
+    expect(store.validateOverride(
+      'toggle-main-window',
+      combo('NumpadAdd', { ctrl: true }),
+    )).toBe('global-inexpressible');
+    expect(store.setOverride(
+      'toggle-main-window',
+      combo('NumpadAdd', { ctrl: true }),
+    )).toBe('global-inexpressible');
+    expect(store.getOverrides()).toEqual({});
+  });
+
   it('setOverride(null) deletes the binding: effective combos become empty', () => {
     const store = makeStore('darwin');
     expect(store.setOverride('find-in-page', null)).toBeNull();

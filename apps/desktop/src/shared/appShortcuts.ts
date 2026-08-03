@@ -33,6 +33,7 @@ export interface AppShortcutCombo {
 export type AppShortcutScope = 'app' | 'workdir-doc' | 'browser' | 'composer';
 
 export const APP_SHORTCUT_IDS = [
+  'toggle-main-window',
   'toggle-sidebar',
   'open-settings',
   'new-maker',
@@ -109,6 +110,12 @@ export interface AppShortcutDefinition {
    * —— store 与设置页双端都按此校验拦截。
    */
   menuBacked?: boolean;
+  /**
+   * true = 由 Electron globalShortcut 在系统级注册。该组合在所有平台都必须
+   * 可转换为 accelerator；运行时注册失败（被其它应用占用）由 main 进程
+   * 保留旧绑定并回报设置页，不能只落盘一个永远不生效的组合。
+   */
+  global?: boolean;
   /** 缺省 = 全平台可用。 */
   platforms?: ReadonlyArray<'darwin' | 'win32' | 'linux'>;
   /**
@@ -140,6 +147,15 @@ function modCombo(code: string, platform: string, extra: ComboModifiers = {}): A
 // 数组顺序即设置页展示顺序: 高频动作在前 (新对话 → 侧边栏 → 权限模式 →
 // 命令行 → 查找 → 缩放 → 浏览器)。hiddenInSettings 项不展示但仍正常生效。
 export const APP_SHORTCUT_DEFINITIONS: ReadonlyArray<AppShortcutDefinition> = [
+  {
+    id: 'toggle-main-window',
+    scope: 'app',
+    labelKey: 'settings.shortcuts.items.toggle-main-window.label',
+    descriptionKey: 'settings.shortcuts.items.toggle-main-window.description',
+    rebindable: true,
+    global: true,
+    getDefaultCombos: (platform) => [modCombo('Space', platform, { shift: true })],
+  },
   {
     id: 'new-maker',
     scope: 'app',

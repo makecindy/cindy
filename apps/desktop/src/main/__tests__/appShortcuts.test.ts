@@ -119,6 +119,27 @@ describe('formatAppShortcutCombo', () => {
 });
 
 describe('overrides normalization and effective merge', () => {
+  it('defines a cross-platform global main-window toggle default', () => {
+    expect(getEffectiveAppShortcuts({}, 'darwin').get('toggle-main-window')).toEqual([
+      combo('Space', { meta: true, shift: true }),
+    ]);
+    for (const platform of ['win32', 'linux']) {
+      expect(getEffectiveAppShortcuts({}, platform).get('toggle-main-window')).toEqual([
+        combo('Space', { ctrl: true, shift: true }),
+      ]);
+    }
+  });
+
+  it('keeps every global shortcut default expressible as an Electron accelerator', () => {
+    for (const platform of ['darwin', 'win32', 'linux']) {
+      for (const def of APP_SHORTCUT_DEFINITIONS.filter((candidate) => candidate.global)) {
+        for (const value of def.getDefaultCombos(platform)) {
+          expect(comboToElectronAccelerator(value, platform)).not.toBeNull();
+        }
+      }
+    }
+  });
+
   it('defines right sidebar tab cycling defaults with primary and fallback combos', () => {
     const mac = getEffectiveAppShortcuts({}, 'darwin');
     expect(mac.get('right-tab-prev')).toEqual([

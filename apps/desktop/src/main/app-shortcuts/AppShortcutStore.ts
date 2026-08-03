@@ -34,6 +34,7 @@ export type AppShortcutOverrideRejection =
   | 'not-bindable'
   | 'system-reserved'
   | 'menu-inexpressible'
+  | 'global-inexpressible'
   | 'conflict';
 
 export interface AppShortcutStoreOptions {
@@ -87,15 +88,27 @@ export class AppShortcutStore {
    * combo 传 null = 删除绑定 (该快捷键禁用), 跳过组合键校验。
    */
   setOverride(id: unknown, combo: unknown): AppShortcutOverrideRejection | null {
+    const rejection = this.validateOverride(id, combo);
+    if (rejection) return rejection;
+    const normalizedId = id as AppShortcutId;
+    const current = this.load();
+    this.replaceOverrides({
+      ...current,
+      [normalizedId]: combo === null ? null : normalizeAppShortcutCombo(combo)!,
+    });
+    return null;
+  }
+
+  /**
+   * 只校验、不写盘。系统级快捷键协调器先用它确认候选合法，再尝试向 OS
+   * 预注册；只有两步都成功才调用 setOverride 提交，避免保存一个不生效的键位。
+   */
+  validateOverride(id: unknown, combo: unknown): AppShortcutOverrideRejection | null {
     if (!isAppShortcutId(id)) return 'unknown-id';
     const def = getAppShortcutDefinition(id);
     if (!def.rebindable) return 'not-rebindable';
     if (!isAppShortcutAvailableOnPlatform(id, this.options.platform)) return 'platform-unavailable';
-    if (combo === null) {
-      const current = this.load();
-      this.replaceOverrides({ ...current, [id]: null });
-      return null;
-    }
+    if (combo === null) return null;
     const normalized = normalizeAppShortcutCombo(combo);
     if (!normalized) return 'invalid-combo';
     if (!isAppShortcutComboBindable(normalized)) return 'not-bindable';
@@ -111,13 +124,15 @@ export class AppShortcutStore {
     ) {
       return 'menu-inexpressible';
     }
+    if (def.global && comboToElectronAccelerator(normalized, this.options.platform) === null) {
+      return 'global-inexpressible';
+    }
     const current = this.load();
     // 跨 id 冲突兜底 (renderer 已前置校验, 这里防多窗口并发 / 直调 IPC):
     // 与重叠 scope 域内其它 id 的生效组合撞键则拒绝。
     if (findAppShortcutConflict(id, normalized, current, this.options.platform)) {
       return 'conflict';
     }
-    this.replaceOverrides({ ...current, [id]: normalized });
     return null;
   }
 

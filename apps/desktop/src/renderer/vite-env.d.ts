@@ -1074,19 +1074,30 @@ interface ElectronAPI {
     getState: () => {
       overrides: import('../shared/appShortcuts').AppShortcutOverrides;
       platform: string;
+      unavailableIds?: import('../shared/appShortcuts').AppShortcutId[];
     };
     setOverride: (
       id: import('../shared/appShortcuts').AppShortcutId,
       combo: import('../shared/appShortcuts').AppShortcutCombo | null,
-    ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
+    ) => Promise<{
+      overrides: import('../shared/appShortcuts').AppShortcutOverrides;
+      unavailableIds?: import('../shared/appShortcuts').AppShortcutId[];
+    }>;
     clearOverride: (
       id: import('../shared/appShortcuts').AppShortcutId,
-    ) => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
-    resetAll: () => Promise<{ overrides: import('../shared/appShortcuts').AppShortcutOverrides }>;
+    ) => Promise<{
+      overrides: import('../shared/appShortcuts').AppShortcutOverrides;
+      unavailableIds?: import('../shared/appShortcuts').AppShortcutId[];
+    }>;
+    resetAll: () => Promise<{
+      overrides: import('../shared/appShortcuts').AppShortcutOverrides;
+      unavailableIds?: import('../shared/appShortcuts').AppShortcutId[];
+    }>;
     setRecording: (active: boolean) => void;
     onChanged: (
       callback: (payload: {
         overrides: import('../shared/appShortcuts').AppShortcutOverrides;
+        unavailableIds?: import('../shared/appShortcuts').AppShortcutId[];
       }) => void,
     ) => () => void;
   };

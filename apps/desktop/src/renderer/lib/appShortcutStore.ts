@@ -1,5 +1,6 @@
 import {
   getEffectiveAppShortcuts,
+  isAppShortcutId,
   normalizeAppShortcutOverrides,
   type AppShortcutCombo,
   type AppShortcutId,
@@ -26,6 +27,7 @@ import { voiceInputShortcutToAppShortcutCombo } from '../voice-input/appShortcut
 let platform = 'darwin';
 let effective = new Map<AppShortcutId, AppShortcutCombo[]>();
 let overridesSnapshot: AppShortcutOverrides = {};
+let unavailableIds = new Set<AppShortcutId>();
 let voiceYieldCombos: AppShortcutCombo[] = [];
 const listeners = new Set<() => void>();
 let initialized = false;
@@ -54,11 +56,13 @@ function ensureInitialized(): void {
       const state = api.getState();
       platform = state.platform;
       overridesSnapshot = normalizeAppShortcutOverrides(state.overrides, platform);
+      unavailableIds = normalizeUnavailableIds(state.unavailableIds);
     } catch {
       overridesSnapshot = {};
     }
     api.onChanged((payload) => {
       overridesSnapshot = normalizeAppShortcutOverrides(payload?.overrides, platform);
+      unavailableIds = normalizeUnavailableIds(payload?.unavailableIds);
       recomputeEffective();
       listeners.forEach((cb) => cb());
     });
@@ -94,9 +98,20 @@ export function getAppShortcutPlatform(): string {
   return platform;
 }
 
+/** 供 useSyncExternalStore 快照纳入运行时注册状态，避免仅 overrides 相同时漏渲染。 */
+export function getUnavailableAppShortcutIds(): AppShortcutId[] {
+  ensureInitialized();
+  return [...unavailableIds].sort();
+}
+
 /** 订阅生效表变化 (改绑 / reset 后触发); 返回取消订阅函数。 */
 export function subscribeAppShortcuts(listener: () => void): () => void {
   ensureInitialized();
   listeners.add(listener);
   return () => listeners.delete(listener);
+}
+
+function normalizeUnavailableIds(raw: unknown): Set<AppShortcutId> {
+  if (!Array.isArray(raw)) return new Set();
+  return new Set(raw.filter(isAppShortcutId));
 }

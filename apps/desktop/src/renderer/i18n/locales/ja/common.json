@@ -2990,9 +2990,15 @@
         "conflict": "「{{name}}」と競合しています",
         "voiceConflict": "音声入力のショートカットと競合しています",
         "composerVoiceConflict": "音声入力のショートカットと競合しています。メッセージ入力の送信ショートカットまたは音声入力のショートカットを変更してください。",
-        "menuAccelerator": "この組み合わせはメニューショートカットとして登録できません"
+        "menuAccelerator": "この組み合わせはメニューショートカットとして登録できません",
+        "globalAccelerator": "この組み合わせはグローバルショートカットとして登録できません",
+        "globalUnavailable": "このショートカットは OS または別のアプリで使用されています。別のキーの組み合わせを選んでください"
       },
       "items": {
+        "toggle-main-window": {
+          "label": "Cindy を表示または非表示",
+          "description": "他のアプリから Cindy を表示し、Cindy が前面にあるときだけ非表示にします"
+        },
         "toggle-sidebar": {
           "label": "サイドバーを切り替え",
           "description": "左側のセッションリストを折りたたみ・展開します"

@@ -14,6 +14,8 @@ const combo = {
 const mocks = vi.hoisted(() => ({
   getOverrides: vi.fn(),
   getCombos: vi.fn(),
+  getUnavailableIds: vi.fn(),
+  listeners: new Set<() => void>(),
 }));
 
 vi.mock('react-i18next', () => ({
@@ -28,7 +30,11 @@ vi.mock('@/lib/appShortcutStore', () => ({
   getAppShortcutCombos: mocks.getCombos,
   getAppShortcutOverrides: mocks.getOverrides,
   getAppShortcutPlatform: () => 'darwin',
-  subscribeAppShortcuts: () => () => {},
+  getUnavailableAppShortcutIds: mocks.getUnavailableIds,
+  subscribeAppShortcuts: (listener: () => void) => {
+    mocks.listeners.add(listener);
+    return () => mocks.listeners.delete(listener);
+  },
 }));
 
 vi.mock('@/hooks/useVoiceInputSettings', () => ({
@@ -40,6 +46,52 @@ import { KeyboardShortcutsSection } from '../KeyboardShortcutsSection';
 describe('KeyboardShortcutsSection mutation ordering', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.listeners.clear();
+    mocks.getUnavailableIds.mockReturnValue([]);
+  });
+
+  it('shows a row error when the global shortcut could not be registered at startup', () => {
+    mocks.getOverrides.mockReturnValue({});
+    mocks.getCombos.mockReturnValue([combo]);
+    mocks.getUnavailableIds.mockReturnValue(['toggle-main-window']);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        appShortcuts: {
+          setOverride: vi.fn(async () => ({ overrides: {} })),
+          clearOverride: vi.fn(async () => ({ overrides: {} })),
+          resetAll: vi.fn(async () => ({ overrides: {} })),
+          setRecording: vi.fn(),
+        },
+      },
+    });
+
+    render(<KeyboardShortcutsSection />);
+    expect(screen.getByText('settings.shortcuts.errors.globalUnavailable')).toBeTruthy();
+  });
+
+  it('clears the registration error when availability changes without an override change', () => {
+    mocks.getOverrides.mockReturnValue({});
+    mocks.getCombos.mockReturnValue([combo]);
+    mocks.getUnavailableIds.mockReturnValue(['toggle-main-window']);
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        appShortcuts: {
+          setOverride: vi.fn(async () => ({ overrides: {} })),
+          clearOverride: vi.fn(async () => ({ overrides: {} })),
+          resetAll: vi.fn(async () => ({ overrides: {} })),
+          setRecording: vi.fn(),
+        },
+      },
+    });
+
+    render(<KeyboardShortcutsSection />);
+    expect(screen.getByText('settings.shortcuts.errors.globalUnavailable')).toBeTruthy();
+
+    mocks.getUnavailableIds.mockReturnValue([]);
+    act(() => mocks.listeners.forEach((listener) => listener()));
+    expect(screen.queryByText('settings.shortcuts.errors.globalUnavailable')).toBeNull();
   });
 
   afterEach(() => {
