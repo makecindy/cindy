@@ -33,6 +33,19 @@ describe('SessionCard review regressions', () => {
     );
   });
 
+  it('plays overflowing sidebar titles only while hovered', () => {
+    expect(sessionItemSource).toContain('function SidebarTitleMarquee');
+    expect(sessionItemSource).toContain("container.dataset.titleOverflowing = 'true'");
+    expect(sessionItemSource).toContain("delete container.dataset.titleOverflowing");
+    expect(globalsSource).toContain('@keyframes sidebar-title-marquee');
+    expect(globalsSource).toContain(
+      "sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track",
+    );
+    expect(globalsSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\][\s\S]*animation: none;/,
+    );
+  });
+
   it('keeps card titles to two lines with shared inline prefix alignment', () => {
     expect(sessionCardSource).toContain('[-webkit-line-clamp:2] overflow-hidden');
     expect(sessionCardSource).toContain('style={{ textIndent: 0, paddingLeft: 0 }}');

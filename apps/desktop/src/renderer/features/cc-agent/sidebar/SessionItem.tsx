@@ -110,6 +110,59 @@ function loadScheduleSidebarIndexRunsCached(): Promise<ScheduleSidebarIndexRun[]
 
 const log = createLogger('SessionItem');
 
+interface SidebarTitleMarqueeProps {
+  children: ReactNode;
+  className?: string;
+  title: string;
+}
+
+/**
+ * 标题保持原生省略号，只有实际溢出且鼠标停留在标题区域时才播放一次横向滚动。
+ * 通过 DOM 属性和 CSS 变量驱动，避免给高密度侧栏行增加 React 状态订阅。
+ */
+function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarqueeProps) {
+  const containerRef = useRef<HTMLSpanElement>(null);
+  const trackRef = useRef<HTMLSpanElement>(null);
+
+  const stopMarquee = useCallback(() => {
+    const container = containerRef.current;
+    if (!container) return;
+    delete container.dataset.titleOverflowing;
+    container.style.removeProperty('--sidebar-title-marquee-shift');
+  }, []);
+
+  const startMarquee = useCallback(() => {
+    const container = containerRef.current;
+    const track = trackRef.current;
+    if (!container || !track || track.scrollWidth <= container.clientWidth + 1) return;
+
+    container.style.setProperty(
+      '--sidebar-title-marquee-shift',
+      `${container.clientWidth - track.scrollWidth}px`,
+    );
+    container.dataset.titleOverflowing = 'true';
+  }, []);
+
+  return (
+    <span
+      ref={containerRef}
+      className="sidebar-title-marquee min-w-0 flex-1 overflow-hidden"
+      title={title}
+      onMouseEnter={startMarquee}
+      onMouseLeave={stopMarquee}
+    >
+      <span className={cn('sidebar-title-marquee__ellipsis', className)}>{children}</span>
+      <span
+        ref={trackRef}
+        aria-hidden="true"
+        className={cn('sidebar-title-marquee__track', className)}
+      >
+        {children}
+      </span>
+    </span>
+  );
+}
+
 export interface SessionItemProps {
   session: Session;
   isActive: boolean;
@@ -332,6 +385,17 @@ export const SessionItem = memo(function SessionItem({
   }, [effectiveScheduleId, t]);
   const displayTitle = getSessionDisplayTitle(session, t('ccAgent.common.unnamedSession'));
   const canHighlightDisplayTitle = canHighlightSessionDisplayTitle(session);
+  const titleContent =
+    matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
+      ? highlightSegments(session.title, matchIndices, {
+          highlightClassName: cn(
+            'bg-transparent font-semibold',
+            isActive
+              ? 'text-[var(--sidebar-item-active-foreground)]'
+              : 'text-[var(--msg-assistant-text)]',
+          ),
+        })
+      : displayTitle;
   // F-PJ-10：archived 视图下的 session 走特殊视觉/菜单分支
   //   - 左侧 status icon 由 CircleDashed 换成 Archive
   //   - 右侧 ⋮ 菜单只显示 Rename + Unarchive（屏蔽 Pin/Delete/Archive 等无意义项）
@@ -718,18 +782,12 @@ export const SessionItem = memo(function SessionItem({
               <AutomationTimerIcon size={10} activeForeground={isActive} />
             </button>
           ) : null}
-          <span className="min-w-0 truncate">
-            {matchIndices && matchIndices.length > 0 && canHighlightDisplayTitle
-              ? highlightSegments(session.title, matchIndices, {
-                  highlightClassName: cn(
-                    'bg-transparent font-semibold',
-                    isActive
-                      ? 'text-[var(--sidebar-item-active-foreground)]'
-                      : 'text-[var(--msg-assistant-text)]',
-                  ),
-                })
-              : displayTitle}
-          </span>
+          <SidebarTitleMarquee
+            title={displayTitle}
+            className={isActive ? 'text-sidebar-item-active-foreground' : 'text-foreground'}
+          >
+            {titleContent}
+          </SidebarTitleMarquee>
           {remoteIconKind && (
             <RemoteProjectIcon
               kind={remoteIconKind}

@@ -1777,6 +1777,61 @@ body.resizing-pane [data-ghost-webview] {
   }
 }
 
+/* 侧栏超长任务标题：只在实际溢出且 hover 时把完整标题横向带过视口。
+   轨道是 HTML 元素，动效只改 transform/opacity，离开标题区域立即恢复省略号。 */
+@keyframes sidebar-title-marquee {
+  0%,
+  12% {
+    transform: translateX(0);
+  }
+  88%,
+  100% {
+    transform: translateX(var(--sidebar-title-marquee-shift));
+  }
+}
+
+.sidebar-title-marquee {
+  position: relative;
+  display: block;
+}
+
+.sidebar-title-marquee__ellipsis {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.sidebar-title-marquee__track {
+  position: absolute;
+  inset: 0 auto auto 0;
+  width: max-content;
+  max-width: none;
+  white-space: nowrap;
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
+  transform: translateX(0);
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {
+  visibility: hidden;
+}
+
+.sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+  visibility: visible;
+  opacity: 1;
+  animation: sidebar-title-marquee calc(var(--motion-base) * 12) var(--motion-ease-move) forwards;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__track {
+    animation: none;
+    transform: translateX(var(--sidebar-title-marquee-shift));
+  }
+}
+
 /* 布局树引擎分割线(C1,LayoutRoot 渲染)——面板之间的 1px 缝由引擎统一画,
    面板自己不再画侧边框(两块时代"各画一侧"的做法在 N 块布局下会漏缝)。
    未来统一拖宽把手也落位在这条缝上。颜色走 token(规则 16)。
