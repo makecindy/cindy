@@ -376,6 +376,10 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       // info 级:打包版默认 level=info,debug 会被 logger 的 shouldLog 丢掉。
       expect(logger.info).toHaveBeenCalledTimes(1);
       expect(logger.info.mock.calls[0][0]).toContain('observation snapshot');
+      // **首条快照必须带上触发它的样本** —— 放在分类之前的话这里会是全零,而后续样本
+      // 又都被限流吞掉,短时故障等于什么都没留下(codex P2)。
+      expect((logger.info.mock.calls[0][1] as { counters?: Record<string, number> })?.counters)
+        .toMatchObject({ errorsNotClassifier: 1 });
 
       // 30 分钟窗口内限流,不刷屏。
       for (let i = 0; i < 20; i += 1) {
@@ -389,9 +393,8 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       t += 30 * 60_000;
       observer(ctx({ status: 429, requestBody: notClassifier }));
       expect(logger.info).toHaveBeenCalledTimes(2);
-      // 快照在身份判据之前落 → 本次的 errorsNotClassifier 还没 +1。
       expect((logger.info.mock.calls[1]?.[1] as { counters?: Record<string, number> })?.counters)
-        .toMatchObject({ classifierFailures: 0, errorsNotClassifier: 21 });
+        .toMatchObject({ classifierFailures: 0, errorsNotClassifier: 22 });
       // 全程不刷 warn —— 它只留给真正的归属漏检。
       expect(logger.warn).not.toHaveBeenCalled();
     });

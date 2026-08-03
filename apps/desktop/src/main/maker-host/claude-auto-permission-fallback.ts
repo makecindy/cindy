@@ -247,6 +247,17 @@ export function createClaudeAutoClassifierFailureObserver(
     logThrottled('warn', reason, fields);
   const infoThrottled = (reason: string, fields: Record<string, unknown>, intervalMs: number): void =>
     logThrottled('info', reason, fields, intervalMs);
+  /**
+   * 周期性把原始计数落盘。**必须在本次响应的计数已经递增之后调用** —— 放在分类之前的话,
+   * 首条快照恒为全零,而后续样本又都被限流吞掉,短时故障等于没留下有效计数(codex P2)。
+   */
+  const snapshotTallies = (status: number): void => {
+    infoThrottled(
+      'classifier observation snapshot',
+      { status },
+      OBSERVER_SNAPSHOT_INTERVAL_MS,
+    );
+  };
 
   return (ctx: ResponseObserverCtx) => {
     if (ctx.status < 400) {
@@ -287,22 +298,16 @@ export function createClaudeAutoClassifierFailureObserver(
       }
       return undefined;
     }
-    // 周期性把原始计数落盘(见 OBSERVER_SNAPSHOT_INTERVAL_MS):漏检时三条 warn 都可能
-    // 不触发,只有这条能保证「分类器在报错但我们没识别出来」在日志里留下痕迹。
-    infoThrottled(
-      'classifier observation snapshot',
-      { status: ctx.status },
-      OBSERVER_SNAPSHOT_INTERVAL_MS,
-    );
     // 身份判据必须**最先**过:observer 挂在共享的 anthropic-compat-proxy 上,普通 turn、
     // PI 以及其它复用该 proxy 的 runtime 的 4xx/5xx 全都流经这里。若先按「缺会话头 /
     // 反解失败」记漏检,这些无关错误会把 errorsMissingSessionHeader / errorsUnresolvedSession
     // 顶满,识别率信号彻底失效 —— 而这两个计数存在的唯一目的就是回答「分类器在报错但我们
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
-      // 正常大头:非分类器的错误响应。只计数当分母 —— 判定交给上面 OBSERVER_SNAPSHOT
-      // 注释说明的周期快照,这里不做推断。
+      // 正常大头:非分类器的错误响应。只计数当分母 —— 判定交给周期快照(见
+      // OBSERVER_SNAPSHOT_INTERVAL_MS 注释),这里不做推断。
       counters.errorsNotClassifier += 1;
+      snapshotTallies(ctx.status);
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
@@ -326,6 +331,7 @@ export function createClaudeAutoClassifierFailureObserver(
       return undefined;
     }
     counters.classifierFailures += 1;
+    snapshotTallies(ctx.status);
 
     if (isTransientClassifierStatus(ctx.status)) {
       const ts = now();
