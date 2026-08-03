@@ -410,6 +410,27 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Task_x1', 'Task_1_dup2']);
   });
 
+  it('单 item summary 指向实际产生 summary 的调用(该行之前最近的)(P2: Map summary IDs from the summary row)', () => {
+    // 只总结第二个调用(第一个 result 短没 summary)时, summary 数组单个 item 应指向
+    // 第二个 occurrence(Bash_5_dup2), 而非全局计数从 occurrence 0 开始指向首个。
+    // 数组按该 summary 行之前的 occurrences 行作用域解析。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5'), toolUse('Bash_5')]),
+      userEntry('u1', [toolResult('Bash_5'), toolResult('Bash_5')]),
+      JSON.stringify({
+        type: 'tool_use_summary',
+        summary: 'ran the second command',
+        preceding_tool_use_ids: ['Bash_5'],
+      }),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Bash_x5', 'Bash_5_dup2']);
+    // 行作用域 + per-summary 游标: 单 item 从该行之前 occurrences 的【最近】匹配
+    expect((entries[2] as Record<string, unknown>).preceding_tool_use_ids).toEqual(['Bash_5_dup2']);
+  });
+
   it('同一 assistant 行内同 id 并行调用: 子记录按内容顺序 FIFO 各挂各次(codex-connector P2)', () => {
     // 同一条 assistant 消息含两个 Bash_210(并行) → Bash_x210 + Bash_210_dup2。
     // 两条 subagent 记录引用 Bash_210: 第一条应挂第一个调用(Bash_x210),

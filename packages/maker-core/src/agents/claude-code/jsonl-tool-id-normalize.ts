@@ -416,21 +416,50 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       }
       return resolveOccurrence(val, index) ?? resolveAhead(val, index);
     };
-    // summary 数组独立游标: preceding_tool_use_ids 的每一项按「该 id 在本数组内第几次
-    // 出现」消费 occurrence —— 数组按调用顺序列, 第 k 项对应第 k 个 occurrence。
+    // summary 数组独立游标: preceding_tool_use_ids 的每一项映射到「该 summary 行之前
+    // 的 occurrences 的**尾部**」 —— 数组长度 N 覆盖最近 N 个调用(内容顺序)。
     // **不共享 occPtr / aheadPtr / childRef**: 标量/child 字段的改写会推进共享指针,
     // 若数组项用同一 occPtr, 前面 child 记录先消费后, 数组起点错位 —— 如
     // ['Task_1','Task_1'] 在 task/stream 行之后会归一化成 ['Task_1_dup2','Task_1_dup2']
     // 而非 [首个, 第二个], 挂错 tool card(codex-connector P2: Keep summary occurrence
     // cursors independent)。
-    const summaryArrCount = new Map<string, number>();
-    const resolveSummaryItem = (val: string): string | undefined => {
-      const occs = occurrenceByOriginal.get(val);
-      if (!occs || occs.length === 0) return undefined;
-      const k = summaryArrCount.get(val) ?? 0;
-      summaryArrCount.set(val, k + 1);
-      if (k < occs.length) return occs[k].finalId;
-      return occs[occs.length - 1].finalId; // 超出(异常)fallback 最近
+    // **尾部映射而非全局计数**: 只总结第二个调用时, 单个 summary item ['Bash_5'] 应
+    // 指向最近那个调用(Bash_5_dup2)而非全局计数从 occurrence 0 开始指向首个 ——
+    // summary 覆盖「实际产生 summary 的最近 N 个调用」(codex-connector P2: Map summary
+    // IDs from the summary row)。
+    const resolveSummaryItems = (arr: unknown[], index: number): Array<string | undefined> => {
+      // 统计数组内每个 id 的出现次数 —— 决定该 id 在 eligible 中的尾部偏移。
+      const arrCount = new Map<string, number>();
+      for (const item of arr) {
+        if (typeof item !== 'string') continue;
+        arrCount.set(item, (arrCount.get(item) ?? 0) + 1);
+      }
+      const consumed = new Map<string, number>();
+      const out: Array<string | undefined> = [];
+      for (const item of arr) {
+        if (typeof item !== 'string') {
+          out.push(undefined);
+          continue;
+        }
+        const occs = occurrenceByOriginal.get(item);
+        if (!occs || occs.length === 0) {
+          out.push(undefined);
+          continue;
+        }
+        // 行作用域: 只取该行之前的同名 occurrences。
+        const eligible = occs.filter((o) => o.line < index);
+        if (eligible.length === 0) {
+          out.push(undefined);
+          continue;
+        }
+        const totalForId = arrCount.get(item) ?? 0;
+        const k = consumed.get(item) ?? 0;
+        consumed.set(item, k + 1);
+        const offset = eligible.length - totalForId; // 尾部偏移: 覆盖最近 totalForId 个
+        const idx = offset + k;
+        out.push(idx >= 0 && idx < eligible.length ? eligible[idx].finalId : eligible[eligible.length - 1].finalId);
+      }
+      return out;
     };
     entries.forEach((entry, index) => {
       let entryChanged = false;
@@ -465,15 +494,14 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // 共享 occPtr 污染(codex-connector P2: Keep summary occurrence cursors
       // independent)。
       const arr = entry.preceding_tool_use_ids;
-      if (Array.isArray(arr)) {
+      if (Array.isArray(arr) && arr.length > 0) {
+        const mappedItems = resolveSummaryItems(arr, index);
         for (let i = 0; i < arr.length; i += 1) {
+          const mapped = mappedItems[i];
           const item = arr[i];
-          if (typeof item !== 'string') continue;
-          const mapped = resolveSummaryItem(item);
-          if (mapped !== undefined && mapped !== item) {
-            arr[i] = mapped;
-            entryChanged = true;
-          }
+          if (typeof item !== 'string' || mapped === undefined || mapped === item) continue;
+          arr[i] = mapped;
+          entryChanged = true;
         }
       }
       // stream_event 的 event.content_block.id(content_block_start 的 tool_use)也要
