@@ -101,6 +101,8 @@ export class ToolUseIdDedupeRewriter {
   constructor(
     historyIds: ReadonlySet<string>,
     private readonly onRename?: (from: string, to: string) => void,
+    /** 每个 resolve 的 id(无论是否撞车)都回调 —— 线程缓存据此记录 fresh id。 */
+    private readonly onObserved?: (id: string) => void,
   ) {
     this.usedIds = new Set(historyIds);
   }
@@ -109,6 +111,7 @@ export class ToolUseIdDedupeRewriter {
   resolve(id: string): string {
     if (!this.usedIds.has(id)) {
       this.usedIds.add(id);
+      this.onObserved?.(id);
       return id;
     }
     let k = 2;
@@ -120,6 +123,7 @@ export class ToolUseIdDedupeRewriter {
     this.usedIds.add(candidate);
     this.renameCount += 1;
     this.onRename?.(id, candidate);
+    this.onObserved?.(candidate);
     return candidate;
   }
 

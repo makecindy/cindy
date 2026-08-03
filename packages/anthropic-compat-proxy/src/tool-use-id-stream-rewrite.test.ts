@@ -96,6 +96,21 @@ describe('ToolUseIdDedupeRewriter.resolve', () => {
     const rewriter = new ToolUseIdDedupeRewriter(new Set(['Bash_210', 'Bash_210_dup2']));
     expect(rewriter.resolve('Bash_210')).toBe('Bash_210_dup3');
   });
+
+  it('onObserved: 每个 resolve 的 id(含 fresh 非碰撞)都回调,线程缓存不漏 fresh id', () => {
+    // 场景:响应 stream 一个 fresh id(fresh_1, 非碰撞),然后 rewind/中断,
+    // 下一请求体不含它 —— 若缓存只记 rename 产物,重铸 fresh_1 就漏防。
+    const observed: string[] = [];
+    const rewriter = new ToolUseIdDedupeRewriter(
+      new Set(['Bash_210']),
+      undefined,
+      (id) => observed.push(id),
+    );
+    rewriter.resolve('fresh_1'); // 非碰撞 → 只走 onObserved
+    rewriter.resolve('Bash_210'); // 碰撞 → rename + onObserved
+    expect(observed).toEqual(['fresh_1', 'Bash_210_dup2']);
+    expect(rewriter.renameCount).toBe(1);
+  });
 });
 
 // ── ToolUseIdRewriteTransform(SSE 字节流) ────────────────────────────────

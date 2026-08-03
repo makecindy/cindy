@@ -302,12 +302,21 @@ function backupTimestamp(): string {
  * 为会话 jsonl 创建 `.bak.<timestamp>` 备份(写不进就换个后缀重试)。
  * fork 修复与 jsonl-tool-id-normalize 共用同一份备份语义。
  */
-export async function createClaudeJsonlBackup(filePath: string, original: string): Promise<string> {
+export async function createClaudeJsonlBackup(
+  filePath: string,
+  original: string,
+  mode?: number,
+): Promise<string> {
   for (let attempt = 0; attempt < 100; attempt += 1) {
     const suffix = `${backupTimestamp()}${attempt === 0 ? '' : `-${attempt}`}`;
     const backupPath = `${filePath}.bak.${suffix}`;
     try {
-      await fs.writeFile(backupPath, original, { encoding: 'utf8', flag: 'wx' });
+      // mode 沿用源文件权限(转录可能 0600,备份不应变 0644 暴露给同机用户)。
+      await fs.writeFile(backupPath, original, {
+        encoding: 'utf8',
+        flag: 'wx',
+        ...(mode !== undefined ? { mode } : {}),
+      });
       return backupPath;
     } catch (error) {
       if (isRecord(error) && error.code === 'EEXIST') continue;

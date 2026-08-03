@@ -1137,21 +1137,28 @@ function forward(
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
     if (responseToolUseIds && responseToolUseIds.size > 0 && isSse && !isCompressed) {
       delete respHeaders['content-length'];
-      const rewriter = new ToolUseIdDedupeRewriter(responseToolUseIds, (from, to) => {
-        logger.info?.('⇄ renamed duplicate tool_use id in response stream (kimi mint collision)', {
-          reqId,
-          from,
-          to,
-        });
-        // 改名产物(_dupN)也进线程缓存,防「请求体缺席该 id 但同底再铸」的循环。
-        // threadId 是 POST handler 作用域变量,forward() 内取不到, 从转发 headers 现取。
-        const renameThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
-        if (renameThreadId && threadMintedIdCache) {
-          const cache = threadMintedIdCache.get(renameThreadId) ?? new Set<string>();
-          cache.add(to);
-          threadMintedIdCache.set(renameThreadId, cache);
-        }
-      });
+      const rewriter = new ToolUseIdDedupeRewriter(
+        responseToolUseIds,
+        (from, to) => {
+          logger.info?.('⇄ renamed duplicate tool_use id in response stream (kimi mint collision)', {
+            reqId,
+            from,
+            to,
+          });
+        },
+        // 每个 streamed id(含 fresh 非碰撞路径)都进线程缓存:rewind/中断让下一
+        // 请求体不含该 id 时,缓存仍能拦截重铸。只记录 rename 产物会漏掉
+        // fresh id 首次出现即被 rewind 的场景(codex-connector review:
+        // Persist every streamed tool ID in the thread cache)。
+        (observed) => {
+          const renameThreadId = selectedHeaderValue(headers, STABLE_THREAD_ID_HEADERS) ?? '';
+          if (renameThreadId && threadMintedIdCache) {
+            const cache = threadMintedIdCache.get(renameThreadId) ?? new Set<string>();
+            cache.add(observed);
+            threadMintedIdCache.set(renameThreadId, cache);
+          }
+        },
+      );
       toolUseIdRewrite = new ToolUseIdRewriteTransform(rewriter);
       toolUseIdRewrite.on('error', (err) => failStreamingResponse('error', err));
     }

@@ -338,4 +338,26 @@ describe('normalizeClaudeSessionJsonlToolIds', () => {
     expect(await readFile(filePath, 'utf8')).toBe(original);
     expect((await readdir(tmpDir)).filter((f) => f.includes('.bak.'))).toHaveLength(0);
   });
+
+  it('权限保留: 重写文件与 .bak 备份沿用原文件权限(不默认 0644 放宽)', async () => {
+    const fsPromises = await import('node:fs/promises');
+    tmpDir = await mkdtemp(path.join(os.tmpdir(), 'jsonl-normalize-'));
+    const filePath = path.join(tmpDir, 'session.jsonl');
+    const original = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    await writeFile(filePath, original, { encoding: 'utf8', mode: 0o600 });
+    const beforeMode = (await fsPromises.stat(filePath)).mode & 0o777;
+
+    const result = await normalizeClaudeSessionJsonlToolIds(filePath);
+    expect(result.changed).toBe(true);
+
+    // 不变量: 归一化后权限与归一化前一致(Windows 恒 0o666 → 恒等;
+    // POSIX 上 0600 转录不得被 tmp 默认 0644 放宽)。
+    const afterMode = (await fsPromises.stat(filePath)).mode & 0o777;
+    expect(afterMode).toBe(beforeMode);
+    const bakMode = (await fsPromises.stat(result.backupPath!)).mode & 0o777;
+    expect(bakMode).toBe(beforeMode);
+  });
 });
