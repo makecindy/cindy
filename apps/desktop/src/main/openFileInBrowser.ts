@@ -79,21 +79,29 @@ export async function handleOpenFileInBrowser(
       return {
         success: false,
         error: INVALID_BROWSER_FILE_TARGET_ERROR,
-        errorCode: 'INVALID_TARGET',
+        errorCode: 'BROWSER_FILE_INVALID_TARGET',
       };
     }
     if (!deps.isPathAllowed(target.filePath)) {
-      return { success: false, error: '不允许访问该路径', errorCode: 'PATH_NOT_ALLOWED' };
+      return {
+        success: false,
+        error: '不允许访问该路径',
+        errorCode: 'BROWSER_FILE_PATH_NOT_ALLOWED',
+      };
     }
     if (!deps.isBrowserOpenablePath(target.filePath)) {
       return {
         success: false,
         error: '该文件类型不支持浏览器查看',
-        errorCode: 'UNSUPPORTED_FILE_TYPE',
+        errorCode: 'BROWSER_FILE_UNSUPPORTED_TYPE',
       };
     }
     if (!deps.existsSync(target.filePath)) {
-      return { success: false, error: '文件不存在', errorCode: 'FILE_NOT_FOUND' };
+      return {
+        success: false,
+        error: '文件不存在',
+        errorCode: 'BROWSER_FILE_NOT_FOUND',
+      };
     }
 
     try {
@@ -119,14 +127,26 @@ export async function handleOpenFileInBrowser(
             });
           }
         }
-        return { success: false, error: OPEN_BROWSER_FILE_ERROR, errorCode: 'OPEN_FAILED' };
+        return {
+          success: false,
+          error: OPEN_BROWSER_FILE_ERROR,
+          errorCode: 'BROWSER_FILE_OPEN_FAILED',
+        };
       }
       const errorMessage = await deps.openPath(target.filePath);
       return errorMessage
-        ? { success: false, error: errorMessage, errorCode: 'OPEN_FAILED' }
+        ? {
+            success: false,
+            error: errorMessage,
+            errorCode: 'BROWSER_FILE_OPEN_FAILED',
+          }
         : { success: true };
     }
   } catch (error) {
-    return { success: false, error: OPEN_BROWSER_FILE_ERROR, errorCode: 'OPEN_FAILED' };
+    return {
+      success: false,
+      error: OPEN_BROWSER_FILE_ERROR,
+      errorCode: 'BROWSER_FILE_OPEN_FAILED',
+    };
   }
 }

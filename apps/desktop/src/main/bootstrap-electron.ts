@@ -4973,9 +4973,9 @@ const registerIpcHandlers = () => {
     async (
       event: Electron.IpcMainInvokeEvent,
       filePathOrUrl: string,
-    ): Promise<{ success: boolean; error?: string }> => {
+    ): Promise<{ success: true }> => {
       assertTrustedAppRendererEvent(event);
-      return handleOpenFileInBrowser(filePathOrUrl, {
+      const result = await handleOpenFileInBrowser(filePathOrUrl, {
         isPathAllowed,
         isBrowserOpenablePath,
         existsSync: fs.existsSync,
@@ -5001,6 +5001,8 @@ const registerIpcHandlers = () => {
           });
         },
       });
+      if (!result.success) throwIpcError(result.errorCode, result.error);
+      return result;
     },
   );
 

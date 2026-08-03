@@ -68,7 +68,6 @@ import type { VoiceInputRefinerProviderKind, VoiceInputRefinerTransport } from '
 import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
-import type { BrowserFileOpenResult } from '../shared/openFileInBrowser';
 import type {
   BrowserBackendHealth,
   BrowserBackendRecoveryResult,
@@ -2683,7 +2682,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // file-chip 传绝对路径;内置浏览器传完整本地 file:// URL 以保留 query/hash。
   // main 端统一解析并做扩展名白名单与 isPathAllowed 安全校验。
-  openFileInBrowser: (filePathOrUrl: string): Promise<BrowserFileOpenResult> =>
+  openFileInBrowser: (filePathOrUrl: string): Promise<{ success: true }> =>
     ipcRenderer.invoke('shell:open-file-in-browser', filePathOrUrl),
 
   // ── 系统级通知（CC Agent session 状态变更）──

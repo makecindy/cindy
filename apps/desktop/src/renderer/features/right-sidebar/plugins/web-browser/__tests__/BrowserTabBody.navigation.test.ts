@@ -558,11 +558,9 @@ describe('BrowserTabBody navigation', () => {
   });
 
   it('shows the file opener error when opening a local HTML page fails', async () => {
-    const openFileInBrowser = vi.fn().mockResolvedValue({
-      success: false,
-      error: '文件不存在',
-      errorCode: 'FILE_NOT_FOUND',
-    });
+    const openFileInBrowser = vi.fn().mockRejectedValue(
+      new Error('[BROWSER_FILE_NOT_FOUND] 文件不存在'),
+    );
     Object.defineProperty(window, 'electronAPI', {
       configurable: true,
       value: {
@@ -580,9 +578,10 @@ describe('BrowserTabBody navigation', () => {
       screen.getByRole('button', { name: 'rightSidebar.browser.openInSystemBrowser' }),
     );
     await Promise.resolve();
+    await Promise.resolve();
 
     expect(toastMocks.error).toHaveBeenCalledWith(
-      'chat.markdownRenderer.openInBrowserFileNotFound',
+      'chat.markdownRenderer.BROWSER_FILE_NOT_FOUND',
     );
   });
 
