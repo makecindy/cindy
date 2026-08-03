@@ -124,14 +124,15 @@ describe('maker:event hot path ordering', () => {
       'autoResumeBookkeeping.markReplacementDispatching(sessionId, clientId);',
     );
     expect(source).toContain(
-      'autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, item.clientId);',
-    );
-    expect(source).toContain(
       'autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);',
     );
     expect(source).toContain('onRejectedUserTurn: (sessionId, item) => {');
+    expect(source).toContain('commitUserPromptPreview: (sessionId, clientId) => {');
     expect(source).toContain(
-      'autoResumeBookkeeping.discardDispatchedReplacement(session.id);',
+      'autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, clientId);',
+    );
+    expect(source).toContain(
+      'autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);',
     );
     expect(source).not.toContain(
       'autoResumeBookkeeping.discardSuppressedError(sessionId);',

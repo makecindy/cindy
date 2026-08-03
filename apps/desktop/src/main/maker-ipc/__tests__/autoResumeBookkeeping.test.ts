@@ -170,8 +170,8 @@ describe('被压住的错误详情:必有人补落', () => {
     h.book.markReplacementPreviewed('s1', 'retry-1');
     h.book.markReplacementDispatching('s1', 'retry-1');
 
-    expect(h.book.discardDispatchedReplacement('s1')).toBe(true);
-    expect(h.book.discardDispatchedReplacement('s1')).toBe(false);
+    expect(h.book.discardReplacementProvenByProviderEvent('s1')).toBe(true);
+    expect(h.book.discardReplacementProvenByProviderEvent('s1')).toBe(false);
     expect(h.book.hasSuppressedError('s1')).toBe(false);
     expect(h.persisted).toEqual([]);
     expect(h.surfaced).toEqual([]);
@@ -432,12 +432,46 @@ describe('会话终止收尾', () => {
     expect(h.guardRollbacks).toEqual([]);
   });
 
-  it('teardown 不复活已经被 replacement dispatch 取代的旧错误', () => {
+  it('teardown 会补落仅进入 dispatching、尚无 accepted/provider 证明的旧错误', () => {
     const h = createHarness();
     h.book.stashSuppressedError('s1', { message: 'old interruption' });
     h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
     h.book.markReplacementPreviewed('s1', 'retry-1');
     h.book.markReplacementDispatching('s1', 'retry-1');
+
+    h.book.teardown('s1');
+
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([]);
+    expect(h.book.hasSuppressedError('s1')).toBe(false);
+  });
+
+  it('dispatching 后 teardown 与迟到 rollback 只补落旧错误一次', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+
+    h.book.teardown('s1');
+    expect(h.book.rollbackReplacementPreview('s1', 'retry-1')).toBe(false);
+    expect(h.book.surfaceSuppressedErrorForRetry('s1', 'retry-1')).toBe(false);
+
+    expect(h.persisted).toEqual([
+      { sessionId: 's1', detail: { message: 'old interruption' } },
+    ]);
+    expect(h.surfaced).toEqual([]);
+  });
+
+  it('teardown 不复活已有 provider event 证明取代的旧错误', () => {
+    const h = createHarness();
+    h.book.stashSuppressedError('s1', { message: 'old interruption' });
+    h.book.claimSuppressedErrorForRetry('s1', 'retry-1');
+    h.book.markReplacementPreviewed('s1', 'retry-1');
+    h.book.markReplacementDispatching('s1', 'retry-1');
+    h.book.discardReplacementProvenByProviderEvent('s1');
 
     h.book.teardown('s1');
 

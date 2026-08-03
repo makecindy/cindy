@@ -227,11 +227,12 @@ export class AutoResumeBookkeeping {
   }
 
   /**
-   * A terminal signal from the replacement can synchronously invalidate the
-   * coordinator active turn before its post-dispatch callback runs. The
-   * dispatching phase itself proves the old transient error was replaced.
+   * A provider running/terminal signal can synchronously arrive before
+   * Session.send returns accepted. Combined with replacementDispatching, that
+   * signal proves the old transient error was replaced. Dispatching alone is
+   * not proof: vendor send can still reject or the Session can close first.
    */
-  discardDispatchedReplacement(sessionId: string): boolean {
+  discardReplacementProvenByProviderEvent(sessionId: string): boolean {
     const entry = this.suppressedErrors.get(sessionId);
     if (entry?.replacementDispatching !== true) return false;
     this.suppressedErrors.delete(sessionId);
@@ -407,18 +408,16 @@ export class AutoResumeBookkeeping {
    * 会话被终止（/clear、abort、「全部停止」、关闭）时的收尾。四件事必须一起做，
    * 顺序也重要：
    *
-   *  1. **先结算**被压住的错误：replacement 尚未 dispatch 才补落；已经 dispatch 的旧
-   *     transient error 必须丢弃，否则同步新终态令 post-dispatch callback 早返后，teardown
-   *     会把已被取代的旧错误复活。`/clear` 的补落由既有清空竞态 cap 兜住。
+   *  1. **先补落**仍存在的错误。accepted=true 与实际 provider running/terminal signal
+   *     会在各自的权威边界提前删掉旧 owner；仅进入 dispatching 仍可能 reject/close，
+   *     不能按毫秒时序把那条历史静默丢掉。`/clear` 的补落由既有清空竞态 cap 兜住。
    *  2. 撤排期（含回滚守卫额度）。
    *  3. 清 coordinator 接管态 —— attempt lease 已能挡住 late completion；这一步继续作为
    *     coordinator 自己在 await 后的复核，并撤掉用户看到的「重新连接中」。
    *  4. 把悬空的待确认记录钉成 failed。
    */
   teardown(sessionId: string): void {
-    if (!this.discardDispatchedReplacement(sessionId)) {
-      this.flushSuppressedError(sessionId);
-    }
+    this.flushSuppressedError(sessionId);
     this.cancelSchedule(sessionId);
     // 不带 message：只清接管态，不弹横幅（会话已经被用户终止，再弹一条只是打扰）。
     this.deps.abandonTakeover(sessionId);

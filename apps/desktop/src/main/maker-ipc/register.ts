@@ -3024,7 +3024,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       if (data.isRunning === true) {
         // replacement 已进入 vendor 后，running 是新 attempt 的权威起点。不要依赖
         // sendToAgent 返回后的 onDispatched 回调：provider 可同步发事件并先清 activeTurn。
-        autoResumeBookkeeping.discardDispatchedReplacement(session.id);
+        autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);
         // 新 turn 启动: 上一轮未配对的失败记账交接 id 已无归属, 丢弃防错配。
         pendingFailedTurnAssistantPersistId.delete(session.id);
         // 记录 turn 开始时刻，供 onTurnErrorEvent 判断 error 是否属于 /clear 之前的旧 turn。
@@ -3347,7 +3347,7 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
       } else if (event.type === 'error' && isTerminalTurnErrorEvent(event)) {
         // replacement 可在 sendToAgent 返回前同步失败并让 coordinator 的 activeTurn
         // 失效；这个新终态已经取代旧中断，按 dispatch phase 直接清旧 owner。
-        autoResumeBookkeeping.discardDispatchedReplacement(session.id);
+        autoResumeBookkeeping.discardReplacementProvenByProviderEvent(session.id);
       }
       // deferred 路径保存 turn 开始时刻:isRemoteAuthRetry 时 onTurnErrorEvent 被跳过，
       // renderer 会稍后调 persistTurnErrorDeferred IPC。在 resetTurnPersistState 清掉
@@ -7801,6 +7801,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     },
     commitUserPromptPreview: (sessionId, clientId) => {
       commitAgentIslandUserPrompt(sessionId, clientId);
+      if (clientId) {
+        // Session.send has returned accepted=true. This is the exact authoritative
+        // success boundary even when synchronous provider events already made the
+        // coordinator active turn stale before onDispatchedUserTurn can run.
+        autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, clientId);
+      }
     },
     rollbackUserPromptPreview: (sessionId, clientId, source) => {
       if (clientId) {
@@ -8388,9 +8394,6 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       return orcaInterAgentDispatcher.runQueuedOrcaInterAgentAcceptedCallback(sessionId, item);
     },
     onDispatchedUserTurn: async (sessionId, item, preVendorDispatchAt): Promise<void> => {
-      // clientId 所属的 replacement 已不可逆。若 sendToAgent 同步发出了新一轮
-      // retryable error，stash 已换成未认领的新记录，这个旧 owner 的释放会安全 no-op。
-      autoResumeBookkeeping.discardSuppressedErrorForRetry(sessionId, item.clientId);
       if (
         item.autoResume &&
         item.origin?.kind === 'scheduler' &&
