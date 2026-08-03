@@ -952,6 +952,32 @@ describe('onTurnErrorEvent — terminal error 持久化', () => {
     expect(content.sdkError).toBe('access_token=[REDACTED]');
   });
 
+  it('content 携带错误发生时的 provider 快照(session-provider-store 同步取值)', async () => {
+    const { setSessionProvider } = await import('../maker-host/session-provider-store.js');
+    const sid = 'session-provider-snapshot';
+    setSessionProvider(sid, 'xd');
+    try {
+      onTurnErrorEvent(sid, { message: '网关余额不足(provider 快照用例)' });
+      await flushWrites();
+      const body = vi.mocked(createMessage).mock.calls.at(-1)?.[1] as {
+        content: Record<string, unknown>;
+      };
+      expect(body.content.providerId).toBe('xd');
+    } finally {
+      setSessionProvider(sid, null);
+    }
+  });
+
+  it('未显式选择 provider(默认路由)时不写 providerId —— 来源不明的行读侧 fail-closed', async () => {
+    const sid = 'session-provider-unset';
+    onTurnErrorEvent(sid, { message: '无显式 provider 的失败(快照用例)' });
+    await flushWrites();
+    const body = vi.mocked(createMessage).mock.calls.at(-1)?.[1] as {
+      content: Record<string, unknown>;
+    };
+    expect('providerId' in body.content).toBe(false);
+  });
+
   it('error 前的在飞 assistant 文本先 flush 落库,error 行排在其后', async () => {
     onAssistantTextEvent(SESSION, { text: '正在收尾…', isFinal: false }, null);
     onTurnErrorEvent(SESSION, { message: 'turn 崩了' });

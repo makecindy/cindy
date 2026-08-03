@@ -1256,9 +1256,9 @@
       },
       "xd": {
         "title": "Cindy AI",
-        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위 과금",
+        "subtitle": "모든 모델 · Claude Code / Codex 공용 · 토큰 단위로 잔액에서 차감",
         "modelLabel": "모든 모델",
-        "billingLabel": "토큰 단위 과금",
+        "billingLabel": "토큰 단위로 잔액에서 차감",
         "disconnectConfirm": {
           "title": "Cindy AI 연결을 해제할까요?",
           "description": "연결을 해제하면 로컬에 저장된 Cindy AI Key가 삭제됩니다. Cindy AI 모델을 계속 사용하려면 다시 연결해야 합니다."
@@ -1280,7 +1280,14 @@
           "confirm": "교체"
         },
         "rotateSuccess": "키를 교체했습니다",
-        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요"
+        "rotateFailed": "교체에 실패했습니다. 나중에 다시 시도해 주세요",
+        "copyKeyAria": "Cindy AI Key 복사",
+        "copyKeySuccess": "Cindy AI Key를 복사했습니다",
+        "copyKeyFailed": "복사에 실패했습니다. 나중에 다시 시도해 주세요",
+        "asset": {
+          "viewUsage": "사용량 보기",
+          "syncFailed": "자격 증명 동기화에 실패해 잔액을 가져올 수 없습니다. 저장된 모델 설정은 영향을 받지 않습니다."
+        }
       },
       "custom": {
         "tag": "사용자 지정",
@@ -1573,7 +1580,8 @@
       },
       "xdSignin": {
         "badge": "추천",
-        "desc": "Cindy에 로그인하면 공식 Cindy AI 서비스가 활성화됩니다. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "desc": "공식 서비스. 모든 모델을 바로 사용할 수 있으며 키 관리가 필요 없습니다.",
+        "grantBadge": "신규 사용자 프로모션 잔액 제공",
         "cta": "Cindy 로그인"
       },
       "menu": {
@@ -5306,7 +5314,7 @@
         "title": "Cindy AI",
         "desc": "공식 서비스 · 전체 모델 · Claude Code / Codex 지원",
         "loginTitle": "Cindy 로그인",
-        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다"
+        "loginDesc": "로그인하면 공식 Cindy AI 서비스가 활성화되어 모든 모델을 사용할 수 있습니다. 신규 사용자에게는 프로모션 잔액이 제공됩니다"
       },
       "othersToggle": "기타 제공자 ({{count}})",
       "presetSub": "API 키를 입력하여 연결",
@@ -5511,6 +5519,9 @@
       "retry": "다시 시도",
       "continueAfterReset": "재설정 후 계속",
       "continueAfterResetTitle": "사용량 제한 재설정 후 현재 작업을 계속할 일회성 자동화 만들기",
+      "gatewayQuotaExhausted": "Cindy AI 잔액이 부족합니다. 충전한 후 계속하세요.",
+      "viewBalance": "잔액 보기",
+      "viewBalanceTitle": "「사용량 및 청구」를 열어 잔액을 확인하고 충전",
       "credentialSwitchBusy": "다른 Codex 작업이 실행 중이어서 이 세션에서 선택한 제공자로 아직 전환할 수 없습니다(공유 Codex 프로세스 재시작 필요). 다른 작업이 끝난 후 ‘재시도’를 눌러 주세요.",
       "codexThreadStale": "Codex 인증 모드가 변경되었습니다. 이 세션은 계속할 수 없습니다. 새 세션을 시작하세요.",
       "claudeGatewayOpusPlanMismatch": "이 Opus 요청은 Claude.ai 구독이 아니라 XD Gateway를 통해 전송되었고, 해당 게이트웨이 경로에서 모델을 거부했습니다. Claude.ai 구독으로 전환해 다시 시도하거나 다른 모델을 선택하세요.",
