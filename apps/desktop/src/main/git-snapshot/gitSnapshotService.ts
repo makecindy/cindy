@@ -406,6 +406,13 @@ export interface CreateShadowSavepointInput {
   fileFilter?: Partial<SnapshotFileFilterOptions>;
 }
 
+/** Content-free lstat fingerprint of a safety-filtered path. */
+export interface SkippedFileFingerprint {
+  path: string;
+  sizeBytes: number;
+  mtimeMs: number;
+}
+
 /** Result of a shadow savepoint attempt. */
 export interface ShadowSavepointResult {
   /** Created commit, or null when skipIfTreeEquals matched. */
@@ -414,6 +421,12 @@ export interface ShadowSavepointResult {
   tree: string;
   includedFiles: string[];
   skippedFiles: SnapshotSkippedFile[];
+  /**
+   * lstat fingerprints (size + mtime, never content) for skipped paths that
+   * still exist as regular files. Turn-boundary readers compare these to
+   * detect changes to files the snapshot is not allowed to record.
+   */
+  skippedFingerprints: SkippedFileFingerprint[];
 }
 
 /**
@@ -450,6 +463,8 @@ export async function createShadowSavepoint(
   // the repository (a parent segment became a symlink pointing outside) must
   // be treated as deleted — never handed to `git add`, which would either
   // refuse it or, worse, snapshot out-of-repo content.
+  const skippedFingerprints = await collectSkippedFingerprints(repoPath, skippedFiles);
+
   const repoReal = await fs.realpath(repoPath);
   const presentFiles: SnapshotIncludedFile[] = [];
   const missingPaths: string[] = [];
@@ -500,6 +515,7 @@ export async function createShadowSavepoint(
           tree,
           includedFiles: plan.includedFiles.map((file) => file.path),
           skippedFiles,
+          skippedFingerprints,
         };
       }
     }
@@ -536,8 +552,25 @@ export async function createShadowSavepoint(
       tree,
       includedFiles: plan.includedFiles.map((file) => file.path),
       skippedFiles,
+      skippedFingerprints,
     };
   });
+}
+
+/** lstat fingerprints (no content) for skipped paths that exist as files. */
+async function collectSkippedFingerprints(
+  repoPath: string,
+  skippedFiles: readonly SnapshotSkippedFile[],
+): Promise<SkippedFileFingerprint[]> {
+  const out: SkippedFileFingerprint[] = [];
+  for (const file of skippedFiles) {
+    const abs = resolveSnapshotGitPath(repoPath, file.path);
+    if (!abs) continue;
+    const stats = await fs.lstat(abs).catch(() => null);
+    if (!stats || stats.isDirectory()) continue;
+    out.push({ path: file.path, sizeBytes: stats.size, mtimeMs: stats.mtimeMs });
+  }
+  return out;
 }
 
 /** Input for metadata-only shadow markers (gap / rollback records on the chain). */
@@ -549,24 +582,19 @@ export interface CreateShadowMarkerInput {
 
 /**
  * Appends a metadata-only marker to the session's savepoint chain, reusing the
- * chain tip's tree. Returns null when the chain is still empty (a marker with
- * no baseline carries no rewind value; readers treat the absence as a gap).
+ * chain tip's tree. An empty chain gets a root marker with the empty tree —
+ * a first-turn gap must survive later successful savepoints, otherwise the
+ * planner would never see it and a rewind to the first message would silently
+ * keep that turn's file changes.
  */
 export async function createShadowMarker(
   repoPath: string,
   input: CreateShadowMarkerInput,
 ): Promise<string | null> {
   const parent = await readSavepointTip(repoPath, input.sessionId);
-  if (!parent) {
-    log.warn('[createShadowMarker] empty savepoint chain, marker skipped', {
-      sessionId: input.sessionId,
-      kind: input.meta.kind,
-    });
-    return null;
-  }
-  const tree = await resolveTreeOf(repoPath, parent);
+  const tree = parent ? await resolveTreeOf(repoPath, parent) : await writeEmptyTree(repoPath);
   if (!tree) {
-    log.warn('[createShadowMarker] chain tip tree unresolved, marker skipped', {
+    log.warn('[createShadowMarker] marker tree unresolved, marker skipped', {
       sessionId: input.sessionId,
     });
     return null;
@@ -741,6 +769,18 @@ export async function listUnprotectedPaths(
     if (stats && !stats.isDirectory()) out.push(rawPath);
   }
   return out;
+}
+
+/** Writes (or reuses) the canonical empty tree object for root gap markers. */
+async function writeEmptyTree(repoPath: string): Promise<string | null> {
+  try {
+    return await withTemporaryIndex(repoPath, async (extraEnv) => {
+      await gitExec(['read-tree', '--empty'], repoPath, { extraEnv });
+      return (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
+    });
+  } catch {
+    return null;
+  }
 }
 
 async function resolveTreeOf(repoPath: string, commitish: string): Promise<string | null> {

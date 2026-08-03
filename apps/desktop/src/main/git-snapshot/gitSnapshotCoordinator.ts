@@ -13,6 +13,7 @@ import type {
   CreateShadowMarkerInput,
   CreateShadowSavepointInput,
   ShadowSavepointResult,
+  SkippedFileFingerprint,
 } from './gitSnapshotService';
 
 interface CoordinatorLogger {
@@ -69,8 +70,8 @@ interface TurnStartState {
   repoRoot: string;
   /** Turn-start savepoint on the shadow chain; unset when creation failed. */
   turnStartCommit: string;
-  /** Paths the safety filter excluded from the turn-start snapshot. */
-  turnStartSkippedPaths: string[];
+  /** Content-free fingerprints of paths the filter excluded at turn start. */
+  turnStartSkippedFingerprints: SkippedFileFingerprint[];
   metadata: TurnStartMetadata;
 }
 
@@ -130,7 +131,7 @@ export class GitSnapshotCoordinator {
           metadata,
         );
         record.turnStartCommit = turnStart.commit;
-        record.turnStartSkippedPaths = turnStart.skippedPaths;
+        record.turnStartSkippedFingerprints = turnStart.skippedFingerprints;
       });
       record.metadata ??= await metadataPromise;
     } catch (err) {
@@ -287,21 +288,28 @@ export class GitSnapshotCoordinator {
       });
     }
 
-    // 被过滤路径集合在本 turn 两端**不一致**时补 gap 标记,两个方向都算:
+    // 被过滤路径在本 turn 两端不一致时补 gap 标记,覆盖三种情形:
     // - after 新增(Agent 写入 .env、生成超限文件):本轮改动没进快照;
-    // - baseline 消失(turn-start 时被过滤的文件本轮被缩小到可纳入或被删):
-    //   它在基线树里缺失,回退会把它删掉/改掉,而 turn-start 时的原始内容
-    //   从未被记录,无法恢复。
-    // 两侧都过滤(常驻 dirty 的过滤文件)不打 gap,否则文件回退会被永久
-    // 禁用;这留下的已知残余限制是「整轮处于过滤范围的既存文件被修改」,
-    // 完备方案需要给被过滤文件记指纹,留作后续增强。
+    // - baseline 消失(被过滤文件本轮被缩小到可纳入或被删):它在基线树里
+    //   缺失,回退会删掉/改掉它,而 turn-start 时的原始内容从未被记录;
+    // - 两端都被过滤但 lstat 指纹(大小/mtime,不含内容)变化:文件本轮被
+    //   改写(如超限文件被 Agent 重写后仍超限),同样没有任何快照可恢复。
+    // 指纹完全一致的常驻过滤文件不打 gap,否则文件回退会被永久禁用。
     if (agentKind === 'codex' || agentKind === 'pi') {
-      const baselineSkips = new Set(turnStart?.turnStartSkippedPaths ?? []);
-      const afterSkips = new Set(result.skippedFiles.map((file) => file.path));
-      const changedSkips = [
-        ...[...afterSkips].filter((skippedPath) => !baselineSkips.has(skippedPath)),
-        ...[...baselineSkips].filter((skippedPath) => !afterSkips.has(skippedPath)),
-      ];
+      const baseline = new Map(
+        (turnStart?.turnStartSkippedFingerprints ?? []).map((fp) => [fp.path, fp]),
+      );
+      const after = new Map(result.skippedFingerprints.map((fp) => [fp.path, fp]));
+      const changedSkips: string[] = [];
+      for (const [skippedPath, fp] of after) {
+        const base = baseline.get(skippedPath);
+        if (!base || base.sizeBytes !== fp.sizeBytes || base.mtimeMs !== fp.mtimeMs) {
+          changedSkips.push(skippedPath);
+        }
+      }
+      for (const skippedPath of baseline.keys()) {
+        if (!after.has(skippedPath)) changedSkips.push(skippedPath);
+      }
       if (changedSkips.length > 0) {
         this.deps.logger.warn('[git-snapshot] turn changes partially filtered', {
           sessionId,
@@ -323,7 +331,7 @@ export class GitSnapshotCoordinator {
     sessionId: string,
     repoRoot: string,
     metadata: TurnStartMetadata,
-  ): Promise<{ commit: string | undefined; skippedPaths: string[] }> {
+  ): Promise<{ commit: string | undefined; skippedFingerprints: SkippedFileFingerprint[] }> {
     // Always created, dirty or clean, so every turn has a uniform restore
     // baseline; an unchanged tree costs almost nothing thanks to object reuse.
     const result = await this.deps.createShadowSavepoint(repoRoot, {
@@ -334,7 +342,6 @@ export class GitSnapshotCoordinator {
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
-    const skippedPaths = result.skippedFiles.map((file) => file.path);
 
     if (result.commit) {
       this.deps.logger.info('[git-snapshot] turn-start baseline created', {
@@ -343,14 +350,14 @@ export class GitSnapshotCoordinator {
         commit: result.commit.slice(0, 8),
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       });
-      return { commit: result.commit, skippedPaths };
+      return { commit: result.commit, skippedFingerprints: result.skippedFingerprints };
     }
 
     this.deps.logger.warn('[git-snapshot] turn-start baseline missing commit', {
       sessionId,
       repoRoot,
     });
-    return { commit: undefined, skippedPaths };
+    return { commit: undefined, skippedFingerprints: result.skippedFingerprints };
   }
 
   private async resolveTurnStartMetadata(sessionId: string): Promise<TurnStartMetadata> {
@@ -398,8 +405,8 @@ export class GitSnapshotCoordinator {
       },
     });
     if (!commit) {
-      // Empty chain: nothing to truncate, the planner already falls back when
-      // it finds no savepoints for the range.
+      // Marker tree could not be built (git fully unavailable); the failure
+      // is logged by the kernel and the outer swallow keeps the turn alive.
       return;
     }
     this.deps.logger.info(logMessage, {

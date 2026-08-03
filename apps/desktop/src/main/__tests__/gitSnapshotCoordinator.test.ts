@@ -15,6 +15,7 @@ const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 function savepointResult(
   commit: string | null,
   skippedPaths: string[] = [],
+  fingerprintSeed = 1,
 ): ShadowSavepointResult {
   return {
     commit,
@@ -23,6 +24,11 @@ function savepointResult(
     skippedFiles: skippedPaths.map((path) => ({
       path,
       reason: 'sensitive-path' as const,
+    })),
+    skippedFingerprints: skippedPaths.map((path) => ({
+      path,
+      sizeBytes: 100 * fingerprintSeed,
+      mtimeMs: 1_000 * fingerprintSeed,
     })),
   };
 }
@@ -272,8 +278,8 @@ describe('GitSnapshotCoordinator', () => {
     });
   });
 
-  it('does not append a gap marker for filtered paths that predate the turn', async () => {
-    // session 全程躺着一个大文件/敏感文件(turn-start 与 after-edit 都 skip):
+  it('does not append a gap marker for filtered paths that predate the turn unchanged', async () => {
+    // session 全程躺着一个大文件/敏感文件(两端都 skip 且 lstat 指纹一致):
     // 不是本轮改动,不打 gap,否则常驻 dirty 的过滤文件会永久禁用文件回退。
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
@@ -287,6 +293,27 @@ describe('GitSnapshotCoordinator', () => {
     await coordinator.onTurnEnd('s1');
 
     expect(deps.createShadowMarker).not.toHaveBeenCalled();
+  });
+
+  it('appends a rewind gap marker when a persistently filtered file changes fingerprint', async () => {
+    // 两端都被过滤但 lstat 指纹变化(如超限文件被 Agent 重写后仍超限):
+    // 该轮改动没有任何快照可恢复,必须打 gap。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1', ['big.bin'], 1))
+        .mockResolvedValueOnce(savepointResult('hash2', ['big.bin'], 2)),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn changes were partially filtered',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
   });
 
   it('skips the filtered-paths gap marker for agents that do not consume the chain', async () => {

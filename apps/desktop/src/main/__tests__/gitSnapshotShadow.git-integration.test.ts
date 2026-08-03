@@ -317,17 +317,24 @@ describe('createShadowSavepoint', () => {
 });
 
 describe('createShadowMarker', () => {
-  it('returns null on an empty chain and leaves no ref behind', async () => {
+  it('creates a root marker with the empty tree on an empty chain', async () => {
+    // 首轮 turn-start 失败时链还是空的:缺口必须作为根提交持久化,否则
+    // 后续轮次正常建链后 planner 永远看不到首轮缺口。
     await commitSeed();
 
     const marker = await createShadowMarker(repoPath, {
       sessionId: SESSION,
       label: 'gap marker',
-      meta: { kind: 'rewind-blocked' },
+      meta: { kind: 'rewind-blocked', anchor: 'm1' },
     });
 
-    expect(marker).toBeNull();
-    expect(await readSavepointTip(repoPath, SESSION)).toBeNull();
+    expect(marker).toBeTruthy();
+    expect(await readSavepointTip(repoPath, SESSION)).toBe(marker);
+    // 空树根提交:无父、树为 canonical empty tree。
+    expect((await gitStdout(['rev-list', '--count', marker as string])).trim()).toBe('1');
+    expect(await treeOf(marker as string)).toBe('4b825dc642cb6eb9a060e54bf8d69288fbee4904');
+    const { entries } = await listShadowSavepoints(repoPath, SESSION);
+    expect(entries.map((entry) => entry.kind)).toContain('rewind-blocked');
   }, REAL_GIT_TEST_TIMEOUT_MS);
 
   it('reuses the chain tip tree and parents the tip on a non-empty chain', async () => {
