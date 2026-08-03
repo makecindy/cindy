@@ -54,6 +54,10 @@ import {
   writeDeviceLinkSetting,
 } from './settings-store';
 import { keepAwakeController } from './power-blocker';
+import {
+  createPeerLinkReopenQueue,
+  shouldEnqueuePeerLinkReopen,
+} from './peerLinkReopenQueue';
 import { createDnsFallbackLookup } from './dnsFallbackLookup';
 import {
   wireInboundDispatch,
@@ -157,46 +161,22 @@ let authRealmReconnectGeneration = 0;
 let unsubscribeAuthState: (() => void) | null = null;
 /** ownership store 按 DbClient 实例缓存(避免每 tick 建对象);换库(换账号)自动重建 */
 let ownershipStoreCache: { db: unknown; store: OwnershipStore } | null = null;
-const pendingPeerLinkReopens = new Set<string>();
-let pendingPeerLinkReopenRetryTimer: ReturnType<typeof setTimeout> | null = null;
-
-function schedulePendingPeerLinkReopenRetry(): void {
-  if (pendingPeerLinkReopenRetryTimer !== null || linkTornDown || pendingPeerLinkReopens.size === 0) return;
-  if (arbiter && !arbiter.isOwner()) return;
-  pendingPeerLinkReopenRetryTimer = setTimeout(() => {
-    pendingPeerLinkReopenRetryTimer = null;
-    flushPendingPeerLinkReopens();
-  }, 5_000);
-  pendingPeerLinkReopenRetryTimer.unref?.();
-}
-
-function flushPendingPeerLinkReopens(): void {
-  if (linkTornDown || (arbiter && !arbiter.isOwner())) return;
-  for (const deviceId of pendingPeerLinkReopens) {
-    log.debug(`peer link stale-frame recovery for ${deviceId.slice(0, 8)}`);
-    void openRemoteLink(deviceId).then(
-      () => {
-        pendingPeerLinkReopens.delete(deviceId);
-        if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
-          clearTimeout(pendingPeerLinkReopenRetryTimer);
-          pendingPeerLinkReopenRetryTimer = null;
-        }
-      },
-      (err) => {
-        log.debug(`peer link stale-frame recovery failed for ${deviceId.slice(0, 8)}`, err);
-        schedulePendingPeerLinkReopenRetry();
-      },
-    );
-  }
-}
-
-function cancelPendingPeerLinkReopen(deviceId: string): void {
-  pendingPeerLinkReopens.delete(deviceId);
-  if (pendingPeerLinkReopens.size === 0 && pendingPeerLinkReopenRetryTimer !== null) {
-    clearTimeout(pendingPeerLinkReopenRetryTimer);
-    pendingPeerLinkReopenRetryTimer = null;
-  }
-}
+/**
+ * before-link 可靠帧触发的重开队列。逻辑与门禁在 peerLinkReopenQueue(可注入、
+ * 单测固化 per-peer 隔离与授权判据);这里只接线真实依赖。
+ */
+const peerLinkReopenQueue = createPeerLinkReopenQueue({
+  reopen: (deviceId) => openRemoteLink(deviceId),
+  canEnqueue: (deviceId) => shouldEnqueuePeerLinkReopen({
+    // 方向判据:只有本机确实在控制该设备(持有出站订阅)时才重开,否则纯被控端
+    // 方向的入站帧会触发反向建链(review P1)。
+    hasOutboundSubscriptions: snapshotSubscriptions(deviceId).length > 0,
+    // 与 openRemoteLink 的 fail-closed 门同源(#1408)。
+    controlDisabledLocally: readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId),
+  }),
+  canRun: () => !linkTornDown && (arbiter === null || arbiter.isOwner()),
+  log: { debug: (msg, ...args) => log.debug(msg, ...args) },
+});
 /**
  * 持有者已生效的授权快照(允许被控开关 + 撤销名单)。用于检测**其它实例**改写共享
  * settings 文件(被动实例的设置页也能改授权,见 settings-store 多实例语义):持有者
@@ -458,24 +438,9 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
   });
   // 死锁自愈(控制端半):对端还在按可靠流给本机发帧,但本机侧 link 未就绪 ——
   // 沉默丢弃会让两边互等(发送端等 ACK、接收端等 link)。client 侧已 30s/peer
-  // 节流,这里进 flushPendingPeerLinkReopens 的重试队列(固定 5s 重排,一次
-  // openRemoteLink 失败不放弃;成功 / 显式关闭 / 撤权 / teardown 会出队,待命态
-  // 只是跳过执行、pending 集合保留,恢复持有权后继续)。
+  // 节流;入队门禁与 per-peer 隔离的重试语义在 peerLinkReopenQueue(见该模块注释)。
   client.onReliableFrameBeforeLink((deviceId) => {
-    if (linkTornDown) return;
-    // 方向判据:openRemoteLink 是「本机去控制对方」。只有本机确实在控制该设备
-    // (持有出站订阅)时才重开,否则纯被控端方向的入站帧会触发反向建链——对端
-    // 接受则凭空多出一条非用户发起的控制链与受控横幅,拒绝则队列每 5s 空转
-    // (review P1)。刻意**不看** client 的 peer.explicitlyClosed:那是双向共享位,
-    // 互控时对端仅关闭「它控制本机」的方向也会置位,据此抑制会连本机仍然有效的
-    // 出站方向一起掐死(review P2)。用户显式关闭本机对该设备的控制时,
-    // setDeviceControlEnabled 已同时清订阅 + 置 disabledControl,两道门都拦得住。
-    if (snapshotSubscriptions(deviceId).length === 0) return;
-    // 与 openRemoteLink 的 fail-closed 门同源(#1408):本机已对该设备关闭控制时
-    // 不入队,避免队列在必然失败的 openRemoteLink 上按 5s 无限重试空转。
-    if (readDeviceLinkSettings().disabledControlDeviceIds.includes(deviceId)) return;
-    pendingPeerLinkReopens.add(deviceId);
-    flushPendingPeerLinkReopens();
+    peerLinkReopenQueue.trigger(deviceId);
   });
   client.onPresenceChanged((snap: PresenceSnapshot) => {
     const wasAvailable = presenceAvailableByDevice.get(snap.deviceId);
@@ -549,7 +514,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       // 循环,否则刚被断开的控制链会被退避重试重新建起。
       routeLinkCloseForReopen(reason, transportTimeoutReopen, env.src);
       if (reason !== 'transport-timeout') {
-        cancelPendingPeerLinkReopen(env.src);
+        peerLinkReopenQueue.cancel(env.src);
       }
       if (reason === 'revoked') {
         // 撤权后在途请求会陆续超时——那不是「设备无响应」,是访问被收回。清熔断并
@@ -674,7 +639,7 @@ export function initDeviceLinkService(options: DeviceLinkServiceOptions = {}): v
       linkTornDown = false;
       client?.start();
       // 可靠帧可能在 ownership 接管前到达；接管后补发一次 link-open，避免启动竞态留下半开链路。
-      setTimeout(flushPendingPeerLinkReopens, 250);
+      setTimeout(() => peerLinkReopenQueue.retryPending(), 250);
       setContactsDeviceLinkOwnerActive(true);
       refreshAppliedSettingsSnapshot();
       pollContactsDeviceSyncSettingChange();
@@ -835,11 +800,7 @@ export function getMobileNotifyGeneration(): number {
 function teardownActiveLink(): void {
   if (!client || linkTornDown) return;
   linkTornDown = true;
-  if (pendingPeerLinkReopenRetryTimer !== null) {
-    clearTimeout(pendingPeerLinkReopenRetryTimer);
-    pendingPeerLinkReopenRetryTimer = null;
-  }
-  pendingPeerLinkReopens.clear();
+  peerLinkReopenQueue.dispose();
   mobileNotifyGeneration += 1;
   if (relayAuthRecoveryRetryTimer !== null) {
     clearTimeout(relayAuthRecoveryRetryTimer);
@@ -1178,7 +1139,7 @@ export function closeRemoteLink(deviceId: string): void {
   // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
   // 链路建回来。
   transportTimeoutReopen.cancel(deviceId);
-  cancelPendingPeerLinkReopen(deviceId);
+  peerLinkReopenQueue.cancel(deviceId);
   openLinkInFlight.delete(deviceId);
   client?.closeLink(deviceId, 'user');
 }
