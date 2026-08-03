@@ -267,7 +267,7 @@ describe('scanAtResources context providers', () => {
     expect(result.items.map((item) => item.type)).toEqual(['dir']);
   });
 
-  it('lists historical tasks without a workspace and excludes the current task and empty drafts', async () => {
+  it('lists only active historical tasks without a workspace', async () => {
     stubApi({
       tasks: [
         {
@@ -279,10 +279,16 @@ describe('scanAtResources context providers', () => {
         {
           id: 'history-1',
           title: '  Release\nplanning ',
-          status: 'archived',
+          status: 'active',
           userSendAt: '2026-08-02T00:00:00.000Z',
           summary: 'Plan\nthe release',
           workingDir: 'D:\\repo',
+        },
+        {
+          id: 'archived-history',
+          title: 'Archived release planning',
+          status: 'archived',
+          userSendAt: '2026-08-01T00:00:00.000Z',
         },
         {
           id: 'empty-draft',
@@ -310,6 +316,7 @@ describe('scanAtResources context providers', () => {
         },
       ],
     });
+    expect(window.electronAPI.localDb.sessions.list).toHaveBeenCalledWith(100, 'active');
   });
 
   it('lists device-link task history on the controlled device and freezes its device id', async () => {
@@ -332,6 +339,11 @@ describe('scanAtResources context providers', () => {
         relPath: 'cindy://session/remote-history?device=device-1',
       },
     ]);
+    expect(window.electronAPI.deviceLink.invoke).toHaveBeenCalledWith(
+      'device-1',
+      'local-db:sessions:list',
+      [100, 'active'],
+    );
   });
 
   it('lists Plugin entries without running them, then searches only the selected provider', async () => {

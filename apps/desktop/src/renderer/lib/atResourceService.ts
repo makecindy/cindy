@@ -179,9 +179,9 @@ export async function scanAtResources(
       ? (window.electronAPI.deviceLink.invoke(
           deviceId,
           'local-db:sessions:list',
-          [100, 'all'],
+          [100, 'active'],
         ) as Promise<Session[]>)
-      : window.electronAPI.localDb.sessions.list(100, 'all')
+      : window.electronAPI.localDb.sessions.list(100, 'active')
     : Promise.resolve(null);
   const pluginProvidersPromise = !deviceId
     ? window.electronAPI.ghosts.listAtResourceProviders({
@@ -331,7 +331,7 @@ export async function scanAtResources(
     if (
       !taskId
       || taskId === context?.sessionId
-      || session.status === 'deleted'
+      || session.status !== 'active'
       || (!session.userSendAt && (session._count?.messages ?? 0) === 0)
     ) continue;
     const title = oneLineText(session.title, 240);
