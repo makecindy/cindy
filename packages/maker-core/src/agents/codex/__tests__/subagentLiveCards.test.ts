@@ -221,8 +221,36 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))?.status).toBe('failed');
   });
 
-  it('returns null from noteSpawnItem when there is nothing buffered to replay', () => {
+  it('re-asserts the live aggregate when the same spawn is noted again (V1 completed phase)', () => {
+    // V1 的 spawn 是 collabAgentToolCall:translator 在 completed phase 会无条件推一帧
+    // status=completed(spawn 工具调用自己收口,不代表子代理跑完)。noteSpawnItem 必须回传
+    // 当前聚合快照,让调用方在 translator 之后把真实状态重新声明一次 —— 否则仍在跑的子线程
+    // 被提前标成完成,先到的 failed/stopped 也会被抹掉。
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
+    tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'));
+    tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+      tokenUsage: { total: { totalTokens: 700 } },
+    });
+
+    // 同一 spawn 再次登记(completed phase):计数不清零,且回传真实的 running 聚合。
+    const reasserted = tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']));
+    expect(reasserted).toMatchObject({
+      taskId: 'card-v1',
+      status: 'running',
+      toolUses: 1,
+      totalTokens: 700,
+    });
+
+    // 已收到的失败终态同样不得被合成的 completed 抹掉。
+    tracker.handleDescendantNotification('t-a', 'turn/completed', { turn: { status: 'failed' } });
+    tracker.handleDescendantNotification('t-b', 'turn/completed', { turn: { status: 'completed' } });
+    expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))?.status).toBe('failed');
+  });
+
+  it('returns null for a fresh spawn with nothing buffered, and for non-spawn items', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    // 全新 spawn 且无早到通知:没有需要重新声明的状态,不发多余帧。
     expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toBeNull();
     expect(tracker.noteSpawnItem({ type: 'commandExecution', id: 'x' })).toBeNull();
   });

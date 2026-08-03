@@ -45,8 +45,9 @@ export interface SubagentLiveCardTracker {
   /**
    * 主线程 item 里认出 spawn → 登记「子线程 id → 子代理卡 taskId」。
    *
-   * 返回聚合快照 = 该 spawn 有早到的子线程通知被重放出了状态,调用方应发一帧
-   * `agent_task_update`;返回 null = 非 spawn item,或没有待重放的通知。
+   * 返回聚合快照 = 调用方应在 translator 之后发一帧 `agent_task_update` 把真实状态重新
+   * 声明一次(两种情形:有早到通知被重放出状态;或该 spawn 已登记 —— 此时 translator 的
+   * 合成 `completed` 帧必须被真实聚合状态盖回去)。返回 null = 非 spawn item。
    */
   noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null;
   /**
@@ -258,12 +259,16 @@ export function createSubagentLiveCardTracker(opts: {
 
       const existing = cards.get(registration.taskId);
       // 同一 spawn 的 started/completed 两个 phase 都会走到这里:已登记且线程集合一致
-      // 就不重置计数(否则第二个 phase 会把已聚合的用量清零)。
+      // 就不重置计数(否则第二个 phase 会把已聚合的用量清零)。但**必须回传当前快照** ——
+      // V1 的 spawn 是 collabAgentToolCall,translator 在 completed phase 会无条件推一帧
+      // status=completed(那是 spawn 工具调用自己收口,不代表子代理跑完)。调用方在
+      // translator 之后重发本快照,真实聚合状态才不会被那帧合成的 completed 覆盖 ——
+      // 否则仍在跑的子线程会被提前标成完成,先到的 failed/stopped 也会被抹掉。
       if (
         existing
         && registration.childThreadIds.every((childThreadId) => existing.threads.has(childThreadId))
       ) {
-        return null;
+        return snapshot(existing);
       }
 
       const card: TrackedCard = existing ?? {

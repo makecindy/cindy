@@ -37,6 +37,12 @@ describe('Session close lifecycle', () => {
       handle,
       capabilities: {} as never,
       logger: createLogger() as never,
+      permissionMode: 'bypassPermissions',
+    });
+
+    expect(session.stablePermissionModeState).toEqual({
+      mode: 'bypassPermissions',
+      generation: 0,
     });
 
     const firstClose = session.close();
@@ -45,6 +51,7 @@ describe('Session close lifecycle', () => {
     expect(secondClose).toBe(firstClose);
     expect(close).toHaveBeenCalledTimes(1);
     expect(session.getStatus()).not.toBe('closed');
+    expect(session.stablePermissionModeState).toBeNull();
 
     transportClose.resolve();
     await Promise.all([firstClose, secondClose]);
