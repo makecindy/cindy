@@ -1118,11 +1118,15 @@ function forward(
     // 必须在 writeHead 前判定:改名会改变 body 长度,上游 content-length 必须删掉,
     // 否则客户端按旧值读取 → 截断(GPT-5.5 review 第 5 轮 P1,本地 fake upstream
     // 复现确认)。
+    // 压缩 SSE(gzip/br)不接管:改写器按明文换行切行,压缩字节会漏改甚至误改;
+    // 压缩流下保持字节透传(不删 content-length,客户端自行解压),与扩展前一致
+    // (Greptile review)。
     const isSse = String(upstreamRes.headers['content-type'] ?? '')
       .toLowerCase()
       .startsWith('text/event-stream');
+    const isCompressed = String(upstreamRes.headers['content-encoding'] ?? '') !== '';
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
-    if (responseToolUseIds && responseToolUseIds.size > 0 && isSse) {
+    if (responseToolUseIds && responseToolUseIds.size > 0 && isSse && !isCompressed) {
       delete respHeaders['content-length'];
       const rewriter = new ToolUseIdDedupeRewriter(responseToolUseIds, (from, to) => {
         logger.info?.('⇄ renamed duplicate tool_use id in response stream (kimi mint collision)', {

@@ -2264,3 +2264,38 @@ describe('tool_use id 响应流去重改写(kimi 撞车自愈)', () => {
     expect(res.text).toContain('"type":"message_stop"');
   });
 });
+
+describe('压缩 SSE 不接管(Greptile review)', () => {
+  it('content-encoding 存在时保持字节透传,不改名、不删 content-length', async () => {
+    const { gzipSync } = await import('node:zlib');
+    const upstream = await startFakeUpstream((_i, _b, res) => {
+      const sseBody =
+        'event: content_block_start\n' +
+        'data: {"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"Bash_210","name":"Bash","input":{}}}\n\n';
+      // 真实 gzip 压缩的 SSE:改写器不得接管(压缩字节按明文行切分会漏改/误改)
+      const gzipped = gzipSync(Buffer.from(sseBody, 'utf8'));
+      res.writeHead(200, {
+        'content-type': 'text/event-stream',
+        'content-encoding': 'gzip',
+        'content-length': String(gzipped.length),
+      });
+      res.end(gzipped);
+    });
+    upstreamClose = upstream.close;
+    proxy = await createAnthropicCompatProxy({
+      upstream: upstream.url,
+      transformRequest: [],
+    });
+
+    const res = await post(proxy.url, {
+      model: 'kimi-k3',
+      messages: [
+        { role: 'assistant', content: [{ type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} }] },
+      ],
+    });
+    expect(res.status).toBe(200);
+    // 字节透传:客户端自解压后内容完整、id 不改名(未进入改写器)
+    expect(res.text).toContain('"id":"Bash_210"');
+    expect(res.text).not.toContain('Bash_210_dup2');
+  });
+});
