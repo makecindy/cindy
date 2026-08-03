@@ -466,6 +466,22 @@ describe('sendToSession ordering', () => {
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'return release;');
   });
 
+  it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
+    const setModelBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.SET_MODEL',
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+    );
+    expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
+    expect(setModelBlock).toContain('isDeviceLinkInvoke(),');
+    expect(setModelBlock).toContain(
+      'expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;',
+    );
+    expect(setModelBlock).toContain('selection = normalizedWireArgs.selection;');
+    expect(setModelBlock).toContain('expectedAgentSwitchRevision must be a non-negative integer');
+    expect(setModelBlock).toContain('selection must contain effort + fastMode');
+  });
+
   it('publishes Agent Island prompt preview from send intent and wires commit rollback', () => {
     const makerSendCreateDbMessageBlock = extractBetween(
       source,
