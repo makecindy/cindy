@@ -618,11 +618,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const { html, replyMarkup } = buildCardPayload(spec);
     const sent = await this.callSend<TgMessage>('sendMessage', {
       ...target,
-      ...this.consumeReplyParams(userId),
+      ...this.peekReplyParams(userId),
       text: html,
       parse_mode: 'HTML',
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
+    this.commitReplyParams(userId);
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
   }
@@ -1284,21 +1285,30 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * 本轮回挂目标 → reply_parameters(首条出站专用)。
+   * 本轮回挂目标 → reply_parameters(首条出站专用), **只读不消耗**。
    * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   *
+   * 读与消耗必须分开: 首条出站失败(网络/限流耗尽)时调用方会重试 —— 发前就消耗
+   * 会让重试那条丢掉引用('first' 档于是整轮不再挂回)。旧 sendRichFinal 就是这么
+   * 做的, DM 改走经典路径后该语义必须留在共用发送入口上。
    */
-  private consumeReplyParams(
+  private peekReplyParams(
     userId: string,
   ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
     const target = this.turnReplyTargets.get(userId);
     if (!target) return {};
+    return {
+      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+    };
+  }
+
+  /** 出站确定成功后才消耗本轮目标(群 'all' 档保留整轮)。 */
+  private commitReplyParams(userId: string): void {
+    if (!this.turnReplyTargets.has(userId)) return;
     // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
     const keepForAll =
       decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
     if (!keepForAll) this.turnReplyTargets.delete(userId);
-    return {
-      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
-    };
   }
 
 
@@ -1356,7 +1366,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     markdownChunk: string,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
-    const replyParams = this.consumeReplyParams(userId);
+    const replyParams = this.peekReplyParams(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {
@@ -1379,6 +1389,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         throw err;
       }
     }
+    this.commitReplyParams(userId);
     this.recordOwnEcho(userId, markdownChunk, sent);
     return {
       messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)),
@@ -1392,11 +1403,12 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     for (const chunk of chunkTelegramSource(text)) {
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
-        ...(firstMessageId === '' ? this.consumeReplyParams(userId) : {}),
+        ...(firstMessageId === '' ? this.peekReplyParams(userId) : {}),
         text: chunk || '…',
         link_preview_options: { is_disabled: true },
       });
       if (!firstMessageId) {
+        this.commitReplyParams(userId);
         firstMessageId = encodeMessageId(String(sent.chat.id), String(sent.message_id));
       }
       this.recordOwnEcho(userId, chunk, sent);

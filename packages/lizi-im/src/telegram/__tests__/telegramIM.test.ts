@@ -1201,6 +1201,52 @@ describe('TelegramIM', () => {
     expect((withReply[0].params.reply_parameters as { message_id: number }).message_id).toBe(95);
   });
 
+  it('回挂目标成功才消耗: 首条出站失败后重试仍带 reply_parameters', async () => {
+    await im.dispose();
+    im = new TelegramIM(ctx.host, {
+      apiFactory: () => api,
+      behavior: () => ({ emojiReactions: 'off', replyQuoteGroup: 'first', replyQuoteDm: 'first' }),
+    });
+    im.registerIpc();
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([privateMessage('问个事', 111, 96)]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+    // connect 的 linked 确认也发往 owner 私聊 —— 取基线后只看本例新增的出站。
+    const dmSendsBefore = api.calls.filter(
+      (c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID,
+    ).length;
+
+    // 首条 sendMessage 非 400 失败(网络类), 之后恢复 —— 回挂目标不能被那次失败吃掉。
+    const originalCall = api.call.bind(api);
+    let failedOnce = false;
+    api.call = (async (method: string, params?: Record<string, unknown>, signal?: AbortSignal) => {
+      if (method === 'sendMessage' && params?.chat_id === OWNER_ID && !failedOnce) {
+        failedOnce = true;
+        api.calls.push({ method, params: params ?? {} });
+        throw new Error('socket hang up');
+      }
+      return originalCall(method, params, signal);
+    }) as FakeApi['call'];
+
+    await expect(im.sendText(OWNER_ID, '第一条(会失败)')).rejects.toThrow();
+    await im.sendText(OWNER_ID, '重试的第一条');
+    // 已成功一条 → 'first' 档后续不再挂回
+    await im.sendText(OWNER_ID, '第二条');
+    const dmSends = api.calls
+      .filter((c) => c.method === 'sendMessage' && c.params.chat_id === OWNER_ID)
+      .slice(dmSendsBefore);
+    expect(dmSends).toHaveLength(3);
+    // 失败那条 + 重试那条都带引用(引用只在成功后被消耗); 第三条不带
+    for (const call of dmSends.slice(0, 2)) {
+      expect((call.params.reply_parameters as { message_id: number } | undefined)?.message_id).toBe(
+        96,
+      );
+    }
+    expect(dmSends[2].params.reply_parameters).toBeUndefined();
+  });
+
   it('全响应·自主判断: always 群未召唤消息进 ambient turn, 表情静默, NO_REPLY 删占位', async () => {
     await im.dispose();
     im = new TelegramIM(ctx.host, {
