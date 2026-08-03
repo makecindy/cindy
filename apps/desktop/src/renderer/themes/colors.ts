@@ -255,9 +255,9 @@ registerColor('input', {
   dark: 'var(--border-shadcn-hsl)',
 }, 'input');
 registerColor('switch-track-off', {
-  light: '#828282',
-  dark: '#858585',
-}, '共享 Switch 未选中轨道；独立于 input/disabled 色槽，与主题表面及滑块保持至少 3:1 非文字组件对比度，同时弱于开启态');
+  light: 'var(--text-secondary)',
+  dark: 'var(--text-secondary)',
+}, '共享 Switch 未选中轨道；跟随主题次要前景，与默认/悬停表面及滑块保持至少 3:1 非文字组件对比度，同时弱于开启态');
 registerColor('switch-thumb-off', {
   light: 'var(--surface-on-card)',
   dark: 'var(--surface-on-card)',
