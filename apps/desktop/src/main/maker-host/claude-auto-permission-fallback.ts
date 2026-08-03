@@ -21,11 +21,18 @@ export interface ClaudeAutoClassifierUnavailableSignal {
 interface FallbackSession {
   agentKind: string;
   useCindyAutoReviewFallback?(): Promise<void>;
+  restoreNativeAutoReview?(): Promise<void>;
 }
 
 interface FallbackLogger {
+  debug(message: string, fields?: Record<string, unknown>): void;
   info(message: string, fields?: Record<string, unknown>): void;
   warn(message: string, fields?: Record<string, unknown>): void;
+}
+
+/** 可取消的恢复定时器；注入是为了让测试用假时钟驱动，不必真等冷却。 */
+export interface FallbackRestoreTimer {
+  cancel(): void;
 }
 
 /** coordinator 的 host 依赖；使用回调注入，模块本身不依赖 Electron/DB。 */
@@ -33,6 +40,10 @@ export interface ClaudeAutoPermissionFallbackDeps {
   getSession(sessionId: string): FallbackSession | undefined;
   getSessionMeta(sessionId: string): Promise<{ permissionMode?: PermissionMode } | null>;
   logger: FallbackLogger;
+  /**
+   * 恢复试探的调度器。缺省用 setTimeout + unref（不阻止进程退出）；测试注入假实现。
+   */
+  scheduleRestore?(run: () => void, delayMs: number): FallbackRestoreTimer;
 }
 
 type UnavailableListener = (signal: ClaudeAutoClassifierUnavailableSignal) => void;
@@ -246,16 +257,56 @@ interface FallbackCounters {
   skippedNonClaude: number;
   skippedUnsupported: number;
   failed: number;
+  /** 冷却到期后真正把会话切回原生审阅的次数。 */
+  restored: number;
+  /** 冷却到期但已不该恢复(会话没了 / 已离开 Auto / handle 不支持)。 */
+  restoreSkipped: number;
+  /** restoreNativeAutoReview 抛错。 */
+  restoreFailed: number;
+}
+
+/**
+ * 切回原生审阅前的冷却 —— 恢复是**乐观试探**,不是「已确认恢复」。
+ *
+ * 为什么只能靠时间:切到 fallback 时 session handle 已把 SDK 切到 `default` 档,原生
+ * 分类器此后不再被调用,proxy 观察器永远收不到它的 2xx;而且切换那一刻就把该会话的瞬时
+ * 记账清零了(见上方 notify 前的 delete)。所以系统里没有任何「分类器已恢复」的信号可等,
+ * 只能过一段时间试一次。
+ *
+ * 试错的代价由指数退避兜住:每次重新切到 fallback 都把下一次冷却翻倍(上限 1 小时),
+ * 确定性故障最多白试几次就退到低频,不会每 5 分钟把用户重新推进一次硬拒绝窗口。
+ */
+const RESTORE_COOLDOWN_BASE_MS = 5 * 60_000;
+const RESTORE_COOLDOWN_MAX_MS = 60 * 60_000;
+/** per-session 恢复状态表上限(防长生命周期泄漏);超限时先剔没有在飞定时器的项。 */
+const RESTORE_STATE_MAX_SESSIONS = 256;
+
+interface SessionRestoreState {
+  /** 该会话累计切到 fallback 的次数,决定下一次冷却时长。 */
+  switches: number;
+  timer: FallbackRestoreTimer | null;
+}
+
+function defaultScheduleRestore(run: () => void, delayMs: number): FallbackRestoreTimer {
+  const timer = setTimeout(run, delayMs);
+  // 恢复试探不是必须完成的工作:进程该退出时不要被它拖住。
+  timer.unref?.();
+  return { cancel: () => clearTimeout(timer) };
 }
 
 /**
  * 创建 per-session fallback coordinator。in-flight 集合只防同一轮 429 retry storm；
  * 完成后即释放；session handle 自身保证重复切换幂等。
+ *
+ * 切换成功后按冷却 + 指数退避安排一次「切回原生审阅」的乐观试探(issue #1578):否则一次
+ * 瞬时抖动就把会话永久钉在 Cindy fallback 上,会话内没有任何恢复路径。
  */
 export function createClaudeAutoPermissionFallbackCoordinator(
   deps: ClaudeAutoPermissionFallbackDeps,
 ): (signal: ClaudeAutoClassifierUnavailableSignal) => Promise<boolean> {
   const inFlight = new Set<string>();
+  const scheduleRestore = deps.scheduleRestore ?? defaultScheduleRestore;
+  const restoreStates = new Map<string, SessionRestoreState>();
   const counters: FallbackCounters = {
     detected: 0,
     switched: 0,
@@ -264,6 +315,88 @@ export function createClaudeAutoPermissionFallbackCoordinator(
     skippedNonClaude: 0,
     skippedUnsupported: 0,
     failed: 0,
+    restored: 0,
+    restoreSkipped: 0,
+    restoreFailed: 0,
+  };
+
+  const runRestore = async (sessionId: string): Promise<void> => {
+    const state = restoreStates.get(sessionId);
+    if (state) state.timer = null;
+    try {
+      // 冷却期内用户可能已经关掉会话、切走权限档,或换到不支持原生审阅的路由。
+      // 逐项复核当前真相,不用冷却开始时的快照。
+      const meta = await deps.getSessionMeta(sessionId);
+      const session = deps.getSession(sessionId);
+      if (
+        meta?.permissionMode !== 'auto'
+        || !session
+        || session.agentKind !== 'claude-code'
+        || !session.restoreNativeAutoReview
+      ) {
+        counters.restoreSkipped += 1;
+        restoreStates.delete(sessionId);
+        deps.logger.debug('skip native Auto reviewer restore attempt', {
+          sessionId,
+          permissionMode: meta?.permissionMode ?? null,
+          hasSession: Boolean(session),
+          counters: { ...counters },
+        });
+        return;
+      }
+      // handle 侧自己判「路由是否支持原生审阅」并在不支持时静默 no-op —— 这里不重复
+      // 那套判定,免得两处口径分叉。
+      await session.restoreNativeAutoReview();
+      counters.restored += 1;
+      deps.logger.info('attempted restore of native Auto reviewer after cooldown', {
+        sessionId,
+        switches: state?.switches ?? 0,
+        counters: { ...counters },
+      });
+    } catch (error) {
+      counters.restoreFailed += 1;
+      deps.logger.warn('native Auto reviewer restore failed', {
+        sessionId,
+        error: error instanceof Error ? error.message : String(error),
+        counters: { ...counters },
+      });
+    }
+  };
+
+  const scheduleRestoreAttempt = (sessionId: string): void => {
+    let state = restoreStates.get(sessionId);
+    if (!state) {
+      if (restoreStates.size >= RESTORE_STATE_MAX_SESSIONS) {
+        for (const [key, value] of restoreStates) {
+          if (!value.timer) restoreStates.delete(key);
+        }
+        if (restoreStates.size >= RESTORE_STATE_MAX_SESSIONS) {
+          // 仍满(极端:256 个会话同时挂着在飞的试探)→ 剔最早插入的一个并取消它的定时器。
+          const oldest = restoreStates.keys().next().value;
+          if (oldest !== undefined) {
+            restoreStates.get(oldest)?.timer?.cancel();
+            restoreStates.delete(oldest);
+          }
+        }
+      }
+      state = { switches: 0, timer: null };
+      restoreStates.set(sessionId, state);
+    }
+    // 同一会话重新切到 fallback → 上一轮试探作废,退避加倍后重排。
+    state.timer?.cancel();
+    state.switches += 1;
+    const delayMs = Math.min(
+      RESTORE_COOLDOWN_BASE_MS * 2 ** (state.switches - 1),
+      RESTORE_COOLDOWN_MAX_MS,
+    );
+    state.timer = scheduleRestore(() => {
+      void runRestore(sessionId);
+    }, delayMs);
+    deps.logger.debug('scheduled native Auto reviewer restore attempt', {
+      sessionId,
+      switches: state.switches,
+      delayMs,
+    });
   };
 
   return async (signal) => {
@@ -292,6 +425,8 @@ export function createClaudeAutoPermissionFallbackCoordinator(
       }
       await session.useCindyAutoReviewFallback();
       counters.switched += 1;
+      // 只给能恢复的 handle 排试探:老 handle 没有对称入口时排了也只会白跑一次。
+      if (session.restoreNativeAutoReview) scheduleRestoreAttempt(signal.sessionId);
       deps.logger.info('auto permission classifier unavailable; session kept on Auto with Cindy fallback', {
         sessionId: signal.sessionId,
         agentKind: signalAgentKind,

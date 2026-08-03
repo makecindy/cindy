@@ -43,10 +43,33 @@ function createDeps(overrides: Partial<ClaudeAutoPermissionFallbackDeps> = {}) {
   const deps: ClaudeAutoPermissionFallbackDeps = {
     getSession: vi.fn(() => ({ agentKind: 'claude-code', useCindyAutoReviewFallback })),
     getSessionMeta: vi.fn(async () => ({ permissionMode: 'auto' as const })),
-    logger: { info: vi.fn(), warn: vi.fn() },
+    logger: { debug: vi.fn(), info: vi.fn(), warn: vi.fn() },
     ...overrides,
   };
   return { deps, useCindyAutoReviewFallback };
+}
+
+/**
+ * 手动驱动的恢复调度器 —— 记下每次排期的 delay,由测试显式 run(),不真等冷却。
+ */
+function createManualRestoreScheduler() {
+  const scheduled: Array<{ delayMs: number; run: () => void; cancelled: boolean }> = [];
+  const scheduleRestore = vi.fn((run: () => void, delayMs: number) => {
+    const entry = { delayMs, run, cancelled: false };
+    scheduled.push(entry);
+    return {
+      cancel: () => {
+        entry.cancelled = true;
+      },
+    };
+  });
+  return { scheduled, scheduleRestore };
+}
+
+/** 让排期的恢复试探跑完(runRestore 是 async 的,void 出去后要等一拍)。 */
+async function runScheduled(entry: { run: () => void }): Promise<void> {
+  entry.run();
+  await new Promise((resolve) => setTimeout(resolve, 0));
 }
 
 afterEach(() => {
@@ -437,6 +460,141 @@ describe('createClaudeAutoPermissionFallbackCoordinator', () => {
     expect(deps.logger.warn).toHaveBeenCalledWith(
       'auto permission fallback failed',
       expect.objectContaining({ error: 'runtime unavailable' }),
+    );
+  });
+});
+
+/**
+ * 切回原生审阅的乐观试探(issue #1578)。
+ *
+ * 缺了它,一次瞬时抖动就把会话永久钉在 Cindy fallback 上 —— 会话内没有恢复路径,用户
+ * 只能新开会话。恢复只能靠时间驱动:切换那一刻 handle 已把 SDK 切到 `default` 档,原生
+ * 分类器不再被调用,proxy 观察器永远收不到它的 2xx(而且该会话的瞬时记账也已清零)。
+ */
+describe('native Auto reviewer restore attempts', () => {
+  function createRestorableDeps(overrides: Partial<ClaudeAutoPermissionFallbackDeps> = {}) {
+    const useCindyAutoReviewFallback = vi.fn(async () => {});
+    const restoreNativeAutoReview = vi.fn(async () => {});
+    const { scheduled, scheduleRestore } = createManualRestoreScheduler();
+    const { deps } = createDeps({
+      getSession: vi.fn(() => ({
+        agentKind: 'claude-code',
+        useCindyAutoReviewFallback,
+        restoreNativeAutoReview,
+      })),
+      scheduleRestore,
+      ...overrides,
+    });
+    return { deps, useCindyAutoReviewFallback, restoreNativeAutoReview, scheduled };
+  }
+
+  it('schedules the first attempt after the base cooldown and then restores', async () => {
+    const { deps, restoreNativeAutoReview, scheduled } = createRestorableDeps();
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(true);
+    expect(scheduled).toHaveLength(1);
+    expect(scheduled[0].delayMs).toBe(5 * 60_000); // RESTORE_COOLDOWN_BASE_MS
+
+    await runScheduled(scheduled[0]);
+    expect(restoreNativeAutoReview).toHaveBeenCalledOnce();
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      'attempted restore of native Auto reviewer after cooldown',
+      expect.objectContaining({ sessionId: 'session-1' }),
+    );
+  });
+
+  it('doubles the cooldown on every re-switch and caps it at one hour', async () => {
+    const { deps, scheduled } = createRestorableDeps();
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    // 每次重新切到 fallback 说明上一次试探白跑了 —— 退避加倍,别每 5 分钟把用户重新
+    // 推进一次硬拒绝窗口。
+    for (let i = 0; i < 6; i += 1) {
+      await fallback({ sessionId: 'session-1', status: 429 });
+    }
+    expect(scheduled.map((entry) => entry.delayMs)).toEqual([
+      5 * 60_000,
+      10 * 60_000,
+      20 * 60_000,
+      40 * 60_000,
+      60 * 60_000, // 封顶
+      60 * 60_000,
+    ]);
+    // 前几轮的在飞试探都被作废,只有最后一轮有效。
+    expect(scheduled.slice(0, -1).every((entry) => entry.cancelled)).toBe(true);
+    expect(scheduled.at(-1)?.cancelled).toBe(false);
+  });
+
+  it('skips the attempt when the session left Auto during the cooldown', async () => {
+    let permissionMode: 'auto' | 'ask' = 'auto';
+    const { deps, restoreNativeAutoReview, scheduled } = createRestorableDeps({
+      getSessionMeta: vi.fn(async () => ({ permissionMode })),
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await fallback({ sessionId: 'session-1', status: 429 });
+    permissionMode = 'ask'; // 用户自己收紧了权限档
+    await runScheduled(scheduled[0]);
+
+    expect(restoreNativeAutoReview).not.toHaveBeenCalled();
+    expect(deps.logger.debug).toHaveBeenCalledWith(
+      'skip native Auto reviewer restore attempt',
+      expect.objectContaining({ permissionMode: 'ask' }),
+    );
+  });
+
+  it('skips the attempt when the session is gone by the time the cooldown ends', async () => {
+    const useCindyAutoReviewFallback = vi.fn(async () => {});
+    const restoreNativeAutoReview = vi.fn(async () => {});
+    const { scheduled, scheduleRestore } = createManualRestoreScheduler();
+    let alive = true;
+    const { deps } = createDeps({
+      getSession: vi.fn(() => (alive
+        ? { agentKind: 'claude-code', useCindyAutoReviewFallback, restoreNativeAutoReview }
+        : undefined)),
+      scheduleRestore,
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await fallback({ sessionId: 'session-1', status: 429 });
+    alive = false; // 会话已关闭
+    await runScheduled(scheduled[0]);
+
+    expect(restoreNativeAutoReview).not.toHaveBeenCalled();
+    expect(deps.logger.debug).toHaveBeenCalledWith(
+      'skip native Auto reviewer restore attempt',
+      expect.objectContaining({ hasSession: false }),
+    );
+  });
+
+  it('does not schedule anything for a handle without the symmetric entry point', async () => {
+    const { scheduled, scheduleRestore } = createManualRestoreScheduler();
+    const { deps } = createDeps({ scheduleRestore }); // 默认 handle 没有 restoreNativeAutoReview
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await expect(fallback({ sessionId: 'session-1', status: 429 })).resolves.toBe(true);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  it('logs and swallows a failing restore attempt', async () => {
+    const { deps, scheduled } = createRestorableDeps({
+      getSession: vi.fn(() => ({
+        agentKind: 'claude-code',
+        useCindyAutoReviewFallback: vi.fn(async () => {}),
+        restoreNativeAutoReview: vi.fn(async () => {
+          throw new Error('control channel closed');
+        }),
+      })),
+    });
+    const fallback = createClaudeAutoPermissionFallbackCoordinator(deps);
+
+    await fallback({ sessionId: 'session-1', status: 429 });
+    await runScheduled(scheduled[0]);
+
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      'native Auto reviewer restore failed',
+      expect.objectContaining({ error: 'control channel closed' }),
     );
   });
 });

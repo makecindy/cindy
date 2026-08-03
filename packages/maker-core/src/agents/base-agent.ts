@@ -1157,6 +1157,17 @@ export interface AgentSessionHandle {
   useCindyAutoReviewFallback?(): Promise<void>;
 
   /**
+   * Symmetric counterpart: the vendor-native Auto reviewer looks usable again,
+   * so stop routing approvals through Cindy's lightweight reviewer.
+   *
+   * The host drives this optimistically (cooldown + backoff) because a session
+   * already switched to the fallback no longer calls the native reviewer, so no
+   * recovery signal can arrive on its own. Implementations must be idempotent
+   * and must decline when the current route cannot serve the native reviewer.
+   */
+  restoreNativeAutoReview?(): Promise<void>;
+
+  /**
    * 运行时开关计划模式（Capabilities.planMode 支持时实现）。
    * 开启：Claude 把 SDK 切到 plan mode；Codex 下一 turn 携带 collaborationMode plan。
    * 关闭：切回当前 permissionMode 对应的底层权限档 / collaborationMode default。

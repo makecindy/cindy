@@ -4529,6 +4529,43 @@ export class ClaudeCodeAgent extends BaseAgent {
         });
       },
 
+      /**
+       * useCindyAutoReviewFallback 的对称入口(issue #1578)。缺了它,一次瞬时抖动就把
+       * 整个会话永久钉在 Cindy fallback 上,会话内没有任何恢复路径 —— 用户只能新开会话。
+       *
+       * 恢复**必须由外部驱动**,不能靠观察器:切到 fallback 时 SDK 已被切到 `default`
+       * 档,原生分类器此后不再被调用,proxy 侧永远收不到它的 2xx 恢复信号(而且切换那一刻
+       * 就把该会话的瞬时记账清零了)。host 的 coordinator 用冷却 + 指数退避做乐观试探,
+       * 恢复后若分类器仍在故障,观察器会重新走 episode 阈值把它再切回来。
+       */
+      async restoreNativeAutoReview() {
+        if (!nativeAutoReviewUnavailable) return;
+        // 路由本身就不支持原生审阅(第三方 / 网关 / API key)时,恢复毫无意义 —— 保持在
+        // fallback,免得白跑一次 SDK 切档、还把布尔与实际路由能力弄分叉。
+        if (mutableAutoReviewCredentialMode !== 'oauth-bearer') return;
+        // 控制通道不可用时**不置位**:恢复是放宽方向,宁可等下一次冷却重试,也不要留下
+        // 「布尔说原生可用、SDK 实际还在 default 档」的分叉。这与 fallback 方向刻意不
+        // 对称 —— 那边即使推不动 SDK 也要先置位,因为那是收紧方向。
+        if (controlRequestsBlocked()) {
+          log.debug('skip native Auto reviewer restore: control requests blocked');
+          return;
+        }
+        if (
+          mutablePermissionMode === 'auto'
+          && !mutablePlanMode
+          && !planTurnActive
+        ) {
+          await q.setPermissionMode('auto');
+        }
+        nativeAutoReviewUnavailable = false;
+        autoReviewDecisionCache.clear();
+        log.info('Claude native Auto reviewer restored; leaving Cindy fallback', {
+          providerId: mutableProviderId,
+          model: mutableModel,
+          permissionMode: mutablePermissionMode,
+        });
+      },
+
       async setPlanMode(enabled: boolean) {
         if (mutablePlanMode === enabled) return;
         mutablePlanMode = enabled;

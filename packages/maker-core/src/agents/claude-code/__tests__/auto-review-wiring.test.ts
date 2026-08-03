@@ -327,6 +327,61 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
   });
 });
 
+/**
+ * fallback 的对称恢复入口(issue #1578)。
+ *
+ * 缺了它,一次瞬时抖动就把会话永久钉在 Cindy fallback 上 —— `nativeAutoReviewUnavailable`
+ * 只有置 true 的地方,会话生命周期内再无重置点,用户只能新开会话。
+ *
+ * 恢复由 host 侧冷却 + 指数退避驱动(不能靠 proxy 观察器:切到 fallback 时 SDK 已被切到
+ * `default` 档,原生分类器此后不再被调用,永远等不到它的 2xx 恢复信号)。
+ */
+describe('Auto-review wiring: native reviewer can be restored after a transient outage', () => {
+  it('switches the SDK back to auto and stays idempotent', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.useCindyAutoReviewFallback?.();
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+
+    await handle.restoreNativeAutoReview?.();
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('auto');
+
+    // 已经回到原生 → 重复调用不再推 SDK(host 的退避会重复试探,必须幂等)。
+    const callsAfterRestore = fakeQuery.setPermissionMode.mock.calls.length;
+    await handle.restoreNativeAutoReview?.();
+    expect(fakeQuery.setPermissionMode.mock.calls).toHaveLength(callsAfterRestore);
+    await handle.close();
+  });
+
+  it('declines to restore on a route that cannot serve the native reviewer', async () => {
+    // 第三方 / 网关路由本来就只能走 Cindy 审阅,把 SDK 推回 auto 只会让 CC 去调一个
+    // 这条路由上不存在的分类器。
+    const { handle, fakeQuery } = await startSession('auto', { providerId: 'xd' });
+
+    await handle.useCindyAutoReviewFallback?.();
+    const before = fakeQuery.setPermissionMode.mock.calls.length;
+    await handle.restoreNativeAutoReview?.();
+
+    expect(fakeQuery.setPermissionMode.mock.calls).toHaveLength(before);
+    await handle.close();
+  });
+
+  it('is a no-op when the session never left the native reviewer', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.restoreNativeAutoReview?.();
+
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
+});
+
 describe('Auto-review wiring: only affects the auto mode', () => {
   it('default mode does not apply the auto-review policy (safe shell still prompts)', async () => {
     const { handle, canUseTool, seen } = await startSession('default');
