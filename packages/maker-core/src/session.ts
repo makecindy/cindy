@@ -746,7 +746,7 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
+  async setModel(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }

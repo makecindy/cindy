@@ -324,6 +324,55 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('rejects an atomic model switch before set_model when its effort is outside the startup snapshot', async () => {
+    const lowOnly = {
+      reasoning: true,
+      thinkingLevelMap: {
+        minimal: null,
+        low: 'low',
+        medium: null,
+        high: null,
+        xhigh: null,
+        max: null,
+      },
+    } as const;
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [{
+        id: 'native-a',
+        name: 'Native A',
+        baseUrl: 'http://a.test',
+        api: 'openai-responses',
+        models: [
+          { id: 'local-model', ...lowOnly },
+          { id: 'target-model', ...lowOnly },
+        ],
+      }],
+      env: {},
+    }), [
+      { id: 'local-model', displayName: 'Local', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+      { id: 'target-model', displayName: 'Target', contextWindow: 200_000, efforts: ['low'], defaultEffort: 'low' },
+    ]));
+    const handle = await agent.startSession({
+      sessionId: 'atomic-effort-preflight',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const beforeSwitch = captured.requests.length;
+
+    // renderer catalog 热更新后把目标模型显示成 high；活动 Pi 的 models.json 仍只允许 low。
+    await expect(handle.setModel!('target-model', { providerId: 'native-a', effort: 'high' }))
+      .rejects.toThrow(/startup model snapshot/);
+    expect(captured.requests.slice(beforeSwitch)).not.toContainEqual({
+      type: 'set_model',
+      provider: 'native-a',
+      modelId: 'target-model',
+    });
+    expect(handle.model).toBe('local-model');
+    await handle.close();
+  });
+
   it('freezes omitted BYOM reasoning to an empty startup capability snapshot', async () => {
     const agent = new PiAgent(byomDeps(async () => ({
       providers: [{

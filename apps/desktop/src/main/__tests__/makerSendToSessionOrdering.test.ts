@@ -426,6 +426,7 @@ describe('sendToSession ordering', () => {
     );
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
     expect(setModelBlock).toContain('if (atomicSelection) {');
+    expect(setModelBlock).toContain('effort: atomicSelection.effort as');
     expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
     expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
     expect(setModelBlock).toContain('await sess.setEffort(');
@@ -438,6 +439,11 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'applySetModelThenCancelAgentSwitchIntent(',
+      'setSessionEffort(sessionId, atomicSelection.effort);',
+    );
+    expectOrder(
+      setModelBlock,
+      'effort: atomicSelection.effort as',
       'setSessionEffort(sessionId, atomicSelection.effort);',
     );
     expectOrder(

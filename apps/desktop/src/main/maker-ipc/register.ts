@@ -9445,6 +9445,18 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             sessionId,
             model,
             providerId: effectiveProviderId,
+            ...(atomicSelection
+              ? {
+                  effort: atomicSelection.effort as
+                    | 'minimal'
+                    | 'low'
+                    | 'medium'
+                    | 'high'
+                    | 'xhigh'
+                    | 'max'
+                    | 'ultra',
+                }
+              : {}),
             isSessionInTurn,
             registerPendingCredentialSwitch: registerPendingCredentialSwitchForSession,
             clearPendingCredentialSwitch: clearPendingCredentialSwitchForSession,

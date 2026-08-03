@@ -625,6 +625,19 @@ export class PiAgent extends BaseAgent {
       return gatewayModel?.efforts;
     };
     const initialEffortSnapshot = resolveStartupEffortSnapshot(initialProvider, opts.model);
+    const assertStartupEffortAllowed = (
+      snapshot: readonly Effort[] | undefined,
+      effort: Effort,
+    ): void => {
+      // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low；它代表“不支持切换”，
+      // 只需跳过 RPC。其它档位必须拒绝，避免热刷目录后的新 effort 绕过启动快照。
+      if (!snapshot || (snapshot.length === 0 && effort === 'low')) return;
+      if (snapshot.includes(effort)) return;
+      throw new Error(
+        `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
+          'startup model snapshot; restart the Pi session after changing provider capabilities.',
+      );
+    };
 
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
@@ -1339,7 +1352,7 @@ export class PiAgent extends BaseAgent {
         interactionResolver = resolver;
       },
 
-      async setModel(model: string, setOpts?: { providerId?: string | null }): Promise<void> {
+      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
         const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
           ? setOpts.providerId
           : undefined;
@@ -1357,6 +1370,9 @@ export class PiAgent extends BaseAgent {
         }
         const provider = resolveProviderForModel(model, requestedProviderId);
         const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
+        if (setOpts?.effort) {
+          assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+        }
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
@@ -1371,15 +1387,8 @@ export class PiAgent extends BaseAgent {
       },
 
       async setEffort(effort: Effort): Promise<void> {
-        // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low。仅接受这个占位值并
-        // 跳过 RPC；其它档位仍必须拒绝，避免热刷目录后的新 effort 绕过空快照。
-        if (activeEffortSnapshot?.length === 0 && effort === 'low') return;
-        if (activeEffortSnapshot && !activeEffortSnapshot.includes(effort)) {
-          throw new Error(
-            `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
-              'startup model snapshot; restart the Pi session after changing provider capabilities.',
-          );
-        }
+        assertStartupEffortAllowed(activeEffortSnapshot, effort);
+        if (activeEffortSnapshot?.length === 0) return;
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),
