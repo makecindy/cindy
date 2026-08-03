@@ -20,6 +20,7 @@ import type {
   CustomProviderConfig,
   CustomProviderRuntimeConfig,
   OAuthProviderDescriptor,
+  ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
 import {
   findReservedOAuthExtraParam,
@@ -114,6 +115,15 @@ function validateRuntime(agent: string, rt: unknown): ValidationResult {
     }
     if (mm.supportsImageInput !== undefined && typeof mm.supportsImageInput !== 'boolean') {
       return invalid(`runtime '${agent}' model.supportsImageInput must be a boolean`);
+    }
+    if (
+      mm.codexCompatibilityWireProtocol !== undefined
+      && (
+        agent !== 'codex'
+        || mm.codexCompatibilityWireProtocol !== 'openai-chat'
+      )
+    ) {
+      return invalid(`runtime '${agent}' model.codexCompatibilityWireProtocol invalid`);
     }
   }
   if (r.wireProtocol !== undefined) {
@@ -326,6 +336,9 @@ function normalizeRuntime(rt: CustomProviderRuntimeConfig): CustomProviderRuntim
       id: m.id.trim(),
       name: m.name.trim(),
       ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+      ...(m.codexCompatibilityWireProtocol
+        ? { codexCompatibilityWireProtocol: m.codexCompatibilityWireProtocol }
+        : {}),
       ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
       ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
     }))
@@ -458,17 +471,26 @@ function parseRuntimes(raw: string): Partial<Record<AgentKind, CustomProviderRun
           .filter((m): m is Record<string, unknown> =>
             !!m && typeof m === 'object' && typeof (m as { id?: unknown }).id === 'string',
           )
-          .map((m) => ({
-            id: String(m.id),
-            name: String(m.name ?? ''),
-            ...(typeof m.contextWindow === 'number'
-              && Number.isFinite(m.contextWindow)
-              && m.contextWindow > 0
-              ? { contextWindow: m.contextWindow }
-              : {}),
-            ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
-            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
-          }))
+          .map<ProviderRuntimeModelConfig>((m) => {
+            const compatibilityWire = agent === 'codex'
+              && m.codexCompatibilityWireProtocol === 'openai-chat'
+              ? m.codexCompatibilityWireProtocol
+              : undefined;
+            return {
+              id: String(m.id),
+              name: String(m.name ?? ''),
+              ...(typeof m.contextWindow === 'number'
+                && Number.isFinite(m.contextWindow)
+                && m.contextWindow > 0
+                ? { contextWindow: m.contextWindow }
+                : {}),
+              ...(compatibilityWire
+                ? { codexCompatibilityWireProtocol: compatibilityWire }
+                : {}),
+              ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+            };
+          })
       : [];
     const entry: CustomProviderRuntimeConfig = {
       baseUrl: typeof r.baseUrl === 'string' ? r.baseUrl : '',

@@ -30,7 +30,6 @@ import type { RoutingDecision } from '@cindy/anthropic-compat-proxy';
 
 import {
   getActiveCatalog,
-  isXdCodexAnthropicBridgeModel,
 } from './active-catalog.js';
 import { getAppCapabilities } from '../appCapabilities.js';
 import { getSessionProvider } from './session-provider-store.js';
@@ -404,21 +403,25 @@ function routingServesWireModel(routing: RoutingDescriptor, wireModel: string | 
 /**
  * 解析 provider × agent × model 的最终 wire。
  *
- * 绝大多数路由直接使用 provider 级描述符；XD 是一个 provider 内同时存在两种 Codex wire
- * 的特例：服务端原生声明 codex 的模型走 Responses，只声明 claude-code 的模型由客户端
- * 投影给 Codex，并复用同一 provider 的 Claude Messages 路由进入本地 bridge。
+ * 绝大多数路由直接使用 provider 级描述符；同一 Provider 内同时存在多种 Codex wire 时，
+ * 模型可用 codexCompatibilityWireProtocol 覆盖。内置目录的 Anthropic Messages 覆盖复用
+ * 该 Provider 的 Claude 路由；用户 Provider 的 Chat Completions 覆盖沿用 Codex 路由的
+ * 上游与鉴权，但不继承 Responses 专属 requestPath。
  */
 function providerRoutingForModel(
   provider: Provider,
   agent: AgentKind,
   wireModel: string | undefined,
 ): RoutingDescriptor | null {
-  if (
-    provider.id === 'xd'
-    && agent === 'codex'
-    && wireModel
-    && isXdCodexAnthropicBridgeModel(wireModel)
-  ) {
+  const routing = provider.routing[agent] ?? null;
+  if (agent !== 'codex' || !wireModel) return routing;
+
+  const modelId = wireModel.replace(/\[1m\]$/, '');
+  const modelWire = provider.models.codex?.find((model) => model.id === modelId)
+    ?.codexCompatibilityWireProtocol;
+  if (!modelWire) return routing;
+
+  if (modelWire === 'anthropic-messages') {
     const claudeRouting = provider.routing['claude-code'];
     if (!claudeRouting) return null;
     return {
@@ -426,7 +429,9 @@ function providerRoutingForModel(
       wireProtocol: 'anthropic-messages',
     };
   }
-  return provider.routing[agent] ?? null;
+  if (!routing) return null;
+  const { requestPath: _responsesRequestPath, ...sharedRouting } = routing;
+  return { ...sharedRouting, wireProtocol: modelWire };
 }
 
 /**
@@ -732,6 +737,48 @@ export function resolveImplicitLocalBridgeRoute(
       return null;
     }
     return resolveProviderRouteById(provider.id, agent, modelId);
+  });
+}
+
+/**
+ * 隐式自定义 Responses 来源：历史会话可能已把 providerId 持久化为 null，但模型选择器
+ * 的默认来源仍是已连接的 user provider。原生 Responses 不经过本地协议 bridge，必须在
+ * 透明代理层补回该来源的 endpoint 与 API key，否则 Codex 会把第三方模型名发往
+ * ChatGPT/XD 默认上游。
+ *
+ * 只接管 user + 原生 Responses；内置默认来源保持既有 no-break 行为，Chat / Anthropic
+ * Messages 则继续由 resolveImplicitLocalBridgeRoute 处理。
+ */
+export function resolveImplicitUserProviderRouteDecision(
+  modelId: string,
+  agent: AgentKind,
+  gatewayKey: string | null,
+): RoutingDecision | null | Promise<RoutingDecision | null> {
+  const catalogModelId = modelId.replace(/\[1m\]$/, '');
+  const hasNativeUserCandidate = providersForModel(catalogModelId, agent).some((candidate) => {
+    if (candidate.source !== 'user') return false;
+    const wireProtocol = providerRoutingForModel(candidate, agent, catalogModelId)?.wireProtocol;
+    return !wireProtocol || wireProtocol === 'openai-responses';
+  });
+  // 绝大多数 Codex 原生模型属于内置来源；先用内存 catalog 快筛，避免每个请求都读取
+  // 凭证连接态。只有确有 user Responses 候选时才进入异步默认来源解析。
+  if (!hasNativeUserCandidate) return null;
+  return connectedDefaultProviderForModel(catalogModelId, agent).then(async (provider) => {
+    if (!provider || provider.source !== 'user') return null;
+    const route = await resolveProviderRouteById(provider.id, agent, modelId);
+    if (!route) return null;
+    const wireProtocol = route.routing.wireProtocol;
+    if (wireProtocol && wireProtocol !== 'openai-responses') return null;
+    const decision = buildRouteDecision(
+      route.routing,
+      gatewayKey,
+      agent,
+      route.apiKey,
+      route.oauthToken,
+    );
+    return decision && route.routing.requestPath
+      ? { ...decision, pathOverride: route.routing.requestPath }
+      : decision;
   });
 }
 

@@ -1,5 +1,5 @@
 /**
- * model-route-guard —— 本地停用与 Registry retired 在 main 新会话路由边界的准入判定。
+ * model-route-guard —— main 新会话路由边界的来源物化、停用与 Registry retired 判定。
  *
  * 背景(PR #744 review):停用标志烘焙进 ProviderView 后,renderer 选择器不会再列出
  * 停用模型,但 `maker:create-session` / `maker:set-model` / `maker:switch-session-agent`
@@ -28,6 +28,7 @@
  */
 
 import {
+  actualSourceIdForModel,
   connectedProvidersForAgent,
   effectiveSourceIdForModel,
   getModel,
@@ -51,6 +52,25 @@ export type ModelRouteVerdict =
 export interface ModelRouteGuardOptions {
   /** Active Registry tombstones have no CatalogModel entity, so the live shell supplies this. */
   isRetiredTombstone?: (providerId: string | null, modelId: string, agent: AgentKind) => boolean;
+}
+
+/**
+ * 旧会话可能把「当时的隐式默认来源」持久化成 null。对原生 agent 来源这仍有稳定
+ * 语义，但用户自定义来源必须在恢复、创建 agent 子进程前显式物化，否则 Codex 会
+ * 按当前登录态选择 OpenAI subscription transport（含 WebSocket），代理甚至没有
+ * 机会把请求改送到第三方上游。resume 口径保留 disabled/retired 的既有路由，因此
+ * 使用 actualSourceIdForModel，而不是新路由准入使用的 effectiveSourceIdForModel。
+ */
+export function implicitUserProviderIdForResume(
+  views: readonly ProviderView[],
+  agent: AgentKind,
+  modelId: string,
+): string | null {
+  const providerId = actualSourceIdForModel([...views], null, modelId, agent);
+  if (!providerId) return null;
+  return views.find((provider) => provider.id === providerId)?.source === 'user'
+    ? providerId
+    : null;
 }
 
 /** 该来源下这份 (model, agent) 拷贝是否被停用(含供应商级)。 */
@@ -127,16 +147,16 @@ export function checkModelRoute(
 
   // 隐式来源:推演「不考虑停用时会路由到谁」(原生默认口径,与 provider-route 的
   // 实际落点一致;rail 只含已连接来源,零已连接 ⇒ pass 交给既有错误路径)。
-  const preDisableRail = [...sourcesForModel([...views], modelId, agent, { includeDisabled: true })];
+  const preDisableRail = [
+    ...sourcesForModel([...views], modelId, agent, { includeDisabled: true }),
+  ];
   const wouldRouteId = nativeDefaultSourceId(preDisableRail, agent);
   if (!wouldRouteId) return { kind: 'pass' };
   const wouldRoute = preDisableRail.find((p) => p.id === wouldRouteId);
   if (!wouldRoute) return { kind: 'pass' };
   if (copyRetired(wouldRoute, modelId, agent)) {
     const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
-    const alternativeProvider = alternative
-      ? views.find((p) => p.id === alternative)
-      : undefined;
+    const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
     return alternative &&
       alternativeProvider &&
       copySelectableForNewRoute(alternativeProvider, modelId, agent)
@@ -162,14 +182,23 @@ export function checkModelRoute(
       ? { kind: 'reroute', providerId: chatAlternative }
       : { kind: 'reject', reason: 'capability-model' };
   }
-  if (!copyDisabled(wouldRoute, modelId, agent)) return { kind: 'pass' };
+  if (!copyDisabled(wouldRoute, modelId, agent)) {
+    // providerId=null 在 agent 原生默认来源(openai/xd)有稳定语义；user provider 却必须
+    // 显式物化，否则代理无法知道应注入哪家的 endpoint/key，会把第三方模型发往原生上游。
+    // Renderer 会把“当前选择等于默认来源”压成 null，因此在 main 边界统一补回。
+    return wouldRoute.source === 'user'
+      ? { kind: 'reroute', providerId: wouldRoute.id }
+      : { kind: 'pass' };
+  }
 
   // 原生默认落点被停用:解析一份启用且已连接的替代拷贝(effectiveSourceIdForModel
   // 走过滤后的 rail),且那份拷贝也必须是对话模型条目,有 ⇒ 显式改路由;
   // 无 ⇒ 该模型在停用语义下不可用。
   const alternative = effectiveSourceIdForModel([...views], null, modelId, agent);
   const alternativeProvider = alternative ? views.find((p) => p.id === alternative) : undefined;
-  return alternative && alternativeProvider && copySelectableForNewRoute(alternativeProvider, modelId, agent)
+  return alternative &&
+    alternativeProvider &&
+    copySelectableForNewRoute(alternativeProvider, modelId, agent)
     ? { kind: 'reroute', providerId: alternative }
     : { kind: 'reject', reason: 'model-disabled' };
 }

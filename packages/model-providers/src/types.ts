@@ -436,6 +436,12 @@ export interface ProviderRuntimeModelConfig {
   id: string;
   name: string;
   contextWindow?: number;
+  /**
+   * 用户 Provider 的 Codex 模型级兼容协议覆盖。仅用于同一 runtime 同时包含原生
+   * Responses 与 Chat-only 模型：缺省继承 runtime wireProtocol；设置后该模型进入
+   * Cindy 的 Responses→Chat bridge。
+   */
+  codexCompatibilityWireProtocol?: Extract<CodexCompatibilityWireProtocol, 'openai-chat'>;
   /** 模型未被用户显式开关时的可见性；缺省保持历史行为（默认可见）。 */
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */

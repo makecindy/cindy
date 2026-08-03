@@ -24,6 +24,7 @@ import {
   resolveSessionRoute,
   resolveSessionRouteDecision,
   resolveImplicitLocalBridgeRoute,
+  resolveImplicitUserProviderRouteDecision,
   inferProviderIdForModel,
   isUserProviderSession,
   setCustomProviderKeyReader,
@@ -101,6 +102,86 @@ describe('implicit local bridge resume routing', () => {
         providerId: 'anthropic',
         routing: { wireProtocol: 'anthropic-messages' },
       });
+  });
+});
+
+describe('model-level Codex compatibility routing', () => {
+  afterEach(() => {
+    clearSessionProvider('s-mixed-wire');
+    setCustomProviders([]);
+    setCustomProviderKeyReader(() => null);
+  });
+
+  it('keeps the native Responses model direct and bridges only the Chat-only model', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'mixed-wire',
+        name: 'Mixed wire',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.example.com',
+            wireProtocol: 'openai-responses',
+            requestPath: '/responses',
+            models: [
+              { id: 'native', name: 'Native' },
+              {
+                id: 'chat-only',
+                name: 'Chat only',
+                codexCompatibilityWireProtocol: 'openai-chat',
+              },
+            ],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'sk-mixed-wire');
+    setSessionProvider('s-mixed-wire', 'mixed-wire');
+
+    expect(getSessionRoutingDescriptor('s-mixed-wire', 'codex', 'native')).toMatchObject({
+      upstream: 'https://api.example.com',
+      authStrategy: 'api-key-header',
+      requestPath: '/responses',
+    });
+    expect(getSessionRoutingDescriptor('s-mixed-wire', 'codex', 'native')?.wireProtocol)
+      .toBeUndefined();
+    const chatRoute = await resolveSessionRoute('s-mixed-wire', 'codex', 'chat-only');
+    expect(chatRoute).toMatchObject({
+      providerId: 'mixed-wire',
+      routing: {
+        upstream: 'https://api.example.com',
+        authStrategy: 'api-key-header',
+        wireProtocol: 'openai-chat',
+      },
+    });
+    expect(chatRoute?.routing).not.toHaveProperty('requestPath');
+  });
+
+  it('routes an implicit native Responses model through its connected user provider', async () => {
+    setCustomProviders([
+      buildUserProvider({
+        id: 'deepseek',
+        name: 'DeepSeek',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.deepseek.com',
+            wireProtocol: 'openai-responses',
+            models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'sk-deepseek');
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { deepseek: true }, {}),
+    );
+
+    await expect(
+      resolveImplicitUserProviderRouteDecision('deepseek-v4-flash', 'codex', KEY),
+    ).resolves.toEqual({
+      upstreamOverride: 'https://api.deepseek.com',
+      headerOverride: { authorization: 'Bearer sk-deepseek' },
+      headerDelete: CODEX_ACCOUNT_HEADER_DELETE,
+    });
   });
 });
 

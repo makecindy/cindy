@@ -298,7 +298,7 @@
         },
         "codex": {
           "baseUrl": "https://api.deepseek.com",
-          "wireProtocol": "openai-chat",
+          "wireProtocol": "openai-responses",
           "models": [
             {
               "id": "deepseek-v4-flash",
@@ -308,7 +308,8 @@
             {
               "id": "deepseek-v4-pro",
               "name": "DeepSeek V4 Pro",
-              "contextWindow": 1000000
+              "contextWindow": 1000000,
+              "codexCompatibilityWireProtocol": "openai-chat"
             }
           ],
           "modelsUrl": "https://api.deepseek.com/models"

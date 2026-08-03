@@ -67,7 +67,21 @@ const anthropicProvider = {
 const deepseekPreset = {
   id: 'deepseek',
   name: 'DeepSeek',
-  runtimes: { 'claude-code': { baseUrl: 'https://api.deepseek.com/anthropic', models: [] } },
+  runtimes: {
+    'claude-code': { baseUrl: 'https://api.deepseek.com/anthropic', models: [] },
+    codex: {
+      baseUrl: 'https://api.deepseek.com',
+      wireProtocol: 'openai-responses' as const,
+      models: [
+        { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+        {
+          id: 'deepseek-v4-pro',
+          name: 'DeepSeek V4 Pro',
+          codexCompatibilityWireProtocol: 'openai-chat' as const,
+        },
+      ],
+    },
+  },
 };
 const liteLlmPreset = {
   id: 'litellm',
@@ -176,6 +190,28 @@ describe('AddProviderWizard — preset 直达', () => {
     expect(screen.getByPlaceholderText('sk-…')).not.toBeNull();
     // 不在目录步(搜索框只在 step 1)。
     expect(screen.queryByPlaceholderText('settings.providers.wizard.searchPlaceholder')).toBeNull();
+  });
+
+  it('DeepSeek 预设保存时保留 Flash 原生 Responses 与 Pro 模型级 Chat bridge', async () => {
+    renderWizard('deepseek');
+
+    await waitFor(() => expect(screen.getByDisplayValue('DeepSeek')).not.toBeNull());
+    fireEvent.change(screen.getByPlaceholderText('sk-…'), { target: { value: 'sk-test' } });
+    fireEvent.click(screen.getByText('settings.providers.wizard.next'));
+    await waitFor(() => expect(screen.getByText('DeepSeek V4 Flash')).not.toBeNull());
+    fireEvent.click(screen.getByText('settings.providers.wizard.finish'));
+
+    await waitFor(() => expect(createCustomProvider).toHaveBeenCalledTimes(1));
+    const codex = vi.mocked(createCustomProvider).mock.calls[0][0].runtimes.codex;
+    expect(codex?.wireProtocol).toBe('openai-responses');
+    expect(codex?.models).toEqual([
+      { id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' },
+      {
+        id: 'deepseek-v4-pro',
+        name: 'DeepSeek V4 Pro',
+        codexCompatibilityWireProtocol: 'openai-chat',
+      },
+    ]);
   });
 
   it('API Key 默认遮罩,eye 能切明文再切回(粘贴后核对)', async () => {

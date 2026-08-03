@@ -7,10 +7,16 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { buildRegistry, type Catalog, type CatalogModel, type Provider } from '@cindy/model-providers';
+import {
+  buildRegistry,
+  type Catalog,
+  type CatalogModel,
+  type Provider,
+} from '@cindy/model-providers';
 
 import {
   checkModelRoute,
+  implicitUserProviderIdForResume,
   pickEnabledFallbackModel,
   resolveLenientRoute,
 } from '../model-route-guard.js';
@@ -30,7 +36,9 @@ function provider(
     source,
     agents: ['claude-code'],
     auth: { method: 'apiKey' },
-    routing: { 'claude-code': { wireProtocol: 'anthropic-messages', authStrategy: 'api_key' } as never },
+    routing: {
+      'claude-code': { wireProtocol: 'anthropic-messages', authStrategy: 'api_key' } as never,
+    },
     models: { 'claude-code': models },
   };
 }
@@ -52,8 +60,12 @@ function views(
 
 describe('checkModelRoute', () => {
   it('无停用条目 / 目录不认识该模型 ⇒ pass(不新增拒绝面)', () => {
-    expect(checkModelRoute(views(), 'claude-code', 'claude-opus-5', null)).toEqual({ kind: 'pass' });
-    expect(checkModelRoute(views(), 'claude-code', 'unknown-model', null)).toEqual({ kind: 'pass' });
+    expect(checkModelRoute(views(), 'claude-code', 'claude-opus-5', null)).toEqual({
+      kind: 'pass',
+    });
+    expect(checkModelRoute(views(), 'claude-code', 'unknown-model', null)).toEqual({
+      kind: 'pass',
+    });
   });
 
   it('显式点名:停用的来源 reject;启用的来源 pass;未知来源按隐式口径裁决', () => {
@@ -62,7 +74,9 @@ describe('checkModelRoute', () => {
       kind: 'reject',
       reason: 'explicit-source-disabled',
     });
-    expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'anthropic')).toEqual({ kind: 'pass' });
+    expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'anthropic')).toEqual({
+      kind: 'pass',
+    });
     // 未知/陈旧的显式来源:实际路由层查不到 routing 会回退原生默认(xd,已停用)——
     // 不 pass-through,按隐式口径裁决 ⇒ 改道到启用替代拷贝(R23)。
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', 'nonexistent')).toEqual({
@@ -101,6 +115,48 @@ describe('checkModelRoute', () => {
     expect(checkModelRoute(v, 'claude-code', 'claude-opus-5', null)).toEqual({ kind: 'pass' });
   });
 
+  it('隐式来源:默认落点是 user provider ⇒ 显式物化来源，避免第三方模型落到原生上游', () => {
+    const catalog = {
+      providers: [
+        {
+          id: 'deepseek',
+          name: 'DeepSeek',
+          source: 'user',
+          agents: ['codex'],
+          auth: { method: 'apiKey' },
+          routing: {
+            codex: {
+              upstream: 'https://api.deepseek.com',
+              wireProtocol: 'openai-responses',
+              authStrategy: 'api-key-header',
+            },
+          },
+          models: { codex: [model('deepseek-v4-flash')] },
+        },
+      ],
+    } as Catalog;
+    const v = buildRegistry(catalog, { deepseek: true }, {});
+    expect(checkModelRoute(v, 'codex', 'deepseek-v4-flash', null)).toEqual({
+      kind: 'reroute',
+      providerId: 'deepseek',
+    });
+    expect(implicitUserProviderIdForResume(v, 'codex', 'deepseek-v4-flash')).toBe('deepseek');
+
+    // resume 保留已经运行的停用路由，但仍需物化 user provider，避免 transport 回落。
+    const disabled = buildRegistry(
+      catalog,
+      { deepseek: true },
+      {},
+      {
+        disabledProviders: { deepseek: true },
+      },
+    );
+    expect(implicitUserProviderIdForResume(disabled, 'codex', 'deepseek-v4-flash')).toBe(
+      'deepseek',
+    );
+    expect(implicitUserProviderIdForResume(views(), 'claude-code', 'claude-opus-5')).toBeNull();
+  });
+
   it('零已连接来源 ⇒ pass(连接域问题,交给既有错误路径)', () => {
     const v = views(
       { disabledModels: { 'xd:claude-opus-5': true, 'anthropic:claude-opus-5': true } },
@@ -129,10 +185,7 @@ describe('checkModelRoute', () => {
   it('retired tombstone 拒绝新路由、跳过 fallback；同 id 有有效他源时仅隐式改道', () => {
     const catalog = {
       providers: [
-        provider('xd', [
-          model('claude-opus-5', { status: 'retired' }),
-          model('claude-sonnet-4-6'),
-        ]),
+        provider('xd', [model('claude-opus-5', { status: 'retired' }), model('claude-sonnet-4-6')]),
         provider('anthropic', [model('claude-opus-5')]),
       ],
     } as Catalog;
@@ -175,9 +228,9 @@ describe('checkModelRoute', () => {
         isRetiredTombstone,
       }),
     ).toEqual({ kind: 'reject', reason: 'model-retired' });
-    expect(
-      checkModelRoute([], 'claude-code', 'claude-gone', null, { isRetiredTombstone }),
-    ).toEqual({ kind: 'reject', reason: 'model-retired' });
+    expect(checkModelRoute([], 'claude-code', 'claude-gone', null, { isRetiredTombstone })).toEqual(
+      { kind: 'reject', reason: 'model-retired' },
+    );
     expect(
       resolveLenientRoute([], 'claude-code', 'claude-gone', 'anthropic', {
         isRetiredTombstone,
@@ -270,7 +323,12 @@ describe('checkModelRoute', () => {
 
   it('供应商级停用与模型级同语义:点名 suspended 来源 reject;默认落点 suspended 且无替代 ⇒ reject', () => {
     expect(
-      checkModelRoute(views({ disabledProviders: { xd: true } }), 'claude-code', 'claude-opus-5', 'xd'),
+      checkModelRoute(
+        views({ disabledProviders: { xd: true } }),
+        'claude-code',
+        'claude-opus-5',
+        'xd',
+      ),
     ).toEqual({ kind: 'reject', reason: 'explicit-source-disabled' });
     expect(
       checkModelRoute(
@@ -282,7 +340,12 @@ describe('checkModelRoute', () => {
     ).toEqual({ kind: 'reject', reason: 'model-disabled' });
     // suspended 默认落点 + 启用替代 ⇒ reroute。
     expect(
-      checkModelRoute(views({ disabledProviders: { xd: true } }), 'claude-code', 'claude-opus-5', null),
+      checkModelRoute(
+        views({ disabledProviders: { xd: true } }),
+        'claude-code',
+        'claude-opus-5',
+        null,
+      ),
     ).toEqual({ kind: 'reroute', providerId: 'anthropic' });
   });
 });
@@ -331,7 +394,10 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
     const catalog: Catalog = {
       providers: [
         provider('xd', [
-          model('claude-opus-5', { efforts: ['low', 'medium', 'high', 'max'], defaultEffort: 'high' }),
+          model('claude-opus-5', {
+            efforts: ['low', 'medium', 'high', 'max'],
+            defaultEffort: 'high',
+          }),
         ]),
         provider('anthropic', [
           model('claude-opus-5', { efforts: ['low', 'medium', 'high'], defaultEffort: 'high' }),
@@ -350,8 +416,15 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
     ).toEqual({ model: 'claude-opus-5', providerId: 'anthropic', degraded: false, effort: 'high' });
     // 落地拷贝仍支持 desiredEffort ⇒ 保留原档。
     expect(
-      resolveLenientRoute(rerouted, 'claude-code', 'claude-opus-5', null, { desiredEffort: 'medium' }),
-    ).toEqual({ model: 'claude-opus-5', providerId: 'anthropic', degraded: false, effort: 'medium' });
+      resolveLenientRoute(rerouted, 'claude-code', 'claude-opus-5', null, {
+        desiredEffort: 'medium',
+      }),
+    ).toEqual({
+      model: 'claude-opus-5',
+      providerId: 'anthropic',
+      degraded: false,
+      effort: 'medium',
+    });
     // 丢弃停用显式来源落隐式默认(xd 拷贝支持 max)⇒ effort 保留。
     const dropped = buildRegistry(
       catalog,
@@ -360,7 +433,9 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
       { disabledModels: { 'anthropic:claude-opus-5': true } },
     );
     expect(
-      resolveLenientRoute(dropped, 'claude-code', 'claude-opus-5', 'anthropic', { desiredEffort: 'max' }),
+      resolveLenientRoute(dropped, 'claude-code', 'claude-opus-5', 'anthropic', {
+        desiredEffort: 'max',
+      }),
     ).toEqual({ model: 'claude-opus-5', providerId: null, degraded: true, effort: 'max' });
   });
 
@@ -393,7 +468,9 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
     } as Catalog;
     const mk = (access?: Parameters<typeof buildRegistry>[3]) =>
       buildRegistry(catalog, { xd: true, anthropic: true }, {}, access);
-    const opusDead = { disabledModels: { 'xd:claude-opus-5': true, 'anthropic:claude-opus-5': true } };
+    const opusDead = {
+      disabledModels: { 'xd:claude-opus-5': true, 'anthropic:claude-opus-5': true },
+    };
 
     // 入口默认(haiku)启用 ⇒ 兜底走它(经裁决,隐式路由可用则不强制显式来源)。
     expect(
@@ -404,9 +481,11 @@ describe('resolveLenientRoute(自动化直建会话的宽松降级)', () => {
 
     // 不带入口默认 ⇒ 直接退到目录第一份启用对话模型(显式带上来源,防同 id 隐式
     // 默认又落回停用拷贝)。
-    expect(
-      resolveLenientRoute(mk(opusDead), 'claude-code', 'claude-opus-5', null),
-    ).toEqual({ model: 'claude-haiku-4-5', providerId: 'anthropic', degraded: true });
+    expect(resolveLenientRoute(mk(opusDead), 'claude-code', 'claude-opus-5', null)).toEqual({
+      model: 'claude-haiku-4-5',
+      providerId: 'anthropic',
+      degraded: true,
+    });
 
     // 入口默认自己也被停用、目录再无启用对话模型 ⇒ model undefined(调用方失败收口),
     // 绝不把未经裁决的模型漏回去(PR #744 review 第六轮)。

@@ -197,6 +197,27 @@ describe('bundled catalog validity (dynamic-first contract)', () => {
     ).toBe(1_000_000);
   });
 
+  it('DeepSeek V4 Flash uses native Responses while V4 Pro keeps the Chat bridge', () => {
+    const codex = BUNDLED_CATALOG.presets
+      ?.find((preset) => preset.id === 'deepseek')
+      ?.runtimes.codex;
+    expect(codex?.wireProtocol).toBe('openai-responses');
+    expect(codex?.models.find((model) => model.id === 'deepseek-v4-flash')
+      ?.codexCompatibilityWireProtocol).toBeUndefined();
+    expect(codex?.models.find((model) => model.id === 'deepseek-v4-pro')
+      ?.codexCompatibilityWireProtocol).toBe('openai-chat');
+  });
+
+  it('rejects Anthropic Messages as a user preset model-level Codex override', () => {
+    const bad = JSON.parse(JSON.stringify(BUNDLED_CATALOG)) as Catalog;
+    const model = bad.presets
+      ?.find((preset) => preset.id === 'deepseek')
+      ?.runtimes.codex?.models[0];
+    expect(model).toBeDefined();
+    (model as unknown as Record<string, unknown>).codexCompatibilityWireProtocol = 'anthropic-messages';
+    expect(parseCatalog(bad).presets?.some((preset) => preset.id === 'deepseek')).toBe(false);
+  });
+
   it('Kimi Code(编程计划)预设的每个模型都带 contextWindow(k3 缺失曾回落 200K)', () => {
     // k3 此前没带 contextWindow → buildUserProvider 回落 200K 保守默认:选择器
     // 显示 200K 且压缩阈值过早触发(用户反馈「动不动就压缩」)。取 262144 与同

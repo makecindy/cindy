@@ -56,6 +56,7 @@ import {
   readProviderOAuthToken,
   providerRoutingServesWireModel,
   resolveImplicitLocalBridgeRoute,
+  resolveImplicitUserProviderRouteDecision,
   resolveImplicitProviderOAuthRouteDecision,
   resolveProviderOAuthControlRouteDecision,
   rewriteImplicitModelIdForRoute,
@@ -2153,6 +2154,7 @@ export function createModelRoutingTransform(
 
     // ①.5 隐式来源(providerId/sessionProvider=null):
     //   - Chat / Anthropic Messages wire 按模型选择器相同的默认来源进入本地 bridge;
+    //   - user provider 的原生 Responses 路由补回 endpoint + API key（兼容历史 null 会话）；
     //   - xai/grok-* 等唯一 provider-oauth 来源仍注入对应 OAuth 并透明转发。
     // 两者都必须先于 Codex 默认 ChatGPT/XD 分支，避免协议或凭证落错上游。
     if (!explicitProviderId && model) {
@@ -2167,14 +2169,41 @@ export function createModelRoutingTransform(
               threadId,
             );
           }
-          const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
-            model,
-            'codex',
-            gatewayKey,
+          return Promise.resolve(resolveImplicitUserProviderRouteDecision(model, 'codex', gatewayKey)).then(
+            (implicitUserProvider) => {
+              if (implicitUserProvider) return implicitUserProvider;
+              const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
+                model,
+                'codex',
+                gatewayKey,
+              );
+              if (implicitProviderOAuth) return implicitProviderOAuth;
+              return decideCodexRoute({ model, authInjection, gatewayKey });
+            },
           );
-          if (implicitProviderOAuth) return implicitProviderOAuth;
-          return decideCodexRoute({ model, authInjection, gatewayKey });
         });
+      }
+      // 首个 /responses 可能早于 thread/started 回调，尚不能通过 thread-id 反查业务
+      // session。原生 user provider 的透明路由只依赖 model + 当前连接态，不需要等待
+      // 会话映射；否则冷恢复任务的第一请求会误落 ChatGPT，且失败后永远没有机会登记。
+      if (!sessionId && ctx.method === 'POST') {
+        const implicitUserProvider = resolveImplicitUserProviderRouteDecision(
+          model,
+          'codex',
+          gatewayKey,
+        );
+        if (implicitUserProvider) {
+          return Promise.resolve(implicitUserProvider).then((decision) => {
+            if (decision) return decision;
+            const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(
+              model,
+              'codex',
+              gatewayKey,
+            );
+            if (implicitProviderOAuth) return implicitProviderOAuth;
+            return decideCodexRoute({ model, authInjection, gatewayKey });
+          });
+        }
       }
       const implicitProviderOAuth = resolveImplicitProviderOAuthRouteDecision(model, 'codex', gatewayKey);
       if (implicitProviderOAuth) return implicitProviderOAuth;

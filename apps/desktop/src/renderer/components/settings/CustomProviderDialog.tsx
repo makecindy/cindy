@@ -656,6 +656,9 @@ export function CustomProviderDialog({
             id: m.id.trim(),
             name: m.name.trim(),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+            ...(m.codexCompatibilityWireProtocol
+              ? { codexCompatibilityWireProtocol: m.codexCompatibilityWireProtocol }
+              : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           }))
@@ -731,10 +734,13 @@ export function CustomProviderDialog({
       const contextWindow = latest?.contextWindow ?? m.contextWindow;
       const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
+      const codexCompatibilityWireProtocol = latest?.codexCompatibilityWireProtocol
+        ?? m.codexCompatibilityWireProtocol;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
+        ...(codexCompatibilityWireProtocol ? { codexCompatibilityWireProtocol } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
       };
@@ -746,6 +752,9 @@ export function CustomProviderDialog({
           id,
           name: m.name.trim() || id,
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.codexCompatibilityWireProtocol
+            ? { codexCompatibilityWireProtocol: m.codexCompatibilityWireProtocol }
+            : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
         });
@@ -848,6 +857,9 @@ export function CustomProviderDialog({
           id: m.id.trim(),
           name: m.name.trim(),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
+          ...(m.codexCompatibilityWireProtocol
+            ? { codexCompatibilityWireProtocol: m.codexCompatibilityWireProtocol }
+            : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
         }))

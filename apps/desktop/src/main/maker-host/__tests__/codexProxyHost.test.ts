@@ -1413,6 +1413,49 @@ describe('createModelRoutingTransform —— session-less 控制面请求(桶③
       .toEqual({ headerOverride: { authorization: 'Bearer gw' } });
   });
 
+  it('首个 Responses 请求尚无 session 映射时仍按模型路由到已连接的 user provider', async () => {
+    const host = await import('../codex-proxy-host.js');
+    const { buildRegistry, buildUserProvider } = await import('@cindy/model-providers');
+    const { setCustomProviders, getActiveCatalog } = await import('../active-catalog.js');
+    const {
+      setCustomProviderKeyReader,
+      setProviderViewsReader,
+    } = await import('../provider-route.js');
+    setCustomProviders([
+      buildUserProvider({
+        id: 'deepseek',
+        name: 'DeepSeek',
+        runtimes: {
+          codex: {
+            baseUrl: 'https://api.deepseek.com',
+            wireProtocol: 'openai-responses',
+            models: [{ id: 'deepseek-v4-flash', name: 'DeepSeek V4 Flash' }],
+          },
+        },
+      }),
+    ]);
+    setCustomProviderKeyReader(() => 'sk-deepseek');
+    setProviderViewsReader(async () =>
+      buildRegistry(getActiveCatalog(), { deepseek: true }, {}),
+    );
+    host.setCodexProxyAuthInjection('oauth-bearer');
+
+    try {
+      await expect(Promise.resolve(host.createModelRoutingTransform()(
+        { model: 'deepseek-v4-flash', input: [] },
+        { reqId: 1, method: 'POST', url: '/responses', headers: {} },
+      ))).resolves.toEqual({
+        upstreamOverride: 'https://api.deepseek.com',
+        headerOverride: { authorization: 'Bearer sk-deepseek' },
+        headerDelete: ['chatgpt-account-id', 'openai-beta', 'originator', 'session_id'],
+      });
+    } finally {
+      setCustomProviders([]);
+      setCustomProviderKeyReader(() => null);
+      setProviderViewsReader(async () => []);
+    }
+  });
+
   it('env-key host + xAI session still routes through provider OAuth instead of falling back to gateway', async () => {
     const host = await import('../codex-proxy-host.js');
     const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
