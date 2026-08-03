@@ -45,6 +45,12 @@ function createTestServer(name: string): McpServer {
   server.tool('current_session', 'Return the active lizi MCP session id.', {}, async () => ({
     content: [{ type: 'text' as const, text: getLiziMcpSessionContext()?.sessionId ?? 'no-session' }],
   }));
+  server.tool('current_instance', 'Return the active runtime session instance id.', {}, async () => ({
+    content: [{
+      type: 'text' as const,
+      text: getLiziMcpSessionContext()?.sessionInstanceId ?? 'no-instance',
+    }],
+  }));
   return server;
 }
 
@@ -86,17 +92,19 @@ describe('piEnvironment per-session identity', () => {
     await shutdownPiEnvironment();
   });
 
-  it('registers a pi session ctx and routes it through ?session= so tools see the sessionId', async () => {
+  it('registers a pi session ctx and routes it through session + instance identity', async () => {
     const config = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
       sessionId: 'pi-lead-1',
+      sessionInstanceId: 'pi-instance-1',
       workingDir: '/repo',
       vendorOptions: {},
     });
     expect(config?.mcpBridge).toBeTruthy();
     const server = config!.mcpBridge!.servers[0]!;
     const token = config!.mcpBridge!.token;
-    // URL 必须带上本会话的 ?session= 路由。
-    expect(server.url).toContain('?session=pi-lead-1');
+    const routeUrl = new URL(server.url);
+    expect(routeUrl.searchParams.get('session')).toBe('pi-lead-1');
+    expect(routeUrl.searchParams.get('instance')).toBe('pi-instance-1');
 
     const headers = {
       authorization: `Bearer ${token}`,
@@ -125,12 +133,79 @@ describe('piEnvironment per-session identity', () => {
       result: { content: [{ type: 'text', text: 'pi-lead-1' }] },
     });
 
+    const instanceResp = await fetch(server.url, {
+      method: 'POST',
+      headers: { ...headers, 'mcp-session-id': mcpSessionId ?? '' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 3,
+        method: 'tools/call',
+        params: { name: 'current_instance', arguments: {} },
+      }),
+    });
+    expect(instanceResp.status).toBe(200);
+    expect(await readRpcText(instanceResp)).toMatchObject({
+      result: { content: [{ type: 'text', text: 'pi-instance-1' }] },
+    });
+
     // close 语义:注销后 ?session=pi-lead-1 未命中 → 401 fail-closed。
     expect(config!.disposeSessionCtx).toBeTypeOf('function');
     config!.disposeSessionCtx!();
-    const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(3) });
+    const after = await fetch(server.url, { method: 'POST', headers, body: INIT_BODY(4) });
     expect(after.status).toBe(401);
     await after.text();
+  });
+
+  it('rejects a stale pi instance route after the same business session is rebound', async () => {
+    const oldConfig = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'pi-rebound',
+      sessionInstanceId: 'pi-instance-old',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    const newConfig = await getPiExtraSpawnConfig([makeProvider()], noopLogger(), {
+      sessionId: 'pi-rebound',
+      sessionInstanceId: 'pi-instance-new',
+      workingDir: '/repo',
+      vendorOptions: {},
+    });
+    const oldServer = oldConfig!.mcpBridge!.servers[0]!;
+    const newServer = newConfig!.mcpBridge!.servers[0]!;
+    const headers = {
+      authorization: `Bearer ${newConfig!.mcpBridge!.token}`,
+      accept: 'application/json, text/event-stream',
+      'content-type': 'application/json',
+    };
+
+    expect(new URL(oldServer.url).searchParams.get('instance')).toBe('pi-instance-old');
+    expect(new URL(newServer.url).searchParams.get('instance')).toBe('pi-instance-new');
+
+    const stale = await fetch(oldServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(11),
+    });
+    expect(stale.status).toBe(401);
+    await stale.text();
+
+    const active = await fetch(newServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(12),
+    });
+    expect(active.status).toBe(200);
+    await active.text();
+
+    // 旧进程迟到 close 只释放自己的 lease，不得注销新实例的 ctx。
+    oldConfig!.disposeSessionCtx!();
+    const afterOldClose = await fetch(newServer.url, {
+      method: 'POST',
+      headers,
+      body: INIT_BODY(13),
+    });
+    expect(afterOldClose.status).toBe(200);
+    await afterOldClose.text();
+    newConfig!.disposeSessionCtx!();
   });
 
   it('omits ?session= and registers nothing for an anonymous session (no sessionId)', async () => {

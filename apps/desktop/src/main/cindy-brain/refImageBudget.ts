@@ -4,7 +4,8 @@
  * 为什么需要:`reference_image` 把张数上限放到 9 之后,单次 edit_video 最坏
  * 能拖进 9 张源图,而单张并不小 —— 源图取自 ledger.ghostCanRead 放行的账目,
  * 除寄存(单张 50MB)还包括 ghost-gallery(network as:'media' 落仓,硬顶
- * GHOST_FETCH_MEDIA_MAX_BYTES = 256MB)与 ghost-grant。主机侧要把每张读成
+ * GHOST_FETCH_MEDIA_MAX_BYTES = 256MB)与 ghost-grant / ghost-tool-grant。
+ * 主机侧要把每张读成
  * base64 data URI 交给上游,这条链上会同时存在:
  *   原始 Buffer(1×)+ base64 字符串(4/3×)+ JSON.stringify 后的请求体(再 4/3×)
  * 峰值约聚合量的 3.7 倍 —— 几百 MB 的输入足以把 main 进程打到 OOM 或长时间停顿。

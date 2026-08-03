@@ -234,6 +234,8 @@ export interface AppServerHostOptions {
    * oauth-bearer spawn 存在)。thread/start|resume 据此对订阅直连会话开远端压缩。
    */
   remoteCompactionProviderId?: string;
+  /** Per-thread host-owned MCP URL overrides keyed by the Session instance. */
+  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
 }
 
 interface BufferedNotification {
@@ -283,6 +285,16 @@ export class AppServerHost {
   /** oauth spawn 定义的 OpenAI 身份 provider id;非 oauth spawn / 未下发 → null。 */
   getRemoteCompactionProviderId(): string | null {
     return this.opts.remoteCompactionProviderId ?? null;
+  }
+
+  /**
+   * Return the host-owned MCP URL overrides for one concrete Session instance.
+   * Anonymous/legacy callers keep the spawn-level unbound URLs, which preserves
+   * ordinary MCP compatibility while permission-sensitive tools fail closed.
+   */
+  getSessionMcpConfig(sessionInstanceId?: string): Record<string, unknown> {
+    if (!sessionInstanceId || !this.opts.buildSessionMcpConfig) return {};
+    return this.opts.buildSessionMcpConfig(sessionInstanceId);
   }
 
   getConnectionId(): string {

@@ -93,6 +93,98 @@ describe('addRef / removeRefs(引用增删)', () => {
     db.delete(schema.mediaBlobs).run();
     expect(db.select().from(schema.mediaRefs).all()).toHaveLength(0);
   });
+
+  it('hasRef 可按 originKind 区分人工授权与工具自动授权', async () => {
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+
+    await expect(
+      ledger.hasRef({ hash: HASH_A, refKind: 'ghost-grant', refId: 'art' }, db),
+    ).resolves.toBe(true);
+    await expect(
+      ledger.hasRef({
+        hash: HASH_A,
+        refKind: 'ghost-grant',
+        refId: 'art',
+        originKind: 'user',
+      }, db),
+    ).resolves.toBe(false);
+    await expect(
+      ledger.hasRef({
+        hash: HASH_A,
+        refKind: 'ghost-grant',
+        refId: 'art',
+        originKind: 'tool',
+      }, db),
+    ).resolves.toBe(true);
+
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'user' },
+      db,
+    );
+    await expect(
+      ledger.hasRef({
+        hash: HASH_A,
+        refKind: 'ghost-grant',
+        refId: 'art',
+        originKind: 'user',
+      }, db),
+    ).resolves.toBe(true);
+  });
+
+  it('hasGhostToolGrant 兼容旧 ghost-grant/tool，但不把 user provenance 当工具交接', async () => {
+    await seedBlob(HASH_A);
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(false);
+
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'user' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(false);
+
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_A, ghostId: 'art' }, db),
+    ).resolves.toBe(true);
+
+    await seedBlob(HASH_B);
+    await ledger.addRef(
+      { hash: HASH_B, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+    await expect(
+      ledger.hasGhostToolGrant({ hash: HASH_B, ghostId: 'art' }, db),
+    ).resolves.toBe(true);
+  });
+
+  it('新版工具交接可取件，但旧版 ghost-grant shortcut 看不到它(回退 fail closed)', async () => {
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+
+    // 新版运行时仍能把本次交接的指纹交给插件实际使用。
+    await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
+    // 模拟旧客户端不带 provenance 的永久授权 shortcut：它只查
+    // refKind='ghost-grant'，因此不会把新版自动交接误当成人工批准。
+    await expect(
+      ledger.hasRef({ hash: HASH_A, refKind: 'ghost-grant', refId: 'art' }, db),
+    ).resolves.toBe(false);
+    await expect(
+      ledger.hasRef({ hash: HASH_A, refKind: 'ghost-tool-grant', refId: 'art' }, db),
+    ).resolves.toBe(true);
+  });
 });
 
 describe('removeRefsExceptHash(替换型引用清理:个人头像换图)', () => {
@@ -208,6 +300,24 @@ describe('ghostCanRead(供图归属校验)', () => {
     );
     await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
     await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
+  });
+
+  it('Host 工具代办交接(ghost-tool-grant)→ 放行本意识,但不是人工授权', async () => {
+    await seedBlob(HASH_A);
+    await ledger.addRef(
+      { hash: HASH_A, refKind: 'ghost-tool-grant', refId: 'art', originKind: 'tool' },
+      db,
+    );
+    await expect(ledger.ghostCanRead(HASH_A, 'art', db)).resolves.toBe(true);
+    await expect(ledger.ghostCanRead(HASH_A, 'other-ghost', db)).resolves.toBe(false);
+    await expect(
+      ledger.hasRef({
+        hash: HASH_A,
+        refKind: 'ghost-grant',
+        refId: 'art',
+        originKind: 'user',
+      }, db),
+    ).resolves.toBe(false);
   });
 
   it('本意识寄存(ghost-deposit)→ 放行本意识,别的意识仍拒(#784)', async () => {

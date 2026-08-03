@@ -34,8 +34,13 @@ function defaultDb(): LedgerDb {
 /**
  * 引用方类型(多态引用,详见 schema.ts mediaRefs 注释)。
  * 'ghost-grant':用户显式引渡给某意识的图(随 ghost_call attachments
- * 过户 / 拖进面板)——授权按张、永久,refId = 意识 id;与画廊 ref 一样计入
- * 归属校验(ghostCanRead)与"不被回收"。
+ * 人工确认 / 拖进面板)——授权按张、永久,refId = 意识 id;与画廊 ref 一样
+ * 计入归属校验(ghostCanRead)与"不被回收"。
+ * 'ghost-tool-grant':Host 按工具权限代办的媒体交接(workdir 内直通、Full
+ * Access 自动交接、工具出生的聊天附件等),refId = 意识 id。它同样让意识
+ * 能按指纹取件,但**绝不**表示用户点过永久授权。刻意使用独立 refKind 而不是
+ * 只靠 originKind 区分:旧客户端的授权 shortcut 只认识 ghost-grant,回退后
+ * 会 fail closed，不会把新版自动交接误当成人工永久授权。
  * 'ghost-deposit':意识经 cindy 槽 deposit_media 寄存的媒体(用户在插件面板里
  * 粘贴/拖入的图等,makecindy/cindy#784),refId = 意识 id。与 gallery / grant
  * 一样计入归属校验与"不被回收",但**刻意独立成一类**,原因有三:
@@ -60,6 +65,7 @@ export type MediaRefKind =
   | 'im-inbox'
   | 'ghost-gallery'
   | 'ghost-grant'
+  | 'ghost-tool-grant'
   | 'ghost-deposit'
   | 'import'
   | 'integration-cache'
@@ -179,7 +185,41 @@ export async function getIntegrationCacheHash(
 
 /** 某指纹在某引用方名下是否已有引用(commit 幂等去重用,避免重发消息刷重复行)。 */
 export async function hasRef(
-  params: { hash: string; refKind: MediaRefKind; refId: string },
+  params: {
+    hash: string;
+    refKind: MediaRefKind;
+    refId: string;
+    /** Optional provenance filter; omit to preserve the historical any-origin query. */
+    originKind?: MediaOriginKind;
+  },
+  db: LedgerDb = defaultDb(),
+): Promise<boolean> {
+  const predicates = [
+    eq(mediaRefs.hash, params.hash),
+    eq(mediaRefs.refKind, params.refKind),
+    eq(mediaRefs.refId, params.refId),
+  ];
+  if (params.originKind !== undefined) {
+    predicates.push(eq(mediaRefs.originKind, params.originKind));
+  }
+  const rows = await db
+    .select({ one: sql`1` })
+    .from(mediaRefs)
+    .where(and(...predicates))
+    .limit(1)
+    .all();
+  return rows.length > 0;
+}
+
+/**
+ * 某意识是否已有 Host 工具代办的附件交接记录。
+ *
+ * 新版使用独立的 ghost-tool-grant/tool；旧版曾把同一语义写成
+ * ghost-grant/tool。两者都只能作为工具 provenance 使用，不能被当成
+ * ghost-grant/user 的人工永久授权。集中兼容旧行，避免各调用点漏判或扩权。
+ */
+export async function hasGhostToolGrant(
+  params: { hash: string; ghostId: string },
   db: LedgerDb = defaultDb(),
 ): Promise<boolean> {
   const rows = await db
@@ -188,8 +228,12 @@ export async function hasRef(
     .where(
       and(
         eq(mediaRefs.hash, params.hash),
-        eq(mediaRefs.refKind, params.refKind),
-        eq(mediaRefs.refId, params.refId),
+        eq(mediaRefs.refId, params.ghostId),
+        eq(mediaRefs.originKind, 'tool'),
+        or(
+          eq(mediaRefs.refKind, 'ghost-tool-grant'),
+          eq(mediaRefs.refKind, 'ghost-grant'),
+        ),
       ),
     )
     .limit(1)
@@ -202,8 +246,9 @@ export async function hasRef(
  *   - session-attachment / import:refId 就是会话 id,直接删;
  *   - message:refId 是消息 id,按出生会话(originSessionId)连坐删——
  *     会话没了,它名下消息的引用自然一起走;
- *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-deposit:画廊/引渡/寄存
- *     是跨会话的持久引用,"删会话作品不陪葬"正是靠这几类 ref 存活
+ *   - **绝不**碰 ghost-gallery / ghost-grant / ghost-tool-grant /
+ *     ghost-deposit:画廊/引渡/工具交接/寄存是跨会话的持久引用,
+ *     "删会话作品不陪葬"正是靠这几类 ref 存活
  *     (寄存物同理:画布上的图不该因为删了某个会话就变得不能改)。
  * 引用删完后引用归零的 blob 交回收器,本函数不动字节仓。
  */
@@ -262,7 +307,8 @@ export async function removeRefs(
 
 /**
  * 意识面板供图归属校验:该指纹「出生自本意识」「挂在本意识画廊」「用户
- * 显式引渡给本意识(ghost-grant)」或「本意识寄存的(ghost-deposit)」才放行。
+ * 显式引渡给本意识(ghost-grant)」「Host 代办交接给本意识
+ * (ghost-tool-grant)」或「本意识寄存的(ghost-deposit)」才放行。
  * 查无此账 = 拒(不区分"不存在"与"不属于你",不给探测空间)。
  *
  * 寄存计入本校验正是 #784 要买的东西:用户粘进面板的图寄存后与生成图同权,
@@ -284,6 +330,7 @@ export async function ghostCanRead(
           and(eq(mediaRefs.originKind, 'ghost'), eq(mediaRefs.originId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-gallery'), eq(mediaRefs.refId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-grant'), eq(mediaRefs.refId, ghostId)),
+          and(eq(mediaRefs.refKind, 'ghost-tool-grant'), eq(mediaRefs.refId, ghostId)),
           and(eq(mediaRefs.refKind, 'ghost-deposit'), eq(mediaRefs.refId, ghostId)),
         ),
       ),
