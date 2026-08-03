@@ -40,8 +40,13 @@ export interface GhostBadgePush {
 
 export interface BadgeSlotDeps {
   getGhost(id: string): InstalledGhost | null;
-  /** 落盘点亮(账本按 owner 隔离,见 ghostUnreadStore)。 */
-  mark(ghostId: string, summary: string | undefined, at: number): void;
+  /**
+   * 落盘点亮(账本按 owner 隔离,见 ghostUnreadStore)。
+   * 返回 false = **没写进去**(只读磁盘 / 磁盘满 / 配置损坏)。此时不得广播
+   * 点亮:renderer 会留下一颗账本里根本不存在的点,而后续的熄灭路径查不到
+   * 记录 → 不广播 → 那颗点再也清不掉(codex review)。
+   */
+  mark(ghostId: string, summary: string | undefined, at: number): boolean;
   /** 落盘熄灭;返回 false = 本来就没亮(调用方据此免掉一次无意义广播)。 */
   clear(ghostId: string): boolean;
   /** 把角标变化推给全部宿主窗口。 */
@@ -110,9 +115,14 @@ export class GhostBadgeSlot {
         message: `角标上报过于频繁(同一意识最小间隔 ${GHOST_BADGE_MIN_INTERVAL_MS} 毫秒),本条已丢弃`,
       };
     }
+    if (!this.deps.mark(ghostId, summary, now)) {
+      // 落盘失败:不广播、不记限速账(否则作者重试还会被自己上一条挡住),
+      // 如实回结构化失败让意识知道这条没生效。
+      this.deps.log?.warn('ghost badge dropped: ledger write failed', { ghostId });
+      return { ok: false, message: '未读角标写入失败(主机侧存储不可用),本条未生效' };
+    }
     this.lastMarkedAt.set(ghostId, now);
 
-    this.deps.mark(ghostId, summary, now);
     this.deps.broadcast({ ghostId, unread: true, ...(summary ? { summary } : {}), at: now });
     this.deps.log?.info('ghost badge marked', { ghostId, hasSummary: summary !== undefined });
     return { ok: true };

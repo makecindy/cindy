@@ -35,7 +35,7 @@ function fakeGhost(
 }
 
 function makeSlot(ghost: InstalledGhost | null, overrides: Partial<BadgeSlotDeps> = {}) {
-  const mark = vi.fn();
+  const mark = vi.fn(() => true);
   const clear = vi.fn(() => true);
   const broadcast = vi.fn();
   const slot = new GhostBadgeSlot({
@@ -143,6 +143,26 @@ describe('GhostBadgeSlot', () => {
     const { slot, broadcast } = makeSlot(fakeGhost(), { clear: () => false });
     expect(slot.handleBadge('inbox', { unread: false })).toEqual({ ok: true });
     expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('落盘失败:不广播、不记限速账,如实回失败 —— 免得留下一颗清不掉的点', () => {
+    const { slot, broadcast } = makeSlot(fakeGhost(), { mark: () => false, now: () => 1_000 });
+    const r = slot.handleBadge('inbox', { unread: true, summary: '新内容' });
+    expect(r).toMatchObject({ ok: false });
+    // 广播了就会在 renderer 留下账本里根本不存在的点,而熄灭路径查不到记录
+    // → 不广播 → 那颗点再也清不掉。
+    expect(broadcast).not.toHaveBeenCalled();
+  });
+
+  it('落盘失败不占限速额度:作者重试不该被自己上一条挡住', () => {
+    let now = 1_000;
+    let ok = false;
+    const { slot, broadcast } = makeSlot(fakeGhost(), { mark: () => ok, now: () => now });
+    expect(slot.handleBadge('inbox', { unread: true })).toMatchObject({ ok: false });
+    ok = true;
+    now += 1; // 远小于最小间隔
+    expect(slot.handleBadge('inbox', { unread: true })).toEqual({ ok: true });
+    expect(broadcast).toHaveBeenCalledTimes(1);
   });
 
   it('forget 抹掉限速记账:重装后第一条不被上一世的时刻挡住', () => {

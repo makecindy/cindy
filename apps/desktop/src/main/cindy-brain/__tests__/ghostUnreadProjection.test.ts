@@ -67,8 +67,17 @@ describe('ghostUnreadProjection', () => {
     expect(ids.sort()).toEqual(['gone', 'revoked']);
   });
 
-  it('空清单不当成"全都撤销了" —— 启动早期 / 账号切换窗口的 manager 空表不许误清', () => {
+  it('**非权威**空清单不当成"全都撤销了" —— 启动早期 / 账号切换窗口的空表不许误清', () => {
     expect(selectRevokedGhostUnreadIds([{ ghostId: 'a' }], [])).toEqual([]);
     expect(selectRevokedGhostUnreadIds([], [ghost('a')])).toEqual([]);
+  });
+
+  it('**权威**空清单必须清孤儿 —— 否则同 id 重装时旧角标会凭空复活', () => {
+    // 卸掉最后一个插件后 manager.list() 就是空表,而且是刚扫完的事实。
+    // 不清的话账本里那条永远留着,用户重装同 id 插件时那颗旧点直接亮回来。
+    expect(selectRevokedGhostUnreadIds([{ ghostId: 'a' }], [], true)).toEqual(['a']);
+    // 权威但非空:照旧只清不再声明能力的那些。
+    expect(selectRevokedGhostUnreadIds([{ ghostId: 'a' }, { ghostId: 'b' }], [ghost('b')], true))
+      .toEqual(['a']);
   });
 });

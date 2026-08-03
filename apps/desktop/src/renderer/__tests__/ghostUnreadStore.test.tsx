@@ -7,7 +7,6 @@
  */
 
 import { act, render, screen } from '@testing-library/react';
-import { useRef } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const listeners: Array<(p: { ghostId: string; unread: boolean; summary?: string; at?: number }) => void> = [];
@@ -253,26 +252,30 @@ describe('ghostUnreadStore', () => {
     type IoCb = (entries: Array<{ isIntersecting: boolean; intersectionRatio: number }>) => void;
     let fire: IoCb | null = null;
     const disconnect = vi.fn();
+    const observed: Element[] = [];
     class FakeIO {
       constructor(cb: IoCb) {
         fire = cb;
       }
-      observe() {}
+      observe(el: Element) {
+        observed.push(el);
+      }
       disconnect = disconnect;
     }
     vi.stubGlobal('IntersectionObserver', FakeIO);
 
     const { useElementVisible } = await loadStore();
-    function Probe() {
-      const ref = useRef<HTMLDivElement | null>(null);
-      const visible = useElementVisible(ref);
-      return (
+    function Probe({ show = true }: { show?: boolean }) {
+      const { ref, visible } = useElementVisible();
+      return show ? (
         <div ref={ref} data-testid="vis">
           {visible ? 'vis' : 'hidden'}
         </div>
+      ) : (
+        <span data-testid="vis">gone</span>
       );
     }
-    const { unmount } = render(<Probe />);
+    const { unmount, rerender } = render(<Probe />);
     // **首帧必须是"尚未观测到可见"**:IntersectionObserver 的首次结果下一拍才到,
     // 这期间面板可能正躺在被邻居最大化压成零宽的容器里。初值若为可见,清零 effect
     // 会在首帧就把未读消费掉(greptile review P1)。
@@ -281,6 +284,16 @@ describe('ghostUnreadStore', () => {
     act(() => fire?.([{ isIntersecting: false, intersectionRatio: 0 }]));
     expect(screen.getByTestId('vis').textContent).toBe('hidden');
     // 用户切回本面板 → 重新占面积,这一刻才算看见。
+    act(() => fire?.([{ isIntersecting: true, intersectionRatio: 1 }]));
+    expect(screen.getByTestId('vis').textContent).toBe('vis');
+
+    // 崩溃走 fallback:host 节点脱离 DOM → 观察器解绑,判据回落到"还不知道"。
+    const before = observed.length;
+    rerender(<Probe show={false} />);
+    expect(disconnect).toHaveBeenCalled();
+    // 用户点「重载」生成**新的** host:必须重新观察新节点,否则那颗点永远清不掉。
+    rerender(<Probe show />);
+    expect(observed.length).toBeGreaterThan(before);
     act(() => fire?.([{ isIntersecting: true, intersectionRatio: 1 }]));
     expect(screen.getByTestId('vis').textContent).toBe('vis');
     unmount();
@@ -292,8 +305,12 @@ describe('ghostUnreadStore', () => {
     vi.stubGlobal('IntersectionObserver', undefined);
     const { useElementVisible } = await loadStore();
     function Probe() {
-      const ref = useRef<HTMLDivElement | null>(null);
-      return <span data-testid="vis">{useElementVisible(ref) ? 'vis' : 'hidden'}</span>;
+      const { ref, visible } = useElementVisible();
+      return (
+        <span ref={ref} data-testid="vis">
+          {visible ? 'vis' : 'hidden'}
+        </span>
+      );
     }
     render(<Probe />);
     expect(screen.getByTestId('vis').textContent).toBe('vis');

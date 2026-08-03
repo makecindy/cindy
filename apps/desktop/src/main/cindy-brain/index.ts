@@ -821,7 +821,8 @@ async function reconcileBuiltinGhosts(reason: string): Promise<void> {
   });
   // 播种绕过 manager 写盘,广播由这里补上(renderer 首帧 sendSync 早于对账
   // 完成时,靠 ghosts:changed 热更新兜底,多窗口同一套通道)。
-  broadcastGhostsChanged(manager.list());
+  // 对账跑完 = 一次完整扫描,清单权威(见 broadcastGhostsChanged 的说明)。
+  broadcastGhostsChanged(manager.list(), true);
   // 首装的意识停进布局树(与 installAndDock 同一套停靠逻辑;覆盖更新 id 未变,
   // 布局位置天然保留,不动树;回收不动树 —— 与 uninstall 口径一致,位置记录
   // 由布局引擎保留)。
@@ -1799,11 +1800,16 @@ export function getGhostBadgeSlot(): GhostBadgeSlot {
           for (const evictedId of markGhostUnread(ghostId, summary, at).evicted) {
             broadcastGhostBadge({ ghostId: evictedId, unread: false });
           }
+          return true;
         } catch (error) {
+          // 写不进去就**如实回 false**,由槽决定不广播。此前这里吞掉异常后
+          // 照常广播,renderer 会留下一颗账本里根本不存在的点;而后续熄灭
+          // 路径查不到记录 → 不广播 → 那颗点再也清不掉(codex review)。
           log.warn('ghost unread 落盘失败', {
             ghostId,
             error: error instanceof Error ? error.message : String(error),
           });
+          return false;
         }
       },
       clear: (ghostId) => {
@@ -1859,14 +1865,16 @@ function suspendGhostUnreadProjection(ghostId: string): void {
  * 挂在 broadcastGhostsChanged 上:装入 / 更新 / 卸载 / 对账都从这一处过,
  * 不用在每条清单变更路径上各补一遍。
  */
-function sweepRevokedGhostUnread(ghosts: InstalledGhost[]): void {
+function sweepRevokedGhostUnread(ghosts: InstalledGhost[], rosterAuthoritative: boolean): void {
   let entries: GhostUnreadEntry[];
   try {
     entries = loadGhostUnread();
   } catch {
     return; // 账本读不出来时不做任何猜测,交给下一次变更
   }
-  for (const id of selectRevokedGhostUnreadIds(entries, ghosts)) extinguishGhostUnread(id);
+  for (const id of selectRevokedGhostUnreadIds(entries, ghosts, rosterAuthoritative)) {
+    extinguishGhostUnread(id);
+  }
 }
 
 /** 重新启用:账本里还留着的那颗点要回来(与 suspend 成对)。 */
@@ -3388,7 +3396,9 @@ async function uninstallGhostAndCleanupLocked(
     // 限速记账一并抹掉,重装后的第一条不该被上一世的时刻挡住。
     extinguishGhostUnread(id);
     badgeSlotSingleton?.forget(id);
-    broadcastGhostsChanged(manager.list());
+    // 卸载刚落地,manager.list() 就是当下的全部事实(哪怕是空表)——标权威,
+    // 好让「卸掉最后一个插件」也能把账本里的孤儿记录一并清掉。
+    broadcastGhostsChanged(manager.list(), true);
     if (recentIds) broadcastGhostRecentUsageChanged(recentIds);
     try {
       await completeLedger?.();
@@ -4779,9 +4789,18 @@ function broadcastGhostProvisioning(active: boolean): void {
   });
 }
 
-function broadcastGhostsChanged(ghosts: InstalledGhost[]): void {
+/**
+ * `rosterAuthoritative` = 传进来的这份清单是否来自**刚做完的完整扫描**。
+ * 只影响未读孤儿扫尾:权威的空表意味着"插件真的一个都没有了",要清账本;
+ * 非权威的空表(账号切换窗口里 manager 尚未重扫)必须当作"还不知道",
+ * 否则会把用户的未读整批误清。缺省 false = 保守。
+ */
+function broadcastGhostsChanged(
+  ghosts: InstalledGhost[],
+  rosterAuthoritative = false,
+): void {
   getGhostSetupManifestTracker().note(ghosts);
-  sweepRevokedGhostUnread(ghosts);
+  sweepRevokedGhostUnread(ghosts, rosterAuthoritative);
   const visible = ghosts.filter((ghost) => isGhostAvailableForActiveSession(ghost.manifest.id));
   BrowserWindow.getAllWindows().forEach((window) => {
     if (window.isDestroyed()) return;

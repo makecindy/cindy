@@ -559,7 +559,10 @@ async function buildGhostPackage(
    */
   expectedRealDir?: string,
 ): Promise<
-  | { ok: true; buf: Buffer; manifest: GhostManifest }
+  // manifestRaw = 校验前的原始清单对象。作者期严格校验(见 firstGhostAuthoringIssue)
+  // 需要它来看见「作者写了但被校验器按未登记字段忽略掉」的内容——校验后的
+  // manifest 里那些字段已经不见了,只看它无从判断。
+  | { ok: true; buf: Buffer; manifest: GhostManifest; manifestRaw: Record<string, unknown> }
   | Exclude<ForgePackResult, { ok: true }>
 > {
   try {
@@ -781,7 +784,12 @@ async function buildGhostPackage(
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    return { ok: true, buf, manifest };
+    return {
+      ok: true,
+      buf,
+      manifest,
+      manifestRaw: (manifestRaw ?? {}) as Record<string, unknown>,
+    };
   } catch (err) {
     return {
       ok: false,
@@ -799,6 +807,10 @@ async function buildGhostPackage(
 export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
+  const authoringIssue = firstGhostAuthoringIssue(built.manifestRaw);
+  if (authoringIssue) {
+    return { ok: false, errorCode: 'MANIFEST_INVALID', message: authoringIssue };
+  }
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
@@ -812,6 +824,32 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     };
   }
   return { ok: true, cindyPath, manifest: built.manifest };
+}
+
+/**
+ * **作者期严格校验**(只在 packGhostDir 这条打包出口上跑,不进任何安装路径)。
+ *
+ * 未读角标现在由 `badge` **卡槽**声明。槽名走硬白名单,写错直接被
+ * validateGhostManifest 拒掉,所以本身不需要额外把关。真正会静默失败的是另一种:
+ * 作者(或 agent)照着**早期示例**写成顶层 `notify: { badge: ... }` —— 那个字段
+ * 从来没被登记过,校验器一律忽略,于是包打出来了、装进去了、运行期每次发 badge
+ * 都被拒,作者却以为自己声明过(codex review)。
+ *
+ * 这里在打包期把它变成一条可行动的报错。放在 packGhostDir 而不是共用校验器或
+ * packGhostDirToFile:后两者会作用到**已在用户机器上**的清单与自定义市场安装管道,
+ * 给它们加新拒绝面就会踩存量红线;而作者正在打包的这一份没有存量问题。
+ */
+function firstGhostAuthoringIssue(raw: Record<string, unknown>): string | null {
+  const notifyRaw = raw.notify;
+  if (
+    notifyRaw !== null &&
+    typeof notifyRaw === 'object' &&
+    !Array.isArray(notifyRaw) &&
+    'badge' in (notifyRaw as Record<string, unknown>)
+  ) {
+    return '未读角标已改为独立卡槽:请把 notify.badge 删掉,改成在 slots 里声明 "badge"(并同时声明 "panel")';
+  }
+  return null;
 }
 
 /**

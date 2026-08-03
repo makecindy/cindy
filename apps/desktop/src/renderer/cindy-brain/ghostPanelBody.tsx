@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
 import { useTranslation } from 'react-i18next';
 import { CircleAlert, Copy, FolderOpen } from 'lucide-react';
 import type { ContextMenuEvent, WebviewTag } from 'electron';
@@ -203,7 +203,17 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
    */
   const unread = useGhostUnread(manifest.id);
   const foreground = useHostWindowForeground();
-  const visible = useElementVisible(hostRef);
+  const { ref: observeHost, visible } = useElementVisible();
+  // 同一个 div 既要给 webview 挂载用(命令式 hostRef),又要被可见性观察器盯住。
+  // 合成一个 callback ref:崩溃走 fallback 时它带 null 触发(观察器解绑),
+  // 用户「重载」生成新 div 时又带新节点触发(观察器重挂)——正是 ref 对象做不到的。
+  const setHostNode = useCallback(
+    (el: HTMLDivElement | null) => {
+      hostRef.current = el;
+      observeHost(el);
+    },
+    [observeHost],
+  );
   useEffect(() => {
     if (!unread || !foreground || !visible) return;
     clearGhostUnread(manifest.id);
@@ -305,7 +315,7 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   // (globals.css 与内置浏览器 pool 同款规则)。
   return (
     <>
-      <div ref={hostRef} data-ghost-webview className="flex min-h-0 flex-1" />
+      <div ref={setHostNode} data-ghost-webview className="flex min-h-0 flex-1" />
       {mediaMenu ? (
         <GhostPanelMediaMenu menu={mediaMenu} onClose={() => setMediaMenu(null)} />
       ) : null}

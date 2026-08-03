@@ -202,9 +202,18 @@ export function useHostWindowForeground(): boolean {
  * 切回来时那颗点已经没了(codex review)。
  *
  * 判据用 IntersectionObserver(能同时覆盖零尺寸与滚出可视区);环境不支持时
- * fail-open 成 true,退回「窗口前台」那一层,不会比改动前更差。
+ * fail-open,退回「窗口前台」那一层,不会比改动前更差。
+ *
+ * **入参是 callback ref 而不是 ref 对象**:ref 对象的身份永不变化,effect 依赖它
+ * 就永远不会重跑——面板崩溃走 fallback、用户点「重载」生成一个**新的** host 元素
+ * 之后,观察器还盯着已经脱离 DOM 的旧节点,从此再也不会报告可见,那颗点永远
+ * 清不掉(codex review)。改成把元素本身放进 state,换了节点就自然重挂观察器。
  */
-export function useElementVisible(ref: { current: Element | null }): boolean {
+export function useElementVisible(): {
+  ref: (el: Element | null) => void;
+  visible: boolean;
+} {
+  const [el, setEl] = useState<Element | null>(null);
   /**
    * 初值必须是 **false = 尚未观测到可见**,不能图省事写 true。
    *
@@ -216,8 +225,11 @@ export function useElementVisible(ref: { current: Element | null }): boolean {
    */
   const [visible, setVisible] = useState(false);
   useEffect(() => {
-    const el = ref.current;
-    if (!el || typeof IntersectionObserver === 'undefined') {
+    if (!el) {
+      setVisible(false); // 还没挂上元素 = 还不知道,不许当成"看见了"
+      return;
+    }
+    if (typeof IntersectionObserver === 'undefined') {
       setVisible(true); // 观测不了就 fail-open,退回「宿主窗口前台」那一层判据
       return;
     }
@@ -227,8 +239,8 @@ export function useElementVisible(ref: { current: Element | null }): boolean {
     });
     observer.observe(el);
     return () => observer.disconnect();
-  }, [ref]);
-  return visible;
+  }, [el]);
+  return { ref: setEl, visible };
 }
 
 /**
