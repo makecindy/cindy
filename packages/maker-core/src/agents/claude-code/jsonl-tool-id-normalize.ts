@@ -296,13 +296,16 @@ export async function normalizeClaudeSessionJsonlToolIds(
     // 保留原文件权限:转录可能含用户敏感内容,若原文件是 0600,重写后(tmp 默认
     // 0666 & umask)会把提示词/工具输出/粘贴的密钥暴露给同机其它用户
     // (codex-connector review: Preserve transcript file permissions)。stat 拿到
-    // 原 mode 应用到 tmp;createClaudeJsonlBackup 生成的 .bak 也沿用(内部走
-    // 相同 mode 参数)。
+    // 原 mode 应用到 tmp;createClaudeJsonlBackup 生成的 .bak 也沿用。
+    // writeFile 的 mode 受进程 umask 影响,创建后必须再 chmod 一次才能真正
+    // 还原权限(codex-connector review: Apply chmod after creating transcript
+    // copies —— 否则更严格的 umask 会让重写文件比原文件更严格)。
     const originalMode = (await fs.stat(filePath)).mode & 0o777;
     backupPath = await createClaudeJsonlBackup(filePath, original, originalMode);
     // tmp+rename 原子替换:写一半崩溃不会留下半截转录(备份仍在,tmp 残留无害)。
     const tmpPath = `${filePath}.normalize-${process.pid}-${Math.random().toString(36).slice(2, 10)}.tmp`;
     await fs.writeFile(tmpPath, normalized.text, { encoding: 'utf8', mode: originalMode });
+    await fs.chmod(tmpPath, originalMode).catch(() => undefined);
     try {
       await fs.rename(tmpPath, filePath);
     } catch (err) {

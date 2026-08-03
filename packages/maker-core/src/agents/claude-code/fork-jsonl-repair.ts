@@ -317,6 +317,9 @@ export async function createClaudeJsonlBackup(
         flag: 'wx',
         ...(mode !== undefined ? { mode } : {}),
       });
+      // writeFile 的 mode 受进程 umask 影响,创建后 chmod 才能真正还原权限
+      // (codex-connector review: Apply chmod after creating transcript copies)。
+      if (mode !== undefined) await fs.chmod(backupPath, mode).catch(() => undefined);
       return backupPath;
     } catch (error) {
       if (isRecord(error) && error.code === 'EEXIST') continue;
@@ -339,7 +342,9 @@ export async function repairForkedClaudeSessionJsonl(
   let backupPath: string | undefined;
 
   if (repaired.changed) {
-    backupPath = await createClaudeJsonlBackup(filePath, original);
+    // 备份沿用源转录权限: 0600 转录不得被备份成 0644(Copilot review)。
+    const originalMode = (await fs.stat(filePath)).mode & 0o777;
+    backupPath = await createClaudeJsonlBackup(filePath, original, originalMode);
     await fs.writeFile(filePath, repaired.text, 'utf8');
   }
 
