@@ -283,8 +283,13 @@ export interface AgentInputCoordinatorDeps {
   /**
    * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
    * host 必须把压住的 error 行补落，否则那次中断在历史里彻底消失（不变量 I2）。
+   * `surfaceError` 只在这条 error 本身成为最终用户可见失败时为 true；被新输入或另一条
+   * 技术错误顶替时只补历史，不能再拿旧错误打扰用户。
    */
-  onResumableTurnErrorDiscarded?: (sessionId: string) => void;
+  onResumableTurnErrorDiscarded?: (
+    sessionId: string,
+    options: { surfaceError: boolean },
+  ) => void;
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
     refs: AgentInputQueuedMessage['sessionRefs'],
@@ -326,6 +331,12 @@ export interface AgentInputCoordinatorDeps {
    * would otherwise be consumed by a later retry/turn.
    */
   onUndispatchedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  /**
+   * The delivery pipeline rejected this item for a technical/policy reason
+   * before vendor dispatch. Unlike Stop/remove/clear, this is a real failed
+   * attempt rather than explicit user cancellation.
+   */
+  onRejectedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   onAcceptedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
    * Awaited only after vendor dispatch is irreversible (`accepted=true`).
@@ -1334,6 +1345,7 @@ export class AgentInputCoordinator {
           if (cur.pendingQueue.length === 0) cur.queuePaused = false;
         }
         this.deps.onUserMessageBlocked?.(sessionId, item, verdict);
+        this.notifyRejectedUserTurn(sessionId, item);
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
         this.emit(sessionId);
         this.scheduleDrain(sessionId, 'steer-ghost-blocked');
@@ -2540,6 +2552,7 @@ export class AgentInputCoordinator {
         if (verdict.action === 'block') {
           this.getState(sessionId).activeTurn = null;
           this.deps.onUserMessageBlocked?.(sessionId, head, verdict);
+          this.notifyRejectedUserTurn(sessionId, head);
           this.deps.onDiscardedQueuedMessage?.(sessionId, head);
           this.emit(sessionId);
           this.scheduleDrain(sessionId, 'ghost-hook-blocked');
@@ -2703,6 +2716,7 @@ export class AgentInputCoordinator {
           reason,
           error: latest.error,
         });
+        this.notifyRejectedUserTurn(sessionId, head);
         this.emit(sessionId);
         return;
       }
@@ -2720,6 +2734,7 @@ export class AgentInputCoordinator {
         // (review #944 第十轮 P1)。
         latest.activeTurn = null;
       }
+      this.notifyRejectedUserTurn(sessionId, head);
       this.notifyUndispatchedUserTurn(sessionId, head);
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
@@ -2770,6 +2785,11 @@ export class AgentInputCoordinator {
         clientId: item.clientId,
         ...logFields,
       });
+      const cancelledByUserBoundary =
+        latest.queueAbortPending &&
+        result.kind === 'session-dispatch' &&
+        result.reason === 'cancelled-before-dispatch';
+      if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
       this.emit(sessionId);
       return;
     }
@@ -2784,6 +2804,11 @@ export class AgentInputCoordinator {
     // 注:isPromptTracked 用的 hasQueuedItemWhere 默认不含 recovery,所以摘掉它不会影响
     // runner 的排队存活探测。
     const schedulerOrigin = this.setActiveTurnRecovery(latest, item) === 'dropped-scheduler';
+    const cancelledByUserBoundary =
+      latest.queueAbortPending &&
+      result.kind === 'session-dispatch' &&
+      result.reason === 'cancelled-before-dispatch';
+    if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
     this.notifyUndispatchedUserTurn(sessionId, item);
     if (latest.queueAbortPending && result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch') {
       latest.queueAbortPending = false;
@@ -3571,21 +3596,28 @@ export class AgentInputCoordinator {
    */
   private discardOnStaleActiveTurn(sessionId: string, active: ActiveTurn): boolean {
     if (this.isActiveTurnCurrent(sessionId, active)) return false;
-    this.discardDeferredResumableCandidate(sessionId, active);
+    this.discardDeferredResumableCandidate(sessionId, active, { surfaceError: false });
     return true;
   }
 
-  private discardDeferredResumableCandidate(sessionId: string, active: ActiveTurn): void {
+  private discardDeferredResumableCandidate(
+    sessionId: string,
+    active: ActiveTurn,
+    options: { surfaceError: boolean } = { surfaceError: true },
+  ): void {
     const pending = active.pendingTerminalEvent;
     if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
     active.pendingTerminalEvent = null;
-    this.notifyResumableTurnErrorDiscarded(sessionId);
+    this.notifyResumableTurnErrorDiscarded(sessionId, options);
   }
 
-  /** 被按住的 error 没能走到决策 → 通知 host 补落 error 行（不变量 I2）。 */
-  private notifyResumableTurnErrorDiscarded(sessionId: string): void {
+  /** 被按住的 error 没能走到决策 → 通知 host 按最终 disposition 释放它（不变量 I2）。 */
+  private notifyResumableTurnErrorDiscarded(
+    sessionId: string,
+    options: { surfaceError: boolean },
+  ): void {
     try {
-      this.deps.onResumableTurnErrorDiscarded?.(sessionId);
+      this.deps.onResumableTurnErrorDiscarded?.(sessionId, options);
     } catch (err) {
       log.warn('onResumableTurnErrorDiscarded failed', { sessionId, error: errorMessage(err) });
     }
@@ -3608,6 +3640,18 @@ export class AgentInputCoordinator {
       this.deps.onUndispatchedUserTurn?.(sessionId, item);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
+        sessionId,
+        clientId: item.clientId,
+        error: errorMessage(err),
+      });
+    }
+  }
+
+  private notifyRejectedUserTurn(sessionId: string, item: AgentInputQueuedMessage): void {
+    try {
+      this.deps.onRejectedUserTurn?.(sessionId, item);
+    } catch (err) {
+      log.warn('onRejectedUserTurn failed', {
         sessionId,
         clientId: item.clientId,
         error: errorMessage(err),
@@ -3702,7 +3746,9 @@ export class AgentInputCoordinator {
       });
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
-        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
+        if (deferredPersistSuppressed) {
+          this.notifyResumableTurnErrorDiscarded(sessionId, { surfaceError: true });
+        }
         // 与 onTurnEvent 的 persisted 分支同款处置:没有 recovery 挡住"紧随的 done",
         // 必须用配对标记吃掉它,否则失败呈现会被 done 擦成"已完成"(第二十一轮 P1)。
         // recovery 不留 → 没有"用户点 clearError / Retry"这个唤醒源,队里压着的消息
@@ -3735,7 +3781,11 @@ export class AgentInputCoordinator {
         state.error = null;
       } else {
         state.error = terminalEvent.message ?? state.error;
-        if (deferredPersistSuppressed) this.notifyResumableTurnErrorDiscarded(sessionId);
+        if (deferredPersistSuppressed) {
+          this.notifyResumableTurnErrorDiscarded(sessionId, {
+            surfaceError: terminalEvent.supersededByUser !== true,
+          });
+        }
         if (schedulerItem) {
           state.recovery = null;
           this.markPendingExternalTerminalDone(sessionId, state);

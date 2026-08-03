@@ -29,9 +29,24 @@ export interface SuppressedTurnError {
   sdkError?: string;
 }
 
+interface SuppressedTurnErrorEntry {
+  detail: SuppressedTurnError;
+  /** The retry queue item that will replace the failed turn. */
+  retryOwnerClientId: string | null;
+  /**
+   * Agent Island tail ownership and vendor dispatch are separate boundaries:
+   * preview can fail while dispatch still proceeds (for example Island is
+   * disabled), and a rejected dispatch rolls both boundaries back.
+   */
+  islandReplacementPreviewed: boolean;
+  replacementDispatching: boolean;
+}
+
 export interface AutoResumeBookkeepingDeps {
   /** 把压住的 error 行补落进历史。**不负责横幅** —— 横幅由 abandonTakeover 决定。 */
   persistSuppressedError: (sessionId: string, detail: SuppressedTurnError) => void;
+  /** 这条错误已确定需要呈现给用户；由 host 同步到聊天之外的错误表面（如 Agent Island）。 */
+  surfaceSuppressedError?: (sessionId: string, detail: SuppressedTurnError) => void;
   /** 回填一条自动续跑记录的结果（`agentMeta.autoResumeOutcome`）。 */
   markOutcome: (sessionId: string, clientId: string, outcome: AutoResumeOutcome) => void;
   /** 回滚守卫的 pendingResume（不回滚会让该会话之后的中断永远被判成「上一次还在路上」）。 */
@@ -50,7 +65,7 @@ export class AutoResumeBookkeeping {
    * 接管期间刻意**不落 error 行**：自愈成功时用户看到的应该是聊天流里一条低调的活动行，
    * 而不是一张红色错误卡 + 一条活动行。最终没救回来时用这份详情补落。
    */
-  private readonly suppressedErrors = new Map<string, SuppressedTurnError>();
+  private readonly suppressedErrors = new Map<string, SuppressedTurnErrorEntry>();
 
   /**
    * 已落库、但还不知道结果的自动续跑消息（sessionId → clientId）。
@@ -84,13 +99,65 @@ export class AutoResumeBookkeeping {
    * 正在压制中的自己补落出来，红色错误卡与活动行同时出现，本功能也就白做了。
    */
   stashSuppressedError(sessionId: string, data: unknown): void {
-    this.flushSuppressedError(sessionId);
+    const previous = this.suppressedErrors.get(sessionId);
+    if (previous?.replacementDispatching) {
+      // The replacement has crossed the vendor boundary. A terminal error that
+      // arrives now belongs to that new attempt; the older transient error was
+      // successfully replaced and must not be restored beside it.
+      this.suppressedErrors.delete(sessionId);
+    } else {
+      this.flushSuppressedError(sessionId);
+    }
     const d = (data ?? {}) as { message?: unknown; reason?: unknown; sdkError?: unknown };
     this.suppressedErrors.set(sessionId, {
-      ...(typeof d.message === 'string' ? { message: d.message } : {}),
-      ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
-      ...(typeof d.sdkError === 'string' ? { sdkError: d.sdkError } : {}),
+      detail: {
+        ...(typeof d.message === 'string' ? { message: d.message } : {}),
+        ...(typeof d.reason === 'string' ? { reason: d.reason } : {}),
+        ...(typeof d.sdkError === 'string' ? { sdkError: d.sdkError } : {}),
+      },
+      retryOwnerClientId: null,
+      islandReplacementPreviewed: false,
+      replacementDispatching: false,
     });
+  }
+
+  /** Bind the suppressed failure to the exact retry queue item that will replace it. */
+  claimSuppressedErrorForRetry(sessionId: string, clientId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry) return false;
+    if (entry.retryOwnerClientId !== null && entry.retryOwnerClientId !== clientId) return false;
+    entry.retryOwnerClientId = clientId;
+    return true;
+  }
+
+  isSuppressedErrorClaimedByRetry(sessionId: string, clientId: string | undefined): boolean {
+    if (!clientId) return false;
+    return this.suppressedErrors.get(sessionId)?.retryOwnerClientId === clientId;
+  }
+
+  /** Agent Island accepted the replacement prompt and can now absorb the old completion tail. */
+  markReplacementPreviewed(sessionId: string, clientId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.retryOwnerClientId !== clientId) return false;
+    entry.islandReplacementPreviewed = true;
+    return true;
+  }
+
+  /** The replacement is about to enter vendor code; later errors belong to the new attempt. */
+  markReplacementDispatching(sessionId: string, clientId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.retryOwnerClientId !== clientId) return false;
+    entry.replacementDispatching = true;
+    return true;
+  }
+
+  /** Preview rollback returns tail ownership to bookkeeping until failure disposition runs. */
+  rollbackReplacementPreview(sessionId: string, clientId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.retryOwnerClientId !== clientId) return false;
+    entry.islandReplacementPreviewed = false;
+    entry.replacementDispatching = false;
+    return true;
   }
 
   /**
@@ -101,10 +168,61 @@ export class AutoResumeBookkeeping {
    * 中断都必须在历史里留下痕迹。
    */
   flushSuppressedError(sessionId: string): boolean {
-    const suppressed = this.suppressedErrors.get(sessionId);
-    if (!suppressed) return false;
+    return this.releaseSuppressedError(sessionId, false);
+  }
+
+  /** 把压住的错误一次性补落，并通知 host 将它呈现到其它用户可见表面。 */
+  surfaceSuppressedError(sessionId: string): boolean {
+    return this.releaseSuppressedError(sessionId, true);
+  }
+
+  private releaseSuppressedError(sessionId: string, surfaceError: boolean): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (!entry) return false;
     this.suppressedErrors.delete(sessionId);
-    this.deps.persistSuppressedError(sessionId, suppressed);
+    this.deps.persistSuppressedError(sessionId, entry.detail);
+    if (surfaceError) this.deps.surfaceSuppressedError?.(sessionId, entry.detail);
+    return true;
+  }
+
+  private releaseSuppressedErrorForRetry(
+    sessionId: string,
+    clientId: string,
+    disposition: 'flush' | 'surface' | 'discard',
+  ): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.retryOwnerClientId !== clientId) return false;
+    if (disposition === 'discard') {
+      this.suppressedErrors.delete(sessionId);
+      return true;
+    }
+    return this.releaseSuppressedError(sessionId, disposition === 'surface');
+  }
+
+  /** A claimed retry was explicitly removed before persistence (Stop / clear / policy block). */
+  flushSuppressedErrorForRetry(sessionId: string, clientId: string): boolean {
+    return this.releaseSuppressedErrorForRetry(sessionId, clientId, 'flush');
+  }
+
+  /** A claimed retry persisted but failed to dispatch, so the original failure is final. */
+  surfaceSuppressedErrorForRetry(sessionId: string, clientId: string): boolean {
+    return this.releaseSuppressedErrorForRetry(sessionId, clientId, 'surface');
+  }
+
+  /** A claimed retry crossed the irreversible dispatch boundary. */
+  discardSuppressedErrorForRetry(sessionId: string, clientId: string): boolean {
+    return this.releaseSuppressedErrorForRetry(sessionId, clientId, 'discard');
+  }
+
+  /**
+   * A terminal signal from the replacement can synchronously invalidate the
+   * coordinator active turn before its post-dispatch callback runs. The
+   * dispatching phase itself proves the old transient error was replaced.
+   */
+  discardDispatchedReplacement(sessionId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    if (entry?.replacementDispatching !== true) return false;
+    this.suppressedErrors.delete(sessionId);
     return true;
   }
 
@@ -113,19 +231,36 @@ export class AutoResumeBookkeeping {
     this.suppressedErrors.delete(sessionId);
   }
 
+  /** 是否仍有一条失败轮的终态等待 disposition；供同轮 completion tail 共用这一边界。 */
+  hasSuppressedError(sessionId: string): boolean {
+    return this.suppressedErrors.has(sessionId);
+  }
+
+  /** Before preview, bookkeeping itself must keep the failed turn's completion tail out. */
+  shouldSuppressAgentIslandCompletionTail(sessionId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    return entry !== undefined && !entry.islandReplacementPreviewed;
+  }
+
+  /** After dispatch begins, an error belongs to the replacement attempt rather than the old one. */
+  shouldSuppressAgentIslandError(sessionId: string): boolean {
+    const entry = this.suppressedErrors.get(sessionId);
+    return entry !== undefined && !entry.replacementDispatching;
+  }
+
   /**
    * 自愈没成 → 补落 error 行 + 结算待确认记录 + 清接管态，并按需把横幅回落出来。
    *
-   * `surfaceBanner=false` 用于「退避窗口内用户自己接手了」：那时再弹一条横幅只是打扰，
+   * `surfaceError=false` 用于「退避窗口内用户自己接手了」：那时再弹错误只是打扰，
    * 但错误行仍要补落。
    */
-  finalizeSuppressedError(sessionId: string, opts: { surfaceBanner: boolean }): void {
+  finalizeSuppressedError(sessionId: string, opts: { surfaceError: boolean }): void {
     // 自愈到此为止 → 上一条续跑记录的结果就是失败。
     this.settleOutcome(sessionId, 'failed');
-    const suppressed = this.suppressedErrors.get(sessionId);
-    this.suppressedErrors.delete(sessionId);
-    if (suppressed) this.deps.persistSuppressedError(sessionId, suppressed);
-    this.deps.abandonTakeover(sessionId, opts.surfaceBanner ? suppressed?.message : undefined);
+    const suppressed = this.suppressedErrors.get(sessionId)?.detail;
+    if (opts.surfaceError) this.surfaceSuppressedError(sessionId);
+    else this.flushSuppressedError(sessionId);
+    this.deps.abandonTakeover(sessionId, opts.surfaceError ? suppressed?.message : undefined);
     this.deps.onAutoResumeFailed?.(sessionId);
   }
 
@@ -218,9 +353,9 @@ export class AutoResumeBookkeeping {
    * 会话被终止（/clear、abort、「全部停止」、关闭）时的收尾。四件事必须一起做，
    * 顺序也重要：
    *
-   *  1. **先补落**被压住的错误行 —— 后面就没人管它了，删掉即等于那次中断消失
-   *     （copilot review）。`/clear` 的场景由落库侧既有的清空竞态 cap 兜住，不会把错误行
-   *     写进一个已经被清空的对话。
+   *  1. **先结算**被压住的错误：replacement 尚未 dispatch 才补落；已经 dispatch 的旧
+   *     transient error 必须丢弃，否则同步新终态令 post-dispatch callback 早返后，teardown
+   *     会把已被取代的旧错误复活。`/clear` 的补落由既有清空竞态 cap 兜住。
    *  2. 撤排期（含回滚守卫额度）。
    *  3. 清 coordinator 接管态 —— 这也是「已经 fire、正在 await 读库」那次重试的**唯一
    *     刹车**：定时器一 fire 就摘掉了，此后撤排期已无从取消，而会话关闭刻意保留
@@ -228,7 +363,9 @@ export class AutoResumeBookkeeping {
    *  4. 把悬空的待确认记录钉成 failed。
    */
   teardown(sessionId: string): void {
-    this.flushSuppressedError(sessionId);
+    if (!this.discardDispatchedReplacement(sessionId)) {
+      this.flushSuppressedError(sessionId);
+    }
     this.cancelSchedule(sessionId);
     // 不带 message：只清接管态，不弹横幅（会话已经被用户终止，再弹一条只是打扰）。
     this.deps.abandonTakeover(sessionId);

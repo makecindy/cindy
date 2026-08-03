@@ -225,6 +225,9 @@ function createHarness() {
   const onDiscardedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
   >(() => {});
+  const onRejectedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>
+  >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
   >(async () => []);
@@ -235,6 +238,7 @@ function createHarness() {
     onUiRetry,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -289,6 +293,7 @@ function createHarness() {
     onUiRetry,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -2764,6 +2769,10 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
     expect(projection.errorRetryText).toBe('first');
     expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-1' }),
+    );
 
     h.coordinator.retryLastError(sid);
     await flush();
@@ -3445,6 +3454,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
 
     h.coordinator.resume(sid);
     await flush();
@@ -4457,6 +4467,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       expect.objectContaining({ clientId: 'q-2' }),
       expect.objectContaining({ ghostId: 'g-1' }),
+    );
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-2' }),
     );
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     const projection = latestProjection(h.projections);
@@ -7195,7 +7209,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     releasePersist();
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: false });
   });
 
   it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
@@ -7290,7 +7304,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const projection = latestProjection(h.projections);
     expect(projection.autoResumePending ?? null).toBeNull();
     expect(projection.error, '不接管就得把横幅还给用户').toBe(truncationMessage);
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: true });
   });
 
   it('延后结算:候选窗口里用户自己发了消息 → 不接管、不消耗额度,回落成常规错误', async () => {
@@ -7322,7 +7336,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending ?? null, '用户已接手 → 不该再显示重连').toBeNull();
     expect(projection.error, '回落成常规错误呈现,让用户自己决定要不要续跑').toBe(truncationMessage);
     expect(h.onResumableTurnError, '连问都不该问(不消耗额度)').not.toHaveBeenCalled();
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: false });
   });
 
   it('退避窗口里用户自己发了消息 → autoRetryLastError 判 superseded(不抢在他前面代发)', async () => {
@@ -7396,7 +7410,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     rejectPersist(new Error('disk full'));
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid, { surfaceError: true });
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
   });
 });
