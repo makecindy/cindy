@@ -3,6 +3,8 @@
  * networkSlot.test.ts):覆盖 access token 现取注入、authAccount 透传、
  * 结构化错误折叠成人话、401 作废重刷整链重试一次、令牌不回流沙箱。
  */
+import { createHash } from 'node:crypto';
+
 import { describe, expect, it, vi } from 'vitest';
 
 import { GhostNetworkSlot, type NetworkSlotDeps } from '../networkSlot';
@@ -79,7 +81,11 @@ describe('networkSlot · oauth 凭证注入', () => {
   it('现取 access token 注入 Authorization;accountId 缺省不传', async () => {
     const getFreshAccessToken = vi.fn(async () => ({ ok: true as const, accessToken: 'at-live', accountId: 'acc-1' }));
     const { slot, fetchImpl } = makeSlot({
-      oauthTokens: { getFreshAccessToken, invalidateAccessToken: vi.fn() },
+      oauthTokens: {
+        getFreshAccessToken,
+        invalidateAccessToken: vi.fn(),
+        markAccessTokenRejected: vi.fn(),
+      },
     });
 
     const r = await slot.handleFetchRequest('g-oauth', { type: 'fetch-request', url: API_URL });
@@ -96,7 +102,11 @@ describe('networkSlot · oauth 凭证注入', () => {
   it('authAccount 透传给令牌管理器;形状非法拒单', async () => {
     const getFreshAccessToken = vi.fn(async () => ({ ok: true as const, accessToken: 'at', accountId: 'acc-2' }));
     const { slot } = makeSlot({
-      oauthTokens: { getFreshAccessToken, invalidateAccessToken: vi.fn() },
+      oauthTokens: {
+        getFreshAccessToken,
+        invalidateAccessToken: vi.fn(),
+        markAccessTokenRejected: vi.fn(),
+      },
     });
     const ok = await slot.handleFetchRequest('g-oauth', { type: 'fetch-request', url: API_URL, authAccount: 'acc-2' });
     expect(ok.ok).toBe(true);
@@ -116,6 +126,7 @@ describe('networkSlot · oauth 凭证注入', () => {
         oauthTokens: {
           getFreshAccessToken: vi.fn(async () => ({ ok: false as const, error })),
           invalidateAccessToken: vi.fn(),
+          markAccessTokenRejected: vi.fn(),
         },
       });
       const r = await slot.handleFetchRequest('g-oauth', { type: 'fetch-request', url: API_URL });
@@ -141,33 +152,53 @@ describe('networkSlot · oauth 凭证注入', () => {
       accountId: 'acc-1',
     }));
     const invalidateAccessToken = vi.fn();
+    const markAccessTokenRejected = vi.fn();
     // 第一单 401,重试后 200。
     const fetchImpl = vi.fn(async () => (fetchImpl.mock.calls.length <= 1 ? fakeResponse(401, '{"e":1}') : fakeResponse()));
-    const { slot } = makeSlot({ fetchImpl, oauthTokens: { getFreshAccessToken, invalidateAccessToken } });
+    const { slot } = makeSlot({
+      fetchImpl,
+      oauthTokens: { getFreshAccessToken, invalidateAccessToken, markAccessTokenRejected },
+    });
 
     const r = await slot.handleFetchRequest('g-oauth', { type: 'fetch-request', url: API_URL });
     expect(r.ok).toBe(true);
     expect(invalidateAccessToken).toHaveBeenCalledWith('g-oauth', 'acct', 'acc-1');
+    expect(markAccessTokenRejected).not.toHaveBeenCalled();
     expect(fetchImpl).toHaveBeenCalledTimes(2);
     const [, init2] = fetchImpl.mock.calls[1] as unknown as [string, { headers: Record<string, string> }];
     expect(init2.headers.Authorization).toBe('Bearer at-2');
 
     // 一直 401:只重试一次,最终把 401 原样回给意识。
     const always401 = vi.fn(async () => fakeResponse(401, '{"e":1}'));
+    const markAlwaysRejected = vi.fn();
     const { slot: slot2 } = makeSlot({
       fetchImpl: always401,
-      oauthTokens: { getFreshAccessToken, invalidateAccessToken },
+      oauthTokens: {
+        getFreshAccessToken,
+        invalidateAccessToken,
+        markAccessTokenRejected: markAlwaysRejected,
+      },
     });
     const r2 = await slot2.handleFetchRequest('g-oauth', { type: 'fetch-request', url: API_URL });
     expect(always401).toHaveBeenCalledTimes(2);
     expect(r2.ok).toBe(true);
     if (r2.ok) expect((r2 as { status?: number }).status).toBe(401);
+    expect(markAlwaysRejected).toHaveBeenCalledWith(
+      'g-oauth',
+      'acct',
+      'acc-1',
+      createHash('sha256').update('at-4').digest('hex').slice(0, 16),
+    );
   });
 
   it('凭证只流向 inject.hosts 声明域名(accounts 域名不带 Authorization)', async () => {
     const getFreshAccessToken = vi.fn(async () => ({ ok: true as const, accessToken: 'at', accountId: 'acc-1' }));
     const { slot, fetchImpl } = makeSlot({
-      oauthTokens: { getFreshAccessToken, invalidateAccessToken: vi.fn() },
+      oauthTokens: {
+        getFreshAccessToken,
+        invalidateAccessToken: vi.fn(),
+        markAccessTokenRejected: vi.fn(),
+      },
     });
     const r = await slot.handleFetchRequest('g-oauth', {
       type: 'fetch-request',

@@ -156,6 +156,16 @@ export interface NetworkSlotDeps {
         }
     >;
     invalidateAccessToken(ghostId: string, secretKey: string, accountId: string): void;
+    /**
+     * 刷新后最终仍 401:按注入 token 的短指纹复验当前缓存,匹配才把该账号
+     * 标为 expired；旧请求迟到时不得误伤已重新授权的新 token。
+     */
+    markAccessTokenRejected(
+      ghostId: string,
+      secretKey: string,
+      accountId: string,
+      version: string,
+    ): void;
   };
   /**
    * 多连接凭证通道(network.connections;生产由 index.ts 注入闭包,内部按
@@ -851,6 +861,31 @@ export class GhostNetworkSlot {
     }
   }
 
+  /** 最终跳 OAuth 401 的专用 expired 通道；异常不覆盖原始上游响应。 */
+  private noteOauthRejectionsIfCurrent(
+    ghostId: string,
+    callId: string,
+    injected: ReadonlyMap<string, { accountId: string; version: string }>,
+  ): void {
+    for (const [secretKey, credential] of injected) {
+      try {
+        this.deps.oauthTokens?.markAccessTokenRejected(
+          ghostId,
+          secretKey,
+          credential.accountId,
+          credential.version,
+        );
+      } catch (error) {
+        this.deps.log?.warn('ghost oauth rejection update failed', {
+          ghostId,
+          callId,
+          secretKey,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+  }
+
   /**
    * 处理一条 fetch-request(ghost-pipe:send 的 invoke 返回值即本结果)。
    * 永不 reject——一切失败折叠成 { ok:false, message }。
@@ -1164,7 +1199,7 @@ export class GhostNetworkSlot {
     // oauthInjected 是跨 attempt/跨跳累计面(401 单飞重试要靠它作废令牌),
     // 但重定向换 host 后上一跳的 oauth 凭证不会跟着走,拿累计面归因会把
     // 最终跳唯一的 user key 误判成「归属不明」而漏记。hop>0 逐跳覆盖。
-    let responseOauthKeys = new Set(inject0.oauthInjected.keys());
+    let responseOauthInjected = new Map(inject0.oauthInjected);
     // 同理,最终跳的直连 key 指纹也逐跳覆盖(401 记账前与保险库现值比对,
     // 在途旧请求的迟到 401 不误记已重存的新凭证)。
     let responseKeyFingerprints = new Map(inject0.directKeyFingerprints);
@@ -1228,14 +1263,18 @@ export class GhostNetworkSlot {
       for (let attempt = 0; attempt < 2; attempt++) {
         if (attempt > 0) {
           this.invalidateExchangedTokens(ghostId, net.secrets ?? []);
-          for (const [secretKey, accountId] of oauthInjected) {
-            this.deps.oauthTokens?.invalidateAccessToken(ghostId, secretKey, accountId);
+          for (const [secretKey, credential] of oauthInjected) {
+            this.deps.oauthTokens?.invalidateAccessToken(
+              ghostId,
+              secretKey,
+              credential.accountId,
+            );
           }
           const reInject = await this.injectSecrets(ghostId, net.secrets ?? [], connectionDecls, url.hostname, net.hosts, requestHeaders, authAccount);
           if (reInject.error) return { ok: false, message: reInject.error };
           for (const [k, v] of reInject.oauthInjected) oauthInjected.set(k, v);
           responseConnectionRefs = new Set(reInject.connectionRefs);
-          responseOauthKeys = new Set(reInject.oauthInjected.keys());
+          responseOauthInjected = new Map(reInject.oauthInjected);
           responseKeyFingerprints = new Map(reInject.directKeyFingerprints);
           responseConnectionFingerprints = new Map(reInject.connectionFingerprints);
           this.deps.log?.info('ghost fetch-request 401 → re-auth retry', {
@@ -1260,7 +1299,7 @@ export class GhostNetworkSlot {
             usedExchange ||= hopInject.usedExchange;
             for (const [k, v] of hopInject.oauthInjected) oauthInjected.set(k, v);
             responseConnectionRefs = new Set(hopInject.connectionRefs);
-            responseOauthKeys = new Set(hopInject.oauthInjected.keys());
+            responseOauthInjected = new Map(hopInject.oauthInjected);
             responseKeyFingerprints = new Map(hopInject.directKeyFingerprints);
             responseConnectionFingerprints = new Map(hopInject.connectionFingerprints);
           }
@@ -1354,7 +1393,7 @@ export class GhostNetworkSlot {
       // (注入的是换来的令牌)与 login-email 型虽不在这里记账,但它们与
       // 直连 key 并存时 401 归属同样不明——只数可记账 key 会把「令牌
       // 被拒」错记到直连 key 头上。
-      // oauth 声明不在这里计:它们由 responseOauthKeys(最终跳实际注入面)
+      // oauth 声明不在这里计:它们由 responseOauthInjected(最终跳实际注入面)
       // 计数——两处都数会把 oauth 算两遍,把本可唯一归因的场景误判歧义。
       const injectedSecretCount = (net.secrets ?? []).filter(
         (decl) =>
@@ -1366,7 +1405,7 @@ export class GhostNetworkSlot {
       // oauth/连接取最终响应那一跳的实际注入面(跨跳累计的 oauthInjected
       // 含上一跳凭证,不随重定向出网,不能归因)。
       const attributionCount =
-        injectedSecretCount + responseOauthKeys.size + responseConnectionRefs.size;
+        injectedSecretCount + responseOauthInjected.size + responseConnectionRefs.size;
       if (attributionCount !== 1) {
         if (response.status === 401 || response.status === 403) {
           this.deps.log?.info('ghost credential rejection attribution ambiguous, skip ledger', {
@@ -1381,6 +1420,7 @@ export class GhostNetworkSlot {
         // 401 = 服务端明确不认这份凭证,直接记账。
         this.noteRejectionsIfCurrent(ghostId, callId, trackableKeys, responseKeyFingerprints);
         this.noteConnectionRejectionsIfCurrent(ghostId, callId, responseConnectionRefs, responseConnectionFingerprints);
+        this.noteOauthRejectionsIfCurrent(ghostId, callId, responseOauthInjected);
       } else if (response.status === 403) {
         // 403 语义宽(限流/越权/封禁都可能):仅当 body 出现凭证失效类信号
         // 才按被拒记账,避免把限流页误标 needs_reauth 钉死好插件。
@@ -1618,8 +1658,8 @@ export class GhostNetworkSlot {
   ): Promise<{
     error: string | null;
     usedExchange: boolean;
-    /** 本次注入过的 oauth 凭证(secretKey → 实际用的账号 id;401 作废用)。 */
-    oauthInjected: Map<string, string>;
+    /** 本次注入过的 oauth 凭证(secretKey → 账号 id + token 指纹;401 作废/expired 用)。 */
+    oauthInjected: Map<string, { accountId: string; version: string }>;
     /** 本次注入过的连接 identity,用于最终响应的被拒归因。 */
     connectionRefs: string[];
     /**
@@ -1643,7 +1683,7 @@ export class GhostNetworkSlot {
       deleteHeaderVariants(headers, decl.inject.header);
     }
     let usedExchange = false;
-    const oauthInjected = new Map<string, string>();
+    const oauthInjected = new Map<string, { accountId: string; version: string }>();
     const directKeyFingerprints = new Map<string, string>();
     const connectionFingerprints = new Map<string, { version: string; host: string }>();
     for (const secret of secrets) {
@@ -1654,7 +1694,12 @@ export class GhostNetworkSlot {
         return { error: resolved.error, usedExchange, oauthInjected, connectionRefs: [], directKeyFingerprints, connectionFingerprints };
       }
       if (secret.exchange !== undefined) usedExchange = true;
-      if (resolved.oauthAccountId !== undefined) oauthInjected.set(secret.key, resolved.oauthAccountId);
+      if (resolved.oauthAccountId !== undefined) {
+        oauthInjected.set(secret.key, {
+          accountId: resolved.oauthAccountId,
+          version: createHash('sha256').update(resolved.value).digest('hex').slice(0, 16),
+        });
+      }
       if ((secret.source ?? 'user') === 'user' && secret.exchange === undefined) {
         directKeyFingerprints.set(
           secret.key,

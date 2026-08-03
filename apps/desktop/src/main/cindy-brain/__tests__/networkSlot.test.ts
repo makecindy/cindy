@@ -184,6 +184,7 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
       oauthTokens: {
         getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
         invalidateAccessToken: () => {},
+        markAccessTokenRejected: () => {},
       },
     });
     await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
@@ -310,6 +311,7 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
       oauthTokens: {
         getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
         invalidateAccessToken: () => {},
+        markAccessTokenRejected: () => {},
       },
     });
     await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });
@@ -363,6 +365,7 @@ describe('networkSlot · 凭证被拒记账(运行期 needs_reauth 事实源)', 
       oauthTokens: {
         getFreshAccessToken: async () => ({ ok: true as const, accessToken: 'tok', accountId: 'a1' }),
         invalidateAccessToken: () => {},
+        markAccessTokenRejected: () => {},
       },
     });
     await slot.handleFetchRequest('web-search', { type: 'fetch-request', url: BRAVE_URL });

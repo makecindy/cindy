@@ -2,6 +2,7 @@
  * ghostOauthAccounts 单测:账号清单持久化 / access token 缓存与单飞刷新 /
  * invalid_grant 过期标记 / 断开与默认账号(规则 14,内存假体零 Electron)。
  */
+import { createHash } from 'node:crypto';
 import * as http from 'node:http';
 import { describe, expect, it, vi } from 'vitest';
 
@@ -650,6 +651,63 @@ describe('getFreshAccessToken', () => {
     mgr.invalidateAccessToken(GHOST, KEY, 'acc-1');
     await mgr.getFreshAccessToken(GHOST, KEY, DECL);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it('刷新后的 access token 仍被 401 拒绝时标 expired', async () => {
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault: seededVault(),
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ access_token: 'at-rejected', expires_in: 3600 }),
+      ) as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+    const token = await mgr.getFreshAccessToken(GHOST, KEY, DECL);
+    expect(token.ok).toBe(true);
+    if (!token.ok) return;
+
+    mgr.markAccessTokenRejected(
+      GHOST,
+      KEY,
+      token.accountId,
+      createHash('sha256').update(token.accessToken).digest('hex').slice(0, 16),
+    );
+
+    expect(mgr.listAccounts(GHOST, KEY)[0]).toMatchObject({ status: 'expired' });
+    expect(onAccountStatusChanged).toHaveBeenCalledWith({
+      ghostId: GHOST,
+      secretKey: KEY,
+      status: 'expired',
+    });
+  });
+
+  it('迟到的旧 token 401 不误标已刷新 token 对应账号', async () => {
+    let tokenSeq = 0;
+    const onAccountStatusChanged = vi.fn();
+    const mgr = new GhostOauthAccountManager({
+      vault: seededVault(),
+      fetchImpl: vi.fn(async () =>
+        jsonResponse({ access_token: `at-${++tokenSeq}`, expires_in: 3600 }),
+      ) as unknown as typeof fetch,
+      openExternal: vi.fn(),
+      onAccountStatusChanged,
+    });
+    const oldToken = await mgr.getFreshAccessToken(GHOST, KEY, DECL);
+    expect(oldToken.ok).toBe(true);
+    if (!oldToken.ok) return;
+    mgr.invalidateAccessToken(GHOST, KEY, oldToken.accountId);
+    await mgr.getFreshAccessToken(GHOST, KEY, DECL);
+
+    mgr.markAccessTokenRejected(
+      GHOST,
+      KEY,
+      oldToken.accountId,
+      createHash('sha256').update(oldToken.accessToken).digest('hex').slice(0, 16),
+    );
+
+    expect(mgr.listAccounts(GHOST, KEY)[0]).toMatchObject({ status: 'connected' });
+    expect(onAccountStatusChanged).not.toHaveBeenCalled();
   });
 
   it('显式 accountId 不存在 / 无任何账号 → NO_ACCOUNT', async () => {

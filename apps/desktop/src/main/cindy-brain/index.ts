@@ -2591,21 +2591,29 @@ let ghostSetupKvStore: GhostKvStore | null = null;
 // 运行期凭证被拒台账(secret key 被服务端 401/403 拒绝的失效记录;
 // 生命周期投影折算为 needs_reauth 的事实源之一)。
 // 惰性初始化:import 期不触碰 userData(测试环境无 Electron app)。
-let ghostCredentialRejectionsSingleton: ReturnType<
-  typeof createGhostCredentialRejectionsStore
-> | null = null;
+let ghostCredentialRejectionsSingleton: {
+  ownerScopeKey: string;
+  store: ReturnType<typeof createGhostCredentialRejectionsStore>;
+} | null = null;
 export function resetGhostCredentialRejectionsStore(): void {
   ghostCredentialRejectionsSingleton = null;
 }
 
 function ghostCredentialRejections() {
-  if (!ghostCredentialRejectionsSingleton) {
-    ghostCredentialRejectionsSingleton = createGhostCredentialRejectionsStore({
-      filePath: ghostCredentialRejectionsPath(ownerScopedUserDataPath()),
-      log,
-    });
+  const ownerScopeKey = activeOwnerScopeKey();
+  if (
+    !ghostCredentialRejectionsSingleton ||
+    ghostCredentialRejectionsSingleton.ownerScopeKey !== ownerScopeKey
+  ) {
+    ghostCredentialRejectionsSingleton = {
+      ownerScopeKey,
+      store: createGhostCredentialRejectionsStore({
+        filePath: ghostCredentialRejectionsPath(ownerScopedUserDataPath()),
+        log,
+      }),
+    };
   }
-  return ghostCredentialRejectionsSingleton;
+  return ghostCredentialRejectionsSingleton.store;
 }
 
 /**
@@ -2955,6 +2963,13 @@ export function getGhostNetworkSlot(): GhostNetworkSlot {
           getGhostOauthAccountManager().getFreshAccessToken(ghostId, secretKey, decl, accountId),
         invalidateAccessToken: (ghostId, secretKey, accountId) =>
           getGhostOauthAccountManager().invalidateAccessToken(ghostId, secretKey, accountId),
+        markAccessTokenRejected: (ghostId, secretKey, accountId, version) =>
+          getGhostOauthAccountManager().markAccessTokenRejected(
+            ghostId,
+            secretKey,
+            accountId,
+            version,
+          ),
       },
       // 多连接凭证(network.connections):按在装清单逐 decl 查连接管理器——
       // 用户添加的地址并入动态白名单(hostsFor),出网时按 hostname 精确

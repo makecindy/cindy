@@ -32,7 +32,7 @@
  * 假体全覆盖,零 Electron。
  */
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 
 import {
   fetchGhostOauthAvatar,
@@ -685,6 +685,33 @@ export class GhostOauthAccountManager {
    */
   invalidateAccessToken(ghostId: string, secretKey: string, accountId: string): void {
     this.tokenCache.delete(this.cacheKey(ghostId, secretKey, accountId));
+  }
+
+  /**
+   * 刷新后 access token 仍被上游 401 拒绝:仅当注入时指纹仍匹配当前缓存
+   * 才标账号 expired。若用户已重授权或另一请求已换新 token,旧请求迟到的
+   * 401 不得把新授权误标失效。
+   */
+  markAccessTokenRejected(
+    ghostId: string,
+    secretKey: string,
+    accountId: string,
+    injectedVersion: string,
+  ): void {
+    const key = this.cacheKey(ghostId, secretKey, accountId);
+    const cached = this.tokenCache.get(key);
+    const currentVersion = cached
+      ? createHash('sha256').update(cached.accessToken).digest('hex').slice(0, 16)
+      : null;
+    if (currentVersion !== injectedVersion) {
+      this.deps.logger?.info(
+        'ghost oauth rejection skipped: access token version changed in flight',
+        { ghostId, secretKey, accountId },
+      );
+      return;
+    }
+    this.tokenCache.delete(key);
+    this.markExpired(ghostId, secretKey, accountId);
   }
 
   private async refreshAccount(

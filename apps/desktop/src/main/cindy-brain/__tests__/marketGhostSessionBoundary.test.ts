@@ -77,4 +77,23 @@ describe('market Ghost session boundary', () => {
       body.indexOf('ghostCredentialRejections().markRejected'),
     );
   });
+
+  it('recreates the rejection store when the committed owner generation changes', () => {
+    const singletonStart = source.indexOf(
+      'let ghostCredentialRejectionsSingleton:',
+    );
+    const singletonEnd = source.indexOf(
+      '\n\n/**\n * networkSlot 在 401/403 重试耗尽后记账',
+      singletonStart,
+    );
+    const body = source.slice(singletonStart, singletonEnd);
+
+    expect(body).toContain('ownerScopeKey: string;');
+    expect(body).toContain('const ownerScopeKey = activeOwnerScopeKey();');
+    expect(body).toContain(
+      'ghostCredentialRejectionsSingleton.ownerScopeKey !== ownerScopeKey',
+    );
+    expect(body).toContain('ownerScopeKey,\n      store: createGhostCredentialRejectionsStore({');
+    expect(body).toContain('return ghostCredentialRejectionsSingleton.store;');
+  });
 });
