@@ -3175,8 +3175,8 @@
         "updateConfirmDescription": "The package will be verified for integrity and manifest compatibility, then replace the installed version. Its current enabled state stays unchanged.",
         "sources": {
           "addMarketplace": "Add Custom Source…",
-          "dialogTitle": "Add Plugin Marketplace",
-          "dialogDescription": "Add a plugin marketplace from a GitHub repository, Git URL, or local folder.",
+          "dialogTitle": "Add Custom Source",
+          "dialogDescription": "Add a custom plugin source from a GitHub repository, Git URL, or local folder.",
           "learnMore": "Learn more",
           "sourceLabel": "Source",
           "sourcePlaceholder": "openai/plugins or git@github.com:org/repo.git",

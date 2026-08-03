@@ -3174,8 +3174,8 @@
         "updateConfirmDescription": "安装包将经过完整性与清单校验，并替换现有版本。当前生效状态保持不变。",
         "sources": {
           "addMarketplace": "添加自定义源…",
-          "dialogTitle": "添加插件市场",
-          "dialogDescription": "从 GitHub 仓库、Git URL 或本地文件夹添加插件市场。",
+          "dialogTitle": "添加自定义源",
+          "dialogDescription": "从 GitHub 仓库、Git URL 或本地文件夹添加自定义插件源。",
           "learnMore": "了解更多",
           "sourceLabel": "来源",
           "sourcePlaceholder": "owner/repo 或 git@github.com:org/repo.git",

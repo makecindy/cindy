@@ -14,7 +14,7 @@ function Harness({
   sessionKey,
   refreshMarket,
 }: {
-  sessionKey: string;
+  sessionKey: string | null;
   refreshMarket: () => void | Promise<void>;
 }) {
   usePluginMarketSourceAutoRefresh(sessionKey, refreshMarket);
@@ -48,5 +48,16 @@ describe('usePluginMarketSourceAutoRefresh', () => {
 
     await waitFor(() => expect(refreshGitSourcesIfStale).toHaveBeenCalledTimes(1));
     expect(refreshMarket).not.toHaveBeenCalled();
+  });
+
+  it('waits for a stable owner before requesting a Git sync', async () => {
+    refreshGitSourcesIfStale.mockResolvedValue({ refreshed: false });
+    const refreshMarket = vi.fn();
+    const view = render(<Harness sessionKey={null} refreshMarket={refreshMarket} />);
+
+    expect(refreshGitSourcesIfStale).not.toHaveBeenCalled();
+
+    view.rerender(<Harness sessionKey="cloud:user-1" refreshMarket={refreshMarket} />);
+    await waitFor(() => expect(refreshGitSourcesIfStale).toHaveBeenCalledTimes(1));
   });
 });

@@ -12,10 +12,10 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 import type { IpcErrorCode } from '../../../shared/ipc-errors.js';
+import { isValidGitRef } from './gitRef.js';
 
 /** 克隆/拉取超时：大仓库给足窗口，但绝不无限挂起。 */
 const GIT_OPERATION_TIMEOUT_MS = 5 * 60 * 1000;
-const REMOTE_BRANCH_PATTERN = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 
 /** rename 遇 Windows 瞬时锁(AV/索引器/云同步持句柄)短退避重试;其余立即上抛。 */
 async function renameWithRetry(from: string, to: string): Promise<void> {
@@ -225,7 +225,7 @@ export async function resolveRemoteDefaultBranch(
     });
     const match = /^ref:\s+refs\/heads\/([^\s]+)\s+HEAD$/m.exec(stdout);
     const branch = match?.[1] ?? null;
-    return branch && REMOTE_BRANCH_PATTERN.test(branch) ? branch : null;
+    return branch && isValidGitRef(branch) ? branch : null;
   } catch {
     return null;
   }

@@ -252,7 +252,7 @@ export function GhostPluginPage() {
   }, [refreshMarket, mode, dataOwnerId]);
   const refreshMarketAfterSourceSync = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketSourceAutoRefresh(
-    `${mode}:${dataOwnerId ?? ''}`,
+    dataOwnerId ? `${mode}:${dataOwnerId}` : null,
     refreshMarketAfterSourceSync,
   );
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);

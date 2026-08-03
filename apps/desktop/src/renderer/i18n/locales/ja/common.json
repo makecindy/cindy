@@ -3174,8 +3174,8 @@
         "updateConfirmDescription": "パッケージの整合性とマニフェスト互換性を確認してから、既存のバージョンを置き換えます。現在の有効/無効の状態は変わりません。",
         "sources": {
           "addMarketplace": "カスタムソースを追加…",
-          "dialogTitle": "プラグインマーケットを追加",
-          "dialogDescription": "GitHub リポジトリ、Git URL、またはローカルフォルダーからプラグインマーケットを追加します。",
+          "dialogTitle": "カスタムソースを追加",
+          "dialogDescription": "GitHub リポジトリ、Git URL、またはローカルフォルダーからカスタムプラグインソースを追加します。",
           "learnMore": "詳しく見る",
           "sourceLabel": "ソース",
           "sourcePlaceholder": "openai/plugins または git@github.com:org/repo.git",

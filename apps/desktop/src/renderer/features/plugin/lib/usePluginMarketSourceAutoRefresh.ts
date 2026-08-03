@@ -5,13 +5,14 @@ import { useEffect, useRef } from 'react';
  * 进行中去重；Renderer 只在本轮确有来源同步成功时重读一次市场快照。
  */
 export function usePluginMarketSourceAutoRefresh(
-  sessionKey: string,
+  sessionKey: string | null,
   refreshMarket: () => void | Promise<void>,
 ): void {
   const refreshMarketRef = useRef(refreshMarket);
   refreshMarketRef.current = refreshMarket;
 
   useEffect(() => {
+    if (!sessionKey) return;
     let active = true;
     void window.electronAPI.pluginMarket
       .refreshGitSourcesIfStale()

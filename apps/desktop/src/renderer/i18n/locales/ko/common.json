@@ -3174,8 +3174,8 @@
         "updateConfirmDescription": "패키지 무결성과 매니페스트 호환성을 확인한 뒤 기존 버전을 교체합니다. 현재 활성화 상태는 그대로 유지됩니다.",
         "sources": {
           "addMarketplace": "사용자 지정 소스 추가…",
-          "dialogTitle": "플러그인 마켓 추가",
-          "dialogDescription": "GitHub 리포지토리, Git URL 또는 로컬 폴더에서 플러그인 마켓을 추가합니다.",
+          "dialogTitle": "사용자 지정 소스 추가",
+          "dialogDescription": "GitHub 리포지토리, Git URL 또는 로컬 폴더에서 사용자 지정 플러그인 소스를 추가합니다.",
           "learnMore": "자세히 알아보기",
           "sourceLabel": "소스",
           "sourcePlaceholder": "openai/plugins 또는 git@github.com:org/repo.git",

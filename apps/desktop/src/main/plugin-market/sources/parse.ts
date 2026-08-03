@@ -8,6 +8,7 @@
 import path from 'node:path';
 
 import type { MarketSource } from '../../../shared/pluginMarket.js';
+import { isValidGitRef } from './gitRef.js';
 
 export type MarketSourceParseError =
   | 'EMPTY_SOURCE'
@@ -22,8 +23,6 @@ export type MarketSourceParseResult =
   | { ok: true; source: MarketSource }
   | { ok: false; code: MarketSourceParseError };
 
-/** Git 引用（branch / tag / commit）允许的字符集；拒绝选项注入（- 开头）与路径穿越。 */
-const REF_PATTERN = /^(?!-)[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$/;
 /**
  * 控制字符与双向文本控制符:URL / sparsePaths 里出现即拒。U+202E 等可让来源
  * 在 UI 单行里显示成另一个域名(视觉欺骗),控制字符则可注入日志与终端。
@@ -133,7 +132,7 @@ export function parseMarketSource(
 
   if (!trimmed) return { ok: false, code: 'EMPTY_SOURCE' };
   if (FORBIDDEN_SOURCE_CHARS.test(trimmed)) return { ok: false, code: 'INVALID_SOURCE_FORMAT' };
-  if (ref && !REF_PATTERN.test(ref)) return { ok: false, code: 'INVALID_REF' };
+  if (ref && !isValidGitRef(ref)) return { ok: false, code: 'INVALID_REF' };
   if (!validSparsePaths(sparsePaths)) return { ok: false, code: 'INVALID_SPARSE_PATH' };
 
   if (looksLikeLocalPath(trimmed)) {
