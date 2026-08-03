@@ -59,6 +59,12 @@ import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMet
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
+/**
+ * Codex 的 reconnect-stalled 清理要等两次 turn/interrupt ACK，每次最多 10s。
+ * 自动续跑仍只允许 3 次 SESSION_RUNNING 派发尝试，但退避必须覆盖这段有界
+ * cleanup 窗口；终态事件先到时 scheduleDrain 仍会立即放行，不会强制等满该间隔。
+ */
+const AUTO_RESUME_SESSION_RUNNING_RETRY_DELAY_MS = 10_000;
 /** 同一自动续跑项撞上 host busy 时的有界派发次数，防止定时器无穷重入。 */
 const MAX_AUTO_RESUME_DISPATCH_ATTEMPTS = 3;
 /**
@@ -520,6 +526,9 @@ interface SessionInputState {
   abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
+  /** 当前 retry timer 绑定的队首/compact owner；队首变化时必须替换 timer policy。 */
+  sessionRunningRetryOwnerKey: string | null;
+  sessionRunningRetryDelayMs: number | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -573,6 +582,8 @@ function createInitialInputState(generation = 0): SessionInputState {
     abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
+    sessionRunningRetryOwnerKey: null,
+    sessionRunningRetryDelayMs: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -3118,18 +3129,46 @@ export class AgentInputCoordinator {
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 
+  private getSessionRunningRetryPolicy(state: SessionInputState): {
+    ownerKey: string | null;
+    delayMs: number;
+  } {
+    const compact = state.pendingCompacts[0];
+    if (compact && compact.waitForClientIds.length === 0) {
+      return { ownerKey: 'compact', delayMs: SESSION_RUNNING_RETRY_DELAY_MS };
+    }
+    const head = state.pendingQueue[0];
+    return {
+      ownerKey: head ? `queue:${head.clientId}` : null,
+      delayMs: head?.autoResume
+        ? AUTO_RESUME_SESSION_RUNNING_RETRY_DELAY_MS
+        : SESSION_RUNNING_RETRY_DELAY_MS,
+    };
+  }
+
   private scheduleSessionRunningRetry(sessionId: string, reason: string): void {
     const state = this.getState(sessionId);
+    const policy = this.getSessionRunningRetryPolicy(state);
     if (state.sessionRunningRetryTimer) {
-      if (state.sessionRunningRetryGeneration === state.generation) return;
+      if (
+        state.sessionRunningRetryGeneration === state.generation &&
+        state.sessionRunningRetryOwnerKey === policy.ownerKey &&
+        state.sessionRunningRetryDelayMs === policy.delayMs
+      ) {
+        return;
+      }
       this.clearSessionRunningRetry(state);
     }
     const generation = state.generation;
     state.sessionRunningRetryGeneration = generation;
+    state.sessionRunningRetryOwnerKey = policy.ownerKey;
+    state.sessionRunningRetryDelayMs = policy.delayMs;
     state.sessionRunningRetryTimer = setTimeout(() => {
       const latest = this.getState(sessionId);
       latest.sessionRunningRetryTimer = null;
       latest.sessionRunningRetryGeneration = null;
+      latest.sessionRunningRetryOwnerKey = null;
+      latest.sessionRunningRetryDelayMs = null;
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
@@ -3137,7 +3176,7 @@ export class AgentInputCoordinator {
         return;
       }
       this.scheduleDrain(sessionId, `session-running-retry:${reason}`);
-    }, SESSION_RUNNING_RETRY_DELAY_MS);
+    }, policy.delayMs);
   }
 
   private markPendingExternalTerminalDone(sessionId: string, state: SessionInputState): void {
@@ -3190,6 +3229,8 @@ export class AgentInputCoordinator {
     }
     state.sessionRunningRetryTimer = null;
     state.sessionRunningRetryGeneration = null;
+    state.sessionRunningRetryOwnerKey = null;
+    state.sessionRunningRetryDelayMs = null;
   }
 
   /** closed 事件可能早于 sendToAgent 返回；这里先挂起 terminal event，等真实 send outcome 决定 drain 还是 recovery。 */

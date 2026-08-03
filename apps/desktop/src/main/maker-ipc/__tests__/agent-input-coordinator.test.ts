@@ -7062,7 +7062,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
-  it('自动续跑连续撞 SESSION_RUNNING 三次后停止重试并交回原错误', async () => {
+  it('自动续跑等待 Codex cleanup 窗口后仍在 3 次上限处停止重试', async () => {
     vi.useFakeTimers();
     const h = createHarness();
     const sid = 'auto-retry-session-running-budget';
@@ -7078,11 +7078,21 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
 
-    await vi.advanceTimersByTimeAsync(250);
+    // Codex reconnect-stalled 的两次 interrupt ACK 各最多等待 10s；不能在
+    // 500ms 内把这条仍可恢复的自动续跑判成失败。
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(3);
 
-    await vi.advanceTimersByTimeAsync(250);
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(1);
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(4);
     expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
@@ -7094,6 +7104,72 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await vi.advanceTimersByTimeAsync(2_000);
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(4);
+  });
+
+  it('live busy 挡住自动续跑时使用 10s fallback，terminal 边界仍立即唤醒', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-live-busy-policy';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // provider cleanup 的终态先到时，事件路径立即 drain，不必等 10s fallback。
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户消息接管 auto-resume 队首后把 10s timer 换回 250ms policy', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-policy-replaced-by-user';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, makeItem('q-user-takeover', 'take over now'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(249);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'take over now',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
   });
 
   it('人工 retryLastError 不打 autoResume(否则会误跳过额度充值)', async () => {

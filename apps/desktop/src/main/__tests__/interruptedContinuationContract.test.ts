@@ -117,6 +117,14 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedHook).toMatch(
       /schedulerQueuedPromptDiscardWatchers/,
     );
+    const discardedSettleIndex = discardedHook.indexOf(
+      'settleUndispatchedInterruptedAutoResume(sessionId, item)',
+    );
+    const discardedFinalizeIndex = discardedHook.indexOf(
+      "finalizeUndispatchedClaimedRetry(sessionId, item, 'cancelled')",
+    );
+    expect(discardedSettleIndex).toBeGreaterThan(-1);
+    expect(discardedFinalizeIndex).toBeGreaterThan(discardedSettleIndex);
 
     const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
     const settleEnd = registerSource.indexOf('\n}\n', settleStart);
@@ -151,12 +159,21 @@ describe('interrupted continuation enqueue contract', () => {
     const undispatchedEnd = registerSource.indexOf('onQueueEmptied:', undispatchedStart);
     expect(undispatchedStart).toBeGreaterThan(-1);
     expect(undispatchedEnd).toBeGreaterThan(undispatchedStart);
-    expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
+    const undispatchedHook = registerSource.slice(undispatchedStart, undispatchedEnd);
+    expect(undispatchedHook).toMatch(
       /settleUndispatchedInterruptedAutoResume\(sessionId, item\)/,
     );
-    expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
+    expect(undispatchedHook).toMatch(
       /finalizeUndispatchedClaimedRetry\(sessionId, item, disposition\)/,
     );
+    const undispatchedSettleIndex = undispatchedHook.indexOf(
+      'settleUndispatchedInterruptedAutoResume(sessionId, item)',
+    );
+    const undispatchedFinalizeIndex = undispatchedHook.indexOf(
+      'finalizeUndispatchedClaimedRetry(sessionId, item, disposition)',
+    );
+    expect(undispatchedSettleIndex).toBeGreaterThan(-1);
+    expect(undispatchedFinalizeIndex).toBeGreaterThan(undispatchedSettleIndex);
 
     const finalizeStart = registerSource.indexOf('const finalizeUndispatchedClaimedRetry = (');
     const finalizeEnd = registerSource.indexOf('\n  };', finalizeStart);
