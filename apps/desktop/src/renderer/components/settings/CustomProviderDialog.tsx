@@ -30,6 +30,8 @@ import {
   createCustomProvider,
   readCustomProviderKey,
   replaceCustomProviderModelId,
+  setCustomProviderModelReasoning,
+  setCustomProviderModelReasoningEffort,
   setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
@@ -50,7 +52,11 @@ import {
   customProviderCodexWireProtocolOption,
 } from '@/lib/customProviderWireProtocols';
 
-import { isProviderRequestPath, sortPresetsForLocale } from '@cindy/model-providers';
+import {
+  isProviderRequestPath,
+  PI_REASONING_EFFORTS,
+  sortPresetsForLocale,
+} from '@cindy/model-providers';
 import type {
   AgentKind,
   CustomProviderConfig,
@@ -658,6 +664,9 @@ export function CustomProviderDialog({
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
             ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+            ...(m.reasoning === true && m.reasoningEfforts?.length
+              ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+              : {}),
           }))
           .filter((m) => m.id.length > 0);
         const currentById = new Map(current.map((m) => [m.id, m]));
@@ -679,6 +688,9 @@ export function CustomProviderDialog({
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
               ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(cur?.reasoning === true && cur.reasoningEfforts?.length
+                ? { reasoning: true, reasoningEfforts: [...cur.reasoningEfforts] }
+                : {}),
             };
           }),
         ];
@@ -731,12 +743,17 @@ export function CustomProviderDialog({
       const contextWindow = latest?.contextWindow ?? m.contextWindow;
       const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
       const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
+      const reasoning = latest ? latest.reasoning : m.reasoning;
+      const reasoningEfforts = latest ? latest.reasoningEfforts : m.reasoningEfforts;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
         ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
+        ...(reasoning === true && reasoningEfforts?.length
+          ? { reasoning: true, reasoningEfforts: [...reasoningEfforts] }
+          : {}),
       };
     });
     for (const m of previousModels) {
@@ -748,6 +765,9 @@ export function CustomProviderDialog({
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+          ...(m.reasoning === true && m.reasoningEfforts?.length
+            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            : {}),
         });
       }
     }
@@ -850,6 +870,9 @@ export function CustomProviderDialog({
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
           ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
+          ...(m.reasoning === true && m.reasoningEfforts?.length
+            ? { reasoning: true, reasoningEfforts: [...m.reasoningEfforts] }
+            : {}),
         }))
         .filter((m) => m.id && m.name);
       const requestPath = rf.requestPath.trim();
@@ -1466,32 +1489,100 @@ export function CustomProviderDialog({
                         <Trash2 size={16} />
                       </button>
                       {activeTab === 'pi' && (
-                        <label className="flex basis-full cursor-pointer items-start gap-2 pr-12 text-[var(--settings-section-desc)]">
-                          <input
-                            type="checkbox"
-                            checked={m.supportsImageInput === true}
-                            onChange={(event) => {
-                              const supportsImageInput = event.currentTarget.checked;
-                              patch(activeTab, (x) => ({
-                                ...x,
-                                models: setCustomProviderModelSupportsImageInput(
-                                  x.models,
-                                  i,
-                                  supportsImageInput,
-                                ),
-                              }));
-                            }}
-                            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
-                          />
-                          <span className="flex flex-col gap-0.5 leading-snug">
-                            <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
-                              {t('settings.providers.custom.fields.modelSupportsImageInput')}
+                        <div className="flex basis-full flex-col gap-2 pr-12 text-[var(--settings-section-desc)]">
+                          <label className="flex cursor-pointer items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={m.supportsImageInput === true}
+                              onChange={(event) => {
+                                const supportsImageInput = event.currentTarget.checked;
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: setCustomProviderModelSupportsImageInput(
+                                    x.models,
+                                    i,
+                                    supportsImageInput,
+                                  ),
+                                }));
+                              }}
+                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                            />
+                            <span className="flex flex-col gap-0.5 leading-snug">
+                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                                {t('settings.providers.custom.fields.modelSupportsImageInput')}
+                              </span>
+                              <span className="text-11">
+                                {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
+                              </span>
                             </span>
-                            <span className="text-11">
-                              {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
+                          </label>
+                          <label className="flex cursor-pointer items-start gap-2">
+                            <input
+                              type="checkbox"
+                              checked={m.reasoning === true}
+                              onChange={(event) => {
+                                const reasoning = event.currentTarget.checked;
+                                patch(activeTab, (x) => ({
+                                  ...x,
+                                  models: setCustomProviderModelReasoning(x.models, i, reasoning),
+                                }));
+                              }}
+                              className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                            />
+                            <span className="flex flex-col gap-0.5 leading-snug">
+                              <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                                {t('settings.providers.custom.fields.modelSupportsReasoning')}
+                              </span>
+                              <span className="text-11">
+                                {t('settings.providers.custom.fields.modelSupportsReasoningHelp')}
+                              </span>
                             </span>
-                          </span>
-                        </label>
+                          </label>
+                          {m.reasoning === true && (
+                            <div className="ml-6 flex flex-col gap-1.5">
+                              <span className="text-11 font-medium text-[var(--settings-section-sublabel)]">
+                                {t('settings.providers.custom.fields.modelReasoningEfforts')}
+                              </span>
+                              <div className="flex flex-wrap gap-x-3 gap-y-1.5">
+                                {PI_REASONING_EFFORTS.map((effort) => {
+                                  const selected = m.reasoningEfforts?.includes(effort) === true;
+                                  const lastSelected = selected && m.reasoningEfforts?.length === 1;
+                                  return (
+                                    <label
+                                      key={effort}
+                                      className={cn(
+                                        'flex items-center gap-1.5 text-11',
+                                        lastSelected
+                                          ? 'cursor-not-allowed opacity-50'
+                                          : 'cursor-pointer',
+                                      )}
+                                    >
+                                      <input
+                                        type="checkbox"
+                                        checked={selected}
+                                        disabled={lastSelected}
+                                        onChange={(event) => {
+                                          const enabled = event.currentTarget.checked;
+                                          patch(activeTab, (x) => ({
+                                            ...x,
+                                            models: setCustomProviderModelReasoningEffort(
+                                              x.models,
+                                              i,
+                                              effort,
+                                              enabled,
+                                            ),
+                                          }));
+                                        }}
+                                        className="h-3.5 w-3.5 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)] disabled:cursor-not-allowed"
+                                      />
+                                      {t(`effortLevels.${effort}`)}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+                        </div>
                       )}
                     </div>
                   ))}

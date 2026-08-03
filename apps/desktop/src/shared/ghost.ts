@@ -388,6 +388,19 @@ export interface GhostToolDecl {
   parameters?: Record<string, unknown>;
 }
 
+/**
+ * 把一个已经声明、已经过权限确认的工具接入 Composer `@` 资源搜索。
+ *
+ * 这不是新卡槽，也不扩大底层工具权限：旧宿主会按顶层未知字段兼容忽略；新版宿主
+ * 仅在用户明确选中该插件的资源入口后，以固定 `{ query, limit }` 参数调用该工具。
+ * 调用入口会单独进入安装/更新权限清单；工具必须无副作用，返回值由宿主按固定
+ * 资源摘要协议裁剪。
+ */
+export interface GhostAtResourceProviderDecl {
+  /** 必须逐字引用同一 manifest 的 tools[].name。 */
+  tool: string;
+}
+
 /** cindy 槽·图像类可申请的动作(主机代办菜单的"图像"类目)。 */
 export const GHOST_MODEL_IMAGE_ACTIONS = ['generate', 'edit'] as const;
 export type GhostModelImageAction = (typeof GHOST_MODEL_IMAGE_ACTIONS)[number];
@@ -1212,6 +1225,8 @@ export interface GhostManifest {
   card?: GhostCardNeeds;
   /** 注册给 agent 的工具声明(与 slots 含 'tool' 成对)。 */
   tools?: GhostToolDecl[];
+  /** 可选的 `@` 业务资源搜索入口；复用已声明工具并单独披露调用入口。 */
+  atResourceProvider?: GhostAtResourceProviderDecl;
   /**
    * cindy 槽能力详单(与 slots 含 'cindy' 成对;缺省 = 零能力,任何代办
    * 都会被拒并提示作者补声明)。清单里的旧字段名 model 在校验层作别名
@@ -1423,7 +1438,7 @@ export interface GhostPermissionItem {
   /** 稳定键:更新 diff 按它对齐(内容变化视为移除+新增,如面板换边)。 */
   key: string;
   /** 图标分组(renderer 按 kind 选图标)。 */
-  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
+  kind: 'cindy' | 'agent' | 'node' | 'tool' | 'at-resource' | 'command' | 'panel' | 'code' | 'subscribe' | 'card' | 'network' | 'notify' | 'confirm' | 'fs' | 'session-context' | 'pick' | 'preview' | 'skill' | 'workspace';
   /** i18n key 后缀,消费方拼 `settings.ghosts.perm.<labelKey>`。 */
   labelKey: string;
   /** i18n 插值参数(工具名、指令名、面板标题等)。 */
@@ -1691,6 +1706,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       labelKey: 'tool',
       labelArgs: { name: tool.name },
       detail: tool.description,
+    });
+  }
+  if (manifest.atResourceProvider) {
+    items.push({
+      key: `at-resource:${manifest.atResourceProvider.tool}`,
+      kind: 'at-resource',
+      labelKey: 'atResourceProvider',
+      labelArgs: { name: manifest.atResourceProvider.tool },
+      detailKey: 'atResourceProviderDetail',
     });
   }
   if (manifest.command) {
@@ -2834,6 +2858,25 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   }
   if (slots.includes('tool') && tools === undefined) {
     return { ok: false, reason: 'slots 声明了 "tool" 但缺少 tools(注册什么工具要写清楚)' };
+  }
+
+  /**
+   * `@` 资源入口复用 `tool` 槽，不另造硬白名单 slot：旧版宿主会接受这类包，
+   * 并像其它未知顶层字段一样忽略 atResourceProvider。这个字段在本版之前也可能被
+   * 存量包当作自定义元数据使用，因此这里仅收窄出待审声明；安装运行时还必须命中
+   * Main 在 install/update 后写下的 host receipt。其它历史形态继续忽略，避免客户端
+   * 升级后让已安装插件消失或凭字段形状自动扩权。
+   */
+  let atResourceProvider: GhostAtResourceProviderDecl | undefined;
+  if (isPlainObject(raw.atResourceProvider)) {
+    const providerRaw = raw.atResourceProvider as Record<string, unknown>;
+    if (
+      Object.keys(providerRaw).length === 1
+      && typeof providerRaw.tool === 'string'
+      && tools?.some((tool) => tool.name === providerRaw.tool)
+    ) {
+      atResourceProvider = { tool: providerRaw.tool };
+    }
   }
 
   // cindy 槽能力详单:与 slots 含 'cindy' 成对(有详单必有槽;有槽无详单
@@ -4192,6 +4235,7 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       ...(raw.settingsHeight !== undefined ? { settingsHeight: raw.settingsHeight as number } : {}),
       slots,
       ...(tools !== undefined ? { tools } : {}),
+      ...(atResourceProvider !== undefined ? { atResourceProvider } : {}),
       ...(card !== undefined ? { card } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(agent !== undefined ? { agent } : {}),

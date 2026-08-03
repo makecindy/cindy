@@ -33,6 +33,16 @@
 import { createHash, randomUUID } from 'node:crypto';
 import path from 'node:path';
 
+/**
+ * 群里的授权卡改投宿主私聊时, 加在卡片正文顶部的说明。
+ *
+ * 放在这一层(desktop main)而不是 @cindy/im: 传输层没有 locale、也不该持有产品措辞。
+ * 与个人 bot 其它 bot 侧文案(im/telegram/uiText.ts)同口径 —— 那一整套目前是单语中文,
+ * 见该文件头部说明; 若要做多语言应连同整套一起改, 不在这一句上开特例。
+ */
+const GROUP_APPROVAL_OWNER_DM_NOTE =
+  '🔐 群聊里的任务需要你授权。授权卡不会发到群里，在这里确认即可。';
+
 import { eq } from 'drizzle-orm';
 import { stripInternalWebCitations } from '@cindy/maker-shared/internal-citation';
 import { getMaker } from '../../maker-host';
@@ -1373,9 +1383,26 @@ export function createTurnRunner(
       return;
     }
 
+    const migratedSourceMessageId =
+      sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
     let messageId: string;
     try {
-      const result = await richIm.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+      const result = await richIm.sendInteractiveCard(userId, spec, {
+        threadTs: scopeKey,
+        // **只有授权卡**转宿主私聊: 群里的授权卡消不掉且只有宿主能答。问答 / 计划审阅
+        // 留在原 lane(它们在群里可见是合理的), 命令卡与会话选择卡更不能转 —— 那会让
+        // 回调落到私聊锁上。
+        ...(req.kind === 'permission'
+          ? {
+              deliverToOwnerDm: true,
+              ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+              // 迁移路径同样按业务 turn 取来源消息(可能没有进行中的 turn)。
+              ...(migratedSourceMessageId !== undefined
+                ? { ownerDmSourceMessageId: migratedSourceMessageId }
+                : {}),
+            }
+          : {}),
+      });
       messageId = result.messageId;
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -2577,11 +2604,25 @@ export function createTurnRunner(
       // (eventually resolved) interaction card — not into the pre-existing card
       // that sits above it. Without this, the user sees the conclusion stream
       // into a card chronologically older than the "✅ 已选择" patch.
+      // 深链身份必须在 finalizeActiveStream **之后**照样可用: 它取自本 turn 的
+      // userMessageId(业务事实), 与流式 handle 生命周期无关 —— 传输层猜不出这个。
+      const ownerDmSourceMessageId =
+        sessionStates.get(localSessionId)?.queue[0]?.userMessageId ?? undefined;
       await finalizeActiveStream(localSessionId);
 
       let messageId: string;
       try {
-        const result = await output.im.sendInteractiveCard(userId, spec, { threadTs: scopeKey });
+        const result = await output.im.sendInteractiveCard(userId, spec, {
+          threadTs: scopeKey,
+          // 同上: 只有 permission 卡转宿主私聊
+          ...(req.kind === 'permission'
+            ? {
+                deliverToOwnerDm: true,
+                ownerDmNote: GROUP_APPROVAL_OWNER_DM_NOTE,
+                ...(ownerDmSourceMessageId !== undefined ? { ownerDmSourceMessageId } : {}),
+              }
+            : {}),
+        });
         messageId = result.messageId;
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);

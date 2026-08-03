@@ -25,6 +25,7 @@ import {
   Sparkles,
   Target,
 } from 'lucide-react';
+import { readAgentInputReferences } from '@cindy/maker-shared/agent-input-projection';
 import { useTranslation } from 'react-i18next';
 import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
@@ -100,6 +101,10 @@ import { AutomationOriginBadge } from './AutomationOriginBadge';
 import { UserMessageUrlLink } from './UserMessageUrlLink';
 import { InlineReferenceChip } from './InlineReferenceChip';
 import { QuoteChip } from './QuoteChip';
+import {
+  SentAgentReferenceChip,
+  sentAgentReferenceDisplayLabel,
+} from './SentAgentReferenceChip';
 import { parseOrcaCommunicationContent, resolveUserDisplayText } from './userMessageDisplayText';
 
 /**
@@ -509,18 +514,50 @@ function renderContentWithoutPastedText(
 export type SentInlineToken =
   | { kind: 'text'; text: string }
   | { kind: 'slash'; text: string }
-  | { kind: 'pasted'; text: string; display: string };
+  | { kind: 'pasted'; text: string; display: string }
+  | { kind: 'agent-reference'; text: string; reference: AgentInputReference };
+
+type SentInlineRange =
+  | { tokenKind: 'pasted'; start: number; end: number; display: string }
+  | { tokenKind: 'slash'; start: number; end: number }
+  | {
+      tokenKind: 'agent-reference';
+      start: number;
+      end: number;
+      reference: AgentInputReference;
+    };
 
 /** Split exact persisted ranges without guessing from repeated text. */
 export function buildSentInlineTokens(
   content: string,
   pastedTextRanges: readonly PastedTextRange[] = [],
   slashCommandRanges: readonly SlashCommandRange[] = [],
+  agentReferences: readonly AgentInputReference[] = [],
 ): SentInlineToken[] {
-  const ranges = [
-    ...pastedTextRanges.map((range) => ({ ...range, kind: 'pasted' as const })),
-    ...slashCommandRanges.map((range) => ({ ...range, kind: 'slash' as const })),
-  ].sort((a, b) => a.start - b.start || a.end - b.end);
+  const ranges: SentInlineRange[] = [
+    ...pastedTextRanges.map(({ start, end, display }): SentInlineRange => ({
+      tokenKind: 'pasted',
+      start,
+      end,
+      display,
+    })),
+    ...slashCommandRanges.map(({ start, end }): SentInlineRange => ({
+      tokenKind: 'slash',
+      start,
+      end,
+    })),
+    ...agentReferences.map((reference): SentInlineRange => ({
+      tokenKind: 'agent-reference',
+      start: reference.start,
+      end: reference.end,
+      reference,
+    })),
+  ].sort((a, b) => {
+    if (a.start !== b.start) return a.start - b.start;
+    if (a.tokenKind === 'agent-reference' && b.tokenKind !== 'agent-reference') return -1;
+    if (b.tokenKind === 'agent-reference' && a.tokenKind !== 'agent-reference') return 1;
+    return a.end - b.end;
+  });
   const tokens: SentInlineToken[] = [];
   let cursor = 0;
   for (const range of ranges) {
@@ -535,10 +572,12 @@ export function buildSentInlineTokens(
     if (range.start > cursor)
       tokens.push({ kind: 'text', text: content.slice(cursor, range.start) });
     const text = content.slice(range.start, range.end);
-    if (range.kind === 'pasted') {
+    if (range.tokenKind === 'pasted') {
       tokens.push({ kind: 'pasted', text, display: range.display });
-    } else {
+    } else if (range.tokenKind === 'slash') {
       tokens.push({ kind: 'slash', text });
+    } else {
+      tokens.push({ kind: 'agent-reference', text, reference: range.reference });
     }
     cursor = range.end;
   }
@@ -565,6 +604,24 @@ export function projectSentPastedPlainText(
   if (pastedTextRanges.length === 0) return content;
   return buildSentInlineTokens(content, pastedTextRanges)
     .map((token) => (token.kind === 'pasted' ? token.display : token.text))
+    .join('');
+}
+
+/** Project rich inline ranges to the labels users see when a long message is collapsed. */
+export function projectSentInlinePlainText(
+  content: string,
+  pastedTextRanges: readonly PastedTextRange[] = [],
+  agentReferences: readonly AgentInputReference[] = [],
+): string {
+  if (pastedTextRanges.length === 0 && agentReferences.length === 0) return content;
+  return buildSentInlineTokens(content, pastedTextRanges, [], agentReferences)
+    .map((token) =>
+      token.kind === 'pasted'
+        ? token.display
+        : token.kind === 'agent-reference'
+          ? sentAgentReferenceDisplayLabel(token.reference)
+          : token.text,
+    )
     .join('');
 }
 
@@ -621,8 +678,14 @@ function renderContent(
    * tooltip —— 那正是"发出去就再也看不到全文"的旧行为,新调用点都应该传。
    */
   onPastedTextChipClick?: (text: string, chip: HTMLElement) => void,
+  agentReferences: readonly AgentInputReference[] = [],
 ): React.ReactNode[] {
-  const tokens = buildSentInlineTokens(content, pastedTextRanges, slashCommandRanges ?? []);
+  const tokens = buildSentInlineTokens(
+    content,
+    pastedTextRanges,
+    slashCommandRanges ?? [],
+    agentReferences,
+  );
   const useLegacySlashHeuristic = slashCommandRanges === undefined;
   return tokens.map((token, index) => {
     if (token.kind === 'slash') {
@@ -655,6 +718,14 @@ function renderContent(
                   onPastedTextChipClick(token.text, event.currentTarget),
               }
             : {})}
+        />
+      );
+    }
+    if (token.kind === 'agent-reference') {
+      return (
+        <SentAgentReferenceChip
+          key={`agent-reference-chip-${index}`}
+          reference={token.reference}
         />
       );
     }
@@ -763,6 +834,10 @@ export function UserMessage({
   // 与提问导航条预览共用同一实现,规则见 userMessageDisplayText.ts;上面已
   // 解析过的 Orca 结果传入复用,渲染热路径不重复 JSON.parse(Copilot review)。
   const displayContent = resolveUserDisplayText({ content, hookSource }, orcaCommunication);
+  const validAgentReferences = useMemo(
+    () => readAgentInputReferences(agentReferences, content),
+    [agentReferences, content],
+  );
   // ghost-summon-card:意识指令/提示的机器追加段从气泡正文尾部剥离,交给
   // GhostSummonCard 渲染(splitGhostDirective 与 expandGhostCommand 同模板,
   // 对不上模板按普通文本原样显示)。copy / fork / rewind / 编辑预填全部用
@@ -858,6 +933,11 @@ export function UserMessage({
       projectSentRanges(pastedTextRanges ?? [], displayBubbleSourceStart, displayBubbleBody.length),
     [displayBubbleBody.length, displayBubbleSourceStart, pastedTextRanges],
   );
+  const bubbleAgentReferences = useMemo(
+    () =>
+      projectSentRanges(validAgentReferences, displayBubbleSourceStart, displayBubbleBody.length),
+    [displayBubbleBody.length, displayBubbleSourceStart, validAgentReferences],
+  );
   // 测量与收起态渲染共用的投影正文:粘贴段按胶囊文案计量,不再拿被折叠掉的
   // 几百行原文去撞收起阈值(issue #946)。偏移只在 bubbleBody 与 ghostBody 同源
   // (无引用交错)时精确 —— quote 块被 join 掉的消息偏移会整体前移,保持原文
@@ -865,9 +945,13 @@ export function UserMessage({
   const collapseMeasureBody = useMemo(
     () =>
       bubbleBody === ghostBody
-        ? projectSentPastedPlainText(displayBubbleBody, bubblePastedRanges)
+        ? projectSentInlinePlainText(
+            displayBubbleBody,
+            bubblePastedRanges,
+            bubbleAgentReferences,
+          )
         : displayBubbleBody,
-    [bubbleBody, ghostBody, displayBubbleBody, bubblePastedRanges],
+    [bubbleAgentReferences, bubbleBody, bubblePastedRanges, displayBubbleBody, ghostBody],
   );
   const collapseMeasureEnabled =
     !orcaCommunication &&
@@ -1333,7 +1417,25 @@ export function UserMessage({
                               key={index}
                             >
                               {longMessageCollapsed
-                        ? segment.text
+                                ? projectSentInlinePlainText(
+                                    segment.text,
+                                    projectSentRanges(
+                                      pastedTextRanges ?? [],
+                                      quoteTextSegmentStarts[index] === null ||
+                                        ghostBodySourceStart === null
+                                        ? null
+                                        : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
+                                      segment.text.length,
+                                    ),
+                                    projectSentRanges(
+                                      validAgentReferences,
+                                      quoteTextSegmentStarts[index] === null ||
+                                        ghostBodySourceStart === null
+                                        ? null
+                                        : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
+                                      segment.text.length,
+                                    ),
+                                  )
                                 : renderContent(
                                     segment.text,
                                     workingDir,
@@ -1372,6 +1474,14 @@ export function UserMessage({
                                         ),
                                     sessionReferences,
                                     handlePastedTextChipClick,
+                                    projectSentRanges(
+                                      validAgentReferences,
+                                      quoteTextSegmentStarts[index] === null ||
+                                        ghostBodySourceStart === null
+                                        ? null
+                                        : ghostBodySourceStart + quoteTextSegmentStarts[index]!,
+                                      segment.text.length,
+                                    ),
                                   )}
                             </span>
                           ),
@@ -1417,6 +1527,7 @@ export function UserMessage({
                                   ),
                               sessionReferences,
                               handlePastedTextChipClick,
+                              bubbleAgentReferences,
                             )}
                       </div>
                     ) : null}

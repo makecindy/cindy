@@ -248,6 +248,25 @@ function isRenderableImageUrl(u: string): boolean {
   return u.startsWith('xdt-image://') || u.startsWith('cindy-media://');
 }
 
+/**
+ * agent 挂起等用户时挂在过程区的状态行, **按交互类型分** —— 都写"等待授权"会把
+ * 问答与计划审阅说成权限请求(review 指出)。
+ *
+ * **刻意不说卡片去了哪**: 投递位置由 hook server 决定(Telegram 群里的授权卡自
+ * 2026-08 起改投宿主私聊), 客户端不知道对端版本, 写"已发到私聊"可能是假的。
+ */
+const AWAITING_INTERACTION_NOTICE: Record<string, string> = {
+  permission: '等待授权 · 需要你确认',
+  ask_user_question: '等待回答 · 需要你选择',
+  plan_review: '等待审阅 · 需要你确认计划',
+};
+/** 未知 kind(将来新增类型)不编造语义, 只说在等你。 */
+const AWAITING_INTERACTION_FALLBACK = '等待你的确认';
+
+function awaitingInteractionNotice(kind: string): string {
+  return AWAITING_INTERACTION_NOTICE[kind] ?? AWAITING_INTERACTION_FALLBACK;
+}
+
 /** 兜底账本条目是否图片(hook 本期只外发图片):cindy-media 地址按扩展名判。 */
 const PRODUCED_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
 
@@ -632,6 +651,12 @@ export function createMakerHookSessionRunner(deps: {
       // listener 由中央 InteractionRouter 持有;这里只准备本 turn 的 handler,
       // 真正的 route 在 beforeProviderStart 屏障内登记。
       const ownInteractionIds = new Set<string>();
+      /**
+       * 待决交互各自的过程区状态行(requestId → notice, 插入序)。agent 可以并行发起
+       * 多个权限请求, 任一个先收口都不能把共享的那一行清掉 —— 否则群里的进度消息又
+       * 变回静止, 而其余交互还要等最长 30 分钟。收口后回落到剩余里最新那条。
+       */
+      const pendingInteractionNotices = new Map<string, string>();
       let interactionRouteLease: InteractionRouteLease | null = null;
       const headlessTurn = {
         closed: false,
@@ -643,6 +668,9 @@ export function createMakerHookSessionRunner(deps: {
         if (headlessTurn.closed || headlessTurn.release) return;
         headlessTurn.release = beginHeadlessGhostSetupTurn(session.id);
       };
+      // 前向引用: 交互回调只在 turn 跑起来之后才可能被调用, 那时 observer 已就位。
+      // 用它给过程区挂「等待授权」, 不新增任何渠道消息。
+      let activeObserver: HookTurnObserver | null = null;
       const handleHookInteraction: InteractionHandler = async (ireq) => {
         if (req.onInteraction) {
           const sendCard = req.onInteraction;
@@ -670,13 +698,25 @@ export function createMakerHookSessionRunner(deps: {
           }
           ownInteractionIds.add(ireq.requestId);
           sendCard({ interactionId: ireq.requestId, ...composed.card });
-          const decision = await registerHookInteraction({
-            interactionId: ireq.requestId,
-            composed,
-            onFallback: (reason) => sendCancel?.(ireq.requestId, reason),
-          });
-          ownInteractionIds.delete(ireq.requestId);
-          return decision;
+          // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
+          // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
+          // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
+          pendingInteractionNotices.set(ireq.requestId, awaitingInteractionNotice(ireq.kind));
+          activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
+          try {
+            const decision = await registerHookInteraction({
+              interactionId: ireq.requestId,
+              composed,
+              onFallback: (reason) => sendCancel?.(ireq.requestId, reason),
+            });
+            ownInteractionIds.delete(ireq.requestId);
+            return decision;
+          } finally {
+            pendingInteractionNotices.delete(ireq.requestId);
+            // 仍有交互待决时保留状态行, 只有最后一个收口才摘掉。回落到**剩余里最新**
+            // 那条 —— 与挂起时"新卡片覆盖状态行"同序(Map 保持插入序)。
+            activeObserver?.setNotice([...pendingInteractionNotices.values()].at(-1) ?? null);
+          }
         }
         if (ireq.kind === 'ask_user_question') {
           return { kind: 'ask_user_question', answers: {} };
@@ -706,6 +746,8 @@ export function createMakerHookSessionRunner(deps: {
           cancelHookInteraction(iid, '任务已结束, 此交互已失效');
         }
         ownInteractionIds.clear();
+        // 收口后不再有待决交互: 先清空, 各 handler 的 finally 随后只会摘掉状态行。
+        pendingInteractionNotices.clear();
       };
       // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
       if (req.isNew) {
@@ -754,6 +796,7 @@ export function createMakerHookSessionRunner(deps: {
         onSilentStopSettled,
         log,
       });
+      activeObserver = observer;
 
       // origin 标注见文件头注释(闭合联合下的 v1 取舍)。scheduleId 用稳定的
       // hook 连接标识 —— renderer/IM 只拿它做展示与分组, 不回查 schedule 表。

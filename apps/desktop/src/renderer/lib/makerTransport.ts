@@ -690,7 +690,9 @@ export function orcaWorkflowsForDevice(deviceId: string): RoutableOrcaWorkflows 
  * 返回 unsubscribe。
  */
 export function subscribeOrcaWorkerChanged(leadSessionId: string, cb: () => void): () => void {
-  const deviceId = getSessionDeviceId(leadSessionId);
+  // 订阅与 Orca 投影查询一样使用粘滞归属。relay 瞬时重连会清空
+  // remoteProjectsStore；此时不能把仍属于被控端的 Lead 改订到控制端本机事件源。
+  const deviceId = getStickySessionDeviceId(leadSessionId);
   if (!deviceId) {
     return (
       window.electronAPI.localDb.orcaWorkflows.onOrcaWorkerChanged?.((payload: unknown) => {

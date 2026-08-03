@@ -77,6 +77,35 @@ describe('applyRuntimeSetModelChange', () => {
     expect(getSessionProvider(sessionId)).toBe('xd');
   });
 
+  it('forwards the atomic effort to live setModel for preflight validation', async () => {
+    const sessionId = rememberSession('runtime-set-model-effort-preflight');
+    setSessionProvider(sessionId, 'native-a');
+    const setModel = vi.fn(async () => {});
+    const maker: RuntimeSetModelMaker = {
+      getSession: () => ({
+        agentKind: 'pi',
+        remoteHostId: null,
+        model: 'local-model',
+        setModel,
+      }),
+      listActiveSessions: () => [],
+      closeSession: vi.fn(async () => {}),
+    };
+
+    await applyRuntimeSetModelChange({
+      maker,
+      sessionId,
+      model: 'target-model',
+      providerId: 'native-a',
+      effort: 'high',
+    });
+
+    expect(setModel).toHaveBeenCalledWith('target-model', {
+      providerId: 'native-a',
+      effort: 'high',
+    });
+  });
+
   it('normalizes a whitespace provider before route and busy-session decisions', async () => {
     const sessionId = rememberSession('runtime-set-model-normalize-provider');
     const setModel = vi.fn(async () => {});

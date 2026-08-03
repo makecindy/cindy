@@ -153,6 +153,7 @@ export type IpcErrorCode =
   | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
   | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
   | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_CONTRAST_UNSUPPORTED' // 主题色板无法满足控件对比度约束
   | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
   | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
   | 'THEME_IMPORT_INTERNAL'; // 意外异常
@@ -280,6 +281,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'THEME_NOT_A_FILE',
   'THEME_FILE_TOO_LARGE',
   'THEME_UNSUPPORTED_FILE',
+  'THEME_CONTRAST_UNSUPPORTED',
   'THEME_USES_INCLUDE',
   'THEME_WRITE_ERROR',
   'THEME_IMPORT_INTERNAL',

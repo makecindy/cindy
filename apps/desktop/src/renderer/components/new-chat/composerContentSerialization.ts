@@ -1,7 +1,12 @@
 import type { Editor } from '@tiptap/core';
 import { Fragment, Slice, type Node as ProseMirrorNode } from '@tiptap/pm/model';
 import { EditorState } from '@tiptap/pm/state';
-import type { AgentInputReference } from '@cindy/maker-shared/agent-input-projection';
+import {
+  parseBrowserTabReferenceHref,
+  parseDesktopWindowReferenceHref,
+  parsePluginResourceReferenceHref,
+  type AgentInputReference,
+} from '@cindy/maker-shared/agent-input-projection';
 
 import type { MentionedResource } from '@/lib/fileTypes';
 import { formatQuoteForSend } from '@/lib/chatQuotes';
@@ -102,7 +107,14 @@ function serializeComposerDocument(
   const addMention = (attrs: MentionChipAttrs) => {
     // Slash commands and deep links are represented in the wire text but are
     // not filesystem resources.
-    if (attrs.kind === 'slash' || attrs.kind === 'session' || attrs.kind === 'project') return;
+    if (
+      attrs.kind === 'slash'
+      || attrs.kind === 'session'
+      || attrs.kind === 'project'
+      || attrs.kind === 'browser-tab'
+      || attrs.kind === 'desktop-window'
+      || attrs.kind === 'plugin-resource'
+    ) return;
     const key = `${attrs.kind}:${attrs.path}`;
     if (seenMentions.has(key)) return;
     seenMentions.add(key);
@@ -263,6 +275,65 @@ function serializeComposerDocument(
               href: attrs.path,
               name: attrs.label || projectDisplayName(target.workingDir),
               workingDir: target.workingDir,
+            });
+          }
+          return;
+        }
+        if (attrs.kind === 'browser-tab') {
+          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const wire = `[${label || 'Browser tab'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          const target = parseBrowserTabReferenceHref(attrs.path);
+          if (target) {
+            bufferAgentReferences.push({
+              kind: 'browser-tab',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              tabId: target.tabId,
+              url: target.url,
+              ...(attrs.label ? { title: attrs.label } : {}),
+            });
+          }
+          return;
+        }
+        if (attrs.kind === 'desktop-window') {
+          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const wire = `[${label || 'Desktop window'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          const target = parseDesktopWindowReferenceHref(attrs.path);
+          if (target) {
+            bufferAgentReferences.push({
+              kind: 'desktop-window',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              windowId: target.windowId,
+              pid: target.pid,
+              appName: target.appName,
+              ...(attrs.label ? { title: attrs.label } : {}),
+            });
+          }
+          return;
+        }
+        if (attrs.kind === 'plugin-resource') {
+          const label = attrs.label.replace(/\s+/g, ' ').trim().replace(/([\\\[\]])/g, '\\$1');
+          const wire = `[${label || 'Plugin resource'}](${attrs.path})`;
+          const start = buffer.length;
+          buffer += wire;
+          const target = parsePluginResourceReferenceHref(attrs.path);
+          if (target) {
+            bufferAgentReferences.push({
+              kind: 'plugin-resource',
+              start,
+              end: buffer.length,
+              href: attrs.path,
+              ...target,
+              pluginName: attrs.sourceLabel || target.ghostId,
+              label: attrs.label || target.resourceId,
+              ...(attrs.sourceDescription ? { description: attrs.sourceDescription } : {}),
             });
           }
           return;

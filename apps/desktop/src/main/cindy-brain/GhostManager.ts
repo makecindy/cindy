@@ -44,8 +44,13 @@ export const MAX_BASIC_ZIP_ENTRIES = 256;
 export const MAX_NODE_ZIP_ENTRIES = 2_048;
 /** 停用标记文件名(安装目录内;存在即停用)。 */
 const DISABLED_MARKER_FILE = '.disabled';
-/** 安装时已验证的信任结果快照(作者包不能提供，staging 阶段由主机写)。 */
+/** 安装时由主机写入的信任快照与权限 receipt；作者包不能提供。 */
 const TRUST_METADATA_FILE = '.cindy-trust.json';
+
+interface GhostInstalledHostMetadata {
+  trust: GhostTrustInfo;
+  approvedAtResourceProviderTool?: string;
+}
 
 /** 注入式日志接口 —— manager 不直接依赖 main/logger,单测零 electron。 */
 export interface GhostManagerLogger {
@@ -138,15 +143,26 @@ export class GhostManager {
         });
         continue;
       }
+      const hostMetadata = this.readInstalledHostMetadata(dir);
+      // atResourceProvider 在旧版宿主里只是未知顶层元数据。只有新版宿主在
+      // install/update 审阅后写下的精确 receipt 才把它提升为运行时入口；旧安装
+      // 没 receipt 时 fail closed，但插件本体与已批准 tool 仍照旧可用。
+      const manifest =
+        v.manifest.atResourceProvider
+        && hostMetadata?.approvedAtResourceProviderTool !== v.manifest.atResourceProvider.tool
+          ? (() => {
+              const { atResourceProvider: _ignored, ...rest } = v.manifest;
+              return rest;
+            })()
+          : v.manifest;
       // icon 读失败只降级为无图标(warn),不影响意识本体可用。
-      const iconDataUrl = this.readInstalledIconDataUrl(dir, v.manifest);
-      const localizedManifest = this.readInstalledLocalizedManifest(dir, v.manifest);
-      const trust = this.readInstalledTrust(dir);
+      const iconDataUrl = this.readInstalledIconDataUrl(dir, manifest);
+      const localizedManifest = this.readInstalledLocalizedManifest(dir, manifest);
       result.push({
         manifest: localizedManifest,
         dir,
         enabled: !fs.existsSync(path.join(dir, DISABLED_MARKER_FILE)),
-        ...(trust ? { trust } : {}),
+        ...(hostMetadata ? { trust: hostMetadata.trust } : {}),
         ...(iconDataUrl !== null ? { iconDataUrl } : {}),
       });
     }
@@ -247,21 +263,44 @@ export class GhostManager {
     }
   }
 
-  /** 读取主机安装时写下的签名验证快照；坏文件只降级未显示，不信作者自报。 */
-  private readInstalledTrust(dir: string): GhostTrustInfo | null {
+  /** 读取主机安装时写下的信任快照与权限 receipt；坏文件一律 fail closed。 */
+  private readInstalledHostMetadata(dir: string): GhostInstalledHostMetadata | null {
     try {
       const bytes = readBoundedFileNoFollowSync(path.join(dir, TRUST_METADATA_FILE), 64 * 1024);
       if (bytes === null) return null;
-      const raw = JSON.parse(bytes.toString('utf8')) as GhostTrustInfo;
+      const raw = JSON.parse(bytes.toString('utf8')) as Record<string, unknown>;
       if (
         !raw ||
         typeof raw !== 'object' ||
+        typeof raw.level !== 'string' ||
         !['cindy-official', 'reviewed', 'verified-publisher', 'unverified'].includes(raw.level) ||
         typeof raw.publisherSigned !== 'boolean' ||
         typeof raw.publisherVerified !== 'boolean' ||
         typeof raw.reviewed !== 'boolean'
       ) return null;
-      return raw;
+      const trust: GhostTrustInfo = {
+        level: raw.level as GhostTrustInfo['level'],
+        publisherSigned: raw.publisherSigned,
+        publisherVerified: raw.publisherVerified,
+        reviewed: raw.reviewed,
+        ...(typeof raw.publisherName === 'string' ? { publisherName: raw.publisherName } : {}),
+        ...(typeof raw.publisherKeyId === 'string' ? { publisherKeyId: raw.publisherKeyId } : {}),
+        ...(typeof raw.reviewerName === 'string' ? { reviewerName: raw.reviewerName } : {}),
+        ...(typeof raw.unknownReviewer === 'boolean' ? { unknownReviewer: raw.unknownReviewer } : {}),
+      };
+      const approval = raw.approvedAtResourceProvider;
+      const approvedAtResourceProviderTool =
+        approval
+        && typeof approval === 'object'
+        && !Array.isArray(approval)
+        && Object.keys(approval).length === 1
+        && typeof (approval as Record<string, unknown>).tool === 'string'
+          ? (approval as Record<string, string>).tool
+          : undefined;
+      return {
+        trust,
+        ...(approvedAtResourceProviderTool ? { approvedAtResourceProviderTool } : {}),
+      };
     } catch {
       return null;
     }
@@ -642,6 +681,9 @@ export class GhostManager {
           ? MAX_NODE_UNCOMPRESSED_BYTES
           : MAX_BASIC_UNCOMPRESSED_BYTES,
         trust,
+        ...(manifest.atResourceProvider
+          ? { approvedAtResourceProviderTool: manifest.atResourceProvider.tool }
+          : {}),
       });
       await fs.promises.rename(stagingDir, finalDir);
     } catch (err) {
@@ -729,6 +771,9 @@ export class GhostManager {
           ? MAX_NODE_UNCOMPRESSED_BYTES
           : MAX_BASIC_UNCOMPRESSED_BYTES,
         trust,
+        ...(manifest.atResourceProvider
+          ? { approvedAtResourceProviderTool: manifest.atResourceProvider.tool }
+          : {}),
       });
     } catch (err) {
       await fs.promises.rm(stagingDir, { recursive: true, force: true }).catch(() => {});
@@ -771,7 +816,12 @@ export class GhostManager {
     allEntries: JSZip.JSZipObject[],
     prefix: string,
     stagingDir: string,
-    opts: { disabled: boolean; maxUncompressedBytes: number; trust: GhostTrustInfo },
+    opts: {
+      disabled: boolean;
+      maxUncompressedBytes: number;
+      trust: GhostTrustInfo;
+      approvedAtResourceProviderTool?: string;
+    },
   ): Promise<void> {
     await fs.promises.mkdir(stagingDir, { recursive: true });
     let totalBytes = 0;
@@ -797,7 +847,12 @@ export class GhostManager {
     }
     await fs.promises.writeFile(
       path.join(stagingDir, TRUST_METADATA_FILE),
-      `${JSON.stringify(opts.trust, null, 2)}\n`,
+      `${JSON.stringify({
+        ...opts.trust,
+        ...(opts.approvedAtResourceProviderTool
+          ? { approvedAtResourceProvider: { tool: opts.approvedAtResourceProviderTool } }
+          : {}),
+      }, null, 2)}\n`,
     );
   }
 

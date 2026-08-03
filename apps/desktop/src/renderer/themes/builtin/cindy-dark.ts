@@ -19,6 +19,8 @@ const overrides = {
   'surface-hover-soft': '#2B2929', // 插值: 20%
   'surface-hover-hsl': '0.0 2.2% 18.0%', // 插值: hover -> HSL
   'surface-on-card': '#2A2828', // 裁决: 中性反相前景,不作红 CTA 专用
+  // 有意引用决策表已冻结的 disabled 灰，与 fast-toggle-track 同源；不新增自由字面值。
+  'switch-track-off': 'var(--text-disabled)',
   'status-badge-fg': '#1F1F1F', // §7 必炸点:值经队列震荡后按 HEAD 冻结(#1F1F1F,5.61:1 × #FF6600 ≥4.5),批准依据:用户亲批方案 2026-07-17
   'border-default': '#434343', // 直映: 边框
   'border-default-hsl': '0.0 0.0% 26.3%', // 边框 -> HSL

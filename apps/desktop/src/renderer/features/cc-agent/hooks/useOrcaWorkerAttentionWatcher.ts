@@ -4,6 +4,11 @@ import type { Session } from '@/lib/ccAgent.types';
 import { isOrcaLeadSession } from '@/lib/orcaSessionIdentity';
 import type { OrcaWorkerStatus } from '../../../../shared/orca-worker-status';
 import {
+  getWorkerProjectionSnapshot,
+  useWorkerProjectionOwners,
+  useWorkerProjectionVersion,
+} from './workerProjectionStore';
+import {
   clearWorkerAttentionMany,
   markWorkerAttention,
 } from '../lib/workerAttentionStore';
@@ -29,6 +34,7 @@ export function computeWorkerAttentionUpdates(
   const currentWorkerIds = new Set<string>();
   const nextStatusByWorkerId = new Map<string, OrcaWorkerStatus>();
   const toMark: string[] = [];
+  const toPrune: string[] = [];
 
   for (const worker of currentWorkers) {
     currentWorkerIds.add(worker.workerId);
@@ -44,7 +50,6 @@ export function computeWorkerAttentionUpdates(
     }
   }
 
-  const toPrune: string[] = [];
   for (const workerId of prevStatusByWorkerId.keys()) {
     if (!currentWorkerIds.has(workerId)) toPrune.push(workerId);
   }
@@ -52,42 +57,18 @@ export function computeWorkerAttentionUpdates(
   return { toMark, toPrune, nextStatusByWorkerId };
 }
 
-function toWorkerAttentionRecord(raw: unknown): WorkerAttentionRecord | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const item = raw as Record<string, unknown>;
-  const workerId = item.id;
-  const leadSessionId = item.leadSessionId;
-  const status = item.status;
-  if (
-    typeof workerId !== 'string' ||
-    typeof leadSessionId !== 'string' ||
-    (status !== 'idle' && status !== 'running' && status !== 'done' && status !== 'error')
-  ) {
-    return null;
-  }
-  return {
-    workerId,
-    leadSessionId,
-    status,
-    focused: item.focused === true,
-  };
-}
-
-export function useOrcaWorkerAttentionWatcher(
-  sessions: readonly Session[],
+export function useOrcaWorkerAttentionByLeadIds(
+  rawLeadSessionIds: readonly string[],
   activeSessionId: string | undefined,
 ): void {
+  const leadSessionKey = [...new Set(rawLeadSessionIds)].join('\0');
   const leadSessionIds = useMemo(
-    () => sessions.filter(isOrcaLeadSession).map((s) => s.id),
-    [sessions],
+    () => (leadSessionKey ? leadSessionKey.split('\0') : []),
+    [leadSessionKey],
   );
-  const leadSessionKey = useMemo(
-    () => leadSessionIds.join('\0'),
-    [leadSessionIds],
-  );
+  useWorkerProjectionOwners(leadSessionIds);
+  const projectionVersion = useWorkerProjectionVersion();
   const prevStatusByWorkerIdRef = useRef<Map<string, OrcaWorkerStatus>>(new Map());
-  const refreshGenerationRef = useRef(0);
-  const appliedRefreshGenerationRef = useRef(0);
 
   useEffect(() => {
     if (leadSessionIds.length === 0) {
@@ -96,48 +77,33 @@ export function useOrcaWorkerAttentionWatcher(
       return;
     }
 
-    let cancelled = false;
-    const leadSessionIdSet = new Set(leadSessionIds);
-    const refresh = () => {
-      const generation = ++refreshGenerationRef.current;
-      void Promise.all(
-        leadSessionIds.map(async (leadSessionId) => {
-          const workers = await window.electronAPI.localDb.orcaWorkflows
-            .listWorkersByLead(leadSessionId)
-            .catch(() => []);
-          return workers;
-        }),
-      ).then((entries) => {
-        if (cancelled || generation < appliedRefreshGenerationRef.current) return;
-        const currentWorkers = entries
-          .flat()
-          .map(toWorkerAttentionRecord)
-          .filter((worker): worker is WorkerAttentionRecord => worker !== null);
-        const updates = computeWorkerAttentionUpdates(
-          prevStatusByWorkerIdRef.current,
-          currentWorkers,
-          activeSessionId,
-        );
-        for (const workerId of updates.toMark) markWorkerAttention(workerId);
-        clearWorkerAttentionMany(updates.toPrune);
-        prevStatusByWorkerIdRef.current = updates.nextStatusByWorkerId;
-        appliedRefreshGenerationRef.current = generation;
-      });
-    };
-    refresh();
-
-    const unsubscribe = window.electronAPI.localDb.orcaWorkflows.onOrcaWorkerChanged?.(
-      (payload: unknown) => {
-        const p = payload as { leadSessionId?: unknown };
-        if (typeof p.leadSessionId === 'string' && leadSessionIdSet.has(p.leadSessionId)) {
-          refresh();
-        }
-      },
+    const currentWorkers = leadSessionIds
+      .flatMap((leadSessionId) =>
+        getWorkerProjectionSnapshot(leadSessionId).workers.map((worker): WorkerAttentionRecord => ({
+          workerId: worker.workerId,
+          leadSessionId,
+          status: worker.status,
+          focused: worker.focused,
+        })),
+      );
+    const updates = computeWorkerAttentionUpdates(
+      prevStatusByWorkerIdRef.current,
+      currentWorkers,
+      activeSessionId,
     );
+    for (const workerId of updates.toMark) markWorkerAttention(workerId);
+    clearWorkerAttentionMany(updates.toPrune);
+    prevStatusByWorkerIdRef.current = updates.nextStatusByWorkerId;
+  }, [activeSessionId, leadSessionKey, projectionVersion]);
+}
 
-    return () => {
-      cancelled = true;
-      unsubscribe?.();
-    };
-  }, [activeSessionId, leadSessionKey]);
+export function useOrcaWorkerAttentionWatcher(
+  sessions: readonly Session[],
+  activeSessionId: string | undefined,
+): void {
+  const leadSessionIds = useMemo(
+    () => sessions.filter(isOrcaLeadSession).map((session) => session.id),
+    [sessions],
+  );
+  useOrcaWorkerAttentionByLeadIds(leadSessionIds, activeSessionId);
 }

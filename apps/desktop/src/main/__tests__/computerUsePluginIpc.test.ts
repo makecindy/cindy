@@ -113,6 +113,28 @@ describe('computer use plugin IPC invariants', () => {
     );
   });
 
+  it('keeps the @ desktop-window gate machine-scoped', () => {
+    const registerSource = fs.readFileSync(
+      path.resolve(__dirname, '../maker-ipc/register.ts'),
+      'utf-8',
+    );
+    const handlerStart = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.AT_CONTEXT_LIST',
+    );
+    const handlerEnd = registerSource.indexOf(
+      'ipcMain.handle(MAKER_INVOKE.LIST_CUSTOMIZATIONS',
+      handlerStart,
+    );
+    const handlerBody = registerSource.slice(handlerStart, handlerEnd);
+
+    expect(handlerStart).toBeGreaterThanOrEqual(0);
+    expect(handlerEnd).toBeGreaterThan(handlerStart);
+    expect(handlerBody).toContain("getPluginRegistry().isEnabled('computer')");
+    expect(handlerBody).not.toContain(
+      "getPluginRegistry().isEnabled('computer', request.workingDir)",
+    );
+  });
+
   it('revalidates Computer Use guide requests at the Main IPC boundary', () => {
     const registerSource = fs.readFileSync(
       path.resolve(__dirname, '../maker-ipc/register.ts'),

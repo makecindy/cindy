@@ -1121,6 +1121,24 @@ interface ElectronAPI {
      * 引导去配置。未装 NOT_FOUND。
      */
     setupStatus: (id: string) => Promise<import('../shared/ghost').GhostSetupStatus>;
+    /** 只列入口元数据，不运行插件工具；远程/device-link 不暴露。 */
+    listAtResourceProviders: (params: { sessionId?: string; workingDir?: string }) => Promise<{
+      items: Array<{ ghostId: string; name: string; description?: string }>;
+    }>;
+    /** 用户选定一个入口后，按固定只读摘要契约搜索该插件。 */
+    queryAtResources: (params: {
+      ghostId: string;
+      sessionId?: string;
+      workingDir?: string;
+      query?: string;
+      limit?: number;
+    }) => Promise<{
+      success: boolean;
+      error?: string;
+      pluginName?: string;
+      items: Array<{ id: string; label: string; description?: string; href: string }>;
+      truncated: boolean;
+    }>;
     /** 最近使用顺序变化（发送 /卸载），多窗口同步。 */
     onRecentUsageChanged: (
       callback: (payload: { ids: string[] }) => void,
@@ -3773,6 +3791,7 @@ interface ElectronAPI {
       getByLeadSession: (leadSessionId: string) => Promise<OrcaTeamRecord | null>;
       getByWorkerSession: (workerSessionId: string) => Promise<OrcaTeamRecord | null>;
       listWorkersByLead: (leadSessionId: string) => Promise<OrcaWorkerRecord[]>;
+      listWorkersByLeads?: (leadSessionIds: string[]) => Promise<Record<string, OrcaWorkerRecord[]>>;
       updateWorkerStatus: (
         workerId: string,
         status: 'idle' | 'running' | 'done' | 'error',
@@ -3969,6 +3988,12 @@ interface ElectronAPI {
     }) => Promise<{
       success: boolean;
       path: string | null;
+    }>;
+    /** 打开 @ 资源系统选择器；macOS 可选文件或目录，Windows/Linux 选择文件。 */
+    showOpenResource: (params?: { defaultPath?: string }) => Promise<{
+      success: true;
+      path: string | null;
+      kind: 'file' | 'directory' | null;
     }>;
   };
 
@@ -4278,6 +4303,22 @@ interface ElectronAPI {
         | { type: 'agent'; name: string; relPath: string; description?: string }
       >;
       truncated?: boolean;
+    }>;
+    listAtContext: (params: {
+      sessionId?: string;
+      workingDir?: string;
+      query?: string;
+      limit?: number;
+    }) => Promise<{
+      success: true;
+      browserTabs: Array<{ tabId: string; title: string; url: string }>;
+      desktopWindows: Array<{
+        windowId: number;
+        pid: number;
+        appName: string;
+        title: string;
+      }>;
+      unavailable: Array<'browser-tabs' | 'desktop-windows'>;
     }>;
 
     createSession: (opts: {

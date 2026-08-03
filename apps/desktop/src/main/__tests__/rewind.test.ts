@@ -32,10 +32,14 @@ const commitRewindFilesMock = vi.fn();
 const isTurnRunningMock = vi.fn(() => false);
 const recomputePrRefsForSessionMock = vi.fn();
 const executeCodexFileRewindPlanWithThreadRollbackMock = vi.fn();
+const executeCodexFileRestorePlanWithThreadRollbackMock = vi.fn();
 const detectCwdMock = vi.fn();
 const getHeadMock = vi.fn();
 const getCurrentBranchMock = vi.fn();
 const listSnapshotsMock = vi.fn();
+const listShadowSavepointsMock = vi.fn();
+const listUnprotectedPathsMock = vi.fn();
+const writeWorktreeTreeForPathsMock = vi.fn();
 const gitExecMock = vi.fn();
 
 type FakeSession = {
@@ -90,6 +94,10 @@ vi.mock('../git-snapshot/codexFileRewindExecutor', () => ({
   executeCodexFileRewindPlanWithThreadRollback: executeCodexFileRewindPlanWithThreadRollbackMock,
 }));
 
+vi.mock('../git-snapshot/codexFileRestoreExecutor', () => ({
+  executeCodexFileRestorePlanWithThreadRollback: executeCodexFileRestorePlanWithThreadRollbackMock,
+}));
+
 vi.mock('../worktree/WorktreeManager.js', () => ({
   detectCwd: detectCwdMock,
 }));
@@ -98,6 +106,17 @@ vi.mock('../git-snapshot/gitSnapshotService', () => ({
   getHead: getHeadMock,
   getCurrentBranch: getCurrentBranchMock,
   listSnapshots: listSnapshotsMock,
+  // 真实实现返回 { entries, truncated };mock 站点允许直接给数组(默认不截断),
+  // 截断用例返回完整对象。
+  listShadowSavepoints: async (...args: unknown[]) => {
+    const value = await listShadowSavepointsMock(...args);
+    return Array.isArray(value) ? { entries: value, truncated: false } : value;
+  },
+  listUnprotectedPaths: listUnprotectedPathsMock,
+  writeWorktreeTreeForPaths: writeWorktreeTreeForPathsMock,
+  // 单测里不需要真实拆块: preview 的 pathspec 数量远小于命令行上限。
+  chunkPathspecArgs: (pathspecs: readonly string[]) =>
+    pathspecs.length > 0 ? [Array.from(pathspecs)] : [],
 }));
 
 vi.mock('../worktree/gitExec', () => ({ gitExec: gitExecMock }));
@@ -168,6 +187,17 @@ beforeEach(async () => {
       threadRollback: await hooks.commitThreadRollback(null),
     }),
   );
+  executeCodexFileRestorePlanWithThreadRollbackMock.mockReset();
+  executeCodexFileRestorePlanWithThreadRollbackMock.mockImplementation(
+    async (
+      _plan: unknown,
+      _sessionId: string,
+      hooks: { commitThreadRollback: (execution: unknown) => Promise<unknown> },
+    ) => ({
+      fileRestore: null,
+      threadRollback: await hooks.commitThreadRollback(null),
+    }),
+  );
   detectCwdMock.mockReset();
   detectCwdMock.mockResolvedValue({ gitInstalled: true, isGitRepo: false, isInsideWorktree: false });
   getHeadMock.mockReset();
@@ -176,6 +206,11 @@ beforeEach(async () => {
   getCurrentBranchMock.mockResolvedValue('main');
   listSnapshotsMock.mockReset();
   listSnapshotsMock.mockResolvedValue([]);
+  listShadowSavepointsMock.mockReset();
+  listShadowSavepointsMock.mockResolvedValue([]);
+  listUnprotectedPathsMock.mockReset();
+  listUnprotectedPathsMock.mockResolvedValue([]);
+  writeWorktreeTreeForPathsMock.mockReset();
   gitExecMock.mockReset();
   recomputePrRefsForSessionMock.mockReset();
   recomputePrRefsForSessionMock.mockResolvedValue(undefined);
@@ -881,14 +916,93 @@ describe('commitRewindAtMessage', () => {
     expect(result.id).toBe('sess-1');
   });
 
-  it('Codex: previews file rewind savepoints before commit', async () => {
+  it('Codex: previews file rewind savepoints before commit (legacy numstat 方向对调)', async () => {
     useFakeSession('codex');
     detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
-    listSnapshotsMock.mockResolvedValueOnce([{ commit: 'sp1', sessionId: 'sess-1', kind: 'after-edit', branch: 'main', parentCount: 1, anchor: 'client-id' }]);
+    listSnapshotsMock.mockResolvedValueOnce([{ commit: 'sp1', sessionId: 'sess-1', kind: 'after-edit', source: 'legacy-xdt', branch: 'main', parentCount: 1, anchor: 'client-id' }]);
     gitExecMock.mockResolvedValueOnce({ stdout: '3\t1\tsrc/a.ts\n-\t-\tbin.dat\n', stderr: '' });
     selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
 
+    // legacy revert 预览: numstat 是正向 diff, 回退方向的 insertions/deletions 要对调。
     await expect(previewRewindAtMessage('sess-1', 'client-id')).resolves.toEqual({ canRewind: true, filesChanged: ['src/a.ts', 'bin.dat'], insertions: 1, deletions: 3 });
+    expect(listShadowSavepointsMock).toHaveBeenCalledWith('/repo', 'sess-1');
+  });
+
+  it('Codex: previews shadow file-restore plan (numstat 不对调, untracked 新建文件删除计入)', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1',
+        sessionId: 'sess-1',
+        kind: 'after-edit',
+        source: 'cindy',
+        parentCount: 1,
+        anchor: 'client-id',
+        baselineCommit: 'base1',
+        label: '本轮修改',
+        time: '2026-08-04T00:00:00+08:00',
+      },
+    ]);
+    writeWorktreeTreeForPathsMock.mockResolvedValueOnce('wtree-sha');
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (args.includes('--name-only')) {
+        // affected = diff(baselineCommit, after-edit commit)
+        expect(Array.from(args)).toEqual(['diff', '--name-only', '--no-renames', '-z', 'base1', 'sc1']);
+        return { stdout: ['src/a.ts', 'new-file.txt', ''].join('\0'), stderr: '' };
+      }
+      // W 树 → 基线树, 方向即回退方向。new-file.txt 是本轮新建的 untracked 文件:
+      // 基线里不存在 → 记 5 行删除。
+      expect(Array.from(args)).toEqual([
+        'diff', '--numstat', '--no-renames', '-z', 'wtree-sha', 'base1', '--',
+        ':(literal)src/a.ts', ':(literal)new-file.txt',
+      ]);
+      return { stdout: ['2\t7\tsrc/a.ts', '0\t5\tnew-file.txt', ''].join('\0'), stderr: '' };
+    });
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+
+    // 数字不对调: insertions=Σadded, deletions=Σdeleted (含 untracked 新建文件的 5 行删除)。
+    await expect(previewRewindAtMessage('sess-1', 'client-id')).resolves.toEqual({
+      canRewind: true,
+      filesChanged: ['src/a.ts', 'new-file.txt'],
+      insertions: 2,
+      deletions: 12,
+    });
+    expect(writeWorktreeTreeForPathsMock).toHaveBeenCalledWith('/repo', ['src/a.ts', 'new-file.txt']);
+    expect(gitExecMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('Codex: preview refuses file-restore when affected files are currently filtered', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1',
+        sessionId: 'sess-1',
+        kind: 'after-edit',
+        source: 'cindy',
+        parentCount: 1,
+        anchor: 'client-id',
+        baselineCommit: 'base1',
+        time: '2026-08-04T00:00:00+08:00',
+      },
+    ]);
+    gitExecMock.mockImplementation(async (args: readonly string[]) => {
+      if (args.includes('--name-only')) {
+        return { stdout: ['big.bin', ''].join('\0'), stderr: '' };
+      }
+      throw new Error(`unexpected git call: ${args.join(' ')}`);
+    });
+    // 受影响文件当前处于安全过滤范围:预览必须拒绝,且不把字节写进对象库。
+    listUnprotectedPathsMock.mockResolvedValueOnce(['big.bin']);
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })]);
+
+    const preview = await previewRewindAtMessage('sess-1', 'client-id');
+
+    expect(preview.canRewind).toBe(false);
+    expect(preview.error).toContain('big.bin');
+    expect(listUnprotectedPathsMock).toHaveBeenCalledWith('/repo', ['big.bin']);
+    expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
   });
 
   it('Codex: treats unborn Git histories as no-savepoints conversation-only rewind', async () => {
@@ -906,7 +1020,43 @@ describe('commitRewindAtMessage', () => {
       'sess-1',
       expect.objectContaining({ commitThreadRollback: expect.any(Function) }),
     );
+    // conversation-only 不进 restore 执行器, 也不动任何文件相关 git 操作。
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
+  it('Codex commit: shadow 链被截断 → 降级 conversation-only(不做部分文件回退)', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    // 截断窗口内仍能看到可入选的 after-edit,但历史不完整 → 不得据此部分回退。
+    listShadowSavepointsMock.mockResolvedValueOnce({
+      entries: [
+        {
+          commit: 'sc1',
+          sessionId: 'sess-1',
+          kind: 'after-edit',
+          source: 'cindy',
+          parentCount: 1,
+          anchor: 'client-id',
+          baselineCommit: 'base1',
+          label: '本轮修改',
+          time: '2026-08-04T00:00:00+08:00',
+        },
+      ],
+      truncated: true,
+    });
+    selectQueue.push([makeUserMessageRow({ agentMeta: null })], [], [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })], [makeSessionRow({ agentKind: 'codex' })]);
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(executeCodexFileRewindPlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'conversation-only', fallbackReason: 'savepoint-history-truncated' }),
+      'sess-1',
+      expect.objectContaining({ commitThreadRollback: expect.any(Function) }),
+    );
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(writeWorktreeTreeForPathsMock).not.toHaveBeenCalled();
   });
 
   it('Codex: waits for pending snapshot writes before reading savepoints', async () => {
@@ -972,6 +1122,108 @@ describe('commitRewindAtMessage', () => {
     );
     expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
   });
+
+  it('Codex commit: shadow file-restore 计划分发给 restore 执行器', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1',
+        sessionId: 'sess-1',
+        kind: 'after-edit',
+        source: 'cindy',
+        parentCount: 1,
+        anchor: 'client-id',
+        baselineCommit: 'base1',
+        label: '本轮修改',
+        time: '2026-08-04T00:00:00+08:00',
+      },
+    ]);
+    commitRewindFilesMock.mockResolvedValueOnce({ sdkSessionId: 'restore-thread-id' });
+    selectQueue.push(
+      [makeUserMessageRow({ agentMeta: null })],
+      [], // agent_switch 边界守卫:无边界
+      [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+      [makeSessionRow({ agentKind: 'codex' })],
+    );
+
+    const result = await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).toHaveBeenCalledTimes(1);
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'file-restore',
+        repoRoot: '/repo',
+        baselineCommit: 'base1',
+        restoreCommitsNewestFirst: [
+          { commit: 'sc1', baselineCommit: 'base1', anchor: 'client-id', label: '本轮修改' },
+        ],
+      }),
+      'sess-1',
+      expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
+    );
+    expect(executeCodexFileRewindPlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    const txCall = txCalls.find((c) => c.name === 'rewind.commit');
+    if (!txCall) throw new Error('缺少 rewind.commit tx 调用');
+    expect(txCall.args).toMatchObject({ sdkSessionId: 'restore-thread-id' });
+    expect(result.id).toBe('sess-1');
+  });
+
+  it('Codex commit: legacy file-rewind 计划仍分发给 revert 执行器', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listSnapshotsMock.mockResolvedValueOnce([
+      { commit: 'sp1', sessionId: 'sess-1', kind: 'after-edit', source: 'legacy-xdt', branch: 'main', parentCount: 1, anchor: 'client-id' },
+    ]);
+    selectQueue.push(
+      [makeUserMessageRow({ agentMeta: null })],
+      [], // agent_switch 边界守卫:无边界
+      [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+      [makeSessionRow({ agentKind: 'codex' })],
+    );
+
+    await commitRewindAtMessage('sess-1', 'client-id');
+
+    expect(executeCodexFileRewindPlanWithThreadRollbackMock).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: 'file-rewind', revertCommitsNewestFirst: ['sp1'] }),
+      'sess-1',
+      expect.objectContaining({ commitThreadRollback: expect.any(Function), onCompensationError: expect.any(Function) }),
+    );
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).not.toHaveBeenCalled();
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+  });
+
+  it('Codex commit: restore 执行器内 thread rollback 失败 → 错误传播, DB 事务不执行', async () => {
+    useFakeSession('codex');
+    detectCwdMock.mockResolvedValueOnce({ gitInstalled: true, isGitRepo: true, repoRoot: '/repo', isInsideWorktree: false });
+    listShadowSavepointsMock.mockResolvedValueOnce([
+      {
+        commit: 'sc1',
+        sessionId: 'sess-1',
+        kind: 'after-edit',
+        source: 'cindy',
+        parentCount: 1,
+        anchor: 'client-id',
+        baselineCommit: 'base1',
+        label: '本轮修改',
+        time: '2026-08-04T00:00:00+08:00',
+      },
+    ]);
+    commitRewindFilesMock.mockRejectedValueOnce(new Error('thread rollback failed'));
+    selectQueue.push(
+      [makeUserMessageRow({ agentMeta: null })],
+      [], // agent_switch 边界守卫:无边界
+      [makeUserMessageRow({ clientId: 'client-id', createdAt: 3000 })],
+    );
+
+    await expect(commitRewindAtMessage('sess-1', 'client-id')).rejects.toThrow('thread rollback failed');
+
+    expect(executeCodexFileRestorePlanWithThreadRollbackMock).toHaveBeenCalledTimes(1);
+    expect(commitRewindFilesMock).toHaveBeenCalledWith('', '', { tailTurnsToDrop: 1 });
+    expect(txCalls).toHaveLength(0);
+  });
+
   it('目标在 agent_switch 边界之前 → REWIND_UNSUPPORTED_HISTORY,SDK 与 DB 均未执行', async () => {
     selectQueue.push([makeUserMessageRow()]);   // target user msg
     selectQueue.push([{ rowid: 11 }]);   // agent_switch 边界守卫:同毫秒也按插入顺序识别

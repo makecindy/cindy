@@ -92,6 +92,7 @@ vi.mock('electron', () => ({
 vi.mock('@cindy/maker-core', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@cindy/maker-core')>();
   return {
+    isAutoReviewUnavailableNotice: actual.isAutoReviewUnavailableNotice,
     isTerminalAgentErrorEvent: actual.isTerminalAgentErrorEvent,
     parseOverloadError: actual.parseOverloadError,
     parseOverloadRetryProgress: actual.parseOverloadRetryProgress,
@@ -1610,6 +1611,233 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       ),
     };
   }
+
+  it('等授权期间过程区挂一行状态, 决策回流后摘掉', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const cards: Array<{ interactionId: string }> = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: (card: { interactionId: string }) => void cards.push(card),
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const decisionPromise = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-notice',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(cards).toHaveLength(1);
+      // 卡片发出的同时过程区出现状态行: 挂起期间没有任何 agent 事件, 渠道那条消息会
+      // 彻底静止, 而卡片可能根本不在这个会话里(群里的授权卡改投宿主私聊)。
+      // 它只改已经在发的那条快照, 不新增任何渠道消息。
+      // **文案按交互类型分**: 这是问答, 说"等待授权"就把它说成了权限请求。
+      expect(emitted.at(-1)).toContain('等待回答');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-notice', 'ask:0')).toBe(true);
+      await decisionPromise;
+      // 授权通过、agent 继续干活: 后续快照不得再带那行状态(否则它会一直挂在过程区
+      // 顶上, 与 review #844 里"重试提示留在终稿正上方"是同一个坑)。
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-1', toolName: 'Read', input: { file_path: '/tmp/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 a.ts');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('过程区状态行按交互类型分: 授权/问答/计划审阅各自措辞', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const [request, expected] of [
+        [
+          {
+            kind: 'permission' as const,
+            requestId: 'int-perm',
+            toolName: 'file_change',
+            input: {},
+          },
+          '等待授权',
+        ],
+        [
+          {
+            kind: 'plan_review' as const,
+            requestId: 'int-plan',
+            plan: '第一步…',
+          },
+          '等待审阅',
+        ],
+      ] as const) {
+        fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+          makeInteractiveSession(opts.id ?? 'sess-x'),
+        );
+        const emitted: string[] = [];
+        const runner = createMakerHookSessionRunner({ log });
+        const p = runner.run(
+          baseReq({
+            onProgress: (t: string) => emitted.push(t),
+            onInteraction: () => {},
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const listener = h.interactionListeners.get('sess-new')!;
+        void listener(request as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitted.at(-1)).toContain(expected);
+        h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+        await p.catch(() => undefined);
+      }
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('待决交互期间的正常进展事件不得抹掉等待提示', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      const listener = h.interactionListeners.get('sess-new')!;
+      const pending = listener({
+        kind: 'permission',
+        requestId: 'int-progress',
+        toolName: 'file_change',
+        input: {},
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      // 挂起期间 agent 的其它子任务照样吐事件。这些走的是 clearNotice ——
+      // 若等待提示与瞬态 notice 共用一个字段, 每一条都会把它抹掉, 于是剩下的
+      // 授权最长要等 30 分钟而过程区一个字都不提。
+      const emit = h.eventCbs.get('sess-new')!;
+      emit({ type: 'thinking', data: { blockId: 'b1', text: '再查一处引用' } });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      emit({
+        type: 'tool_use',
+        data: { toolUseId: 'bg-1', toolName: 'Read', input: { file_path: '/tmp/bg.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 bg.ts');
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      emit({ type: 'text', data: { text: '我先读了这个文件' } });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      // 收口后才摘掉
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-progress', 'perm:allow')).toBe(true);
+      await pending;
+      emit({
+        type: 'tool_use',
+        data: { toolUseId: 'bg-2', toolName: 'Read', input: { file_path: '/tmp/after.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 after.ts');
+      expect(emitted.at(-1)).not.toContain('等待授权');
+
+      emit({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('并发交互: 其中一个收口不摘掉状态行, 最后一个结束才摘', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // agent 并行发起两个交互: 各自独立挂起, 共用过程区那一行状态。**两者措辞不同**,
+      // 这样"回落到仍在等的那条"表现为文字变化 —— 用 tool_use 逼快照反而不行:
+      // 真实进展本身就会作废状态行(clearNotice), 那条断言对两种实现都成立。
+      const listener = h.interactionListeners.get('sess-new')!;
+      const first = listener({
+        kind: 'permission',
+        requestId: 'int-par-1',
+        toolName: 'file_change',
+        input: {},
+      });
+      const second = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-par-2',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 挂起时新卡片覆盖状态行 —— 最新那条(问答)在上。
+      expect(emitted.at(-1)).toContain('等待回答');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-par-2', 'ask:0')).toBe(true);
+      await second;
+      await vi.advanceTimersByTimeAsync(1500);
+      // 权限请求还在等 —— 状态行必须回落到它, 不能整行摘掉: 摘了群里的进度消息又变回
+      // 静止, 而剩下那个交互最长要等 30 分钟。
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      expect(resolveHookInteraction('int-par-1', 'perm:allow')).toBe(true);
+      await first;
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-par', toolName: 'Read', input: { file_path: '/tmp/b.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 b.ts');
+      expect(emitted.at(-1)).not.toContain('等待');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 
   it('ask 请求 -> 中央 Router 发卡 -> 按钮决策回流 resolve; 收口后释放 route', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>

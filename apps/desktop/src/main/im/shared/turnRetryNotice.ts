@@ -17,8 +17,8 @@
  * currentTurnProducedOutput 守卫), 于是那段退避窗口(交互式约 22-38s)里过程区
  * 与正文都是空的, 渠道那条占位消息一个字都不变 —— 用户看到的就是"卡死了"。
  *
- * 只认已有本地化契约的过载与终态 429 外层重投；其它非终止 error(普通 429 /
- * 5xx / 网络重连等)保持既有静默行为:
+ * 只认已有本地化契约的过载、终态 429 外层重投与 Auto 档审阅器不可用；其它非终止
+ * error(普通 429 / 5xx / 网络重连等)保持既有静默行为:
  * 它们的 message 是内部英文串, 渠道侧没有对应的中文表达, 贸然透出等于把裸英文
  * 推给用户(这也是 maker-core 侧 claude translator 只透过载类的同一条理由)。
  * 将来要放开某一类, 在这里按 kind 补一条文案即可, 不要直接外发原文。
@@ -29,10 +29,27 @@
  */
 
 import {
+  isAutoReviewUnavailableNotice,
   parseOverloadError,
   parseOverloadRetryProgress,
   parseTerminalRateLimitRetryProgress,
 } from '@cindy/maker-core';
+
+/**
+ * Auto 档「自动审批不可用」-> 渠道说明。
+ *
+ * 这不是自动重试,但同样是**非终止** error 携带的会话级状态,渠道侧此前对非终止 error
+ * 一律静默 —— 于是 Slack / Telegram 上的用户只会看到工具一个接一个被拒、没有任何原因
+ * (codex P1 of #1574)。它有明确的用户动作可给(切到默认权限自己确认),所以必须透出。
+ *
+ * 判据走 maker-core 的单点函数,不在这里匹配英文原文或自己拼 `[CODE]` 前缀;文案硬编码
+ * 中文、不进 renderer locale(与本文件其它渠道文案同规)。
+ */
+function autoReviewUnavailableNotice(message: string): string | null {
+  return isAutoReviewUnavailableNotice(message)
+    ? '自动审批暂时不可用，需要审批的操作会被拒绝。想自己确认这些操作，可以把这个任务切到「默认权限」。'
+    : null;
+}
 
 /** 已知的非终止自动重试事件 -> 渠道侧本地化进度；其它错误保持静默。 */
 export function turnRetryNotice(data: unknown): string | null {
@@ -40,6 +57,8 @@ export function turnRetryNotice(data: unknown): string | null {
   const record = data as { message?: unknown; reason?: unknown };
   const message = typeof record.message === 'string' ? record.message : '';
   const reason = typeof record.reason === 'string' ? record.reason : undefined;
+  const autoReviewNotice = autoReviewUnavailableNotice(message);
+  if (autoReviewNotice) return autoReviewNotice;
   const rateLimitProgress = parseTerminalRateLimitRetryProgress(message, reason);
   if (rateLimitProgress) {
     return `请求受到限流，正在自动重试（${rateLimitProgress.attempt}/${rateLimitProgress.maxAttempts}）…`;

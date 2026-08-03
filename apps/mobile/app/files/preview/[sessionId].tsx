@@ -9,6 +9,8 @@
  * 切换文件通过 Done 返回列表完成。
  * 文本 = readFile(acceptGzip,pako 解码)+ 行号列表;图片 = 缩略图立即显示,
  * OSS 导出原图就绪后无缝换源(不出 loading 态,规则 7);其它 = 占位 + 下载。
+ * markdown 与 HTML 额外有「渲染 / 源码」双态,默认渲染:两者都只用已读到的那份文本
+ * (不为渲染多走一遍 OSS 导出),载体分别是 MarkdownFileReader 与 HtmlFileReader。
  *
  * absPath 单文件模式(route 参 absPath,与 relPath 互斥):聊天 chip 指向
  * workdir 外文件时进入。file-browser 的 relPath 通道(listDir / readFile /
@@ -17,7 +19,7 @@
  * (fetchRemoteAbsFileToUrl);无同目录翻页、无缩略图(直接取原图)。
  */
 import * as Clipboard from 'expo-clipboard';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useIsFocused, useLocalSearchParams, useRouter } from 'expo-router';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { ArrowDownToLine, Copy, Database, File as FileIcon, Info, MessageSquarePlus, Share as ShareIcon } from 'lucide-react-native';
@@ -44,11 +46,12 @@ import { useMobileMakerTransport } from '@/device-link/useMobileMakerTransport';
 import type { FileBrowserReadFileResult, MobileMakerTransport } from '@/device-link/mobileMakerTransport';
 import { isAbsolutePathShape, pathDisplayName } from '@/session/chatPathCandidate';
 import { adaptTextFilePreviewResult, fetchRemoteAbsFileToUrl } from '@/session/remoteAbsFileFetch';
-import { formatByteSize } from '@/session/filePreview';
+import { formatByteSize, isHtmlFilePreviewCandidate } from '@/session/filePreview';
 import { decodeGzipBase64Text, mergePathIntoComposerDraft, shareMimeForFileName } from '@/session/fileBrowserActions';
 import { appendQuote, truncateQuoteText } from '@/session/chatQuoteStore';
 import { getCachedPreviewText, storeCachedPreviewText } from '@/session/fileBrowserCache';
 import { exportRemoteFileToUrl } from '@/session/fileBrowserExport';
+import { HtmlFileReader } from '@/session/HtmlFileReader';
 import { MarkdownFileReader } from '@/session/MarkdownFileReader';
 import { RemoteMediaPlayerWebView } from '@/session/mediaPlayerWebView';
 import {
@@ -77,14 +80,39 @@ type TextPreviewState =
   | { status: 'ready'; lines: string[]; truncated: boolean; totalLines: number; content?: string }
   | { status: 'unavailable'; reason: string; oversize?: boolean };
 
-function isMarkdownFile(name: string): boolean {
-  return /\.(md|mdx|markdown)$/i.test(name);
+/**
+ * 「渲染态」可用的两类文本:markdown 与 HTML。两者共用同一套双态机(下面
+ * TextPreviewPage 的 richView),差别只在渲染载体 —— markdown 经 buildSelectableMarkdownHtml
+ * 转成我们自己的 HTML,HTML 生成物则原样进 WebView。
+ */
+type RichTextKind = 'markdown' | 'html';
+
+/**
+ * **入参必须是 `item.relPath`(真实路径),不能是 `item.name`(展示名)。**
+ *
+ * 这两个字段在 absPath 单文件模式下不等价(review P1,尾随反斜杠第三轮):`absPathItem`
+ * 的 name 走 `pathDisplayName`,它 `split(/[\\/]/).filter(Boolean)` —— 把 `\` 一律当分隔符、
+ * 再丢掉空段。于是 macOS / Linux 上合法的 `report.html\` 被削成 `report.html`,
+ * 一个**不以 HTML 扩展名结尾**的文件就此冒充 HTML 进可执行 WebView。
+ *
+ * 上一轮修的是判定函数**内部**(`isHtmlFilePreviewCandidate` 改用不削尾的 basename),
+ * 但调用方在传参之前就已经把那个字符做掉了 —— 函数再严也拿不回丢掉的信息。
+ * `relPath` 两种模式下都是未归一化的真实路径(浏览器模式=被控端 `fs:list` 的原值,
+ * absPath 模式=原始绝对路径),所以判定一律以它为输入。
+ *
+ * `pathDisplayName` 本身不改:它是**展示**函数(`/a/b/` 显示 `b` 是对的),
+ * 问题从来不是它归一化,而是它的输出被当成了语义值。
+ */
+function richTextKindOf(pathOrName: string): RichTextKind | null {
+  if (/\.(md|mdx|markdown)$/i.test(pathOrName)) return 'markdown';
+  if (isHtmlFilePreviewCandidate(pathOrName)) return 'html';
+  return null;
 }
 
-/** 音视频类型(复用消息里的 RemoteMediaPlayerWebView 播放器)。 */
-function avKindFor(name: string): 'video' | 'audio' | null {
-  if (/\.(mp4|mov|m4v|webm)$/i.test(name)) return 'video';
-  if (/\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(name)) return 'audio';
+/** 音视频类型(复用消息里的 RemoteMediaPlayerWebView 播放器)。同上:吃 relPath 不吃 name。 */
+function avKindFor(pathOrName: string): 'video' | 'audio' | null {
+  if (/\.(mp4|mov|m4v|webm)$/i.test(pathOrName)) return 'video';
+  if (/\.(mp3|m4a|wav|aac|ogg|flac)$/i.test(pathOrName)) return 'audio';
   return null;
 }
 
@@ -127,11 +155,23 @@ export default function RemoteFilePreviewScreen() {
 
   const [siblings, setSiblings] = useState<FileBrowserGridItem[] | null>(null);
   const [pageIndex, setPageIndex] = useState(0);
+  // 屏级焦点(HTML 可执行 WebView 的挂载门之一,见 renderItem 的 visible)。
+  // 本屏被压栈(点「发送到会话」→ router.navigate 把会话页推到根 Stack 上)时
+  // 路由仍挂载、pageIndex 也不变,只有 focus 会翻。
+  const screenFocused = useIsFocused();
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const noticeTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // 当前页是否处在「HTML 渲染态」——外层横滑要为它让路(见 pager 的 scrollEnabled)。
+  // 渲染 / 源码的切换状态在子页里,所以由子页按页 key 上报;setter 用 key 比对而不是
+  // 直接存布尔,避免翻页时「旧页报 false」与「新页报 true」的先后顺序决定结果。
+  const [htmlPanPageKey, setHtmlPanPageKey] = useState<string | null>(null);
+  const reportHtmlPan = useCallback((key: string, wants: boolean) => {
+    setHtmlPanPageKey((prev) => (wants ? key : (prev === key ? null : prev)));
+  }, []);
 
   const showNotice = useCallback((text: string) => {
     setNotice(text);
@@ -425,6 +465,16 @@ export default function RemoteFilePreviewScreen() {
           <View style={{ width: pageWidth }}>
             <FilePreviewPage
               active={Math.abs(index - pageIndex) <= 1}
+              // HTML 渲染态只在真正可见的当前页挂载可执行 WebView(review P1):
+              // active 含相邻页(文本预取要它),但相邻页提前挂 WebView 会让用户还没
+              // 滑到的文件里的脚本 / 计时器 / 网络请求先跑起来,滑走后还继续跑。
+              //
+              // **屏级焦点也是门的一部分**(review P1 第二轮):本屏被压栈时(从深链进
+              // 预览再点「发送到会话」,router.navigate 把会话页推到根 Stack 上)路由默认
+              // 仍挂载、pageIndex 也不变 —— 只看 pageIndex 的话 WebView 会在用户已经回到
+              // 对话界面之后继续跑脚本。screenFocused 翻假即卸载。
+              visible={screenFocused && index === pageIndex}
+              onHtmlPanChange={reportHtmlPan}
               exportToUrl={exportToUrl}
               item={item}
               maker={maker}
@@ -455,7 +505,12 @@ export default function RemoteFilePreviewScreen() {
             />
           </View>
         )}
-        scrollEnabled={current.previewKind !== 'pdf'}
+        // PDF 与「HTML 渲染态」都要把水平拖动完整留给内层 WebView(review P2):
+        // 固定宽度布局或用户放大后需要横向平移,外层 pager 会抢走手势并切到相邻文件,
+        // 超出视口的内容永远看不到。手势仲裁(区分内层平移与翻页)在 RN 上要自己写一套
+        // 竞态裁决,属独立改动;这里沿用本文件对 PDF 已经采用的同一口径 —— 想翻页就切到
+        // 「源码」态(源码是竖向列表,不冲突),或 Done 返回列表。
+        scrollEnabled={current.previewKind !== 'pdf' && htmlPanPageKey !== current.key}
         showsHorizontalScrollIndicator={false}
         windowSize={3}
       />
@@ -534,11 +589,13 @@ function FilePreviewPage({
   item,
   maker,
   onDownload,
+  onHtmlPanChange,
   onOpenLightbox,
   onQuoteSelection,
   readTextFile,
   recoveryEpoch,
   targetLine,
+  visible,
   workdir,
 }: {
   active: boolean;
@@ -546,12 +603,16 @@ function FilePreviewPage({
   item: FileBrowserGridItem;
   maker: Pick<MobileMakerTransport, 'fileBrowser'>;
   onDownload(): void;
+  /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,仅文本页产出)。 */
+  onHtmlPanChange?: (key: string, wants: boolean) => void;
   onOpenLightbox(url: string): void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(仅文本页消费)。 */
   onQuoteSelection?: (text: string) => void;
   readTextFile(relPath: string): Promise<FileBrowserReadFileResult>;
   recoveryEpoch: number;
   targetLine: number | null;
+  /** 是否真正可见的当前页(可执行渲染态的挂载门,见调用处说明)。 */
+  visible: boolean;
   workdir: string;
 }) {
   const { t } = useTranslation();
@@ -570,12 +631,12 @@ function FilePreviewPage({
   if (item.previewKind === 'pdf') {
     return <PdfPreviewPage active={active} exportToUrl={exportToUrl} item={item} onDownload={onDownload} recoveryEpoch={recoveryEpoch} workdir={workdir} />;
   }
-  const avKind = avKindFor(item.name);
+  const avKind = avKindFor(item.relPath);
   if (avKind) {
     return <AvPreviewPage active={active} exportToUrl={exportToUrl} item={item} kind={avKind} onDownload={onDownload} workdir={workdir} />;
   }
   if (item.thumb === 'doc') {
-    return <TextPreviewPage active={active} item={item} onDownload={onDownload} onQuoteSelection={onQuoteSelection} readTextFile={readTextFile} targetLine={targetLine} workdir={workdir} />;
+    return <TextPreviewPage active={active} item={item} onDownload={onDownload} onHtmlPanChange={onHtmlPanChange} onQuoteSelection={onQuoteSelection} readTextFile={readTextFile} targetLine={targetLine} visible={visible} workdir={workdir} />;
   }
   return <UnsupportedPage item={item} onDownload={onDownload} reason={t('files.preview.unsupportedType')} />;
 }
@@ -720,30 +781,39 @@ function PdfPreviewPage({
   return <WebView source={pdfSource} style={styles.pdfView} testID="filePreview.pdfView" />;
 }
 
-/** 文本/代码页:readFile(acceptGzip)→ 行号列表;OVERSIZE/BINARY 退占位。 */
+/**
+ * 文本/代码页:readFile(acceptGzip)→ 行号列表;OVERSIZE/BINARY 退占位。
+ * markdown / HTML(richTextKindOf)多一层「渲染 / 源码」切换,渲染态复用同一份已读文本。
+ */
 function TextPreviewPage({
   active,
   item,
   onDownload,
+  onHtmlPanChange,
   onQuoteSelection,
   readTextFile,
   targetLine,
+  visible,
   workdir,
 }: {
   active: boolean;
   item: FileBrowserGridItem;
   onDownload(): void;
+  /** 上报本页是否处在 HTML 渲染态(外层 pager 据此让出横滑,见调用处说明)。 */
+  onHtmlPanChange?: (key: string, wants: boolean) => void;
   /** chat-text-quote:markdown 渲染态的选中引用回调(源码态暂不支持,见 PR 说明)。 */
   onQuoteSelection?: (text: string) => void;
   /** 屏级注入:readFile 带瞬断重试 + openLink(与列表/搜索/导出同路径)。 */
   readTextFile(relPath: string): Promise<FileBrowserReadFileResult>;
   targetLine: number | null;
+  /** 是否真正可见的当前页:HTML 渲染态只在可见时挂 WebView(文本预取不受限)。 */
+  visible: boolean;
   workdir: string;
 }) {
   const styles = useThemedStyles(makeStyles);
   const { colors } = useTheme();
   const { t } = useTranslation();
-  const markdown = isMarkdownFile(item.name);
+  const richKind = richTextKindOf(item.relPath);
   // absPath 单文件模式(item.relPath 为绝对路径)没有可靠 mtime(恒 0),
   // 缓存键无法随文件覆写失效,读写一律跳过缓存。
   const cacheable = !!workdir && !isAbsolutePathShape(item.relPath);
@@ -760,12 +830,21 @@ function TextPreviewPage({
         }
       : { status: 'loading' };
   });
-  // markdown 默认渲染态(带命中行也进渲染态——渲染层按块级 data-src-line 定位到
-  // 覆盖目标行的块并闪高亮;切到源码态仍走精确行号跳转),可切源码;非 md 恒为源码态。
-  const [mdView, setMdView] = useState<'rendered' | 'source'>(markdown ? 'rendered' : 'source');
+  // markdown / HTML 默认渲染态(markdown 带命中行也进渲染态——渲染层按块级
+  // data-src-line 定位到覆盖目标行的块并闪高亮;切到源码态仍走精确行号跳转),
+  // 可切源码;其余文本恒为源码态。
+  const [richView, setRichView] = useState<'rendered' | 'source'>(richKind ? 'rendered' : 'source');
   const loadedRef = useRef(state.status === 'ready');
   const codeListRef = useRef<FlatList<string>>(null);
   const scrolledToTargetRef = useRef(false);
+
+  // 只有「可见 + HTML + 渲染态 + 内容已就绪」这一种组合真的挂着 WebView,需要横滑手势。
+  // cleanup 无条件报 false:卸载(翻页 / 失焦 / 换文件)后不能把 pager 留在禁滑状态。
+  const htmlPanWanted = visible && richKind === 'html' && richView === 'rendered' && state.status === 'ready';
+  useEffect(() => {
+    onHtmlPanChange?.(item.key, htmlPanWanted);
+    return () => onHtmlPanChange?.(item.key, false);
+  }, [htmlPanWanted, item.key, onHtmlPanChange]);
 
   useEffect(() => {
     if (!active || loadedRef.current || !workdir) return;
@@ -798,8 +877,8 @@ function TextPreviewPage({
           lines: allLines.slice(0, MAX_RENDERED_LINES),
           totalLines: allLines.length,
           truncated: res.data.truncated === true,
-          // 原文只为 markdown 渲染态保留,普通代码文件不留大字符串。
-          content: markdown ? content : undefined,
+          // 原文只为渲染态(markdown / HTML)保留,普通代码文件不留大字符串。
+          content: richKind ? content : undefined,
         };
         if (cacheable) storeCachedPreviewText(workdir, item.relPath, res.data.mtimeMs, ready);
         setState({ status: 'ready', ...ready });
@@ -812,7 +891,7 @@ function TextPreviewPage({
     return () => {
       cancelled = true;
     };
-  }, [active, cacheable, item.relPath, markdown, readTextFile, t, workdir]);
+  }, [active, cacheable, item.relPath, richKind, readTextFile, t, workdir]);
 
   if (state.status === 'loading') {
     return (
@@ -828,8 +907,8 @@ function TextPreviewPage({
   const targetIndex = targetLine !== null && targetLine <= state.lines.length ? targetLine - 1 : null;
   const lineNumWidth = String(state.lines.length).length;
   const clipped = state.truncated || state.totalLines > state.lines.length;
-  const canRenderMarkdown = markdown && typeof state.content === 'string';
-  const showRendered = canRenderMarkdown && mdView === 'rendered';
+  const canRenderRich = richKind !== null && typeof state.content === 'string';
+  const showRendered = canRenderRich && richView === 'rendered';
   return (
     <View style={styles.textPage}>
       {clipped ? (
@@ -840,17 +919,19 @@ function TextPreviewPage({
           </Text>
         </View>
       ) : null}
-      {canRenderMarkdown ? (
+      {/* 切换胶囊的 `md*` 样式与 i18n key 是 markdown 独占时期留下的命名,现在两类
+          渲染态共用;文案本身("渲染 / 源码")与载体无关,不为改名动四份 locale。 */}
+      {canRenderRich ? (
         <View style={styles.mdToggleRow}>
           {([['rendered', t('files.preview.mdRendered')], ['source', t('files.preview.mdSource')]] as const).map(([value, label]) => (
             <Pressable
               accessibilityLabel={t('files.preview.mdViewA11y', { view: label })}
               key={value}
-              onPress={() => setMdView(value)}
-              style={[styles.mdTogglePill, mdView === value && styles.mdTogglePillActive]}
-              testID={`filePreview.mdView.${value}`}
+              onPress={() => setRichView(value)}
+              style={[styles.mdTogglePill, richView === value && styles.mdTogglePillActive]}
+              testID={`filePreview.richView.${value}`}
             >
-              <Text style={[styles.mdToggleLabel, mdView === value && styles.mdToggleLabelActive]}>
+              <Text style={[styles.mdToggleLabel, richView === value && styles.mdToggleLabelActive]}>
                 {label}
               </Text>
             </Pressable>
@@ -858,7 +939,23 @@ function TextPreviewPage({
         </View>
       ) : null}
       {showRendered ? (
-        <MarkdownFileReader markdown={state.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+        richKind === 'html' ? (
+          // HTML 生成物:已读到的文本直接进 WebView(不走 OSS 导出),同目录相对资源
+          // 取不到是已知边界,见 HtmlFileReader 头注。
+          //
+          // **只在真正可见的当前页挂载**(review P1):HTML 里的脚本是可执行的不可信
+          // 内容,相邻预取页提前挂 WebView 会让用户还没打开的文件里的脚本 / 计时器 /
+          // 网络请求先跑起来。离开当前页即卸载 —— 卸载 WebView 是停掉这些东西最彻底
+          // 的方式(比 injectJavaScript 去逐个 clearInterval 可靠)。文本预取不受影响,
+          // 所以滑回来时无需重新取件。
+          visible ? (
+            <HtmlFileReader html={state.content ?? ''} testID="filePreview.htmlRendered" />
+          ) : (
+            <View style={styles.centerFill} testID="filePreview.htmlOffscreen" />
+          )
+        ) : (
+          <MarkdownFileReader markdown={state.content ?? ''} onQuoteSelection={onQuoteSelection} targetLine={targetLine} testID="filePreview.markdownRendered" />
+        )
       ) : (
       <FlatList
         contentContainerStyle={styles.codeContent}

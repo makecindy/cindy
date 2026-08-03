@@ -364,10 +364,15 @@ export function buildAgentTaskCardModel(input: {
   const description = compactText(
     update?.description ?? readInputString(toolInput, ['prompt', 'description', 'task']),
   );
-  const spawnedAgentName = subagentSpawnReceiptName(toolName, toolInput, result);
+  const spawnReceiptName = subagentSpawnReceiptName(toolName, toolInput, result);
+  // 有实时 update(子线程送来的 tokens / 工具调用数 / 终态)时不再暴露启动回执:
+  // title 与运行状态已经表达了同样的信息,再显示「Subagent X 已启动」会让 codex 卡
+  // 比 Claude 子代理卡多出一行冗余文案 —— 两者共用同一张卡,形态必须一致。历史回放
+  // 拿不到 live update,回执仍是唯一可读摘要,保留原样。
+  const spawnedAgentName = update ? undefined : spawnReceiptName;
   // 启动回执命中时 summary 不携带裸路径(路径已在 spawnedAgentName / title 中),
   // 否则手机端会把 agentPath 原样当摘要展示。
-  const summary = spawnedAgentName ? detailText(update?.summary) : detailText(result, update?.summary);
+  const summary = spawnReceiptName ? detailText(update?.summary) : detailText(result, update?.summary);
   return {
     status,
     provider,

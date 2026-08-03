@@ -31,6 +31,8 @@ type MakerSendOptions = {
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
+  /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
+  turnAttemptToken?: number;
   /**
    * Direct Continue fallback only: acknowledge the interrupted marker on the
    * executor after vendor dispatch is irreversible. The executor must own the
@@ -68,6 +70,8 @@ type MakerSendOptions = {
     autoResume?: unknown;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
+    /** 队列自动来源(只写入 agentMeta,不传给 maker-core 的 turn origin)。 */
+    origin?: unknown;
   };
 };
 
@@ -224,6 +228,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
   autoResumeInfo?: Record<string, unknown>;
+  origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
   onPersisted?: () => void | Promise<void>;
@@ -237,6 +242,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
       ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
+      : {}),
+    ...(persist.origin && typeof persist.origin === 'object' && !Array.isArray(persist.origin)
+      ? { origin: persist.origin as Record<string, unknown> }
       : {}),
     ...(persist.delivery === 'turn' || persist.delivery === 'steer' ? { delivery: persist.delivery } : {}),
     ...(typeof persist.shouldBroadcast === 'function'
@@ -591,6 +599,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           messageUuid: so.messageUuid,
           userName: so.userName,
           throwOnStartFailure: so.throwOnStartFailure,
+          turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
@@ -655,6 +664,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                     ...(persistUserMessage.autoResume ? { autoResume: true } : {}),
                     ...(persistUserMessage.autoResumeInfo
                       ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
+                      : {}),
+                    ...(persistUserMessage.origin
+                      ? { origin: persistUserMessage.origin }
                       : {}),
                     // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
                     // 对齐,renderer 据此渲染"由自动化任务发送"标签。

@@ -201,6 +201,36 @@ describe('useAgentCapabilities deviceId-aware cache', () => {
     expect(mod.getCachedCapabilities('claude-code')).toBeNull();
   });
 
+  it('远程 Pi capabilities 原样保留 BYOM 显式 effort 子集', async () => {
+    const explicitPiCaps: Caps = {
+      ...caps('dev-1:pi'),
+      availableModels: [
+        {
+          id: 'reasoner',
+          displayName: 'Reasoner',
+          contextWindow: 200_000,
+          efforts: ['low', 'high'],
+          defaultEffort: 'high',
+        },
+      ],
+    };
+    const invoke = vi.fn(async (_deviceId: string, _channel: string, args: unknown[]) =>
+      args[0] === 'pi' ? explicitPiCaps : caps(`dev-1:${String(args[0])}`),
+    );
+    const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));
+    vi.stubGlobal('window', {
+      electronAPI: { maker: { getCapabilities }, deviceLink: { invoke } },
+    });
+    const mod = await import('@/hooks/useAgentCapabilities');
+
+    await mod.prefetchDeviceCapabilities('dev-1');
+
+    expect(mod.getCachedCapabilities('pi', 'dev-1')?.availableModels[0]?.efforts).toEqual([
+      'low',
+      'high',
+    ]);
+  });
+
   it('非法 capabilities 响应进入 error，不得发布 ready 或落缓存', async () => {
     const invoke = vi.fn(async () => null);
     const getCapabilities = vi.fn(async (k: string) => caps(`local:${k}`));

@@ -162,6 +162,15 @@ const DEVICE_LINK_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
 ] as const);
+/**
+ * 非 `REMOTE_*` / 非 device-link 的会话级提示码 —— agent runtime 用同一套
+ * `[CODE] fallback text` 约定把「这件事用户该知道」告诉 renderer,不新增事件类型。
+ * 未登记的 code 仍然回退到英文兜底文案(绝不把 `[CODE]` 裸露给用户)。
+ */
+const AGENT_RUNTIME_CHAT_ERROR_CODES: ReadonlySet<string> = new Set([
+  // Auto 档下审阅器没跑起来(与「模型判定动作危险」不同,后者刻意保持静默)。
+  'AUTO_REVIEW_UNAVAILABLE',
+] as const);
 const REMOTE_HEAVY_INBOUND_CHANNELS: ReadonlySet<string> = new Set([
   'maker:event',
   'maker:status-changed',
@@ -193,7 +202,11 @@ function resolveEstimatedTurnCostUsd(
 export function decodeRemoteErrorMessage(msg: string): string {
   const bracketMatch = BRACKET_ERROR_CODE_RE.exec(msg);
   const bracketCode = bracketMatch?.[1];
-  if (bracketCode && DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode)) {
+  if (
+    bracketCode
+    && (DEVICE_LINK_CHAT_ERROR_CODES.has(bracketCode)
+      || AGENT_RUNTIME_CHAT_ERROR_CODES.has(bracketCode))
+  ) {
     return i18n.t(`chat.remoteError.${bracketCode}`, {
       defaultValue: bracketMatch[2] || msg,
     });

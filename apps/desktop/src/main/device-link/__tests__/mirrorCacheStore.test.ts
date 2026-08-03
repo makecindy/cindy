@@ -69,6 +69,23 @@ function row(id: string, createdAt: string, extra: Record<string, unknown> = {})
   return { id, clientId: `c-${id}`, role: 'user', content: `body-${id}`, createdAt, ...extra };
 }
 
+async function seedMessageFiles(
+  entries: Array<{ sessionId: string; messages: ReturnType<typeof row>[]; mtime: Date }>,
+): Promise<void> {
+  await fsp.mkdir(messagesDir(), { recursive: true });
+  // These files are only the on-disk fixture for an eviction test. Going through
+  // writeMessages for every filler would rescan the growing directory each time.
+  for (const { sessionId, messages, mtime } of entries) {
+    const file = path.join(messagesDir(), messageFileName('dev-1', sessionId));
+    await fsp.writeFile(
+      file,
+      JSON.stringify({ version: 1, updatedAt: mtime.getTime(), messages }),
+      'utf8',
+    );
+    await fsp.utimes(file, mtime, mtime);
+  }
+}
+
 beforeEach(() => {
   root = fs.mkdtempSync(path.join(os.tmpdir(), 'mirror-cache-test-'));
 });
@@ -388,17 +405,19 @@ describe('readMessages / writeMessages', () => {
 
   it('超文件数上限 → 按 mtime 逐出最旧,新写入的留下', async () => {
     const c = cache();
-    for (let i = 0; i < MAX_MESSAGE_FILES + 5; i += 1) {
-      await c.writeMessages('dev-1', `sess-${i}`, [row(`m${i}`, '2026-01-01T00:00:00.000Z')]);
-      // mtime 分辨率有限:显式回拨保证 LRU 顺序确定(越早写的越旧)。
-      const file = path.join(messagesDir(), messageFileName('dev-1', `sess-${i}`));
-      const stamp = new Date(2026, 0, 1, 0, 0, i);
-      await fsp.utimes(file, stamp, stamp);
-    }
+    await seedMessageFiles(
+      Array.from({ length: MAX_MESSAGE_FILES }, (_, i) => ({
+        sessionId: `sess-${i}`,
+        messages: [row(`m${i}`, '2026-01-01T00:00:00.000Z')],
+        // mtime 分辨率有限:显式回拨保证 LRU 顺序确定(越早写的越旧)。
+        mtime: new Date(2026, 0, 1, 0, 0, i),
+      })),
+    );
+    await c.writeMessages('dev-1', 'sess-new', [row('m-new', '2026-02-01T00:00:00.000Z')]);
     const files = await fsp.readdir(messagesDir());
-    expect(files.length).toBeLessThanOrEqual(MAX_MESSAGE_FILES);
+    expect(files).toHaveLength(MAX_MESSAGE_FILES);
     expect(await c.readMessages('dev-1', 'sess-0')).toEqual([]);
-    expect(await c.readMessages('dev-1', `sess-${MAX_MESSAGE_FILES + 4}`)).not.toEqual([]);
+    expect(await c.readMessages('dev-1', 'sess-new')).not.toEqual([]);
   });
 });
 
@@ -470,9 +489,16 @@ describe('重复写入去重', () => {
     const old = new Date(2020, 0, 1);
     await fsp.utimes(victimFile, old, old);
     // 灌满到逐出:victim 是 mtime 最旧的那个,必然先走。
-    for (let i = 0; i < MAX_MESSAGE_FILES + 2; i += 1) {
-      await c.writeMessages('dev-1', `sess-${i}`, [row(`m${i}`, '2026-02-01T00:00:00.000Z')]);
-    }
+    await seedMessageFiles(
+      Array.from({ length: MAX_MESSAGE_FILES - 1 }, (_, i) => ({
+        sessionId: `sess-${i}`,
+        messages: [row(`m${i}`, '2026-02-01T00:00:00.000Z')],
+        mtime: new Date(2026, 1, 1, 0, 0, i),
+      })),
+    );
+    await c.writeMessages('dev-1', 'sess-trigger', [
+      row('trigger', '2026-03-01T00:00:00.000Z'),
+    ]);
     expect(fs.existsSync(victimFile)).toBe(false);
 
     await c.writeMessages('dev-1', 'sess-victim', victim);

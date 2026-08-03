@@ -254,6 +254,14 @@ registerColor('input', {
   light: 'var(--border-shadcn-hsl)',
   dark: 'var(--border-shadcn-hsl)',
 }, 'input');
+registerColor('switch-track-off', {
+  light: 'var(--text-secondary)',
+  dark: 'var(--text-secondary)',
+}, '共享 Switch 未选中轨道；跟随主题次要前景，与默认/悬停表面及滑块保持至少 3:1 非文字组件对比度，同时弱于开启态');
+registerColor('switch-thumb-off', {
+  light: 'var(--surface-on-card)',
+  dark: 'var(--surface-on-card)',
+}, '共享 Switch 未选中滑块；跟随主题反相前景，与未选中轨道保持至少 3:1 非文字组件对比度');
 registerColor('ring', {
   light: 'var(--text-primary-hsl)',
   dark: 'var(--text-primary-hsl)',

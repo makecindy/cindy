@@ -56,6 +56,10 @@ import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
+import {
+  useWorkerProjection,
+  useWorkerProjectionOwner,
+} from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
@@ -1950,23 +1954,17 @@ export function CCAgentSessionView({
   const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
   const collabSessionId = sessionId;
+  const collabProjectionLeadId = collabEnabled ? collabSessionId : undefined;
+  useWorkerProjectionOwner(collabProjectionLeadId);
+  const collabWorkerProjection = useWorkerProjection(collabProjectionLeadId);
   useEffect(() => {
-    if (!collabSessionId || !collabEnabled) return;
-    let cancelled = false;
-    void orcaWorkflowsFor(collabSessionId)
-      .listWorkersByLead(collabSessionId)
-      .then((workers) => {
-        if (cancelled || workers.length === 0) return;
-        const activeWorker = workers[0]; // MVP: 假设最多 1 个 active Worker
-        // orca worker 创建面未开 pi;万一读到脏值也按 codex 收敛,不撑开 toggle 契约。
-        const normalizedKind = normalizeDbAgentKind(activeWorker.session?.agentKind);
-        setCollabWorker(normalizedKind === 'cc' ? 'cc' : 'codex');
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [collabSessionId, collabEnabled]);
+    if (!collabProjectionLeadId) return;
+    const activeWorker = collabWorkerProjection.workers[0]; // MVP: 假设最多 1 个 active Worker
+    if (!activeWorker) return;
+    // orca worker 创建面未开 pi;万一读到脏值也按 codex 收敛,不撑开 toggle 契约。
+    const normalizedKind = normalizeDbAgentKind(activeWorker.agent);
+    setCollabWorker(normalizedKind === 'cc' ? 'cc' : 'codex');
+  }, [collabProjectionLeadId, collabWorkerProjection.workers]);
 
   // F-COLLAB: "外部触发" 协同状态变化时自动打开协同 tab (典型场景: MCP team
   // 工具, 未来也覆盖飞书等其它入口)。
