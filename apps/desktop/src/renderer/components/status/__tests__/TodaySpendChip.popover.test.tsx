@@ -369,6 +369,42 @@ describe('TodaySpendChip Claude subscription popover', () => {
     expect(screen.getByText('本轮消耗：$0.46')).toBeTruthy();
   });
 
+  it('第三方参考价的近似实际费用仍标为本任务已用', () => {
+    const approximateActualMoney: RegionalMoney = {
+      ...usdMoney(0.25),
+      approximate: true,
+      estimateReasons: ['reference-price'],
+    };
+    mocks.sessionUsage = {
+      actualMoney: approximateActualMoney,
+      estimatedValueMoney: null,
+      totalMoney: approximateActualMoney,
+    };
+
+    renderClaudeSubscriptionChip();
+    const { card } = openCardFromHover();
+    const sessionSection = within(card).getByTestId('quota-session-usage');
+
+    expect(within(sessionSection).getByText('本任务已用 $0.25')).toBeTruthy();
+    expect(within(sessionSection).queryByText('本任务价值 $0.25')).toBeNull();
+  });
+
+  it('纯订阅价值估算仍标为本任务价值', () => {
+    const estimatedValueMoney = usdMoney(0.50, 'value-estimate');
+    mocks.sessionUsage = {
+      actualMoney: null,
+      estimatedValueMoney,
+      totalMoney: estimatedValueMoney,
+    };
+
+    renderClaudeSubscriptionChip();
+    const { card } = openCardFromHover();
+    const sessionSection = within(card).getByTestId('quota-session-usage');
+
+    expect(within(sessionSection).getByText('本任务价值 $0.50')).toBeTruthy();
+    expect(within(sessionSection).queryByText('本任务已用 $0.50')).toBeNull();
+  });
+
   it('单分段不加冗余标题，多分段则分开累计金额与最后分段明细', () => {
     setLatestUsageMessage({
       turnMoney: usdMoney(0.46, 'value-estimate'),

@@ -797,8 +797,11 @@ function toQuotaHoverCardSessionUsage(
 
   return {
     costText: formatTurnCostMoney(totalMoney),
+    // approximate 只说明金额精度，不能把第三方参考价的实际费用改成订阅价值语义。
+    // 纯价值估算优先信任 kind；兼容旧投影时再以唯一存在的估值分量兜底。
     costIsEstimate:
-      totalMoney.approximate || totalMoney.kind === 'value-estimate',
+      totalMoney.kind === 'value-estimate'
+      || Boolean(!actualMoney?.amount && estimatedValueMoney?.amount),
     ...(actualMoney?.amount
       ? { actualCostText: formatTurnCostMoney(actualMoney) }
       : {}),
