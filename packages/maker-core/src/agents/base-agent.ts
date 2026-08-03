@@ -113,12 +113,28 @@ export type McpToolApprovalPolicy =
   | 'prompt'
   | 'prompt-each-time';
 
-/** pi spawn 附加配置:host 的 MCP HTTP bridge 出口(见 AgentDeps.preparePiExtraSpawnConfig)。 */
+/** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
+export interface PiMcpServerRef {
+  name: string;
+  url: string;
+  remote?: {
+    /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
+    headerEnvVars: Record<string, string>;
+    /** extension 启动时 initialize + tools/list 的总预算；必须短于 Pi RPC ready 超时。 */
+    startupTimeoutMs: number;
+    /** 完成启动探测后的单次工具调用预算。 */
+    requestTimeoutMs: number;
+  };
+}
+
+/** pi spawn 附加配置:host 的 MCP HTTP bridge / 外部 HTTP MCP 出口。 */
 export interface PiExtraSpawnConfig {
   mcpBridge?: {
     token: string;
-    servers: Array<{ name: string; url: string }>;
+    servers: PiMcpServerRef[];
   } | null;
+  /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
+  mcpEnv?: Record<string, string>;
   /**
    * 释放本 session 的 bridge lease；带 sessionId 时同时注销身份 ctx。PiAgent 在
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。

@@ -105,7 +105,7 @@ export function isInterruptedTurnError(signals: InterruptedTurnErrorSignals): bo
   const reason = typeof signals.reason === 'string' ? signals.reason : '';
   // 例外先行：`upstream-overload` 是**已归类为可重试**的 reason，它本身就是比文案更可靠的
   // 权威判据（结构化优先于文案，与 overload-error.ts 的论证同源），直接放行、不再看文案。
-  if (reason === UPSTREAM_OVERLOAD_REASON) return true;
+  if (reason === UPSTREAM_OVERLOAD_REASON || reason === 'codex_reconnect_stalled') return true;
   if (reason.length > 0) return false;
   if (isStreamTruncationError(signals)) return true;
   const message = signals.message;

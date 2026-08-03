@@ -832,8 +832,6 @@ export function collectSessionImageSrcs(
   return out;
 }
 
-// export 仅供单测(`buildRenderItemsKeyStability.test.ts`)使用,运行时无外部消费者。
-
 // Workflow 工具(Claude Code SDK 多 agent 编排)在父会话事件流里 = 单个 local_workflow
 // 任务(内部子 agent 不发独立 task 事件,只有 workflow 级聚合进度)。与 Agent/Task 一样
 // 走 agent_task 渲染项;AgentTaskCard 内部按 taskType/toolName 识别为 workflow,展示

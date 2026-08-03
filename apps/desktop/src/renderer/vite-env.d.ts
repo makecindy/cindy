@@ -1320,6 +1320,28 @@ interface ElectronAPI {
         tone: 'info' | 'success' | 'warning' | 'error';
       }) => void,
     ) => () => void;
+    /** badge 槽:意识未读角标变化(插件入口与插件卡上的绿点)。
+     *  与 onNotify 的分工是持久状态对一次性 toast——用户没去看就一直亮着。
+     *  summary/at 只在 unread:true 时给。 */
+    onBadge: (
+      callback: (payload: {
+        ghostId: string;
+        unread: boolean;
+        summary?: string;
+        at?: number;
+      }) => void,
+    ) => () => void;
+    /** badge 槽:未读全量快照(换账号后整表替换;逐条 onBadge 只表达增量)。 */
+    onUnreadSnapshot: (
+      callback: (payload: {
+        entries: Array<{ ghostId: string; summary?: string; at: number }>;
+      }) => void,
+    ) => () => void;
+    /** badge 槽:未读角标首帧快照(同步读,避免绿点晚一帧跳出来)。 */
+    unreadSync: () => { entries: Array<{ ghostId: string; summary?: string; at: number }> };
+    /** badge 槽:用户侧熄灭未读(打开面板 = 明确已读)。seenAt = 当时看到的那条
+     *  的点亮时刻,main 据此条件删除,避免陈旧清除抹掉更新的未读。 */
+    clearUnread: (id: string, seenAt?: number) => Promise<{ ok: boolean }>;
     /** confirm 槽:插件请求弹主机同款确认框(main 已资格审+净化+限速+单飞)。
      *  main 只投单个窗口,所以收到即本窗口负责弹;答案用 resolveConfirm 回包。
      *  confirmText/cancelText 为 null 时用 renderer 自己的缺省文案(跟语言走)。 */

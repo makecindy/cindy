@@ -3375,6 +3375,8 @@
         "cardExternalLinkDetail": "卡片中的链接点击后会弹出确认框，你同意后才会在系统浏览器中打开；仅限 http/https 地址。",
         "notify": "可弹出系统提示(屏幕顶部的轻提示)",
         "notifyDetail": "提示内容由这个插件提供，提示上会标注它的名字；自动消失，不会打断你的操作。",
+        "badge": "可在插件入口点亮未读提醒",
+        "badgeDetail": "有新内容时，它可以在侧栏插件入口和自己的卡片上点亮一个绿点，并附一句话摘要；你打开它的面板即清零。绿点不出声、不震动，也不会进入系统通知中心，和上面的系统提示是两项独立权限。",
         "confirm": "可弹出确认框征求你同意",
         "confirmDetail": "它动手前可以弹一个和 Cindy 同款的确认框来问你，问句由它提供、框上会标注它的名字；同意还是取消都由你亲手点，它自己点不了。同时最多一个确认框，弹得太频会被拦下。",
         "fsWrite": "可写入文件(创建/修改)",
@@ -3512,6 +3514,7 @@
         "slotCard": "消息卡片",
         "slotNetwork": "网络访问",
         "slotNotify": "系统提示",
+        "slotBadge": "未读角标",
         "slotFs": "写文件",
         "slotSkill": "Agent 技能",
         "slotWorkspace": "工作区任务"
@@ -5229,6 +5232,7 @@
         "dismiss": "关闭"
       },
       "credentialSwitchDeferred": "模型来源已切换，将在当前任务结束后生效。",
+      "effortRuntimeDirty": "推理强度还在更新，稍等一下再发送",
       "credentialSwitchApplied": "模型来源切换已生效。",
       "modelSwitchContextGuard": {
         "title": "目标模型的上下文窗口较小",

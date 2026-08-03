@@ -764,6 +764,22 @@ describe('ErrorBanner OpenAI connection recovery', () => {
     expect(mocks.triggerLogin).not.toHaveBeenCalled();
   });
 
+  it('localizes event-loop terminal errors from the stable reason key', () => {
+    render(
+      <ErrorBanner
+        error="Session event loop stopped unexpectedly without a terminal event"
+        errorReason="session_event_loop_crashed"
+        retryText="retry this turn"
+        onRetry={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('logic.errors.turnFailed')).toBeTruthy();
+    expect(
+      screen.queryByText('Session event loop stopped unexpectedly without a terminal event'),
+    ).toBeNull();
+  });
+
   it('exposes the explicit Continue After Reset action only when provided', () => {
     const onContinueAfterUsageReset = vi.fn();
     const { rerender } = render(
