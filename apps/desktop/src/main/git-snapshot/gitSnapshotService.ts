@@ -429,9 +429,10 @@ export interface ShadowSavepointResult {
   includedFiles: string[];
   skippedFiles: SnapshotSkippedFile[];
   /**
-   * lstat fingerprints (size + mtime, never content) for skipped paths that
-   * still exist as regular files. Turn-boundary readers compare these to
-   * detect changes to files the snapshot is not allowed to record.
+   * lstat fingerprints (size + mtime + ctime + inode, never content) for
+   * skipped paths that still exist as regular files. Turn-boundary readers
+   * compare these to detect changes to files the snapshot is not allowed to
+   * record.
    */
   skippedFingerprints: SkippedFileFingerprint[];
 }

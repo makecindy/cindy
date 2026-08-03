@@ -32,7 +32,6 @@ import {
 import { ensureDialogueWorkspaceDir } from '../dialogueWorkspace';
 import { recomputePrRefsForSession } from '../../git-context/prRefsStore';
 import { ensureProjectGitInitialized } from '../../git-snapshot/projectGitBootstrap';
-import { cleanupSavepointsForRemovedSession } from '../../git-snapshot/savepointCleanup';
 import { readGitSafetySettings } from '../../maker-host/git-safety-settings-store';
 import * as imageCacheStore from '../../imageCacheStore';
 import { removeSessionRefs as removeSessionMediaRefs } from '../../cindy-media/ledger';
@@ -110,7 +109,6 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
-  scheduleSavepointCleanupForStatusChange(sessionId, status);
   if (status !== 'deleted' && status !== 'archived') return;
   void (async () => {
     const [mh, recycle, routeLock] = await Promise.all([
@@ -139,21 +137,11 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
     });
 }
 
-/**
- * 会话删除后的 shadow savepoint 链清理(refs/cindy/savepoints/<sid>)。
- * 只处理 deleted:归档可恢复,恢复后文件回退仍要可用,归档会话的保存点保留。
- * fire-and-forget;失败由启动期 reconcile 兜底。savepointCleanup 只依赖
- * gitExec / localDb 叶子模块,静态导入不构成本文件顶部注释警告的模块环。
- */
-function scheduleSavepointCleanupForStatusChange(sessionId: string, status: unknown): void {
-  if (status !== 'deleted') return;
-  void cleanupSavepointsForRemovedSession(sessionId).catch((err) => {
-    log.warn('savepoint cleanup after session delete failed', {
-      sessionId,
-      err: err instanceof Error ? err.message : String(err),
-    });
-  });
-}
+// shadow savepoint 链(refs/cindy/savepoints/<sid>)刻意**不**挂 status 变化
+// 即时清理:覆盖导入等流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复,
+// status 触发的 ref 删除与这类回滚天然竞态(删了就不可逆)。孤儿 ref 隐藏且
+// 极小,统一由启动期 reconcileSavepointRefsForDeletedSessions() 清理——启动期
+// 不存在进行中的瞬态软删流程。
 
 /**
  * 会话 status 变化的订阅槽①旁路通知(archived → did-session-archived)。

@@ -1,7 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import { createGitSnapshotCoordinator } from '../maker-host/git-snapshot-host';
-import type { CreateShadowSavepointInput } from '../git-snapshot/gitSnapshotService';
+import type {
+  CreateShadowSavepointInput,
+  ShadowSavepointResult,
+} from '../git-snapshot/gitSnapshotService';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
 
@@ -32,11 +35,17 @@ describe('createGitSnapshotCoordinator', () => {
       text: 'please update login',
     });
     const createShadowSavepoint = vi.fn().mockImplementation(
-      async (_repo: string, input: CreateShadowSavepointInput) => {
+      async (_repo: string, input: CreateShadowSavepointInput): Promise<ShadowSavepointResult> => {
         if (typeof input.label === 'function') {
           await input.label({ diffStat: ' src/a.ts | 1 +', diffText: '+x' });
         }
-        return { commit: 'hash123', tree: 'tree123', includedFiles: [], skippedFiles: [] };
+        return {
+          commit: 'hash123',
+          tree: 'tree123',
+          includedFiles: [],
+          skippedFiles: [],
+          skippedFingerprints: [],
+        };
       },
     );
     const coordinator = createGitSnapshotCoordinator(maker, {
@@ -120,7 +129,8 @@ describe('createGitSnapshotCoordinator', () => {
       tree: 'tree-t1',
       includedFiles: [],
       skippedFiles: [],
-    });
+      skippedFingerprints: [],
+    } satisfies ShadowSavepointResult);
     const coordinator = createGitSnapshotCoordinator(maker, {
       readAutoSnapshotEnabled: vi.fn(() => enabled),
       detectRepoRoot: vi.fn().mockResolvedValue(null),

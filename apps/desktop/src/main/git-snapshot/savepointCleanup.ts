@@ -1,11 +1,12 @@
 /**
  * shadow savepoint 链的生命周期清理。
  *
- * - 会话显式删除后删除其 refs/cindy/savepoints/<sessionId>(归档保留:归档可
- *   恢复,恢复后文件回退仍要可用;与 worktree 启动期对账"archived 不回收"的
- *   保守口径一致)。
- * - 启动期对账:遍历会话工作目录对应的 repo,清掉 owning session 已删除或行
- *   已缺失的孤儿 ref(删除动作与清理之间的崩溃窗口兜底)。
+ * 唯一删除驱动是启动期对账:遍历会话工作目录对应的 repo,清掉 owning session
+ * 已删除或行已缺失的孤儿 ref。刻意**没有**会话删除时的即时清理——覆盖导入等
+ * 流程会把旧会话瞬态置为 deleted、失败后经 journal 恢复原状态,任何由 status
+ * 变化触发的 ref 删除都与这类回滚竞态(ref 删了即不可逆);启动期不存在进行中
+ * 的瞬态软删流程,对账时的 deleted 才是稳定终态。归档会话的 ref 保留:归档可
+ * 恢复,恢复后文件回退仍要可用(与 worktree 对账"archived 不回收"同口径)。
  *
  * v1 不主动跑 git gc:删 ref 后保存点对象不可达,由用户仓库自身的 gc 策略
  * 回收;后续增强再考虑对空闲 repo 触发 git gc --auto。
@@ -13,7 +14,7 @@
 
 import path from 'node:path';
 
-import { eq, inArray, isNotNull } from 'drizzle-orm';
+import { inArray, isNotNull } from 'drizzle-orm';
 
 import { getDbClient } from '../localDb/client/current';
 import { sessions } from '../localDb/schema';
@@ -29,8 +30,8 @@ const RECONCILE_MAX_WORKDIRS = 200;
 /**
  * 判定与 maker-host 的 defaultDetectRepoRoot 同口径:git 可用、是仓库、
  * 非 linked worktree(linked worktree 会话全链路不产生保存点链)。
- * 刻意不用 WorktreeManager.detectCwd:本模块被 localDb/ipc/sessions 静态
- * 导入,经 WorktreeManager → worktreeStore 会绕回 sessions 形成模块环。
+ * 刻意不用 WorktreeManager.detectCwd:保持只依赖 gitExec / localDb 叶子模块,
+ * 避免经 WorktreeManager → worktreeStore 绕回 localDb/ipc/sessions 的模块环。
  */
 async function resolveSavepointRepoRoot(workingDir: string): Promise<string | null> {
   try {
@@ -51,36 +52,6 @@ async function resolveSavepointRepoRoot(workingDir: string): Promise<string | nu
   } catch {
     // git 不可用 / 非仓库 / 目录已被删除:都视为无可清理的保存点。
     return null;
-  }
-}
-
-/**
- * 会话删除后的保存点链清理。fire-and-forget 语义:任何失败只记日志,由启动期
- * reconcileSavepointRefsForDeletedSessions() 兜底。
- */
-export async function cleanupSavepointsForRemovedSession(sessionId: string): Promise<void> {
-  try {
-    const db = getDbClient().drizzle;
-    const [row] = await db
-      .select({ status: sessions.status, workingDir: sessions.workingDir })
-      .from(sessions)
-      .where(eq(sessions.id, sessionId));
-    // 行已缺失同样视为已删除;状态被并发改回非 deleted 时保留保存点。
-    if (row && row.status !== 'deleted') return;
-    if (!row?.workingDir) return;
-
-    const repoRoot = await resolveSavepointRepoRoot(row.workingDir);
-    if (!repoRoot) return;
-    await deleteSavepointRef(repoRoot, sessionId);
-    log.info('[savepoint-cleanup] savepoint chain removed for deleted session', {
-      sessionId,
-      repoRoot,
-    });
-  } catch (err) {
-    log.warn('[savepoint-cleanup] cleanup after session delete failed (swallowed)', {
-      sessionId,
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 
