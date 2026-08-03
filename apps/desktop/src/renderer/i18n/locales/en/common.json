@@ -6071,6 +6071,7 @@
     "remoteSession": {
       "reconnecting": "Connection to the controlled device was lost — reconnecting…",
       "hostOffline": "The controlled device is offline; can't sync right now",
+      "degraded": "Connection to the controlled device is unstable — retrying automatically…",
       "actionsUnavailable": "The controlled device is unavailable. Reconnect it before changing this session.",
       "resync": "Resync",
       "loading": "Loading session from the remote device…",

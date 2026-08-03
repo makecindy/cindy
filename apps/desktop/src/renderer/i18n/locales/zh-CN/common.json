@@ -6060,6 +6060,7 @@
     "remoteSession": {
       "reconnecting": "与被控设备的连接中断，正在重连…",
       "hostOffline": "被控设备已离线，暂时无法同步",
+      "degraded": "与被控设备的连接不稳定，正在自动重试…",
       "actionsUnavailable": "被控设备暂不可用，恢复连接后才能修改该任务",
       "resync": "重新同步",
       "loading": "正在从被控设备加载任务…",
