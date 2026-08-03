@@ -567,6 +567,30 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.noteSpawnItem({ ...v1SpawnItem('card-v2', ['t-b']), status: 'failed' })).toBeNull();
   });
 
+  it('counts every tool item type the real codex protocol defines, and only those', () => {
+    // 这份名单是对**真实 codex 0.145 二进制**导出的 schema 逐项核对出来的
+    // (`codex app-server generate-json-schema` → ThreadItem 18 个变体)。`sleep` 就是核对时
+    // 补上的:schema 写明它是 "Display item emitted by the interruptible `clock.sleep` tool",
+    // 手工构造的单测永远发现不了漏计 —— 因为漏的那类事件我根本没想到要构造。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    const toolTypes = [
+      'commandExecution', 'mcpToolCall', 'dynamicToolCall', 'webSearch',
+      'fileChange', 'imageView', 'imageGeneration', 'collabAgentToolCall', 'sleep',
+    ];
+    toolTypes.forEach((type, i) => {
+      expect(
+        tracker.handleDescendantNotification('t-child', 'item/started', toolItem(`t-${i}`, type)),
+      ).toMatchObject({ toolUses: i + 1 });
+    });
+    // 非工具产出不得计数(否则子代理每说一句话都算一次工具调用)。
+    for (const type of ['userMessage', 'agentMessage', 'reasoning', 'plan', 'hookPrompt',
+      'enteredReviewMode', 'exitedReviewMode', 'contextCompaction', 'subAgentActivity']) {
+      expect(tracker.handleDescendantNotification('t-child', 'item/started', toolItem(`n-${type}`, type)))
+        .toBeNull();
+    }
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

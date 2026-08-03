@@ -87,7 +87,16 @@ export interface SubagentLiveCardTracker {
   readonly size: number;
 }
 
-/** 计入「工具调用次数」的子线程 item 类型(排除 agentMessage / reasoning / plan 等非工具产出)。 */
+/**
+ * 计入「工具调用次数」的子线程 item 类型(排除 agentMessage / reasoning / plan 等非工具产出)。
+ *
+ * 这份名单已对**真实 codex 二进制**导出的协议 schema 逐项核对过(见 PR 说明的实测记录):
+ * `codex app-server generate-json-schema` 的 `ThreadItem` 共 18 个变体,这里的 8 个全部存在
+ * (无拼写错误),`sleep` 是核对时补上的 —— schema 里写明它是 "Display item emitted by the
+ * interruptible `clock.sleep` tool",属工具调用,漏掉会少计一次。其余未计入的
+ * (userMessage / hookPrompt / agentMessage / plan / reasoning / enteredReviewMode /
+ * exitedReviewMode / contextCompaction / subAgentActivity)确非工具产出。
+ */
 const TOOL_ITEM_TYPES = new Set([
   'commandExecution',
   'mcpToolCall',
@@ -97,6 +106,7 @@ const TOOL_ITEM_TYPES = new Set([
   'imageView',
   'imageGeneration',
   'collabAgentToolCall',
+  'sleep',
 ]);
 
 /** 我们会消费的 method —— 只有这些值得在 spawn 登记前缓冲。 */
