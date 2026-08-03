@@ -950,6 +950,23 @@ function isPermanentSubscriptionReplayError(err: unknown): boolean {
  */
 const subscriptionReplayGenerations = new Map<string, number>();
 
+/**
+ * 取消某设备的订阅重放收敛循环:翻代作废在途请求的失败回调 + 清已排期定时器。
+ * closeRemoteLink 的取消义务之一——循环无上限收敛后,不取消的话 close 后定时器
+ * 仍会以**新代次**重新 remoteSubscribe,经按需建链把用户刚关的链路建回来。
+ */
+function cancelSubscriptionReplay(deviceId: string): void {
+  subscriptionReplayGenerations.set(
+    deviceId,
+    (subscriptionReplayGenerations.get(deviceId) ?? 0) + 1,
+  );
+  const timer = subscriptionReplayRetryTimers.get(deviceId);
+  if (timer) {
+    clearTimeout(timer);
+    subscriptionReplayRetryTimers.delete(deviceId);
+  }
+}
+
 function replayDeviceSubscription(
   deviceId: string,
   topics: string[],
@@ -1321,10 +1338,17 @@ export async function openRemoteLink(
 
 /** 控制端:解除控制链路 */
 export function closeRemoteLink(deviceId: string): void {
-  // 本地主动断开同样必须终止重开循环:否则用户刚点断开,退避重试又把
-  // 链路建回来。
+  // 取消义务清单(不变量 6):用户显式断开必须终止该设备**全部** per-device
+  // 恢复机制,漏一个就是「刚关又被自动建回」。当前全量:
+  //   1. transportTimeoutReopen 重开循环;
+  //   2. pendingPeerLinkReopens 重开队列;
+  //   3. 订阅重放收敛循环(翻代 + 清定时器);
+  //   4. 在途建链(登记删除 + closeEpochs 翻代拦 park 中的等待);
+  //   5. remoteInvoke / remoteSubscribe 在途调用(经 4 的代次在发送/重开前自败)。
+  // 新增任何 per-device 重试/恢复机制时必须同步登记到本清单。
   transportTimeoutReopen.cancel(deviceId);
   cancelPendingPeerLinkReopen(deviceId);
+  cancelSubscriptionReplay(deviceId);
   // 在途建链可能正 park 在上线等待里(map 删除挡不住它):翻代,让它在等待
   // 结束后的复验处自我取消。
   openLinkCloseEpochs.set(deviceId, (openLinkCloseEpochs.get(deviceId) ?? 0) + 1);
