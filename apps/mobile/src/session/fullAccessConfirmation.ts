@@ -4,17 +4,9 @@ import { requiresFullAccessConfirmation } from '@cindy/maker-shared/permission-m
 
 import { getManualLocaleOverride } from '@/i18n/appLanguage';
 import {
-  getMobileAuthOwner,
-  isMobileAuthOwnerCurrent,
-} from '@/auth/authOwnerGeneration';
-import {
   FULL_ACCESS_CONFIRMATION_COPY,
   type FullAccessConfirmationCopy,
 } from './fullAccessConfirmationCopy';
-import {
-  hasFullAccessAcknowledgement,
-  rememberFullAccessAcknowledgement,
-} from './fullAccessConfirmationStore';
 
 
 
@@ -41,14 +33,24 @@ type ShowAlert = (
 ) => void;
 
 export interface FullAccessConfirmationOptions {
-  controlledDeviceId?: string | null;
-  isControlledDeviceCurrent?: () => boolean;
+  /** 仅用于把新建任务默认权限恢复为该 agent 上一次明确选过的档位。 */
+  restoringRememberedChoice?: boolean;
   showAlert?: ShowAlert;
 }
 
-const confirmationInFlight = new Map<string, Promise<boolean>>();
+/**
+ * 手机端进入 Full access 的确认。只有新建任务恢复该 agent 上一次明确选择的权限时
+ * 直接沿用；其它从非 Full access 进入 Full access 的操作每次都确认。
+ */
+export function confirmFullAccessChange(
+  currentMode: unknown,
+  nextMode: unknown,
+  options: FullAccessConfirmationOptions = {},
+): Promise<boolean> {
+  if (options.restoringRememberedChoice || !requiresFullAccessConfirmation(currentMode, nextMode)) {
+    return Promise.resolve(true);
+  }
 
-function showFullAccessConfirmation(showAlert: ShowAlert): Promise<boolean> {
   return new Promise((resolve) => {
     let settled = false;
     const finish = (confirmed: boolean) => {
@@ -58,7 +60,7 @@ function showFullAccessConfirmation(showAlert: ShowAlert): Promise<boolean> {
     };
 
     const copy = getFullAccessConfirmationCopy();
-    showAlert(
+    (options.showAlert ?? Alert.alert)(
       copy.title,
       copy.description,
       [
@@ -69,60 +71,3 @@ function showFullAccessConfirmation(showAlert: ShowAlert): Promise<boolean> {
     );
   });
 }
-
-/**
- * 手机端进入 Full access 的首次确认。同一账号控制同一台桌面电脑只确认一次；
- * 换账号或换电脑重新确认。取消、系统 dismiss、账号/设备切换都保持原权限。
- */
-export async function confirmFullAccessChange(
-  currentMode: unknown,
-  nextMode: unknown,
-  options: FullAccessConfirmationOptions = {},
-): Promise<boolean> {
-  if (!requiresFullAccessConfirmation(currentMode, nextMode)) {
-    return true;
-  }
-
-  const owner = getMobileAuthOwner();
-  const controlledDeviceId = options.controlledDeviceId?.trim() ?? '';
-  const scopeIsCurrent = () => (
-    !!owner.accountId
-    && !!controlledDeviceId
-    && isMobileAuthOwnerCurrent(owner)
-    && (options.isControlledDeviceCurrent?.() ?? true)
-  );
-  if (!scopeIsCurrent()) return false;
-
-  const inFlightKey = `${owner.accountId}\u0000${controlledDeviceId}\u0000${owner.generation}`;
-  const existing = confirmationInFlight.get(inFlightKey);
-  if (existing) {
-    const confirmed = await existing;
-    return confirmed && scopeIsCurrent();
-  }
-
-  const task = (async () => {
-    const acknowledged = await hasFullAccessAcknowledgement(owner.accountId, controlledDeviceId);
-    if (!scopeIsCurrent()) return false;
-    if (acknowledged) return true;
-
-    const confirmed = await showFullAccessConfirmation(options.showAlert ?? Alert.alert);
-    if (!confirmed || !scopeIsCurrent()) return false;
-
-    await rememberFullAccessAcknowledgement(owner.accountId, controlledDeviceId);
-    return scopeIsCurrent();
-  })();
-  confirmationInFlight.set(inFlightKey, task);
-  try {
-    return await task;
-  } finally {
-    if (confirmationInFlight.get(inFlightKey) === task) {
-      confirmationInFlight.delete(inFlightKey);
-    }
-  }
-}
-
-export const __testing = {
-  resetInFlight(): void {
-    confirmationInFlight.clear();
-  },
-};
