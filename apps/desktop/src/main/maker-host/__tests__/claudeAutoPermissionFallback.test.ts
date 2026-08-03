@@ -359,7 +359,7 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
      * (它们在身份判据之后)、也没有升级 debug(永远识别不出来),整条链路重新全静默。
      * 所以这个计数要有自己的周期性快照(codex P2)。
      */
-    it('warns at a production-visible level once identity never matches', () => {
+    it('warns at a production-visible level after a long unmatched streak', () => {
       let t = 0;
       const { logger, observer } = createObserver(() => 'session-1', () => t);
       const notClassifier = requestBody({ system: 'ordinary assistant' });
@@ -372,7 +372,7 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       // debug 会被 logger 的 shouldLog 直接丢掉,在生产环境等于没落盘。
       observer(ctx({ status: 429, requestBody: notClassifier }));
       expect(logger.warn).toHaveBeenCalledTimes(1);
-      expect(logger.warn.mock.calls[0][0]).toContain('has matched the classifier identity');
+      expect(logger.warn.mock.calls[0][0]).toContain('has not matched for a long streak');
       expect(warnCounters(logger)).toMatchObject({
         classifierFailures: 0,
         errorsNotClassifier: 50,
@@ -386,16 +386,32 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       expect(logger.warn).toHaveBeenCalledTimes(2);
     });
 
-    it('stays silent once the classifier has been recognised at least once', () => {
+    it('resets the streak on every successful match instead of silencing forever', () => {
       const { logger, observer } = createObserver(() => 'session-1', () => 0);
+      const notClassifier = requestBody({ system: 'ordinary assistant' });
 
-      observer(ctx({ status: 429 })); // 识别成功一次 → classifierFailures = 1
-      for (let i = 0; i < 60; i += 1) {
-        observer(ctx({ status: 429, requestBody: requestBody({ system: 'ordinary assistant' }) }));
-      }
-
-      // 识别链路是好的,只是这些响应不是分类器的 —— 不该报。
+      // 攒到 49 条,然后成功识别一次 → 连续计数归零。
+      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
+      observer(ctx({ status: 429 }));
+      // 归零后再来 49 条仍不到阈值 —— 证明计数真的重置了,不是累计总数。
+      for (let i = 0; i < 49; i += 1) observer(ctx({ status: 429, requestBody: notClassifier }));
       expect(logger.warn).not.toHaveBeenCalled();
+    });
+
+    it('still detects drift of one classifier shape after another shape matched', () => {
+      // 分类器有 fast / 2-stage / thinking 三种形态。判据若是「进程内从未命中」,任意
+      // 一种命中过就永久关闭告警,另一种形态漂移永远发现不了(codex P1)。
+      const { logger, observer } = createObserver(() => 'session-1', () => 0);
+      const drifted = requestBody({ system: 'You are a NEW security monitor prefix.' });
+
+      observer(ctx({ status: 429 })); // 某一形态仍能命中
+      expect(logger.warn).not.toHaveBeenCalled();
+
+      // 另一形态持续漂移 → 必须报出来。
+      for (let i = 0; i < 50; i += 1) observer(ctx({ status: 429, requestBody: drifted }));
+      expect(logger.warn).toHaveBeenCalledTimes(1);
+      expect(logger.warn.mock.calls[0][0]).toContain('has not matched for a long streak');
+      expect(logger.warn.mock.calls[0][1]).toMatchObject({ missesSinceLastMatch: 50 });
     });
 
     /**

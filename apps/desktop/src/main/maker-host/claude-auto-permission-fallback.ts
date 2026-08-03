@@ -177,11 +177,14 @@ interface ClassifierObserverCounters {
 const OBSERVER_WARN_THROTTLE_MS = 60_000;
 
 /**
- * 「一条都没识别出来」的告警样本下限。
+ * 身份漂移告警的样本下限 —— 判据是「**自上次成功识别以来**连续这么多条都没命中」,
+ * 不是「进程启动至今一次都没命中」。
  *
- * 正常运行下分类器只要报过一次错,`classifierFailures` 就 > 0,这条永不触发;真正的
- * 识别规则失效会让 errorsNotClassifier 单边快速累积。取 50:普通 turn 的错误响应本就
- * 稀疏,攒到 50 条而分类器一次都没识别出来,才值得当信号报。
+ * 后者会被一次历史命中永久关闭:分类器有 fast / 2-stage / thinking 三种形态,只要任意
+ * 一种曾命中过,另一种形态因前缀或 max_tokens 变化而持续漏检就永远报不出来(codex P1)。
+ * 连续计数在每次成功识别时归零,所以既能发现整体失效,也能发现局部漂移。
+ *
+ * 取 50:普通 turn 的错误响应本就稀疏,连续 50 条都不是分类器才值得当信号。
  */
 const IDENTITY_MISS_ALERT_THRESHOLD = 50;
 
@@ -215,6 +218,11 @@ export function createClaudeAutoClassifierFailureObserver(
     errorsNotClassifier: 0,
     recoveryMissingSessionHeader: 0,
   };
+  /**
+   * 自上次成功识别以来的连续未命中数(命中即归零)。用它判断身份漂移 —— 见
+   * IDENTITY_MISS_ALERT_THRESHOLD 注释里的「一次历史命中不该永久关闭告警」。
+   */
+  let missesSinceLastMatch = 0;
   /** 每个 reason 各自限流,免得高频的那个把另一个饿死。 */
   const lastLogAt = new Map<string, number>();
   const logThrottled = (
@@ -281,6 +289,7 @@ export function createClaudeAutoClassifierFailureObserver(
     // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
     if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
       counters.errorsNotClassifier += 1;
+      missesSinceLastMatch += 1;
       // 「识别规则本身失效」必须能独立落盘:一旦 CC 改了分类器的 system 前缀或 max_tokens
       // 上界,所有真实分类器请求都会掉进这个分支 —— 那时既没有漏检 warn(它们在身份判据
       // 之后)、也没有升级日志(永远识别不出来),整条链路重新完全静默,而这恰恰是这套记账
@@ -292,12 +301,10 @@ export function createClaudeAutoClassifierFailureObserver(
       //
       // 用阈值门控把噪音压住:只有「一条都没识别出来」且样本已经够多时才报。正常运行下
       // 只要分类器真的报过一次错,classifierFailures 就 > 0,这条永远不触发。
-      if (
-        counters.classifierFailures === 0
-        && counters.errorsNotClassifier >= IDENTITY_MISS_ALERT_THRESHOLD
-      ) {
-        warnThrottled('no error response has matched the classifier identity yet', {
+      if (missesSinceLastMatch >= IDENTITY_MISS_ALERT_THRESHOLD) {
+        warnThrottled('classifier identity has not matched for a long streak', {
           status: ctx.status,
+          missesSinceLastMatch,
         });
       }
       return undefined;
@@ -323,6 +330,8 @@ export function createClaudeAutoClassifierFailureObserver(
       return undefined;
     }
     counters.classifierFailures += 1;
+    // 命中即归零:连续漏检才是漂移信号,累计总数会被一次历史命中永久淹掉。
+    missesSinceLastMatch = 0;
 
     if (isTransientClassifierStatus(ctx.status)) {
       const ts = now();
