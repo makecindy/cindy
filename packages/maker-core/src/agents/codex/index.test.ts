@@ -6038,6 +6038,70 @@ describe('CodexAgent MCP thread context hooks', () => {
       }
     });
 
+    it.each([
+      {
+        name: 'capacity then terminal rate limit',
+        failures: ['capacity', 'terminal-rate-limit', 'terminal-rate-limit'] as const,
+        expectedTurnStarts: 3,
+      },
+      {
+        name: 'terminal rate limit then capacity',
+        failures: [
+          'terminal-rate-limit',
+          'terminal-rate-limit',
+          'capacity',
+          'capacity',
+          'capacity',
+        ] as const,
+        expectedTurnStarts: 5,
+      },
+    ])(
+      'shares one replay budget across policies: $name',
+      async ({ failures, expectedTurnStarts }) => {
+        vi.useFakeTimers();
+        try {
+          const agent = new CodexAgent(createDeps());
+          const host = installCapacityHost(agent);
+          const handle = await agent.startSession({
+            sessionId: `session-shared-replay-budget-${failures[0]}`,
+            model: 'gpt-5.4',
+            workingDir: '/repo',
+          });
+          await handle.send({ type: 'user', content: 'hello' });
+
+          const handlers = host.getThreadHandlers();
+          if (!handlers?.error) throw new Error('expected error handler');
+          const events: AgentEvent[] = [];
+          void (async () => {
+            for await (const event of handle.events()) events.push(event);
+          })();
+
+          for (const failure of failures) {
+            if (failure === 'capacity') {
+              await rejectCurrentTurnForCapacity(handle, handlers);
+            } else {
+              await rejectCurrentTurnForTerminalRateLimit(handle, handlers);
+            }
+          }
+
+          // 两类错误共享同一 logical send 的 attempt：策略切换不能各自续满预算。
+          // 顺序不同只会选择当前 policy 的上限，绝不会叠成 4 + 2 次外层重投。
+          expect(turnStartCount(host)).toBe(expectedTurnStarts);
+          expect(
+            events.filter(
+              (event) =>
+                event.type === 'error' &&
+                (event.data as { isTerminal?: boolean }).isTerminal === true,
+            ),
+          ).toHaveLength(1);
+
+          await handle.close();
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
     it('does not outer-retry a terminal 429 after the turn produced output', async () => {
       vi.useFakeTimers();
       try {

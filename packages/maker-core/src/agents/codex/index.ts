@@ -2463,6 +2463,12 @@ export class CodexAgent extends BaseAgent {
      */
     let overloadRetry: {
       retry: () => Promise<void>;
+      /**
+       * 同一 logical send 已消耗的外层重放次数，所有 provider failure policy 共享。
+       * policy 切换不重置：否则 capacity 4 次 + terminal-rate-limit 2 次会把同一条
+       * 用户输入最多重放 6 次，扩大请求量与重复副作用风险。各 policy 的
+       * maxAttempts 是它愿意接受的**总重放上限**，不是独立配额。
+       */
       attempt: number;
       /** 同一逻辑 send 最多接管一次 WS→HTTP body recovery，避免坏响应形成重投环。 */
       httpRecoveryRetryAttempted: boolean;
@@ -6789,6 +6795,8 @@ export class CodexAgent extends BaseAgent {
           maxAttempts: policy.maxAttempts,
         };
       }
+      // attempt 是 logical send 级共享预算，不按 failure kind 分桶。混合故障时沿用
+      // 已消耗次数，保证策略切换不会续满另一份外层重放额度。
       if (state.attempt >= policy.maxAttempts) {
         log.warn('codex turn replay retry budget exhausted — surfacing terminal error', {
           kind: policy.kind,
