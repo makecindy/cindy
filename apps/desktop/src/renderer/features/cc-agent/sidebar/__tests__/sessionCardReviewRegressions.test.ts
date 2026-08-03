@@ -72,8 +72,8 @@ describe('SessionCard review regressions', () => {
   });
 
   it('keeps the original accessible title visible when reduced motion is enabled', () => {
-    expect(globalsSource).toContain(
-      ".sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {\n  opacity: 0;\n}",
+    expect(globalsSource).toMatch(
+      /\.sidebar-title-marquee\[data-title-overflowing='true'\] \.sidebar-title-marquee__ellipsis \{\r?\n {2}opacity: 0;\r?\n\}/,
     );
     expect(globalsSource).toMatch(
       /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\] \.sidebar-title-marquee__ellipsis \{[\s\S]*opacity: 1;/,
