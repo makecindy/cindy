@@ -215,6 +215,40 @@ describe('TodaySpendChip Claude 订阅额度段着色', () => {
       .toContain('text-[var(--error-fg)]');
   });
 
+  it('隐藏总周限利用率仅 50% 但服务端为 critical 时仍显示红色兜底', () => {
+    setClaudeUsage(76, 50);
+    mocks.claudeSnapshot!.sevenDay!.severity = 'critical';
+    mocks.claudeSnapshot!.scoped = [{
+      utilization: 20,
+      modelDisplayName: 'Opus',
+      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+    }];
+    const { container } = renderClaudeSubscriptionChip();
+
+    expect(container.textContent).toContain('5小时 剩余 24%');
+    expect(container.textContent).toContain('Opus 6天 剩余 80%');
+    expect(container.textContent).not.toContain('周限 剩余 50%');
+    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+      .toContain('text-[var(--error-fg)]');
+  });
+
+  it('隐藏总周限利用率 50% 且服务端为 normal 时保持原有警告段展示', () => {
+    setClaudeUsage(76, 50);
+    mocks.claudeSnapshot!.sevenDay!.severity = 'normal';
+    mocks.claudeSnapshot!.scoped = [{
+      utilization: 20,
+      modelDisplayName: 'Opus',
+      resetsAt: (NOW_MS + 6 * DAY_MS) / 1000,
+    }];
+    const { container } = renderClaudeSubscriptionChip();
+
+    const warningSegment = container.querySelector<HTMLElement>('[data-quota-severity="warn"]');
+    expect(warningSegment?.textContent).toBe('5小时 剩余 24%');
+    expect(container.textContent).not.toContain('周限 剩余 50%');
+    expect(screen.getByRole('button', { name: '打开 Claude 用量页面' }).className)
+      .not.toContain('--error-fg');
+  });
+
   it('当前模型 scoped 周限已有红色段时不重复显示整 chip 告警兜底', () => {
     setClaudeUsage(20, 95);
     mocks.claudeSnapshot!.scoped = [{

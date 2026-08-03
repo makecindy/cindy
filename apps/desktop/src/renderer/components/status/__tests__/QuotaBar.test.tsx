@@ -5,7 +5,7 @@ import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
-import { QuotaBar, quotaSeverity } from '../QuotaBar';
+import { effectiveQuotaSeverity, QuotaBar, quotaSeverity } from '../QuotaBar';
 
 const colorsSource = readFileSync(
   resolve(__dirname, '..', '..', '..', 'themes', 'colors.ts'),
@@ -48,6 +48,23 @@ describe('QuotaBar', () => {
   ] as const)('derives $usedPercent as $expected severity', ({ usedPercent, expected }) => {
     expect(quotaSeverity(usedPercent)).toBe(expected);
   });
+
+  // 任何非 normal 的未知服务端等级都至少保留告警，且不能覆盖更严重的本地利用率等级。
+  it.each([
+    { serverSeverity: 'warning', usedPercent: 50, expected: 'warn' },
+    { serverSeverity: undefined, usedPercent: 50, expected: 'normal' },
+    { serverSeverity: '', usedPercent: 50, expected: 'normal' },
+    { serverSeverity: 'unknown-upstream-value', usedPercent: 50, expected: 'warn' },
+    { serverSeverity: 'hard_limit', usedPercent: 50, expected: 'warn' },
+    { serverSeverity: 'quota_exceeded', usedPercent: 50, expected: 'crit' },
+    { serverSeverity: 'critical', usedPercent: 50, expected: 'crit' },
+    { serverSeverity: 'normal', usedPercent: 93, expected: 'crit' },
+  ] as const)(
+    'combines server severity $serverSeverity and $usedPercent% utilization as $expected',
+    ({ serverSeverity, usedPercent, expected }) => {
+      expect(effectiveQuotaSeverity(usedPercent, serverSeverity)).toBe(expected);
+    },
+  );
 
   it('renders distinct regular and mini size classes', () => {
     const { getByRole, rerender } = render(<QuotaBar usedPercent={1} />);
