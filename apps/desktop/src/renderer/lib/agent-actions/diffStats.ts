@@ -71,10 +71,26 @@ export function statsForToolCall(
     return computeDiffStats(o, n);
   }
 
-  if (toolName === 'Write') {
+  if (toolName === 'Write' || toolName === 'write') {
     const c = typeof inp.content === 'string' ? inp.content : '';
     // All-add: oldStr = ''. Surface as `+N -0` per ADR-5.
     return computeDiffStats('', c);
+  }
+
+  // pi edit:edits[].oldText/newText,逐条求和(与 MultiEdit 同形态)。
+  if (toolName === 'edit') {
+    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    let add = 0;
+    let del = 0;
+    for (const e of edits) {
+      const er = e as Record<string, unknown> | null;
+      const o = er && typeof er.oldText === 'string' ? er.oldText : '';
+      const n = er && typeof er.newText === 'string' ? er.newText : '';
+      const s = computeDiffStats(o, n);
+      add += s.add;
+      del += s.del;
+    }
+    return { add, del };
   }
 
   if (toolName === 'MultiEdit') {

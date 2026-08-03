@@ -19,6 +19,9 @@ import {
  * - Codex：shell 工具 toolName='exec'（input 无 description，`displayCommand`
  *   是解包 POSIX / PowerShell wrapper 后的展示命令）；MCP 为 `mcp:server:tool`，另有
  *   `dynamic:ns:tool` / `collab:tool` / `web_search`。
+ * - pi：内置工具名全小写（bash/read/edit/write/grep/find/ls），文件参数字段为
+ *   `path`（fileDescriptor 已双认 file_path/path）；bash 无 description 字段，
+ *   桥接 MCP 复用 Claude Code 的 `mcp__server__tool` 形态。
  */
 
 // ── 工具名拆解 ───────────────────────────────────────────────────────────────
@@ -221,10 +224,13 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
   }
 
   switch (toolName) {
-    case 'Bash': {
+    // pi 内置 bash 与 Claude Code Bash 同构:input.command 必有,description
+    // 仅 CC 会填(pi schema 无此字段,自然走 intent 兜底),共用一条路径。
+    case 'Bash':
+    case 'bash': {
       const description = readNonEmptyString(inp?.description);
       const command = readNonEmptyString(inp?.command) ?? '';
-      // description 缺失（模型漏填 / codex exec 无此字段）才兜底算 intent。
+      // description 缺失（模型漏填 / pi bash 无此字段）才兜底算 intent。
       const intent = description ? undefined : commandIntentFromCommand(command);
       return {
         kind: 'command',
@@ -251,14 +257,24 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
     case 'file_change':
       return fileChangeDescriptor(toolName, inp);
     case 'Read':
+    case 'read':
+    // pi ls 目标是目录,读取语义与 read 同档;path 可缺省(默认当前目录),
+    // 缺省时 fileDescriptor 自然降级 generic。
+    case 'ls':
       return fileDescriptor(toolName, 'read', inp);
     case 'Edit':
     case 'MultiEdit':
+    case 'edit':
       return fileDescriptor(toolName, 'edit', inp);
     case 'Write':
+    case 'write':
       return fileDescriptor(toolName, 'create', inp);
+    // pi grep/find 与 CC Grep/Glob 同构:pattern 必有,path/glob 可选;
+    // find 的 pattern 是 glob 表达式,归 glob 模式。
     case 'Grep':
-    case 'Glob': {
+    case 'Glob':
+    case 'grep':
+    case 'find': {
       const pattern = readNonEmptyString(inp?.pattern);
       if (!pattern) return genericDescriptor(toolName, inp);
       const path = readNonEmptyString(inp?.path);
@@ -266,7 +282,7 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
       return {
         kind: 'search',
         toolName,
-        mode: toolName === 'Grep' ? 'grep' : 'glob',
+        mode: toolName === 'Grep' || toolName === 'grep' ? 'grep' : 'glob',
         pattern,
         ...(path ? { path } : {}),
         ...(glob ? { glob } : {}),

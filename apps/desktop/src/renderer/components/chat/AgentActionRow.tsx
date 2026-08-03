@@ -69,7 +69,8 @@ import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 
-const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read']);
+// CC 大写 + pi 小写(pi 内置工具名全小写、文件字段为 path,见 toolUseDescriptor.ts)。
+const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read', 'edit', 'write', 'read']);
 
 /**
  * v10 (2026-04-20): 命令类工具(Bash/Grep/Glob/WebFetch/WebSearch/...)的
@@ -451,6 +452,7 @@ function formatInlineInput(
   if (!inp) return '';
   switch (toolName) {
     case 'Bash':
+    case 'bash':
     case 'exec': {
       // description 已上移为行主文案(issue #450),这里只展示命令原文 + cwd,
       // 避免同一句话在折叠行和展开区重复出现。
@@ -458,7 +460,8 @@ function formatInlineInput(
       const cwd = typeof inp.cwd === 'string' && inp.cwd ? `cwd: ${inp.cwd}` : '';
       return cwd ? `${cmd}\n${cwd}` : cmd;
     }
-    case 'Grep': {
+    case 'Grep':
+    case 'grep': {
       const pattern = typeof inp.pattern === 'string' ? inp.pattern : '';
       const path = typeof inp.path === 'string' ? inp.path : '';
       const glob = typeof inp.glob === 'string' ? inp.glob : '';
@@ -474,10 +477,16 @@ function formatInlineInput(
         .filter(Boolean)
         .join('\n');
     }
-    case 'Glob': {
+    case 'Glob':
+    case 'find': {
       const pattern = typeof inp.pattern === 'string' ? inp.pattern : '';
       const path = typeof inp.path === 'string' ? inp.path : '';
       return path ? `${pattern}\nin: ${path}` : pattern;
+    }
+    case 'ls': {
+      // pi ls:path 可缺省(默认当前目录)。
+      const path = typeof inp.path === 'string' ? inp.path : '';
+      return path;
     }
     case 'WebFetch': {
       const url = typeof inp.url === 'string' ? inp.url : '';
@@ -536,7 +545,7 @@ function buildDiffPayload(
       ],
     };
   }
-  if (toolName === 'Write') {
+  if (toolName === 'Write' || toolName === 'write') {
     const c = typeof inp.content === 'string' ? inp.content : '';
     return {
       kind: 'diff',
@@ -545,6 +554,25 @@ function buildDiffPayload(
           key: filePath,
           filePath,
           diffs: [{ key: 'write:0', oldString: '', newString: c }],
+        },
+      ],
+    };
+  }
+  // pi edit:edits[].oldText/newText,与 MultiEdit 同款多段 diff 呈现。
+  if (toolName === 'edit') {
+    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    return {
+      kind: 'diff',
+      files: [
+        {
+          key: filePath,
+          filePath,
+          diffs: edits.map((e, index) => {
+            const er = e as Record<string, unknown> | null;
+            const o = er && typeof er.oldText === 'string' ? er.oldText : '';
+            const n = er && typeof er.newText === 'string' ? er.newText : '';
+            return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
+          }),
         },
       ],
     };
@@ -719,7 +747,7 @@ export function AgentActionRow({
       return;
     }
     triggerRef.current = anchor;
-    if (toolName === 'Read' && filePath) {
+    if ((toolName === 'Read' || toolName === 'read') && filePath) {
       // 模型可能给相对路径(runtime 按会话工作目录解析后 Read 照样成功),而
       // 预览 / 定位 IPC 一律要求绝对路径 —— 先按 workingDir 补齐,镜像 runtime
       // 语义,保证 chip 打开的就是 agent 实际读到的那个文件。

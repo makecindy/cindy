@@ -216,6 +216,14 @@ export function formatPayloadToolUseSummary(toolName: string, input: unknown): s
     Bash: ['command'],
     Glob: ['pattern'],
     Grep: ['pattern'],
+    // pi 内置工具:名字全小写、文件参数为 path(见 toolUseDescriptor.ts 数据来源约定)。
+    read: ['path'],
+    edit: ['path'],
+    write: ['path'],
+    ls: ['path'],
+    bash: ['command'],
+    grep: ['pattern'],
+    find: ['pattern'],
   };
   const keys = keyParamMap[toolName];
   if (!keys) return `${toolName}()`;
@@ -240,9 +248,22 @@ export function buildPayloadToolDiff(toolName: string, input: unknown): PayloadT
     const newString = typeof inp.new_string === 'string' ? inp.new_string : '';
     return createPayloadToolDiff(filePath, [{ key: 'edit:0', oldString, newString }]);
   }
-  if (toolName === 'Write') {
+  if (toolName === 'Write' || toolName === 'write') {
     const newString = typeof inp.content === 'string' ? inp.content : '';
     return createPayloadToolDiff(filePath, [{ key: 'write:0', oldString: '', newString }]);
+  }
+  // pi edit:edits[].oldText/newText(与 MultiEdit 同款多段 diff)。
+  if (toolName === 'edit') {
+    const edits = Array.isArray(inp.edits) ? inp.edits : [];
+    return createPayloadToolDiff(filePath, edits.map((edit, index) => {
+      const record = readPayloadRecord(edit);
+      return {
+        key: `edit:${index}`,
+        oldString: typeof record?.oldText === 'string' ? record.oldText : '',
+        newString: typeof record?.newText === 'string' ? record.newText : '',
+        label: `Edit ${index + 1}/${edits.length}`,
+      };
+    }));
   }
   if (toolName === 'MultiEdit') {
     const edits = Array.isArray(inp.edits) ? inp.edits : [];

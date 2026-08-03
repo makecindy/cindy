@@ -184,6 +184,68 @@ describe('describeToolUse — file tools', () => {
   });
 });
 
+describe('describeToolUse — pi builtin tools (lowercase, path field)', () => {
+  it('maps pi bash to command with local intent (schema has no description field)', () => {
+    expect(describeToolUse('bash', { command: 'git status' })).toEqual({
+      kind: 'command',
+      toolName: 'bash',
+      command: 'git status',
+      intent: { action: 'gitStatus' },
+    });
+    expect(describeToolUse('bash', { command: 'docker ps' })).toEqual({
+      kind: 'command',
+      toolName: 'bash',
+      command: 'docker ps',
+    });
+  });
+
+  it('maps pi read/edit/write/ls to file actions via the path field', () => {
+    expect(describeToolUse('read', { path: '/repo/src/app.ts' })).toEqual({
+      kind: 'file',
+      toolName: 'read',
+      action: 'read',
+      filePath: '/repo/src/app.ts',
+      fileName: 'app.ts',
+    });
+    expect(describeToolUse('edit', {
+      path: '/repo/a.ts',
+      edits: [{ oldText: 'a', newText: 'b' }],
+    })).toMatchObject({ kind: 'file', action: 'edit', fileName: 'a.ts' });
+    expect(describeToolUse('write', { path: '/repo/new.ts', content: 'x' })).toMatchObject({
+      kind: 'file',
+      action: 'create',
+      fileName: 'new.ts',
+    });
+    expect(describeToolUse('ls', { path: '/repo/src' })).toMatchObject({
+      kind: 'file',
+      action: 'read',
+      fileName: 'src',
+    });
+  });
+
+  it('degrades pi ls without path (defaults to cwd) to generic', () => {
+    expect(describeToolUse('ls', {})).toEqual({ kind: 'generic', toolName: 'ls' });
+  });
+
+  it('maps pi grep to grep-mode and pi find (glob pattern) to glob-mode search', () => {
+    expect(describeToolUse('grep', { pattern: 'TODO', path: 'src/', glob: '*.ts' })).toEqual({
+      kind: 'search',
+      toolName: 'grep',
+      mode: 'grep',
+      pattern: 'TODO',
+      path: 'src/',
+      glob: '*.ts',
+    });
+    expect(describeToolUse('find', { pattern: '**/*.spec.ts' })).toEqual({
+      kind: 'search',
+      toolName: 'find',
+      mode: 'glob',
+      pattern: '**/*.spec.ts',
+    });
+    expect(describeToolUse('grep', {})).toEqual({ kind: 'generic', toolName: 'grep' });
+  });
+});
+
 describe('describeToolUse — Codex file_change', () => {
   it('normalizes add/update/delete and rename changes', () => {
     expect(describeToolUse('file_change', {
