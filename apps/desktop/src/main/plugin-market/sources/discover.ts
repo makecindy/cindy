@@ -179,6 +179,14 @@ type PluginDirResolution =
  *   "invalid" 时排查者无从判断是哪一种。
  * - `manifest-symlink-rejected` 是 O_NOFOLLOW 拒掉符号链接的结果,属攻击面,不该
  *   与普通的读取失败混在一起。
+ * - `manifest-unreadable` **只用于事实不明**(kind === 'unreadable':文件锁、权限、
+ *   网络盘抖动)。永久性的打开失败(ENOTDIR / EISDIR 等)走 `manifest-open-failed`——
+ *   否则新增的诊断会把结构损坏说成"暂时读不到",排障者按瞬时故障处理、干等恢复。
+ * - `manifest-bounded-read-rejected` 是限量读取闸返回 null,**三种成因**:非普通
+ *   文件、超过 GHOST_MANIFEST_MAX_BYTES、根内复核不过(Windows 无 O_NOFOLLOW 时
+ *   的符号链接与 dev/ino 不匹配也在此)。闸只给"拒了"这一个信号,不带原因,所以
+ *   reason 名不对文件类型下断言;要细分得先改 readBoundedFile* 的返回契约,那会
+ *   牵动发现/安装/打包三条共用链路,不属本次范围。
  */
 type PluginSkipReason =
   | 'entry-not-object'
@@ -189,7 +197,8 @@ type PluginSkipReason =
   | 'dir-unresolvable'
   | 'manifest-missing'
   | 'manifest-symlink-rejected'
-  | 'manifest-not-regular-file'
+  | 'manifest-bounded-read-rejected'
+  | 'manifest-open-failed'
   | 'manifest-unreadable'
   | 'manifest-unparsable'
   | 'manifest-invalid'
@@ -241,17 +250,35 @@ function manifestReadReason(
   // 目录在、ghost.json 不在:submodule 未检出的典型形态(见 PluginSkipReason)。
   if (errno === 'ENOENT') return 'manifest-missing';
   // O_NOFOLLOW 平台对符号链接的拒绝。Windows 没有该 flag,回退闸走 lstat+dev/ino
-  // 并**返回 null**(不抛),因此那边的符号链接落在 manifest-not-regular-file。
+  // 并**返回 null**(不抛),因此那边的符号链接落在 manifest-bounded-read-rejected。
   if (errno === 'ELOOP') return 'manifest-symlink-rejected';
-  return 'manifest-unreadable';
+  // 到这里 kind 必为 'invalid':是**永久**的打开失败(ENOTDIR / EISDIR / 无 errno 的
+  // 异常等)。绝不能回落到 manifest-unreadable —— 那个 reason 专表事实不明。
+  return 'manifest-open-failed';
 }
 
 /**
- * 把清单自报的相对路径写进日志前消毒:换行能伪造出额外的日志行,双向控制符能让路径
- * 显示成另一个位置。字符集直接取自 FORBIDDEN_NAME_CHARS(市场名那道校验闸),只是改为
- * 带 g 的**剥离**——两处永不漂移。市场名出现即拒,路径不能拒:它是跳过原因的关键线索。
+ * Unicode 换行类:NEL(U+0085)、LINE SEPARATOR(U+2028)、PARAGRAPH SEPARATOR(U+2029)。
+ *
+ * 它们不在 C0/DEL 与双向控制符集合里,但日志序列化(JSON.stringify 与 util.inspect
+ * 都不转义这三个码位)会原样写出,查看器与终端普遍按换行渲染 —— 于是不受信路径能把
+ * 一行 warn 劈成攻击者控制的多行,正是本消毒声称要挡住的东西。
+ *
+ * 只补在**日志剥离**侧,不动 FORBIDDEN_NAME_CHARS:那是市场名的准入判据,往里加字符
+ * 会改变"哪些市场名被拒绝",属于内容判据变更(可能影响存量市场),不在本次范围内。
  */
-const LOG_UNSAFE_CHARS = new RegExp(FORBIDDEN_NAME_CHARS.source, 'g');
+const LOG_UNSAFE_LINE_BREAKS = '\\u0085\\u2028\\u2029';
+
+/**
+ * 把清单自报的相对路径写进日志前消毒:换行能伪造出额外的日志行,双向控制符能让路径
+ * 显示成另一个位置。字符类取自 FORBIDDEN_NAME_CHARS(市场名那道校验闸)再并上 Unicode
+ * 换行类,改为带 g 的**剥离**——与那道闸共用同一份来源,不各自抄一遍。市场名出现即拒,
+ * 路径不能拒:它是跳过原因的关键线索。
+ */
+const LOG_UNSAFE_CHARS = new RegExp(
+  `${FORBIDDEN_NAME_CHARS.source}|[${LOG_UNSAFE_LINE_BREAKS}]`,
+  'g',
+);
 
 function logSafeEntryPath(value: string): string {
   return value.replace(LOG_UNSAFE_CHARS, '').slice(0, SKIP_LOG_PATH_MAX_CHARS);
@@ -319,8 +346,9 @@ async function resolvePluginDir(
       GHOST_MANIFEST_MAX_BYTES,
       realRoot,
     );
-    // null = 非普通文件 / 超限 / 根内复核不过:都是内容判据,属永久非法。
-    if (raw === null) return { kind: 'invalid', reason: 'manifest-not-regular-file' };
+    // null = 非普通文件 / 超限 / 根内复核不过:都是内容判据,属永久非法。闸不区分
+    // 三者,reason 也不下断言(见 PluginSkipReason)。
+    if (raw === null) return { kind: 'invalid', reason: 'manifest-bounded-read-rejected' };
   } catch (error) {
     // JSON 解析失败是内容非法;fs 错误按可重试性分类。
     if (error instanceof SyntaxError) return { kind: 'invalid', reason: 'manifest-unparsable' };

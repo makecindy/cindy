@@ -444,6 +444,46 @@ describe('discoverMarketplace', () => {
     );
   });
 
+  it('does not claim a bounded-read rejection is a non-regular file', async () => {
+    const root = makeRoot();
+    const bigDir = path.join(root, 'plugins', 'big');
+    fs.mkdirSync(bigDir, { recursive: true });
+    // 超过 GHOST_MANIFEST_MAX_BYTES:限量读取闸返回 null,与"非普通文件""根内复核
+    // 不过"共用同一个信号。reason 因此不得对文件类型下断言,否则排障者会去查
+    // symlink / 文件类型,而真因是体积。
+    fs.writeFileSync(
+      path.join(bigDir, 'ghost.json'),
+      `{"schemaVersion":2,"id":"big","pad":"${'x'.repeat(600 * 1024)}"}`,
+    );
+    writeManifest(root, { name: 'sized-log', plugins: [{ source: 'plugins/big' }] });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(1);
+    const payload = mocks.warn.mock.calls.at(-1)?.[1] as { entries: Array<{ reason: string }> };
+    expect(payload.entries[0]?.reason).toBe('manifest-bounded-read-rejected');
+  });
+
+  it('strips unicode line separators from logged paths', async () => {
+    const root = makeRoot();
+    // U+2028 / U+2029 / NEL 不在 C0 与双向控制符集合里,但日志序列化不转义它们,
+    // 查看器按换行渲染 —— 不剥离就能把一行 warn 劈成攻击者控制的多行。
+    const hostileRel = 'plugins/a\u2028fake-log-line\u2029b\u0085c';
+    writeManifest(root, { name: 'hostile-path', plugins: [{ source: hostileRel }] });
+
+    const result = await discoverMarketplace(root);
+
+    expect(result.ok).toBe(true);
+    if (!result.ok) return;
+    expect(result.marketplace.skippedCount).toBe(1);
+    const payload = mocks.warn.mock.calls.at(-1)?.[1] as { entries: Array<{ path?: string }> };
+    const logged = payload.entries[0]?.path ?? '';
+    expect(logged).toBe('plugins/afake-log-linebc');
+    expect(/[\u0085\u2028\u2029]/.test(logged)).toBe(false);
+  });
+
   it('caps skip details and reports how many were dropped', async () => {
     const root = makeRoot();
     // 损坏或恶意清单可有数百条非法条目;发现会被列表/快照/详情反复调用,明细必须限量。
