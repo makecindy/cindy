@@ -113,7 +113,11 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     workdir: ctx.workdir,
     url: browser.url || state.url,
     reload: browser.reload,
-    enabled: active === true && ctx.remoteHostId === null && !browser.crash,
+    enabled:
+      active === true &&
+      ctx.remoteHostId === null &&
+      deviceLinkDeviceId === null &&
+      !browser.crash,
   });
 
   // 把 pool 的 wrapper 挂进 slot —— useLayoutEffect(在 paint 前移 DOM,避免闪)。

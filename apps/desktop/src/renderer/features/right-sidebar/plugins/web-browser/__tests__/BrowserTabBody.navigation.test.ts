@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { UseBrowserWebviewResult } from '../../../hooks/useBrowserWebview';
 import type { TabKindHostContext } from '../../../types';
 import { BrowserTabBody } from '../BrowserTabBody';
+import { useLocalHtmlAutoReload } from '../useLocalHtmlAutoReload';
 
 const toastMocks = vi.hoisted(() => ({
   error: vi.fn(),
@@ -662,5 +663,15 @@ describe('BrowserTabBody navigation', () => {
         name: 'rightSidebar.browser.openInSystemBrowser',
       }) as HTMLButtonElement).disabled,
     ).toBe(true);
+  });
+
+  it.each([
+    ['remote device-link', 'device-1' as string | undefined],
+    ['unresolved device-link', undefined],
+  ])('disables local HTML auto reload for %s sessions', (_label, deviceLinkDeviceId) => {
+    browserState = makeBrowserState({ url: 'file:///remote/repo/index.html' });
+    render(renderBrowserTab('file:///remote/repo/index.html', vi.fn(), true, {}, deviceLinkDeviceId));
+
+    expect(vi.mocked(useLocalHtmlAutoReload).mock.lastCall?.[0].enabled).toBe(false);
   });
 });
