@@ -103,6 +103,8 @@ import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
 import { resolveFastSupported } from '@/lib/providerModels';
@@ -1255,6 +1257,7 @@ export function CCAgentSessionView({
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
+  const { mode: authMode, user: authUser } = useAuth();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
@@ -1278,6 +1281,18 @@ export function CCAgentSessionView({
     session?.model,
     session?.remoteHostId,
   ]);
+  /**
+   * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
+   * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里
+   * 没有余额页可跳，此时不传回调，ErrorBanner 会保持原样文案、不加按钮。
+   */
+  const canAccessBilling = canAccessBillingSettings({
+    mode: authMode,
+    membershipKind: authUser?.membershipKind ?? null,
+  });
+  const handleViewBalance = useCallback(() => {
+    navigate('/settings?tab=billing');
+  }, [navigate]);
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -3383,6 +3398,7 @@ export function CCAgentSessionView({
                 onSwitchToClaudeSubscription={
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }
+                onViewBalance={canAccessBilling ? handleViewBalance : undefined}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
