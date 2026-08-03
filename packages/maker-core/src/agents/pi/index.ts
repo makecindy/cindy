@@ -31,6 +31,7 @@ import {
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
+  type PiNativeModelSpec,
   type PiNativeProviderSpec,
   type SendOptions,
   type StartSessionOptions,
@@ -173,6 +174,18 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
 /** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
 function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
+}
+
+const PI_NATIVE_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
+function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
+  if (!model) return undefined;
+  if (model.thinkingLevelMap) {
+    return PI_NATIVE_THINKING_LEVELS.filter((effort) => model.thinkingLevelMap?.[effort] != null);
+  }
+  // 明确声明非 reasoning 也是已知的空能力；缺少声明则保留旧兼容行为。
+  return model.reasoning === false ? [] : undefined;
 }
 
 /**
@@ -591,6 +604,27 @@ export class PiAgent extends BaseAgent {
       });
     }
 
+    // Pi 子进程只读取本次启动生成的 models.json。renderer 目录热更新后，不能把新出现的
+    // effort 直接发送给仍在运行的旧进程；否则 Pi 会把 thinkingLevelMap 中的 null 当作
+    // 关闭 reasoning。这里冻结每个可路由模型在该启动快照中的能力，setModel 成功后只
+    // 切换到同一快照里已有的目标模型能力。
+    const resolveStartupEffortSnapshot = (
+      providerId: string,
+      modelId: string,
+    ): readonly Effort[] | undefined => {
+      if (providerId !== PI_PROVIDER_ID) {
+        return startupEffortsOfNativeModel(
+          nativeProviderById.get(providerId)?.models.find((model) => model.id === modelId),
+        );
+      }
+      const gatewayModel = modelId === opts.model && selectedRuntimeModel
+        ? selectedRuntimeModel
+        : this.deps.resolvePiGatewayModelDescriptor?.(modelId)
+          ?? this.capabilities.availableModels.find((model) => model.id === modelId);
+      return gatewayModel?.efforts;
+    };
+    const initialEffortSnapshot = resolveStartupEffortSnapshot(initialProvider, opts.model);
+
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
     const authProviderId =
@@ -837,6 +871,7 @@ export class PiAgent extends BaseAgent {
     // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
     let mutablePiProviderId = initialProvider;
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
+    let activeEffortSnapshot = initialEffortSnapshot;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
@@ -1320,10 +1355,12 @@ export class PiAgent extends BaseAgent {
           );
         }
         const provider = resolveProviderForModel(model, requestedProviderId);
+        const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
         mutablePiProviderId = provider;
+        activeEffortSnapshot = nextEffortSnapshot;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };
@@ -1333,6 +1370,12 @@ export class PiAgent extends BaseAgent {
       },
 
       async setEffort(effort: Effort): Promise<void> {
+        if (activeEffortSnapshot && !activeEffortSnapshot.includes(effort)) {
+          throw new Error(
+            `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
+              'startup model snapshot; restart the Pi session after changing provider capabilities.',
+          );
+        }
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),

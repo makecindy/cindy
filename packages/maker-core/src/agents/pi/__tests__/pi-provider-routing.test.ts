@@ -275,6 +275,54 @@ describe('Pi provider-aware model routing', () => {
     await handle.close();
   });
 
+  it('freezes active BYOM effort selection to the startup models.json snapshot', async () => {
+    const agent = new PiAgent(byomDeps(async () => ({
+      providers: [
+        {
+          id: 'native-a',
+          name: 'Native A',
+          baseUrl: 'http://a.test',
+          api: 'openai-responses',
+          models: [{
+            id: 'local-model',
+            reasoning: true,
+            thinkingLevelMap: {
+              minimal: null,
+              low: 'low',
+              medium: null,
+              high: null,
+              xhigh: null,
+              max: null,
+            },
+          }],
+        },
+      ],
+      env: {},
+    })));
+
+    const handle = await agent.startSession({
+      sessionId: 'frozen-effort-snapshot',
+      workingDir: cwd,
+      model: 'local-model',
+      providerId: 'native-a',
+      effort: 'low',
+    });
+    const startupRequests = captured.requests.filter((request) => request.type === 'set_thinking_level');
+    expect(startupRequests).toContainEqual({ type: 'set_thinking_level', level: 'low' });
+
+    // provider 保存后 renderer 目录可能已出现 xhigh，但这个活动 Pi 进程仍读旧 models.json。
+    await expect(handle.setEffort!('xhigh')).rejects.toThrow(/startup model snapshot.*restart the Pi session/);
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      startupRequests.length,
+    );
+
+    await handle.setEffort!('low');
+    expect(captured.requests.filter((request) => request.type === 'set_thinking_level')).toHaveLength(
+      startupRequests.length + 1,
+    );
+    await handle.close();
+  });
+
   const byomDeps = (resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders']): AgentDeps => ({
     auth: {
       getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
