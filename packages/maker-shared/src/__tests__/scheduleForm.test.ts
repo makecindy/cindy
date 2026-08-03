@@ -85,6 +85,25 @@ describe('mobile schedule form model', () => {
     });
   });
 
+  it('clears intervalMs with a serializable null that survives the JSON wire', () => {
+    const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
+
+    const cleared = buildMobileScheduleInput({ ...edited, intervalMinutes: '' });
+    expect(cleared.intervalMs).toBeNull();
+
+    const manual = buildMobileScheduleInput({ ...edited, runMode: 'manual', intervalMinutes: '' });
+    expect(manual.intervalMs).toBeNull();
+
+    // device-link 经 JSON.stringify 传输:undefined 的 key 会被丢掉(= 桌面端
+    // 视为「不修改」),清空语义必须以 null 原样过线,由桌面接收端归一化。
+    const wire = JSON.parse(JSON.stringify(cleared)) as Record<string, unknown>;
+    expect(hasOwn(wire, 'intervalMs')).toBe(true);
+    expect(wire.intervalMs).toBeNull();
+
+    const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
+    expect(kept.intervalMs).toBe(15 * 60_000);
+  });
+
   it('writes an explicit false when mobile disables WeCom group notifications', () => {
     const draft = createMobileScheduleDraft(schedule({
       notify: { desktop: true, feishu: false, wecomGroup: true },

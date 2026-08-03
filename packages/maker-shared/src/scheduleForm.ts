@@ -254,7 +254,11 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     timezone: draft.timezone.trim(),
     recurring,
     manual: !recurring,
-    intervalMs: recurring && intervalMinutes ? intervalMinutes * 60_000 : undefined,
+    // Mobile 表单是全量提交:没填间隔(或 manual 模式)就是要清空间隔。清空必须
+    // 发 null 而不是 undefined——这个 input 经 device-link JSON.stringify 传输,
+    // undefined 的 key 会被丢掉,desktop 端真 partial 语义下旧 intervalMs 会被
+    // 保留,清空间隔 / manual 切回 recurring 就静默失效(codex review 发现)。
+    intervalMs: recurring && intervalMinutes ? intervalMinutes * 60_000 : null,
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,

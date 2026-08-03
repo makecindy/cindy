@@ -20,7 +20,13 @@ export interface RemoteScheduleWriteInput {
   timezone: string;
   recurring: boolean;
   manual?: boolean;
-  intervalMs?: number;
+  /**
+   * Interval 语义间隔(毫秒)。这个类型跨 device-link 的 JSON 边界传输,而
+   * JSON.stringify 会丢掉值为 undefined 的 key——所以「清空间隔、退回 cron
+   * 壁钟语义」必须用可序列化的 null 表达(desktop 接收端归一化成引擎的
+   * 「带 key 的 undefined」);省略 key = 不修改。
+   */
+  intervalMs?: number | null;
   agentKind: RemoteScheduleAgentKind;
   model?: string;
   providerId?: string;

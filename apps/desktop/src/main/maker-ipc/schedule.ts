@@ -215,6 +215,24 @@ async function withScheduler<T>(cb: (deps: SchedulerDeps) => Promise<T>): Promis
   }
 }
 
+/**
+ * Device-link JSON 边界翻译:mobile 清空 intervalMs 用可序列化的 null 表达
+ * (`JSON.stringify` 会丢掉值为 undefined 的 key,见 maker-shared
+ * scheduleTypes.RemoteScheduleWriteInput.intervalMs),而引擎契约是「带 key 的
+ * undefined = 显式清空;省略 key = 不修改」。在 IPC 入口把 null 归一化成带 key
+ * 的 undefined,与 MCP schedule_update 对 intervalMs:null 的翻译同一约定。
+ * 桌面 renderer 走 structured clone,undefined key 不会丢,不受影响。
+ * (export 仅供单测直接验证翻译语义。)
+ */
+export function normalizeNullableIntervalMs<T extends { intervalMs?: number | null }>(
+  input: T,
+): Omit<T, 'intervalMs'> & { intervalMs?: number } {
+  if (input.intervalMs !== null) {
+    return input as Omit<T, 'intervalMs'> & { intervalMs?: number };
+  }
+  return { ...input, intervalMs: undefined };
+}
+
 function listAllTemplates(): ScheduleTemplate[] {
   const projectTemplates: ScheduleTemplate[] = [];
   return [...BUILTIN_TEMPLATES, ...projectTemplates];
@@ -294,7 +312,7 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
     requireObject(input, 'input');
     return withScheduler(async ({ scheduler }) => {
       const normalized = await stabilizePreRunHookForCreate(
-        input as CreateScheduleInput,
+        normalizeNullableIntervalMs(input as CreateScheduleInput & { intervalMs?: number | null }),
         hookPathDeps,
       );
       return scheduler.create(normalized);
@@ -308,7 +326,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       scheduler.updateFromCurrent(scheduleId, (existing) =>
         stabilizePreRunHookForUpdate(
           existing,
-          patch as UpdateScheduleInput,
+          normalizeNullableIntervalMs(
+            patch as UpdateScheduleInput & { intervalMs?: number | null },
+          ),
           hookPathDeps,
         ),
       ),
@@ -581,7 +601,9 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
         : {};
     const overrides =
       body.overrides && typeof body.overrides === 'object'
-        ? (body.overrides as Partial<CreateScheduleInput>)
+        ? normalizeNullableIntervalMs(
+            body.overrides as Partial<CreateScheduleInput> & { intervalMs?: number | null },
+          )
         : {};
     return withScheduler(({ scheduler }) => {
       const template = findTemplate(templateId);
