@@ -25,7 +25,11 @@ import { prefillContactsAiSessionDraft } from './startContactsAiSession';
 
 const log = createLogger('ContactsSection');
 
-export function ContactsSection() {
+interface ContactsSectionProps {
+  workingDir?: string;
+}
+
+export function ContactsSection({ workingDir }: ContactsSectionProps) {
   const { t, i18n } = useTranslation();
   const navigate = useNavigate();
 
@@ -47,7 +51,7 @@ export function ContactsSection() {
 
   useEffect(() => {
     void contactsService
-      .settingsGet()
+      .settingsGet(workingDir)
       .then((s) => setEnabled(s.enabled))
       .catch((err) => log.warn('contacts settingsGet failed', err));
     void reloadStats();
@@ -62,7 +66,7 @@ export function ContactsSection() {
       off();
       offSync();
     };
-  }, [reloadStats]);
+  }, [reloadStats, workingDir]);
 
   const handleToggle = useCallback(
     async (next: boolean) => {
@@ -96,7 +100,7 @@ export function ContactsSection() {
     if (togglePending || aiSessionPending) return;
     setAiSessionPending(true);
     try {
-      const settings = await contactsService.settingsGet();
+      const settings = await contactsService.settingsGet(workingDir);
       if (!settings.enabled) {
         setEnabled(false);
         return;
@@ -114,7 +118,7 @@ export function ContactsSection() {
     } finally {
       setAiSessionPending(false);
     }
-  }, [aiSessionPending, navigate, t, togglePending]);
+  }, [aiSessionPending, navigate, t, togglePending, workingDir]);
 
   const statsLine =
     stats && (stats.people > 0 || stats.orgs > 0 || stats.groups > 0)

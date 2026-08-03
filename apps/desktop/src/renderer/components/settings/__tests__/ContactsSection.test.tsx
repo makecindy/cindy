@@ -94,15 +94,16 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByText('settings.contacts.guide.sources.import')).toBeNull();
   });
 
-  it('点击后写入统一管理意图并进入新任务页', async () => {
+  it('点击后按目标工作目录检查有效插件开关，再写入统一管理意图并进入新任务页', async () => {
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
-    render(<ContactsSection />);
+    render(<ContactsSection workingDir="/project-a" />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
     await waitFor(() =>
       expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt'),
     );
+    expect(mocks.settingsGet).toHaveBeenCalledWith('/project-a');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
   });
 
