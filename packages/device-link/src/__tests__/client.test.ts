@@ -3260,19 +3260,23 @@ describe('DeviceLinkClient', () => {
     // 模拟 RN 适配层没有 terminate 的历史形态:删掉后必须退回 close,不能裸遗留
     (first as { terminate?: () => void }).terminate = undefined;
     first.ack();
-    await tick(40);
+    // 有界轮询替代固定窗口:CI 负载下(Windows 实测)真实计时器漂移会让 8ms×2 tick
+    // 的判死晚于固定 40ms 断言点,语义不变,只是等到事件发生。
+    for (let i = 0; i < 100 && first.closed === null; i++) await tick(10);
     expect(first.closed).not.toBeNull();
     expect(h.client.getStatus()).toBe('connecting');
     h.client.stop();
   });
 
-  it('restartConnection:online(可能半开假活)也强制重建;stopped 不拉起', async () => {
+  it('restartConnection:online(可能半开假活)也强制重建并复位 link 状态;stopped 不拉起', async () => {
     const h = makeHarness({ timing: { reconnectBaseMs: 5, reconnectMaxMs: 10 } });
     h.client.start();
     await tick();
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
+    // 建一条 reliable link:重建后它的 linkReady 必须被复位,host 才会重新 openLink
+    await establishInboundReliableLink(h, 'resume-stream', 1, 'ctrl-resume');
 
     const before = h.sockets.length;
     h.client.restartConnection('system-resume');
@@ -3281,6 +3285,12 @@ describe('DeviceLinkClient', () => {
     h.current().ack();
     await tick();
     expect(h.client.getStatus()).toBe('online');
+    // linkReady 已复位:relay 在线 + link 未就绪 → invoke-result 走 legacy 裸帧
+    // (若 linkReady 残留 true,这里会被包进 transport wrapper 走旧 stream)
+    h.client.sendInvokeResult('ctrl-resume', 'req-after-resume', { ok: true, result: 1 });
+    const resent = h.current().sent.filter((e) => e.kind === 'invoke-result');
+    expect(resent).toHaveLength(1);
+    expect(resent[0]!.payload).toMatchObject({ ok: true, result: 1 });
 
     h.client.stop();
     const count = h.sockets.length;

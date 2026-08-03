@@ -458,6 +458,9 @@ export class DeviceLinkClient {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = null;
     }
+    // 主动重建必须复用被动断线的链路层复位:半开期间 linkReady 仍是 true,
+    // 不复位会让 host 侧跳过 openLink、旧 stream 帧在新 socket 上被对端丢弃。
+    this.resetLinkStateForReconnect();
     void this.connect(reason);
   }
 
@@ -1072,9 +1075,14 @@ export class DeviceLinkClient {
     });
   }
 
-  private handleDisconnect(code?: number, reason?: string): void {
-    this.clearTimers();
-    this.ws = null;
+  /**
+   * 连接世代切换时的链路层复位:link 状态、可靠重试计时器、入站 offer、legacy 队列
+   * 与跨世代 presence patch。可靠 pending **保留**(等 link 重建后按原 seq 重放)。
+   * handleDisconnect(被动断线)与 restartConnection(主动重建)共用 —— 主动重建
+   * 若跳过这段,旧 linkReady=true 会让 host 侧误以为 link 仍在、跳过 openLink,
+   * 随后用旧 stream 在新 socket 上发帧被对端当未建链帧丢弃(review P2)。
+   */
+  private resetLinkStateForReconnect(): void {
     // hello 会从 host 读取完整最新状态；旧连接上尚未发出的覆盖型 patch 不跨世代重放。
     this.clearPendingPresence();
     for (const peer of this.peerTransport.values()) {
@@ -1086,6 +1094,12 @@ export class DeviceLinkClient {
     }
     this.pendingInboundLinkOffers.clear();
     this.resetLegacyInboundQueue();
+  }
+
+  private handleDisconnect(code?: number, reason?: string): void {
+    this.clearTimers();
+    this.ws = null;
+    this.resetLinkStateForReconnect();
     this.failNonReliablePending(new DeviceLinkError('NOT_CONNECTED', 'relay connection lost'));
     if (this.stopped) return;
     if (code === DUPLICATE_CONNECTION_CLOSE_CODE) {

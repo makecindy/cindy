@@ -150,9 +150,12 @@ export function createResponsivenessTracker(
   // 同一设备短时间窗内的并发请求共享一个熔断批次(cohort):renderer 的 fan-out
   // 预取(capabilities / providers / git-safety 同 tick 并发)在一次短暂链路中断里
   // 会同时超时,逐请求独立记账会让单轮并发直接凑满 3 次阈值误开熔断(review P2)。
-  // 归批后同窗并发的超时只算一次独立故障证据;窗口(1s)远小于对账周期(10s),
-  // 不会把跨轮次的真实连续失败误并成一批。窗口从批首请求起算,不滑动。
-  const COHORT_WINDOW_MS = 1_000;
+  // 窗口取 250ms:真实 fan-out 在同一事件循环 tick 或几十 ms 内发出,250ms 足够
+  // 覆盖;而用户手动发起的独立操作极少落进同一 250ms,不至于把独立超时误并
+  // (review P1 权衡)。更根本地,窗口内"独立"操作若同时超时,反映的也是同一
+  // 时刻的链路状态,证据价值与一次 fan-out 等同——阈值语义要的是时间上分离的
+  // 多次观察。窗口从批首请求起算,不滑动。
+  const COHORT_WINDOW_MS = 250;
   const activeCohorts = new Map<string, { id: number; startedAt: number }>();
   const cohortFor = (deviceId: string): number => {
     const nowMs = now();
