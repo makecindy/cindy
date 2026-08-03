@@ -44,6 +44,9 @@ describe('SessionCard review regressions', () => {
     expect(globalsSource).toMatch(
       /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\][\s\S]*animation: none;/,
     );
+    expect(globalsSource).toContain(
+      'animation: sidebar-title-marquee var(--sidebar-title-marquee-duration)',
+    );
   });
 
   it('recalculates the marquee when a hovered title changes', () => {
@@ -54,6 +57,26 @@ describe('SessionCard review regressions', () => {
     expect(sessionItemSource).toContain('delete container.dataset.titleOverflowing;');
     expect(sessionItemSource).toContain(
       "container.style.removeProperty('--sidebar-title-marquee-shift');",
+    );
+    expect(sessionItemSource).toContain(
+      "container.style.removeProperty('--sidebar-title-marquee-duration');",
+    );
+    expect(sessionItemSource).toContain('const viewportCount = Math.max(');
+  });
+
+  it('remeasures hovered titles when the sidebar or highlighted content resizes', () => {
+    expect(sessionItemSource).toContain("typeof ResizeObserver === 'undefined'");
+    expect(sessionItemSource).toContain('observer.observe(container);');
+    expect(sessionItemSource).toContain('observer.observe(track);');
+    expect(sessionItemSource).toContain('if (isHoveredRef.current) startMarquee();');
+  });
+
+  it('keeps the original accessible title visible when reduced motion is enabled', () => {
+    expect(globalsSource).toContain(
+      ".sidebar-title-marquee[data-title-overflowing='true'] .sidebar-title-marquee__ellipsis {\n  opacity: 0;\n}",
+    );
+    expect(globalsSource).toMatch(
+      /@media \(prefers-reduced-motion: reduce\) \{[\s\S]*\.sidebar-title-marquee\[data-title-overflowing='true'\] \.sidebar-title-marquee__ellipsis \{[\s\S]*opacity: 1;/,
     );
   });
 

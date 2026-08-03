@@ -130,6 +130,7 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
     if (!container) return;
     delete container.dataset.titleOverflowing;
     container.style.removeProperty('--sidebar-title-marquee-shift');
+    container.style.removeProperty('--sidebar-title-marquee-duration');
   }, []);
 
   const startMarquee = useCallback(() => {
@@ -139,11 +140,20 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
 
     delete container.dataset.titleOverflowing;
     container.style.removeProperty('--sidebar-title-marquee-shift');
+    container.style.removeProperty('--sidebar-title-marquee-duration');
     if (track.scrollWidth <= container.clientWidth + 1) return;
 
+    const viewportCount = Math.max(
+      1,
+      Math.ceil(track.scrollWidth / Math.max(container.clientWidth, 1)),
+    );
     container.style.setProperty(
       '--sidebar-title-marquee-shift',
       `${container.clientWidth - track.scrollWidth}px`,
+    );
+    container.style.setProperty(
+      '--sidebar-title-marquee-duration',
+      `calc(var(--motion-base) * ${viewportCount * 12})`,
     );
     container.dataset.titleOverflowing = 'true';
   }, []);
@@ -151,6 +161,19 @@ function SidebarTitleMarquee({ children, className, title }: SidebarTitleMarquee
   useLayoutEffect(() => {
     if (isHoveredRef.current) startMarquee();
   }, [startMarquee, title]);
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const track = trackRef.current;
+    if (!container || typeof ResizeObserver === 'undefined') return;
+
+    const observer = new ResizeObserver(() => {
+      if (isHoveredRef.current) startMarquee();
+    });
+    observer.observe(container);
+    if (track) observer.observe(track);
+    return () => observer.disconnect();
+  }, [startMarquee]);
 
   return (
     <span
