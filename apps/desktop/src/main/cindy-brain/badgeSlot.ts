@@ -1,14 +1,13 @@
 /**
- * badgeSlot.ts — 未读角标槽(notify.badge,2026-08-03)。
+ * badgeSlot.ts — 未读角标槽(badge 槽,2026-08-03)。
  * ---------------------------------------------------------------------------
  * 意识经管子上行 `{type:'badge', unread, summary?}`,请主机点亮/熄灭它在插件
  * 入口与插件卡上的**未读绿点**。设计边界(与 notify 同一信任模型):
  *
- *   - 资格审只看 `notify.badge === true`——它是与 `notify` 卡槽**并列**的一档
- *     独立权限,不要求也不捆绑 notify 槽(绿点比 toast 克制,只想点绿点的意识
- *     不该被迫连"能弹全屏顶部提示"一起申请)。装入时 validateGhostManifest 已
- *     强制 badge 必须同时声明 panel,这里不重复判;老包不可能带 badge 字段,
- *     天然拒绝;
+ *   - 资格审只看 `badge` 卡槽——它与 `notify` 卡槽**并列**,不要求也不捆绑
+ *     notify(绿点比 toast 克制,只想点绿点的意识不该被迫连"能弹全屏顶部提示"
+ *     一起申请)。装入时 validateGhostManifest 已强制 badge 必须同时声明 panel,
+ *     这里不重复判;`slots` 是硬白名单,老包不可能带这个槽,天然拒绝;
  *   - 意识只供**纯文本** summary:与 notify 共用 sanitizeGhostNoticeText 剥控制
  *     字符,换行坍缩成空格(摘要占卡片一行,换行没有正当用途),超限拒收——
  *     不静默截断,作者需要知道自己超了;
@@ -68,10 +67,10 @@ export class GhostBadgeSlot {
     if (!ghost || !ghost.enabled) {
       return { ok: false, message: '意识不在可用状态' };
     }
-    if (ghost.manifest.notify?.badge !== true) {
+    if (!ghost.manifest.slots?.includes('badge')) {
       return {
         ok: false,
-        message: '本意识未在身份卡声明 notify.badge,无权点亮未读角标(需在 ghost.json 加 "notify": { "badge": true } 并重新装入)',
+        message: '本意识未声明 badge 卡槽,无权点亮未读角标(需在 ghost.json 的 slots 里加 "badge" 并重新装入)',
       };
     }
 

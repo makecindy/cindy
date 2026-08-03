@@ -1784,7 +1784,7 @@ function visibleGhostUnread(): GhostUnreadEntry[] {
 }
 
 /**
- * 未读角标槽单例(notify.badge):资格审/净化/限速在 GhostBadgeSlot,这里只装配
+ * 未读角标槽单例(badge 槽):资格审/净化/限速在 GhostBadgeSlot,这里只装配
  * 取意识、落盘与广播。落盘失败**不吞成静默**——账本写不进去时角标只在本次
  * 运行期有效,如实记日志,但仍然推给 renderer(用户当下看得见比事后可靠更重要)。
  */
@@ -1830,9 +1830,11 @@ export function getGhostBadgeSlot(): GhostBadgeSlot {
  * 主机侧熄灭未读(用户打开面板 / 停用 / 卸载)。与意识自发的 badge 熄灭同
  * 通道同落盘,但不经意识代码、不占限速——判定者是主机。
  */
-function extinguishGhostUnread(ghostId: string): void {
+function extinguishGhostUnread(ghostId: string, seenAt?: number): void {
   try {
-    if (clearGhostUnread(ghostId) === null) return; // 本来就没亮,免掉一轮广播
+    // null = 没发生变化(本来就没亮,或账本比 seenAt 新)——免掉一轮广播,
+    // 也别把仍然亮着的那条误报成已熄灭。
+    if (clearGhostUnread(ghostId, seenAt) === null) return;
   } catch (error) {
     log.warn('ghost unread 清除失败', {
       ghostId,
@@ -1852,7 +1854,7 @@ function suspendGhostUnreadProjection(ghostId: string): void {
 }
 
 /**
- * 撤销扫尾:插件更新后身份卡不再声明 notify.badge(或整个 notify 槽没了)时,
+ * 撤销扫尾:插件更新后身份卡不再声明 badge 卡槽时,
  * 既有未读**立即清除**——权限撤了还留一颗点,等于把已收回的能力继续兑现。
  * 挂在 broadcastGhostsChanged 上:装入 / 更新 / 卸载 / 对账都从这一处过,
  * 不用在每条清单变更路径上各补一遍。
@@ -3195,9 +3197,9 @@ async function installOrUpdateMarketGhostPackageLocked(
      * 装入确认框渲染的是**来源方给的 manifest**(服务端市场 = release manifest,
      * 自定义市场 = 抓到的 ghost.json),而真正落地的是 `.cindy` 包里的 ghost.json。
      * 两者本该同一份,但来源方的投影层可能与客户端的清单契约漂移——`cindy-protocol`
-     * 那份平行校验器就已经缺了 `confirm` 槽,新字段(如 `notify.badge`)按「宽进
-     * 严出,忽略未知字段」被静默丢掉。结果:确认框漏列该项权限,包却原样带着它装
-     * 进来,用户**从没审过就多出一个常驻能力面**。
+     * 那份平行校验器就已经缺了 `confirm` 槽;新登记的槽(如 `badge`)在它眼里是
+     * 未知槽名,投影时会被丢掉或整份拒绝。结果:确认框漏列该项权限,包却原样带着
+     * 它装进来,用户**从没审过就多出一个常驻能力面**。
      *
      * 这里按权限项逐项比对,包里多出来的一律拒装——不是只挡 badge,是把这一整类
      * 「来源投影漏字段」的洞一次封死。落在 inspect 之后、任何落地动作之前,所以
@@ -3978,7 +3980,7 @@ export function registerGhostIpc(): void {
     if (type === 'notify') {
       return getGhostNotifySlot().handleNotify(id, payload);
     }
-    // badge = 未读角标(notify.badge 加档):资格审两道(notify 槽 + badge 声明)、
+    // badge = 未读角标(badge 槽):资格审看 badge 卡槽、
     // 净化/限速/落盘在 badgeSlot。与 notify 的分工是"持久状态"对"一次性 toast"。
     if (type === 'badge') {
       return getGhostBadgeSlot().handleBadge(id, payload);
@@ -4114,7 +4116,7 @@ export function registerGhostIpc(): void {
     }
   });
 
-  // 未读角标快照(notify.badge)。同步读的理由与 recent-usage 同款:插件入口
+  // 未读角标快照(badge 槽)。同步读的理由与 recent-usage 同款:插件入口
   // 与插件卡的绿点必须**首帧就对**,先渲染成"全无未读"再跳出一颗点是可见跳变。
   // 账本损坏 / 权限异常一律降级成空,不阻断首屏。
   // 来源闸:未读 summary 是**插件正文**(工单标题、邮件主题、任务名),
@@ -4129,12 +4131,18 @@ export function registerGhostIpc(): void {
   // 陈旧条目也该能被清掉,否则界面上会留一颗永远点不掉的点。
   // 来源闸同上:它会改写 owner 作用域的账本,不能让非可信 frame 拿任意合法
   // 插件 id 把别人的未读清掉(codex review)。
-  ipcMain.handle('ghosts:clear-unread', (event, id: unknown) => {
+  ipcMain.handle('ghosts:clear-unread', (event, id: unknown, seenAt: unknown) => {
     assertTrustedAppRendererEvent(event);
     if (typeof id !== 'string' || !isValidGhostId(id)) {
       throwIpcError('INVALID_PARAMS', 'id must be a valid Ghost id');
     }
-    extinguishGhostUnread(id);
+    if (seenAt !== undefined && (typeof seenAt !== 'number' || !Number.isFinite(seenAt))) {
+      throwIpcError('INVALID_PARAMS', 'seenAt must be a finite number when provided');
+    }
+    // seenAt = renderer 当时**实际看到的那条**的点亮时刻。清除请求与插件的新点亮
+    // 走两条独立 IPC,「新点亮先到、旧清除后到」完全可能发生;按它做条件删除,
+    // 陈旧清除不会把用户还没看到的新摘要一并抹掉(codex review)。
+    extinguishGhostUnread(id, seenAt as number | undefined);
     return { ok: true };
   });
 

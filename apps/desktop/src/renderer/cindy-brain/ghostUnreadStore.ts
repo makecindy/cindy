@@ -1,5 +1,5 @@
 /**
- * ghostUnreadStore.ts — 意识未读角标(notify.badge)的 renderer 侧状态源。
+ * ghostUnreadStore.ts — 意识未读角标(badge 槽)的 renderer 侧状态源。
  * ---------------------------------------------------------------------------
  * 主机在意识上行 badge 时点亮、用户打开面板 / 停用 / 卸载时熄灭,变化经
  * 'ghosts:badge' 推送到达;首帧用 unreadSync() 同步取快照(绿点要与插件入口
@@ -34,7 +34,7 @@ interface GhostUnreadApi {
   ) => () => void;
   onUnreadSnapshot?: (cb: (p: { entries: UnreadSnapshotEntry[] }) => void) => () => void;
   unreadSync?: () => { entries: UnreadSnapshotEntry[] };
-  clearUnread?: (id: string) => Promise<{ ok: boolean }>;
+  clearUnread?: (id: string, seenAt?: number) => Promise<{ ok: boolean }>;
 }
 
 function api(): GhostUnreadApi | undefined {
@@ -237,8 +237,12 @@ export function useElementVisible(ref: { current: Element | null }): boolean {
  */
 export function clearGhostUnread(ghostId: string): void {
   ensureReady();
+  // 带上**当前这条**的点亮时刻:清除请求与插件的新点亮走两条独立 IPC,
+  // "新点亮先到、旧清除后到"完全可能发生。main 按它条件删除,陈旧清除不会
+  // 抹掉用户还没看到的新摘要(codex review)。
+  const seenAt = unread.get(ghostId)?.at;
   if (unread.delete(ghostId)) emit();
-  void api()?.clearUnread?.(ghostId)?.catch(() => undefined);
+  void api()?.clearUnread?.(ghostId, seenAt)?.catch(() => undefined);
 }
 
 /** 测试专用:直灌一条角标变化(绕过 IPC)。 */

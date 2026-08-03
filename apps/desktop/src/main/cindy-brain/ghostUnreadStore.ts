@@ -1,5 +1,5 @@
 /**
- * ghostUnreadStore.ts — 意识未读角标的落盘账本(notify.badge,2026-08-03)。
+ * ghostUnreadStore.ts — 意识未读角标的落盘账本(badge 槽,2026-08-03)。
  * ---------------------------------------------------------------------------
  * 未读点必须**跨重启存活**:意识在后台点亮了角标,用户关掉 app 再打开,那条
  * 「有新内容」不该凭空消失(否则未读机制退化成一次性 toast,与 notify 无异)。
@@ -83,6 +83,14 @@ function persist(entries: GhostUnreadEntry[]): void {
   getStore().set('entries', shape);
 }
 
+/**
+ * 这次清除是否**陈旧**(账本里的记录比请求方看到的那条新)。抽成导出的纯函数
+ * 是为了能直测:clearGhostUnread 本身要 electron-store,单测碰不到。
+ */
+export function isStaleGhostUnreadClear(entryAt: number, seenAt?: number): boolean {
+  return seenAt !== undefined && entryAt > seenAt;
+}
+
 /** 当前还亮着的全部未读(最新在前)。 */
 export function loadGhostUnread(): GhostUnreadEntry[] {
   return normalizeGhostUnreadEntries(getStore().get('entries', {}));
@@ -134,13 +142,22 @@ export function applyGhostUnreadMark(
 }
 
 /**
- * 熄灭一条未读。返回 null = 本来就没亮(调用方据此免掉一次无意义广播,
+ * 熄灭一条未读。返回 null = 没有发生变化(调用方据此免掉一次无意义广播,
  * 别让"打开面板"每次都刷一轮全窗口推送)。
+ *
+ * `seenAt` = **请求方当时实际看到的那条**的点亮时刻。给了就做条件删除:账本里
+ * 的记录比它新时不动。用户已读是针对他看见的那条内容,而 renderer 的清除请求
+ * 与插件的新点亮走的是两条独立 IPC——"新点亮先到、旧清除后到"的顺序完全可能
+ * 发生,无条件按 ghostId 删会把用户还没看到的新摘要一并抹掉(codex review)。
+ * 不给 seenAt 则是主机侧的无条件熄灭(停用 / 卸载 / 能力撤销),那些场景没有
+ * "看见了哪一条"可言。
  */
-export function clearGhostUnread(ghostId: string): GhostUnreadEntry[] | null {
+export function clearGhostUnread(ghostId: string, seenAt?: number): GhostUnreadEntry[] | null {
   const current = loadGhostUnread();
+  const entry = current.find((candidate) => candidate.ghostId === ghostId);
+  if (!entry) return null;
+  if (isStaleGhostUnreadClear(entry.at, seenAt)) return null;
   const next = current.filter((candidate) => candidate.ghostId !== ghostId);
-  if (next.length === current.length) return null;
   persist(next);
   return next;
 }

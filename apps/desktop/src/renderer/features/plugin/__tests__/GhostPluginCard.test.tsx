@@ -228,7 +228,7 @@ describe('GhostPluginCard', () => {
     expect(fallbackIcon?.parentElement?.className).toContain('var(--surface-elevated)');
   });
 
-  // ── 未读角标(notify.badge)────────────────────────────────────────────
+  // ── 未读角标(badge 槽)────────────────────────────────────────────
   it('无未读时不画点,描述位仍是静态描述', () => {
     const { container } = render(
       <GhostPluginCard item={commandPlugin} onPrimary={vi.fn()} onManage={vi.fn()} />,

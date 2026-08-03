@@ -3070,7 +3070,7 @@ function CollapsedView({
   // 主视图切换(Plugin / Skill 管理)——与展开态 SidebarTopNav 的管理入口同源:
   // 命中 Plugin 或 Skill 视图时高亮。折叠 rail 之前漏了这颗按钮,现保持两态一致。
   const { activeKey, navigateToView } = useActiveMainView();
-  // 插件未读聚合(notify.badge)——与展开态同源同语义。
+  // 插件未读聚合(badge 槽)——与展开态同源同语义。
   const hasGhostUnread = useAnyGhostUnread();
 
   // 接管中的会话(/ctr)——面板行沿用 SessionStatusIcon 的 RadioTower 表达。

@@ -3495,6 +3495,7 @@
         "slotCard": "消息卡片",
         "slotNetwork": "网络访问",
         "slotNotify": "系统提示",
+        "slotBadge": "未读角标",
         "slotFs": "写文件",
         "slotSkill": "Agent 技能",
         "slotWorkspace": "工作区任务"

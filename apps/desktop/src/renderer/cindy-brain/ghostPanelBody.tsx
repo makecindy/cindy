@@ -184,7 +184,7 @@ export function GhostChipPanelBody({ manifest }: { manifest: GhostManifest }): R
   const hostRef = useRef<HTMLDivElement | null>(null);
 
   /**
-   * 面板体挂载 = 未读已读(notify.badge 的 explicit 清零)。
+   * 面板体挂载 = 未读已读(badge 槽的 explicit 清零)。
    *
    * 清零收在这里而不是各宿主的"打开"动作里:面板体有三个宿主(插件页页签
    * GhostPagePanelHost、布局停靠 ghostPanels、独立窗口 GhostPanelWindowLayout),

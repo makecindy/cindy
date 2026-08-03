@@ -3496,6 +3496,7 @@
         "slotCard": "Message cards",
         "slotNetwork": "Network access",
         "slotNotify": "System tips",
+        "slotBadge": "Unread badge",
         "slotFs": "File writing",
         "slotSkill": "Agent skills",
         "slotWorkspace": "Workspace sessions"

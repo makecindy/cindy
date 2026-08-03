@@ -26,8 +26,8 @@ function ghost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: opts.slots ?? ['panel', 'notify'],
-      ...(badge ? { notify: { badge: true } } : {}),
+      slots: badge ? [...(opts.slots ?? ['panel', 'notify']), 'badge'] : (opts.slots ?? ['panel', 'notify']),
+
     },
     dir: `/fake/${id}`,
     enabled: opts.enabled ?? true,
@@ -35,7 +35,7 @@ function ghost(
 }
 
 describe('ghostUnreadProjection', () => {
-  it('资格只看 badge 声明:与 notify 槽无关,也与启用与否无关', () => {
+  it('资格只看 badge 卡槽:与 notify 槽无关,也与启用与否无关', () => {
     expect(ghostDeclaresBadge(ghost('a'))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { enabled: false }))).toBe(true);
     expect(ghostDeclaresBadge(ghost('a', { badge: false }))).toBe(false);

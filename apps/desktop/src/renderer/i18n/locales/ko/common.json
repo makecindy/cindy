@@ -3495,6 +3495,7 @@
         "slotCard": "메시지 카드",
         "slotNetwork": "네트워크 접근",
         "slotNotify": "시스템 알림",
+        "slotBadge": "읽지 않음 배지",
         "slotFs": "파일 쓰기",
         "slotSkill": "에이전트 스킬",
         "slotWorkspace": "워크스페이스 세션"

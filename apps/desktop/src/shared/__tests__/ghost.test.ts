@@ -2229,13 +2229,9 @@ describe('ghost · network 详单校验', () => {
     expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
   });
 
-  it('notify.badge 出**独立**权限条目 —— 老包加这一档必须触发扩权重新确认', () => {
+  it('badge 槽出**独立**权限条目 —— 老包加这一档必须触发扩权重新确认', () => {
     const before = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify'] });
-    const after = validateGhostManifest({
-      ...goodManifest(),
-      slots: ['panel', 'notify'],
-      notify: { badge: true },
-    });
+    const after = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'notify', 'badge'] });
     expect(before.ok && after.ok).toBe(true);
     if (!before.ok || !after.ok) return;
     expect(ghostPermissionItems(after.manifest).find((i) => i.key === 'badge')).toMatchObject({
@@ -2250,15 +2246,8 @@ describe('ghost · network 详单校验', () => {
     expect(diff.removed).toHaveLength(0);
   });
 
-  it('notify.badge 与 notify 槽并列:不要 toast 也能要绿点(最小必要权限)', () => {
-    // 只声明 panel + badge,**不**声明 notify 槽 → 合法,且权限清单里只有绿点
-    // 那一项,没有"可弹出系统提示"。这正是解绑的意义:只想安静点个绿点的插件
-    // 不该被迫连"能弹全屏顶部提示"一起申请。
-    const r = validateGhostManifest({
-      ...goodManifest(),
-      slots: ['panel'],
-      notify: { badge: true },
-    });
+  it('badge 与 notify 槽并列:不要 toast 也能要绿点(最小必要权限)', () => {
+    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
     expect(r.ok).toBe(true);
     if (!r.ok) return;
     const keys = ghostPermissionItems(r.manifest).map((i) => i.key);
@@ -2266,46 +2255,33 @@ describe('ghost · network 详单校验', () => {
     expect(keys).not.toContain('notify');
   });
 
-  it('存量兼容(红线):老包里任何形态的 notify 字段都不得因新校验而装不进来', () => {
-    // `notify` 在本次改动前是**未登记的顶层字段**,按「宽进严出:忽略未知字段」
-    // 被直接忽略——任何已装插件的 ghost.json 里碰巧有它(什么形态都可能),
-    // 过去都装得进来。新增结构约束后若判成 invalid,插件会从列表与运行时整个
-    // 消失:用户升级后什么都没做就"插件不见了",正是 §5 红线禁止的。
-    // 判据一律是「解释不了就忽略」,而不是拒装。
-    const legacyShapes: unknown[] = [
-      true,                                   // 老包写成布尔开关
-      'badge',                                // 写成字符串
-      ['badge'],                              // 写成数组
-      { sound: true },                        // 对象但键是别的扩展
-      { badge: true, sound: true },           // badge 之外还带自定义兄弟键
-      {},                                     // 空对象
-    ];
-    for (const shape of legacyShapes) {
+  it('存量兼容(红线):老包里任何形态的 notify 顶层字段都照旧被忽略,不影响装入', () => {
+    // `notify` 顶层字段从头到尾就没被登记过,校验器「宽进严出」直接忽略。
+    // 现在角标改由 `badge` **卡槽**声明,这个字段更是彻底不参与解释——
+    // 老包里写成什么形态都装得进来,也不会因此白拿角标能力。
+    for (const shape of [true, 'badge', ['badge'], { badge: true }, { sound: true }, {}]) {
       const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
       expect(r.ok, `notify: ${JSON.stringify(shape)} 不该被判 invalid`).toBe(true);
+      // **关键**:哪怕老包恰好写成 { badge: true } 且有 panel,也不得凭空获得能力
+      // ——它没有经过任何安装/更新确认(codex review P1)。
+      if (r.ok) expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
     }
-    // 只有能确切解释成 badge:true 的那一份才拿到权限项;其余一律零能力。
-    const keys = (shape: unknown) => {
-      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
-      return r.ok ? ghostPermissionItems(r.manifest).map((i) => i.key) : null;
-    };
-    expect(keys(true)).not.toContain('badge');
-    expect(keys({ sound: true })).not.toContain('badge');
-    expect(keys({})).not.toContain('badge');
-    // 未知兄弟键被忽略,但 badge 本身照常生效(不因为多了个键就吞掉已声明的能力)。
-    expect(keys({ badge: true, sound: true })).toContain('badge');
   });
 
-  it('来源投影丢掉 notify 时,包里的 badge 必须被识别成「未审权限」', () => {
-    // 场景:服务端市场那份平行校验器不认识 `notify` 顶层字段,按「宽进严出,
-    // 忽略未知字段」把它丢了 → 确认框渲染的 manifest 没有 badge;而下载的 .cindy
-    // 包里 ghost.json 原样带着。装入出口就是拿这个 diff 拦下的(codex review P1)。
+  it('badge 槽是**可证明**的新声明:老包不可能带它(未知槽名一律拒装)', () => {
+    // slots 是硬白名单,当年装老包的客户端遇到未登记的 'badge' 会直接拒绝整份清单。
+    // 所以「清单里有 badge 槽」⇒「这份清单是本能力上线之后写的」,严格校验才安全。
+    const r = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'not-a-real-slot'] });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.reason).toContain('未知卡槽');
+  });
+
+  it('来源投影丢掉 badge 槽时,包里的 badge 必须被识别成「未审权限」', () => {
+    // 场景:服务端市场那份平行校验器不认识 `badge` 槽(它连 `confirm` 都还没有),
+    // 投影出的 manifest 少了这一档 → 确认框漏列;而下载的 .cindy 包里 ghost.json
+    // 原样带着。装入出口就是拿这个 diff 拦下的(codex review P1)。
     const reviewed = validateGhostManifest({ ...goodManifest(), slots: ['panel'] });
-    const packed = validateGhostManifest({
-      ...goodManifest(),
-      slots: ['panel'],
-      notify: { badge: true },
-    });
+    const packed = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
     expect(reviewed.ok && packed.ok).toBe(true);
     if (!reviewed.ok || !packed.ok) return;
     const unreviewed = diffGhostPermissionItems(reviewed.manifest, packed.manifest).added;
@@ -2314,42 +2290,22 @@ describe('ghost · network 详单校验', () => {
     expect(diffGhostPermissionItems(packed.manifest, packed.manifest).added).toHaveLength(0);
   });
 
-  it('notify.badge 只在能明确识别时生效;识别不了一律静默忽略而不是拒装', () => {
-    // ① 有 badge 但没有面板 → **不拒装**,只是不生效。
-    //    未读点承诺"点开能看到内容",没面板就不该给;但校验器无法把"新声明忘了写
-    //    panel"与"老包的同名自定义字段"区分开,分不清就只能忽略,不能让插件消失。
+  it('badge 槽与 panel 严格成对:声明了槽却没有面板一律拒装', () => {
+    // 这里可以放心用严格拒绝:带 badge 槽的清单必然是本能力上线之后写的,
+    // 不存在"拒了会让存量插件消失"的问题(见上一条的可证明性)。
     const noPanel = validateGhostManifest({
       ...goodManifest(),
-      slots: ['tool'],
+      slots: ['tool', 'badge'],
       panel: undefined,
       tools: [{ name: 'ping', description: 'ping' }],
-      notify: { badge: true },
     });
-    expect(noPanel.ok).toBe(true);
-    if (noPanel.ok) {
-      expect(noPanel.manifest.notify).toBeUndefined();
-      expect(ghostPermissionItems(noPanel.manifest).map((i) => i.key)).not.toContain('badge');
-    }
+    expect(noPanel.ok).toBe(false);
+    if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
 
-    // ② `notify` 分支**一条都不会让清单变 invalid** —— 校验器分不清「新声明写错了」
-    //    与「老包拿同名字段当自定义扩展」,分不清就不能拒。写错的代价是静默无效。
-    for (const bad of [{ badge: 'yes' }, { badge: 1 }, { badge: null }]) {
-      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: bad });
-      expect(r.ok, `notify: ${JSON.stringify(bad)} 不该被判 invalid`).toBe(true);
-      if (r.ok) expect(ghostPermissionItems(r.manifest).map((i) => i.key)).not.toContain('badge');
-    }
-
-    // ③ badge:false 与空详单都合法,且不落成权限条目(存量兼容:老包无此字段)
-    const off = validateGhostManifest({
-      ...goodManifest(),
-      slots: ['panel', 'notify'],
-      notify: { badge: false },
-    });
-    expect(off.ok).toBe(true);
-    if (off.ok) {
-      expect(off.manifest.notify).toBeUndefined();
-      expect(ghostPermissionItems(off.manifest).map((i) => i.key)).not.toContain('badge');
-    }
+    // 有面板就通过,并落成权限项。
+    const ok = validateGhostManifest({ ...goodManifest(), slots: ['panel', 'badge'] });
+    expect(ok.ok).toBe(true);
+    if (ok.ok) expect(ghostPermissionItems(ok.manifest).map((i) => i.key)).toContain('badge');
   });
 });
 

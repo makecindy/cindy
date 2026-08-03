@@ -115,6 +115,7 @@ export const GHOST_SLOTS = [
   'node',
   'network',
   'notify',
+  'badge',
   'confirm',
   'fs',
   'session-context',
@@ -152,26 +153,6 @@ export interface GhostCardNeeds {
  * - 每插件同时最多 1 单在途,任务表在内存(重启即丢,查询按"查无此单、
  *   可重新提交"处理)。
  */
-/**
- * 提示类能力详单(2026-08-03)。字段名沿用 `notify`,但**每一档各自有门槛,
- * 不捆绑 `notify` 卡槽**。
- *
- * 为什么 `badge` 不依赖 notify 槽(2026-08-03 Chris 裁决):toast 是打断式的
- * (占屏幕顶部、每条都要用户分神),绿点是克制的(一个 6px 的点,想看再看)。
- * 把 badge 挂在 notify 槽下,等于逼一个"只想安静点个绿点"的意识连"能弹全屏
- * 顶部提示"一起申请——按最小必要权限,这是过度授权。两者现在是并列的两档:
- * 要 toast 声明 `notify` 槽,要绿点声明 `notify.badge`,谁也不是谁的前置。
- */
-export interface GhostNotifyNeeds {
-  /**
-   * 申请未读角标。**只有同时声明了 `panel` 的意识可用**
-   * (validateGhostManifest 强制):未读点承诺「点开能看到内容」,
-   * 没有可打开界面的意识给了就是骗点击。
-   * 不需要 `notify` 卡槽——绿点与 toast 是两档独立权限。
-   */
-  badge?: boolean;
-}
-
 export interface GhostAgentNeeds {
   background?: boolean;
   errand?: boolean;
@@ -1200,8 +1181,6 @@ export interface GhostManifest {
   launch?: GhostLaunchMode;
   /** Agent 新回合能力详单；须与 slots 中的 `agent` 成对。 */
   agent?: GhostAgentNeeds;
-  /** 提示类能力详单(badge 未读角标);与 slots 中的 `notify` **不**成对,各自独立。 */
-  notify?: GhostNotifyNeeds;
   /** 随包本地 Node 工作进程详单；须与 slots 中的 `node` 成对。 */
   node?: GhostNodeNeeds;
   /**
@@ -1371,6 +1350,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'card') keys.push('slotCard');
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
+    else if (slot === 'badge') keys.push('slotBadge');
     else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
@@ -1798,9 +1778,8 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
   // key 独立还有一层必要性(同 subscribe 的 activity topic 判例):
   // diffGhostPermissionItems 按 key + detail 比对,若并进某个固定 key,已装插件
   // 新增这一档时 added 为空,plugin-market 的扩权确认就不会拦——用户会在毫不
-  // 知情的情况下多给出一个常驻的注意力入口。存量插件不声明本字段,权限清单
-  // 逐字不变(批准状态不 churn)。
-  if (manifest.notify?.badge === true) {
+  // 知情的情况下多给出一个常驻的注意力入口。
+  if (manifest.slots.includes('badge')) {
     items.push({ key: 'badge', kind: 'notify', labelKey: 'badge', detailKey: 'badgeDetail' });
   }
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
@@ -2778,48 +2757,26 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     }
   }
 
-  // 提示类能力详单。与其它详单不同:**不与 notify 卡槽成对**——绿点(badge)
-  // 和 toast(notify 槽)是两档并列权限,谁也不是谁的前置(见 GhostNotifyNeeds
-  // 注释里的裁决理由)。有 notify 槽无详单 = 只有基础的一次性 toast(存量插件的
-  // 既有形态,必须继续可装)。
-  // badge 自己的门槛只有一条:必须声明 panel —— 未读点承诺「点开能看到内容」,
-  // 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
-  let notify: GhostNotifyNeeds | undefined;
-  if (raw.notify !== undefined) {
-    /**
-     * **存量兼容(红线,`plugin-security-and-authoring.md` §5)**:`notify` 在本次
-     * 改动之前是个**未登记的顶层字段**,按校验器「宽进严出:忽略未知字段」的总纪律
-     * 被直接忽略——也就是说,任何已装插件的 ghost.json 里如果碰巧有 `notify`
-     * (无论什么形态:`true`、字符串、带别的键的对象),过去都装得进来、跑得起来。
-     *
-     * 现在给它加结构约束,**绝不能把这些老形态判成 invalid**:validateGhostManifest
-     * 返回 ok:false 会让插件从列表与运行时整个消失,用户升级后什么都没做就"插件不见了"
-     * ——§5 明写「新增校验默认必须自带迁移,不是自带拒绝」「未知字段忽略而不是判
-     * invalid,否则用户一旦回退旧版就再炸一次」。
-     *
-     * 所以这里按「解释不了就忽略」处理,只对**本次新增的 `badge` 键本身**保留严格
-     * 校验——那个键在本 PR 之前不可能存在于任何已装插件里,不存在存量面,严格拒能
-     * 给作者明确反馈而不伤任何人。
-     */
-    // **识别式解析,不是校验式拒绝**:整个 `notify` 分支一条都不会让清单变 invalid。
-    //
-    // 只有**能明确识别成本次新增声明**的那一种形态才被解释,其余一律当老形态忽略。
-    // 识别判据是两条同时成立:`badge === true` **且**清单声明了 `panel`。
-    //   - 判据不成立的一律零能力(不进权限清单、不进装入确认、运行期资格审也拒),
-    //     所以「误判成老形态」的代价只是不给能力,不会凭空多给。
-    //   - 反过来若按校验式拒绝:老包里 `notify.badge` 写成别的值、或写了 true 却没有
-    //     面板(那时这个字段被完全忽略,作者拿它当自定义扩展完全合法),升级后会被判
-    //     invalid → 插件从列表与运行时整个消失。这正是 §5 红线禁止的。
-    //
-    // 代价说清楚:作者写了 `badge:true` 却忘了 `panel` 时,拿不到报错、只是静默无效。
-    // 这是刻意的取舍——校验器分不清「新声明写漏了」与「老包的同名自定义字段」,
-    // 分不清就不能拒。作者侧的反馈交给 FORGE_GUIDE 与打包工具,不放在这里赌存量。
-    if (isPlainObject(raw.notify)) {
-      const notifyRaw = raw.notify as Record<string, unknown>;
-      if (notifyRaw.badge === true && slots.includes('panel')) {
-        notify = { badge: true };
-      }
-    }
+  /**
+   * 未读角标槽(badge)与 `panel` 严格成对:未读点承诺「点开能看到内容」,
+   * 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
+   *
+   * **为什么用一个新 slot 而不是 `notify` 下的子字段**(2026-08-03,codex review P1):
+   * `slots` 是硬白名单——未登记的槽名一律拒装。所以任何**已经装在用户机器上**的
+   * 老包都不可能带 `badge` 槽:当初装它的客户端会直接拒绝那份清单。这让「新声明」
+   * 与「老包的同名自定义字段」成为**可证明**可分,而不是靠概率赌。
+   *
+   * 早前的方案把它放在顶层 `notify` 对象里。那个字段在本改动前完全未登记、会被
+   * 校验器静默忽略,于是两头堵:严格校验会让写过同名字段的老包升级后消失(§5 红线),
+   * 放松成"识别到就给"又会让恰好写成 `badge:true` 且有面板的老包在**没有任何安装
+   * 或更新确认**的情况下白拿一个常驻注意力面。换成 slot 后两个问题同时消失,
+   * `notify` 顶层字段也不再被解释——存量清单里有什么形态都照旧忽略。
+   */
+  if (slots.includes('badge') && panel === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "badge" 但缺少 panel——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+    };
   }
 
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
@@ -4224,7 +4181,6 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
       slots,
       ...(tools !== undefined ? { tools } : {}),
       ...(card !== undefined ? { card } : {}),
-      ...(notify !== undefined ? { notify } : {}),
       ...(cindy !== undefined ? { cindy } : {}),
       ...(agent !== undefined ? { agent } : {}),
       ...(node !== undefined ? { node } : {}),
@@ -4904,12 +4860,12 @@ export interface GhostPipeNotify {
 export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string };
 
 /**
- * 上行:未读角标(notify.badge,2026-08-03)。意识告诉主机"我这儿有新内容了",
+ * 上行:未读角标(badge 槽,2026-08-03)。意识告诉主机"我这儿有新内容了",
  * 主机在插件入口与插件卡上点一颗**绿点**,并把 summary 显示在卡片简介位。
  *
  * 与 notify 的分工:notify 是"弹一条即走"的一次性 toast(错过就没了);本消息
  * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。两者是**并列的两档
- * 权限**,不是加档关系:要 toast 声明 `notify` 槽,要绿点声明 `notify.badge`,
+ * 权限**,不是加档关系:要 toast 声明 `notify` 槽,要绿点声明 `badge` 槽,
  * 谁也不是谁的前置(绿点比 toast 克制,不该被 toast 权限捆绑)。
  *
  * 门槛(validateGhostManifest 强制):只有声明了 `panel` 的意识能申请。理由是

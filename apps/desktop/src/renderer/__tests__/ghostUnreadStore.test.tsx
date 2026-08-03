@@ -177,7 +177,8 @@ describe('ghostUnreadStore', () => {
     expect(screen.getByTestId('row').textContent).toBe('on');
     act(() => clearGhostUnread('inbox'));
     expect(screen.getByTestId('row').textContent).toBe('off');
-    expect(clearUnread).toHaveBeenCalledWith('inbox');
+    // 必须带上"当时看到的那条"的点亮时刻,main 据此条件删除。
+    expect(clearUnread).toHaveBeenCalledWith('inbox', 100);
   });
 
   it('换账号快照整表替换 —— 账号 A 的点与摘要不许留在账号 B 的界面上', async () => {

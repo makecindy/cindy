@@ -1765,7 +1765,7 @@ export function GhostPluginCard({
 }) {
   const { t } = useTranslation();
   const enabled = effectiveEnabled ?? item.enabled;
-  // 未读(notify.badge):单条卡片走**呼吸**点(AttentionDot 形态规范——聚合入口
+  // 未读(badge 槽):单条卡片走**呼吸**点(AttentionDot 形态规范——聚合入口
   // 静态、单条呼吸)。有摘要时顶替静态描述:用户扫一眼就知道新内容是什么。
   const unread = useGhostUnread(item.id);
   const unreadSummary = useGhostUnreadSummary(item.id);

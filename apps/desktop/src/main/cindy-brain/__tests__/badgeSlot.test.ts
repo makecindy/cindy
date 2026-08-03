@@ -18,6 +18,7 @@ function fakeGhost(
   overrides: { enabled?: boolean; slots?: string[]; badge?: boolean } = {},
 ): InstalledGhost {
   const badge = overrides.badge ?? true;
+  const slots = overrides.slots ?? ['panel', 'notify'];
   return {
     manifest: {
       schemaVersion: 2,
@@ -26,8 +27,7 @@ function fakeGhost(
       version: '1.0.0',
       kind: 'chip',
       entry: 'main.js',
-      slots: overrides.slots ?? ['panel', 'notify'],
-      ...(badge ? { notify: { badge: true } } : {}),
+      slots: badge ? [...slots, 'badge'] : slots,
     },
     dir: '/fake/brain/inbox',
     enabled: overrides.enabled ?? true,
@@ -62,11 +62,11 @@ describe('GhostBadgeSlot', () => {
     });
   });
 
-  it('资格只看 notify.badge:没声明就拒(存量只有 notify 槽的老包不白捡这档能力)', () => {
+  it('资格只看 badge 卡槽:没声明就拒(存量只有 notify 槽的老包不白捡这档能力)', () => {
     const noDecl = makeSlot(fakeGhost({ badge: false }));
     const r = noDecl.slot.handleBadge('inbox', { unread: true });
     expect(r).toMatchObject({ ok: false });
-    if (!r.ok) expect(r.message).toContain('notify.badge');
+    if (!r.ok) expect(r.message).toContain('badge');
     expect(noDecl.mark).not.toHaveBeenCalled();
   });
 

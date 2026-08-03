@@ -559,10 +559,7 @@ async function buildGhostPackage(
    */
   expectedRealDir?: string,
 ): Promise<
-  // manifestRaw = 校验前的原始清单对象。作者期严格校验(见 firstGhostAuthoringIssue)
-  // 需要它来分辨「作者写了但被校验器按老形态忽略掉」的字段——校验后的 manifest
-  // 里那些字段已经不见了,只看它无从判断。
-  | { ok: true; buf: Buffer; manifest: GhostManifest; manifestRaw: Record<string, unknown> }
+  | { ok: true; buf: Buffer; manifest: GhostManifest }
   | Exclude<ForgePackResult, { ok: true }>
 > {
   try {
@@ -784,12 +781,7 @@ async function buildGhostPackage(
         message: `压缩包体积超上限(${maxCindyBytes} 字节)`,
       };
     }
-    return {
-      ok: true,
-      buf,
-      manifest,
-      manifestRaw: (manifestRaw ?? {}) as Record<string, unknown>,
-    };
+    return { ok: true, buf, manifest };
   } catch (err) {
     return {
       ok: false,
@@ -807,10 +799,6 @@ async function buildGhostPackage(
 export async function packGhostDir(dir: string): Promise<ForgePackResult> {
   const built = await buildGhostPackage(dir);
   if (!built.ok) return built;
-  const authoringIssue = firstGhostAuthoringIssue(built.manifest, built.manifestRaw);
-  if (authoringIssue) {
-    return { ok: false, errorCode: 'MANIFEST_INVALID', message: authoringIssue };
-  }
   // 产物跟源码住一起(2026-07 Lizi 定案:拿取直观);文件收集在写盘之前完成
   // + shouldSkip 跳过 *.cindy,自身产物不会进包;同名覆盖。
   const cindyPath = path.join(dir, `${built.manifest.id}-${built.manifest.version}.cindy`);
@@ -824,37 +812,6 @@ export async function packGhostDir(dir: string): Promise<ForgePackResult> {
     };
   }
   return { ok: true, cindyPath, manifest: built.manifest };
-}
-
-/**
- * **作者期严格校验**(只在 packGhostDir 这条打包出口上跑,不进任何安装路径)。
- *
- * 为什么要分成两套判据:`validateGhostManifest` 面对的是**已经在用户机器上的**
- * 清单,那里的纪律是「解释不了就忽略」——它分不清「新声明写漏了」与「老包拿同名
- * 字段做自定义扩展」,分不清就不能拒,否则升级会让存量插件整个消失(§5 红线)。
- * 但作者**正在打包**的这一份没有存量问题:此刻拒绝只会让作者当场改对,不会伤到
- * 任何已装插件。所以严格校验放在这里,而不是塞进共用的校验器或 packGhostDirToFile
- * (后者是自定义市场安装管道,收紧它等于给安装路径加新拒绝面)。
- *
- * 手册(§4.9.1)承诺的「写错会被拦下」就由这一处兑现——作者契约与实际行为必须
- * 对得上,否则 agent 会以为打包成功即正确,直到运行期发 badge 才发现没权限
- * (codex review)。
- */
-function firstGhostAuthoringIssue(
-  manifest: GhostManifest,
-  raw: Record<string, unknown>,
-): string | null {
-  const notifyRaw = raw.notify;
-  if (
-    notifyRaw !== null &&
-    typeof notifyRaw === 'object' &&
-    !Array.isArray(notifyRaw) &&
-    (notifyRaw as Record<string, unknown>).badge === true &&
-    manifest.notify?.badge !== true
-  ) {
-    return 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点(装入侧对老包按忽略处理,但新打包不放行)';
-  }
-  return null;
 }
 
 /**
@@ -921,7 +878,7 @@ ghost_forge_pack 打包 → 用户在弹窗上确认装入。**
 - **启动模式**:on-demand 按需拉起(缺省,推荐)/ resident 常驻(仅订阅型、要秒响应
   的场景,§2)。
 - **后台能力**:要不要旁听事件(subscribe 槽,§4.6)、发系统提示(notify 槽,§4.9)、留一条持久
-  未读绿点(notify.badge,§4.9.1)、
+  未读绿点(badge 槽,§4.9.1)、
   动手前弹确认框征求同意(confirm 槽,§4.18)。
 - **联网与凭证**:要不要 network 槽白名单联网(§4.7);要用户填 key 就需要 setup
   就绪声明与 settingsHtml 设置区(§4.7、§4.8)。
@@ -1072,8 +1029,8 @@ node secretBindings key、setup kv key——都不能使用 \`__proto__\`、\`co
 当前 Agent 开始一个普通用户回合,或派活取回结果,见 §4.11 / §4.11.1)、\`panel\`(常驻
 面板)、\`card\`(聊天卡片:自绘工具调用的过程与结果,见 §4.5)、\`subscribe\`(旁听会话
 事件 + 拦截用户消息,见 §4.6)、\`network\`(访问自带服务的域名白名单 HTTP,主机代发,
-见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9;插件入口的持久
-未读绿点是另一档并列权限 \`notify.badge\`,不需要本槽,见 §4.9.1)、\`confirm\`(弹主机
+见 §4.7)、\`notify\`(弹系统轻提示,主机画壳带你的身份头,见 §4.9)、\`badge\`
+(在插件入口留一颗持久的未读绿点,与 notify 并列、互不为前置,见 §4.9.1)、\`confirm\`(弹主机
 同款确认框征求用户同意并拿回真实点击,见 §4.18)、\`fs\`(请主机
 代写文件:私有数据目录/会话工作目录/过户目录三档,见 §4.10)、\`node\`(运行随包
 Node 工作进程或 stdio MCP,见 §4.12)、\`session-context\`(派活时主机把当前会话的
@@ -2311,18 +2268,18 @@ const r = await cindy.send({ type: 'notify', text: '视频已生成,点面板查
   给你,用 §4.18 的 confirm 槽(主机同款确认框);要在聊天流里放按钮用交互卡
   (§4.5 的 data-ghost-action)。
 
-### 4.9.1 未读角标(notify.badge —— 与 notify 槽并列的独立一档)
+### 4.9.1 未读角标(badge 槽 —— 与 notify 槽并列的独立一档)
 
 toast 是"说一句就走",错过就没了。要留下一条**持久**的"我这儿有新内容"——
 用户没去看就一直亮着——在身份卡里加一档:
 
 \`\`\`json
-{ "slots": ["panel"], "notify": { "badge": true } }
+{ "slots": ["panel", "badge"] }
 \`\`\`
 
-注意 \`slots\` 里**不需要** \`notify\`:绿点与 toast 是并列的两档权限,谁也不是谁的
-前置。只想安静点个绿点就别申请 \`notify\` 槽——多要一档"能弹全屏顶部提示"的权限,
-用户装的时候只会更犹豫。两个都要就两个都声明。
+\`badge\` 与 \`notify\` 是**并列的两档权限**,谁也不是谁的前置。只想安静点个绿点就
+别申请 \`notify\` 槽——多要一档"能弹全屏顶部提示"的权限,用户装的时候只会更犹豫。
+两个都要就两个都声明。
 
 \`\`\`js
 // 有新内容:点亮侧栏插件入口与自己卡片上的绿点,并把摘要显示在卡片简介位
@@ -2333,11 +2290,8 @@ await cindy.send({ type: 'badge', unread: false });
 
 规则(都由主机强制):
 
-- **必须同时声明 \`panel\`**,\`ghost_forge_pack\` 打包时校验,漏了直接打不出包。
-  这是本档唯一的门槛:未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,
-  给了就是骗点击。(装入侧对**已在用户机器上**的老包按忽略处理而不是拒装——那边
-  分不清"新声明写漏了"与"老包的同名自定义字段",分不清就不能让插件消失;所以这道
-  门开在打包期,那时还没有存量问题。)
+- **必须同时声明 \`panel\`**,装入时校验,漏了整个包装不进去。这是本档唯一的门槛:
+  未读点承诺"点开能看到内容",没有面板的意识点亮了也无处可点,给了就是骗点击;
 - 装入确认框里**单列一项**权限,已装插件加这一档会触发扩权重新确认——常驻的
   注意力入口值这一次打断;
 - \`summary\`(可选):**纯文本**,≤80 字符,换行会被坍缩成空格,超长直接拒

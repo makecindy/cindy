@@ -5,7 +5,11 @@
 
 import { describe, expect, it } from 'vitest';
 
-import { applyGhostUnreadMark, normalizeGhostUnreadEntries } from '../ghostUnreadStore';
+import {
+  applyGhostUnreadMark,
+  isStaleGhostUnreadClear,
+  normalizeGhostUnreadEntries,
+} from '../ghostUnreadStore';
 import { GHOST_BADGE_SUMMARY_MAX_CHARS } from '../../../shared/ghost';
 
 describe('ghostUnreadStore · normalizeGhostUnreadEntries', () => {
@@ -67,6 +71,16 @@ describe('ghostUnreadStore · normalizeGhostUnreadEntries', () => {
     expect(r.entries.map((e) => e.ghostId)).toEqual(['newcomer', 'p-2', 'p-1']);
     // 最老的那条被挤出账本,调用方必须据此补一条 unread:false 广播。
     expect(r.evicted).toEqual(['p-0']);
+  });
+
+  it('条件删除的判据:账本比"看到的那条"新时不得删', () => {
+    // clearGhostUnread 的落盘那层要 electron-store,这里直接验判据本身:
+    // renderer 清除请求与插件新点亮走两条独立 IPC,「新点亮先到、旧清除后到」
+    // 时,无条件删会把用户还没看到的新摘要抹掉(codex review)。
+    expect(isStaleGhostUnreadClear(20, 10)).toBe(true); // 账本更新 → 跳过
+    expect(isStaleGhostUnreadClear(10, 10)).toBe(false); // 就是看到的那条 → 删
+    expect(isStaleGhostUnreadClear(5, 10)).toBe(false); // 账本更旧 → 删
+    expect(isStaleGhostUnreadClear(20, undefined)).toBe(false); // 主机侧无条件熄灭
   });
 
   it('截断到上限(未读是"当前还亮着的",不是历史流水)', () => {
