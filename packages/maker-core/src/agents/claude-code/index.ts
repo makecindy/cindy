@@ -1761,18 +1761,38 @@ export class ClaudeCodeAgent extends BaseAgent {
     let mutableAutoReviewCredentialMode = effectiveCredentialMode;
     let nativeAutoReviewUnavailable = false;
     /**
-     * 试探性(turn 级)降级 —— 见 AutoReviewFallbackScope。原生分类器**首次**瞬时故障
-     * 就置位,本 turn 剩余工具立刻改走 Cindy reviewer(而不是继续撞 SDK 的"无法判定安全性"
-     * 硬拒绝);下一 turn 起点由 restoreNativeAutoReviewForNewTurn() 清零并回探原生。
-     * 与 nativeAutoReviewUnavailable(会话级,已确认持续故障)相互独立:后者置位后本标记
-     * 不再有意义,回探也不会重开原生。
+     * 试探性(turn 级)降级状态机 —— 见 AutoReviewFallbackScope。
+     *
+     * 这里刻意用三态而不是一个布尔。切档是**异步控制请求**,所以"我想用哪个 reviewer"
+     * 和"SDK 实际在哪个档"是两个维度;早先用单个布尔表达,"想用 Cindy 但 SDK 档位还没
+     * 确认"这个中间态没有位置,于是同一个不一致连着 5 轮 review 以不同形态漏出来
+     * (提前清标记 → 提前置标记 → 请求悬挂 → 超时后迟到成功)。三态把它显式化:
+     *
+     * - `'native'`      —— 本 turn 用原生分类器(无试探性降级)。
+     * - `'cindy'`       —— 已降级到 Cindy,且 SDK 档位**已确认**为 `default`(推档成功,或
+     *                      处在"推不了档但由其它路径按状态起档"的窗口)。同一 turn 的重复
+     *                      故障信号在此状态下是幂等 no-op。
+     * - `'cindy-unconfirmed'` —— 降级意图是 Cindy,但 SDK 实际档位**未确认**:回探的控制
+     *                      请求超时了,它既可能永不返回,也可能迟到成功把 SDK 切回 `auto`。
+     *                      此状态下重复故障信号**必须允许再推一次 `default`** —— 否则若
+     *                      SDK 已被迟到的回探切回 `auto`,用户会继续撞硬拒绝。
+     *
+     * `nativeAutoReviewUnavailable`(会话级终态)独立于本状态机,且优先级更高。
      */
-    let nativeAutoReviewTurnFallback = false;
+    type TurnAutoReviewState = 'native' | 'cindy' | 'cindy-unconfirmed';
+    let turnAutoReviewState: TurnAutoReviewState = 'native';
+    /**
+     * 目标档位的代际号。每**发起**一次 turn 级档位变更就 +1;异步控制请求的回调(成功/
+     * 失败/看门狗超时)只在自己那一代仍是最新时才写状态。没有它,一个迟到的回探结果会
+     * 覆盖掉它超时之后才发生的新决策 —— 例如 watchdog 置 unconfirmed → 新故障信号成功
+     * 推回 `default` → 更晚到达的回探成功把状态改回 `'native'`,而 SDK 其实在 `default`。
+     */
+    let turnAutoReviewGeneration = 0;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const usesNativeClaudeAutoReview = (): boolean =>
       !nativeAutoReviewUnavailable
-      && !nativeAutoReviewTurnFallback
+      && turnAutoReviewState === 'native'
       && mutableAutoReviewCredentialMode === 'oauth-bearer';
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
@@ -3655,28 +3675,31 @@ export class ClaudeCodeAgent extends BaseAgent {
      *
      * 会话级降级(持续故障已确认)不回探 —— 那是终态,回探只会让用户每个 turn 各撞一次。
      *
-     * **不变量:标记与 SDK 实际档位必须始终一致。** 只有真正发起了切回 `auto` 的控制请求
-     * 才清标记;任何"这个 turn 推不了档"的路径都**保留**标记等下一个 turn。反过来
-     * (提前清标记却没推档)会让判据说"该用原生"而 SDK 停在 `default`,且后续 send 再也
-     * 进不来这里 —— 健康的原生分类器就永久回不来了(greptile P1)。
+     * **不变量:状态最终必须与 SDK 实际档位一致。** 控制请求是异步的,所以每一种结局都要
+     * 有归宿:成功 → `'native'`;失败 → `'cindy'`(SDK 仍在 default);超时未返回 →
+     * `'cindy-unconfirmed'`(档位未知,后续信号可重推);**超时后才迟到返回 → 按 generation
+     * 校验后仍要调和**(不能一丢了之,否则 SDK 在 auto 而状态说 Cindy,本 turn 后续信号会被
+     * 幂等闸吞掉、推不回 default,用户继续撞硬拒绝)。"这个 turn 推不了档"的路径一律**保持
+     * 当前状态**等下一个 turn,不做乐观清零。
      */
     const restoreNativeAutoReviewForNewTurn = (): void => {
-      if (!nativeAutoReviewTurnFallback) return;
+      if (turnAutoReviewState === 'native') return;
       if (nativeAutoReviewUnavailable) {
-        // 会话级终态已覆盖 turn 级语义(终态本就该停在 default):清掉冗余标记、不推档。
-        nativeAutoReviewTurnFallback = false;
+        // 会话级终态已覆盖 turn 级语义(终态本就该停在 default):归位、不推档。
+        turnAutoReviewState = 'cindy';
         return;
       }
-      // 本就不该用原生(第三方/网关路由、或底层档已不是 auto):保留标记,等条件重新满足
-      // 的那个 turn 再回探 —— 切回 auto 档时 setPermissionMode 会按当时的标记推档。
+      // 本就不该用原生(第三方/网关路由、或底层档已不是 auto):保持状态,等条件重新满足
+      // 的那个 turn 再回探 —— 切回 auto 档时 setPermissionMode 会按当时的状态推档。
       if (mutablePermissionMode !== 'auto' || mutableAutoReviewCredentialMode !== 'oauth-bearer') {
         return;
       }
-      // plan 档恒在 plan、rewind/bridge 重建窗口里 q 不可写:这些 turn 推不了档,保留标记。
+      // plan 档恒在 plan、rewind/bridge 重建窗口里 q 不可写:这些 turn 推不了档,保持状态。
       if (mutablePlanMode || planTurnActive || controlRequestsBlocked()) return;
-      // 走到这里才真正回探。先清标记:本 turn 后续所有档位计算(含 rewind 重建的起档
-      // permissionMode)都据此算出 'auto',与下面这次 push 指向同一个结果。
-      nativeAutoReviewTurnFallback = false;
+      // 走到这里才真正回探。先乐观置 'native':本 turn 后续所有档位计算(含 rewind 重建的
+      // 起档 permissionMode)都据此算出 'auto',与下面这次 push 指向同一个结果。
+      const probeGeneration = ++turnAutoReviewGeneration;
+      turnAutoReviewState = 'native';
       // 上一 turn 的裁决缓存出自 Cindy reviewer,不能带进回探后的 turn。
       autoReviewDecisionCache.clear();
       // **不 await** —— docs/dev-rules/maker-core-and-agent-behavior.md §3.2 禁止在
@@ -3684,19 +3707,35 @@ export class ClaudeCodeAgent extends BaseAgent {
       // 没入队,也没有超时兜底)。与 stale plan turn cleanup 同款 fire-and-forget;失败则
       // 恢复标记,下一 turn 再试,期间继续由 Cindy reviewer 兜住,不影响正确性。
       const probedQuery = q;
-      let probeSettled = false;
       /**
-       * 只处理 resolve/reject 是不够的:控制请求**悬挂**时两个回调都不会来,而标记已经
-       * 乐观清零 —— SDK 永远停在 default、后续 send 也不再回探,一次试探性降级就永久变成
-       * Cindy fallback。看门狗只做「恢复标记」这一件事(非阻塞、不重试、不碰档位),把重试
-       * 交回给下一 turn 的正常回探路径。
+       * 迟到结果的落点判定。三种情况必须分开:
+       *  - **代际已过期**:超时之后又发生了新的档位决策(例如新故障信号已把 SDK 推回
+       *    `default`)。这次回探的结果不再代表当前目标,只能丢弃 —— 否则会把那个更新的
+       *    决策覆盖掉。
+       *  - **Query 已重建**:结果属于被丢弃的旧 `q`,新 Query 的起档由当前状态算出,同样
+       *    不能拿旧结果去写状态。
+       *  - 其余情况**必须调和**,即使早已超时:SDK 的真实档位只有这个结果知道。
+       */
+      const settleProbe = (next: TurnAutoReviewState, reason: string, fields: Record<string, unknown> = {}): void => {
+        if (probeGeneration !== turnAutoReviewGeneration) {
+          log.debug(`native Auto classifier probe ${reason} ignored: superseded by a newer decision`, fields);
+          return;
+        }
+        if (q !== probedQuery) {
+          log.debug(`native Auto classifier probe ${reason} ignored: query was rebuilt`, fields);
+          return;
+        }
+        turnAutoReviewState = next;
+      };
+      /**
+       * 看门狗只把状态挪到 `'cindy-unconfirmed'`:档位未知,后续故障信号因此可以重推
+       * `default`,而不是被幂等闸当成"已降级"吞掉。它**不取消**控制请求,所以请求真正返回
+       * 时仍要走 settleProbe 调和 —— 迟到的成功正是第 5 轮 review 抓到的漂移源。
        */
       const probeWatchdog = setTimeout(() => {
-        if (probeSettled) return;
-        probeSettled = true;
-        if (q !== probedQuery) return;
-        nativeAutoReviewTurnFallback = true;
-        log.warn('native Auto classifier probe timed out — keeping Cindy fallback for this turn', {
+        if (probeGeneration !== turnAutoReviewGeneration || q !== probedQuery) return;
+        turnAutoReviewState = 'cindy-unconfirmed';
+        log.warn('native Auto classifier probe timed out — SDK mode unconfirmed, later failures may re-push default', {
           timeoutMs: CC_AUTO_REVIEW_PROBE_TIMEOUT_MS,
         });
       }, CC_AUTO_REVIEW_PROBE_TIMEOUT_MS);
@@ -3704,25 +3743,16 @@ export class ClaudeCodeAgent extends BaseAgent {
       probeWatchdog.unref?.();
       void q.setPermissionMode('auto').then(
         () => {
-          if (probeSettled) return;
-          probeSettled = true;
           clearTimeout(probeWatchdog);
-          log.debug('native Auto classifier probe: switched SDK back to auto for the new turn');
+          // 成功 = SDK 确认在 auto。即使 watchdog 已把状态挪成 unconfirmed,这里也要调和
+          // 回 'native',否则状态说 Cindy 而 SDK 在 auto,本 turn 后续信号会被幂等闸吞掉。
+          settleProbe('native', 'success');
+          log.debug('native Auto classifier probe: SDK confirmed back on auto');
         },
         (e: unknown) => {
-          if (probeSettled) return;
-          probeSettled = true;
           clearTimeout(probeWatchdog);
-          if (q !== probedQuery) {
-            // 本 turn 中途换了 Query(bridge rewind 重建等):失败属于那个已被丢弃的 q,
-            // 新 Query 的起档已按清零后的标记算成 'auto'。此时恢复标记只会制造
-            // 「标记说 Cindy、SDK 在 auto」的漂移,不碰。
-            log.debug('native Auto classifier probe raced a query rebuild; probe result ignored', {
-              error: String(e),
-            });
-            return;
-          }
-          nativeAutoReviewTurnFallback = true;
+          // 失败 = SDK 仍在 default,状态确认为已降级(下一 turn 会再回探一次)。
+          settleProbe('cindy', 'failure', { error: String(e) });
           log.warn('native Auto classifier probe failed — keeping Cindy fallback for this turn', {
             error: String(e),
           });
@@ -4632,17 +4662,23 @@ export class ClaudeCodeAgent extends BaseAgent {
         const scope = fallbackOpts?.scope ?? 'session';
         // 会话级降级是终态(更严):已在该状态下,任何 scope 的重复信号都是幂等 no-op。
         if (nativeAutoReviewUnavailable) return false;
-        // 本 turn 已降级 → 幂等返回(下一 turn 起点回探后才会再次真正切档)。
-        if (scope === 'turn' && nativeAutoReviewTurnFallback) return false;
-        // **先推档,成功之后才提交标记** —— 与回探侧同一条不变量:标记必须与 SDK 实际档位
-        // 一致。反过来(先置标记、push 再失败)会让 SDK 留在 auto 继续硬拒绝,而后续故障信号
+        // 本 turn 已降级**且 SDK 档位已确认** → 幂等返回。刻意只拦 'cindy':
+        // 'cindy-unconfirmed' 表示回探请求超时、SDK 可能已被迟到的回探切回 auto,此时必须
+        // 允许重推一次 default,否则用户会在本 turn 剩下的时间里继续撞硬拒绝(第 5 轮 review)。
+        if (scope === 'turn' && turnAutoReviewState === 'cindy') return false;
+        // **先推档,成功之后才提交状态** —— 与回探侧同一条不变量:状态必须与 SDK 实际档位
+        // 一致。反过来(先置状态、push 再失败)会让 SDK 留在 auto 继续硬拒绝,而后续故障信号
         // 全被上面两道幂等闸吞掉、再也进不来,等于把 #1573 的修复整轮吃掉;scope='session'
         // 更糟 —— 第一道闸是永久的,整个会话余生的信号都被吞。这里刻意不 catch:失败向上抛
-        // 给 coordinator 记 failed,标记未动,同一 turn 的下一个故障信号就能重试(codex P2)。
+        // 给 coordinator 记 failed,状态未动,同一 turn 的下一个故障信号就能重试(codex P2)。
         //
-        // 推不了档的窗口不算失败,标记照常提交:plan 档恒在 plan、rewind/bridge 重建期 q
-        // 不可写、底层档已不是 auto —— 这些路径各自会按标记推导档位(plan turn 收尾的
-        // effectiveSdkPermissionMode()、buildQuery 的起档 permissionMode),标记正是它们的输入。
+        // 递增代际:本次降级是**更新的**决策,在飞的回探(可能已超时进 unconfirmed)迟到返回
+        // 时会因代际过期而不再改写状态,避免它把这次降级覆盖掉。
+        //
+        // 推不了档的窗口不算失败,状态照常提交:plan 档恒在 plan、rewind/bridge 重建期 q
+        // 不可写、底层档已不是 auto —— 这些路径各自会按状态推导档位(plan turn 收尾的
+        // effectiveSdkPermissionMode()、buildQuery 的起档 permissionMode),状态正是它们的输入。
+        const fallbackGeneration = ++turnAutoReviewGeneration;
         if (
           mutablePermissionMode === 'auto'
           && !mutablePlanMode
@@ -4650,17 +4686,18 @@ export class ClaudeCodeAgent extends BaseAgent {
           && !controlRequestsBlocked()
         ) {
           await q.setPermissionMode('default');
-          // await 期间更高优先级的降级可能已落地(会话级信号能穿透在飞的 turn 级操作):
-          // 按**当前**状态重判,不用入口快照,避免把已是终态的会话写回冗余的双标记状态。
+          // await 期间更高优先级的决策可能已落地(会话级信号能穿透在飞的 turn 级操作,或
+          // 另一次降级已推进代际):按**当前**状态重判,不用入口快照。
           if (nativeAutoReviewUnavailable) return false;
-          if (scope === 'turn' && nativeAutoReviewTurnFallback) return false;
+          if (fallbackGeneration !== turnAutoReviewGeneration) return false;
         }
         if (scope === 'session') {
           nativeAutoReviewUnavailable = true;
-          // 终态已覆盖 turn 级语义,清掉以免出现两个标记同时置位的冗余状态。
-          nativeAutoReviewTurnFallback = false;
+          // 终态已覆盖 turn 级语义,归位以免留下"终态 + unconfirmed"这类冗余组合。
+          turnAutoReviewState = 'cindy';
         } else {
-          nativeAutoReviewTurnFallback = true;
+          // SDK 档位刚被这次 push 确认(或处在"由其它路径按状态起档"的窗口)→ confirmed。
+          turnAutoReviewState = 'cindy';
         }
         autoReviewDecisionCache.clear();
         // 文案按 scope 分叉:turn 级只作用于当前 turn(下一 turn 回探),用会话级的

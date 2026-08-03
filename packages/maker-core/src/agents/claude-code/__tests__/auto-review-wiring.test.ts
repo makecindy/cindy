@@ -363,6 +363,96 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('reconciles a probe that succeeds after the watchdog instead of dropping the result', async () => {
+    // 第 5 轮 review 的核心竞态:watchdog 超时后控制请求**迟到成功**,SDK 实际已回到 auto。
+    // 旧实现用 probeSettled 一刀切丢弃迟到结果,状态却仍声称 Cindy 兜底 → 本 turn 后续
+    // 故障信号被幂等闸吞掉、推不回 default,用户继续撞硬拒绝。现在按代际校验后调和。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    vi.useFakeTimers();
+    try {
+      fakeQuery.setPermissionMode.mockReturnValueOnce(probeGate);
+      await handle.send({ type: 'user', content: 'probe hangs, then succeeds' });
+      await vi.advanceTimersByTimeAsync(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    releaseProbe();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 已调和为 'native'(SDK 确认在 auto)→ 下一 turn 不需要再回探。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+    await handle.close();
+  });
+
+  it('lets an unconfirmed probe state re-push default instead of swallowing the signal', async () => {
+    // watchdog 超时后 SDK 档位未知(可能已被迟到的回探切回 auto):此时的故障信号**不能**
+    // 被当成"本 turn 已降级"的重复信号,必须允许再推一次 default。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    // 已确认降级时重复信号仍是幂等 no-op。
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(false);
+
+    vi.useFakeTimers();
+    try {
+      fakeQuery.setPermissionMode.mockReturnValueOnce(new Promise<void>(() => {}));
+      await handle.send({ type: 'user', content: 'probe hangs' });
+      await vi.advanceTimersByTimeAsync(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    fakeQuery.setPermissionMode.mockClear();
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(true);
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
+  it('does not let a late probe success override a newer fallback decision', async () => {
+    // 代际保护:unconfirmed 期间新的降级已把 SDK 推回 default,更晚到达的回探成功不得把
+    // 状态改回 'native' —— 否则状态说原生而 SDK 在 default,下一 turn 也不会再回探。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+
+    let releaseProbe!: () => void;
+    const probeGate = new Promise<void>((resolve) => { releaseProbe = resolve; });
+    vi.useFakeTimers();
+    try {
+      fakeQuery.setPermissionMode.mockReturnValueOnce(probeGate);
+      await handle.send({ type: 'user', content: 'probe hangs' });
+      await vi.advanceTimersByTimeAsync(10_000);
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 更新的决策:重新降级并确认 SDK 在 default。
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(true);
+    // 迟到的回探成功此刻才返回 —— 代际已过期,不得改写状态。
+    releaseProbe();
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 状态仍是已确认降级 → 下一 turn 照常回探 auto。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
   it('restores the tentative flag when the probe control request fails', async () => {
     const { handle, fakeQuery } = await startSession('auto', {
       providerId: 'anthropic',
