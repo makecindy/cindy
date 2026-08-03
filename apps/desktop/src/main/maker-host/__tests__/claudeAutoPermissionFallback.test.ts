@@ -353,6 +353,63 @@ describe('createClaudeAutoClassifierFailureObserver', () => {
       });
     });
 
+    /**
+     * observer 挂在**共享**的 anthropic-compat-proxy 上(见 anthropic-compat-proxy-host
+     * 的 composeResponseObservers):普通 turn、PI 以及其它复用该 proxy 的 runtime 的响应
+     * 全都流经这里。身份判据必须最先过,否则这些无关响应会把漏检计数顶满,而那两个计数
+     * 存在的唯一目的就是回答「分类器在报错但我们没识别出来吗」。
+     */
+    describe('does not let unrelated runtimes pollute the tallies', () => {
+      /** PI 等其它 runtime 的请求:既不是分类器身份,也不带 cc 会话头。 */
+      const foreignBody = Buffer.from(JSON.stringify({
+        model: 'gpt-5.5',
+        max_tokens: 64_000,
+        messages: [],
+      }));
+
+      it('ignores a headerless error response that is not a classifier request', () => {
+        const { logger, observer } = createObserver(() => 'session-1', () => 0);
+
+        observer(ctx({ status: 429, requestHeaders: {}, requestBody: foreignBody }));
+        observer(ctx({ status: 500, requestHeaders: {}, requestBody: foreignBody }));
+
+        // 只算分母,不算漏检、不刷 warn。
+        expect(logger.warn).not.toHaveBeenCalled();
+        // 用一条真漏检把计数带出来核对。
+        observer(ctx({ status: 429, requestHeaders: {} }));
+        expect(warnCounters(logger)).toMatchObject({
+          errorsNotClassifier: 2,
+          errorsMissingSessionHeader: 1,
+          errorsUnresolvedSession: 0,
+        });
+      });
+
+      it('ignores an error response whose session id is unresolvable but is not a classifier request', () => {
+        const { logger, observer } = createObserver(() => null, () => 0);
+
+        observer(ctx({ status: 429, requestBody: foreignBody }));
+
+        expect(logger.warn).not.toHaveBeenCalled();
+      });
+
+      it('ignores headerless success responses from other runtimes while a Claude tally exists', () => {
+        let t = 0;
+        const { logger, observer } = createObserver(() => 'session-1', () => t);
+
+        observer(ctx({ status: 429 })); // 某个 Claude 会话留下记账 → observer 级 size 非零
+        t += 1_000;
+
+        // 混合运行时:PI 的 SSE 成功响应不带 cc 会话头,不得记成「恢复漏检」。
+        observer(ctx({ status: 200, requestHeaders: {}, requestBody: foreignBody }));
+        expect(logger.warn).not.toHaveBeenCalled();
+
+        // 真正的分类器 2xx 缺头才算。
+        observer(ctx({ status: 200, requestHeaders: {} }));
+        expect(logger.warn).toHaveBeenCalledTimes(1);
+        expect(warnCounters(logger)).toMatchObject({ recoveryMissingSessionHeader: 1 });
+      });
+    });
+
     it('throttles the same reason but keeps different reasons independent', () => {
       let t = 0;
       const { logger, observer } = createObserver(

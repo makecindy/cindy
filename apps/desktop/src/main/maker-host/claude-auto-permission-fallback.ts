@@ -151,19 +151,22 @@ interface ClassifierObserverLogger {
  * 「分类器正在报错,但我们到底有没有识别出来?」
  *
  * `classifierFailures` 是识别成功数;它与两个漏检计数的比例才是识别率信号。
- * `errorsNotClassifier` 是**正常**的大头(普通 turn 的错误响应也会流经这里),不参与
- * 漏检判断,单列出来只为让另外两个计数有分母。
+ * `errorsNotClassifier` 是**正常**的大头,不参与漏检判断,单列出来只为让另外两个计数有分母。
+ *
+ * **所有计数都在「已确认是 Auto 分类器请求」之后才累加。** observer 挂在共享的
+ * anthropic-compat-proxy 上,普通 turn、PI 与其它复用该 proxy 的 runtime 的响应同样流经
+ * 这里;若先按归属失败记账,那些无关响应会把漏检计数顶满,识别率信号就废了。
  */
 interface ClassifierObserverCounters {
-  /** 有 header + 反解成功 + body 判定为分类器 → 真正识别出的分类器故障。 */
+  /** 分类器请求 + 有 header + 反解成功 → 真正识别出的分类器故障。 */
   classifierFailures: number;
-  /** 错误响应缺 x-claude-code-session-id → 无法归属会话,漏检。 */
+  /** **分类器请求**的错误响应缺 x-claude-code-session-id → 无法归属会话,漏检。 */
   errorsMissingSessionHeader: number;
-  /** 错误响应有 header 但反解不出业务会话 id → 漏检。 */
+  /** **分类器请求**的错误响应有 header 但反解不出业务会话 id → 漏检。 */
   errorsUnresolvedSession: number;
-  /** 有 header + 反解成功,但 body 不是分类器请求 → 正常,普通 turn 的错误。 */
+  /** 错误响应的 body 不是分类器请求 → 正常(普通 turn / PI / 其它 runtime)。 */
   errorsNotClassifier: number;
-  /** 已有瞬时记账的成功响应缺 header → 这一轮「恢复即清零」不会发生。 */
+  /** 有瞬时记账时,**分类器请求**的 2xx 缺 header → 这一轮「恢复即清零」不会发生。 */
   recoveryMissingSessionHeader: number;
 }
 
@@ -225,11 +228,18 @@ export function createClaudeAutoClassifierFailureObserver(
       if (!sdkSessionId) {
         // 拿不到 header 就找不到要清哪一条账。后果有界(记账最终会因窗口过期被弃),
         // 但期间该会话可能被残账提前推过升级阈值,值得在日志里可见。
-        counters.recoveryMissingSessionHeader += 1;
-        warnThrottled('success response without session header; recovery reset skipped', {
-          status: ctx.status,
-          trackedSessions: transientEpisodes.size,
-        });
+        //
+        // 只有**确认是分类器请求**才算漏检:observer 挂在共享的 anthropic-compat-proxy 上,
+        // PI 与其它 runtime 的成功响应同样不带这个头,不先过滤会让混合运行时持续制造假告警
+        // (`transientEpisodes.size` 是整个 observer 级的,任意一个 Claude 会话有记账就非零)。
+        // 判据顺序按成本排:先 2xx(3xx 本就不清账)、再 parse —— 只有走到这里的少数响应付这笔。
+        if (ctx.status >= 200 && ctx.status < 300 && isClaudeAutoClassifierRequest(ctx.requestBody)) {
+          counters.recoveryMissingSessionHeader += 1;
+          warnThrottled('success response without session header; recovery reset skipped', {
+            status: ctx.status,
+            trackedSessions: transientEpisodes.size,
+          });
+        }
         return undefined;
       }
       const episodes = transientEpisodes.get(sdkSessionId);
@@ -247,6 +257,16 @@ export function createClaudeAutoClassifierFailureObserver(
       if (ctx.status >= 200 && ctx.status < 300 && isClaudeAutoClassifierRequest(ctx.requestBody)) {
         transientEpisodes.delete(sdkSessionId);
       }
+      return undefined;
+    }
+    // 身份判据必须**最先**过:observer 挂在共享的 anthropic-compat-proxy 上,普通 turn、
+    // PI 以及其它复用该 proxy 的 runtime 的 4xx/5xx 全都流经这里。若先按「缺会话头 /
+    // 反解失败」记漏检,这些无关错误会把 errorsMissingSessionHeader / errorsUnresolvedSession
+    // 顶满,识别率信号彻底失效 —— 而这两个计数存在的唯一目的就是回答「分类器在报错但我们
+    // 没识别出来吗」。代价是错误响应一律 parse 一次 body(原注释已认定该成本可忽略)。
+    if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
+      // 正常大头:非分类器的错误响应。只计数当分母,不 warn。
+      counters.errorsNotClassifier += 1;
       return undefined;
     }
     const sdkSessionId = ctx.requestHeaders['x-claude-code-session-id'];
@@ -267,12 +287,6 @@ export function createClaudeAutoClassifierFailureObserver(
         status: ctx.status,
         sdkSessionId,
       });
-      return undefined;
-    }
-    // 先判 sessionId 再 parse body —— 保持原有短路顺序,不为无法归属的响应付 parse 成本。
-    if (!isClaudeAutoClassifierRequest(ctx.requestBody)) {
-      // 正常大头:普通 turn 的错误响应也流经这里。只计数,不 warn。
-      counters.errorsNotClassifier += 1;
       return undefined;
     }
     counters.classifierFailures += 1;
