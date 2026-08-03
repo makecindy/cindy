@@ -1864,6 +1864,12 @@ const GHOST_ICON_MIME_BY_EXT: Record<string, string> = {
   '.gif': 'image/gif',
 };
 
+/**
+ * icon 字节上限。icon 会以 data URL 形态同步下发给 Renderer，因此安装、
+ * 本地读取与 Forge overlay 必须共用同一硬顶，避免“能打包但不能安装”。
+ */
+export const GHOST_ICON_MAX_BYTES = 512 * 1024;
+
 /** icon 路径 → mime;扩展名不在白名单返回 null(即校验不通过)。 */
 export function ghostIconMimeType(p: string): string | null {
   const dot = p.lastIndexOf('.');

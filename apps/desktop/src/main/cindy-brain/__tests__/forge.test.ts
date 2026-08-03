@@ -116,6 +116,62 @@ describe('packGhostDir', () => {
     await expect(fs.promises.stat(path.join(dir, 'assets/icon.png'))).rejects.toMatchObject({
       code: 'ENOENT',
     });
+
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    const inspected = await manager.inspect(packed.cindyPath);
+    expect('manifest' in inspected, JSON.stringify(inspected)).toBe(true);
+  });
+
+  it('iconPng 超过安装器 512 KiB 上限时在打包期拒绝', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.alloc(512 * 1024 + 1) })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'TOO_LARGE',
+    });
+  });
+
+  it('无效清单传 iconPng 仍返回 MANIFEST_INVALID，不被 overlay 改造成其它形状', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': 'null',
+      'main.js': '// brain',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+    });
+  });
+
+  it('assets/icon.png 已被目录占用时拒绝 icon overlay', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+    });
+    await fs.promises.mkdir(path.join(dir, 'assets/icon.png'), { recursive: true });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('目标路径已被源码目录占用'),
+    });
+  });
+
+  it('assets/icon.png 子路径已被目录占用时拒绝 icon overlay', async () => {
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(GOOD_MANIFEST),
+      'main.js': '// brain',
+      'assets/icon.png/child.txt': 'occupied',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('目标路径已被源码目录占用'),
+    });
   });
 
   it('打包进 zip 的 ghost.json 是校验时的快照,并发改写不生效(防 TOCTOU)', async () => {

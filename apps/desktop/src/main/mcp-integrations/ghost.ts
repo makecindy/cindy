@@ -70,14 +70,16 @@ import * as ledger from '../cindy-media/ledger.js';
 import { chatAttachmentOrigin } from '../cindy-media/attachmentGrantGate.js';
 import { resolveGhostAttachmentUrl } from './ghostAttachmentResolve.js';
 import { ghostSetupInteractionSessionId } from './ghostSetupInteractionSurface.js';
+import {
+  createForgeIconConverter,
+  type ForgeSharpModule,
+} from './forgeIconConversion.js';
 import { t } from '../i18n.js';
 import { createLogger } from '../logger.js';
 
 const log = createLogger('mcp/cindy');
 const MAX_FORGE_ICON_SOURCE_BYTES = 25 * 1024 * 1024;
-const FORGE_ICON_CONVERT_TIMEOUT_MS = 5_000;
 
-type ForgeSharpModule = (typeof import('sharp'))['default'];
 let forgeSharp: ForgeSharpModule | null = null;
 let forgeSharpLoadAttempted = false;
 
@@ -97,28 +99,7 @@ function loadForgeSharp(): ForgeSharpModule | null {
   return forgeSharp;
 }
 
-async function convertForgeIconToPng(absPath: string): Promise<Buffer> {
-  const sharp = loadForgeSharp();
-  if (!sharp) throw new Error('sharp unavailable');
-
-  const work = sharp(absPath, {
-    failOn: 'error',
-    limitInputPixels: 64 * 1024 * 1024,
-  })
-    .rotate()
-    .resize(1024, 1024, { fit: 'cover', position: 'centre' })
-    .png({ compressionLevel: 9 })
-    .toBuffer();
-  const timeout = new Promise<'timeout'>((resolve) => {
-    const timer = setTimeout(() => resolve('timeout'), FORGE_ICON_CONVERT_TIMEOUT_MS);
-    timer.unref?.();
-  });
-  const result = await Promise.race([work, timeout]);
-  if (result === 'timeout') {
-    throw new Error(`AI 图标转换超时(${FORGE_ICON_CONVERT_TIMEOUT_MS}ms)`);
-  }
-  return result;
-}
+const convertForgeIconToPng = createForgeIconConverter({ loadSharp: loadForgeSharp });
 
 /* ────────────────────────────────────────────────────────────────────────
  * workdir 外过户确认:

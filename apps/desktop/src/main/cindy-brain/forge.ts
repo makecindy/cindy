@@ -19,6 +19,7 @@ import path from 'node:path';
 import JSZip from 'jszip';
 
 import {
+  GHOST_ICON_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
@@ -39,7 +40,6 @@ const MAX_NODE_TOTAL_BYTES = 256 * 1024 * 1024;
 const MAX_BASIC_CINDY_BYTES = 8 * 1024 * 1024;
 const MAX_NODE_CINDY_BYTES = 128 * 1024 * 1024;
 const FORGE_AI_ICON_PATH = 'assets/icon.png';
-const MAX_FORGE_AI_ICON_BYTES = 8 * 1024 * 1024;
 
 /** 打包时跳过的目录/文件(源码目录里的开发残留,不属于意识本体)。 */
 function shouldSkip(name: string): boolean {
@@ -620,17 +620,21 @@ async function buildGhostPackage(
     }
     const iconPng = options?.iconPng;
     if (iconPng !== undefined) {
-      if (iconPng.byteLength === 0 || iconPng.byteLength > MAX_FORGE_AI_ICON_BYTES) {
+      if (iconPng.byteLength === 0 || iconPng.byteLength > GHOST_ICON_MAX_BYTES) {
         return {
           ok: false,
           errorCode: 'TOO_LARGE',
-          message: `AI 图标体积必须在 1–${MAX_FORGE_AI_ICON_BYTES} 字节之间`,
+          message: `AI 图标体积必须在 1–${GHOST_ICON_MAX_BYTES} 字节之间`,
         };
       }
-      // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
-      // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
-      manifestRaw = { ...(manifestRaw as Record<string, unknown>), icon: FORGE_AI_ICON_PATH };
-      manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw, null, 2)}\n`, 'utf-8');
+      // 无效清单先交给正式 validator，避免 overlay 把 null/数组等输入改造成
+      // 另一种形状、掩盖原始 MANIFEST_INVALID。只有普通对象才写入快照。
+      if (typeof manifestRaw === 'object' && manifestRaw !== null && !Array.isArray(manifestRaw)) {
+        // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
+        // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
+        manifestRaw = { ...manifestRaw, icon: FORGE_AI_ICON_PATH };
+        manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw, null, 2)}\n`, 'utf-8');
+      }
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
@@ -756,6 +760,16 @@ async function buildGhostPackage(
     if (tooLarge) return tooLarge;
     const foldedAiIconPath = FORGE_AI_ICON_PATH.toLowerCase();
     const iconSourceEntry = files.find((file) => file.rel.toLowerCase() === foldedAiIconPath);
+    const iconPathOccupiedByDirectory = [...seenPackPaths].some(
+      (rel) => rel === foldedAiIconPath || rel.startsWith(`${foldedAiIconPath}/`),
+    );
+    if (iconPng !== undefined && iconPathOccupiedByDirectory && !iconSourceEntry) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `AI 图标目标路径已被源码目录占用:${FORGE_AI_ICON_PATH}`,
+      };
+    }
     if (iconPng !== undefined && iconSourceEntry && iconSourceEntry.rel !== FORGE_AI_ICON_PATH) {
       return {
         ok: false,
