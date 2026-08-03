@@ -386,6 +386,11 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
     // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
     // 重映射到下一个 occurrence 拆散。
+    // 解析顺序: 后顾优先(引用「之前最近的同名 call」); 后顾 miss 时 fallback 前瞻
+    // (stream_event / task 行可先于 assistant 行到达, 引用的父调用在后面 —— 否则顶层
+    // parent_tool_use_id / tool_use_id 保持旧 id, 与已前瞻改名的 content_block.id
+    // 不一致, child 流挂到旧 id 下, codex-connector P1: Forward-map pre-assistant
+    // top-level tool refs)。
     const resolveForEntry = (entry: JsonObject, val: string, index: number): string | undefined => {
       const key = childKeyOf(entry);
       if (key !== undefined) {
@@ -394,7 +399,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           const cached = m.get(val);
           if (cached !== undefined) return cached;
         }
-        const mapped = resolveOccurrence(val, index);
+        const mapped = resolveOccurrence(val, index) ?? resolveAhead(val, index);
         if (mapped !== undefined) {
           if (!m) {
             m = new Map();
@@ -404,14 +409,26 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         }
         return mapped;
       }
-      return resolveOccurrence(val, index);
+      return resolveOccurrence(val, index) ?? resolveAhead(val, index);
     };
     entries.forEach((entry, index) => {
       let entryChanged = false;
+      // entry 级缓存: 同一条记录内多个字段引用同一 id 时共享解析结果 —— 否则标量
+      // (parent_tool_use_id / tool_use_id)与嵌套 content_block.id 各自消费前瞻/后顾
+      // 指针, 同 id 可能映射到不同终 id, 一条 stream_event 内 self-inconsistent
+      // (codex-connector P1 引出的协调)。
+      const entryRef = new Map<string, string>();
+      const resolveField = (val: string): string | undefined => {
+        const cached = entryRef.get(val);
+        if (cached !== undefined) return cached;
+        const mapped = resolveForEntry(entry, val, index);
+        if (mapped !== undefined) entryRef.set(val, mapped);
+        return mapped;
+      };
       for (const field of ['parent_tool_use_id', 'tool_use_id'] as const) {
         const val = entry[field];
         if (typeof val !== 'string') continue;
-        const mapped = resolveForEntry(entry, val, index);
+        const mapped = resolveField(val);
         if (mapped !== undefined && mapped !== val) {
           entry[field] = mapped;
           entryChanged = true;
@@ -424,7 +441,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         for (let i = 0; i < arr.length; i += 1) {
           const item = arr[i];
           if (typeof item !== 'string') continue;
-          const mapped = resolveForEntry(entry, item, index);
+          const mapped = resolveField(item);
           if (mapped !== undefined && mapped !== item) {
             arr[i] = mapped;
             entryChanged = true;
@@ -434,14 +451,14 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       // stream_event 的 event.content_block.id(content_block_start 的 tool_use)也要
       // 改写: handleStreamEvent 用它驱动 tool-use start / tool-name 状态, replay/import
       // 会以旧 id 发 tool card, 与归一化后的 tool_result / summary 指向不一致
-      // (codex-connector P2: Rewrite stream-event tool IDs too)。
-      // 用前瞻解析(不走 child 缓存): content_block_start 是独立调用, 且可先于
-      // assistant 行到达, 需匹配「即将出现」的 occurrence(见 resolveAhead)。
+      // (codex-connector P2: Rewrite stream-event tool IDs too)。用 resolveField
+      // (后顾优先 + 前瞻 fallback), 可先于 assistant 行到达(前瞻匹配即将出现的
+      // occurrence); 与同 entry 顶层标量共享 entryRef, 保证一致。
       const evt = entry.event;
       if (isRecord(evt) && evt.type === 'content_block_start') {
         const cb = evt.content_block;
         if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
-          const mapped = resolveAhead(cb.id, index);
+          const mapped = resolveField(cb.id);
           if (mapped !== undefined && mapped !== cb.id) {
             cb.id = mapped;
             entryChanged = true;

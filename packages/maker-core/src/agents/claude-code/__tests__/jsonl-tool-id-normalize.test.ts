@@ -472,6 +472,9 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     // stream_event 在 line 0, assistant 在 line 1: content_block.id 前瞻匹配到 Bash_x210
     const evt = (entries[0] as Record<string, unknown>).event as Record<string, unknown>;
     expect((evt.content_block as Record<string, unknown>).id).toBe('Bash_x210');
+    // 顶层 parent_tool_use_id 同样前瞻改写(P1: Forward-map pre-assistant top-level
+    // tool refs) —— handleStreamEvent 用它作 parentToolUseId, 必须与 card id 一致
+    expect((entries[0] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_x210');
     // 后续 assistant / tool_result 也一致
     expect(contentOf(entries[1])[0].id).toBe('Bash_x210');
   });
