@@ -1054,8 +1054,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
       name: string,
     ): Promise<import('../shared/pluginMarket').MarketSourceSummary> =>
       ipcRenderer.invoke('plugin-market:refresh-source', name),
+    refreshGitSourcesIfStale: (): Promise<
+      import('../shared/pluginMarket').MarketSourceAutoRefreshResult
+    > => ipcRenderer.invoke('plugin-market:refresh-git-sources-if-stale'),
     gitPreflight: (): Promise<{ ok: boolean; version: string | null }> =>
       ipcRenderer.invoke('plugin-market:git-preflight'),
+    resolveDefaultBranch: (source: string): Promise<string | null> =>
+      ipcRenderer.invoke('plugin-market:resolve-default-branch', source),
   },
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }): Promise<{ ok: true }> =>

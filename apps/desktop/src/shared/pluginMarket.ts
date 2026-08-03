@@ -74,6 +74,12 @@ export interface MarketSourceSummary extends MarketSourceConfig {
   errorCode: string | null;
 }
 
+/** 进入插件页时触发的 Git 来源后台同步结果。 */
+export interface MarketSourceAutoRefreshResult {
+  /** 本轮是否至少成功同步了一个 Git 来源；成功时 Renderer 重新读取市场快照。 */
+  refreshed: boolean;
+}
+
 /**
  * 来源的规范化指纹。市场名是 marketplace.json 自报的、**可复用**——移除来源 A 后
  * 添加一个同名的来源 B,`customMarketPluginId` 完全相同;账本所有权若只锚在

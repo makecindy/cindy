@@ -1391,7 +1391,11 @@ interface ElectronAPI {
     refreshSource: (
       name: string,
     ) => Promise<import('../shared/pluginMarket').MarketSourceSummary>;
+    refreshGitSourcesIfStale: () => Promise<
+      import('../shared/pluginMarket').MarketSourceAutoRefreshResult
+    >;
     gitPreflight: () => Promise<{ ok: boolean; version: string | null }>;
+    resolveDefaultBranch: (source: string) => Promise<string | null>;
   };
   voiceInput: {
     prewarm: (payload?: { sourceLanguage?: string; refinementEnabled?: boolean }) => Promise<{ ok: true }>;

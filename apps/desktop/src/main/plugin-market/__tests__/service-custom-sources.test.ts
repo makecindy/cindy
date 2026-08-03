@@ -78,6 +78,7 @@ const roots: string[] = [];
 const PLUGIN_ID = `c${'a'.repeat(24)}`;
 
 afterEach(() => {
+  vi.useRealTimers();
   runtime.ghosts = [];
   runtime.listSequence = null;
   runtime.install.mockReset();
@@ -197,6 +198,98 @@ function harness(items: VisiblePluginSummary[], marketDirs: Array<{ name: string
 }
 
 describe('PluginMarketService 自定义市场聚合', () => {
+  it('deduplicates and throttles automatic Git source refreshes', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T00:00:00.000Z'));
+    const h = harness([], []);
+    h.sourceStore.add({
+      name: 'team-git',
+      addedAt: '2026-08-03T00:00:00.000Z',
+      lastSyncedAt: null,
+      lastRevision: null,
+      source: {
+        type: 'git',
+        url: 'https://github.com/example/team-git.git',
+        sparsePaths: [],
+      },
+    });
+    let finishFirstRefresh!: () => void;
+    const firstRefresh = new Promise<void>((resolve) => {
+      finishFirstRefresh = resolve;
+    });
+    const refreshSource = vi
+      .spyOn(h.service, 'refreshSource')
+      .mockImplementationOnce(async () => {
+        await firstRefresh;
+        return {} as never;
+      })
+      .mockResolvedValue({} as never);
+
+    const first = h.service.refreshGitSourcesIfStale();
+    const duplicate = h.service.refreshGitSourcesIfStale();
+    expect(refreshSource).toHaveBeenCalledTimes(1);
+
+    finishFirstRefresh();
+    await expect(first).resolves.toEqual({ refreshed: true });
+    await expect(duplicate).resolves.toEqual({ refreshed: true });
+
+    await expect(h.service.refreshGitSourcesIfStale()).resolves.toEqual({ refreshed: false });
+    expect(refreshSource).toHaveBeenCalledTimes(1);
+
+    vi.advanceTimersByTime(5 * 60 * 1_000);
+    await expect(h.service.refreshGitSourcesIfStale()).resolves.toEqual({ refreshed: true });
+    expect(refreshSource).toHaveBeenCalledTimes(2);
+    refreshSource.mockRestore();
+  });
+
+  it('skips Git sources that were synced within the throttle window', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-08-03T00:00:00.000Z'));
+    const h = harness([], []);
+    h.sourceStore.add({
+      name: 'fresh-git',
+      addedAt: '2026-08-03T00:00:00.000Z',
+      lastSyncedAt: '2026-08-02T23:59:00.000Z',
+      lastRevision: 'abc123',
+      source: {
+        type: 'git',
+        url: 'https://github.com/example/fresh-git.git',
+        sparsePaths: [],
+      },
+    });
+    const refreshSource = vi.spyOn(h.service, 'refreshSource');
+
+    await expect(h.service.refreshGitSourcesIfStale()).resolves.toEqual({ refreshed: false });
+    expect(refreshSource).not.toHaveBeenCalled();
+    refreshSource.mockRestore();
+  });
+
+  it('continues refreshing other Git sources after one source fails', async () => {
+    const h = harness([], []);
+    for (const name of ['broken-git', 'healthy-git']) {
+      h.sourceStore.add({
+        name,
+        addedAt: '2026-08-03T00:00:00.000Z',
+        lastSyncedAt: null,
+        lastRevision: null,
+        source: {
+          type: 'git',
+          url: `https://github.com/example/${name}.git`,
+          sparsePaths: [],
+        },
+      });
+    }
+    const refreshSource = vi
+      .spyOn(h.service, 'refreshSource')
+      .mockRejectedValueOnce(new Error('network unavailable'))
+      .mockResolvedValue({} as never);
+
+    await expect(h.service.refreshGitSourcesIfStale()).resolves.toEqual({ refreshed: true });
+    expect(refreshSource).toHaveBeenNthCalledWith(1, 'broken-git');
+    expect(refreshSource).toHaveBeenNthCalledWith(2, 'healthy-git');
+    refreshSource.mockRestore();
+  });
+
   it('appends custom market items after server items with source identity', async () => {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-custom-fixture-'));
     roots.push(root);

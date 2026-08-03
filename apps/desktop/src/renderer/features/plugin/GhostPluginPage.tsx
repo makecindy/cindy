@@ -116,6 +116,7 @@ import { pluginMarketErrorKey } from './lib/pluginMarketErrorKey';
 import { usePluginIconRefresh } from './lib/usePluginIconRefresh';
 import { usePluginMarketForegroundRefresh } from './lib/usePluginMarketForegroundRefresh';
 import { usePluginMarketLocaleRefresh } from './lib/usePluginMarketLocaleRefresh';
+import { usePluginMarketSourceAutoRefresh } from './lib/usePluginMarketSourceAutoRefresh';
 import './plugin-motion.css';
 
 const PLUGIN_CATALOG_TOOLBAR_CLASS =
@@ -249,6 +250,11 @@ export function GhostPluginPage() {
     marketDetailRequestRef.current += 1;
     void refreshMarket();
   }, [refreshMarket, mode, dataOwnerId]);
+  const refreshMarketAfterSourceSync = useCallback(() => refreshMarket(true), [refreshMarket]);
+  usePluginMarketSourceAutoRefresh(
+    `${mode}:${dataOwnerId ?? ''}`,
+    refreshMarketAfterSourceSync,
+  );
   const refreshMarketOnForeground = useCallback(() => refreshMarket(true), [refreshMarket]);
   usePluginMarketForegroundRefresh(refreshMarketOnForeground, lastMarketRefreshAtRef);
   useEffect(() => {

@@ -24,15 +24,19 @@ import { AddMarketplaceDialog } from '../AddMarketplaceDialog';
 
 const addSource = vi.fn(async () => ({}) as never);
 const pickLocalSource = vi.fn(async () => ({ canceled: false, summary: {} }) as never);
+const resolveDefaultBranch = vi.fn(async () => null as string | null);
 
 beforeEach(() => {
   addSource.mockClear();
   vi.stubGlobal('window', window);
   pickLocalSource.mockClear();
+  resolveDefaultBranch.mockReset();
+  resolveDefaultBranch.mockResolvedValue(null);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     pluginMarket: {
       addSource,
       pickLocalSource,
+      resolveDefaultBranch,
       listSources: vi.fn(async () => []),
       removeSource: vi.fn(async () => ({ ok: true })),
       refreshSource: vi.fn(),
@@ -47,6 +51,72 @@ function input(key: string): HTMLElement {
 }
 
 describe('AddMarketplaceDialog', () => {
+  it('prefills the remote default branch after the source loses focus', async () => {
+    resolveDefaultBranch.mockResolvedValueOnce('main');
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
+    const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;
+    fireEvent.change(sourceField, { target: { value: 'openai/plugins' } });
+    fireEvent.blur(sourceField);
+
+    await waitFor(() => expect(refField.value).toBe('main'));
+    expect(resolveDefaultBranch).toHaveBeenCalledWith('openai/plugins');
+    expect(screen.getByText('settings.ghosts.market.sources.defaultBranchDetected')).toBeTruthy();
+  });
+
+  it('does not overwrite a user-entered Git ref', async () => {
+    resolveDefaultBranch.mockResolvedValueOnce('main');
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
+    const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;
+    fireEvent.change(sourceField, { target: { value: 'openai/plugins' } });
+    fireEvent.change(refField, { target: { value: 'release' } });
+    fireEvent.blur(sourceField);
+
+    await waitFor(() => expect(refField.value).toBe('release'));
+    expect(resolveDefaultBranch).not.toHaveBeenCalled();
+    expect(refField.value).toBe('release');
+  });
+
+  it('ignores a stale default branch response after the source changes', async () => {
+    let resolveBranch!: (branch: string | null) => void;
+    const pending = new Promise<string | null>((resolve) => {
+      resolveBranch = resolve;
+    });
+    resolveDefaultBranch.mockReturnValueOnce(pending);
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    const sourceField = input('settings.ghosts.market.sources.sourcePlaceholder');
+    const refField = input('settings.ghosts.market.sources.refPlaceholder') as HTMLInputElement;
+    fireEvent.change(sourceField, { target: { value: 'openai/plugins' } });
+    fireEvent.blur(sourceField);
+    await waitFor(() => expect(resolveDefaultBranch).toHaveBeenCalledWith('openai/plugins'));
+
+    fireEvent.change(sourceField, { target: { value: 'acme/tools' } });
+    resolveBranch('main');
+    await pending;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(refField.value).toBe('');
+    expect(screen.queryByText('settings.ghosts.market.sources.defaultBranchDetected')).toBeNull();
+  });
+
+  it('explains when sparse paths are useful', async () => {
+    render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
+
+    const sparseField = input('settings.ghosts.market.sources.sparsePlaceholder');
+    const descriptionId = sparseField.getAttribute('aria-describedby');
+
+    expect(descriptionId).toBeTruthy();
+    await waitFor(() => {
+      const description = document.getElementById(descriptionId ?? '')?.textContent;
+      expect(description).toContain('settings.ghosts.market.sources.sparseDescription');
+      expect(description).toContain('settings.ghosts.market.sources.sparseExample');
+    });
+  });
+
   it('drops ref and sparse paths once the source turns out to be a local path', async () => {
     render(<AddMarketplaceDialog open onOpenChange={() => {}} onSourcesChanged={() => {}} />);
 

@@ -6,7 +6,7 @@
  * 容器 12px radius + --confirm-bg + --confirm-shadow，表单对话框放宽到 460px；
  * 单行输入 pill、多行输入 8px 内层 radius，按钮全部 pill。
  */
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import { ChevronRight } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
@@ -56,6 +56,14 @@ export function AddMarketplaceDialog({
   const [sourceInput, setSourceInput] = useState('');
   const [refInput, setRefInput] = useState('');
   const [sparseInput, setSparseInput] = useState('');
+  const sparseDescriptionId = useId();
+  const refDescriptionId = useId();
+  const sourceInputRef = useRef('');
+  const refInputRef = useRef('');
+  const defaultBranchRequestRef = useRef(0);
+  const autoFilledRef = useRef<string | null>(null);
+  const [defaultBranch, setDefaultBranch] = useState<string | null>(null);
+  const [resolvingDefaultBranch, setResolvingDefaultBranch] = useState(false);
   const [adding, setAdding] = useState(false);
   const [guideOpen, setGuideOpen] = useState(false);
   const [sourcesOpen, setSourcesOpen] = useState(false);
@@ -102,10 +110,20 @@ export function AddMarketplaceDialog({
   }, [mode, dataOwnerId, open, loadSources]);
 
   useEffect(() => {
-    if (!open) return;
+    if (!open) {
+      defaultBranchRequestRef.current += 1;
+      setResolvingDefaultBranch(false);
+      return;
+    }
     setSourceInput('');
     setRefInput('');
     setSparseInput('');
+    sourceInputRef.current = '';
+    refInputRef.current = '';
+    autoFilledRef.current = null;
+    defaultBranchRequestRef.current += 1;
+    setDefaultBranch(null);
+    setResolvingDefaultBranch(false);
     void window.electronAPI.pluginMarket
       .gitPreflight()
       .then((result) => setGitReady(result.ok))
@@ -113,6 +131,57 @@ export function AddMarketplaceDialog({
   }, [open]);
 
   const sourceIsLocal = looksLikeLocalPath(sourceInput);
+
+  const handleSourceChange = useCallback((value: string) => {
+    sourceInputRef.current = value;
+    defaultBranchRequestRef.current += 1;
+    if (autoFilledRef.current !== null && refInputRef.current === autoFilledRef.current) {
+      refInputRef.current = '';
+      setRefInput('');
+    }
+    autoFilledRef.current = null;
+    setDefaultBranch(null);
+    setResolvingDefaultBranch(false);
+    setSourceInput(value);
+  }, []);
+
+  const handleRefChange = useCallback((value: string) => {
+    refInputRef.current = value;
+    defaultBranchRequestRef.current += 1;
+    autoFilledRef.current = null;
+    setDefaultBranch(null);
+    setResolvingDefaultBranch(false);
+    setRefInput(value);
+  }, []);
+
+  const resolveDefaultBranch = useCallback(() => {
+    const source = sourceInputRef.current.trim();
+    if (!source || looksLikeLocalPath(source) || refInputRef.current.trim()) return;
+
+    const requestId = ++defaultBranchRequestRef.current;
+    setResolvingDefaultBranch(true);
+    void window.electronAPI.pluginMarket
+      .resolveDefaultBranch(source)
+      .then((branch) => {
+        if (
+          requestId !== defaultBranchRequestRef.current ||
+          sourceInputRef.current.trim() !== source ||
+          refInputRef.current.trim() ||
+          !branch
+        ) {
+          return;
+        }
+        refInputRef.current = branch;
+        autoFilledRef.current = branch;
+        setRefInput(branch);
+        setDefaultBranch(branch);
+      })
+      .catch(() => undefined)
+      .finally(() => {
+        if (requestId === defaultBranchRequestRef.current) setResolvingDefaultBranch(false);
+      });
+  }, []);
+
   const addDisabled =
     adding ||
     sourceInput.trim().length === 0 ||
@@ -144,6 +213,11 @@ export function AddMarketplaceDialog({
       setSourceInput('');
       setRefInput('');
       setSparseInput('');
+      sourceInputRef.current = '';
+      refInputRef.current = '';
+      autoFilledRef.current = null;
+      defaultBranchRequestRef.current += 1;
+      setDefaultBranch(null);
       await loadSources();
       onSourcesChanged();
     } catch (error) {
@@ -217,7 +291,8 @@ export function AddMarketplaceDialog({
                 </span>
                 <input
                   value={sourceInput}
-                  onChange={(event) => setSourceInput(event.target.value)}
+                  onChange={(event) => handleSourceChange(event.target.value)}
+                  onBlur={resolveDefaultBranch}
                   placeholder={t('settings.ghosts.market.sources.sourcePlaceholder')}
                   spellCheck={false}
                   className={cn(
@@ -233,8 +308,12 @@ export function AddMarketplaceDialog({
                 </span>
                 <input
                   value={refInput}
-                  onChange={(event) => setRefInput(event.target.value)}
+                  onChange={(event) => handleRefChange(event.target.value)}
                   placeholder={t('settings.ghosts.market.sources.refPlaceholder')}
+                  aria-describedby={
+                    defaultBranch || resolvingDefaultBranch ? refDescriptionId : undefined
+                  }
+                  aria-busy={resolvingDefaultBranch}
                   spellCheck={false}
                   disabled={sourceIsLocal}
                   className={cn(
@@ -244,6 +323,23 @@ export function AddMarketplaceDialog({
                     'disabled:cursor-not-allowed disabled:opacity-50',
                   )}
                 />
+                {resolvingDefaultBranch ? (
+                  <span
+                    id={refDescriptionId}
+                    className="text-11 leading-4 text-[var(--text-tertiary)]"
+                  >
+                    {t('settings.ghosts.market.sources.defaultBranchResolving')}
+                  </span>
+                ) : defaultBranch ? (
+                  <span
+                    id={refDescriptionId}
+                    className="text-11 leading-4 text-[var(--text-tertiary)]"
+                  >
+                    {t('settings.ghosts.market.sources.defaultBranchDetected', {
+                      branch: defaultBranch,
+                    })}
+                  </span>
+                ) : null}
               </label>
               <label className="flex flex-col gap-1.5">
                 <span className="text-12 text-[var(--text-secondary)]">
@@ -253,6 +349,7 @@ export function AddMarketplaceDialog({
                   value={sparseInput}
                   onChange={(event) => setSparseInput(event.target.value)}
                   placeholder={t('settings.ghosts.market.sources.sparsePlaceholder')}
+                  aria-describedby={sparseDescriptionId}
                   spellCheck={false}
                   rows={2}
                   disabled={sourceIsLocal}
@@ -263,6 +360,14 @@ export function AddMarketplaceDialog({
                     'disabled:cursor-not-allowed disabled:opacity-50',
                   )}
                 />
+                <span
+                  id={sparseDescriptionId}
+                  className="text-11 leading-4 text-[var(--text-tertiary)]"
+                >
+                  {t('settings.ghosts.market.sources.sparseDescription')}
+                  <br />
+                  {t('settings.ghosts.market.sources.sparseExample')}
+                </span>
               </label>
             </div>
 

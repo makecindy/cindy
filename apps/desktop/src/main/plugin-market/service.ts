@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import crypto from 'node:crypto';
 
@@ -19,6 +20,7 @@ import {
 } from '../../shared/ghost.js';
 import type {
   MarketSourceConfig,
+  MarketSourceAutoRefreshResult,
   MarketSourceSummary,
   PluginMarketDetail,
   PluginMarketItem,
@@ -61,12 +63,15 @@ import {
   type PluginMarketInstallationRecord,
 } from './ledger.js';
 import type { DiscoveredMarketPlugin } from './sources/discover.js';
+import { resolveRemoteDefaultBranch } from './sources/git.js';
+import { parseMarketSource } from './sources/parse.js';
 import { checkGitPreflight, type GitPreflightResult } from './sources/preflight.js';
 import { MarketSourceManager } from './sources/index.js';
 import { MarketSourceStore } from './sources/store.js';
 
 const log = createLogger('plugin-market');
 const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
+const AUTOMATIC_GIT_REFRESH_THROTTLE_MS = 5 * 60 * 1_000;
 
 /**
  * 来源增删改的互斥键。**安装的提交段(所有权复核 + 包落位)也要拿这把锁**:
@@ -274,6 +279,14 @@ interface LocalInstallSnapshot {
  */
 export class PluginMarketService {
   private readonly mutations = new Map<string, Promise<unknown>>();
+  private readonly automaticGitRefreshes = new Map<
+    string,
+    {
+      generation: number;
+      lastStartedAt: number;
+      inFlight: Promise<MarketSourceAutoRefreshResult> | null;
+    }
+  >();
   private ledgerMutation: Promise<void> = Promise.resolve();
 
   constructor(
@@ -622,8 +635,55 @@ export class PluginMarketService {
     );
   }
 
+  /**
+   * 插件页进入时后台刷新全部 Git 来源。页面挂载、账号切换和多窗口可能在短时间内
+   * 重复请求，因此 Main 按 owner generation 复用进行中的任务，并从任务开始起
+   * 节流五分钟。单个来源失败只记录日志并保留旧缓存，不阻断其它来源。
+   */
+  async refreshGitSourcesIfStale(): Promise<MarketSourceAutoRefreshResult> {
+    const owner = captureMarketOwner();
+    const ownerKey = `${owner.mode}:${owner.dataOwnerId}`;
+    const previous = this.automaticGitRefreshes.get(ownerKey);
+    if (previous?.generation === owner.generation && previous.inFlight) {
+      return previous.inFlight;
+    }
+
+    const now = Date.now();
+    if (
+      previous?.generation === owner.generation &&
+      now - previous.lastStartedAt < AUTOMATIC_GIT_REFRESH_THROTTLE_MS
+    ) {
+      return { refreshed: false };
+    }
+
+    const operation = this.refreshGitSourcesForOwner(owner, now);
+    this.automaticGitRefreshes.set(ownerKey, {
+      generation: owner.generation,
+      lastStartedAt: now,
+      inFlight: operation,
+    });
+    try {
+      return await operation;
+    } finally {
+      const current = this.automaticGitRefreshes.get(ownerKey);
+      if (current?.inFlight === operation) {
+        this.automaticGitRefreshes.set(ownerKey, {
+          generation: current.generation,
+          lastStartedAt: current.lastStartedAt,
+          inFlight: null,
+        });
+      }
+    }
+  }
+
   async gitPreflight(): Promise<GitPreflightResult> {
     return checkGitPreflight();
+  }
+
+  async resolveDefaultBranch(source: string): Promise<string | null> {
+    const parsed = parseMarketSource({ source }, os.homedir());
+    if (!parsed.ok || parsed.source.type !== 'git') return null;
+    return resolveRemoteDefaultBranch(parsed.source.url);
   }
 
   /** 自定义市场插件详情：本地发现现查，不要求服务端市场可用。 */
@@ -1076,6 +1136,43 @@ export class PluginMarketService {
       ),
       cloneRoot: ownerScopedUserDataPath('plugin-market', 'sources'),
     });
+  }
+
+  private async refreshGitSourcesForOwner(
+    owner: ActiveAppSession,
+    now: number,
+  ): Promise<MarketSourceAutoRefreshResult> {
+    requireSameMarketOwner(owner);
+    const configs = this.sourceStore
+      .bind(ownerScopedUserDataPath('plugin-market', 'sources.v1.json'))
+      .list()
+      .filter((config) => {
+        if (config.source.type !== 'git') return false;
+        if (config.lastSyncedAt === null) return true;
+        const lastSyncedAt = Date.parse(config.lastSyncedAt);
+        return (
+          !Number.isFinite(lastSyncedAt) ||
+          now - lastSyncedAt >= AUTOMATIC_GIT_REFRESH_THROTTLE_MS
+        );
+      });
+    let refreshed = false;
+    for (const config of configs) {
+      requireSameMarketOwner(owner);
+      try {
+        await this.refreshSource(config.name);
+        refreshed = true;
+      } catch (error) {
+        // refreshSource 已负责结构化错误；这里是后台 best-effort 批量同步，失败
+        // 不打断页面，也不能清掉上次有效缓存。账号漂移仍须立即终止整批。
+        requireSameMarketOwner(owner);
+        log.warn('automatic Git marketplace refresh failed', {
+          market: config.name,
+          error: error instanceof Error ? error.message : String(error),
+        });
+      }
+    }
+    requireSameMarketOwner(owner);
+    return { refreshed };
   }
 
   private async installDetail(

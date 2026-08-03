@@ -25,7 +25,7 @@ describe('Plugin Market IPC error boundary', () => {
 
     expect(body).toContain('if (isIpcError(error)) throw error;');
     expect(body).toContain("throwIpcError('INTERNAL', 'Plugin market operation failed');");
-    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(10);
+    expect(registerSource.match(/return invokePluginMarket\(/g)?.length).toBe(12);
   });
 
   it('refuses renderer-supplied local paths and only grants them via the picker', () => {

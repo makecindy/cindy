@@ -10,6 +10,7 @@ import {
   fetchMarketplace,
   gitVersion,
   isGitVersionSupported,
+  resolveRemoteDefaultBranch,
   type GitExecutor,
 } from '../sources/git';
 import { checkGitPreflight } from '../sources/preflight';
@@ -149,6 +150,24 @@ describe('fetchMarketplace', () => {
 });
 
 describe('git environment', () => {
+  it('resolves the advertised remote default branch without cloning', async () => {
+    const { executor, calls } = fakeExecutor(() => ({
+      stdout: 'ref: refs/heads/main\tHEAD\nabc123\tHEAD\n',
+    }));
+
+    await expect(resolveRemoteDefaultBranch('https://github.com/openai/plugins.git', executor)).resolves.toBe('main');
+    expect(calls).toEqual([
+      {
+        args: ['ls-remote', '--symref', 'https://github.com/openai/plugins.git', 'HEAD'],
+      },
+    ]);
+  });
+
+  it('returns null when the remote does not advertise a default branch', async () => {
+    const { executor } = fakeExecutor(() => ({ stdout: 'abc123\tHEAD\n' }));
+    await expect(resolveRemoteDefaultBranch('https://x.test/r.git', executor)).resolves.toBeNull();
+  });
+
   it('parses git versions and enforces the sparse-checkout floor', async () => {
     const { executor } = fakeExecutor(() => ({ stdout: 'git version 2.43.0\n' }));
     expect(await gitVersion(executor)).toEqual({ major: 2, minor: 43 });

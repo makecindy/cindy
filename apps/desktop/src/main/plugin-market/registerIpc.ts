@@ -164,8 +164,18 @@ export function registerPluginMarketIpc(): void {
       service().refreshSource(requireString(name, 'name')),
     );
   });
+  ipcMain.handle('plugin-market:refresh-git-sources-if-stale', (event) => {
+    assertTrustedAppRendererEvent(event);
+    return invokePluginMarket(() => service().refreshGitSourcesIfStale());
+  });
   ipcMain.handle('plugin-market:git-preflight', (event) => {
     assertTrustedAppRendererEvent(event);
     return invokePluginMarket(() => service().gitPreflight());
+  });
+  ipcMain.handle('plugin-market:resolve-default-branch', (event, source: unknown) => {
+    assertTrustedAppRendererEvent(event);
+    const value = requireString(source, 'source');
+    if (value.length > 512) throwIpcError('INVALID_PARAMS', 'source is too long');
+    return invokePluginMarket(() => service().resolveDefaultBranch(value));
   });
 }
