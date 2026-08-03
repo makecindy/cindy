@@ -333,6 +333,7 @@ describe('device-link IPC handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-1'],
+        unresponsiveDeviceIds: [],
       }),
       apiFetch: vi.fn().mockResolvedValue({
         devices: [
@@ -428,6 +429,7 @@ describe('device-link controller handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: ['dev-2'],
+        unresponsiveDeviceIds: [],
       }),
     });
 
@@ -532,6 +534,7 @@ describe('device-link controller handlers', () => {
         controlledBy: [],
         revokedControllers: [],
         disabledControlDeviceIds: disabled ? ['dev-2'] : [],
+        unresponsiveDeviceIds: [],
       }),
       invoke,
       rewriteOutboundMedia: vi.fn().mockImplementation(async (_channel, args) => {
