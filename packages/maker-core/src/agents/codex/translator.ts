@@ -342,10 +342,12 @@ export function translateErrorNotification(
   // 重试窗口里看到英文原文, 也就是本次改动要消除的那个依赖在 UI 侧原样残留。
   const overloadReason = isCapacityError ? { reason: UPSTREAM_OVERLOAD_REASON } : {};
   // 上下文超限同样带稳定 reason key(#1429): 原样重试必然再撞同一个 4xx, renderer 靠
-  // 它隐藏 Retry 并给出压缩 / 新开会话入口。与 capacity 互斥时 overload 优先 —— 它
-  // 还驱动退避重投接管, 语义更具体; pattern 上两者措辞集合不相交, 实际不会同时命中。
+  // 它隐藏 Retry 并给出压缩 / 新开会话入口。结构化 contextWindowExceeded 优先，
+  // 文案匹配仅兼容旧版 app-server；与 capacity 互斥时 overload 优先 —— 它还驱动
+  // 退避重投接管，语义更具体。
   const contextOverflowReason =
-    !isCapacityError && isContextOverflowErrorMessage(safeMessage)
+    !isCapacityError &&
+    (errorInfoTag === 'contextWindowExceeded' || isContextOverflowErrorMessage(safeMessage))
       ? { reason: CONTEXT_OVERFLOW_REASON }
       : {};
   if (!params.willRetry && isCapacityError) {

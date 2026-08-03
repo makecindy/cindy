@@ -397,6 +397,46 @@ describe('translateErrorNotification', () => {
     });
   });
 
+  it('Codex 结构化 contextWindowExceeded tag 不依赖错误文案措辞', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'The request cannot be processed.',
+        codexErrorInfo: 'contextWindowExceeded',
+      }),
+      q,
+      makeCtx(rt),
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      codexErrorInfo: 'contextWindowExceeded',
+      reason: 'context-overflow',
+      isTerminal: true,
+    });
+  });
+
+  it('serverOverloaded tag 优先于文案里的上下文超限信号', async () => {
+    const rt = newCodexRuntimeState();
+    const q = createAsyncQueue<AgentEvent>();
+    translateErrorNotification(
+      makeParams({
+        willRetry: false,
+        message: 'Your input exceeds the context window of this model.',
+        codexErrorInfo: 'serverOverloaded',
+      }),
+      q,
+      { ...makeCtx(rt), tryTakeOverOverload: () => null },
+    );
+    const events = await collect(q);
+    expect(events[0]!.data).toMatchObject({
+      codexErrorInfo: 'serverOverloaded',
+      reason: 'upstream-overload',
+      isTerminal: true,
+    });
+  });
+
   it('容量拒绝改了文案措辞时，结构化 tag 仍触发接管重投', async () => {
     // 本用例锁的是这次改动的核心目标: 重投不再依赖 codex 的英文文案。
     // message 故意完全不含 "at capacity" —— 模拟 codex 升级改了措辞。若判定回退到

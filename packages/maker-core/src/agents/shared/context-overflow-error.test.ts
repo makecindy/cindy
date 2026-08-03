@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { isContextOverflowErrorMessage } from './context-overflow-error';
+import { isContextOverflowErrorMessage } from './context-overflow-error.js';
 
 /**
  * Pattern 与 desktop providerErrors.ts 的 CONTEXT_TOO_LONG_RE、renderer 镜像判定
@@ -23,7 +23,7 @@ describe('isContextOverflowErrorMessage', () => {
     ).toBe(true);
   });
 
-  it('matches Anthropic / OpenAI / generic gateway phrasings', () => {
+  it('matches Anthropic / OpenAI / structured gateway phrasings', () => {
     expect(
       isContextOverflowErrorMessage('prompt is too long: 250000 tokens > 200000 maximum'),
     ).toBe(true);
@@ -32,11 +32,21 @@ describe('isContextOverflowErrorMessage', () => {
         "This model's maximum context length is 128000 tokens. However, your messages resulted in 131072 tokens.",
       ),
     ).toBe(true);
-    expect(isContextOverflowErrorMessage('Request rejected: too many tokens')).toBe(true);
-    expect(isContextOverflowErrorMessage('input length exceeds limit for this deployment')).toBe(
-      true,
-    );
     expect(isContextOverflowErrorMessage('{"code": "context_length_exceeded"}')).toBe(true);
+  });
+
+  it('does NOT confuse rate, output, or tool argument limits with context overflow', () => {
+    expect(
+      isContextOverflowErrorMessage('Rate limit exceeded: too many tokens per minute'),
+    ).toBe(false);
+    expect(
+      isContextOverflowErrorMessage('Maximum output tokens reached: too many tokens'),
+    ).toBe(false);
+    expect(
+      isContextOverflowErrorMessage(
+        'Tool argument validation failed: input length exceeds 1000 characters',
+      ),
+    ).toBe(false);
   });
 
   it('does NOT match overload / network / auth errors (disjoint recovery semantics)', () => {

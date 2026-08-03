@@ -12,7 +12,10 @@
  *  - OpenAI:           `This model's maximum context length is 128000 tokens...`
  *  - litellm / Azure:  `{"code": "context_length_exceeded"}` /
  *                      `Your input exceeds the context window of this model.`（#1429 实踩）
- *  - 通用网关:          token limit / too many tokens / input length exceeds 等变体
+ *
+ * 裸 `too many tokens` / `input length exceeds` 不足以证明是上下文窗口超限：它们也会
+ * 出现在 token 速率限制、输出上限与工具参数长度错误中。只有文本明确提到 context
+ * window / context length，或携带稳定错误码时才归为本类。
  *
  * 为什么会走到这一步（防线失效链，见 #1429）：声明窗口大于路由真实上限时，
  * SDK 内部与 host 侧两层 auto-compact 的阈值都建立在错误的分母上，永远触发不了；
@@ -53,7 +56,7 @@ export const CONTEXT_OVERFLOW_REASON = 'context-overflow';
  * 误伤面与既有 overload / network pattern 同级。
  */
 const CONTEXT_OVERFLOW_RE =
-  /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|too many tokens|input length.{0,20}exceed|context_length_exceeded/i;
+  /prompt is too long|maximum context length|context.{0,20}(length|window).{0,40}(exceed|too)|(input|request|message).{0,20}exceeds?.{0,40}context.{0,20}(length|window)|context_length_exceeded/i;
 
 /** 是否是上下文超限类错误。命中 = 不可原样重试，恢复动作是压缩上下文或新开会话。 */
 export function isContextOverflowErrorMessage(message: string): boolean {
