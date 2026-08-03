@@ -110,7 +110,11 @@ import {
   type QuotaHoverCardSessionUsage,
   type QuotaHoverCardTurnUsage,
 } from './QuotaHoverCard';
-import { quotaSeverity, type QuotaSeverity } from './QuotaBar';
+import {
+  effectiveQuotaSeverity,
+  quotaSeverity,
+  type QuotaSeverity,
+} from './QuotaBar';
 import { QuotaResetConfetti } from './QuotaResetConfetti';
 
 // XD 网关 / 托管账号之前会跳到内部用量看板(内部域名)—— 开源前移除该硬编码。
@@ -1053,8 +1057,8 @@ const QUOTA_SEVERITY_RANK: Record<QuotaSeverity, number> = {
 };
 
 /**
- * 整 chip 兜底告警的等级：被拒或当前会话相关窗口达到 90% 为严重告警；
- * 其余由上游非 normal severity 触发的告警按警告级处理。
+ * 整 chip 兜底告警的等级：被拒直接视为严重告警；其余窗口分别合并本地利用率
+ * 与服务端 severity 后取最高等级。非窗口信号触发的告警按警告级处理。
  */
 function getClaudeSubscriptionAlertSeverity(
   snapshot: ClaudeSubscriptionUsageSnapshot | null,
@@ -1068,12 +1072,19 @@ function getClaudeSubscriptionAlertSeverity(
     snapshot?.sevenDay,
     matchScopedWindowForModel(snapshot?.scoped, modelId),
   ];
-  const hasCriticalWindow = sessionWindows.some((window) => (
-    typeof window?.utilization === 'number'
-    && Number.isFinite(window.utilization)
-    && quotaSeverity(window.utilization) === 'crit'
-  ));
-  return hasCriticalWindow ? 'crit' : 'warn';
+  const highestWindowSeverity = sessionWindows.reduce<QuotaSeverity>(
+    (highestSeverity, window) => {
+      if (typeof window?.utilization !== 'number' || !Number.isFinite(window.utilization)) {
+        return highestSeverity;
+      }
+      const severity = effectiveQuotaSeverity(window.utilization, window.severity);
+      return QUOTA_SEVERITY_RANK[severity] > QUOTA_SEVERITY_RANK[highestSeverity]
+        ? severity
+        : highestSeverity;
+    },
+    'normal',
+  );
+  return highestWindowSeverity === 'normal' ? 'warn' : highestWindowSeverity;
 }
 
 interface TodaySpendChipProps {
