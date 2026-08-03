@@ -84,7 +84,7 @@ describe('resolveProviderModelEfforts', () => {
     const source = readFileSync(
       resolve(__dirname, '../../components/new-chat/ChatInput.tsx'),
       'utf8',
-    );
+    ).replace(/\r\n/g, '\n');
     const switchResolverStart = source.indexOf('const resolveSwitchEffort = useCallback(');
     const providerChangeStart = source.indexOf('const performProviderChange = useCallback(');
     const providerChangeEnd = source.indexOf('const handleProviderChange = useCallback(');

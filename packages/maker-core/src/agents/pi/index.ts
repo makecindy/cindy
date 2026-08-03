@@ -170,6 +170,23 @@ function effortToPiThinkingLevel(effort: Effort): string {
 }
 
 /**
+ * 启动时把任务里持久化的旧 effort 与当前 provider/model 的能力重新对齐。
+ * 已支持档原样保留；能力未知/未声明档位时维持旧行为；只有明确不支持时才落到
+ * 当前模型的合法默认档（病态 default 再落首档），避免 thinkingLevelMap 将旧档映成 null。
+ */
+function reconcilePiStartupEffort(
+  requested: Effort | undefined,
+  model: ModelDescriptor | undefined,
+): Effort | undefined {
+  if (!requested || !model || model.efforts.length === 0) return requested;
+  if (model.efforts.includes(requested)) return requested;
+  if (model.defaultEffort && model.efforts.includes(model.defaultEffort)) {
+    return model.defaultEffort;
+  }
+  return model.efforts[0];
+}
+
+/**
  * pi 的 RPC prompt 会**执行**扩展命令(实测:/plan 直接被 plan-mode 扩展吃掉,零 LLM
  * 请求)并展开 /skill: 与 /template;内置 TUI 命令(/help、/model 等)则按字面进模型。
  * 用户输入以 / 开头时,除显式技能调用(/skill:)外一律前置空格转义成字面文本(实测
@@ -518,26 +535,48 @@ export class PiAgent extends BaseAgent {
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
 
-    // availableModels 是公开的新选择面,retired/disabled 会被有意过滤;但恢复中的旧 Pi
-    // 会话仍需要 models.json 内存在当前模型,Pi 才能解析持久化的 --model。仅对真实 resume
-    // 且公开清单缺失的 compat 模型请求 host 补一个私有描述符;不回写 capabilities,也不
-    // 放宽 setModel / route guard。
+    // availableModels 是跨 provider 拍平的公开选择面；启动旧任务时必须按实际来源重查
+    // provider-aware 描述符，不能拿同 id 的内置/BYOM 首见条目校验持久化 effort。
+    // 新建时若模型连公开清单都不在，仍不调用私有解析器（不借此放宽新选择准入）；resume
+    // 才允许读取 disabled/retired 描述符继续运行。
+    const publicRuntimeModel = this.capabilities.availableModels.find(
+      (model) => model.id === opts.model,
+    );
+    const runtimeProviderId =
+      opts.providerId === undefined && initialProvider !== PI_PROVIDER_ID
+        ? initialProvider
+        : opts.providerId;
+    const mayResolveRuntimeModel = publicRuntimeModel !== undefined || !!opts.resumeSessionId;
+    const selectedRuntimeModel = mayResolveRuntimeModel
+      ? this.deps.resolvePiRuntimeModelDescriptor?.(runtimeProviderId, opts.model)
+        ?? publicRuntimeModel
+      : undefined;
+
+    // 恢复中的旧 Pi 网关会话仍需要 models.json 内存在当前模型,Pi 才能解析持久化的
+    // --model。仅对真实 resume 且公开清单缺失的 compat 模型补一个私有描述符；不回写
+    // capabilities,也不放宽 setModel / route guard。
     let retainedRuntimeModel: ModelDescriptor | undefined;
     if (
       opts.resumeSessionId &&
       initialProvider === PI_PROVIDER_ID &&
-      !this.capabilities.availableModels.some((model) => model.id === opts.model)
+      !publicRuntimeModel
     ) {
-      retainedRuntimeModel = this.deps.resolvePiRuntimeModelDescriptor?.(
-        opts.providerId,
-        opts.model,
-      ) ?? undefined;
+      retainedRuntimeModel = selectedRuntimeModel;
       if (!retainedRuntimeModel) {
         this.deps.logger.warn('pi: selected model missing from public and retained runtime catalogs', {
           model: opts.model,
           providerId: opts.providerId ?? null,
         });
       }
+    }
+    const startupEffort = reconcilePiStartupEffort(opts.effort, selectedRuntimeModel);
+    if (opts.effort && startupEffort !== opts.effort) {
+      this.deps.logger.info('pi: reconciled persisted effort against current runtime model', {
+        model: opts.model,
+        providerId: runtimeProviderId ?? null,
+        requestedEffort: opts.effort,
+        resolvedEffort: startupEffort ?? null,
+      });
     }
 
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
@@ -1066,13 +1105,13 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      if (opts.effort) {
+      if (startupEffort) {
         const resp = await proc.request({
           type: 'set_thinking_level',
-          level: effortToPiThinkingLevel(opts.effort),
+          level: effortToPiThinkingLevel(startupEffort),
         });
         if (!resp.success) {
-          this.deps.logger.warn('pi set_thinking_level rejected', { effort: opts.effort, error: resp.error });
+          this.deps.logger.warn('pi set_thinking_level rejected', { effort: startupEffort, error: resp.error });
         }
       }
 

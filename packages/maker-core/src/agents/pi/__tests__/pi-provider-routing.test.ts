@@ -130,6 +130,83 @@ describe('Pi provider-aware model routing', () => {
     await nativeHandle.close();
   });
 
+  it('reconciles a stale persisted effort to the selected BYOM model default before startup', async () => {
+    const resolver = vi.fn((providerId: string | null | undefined, modelId: string) => {
+      if (providerId !== 'native-a' || modelId !== 'shared-model') return null;
+      return {
+        id: modelId,
+        displayName: 'Shared through BYOM',
+        contextWindow: 200_000,
+        efforts: ['low', 'xhigh'] as const,
+        defaultEffort: 'xhigh' as const,
+      };
+    });
+    const deps: AgentDeps = {
+      auth: {
+        getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
+        triggerLogin: async () => ({ authenticated: true }),
+        logout: async () => {},
+        getAuthEnv: async () => ({}),
+      },
+      runtimeConfig: { endpoint: 'http://127.0.0.1:9' },
+      binaryPath: path.join(agentHome, 'pi'),
+      logger: noopLogger,
+      capabilityAdditions: {
+        availableModels: [
+          {
+            id: 'shared-model',
+            displayName: 'Shared',
+            contextWindow: 200_000,
+            efforts: ['low'],
+            defaultEffort: 'low',
+          },
+        ],
+      },
+      resolvePiAgentHome: () => agentHome,
+      resolvePiNativeProviders: async () => ({
+        providers: [
+          {
+            id: 'native-a',
+            name: 'Native A',
+            baseUrl: 'http://a.test',
+            api: 'openai-responses',
+            models: [
+              {
+                id: 'shared-model',
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: null,
+                  low: 'low',
+                  medium: null,
+                  high: null,
+                  xhigh: 'xhigh',
+                  max: null,
+                },
+              },
+            ],
+          },
+        ],
+        env: {},
+      }),
+      resolvePiRuntimeModelDescriptor: resolver,
+    };
+    const agent = new PiAgent(deps);
+
+    const handle = await agent.startSession({
+      sessionId: 'stale-effort',
+      workingDir: cwd,
+      model: 'shared-model',
+      providerId: 'native-a',
+      // 旧任务保存的 high 已在用户收窄能力后失效；必须走当前路由默认 xhigh，不能发 high→null。
+      effort: 'high',
+    });
+
+    expect(resolver).toHaveBeenCalledWith('native-a', 'shared-model');
+    expect(captured.requests).toContainEqual({ type: 'set_thinking_level', level: 'xhigh' });
+    expect(captured.requests).not.toContainEqual({ type: 'set_thinking_level', level: 'high' });
+    await handle.close();
+  });
+
   const byomDeps = (resolvePiNativeProviders: AgentDeps['resolvePiNativeProviders']): AgentDeps => ({
     auth: {
       getState: async () => ({ authenticated: true, identity: 'test', authSource: 'api-key' as const }),
