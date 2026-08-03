@@ -214,7 +214,7 @@ function minimumContrast(color: Rgb, against: readonly Rgb[]): number {
  * 保留已经合格的源色；否则分别向黑、白搜索首个合格的整数 RGB 色，并选择
  * 改动更小的一侧。整数步进与最终 hex 精度一致，也避免多背景约束下的非单调误判。
  */
-function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb[]): Rgb {
+export function deriveUncheckedSwitchTrack(preferred: Rgb, against: readonly Rgb[]): Rgb {
   if (minimumContrast(preferred, against) >= MIN_NON_TEXT_CONTRAST) return preferred;
 
   let best: { color: Rgb; distance: number; contrast: number } | null = null;
