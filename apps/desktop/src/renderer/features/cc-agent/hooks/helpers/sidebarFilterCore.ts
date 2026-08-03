@@ -191,17 +191,18 @@ export function includeProjectInFilter(prev: FilterProjects, workingDir: string)
 export function removeProjectsFromFilter(
   prev: FilterProjects,
   projectKeys: ReadonlySet<string>,
+  localPlatform: string,
 ): FilterProjects {
   if (prev === 'all' || projectKeys.size === 0) return prev;
   const hiddenComparisonKeys = new Set(
     normalizeProjectKeyList(Array.from(projectKeys))
-      .map((projectKey) => projectKeyComparisonKey(projectKey))
+      .map((projectKey) => projectKeyComparisonKey(projectKey, localPlatform))
       .filter((projectKey): projectKey is string => projectKey != null),
   );
   if (hiddenComparisonKeys.size === 0) return prev;
   const normalizedPrev = normalizeProjectKeyList(prev);
   const filtered = normalizedPrev.filter((projectKey) => {
-    const comparisonKey = projectKeyComparisonKey(projectKey);
+    const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
     return comparisonKey == null || !hiddenComparisonKeys.has(comparisonKey);
   });
   if (filtered.length === 0) return 'all';

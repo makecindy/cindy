@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createElement } from 'react';
 import type { MouseEvent, ReactElement, ReactNode } from 'react';
 import type { NavigateFunction } from 'react-router-dom';
@@ -208,8 +208,16 @@ function allProjectsOption(): HTMLButtonElement {
   }) as HTMLButtonElement;
 }
 
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: { platform: 'win32' },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(window, 'electronAPI');
   vi.clearAllMocks();
   vi.useRealTimers();
 });

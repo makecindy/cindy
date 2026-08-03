@@ -376,12 +376,12 @@ describe('includeProjectInFilter', () => {
 describe('removeProjectsFromFilter', () => {
   it("keeps 'all' unchanged", () => {
     const prev: FilterProjects = 'all';
-    expect(removeProjectsFromFilter(prev, new Set(['local:/a']))).toBe(prev);
+    expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toBe(prev);
   });
 
   it('removes hidden projects while preserving the remaining order', () => {
     const prev: FilterProjects = ['local:/a', 'local:/b'];
-    expect(removeProjectsFromFilter(prev, new Set(['/a']))).toEqual(['local:/b']);
+    expect(removeProjectsFromFilter(prev, new Set(['/a']), 'linux')).toEqual(['local:/b']);
   });
 
   it('matches Windows local paths case-insensitively without folding remote, device, or POSIX keys', () => {
@@ -401,6 +401,7 @@ describe('removeProjectsFromFilter', () => {
           'device:device-a:c:/repo',
           'local:/users/lee/repo',
         ]),
+        'win32',
       ),
     ).toEqual([
       'remote:host-a:C:/Repo',
@@ -409,23 +410,38 @@ describe('removeProjectsFromFilter', () => {
     ]);
   });
 
+  it('keeps a different-cased POSIX double-slash project in the filter', () => {
+    const prev: FilterProjects = ['local://mnt/Repo', 'local://mnt/repo'];
+
+    expect(
+      removeProjectsFromFilter(
+        prev,
+        new Set(['local://mnt/Repo']),
+        'linux',
+      ),
+    ).toEqual(['local://mnt/repo']);
+  });
+
   it("falls back to 'all' after removing the final explicit project", () => {
     const prev: FilterProjects = ['local:/a'];
-    expect(removeProjectsFromFilter(prev, new Set(['local:/a']))).toBe('all');
+    expect(removeProjectsFromFilter(prev, new Set(['local:/a']), 'linux')).toBe('all');
   });
 
   it('is idempotent for unrelated and repeated hidden snapshots', () => {
     const unrelated: FilterProjects = ['local:/b'];
-    expect(removeProjectsFromFilter(unrelated, new Set(['local:/a']))).toBe(unrelated);
+    expect(
+      removeProjectsFromFilter(unrelated, new Set(['local:/a']), 'linux'),
+    ).toBe(unrelated);
 
     const afterFirstRemoval = removeProjectsFromFilter(
       ['local:/a', 'local:/b'],
       new Set(['local:/a']),
+      'linux',
     );
     expect(afterFirstRemoval).toEqual(['local:/b']);
-    expect(removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']))).toBe(
-      afterFirstRemoval,
-    );
+    expect(
+      removeProjectsFromFilter(afterFirstRemoval, new Set(['local:/a']), 'linux'),
+    ).toBe(afterFirstRemoval);
   });
 });
 

@@ -276,6 +276,7 @@ function cutoffForLastActivity(
 
 export function CCAgentSidebarUpper() {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
   const isCollapsed = useSidebarCollapsedState();
   // 错误红点的派生真源:拉取存在未处理告警(中断 ∪ 未 dismissed 错误尾行)的会话
   // 并在收敛触发点重算 —— 横幅不被处置,红点就不消失。
@@ -294,15 +295,22 @@ export function CCAgentSidebarUpper() {
   const projectAliases = useProjectAliases();
   const searchProjectGroups = useProjectGroups(searchProjectSessions, projectAliases.aliases);
   const visibleSearchProjects = useMemo(
-    () => visibleSidebarProjects(searchProjectGroups.projects, hiddenProjectKeys),
-    [searchProjectGroups.projects, hiddenProjectKeys],
+    () =>
+      visibleSidebarProjects(
+        searchProjectGroups.projects,
+        hiddenProjectKeys,
+        localPlatform,
+      ),
+    [searchProjectGroups.projects, hiddenProjectKeys, localPlatform],
   );
   const visibleSearchSessionIds = useMemo(
     () =>
-      sidebarSessionsWithHiddenProjectsAsDialogues(searchProjectSessions, hiddenProjectKeys).map(
-        (session) => session.id,
-      ),
-    [searchProjectSessions, hiddenProjectKeys],
+      sidebarSessionsWithHiddenProjectsAsDialogues(
+        searchProjectSessions,
+        hiddenProjectKeys,
+        localPlatform,
+      ).map((session) => session.id),
+    [searchProjectSessions, hiddenProjectKeys, localPlatform],
   );
   const attentionNotifications = useSessionAttentionSnapshot();
   const scheduleSessionIndex = useAutomationScheduleSessionIndex();
@@ -398,15 +406,20 @@ export function CCAgentSidebarUpper() {
     [allSessionsForAttention, filesSessionId],
   );
   const hiddenProjectComparisonKeys = useMemo(
-    () => buildProjectKeyComparisonSet(hiddenProjectKeys),
-    [hiddenProjectKeys],
+    () => buildProjectKeyComparisonSet(hiddenProjectKeys, localPlatform),
+    [hiddenProjectKeys, localPlatform],
   );
   const docModeSwitchProjects = useMemo(() => {
     const switchableSessions = allSessionsForAttention.filter((s) => !isOrcaWorkerSession(s));
     return buildDocModeSwitchProjects(switchableSessions).filter(
-      (project) => !projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey),
+      (project) =>
+        !projectKeyComparisonSetHas(
+          hiddenProjectComparisonKeys,
+          project.projectKey,
+          localPlatform,
+        ),
     );
-  }, [allSessionsForAttention, hiddenProjectComparisonKeys]);
+  }, [allSessionsForAttention, hiddenProjectComparisonKeys, localPlatform]);
   const filesProjectKey = filesSession ? projectIdentityKeyForSession(filesSession) : null;
 
   // Refresh sessions only when a NEW session appears (e.g. after index redirect
@@ -436,8 +449,13 @@ export function CCAgentSidebarUpper() {
     [sessionsHook.sessions, remoteProjectSessions, selectedMachineId],
   );
   const visibleSessionsWithRemote = useMemo(
-    () => sidebarSessionsWithHiddenProjectsAsDialogues(sessionsWithRemote, hiddenProjectKeys),
-    [sessionsWithRemote, hiddenProjectKeys],
+    () =>
+      sidebarSessionsWithHiddenProjectsAsDialogues(
+        sessionsWithRemote,
+        hiddenProjectKeys,
+        localPlatform,
+      ),
+    [sessionsWithRemote, hiddenProjectKeys, localPlatform],
   );
 
   // rail 未读集与展开态(ExpandedView.sidebarNotifications)同口径:把"定时任务有未读运行"的
@@ -658,6 +676,7 @@ function ExpandedView({
   scheduleSessionIndex,
 }: ExpandedProps) {
   const { t } = useTranslation();
+  const localPlatform = window.electronAPI.platform;
   const { sessions, refreshSessions, patchLocal, effectiveIncludeArchived } = sessionsHook;
   const { hiddenProjectKeys, setProjectHidden } = hiddenProjects;
   const refreshWorktrees = useRefreshWorktrees();
@@ -1014,8 +1033,13 @@ function ExpandedView({
     [sessions, remoteProjectSessions, selectedMachineId, passesOrcaAndStatus],
   );
   const sidebarSessions = useMemo(
-    () => sidebarSessionsWithHiddenProjectsAsDialogues(scopedSidebarSessions, hiddenProjectKeys),
-    [scopedSidebarSessions, hiddenProjectKeys],
+    () =>
+      sidebarSessionsWithHiddenProjectsAsDialogues(
+        scopedSidebarSessions,
+        hiddenProjectKeys,
+        localPlatform,
+      ),
+    [scopedSidebarSessions, hiddenProjectKeys, localPlatform],
   );
 
   const activityFilteredSessions = useMemo(() => {
@@ -1056,8 +1080,9 @@ function ExpandedView({
   // Visibility is a negative overlay only. Keep the raw universe above for
   // filter/manual-order GC, and expose a separate catalogue to sidebar UI.
   const visibleProjectUniverse = useMemo(
-    () => visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys),
-    [projectUniverse.projects, hiddenProjectKeys],
+    () =>
+      visibleSidebarProjects(projectUniverse.projects, hiddenProjectKeys, localPlatform),
+    [projectUniverse.projects, hiddenProjectKeys, localPlatform],
   );
 
   // 内联会话搜索:输入行在 SidebarTopNav 的第 4 行,状态经 ConversationSearchProvider 共享;
@@ -1156,11 +1181,15 @@ function ExpandedView({
 
   /* ---- F-PJ-10: 在 render 阶段把 filter.projects 应用到 ProjectNode 列表 ---- */
   const visibleProjects = useMemo(() => {
-    const notHidden = visibleSidebarProjects(groupsWithPinnedProjects.projects, hiddenProjectKeys);
+    const notHidden = visibleSidebarProjects(
+      groupsWithPinnedProjects.projects,
+      hiddenProjectKeys,
+      localPlatform,
+    );
     if (filter.projectsAsSet === null) return notHidden;
     const allowed = filter.projectsAsSet;
     return notHidden.filter((p) => allowed.has(p.projectKey));
-  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet]);
+  }, [groupsWithPinnedProjects.projects, hiddenProjectKeys, filter.projectsAsSet, localPlatform]);
 
   /* ---- M41: Vendor 过滤 — 应用到 pinned / unclassified / project sessions ---- */
   const vendorPredicate = useMemo(() => {
@@ -1191,8 +1220,8 @@ function ExpandedView({
   const restorableProjectKeysRef = useRef(restorableProjectKeys);
   restorableProjectKeysRef.current = restorableProjectKeys;
   const hiddenProjectComparisonKeys = useMemo(
-    () => buildProjectKeyComparisonSet(hiddenProjectKeys),
-    [hiddenProjectKeys],
+    () => buildProjectKeyComparisonSet(hiddenProjectKeys, localPlatform),
+    [hiddenProjectKeys, localPlatform],
   );
 
   const visiblePinnedSessions = useMemo(() => {
@@ -1211,7 +1240,9 @@ function ExpandedView({
   const visiblePinnedProjects = useMemo(() => {
     const allowedProjects = filter.projectsAsSet;
     return allProjectGroups.projects.flatMap((project) => {
-      if (projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey)) return [];
+      if (projectKeyComparisonSetHas(hiddenProjectComparisonKeys, project.projectKey, localPlatform)) {
+        return [];
+      }
       if (!pinnedProjectKeys.has(project.projectKey)) return [];
       if (allowedProjects !== null && !allowedProjects.has(project.projectKey)) return [];
 
@@ -1756,10 +1787,12 @@ function ExpandedView({
           wasHiddenAtPickerOpen: isProjectHidden(
             localProjectKey,
             hiddenProjectKeysAtPickerOpen,
+            localPlatform,
           ),
           setProjectHidden,
           getCurrentProjectKeys: () => restorableProjectKeysRef.current,
           ensureProjectIncluded: filter.ensureProjectIncluded,
+          localPlatform,
         });
         if (restored) return;
       }

@@ -10,7 +10,7 @@
  */
 
 import { act, cleanup, render, renderHook } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { SEARCH_SORT_BY_KEY, __resetSearchSortByStoreForTests } from '../conversationSearchPrefs';
 import { SearchFilterMenu, useConversationSearch } from '../ConversationSearchBox';
@@ -32,8 +32,16 @@ vi.mock('@/lib/orcaSessionIdentity', () => ({
   resolveSessionRoute: vi.fn(async () => '/'),
 }));
 
+beforeEach(() => {
+  Object.defineProperty(window, 'electronAPI', {
+    configurable: true,
+    value: { platform: 'linux' },
+  });
+});
+
 afterEach(() => {
   cleanup();
+  Reflect.deleteProperty(window, 'electronAPI');
   localStorage.clear();
   __resetSearchSortByStoreForTests();
   vi.useRealTimers();

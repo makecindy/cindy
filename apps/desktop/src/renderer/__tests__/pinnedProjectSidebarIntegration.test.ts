@@ -97,10 +97,12 @@ describe('pinned project sidebar integration', () => {
       'getCurrentProjectKeys: () => restorableProjectKeysRef.current,',
     );
     expect(sidebarSource).toContain('ensureProjectIncluded: filter.ensureProjectIncluded,');
+    expect(sidebarSource).toContain('localPlatform,');
     expect(sidebarSource).toContain('if (restored) return;');
   });
 
   it('prunes hidden projects from filters in every renderer hook', () => {
-    expect(filterHookSource).toContain('removeProjectsFromFilter(prev, hiddenProjectKeys)');
+    expect(filterHookSource).toContain('const next = removeProjectsFromFilter(');
+    expect(filterHookSource).toContain('window.electronAPI.platform,');
   });
 });

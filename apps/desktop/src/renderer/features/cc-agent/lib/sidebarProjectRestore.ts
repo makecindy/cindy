@@ -59,6 +59,7 @@ interface RestoreHiddenProjectIfPresentOptions {
   setProjectHidden: (projectKey: string, hidden: boolean) => Promise<boolean>;
   getCurrentProjectKeys: () => ReadonlySet<string>;
   ensureProjectIncluded: (projectKey: string) => void;
+  localPlatform: string;
 }
 
 /**
@@ -76,18 +77,20 @@ export async function restoreHiddenProjectIfPresent({
   setProjectHidden,
   getCurrentProjectKeys,
   ensureProjectIncluded,
+  localPlatform,
 }: RestoreHiddenProjectIfPresentOptions): Promise<boolean> {
   const hiddenStateChanged = await setProjectHidden(projectKey, false);
   if (!hiddenStateChanged && !wasHiddenAtPickerOpen) {
     return false;
   }
 
-  const comparisonKey = projectKeyComparisonKey(projectKey);
+  const comparisonKey = projectKeyComparisonKey(projectKey, localPlatform);
   const currentProjectKey =
     comparisonKey == null
       ? null
       : Array.from(getCurrentProjectKeys()).find(
-          (candidate) => projectKeyComparisonKey(candidate) === comparisonKey,
+          (candidate) =>
+            projectKeyComparisonKey(candidate, localPlatform) === comparisonKey,
         ) ?? null;
   if (currentProjectKey == null) return false;
 

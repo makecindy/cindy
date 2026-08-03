@@ -33,14 +33,19 @@ describe('sidebar project visibility', () => {
   it('keeps local, SSH, and device projects with the same path isolated', () => {
     const hidden = new Set(['local:/repo']);
 
-    expect(isSessionInHiddenProject(session({ workingDir: '/repo' }), hidden)).toBe(true);
+    expect(isSessionInHiddenProject(session({ workingDir: '/repo' }), hidden, 'linux')).toBe(true);
     expect(
-      isSessionInHiddenProject(session({ workingDir: '/repo', remoteHostId: 'host-a' }), hidden),
+      isSessionInHiddenProject(
+        session({ workingDir: '/repo', remoteHostId: 'host-a' }),
+        hidden,
+        'linux',
+      ),
     ).toBe(false);
     expect(
       isSessionInHiddenProject(
         session({ workingDir: '/repo', deviceLinkDeviceId: 'device-a' }),
         hidden,
+        'linux',
       ),
     ).toBe(false);
   });
@@ -50,6 +55,7 @@ describe('sidebar project visibility', () => {
       isSessionInHiddenProject(
         session({ workingDir: '/repo', workspaceKind: 'dialogue' }),
         new Set(['local:/repo']),
+        'linux',
       ),
     ).toBe(false);
   });
@@ -64,6 +70,7 @@ describe('sidebar project visibility', () => {
     const presented = sidebarSessionsWithHiddenProjectsAsDialogues(
       [projectTask, dialogueTask],
       new Set(['local:/repo']),
+      'linux',
     );
 
     expect(presented).toEqual([
@@ -88,6 +95,7 @@ describe('sidebar project visibility', () => {
     const [presented] = sidebarSessionsWithHiddenProjectsAsDialogues(
       [pinnedTask],
       new Set(['local:/repo']),
+      'linux',
     );
 
     expect(presented).toEqual(
@@ -101,6 +109,7 @@ describe('sidebar project visibility', () => {
       isSessionInHiddenProject(
         session({ workingDir: '/repo/.cindy-worktrees/issue-1338/src' }),
         new Set(['local:/repo']),
+        'linux',
       ),
     ).toBe(true);
   });
@@ -108,13 +117,31 @@ describe('sidebar project visibility', () => {
   it('matches local Windows project and session keys regardless of path casing', () => {
     const hidden = new Set(['local:C:/Users/Lee/Repo']);
 
-    expect(isProjectHidden('local:c:/users/lee/repo', hidden)).toBe(true);
+    expect(isProjectHidden('local:c:/users/lee/repo', hidden, 'win32')).toBe(true);
     expect(
       isSessionInHiddenProject(
         session({ workingDir: 'c:\\users\\lee\\repo' }),
         hidden,
+        'win32',
       ),
     ).toBe(true);
+  });
+
+  it('does not hide a different-cased POSIX double-slash project', () => {
+    const hidden = new Set(['local://mnt/Repo']);
+    const lowerCaseProjectTask = session({ workingDir: '//mnt/repo' }) as Session;
+
+    expect(isProjectHidden('local://mnt/repo', hidden, 'linux')).toBe(false);
+    expect(
+      isSessionInHiddenProject(lowerCaseProjectTask, hidden, 'linux'),
+    ).toBe(false);
+    expect(
+      sidebarSessionsWithHiddenProjectsAsDialogues(
+        [lowerCaseProjectTask],
+        hidden,
+        'linux',
+      ),
+    ).toEqual([lowerCaseProjectTask]);
   });
 
   it('uses Windows comparison keys for bulk projections without folding other scopes', () => {
@@ -130,15 +157,15 @@ describe('sidebar project visibility', () => {
       project('device:device-a:c:/repo'),
       project('local:/users/lee/repo'),
     ];
-    const hiddenComparisonKeys = buildProjectKeyComparisonSet(hidden);
+    const hiddenComparisonKeys = buildProjectKeyComparisonSet(hidden, 'win32');
 
-    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:c:/repo')).toBe(true);
-    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'remote:host-a:c:/repo')).toBe(false);
-    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'device:device-a:c:/repo')).toBe(false);
-    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:/users/lee/repo')).toBe(false);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:c:/repo', 'win32')).toBe(true);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'remote:host-a:c:/repo', 'win32')).toBe(false);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'device:device-a:c:/repo', 'win32')).toBe(false);
+    expect(projectKeyComparisonSetHas(hiddenComparisonKeys, 'local:/users/lee/repo', 'win32')).toBe(false);
 
     expect(
-      visibleSidebarProjects(projects, hidden).map((entry) => entry.projectKey),
+      visibleSidebarProjects(projects, hidden, 'win32').map((entry) => entry.projectKey),
     ).toEqual([
       'remote:host-a:c:/repo',
       'device:device-a:c:/repo',
@@ -159,6 +186,7 @@ describe('sidebar project visibility', () => {
     const presented = sidebarSessionsWithHiddenProjectsAsDialogues(
       [localWindowsSession, remoteSession, deviceSession, posixSession],
       hidden,
+      'win32',
     );
     expect(presented[0]).toEqual(
       expect.objectContaining({ workspaceKind: 'dialogue' }),
@@ -173,6 +201,7 @@ describe('sidebar project visibility', () => {
       visibleSidebarProjects(
         [project('local:/one'), project('remote:host-a:/one'), project('local:/two')],
         new Set(['local:/one']),
+        'linux',
       ).map((entry) => entry.projectKey),
     ).toEqual(['remote:host-a:/one', 'local:/two']);
   });

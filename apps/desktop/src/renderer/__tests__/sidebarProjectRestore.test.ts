@@ -113,6 +113,7 @@ describe('restoreHiddenProjectIfPresent', () => {
         setProjectHidden,
         getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
         ensureProjectIncluded,
+        localPlatform: 'linux',
       }),
     ).resolves.toBe(false);
 
@@ -130,6 +131,7 @@ describe('restoreHiddenProjectIfPresent', () => {
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set([PROJECT_KEY]),
         ensureProjectIncluded,
+        localPlatform: 'linux',
       }),
     ).resolves.toBe(true);
 
@@ -149,11 +151,29 @@ describe('restoreHiddenProjectIfPresent', () => {
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set([currentProjectKey]),
         ensureProjectIncluded,
+        localPlatform: 'win32',
       }),
     ).resolves.toBe(true);
 
     expect(ensureProjectIncluded).toHaveBeenCalledOnce();
     expect(ensureProjectIncluded).toHaveBeenCalledWith(currentProjectKey);
+  });
+
+  it('does not restore a different-cased POSIX double-slash project', async () => {
+    const ensureProjectIncluded = vi.fn();
+
+    await expect(
+      restoreHiddenProjectIfPresent({
+        projectKey: 'local://mnt/Repo',
+        wasHiddenAtPickerOpen: true,
+        setProjectHidden: vi.fn().mockResolvedValue(true),
+        getCurrentProjectKeys: () => new Set(['local://mnt/repo']),
+        ensureProjectIncluded,
+        localPlatform: 'linux',
+      }),
+    ).resolves.toBe(false);
+
+    expect(ensureProjectIncluded).not.toHaveBeenCalled();
   });
 
   it('continues draft creation when the hidden project no longer has tasks', async () => {
@@ -166,6 +186,7 @@ describe('restoreHiddenProjectIfPresent', () => {
         setProjectHidden: vi.fn().mockResolvedValue(true),
         getCurrentProjectKeys: () => new Set(),
         ensureProjectIncluded,
+        localPlatform: 'linux',
       }),
     ).resolves.toBe(false);
 
@@ -183,6 +204,7 @@ describe('restoreHiddenProjectIfPresent', () => {
         setProjectHidden: vi.fn().mockResolvedValue(false),
         getCurrentProjectKeys: () => new Set([currentProjectKey]),
         ensureProjectIncluded,
+        localPlatform: 'win32',
       }),
     ).resolves.toBe(true);
 
@@ -204,6 +226,7 @@ describe('restoreHiddenProjectIfPresent', () => {
       setProjectHidden: () => hiddenUpdate,
       getCurrentProjectKeys: () => projectKeys,
       ensureProjectIncluded,
+      localPlatform: 'linux',
     });
     projectKeys.delete(PROJECT_KEY);
     resolveHidden(true);

@@ -64,14 +64,21 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   const searchSessions = useMemo(() => sessions.filter((s) => !isOrcaWorkerSession(s)), [sessions]);
   const { projects } = useProjectGroups(searchSessions, aliases);
   const visibleProjects = useMemo(
-    () => visibleSidebarProjects(projects, hiddenProjectKeys),
+    () =>
+      visibleSidebarProjects(
+        projects,
+        hiddenProjectKeys,
+        window.electronAPI.platform,
+      ),
     [projects, hiddenProjectKeys],
   );
   const allowedSessionIds = useMemo(
     () =>
-      sidebarSessionsWithHiddenProjectsAsDialogues(searchSessions, hiddenProjectKeys).map(
-        (session) => session.id,
-      ),
+      sidebarSessionsWithHiddenProjectsAsDialogues(
+        searchSessions,
+        hiddenProjectKeys,
+        window.electronAPI.platform,
+      ).map((session) => session.id),
     [searchSessions, hiddenProjectKeys],
   );
 
@@ -93,7 +100,11 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
   useEffect(() => {
     if (
       search.lockedProjectKey &&
-      isProjectHidden(search.lockedProjectKey, hiddenProjectKeys)
+      isProjectHidden(
+        search.lockedProjectKey,
+        hiddenProjectKeys,
+        window.electronAPI.platform,
+      )
     ) {
       search.reset();
       search.clearLock();
@@ -103,6 +114,7 @@ export function ConversationSearchProvider({ children }: { children: ReactNode }
     const next = reconcileProjectSelectionWithVisibleProjects(
       search.projectSelection,
       visibleProjects,
+      window.electronAPI.platform,
     );
     if (
       next.length === search.projectSelection.length &&

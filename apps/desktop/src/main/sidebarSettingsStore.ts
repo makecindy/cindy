@@ -66,7 +66,7 @@ export function loadHiddenProjectKeys(): string[] {
   const normalized: string[] = [];
   for (const entry of stored) {
     const projectKey = normalizeProjectKey(entry);
-    const comparisonKey = projectKeyComparisonKey(projectKey);
+    const comparisonKey = projectKeyComparisonKey(projectKey, process.platform);
     if (
       projectKey == null ||
       projectKey.length > MAX_PROJECT_KEY_LENGTH ||
@@ -150,9 +150,9 @@ function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
   const hidden = requireHidden(rawHidden);
   // intent 更新每次都从 main 的最新快照计算，避免两个窗口用各自旧数组互相覆盖。
   const current = loadHiddenProjectKeys();
-  const comparisonKey = projectKeyComparisonKey(projectKey) ?? projectKey;
+  const comparisonKey = projectKeyComparisonKey(projectKey, process.platform) ?? projectKey;
   const alreadyHidden = current.some(
-    (entry) => projectKeyComparisonKey(entry) === comparisonKey,
+    (entry) => projectKeyComparisonKey(entry, process.platform) === comparisonKey,
   );
   if (alreadyHidden === hidden) return false;
   if (hidden && current.length >= MAX_HIDDEN_PROJECT_ENTRIES) {
@@ -161,7 +161,9 @@ function setProjectHidden(rawProjectKey: unknown, rawHidden: unknown): boolean {
 
   const next = hidden
     ? [...current, projectKey]
-    : current.filter((entry) => projectKeyComparisonKey(entry) !== comparisonKey);
+    : current.filter(
+        (entry) => projectKeyComparisonKey(entry, process.platform) !== comparisonKey,
+      );
   try {
     saveHiddenProjectKeys(next);
   } catch (err) {

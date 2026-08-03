@@ -173,7 +173,11 @@ export function useSidebarFilter(hiddenProjectKeys: ReadonlySet<string>): UseSid
   // leave a stale project-only filter behind.
   useLayoutEffect(() => {
     setProjectsState((prev) => {
-      const next = removeProjectsFromFilter(prev, hiddenProjectKeys);
+      const next = removeProjectsFromFilter(
+        prev,
+        hiddenProjectKeys,
+        window.electronAPI.platform,
+      );
       if (next === prev) return prev;
       persistProjects(next);
       return next;

@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const harness = vi.hoisted(() => ({
   settings: {
@@ -75,8 +75,15 @@ vi.mock('../windowFocusClassifier', () => ({
     window.appContent === true && !window.isDestroyed(),
 }));
 
+const originalPlatform = process.platform;
+
+function setPlatform(value: NodeJS.Platform): void {
+  Object.defineProperty(process, 'platform', { value, configurable: true });
+}
+
 describe('sidebarSettingsStore', () => {
   beforeEach(async () => {
+    setPlatform('win32');
     harness.settings.pinnedOrder = [];
     harness.settings.hiddenProjectKeys = [];
     harness.storeOptions = undefined;
@@ -93,6 +100,10 @@ describe('sidebarSettingsStore', () => {
 
     const { registerSidebarSettingsIpc } = await import('../sidebarSettingsStore');
     registerSidebarSettingsIpc();
+  });
+
+  afterAll(() => {
+    setPlatform(originalPlatform);
   });
 
   it('broadcasts a validated pinned-order snapshot to every live window', () => {
@@ -203,6 +214,29 @@ describe('sidebarSettingsStore', () => {
     );
   });
 
+  it('keeps POSIX double-slash project keys case-sensitive', () => {
+    setPlatform('linux');
+    harness.settings.hiddenProjectKeys = ['local://mnt/Repo'];
+    const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
+
+    expect(handler?.({}, 'local://mnt/repo', true)).toBe(true);
+    expect(harness.settings.hiddenProjectKeys).toEqual([
+      'local://mnt/Repo',
+      'local://mnt/repo',
+    ]);
+
+    expect(handler?.({}, 'local://mnt/Repo', false)).toBe(true);
+    expect(harness.settings.hiddenProjectKeys).toEqual(['local://mnt/repo']);
+    expect(harness.storeSet).toHaveBeenLastCalledWith(
+      'hiddenProjectKeys',
+      ['local://mnt/repo'],
+    );
+    expect(harness.send).toHaveBeenLastCalledWith(
+      'sidebar-settings:hidden-project-keys-changed',
+      ['local://mnt/repo'],
+    );
+  });
+
   it('merges sequential window intents against the latest main-process snapshot', () => {
     const handler = harness.handlers.get('sidebar-settings:set-project-hidden');
 
@@ -298,6 +332,19 @@ describe('sidebarSettingsStore', () => {
     listener?.(event);
 
     expect(event.returnValue).toEqual(['local:C:/Workspace/Alpha']);
+  });
+
+  it('deduplicates Windows UNC hidden-project keys across casing and separators', () => {
+    harness.settings.hiddenProjectKeys = [
+      'local:\\\\Server\\Share\\Repo\\',
+      'local://server/share/repo',
+    ];
+    const listener = harness.listeners.get('sidebar-settings:load-hidden-project-keys-sync');
+    const event: { returnValue?: string[] } = {};
+
+    listener?.(event);
+
+    expect(event.returnValue).toEqual(['local://Server/Share/Repo']);
   });
 
   it('checks the trusted sender before accepting a project-hidden intent', () => {

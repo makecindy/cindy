@@ -26,6 +26,7 @@ beforeEach(() => {
   hiddenProjectKeysBeforeListenerRegistration = null;
   window.localStorage.clear();
   (window as unknown as { electronAPI: unknown }).electronAPI = {
+    platform: 'linux',
     sidebarSettings: {
       loadHiddenProjectKeys: () => initialHiddenProjectKeys,
       onHiddenProjectKeysChanged: (listener: HiddenProjectsListener) => {
