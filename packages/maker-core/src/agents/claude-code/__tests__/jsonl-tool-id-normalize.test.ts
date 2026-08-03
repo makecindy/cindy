@@ -423,6 +423,64 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[4] as Record<string, unknown>).parent_tool_use_id).toBe('Bash_210_dup2');
   });
 
+  it('stream_event 的 event.content_block.id 跟随归一化改名(P2: Rewrite stream-event tool IDs too)', () => {
+    // handleStreamEvent 用 event.content_block.id 驱动 tool-use start 状态; 归一化后
+    // 若仍留旧 id, replay/import 会以旧 id 发 tool card, 与 tool_result/summary 指向
+    // 不一致。验证嵌套的 event.content_block.id 也被改写。
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210')]),
+      JSON.stringify({
+        type: 'stream_event',
+        uuid: 'stream-1',
+        parent_tool_use_id: 'Bash_210',
+        event: {
+          type: 'content_block_start',
+          content_block: { type: 'tool_use', id: 'Bash_210', name: 'Bash', input: {} },
+        },
+      }),
+      userEntry('u1', [toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0])[0].id).toBe('Bash_x210');
+    const evt = (entries[1] as Record<string, unknown>).event as Record<string, unknown>;
+    expect((evt.content_block as Record<string, unknown>).id).toBe('Bash_x210');
+  });
+
+  it('task 记录(task_started/progress/notification)按 task_id 复用同一终 id, 不拆散到多卡片(P2: Reuse task_id)', () => {
+    // task 系统记录用 task_id + tool_use_id 标识 child, 通常无 uuid。若按条消费
+    // occurrence, 同一条 task 的 progress/notification 会被重映射到下一个 occurrence。
+    const taskRow = (taskId: string, subtype: string, status = 'running'): string =>
+      JSON.stringify({
+        type: 'task_progress',
+        subtype,
+        task_id: taskId,
+        tool_use_id: 'Bash_210',
+        status,
+      });
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_210'), toolUse('Bash_210')]),
+      taskRow('task-1', 'task_started'),
+      taskRow('task-1', 'task_progress'),
+      taskRow('task-1', 'task_notification', 'completed'),
+      taskRow('task-2', 'task_started'),
+      taskRow('task-2', 'task_notification', 'completed'),
+      userEntry('u1', [toolResult('Bash_210'), toolResult('Bash_210')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Bash_x210', 'Bash_210_dup2']);
+    // task-1 的三条记录全部挂 Bash_x210(task_id 复用, 不按条推进)
+    expect((entries[1] as Record<string, unknown>).tool_use_id).toBe('Bash_x210');
+    expect((entries[2] as Record<string, unknown>).tool_use_id).toBe('Bash_x210');
+    expect((entries[3] as Record<string, unknown>).tool_use_id).toBe('Bash_x210');
+    // task-2 挂第二个调用(各 task 独立消费)
+    expect((entries[4] as Record<string, unknown>).tool_use_id).toBe('Bash_210_dup2');
+    expect((entries[5] as Record<string, unknown>).tool_use_id).toBe('Bash_210_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);

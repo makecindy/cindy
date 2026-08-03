@@ -308,9 +308,19 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
   if (occurrenceByOriginal.size > 0) {
     // occPtr[id] = 已消费到 occurrenceByOriginal[id] 的哪个下标。初始 -1。
     const occPtr = new Map<string, number>();
-    // childRef[uuid][origId] = 该 child 首次解析出的终 id。同一 child 的多条
-    // stream_event(共享 uuid)引用同一 parent id 时全部复用, 不再推进 occPtr。
+    // childRef[childKey][origId] = 该 child 首次解析出的终 id。同一 child 的多条
+    // 记录(共享 child 身份)引用同一 parent id 时全部复用, 不再推进 occPtr。
+    // child 身份: stream_event 用 uuid; task_started/task_progress/task_notification
+    // 等 task 记录用 task_id(通常无 uuid, translator 以 task_id 为 child 标识,
+    // codex-connector P2: Reuse task_id when remapping task records)。用前缀区分
+    // 两类命名空间, 避免 uuid 与 task_id 值相同串扰。
     const childRef = new Map<string, Map<string, string>>();
+    // 提取记录所属 child 身份(无 child 身份时返回 undefined → 走独立逐条解析)。
+    const childKeyOf = (entry: JsonObject): string | undefined => {
+      if (typeof entry.uuid === 'string' && entry.uuid) return `uuid:${entry.uuid}`;
+      if (typeof entry.task_id === 'string' && entry.task_id) return `task:${entry.task_id}`;
+      return undefined;
+    };
     // 单个原始 id → 终 id 的行作用域解析。推进规则:
     //   - 同行块内继续(当前 ptr 所在块行 < index 且块内还有下一个): 消费下一个
     //     (FIFO —— 同一条 assistant 消息内同 id 并行调用, 多条子记录按内容顺序);
@@ -339,11 +349,13 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
       occPtr.set(val, ptr);
       return ptr < 0 ? undefined : occs[ptr].finalId;
     };
-    // 带 child 身份(顶层 uuid)的记录: 同一 child 复用已解析终 id(首次解析后缓存)。
+    // 带 child 身份(顶层 uuid / task_id)的记录: 同一 child 复用已解析终 id(首次解析
+    // 后缓存), 不按条消费 occurrence —— 同一条 subagent 流 / task 的后续事件不会被
+    // 重映射到下一个 occurrence 拆散。
     const resolveForEntry = (entry: JsonObject, val: string, index: number): string | undefined => {
-      const uuid = entry.uuid;
-      if (typeof uuid === 'string' && uuid) {
-        let m = childRef.get(uuid);
+      const key = childKeyOf(entry);
+      if (key !== undefined) {
+        let m = childRef.get(key);
         if (m) {
           const cached = m.get(val);
           if (cached !== undefined) return cached;
@@ -352,7 +364,7 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         if (mapped !== undefined) {
           if (!m) {
             m = new Map();
-            childRef.set(uuid, m);
+            childRef.set(key, m);
           }
           m.set(val, mapped);
         }
@@ -381,6 +393,21 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
           const mapped = resolveForEntry(entry, item, index);
           if (mapped !== undefined && mapped !== item) {
             arr[i] = mapped;
+            entryChanged = true;
+          }
+        }
+      }
+      // stream_event 的 event.content_block.id(content_block_start 的 tool_use)也要
+      // 改写: handleStreamEvent 用它驱动 tool-use start / tool-name 状态, replay/import
+      // 会以旧 id 发 tool card, 与归一化后的 tool_result / summary 指向不一致
+      // (codex-connector P2: Rewrite stream-event tool IDs too)。
+      const evt = entry.event;
+      if (isRecord(evt) && evt.type === 'content_block_start') {
+        const cb = evt.content_block;
+        if (isRecord(cb) && cb.type === 'tool_use' && typeof cb.id === 'string' && cb.id.length > 0) {
+          const mapped = resolveForEntry(entry, cb.id, index);
+          if (mapped !== undefined && mapped !== cb.id) {
+            cb.id = mapped;
             entryChanged = true;
           }
         }
