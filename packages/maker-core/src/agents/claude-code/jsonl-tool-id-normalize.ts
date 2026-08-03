@@ -316,9 +316,14 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
     // 两类命名空间, 避免 uuid 与 task_id 值相同串扰。
     const childRef = new Map<string, Map<string, string>>();
     // 提取记录所属 child 身份(无 child 身份时返回 undefined → 走独立逐条解析)。
+    // task 记录(task_started/progress/notification)的稳定标识是 task_id, per-row 的
+    // uuid 只是临时记录 id —— 若 uuid 优先, 同一 task 的多条记录(uuid 各不相同)
+    // 不共享 task 级映射, 各自消费下一个 duplicate occurrence, 把单个 task 拆散到
+    // 多张 Agent/Task 卡片。task_id 存在时优先, uuid 仅作 fallback
+    // (codex-connector P2: Prefer task IDs before per-row UUIDs)。
     const childKeyOf = (entry: JsonObject): string | undefined => {
-      if (typeof entry.uuid === 'string' && entry.uuid) return `uuid:${entry.uuid}`;
       if (typeof entry.task_id === 'string' && entry.task_id) return `task:${entry.task_id}`;
+      if (typeof entry.uuid === 'string' && entry.uuid) return `uuid:${entry.uuid}`;
       return undefined;
     };
     // 单个原始 id → 终 id 的行作用域解析。推进规则:

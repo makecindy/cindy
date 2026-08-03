@@ -597,6 +597,37 @@ describe('normalizeClaudeJsonlToolIdsText', () => {
     expect((entries[5] as Record<string, unknown>).tool_use_id).toBe('Bash_210_dup2');
   });
 
+  it('task 记录同时带 task_id + uuid 时优先 task_id 复用(P2: Prefer task IDs before per-row UUIDs)', () => {
+    // task 系统记录可能同时带稳定 task_id 和 per-row uuid。若 child 身份优先取 uuid,
+    // 同一 task 的多条记录(uuid 各不相同)不共享 task 级映射, 各自消费下一个 duplicate
+    // occurrence, 把单个 task 拆散到多张卡片。task_id 必须优先。
+    const taskRow = (taskId: string, uuid: string): string =>
+      JSON.stringify({
+        type: 'task_progress',
+        subtype: 'task_progress',
+        task_id: taskId,
+        uuid,
+        tool_use_id: 'Bash_5',
+        status: 'running',
+      });
+    const text = [
+      assistantEntry('a1', [toolUse('Bash_5'), toolUse('Bash_5')]),
+      taskRow('task-1', 'row-uuid-1'), // 同一 task 两条记录, uuid 各不相同
+      taskRow('task-1', 'row-uuid-2'),
+      taskRow('task-2', 'row-uuid-3'),
+      userEntry('u1', [toolResult('Bash_5'), toolResult('Bash_5')]),
+    ].join('\n') + '\n';
+    const result = normalizeClaudeJsonlToolIdsText(text);
+    expect(result.changed).toBe(true);
+    const entries = parseEntries(result.text);
+    expect(contentOf(entries[0]).map((b) => b.id)).toEqual(['Bash_x5', 'Bash_5_dup2']);
+    // task-1 两条记录(uuid 不同)因 task_id 复用全部挂 Bash_x5
+    expect((entries[1] as Record<string, unknown>).tool_use_id).toBe('Bash_x5');
+    expect((entries[2] as Record<string, unknown>).tool_use_id).toBe('Bash_x5');
+    // task-2 挂第二个调用
+    expect((entries[3] as Record<string, unknown>).tool_use_id).toBe('Bash_5_dup2');
+  });
+
   it('未改动行保持原始字节(不重新序列化)', () => {
     const unchangedLine = userEntry('u1', [{ type: 'text', text: '含  unicode 与  空格' }]);
     const changedLine = assistantEntry('a1', [toolUse('Bash_210')]);
