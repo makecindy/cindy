@@ -51,6 +51,16 @@ export interface SubagentLiveCardTracker {
    */
   noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null;
   /**
+   * 登记「子线程 → 其父线程」的血缘(host 的 `descendantThreadStarted` 对**每一代**都触发)。
+   *
+   * 嵌套子代理必须靠它:孙线程的 spawn item 出现在**子线程自己**的事件流里,主线程的
+   * itemStarted 钩子永远看不到,所以 noteSpawnItem 不可能登记孙线程。父线程已归属某张卡时,
+   * 把子线程并入同一张卡并重放其早到缓冲;父线程与子代理无关时无副作用。
+   *
+   * 返回聚合快照 = 有早到通知被重放出状态,调用方应发一帧;否则 null。
+   */
+  noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null;
+  /**
    * 消费一条子线程通知。返回聚合快照表示卡片需要刷新;返回 null = 与子代理卡无关
    * (不关心的 method、无效载荷),或该子线程尚未登记(已缓冲,等 spawn 到达后重放)。
    */
@@ -302,6 +312,34 @@ export function createSubagentLiveCardTracker(opts: {
         }
       }
 
+      return replayed ? snapshot(card) : null;
+    },
+
+    noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null {
+      if (!childThreadId || !parentThreadId || childThreadId === parentThreadId) return null;
+      // 父线程不属于任何子代理卡 → 与子代理无关(例如主线程自己的后代未经 spawn 登记)。
+      const taskId = taskIdByThread.get(parentThreadId);
+      if (taskId === undefined) return null;
+      const card = cards.get(taskId);
+      if (!card) return null;
+      // 已并入同一张卡:幂等,不重置计数。
+      if (taskIdByThread.get(childThreadId) === taskId && card.threads.has(childThreadId)) return null;
+
+      if (taskIdByThread.get(childThreadId) !== taskId) unbindThread(childThreadId);
+      if (!card.threads.has(childThreadId)) {
+        card.threads.set(childThreadId, { status: 'running', totalTokens: 0 });
+      }
+      taskIdByThread.set(childThreadId, taskId);
+
+      // 孙线程的通知可能早于本次血缘登记到达(已缓冲),在此补进聚合。
+      const queued = pending.get(childThreadId);
+      if (!queued) return null;
+      pending.delete(childThreadId);
+      const thread = card.threads.get(childThreadId)!;
+      let replayed = false;
+      for (const entry of queued) {
+        if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
+      }
       return replayed ? snapshot(card) : null;
     },
 

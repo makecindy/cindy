@@ -306,6 +306,70 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.handleDescendantNotification('t-new', 'item/started', toolItem('x-3'))?.taskId).toBe('card-3');
   });
 
+  it('folds nested subagents into the ancestor card via lineage', () => {
+    // 孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的 itemStarted 看不到,
+    // 所以 noteSpawnItem 不可能登记它。必须靠血缘并入父线程所属的卡,否则孙线程的工具调用
+    // 与 token 全部落进 pending 且再无登记路径可重放。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child', '/root/scout'));
+
+    // 子 → 孙
+    expect(tracker.noteDescendantThread('t-grand', 't-child')).toBeNull();
+    expect(tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-1'))).toMatchObject({
+      taskId: 'card-1',
+      toolUses: 1,
+    });
+    // 孙 → 曾孙:任意深度都归到同一张根卡。
+    tracker.noteDescendantThread('t-great', 't-grand');
+    expect(tracker.handleDescendantNotification('t-great', 'item/started', toolItem('gg-1'))?.toolUses).toBe(2);
+
+    // token 按线程分量求和(子 + 孙各自的累计快照)。
+    tracker.handleDescendantNotification('t-child', 'thread/tokenUsage/updated', {
+      tokenUsage: { total: { totalTokens: 100 } },
+    });
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 30 } },
+      })?.totalTokens,
+    ).toBe(130);
+
+    // 只有全部代际终态后卡片才收口。
+    tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } });
+    tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } });
+    expect(
+      tracker.handleDescendantNotification('t-great', 'turn/completed', { turn: { status: 'failed' } })?.status,
+    ).toBe('failed');
+  });
+
+  it('replays a nested thread\'s notifications buffered before its lineage was known', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+
+    // 孙线程通知先到(血缘还没建立)→ 缓冲,不产帧。
+    expect(tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-1'))).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'failed' } }),
+    ).toBeNull();
+
+    // 血缘建立时重放:工具数与终态都补回来(否则卡片会永久停在 running)。
+    const replayed = tracker.noteDescendantThread('t-grand', 't-child');
+    expect(replayed).toMatchObject({ taskId: 'card-1', toolUses: 1 });
+    // 子线程仍在跑 → 整卡仍 running;孙的 failed 已记在它自己那份状态里。
+    expect(replayed?.status).toBe('running');
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('failed');
+  });
+
+  it('ignores lineage for threads unrelated to any subagent card', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    // 父线程不属于任何卡(例如主线程的后代未经 spawn 登记)→ 无副作用。
+    expect(tracker.noteDescendantThread('t-x', 't-unknown')).toBeNull();
+    expect(tracker.noteDescendantThread('', 't-child')).toBeNull();
+    expect(tracker.noteDescendantThread('t-same', 't-same')).toBeNull();
+    expect(tracker.size).toBe(0);
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));

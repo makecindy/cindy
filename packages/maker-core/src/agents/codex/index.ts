@@ -6815,6 +6815,11 @@ export class CodexAgent extends BaseAgent {
           parentThreadId,
           childThreadId,
         });
+        // 嵌套子代理:孙线程的 spawn item 只出现在**子线程自己**的事件流里,主线程的
+        // itemStarted 看不到,所以只能靠血缘把它并进父线程所属的那张卡 —— 否则孙线程的
+        // 工具调用与 token 全部进 pending 且再也没有登记路径可以重放(greptile P1)。
+        const replayed = subagentLiveCards.noteDescendantThread(childThreadId, parentThreadId);
+        if (replayed) emitSubagentCardUpdate(replayed);
       },
       descendantNotification: handleDescendantNotification,
       turnStarted: (params) => {

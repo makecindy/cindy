@@ -583,3 +583,83 @@ describe('AppServerHost descendant notification routing', () => {
     await host.shutdown();
   });
 });
+describe('AppServerHost buffered descendant notification replay', () => {
+  it('replays a child thread\'s pre-subscribe item/usage/turn notifications in arrival order', async () => {
+    // thread/started 与该 child 的 item / usage / turn 全部早于 root 的 subscribeThread 到达时,
+    // 它们分别缓存在 **child id** 下。root 侧的 drain 只排空 root id 的队列,这些永远排不到 →
+    // 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在 running(codex review)。
+    const transport = new NotificationTransport();
+    const host = new AppServerHost({
+      createTransport: () => transport,
+      logger,
+      clientInfo: { name: 'cindy-test', version: '0.0.0' },
+    });
+    await host.ensureStarted();
+
+    // 订阅之前:child 与 grandchild 的血缘 + 各自的业务通知全部先到。
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'child-thread', parentThreadId: 'root-thread' } },
+    });
+    const childItem = {
+      method: 'item/started',
+      params: { threadId: 'child-thread', turnId: 't1', item: { id: 'i-1', type: 'commandExecution' } },
+    };
+    const childUsage = {
+      method: 'thread/tokenUsage/updated',
+      params: { threadId: 'child-thread', turnId: 't1', tokenUsage: { total: { totalTokens: 99 } } },
+    };
+    const childTurnEnd = {
+      method: 'turn/completed',
+      params: { threadId: 'child-thread', turn: { id: 't1', status: 'completed' } },
+    };
+    transport.emit(childItem);
+    transport.emit(childUsage);
+    transport.emit(childTurnEnd);
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'grandchild-thread', parentThreadId: 'child-thread' } },
+    });
+    transport.emit({
+      method: 'item/started',
+      params: { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+    });
+
+    const descendantNotification = vi.fn();
+    const descendantThreadStarted = vi.fn();
+    const itemStarted = vi.fn();
+    const subscription = host.subscribeThread('root-thread', {
+      descendantNotification,
+      descendantThreadStarted,
+      itemStarted,
+    });
+
+    // 血缘照旧重建(child + grandchild)。
+    expect(descendantThreadStarted).toHaveBeenCalledTimes(2);
+    // 关键:child 的三条业务通知按到达顺序补投,grandchild 的也补投。
+    expect(descendantNotification.mock.calls).toEqual([
+      ['child-thread', 'item/started', childItem.params],
+      ['child-thread', 'thread/tokenUsage/updated', childUsage.params],
+      ['child-thread', 'turn/completed', childTurnEnd.params],
+      [
+        'grandchild-thread',
+        'item/started',
+        { threadId: 'grandchild-thread', turnId: 't2', item: { id: 'i-2', type: 'mcpToolCall' } },
+      ],
+    ]);
+    // thread/started 不进本通道(有专用 handler),也不得重复投递业务通知到主线程通道。
+    expect(descendantNotification.mock.calls.some(([, method]) => method === 'thread/started')).toBe(false);
+    expect(itemStarted).not.toHaveBeenCalled();
+
+    // 补投过一次后不再重复:同一批不会因后续血缘重建被投第二遍。
+    descendantNotification.mockClear();
+    transport.emit({
+      method: 'thread/started',
+      params: { thread: { id: 'great-grandchild', parentThreadId: 'grandchild-thread' } },
+    });
+    expect(descendantNotification).not.toHaveBeenCalled();
+
+    await subscription.release();
+    await host.shutdown();
+  });
+});

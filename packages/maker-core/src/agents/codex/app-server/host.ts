@@ -840,16 +840,52 @@ export class AppServerHost {
     if (!handlers) return;
 
     this.lineageRoots.set(childThreadId, rootThreadId);
-    if (!handlers.descendantThreadStarted) return;
-    try {
-      handlers.descendantThreadStarted(params);
-    } catch (e) {
-      this.logger.error('descendant thread handler threw', {
-        rootThreadId,
-        parentThreadId,
-        childThreadId,
-        message: (e as Error).message,
-      });
+    if (handlers.descendantThreadStarted) {
+      try {
+        handlers.descendantThreadStarted(params);
+      } catch (e) {
+        this.logger.error('descendant thread handler threw', {
+          rootThreadId,
+          parentThreadId,
+          childThreadId,
+          message: (e as Error).message,
+        });
+      }
+    }
+    // 血缘刚建立:该子线程在此之前到达的 item / tokenUsage / turn 通知都缓存在**它自己的
+    // id** 下(那时既不是 subscriber 也没有 lineage)。root 侧的 drain 只排空 root id 的队列,
+    // 这些永远排不到 → 早期工具数、token 丢失,漏掉 turn/completed 还会让卡片永久停在
+    // running(codex review)。这里按到达顺序补投进 descendant 通道。
+    this.drainBufferedDescendantNotifications(childThreadId, rootThreadId, handlers);
+  }
+
+  /**
+   * 把某子线程在血缘建立前缓存的通知按原顺序补投给 root 的 descendant 通道。
+   * `thread/started` 跳过 —— 它已由 routeDescendantThreadStarted 经专用 handler 投递过,
+   * 而且 descendantNotification 的契约里不含它。
+   */
+  private drainBufferedDescendantNotifications(
+    childThreadId: string,
+    rootThreadId: string,
+    handlers: ThreadEventHandlers,
+  ): void {
+    const buffered = this.buffered.get(childThreadId);
+    if (!buffered) return;
+    // 先删再投:补投过程中若又触发别的血缘重建,不会把同一批重复投一遍。
+    this.buffered.delete(childThreadId);
+    if (!handlers.descendantNotification) return;
+    for (const item of buffered) {
+      if (item.method === 'thread/started') continue;
+      try {
+        handlers.descendantNotification(childThreadId, item.method, item.params);
+      } catch (e) {
+        this.logger.error('buffered descendant notification handler threw', {
+          rootThreadId,
+          childThreadId,
+          method: item.method,
+          message: (e as Error).message,
+        });
+      }
     }
   }
 
@@ -858,22 +894,27 @@ export class AppServerHost {
     // cannot drain those entries directly; rebuild the lineage iteratively so an
     // already-buffered child can unlock an already-buffered grandchild as well.
     for (;;) {
-      let discovered = 0;
+      // 先快照本轮的候选再处理:routeDescendantThreadStarted 现在会把该 child 的缓冲队列
+      // 排空并**从 this.buffered 删除**,边迭代边删同一个 Map 容易漏项。
+      const candidates: ThreadStartedNotification['params'][] = [];
       for (const notifications of this.buffered.values()) {
         for (const item of notifications) {
           if (item.method !== 'thread/started') continue;
-          const params = item.params as ThreadStartedNotification['params'];
-          const childThreadId = params.thread?.id;
-          const parentThreadId = params.thread?.parentThreadId;
-          if (
-            !childThreadId
-            || !parentThreadId
-            || this.lineageRoots.has(childThreadId)
-            || this.lineageRoots.get(parentThreadId) !== rootThreadId
-          ) continue;
-          this.routeDescendantThreadStarted(params);
-          if (this.lineageRoots.get(childThreadId) === rootThreadId) discovered += 1;
+          candidates.push(item.params as ThreadStartedNotification['params']);
         }
+      }
+      let discovered = 0;
+      for (const params of candidates) {
+        const childThreadId = params.thread?.id;
+        const parentThreadId = params.thread?.parentThreadId;
+        if (
+          !childThreadId
+          || !parentThreadId
+          || this.lineageRoots.has(childThreadId)
+          || this.lineageRoots.get(parentThreadId) !== rootThreadId
+        ) continue;
+        this.routeDescendantThreadStarted(params);
+        if (this.lineageRoots.get(childThreadId) === rootThreadId) discovered += 1;
       }
       if (discovered === 0) return;
     }
