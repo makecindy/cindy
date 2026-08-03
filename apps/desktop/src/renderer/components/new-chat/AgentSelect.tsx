@@ -132,6 +132,28 @@ export function AgentSelect({
   }, [disabled]);
 
   /**
+   * field 形态: 面板打开期间祖先一滚就关掉。
+   *
+   * MorphPopover 是**形变定位** —— 打开那一刻按触发器的位置算好坐标并钉住(它服务的
+   * composer toolbar 固定在底部, 没有可滚动祖先, 所以够用)。设置页不一样: 内容列本身
+   * 可滚, 滚一下面板就与字段分离、悬在半空(review 指出)。这里不给 MorphPopover 补一套
+   * 跟随定位(那是把工具条的形变语义扩成通用锚点定位, 影响面远超本 PR), 改为在祖先滚动 /
+   * 视口变化时收起 —— 与常见下拉的行为一致, 且不会留下错位的面板。
+   *
+   * capture 阶段监听: scroll 不冒泡, 只有捕获期才能收到祖先滚动容器的事件。
+   */
+  useEffect(() => {
+    if (!isField || !open) return;
+    const close = (): void => setOpen(false);
+    window.addEventListener('scroll', close, true);
+    window.addEventListener('resize', close);
+    return () => {
+      window.removeEventListener('scroll', close, true);
+      window.removeEventListener('resize', close);
+    };
+  }, [isField, open]);
+
+  /**
    * 朝下空间放得下就朝下(设置字段的自然方向), 否则比较上下取更宽裕的一侧。
    * 只作用于 field 形态: 工具条永远在底部, 方向由调用方定死。
    */

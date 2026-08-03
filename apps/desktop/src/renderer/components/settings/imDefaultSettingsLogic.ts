@@ -21,25 +21,26 @@ import type {
 export function resolveAgentSwitchSettings(args: {
   current: ImDefaultAgentSettings;
   available: ReadonlyArray<{ id: string; efforts?: readonly string[] }>;
-  fallbackEffort: ImDefaultEffort;
+  /**
+   * 强度解析, **必须传 changeModel 用的那一个**(组件里的 resolveEffort)。
+   *
+   * 不要在这里另写一套回落: 那条链是「当前值 → 该模型的 override → 该模型的
+   * defaultEffort → 该模型首档 → agent 出厂值」, model-specific 的两步在 agent-wide
+   * 兜底**之前**。本函数曾自己实现成「当前值 → agent-wide → 首档」, 于是切 agent 与
+   * 切模型对同一个模型给出不同强度(review 指出)。共用同一个函数是唯一不会再分叉的写法。
+   */
+  resolveEffort: (modelId: string, requested: ImDefaultEffort) => ImDefaultEffort;
   resolveProviderId: (modelId: string, providerId: string | null) => string | null;
 }): ImDefaultAgentSettings {
-  const { current, available, fallbackEffort, resolveProviderId } = args;
+  const { current, available, resolveEffort, resolveProviderId } = args;
   if (available.length === 0) return current;
   const keptModel = available.find((m) => m.id === current.model);
   const model = keptModel ?? available[0]!;
-  const efforts = model.efforts ?? [];
-  const effort: ImDefaultEffort =
-    efforts.length === 0
-      ? current.effort
-      : efforts.includes(current.effort)
-        ? current.effort
-        : ((efforts.includes(fallbackEffort) ? fallbackEffort : efforts[0]) as ImDefaultEffort);
   return {
     model: model.id,
     // 模型没换时仍要重解供应商: 旧 providerId 可能指向已断开的供应商。
     providerId: resolveProviderId(model.id, keptModel ? current.providerId : null),
-    effort,
+    effort: resolveEffort(model.id, current.effort),
   };
 }
 

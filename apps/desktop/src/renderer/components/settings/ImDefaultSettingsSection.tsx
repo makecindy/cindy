@@ -220,7 +220,8 @@ export function ImDefaultSettingsSection({
     const next = resolveAgentSwitchSettings({
       current: settings.agents[agentKind],
       available: modelsByAgent[agentKind],
-      fallbackEffort: IM_DEFAULT_SETTINGS.agents[agentKind].effort,
+      // 与 changeModel 共用同一条解析链(model override / defaultEffort 先于 agent 出厂值)
+      resolveEffort: (modelId, requested) => resolveEffort(agentKind, modelId, requested),
       resolveProviderId: (modelId, providerId) =>
         resolveProviderId(agentKind, modelId, providerId),
     });

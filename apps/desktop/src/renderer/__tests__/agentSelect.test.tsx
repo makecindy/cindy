@@ -246,6 +246,31 @@ describe('AgentSelect', () => {
     }
   });
 
+  it('field 形态: 祖先滚动或视口变化时收起面板(形变定位不会跟着滚)', () => {
+    // 设置页的内容列可滚动, 而 MorphPopover 在打开那一刻就把坐标钉死 —— 不收起的话
+    // 面板会与字段分离、悬在半空。
+    const { unmount } = render(
+      <AgentSelect value="cc" onChange={() => {}} triggerVariant="field" side="bottom" />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    expect(screen.getByTestId('agent-select-panel')).toBeTruthy();
+    // scroll 不冒泡: 组件必须在捕获阶段听, 这里从 document 派发模拟祖先容器滚动
+    fireEvent.scroll(document);
+    expect(screen.queryByTestId('agent-select-panel')).toBeNull();
+
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    expect(screen.getByTestId('agent-select-panel')).toBeTruthy();
+    fireEvent(window, new Event('resize'));
+    expect(screen.queryByTestId('agent-select-panel')).toBeNull();
+    unmount();
+
+    // 工具条形态不受影响: 它固定在底部、没有可滚动祖先, 滚动不该把它关掉
+    render(<AgentSelect value="cc" onChange={() => {}} />);
+    fireEvent.click(screen.getByRole('button', { name: '选择引擎：Claude' }));
+    fireEvent.scroll(document);
+    expect(screen.getByTestId('agent-select-panel')).toBeTruthy();
+  });
+
   it('打开时初始焦点落在当前选中行,不是第一行(经 data-morph-autofocus)', async () => {
     render(<AgentSelect value="codex" onChange={() => {}} />);
     fireEvent.click(screen.getByRole('button', { name: '选择引擎：Codex' }));
