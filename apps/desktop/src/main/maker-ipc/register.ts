@@ -568,6 +568,7 @@ import { isDeviceLinkInvoke, isMobileControllerInvoke } from '../device-link/inv
 import {
   buildMobileClientPromptNote,
   stampMobileClientOrigin,
+  stripMainOnlySendOpts,
 } from './mobileClientPromptNote.js';
 import {
   assertResolveInteractionOrigin,
@@ -7949,7 +7950,14 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
   );
 
   ipcMain.handle(MAKER_INVOKE.STEER, async (_e, sessionId: unknown, message: unknown, sendOpts?: unknown) => {
-    await steerToAgentAccepted(sessionId, message, sendOpts);
+    // **wire sendOpts 必须消毒**(review P1/P2,两个 bot 各报一次):这个 channel 在
+    // device-link allowlist 里开放,`sendOpts` 是调用方可控输入。不剥的话,桌面 renderer
+    // 或任意获准远控的非手机客户端只要传 `{ fromMobileClient: true }`,就能让本轮拿到伪造
+    // 的手机环境说明、按错误的来源调整产物形态。
+    //
+    // 契约与 maker:send 一致(sessionSendHandler 同样在 IPC 边界剥):**该字段只由 main
+    // 盖章**。coordinator 的内部 steerToAgent 调用不经过这里,透传值不受影响。
+    await steerToAgentAccepted(sessionId, message, stripMainOnlySendOpts(sendOpts));
   });
 
   ipcMain.handle(MAKER_INVOKE.GET_CONTEXT_USAGE, async (_e, sessionId: unknown, createOpts?: unknown): Promise<ContextUsageData> => {

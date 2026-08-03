@@ -235,7 +235,9 @@ describe('注入接线(源码级守卫)', () => {
 
 describe('stampMobileClientOrigin(IPC 边界盖章)', () => {
   it('手机来源盖上标记,返回新对象不改入参', () => {
-    const item = { clientId: 'a', text: 'hi' };
+    // 显式标出可选字段:真实入参是 AgentInputQueuedMessage(该字段是可选的),
+    // 字面量不写这一项会让 TS 判「与约束无公共属性」(TS2559)而拒收。
+    const item: { clientId: string; text: string; fromMobileClient?: boolean } = { clientId: 'a', text: 'hi' };
     const out = stampMobileClientOrigin(item, true);
     expect(out).toEqual({ clientId: 'a', text: 'hi', fromMobileClient: true });
     expect(item).toEqual({ clientId: 'a', text: 'hi' });
@@ -313,5 +315,19 @@ describe('排队 / 插入两条路径的接线(源码级守卫)', () => {
 
   it('直连 maker:send 的 wire sendOpts 必须消毒', () => {
     expect(sendHandler).toContain('stripMainOnlySendOpts(sendOpts)');
+  });
+
+  it('直连 maker:steer 的 wire sendOpts 同样必须消毒', () => {
+    // 这个 channel 在 device-link allowlist 里开放,sendOpts 是调用方可控输入 ——
+    // 不剥的话传 `{ fromMobileClient: true }` 就能让非手机轮次收到伪造的手机说明
+    // (review P1/P2 各报一次)。契约与 maker:send 一致:该字段只由 main 盖章。
+    expect(register).toMatch(
+      /MAKER_INVOKE\.STEER[\s\S]*?steerToAgentAccepted\(sessionId, message, stripMainOnlySendOpts\(sendOpts\)\)/,
+    );
+    // coordinator 的内部调用**不得**被消毒 —— 那条路的 sendOpts 是 main 构造的透传值。
+    expect(register).toContain('steerToAgent: (sessionId, message, sendOpts) =>');
+    expect(register).toMatch(
+      /steerToAgent: \(sessionId, message, sendOpts\) =>\s*\n\s*steerToAgentAccepted\(sessionId, message, sendOpts\),/,
+    );
   });
 });
