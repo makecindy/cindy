@@ -1573,54 +1573,6 @@ describe('进度快照(turn.progress 链路)', () => {
     }
   });
 
-  it('Telegram draft 只流式输出正文，不把会重排的 thinking/tool timeline 塞进 Rich Message', async () => {
-    vi.useFakeTimers();
-    try {
-      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
-        makeManualSession(opts.id ?? 'sess-x'),
-      );
-      const emitted: string[] = [];
-      const runner = createMakerHookSessionRunner({ log });
-      const p = runner.run(
-        baseReq({
-          source: { im: 'telegram', userText: 'hello' },
-          onProgress: (text: string) => emitted.push(text),
-        }),
-      );
-      await flush();
-
-      const cb = h.eventCbs.get('sess-new')!;
-      cb({
-        type: 'tool_use',
-        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: '/repo/a.ts' } },
-      });
-      cb({ type: 'thinking', data: { stage: 'final', blockId: 't-1', text: '检查实现' } });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual([]);
-
-      cb({ type: 'text', data: { text: '**结论**', isFinal: false } });
-      await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual(['**结论**']);
-
-      // Later activity-only ticks must not resend or rewrite the same draft.
-      cb({
-        type: 'tool_use',
-        data: { toolUseId: 'test-1', toolName: 'Bash', input: { command: 'pnpm test' } },
-      });
-      await vi.advanceTimersByTimeAsync(6_500);
-      expect(emitted).toEqual(['**结论**']);
-
-      cb({ type: 'text', data: { text: '已完成。', isFinal: false } });
-      await vi.advanceTimersByTimeAsync(1_500);
-      expect(emitted).toEqual(['**结论**', '**结论**已完成。']);
-
-      cb({ type: 'done', data: null });
-      await p;
-    } finally {
-      vi.useRealTimers();
-    }
-  });
-
   it('未注入 onProgress 时零开销路径: 正常收口无异常', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeManualSession(opts.id ?? 'sess-x'),
@@ -1743,7 +1695,7 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
     }
   });
 
-  it('Telegram 草稿在零正文时也给出重试提示, 有正文后只发正文', async () => {
+  it('Telegram DM 与群同一套过程区: 工具时间线在上正文在下', async () => {
     vi.useFakeTimers();
     try {
       fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
@@ -1754,22 +1706,39 @@ describe('上游过载自动重试期间的渠道进度(零产出窗口)', () =>
       const p = runner.run(
         baseReq({
           source: { im: 'telegram', userText: 'hello' },
+          laneKind: 'dm',
           onProgress: (t: string) => emitted.push(t),
         }),
       );
       await flush();
       const cb = h.eventCbs.get('sess-new')!;
 
+      // 零产出的过载重试: 与群同款的“工作中 + 状态行”, 不再是裸文本一行。
       cb({
         type: 'error',
         data: { message: 'model is at capacity (auto-retry 1/4)', isTerminal: false },
       });
       await vi.advanceTimersByTimeAsync(0);
-      expect(emitted).toEqual(['模型服务繁忙，正在自动重试（1/4）…']);
+      expect(emitted).toHaveLength(1);
+      expect(emitted[0]).toContain('⚙️ 工作中');
+      expect(emitted[0]).toContain('⏳ 模型服务繁忙，正在自动重试（1/4）…');
 
+      // 工具调用在 DM 也可见(本次统一的核心): 旧行为这里什么都不发。
+      cb({
+        type: 'tool_use',
+        data: { toolUseId: 'read-1', toolName: 'Read', input: { file_path: 'D:/repo/a.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1_500);
+      expect(emitted.at(-1)).toContain('读取 a.ts');
+      expect(emitted.at(-1)).toContain('工作中 · 1 项');
+
+      // 有正文后仍保留过程区: 时间线在上, 正文在下(与群 lane 逐字同口径)。
       cb({ type: 'text', data: { text: '结论。', isFinal: false } });
       await vi.advanceTimersByTimeAsync(1_500);
-      expect(emitted.at(-1)).toBe('结论。');
+      const last = emitted.at(-1)!;
+      expect(last).toContain('读取 a.ts');
+      expect(last).toContain('结论。');
+      expect(last.indexOf('读取 a.ts')).toBeLessThan(last.indexOf('结论。'));
 
       cb({ type: 'done', data: null });
       await p;
@@ -2308,7 +2277,6 @@ describe('watchContinuation: 观察桌面端续跑并回流', () => {
   it('终态回调抛错时仍拆监听并 settle finished', async () => {
     const session = makeManualSession('sess-terminal-callback');
     const observer = observeHookTurn(session as never, {
-      answerOnlyProgress: false,
       onTurnTerminal: () => {
         throw new Error('restore failed');
       },

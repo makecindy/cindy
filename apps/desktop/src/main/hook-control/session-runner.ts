@@ -812,9 +812,8 @@ export function createMakerHookSessionRunner(deps: {
         // tool_result 旁路收集的出站图片 absPath(收口时随 turn.end 附件外发)
         const extraImageAbsPaths: string[] = [];
         const observer = observeHookTurn(session, {
-          // Telegram DM 只流正文(Rich draft 是"部分终稿"动画, 过程区重排会整段
-          // 清空重播); 群/topic 与 Slack 同款完整过程卡。
-          answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
+          // 进度快照不按渠道/聊天类型分叉: 过程区时间线在上正文在下,
+          // Telegram DM / 群 / topic 与 Slack 一致。
           ...(req.onProgress ? { onProgress: req.onProgress } : {}),
           onToolResult: (fullText) => collectOutboundImages(fullText, extraImageAbsPaths, log),
           onTurnTerminal: () => {
@@ -1186,8 +1185,7 @@ function beginContinuationWatch(
   let claimed = false;
   let settled = false;
   const observer = observeHookTurn(session, {
-    // 与 run() 同一判据: Telegram DM 只流正文, 群/topic 走完整过程卡。
-    answerOnlyProgress: req.source?.im === 'telegram' && req.laneKind !== 'group',
+    // 与 run() 同一呈现: 过程区时间线在上正文在下, 不按聊天类型分叉。
     onProgress: (text) => {
       // 认领之前不发进度: 那时 server 还没把这条消息挂到新 requestId 上。
       if (claimed) req.onProgress(text);

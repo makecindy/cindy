@@ -508,8 +508,10 @@ interface PendingTask {
 /** 一条等待续跑的失败任务(见 pendingReopens)。 */
 /**
  * 渠道形态(dm / group)—— 只看 externalKey 的前缀形状, 不查任何状态。
- * execute() 与续跑观察共用: 两边都要用它算 answerOnlyProgress, 判据分叉就会让
- * 续跑轮的进度渲染跟正常任务不一致(Telegram DM 冒出过程区 / 群里少了过程区)。
+ * 用于 Telegram 群轮次的权限收紧(见 session-runner 的 isTelegramGroupTurn):
+ * 群里的成员可控文本会进 prompt, 所有群轮次都挂破坏性操作强确认; DM 不挂。
+ * execute() 与续跑观察共用同一判据, 分叉会让续跑轮的权限档跟正常任务不一致。
+ * (进度呈现已不再看它 —— DM 与群用同一套过程区。)
  */
 function deriveLaneKind(externalKey: string): 'dm' | 'group' {
   return /^telegram:(group|topic):/.test(externalKey) ? 'group' : 'dm';
