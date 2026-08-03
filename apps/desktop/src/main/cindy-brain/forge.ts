@@ -20,6 +20,7 @@ import JSZip from 'jszip';
 
 import {
   GHOST_ICON_MAX_BYTES,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_MANIFEST_FILE,
   GHOST_SKILL_MD_MAX_BYTES,
   validateGhostManifest,
@@ -633,12 +634,20 @@ async function buildGhostPackage(
         // icon_source 是打包期 overlay：源码仍保留 scaffold 占位图，只有用户
         // 确认生成成功的这一包替换图标。清单快照也同步指向固定安全路径。
         manifestRaw = { ...manifestRaw, icon: FORGE_AI_ICON_PATH };
-        manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw, null, 2)}\n`, 'utf-8');
+        // 采用紧凑 JSON，避免仅为 overlay 重排空白就把清单推过安装侧上限。
+        manifestBytes = Buffer.from(`${JSON.stringify(manifestRaw)}\n`, 'utf-8');
       }
     }
     const v = validateGhostManifest(manifestRaw);
     if (!v.ok) {
       return { ok: false, errorCode: 'MANIFEST_INVALID', message: `清单不合格:${v.reason}` };
+    }
+    if (manifestBytes.byteLength > GHOST_INSTALL_MANIFEST_MAX_BYTES) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: `${GHOST_MANIFEST_FILE} 合成后超过安装器 ${GHOST_INSTALL_MANIFEST_MAX_BYTES} 字节上限`,
+      };
     }
     const manifest = v.manifest;
 
@@ -3043,8 +3052,10 @@ if (r.ok && r.confirmed) {
 
   只尝试一次。图片能力不可用、超时或失败时不要重试，直接调用
   \`ghost_forge_pack({ dir })\`，保留占位图/宿主默认图标继续打包，不让图标阻塞用户。
-  生成成功且结果带 \`cindy-media://\` 地址时，把该地址原样交给
-  \`ghost_forge_pack({ dir, icon_source: result.url })\`；主机会转成 1024×1024 PNG 并
+  生成成功后，从图片工具结果的 \`xdt_image_url\` 取单张地址；如果结果只有
+  \`xdt_image_urls\`，取数组第一项(例如 \`const selectedImageUrl = result.xdt_image_url ?? result.xdt_image_urls?.[0]\`)。
+  仅当它是 \`cindy-media://\` 地址时，才把它原样交给
+  \`ghost_forge_pack({ dir, icon_source: selectedImageUrl })\`；主机会转成 1024×1024 PNG 并
   嵌入安装包。icon_source 处理失败时 pack 也会自动回退默认图标，不要再发起第二次生成。
 - **上传图片**：让用户提供图片，保存到 \`assets/icon.png\` 后继续；不要要求用户先
   把图片处理成圆角，宿主负责最终显示形态。

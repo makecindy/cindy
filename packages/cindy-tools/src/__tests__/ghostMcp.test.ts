@@ -1097,6 +1097,16 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       { dir: "/src/default" },
     ]);
   });
+
+  it("forge_pack 描述明确图片工具结果字段", () => {
+    const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+    const description = server._registeredTools.ghost_forge_pack?.description ?? "";
+    expect(description).toContain("xdt_image_url");
+    expect(description).toContain("xdt_image_urls");
+    expect(description).toContain("icon_source");
+  });
 });
 
 describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {

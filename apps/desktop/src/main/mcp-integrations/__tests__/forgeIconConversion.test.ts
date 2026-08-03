@@ -84,6 +84,90 @@ describe('createForgeIconConverter', () => {
     expect(fork).toHaveBeenCalledTimes(2);
   });
 
+  it('error 没有后续 exit 时也释放转换槽位', async () => {
+    const first = new FakeConversionChild();
+    const second = new FakeConversionChild();
+    const fork = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const convert = createForgeIconConverter({ fork });
+
+    const failed = convert('/tmp/error.png');
+    first.emit('error', 'FatalError', 'forge-icon', 'diagnostic report');
+    await expect(failed).rejects.toThrow('转换进程异常');
+
+    // 模拟 error 后没有 exit；下一次请求仍应能启动新的隔离进程。
+    const next = convert('/tmp/next-after-error.png');
+    const request = second.request();
+    second.emit('message', {
+      kind: 'result',
+      id: request.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('next')),
+    });
+    await expect(next).resolves.toEqual(Buffer.from('next'));
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
+  it('成功回执后 error 没有 exit 也不会遗留转换槽位', async () => {
+    const first = new FakeConversionChild();
+    const second = new FakeConversionChild();
+    const fork = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const convert = createForgeIconConverter({ fork });
+
+    const firstResult = convert('/tmp/success-then-error.png');
+    const firstRequest = first.request();
+    first.emit('message', {
+      kind: 'result',
+      id: firstRequest.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('first')),
+    });
+    await expect(firstResult).resolves.toEqual(Buffer.from('first'));
+    first.emit('error', 'FatalError', 'forge-icon', 'diagnostic report');
+
+    const next = convert('/tmp/next-after-late-error.png');
+    const nextRequest = second.request();
+    second.emit('message', {
+      kind: 'result',
+      id: nextRequest.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('next')),
+    });
+    await expect(next).resolves.toEqual(Buffer.from('next'));
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
+  it('kill 返回 false 且没有 exit 时也释放转换槽位', async () => {
+    vi.useFakeTimers();
+    const first = new FakeConversionChild();
+    first.kill.mockReturnValue(false);
+    const second = new FakeConversionChild();
+    const fork = vi.fn()
+      .mockReturnValueOnce(first)
+      .mockReturnValueOnce(second);
+    const convert = createForgeIconConverter({ fork });
+
+    const failed = convert('/tmp/kill-false.png');
+    const failedExpectation = expect(failed).rejects.toThrow('转换超时');
+    await vi.advanceTimersByTimeAsync(5_000);
+    await failedExpectation;
+
+    // kill 已明确报告子进程不可用，且没有 exit 事件；不应永久占槽。
+    const next = convert('/tmp/next-after-kill-false.png');
+    const request = second.request();
+    second.emit('message', {
+      kind: 'result',
+      id: request.id,
+      ok: true,
+      png: new Uint8Array(Buffer.from('next')),
+    });
+    await expect(next).resolves.toEqual(Buffer.from('next'));
+    expect(fork).toHaveBeenCalledTimes(2);
+  });
+
   it('转换结果超过安装器上限时回退失败', async () => {
     const child = new FakeConversionChild();
     const convert = createForgeIconConverter({ fork: () => child });

@@ -21,6 +21,7 @@ import {
   type ForgeScaffoldTemplate,
 } from '../forge';
 import { GhostManager } from '../GhostManager';
+import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
 
 const canSymlink = (() => {
   const probeDir = fs.mkdtempSync(path.join(os.tmpdir(), 'cindy-forge-symlink-probe-'));
@@ -143,6 +144,31 @@ describe('packGhostDir', () => {
     await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
       ok: false,
       errorCode: 'MANIFEST_INVALID',
+    });
+  });
+
+  it('icon overlay 后清单超过安装器上限时在打包期拒绝', async () => {
+    // 用未知字段填充到上限附近:validator 会忽略它,但安装器仍必须按实际
+    // ghost.json 字节数限流。overlay 只能写紧凑 JSON,并且写入 zip 前再复核。
+    const emptyExtraBytes = Buffer.byteLength(
+      `${JSON.stringify({ ...GOOD_MANIFEST, extra: '' })}\n`,
+      'utf8',
+    );
+    const manifest = {
+      ...GOOD_MANIFEST,
+      extra: 'x'.repeat(GHOST_INSTALL_MANIFEST_MAX_BYTES - emptyExtraBytes - 4),
+    };
+    const originalBytes = Buffer.byteLength(`${JSON.stringify(manifest)}\n`, 'utf8');
+    expect(originalBytes).toBeLessThanOrEqual(GHOST_INSTALL_MANIFEST_MAX_BYTES);
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('png') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('合成后超过安装器'),
     });
   });
 
@@ -860,7 +886,10 @@ describe('FORGE_GUIDE', () => {
       'Output a 1024×1024 PNG',
       '只尝试一次',
       '超时或失败时不要重试',
-      'icon_source: result.url',
+      'xdt_image_url',
+      'xdt_image_urls',
+      'selectedImageUrl',
+      'icon_source: selectedImageUrl',
       'pack 也会自动回退默认图标',
       '跳过与使用默认是同一个选择',
       '不要用 AI 仿制商标',

@@ -8,6 +8,7 @@ import {
   GHOST_MANIFEST_FILE,
   GHOST_LOCALE_MAX_BYTES,
   GHOST_ICON_MAX_BYTES,
+  GHOST_INSTALL_MANIFEST_MAX_BYTES,
   GHOST_SKILL_MD_MAX_BYTES,
   ghostLocalePathFor,
   ghostIconMimeType,
@@ -35,7 +36,7 @@ import { checkSkillMdConsistency } from './skillSlot.js';
 export const MAX_BASIC_CINDY_FILE_BYTES = 8 * 1024 * 1024;
 export const MAX_NODE_CINDY_FILE_BYTES = 128 * 1024 * 1024;
 /** 身份卡本身只应是小 JSON；先限流读取，避免在识别包类型前被单文件撑爆内存。 */
-const MAX_GHOST_MANIFEST_BYTES = 256 * 1024;
+const MAX_GHOST_MANIFEST_BYTES = GHOST_INSTALL_MANIFEST_MAX_BYTES;
 /** 解压后总大小/条目数上限；Node 包允许携带已打包 CLI，但仍有硬闸。 */
 export const MAX_BASIC_UNCOMPRESSED_BYTES = 32 * 1024 * 1024;
 export const MAX_NODE_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;

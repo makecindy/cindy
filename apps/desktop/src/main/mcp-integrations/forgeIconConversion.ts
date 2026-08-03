@@ -71,11 +71,12 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
           state.timer = undefined;
         }
       };
-      const requestTermination = (): void => {
+      const requestTermination = (): boolean => {
         try {
-          child.kill();
+          return child.kill();
         } catch {
-          // Electron 仍会在进程结束时发 exit；锁保持到 exit，避免并发点火。
+          // 子进程已不可用时，调用方会立即释放槽位；不能把异常吞掉后永久 busy。
+          return false;
         }
       };
       const complete = (operation: () => void): void => {
@@ -85,16 +86,17 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
         // Keep the slot occupied until the child emits exit. The response can
         // arrive just before the process is reaped; releasing here could start
         // a second Sharp process while the first one is still shutting down.
-        requestTermination();
+        if (!requestTermination()) release();
         operation();
       };
       const failAndTerminate = (error: Error): void => {
         if (state.settled) return;
         state.settled = true;
         clearTimer();
-        // 超时/进程错误时不能在 kill 请求后立刻释放：等 Electron 确认 exit，
-        // 防止旧 native 任务尚未停止时新请求又启动一个子进程。
-        requestTermination();
+        // 超时/请求失败时不能在 kill 请求后立刻释放：等 Electron 确认 exit，
+        // 防止旧 native 任务尚未停止时新请求又启动一个子进程。FatalError 的
+        // error 监听器另有无 exit 兜底，避免异常路径永久占槽。
+        if (!requestTermination()) release();
         reject(error);
       };
 
@@ -115,9 +117,12 @@ export function createForgeIconConverter(options: ForgeIconConverterOptions) {
         complete(() => resolve(png));
       });
       child.on('error', (type, location) => {
-        failAndTerminate(
-          new Error(`AI 图标转换进程异常:${type}${location ? `(${location})` : ''}`),
-        );
+        const error = new Error(`AI 图标转换进程异常:${type}${location ? `(${location})` : ''}`);
+        if (!state.settled) failAndTerminate(error);
+        // Electron 通常会随后发 exit，但 FatalError 路径在测试/部分平台上
+        // 可能只有 error。把它视为同一终止路径，避免一次异常永久占住转换槽；
+        // exit 后的 release 仍是幂等的(active === state 才会清理)。
+        release();
       });
       child.on('exit', (code) => {
         clearTimer();
