@@ -124,6 +124,7 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning,
   errorReason,
   onSilentStopContinue,
+  onCompactContext,
   className,
   style,
 }: {
@@ -147,6 +148,8 @@ export function ErrorTailErrorBanner({
   forkStripEncryptedRunning?: boolean;
   errorReason?: string | null;
   onSilentStopContinue?: () => void;
+  /** 上下文超限历史行的「压缩上下文」入口(透传 ErrorBanner,见其 prop 注释)。 */
+  onCompactContext?: () => void | Promise<void>;
   className?: string;
   style?: React.CSSProperties;
 }) {
@@ -169,6 +172,7 @@ export function ErrorTailErrorBanner({
       silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
       onForkStripEncrypted={onForkStripEncrypted}
       forkStripEncryptedRunning={forkStripEncryptedRunning}
+      onCompactContext={onCompactContext}
       className={className}
       style={style}
     />

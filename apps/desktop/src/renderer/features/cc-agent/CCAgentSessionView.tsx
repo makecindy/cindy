@@ -3366,6 +3366,11 @@ export function CCAgentSessionView({
                   silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                   onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                   forkStripEncryptedRunning={forkStripEncryptedRunning}
+                  onCompactContext={
+                    // 与 Context 环同款门控(codex 走服务端自动压缩无手动入口);
+                    // 刻意不要求 contextTokens > 0 —— 超限自锁的会话读数可能停在 0(#1429)。
+                    !isCodex && session != null ? handleCompactRequest : undefined
+                  }
                   style={{ width: inputWidth }}
                   className="py-1"
                 />
@@ -3416,6 +3421,10 @@ export function CCAgentSessionView({
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
+                onCompactContext={
+                  // 门控与 error-tail 同款(见上);live 超限错误同样给压缩入口。
+                  !isCodex && session != null ? handleCompactRequest : undefined
+                }
                 style={{ width: inputWidth }}
                 className="py-1"
               />

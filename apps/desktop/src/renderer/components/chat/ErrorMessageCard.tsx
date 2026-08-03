@@ -21,6 +21,7 @@ import { AlertCircle } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { decodeRemoteErrorMessage } from '../../lib/makerChatStore';
 import { UPSTREAM_OVERLOAD_REASON } from '@/utils/overloadError';
+import { CONTEXT_OVERFLOW_REASON } from '@/utils/contextOverflowError';
 import { CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON } from '../../../shared/claudeGatewayError';
 
 /** 稳定 reason key → i18n。error-tail-banner(CCAgentSessionView)复用同一映射,
@@ -39,6 +40,9 @@ export const ERROR_REASON_I18N_KEYS: Record<string, string> = {
   // 注释说的那个一致性: 不映射的话同一条过载错误会出现「尾部红条本地化、历史静态
   // 卡英文原文」的分裂 —— 而 codex 的过载原文还会随版本改措辞。
   [UPSTREAM_OVERLOAD_REASON]: 'chat.errorBanner.overloadBusyNoRetry',
+  // 上下文超限(#1429):历史静态卡无按钮,用「新建任务」引导版文案(与尾部红条的
+  // 无压缩入口分支同文案 —— 历史轮的压缩语义已不成立,与本表其它条目的分工一致)。
+  [CONTEXT_OVERFLOW_REASON]: 'chat.errorBanner.contextOverflowNoCompact',
   [CLAUDE_GATEWAY_OPUS_PLAN_MISMATCH_REASON]: 'chat.errorBanner.claudeGatewayOpusPlanMismatch',
 };
 
