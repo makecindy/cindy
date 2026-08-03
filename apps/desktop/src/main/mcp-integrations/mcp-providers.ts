@@ -9,7 +9,7 @@ import {
 import type { OrcaMcpDeps } from '@cindy/mcps';
 import { createCindyGhostsMcpServer } from 'cindy-tools';
 import type { MakerMemoryManager } from '@cindy/maker-core';
-import { getCindyGhostsMcpDeps } from './ghost.js';
+import { getCindyGhostsMcpDeps, type GhostGrantLiveSessionState } from './ghost.js';
 import { getAndroidMcpDeps } from './android.js';
 import { getBrowserMcpDeps } from './browser.js';
 import { getComputerMcpDeps } from './computer.js';
@@ -54,6 +54,11 @@ export interface DesktopMcpProvidersDeps {
   pluginRegistry: PluginRegistry;
   /** Device-link transport stays host-injected so provider tests do not load Electron runtime services. */
   invokeRemote: ChatHistoryReaderDeps['invokeRemote'];
+  /** 插件文件交接只认活跃 Session 的实时权限；缺失时由 ghost.ts fail closed。 */
+  getLiveSessionGrantState?: (
+    sessionId: string,
+    sessionInstanceId: string,
+  ) => GhostGrantLiveSessionState | null;
 }
 
 export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMcpProvider[] {
@@ -427,7 +432,11 @@ export function createDesktopMcpProviders(deps: DesktopMcpProvidersDeps): LiziMc
     toClaudeSdkConfig: (ctx) => ({
       type: 'sdk',
       name: 'cindy',
-      instance: createCindyGhostsMcpServer(getCindyGhostsMcpDeps(ctx)),
+      instance: createCindyGhostsMcpServer(
+        getCindyGhostsMcpDeps(ctx, {
+          getLiveSessionGrantState: deps.getLiveSessionGrantState,
+        }),
+      ),
     }),
   });
 

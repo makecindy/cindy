@@ -9,7 +9,7 @@
  * session 身份(orca / 会话身份类工具能绑定当前 pi 会话):
  *  - bridge 是懒启动单例(所有 pi 会话共享 HTTP server + server 工厂)。
  *  - 带 sessionId 的会话:在 bridge 上 registerSessionCtx + 给该会话的 server URL
- *    打 `?session=<id>` 路由 —— 与远端 Claude Code 的身份通道同机制。工具 handler
+ *    打 `?session=<id>&instance=<opaque>` 路由 —— 与远端 Claude Code 的身份通道同机制。工具 handler
  *    经 getLiziMcpSessionContext() 拿到 {agentKind:'pi', sessionId, ...},
  *    start_team/create_worker 据此绑定 Lead(否则回落 LEAD_NOT_SUPPORTED)。
  *  - 匿名会话(无 sessionId):不注册、URL 不带 query,走无 ctx 兜底(行为同改动前)。
@@ -36,7 +36,11 @@ import { getLiziMcpSessionContext, type LiziMcpSessionContext } from '@cindy/mcp
 
 import type { Logger as MakerLogger } from '@cindy/maker-core';
 
-import { startCodexHttpBridge, type CodexHttpBridge } from './codexHttpBridge.js';
+import {
+  startCodexHttpBridge,
+  type CodexHttpBridge,
+  withMcpRouteIdentity,
+} from './codexHttpBridge.js';
 import { CODEX_DISABLED_BUILTIN_PLUGIN_IDS_KEY } from './codexBuiltinToolPolicy.js';
 import { pluginIdForKnownProviderName } from '../maker-host/plugins/builtin-plugins.js';
 // 直接取 plugins 模块的 registry 单例,不经 maker-host/index.ts —— 后者 import pi-host,
@@ -125,6 +129,9 @@ export async function getPiExtraSpawnConfig(
   const liziCtx: LiziMcpSessionContext = {
     agentKind: 'pi',
     sessionId,
+    ...(sessionCtx?.sessionInstanceId
+      ? { sessionInstanceId: sessionCtx.sessionInstanceId }
+      : {}),
     workingDir: sessionCtx?.workingDir ?? '',
     vendorOptions: {
       ...sessionCtx?.vendorOptions,
@@ -143,7 +150,10 @@ export async function getPiExtraSpawnConfig(
   try {
     const servers = serverNames.map((name) => ({
       name,
-      url: `${bridge.url(name)}?session=${encodeURIComponent(sessionId)}`,
+      url: withMcpRouteIdentity(bridge.url(name), {
+        sessionId,
+        sessionInstanceId: sessionCtx?.sessionInstanceId,
+      }),
     }));
     return {
       mcpBridge: { token: bridge.token, servers },
@@ -199,8 +209,7 @@ async function ensureBridge(providers: McpProvider[], logger: MakerLogger): Prom
   for (;;) {
     if (!startPromise) {
       const epoch = environmentEpoch;
-      let pending!: Promise<StartedPiBridge | null>;
-      pending = doStart(providers, logger.child('pi-environment'))
+      const pending = doStart(providers, logger.child('pi-environment'))
         .then((raw) => {
           if (!raw) return null;
           const started: StartedPiBridge = {
@@ -257,6 +266,9 @@ async function doStart(
         workingDir: active.workingDir,
         vendorOptions: active.vendorOptions,
         sessionId: active.sessionId,
+        ...(active.sessionInstanceId
+          ? { sessionInstanceId: active.sessionInstanceId }
+          : {}),
         getSessionContext: ctx.getSessionContext,
       };
     },

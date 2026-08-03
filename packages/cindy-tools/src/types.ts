@@ -212,22 +212,25 @@ export interface CindyGhostsMcpDeps {
     /**
      * 用户图片过户(可选):会话里用户图片的地址(xdt-image:// /
      * cindy-media://blobs/ / 本机绝对路径,主机归一化并验归属)。
-     * host 把每张图落媒体总仓、给目标意识记 ghost-grant 引用(显式引渡 =
-     * 授权,按张、永久),再以指纹数组注入 args.attachments 交给意识——
+     * host 把每张图落媒体总仓、给目标意识记可读引用(人工确认的引渡才形成
+     * 按张永久授权；工作目录/Full Access 等 Host 代办交接不冒充用户授权),
+     * 再以指纹数组注入 args.attachments 交给意识——
      * 意识拿到的仍只是字符串指纹,摸不到路径与字节。
      */
     attachments?: string[];
     /**
-     * 批量预授权(可选):true 时本次调用**只做 attachments 过户、不派发
+     * 批量交接(可选):true 时本次调用**只做 attachments 过户、不派发
      * 工具**(tool/args 被忽略)。用途:agent 计划连续多次调用同一意识、
-     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——用户只见一张
-     * 列出全部文件的确认卡,批一次;之后逐次调用命中授权记忆不再弹卡。
+     * 每次用一个 workdir 外文件时,先把整批文件一次性过户——非 Full Access
+     * 下用户只见一张列出全部文件的确认卡；Full Access 下自动交接、不弹卡，
+     * 且不会形成降档后仍生效的人工永久授权。
      * 普通调用 attachments 上限 4 张,grant_only 放宽(上限由 host 定)。
      */
     grantOnly?: boolean;
     /**
      * 目录过户(可选):要整体交给意识上传的本地目录**绝对路径**(部署
-     * 构建产物等场景)。host 验证(必须位于当前会话 workdir 内)、收集
+     * 构建产物等场景)。host 验证路径；workdir 内直接放行，workdir 外仅
+     * 本地 Full Access 自动过户，其它权限档及远程会话须用户确认。随后收集
      * 文件并预检限额、发一次性限时票据,以 args.dir_deposit =
      * { token, file_count, total_bytes, rel_paths } 注入交给意识——意识拿到
      * 的只有票据与相对路径清单,摸不到绝对路径与文件字节;上传时经
@@ -236,8 +239,9 @@ export interface CindyGhostsMcpDeps {
     dir?: string;
     /**
      * 下行落盘过户(可选):让意识把下载的文件存进的本地目录**绝对路径**
-     * (附件下载等场景)。host 验证(必须是当前会话 workdir 内的已存在
-     * 目录)、发限时票据,以 args.save_deposit = { token, dir_name } 注入
+     * (附件下载等场景)。host 验证为已存在目录；workdir 内直接放行，
+     * workdir 外仅本地 Full Access 自动过户，其它权限档及远程会话须用户
+     * 确认。随后发限时票据,以 args.save_deposit = { token, dir_name } 注入
      * 交给意识——意识经 fetch-request 的 as:'file' + saveTo 报 token,主机
      * 把响应字节直接写进该目录(文件名消毒去重,不覆盖);意识全程摸不到
      * 绝对路径与文件字节。

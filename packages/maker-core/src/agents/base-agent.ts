@@ -82,6 +82,8 @@ export interface AgentCapabilityAdditions {
 export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
+  /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
+  sessionInstanceId?: string;
   workingDir: string;
   /**
    * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
@@ -182,6 +184,8 @@ export interface PiNativeProvidersResult {
  */
 export interface PiExtraSpawnConfigContext {
   sessionId?: string;
+  /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
+  sessionInstanceId?: string;
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
 }
@@ -189,6 +193,13 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /**
+   * Build per-thread config overrides that bind host-owned HTTP MCP URLs to one
+   * in-memory Session instance. The app-server process is shared, so the spawn
+   * config only supplies the unbound base URL; thread/start|resume must add the
+   * opaque route identity for the concrete Session using this callback.
+   */
+  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
    * spawn args 中定义的「OpenAI 身份」provider id(name 逐字为 "OpenAI",
@@ -416,7 +427,10 @@ export interface AgentDeps {
    * behavior; implementations should be in-memory and best-effort.
    */
   registerCodexMcpThreadContext?: (args: CodexMcpThreadContextArgs) => void;
-  unregisterCodexMcpThreadContext?: (threadId: string) => void;
+  unregisterCodexMcpThreadContext?: (
+    threadId: string,
+    expectedSessionInstanceId?: string,
+  ) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -627,6 +641,8 @@ export interface AgentDeps {
   remoteCcQueryFactory?: (opts: {
     remoteHostId: string;
     sessionId: string;
+    /** 当前 Maker Session 实例代号；只在宿主 MCP 身份上下文中流转。 */
+    sessionInstanceId?: string;
     /**
      * 给 cc-mgr daemon 起 SDK Query 时用的全部 options
      * (cwd / model / env / mcpServers / systemPrompt / additionalDirectories /
@@ -791,6 +807,13 @@ export interface StartSessionOptions {
    * (如 LEAD_NOT_SUPPORTED) 让 LLM 知道当前调用无法绑定到具体 session。
    */
   sessionId?: string;
+  /**
+   * Maker 为本次内存 Session 实例铸造的唯一代号。业务 sessionId 可在重建后
+   * 复用；MCP 权限读取必须同时匹配本代号。Maker 会覆盖外部同名输入。宿主可
+   * 将它作为 opaque route identity 放进 harness 的本地 MCP URL，但不得把它
+   * 暴露成模型或插件可控的工具参数。
+   */
+  sessionInstanceId?: string;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an
