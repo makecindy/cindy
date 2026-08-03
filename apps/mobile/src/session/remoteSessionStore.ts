@@ -123,6 +123,18 @@ const messages = new Map<string, RemoteMessage[]>();
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
 /**
+ * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
+ *
+ * 空列表有两种来源,消费方光看 `getPendingInteractions()` 分辨不了:
+ * - 权威的空:被控端确认所有请求都已回答 / 撤销;
+ * - 非权威的空:`markDeviceOffline` / `removeDevice` 按设计清掉了这份投影(它依赖
+ *   实时连接),此刻我们其实不知道被控端还在等什么。
+ *
+ * 凡是「空快照才能做的清理」都必须先问这里,否则短暂离线会被误判成「都处理完了」。
+ * 不能退化成看全局 relay status:目标设备 offline 时 relay 仍可能 online(#1493 review)。
+ */
+const pendingInteractionsAuthoritative = new Set<string>();
+/**
  * 乐观 resolve 在途抑制集合:交互卡批准 / 拒绝已在本地乐观撤卡、被控端还没有
  * 确认的 requestId。这个窗口里权威流(全量快照 setPendingInteractions / push
  * 重放 applyInteractionRequest)可能把同一张卡重新灌回来造成「闪回」——凡在
@@ -1788,8 +1800,13 @@ export const remoteSessionStore = {
     const streamingChanged = options.finalizeStreaming === true && next.length > 0
       ? flushAndFinalizeRemoteStreamingMessages(sessionId)
       : false;
+    // 权威性先落:哪怕内容一字未变(典型是重连后的 [] → []),消费方也必须知道
+    // 「这份空列表已经被被控端确认过」——否则离线期收起态的清理永远等不到时机
+    // (#1493 review)。因此 authority 的翻转本身就是一次需要通知的变化。
+    const authorityChanged = !pendingInteractionsAuthoritative.has(sessionId);
+    pendingInteractionsAuthoritative.add(sessionId);
     if (deepValueEqual(pendingInteractions.get(sessionId) ?? emptyPendingInteractions, next)) {
-      if (streamingChanged) emit();
+      if (streamingChanged || authorityChanged) emit();
       return;
     }
     pendingInteractions.set(sessionId, next);
@@ -2489,6 +2506,8 @@ export const remoteSessionStore = {
       changed = livePlanSnapshots.delete(sessionId) || changed;
       changed = pendingRefreshSessions.delete(sessionId) || changed;
       changed = pendingInteractions.delete(sessionId) || changed;
+      // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
+      changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
       changed = inputProjections.delete(sessionId) || changed;
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
@@ -2516,6 +2535,7 @@ export const remoteSessionStore = {
         messages.delete(sessionId);
         livePlanSnapshots.delete(sessionId);
         pendingInteractions.delete(sessionId);
+        pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
@@ -2554,6 +2574,7 @@ export const remoteSessionStore = {
     messages.clear();
     livePlanSnapshots.clear();
     pendingInteractions.clear();
+    pendingInteractionsAuthoritative.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
     interactionRevisionFloors.clear();
@@ -2644,6 +2665,14 @@ export const remoteSessionStore = {
 
   getPendingInteractions(sessionId: string): PendingInteraction[] {
     return pendingInteractions.get(sessionId) ?? emptyPendingInteractions;
+  },
+
+  /**
+   * pending 列表当前是否权威(见 pendingInteractionsAuthoritative 的注释)。
+   * 空列表要用来做清理判断时必须先问这里。
+   */
+  hasAuthoritativePendingInteractions(sessionId: string): boolean {
+    return pendingInteractionsAuthoritative.has(sessionId);
   },
 
   getInputProjection(sessionId: string): InputProjection {
@@ -3055,6 +3084,13 @@ export function useSessionPendingInteractions(sessionId: string): PendingInterac
   return useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getPendingInteractions(sessionId),
+  );
+}
+
+export function useSessionPendingInteractionsAuthoritative(sessionId: string): boolean {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.hasAuthoritativePendingInteractions(sessionId),
   );
 }
 

@@ -69,6 +69,10 @@ import { isIpcErrorCode, type IpcErrorCode } from '../shared/ipc-errors';
 import type { VoiceInputSyncErrorResult } from '../shared/voiceInputData';
 import type { UtilityTextFailure } from '../shared/utilityTextResult';
 import type {
+  BrowserBackendHealth,
+  BrowserBackendRecoveryResult,
+} from '../shared/browserBackend';
+import type {
   ReviewBranchDiffData,
   ReviewCommitDiffData,
   ReviewCommitListData,
@@ -337,8 +341,9 @@ const fanOutCorruptionRestored = createIpcFanOut('local-db:corruption-restored')
 // #37: release 端检测到 schema drift 时一次性 toast 提示开发者切回 dev 自动修复
 const fanOutSchemaDriftWarning = createIpcFanOut('local-db:schema-drift-warning');
 const fanOutProjectAliasesChanged = createIpcFanOut('local-db:project-aliases:changed');
-const fanOutSidebarPinnedOrderChanged = createIpcFanOut(
-  'sidebar-settings:pinned-order-changed',
+const fanOutSidebarPinnedOrderChanged = createIpcFanOut('sidebar-settings:pinned-order-changed');
+const fanOutSidebarHiddenProjectKeysChanged = createIpcFanOut(
+  'sidebar-settings:hidden-project-keys-changed',
 );
 // Workdir File Browser — push events from chokidar (add/change/unlink/...)
 const fanOutFileBrowserEvent = createIpcFanOut('maker:file-browser:event');
@@ -3854,6 +3859,25 @@ contextBridge.exposeInMainWorld('electronAPI', {
         cb(payload);
       }
     }),
+  sidebarSettings: {
+    loadHiddenProjectKeys: (): string[] => {
+      const value = ipcRenderer.sendSync('sidebar-settings:load-hidden-project-keys-sync');
+      return Array.isArray(value) && value.every((entry) => typeof entry === 'string')
+        ? Array.from(value)
+        : [];
+    },
+    setProjectHidden: (projectKey: string, hidden: boolean): Promise<boolean> =>
+      ipcRenderer.invoke('sidebar-settings:set-project-hidden', projectKey, hidden),
+    onHiddenProjectKeysChanged: (cb: (projectKeys: string[]) => void): (() => void) =>
+      fanOutSidebarHiddenProjectKeysChanged((payload) => {
+        if (
+          Array.isArray(payload) &&
+          payload.every((entry): entry is string => typeof entry === 'string')
+        ) {
+          cb(Array.from(payload));
+        }
+      }),
+  },
 
   remotePrecreatedWorktreeLedger: {
     list: (): Promise<RemotePrecreatedWorktreeLedgerSnapshot> =>
@@ -4205,6 +4229,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
       ipcRenderer.invoke('browser-backend:set-kind', { kind }),
     /** Clear user override → follow current system default. */
     reset: (): Promise<unknown> => ipcRenderer.invoke('browser-backend:reset'),
+    /** Probe the active backend; main performs one automatic embedded recovery. */
+    getHealth: (): Promise<BrowserBackendHealth> =>
+      ipcRenderer.invoke('browser-backend:get-health'),
+    /** Force a fresh embedded backend instance and verify the new connection. */
+    recover: (): Promise<BrowserBackendRecoveryResult> =>
+      ipcRenderer.invoke('browser-backend:recover'),
   },
 
   // electronAPI.codex.* 已退役 —— auth / agent status / usage 全部走 electronAPI.maker.*(agentKind),

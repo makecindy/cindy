@@ -2373,6 +2373,22 @@
         "defaultTag": "デフォルト",
         "resetToDefault": "デフォルトに戻す",
         "toggleFailed": "ブラウザ対象の切り替えに失敗しました",
+        "health": {
+          "ready": "内蔵ブラウザの制御接続は正常です。",
+          "error": "内蔵ブラウザの接続に失敗しました：{{reason}}。「内蔵ブラウザを復旧」で制御接続を再構築してください。",
+          "reasons": {
+            "disposing": "前回の終了処理が完了していません",
+            "hostUnavailable": "内蔵ブラウザー画面の準備ができていないか、接続が切れています",
+            "startFailed": "新しい制御プロセスを起動できませんでした",
+            "statusFailed": "制御プロセスの状態確認に失敗しました",
+            "recoveryFailed": "制御接続を再構築できませんでした"
+          },
+          "reconnect": "内蔵ブラウザを再接続",
+          "recover": "内蔵ブラウザを復旧",
+          "recovering": "内蔵ブラウザを復旧中…",
+          "recovered": "内蔵ブラウザを再接続しました",
+          "recoverFailed": "内蔵ブラウザの復旧に失敗しました。理由を確認して再試行してください。"
+        },
         "rsbWebview": {
           "title": "サイドバー内蔵ブラウザ",
           "description": "エージェントは右サイドバーの webview タブ内で操作します。ポップアップなし、ログイン状態は独立保持。"
@@ -6527,6 +6543,11 @@
         "rename": "プロジェクト名を変更",
         "pin": "プロジェクトをピン留め",
         "unpin": "プロジェクトのピン留めを解除",
+        "removeFromSidebar": "サイドバーからプロジェクトを削除",
+        "removeFromSidebarConfirmTitle": "「{{name}}」を削除しますか？",
+        "removeFromSidebarConfirmDescription": "このプロジェクトをサイドバーから削除します。コンピューター上のファイルは削除されません。既存のセッションは「会話」セクションに移動し、引き続き利用できます。",
+        "removeFromSidebarConfirmAction": "プロジェクトを削除",
+        "removeFromSidebarFailed": "サイドバーからプロジェクトを削除できませんでした。もう一度お試しください。",
         "syncCodex": "このプロジェクトの Codex セッションを同期",
         "syncCodexDone": "Codex 同期完了:リンク {{inserted}} 件、更新 {{updated}} 件",
         "syncCodexAlreadyLinked": "このプロジェクトの Codex セッションはリンク済みです",
