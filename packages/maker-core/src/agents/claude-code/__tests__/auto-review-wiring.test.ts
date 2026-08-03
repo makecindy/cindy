@@ -495,6 +495,32 @@ describe('Auto-review wiring: reviewer outages surface once per session', () => 
     await handle.close();
   });
 
+  /**
+   * ErrorBanner 那份提示只活到下一条非 error 事件(renderer 的 handleStreamEvent 会清
+   * recoverableError),所以「整个会话只说一次」会让用户在后续轮次里完全看不到。每轮
+   * 至多一条:不刷屏,又保证每一轮遇到时都有机会看见。
+   */
+  it('re-arms the notice on each new user turn', async () => {
+    const { handle, canUseTool } = await startSession('auto', {
+      reviewer: async () => {
+        throw new Error('reviewer offline');
+      },
+      attachResolver: false,
+    });
+    const { notices } = startNoticeCollector(handle);
+
+    await canUseTool('Write', { file_path: '/tmp/t1.conf' }, { toolUseID: 'turn1-a' });
+    await canUseTool('Write', { file_path: '/tmp/t2.conf' }, { toolUseID: 'turn1-b' });
+    await settle();
+    expect(notices).toHaveLength(1); // 同一轮内两次被拒 → 仍只一条
+
+    await handle.send({ type: 'user', content: 'Try something else then.' });
+    await canUseTool('Write', { file_path: '/tmp/t3.conf' }, { toolUseID: 'turn2-a' });
+    await settle();
+    expect(notices).toHaveLength(2); // 新一轮 → 重新武装
+    await handle.close();
+  });
+
   it('re-arms the notice after the user changes the permission mode', async () => {
     const { handle, canUseTool } = await startSession('auto', {
       reviewer: async () => {

@@ -892,6 +892,11 @@ export class PiAgent extends BaseAgent {
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
       currentAutoReviewIntent = extractAutoReviewUserIntent(content);
       autoReviewDecisionCache.clear();
+    // 每条新用户消息 = 新一轮,提示重新武装。ErrorBanner 那份只活到下一条非 error 事件
+    // (renderer 的 handleStreamEvent 会清 recoverableError),所以「整个会话只说一次」
+    // 会让用户在后续轮次里完全看不到;改为每轮至多一条 —— 不刷屏,又保证每一轮遇到时
+    // 都有机会看见。持久呈现需要一条真正的会话级 notice 通道,见 issue 外推。
+      autoReviewUnavailableNotice.reset();
     };
     // 「自动审核不可用」的会话级一次性提示(issue #1574);与 Claude / Codex 同口径,走既有的
     // 非终止 error 事件 + `[CODE]` 约定,不新增事件类型。

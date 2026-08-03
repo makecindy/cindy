@@ -27,7 +27,6 @@ import type {
   SessionSendResult,
   UserMessage,
 } from '@cindy/maker-core';
-import { isAutoReviewUnavailableNotice } from '@cindy/maker-core';
 import { createId } from '@paralleldrive/cuid2';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
 import { permissionModeOrAsk } from '@cindy/maker-shared/permission-mode';
@@ -3534,23 +3533,6 @@ export function wireSessionToIpc(session: ReturnType<Maker['getSession']>): void
           });
         } catch { /* non-fatal */ }
       })();
-    }
-    // 「自动审批不可用」提示要留在时间线上。它是**非终止** error,因此不进上面那个
-    // done/terminal 持久化块 —— 而 renderer 的 handleStreamEvent 会在下一条非 error
-    // 事件(text / tool_result / status …)到达时清掉 recoverableError,harness 侧的
-    // 会话级一次性门又阻止它重现:两者叠加等于用户可能一眼都没看到就没了
-    // (codex P1 of #1574)。所以单独落一条持久 error 行,由消息流的 ErrorMessageCard
-    // 承载。判据走 maker-core 的单点函数,不在这里拼 `[CODE]` 前缀。
-    if (
-      event.type === 'error' &&
-      !isTerminalTurnErrorEvent(event) &&
-      isAutoReviewUnavailableNotice((attributedEvent.data as { message?: unknown } | null)?.message)
-    ) {
-      onTurnErrorEvent(
-        session.id,
-        attributedEvent.data as { message?: unknown; reason?: unknown; sdkError?: unknown } | null,
-        eventAgentMeta,
-      );
     }
     if (pendingContextSnapshot) {
       recordSessionContextSnapshot(
