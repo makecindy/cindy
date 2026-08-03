@@ -570,6 +570,9 @@ export class DeviceLinkClient {
 
   /** 任一端:解除控制链路(fire-and-forget) */
   closeLink(dst: string, reason: LinkCloseReason): void {
+    // 本地永久关闭必须同步撤销已排期的 transport-timeout 重试通知:否则迟到
+    // 的回调会在链路已关闭后补发瞬时重置帧,诱使对端重开用户已关掉的控制方向。
+    this.cancelTimeoutCloseNotify(dst);
     this.pendingInboundLinkOffers.delete(dst);
     this.rejectPendingLinkOpen(
       dst,
@@ -1420,6 +1423,9 @@ export class DeviceLinkClient {
           peer.linkReady = false;
           peer.explicitlyClosed = true;
           peer.unlinkedLegacyResponseIds.clear();
+          // 收到永久关闭同样撤销已排期的 transport-timeout 重试通知(与本地
+          // closeLink 对称):链路已死,迟到通知只会诱使对端重开已关闭的方向。
+          this.cancelTimeoutCloseNotify(env.src);
           // 永久关闭同时撤销「当前活动入站方向」标记:互控时入站方向被对方
           // 用户明确关闭后,后续出站方向的重试耗尽不得再误判为「仍有活动
           // 入站」而发 transport-timeout——那会让对端自动重开用户已关掉的控制
@@ -2352,9 +2358,20 @@ export class DeviceLinkClient {
     this.cancelTimeoutCloseNotify(dst);
     const timer = setTimeout(() => {
       this.timeoutCloseNotifyTimers.delete(dst);
+      // 发送前全量复验:排期到触发之间状态可能已变(永久关闭、对端重开、
+      // 能力失效、relay 断开、stop)——任一不满足即终止,不补发迟到的瞬时
+      // 重置帧(它会诱使对端 rehydrate/reopen 用户已关闭的控制方向)。
       if (this.stopped || this.status !== 'online') return;
       const peer = this.peerTransport.get(dst);
-      if (!peer || peer.linkReady) return;
+      if (
+        !peer
+        || peer.linkReady // 对端已重开,通知不再需要
+        || peer.explicitlyClosed // 已进入永久关闭态
+        || !peer.linkAcceptedInbound // 活动入站方向已被撤销
+        || !peer.supportsTransportTimeoutClose // 能力已失效(对端降级重声明)
+      ) {
+        return;
+      }
       this.notifyTransportTimeoutClose(dst, attempt);
     }, this.timing.transportRetryIntervalMs);
     this.timeoutCloseNotifyTimers.set(dst, timer);

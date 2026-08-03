@@ -867,6 +867,98 @@ describe('DeviceLinkClient', () => {
     h.client.stop();
   });
 
+  it('已排期的通知重试在本地永久 closeLink 后被撤销,不补发迟到的 transport-timeout', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 2,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'late-notify-local-close');
+
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'late-1', { ok: true, result: [] });
+
+    // 让 link-close 的首发持续失败 → 重试被排期
+    const originalSend = socket.send.bind(socket);
+    let blockedCloses = 0;
+    socket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close') {
+        blockedCloses += 1;
+        throw new Error('simulated backpressure');
+      }
+      originalSend(data);
+    };
+    await vi.waitFor(() => expect(blockedCloses).toBeGreaterThanOrEqual(1));
+
+    // 重试排期期间,本地永久关闭该链路(如用户断开/被控开关关闭)
+    socket.send = originalSend;
+    h.client.closeLink('dev-b', 'user');
+    const sentBefore = socket.sent.length;
+
+    // 超过数个重试周期:不得再补发任何 transport-timeout
+    await tick(100);
+    const lateTimeouts = socket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ));
+    expect(lateTimeouts).toHaveLength(0);
+    h.client.stop();
+  });
+
+  it('收到对端永久 link-close 后,迟到的通知重试回调复验状态后终止,不补发 transport-timeout', async () => {
+    const h = makeHarness({
+      timing: {
+        pingIntervalMs: 60_000,
+        transportRetryIntervalMs: 20,
+        transportMaxRetryAttempts: 3,
+      },
+    });
+    h.client.start();
+    await tick();
+    h.current().ack();
+    await establishInboundReliableLink(h, 'late-notify-peer-close');
+
+    const socket = h.current();
+    h.client.sendInvokeResult('dev-b', 'late-2', { ok: true, result: [] });
+
+    const originalSend = socket.send.bind(socket);
+    let blockedCloses = 0;
+    socket.send = (data: string) => {
+      const env = JSON.parse(data) as Envelope;
+      if (env.kind === 'link-close') {
+        blockedCloses += 1;
+        throw new Error('simulated backpressure');
+      }
+      originalSend(data);
+    };
+    await vi.waitFor(() => expect(blockedCloses).toBeGreaterThanOrEqual(1));
+
+    // 重试排期期间收到对端的永久关闭(对方用户关掉了它对本机的控制)
+    socket.send = originalSend;
+    socket.push({
+      v: PROTOCOL_VERSION,
+      kind: 'link-close',
+      src: 'dev-b',
+      payload: { reason: 'user' },
+    });
+    await tick();
+    const sentBefore = socket.sent.length;
+
+    await tick(150);
+    const lateTimeouts = socket.sent.slice(sentBefore).filter((env) => (
+      env.kind === 'link-close'
+      && (env.payload as { reason?: string } | undefined)?.reason === 'transport-timeout'
+    ));
+    expect(lateTimeouts).toHaveLength(0);
+    h.client.stop();
+  });
+
   it('入站方向被永久关闭后,出站重试耗尽不得再发 transport-timeout(不诱使对端重开用户已关闭的方向)', async () => {
     const h = makeHarness({
       timing: {
