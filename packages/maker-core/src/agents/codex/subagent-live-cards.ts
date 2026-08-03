@@ -10,7 +10,7 @@
  * 状态,由调用方按同一 `taskId` 发 `agent_task_update`。卡片本体与 Claude 子代理共用
  * `AgentTaskCard`,这里只负责补齐 Codex 侧此前缺失的数据源,不引入新的 UI 概念。
  *
- * 两条容易踩空的语义,单测各有覆盖:
+ * 四条容易踩空的语义,单测各有覆盖:
  *  - **一次 spawn 可能扇出多个子线程**(V1 `spawnAgent` 的 `receiverThreadIds`),但它们
  *    共用同一张卡。聚合状态必须挂在 taskId 上、按 thread 分量累计,否则各线程用自己的
  *    计数器发同一个 taskId,后到的快照会把先到的覆盖成更小的值(token/工具数回退),
@@ -18,6 +18,11 @@
  *  - **通知可能早于 spawn 登记到达**(子线程 `thread/started` 建立 lineage 后,父线程的
  *    spawn item 还没被处理)。这类通知先缓冲,登记后重放,否则首个工具调用、初始 token
  *    甚至终态会永久缺失。
+ *  - **血缘边本身也可能早于归属到达**:子线程尚未归属时它就派出了孙线程。那条「孙 → 子」
+ *    血缘是孙线程**唯一**的入卡途径(孙线程的 spawn item 只在子线程自己的事件流里,主线程
+ *    看不到),丢了不会有第二次机会 —— 必须缓冲,并在父线程归属时**递归**补绑整条链。
+ *  - **spawn 自身失败是终态**:派发失败后子线程迟到的 `turn/started` / `turn/completed`
+ *    不得把卡片翻回 running/completed。靠卡上的终态闩,不能只改当下已知线程的状态。
  *
  * 设计约束:
  * - **纯聚合、零 IO**:落在 translator/event-loop 热路径上,每条通知只做 Map 查 + 计数。
@@ -46,8 +51,11 @@ export interface SubagentLiveCardTracker {
    * 主线程 item 里认出 spawn → 登记「子线程 id → 子代理卡 taskId」。
    *
    * 返回聚合快照 = 调用方应在 translator 之后发一帧 `agent_task_update` 把真实状态重新
-   * 声明一次(两种情形:有早到通知被重放出状态;或该 spawn 已登记 —— 此时 translator 的
-   * 合成 `completed` 帧必须被真实聚合状态盖回去)。返回 null = 非 spawn item。
+   * 声明一次(两种情形:有早到通知/血缘被重放出状态;或该 taskId 已在跟踪 —— 此时
+   * translator 的合成 `completed` 帧必须被真实聚合状态盖回去)。
+   *
+   * 返回 null = 非 spawn item,或 **spawn 自身失败**(translator 已推过 failed 帧,再补一帧
+   * 只会把失败盖回运行中;此时卡片被上终态闩,后续子线程通知也翻不了案)。
    */
   noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null;
   /**
@@ -55,9 +63,13 @@ export interface SubagentLiveCardTracker {
    *
    * 嵌套子代理必须靠它:孙线程的 spawn item 出现在**子线程自己**的事件流里,主线程的
    * itemStarted 钩子永远看不到,所以 noteSpawnItem 不可能登记孙线程。父线程已归属某张卡时,
-   * 把子线程并入同一张卡并重放其早到缓冲;父线程与子代理无关时无副作用。
+   * 把子线程并入同一张卡并重放其早到缓冲。
    *
-   * 返回聚合快照 = 有早到通知被重放出状态,调用方应发一帧;否则 null。
+   * 父线程**尚未**归属时不能丢弃:那可能只是 spawn item 还没到(乱序),而这条边是孙线程唯一
+   * 的入卡途径 —— 先缓冲,父线程归属时递归补绑整条链。真正与子代理无关的血缘会自然淘汰。
+   *
+   * 返回聚合快照 = 有早到通知被重放出状态,**或**新线程并入改变了聚合状态(例如已显示完成的
+   * 卡因为孙线程仍在跑而必须回到 running);否则 null。
    */
   noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null;
   /**
@@ -100,6 +112,9 @@ const DEFAULT_MAX_TRACKED_CARDS = 64;
 /** 早到通知的缓冲上限(线程数 × 每线程条数),防永不登记的线程无界堆积。 */
 const MAX_PENDING_THREADS = 32;
 const MAX_PENDING_PER_THREAD = 64;
+/** 未归属血缘边的缓冲上限(父线程数 × 每父线程子线程数),同样防无界堆积。 */
+const MAX_PENDING_LINEAGE_PARENTS = 32;
+const MAX_PENDING_LINEAGE_CHILDREN = 32;
 
 interface ThreadState {
   status: SubagentLiveCardStatus;
@@ -116,6 +131,11 @@ interface TrackedCard {
   countedItemIds: Set<string>;
   /** 同一次 spawn 的全部子线程(V1 可能多 receiver);状态与 token 分量按线程存。 */
   threads: Map<string, ThreadState>;
+  /**
+   * spawn 工具调用**自身**失败 → 卡片终态闩。一旦置位,任何子线程生命周期通知都不得再把
+   * 状态翻回 running/completed:派发失败就是失败,子线程后续说什么都不改变这个结论(review)。
+   */
+  spawnFailed: boolean;
 }
 
 interface PendingNotification {
@@ -132,10 +152,21 @@ export function createSubagentLiveCardTracker(opts: {
   const cards = new Map<string, TrackedCard>();
   const taskIdByThread = new Map<string, string>();
   const pending = new Map<string, PendingNotification[]>();
+  /**
+   * 尚未归属任何卡的血缘边:`父线程 id → 子线程 id 集合`。
+   *
+   * 子线程的 `thread/started` 可能早于根线程的 spawn item 到达,而它在归属前就可能已经派出
+   * 孙线程 —— 那条「孙 → 子」血缘此刻无从判断归属。以前直接丢弃,后果是父线程登记时只绑直接
+   * 子线程,孙线程已缓冲的工具/token/终态永远不会重放:卡片漏计,还可能在孙线程仍在跑时提前
+   * 显示完成(review)。这里先记下,父线程一归属就**递归**补绑整条血缘链。
+   */
+  const pendingLineage = new Map<string, Set<string>>();
 
   const isTerminal = (status: SubagentLiveCardStatus): boolean => status !== 'running';
 
   const aggregateStatus = (card: TrackedCard): SubagentLiveCardStatus => {
+    // 终态闩优先于一切子线程状态:spawn 自身失败就是失败。
+    if (card.spawnFailed) return 'failed';
     let sawFailed = false;
     let sawStopped = false;
     for (const thread of card.threads.values()) {
@@ -216,6 +247,22 @@ export function createSubagentLiveCardTracker(opts: {
     queue.push({ method, params });
   };
 
+  /** 记下一条尚未能判断归属的血缘边,等父线程归属后补绑。 */
+  const bufferLineage = (childThreadId: string, parentThreadId: string): void => {
+    let children = pendingLineage.get(parentThreadId);
+    if (!children) {
+      if (pendingLineage.size >= MAX_PENDING_LINEAGE_PARENTS) {
+        // 淘汰最早缓冲的父线程 —— 绝大多数是主线程自己的后代,永远不会归属任何子代理卡。
+        const oldest = pendingLineage.keys().next();
+        if (!oldest.done) pendingLineage.delete(oldest.value);
+      }
+      children = new Set<string>();
+      pendingLineage.set(parentThreadId, children);
+    }
+    if (children.size >= MAX_PENDING_LINEAGE_CHILDREN && !children.has(childThreadId)) return;
+    children.add(childThreadId);
+  };
+
   /** 应用一条通知到卡上;返回是否产生了变化(无变化不必发帧)。 */
   const applyNotification = (
     card: TrackedCard,
@@ -262,39 +309,55 @@ export function createSubagentLiveCardTracker(opts: {
     }
   };
 
+  /**
+   * 把一个子线程并入卡:绑定 → 重放它的早到通知 → **递归**补绑它在归属前自己派出的后代。
+   *
+   * 递归是必需的,不是保险:孙线程的 spawn item 只出现在子线程自己的事件流里,主线程的
+   * itemStarted 钩子永远看不到,所以除了这条路径没有别的机会把孙线程并进卡。
+   *
+   * `visited` 防环:血缘理论上是树,但通知来自外部进程,不能假定它一定是树。
+   * 返回是否有内容被重放(调用方据此判断要不要发帧)。
+   */
+  const attachThread = (card: TrackedCard, childThreadId: string, visited: Set<string>): boolean => {
+    if (visited.has(childThreadId)) return false;
+    visited.add(childThreadId);
+
+    if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
+    if (!card.threads.has(childThreadId)) {
+      // 已上终态闩的卡,新并入的线程直接算失败,别让它把卡拉回 running。
+      card.threads.set(childThreadId, {
+        status: card.spawnFailed ? 'failed' : 'running',
+        totalTokens: 0,
+      });
+    }
+    taskIdByThread.set(childThreadId, card.taskId);
+    const thread = card.threads.get(childThreadId)!;
+
+    let replayed = false;
+    const queued = pending.get(childThreadId);
+    if (queued) {
+      pending.delete(childThreadId);
+      for (const entry of queued) {
+        if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
+      }
+    }
+
+    const descendants = pendingLineage.get(childThreadId);
+    if (descendants) {
+      pendingLineage.delete(childThreadId);
+      for (const grandChildId of descendants) {
+        if (attachThread(card, grandChildId, visited)) replayed = true;
+      }
+    }
+    return replayed;
+  };
+
   return {
     noteSpawnItem(item: unknown): SubagentLiveCardUpdate | null {
       const registration = readCodexSubagentSpawnRegistration(item);
       if (!registration) return null;
 
       const existing = cards.get(registration.taskId);
-
-      // spawn **本身**收口为失败:translator 已推过 failed 帧,这里绝不能再补一帧聚合快照
-      // —— 那时子线程还标着 running,会把真实的失败终态盖回成运行中(review)。同时把这批
-      // 线程直接标成 failed,后续迟到的子线程通知也不会把卡片翻回 running。
-      if (registration.failed) {
-        if (existing) {
-          for (const childThreadId of registration.childThreadIds) {
-            const thread = existing.threads.get(childThreadId);
-            if (thread) thread.status = 'failed';
-          }
-        }
-        return null;
-      }
-
-      // 同一 spawn 的 started/completed 两个 phase 都会走到这里:已登记且线程集合一致
-      // 就不重置计数(否则第二个 phase 会把已聚合的用量清零)。但**必须回传当前快照** ——
-      // V1 的 spawn 是 collabAgentToolCall,translator 在 completed phase 会无条件推一帧
-      // status=completed(那是 spawn 工具调用自己收口,不代表子代理跑完)。调用方在
-      // translator 之后重发本快照,真实聚合状态才不会被那帧合成的 completed 覆盖 ——
-      // 否则仍在跑的子线程会被提前标成完成,先到的 failed/stopped 也会被抹掉。
-      if (
-        existing
-        && registration.childThreadIds.every((childThreadId) => existing.threads.has(childThreadId))
-      ) {
-        return snapshot(existing);
-      }
-
       const card: TrackedCard = existing ?? {
         taskId: registration.taskId,
         ...(registration.agentPath ? { agentPath: registration.agentPath } : {}),
@@ -302,59 +365,64 @@ export function createSubagentLiveCardTracker(opts: {
         toolUses: 0,
         countedItemIds: new Set<string>(),
         threads: new Map<string, ThreadState>(),
+        spawnFailed: false,
       };
       if (!existing) {
         pruneCards();
         cards.set(card.taskId, card);
       }
 
-      let replayed = false;
-      for (const childThreadId of registration.childThreadIds) {
-        if (taskIdByThread.get(childThreadId) !== card.taskId) unbindThread(childThreadId);
-        if (!card.threads.has(childThreadId)) {
-          card.threads.set(childThreadId, { status: 'running', totalTokens: 0 });
+      // spawn **本身**收口为失败:translator 已推过 failed 帧,这里绝不能再补一帧聚合快照
+      // —— 那时子线程还标着 running,会把真实的失败终态盖回成运行中。上终态闩(而不是只把
+      // 当下已知的线程标 failed):迟到的 turn/started / turn/completed 会把线程状态改回
+      // running/completed,只标线程状态挡不住(review)。闩上之后仍继续吸收 token / 工具计数
+      // —— 派发失败但子线程已经烧掉的量该算进去,只是状态恒为 failed。
+      if (registration.failed) {
+        card.spawnFailed = true;
+        const visited = new Set<string>();
+        for (const childThreadId of registration.childThreadIds) {
+          attachThread(card, childThreadId, visited);
+          const thread = card.threads.get(childThreadId);
+          if (thread) thread.status = 'failed';
         }
-        taskIdByThread.set(childThreadId, card.taskId);
-
-        // 早到通知重放:登记前到达的 item / tokenUsage / turn 事件在此补进聚合。
-        const queued = pending.get(childThreadId);
-        if (!queued) continue;
-        pending.delete(childThreadId);
-        const thread = card.threads.get(childThreadId)!;
-        for (const entry of queued) {
-          if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
-        }
+        return null;
       }
 
+      const visited = new Set<string>();
+      let replayed = false;
+      for (const childThreadId of registration.childThreadIds) {
+        if (attachThread(card, childThreadId, visited)) replayed = true;
+      }
+
+      // 已登记过的 spawn(同一 collabAgentToolCall 的 started/completed 两个 phase 都会到
+      // 这里)**必须无条件回传快照**:translator 在 completed phase 会无条件推一帧
+      // status=completed —— 那是 spawn 工具调用自己收口,不代表子代理跑完。调用方在
+      // translator 之后重发本快照,真实聚合状态才不会被那帧合成的 completed 覆盖,否则仍在
+      // 跑的子线程会被提前标成完成,先到的 failed/stopped 也会被抹掉。
+      // (attachThread 幂等:已在卡上的线程不会被重置计数。)
+      if (existing) return snapshot(card);
       return replayed ? snapshot(card) : null;
     },
 
     noteDescendantThread(childThreadId: string, parentThreadId: string): SubagentLiveCardUpdate | null {
       if (!childThreadId || !parentThreadId || childThreadId === parentThreadId) return null;
-      // 父线程不属于任何子代理卡 → 与子代理无关(例如主线程自己的后代未经 spawn 登记)。
       const taskId = taskIdByThread.get(parentThreadId);
-      if (taskId === undefined) return null;
+      if (taskId === undefined) {
+        // 父线程还没归属:**不能丢**。它可能只是 spawn item 尚未到达(乱序),而本次血缘正是
+        // 孙线程唯一的入卡途径 —— 丢了就再没有第二次机会。先缓冲,父线程归属时递归补绑。
+        bufferLineage(childThreadId, parentThreadId);
+        return null;
+      }
       const card = cards.get(taskId);
       if (!card) return null;
       // 已并入同一张卡:幂等,不重置计数。
       if (taskIdByThread.get(childThreadId) === taskId && card.threads.has(childThreadId)) return null;
 
-      if (taskIdByThread.get(childThreadId) !== taskId) unbindThread(childThreadId);
-      if (!card.threads.has(childThreadId)) {
-        card.threads.set(childThreadId, { status: 'running', totalTokens: 0 });
-      }
-      taskIdByThread.set(childThreadId, taskId);
-
-      // 孙线程的通知可能早于本次血缘登记到达(已缓冲),在此补进聚合。
-      const queued = pending.get(childThreadId);
-      if (!queued) return null;
-      pending.delete(childThreadId);
-      const thread = card.threads.get(childThreadId)!;
-      let replayed = false;
-      for (const entry of queued) {
-        if (applyNotification(card, thread, entry.method, entry.params)) replayed = true;
-      }
-      return replayed ? snapshot(card) : null;
+      // 新线程并入会改变聚合状态(比如把已显示完成的卡拉回 running —— 孙线程还在跑,卡片就
+      // 不该说完成),所以发帧条件不只看有没有重放内容,还看聚合状态是否因此改变。
+      const before = aggregateStatus(card);
+      const replayed = attachThread(card, childThreadId, new Set<string>());
+      return replayed || aggregateStatus(card) !== before ? snapshot(card) : null;
     },
 
     handleDescendantNotification(
@@ -379,6 +447,7 @@ export function createSubagentLiveCardTracker(opts: {
       cards.clear();
       taskIdByThread.clear();
       pending.clear();
+      pendingLineage.clear();
     },
 
     get size(): number {

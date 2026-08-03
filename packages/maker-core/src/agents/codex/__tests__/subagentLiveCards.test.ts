@@ -397,6 +397,131 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.size).toBe(0);
   });
 
+  it('locks the failed spawn terminal state against late turn lifecycle notifications', () => {
+    // 上一轮只把「当下已知的线程」标成 failed,而 applyNotification 的 turn/started 会无条件
+    // 写回 running、turn/completed 会写 completed —— 迟到的 turn 生命周期通知照样能把卡片
+    // 从失败翻回运行中/已完成,覆盖 translator 的失败帧(review)。这里守终态闩。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a']));
+    expect(tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a']), status: 'failed' })).toBeNull();
+
+    // 迟到的 turn/started:线程状态被改回 running,但卡片状态由闩锁定。
+    expect(tracker.handleDescendantNotification('t-a', 'turn/started', {})?.status).toBe('failed');
+    // 迟到的 turn/completed(成功收口)同样不得翻案。
+    expect(
+      tracker.handleDescendantNotification('t-a', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('failed');
+    // 闩上之后仍继续吸收用量:派发失败但子线程已经烧掉的 token 该算进去。
+    expect(
+      tracker.handleDescendantNotification('t-a', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 512 } },
+      }),
+    ).toMatchObject({ status: 'failed', totalTokens: 512 });
+  });
+
+  it('keeps the failed latch for threads that only register after the failure', () => {
+    // 失败先到、子线程后到(乱序):新并入的线程不能把卡片拉回 running。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a', 't-b']), status: 'failed' })).toBeNull();
+    expect(tracker.handleDescendantNotification('t-b', 'turn/started', {})?.status).toBe('failed');
+    // 后代线程经血缘并入,同样是 failed。
+    expect(tracker.noteDescendantThread('t-grand', 't-a')?.status ?? 'failed').toBe('failed');
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('failed');
+  });
+
+  it('buffers lineage whose parent is not attributed yet, then recursively attaches it', () => {
+    // 乱序最狠的一种:子线程 thread/started 早于根线程的 spawn item,而它在归属前就派了孙线程。
+    // 那条「孙 → 子」血缘此刻无从判断归属,以前直接丢弃 —— 之后 noteSpawnItem 只绑直接子线程,
+    // 孙线程已缓冲的工具/token/终态再也没机会重放(卡片漏计,还可能提前显示完成)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+
+    // 1) 血缘先到,父线程 t-child 尚未归属任何卡 → 必须缓冲而不是丢弃。
+    expect(tracker.noteDescendantThread('t-grand', 't-child')).toBeNull();
+    // 2) 孙线程的事件也先到 → 进通知缓冲。
+    expect(tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-1'))).toBeNull();
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'thread/tokenUsage/updated', {
+        tokenUsage: { total: { totalTokens: 300 } },
+      }),
+    ).toBeNull();
+
+    // 3) spawn item 终于到达:直接子线程 + 缓冲的孙线程一起入卡,孙的用量被重放回来。
+    const registered = tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    expect(registered).toMatchObject({ taskId: 'card-1', toolUses: 1, totalTokens: 300 });
+
+    // 4) 孙线程确已在卡上:它的后续通知直接命中(不再进缓冲),且子线程收口时孙线程仍在跑
+    //    → 整卡不得提前完成。
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'item/started', toolItem('g-2')),
+    ).toMatchObject({ toolUses: 2 });
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('running');
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('completed');
+  });
+
+  it('recursively attaches a multi-generation lineage chain buffered before registration', () => {
+    // 曾孙:t-great → t-grand → t-child → (spawn) card-1,三条血缘全在归属前到达。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    expect(tracker.noteDescendantThread('t-great', 't-grand')).toBeNull();
+    expect(tracker.noteDescendantThread('t-grand', 't-child')).toBeNull();
+    tracker.handleDescendantNotification('t-great', 'item/started', toolItem('gg-1'));
+
+    // 一次 spawn 登记应沿链递归补绑到曾孙,并重放它的工具计数。
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'))).toMatchObject({
+      taskId: 'card-1',
+      toolUses: 1,
+    });
+    // 曾孙已在卡上:后续通知直接命中,且它没收口前整卡不算完成。
+    expect(
+      tracker.handleDescendantNotification('t-great', 'item/started', toolItem('gg-2')),
+    ).toMatchObject({ toolUses: 2 });
+    tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } });
+    expect(
+      tracker.handleDescendantNotification('t-grand', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('running');
+    expect(
+      tracker.handleDescendantNotification('t-great', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('completed');
+  });
+
+  it('survives a cyclic lineage claim without recursing forever', () => {
+    // 血缘理论上是树,但通知来自外部进程,不能假定。环不得让补绑无限递归。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteDescendantThread('t-b', 't-a');
+    tracker.noteDescendantThread('t-a', 't-b');
+    expect(tracker.noteSpawnItem(v2SpawnItem('card-1', 't-a'))).toBeNull();
+    // 两条线程都已入卡,状态可正常推进。
+    expect(tracker.handleDescendantNotification('t-b', 'item/started', toolItem('c-1'))).toMatchObject({
+      taskId: 'card-1',
+      toolUses: 1,
+    });
+  });
+
+  it('re-opens a card that already looked completed when a late descendant joins', () => {
+    // 孙线程在子线程收口之后才并入:卡片已显示 completed,但孙还在跑 —— 必须发帧改回 running,
+    // 否则用户看到的是"完成"而子代理其实还在烧 token。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
+    expect(
+      tracker.handleDescendantNotification('t-child', 'turn/completed', { turn: { status: 'completed' } })?.status,
+    ).toBe('completed');
+    expect(tracker.noteDescendantThread('t-grand', 't-child')?.status).toBe('running');
+  });
+
+  it('bounds the unattributed lineage buffer', () => {
+    // 绝大多数 descendantThreadStarted 的父线程与子代理无关(主线程自己的后代),缓冲必须有界。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    for (let i = 0; i < 200; i += 1) tracker.noteDescendantThread(`c-${i}`, `p-${i}`);
+    for (let i = 0; i < 200; i += 1) tracker.noteDescendantThread(`x-${i}`, 'p-shared');
+    // 无卡产生,且不抛错;有界性由内部常量保证(此处守的是"不崩、不建卡")。
+    expect(tracker.size).toBe(0);
+  });
+
   it('clear() drops all tracking (session close)', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     tracker.noteSpawnItem(v2SpawnItem('card-1', 't-child'));
