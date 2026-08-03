@@ -259,6 +259,54 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('keeps the tentative flag when a turn cannot probe, and probes on the next eligible turn', async () => {
+    // 回探的不变量:标记与 SDK 档位必须一致。推不了档的 turn(底层档已不是 auto、plan 档、
+    // rewind/bridge 重建窗口)必须**保留**标记 —— 提前清掉会让判据说"该用原生"而 SDK 停在
+    // default,后续 send 再也进不来回探逻辑,健康的原生分类器就永久回不来了(greptile P1)。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+
+    // 底层档已切离 auto:这个 turn 回探必须让位,且不得清标记。
+    await handle.setPermissionMode?.('ask');
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'ask-mode turn' });
+    expect(fakeQuery.setPermissionMode).not.toHaveBeenCalled();
+
+    // 切回 Auto:标记仍在 → SDK 落回 default,而不是 auto(标记没被提前清掉的直接证据)。
+    await handle.setPermissionMode?.('auto');
+    expect(fakeQuery.setPermissionMode).toHaveBeenLastCalledWith('default');
+
+    // 下一个条件重新满足的 turn:回探正常发生。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'eligible turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
+  it('restores the tentative flag when the probe control request fails', async () => {
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    await handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    // 回探是 fire-and-forget(不许阻塞 send 入口),失败只能异步观测。
+    fakeQuery.setPermissionMode.mockRejectedValueOnce(new Error('transport not ready'));
+    await handle.send({ type: 'user', content: 'probe fails here' });
+    await new Promise((resolve) => setImmediate(resolve));
+
+    // 失败 → 标记恢复 → 下一 turn 再试(期间继续由 Cindy 兜住,不影响正确性)。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'retry probe' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
   it('never probes back after a session-scoped fallback (#758 self-rescue stays sticky)', async () => {
     const { handle, fakeQuery } = await startSession('auto', {
       providerId: 'anthropic',
