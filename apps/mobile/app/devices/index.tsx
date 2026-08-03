@@ -97,6 +97,7 @@ import {
   getCachedHomeListSnapshot,
   scheduleHomeListSnapshotPersist,
 } from '@/session/mobileHomeListCache';
+import { startBoundedStartupRead } from '@/session/mobileHomeStartup';
 import { serializeNewSessionDeviceOptions } from '@/session/newSession';
 import {
   buildRemoteSessionCardPreview,
@@ -195,6 +196,9 @@ export default function HomeScreen() {
   const scheduleIndexDeferRegistryRef = useRef(createScheduleIndexDeferRegistry());
   const scheduleEventVersionsRef = useRef(new Map<string, number>());
   const deviceIdentityCacheRef = useRef(createEmptyDeviceIdentityCache());
+  // A timed-out SecureStore read may still complete. Do not persist an empty/rebuilt
+  // cache until that read settles and its stored identities have been reapplied.
+  const deviceIdentityCachePersistReadyRef = useRef(false);
   // presence 补丁新鲜度:loadHome 用它判断哪些设备在 REST 快照发起后又收到过 presence-changed,
   // 避免用过期快照把它们改回离线(否则出现「会话都同步出来了、新建对话按钮却灰着」的卡死态)。
   const presenceFreshnessRef = useRef(createPresenceFreshnessTracker());
@@ -267,7 +271,9 @@ export default function HomeScreen() {
   const reconcileDeviceViews = useCallback((nextRawDevices: readonly DeviceView[]) => {
     const result = reconcileDeviceIdentities(nextRawDevices, deviceIdentityCacheRef.current);
     deviceIdentityCacheRef.current = result.cache;
-    if (result.cacheChanged) void saveDeviceIdentityCache(result.cache);
+    if (result.cacheChanged && deviceIdentityCachePersistReadyRef.current) {
+      void saveDeviceIdentityCache(result.cache);
+    }
     return result;
   }, []);
 
@@ -506,8 +512,12 @@ export default function HomeScreen() {
       return;
     }
     let cancelled = false;
-    void getCachedHomeListSnapshot(homeCacheUserId)
-      .then((snapshot) => {
+    const read = startBoundedStartupRead(
+      getCachedHomeListSnapshot(homeCacheUserId),
+      [],
+    );
+    void read.initial
+      .then(({ value: snapshot }) => {
         if (cancelled || lastSyncedAtRef.current !== null) return;
         for (const device of snapshot) {
           remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
@@ -525,18 +535,37 @@ export default function HomeScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    void loadDeviceIdentityCache()
-      .then((cache) => {
+    const read = startBoundedStartupRead(
+      loadDeviceIdentityCache(),
+      createEmptyDeviceIdentityCache(),
+    );
+    void read.initial
+      .then(async (initial) => {
         if (cancelled) return;
-        deviceIdentityCacheRef.current = cache;
-      })
-      .finally(() => {
-        if (!cancelled) setDeviceIdentityCacheReady(true);
+        deviceIdentityCacheRef.current = initial.value;
+        deviceIdentityCachePersistReadyRef.current = !initial.timedOut;
+        setDeviceIdentityCacheReady(true);
+        if (!initial.timedOut) return;
+
+        const late = await read.completion;
+        if (cancelled) return;
+        if (late.ok) {
+          deviceIdentityCacheRef.current = late.value;
+          const reconciled = reconcileDeviceViews(devicesRef.current);
+          devicesRef.current = reconciled.devices;
+          if (reconciled.viewsChanged) setDevices(reconciled.devices);
+          deviceIdentityCachePersistReadyRef.current = true;
+          if (reconciled.cacheChanged) void saveDeviceIdentityCache(reconciled.cache);
+          return;
+        }
+
+        deviceIdentityCachePersistReadyRef.current = true;
+        void saveDeviceIdentityCache(deviceIdentityCacheRef.current);
       });
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [reconcileDeviceViews]);
 
   // 冷启动恢复上次的首页视图偏好(设备筛选 + 按项目分组);用户已手动操作过则不覆盖。
   useEffect(() => {
