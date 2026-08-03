@@ -94,11 +94,20 @@ export function createPeerLinkReopenQueue(
 
   const pending = new Set<string>();
   /**
-   * 已发出但未落定的重开。flush 会遍历整个 pending 集合(任一 peer 的新触发都会
-   * 带动一轮),没有这层去重时,邻居的触发会给在途 peer 再发一次重开 —— 虽然
-   * reopen(openRemoteLink)自己也去重,但让隔离性在本层就成立,重排也不会叠加。
+   * 已发出但未落定的重开:deviceId → 本轮 attempt 序号。
+   *
+   * 两个作用:
+   * 1. 去重 —— flush 会遍历整个 pending 集合(任一 peer 的新触发都会带动一轮),
+   *    没有它时邻居的触发会给在途 peer 再发一次重开。虽然 reopen(openRemoteLink)
+   *    自己也去重,但让隔离性在本层就成立,重排也不会叠加。
+   * 2. 世代守卫 —— 记序号而非仅记 deviceId:cancel(如非 transport-timeout 的
+   *    link-close)之后同一设备可能因新的 before-link 帧重新入队并发起**新一轮**,
+   *    此时旧一轮的 promise 才落定。若旧回调按 deviceId 无条件删 pending/inFlight,
+   *    就会把新一轮的排队状态抹掉 —— 新一轮失败时 pending 已空,scheduleRetry 不
+   *    再排下一轮,链路持续未就绪直到下次偶然又收到可靠帧(review P1)。
    */
-  const inFlight = new Set<string>();
+  const inFlight = new Map<string, number>();
+  let nextAttemptId = 1;
   let retryTimer: Timer | null = null;
 
   const clearRetryTimer = (): void => {
@@ -139,14 +148,19 @@ export function createPeerLinkReopenQueue(
       } catch (err) {
         attempt = Promise.reject(err);
       }
-      inFlight.add(deviceId);
+      const attemptId = nextAttemptId++;
+      inFlight.set(deviceId, attemptId);
+      /** 本轮是否仍是该设备的当前轮(cancel 或更新的一轮都会让它作废)。 */
+      const isCurrentAttempt = (): boolean => inFlight.get(deviceId) === attemptId;
       void attempt.then(
         () => {
+          if (!isCurrentAttempt()) return;
           inFlight.delete(deviceId);
           pending.delete(deviceId);
           if (pending.size === 0) clearRetryTimer();
         },
         (err) => {
+          if (!isCurrentAttempt()) return;
           inFlight.delete(deviceId);
           log.debug(`peer link stale-frame recovery failed for ${deviceId.slice(0, 8)}`, err);
           scheduleRetry();

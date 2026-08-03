@@ -3636,6 +3636,82 @@ describe('DeviceLinkClient', () => {
       }
     });
 
+    it('C3:恢复动作(openLink)按 peer 隔离 —— 邻居的真实在途可靠请求照常完成、link 不被复位', async () => {
+      const h = makeHarness();
+      h.client.start();
+      await tick();
+      h.current().ack();
+      await tick();
+      // 共享同一条 relay 的两个 peer:都完成可靠能力协商
+      await establishInboundReliableLink(h, 'stream-neighbor', 1, 'peer-neighbor');
+      await establishInboundReliableLink(h, 'stream-broken', 1, 'peer-broken');
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+      expect(h.client.isLinkReady('peer-broken')).toBe(true);
+
+      // 邻居上挂一个**真实**在途可靠 invoke(回包未到)
+      const neighborPending = h.client.invoke('peer-neighbor', {
+        channel: 'local-db:sessions:list',
+        args: [10],
+      });
+      const neighborInvoke = h.current().sent
+        .filter((env) => env.kind === 'invoke' && env.dst === 'peer-neighbor')
+        .at(-1)!;
+      expect(neighborInvoke).toBeDefined();
+
+      // peer-broken 的 link 瞬时重置(transport-timeout 保留可靠层,是 before-link 现场)
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-close',
+        src: 'peer-broken',
+        payload: { reason: 'transport-timeout' },
+      });
+      await tick();
+      expect(h.client.isLinkReady('peer-broken')).toBe(false);
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+
+      // 执行 host 恢复队列真正会做的动作:对 peer-broken 发起 openLink
+      const socketsBefore = h.sockets.length;
+      const reopened = h.client.openLink('peer-broken', {
+        controllerName: 'Test Mac',
+        protocolVersion: 1,
+        appVersion: '1.0.0',
+      });
+      const openFrame = h.current().sent
+        .filter((env) => env.kind === 'link-open' && env.dst === 'peer-broken')
+        .at(-1)!;
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'link-accept',
+        id: openFrame.id,
+        src: 'peer-broken',
+        payload: {
+          appVersion: '1.0.0',
+          allowlistHash: 'hash',
+          capabilities: [DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT],
+          transportStreamId: 'stream-broken-2',
+          transportBaseSeq: 1,
+        },
+      });
+      await expect(reopened).resolves.toMatchObject({ allowlistHash: 'hash' });
+      expect(h.client.isLinkReady('peer-broken')).toBe(true);
+
+      // 邻居零感知:link 未被复位、共享 relay 未重建、在途请求既未被拒也未丢
+      expect(h.client.isLinkReady('peer-neighbor')).toBe(true);
+      expect(h.sockets.length).toBe(socketsBefore);
+      h.current().push({
+        v: PROTOCOL_VERSION,
+        kind: 'invoke-result',
+        id: neighborInvoke.id,
+        src: 'peer-neighbor',
+        payload: { ok: true, result: ['neighbor-ok'] },
+      });
+      await expect(neighborPending).resolves.toMatchObject({
+        ok: true,
+        result: ['neighbor-ok'],
+      });
+      h.client.stop();
+    });
+
     it('C2:link 恢复即清节流 —— 恢复后 30s 内再次丢 link 时新帧立刻再通知一次', async () => {
       const proto = DeviceLinkClient.prototype as unknown as { monotonicNow(): number };
       let nowMs = 4_000_000;

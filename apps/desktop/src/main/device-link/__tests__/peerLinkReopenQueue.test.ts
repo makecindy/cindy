@@ -227,6 +227,39 @@ describe('createPeerLinkReopenQueue', () => {
     h.queue.dispose();
   });
 
+  it('cancel 后同设备重新入队:旧一轮落定不得抹掉新一轮的排队状态(世代守卫)', async () => {
+    const settlers: Array<{ resolve: () => void; reject: (err: Error) => void }> = [];
+    const h = harness({
+      reopen: () => new Promise<void>((resolve, reject) => {
+        settlers.push({ resolve, reject: (err) => reject(err) });
+      }),
+    });
+
+    // 第一轮在途
+    h.queue.trigger('dev-a');
+    expect(settlers).toHaveLength(1);
+    // 非 transport-timeout 的 link-close → cancel(出队并作废在途轮)
+    h.queue.cancel('dev-a');
+    expect(h.queue.isPending('dev-a')).toBe(false);
+
+    // 新的 before-link 帧 → 重新入队并发起第二轮
+    h.queue.trigger('dev-a');
+    expect(settlers).toHaveLength(2);
+    expect(h.queue.isPending('dev-a')).toBe(true);
+
+    // 旧一轮此刻才落定:不得动新一轮的状态
+    settlers[0]!.resolve();
+    await settle();
+    expect(h.queue.isPending('dev-a')).toBe(true);
+
+    // 新一轮失败仍能正常重排(旧回调若抹掉 pending,这里就再也不会重试)
+    settlers[1]!.reject(new Error('second attempt fails'));
+    await settle();
+    expect(h.queue.isPending('dev-a')).toBe(true);
+    expect(h.timers.scheduled).toHaveLength(1);
+    h.queue.dispose();
+  });
+
   it('cancel / dispose 立即出队并清掉重排', async () => {
     const h = harness({ reopen: async () => { throw new Error('fail'); } });
     h.queue.trigger('dev-a');
