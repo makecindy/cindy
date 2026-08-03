@@ -8,10 +8,10 @@
  *     (RPC 模式 → extension_ui_request → PiAgent → interactionResolver)。
  *     权限档从 CINDY_PI_PERMISSION_FILE 每次现读 —— setPermissionMode 热切换生效;
  *     读不到一律按 ask(fail-closed)。
- *  2. MCP 桥:CINDY_PI_MCP_BRIDGE(JSON {token, servers[{name,url}]})指向 host 的
- *     localhost streamable-HTTP MCP bridge;对每个 server 走 initialize →
- *     tools/list,把工具注册成 pi 工具(mcp__<server>__<tool>),execute 转发
- *     tools/call。
+ *  2. MCP 桥:CINDY_PI_MCP_BRIDGE 指向 host 的 localhost bridge，或用户显式配置的
+ *     外部 Streamable HTTP MCP。外部认证只保存 env 引用，真值留在 Pi 父进程 env；
+ *     对每个 server 走 initialize → tools/list,把工具注册成 pi 工具
+ *     (mcp__<server>__<tool>),execute 转发 tools/call。
  *  3. 会话树:注册 Cindy 私有 command，把 RPC prompt 桥到 ctx.navigateTree。
  *
  * 协议说明(@modelcontextprotocol/sdk StreamableHTTPServerTransport):
@@ -149,44 +149,124 @@ function isInsideRoot(candidate: string, root: string): boolean {
 interface McpServerRef {
   name: string;
   url: string;
+  remote?: {
+    headerEnvVars: Record<string, string>;
+    requestTimeoutMs: number;
+  };
+}
+
+class McpBridgeError extends Error {}
+
+function safeMcpFailure(error: unknown): string {
+  return error instanceof McpBridgeError ? error.message : 'unexpected error';
+}
+
+function isLoopbackMcpHostname(hostname: string): boolean {
+  const normalized = hostname.toLowerCase();
+  return normalized === 'localhost'
+    || normalized.endsWith('.localhost')
+    || /^127(?:\.\d{1,3}){3}$/.test(normalized)
+    || normalized === '[::1]';
+}
+
+function isAllowedMcpUrl(url: URL): boolean {
+  if (url.username || url.password) return false;
+  if (url.protocol === 'https:') return true;
+  return url.protocol === 'http:' && isLoopbackMcpHostname(url.hostname);
 }
 
 class McpHttpClient {
   private nextId = 1;
   private sessionId: string | null = null;
+  private readonly requestUrl: string;
+  private readonly requestTimeoutMs: number;
 
   constructor(
     private readonly server: McpServerRef,
     private readonly token: string,
-  ) {}
+  ) {
+    let parsed: URL;
+    try {
+      parsed = new URL(server.url);
+    } catch {
+      throw new McpBridgeError('invalid URL');
+    }
+    // 外部 URL 的 host 边界由用户保存的 endpoint 决定；这里再做 web-only fail-closed，
+    // 防描述符损坏后把 Pi 变成 file/data 等协议读取器。非 loopback 必须 HTTPS；URL
+    // 内嵌凭证也禁止，避免它们进入 bridge JSON，认证必须走专用 env。
+    if (!isAllowedMcpUrl(parsed)) {
+      throw new McpBridgeError('URL outside security boundary');
+    }
+    this.requestUrl = parsed.href;
+    const configuredTimeout = server.remote?.requestTimeoutMs;
+    this.requestTimeoutMs = Number.isInteger(configuredTimeout)
+      && configuredTimeout! > 0
+      && configuredTimeout! <= 600_000
+      ? configuredTimeout!
+      : 600_000;
+  }
 
-  private headers(): Record<string, string> {
-    const h: Record<string, string> = {
-      'content-type': 'application/json',
-      accept: 'application/json, text/event-stream',
-      authorization: 'Bearer ' + this.token,
-    };
-    if (this.sessionId) h['mcp-session-id'] = this.sessionId;
+  private headers(): Headers {
+    const h = new Headers();
+    try {
+      if (this.server.remote) {
+        for (const [headerName, envName] of Object.entries(this.server.remote.headerEnvVars ?? {})) {
+          if (typeof envName !== 'string' || !envName) {
+            throw new McpBridgeError('invalid authentication configuration');
+          }
+          const value = process.env[envName];
+          if (value === undefined) throw new McpBridgeError('missing authentication environment');
+          h.set(headerName, value);
+        }
+      } else {
+        if (!this.token) throw new McpBridgeError('missing local bridge token');
+        h.set('authorization', 'Bearer ' + this.token);
+      }
+      // 协议 header 与 server 颁发的 session id 由 client 掌控，不能被自定义 header 覆盖。
+      h.set('content-type', 'application/json');
+      h.set('accept', 'application/json, text/event-stream');
+      h.delete('mcp-session-id');
+      if (this.sessionId) h.set('mcp-session-id', this.sessionId);
+    } catch (error) {
+      if (error instanceof McpBridgeError) throw error;
+      throw new McpBridgeError('invalid authentication header');
+    }
     return h;
   }
 
-  private async post(body: unknown): Promise<Response> {
-    const res = await fetch(this.server.url, {
-      method: 'POST',
-      headers: this.headers(),
-      body: JSON.stringify(body),
-    });
-    const sid = res.headers.get('mcp-session-id');
-    if (sid) this.sessionId = sid;
-    return res;
+  private async post<T>(body: unknown, consume: (response: Response) => Promise<T>): Promise<T> {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), this.requestTimeoutMs);
+    try {
+      const res = await fetch(this.requestUrl, {
+        method: 'POST',
+        headers: this.headers(),
+        body: JSON.stringify(body),
+        redirect: 'error',
+        signal: controller.signal,
+      });
+      const sid = res.headers.get('mcp-session-id');
+      if (sid) this.sessionId = sid;
+      // consume 在同一个 AbortController 生命周期内完成，故 200/SSE 响应头后卡住的
+      // body 也会按 requestTimeoutMs 中止，不会无限阻塞后续 server 注册。
+      return await consume(res);
+    } catch (error) {
+      if (controller.signal.aborted) throw new McpBridgeError('request timed out');
+      if (error instanceof McpBridgeError) throw error;
+      if (error instanceof SyntaxError) throw new McpBridgeError('invalid JSON response');
+      throw new McpBridgeError('request failed');
+    } finally {
+      clearTimeout(timeout);
+    }
   }
 
   /** 解析 application/json 或 SSE 响应体里 id 匹配的 JSON-RPC response。 */
   private async readResponse(res: Response, id: number): Promise<any> {
     const contentType = res.headers.get('content-type') ?? '';
     if (!res.ok) {
-      const text = await res.text().catch(() => '');
-      throw new Error('MCP HTTP ' + res.status + ': ' + text.slice(0, 300));
+      // 远端错误体可能回显 Authorization / API key，绝不拼进 Pi stderr。
+      void res.body?.cancel().catch(() => {});
+      throw new McpBridgeError('HTTP ' + res.status);
     }
     if (contentType.includes('text/event-stream')) {
       const text = await res.text();
@@ -201,23 +281,28 @@ class McpHttpClient {
           }
         }
       }
-      throw new Error('MCP SSE response missing id=' + id);
+      throw new McpBridgeError('invalid SSE response');
     }
     return res.json();
   }
 
   async request(method: string, params?: unknown): Promise<any> {
     const id = this.nextId++;
-    const res = await this.post({ jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) });
-    const msg = await this.readResponse(res, id);
+    const msg = await this.post(
+      { jsonrpc: '2.0', id, method, ...(params !== undefined ? { params } : {}) },
+      (res) => this.readResponse(res, id),
+    );
     if (msg.error) {
-      throw new Error('MCP ' + method + ' failed: ' + (msg.error.message ?? JSON.stringify(msg.error)));
+      throw new McpBridgeError('MCP ' + method + ' returned an error');
     }
     return msg.result;
   }
 
   async notify(method: string, params?: unknown): Promise<void> {
-    await this.post({ jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) }).catch(() => {});
+    await this.post(
+      { jsonrpc: '2.0', method, ...(params !== undefined ? { params } : {}) },
+      async (res) => { await res.body?.cancel(); },
+    ).catch(() => {});
   }
 
   async initialize(): Promise<void> {
@@ -406,7 +491,7 @@ export default async function cindyBridge(pi: any) {
       const count = await connectServer(pi, server, token);
       console.error('[cindy-bridge] connected ' + server.name + ' (' + count + ' tools)');
     } catch (err) {
-      console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + String(err));
+      console.error('[cindy-bridge] connect ' + server.name + ' failed: ' + safeMcpFailure(err));
     }
   }
 }

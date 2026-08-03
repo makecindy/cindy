@@ -862,8 +862,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     workingDir: string;
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
+    deps?: AgentDeps;
   }): Promise<{ resolverTools: string[]; finalText: string }> {
-    const agent = new PiAgent(buildDeps());
+    const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
     let handle: AgentSessionHandle | null = null;
     try {
@@ -936,12 +937,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     async () => {
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-env-isolation-'));
       try {
+        const deps = buildDeps();
+        deps.preparePiExtraSpawnConfig = async () => ({
+          mcpBridge: { token: '', servers: [] },
+          mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'remote-mcp-secret-canary' },
+        });
         scriptedResponses.length = 0;
         scriptedResponses.push(
           anthropicToolUseBody('bash', {
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
-              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_SECRET_ENV_NAMES',
+              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
+              'CINDY_PI_SECRET_ENV_NAMES',
               'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
               'done; printf "PI_ENV_CLEAN\\n"',
@@ -955,6 +962,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           workingDir,
           permissionMode: 'ask',
           resolverBehavior: 'allow',
+          deps,
         });
         const lastBody = JSON.parse(seenRequests.slice(reqBefore).at(-1)?.body ?? '{}') as {
           messages?: Array<{ role?: string; content?: Array<{ type?: string; content?: string }> }>;
@@ -965,6 +973,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(toolResult).toContain('PI_ENV_CLEAN');
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
+        expect(toolResult).not.toContain('remote-mcp-secret-canary');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
