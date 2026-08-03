@@ -36,7 +36,7 @@ function effectiveWindow(
 function bandGroups(route: ModelRegistryRoute): ModelReferencePrice[][] {
   const groups = new Map<string, ModelReferencePrice[]>();
   for (const price of route.referencePrices ?? []) {
-    const key = `${price.currency}|${price.variant ?? "standard"}|${price.effectiveFrom}`;
+    const key = `${price.currency}|${price.variant}|${price.effectiveFrom}`;
     const group = groups.get(key);
     if (group) group.push(price);
     else groups.set(key, [price]);
@@ -62,11 +62,16 @@ describe("model registry data consistency", () => {
         ).toBeLessThanOrEqual(entry.contextWindow);
       }
       for (const [agent, override] of Object.entries(entry.perAgent ?? {})) {
-        if (override?.contextWindow !== undefined) {
+        if (override?.contextWindow === undefined) continue;
+        expect(
+          override.contextWindow,
+          `${entry.id} perAgent.${agent}.contextWindow`,
+        ).toBeGreaterThan(0);
+        if (entry.maxOutputTokens !== undefined) {
           expect(
-            override.contextWindow,
-            `${entry.id} perAgent.${agent}.contextWindow`,
-          ).toBeGreaterThan(0);
+            entry.maxOutputTokens,
+            `${entry.id}: maxOutputTokens exceeds perAgent.${agent}.contextWindow`,
+          ).toBeLessThanOrEqual(override.contextWindow);
         }
       }
     }
