@@ -160,10 +160,12 @@ export function normalizeClaudeJsonlToolIdsText(text: string): NormalizeClaudeJs
         entries.push({ __malformedTailLine: line });
         return;
       }
-      const preview = line.slice(0, 120);
-      throw new Error(`tool id normalize: JSONL parse error at line ${index + 1}: ${preview}`, {
-        cause: err,
-      });
+      // 错误信息不含原始行内容: 转录可能含用户粘贴的密钥/敏感信息, 拼进 error
+      // message 会被调用方写入日志, 属数据暴露(Copilot review)。只留行号与长度。
+      throw new Error(
+        `tool id normalize: JSONL parse error at line ${index + 1} (length ${line.length})`,
+        { cause: err },
+      );
     }
   });
 

@@ -1174,6 +1174,10 @@ function forward(
     const isCompressed = contentEncoding !== '' && contentEncoding !== 'identity';
     let toolUseIdRewrite: ToolUseIdRewriteTransform | null = null;
     if (responseToolUseIds && isSse && !isCompressed) {
+      // 压缩 SSE(gzip/br)不改写: 字节按明文换行切分会漏改/误改, 保持透传
+      // (Greptile 指出此路径撞车 id 不设防; 但 LLM 流式响应不 gzip, 实测链路
+      // 均明文 SSE, 属理论场景)。为压缩流做解压-改写-重压收益趋零、风险高,
+      // 不做; 压缩透传的撞车 id 不会污染明文转录, 下一轮明文请求仍由缓存拦截)。
       delete respHeaders['content-length'];
       const rewriter = new ToolUseIdDedupeRewriter(
         responseToolUseIds,
