@@ -468,6 +468,79 @@ describe('Auto-review wiring: native first, Cindy fallback', () => {
     await handle.close();
   });
 
+  it('leaves the mode unconfirmed when an already-landed default write loses its generation', async () => {
+    // greptile P1 / codex P2 的共同根因:代际过期时把「push 已成功、SDK 现在就在 default」
+    // 这个物理事实整个丢弃,会留下"状态说 native、SDK 在 default"且再也没人纠正的死角 ——
+    // send() 因状态是 native 不再回探,default 档又不再产生分类器响应触发新信号。
+    //
+    // 这里构造「旧降级请求先成功、更新的决策后失败」这一反向完成顺序(此前的用例只固定了
+    // "新请求先失败、旧请求后成功")。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    let releaseTurnPush!: () => void;
+    const turnPushGate = new Promise<void>((resolve) => { releaseTurnPush = resolve; });
+    let rejectSessionPush!: (e: Error) => void;
+    const sessionPushGate = new Promise<void>((_, reject) => { rejectSessionPush = reject; });
+    fakeQuery.setPermissionMode
+      .mockReturnValueOnce(turnPushGate)
+      .mockReturnValueOnce(sessionPushGate);
+
+    const turnFallback = handle.useCindyAutoReviewFallback?.({ scope: 'turn' });
+    // 更新的会话级决策穿透进来并推进代际,它的 push 也还在飞。
+    const sessionResult = handle.useCindyAutoReviewFallback?.({ scope: 'session' })
+      ?.then(() => null, (e: unknown) => e);
+
+    // 旧的 turn 级 push **先**成功:代际已被 session 级推进,它只能降级后返回 —— 这一刻
+    // 它就"已结束"了,后面任何代际回滚都不会再把它叫回来提交状态。
+    releaseTurnPush();
+    await expect(turnFallback).resolves.toBe(false);
+
+    // session 级随后失败 → 回滚代际,可它并不知道 turn 级那次已经落地在 SDK 上。
+    rejectSessionPush(new Error('transport not ready'));
+    await expect(sessionResult).resolves.toBeInstanceOf(Error);
+
+    // 状态必须落在"未确认"而不是 native:下一 turn 仍会回探,把真实档位重新确认回来。
+    fakeQuery.setPermissionMode.mockClear();
+    await handle.send({ type: 'user', content: 'next turn' });
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('auto');
+    await handle.close();
+  });
+
+  it('times out a hanging default push so the signal can retry instead of pinning in-flight', async () => {
+    // codex P1:降级方向的 await 没有上界时,悬挂的控制请求会让 coordinator 永久扣着该会话
+    // 的 in-flight 记录,后续信号全被去重,而状态仍声称 native、SDK 可能还在 auto ——
+    // #1573 的硬拒绝窗口原样复现。
+    const { handle, fakeQuery } = await startSession('auto', {
+      providerId: 'anthropic',
+      authSource: 'oauth',
+    });
+
+    vi.useFakeTimers();
+    let rejected: unknown;
+    try {
+      fakeQuery.setPermissionMode.mockReturnValueOnce(new Promise<void>(() => {}));
+      const pending = handle.useCindyAutoReviewFallback?.({ scope: 'turn' })?.catch((e) => {
+        rejected = e;
+      });
+      await vi.advanceTimersByTimeAsync(10_000);
+      await pending;
+    } finally {
+      vi.useRealTimers();
+    }
+
+    // 必须按失败上抛(coordinator 据此记 failed 并释放 in-flight),而不是无限等待。
+    expect(String(rejected)).toContain('timed out');
+
+    // 档位未知 → 状态保守置"未确认",于是同一 turn 的下一个故障信号可以重推 default。
+    fakeQuery.setPermissionMode.mockClear();
+    await expect(handle.useCindyAutoReviewFallback?.({ scope: 'turn' })).resolves.toBe(true);
+    expect(fakeQuery.setPermissionMode).toHaveBeenCalledWith('default');
+    await handle.close();
+  });
+
   it('does not let a late probe success override a newer fallback decision', async () => {
     // 代际保护:unconfirmed 期间新的降级已把 SDK 推回 default,更晚到达的回探成功不得把
     // 状态改回 'native' —— 否则状态说原生而 SDK 在 default,下一 turn 也不会再回探。

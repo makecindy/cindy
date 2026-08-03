@@ -477,6 +477,34 @@ const CC_UPSTREAM_IDLE_SUSPEND_GAP_MS = 30_000;
  */
 const CC_AUTO_REVIEW_PROBE_TIMEOUT_MS = 10_000;
 
+/**
+ * 降级方向(SDK 切到 `default`)控制请求的有界等待上限。与回探方向取同一个量级:两者都是
+ * 同一条 control-request 通道,悬挂风险同源。
+ *
+ * 为什么降级也需要它:这个 await 发生在 coordinator 线程上,无限等待会让它永久扣着该会话
+ * 的 in-flight 记录 —— 同一故障段的后续信号全被去重,而状态仍声称 native、SDK 可能还停在
+ * `auto`,#1573 要消除的硬拒绝窗口就原样复现了(codex P1)。
+ */
+const CC_AUTO_REVIEW_MODE_PUSH_TIMEOUT_MS = 10_000;
+
+/** 降级 push 的超时哨兵 —— 与真实 transport 错误区分:超时意味着档位**未知**,而非未落地。 */
+const MODE_PUSH_TIMEOUT = Symbol('cc-auto-review-mode-push-timeout');
+
+/**
+ * 给一个控制请求加有界等待。不取消原 promise(SDK 不提供取消),所以它之后仍可能 settle ——
+ * 调用方据此把状态保守地置为"未确认",无论真实结果如何都能自愈。
+ */
+function withModePushTimeout<T>(pending: Promise<T>): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const timeout = new Promise<never>((_, reject) => {
+    timer = setTimeout(() => reject(MODE_PUSH_TIMEOUT), CC_AUTO_REVIEW_MODE_PUSH_TIMEOUT_MS);
+    timer.unref?.();
+  });
+  return Promise.race([pending, timeout]).finally(() => {
+    if (timer) clearTimeout(timer);
+  }) as Promise<T>;
+}
+
 
 function mapAnthropicError(err: unknown): OneShotError {
   if (err instanceof APIError) {
@@ -1792,6 +1820,23 @@ export class ClaudeCodeAgent extends BaseAgent {
      * 推回 `default` → 更晚到达的回探成功把状态改回 `'native'`,而 SDK 其实在 `default`。
      */
     let turnAutoReviewGeneration = 0;
+    /**
+     * 一次**已经落地(或可能已落地)**的档位写入,因代际过期／超时而不能声称代表最新意图时
+     * 的归宿。
+     *
+     * 关键:代际只回答"我的意图还是最新的吗",它**无权否认物理事实** —— 请求既然完成了,
+     * SDK 的档位就已经变了。把这类结果一丢了之,会留下"状态说 native、SDK 在 default"且
+     * 再也没人来纠正的死角:`send()` 因状态已是 native 不再回探,而 default 档又不再产生
+     * 分类器响应来触发新信号,会话永久停在没有记账的 Cindy fallback(greptile P1 /
+     * codex P2 —— 并发回探、以及"旧请求先成功、新请求后失败"两种顺序都会走到这里)。
+     *
+     * 落到 `'cindy-unconfirmed'` 是保守且自愈的:后续故障信号能重推 `default`(幂等闸只拦
+     * 已确认的 `'cindy'`)、下一 turn 起点也会回探,两条路都能把真实档位重新确认回来。
+     * 已经是 `'cindy'` / `'cindy-unconfirmed'` 的不动 —— 它们本就没有声称 native。
+     */
+    const demoteUnattributableModeWrite = (): void => {
+      if (turnAutoReviewState === 'native') turnAutoReviewState = 'cindy-unconfirmed';
+    };
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const usesNativeClaudeAutoReview = (): boolean =>
@@ -3730,18 +3775,20 @@ export class ClaudeCodeAgent extends BaseAgent {
       /**
        * 迟到结果的落点判定。三种情况必须分开:
        *  - **代际已过期**:超时之后又发生了新的档位决策(例如新故障信号已把 SDK 推回
-       *    `default`)。这次回探的结果不再代表当前目标,只能丢弃 —— 否则会把那个更新的
-       *    决策覆盖掉。
-       *  - **Query 已重建**:结果属于被丢弃的旧 `q`,新 Query 的起档由当前状态算出,同样
-       *    不能拿旧结果去写状态。
+       *    `default`)。这次回探的结果不再代表当前目标,不能拿它写目标状态 —— 但也**不能
+       *    当没发生**:它已经改变了 SDK 的物理档位,所以降级到"档位未确认"让后续信号与
+       *    下一 turn 的回探去重新确认(见 demoteUnattributableModeWrite)。
+       *  - **Query 已重建**:结果属于被丢弃的旧 `q`,新 Query 的起档由当前状态算出,那个
+       *    起档与旧 q 的档位无关,所以这里既不写状态也不降级。
        *  - 其余情况**必须调和**,即使早已超时:SDK 的真实档位只有这个结果知道。
        *
-       * 返回是否真的写入了状态 —— 被丢弃时调用方不能再打"已确认/仍在兜底"这类日志,
+       * 返回是否真的写入了目标状态 —— 未写入时调用方不能再打"已确认/仍在兜底"这类日志,
        * 否则运维按 message 扫日志会读到与实际状态相反的结论。
        */
       const settleProbe = (next: TurnAutoReviewState, reason: string, fields: Record<string, unknown> = {}): boolean => {
         if (probeGeneration !== turnAutoReviewGeneration) {
-          log.debug(`native Auto classifier probe ${reason} ignored: superseded by a newer decision`, fields);
+          demoteUnattributableModeWrite();
+          log.debug(`native Auto classifier probe ${reason} superseded by a newer decision; mode left unconfirmed`, fields);
           return false;
         }
         if (q !== probedQuery) {
@@ -4726,8 +4773,30 @@ export class ClaudeCodeAgent extends BaseAgent {
           && !controlRequestsBlocked()
         ) {
           try {
-            await q.setPermissionMode('default');
+            // **有界等待**:控制请求可能永不 settle(回探方向已经证明了这一点)。无限 await
+            // 会让 coordinator 永久扣着该会话的 in-flight 记录 —— 同一故障段的后续信号全被
+            // 去重,而状态还停在 native、SDK 可能仍在 auto,#1573 的 60–90s 硬拒绝窗口原样
+            // 复现(codex P1)。超时按失败上抛:coordinator 记 failed 并释放 in-flight,
+            // 后续信号即可重试。这里的 await 在 coordinator 线程上,不在 send 路径,
+            // 不违反 dev-rules §3.2。
+            await withModePushTimeout(q.setPermissionMode('default'));
           } catch (e) {
+            if (e === MODE_PUSH_TIMEOUT) {
+              // 超时 ≠ 确定没落地:请求可能已送达、只是响应没回来,SDK 档位真正未知。
+              // 保守降级成"未确认",让后续信号能重推、下一 turn 能回探(而不是留下
+              // 声称 native 的状态,那才会让用户继续撞硬拒绝)。
+              if (turnAutoReviewGeneration === fallbackGeneration) {
+                turnAutoReviewGeneration = previousGeneration;
+              }
+              demoteUnattributableModeWrite();
+              log.warn('Cindy fallback mode push timed out — SDK mode unconfirmed, signal may retry', {
+                scope,
+                timeoutMs: CC_AUTO_REVIEW_MODE_PUSH_TIMEOUT_MS,
+              });
+              throw new Error(
+                `Claude setPermissionMode('default') timed out after ${CC_AUTO_REVIEW_MODE_PUSH_TIMEOUT_MS}ms`,
+              );
+            }
             // 代际号的语义是「最后一个**发起**的档位变更」,而它成立的前提是发起者最终会
             // 写状态。本次请求失败 = 没落地也没人写,必须把写入权**交还上一个发起者**,
             // 否则一个失败的新决策会永久遮住一个已成功的旧决策:会话级升级穿透在飞的
@@ -4741,9 +4810,17 @@ export class ClaudeCodeAgent extends BaseAgent {
             throw e;
           }
           // await 期间更高优先级的决策可能已落地(会话级信号能穿透在飞的 turn 级操作,或
-          // 另一次降级已推进代际):按**当前**状态重判,不用入口快照。
+          // 另一次降级/回探已推进代际):按**当前**状态重判,不用入口快照。
           if (nativeAutoReviewUnavailable) return false;
-          if (fallbackGeneration !== turnAutoReviewGeneration) return false;
+          if (fallbackGeneration !== turnAutoReviewGeneration) {
+            // 这次 push **已经成功**,SDK 现在就在 default —— 代际过期只说明"我的意图不再
+            // 是最新的",不能据此假装没推过。直接 return 会留下"状态说 native、SDK 在
+            // default"的死角:并发回探刚乐观写了 native(greptile P1),或更新的会话级决策
+            // 随后失败并回滚了代际、而它并不知道我已经落地(codex P2 的"旧请求先成功、新
+            // 请求后失败"顺序)。两种顺序都靠这里降级成"未确认"自愈。
+            demoteUnattributableModeWrite();
+            return false;
+          }
         }
         if (scope === 'session') nativeAutoReviewUnavailable = true;
         // 两个 scope 都归到「已确认降级」:SDK 档位刚被这次 push 确认(或处在"推不了档、
