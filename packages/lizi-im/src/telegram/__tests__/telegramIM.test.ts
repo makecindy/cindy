@@ -484,11 +484,16 @@ describe('TelegramIM', () => {
     ]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
 
-    await im.sendInteractiveCard(events[0].senderId, {
-      title: '需要授权',
-      body: '要修改 src/app.ts 吗？',
-      buttons: [{ id: 'allow', label: '允许', type: 'primary' }],
-    });
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      {
+        title: '需要授权',
+        body: '要修改 src/app.ts 吗？',
+        buttons: [{ id: 'allow', label: '允许', type: 'primary' }],
+      },
+      // 授权卡由调用方点名转私聊, 并把用户可见说明一起传进来(传输层不造文案)
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
     const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
     // 群里的授权卡消不掉, 且只有 owner 能回答它 —— 一律投宿主私聊, 群里一条都不发
     expect(card.params.chat_id).toBe(OWNER_ID);
@@ -516,15 +521,62 @@ describe('TelegramIM', () => {
     api.pushUpdates([privateMessage('needs approval', 111, 71)]);
     await vi.waitFor(() => expect(events).toHaveLength(1));
 
-    await im.sendInteractiveCard(events[0].senderId, {
-      title: 'Approval',
-      body: 'Continue?',
-      buttons: [{ id: 'yes', label: 'Yes' }],
-    });
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      {
+        title: 'Approval',
+        body: 'Continue?',
+        buttons: [{ id: 'yes', label: 'Yes' }],
+      },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
     const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
     expect(card.params.chat_id).toBe(OWNER_ID);
     expect(String(card.params.text)).not.toContain('t.me/c/');
-    expect(String(card.params.text)).not.toContain('授权卡不会发到群里');
+    expect(String(card.params.text)).not.toContain('群聊里的任务需要你授权');
+  });
+
+  it('未点名转私聊的卡片(命令卡 / 会话选择卡)留在原群 lane', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '/ctr', fromId: 111, messageId: 72, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 不传 deliverToOwnerDm: 这类卡的回调要落在原群 lane, 转到私聊会让
+    // exitControl 释放宿主私聊那把锁而不是原群锁。
+    await im.sendInteractiveCard(events[0].senderId, {
+      title: '选择要接管的任务',
+      body: '挑一个',
+      buttons: [{ id: 'sess-1', label: '任务 A' }],
+    });
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe('-100200');
+    expect(String(card.params.text)).not.toContain('t.me/c/');
+  });
+
+  it('授权卡深链指向**正在处理的那一轮**触发消息(待配对队列取队首, FIFO)', async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    // 群里连发两问 —— 两条触发消息都在待配对队列里, 第一轮处理的是 80
+    api.pushUpdates([
+      groupMessage({ text: '第一问', fromId: 111, messageId: 80, mentionBot: true }),
+      groupMessage({ text: '第二问', fromId: 111, messageId: 81, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(2));
+
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    // 取 .at(-1) 会指向后到的 81, 那是另一轮的提问
+    expect(String(card.params.text)).toContain('https://t.me/c/200/80');
+    expect(String(card.params.text)).not.toContain('/81');
   });
 
   it('私聊出站不回挂 reply', async () => {

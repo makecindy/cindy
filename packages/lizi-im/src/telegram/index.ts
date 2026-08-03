@@ -58,13 +58,6 @@ import { startTelegramStreaming } from './streamingText.js';
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
 
-/**
- * 群/topic 里的交互卡改投宿主私聊时, 加在卡片正文顶部的说明。
- *
- * 中英双语一行, 与非 owner 礼貌回应(UNBOUND_REPLY)同口径 —— 这一层没有 i18n 通道。
- */
-const GROUP_APPROVAL_OWNER_DM_NOTE =
-  '🔐 群聊里的任务需要你授权，授权卡不会发到群里。\nApproval needed for a group-chat task; approval cards are never posted in the group.';
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
@@ -620,18 +613,22 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
+    opts?: { threadTs?: string; deliverToOwnerDm?: boolean; ownerDmNote?: string },
   ): Promise<{ messageId: string }> {
-    // 群 / topic lane 的交互卡改投**宿主私聊**(Chris 2026-08-03 要求, 官方 bot 侧同批
-    // 同口径): 群里的授权卡消不掉, 而且只有 owner 能回答它 —— 留在群里既是噪音也是误导。
+    // **只有授权类卡片**转宿主私聊(调用方用 deliverToOwnerDm 点名): 群里的授权卡消不掉,
+    // 且只有 owner 能回答它。命令卡 / 会话选择卡(/ctr 等)不传这个开关 —— 它们的回调必须
+    // 落在原群 lane, 否则 exitControl 释放的是宿主私聊那把锁而不是原群锁。
     // owner 未知时(理论上不该发生: 群 lane 的触发条件本身就是 owner @bot / reply)保持原
     // lane 投递, 不吞掉这次交互。
-    const groupLane = this.ownerUserId ? decodeLaneUserId(userId) : null;
+    const groupLane =
+      opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
     if (groupLane) {
       const link = groupMessageLink(groupLane.chatId, this.peekReplyTargetId(userId));
+      // 说明文案由调用方给(传输层不造用户可见措辞); 深链是 URL 不是文案, 在这里拼。
+      const notice = [opts?.ownerDmNote, link].filter((line) => line).join('\n');
       const { html, replyMarkup } = buildCardPayload({
         ...spec,
-        // 私聊里看不出是哪个群问的, 所以带说明 + 触发消息深链
-        body: `${GROUP_APPROVAL_OWNER_DM_NOTE}${link === null ? '' : `\n${link}`}\n\n${spec.body}`,
+        body: notice.length > 0 ? `${notice}\n\n${spec.body}` : spec.body,
       });
       const sent = await this.callSend<TgMessage>('sendMessage', {
         chat_id: this.ownerUserId,
@@ -662,10 +659,15 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
   }
 
-  /** 本轮回挂目标的消息 id(**只读不消耗**, 给私聊授权卡拼触发消息深链用)。 */
+  /**
+   * 本轮回挂目标的消息 id(**只读不消耗**, 给私聊授权卡拼触发消息深链用)。
+   *
+   * 待配对队列按 **FIFO** 取队首 —— 与 claimTurnReplyTarget 同序。取 `.at(-1)` 会拿到
+   * **后到**的那条触发消息(群里连发两问时), 深链就指向了另一轮的提问。
+   */
   private peekReplyTargetId(userId: string): string | null {
     return (
-      this.turnReplyTargets.get(userId) ?? this.pendingReplyTargets.get(userId)?.at(-1)?.id ?? null
+      this.turnReplyTargets.get(userId) ?? this.pendingReplyTargets.get(userId)?.[0]?.id ?? null
     );
   }
 

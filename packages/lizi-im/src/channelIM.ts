@@ -85,7 +85,23 @@ export interface RichChannelIM extends TextChannelIM {
   sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
-    opts?: { threadTs?: string },
+    opts?: {
+      threadTs?: string;
+      /**
+       * **只有授权类(permission)卡片**可以传 true: 群 lane 里把卡片改投宿主私聊 ——
+       * 群里的授权卡消不掉, 而且只有宿主本人能回答它。
+       *
+       * 命令卡 / 会话选择卡(`/ctr` 等)**绝不能传**: 它们的回调要落在原群 lane
+       * (exitControl 释放的是那把群锁), 投到私聊会让锁与卡片对不上。
+       * 渠道不支持该语义时忽略即可(按原 lane 投递), 不要吞掉卡片。
+       */
+      deliverToOwnerDm?: boolean;
+      /**
+       * `deliverToOwnerDm` 生效时加在卡片正文顶部的说明。**用户可见文案由调用方给**,
+       * 传输层不造文案(它没有 locale, 也不该持有产品措辞)。
+       */
+      ownerDmNote?: string;
+    },
   ): Promise<{ messageId: string }>;
 
   /** 原地替换一张已发出的交互卡片(spec 全量覆盖)。 */

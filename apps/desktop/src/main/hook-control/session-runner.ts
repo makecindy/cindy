@@ -251,12 +251,23 @@ function isRenderableImageUrl(u: string): boolean {
 }
 
 /**
- * agent 挂起等授权时挂在过程区的状态行。
+ * agent 挂起等用户时挂在过程区的状态行, **按交互类型分** —— 都写"等待授权"会把
+ * 问答与计划审阅说成权限请求(review 指出)。
  *
  * **刻意不说卡片去了哪**: 投递位置由 hook server 决定(Telegram 群里的授权卡自
  * 2026-08 起改投宿主私聊), 客户端不知道对端版本, 写"已发到私聊"可能是假的。
  */
-const AWAITING_APPROVAL_NOTICE = '等待授权 · 需要你确认';
+const AWAITING_INTERACTION_NOTICE: Record<string, string> = {
+  permission: '等待授权 · 需要你确认',
+  ask_user_question: '等待回答 · 需要你选择',
+  plan_review: '等待审阅 · 需要你确认计划',
+};
+/** 未知 kind(将来新增类型)不编造语义, 只说在等你。 */
+const AWAITING_INTERACTION_FALLBACK = '等待你的确认';
+
+function awaitingInteractionNotice(kind: string): string {
+  return AWAITING_INTERACTION_NOTICE[kind] ?? AWAITING_INTERACTION_FALLBACK;
+}
 
 /** 兜底账本条目是否图片(hook 本期只外发图片):cindy-media 地址按扩展名判。 */
 const PRODUCED_IMAGE_EXT_RE = /\.(png|jpe?g|gif|webp)$/i;
@@ -754,7 +765,7 @@ export function createMakerHookSessionRunner(deps: {
             // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
             // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
             // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
-            activeObserver?.setNotice(AWAITING_APPROVAL_NOTICE);
+            activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
             try {
               const decision = await registerHookInteraction({
                 interactionId: ireq.requestId,

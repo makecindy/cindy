@@ -1921,10 +1921,12 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
       });
       await vi.advanceTimersByTimeAsync(0);
       expect(cards).toHaveLength(1);
-      // 卡片发出的同时过程区出现状态行: 等授权期间没有任何 agent 事件, 渠道那条消息
-      // 会彻底静止, 而卡片可能根本不在这个会话里(群里的授权卡改投宿主私聊)。
+      // 卡片发出的同时过程区出现状态行: 挂起期间没有任何 agent 事件, 渠道那条消息会
+      // 彻底静止, 而卡片可能根本不在这个会话里(群里的授权卡改投宿主私聊)。
       // 它只改已经在发的那条快照, 不新增任何渠道消息。
-      expect(emitted.at(-1)).toContain('等待授权');
+      // **文案按交互类型分**: 这是问答, 说"等待授权"就把它说成了权限请求。
+      expect(emitted.at(-1)).toContain('等待回答');
+      expect(emitted.at(-1)).not.toContain('等待授权');
 
       const { resolveHookInteraction } = await import('../interactions.js');
       expect(resolveHookInteraction('int-notice', 'ask:0')).toBe(true);
@@ -1941,6 +1943,53 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
 
       h.eventCbs.get('sess-new')!({ type: 'done', data: null });
       await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('过程区状态行按交互类型分: 授权/问答/计划审阅各自措辞', async () => {
+    vi.useFakeTimers();
+    try {
+      for (const [request, expected] of [
+        [
+          {
+            kind: 'permission' as const,
+            requestId: 'int-perm',
+            toolName: 'file_change',
+            input: {},
+          },
+          '等待授权',
+        ],
+        [
+          {
+            kind: 'plan_review' as const,
+            requestId: 'int-plan',
+            plan: '第一步…',
+          },
+          '等待审阅',
+        ],
+      ] as const) {
+        fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+          makeInteractiveSession(opts.id ?? 'sess-x'),
+        );
+        const emitted: string[] = [];
+        const runner = createMakerHookSessionRunner({ log });
+        const p = runner.run(
+          baseReq({
+            onProgress: (t: string) => emitted.push(t),
+            onInteraction: () => {},
+          }),
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        await vi.advanceTimersByTimeAsync(0);
+        const listener = h.interactionListeners.get('sess-new')!;
+        void listener(request as never);
+        await vi.advanceTimersByTimeAsync(0);
+        expect(emitted.at(-1)).toContain(expected);
+        h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+        await p.catch(() => undefined);
+      }
     } finally {
       vi.useRealTimers();
     }
