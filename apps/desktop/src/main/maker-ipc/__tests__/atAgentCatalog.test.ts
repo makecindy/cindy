@@ -3,8 +3,10 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import {
+  finalizeAtProjectAgentResources,
   listAtProjectAgentResources,
   mergeAtProjectAgentResources,
+  supportsAtProjectAgentResources,
 } from '../atAgentCatalog.js';
 
 const root = path.resolve('C:/workspace/demo');
@@ -63,6 +65,66 @@ describe('atAgentCatalog', () => {
         projectAgents[0],
         { type: 'file', name: 'README.md', relPath: 'README.md' },
       ],
+      capped: false,
+    });
+  });
+
+  it('exposes project Agents only for Claude Code', () => {
+    expect(supportsAtProjectAgentResources('claude-code')).toBe(true);
+    expect(supportsAtProjectAgentResources('codex')).toBe(false);
+    expect(supportsAtProjectAgentResources('pi')).toBe(false);
+  });
+
+  it.each(['codex', 'pi'] as const)(
+    'hides Agent entries and their backing .claude files for %s',
+    (agentKind) => {
+      const result = finalizeAtProjectAgentResources(
+        agentKind,
+        [
+          { type: 'dir', name: '.claude', relPath: '.claude' },
+          { type: 'dir', name: 'agents', relPath: '.claude/agents' },
+          {
+            type: 'file',
+            name: 'reviewer.md',
+            relPath: '.claude\\agents\\reviewer.md',
+          },
+          {
+            type: 'agent',
+            name: 'reviewer',
+            relPath: '.claude/agents/reviewer.md',
+          },
+          { type: 'file', name: 'README.md', relPath: 'README.md' },
+        ],
+        [{
+          type: 'agent',
+          name: 'reviewer',
+          relPath: '.claude/agents/reviewer.md',
+        }],
+      );
+
+      expect(result).toEqual({
+        items: [
+          { type: 'dir', name: '.claude', relPath: '.claude' },
+          { type: 'file', name: 'README.md', relPath: 'README.md' },
+        ],
+        capped: false,
+      });
+    },
+  );
+
+  it('keeps Claude Code project Agents ahead of ordinary resources', () => {
+    const agent = {
+      type: 'agent' as const,
+      name: 'reviewer',
+      relPath: '.claude/agents/reviewer.md',
+    };
+
+    expect(finalizeAtProjectAgentResources(
+      'claude-code',
+      [{ type: 'file', name: 'README.md', relPath: 'README.md' }],
+      [agent],
+    )).toEqual({
+      items: [agent, { type: 'file', name: 'README.md', relPath: 'README.md' }],
       capped: false,
     });
   });

@@ -1,6 +1,6 @@
 import path from 'node:path';
 
-import type { AgentCustomization, AtResourceItem } from '@cindy/maker-core';
+import type { AgentCustomization, AgentKind, AtResourceItem } from '@cindy/maker-core';
 
 function oneLine(value: unknown, maxLength: number): string {
   return typeof value === 'string'
@@ -76,4 +76,30 @@ export function mergeAtProjectAgentResources(
     items: merged.slice(0, limit),
     capped: merged.length > limit,
   };
+}
+
+/** Native project Agents are an executable capability of Claude Code only. */
+export function supportsAtProjectAgentResources(agentKind: AgentKind): boolean {
+  return agentKind === 'claude-code';
+}
+
+function isProjectAgentPath(relPath: string): boolean {
+  const normalized = relPath.replace(/\\/g, '/').replace(/\/$/, '');
+  return normalized === '.claude/agents' || normalized.startsWith('.claude/agents/');
+}
+
+/** Apply the engine boundary and keep Claude Agent definitions out of ordinary file results. */
+export function finalizeAtProjectAgentResources(
+  agentKind: AgentKind,
+  base: readonly AtResourceItem[],
+  projectAgents: readonly AtResourceItem[],
+  cap?: number,
+): { items: AtResourceItem[]; capped: boolean } {
+  if (!supportsAtProjectAgentResources(agentKind)) {
+    return {
+      items: base.filter((item) => item.type !== 'agent' && !isProjectAgentPath(item.relPath)),
+      capped: false,
+    };
+  }
+  return mergeAtProjectAgentResources(base, projectAgents, cap);
 }

@@ -130,8 +130,9 @@ import {
   readAtDesktopWindows,
 } from './atContextCatalog.js';
 import {
+  finalizeAtProjectAgentResources,
   listAtProjectAgentResources,
-  mergeAtProjectAgentResources,
+  supportsAtProjectAgentResources,
 } from './atAgentCatalog.js';
 import * as imageCacheStore from '../imageCacheStore.js';
 import { collectCindyMediaUrls, commitChatImageUrls } from '../cindy-media/chatAttachments.js';
@@ -4979,16 +4980,19 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       const resourceParams = params as { workingDir: string; cap?: number; query?: string };
       await prepareProjectSkillLinksFailSoft(resourceParams?.workingDir);
       const kind = requireAgentKind(agentKind);
+      const includeProjectAgents = supportsAtProjectAgentResources(kind);
       const [result, customizationResult] = await Promise.all([
         maker.scanAtResources(kind, resourceParams),
-        maker.listCustomizations({
-          agentKind: 'claude-code',
-          workingDirs: [resourceParams.workingDir],
-          kinds: ['agent'],
-        }).catch((err: unknown) => {
-          log.warn('Project Agent @ catalog failed; keeping workspace resources available', err);
-          return null;
-        }),
+        includeProjectAgents
+          ? maker.listCustomizations({
+              agentKind: 'claude-code',
+              workingDirs: [resourceParams.workingDir],
+              kinds: ['agent'],
+            }).catch((err: unknown) => {
+              log.warn('Project Agent @ catalog failed; keeping workspace resources available', err);
+              return null;
+            })
+          : Promise.resolve(null),
       ]);
       const projectAgents = customizationResult
         ? listAtProjectAgentResources(
@@ -4997,7 +5001,12 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
             resourceParams.query,
           )
         : [];
-      const merged = mergeAtProjectAgentResources(result.items, projectAgents, resourceParams.cap);
+      const merged = finalizeAtProjectAgentResources(
+        kind,
+        result.items,
+        projectAgents,
+        resourceParams.cap,
+      );
       return {
         success: true,
         items: merged.items,
