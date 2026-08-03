@@ -31,7 +31,10 @@ vi.mock('../../agent-island/service.js', () => ({
   getAgentIslandService: () => null,
 }));
 
-import { normalizeNullableIntervalMs } from '../schedule';
+import {
+  normalizeLegacyDeviceLinkIntervalClear,
+  normalizeNullableIntervalMs,
+} from '../schedule';
 
 function hasOwn(value: object, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(value, key);
@@ -68,5 +71,45 @@ describe('normalizeNullableIntervalMs(device-link JSON 边界)', () => {
     const out = normalizeNullableIntervalMs(wire);
     expect(hasOwn(out, 'intervalMs')).toBe(true);
     expect(out.intervalMs).toBeUndefined();
+  });
+});
+
+describe('normalizeLegacyDeviceLinkIntervalClear(旧版 mobile 的清空兼容)', () => {
+  // 旧版 mobile 全量表单的 wire 形态:带 cronExpr / manual / notify,清空间隔时
+  // 不带 intervalMs key(经 JSON 序列化被丢),靠旧引擎隐式清空表达语义。
+  const legacyForm = {
+    name: '巡检',
+    cronExpr: '0 9 * * *',
+    recurring: true,
+    manual: false,
+    notify: { desktop: true, feishu: false },
+  };
+
+  it('device-link 来源 + 旧全量表单缺 intervalMs key → 翻译成显式清空', () => {
+    const out = normalizeLegacyDeviceLinkIntervalClear({ ...legacyForm }, true);
+    expect(hasOwn(out, 'intervalMs')).toBe(true);
+    expect(out.intervalMs).toBeUndefined();
+  });
+
+  it('非 device-link 来源的同形态 patch 原样透传(MCP / renderer 的真 partial 不受影响)', () => {
+    const patch = { ...legacyForm };
+    expect(normalizeLegacyDeviceLinkIntervalClear(patch, false)).toBe(patch);
+  });
+
+  it('新版 mobile 恒带 intervalMs key(数值或 null 归一化后的 undefined),不会命中兼容分支', () => {
+    const withNumber = { ...legacyForm, intervalMs: 600_000 };
+    expect(normalizeLegacyDeviceLinkIntervalClear(withNumber, true)).toBe(withNumber);
+
+    const clearedByNull = normalizeLegacyDeviceLinkIntervalClear(
+      normalizeNullableIntervalMs({ ...legacyForm, intervalMs: null }),
+      true,
+    );
+    expect(hasOwn(clearedByNull, 'intervalMs')).toBe(true);
+    expect(clearedByNull.intervalMs).toBeUndefined();
+  });
+
+  it('device-link 的非全量 partial(缺 manual/notify 标记)不被伪造成清空', () => {
+    const partial = { cronExpr: '0 9 * * *' };
+    expect(normalizeLegacyDeviceLinkIntervalClear(partial, true)).toBe(partial);
   });
 });

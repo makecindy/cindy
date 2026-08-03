@@ -68,6 +68,7 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftIntervalMinutes,
   updateDraftRunMode,
   updateDraftSessionMode,
   updateDraftWorkspaceKind,
@@ -1220,7 +1221,7 @@ function ScheduleFormCard({
             <TextInput
               editable={!busy}
               keyboardType="number-pad"
-              onChangeText={(value) => setField('intervalMinutes', value)}
+              onChangeText={(value) => onChange(updateDraftIntervalMinutes(draft, value))}
               placeholder={t('devices.automations.form.intervalPlaceholder')}
               placeholderTextColor={colors.textTertiary}
               style={styles.input}

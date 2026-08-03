@@ -35,6 +35,18 @@ export interface MobileScheduleDraft {
   cronExpr: string;
   timezone: string;
   intervalMinutes: string;
+  /**
+   * 原任务的 intervalMs。表单只表达得了 1-59 分钟 / 整点小时,MCP 可以设出
+   * 表单区间外的间隔(如 90 分钟),这时 intervalMinutes 折叠成 '' ——保存时
+   * 必须能区分「表达不了」和「用户清空」,否则只改 prompt 也会静默清掉间隔
+   * (copilot review 发现)。
+   */
+  sourceIntervalMs?: number;
+  /**
+   * 用户是否动过间隔(输入框编辑、切 manual、套模板都算)。动过且为空 =
+   * 明确清空;没动过为空 = 保留 sourceIntervalMs 原值。
+   */
+  intervalMinutesTouched?: boolean;
   agentKind: RemoteScheduleAgentKind;
   model: string;
   providerId: string;
@@ -100,6 +112,7 @@ export function createMobileScheduleDraft(
     cronExpr: schedule.cronExpr?.trim() || DEFAULT_CRON,
     timezone: schedule.timezone?.trim() || DEFAULT_TIMEZONE,
     intervalMinutes: intervalMsToSupportedMinutes(schedule.intervalMs),
+    ...(typeof schedule.intervalMs === 'number' ? { sourceIntervalMs: schedule.intervalMs } : {}),
     agentKind: schedule.agentKind ?? 'claude-code',
     model: schedule.model ?? defaultModelFor(schedule.agentKind ?? 'claude-code'),
     providerId: schedule.providerId ?? '',
@@ -140,7 +153,9 @@ export function applyTemplateToMobileScheduleDraft(
     runMode: template.recurring === false ? 'manual' : 'recurring',
     cronExpr: template.cronExpr?.trim() || draft.cronExpr,
     timezone: template.timezone?.trim() || draft.timezone,
+    // 模板显式定义 cadence:清空间隔是模板的意图,不是「表达不了」,按已触碰处理。
     intervalMinutes: '',
+    intervalMinutesTouched: true,
     agentKind,
     model: template.model ?? (draft.agentKind === agentKind ? draft.model : defaultModelFor(agentKind)),
     // 模板若固定了 provider，必须随模板一起落到新建任务；否则 Pi 的空模型会在
@@ -258,7 +273,16 @@ export function buildMobileScheduleInput(draft: MobileScheduleDraft): RemoteSche
     // 发 null 而不是 undefined——这个 input 经 device-link JSON.stringify 传输,
     // undefined 的 key 会被丢掉,desktop 端真 partial 语义下旧 intervalMs 会被
     // 保留,清空间隔 / manual 切回 recurring 就静默失效(codex review 发现)。
-    intervalMs: recurring && intervalMinutes ? intervalMinutes * 60_000 : null,
+    // 例外:表单区间表达不了的既有间隔(sourceIntervalMs 在、intervalMinutes 折叠
+    // 为 '' 且用户没动过)原值回传,只改 prompt 不得顺手清 cadence(copilot review
+    // 发现;touched 语义见 MobileScheduleDraft.intervalMinutesTouched)。
+    intervalMs: recurring && intervalMinutes
+      ? intervalMinutes * 60_000
+      : recurring
+          && !draft.intervalMinutesTouched
+          && typeof draft.sourceIntervalMs === 'number'
+        ? draft.sourceIntervalMs
+        : null,
     agentKind: draft.agentKind,
     workspaceKind: draft.workspaceKind,
     useWorktree: draft.workspaceKind === 'project' && draft.useWorktree,
@@ -348,6 +372,14 @@ export function updateDraftAgentKind(
   };
 }
 
+/** 间隔输入框的编辑入口:任何编辑(含清空)都标记 touched,与「表达不了被折叠成空」区分。 */
+export function updateDraftIntervalMinutes(
+  draft: MobileScheduleDraft,
+  intervalMinutes: string,
+): MobileScheduleDraft {
+  return { ...draft, intervalMinutes, intervalMinutesTouched: true };
+}
+
 export function updateDraftRunMode(
   draft: MobileScheduleDraft,
   runMode: MobileScheduleRunMode,
@@ -357,6 +389,9 @@ export function updateDraftRunMode(
     ...draft,
     runMode,
     intervalMinutes: runMode === 'manual' ? '' : draft.intervalMinutes,
+    // 切 manual 是对 cadence 的显式操作:之后切回 recurring 也不该复活旧间隔
+    // (2026-08-03 codex review:manual 切回 recurring 仍按旧间隔跑就是事故形态)。
+    ...(runMode === 'manual' ? { intervalMinutesTouched: true } : {}),
   };
 }
 

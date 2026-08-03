@@ -68,6 +68,7 @@ import { resolveScriptCapabilityStatuses } from '../scheduler-host/script-capabi
 import { getGhostManager } from '../cindy-brain/index.js';
 import { throwIpcError, requireString, requireObject } from '../utils/ipcValidate.js';
 import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
+import { isDeviceLinkInvoke } from '../device-link/invoke-context.js';
 import { getAgentIslandService } from '../agent-island/service.js';
 import { getSessionProvider } from '../maker-host/session-provider-store.js';
 import { MAKER_INVOKE, MAKER_PUSH } from './channels.js';
@@ -233,6 +234,28 @@ export function normalizeNullableIntervalMs<T extends { intervalMs?: number | nu
   return { ...input, intervalMs: undefined };
 }
 
+/**
+ * 版本错位兼容的另一半:**旧版 mobile** 清空间隔靠「全量表单不带 intervalMs key +
+ * 引擎隐式清空」表达;真 partial 语义下省略 key 变成「不修改」,旧 mobile 的清空
+ * 就静默失效(codex review 发现)。这里在 update 入口把「device-link 来源 + 旧版
+ * 全量表单形态(带 cronExpr / manual / notify 却没有 intervalMs key)」翻译回
+ * 显式清空。新版 mobile 全量表单恒带 intervalMs key(数值或 null),永远不会命中
+ * 这条;MCP 与桌面 renderer 不走 device-link,partial patch 不受影响。来源判定用
+ * AsyncLocalStorage 的可信标记(isDeviceLinkInvoke),不信任 payload 自述。
+ */
+export function normalizeLegacyDeviceLinkIntervalClear<
+  T extends { intervalMs?: number; cronExpr?: string },
+>(patch: T, isRemoteInvoke: boolean): T & { intervalMs?: number } {
+  if (!isRemoteInvoke) return patch;
+  if (Object.prototype.hasOwnProperty.call(patch, 'intervalMs')) return patch;
+  const legacyFullForm =
+    typeof patch.cronExpr === 'string' &&
+    Object.prototype.hasOwnProperty.call(patch, 'manual') &&
+    Object.prototype.hasOwnProperty.call(patch, 'notify');
+  if (!legacyFullForm) return patch;
+  return { ...patch, intervalMs: undefined };
+}
+
 function listAllTemplates(): ScheduleTemplate[] {
   const projectTemplates: ScheduleTemplate[] = [];
   return [...BUILTIN_TEMPLATES, ...projectTemplates];
@@ -326,8 +349,11 @@ export function registerScheduleHandlers(getMaker?: () => Maker | null): void {
       scheduler.updateFromCurrent(scheduleId, (existing) =>
         stabilizePreRunHookForUpdate(
           existing,
-          normalizeNullableIntervalMs(
-            patch as UpdateScheduleInput & { intervalMs?: number | null },
+          normalizeLegacyDeviceLinkIntervalClear(
+            normalizeNullableIntervalMs(
+              patch as UpdateScheduleInput & { intervalMs?: number | null },
+            ),
+            isDeviceLinkInvoke(),
           ),
           hookPathDeps,
         ),

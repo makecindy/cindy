@@ -10,6 +10,8 @@ import {
   MOBILE_SCHEDULE_PENDING_SESSION_ID,
   updateDraftAgentKind,
   updateDraftBoundSessionId,
+  updateDraftIntervalMinutes,
+  updateDraftRunMode,
   updateDraftSessionMode,
   validateTemplateParamValues,
   validateMobileScheduleDraft,
@@ -89,7 +91,8 @@ describe('mobile schedule form model', () => {
   it('clears intervalMs with a serializable null that survives the JSON wire', () => {
     const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
 
-    const cleared = buildMobileScheduleInput({ ...edited, intervalMinutes: '' });
+    // 清空必须走编辑入口(标记 touched)——未触碰的空值是「表达不了」不是「清空」。
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(edited, ''));
     expect(cleared.intervalMs).toBeNull();
 
     const manual = buildMobileScheduleInput({ ...edited, runMode: 'manual', intervalMinutes: '' });
@@ -107,7 +110,7 @@ describe('mobile schedule form model', () => {
 
   it('downgrades the null clear to key omission for hosts without the capability', () => {
     const edited = createMobileScheduleDraft(schedule({ intervalMs: 900_000 }));
-    const cleared = buildMobileScheduleInput({ ...edited, intervalMinutes: '' });
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(edited, ''));
 
     // 旧 desktop:null 会被旧引擎当成已设间隔立即触发;省略 key 让旧引擎的
     // 隐式清空(带 cronExpr 不带 intervalMs)承担等价语义。
@@ -121,6 +124,24 @@ describe('mobile schedule form model', () => {
     // 数值间隔与能力无关,两种 host 都原样透传。
     const kept = buildMobileScheduleInput({ ...edited, intervalMinutes: '15' });
     expect(applyScheduleWireCompat(kept, { supportsIntervalNullClear: false })).toBe(kept);
+  });
+
+  it('preserves a form-inexpressible interval unless the user explicitly touches it', () => {
+    // 90 分钟表单表达不了(非 1-59 分钟/整点小时),intervalMinutes 折叠成 ''
+    const draft = createMobileScheduleDraft(schedule({ intervalMs: 90 * 60_000 }));
+    expect(draft.intervalMinutes).toBe('');
+
+    // 只改 prompt:间隔原值回传,不因「表单显示不了」被顺手清空
+    const untouched = buildMobileScheduleInput({ ...draft, prompt: 'new prompt' });
+    expect(untouched.intervalMs).toBe(90 * 60_000);
+
+    // 用户经编辑入口清空 → 明确清空
+    const cleared = buildMobileScheduleInput(updateDraftIntervalMinutes(draft, ''));
+    expect(cleared.intervalMs).toBeNull();
+
+    // 切 manual 是显式 cadence 操作:切回 recurring 也不复活旧间隔
+    const manualRoundTrip = updateDraftRunMode(updateDraftRunMode(draft, 'manual'), 'recurring');
+    expect(buildMobileScheduleInput(manualRoundTrip).intervalMs).toBeNull();
   });
 
   it('writes an explicit false when mobile disables WeCom group notifications', () => {
