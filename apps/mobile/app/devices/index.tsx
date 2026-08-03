@@ -518,7 +518,8 @@ export default function HomeScreen() {
       getCachedHomeListSnapshot(homeCacheUserId),
       [],
     );
-    const applySnapshot = (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+    const applySnapshot = async (snapshot: Awaited<ReturnType<typeof getCachedHomeListSnapshot>>) => {
+      await syncInFlightRef.current;
       if (cancelled || lastSyncedAtRef.current !== null) return;
       for (const device of snapshot) {
         remoteSessionStore.hydrateDeviceSessionsIfEmpty(device.deviceId, device.deviceName, device.sessions);
@@ -527,9 +528,9 @@ export default function HomeScreen() {
     };
     void read.initial
       .then((initial) => {
-        applySnapshot(initial.value);
+        void applySnapshot(initial.value);
         if (initial.timedOut) void read.completion.then((late) => {
-          if (late.ok) applySnapshot(late.value);
+          if (late.ok) void applySnapshot(late.value);
         });
       })
       .catch(() => undefined)

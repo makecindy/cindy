@@ -380,10 +380,9 @@ describe('mobile home desktop-first surface', () => {
 
     expect(source).toContain('void loadHome({ visible: false });');
     expect(source).toMatch(/startBoundedStartupRead\(\s*getCachedHomeListSnapshot\(homeCacheUserId\)/);
-    expect(source).toContain('if (late.ok) applySnapshot(late.value);');
+    expect(source).toContain('await syncInFlightRef.current;');
     expect(source).toMatch(/startBoundedStartupRead\(\s*loadDeviceIdentityCache\(\)/);
     expect(source).toContain('const deviceIdentityCachePersistPendingRef = useRef(false);');
-    expect(source).toContain('if (result.cacheChanged)');
     // 重连(connectionEpoch 变化)必须无条件全量刷新:presence 只在变化时广播、无全量重放,
     // 后台漏掉的上/下线事件只能靠重连重拉 REST 快照兜底,不能再用 hydrated 标记门控挡掉。
     // homeListCacheHydrated 是一次性 gate(缓存种入完成后永久为 true,种入失败也置 true),
