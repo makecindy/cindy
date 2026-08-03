@@ -10,25 +10,26 @@ export function permissionOptionsForDisplay(
   activeMode: string,
 ): MobileChoiceOption[] {
   const result: MobileChoiceOption[] = [];
-  const indexBySemanticId = new Map<string, number>();
+  let defaultPermissionsIndex: number | undefined;
 
   for (const option of options) {
     if (option.id === 'plan') continue;
-    const semanticId = option.id === 'default' || option.id === 'ask'
-      ? 'default-permissions'
-      : option.id;
-    const existingIndex = indexBySemanticId.get(semanticId);
-    if (existingIndex === undefined) {
-      indexBySemanticId.set(semanticId, result.length);
+    if (option.id !== 'default' && option.id !== 'ask') {
       result.push(option);
       continue;
     }
 
-    const existing = result[existingIndex];
+    if (defaultPermissionsIndex === undefined) {
+      defaultPermissionsIndex = result.length;
+      result.push(option);
+      continue;
+    }
+
+    const existing = result[defaultPermissionsIndex];
     const existingIsActive = existing.id === activeMode;
     const candidateIsActive = option.id === activeMode;
     if (candidateIsActive || (!existingIsActive && existing.id === 'default' && option.id === 'ask')) {
-      result[existingIndex] = option;
+      result[defaultPermissionsIndex] = option;
     }
   }
 
