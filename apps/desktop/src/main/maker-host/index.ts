@@ -136,6 +136,18 @@ import { readContactsSettings } from './contacts-settings-store.js';
  * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
  */
 let codexAppliedContactsEnabled: boolean | null = null;
+let codexAppliedContactsOwnerScope: string | null = null;
+
+/**
+ * 当前数据所有者的 Codex runtime 是否会为下一条新任务提供 cindy_contacts。
+ * 没有当前 owner 的 applied 快照时，下次 lazy spawn 会读取 live 设置，视为就绪；
+ * 同 owner 有快照时必须服从实际应用值，避免开关已落盘但旧 app-server 仍无工具。
+ */
+export function isCodexContactsMcpReady(): boolean {
+  if (!readContactsSettings().enabled) return false;
+  if (codexAppliedContactsOwnerScope !== activeOwnerScopeKey()) return true;
+  return codexAppliedContactsEnabled !== false;
+}
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -613,7 +625,13 @@ export function getMaker(): Maker {
     // bridge shutdown 后的远端失效统一折进 shutdownCodexEnvironment 内部
     // (codex-connector R22 P1):插件开关 / custom MCP CRUD / contacts /
     // Slack provider / 账号切换等所有 shutdown 路径自动覆盖, 不靠逐点调用。
-    setCodexEnvironmentShutdownHook(handleCodexEnvironmentShutdownForRemote);
+    setCodexEnvironmentShutdownHook(() => {
+      // 所有成功 MCP 重建路径最终都会 shutdown 旧 bridge；清掉 applied 快照后，
+      // 当前 owner 的下一次 lazy spawn 将按 live 设置重建工具面。
+      codexAppliedContactsEnabled = null;
+      codexAppliedContactsOwnerScope = null;
+      handleCodexEnvironmentShutdownForRemote();
+    });
     // bridge token 轮换 (账号切换 secrets 清空) 时同步失效远端 CC query —
     // 旧 Authorization header 在新 bridge 上持续 401;独立于 shutdown 路径
     // (本地 turn 忙时 shutdown 会被跳过, codex-connector R24 P2)。
@@ -975,8 +993,7 @@ export function getMaker(): Maker {
         if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
         const live = readContactsSettings().enabled;
         if (!live) return 'disabled';
-        const applied = codexAppliedContactsEnabled ?? live;
-        return applied ? 'enabled' : 'unavailable';
+        return isCodexContactsMcpReady() ? 'enabled' : 'unavailable';
       },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
@@ -1040,12 +1057,14 @@ export function getMaker(): Maker {
           // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
           // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
           codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
+          codexAppliedContactsOwnerScope = activeOwnerScopeKey();
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
           });
           // bridge 整体缺席 = cindy_contacts 必然不可达
           codexAppliedContactsEnabled = false;
+          codexAppliedContactsOwnerScope = activeOwnerScopeKey();
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。

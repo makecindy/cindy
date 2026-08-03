@@ -64,8 +64,11 @@ const syncStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  window.sessionStorage.clear();
-  mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
+  mocks.settingsGet.mockResolvedValue({
+    enabled: true,
+    isCustomized: true,
+    codexMcpReady: true,
+  });
   mocks.settingsSet.mockResolvedValue({ enabled: true, codexMcpRefreshed: true });
   mocks.syncStatusGet.mockResolvedValue(syncStatus);
   mocks.syncEnabledSet.mockResolvedValue(syncStatus);
@@ -97,12 +100,18 @@ describe('ContactsSection AI 管理入口', () => {
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
-    expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
+    await waitFor(() =>
+      expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt'),
+    );
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
   });
 
   it('功能关闭时不启动拿不到 cindy_contacts 的空任务', async () => {
-    mocks.settingsGet.mockResolvedValue({ enabled: false, isCustomized: true });
+    mocks.settingsGet.mockResolvedValue({
+      enabled: false,
+      isCustomized: true,
+      codexMcpReady: false,
+    });
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
     render(<ContactsSection />);
 
@@ -110,40 +119,55 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByRole('button', { name: 'settings.contacts.guide.cta' })).toBeNull();
   });
 
-  it('开启处理中及 Codex MCP 刷新延迟时禁止启动空任务', async () => {
-    mocks.settingsGet.mockResolvedValue({ enabled: false, isCustomized: true });
-    let resolveSettingsSet!: (value: { enabled: boolean; codexMcpRefreshed: boolean }) => void;
-    mocks.settingsSet.mockImplementation(
-      () =>
-        new Promise((resolve) => {
-          resolveSettingsSet = resolve;
-        }),
-    );
+  it('main 报告工具未就绪时不启动任务，其他路径刷新成功后可直接恢复', async () => {
+    mocks.settingsGet.mockResolvedValue({
+      enabled: true,
+      isCustomized: true,
+      codexMcpReady: false,
+    });
     mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
-    const view = render(<ContactsSection />);
-
-    fireEvent.click(
-      await screen.findByRole('switch', { name: 'settings.contacts.enable.toggleAria' }),
-    );
+    render(<ContactsSection />);
 
     const cta = await screen.findByRole('button', { name: 'settings.contacts.guide.cta' });
-    await waitFor(() => expect(mocks.settingsSet).toHaveBeenCalledWith(true));
-    expect((cta as HTMLButtonElement).disabled).toBe(true);
-
-    resolveSettingsSet({ enabled: true, codexMcpRefreshed: false });
-    await waitFor(() => expect((cta as HTMLButtonElement).disabled).toBe(true));
-
     fireEvent.click(cta);
+    await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalledTimes(2));
     expect(mocks.prefill).not.toHaveBeenCalled();
     expect(mocks.navigate).not.toHaveBeenCalled();
 
-    view.unmount();
-    mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
-    render(<ContactsSection />);
+    mocks.settingsGet.mockResolvedValue({
+      enabled: true,
+      isCustomized: true,
+      codexMcpReady: true,
+    });
+    fireEvent.click(cta);
 
-    const remountedCta = await screen.findByRole('button', {
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
+  });
+
+  it('切换数据所有者并重挂载后只服从 main 返回的当前 owner 就绪状态', async () => {
+    mocks.settingsGet.mockResolvedValue({
+      enabled: true,
+      isCustomized: true,
+      codexMcpReady: false,
+    });
+    mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
+    const view = render(<ContactsSection />);
+    const ownerACta = await screen.findByRole('button', {
       name: 'settings.contacts.guide.cta',
     });
-    expect((remountedCta as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(ownerACta);
+    await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalledTimes(2));
+    expect(mocks.navigate).not.toHaveBeenCalled();
+
+    view.unmount();
+    mocks.settingsGet.mockResolvedValue({
+      enabled: true,
+      isCustomized: true,
+      codexMcpReady: true,
+    });
+    render(<ContactsSection />);
+    fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
+
+    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
   });
 });

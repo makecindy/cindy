@@ -4663,7 +4663,11 @@ interface ElectronAPI {
      * @cindy/maker-core 的 contacts 类型(type-only import)。
      */
     contacts: {
-      settingsGet: () => Promise<{ enabled: boolean; isCustomized: boolean }>;
+      settingsGet: () => Promise<{
+        enabled: boolean;
+        isCustomized: boolean;
+        codexMcpReady: boolean;
+      }>;
       settingsSet: (enabled: boolean) => Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }>;
       syncStatusGet: () => Promise<unknown>;
       syncEnabledSet: (enabled: boolean) => Promise<unknown>;

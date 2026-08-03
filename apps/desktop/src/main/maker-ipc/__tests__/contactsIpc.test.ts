@@ -79,12 +79,39 @@ describe('contacts-ipc handlers', () => {
     expect(await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).toEqual({
       enabled: false,
       isCustomized: false,
+      codexMcpReady: false,
     });
     await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true);
     expect(enabled).toBe(true);
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!('yes')).rejects.toThrow(
       /INVALID_PARAMS/,
     );
+  });
+
+  it('设置读取每次从 main 现查当前 owner 的 Codex MCP 就绪状态', async () => {
+    enabled = true;
+    let codexMcpReady = false;
+    handlers = createContactsIpcHandlers({
+      getManager: () => manager,
+      readSettingsState: () => ({ value: { enabled }, isCustomized: true }),
+      writeEnabled: (value) => {
+        enabled = value;
+      },
+      broadcastChanged: () => {},
+      readCodexMcpReady: () => codexMcpReady,
+    });
+
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).resolves.toMatchObject({
+      enabled: true,
+      codexMcpReady: false,
+    });
+
+    // 模拟当前 owner 通过账号/插件等其他路径成功重建 Codex 环境；不得残留 renderer 锁。
+    codexMcpReady = true;
+    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).resolves.toMatchObject({
+      enabled: true,
+      codexMcpReady: true,
+    });
   });
 
   it('开关落盘失败按 [CODE] 协议上抛, 不漏裸 Error(规则 13)', async () => {

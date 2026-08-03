@@ -71,6 +71,8 @@ export interface ContactsIpcDeps {
    * 返回给 renderer 提示"对 Codex 延迟生效", 静默成功会掩盖开关与 Codex 实际状态失同步。
    */
   invalidateCodexMcp?: () => Promise<void>;
+  /** 当前数据所有者的 Codex runtime 是否已应用 cindy_contacts。 */
+  readCodexMcpReady?: () => boolean | Promise<boolean>;
   readDeviceSyncStatus?: () => unknown | Promise<unknown>;
   setDeviceSyncEnabled?: (enabled: boolean) => Promise<void>;
   syncNow?: () => Promise<void>;
@@ -122,7 +124,10 @@ export function createContactsIpcHandlers(deps: ContactsIpcDeps): Record<string,
   return {
     [MAKER_INVOKE.CONTACTS_SETTINGS_GET]: async () => {
       const state = deps.readSettingsState();
-      return { enabled: state.value.enabled, isCustomized: state.isCustomized };
+      const codexMcpReady = state.value.enabled
+        ? ((await deps.readCodexMcpReady?.()) ?? true)
+        : false;
+      return { enabled: state.value.enabled, isCustomized: state.isCustomized, codexMcpReady };
     },
     [MAKER_INVOKE.CONTACTS_SETTINGS_SET]: async (enabled) => {
       if (typeof enabled !== 'boolean')
@@ -359,6 +364,10 @@ export function registerContactsIpc(): void {
     // 内 remote-ssh 的先例)。
     // 契约: 任一步失败都 rethrow(见 ContactsIpcDeps.invalidateCodexMcp 注释),
     // handler 把失败折成 codexMcpRefreshed:false 由 renderer 提示延迟生效。
+    readCodexMcpReady: async () => {
+      const { isCodexContactsMcpReady } = await import('../maker-host/index.js');
+      return isCodexContactsMcpReady();
+    },
     invalidateCodexMcp: async () => {
       try {
         const { restartCodexAfterAuthModeChange } = await import('../maker-host/index.js');
