@@ -1,4 +1,5 @@
 import {
+  isResponsesImageContentPartType,
   UnsupportedResponsesFeatureError,
   type ChatAssistantMessage,
   type ChatAudioInput,
@@ -95,6 +96,13 @@ function hasImageSource(part: Record<string, unknown>): boolean {
     );
 }
 
+function isImagePartTranslatable(
+  part: Record<string, unknown>,
+  capabilities: ChatMediaCapabilities,
+): boolean {
+  return capabilities.imageInput === 'image_url' && part.file_id === undefined;
+}
+
 function hasFileSource(part: Record<string, unknown>): boolean {
   const source = isPlainObject(part.file) ? part.file : part;
   return source.file_id !== undefined
@@ -112,7 +120,7 @@ function mediaPart(
   capabilities: ChatMediaCapabilities,
   failClosed = false,
 ): ChatUserContentPart | undefined {
-  if (part.type === 'input_image' || part.type === 'image_url' || part.type === 'image') {
+  if (isResponsesImageContentPartType(part.type)) {
     if (!hasImageSource(part)) return undefined;
     if (capabilities.imageInput !== 'image_url') {
       if (failClosed) throw new UnsupportedResponsesFeatureError(String(part.type));
@@ -144,6 +152,7 @@ function messageContent(
   itemIndex: number,
   developerRole: ChatDeveloperRole,
   mediaCapabilities: ChatMediaCapabilities,
+  dropUnsupportedHistoricalImages = false,
 ): string | ChatUserContentPart[] {
   if (typeof item.content === 'string') return item.content;
   if (!Array.isArray(item.content)) {
@@ -171,6 +180,19 @@ function messageContent(
     if (rawPart.type === 'refusal' && typeof rawPart.refusal === 'string') {
       text += rawPart.refusal;
       content.push({ type: 'text', text: rawPart.refusal });
+      continue;
+    }
+    if (
+      dropUnsupportedHistoricalImages
+      && normalizedRole === 'user'
+      && isResponsesImageContentPartType(rawPart.type)
+      && hasImageSource(rawPart)
+      && !isImagePartTranslatable(rawPart, mediaCapabilities)
+    ) {
+      // Codex replays failed user input in later Responses requests. A Chat-only provider that
+      // rejected that image once would otherwise reject every subsequent text turn as well.
+      // Provider-scoped file IDs remain untranslatable even when the route accepts image URLs.
+      // Only replayed images are removed: the newest user turn remains fail-closed below.
       continue;
     }
     const translatedMedia = mediaPart(rawPart, mediaCapabilities);
@@ -317,6 +339,27 @@ function ensureToolCallCompatibility(message: ChatAssistantMessage, opts: Transl
 function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOptions): ChatMessage[] {
   if (typeof input === 'string') return [{ role: 'user', content: input }];
   if (!Array.isArray(input)) throw new UnsupportedResponsesFeatureError('input');
+
+  let newestNormalizedUserMessageIndex = -1;
+  let newestUserMessageIndex = -1;
+  for (let index = input.length - 1; index >= 0; index -= 1) {
+    const item = input[index];
+    if (!isPlainObject(item)) continue;
+    const role = (item as Record<string, unknown>).role;
+    if (typeof role !== 'string') continue;
+    if (role === 'user') {
+      newestUserMessageIndex = index;
+      break;
+    }
+    if (
+      newestNormalizedUserMessageIndex < 0
+      && role !== 'assistant'
+      && normalizeRole(role, opts.developerRole) === 'user'
+    ) newestNormalizedUserMessageIndex = index;
+  }
+  // Codex can append user-like synthetic reminders after the real user item. Treat the latest
+  // explicit user item as the current-turn boundary so a fresh image is never silently discarded.
+  if (newestUserMessageIndex < 0) newestUserMessageIndex = newestNormalizedUserMessageIndex;
 
   const messages: ChatMessage[] = [];
   let assistant: ChatAssistantMessage | null = null;
@@ -474,6 +517,7 @@ function translateInput(input: ResponsesRequest['input'], opts: TranslateInputOp
         index,
         opts.developerRole,
         opts.mediaCapabilities,
+        index < newestUserMessageIndex,
       );
       if (item.role === 'assistant') {
         if (typeof content !== 'string') {

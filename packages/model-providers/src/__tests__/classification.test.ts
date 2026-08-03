@@ -19,10 +19,26 @@ import {
   groupOf,
   isBudgetModel,
   isChatEligible,
+  isModelSelectableForNewRoute,
   isSubscriptionDirectModel,
   modelBadges,
   type ModelCategory,
 } from '../classification.js';
+
+describe('isModelSelectableForNewRoute', () => {
+  it('只允许未停用、未 retired 的 agent 对话模型进入新路由', () => {
+    expect(isModelSelectableForNewRoute({ id: 'claude-opus-5' })).toBe(true);
+    expect(isModelSelectableForNewRoute({ id: 'claude-opus-5', disabled: true })).toBe(false);
+    expect(isModelSelectableForNewRoute({ id: 'claude-opus-5', status: 'retired' })).toBe(false);
+    expect(isModelSelectableForNewRoute({ id: 'gpt-image-2', mode: 'image_generation' })).toBe(false);
+    expect(
+      isModelSelectableForNewRoute(
+        { id: 'gpt-image-2', group: 'custom:mine' },
+        { userProvider: true },
+      ),
+    ).toBe(true);
+  });
+});
 
 // ── 原文移植: sourceSwitch.test.ts 的 categorize / groupOf / groupModelsForDisplay ──
 

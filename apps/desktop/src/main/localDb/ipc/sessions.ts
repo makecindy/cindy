@@ -53,7 +53,12 @@ import {
   listInterruptedPendingSessionIds,
   setOnSessionTurnEndedPersisted,
 } from '../sessionActiveTurn';
-import { dismissErrorMessage, rebroadcastAgentSwitchBoundary } from './messages';
+import {
+  dismissErrorMessage,
+  listDeletableSessionPersistedChatAttachmentPaths,
+  rebroadcastAgentSwitchBoundary,
+} from './messages';
+import { cleanupStagedChatAttachments } from '../../file-browser/remote-file-cache';
 import { assertTrustedAppRendererEvent } from '../../security/trustedAppRenderer.js';
 
 const log = createLogger('sessions');
@@ -1302,6 +1307,14 @@ export async function patchSessionMetaInDb(
         err: err instanceof Error ? err.message : String(err),
       });
     });
+    void listDeletableSessionPersistedChatAttachmentPaths(sessionId)
+      .then((filePaths) => cleanupStagedChatAttachments(filePaths))
+      .catch((err) => {
+        log.warn('staged chat attachment cleanup failed', {
+          sessionId,
+          err: err instanceof Error ? err.message : String(err),
+        });
+      });
   }
   removeHookAttachmentDir(sessionId, patch.status);
   scheduleWorktreeRecycleForStatusChange(sessionId, patch.status);

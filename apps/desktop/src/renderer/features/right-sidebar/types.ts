@@ -17,7 +17,8 @@ import type { TabCloseInterceptor } from './store';
  * - `file-browser` / `web-browser`:Phase 3 / Phase 5 注册真实 plugin。
  * - `terminal` / `review`:占位扩展点,Phase 1 在「+」dropdown 里灰显;未来注册新 plugin 时只需在此 union 添加值 + 调 `registerTabKind`,壳子不动。
  * - `ghost:<id>`:panel.position:'tab' 的插件面板页签,由
- *   renderer/cindy-brain/ghostTabPlugins.tsx 随已装清单动态注册/注销
+ *   历史形态(面板收束前)由页签注册表动态注册;2026-08 起页签面板改由
+ *   插件页承载,该前缀仅存在于旧会话持久化数据,Shell 发现即静默关闭
  *   (字符串与顶层布局的 ghostPanelKind 同形,DB kind 列无枚举约束可直存)。
  */
 export type BuiltinTabKindId =

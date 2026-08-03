@@ -86,7 +86,7 @@ export function verifyDirDistManifest(destDir) {
   }
   // 反向精确匹配:目录里不得有清单之外的条目。逐文件哈希只覆盖清单内条目,清单外的
   // 字节(旧构建残留 / 本地污染)完全不参与校验,却会被 ensure-agent-binaries 跳过刷新、
-  // 被 stagePi 原样打进安装包 —— 成为未验证资产(codex review P1)。故递归枚举实际集合,
+  // 随后进入 CDN 目录归档 —— 成为未验证资产(codex review P1)。故递归枚举实际集合,
   // 要求与清单精确一致:多出普通文件、或出现任何 symlink/非普通文件(污染向量)即 false。
   const manifestPaths = new Set(files.map((entry) => entry.path));
   const actualPaths = [];

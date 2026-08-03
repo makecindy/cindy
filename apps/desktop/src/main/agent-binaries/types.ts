@@ -56,6 +56,8 @@ export interface BinaryProvisioner {
   /** 显式触发安装/升级流程；幂等：本地已有正确版本时立即返回 ready: true */
   prepare(opts?: {
     onProgress?: (p: VendorRuntimeState) => void;
+    /** 取消排队、下载或重试等待；已完成的本地命中不受影响。 */
+    signal?: AbortSignal;
   }): Promise<{ ready: boolean; binaryPath: string; error?: string }>;
 
   /**
@@ -80,11 +82,11 @@ export interface PrepareOpts {
   broadcastProgress?: boolean;
   /**
    * false 时失败不广播 failed payload(splash 收到 failed 会立即进失败态)。
-   * 供可选 vendor(pi)使用:下载失败静默降级到安装包自带分发,不打断启动。
+   * 供可选 vendor(pi)使用:下载失败时本次禁用 pi,不打断启动。
    * 缺省 true(cc/codex 必装,失败要让 splash 显示重试)。
    */
   broadcastFailure?: boolean;
-  /** 允许宿主在退出或启动 deadline 到期时取消 Linux 私有安装子进程。 */
+  /** 允许宿主在退出或启动 deadline 到期时取消受管下载或 Linux 私有安装。 */
   signal?: AbortSignal;
 }
 

@@ -144,7 +144,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
       try {
         // 1. 拉 manifest（不带 dev fallback —— dev mode 归属在 Boss 2 包壳层）
         let manifest = getCachedManifest();
-        if (!manifest) manifest = await fetchManifest();
+        if (!manifest) manifest = await fetchManifest(undefined, opts?.signal);
         if (!manifest) {
           emit({
             status: 'failed',
@@ -168,7 +168,7 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
         // Reject a manifest asset explicitly scoped to another platform, while
         // keeping compatibility with older manifests whose file path had no
         // platform segment at all.
-        const assetPlatform = asset.file.match(/\/(linux-x64|linux-arm64|darwin-arm64|darwin-x64|win32-x64)\//)?.[1];
+        const assetPlatform = asset.file.match(/\/(linux-x64|linux-arm64|darwin-arm64|darwin-x64|win32-x64|win32-arm64)\//)?.[1];
         if (assetPlatform && assetPlatform !== getPlatformKey()) {
           emit({
             status: 'failed',
@@ -219,6 +219,10 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
           targetPath: downloadDest,
           sha256: asset.sha256.toLowerCase(),
           expectedSize: asset.size,
+          signal: opts?.signal,
+          // 可选 Pi 不该在 CDN 故障时做六轮重试拖住启动；一次连接失败就降级，
+          // 持续有进度的正常下载仍可在宿主总 deadline 内完成。
+          retry: config.optionalAsset ? { maxAttempts: 1 } : undefined,
           onProgress: (e: ProgressEvent) => {
             emit({
               status: 'downloading',
@@ -292,6 +296,9 @@ export function createBinaryProvisioner(config: BinaryProvisionerConfig): Binary
       // asset_missing 快速失败交调用方降级)。
       try {
         let manifest = getCachedManifest();
+        // 可选资产的 peek 只用于 splash 步数提示，不能为了“猜要不要下载”额外
+        // 发一次可能卡住启动的网络请求；真正 prepare 会带宿主 deadline 拉清单。
+        if (!manifest && config.optionalAsset) return true;
         if (!manifest) manifest = await fetchManifest();
         if (!manifest) return true;
         const asset = getVendorAsset(manifest, config.manifestField);

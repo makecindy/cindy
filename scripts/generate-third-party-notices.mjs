@@ -5,8 +5,9 @@
  * 生成全工程及桌面端分发产物的第三方开源声明文件 THIRD-PARTY-NOTICES.txt。
  *
  * 范围:根目录及所有 pnpm workspace 包的生产依赖闭包(dependencies +
- * optionalDependencies,递归;workspace 内部包只穿透不收录),外加随安装包
- * 分发的非 npm 资产(ripgrep / Codex CLI / pi coding agent / Electron /
+ * optionalDependencies,递归;workspace 内部包只穿透不收录),外加产品分发的
+ * 非 npm 资产(安装包内的 ripgrep / Electron，以及运行时下载的 Codex CLI /
+ * pi coding agent，另含
  * Android Platform-Tools / vendored 代码)的手工条目。
  *
  * 输出(均应提交进仓库,但依赖范围不同):
@@ -612,7 +613,7 @@ function readBundledLicense(relativePath) {
 }
 
 /**
- * 桌面三平台共有的随包分发组件声明。
+ * 桌面三平台共有的非 npm 分发组件声明（含安装包内资产与运行时受管下载资产）。
  *
  * @param sharpPackageNames sharp 预编译包名,可传单个或数组。该包的 README 与
  *   versions.json 是 per-arch 的(见下方 sharp 段),所以一个平台声明覆盖多个架构时
@@ -635,10 +636,10 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
-  // OpenAI Codex CLI — 随包分发的 agent 二进制
+  // OpenAI Codex CLI — 运行时从 CDN 下载到 userData，不进入安装包
   entries.push(
     bundledComponent({
-      name: "OpenAI Codex CLI (bundled binary)",
+      name: "OpenAI Codex CLI (runtime-downloaded binary)",
       version: readToolVersion("codex"),
       license: "Apache-2.0",
       url: "https://github.com/openai/codex",
@@ -649,10 +650,10 @@ function buildDesktopCommonEntries(apacheText, sharpPackageNames) {
     }),
   );
 
-  // pi coding agent — 随包分发的 agent 二进制(@earendil-works/pi-coding-agent)
+  // pi coding agent — 运行时从 CDN 下载到 userData，不进入安装包
   entries.push(
     bundledComponent({
-      name: "pi coding agent (bundled binary)",
+      name: "pi coding agent (runtime-downloaded binary)",
       version: readToolVersion("pi"),
       license: "MIT",
       url: "https://github.com/earendil-works/pi",
@@ -932,7 +933,7 @@ function buildOutput({
 
   // —— Section 1: 非 npm 组件 ——
   push("=".repeat(78));
-  push("SECTION 1: Bundled components (non-npm)");
+  push("SECTION 1: Non-npm components");
   push("=".repeat(78));
   for (const e of manualEntries) {
     const versionSuffix = `(${e.version})`;
@@ -1229,7 +1230,7 @@ function auditArtifact(label, closure, manualEntries) {
     throw new Error(lines.join("\n"));
   }
   console.log(
-    `${label}: ${closure.packages.length} package dependencies + ${manualEntries.length} bundled components`,
+    `${label}: ${closure.packages.length} package dependencies + ${manualEntries.length} non-npm components`,
   );
 }
 

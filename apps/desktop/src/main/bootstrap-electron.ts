@@ -37,12 +37,16 @@ import {
   markDesktopDevWindowReady,
 } from './devStartupStatus';
 import { prewarmMacComputerPermissionGuideHelper } from './computer-permission-guide/MacComputerPermissionGuideNativeHost.js';
+import { handleOpenChatGPTApp } from './chatgpt-app.js';
 
 const PROCESS_STARTED_AT_MS = Date.now();
 // Official Linux binaries total hundreds of MB. Keep one shared deadline for
 // both downloads, but allow normal consumer connections to finish while the
 // splash displays real byte progress.
 const LINUX_AGENT_INSTALL_STARTUP_DEADLINE_MS = 5 * 60_000;
+// Pi 是可选能力。首启可以给它一小段时间从 CDN 准备，但网络异常时不能让
+// 整个 Cindy 一直停在启动页；到期后取消本次下载并禁用本次 Pi。
+const PI_AGENT_INSTALL_STARTUP_DEADLINE_MS = 60_000;
 
 if (
   process.platform === 'linux' &&
@@ -195,6 +199,14 @@ import {
   REMOTE_IMAGE_MAX_BYTES,
 } from './lightboxMediaActions';
 import { createChatAttachmentSaveHandler } from './chatAttachmentSave';
+import { createChatAttachmentStageHandler } from './chatAttachmentStage';
+import {
+  cleanupOwnedUnpersistedStagedChatAttachments,
+  getChatAttachmentCacheRoot,
+  getRemoteFileCacheRoot,
+  stageLocalFileToCache,
+  sweepStagedChatAttachmentsOnStartup,
+} from './file-browser/remote-file-cache';
 import { sweepStartupDraftImages } from './imageCacheOrphanSweep';
 import { sweepLegacyDialogueWorkingDirs } from './localDb/dialogueWorkdirSelfHeal';
 import { BRAND_IDENTITY } from '@cindy/maker-shared/brand-identity';
@@ -232,6 +244,7 @@ import { cindyGhostSchemePrivilege } from './cindy-brain/runtime/electronSandbox
 import { fetchReleaseNotes, fetchReleaseNotesIndex } from './releaseNotesService';
 import { resolveWorkspacePathCached, resolveWorkspacePathBatchCached } from './pathResolver';
 import { registerLocalDbIpc } from './localDb/ipc/registerAll';
+import { listPersistedChatAttachmentPaths } from './localDb/ipc/messages';
 import {
   registerLegacyMigrationIpc,
   runLegacyUserDataMigrationForUser,
@@ -288,6 +301,7 @@ import { initDeviceLinkService, releaseDeviceLinkOwnershipBeforeLogout } from '.
 import {
   getUpdateRelaunchControllers,
   hasInFlightRemoteInvokes,
+  pushSessionActivityToController,
   setSessionsSubscribedListener,
 } from './device-link/dispatch';
 import {
@@ -404,6 +418,7 @@ import {
   collectAgentInputQueueScanTexts,
   createAutomationUserTurnGitBaselineHooks,
   registerMakerIpc as registerMakerCoreIpc,
+  isSessionTurnPendingCompletion,
   stopOrcaIdleWatcher,
   setGoalClearObserver,
   setGoalIdleObserver,
@@ -2606,8 +2621,13 @@ const registerIpcHandlers = () => {
     getMainWindow: () => getWindow() ?? null,
     isPlannedRemoteDaemonClose: isCcMgrUpgradeInFlight,
   })?.setAppFocused(hasFocusedAppWindow());
-  setSessionsSubscribedListener(() => {
-    getAgentIslandService()?.replaySessionActivity();
+  // 定向 replay:快照只补发给刚完成 sessions 订阅的那一台控制端。若沿默认广播
+  // 通道扇出,每次 subscribe 都会把 O(会话数) 的帧重复灌给其它所有控制端,
+  // 多控制端重连风暴中会互相挤爆对方的可靠传输窗口。
+  setSessionsSubscribedListener((controllerDeviceId) => {
+    getAgentIslandService()?.replaySessionActivity((payload) => {
+      pushSessionActivityToController(controllerDeviceId, payload);
+    });
   });
 
   // 「在新窗口打开」会话多开 —— 新建一个完整窗口定位到该 session, 初始 bounds 取主窗。
@@ -3835,6 +3855,9 @@ const registerIpcHandlers = () => {
   // getMaker() 在构造期就读 binary path, 早于 splash 调用会抛错; 第一次 splash 成功后置 true,
   // 后续 retry 走 check-environment 不重复注册 (重复 ipcMain.handle 会覆盖同名 handler)。
   let makerIpcsRegistered = false;
+  // Pi 是“本次启动可选”的能力：一旦首次准备失败，就算后续清单/CDN恢复，
+  // 也不再把 Pi 动态塞回已经构造好的 Maker，避免返回状态与实际能力不一致。
+  let piDisabledForLaunch = false;
   const registerMakerIpcsAfterSplash = async (): Promise<void> => {
     if (makerIpcsRegistered) return;
     // 模型供应商目录(providers.json)按「OSS 真源 / bundled 兜底」加载一次存内存:必须在第一次
@@ -3916,7 +3939,7 @@ const registerIpcHandlers = () => {
         waitForAccountProviderModelsReady: waitForCurrentAccountProviderModelsReady,
         onProviderModelAutoRefreshConfigured: markMakerProviderRefreshConfigured,
       });
-      registerMakerTitleIpc();
+      registerMakerTitleIpc({ isSessionTurnPendingCompletion });
       registerMakerHelpIpc(ipcMaker);
       registerHelpFeedbackIpc();
       registerMakerPlanWriteIpc();
@@ -4041,7 +4064,7 @@ const registerIpcHandlers = () => {
   // 提前 peekNeedsDownload 决定 (x/y) 标签：两个及以上需要下载时给 step/totalSteps，
   // 否则不带标签（splash 显示单一 "唤醒 Cindy 中..." 文案）。
   // pi 是可选实验 agent:清单无资产 / 下载失败都不算环境检查失败(失败不广播
-  // failed payload),pi-host 会回退安装包自带分发,再缺失则本次不注册 pi。
+  // failed payload),本次不注册 pi。
   ipcMain.handle('check-environment', async () => {
     // splash 首个 invoke = renderer 存活的强信号(与 renderer:log 双保险)。
     rendererBootGuard?.markAlive();
@@ -4143,28 +4166,41 @@ const registerIpcHandlers = () => {
     }
 
     // ── Phase 3: pi 段（可选,失败不阻塞启动）──────────────────────────────────
-    // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默降级,
-    // buildPiAgent 会依次回退 userData 已装版本 → 安装包自带分发(resources/pi)。
+    // broadcastFailure: false —— pi 下载失败不能把 splash 打进失败态;静默禁用
+    // 本次 pi 注册，Claude Code / Codex 与 Cindy 本身仍照常可用。
+    // 只从 Pi 阶段开始计时，不能让前面的必需 binary 下载吃掉 Pi 自己的预算。
+    const piInstallSignal = app.isPackaged
+      ? AbortSignal.timeout(PI_AGENT_INSTALL_STARTUP_DEADLINE_MS)
+      : undefined;
     resetBeforeSegment('pi', claudeRes.downloaded === true || codexRes.downloaded === true);
 
     let piInfo: { status: 'passed' | 'failed'; path?: string; error?: string };
-    try {
-      const piRes = await binaryPrepare('pi', {
-        ...stepOptsFor('pi'),
-        broadcastFailure: false,
-      });
-      piInfo = piRes.ready && piRes.path
-        ? { status: 'passed' as const, path: piRes.path }
-        : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
-    } catch (err: unknown) {
+    if (piDisabledForLaunch) {
       piInfo = {
         status: 'failed' as const,
-        error: err instanceof Error ? err.message : String(err),
+        error: 'pi disabled for this launch after an earlier prepare failure',
       };
+    } else {
+      try {
+        const piRes = await binaryPrepare('pi', {
+          ...stepOptsFor('pi'),
+          broadcastFailure: false,
+          signal: piInstallSignal,
+        });
+        piInfo = piRes.ready && piRes.path
+          ? { status: 'passed' as const, path: piRes.path }
+          : { status: 'failed' as const, error: piRes.error ?? 'pi binary not available' };
+      } catch (err: unknown) {
+        piInfo = {
+          status: 'failed' as const,
+          error: err instanceof Error ? err.message : String(err),
+        };
+      }
     }
     if (piInfo.status === 'failed') {
+      piDisabledForLaunch = true;
       console.warn(
-        `[bootstrap-electron] pi binary prepare failed (non-fatal, falling back to bundled dist): ${piInfo.error}`,
+        `[bootstrap-electron] pi binary prepare failed (non-fatal, pi disabled for this launch): ${piInfo.error}`,
       );
     }
 
@@ -4207,6 +4243,17 @@ const registerIpcHandlers = () => {
         return { success: false };
       }
     },
+  );
+
+  // ChatGPT Desktop 当前注册 `codex:` 协议（macOS bundle id com.openai.codex；
+  // Windows 安装包也由系统协议注册表接管）。独立无参 IPC 保持最小权限，不能借此
+  // 打开 renderer 提供的任意自定义 scheme / deep link。
+  ipcMain.handle(
+    'shell:open-chatgpt-app',
+    async (event): Promise<{ success: boolean }> => handleOpenChatGPTApp(event, {
+      assertTrustedSender: assertTrustedAppRendererEvent,
+      openExternal: (url) => shell.openExternal(url),
+    }),
   );
 
   // Show native directory picker dialog
@@ -5017,13 +5064,67 @@ const registerIpcHandlers = () => {
     getDownloadsDir: () => app.getPath('downloads'),
     getAllowedSourceRoots: () => [
       imageCacheStore.getCacheRoot(),
-      path.join(app.getPath('userData'), 'remote-file-cache'),
+      getChatAttachmentCacheRoot(),
+      getRemoteFileCacheRoot(),
     ],
   });
+  const stageChatAttachment = createChatAttachmentStageHandler({
+    isPathAllowed,
+    realpath: (filePath) => fs.promises.realpath(filePath),
+    stat: (filePath) => fs.promises.stat(filePath, { bigint: true }),
+    openSource: async (filePath) => {
+      const noFollow = typeof fs.constants.O_NOFOLLOW === 'number' ? fs.constants.O_NOFOLLOW : 0;
+      const handle = await fs.promises.open(filePath, fs.constants.O_RDONLY | noFollow);
+      return {
+        stat: () => handle.stat({ bigint: true }),
+        copyTo: async (targetPath) => {
+          await pipeline(
+            handle.createReadStream({ autoClose: false, start: 0 }),
+            fs.createWriteStream(targetPath, { flags: 'wx' }),
+          );
+        },
+        close: () => handle.close(),
+      };
+    },
+    stageCopy: (params) => {
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId) throw new Error('Cannot stage an attachment without an active data owner');
+      return stageLocalFileToCache({ ...params, ownerId });
+    },
+  });
+  ipcMain.handle(
+    'chat-attachment:stage',
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return stageChatAttachment(params);
+    },
+  );
+  ipcMain.handle(
+    'chat-attachment:cleanup',
+    async (event, filePaths: readonly string[]) => {
+      assertTrustedAppRendererEvent(event);
+      if (!Array.isArray(filePaths)) return;
+      const ownerScopeKey = activeOwnerScopeKey();
+      const ownerId = getActiveAppSession().dataOwnerId;
+      if (!ownerId || isAppSessionBoundaryPending()) return;
+      const protectedPaths = await listPersistedChatAttachmentPaths();
+      const isCurrentOwner = () =>
+        activeOwnerScopeKey() === ownerScopeKey && !isAppSessionBoundaryPending();
+      if (!isCurrentOwner()) return;
+      await cleanupOwnedUnpersistedStagedChatAttachments({
+        ownerId,
+        filePaths,
+        protectedPaths,
+        canRemove: isCurrentOwner,
+      });
+    },
+  );
   ipcMain.handle(
     'chat-attachment:save-as',
-    (_event, params: { sourcePath?: unknown; suggestedName?: unknown }) =>
-      saveChatAttachment(params),
+    (event, params: { sourcePath?: unknown; suggestedName?: unknown }) => {
+      assertTrustedAppRendererEvent(event);
+      return saveChatAttachment(params);
+    },
   );
 
   // Settings → About: 打开 <userData>/logs 在系统文件管理器。
@@ -5824,6 +5925,26 @@ app.on('ready', async () => {
       // Phase 1.1: file worker 接管 DB 连接后,释放 main 端的 _db + optimize 定时器。
       // 如果 worker takeover 失败并进入 inproc fallback,main _db 必须继续保留,
       // 否则 fallback 会拿到已关闭的连接。
+      try {
+        const protectedPaths = await listPersistedChatAttachmentPaths();
+        const result = await sweepStagedChatAttachmentsOnStartup({
+          ownerId: userId,
+          protectedPaths,
+          createdBeforeMs: PROCESS_STARTED_AT_MS,
+        });
+        if (result.removed > 0 || result.protected > 0) {
+          dbClientLog.info('[ChatAttachment] startup staged attachment sweep completed', {
+            ...result,
+            ownerId: userId,
+          });
+        }
+      } catch (err) {
+        dbClientLog.warn('[ChatAttachment] startup staged attachment sweep failed (non-fatal)', {
+          ownerId: userId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
+      logStartupPhase('chat-attachment-sweep');
       if (dbClientTakeover.shouldReleaseMainDb && process.env.XDT_DB_INPROC !== 'true') {
         // 只把连接交给 worker，不能释放 shared-passive schema reader lease：worker
         // 还会长期持有同一 DB；lease 必须留到真正 logout / app quit 才释放。

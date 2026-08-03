@@ -90,6 +90,7 @@ describe('applyCodexPlanSnapshotOnDone', () => {
   });
 
   it('marks the matching plan complete when a successful turn has no final snapshot', () => {
+    const completedAtMs = 1_700_000_005_000;
     const message = planMessage('plan:done', [
       { step: 'Inspect', status: 'in_progress' },
       { step: 'Patch', status: 'pending' },
@@ -99,11 +100,13 @@ describe('applyCodexPlanSnapshotOnDone', () => {
       null,
       'done',
       'completed',
+      completedAtMs,
     );
 
     expect(result.changed).toBe(true);
     expect(result.toolUseId).toBe('plan:done');
     expect(result.messages[0]).toMatchObject({
+      planUpdatedAtMs: completedAtMs,
       toolInput: {
         plan: [
           { step: 'Inspect', status: 'completed' },

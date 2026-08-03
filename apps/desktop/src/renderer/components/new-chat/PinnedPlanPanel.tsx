@@ -18,11 +18,13 @@ import type { ChatMessage } from '@/lib/makerChatStore';
 const COMPLETED_PLAN_VISIBLE_MS = 2_000;
 
 export function PinnedPlanPanel({
+  sessionId,
   messages,
   animated,
   width,
   visible = true,
 }: {
+  sessionId: string | null;
   messages: readonly ChatMessage[];
   /** 会话仍在流式时进行中项呼吸/旋转;停止后冻结。 */
   animated: boolean;
@@ -33,30 +35,77 @@ export function PinnedPlanPanel({
 }): React.ReactElement | null {
   const insertion = useMemo(() => findLatestMessageTodoInsertion(messages), [messages]);
   const allDone = Boolean(
-    insertion
-    && insertion.todos.length > 0
-    && insertion.todos.every((todo) => todo.status === 'completed'),
+    insertion &&
+    insertion.todos.length > 0 &&
+    insertion.todos.every((todo) => todo.status === 'completed'),
+  );
+  const completedAtMs = insertion?.updatedAtMs ?? Date.parse(insertion?.createdAt ?? '');
+  const persistedCompletionDeadlineMs =
+    allDone && Number.isFinite(completedAtMs)
+      ? completedAtMs + COMPLETED_PLAN_VISIBLE_MS
+      : null;
+  const [fallbackCompletionVisibility, setFallbackCompletionVisibility] = useState<{
+    identity: string;
+    deadlineMs: number;
+  } | null>(null);
+  const completionIdentity = insertion ? `${sessionId ?? 'unknown'}:${insertion.key}` : null;
+  const completionDeadlineMs =
+    persistedCompletionDeadlineMs ??
+    (allDone && fallbackCompletionVisibility?.identity === completionIdentity
+      ? fallbackCompletionVisibility.deadlineMs
+      : null);
+  const completedPlanExpired = Boolean(
+    completionDeadlineMs !== null && completionDeadlineMs <= Date.now(),
   );
   const [hiddenInsertionKey, setHiddenInsertionKey] = useState<string | null>(null);
 
   useEffect(() => {
     if (!insertion || !allDone) {
       setHiddenInsertionKey(null);
+      setFallbackCompletionVisibility(null);
       return;
     }
 
+    if (completionDeadlineMs === null) {
+      setHiddenInsertionKey(null);
+      setFallbackCompletionVisibility({
+        identity: completionIdentity ?? insertion.key,
+        deadlineMs: Date.now() + COMPLETED_PLAN_VISIBLE_MS,
+      });
+      return;
+    }
+
+    const remainingMs = Math.max(0, completionDeadlineMs - Date.now());
+    if (remainingMs === 0) {
+      setHiddenInsertionKey(insertion.key);
+      return;
+    }
+
+    setHiddenInsertionKey(null);
     const timer = window.setTimeout(() => {
       setHiddenInsertionKey(insertion.key);
-    }, COMPLETED_PLAN_VISIBLE_MS);
+    }, remainingMs);
     return () => window.clearTimeout(timer);
-  }, [allDone, insertion?.key]);
+  }, [allDone, completionDeadlineMs, completionIdentity, insertion?.key]);
 
-  if (!visible || !insertion || insertion.todos.length === 0 || hiddenInsertionKey === insertion.key) return null;
+  if (
+    !visible ||
+    !insertion ||
+    insertion.todos.length === 0 ||
+    completedPlanExpired ||
+    hiddenInsertionKey === insertion.key
+  )
+    return null;
 
   return (
     <div className="mb-1.5 max-w-full" style={{ width }}>
       {/* key 按 plan session 锚定:新计划重挂载,浮层/进度从头开始。 */}
-      <TodoListCard key={insertion.key} todos={insertion.todos} animated={animated} maxWidth={width} />
+      <TodoListCard
+        key={insertion.key}
+        todos={insertion.todos}
+        animated={animated}
+        maxWidth={width}
+      />
     </div>
   );
 }

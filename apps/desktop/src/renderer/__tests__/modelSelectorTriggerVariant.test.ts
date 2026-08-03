@@ -34,6 +34,11 @@ vi.mock('react-i18next', async (importOriginal) => ({
         'newChat.modelSelector.trigger.agent.codex': 'Codex',
         'newChat.modelSelector.pricing.free': '限时免费',
         'newChat.modelSelector.source.disconnected': '已断开',
+        'newChat.modelSelector.remoteLoading': '正在从远程设备读取模型…',
+        'newChat.modelSelector.remoteLoadFailed': '无法读取远程设备上的模型。请检查连接后重试。',
+        'newChat.modelSelector.remoteLoadFailedShort': '模型读取失败',
+        'newChat.modelSelector.retryRemoteModels': '重新读取模型',
+        'newChat.modelSelector.search.noResults': '没有匹配的模型',
       };
       if (key === 'newChat.modelSelector.priceTip') {
         return `Input ${options?.input} · Output ${options?.output} per 1M tokens`;
@@ -179,10 +184,21 @@ const agentCapabilitiesRef = vi.hoisted(() => {
     effortLevels: [{ id: 'xhigh', displayName: 'X-High' }],
     hasFastMode: false,
   };
-  return { DEFAULT_CAPABILITIES, capabilities: DEFAULT_CAPABILITIES as unknown };
+  return {
+    DEFAULT_CAPABILITIES,
+    capabilities: DEFAULT_CAPABILITIES as unknown,
+    loading: false,
+    error: null as string | null,
+  };
 });
 vi.mock('@/hooks/useAgentCapabilities', () => ({
-  useAgentCapabilities: () => ({ capabilities: agentCapabilitiesRef.capabilities }),
+  evictDeviceCapabilities: vi.fn(),
+  prefetchDeviceCapabilities: vi.fn(async () => {}),
+  useAgentCapabilities: () => ({
+    capabilities: agentCapabilitiesRef.capabilities,
+    loading: agentCapabilitiesRef.loading,
+    error: agentCapabilitiesRef.error,
+  }),
 }));
 
 vi.mock('@/hooks/useApiKey', () => ({
@@ -275,9 +291,23 @@ vi.mock('@/hooks/useProviders', () => ({
   }),
 }));
 
-const deviceProvidersRef = vi.hoisted(() => ({ providers: [] as unknown[] }));
+const deviceProvidersRef = vi.hoisted(() => ({
+  providers: [] as unknown[],
+  loading: false,
+  error: null as string | null,
+  unsupported: false,
+  prefetch: vi.fn(async () => {}),
+}));
 vi.mock('@/hooks/useDeviceProviders', () => ({
-  useDeviceProviders: () => ({ providers: deviceProvidersRef.providers, loading: false }),
+  evictDeviceProviders: vi.fn(),
+  prefetchDeviceProviders: (...args: Parameters<typeof deviceProvidersRef.prefetch>) =>
+    deviceProvidersRef.prefetch(...args),
+  useDeviceProviders: () => ({
+    providers: deviceProvidersRef.providers,
+    loading: deviceProvidersRef.loading,
+    error: deviceProvidersRef.error,
+    unsupported: deviceProvidersRef.unsupported,
+  }),
 }));
 
 interface VisibleModelFixture {
@@ -372,6 +402,7 @@ import {
   ModelSelectorContent,
   modelEffortLabel,
   modelListMaxHeightForRows,
+  resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
 } from '@/components/new-chat/ModelSelector';
 import { makerChatStore } from '@/lib/makerChatStore';
@@ -381,9 +412,91 @@ const requestProviderModelsAutoRefresh = vi.fn(async () => ({ ok: true as const 
 beforeEach(() => {
   requestProviderModelsAutoRefresh.mockClear();
   providersRef.providerOrder = [];
+  agentCapabilitiesRef.loading = false;
+  agentCapabilitiesRef.error = null;
+  deviceProvidersRef.loading = false;
+  deviceProvidersRef.error = null;
+  deviceProvidersRef.unsupported = false;
+  deviceProvidersRef.prefetch.mockReset();
+  deviceProvidersRef.prefetch.mockResolvedValue(undefined);
   (window as unknown as { electronAPI: unknown }).electronAPI = {
     maker: { requestProviderModelsAutoRefresh },
   };
+});
+
+describe('resolveRemoteModelListStatus', () => {
+  const ready = { capabilities: {}, loading: false, error: null };
+  const pending = { capabilities: null, loading: true, error: null };
+  const failed = { capabilities: null, loading: false, error: 'offline' };
+
+  it('requires the selected agent capability and provider result before declaring ready', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: pending,
+        codex: failed,
+        pi: failed,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('loading');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: failed,
+        pi: failed,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('ready');
+  });
+
+  it('reports capability or connection failures instead of authoritative empty', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: failed,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('error');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: null,
+        cc: ready,
+        codex: failed,
+        pi: ready,
+        providers: { loading: false, error: null },
+      }),
+    ).toBe('error');
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-a',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: 'timeout', unsupported: false },
+      }),
+    ).toBe('error');
+  });
+
+  it('only treats an unsupported provider channel as a compatible flat-list fallback', () => {
+    expect(
+      resolveRemoteModelListStatus({
+        deviceId: 'dev-old',
+        agentKind: 'claude-code',
+        cc: ready,
+        codex: ready,
+        pi: ready,
+        providers: { loading: false, error: 'channel not allowed', unsupported: true },
+      }),
+    ).toBe('ready');
+  });
 });
 
 describe('ModelSelector trigger variants', () => {
@@ -394,6 +507,79 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
     });
   };
+
+  it('remote loading replaces the placeholder and no-results empty state', async () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.loading = true;
+    deviceProvidersRef.loading = true;
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(ModelSelector, {
+        modelId: 'remote-model',
+        effort: 'medium',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+      }),
+    );
+    try {
+      const trigger = screen.getByRole('button', { name: /正在从远程设备读取模型/ });
+      expect(trigger.textContent).toContain('正在从远程设备读取模型…');
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+      expect(screen.getAllByText('正在从远程设备读取模型…').length).toBeGreaterThan(1);
+      expect(screen.queryByText('没有匹配的模型')).toBeNull();
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.loading = false;
+      deviceProvidersRef.loading = false;
+      visibleModelsRef.models = originalModels;
+    }
+  });
+
+  it('remote failures show an explicit retry state instead of no matching models', async () => {
+    const originalCapabilities = agentCapabilitiesRef.capabilities;
+    const originalModels = visibleModelsRef.models;
+    agentCapabilitiesRef.capabilities = null;
+    agentCapabilitiesRef.error = 'offline';
+    visibleModelsRef.models = [];
+    const view = render(
+      React.createElement(ModelSelector, {
+        modelId: 'remote-model',
+        effort: 'medium',
+        onModelChange: vi.fn(),
+        onEffortChange: vi.fn(),
+        vendorKey: 'cc',
+        deviceId: 'dev-a',
+      }),
+    );
+    try {
+      const trigger = screen.getByRole('button', { name: /模型读取失败/ });
+      expect(trigger.textContent).toContain('模型读取失败');
+      await act(async () => {
+        fireEvent.click(trigger);
+      });
+      expect(screen.getByText('无法读取远程设备上的模型。请检查连接后重试。')).toBeTruthy();
+      expect(screen.getByRole('button', { name: '重新读取模型' })).toBeTruthy();
+      expect(screen.queryByText('没有匹配的模型')).toBeNull();
+      deviceProvidersRef.prefetch.mockRejectedValueOnce(new Error('offline'));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: '重新读取模型' }));
+        await Promise.resolve();
+      });
+      expect(deviceProvidersRef.prefetch).toHaveBeenCalledWith('dev-a');
+    } finally {
+      view.unmount();
+      agentCapabilitiesRef.capabilities = originalCapabilities;
+      agentCapabilitiesRef.error = null;
+      visibleModelsRef.models = originalModels;
+    }
+  });
 
   it('orders local provider sections by the Settings display preference', () => {
     providersRef.providers = [
@@ -881,7 +1067,7 @@ describe('ModelSelector trigger variants', () => {
     expect(trigger.querySelector('[data-model-promotion-badge]')).toBeNull();
   });
 
-  it('keeps a long subscription-backed field menu bounded and wheel-scrollable', () => {
+  it('keeps a long subscription-backed field menu bounded and wheel-scrollable', async () => {
     const models: VisibleModelFixture[] = Array.from({ length: 40 }, (_, index) => ({
       id: `subscription-model-${index + 1}`,
       displayName: `Subscription Model ${index + 1}`,
@@ -928,7 +1114,9 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
 
-      fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button', { name: /Current: Subscription Model 1/ }));
+      });
       const list = screen.getByRole('listbox', { name: 'Model list' });
 
       expect(list.className).toContain('max-h-[300px]');
@@ -945,7 +1133,7 @@ describe('ModelSelector trigger variants', () => {
     }
   });
 
-  it('reuses the parent pricing snapshot when the model content opens', () => {
+  it('reuses the parent pricing snapshot when the model content opens', async () => {
     pricingRef.renderCalls = 0;
     render(
       React.createElement(ModelSelector, {
@@ -959,8 +1147,12 @@ describe('ModelSelector trigger variants', () => {
     expect(pricingRef.renderCalls).toBe(1);
 
     pricingRef.renderCalls = 0;
-    fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
-    expect(pricingRef.renderCalls).toBe(1);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /Current: Opus 4\.8/ }));
+    });
+    // Opening and the discovery-pending settle each re-render the parent once. The content must
+    // reuse that parent's pricing snapshot; calling useModelPricing inside it would double this.
+    expect(pricingRef.renderCalls).toBe(2);
   });
 
   it('does not show Gateway promotions in the selected-model trigger', () => {
@@ -1041,7 +1233,9 @@ describe('ModelSelector trigger variants', () => {
         }),
       );
       expect(
-        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText('限时免费'),
+        within(screen.getByRole('button', { name: /Current: Sonnet 4\.6/ })).queryByText(
+          '限时免费',
+        ),
       ).toBeNull();
     } finally {
       providersRef.providers = providersRef.DEFAULT_PROVIDERS;
@@ -1181,7 +1375,15 @@ describe('ModelSelector trigger variants', () => {
     },
   ])(
     'renders the corrected XD effort defaults without Fast markers for $agentKind',
-    ({ agentKind, vendorKey, currentModel, seedEfforts, seedDefaultEffort, seedLabel, glmEfforts }) => {
+    ({
+      agentKind,
+      vendorKey,
+      currentModel,
+      seedEfforts,
+      seedDefaultEffort,
+      seedLabel,
+      glmEfforts,
+    }) => {
       const targetModels: VisibleModelFixture[] = [
         {
           id: 'bytedance-seed/seed-2.1-pro',
@@ -1293,8 +1495,12 @@ describe('ModelSelector trigger variants', () => {
           '超高',
         );
         expect(screen.getByRole('option', { name: /GLM-5\.2/ }).textContent).toContain('Max');
-        expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/ }).textContent).toContain('High');
-        expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/ }).textContent).toContain('High');
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Pro/ }).textContent).toContain(
+          'High',
+        );
+        expect(screen.getByRole('option', { name: /DeepSeek V4 Flash/ }).textContent).toContain(
+          'High',
+        );
         expect(screen.queryByLabelText('newChat.modelSelector.meta.fastBadge')).toBeNull();
       } finally {
         visibleModelsRef.models = null;
@@ -1452,9 +1658,7 @@ describe('ModelSelector trigger variants', () => {
           expect(detailText.indexOf('1M context')).toBeLessThan(
             detailText.indexOf('Codex compatibility mode'),
           );
-          expect(compatibilityLabel).not.toBe(
-            within(details).getByText(sourceText).parentElement,
-          );
+          expect(compatibilityLabel).not.toBe(within(details).getByText(sourceText).parentElement);
           expect(compatibilityLabel).not.toBe(
             within(details).getByText('1M context').parentElement,
           );
@@ -1896,8 +2100,7 @@ describe('ModelSelector trigger variants', () => {
       return React.createElement(ModelSelector, {
         modelId: selection.modelId,
         effort: 'high',
-        onModelChange: (modelId: string) =>
-          setSelection((current) => ({ ...current, modelId })),
+        onModelChange: (modelId: string) => setSelection((current) => ({ ...current, modelId })),
         onEffortChange: vi.fn(),
         vendorKey: 'cc',
         currentProviderId: selection.providerId,
@@ -1970,12 +2173,8 @@ describe('ModelSelector trigger variants', () => {
     expect(searchInput.hasAttribute('disabled')).toBe(true);
     expect(searchInput.className).toContain('cursor-not-allowed');
     expect(searchInput.className).toContain('text-[var(--text-disabled)]');
-    expect(searchInput.className).toContain(
-      'placeholder:text-[var(--text-disabled-tertiary)]',
-    );
-    expect(searchInput.parentElement?.className).toContain(
-      'bg-[var(--surface-elevated-soft)]',
-    );
+    expect(searchInput.className).toContain('placeholder:text-[var(--text-disabled-tertiary)]');
+    expect(searchInput.parentElement?.className).toContain('bg-[var(--surface-elevated-soft)]');
 
     fireEvent.click(opusRow);
     fireEvent.pointerEnter(opusRow);
@@ -2071,9 +2270,7 @@ describe('ModelSelector trigger variants', () => {
       fireEvent.click(within(options).getByRole('option', { name: 'low' }));
       expect(setEffort).toHaveBeenCalledWith('codex', 'zeta-codex', 'gpt-5.5', 'low');
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
-      await waitFor(() =>
-        expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'),
-      );
+      await waitFor(() => expect(onSwitch).toHaveBeenCalledWith('codex', 'gpt-5.5', 'zeta-codex'));
       expect(onDismiss).not.toHaveBeenCalled();
       // 配置点击同时选中目标模型；确认门仍只在 Agent 分段切换。
       expect(confirmBrowseSwitch).toHaveBeenCalledTimes(1);
@@ -2089,13 +2286,7 @@ describe('ModelSelector trigger variants', () => {
       // 第一笔事务仍在途时，后一次配置也立即交给调用方；调用方会同步登记目标
       // session 的 pending token，再由 session 级协调器保证同会话顺序。
       expect(onSwitch).toHaveBeenCalledTimes(2);
-      expect(setEffort).toHaveBeenNthCalledWith(
-        2,
-        'codex',
-        'zeta-codex',
-        'gpt-5.5',
-        'high',
-      );
+      expect(setEffort).toHaveBeenNthCalledWith(2, 'codex', 'zeta-codex', 'gpt-5.5', 'high');
 
       await act(async () => {
         releaseFirstSwitch();

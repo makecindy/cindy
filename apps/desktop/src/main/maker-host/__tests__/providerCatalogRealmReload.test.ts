@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 const h = vi.hoisted(() => ({
   endpoint: 'https://model.cn.example',
   buildEndpoint: 'https://model.cn.example',
+  owner: 'owner-default',
   loads: [] as Array<{
     source: Record<string, unknown>;
     resolve: (catalog: unknown) => void;
@@ -17,6 +18,7 @@ const h = vi.hoisted(() => ({
     resolve: (result: unknown) => void;
   }>,
   customProviderRead: vi.fn(),
+  warn: vi.fn(),
 }));
 
 vi.mock('electron', () => ({
@@ -52,12 +54,21 @@ vi.mock('../../clientEndpointsService.js', () => ({
   getBuildClientEndpoint: () => h.buildEndpoint,
   getClientEndpoint: () => h.endpoint,
 }));
+vi.mock('../../logger.js', () => ({
+  createLogger: () => ({
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: h.warn,
+    error: vi.fn(),
+  }),
+}));
 vi.mock('../../authManager.js', () => ({
   getAuthState: () => ({ mode: 'signed-out', user: null }),
 }));
 vi.mock('../../appSessionState.js', () => ({
-  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: null }),
-  ownerScopedUserDataPath: (...segments: string[]) => path.join(os.tmpdir(), ...segments),
+  getActiveAppSession: () => ({ mode: 'signed-out', dataOwnerId: h.owner }),
+  ownerScopedUserDataPath: (...segments: string[]) =>
+    path.join(os.tmpdir(), 'provider-catalog-realm-reload', h.owner, ...segments),
 }));
 vi.mock('../../appCapabilities.js', () => ({
   getAppCapabilities: () => ({ canUseCindyGateway: false }),
@@ -124,7 +135,12 @@ import {
   type Catalog,
   type CustomProviderConfig,
 } from '@cindy/model-providers';
-import { getActiveCatalog, setCustomProviders } from '../active-catalog.js';
+import {
+  getActiveCatalog,
+  setActiveCatalog,
+  setActiveCatalogChangedListener,
+  setCustomProviders,
+} from '../active-catalog.js';
 import {
   __testing,
   ensureActiveCatalogLoaded,
@@ -132,6 +148,7 @@ import {
   refreshCustomProvidersIntoCatalog,
   reloadActiveCatalogForEndpointChange,
   shouldDisableCatalogFetch,
+  syncLocalCatalogOverridesIntoActiveCatalog,
 } from '../createDesktopProviderService.js';
 
 function catalogNamed(name: string, updatedAt?: string): Catalog {
@@ -254,6 +271,29 @@ describe('provider catalog realm reload', () => {
     }
   });
 
+  it('keeps the LKG when the same registry revision is republished with different content', () => {
+    const updatedAt = '2026-08-01T00:00:00.000Z';
+    const currentCatalog = catalogNamed('CURRENT', updatedAt);
+    const incomingCatalog = structuredClone(currentCatalog);
+    const registryEntry = incomingCatalog.modelRegistry?.models[0];
+    if (!registryEntry) throw new Error('expected bundled model registry entry');
+    registryEntry.name = `${registryEntry.name} (republished)`;
+    const current = JSON.stringify(currentCatalog);
+    const incoming = JSON.stringify(incomingCatalog);
+
+    expect(__testing.selectCatalogLkgSnapshot(incoming, current)).toBe(current);
+  });
+
+  it('keeps a Registry-bearing LKG when a later serialized write omits Registry', () => {
+    const currentCatalog = catalogNamed('CURRENT', '2026-08-01T00:00:00.000Z');
+    const incomingCatalog = structuredClone(currentCatalog);
+    delete incomingCatalog.modelRegistry;
+    const current = JSON.stringify(currentCatalog);
+    const incoming = JSON.stringify(incomingCatalog);
+
+    expect(__testing.selectCatalogLkgSnapshot(incoming, current)).toBe(current);
+  });
+
   it('replaces an existing LKG through a Windows-safe backup path', async () => {
     const files = new Set(['/catalog.json', '/catalog.tmp']);
     const calls: Array<[string, string]> = [];
@@ -291,7 +331,9 @@ describe('provider catalog realm reload', () => {
       async rename(from: string, to: string) {
         if (from === '/catalog.tmp') {
           temporaryAttempts += 1;
-          throw Object.assign(new Error('locked'), { code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY' });
+          throw Object.assign(new Error('locked'), {
+            code: temporaryAttempts === 1 ? 'EPERM' : 'EBUSY',
+          });
         }
         if (!files.has(from)) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
         files.delete(from);
@@ -385,21 +427,22 @@ describe('provider catalog realm reload', () => {
   });
 
   it('does not downgrade the active catalog when refresh falls back to an older cache', async () => {
-    const activeXaiModels = getActiveCatalog().providers
-      .find((provider) => provider.id === 'xai')
+    const activeXaiModels = getActiveCatalog().providers.find((provider) => provider.id === 'xai')
       ?.models.codex;
     const staleCatalog = structuredClone(
       catalogNamed('catalog-global-cached', '2026-07-31T11:00:00.000Z'),
     );
     const staleXai = staleCatalog.providers.find((provider) => provider.id === 'xai');
     if (!staleXai) throw new Error('expected bundled xai provider');
-    staleXai.models.codex = [{
-      id: 'xai/stale-cache-only',
-      name: 'Stale cache only',
-      contextWindow: 1,
-      efforts: [],
-      defaultEffort: null,
-    }];
+    staleXai.models.codex = [
+      {
+        id: 'xai/stale-cache-only',
+        name: 'Stale cache only',
+        contextWindow: 1,
+        efforts: [],
+        defaultEffort: null,
+      },
+    ];
     const refresh = refreshActiveCatalogFromSource();
     await Promise.resolve();
     const load = h.refreshLoads.at(-1)!;
@@ -413,5 +456,123 @@ describe('provider catalog realm reload', () => {
     expect(
       getActiveCatalog().providers.find((provider) => provider.id === 'xai')?.models.codex,
     ).toEqual(activeXaiModels);
+  });
+
+  it('按时间语义守卫 offset/Z 等价 revision,拒收真实旧值和坏值,接受真实新值', async () => {
+    setActiveCatalog(catalogNamed('current-offset', '2026-08-02T10:00:00+08:00'));
+    h.warn.mockClear();
+
+    const refreshWith = async (name: string, updatedAt: string): Promise<void> => {
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: catalogNamed(name, updatedAt), source: 'remote' });
+      await refresh;
+    };
+
+    try {
+      // 同一时刻仅 ISO 表示不同：Registry 内容相同，应 no-op 且不误报警。
+      await refreshWith('equivalent-z', '2026-08-02T02:00:00.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+      expect(h.warn).not.toHaveBeenCalled();
+
+      await refreshWith('actually-older', '2026-08-02T01:59:59.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T10:00:00+08:00');
+
+      await refreshWith('actually-newer', '2026-08-02T03:00:00.000Z');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');
+
+      await refreshWith('invalid-revision', 'not-a-timestamp');
+      expect(getActiveCatalog().modelRegistry?.updatedAt).toBe('2026-08-02T03:00:00.000Z');
+      expect(h.warn).toHaveBeenCalledWith('model registry updatedAt is invalid; rejecting', {
+        incomingUpdatedAt: 'not-a-timestamp',
+        currentUpdatedAt: '2026-08-02T03:00:00.000Z',
+      });
+    } finally {
+      setActiveCatalog(catalogNamed('catalog-global-refreshed', '2026-07-31T12:30:00.000Z'));
+    }
+  });
+
+  it('原子模型平面:成功刷新恰 1 revision;同 updatedAt 同 digest=no-op、异 digest=拒收,均 0 revision', async () => {
+    const events: number[] = [];
+    setActiveCatalogChangedListener((revision) => {
+      events.push(revision);
+    });
+    try {
+      // 更高 updatedAt:xai 清单 + registry 单次 swap → 恰 1 次 markChanged(旧实现是
+      // 2 个 setter + wrapper 广播 = 3 次可观测通知,本用例是 3→1 收敛的回归门)。
+      const next = structuredClone(catalogNamed('catalog-plane-v3', '2026-07-31T15:00:00.000Z'));
+      const refresh = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: next, source: 'remote' });
+      await refresh;
+      expect(events).toHaveLength(1);
+
+      // 同 updatedAt 同 digest → 纯 no-op,零 revision 零广播。
+      const noop = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: structuredClone(next), source: 'remote' });
+      await noop;
+      expect(events).toHaveLength(1);
+
+      // 同 updatedAt 异 digest = 非法重发 → 拒收保当前快照,零 revision。
+      const mutated = structuredClone(next);
+      mutated.modelRegistry!.models = mutated.modelRegistry!.models.slice(1);
+      const rejected = refreshActiveCatalogFromSource();
+      await Promise.resolve();
+      h.refreshLoads.at(-1)!.resolve({ catalog: mutated, source: 'remote' });
+      await rejected;
+      expect(events).toHaveLength(1);
+      expect(getActiveCatalog().modelRegistry?.models).toHaveLength(
+        next.modelRegistry!.models.length,
+      );
+    } finally {
+      setActiveCatalogChangedListener(null);
+    }
+  });
+
+  it('owner 切换即使 endpoint 未变也会清掉上一账号的本地模型 override', async () => {
+    const root = path.join(os.tmpdir(), 'provider-catalog-realm-reload');
+    h.owner = 'owner-a';
+    const ownerAFile = path.join(root, h.owner, 'model-catalog-overrides.json');
+    await fsp.mkdir(path.dirname(ownerAFile), { recursive: true });
+    await fsp.writeFile(
+      ownerAFile,
+      JSON.stringify({
+        version: 1,
+        additions: {
+          'openai:owner-a-only': {
+            agents: ['codex'],
+            base: {
+              name: 'Owner A only',
+              contextWindow: 32_000,
+              efforts: ['high'],
+              defaultEffort: 'high',
+            },
+          },
+        },
+      }),
+      'utf8',
+    );
+
+    try {
+      syncLocalCatalogOverridesIntoActiveCatalog();
+      expect(
+        getActiveCatalog()
+          .providers.find((provider) => provider.id === 'openai')
+          ?.models.codex?.some((model) => model.id === 'owner-a-only'),
+      ).toBe(true);
+
+      h.owner = 'owner-b';
+      await reloadActiveCatalogForEndpointChange();
+      expect(
+        getActiveCatalog()
+          .providers.find((provider) => provider.id === 'openai')
+          ?.models.codex?.some((model) => model.id === 'owner-a-only'),
+      ).toBe(false);
+    } finally {
+      h.owner = 'owner-default';
+      await fsp.rm(root, { recursive: true, force: true });
+      syncLocalCatalogOverridesIntoActiveCatalog();
+    }
   });
 });

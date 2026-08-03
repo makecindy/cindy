@@ -73,7 +73,7 @@ export interface RipgrepManifest {
 /**
  * pi 是整目录分发:`file` 指向整包 tar.gz(归档根即完整运行时目录,主二进制 +
  * theme/ 等旁侧资产,与 apps/pi-bin/<platform>/ 同布局),`sha256`/`size` 是该
- * tar.gz 的。可选字段:清单未发 pi 资产时客户端回退安装包自带分发(resources/pi)。
+ * tar.gz 的。可选字段:清单未发 pi 资产或下载失败时，本次不注册 pi，但不阻塞启动。
  */
 export interface PiManifest {
   version: string;
@@ -138,8 +138,12 @@ export function isDev(): boolean {
  * to stable — that would silently downgrade canary users to whatever stale
  * version is sitting on the stable channel.
  */
-export async function fetchManifest(timeoutMs?: number): Promise<Manifest | null> {
+export async function fetchManifest(
+  timeoutMs?: number,
+  signal?: AbortSignal,
+): Promise<Manifest | null> {
   if (isDev()) return null;
+  if (signal?.aborted) return null;
 
   const isCanary = canaryFlagStore.read();
   const channelSuffix = isCanary ? '-canary' : '';
@@ -152,21 +156,25 @@ export async function fetchManifest(timeoutMs?: number): Promise<Manifest | null
       const request = net.request(url);
       let body = '';
       let settled = false;
+      let timeout: ReturnType<typeof setTimeout> | undefined;
 
-      const timeout = setTimeout(() => {
-        if (!settled) {
-          settled = true;
-          request.abort();
-          resolve(null);
-        }
-      }, timeoutMs ?? REQUEST_TIMEOUT_MS);
+      const finish = (value: Manifest | null, abortRequest = false): void => {
+        if (settled) return;
+        settled = true;
+        if (timeout) clearTimeout(timeout);
+        signal?.removeEventListener('abort', onAbort);
+        if (abortRequest) request.abort();
+        resolve(value);
+      };
+      const onAbort = (): void => finish(null, true);
+      signal?.addEventListener('abort', onAbort, { once: true });
+
+      timeout = setTimeout(() => finish(null, true), timeoutMs ?? REQUEST_TIMEOUT_MS);
 
       request.on('response', (response) => {
         if (response.statusCode !== 200) {
           log.info('HTTP %d for %s', response.statusCode, url);
-          clearTimeout(timeout);
-          settled = true;
-          resolve(null);
+          finish(null);
           return;
         }
 
@@ -174,37 +182,27 @@ export async function fetchManifest(timeoutMs?: number): Promise<Manifest | null
           body += chunk.toString();
         });
         response.on('end', () => {
-          clearTimeout(timeout);
           if (settled) return;
-          settled = true;
           try {
             const json = JSON.parse(body) as Manifest;
             cached = json;
             log.info('Fetched OK: app.version=%s, hotfix=%s', json.app?.version, json.app?.hotfix?.file ?? 'none');
-            resolve(json);
+            finish(json);
           } catch (err) {
             log.error('JSON parse failed:', err);
-            resolve(null);
+            finish(null);
           }
         });
-        response.on('error', () => {
-          clearTimeout(timeout);
-          if (!settled) {
-            settled = true;
-            resolve(null);
-          }
-        });
+        response.on('error', () => finish(null));
       });
 
-      request.on('error', () => {
-        clearTimeout(timeout);
-        if (!settled) {
-          settled = true;
-          resolve(null);
-        }
-      });
+      request.on('error', () => finish(null));
 
-      request.end();
+      try {
+        request.end();
+      } catch {
+        finish(null, true);
+      }
     } catch {
       resolve(null);
     }

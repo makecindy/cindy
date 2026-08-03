@@ -81,6 +81,7 @@ import {
   type DroppedFileItems,
 } from '@/lib/fileDrop';
 import { shouldOpenTextLightbox } from '@/lib/filePreview';
+import { isDangerousAttachmentName } from '../../../shared/attachmentSafety';
 import {
   getDraft as getComposerDraft,
   saveDraft as saveComposerDraft,
@@ -91,6 +92,7 @@ import {
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import {
   ModelSelector,
+  resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
   type ModelMemoryAccessors,
 } from './ModelSelector';
@@ -499,6 +501,7 @@ interface ChatInputProps {
     consumePendingFileMentions: () => Array<{ type: 'file'; relPath: string; name: string }>;
     removeFile: (id: string) => void;
     updateFile: (id: string, patch: Partial<AttachedFile>) => void;
+    discardFiles: () => void;
     clearFiles: () => void;
   };
   /**
@@ -1072,6 +1075,7 @@ export function ChatInput({
     consumePendingFileMentions,
     removeFile,
     updateFile,
+    discardFiles,
     clearFiles,
   } = attachmentState;
   // browser-comment-chip:内置浏览器页面评论(结构化,不进草稿文本),渲染为
@@ -1375,11 +1379,25 @@ export function ChatInput({
   // 模型选择器 trigger 化成「连接来源」CTA、Send 禁用。useConnectedSource 仅用于
   // loading 态判定；实际「有没有可发送来源」独立走 sendProviders（已过滤 SSH remote
   // 排除项），两者职责分离以保留 remote guard。
-  // providersLoading 期间不判,避免有缓存的老用户首帧闪 CTA / 禁用态(规则 7)。
-  const { loading: providersLoading } = useConnectedSource(
+  // 本机沿用 useConnectedSource 的加载态；device-link 必须同时等待被控端 capabilities 与
+  // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
+  const { loading: localProvidersLoading } = useConnectedSource(
     currentModelAgentKind,
     activeModel,
   );
+  const remoteModelListStatus = resolveRemoteModelListStatus({
+    deviceId: deviceLinkDeviceId,
+    agentKind: currentModelAgentKind,
+    cc: ccCaps,
+    codex: codexCaps,
+    pi: piCaps,
+    providers: remoteProviders,
+  });
+  const providersLoading = deviceLinkDeviceId
+    ? remoteModelListStatus === 'loading'
+    : localProvidersLoading;
+  const remoteModelListBlocked =
+    !!deviceLinkDeviceId && remoteModelListStatus !== 'ready';
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -1392,7 +1410,14 @@ export function ChatInput({
         includeDisabled: !!sessionId,
       }).length > 0
     : false;
-  const noConnectedSource = !!currentModelAgentKind && !providersLoading && !hasConnectedSendSource;
+  const noConnectedSource =
+    !!currentModelAgentKind &&
+    !providersLoading &&
+    !remoteModelListBlocked &&
+    // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
+    // provider 镜像误判成权威的「没有已连接来源」。
+    (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
+    !hasConnectedSendSource;
 
   // 会话显式选中的来源已断开(如外部删除订阅 OAuth 凭证):trigger 显示「已断开」错误态 +
   // Send 禁用,不再静默回退默认来源图标(否则界面显示 XD、main 懒创建却按 DB 里的来源报
@@ -3573,6 +3598,17 @@ export function ChatInput({
         // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
         if (!text && !hasAttachments) return;
 
+        // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
+        // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
+        if (remoteModelListBlocked) {
+          if (remoteModelListStatus === 'error') {
+            toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+          } else {
+            toast.warning(t('newChat.modelSelector.remoteLoading'));
+          }
+          return;
+        }
+
         // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
         // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
         // 弹窗给出明确原因 + 去设置入口,而不是让请求出去撞一个原始错误码。
@@ -3598,7 +3634,12 @@ export function ChatInput({
         // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
         // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
-        if (currentModelAgentKind) {
+        if (
+          currentModelAgentKind &&
+          // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
+          // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
+          !(deviceLinkDeviceId && remoteProviders.unsupported)
+        ) {
           // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
           // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
           // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
@@ -3722,7 +3763,11 @@ export function ChatInput({
       storageKey,
       t,
       currentModelAgentKind,
+      deviceLinkDeviceId,
       providers,
+      remoteProviders.unsupported,
+      remoteModelListBlocked,
+      remoteModelListStatus,
       confirmDialog,
       navigate,
     ],
@@ -5103,6 +5148,9 @@ export function ChatInput({
     noConnectedSource ||
     // 会话显式选中的来源已断开 → Send 禁用(trigger 同步显示「已断开」错误态说明原因)。
     selectedSourceDisconnected ||
+    // device-link 模型目录仍在读取或真实失败 → 禁止旧快照继续发送；旧端明确
+    // unsupported 已由 remoteModelListStatus 归并为 ready，不会误伤兼容回退。
+    remoteModelListBlocked ||
     // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
     agentSwitchInFlight ||
     sendDispatchInFlight ||
@@ -5553,7 +5601,7 @@ export function ChatInput({
                   } finally {
                     isRestoringRef.current = false;
                   }
-                  clearFiles();
+                  discardFiles();
                   // 页面评论走丢弃语义(清 state + 清截图缓存):目标不接管评论截图,
                   // 与发送后清空(消息接管截图,不清缓存)不同,这里不清会留磁盘孤儿。
                   clearBrowserComments();
@@ -6279,6 +6327,7 @@ function ThumbnailItem({
   onRemove: (id: string) => void;
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
+  const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
   const thumbRef = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -6290,6 +6339,8 @@ function ThumbnailItem({
   // Lightbox state is local to each item so multiple thumbnails don't fight.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
+  const isDownloadOnly =
+    isDangerousAttachmentName(file.name) || isDangerousAttachmentName(file.path);
 
   // 非图片附件仍使用路径 tooltip；图片定位由共享 ImageHoverPreview 自己负责。
   useLayoutEffect(() => {
@@ -6319,12 +6370,16 @@ function ThumbnailItem({
       if (src) setLightboxSrc(src);
       return;
     }
+    // Historical composer drafts may still contain an executable's original
+    // path from before dangerous attachments were staged as `.bin`. Never pass
+    // those paths to the OS default-app opener from the attachment tray.
+    if (isDownloadOnly) return;
     // Non-image text/code/markdown files preview via TextLightbox. Other
     // supported attachment categories (PDF, etc.) open in the system app.
     if (!file.path) return;
     if (!(await shouldOpenTextLightbox(file.path))) return;
     setTextLightboxOpen(true);
-  }, [file]);
+  }, [file, isDownloadOnly]);
 
   // 图片缩略图恒为 56×56 方块;其余附件走横向文件卡,宽度随文件名自适应
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
@@ -6356,9 +6411,17 @@ function ThumbnailItem({
       {/* image-local-cache: prefer xdt-image:// url; fall back to base64 (F6). */}
       <button
         type="button"
-        className="h-full w-full cursor-pointer border-0 bg-transparent p-0 text-left"
+        className={cn(
+          'h-full w-full border-0 bg-transparent p-0 text-left',
+          isDownloadOnly ? 'cursor-default' : 'cursor-pointer',
+        )}
         onClick={handleOpenPreview}
-        aria-label={`Preview ${file.name}`}
+        disabled={isDownloadOnly}
+        aria-label={
+          isDownloadOnly
+            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
+            : `Preview ${file.name}`
+        }
       >
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">

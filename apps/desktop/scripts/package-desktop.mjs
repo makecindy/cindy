@@ -437,9 +437,10 @@ async function main() {
   console.log(`    version:  ${versionless ? `(版本无关,占位 ${version},不参与热更新)` : version}`);
   console.log('='.repeat(60));
 
-  // Linux 只校验 sqlite-vec 等原生运行资产。Claude/Codex 各平台都不进安装包
+  // Linux 只校验 sqlite-vec 等原生运行资产。Claude/Codex/Pi 各平台都不进安装包
   // (forge extraResource 不含它们),由 packaged runtime 首启时复用系统 CLI 或
-  // 安装到 userData/agent-runtime,打包阶段无需预下载。ripgrep 是唯一进包的
+  // 从 CDN 安装到 userData(仅 Linux 的 Claude/Codex 另有系统 CLI / 官方下载
+  // fallback),打包阶段无需预下载。ripgrep 是唯一进包的
   // agent 二进制,这里按 pin 预 ensure(缓存命中即跳过),在昂贵的 forge make
   // 之前尽早失败;forge prePackage 的 stageRipgrep 仍会兜底校验。
   if (platform === 'linux') {

@@ -28,6 +28,7 @@ import {
   MAX_TRANSPORT_SEQUENCE_WINDOW,
   MAX_TRANSPORT_WEBSOCKET_BUFFERED_BYTES,
   TRANSPORT_MAX_RETRY_ATTEMPTS,
+  TRANSPORT_PENDING_PUSH_MAX_AGE_MS,
   TRANSPORT_RETRY_INTERVAL_MS,
   decodeTransportJson,
   encodeReliableFrames,
@@ -44,6 +45,7 @@ const SLOW_REQUEST_WARN_MS = 1_000;
 const MAX_LEGACY_INBOUND_FRAMES = 128;
 const MAX_LEGACY_INBOUND_BYTES = 16 * 1024 * 1024;
 const MAX_PENDING_INBOUND_LINK_OFFERS = 64;
+const MAX_UNLINKED_LEGACY_RESPONSE_IDS = 128;
 
 type DeviceLinkCrypto = {
   randomUUID?: () => string;
@@ -249,6 +251,8 @@ interface PendingReliableMessage {
   attempts: number;
   lastSentAt: number;
   sent: boolean;
+  /** 入队时刻（monotonicNow 单调时钟）；push 帧按 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 判定过期。 */
+  enqueuedAt: number;
 }
 
 interface PeerTransportState {
@@ -259,6 +263,8 @@ interface PeerTransportState {
   reliable: boolean;
   linkReady: boolean;
   explicitlyClosed: boolean;
+  /** 显式关闭后收到的 allowlisted legacy invoke；只放行与 requestId 配对的一次回程。 */
+  unlinkedLegacyResponseIds: Set<string>;
   pending: Map<number, PendingReliableMessage>;
   pendingBytes: number;
   retryTimer: ReturnType<typeof setInterval> | null;
@@ -459,6 +465,11 @@ export class DeviceLinkClient {
     return this.status;
   }
 
+  /** 目标设备是否已完成 link-open / link-accept，可安全进入 streaming tier。 */
+  isLinkReady(dst: string): boolean {
+    return this.peerTransport.get(dst)?.linkReady === true;
+  }
+
   onStatusChange(cb: (s: DeviceLinkStatus) => void): () => void {
     this.statusHandlers.add(cb);
     return () => this.statusHandlers.delete(cb);
@@ -547,6 +558,7 @@ export class DeviceLinkClient {
     if (peer) {
       peer.linkReady = false;
       peer.explicitlyClosed = true;
+      peer.unlinkedLegacyResponseIds.clear();
       // 显式关闭只撤掉 streaming 可靠层。listing / topic 控制帧仍不依赖
       // link-open，后续应回退到 legacy，而不是被统一挡成 LINK_NOT_OPEN。
       peer.reliable = false;
@@ -583,7 +595,13 @@ export class DeviceLinkClient {
 
   /** 被控端:回 invoke-result(对应入站 invoke 的 id) */
   sendInvokeResult(dst: string, requestId: string, payload: InvokeResultPayload): void {
-    this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload });
+    const peer = this.peerTransport.get(dst);
+    const allowClosedLegacyResponse = peer?.unlinkedLegacyResponseIds.has(requestId) === true;
+    this.sendPeerEnvelope(
+      { v: PROTOCOL_VERSION, kind: 'invoke-result', id: requestId, dst, payload },
+      allowClosedLegacyResponse,
+    );
+    if (allowClosedLegacyResponse) peer?.unlinkedLegacyResponseIds.delete(requestId);
   }
 
   /** 被控端:回 link-accept */
@@ -597,6 +615,15 @@ export class DeviceLinkClient {
       && matchingOffer.capabilities.includes(DEVICE_LINK_CAPABILITY_RELIABLE_TRANSPORT)
     );
     const peer = this.getPeerTransport(dst);
+    // 建链即丢弃队头连续的可丢弃前缀（push 不分新旧 + skip 占位）：让 accept
+    // 携带的 transportBaseSeq 直接跳过它们，对端从一开始就不等这些 seq，随后的
+    // 重放不再灌回离线期间堆积的实时镜像，紧随建链而来的 invoke-result 成为最
+    // 早可交付的 live seq（v0.1.25 线上曾出现建链后 250ms invoke-result 仍被离
+    // 线期间堆满的 push 重放洪峰挤在后面，控制端的存活探测因此超时，熔断持续
+    // open）。
+    if (peerSupportsReliable) {
+      this.dropDiscardablePendingPrefix(dst, peer, false, 'before link re-establishment replay');
+    }
     this.sendEnvelope({
       v: PROTOCOL_VERSION,
       kind: 'link-accept',
@@ -640,6 +667,16 @@ export class DeviceLinkClient {
       return;
     }
     this.sendPeerEnvelope({ v: PROTOCOL_VERSION, kind: 'push', dst, payload: { channel, payload } });
+  }
+
+  /**
+   * 指定 peer 可靠发送队列中未确认的逻辑消息数(0 = 无积压或未建立可靠传输)。
+   * 供上层做**软背压**:可整流的状态镜像流量(如会话活动快照)在窗口
+   * (MAX_TRANSPORT_PENDING_MESSAGES)被占满、BACKPRESSURE 变成硬失败之前提前停手,
+   * 给 invoke-result 等控制面帧留出余量。只读,不改变任何传输状态。
+   */
+  getReliableSendQueueDepth(dst: string): number {
+    return this.peerTransport.get(dst)?.pending.size ?? 0;
   }
 
   // ─── 内部:请求配对 ─────────────────────────────────────────────────────────
@@ -1333,6 +1370,7 @@ export class DeviceLinkClient {
           const peer = this.getPeerTransport(env.src);
           peer.linkReady = false;
           peer.explicitlyClosed = true;
+          peer.unlinkedLegacyResponseIds.clear();
           // 对端关闭与本地 closeLink 语义对称：撤掉 streaming 可靠层，
           // 后续不依赖 link-open 的 listing/control invoke 可回退 legacy。
           peer.reliable = false;
@@ -1340,6 +1378,16 @@ export class DeviceLinkClient {
           peer.remoteBaseSeq = 1;
           peer.receive.clear();
           this.abandonReliablePending(env.src, 'control link closed by peer');
+        } else if (
+          env.kind === 'invoke'
+          && env.src
+          && env.id
+          && isUnlinkedLegacyEnvelope(env)
+        ) {
+          const peer = this.getPeerTransport(env.src);
+          if (peer.explicitlyClosed && !peer.linkReady) {
+            this.rememberUnlinkedLegacyResponse(peer, env.id);
+          }
         }
         return this.emitFrame(env);
     }
@@ -1646,13 +1694,18 @@ export class DeviceLinkClient {
     );
   }
 
-  private sendPeerEnvelope(env: Envelope): boolean {
+  private sendPeerEnvelope(env: Envelope, allowClosedLegacyResponse = false): boolean {
     if (!env.dst || !isReliableKind(env.kind)) {
       this.sendEnvelope(env);
       return false;
     }
     const peer = this.getPeerTransport(env.dst);
-    if (peer.explicitlyClosed && !peer.linkReady && !isUnlinkedLegacyEnvelope(env)) {
+    if (
+      peer.explicitlyClosed
+      && !peer.linkReady
+      && !isUnlinkedLegacyEnvelope(env)
+      && !allowClosedLegacyResponse
+    ) {
       throw new DeviceLinkError('LINK_NOT_OPEN', 'control link is closed');
     }
     if (!peer.reliable) {
@@ -1677,10 +1730,23 @@ export class DeviceLinkClient {
         err instanceof Error ? err.message : String(err),
       );
     }
-    if (
-      peer.pending.size >= MAX_TRANSPORT_PENDING_MESSAGES ||
-      peer.pendingBytes + reservedBytes > MAX_TRANSPORT_PENDING_BYTES
-    ) {
+    const hasPendingCapacity = (): boolean => (
+      peer.pending.size < MAX_TRANSPORT_PENDING_MESSAGES
+      && peer.pendingBytes + reservedBytes <= MAX_TRANSPORT_PENDING_BYTES
+    );
+    if (!hasPendingCapacity()) {
+      if (env.kind === 'invoke-result') {
+        // invoke-result 是控制端确认被控端存活的唯一凭据，绝不能被堆积的可丢弃
+        // 帧饿死：丢弃整个队头可丢弃前缀（fresh push 一并放弃——单 FIFO 无法同时
+        // 做到 push 无损与 result 抢占），让 result 成为最早可交付的 live seq。
+        this.dropDiscardablePendingPrefix(env.dst, peer, false, 'to make room for invoke-result');
+      } else {
+        // 其它帧的入队压力只做 TTL 兜底清扫：过期 push 已无实时价值，先出队腾位；
+        // 新鲜 push 之间维持原有 BACKPRESSURE 语义，不互相驱逐。
+        this.dropDiscardablePendingPrefix(env.dst, peer, true, 'after pending push TTL expiry');
+      }
+    }
+    if (!hasPendingCapacity()) {
       throw new DeviceLinkError(
         'BACKPRESSURE',
         `reliable transport buffer is full for peer ${env.dst.slice(0, 8)}`,
@@ -1699,6 +1765,7 @@ export class DeviceLinkClient {
       attempts: 0,
       lastSentAt: 0,
       sent: false,
+      enqueuedAt: this.monotonicNow(),
     };
     peer.pending.set(seq, pending);
     peer.pendingBytes += reservedBytes;
@@ -1812,6 +1879,7 @@ export class DeviceLinkClient {
         reliable: false,
         linkReady: false,
         explicitlyClosed: false,
+        unlinkedLegacyResponseIds: new Set(),
         pending: new Map(),
         pendingBytes: 0,
         retryTimer: null,
@@ -1822,6 +1890,16 @@ export class DeviceLinkClient {
       this.peerTransport.set(dst, peer);
     }
     return peer;
+  }
+
+  private rememberUnlinkedLegacyResponse(peer: PeerTransportState, requestId: string): void {
+    peer.unlinkedLegacyResponseIds.delete(requestId);
+    peer.unlinkedLegacyResponseIds.add(requestId);
+    while (peer.unlinkedLegacyResponseIds.size > MAX_UNLINKED_LEGACY_RESPONSE_IDS) {
+      const oldest = peer.unlinkedLegacyResponseIds.values().next().value as string | undefined;
+      if (!oldest) break;
+      peer.unlinkedLegacyResponseIds.delete(oldest);
+    }
   }
 
   private getReceiveStream(
@@ -1965,6 +2043,9 @@ export class DeviceLinkClient {
   private handleTransportAck(src: string, streamId: string, ackSeq: number): void {
     const peer = this.peerTransport.get(src);
     if (!peer || !peer.reliable || !peer.linkReady || peer.streamId !== streamId) return;
+    // 迟到/陈旧 ACK 幂等无害（含指向已被驱逐 seq 的 ACK）：驱逐后该 seq 已不在
+    // map 里，累计删除循环遇到更高的队头 live seq 直接 break，不会误删、不抛错、
+    // 不错误推进状态；高于 nextSeq-1 的未知 ACK 与倒退的 ACK 直接忽略。
     if (ackSeq > peer.nextSeq - 1 || ackSeq <= peer.highestAckSeq) return;
     peer.highestAckSeq = ackSeq;
     for (const [seq, pending] of peer.pending) {
@@ -1972,6 +2053,96 @@ export class DeviceLinkClient {
       peer.pending.delete(seq);
       peer.pendingBytes -= pending.bytes;
     }
+    if (peer.pending.size === 0 && peer.retryTimer) {
+      clearInterval(peer.retryTimer);
+      peer.retryTimer = null;
+    }
+  }
+
+  /**
+   * 单调时钟。pending 帧的滞留时长（TTL）必须用不受墙钟校正影响的时源计量：
+   * Date.now() 在系统时间被向前校正超过 TRANSPORT_PENDING_PUSH_MAX_AGE_MS 时，
+   * 会把刚入队的 push 误判为过期。测试通过 stub 本方法模拟老化。
+   */
+  private monotonicNow(): number {
+    return performance.now();
+  }
+
+  /**
+   * 可丢弃帧判据（重连重放与 invoke-result 腾位两条路径共用的不变量）：
+   * best-effort push，以及 timeout / relay-error 后被 dropReliablePendingForRequest
+   * 换成 transport-skip 占位 payload 的帧——其外层 kind 仍是原 invoke /
+   * invoke-result，但已无任何业务副作用。两者都可以通过推进 baseSeq 让接收端
+   * 整体跳过；live invoke / invoke-result 永不可丢弃，是丢弃前缀的边界。
+   */
+  private isDiscardablePending(pending: PendingReliableMessage): boolean {
+    return (
+      pending.envelope.kind === 'push'
+      || isTransportSkipPayload(pending.envelope.payload)
+    );
+  }
+
+  /**
+   * 丢弃 pending 队头连续的可丢弃前缀。只能从队头连续删除：队头出队后
+   * baseSeq（最小 pending seq）随之前移，后续帧携带的 baseSeq 会让接收端整体
+   * 跳过这些 seq；若删除中段条目则会留下 seq 空洞，接收端累计 ACK 永久停住。
+   *
+   * expiredOnly=true 只删过期 push（skip 占位没有任何交付价值，始终可删），
+   * 用于普通入队压力下的兜底清扫；expiredOnly=false 丢弃整个可丢弃前缀
+   * （fresh push 一并放弃），用于重连重放前与 invoke-result 腾位——保证剩余
+   * 队头就是最早的 live 帧，invoke-result 不会排在任何可丢弃帧之后。
+   *
+   * 不变量的作用域（刻意从窄）：「result 成为最早可交付的 live seq」只在两个
+   * 清扫时点成立——重连重放写入 socket 之前、新帧入队之前。已写进 WebSocket
+   * FIFO 的帧无法撤回，本方法不承诺全时态抢占；队头是 live 帧时前缀为空，
+   * 维持原 BACKPRESSURE 语义。这也是单 FIFO 的固有极限：live 帧之后的 push
+   * 不可跨越（会留 seq 空洞），例如 [push, live-invoke, push…] 只能丢掉第一段，
+   * result 仍排在 live-invoke 之后——「push 无损」与「result 抢占」在单流上
+   * 不可兼得（需独立优先 stream 才能同时满足）。
+   *
+   * 终止性与计数：每轮迭代要么删除当前队头、要么 break（队头 live / 未过期），
+   * 至多 pending.size 轮；removePendingEntry 同步扣减 pendingBytes 并在队空时
+   * 回收 retryTimer，不产生计数漂移。只触碰参数 peer（按 dst 隔离）的缓冲。
+   *
+   * 数据完整性：被丢弃的 push 不是静默丢数据——push 是尽力而为的状态镜像，
+   * 控制端在重连/回前台时会整体 resync + 重新订阅（mobile 侧 reconnect
+   * reseed），最新状态由下一次全量拉取补偿。传输层没有 push 的离线持久队列
+   * （invoke-result 的 outbox 在 host 层且与 push 无关），驱逐回填既无宿主也无
+   * 必要，故不做。
+   */
+  private dropDiscardablePendingPrefix(
+    dst: string,
+    peer: PeerTransportState,
+    expiredOnly: boolean,
+    reason: string,
+  ): number {
+    const now = this.monotonicNow();
+    let dropped = 0;
+    for (const [seq, pending] of peer.pending) {
+      if (!this.isDiscardablePending(pending)) break;
+      if (
+        expiredOnly
+        && pending.envelope.kind === 'push'
+        && now - pending.enqueuedAt < TRANSPORT_PENDING_PUSH_MAX_AGE_MS
+      ) break;
+      this.removePendingEntry(peer, seq, pending);
+      dropped += 1;
+    }
+    if (dropped > 0) {
+      this.log.warn(
+        `dropped ${dropped} discardable pending frame(s) (best-effort push / transport-skip) for peer ${dst.slice(0, 8)} ${reason}`,
+      );
+    }
+    return dropped;
+  }
+
+  private removePendingEntry(
+    peer: PeerTransportState,
+    seq: number,
+    pending: PendingReliableMessage,
+  ): void {
+    peer.pending.delete(seq);
+    peer.pendingBytes -= pending.bytes;
     if (peer.pending.size === 0 && peer.retryTimer) {
       clearInterval(peer.retryTimer);
       peer.retryTimer = null;
@@ -2015,6 +2186,12 @@ export class DeviceLinkClient {
   private replayPending(dst: string, resumedLink = false): void {
     const peer = this.peerTransport.get(dst);
     if (!peer || !peer.reliable || !peer.linkReady || peer.pending.size === 0) return;
+    // 重放前先丢弃队头连续的可丢弃前缀（push 不分新旧 + skip 占位）：重放一旦把
+    // 它们写进 WebSocket FIFO 就无法撤回，之后的 invoke-result 驱逐救不回已发出
+    // 的帧，接收端仍会按 seq 顺序先消化整段重放洪峰。丢弃后重放的第一帧就是最
+    // 早的 live 帧。
+    this.dropDiscardablePendingPrefix(dst, peer, false, 'before link re-establishment replay');
+    if (peer.pending.size === 0) return;
     if (resumedLink || peer.lastReplayEpoch !== this.connEpoch) {
       peer.lastReplayEpoch = this.connEpoch;
       for (const pending of peer.pending.values()) {

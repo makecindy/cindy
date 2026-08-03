@@ -210,55 +210,45 @@ export async function prepareExternalCodexSessionForResume(threadId: string): Pr
     ?? findExternalThreadById(threadId)
     ?? (targetRollout ? findThreadByIdInHome(targetHome, threadId) : null);
   if (found) {
-    const isBrandMigration = isLegacyBrandedCodexLocation(targetHome, found.sourceHome)
-      || isLegacyBrandedCodexLocation(targetHome, found.rolloutPath);
-    if (isBrandMigration) {
-      const adoptedRolloutPath = targetRolloutPathForExternalThread(found, targetHome);
-      const sourceRolloutExists = !!found.rolloutPath && fs.existsSync(found.rolloutPath);
-      let adoptedRollout = false;
-      if (sourceRolloutExists) {
-        try {
-          adoptedRollout = await copyExternalRolloutAtomically(found.rolloutPath, adoptedRolloutPath);
-        } catch (err) {
-          log.warn('failed to adopt external Codex rollout into current home', {
-            threadId,
-            sourceRolloutPath: found.rolloutPath,
-            targetRolloutPath: adoptedRolloutPath,
-            error: err instanceof Error ? err.message : String(err),
-          });
-        }
+    // 外部会话(~/.codex、Codex.app、历史品牌 HOME)一律**复制成 Cindy 私有副本**,
+    // 不再链接源 rollout(#789 方案 A:Dash 定稿)。Cindy 的续聊只写进 desktop CODEX_HOME
+    // 的这份副本,源会话零改动、也没有任何回写通道——彻底消除跨 runtime 版本回写污染源会话
+    // 的风险。接管进当前 HOME 还避免 state 长期指向可能被用户清理的外部目录。
+    const adoptedRolloutPath = targetRolloutPathForExternalThread(found, targetHome);
+    const sourceRolloutExists = !!found.rolloutPath && fs.existsSync(found.rolloutPath);
+    let adoptedRollout = false;
+    if (sourceRolloutExists) {
+      try {
+        adoptedRollout = await copyExternalRolloutAtomically(found.rolloutPath, adoptedRolloutPath);
+      } catch (err) {
+        log.warn('failed to adopt external Codex rollout into current home', {
+          threadId,
+          sourceRolloutPath: found.rolloutPath,
+          targetRolloutPath: adoptedRolloutPath,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-
-      // 原文件存在但接管失败时仍指回原文件,保证本次 resume 不因迁移 IO 故障被阻断;
-      // 原文件本就缺失时则把 state 指向当前 HOME,随后由 localDb 历史合成兜底 rollout。
-      const preparedRolloutPath = adoptedRollout || !sourceRolloutExists
-        ? adoptedRolloutPath
-        : found.rolloutPath;
-      const copiedState = copyThreadStateToTarget(found, targetDbPath, {
-        rolloutPathOverride: preparedRolloutPath,
-      });
-      const linkedState = pointThreadAtRollout(targetDbPath, threadId, preparedRolloutPath);
-      targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-      log.info('prepared legacy branded Codex thread for resume', {
-        threadId,
-        sourceHome: found.sourceHome,
-        copiedState,
-        linkedState,
-        adoptedRollout,
-        rolloutPath: targetRollout,
-      });
-    } else {
-      // 显式导入的 ~/.codex / Codex.app 会话保持链接语义,close 时仍同步回原 HOME。
-      const copiedState = copyThreadStateToTarget(found, targetDbPath);
-      targetRollout = readThreadRolloutPath(targetDbPath, threadId);
-      log.info('prepared linked external Codex thread for resume', {
-        threadId,
-        sourceHome: found.sourceHome,
-        copiedState,
-        rolloutPath: targetRollout,
-      });
     }
+
+    // 原文件存在但接管失败时仍指回原文件,保证本次 resume 不因迁移 IO 故障被阻断(此时
+    // app-server 仍以 CODEX_HOME=desktop 运行、新事件写进 desktop home,不改源);原文件
+    // 本就缺失时把 state 指向当前 HOME,随后由 localDb 历史合成兜底 rollout。
+    const preparedRolloutPath = adoptedRollout || !sourceRolloutExists
+      ? adoptedRolloutPath
+      : found.rolloutPath;
+    const copiedState = copyThreadStateToTarget(found, targetDbPath, {
+      rolloutPathOverride: preparedRolloutPath,
+    });
+    const pointedState = pointThreadAtRollout(targetDbPath, threadId, preparedRolloutPath);
     targetRollout = readThreadRolloutPath(targetDbPath, threadId);
+    log.info('prepared private-copy external Codex thread for resume', {
+      threadId,
+      sourceHome: found.sourceHome,
+      copiedState,
+      pointedState,
+      adoptedRollout,
+      rolloutPath: targetRollout,
+    });
     if (targetRollout && fs.existsSync(targetRollout)) return targetRollout;
   }
 
@@ -954,51 +944,6 @@ function dropUndefined<T extends Record<string, unknown>>(obj: T): Partial<T> {
     if (v !== undefined) out[k as keyof T] = v as T[keyof T];
   }
   return out;
-}
-
-/** Copy a linked Codex thread updated by xdt-maker back into the original Codex home. */
-export async function syncExternalCodexSessionFromDesktop(threadId: string): Promise<void> {
-  if (!isLikelyThreadId(threadId)) return;
-
-  const desktopThread = findThreadByIdInHome(getDesktopCodexHome(), threadId);
-  if (!desktopThread) {
-    log.debug('sync external skipped: desktop thread missing', { threadId });
-    return;
-  }
-
-  const externalThread = findExternalThreadById(threadId);
-  if (!externalThread) {
-    log.debug('sync external skipped: original external thread missing', { threadId });
-    return;
-  }
-
-  let copiedRollout = false;
-  if (
-    desktopThread.rolloutPath &&
-    externalThread.rolloutPath &&
-    !samePath(desktopThread.rolloutPath, externalThread.rolloutPath) &&
-    fs.existsSync(desktopThread.rolloutPath)
-  ) {
-    await fsp.mkdir(path.dirname(externalThread.rolloutPath), { recursive: true });
-    await fsp.copyFile(desktopThread.rolloutPath, externalThread.rolloutPath);
-    copiedRollout = true;
-  }
-
-  const copiedState = externalThread.sourceDbPath
-    ? copyThreadStateToTarget(desktopThread, externalThread.sourceDbPath, {
-      replaceExisting: true,
-      rolloutPathOverride: externalThread.rolloutPath || desktopThread.rolloutPath,
-    })
-    : false;
-  await appendSessionIndexEntry(externalThread.sourceHome, desktopThread);
-
-  log.info('synced linked Codex thread back to external home', {
-    threadId,
-    sourceHome: desktopThread.sourceHome,
-    targetHome: externalThread.sourceHome,
-    copiedRollout,
-    copiedState,
-  });
 }
 
 /**

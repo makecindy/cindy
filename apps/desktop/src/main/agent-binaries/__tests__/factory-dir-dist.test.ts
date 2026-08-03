@@ -21,6 +21,8 @@ const FAKE_SHA = 'b'.repeat(64);
 
 const mocks = vi.hoisted(() => ({
   download: vi.fn(),
+  fetchManifest: vi.fn(async () => ({ app: {} })),
+  cachedManifest: { current: { app: {} } as { app: Record<string, never> } | null },
   // 每个用例把要打包进 tar.gz 的源目录塞进来,download mock 现打包成归档落盘。
   archiveState: { srcDir: '' },
   asset: {
@@ -45,8 +47,8 @@ vi.mock('../../downloader/index.js', () => ({
 }));
 
 vi.mock('../../manifestService.js', () => ({
-  fetchManifest: vi.fn(async () => null),
-  getCachedManifest: vi.fn(() => ({ app: {} })),
+  fetchManifest: mocks.fetchManifest,
+  getCachedManifest: vi.fn(() => mocks.cachedManifest.current),
   getBaseUrl: () => 'https://cdn.test',
   getPlatformKey: () => 'darwin-arm64',
 }));
@@ -60,7 +62,7 @@ import { createBinaryProvisioner } from '../factory.js';
 
 const BIN_NAME = 'pi-test-bin';
 
-interface DownloadOpts { targetPath: string }
+interface DownloadOpts { targetPath: string; signal?: AbortSignal }
 
 /** download mock 成功实现:把 archiveState.srcDir 打成真实 tar.gz 落到 targetPath。 */
 async function fulfillDownloadWithTarGz(opts: DownloadOpts) {
@@ -103,6 +105,9 @@ function stageDist(layout: 'flat' | 'nested', withBinary = true): string {
 
 beforeEach(() => {
   mocks.download.mockReset();
+  mocks.fetchManifest.mockReset();
+  mocks.fetchManifest.mockResolvedValue({ app: {} });
+  mocks.cachedManifest.current = { app: {} };
   mocks.asset.current = {
     version: '9.9.9-test',
     file: 'pi/9.9.9-test/darwin-arm64/pi.dist.tar.gz',
@@ -158,6 +163,20 @@ describe('createBinaryProvisioner tar-gz-dir', () => {
     expect(state.status).toBe('failed');
   });
 
+  it('拒绝 win32-arm64 资产被错误地用于当前平台', async () => {
+    mocks.asset.current = {
+      version: '9.9.9-test',
+      file: 'pi/9.9.9-test/win32-arm64/pi.dist.tar.gz',
+      sha256: FAKE_SHA,
+      size: 128,
+    };
+
+    const result = await makeProvisioner({ optionalAsset: true }).prepare();
+
+    expect(result).toEqual({ ready: false, binaryPath: '', error: 'asset_platform_mismatch' });
+    expect(mocks.download).not.toHaveBeenCalled();
+  });
+
   it('二次 prepare 命中已安装版本,不再下载', async () => {
     mocks.archiveState.srcDir = stageDist('flat');
     mocks.download.mockImplementation(fulfillDownloadWithTarGz);
@@ -171,6 +190,26 @@ describe('createBinaryProvisioner tar-gz-dir', () => {
     expect(second.ready).toBe(true);
     expect(second.binaryPath).toBe(first.binaryPath);
     expect(mocks.download).toHaveBeenCalledTimes(1);
+  });
+
+  it('把宿主的启动取消信号传给统一下载器', async () => {
+    mocks.archiveState.srcDir = stageDist('flat');
+    mocks.download.mockImplementation(fulfillDownloadWithTarGz);
+    const controller = new AbortController();
+
+    mocks.cachedManifest.current = null;
+    const result = await makeProvisioner({ optionalAsset: true }).prepare({
+      signal: controller.signal,
+    });
+
+    expect(result.ready).toBe(true);
+    expect(mocks.fetchManifest).toHaveBeenCalledWith(undefined, controller.signal);
+    expect(mocks.download).toHaveBeenCalledWith(
+      expect.objectContaining({
+        signal: controller.signal,
+        retry: { maxAttempts: 1 },
+      }),
+    );
   });
 
   it('optionalAsset: manifest 缺字段 → peekNeedsDownload false;非 optional 保守 true', async () => {

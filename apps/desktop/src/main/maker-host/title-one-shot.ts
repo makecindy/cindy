@@ -31,9 +31,12 @@ import { fetch as undiciFetch } from 'undici';
 
 import {
   type AgentKind,
+  type CatalogModel,
   type Effort,
   type Provider,
   type ProviderView,
+  findModelRegistryRoute,
+  isModelSelectableForNewRoute,
   nativeDefaultSourceId,
 } from '@cindy/model-providers';
 import { toSdkModelString } from '@cindy/maker-core';
@@ -48,6 +51,7 @@ import { readClaudeApiKey, readCodexOneShotCreds } from './auth-adapters.js';
 import { getValidClaudeAiOAuth } from './claude-oauth-refresh.js';
 import { outboundUndiciFetch } from './outbound-fetch.js';
 import { effectiveXdGatewayBaseUrl } from '../model-access/effectiveEndpoint.js';
+import { validateTitleOutput } from './title-output-validation.js';
 
 const log = createLogger('maker-host:title-one-shot');
 
@@ -55,6 +59,8 @@ const log = createLogger('maker-host:title-one-shot');
 const TITLE_TIMEOUT_MS = 12_000;
 /** 标题 ≤ 20 字,32 token 足够;codex Responses 协议层不暴露 max_tokens,仅对 messages/chat 生效。 */
 const TITLE_MAX_TOKENS = 32;
+/** 异常响应保护:完整模型输出超过此 Unicode 长度就拒绝,再按历史契约截到 40 字。 */
+const TITLE_OUTPUT_MAX_CHARS = 256;
 /**
  * Codex Responses 要求 instructions 字段，但语言和长度必须由调用方 prompt 决定。
  * 这里仅约束输出形状，避免覆盖 locale-aware 标题指令。
@@ -87,9 +93,7 @@ export interface TitleOneShotDeps {
   /** 某 agent 下已连接的供应商视图列表(实时连接态)。用于无显式选择时取 WYSIWYG 默认。 */
   listConnectedProviders?: (agentKind: AgentKind) => Promise<ProviderView[]>;
   readAnthropicOAuth?: () =>
-    | Promise<{ accessToken: string } | null>
-    | { accessToken: string }
-    | null;
+    Promise<{ accessToken: string } | null> | { accessToken: string } | null;
   readCodexCreds?: () => { accessToken: string; accountId: string } | null;
   readGatewayKey?: () => string | null;
 }
@@ -114,7 +118,6 @@ function trimTrailingSlash(s: string): string {
   return s.replace(/\/+$/, '');
 }
 
-
 /** 在 provider 的所有 agent 模型清单里查某 model id 的目录条目(用于取 efforts)。 */
 function findCatalogModel(provider: Provider, modelId: string) {
   for (const agent of provider.agents) {
@@ -122,6 +125,17 @@ function findCatalogModel(provider: Provider, modelId: string) {
     if (hit) return hit;
   }
   return undefined;
+}
+
+type TitleRouteUnavailableReason = 'disabled' | 'retired' | 'capability-model';
+
+function titleRouteUnavailableReason(
+  model: CatalogModel,
+  userProvider: boolean,
+): TitleRouteUnavailableReason | null {
+  if (isModelSelectableForNewRoute(model, { userProvider })) return null;
+  if (model.status === 'retired') return 'retired';
+  return model.disabled === true ? 'disabled' : 'capability-model';
 }
 
 /**
@@ -158,7 +172,13 @@ export function buildTitleTarget(providerId: string): TitleTarget | null {
       // 就绪(空串)时返回 null,回落启发式起名。
       const base = effectiveXdGatewayBaseUrl().trim();
       return base
-        ? { providerId, model, effort, wire: 'gateway-chat', upstream: `${trimTrailingSlash(base)}/v1` }
+        ? {
+            providerId,
+            model,
+            effort,
+            wire: 'gateway-chat',
+            upstream: `${trimTrailingSlash(base)}/v1`,
+          }
         : null;
     }
     default:
@@ -353,10 +373,15 @@ export async function generateTitleViaProvider(
   // gpt-5.4-mini 挂在 codex 清单下,只查会话 agent 会漏掉停用标志(PR #744 review
   // 第十一轮)。目录里完全找不到该模型时不额外拦。
   const railProvider = rail.find((p) => p.id === providerId);
-  if (railProvider && findCatalogModel(railProvider, target.model)?.disabled === true) {
-    log.debug('title oneShot skipped: title model disabled in settings', {
+  const titleCatalogModel = railProvider ? findCatalogModel(railProvider, target.model) : undefined;
+  const initialUnavailableReason = titleCatalogModel
+    ? titleRouteUnavailableReason(titleCatalogModel, railProvider?.source === 'user')
+    : null;
+  if (initialUnavailableReason) {
+    log.debug('title oneShot skipped: title model unavailable for new route', {
       providerId,
       model: target.model,
+      reason: initialUnavailableReason,
     });
     return null;
   }
@@ -369,16 +394,43 @@ export async function generateTitleViaProvider(
   args.signal?.addEventListener('abort', onExternalAbort);
 
   // 派发紧前重查(PR #744 review 第二十一轮):OAuth 刷新等凭证获取是可能数秒的
-  // await,期间该 (来源, 标题模型) 可能被用户停用 —— 凭证到手、请求发出的紧前按
-  // override store 同步再验一次(key 无 agent 维度,组合判定即精确口径)。
-  // 直查 override store(不经 oneShotCandidates:那条链模块加载期拖 runtime-configs
-  // / ripgrep 探测等 electron 面,污染轻量测试环境)。
-  const routeDisabledNow = (): boolean => {
+  // await,期间该 (来源, 标题模型) 可能被用户停用或被热刷新标成 retired —— 凭证
+  // 到手、请求发出的紧前同时重读 override store 与 active catalog。直查这两份同步
+  // 真源(不经 oneShotCandidates:那条链模块加载期拖 runtime-configs / ripgrep 探测等
+  // electron 面,污染轻量测试环境)。
+  const routeUnavailableNow = (): TitleRouteUnavailableReason | null => {
     const overrides = readModelDisableOverrides();
-    return (
+    if (
       isProviderDisabled(overrides, providerId) ||
       isModelDisabled(overrides, providerId, target.model)
-    );
+    ) {
+      return 'disabled';
+    }
+    const currentCatalog = getActiveCatalog();
+    const currentProvider = currentCatalog.providers.find((provider) => provider.id === providerId);
+    const currentModel = currentProvider
+      ? findCatalogModel(currentProvider, target.model)
+      : undefined;
+    if (currentModel) {
+      return titleRouteUnavailableReason(currentModel, currentProvider?.source === 'user');
+    }
+    // retired 且没有 discovery/local addition 时不会出现在 provider.models；仍要从
+    // Registry tombstone 本身识别，不能把“未实体化”误当成“没有限制”。
+    return findModelRegistryRoute(currentCatalog.modelRegistry, providerId, target.model)?.entry
+      .status === 'retired'
+      ? 'retired'
+      : null;
+  };
+  const canDispatchNow = (stage: string): boolean => {
+    const reason = routeUnavailableNow();
+    if (!reason) return true;
+    log.debug('title oneShot skipped: route unavailable before dispatch', {
+      providerId,
+      model: target.model,
+      reason,
+      stage,
+    });
+    return false;
   };
   try {
     let text = '';
@@ -389,11 +441,15 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no anthropic OAuth', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled after credential refresh', { providerId });
-          return null;
-        }
-        text = await fetchAnthropicTitle(target.upstream, target.model, args.prompt, oauth.accessToken, fetchImpl, controller.signal);
+        if (!canDispatchNow('after-credential-refresh')) return null;
+        text = await fetchAnthropicTitle(
+          target.upstream,
+          target.model,
+          args.prompt,
+          oauth.accessToken,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
       case 'codex-responses': {
@@ -402,11 +458,16 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no codex creds', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
-          return null;
-        }
-        text = await fetchCodexTitle(target.upstream, target.model, target.effort, args.prompt, creds, fetchImpl, controller.signal);
+        if (!canDispatchNow('after-credential-read')) return null;
+        text = await fetchCodexTitle(
+          target.upstream,
+          target.model,
+          target.effort,
+          args.prompt,
+          creds,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
       case 'gateway-chat': {
@@ -415,23 +476,41 @@ export async function generateTitleViaProvider(
           log.debug('title oneShot skipped: no gateway key', { providerId });
           return null;
         }
-        if (routeDisabledNow()) {
-          log.debug('title oneShot skipped: route disabled before dispatch', { providerId });
-          return null;
-        }
-        text = await fetchGatewayTitle(target.upstream, target.model, args.prompt, key, fetchImpl, controller.signal);
+        if (!canDispatchNow('after-credential-read')) return null;
+        text = await fetchGatewayTitle(
+          target.upstream,
+          target.model,
+          args.prompt,
+          key,
+          fetchImpl,
+          controller.signal,
+        );
         break;
       }
     }
-    const title = text.trim().slice(0, 40);
+    // The prompt is advisory; never persist a transcript continuation, role-labelled
+    // response, Markdown wrapper, or multiline answer. Validate the complete response
+    // before applying the historical 40-character auto-title truncation, so a bad suffix
+    // cannot hide beyond the slice boundary.
+    const normalized = validateTitleOutput(text, TITLE_OUTPUT_MAX_CHARS);
+    const title = normalized ? Array.from(normalized).slice(0, 40).join('') : null;
+    if (!title) {
+      log.warn('title oneShot rejected invalid model output', {
+        providerId,
+        model: target.model,
+        wire: target.wire,
+        elapsedMs: Date.now() - startedAt,
+      });
+      return null;
+    }
     log.info('title oneShot done', {
       providerId,
       model: target.model,
       wire: target.wire,
       elapsedMs: Date.now() - startedAt,
-      chars: title.length,
+      chars: Array.from(title).length,
     });
-    return title || null;
+    return title;
   } catch (err) {
     log.warn('title oneShot failed (swallowed)', {
       providerId,

@@ -27,8 +27,10 @@ git lfs pull
 pnpm install
 ```
 
-`pnpm install` 的 postinstall 会按当前平台 **best-effort 自动下载 agent 二进制**
-（claude／codex／ripgrep，不入 git；失败只告警不阻断），dev 启动前的 guard 会再确认。
+`pnpm install` 的 postinstall 会按当前平台 **best-effort 自动下载 Desktop runtime
+二进制**（claude／codex／ripgrep／pi，不入 git；失败只告警不阻断）。dev 启动前
+的 guard 会按同一份 runtime kind 清单再确认：全新 clone／worktree 缺少任何一项时都会
+自动补下载，仍无法准备才会中止 dev 启动并给出明确错误。
 正常情况下无需手动安装二进制。
 
 新 worktree 不共享 `node_modules`。确认 checkout 已完成且根 `package.json` 存在后，
@@ -67,7 +69,7 @@ sudo chmod 4755 chrome-sandbox
   避免继续使用 `.git/config` 缓存的旧仓库地址。
 - 公开版本不包含内建插件种子；插件通过 SkillHub 或手动安装。不要把任何访问令牌写入
   仓库、Git 配置或脚本。
-- agent 二进制（claude／codex／ripgrep）的版本由仓库维护者统一判断与升级；贡献者和
+- Desktop runtime 二进制（claude／codex／ripgrep／pi）的版本由仓库维护者统一判断与升级；贡献者和
   Agent 不要修改 `tools/<kind>/latest.json` 的版本 pin，也不要主动升级二进制。
 - 依赖和命令的事实源是当前 checkout 的 `package.json` 与脚本。文档和脚本冲突时，
   先核对代码并修正文档，不要继续执行已失效命令。

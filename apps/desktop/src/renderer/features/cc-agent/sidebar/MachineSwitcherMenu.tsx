@@ -7,7 +7,8 @@
  * 下拉 **hover 自动展开**(移上即开、移开即收,点击也可开且不误关,见 useHoverOpenMenu;
  * 2026-07-12 产品定稿恢复,推翻 d5a8d77c9 按 Codex P2 改的「点击展开」)。
  *
- * 仅当本机有 ≥1 台相关远程机器(已连接 / 连接中 / 被拒)时显示;否则 return null。
+ * 本机有 ≥1 台相关远程机器(已连接 / 连接中 / 被拒)时显示;若断网导致设备目录
+ * 与远端分片都清空,但 raw 选择仍指向远端,也必须保留入口让用户切回本机。
  *
  * 机器选择:**默认单选、多选框另走多选**(2026-07 用户定稿):
  *   - 「所有」→ 重置回默认(本机 + 全部远程),菜单关闭;
@@ -33,7 +34,7 @@
  * 风格(h-8 全宽、图标 15/1.8 meta 灰、文字 foreground、hover 灰底)——trigger 显示
  * 当前范围文字(所有 / 本机 / 设备名 / N 台机器)+ 下拉箭头。范围文字本身已表达
  * 过滤状态,trigger 不再叠常驻高亮底色(常亮易被误读为导航选中态,2026-07 用户定稿)。
- * 无任何相关远程机器时 return null,列表里不占行。
+ * 无任何相关远程机器且没有悬空远端选择时 return null,列表里不占行。
  *
  * 颜色全走主题 token(规则 16),文案全走 i18n(规则 18)。
  */
@@ -103,7 +104,7 @@ export function MachineSwitcherMenu(): ReactNode {
     ensureConversationListVisible();
   };
 
-  // 无任何相关远程机器 → 不渲染入口(可见性门控)。
+  // 无任何相关远程机器、也没有需要逃生的悬空远端选择 → 不渲染入口。
   if (!hasRemote) return null;
 
   const triggerLabel = t('ccAgent.sidebar.machineSwitcher.menuTrigger');
@@ -116,7 +117,7 @@ export function MachineSwitcherMenu(): ReactNode {
       triggerText =
         only === MACHINE_LOCAL
           ? t('ccAgent.sidebar.machineSwitcher.localMachine')
-          : (devices.find((device) => device.deviceId === only)?.name ?? '');
+          : (devices.find((device) => device.deviceId === only)?.name ?? triggerLabel);
     } else {
       triggerText = t('ccAgent.sidebar.machineSwitcher.selectedCount', {
         count: selectedDeviceId.length,

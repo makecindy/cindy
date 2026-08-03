@@ -147,6 +147,7 @@
     "systemInstruction": "System instruction",
     "retrySend": "Retry Send",
     "clearError": "Clear Error",
+    "piImageInputUnsupported": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "credentialSwitchWait": "Waiting for another Codex task to finish; it will send automatically once done",
     "aborting": "Stopping; queued messages will stay here",
     "paused": "Queue paused; queued messages won't send automatically",

@@ -152,6 +152,13 @@ function sessionRunningError(): Error & { code: string } {
   });
 }
 
+function unsupportedChatBridgeImageError(
+  feature = "input content part 'input_image'",
+): string {
+  return 'unexpected status 400 Bad Request: Responses feature is not supported by the '
+    + `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`;
+}
+
 function createHarness() {
   let running = false;
   let turnGeneration = 0;
@@ -2102,6 +2109,201 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
   });
 
+  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-with-text';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+      {
+        id: 'gif-1',
+        name: 'clip.gif',
+        path: '/repo/clip.gif',
+        ext: '.gif',
+        size: 6,
+        category: 'image',
+        mimeType: 'image/gif',
+        url: 'xdt-image://session/clip.gif',
+      },
+      {
+        id: 'file-1',
+        name: 'notes.pdf',
+        path: '/repo/notes.pdf',
+        ext: '.pdf',
+        size: 8,
+        category: 'pdf',
+        mimeType: 'application/pdf',
+      },
+    ];
+    item.persistedContent = JSON.stringify({
+      text: item.text,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    };
+    (item.chatMessage as typeof item.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles = item.files;
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = unsupportedChatBridgeImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+      ],
+    });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.files).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
+    expect(retried?.chatMessage.images).toEqual([{
+      url: 'xdt-image://session/clip.gif',
+      mimeType: 'image/gif',
+      originalName: 'clip.gif',
+    }]);
+    expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
+    expect((retried?.chatMessage as typeof retried.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
+    expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
+      text: 'describe this',
+      images: [{
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+  });
+
+  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-only';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', '');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+    item.persistedContent = JSON.stringify({
+      text: '',
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+      files: [],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = unsupportedChatBridgeImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).error).toBe(error);
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+  });
+
+  it('keeps retry recovery compatible with the legacy bridge image error', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-legacy-error';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', unsupportedChatBridgeImageError('input_image'));
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
+  });
+
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
     // retry-supersede:零产出克隆重发会在历史里留下两条一模一样的 user 行
     // (旧行 + 克隆行)。克隆行落库并派发成功后必须软删旧行,且锚定的是
@@ -2572,6 +2774,23 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the Pi image-capability marker for display-side localization', async () => {
+    const h = createHarness();
+    const sid = 'pi-image-capability';
+    h.sendToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, makeItem('q-image', 'describe the screenshot'));
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-image']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
 
   it('retries a queue-head recovery when an external live reservation clears without a terminal event', async () => {
@@ -4113,6 +4332,101 @@ describe('AgentInputCoordinator steer transaction', () => {
     const afterDone = latestProjection(h.projections);
     expect(afterDone.queuePaused).toBe(true);
     expect(afterDone.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
+  });
+
+  it('restores a capability-rejected steer to the queue head for retry after switching models', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-retry';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(projection.queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Capability rejection is pre-RPC, so finishing the old turn must not auto-send. Once the
+    // user has switched models, the explicit Retry consumes the preserved queue row exactly once.
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
+  it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-active-error';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'original turn failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Switching to an image-capable model is represented by the next host send succeeding.
+    // Only the explicit Retry may consume the preserved steer, and it must do so once.
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
   });
 
   it('screens same-turn steers through ghost hooks: block discards without injecting or persisting', async () => {

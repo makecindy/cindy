@@ -5,18 +5,14 @@
  * 行右侧用 chevron 而非快捷键(快捷键在代码里没绑定,画 kbd 会骗用户)。
  * 严格走 token(规则 16),不写 hex。
  *
- * 插件页签行(panel.position:'tab' 的意识,2026-07-24):
- * - 恰好 1 个启用中 → 直接显示它自己(插件名一行);
- * - ≥2 个 → 收进一行可折叠分组(「插件面板」),展开逐个列出。
+ * 插件面板不再出现在这里(面板收束,2026-08):页签形态的插件面板由
+ * 插件页独占承载,入口只在 /plugins。
  */
 
-import { useState } from 'react';
-import { ChevronRight, FileDiff, FolderOpen, Globe, ListTodo, Puzzle, Terminal } from 'lucide-react';
+import { ChevronRight, FileDiff, FolderOpen, Globe, ListTodo, Terminal } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import type { TFunction } from 'i18next';
 import { cn } from '@/lib/utils';
-import type { TabKindId, TabKindMenuMeta } from './types';
 
 interface EmptyStateProps {
   onAddFileTab: () => void;
@@ -24,9 +20,6 @@ interface EmptyStateProps {
   onAddTerminalTab: () => void;
   onAddReviewTab: () => void;
   onAddBackgroundTasksTab: () => void;
-  /** 启用中的插件页签 menu 项(listGhostTabMenuMetas 产物);缺省/空 = 不渲染插件行。 */
-  ghostTabMetas?: TabKindMenuMeta[];
-  onAddGhostTab?: (kind: TabKindId) => void;
 }
 
 export function EmptyState({
@@ -35,8 +28,6 @@ export function EmptyState({
   onAddTerminalTab,
   onAddReviewTab,
   onAddBackgroundTasksTab,
-  ghostTabMetas = [],
-  onAddGhostTab,
 }: EmptyStateProps) {
   const { t } = useTranslation();
   return (
@@ -88,74 +79,11 @@ export function EmptyState({
           sub={t('rightSidebar.tabs.empty.terminalSub')}
           onClick={onAddTerminalTab}
         />
-        {ghostTabMetas.length === 1 && (
-          // 恰好一个启用中的插件页签:直接显示它自己(插件名原文,不进 i18n)。
-          <ActionRow
-            icon={ghostTabMetas[0].icon}
-            label={ghostTabMetas[0].labelText ?? t(ghostTabMetas[0].labelKey)}
-            sub={t('rightSidebar.tabs.empty.pluginSub')}
-            onClick={() => onAddGhostTab?.(ghostTabMetas[0].kind)}
-          />
-        )}
-        {ghostTabMetas.length >= 2 && (
-          <GhostGroupRows metas={ghostTabMetas} onAdd={onAddGhostTab} t={t} />
-        )}
       </div>
       <p className="px-1 text-[11px] text-[var(--text-tertiary)]">
         {t('rightSidebar.tabs.empty.addMoreHint')}
       </p>
     </div>
-  );
-}
-
-/**
- * 多个插件页签时的折叠分组:一行「插件面板」expander,展开后逐个列出。
- * 展开态不持久化 —— EmptyState 本身是临时画面,记忆没有意义。
- */
-function GhostGroupRows({
-  metas,
-  onAdd,
-  t,
-}: {
-  metas: TabKindMenuMeta[];
-  onAdd?: (kind: TabKindId) => void;
-  t: TFunction;
-}) {
-  const [open, setOpen] = useState(false);
-  return (
-    <>
-      <button
-        type="button"
-        aria-expanded={open}
-        onClick={() => setOpen((v) => !v)}
-        className="group flex w-full items-center gap-3.5 border-b border-[var(--border-default)] px-1 py-3 text-left transition-colors hover:bg-[var(--surface-hover)]"
-      >
-        <Puzzle size={16} className="text-[var(--text-secondary)]" />
-        <span className="flex flex-1 flex-col gap-0.5">
-          <span className="text-[14px] font-medium text-[var(--text-primary)]">
-            {t('rightSidebar.tabs.empty.pluginGroup')}
-          </span>
-          <span className="text-[11px] text-[var(--text-tertiary)]">
-            {t('rightSidebar.tabs.empty.pluginGroupSub', { count: metas.length })}
-          </span>
-        </span>
-        <ChevronRight
-          size={14}
-          className={cn('text-[var(--text-tertiary)] transition-transform', open && 'rotate-90')}
-        />
-      </button>
-      {open &&
-        metas.map((m) => (
-          <ActionRow
-            key={m.kind}
-            icon={m.icon}
-            label={m.labelText ?? t(m.labelKey)}
-            sub={t('rightSidebar.tabs.empty.pluginSub')}
-            onClick={() => onAdd?.(m.kind)}
-            inset
-          />
-        ))}
-    </>
   );
 }
 

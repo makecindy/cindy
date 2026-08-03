@@ -2547,7 +2547,7 @@ describe('Telegram provider capability, binding and prefs', () => {
     });
   });
 
-  it('confirmed 绑定持久化、provider 偏好隔离读写，并可显式解绑', async () => {
+  it('hello 声明完整 Telegram 能力，confirmed 绑定持久化、偏好隔离读写并可显式解绑', async () => {
     const { wss, url } = await startServer();
     const store = memoryStore({ url, enabled: false, telegramEnabled: true });
     const notified: unknown[] = [];
@@ -2569,8 +2569,9 @@ describe('Telegram provider capability, binding and prefs', () => {
     const [sock] = await connPromise;
     const server = collectFrames(sock);
     const hello = await server.waitFor('hello');
-    expect(hello.type === 'hello' ? hello.payload.features : []).toContain(
-      HOOK_FEATURE_PROVIDER_BEHAVIOR,
+    if (hello.type !== 'hello') throw new Error('unreachable');
+    expect(hello.payload.features).toEqual(
+      expect.arrayContaining(TELEGRAM_FEATURES),
     );
     sock.send(
       serializeHookMessage(

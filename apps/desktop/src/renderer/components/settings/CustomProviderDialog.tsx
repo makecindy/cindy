@@ -30,6 +30,7 @@ import {
   createCustomProvider,
   readCustomProviderKey,
   replaceCustomProviderModelId,
+  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
   type RuntimeKeys,
 } from '@/lib/customProviders';
@@ -656,6 +657,7 @@ export function CustomProviderDialog({
             name: m.name.trim(),
             ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
             ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+            ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
           }))
           .filter((m) => m.id.length > 0);
         const currentById = new Map(current.map((m) => [m.id, m]));
@@ -676,6 +678,7 @@ export function CustomProviderDialog({
               name: cur?.name || m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(cur?.defaultEnabled === false ? { defaultEnabled: false } : {}),
+              ...(cur?.supportsImageInput === true ? { supportsImageInput: true } : {}),
             };
           }),
         ];
@@ -727,11 +730,13 @@ export function CustomProviderDialog({
       const latest = latestById.get(m.id);
       const contextWindow = latest?.contextWindow ?? m.contextWindow;
       const defaultEnabled = latest?.defaultEnabled ?? m.defaultEnabled;
+      const supportsImageInput = latest ? latest.supportsImageInput : m.supportsImageInput;
       return {
         id: m.id,
         name: latest?.name.trim() ? latest.name.trim() : m.name,
         ...(contextWindow !== undefined ? { contextWindow } : {}),
         ...(defaultEnabled === false ? { defaultEnabled: false } : {}),
+        ...(supportsImageInput === true ? { supportsImageInput: true } : {}),
       };
     });
     for (const m of previousModels) {
@@ -742,6 +747,7 @@ export function CustomProviderDialog({
           name: m.name.trim() || id,
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
         });
       }
     }
@@ -843,6 +849,7 @@ export function CustomProviderDialog({
           name: m.name.trim(),
           ...(m.contextWindow !== undefined ? { contextWindow: m.contextWindow } : {}),
           ...(m.defaultEnabled === false ? { defaultEnabled: false } : {}),
+          ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
         }))
         .filter((m) => m.id && m.name);
       const requestPath = rf.requestPath.trim();
@@ -1342,7 +1349,7 @@ export function CustomProviderDialog({
                 <div className="flex flex-col gap-2">
                   <FieldLabel>{t('settings.providers.custom.fields.models')}</FieldLabel>
                   {f.models.map((m, i) => (
-                    <div key={i} className="flex items-center gap-2">
+                    <div key={i} className="flex flex-wrap items-center gap-2">
                       <div className="flex-1">
                         <SettingsTextInput
                           surface="ivory"
@@ -1458,6 +1465,34 @@ export function CustomProviderDialog({
                       >
                         <Trash2 size={16} />
                       </button>
+                      {activeTab === 'pi' && (
+                        <label className="flex basis-full cursor-pointer items-start gap-2 pr-12 text-[var(--settings-section-desc)]">
+                          <input
+                            type="checkbox"
+                            checked={m.supportsImageInput === true}
+                            onChange={(event) => {
+                              const supportsImageInput = event.currentTarget.checked;
+                              patch(activeTab, (x) => ({
+                                ...x,
+                                models: setCustomProviderModelSupportsImageInput(
+                                  x.models,
+                                  i,
+                                  supportsImageInput,
+                                ),
+                              }));
+                            }}
+                            className="mt-0.5 h-4 w-4 shrink-0 cursor-pointer accent-[var(--settings-menu-text-selected)]"
+                          />
+                          <span className="flex flex-col gap-0.5 leading-snug">
+                            <span className="text-12 font-medium text-[var(--settings-section-sublabel)]">
+                              {t('settings.providers.custom.fields.modelSupportsImageInput')}
+                            </span>
+                            <span className="text-11">
+                              {t('settings.providers.custom.fields.modelSupportsImageInputHelp')}
+                            </span>
+                          </span>
+                        </label>
+                      )}
                     </div>
                   ))}
                   <button

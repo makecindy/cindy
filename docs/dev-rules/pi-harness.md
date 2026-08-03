@@ -88,17 +88,20 @@ Cindy 显式设置:models.json、`--append-system-prompt`、`--session-dir`、�
 
 - [x] **平台分发**:pin 已升级到 Pi `v0.83.0`，darwin arm64/x64、linux arm64/x64、
       win32 arm64/x64 六份官方资产都进入 digest pin；下载器兼容 Unix `pi/` 嵌套包与
-      Windows 根目录平铺 zip。Forge 按目标平台下载、校验并把**完整目录分发**打进
-      `resources/pi/<platform>`，Windows `pi.exe` 进入签名扫描。当前 Mac 已完成六资产
-      SHA-256 下载验收；非本机 OS 的最终启动 smoke 仍由对应发布 runner 执行。
-      2026-08 起 pi 接入与 cc/codex 相同的 CDN 运行时分发链(`agent-binaries` +
-      splash prepare):CDN manifest 新增可选 `pi` 字段(整包 tar.gz,归档根即完整
-      目录分发,SHA256 为 tar.gz 的),启动时按 manifest 版本下载到
-      `userData/pi/<version>/` 并清旧版。pi 是可选资产:manifest 缺字段/下载失败
-      **不阻塞启动**(splash 不进失败态),`pi-host.resolvePiBinaryPath` 依次回退
-      受管下载版 → `resources/pi/<platform>` 安装包自带分发。发布侧需把整包
-      tar.gz 上传 CDN 并写 manifest `pi` 字段后,该链路才对 packaged 用户生效;
-      在那之前行为与旧版一致(只用安装包自带分发)。发布入口**不在本仓**:
+      Windows 根目录平铺 zip。当前 Mac 已完成六资产 SHA-256 下载验收；非本机 OS 的
+      最终启动 smoke 仍由对应发布 runner 执行。2026-08 起 pi 与 cc/codex 一样只走
+      CDN 运行时分发链(`agent-binaries` + splash prepare):CDN manifest 的可选 `pi`
+      字段指向整包 tar.gz(归档根即完整目录分发,SHA256 为 tar.gz 的),启动时按
+      manifest 版本下载到 `userData/pi/<version>/` 并清旧版。正式安装包不内置 Pi；
+      manifest 缺字段或下载失败时**不阻塞启动**(splash 不进失败态),本次不注册 pi。
+      **不变量(刻意如此,别当 bug 改掉)**:`pi-host.resolvePiBinaryPath` 只读
+      `getReadyBinaryPath('pi')`——即本次启动 prepare 成功回填的路径,**不回落
+      `getCachedBinaryStatus`**,因此不会复用上一次启动下载的旧版本。`prepare()` 先取
+      CDN manifest、取不到就直接失败(不看本地存货),所以离线时 pi 本次不可用。这与
+      Claude Code 一致(同样只读 `getReadyBinaryPath`),但与 **Codex 不同**——codex 读
+      `getCachedBinaryStatus`,会接受早前已 `.verified` 的旧版本,离线仍可用。想让 pi
+      也离线可用属于行为变更,需先确认再改,不要以"和 codex 对齐"为由顺手改回。
+      发布入口**不在本仓**:
       二进制发布统一走 cindy 同级目录的独立工程 `cindy-binary-release`
       (`pnpm release:pi -- --region cn|global`,默认 canary 通道;配置与安全机制见
       该工程 README)。本仓只保留版本 pin 与暂存(`pnpm update:pi` / `install:pi`)。

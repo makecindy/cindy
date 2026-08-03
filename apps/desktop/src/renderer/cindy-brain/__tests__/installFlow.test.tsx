@@ -8,12 +8,9 @@ import { confirmAndInstallGhost } from '../installFlow';
 vi.mock('@/lib/toast', () => ({
   toast: { success: vi.fn(), error: vi.fn() },
 }));
-// node 环境无 window:logger 与真实的开页签实现(拉起 right-sidebar store 链)都桩掉。
+// node 环境无 window:logger 桩掉。
 vi.mock('@/lib/logger', () => ({
   createLogger: () => ({ debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() }),
-}));
-vi.mock('../../features/right-sidebar/lib/openGhostTabInSidebar', () => ({
-  openGhostTabInSidebar: vi.fn(async () => undefined),
 }));
 
 const baseManifest = {
@@ -98,7 +95,7 @@ describe('installFlow · 装入确认', () => {
   });
 });
 
-describe('installFlow · tab 型插件「立即开启并打开页签」', () => {
+describe('installFlow · tab 型插件「立即开启并打开面板」', () => {
   const tabManifest = {
     schemaVersion: 2 as const,
     id: 'tab-demo-a',
@@ -112,8 +109,7 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
 
   function tabDeps(overrides: {
     checked?: boolean;
-    sessionId?: string | null;
-    openGhostTab?: (sessionId: string, ghostId: string) => Promise<void>;
+    openPluginPanel?: (ghostId: string) => void;
   }) {
     const confirmWithCheckbox = vi.fn(async () => ({
       ok: true,
@@ -124,25 +120,22 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
         t: ((key: string) => key) as never,
         confirm: vi.fn(async () => true),
         confirmWithCheckbox,
-        ...(overrides.sessionId !== undefined
-          ? { getSidebarSessionId: () => overrides.sessionId ?? null }
-          : {}),
-        ...(overrides.openGhostTab ? { openGhostTab: overrides.openGhostTab } : {}),
+        ...(overrides.openPluginPanel ? { openPluginPanel: overrides.openPluginPanel } : {}),
       },
       confirmWithCheckbox,
     };
   }
 
-  it('tab 清单 + 有会话 + 勾选 → enable 装入并打开 ghost:<id> 页签,勾选文案换 open 版', async () => {
+  it('tab 清单 + 勾选 → enable 装入并打开插件页面板,勾选文案换 openPanel 版', async () => {
     const { install } = setupWindow(tabManifest);
-    const openGhostTab = vi.fn(async () => undefined);
-    const { deps: d, confirmWithCheckbox } = tabDeps({ sessionId: 's1', openGhostTab });
+    const openPluginPanel = vi.fn();
+    const { deps: d, confirmWithCheckbox } = tabDeps({ openPluginPanel });
 
     await confirmAndInstallGhost('/tmp/tab.cindy', d);
 
     expect(confirmWithCheckbox).toHaveBeenCalledWith(
       expect.objectContaining({
-        checkboxLabel: 'settings.ghosts.installConfirm.enableNowOpenTab',
+        checkboxLabel: 'settings.ghosts.installConfirm.enableNowOpenPanel',
         // 2026-07-25 起"立即开启"默认勾选:装入即带电,取消勾选才沉睡。
         checkboxDefaultChecked: true,
       }),
@@ -151,43 +144,38 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
       enable: true,
       expectedPackageSha256: 'a'.repeat(64),
     });
-    expect(openGhostTab).toHaveBeenCalledWith('s1', 'tab-demo-a');
+    expect(openPluginPanel).toHaveBeenCalledWith('tab-demo-a');
     expect(toast.success).toHaveBeenCalledTimes(1);
   });
 
-  it('不勾选 → 沉睡装入,不打开页签', async () => {
+  it('不勾选 → 沉睡装入,不打开面板', async () => {
     setupWindow(tabManifest);
-    const openGhostTab = vi.fn(async () => undefined);
-    const { deps: d } = tabDeps({ checked: false, sessionId: 's1', openGhostTab });
+    const openPluginPanel = vi.fn();
+    const { deps: d } = tabDeps({ checked: false, openPluginPanel });
 
     await confirmAndInstallGhost('/tmp/tab.cindy', d);
 
-    expect(openGhostTab).not.toHaveBeenCalled();
+    expect(openPluginPanel).not.toHaveBeenCalled();
   });
 
-  it('无会话入口(getter 缺省/返回 null)→ 勾选文案保持旧版,勾了也不打开', async () => {
+  it('入口未提供 openPluginPanel → 勾选文案保持旧版,不许诺打开', async () => {
     setupWindow(tabManifest);
-    const openGhostTab = vi.fn(async () => undefined);
+    const { deps: d, confirmWithCheckbox } = tabDeps({});
 
-    const noGetter = tabDeps({ openGhostTab });
-    await confirmAndInstallGhost('/tmp/tab.cindy', noGetter.deps);
-    expect(noGetter.confirmWithCheckbox).toHaveBeenCalledWith(
+    await confirmAndInstallGhost('/tmp/tab.cindy', d);
+
+    expect(confirmWithCheckbox).toHaveBeenCalledWith(
       expect.objectContaining({ checkboxLabel: 'settings.ghosts.installConfirm.enableNow' }),
     );
-
-    const nullGetter = tabDeps({ sessionId: null, openGhostTab });
-    await confirmAndInstallGhost('/tmp/tab.cindy', nullGetter.deps);
-
-    expect(openGhostTab).not.toHaveBeenCalled();
   });
 
-  it('停靠形态(position: left)勾选只带电,不打开页签', async () => {
+  it('停靠形态(position: left)勾选只带电,不打开面板', async () => {
     setupWindow({
       ...tabManifest,
       panel: { html: 'panel.html', position: 'left' as const },
     });
-    const openGhostTab = vi.fn(async () => undefined);
-    const { deps: d, confirmWithCheckbox } = tabDeps({ sessionId: 's1', openGhostTab });
+    const openPluginPanel = vi.fn();
+    const { deps: d, confirmWithCheckbox } = tabDeps({ openPluginPanel });
 
     await confirmAndInstallGhost('/tmp/dock.cindy', d);
 
@@ -197,42 +185,6 @@ describe('installFlow · tab 型插件「立即开启并打开页签」', () => 
         checkboxDefaultChecked: true,
       }),
     );
-    expect(openGhostTab).not.toHaveBeenCalled();
-  });
-
-  it('打开页签失败只记日志:装入成功 toast 不改口、不冒错误', async () => {
-    setupWindow(tabManifest);
-    const openGhostTab = vi.fn(async () => {
-      throw new Error('sidebar exploded');
-    });
-    const { deps: d } = tabDeps({ sessionId: 's1', openGhostTab });
-
-    await confirmAndInstallGhost('/tmp/tab.cindy', d);
-
-    expect(toast.success).toHaveBeenCalledTimes(1);
-    expect(toast.error).not.toHaveBeenCalled();
-  });
-
-  it('安装期间切换会话(getter 变 null)→ 不打开页签(避免写入旧会话)', async () => {
-    setupWindow(tabManifest);
-    const openGhostTab = vi.fn(async () => undefined);
-    let currentSession: string | null = 's1';
-    const confirmWithCheckbox = vi.fn(async () => {
-      // 模拟用户在确认弹窗期间切走会话
-      currentSession = null;
-      return { ok: true, checked: true };
-    });
-    const deps = {
-      t: ((key: string) => key) as never,
-      confirm: vi.fn(async () => true),
-      confirmWithCheckbox,
-      getSidebarSessionId: () => currentSession,
-      openGhostTab,
-    };
-
-    await confirmAndInstallGhost('/tmp/tab.cindy', deps);
-
-    expect(openGhostTab).not.toHaveBeenCalled();
-    expect(toast.success).toHaveBeenCalledTimes(1);
+    expect(openPluginPanel).not.toHaveBeenCalled();
   });
 });

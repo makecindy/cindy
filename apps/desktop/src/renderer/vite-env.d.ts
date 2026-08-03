@@ -47,7 +47,7 @@ type RemotePrecreatedWorktreeLedgerSnapshot =
 interface EnvCheckResult {
   claudeCode: { status: 'passed' | 'failed'; path?: string; error?: string };
   codex: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
-  /** pi 可选实验 agent:failed 不影响 allPassed(主进程会降级到安装包自带分发)。 */
+  /** pi 可选实验 agent:failed 不影响 allPassed；本次启动会禁用 pi。 */
   pi?: { status: 'passed' | 'failed' | 'skipped'; path?: string; error?: string };
   allPassed: boolean;
   platform: 'darwin' | 'win32' | 'linux';
@@ -576,6 +576,8 @@ interface CodexAuthState {
   expiresAt?: number;
   errorReason?: string;
   authSource?: 'oauth' | 'api-key';
+  credentialScope?: 'system-shared' | 'instance-isolated' | 'unknown';
+  recoveryRequiredReason?: string;
 }
 
 /** Codex progress event payload (binary download + login phases) */
@@ -2179,6 +2181,7 @@ interface ElectronAPI {
   };
   showOpenDirectoryDialog: () => Promise<{ canceled: boolean; path?: string }>;
   openExternal: (url: string) => Promise<{ success: boolean }>;
+  openChatGPTApp: () => Promise<{ success: boolean }>;
 
   // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
   // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。
@@ -2324,6 +2327,27 @@ interface ElectronAPI {
    * TextLightbox toolbar Open-in-System button and the Oversize main button.
    */
   openPath: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+
+  /** Copy a dangerous local attachment into the controlled inert cache. */
+  stageChatAttachment: (params: {
+    sourcePath: string;
+    suggestedName: string;
+  }) => Promise<
+    | { success: true; path: string }
+    | {
+        success: false;
+        code:
+          | 'invalid_source'
+          | 'forbidden'
+          | 'not_found'
+          | 'not_file'
+          | 'unsupported_type'
+          | 'copy_failed';
+      }
+  >;
+
+  /** Remove staged dangerous attachment copies from the controlled cache. */
+  cleanupStagedChatAttachments: (filePaths: readonly string[]) => Promise<void>;
 
   /**
    * Save a safely materialized chat attachment under its sanitized original

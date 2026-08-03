@@ -26,9 +26,18 @@ const remoteCollabHandoffSource = readFileSync(
 describe('NewMakerDraftRoute Orca worker create order', () => {
   it('delegates worker creation to enableOrca and defers tab reveal until the new route is current', () => {
     const collabBranch = source.indexOf('if (shouldEnableCollab)');
-    const enableOrca = source.indexOf('const result = await window.electronAPI.maker.enableOrca', collabBranch);
-    const revealState = source.indexOf('orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };', enableOrca);
-    const navigate = source.indexOf('navigate(orcaNavTarget ?? `/cc-agent/${newSession.id}`', revealState);
+    const enableOrca = source.indexOf(
+      'const result = await window.electronAPI.maker.enableOrca',
+      collabBranch,
+    );
+    const revealState = source.indexOf(
+      'orcaWorkersRevealState = { focusWorkerSessionId: result.workerSessionId };',
+      enableOrca,
+    );
+    const navigate = source.indexOf(
+      'navigate(orcaNavTarget ?? `/cc-agent/${newSession.id}`',
+      revealState,
+    );
 
     expect(collabBranch).toBeGreaterThan(-1);
     expect(enableOrca).toBeGreaterThan(collabBranch);
@@ -46,7 +55,10 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 本机 / SSH 侧四条草稿起 Worker 路径都走同一个错误映射器:Send 普通、Send worktree、
     // 新建目标(2026-07-23 新增 New Goal 路径也 honor 协同,codex P2)、以及 SSH 添加远程
     // 项目(2026-07-28 remote 协同接通, codex-connector P2)。
-    const mappedFallbacks = source.match(/getCollaborationStartErrorMessage\(err, t, \{ continueAsSingleSession: true \}\)/g) ?? [];
+    const mappedFallbacks =
+      source.match(
+        /getCollaborationStartErrorMessage\(err, t, \{ continueAsSingleSession: true \}\)/g,
+      ) ?? [];
     expect(mappedFallbacks).toHaveLength(4);
 
     // device-link 两条(issue #1170)的失败提示已随「等待挪到导航之后」一起搬进
@@ -156,7 +168,7 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
     // 本机 / SSH 的四条路径仍按控制端目录收窄,不能被一起改掉。
     expect(
       collapsed.match(
-        /draftEnableOrcaOptions\(effectiveCollab, localProviders, !localProvidersLoading\)/g,
+        /draftEnableOrcaOptions\(\s*effectiveCollab,\s*localProviders,\s*!localProvidersLoading,?\s*\)/g,
       ) ?? [],
     ).toHaveLength(4);
   });
@@ -184,13 +196,13 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
 
   it('blocks new-goal creation until a selected collaboration policy is available', () => {
     const goalHandler = source.slice(source.indexOf('const handleCreateGoal = useCallback('));
-    expect(goalHandler).toContain("let policyEnabled = collabPolicy.enabled");
-    expect(goalHandler).toContain("if (collabPolicy.loading)");
-    expect(goalHandler).toContain("if (collabPolicy.unavailable)");
-    expect(goalHandler).toContain("collabPolicy.refresh()");
-    expect(goalHandler).toContain("policyEnabled = refreshed.enabled");
-    expect(goalHandler).toContain("if (!policyEnabled)");
-    expect(goalHandler.indexOf("if (collabPolicy.loading)")).toBeLessThan(
+    expect(goalHandler).toContain('let policyEnabled = collabPolicy.enabled');
+    expect(goalHandler).toContain('if (collabPolicy.loading)');
+    expect(goalHandler).toContain('if (collabPolicy.unavailable)');
+    expect(goalHandler).toContain('collabPolicy.refresh()');
+    expect(goalHandler).toContain('policyEnabled = refreshed.enabled');
+    expect(goalHandler).toContain('if (!policyEnabled)');
+    expect(goalHandler.indexOf('if (collabPolicy.loading)')).toBeLessThan(
       goalHandler.indexOf('const newSession = await createSession'),
     );
   });
@@ -301,7 +313,9 @@ describe('NewMakerDraftRoute Orca worker create order', () => {
       // 归属走粘滞解析:非粘滞版在 relay 瞬断窗口会返回 undefined → 跳过订阅,
       // 而 goalApiFor 仍按粘滞归属把 setGoal 发到被控端(greptile P1,不变量 #3)。
       expect(branch).toContain('const deviceId = getStickySessionDeviceId(sessionId);');
-      const awaitCollab = branch.indexOf('await consumePendingRemoteCollab(pendingGoal.remoteCollab');
+      const awaitCollab = branch.indexOf(
+        'await consumePendingRemoteCollab(pendingGoal.remoteCollab',
+      );
       const setGoal = branch.indexOf('await goalApiFor(sessionId).setGoal(');
       const forget = branch.indexOf('deliverRecoverableHandoff(sessionId, async () => {');
       const unlock = branch.indexOf('setRemoteHandoffPreparing(false)');

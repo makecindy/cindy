@@ -10,7 +10,13 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { connectedProvidersForAgent, effectiveSourceIdForModel, getModel, isAgentSelectableModel, visibleModelUnion } from '@cindy/model-providers';
+import {
+  connectedProvidersForAgent,
+  effectiveSourceIdForModel,
+  getModel,
+  isModelSelectableForNewRoute,
+  visibleModelUnion,
+} from '@cindy/model-providers';
 
 import { ClaudeMark } from '@/components/icons/ClaudeMark';
 import { CodexMark } from '@/components/icons/CodexMark';
@@ -156,7 +162,7 @@ export function SubagentModelSection() {
       // image/audio/embedding 端点。
       const catalogModel = getModel(provider, modelId, agentKind);
       return catalogModel &&
-        isAgentSelectableModel(catalogModel, { userProvider: provider.source === 'user' })
+        isModelSelectableForNewRoute(catalogModel, { userProvider: provider.source === 'user' })
         ? providerId
         : null;
     },
@@ -364,7 +370,7 @@ export function SubagentModelSection() {
           const catalogModel = getModel(p, model, agentKind);
           return (
             catalogModel !== undefined &&
-            isAgentSelectableModel(catalogModel, { userProvider: p.source === 'user' })
+            isModelSelectableForNewRoute(catalogModel, { userProvider: p.source === 'user' })
           );
         }),
     );
