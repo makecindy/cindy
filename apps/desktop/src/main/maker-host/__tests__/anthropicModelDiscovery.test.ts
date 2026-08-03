@@ -42,6 +42,12 @@ const oauthRefreshMock = vi.hoisted(() => ({
 }));
 vi.mock('../claude-oauth-refresh.js', () => oauthRefreshMock);
 
+// HTTP discovery tests inject global fetch responses; keep the production
+// proxy-aware transport out of this unit's network boundary.
+vi.mock('../outbound-fetch.js', () => ({
+  outboundFetch: (input: RequestInfo | URL, init?: RequestInit) => globalThis.fetch(input, init),
+}));
+
 import {
   evaluateHttpShrink,
   isDegenerateModelListShrink,

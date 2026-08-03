@@ -101,7 +101,15 @@ jobs:
       - name: Check i18n glossary
         run: pnpm check:i18n-glossary
 
+      # desktop 的 tsc 峰值内存已经贴着全局 4096MB 上限(2026-08-03 本地实测
+      # 约 4.2GB,`--extendedDiagnostics` 下 Types ~125 万、Instantiations ~277 万),
+      # 在 runner 上会随机 OOM(FATAL ERROR: Ineffective mark-compacts near heap
+      # limit)。已排除单点热点:移走最大的单个测试文件只省 ~5MB、移走 1400 行的
+      # 插件页组件只省 ~14MB,skipLibCheck 也早已开启——是整仓类型规模的自然结果,
+      # 不是某处写法。这一步单独给更大的堆,其它步骤维持全局值。
       - name: Typecheck desktop
+        env:
+          NODE_OPTIONS: '--max-old-space-size=6144'
         run: pnpm --filter desktop typecheck
 
       - name: Typecheck mobile

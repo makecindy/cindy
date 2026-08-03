@@ -1,42 +1,54 @@
 /**
- * Regression coverage for Plugin card actions, compact metadata, and queue focus continuity.
+ * Regression coverage for installed Plugin card actions (redesigned card:
+ * whole-card primary action, kind-specific primary button, manage entry),
+ * market card actions, and the legacy recovery notice.
  * [PROTOCOL]: 变更时更新此头部，然后检查 CLAUDE.md
  * @vitest-environment jsdom
  */
 
-import { fireEvent, render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
-import { useState, type ReactNode } from 'react';
 
 vi.mock('react-i18next', () => ({
   useTranslation: () => ({ t: (key: string) => key }),
+  // 页面经批量更新控制器引 @/i18n,其 init 链路需要这些导出。
+  initReactI18next: { type: '3rdParty', init: vi.fn() },
+  I18nextProvider: ({ children }: { children: React.ReactNode }) => children,
 }));
 vi.mock('@/contexts/AuthContext', () => ({
   useAuth: () => ({ user: null, mode: 'signed-out', dataOwnerId: null }),
 }));
-vi.mock('@/components/ui/tooltip', () => ({
-  Tip: ({ text, children }: { text: string; children: ReactNode }) => (
-    <span data-tooltip={text}>{children}</span>
-  ),
-}));
 
 import {
   GhostPluginCard,
-  InstalledGhostQueue,
-  InstalledGhostShortcut,
   MarketPluginCard,
   LegacyGhostRecoveryNotice,
 } from '../GhostPluginPage';
 import type { GhostPluginListItem } from '../lib/ghostPluginViewModel';
 import type { PluginMarketItem } from '../../../../shared/pluginMarket';
 
-const installedPlugin: GhostPluginListItem = {
+const commandPlugin: GhostPluginListItem = {
   id: 'filo-google',
   name: 'Filo Google',
   description: 'Google services',
   version: '1.0.0',
   enabled: true,
   canUse: true,
+  tabPanel: false,
+};
+
+const panelPlugin: GhostPluginListItem = {
+  ...commandPlugin,
+  id: 'signoff-board',
+  name: 'Signoff Board',
+  tabPanel: true,
+};
+
+const toolPlugin: GhostPluginListItem = {
+  ...commandPlugin,
+  id: 'pure-tool',
+  name: 'Pure Tool',
+  canUse: false,
 };
 
 const marketPlugin: PluginMarketItem = {
@@ -58,196 +70,136 @@ const marketPlugin: PluginMarketItem = {
   sourceMarketName: null,
 };
 
-function InstalledQueueHarness({ items }: { items: readonly GhostPluginListItem[] }) {
-  const [expanded, setExpanded] = useState(false);
-  return (
-    <InstalledGhostQueue
-      items={items}
-      expanded={expanded}
-      onExpandedChange={setExpanded}
-      onSelect={vi.fn()}
-    />
-  );
-}
-
 describe('GhostPluginCard', () => {
-  it('shows the installed shortcut name through the shared Tooltip', () => {
-    const onSelect = vi.fn();
-    const { container } = render(
-      <InstalledGhostShortcut item={installedPlugin} onSelect={onSelect} />,
+  it('fires the primary action from the whole card for a command plugin', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+    expect(onManage).not.toHaveBeenCalled();
+    // 指令型主按钮 = 「对话」。
+    expect(screen.getByRole('button', { name: 'settings.ghosts.page.chatAria' })).toBeTruthy();
+  });
+
+  it('labels the primary button 使用 for a tab-panel plugin', () => {
+    const onPrimary = vi.fn();
+    render(<GhostPluginCard item={panelPlugin} onPrimary={onPrimary} onManage={vi.fn()} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }));
+    expect(onPrimary).toHaveBeenCalledTimes(1);
+  });
+
+  it('routes the manage icon to detail without firing the primary action', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={commandPlugin} onPrimary={onPrimary} onManage={onManage} />);
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.manageAria' }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+  });
+
+  it('shows the update pill and keeps it from triggering the card action', () => {
+    const onPrimary = vi.fn();
+    const onUpdate = vi.fn();
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        updateVersion="1.1.0"
+        onPrimary={onPrimary}
+        onManage={vi.fn()}
+        onUpdate={onUpdate}
+      />,
     );
 
-    const button = screen.getByRole('button', { name: 'Filo Google' });
-    expect(container.querySelector('[data-tooltip="Filo Google"]')).toBeTruthy();
-    expect(button.getAttribute('title')).toBeNull();
-    fireEvent.click(button);
-    expect(onSelect).toHaveBeenCalledWith('filo-google');
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.updateAria' }));
+    expect(onUpdate).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+    // 有更新时不显示「已是最新」。
+    expect(screen.queryByText(/upToDate/)).toBeNull();
   });
 
-  it('puts the collapse control after every installed plugin in the expanded queue', () => {
-    const plugins = Array.from({ length: 7 }, (_, index) => ({
-      ...installedPlugin,
-      id: `plugin-${index + 1}`,
-      name: `Plugin ${index + 1}`,
-    }));
-    const { container } = render(<InstalledQueueHarness items={plugins} />);
-
-    expect(screen.getByRole('button', { name: 'Plugin 5' })).toBeTruthy();
-    expect(screen.queryByRole('button', { name: 'Plugin 6' })).toBeNull();
-
-    const expand = screen.getByRole('button', {
-      name: 'settings.ghosts.page.installedExpand',
-    });
-    expand.focus();
-    fireEvent.click(expand);
-
-    const queue = container.querySelector('[data-testid="installed-plugin-queue"]');
-    const collapse = screen.getByRole('button', {
-      name: 'settings.ghosts.page.installedCollapse',
-    });
-    expect(screen.getByRole('button', { name: 'Plugin 7' })).toBeTruthy();
-    expect(queue?.lastElementChild).toBe(collapse);
-    expect(within(collapse).queryByText('+2')).toBeNull();
-    expect(collapse.querySelector('.lucide-chevron-up')).toBeTruthy();
-    expect(document.activeElement).toBe(collapse);
-
-    fireEvent.click(collapse);
-    expect(document.activeElement).toBe(
-      screen.getByRole('button', { name: 'settings.ghosts.page.installedExpand' }),
+  it('blocks the update pill while a market operation is running', () => {
+    render(
+      <GhostPluginCard
+        item={commandPlugin}
+        updateVersion="1.1.0"
+        updateBusy
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
+        onUpdate={vi.fn()}
+      />,
     );
+
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'settings.ghosts.page.updateAria',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
   });
 
-  it('opens the plugin detail from the card body without firing the action', () => {
-    const onSelect = vi.fn();
-    const onAction = vi.fn();
-    render(<GhostPluginCard item={installedPlugin} onSelect={onSelect} onAction={onAction} />);
+  it('sends a tool-only plugin to manage and renders no primary button', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(<GhostPluginCard item={toolPlugin} onPrimary={onPrimary} onManage={onManage} />);
 
-    const detailButton = screen.getByRole('button', { name: 'Filo Google' });
-    fireEvent.click(detailButton);
-
-    expect(onSelect).toHaveBeenCalledTimes(1);
-    expect(onAction).not.toHaveBeenCalled();
+    expect(screen.getByText('settings.ghosts.page.agentInvoked')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Pure Tool' }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
   });
 
-  it('routes projected icon failures from installed cards and shortcuts to market recovery', () => {
+  it('sends a disabled plugin to manage and shows no enable switch on the card', () => {
+    const onPrimary = vi.fn();
+    const onManage = vi.fn();
+    render(
+      <GhostPluginCard
+        item={{ ...commandPlugin, enabled: false }}
+        effectiveEnabled={false}
+        onPrimary={onPrimary}
+        onManage={onManage}
+      />,
+    );
+
+    // 启用开关收进详情页(设计定稿):卡片上不再有 switch。
+    expect(screen.queryByRole('switch')).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Filo Google' }));
+    expect(onManage).toHaveBeenCalledTimes(1);
+    expect(onPrimary).not.toHaveBeenCalled();
+    expect(
+      screen.getByRole('button', { name: 'settings.ghosts.page.manageAction' }),
+    ).toBeTruthy();
+  });
+
+  it('routes projected icon failures to market recovery', () => {
     const onIconLoadError = vi.fn();
     const projected = {
-      ...installedPlugin,
+      ...commandPlugin,
       iconDataUrl: 'https://plugins.example.invalid/icon.png?signature=current',
     };
-    const { container, rerender } = render(
+    const { container } = render(
       <GhostPluginCard
         item={projected}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
         onIconLoadError={onIconLoadError}
       />,
     );
 
     fireEvent.error(container.querySelector('img') as HTMLImageElement);
     expect(onIconLoadError).toHaveBeenCalledTimes(1);
-
-    rerender(
-      <InstalledGhostQueue
-        items={[projected]}
-        expanded={false}
-        onExpandedChange={vi.fn()}
-        onSelect={vi.fn()}
-        onIconLoadError={onIconLoadError}
-      />,
-    );
-    fireEvent.error(container.querySelector('img') as HTMLImageElement);
-    expect(onIconLoadError).toHaveBeenCalledTimes(2);
-  });
-
-  it('surfaces the market update state with a badge and a direct update action', () => {
-    const onAction = vi.fn();
-    const onUpdate = vi.fn();
-    render(
-      <GhostPluginCard
-        item={installedPlugin}
-        onSelect={vi.fn()}
-        onAction={onAction}
-        onUpdate={onUpdate}
-        updateVersion="1.1.1"
-      />,
-    );
-
-    expect(screen.getByText('settings.ghosts.market.updateAvailable')).toBeTruthy();
-    // Metadata keeps only the installed version; the pending version stays out of
-    // the crowded metadata row (surfaced by the badge and the detail header instead).
-    expect(screen.getByText('v1.0.0')).toBeTruthy();
-    expect(screen.queryByText('v1.1.1')).toBeNull();
-
-    const updateButton = screen.getByRole('button', {
-      name: 'settings.ghosts.market.updateAria',
-    });
-    fireEvent.click(updateButton);
-    expect(onUpdate).toHaveBeenCalledTimes(1);
-    expect(onAction).not.toHaveBeenCalled();
-    // The direct Use entry is replaced by Update while a new release is pending.
-    expect(screen.queryByRole('button', { name: 'settings.ghosts.page.useAria' })).toBeNull();
-  });
-
-  it('keeps the update action interactive while Use is locked, and blocks it when busy', () => {
-    const onUpdate = vi.fn();
-    render(
-      <GhostPluginCard
-        item={{ ...installedPlugin, enabled: false, canUse: false }}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
-        onUpdate={onUpdate}
-        updateVersion="1.1.1"
-        updateBusy
-      />,
-    );
-
-    const updateButton = screen.getByRole('button', {
-      name: 'settings.ghosts.market.updateAria',
-    }) as HTMLButtonElement;
-    expect(updateButton.disabled).toBe(true);
-    fireEvent.click(updateButton);
-    expect(onUpdate).not.toHaveBeenCalled();
-  });
-
-  it('disables Use when an installed plugin has no command', () => {
-    render(
-      <GhostPluginCard
-        item={{ ...installedPlugin, canUse: false }}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
-      />,
-    );
-
-    expect(
-      (screen.getByRole('button', { name: 'settings.ghosts.page.useAria' }) as HTMLButtonElement)
-        .disabled,
-    ).toBe(true);
-  });
-
-  it('renders project-scope enabled state and respects the global-disabled lock', () => {
-    render(
-      <GhostPluginCard
-        item={{ ...installedPlugin, enabled: false, canUse: false }}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
-        onToggle={vi.fn()}
-        effectiveEnabled={false}
-        toggleDisabled
-      />,
-    );
-
-    const toggle = screen.getByRole('switch', { name: 'settings.ghosts.enableAria' });
-    expect((toggle as HTMLButtonElement).disabled).toBe(true);
-    expect(toggle.getAttribute('data-state')).toBe('unchecked');
   });
 
   it('renders a functional media symbol when the plugin package has no icon', () => {
     const { container } = render(
       <GhostPluginCard
-        item={{ ...installedPlugin, id: 'lizi-mivo', name: 'Lizi Mivo' }}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
+        item={{ ...commandPlugin, id: 'lizi-mivo', name: 'Lizi Mivo' }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
       />,
     );
 
@@ -258,15 +210,36 @@ describe('GhostPluginCard', () => {
   it('renders the Mermaid fallback symbol on the theme elevated surface', () => {
     const { container } = render(
       <GhostPluginCard
-        item={{ ...installedPlugin, id: 'cindy-mermaid', name: 'Cindy Mermaid' }}
-        onSelect={vi.fn()}
-        onAction={vi.fn()}
+        item={{ ...commandPlugin, id: 'cindy-mermaid', name: 'Cindy Mermaid' }}
+        onPrimary={vi.fn()}
+        onManage={vi.fn()}
       />,
     );
 
     const fallbackIcon = container.querySelector('.lucide-workflow');
     expect(fallbackIcon).toBeTruthy();
     expect(fallbackIcon?.parentElement?.className).toContain('var(--surface-elevated)');
+  });
+});
+
+describe('MarketPluginCard', () => {
+  it('exposes both 详情 and 安装 actions for a not-installed plugin', () => {
+    const onSelect = vi.fn();
+    const onInstall = vi.fn();
+    render(
+      <MarketPluginCard
+        item={marketPlugin}
+        busy={false}
+        onSelect={onSelect}
+        onInstall={onInstall}
+        onIconLoadError={vi.fn()}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'settings.ghosts.page.installAria' }));
+    expect(onInstall).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByText('settings.ghosts.market.details'));
+    expect(onSelect).toHaveBeenCalledTimes(1);
   });
 
   it('keeps fixed market metadata on one line while truncating long identities', () => {
@@ -296,6 +269,7 @@ describe('GhostPluginCard', () => {
         item={{ ...marketPlugin, installState: 'conflict' }}
         busy={false}
         onSelect={vi.fn()}
+        onInstall={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );
@@ -304,12 +278,20 @@ describe('GhostPluginCard', () => {
     expect((cardBody as HTMLButtonElement).disabled).toBe(true);
     expect(cardBody.className).toContain('disabled:cursor-not-allowed');
     expect(cardBody.className).not.toContain('disabled:cursor-wait');
+    expect(
+      (
+        screen.getByRole('button', {
+          name: 'settings.ghosts.page.installAria',
+        }) as HTMLButtonElement
+      ).disabled,
+    ).toBe(true);
 
     rerender(
       <MarketPluginCard
         item={marketPlugin}
         busy
         onSelect={vi.fn()}
+        onInstall={vi.fn()}
         onIconLoadError={vi.fn()}
       />,
     );

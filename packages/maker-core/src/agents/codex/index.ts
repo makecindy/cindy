@@ -31,6 +31,7 @@ import {
   TurnPermissionPolicyUnsupportedError,
   type AgentSessionHandle,
   type AgentDeps,
+  type CodexExtraSpawnConfig,
   type StartSessionOptions,
   type OneShotOptions,
   type RefreshLocalModelsOptions,
@@ -1954,6 +1955,7 @@ export class CodexAgent extends BaseAgent {
     let extraArgs: string[] = [];
     let codexProxyActive = false;
     let remoteCompactionProviderId: string | undefined;
+    let buildSessionMcpConfig: CodexExtraSpawnConfig['buildSessionMcpConfig'];
     for (;;) {
       const upgradedToSuperset = spawnCredentialMode !== credentialMode;
       onSpawnCredentialModeResolved?.(spawnCredentialMode);
@@ -1974,6 +1976,7 @@ export class CodexAgent extends BaseAgent {
       extraArgs = [];
       codexProxyActive = false;
       remoteCompactionProviderId = undefined;
+      buildSessionMcpConfig = undefined;
       if (this.deps.prepareCodexExtraSpawnConfig) {
         try {
           const cfg = await this.deps.prepareCodexExtraSpawnConfig(
@@ -1987,6 +1990,7 @@ export class CodexAgent extends BaseAgent {
           assertCurrentGeneration('spawn config');
           Object.assign(env, cfg.extraEnv);
           extraArgs = cfg.extraArgs;
+          buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           codexProxyActive = cfg.codexProxyActive === true && !remoteHostId;
           // OpenAI 身份 provider 依赖 loopback proxy 路由订阅直连;proxy 不可用
           // (退化直连网关)时不得下发,否则远端压缩请求会打到不支持它的上游。
@@ -2062,6 +2066,7 @@ export class CodexAgent extends BaseAgent {
       clientInfo: { name: 'cindy', version: '0.0.0' },
       codexProxyActive,
       remoteCompactionProviderId,
+      buildSessionMcpConfig,
       // app-server 对失败 RPC 返回 cloudRequirements + Auth/relogin 结构化错误时,当前 host
       // 持有的 token 已不可用。stderr 与工具输出只做诊断,绝不驱动鉴权状态。保留 host 只会
       // 持续撞鉴权失败; auth.invalidate 会触发 logout + 通知 UI 重登。延后到 microtask
@@ -3012,6 +3017,7 @@ export class CodexAgent extends BaseAgent {
         register({
           threadId,
           sessionId: sid,
+          ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(opts.remoteHostId ? { remoteHostId: opts.remoteHostId } : {}),
@@ -3033,7 +3039,8 @@ export class CodexAgent extends BaseAgent {
       try {
         const unregister = this.deps.unregisterCodexMcpThreadContext;
         if (!unregister) return;
-        unregister(threadId);
+        if (opts.sessionInstanceId) unregister(threadId, opts.sessionInstanceId);
+        else unregister(threadId);
         log.debug('codex MCP thread context unregistered', {
           threadId: prefixId(threadId),
         });
@@ -3053,6 +3060,86 @@ export class CodexAgent extends BaseAgent {
       }
       descendantMcpThreadIds.clear();
     };
+    const terminateHandleAfterThreadCleanupFailure = (reason: string): void => {
+      if (closed) return;
+      closed = true;
+      resetUpstreamIdleForTurnEnd();
+      unregisterCodexMcpContext(threadId);
+      unregisterDescendantCodexMcpContexts();
+      abandonBufferedTurns(reason);
+      abandonPendingCapabilitySteers();
+      try { dismissAllPending(reason, 'deny'); } catch (e) { log.warn('dismissAllPending threw', { error: String(e) }); }
+      try { dismissAllPendingUserInput(reason); } catch (e) { log.warn('dismissAllPendingUserInput threw', { error: String(e) }); }
+      try { clearAllPendingUserInputInteractions(); } catch (e) { log.warn('clear pending user input threw', { error: String(e) }); }
+      try { stopActiveRolloutPlanFallback(); } catch (e) { log.warn('stop rollout plan fallback threw', { error: String(e) }); }
+      try { discardOverloadRetry(reason); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
+      subscription = null;
+      try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
+    };
+    const retireCapturedHostAfterThreadCleanupFailure = async (
+      reason: string,
+    ): Promise<void> => {
+      if (!isCurrentHost()) {
+        log.warn('thread cleanup failed after host replacement; skipping stale retire', {
+          threadId,
+          hostKey: currentHostKey,
+          reason,
+        });
+        return;
+      }
+      await this.retireHostKey(currentHostKey, reason, {
+        failIfActive: false,
+        logPrefix: 'codex thread cleanup',
+        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+        expectedGeneration: hostGeneration,
+      });
+    };
+    const runThreadCleanupOrRetire = async (params: {
+      cleanupThreadId: string;
+      reason: string;
+      cleanup: () => Promise<void>;
+    }): Promise<boolean> => {
+      try {
+        await params.cleanup();
+        return true;
+      } catch (error) {
+        log.warn('Codex thread cleanup failed; retiring captured app-server', {
+          threadId: params.cleanupThreadId,
+          reason: params.reason,
+          error: error instanceof Error ? error.message : String(error),
+        });
+        try {
+          await retireCapturedHostAfterThreadCleanupFailure(params.reason);
+        } catch (retireError) {
+          log.warn('Codex host retire after thread cleanup failure threw', {
+            threadId: params.cleanupThreadId,
+            reason: params.reason,
+            error: retireError instanceof Error ? retireError.message : String(retireError),
+          });
+        }
+        terminateHandleAfterThreadCleanupFailure(params.reason);
+        return false;
+      }
+    };
+    const releaseCurrentThreadSubscription = async (reason: string): Promise<boolean> => {
+      const currentSubscription = subscription;
+      if (!currentSubscription) return true;
+      const released = await runThreadCleanupOrRetire({
+        cleanupThreadId: threadId,
+        reason,
+        cleanup: () => currentSubscription.release(),
+      });
+      if (subscription === currentSubscription) subscription = null;
+      return released;
+    };
+    const unsubscribeDetachedThread = async (
+      detachedThreadId: string,
+      reason: string,
+    ): Promise<boolean> => runThreadCleanupOrRetire({
+      cleanupThreadId: detachedThreadId,
+      reason,
+      cleanup: () => host.unsubscribeThread(detachedThreadId),
+    });
     function currentApprovalConfig(): CodexPermissionConfig {
       return mapPermissionToCodex(
         mutablePermissionMode,
@@ -3082,6 +3169,7 @@ export class CodexAgent extends BaseAgent {
       const config = {
         ...capabilityRoutingConfig,
         ...(readonlyReferenceDirsSupported ? readonlyReferencesConfig : {}),
+        ...host.getSessionMcpConfig(opts.sessionInstanceId),
       };
       const shared = {
         approvalPolicy,
@@ -3607,7 +3695,11 @@ export class CodexAgent extends BaseAgent {
           onLateResolve: async (lateResp) => {
             const lateThreadId = lateResp.thread.id;
             if (lateThreadId === previousThreadId) return;
-            await host.unsubscribeThread(lateThreadId);
+            const cleaned = await unsubscribeDetachedThread(
+              lateThreadId,
+              'late unused profile replacement cleanup',
+            );
+            if (!cleaned) return;
             log.debug('discarded late unused profile replacement', {
               previousThreadId,
               threadId: lateThreadId,
@@ -3617,14 +3709,10 @@ export class CodexAgent extends BaseAgent {
         assertCurrentHost('read-only reference profile replacement');
         const nextThreadId = resp.thread.id;
         if (closed) {
-          try {
-            await host.unsubscribeThread(nextThreadId);
-          } catch (e) {
-            log.warn('unused profile replacement cleanup threw after close', {
-              error: String(e),
-              threadId: nextThreadId,
-            });
-          }
+          await unsubscribeDetachedThread(
+            nextThreadId,
+            'unused profile replacement cleanup after close',
+          );
           throw new Error('Codex session closed during read-only reference profile replacement');
         }
         if (
@@ -3634,24 +3722,18 @@ export class CodexAgent extends BaseAgent {
           mutableServiceTier = normalizeServiceTier(resp.serviceTier) ?? null;
         }
         if (nextThreadId !== previousThreadId) {
-          try {
-            await subscription?.release();
-          } catch (e) {
-            log.warn('unused profile replacement release threw', {
-              error: String(e),
-              threadId: previousThreadId,
-            });
+          const released = await releaseCurrentThreadSubscription(
+            'unused profile replacement release',
+          );
+          if (!released) {
+            throw staleHostError('read-only reference profile replacement cleanup');
           }
           unregisterCodexMcpContext(previousThreadId);
           if (closed) {
-            try {
-              await host.unsubscribeThread(nextThreadId);
-            } catch (e) {
-              log.warn('unused profile replacement cleanup threw after concurrent close', {
-                error: String(e),
-                threadId: nextThreadId,
-              });
-            }
+            await unsubscribeDetachedThread(
+              nextThreadId,
+              'unused profile replacement cleanup after concurrent close',
+            );
             throw new Error('Codex session closed during read-only reference profile replacement');
           }
           threadId = nextThreadId;
@@ -4306,6 +4388,8 @@ export class CodexAgent extends BaseAgent {
       await this.retireHostKey(currentHostKey, reason, {
         failIfActive: false,
         logPrefix: 'codex upstream-idle watchdog',
+        ...(capturedHostWasRegistered ? { expectedHost: host } : {}),
+        expectedGeneration: hostGeneration,
       });
     };
     /** turn 结束 / 中断时收表并清工具项(终态可能先于 item completed 到达)。 */
@@ -8158,7 +8242,7 @@ export class CodexAgent extends BaseAgent {
         // thread 发 turn/start（assertCurrentHost 会抛，但那是在无人接收的
         // setTimeout 回调里，白留一次失败与一条误导日志）。
         try { discardOverloadRetry('session_closed'); } catch (e) { log.warn('cancel overload retry threw', { error: String(e) }); }
-        try { await subscription?.release(); } catch (e) { log.warn('release threw', { error: String(e) }); }
+        await releaseCurrentThreadSubscription('session close subscription release');
         try { eventQueue.end(); } catch (e) { log.warn('eventQueue.end threw', { error: String(e) }); }
       },
 
@@ -8358,21 +8442,16 @@ export class CodexAgent extends BaseAgent {
         const previousThreadId = threadId;
         const nextThreadId = rollbackResp.thread.id || previousThreadId;
         if (nextThreadId !== previousThreadId) {
-          try {
-            await subscription?.release();
-          } catch {
-            // no-op: stale subscription cleanup should not fail a successful rollback.
+          const released = await releaseCurrentThreadSubscription('thread/rollback subscription release');
+          if (!released) {
+            throw staleHostError('thread/rollback subscription cleanup');
           }
           unregisterCodexMcpContext(previousThreadId);
           if (closed) {
-            try {
-              await host.unsubscribeThread(nextThreadId);
-            } catch (e) {
-              log.warn('thread/unsubscribe replacement after close threw', {
-                error: String(e),
-                threadId: nextThreadId,
-              });
-            }
+            await unsubscribeDetachedThread(
+              nextThreadId,
+              'thread/rollback replacement cleanup after close',
+            );
             log.info('commitRewindFiles discarded replacement after concurrent close', {
               previousThreadId,
               nextThreadId,
@@ -8505,6 +8584,46 @@ export class CodexAgent extends BaseAgent {
     const log = this.deps.logger.child('codex/fork');
     const tailTurnsToDrop = normalizeTailTurnsToDrop(opts.tailTurnsToDrop);
     let stripCopyPath: string | undefined;
+    let utilityHostKey: string | undefined;
+    let utilityHost: AppServerHost | undefined;
+    let utilityHostGeneration: number | undefined;
+    let utilityHostWasRegistered = false;
+    const createdThreadIds = new Set<string>();
+    const cleanupCreatedThreads = async (): Promise<void> => {
+      if (!utilityHost || !utilityHostKey || createdThreadIds.size === 0) return;
+      for (const threadId of createdThreadIds) {
+        try {
+          // Codex 0.145 keeps a forked child loaded in the shared app-server.
+          // Unload it before the new Cindy Session resumes with its own MCP
+          // instance URL; otherwise thread/resume.config is ignored and the
+          // child remains bound to the utility host's spawn-level URL.
+          await utilityHost.unsubscribeThread(threadId);
+        } catch (error) {
+          const reason = `Codex fork child ${threadId} could not be unloaded safely`;
+          log.warn('fork child cleanup failed; retiring shared app-server', {
+            threadId,
+            error: error instanceof Error ? error.message : String(error),
+          });
+          try {
+            await this.retireHostKey(utilityHostKey, reason, {
+              failIfActive: false,
+              logPrefix: 'codex fork child cleanup',
+              ...(utilityHostWasRegistered ? { expectedHost: utilityHost } : {}),
+              ...(utilityHostGeneration !== undefined
+                ? { expectedGeneration: utilityHostGeneration }
+                : {}),
+            });
+          } catch (retireError) {
+            log.warn('fork child cleanup host retire threw', {
+              threadId,
+              error: retireError instanceof Error ? retireError.message : String(retireError),
+            });
+          }
+          throw error;
+        }
+      }
+      createdThreadIds.clear();
+    };
     log.info('forkSdkSession ▶', {
       sourceSdkSessionId: opts.sourceSdkSessionId,
       upToMessageId: opts.upToMessageId,
@@ -8513,7 +8632,12 @@ export class CodexAgent extends BaseAgent {
       note: 'Codex 精确 fork: thread/fork 后按需 thread/rollback 新 thread 尾部 turn',
     });
     try {
-      const { host } = await this.getUtilityHost();
+      const utility = await this.getUtilityHost();
+      utilityHostKey = utility.key;
+      utilityHost = utility.host;
+      utilityHostGeneration = this.hostGenerations.get(utility.key) ?? 0;
+      utilityHostWasRegistered = this.hosts.get(utility.key) === utility.host;
+      const { host } = utility;
       await host.ensureStarted();
       // Imported Codex threads may still live under another CODEX_HOME. Resume
       // already asks the desktop host to link/adopt their state and rollout;
@@ -8538,6 +8662,7 @@ export class CodexAgent extends BaseAgent {
       };
       const resp = await host.request<ThreadForkResponse>(Method.ThreadFork, params);
       let newSdkSessionId = resp.thread.id;
+      createdThreadIds.add(newSdkSessionId);
       if (tailTurnsToDrop > 0) {
         const rollbackParams: ThreadRollbackParams = {
           threadId: newSdkSessionId,
@@ -8547,18 +8672,24 @@ export class CodexAgent extends BaseAgent {
           Method.ThreadRollback,
           rollbackParams,
         );
-        newSdkSessionId = rollbackResp.thread.id || newSdkSessionId;
+        const rollbackThreadId = rollbackResp.thread.id || newSdkSessionId;
+        createdThreadIds.add(rollbackThreadId);
+        newSdkSessionId = rollbackThreadId;
       }
       log.info('forkSdkSession ◀', { newSdkSessionId, tailTurnsToDrop });
       return { newSdkSessionId, uuidMap: new Map() };
     } finally {
-      if (stripCopyPath) {
-        await fs.rm(path.dirname(stripCopyPath), { recursive: true, force: true }).catch((err) => {
-          log.warn('strip encrypted rollout temp cleanup failed', {
-            path: stripCopyPath,
-            err: err instanceof Error ? err.message : String(err),
+      try {
+        await cleanupCreatedThreads();
+      } finally {
+        if (stripCopyPath) {
+          await fs.rm(path.dirname(stripCopyPath), { recursive: true, force: true }).catch((err) => {
+            log.warn('strip encrypted rollout temp cleanup failed', {
+              path: stripCopyPath,
+              err: err instanceof Error ? err.message : String(err),
+            });
           });
-        });
+        }
       }
     }
   }
@@ -8665,11 +8796,36 @@ export class CodexAgent extends BaseAgent {
   private async retireHostKey(
     key: string,
     reason: string,
-    opts: { failIfActive: boolean; logPrefix: string },
+    opts: {
+      failIfActive: boolean;
+      logPrefix: string;
+      /** Optional identity fence for delayed cleanup from an older handle. */
+      expectedHost?: AppServerHost;
+      expectedGeneration?: number;
+    },
   ): Promise<void> {
+    let expectedGeneration = opts.expectedGeneration;
+    const matchesExpectedHost = (): boolean => {
+      if (opts.expectedHost && this.hosts.get(key) !== opts.expectedHost) return false;
+      if (
+        expectedGeneration !== undefined &&
+        (this.hostGenerations.get(key) ?? 0) !== expectedGeneration
+      ) {
+        return false;
+      }
+      return true;
+    };
+    if (!matchesExpectedHost()) {
+      this.deps.logger.warn(`${opts.logPrefix}: stale host cleanup skipped`, {
+        key,
+        reason,
+      });
+      return;
+    }
     const inflight = this.hostPromises.get(key);
     if (inflight) {
-      this.bumpHostGeneration(key);
+      const bumpedGeneration = this.bumpHostGeneration(key);
+      if (expectedGeneration !== undefined) expectedGeneration = bumpedGeneration;
       this.hostPromises.delete(key);
       try {
         await Promise.race([
@@ -8682,6 +8838,15 @@ export class CodexAgent extends BaseAgent {
         this.deps.logger.warn(`${opts.logPrefix}: hostPromise await skipped`, {
           message: (e as Error).message,
         });
+      }
+      // The in-flight entry may have been replaced while we waited for it.
+      // Never let an old handle's delayed cleanup delete the newer host.
+      if (!matchesExpectedHost()) {
+        this.deps.logger.warn(`${opts.logPrefix}: stale host cleanup skipped after await`, {
+          key,
+          reason,
+        });
+        return;
       }
     }
 

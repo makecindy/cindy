@@ -127,6 +127,7 @@
       "subagentModels": "하위 에이전트",
       "compaction": "컨텍스트 압축",
       "terminalShell": "기본 터미널 셸",
+      "composer": "메시지 입력",
       "linkOpen": "링크 열기 방식",
       "compatMode": "팁",
       "voiceInput": "음성 입력",
@@ -2257,6 +2258,14 @@
         "selectAria": "기본 터미널 셸 선택"
       }
     },
+    "composer": {
+      "title": "메시지 입력",
+      "sendShortcut": {
+        "label": "{{shortcut}}로 보내기",
+        "hint": "켜면 {{shortcut}}로 메시지를 보냅니다. 끄면 Enter로 보내고 Shift+Enter로 줄을 바꿉니다.",
+        "ariaLabel": "{{shortcut}}로 메시지 보내기"
+      }
+    },
     "linkOpen": {
       "title": "링크 열기 방식",
       "description": "메시지의 링크나 HTML 파일을 왼쪽 클릭했을 때 기본으로 여는 위치입니다.",
@@ -2971,6 +2980,7 @@
         "systemReserved": "운영 체제에서 예약된 조합입니다",
         "conflict": "\"{{name}}\"과(와) 충돌합니다",
         "voiceConflict": "음성 입력 단축키와 충돌합니다",
+        "composerVoiceConflict": "음성 입력 단축키와 충돌합니다. 메시지 입력의 보내기 단축키 또는 음성 입력 단축키를 변경하세요.",
         "menuAccelerator": "이 조합은 메뉴 단축키로 등록할 수 없습니다"
       },
       "items": {
@@ -3097,12 +3107,15 @@
         "clearSearch": "플러그인 검색 지우기",
         "addPlugin": "플러그인 추가",
         "addPluginAria": "플러그인 추가 옵션",
+        "installedSection": "설치됨",
+        "recommendedSection": "추천",
+        "updatesAvailable": "플러그인 업데이트 {{count}}개 사용 가능",
+        "updateAll": "모두 업데이트",
+        "ignoreRound": "이번은 무시",
+        "updateTo": "v{{version}}(으)로 업데이트",
+        "updateAria": "{{name}}을(를) v{{version}}(으)로 업데이트",
         "createWithCindy": "Cindy로 만들기",
-        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 오른쪽 사이드바 탭 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
-        "installedTitle": "설치된 플러그인",
-        "installedExpand": "설치된 플러그인 {{count}}개 더 보기",
-        "installedCollapse": "추가 설치 플러그인 숨기기",
-        "allTitle": "모든 플러그인",
+        "createPrompt": "Cindy 플러그인을 만들고 싶습니다. 먼저 ghost_forge_guide를 호출해 핸드북 목차를 받고, 우선 0장 「설계 맞추기」를 읽은 뒤 section 매개변수로 관련 장(최소한 샌드박스 금지선과 패키징 장)을 읽고 나서 작업을 시작하세요. 바로 구현을 시작하지 마세요. 질문부터 시작하세요: 선택지가 있는 질문 카드를 우선 사용하고, 카드 한 장에는 핵심 결정 하나만 담아 추천안을 표시하며, 제가 모를 수 있는 설계 옵션(UI 형태: 도킹 패널 / 플러그인 페이지 내 패널 / 채팅 카드 / UI 없음, $ 호출 명령어, 시작 모드, 네트워크 사용 여부, 설정 페이지 필요 여부 등)을 먼저 보여 주고 고르게 해 주세요. 해결할 문제, 대상 사용자, 상호작용 흐름, 필요한 도구와 연결, 권한 경계, 완료 기준을 단계적으로 확인해 주세요. 설계를 확인한 뒤 규격에 따라 구현하고 검증한 다음, 마지막으로 ghost_forge_pack을 호출해 플러그인을 패키징하고 설치해 주세요.",
         "filterAll": "전체",
         "filtersAria": "출처별 플러그인 필터",
         "origin": {
@@ -3112,8 +3125,15 @@
           "custom": "사용자 지정"
         },
         "emptyFiltered": "일치하는 플러그인이 없습니다",
-        "useAction": "사용",
-        "useAria": "{{name}} 사용"
+        "useAria": "{{name}} 사용",
+        "usePanelAction": "사용",
+        "chatAction": "대화",
+        "chatAria": "{{name}}과(와) 대화",
+        "manageAction": "관리",
+        "manageAria": "{{name}} 관리",
+        "agentInvoked": "Agent가 자동 호출",
+        "upToDate": "최신 상태",
+        "installAria": "{{name}} 설치"
       },
       "market": {
         "scopeAria": "플러그인 출처 필터",
@@ -3128,9 +3148,6 @@
         "install": "설치",
         "details": "상세",
         "update": "마켓에서 업데이트",
-        "updateAvailable": "업데이트 가능",
-        "updateAction": "업데이트",
-        "updateAria": "{{name}} 업데이트",
         "updateTo": "v{{version}}(으)로 업데이트",
         "installed": "설치됨",
         "conflict": "플러그인 ID 충돌",
@@ -3285,7 +3302,7 @@
         "meta": "버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "metaWithAuthor": "제작자 {{author}} · 버전 {{version}}. 로컬에 설치되며 언제든 제거할 수 있습니다.",
         "enableNow": "설치 후 바로 활성화",
-        "enableNowOpenTab": "설치 후 바로 활성화하고 탭 열기",
+        "enableNowOpenPanel": "설치 후 바로 활성화하고 패널 열기",
         "expandDescription": "전체 소개 보기",
         "collapseDescription": "소개 접기"
       },
@@ -3332,7 +3349,7 @@
         "tool": "도구 \"{{name}}\"",
         "command": "채팅 명령 ${{command}}",
         "panelLeft": "패널 \"{{title}}\" · 채팅 왼쪽에 도킹",
-        "panelTab": "패널 \"{{title}}\" · 오른쪽 사이드바 탭",
+        "panelTab": "패널 \"{{title}}\" · 플러그인 페이지에서 열기",
         "code": "실행 코드",
         "codeDetail": "격리된 샌드박스에서 실행되며 파일과 네트워크에 접근할 수 없습니다.",
         "resident": "상주 실행(활성화하면 시작되며 호출이 없어도 백그라운드 프로세스 유지)",
@@ -3415,6 +3432,7 @@
         "openLocation": "설치 위치 열기",
         "panelDocked": "도킹됨 · 최소 너비 {{min}}px",
         "panelNotDocked": "도킹되지 않음(레이아웃에 위치 기록 없음)",
+        "panelPageHosted": "플러그인 페이지에서 열림 · 벗어나면 자동으로 닫힘",
         "panelNone": "이 플러그인에는 패널이 없습니다",
         "customSlotTitle": "플러그인 사용자 정의 설정 영역",
         "dangerTitle": "플러그인 제거",
@@ -3454,6 +3472,9 @@
         "descriptionExpand": "더 보기",
         "descriptionCollapse": "접기",
         "useAction": "Plugin 사용",
+        "chatAction": "대화",
+        "enabledLabel": "사용 중",
+        "disabledLabel": "사용 안 함",
         "useDisabled": "사용하기 전에 Plugin을 활성화하세요",
         "moreActions": "Plugin 추가 작업",
         "updateFromFile": ".cindy 파일에서 업데이트…",
@@ -3503,6 +3524,29 @@
       "workspace": {
         "dialogTitle": "프로젝트 폴더 선택",
         "dialogMessage": "플러그인 \"{{name}}\"이(가) 사이드바에 세션을 만들기 위해 프로젝트 폴더 선택을 요청합니다"
+      },
+      "panelHost": {
+        "close": "패널 닫기"
+      },
+      "updateAll": {
+        "title": "모두 업데이트 · {{count}}개",
+        "description": "권한 변경이 없는 업데이트는 자동으로 완료됩니다. 권한이 확장되는 업데이트는 항목별 확인이 필요합니다.",
+        "versionRange": "v{{from}} → v{{to}}",
+        "permissionChanged": "권한 변경됨",
+        "reviewOutdated": "권한 변경 내역이 오래되었습니다",
+        "rereview": "다시 검토",
+        "reviewDiff": "확인",
+        "collapseDiff": "접기",
+        "approve": "동의 후 업데이트",
+        "skip": "건너뛰기",
+        "statusPending": "대기 중",
+        "statusInstalling": "업데이트 중…",
+        "statusDone": "업데이트됨",
+        "statusSkipped": "건너뜀",
+        "statusFailed": "업데이트 실패",
+        "background": "백그라운드에서 계속",
+        "doneAction": "완료",
+        "doneToast": "일괄 업데이트 완료: {{done}}개 업데이트, {{rest}}개 미완료"
       }
     },
     "mcp": {
@@ -4178,13 +4222,10 @@
       "addAria": "탭 추가",
       "addFailed": "탭을 추가하지 못했습니다",
       "tabCloseAria": "탭 닫기",
-      "pinAria": "고정 — 모든 세션에서 유지",
-      "unpinAria": "고정 해제 — 현재 세션에서만 유지",
       "menu": {
         "addLabel": "탭 추가",
         "comingSoon": "지원 예정",
-        "alreadyOpen": "열림",
-        "pluginGroup": "플러그인"
+        "alreadyOpen": "열림"
       },
       "kinds": {
         "fileBrowser": "파일 브라우저",
@@ -4205,9 +4246,7 @@
       "contextMenu": {
         "close": "닫기",
         "closeOthers": "다른 탭 닫기",
-        "closeAll": "모두 닫기",
-        "pin": "고정",
-        "unpin": "고정 해제"
+        "closeAll": "모두 닫기"
       },
       "empty": {
         "eyebrow": "오른쪽 사이드바",
@@ -4223,9 +4262,6 @@
         "browserSub": "Browser",
         "openTerminal": "터미널 열기",
         "terminalSub": "Terminal",
-        "pluginSub": "Plugin",
-        "pluginGroup": "플러그인 패널",
-        "pluginGroupSub": "플러그인 {{count}}개",
         "addMoreHint": "위쪽 + 버튼에서 다른 패널 유형을 선택할 수 있어요"
       },
       "placeholderHint": "{{kind}} — 콘텐츠는 이후 단계에서 추가됩니다"
@@ -4758,6 +4794,7 @@
       "send": "메시지 전송",
       "queue": "대기열에 추가",
       "queueTooltip": "클릭하면 대기열에 추가됩니다. {{shortcut}} 를 누르면 작업을 중단하지 않고 끼어듭니다",
+      "queueTooltipSendMode": "클릭하면 대기열에 추가하고, {{shortcut}}를 누르면 이 메시지를 보냅니다.",
       "stop": "생성 중지"
     },
     "pluginSetup": {

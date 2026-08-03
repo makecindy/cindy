@@ -11,11 +11,13 @@ import { useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import * as Dialog from '@radix-ui/react-dialog';
 import {
   AppWindow,
+  ArrowUp,
   Bot,
   ChevronDown,
   Copy,
   Cpu,
   Download,
+  MessageCircle,
   FileCode2,
   FilePen,
   FolderOpen,
@@ -55,10 +57,16 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 import { Switch } from '@/components/ui/switch';
 import { toast } from '@/lib/toast';
 import { cn } from '@/lib/utils';
-import type { GhostPermissionItem, GhostToolDecl, InstalledGhost } from '../../../shared/ghost';
+import {
+  isOfficialGhostId,
+  type GhostPermissionItem,
+  type GhostToolDecl,
+  type InstalledGhost,
+} from '../../../shared/ghost';
 import { type GhostPluginDetail } from './lib/ghostPluginViewModel';
 import { GhostPluginIcon } from './GhostPluginIcon';
 import { ghostPluginSummary } from './lib/ghostPluginDetailModel';
+import { ghostPrimaryAction } from './lib/ghostPluginViewModel';
 import { PluginDetailTopBar, usePluginDetailScrolled } from './PluginDetailTopBar';
 import './plugin-motion.css';
 
@@ -69,9 +77,12 @@ interface GhostPluginDetailViewProps {
   enabledOverride?: boolean;
   onBack: () => void;
   onToggle: (enabled: boolean) => void;
+  /** 主动作:面板型「使用」(打开面板)/ 指令型「对话」;纯工具型不渲染主按钮。 */
   onUse: () => void;
+  /** 头部更新 CTA:市场有新版本时走市场更新确认流。 */
   onUpdate: () => void;
-  updateLabel?: string;
+  /** ⋮ 菜单的兜底路径:从本地 .cindy 文件更新。 */
+  onUpdateFromFile: () => void;
   /** 市场存在新版本时的目标版本号;设置后头部展示显著的更新按钮。 */
   updateVersion?: string;
   updateBusy?: boolean;
@@ -135,7 +146,7 @@ export function GhostPluginDetailView({
   onToggle,
   onUse,
   onUpdate,
-  updateLabel,
+  onUpdateFromFile,
   updateVersion,
   updateBusy = false,
   onUninstall,
@@ -149,11 +160,25 @@ export function GhostPluginDetailView({
   const [descriptionOverflows, setDescriptionOverflows] = useState(false);
   const descriptionRef = useRef<HTMLParagraphElement>(null);
   const enabled = enabledOverride ?? detail.enabled;
-  const canUse = enabled && detail.canUse;
+  const primaryAction = ghostPrimaryAction(detail);
+  const primaryEnabled =
+    enabled && (primaryAction === 'panel' || (primaryAction === 'command' && detail.canUse));
   const cindyCapabilities = detail.cindyCapabilities;
   const hasConfiguration =
     detail.hasSettingsUi || cindyCapabilities.length > 0 || detail.hasErrand;
   const summary = ghostPluginSummary(detail.description, detail.id);
+  /**
+   * 「从 .cindy 文件更新」是否可用。官方保留前缀(cindy- / filo- / xd-)在**非 dev
+   * 构建**上会被 Main 的用户装入通道以 GHOST_ID_RESERVED 直接拒绝(见
+   * main/cindy-brain/index.ts 的 rejectReservedGhostId),把这个必失败的动作摆在
+   * 菜单里只会让用户选文件、等一下、然后吃一个错误。
+   *
+   * 判据用 `import.meta.env.DEV` 而不是新开一条 IPC 去问 app.isPackaged:打包产物
+   * 必然 DEV=false,覆盖 Main 拒绝的全部场景;唯一偏差是「本地 build 但未打包运行」
+   * 会多隐藏一次入口——方向保守(少一个入口 vs 给用户一个必失败按钮),可接受。
+   * 普通第三方插件不受影响。
+   */
+  const localUpdateAvailable = import.meta.env.DEV || !isOfficialGhostId(detail.id);
 
   useLayoutEffect(() => {
     setDescriptionExpanded(false);
@@ -229,43 +254,86 @@ export function GhostPluginDetailView({
               style={WINDOW_NO_DRAG_STYLE}
             >
               {updateVersion ? (
+                // 更新提级(设计定稿):有新版本时黑色主 CTA 直达市场更新确认流。
                 <button
                   type="button"
                   onClick={onUpdate}
                   disabled={updateBusy}
                   className={cn(
-                    'inline-flex h-10 items-center justify-center rounded-full border border-[var(--border-default)] bg-[var(--surface-elevated)] px-5 text-13 font-medium text-[var(--text-primary)]',
-                    'transition-[background-color,border-color,transform,opacity] duration-150 hover:border-[var(--text-tertiary)] hover:bg-[var(--surface-hover-soft)] active:scale-[0.98]',
+                    'inline-flex h-10 items-center justify-center gap-1.5 rounded-full px-5 text-13 font-medium',
+                    'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
+                    'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                    'disabled:cursor-wait disabled:opacity-40 disabled:active:scale-100',
+                    'disabled:cursor-wait disabled:opacity-60 disabled:active:scale-100',
                   )}
                 >
+                  <ArrowUp size={14} aria-hidden="true" />
                   {updateVersion === detail.version
                     ? t('settings.ghosts.market.update')
                     : t('settings.ghosts.market.updateTo', { version: updateVersion })}
                 </button>
               ) : null}
+              {primaryAction !== 'manage' ? (
+                <button
+                  type="button"
+                  onClick={onUse}
+                  disabled={!primaryEnabled}
+                  title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
+                  className={cn(
+                    'plugin-detail-primary-action inline-flex h-10 min-w-[88px] items-center justify-center gap-1.5 whitespace-nowrap rounded-full px-3 text-13 font-medium',
+                    updateVersion
+                      ? 'border border-[var(--border-default)] bg-[var(--surface-elevated)] text-[var(--text-primary)] hover:bg-[var(--surface-hover-soft)]'
+                      : 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:bg-[var(--accent-hover)]',
+                    'transition-[background-color,transform,opacity] duration-150 active:scale-[0.98]',
+                    'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                    'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
+                  )}
+                >
+                  {primaryAction === 'command' ? (
+                    <MessageCircle size={14} aria-hidden="true" />
+                  ) : null}
+                  {t(
+                    primaryAction === 'panel'
+                      ? 'settings.ghosts.detail.useAction'
+                      : 'settings.ghosts.detail.chatAction',
+                  )}
+                </button>
+              ) : null}
+              {/* 启用开关带明确文字(设计定稿):状态一目了然,点文字同样可切换。 */}
               <button
                 type="button"
-                onClick={onUse}
-                disabled={!canUse}
-                title={!enabled ? t('settings.ghosts.detail.useDisabled') : undefined}
+                onClick={() => {
+                  if (!toggleDisabled) onToggle(!enabled);
+                }}
+                disabled={toggleDisabled}
+                aria-pressed={enabled}
+                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
                 className={cn(
-                  'plugin-detail-primary-action inline-flex h-10 min-w-[88px] items-center justify-center whitespace-nowrap rounded-full px-3 text-13 font-medium',
-                  'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)]',
-                  'transition-[background-color,transform,opacity] duration-150 hover:bg-[var(--accent-hover)] active:scale-[0.98]',
-                  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
-                  'disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100',
+                  'flex shrink-0 items-center gap-2 rounded-full py-1 pl-3 pr-1 transition-colors duration-150',
+                  'hover:bg-[var(--surface-hover-soft)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-[var(--focus-ring)]',
+                  'disabled:cursor-not-allowed disabled:opacity-60',
                 )}
               >
-                {t('settings.ghosts.detail.useAction')}
+                <span
+                  className={cn(
+                    'text-12',
+                    enabled ? 'text-[var(--text-secondary)]' : 'text-[var(--text-tertiary)]',
+                  )}
+                >
+                  {t(
+                    enabled
+                      ? 'settings.ghosts.detail.enabledLabel'
+                      : 'settings.ghosts.detail.disabledLabel',
+                  )}
+                </span>
+                <Switch
+                  checked={enabled}
+                  disabled={toggleDisabled}
+                  aria-hidden="true"
+                  tabIndex={-1}
+                  className="pointer-events-none"
+                />
               </button>
-              <Switch
-                checked={enabled}
-                onCheckedChange={onToggle}
-                disabled={toggleDisabled}
-                aria-label={t('settings.ghosts.enableAria', { name: detail.name })}
-              />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <button
@@ -281,13 +349,15 @@ export function GhostPluginDetailView({
                   sideOffset={8}
                   className="w-56 rounded-xl border border-[var(--border-default)] bg-[var(--surface-elevated)] p-1.5 text-[var(--text-primary)] shadow-[var(--shadow-menu)]"
                 >
-                  <DropdownMenuItem
-                    onSelect={onUpdate}
-                    disabled={updateBusy}
-                    className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
-                  >
-                    {updateLabel ?? t('settings.ghosts.detail.updateFromFile')}
-                  </DropdownMenuItem>
+                  {localUpdateAvailable ? (
+                    <DropdownMenuItem
+                      onSelect={onUpdateFromFile}
+                      disabled={updateBusy}
+                      className="h-10 rounded-lg px-3 text-13 focus:bg-[var(--surface-hover-soft)]"
+                    >
+                      {t('settings.ghosts.detail.updateFromFile')}
+                    </DropdownMenuItem>
+                  ) : null}
                   {onExport ? (
                     <DropdownMenuItem
                       onSelect={onExport}

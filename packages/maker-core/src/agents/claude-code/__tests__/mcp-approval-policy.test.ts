@@ -29,7 +29,10 @@ import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
 import type { InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
-import type { McpProvider } from '../../../interfaces/mcp-provider.js';
+import type {
+  McpProvider,
+  McpProviderContext,
+} from '../../../interfaces/mcp-provider.js';
 
 const sdkMock = vi.hoisted(() => ({
   forkSession: vi.fn(),
@@ -757,6 +760,40 @@ describe('prompt-each-time never turns into a persisted grant', () => {
 });
 
 describe('a custom server cannot take over a builtin name', () => {
+  it('passes the runtime session instance id into Claude MCP provider context', async () => {
+    const configDir = await makeTempDir();
+    process.env.CLAUDE_CONFIG_DIR = configDir;
+    const workingDir = await makeTempDir();
+    sdkMock.query.mockReturnValue(createFakeQuery());
+    let capturedContext: McpProviderContext | undefined;
+    const deps = createDeps();
+    deps.mcpProviders = [
+      {
+        name: 'cindy_probe',
+        toClaudeSdkConfig: (context) => {
+          capturedContext = context;
+          return { type: 'stdio', command: 'true' };
+        },
+      },
+    ];
+
+    const handle = await new ClaudeCodeAgent(deps).startSession({
+      sessionId: 'session-instance-context',
+      sessionInstanceId: 'instance-claude-context',
+      model: 'claude-opus-4-6',
+      workingDir,
+      permissionMode: 'default',
+    });
+
+    expect(capturedContext).toMatchObject({
+      agentKind: 'claude-code',
+      sessionId: 'session-instance-context',
+      sessionInstanceId: 'instance-claude-context',
+      workingDir,
+    });
+    await handle.close();
+  });
+
   it('keeps the first registration when two providers share a name', async () => {
     const configs: Array<{ name: string; marker: string }> = [];
     const contexts: McpToolApprovalContext[] = [];
@@ -866,12 +903,21 @@ describe('remote sessions share the same permission semantics', () => {
       toClaudeSdkConfig: () => ({ type: 'http', url: `https://x/${name}` }),
     })) as McpProvider[];
     let remoteStartParams: Record<string, unknown> | undefined;
+    let remoteIdentity: { sessionId: string; sessionInstanceId?: string } | undefined;
     deps.remoteCcQueryFactory = (async (args: {
+      sessionId: string;
+      sessionInstanceId?: string;
       onApprovalRequest: (raw: unknown) => Promise<{ behavior?: string }>;
       startParams: Record<string, unknown>;
     }) => {
       onApprovalRequest = args.onApprovalRequest;
       remoteStartParams = args.startParams;
+      remoteIdentity = {
+        sessionId: args.sessionId,
+        ...(args.sessionInstanceId
+          ? { sessionInstanceId: args.sessionInstanceId }
+          : {}),
+      };
       return createFakeQuery(
         options?.initMcpServerNames,
         options?.failedInitMcpServerNames,
@@ -881,6 +927,7 @@ describe('remote sessions share the same permission semantics', () => {
     const agent = new ClaudeCodeAgent(deps);
     const handle = await agent.startSession({
       sessionId: 'session-remote-mcp-policy',
+      sessionInstanceId: 'instance-remote-mcp-policy',
       model: 'claude-opus-4-6',
       workingDir,
       remoteHostId: 'remote-1',
@@ -894,8 +941,18 @@ describe('remote sessions share the same permission semantics', () => {
       });
     }
     if (!onApprovalRequest) throw new Error('expected remote onApprovalRequest');
-    return { handle, onApprovalRequest, seen, remoteStartParams };
+    return { handle, onApprovalRequest, seen, remoteStartParams, remoteIdentity };
   }
+
+  it('passes the runtime session instance id into the remote Claude factory', async () => {
+    const { handle, remoteIdentity } = await startRemoteSession(() => 'auto-approve');
+
+    expect(remoteIdentity).toEqual({
+      sessionId: 'session-remote-mcp-policy',
+      sessionInstanceId: 'instance-remote-mcp-policy',
+    });
+    await handle.close();
+  });
 
   it('auto-approves trusted MCP tools without prompting', async () => {
     const { handle, onApprovalRequest, seen } = await startRemoteSession(() => 'auto-approve', {

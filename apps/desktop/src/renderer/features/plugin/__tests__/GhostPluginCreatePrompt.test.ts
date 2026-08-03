@@ -36,6 +36,8 @@ describe('Ghost Plugin creation prompt', () => {
     expect(prompt).toContain('提问卡片');
     expect(prompt).toContain('推荐项');
     expect(prompt).toContain('停靠面板');
-    expect(prompt).toContain('右侧栏页签');
+    // 面板收束(2026-08-02):tab 形态住在插件页内,不再是右侧栏页签。
+    expect(prompt).toContain('插件页内面板');
+    expect(prompt).not.toContain('右侧栏页签');
   });
 });

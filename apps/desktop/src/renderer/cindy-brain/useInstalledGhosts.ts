@@ -85,6 +85,14 @@ export function useInstalledGhosts(): InstalledGhost[] {
   return useSyncExternalStore(subscribeInstalledGhosts, getInstalledGhostsSnapshot);
 }
 
+/**
+ * 非 hook 消费者(模块级控制器,如批量更新 runner)读取同一份清单;
+ * 与 hook 走完全相同的缓存与 ghosts:changed 刷新,不另开数据源。
+ */
+export function readInstalledGhostsSnapshot(): InstalledGhost[] {
+  return ensureLoaded();
+}
+
 if (import.meta.hot) {
   import.meta.hot.accept(() => {});
   import.meta.hot.dispose(resetInstalledGhostsStore);

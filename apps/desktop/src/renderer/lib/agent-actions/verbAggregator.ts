@@ -71,6 +71,14 @@ const TOOL_TO_VERB: Record<string, Verb> = {
   WebFetch: 'fetched',
   WebSearch: 'fetched',
   web_search: 'fetched',
+  // pi 内置工具(全小写,见 toolUseDescriptor.ts 数据来源约定)。
+  bash: 'ran',
+  read: 'read',
+  ls: 'read',
+  edit: 'edited',
+  write: 'created',
+  grep: 'searched',
+  find: 'searched',
 };
 
 const ORDER: Verb[] = [

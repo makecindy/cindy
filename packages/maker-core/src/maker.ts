@@ -33,6 +33,7 @@ import type {
 } from './types/customizations.js';
 import { Session, generateSessionId } from './session.js';
 import type {
+  AgentSessionHandle,
   BaseAgent,
   StartSessionOptions,
   OneShotOptions,
@@ -147,6 +148,30 @@ function capabilitiesForSession(
   };
 }
 
+function isClaimableCodexThreadId(id: string | undefined): id is string {
+  return (
+    typeof id === 'string' &&
+    id.length > 0 &&
+    !id.startsWith('<') &&
+    /^[0-9a-fA-F-]+$/.test(id)
+  );
+}
+
+function codexThreadClaimKey(remoteHostId: string | undefined, threadId: string): string {
+  return JSON.stringify([remoteHostId ?? null, threadId]);
+}
+
+interface CodexThreadClaimOwner {
+  token: symbol;
+  sessionId: string;
+  sessionInstanceId: string;
+}
+
+interface CodexThreadClaimLease {
+  moveTo(threadId: string): void;
+  release(): void;
+}
+
 export class Maker {
   protected readonly agents: Partial<Record<AgentKind, BaseAgent>>;
   protected readonly storage: SessionStorage;
@@ -163,6 +188,13 @@ export class Maker {
     string,
     { promise: Promise<Session> }
   >();
+  /**
+   * Codex 0.145 会忽略已加载 thread 的 thread/resume.config。不同 Cindy task
+   * 若同时复用同一 native thread，后启动者会继续使用前一 Session 的 MCP URL，
+   * 使实例绑定失配并破坏通知路由。按 target(local / remote host)+thread 独占；
+   * claim 由启动前持有到 Session 真正 close，禁止覆盖或抢占。
+   */
+  private readonly activeCodexThreadClaims = new Map<string, CodexThreadClaimOwner>();
   /**
    * 同一 business session 的 vendor id 写入必须串行。invalid-resume CAS 只有排在
    * 已在途的 session_id update 之后执行，才能保证旧写入不会在清空后反向覆盖。
@@ -189,6 +221,59 @@ export class Maker {
       hasOnCloseHook: !!this.lifecycleHooks.onClose,
       makerMemory: !!this.makerMemory,
     });
+  }
+
+  private claimCodexThread(params: {
+    sessionId: string;
+    sessionInstanceId: string;
+    remoteHostId?: string;
+    threadId: string;
+  }): CodexThreadClaimLease {
+    const owner: CodexThreadClaimOwner = {
+      token: Symbol('codex-thread-claim'),
+      sessionId: params.sessionId,
+      sessionInstanceId: params.sessionInstanceId,
+    };
+    let currentKey: string | null = null;
+    let released = false;
+
+    const moveTo = (threadId: string): void => {
+      if (released) throw new Error('Codex thread claim was already released');
+      const nextKey = codexThreadClaimKey(params.remoteHostId, threadId);
+      if (nextKey === currentKey) return;
+      const existing = this.activeCodexThreadClaims.get(nextKey);
+      if (existing && existing.token !== owner.token) {
+        throw new Error(
+          `Codex thread ${threadId} is already active in another Cindy task. Close that task and try again.`,
+        );
+      }
+      this.activeCodexThreadClaims.set(nextKey, owner);
+      const previousKey = currentKey;
+      currentKey = nextKey;
+      if (
+        previousKey &&
+        previousKey !== nextKey &&
+        this.activeCodexThreadClaims.get(previousKey)?.token === owner.token
+      ) {
+        this.activeCodexThreadClaims.delete(previousKey);
+      }
+    };
+
+    moveTo(params.threadId);
+    return {
+      moveTo,
+      release: () => {
+        if (released) return;
+        released = true;
+        if (
+          currentKey &&
+          this.activeCodexThreadClaims.get(currentKey)?.token === owner.token
+        ) {
+          this.activeCodexThreadClaims.delete(currentKey);
+        }
+        currentKey = null;
+      },
+    };
   }
 
   /**
@@ -283,21 +368,65 @@ export class Maker {
     // provider ctx 时塞到 ctx.sessionId 上 (claude-code/index.ts buildMcpServers)。
     // MCP server 工厂据此闭包绑定 "我属于哪个 session", 控制类工具 (如
     // start_team / create_worker) 需要它把回调路由到对应 session 的业务函数。
-    const handle = await agent.startSession({
-      ...startOpts,
-      sessionId: id,
-      // 强制由 Maker 注入持久化 CAS，不能信任外部 CreateSessionOptions 自带回调。
-      // Claude adapter 只在精确识别 invalid-resume 时调用；Codex 不消费该字段。
-      // 对所有 claude-code 会话装配(不止 resume):全新会话也可能在首个 turn 崩溃前
-      // 就把 SDK 回填、已落库的 sdk_session_id 变成幽灵 id(见 claude-code/index.ts
-      // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
-      // send 会 resume 同一个不存在的会话反复失败。
-      onInvalidResumeSession:
-        opts.agentKind === 'claude-code'
-          ? (expectedSdkSessionId) =>
-              this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
-          : undefined,
-    });
+    // business id 在 close/rebuild 后会复用；另铸一个只活在本次内存实例里的
+    // 代号，让迟到的旧 MCP 请求不能借用新 Session 的权限状态。
+    const sessionInstanceId = generateSessionId();
+    let codexThreadClaim =
+      opts.agentKind === 'codex' && isClaimableCodexThreadId(startOpts.resumeSessionId)
+        ? this.claimCodexThread({
+            sessionId: id,
+            sessionInstanceId,
+            remoteHostId: startOpts.remoteHostId,
+            threadId: startOpts.resumeSessionId,
+          })
+        : null;
+    let handle: AgentSessionHandle;
+    try {
+      handle = await agent.startSession({
+        ...startOpts,
+        sessionId: id,
+        sessionInstanceId,
+        // 强制由 Maker 注入持久化 CAS，不能信任外部 CreateSessionOptions 自带回调。
+        // Claude adapter 只在精确识别 invalid-resume 时调用；Codex 不消费该字段。
+        // 对所有 claude-code 会话装配(不止 resume):全新会话也可能在首个 turn 崩溃前
+        // 就把 SDK 回填、已落库的 sdk_session_id 变成幽灵 id(见 claude-code/index.ts
+        // 的 fresh-session self-reference 恢复),需要同一把 CAS 才能把它清掉,否则下一次
+        // send 会 resume 同一个不存在的会话反复失败。
+        onInvalidResumeSession:
+          opts.agentKind === 'claude-code'
+            ? (expectedSdkSessionId) =>
+                this.invalidateAndClearSdkSessionId(id, expectedSdkSessionId)
+            : undefined,
+      });
+    } catch (error) {
+      codexThreadClaim?.release();
+      throw error;
+    }
+    if (opts.agentKind === 'codex' && isClaimableCodexThreadId(handle.id)) {
+      try {
+        if (codexThreadClaim) {
+          codexThreadClaim.moveTo(handle.id);
+        } else {
+          codexThreadClaim = this.claimCodexThread({
+            sessionId: id,
+            sessionInstanceId,
+            remoteHostId: startOpts.remoteHostId,
+            threadId: handle.id,
+          });
+        }
+      } catch (error) {
+        try {
+          await handle.close();
+        } catch (closeError) {
+          this.logger.warn('failed to close Codex handle after thread claim conflict', {
+            sessionId: id,
+            error: String(closeError),
+          });
+        }
+        codexThreadClaim?.release();
+        throw error;
+      }
+    }
     this.logger.debug('createSession ↑ agent.startSession returned', {
       localSessionId: id,
       sdkSessionId: handle.id,
@@ -306,28 +435,43 @@ export class Maker {
 
     // 落地元数据 —— storage 已有同 id 的 row 时跳过 insert, 走 update 把 sdkSessionId 写回
     let meta: SessionMeta;
-    const existingRow = opts.id ? await this.storage.get(opts.id) : null;
-    if (existingRow) {
-      meta = handle.id !== '<pending>' && existingRow.sdkSessionId !== handle.id
-        ? await this.storage.update(id, { sdkSessionId: handle.id })
-        : existingRow;
-    } else {
-      meta = await this.storage.create({
-        id,
-        agentKind: opts.agentKind,
-        workDir: opts.workingDir,
-        title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
-        model: opts.model,
-        workspaceKind: opts.workspaceKind,
-        effort: opts.effort,
-        permissionMode: opts.permissionMode,
-        fastMode: opts.fastMode,
-        parentSessionId: opts.parentSessionId,
-        // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
-        // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
-        remoteHostId: opts.remoteHostId,
-        sdkSessionId: handle.id !== '<pending>' ? handle.id : undefined,
-      });
+    try {
+      const existingRow = opts.id ? await this.storage.get(opts.id) : null;
+      if (existingRow) {
+        meta = handle.id !== '<pending>' && existingRow.sdkSessionId !== handle.id
+          ? await this.storage.update(id, { sdkSessionId: handle.id })
+          : existingRow;
+      } else {
+        meta = await this.storage.create({
+          id,
+          agentKind: opts.agentKind,
+          workDir: opts.workingDir,
+          title: opts.title ?? DEFAULT_DRAFT_SESSION_TITLE,
+          model: opts.model,
+          workspaceKind: opts.workspaceKind,
+          effort: opts.effort,
+          permissionMode: opts.permissionMode,
+          fastMode: opts.fastMode,
+          parentSessionId: opts.parentSessionId,
+          // remoteHostId: 远端 session 把目标机器持久化, 之后 resume / list 都能识别。
+          // 本地 session 留 undefined (sqlite 落空), 跟历史行为兼容。
+          remoteHostId: opts.remoteHostId,
+          sdkSessionId: handle.id !== '<pending>' ? handle.id : undefined,
+        });
+      }
+    } catch (error) {
+      if (codexThreadClaim) {
+        try {
+          await handle.close();
+        } catch (closeError) {
+          this.logger.warn('failed to close Codex handle after session storage failure', {
+            sessionId: id,
+            error: String(closeError),
+          });
+        }
+        codexThreadClaim.release();
+      }
+      throw error;
     }
 
     const delivery = handle.codexProductPromptDelivery;
@@ -355,6 +499,7 @@ export class Maker {
 
     const session = new Session({
       id: meta.id,
+      sessionInstanceId,
       agentKind: meta.agentKind,
       workDir: meta.workDir,
       handle,
@@ -369,6 +514,28 @@ export class Maker {
     // 当 SDK 回填 sdkSessionId 时持久化
     session.onEvent((evt) => {
       if (evt.type === 'session_id' && typeof evt.data === 'string' && evt.data) {
+        if (opts.agentKind === 'codex' && isClaimableCodexThreadId(evt.data)) {
+          try {
+            if (codexThreadClaim) {
+              codexThreadClaim.moveTo(evt.data);
+            } else {
+              codexThreadClaim = this.claimCodexThread({
+                sessionId: id,
+                sessionInstanceId,
+                remoteHostId: startOpts.remoteHostId,
+                threadId: evt.data,
+              });
+            }
+          } catch (error) {
+            this.logger.error('Codex thread claim move failed; closing conflicting session', {
+              sessionId: id,
+              sdkSessionId: evt.data,
+              error: String(error),
+            });
+            void session.close();
+            return;
+          }
+        }
         void this.persistSdkSessionId(meta.id, evt.data).catch((e) => {
           this.logger.warn('failed to persist sdkSessionId', { error: String(e) });
         });
@@ -377,6 +544,7 @@ export class Maker {
 
     session.onStatusChange((status) => {
       if (status === 'closed') {
+        codexThreadClaim?.release();
         // 不再持久化运行态: 'closed' 是 SDK 子进程的瞬态, 重启即灭, 无意义存盘。
         this.activeSessions.delete(meta.id);
         this.emit({

@@ -1355,7 +1355,7 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     expect(fs.readFileSync(targetRow.rolloutPath, 'utf-8')).toBe('LEGACY_ROLLOUT');
   });
 
-  it('keeps an explicitly configured external CODEX_HOME linked instead of adopting it', async () => {
+  it('adopts an explicitly configured external CODEX_HOME into a private copy (never links the source) (#789)', async () => {
     const sourceRollout = path.join(
       externalHome,
       'sessions',
@@ -1363,21 +1363,23 @@ describe('prepareExternalCodexSessionForResume orphan rollout synthesis', () => 
     );
     const sourceDbPath = createStateDb(externalHome);
     fs.mkdirSync(path.dirname(sourceRollout), { recursive: true });
-    fs.writeFileSync(sourceRollout, 'LINKED_EXTERNAL_ROLLOUT');
+    fs.writeFileSync(sourceRollout, 'EXTERNAL_ROLLOUT');
     insertThread(sourceDbPath, threadId, sourceRollout, { updatedAt: 2_000 });
     const targetDbPath = createStateDb(desktopHome());
 
     await prepareExternalCodexSessionForResume(threadId);
 
+    const adoptedRollout = path.join(desktopHome(), 'sessions', path.basename(sourceRollout));
     const targetDb = new Database(targetDbPath, { readonly: true });
     const targetRow = targetDb
       .prepare('SELECT rollout_path AS rolloutPath FROM threads WHERE id = ?')
       .get(threadId) as { rolloutPath: string };
     targetDb.close();
-    expect(targetRow.rolloutPath).toBe(sourceRollout);
-    expect(fs.existsSync(path.join(desktopHome(), 'sessions', path.basename(sourceRollout)))).toBe(
-      false,
-    );
+    // 方案 A:desktop state 指向私有副本,而非源 rollout;副本落盘、内容与源一致。
+    expect(targetRow.rolloutPath).toBe(adoptedRollout);
+    expect(fs.readFileSync(adoptedRollout, 'utf-8')).toBe('EXTERNAL_ROLLOUT');
+    // 源 rollout 原样不动——不再有任何回写通道。
+    expect(fs.readFileSync(sourceRollout, 'utf-8')).toBe('EXTERNAL_ROLLOUT');
   });
 
   it('synthesizes into the current HOME when legacy state survives but its rollout is missing', async () => {

@@ -7,10 +7,11 @@ import {
   type VisiblePluginDetail,
   type VisiblePluginSummary,
 } from '@cindy/plugin-protocol';
-import { app, dialog, type WebContents } from 'electron';
+import { app, dialog } from 'electron';
 
 import {
   diffGhostPermissionItems,
+  ghostPermissionBaselineKey,
   isOfficialGhostId,
   validateGhostManifest,
   type GhostManifest,
@@ -82,6 +83,30 @@ const NO_DUPLICATE_GHOST_IDS: ReadonlySet<string> = new Set();
  * 放宽正确性的理由。
  */
 const SOURCE_MUTATION_KEY = 'market-sources';
+
+/**
+ * 扩权批准的原子复核:Renderer 的 allowPermissionExpansion 只代表「用户对
+ * **某一份**已装 manifest 与目标包之间的差异点过同意」。它到达这里之前有一段
+ * 往返窗口,期间「从文件更新」等路径可能整体替换已装 manifest(ghosts.update()
+ * 没有版本单调性检查),那份同意就不再对应现实——继续放行等于让旧批准覆盖
+ * 相对新 manifest 的全部新增权限。
+ *
+ * 所以带审阅基线来的批准,必须在安装锁内、真正放行扩权之前,拿**当前**已装
+ * manifest 重算指纹比对;不一致就拒绝这次批准,由 Renderer 回到重新审阅。
+ * 基线缺席时保持既有行为(旧版本 Renderer / 首装无基线可比),不新增拒绝面。
+ */
+function assertReviewedBaselineFresh(
+  installed: GhostManifest,
+  reviewedBaseline: string | undefined,
+): void {
+  if (reviewedBaseline === undefined) return;
+  if (ghostPermissionBaselineKey(installed) !== reviewedBaseline) {
+    throwIpcError(
+      'PRECONDITION_FAILED',
+      'Installed Plugin permissions changed after review; re-review required',
+    );
+  }
+}
 
 function captureMarketOwner(): ActiveAppSession {
   const session = getActiveAppSession();
@@ -387,6 +412,14 @@ export class PluginMarketService {
       /** 自定义市场插件：Renderer 确认框实际审阅过的完整 manifest。 */
       expectedManifest?: GhostManifest;
       allowPermissionExpansion?: boolean;
+      /**
+       * 扩权批准所依据的**已装 manifest 权限指纹**
+       * (`ghostPermissionBaselineKey`)。带 allowPermissionExpansion 时应一并
+       * 传入:Main 在安装锁内用当前已装 manifest 重算比对,不一致说明审阅与
+       * 现实已经脱节(典型是审阅期间「从文件更新」换了包),此时拒绝这次批准
+       * 而不是拿旧批准放行相对新 manifest 的全部新增权限。
+       */
+      reviewedBaseline?: string;
     },
   ): Promise<{ ghost: InstalledGhost }> {
     const customRef = parseCustomMarketPluginId(pluginId);
@@ -448,6 +481,9 @@ export class PluginMarketService {
           {
             expectedInstalled: existing,
             allowPermissionExpansion: options.allowPermissionExpansion === true,
+            ...(options.reviewedBaseline !== undefined
+              ? { reviewedBaseline: options.reviewedBaseline }
+              : {}),
             // 下载可能持续数分钟,提交副作用前按当前事实再算一次。
             recheckOwnership: assertOwnership,
           },
@@ -697,7 +733,13 @@ export class PluginMarketService {
    */
   private async customInstall(
     ref: { marketName: string; ghostId: string },
-    options: { expectedReleaseId: string; expectedManifest: GhostManifest; allowPermissionExpansion?: boolean },
+    options: {
+      expectedReleaseId: string;
+      expectedManifest: GhostManifest;
+      allowPermissionExpansion?: boolean;
+      /** 扩权批准所依据的已装权限指纹;安装锁内复核,详见 install() 的说明。 */
+      reviewedBaseline?: string;
+    },
   ): Promise<{ ghost: InstalledGhost }> {
     const owner = captureMarketOwner();
     const ledger = this.ledgerForOwner(owner);
@@ -762,10 +804,12 @@ export class PluginMarketService {
           existing &&
           // 与服务端安装同口径:对比已装 manifest 与候选包,只有新增权限才要求
           // 显式确认(upstream 已回退批准 receipt 基线,这里跟随主干口径)。
-          diffGhostPermissionItems(existing.manifest, plugin.manifest).added.length > 0 &&
-          options.allowPermissionExpansion !== true
+          diffGhostPermissionItems(existing.manifest, plugin.manifest).added.length > 0
         ) {
-          throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
+          if (options.allowPermissionExpansion !== true) {
+            throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
+          }
+          assertReviewedBaselineFresh(existing.manifest, options.reviewedBaseline);
         }
         requireSameMarketOwner(owner);
         const ghost = await installCustomMarketPlugin({
@@ -1038,6 +1082,8 @@ export class PluginMarketService {
     plugin: VisiblePluginDetail,
     options: {
       allowPermissionExpansion?: boolean;
+      /** 扩权批准所依据的已装权限指纹;安装锁内复核,详见 install() 的说明。 */
+      reviewedBaseline?: string;
       /** 确认操作时的安装意图;下载窗口期目标被另一窗口卸载时拒绝滑入首装。 */
       expectedInstalled: boolean;
       /**
@@ -1065,13 +1111,23 @@ export class PluginMarketService {
     if (!compatible.ok) {
       throwIpcError('GHOST_FILE_INVALID', 'This Plugin manifest is not supported');
     }
-    if (
-      existing &&
-      diffGhostPermissionItems(existing.manifest, compatible.manifest).added.length > 0 &&
-      options.allowPermissionExpansion !== true
-    ) {
-      throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
-    }
+    /**
+     * 扩权闸门:按**传入时刻的**已装 manifest 判定。下面调用两次——
+     *  1. 锁外一次:快速失败,不为注定被拒的更新白下载几十 MB;
+     *  2. 落位前在 withGhostInstallLock 内再一次(权威):下载可能持续数分钟,
+     *     期间本地 `ghosts:update` 能整体替换已装 manifest。只在锁外判定的话,
+     *     旧的 reviewedBaseline 会放行相对**新** manifest 多出来的权限——
+     *     那些权限用户从没审过。锁内这次才是不可绕过的那道。
+     */
+    const assertExpansionApproved = (installedNow: GhostManifest | null): void => {
+      if (!installedNow) return;
+      if (diffGhostPermissionItems(installedNow, compatible.manifest).added.length === 0) return;
+      if (options.allowPermissionExpansion !== true) {
+        throwIpcError('PRECONDITION_FAILED', 'Plugin permissions changed and require review');
+      }
+      assertReviewedBaselineFresh(installedNow, options.reviewedBaseline);
+    };
+    assertExpansionApproved(existing?.manifest ?? null);
     const download = await this.api.download(plugin.id, plugin.currentRelease.id);
     requireSameMarketOwner(owner);
     if (
@@ -1119,6 +1175,14 @@ export class PluginMarketService {
           // 改动 Ghost 运行时之前的最后一道:跨来源 ghostId 所有权按当前事实重算。
           await options.recheckOwnership?.();
           requireSameMarketOwner(owner);
+          // 权限扩权的**权威**判定点:锁内按当前已装 manifest 重算。锁外那次
+          // 只是快速失败;下载窗口期本地装入/更新若换掉了已装包,旧批准在这里
+          // 被基线比对拦下,并发替换绕不过去(落位就在下面几行)。
+          assertExpansionApproved(
+            getGhostManager()
+              .list()
+              .find((ghost) => ghost.manifest.id === plugin.ghostId)?.manifest ?? null,
+          );
           // 市场首装一律装完即开(2026-07-26 定案,见 installOrUpdateMarketGhostPackage);
           // 已装过则走原位更新,唤醒/沉睡状态延续当前值。
           const installed = await installOrUpdateMarketGhostPackage(tempPath, {

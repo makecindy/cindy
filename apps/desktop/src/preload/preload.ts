@@ -1029,6 +1029,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
         expectedReleaseId: string;
         expectedManifest?: import('../shared/ghost').GhostManifest;
         allowPermissionExpansion?: boolean;
+        /** 扩权批准所依据的已装权限指纹;Main 在安装锁内复核后才放行扩权。 */
+        reviewedBaseline?: string;
       },
     ): Promise<{ ghost: import('../shared/ghost').InstalledGhost }> =>
       ipcRenderer.invoke('plugin-market:install', pluginId, options),

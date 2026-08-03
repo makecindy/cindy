@@ -19,6 +19,9 @@ import {
  * - Codex：shell 工具 toolName='exec'（input 无 description，`displayCommand`
  *   是解包 POSIX / PowerShell wrapper 后的展示命令）；MCP 为 `mcp:server:tool`，另有
  *   `dynamic:ns:tool` / `collab:tool` / `web_search`。
+ * - pi：内置工具名全小写（bash/read/edit/write/grep/find/ls），文件参数字段为
+ *   `path`（fileDescriptor 已双认 file_path/path）；bash 无 description 字段，
+ *   桥接 MCP 复用 Claude Code 的 `mcp__server__tool` 形态。
  */
 
 // ── 工具名拆解 ───────────────────────────────────────────────────────────────
@@ -161,6 +164,44 @@ export type ToolUseDescriptor =
     }
   | { kind: 'generic'; toolName: string; detail?: string };
 
+/** pi `edit` 的一段定向替换。 */
+export interface PiEditReplacement {
+  oldText: string;
+  newText: string;
+}
+
+/**
+ * 归一化 pi `edit` 工具的替换段。
+ *
+ * pi v0.83.0 的 `edit` 有**两种**入参形态，展示层必须都认（`edit.ts` 的
+ * `editSchema` 与 `LegacyEditToolInput` / `normalizeEditInput`）：
+ *  - 声明 schema（模型被要求产出的形态）：`{ path, edits: [{ oldText, newText }] }`；
+ *  - legacy 顶层单段：`{ path, oldText, newText }` —— pi 自己仍接受并归一化。
+ *
+ * 顺序与 pi 的 `normalizeEditInput` 对齐：先取 `edits[]`，再把顶层
+ * `oldText`/`newText`（两者都是字符串才认）作为**最后一段**追加。只认其中之一
+ * 会让另一种形态退化成空 diff 与 `+0 -0`。
+ */
+export function piEditReplacements(input: unknown): PiEditReplacement[] {
+  const inp = readRecord(input);
+  if (!inp) return [];
+  const out: PiEditReplacement[] = [];
+  if (Array.isArray(inp.edits)) {
+    for (const raw of inp.edits) {
+      const rec = readRecord(raw);
+      // 单段内只要有一侧是字符串就成段(另一侧按空串)，纯增/纯删才不会被丢掉。
+      const oldText = typeof rec?.oldText === 'string' ? rec.oldText : undefined;
+      const newText = typeof rec?.newText === 'string' ? rec.newText : undefined;
+      if (oldText === undefined && newText === undefined) continue;
+      out.push({ oldText: oldText ?? '', newText: newText ?? '' });
+    }
+  }
+  if (typeof inp.oldText === 'string' && typeof inp.newText === 'string') {
+    out.push({ oldText: inp.oldText, newText: inp.newText });
+  }
+  return out;
+}
+
 /** 下划线（含双下划线）转空格并收敛连续空白，得到可读的 token。 */
 export function humanizeToolToken(token: string): string {
   return token.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();
@@ -221,10 +262,13 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
   }
 
   switch (toolName) {
-    case 'Bash': {
+    // pi 内置 bash 与 Claude Code Bash 同构:input.command 必有,description
+    // 仅 CC 会填(pi schema 无此字段,自然走 intent 兜底),共用一条路径。
+    case 'Bash':
+    case 'bash': {
       const description = readNonEmptyString(inp?.description);
       const command = readNonEmptyString(inp?.command) ?? '';
-      // description 缺失（模型漏填 / codex exec 无此字段）才兜底算 intent。
+      // description 缺失（模型漏填 / pi bash 无此字段）才兜底算 intent。
       const intent = description ? undefined : commandIntentFromCommand(command);
       return {
         kind: 'command',
@@ -251,14 +295,24 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
     case 'file_change':
       return fileChangeDescriptor(toolName, inp);
     case 'Read':
+    case 'read':
+    // pi ls 目标是目录,读取语义与 read 同档;path 可缺省(默认当前目录),
+    // 缺省时 fileDescriptor 自然降级 generic。
+    case 'ls':
       return fileDescriptor(toolName, 'read', inp);
     case 'Edit':
     case 'MultiEdit':
+    case 'edit':
       return fileDescriptor(toolName, 'edit', inp);
     case 'Write':
+    case 'write':
       return fileDescriptor(toolName, 'create', inp);
+    // pi grep/find 与 CC Grep/Glob 同构:pattern 必有,path/glob 可选;
+    // find 的 pattern 是 glob 表达式,归 glob 模式。
     case 'Grep':
-    case 'Glob': {
+    case 'Glob':
+    case 'grep':
+    case 'find': {
       const pattern = readNonEmptyString(inp?.pattern);
       if (!pattern) return genericDescriptor(toolName, inp);
       const path = readNonEmptyString(inp?.path);
@@ -266,7 +320,7 @@ export function describeToolUse(toolName: string, input: unknown): ToolUseDescri
       return {
         kind: 'search',
         toolName,
-        mode: toolName === 'Grep' ? 'grep' : 'glob',
+        mode: toolName === 'Grep' || toolName === 'grep' ? 'grep' : 'glob',
         pattern,
         ...(path ? { path } : {}),
         ...(glob ? { glob } : {}),
