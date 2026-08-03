@@ -221,6 +221,92 @@ describe('Session per-turn origin 打标', () => {
     expect(seen.every((e) => e.turnOrigin === undefined)).toBe(true);
   });
 
+  it('带 runtime turnAttemptToken 的 send → 每个事件带同一 token,终态后清空', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((e) => seen.push({ ...e }));
+
+    await session.send('auto retry', { turnAttemptToken: 7 });
+    await emit({ type: 'text', data: { text: 'progress', isFinal: false } });
+    await emit({ type: 'done', data: {} });
+    await emit({ type: 'status', data: { isRunning: false } });
+
+    expect(seen.slice(0, 2).map((event) => event.turnAttemptToken)).toEqual([7, 7]);
+    expect(seen[2]?.turnAttemptToken).toBeUndefined();
+  });
+
+  it('terminal error 后先排空尾部，再允许新 attempt', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first', { turnAttemptToken: 1 });
+    await emit({ type: 'error', data: { message: 'first failed', isTerminal: true } });
+
+    await expect(session.send('second', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await emit({ type: 'done', data: { reason: 'first-tail' } });
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'error', data: { message: 'second failed', isTerminal: true } });
+
+    expect(seen.map((event) => event.type)).toEqual(['error', 'done', 'error']);
+    expect(seen[0]?.turnAttemptToken).toBe(1);
+    expect(seen[1]?.turnAttemptToken).toBeUndefined();
+    expect(seen[2]?.turnAttemptToken).toBe(2);
+  });
+
+  it('event loop crash emits a terminal error and closes the poisoned session', async () => {
+    let releaseCrash!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      releaseCrash = resolve;
+    });
+    let turnRunning = false;
+    const handle = {
+      id: 'crashing-handle',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      async send() {
+        turnRunning = true;
+      },
+      async steer() {},
+      async abort() {},
+      async close() {
+        turnRunning = false;
+      },
+      async *events() {
+        await crashReady;
+        throw new Error('event stream crashed');
+      },
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      setInteractionResolver() {},
+      isTurnRunning: () => turnRunning,
+    } as unknown as AgentSessionHandle;
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    await session.send('go', { turnAttemptToken: 1 });
+    releaseCrash();
+    await closed;
+
+    expect(seen.at(-1)).toEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(session.getStatus()).toBe('closed');
+  });
+
   it('多 listener 拿到同一份 origin', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);

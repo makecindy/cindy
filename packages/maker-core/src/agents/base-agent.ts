@@ -983,6 +983,8 @@ export interface SendOptions {
    * 共享 session 下区分自动任务 turn 与用户 turn。agent 子类不消费,透传无害。
    */
   origin?: SendOrigin;
+  /** Host-owned per-turn correlation copied onto every AgentEvent for lifecycle settlement. */
+  turnAttemptToken?: number;
   /**
    * Host-owned, per-turn permission policy. This is deliberately a callback
    * rather than prompt text: providers must enforce it at their pre-execution
