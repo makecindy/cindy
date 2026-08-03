@@ -68,6 +68,8 @@ describe('fileUrlToAbsPath / isLocalHtmlFileUrl', () => {
   it('rejects non-local file authorities', () => {
     expect(fileUrlToAbsPath('file://server/share/index.html')).toBeNull();
     expect(isLocalHtmlFileUrl('file://server/share/index.html')).toBe(false);
+    expect(fileUrlToAbsPath('file://localhost:8080/tmp/index.html')).toBeNull();
+    expect(isLocalHtmlFileUrl('file://localhost:8080/tmp/index.html')).toBe(false);
   });
 
   it('ignores hash/query when recovering the path', () => {

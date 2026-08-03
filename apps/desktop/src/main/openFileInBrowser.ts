@@ -36,6 +36,7 @@ export function resolveBrowserFileTarget(value: string): BrowserFileTarget | nul
   if (parsed.protocol !== 'file:') return null;
   if (parsed.username || parsed.password) return null;
   if (parsed.hostname && parsed.hostname !== 'localhost') return null;
+  if (parsed.port) return null;
 
   let filePath: string;
   try {

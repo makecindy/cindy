@@ -39,6 +39,7 @@ describe('resolveBrowserFileTarget', () => {
 
   it('rejects non-local file authorities and non-file URLs', () => {
     expect(resolveBrowserFileTarget('file://server/share/index.html')).toBeNull();
+    expect(resolveBrowserFileTarget('file://localhost:8080/tmp/index.html')).toBeNull();
     expect(resolveBrowserFileTarget('https://example.test/index.html')).toBeNull();
   });
 });
