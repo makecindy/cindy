@@ -2496,17 +2496,18 @@ function handleAgentIslandSessionClosedAfterCleanup(
 }
 
 function handleAgentIslandSessionStopped(
-  session: { id: string; getCurrentTurnId?: () => string | null },
+  session: string | { id: string; getCurrentTurnId?: () => string | null },
 ): void {
-  if (!shouldNotifyAgentIslandForSession(session.id)) return;
+  const sessionId = typeof session === 'string' ? session : session.id;
+  if (!shouldNotifyAgentIslandForSession(sessionId)) return;
   try {
     getAgentIslandService()?.handleSessionStopped(
-      session.id,
-      session.getCurrentTurnId?.() ?? null,
+      sessionId,
+      typeof session === 'string' ? null : (session.getCurrentTurnId?.() ?? null),
     );
   } catch (error) {
-    log.warn('Agent Island session stop update failed before provider abort', {
-      sessionId: session.id,
+    log.warn('Agent Island session stop update failed', {
+      sessionId,
       error: error instanceof Error ? error.message : String(error),
     });
   }
@@ -8000,6 +8001,32 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
     }
   };
 
+  /**
+   * Finalize an exact retry owner that never crossed vendor dispatch.
+   *
+   * Technical delivery failure surfaces the suppressed error once. Explicit user
+   * cancellation persists it without attention and closes the replacement Island
+   * lifecycle, so delayed provider tails cannot turn the cancelled retry into a
+   * false success. Both queued discard and persisted/pre-dispatch cancellation use
+   * this boundary; keeping the disposition here prevents those paths from drifting.
+   */
+  const finalizeUndispatchedClaimedRetry = (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    disposition: 'cancelled' | 'failed',
+  ): boolean => {
+    if (disposition === 'failed') {
+      return autoResumeBookkeeping.surfaceSuppressedErrorForRetry(sessionId, item.clientId);
+    }
+    const cancelledClaimedRetry = autoResumeBookkeeping.flushSuppressedErrorForRetry(
+      sessionId,
+      item.clientId,
+    );
+    if (!cancelledClaimedRetry) return false;
+    handleAgentIslandSessionStopped(getStableSessionForTurnBoundary(sessionId) ?? sessionId);
+    return true;
+  };
+
   const reconcileSessionTurnIdle = (sessionId: string, source: string): boolean => {
     const sess = getStableSessionForTurnBoundary(sessionId);
     if (!sess) return false;
@@ -8425,7 +8452,7 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       orcaInterAgentDispatcher.discardQueuedOrcaInterAgentAcceptedCallback(item.clientId);
       // 通用 discard 只做非打扰补落：Stop / clear / remove 不应复活旧错误；policy block
       // 已先经 onRejectedUserTurn surface，这里按 clientId 会安全 no-op。
-      autoResumeBookkeeping.flushSuppressedErrorForRetry(sessionId, item.clientId);
+      finalizeUndispatchedClaimedRetry(sessionId, item, 'cancelled');
       // 持久化中的项在这里被取消后不会再走 onUndispatchedUserTurn，复用同一结算出口。
       settleUndispatchedAutoResumeOutcome(sessionId, item);
       // 排队心跳被丢弃 → 通知 runner 按 aborted 收尾对应 run,不让 fire 永久挂起。
@@ -8502,10 +8529,13 @@ export function registerMakerIpc(maker: Maker, options: RegisterMakerIpcOptions)
       publishUiTurnDispatching(sessionId, item.clientId);
       return gitSnapshotCoordinator?.onTurnStart(sessionId);
     },
-    onUndispatchedUserTurn: (sessionId, item) => {
+    onUndispatchedUserTurn: (sessionId, item, disposition) => {
       // 目标轮落库了却没能 dispatch(取消 / 失败): 记账该立刻还回去, 而不是等超时。
       publishUiTurnUndispatched(sessionId, item.clientId);
       gitSnapshotCoordinator?.onTurnAbort(sessionId);
+      // persisted/pre-dispatch 与仍在队列的取消共用同一个 exact-owner 终局；技术失败
+      // 必须 surface，用户接管则进入 stopped，二者不能再靠调用路径隐式推断。
+      finalizeUndispatchedClaimedRetry(sessionId, item, disposition);
       // 自动续跑那条消息已落库、却最终没派出去 → 这次重连就是失败。**必须在这里钉死**:
       // 它不会产生任何 turn 事件,新加的终态结算路径够不到它,待确认记录于是悬空,被之后
       // 任何一个无关的 text / tool 事件误标成「已重新连接」(codex P1)。

@@ -327,10 +327,16 @@ export interface AgentInputCoordinatorDeps {
   beforeDispatchUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
    * Called when a user row crossed the persistence boundary but never reached
-   * vendor dispatch. Hosts use this to discard turn-start side effects that
-   * would otherwise be consumed by a later retry/turn.
+   * vendor dispatch. `cancelled` is an explicit user lifecycle boundary
+   * (Stop/remove/clear/new input); `failed` means the attempted delivery itself
+   * failed and remains user-visible. Hosts use this to finalize retry ownership
+   * and discard turn-start side effects that would otherwise leak into a later turn.
    */
-  onUndispatchedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
+  onUndispatchedUserTurn?: (
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    disposition: 'cancelled' | 'failed',
+  ) => void;
   /**
    * The delivery pipeline rejected this item for a technical/policy reason
    * before vendor dispatch. Unlike Stop/remove/clear, this is a real failed
@@ -2739,7 +2745,7 @@ export class AgentInputCoordinator {
         latest.activeTurn = null;
       }
       this.notifyRejectedUserTurn(sessionId, head);
-      this.notifyUndispatchedUserTurn(sessionId, head);
+      this.notifyUndispatchedUserTurn(sessionId, head, 'failed');
       this.emit(sessionId);
       // 派发边界刚刚放开,队里可能还压着别的消息 —— 用户那条路靠 clearError 顺带唤醒,
       // scheduler 这条没有人点,必须自己唤一次。
@@ -2813,7 +2819,11 @@ export class AgentInputCoordinator {
       result.kind === 'session-dispatch' &&
       result.reason === 'cancelled-before-dispatch';
     if (!cancelledByUserBoundary) this.notifyRejectedUserTurn(sessionId, item);
-    this.notifyUndispatchedUserTurn(sessionId, item);
+    this.notifyUndispatchedUserTurn(
+      sessionId,
+      item,
+      cancelledByUserBoundary ? 'cancelled' : 'failed',
+    );
     if (latest.queueAbortPending && result.kind === 'session-dispatch' && result.reason === 'cancelled-before-dispatch') {
       latest.queueAbortPending = false;
     }
@@ -3093,7 +3103,7 @@ export class AgentInputCoordinator {
       // 同 onTurnEvent / handleSendNotDispatched:scheduler 的 prompt 不留重试入口
       // (判据内建在 setActiveTurnRecovery,第十八轮 P1)。
       const schedulerOrigin = this.setActiveTurnRecovery(state, item) === 'dropped-scheduler';
-      this.notifyUndispatchedUserTurn(sessionId, item);
+      this.notifyUndispatchedUserTurn(sessionId, item, 'failed');
       log.warn(
         schedulerOrigin
           ? 'session closed before dispatch after persistence; dropped scheduler prompt (no user retry)'
@@ -3135,7 +3145,7 @@ export class AgentInputCoordinator {
     const item = active.item;
     if (!item) return;
     if (active.persisted) {
-      this.notifyUndispatchedUserTurn(sessionId, item);
+      this.notifyUndispatchedUserTurn(sessionId, item, 'cancelled');
       // 第六条终态路径(本轮自查补上,不是等 reviewer 报的):用户 Stop 赢在 pre-vendor
       // await 窗口。scheduler 的 prompt 同样不留重试入口 —— runner 会按 abort 收口这一轮,
       // 克隆重跑没有 FireContext 回调也不计 run 账(判据内建在 setActiveTurnRecovery)。
@@ -3639,9 +3649,13 @@ export class AgentInputCoordinator {
     if (!cancelledPrepared && (hadPendingTakeover || surfacedMessage)) this.emit(sessionId);
   }
 
-  private notifyUndispatchedUserTurn(sessionId: string, item: AgentInputQueuedMessage): void {
+  private notifyUndispatchedUserTurn(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+    disposition: 'cancelled' | 'failed',
+  ): void {
     try {
-      this.deps.onUndispatchedUserTurn?.(sessionId, item);
+      this.deps.onUndispatchedUserTurn?.(sessionId, item, disposition);
     } catch (err) {
       log.warn('onUndispatchedUserTurn failed', {
         sessionId,

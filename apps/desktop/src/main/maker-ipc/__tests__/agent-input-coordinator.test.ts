@@ -3216,7 +3216,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBe('turn/start failed');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('recovers a persisted turn when terminal error arrives before send resolves', async () => {
@@ -3360,7 +3360,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps a persisted ordinary send recoverable when a host failure is reported late', async () => {
@@ -3391,7 +3391,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('WORKDIR_MISSING');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps ordinary send DB writes linear while draining queued turns', async () => {
@@ -3453,7 +3453,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
     expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
 
     h.coordinator.resume(sid);
@@ -3625,7 +3625,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
 
     h.coordinator.resume(sid);
     await flush();
