@@ -783,6 +783,12 @@ export function AddProviderWizard({
               name: m.name,
               ...(contextWindow !== undefined ? { contextWindow } : {}),
               ...(presetModel?.supportsImageInput === true ? { supportsImageInput: true } : {}),
+              ...(presetModel?.reasoning === true && presetModel.reasoningEfforts?.length
+                ? {
+                    reasoning: true,
+                    reasoningEfforts: [...presetModel.reasoningEfforts],
+                  }
+                : {}),
             };
           });
         if (agentModels.length === 0) continue;

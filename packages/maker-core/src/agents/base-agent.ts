@@ -131,11 +131,15 @@ export type PiNativeApi =
   | 'openai-completions'
   | 'google-generative-ai';
 
+export type PiNativeThinkingLevel = Exclude<Effort, 'ultra'>;
+
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
+  thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;

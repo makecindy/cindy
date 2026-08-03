@@ -416,6 +416,7 @@ export class PiAgent extends BaseAgent {
           id: m.id,
           name: m.name ?? m.id,
           reasoning: m.reasoning ?? false,
+          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
           input: m.input ?? ['text'],
           contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
