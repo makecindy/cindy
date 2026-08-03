@@ -368,7 +368,8 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
       //     瞬时 408/429/5xx 每次都通知 turn 级试探性降级(先兜住当前 turn,避免 #1573
       //     的硬拒绝窗口),同时按 episode 阈值记账、持续故障才升级为会话级(见
       //     claude-auto-permission-fallback.ts);只在错误路径与「该会话有瞬时记账」的
-      //     成功路径解析 request body;不 tee/改写响应;
+      //     成功路径解析 request body;不 tee/改写响应;缺会话头 / id 反解失败这两类
+      //     漏检走限流 warn + 识别记账落到同一份 log(否则自救通道静默失效无线索);
       //   - 自定义供应商上游错误分类广播(status≥400 且会话路由到 user 供应商时才 tee,
       //     成功路径零开销;30s 节流,见 provider-upstream-error-observer)。
       responseObserver: composeResponseObservers(
@@ -380,8 +381,9 @@ export async function ensureAnthropicCompatProxyReady(): Promise<void> {
         createClaudeSessionActivityResponseObserver((sdkSessionId) =>
           _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null,
         ),
-        createClaudeAutoClassifierFailureObserver((sdkSessionId) =>
-          _resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null,
+        createClaudeAutoClassifierFailureObserver(
+          (sdkSessionId) => (_resolveCcSessionId ? _resolveCcSessionId(sdkSessionId) : null),
+          { logger: log },
         ),
         createProviderUpstreamErrorObserver({
           agent: 'claude-code',
