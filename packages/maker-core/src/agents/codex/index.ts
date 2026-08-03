@@ -3088,10 +3088,25 @@ export class CodexAgent extends BaseAgent {
     // 聚合逻辑在 subagent-live-cards.ts(纯函数、可单测),这里只负责把快照按 spawn 卡
     // 的同一 taskId 发成 agent_task_update —— 卡片本体与 Claude 子代理共用
     // AgentTaskCard,本改动只补 Codex 侧缺失的数据源,不新建 UI。
+    /**
+     * 正在发子代理卡帧 —— eventQueue.push 的探针据此跳过主 turn 存活判定。
+     * 只在同步的 emitSubagentCardUpdate 内为 true(见那里的注释)。
+     */
+    let emittingDescendantUpdate = false;
     const subagentLiveCards = createSubagentLiveCardTracker();
 
     const emitSubagentCardUpdate = (update: SubagentLiveCardUpdate): void => {
-      eventQueue.push({
+      // 子代理帧**不得**参与主 turn 的存活判定。eventQueue.push 上装了探针:每条事件都会刷新
+      // upstreamIdleLastEventAt + armUpstreamIdle(),并喂给 observeReconnectStallEvent ——
+      // 而 `agent_task_update` 正在 isReconnectRecoveryEvent 的白名单里(那对 Claude 的主线程
+      // Task 更新是对的,不能从白名单里删)。于是子线程一有进展就会重置主线程的静默计时、
+      // 清掉 reconnect deadline:主 turn 其实已经哑火,却因为子代理还在跑而永远检测不出来
+      // (review)。子线程有进展 ≠ 主 turn 已恢复。
+      //
+      // push 是同步的,所以这个标志在 set 与 clear 之间不会被别的事件穿插。
+      emittingDescendantUpdate = true;
+      try {
+        eventQueue.push({
         type: 'agent_task_update',
         data: {
           provider: 'codex',
@@ -3105,8 +3120,11 @@ export class CodexAgent extends BaseAgent {
             durationMs: update.durationMs,
           },
         },
-        source: 'codex',
-      });
+          source: 'codex',
+        });
+      } finally {
+        emittingDescendantUpdate = false;
+      }
     };
 
     const handleDescendantNotification = (
@@ -4872,10 +4890,14 @@ export class CodexAgent extends BaseAgent {
     // 装探针:此处仍远早于 handlers 注册(事件开始流动),不会漏掉任何一条。
     const rawEventQueuePush = eventQueue.push;
     eventQueue.push = (ev: AgentEvent): boolean => {
-      upstreamIdleLastEventType = ev.type;
-      upstreamIdleLastEventAt = Date.now();
-      armUpstreamIdle();
-      observeReconnectStallEvent(ev);
+      // 子代理卡帧只是"子线程有进展",不代表主 turn 还活着 —— 不参与静默计时与
+      // reconnect 恢复判定,否则主 turn 哑火时会被子代理的心跳一直掩盖(review)。
+      if (!emittingDescendantUpdate) {
+        upstreamIdleLastEventType = ev.type;
+        upstreamIdleLastEventAt = Date.now();
+        armUpstreamIdle();
+        observeReconnectStallEvent(ev);
+      }
       return rawEventQueuePush(ev);
     };
 

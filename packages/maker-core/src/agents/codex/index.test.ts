@@ -16787,6 +16787,60 @@ describe('CodexAgent reconnect-stall watchdog', () => {
     }
   });
 
+
+  it('子代理进展不算主 turn 恢复:reconnect deadline 照旧到点收口', async () => {
+    // eventQueue.push 的探针会刷新 upstreamIdleLastEventAt + armUpstreamIdle(),并把事件喂给
+    // observeReconnectStallEvent —— 而 `agent_task_update` 就在 isReconnectRecoveryEvent 的
+    // 白名单里(那对 Claude 主线程的 Task 更新是对的)。于是子线程一有进展就清掉 reconnect
+    // deadline:主 turn 其实已经哑火,却因为子代理还在跑而永远检测不出来(review)。
+    vi.useFakeTimers();
+    try {
+      const agent = new CodexAgent(createDeps());
+      const { handle, handlers, seen } = await startReconnectTurn(
+        agent,
+        'session-reconnect-descendant',
+      );
+      // spawn 登记必须发生在 reconnect 提示**之前**:itemStarted 是主线程事件,它本身就是
+      // 合法的主 turn 进展、会清掉 deadline(第一版测试把它放在后面,于是测的是"主线程事件
+      // 清了 deadline",而不是"子代理帧不该清")。
+      handlers.descendantThreadStarted?.({
+        thread: { id: 'child-1', parentThreadId: 'start-thread-id' },
+      } as never);
+      handlers.itemStarted?.({
+        threadId: 'start-thread-id',
+        turnId: 'turn-1',
+        item: { id: 'spawn-1', type: 'subAgentActivity', kind: 'started', agentThreadId: 'child-1', agentPath: '/scout' },
+      } as never);
+
+      emitReconnect(handlers, 1);
+
+      // 此后主线程一条事件都不发,只有子代理持续产出进展(每 30s 一次工具调用)。
+      for (let i = 0; i < 4; i += 1) {
+        await vi.advanceTimersByTimeAsync(30_000);
+        handlers.descendantNotification?.('child-1', 'item/started', {
+          threadId: 'child-1',
+          turnId: 'child-turn',
+          item: { id: `child-tool-${i}`, type: 'commandExecution' },
+        });
+      }
+
+      // 卡片确实在更新(证明子代理帧真的流过来了,不是测试没生效)。
+      expect(seen.filter((e) => e.type === 'agent_task_update').length).toBeGreaterThan(0);
+      // 关键:deadline 不被子代理帧续命,照旧到点收口。
+      await vi.advanceTimersByTimeAsync(RECONNECT_STALL_MS + 1);
+      expect(seen).toContainEqual(expect.objectContaining({
+        type: 'error',
+        data: expect.objectContaining({
+          reason: 'codex_reconnect_stalled',
+          isTerminal: true,
+        }),
+      }));
+      await handle.close();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('后续 2/5、3/5 只更新进度，不延长首次提示建立的总 deadline', async () => {
     vi.useFakeTimers();
     try {
