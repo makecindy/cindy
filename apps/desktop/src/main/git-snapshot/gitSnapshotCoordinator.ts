@@ -287,22 +287,26 @@ export class GitSnapshotCoordinator {
       });
     }
 
-    // 本轮**新出现**的被过滤路径(相对 turn-start 的 skipped 集合):这些文件
-    // 的本轮改动没有进任何快照,回退无法恢复它们——在链上补 gap 标记,让
-    // 覆盖本轮的回退降级为 conversation-only,而不是静默留下半截修改。
-    // 已知残余限制:整个 turn 期间都处于过滤范围的既存文件(两侧集合都有)
-    // 若被 Agent 修改,这里判不出来;完备方案需要给被过滤文件记指纹,留作
-    // 后续增强。
+    // 被过滤路径集合在本 turn 两端**不一致**时补 gap 标记,两个方向都算:
+    // - after 新增(Agent 写入 .env、生成超限文件):本轮改动没进快照;
+    // - baseline 消失(turn-start 时被过滤的文件本轮被缩小到可纳入或被删):
+    //   它在基线树里缺失,回退会把它删掉/改掉,而 turn-start 时的原始内容
+    //   从未被记录,无法恢复。
+    // 两侧都过滤(常驻 dirty 的过滤文件)不打 gap,否则文件回退会被永久
+    // 禁用;这留下的已知残余限制是「整轮处于过滤范围的既存文件被修改」,
+    // 完备方案需要给被过滤文件记指纹,留作后续增强。
     if (agentKind === 'codex' || agentKind === 'pi') {
       const baselineSkips = new Set(turnStart?.turnStartSkippedPaths ?? []);
-      const newlySkipped = result.skippedFiles
-        .map((file) => file.path)
-        .filter((skippedPath) => !baselineSkips.has(skippedPath));
-      if (newlySkipped.length > 0) {
+      const afterSkips = new Set(result.skippedFiles.map((file) => file.path));
+      const changedSkips = [
+        ...[...afterSkips].filter((skippedPath) => !baselineSkips.has(skippedPath)),
+        ...[...baselineSkips].filter((skippedPath) => !afterSkips.has(skippedPath)),
+      ];
+      if (changedSkips.length > 0) {
         this.deps.logger.warn('[git-snapshot] turn changes partially filtered', {
           sessionId,
           repoRoot,
-          skipped: newlySkipped.slice(0, 5),
+          skipped: changedSkips.slice(0, 5),
         });
         await this.createRewindBlockedMarker(
           sessionId,

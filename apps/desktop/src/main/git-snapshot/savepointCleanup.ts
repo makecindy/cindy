@@ -40,9 +40,12 @@ async function resolveSavepointRepoRoot(workingDir: string): Promise<string | nu
       gitExec(['rev-parse', '--git-dir'], workingDir),
       gitExec(['rev-parse', '--git-common-dir'], workingDir),
     ]);
+    // rev-parse 输出的相对路径以命令的 cwd(workingDir)为基准,与
+    // WorktreeManager.detectCwd 同口径;用 repoRoot 作基准会在子目录场景
+    // 下解析错。
     const isInsideWorktree =
-      path.resolve(repoRoot, gitDir.stdout.trim()) !==
-      path.resolve(repoRoot, commonDir.stdout.trim());
+      path.resolve(workingDir, gitDir.stdout.trim()) !==
+      path.resolve(workingDir, commonDir.stdout.trim());
     if (isInsideWorktree) return null;
     return repoRoot;
   } catch {

@@ -251,6 +251,27 @@ describe('GitSnapshotCoordinator', () => {
     });
   });
 
+  it('appends a rewind gap marker when a baseline-filtered path leaves the filter set', async () => {
+    // turn-start 时被过滤的文件(如 11MB untracked)本轮被缩小到可纳入快照:
+    // 基线树里没有它的原始内容,回退会删掉/覆盖它且无法恢复 → 必须打 gap。
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash1', ['big.bin']))
+        .mockResolvedValueOnce(savepointResult('hash2')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn changes were partially filtered',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
+  });
+
   it('does not append a gap marker for filtered paths that predate the turn', async () => {
     // session 全程躺着一个大文件/敏感文件(turn-start 与 after-edit 都 skip):
     // 不是本轮改动,不打 gap,否则常驻 dirty 的过滤文件会永久禁用文件回退。
