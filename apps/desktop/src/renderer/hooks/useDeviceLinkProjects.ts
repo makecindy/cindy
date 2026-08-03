@@ -41,6 +41,8 @@ export function toDeviceProjectOptions(
 /** 复用的空集合,免得每次取数都新建一个。 */
 const EMPTY_PATHS: ReadonlySet<string> = new Set<string>();
 
+export type DeviceLinkProjectsStatus = 'idle' | 'loading' | 'ready' | 'error';
+
 export function useDeviceLinkProjects(
   deviceId: string | null,
   deviceName: string | null,
@@ -48,6 +50,9 @@ export function useDeviceLinkProjects(
 ): {
   projects: FolderPickerOption[];
   loading: boolean;
+  status: DeviceLinkProjectsStatus;
+  error: string | null;
+  retry: () => void;
   removeProject: (option: FolderPickerOption) => Promise<void>;
 } {
   /**
@@ -61,7 +66,12 @@ export function useDeviceLinkProjects(
     deviceId: string | null;
     rows: ExistingRemoteProject[];
   }>({ deviceId: null, rows: [] });
-  const [loading, setLoading] = useState(false);
+  const [requestState, setRequestState] = useState<{
+    deviceId: string | null;
+    status: DeviceLinkProjectsStatus;
+    error: string | null;
+  }>({ deviceId: null, status: 'idle', error: null });
+  const [retryNonce, setRetryNonce] = useState(0);
   /**
    * loaded 的**同步**镜像。setState 的 updater 只在 React 处理这次更新时才跑,而删除失败后的恢复
    * 要在两次 await 之间就拿到「被移除的是哪一行、它原来在第几位」—— 从 updater 的副作用里取值会
@@ -168,8 +178,7 @@ export function useDeviceLinkProjects(
         if (tomb.size === 0) tombstonesRef.current.delete(ownerDeviceId);
       }
       const stillTombstoned = tombstonesRef.current.get(ownerDeviceId);
-      const drop = (path: string) =>
-        hiddenPaths.has(path) || stillTombstoned?.has(path) === true;
+      const drop = (path: string) => hiddenPaths.has(path) || stillTombstoned?.has(path) === true;
       commitRows(
         ownerDeviceId,
         list.some((row) => drop(row.path)) ? list.filter((row) => !drop(row.path)) : [...list],
@@ -184,7 +193,7 @@ export function useDeviceLinkProjects(
     // 本机(deviceId=null)不走隧道;picker 没打开时不取数,避免常驻首页时白拉。
     if (!enabled || !deviceId) {
       commitRows(deviceId, []);
-      setLoading(false);
+      setRequestState({ deviceId, status: 'idle', error: null });
       return;
     }
     let cancelled = false;
@@ -195,7 +204,7 @@ export function useDeviceLinkProjects(
     // deviceId 已经变成 B 而 rows 还是 A 的,于是加载窗口里会渲染出「标着 B 的 A 的项目」——
     // 用户此时选中就把 A 的路径发给 B,撞 path guard 或打开 B 上同名的无关目录。
     commitRows(deviceId, []);
-    setLoading(true);
+    setRequestState({ deviceId, status: 'loading', error: null });
     void loadDeviceLinkExistingProjects(deviceId)
       .then((list) => {
         if (cancelled || requestIdRef.current !== requestId) return;
@@ -203,138 +212,144 @@ export function useDeviceLinkProjects(
         // 点掉的行贴回去。以前靠删除路径自增 requestIdRef 作废取数来避免,但那个共享版本号会
         // 顺带把**别的设备**的取数误判成过期(见 requestIdRef 的说明),所以改成在这里过滤。
         // 墓碑(已成功删除但快照可能更旧)由 applySnapshot 一并扣掉。
-        applySnapshot(deviceId, issueSeq, list, pendingRemovalsRef.current.get(deviceId) ?? EMPTY_PATHS);
-        setLoading(false);
+        applySnapshot(
+          deviceId,
+          issueSeq,
+          list,
+          pendingRemovalsRef.current.get(deviceId) ?? EMPTY_PATHS,
+        );
+        setRequestState({ deviceId, status: 'ready', error: null });
       })
-      .catch(() => {
-        // 被控端离线 / 老版本没这个 channel → 空态里仍有「浏览文件夹」兜底。
+      .catch((error: unknown) => {
+        // 被控端离线、超时或老版本没这个 channel 都是读取失败；UI 显示错误与重试，
+        // 不得把它们当成对端权威返回的「没有项目」。
         if (cancelled || requestIdRef.current !== requestId) return;
         // **刻意不 commitRows([])**(Codex review 第 33 轮 P1)。这个 effect 开头已经把行设成了
-        // 「(这台设备, 空)」,所以失败时什么都不做,显示的就已经是空态 —— 再提交一次是冗余的,
+        // 「(这台设备, 空)」，失败由 requestState 单独表达；再提交空行是冗余的，
         // 而且会踩掉一个真实窗口:删除失败的兜底回读**在 effect 开头那次清空之后**才 apply,
         // 于是「回读刚带回一份好数据」与「本次取数瞬时失败(隧道抖动 / 超时)」可以同时成立。
         // 无条件清空会把那份刚被证明存在的列表抹成「没有项目」,直到用户再成功重开一次才恢复。
         // 归属正确性不依赖这里:effect 开头的清空已经保证当前行属于这台设备。
-        setLoading(false);
+        setRequestState({
+          deviceId,
+          status: 'error',
+          error: error instanceof Error ? error.message : String(error),
+        });
       });
     return () => {
       cancelled = true;
     };
-  }, [deviceId, enabled]);
+  }, [deviceId, enabled, retryNonce]);
 
-  const removeProject = useCallback(
-    async (option: FolderPickerOption) => {
-      const target = option.remoteDevice;
-      if (!target) return;
+  const removeProject = useCallback(async (option: FolderPickerOption) => {
+    const target = option.remoteDevice;
+    if (!target) return;
 
-      // 刻意**不动** requestIdRef(Greptile review):在途取数不会把刚乐观移除的行贴回来 ——
-      // 它落库前会减去下面这个 pending 集合。作废取数反而会误伤别的设备的取数,见 requestIdRef。
-      const devicePending =
-        pendingRemovalsRef.current.get(target.deviceId) ?? new Set<string>();
-      devicePending.add(option.path);
-      pendingRemovalsRef.current.set(target.deviceId, devicePending);
-      // 记下被移除的行与它原来的位置:两条恢复路径都要用(回读失败时按原序插回)。
-      // 从同步镜像读,不从 setState 的 updater 副作用读 —— 见 loadedRef 的说明。
-      // 归属不符就不动列表:那说明当前显示的已经是别的设备的行,乐观移除会改错列表。
-      const before = loadedRef.current.deviceId === target.deviceId ? loadedRef.current.rows : [];
-      const removedIndex = before.findIndex((row) => row.path === option.path);
-      const removedRow = removedIndex >= 0 ? before[removedIndex] : undefined;
-      if (removedIndex >= 0) {
-        commitRows(target.deviceId, [
-          ...before.slice(0, removedIndex),
-          ...before.slice(removedIndex + 1),
-        ]);
+    // 刻意**不动** requestIdRef(Greptile review):在途取数不会把刚乐观移除的行贴回来 ——
+    // 它落库前会减去下面这个 pending 集合。作废取数反而会误伤别的设备的取数,见 requestIdRef。
+    const devicePending = pendingRemovalsRef.current.get(target.deviceId) ?? new Set<string>();
+    devicePending.add(option.path);
+    pendingRemovalsRef.current.set(target.deviceId, devicePending);
+    // 记下被移除的行与它原来的位置:两条恢复路径都要用(回读失败时按原序插回)。
+    // 从同步镜像读,不从 setState 的 updater 副作用读 —— 见 loadedRef 的说明。
+    // 归属不符就不动列表:那说明当前显示的已经是别的设备的行,乐观移除会改错列表。
+    const before = loadedRef.current.deviceId === target.deviceId ? loadedRef.current.rows : [];
+    const removedIndex = before.findIndex((row) => row.path === option.path);
+    const removedRow = removedIndex >= 0 ? before[removedIndex] : undefined;
+    if (removedIndex >= 0) {
+      commitRows(target.deviceId, [
+        ...before.slice(0, removedIndex),
+        ...before.slice(removedIndex + 1),
+      ]);
+    }
+
+    /**
+     * 把乐观移除的那一行按原位插回。
+     *
+     * 「这次删除失败了,所以这一行该在」是一件**与快照版本无关的局部事实**,所以两种情况都用它:
+     *   ① 权威回读本身也失败(拿不到任何真相);
+     *   ② 回读拿到了快照,但它比已落库的更旧而被丢弃 —— 这一条是 seq gate 的代价:不补的话
+     *      并发失败删除就不再收敛(先回的那份快照隐藏了仍在飞的自己,后回的自己又被丢弃,
+     *      于是自己那一行永远回不来),而「并发失败删除必须各自收敛」是既有不变量。
+     *
+     * 刻意**不按取数版本号一刀切**:期间用户重开 picker / 切回本设备都会推进版本号,按它直接
+     * gate 会把这次恢复跳过,那一行就一直从选择器里消失(而它在对端还在)。自带存在性检查,
+     * 期间真有成功回读把它带回来了也不会插重。
+     *
+     * 但**必须尊重更新快照的否证**(Greptile review):上一轮为保住收敛性而在「回读被 seq gate
+     * 拒绝」时也走这里,那条路径当时只查设备归属与存在性 —— 于是当对端其实已经没有这个项目了
+     * (用户在对端删了 / 删除实际成功只是响应失败),更新的权威快照如实不含它,旧回读却仍能把它
+     * 插回选择器;用户选中就撞 path guard,或打开对端同名但无关的目录。
+     *
+     * 判据用**原始**快照集合而不是落库后的行,见 lastSnapshotPathsRef —— 落库会扣掉仍在飞的
+     * 乐观删除,拿它判会把「对端有、只是被 pending 过滤」也当成否证,直接废掉并发收敛。
+     */
+    const restoreRemovedRow = (readbackSeq?: number) => {
+      const restored = removedRow;
+      if (!restored) return;
+      // 按当前设备 gate:若请求还在飞时用户已切到别的设备,把 A 的行插进 B 的 rows 会被
+      // toDeviceProjectOptions 标成属于 B —— 选中它就把 A 的路径发给 B 了。这与「并发删除不能
+      // 互相取消」不冲突:设备身份只排除「已切走」,不排除同设备内的并发。
+      if (currentDeviceIdRef.current !== target.deviceId) return;
+      if (loadedRef.current.deviceId !== target.deviceId) return;
+      // 已有**更新**的权威快照,且它的原始列表里没有这一行 → 对端确实没有,不恢复。
+      if (readbackSeq !== undefined) {
+        const applied = appliedSeqRef.current.get(target.deviceId) ?? 0;
+        const snapshotPaths = lastSnapshotPathsRef.current.get(target.deviceId);
+        if (applied > readbackSeq && snapshotPaths && !snapshotPaths.has(restored.path)) return;
       }
+      // 删除其实已在对端成功过(墓碑)→ 同样不恢复,那一行不该再出现。
+      if (tombstonesRef.current.get(target.deviceId)?.has(restored.path)) return;
+      const current = loadedRef.current.rows;
+      if (current.some((row) => row.path === restored.path)) return;
+      const at =
+        removedIndex >= 0 && removedIndex <= current.length ? removedIndex : current.length;
+      commitRows(target.deviceId, [...current.slice(0, at), restored, ...current.slice(at)]);
+    };
 
-      /**
-       * 把乐观移除的那一行按原位插回。
-       *
-       * 「这次删除失败了,所以这一行该在」是一件**与快照版本无关的局部事实**,所以两种情况都用它:
-       *   ① 权威回读本身也失败(拿不到任何真相);
-       *   ② 回读拿到了快照,但它比已落库的更旧而被丢弃 —— 这一条是 seq gate 的代价:不补的话
-       *      并发失败删除就不再收敛(先回的那份快照隐藏了仍在飞的自己,后回的自己又被丢弃,
-       *      于是自己那一行永远回不来),而「并发失败删除必须各自收敛」是既有不变量。
-       *
-       * 刻意**不按取数版本号一刀切**:期间用户重开 picker / 切回本设备都会推进版本号,按它直接
-       * gate 会把这次恢复跳过,那一行就一直从选择器里消失(而它在对端还在)。自带存在性检查,
-       * 期间真有成功回读把它带回来了也不会插重。
-       *
-       * 但**必须尊重更新快照的否证**(Greptile review):上一轮为保住收敛性而在「回读被 seq gate
-       * 拒绝」时也走这里,那条路径当时只查设备归属与存在性 —— 于是当对端其实已经没有这个项目了
-       * (用户在对端删了 / 删除实际成功只是响应失败),更新的权威快照如实不含它,旧回读却仍能把它
-       * 插回选择器;用户选中就撞 path guard,或打开对端同名但无关的目录。
-       *
-       * 判据用**原始**快照集合而不是落库后的行,见 lastSnapshotPathsRef —— 落库会扣掉仍在飞的
-       * 乐观删除,拿它判会把「对端有、只是被 pending 过滤」也当成否证,直接废掉并发收敛。
-       */
-      const restoreRemovedRow = (readbackSeq?: number) => {
-        const restored = removedRow;
-        if (!restored) return;
-        // 按当前设备 gate:若请求还在飞时用户已切到别的设备,把 A 的行插进 B 的 rows 会被
-        // toDeviceProjectOptions 标成属于 B —— 选中它就把 A 的路径发给 B 了。这与「并发删除不能
-        // 互相取消」不冲突:设备身份只排除「已切走」,不排除同设备内的并发。
-        if (currentDeviceIdRef.current !== target.deviceId) return;
-        if (loadedRef.current.deviceId !== target.deviceId) return;
-        // 已有**更新**的权威快照,且它的原始列表里没有这一行 → 对端确实没有,不恢复。
-        if (readbackSeq !== undefined) {
-          const applied = appliedSeqRef.current.get(target.deviceId) ?? 0;
-          const snapshotPaths = lastSnapshotPathsRef.current.get(target.deviceId);
-          if (applied > readbackSeq && snapshotPaths && !snapshotPaths.has(restored.path)) return;
-        }
-        // 删除其实已在对端成功过(墓碑)→ 同样不恢复,那一行不该再出现。
-        if (tombstonesRef.current.get(target.deviceId)?.has(restored.path)) return;
-        const current = loadedRef.current.rows;
-        if (current.some((row) => row.path === restored.path)) return;
-        const at =
-          removedIndex >= 0 && removedIndex <= current.length ? removedIndex : current.length;
-        commitRows(target.deviceId, [...current.slice(0, at), restored, ...current.slice(at)]);
-      };
-
+    try {
+      await removeDeviceLinkExistingProject(target.deviceId, option.path);
+      // 删成了 → 立墓碑。此刻可能已有一次「A 还在」的旧回读在飞,它落库会把这一行显示回来,
+      // 而成功路径本身不再更新列表(行早就被乐观移除了)—— 墓碑就是那道防线,见 tombstonesRef。
+      const deviceTombstones =
+        tombstonesRef.current.get(target.deviceId) ?? new Map<string, number>();
+      deviceTombstones.set(option.path, fetchSeqRef.current);
+      tombstonesRef.current.set(target.deviceId, deviceTombstones);
+    } catch {
+      // 老被控端可能没有 remove channel。回读一次收敛到被控端真相,
+      // 而不是留下一个「本地看着删了、对端其实还在」的幻影删除。
+      // 同样不动 requestIdRef:晚到的 effect 取数即使覆盖这次回读也无害 —— 两者都是被控端
+      // 真相,且都会减去仍在飞的乐观删除,结果一致。作废它只会误伤新设备的取数。
+      const readbackSeq = ++fetchSeqRef.current;
       try {
-        await removeDeviceLinkExistingProject(target.deviceId, option.path);
-        // 删成了 → 立墓碑。此刻可能已有一次「A 还在」的旧回读在飞,它落库会把这一行显示回来,
-        // 而成功路径本身不再更新列表(行早就被乐观移除了)—— 墓碑就是那道防线,见 tombstonesRef。
-        const deviceTombstones =
-          tombstonesRef.current.get(target.deviceId) ?? new Map<string, number>();
-        deviceTombstones.set(option.path, fetchSeqRef.current);
-        tombstonesRef.current.set(target.deviceId, deviceTombstones);
-      } catch {
-        // 老被控端可能没有 remove channel。回读一次收敛到被控端真相,
-        // 而不是留下一个「本地看着删了、对端其实还在」的幻影删除。
-        // 同样不动 requestIdRef:晚到的 effect 取数即使覆盖这次回读也无害 —— 两者都是被控端
-        // 真相,且都会减去仍在飞的乐观删除,结果一致。作废它只会误伤新设备的取数。
-        const readbackSeq = ++fetchSeqRef.current;
-        try {
-          const list = await loadDeviceLinkExistingProjects(target.deviceId);
-          // gate 用**设备身份**:只要设备没切走,这份回读就是被控端真相,该应用。不用版本号 ——
-          // 并发删除会互相把对方的回读判成过期,那一行既没在对端删成、又没被恢复,会一直消失。
-          if (currentDeviceIdRef.current !== target.deviceId) return;
-          // 只减**这台设备上**其它仍在飞的乐观删除;不含自己 —— 这次删除失败了,真相里有它就该
-          // 显示回来。跨设备的 pending 不参与,否则同名路径会互相误伤。
-          const othersPending = new Set(
-            [...(pendingRemovalsRef.current.get(target.deviceId) ?? [])].filter(
-              (path) => path !== option.path,
-            ),
-          );
-          // 快照比已落库的更旧 → 被丢弃。此时仍要让自己那一行回来,否则并发失败删除不再收敛;
-          // 但要带上 readbackSeq,好让恢复尊重「更新快照已否证这一行」的情形(见 restoreRemovedRow)。
-          if (!applySnapshot(target.deviceId, readbackSeq, list, othersPending)) {
-            restoreRemovedRow(readbackSeq);
-          }
-        } catch {
-          // 回读也失败(对端离线 / 隧道断)。此时**必须把行放回去**:删除既没在对端生效,
-          // 权威列表也拿不到,保留乐观移除等于让选择器藏着一个远端仍然存在的项目,而且不给
-          // 任何提示 —— 用户只能靠重开 picker 才发现它还在。
-          restoreRemovedRow();
+        const list = await loadDeviceLinkExistingProjects(target.deviceId);
+        // gate 用**设备身份**:只要设备没切走,这份回读就是被控端真相,该应用。不用版本号 ——
+        // 并发删除会互相把对方的回读判成过期,那一行既没在对端删成、又没被恢复,会一直消失。
+        if (currentDeviceIdRef.current !== target.deviceId) return;
+        // 只减**这台设备上**其它仍在飞的乐观删除;不含自己 —— 这次删除失败了,真相里有它就该
+        // 显示回来。跨设备的 pending 不参与,否则同名路径会互相误伤。
+        const othersPending = new Set(
+          [...(pendingRemovalsRef.current.get(target.deviceId) ?? [])].filter(
+            (path) => path !== option.path,
+          ),
+        );
+        // 快照比已落库的更旧 → 被丢弃。此时仍要让自己那一行回来,否则并发失败删除不再收敛;
+        // 但要带上 readbackSeq,好让恢复尊重「更新快照已否证这一行」的情形(见 restoreRemovedRow)。
+        if (!applySnapshot(target.deviceId, readbackSeq, list, othersPending)) {
+          restoreRemovedRow(readbackSeq);
         }
-      } finally {
-        const set = pendingRemovalsRef.current.get(target.deviceId);
-        set?.delete(option.path);
-        if (set && set.size === 0) pendingRemovalsRef.current.delete(target.deviceId);
+      } catch {
+        // 回读也失败(对端离线 / 隧道断)。此时**必须把行放回去**:删除既没在对端生效,
+        // 权威列表也拿不到,保留乐观移除等于让选择器藏着一个远端仍然存在的项目,而且不给
+        // 任何提示 —— 用户只能靠重开 picker 才发现它还在。
+        restoreRemovedRow();
       }
-    },
-    [],
-  );
+    } finally {
+      const set = pendingRemovalsRef.current.get(target.deviceId);
+      set?.delete(option.path);
+      if (set && set.size === 0) pendingRemovalsRef.current.delete(target.deviceId);
+    }
+  }, []);
 
   /**
    * 归属必须相符才输出选项 —— 这是上面把 deviceId 绑进状态的唯一目的:切设备的那一帧
@@ -348,9 +363,27 @@ export function useDeviceLinkProjects(
     [deviceId, deviceName, loaded],
   );
 
-  // 归属还没对上就仍算「加载中」:否则切设备那一帧会闪一下「没有项目」的空态
-  // (loading 要等 effect 才置 true)。宁可多显示一帧 spinner。
-  const effectiveLoading = loading || (deviceId != null && loaded.deviceId !== deviceId);
+  // 归属还没对上 / picker 刚打开、effect 尚未执行时仍算「加载中」:否则切设备或首次打开
+  // 会闪一下「没有项目」的空态。状态与 deviceId 绑定，上一台的 error 也不会串到新设备。
+  const status: DeviceLinkProjectsStatus =
+    !enabled || !deviceId
+      ? 'idle'
+      : requestState.deviceId !== deviceId || requestState.status === 'idle'
+        ? 'loading'
+        : requestState.status;
+  const error = status === 'error' ? requestState.error : null;
+  const retry = useCallback(() => {
+    if (!enabled || !deviceId) return;
+    setRequestState({ deviceId, status: 'loading', error: null });
+    setRetryNonce((value) => value + 1);
+  }, [deviceId, enabled]);
 
-  return { projects, loading: effectiveLoading, removeProject };
+  return {
+    projects,
+    loading: status === 'loading',
+    status,
+    error,
+    retry,
+    removeProject,
+  };
 }

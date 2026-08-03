@@ -18,7 +18,9 @@ describe('classifyPiToolForAutoReview', () => {
   it('approves file writes inside the workspace, escalates outside or pathless', () => {
     expect(verdict('edit', { path: `${WS}/src/a.ts` })).toBe('auto-approve');
     expect(verdict('write', { path: `${WS}/README.md` })).toBe('auto-approve');
-    expect(verdict('write', { path: '/etc/hosts' })).toBe('prompt');
+    expect(verdict('write', { path: '/tmp/outside.txt' })).toBe('prompt');
+    // 系统目录写不交灰区 reviewer 静默裁决。
+    expect(verdict('write', { path: '/etc/hosts' })).toBe('prompt-each-time');
     expect(verdict('edit', {})).toBe('prompt');
   });
 
@@ -38,7 +40,9 @@ describe('classifyPiToolForAutoReview', () => {
     expect(verdict('bash', { command: 'sudo whoami' })).toBe('prompt-each-time');
     // Destructive but replaceable actions are gray: the current-model reviewer
     // should block or ask with the actual user intent instead of always interrupting.
-    expect(verdict('bash', { command: 'rm -rf /' })).toBe('prompt');
+    expect(verdict('bash', { command: 'rm -rf build' })).toBe('prompt');
+    // 区外/整根破坏是确定性红线。
+    expect(verdict('bash', { command: 'rm -rf /' })).toBe('prompt-each-time');
     // 入参缺失/非字符串 → 空命令 → 无法判定,升级
     expect(verdict('bash', {})).not.toBe('auto-approve');
   });

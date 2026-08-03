@@ -56,6 +56,10 @@ import { GoalIndicator } from '@/components/new-chat/GoalIndicator';
 import { PinnedPlanPanel } from '@/components/new-chat/PinnedPlanPanel';
 import { sessionsStore } from '@/lib/sessionsStore';
 import { useStopOrcaCollab } from './hooks/useStopOrcaCollab';
+import {
+  useWorkerProjection,
+  useWorkerProjectionOwner,
+} from './hooks/workerProjectionStore';
 import { CreateWorkerPopover, type CreateWorkerForm } from './CreateWorkerPopover';
 import { createWorkerLabel } from './workerLabel';
 import { TakeoverMask } from '@/components/new-chat/TakeoverMask';
@@ -103,8 +107,11 @@ import { SessionContentHeaderRegistration } from './SessionContentHeader';
 import { useSessionBinding } from '@/hooks/useSessionBinding';
 import { useVendorAuthGate } from '@/hooks/useVendorAuthGate';
 import { useProviders } from '@/hooks/useProviders';
+import { useAuth } from '@/contexts/AuthContext';
+import { canAccessBillingSettings } from '@/components/settings/billingVisibility';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { useAgentCapabilities } from '@/hooks/useAgentCapabilities';
+import { useLiveErrorSourceProvider } from '@/hooks/useLiveErrorSourceProvider';
 import { resolveFastSupported } from '@/lib/providerModels';
 import { useRemoteSessionSync } from '@/features/cc-agent/hooks/useRemoteSessionSync';
 import {
@@ -407,17 +414,24 @@ function RightSidebarSessionIdRegistration({
 function RightSidebarWorkdirRegistration({
   workdir,
   remoteHostId,
+  deviceLinkDeviceId,
   declare,
 }: {
   workdir: string;
   /** 非空 = SSH remote 会话(workdir 为远端路径);plugin 据此走远端 file-service。 */
   remoteHostId: string | null;
-  declare: (workdir: string, remoteHostId?: string | null) => void;
+  /** device-link 会话归属：null = 已确认本机，undefined = 尚未解析。 */
+  deviceLinkDeviceId?: string | null;
+  declare: (
+    workdir: string,
+    remoteHostId?: string | null,
+    deviceLinkDeviceId?: string | null,
+  ) => void;
 }) {
   useLayoutEffect(() => {
-    declare(workdir, remoteHostId);
-    return () => declare('');
-  }, [workdir, remoteHostId, declare]);
+    declare(workdir, remoteHostId, deviceLinkDeviceId);
+    return () => declare('', null, undefined);
+  }, [workdir, remoteHostId, deviceLinkDeviceId, declare]);
   return null;
 }
 
@@ -496,7 +510,11 @@ export function CCAgentSessionView({
       sessionId: string | null,
       opts?: { initialCollapsed?: boolean; writeInitialCollapsedRecord?: boolean },
     ) => void;
-    setRightSidebarWorkdir?: (workdir: string) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
   const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
@@ -691,6 +709,10 @@ export function CCAgentSessionView({
     () => (sessionId ? getStickySessionDeviceId(sessionId) : undefined),
     [sessionId, remoteProjectSessions],
   );
+  // 右栏本地-only 能力需要区分三态：字符串=远端、null=已确认本机、undefined=归属尚未解析。
+  // 冷启动 / bootstrap 竞态期间宁可暂时禁用系统文件打开，也不能把被控端 file:// 交给控制端。
+  const rightSidebarDeviceLinkDeviceId =
+    remoteDeviceId ?? session?.deviceLinkDeviceId ?? (session ? null : undefined);
   // device-link 远程会话:重 topic 订阅(含 WS 重连 / 被控端回在线时重建)+ 消息对账触发
   // (重连 / presence / turn 结束 / 窗口聚焦 / 手动)。修「控制端丢消息」—— 以被控端为准重新同步。
   // 本机会话(remoteDeviceId 为 undefined)整体 no-op。resync 供连接 banner 的「重新同步」按钮用。
@@ -1201,6 +1223,7 @@ export function CCAgentSessionView({
     loadOlderMessages,
     isLoadingMore,
     hasMoreMessages,
+    historyWindowHasIsland,
     pendingPermission,
     respondToPermission,
     pendingAskUser,
@@ -1255,6 +1278,7 @@ export function CCAgentSessionView({
   // 与模型选择器同源(见下方 M35 vendor fallback effect)。本地 IPC 极快返回,有模块级缓存。
   // device-link 远程会话用被控端经隧道带来的 providers(per-provider,fast 判定与本地同口径)。
   const { providers: localProviders } = useProviders();
+  const { mode: authMode, user: authUser } = useAuth();
   const { providers: deviceProviders } = useDeviceProviders(remoteDeviceId);
   const providers = remoteDeviceId ? deviceProviders : localProviders;
   const canSwitchToClaudeSubscription = useMemo(() => {
@@ -1278,6 +1302,25 @@ export function CCAgentSessionView({
     session?.model,
     session?.remoteHostId,
   ]);
+  /**
+   * 余额不足横幅的「查看余额」出口 —— 只在计费面对当前账号可见时提供（cloud +
+   * personal，与设置页「用量和计费」同一判据）。org / local / 未登录账号在 Cindy 里
+   * 没有余额页可跳，此时不传回调，ErrorBanner 会保持原样文案、不加按钮。
+   */
+  const canAccessBilling = canAccessBillingSettings({
+    mode: authMode,
+    membershipKind: authUser?.membershipKind ?? null,
+  });
+  const handleViewBalance = useCallback(() => {
+    navigate('/settings?tab=billing');
+  }, [navigate]);
+  // live 错误的来源 provider 快照:错误出现时取值、任务切换时重置、错误存续期间
+  // 切 provider 不跟随。语义与边界条件见 useLiveErrorSourceProvider 头注释。
+  const liveErrorSourceProviderId = useLiveErrorSourceProvider(
+    error,
+    sessionId,
+    session?.providerId ?? null,
+  );
   // 该会话 agent 的能力(agent 级 hasFastMode + 旧被控端拍平回退用 availableModels);按 remoteDeviceId 作用域。
   const { capabilities: sessionCaps } = useAgentCapabilities(displayAgentKind, remoteDeviceId);
   // 这里曾有 useErrorReadAck:ErrorBanner 在视图内聚焦驻留 1.5s 即 explicit 清红点。
@@ -1884,12 +1927,12 @@ export function CCAgentSessionView({
   // remote-forward 直连本机 MCP bridge、worker 创建继承 remoteHostId;device-link 会话的
   // Lead / Worker / team 真身都在被控端,enableOrca 与团队读写经隧道路由过去 ——
   // 三类都已接通,不再按 agent 或远端形态限流。
-  // 注意:doc rail (isCompactRail) 也允许显示 toggle —— WorkdirBrowseRoute 已经
+  // 注意:doc rail (isCompactRail) 也允许显示协同菜单项 —— WorkdirBrowseRoute 已经
   // 针对 Lead session 接入了 OrcaSplitView toggle 布局,普通 session 必须能从
-  // ChatInput 工具行启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
-  // 工具行同时传 denseToolbar=true,协同 pill 自动收成 icon-only,窄 rail 视觉 OK。
+  // ChatInput「+」菜单启用协同变成 Lead,否则 doc 模式下首次开启入口完全没有。
+  const collabWorkspaceKind = session?.workspaceKind;
   const collabEntry = resolveCollabEntryPolicy({
-    workspaceKind: session?.workspaceKind,
+    workspaceKind: collabWorkspaceKind,
     workingDir: session?.workingDir,
     orcaRole: session?.orcaRole,
     remoteHostId: session?.remoteHostId,
@@ -1899,6 +1942,7 @@ export function CCAgentSessionView({
   });
   const collabPolicyEligible = !orcaMode && collabEntry.eligible;
   const collabPolicy = useCollabProjectPolicy(session?.workingDir, collabPolicyEligible, {
+    workspaceKind: collabWorkspaceKind,
     // SSH 远端会话的 workingDir 是远端主机路径, 跳过项目级查询; 用户级/全局级 collab
     // 开关仍生效 (与 main 侧 remote 分支同口径)。
     skipQuery: collabEntry.skipProjectQuery,
@@ -1910,23 +1954,17 @@ export function CCAgentSessionView({
   const allowCollabToggle = !orcaMode && collabPolicyEligible;
   // 把 sessionId 抽出来给 useEffect 用 (linter 偏好稳定的标量依赖)
   const collabSessionId = sessionId;
+  const collabProjectionLeadId = collabEnabled ? collabSessionId : undefined;
+  useWorkerProjectionOwner(collabProjectionLeadId);
+  const collabWorkerProjection = useWorkerProjection(collabProjectionLeadId);
   useEffect(() => {
-    if (!collabSessionId || !collabEnabled) return;
-    let cancelled = false;
-    void orcaWorkflowsFor(collabSessionId)
-      .listWorkersByLead(collabSessionId)
-      .then((workers) => {
-        if (cancelled || workers.length === 0) return;
-        const activeWorker = workers[0]; // MVP: 假设最多 1 个 active Worker
-        // orca worker 创建面未开 pi;万一读到脏值也按 codex 收敛,不撑开 toggle 契约。
-        const normalizedKind = normalizeDbAgentKind(activeWorker.session?.agentKind);
-        setCollabWorker(normalizedKind === 'cc' ? 'cc' : 'codex');
-      })
-      .catch(() => undefined);
-    return () => {
-      cancelled = true;
-    };
-  }, [collabSessionId, collabEnabled]);
+    if (!collabProjectionLeadId) return;
+    const activeWorker = collabWorkerProjection.workers[0]; // MVP: 假设最多 1 个 active Worker
+    if (!activeWorker) return;
+    // orca worker 创建面未开 pi;万一读到脏值也按 codex 收敛,不撑开 toggle 契约。
+    const normalizedKind = normalizeDbAgentKind(activeWorker.agent);
+    setCollabWorker(normalizedKind === 'cc' ? 'cc' : 'codex');
+  }, [collabProjectionLeadId, collabWorkerProjection.workers]);
 
   // F-COLLAB: "外部触发" 协同状态变化时自动打开协同 tab (典型场景: MCP team
   // 工具, 未来也覆盖飞书等其它入口)。
@@ -1972,7 +2010,7 @@ export function CCAgentSessionView({
   // navigate 触发条件:仅兼容 orca route 仍在场时需要跳回单 session 路由。
   // doc 模式 (isCompactRail=true) 下 OrcaSplitView 把 Lead pane 渲染为
   // <CCAgentSessionView ... orcaMode compact />,orcaMode 这里只是表"在 split-pane 里"的语义标,
-  // 不能当 navigate 判据 —— 否则用户在 doc rail 工具行点协同 pill 关协同会跳出 doc 模式。
+  // 不能当 navigate 判据 —— 否则用户在 doc rail 的「+」菜单关闭协同会跳出 doc 模式。
   // disableOrca 后 lead.orcaRole 被清掉,WorkdirBrowseRoute 的 isOrcaLeadSession 自动 fallback
   // 到单 CCAgentSessionView,留在 doc 模式即可。
   const { requestStop: requestStopCollab } = useStopOrcaCollab({
@@ -3081,6 +3119,7 @@ export function CCAgentSessionView({
         <RightSidebarWorkdirRegistration
           workdir={session?.workingDir ?? ''}
           remoteHostId={session?.remoteHostId ?? null}
+          deviceLinkDeviceId={rightSidebarDeviceLinkDeviceId}
           declare={setRightSidebarWorkdir}
         />
       )}
@@ -3164,16 +3203,19 @@ export function CCAgentSessionView({
           </div>
         )}
 
-        {/* device-link 远程会话状态 banner:断链重连 / 被控离线时提示 + 重新同步(以被控端为准重拉对账)。
-          suspect-stall(链路在线但本轮久未更新且核实不到被控端)优先 —— 它可能在 connected 时触发,
-          额外给「结束本轮」手动收尾。connected / local 且无 stall 时不渲染。 */}
+        {/* device-link 远程会话状态 banner:断链重连 / 被控离线 / 通路不稳定(degraded,弱网熔断)
+          时提示 + 重新同步(以被控端为准重拉对账)。suspect-stall(链路在线但本轮久未更新且核实
+          不到被控端)优先 —— 它可能在 connected 时触发,额外给「结束本轮」手动收尾。
+          connected / local 且无 stall 时不渲染。 */}
         {remoteSync.suspectStall ? (
           <RemoteSessionBanner
             status="suspect-stall"
             onResync={remoteSync.resync}
             onFinalize={remoteSync.forceFinalize}
           />
-        ) : remoteConn === 'reconnecting' || remoteConn === 'host-offline' ? (
+        ) : remoteConn === 'reconnecting' ||
+          remoteConn === 'host-offline' ||
+          remoteConn === 'degraded' ? (
           <RemoteSessionBanner
             status={remoteConn}
             issue={remoteLinkIssue}
@@ -3329,6 +3371,8 @@ export function CCAgentSessionView({
                   deviceLinkDeviceId={remoteDeviceId}
                   modelId={session?.model}
                   providerId={session?.providerId}
+                  onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                  errorSourceProviderId={errorTailMsg?.errorProviderId ?? null}
                   onSwitchToClaudeSubscription={
                     canSwitchToClaudeSubscription
                       ? handleSwitchToClaudeSubscription
@@ -3382,6 +3426,8 @@ export function CCAgentSessionView({
                 onSwitchToClaudeSubscription={
                   canSwitchToClaudeSubscription ? handleSwitchToClaudeSubscription : undefined
                 }
+                onViewBalance={canAccessBilling ? handleViewBalance : undefined}
+                errorSourceProviderId={liveErrorSourceProviderId}
                 silentEncryptedRetryEnabled={silentEncryptedRetryEnabled}
                 onForkStripEncrypted={ownsWindowRoute ? handleForkStripEncrypted : undefined}
                 forkStripEncryptedRunning={forkStripEncryptedRunning}
@@ -3527,9 +3573,13 @@ export function CCAgentSessionView({
                  胶囊的悬停浮层向上展开,会盖住交互卡内容(条件集与下方 ternary
                  的静默判定保持一致)。 */}
               <PinnedPlanPanel
+                sessionId={sessionId ?? null}
                 messages={messages}
                 animated={isStreaming}
                 width={inputWidth}
+                taskHistoryMayBeIncomplete={
+                  !historyLoaded || hasMoreMessages || historyWindowHasIsland
+                }
                 visible={!(
                   pendingPlanReview ||
                   pendingPermission ||
@@ -3620,21 +3670,18 @@ export function CCAgentSessionView({
                   extraDirs={session?.extraDirs ?? []}
                   onExtraDirsChange={handleExtraDirsChange}
                   compactToolbar={compactToolbar}
-                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把
-                  // 字号/控件压一档,同时让协同 toggle 只剩 logo。
+                  // doc rail (isCompactRail) 宽度受限 + 拖宽上限,工具行需要把字号/控件压一档。
                   denseToolbar={isCompactRail}
                   // doc 模式右栏:不抢焦点,避免 TipTap contenteditable 激活
                   // Windows 中文 IME 后,Ctrl+Shift+F 等组合键被 OS 层吞掉。
                   // 详见 ChatInput 的 disableAutofocus prop 注释。
                   disableAutofocus={isCompactRail}
                   focusOnStorageKeyChange={ownsRoute}
-                  // F-COLLAB: 协同模式 toggle。在以下场景渲染:
-                  // - 普通主会话视图 (含 doc rail) 的 Claude / Codex 项目会话,本地 /
-                  //   SSH 远端 / device-link 被控端三类都算(判定见 collabEntry)。
-                  // 排除 worker 子会话(worker 自己不能再开协同)与对话模式(无项目目录)。
-                  // orcaMode 路由下 toggle 也保留显示 — ON 态的 orange pill 本身就是
+                  // F-COLLAB:「+」菜单里的协同模式项。普通 Lead 的项目/对话会话都渲染,
+                  // 项目级与用户级策略范围由 collabEntry 决定;只排除 Worker 子会话
+                  // (worker 自己不能再开协同)。
+                  // orcaMode 路由下也保留显示 — ON 态菜单项本身就是
                   // 关闭按钮 (点击触发 onChange({enabled:false}),走 requestStopCollab)。
-                  // doc rail 的 denseToolbar=true 会把 pill 收成 icon-only 形态。
                   collaboration={
                     allowCollabToggle || (orcaMode && collabEnabled)
                       ? {

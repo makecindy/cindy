@@ -65,6 +65,7 @@ describe('messageAttachmentPayload', () => {
         type: 'image',
         path: 'xdt-image://session/shot.png',
         mimeType: 'image/png',
+        originalName: 'original.png',
       },
     ]);
   });
@@ -94,6 +95,7 @@ describe('messageAttachmentPayload', () => {
         type: 'image',
         base64: 'inline-image',
         mimeType: 'image/png',
+        originalName: 'fallback.png',
       },
     ]);
   });
@@ -116,7 +118,7 @@ describe('messageAttachmentPayload', () => {
       type: 'user',
       content: [
         { type: 'text', text: 'read it' },
-        { type: 'file', path: pdfPath, mimeType: 'application/pdf' },
+        { type: 'file', path: pdfPath, mimeType: 'application/pdf', originalName: 'doc.pdf' },
       ],
     });
   });
@@ -147,7 +149,13 @@ describe('messageAttachmentPayload', () => {
       type: 'user',
       content: [
         { type: 'text', text: 'inspect gif' },
-        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif', originalPath: gifPath },
+        {
+          type: 'file',
+          path: 'xdt-image://session/clip.gif',
+          mimeType: 'image/gif',
+          originalName: 'clip.gif',
+          originalPath: gifPath,
+        },
       ],
     });
   });
@@ -170,7 +178,12 @@ describe('messageAttachmentPayload', () => {
       type: 'user',
       content: [
         { type: 'text', text: 'summarize video' },
-        { type: 'file', path: videoPath, mimeType: 'video/mp4' },
+        {
+          type: 'file',
+          path: videoPath,
+          mimeType: 'video/mp4',
+          originalName: 'recording.mp4',
+        },
       ],
     });
   });

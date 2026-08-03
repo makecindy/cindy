@@ -1,23 +1,47 @@
 // @vitest-environment jsdom
 
-import { act, renderHook, waitFor } from '@testing-library/react';
+import { act, cleanup, renderHook, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   listWorkersByLead: vi.fn(),
+  listWorkersByLeads: vi.fn(),
   getCollaborationSettings: vi.fn(),
   subscribeOrcaWorkerChanged: vi.fn(),
+  isRemoteSessionSticky: vi.fn(),
 }));
 
 vi.mock('@/lib/makerTransport', () => ({
+  isRemoteSessionSticky: (leadSessionId: string) => mocks.isRemoteSessionSticky(leadSessionId),
   orcaWorkflowsFor: (leadSessionId: string) => ({
     listWorkersByLead: (...args: unknown[]) => mocks.listWorkersByLead(leadSessionId, ...args),
     getCollaborationSettings: () => mocks.getCollaborationSettings(leadSessionId),
   }),
+  orcaWorkflowsForDevice: (deviceId: string) => ({
+    listWorkersByLead: (...args: unknown[]) => mocks.listWorkersByLead(deviceId, ...args),
+    getCollaborationSettings: () => mocks.getCollaborationSettings(deviceId),
+  }),
   subscribeOrcaWorkerChanged: mocks.subscribeOrcaWorkerChanged,
 }));
 
+import type { Session } from '@/lib/ccAgent.types';
+import { useOrcaLeadWorkerMap } from '../useOrcaLeadWorkerMap';
+import {
+  useOrcaWorkerAttentionByLeadIds,
+  useOrcaWorkerAttentionWatcher,
+} from '../useOrcaWorkerAttentionWatcher';
 import { clearWorkersCache, useWorkers } from '../useWorkers';
+import {
+  __getWorkerProjectionOwnerCountForTest,
+  __setWorkerProjectionCoalesceMsForTest,
+  retainWorkerProjection,
+  revalidateActiveWorkerSettings,
+  revalidateActiveWorkersProjection,
+} from '../workerProjectionStore';
+import {
+  __getWorkerAttentionSnapshotForTest,
+  __resetWorkerAttentionStoreForTest,
+} from '../../lib/workerAttentionStore';
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -26,8 +50,6 @@ function deferred<T>() {
   });
   return { promise, resolve };
 }
-
-const flushAsyncUpdates = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
 
 function workerRecord(
   workerId: string,
@@ -51,214 +73,459 @@ function workerRecord(
   };
 }
 
-describe('useWorkers', () => {
+function leadSession(id: string): Session {
+  return { id, orcaRole: 'lead' } as Session;
+}
+
+describe('useWorkers / worker projection store', () => {
+  let callbacks: Map<string, () => void>;
+
   beforeEach(() => {
     clearWorkersCache();
     vi.clearAllMocks();
+    vi.useRealTimers();
+    __setWorkerProjectionCoalesceMsForTest(100);
+    __resetWorkerAttentionStoreForTest();
+    callbacks = new Map();
+    mocks.isRemoteSessionSticky.mockReturnValue(false);
     mocks.listWorkersByLead.mockResolvedValue([workerRecord('worker-a', 'session-a', true)]);
+    mocks.listWorkersByLeads.mockImplementation(async (leadSessionIds: string[]) =>
+      Object.fromEntries(
+        leadSessionIds.map((leadSessionId) => [
+          leadSessionId,
+          [workerRecord(`worker-${leadSessionId}`, `session-${leadSessionId}`, true)],
+        ]),
+      ),
+    );
     mocks.getCollaborationSettings.mockResolvedValue({
       workerSoftLimit: 3,
       workerHardLimit: 6,
     });
-    mocks.subscribeOrcaWorkerChanged.mockReturnValue(() => undefined);
+    mocks.subscribeOrcaWorkerChanged.mockImplementation((leadSessionId: string, cb: () => void) => {
+      callbacks.set(leadSessionId, cb);
+      return () => callbacks.delete(leadSessionId);
+    });
+    (window as unknown as {
+      electronAPI: {
+        localDb: {
+          orcaWorkflows: {
+            listWorkersByLead: typeof mocks.listWorkersByLead;
+            listWorkersByLeads: typeof mocks.listWorkersByLeads;
+          };
+        };
+      };
+    }).electronAPI = {
+      localDb: {
+        orcaWorkflows: {
+          listWorkersByLead: mocks.listWorkersByLead,
+          listWorkersByLeads: mocks.listWorkersByLeads,
+        },
+      },
+    };
   });
 
   afterEach(() => {
+    cleanup();
     act(() => clearWorkersCache());
+    __resetWorkerAttentionStoreForTest();
+    vi.useRealTimers();
   });
 
-  it('caches the worker snapshot so remount starts with the previous list instead of an empty frame', async () => {
-    const first = renderHook(() => useWorkers('lead-1'));
+  it('hydrates local N lead projections through one batch IPC', async () => {
+    const sessions = [leadSession('lead-1'), leadSession('lead-2')];
+    const hook = renderHook(() => useOrcaLeadWorkerMap(sessions));
 
-    expect(first.result.current.workers).toEqual([]);
     await waitFor(() => {
-      expect(first.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-a']);
+      expect(Array.from(hook.result.current.get('lead-1') ?? [])).toEqual(['session-lead-1']);
+      expect(Array.from(hook.result.current.get('lead-2') ?? [])).toEqual(['session-lead-2']);
     });
-    await waitFor(() => {
-      expect(first.result.current.softLimit).toBe(3);
-      expect(first.result.current.hardLimit).toBe(6);
-    });
-    first.unmount();
 
-    mocks.listWorkersByLead.mockClear();
-    mocks.getCollaborationSettings.mockClear();
-    const second = renderHook(() => useWorkers('lead-1'));
-
-    expect(second.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-a']);
-    expect(second.result.current.focusedWorker?.sessionId).toBe('session-a');
-    expect(second.result.current.softLimit).toBe(3);
-    expect(second.result.current.hardLimit).toBe(6);
-    await waitFor(() => {
-      expect(mocks.listWorkersByLead).toHaveBeenCalledOnce();
-      expect(mocks.getCollaborationSettings).toHaveBeenCalledOnce();
-    });
-    second.unmount();
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1);
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledWith(['lead-1', 'lead-2']);
+    expect(mocks.listWorkersByLead).not.toHaveBeenCalled();
   });
 
-  it('keeps terminal workers occupying hard-limit slots across remounts', async () => {
-    mocks.listWorkersByLead.mockResolvedValue([
-      workerRecord('worker-a', 'session-a', true, 'running'),
-      workerRecord('worker-b', 'session-b', false, 'done'),
-      workerRecord('worker-c', 'session-c', false, 'error'),
-    ]);
-    mocks.getCollaborationSettings.mockResolvedValue({
-      workerSoftLimit: 2,
-      workerHardLimit: 3,
+  it('keeps projection owners when the lead collection is only reordered', async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(({ sessions }) => useOrcaLeadWorkerMap(sessions), {
+      initialProps: { sessions: [leadSession('lead-1'), leadSession('lead-2')] },
     });
-    const first = renderHook(() => useWorkers('lead-1'));
-
-    await waitFor(() => {
-      expect(first.result.current.activeWorkerCount).toBe(3);
-      expect(first.result.current.hardLimit).toBe(3);
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
     });
-    first.unmount();
+    expect(hook.result.current.get('lead-1')?.has('session-lead-1')).toBe(true);
+    expect(hook.result.current.get('lead-2')?.has('session-lead-2')).toBe(true);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-1')).toBe(1);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-2')).toBe(1);
 
-    mocks.listWorkersByLead.mockClear();
-    mocks.getCollaborationSettings.mockClear();
-    const remount = renderHook(() => useWorkers('lead-1'));
-
-    expect(remount.result.current.activeWorkerCount).toBe(3);
-    expect(remount.result.current.hardLimit).toBe(3);
-    await waitFor(() => {
-      expect(mocks.listWorkersByLead).toHaveBeenCalledOnce();
-      expect(mocks.getCollaborationSettings).toHaveBeenCalledOnce();
+    mocks.listWorkersByLeads.mockClear();
+    mocks.subscribeOrcaWorkerChanged.mockClear();
+    hook.rerender({ sessions: [leadSession('lead-2'), leadSession('lead-1')] });
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
     });
-    remount.unmount();
+
+    expect(mocks.listWorkersByLeads).not.toHaveBeenCalled();
+    expect(mocks.subscribeOrcaWorkerChanged).not.toHaveBeenCalled();
+    expect(__getWorkerProjectionOwnerCountForTest('lead-1')).toBe(1);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-2')).toBe(1);
   });
 
-  it('refreshes the cache when an ORCA_WORKER_CHANGED event arrives', async () => {
-    let onWorkerChanged: (() => void) | null = null;
-    mocks.subscribeOrcaWorkerChanged.mockImplementation(
-      (_leadSessionId: string, cb: () => void) => {
-        onWorkerChanged = cb;
-        return () => undefined;
-      },
+  it('retains and releases only lead owner diffs when the lead collection changes', async () => {
+    vi.useFakeTimers();
+    const hook = renderHook(({ sessions }) => useOrcaLeadWorkerMap(sessions), {
+      initialProps: { sessions: [leadSession('lead-1'), leadSession('lead-2')] },
+    });
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(callbacks.has('lead-1')).toBe(true);
+    expect(callbacks.has('lead-2')).toBe(true);
+
+    mocks.listWorkersByLeads.mockClear();
+    mocks.subscribeOrcaWorkerChanged.mockClear();
+    hook.rerender({ sessions: [leadSession('lead-2'), leadSession('lead-3')] });
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledOnce();
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledWith(['lead-3']);
+    expect(mocks.subscribeOrcaWorkerChanged).toHaveBeenCalledOnce();
+    expect(mocks.subscribeOrcaWorkerChanged).toHaveBeenCalledWith('lead-3', expect.any(Function));
+    expect(callbacks.has('lead-1')).toBe(false);
+    expect(callbacks.has('lead-2')).toBe(true);
+    expect(callbacks.has('lead-3')).toBe(true);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-1')).toBe(0);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-2')).toBe(1);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-3')).toBe(1);
+  });
+
+  it('chunks local projection hydration at the main IPC batch limit', async () => {
+    const releases = Array.from({ length: 201 }, (_, index) =>
+      retainWorkerProjection(`large-lead-${index}`),
     );
+
+    await waitFor(() => expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(2));
+    expect(mocks.listWorkersByLeads.mock.calls.map(([ids]) => ids.length)).toEqual([200, 1]);
+    expect(mocks.listWorkersByLead).not.toHaveBeenCalled();
+
+    for (const release of releases) release();
+  });
+
+  it('keeps one query and one subscription for multiple consumers of the same lead', async () => {
+    renderHook(() => {
+      useWorkers('lead-1');
+      useWorkers('lead-1');
+      return null;
+    });
+
+    await waitFor(() => expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1));
+    expect(mocks.subscribeOrcaWorkerChanged).toHaveBeenCalledTimes(1);
+    expect(__getWorkerProjectionOwnerCountForTest('lead-1')).toBe(2);
+  });
+
+  it('does not fetch collaboration settings on mount and reads them for creation refresh', async () => {
     const hook = renderHook(() => useWorkers('lead-1'));
 
     await waitFor(() => {
-      expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-a']);
-    });
-
-    mocks.listWorkersByLead.mockResolvedValueOnce([workerRecord('worker-b', 'session-b', true)]);
-    await act(async () => {
-      onWorkerChanged?.();
-    });
-
-    await waitFor(() => {
-      expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
-    });
-    hook.unmount();
-
-    mocks.listWorkersByLead.mockResolvedValue([workerRecord('worker-b', 'session-b', true)]);
-    const remount = renderHook(() => useWorkers('lead-1'));
-    expect(remount.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
-    await waitFor(() => {
-      expect(remount.result.current.workers.map((worker) => worker.sessionId)).toEqual([
-        'session-b',
+      expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+        'session-lead-1',
       ]);
     });
-    remount.unmount();
+    expect(mocks.getCollaborationSettings).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await revalidateActiveWorkerSettings('lead-1');
+    });
+    expect(mocks.getCollaborationSettings).toHaveBeenCalledOnce();
+    expect(hook.result.current.softLimit).toBe(3);
+    expect(hook.result.current.hardLimit).toBe(6);
+
+    let result!: Awaited<ReturnType<typeof hook.result.current.refreshCreationState>>;
+    await act(async () => {
+      result = await hook.result.current.refreshCreationState();
+    });
+
+    expect(mocks.getCollaborationSettings).toHaveBeenCalledTimes(2);
+    expect(result).toMatchObject({ status: 'applied', hardLimit: 6 });
+    expect(hook.result.current.hardLimit).toBe(6);
   });
 
-  it('refreshes workers and the authoritative hard limit together for creation checks', async () => {
+  it('joins the initial in-flight request when the tab becomes active', async () => {
+    vi.useFakeTimers();
+    const first = deferred<Record<string, unknown[]>>();
+    mocks.listWorkersByLeads.mockReturnValueOnce(first.promise);
+    renderHook(() => useWorkers('lead-1'));
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledOnce();
+
+    const activeRefresh = revalidateActiveWorkersProjection('lead-1');
+    first.resolve({ 'lead-1': [workerRecord('worker-a', 'session-a', true)] });
+    await act(async () => {
+      await activeRefresh;
+      await vi.advanceTimersByTimeAsync(101);
+    });
+
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledOnce();
+  });
+
+  it('refreshes only the changed lead and coalesces a burst of worker events', async () => {
+    vi.useFakeTimers();
+    __setWorkerProjectionCoalesceMsForTest(100);
+    const hook = renderHook(() => useOrcaLeadWorkerMap([
+      leadSession('lead-1'),
+      leadSession('lead-2'),
+    ]));
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(hook.result.current.get('lead-1')?.has('session-lead-1')).toBe(true);
+    mocks.listWorkersByLeads.mockClear();
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-new', 'session-new', true)],
+    });
+
+    act(() => {
+      callbacks.get('lead-1')?.();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60);
+    });
+    act(() => {
+      callbacks.get('lead-1')?.();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(99);
+    });
+    expect(mocks.listWorkersByLeads).not.toHaveBeenCalled();
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(1);
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(hook.result.current.get('lead-1')?.has('session-new')).toBe(true);
+
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1);
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledWith(['lead-1']);
+  });
+
+  it('single-flights active settings refreshes for one lead', async () => {
+    const settings = deferred<unknown>();
+    mocks.getCollaborationSettings.mockReturnValueOnce(settings.promise);
+
+    const first = revalidateActiveWorkerSettings('lead-1');
+    const second = revalidateActiveWorkerSettings('lead-1');
+    expect(first).toBe(second);
+    expect(mocks.getCollaborationSettings).toHaveBeenCalledOnce();
+
+    settings.resolve({ workerSoftLimit: 4, workerHardLimit: 7 });
+    await expect(first).resolves.toEqual({ status: 'applied', hardLimit: 7 });
+  });
+
+  it('makes an authoritative refresh wait for the final trailing request', async () => {
+    const first = deferred<Record<string, unknown[]>>();
+    const second = deferred<Record<string, unknown[]>>();
+    mocks.listWorkersByLeads.mockReturnValueOnce(first.promise);
     const hook = renderHook(() => useWorkers('lead-1'));
-    await waitFor(() => expect(hook.result.current.hardLimit).toBe(6));
+    await waitFor(() => expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1));
 
-    mocks.listWorkersByLead.mockResolvedValue([
-      { ...workerRecord('worker-b', 'session-b', true), status: 'running' },
-    ]);
-    mocks.getCollaborationSettings.mockResolvedValue({
-      workerSoftLimit: 1,
-      workerHardLimit: 1,
+    let refreshPromise!: ReturnType<typeof hook.result.current.refresh>;
+    act(() => {
+      refreshPromise = hook.result.current.refresh();
+      callbacks.get('lead-1')?.();
     });
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(1);
 
-    let creationState!: Awaited<ReturnType<typeof hook.result.current.refreshCreationState>>;
-    await act(async () => {
-      creationState = await hook.result.current.refreshCreationState();
-    });
-
-    expect(creationState).toMatchObject({
-      status: 'applied',
-      hardLimit: 1,
-      workers: [{ sessionId: 'session-b', status: 'running' }],
-    });
-  });
-
-  it('only applies the latest out-of-order worker refresh for a lead', async () => {
-    const first = deferred<unknown[]>();
-    const second = deferred<unknown[]>();
-    mocks.listWorkersByLead
-      .mockReset()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    mocks.getCollaborationSettings.mockReturnValue(new Promise(() => undefined));
-    const hook = renderHook(() => useWorkers('lead-1'));
-
-    let latestRefresh!: ReturnType<typeof hook.result.current.refresh>;
-    await act(async () => {
-      latestRefresh = hook.result.current.refresh();
+    mocks.listWorkersByLeads.mockReturnValueOnce(second.promise);
+    let refreshSettled = false;
+    void refreshPromise.then(() => {
+      refreshSettled = true;
     });
     await act(async () => {
-      second.resolve([workerRecord('worker-b', 'session-b', true)]);
-      await latestRefresh;
+      first.resolve({ 'lead-1': [workerRecord('worker-a', 'session-a', true)] });
     });
-    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
+    await waitFor(() => expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(2));
+    expect(refreshSettled).toBe(false);
 
+    let result!: Awaited<typeof refreshPromise>;
     await act(async () => {
-      first.resolve([workerRecord('worker-a', 'session-a', true)]);
-      await flushAsyncUpdates();
+      second.resolve({ 'lead-1': [workerRecord('worker-b', 'session-b', true)] });
+      result = await refreshPromise;
     });
+    expect(result?.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
     expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
   });
 
-  it('does not let old lead worker or settings requests pollute the current hook snapshot', async () => {
-    const lead1Workers = deferred<unknown[]>();
-    const lead2Workers = deferred<unknown[]>();
-    const lead1Settings = deferred<unknown>();
-    const lead2Settings = deferred<unknown>();
-    mocks.listWorkersByLead.mockImplementation((leadSessionId: string) =>
-      leadSessionId === 'lead-1' ? lead1Workers.promise : lead2Workers.promise,
-    );
-    mocks.getCollaborationSettings.mockImplementation((leadSessionId: string) =>
-      leadSessionId === 'lead-1' ? lead1Settings.promise : lead2Settings.promise,
-    );
+  it('routes remote leads through per-lead listWorkersByLead without the local batch channel', async () => {
+    mocks.isRemoteSessionSticky.mockImplementation((leadSessionId: string) => leadSessionId === 'remote-lead');
+    const hook = renderHook(() => useWorkers('remote-lead'));
 
-    const hook = renderHook(({ lead }) => useWorkers(lead), {
-      initialProps: { lead: 'lead-1' },
-    });
-    hook.rerender({ lead: 'lead-2' });
-    expect(hook.result.current.workers).toEqual([]);
-
-    await act(async () => {
-      lead1Workers.resolve([workerRecord('worker-a', 'session-a', true)]);
-      lead1Settings.resolve({ workerSoftLimit: 1, workerHardLimit: 2 });
-      await flushAsyncUpdates();
-    });
-    expect(hook.result.current.workers).toEqual([]);
-    expect(hook.result.current.softLimit).toBe(5);
-    expect(hook.result.current.hardLimit).toBe(8);
-
-    await act(async () => {
-      lead2Workers.resolve([workerRecord('worker-b', 'session-b', true)]);
-      lead2Settings.resolve({ workerSoftLimit: 4, workerHardLimit: 7 });
-      await flushAsyncUpdates();
-    });
     await waitFor(() => {
-      expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-b']);
-      expect(hook.result.current.softLimit).toBe(4);
-      expect(hook.result.current.hardLimit).toBe(7);
+      expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-a']);
+    });
+
+    expect(mocks.listWorkersByLead).toHaveBeenCalledWith('remote-lead', 'remote-lead');
+    expect(mocks.listWorkersByLeads).not.toHaveBeenCalled();
+  });
+
+  it('keeps remote projection reads on the sticky device during a relay mapping gap', async () => {
+    const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');
+    remoteProjectsStore.setDeviceSessions('dev-sticky', 'Mac', [leadSession('remote-sticky')]);
+    mocks.isRemoteSessionSticky.mockReturnValue(true);
+
+    const hook = renderHook(() => useWorkers('remote-sticky'));
+    await waitFor(() => expect(hook.result.current.workers).toHaveLength(1));
+
+    remoteProjectsStore.setDeviceSessions('dev-sticky', 'Mac', []);
+    mocks.listWorkersByLead.mockClear();
+    await act(async () => {
+      await hook.result.current.refresh();
+    });
+    expect(mocks.listWorkersByLead).toHaveBeenCalledWith('dev-sticky', 'remote-sticky');
+    expect(mocks.listWorkersByLeads).not.toHaveBeenCalled();
+  });
+
+  it('keeps old attention when a changed lead refresh fails', async () => {
+    vi.useFakeTimers();
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    renderHook(() => useOrcaWorkerAttentionWatcher([leadSession('lead-1')], undefined));
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockRejectedValueOnce(new Error('db busy'));
+    act(() => callbacks.get('lead-1')?.());
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(100);
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    expect(mocks.listWorkersByLeads).toHaveBeenCalledTimes(2);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+  });
+
+  it('applies a legal empty batch entry but keeps old workers and attention when a lead entry is missing', async () => {
+    vi.useFakeTimers();
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    const hook = renderHook(() => {
+      useOrcaWorkerAttentionWatcher([leadSession('lead-1')], undefined);
+      return useWorkers('lead-1');
+    });
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({ 'lead-1': [] });
+    let emptyResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      emptyResult = await refresh;
+    });
+    expect(emptyResult).toMatchObject({ status: 'applied', workers: [] });
+    expect(hook.result.current.workers).toEqual([]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(false);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      await refresh;
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({});
+    let missingResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      missingResult = await refresh;
+    });
+    expect(missingResult).toMatchObject({ status: 'failed' });
+    expect(missingResult?.workers.map((worker) => worker.sessionId)).toEqual(['session-done']);
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual([
+      'session-done',
+    ]);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+
+    mocks.listWorkersByLeads.mockResolvedValueOnce({ 'lead-1': null });
+    let malformedResult!: Awaited<ReturnType<typeof hook.result.current.refresh>>;
+    await act(async () => {
+      const refresh = hook.result.current.refresh();
+      await vi.runOnlyPendingTimersAsync();
+      malformedResult = await refresh;
+    });
+    expect(malformedResult).toMatchObject({ status: 'failed' });
+    expect(malformedResult?.workers.map((worker) => worker.sessionId)).toEqual(['session-done']);
+    expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
+  });
+
+  it('lets a detached renderer derive attention from its owned lead projection', async () => {
+    mocks.listWorkersByLeads.mockResolvedValueOnce({
+      'lead-1': [workerRecord('worker-done', 'session-done', false, 'done')],
+    });
+    renderHook(() => useOrcaWorkerAttentionByLeadIds(['lead-1'], undefined));
+
+    await waitFor(() => {
+      expect(__getWorkerAttentionSnapshotForTest().has('worker-done')).toBe(true);
     });
   });
 
-  it('does not render the previous lead cache on the first render after a lead switch', async () => {
-    const lead2Workers = deferred<unknown[]>();
-    mocks.listWorkersByLead.mockImplementation((leadSessionId: string) =>
-      leadSessionId === 'lead-1'
-        ? Promise.resolve([workerRecord('worker-a', 'session-a', true)])
-        : lead2Workers.promise,
-    );
-    mocks.getCollaborationSettings.mockReturnValue(new Promise(() => undefined));
+  it('keeps mounted consumers live after clearing an in-flight projection', async () => {
+    vi.useFakeTimers();
+    const stale = deferred<Record<string, unknown[]>>();
+    mocks.listWorkersByLeads
+      .mockReturnValueOnce(stale.promise)
+      .mockResolvedValueOnce({
+        'lead-1': [workerRecord('worker-new', 'session-new', true)],
+      });
+    const hook = renderHook(() => useWorkers('lead-1'));
+    await act(async () => {
+      await vi.runOnlyPendingTimersAsync();
+    });
+
+    const refresh = hook.result.current.refresh();
+    act(() => clearWorkersCache('lead-1'));
+    await expect(refresh).resolves.toMatchObject({ status: 'failed' });
+    await act(async () => {
+      await vi.runAllTimersAsync();
+      await Promise.resolve();
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-new']);
+
+    await act(async () => {
+      stale.resolve({ 'lead-1': [workerRecord('worker-stale', 'session-stale', true)] });
+      await Promise.resolve();
+    });
+    expect(hook.result.current.workers.map((worker) => worker.sessionId)).toEqual(['session-new']);
+  });
+
+  it('does not render the previous lead projection on the first frame after a lead switch', async () => {
+    const lead2 = deferred<Record<string, unknown[]>>();
+    mocks.listWorkersByLeads.mockImplementation((leadSessionIds: string[]) => {
+      if (leadSessionIds.includes('lead-2')) return lead2.promise;
+      return Promise.resolve({
+        'lead-1': [workerRecord('worker-a', 'session-a', true)],
+      });
+    });
     const hook = renderHook(({ lead }) => useWorkers(lead), {
       initialProps: { lead: 'lead-1' },
     });
@@ -268,34 +535,6 @@ describe('useWorkers', () => {
 
     hook.rerender({ lead: 'lead-2' });
     expect(hook.result.current.workers).toEqual([]);
-  });
-
-  it('only applies the latest collaboration settings request for a lead', async () => {
-    const first = deferred<unknown>();
-    const second = deferred<unknown>();
-    mocks.getCollaborationSettings
-      .mockReset()
-      .mockReturnValueOnce(first.promise)
-      .mockReturnValueOnce(second.promise);
-    mocks.listWorkersByLead.mockReturnValue(new Promise(() => undefined));
-    const hook = renderHook(() => {
-      const left = useWorkers('lead-1');
-      useWorkers('lead-1');
-      return left;
-    });
-
-    await act(async () => {
-      second.resolve({ workerSoftLimit: 4, workerHardLimit: 7 });
-      await flushAsyncUpdates();
-    });
-    expect(hook.result.current.softLimit).toBe(4);
-    expect(hook.result.current.hardLimit).toBe(7);
-
-    await act(async () => {
-      first.resolve({ workerSoftLimit: 1, workerHardLimit: 2 });
-      await flushAsyncUpdates();
-    });
-    expect(hook.result.current.softLimit).toBe(4);
-    expect(hook.result.current.hardLimit).toBe(7);
+    lead2.resolve({ 'lead-2': [workerRecord('worker-b', 'session-b', true)] });
   });
 });

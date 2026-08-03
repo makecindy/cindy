@@ -13,7 +13,9 @@
 
 import {
   connectedProvidersForAgent,
-  isAgentSelectableModel,
+  effectiveSourceIdForModel,
+  isModelSelectableForNewRoute,
+  nativeDefaultSourceId,
   type AgentKind,
   type CatalogModel,
   type ProviderView,
@@ -45,7 +47,7 @@ function providersByPreference(
  * 默认收起的模型不参与：它们在选择器里根本不显示，选中了等于让用户面对一个自己找不到的默认
  * 模型。整组都收起时退回纯排序第一 —— 有个能用的默认，好过让这个供应商整体落空。
  *
- * 聊天准入(isAgentSelectableModel)是硬门槛,不参与"整组收起退回"的放宽:挑到的模型直接被
+ * 新路由准入(isModelSelectableForNewRoute)是硬门槛,不参与"整组收起退回"的放宽:挑到的模型直接被
  * 当成会话默认模型使用,非聊天模型(图像/向量/TTS 等,issue #882 第 3 点)漏进来就是"草稿
  * 默认模型选中一个不能聊天的模型"。用 provider-aware 谓词而非裸 isChatEligible:用户自定义
  * 供应商显式配置的模型(未知 group)是合法聊天模型,id 撞上能力启发式(如 flux-image-x)
@@ -54,7 +56,7 @@ function providersByPreference(
 function firstModelByOrder(provider: ProviderView, agent: AgentKind): CatalogModel | undefined {
   const userProvider = provider.source === 'user';
   const chatModels = (provider.models[agent] ?? []).filter((m) =>
-    isAgentSelectableModel(m, { userProvider }),
+    isModelSelectableForNewRoute(m, { userProvider }),
   );
   if (chatModels.length === 0) return undefined;
   const visible = chatModels.filter((m) => m.defaultEnabled !== false);
@@ -113,7 +115,7 @@ export function pickConnectedModelForAgent(
     if (
       preferred &&
       preferred.defaultEnabled !== false &&
-      isAgentSelectableModel(preferred, { userProvider: provider.source === 'user' })
+      isModelSelectableForNewRoute(preferred, { userProvider: provider.source === 'user' })
     ) {
       return { model: preferredModelId, providerId: provider.id };
     }
@@ -165,4 +167,54 @@ export function calibrateDraftModel({
   if (chosenByUser || providersLoading) return { model, providerId: null };
   const picked = pickConnectedModelForAgent(providers, agent, model);
   return picked ?? { model, providerId: null };
+}
+
+export interface DraftSessionProviderResolutionInput {
+  /** main 进程用于默认路由的完整本机来源目录。 */
+  providers: readonly ProviderView[];
+  agent: AgentKind;
+  model: string;
+  /** 用户在草稿里显式选择的来源。 */
+  explicitProviderId: string | null | undefined;
+  /** renderer 已按当前模型与校准结果解析出的生效来源。 */
+  effectiveProviderId: string | null;
+}
+
+/**
+ * 决定新建会话是否必须把 renderer 的生效来源显式带给 main。
+ *
+ * 只有在省略 providerId 后 main 会解析到同一个来源时才允许返回 null；否则必须把来源
+ * 固化在会话上，避免 UI 所见与首条请求的实际路由分叉。
+ */
+export function resolveDraftSessionProviderId({
+  providers,
+  agent,
+  model,
+  explicitProviderId,
+  effectiveProviderId,
+}: DraftSessionProviderResolutionInput): string | null {
+  if (explicitProviderId && explicitProviderId === effectiveProviderId) {
+    return explicitProviderId;
+  }
+  if (!effectiveProviderId) return null;
+  const modelDefaultProviderId = effectiveSourceIdForModel(
+    [...providers],
+    null,
+    model,
+    agent,
+  );
+  // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
+  // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
+  // claude-opus-5。modelDefault 是 anthropic，但 agentDefault 仍是 xd；若只比较前者
+  // 就会错误地省略 providerId，main 随后拿 gateway key 启动 XD 路由(issue #1196)。
+  const agentDefaultProviderId = nativeDefaultSourceId(
+    // main 的 spawn 默认不读取用户的 suspended 开关；这里必须保留 suspended 来源，
+    // 否则 UI 停用 XD 后会把 agentDefault 错算成 Anthropic，再次把必需的来源省略掉。
+    connectedProvidersForAgent([...providers], agent, { includeSuspended: true }),
+    agent,
+  );
+  return modelDefaultProviderId === effectiveProviderId &&
+    agentDefaultProviderId === effectiveProviderId
+    ? null
+    : effectiveProviderId;
 }

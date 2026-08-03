@@ -24,19 +24,21 @@ import { getModelUsageSince, type DailyModelUsageRow } from '../localDb/dailyMod
 import { getCurrentDbClientUserId } from '../localDb/client/current';
 import { createLogger } from '../logger';
 import {
+  getGatewayModelPricing,
+  isModelPricingRefreshInFlight,
+  type ModelPricingMap,
+} from './modelPricing';
+import {
   getClaudeSubscriptionValuePrice,
   getCodexProviderSubscriptionValuePrice,
   getCodexSubscriptionValuePrice,
-  getModelPricing,
+  getReferenceModelPricing,
   getSubscriptionDirectValuePrice,
-  isModelPricingRefreshInFlight,
   readModelPriceOverridesSnapshot,
   type ModelPriceOverridesSnapshot,
-  type ModelPricingMap,
-} from './modelPricing';
+} from './referenceModelPricing';
 import { computePriceQuoteTurnMoney } from './turnCostCalculator';
 import { currentLedgerCurrency } from './ledgerCurrency.js';
-import { CURRENT_CINDY_REGION } from '../../shared/brandRegion.js';
 import {
   addCompatibleRegionalMoney,
   normalizeRegionalMoney,
@@ -227,7 +229,8 @@ export function computeAnomaly(
 export interface UsageHistoryDeps {
   getAllSpendDays(): Promise<Array<{ day: string; monies: RegionalMoney[] }>>;
   getModelUsageSince(sinceDayKey: string): Promise<DailyModelUsageRow[]>;
-  getModelPricing(): Promise<ModelPricingMap | null>;
+  getGatewayModelPricing(): Promise<ModelPricingMap | null>;
+  getReferenceModelPricing(): ModelPricingMap;
   /** 覆盖记录快照,一次聚合读一份——历史重合并逐行读文件会在慢盘上拖垮 Main 线程。 */
   getModelPriceOverridesSnapshot(): ModelPriceOverridesSnapshot;
   isModelPricingRefreshInFlight(): boolean;
@@ -237,7 +240,8 @@ export interface UsageHistoryDeps {
 const defaultDeps: UsageHistoryDeps = {
   getAllSpendDays,
   getModelUsageSince,
-  getModelPricing,
+  getGatewayModelPricing,
+  getReferenceModelPricing,
   getModelPriceOverridesSnapshot: readModelPriceOverridesSnapshot,
   isModelPricingRefreshInFlight,
   todayKey: () => localDayKey(),
@@ -516,11 +520,12 @@ export async function readUsageHistoryWith(
   // 账本币种与写入侧同一事实源(currentLedgerCurrency)：由服务端按账号所属租户下发，
   // 不保证等于发行区域。按区域取会把以 USD 结算的账号在 CN 构建上的每一行判成异币种、
   // 整段归零成不计费。历史遗留的异币种行(换号 / 跨区)仍按 keepCompatibleMoney 归零。
-  const [spendDayRows, pricing] = await Promise.all([
+  const [spendDayRows, , pricing] = await Promise.all([
     deps.getAllSpendDays(),
-    // getModelPricing 只读内存或账号作用域内的磁盘快照，不发网络请求。必须等它完成，
+    // Gateway 报价只读内存或账号作用域内的磁盘快照，不发网络请求。必须等它完成，
     // 因为 hydrateFromDisk 还负责恢复同一快照声明的账本币种。
-    deps.getModelPricing(),
+    deps.getGatewayModelPricing(),
+    Promise.resolve(deps.getReferenceModelPricing()),
   ]);
   // 必须在上面 pricing 恢复之后再读:hydrateFromDisk 会在磁盘缓存生效的同时回写账本币种,
   // 而 prewarmModelPricing 与首页首次聚合是并发的。先读会拿到构建默认值,把该账号的日账与

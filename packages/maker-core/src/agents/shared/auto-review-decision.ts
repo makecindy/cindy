@@ -34,13 +34,14 @@ export type AutoReviewDelegate = (
 ) => Promise<AutoReviewDecision | null>;
 
 export const MAX_AUTO_REVIEW_ACTION_TEXT_CHARS = 4_096;
+const MAX_AUTO_REVIEW_REASON_CHARS = 240;
 const AUTO_REVIEW_DELEGATE_TIMEOUT_MS = 8_000;
 const AUTO_REVIEW_TIMEOUT = Symbol('auto-review-timeout');
 
 export function getAutoReviewActionTextLength(action: ReviewableAction): number {
   switch (action.kind) {
     case 'exec':
-      return action.command.length;
+      return action.command.length + (action.cwd?.length ?? 0);
     case 'read':
     case 'file-write':
       return action.path?.length ?? 0;
@@ -154,7 +155,15 @@ export async function resolveAutoReviewDecision(
         || decision?.verdict === 'ask'
       )
     ) {
-      return decision;
+      // Delegate 是运行期边界：即便当前 host 实现已做解析，未来实现也不能把
+      // 非字符串或无上限 reason 原样塞进日志、UI 或下一轮模型上下文。
+      const reason = typeof decision.reason === 'string'
+        ? decision.reason.trim().slice(0, MAX_AUTO_REVIEW_REASON_CHARS)
+        : '';
+      return {
+        verdict: decision.verdict,
+        ...(reason ? { reason } : {}),
+      };
     }
   } catch {
     // Reviewer outages must not turn Auto into Ask or hold the tool callback open.
@@ -188,4 +197,45 @@ export function extractAutoReviewUserIntent(content: UserMessage['content']): st
       .map((block) => block.text)
       .join('\n');
   return compactCurrentUserIntent(text);
+}
+
+/**
+ * Plan approval changes the authority for the implementation turn. Keep the
+ * original request together with the approved plan without expanding the
+ * lightweight reviewer beyond its existing intent budget.
+ */
+export function composeAutoReviewIntentWithApprovedPlan(
+  currentUserIntent: string,
+  approvedPlan: string,
+): string {
+  const plan = approvedPlan.trim();
+  if (!plan) return compactCurrentUserIntent(currentUserIntent);
+  return compactCurrentUserIntent([
+    currentUserIntent.trim(),
+    `Approved plan:\n${plan}`,
+  ].filter(Boolean).join('\n\n'));
+}
+
+/**
+ * 澄清问答同样改变本轮的授权范围:用户把范围从 `src/` 收窄到 `build/` 后,后续 `rm -rf src` 必须按
+ * **澄清后**的意图裁决,而不是仍按原先那句含糊请求(否则可能被静默 allow)。答案与获批计划同理并入
+ * 有界 intent,不扩大轻量 reviewer 的输入预算。
+ */
+export function composeAutoReviewIntentWithClarification(
+  currentUserIntent: string,
+  clarifications: readonly { question?: string; answer?: string }[],
+): string {
+  const lines = clarifications
+    .map(({ question, answer }) => {
+      const q = (question ?? '').trim();
+      const a = (answer ?? '').trim();
+      if (!a) return '';
+      return q ? `- ${q} → ${a}` : `- ${a}`;
+    })
+    .filter(Boolean);
+  if (lines.length === 0) return compactCurrentUserIntent(currentUserIntent);
+  return compactCurrentUserIntent([
+    currentUserIntent.trim(),
+    `Clarifications:\n${lines.join('\n')}`,
+  ].filter(Boolean).join('\n\n'));
 }

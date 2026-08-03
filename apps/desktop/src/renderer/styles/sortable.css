@@ -83,6 +83,33 @@
   border-radius: 8px;
 }
 
+/* 设置页供应商行的浮起 clone 脱离卡片后补回卡片背景；阴影只使用主题语义 token，
+   Light / Dark 同源，不另写模式补丁。 */
+.provider-settings-sortable-row.xdt-sortable-drag {
+  background-color: var(--settings-theme-card-bg);
+  border-radius: 8px;
+  box-shadow: var(--shadow-menu);
+}
+
+/* 供应商列表整行都是拖动热区，紧凑手柄只作为 hover / keyboard 的辅助提示。
+   手柄绝对定位在选中背景内部，仅在左缘保留最小固定间距；显隐不会引发布局跳动。 */
+.provider-settings-sortable-row .provider-order-handle {
+  opacity: 0;
+  transition: opacity var(--motion-fast) var(--motion-ease-move);
+}
+.provider-settings-sortable-row:hover .provider-order-handle,
+.provider-settings-sortable-row:focus-within .provider-order-handle,
+.provider-settings-sortable-row.xdt-sortable-ghost .provider-order-handle,
+.provider-settings-sortable-row.xdt-sortable-drag .provider-order-handle {
+  opacity: 1;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .provider-settings-sortable-row .provider-order-handle {
+    transition: none;
+  }
+}
+
 /* 右侧栏 tab strip 是面板 chrome,不继承普通 sidebar 行的浮卡背景 / 阴影。
    clone 挂到 body 后补 panel 背景,保持与原 tab 同一视觉层;docs/design-rules/cindy-design-system.md 的 chrome
    仍是纯平面,拖动只靠位置与原位 ghost 表达,不额外制造阴影。 */

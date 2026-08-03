@@ -3,7 +3,7 @@
  * ensure-dev-runtime-assets — make sure the current platform's dev runtime
  * binaries are in place before desktop dev starts. Hybrid sourcing:
  *
- *   - agent CLI binaries (claude / codex / ripgrep): NOT in git/LFS anymore.
+ *   - Desktop runtime binaries (claude / codex / ripgrep / pi): NOT in git/LFS anymore.
  *     Downloaded on demand from upstream (pinned version in tools/<kind>/latest.json)
  *     via ensure-agent-binaries.mjs into apps/<kind>-bin/<platform>/.
  *   - sqlite-vec native extension: still Git-LFS managed. The repo uses
@@ -17,7 +17,11 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { ensureBinary, currentPlatformKey } from './ensure-agent-binaries.mjs';
+import {
+  ensureBinary,
+  currentPlatformKey,
+  SUPPORTED_BINARY_KINDS,
+} from './ensure-agent-binaries.mjs';
 import { fixNodePtyExecutables } from './fix-node-pty-perms.mjs';
 
 const ROOT = path.resolve(fileURLToPath(new URL('..', import.meta.url)));
@@ -28,8 +32,10 @@ const log = (msg) => console.log(`\x1b[36m[ensure-dev-runtime-assets]\x1b[0m ${m
 const warn = (msg) => console.log(`\x1b[33m[ensure-dev-runtime-assets]\x1b[0m ${msg}`);
 const err = (msg) => console.error(`\x1b[31m[ensure-dev-runtime-assets]\x1b[0m ${msg}`);
 
-// agent CLI 二进制走上游按需下载（不再 LFS）
-const AGENT_KINDS = ['claude', 'codex', 'ripgrep'];
+// Desktop runtime 二进制走上游按需下载（不再 LFS）。直接复用
+// ensure-agent-binaries 的 kind 真源，保证新 clone / worktree 首次启动 dev
+// 时会自动准备 Pi，与 Claude Code / Codex 一致。
+const AGENT_KINDS = SUPPORTED_BINARY_KINDS;
 
 function platformKey() {
   return `${process.platform}-${process.arch}`;

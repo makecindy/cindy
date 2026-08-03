@@ -251,7 +251,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     }));
     const { handle, canUseTool, seen } = await startSession('auto', { reviewer });
 
-    const pending = canUseTool('Write', { file_path: '/etc/late-mode.conf' }, { toolUseID: 'late-ask' });
+    const pending = canUseTool('Write', { file_path: '/tmp/late-mode.conf' }, { toolUseID: 'late-ask' });
     await vi.waitFor(() => expect(reviewer).toHaveBeenCalledOnce());
     await handle.setPermissionMode!('ask');
     resolveReview!({ verdict: 'allow', reason: 'reviewed' });
@@ -267,7 +267,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     // 新建一个 auto 会话，避免上一段 Ask 的本地状态影响断言。
     await handle.close();
     const next = await startSession('auto', { reviewer: fullReviewer });
-    const fullPending = next.canUseTool('Write', { file_path: '/etc/late-full.conf' }, { toolUseID: 'late-full' });
+    const fullPending = next.canUseTool('Write', { file_path: '/tmp/late-full.conf' }, { toolUseID: 'late-full' });
     await vi.waitFor(() => expect(fullReviewer).toHaveBeenCalledOnce());
     await next.handle.setPermissionMode!('bypassPermissions');
     resolveFull!({ verdict: 'allow', reason: 'reviewed' });
@@ -282,7 +282,7 @@ describe('Auto-review wiring: lightweight reviewer controls gray actions', () =>
     });
     const r = await canUseTool(
       'Write',
-      { file_path: '/etc/evil.conf' },
+      { file_path: '/tmp/gray-write.conf' },
       { toolUseID: 't4', suggestions: SESSION_SUGGESTION },
     );
     expect(r.behavior).toBe('allow');

@@ -71,3 +71,59 @@ describe('UsageTracker.getTurnUsage', () => {
     });
   });
 });
+
+/**
+ * markContextOverflow — 上下文超限终态的自锁解除(#1429)。
+ * 超限请求被 400 整体拒绝、不返回 usage 时, lastApi 停在旧值(重启后是 0):
+ * 圆环显示 0%、auto-compact 的 ratio 永远到不了阈值。锁到窗口满载后
+ * snapshot().contextTokens = contextWindow, ratio=1.0 让 turn end 压缩得以触发。
+ */
+describe('UsageTracker.markContextOverflow', () => {
+  it('locks contextTokens to the window when below it (fresh tracker after restart)', () => {
+    const tracker = new UsageTracker();
+    tracker.setContextWindow(272_000);
+    expect(tracker.snapshot().contextTokens).toBe(0);
+
+    tracker.markContextOverflow();
+    expect(tracker.snapshot()).toMatchObject({ contextTokens: 272_000, contextWindow: 272_000 });
+  });
+
+  it('locks contextTokens to the window when a previous successful turn left a lower value', () => {
+    const tracker = new UsageTracker();
+    tracker.setContextWindow(272_000);
+    tracker.ingestApiCallUsage({ inputTokens: 1_000, outputTokens: 10, cacheReadTokens: 199_000 });
+    expect(tracker.snapshot().contextTokens).toBe(200_000);
+
+    tracker.markContextOverflow();
+    expect(tracker.snapshot().contextTokens).toBe(272_000);
+  });
+
+  it('keeps the real reading when it already meets/exceeds the window', () => {
+    const tracker = new UsageTracker();
+    tracker.setContextWindow(272_000);
+    tracker.ingestApiCallUsage({ inputTokens: 280_000, outputTokens: 10 });
+
+    tracker.markContextOverflow();
+    // 真实读数比伪造值更诚实 —— 不动
+    expect(tracker.snapshot().contextTokens).toBe(280_000);
+  });
+
+  it('is a no-op when the window is unknown ("无估算" principle)', () => {
+    const tracker = new UsageTracker();
+    tracker.ingestApiCallUsage({ inputTokens: 5_000, outputTokens: 10 });
+
+    tracker.markContextOverflow();
+    expect(tracker.snapshot()).toMatchObject({ contextTokens: 5_000, contextWindow: 0 });
+  });
+
+  it('survives endTurn without replaceLastApi (the failed-turn zero delta must not wipe it)', () => {
+    const tracker = new UsageTracker();
+    tracker.setContextWindow(272_000);
+    tracker.markContextOverflow();
+
+    // 超限失败轮: translator 对 overflow 轮传 replaceLastApi:false(守卫加 !isContextOverflowTurn)
+    const snap = tracker.endTurn({ inputTokens: 0, outputTokens: 0, replaceLastApi: false });
+    expect(snap.contextTokens).toBe(272_000);
+    expect(tracker.snapshot().contextTokens).toBe(272_000);
+  });
+});

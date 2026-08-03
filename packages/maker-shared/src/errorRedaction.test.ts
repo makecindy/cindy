@@ -2,8 +2,45 @@ import { describe, expect, it } from 'vitest';
 
 import {
   extractNonSecretErrorSignals,
+  matchesDeterministicUsageExhaustionText,
   redactSensitiveText,
 } from './errorRedaction.js';
+
+describe('matchesDeterministicUsageExhaustionText', () => {
+  it.each([
+    'insufficient_quota',
+    'insufficient credit balance',
+    'insufficient balance',
+    'insufficient funds',
+    'quota exhausted for this key',
+    'Your quota has been exceeded',
+    'You exceeded your current quota',
+    'usage limit',
+    'account budget exhausted',
+    'session budget exhausted',
+    'usage budget has been exceeded',
+    'ExceededBudget',
+    'budget_exceeded',
+    'exceeded_budget',
+    '账户余额不足，请充值',
+    '账户欠费',
+  ])('recognizes deterministic usage exhaustion: %s', (message) => {
+    expect(matchesDeterministicUsageExhaustionText(message)).toBe(true);
+  });
+
+  it.each([
+    '429',
+    'HTTP 429 Too Many Requests',
+    'Too Many Requests',
+    'rate limit exceeded',
+    'retry budget exhausted',
+    'retry budget exceeded',
+    'exhausted daemon retry budget',
+    'exceeded retry limit, last status: 429 Too Many Requests',
+  ])('does not treat transient or retry exhaustion as usage exhaustion: %s', (message) => {
+    expect(matchesDeterministicUsageExhaustionText(message)).toBe(false);
+  });
+});
 
 describe('redactSensitiveText', () => {
   it('redacts LiteLLM credential fields and bearer tokens while preserving context', () => {

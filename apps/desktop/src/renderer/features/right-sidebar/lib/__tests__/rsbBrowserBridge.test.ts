@@ -196,6 +196,21 @@ describe('rsbBrowserBridge — report / release / snapshot forwarding', () => {
   });
 });
 
+describe('rsbBrowserBridge — control-path probe', () => {
+  it('acks without hydrating a session or creating a webview', async () => {
+    const api = installFakeIpc();
+    initRsbBrowserBridge();
+    const before = browserWebviewPool.inspectTabIds();
+
+    api.tabOpCb?.({ reqId: 'probe-1', op: 'probe' });
+
+    await vi.waitFor(() => {
+      expect(api.tabOpResult).toHaveBeenCalledWith({ reqId: 'probe-1', ok: true });
+    });
+    expect(browserWebviewPool.inspectTabIds()).toEqual(before);
+  });
+});
+
 describe('rsbBrowserBridge — initialization & teardown', () => {
   it('binds pool.onRelease → ipc.release', () => {
     const api = installFakeIpc();
@@ -371,6 +386,22 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
     expect(api.release).not.toHaveBeenCalled();
   });
 
+  it('teardown permits HMR re-init and a stale disposer cannot remove fresh listeners', () => {
+    const api = installFakeIpc();
+    const staleTeardown = initRsbBrowserBridge();
+
+    staleTeardown();
+    const currentTeardown = initRsbBrowserBridge();
+    expect(api.onPin).toHaveBeenCalledTimes(2);
+    expect(api.pinCb).not.toBeNull();
+
+    staleTeardown();
+    expect(api.pinCb).not.toBeNull();
+
+    currentTeardown();
+    expect(api.pinCb).toBeNull();
+  });
+
   it('init when electronAPI is missing is a silent no-op', () => {
     clearIpc();
     expect(() => initRsbBrowserBridge()).not.toThrow();
@@ -420,7 +451,7 @@ describe('rsbBrowserBridge — initialization & teardown', () => {
             if (idx >= 0) synthetic._domReadyListeners.splice(idx, 1);
           }
         };
-        synthetic.setAttribute = vi.fn((_k, _v) => {
+        synthetic.setAttribute = vi.fn(() => {
           // Simulate async dom-ready firing on the next microtask. The real
           // Electron <webview> fires it once the guest WebContents has
           // attached + initial navigation begins.

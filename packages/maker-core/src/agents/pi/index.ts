@@ -31,6 +31,7 @@ import {
   type AgentDeps,
   type AgentSessionHandle,
   type PiExtraSpawnConfig,
+  type PiNativeModelSpec,
   type PiNativeProviderSpec,
   type SendOptions,
   type StartSessionOptions,
@@ -95,10 +96,23 @@ const PI_SESSION_ID_ENV = 'CINDY_PI_SESSION_ID';
 const PI_SESSION_TOKEN_ENV = 'CINDY_PI_SESSION_TOKEN';
 const PI_MCP_BRIDGE_ENV = 'CINDY_PI_MCP_BRIDGE';
 const PI_SECRET_ENV_NAMES_ENV = 'CINDY_PI_SECRET_ENV_NAMES';
+const PI_IMAGE_INPUT_UNSUPPORTED_CODE = 'PI_IMAGE_INPUT_UNSUPPORTED';
 /** 手动压缩 = 一次完整 LLM 摘要调用(大上下文 + 网关排队),远超默认 30s RPC 超时。 */
 const PI_COMPACT_TIMEOUT_MS = 600_000;
 /** 分支摘要同样可能触发一次完整 LLM 调用。 */
 const PI_BRANCH_NAVIGATION_TIMEOUT_MS = 600_000;
+
+class PiImageInputUnsupportedError extends Error {
+  readonly code = PI_IMAGE_INPUT_UNSUPPORTED_CODE;
+
+  constructor() {
+    super(
+      `[${PI_IMAGE_INPUT_UNSUPPORTED_CODE}] Image input is not enabled for the current Pi model. ` +
+        'Switch to an image-capable model, or enable image input for this custom model and start a new Pi task.',
+    );
+    this.name = 'PiImageInputUnsupportedError';
+  }
+}
 
 /**
  * digest 分片 body 的**字节**上限(硬上限 8192,留 headroom)。存储层按 UTF-8 字节
@@ -147,13 +161,49 @@ function mergeLoopbackNoProxy(env: NodeJS.ProcessEnv): void {
     .flatMap((s) => s.split(','))
     .map((s) => s.trim())
     .filter(Boolean);
-  env.NO_PROXY = Array.from(new Set([...existing, '127.0.0.1', 'localhost', '::1'])).join(',');
+  env.NO_PROXY = Array.from(new Set([
+    ...existing,
+    '127.0.0.1',
+    'localhost',
+    '::1',
+    '[::1]',
+  ])).join(',');
   delete env.no_proxy;
 }
 
 /** cindy Effort → pi thinking level(pi 无 ultra;cindy 无 off)。 */
 function effortToPiThinkingLevel(effort: Effort): string {
   return effort === 'ultra' ? 'max' : effort;
+}
+
+const PI_NATIVE_THINKING_LEVELS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+
+/** 从本次启动写入 models.json 的 native model 快照提取可用 effort。 */
+function startupEffortsOfNativeModel(model: PiNativeModelSpec | undefined): readonly Effort[] | undefined {
+  if (!model) return undefined;
+  if (model.thinkingLevelMap) {
+    return PI_NATIVE_THINKING_LEVELS.filter((effort) => model.thinkingLevelMap?.[effort] != null);
+  }
+  // writeModelsJson 对缺省 reasoning 同样序列化为 false；因此缺省与显式 false
+  // 都必须冻结为空能力，不能把 renderer 后续热刷出的 effort 放行给旧进程。
+  return model.reasoning === true ? undefined : [];
+}
+
+/**
+ * 启动时把任务里持久化的旧 effort 与当前 provider/model 的能力重新对齐。
+ * 已支持档原样保留；能力未知/未声明档位时维持旧行为；只有明确不支持时才落到
+ * 当前模型的合法默认档（病态 default 再落首档），避免 thinkingLevelMap 将旧档映成 null。
+ */
+function reconcilePiStartupEffort(
+  requested: Effort | undefined,
+  model: ModelDescriptor | undefined,
+): Effort | undefined {
+  if (!requested || !model || model.efforts.length === 0) return requested;
+  if (model.efforts.includes(requested)) return requested;
+  if (model.defaultEffort && model.efforts.includes(model.defaultEffort)) {
+    return model.defaultEffort;
+  }
+  return model.efforts[0];
 }
 
 /**
@@ -348,27 +398,38 @@ export class PiAgent extends BaseAgent {
   private async writeModelsJson(
     agentHome: string,
     nativeProviders: PiNativeProviderSpec[] = [],
+    retainedRuntimeModel?: ModelDescriptor,
   ): Promise<void> {
     const endpoint = this.deps.runtimeConfig.endpoint;
     if (!endpoint) {
       this.deps.logger.warn('pi: runtimeConfig.endpoint missing — models.json will have no usable provider');
     }
-    const models = this.capabilities.availableModels
-      .map((m: ModelDescriptor) => ({
-      id: m.id,
-      name: m.displayName,
-      reasoning: m.efforts.length > 0,
-      input: ['text', 'image'],
-      contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
-      maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
-      // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
-      cost: {
-        input: m.cost?.input ?? 0,
-        output: m.cost?.output ?? 0,
-        cacheRead: m.cost?.cacheRead ?? 0,
-        cacheWrite: m.cost?.cacheWrite ?? 0,
-      },
-    }));
+    const publicModels = this.capabilities.availableModels;
+    const runtimeModels = retainedRuntimeModel && !publicModels.some((m) => m.id === retainedRuntimeModel.id)
+      ? [...publicModels, retainedRuntimeModel]
+      : publicModels;
+    const models = runtimeModels.map((publicModel: ModelDescriptor) => {
+      // availableModels 为跨 provider 拍平的公开能力；BYOM 同 id 冲突时 effort
+      // 会按设计收敛成交集。cindy gateway 块则代表内置路由，必须回查其
+      // provider-aware 描述符，不能被同名 non-reasoning BYOM 清空 reasoning。
+      // host 未注入 resolver 或只有 BYOM 条目时保留旧 flat fallback。
+      const m = this.deps.resolvePiGatewayModelDescriptor?.(publicModel.id) ?? publicModel;
+      return {
+        id: m.id,
+        name: m.displayName,
+        reasoning: m.efforts.length > 0,
+        input: ['text', 'image'],
+        contextWindow: m.contextWindow > 0 ? m.contextWindow : 200_000,
+        maxTokens: m.maxOutputTokens && m.maxOutputTokens > 0 ? m.maxOutputTokens : 32_000,
+        // 计费单位与目录一致($/1M tokens);pi 按此自行计价,usage 事件的 cost 才有真值。
+        cost: {
+          input: m.cost?.input ?? 0,
+          output: m.cost?.output ?? 0,
+          cacheRead: m.cost?.cacheRead ?? 0,
+          cacheWrite: m.cost?.cacheWrite ?? 0,
+        },
+      };
+    });
     const providers: Record<string, unknown> = {
       [PI_PROVIDER_ID]: {
         name: 'Cindy AI',
@@ -398,6 +459,7 @@ export class PiAgent extends BaseAgent {
           id: m.id,
           name: m.name ?? m.id,
           reasoning: m.reasoning ?? false,
+          ...(m.thinkingLevelMap ? { thinkingLevelMap: { ...m.thinkingLevelMap } } : {}),
           input: m.input ?? ['text'],
           contextWindow: m.contextWindow && m.contextWindow > 0 ? m.contextWindow : 128_000,
           maxTokens: m.maxTokens && m.maxTokens > 0 ? m.maxTokens : 16_000,
@@ -499,6 +561,84 @@ export class PiAgent extends BaseAgent {
     }
     const initialProvider = resolveProviderForModel(opts.model, opts.providerId);
 
+    // availableModels 是跨 provider 拍平的公开选择面；启动旧任务时必须按实际来源重查
+    // provider-aware 描述符，不能拿同 id 的内置/BYOM 首见条目校验持久化 effort。
+    // 新建时若模型连公开清单都不在，仍不调用私有解析器（不借此放宽新选择准入）；resume
+    // 才允许读取 disabled/retired 描述符继续运行。
+    const publicRuntimeModel = this.capabilities.availableModels.find(
+      (model) => model.id === opts.model,
+    );
+    const runtimeProviderId =
+      opts.providerId === undefined && initialProvider !== PI_PROVIDER_ID
+        ? initialProvider
+        : opts.providerId;
+    const mayResolveRuntimeModel = publicRuntimeModel !== undefined || !!opts.resumeSessionId;
+    const selectedRuntimeModel = mayResolveRuntimeModel
+      ? this.deps.resolvePiRuntimeModelDescriptor?.(runtimeProviderId, opts.model)
+        ?? publicRuntimeModel
+      : undefined;
+
+    // 恢复中的旧 Pi 网关会话仍需要 models.json 内存在当前模型,Pi 才能解析持久化的
+    // --model。仅对真实 resume 且公开清单缺失的 compat 模型补一个私有描述符；不回写
+    // capabilities,也不放宽 setModel / route guard。
+    let retainedRuntimeModel: ModelDescriptor | undefined;
+    if (
+      opts.resumeSessionId &&
+      initialProvider === PI_PROVIDER_ID &&
+      !publicRuntimeModel
+    ) {
+      retainedRuntimeModel = selectedRuntimeModel;
+      if (!retainedRuntimeModel) {
+        this.deps.logger.warn('pi: selected model missing from public and retained runtime catalogs', {
+          model: opts.model,
+          providerId: opts.providerId ?? null,
+        });
+      }
+    }
+    const startupEffort = reconcilePiStartupEffort(opts.effort, selectedRuntimeModel);
+    if (opts.effort && startupEffort !== opts.effort) {
+      this.deps.logger.info('pi: reconciled persisted effort against current runtime model', {
+        model: opts.model,
+        providerId: runtimeProviderId ?? null,
+        requestedEffort: opts.effort,
+        resolvedEffort: startupEffort ?? null,
+      });
+    }
+
+    // Pi 子进程只读取本次启动生成的 models.json。renderer 目录热更新后，不能把新出现的
+    // effort 直接发送给仍在运行的旧进程；否则 Pi 会把 thinkingLevelMap 中的 null 当作
+    // 关闭 reasoning。这里冻结每个可路由模型在该启动快照中的能力，setModel 成功后只
+    // 切换到同一快照里已有的目标模型能力。
+    const resolveStartupEffortSnapshot = (
+      providerId: string,
+      modelId: string,
+    ): readonly Effort[] | undefined => {
+      if (providerId !== PI_PROVIDER_ID) {
+        return startupEffortsOfNativeModel(
+          nativeProviderById.get(providerId)?.models.find((model) => model.id === modelId),
+        );
+      }
+      const gatewayModel = modelId === opts.model && selectedRuntimeModel
+        ? selectedRuntimeModel
+        : this.deps.resolvePiGatewayModelDescriptor?.(modelId)
+          ?? this.capabilities.availableModels.find((model) => model.id === modelId);
+      return gatewayModel?.efforts;
+    };
+    const initialEffortSnapshot = resolveStartupEffortSnapshot(initialProvider, opts.model);
+    const assertStartupEffortAllowed = (
+      snapshot: readonly Effort[] | undefined,
+      effort: Effort,
+    ): void => {
+      // efforts:[] 仍可能收到 resolveEffort 的 UI 占位值 low；它代表“不支持切换”，
+      // 只需跳过 RPC。其它档位必须拒绝，避免热刷目录后的新 effort 绕过启动快照。
+      if (!snapshot || (snapshot.length === 0 && effort === 'low')) return;
+      if (snapshot.includes(effort)) return;
+      throw new Error(
+        `pi set_thinking_level refused: effort '${effort}' is not available in this session's ` +
+          'startup model snapshot; restart the Pi session after changing provider capabilities.',
+      );
+    };
+
     // 先解析 native provider 再做 auth：老会话/远端控制端可能没有持久化 providerId，
     // 仍必须能从 model→provider 映射识别纯 BYOM，不能误落 Cindy gateway 登录门。
     const authProviderId =
@@ -540,7 +680,7 @@ export class PiAgent extends BaseAgent {
       configHomeCleaned = true;
       void fs.rm(configHome, { recursive: true, force: true }).catch(() => {});
     };
-    await this.writeModelsJson(configHome, nativeProviders);
+    await this.writeModelsJson(configHome, nativeProviders, retainedRuntimeModel);
     const sessionDir = path.join(agentHome, 'sessions');
     await fs.mkdir(sessionDir, { recursive: true });
 
@@ -644,20 +784,24 @@ export class PiAgent extends BaseAgent {
     };
     await writePermissionFile(requestedPermissionSnapshot);
 
-    // MCP 桥:host 把 in-process MCP providers 暴露成 localhost streamable-HTTP。
+    // MCP:host 把 in-process providers 暴露成 localhost streamable-HTTP，也可给出
+    // 外部 HTTP server 描述（header 真值另走 mcpEnv，不进入描述符）。
     // 传 session 身份(sessionId/workingDir/vendorOptions)让 host 在 bridge 上注册
     // 身份 ctx + 给 server URL 打 `?session=` 路由 —— orca/会话身份类工具据此绑定
     // 当前 pi 会话。disposeSessionCtx 在 close() 注销该注册(幂等)。
     let mcpBridge: PiExtraSpawnConfig['mcpBridge'] = null;
+    let mcpEnv: PiExtraSpawnConfig['mcpEnv'] = {};
     let disposeSessionCtx: (() => void) | undefined;
     if (this.deps.preparePiExtraSpawnConfig) {
       try {
         const extra = await this.deps.preparePiExtraSpawnConfig(this.deps.mcpProviders ?? [], {
           sessionId: opts.sessionId,
+          ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           workingDir: opts.workingDir,
           vendorOptions: opts.vendorOptions,
         });
         mcpBridge = extra?.mcpBridge ?? null;
+        mcpEnv = extra?.mcpEnv ?? {};
         disposeSessionCtx = extra?.disposeSessionCtx;
       } catch (err) {
         this.deps.logger.error('pi MCP bridge prep failed, continuing without cindy tools', {
@@ -737,7 +881,11 @@ export class PiAgent extends BaseAgent {
     const ctx: PiTranslateContext = createPiTranslateContext(this.deps.logger);
     let interactionResolver: InteractionResolver | null = null;
     let mutableModel = opts.model;
+    // Pi RPC 实际选中的 provider。与用于宿主鉴权/审阅元数据的 mutableProviderId 分开：
+    // null/订阅来源会归一到 cindy，setModel 未显式传来源时也必须跟随本次解析结果。
+    let mutablePiProviderId = initialProvider;
     let mutableProviderId: string | null | undefined = opts.providerId ?? authProviderId;
+    let activeEffortSnapshot = initialEffortSnapshot;
     let currentAutoReviewIntent = '';
     const autoReviewDecisionCache = new Map<string, Promise<AutoReviewDecision>>();
     const setAutoReviewIntent = (content: UserMessage['content']): void => {
@@ -806,6 +954,7 @@ export class PiAgent extends BaseAgent {
         PI_SESSION_TOKEN_ENV,
         ...Object.keys(authEnv),
         ...Object.keys(nativeEnv),
+        ...Object.keys(mcpEnv),
         ...(mcpBridge && mcpBridge.servers.length > 0 ? [PI_MCP_BRIDGE_ENV] : []),
       ]));
       const spawnEnv: NodeJS.ProcessEnv = {
@@ -813,6 +962,9 @@ export class PiAgent extends BaseAgent {
         ...authEnv,
         // BYOM 原生 provider 的 api keys(键名对应 spec.apiKeyEnvVar,models.json 用 $ENV 引用)。
         ...nativeEnv,
+        // 外部 MCP header 真值只经 env 交给 bridge extension；host 生成独立名字，
+        // 且这些键已进入 piSecretEnvNames，LLM 可调用的 bash 子进程拿不到。
+        ...mcpEnv,
         [PI_SESSION_ID_ENV]: opts.sessionId ?? '',
         [PI_SESSION_TOKEN_ENV]: proxySessionToken,
         [PI_SECRET_ENV_NAMES_ENV]: JSON.stringify(piSecretEnvNames),
@@ -1022,13 +1174,13 @@ export class PiAgent extends BaseAgent {
         }
       }
 
-      if (opts.effort) {
+      if (startupEffort) {
         const resp = await proc.request({
           type: 'set_thinking_level',
-          level: effortToPiThinkingLevel(opts.effort),
+          level: effortToPiThinkingLevel(startupEffort),
         });
         if (!resp.success) {
-          this.deps.logger.warn('pi set_thinking_level rejected', { effort: opts.effort, error: resp.error });
+          this.deps.logger.warn('pi set_thinking_level rejected', { effort: startupEffort, error: resp.error });
         }
       }
 
@@ -1094,6 +1246,15 @@ export class PiAgent extends BaseAgent {
       }
     };
 
+    const assertImageInputSupported = (images: readonly PiPromptImage[]): void => {
+      if (images.length === 0 || mutablePiProviderId === PI_PROVIDER_ID) return;
+      const nativeModel = nativeProviderById
+        .get(mutablePiProviderId)
+        ?.models.find((candidate) => candidate.id === mutableModel);
+      if (nativeModel?.input?.includes('image')) return;
+      throw new PiImageInputUnsupportedError();
+    };
+
     const handle: AgentSessionHandle = {
       // getter 而非固定值:setModel / commitRewindFiles 会更新闭包里的 mutableModel /
       // sdkSessionId,Session.model / Session.sdkSessionId 直读这两个 handle 属性 ——
@@ -1117,9 +1278,10 @@ export class PiAgent extends BaseAgent {
       async send(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'send');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        setAutoReviewIntent(message.content);
         const { text, images } = await buildPiPrompt(message);
         rejectIfCancelled(sendOpts, 'send');
+        assertImageInputSupported(images);
+        setAutoReviewIntent(message.content);
         // setExtraDirs 是热更新；Pi 没有独立的 mid-session system-prompt RPC，所以在
         // 后续 user turn 前附上短引用目录段(但 /skill: 起始时不前置,见 composePiPromptText)。
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
@@ -1141,9 +1303,10 @@ export class PiAgent extends BaseAgent {
       async steer(message: UserMessage, sendOpts?: SendOptions): Promise<void> {
         rejectIfCancelled(sendOpts, 'steer');
         if (sendOpts) handle.validateSendOptions?.(sendOpts);
-        setAutoReviewIntent(message.content);
         const { text, images } = await buildPiPrompt(message);
         rejectIfCancelled(sendOpts, 'steer');
+        assertImageInputSupported(images);
+        setAutoReviewIntent(message.content);
         // /skill: 起始时不前置 Extra Dir 引用段(否则命令退化成文本),与 send 同口径。
         const promptText = composePiPromptText(text, piExtraDirsPrompt(mutableExtraDirs));
         const command: Record<string, unknown> = { type: 'steer', message: escapeLeadingSlashCommand(promptText) };
@@ -1189,7 +1352,7 @@ export class PiAgent extends BaseAgent {
         interactionResolver = resolver;
       },
 
-      async setModel(model: string, setOpts?: { providerId?: string | null }): Promise<void> {
+      async setModel(model: string, setOpts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
         const requestedProviderId = setOpts && Object.hasOwn(setOpts, 'providerId')
           ? setOpts.providerId
           : undefined;
@@ -1206,9 +1369,15 @@ export class PiAgent extends BaseAgent {
           );
         }
         const provider = resolveProviderForModel(model, requestedProviderId);
+        const nextEffortSnapshot = resolveStartupEffortSnapshot(provider, model);
+        if (setOpts?.effort) {
+          assertStartupEffortAllowed(nextEffortSnapshot, setOpts.effort);
+        }
         const resp = await proc.request({ type: 'set_model', provider, modelId: model });
         if (!resp.success) throw new Error(`pi set_model failed: ${resp.error ?? 'unknown'}`);
         mutableModel = model;
+        mutablePiProviderId = provider;
+        activeEffortSnapshot = nextEffortSnapshot;
         if (setOpts && Object.hasOwn(setOpts, 'providerId')) mutableProviderId = setOpts.providerId;
         autoReviewDecisionCache.clear();
         const data = (resp.data ?? {}) as { contextWindow?: number };
@@ -1218,6 +1387,8 @@ export class PiAgent extends BaseAgent {
       },
 
       async setEffort(effort: Effort): Promise<void> {
+        assertStartupEffortAllowed(activeEffortSnapshot, effort);
+        if (activeEffortSnapshot?.length === 0) return;
         const resp = await proc.request({
           type: 'set_thinking_level',
           level: effortToPiThinkingLevel(effort),

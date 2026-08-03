@@ -1,11 +1,12 @@
 /**
  * GhostGrantConfirmBridge —— ghost_call 过户 workdir 外文件的「用户确认」桥。
  *
- * 背景:意识触碰用户文件的通道(attachments / dir / save_dir)原本把可达面
- * 钳制在「进过聊天流的图」与「会话 workdir 内」;两层策略升级后(2026-07-14
- * 与 Lizi 定案):workdir 内自动放行,workdir 外改为**弹确认卡**——把「拖图
- * 进聊天」这个授权动作换成「点一下允许」,决定权在用户的点击上,被注入的
- * 模型只能发起请求、点不了按钮。
+ * 背景:意识触碰用户文件的通道(attachments / dir / save_dir)把可达面钳制在
+ * 「进过聊天流的图」与「会话 workdir 内」;普通权限档遇到 workdir 外路径时
+ * 由本桥**弹确认卡**——把「拖图进聊天」这个授权动作换成「点一下允许」,
+ * 决定权在用户的点击上,被注入的模型只能发起请求、点不了按钮。
+ * 当前本地活跃会话为 Full Access 时,mcp-integrations/ghost.ts 会在进入本桥前
+ * 按实时 Session 状态自动放行；workspace / fs_write 等其它 lane 不受该旁路影响。
  *
  * 实现完全对齐 IssueConfirmBridge 的成熟模式:main 侧发起,broadcast 一个
  * kind='ghost_grant_confirm' 的 interaction 到 renderer(复用

@@ -2326,7 +2326,9 @@ describe('codex proxy host', () => {
       ],
       input: [
         { type: 'message', role: 'system', content: 'BASE_PROMPT\n\nPRODUCT_PROMPT' },
-        { type: 'reasoning', id: 'rs_1', encrypted_content: 'gAAA' },
+        // summary 恒定补齐(缺省 []):xAI 要求回放的 reasoning 始终带 summary,
+        // 与 anthropic-responses-bridge 的回放形状同口径。
+        { type: 'reasoning', id: 'rs_1', summary: [], encrypted_content: 'gAAA' },
         {
           type: 'function_call',
           id: 'ctc_1',
@@ -2462,6 +2464,182 @@ describe('codex proxy host', () => {
         expect(out.tools).toEqual([{ type: 'function', name: 'read_file' }]);
       },
     );
+  });
+
+  // codex 的结构体会把自己没用上的 Option 字段一并序列化(实测 `content: null`),
+  // 那是 xAI 从没发过的键;带着它回放,上游判定「blob 被改过」→ 整轮 400
+  // "Could not decode the compaction blob. Ensure it is unmodified from the compact response."
+  // (2026-08-02 实测:新会话里首个把 reasoning 回放进 input[] 的请求必挂,重试同样挂。)
+  describe('xAI 加密 reasoning 回放形状', () => {
+    async function runXaiReasoningTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-reasoning-shape-${suffix}`;
+      const threadId = `thread-reasoning-shape-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    const reasoningItemFrom = (input: unknown[]): Record<string, unknown> =>
+      input.find(
+        (item): item is Record<string, unknown> =>
+          typeof item === 'object' && item !== null && (item as { type?: unknown }).type === 'reasoning',
+      ) ?? {};
+
+    it('剥掉 codex 多序列化出来的键，只留 Responses 契约里的四个', async () => {
+      const out = await runXaiReasoningTransforms('strips-extra-keys', {
+        model: 'xai/grok-4.5',
+        input: [
+          {
+            type: 'reasoning',
+            id: 'rs_keep_me',
+            summary: [{ type: 'summary_text', text: 'thinking' }],
+            // codex 实际发出来的形态:自己没用上的 Option 字段照样序列化。
+            content: null,
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+            encrypted_content: 'BLOB-KEEP',
+          },
+        ],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'id', 'summary', 'type']);
+      // blob 必须逐字不动 —— 改一个字节上游就解不开。
+      expect(reasoning.encrypted_content).toBe('BLOB-KEEP');
+      expect(reasoning.summary).toEqual([{ type: 'summary_text', text: 'thinking' }]);
+      expect(reasoning.id).toBe('rs_keep_me');
+    });
+
+    // 键名都在允许列表里、但 id 的值是空串:只数键名会判定「没变」,把原对象原样
+    // 发出去 —— 等于算出了规范形状又扔掉。
+    it('id 是空串时也要真的剥掉，而不是当作“没变”原样透传', async () => {
+      const out = await runXaiReasoningTransforms('empty-id', {
+        model: 'xai/grok-4.5',
+        input: [{ type: 'reasoning', id: '', summary: [], encrypted_content: 'BLOB-EMPTY-ID' }],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
+      expect(reasoning.encrypted_content).toBe('BLOB-EMPTY-ID');
+    });
+
+    it('codex 不发 id 时不编造一个（实测 xAI 不需要 id 也能解开 blob）', async () => {
+      const out = await runXaiReasoningTransforms('no-id', {
+        model: 'xai/grok-4.5',
+        input: [{ type: 'reasoning', summary: [], content: null, encrypted_content: 'BLOB-NO-ID' }],
+      });
+
+      const reasoning = reasoningItemFrom(out.input as unknown[]);
+      expect(Object.keys(reasoning).sort()).toEqual(['encrypted_content', 'summary', 'type']);
+      expect(reasoning.encrypted_content).toBe('BLOB-NO-ID');
+    });
+  });
+
+  // OpenAI/Codex collab 历史里的 agent_message 不是 xAI ModelInput 变体；跨源 resume
+  // 到 grok 时原样转发 → 422 "data did not match any variant of untagged enum ModelInput"。
+  // (2026-08-03 实测: gpt-5.6-sol collab 会话切 xai/grok-4.5 必挂;新建 grok 会话正常。)
+  describe('xAI collab agent_message 跨源回放', () => {
+    async function runXaiInputTransforms(
+      suffix: string,
+      body: Record<string, unknown>,
+    ): Promise<Record<string, unknown>> {
+      const host = await freshCodexProxyHost();
+      const { setSessionProvider, clearSessionProvider } = await import('../session-provider-store.js');
+      mockState.createAnthropicCompatProxy.mockResolvedValueOnce({
+        url: 'http://127.0.0.1:43210',
+        dispose: vi.fn(async () => undefined),
+      });
+      await host.ensureCodexProxyReady();
+      const sessionId = `session-agent-message-${suffix}`;
+      const threadId = `thread-agent-message-${suffix}`;
+      host.registerComposed(sessionId, threadId, 'PRODUCT_PROMPT');
+      setSessionProvider(sessionId, 'xai');
+
+      const transforms = mockState.createAnthropicCompatProxy.mock.calls[0]?.[0]?.transformRequest ?? [];
+      const ctx = { method: 'POST', url: '/responses', headers: { 'thread-id': threadId } };
+      let current: unknown = body;
+      for (const transform of transforms) {
+        const next = transform(current, ctx);
+        if (next !== null && next !== undefined) current = next;
+      }
+      clearSessionProvider(sessionId);
+      return current as Record<string, unknown>;
+    }
+
+    it('把 agent_message 降级成 assistant message，丢掉 content 里的 encrypted_content', async () => {
+      const out = await runXaiInputTransforms('collab-to-message', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: [{ type: 'input_text', text: 'go' }] },
+          {
+            type: 'agent_message',
+            author: '/root/official_pr_rules',
+            recipient: '/root',
+            content: [
+              {
+                type: 'input_text',
+                text: 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+              },
+              { type: 'encrypted_content', encrypted_content: 'gAAAAA-openai-collab-blob' },
+            ],
+            internal_chat_message_metadata_passthrough: { turn_id: 't1' },
+          },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(2);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+      expect(input[1]).toEqual({
+        type: 'message',
+        role: 'assistant',
+        content: [
+          {
+            type: 'output_text',
+            text:
+              '[collab /root/official_pr_rules]\n'
+              + 'Message Type: FINAL_ANSWER\nTask name: /root\nPayload:\n已完成只读审查',
+          },
+        ],
+      });
+      // 不得残留 collab 专有键或 OpenAI 密文 part。
+      expect(JSON.stringify(input[1])).not.toContain('agent_message');
+      expect(JSON.stringify(input[1])).not.toContain('encrypted_content');
+      expect(JSON.stringify(input[1])).not.toContain('gAAAAA-openai-collab-blob');
+    });
+
+    it('未知 input type 直接丢掉，不原样透传给 xAI', async () => {
+      const out = await runXaiInputTransforms('drop-unknown', {
+        model: 'xai/grok-4.5',
+        input: [
+          { type: 'message', role: 'user', content: 'hi' },
+          { type: 'web_search_end', call_id: 'c1', query: 'x' },
+          { type: 'mcp_tool_call_end', call_id: 'c2' },
+        ],
+      });
+
+      const input = out.input as Array<Record<string, unknown>>;
+      expect(input).toHaveLength(1);
+      expect(input[0]).toMatchObject({ type: 'message', role: 'user' });
+    });
   });
 
   it('leaves custom_tool_call history untouched for non-xAI requests', async () => {

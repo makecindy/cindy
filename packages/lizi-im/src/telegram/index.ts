@@ -57,6 +57,7 @@ import { startTelegramStreaming } from './streamingText.js';
 
 const TOKEN_SECRET_KEY = 'telegram-bot-token';
 const OWNER_USER_ID_SECRET_KEY = 'telegram-owner-user-id';
+
 /** 历史遗留 key(上下线播报机制已移除), disconnect 时顺手清掉。 */
 const LEGACY_RUNTIME_ACTIVE_SECRET_KEY = 'telegram-bot-runtime-active';
 /**
@@ -93,8 +94,6 @@ const DEFAULT_EXPIRED_CARD_NOTICE = '卡片已过期';
 
 /** 非 owner 显式召唤(私聊/群 @/reply)的礼貌回应 — per-user 冷却防刷屏。 */
 const STRANGER_NOTICE_COOLDOWN_MS = 60_000;
-/** DM 定稿的 message_effect_id(官方公开的标准特效 id, 👍; 仅私聊生效)。 */
-const DM_DONE_EFFECT_ID = '5107584321108051014';
 const DEFAULT_STRANGER_NOTICE =
   '👋 我是一位主人的个人 Cindy 助理，只响应主人本人的指令~\nI am a personal Cindy assistant and only respond to my owner.';
 
@@ -111,6 +110,38 @@ type MessageHandler = (e: IMMessageEvent) => void;
 type CardActionHandler = (e: IMCardActionEvent) => void;
 type StatusHandler = (s: IMStatus) => void;
 type GroupWindowHandler = (entry: TelegramGroupWindowEntry) => void;
+
+/**
+ * 回挂目标的请求级凭据: 记住本次出站真正带上的那个目标身份。
+ * null = 本次没挂回(无需提交)。提交必须凭它校身份, 不能按 userId 当前槽位盲删。
+ */
+type ReplyTargetLease = { userId: string; messageId: string } | null;
+
+/**
+ * 队列里是否存在比 current 更新的触发消息 —— Telegram 同一 chat 内 message_id
+ * 单调递增, 因此更大的 id 就意味着槽位里那个已经过时。
+ * current 解不出数字(不应发生)时不阴拦领取。
+ */
+function hasNewerTrigger(queue: Array<{ id: string }>, current: string): boolean {
+  const currentId = Number(current);
+  if (!Number.isFinite(currentId)) return true;
+  return queue.some((entry) => Number(entry.id) > currentId);
+}
+
+/**
+ * 调用方给的「本轮触发消息」编码 id → 同群的原生 message_id(给私聊授权卡拼深链)。
+ *
+ * 解不开、或解出来属于**别的 chat** 时返回 null(不渲染深链): 链到别的会话比没有链更糟。
+ */
+function sourceMessageIdIn(chatId: string, encoded: string | undefined): string | null {
+  if (encoded === undefined) return null;
+  try {
+    const decoded = decodeMessageId(encoded);
+    return decoded.chatId === chatId ? decoded.messageId : null;
+  } catch {
+    return null;
+  }
+}
 
 /** settle 缓冲/处理中的相册(见 albumsInFlight 注释)。 */
 interface PendingAlbum {
@@ -205,10 +236,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private pollAbort: AbortController | null = null;
   private pollLoop: Promise<void> | null = null;
   private disposing = false;
-  /** DM 流式草稿的 draft_id 单调计数(非零; 同 id 连续更新触发客户端动画)。 */
-  private draftIdCounter = 0;
-  /** sendMessageDraft 能力性失败后的永久 latch(本实例生命周期内)。 */
-  private draftStreamingDisabled = false;
   /** sendRichMessage 方法不可用(404)后的永久 latch(本实例生命周期内)。 */
   private richSendDisabled = false;
   private readonly mediaDir: string;
@@ -244,6 +271,16 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
   /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
   private readonly turnReplyTargets = new Map<string, string>();
+  /**
+   * 活动流式回合计数(userId → 未收口的 handle 数) —— 回挂目标槽位的**归属权**。
+   *
+   * 为何必需: A 回合正在流式输出时, B 消息到达会入队并立即发一条排队提示
+   * (turnRunner 的 notifyQueuedPosition → sendMarkdownText)。若让那条独立出站按「队列
+   * 里有更新的 id」接管槽位, A 剩下的 sendRenderedChunk 会改挂到 B 上 —— 群 'all'
+   * 档要求目标整轮不变, 而「队列里有更新的消息」并不证明 A 已被放弃。
+   * 所以领取要看归属: 回合活着就由它持有, 收口(finalize/close)后才允许替换。
+   */
+  private readonly activeStreamRounds = new Map<string, number>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -618,17 +655,66 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   async sendInteractiveCard(
     userId: string,
     spec: InteractiveCardSpec,
+    opts?: {
+      threadTs?: string;
+      deliverToOwnerDm?: boolean;
+      ownerDmNote?: string;
+      ownerDmSourceMessageId?: string;
+    },
   ): Promise<{ messageId: string }> {
+    // **只有授权类卡片**转宿主私聊(调用方用 deliverToOwnerDm 点名): 群里的授权卡消不掉,
+    // 且只有 owner 能回答它。命令卡 / 会话选择卡(/ctr 等)不传这个开关 —— 它们的回调必须
+    // 落在原群 lane, 否则 exitControl 释放的是宿主私聊那把锁而不是原群锁。
+    // owner 未知时(理论上不该发生: 群 lane 的触发条件本身就是 owner @bot / reply)保持原
+    // lane 投递, 不吞掉这次交互。
+    const groupLane =
+      opts?.deliverToOwnerDm === true && this.ownerUserId ? decodeLaneUserId(userId) : null;
+    if (groupLane) {
+      // 来源深链只认调用方给的那条触发消息 id —— 只有它知道这张卡属于哪一轮业务 turn。
+      // 传输层能看到的两个信号都不等于业务轮次: 回挂目标在 'first' 档发出首条回复即被
+      // consumeReplyParams 消耗, 而调用方在发卡前会主动收口流式 handle(turnRunner 的
+      // finalizeActiveStream), 所以"有活动流式回合"同样为假。宁可不渲染深链, 不猜。
+      const link = groupMessageLink(
+        groupLane.chatId,
+        sourceMessageIdIn(groupLane.chatId, opts?.ownerDmSourceMessageId),
+      );
+      // 卡片不再发到群里 —— callSend 只停它自己那条 chat 的 typing loop(这里是宿主私聊),
+      // 群里那条会继续每 4.5s 打一次 sendChatAction, 于是群里一直显示「正在输入…」。
+      // 手动停掉原群的那条(review 指出的回归)。
+      this.stopTypingLoopsForChat(groupLane.chatId);
+      // 说明文案由调用方给(传输层不造用户可见措辞); 深链是 URL 不是文案, 在这里拼。
+      const notice = [opts?.ownerDmNote, link].filter((line) => line).join('\n');
+      const { html, replyMarkup } = buildCardPayload({
+        ...spec,
+        body: notice.length > 0 ? `${notice}\n\n${spec.body}` : spec.body,
+      });
+      const sent = await this.callSend<TgMessage>('sendMessage', {
+        chat_id: this.ownerUserId,
+        text: html,
+        parse_mode: 'HTML',
+        ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
+      });
+      // 刻意不动群 lane 的回挂目标: 那条触发消息在私聊里不存在, 消耗掉还会让本轮真正的
+      // 回答失去引用。回声按**实际落地**的私聊维度记, 否则群窗口会以为 bot 在群里说过这段。
+      this.recordOwnEcho(
+        this.ownerUserId,
+        spec.title ? `[${spec.title}]` : spec.body.slice(0, 100),
+        sent,
+      );
+      return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
+    }
     this.claimTurnReplyTargetIfIdle(userId);
     const target = this.targetOf(userId);
     const { html, replyMarkup } = buildCardPayload(spec);
+    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
     const sent = await this.callSend<TgMessage>('sendMessage', {
       ...target,
-      ...this.consumeReplyParams(userId),
+      ...replyParams,
       text: html,
       parse_mode: 'HTML',
       ...(replyMarkup ? { reply_markup: replyMarkup } : {}),
     });
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, spec.title ? `[${spec.title}]` : spec.body.slice(0, 100), sent);
     return { messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)) };
   }
@@ -646,16 +732,37 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   async startStreamingText(userId: string, initial?: string): Promise<StreamingTextHandle> {
-    // DM(非 lane 合成 id)走 sendMessageDraft 原生流式草稿: turn 开始即原生
-    // "Thinking…" 占位动画, 中间态无真实消息、定稿才落聊天记录(#848 的
-    // answerOnly 补丁由该通道取代; draft 一旦失败 handle 内部 latch 回
-    // send+edit 经典路径, 且本实例后续 turn 不再尝试 draft)。
-    const isDm = decodeLaneUserId(userId) === null;
-    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget)。
+    // DM 与群/topic 共用同一条流式呈现: send + editMessageText 覆盖同一条
+    // 消息, 过程区(工具时间线)与正文一起原地刷新, 定稿原地升级为 rich。
+    // 私聊曾走 sendMessageDraft 草稿通道 —— 草稿只能承载一行纯文本, 工具调用
+    // 在私聊里因此整体不可见, 与群聊形成两套体验(Chris 2026-08 点名);
+    // 呈现规则不再按 DM / 群分叉。
+    // 一轮输出开始: 从待配对队列领取本轮的回挂目标(见 claimTurnReplyTarget), 并占住
+    // 槽位归属直到本回合收口 —— 期间的排队提示等独立出站不得把它改向新消息。
     this.claimTurnReplyTarget(userId);
-    const useDraft = isDm && !this.draftStreamingDisabled;
-    if (useDraft) this.draftIdCounter += 1;
-    const draftId = this.draftIdCounter;
+    this.beginStreamRound(userId);
+    return this.startTrackedStreaming(userId, initial);
+  }
+
+  private async startTrackedStreaming(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
+    try {
+      const handle = await this.createStreamingHandle(userId, initial);
+      return this.trackStreamRound(userId, handle);
+    } catch (err) {
+      // 建 handle 就失败 → 本回合没有 finalize/close 可依靠, 当场退归属, 否则槽位
+      // 会被一个不存在的回合永久锁住。
+      this.endStreamRound(userId);
+      throw err;
+    }
+  }
+
+  private createStreamingHandle(
+    userId: string,
+    initial?: string,
+  ): Promise<StreamingTextHandle> {
     return startTelegramStreaming(
       {
         send: async (markdown) => {
@@ -678,27 +785,6 @@ export class TelegramIM extends BaseIM implements ChannelIM {
             message_id: Number(nativeId),
           });
         },
-        ...(useDraft
-          ? {
-              sendFinal: (markdown: string) => this.sendRichFinal(userId, markdown),
-              sendDraft: async (plainText: string) => {
-                try {
-                  await this.requireApi().call('sendMessageDraft', {
-                    chat_id: Number(userId),
-                    draft_id: draftId,
-                    text: plainText,
-                  });
-                } catch (err) {
-                  // 能力性失败(旧 Bot API server / 客户端不支持)永久 latch,
-                  // 不再逐 turn 白付一次往返; 瞬时失败(限流等)只影响本 turn。
-                  if (err instanceof TelegramApiError && err.errorCode === 400) {
-                    this.draftStreamingDisabled = true;
-                  }
-                  throw err;
-                }
-              },
-            }
-          : {}),
       },
       initial,
     );
@@ -1130,8 +1216,8 @@ export class TelegramIM extends BaseIM implements ChannelIM {
       if (this.behaviorOf().replyQuoteDm === 'first') {
         this.queueReplyTarget(String(m.from.id), String(m.message_id));
       }
-      // DM 也要 typing: 草稿占位只在会话内部可见, 聊天列表/标题栏的
-      // 「正在输入…」靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
+      // DM 也要 typing: 首条真实消息落地前, 聊天列表/标题栏的「正在输入…」
+      // 是唯一反馈, 靠 sendChatAction(Chris 2026-07-30 实测点名缺失)。
       this.startTypingLoop(String(m.chat.id));
       this.emitMessage(event);
       return;
@@ -1306,29 +1392,125 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     else this.turnReplyTargets.delete(userId);
   }
 
-  /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
+  /**
+   * 独立输出入口用的领取: 队列有货, 且槽位为空 **或槽位已过时** 时领取。
+   *
+   * 为何不能拿「槽位非空」当忙: 槽位里的目标可能是上一轮的残留 —— 某轮领取后
+   * 出站失败且调用方直接放弃(如 processOne 捕到 unsupportedOnly 后 return), 目标就会
+   * 一直占着。旧判据下下一条入站消息领不到自己的新目标, 回复会持续落后一条。
+   *
+   * 过时判据不靠猜失败原因(传输层无法区分「调用方还会重试」与「已放弃」), 而是用
+   * Telegram 的硬事实: 同一 chat 内 message_id 单调递增 —— 队列里出现更大的 id,
+   * 就证明有更新的触发消息到达过, 槽位那个已经不是"当前该回的那条"。
+   * 这比分类失败路径更嬽: 任何原因造成的残留都会在下一条入站消息处自愈。
+   */
   private claimTurnReplyTargetIfIdle(userId: string): void {
-    if (this.turnReplyTargets.has(userId)) return;
-    if (!this.pendingReplyTargets.has(userId)) return;
+    const queue = this.pendingReplyTargets.get(userId);
+    if (!queue || queue.length === 0) return;
+    const current = this.turnReplyTargets.get(userId);
+    if (current !== undefined) {
+      // 流式回合持有期间一律不接管: 排队提示这类独立出站不得把正在输出的
+      // 回合改向新消息(群 'all' 档会把 A 剩下的答案挂到 B 上)。代价是该提示本身
+      // 沿用回合目标或不挂回 —— 但 B 的目标因此留在队列里, B 自己的回合能领到。
+      if (this.hasActiveStreamRound(userId)) return;
+      // 无活动回合 = 槽位是上一轮残留; 队列里有更新的 id 即证明它过时。
+      if (!hasNewerTrigger(queue, current)) return;
+    }
     this.claimTurnReplyTarget(userId);
   }
 
+  private hasActiveStreamRound(userId: string): boolean {
+    return (this.activeStreamRounds.get(userId) ?? 0) > 0;
+  }
+
+  private beginStreamRound(userId: string): void {
+    this.activeStreamRounds.set(userId, (this.activeStreamRounds.get(userId) ?? 0) + 1);
+  }
+
+  private endStreamRound(userId: string): void {
+    const next = (this.activeStreamRounds.get(userId) ?? 0) - 1;
+    if (next > 0) this.activeStreamRounds.set(userId, next);
+    else this.activeStreamRounds.delete(userId);
+  }
+
   /**
-   * 本轮回挂目标 → reply_parameters(首条出站专用)。
-   * allow_sending_without_reply: 触发消息被删时降级为普通消息, 不让发送失败。
+   * 给流式 handle 包上回合归属的生命周期: finalize / close 任一到达即收口(只计
+   * 一次)。收口后槽位失去保护, 残留目标可被下一条入站消息覆盖领取(自愈)。
    */
-  private consumeReplyParams(
-    userId: string,
-  ): { reply_parameters: { message_id: number; allow_sending_without_reply: true } } | Record<string, never> {
+  private trackStreamRound(userId: string, inner: StreamingTextHandle): StreamingTextHandle {
+    let ended = false;
+    const end = (): void => {
+      if (ended) return;
+      ended = true;
+      this.endStreamRound(userId);
+    };
+    const wrapped: StreamingTextHandle = {
+      get messageId() {
+        return inner.messageId;
+      },
+      append: (delta) => inner.append(delta),
+      replace: (fullText) => inner.replace(fullText),
+      finalize: async (finalText) => {
+        try {
+          await inner.finalize(finalText);
+        } finally {
+          end();
+        }
+      },
+      close: () => {
+        try {
+          inner.close();
+        } finally {
+          end();
+        }
+      },
+      // 只在底层真的支持时暴露 —— turnRunner 靠它是否存在判断能不能投图。
+      ...(inner.addExtraImageAbsPath
+        ? { addExtraImageAbsPath: (absPath: string) => inner.addExtraImageAbsPath?.(absPath) }
+        : {}),
+    };
+    return wrapped;
+  }
+
+  /**
+   * 租借本次出站的回挂目标: 同时返回 reply_parameters 与**请求级凭据**(lease),
+   * **只读不消耗**。allow_sending_without_reply: 触发消息被删时降级为普通消息。
+   *
+   * 读与消耗分开的原因: 首条出站失败(网络/限流耗尽)时调用方会重试 —— 发前就消耗
+   * 会让重试那条丢掉引用('first' 档于是整轮不再挂回)。旧 sendRichFinal 就是这么
+   * 做的, DM 改走经典路径后该语义必须留在共用发送入口上。
+   */
+  private leaseReplyTarget(userId: string): {
+    params:
+      | { reply_parameters: { message_id: number; allow_sending_without_reply: true } }
+      | Record<string, never>;
+    lease: ReplyTargetLease;
+  } {
     const target = this.turnReplyTargets.get(userId);
-    if (!target) return {};
+    if (!target) return { params: {}, lease: null };
+    return {
+      params: {
+        reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
+      },
+      lease: { userId, messageId: target },
+    };
+  }
+
+  /**
+   * 出站确定成功后才消耗 —— 且只能消耗**本次请求真正带上的那个目标**。
+   *
+   * 身份校验不可省: 旧轮请求还在途时新一轮可能已 claim 了新目标写进同一个槽位,
+   * 此时若按 userId 无条件删除, 旧请求的迟到成功会吃掉新轮的目标 —— 新轮首条
+   * 答案于是丢引用(群里就是一条与提问脉络不上的回答)。不匹配 = 本次与当前槽位无关,
+   * 什么都不做。
+   */
+  private commitReplyTarget(lease: ReplyTargetLease): void {
+    if (!lease) return;
+    if (this.turnReplyTargets.get(lease.userId) !== lease.messageId) return;
     // 群 'all' 档: 目标保留整轮(下一轮 claim 时被替换/清除), 每条出站都挂回。
     const keepForAll =
-      decodeLaneUserId(userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
-    if (!keepForAll) this.turnReplyTargets.delete(userId);
-    return {
-      reply_parameters: { message_id: Number(target), allow_sending_without_reply: true },
-    };
+      decodeLaneUserId(lease.userId) !== null && this.behaviorOf().replyQuoteGroup === 'all';
+    if (!keepForAll) this.turnReplyTargets.delete(lease.userId);
   }
 
 
@@ -1356,50 +1538,9 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * Rich 定稿(Bot API 10.1 sendRichMessage, markdown 直投): 表格/标题/代码块/
-   * LaTeX 原生渲染, 32768 上限一条到底不分段。仅 DM 定稿路径尝试;
-   *   - 404 = 方法不可用(旧 Bot API server) → 实例级永久 latch;
-   *   - 400 = 本条内容 rich 解析不过 → 只本条回落, rich 保持可用;
-   *   - 其它错误(网络/限流)回落经典路径, 不 latch。
-   * DM 定稿顺带 message_effect_id(👍 特效, 仅私聊生效)。
-   */
-  private async sendRichFinal(userId: string, markdown: string): Promise<string | null> {
-    if (this.richSendDisabled || !markdown.trim()) return null;
-    const api = this.api;
-    if (!api) return null;
-    // 只读取不消耗: rich 失败(404 latch/400 解析/网络)回落经典路径时,
-    // 目标必须还在, 否则定稿消息丢掉回挂。成功后才按档位消耗。
-    const pendingTarget = this.turnReplyTargets.get(userId);
-    try {
-      const target = this.targetOf(userId);
-      const sent = await this.callSend<TgMessage>('sendRichMessage', {
-        ...target,
-        ...(pendingTarget
-          ? {
-              reply_parameters: {
-                message_id: Number(pendingTarget),
-                allow_sending_without_reply: true,
-              },
-            }
-          : {}),
-        rich_message: { markdown },
-        message_effect_id: DM_DONE_EFFECT_ID,
-      });
-      if (pendingTarget) this.consumeReplyParams(userId); // 成功才消耗('all' 档语义由它处理)
-      this.recordOwnEcho(userId, markdown, sent);
-      return encodeMessageId(String(sent.chat.id), String(sent.message_id));
-    } catch (err) {
-      if (err instanceof TelegramApiError && err.errorCode === 404) {
-        this.richSendDisabled = true;
-      }
-      return null;
-    }
-  }
-
-  /**
-   * 经典路径 rich 原地定稿(editMessageText + rich_message, Bot API 10.1):
-   * 群与降级档 DM 的流式占位消息一步升级 rich 渲染。404 → 实例级 latch;
-   * 400(本条解析不过)只回落本条。
+   * Rich 原地定稿(editMessageText + rich_message, Bot API 10.1): 把流式占位
+   * 消息一步升级成 rich 渲染(表格/标题/代码块/LaTeX 原生, 32768 上限免分段)。
+   * DM 与群共用。404 → 实例级 latch; 400(本条解析不过)只回落本条。
    */
   private async richEditFinal(messageId: string, markdown: string): Promise<boolean> {
     if (this.richSendDisabled || !markdown.trim()) return false;
@@ -1427,7 +1568,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     markdownChunk: string,
   ): Promise<{ messageId: string; imageUrls: string[] }> {
     const target = this.targetOf(userId);
-    const replyParams = this.consumeReplyParams(userId);
+    const { params: replyParams, lease } = this.leaseReplyTarget(userId);
     const { html, imageUrls } = markdownToTelegramHtml(markdownChunk);
     let sent: TgMessage;
     try {
@@ -1450,6 +1591,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
         throw err;
       }
     }
+    this.commitReplyTarget(lease);
     this.recordOwnEcho(userId, markdownChunk, sent);
     return {
       messageId: encodeMessageId(String(sent.chat.id), String(sent.message_id)),
@@ -1461,13 +1603,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     const target = this.targetOf(userId);
     let firstMessageId = '';
     for (const chunk of chunkTelegramSource(text)) {
+      // 只首条挂回: 后续分段不租借、也不提交(lease 为 null 时 commit 是 noop)。
+      const { params: replyParams, lease } =
+        firstMessageId === '' ? this.leaseReplyTarget(userId) : { params: {}, lease: null };
       const sent = await this.callSend<TgMessage>('sendMessage', {
         ...target,
-        ...(firstMessageId === '' ? this.consumeReplyParams(userId) : {}),
+        ...replyParams,
         text: chunk || '…',
         link_preview_options: { is_disabled: true },
       });
       if (!firstMessageId) {
+        this.commitReplyTarget(lease);
         firstMessageId = encodeMessageId(String(sent.chat.id), String(sent.message_id));
       }
       this.recordOwnEcho(userId, chunk, sent);
@@ -1879,6 +2025,20 @@ export type { TelegramGroupWindowEntry } from './inbound.js';
  * reason 保留原文供日志/诊断; code 是给 UI 用的稳定分类 —— 渲染层按 code 取
  * i18n 文案, 不再把这些英文技术串直接怼给用户看。
  */
+/**
+ * 私有超级群里某条消息的深链(`t.me/c/<internal>/<messageId>`) —— 授权卡改投宿主私聊后,
+ * 用它告诉宿主「是哪个群的哪条消息」。
+ *
+ * 只对 `-100` 前缀的私有超级群成立(公开群要 username, 这一层没有持久化群名/username)。
+ * 形状对不上返回 null, 调用方省掉那一行, 不拼一个点不开的链接。
+ */
+function groupMessageLink(chatId: string, messageId: string | null): string | null {
+  if (messageId === null || !chatId.startsWith('-100')) return null;
+  const internal = chatId.slice(4);
+  if (!/^\d+$/.test(internal) || !/^\d+$/.test(messageId)) return null;
+  return `https://t.me/c/${internal}/${messageId}`;
+}
+
 function mapConnectErrorToStatus(err: unknown): IMStatus {
   if (err instanceof TelegramApiError) {
     if (err.errorCode === 401 || err.errorCode === 404) {

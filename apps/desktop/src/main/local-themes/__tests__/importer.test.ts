@@ -43,6 +43,20 @@ const VSCODE_THEME = JSON.stringify({
   tokenColors: [{ scope: 'comment', settings: { foreground: '#7f848e' } }],
 });
 
+const UNSATISFIABLE_SWITCH_CONTRAST_THEME = JSON.stringify({
+  name: 'Impossible Contrast',
+  type: 'dark',
+  colors: {
+    'editor.background': '#000000',
+    'editor.foreground': '#dddddd',
+    'sideBar.background': '#ffffff',
+    'list.hoverBackground': '#777777',
+    'panel.border': '#555555',
+    'button.background': '#666666',
+  },
+  tokenColors: [{ scope: 'comment', settings: { foreground: '#777777' } }],
+});
+
 const OBSIDIAN_THEME = `
 /* Dual mode theme */
 .theme-dark {
@@ -260,6 +274,13 @@ describe('外部主题导入（main 侧编排）', () => {
     pickFile(writeSource('plain.css', '.foo { color: red; }'));
 
     await expect(importExternalTheme()).rejects.toThrow('THEME_UNSUPPORTED_FILE');
+  });
+
+  it('主题无法派生可辨认的 Switch 关闭态时返回专用错误且不落盘', async () => {
+    pickFile(writeSource('impossible.json', UNSATISFIABLE_SWITCH_CONTRAST_THEME));
+
+    await expect(importExternalTheme()).rejects.toThrow('THEME_CONTRAST_UNSUPPORTED');
+    expect(loadLocalThemesSync().themes).toEqual([]);
   });
 
   it('超大文件报 THEME_FILE_TOO_LARGE 而不读进内存', async () => {

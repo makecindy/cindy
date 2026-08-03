@@ -9,7 +9,7 @@
  *   4. ask 档:区内写照旧弹 resolver(auto 的差异只在 auto 档生效)。
  */
 
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -143,8 +143,13 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
   }
 
   it('spawns with --append-system-prompt (default pi prompt preserved) and offline/no-proxy env', async () => {
-    process.env.no_proxy = 'corp.internal';
-    delete process.env.NO_PROXY;
+    if (process.platform === 'win32') {
+      // Windows 的环境变量键不区分大小写，无法同时构造“仅有小写键”的进程环境。
+      process.env.NO_PROXY = 'corp.internal';
+    } else {
+      process.env.no_proxy = 'corp.internal';
+      delete process.env.NO_PROXY;
+    }
     await start();
     expect(captured.args).not.toContain('--system-prompt');
     const idx = captured.args.indexOf('--append-system-prompt');
@@ -165,7 +170,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       ]),
     );
     const noProxy = (captured.env.NO_PROXY ?? '').split(',');
-    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1']) {
+    for (const entry of ['corp.internal', '127.0.0.1', 'localhost', '::1', '[::1]']) {
       expect(noProxy).toContain(entry);
     }
     expect(captured.env.no_proxy).toBeUndefined();
@@ -184,7 +189,6 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
 
   it('models.json carries real cost and maxTokens from the model descriptor', async () => {
     await start();
-    const { readFileSync } = await import('node:fs');
     const config = JSON.parse(
       readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
     ) as {
@@ -203,6 +207,67 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       'x-cindy-pi-session-token': '$CINDY_PI_SESSION_TOKEN',
     });
     expect(JSON.stringify(config)).not.toContain(captured.env.CINDY_PI_SESSION_TOKEN);
+  });
+
+  it('只把 resumed retired 模型补进私有 models.json,不暴露到公开能力', async () => {
+    const resolver = vi.fn(() => ({
+      id: 'chatgpt/gpt-retired',
+      displayName: 'GPT Retired',
+      contextWindow: 300_000,
+      efforts: ['minimal', 'low'] as const,
+      defaultEffort: 'low' as const,
+      maxOutputTokens: 96_000,
+    }));
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = resolver;
+    const agent = new PiAgent(deps);
+    const resumeFile = path.join(agentHome, 'retired-session.jsonl');
+    writeFileSync(resumeFile, '{}\n');
+
+    const handle = await agent.startSession({
+      sessionId: 'retired-resume',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-retired',
+      providerId: 'openai',
+      resumeSessionId: resumeFile,
+    });
+    const config = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: { cindy: { models: Array<{ id: string; maxTokens: number }> } } };
+
+    expect(resolver).toHaveBeenCalledWith('openai', 'chatgpt/gpt-retired');
+    expect(config.providers.cindy.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'm' }),
+      expect.objectContaining({ id: 'chatgpt/gpt-retired', maxTokens: 96_000 }),
+    ]));
+    expect(agent.capabilities.availableModels.map((model) => model.id)).toEqual(['m']);
+    await handle.close();
+  });
+
+  it('新会话缺少公开模型时不调用私有续跑解析器', async () => {
+    const resolver = vi.fn(() => ({
+      id: 'chatgpt/gpt-retired',
+      displayName: 'GPT Retired',
+      contextWindow: 300_000,
+      efforts: [] as const,
+      defaultEffort: null,
+    }));
+    const deps = buildDeps();
+    deps.resolvePiRuntimeModelDescriptor = resolver;
+    const agent = new PiAgent(deps);
+    const handle = await agent.startSession({
+      sessionId: 'fresh-retired',
+      workingDir: cwd,
+      model: 'chatgpt/gpt-retired',
+      providerId: 'openai',
+    });
+    const config = JSON.parse(
+      readFileSync(path.join(captured.env.PI_CODING_AGENT_DIR as string, 'models.json'), 'utf8'),
+    ) as { providers: { cindy: { models: Array<{ id: string }> } } };
+
+    expect(resolver).not.toHaveBeenCalled();
+    expect(config.providers.cindy.models.some((model) => model.id === 'chatgpt/gpt-retired')).toBe(false);
+    await handle.close();
   });
 
   it('auto mode silently approves in-workspace writes without consulting the resolver', async () => {
@@ -226,14 +291,14 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolverCalls++;
       return { kind: 'permission', behavior: 'deny' } as never;
     });
-    await handle.send({ type: 'user', content: 'Update the system hosts mapping for this test.' });
-    firePermissionRequest('r2', 'write', { path: '/etc/hosts' });
+    await handle.send({ type: 'user', content: 'Update the shared scratch file for this test.' });
+    firePermissionRequest('r2', 'write', { path: '/tmp/outside.txt' });
     await flush();
     expect(review).toHaveBeenCalledWith(expect.objectContaining({
       agentKind: 'pi',
       model: 'm',
-      userIntent: 'Update the system hosts mapping for this test.',
-      action: { kind: 'file-write', path: '/etc/hosts' },
+      userIntent: 'Update the shared scratch file for this test.',
+      action: { kind: 'file-write', path: '/tmp/outside.txt' },
     }));
     expect(resolverCalls).toBe(0);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r2', confirmed: true });
@@ -274,7 +339,7 @@ describe('pi auto-review dispatch & spawn config (mocked pi process)', () => {
       resolverCalls++;
       return { kind: 'permission', behavior: 'allow' } as never;
     });
-    firePermissionRequest('r7', 'write', { path: '/etc/hosts' });
+    firePermissionRequest('r7', 'write', { path: '/tmp/outside.txt' });
     await flush();
     expect(resolverCalls).toBe(0);
     expect(captured.sent).toContainEqual({ type: 'extension_ui_response', id: 'r7', confirmed: false });

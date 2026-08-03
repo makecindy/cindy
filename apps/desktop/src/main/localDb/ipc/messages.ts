@@ -7,7 +7,7 @@
  */
 
 import { ipcMain, BrowserWindow } from 'electron';
-import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, or, sql, type SQL } from 'drizzle-orm';
+import { and, asc, eq, inArray, lt, gt, gte, desc, isNull, ne, or, sql, type SQL } from 'drizzle-orm';
 import { createId } from '@paralleldrive/cuid2';
 
 import { getDbClient } from '../client/current';
@@ -28,6 +28,10 @@ import { importExternalClaudeCodeMessagesForSession } from '../../maker-host/cla
 import { isDeviceLinkInvoke } from '../../device-link/invoke-context';
 import { onMessageCreated as onChatMessageCreatedForEmbedding } from '../../embedders/chat-history-embedder';
 import { recomputePrRefsForSession, recordPrRefsForMessage } from '../../git-context/prRefsStore';
+import {
+  cleanupStagedChatAttachments,
+  extractChatAttachmentPathsFromPersistedContent,
+} from '../../file-browser/remote-file-cache';
 import {
   isSyntheticTriggerText,
   mergeDismissedIntoErrorContent,
@@ -53,6 +57,12 @@ const MESSAGE_DELETION_USER_BOUNDARY_PAGE_SIZE = 32;
 const messageRowid = sql<number>`rowid`;
 type MessageRow = typeof messages.$inferSelect;
 type MessageRowWithRowid = MessageRow & { rowid: number };
+
+const PERSISTED_CHAT_ATTACHMENT_ROWS_SQL = `SELECT m.content
+   FROM messages AS m
+   JOIN sessions AS s ON s.id = m.session_id
+  WHERE s.status != 'deleted'
+    AND m.content LIKE '%chat-attachment-cache%'`;
 
 export interface EstimatedSessionValueEntry {
   clientId: string;
@@ -80,6 +90,66 @@ const VALID_ROLES: ReadonlySet<MessageRole> = new Set([
   'plan_review',
   'thinking',
 ] as const);
+
+function uniqueStrings(values: readonly string[]): string[] {
+  return [...new Set(values)];
+}
+
+/** Return staged attachment paths persisted by a session's messages. */
+export async function listSessionPersistedChatAttachmentPaths(
+  sessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ content: messages.content })
+    .from(messages)
+    .where(eq(messages.sessionId, sessionId));
+  return uniqueStrings(
+    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
+}
+
+/**
+ * Return the staged attachment paths that may be removed after deleting one
+ * session. Forked sessions copy persisted message content, so a path remains
+ * protected while any other non-deleted session still references it.
+ */
+export async function listDeletableSessionPersistedChatAttachmentPaths(
+  sessionId: string,
+): Promise<string[]> {
+  const [sessionPaths, retainedPaths] = await Promise.all([
+    listSessionPersistedChatAttachmentPaths(sessionId),
+    listPersistedChatAttachmentPathsForOtherSessions(sessionId),
+  ]);
+  return sessionPaths.filter((filePath) => !retainedPaths.includes(filePath));
+}
+
+/** Return staged attachment paths referenced by other non-deleted sessions. */
+export async function listPersistedChatAttachmentPathsForOtherSessions(
+  sessionId: string,
+): Promise<string[]> {
+  const rows = await getDbClient().drizzle
+    .select({ content: messages.content })
+    .from(messages)
+    .innerJoin(sessions, eq(messages.sessionId, sessions.id))
+    .where(and(ne(messages.sessionId, sessionId), ne(sessions.status, 'deleted')));
+  return uniqueStrings(
+    rows.flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
+}
+
+/** Return all staged attachment paths retained by the current owner's message DB. */
+export async function listPersistedChatAttachmentPaths(): Promise<string[]> {
+  const rows = await getDbClient().query<{ content: unknown }>(
+    PERSISTED_CHAT_ATTACHMENT_ROWS_SQL,
+  );
+  return uniqueStrings(
+    rows.flatMap((row) =>
+      typeof row.content === 'string'
+        ? extractChatAttachmentPathsFromPersistedContent(row.content)
+        : [],
+    ),
+  );
+}
 
 export function registerMessageIpc(): void {
   ipcMain.handle('local-db:messages:list', async (_e, sessionId: unknown, opts: unknown) => {
@@ -735,6 +805,15 @@ export async function commitMessageDeletion(
   preview: string | null;
 }> {
   const now = Date.now();
+  const db = getDbClient().drizzle;
+  const deletedAttachmentPaths = uniqueStrings(
+    (
+      await db
+        .select({ content: messages.content })
+        .from(messages)
+        .where(and(eq(messages.sessionId, sessionId), inArray(messages.clientId, clientIds)))
+    ).flatMap((row) => extractChatAttachmentPathsFromPersistedContent(row.content)),
+  );
   const result = await getDbClient().tx('message.delete', {
     sessionId,
     clientIds,
@@ -746,6 +825,29 @@ export async function commitMessageDeletion(
     },
     updatedAt: now,
   });
+
+  if (deletedAttachmentPaths.length > 0) {
+    try {
+      const remainingAttachmentPaths = new Set(
+        await listSessionPersistedChatAttachmentPaths(sessionId),
+      );
+      const retainedByOtherSessions = new Set(
+        await listPersistedChatAttachmentPathsForOtherSessions(sessionId),
+      );
+      await cleanupStagedChatAttachments(
+        deletedAttachmentPaths.filter(
+          (filePath) =>
+            !retainedByOtherSessions.has(filePath) && !remainingAttachmentPaths.has(filePath),
+        ),
+      );
+    } catch (error) {
+      log.warn('message staged attachment cleanup failed', {
+        sessionId,
+        deletedClientIds: clientIds,
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
 
   // 当前生产聊天附件主要是 session-attachment 粗粒度引用，不能因删除一轮
   // 误删同 session 其它气泡仍在用的 blob。这里只释放明确以消息 id/clientId

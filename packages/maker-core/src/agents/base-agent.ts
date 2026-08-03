@@ -82,6 +82,8 @@ export interface AgentCapabilityAdditions {
 export interface CodexMcpThreadContextArgs {
   threadId: string;
   sessionId: string;
+  /** 当前 Maker Session 实例代号；同 business session 重建后必须变化。 */
+  sessionInstanceId?: string;
   workingDir: string;
   /**
    * SSH remote 会话的 host id。cindy_memory 的 store 定位键要靠它区分
@@ -111,12 +113,28 @@ export type McpToolApprovalPolicy =
   | 'prompt'
   | 'prompt-each-time';
 
-/** pi spawn 附加配置:host 的 MCP HTTP bridge 出口(见 AgentDeps.preparePiExtraSpawnConfig)。 */
+/** Pi 内 MCP client 的 server 描述；remote 存在时直接访问外部 Streamable HTTP MCP。 */
+export interface PiMcpServerRef {
+  name: string;
+  url: string;
+  remote?: {
+    /** HTTP header 名 → Pi 父进程 env var 名；描述符里绝不放 header 真值。 */
+    headerEnvVars: Record<string, string>;
+    /** extension 启动时 initialize + tools/list 的总预算；必须短于 Pi RPC ready 超时。 */
+    startupTimeoutMs: number;
+    /** 完成启动探测后的单次工具调用预算。 */
+    requestTimeoutMs: number;
+  };
+}
+
+/** pi spawn 附加配置:host 的 MCP HTTP bridge / 外部 HTTP MCP 出口。 */
 export interface PiExtraSpawnConfig {
   mcpBridge?: {
     token: string;
-    servers: Array<{ name: string; url: string }>;
+    servers: PiMcpServerRef[];
   } | null;
+  /** 外部 MCP header 真值；只进 Pi 父进程 env，并在 bash spawn 边界剥离。 */
+  mcpEnv?: Record<string, string>;
   /**
    * 释放本 session 的 bridge lease；带 sessionId 时同时注销身份 ctx。PiAgent 在
    * close() 时调用且要求幂等。只要拿到 bridge（包括匿名会话）就应提供。
@@ -131,11 +149,15 @@ export type PiNativeApi =
   | 'openai-completions'
   | 'google-generative-ai';
 
+export type PiNativeThinkingLevel = Exclude<Effort, 'ultra'>;
+
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
+  thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
@@ -182,6 +204,8 @@ export interface PiNativeProvidersResult {
  */
 export interface PiExtraSpawnConfigContext {
   sessionId?: string;
+  /** 当前 Maker Session 实例代号；用于阻断旧 bridge 请求借用新实例权限。 */
+  sessionInstanceId?: string;
   workingDir: string;
   vendorOptions?: Record<string, unknown>;
 }
@@ -189,6 +213,13 @@ export interface PiExtraSpawnConfigContext {
 export interface CodexExtraSpawnConfig {
   extraArgs: string[];
   extraEnv: Record<string, string>;
+  /**
+   * Build per-thread config overrides that bind host-owned HTTP MCP URLs to one
+   * in-memory Session instance. The app-server process is shared, so the spawn
+   * config only supplies the unbound base URL; thread/start|resume must add the
+   * opaque route identity for the concrete Session using this callback.
+   */
+  buildSessionMcpConfig?: (sessionInstanceId: string) => Record<string, unknown>;
   codexProxyActive?: boolean;
   /**
    * spawn args 中定义的「OpenAI 身份」provider id(name 逐字为 "OpenAI",
@@ -304,6 +335,23 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
+   * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
+   * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
+   * availableModels 或授予新选择准入。
+   */
+  resolvePiRuntimeModelDescriptor?: (
+    providerId: string | null | undefined,
+    modelId: string,
+  ) => ModelDescriptor | null;
+
+  /**
+   * Pi-only:为 `cindy` gateway 的 models.json 块解析内置 provider-aware 描述符。
+   * 与上面的续跑私有解析器分开，避免生成 gateway 配置放宽 retired/disabled
+   * 准入或改变新会话的私有解析时机。缺省时 Pi 保留 flat descriptor fallback。
+   */
+  resolvePiGatewayModelDescriptor?: (modelId: string) => ModelDescriptor | null;
+
+  /**
    * Host-provided capability descriptor additions.
    *
    * This is append-only: additions with ids already present in the agent's built-in
@@ -407,7 +455,10 @@ export interface AgentDeps {
    * behavior; implementations should be in-memory and best-effort.
    */
   registerCodexMcpThreadContext?: (args: CodexMcpThreadContextArgs) => void;
-  unregisterCodexMcpThreadContext?: (threadId: string) => void;
+  unregisterCodexMcpThreadContext?: (
+    threadId: string,
+    expectedSessionInstanceId?: string,
+  ) => void;
 
   /**
    * Codex 专用:为远端机器构造一个 codex app-server transport。
@@ -618,6 +669,8 @@ export interface AgentDeps {
   remoteCcQueryFactory?: (opts: {
     remoteHostId: string;
     sessionId: string;
+    /** 当前 Maker Session 实例代号；只在宿主 MCP 身份上下文中流转。 */
+    sessionInstanceId?: string;
     /**
      * 给 cc-mgr daemon 起 SDK Query 时用的全部 options
      * (cwd / model / env / mcpServers / systemPrompt / additionalDirectories /
@@ -782,6 +835,13 @@ export interface StartSessionOptions {
    * (如 LEAD_NOT_SUPPORTED) 让 LLM 知道当前调用无法绑定到具体 session。
    */
   sessionId?: string;
+  /**
+   * Maker 为本次内存 Session 实例铸造的唯一代号。业务 sessionId 可在重建后
+   * 复用；MCP 权限读取必须同时匹配本代号。Maker 会覆盖外部同名输入。宿主可
+   * 将它作为 opaque route identity 放进 harness 的本地 MCP URL，但不得把它
+   * 暴露成模型或插件可控的工具参数。
+   */
+  sessionInstanceId?: string;
   workingDir: string;
   /**
    * Product workspace classification. `dialogue` sessions may still receive an
@@ -935,6 +995,8 @@ export interface SendOptions {
    * 共享 session 下区分自动任务 turn 与用户 turn。agent 子类不消费,透传无害。
    */
   origin?: SendOrigin;
+  /** Host-owned per-turn correlation copied onto every AgentEvent for lifecycle settlement. */
+  turnAttemptToken?: number;
   /**
    * Host-owned, per-turn permission policy. This is deliberately a callback
    * rather than prompt text: providers must enforce it at their pre-execution
@@ -1080,7 +1142,7 @@ export interface AgentSessionHandle {
   setInteractionResolver(resolver: InteractionResolver): void;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(model: string, opts?: { providerId?: string | null }): Promise<void>;
+  setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;

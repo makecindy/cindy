@@ -163,6 +163,9 @@ export async function installCustomMarketPlugin(input: {
     // 复核与落位必须在同一把锁内完成,否则复核结论会在落位前过期。
     const commit = async (): Promise<InstalledGhost> => {
       await input.beforeCommit?.();
+      // 这里不传 reviewedManifest:上面那道逐字节比对(packed.manifest ===
+      // input.expected)比出口处的逐项权限比对**更强**,自定义来源不存在服务端
+      // 那种「投影层丢字段」的漂移面。传了是死代码,不传不是漏改。
       const installed = await installOrUpdateMarketGhostPackage(tempPath, {
         ghostId: validated.manifest.id,
         version: validated.manifest.version,

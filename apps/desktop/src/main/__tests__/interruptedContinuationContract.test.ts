@@ -81,6 +81,15 @@ describe('interrupted continuation enqueue contract', () => {
     expect(scheduleEnd).toBeGreaterThan(scheduleStart);
     const scheduleHook = registerSource.slice(scheduleStart, scheduleEnd);
     expect(scheduleHook).not.toMatch(/clearSchedulerAutoResumePending\s*\(/);
+    expect(scheduleHook).toMatch(/\(attempt\)\s*=>\s*\{\s*return\s*\(async/);
+    expect(scheduleHook).not.toMatch(/void\s*\(async\s*\(\)\s*=>/);
+
+    expect(registerSource).toMatch(/getAutoResumeDeferredOwner\(session\.id\)/);
+    const ownerDiscardedStart = registerSource.indexOf('onResumableTurnErrorDiscarded:');
+    const ownerDiscardedEnd = registerSource.indexOf('onResumableTurnError:', ownerDiscardedStart);
+    expect(registerSource.slice(ownerDiscardedStart, ownerDiscardedEnd)).toMatch(
+      /deferredOwner:\s*options\.owner/,
+    );
 
     const dispatchedStart = registerSource.indexOf('onDispatchedUserTurn:');
     const dispatchedEnd = registerSource.indexOf('noteSessionClearBoundary', dispatchedStart);
@@ -88,10 +97,10 @@ describe('interrupted continuation enqueue contract', () => {
     expect(dispatchedEnd).toBeGreaterThan(dispatchedStart);
     const dispatchedHook = registerSource.slice(dispatchedStart, dispatchedEnd);
     expect(dispatchedHook).toMatch(
-      /!inputCoordinator\.isAutoResumePending\(sessionId\)/,
+      /attemptToken !== null/,
     );
     expect(dispatchedHook).toMatch(
-      /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId\)/,
+      /clearSchedulerAutoResumePending\(sessionId, item\.origin\.runId, attemptToken\)/,
     );
 
     const discardedStart = registerSource.indexOf('onDiscardedQueuedMessage:');
@@ -100,14 +109,22 @@ describe('interrupted continuation enqueue contract', () => {
     expect(discardedEnd).toBeGreaterThan(discardedStart);
     const discardedHook = registerSource.slice(discardedStart, discardedEnd);
     expect(discardedHook).toMatch(
-      /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
+      /settleUndispatchedInterruptedAutoResume\(sessionId, item\)/,
     );
     expect(discardedHook).toMatch(
-      /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId\)/,
+      /finalizeUndispatchedClaimedRetry\(sessionId, item, ['"]cancelled['"]\)/,
     );
     expect(discardedHook).toMatch(
-      /notifySchedulerAutoResumeFailed\(sessionId, item\.origin\.runId\)/,
+      /schedulerQueuedPromptDiscardWatchers/,
     );
+    const discardedSettleIndex = discardedHook.indexOf(
+      'settleUndispatchedInterruptedAutoResume(sessionId, item)',
+    );
+    const discardedFinalizeIndex = discardedHook.indexOf(
+      "finalizeUndispatchedClaimedRetry(sessionId, item, 'cancelled')",
+    );
+    expect(discardedSettleIndex).toBeGreaterThan(-1);
+    expect(discardedFinalizeIndex).toBeGreaterThan(discardedSettleIndex);
 
     const settleStart = registerSource.indexOf('function settleUndispatchedAutoResumeOutcome(');
     const settleEnd = registerSource.indexOf('\n}\n', settleStart);
@@ -115,19 +132,85 @@ describe('interrupted continuation enqueue contract', () => {
     expect(settleEnd).toBeGreaterThan(settleStart);
     const settleHelper = registerSource.slice(settleStart, settleEnd);
     expect(settleHelper).toMatch(
-      /autoResumeBookkeeping\.isPendingOutcomeClientId\(sessionId, item\.clientId\)/,
+      /autoResumeBookkeeping\.settleOutcomeForClient\(/,
     );
     expect(settleHelper).toMatch(
-      /autoResumeBookkeeping\.settleOutcome\(sessionId, ['"]failed['"]\)/,
+      /item\.clientId/,
+    );
+
+    const interruptedSettleStart = registerSource.indexOf(
+      'function settleUndispatchedInterruptedAutoResume(',
+    );
+    const interruptedSettleEnd = registerSource.indexOf('\n}\n', interruptedSettleStart);
+    expect(interruptedSettleStart).toBeGreaterThan(-1);
+    expect(interruptedSettleEnd).toBeGreaterThan(interruptedSettleStart);
+    const interruptedSettleHelper = registerSource.slice(
+      interruptedSettleStart,
+      interruptedSettleEnd,
+    );
+    expect(interruptedSettleHelper).toMatch(
+      /autoResumeBookkeeping\.hasPendingLifecycleForClient\(/,
+    );
+    expect(interruptedSettleHelper).toMatch(
+      /interruptedTurnAutoResumeGuard\.noteResumeSendFailed\(sessionId, attemptToken\)/,
     );
 
     const undispatchedStart = registerSource.indexOf('onUndispatchedUserTurn:');
     const undispatchedEnd = registerSource.indexOf('onQueueEmptied:', undispatchedStart);
     expect(undispatchedStart).toBeGreaterThan(-1);
     expect(undispatchedEnd).toBeGreaterThan(undispatchedStart);
-    expect(registerSource.slice(undispatchedStart, undispatchedEnd)).toMatch(
-      /settleUndispatchedAutoResumeOutcome\(sessionId, item\)/,
+    const undispatchedHook = registerSource.slice(undispatchedStart, undispatchedEnd);
+    expect(undispatchedHook).toMatch(
+      /settleUndispatchedInterruptedAutoResume\(sessionId, item\)/,
     );
+    expect(undispatchedHook).toMatch(
+      /finalizeUndispatchedClaimedRetry\(sessionId, item, disposition\)/,
+    );
+    const undispatchedSettleIndex = undispatchedHook.indexOf(
+      'settleUndispatchedInterruptedAutoResume(sessionId, item)',
+    );
+    const undispatchedFinalizeIndex = undispatchedHook.indexOf(
+      'finalizeUndispatchedClaimedRetry(sessionId, item, disposition)',
+    );
+    expect(undispatchedSettleIndex).toBeGreaterThan(-1);
+    expect(undispatchedFinalizeIndex).toBeGreaterThan(undispatchedSettleIndex);
+
+    const finalizeStart = registerSource.indexOf('const finalizeUndispatchedClaimedRetry = (');
+    const finalizeEnd = registerSource.indexOf('\n  };', finalizeStart);
+    expect(finalizeStart).toBeGreaterThan(-1);
+    expect(finalizeEnd).toBeGreaterThan(finalizeStart);
+    const finalizeHelper = registerSource.slice(finalizeStart, finalizeEnd);
+    expect(finalizeHelper).toMatch(
+      /surfaceSuppressedErrorForRetry\(sessionId, item\.clientId\)/,
+    );
+    expect(finalizeHelper).toMatch(
+      /flushSuppressedErrorForRetry\(\s*sessionId,\s*item\.clientId,?\s*\)/,
+    );
+    expect(finalizeHelper).toMatch(
+      /handleAgentIslandSessionStopped\(getStableSessionForTurnBoundary\(sessionId\) \?\? sessionId\)/,
+    );
+  });
+
+  it('retires an interrupted attempt owner after both done and terminal error settlement', () => {
+    const doneStart = registerSource.indexOf('const doneAttemptToken = event.turnAttemptToken;');
+    const doneEnd = registerSource.indexOf('const isSilentStopDone', doneStart);
+    expect(doneStart).toBeGreaterThan(-1);
+    expect(doneEnd).toBeGreaterThan(doneStart);
+    expect(registerSource.slice(doneStart, doneEnd)).toMatch(
+      /autoResumeBookkeeping\.settleOutcome\(session\.id, doneAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, doneAttemptToken\);/,
+    );
+
+    const errorStart = registerSource.indexOf('const failedAttemptToken = event.turnAttemptToken;');
+    const errorEnd = registerSource.indexOf('// 终止型 error 可能没有后续 status/done', errorStart);
+    expect(errorStart).toBeGreaterThan(-1);
+    expect(errorEnd).toBeGreaterThan(errorStart);
+    expect(registerSource.slice(errorStart, errorEnd)).toMatch(
+      /autoResumeBookkeeping\.settleOutcome\(session\.id, failedAttemptToken, 'failed'\);\s*interruptedTurnAutoResumeGuard\.noteAttemptSettled\(session\.id, failedAttemptToken\);/,
+    );
+  });
+
+  it('advertises interval null-clear support for mobile wire compatibility', () => {
+    expect(registerSource).toMatch(/supportsScheduleIntervalNullClear:\s*true/);
   });
 
   it('fails a pending scheduler auto-resume before dispatching unrelated user input', () => {

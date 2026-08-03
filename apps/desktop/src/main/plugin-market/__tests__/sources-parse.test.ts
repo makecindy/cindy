@@ -1,8 +1,10 @@
+import path from 'node:path';
+
 import { describe, expect, it } from 'vitest';
 
 import { parseMarketSource, resolveLocalSourcePath } from '../sources/parse';
 
-const HOME = '/home/tester';
+const HOME = path.join(path.parse(process.cwd()).root, 'home', 'tester');
 
 function parse(input: { source: string; ref?: string; sparsePaths?: string[] }) {
   return parseMarketSource(input, HOME);
@@ -72,7 +74,7 @@ describe('parseMarketSource', () => {
     const result = parse({ source: '~/team/plugins' });
     expect(result).toEqual({
       ok: true,
-      source: { type: 'local', path: `${HOME}/team/plugins` },
+      source: { type: 'local', path: path.join(HOME, 'team', 'plugins') },
     });
   });
 
@@ -140,7 +142,7 @@ describe('parseMarketSource', () => {
   });
 
   it('resolves local paths without touching the filesystem', () => {
-    expect(resolveLocalSourcePath('~/a/b', HOME)).toBe(`${HOME}/a/b`);
+    expect(resolveLocalSourcePath('~/a/b', HOME)).toBe(path.join(HOME, 'a', 'b'));
   });
 
   it('rejects backslash in git URL authority (WHATWG/git 分歧,凭证闸失明)', () => {

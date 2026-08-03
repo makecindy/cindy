@@ -23,7 +23,8 @@
  *
  * 传输层失败在弹框前还会跑一轮分阶段诊断(endpointFetchDiagnostics:代理决策 /
  * DNS / TCP,每段各有硬 deadline——这段跑在阻断路径上,探针挂住等于启动卡死)
- * 并抓一份 netlog,摘要同时进日志和弹框。原因是 Electron `net.request`
+ * 并抓一份 netlog,摘要与产物路径只进日志,不直接展示给普通用户；用户主动点击「复制
+ * 诊断信息」时才将它们交给剪贴板。原因是 Electron `net.request`
  * 把 DNS、代理、TLS、被本机网络过滤扩展拦下全折叠成通用的 `ERR_FAILED`,
  * 只报一个错误码等于没有现场(2026-07 实测:同一 URL curl 与裸 Electron 都是 200,
  * 安装版毫秒级 ERR_FAILED,单看错误码无从下手)。
@@ -48,7 +49,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 
-import { app, dialog, ipcMain, net, netLog } from 'electron';
+import { app, clipboard, dialog, ipcMain, net, netLog } from 'electron';
 
 import {
   resolveClientEndpointsStrict,
@@ -75,15 +76,14 @@ import {
 } from './endpointManifestCache';
 import {
   buildEndpointManifestDialogContent,
+  type EndpointManifestDialogCopyStatus,
+  type EndpointManifestDialogAction,
   type EndpointManifestDialogChoice,
   type EndpointManifestDialogLocale,
   type EndpointManifestFailureKind,
 } from './endpointManifestDialogCopy';
 import { createLogger, getLogDir } from './logger';
-import {
-  ENDPOINT_MANIFEST_BASE_URL,
-  ENDPOINT_MANIFEST_PEER_BASE_URL,
-} from '../shared/endpoints';
+import { ENDPOINT_MANIFEST_BASE_URL, ENDPOINT_MANIFEST_PEER_BASE_URL } from '../shared/endpoints';
 import { resolvePreferredSystemLocale } from '../shared/locale';
 
 const log = createLogger('clientEndpoints');
@@ -91,8 +91,7 @@ const log = createLogger('clientEndpoints');
 const MANIFEST_FILE_NAME = 'endpoint.json';
 const BUILD_VARIANT = import.meta.env.VITE_CINDY_AUTH_REGION;
 /** 与 authManager 的构建区域判定保持一致；dev 使用 CN auth 身份。 */
-const BUILD_AUTH_REGION: ClientEndpointRegion =
-  BUILD_VARIANT === 'global' ? 'global' : 'cn';
+const BUILD_AUTH_REGION: ClientEndpointRegion = BUILD_VARIANT === 'global' ? 'global' : 'cn';
 const DEFAULT_REALM_MANIFEST_BASE_URLS: RealmManifestBaseUrls =
   BUILD_AUTH_REGION === 'global'
     ? {
@@ -263,17 +262,11 @@ function fetchTextViaNet(url: string, timeoutMs: number): Promise<ManifestFetchR
         });
         response.on('end', () => finish({ ok: true, text: body }, timeout));
         response.on('error', (err) =>
-          finish(
-            { ok: false, detail: describeFetchError(err), raw: rawFetchError(err) },
-            timeout,
-          ),
+          finish({ ok: false, detail: describeFetchError(err), raw: rawFetchError(err) }, timeout),
         );
       });
       request.on('error', (err) =>
-        finish(
-          { ok: false, detail: describeFetchError(err), raw: rawFetchError(err) },
-          timeout,
-        ),
+        finish({ ok: false, detail: describeFetchError(err), raw: rawFetchError(err) }, timeout),
       );
       request.end();
     } catch (err) {
@@ -372,7 +365,7 @@ export interface OfflineManifestCandidate {
 /** 阻断循环的依赖注入面(规则 14:测试用内存 harness 驱动,不起 Electron)。 */
 export interface BlockingResolveDeps {
   fetchManifest(timeoutMs: number): Promise<ManifestFetchResult>;
-  /** 拉取/校验失败时问用户;生产实现是系统模态错误框。 */
+  /** 拉取/校验失败时问用户;生产实现是系统模态提示框。 */
   promptRetry(context: ManifestPromptContext): EndpointManifestDialogChoice;
   exitApp(): void;
   timeoutMs?: number;
@@ -521,10 +514,11 @@ export async function resolveClientEndpointsBlocking(
     }
 
     log.warn(
-      'client endpoints manifest unavailable (%s, kind=%s, diagnosis=%s, offline=%s), prompting user',
+      'client endpoints manifest unavailable (%s, kind=%s, diagnosis=%s, logPath=%s, offline=%s), prompting user',
       reason,
       kind,
       diagnosis ?? 'n/a',
+      logPath ?? 'n/a',
       offline ? 'available' : 'none',
     );
     const choice = deps.promptRetry({
@@ -550,33 +544,55 @@ export async function resolveClientEndpointsBlocking(
   }
 }
 
-/** 弹框宿主实现:按系统语言取四语文案(不再中英混排),返回用户选择的语义。 */
-function promptRetryDialog(
+/**
+ * 弹框宿主实现:按系统语言取四语文案(不再中英混排),返回用户选择的语义。
+ *
+ * context 里的简短错误信息直接展示；完整来源、诊断结果和日志路径只在用户主动
+ * 点击复制时交给剪贴板，避免把普通提示变成一屏技术现场。
+ */
+export function promptRetryDialog(
   context: ManifestPromptContext,
   sourceLabel: string,
   locale: EndpointManifestDialogLocale,
 ): EndpointManifestDialogChoice {
-  const content = buildEndpointManifestDialogContent({
-    locale,
-    kind: context.kind,
-    reason: context.reason,
-    source: sourceLabel,
-    diagnosis: context.diagnosis,
-    logPath: context.logPath,
-    offlineSavedAt: context.offlineSavedAt,
-  });
-  // createWindow 之前无父窗口,showMessageBoxSync 直接系统模态。
-  const clicked = dialog.showMessageBoxSync({
-    type: 'error',
-    title: 'Cindy',
-    message: content.message,
-    detail: content.detail,
-    buttons: content.buttons,
-    defaultId: content.defaultId,
-    cancelId: content.cancelId,
-    noLink: true,
-  });
-  return content.choices[clicked] ?? 'exit';
+  let copyStatus: EndpointManifestDialogCopyStatus = 'idle';
+  for (;;) {
+    const content = buildEndpointManifestDialogContent({
+      locale,
+      kind: context.kind,
+      reason: context.reason,
+      source: sourceLabel,
+      diagnosis: context.diagnosis,
+      logPath: context.logPath,
+      copyStatus,
+      offlineSavedAt: context.offlineSavedAt,
+    });
+    // createWindow 之前无父窗口,showMessageBoxSync 直接系统模态。
+    const clicked = dialog.showMessageBoxSync({
+      type: 'warning',
+      title: 'Cindy',
+      message: content.message,
+      detail: content.detail,
+      buttons: content.buttons,
+      defaultId: content.defaultId,
+      cancelId: content.cancelId,
+      noLink: true,
+    });
+    const action: EndpointManifestDialogAction = content.choices[clicked] ?? 'exit';
+    if (action !== 'copy-diagnostics') return action;
+    try {
+      clipboard.writeText(content.diagnosticsText);
+      copyStatus = 'success';
+      log.info('copied endpoint manifest diagnostics (reason=%s)', context.reason);
+    } catch (err) {
+      copyStatus = 'failed';
+      log.warn(
+        'failed to copy endpoint manifest diagnostics (reason=%s): %s',
+        context.reason,
+        String(err),
+      );
+    }
+  }
 }
 
 // ── 模块状态与启动入口 ──────────────────────────────────────────────────────
@@ -640,18 +656,7 @@ const NETLOG_STOP_ATTEMPTS = 2;
  * 定时器 unref,不拖住进程退出;长间隔阶段的成本可以忽略,而"抓包还在录"必须有人收。
  */
 const NETLOG_BACKGROUND_STOP_SCHEDULE_MS: readonly number[] = [
-  5_000,
-  5_000,
-  5_000,
-  5_000,
-  5_000,
-  5_000,
-  30_000,
-  30_000,
-  30_000,
-  30_000,
-  30_000,
-  30_000,
+  5_000, 5_000, 5_000, 5_000, 5_000, 5_000, 30_000, 30_000, 30_000, 30_000, 30_000, 30_000,
 ];
 const NETLOG_BACKGROUND_STOP_LONG_DELAY_MS = 300_000;
 
@@ -762,7 +767,11 @@ export function verifyEndpointNetLogCapture(capture: PreparedNetLogCapture): boo
   try {
     const dirStat = fs.lstatSync(path.dirname(capture.file));
     if (!dirStat.isDirectory()) return false;
-    if (capture.dirIno && dirStat.ino && (dirStat.ino !== capture.dirIno || dirStat.dev !== capture.dirDev)) {
+    if (
+      capture.dirIno &&
+      dirStat.ino &&
+      (dirStat.ino !== capture.dirIno || dirStat.dev !== capture.dirDev)
+    ) {
       return false;
     }
     return fs.lstatSync(capture.file).isFile();
@@ -874,7 +883,9 @@ export async function captureNetLogAround(
       }
       // 前台两次都没停下:抓包可能还在跑,这比"收尾慢"严重,按 warn 记而不是 debug,
       // 并把后续收尾交给后台重试(review 抓到:上一版到这里就彻底没有触发点了)。
-      log.warn('netlog capture still running after foreground stop attempts; retrying in background');
+      log.warn(
+        'netlog capture still running after foreground stop attempts; retrying in background',
+      );
       scheduleBackgroundStop();
     } finally {
       stopping = false;
@@ -1283,8 +1294,7 @@ export function resetClientEndpointsForTest(
   resolvedRegion = resolved ? (options?.buildRegion ?? null) : null;
   startedFromCachedManifest = false;
   crossRealmOrgLoginEnabled = options?.crossRealmOrgLoginEnabled ?? BUILD_VARIANT !== 'dev';
-  realmManifestBaseUrls =
-    options?.realmManifestBaseUrls ?? DEFAULT_REALM_MANIFEST_BASE_URLS;
+  realmManifestBaseUrls = options?.realmManifestBaseUrls ?? DEFAULT_REALM_MANIFEST_BASE_URLS;
   activeSessionRealm = resolvedRegion;
   realmEndpointCache.clear();
   // 既有 desktop 单测只注入一份逻辑端点，不关心物理区域；让两种构建区域都能

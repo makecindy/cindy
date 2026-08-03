@@ -11,6 +11,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import {
   DeviceLinkError,
+  CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
   DL_SUBSCRIBE_CHANNEL,
   MAX_FRAME_BYTES,
   PROTOCOL_VERSION,
@@ -522,7 +523,8 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
 
     __testing.handleLinkOpen(client as never, 'ctrl-revoked', 'open-1', undefined);
 
-    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked');
+    // 'inbound':撤权关的是对方对本机的控制方向,不得封死本机仍存续的主动控制。
+    expect(client.closeLink).toHaveBeenCalledWith('ctrl-revoked', 'revoked', 'inbound');
     expect(client.sendLinkAccept).not.toHaveBeenCalled();
     expect(__testing.queuedPushesFor('ctrl-revoked')).toEqual([]);
     expect(subscriptions.getKnownControllersForTopic('session:s1')).toEqual([]);
@@ -549,7 +551,12 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
   it('remembered modern link-open waits for an explicit subscribe frame', () => {
     const client = mkClient();
     __testing.setActiveClient(client as never);
-    subscriptions.subscribe('ctrl-modern', ['session:s1']);
+    subscriptions.subscribe(
+      'ctrl-modern',
+      ['session:s1'],
+      'Desktop',
+      [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
+    );
     subscriptions.clearController('ctrl-modern');
     __testing.forwardPush('local-db:messages:created', { sessionId: 's1', id: 'm1' });
 
@@ -557,12 +564,16 @@ describe('[13] forwardPush — 转发失败 best-effort,不冒泡', () => {
       controllerName: 'Mobile',
       protocolVersion: 1,
       appVersion: '1.0.0',
-      capabilities: [],
+      capabilities: [CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1],
     });
 
     expect(client.sendLinkAccept).toHaveBeenCalledTimes(1);
     expect(client.sendPush).not.toHaveBeenCalled();
     expect(subscriptions.__testing.topicsOf('ctrl-modern')).toEqual([]);
+    expect(subscriptions.controllerSupports(
+      'ctrl-modern',
+      CONTROLLER_CAPABILITY_SET_MODEL_EXPLICIT_PROVIDER_NULL_V1,
+    )).toBe(true);
 
     const result = __testing.handleSubscriptionFrame('ctrl-modern', {
       channel: DL_SUBSCRIBE_CHANNEL,

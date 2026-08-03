@@ -71,13 +71,13 @@ export interface RemoteSessionReconnectAttempt {
   attempt: number;
   maxAttempts: number;
   /**
-   * 重试原因。`'overload'` = 上游模型没有可用容量、agent 正在退避重投
-   * (maker-core 的 `(auto-retry N/M)` 标记); 缺省 / `'reconnect'` = 传输层重连。
+   * 重试原因。`'overload'` = 上游模型没有可用容量；`'rate-limit'` = Codex daemon
+   * 已耗尽内部 retry budget 后的受限外层重投；缺省 / `'reconnect'` = 传输层重连。
    *
    * 刻意复用同一个字段而不是新加一个: 这个 attempt 有 6 处清理点(turn 边界 / 快照 /
    * 收口 / 活动流), 拆成两个字段就得在每处各清一次, 漏一处就会残留一个假状态。
    */
-  kind?: 'reconnect' | 'overload';
+  kind?: 'reconnect' | 'overload' | 'rate-limit';
 }
 
 interface SessionMessageSyncMarker {
@@ -122,6 +122,18 @@ const messages = new Map<string, RemoteMessage[]>();
 // overwrite a newer live state with the first stale 0/N snapshot.
 const livePlanSnapshots = new Map<string, Map<string, LivePlanSnapshot>>();
 const pendingInteractions = new Map<string, PendingInteraction[]>();
+/**
+ * 这个会话的 pending 列表当前是不是**权威**的(来自被控端的一次全量快照)。
+ *
+ * 空列表有两种来源,消费方光看 `getPendingInteractions()` 分辨不了:
+ * - 权威的空:被控端确认所有请求都已回答 / 撤销;
+ * - 非权威的空:`markDeviceOffline` / `removeDevice` 按设计清掉了这份投影(它依赖
+ *   实时连接),此刻我们其实不知道被控端还在等什么。
+ *
+ * 凡是「空快照才能做的清理」都必须先问这里,否则短暂离线会被误判成「都处理完了」。
+ * 不能退化成看全局 relay status:目标设备 offline 时 relay 仍可能 online(#1493 review)。
+ */
+const pendingInteractionsAuthoritative = new Set<string>();
 /**
  * 乐观 resolve 在途抑制集合:交互卡批准 / 拒绝已在本地乐观撤卡、被控端还没有
  * 确认的 requestId。这个窗口里权威流(全量快照 setPendingInteractions / push
@@ -1202,6 +1214,16 @@ function recallParkedTaskUpdates(
 }
 
 export const remoteSessionStore = {
+  /**
+   * 读当前权威设备身份列表(setDeviceIdentity 注入的那份;未注入过为空)。
+   * 会话页抽屉等在首页之外调 buildMobileHomePresentation 时传入,保证展示归一化
+   * (canonicalDeviceId 认领)与首页/本 store 同一口径——不传 devices 的空列表会把
+   * store 已算好的规范 id 覆盖成仅凭会话内嵌名字推出的弱结果(re-link 后路由错设备)。
+   */
+  getDeviceIdentity(): readonly { deviceId: string; name: string }[] {
+    return deviceList ?? [];
+  },
+
   // 注入当前权威设备列表(首页从 /api/device-link/devices reconcile 后调用),用于设备身份归一化。
   // 仅在身份索引实际变化时重算,避免每次设备列表引用变动都刷新全部会话。
   setDeviceIdentity(devices: readonly { deviceId: string; name: string }[]): void {
@@ -1778,8 +1800,13 @@ export const remoteSessionStore = {
     const streamingChanged = options.finalizeStreaming === true && next.length > 0
       ? flushAndFinalizeRemoteStreamingMessages(sessionId)
       : false;
+    // 权威性先落:哪怕内容一字未变(典型是重连后的 [] → []),消费方也必须知道
+    // 「这份空列表已经被被控端确认过」——否则离线期收起态的清理永远等不到时机
+    // (#1493 review)。因此 authority 的翻转本身就是一次需要通知的变化。
+    const authorityChanged = !pendingInteractionsAuthoritative.has(sessionId);
+    pendingInteractionsAuthoritative.add(sessionId);
     if (deepValueEqual(pendingInteractions.get(sessionId) ?? emptyPendingInteractions, next)) {
-      if (streamingChanged) emit();
+      if (streamingChanged || authorityChanged) emit();
       return;
     }
     pendingInteractions.set(sessionId, next);
@@ -2328,7 +2355,10 @@ export const remoteSessionStore = {
     if (type === 'error') {
       const data = isRecord(event.data) ? event.data : null;
       const reconnectAttempt = data?.willRetry === true
-        ? parseReconnectAttemptMessage(readString(data, 'message') ?? '')
+        ? parseReconnectAttemptMessage(
+            readString(data, 'message') ?? '',
+            readString(data, 'reason'),
+          )
         : null;
       const current = readSessionRunStatus(sessionId);
       const changed = writeSessionRunStatus(sessionId, {
@@ -2479,6 +2509,8 @@ export const remoteSessionStore = {
       changed = livePlanSnapshots.delete(sessionId) || changed;
       changed = pendingRefreshSessions.delete(sessionId) || changed;
       changed = pendingInteractions.delete(sessionId) || changed;
+      // 投影没了,这份(空)列表就不再权威:重连拿到全量快照前不许据此做清理。
+      changed = pendingInteractionsAuthoritative.delete(sessionId) || changed;
       changed = inputProjections.delete(sessionId) || changed;
       changed = sessionLiveActivity.delete(sessionId) || changed;
       changed = sessionGoalStatus.delete(sessionId) || changed;
@@ -2506,6 +2538,7 @@ export const remoteSessionStore = {
         messages.delete(sessionId);
         livePlanSnapshots.delete(sessionId);
         pendingInteractions.delete(sessionId);
+        pendingInteractionsAuthoritative.delete(sessionId);
         inputProjections.delete(sessionId);
         sessionLiveActivity.delete(sessionId);
         sessionRunning.delete(sessionId);
@@ -2544,6 +2577,7 @@ export const remoteSessionStore = {
     messages.clear();
     livePlanSnapshots.clear();
     pendingInteractions.clear();
+    pendingInteractionsAuthoritative.clear();
     inFlightInteractionResolves.clear();
     confirmedInteractionDismissals.clear();
     interactionRevisionFloors.clear();
@@ -2634,6 +2668,14 @@ export const remoteSessionStore = {
 
   getPendingInteractions(sessionId: string): PendingInteraction[] {
     return pendingInteractions.get(sessionId) ?? emptyPendingInteractions;
+  },
+
+  /**
+   * pending 列表当前是否权威(见 pendingInteractionsAuthoritative 的注释)。
+   * 空列表要用来做清理判断时必须先问这里。
+   */
+  hasAuthoritativePendingInteractions(sessionId: string): boolean {
+    return pendingInteractionsAuthoritative.has(sessionId);
   },
 
   getInputProjection(sessionId: string): InputProjection {
@@ -2757,17 +2799,30 @@ function parseAttemptPair(
 /**
  * 非终止 error 的 message → 重试进度。
  *
- * 两类各有自己的标记:
+ * 三类各有自己的标记:
  *  - 传输层重连: `Reconnecting... N/M`;
  *  - 上游过载退避重投: `(auto-retry N/M)`(maker-core 的
  *    agents/shared/overload-error.ts 统一后缀, Codex 与 Claude 两侧同款)。
+ *  - daemon 终态 429 外层重投: reason=`terminal-rate-limit-retry` +
+ *    `(rate-limit-retry N/M)`；reason 与 marker 必须同时命中。
  *
- * 后者不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
+ * 过载 marker 不认的话, 整个退避窗口(交互式最长约 30s)手机端只显示笼统的「思考中」, 用户看不出
  * 是在等上游容量(review #844 codex P1)。这里刻意在 mobile 侧独立实现一份判定, 与
  * renderer 的 utils/overloadError.ts 同规 —— maker-core 是 desktop/node 侧包, 不跨
  * bundle 共享。
  */
-function parseReconnectAttemptMessage(message: string): RemoteSessionReconnectAttempt | null {
+const TERMINAL_RATE_LIMIT_RETRY_REASON = 'terminal-rate-limit-retry';
+
+function parseReconnectAttemptMessage(
+  message: string,
+  reason?: string | null,
+): RemoteSessionReconnectAttempt | null {
+  if (reason === TERMINAL_RATE_LIMIT_RETRY_REASON) {
+    const rateLimit = parseAttemptPair(
+      /\(rate-limit-retry\s+(\d+)\s*\/\s*(\d+)\)\s*$/i.exec(message),
+    );
+    return rateLimit ? { ...rateLimit, kind: 'rate-limit' } : null;
+  }
   const reconnect = parseAttemptPair(
     /\bReconnecting(?:\.{3}|…)\s*(\d+)\s*\/\s*(\d+)\b/i.exec(message),
   );
@@ -3045,6 +3100,13 @@ export function useSessionPendingInteractions(sessionId: string): PendingInterac
   return useSyncExternalStore(
     remoteSessionStore.subscribe,
     () => remoteSessionStore.getPendingInteractions(sessionId),
+  );
+}
+
+export function useSessionPendingInteractionsAuthoritative(sessionId: string): boolean {
+  return useSyncExternalStore(
+    remoteSessionStore.subscribe,
+    () => remoteSessionStore.hasAuthoritativePendingInteractions(sessionId),
   );
 }
 

@@ -145,4 +145,72 @@ describe('buildPiNativeProvidersFromConfigs', () => {
     expect(Object.values(env)).toEqual(expect.arrayContaining(['acme', 'Bearer header-secret']));
     expect(providers[0].models[0]).toMatchObject({ id: 'm1', name: 'M1', contextWindow: 8000 });
   });
+
+  it('maps an explicit custom-model image capability into the Pi native model spec', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [{
+        id: 'visual',
+        name: 'Visual',
+        auth: { method: 'none' },
+        runtimes: {
+          pi: piRuntime({
+            models: [
+              { id: 'vision', name: 'Vision', supportsImageInput: true },
+              { id: 'legacy', name: 'Legacy' },
+            ],
+          }),
+        },
+      }],
+      () => null,
+    );
+    expect(providers[0].models).toEqual([
+      { id: 'vision', name: 'Vision', contextWindow: undefined, input: ['text', 'image'] },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+    ]);
+  });
+
+  it('maps an explicit Responses reasoning capability and supported efforts into Pi', () => {
+    const { providers } = buildPiNativeProvidersFromConfigs(
+      [
+        {
+          id: 'reasoning',
+          name: 'Reasoning',
+          auth: { method: 'none' },
+          runtimes: {
+            pi: piRuntime({
+              wireProtocol: 'openai-responses',
+              models: [
+                {
+                  id: 'reasoner',
+                  name: 'Reasoner',
+                  reasoning: true,
+                  reasoningEfforts: ['low', 'high', 'xhigh'],
+                },
+                { id: 'legacy', name: 'Legacy' },
+              ],
+            }),
+          },
+        },
+      ],
+      () => null,
+    );
+
+    expect(providers[0].models).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        contextWindow: undefined,
+        reasoning: true,
+        thinkingLevelMap: {
+          minimal: null,
+          low: 'low',
+          medium: null,
+          high: 'high',
+          xhigh: 'xhigh',
+          max: null,
+        },
+      },
+      { id: 'legacy', name: 'Legacy', contextWindow: undefined },
+    ]);
+  });
 });

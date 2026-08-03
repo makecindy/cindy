@@ -163,24 +163,36 @@ describe('AppServerHost.request startup timeout', () => {
   });
 
   it('treats timeoutMs as an overall deadline across startup + request (copilot R9)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'Date'] });
     // timeoutMs 不是「startup 一次 + request 再一次」的双重施加: startup 用掉
     // 的预算要从 request 里扣, 最坏等待仍是 1× timeoutMs — 否则 60s 关键 RPC
     // 在冷启动路径上最坏拖到 ~120s, UI 长时间卡 generating。
-    // DelayedTransport(40): startup ~40ms, 预算 50ms → request 只剩 ~10ms。
-    // 1× 语义 ~50ms 超时; 2× 语义要 ~90ms (40 + 50) 才超时。
+    // fake clock 下 DelayedTransport(40): startup 精确用掉 40ms,
+    // 50ms overall deadline 只剩 10ms 给 request; 若误变成 2× 语义则要到 90ms。
     const host = new AppServerHost({
       createTransport: () => new DelayedTransport(40),
       logger,
       clientInfo: { name: 'cindy-test', version: '0.0.0' },
     });
 
-    const startedAt = Date.now();
-    await expect(host.request('turn/start', {}, { timeoutMs: 50 })).rejects.toThrow(
-      /timed out after \d+ms|consumed the entire/,
-    );
-    expect(Date.now() - startedAt).toBeLessThan(70);
+    try {
+      const request = host.request('turn/start', {}, { timeoutMs: 50 });
+      const settled = vi.fn();
+      void request.then(settled, settled);
+      const rejection = expect(request).rejects.toThrow(
+        'codex app-server turn/start timed out after 10ms',
+      );
 
-    await host.shutdown();
+      await vi.advanceTimersByTimeAsync(49);
+      expect(settled).not.toHaveBeenCalled();
+
+      await vi.advanceTimersByTimeAsync(1);
+      await rejection;
+      expect(settled).toHaveBeenCalledTimes(1);
+    } finally {
+      await host.shutdown();
+      vi.useRealTimers();
+    }
   });
 });
 

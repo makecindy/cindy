@@ -11,14 +11,23 @@
 
 import { customProviderSecretStorageKey } from '@/../shared/providerSecrets';
 
-import { DEFAULT_CUSTOM_CONTEXT_WINDOW } from '@cindy/model-providers';
+import { DEFAULT_CUSTOM_CONTEXT_WINDOW, PI_REASONING_EFFORTS } from '@cindy/model-providers';
 import type {
   AgentKind,
   CatalogModel,
   CustomProviderConfig,
+  PiReasoningEffort,
   ProviderView,
   ProviderRuntimeModelConfig,
 } from '@cindy/model-providers';
+
+/** 开启 Pi reasoning 时的保守常用档位；xhigh/max 仍需用户明确勾选。 */
+export const DEFAULT_PI_CUSTOM_REASONING_EFFORTS: readonly PiReasoningEffort[] = [
+  'minimal',
+  'low',
+  'medium',
+  'high',
+];
 
 /** per-runtime 密钥输入：键为 agent，值为该 runtime 的 API key（空串 = 不改 / 不存）。 */
 export type RuntimeKeys = Partial<Record<AgentKind, string>>;
@@ -35,6 +44,58 @@ export function replaceCustomProviderModelId(
   return { id: nextId, name: model.name };
 }
 
+export function setCustomProviderModelSupportsImageInput(
+  models: readonly ProviderRuntimeModelConfig[],
+  targetIndex: number,
+  supportsImageInput: boolean,
+): ProviderRuntimeModelConfig[] {
+  return models.map((model, index) => {
+    if (index !== targetIndex) return model;
+    return { ...model, supportsImageInput };
+  });
+}
+
+export function setCustomProviderModelReasoning(
+  models: readonly ProviderRuntimeModelConfig[],
+  targetIndex: number,
+  reasoning: boolean,
+): ProviderRuntimeModelConfig[] {
+  return models.map((model, index) => {
+    if (index !== targetIndex) return model;
+    if (!reasoning) {
+      const { reasoning: _reasoning, reasoningEfforts: _reasoningEfforts, ...rest } = model;
+      return rest;
+    }
+    return {
+      ...model,
+      reasoning: true,
+      reasoningEfforts: model.reasoningEfforts?.length
+        ? [...model.reasoningEfforts]
+        : [...DEFAULT_PI_CUSTOM_REASONING_EFFORTS],
+    };
+  });
+}
+
+export function setCustomProviderModelReasoningEffort(
+  models: readonly ProviderRuntimeModelConfig[],
+  targetIndex: number,
+  effort: PiReasoningEffort,
+  enabled: boolean,
+): ProviderRuntimeModelConfig[] {
+  return models.map((model, index) => {
+    if (index !== targetIndex || model.reasoning !== true) return model;
+    const current = model.reasoningEfforts ?? [];
+    if (!enabled && current.length <= 1 && current.includes(effort)) return model;
+    const selected = new Set(current);
+    if (enabled) selected.add(effort);
+    else selected.delete(effort);
+    return {
+      ...model,
+      reasoningEfforts: PI_REASONING_EFFORTS.filter((candidate) => selected.has(candidate)),
+    };
+  });
+}
+
 /**
  * 运行期 CatalogModel 已把缺省 contextWindow 物化为通用默认值；转回用户配置时不能把该
  * 默认快照写成 override，否则未来默认升级后老配置无法跟随。判据以 contextWindowExplicit
@@ -42,8 +103,24 @@ export function replaceCustomProviderModelId(
  * 推断（PR review P1）；无标记的旧视图快照回退等值判断,行为不变。
  */
 export function customProviderModelConfigFromCatalogModel(
-  model: Pick<CatalogModel, 'id' | 'name' | 'contextWindow' | 'contextWindowExplicit' | 'defaultEnabled'>,
+  model: Pick<
+    CatalogModel,
+    | 'id'
+    | 'name'
+    | 'contextWindow'
+    | 'contextWindowExplicit'
+    | 'defaultEnabled'
+    | 'supportsImageInput'
+  > &
+    Partial<Pick<CatalogModel, 'efforts'>>,
+  agent?: AgentKind,
 ): ProviderRuntimeModelConfig {
+  const reasoningEfforts =
+    agent === 'pi'
+      ? (model.efforts ?? []).filter((effort): effort is PiReasoningEffort =>
+          (PI_REASONING_EFFORTS as readonly string[]).includes(effort),
+        )
+      : [];
   return {
     id: model.id,
     name: model.name,
@@ -51,6 +128,8 @@ export function customProviderModelConfigFromCatalogModel(
       ? { contextWindow: model.contextWindow }
       : {}),
     ...(model.defaultEnabled === false ? { defaultEnabled: false } : {}),
+    ...(model.supportsImageInput === true ? { supportsImageInput: true } : {}),
+    ...(reasoningEfforts.length > 0 ? { reasoning: true, reasoningEfforts } : {}),
   };
 }
 
@@ -64,7 +143,7 @@ export function providerViewToCustomProviderConfig(p: ProviderView): CustomProvi
       baseUrl: routing?.upstream ?? '',
       ...(routing?.requestPath ? { requestPath: routing.requestPath } : {}),
       ...(routing?.wireProtocol ? { wireProtocol: routing.wireProtocol } : {}),
-      models: models.map(customProviderModelConfigFromCatalogModel),
+      models: models.map((model) => customProviderModelConfigFromCatalogModel(model, agent)),
       ...(routing?.headerOverride && Object.keys(routing.headerOverride).length > 0
         ? { headers: { ...routing.headerOverride } }
         : {}),

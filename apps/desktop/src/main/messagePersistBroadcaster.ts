@@ -39,11 +39,13 @@ import {
   updateMessageContent as updateDbMessageContent,
 } from './localDb/ipc/messages.js';
 import { getDbClient } from './localDb/client/current.js';
+import { isTopLevelTitleAssistant } from './localDb/latestMessageText.logic.js';
 import { messages as messagesTable } from './localDb/schema.js';
 import { createLogger } from './logger.js';
 import { tapWindowBroadcast } from './device-link/broadcast-tap.js';
 import { takeMediaToolResult } from './mcp-integrations/mediaToolResultFallback.js';
 import { redactSensitiveText } from '@cindy/maker-shared/error-redaction';
+import { getSessionProvider } from './maker-host/session-provider-store.js';
 import type { AgentMeta } from '../renderer/lib/ccAgent.types';
 
 const log = createLogger('messagePersistBroadcaster');
@@ -211,15 +213,43 @@ function notePersistedMessage(sessionId: string, role: string, persistId: string
  * 每会话"本 turn 最后一条已入队落库的 assistant 文本"的 persistId。turn 结束(done)
  * 时由 register.ts 经 consumeLastAssistantPersistId 取走,用于把 per-turn 费用挂到该
  * 条消息的 agent_meta 上。consume 即清(get + delete):纯 tool 轮取到 undefined 不挂;
- * terminal error 结束的轮也 consume 丢弃,防 persistId 串到下一轮。
+ * terminal error 调用方用同一 id 写失败边界，并可交接给稍后的 paired done。
  */
 const lastAssistantPersistIdBySession = new Map<string, string>();
+/**
+ * 标题 turn seal 必须落在最后一条顶层 Assistant；Subagent 行会被标题选择器过滤，
+ * 若 seal 写到它上面，顶层施工播报仍会退回 legacy final。
+ */
+const lastTopLevelAssistantPersistIdBySession = new Map<string, string>();
+const EMPTY_TOOL_USE_IDS: ReadonlySet<string> = new Set<string>();
 
 /** 取出并清除本 turn 最后一条 assistant 的 persistId(没有则 undefined)。 */
 export function consumeLastAssistantPersistId(sessionId: string): string | undefined {
   const id = lastAssistantPersistIdBySession.get(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
   return id;
+}
+
+/** 取出并清除本 turn 最后一条顶层 Assistant 的 persistId。 */
+export function consumeLastTopLevelAssistantPersistId(sessionId: string): string | undefined {
+  const id = lastTopLevelAssistantPersistIdBySession.get(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
+  return id;
+}
+
+function markAssistantTurnBoundary(
+  sessionId: string,
+  clientId: string | undefined,
+  completed: boolean,
+): Promise<boolean> {
+  if (!sessionId || !clientId) return Promise.resolve(false);
+  return enqueueDurableWrite(`turn-boundary:${sessionId}:${clientId}:${completed}`, async () => {
+    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
+      turnCompleted: completed,
+    });
+    if (!patched) return false;
+    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
+  });
 }
 
 /**
@@ -231,14 +261,18 @@ export function markAssistantTurnCompleted(
   sessionId: string,
   clientId: string | undefined,
 ): Promise<boolean> {
-  if (!sessionId || !clientId) return Promise.resolve(false);
-  return enqueueDurableWrite(`turn-completed:${sessionId}:${clientId}`, async () => {
-    const patched = await patchMessageAgentMetaWithResult(sessionId, clientId, {
-      turnCompleted: true,
-    });
-    if (!patched) return false;
-    return broadcastMessageAgentMetaUpdate(sessionId, clientId);
-  });
+  return markAssistantTurnBoundary(sessionId, clientId, true);
+}
+
+/**
+ * Terminal error 没有可选作正式答复的 Assistant，但仍需留下现代 turn 边界，
+ * 防止后续成功轮次出现后把失败轮的最后一条施工播报误当成 legacy final。
+ */
+export function markAssistantTurnFailed(
+  sessionId: string,
+  clientId: string | undefined,
+): Promise<boolean> {
+  return markAssistantTurnBoundary(sessionId, clientId, false);
 }
 
 /**
@@ -357,6 +391,14 @@ function enqueuePersistAssistant(
   });
   notePersistedMessage(sessionId, 'assistant', clientId, content);
   lastAssistantPersistIdBySession.set(sessionId, clientId);
+  if (
+    isTopLevelTitleAssistant(
+      agentMeta as Record<string, unknown> | null,
+      knownToolUseIdsBySession.get(sessionId) ?? EMPTY_TOOL_USE_IDS,
+    )
+  ) {
+    lastTopLevelAssistantPersistIdBySession.set(sessionId, clientId);
+  }
 }
 
 /**
@@ -915,6 +957,7 @@ export function resetTurnPersistState(sessionId: string): void {
   // 不经 notePersistedMessage),若跨 turn 保留,turn1 burst "X" → 用户发消息(不更新 main
   // tracker)→ turn2 又 burst "X" 会被误判重复、跳 create → turn2 回复丢失。清在这里堵死。
   lastPersistedMsgBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
 }
 
 /**
@@ -1111,6 +1154,14 @@ export function onTurnErrorEvent(
   if (typeof data?.sdkError === 'string' && data.sdkError) {
     content.sdkError = redactSensitiveText(data.sdkError);
   }
+  // 错误来源 provider 的**同步**快照(session-provider-store 内存态):错误分类必须
+  // 绑定到错误发生时的 provider —— session.providerId 可在任务中途切换并持久化,
+  // 恢复历史错误时用它会把别家 provider 的 insufficient_quota 误判成 Cindy AI 余额
+  // 不足(或反向丢失充值入口)。在入队前取值,写队列延迟消费不影响快照语义。
+  // null(未显式选择,走默认路由)时不写字段:来源不明确的错误行,读侧一律不启用
+  // 余额分类(fail-closed),与 live 路径「显式 providerId 才分类」同一判据。
+  const providerIdAtError = getSessionProvider(sessionId);
+  if (providerIdAtError) content.providerId = providerIdAtError;
   const meta = agentMeta ?? lastAgentMetaBySession.get(sessionId) ?? null;
   const dbAgentKindSnapshot = getSessionDbAgentKind(sessionId) ?? undefined;
   enqueueWrite(`turn_error:${sessionId}:${persistId}`, async () => {
@@ -1183,6 +1234,7 @@ export function clearSessionPersistState(sessionId: string): void {
   toolResultContentByClientId.delete(sessionId);
   lastPersistedMsgBySession.delete(sessionId);
   lastAssistantPersistIdBySession.delete(sessionId);
+  lastTopLevelAssistantPersistIdBySession.delete(sessionId);
   lastAssistantTranscriptUuidBySession.delete(sessionId);
   dbAgentKindBySession.delete(sessionId);
   _turnStartedAtBySession.delete(sessionId);

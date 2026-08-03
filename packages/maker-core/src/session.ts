@@ -112,6 +112,8 @@ const TURN_STALL_SLICE_MS = 60_000;
  * 与 maker-scheduler 的 SUSPEND_GAP_MS 同量级:远大于正常的事件循环抖动。
  */
 const TURN_STALL_SUSPEND_GAP_MS = 30_000;
+/** Terminal error 的尾部 drain 宽限；超时后关闭句柄，下一次 send 由 Maker 重建。 */
+const TERMINAL_ERROR_DRAIN_GRACE_MS = 250;
 
 function parseTurnStallMs(raw: string | undefined): number {
   if (raw === undefined || raw === '') return DEFAULT_TURN_STALL_MS;
@@ -122,6 +124,8 @@ function parseTurnStallMs(raw: string | undefined): number {
 
 export interface SessionOptions {
   id: string;
+  /** 与 Agent MCP context 同源的本次内存实例代号；省略时由 Session 自铸。 */
+  sessionInstanceId?: string;
   agentKind: AgentKind;
   workDir: string;
   handle: AgentSessionHandle;
@@ -269,6 +273,8 @@ type SendReservation = {
 
 export class Session {
   readonly id: string;
+  /** business id 可复用；instanceId 精确标识本次内存 Session incarnation。 */
+  readonly instanceId: string;
   readonly agentKind: AgentKind;
   readonly workDir: string;
   readonly capabilities: Capabilities;
@@ -294,7 +300,17 @@ export class Session {
    * 同时请求关闭；所有调用方都必须等到 transport / 子进程真正释放后才能继续回收 worktree。
    */
   private closePromise: Promise<void> | null = null;
+  /** close/detach 一进入同步入口就置位，早于底层 handle 的异步关闭完成。 */
+  private terminationStarted = false;
   private eventLoopStarted = false;
+  /**
+   * 最近一次已观察到的终态事件属于哪个 turn generation；事件迭代器可能在上一轮
+   * 开始等待、下一轮 dispatch 后才返回旧事件，不能用一个 bool 判断是否已收口。
+   */
+  private terminalEventObservedGeneration: number | null = null;
+  /** 终态 error 后等待 provider 尾部 done；避免旧尾事件冒领下一轮。 */
+  private terminalErrorDrainGeneration: number | null = null;
+  private terminalErrorDrainTimer: ReturnType<typeof setTimeout> | null = null;
   private sendReservation: SendReservation | null = null;
   /**
    * 当前进行中 turn 的发起来源(来自 send 的 opts.origin)。事件 fan-out 前打到
@@ -302,6 +318,8 @@ export class Session {
    * session(心跳 + 远程控制)下区分 per-turn 归属。null = 未标记来源(默认)。
    */
   private currentTurnOrigin: SendOrigin | null = null;
+  /** Host-owned per-turn correlation, kept beside origin and cleared at the terminal boundary. */
+  private currentTurnAttemptToken: number | null = null;
   // ── turn 零事件看门狗（见 DEFAULT_TURN_STALL_MS）────────────────────────
   private readonly turnStallMs: number;
   private turnStallTimer: ReturnType<typeof setTimeout> | null = null;
@@ -330,6 +348,7 @@ export class Session {
 
   constructor(opts: SessionOptions) {
     this.id = opts.id;
+    this.instanceId = opts.sessionInstanceId ?? generateSessionId();
     this.agentKind = opts.agentKind;
     this.workDir = opts.workDir;
     this.handle = opts.handle;
@@ -412,6 +431,15 @@ export class Session {
       : message;
     this.logger.debug('send', summarizeUserMessage(msg));
     this.ensureActive();
+    if (this.terminalErrorDrainGeneration !== null) {
+      throw this.createSessionRunningError();
+    }
+    // An auto-resume token remains owned until its terminal event has been fanned out. A vendor
+    // may report idle one tick before that event; do not admit a new turn into that gap, or a late
+    // old event could be attributed to the new attempt.
+    if (this.currentTurnAttemptToken !== null && !this.isTurnRunning()) {
+      throw this.createSessionRunningError();
+    }
     if (this.isTurnRunning()) {
       throw this.createSessionRunningError();
     }
@@ -423,6 +451,7 @@ export class Session {
     this.sendReservation = reservation;
     // 新一轮 turn 的代号（见 turnGeneration）：看门狗的善后动作据此判断"还是不是那个
     // 卡死的 turn"，避免误杀宽限期内新起的健康 turn。
+    const previousTurnGeneration = this.turnGeneration;
     this.turnGeneration += 1;
     const cleanupExternalAbort = this.attachExternalCancellation(reservation, handleOpts.signal);
     // originInstalled:已越过 dispatch 边界、把本次 origin 装进 currentTurnOrigin。
@@ -430,6 +459,7 @@ export class Session {
     let originInstalled = false;
     let turnDispatched = false;
     let previousTurnOrigin: SendOrigin | null = null;
+    let previousTurnAttemptToken: number | null = null;
     const finishCancelledBeforeDispatch = (): SessionSendResult | null => {
       if (!reservation.cancelled && this.sendReservation === reservation) return null;
       if (this.sendReservation === reservation) this.sendReservation = null;
@@ -463,6 +493,12 @@ export class Session {
       // 关联到具体 turn 事件而非单槽位(maker-core 热路径重构,规则 10),留作独立后续。
       previousTurnOrigin = this.currentTurnOrigin;
       this.currentTurnOrigin = handleOpts.origin ?? null;
+      if (this.terminalErrorDrainGeneration === null) {
+        this.terminalEventObservedGeneration = null;
+      }
+      previousTurnAttemptToken = this.currentTurnAttemptToken;
+      this.currentTurnAttemptToken =
+        typeof handleOpts.turnAttemptToken === 'number' ? handleOpts.turnAttemptToken : null;
       originInstalled = true;
       this.startEventLoopIfNeeded();
       try {
@@ -507,6 +543,15 @@ export class Session {
       //     state 污染下一轮(见 PR #129 review)。
       if (originInstalled && !turnDispatched) {
         this.currentTurnOrigin = previousTurnOrigin;
+        this.currentTurnAttemptToken = previousTurnAttemptToken;
+        this.turnGeneration = previousTurnGeneration;
+        // runEventLoop may already be awaiting the failed generation. Reusing
+        // the rolled-back generation immediately creates an ABA window where
+        // a delayed terminal event from this failed dispatch can claim the
+        // next turn's origin/token. Reuse the existing bounded tail fence:
+        // an old terminal event releases it; no tail closes the ambiguous
+        // Session so Maker can rebuild before the next send.
+        this.armTerminalErrorDrain(previousTurnGeneration);
       }
     }
   }
@@ -580,6 +625,7 @@ export class Session {
     if (this.closePromise) return this.closePromise;
     if (this.status === 'closed') return Promise.resolve();
 
+    this.terminationStarted = true;
     this.closePromise = this.performClose();
     return this.closePromise;
   }
@@ -593,27 +639,40 @@ export class Session {
     if (this.status !== 'active' || this.closePromise || this.isTurnRunning()) {
       return Promise.resolve(false);
     }
+    this.terminationStarted = true;
     this.closePromise = this.performClose();
     return this.closePromise.then(() => true);
   }
 
   private async performClose(): Promise<void> {
+    let closeSucceeded = false;
     try {
       this.clearTurnStallWatchdog();
+      this.clearTerminalErrorDrain();
       this.cancelSendReservation(this.sendReservation);
       await this.handle.close();
+      closeSucceeded = true;
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
-      this.setStatus('closed');
+      this.currentTurnAttemptToken = null;
       this.eventListeners.clear();
-      this.statusListeners.clear();
       this.interactionListener = null;
+      if (closeSucceeded) {
+        this.setStatus('closed');
+        this.statusListeners.clear();
+      } else {
+        // 底层仍可能存活时不能发布 closed；保留 status listener，让 Maker 后续重试
+        // close 时仍能从 activeSessions 移除，避免错误句柄永久占槽。
+        this.closePromise = null;
+        this.setStatus('error');
+      }
     }
   }
 
   async detach(): Promise<void> {
     if (this.status === 'closed') return;
+    this.terminationStarted = true;
     try {
       if (this.handle.detach) {
         await this.handle.detach();
@@ -623,6 +682,8 @@ export class Session {
     } finally {
       this.sendReservation = null;
       this.currentTurnOrigin = null;
+      this.currentTurnAttemptToken = null;
+      this.clearTerminalErrorDrain();
       this.setStatus('closed');
       this.eventListeners.clear();
       this.statusListeners.clear();
@@ -681,6 +742,22 @@ export class Session {
   }
 
   /**
+   * 只在本 Session 仍活跃、未开始关闭、且没有权限切换在途时返回稳定快照。
+   * 权限边界读取方必须用本 getter，不能直接用 permissionModeState：底层切换
+   * 完成前旧 mode 仍会保留，而收紧操作一开始就应 fail closed。
+   */
+  get stablePermissionModeState(): PermissionModeState | null {
+    if (this.status !== 'active' || this.terminationStarted) return null;
+    if (
+      this.permissionModeChangesInFlight > 0 ||
+      this.externalPermissionModeChangesInFlight > 0
+    ) {
+      return null;
+    }
+    return this.permissionModeState;
+  }
+
+  /**
    * Keep this Session logically occupied beyond the provider's own turn flag.
    * The caller must release the returned lease on every terminal path.
    */
@@ -701,7 +778,7 @@ export class Session {
 
   // ── 运行时切换 ─────────────────────────────────────────────────────────────
 
-  async setModel(model: string, opts?: { providerId?: string | null }): Promise<void> {
+  async setModel(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void> {
     if (!this.capabilities.switchModel.supported) {
       throw new NotSupportedError('switchModel', this.capabilities.switchModel);
     }
@@ -1060,19 +1137,51 @@ export class Session {
    * 并像用户插话一样暂停 goal,scheduler 的 IM 转播则直接忽略,卡片永不 finalize
    * (review #944 第二轮)。
    */
-  private fanOutEvent(event: AgentEvent): void {
+  private fanOutEvent(event: AgentEvent, observedGeneration = this.turnGeneration): void {
     this.lastEventAt = Date.now();
     this.lastEventType = event.type;
+    const isCurrentGeneration = observedGeneration === this.turnGeneration;
     // fan-out 前打 turn origin(所有 listener 拿到同一份);事件对象由 translator
     // 每次新建、看门狗每次合成,不会串台。=== undefined 守卫:不覆盖 agent 自带的。
-    if (this.currentTurnOrigin && event.turnOrigin === undefined) {
+    if (isCurrentGeneration && this.currentTurnOrigin && event.turnOrigin === undefined) {
       event.turnOrigin = this.currentTurnOrigin;
+    }
+    if (
+      isCurrentGeneration &&
+      this.currentTurnAttemptToken !== null &&
+      event.turnAttemptToken === undefined
+    ) {
+      event.turnAttemptToken = this.currentTurnAttemptToken;
+    }
+    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
+    // A dispatching send is not enough evidence that a terminal event belongs
+    // to it: Codex can enqueue the previous turn's terminal error after flipping
+    // its handle idle. Only runEventLoop's generation adoption may transfer
+    // ownership to the new attempt.
+    const terminalBoundaryObserved = isCurrentGeneration && isTerminal;
+    if (terminalBoundaryObserved) {
+      this.terminalEventObservedGeneration = this.turnGeneration;
+      if (event.type === 'done') {
+        this.clearTerminalErrorDrain();
+      } else if (event.type === 'error') {
+        this.armTerminalErrorDrain(this.turnGeneration);
+      }
+    } else if (
+      this.agentKind === 'codex' &&
+      isCurrentGeneration &&
+      event.type === 'status' &&
+      (event.data as { isRunning?: unknown } | null | undefined)?.isRunning === false &&
+      this.terminalErrorDrainGeneration === this.turnGeneration
+    ) {
+      // Codex closes a terminal error with an idle status rather than a done
+      // event. That status drains the provider tail, but it is not itself a
+      // generation boundary for ordinary status events.
+      this.clearTerminalErrorDrain();
     }
     const listenerEvent = redactEventForListeners(event);
     for (const listener of this.eventListeners) {
       try { listener(listenerEvent); } catch (e) { this.logger.error('event listener threw', { error: String(e) }); }
     }
-    const isTerminal = event.type === 'done' || isTerminalAgentErrorEvent(event);
     // turn 真正结束后清 origin,下一轮无 origin 的 turn 不被污染。
     // 关键:**只**在 done / 终止型 error 上清,**不要**在 status(isRunning=false)
     // 上清 —— translator 收尾是先 push end-status(isRunning=false)、紧接着 push
@@ -1085,11 +1194,12 @@ export class Session {
     // 不应透传到 Session。凡是到达 Session 的 done / 终止型 error 都代表产品层
     // turn 已结束,必须清 origin,避免后续 standalone auto-compact 等后台 turn 继承
     // goal/scheduler origin。
-    if (isTerminal) {
+    if (isCurrentGeneration && isTerminal) {
       this.currentTurnOrigin = null;
+      this.currentTurnAttemptToken = null;
       // 终态之后不再计 stall 额度。
       this.clearTurnStallWatchdog();
-    } else {
+    } else if (isCurrentGeneration) {
       this.armTurnStallWatchdog();
     }
   }
@@ -1101,6 +1211,32 @@ export class Session {
     }
     this.turnStallRemainingMs = 0;
     this.turnStallSliceStartedAt = 0;
+  }
+
+  private clearTerminalErrorDrain(): void {
+    if (this.terminalErrorDrainTimer) {
+      clearTimeout(this.terminalErrorDrainTimer);
+      this.terminalErrorDrainTimer = null;
+    }
+    this.terminalErrorDrainGeneration = null;
+  }
+
+  private armTerminalErrorDrain(generation: number): void {
+    this.clearTerminalErrorDrain();
+    this.terminalErrorDrainGeneration = generation;
+    const timer = setTimeout(() => {
+      this.terminalErrorDrainTimer = null;
+      if (this.terminalErrorDrainGeneration !== generation) return;
+      this.logger.warn('terminal error drain timed out; closing session for rebuild', {
+        generation,
+        graceMs: TERMINAL_ERROR_DRAIN_GRACE_MS,
+      });
+      void this.close().catch((error) => {
+        this.logger.warn('terminal error drain close failed', { error: String(error) });
+      });
+    }, TERMINAL_ERROR_DRAIN_GRACE_MS);
+    this.terminalErrorDrainTimer = timer;
+    (timer as unknown as { unref?: () => void }).unref?.();
   }
 
   /**
@@ -1315,18 +1451,53 @@ export class Session {
 
   private async runEventLoop(): Promise<void> {
     try {
-      for await (const event of this.handle.events()) {
+      const iterator = this.handle.events()[Symbol.asyncIterator]();
+      while (true) {
+        const awaitingGeneration = this.turnGeneration;
+        const awaitingCanAdoptNextGeneration =
+          awaitingGeneration === 0 ||
+          this.terminalEventObservedGeneration === awaitingGeneration;
+        const result = await iterator.next();
+        if (result.done) break;
+        const event = result.value;
         this.releaseSendReservationIfObserved();
+        let observedGeneration = awaitingGeneration;
+        if (
+          awaitingCanAdoptNextGeneration &&
+          this.turnGeneration === awaitingGeneration + 1
+        ) {
+          // Only a next() that started while logically idle may follow the next send.
+          // Capturing that fact before awaiting is essential. The terminal drain may
+          // already be armed when a watchdog-generated error precedes this pending
+          // next(); adopting the exact next generation lets the provider's tail done
+          // clear that fence. The fence itself prevents any later generation entering.
+          observedGeneration = this.turnGeneration;
+        }
         // origin 打标与终态清理都收在 fanOutEvent 里（看门狗合成的事件共用同一语义，
         // 见那里的注释）。
-        this.fanOutEvent(event);
+        this.fanOutEvent(event, observedGeneration);
       }
     } catch (e) {
       this.logger.error('event loop crashed', { error: String(e) });
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.clearTurnStallWatchdog();
-      this.setStatus('error');
+      if (this.closePromise || this.status === 'closed') return;
+      // 先占住 closing gate，避免 terminal error listener 在死掉的 iterator 上重新 send。
+      this.closePromise = this.performClose();
+      if (this.terminalEventObservedGeneration !== this.turnGeneration) {
+        this.fanOutEvent({
+          type: 'error',
+          data: {
+            message: `Session event loop stopped unexpectedly: ${String(e)}`,
+            isTerminal: true,
+            reason: 'session_event_loop_crashed',
+          },
+          source: this.agentKind,
+        });
+      }
+      try {
+        await this.closePromise;
+      } catch (closeError) {
+        this.logger.warn('event-loop crash handle close failed', { error: String(closeError) });
+      }
       return;
     }
     // handle.events() 自然结束 (iterator return) = 底层 handle 已死、不会再发任何事件。
@@ -1343,12 +1514,34 @@ export class Session {
     // send 自然走 IPC lazy create-session 路径, 重建 handle / transport / 远端连接。
     //
     // 仅当当前 status 还是 'active' 时切 — 'closed' / 'error' 已经表达终态, 不覆盖。
-    if (this.status === 'active') {
-      this.logger.debug('event loop ended (handle dead), auto-closing session');
-      this.sendReservation = null;
-      this.currentTurnOrigin = null;
-      this.setStatus('closed');
+    if (this.terminationStarted || this.status === 'closed' || this.status === 'error') return;
+    const unfinishedTurn =
+      this.status === 'active' &&
+      this.isTurnRunning() &&
+      this.terminalEventObservedGeneration !== this.turnGeneration;
+    this.logger.debug('event loop ended (handle dead), auto-closing session', { unfinishedTurn });
+    this.terminationStarted = true;
+    this.closePromise = Promise.resolve();
+    if (unfinishedTurn) {
+      this.fanOutEvent({
+        type: 'error',
+        data: {
+          message: 'Session event loop stopped unexpectedly without a terminal event',
+          isTerminal: true,
+          reason: 'session_event_loop_crashed',
+        },
+        source: this.agentKind,
+      });
     }
+    this.clearTurnStallWatchdog();
+    this.cancelSendReservation(this.sendReservation);
+    this.sendReservation = null;
+    this.currentTurnOrigin = null;
+    this.currentTurnAttemptToken = null;
+    this.setStatus('closed');
+    this.eventListeners.clear();
+    this.statusListeners.clear();
+    this.interactionListener = null;
   }
 
   private isHandleTurnRunning(): boolean {

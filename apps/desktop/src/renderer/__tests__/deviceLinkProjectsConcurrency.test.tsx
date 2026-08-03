@@ -36,11 +36,17 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-const row = (path: string): ExistingRemoteProject => ({ path, name: path.split('/').pop() ?? path });
+const row = (path: string): ExistingRemoteProject => ({
+  path,
+  name: path.split('/').pop() ?? path,
+});
 
 interface Harness {
   projects: { path: string; deviceId: string }[];
   loading: boolean;
+  status: 'idle' | 'loading' | 'ready' | 'error';
+  error: string | null;
+  retry: () => void;
   remove: (path: string, deviceId: string) => Promise<void>;
   /** 每一帧渲染看到的选项快照 —— 「切设备那一帧短暂标错归属」只能靠逐帧记录才抓得到。 */
   frames: { path: string; deviceId: string }[][];
@@ -48,7 +54,15 @@ interface Harness {
 
 /** 把 hook 的输出暴露给测试,并允许在 render 之外驱动 removeProject / 切设备。 */
 function mountHook() {
-  const seen: Harness = { projects: [], loading: false, remove: async () => {}, frames: [] };
+  const seen: Harness = {
+    projects: [],
+    loading: false,
+    status: 'idle',
+    error: null,
+    retry: () => {},
+    remove: async () => {},
+    frames: [],
+  };
   let setDevice!: (id: string) => void;
   let setEnabled!: (v: boolean) => void;
 
@@ -59,10 +73,20 @@ function mountHook() {
     setEnabled = setEnabledState;
     // 动态 import 后 hook 已带 mock;放在组件里保证每个用例拿到同一实例。
     const { useDeviceLinkProjects } = hookModule;
-    const { projects, loading, removeProject } = useDeviceLinkProjects(deviceId, 'Peer', enabled);
-    seen.projects = projects.map((p) => ({ path: p.path, deviceId: p.remoteDevice?.deviceId ?? '' }));
+    const { projects, loading, status, error, retry, removeProject } = useDeviceLinkProjects(
+      deviceId,
+      'Peer',
+      enabled,
+    );
+    seen.projects = projects.map((p) => ({
+      path: p.path,
+      deviceId: p.remoteDevice?.deviceId ?? '',
+    }));
     seen.frames.push(seen.projects);
     seen.loading = loading;
+    seen.status = status;
+    seen.error = error;
+    seen.retry = retry;
     seen.remove = (path, dId) =>
       removeProject({ path, name: path, remoteDevice: { deviceId: dId, deviceName: 'Peer' } });
     return null;
@@ -104,7 +128,9 @@ describe('useDeviceLinkProjects 取数 / 删除并发', () => {
     const aReadback = deferred<ExistingRemoteProject[]>();
     // 切到设备 B 的取数(第二次 load)。
     const bLoad = deferred<ExistingRemoteProject[]>();
-    loadMock.mockImplementationOnce(() => bLoad.promise).mockImplementationOnce(() => aReadback.promise);
+    loadMock
+      .mockImplementationOnce(() => bLoad.promise)
+      .mockImplementationOnce(() => aReadback.promise);
 
     let removePromise!: Promise<void>;
     act(() => {
@@ -510,7 +536,9 @@ describe('useDeviceLinkProjects 取数 / 删除并发', () => {
     // 两个删除都失败,各自发起回读。
     const del1 = deferred<void>();
     const del2 = deferred<void>();
-    removeMock.mockImplementationOnce(() => del1.promise).mockImplementationOnce(() => del2.promise);
+    removeMock
+      .mockImplementationOnce(() => del1.promise)
+      .mockImplementationOnce(() => del2.promise);
     const rb1 = deferred<ExistingRemoteProject[]>();
     const rb2 = deferred<ExistingRemoteProject[]>();
     loadMock.mockImplementationOnce(() => rb1.promise).mockImplementationOnce(() => rb2.promise);
@@ -653,7 +681,7 @@ describe('useDeviceLinkProjects 取数 / 删除并发', () => {
     expect(seen.projects.map((p) => p.path)).toEqual(['/a/two']);
   });
 
-  it('首次取数就失败时仍提交空列表(没有可保留的快照,空态里有浏览文件夹兜底)', async () => {
+  it('首次取数失败进入错误态，不把未知结果伪装成权威空列表', async () => {
     const first = deferred<ExistingRemoteProject[]>();
     loadMock.mockImplementationOnce(() => first.promise);
     const { seen } = mountHook();
@@ -661,6 +689,35 @@ describe('useDeviceLinkProjects 取数 / 删除并发', () => {
       first.reject(new Error('DEVICE_OFFLINE'));
     });
     expect(seen.projects).toEqual([]);
+    expect(seen.loading).toBe(false);
+    expect(seen.status).toBe('error');
+    expect(seen.error).toContain('DEVICE_OFFLINE');
+  });
+
+  it('错误态点击重试后立即回到 loading，成功空数组才进入权威空态', async () => {
+    const first = deferred<ExistingRemoteProject[]>();
+    const retryLoad = deferred<ExistingRemoteProject[]>();
+    loadMock
+      .mockImplementationOnce(() => first.promise)
+      .mockImplementationOnce(() => retryLoad.promise);
+    const { seen } = mountHook();
+
+    await act(async () => {
+      first.reject(new Error('DEVICE_LINK_TIMEOUT'));
+    });
+    expect(seen.status).toBe('error');
+
+    act(() => {
+      seen.retry();
+    });
+    expect(seen.status).toBe('loading');
+    expect(seen.error).toBeNull();
+
+    await act(async () => {
+      retryLoad.resolve([]);
+    });
+    expect(seen.projects).toEqual([]);
+    expect(seen.status).toBe('ready');
     expect(seen.loading).toBe(false);
   });
 });

@@ -8,7 +8,18 @@ import {
   type PointerEvent as ReactPointerEvent,
   type ReactNode,
 } from 'react';
-import { Check, ChevronDown, Loader2, PlugZap, Plus, Search, Unplug, Zap } from 'lucide-react';
+import {
+  Check,
+  ChevronDown,
+  CircleAlert,
+  Loader2,
+  PlugZap,
+  Plus,
+  RefreshCw,
+  Search,
+  Unplug,
+  Zap,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -22,12 +33,21 @@ import { hasProviderLogo, ProviderLogoMark } from '@/components/icons/ProviderLo
 import { FastModeToggle } from './FastModeToggle';
 import { useModelDiscoveryPending } from './useModelDiscoveryPending';
 import { VendorSegmentedSwitcher } from './VendorSegmentedSwitcher';
-import { useAgentCapabilities, type AgentKind } from '@/hooks/useAgentCapabilities';
+import {
+  evictDeviceCapabilities,
+  prefetchDeviceCapabilities,
+  useAgentCapabilities,
+  type AgentKind,
+} from '@/hooks/useAgentCapabilities';
 import { useApiKey } from '@/hooks/useApiKey';
 import { useConnectedSource } from '@/hooks/useConnectedSource';
-import { useModelPricing } from '@/hooks/useModelPricing';
+import { useGatewayModelPricing, useReferenceModelPricing } from '@/hooks/useModelPricing';
 import { useProviders } from '@/hooks/useProviders';
-import { useDeviceProviders } from '@/hooks/useDeviceProviders';
+import {
+  evictDeviceProviders,
+  prefetchDeviceProviders,
+  useDeviceProviders,
+} from '@/hooks/useDeviceProviders';
 import {
   modelPriceDiscountLabelValues,
   modelPriceDetailRows,
@@ -64,6 +84,7 @@ import {
 } from '@cindy/model-providers';
 import { isProviderLogoKind } from '@cindy/model-providers/branding';
 import { getModelPriceQuote } from '../../../shared/modelPriceQuote';
+import { applyProviderOrder } from '../../../shared/providerOrder';
 import type { ModelPricingCatalog } from '../../../shared/regionalMoney';
 import { buildProviderSections } from './sourceSwitch';
 
@@ -279,6 +300,57 @@ function ModelPromotionBadge({ children }: { children: ReactNode }) {
     >
       {children}
     </span>
+  );
+}
+
+function RemoteModelLoadNotice({
+  status,
+  onRetry,
+  compact = false,
+}: {
+  status: 'loading' | 'error';
+  onRetry: () => void;
+  compact?: boolean;
+}) {
+  const { t } = useTranslation();
+  if (status === 'loading') {
+    return (
+      <div
+        className={cn(
+          'flex items-center gap-1.5 text-[var(--text-tertiary)]',
+          compact ? 'px-3 pt-0.5 text-12' : 'justify-center px-3 py-6 text-13',
+        )}
+      >
+        <span className="inline-flex shrink-0 animate-spinner motion-reduce:animate-none">
+          <Loader2 size={compact ? 12 : 14} />
+        </span>
+        <span>{t('newChat.modelSelector.remoteLoading')}</span>
+      </div>
+    );
+  }
+  return (
+    <div
+      role="alert"
+      className={cn(
+        'flex items-start gap-2 border border-[var(--error-border)] bg-[var(--error-bg)] text-[var(--error-fg)]',
+        compact ? 'mx-1 rounded-[8px] px-3 py-2' : 'mx-1 rounded-[8px] px-3 py-3',
+      )}
+    >
+      <CircleAlert size={14} className="mt-0.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className={cn(compact ? 'text-11 leading-[1.45]' : 'text-xs leading-[1.45]')}>
+          {t('newChat.modelSelector.remoteLoadFailed')}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="mt-1 inline-flex h-6 items-center gap-1 rounded-full px-2 text-xs font-medium text-[var(--error-fg-strong)] hover:bg-[var(--surface-hover)]"
+        >
+          <RefreshCw size={12} />
+          {t('newChat.modelSelector.retryRemoteModels')}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -517,9 +589,61 @@ function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
   return null;
 }
 
+export type RemoteModelListStatus = 'idle' | 'loading' | 'ready' | 'error';
+
+interface RemoteCapabilityLoadState {
+  capabilities: unknown | null;
+  loading?: boolean;
+  error?: string | null;
+}
+
+interface RemoteProviderLoadState {
+  loading?: boolean;
+  error?: string | null;
+  unsupported?: boolean;
+}
+
+/**
+ * device-link 模型列表的权威状态：目标 agent 的 capabilities 与 provider 目录必须都结算。
+ * 只有老被控端明确不支持 provider:list 时允许 capabilities-only flat fallback。
+ */
+export function resolveRemoteModelListStatus({
+  deviceId,
+  agentKind,
+  cc,
+  codex,
+  pi,
+  providers,
+}: {
+  deviceId?: string;
+  agentKind: AgentKind | null;
+  cc: RemoteCapabilityLoadState;
+  codex: RemoteCapabilityLoadState;
+  pi: RemoteCapabilityLoadState;
+  providers: RemoteProviderLoadState;
+}): RemoteModelListStatus {
+  if (!deviceId) return 'idle';
+  const required = agentKind
+    ? [agentKind === 'claude-code' ? cc : agentKind === 'codex' ? codex : pi]
+    : [cc, codex, pi];
+  if (required.some((state) => !!state.error)) return 'error';
+  if (providers.error && !providers.unsupported) return 'error';
+  if (providers.loading || required.some((state) => state.loading || state.capabilities == null)) {
+    return 'loading';
+  }
+  return 'ready';
+}
+
 export function ModelSelectorContent(props: ModelSelectorContentProps) {
-  const pricing = useModelPricing();
-  return <ModelSelectorContentView {...props} pricing={pricing} />;
+  const gatewayPricing = useGatewayModelPricing();
+  const referencePricing = useReferenceModelPricing();
+  return (
+    <ModelSelectorContentView
+      {...props}
+      gatewayPricing={gatewayPricing}
+      referencePricing={referencePricing}
+    />
+  );
 }
 
 function ModelSelectorContentView({
@@ -549,8 +673,12 @@ function ModelSelectorContentView({
   agentSwitch,
   discoveringModels = false,
   interactionDisabled = false,
-  pricing,
-}: ModelSelectorContentProps & { pricing: ModelPricingCatalog | null }) {
+  gatewayPricing,
+  referencePricing,
+}: ModelSelectorContentProps & {
+  gatewayPricing: ModelPricingCatalog | null;
+  referencePricing: ModelPricingCatalog | null;
+}) {
   // 当前来源解析器:已建会话 = 实际路由口径(含停用拷贝),其余 = 准入口径。
   const resolveCurrentSourceId = actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel;
   const { t } = useTranslation();
@@ -609,6 +737,23 @@ function ModelSelectorContentView({
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
   const providersLoading = deviceId ? remoteProviders.loading : localProviders.loading;
+  const remoteModelListStatus = resolveRemoteModelListStatus({
+    deviceId,
+    agentKind,
+    cc,
+    codex,
+    pi,
+    providers: remoteProviders,
+  });
+  const retryRemoteModels = useCallback(() => {
+    if (!deviceId) return;
+    evictDeviceCapabilities(deviceId);
+    evictDeviceProviders(deviceId);
+    void Promise.allSettled([
+      prefetchDeviceCapabilities(deviceId),
+      prefetchDeviceProviders(deviceId),
+    ]);
+  }, [deviceId]);
 
   const visibilityVersion = useModelVisibilityVersion();
   const [query, setQuery] = useState('');
@@ -758,7 +903,7 @@ function ModelSelectorContentView({
           ? (codex.capabilities?.effortLevels ?? [])
           : currentAgentKind === 'pi'
             ? (pi.capabilities?.effortLevels ?? [])
-          : [];
+            : [];
     return new Map(levels.map((e) => [e.id, e.displayName]));
   }, [currentAgentKind, cc.capabilities, codex.capabilities, pi.capabilities]);
   // 档名多语言:i18n 词表(effortLevels.*) → 模型级 effortDisplayNames →
@@ -816,9 +961,8 @@ function ModelSelectorContentView({
   };
 
   // ── 模型单价 ─────────────────────────────────────────────────────────────
-  // providerId 是价格索引的一部分。同模型经 XD / OpenAI / Anthropic 等来源出现时，
-  // 必须按实际行来源查价，不能退化为 pricing[modelId]。只有 XD Gateway 目录价会
-  // 叠加 CatalogModel.cost 作为折后展示价；其它来源保持价格源自带的币种。
+  // XD 实际报价与非 XD Catalog 参考价是两份独立快照。这里只按行来源选择快照，
+  // 相同 modelId 不跨 Provider 复用或兜底。
   const pricePresentationOf = (providerId: string | null, id: string) => {
     // device-link 只同步被控端 provider 目录，不同步价格快照；不能把控制端价格与
     // 被控端 CatalogModel.cost 拼成一个展示结果。在协议补齐前远程选择器不展示价格。
@@ -828,6 +972,7 @@ function ModelSelectorContentView({
       (currentAgentKind
         ? resolveCurrentSourceId(providers, currentProviderId, id, currentAgentKind)
         : null);
+    const pricing = effectiveProviderId === 'xd' ? gatewayPricing : referencePricing;
     const quote = getModelPriceQuote(
       pricing,
       effectiveProviderId,
@@ -835,7 +980,7 @@ function ModelSelectorContentView({
       currentAgentKind ?? undefined,
     );
     if (effectiveProviderId === 'xd' && (!quote || quote.source === 'gateway')) {
-      if (!quote && pricing == null) return null;
+      if (!quote && gatewayPricing == null) return null;
       const effectiveProvider = providers.find((provider) => provider.id === effectiveProviderId);
       const effectiveCost =
         effectiveProvider && currentAgentKind
@@ -863,8 +1008,8 @@ function ModelSelectorContentView({
       if (subscriptionDirectDisabledReason(id)) return true;
       return id.startsWith('codex/') && !hasSavedKey;
     }
-    if (remoteProviders.loading) return true;
-    if (remoteProviders.error) return false;
+    if (remoteModelListStatus !== 'ready') return true;
+    if (remoteProviders.error) return remoteProviders.unsupported ? false : true;
     const rowAgentKind = resolveVisibleModelAgentKind({
       modelId: id,
       agentKind,
@@ -904,8 +1049,16 @@ function ModelSelectorContentView({
     if (!actual?.connected || !actual.agents.includes(currentAgentKind)) return connected;
     return [...connected, actual];
   }, [connected, providers, activeSourceId, currentAgentKind]);
-  const suspendedActiveSourceId =
-    sectionProviders === connected ? null : activeSourceId;
+  // Provider order is a display preference. Apply it only to local picker sections so source
+  // resolution and first-wins catalog derivation keep their canonical catalog order.
+  const orderedSectionProviders = useMemo(
+    () =>
+      deviceId
+        ? sectionProviders
+        : applyProviderOrder(sectionProviders, localProviders.providerOrder),
+    [deviceId, localProviders.providerOrder, sectionProviders],
+  );
+  const suspendedActiveSourceId = sectionProviders === connected ? null : activeSourceId;
   // biome-ignore lint/correctness/useExhaustiveDependencies: visibilityVersion 是外部可见性偏好的刷新信号,需要强制重算分段列表。
   const sections = useMemo(() => {
     if (!sourcesEnabled || !currentAgentKind) return null;
@@ -917,7 +1070,7 @@ function ModelSelectorContentView({
     const restrictSuspended = (pid: string, mid: string): boolean =>
       !(suspendedActiveSourceId && pid === suspendedActiveSourceId && mid !== modelId);
     return buildProviderSections({
-      providers: sectionProviders,
+      providers: orderedSectionProviders,
       agent: currentAgentKind,
       selectedModelId: modelId,
       selectedProviderId: activeSourceId,
@@ -950,6 +1103,7 @@ function ModelSelectorContentView({
   }, [
     sourcesEnabled,
     sectionProviders,
+    orderedSectionProviders,
     suspendedActiveSourceId,
     currentAgentKind,
     modelId,
@@ -1064,11 +1218,7 @@ function ModelSelectorContentView({
   }, [sections, flatModels]);
 
   // ── 行选择 ───────────────────────────────────────────────────────────────
-  const handleRowSelect = (
-    providerId: string | null,
-    id: string,
-    dismiss = true,
-  ) => {
+  const handleRowSelect = (providerId: string | null, id: string, dismiss = true) => {
     if (interactionDisabled) return;
     // 浏览目标引擎态:选中模型 = 确认切换引擎(两步式的第二步),走切换事务。
     // providerId 一起带上:切换后 sessions.provider_id 直接落用户选的来源,
@@ -1183,7 +1333,14 @@ function ModelSelectorContentView({
       editingProviderId ??
       resolveCurrentSourceId(providers, currentProviderId, editingModel.id, currentAgentKind);
     return providerId ? providers.find((provider) => provider.id === providerId) : undefined;
-  }, [editingModel, currentAgentKind, editingProviderId, providers, currentProviderId, resolveCurrentSourceId]);
+  }, [
+    editingModel,
+    currentAgentKind,
+    editingProviderId,
+    providers,
+    currentProviderId,
+    resolveCurrentSourceId,
+  ]);
   const editingPricePresentation = editingModel
     ? pricePresentationOf(editingProvider?.id ?? editingProviderId, editingModel.id)
     : null;
@@ -1368,7 +1525,6 @@ function ModelSelectorContentView({
   const renderModelItem = (provider: ProviderView | null, model: RowModel) => {
     const providerId = provider?.id ?? null;
     const isSelected = isSelectedRow(providerId, model.id);
-    const isBudgetModel = model.id.startsWith('codex/');
     const isSubscriptionModel = provider?.access?.kind === 'subscription';
     const disabled = interactionDisabled || modelDisabledOf(model.id);
     const disabledReason = subscriptionDirectDisabledReason(model.id);
@@ -1498,16 +1654,11 @@ function ModelSelectorContentView({
                     />
                   )}
                 </span>
-                {(isSubscriptionModel || isBudgetModel || rowPromotionLabel) && (
+                {(isSubscriptionModel || rowPromotionLabel) && (
                   <span data-model-tags className="ml-auto flex shrink-0 items-center gap-1.5">
                     {isSubscriptionModel && (
                       <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--surface-chip)] px-2 py-[1px] text-[11px] font-medium text-[var(--text-secondary)]">
                         {t('settings.providers.models.subscription')}
-                      </span>
-                    )}
-                    {isBudgetModel && (
-                      <span className="inline-flex shrink-0 items-center rounded-full bg-[var(--model-budget-badge-bg)] px-2 py-[1px] text-[11px] font-medium text-[var(--model-budget-badge-text)]">
-                        {t('newChat.modelSelector.meta.budgetDiscount')}
                       </span>
                     )}
                     {rowPromotionLabel && (
@@ -1595,6 +1746,13 @@ function ModelSelectorContentView({
   if (emptyState) return emptyState;
 
   const hasAnyModel = sections ? sections.length > 0 : (flatModels?.length ?? 0) > 0;
+  const trimmedQuery = query.trim();
+  const remoteStatusInList =
+    deviceId && (remoteModelListStatus === 'loading' || remoteModelListStatus === 'error')
+      ? remoteModelListStatus
+      : null;
+  const showRemoteStatusFooter =
+    remoteStatusInList !== null && (hasAnyModel || trimmedQuery.length > 0);
 
   // ── 主菜单:固定 320 宽(field 形态改绑 trigger 宽度,见 fluidWidth),选项浮层
   //    portal 到 body,hover 时主菜单完全不重排 ─────
@@ -1716,18 +1874,44 @@ function ModelSelectorContentView({
         {!hasAnyModel ? (
           // 发现还在途、且用户没在搜索时不摆「无结果」:那句话和下方的「正在获取」自相矛盾,
           // 而用户看到「没有模型」就会走。搜索无命中是本地过滤的确定结论,照常显示。
-          discoveringModels && query.trim().length === 0 ? null : (
+          remoteStatusInList && trimmedQuery.length === 0 ? (
+            <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} />
+          ) : discoveringModels && trimmedQuery.length === 0 ? null : (
             <div className="px-3 py-6 text-center text-13 text-[var(--text-tertiary)]">
-              {t('newChat.modelSelector.search.noResults')}
+              {t(
+                deviceId && remoteModelListStatus === 'ready' && trimmedQuery.length === 0
+                  ? 'newChat.modelSelector.remoteEmpty'
+                  : 'newChat.modelSelector.search.noResults',
+              )}
             </div>
           )
         ) : sections ? (
-          // 平铺:每行带来源 mark 前缀,无分组标题(同供应商行仍因 buildProviderSections 顺序而相邻)。
-          sections.flatMap((sec) => sec.models.map((m) => renderModelItem(sec.provider, m)))
+          // 按供应商分组:每组一个轻量标题 + 该供应商下的模型行。
+          sections
+            .filter((sec) => sec.models.length > 0)
+            .map((sec, index) => (
+              <div
+                key={sec.provider.id}
+                role="group"
+                aria-label={providerDisplayName(sec.provider, t)}
+              >
+                {index > 0 && <div className="mx-1 my-1 h-px bg-[var(--model-dropdown-border)]" />}
+                <div className="truncate px-3 pb-0.5 pt-1 text-11 font-medium text-[var(--text-tertiary)]">
+                  {providerDisplayName(sec.provider, t)}
+                </div>
+                <div className="flex flex-col gap-0.5">
+                  {sec.models.map((m) => renderModelItem(sec.provider, m))}
+                </div>
+              </div>
+            ))
         ) : (
           (flatModels ?? []).map((m) => renderModelItem(null, m))
         )}
       </div>
+
+      {showRemoteStatusFooter && remoteStatusInList && (
+        <RemoteModelLoadNotice status={remoteStatusInList} onRetry={retryRemoteModels} compact />
+      )}
 
       {/* 发现在途提示 —— 追加在列表下方,不接管列表(见 discoveringModels 注释)。
           spinner 挂 HTML wrapper + animate-spinner(DESIGN.md §14.4 / 工程规范 §7)。 */}
@@ -1889,12 +2073,23 @@ export function ModelSelector({
   const cc = useAgentCapabilities('claude-code', deviceId);
   const codex = useAgentCapabilities('codex', deviceId);
   const pi = useAgentCapabilities('pi', deviceId);
-  const pricing = useModelPricing();
+  const gatewayPricing = useGatewayModelPricing();
+  const referencePricing = useReferenceModelPricing();
   // trigger 的来源 icon / 当前模型也按来源取:device-link 用被控端供应商目录(否则控制端本地
   // 查不到被控端独有模型 → currentModel undefined → label 退成 "Select model")。
   const localProviders = useProviders();
   const remoteProviders = useDeviceProviders(deviceId);
   const providers = deviceId ? remoteProviders.providers : localProviders.providers;
+  const remoteModelListStatus = resolveRemoteModelListStatus({
+    deviceId,
+    agentKind,
+    cc,
+    codex,
+    pi,
+    providers: remoteProviders,
+  });
+  const remoteModelLoading = !!deviceId && remoteModelListStatus === 'loading';
+  const remoteModelLoadFailed = !!deviceId && remoteModelListStatus === 'error';
   const visibleModels = useMemo(
     () =>
       selectVisibleModels({
@@ -1929,6 +2124,8 @@ export function ModelSelector({
   const displayLabel = fallbackOption?.active
     ? fallbackOption.label
     : (currentModel?.displayName ??
+      (remoteModelLoading ? t('newChat.modelSelector.remoteLoading') : null) ??
+      (remoteModelLoadFailed ? t('newChat.modelSelector.remoteLoadFailedShort') : null) ??
       (unknownLabel !== '' ? unknownLabel : null) ??
       t('newChat.modelSelector.trigger.placeholder'));
   const agentName =
@@ -1943,9 +2140,19 @@ export function ModelSelector({
     agentName && agentIdentity?.state === 'pending'
       ? t('newChat.modelSelector.trigger.agent.pending', { agent: agentName })
       : agentName;
-  const displayIdentityLabel = agentIdentityLabel
+  const baseDisplayIdentityLabel = agentIdentityLabel
     ? `${agentIdentityLabel} · ${displayLabel}`
     : displayLabel;
+  const remoteStatusLabel = currentModel
+    ? remoteModelLoading
+      ? t('newChat.modelSelector.remoteLoading')
+      : remoteModelLoadFailed
+        ? t('newChat.modelSelector.remoteLoadFailedShort')
+        : null
+    : null;
+  const displayIdentityLabel = remoteStatusLabel
+    ? `${baseDisplayIdentityLabel} · ${remoteStatusLabel}`
+    : baseDisplayIdentityLabel;
   const efforts = currentModel?.efforts ?? [];
 
   const currentAgentKind: AgentKind | null = useMemo(() => {
@@ -1982,7 +2189,12 @@ export function ModelSelector({
   const activeSourceId = useMemo<string | null>(
     () =>
       currentAgentKind
-        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(providers, currentProviderId, modelId, currentAgentKind)
+        ? (actualRoute ? actualSourceIdForModel : effectiveSourceIdForModel)(
+            providers,
+            currentProviderId,
+            modelId,
+            currentAgentKind,
+          )
         : null,
     [providers, currentAgentKind, currentProviderId, modelId, actualRoute],
   );
@@ -2209,6 +2421,14 @@ export function ModelSelector({
         </>
       ) : (
         <>
+          {!currentModel && remoteModelLoading && (
+            <span className="inline-flex shrink-0 animate-spinner text-[var(--text-tertiary)] motion-reduce:animate-none">
+              <Loader2 size={dense ? 12 : 13} />
+            </span>
+          )}
+          {!currentModel && remoteModelLoadFailed && (
+            <CircleAlert size={dense ? 12 : 13} className="shrink-0 text-[var(--error-fg)]" />
+          )}
           {/* 图标统一规则:模型条目 icon(AI Gateway / 目录设定)优先,缺省回落
                   当前真正路由的来源标(activeSourceId)——客户端不按 model id 猜厂牌。 */}
           {activeSourceId && (
@@ -2294,6 +2514,17 @@ export function ModelSelector({
               aria-label={t('newChat.modelSelector.meta.fastBadge')}
             />
           )}
+          {currentModel && remoteModelLoading && (
+            <span className="ml-0.5 inline-flex shrink-0 animate-spinner text-[var(--text-tertiary)] motion-reduce:animate-none">
+              <Loader2 size={dense ? 11 : 12} />
+            </span>
+          )}
+          {currentModel && remoteModelLoadFailed && (
+            <CircleAlert
+              size={dense ? 11 : 12}
+              className="ml-0.5 shrink-0 text-[var(--error-fg)]"
+            />
+          )}
         </>
       )}
       <ChevronDown
@@ -2335,7 +2566,8 @@ export function ModelSelector({
       agentSwitch={contentAgentSwitch}
       discoveringModels={showDiscoveryPending && discovery.pending}
       interactionDisabled={switching || disabled}
-      pricing={pricing}
+      gatewayPricing={gatewayPricing}
+      referencePricing={referencePricing}
       followSession={
         fallbackOption
           ? {

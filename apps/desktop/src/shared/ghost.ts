@@ -21,6 +21,12 @@ import { DEFAULT_LOCALE, SUPPORTED_LOCALES, type SupportedLocale } from './local
 /** 清单文件名(zip 根部)。 */
 export const GHOST_MANIFEST_FILE = 'ghost.json';
 
+/**
+ * 安装器读取包内 ghost.json 的硬上限。源码目录的发现/预读取可以使用更宽的
+ * 安全预算，但最终写进 .cindy 的清单必须落在这个上限内。
+ */
+export const GHOST_INSTALL_MANIFEST_MAX_BYTES = 256 * 1024;
+
 /** 意识文件扩展名。 */
 export const CINDY_FILE_EXT = '.cindy';
 
@@ -115,6 +121,7 @@ export const GHOST_SLOTS = [
   'node',
   'network',
   'notify',
+  'badge',
   'confirm',
   'fs',
   'session-context',
@@ -332,7 +339,7 @@ export type GhostLaunchMode = (typeof GHOST_LAUNCH_MODES)[number];
 /**
  * 面板显示形态(相对主聊天窗)。left = 顶层布局树停靠 pane(缺省);
  * 'tab' = 不进布局树,作为右侧栏(right-tabs)里的每会话单例页签
- * (2026-07-24 定案,注册链路见 renderer/cindy-brain/ghostTabPlugins.tsx)。
+ * (2026-08 面板收束:页签面板由插件页 GhostPagePanelHost 独占承载)。
  * right 已退役(2026-07-25 Lizi 定案:右侧是右侧边栏的地盘,插件面板默认
  * 挤过去体验差;用户想放右边用拖拽换位即可)——旧包声明的 right 在校验期
  * 归一化为 left(已装插件每次启动都重过校验,硬拒会把存量插件打没;兼容
@@ -346,7 +353,8 @@ export type GhostPanelPosition = (typeof GHOST_PANEL_POSITIONS)[number];
 export interface GhostPanelDecl {
   /** 面板标准头(PanelChrome)标题;缺省用意识 name。 */
   title?: string;
-  /** 显示形态:left 停靠主聊天窗左侧(缺省),或 'tab' 右侧栏页签;
+  /** 显示形态:left 停靠主聊天窗左侧(缺省),或 'tab' 插件页内独占面板
+   *  (2026-08-02 面板收束:只从插件页打开,离开插件页即关闭);
    *  right 已退役并入 left(2026-07-25 Lizi 定案,见 GHOST_PANEL_POSITIONS 注释)。 */
   position?: GhostPanelPosition;
   /** 面板界面入口(安装目录内相对路径,意识自绘)。 */
@@ -1348,6 +1356,7 @@ export function ghostContentKeys(manifest: GhostManifest): string[] {
     else if (slot === 'card') keys.push('slotCard');
     else if (slot === 'network') keys.push('slotNetwork');
     else if (slot === 'notify') keys.push('slotNotify');
+    else if (slot === 'badge') keys.push('slotBadge');
     else if (slot === 'confirm') keys.push('slotConfirm');
     else if (slot === 'fs') keys.push('slotFs');
     // skill 是信任面最高的内容(给主 Agent 灌指令),详情页必须如实露出。
@@ -1770,6 +1779,15 @@ export function ghostPermissionItems(manifest: GhostManifest): GhostPermissionIt
       items.push({ key: 'notify', kind: 'notify', labelKey: 'notify', detailKey: 'notifyDetail' });
     }
   }
+  // 未读角标:与 notify 槽**并列**的独立一档(不是它的子项)——绿点比 toast 克制,
+  // 只想安静点个绿点的意识不该被迫连"能弹全屏顶部提示"一起申请。
+  // key 独立还有一层必要性(同 subscribe 的 activity topic 判例):
+  // diffGhostPermissionItems 按 key + detail 比对,若并进某个固定 key,已装插件
+  // 新增这一档时 added 为空,plugin-market 的扩权确认就不会拦——用户会在毫不
+  // 知情的情况下多给出一个常驻的注意力入口。
+  if (manifest.slots.includes('badge')) {
+    items.push({ key: 'badge', kind: 'notify', labelKey: 'badge', detailKey: 'badgeDetail' });
+  }
   // confirm 槽:能请主机弹一个二选一确认框(会打断操作)。装入时如实告知"它会来问",
   // 决定权仍在用户的点击上——detailKey 的固定说明把这层讲清。
   if (manifest.slots.includes('confirm')) {
@@ -1802,6 +1820,22 @@ export interface GhostPermissionDiff {
   added: GhostPermissionItem[];
   removed: GhostPermissionItem[];
   unchanged: GhostPermissionItem[];
+}
+
+/**
+ * 权限审阅基线指纹:同一份 manifest 推导出的权限条目集合(key + detail)。
+ * 与 diffGhostPermissionItems 同口径(按 key 对齐、detail 变化算差异),
+ * 所以"指纹相同"等价于"权限面没变",可安全沿用先前的审阅结论。
+ *
+ * renderer 审阅时记录基线并随安装请求回传,main 在安装锁内用**当前**已装
+ * manifest 重算比对——两侧必须用同一个实现,否则复核形同虚设,故住在 shared。
+ * 每项 JSON 编码后排序拼接,全可打印、无拼接歧义。
+ */
+export function ghostPermissionBaselineKey(manifest: GhostManifest): string {
+  return ghostPermissionItems(manifest)
+    .map((item) => JSON.stringify([item.key, item.detail ?? '']))
+    .sort()
+    .join('\n');
 }
 
 export function diffGhostPermissionItems(
@@ -1847,6 +1881,12 @@ const GHOST_ICON_MIME_BY_EXT: Record<string, string> = {
   '.gif': 'image/gif',
 };
 
+/**
+ * icon 字节上限。icon 会以 data URL 形态同步下发给 Renderer，因此安装、
+ * 本地读取与 Forge overlay 必须共用同一硬顶，避免“能打包但不能安装”。
+ */
+export const GHOST_ICON_MAX_BYTES = 512 * 1024;
+
 /** icon 路径 → mime;扩展名不在白名单返回 null(即校验不通过)。 */
 export function ghostIconMimeType(p: string): string | null {
   const dot = p.lastIndexOf('.');
@@ -1888,7 +1928,7 @@ export function ghostWebviewEntryPaths(manifest: GhostManifest): string[] {
  * 装入带面板的意识后,把面板停进布局树(main 侧随 install 调用)。
  * - 树上已有同 kind 的 pane(重装)→ 返回 null:不动树,位置记忆保留、原位复活;
  * - 意识没声明面板 → null;
- * - position:'tab' → null:页签形态不进布局树,由右侧栏页签(ghostTabPlugins)承载;
+ * - position:'tab' → null:页签形态不进布局树,由插件页(GhostPagePanelHost)承载;
  * - 否则停在聊天区左侧,宽度占比/最小宽取清单声明。
  * 卸下时**不做**逆操作 —— 树数据保留正是"重装复活"的记忆来源(§6 规则 5)。
  */
@@ -2727,6 +2767,28 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
     if (cardRaw.externalLinks === true) {
       card = { externalLinks: true };
     }
+  }
+
+  /**
+   * 未读角标槽(badge)与 `panel` 严格成对:未读点承诺「点开能看到内容」,
+   * 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
+   *
+   * **为什么用一个新 slot 而不是 `notify` 下的子字段**(2026-08-03,codex review P1):
+   * `slots` 是硬白名单——未登记的槽名一律拒装。所以任何**已经装在用户机器上**的
+   * 老包都不可能带 `badge` 槽:当初装它的客户端会直接拒绝那份清单。这让「新声明」
+   * 与「老包的同名自定义字段」成为**可证明**可分,而不是靠概率赌。
+   *
+   * 早前的方案把它放在顶层 `notify` 对象里。那个字段在本改动前完全未登记、会被
+   * 校验器静默忽略,于是两头堵:严格校验会让写过同名字段的老包升级后消失(§5 红线),
+   * 放松成"识别到就给"又会让恰好写成 `badge:true` 且有面板的老包在**没有任何安装
+   * 或更新确认**的情况下白拿一个常驻注意力面。换成 slot 后两个问题同时消失,
+   * `notify` 顶层字段也不再被解释——存量清单里有什么形态都照旧忽略。
+   */
+  if (slots.includes('badge') && panel === undefined) {
+    return {
+      ok: false,
+      reason: 'slots 声明了 "badge" 但缺少 panel——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+    };
   }
 
   // 工具声明(卡槽②):与 slots 含 'tool' 严格成对,规则同 panel。
@@ -4809,6 +4871,49 @@ export interface GhostPipeNotify {
 /** notify 的 invoke 返回(失败带人话原因,供意识作者调试;不涉他人信息)。 */
 export type GhostPipeNotifyResult = { ok: true } | { ok: false; message: string };
 
+/**
+ * 上行:未读角标(badge 槽,2026-08-03)。意识告诉主机"我这儿有新内容了",
+ * 主机在插件入口与插件卡上点一颗**绿点**,并把 summary 显示在卡片简介位。
+ *
+ * 与 notify 的分工:notify 是"弹一条即走"的一次性 toast(错过就没了);本消息
+ * 是**持久状态**——用户没去看就一直亮着,打开面板即清零。两者是**并列的两档
+ * 权限**,不是加档关系:要 toast 声明 `notify` 槽,要绿点声明 `badge` 槽,
+ * 谁也不是谁的前置(绿点比 toast 克制,不该被 toast 权限捆绑)。
+ *
+ * 门槛(validateGhostManifest 强制):只有声明了 `panel` 的意识能申请。理由是
+ * 未读点承诺"点开能看到内容",纯工具型/对话型意识没有可打开的界面,给了就是
+ * 骗点击。
+ *
+ * 信任边界与 notify 同款:意识只供纯文本 summary(净化 + 限长),点的颜色、
+ * 位置、身份头全由主机画;意识改不了别人的角标(id 由沙箱绑定,不看载荷自报)。
+ */
+export interface GhostPipeBadge {
+  type: 'badge';
+  /** true = 有未读(点亮);false = 自己清零(如意识内已读)。 */
+  unread: boolean;
+  /**
+   * 最新一条的摘要(纯文本,≤ GHOST_BADGE_SUMMARY_MAX_CHARS)。
+   * 显示在插件卡的简介位,替代静态描述——用户扫一眼就知道新内容是什么。
+   * unread:false 时忽略。
+   */
+  summary?: string;
+}
+
+/** badge 的 invoke 返回(与 notify 同款结构化拒绝,不抛异常穿透沙箱)。 */
+export type GhostPipeBadgeResult = { ok: true } | { ok: false; message: string };
+
+/**
+ * 未读摘要长度上限。比 notify 正文更短:它要挤进卡片一行、单行省略,
+ * 太长的部分用户根本看不到,不如让作者自己裁。
+ */
+export const GHOST_BADGE_SUMMARY_MAX_CHARS = 80;
+
+/**
+ * 同一意识两次角标上报的最小间隔 ms。比 notify 宽松得多——角标是幂等的
+ * 状态写入(不像 toast 每条都打扰用户),但仍要挡住死循环刷写。
+ */
+export const GHOST_BADGE_MIN_INTERVAL_MS = 500;
+
 /** 提示正文长度上限(与订阅槽 block reason ≤200 同量级:一眼能读完的量)。 */
 export const GHOST_NOTIFY_MAX_CHARS = 200;
 
@@ -5127,6 +5232,24 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /**
+       * 要不要同时生成音频(对白 / 音效 / 背景音乐;2026-08 加法)。
+       *
+       * **三态,不传与传 false 不是一回事**:
+       *   - 不传(**缺省**):主机不向上游传递任何音频字段,出声与否随该型号
+       *     的上游默认——与本字段出现之前逐字节同形。存量插件不改一行代码,
+       *     产出不变。
+       *   - `true`:显式要求带音轨。台词/音效/配乐的具体内容写在 prompt 里
+       *     (主机遵守提示词 passthrough,不代写)。
+       *   - `false`:显式要求静音。
+       *
+       * 不是所有型号都有音轨能力:主机按解析出的选型二次校验,不支持的型号
+       * 上**显式传**本字段即明拒(不静默忽略——静默出一条无声/有声都不是
+       * 用户要的片子,还照样计费)。不传则永远不会因此被拒。
+       *
+       * 实际生效值随结果回传(见 GhostVideoResultParams 的 audio)。
+       */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /**
@@ -5162,6 +5285,8 @@ export type GhostPipeCindyRequest =
       resolution?: GhostVideoResolution;
       duration?: number;
       fps?: number;
+      /** 音频开关(同 gen_video 分支的三态语义;参考图不改变它的含义)。 */
+      audio?: boolean;
       /** 归因号(同 gen_image 分支)。 */
       callId?: string;
       /** 异步模式(同 gen_video 分支)。 */
@@ -5256,6 +5381,13 @@ export interface GhostVideoResultParams {
   resolution?: string;
   ratio?: string;
   fps?: number;
+  /**
+   * 本单是否带音轨。缺省 = 主机说不上来(该型号没有音轨能力,或老宿主根本
+   * 不认识这个字段),**不等于"无声"**——想确认有没有兑现就看这个字段在不在,
+   * 别把缺省读成 false。当前上游任务不回报音频状态,所以这里的值来自主机
+   * 提交值 / 该型号的已知默认,不是上游上报的实测结果。
+   */
+  audio?: boolean;
 }
 
 /** cindy 槽代办的返回(cindy.send 的 resolve 值)。 */

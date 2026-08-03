@@ -6,9 +6,16 @@ import {
   customProviderModelConfigFromCatalogModel,
   providerViewToCustomProviderConfig,
   replaceCustomProviderModelId,
+  setCustomProviderModelReasoning,
+  setCustomProviderModelReasoningEffort,
+  setCustomProviderModelSupportsImageInput,
   updateCustomProvider,
 } from '../customProviders';
-import type { ProviderView } from '@cindy/model-providers';
+import type {
+  CatalogModel,
+  ProviderRuntimeModelConfig,
+  ProviderView,
+} from '@cindy/model-providers';
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -19,6 +26,9 @@ describe('replaceCustomProviderModelId', () => {
       id: 'MiniMax-M3',
       name: 'MiniMax M3',
       contextWindow: 1_000_000,
+      supportsImageInput: true,
+      reasoning: true,
+      reasoningEfforts: ['low', 'high'],
     }, 'another-model')).toEqual({
       id: 'another-model',
       name: 'MiniMax M3',
@@ -32,6 +42,50 @@ describe('replaceCustomProviderModelId', () => {
       contextWindow: 1_000_000,
     };
     expect(replaceCustomProviderModelId(model, model.id)).toBe(model);
+  });
+});
+
+describe('setCustomProviderModelSupportsImageInput', () => {
+  it('updates only the selected model row', () => {
+    const models = [
+      { id: 'text', name: 'Text' },
+      { id: 'vision', name: 'Vision' },
+    ];
+    expect(setCustomProviderModelSupportsImageInput(models, 1, true)).toEqual([
+      models[0],
+      { id: 'vision', name: 'Vision', supportsImageInput: true },
+    ]);
+  });
+});
+
+describe('Pi custom-provider reasoning controls', () => {
+  it('enables conservative default levels and removes the capability when disabled', () => {
+    const models = [{ id: 'reasoner', name: 'Reasoner' }];
+    const enabled = setCustomProviderModelReasoning(models, 0, true);
+    expect(enabled).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        reasoning: true,
+        reasoningEfforts: ['minimal', 'low', 'medium', 'high'],
+      },
+    ]);
+    expect(setCustomProviderModelReasoning(enabled, 0, false)).toEqual(models);
+  });
+
+  it('keeps canonical order and refuses to remove the final supported effort', () => {
+    const models: ProviderRuntimeModelConfig[] = [
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        reasoning: true,
+        reasoningEfforts: ['high'],
+      },
+    ];
+    const withXhigh = setCustomProviderModelReasoningEffort(models, 0, 'xhigh', true);
+    expect(withXhigh[0]?.reasoningEfforts).toEqual(['high', 'xhigh']);
+    const highOnly = setCustomProviderModelReasoningEffort(withXhigh, 0, 'xhigh', false);
+    expect(setCustomProviderModelReasoningEffort(highOnly, 0, 'high', false)).toEqual(highOnly);
   });
 });
 
@@ -86,6 +140,38 @@ describe('customProviderModelConfigFromCatalogModel', () => {
       defaultEnabled: false,
     });
   });
+
+  it('preserves an explicit Pi image-input capability through the edit round trip', () => {
+    expect(customProviderModelConfigFromCatalogModel({
+      id: 'vision-model',
+      name: 'Vision Model',
+      contextWindow: 200_000,
+      supportsImageInput: true,
+    })).toEqual({
+      id: 'vision-model',
+      name: 'Vision Model',
+      supportsImageInput: true,
+    });
+  });
+
+  it('reconstructs explicit Pi reasoning capability from catalog efforts only for Pi', () => {
+    const catalogModel = {
+      id: 'reasoner',
+      name: 'Reasoner',
+      contextWindow: 200_000,
+      efforts: ['low', 'high', 'xhigh'] as CatalogModel['efforts'],
+    };
+    expect(customProviderModelConfigFromCatalogModel(catalogModel, 'pi')).toEqual({
+      id: 'reasoner',
+      name: 'Reasoner',
+      reasoning: true,
+      reasoningEfforts: ['low', 'high', 'xhigh'],
+    });
+    expect(customProviderModelConfigFromCatalogModel(catalogModel, 'codex')).toEqual({
+      id: 'reasoner',
+      name: 'Reasoner',
+    });
+  });
 });
 
 describe('providerViewToCustomProviderConfig', () => {
@@ -132,6 +218,45 @@ describe('providerViewToCustomProviderConfig', () => {
         },
       },
     });
+  });
+
+  it('round-trips Pi reasoning efforts from a provider view', () => {
+    const provider = {
+      id: 'local-reasoning',
+      name: 'Local Reasoning',
+      source: 'user',
+      agents: ['pi'],
+      auth: { method: 'none' },
+      access: { kind: 'api' },
+      routing: {
+        pi: {
+          upstream: 'http://127.0.0.1:4000/v1',
+          authStrategy: 'none',
+          wireProtocol: 'openai-responses',
+        },
+      },
+      models: {
+        pi: [
+          {
+            id: 'reasoner',
+            name: 'Reasoner',
+            contextWindow: 200_000,
+            efforts: ['low', 'high', 'xhigh'],
+            defaultEffort: 'high',
+          },
+        ],
+      },
+      connected: true,
+    } satisfies ProviderView;
+
+    expect(providerViewToCustomProviderConfig(provider).runtimes.pi?.models).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        reasoning: true,
+        reasoningEfforts: ['low', 'high', 'xhigh'],
+      },
+    ]);
   });
 });
 

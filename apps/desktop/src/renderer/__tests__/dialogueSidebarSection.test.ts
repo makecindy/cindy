@@ -40,6 +40,11 @@ const newMakerDraftRouteSource = readFileSync(
   'utf8',
 );
 
+const remoteProjectsHookSource = readFileSync(
+  resolve(__dirname, '..', 'features', 'device-link', 'useDeviceLinkRemoteProjects.ts'),
+  'utf8',
+);
+
 describe('Dialogue sidebar section', () => {
   it('is rendered after Projects in project-grouped mode', () => {
     const projectsIndex = sidebarSource.indexOf('<ProjectsSection');
@@ -61,11 +66,9 @@ describe('Dialogue sidebar section', () => {
 
   it('shows loading instead of the empty state until the initial session fetch settles', () => {
     expect(sidebarSource.match(/isLoading=\{isLoadingSidebarSessions\}/g)).toHaveLength(2);
-    expect(sidebarSource).toContain(
-      'useRemoteSessionBootstrapLoading(selectedMachineId)',
-    );
-    expect(sidebarSource).toContain(
-      'sessionsHook.isLoading || remoteSessionBootstrapLoading',
+    expect(sidebarSource).toContain('useRemoteSessionBootstrapLoading(selectedMachineId)');
+    expect(sidebarSource).toMatch(
+      /sessionsHook\.isLoading\s*\|\|\s*remoteSessionBootstrapLoading\s*\|\|\s*remoteDeviceDirectoryStatus === 'loading'/,
     );
     expect(dialogueSectionSource).toContain('isLoading: boolean');
     expect(dialogueSectionSource).toContain("'ccAgent.sidebar.loadingDialogues'");
@@ -76,6 +79,30 @@ describe('Dialogue sidebar section', () => {
     expect(dateGroupedSectionSource).toContain('!isLoading');
     expect(dateGroupedSectionSource).toMatch(
       /isLoading\s*\?\s*'ccAgent\.sidebar\.loadingDialogues'\s*:\s*'ccAgent\.sidebar\.dateGroup\.empty'/,
+    );
+  });
+
+  it('shows remote directory/task loading and failures before connecting or authoritative empty states', () => {
+    const failureIndex = sidebarSource.indexOf(
+      'remoteSessionBootstrapFailures.length > 0 && !hasVisibleSidebarContent',
+    );
+    const connectingIndex = sidebarSource.indexOf('selectedMachineConnecting ?');
+    expect(failureIndex).toBeGreaterThanOrEqual(0);
+    expect(connectingIndex).toBeGreaterThan(failureIndex);
+    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoadFailed'");
+    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksPartiallyFailed'");
+    // 任务读取失败是「自动重试进行中」的状态说明(reconciler 退避重试 + 熔断探测恢复
+    // 自动补拉),不再提供手动重试按钮(2026-08 弱网实测反馈:重连必须全自动)。
+    expect(sidebarSource).not.toContain('retryRemoteSessionBootstrap(device.deviceId)');
+    expect(sidebarSource).not.toContain("'ccAgent.sidebar.machineSwitcher.retryTasks'");
+    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.tasksLoading'");
+    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoadFailed'");
+    expect(sidebarSource).toContain("'ccAgent.sidebar.machineSwitcher.devicesLoading'");
+    expect(sidebarSource).toContain('retryDeviceLinkDeviceList');
+    // 即使有旧/空 shard，本轮 gave-up 也必须进 error，不能把缓存伪装成权威结果。
+    expect(remoteProjectsHookSource).toContain("if (result === 'gave-up') {");
+    expect(remoteProjectsHookSource).not.toContain(
+      "result === 'gave-up' && !remoteProjectsStore.hasDevice(deviceId)",
     );
   });
 
@@ -100,9 +127,15 @@ describe('Dialogue sidebar section', () => {
   it('makes the Dialogue title and adjacent hover arrow collapse the section instead of putting collapse in the right tool group', () => {
     const titleIndex = dialogueSectionSource.indexOf("t('ccAgent.sidebar.dialogues')");
     const titleButtonIndex = dialogueSectionSource.lastIndexOf('<button', titleIndex);
-    const titleExpandedIndex = dialogueSectionSource.indexOf('aria-expanded={!collapsed}', titleButtonIndex);
+    const titleExpandedIndex = dialogueSectionSource.indexOf(
+      'aria-expanded={!collapsed}',
+      titleButtonIndex,
+    );
     const hoverToggleIndex = dialogueSectionSource.indexOf('<Tip text={toggleLabel}');
-    const hoverToggleExpandedIndex = dialogueSectionSource.indexOf('aria-expanded={!collapsed}', hoverToggleIndex);
+    const hoverToggleExpandedIndex = dialogueSectionSource.indexOf(
+      'aria-expanded={!collapsed}',
+      hoverToggleIndex,
+    );
     const settingsIndex = dialogueSectionSource.indexOf("t('ccAgent.sidebar.dialogueSettings')");
 
     expect(titleIndex).toBeGreaterThanOrEqual(0);
@@ -115,17 +148,27 @@ describe('Dialogue sidebar section', () => {
 
   it('only shows dialogue header actions while hovering or focusing the Dialogue header row', () => {
     expect(dialogueSectionSource).toContain('group/sidebar-header flex h-6');
-    expect(dialogueSectionSource).toContain('pointer-events-none opacity-0 transition-opacity duration-150');
-    expect(dialogueSectionSource).toContain('group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100');
-    expect(dialogueSectionSource).toContain('has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100');
-    expect(dialogueSectionSource).not.toContain('group-focus-within/sidebar-header:pointer-events-auto');
+    expect(dialogueSectionSource).toContain(
+      'pointer-events-none opacity-0 transition-opacity duration-150',
+    );
+    expect(dialogueSectionSource).toContain(
+      'group-hover/sidebar-header:pointer-events-auto group-hover/sidebar-header:opacity-100',
+    );
+    expect(dialogueSectionSource).toContain(
+      'has-[:focus-visible]:pointer-events-auto has-[:focus-visible]:opacity-100',
+    );
+    expect(dialogueSectionSource).not.toContain(
+      'group-focus-within/sidebar-header:pointer-events-auto',
+    );
     expect(dialogueSectionSource).toContain('className={HEADER_HOVER_ACTION_CLASS}');
     expect(dialogueSectionSource).toContain('className={HEADER_ACTIONS_CLASS}');
   });
 
   it('creates a standalone dialogue without inheriting a project draft directory', () => {
-    expect(sidebarSource).toContain('patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] })');
-    expect(sidebarSource).toMatch(/navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/);
+    expect(sidebarSource).toContain('resetDraftWorkspaceTargets();');
+    expect(sidebarSource).toMatch(
+      /navigate\(['`]\/cc-agent\/new['`],\s*\{\s*state:\s*makeNewMakerRouteState\('dialogue'\)\s*\}\)/,
+    );
     expect(sidebarSource).toContain('onCreateDialogue={handleCreateDialogue}');
   });
 
@@ -134,6 +177,8 @@ describe('Dialogue sidebar section', () => {
     // workingDir。workingDir 为空时直接创建 dialogue,不再强制弹项目 picker。
     expect(newMakerDraftRouteSource).not.toContain('selectProjectRequired');
     expect(newMakerDraftRouteSource).not.toContain('!selectedWorkingDir');
-    expect(newMakerDraftRouteSource).toContain("workspaceKind: workingDir ? 'project' : 'dialogue'");
+    expect(newMakerDraftRouteSource).toContain(
+      "workspaceKind: workingDir ? 'project' : 'dialogue'",
+    );
   });
 });

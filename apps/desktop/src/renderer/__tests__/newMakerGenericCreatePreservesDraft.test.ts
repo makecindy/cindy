@@ -5,7 +5,7 @@
  *
  * 背景:草稿页(/cc-agent/new)的「对话或选择项目」选择由 newMakerDraft store
  * 持久化。此前展开态 SidebarTopNav.handleNew 与折叠态 CCAgentSidebarUpper.handleNewCCS
- * 都会先 patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] })
+ * 都会先重置 newMakerDraft
  * 再 navigate,导致用户选好项目后切到别的会话、再点「新建」回来时选择被重置为默认、
  * 需要重新选。修复后这两个通用入口只 navigate、不清空;清空语义只保留在「新建对话」
  * 等显式入口(handleCreateDialogue)。
@@ -59,7 +59,7 @@ describe('通用「新建」保留 newMakerDraft 选择', () => {
 
   it('显式「新建对话」入口 handleCreateDialogue 仍清空 workingDir(不受本次修复影响)', () => {
     const block = extractHandlerBlock(sidebarUpperSource, 'handleCreateDialogue');
-    expect(block).toContain('patchNewMakerDraft({ workingDir: null, remoteHostId: null, extraDirs: [] })');
+    expect(block).toContain('resetDraftWorkspaceTargets();');
   });
 
   // 保留与清空的分界(2026-07-25 用户定稿):workingDir / 文本 / 模型是便利性

@@ -94,6 +94,12 @@ export const DEVICE_LINK_PUSH = {
    * payload: { keepAwake: boolean } —— renderer 据此同步开关显示状态。
    */
   KEEP_AWAKE_CHANGED: 'device-link:keep-awake-changed',
+  /**
+   * 控制端:某目标设备的「无响应」熔断状态翻转(连续 invoke 超时判定,弱网 / 对端
+   * 卡死;presence 可能仍显示在线)。payload: { deviceId, unresponsive: boolean }。
+   * renderer 据此显示「通路不稳定」降级态,恢复(探测拿到真实回包)时自动清除。
+   */
+  RESPONSIVENESS_CHANGED: 'device-link:responsiveness-changed',
 } as const;
 
 /** 控制本机的控制端信息(同 main/device-link/dispatch.ts ActiveController) */
@@ -145,6 +151,11 @@ export interface DeviceLinkState {
   revokedControllers: string[];
   /** 本机主动关闭控制的目标设备 deviceId 列表(控制端本地偏好)。 */
   disabledControlDeviceIds: string[];
+  /**
+   * 「无响应」熔断中的目标设备(控制端本地判定;初值,后续变化走 RESPONSIVENESS_CHANGED
+   * push)。presence 在线但连续 invoke 超时的弱网 / 对端卡死态。
+   */
+  unresponsiveDeviceIds: string[];
 }
 
 /** LIST_DEVICES 返回的设备视图(同 server REST DeviceView) */

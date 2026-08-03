@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
+const outboundFetchMock = vi.hoisted(() => vi.fn());
+vi.mock('../../maker-host/outbound-fetch.js', () => ({
+  outboundFetch: (...args: unknown[]) => outboundFetchMock(...args),
+}));
+
 import {
   LiteLlmTranscriptionProvider,
   transcribeLiteLlmAudioFile,
@@ -8,13 +13,13 @@ import type { AsrEvent } from '@cindy/voice-input-core';
 
 describe('LiteLlmTranscriptionProvider', () => {
   afterEach(() => {
-    vi.unstubAllGlobals();
+    outboundFetchMock.mockReset();
   });
 
   it('posts captured audio to LiteLLM using ElevenLabs Scribe v2', async () => {
     let requestUrl = '';
     let requestInit: RequestInit | undefined;
-    const fetchMock = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    outboundFetchMock.mockImplementation(async (url: string | URL | Request, init?: RequestInit) => {
       requestUrl = String(url);
       requestInit = init;
       return new Response(JSON.stringify({ text: 'hello world' }), {
@@ -22,7 +27,6 @@ describe('LiteLlmTranscriptionProvider', () => {
         headers: { 'Content-Type': 'application/json' },
       });
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     const events: AsrEvent[] = [];
     const provider = new LiteLlmTranscriptionProvider({
@@ -47,14 +51,13 @@ describe('LiteLlmTranscriptionProvider', () => {
 
   it('posts an existing audio file to LiteLLM and returns trimmed text', async () => {
     let requestInit: RequestInit | undefined;
-    const fetchMock = vi.fn(async (_url: string | URL | Request, init?: RequestInit) => {
+    outboundFetchMock.mockImplementation(async (_url: string | URL | Request, init?: RequestInit) => {
       requestInit = init;
       return new Response(JSON.stringify({ text: '  mobile voice  ' }), {
         status: 200,
         headers: { 'Content-Type': 'application/json' },
       });
     });
-    vi.stubGlobal('fetch', fetchMock);
 
     const text = await transcribeLiteLlmAudioFile({
       proxyApiKey: 'sk-test',

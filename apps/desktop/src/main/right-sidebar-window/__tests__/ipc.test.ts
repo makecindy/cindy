@@ -15,7 +15,7 @@ vi.mock('electron', () => {
 
 import { ipcMain, type BrowserWindow } from 'electron';
 
-import { MAKER_INVOKE } from '../../maker-ipc/channels.js';
+import { MAKER_INVOKE, MAKER_SEND } from '../../maker-ipc/channels.js';
 import { registerRsbWindowIpc } from '../ipc.js';
 import type { RsbWindowController } from '../controller.js';
 
@@ -61,6 +61,37 @@ beforeEach(() => {
 });
 
 describe('right-sidebar-window IPC', () => {
+  it('forwards the optional device-link origin in window context', () => {
+    const controller = makeController();
+    const { mainWebContents } = registerController(controller);
+    const setContextCall = (ipcMain.on as ReturnType<typeof vi.fn>).mock.calls.find(
+      ([channel]) => channel === MAKER_SEND.RSB_WINDOW_SET_CONTEXT,
+    );
+    const setContext = setContextCall?.[1] as
+      | ((event: { sender: unknown }, payload: unknown) => void)
+      | undefined;
+    if (!setContext) throw new Error('RSB_WINDOW_SET_CONTEXT handler not registered');
+
+    setContext(
+      { sender: mainWebContents },
+      {
+        sessionId: 's1',
+        workdir: '/remote/workdir',
+        remoteHostId: null,
+        deviceLinkDeviceId: 'device-1',
+        available: true,
+      },
+    );
+
+    expect(controller.setContext).toHaveBeenCalledWith({
+      sessionId: 's1',
+      workdir: '/remote/workdir',
+      remoteHostId: null,
+      deviceLinkDeviceId: 'device-1',
+      available: true,
+    });
+  });
+
   it('preserves missing vs explicit null worker focus hints in ensure commands', async () => {
     const controller = makeController();
     const { handler, mainWebContents } = registerController(controller);
@@ -225,36 +256,6 @@ describe('right-sidebar-window IPC', () => {
         },
       ),
     ).rejects.toThrow(/command.absPath required/);
-  });
-
-  it('validates and forwards open-ghost-tab commands (ghostId 走身份卡同一校验)', async () => {
-    const controller = makeController();
-    const { handler, mainWebContents } = registerController(controller);
-
-    await handler(
-      { sender: mainWebContents },
-      {
-        command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
-        allowOpen: true,
-      },
-    );
-    expect(controller.routeCommand).toHaveBeenCalledWith({
-      command: { type: 'open-ghost-tab', sessionId: 's1', ghostId: 'tab-demo-a' },
-      allowOpen: true,
-    });
-
-    // 野值(路径穿越形状 / 缺失)进不了命令通道。
-    for (const ghostId of ['../escape', 'UPPER', '', undefined]) {
-      await expect(
-        handler(
-          { sender: mainWebContents },
-          {
-            command: { type: 'open-ghost-tab', sessionId: 's1', ghostId },
-            allowOpen: true,
-          },
-        ),
-      ).rejects.toThrow(/ghostId/);
-    }
   });
 
   it('drops commands from secondary renderers but still validates their payloads', async () => {

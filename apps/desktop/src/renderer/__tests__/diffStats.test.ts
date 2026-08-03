@@ -104,6 +104,51 @@ describe('statsForToolCall', () => {
     expect(statsForToolCall('MultiEdit', { edits: [] })).toEqual({ add: 0, del: 0 });
   });
 
+  it('pi edit: sums edits[].oldText/newText like MultiEdit', () => {
+    const stats = statsForToolCall('edit', {
+      path: '/foo',
+      edits: [
+        { oldText: 'a', newText: 'b' },       // +1 -1
+        { oldText: '', newText: 'x\ny' },     // +2 -0
+      ],
+    });
+    expect(stats).toEqual({ add: 3, del: 1 });
+  });
+
+  it('pi edit: legacy top-level oldText/newText yields real counts, not +0 -0', () => {
+    expect(statsForToolCall('edit', {
+      path: '/foo',
+      oldText: 'old A\nold B',
+      newText: 'new A',
+    })).toEqual({ add: 1, del: 2 });
+  });
+
+  it('pi edit: top-level pair is counted after edits[] when both are present', () => {
+    expect(statsForToolCall('edit', {
+      path: '/foo',
+      edits: [{ oldText: 'a', newText: 'b' }], // +1 -1
+      oldText: 'c',
+      newText: 'd',                            // +1 -1
+    })).toEqual({ add: 2, del: 2 });
+  });
+
+  it('pi edit: no usable replacement returns +0 -0 (not null)', () => {
+    expect(statsForToolCall('edit', { path: '/foo' })).toEqual({ add: 0, del: 0 });
+  });
+
+  it('pi write: full content as +N -0', () => {
+    expect(statsForToolCall('write', { path: '/foo', content: 'a\nb' })).toEqual({
+      add: 2,
+      del: 0,
+    });
+  });
+
+  it('pi read-only tools stay null', () => {
+    expect(statsForToolCall('read', { path: '/foo' })).toBeNull();
+    expect(statsForToolCall('bash', { command: 'ls' })).toBeNull();
+    expect(statsForToolCall('grep', { pattern: 'foo' })).toBeNull();
+  });
+
   it('file_change: sums unified diffs across all changed files', () => {
     expect(statsForToolCall('file_change', {
       changes: [

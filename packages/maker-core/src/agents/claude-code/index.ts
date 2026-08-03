@@ -105,6 +105,8 @@ import {
 } from './capability-routing.js';
 import { normalizeBuiltinToolForAutoReview } from './auto-review-policy.js';
 import {
+  composeAutoReviewIntentWithApprovedPlan,
+  composeAutoReviewIntentWithClarification,
   extractAutoReviewUserIntent,
   resolveAutoReviewDecision,
   type AutoReviewDecision,
@@ -1182,6 +1184,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         // 到对应 session 的业务函数。host 直接调 startSession 而没透 sessionId
         // 时此处为 undefined, 工具按"无 session 绑定"语义处理。
         sessionId: opts.sessionId,
+        ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
         getSessionContext: () => context,
       };
       // null-prototype: server 名来自用户可控的自定义 MCP id, 而 id 正则允许下划线,
@@ -1487,6 +1490,13 @@ export class ClaudeCodeAgent extends BaseAgent {
           log.warn('AskUserQuestion got mismatched decision', { decKind: decision.kind });
           return { behavior: 'deny', message: 'resolver kind mismatch' };
         }
+        // 澄清答案同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/ 后,后续 `rm -rf src` 必须按
+        // 澄清后的意图裁决)→ 并入有界 review intent 并清空决策缓存,否则 reviewer 仍按原含糊请求
+        // 裁决、可能静默 allow(codex 报)。
+        setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+          currentAutoReviewIntent,
+          Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+        ));
         // 把用户回答拼回 SDK 让模型读 (老链路 agentManager.ts:1097-1106 把 answers 当 updatedInput.answers)
         return {
           behavior: 'allow',
@@ -1503,6 +1513,9 @@ export class ClaudeCodeAgent extends BaseAgent {
           // 空 plan 直接放过(老链路 agentManager.ts:1118-1120 同样处理)
           return { behavior: 'allow', updatedInput: input };
         }
+        // 计划审批期间用户可能继续发消息(currentAutoReviewIntent 会被覆盖);实施阶段的审查意图
+        // 必须是"发起计划时的原始请求 + 最终获批计划",不能掺进审批期间的内部跟进消息(codex 报)。
+        const planRequestAutoReviewIntent = currentAutoReviewIntent;
         const decision = await dispatchInteraction({
           kind: 'plan_review',
           requestId: options.toolUseID,
@@ -1544,6 +1557,12 @@ export class ClaudeCodeAgent extends BaseAgent {
           });
         }
         const finalPlan = decision.editedPlan ?? plan;
+        // 计划获批后,后续实施动作要按"原始意图 + 获批计划"审查 —— 否则轻量 reviewer 仍按批准前的
+        // 过期意图裁决,计划里明确授权的动作会被误 block(或反之)。
+        setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
+          planRequestAutoReviewIntent,
+          finalPlan,
+        ));
         return {
           behavior: 'allow',
           updatedInput: { ...(input as Record<string, unknown>), plan: finalPlan } as Record<string, unknown>,
@@ -2332,6 +2351,7 @@ export class ClaudeCodeAgent extends BaseAgent {
         const remoteQuery = await this.deps.remoteCcQueryFactory({
           remoteHostId: opts.remoteHostId,
           sessionId: opts.sessionId,
+          ...(opts.sessionInstanceId ? { sessionInstanceId: opts.sessionInstanceId } : {}),
           startParams,
           // 协同身份以 session 自己的 vendorOptions 为准 (worker 首次创建时
           // DB 标记尚未写入, host 现场查库会拿到空角色)。见 base-agent.ts
@@ -2387,11 +2407,22 @@ export class ClaudeCodeAgent extends BaseAgent {
               if (decision.kind !== 'ask_user_question') {
                 return { kind: 'ask_user_question', answers: {} };
               }
+              // 远端澄清同样改变本轮授权范围(用户把范围从 src/ 收窄到 build/)→ 与本地 AskUserQuestion
+              // 分支一致地并入有界 review intent 并清空裁决缓存,否则后续工具仍按澄清前的意图裁决、
+              // 越界操作可能被静默允许(codex 报)。
+              setAutoReviewIntent(composeAutoReviewIntentWithClarification(
+                currentAutoReviewIntent,
+                Object.entries(decision.answers ?? {}).map(([question, answer]) => ({ question, answer })),
+              ));
               return { kind: 'ask_user_question', answers: decision.answers };
             }
             if (params.kind === 'plan_review') {
               const planInput = (params.input ?? {}) as { plan?: string; planFilePath?: string };
               const plan = params.plan ?? planInput.plan ?? '';
+              // 审批等待期间用户可能继续发消息(setAutoReviewIntent 会覆盖 currentAutoReviewIntent),
+              // 实施阶段的审查意图必须锚在**发起计划时**的原始请求上,不能掺进审批期间的内部跟进
+              // (copilot 报;与本地 ExitPlanMode 分支的 planRequestAutoReviewIntent 同款)。
+              const planRequestAutoReviewIntent = currentAutoReviewIntent;
               const decision = await dispatchWithTimeout({
                 kind: 'plan_review',
                 requestId: params.requestId,
@@ -2410,6 +2441,12 @@ export class ClaudeCodeAgent extends BaseAgent {
                     decision.editedPlan,
                   ),
                 );
+                // 远端计划获批同样要把审查意图更新成"原始意图 + 最终获批计划"—— 与本地 ExitPlanMode 分支
+                // 一致,否则后续实施工具的轻量 reviewer 仍按批准前的过期意图裁决(codex 报)。
+                setAutoReviewIntent(composeAutoReviewIntentWithApprovedPlan(
+                  planRequestAutoReviewIntent,
+                  decision.editedPlan ?? plan,
+                ));
               } else if (!decision.dismissed) {
                 appendActiveCapabilitySelectionText(decision.reason);
               }

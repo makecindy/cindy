@@ -152,6 +152,13 @@ function sessionRunningError(): Error & { code: string } {
   });
 }
 
+function unsupportedChatBridgeImageError(
+  feature = "input content part 'input_image'",
+): string {
+  return 'unexpected status 400 Bad Request: Responses feature is not supported by the '
+    + `Chat Completions bridge: ${feature}, url: http://127.0.0.1/v1/responses`;
+}
+
 function createHarness() {
   let running = false;
   let turnGeneration = 0;
@@ -214,9 +221,15 @@ function createHarness() {
     NonNullable<AgentInputCoordinatorDeps['persistQueueSnapshot']>
   >();
   const onUiRetry = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUiRetry']>>(() => {});
+  const onAutomaticEnqueue = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onAutomaticEnqueue']>
+  >(() => {});
   const onUserEnqueue = vi.fn<NonNullable<AgentInputCoordinatorDeps['onUserEnqueue']>>(() => {});
   const onDiscardedQueuedMessage = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['onDiscardedQueuedMessage']>
+  >(() => {});
+  const onRejectedUserTurn = vi.fn<
+    NonNullable<AgentInputCoordinatorDeps['onRejectedUserTurn']>
   >(() => {});
   const supersedeRetriedUserTurn = vi.fn<
     NonNullable<AgentInputCoordinatorDeps['supersedeRetriedUserTurn']>
@@ -226,8 +239,10 @@ function createHarness() {
     steerToAgent,
     abortSession,
     onUiRetry,
+    onAutomaticEnqueue,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     isTurnRunning: () => running,
     getTurnGeneration: () => turnGeneration,
@@ -280,8 +295,10 @@ function createHarness() {
     emitProjection,
     projections,
     onUiRetry,
+    onAutomaticEnqueue,
     onUserEnqueue,
     onDiscardedQueuedMessage,
+    onRejectedUserTurn,
     supersedeRetriedUserTurn,
     setRunning(value: boolean) {
       running = value;
@@ -2099,7 +2116,202 @@ describe('AgentInputCoordinator send transaction', () => {
     // 重发的是原文, 文本上与普通用户消息无异 —— 所以「用户显式重试」只能靠这个
     // 回调传出去。hook 侧的渠道回流(turn.reopen)依赖它: 零产出失败恰是上游过载
     // 最典型的形态, 也最需要把结果接回渠道那条消息。
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
+  });
+
+  it('removes unsupported image blocks but preserves GIF and PDF files on retry', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-with-text';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [
+      {
+        id: 'image-1',
+        name: 'image.png',
+        path: 'clipboard://image.png',
+        ext: '.png',
+        size: 4,
+        category: 'image',
+        mimeType: 'image/png',
+        url: 'data:image/png;base64,aW1hZ2U=',
+      },
+      {
+        id: 'gif-1',
+        name: 'clip.gif',
+        path: '/repo/clip.gif',
+        ext: '.gif',
+        size: 6,
+        category: 'image',
+        mimeType: 'image/gif',
+        url: 'xdt-image://session/clip.gif',
+      },
+      {
+        id: 'file-1',
+        name: 'notes.pdf',
+        path: '/repo/notes.pdf',
+        ext: '.pdf',
+        size: 8,
+        category: 'pdf',
+        mimeType: 'application/pdf',
+      },
+    ];
+    item.persistedContent = JSON.stringify({
+      text: item.text,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }, {
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    };
+    (item.chatMessage as typeof item.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles = item.files;
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = unsupportedChatBridgeImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: [
+        { type: 'text', text: 'describe this' },
+        { type: 'file', path: 'xdt-image://session/clip.gif', mimeType: 'image/gif' },
+        { type: 'file', path: '/repo/notes.pdf', mimeType: 'application/pdf' },
+      ],
+    });
+    const retried = h.onDispatchedUserTurn.mock.calls[1]?.[1];
+    expect(retried?.files).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
+    expect(retried?.chatMessage.images).toEqual([{
+      url: 'xdt-image://session/clip.gif',
+      mimeType: 'image/gif',
+      originalName: 'clip.gif',
+    }]);
+    expect(retried?.chatMessage.files).toEqual([{ name: 'notes.pdf', path: '/repo/notes.pdf' }]);
+    expect((retried?.chatMessage as typeof retried.chatMessage & {
+      retryFiles?: AgentInputQueuedMessage['files'];
+    }).retryFiles).toEqual([
+      expect.objectContaining({ id: 'gif-1', ext: '.gif', category: 'image' }),
+      expect.objectContaining({ id: 'file-1', category: 'pdf' }),
+    ]);
+    expect(JSON.parse(retried?.persistedContent ?? '{}')).toEqual({
+      text: 'describe this',
+      images: [{
+        url: 'xdt-image://session/clip.gif',
+        mimeType: 'image/gif',
+        originalName: 'clip.gif',
+      }],
+      files: [{ name: 'notes.pdf', path: '/repo/notes.pdf' }],
+    });
+  });
+
+  it('keeps an unsupported image-only retry recoverable without fabricating text', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-only';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', '');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+    item.persistedContent = JSON.stringify({
+      text: '',
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+      files: [],
+    });
+    item.chatMessage = {
+      ...item.chatMessage,
+      images: [{
+        url: 'data:image/png;base64,aW1hZ2U=',
+        mimeType: 'image/png',
+        originalName: 'image.png',
+      }],
+    };
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    const error = unsupportedChatBridgeImageError();
+    h.coordinator.onTurnEvent(sid, 'error', error);
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    expect(latestProjection(h.projections).error).toBe(error);
+    expect(latestProjection(h.projections).recovery?.kind).toBe('active-turn');
+
+    h.coordinator.enqueue(sid, makeItem('q-next', 'continue in text'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'continue in text' });
+  });
+
+  it('keeps retry recovery compatible with the legacy bridge image error', async () => {
+    const h = createHarness();
+    const sid = 'retry-unsupported-image-legacy-error';
+    h.setHasAssistantProgressAfter(async () => false);
+    const item = makeItem('q-first', 'describe this');
+    item.files = [{
+      id: 'image-1',
+      name: 'image.png',
+      path: 'clipboard://image.png',
+      ext: '.png',
+      size: 4,
+      category: 'image',
+      mimeType: 'image/png',
+      url: 'data:image/png;base64,aW1hZ2U=',
+    }];
+
+    h.coordinator.enqueue(sid, item);
+    await flush();
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', unsupportedChatBridgeImageError('input_image'));
+    await flush();
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({ type: 'user', content: 'describe this' });
   });
 
   it('zero-progress retry supersedes the failed user row once the clone is dispatched', async () => {
@@ -2255,7 +2467,7 @@ describe('AgentInputCoordinator send transaction', () => {
       expect(h.onUiRetry).not.toHaveBeenCalled();
       await h.coordinator.retryLastError(sid);
       await flush();
-      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
+      expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
       expect(h.onUiRetry).toHaveBeenCalledTimes(1);
     }
   });
@@ -2279,7 +2491,7 @@ describe('AgentInputCoordinator send transaction', () => {
     await h.coordinator.retryLastError(sid);
     await flush();
 
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual');
+    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'manual', undefined);
     expect(h.onUserEnqueue).not.toHaveBeenCalled();
   });
 
@@ -2562,6 +2774,10 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-1' });
     expect(projection.errorRetryText).toBe('first');
     expect(mocks.createMessage).not.toHaveBeenCalled();
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-1' }),
+    );
 
     h.coordinator.retryLastError(sid);
     await flush();
@@ -2572,6 +2788,23 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBeNull();
     expect(projection.recovery).toBeNull();
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('preserves the Pi image-capability marker for display-side localization', async () => {
+    const h = createHarness();
+    const sid = 'pi-image-capability';
+    h.sendToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, makeItem('q-image', 'describe the screenshot'));
+    await flush();
+
+    const projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-image']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-image' });
   });
 
   it('retries a queue-head recovery when an external live reservation clears without a terminal event', async () => {
@@ -2988,7 +3221,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toBe('turn/start failed');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('recovers a persisted turn when terminal error arrives before send resolves', async () => {
@@ -3132,7 +3365,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps a persisted ordinary send recoverable when a host failure is reported late', async () => {
@@ -3163,7 +3396,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.error).toContain('WORKDIR_MISSING');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
     expect(projection.errorRetryText).toBe('first');
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'failed');
   });
 
   it('keeps ordinary send DB writes linear while draining queued turns', async () => {
@@ -3225,7 +3458,8 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toContain('cancelled-before-dispatch');
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
+    expect(h.onRejectedUserTurn).not.toHaveBeenCalled();
 
     h.coordinator.resume(sid);
     await flush();
@@ -3396,7 +3630,7 @@ describe('AgentInputCoordinator send transaction', () => {
     expect(projection.pendingQueue).toEqual([second]);
     expect(projection.error).toBeNull();
     expect(projection.recovery).toEqual({ kind: 'active-turn', item: first });
-    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first);
+    expect(h.onUndispatchedUserTurn).toHaveBeenCalledWith(sid, first, 'cancelled');
 
     h.coordinator.resume(sid);
     await flush();
@@ -4115,6 +4349,101 @@ describe('AgentInputCoordinator steer transaction', () => {
     expect(afterDone.pendingQueue.map((q) => q.clientId)).toEqual(['q-2']);
   });
 
+  it('restores a capability-rejected steer to the queue head for retry after switching models', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-retry';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(projection.queuePaused).toBe(false);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Capability rejection is pre-RPC, so finishing the old turn must not auto-send. Once the
+    // user has switched models, the explicit Retry consumes the preserved queue row exactly once.
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
+  it('preserves a capability-rejected steer when the original active turn errors concurrently', async () => {
+    const h = createHarness();
+    h.setAgentKind('pi');
+    const sid = 'steer-pi-image-capability-active-error';
+    const first = makeItem('q-1', 'first');
+    const second = makeItem('q-2', 'describe the screenshot');
+    h.steerToAgent.mockRejectedValueOnce(Object.assign(
+      new Error('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled'),
+      { code: 'PI_IMAGE_INPUT_UNSUPPORTED' },
+    ));
+
+    h.coordinator.enqueue(sid, first);
+    await flush();
+    h.coordinator.enqueue(sid, second);
+    await flush();
+
+    await expect(h.coordinator.steer(sid, second, { removeFromQueue: true })).resolves.toBe(false);
+    await flush();
+
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', 'original turn failed');
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+
+    let projection = latestProjection(h.projections);
+    expect(projection.error).toBe('[PI_IMAGE_INPUT_UNSUPPORTED] image input disabled');
+    expect(projection.pendingQueue.map((item) => item.clientId)).toEqual(['q-2']);
+    expect(projection.recovery).toEqual({ kind: 'queue-head', clientId: 'q-2' });
+    expect(projection.errorRetryText).toBe('describe the screenshot');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // Switching to an image-capable model is represented by the next host send succeeding.
+    // Only the explicit Retry may consume the preserved steer, and it must do so once.
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    projection = latestProjection(h.projections);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'describe the screenshot',
+    });
+    expect(projection.pendingQueue).toEqual([]);
+    expect(projection.error).toBeNull();
+    expect(projection.recovery).toBeNull();
+  });
+
   it('screens same-turn steers through ghost hooks: block discards without injecting or persisting', async () => {
     // review #939 第四轮:steer 直达 steerToAgent 不经 drain,必须补同一道
     // will-user-message 筛查,否则被拦消息可经插话原样注入并落库。
@@ -4143,6 +4472,10 @@ describe('AgentInputCoordinator steer transaction', () => {
       sid,
       expect.objectContaining({ clientId: 'q-2' }),
       expect.objectContaining({ ghostId: 'g-1' }),
+    );
+    expect(h.onRejectedUserTurn).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ clientId: 'q-2' }),
     );
     expect(mocks.createMessage).toHaveBeenCalledTimes(1);
     const projection = latestProjection(h.projections);
@@ -5917,12 +6250,24 @@ describe('AgentInputCoordinator scheduler 排队心跳(撞忙排队桥)', () => 
     expect(bySchedule('sch-C')).toBe(false);
   });
 
-  it('drain 派发把 scheduler origin 透传进 sendOpts(orca/无 origin 项不透传)', async () => {
+  it('drain 派发把自动来源写入持久化 metadata,仅 scheduler 进入 turn origin', async () => {
     const h = createHarness();
     h.coordinator.enqueue('s-sched', makeItem('c1', 'hb', { origin: schedulerOrigin('sch-1') }));
     await flush();
     const schedSendOpts = h.sendToAgent.mock.calls.at(-1)?.[3] as { origin?: unknown };
     expect(schedSendOpts.origin).toEqual(schedulerOrigin('sch-1'));
+
+    const orcaOrigin = { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' } as const;
+    const hOrca = createHarness();
+    hOrca.coordinator.enqueue('s-orca', makeItem('c-orca', 'orca input', { origin: orcaOrigin }));
+    await flush();
+    const orcaSendOpts = hOrca.sendToAgent.mock.calls.at(-1)?.[3] as {
+      origin?: unknown;
+      persistUserMessage?: { origin?: unknown };
+    };
+    expect(orcaSendOpts.origin).toBeUndefined();
+    expect(orcaSendOpts.persistUserMessage?.origin).toEqual(orcaOrigin);
+    expect(hOrca.onUserEnqueue, 'Orca 自动输入不应被当成人工接管').not.toHaveBeenCalled();
 
     // 无 origin 的普通输入不透传(独立 harness:上面的派发已把全局 running 翻 true)。
     const h2 = createHarness();
@@ -6533,9 +6878,14 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
       expect.objectContaining({ clientId: 'q-sched', origin: item.origin }),
     );
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await flush();
     expect(h.sendToAgent.mock.calls[1]?.[3]?.origin).toEqual(item.origin);
+    // Scheduler 的自动续跑已有专属 waiter；不能触发通用自动入队回调，否则
+    // register.ts 会把当前 waiter 当成被新输入作废，导致 scheduler retry 只执行一次。
+    expect(h.onAutomaticEnqueue).not.toHaveBeenCalled();
   });
 
   it('用户接管会撤销已经离队但尚未派发的 scheduler 自动续跑', async () => {
@@ -6557,7 +6907,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     // maker-core 已建立 reservation，vendor dispatch 仍未发生。
     const persistGate = deferred<Record<string, never>>();
     mocks.createMessage.mockImplementationOnce(() => persistGate.promise);
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await vi.waitFor(() => expect(mocks.createMessage).toHaveBeenCalledTimes(2));
 
     const userItem = makeItem('q-user', 'take over');
@@ -6594,7 +6946,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
 
     // 模拟另一个 turn 占用会话：自动 Continue 已入队，但尚未离队派发。
     h.setRunning(true);
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await flush();
     expect(latestProjection(h.projections).pendingQueue).toEqual([
       expect.objectContaining({ autoResume: true, origin: schedulerItem.origin }),
@@ -6686,7 +7040,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.setHasAssistantProgressAfter(async () => true);
     await failAfterDispatch(h, sid);
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await flush();
 
     expect(h.sendToAgent).toHaveBeenCalledTimes(2);
@@ -6696,9 +7052,229 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     });
     // autoResume 必须透到落库参数:renderer 靠它隐藏气泡,host 靠它跳过额度充值。
     expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
-    expect(h.onUiRetry).toHaveBeenCalledWith(sid, expect.any(String), 'auto');
+    expect(h.onUiRetry).toHaveBeenCalledWith(
+      sid,
+      expect.any(String),
+      'auto',
+      TAKEOVER_INFO.sessionTotal,
+    );
     // 自动补发不冒充人类动作(userSendAt 是「人最近发过消息」的语义)。
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
+  });
+
+  it('自动续跑等待 Codex cleanup 窗口后仍在 3 次上限处停止重试', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-session-running-budget';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+    h.sendToAgent.mockImplementation(async () =>
+      hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] Session is already running a turn'));
+
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    // Codex reconnect-stalled 的两次 interrupt ACK 各最多等待 10s；不能在
+    // 500ms 内把这条仍可恢复的自动续跑判成失败。
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(4);
+    expect(h.onDiscardedQueuedMessage).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ autoResume: true }),
+    );
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+
+    await vi.advanceTimersByTimeAsync(2_000);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(4);
+  });
+
+  it('自动续跑耗尽后唤醒其后的 scheduler 队列尾部', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-budget-drains-scheduler-tail';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    let busyAttempts = 0;
+    h.sendToAgent.mockImplementation(async (_sessionId, message) => {
+      const isContinuePrompt =
+        message === CONTINUE_AFTER_ERROR_PROMPT ||
+        (typeof message !== 'string' && message.content === CONTINUE_AFTER_ERROR_PROMPT);
+      if (isContinuePrompt) {
+        busyAttempts += 1;
+        return hostSendFailure('SESSION_RUNNING', '[SESSION_RUNNING] Session is already running a turn');
+      }
+      return sendSuccess('scheduler-tail');
+    });
+
+    // Keep the auto-resume at the head while the provider is busy, then queue
+    // a scheduler message behind it. Once the provider reports idle, the host
+    // still returns SESSION_RUNNING for three dispatch races; the third busy
+    // result removes only the auto item, so the remaining scheduler item must
+    // still be dispatched.
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    h.coordinator.enqueue(sid, makeItem('q-scheduler-tail', 'next heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-tail',
+        scheduleName: 'Tail',
+        runId: 'run-tail',
+      },
+    }));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(busyAttempts).toBe(1);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(busyAttempts).toBe(2);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(3);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+
+    expect(busyAttempts).toBe(3);
+    expect(h.sendToAgent).toHaveBeenCalledTimes(5);
+    expect(h.sendToAgent.mock.calls[4]?.[1]).toEqual({
+      type: 'user',
+      content: 'next heartbeat',
+    });
+    expect(latestProjection(h.projections).pendingQueue).toEqual([]);
+  });
+
+  it('live busy 挡住自动续跑时使用 10s fallback，terminal 边界仍立即唤醒', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-live-busy-policy';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(9_999);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    // provider cleanup 的终态先到时，事件路径立即 drain，不必等 10s fallback。
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'done');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('用户消息接管 auto-resume 队首后把 10s timer 换回 250ms policy', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-policy-replaced-by-user';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.coordinator.enqueue(sid, makeItem('q-user-takeover', 'take over now'));
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(249);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'take over now',
+    });
+
+    await vi.advanceTimersByTimeAsync(10_000);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+  });
+
+  it('队列 move 把普通项移到 auto-resume 前时也切换回 250ms policy', async () => {
+    vi.useFakeTimers();
+    const h = createHarness();
+    const sid = 'auto-retry-policy-replaced-by-move';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    h.setRunning(true);
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+
+    h.coordinator.enqueue(sid, makeItem('q-scheduler-next', 'next heartbeat', {
+      origin: {
+        kind: 'scheduler',
+        scheduleId: 'sch-1',
+        scheduleName: '任务 1',
+        runId: 'run-1',
+      },
+    }));
+    await flush();
+    h.coordinator.move(sid, 'q-scheduler-next', 0);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    h.setRunning(false);
+    await vi.advanceTimersByTimeAsync(249);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(1);
+
+    await vi.advanceTimersByTimeAsync(1);
+    await flush();
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'next heartbeat',
+    });
   });
 
   it('人工 retryLastError 不打 autoResume(否则会误跳过额度充值)', async () => {
@@ -6715,28 +7291,72 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(2);
   });
 
-  it('零产出时不自动补发,错误横幅与「继续」按钮留给用户', async () => {
+  it('自动续跑再次失败后,人工 Retry 会清掉上一轮隐藏标记并重置真人额度', async () => {
+    const h = createHarness();
+    const sid = 'manual-retry-after-auto-failure';
+    h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
+    h.setHasAssistantProgressAfter(async () => true);
+    await failAfterDispatch(h, sid);
+
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
+    await flush();
+
+    // 自动续跑已经成为当前 active turn,但随后再次在 vendor 侧失败。
+    h.setRunning(false);
+    h.coordinator.onTurnEvent(sid, 'error', truncationMessage, truncationSignals);
+    await flush();
+    expect(latestProjection(h.projections).recovery).toEqual(
+      expect.objectContaining({
+        kind: 'active-turn',
+        item: expect.objectContaining({ autoResume: true }),
+      }),
+    );
+
+    await h.coordinator.retryLastError(sid);
+    await flush();
+
+    const persist = h.sendToAgent.mock.calls[2]?.[3]?.persistUserMessage;
+    expect(persist?.autoResume).toBeUndefined();
+    expect(persist?.autoResumeInfo).toBeUndefined();
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(2);
+  });
+
+  it('零产出时自动克隆重发原文,并沿用 autoResume 计数守卫', async () => {
     const h = createHarness();
     const sid = 'auto-retry-without-progress';
     h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     h.setHasAssistantProgressAfter(async () => false);
     await failAfterDispatch(h, sid);
 
-    // no-progress 而不是 superseded:这是一次没人接手的真失败,host 据此把横幅还给用户。
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('no-progress');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await flush();
 
-    expect(h.sendToAgent, '不得克隆重发用户原文').toHaveBeenCalledTimes(1);
-    // 接管成立时横幅是被压住的,所以这一刻 error 仍为 null:把它还给用户是 host 的动作
-    // (finalizeSuppressedAutoResumeError → abandonAutoResume),outcome='no-progress'
-    // 正是那个信号。这里连着验完整条链,免得只测一半。
-    expect(latestProjection(h.projections).error).toBeNull();
-    h.coordinator.abandonAutoResume(sid, truncationMessage);
-    await flush();
-    const projection = latestProjection(h.projections);
-    expect(projection.error).toBe(truncationMessage);
-    expect(projection.autoResumePending ?? null).toBeNull();
-    expect(projection.recovery?.kind).toBe('active-turn');
+    expect(h.sendToAgent).toHaveBeenCalledTimes(2);
+    expect(h.sendToAgent.mock.calls[1]?.[1]).toEqual({
+      type: 'user',
+      content: 'original long task',
+    });
+    expect(h.sendToAgent.mock.calls[1]?.[3]?.persistUserMessage?.autoResume).toBe(true);
+    expect(h.onDispatchedUserTurn.mock.calls[1]?.[1]).toEqual(
+      expect.objectContaining({
+        autoResume: true,
+        autoResumeInfo: TAKEOVER_INFO,
+        supersedesUserClientId: undefined,
+      }),
+    );
+    expect(h.onUiRetry).toHaveBeenCalledWith(
+      sid,
+      expect.any(String),
+      'auto',
+      TAKEOVER_INFO.sessionTotal,
+    );
+    expect(h.supersedeRetriedUserTurn).not.toHaveBeenCalled();
+    // 自动补发不冒充真人输入，守卫不会被重新充值。
+    expect(mocks.touchUserSendInDb).toHaveBeenCalledTimes(1);
   });
 
   it('host 接管时不设 error、只置 autoResumePending(红横幅留给最终失败)', async () => {
@@ -6771,7 +7391,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     await failAfterDispatch(h, sid);
     expect(latestProjection(h.projections).autoResumePending).toEqual(TAKEOVER_INFO);
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('resumed');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('resumed');
     await flush();
 
     const projection = latestProjection(h.projections);
@@ -6828,11 +7450,13 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const sid = 'takeover-cleared-by-clear-error';
     h.setResumableTurnErrorTakeover(TAKEOVER_INFO);
     await failAfterDispatch(h, sid);
+    h.onUserEnqueue.mockClear();
 
     h.coordinator.clearError(sid);
     await flush();
 
     expect(h.coordinator.isAutoResumePending(sid)).toBe(false);
+    expect(h.onUserEnqueue, 'host 必须先释放退避簿记与 Agent Island filter').toHaveBeenCalledWith(sid);
   });
 
   it('recovery 已被用户清掉时 autoRetryLastError 返回 false(调用方据此回滚额度)', async () => {
@@ -6845,7 +7469,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     h.coordinator.clearError(sid);
     await flush();
 
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('superseded');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('superseded');
     await flush();
     expect(h.sendToAgent).toHaveBeenCalledTimes(1);
   });
@@ -6881,7 +7507,10 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     releasePersist();
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ surfaceError: false, owner: expect.any(Object) }),
+    );
   });
 
   it('在途重试的刹车:await 读库期间接管态被清(会话关闭)→ 判 superseded,不补发', async () => {
@@ -6903,7 +7532,7 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.coordinator.isAutoResumePending(sid)).toBe(true);
 
     const sendCallsBefore = h.sendToAgent.mock.calls.length;
-    const retry = h.coordinator.autoRetryLastError(sid);
+    const retry = h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal);
     await flush();
     // 读库还没回来时会话被关掉 → teardown 清接管态(abandonAutoResume 不带 message)。
     h.coordinator.abandonAutoResume(sid);
@@ -6976,7 +7605,10 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     const projection = latestProjection(h.projections);
     expect(projection.autoResumePending ?? null).toBeNull();
     expect(projection.error, '不接管就得把横幅还给用户').toBe(truncationMessage);
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
+    );
   });
 
   it('延后结算:候选窗口里用户自己发了消息 → 不接管、不消耗额度,回落成常规错误', async () => {
@@ -7008,7 +7640,10 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(projection.autoResumePending ?? null, '用户已接手 → 不该再显示重连').toBeNull();
     expect(projection.error, '回落成常规错误呈现,让用户自己决定要不要续跑').toBe(truncationMessage);
     expect(h.onResumableTurnError, '连问都不该问(不消耗额度)').not.toHaveBeenCalled();
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ surfaceError: false, owner: expect.any(Object) }),
+    );
   });
 
   it('退避窗口里用户自己发了消息 → autoRetryLastError 判 superseded(不抢在他前面代发)', async () => {
@@ -7026,7 +7661,9 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     expect(h.coordinator.isAutoResumePending(sid), 'enqueue 同步撤掉接管态').toBe(false);
 
     const sendCallsBefore = h.sendToAgent.mock.calls.length;
-    await expect(h.coordinator.autoRetryLastError(sid)).resolves.toBe('superseded');
+    await expect(
+      h.coordinator.autoRetryLastError(sid, TAKEOVER_INFO.sessionTotal),
+    ).resolves.toBe('superseded');
     await flush();
     expect(
       h.sendToAgent.mock.calls.length,
@@ -7082,7 +7719,10 @@ describe('AgentInputCoordinator 中断自动续跑', () => {
     rejectPersist(new Error('disk full'));
     await flush();
 
-    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(sid);
+    expect(h.onResumableTurnErrorDiscarded).toHaveBeenCalledWith(
+      sid,
+      expect.objectContaining({ surfaceError: true, owner: expect.any(Object) }),
+    );
     expect(h.onResumableTurnError, '落库失败就没有可续跑的目标,不该消耗额度').not.toHaveBeenCalled();
   });
 });

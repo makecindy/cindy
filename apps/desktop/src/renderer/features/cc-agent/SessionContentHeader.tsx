@@ -62,7 +62,7 @@ import {
   pickSessionIdAfterRemoval,
 } from './lib/sessionRemovalNavigation';
 import { isOrcaLeadSession, resolveSessionRoute } from '@/lib/orcaSessionIdentity';
-import { orcaWorkflowsFor } from '@/lib/makerTransport';
+import { revalidateWorkersProjection } from './hooks/workerProjectionStore';
 import { GitContextBadge } from './GitContextBadge';
 import { SessionRenameInput } from './SessionRenameInput';
 import { useSessionBoundSchedules } from '@/features/scheduler/lib/scheduleSessionBinding';
@@ -319,8 +319,8 @@ export function SessionContentHeader({
       // worker 列表,避免依赖挂载初期尚未加载完成的订阅态(Codex review P2)。
       // 查询失败时不阻断,与 sidebar map 拉取失败(空集合)的行为一致。
       if (isOrcaLeadSession(session)) {
-        const workers = await orcaWorkflowsFor(session.id)
-          .listWorkersByLead(session.id)
+        const workers = await revalidateWorkersProjection(session.id)
+          .then((result) => (result.status === 'applied' ? result.workers : []))
           .catch(() => []);
         if (workers.some((worker) => runningSessionIds.has(worker.sessionId))) {
           toast.warning(t('ccAgent.sidebar.sessionMenu.moveToProjectRunningBlocked'));

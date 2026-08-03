@@ -4,8 +4,8 @@
  * 归属铁律不动:意识永远只能读自己名下的账。用户想让意识处理**自己的图**,
  * 走"显式引渡":AI 调 ghost_call 时把当前会话里用户图片的 xdt-image:// 地址
  * 放进顶层 attachments → 本模块逐张解析、读字节、落媒体总仓(blob)、给目标
- * 意识记一条 ghost-grant 引用(授权按张、永久,与画廊同生命周期,回收随
- * 引用计数)→ 返回指纹数组。调用方把指纹注入 args.attachments 交给意识——
+ * 意识记一条可读引用(人工交接 = ghost-grant；Host 工具代办 =
+ * ghost-tool-grant)→ 返回指纹数组。调用方把指纹注入 args.attachments 交给意识——
  * 意识拿到的仍只是字符串,摸不到路径与字节(平台结构保证不破)。
  *
  * 语义:用户把图和请求一起发出 = 对这批图的授权意图明确,不再弹框。
@@ -48,7 +48,7 @@ export interface AttachmentGrantDeps {
   /** 加引用行(真身 ledger.addRef;出生按解析层给出的真实来源记账)。 */
   addRef(params: {
     hash: string;
-    refKind: 'ghost-grant';
+    refKind: 'ghost-grant' | 'ghost-tool-grant';
     refId: string;
     originKind: 'user' | 'tool';
     label?: string;
@@ -126,11 +126,14 @@ export async function grantAttachmentsToGhost(
         bytes: written.bytes,
         isCache: false,
       });
+      const originKind = r.originKind ?? 'user';
       await deps.addRef({
         hash: written.hash,
-        refKind: 'ghost-grant',
+        // refKind 本身就是回退兼容边界:旧客户端只把 ghost-grant 当成人工
+        // 永久授权，因而工具自动交接必须落到它不认识的独立类型。
+        refKind: originKind === 'user' ? 'ghost-grant' : 'ghost-tool-grant',
         refId: ghostId,
-        originKind: r.originKind ?? 'user',
+        originKind,
       });
       hashes.push(written.hash);
     } catch (err) {

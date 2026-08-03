@@ -12,6 +12,7 @@ import {
   Image,
   List,
   ListTodo,
+  Menu,
   Mic,
   Pencil,
   Pin,
@@ -31,12 +32,15 @@ import {
   requestRecordingPermissionsAsync,
   setAudioModeAsync,
 } from 'expo-audio';
-import { useFocusEffect, useLocalSearchParams, useRouter } from 'expo-router';
-import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type SetStateAction } from 'react';
+import { useFocusEffect, useLocalSearchParams, useNavigation, useRouter } from 'expo-router';
+import { forwardRef, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore, type ReactNode, type RefObject, type SetStateAction } from 'react';
 import {
   ActivityIndicator,
+  AccessibilityInfo,
   Alert,
   AppState,
+  BackHandler,
+  Keyboard,
   KeyboardAvoidingView,
   Linking,
   Platform,
@@ -44,6 +48,7 @@ import {
   ScrollView,
   StyleSheet,
   View,
+  findNodeHandle,
   useWindowDimensions,
   type GestureResponderEvent,
   type LayoutChangeEvent,
@@ -60,6 +65,7 @@ import { ScreenBackButton } from '@/components/MobilePrimitives';
 import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/auth/AuthContext';
 import { useGuardedBack } from '@/utils/useGuardedBack';
+import { useGuardedPush } from '@/utils/useGuardedPush';
 import { DEVICE_LINK_API_BASE_URL, MOBILE_VISUAL_MOCK_ENABLED } from '@/config/env';
 import { ConnectionBanner, useShowConnectionBanner } from '@/components/ConnectionBanner';
 import { resolveEffectiveConnectionError } from '@/components/connectionBannerVisibility';
@@ -98,11 +104,17 @@ import {
 import type { SessionMenuView } from '@/session/sessionMenu';
 import {
   interactionKind,
+  isPendingInteractionCollapsed,
   pendingInteractionsBlockRemoteComposer,
   readRequestId,
   selectPendingInteractionByRequestId,
   shouldUseFullHeightPendingInteractionSurface,
 } from '@/session/interactionModel';
+import {
+  prunePendingInteractionCollapse,
+  togglePendingInteractionCollapse,
+  useCollapsedPendingRequestIds,
+} from '@/session/pendingInteractionCollapseStore';
 import {
   buildSessionRuntimeOptions,
   normalizeMobileAgentCapabilities,
@@ -395,6 +407,9 @@ import { deferScheduleIndexHydration } from '@/session/scheduleIndexDefer';
 import { markSessionScheduleRunsRead, unreadRunIdFromProjection } from '@/session/scheduleRunRead';
 import { useRemoteScheduleEventSnapshot } from '@/scheduler/remoteScheduleEvents';
 import { buildSessionNativeShellLayout } from '@/session/mobileNativeShellLayout';
+import { buildWideSessionNavLayout } from '@/session/wideSessionNav';
+import { SessionListDrawer } from '@/session/SessionListDrawer';
+import type { RemoteSessionListItem } from '@/session/sessionList';
 import {
   findMobileMessageSearchHits,
   nextMessageSearchIndex,
@@ -428,6 +443,7 @@ import {
   useSessionInputProjection,
   useSessionMessages,
   useSessionPendingInteractions,
+  useSessionPendingInteractionsAuthoritative,
   useSessionRunStatus,
   useSessionMakerTurnRunning,
   useSessionRunning,
@@ -741,6 +757,7 @@ export default function SessionScreen() {
   const visualFocusComposer = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualFocusComposer) === '1';
   const visualOpenSearch = MOBILE_VISUAL_MOCK_ENABLED && readRouteParam(params.visualOpenSearch) === '1';
   const visualSearchQuery = MOBILE_VISUAL_MOCK_ENABLED ? readRouteParam(params.visualSearchQuery) : null;
+  const navigation = useNavigation();
   const router = useRouter();
   const auth = useAuth();
   const windowDimensions = useWindowDimensions();
@@ -762,6 +779,8 @@ export default function SessionScreen() {
   const sessions = useRemoteSessions();
   const messages = useSessionMessages(sessionId, deviceId);
   const pending = useSessionPendingInteractions(sessionId);
+  // pending 列表是否已被被控端的全量快照确认过(空列表能不能当「都处理完了」用)。
+  const pendingInteractionsAuthoritative = useSessionPendingInteractionsAuthoritative(sessionId);
   const inputProjection = useSessionInputProjection(sessionId);
   const remoteSessionRunning = useSessionRunning(sessionId);
   const makerTurnRunning = useSessionMakerTurnRunning(sessionId);
@@ -1038,6 +1057,14 @@ export default function SessionScreen() {
   const [locallyRemovedQueueClientIds, setLocallyRemovedQueueClientIds] = useState<ReadonlySet<string>>(new Set());
   const [pendingHistoryExpanded, setPendingHistoryExpanded] = useState(false);
   const [pendingInteractionActiveRequestId, setPendingInteractionActiveRequestId] = useState<string | null>(null);
+  /**
+   * 用户主动收起的待处理请求(按 requestId),来自模块级 store。
+   *
+   * 不能是本组件的 state:契约是「只有该请求被回答 / 撤销才失效」,而离开任务会卸载本页,
+   * 组件 state 随之丢失——再进来同一条仍在 pending 的请求又会展开占满屏(#1493 review)。
+   * store 按 sessionId 隔离,切换会话不串状态。
+   */
+  const collapsedPendingRequestIds = useCollapsedPendingRequestIds(sessionId);
   const [pendingPlanViewerState, setPendingPlanViewerState] = useState<MobilePlanViewerState>('half');
   const [searchQuery, setSearchQuery] = useState('');
   const [activeSearchIndex, setActiveSearchIndex] = useState(-1);
@@ -1497,10 +1524,24 @@ export default function SessionScreen() {
   const activePendingKind = activePendingInteraction
     ? interactionKind(activePendingInteraction)
     : null;
+  const activePendingCollapsed = isPendingInteractionCollapsed(
+    collapsedPendingRequestIds,
+    activePendingRequestId,
+  );
   const pendingInteractionFullHeight = shouldUseFullHeightPendingInteractionSurface({
     activeKind: activePendingKind,
+    collapsed: activePendingCollapsed,
     planViewerState: pendingPlanViewerState,
   });
+  const toggleCollapsedPendingRequest = useCallback((requestId: string) => {
+    togglePendingInteractionCollapse(sessionId, requestId);
+  }, [sessionId]);
+  // 状态与回调成对下发:Panel 的 collapse prop 是整组给或整组不给,只给一半会得到
+  // 「显示为收起但点不开」的死界面(#1493 review)。
+  const pendingInteractionCollapse = useMemo(
+    () => ({ requestIds: collapsedPendingRequestIds, onToggle: toggleCollapsedPendingRequest }),
+    [collapsedPendingRequestIds, toggleCollapsedPendingRequest],
+  );
   const hasActivePendingInteraction = activePendingInteraction !== null;
   // 只有手机能终结的卡才允许接管输入框。plugin_setup 这类必须回电脑端完成的
   // 请求若也顶掉 composer,用户既处理不了卡、又发不出消息,会话在手机上被彻底
@@ -1552,6 +1593,14 @@ export default function SessionScreen() {
       setPendingInteractionActiveRequestId(null);
     }
   }, [pending, pendingInteractionActiveRequestId]);
+  // 卡被回答 / 被撤后清掉它的收起记录,否则同一 requestId 万一复现会直接以收起态出现。
+  // 只在 pending 列表**权威**时清:短暂离线会按设计清空这份投影(markDeviceOffline),
+  // 那种空列表不代表请求已终结(#1493 review)。prune 无变化时返回原数组,不会自触发。
+  useEffect(() => {
+    prunePendingInteractionCollapse(sessionId, pending, {
+      authoritative: pendingInteractionsAuthoritative,
+    });
+  }, [pending, pendingInteractionsAuthoritative, sessionId]);
   useEffect(() => {
     if (
       sessionOperationLayout.composerSlot !== 'pending-interaction'
@@ -1914,6 +1963,125 @@ export default function SessionScreen() {
   const composerTouchLayout = useMemo(() => buildComposerTouchLayout({
     screenWidth: windowDimensions.width,
   }), [windowDimensions.width]);
+  // 宽屏导航形态(iPad / 安卓折叠屏与横屏大屏机):左上角三条杠 + 任务列表抽屉,
+  // 原地 replace 切任务;窄屏保持传统返回键。断点与按平台分闸(iOS 仅 iPad,
+  // iPhone 不发)见 wideSessionNav.ts。
+  const wideSessionNav = useMemo(() => buildWideSessionNavLayout({
+    iosPad: Platform.OS === 'ios' && Platform.isPad,
+    platform: Platform.OS,
+    windowHeight: windowDimensions.height,
+    windowWidth: windowDimensions.width,
+  }), [windowDimensions.height, windowDimensions.width]);
+  const [sessionListDrawerOpen, setSessionListDrawerOpen] = useState(false);
+  // 父级镜像 overlay 的真实存续期:打开时立即 true,退场动画完成 + native 子树卸载后的
+  // onClosed 才 false。它同时保证退场期 TalkBack 背景隔离,以及旋转/收窄退出宽屏时
+  // 不会提前卸载 Drawer 而吞掉 pending 导航。
+  const [sessionListDrawerOverlayMounted, setSessionListDrawerOverlayMounted] = useState(false);
+  // 退出宽屏后 layout.drawerWidth 会变 0;退场期间继续用最后一个有效宽度,避免面板几何跳变。
+  const sessionListDrawerWidthRef = useRef(wideSessionNav.drawerWidth);
+  if (wideSessionNav.enabled) sessionListDrawerWidthRef.current = wideSessionNav.drawerWidth;
+  // 抽屉里的导航动作必须等退场动画结束、GestureDetector/Reanimated overlay 真正
+  // 卸载后再执行。Android 原生 Screen 换页与该子树卸载同帧存在 native crash 竞态。
+  const pendingDrawerNavigationRef = useRef<(() => void) | null>(null);
+  // pending 只能拦住「首击本身就是导航」的连点;遮罩/back/左滑/当前任务先关闭时 pending
+  // 仍为空。closing 从任一关闭入口同步置 true,完整覆盖退场 commit 前的快速二次点击。
+  const sessionListDrawerClosingRef = useRef(false);
+  // 非导航关闭的焦点归还必须晚于父级 overlayMounted=false commit:否则按钮仍在
+  // no-hide-descendants 子树里,VoiceOver/TalkBack 会忽略聚焦并丢失焦点。
+  const returnDrawerFocusAfterCloseRef = useRef(false);
+  const sessionListButtonRef = useRef<View>(null);
+  const closeSessionListDrawer = useCallback(() => {
+    if (sessionListDrawerClosingRef.current) return;
+    sessionListDrawerClosingRef.current = true;
+    setSessionListDrawerOpen(false);
+  }, []);
+  // 旋转 / 分屏收窄回到窄屏形态时,抽屉没有入口也没有意义,直接关掉。
+  useEffect(() => {
+    if (!wideSessionNav.enabled && sessionListDrawerOverlayMounted) closeSessionListDrawer();
+  }, [closeSessionListDrawer, sessionListDrawerOverlayMounted, wideSessionNav.enabled]);
+  // 抽屉打开时由 SessionListDrawer 消费 Android back 并发起关闭;open=false 后该监听会
+  // 卸载,但 overlay 仍要退场约 motionDuration.exit。这个窗口临时吞掉 back,避免原生
+  // Screen 返回与 GestureDetector/Reanimated 子树卸载再次挤进同一帧。onClosed 提交
+  // overlayMounted=false 后自动移除,正常返回链(含 useGuardedBack)随即恢复。
+  useEffect(() => {
+    if (Platform.OS !== 'android' || !sessionListDrawerOverlayMounted || sessionListDrawerOpen) return;
+    const subscription = BackHandler.addEventListener('hardwareBackPress', () => true);
+    return () => subscription.remove();
+  }, [sessionListDrawerOpen, sessionListDrawerOverlayMounted]);
+  const openSessionListDrawer = useCallback(() => {
+    pendingDrawerNavigationRef.current = null;
+    sessionListDrawerClosingRef.current = false;
+    returnDrawerFocusAfterCloseRef.current = false;
+    Keyboard.dismiss();
+    setSessionListDrawerOverlayMounted(true);
+    setSessionListDrawerOpen(true);
+  }, []);
+  const queueDrawerNavigation = useCallback((action: () => void) => {
+    // closing 覆盖所有关闭来源,包括 pending 为空的纯关闭;首个意图获胜。
+    if (sessionListDrawerClosingRef.current || pendingDrawerNavigationRef.current) return;
+    sessionListDrawerClosingRef.current = true;
+    pendingDrawerNavigationRef.current = action;
+    setSessionListDrawerOpen(false);
+  }, []);
+  const handleSessionListDrawerClosed = useCallback(() => {
+    const action = pendingDrawerNavigationRef.current;
+    sessionListDrawerClosingRef.current = false;
+    if (!action) returnDrawerFocusAfterCloseRef.current = true;
+    setSessionListDrawerOverlayMounted(false);
+    if (!action) return;
+    pendingDrawerNavigationRef.current = null;
+    action();
+  }, []);
+  useEffect(() => {
+    if (sessionListDrawerOverlayMounted || !returnDrawerFocusAfterCloseRef.current) return;
+    returnDrawerFocusAfterCloseRef.current = false;
+    // 导航型关闭不会登记归还请求;外部导航已让本页失焦时也不抢新屏焦点。
+    if (!navigation.isFocused()) return;
+    const returnNode = sessionListButtonRef.current ? findNodeHandle(sessionListButtonRef.current) : null;
+    if (returnNode != null) AccessibilityInfo.setAccessibilityFocus(returnNode);
+  }, [navigation, sessionListDrawerOverlayMounted]);
+  const handleDrawerSelectSession = useCallback((item: RemoteSessionListItem) => {
+    const targetSession = item.session as RemoteSession;
+    if (targetSession.id === sessionId) {
+      closeSessionListDrawer();
+      return;
+    }
+    // 可达优先,与首页 openSession 同口径:被认领的 stale 会话优先 canonicalDeviceId,
+    // 回退物理 id / store 索引。校验先于关闭动画:失败时保持抽屉打开 + Alert 反馈
+    // (文案与首页同键)——先关再弹会让 200ms 后的读屏焦点归还从错误弹窗手里抢焦点,
+    // 且抽屉留在原地,用户可直接改选别的任务。
+    const targetDeviceId = targetSession.canonicalDeviceId
+      ?? targetSession.deviceLinkDeviceId
+      ?? remoteSessionStore.getSessionDeviceId(targetSession.id);
+    if (!targetDeviceId) {
+      Alert.alert(t('devices.list.error.sessionDeviceNotFound'));
+      return;
+    }
+    // replace 而非 push:抽屉是「原地切换」语义,栈保持 [主页, 会话],返回手势仍回主页。
+    queueDrawerNavigation(() => {
+      router.replace({
+        pathname: '/sessions/[sessionId]',
+        params: {
+          deviceId: targetDeviceId,
+          deviceName: targetSession.deviceLinkDeviceName ?? targetDeviceId,
+          sessionId: targetSession.id,
+        },
+      });
+    });
+  }, [closeSessionListDrawer, queueDrawerNavigation, router, sessionId, t]);
+  // 前进导航防连点:快速双击「新建」会把 /sessions/new 压栈两层(返回要退两次),
+  // 与首页各入口同一把 guardedPush 锁。
+  const guardedPush = useGuardedPush();
+  const handleDrawerNewSession = useCallback(() => {
+    queueDrawerNavigation(() => {
+      guardedPush({ pathname: '/sessions/new', params: { deviceId, deviceName } });
+    });
+  }, [deviceId, deviceName, guardedPush, queueDrawerNavigation]);
+  // 抽屉「主页」是显式的去处承诺,不是「返回」:从设备详情/自动化页进来时 back 只退一层,
+  // 会落在中间页。dismissTo 沿当前栈一路退到根页,栈里没有根页(深链冷启动)则推入。
+  const handleDrawerGoHome = useCallback(() => {
+    queueDrawerNavigation(() => router.dismissTo('/'));
+  }, [queueDrawerNavigation, router]);
   // 聚焦 / 面板打开 / 语音中呈现卡片形态（输入区全宽 + 底部工具排），其余保持单行简洁态。
   // 注意不看 composerLayout.density：有草稿 / 会话运行中未聚焦时也应收回简洁态，
   // 否则「拖回单行退出激活态」永远收不回去。
@@ -7526,7 +7694,12 @@ export default function SessionScreen() {
   return (
     <View style={styles.safeArea} testID="session.screen">
       <KeyboardAvoidingView
+        // 抽屉开着时把背后内容从读屏树里摘掉:iOS 用 accessibilityElementsHidden
+        // (与抽屉侧 accessibilityViewIsModal 配对),Android 用 importantForAccessibility
+        // ——后者才对 TalkBack 生效(与 ComposerRichInput 的双平台配对惯例一致)。
+        accessibilityElementsHidden={sessionListDrawerOverlayMounted}
         behavior={nativeShellLayout.keyboardAvoidingBehavior}
+        importantForAccessibility={sessionListDrawerOverlayMounted ? 'no-hide-descendants' : 'auto'}
         keyboardVerticalOffset={nativeShellLayout.keyboardVerticalOffset}
         style={styles.keyboard}
       >
@@ -7540,6 +7713,8 @@ export default function SessionScreen() {
               syncing={showSyncingIndicator}
               messageCount={Math.max(messages.length, currentSession?._count?.messages ?? 0)}
               onBack={goBackToHome}
+              onOpenSessionList={wideSessionNav.enabled ? openSessionListDrawer : undefined}
+              sessionListButtonRef={sessionListButtonRef}
               onOpenFiles={() => {
                 if (!currentSession?.workingDir) return;
                 router.push({
@@ -8061,6 +8236,9 @@ export default function SessionScreen() {
                 nestedScrollEnabled
                 testID="interaction.aboveComposerScroll"
               >
+                {/* 这张卡本来就只占 palette 量级高度、且手机上答不了(只能取消 / 回电脑端),
+                    不给收起入口:收起态的文案与 a11y 都是「先不答、稍后回答」,套在它身上是
+                    错的语义。 */}
                 <InteractionPanel
                   deviceId={deviceId}
                   sessionId={sessionId}
@@ -8097,6 +8275,7 @@ export default function SessionScreen() {
                 >
                   <InteractionPanel
                     safeAreaBottomInset={insets.bottom}
+                    collapse={pendingInteractionCollapse}
                     deviceId={deviceId}
                     fillAvailableHeight
                     sessionId={sessionId}
@@ -8117,6 +8296,7 @@ export default function SessionScreen() {
                 >
                 <InteractionPanel
                   safeAreaBottomInset={insets.bottom}
+                  collapse={pendingInteractionCollapse}
                   deviceId={deviceId}
                   sessionId={sessionId}
                   interactions={pending}
@@ -8343,6 +8523,21 @@ export default function SessionScreen() {
           </View>
         </View>
       </KeyboardAvoidingView>
+      {wideSessionNav.enabled || sessionListDrawerOverlayMounted ? (
+        // 树内 overlay(zIndex 40)盖住顶部 chrome 与底部 composer;树内层叠而非 Modal 的
+        // 取舍见 SessionListDrawer 头注释。退出宽屏时也保留到 onClosed,否则退场期旋转/
+        // 收窄会直接卸载组件并吞掉已登记的导航动作。
+        <SessionListDrawer
+          currentSessionId={sessionId}
+          onClose={closeSessionListDrawer}
+          onClosed={handleSessionListDrawerClosed}
+          onGoHome={handleDrawerGoHome}
+          onNewSession={handleDrawerNewSession}
+          onSelectSession={handleDrawerSelectSession}
+          open={sessionListDrawerOpen}
+          width={sessionListDrawerWidthRef.current}
+        />
+      ) : null}
     </View>
   );
 }
@@ -8363,6 +8558,7 @@ function SessionHeaderBar({
   messageCount,
   onBack,
   onOpenFiles,
+  onOpenSessionList,
   onOpenSettings,
   onOpenUsage,
   onToggleSearch,
@@ -8372,6 +8568,7 @@ function SessionHeaderBar({
   readOnlyReason,
   remoteUnavailableReason,
   searchOpen,
+  sessionListButtonRef,
   title,
 }: {
   currentSession: RemoteSession | null;
@@ -8380,6 +8577,10 @@ function SessionHeaderBar({
   syncing: boolean;
   messageCount: number;
   onBack(): void;
+  /** 宽屏导航形态下提供:左上角改为三条杠,点击拉出任务列表抽屉(替代返回)。 */
+  onOpenSessionList?: () => void;
+  /** 三条杠按钮 ref:抽屉关闭后读屏焦点归还的锚点。 */
+  sessionListButtonRef?: RefObject<View | null>;
   onOpenFiles(): void;
   onOpenSettings(): void;
   onOpenUsage(): void;
@@ -8430,12 +8631,26 @@ function SessionHeaderBar({
 
   return (
     <View style={styles.sessionHeaderBar} testID="session.summary">
-      <ScreenBackButton
-        hitSlop={4}
-        onPress={onBack}
-        style={styles.sessionHeaderBackButton}
-        testID="session.backButton"
-      />
+      {onOpenSessionList ? (
+        // 宽屏(iPad / 折叠屏展开 / 横屏手机):三条杠拉任务列表抽屉,返回语义由抽屉里的
+        // 「主页」项与系统返回手势承担。
+        <SessionHeaderIconButton
+          accessibilityLabel={t('home.drawer.openA11y')}
+          active={false}
+          buttonRef={sessionListButtonRef}
+          hitSlop={4}
+          icon={Menu}
+          onPress={onOpenSessionList}
+          testID="session.sessionListButton"
+        />
+      ) : (
+        <ScreenBackButton
+          hitSlop={4}
+          onPress={onBack}
+          style={styles.sessionHeaderBackButton}
+          testID="session.backButton"
+        />
+      )}
 
       <View style={styles.sessionHeaderTextBlock}>
         <View style={styles.sessionHeaderTitleRow}>
@@ -8489,7 +8704,9 @@ function SessionHeaderIconButton({
   accessibilityLabel,
   active,
   attention = false,
+  buttonRef,
   disabled,
+  hitSlop,
   icon: Icon,
   onPress,
   testID,
@@ -8498,7 +8715,11 @@ function SessionHeaderIconButton({
   accessibilityLabel: string;
   active?: boolean;
   attention?: boolean;
+  /** 需要外部定位本钮时传入(如三条杠:抽屉关闭后读屏焦点归还锚点)。 */
+  buttonRef?: RefObject<View | null>;
   disabled?: boolean;
+  /** 38×38 可见钮低于 44 触控底线时用它补热区(如左上角三条杠)。 */
+  hitSlop?: PressableProps['hitSlop'];
   icon: SessionHeaderIcon;
   onPress?: () => void;
   testID: string;
@@ -8508,10 +8729,12 @@ function SessionHeaderIconButton({
   const color = colors.textPrimary;
   return (
     <RouteActionButton
+      ref={buttonRef}
       accessibilityHint={accessibilityHint}
       accessibilityLabel={accessibilityLabel}
       active={active}
       disabled={disabled}
+      hitSlop={hitSlop}
       onPress={onPress}
       pressedStyle={styles.sessionHeaderIconPressed}
       style={[
@@ -8972,14 +9195,15 @@ function ComposerActivityStatus({
 
   const elapsedText = formatComposerActivityElapsed(elapsed);
   const tokenText = formatComposerActivityTokens(tokenUsage);
-  // 过载退避与传输层重连共用这一个 attempt 字段, 但说法必须分开: 前者是上游没有可用
-  // 容量、agent 在退避重投, 说「正在重新连接」会把用户引向排查自己的网络
-  // (review #844 codex P1)。
+  // 三类进度共用这一个 attempt 字段, 但说法必须分开: 模型容量、请求限流与传输层重连
+  // 的用户含义不同，混用会把用户引向错误的排查方向。
   const activityText = reconnectAttempt
     ? t(
         reconnectAttempt.kind === 'overload'
           ? 'session.screen.modelBusyRetrying'
-          : 'session.screen.networkReconnecting',
+          : reconnectAttempt.kind === 'rate-limit'
+            ? 'session.screen.rateLimitRetrying'
+            : 'session.screen.networkReconnecting',
       )
     : t('session.screen.thinking');
 

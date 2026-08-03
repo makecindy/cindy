@@ -132,6 +132,17 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
       validateCustomProviderConfig({
         ...valid,
         runtimes: {
+          pi: {
+            baseUrl: 'https://x/v1',
+            models: [{ id: 'm', name: 'M', supportsImageInput: 'yes' }],
+          },
+        },
+      }).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig({
+        ...valid,
+        runtimes: {
           codex: {
             baseUrl: 'https://x/v1',
             models: [{ id: 'm', name: 'M', defaultEnabled: 'false' }],
@@ -165,6 +176,57 @@ describe('validateCustomProviderConfig (per-runtime)', () => {
         }).ok,
       ).toBe(true);
     }
+  });
+
+  it('accepts only explicit, non-empty, valid Pi reasoning effort capabilities', () => {
+    const config = (model: Record<string, unknown>, agent: 'pi' | 'codex' = 'pi') => ({
+      id: 'reasoning-provider',
+      name: 'Reasoning provider',
+      runtimes: {
+        [agent]: {
+          baseUrl: 'https://example.com/v1',
+          models: [{ id: 'reasoner', name: 'Reasoner', ...model }],
+        },
+      },
+    });
+
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['low', 'high', 'xhigh'],
+        }),
+      ),
+    ).toEqual({ ok: true });
+    expect(validateCustomProviderConfig(config({ reasoning: true })).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['high', 'high'],
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config({
+          reasoning: true,
+          reasoningEfforts: ['ultra'],
+        }),
+      ).ok,
+    ).toBe(false);
+    expect(validateCustomProviderConfig(config({ reasoningEfforts: ['high'] })).ok).toBe(false);
+    expect(
+      validateCustomProviderConfig(
+        config(
+          {
+            reasoning: true,
+            reasoningEfforts: ['high'],
+          },
+          'codex',
+        ),
+      ).ok,
+    ).toBe(false);
   });
 
   it('rejects an invalid wireProtocol on a pi runtime', () => {
@@ -272,6 +334,64 @@ describe('custom-provider-store CRUD (per-runtime)', () => {
       { id: 'hidden', name: 'Hidden', defaultEnabled: false },
     ]);
     expect(got?.runtimes.codex?.headers).toBeUndefined();
+  });
+
+  it('round-trips only an explicitly enabled Pi image-input capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'visual-pi',
+      name: 'Visual Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [
+            { id: 'vision', name: 'Vision', supportsImageInput: true },
+            { id: 'legacy', name: 'Legacy' },
+            { id: 'explicit-text', name: 'Explicit text', supportsImageInput: false },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('visual-pi'))?.runtimes.pi?.models).toEqual([
+      { id: 'vision', name: 'Vision', supportsImageInput: true },
+      { id: 'legacy', name: 'Legacy' },
+      { id: 'explicit-text', name: 'Explicit text' },
+    ]);
+  });
+
+  it('round-trips only an explicitly enabled Pi reasoning capability', async () => {
+    mountDb();
+    await createCustomProvider({
+      id: 'reasoning-pi',
+      name: 'Reasoning Pi',
+      auth: { method: 'none' },
+      runtimes: {
+        pi: {
+          baseUrl: 'http://127.0.0.1:11434/v1',
+          models: [
+            {
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high', 'xhigh'],
+            },
+            { id: 'legacy', name: 'Legacy' },
+            { id: 'explicit-off', name: 'Explicit off', reasoning: false },
+          ],
+        },
+      },
+    });
+    expect((await getCustomProvider('reasoning-pi'))?.runtimes.pi?.models).toEqual([
+      {
+        id: 'reasoner',
+        name: 'Reasoner',
+        reasoning: true,
+        reasoningEfforts: ['low', 'high', 'xhigh'],
+      },
+      { id: 'legacy', name: 'Legacy' },
+      { id: 'explicit-off', name: 'Explicit off' },
+    ]);
   });
 
   it('round-trips an explicit Chat Completions protocol', async () => {

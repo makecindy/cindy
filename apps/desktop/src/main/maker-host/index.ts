@@ -50,6 +50,7 @@ import { tapWindowBroadcast } from '../device-link/broadcast-tap.js';
 import { remoteInvoke } from '../device-link/index.js';
 import { WorktreePool } from '../worktree/index.js';
 import { getReadyBinaryPath, getCachedBinaryStatus } from '../agent-binaries/index.js';
+import { activeOwnerScopeKey, isAppSessionBoundaryPending } from '../appSessionState.js';
 import {
   desktopClaudeAuthAdapter,
   desktopCodexAuthAdapter,
@@ -81,6 +82,7 @@ import { createCommandConcurrencyGate } from './command-concurrency-gate.js';
 import {
   deriveAvailableModels,
   refreshCatalogDerivedModels,
+  resolvePiRuntimeModelDescriptor,
   resolveVerifiedContextWindow,
 } from './catalog-to-descriptors.js';
 import { buildPiAgent } from './pi-host.js';
@@ -104,6 +106,7 @@ import { resolveRemoteClaudeRoute } from './remote-claude-route.js';
 import { claudeSubagentUsageBridge } from './claude-subagent-usage-bridge.js';
 import { createAutoPermissionReviewer } from './auto-permission-reviewer.js';
 import { requestUtilityText } from '../utility-model/oneShotCandidates.js';
+import { accountProviderReadinessBarrier } from './account-provider-readiness-barrier.js';
 import { hasClaudeAiOAuth } from './claude-credentials-store.js';
 import {
   armCodexHttpRecovery,
@@ -599,6 +602,20 @@ export function getMaker(): Maker {
       lspPool: getLspPool(),
       pluginRegistry,
       invokeRemote: remoteInvoke,
+      // 只读活跃 Session 的运行时真相。权限切换是 runtime-first、DB-second，
+      // 因此插件过户自动放行不得回退 sessions.permission_mode；会话不再 active
+      // 时同样 fail closed。闭包在 MCP tool-call 时执行，此时 _maker 已装配完成。
+      getLiveSessionGrantState: (sessionId: string, sessionInstanceId: string) => {
+        if (!sessionInstanceId) return null;
+        const session = _maker?.getSession(sessionId);
+        if (!session || session.instanceId !== sessionInstanceId) return null;
+        const permission = session.stablePermissionModeState;
+        if (!permission) return null;
+        return {
+          permissionMode: permission.mode,
+          remoteHostId: session.remoteHostId,
+        };
+      },
     };
     const orcaTeamStoreAdapter = createDesktopOrcaTeamStoreAdapter({
       getWorkerLink,
@@ -778,7 +795,7 @@ export function getMaker(): Maker {
       // RemoteQuery 实现 SDK Query interface 的子集 (ClaudeCodeAgent 实际只调
       // for-await / interrupt / setModel / setPermissionMode / applyFlagSettings),
       // factory 返回时直接 `as unknown as Query` cast 即可。
-      remoteCcQueryFactory: async ({ remoteHostId, sessionId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
+      remoteCcQueryFactory: async ({ remoteHostId, sessionId, sessionInstanceId, startParams, vendorOptions, onApprovalRequest, onOAuthRefresh, makerMemoryEnabled }) => {
         const host = getRemoteSshPool().get(remoteHostId);
         if (host?.getStatus() !== 'ready') {
           throw new Error(`remote ssh host not ready: ${remoteHostId}`);
@@ -807,6 +824,7 @@ export function getMaker(): Maker {
             {
               host,
               sessionId,
+              sessionInstanceId,
               workingDir: typeof startParams.cwd === 'string' ? startParams.cwd : '',
               vendorOptions,
               // per-session Maker Memory 开关 (maker-core 归一后透传)。
@@ -1025,6 +1043,9 @@ export function getMaker(): Maker {
         }
         let mcpExtraArgs: string[] = [];
         let mcpExtraEnv: Record<string, string> = {};
+        let buildSessionMcpConfig:
+          | ((sessionInstanceId: string) => Record<string, unknown>)
+          | undefined;
         try {
           const cfg = await getCodexExtraSpawnConfig({
             mcpProviders: providers,
@@ -1032,6 +1053,7 @@ export function getMaker(): Maker {
           });
           mcpExtraArgs = cfg.extraArgs;
           mcpExtraEnv = cfg.extraEnv;
+          buildSessionMcpConfig = cfg.buildSessionMcpConfig;
           // 本次 spawn 配置实际应用的通讯录可用性快照 —— 从返回的 cfg 本体推导,
           // 不另读 settings: getCodexExtraSpawnConfig 是模块级缓存, 失效失败后
           // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
@@ -1104,6 +1126,7 @@ export function getMaker(): Maker {
             ...buildCodexProxySpawnArgs(endpoint, authInjection),
           ],
           extraEnv: mcpExtraEnv,
+          ...(buildSessionMcpConfig ? { buildSessionMcpConfig } : {}),
           codexProxyActive: ready,
           // oauth spawn 才定义 OpenAI 身份 provider(spawn args 同源);maker-core 只对
           // 「订阅直连路由」的 thread 用它开 OpenAI 远端压缩,其余 thread 保持本地压缩。
@@ -1112,7 +1135,7 @@ export function getMaker(): Maker {
             : {}),
         };
       },
-      registerCodexMcpThreadContext: ({ threadId, sessionId, workingDir, remoteHostId, vendorOptions }) => {
+      registerCodexMcpThreadContext: ({ threadId, sessionId, sessionInstanceId, workingDir, remoteHostId, vendorOptions }) => {
         // Codex shares one app-server across sessions. Freeze the effective
         // ordinary-tool policy at thread creation so later Settings changes do
         // not mutate a runtime that is already running.
@@ -1120,6 +1143,7 @@ export function getMaker(): Maker {
         registerCodexMcpThreadContext(threadId, {
           agentKind: 'codex',
           sessionId,
+          ...(sessionInstanceId ? { sessionInstanceId } : {}),
           workingDir,
           // remote thread ctx: scope key 语义见 buildMemoryScopeKey。
           ...(remoteHostId ? { remoteHostId } : {}),
@@ -1247,7 +1271,7 @@ export function getMaker(): Maker {
     // logout + 这里这个 broadcast, 让 useCodexAuth hook 立刻进 'unauthenticated' 状态,
     // UI 弹 "请重新登录" — 否则错误只会反复埋在后台日志里。payload 字段对齐
     // maker-ipc/auth.ts logout handler 的 broadcast 形态。
-    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason) => {
+    desktopCodexAuthAdapter.setOnInvalidatedBroadcast(async (reason, credentialScope) => {
       resetProviderModelAutoRefreshCooldowns('openai');
       resetCodexModelBackfillState();
       // 运行中 401/token invalidation 不经过 maker:auth:logout IPC，必须在这里做同一套
@@ -1275,6 +1299,7 @@ export function getMaker(): Maker {
         agentKind: 'codex' as const,
         authenticated: false,
         errorReason: reason,
+        credentialScope,
       };
       for (const win of BrowserWindow.getAllWindows()) {
         if (win.isDestroyed()) continue;
@@ -1317,6 +1342,10 @@ export function getMaker(): Maker {
       capabilityAdditions: {
         availableModels: deriveAvailableModels(getDesktopSelectableCatalog(), 'pi'),
       },
+      resolvePiRuntimeModelDescriptor: (providerId, modelId) =>
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), providerId, modelId),
+      resolvePiGatewayModelDescriptor: (modelId) =>
+        resolvePiRuntimeModelDescriptor(getDesktopSelectableCatalog(), 'cindy', modelId),
       mcpProviders: piMcpProviders,
       makerMemory: makerMemoryManager,
     });
@@ -1334,6 +1363,17 @@ export function getMaker(): Maker {
       // 启动前的 Skill 共享与关闭后的清理都由 desktop host 注入。
       lifecycleHooks: {
         prepareStartOptions: async (sessionId, opts) => {
+          const providerScopeKey = activeOwnerScopeKey();
+          const providerReady = await accountProviderReadinessBarrier.waitForScope(providerScopeKey);
+          if (
+            !providerReady ||
+            activeOwnerScopeKey() !== providerScopeKey ||
+            isAppSessionBoundaryPending()
+          ) {
+            throw new Error(
+              'Account provider models are not ready for this app session; retry.',
+            );
+          }
           await preparePersistedOrcaSessionStart(sessionId, opts as MakerSessionCreateOpts);
         },
         onBeforeStart: async ({ agentKind, workingDir, remoteHostId }) => {

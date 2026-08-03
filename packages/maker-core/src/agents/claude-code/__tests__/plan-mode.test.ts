@@ -15,6 +15,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import type { AgentDeps } from '../../base-agent.js';
 import type { AuthAdapter } from '../../../interfaces/auth-adapter.js';
+import type { PermissionMode } from '../../../types/common.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest } from '../../../types/events.js';
 import type { Logger } from '../../../interfaces/logger.js';
 import type { CapabilityRoutingPolicy } from '../../../types/capability-routing.js';
@@ -100,7 +101,11 @@ async function makeTempDir(): Promise<string> {
   return dir;
 }
 
-async function startPlanSession(planMode: boolean, depOverrides: Partial<AgentDeps> = {}) {
+async function startPlanSession(
+  planMode: boolean,
+  depOverrides: Partial<AgentDeps> = {},
+  permissionMode: PermissionMode = 'acceptEdits',
+) {
   const configDir = await makeTempDir();
   process.env.CLAUDE_CONFIG_DIR = configDir;
   const workingDir = await makeTempDir();
@@ -113,7 +118,7 @@ async function startPlanSession(planMode: boolean, depOverrides: Partial<AgentDe
     sessionId: 'session-plan',
     model: 'claude-opus-4-6',
     workingDir,
-    permissionMode: 'acceptEdits',
+    permissionMode,
     planMode,
   });
   const queryOptions = sdkMock.query.mock.calls.at(-1)?.[0]?.options as
@@ -467,6 +472,43 @@ describe('ClaudeCodeAgent plan mode', () => {
     });
     const ev = await nextEvent(iterator);
     expect(ev).toMatchObject({ type: 'plan_mode_changed', data: { enabled: false } });
+    await handle.close();
+  });
+
+  it('reviews post-approval actions against the approved plan', async () => {
+    const reviewAutoPermissionAction = vi.fn(async () => ({ verdict: 'allow' as const }));
+    const { handle, queryOptions } = await startPlanSession(
+      true,
+      { reviewAutoPermissionAction },
+      'auto',
+    );
+    handle.setInteractionResolver(async (req): Promise<InteractionDecision> => {
+      if (req.kind === 'plan_review') return { kind: 'plan_review', behavior: 'allow' };
+      return { kind: 'permission', behavior: 'allow' };
+    });
+    const canUseTool = queryOptions.canUseTool;
+    if (!canUseTool) throw new Error('expected canUseTool');
+
+    await handle.send({
+      type: 'user',
+      content: 'Refactor the parser without changing public behavior',
+    });
+    await canUseTool(
+      'ExitPlanMode',
+      { plan: '1. Inspect parser call sites\n2. Update parser\n3. Run focused tests' },
+      { toolUseID: 'approve-plan' },
+    );
+    await canUseTool(
+      'Bash',
+      { command: 'npx tsc --noEmit' },
+      { toolUseID: 'focused-typecheck' },
+    );
+
+    expect(reviewAutoPermissionAction).toHaveBeenCalledWith(expect.objectContaining({
+      userIntent:
+        'Refactor the parser without changing public behavior\n\n'
+        + 'Approved plan:\n1. Inspect parser call sites\n2. Update parser\n3. Run focused tests',
+    }));
     await handle.close();
   });
 

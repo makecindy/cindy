@@ -92,6 +92,7 @@ export type IpcErrorCode =
   | 'DEVICE_LINK_ACCESS_REVOKED' // 目标设备已撤销本机的访问权限(逐设备黑名单)
   | 'DEVICE_LINK_CONTROL_DISABLED' // 本机已关闭对该目标设备的控制(控制端本地偏好)
   | 'DEVICE_LINK_TIMEOUT' // 等待远端响应超时
+  | 'DEVICE_LINK_DEVICE_UNRESPONSIVE' // 目标设备连续超时被熔断判定无响应(弱网 / 对端卡死),快速失败中
   | 'DEVICE_LINK_VERSION_MISMATCH' // 两端协议/版本不匹配
   | 'DEVICE_LINK_MEDIA_TRANSFER_FAILED' // 远程媒体经 OSS 中转失败(出方向附件上传 / 入方向取媒体)
   | 'REMOTE_WORKDIR_INVALID' // 被控端工作目录路径非法
@@ -132,6 +133,12 @@ export type IpcErrorCode =
   // 个人资料自助修改(settings → 用户卡片;服务端直写)
   | 'PROFILE_AVATAR_UPLOAD_FAILED' // 头像经 oss-server 预签名直传失败(presign 或 PUT 阶段)
   | 'PROFILE_UPDATE_FAILED' // PATCH /api/me/profile 失败(网络 / 服务端拒绝)
+  // 本机 HTML 页面打开到系统浏览器
+  | 'BROWSER_FILE_INVALID_TARGET'
+  | 'BROWSER_FILE_PATH_NOT_ALLOWED'
+  | 'BROWSER_FILE_UNSUPPORTED_TYPE'
+  | 'BROWSER_FILE_NOT_FOUND'
+  | 'BROWSER_FILE_OPEN_FAILED'
   // 会话分享(.cshare 导出/导入)
   | 'SHARE_FILE_INVALID' // 不是 .cshare / 头或 manifest 损坏 / payload 不是 zip
   | 'SHARE_PASSWORD_REQUIRED' // 文件已加密但未提供密码
@@ -146,6 +153,7 @@ export type IpcErrorCode =
   | 'THEME_NOT_A_FILE' // 选中路径不是普通文件
   | 'THEME_FILE_TOO_LARGE' // 超 4MB 上限
   | 'THEME_UNSUPPORTED_FILE' // 无法识别为 VSCode / Obsidian 主题
+  | 'THEME_CONTRAST_UNSUPPORTED' // 主题色板无法满足控件对比度约束
   | 'THEME_USES_INCLUDE' // VSCode 主题含 include(需基底才能完整解析)
   | 'THEME_WRITE_ERROR' // 落盘失败(权限/磁盘)
   | 'THEME_IMPORT_INTERNAL'; // 意外异常
@@ -222,6 +230,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DEVICE_LINK_ACCESS_REVOKED',
   'DEVICE_LINK_CONTROL_DISABLED',
   'DEVICE_LINK_TIMEOUT',
+  'DEVICE_LINK_DEVICE_UNRESPONSIVE',
   'DEVICE_LINK_VERSION_MISMATCH',
   'DEVICE_LINK_MEDIA_TRANSFER_FAILED',
   'REMOTE_WORKDIR_INVALID',
@@ -255,6 +264,11 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'DINGTALK_STREAM_CONNECTION_FAILED',
   'PROFILE_AVATAR_UPLOAD_FAILED',
   'PROFILE_UPDATE_FAILED',
+  'BROWSER_FILE_INVALID_TARGET',
+  'BROWSER_FILE_PATH_NOT_ALLOWED',
+  'BROWSER_FILE_UNSUPPORTED_TYPE',
+  'BROWSER_FILE_NOT_FOUND',
+  'BROWSER_FILE_OPEN_FAILED',
   'SHARE_FILE_INVALID',
   'SHARE_PASSWORD_REQUIRED',
   'SHARE_PASSWORD_WRONG',
@@ -267,6 +281,7 @@ const IPC_ERROR_CODES: ReadonlySet<IpcErrorCode> = new Set<IpcErrorCode>([
   'THEME_NOT_A_FILE',
   'THEME_FILE_TOO_LARGE',
   'THEME_UNSUPPORTED_FILE',
+  'THEME_CONTRAST_UNSUPPORTED',
   'THEME_USES_INCLUDE',
   'THEME_WRITE_ERROR',
   'THEME_IMPORT_INTERNAL',

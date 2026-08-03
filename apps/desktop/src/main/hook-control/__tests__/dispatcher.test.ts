@@ -261,13 +261,15 @@ describe('normalizeTaskSource', () => {
     fr.finish();
   });
 
+  // laneKind 的唯一消费者是群轮次的 turn lease(见 session-runner);派生判据必须
+  // 在正常派发与续跑观察两条路径上一致, 否则续跑轮会丢掉那层独占。
   it('laneKind 派生: telegram group/topic externalKey → group, DM 与 Slack → dm', async () => {
     const fr = fakeRunner();
     const { d } = makeDispatcher({ runner: fr.runner });
     const c = collector();
 
     const keys = [
-      'telegram:group:bot:-900:42:9:g0',
+      'telegram:group:bot:-900:9:g0',
       'telegram:topic:bot:-900:77:9:g0',
       'telegram:dm:bot:user:g0',
       'team-slack:C1:1.1',
@@ -280,6 +282,7 @@ describe('normalizeTaskSource', () => {
     }
     expect(fr.calls.map((call) => call.laneKind)).toEqual(['group', 'group', 'dm', 'dm']);
   });
+
 });
 
 describe('dispatcher 核心语义', () => {

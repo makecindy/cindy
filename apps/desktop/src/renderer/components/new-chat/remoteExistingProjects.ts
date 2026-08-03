@@ -46,6 +46,17 @@ interface RecentWorkdirRow {
   exists?: boolean;
 }
 
+function isRecentWorkdirRow(value: unknown): value is RecentWorkdirRow {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
+  const row = value as Record<string, unknown>;
+  return (
+    typeof row.path === 'string' &&
+    row.path.length > 0 &&
+    typeof row.lastUsedAt === 'string' &&
+    (row.exists === undefined || typeof row.exists === 'boolean')
+  );
+}
+
 /** device-link:被控端 recent_workdirs → 已有项目列表(保序,handler 已按 lastUsedAt desc 排好)。 */
 export function recentWorkdirsToProjects(
   rows: readonly RecentWorkdirRow[],
@@ -78,12 +89,17 @@ export function sshExistingProjects(
 export async function loadDeviceLinkExistingProjects(
   deviceId: string,
 ): Promise<ExistingRemoteProject[]> {
-  const rows = (await window.electronAPI.deviceLink.invoke(
+  const rows: unknown = await window.electronAPI.deviceLink.invoke(
     deviceId,
     'local-db:recent-workdirs:list',
     [],
-  )) as RecentWorkdirRow[] | null | undefined;
-  return recentWorkdirsToProjects(rows ?? []);
+  );
+  // 只有明确返回数组才是权威结果；null / undefined 是协议或连接异常，不能伪装成
+  // 「对方确实没有项目」的空列表。数组元素也必须完整符合协议，否则整份响应失败。
+  if (!Array.isArray(rows) || !rows.every(isRecentWorkdirRow)) {
+    throw new Error('Invalid recent workdirs response');
+  }
+  return recentWorkdirsToProjects(rows);
 }
 
 /** device-link:从被控端最近项目列表移除一条,不删除会话或磁盘目录。 */
@@ -91,9 +107,7 @@ export async function removeDeviceLinkExistingProject(
   deviceId: string,
   path: string,
 ): Promise<void> {
-  await window.electronAPI.deviceLink.invoke(
-    deviceId,
-    'local-db:recent-workdirs:remove',
-    [{ path }],
-  );
+  await window.electronAPI.deviceLink.invoke(deviceId, 'local-db:recent-workdirs:remove', [
+    { path },
+  ]);
 }

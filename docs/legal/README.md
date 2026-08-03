@@ -14,13 +14,6 @@
 - [项目版权与归属声明](../../NOTICE)：仓库根目录固定文件；其中的第三方材料入口
   指向本目录的 `notices/`。
 
-### 人工维护的合规记录
-
-- [微信 Open SDK 合规记录](./wechat-open-sdk-compliance.md)：版本、隐私披露、用户
-  同意和发布前复核记录。
-- [个人微信 IM 合规与发布记录](./wechat-personal-im-compliance.md)：iLink 协议来源、
-  数据处理、腾讯接入授权与 GA 门禁。
-
 ### 第三方许可、受限组件与 SBOM
 
 - [第三方声明与 SBOM 说明](./notices/README.md)：生成命令、覆盖范围、审计门禁和

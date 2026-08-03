@@ -1,9 +1,10 @@
 /**
  * ExtraDirsButton —— composer 的「+」操作菜单(左置于权限选择器之前)。
  *
- * 合并了四类入口(参考 Codex 的 + 菜单):
+ * 合并了五类入口(参考 Codex 的 + 菜单):
  *   - 添加文件、图片或视频→ 复用 composer 既有附件管线。
  *   - 新建目标(`onNewGoal` 提供时显示;仅会话中,父组件按 sessionId 决定)→ 打开 NewGoalDialog。
+ *   - 计划模式 / 协同模式→ 与新建目标同级的模式入口。
  *   - 已安装 Plugin:选择后由 ChatInput 把 command 放到消息开头,保留正文并聚焦末尾。
  *   - 附加只读引用目录(Claude vendor;`onChange` 提供时显示)→ 列表 / 添加。
  *
@@ -19,7 +20,16 @@
  */
 
 import { useRef, useState } from 'react';
-import { Check, ClipboardList, FolderPlus, Paperclip, Plus, Target, X } from 'lucide-react';
+import {
+  Check,
+  ClipboardList,
+  FolderPlus,
+  Paperclip,
+  Plus,
+  Target,
+  UsersRound,
+  X,
+} from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 
 import { cn } from '@/lib/utils';
@@ -36,6 +46,20 @@ const log = createLogger('ExtraDirsButton');
 
 /** 与 main 端 EXTRA_DIRS_MAX 保持一致;UI 满了 disable 添加按钮。 */
 const MAX_EXTRA_DIRS = 10;
+
+export type CollabWorkerKind = 'cc' | 'codex' | 'pi';
+
+export interface CollaborationMenuConfig {
+  enabled: boolean;
+  worker: CollabWorkerKind;
+  onChange: (next: { enabled: boolean; worker: CollabWorkerKind }) => void;
+  /** 关闭态优先打开完整 Worker 配置;未提供时直接沿用当前 worker 开启。 */
+  onOpenDetails?: () => void;
+  /** 策略暂不可用时允许从菜单项触发刷新。 */
+  onDisabledActivate?: () => void;
+  disabled?: boolean;
+  disabledReason?: string;
+}
 
 export interface ExtraDirsButtonProps {
   extraDirs: string[];
@@ -54,6 +78,8 @@ export interface ExtraDirsButtonProps {
    * 父组件负责能力门控(capabilities.planMode)与持久化,这里只做 UI。
    */
   planMode?: { enabled: boolean; onToggle: (next: boolean) => void };
+  /** 协同模式入口;与新建目标、计划模式同级显示在「+」菜单。 */
+  collaboration?: CollaborationMenuConfig;
   /** 已安装 Plugin 清单;无指令或未生效项仍展示,但不可选。 */
   plugins?: readonly InstalledGhost[];
   /** 当前会话范围内可直接使用的 Plugin id;未命中项保留展示但置灰。 */
@@ -122,6 +148,7 @@ export function ExtraDirsButton({
   onChange,
   onNewGoal,
   planMode,
+  collaboration,
   plugins = [],
   pluginAvailableIds,
   onPluginSelect,
@@ -141,11 +168,43 @@ export function ExtraDirsButton({
   // hover 展开「添加」文案已移除(2026-07-22 用户定稿:展开必须承载信息,
   // 图标自明的 + 不需要;裸态→hover 外框→点击直接长出菜单)。
 
-  // 能力感知:附件、新建目标、计划模式、Plugin 与引用目录都由父组件是否接线决定。
-  if (!onAddFiles && !onNewGoal && !planMode && !hasReferenceDirs && plugins.length === 0)
+  // 能力感知:附件、新建目标、计划/协同模式、Plugin 与引用目录都由父组件是否接线决定。
+  if (
+    !onAddFiles &&
+    !onNewGoal &&
+    !planMode &&
+    !collaboration &&
+    !hasReferenceDirs &&
+    plugins.length === 0
+  ) {
     return null;
+  }
 
   const atLimit = count >= MAX_EXTRA_DIRS;
+  const collaborationPolicyDisabled = collaboration?.disabled === true;
+  const collaborationRetryable =
+    !disabled && collaborationPolicyDisabled && !!collaboration?.onDisabledActivate;
+  const collaborationAriaLabel = collaboration?.disabledReason
+    ? `${t('newChat.collaboration.modeLabel')}: ${collaboration.disabledReason}`
+    : t('newChat.collaboration.modeLabel');
+
+  const handleCollaborationActivate = () => {
+    if (!collaboration || disabled) return;
+    setOpen(false);
+    if (collaborationPolicyDisabled) {
+      collaboration.onDisabledActivate?.();
+      return;
+    }
+    if (collaboration.enabled) {
+      collaboration.onChange({ enabled: false, worker: collaboration.worker });
+      return;
+    }
+    if (collaboration.onOpenDetails) {
+      collaboration.onOpenDetails();
+      return;
+    }
+    collaboration.onChange({ enabled: true, worker: collaboration.worker });
+  };
 
   const handleAdd = async () => {
     if (atLimit || !onChange) return;
@@ -283,7 +342,7 @@ export function ExtraDirsButton({
               {t('extraDirs.addFiles')}
             </span>
           </button>
-          {(onNewGoal || planMode || plugins.length > 0 || hasReferenceDirs) && (
+          {(onNewGoal || planMode || collaboration || plugins.length > 0 || hasReferenceDirs) && (
             <div className="my-1 h-px bg-[var(--model-dropdown-border)]" />
           )}
         </>
@@ -334,9 +393,62 @@ export function ExtraDirsButton({
           </button>
         )}
 
+        {/* 协同模式与目标/计划同级。开启态保留 Thinking Orange,右侧对勾表示当前状态。 */}
+        {collaboration && (
+          <Tip
+            text={collaborationPolicyDisabled ? collaboration.disabledReason : null}
+            side="right"
+          >
+            <span className="block">
+              <button
+                type="button"
+                role="menuitemcheckbox"
+                aria-checked={collaboration.enabled}
+                aria-label={collaborationAriaLabel}
+                aria-disabled={
+                  collaborationPolicyDisabled && !collaborationRetryable ? true : undefined
+                }
+                disabled={disabled || (collaborationPolicyDisabled && !collaborationRetryable)}
+                onClick={handleCollaborationActivate}
+                className={cn(
+                  'flex w-full items-center gap-2 rounded-[8px] px-3 py-2',
+                  'transition-colors hover:bg-[var(--model-item-hover)]',
+                  collaboration.enabled && 'bg-[var(--model-item-hover)]',
+                  (disabled || collaborationPolicyDisabled) && 'opacity-50',
+                  (disabled || (collaborationPolicyDisabled && !collaborationRetryable)) &&
+                    'cursor-not-allowed',
+                )}
+              >
+                <UsersRound
+                  size={14}
+                  className={cn(
+                    'shrink-0',
+                    collaboration.enabled
+                      ? 'text-[var(--warning-accent)]'
+                      : 'text-[var(--model-item-text)]',
+                  )}
+                />
+                <span
+                  className={cn(
+                    'min-w-0 flex-1 truncate text-left text-[13px]',
+                    collaboration.enabled
+                      ? 'font-medium text-[var(--warning-accent)]'
+                      : 'text-[var(--model-item-text)]',
+                  )}
+                >
+                  {t('newChat.collaboration.modeLabel')}
+                </span>
+                {collaboration.enabled && (
+                  <Check size={13} className="shrink-0 text-[var(--model-item-check)]" />
+                )}
+              </button>
+            </span>
+          </Tip>
+        )}
+
         {plugins.length > 0 && (
           <>
-            {(onNewGoal || planMode) && (
+            {(onNewGoal || planMode || collaboration) && (
               <div className="my-1 h-px bg-[var(--model-dropdown-border)]" />
             )}
             <div className="px-2 pb-1 pt-1 text-[12px] text-[var(--model-trigger-text)] opacity-70">
@@ -397,7 +509,7 @@ export function ExtraDirsButton({
         {/* 引用目录段:Claude 与 Codex 共用；未接 onChange 时不暴露空操作入口。 */}
         {hasReferenceDirs && (
           <>
-            {(onNewGoal || planMode || plugins.length > 0) && (
+            {(onNewGoal || planMode || collaboration || plugins.length > 0) && (
               <div className="my-1 h-px bg-[var(--model-dropdown-border)]" />
             )}
 

@@ -80,7 +80,7 @@ export function registerTabKind(plugin: TabKindPlugin, hot?: HotContextLike | nu
 }
 
 /**
- * 注销 plugin —— 插件页签的意识停用/卸下时由 ghostTabPlugins 调用,幂等;
+ * 注销 plugin —— 动态注册的 kind 退场时调用,幂等;
  * 内置 plugin 不注销。已打开的同 kind tab 落回 Shell 的 PlaceholderBody,
  * tab 数据保留,重新注册即原位复活(对齐顶层面板「未安装隐藏、重装复活」语义)。
  */
@@ -113,17 +113,6 @@ export function listTabKindMenuMetas(): TabKindMenuMeta[] {
     .map((p) => p.menu)
     .filter((menu) => !menu.hiddenFromMenu)
     .sort((a, b) => a.order - b.order);
-}
-
-/**
- * 启用中的插件页签 menu 项(kind 前缀 `ghost:`),「+」菜单动态分组与空态
- * 「1 个直显 / 多个折叠」共用。按 labelText(插件名)稳定排序。
- */
-export function listGhostTabMenuMetas(): TabKindMenuMeta[] {
-  return Array.from(REGISTRY.values())
-    .map((p) => p.menu)
-    .filter((menu) => menu.kind.startsWith('ghost:') && !menu.hiddenFromMenu)
-    .sort((a, b) => (a.labelText ?? a.kind).localeCompare(b.labelText ?? b.kind));
 }
 
 /** 仅测试 / dev hot-reload 用:清空 registry。production 不应调用。 */

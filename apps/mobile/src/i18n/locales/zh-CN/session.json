@@ -28,6 +28,7 @@
     "thinking": "思考中…",
     "networkReconnecting": "正在重新连接…",
     "modelBusyRetrying": "模型服务繁忙，正在重试…",
+    "rateLimitRetrying": "请求受到限流，正在重试…",
     "composerSyncing": "正在同步任务数据，同步完成后即可发送。",
     "composerSessionNotSynced": "当前任务还没有同步完成。",
     "composerCreating": "任务创建中，首条消息发出后即可继续发送。",

@@ -42,6 +42,24 @@ const PREVIOUS_PI_BINARY = path.join(
 
 const piAvailable = existsSync(PI_BINARY);
 
+const canSymlink = (() => {
+  const probeDir = mkdtempSync(path.join(tmpdir(), 'pi-symlink-probe-'));
+  try {
+    const target = path.join(probeDir, 'target.txt');
+    writeFileSync(target, 'probe');
+    symlinkSync(target, path.join(probeDir, 'link.txt'));
+    return true;
+  } catch {
+    return false;
+  } finally {
+    rmSync(probeDir, { recursive: true, force: true });
+  }
+})();
+
+function jsonStringContent(value: string): string {
+  return JSON.stringify(value).slice(1, -1);
+}
+
 const noopLogger: Logger = {
   trace: () => {},
   debug: () => {},
@@ -84,6 +102,141 @@ function anthropicStreamBody(text: string): string {
       data: { type: 'message_delta', delta: { stop_reason: 'end_turn', stop_sequence: null }, usage: { output_tokens: 7 } },
     },
     { event: 'message_stop', data: { type: 'message_stop' } },
+  ]);
+}
+
+/** 最小完整的 OpenAI Responses SSE 流：供 Pi 原生 Responses BYOM 回归使用。 */
+function responsesStreamBody(text: string, model: string): string {
+  const responseId = 'resp_byom_reasoning_1';
+  const item = {
+    id: 'msg_byom_reasoning_1',
+    type: 'message',
+    status: 'completed',
+    role: 'assistant',
+    content: [{ type: 'output_text', text, annotations: [], logprobs: [] }],
+  };
+  const completed = {
+    id: responseId,
+    object: 'response',
+    created_at: 1,
+    status: 'completed',
+    error: null,
+    incomplete_details: null,
+    instructions: null,
+    max_output_tokens: null,
+    model,
+    output: [item],
+    parallel_tool_calls: true,
+    previous_response_id: null,
+    reasoning: { effort: 'xhigh', summary: null },
+    store: false,
+    temperature: 1,
+    text: { format: { type: 'text' } },
+    tool_choice: 'auto',
+    tools: [],
+    top_p: 1,
+    truncation: 'disabled',
+    usage: {
+      input_tokens: 1,
+      input_tokens_details: { cached_tokens: 0 },
+      output_tokens: 1,
+      output_tokens_details: { reasoning_tokens: 0 },
+      total_tokens: 2,
+    },
+    metadata: {},
+  };
+  return sse([
+    {
+      event: 'response.created',
+      data: {
+        type: 'response.created',
+        sequence_number: 0,
+        response: {
+          ...completed,
+          status: 'in_progress',
+          output: [],
+          usage: null,
+        },
+      },
+    },
+    {
+      event: 'response.output_item.added',
+      data: {
+        type: 'response.output_item.added',
+        sequence_number: 1,
+        response_id: responseId,
+        output_index: 0,
+        item: { ...item, status: 'in_progress', content: [] },
+      },
+    },
+    {
+      event: 'response.content_part.added',
+      data: {
+        type: 'response.content_part.added',
+        sequence_number: 2,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: { type: 'output_text', text: '', annotations: [], logprobs: [] },
+      },
+    },
+    {
+      event: 'response.output_text.delta',
+      data: {
+        type: 'response.output_text.delta',
+        sequence_number: 3,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        delta: text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.output_text.done',
+      data: {
+        type: 'response.output_text.done',
+        sequence_number: 4,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        text,
+        logprobs: [],
+      },
+    },
+    {
+      event: 'response.content_part.done',
+      data: {
+        type: 'response.content_part.done',
+        sequence_number: 5,
+        response_id: responseId,
+        item_id: item.id,
+        output_index: 0,
+        content_index: 0,
+        part: item.content[0],
+      },
+    },
+    {
+      event: 'response.output_item.done',
+      data: {
+        type: 'response.output_item.done',
+        sequence_number: 6,
+        response_id: responseId,
+        output_index: 0,
+        item,
+      },
+    },
+    {
+      event: 'response.completed',
+      data: {
+        type: 'response.completed',
+        sequence_number: 7,
+        response: completed,
+      },
+    },
   ]);
 }
 
@@ -576,8 +729,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         });
         await done;
         const bodies = seenRequests.slice(before).map((request) => request.body).join('\n');
-        expect(bodies).toContain(filePath);
-        expect(bodies).toContain(referenceDir);
+        // 请求体是 JSON 文本；Windows 路径的反斜杠会按 JSON 规则转义。
+        expect(bodies).toContain(jsonStringContent(filePath));
+        expect(bodies).toContain(jsonStringContent(referenceDir));
         expect(agent.capabilities.multimodal.file.supported).toBe(true);
         expect(agent.capabilities.extraDirs.supported).toBe(true);
       } finally {
@@ -763,6 +917,113 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
   );
 
   it(
+    'BYOM Responses: an explicit Pi effort reaches the upstream reasoning.effort request field',
+    { timeout: 60_000 },
+    async () => {
+      const nativeSeen: Array<{
+        url: string;
+        auth: string | undefined;
+        body: string;
+      }> = [];
+      const nativeServer = createServer((req, res) => {
+        let body = '';
+        req.on('data', (chunk) => {
+          body += chunk;
+        });
+        req.on('end', () => {
+          nativeSeen.push({
+            url: req.url ?? '',
+            auth: req.headers.authorization as string | undefined,
+            body,
+          });
+          res.writeHead(200, {
+            'content-type': 'text/event-stream',
+            'cache-control': 'no-cache',
+          });
+          res.end(responsesStreamBody('pong from Responses', 'byom-reasoner'));
+        });
+      });
+      await new Promise<void>((resolve) => nativeServer.listen(0, '127.0.0.1', resolve));
+      const nativeAddr = nativeServer.address();
+      const nativeUrl =
+        typeof nativeAddr === 'object' && nativeAddr ? `http://127.0.0.1:${nativeAddr.port}` : '';
+
+      const deps = buildDeps();
+      deps.auth.getState = async (options) =>
+        options?.providerId === 'localresponses'
+          ? {
+              authenticated: true,
+              identity: 'Local Responses',
+              authSource: 'api-key' as const,
+            }
+          : { authenticated: false };
+      deps.auth.getAuthEnv = async () => ({
+        CINDY_PI_API_KEY: 'gateway-unavailable-placeholder',
+      });
+      deps.resolvePiNativeProviders = async () => ({
+        providers: [
+          {
+            id: 'localresponses',
+            name: 'Local Responses',
+            baseUrl: nativeUrl,
+            api: 'openai-responses',
+            apiKeyEnvVar: 'CINDY_PI_KEY_LOCALRESPONSES',
+            models: [
+              {
+                id: 'byom-reasoner',
+                name: 'BYOM Reasoner',
+                reasoning: true,
+                thinkingLevelMap: {
+                  minimal: null,
+                  low: 'low',
+                  medium: null,
+                  high: 'high',
+                  xhigh: 'xhigh',
+                  max: null,
+                },
+              },
+            ],
+          },
+        ],
+        env: { CINDY_PI_KEY_LOCALRESPONSES: 'responses-secret-key' },
+      });
+      const agent = new PiAgent(deps);
+      const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-byom-responses-cwd-'));
+      let handle: AgentSessionHandle | null = null;
+      try {
+        const gatewayBefore = seenRequests.length;
+        handle = await agent.startSession({
+          sessionId: 'byom-responses-session',
+          workingDir,
+          providerId: 'localresponses',
+          model: 'byom-reasoner',
+          effort: 'xhigh',
+        });
+        const done = (async () => {
+          for await (const event of handle!.events()) {
+            if (event.type === 'done') break;
+          }
+        })();
+        await handle.send({ type: 'user', content: 'reason carefully' });
+        await done;
+
+        expect(nativeSeen).toHaveLength(1);
+        expect(nativeSeen[0]?.url).toMatch(/\/responses(?:\?|$)/);
+        expect(nativeSeen[0]?.auth).toContain('responses-secret-key');
+        expect(JSON.parse(nativeSeen[0]?.body ?? '{}')).toMatchObject({
+          model: 'byom-reasoner',
+          reasoning: { effort: 'xhigh' },
+        });
+        expect(seenRequests.length).toBe(gatewayBefore);
+      } finally {
+        await handle?.close();
+        await new Promise<void>((resolve) => nativeServer.close(() => resolve()));
+        rmSync(workingDir, { recursive: true, force: true });
+      }
+    },
+  );
+
+  it(
     'exportSessionHtml writes a real HTML file via pi export_html (offline, no gateway)',
     { timeout: 60_000 },
     async () => {
@@ -843,8 +1104,9 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     workingDir: string;
     permissionMode: 'ask' | 'auto' | 'bypassPermissions';
     resolverBehavior: 'allow' | 'deny';
+    deps?: AgentDeps;
   }): Promise<{ resolverTools: string[]; finalText: string }> {
-    const agent = new PiAgent(buildDeps());
+    const agent = new PiAgent(opts.deps ?? buildDeps());
     const resolverTools: string[] = [];
     let handle: AgentSessionHandle | null = null;
     try {
@@ -917,12 +1179,18 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     async () => {
       const workingDir = mkdtempSync(path.join(tmpdir(), 'pi-env-isolation-'));
       try {
+        const deps = buildDeps();
+        deps.preparePiExtraSpawnConfig = async () => ({
+          mcpBridge: { token: '', servers: [] },
+          mcpEnv: { CINDY_PI_REMOTE_MCP_SECRET_0: 'remote-mcp-secret-canary' },
+        });
         scriptedResponses.length = 0;
         scriptedResponses.push(
           anthropicToolUseBody('bash', {
             command: [
               'for n in CINDY_PI_API_KEY CINDY_PI_SESSION_ID CINDY_PI_SESSION_TOKEN',
-              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_SECRET_ENV_NAMES',
+              'CINDY_PI_MCP_BRIDGE CINDY_PI_KEY_LOCALBYOM CINDY_PI_REMOTE_MCP_SECRET_0',
+              'CINDY_PI_SECRET_ENV_NAMES',
               'CINDY_PI_PERMISSION_FILE PI_CODING_AGENT_DIR PI_SESSION_ID PI_SESSION_FILE; do',
               '  if [ -n "$(printenv "$n")" ]; then printf "PI_ENV_LEAK:%s\\n" "$n"; fi;',
               'done; printf "PI_ENV_CLEAN\\n"',
@@ -936,6 +1204,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
           workingDir,
           permissionMode: 'ask',
           resolverBehavior: 'allow',
+          deps,
         });
         const lastBody = JSON.parse(seenRequests.slice(reqBefore).at(-1)?.body ?? '{}') as {
           messages?: Array<{ role?: string; content?: Array<{ type?: string; content?: string }> }>;
@@ -946,6 +1215,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
         expect(toolResult).toContain('PI_ENV_CLEAN');
         expect(toolResult).not.toContain('PI_ENV_LEAK:');
         expect(toolResult).not.toContain('test-key-123');
+        expect(toolResult).not.toContain('remote-mcp-secret-canary');
       } finally {
         rmSync(workingDir, { recursive: true, force: true });
         scriptedResponses.length = 0;
@@ -1075,7 +1345,7 @@ describe.skipIf(!piAvailable)('PiAgent integration (real pi binary + fake gatewa
     },
   );
 
-  it(
+  it.skipIf(!canSymlink)(
     'full access blocks credential reads reached through a workspace symlink',
     { timeout: 60_000 },
     async () => {

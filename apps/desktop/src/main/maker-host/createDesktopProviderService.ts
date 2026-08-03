@@ -24,6 +24,8 @@ import path from 'node:path';
 import {
   BUNDLED_CATALOG,
   buildUserProvider,
+  compareModelRegistryRevisions,
+  decideModelRegistrySnapshot,
   DEFAULT_REMOTE_CATALOG_BUDGET_MS,
   loadCatalog,
   loadCatalogWithSource,
@@ -37,13 +39,15 @@ import { createLogger } from '../logger.js';
 import { getBaseUrl, isDev } from '../manifestService.js';
 import { getBuildClientEndpoint, getClientEndpoint } from '../clientEndpointsService.js';
 import {
+  commitModelPlaneFromCatalog,
   getActiveCatalog,
+  getModelPlaneWarnings,
   setActiveCatalog,
   setCustomProviders,
   setDiscoveredCodexModels,
-  setModelRegistryFromCatalog,
-  setProviderModelsFromCatalog,
+  setLocalCatalogOverrides,
 } from './active-catalog.js';
+import { readModelCatalogOverrides } from './model-catalog-override-store.js';
 import {
   readCodexDiscoveredModels,
   readCodexDiscoveredModelsForAuthRefresh,
@@ -69,7 +73,10 @@ import {
   readCachedGenericOAuthAccessToken,
   resetGenericOAuthMemoryCache,
 } from './generic-oauth.js';
-import { genericOAuthSecretIo, addProviderSecretsClearedListener } from '../secrets/providerSecretStore.js';
+import {
+  genericOAuthSecretIo,
+  addProviderSecretsClearedListener,
+} from '../secrets/providerSecretStore.js';
 import { readClaudeApiKey, desktopCodexAuthAdapter } from './auth-adapters.js';
 import { getProviderSecretStore, readCustomProviderKey } from '../secrets/providerSecretStore.js';
 import { hasClaudeAiOAuth, hasClaudeAiOAuthUnbound } from './claude-credentials-store.js';
@@ -93,7 +100,7 @@ import {
   migrateLegacyNativeProviderAuthBindings,
 } from './nativeProviderAuthBinding.js';
 import { hasLegacyOwnerNamespaceClaim } from '../ownerNamespaceMigration.js';
-import { broadcastEffectiveModelPricing } from '../usage/modelPricing.js';
+import { broadcastReferenceModelPricing } from '../usage/referenceModelPricing.js';
 
 const log = createLogger('provider-service');
 
@@ -250,10 +257,7 @@ function catalogLkgTemporaryPath(file: string, nonce = randomUUID()): string {
 }
 
 /** Serialize the complete replace transaction per scope while leaving different scopes parallel. */
-async function serializeCatalogLkgWrite<T>(
-  file: string,
-  write: () => Promise<T>,
-): Promise<T> {
+async function serializeCatalogLkgWrite<T>(file: string, write: () => Promise<T>): Promise<T> {
   const previous = catalogLkgWriteTails.get(file) ?? Promise.resolve();
   const current = previous.catch(() => undefined).then(write);
   const tail = current.then(
@@ -271,14 +275,12 @@ async function serializeCatalogLkgWrite<T>(
 function selectCatalogLkgSnapshot(incoming: string, current: string | null): string {
   if (current === null) return incoming;
   try {
-    const incomingUpdatedAt = parseCatalog(incoming).modelRegistry?.updatedAt;
-    const currentUpdatedAt = parseCatalog(current).modelRegistry?.updatedAt;
-    const incomingRevision = incomingUpdatedAt ? Date.parse(incomingUpdatedAt) : Number.NaN;
-    const currentRevision = currentUpdatedAt ? Date.parse(currentUpdatedAt) : Number.NaN;
-    if (
-      Number.isFinite(currentRevision) &&
-      (!Number.isFinite(incomingRevision) || currentRevision > incomingRevision)
-    ) {
+    const incomingRegistry = parseCatalog(incoming).modelRegistry;
+    const currentRegistry = parseCatalog(current).modelRegistry;
+    const decision = decideModelRegistrySnapshot(incomingRegistry, currentRegistry);
+    if (decision !== 'accept-incoming') {
+      // Registry 缺失、revision 回退或同 revision 异内容都不能覆盖磁盘 LKG；否则
+      // 下一次启动已经失去可对照的 last-good，source 层的守卫也无法再救回旧快照。
       return current;
     }
   } catch {
@@ -440,11 +442,20 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
   // 在启动期固定 service 实例，避免请求路由热路径重复进入 getter 里的 legacy
   // owner 绑定迁移；每次 listProviders 仍会实时读取凭证连接态。
   const providerService = getDesktopProviderService();
-  setProviderViewsReader(() => providerService.listProviders({
-    allowSideEffects: false,
-    catalog: getActiveCatalog(),
-  }));
-  if (activeLoaded) return Promise.resolve(getActiveCatalog());
+  setProviderViewsReader(() =>
+    providerService.listProviders({
+      allowSideEffects: false,
+      catalog: getActiveCatalog(),
+    }),
+  );
+  if (activeLoaded) {
+    // 幂等路径也重同步本地 override:手改文件 / 换 owner 后,任何经过这里的
+    // 刷新触发都会带出新快照(store 内 mtime/路径守卫,未变零开销)。
+    syncLocalCatalogOverridesIntoActiveCatalog();
+    const activeCatalog = getActiveCatalog();
+    logModelPlaneWarnings();
+    return Promise.resolve(activeCatalog);
+  }
   if (!activeInflight) {
     const source = buildSource();
     const sourceKey = catalogSourceKey(source);
@@ -454,7 +465,10 @@ export function ensureActiveCatalogLoaded(): Promise<Catalog> {
       .then(async (catalog) => {
         activeCatalogSourceKey = sourceKey;
         setActiveCatalog(catalog);
-        broadcastEffectiveModelPricing();
+        syncLocalCatalogOverridesIntoActiveCatalog();
+        getActiveCatalog();
+        logModelPlaneWarnings();
+        broadcastReferenceModelPricing();
         // 读 codex models_cache.json 得到规范化快照,由 active-catalog 同时投影到 Codex 与
         // Claude bridge。null 表示没读到有效 cache,保留现值 / 静态兜底;[] 表示合法空快照。
         try {
@@ -488,6 +502,11 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
     return ensureActiveCatalogLoaded().then(() => reloadActiveCatalogForEndpointChange());
   }
 
+  // owner 切换与 endpoint/realm 切换可能同时发生；即使 URL 没变、下面直接早退，
+  // 也必须先按新的 ownerScopedUserDataPath 换掉本地 override，不能让上一账号的
+  // additions/patches 继续留在 active-catalog 内存层。
+  syncLocalCatalogOverridesIntoActiveCatalog();
+
   const source = buildSource();
   const sourceKey = catalogSourceKey(source);
   if (endpointReloadInflight?.sourceKey === sourceKey) {
@@ -501,7 +520,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
   activeCatalogSourceKey = null;
   // 必须在网络 await 前失效：登录提交后 renderer/agent 可能立即读取目录。
   setActiveCatalog(BUNDLED_CATALOG);
-  broadcastEffectiveModelPricing();
+  broadcastReferenceModelPricing();
 
   const flight = loadCatalog(source, io)
     .then((catalog) => {
@@ -513,7 +532,7 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
       }
       activeCatalogSourceKey = sourceKey;
       setActiveCatalog(catalog);
-      broadcastEffectiveModelPricing();
+      broadcastReferenceModelPricing();
       return getActiveCatalog();
     })
     .finally(() => {
@@ -526,9 +545,13 @@ export function reloadActiveCatalogForEndpointChange(): Promise<Catalog> {
 }
 
 /**
- * 手动重载 xAI 模型目录与统一 modelRegistry。先确保启动期动态发现已完成，再复用同一
- * `loadCatalog` 源选择与 bundled fallback；xAI 只投影静态模型列表，当前 routing/auth
- * 以及其它 provider 保持不变；modelRegistry 仅接受不旧于当前版本的快照。
+ * 重载模型平面(xAI 双 root 静态清单 + 统一 modelRegistry)。先确保启动期动态发现
+ * 已完成,再复用同一 `loadCatalogWithSource` 源选择;bundled fallback 视为失败保
+ * LKG。守卫序:realm/generation → updatedAt 时间单调 → 同一时刻规范化 digest
+ * (同=no-op,异=拒收+告警——线上纠错必须 forward-fix 抬 updatedAt)。通过后经
+ * `commitModelPlaneFromCatalog` **单次 swap、单次 markChanged** 提交,成功且有
+ * 变化 = 恰 1 revision/1 广播(出口只有 active-catalog changedListener),
+ * no-op/失败/拒收 = 0。
  */
 export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
   await ensureActiveCatalogLoaded();
@@ -552,28 +575,75 @@ export async function refreshActiveCatalogFromSource(): Promise<Catalog> {
       }
       const currentRegistry = getActiveCatalog().modelRegistry;
       const incomingRegistry = catalog.modelRegistry;
-      if (
-        currentRegistry &&
-        incomingRegistry &&
-        incomingRegistry.updatedAt < currentRegistry.updatedAt
-      ) {
-        return getActiveCatalog();
+      if (currentRegistry && incomingRegistry) {
+        const relation = compareModelRegistryRevisions(incomingRegistry, currentRegistry);
+        if (relation === 'older' || relation === 'same') {
+          // 旧版拒收；同版同内容纯 no-op。两者都不 commit，零 revision 零广播。
+          return getActiveCatalog();
+        }
+        if (relation === 'invalid-incoming') {
+          log.warn('model registry updatedAt is invalid; rejecting', {
+            incomingUpdatedAt: incomingRegistry.updatedAt,
+            currentUpdatedAt: currentRegistry.updatedAt,
+          });
+          return getActiveCatalog();
+        }
+        if (relation === 'conflict') {
+          // 同一 revision 异内容 = 非法重发:拒收保当前快照并告警(telemetry 走日志管道)。
+          log.warn(
+            'model registry republished the same revision with different content; rejecting',
+            {
+              incomingUpdatedAt: incomingRegistry.updatedAt,
+              currentUpdatedAt: currentRegistry.updatedAt,
+            },
+          );
+          return getActiveCatalog();
+        }
       }
-      setProviderModelsFromCatalog('xai', catalog);
-      if (
-        incomingRegistry &&
-        (!currentRegistry || incomingRegistry.updatedAt >= currentRegistry.updatedAt)
-      ) {
-        setModelRegistryFromCatalog(catalog);
-      }
-      broadcastEffectiveModelPricing();
-      return getActiveCatalog();
+      commitModelPlaneFromCatalog(catalog);
+      // computeMerged 在这里同步完成，确保告警属于刚提交的同一代目录；不能读取
+      // 上一代惰性缓存留下的 warnings。
+      const activeCatalog = getActiveCatalog();
+      logModelPlaneWarnings();
+      broadcastReferenceModelPricing();
+      return activeCatalog;
     })
     .finally(() => {
       if (catalogRefreshInflight?.promise === flight) catalogRefreshInflight = null;
     });
   catalogRefreshInflight = { sourceKey, promise: flight };
   return flight;
+}
+
+/**
+ * 把 owner-scoped 本地目录 override 快照同步进 active-catalog。mtime/路径守卫在
+ * store 内(手改文件、换 owner 都会现读);内容未变时不触发 revision。
+ * 调用点:启动装载、目录刷新、realm 重载——owner 切换后任一路径都会带出新快照。
+ */
+let lastSyncedOverridesJson: string | null = null;
+let lastLoggedModelPlaneWarningsJson: string | null = null;
+
+function logModelPlaneWarnings(): void {
+  const warnings = getModelPlaneWarnings();
+  if (warnings.length === 0) {
+    lastLoggedModelPlaneWarningsJson = null;
+    return;
+  }
+  const serialized = JSON.stringify(warnings);
+  if (serialized === lastLoggedModelPlaneWarningsJson) return;
+  lastLoggedModelPlaneWarningsJson = serialized;
+  log.warn('model plane ignored inconsistent registry/local entries', {
+    count: warnings.length,
+    samples: warnings.slice(0, 5),
+  });
+}
+
+export function syncLocalCatalogOverridesIntoActiveCatalog(): void {
+  const overrides = readModelCatalogOverrides();
+  const serialized = JSON.stringify(overrides);
+  if (serialized === lastSyncedOverridesJson) return;
+  lastSyncedOverridesJson = serialized;
+  setLocalCatalogOverrides(overrides);
 }
 
 /**
@@ -605,13 +675,26 @@ export async function refreshDiscoveredCodexModels(
  *
  * best-effort：localDb 未就绪 / 读失败时清空 custom（不抛），不影响内置供应商与路由默认行为。
  */
-export async function refreshCustomProvidersIntoCatalog(): Promise<void> {
+export async function refreshCustomProvidersIntoCatalog(
+  shouldApply: () => boolean = () => true,
+): Promise<void> {
   try {
     const configs = await listCustomProvidersWithSecureHeaders();
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh');
+      return;
+    }
     setCustomProviders(configs.map((c) => buildUserProvider(c)));
     log.info('custom providers merged into active catalog', { count: configs.length });
   } catch (err) {
-    log.warn('failed to load custom providers; keeping last valid active catalog snapshot', {
+    if (!shouldApply()) {
+      log.info('discarded stale custom provider catalog refresh failure', {
+        err: String(err),
+      });
+      return;
+    }
+    setCustomProviders([]);
+    log.warn('failed to load custom providers; cleared current owner catalog snapshot', {
       err: String(err),
     });
   }
@@ -710,9 +793,10 @@ export function getDesktopProviderService(): ProviderService {
         // 才放行,其余降级为纯读(PR #548 review)。
         if (!allowSideEffects) return hasClaudeAiOAuth();
         claimNativeProviderAuthOnRead('anthropic', hasClaudeAiOAuthUnbound, () => {
-          // anthropic 清单的唯一来源是动态发现,而发现只在启动期与显式 OAuth 登录成功
-          // 时触发。绑定是在这两个时机之后才建立的,启动期那次早被登录态 gate 掉 ——
-          // 不在认领成功时补拉一次,供应商会停在「已连接 + 零模型」直到下次重启。
+          // anthropic 的 live entitlement 证据只来自动态发现，而发现只在启动期与
+          // 显式 OAuth 登录成功时触发。绑定是在这两个时机之后才建立的，启动期那次
+          // 早被登录态 gate 掉——不在认领成功时补拉，目录虽可能有 Registry presence，
+          // 运行时仍缺少当前账号的可用性证据。
           //
           // 磁盘缓存要先补:启动期的 loadAnthropicModelsFromDiskCache 同样因当时未绑定而
           // 早退了。先把上次成功的清单摆出来,再去拉最新的 —— 否则这次 HTTP 一旦超时或
@@ -743,8 +827,9 @@ export function getDesktopProviderService(): ProviderService {
     // 内置 API-key 供应商(如 gemini 图像来源):连接态 = key 已存(providerSecretStore)。
     builtinApiKeyConnected: (providerId) =>
       providerId === 'gemini' ? Boolean(getProviderSecretStore().get('gemini')?.trim()) : false,
-    // 动态清单发现的失败归因：目前只有 anthropic 是「清单唯一来源是动态发现」的供应商，
-    // 拉不到就是零模型 —— UI 要据此讲明失败理由，而不是一直说「正在发现」。
+    // 动态发现失败归因：目前只有 anthropic 的 live entitlement 证据依赖这条通道。
+    // 即使 Registry presence 仍能展示目录，UI 也要说明当前账号验证失败，而不是一直
+    // 说「正在发现」。
     //
     // 连接态直接沿用本次快照已经算好的那个：它内部要读凭证库，macOS 上每读一次就是一个
     // 同步的 `security` 子进程，同一次 listProviders 不该为此阻塞主线程两回（PR #548 review）。

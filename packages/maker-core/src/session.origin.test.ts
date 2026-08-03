@@ -11,6 +11,7 @@ import path from 'node:path';
 import { Session } from './session.js';
 import type { AgentSessionHandle } from './agents/base-agent.js';
 import type { AgentEvent, InteractionDecision, InteractionRequest, SendOrigin } from './types/events.js';
+import type { AgentKind } from './types/common.js';
 
 function createLogger() {
   const logger = {
@@ -24,23 +25,49 @@ function createLogger() {
  * 可控事件流的 fake handle:send 后通过 emit() 往事件流逐条推 AgentEvent。
  * isTurnRunning 跟随 send/terminal 翻转,模拟真实 turn 边界。
  */
-function createControllableHandle(opts?: { sendError?: Error }) {
+function createControllableHandle(opts?: {
+  sendError?: Error;
+  sendErrorOnSend?: number;
+  agentKind?: AgentKind;
+  dispatchEvent?: AgentEvent;
+  dispatchOnSend?: number;
+  holdDispatch?: boolean;
+  holdOnSend?: number;
+}) {
   let push: ((e: AgentEvent) => void) | null = null;
   let turnRunning = false;
+  let closeCalls = 0;
+  let releaseDispatch: (() => void) | null = null;
+  let sendCount = 0;
   const buffered: AgentEvent[] = [];
   let interactionResolver: ((req: InteractionRequest) => Promise<InteractionDecision>) | null = null;
 
   const handle: AgentSessionHandle = {
     id: 'thread-1',
-    agentKind: 'codex',
+    agentKind: opts?.agentKind ?? 'codex',
     model: 'gpt-5.4',
     async send() {
-      if (opts?.sendError) throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
+      sendCount += 1;
+      if (opts?.sendError && (opts.sendErrorOnSend ?? 1) === sendCount) {
+        throw opts.sendError; // 模拟 dispatch 失败(SESSION_RUNNING race)
+      }
+      if (opts?.dispatchEvent && (opts.dispatchOnSend ?? 1) === sendCount) {
+        if (push) push(opts.dispatchEvent);
+        else buffered.push(opts.dispatchEvent);
+      }
+      if (opts?.holdDispatch && (opts.holdOnSend ?? 1) === sendCount) {
+        await new Promise<void>((resolve) => {
+          releaseDispatch = resolve;
+        });
+      }
       turnRunning = true;
     },
     async steer() {},
     async abort() {},
-    async close() {},
+    async close() {
+      closeCalls += 1;
+      turnRunning = false;
+    },
     async *events() {
       for (const e of buffered) yield e;
       buffered.length = 0;
@@ -72,18 +99,32 @@ function createControllableHandle(opts?: { sendError?: Error }) {
      * SDK 处理 /compact 后发 done 但 handle 端 turnInFlight 仍是 true)。
      */
     async emit(e: AgentEvent, opts: { keepRunning?: boolean } = {}) {
-      if ((e.type === 'done' || e.type === 'error') && !opts.keepRunning) turnRunning = false;
+      const terminalError =
+        e.type === 'error' &&
+        (e.data as { isTerminal?: unknown } | null | undefined)?.isTerminal === true;
+      if ((e.type === 'done' || terminalError) && !opts.keepRunning) turnRunning = false;
       if (push) push(e);
       else buffered.push(e);
       await new Promise((r) => setTimeout(r, 0)); // 让事件循环把它 fan-out 出去
     },
+    setTurnRunning(running: boolean) {
+      turnRunning = running;
+    },
+    releaseDispatch() {
+      releaseDispatch?.();
+    },
+    queue(event: AgentEvent) {
+      if (push) push(event);
+      else buffered.push(event);
+    },
+    closeCalls: () => closeCalls,
   };
 }
 
-function makeSession(handle: AgentSessionHandle): Session {
+function makeSession(handle: AgentSessionHandle, agentKind: AgentKind = 'codex'): Session {
   return new Session({
     id: 'session-1',
-    agentKind: 'codex',
+    agentKind,
     workDir: path.join('workspace', 'repo'),
     handle,
     capabilities: {} as never,
@@ -221,6 +262,235 @@ describe('Session per-turn origin 打标', () => {
     expect(seen.every((e) => e.turnOrigin === undefined)).toBe(true);
   });
 
+  it('带 runtime turnAttemptToken 的 send → 每个事件带同一 token,终态后清空', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((e) => seen.push({ ...e }));
+
+    await session.send('auto retry', { turnAttemptToken: 7 });
+    await emit({ type: 'text', data: { text: 'progress', isFinal: false } });
+    await emit({ type: 'done', data: {} });
+    await emit({ type: 'status', data: { isRunning: false } });
+
+    expect(seen.slice(0, 2).map((event) => event.turnAttemptToken)).toEqual([7, 7]);
+    expect(seen[2]?.turnAttemptToken).toBeUndefined();
+  });
+
+  it('Codex 在 provider 启动前报终态 error → 通过 event-loop generation 归属当前 attempt', async () => {
+    const { handle, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'dispatch failed', isTerminal: true },
+        source: 'codex',
+      },
+      holdDispatch: true,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    const send = session.send('go', {
+      origin: SCHED_ORIGIN,
+      turnAttemptToken: 9,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(seen[0]).toEqual(expect.objectContaining({
+      type: 'error',
+      turnOrigin: SCHED_ORIGIN,
+      turnAttemptToken: 9,
+    }));
+    releaseDispatch();
+    await send;
+    await session.close();
+  });
+
+  it('排队中的旧 Codex terminal error 不能冒领随后 dispatch 的 attempt token', async () => {
+    const { handle, emit, queue, setTurnRunning, releaseDispatch } = createControllableHandle({
+      dispatchEvent: {
+        type: 'error',
+        data: { message: 'second failed', isTerminal: true },
+        source: 'codex',
+      },
+      dispatchOnSend: 2,
+      holdDispatch: true,
+      holdOnSend: 2,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    queue({
+      type: 'error',
+      data: { message: 'first late failure', isTerminal: true },
+      source: 'codex',
+    });
+    const second = session.send('second', {
+      origin: SCHED_ORIGIN,
+      turnAttemptToken: 2,
+    });
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    const late = seen.find((event) =>
+      event.type === 'error' && (event.data as { message?: string }).message === 'first late failure');
+    expect(late?.turnAttemptToken).toBeUndefined();
+    expect(late?.turnOrigin).toBeUndefined();
+    releaseDispatch();
+    await second;
+    await session.close();
+  });
+
+  it('terminal error 后先排空尾部，再允许新 attempt', async () => {
+    const { handle, emit } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first', { turnAttemptToken: 1 });
+    await emit({ type: 'error', data: { message: 'first failed', isTerminal: true } });
+
+    await expect(session.send('second', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await emit({ type: 'done', data: { reason: 'first-tail' } });
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'error', data: { message: 'second failed', isTerminal: true } });
+
+    expect(seen.map((event) => event.type)).toEqual(['error', 'done', 'error']);
+    expect(seen[0]?.turnAttemptToken).toBe(1);
+    expect(seen[1]?.turnAttemptToken).toBeUndefined();
+    expect(seen[2]?.turnAttemptToken).toBe(2);
+  });
+
+  it('terminal error 后的 Codex idle status 会清 drain，不会误关健康 session', async () => {
+    const { handle, emit, closeCalls } = createControllableHandle();
+    const session = makeSession(handle);
+
+    await session.send('first');
+    await emit({ type: 'error', data: { message: 'first failed', isTerminal: true } });
+    await emit({ type: 'status', data: { isRunning: false } });
+
+    await expect(session.send('second', { turnAttemptToken: 2 })).resolves.toEqual({ accepted: true });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closeCalls()).toBe(0);
+  });
+
+  it('Claude terminal error 后的 idle status 不能越过 queued done 提前解锁', async () => {
+    const { handle, emit } = createControllableHandle({ agentKind: 'claude-code' });
+    const session = makeSession(handle, 'claude-code');
+
+    await session.send('first');
+    await emit({
+      type: 'error',
+      data: { message: 'first failed', isTerminal: true },
+      source: 'claude-code',
+    });
+    await emit({ type: 'status', data: { isRunning: false }, source: 'claude-code' });
+
+    await expect(session.send('second')).rejects.toMatchObject({ code: 'SESSION_RUNNING' });
+    await emit({ type: 'done', data: {}, source: 'claude-code' });
+    await expect(session.send('second')).resolves.toEqual({ accepted: true });
+    await session.close();
+  });
+
+  it('non-terminal error 不启动 terminal drain，也不打开 generation fence', async () => {
+    const { handle, emit, setTurnRunning, closeCalls } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'error', data: { message: 'retryable', isTerminal: false } });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+    expect(closeCalls()).toBe(0);
+
+    await emit({ type: 'text', data: { text: 'still running', isFinal: false } });
+    setTurnRunning(false);
+    expect(session.isTurnRunning()).toBe(false);
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'done', data: {} }, { keepRunning: true });
+    await emit({ type: 'text', data: { text: 'second turn', isFinal: false } });
+
+    expect(seen.find((event) => event.type === 'text' &&
+      (event.data as { text?: string }).text === 'second turn')?.turnAttemptToken).toBe(2);
+  });
+
+  it('普通事件不能让旧 turn 的迟到 done 冒领下一代 token', async () => {
+    const { handle, emit, setTurnRunning } = createControllableHandle();
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await session.send('first');
+    await emit({ type: 'text', data: { text: 'first progress', isFinal: false } });
+    setTurnRunning(false);
+    expect(session.isTurnRunning()).toBe(false);
+    await session.send('second', { turnAttemptToken: 2 });
+    await emit({ type: 'done', data: { reason: 'late first tail' } }, { keepRunning: true });
+    await emit({ type: 'text', data: { text: 'second progress', isFinal: false } });
+
+    const lateDone = seen.find((event) => event.type === 'done');
+    const secondText = seen.find(
+      (event) => event.type === 'text' &&
+        (event.data as { text?: string }).text === 'second progress',
+    );
+    expect(lateDone?.turnAttemptToken).toBeUndefined();
+    expect(secondText?.turnAttemptToken).toBe(2);
+  });
+
+  it('event loop crash emits a terminal error and closes the poisoned session', async () => {
+    let releaseCrash!: () => void;
+    const crashReady = new Promise<void>((resolve) => {
+      releaseCrash = resolve;
+    });
+    let turnRunning = false;
+    const handle = {
+      id: 'crashing-handle',
+      agentKind: 'codex',
+      model: 'gpt-5.4',
+      async send() {
+        turnRunning = true;
+      },
+      async steer() {},
+      async abort() {},
+      async close() {
+        turnRunning = false;
+      },
+      async *events() {
+        await crashReady;
+        throw new Error('event stream crashed');
+      },
+      getUsageSnapshot: () => ({ tokenUsage: 0, contextTokens: 0, contextWindow: 0, costUsd: 0 }),
+      setInteractionResolver() {},
+      isTurnRunning: () => turnRunning,
+    } as unknown as AgentSessionHandle;
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+    const closed = new Promise<void>((resolve) => {
+      session.onStatusChange((status) => {
+        if (status === 'closed') resolve();
+      });
+    });
+
+    await session.send('go', { turnAttemptToken: 1 });
+    releaseCrash();
+    await closed;
+
+    expect(seen.at(-1)).toEqual(expect.objectContaining({
+      type: 'error',
+      data: expect.objectContaining({
+        reason: 'session_event_loop_crashed',
+        isTerminal: true,
+      }),
+    }));
+    expect(session.getStatus()).toBe('closed');
+  });
+
   it('多 listener 拿到同一份 origin', async () => {
     const { handle, emit } = createControllableHandle();
     const session = makeSession(handle);
@@ -250,6 +520,44 @@ describe('Session per-turn origin 打标', () => {
     // 事件循环已起(startEventLoopIfNeeded 在 handle.send 前调),别的 turn 的事件流进来
     await emit({ type: 'text', data: { text: '别的 turn 的事件', isFinal: true } });
     expect(seen.at(-1)?.turnOrigin).toBeUndefined(); // origin 已清,不误打
+  });
+
+  it('dispatch 失败且没有旧尾事件时，drain 超时关闭歧义 session', async () => {
+    const { handle, closeCalls } = createControllableHandle({
+      sendError: new Error('boom-dispatch'),
+      sendErrorOnSend: 1,
+    });
+    const session = makeSession(handle);
+
+    await expect(session.send('failed', { turnAttemptToken: 1 })).rejects.toThrow('boom-dispatch');
+    await expect(session.send('next', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await new Promise((resolve) => setTimeout(resolve, 300));
+
+    expect(closeCalls()).toBe(1);
+    expect(session.getStatus()).toBe('closed');
+  });
+
+  it('dispatch 失败后的迟到终态不能冒领下一次 turn 的 token', async () => {
+    const { handle, emit } = createControllableHandle({
+      sendError: new Error('boom-dispatch'),
+      sendErrorOnSend: 1,
+    });
+    const session = makeSession(handle);
+    const seen: AgentEvent[] = [];
+    session.onEvent((event) => seen.push({ ...event }));
+
+    await expect(session.send('failed', { turnAttemptToken: 1 })).rejects.toThrow('boom-dispatch');
+    await expect(session.send('next', { turnAttemptToken: 2 })).rejects.toMatchObject({
+      code: 'SESSION_RUNNING',
+    });
+    await emit({ type: 'done', data: { reason: 'late failed-dispatch tail' } });
+    await session.send('next', { turnAttemptToken: 2 });
+    await emit({ type: 'text', data: { text: 'next turn progress', isFinal: false } });
+
+    expect(seen[0]?.turnAttemptToken).toBeUndefined();
+    expect(seen[1]?.turnAttemptToken).toBe(2);
   });
 
   it('失败 send 还原(而非清空)正在跑 turn 的 origin —— turn1 的 done 仍带 origin(回归 Greptile P1)', async () => {

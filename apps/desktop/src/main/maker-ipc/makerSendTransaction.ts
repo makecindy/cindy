@@ -15,8 +15,10 @@ import { isCredentialModeSwitchBusyError } from '../maker-host/codex-credential-
 import { throwIpcError } from '../utils/ipcValidate.js';
 import {
   prependHandoffToUserMessage,
+  prependNoteToWireUserMessage,
   type HandoffWireMessage,
 } from './agentHandoff.js';
+import { buildMobileClientPromptNote } from './mobileClientPromptNote.js';
 import type { MakerSessionCreateOpts } from './sessionRequest.js';
 
 type CreateOpts = MakerSessionCreateOpts;
@@ -29,6 +31,8 @@ type MakerSendOptions = {
   messageUuid?: string;
   userName?: string;
   throwOnStartFailure?: boolean;
+  /** Host-owned per-turn lifecycle correlation; maker-core stamps it on AgentEvent. */
+  turnAttemptToken?: number;
   /**
    * Direct Continue fallback only: acknowledge the interrupted marker on the
    * executor after vendor dispatch is irreversible. The executor must own the
@@ -42,6 +46,14 @@ type MakerSendOptions = {
    * 打到 sess.send 的 origin(本轮 turnOrigin)并合进落库 user 消息 agentMeta.origin。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 手机来源(coordinator 从队列项透传;**main 构造,不是 wire 输入**——直连 maker:send
+   * 的客户端 sendOpts 在 sessionSendHandler 边界被剥掉,见那里的说明)。
+   *
+   * 必须认这一条:手机会话页所有发送都走 input:enqueue / input:steer,drain 派发时
+   * 入队时的 async context 早已结束,只靠 isMobileClientInvoke() 实际读不到来源。
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId?: unknown;
     content?: unknown;
@@ -58,6 +70,8 @@ type MakerSendOptions = {
     autoResume?: unknown;
     /** 本次自动续跑的展示信息(合进 agentMeta.autoResumeInfo,供活动行 param 位与展开详情)。 */
     autoResumeInfo?: unknown;
+    /** 队列自动来源(只写入 agentMeta,不传给 maker-core 的 turn origin)。 */
+    origin?: unknown;
   };
 };
 
@@ -66,6 +80,8 @@ export interface MakerSendTransactionSession {
   agentKind: AgentKind;
   workDir: string;
   remoteHostId: string | null;
+  /** Error sessions stay registered while their underlying handle cleanup is retried. */
+  getStatus?(): 'active' | 'aborting' | 'closed' | 'error';
   isTurnRunning(): boolean;
   send(message: UserMessage | string, opts?: SessionSendOptions): Promise<SessionSendResult>;
 }
@@ -112,6 +128,21 @@ export interface MakerSendTransactionDeps {
     sessionId: string,
     message: unknown,
   ): Promise<IpcUserMessage>;
+  /**
+   * Direct device-link sends may carry OSS attachment references that need to
+   * become local paths before normalization. Keep this after the transaction's
+   * session/workdir preflight so rejected sends do not materialize local copies.
+   */
+  materializeDirectSendOssAttachments?: (
+    sessionId: string,
+    message: unknown,
+    sendOpts: unknown,
+  ) => Promise<{
+    message: unknown;
+    sendOpts: unknown;
+    cleanupAfterAcceptance?: () => void;
+    cleanupBeforeAcceptance?: () => void | Promise<void>;
+  }>;
   createDbMessage(
     sessionId: string,
     message: {
@@ -137,7 +168,7 @@ export interface MakerSendTransactionDeps {
     content: unknown,
     options: { source: string; clientId?: string },
   ): void;
-  dispatchUserPromptPreview?(sessionId: string): void;
+  dispatchUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   commitUserPromptPreview?(sessionId: string, clientId: string | undefined): void;
   rollbackUserPromptPreview?(sessionId: string, clientId: string | undefined, source: string): void;
   isSessionRunningError(err: unknown): boolean;
@@ -162,6 +193,18 @@ export interface MakerSendTransactionDeps {
    */
   peekPendingHandoff?(sessionId: string): Promise<string | null>;
   consumePendingHandoff?(sessionId: string): void;
+  /**
+   * 本次调用是否来自手机控制端(缺省 = 否)。**纯体验分流,不是安全判据。**
+   *
+   * 注入而非直接 import `isMobileControllerInvoke`,是为了可单测(同
+   * newMakerWorktreePreferenceHandler 把 isDeviceLinkInvoke 做成 deps 的写法)。
+   *
+   * ⚠️ 判据里的平台值是**对端设备在 hello 帧自报**的(经 presence 广播进本机缓存),
+   * 本仓没有服务端校验 —— 一台改过的同账号已配对设备可以声称自己是手机。它的唯一
+   * 后果是多追加一段体验说明,所以够用;但不得据它放行权限或跳过任何校验。
+   * 完整可信度说明见 device-link/invoke-context.ts。
+   */
+  isMobileClientInvoke?(): boolean;
   log: MakerSendTransactionLog;
 }
 
@@ -185,6 +228,7 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
   delivery?: 'turn' | 'steer';
   autoResume?: boolean;
   autoResumeInfo?: Record<string, unknown>;
+  origin?: Record<string, unknown>;
   shouldBroadcast?: () => boolean;
   onPersisting?: () => void;
   onPersisted?: () => void | Promise<void>;
@@ -198,6 +242,9 @@ function readPersistUserMessageOption(sendOpts: MakerSendOptions): {
     ...(persist.autoResume === true ? { autoResume: true as const } : {}),
     ...(persist.autoResumeInfo && typeof persist.autoResumeInfo === 'object'
       ? { autoResumeInfo: persist.autoResumeInfo as Record<string, unknown> }
+      : {}),
+    ...(persist.origin && typeof persist.origin === 'object' && !Array.isArray(persist.origin)
+      ? { origin: persist.origin as Record<string, unknown> }
       : {}),
     ...(persist.delivery === 'turn' || persist.delivery === 'steer' ? { delivery: persist.delivery } : {}),
     ...(typeof persist.shouldBroadcast === 'function'
@@ -422,6 +469,14 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       // 让下方走 lazy-create 按 DB 新值 spawn 新引擎。
       await deps.applyPendingAgentSwitch?.(sessionId);
       let sess = deps.getSession(sessionId);
+      // Maker keeps a failed Session registered until its real handle cleanup
+      // succeeds. It is not a reusable send target: route it through the
+      // existing lazy bootstrap path so Maker.createSession() can retry close
+      // and rebuild the handle before dispatching the message.
+      if (sess?.getStatus?.() === 'error') {
+        deps.log.info('send: error session requires recovery before dispatch', { sessionId });
+        sess = undefined;
+      }
       if (sess?.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
@@ -462,21 +517,67 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
       if (sess.isTurnRunning()) {
         throwIpcError('SESSION_RUNNING', `Session ${sessionId} is already running a turn`);
       }
-      const normalized = await deps.prepareSendUserMessage(sessionId, message);
-      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
-      // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
-      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
-      const outgoing = pendingHandoff
-        ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
-        : normalized;
-      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
-      const so = (sendOpts ?? {}) as MakerSendOptions;
+      const requestedSendOpts = (sendOpts ?? {}) as MakerSendOptions;
       if (
-        so.ackInterruptedTurnOnDispatch !== undefined &&
-        typeof so.ackInterruptedTurnOnDispatch !== 'boolean'
+        requestedSendOpts.ackInterruptedTurnOnDispatch !== undefined &&
+        typeof requestedSendOpts.ackInterruptedTurnOnDispatch !== 'boolean'
       ) {
         throwIpcError('INVALID_PARAMS', 'ackInterruptedTurnOnDispatch must be a boolean');
       }
+      let outgoingMessage = message;
+      let outgoingSendOpts = sendOpts;
+      let cleanupAfterAcceptance: (() => void) | undefined;
+      let cleanupBeforeAcceptance: (() => void | Promise<void>) | undefined;
+      let sendAccepted = false;
+      if (deps.materializeDirectSendOssAttachments) {
+        const materialized = await deps.materializeDirectSendOssAttachments(
+          sessionId,
+          outgoingMessage,
+          outgoingSendOpts,
+        );
+        outgoingMessage = materialized.message;
+        outgoingSendOpts = materialized.sendOpts;
+        cleanupAfterAcceptance = materialized.cleanupAfterAcceptance;
+        cleanupBeforeAcceptance = materialized.cleanupBeforeAcceptance;
+      }
+      const cleanupBeforeAcceptanceIfNeeded = async (): Promise<void> => {
+        if (!cleanupBeforeAcceptance) return;
+        try {
+          await cleanupBeforeAcceptance();
+        } catch (err) {
+          deps.log.warn('send: direct OSS materialization cleanup failed', {
+            sessionId,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
+      };
+      let normalized: IpcUserMessage;
+      try {
+        normalized = await deps.prepareSendUserMessage(sessionId, outgoingMessage);
+      } catch (err) {
+        await cleanupBeforeAcceptanceIfNeeded();
+        throw err;
+      }
+      // session-agent-switch:切换后的首条消息把交接前缀拼进 wire payload。
+      // 落库/显示内容(persistUserMessage.content)不含交接段——display 与 sent 分离。
+      const pendingHandoff = (await deps.peekPendingHandoff?.(sessionId)) ?? null;
+      const withHandoff = pendingHandoff
+        ? prependHandoffToUserMessage(normalized as HandoffWireMessage, pendingHandoff)
+        : normalized;
+      const so = (outgoingSendOpts ?? {}) as MakerSendOptions;
+      // 手机客户端说明:同样只进 wire payload,落库/显示内容(persistUserMessage.content)
+      // 不含它。位置在交接段**之前** —— 交接正文自带「以下是用户的新消息」结束标记,
+      // 排在它后面会让说明插到那句话之后(顺序推导同 agentHandoff.composeForkOriginHandoff:
+      // 元信息在前、交接正文在后、由交接自带的标记统一收尾)。
+      // 两个来源:直连 maker:send 走 async context(deps 注入);排队 / 插入路径走
+      // coordinator 从队列项透传的 so.fromMobileClient(drain 时 context 已结束)。
+      const mobileClientNote = deps.isMobileClientInvoke?.() === true || so.fromMobileClient === true
+        ? buildMobileClientPromptNote()
+        : null;
+      const outgoing = mobileClientNote
+        ? prependNoteToWireUserMessage(withHandoff as HandoffWireMessage, mobileClientNote)
+        : withHandoff;
+      const meta = await deps.getSessionMeta(sessionId).catch(() => null);
       const persistUserMessage = readPersistUserMessageOption(so);
       const directPreDispatchHook = persistUserMessage ? null : deps.beforeDispatchDirectUserTurn;
       let directPreDispatchHookStarted = false;
@@ -498,6 +599,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           messageUuid: so.messageUuid,
           userName: so.userName,
           throwOnStartFailure: so.throwOnStartFailure,
+          turnAttemptToken: so.turnAttemptToken,
           signal: so.signal,
           // scheduler 排队消息:origin 打到本轮 turnOrigin(IM 转播识别自动 turn),
           // 与 runner 直发路径的 session.send({ origin }) 语义对齐。
@@ -563,6 +665,9 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
                     ...(persistUserMessage.autoResumeInfo
                       ? { autoResumeInfo: persistUserMessage.autoResumeInfo }
                       : {}),
+                    ...(persistUserMessage.origin
+                      ? { origin: persistUserMessage.origin }
+                      : {}),
                     // scheduler 排队消息:与 runner 直发路径落库的 agentMeta.origin
                     // 对齐,renderer 据此渲染"由自动化任务发送"标签。
                     ...(so.origin ? { origin: so.origin } : {}),
@@ -577,10 +682,16 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
             : undefined,
           onDispatching: () => {
             if (userPromptPreviewSessionId) {
-              deps.dispatchUserPromptPreview?.(userPromptPreviewSessionId);
+              deps.dispatchUserPromptPreview?.(
+                userPromptPreviewSessionId,
+                userPromptPreviewClientId ?? undefined,
+              );
             }
           },
         });
+        sendAccepted = sendResult.accepted;
+        if (sendAccepted) cleanupAfterAcceptance?.();
+        else await cleanupBeforeAcceptanceIfNeeded();
         if (sendResult.accepted && interruptedAckAt !== null) {
           try {
             await deps.ackInterruptedTurnDispatched?.(sessionId, interruptedAckAt);
@@ -618,6 +729,7 @@ export function createMakerSendTransaction(deps: MakerSendTransactionDeps): Make
           }),
         );
       } catch (err) {
+        if (!sendAccepted) await cleanupBeforeAcceptanceIfNeeded();
         if (userPromptPreviewSessionId && userPromptPreviewClientId) {
           deps.rollbackUserPromptPreview?.(
             userPromptPreviewSessionId,

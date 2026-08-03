@@ -20,16 +20,13 @@ import { loadUserBrowserRecipes, type UserRecipesResult } from '../browser-recip
 import { writeUserRecipe, type WriteUserRecipeResult } from '../browser-recipes/writer.js';
 import { stopRuntimeForQuitIfUsed, trackBrowserRuntimeUsage } from './browser-dispose.js';
 import {
-  BackendRouter,
+  BrowserBackendController,
+  BrowserBackendHealthService,
   ExternalChromeBackend,
   RsbWebviewBackend,
   type BackendKind,
-  type BrowserBackend,
 } from './browser-backend/index.js';
-import {
-  getRsbBrowserBridge,
-  dispatchTabOp as _dispatchTabOp,
-} from '../rsb-browser-bridge/index.js';
+import { getRsbBrowserBridge } from '../rsb-browser-bridge/index.js';
 import {
   readBrowserBackendSettings,
   writeBrowserBackendKind,
@@ -40,12 +37,10 @@ import {
   getActiveRsbSessionId,
   setActiveRsbSessionId,
 } from '../rsb-browser-bridge/active-session.js';
-import {
-  requireEnum,
-  requireObject,
-  optionalNullableString,
-} from '../utils/ipcValidate.js';
+import { requireObject, optionalNullableString } from '../utils/ipcValidate.js';
 import { buildManagedConfig, MANAGED_PROFILE } from './browser-managed-config.js';
+import { assertTrustedAppRendererEvent } from '../security/trustedAppRenderer.js';
+import { createBrowserBackendIpcHandlers } from './browser-backend/settings-ipc.js';
 
 export { extractBrowserAvailability, type BrowserAvailability } from './browser-availability.js';
 
@@ -82,12 +77,12 @@ healLegacyManagedProfileDir();
 //
 // `vendoredRuntime` is the raw upstream object behind a thin usage-tracking
 // wrapper (see `trackBrowserRuntimeUsage`): every consumer in this module —
-// the `ExternalChromeBackend` (behind the `BackendRouter`, which is what
+// the `ExternalChromeBackend` (behind the lifecycle controller, which is what
 // @cindy/mcps via `getBrowserMcpDeps` and host helpers below receive), the
 // availability probe and the login helper — calls through the wrapper, so
 // `disposeBrowserRuntime` can tell whether the runtime saw ANY traffic this
 // session. We never hand the raw object out; swapping the active backend in
-// Phase 5 is a single `router.setBackend()` call away.
+// Backend switching and recovery stay behind the process-wide controller.
 const vendoredRuntime = trackBrowserRuntimeUsage(
   createBrowserControlRuntime({
     config: buildManagedConfig(),
@@ -114,35 +109,41 @@ export function setBrowserSessionUploadRootResolver(
 }
 
 /**
- * RSB-webview backend instance (Phase 3+). Lazily constructed because the
+ * Create an RSB-webview backend instance (Phase 3+). The instance is terminal
+ * after `dispose()`, so every activation/recovery must call this factory rather
+ * than reusing a process-wide singleton.
+ *
+ * Lazily constructed because the
  * TabRegistry singleton must be available — which it is right after this
  * module evaluates, since `getRsbBrowserBridge()` is self-instantiating.
  */
-const rsbBackend = new RsbWebviewBackend({
-  registry: getRsbBrowserBridge(),
-  getActiveSessionId: () => getActiveRsbSessionId(),
-  artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
-  resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
-  bridge: {
-    // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
-    // window is available the dispatch lands cleanly, before that the request
-    // rejects with `host renderer not available`.
-    getHostWebContents: () => {
-      // bootstrap-electron owns mainWindowRef; we read it through the public
-      // helper to avoid a circular import.
-      const win = readMainWindowForBackend();
-      return win;
+function createRsbBackend(): RsbWebviewBackend {
+  return new RsbWebviewBackend({
+    registry: getRsbBrowserBridge(),
+    getActiveSessionId: () => getActiveRsbSessionId(),
+    artifactRoot: () => nodePath.join(app.getPath('temp'), 'cindy-browser-artifacts'),
+    resolveUploadRoots: (sessionId) => resolveSessionUploadRoots(sessionId),
+    bridge: {
+      // Lazy main-window lookup. Phase 2 uses the same pattern; once the host
+      // window is available the dispatch lands cleanly, before that the request
+      // rejects with `host renderer not available`.
+      getHostWebContents: () => {
+        // bootstrap-electron owns mainWindowRef; we read it through the public
+        // helper to avoid a circular import.
+        const win = readMainWindowForBackend();
+        return win;
+      },
+      // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
+      // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
+      ensureHost: () => ensureHostForBackend(),
+      // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
+      // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
+      isDetached: () => isDetachedForBackend(),
+      logger,
     },
-    // detached 偏好开 + 侧边栏子窗口关着时,tab-op 前先把子窗口拉起来并等
-    // renderer ready 握手(否则没有任何 renderer 挂着 RSB store 可执行 op)。
-    ensureHost: () => ensureHostForBackend(),
-    // detached 偏好信号:直连动作解析 miss 时,只有 detached 模式才值得等
-    // 子窗口 renderer 重注册 tab;内嵌模式主窗常驻,miss 即真失效,快速失败。
-    isDetached: () => isDetachedForBackend(),
     logger,
-  },
-  logger,
-});
+  });
+}
 
 /**
  * Initial backend selection — driven by the persisted settings file. On first
@@ -151,26 +152,27 @@ const rsbBackend = new RsbWebviewBackend({
  * who explicitly picked a backend keep their choice — see the DEFAULT HISTORY
  * note in that store for the override semantics behind the two flips.
  */
-function backendForKind(kind: BackendKind): BrowserBackend {
-  switch (kind) {
-    case 'external':
-      return externalBackend;
-    case 'rsb-webview':
-      return rsbBackend;
-  }
-}
-
 const initialKind = readBrowserBackendSettings().kind;
 
 /**
- * Process-wide router. Phase 5 wires it to the persisted backend kind. All
+ * Process-wide lifecycle controller. Phase 5 wires it to the persisted backend kind. All
  * downstream consumers (MCP deps, login helper, availability probe, quit
- * disposer) go through the router so the swap is a single `setBackend` call.
+ * disposer) go through the controller so switching and same-kind recovery are
+ * serialized.
  *
- * The router implements `BrowserControlRuntime` (its `.call` matches the
+ * The controller implements `BrowserControlRuntime` (its `.call` matches the
  * contract verbatim) so @cindy/mcps consumes it as the runtime with no adapter.
  */
-const router = new BackendRouter(backendForKind(initialKind), logger);
+const backendController = new BrowserBackendController({
+  initialKind,
+  externalBackend,
+  createRsbBackend,
+  logger,
+});
+const browserBackendHealthService = new BrowserBackendHealthService(
+  backendController,
+  logger,
+);
 
 /**
  * Main-window webContents accessor — populated by bootstrap-electron via
@@ -228,18 +230,15 @@ export function setIsDetachedForBackend(impl: () => boolean): void {
 /**
  * Switch the active backend. Called from the Phase 5 toggle IPC handler.
  * Persists the new kind to disk and disposes the outgoing backend (per
- * `BackendRouter.setBackend` contract).
+ * lifecycle controller contract).
  */
 export async function setActiveBrowserBackendKind(kind: BackendKind): Promise<void> {
-  if (router.getCurrentBackendKind() === kind) {
-    // Same-kind path: skip both the swap AND the settings write. The renderer
-    // UI already guards against same-kind clicks; if this path runs it's a
-    // programmatic caller and there's no semantic to upgrade. Writing the
-    // settings file on every click would churn fs.writeFile without changing
-    // anything observable.
-    return;
-  }
-  await router.setBackend(backendForKind(kind));
+  // The controller performs the same-kind check inside its serialized queue.
+  // Doing it here would race two Settings actions: a request for the current
+  // kind could return early while an earlier queued request is about to switch
+  // away from it.
+  const changed = await backendController.setKind(kind);
+  if (!changed) return;
   writeBrowserBackendKind(kind);
 }
 
@@ -264,12 +263,12 @@ export function getBrowserMcpDeps(): {
     getUserRecipes: () => loadUserBrowserRecipes(),
     // Self-grow: persist an agent/user-authored recipe into L2 (validated by the MCP).
     saveUserRecipe: (input) => writeUserRecipe(input),
-    // Router implements `BrowserControlRuntime` — the MCP tool layer never sees
+    // Controller implements `BrowserControlRuntime` — the MCP tool layer never sees
     // the backend split. Swapping the active backend (Phase 5) is invisible from
     // @cindy/mcps' perspective.
-    getRuntime: () => router,
-    supportsResourceDownloads: () => router.kind === 'rsb-webview',
-    supportsSemanticQueries: () => router.kind === 'rsb-webview',
+    getRuntime: () => backendController,
+    supportsResourceDownloads: () => backendController.kind === 'rsb-webview',
+    supportsSemanticQueries: () => backendController.kind === 'rsb-webview',
     logger,
   };
 }
@@ -278,10 +277,10 @@ export function getBrowserMcpDeps(): {
  * Probe whether a local browser is available (drives the Settings UI's
  * "未检测到本机浏览器 / 下载 Chrome" cell).
  *
- * **Always** goes to the vendored runtime, NOT the router — this probe asks
+ * **Always** goes to the vendored runtime, NOT the active controller — this probe asks
  * "did the user install Chrome on their machine?", which is purely a property
  * of the EXTERNAL backend. The RSB-webview backend uses Electron's bundled
- * Chromium and is always available; routing through router would make the
+ * Chromium and is always available; routing through the active controller would make the
  * Settings card lie ("未检测到 Chrome") whenever the user has the internal
  * backend selected, even on a machine with Chrome installed.
  */
@@ -295,7 +294,22 @@ export async function getBrowserAvailability(): Promise<BrowserAvailability> {
  * (persisted override) merged over the system default, not a fixed value.
  */
 export function getActiveBrowserBackendKind(): BackendKind {
-  return router.getCurrentBackendKind();
+  return backendController.getCurrentBackendKind();
+}
+
+/**
+ * Rebuild the active embedded control backend and verify the replacement before
+ * reporting success. The controller swaps first, so every existing MCP runtime
+ * reference immediately delegates to the fresh instance; no Agent-side cache
+ * needs to be invalidated separately.
+ */
+export function recoverActiveBrowserBackend() {
+  return browserBackendHealthService.recover();
+}
+
+/** Probe once, then automatically replace a failed embedded backend. */
+export function getBrowserBackendHealth() {
+  return browserBackendHealthService.getHealth();
 }
 
 /**
@@ -303,6 +317,8 @@ export function getActiveBrowserBackendKind(): BackendKind {
  *   - `browser-backend:get-state` → current kind + override state
  *   - `browser-backend:set-kind`  → swap active backend + persist
  *   - `browser-backend:reset`     → clear user override, follow current default
+ *   - `browser-backend:get-health` → probe + one automatic embedded recovery
+ *   - `browser-backend:recover`    → force a fresh embedded backend + verify
  *   - `rsb-browser-bridge:set-active-session` → renderer pushes the focused
  *      sessionId; RsbWebviewBackend reads via getActiveRsbSessionId() at
  *      action time (Phase 3 dependency).
@@ -314,29 +330,33 @@ export function registerBrowserBackendIpc(): void {
   if (backendIpcRegistered) return;
   backendIpcRegistered = true;
 
-  ipcMain.handle('browser-backend:get-state', () => {
-    const state = readBrowserBackendSettingsState();
-    return {
-      active: router.getCurrentBackendKind(),
-      systemDefault: state.defaults.kind,
-      isOverride: state.isCustomized,
-    };
+  const handlers = createBrowserBackendIpcHandlers({
+    assertTrusted: assertTrustedAppRendererEvent,
+    getState: () => {
+      const state = readBrowserBackendSettingsState();
+      return {
+        active: backendController.getCurrentBackendKind(),
+        systemDefault: state.defaults.kind,
+        isOverride: state.isCustomized,
+      };
+    },
+    setKind: async (kind) => {
+      await setActiveBrowserBackendKind(kind);
+      return backendController.getCurrentBackendKind();
+    },
+    reset: async () => {
+      const next = resetBrowserBackendSettings();
+      await setActiveBrowserBackendKind(next.kind);
+      return backendController.getCurrentBackendKind();
+    },
+    getHealth: getBrowserBackendHealth,
+    recover: recoverActiveBrowserBackend,
   });
-
-  ipcMain.handle('browser-backend:set-kind', async (_e, payload: unknown) => {
-    const obj = requireObject(payload, 'set-kind payload');
-    // requireEnum throws throwIpcError('INVALID_PARAMS') for unknown kinds —
-    // rule 13: handlers must use throwIpcError, never bare `throw new Error`.
-    const kind = requireEnum(obj.kind, ['external', 'rsb-webview'] as const, 'kind');
-    await setActiveBrowserBackendKind(kind);
-    return { ok: true, active: router.getCurrentBackendKind() };
-  });
-
-  ipcMain.handle('browser-backend:reset', async () => {
-    const next = resetBrowserBackendSettings();
-    await setActiveBrowserBackendKind(next.kind);
-    return { ok: true, active: router.getCurrentBackendKind() };
-  });
+  ipcMain.handle('browser-backend:get-state', handlers.getState);
+  ipcMain.handle('browser-backend:set-kind', handlers.setKind);
+  ipcMain.handle('browser-backend:reset', handlers.reset);
+  ipcMain.handle('browser-backend:get-health', handlers.getHealth);
+  ipcMain.handle('browser-backend:recover', handlers.recover);
 
   ipcMain.handle('rsb-browser-bridge:set-active-session', (_e, payload: unknown) => {
     const obj = requireObject(payload, 'set-active-session payload');
@@ -365,11 +385,11 @@ export async function openBrowserForLogin(): Promise<void> {
   // doing so raced with Chrome's own initial tab on a cold start and produced a
   // duplicate tab on the first open.
   //
-  // **Always** goes to the vendored runtime, NOT the router — "打开 Agent 专用浏
+  // **Always** goes to the vendored runtime, NOT the active controller — "打开 Agent 专用浏
   // 览器" is the external Chrome workflow: user clicks it to log into sites in
   // the dedicated `Cindy` profile. If the user picked the rsb-webview backend
   // they don't need this button at all (logins go through the sidebar webview);
-  // routing through router would either no-op (rsb backend's `start` is a
+  // routing through the active controller would either no-op (rsb backend's `start` is a
   // no-op) or open the wrong thing.
   const started = await vendoredRuntime.call({ action: 'start' });
   if (!started.ok) {
@@ -408,10 +428,10 @@ export async function openBrowserForLogin(): Promise<void> {
  * not run on the auto-update relaunch path; stale-lock recovery covers that case.
  */
 export function disposeBrowserRuntime(): Promise<void> {
-  // Always stop the vendored Chrome directly, NOT through the router. The
-  // router may currently point at RsbWebviewBackend (whose `dispose` is a
-  // no-op by design — webview lifecycle is owned by the RSB UI). If we only
-  // dispose-via-router, a user who ever switched to external Chrome and back
+  // Always stop the vendored Chrome directly, NOT through the active controller.
+  // The controller may currently point at RsbWebviewBackend, whose dispose only
+  // releases control listeners and does not own the external Chrome process. If
+  // we only dispose through the active backend, a user who switched to external Chrome and back
   // leaves a headed Chrome process surviving app quit (the vendored runtime
   // doesn't know about the swap and Phase 5 swap-time dispose already ran;
   // a stale-lock recovery on next launch is the symptom).

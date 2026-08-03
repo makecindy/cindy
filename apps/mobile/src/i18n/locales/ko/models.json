@@ -8,7 +8,6 @@
     "emptyDefault": "사용 가능한 모델이 없습니다",
     "loadingDefault": "모델을 불러오는 중…",
     "subscriptionBadge": "구독",
-    "discountBadge": "특별 할인",
     "backToModels": "모델 목록으로 돌아가기",
     "agentSwitchHint": "모델을 선택하면 다음 메시지부터 {{agent}}(으)로 전환됩니다",
     "crossAgentEmptyHint": "먼저 제어 대상 기기에서 {{agent}} 모델 소스를 연결하세요",

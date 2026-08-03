@@ -22,7 +22,7 @@ import {
   shouldCheckBundleUpdate,
 } from './bundleUpdate';
 import type { BundleUpdateCheckOutcome } from './manualUpdateCheck';
-import { markForcedPrompted } from './resumeUpdateCheck';
+import { enterForcedUpdate } from './forcedUpdateStore';
 import { isCanaryChannel } from './canaryChannelStore';
 
 type CheckState = 'idle' | 'checking' | 'up-to-date' | 'update-available' | 'error';
@@ -52,26 +52,36 @@ async function openInstall(url: string): Promise<void> {
   }
 }
 
-/** 弹出整包更新引导(强更不可取消)。启动/设置页检查与 resume 静默检查的强更路径共用。 */
+/** 阻断屏的「去更新」出口:解析安装地址并交给系统。无可用地址则 no-op。 */
+export function openBundleInstall(target: { itmsUrl?: string; installUrl?: string }): void {
+  const url = preferredInstallUrl(target);
+  if (url) void openInstall(url);
+}
+
+/**
+ * 整包更新的统一出口。启动/设置页检查与 resume 静默检查共用。
+ * - 强更:不弹窗,进入模块级阻断态,由 root 层渲染只有「去更新」的闸门屏。
+ *   弹窗做不到阻断——RN Alert 的按钮点一下就关(cancelable: false 只挡点外部/返回键),
+ *   弹窗消失后底下的 App 照旧可用,那是"强提醒"不是"强制"。
+ * - 非强更:可跳过的普通提示,行为不变。
+ * 两种情况都要求先解析出可跳转的安装地址:拿不到地址就什么都不做,
+ * 尤其不能把用户关进一个没有出口的阻断屏(见 forcedUpdateStore 的三层保证)。
+ */
 export function promptBundleUpdate(evaluation: ReturnType<typeof evaluateBundleUpdate>): void {
   if (!evaluation.target) return;
   const url = preferredInstallUrl(evaluation.target);
   if (!url) return;
+
+  if (evaluation.forced) {
+    enterForcedUpdate(evaluation.target);
+    return;
+  }
+
   const notes = evaluation.target.releaseNotes?.trim();
   const message = [
     i18n.t('update.bundleAvailableBody'),
     notes ? i18n.t('update.releaseNotes', { notes }) : '',
   ].join('');
-
-  if (evaluation.forced) {
-    // 确认有可跳转 URL、即将展示强更弹窗时才标记去重(模块级 Set,跨启动/resume 路径共享)。
-    // 必须在 url 校验之后标记:若无 URL 提前 return 则不标记,下次 resume 仍会重试,
-    // 避免"已标记但未展示"导致强更对本进程永久失声。
-    markForcedPrompted(evaluation.target.runtimeVersion);
-    // 强制更新:不可取消,只留"去更新"。
-    Alert.alert(i18n.t('update.forcedTitle'), message, [{ text: i18n.t('update.goUpdate'), onPress: () => void openInstall(url) }], { cancelable: false });
-    return;
-  }
   Alert.alert(i18n.t('update.newVersionTitle'), message, [
     { text: i18n.t('update.later'), style: 'cancel' },
     { text: i18n.t('update.goUpdate'), onPress: () => void openInstall(url) },

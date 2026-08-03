@@ -37,9 +37,6 @@ export const DEFAULT_CUSTOM_CONTEXT_WINDOW = 200_000;
 const CUSTOM_EFFORTS: Partial<Record<AgentKind, Effort[]>> = {
   'claude-code': ['low', 'medium', 'high', 'xhigh', 'max'],
   codex: ['low', 'medium', 'high', 'xhigh'],
-  // pi 经 thinking level 表达推理强度(off/minimal/low/medium/high/xhigh/max);选择器给
-  // 与 claude 同档,实际是否生效由自定义模型后端决定(BYOM 本地模型可能不支持,无害)。
-  pi: ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'],
 };
 /** 自定义模型默认选中的 effort（与内置旗舰一致）。 */
 const DEFAULT_CUSTOM_EFFORT: Effort = 'high';
@@ -53,7 +50,17 @@ function toCatalogModel(
   providerId: string,
   agent: AgentKind,
 ): CatalogModel {
-  const efforts = CUSTOM_EFFORTS[agent] ?? [];
+  // Pi BYOM 不从 runtime / 协议猜模型能力：只有用户逐模型明确确认后才向 catalog 暴露
+  // effort。这样 catalog/UI 与稍后写入 models.json 的能力保持同一份契约，旧配置安全关闭。
+  const efforts: Effort[] =
+    agent === 'pi'
+      ? m.reasoning === true
+        ? [...(m.reasoningEfforts ?? [])]
+        : []
+      : (CUSTOM_EFFORTS[agent] ?? []);
+  const defaultEffort = efforts.includes(DEFAULT_CUSTOM_EFFORT)
+    ? DEFAULT_CUSTOM_EFFORT
+    : (efforts[0] ?? null);
   return {
     id: m.id,
     name: m.name,
@@ -65,11 +72,13 @@ function toCatalogModel(
     // 哪怕用户显式填的恰好等于当前默认(未来默认升级后显式值要原样保留)。
     ...(m.contextWindow !== undefined ? { contextWindowExplicit: true } : {}),
     efforts,
-    defaultEffort: efforts.length > 0 ? DEFAULT_CUSTOM_EFFORT : null,
+    defaultEffort,
     // 选择器右栏按 group 聚合：同一自定义来源的模型聚成一组（渲染层用 provider 名兜底标签）。
     group: `custom:${providerId}`,
     // 手填模型保持历史默认可见；刷新发现的模型可显式声明默认隐藏。
     defaultEnabled: m.defaultEnabled ?? true,
+    // 图片能力必须由用户/预设明确确认；缺省不猜，防止 Pi 静默把截图降级成占位文本。
+    ...(m.supportsImageInput === true ? { supportsImageInput: true } : {}),
   };
 }
 

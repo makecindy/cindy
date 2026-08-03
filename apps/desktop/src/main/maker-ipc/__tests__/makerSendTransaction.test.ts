@@ -150,7 +150,7 @@ describe('maker SEND transaction', () => {
       { shouldBroadcast },
     );
     expect(onPersisted).toHaveBeenCalled();
-    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1');
+    expect(deps.dispatchUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.commitUserPromptPreview).toHaveBeenCalledWith('session-1', 'client-1');
     expect(deps.rollbackUserPromptPreview).not.toHaveBeenCalled();
   });
@@ -233,6 +233,39 @@ describe('maker SEND transaction', () => {
     );
   });
 
+  it('persists Orca queue origin without sending the unsupported origin to maker-core', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const origin = { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' } as const;
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'orca prompt' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-1',
+          content: 'orca prompt',
+          delivery: 'turn',
+          origin,
+        },
+      },
+    );
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'orca prompt' },
+      expect.not.objectContaining({ origin }),
+    );
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({ origin }),
+      }),
+      undefined,
+    );
+  });
+
   it('threads the autoResume flag into persisted agentMeta', async () => {
     // 中断自动续跑补发的「继续」经 coordinator drain 透传 autoResume(见
     // AgentInputQueuedMessage.autoResume)。它必须落进 agentMeta:renderer 靠它隐藏气泡,
@@ -246,12 +279,14 @@ describe('maker SEND transaction', () => {
       undefined,
       {
         messageUuid: 'message-uuid',
+        turnAttemptToken: 7,
         persistUserMessage: {
           clientId: 'client-1',
           content: 'continue',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
           autoResume: true,
+          autoResumeInfo: { attempt: 1, maxAttempts: 5, sessionTotal: 7 },
         },
       },
     );
@@ -263,6 +298,9 @@ describe('maker SEND transaction', () => {
       }),
       undefined,
     );
+    expect(
+      (deps.getSession('session-1')?.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[1],
+    ).toEqual(expect.objectContaining({ turnAttemptToken: 7 }));
   });
 
   it('omits autoResume for ordinary user sends', async () => {
@@ -308,6 +346,148 @@ describe('maker SEND transaction', () => {
 
     expect(events).toEqual(['baseline', 'send']);
     expect(beforeDispatchDirectUserTurn).toHaveBeenCalledWith('session-1');
+  });
+
+  it('materializes direct OSS attachments after session/workdir preflight', async () => {
+    const events: string[] = [];
+    const materializeDirectSendOssAttachments = vi.fn(async (
+      _sessionId: string,
+      message: unknown,
+      sendOpts: unknown,
+    ) => {
+      events.push('materialize');
+      return {
+        message: { ...(message as object), materialized: true },
+        sendOpts: { ...(sendOpts as object), materialized: true },
+      };
+    });
+    const session = createSession({
+      send: vi.fn(async (message) => {
+        events.push('send');
+        expect(message).toMatchObject({ materialized: true });
+        return { accepted: true } satisfies SessionSendResult;
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    deps.prepareSendUserMessage = vi.fn(async (_sessionId, message) => {
+      events.push('normalize');
+      return message as UserMessage;
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }, undefined, { marker: true }),
+    ).resolves.toMatchObject({ accepted: true });
+
+    expect(events).toEqual(['materialize', 'normalize', 'send']);
+    expect(materializeDirectSendOssAttachments).toHaveBeenCalledWith(
+      'session-1',
+      { type: 'user', content: 'hello' },
+      { marker: true },
+    );
+  });
+
+  it('cleans direct OSS materializations when normalization rejects before acceptance', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const { deps } = createDeps({ materializeDirectSendOssAttachments });
+    deps.prepareSendUserMessage = vi.fn(async () => {
+      throw new Error('normalize failed');
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).rejects.toThrow('normalize failed');
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans direct OSS materializations when vendor send is rejected before dispatch', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const session = createSession({
+      send: vi.fn(async () => ({
+        accepted: false,
+        reason: 'cancelled-before-dispatch',
+      } satisfies SessionSendResult)),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({
+      accepted: false,
+    });
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('cleans direct OSS materializations when vendor send throws before dispatch', async () => {
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupBeforeAcceptance,
+    }));
+    const session = createSession({
+      send: vi.fn(async () => {
+        throw new Error('vendor send failed');
+      }),
+    });
+    const { deps } = createDeps({
+      getSession: vi.fn(() => session),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).rejects.toThrow(
+      'vendor send failed',
+    );
+    expect(cleanupBeforeAcceptance).toHaveBeenCalledTimes(1);
+  });
+
+  it('keeps local OSS materializations after accepted vendor dispatch', async () => {
+    const cleanupAfterAcceptance = vi.fn();
+    const cleanupBeforeAcceptance = vi.fn(async () => {});
+    const materializeDirectSendOssAttachments = vi.fn(async () => ({
+      message: { type: 'user', content: 'materialized' },
+      sendOpts: undefined,
+      cleanupAfterAcceptance,
+      cleanupBeforeAcceptance,
+    }));
+    const { deps } = createDeps({ materializeDirectSendOssAttachments });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello')).resolves.toMatchObject({
+      accepted: true,
+    });
+    expect(cleanupAfterAcceptance).toHaveBeenCalledTimes(1);
+    expect(cleanupBeforeAcceptance).not.toHaveBeenCalled();
+  });
+
+  it('does not materialize direct OSS attachments when workdir preflight rejects', async () => {
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps } = createDeps({
+      checkWorkDirExists: vi.fn(async () => false),
+      materializeDirectSendOssAttachments,
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(
+      transaction.sendToAgentAccepted('session-1', { type: 'user', content: 'hello' }),
+    ).resolves.toMatchObject({ accepted: false });
+
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
   });
 
   it('consumes the direct-send baseline when vendor dispatch is not accepted', async () => {
@@ -432,7 +612,8 @@ describe('maker SEND transaction', () => {
   });
 
   it('rejects a non-boolean interrupted-turn dispatch ack option before vendor dispatch', async () => {
-    const { deps, session } = createDeps();
+    const materializeDirectSendOssAttachments = vi.fn();
+    const { deps, session } = createDeps({ materializeDirectSendOssAttachments });
     const transaction = createMakerSendTransaction(deps);
 
     await expect(
@@ -442,6 +623,7 @@ describe('maker SEND transaction', () => {
     ).rejects.toMatchObject({ code: 'INVALID_PARAMS' });
 
     expect(session.send).not.toHaveBeenCalled();
+    expect(materializeDirectSendOssAttachments).not.toHaveBeenCalled();
   });
 
   it('rolls back the prompt preview if accepted persistence fails before dispatch', async () => {
@@ -502,6 +684,37 @@ describe('maker SEND transaction', () => {
 
     expect(deps.checkWorkDirExists).toHaveBeenCalledWith('session-1', 'C:\\repo', 'codex', null);
     expect(session.send).not.toHaveBeenCalled();
+  });
+
+  it('rebuilds an error session through lazy bootstrap before dispatch', async () => {
+    const failedSession = createSession({
+      getStatus: vi.fn(() => 'error' as const),
+    });
+    const recoveredSession = createSession({ id: 'session-1', workDir: 'C:\\repo' });
+    const createOpts: MakerSessionCreateOpts = {
+      id: 'session-1',
+      agentKind: 'codex',
+      workingDir: 'C:\\repo',
+      model: 'gpt-5.4',
+    };
+    const { deps } = createDeps({
+      getSession: vi.fn(() => failedSession),
+      bootstrapSession: vi.fn(async () => ({
+        session: recoveredSession,
+        didInjectOrcaInstructions: false,
+        didInjectProjectContext: false,
+      })),
+    });
+    const transaction = createMakerSendTransaction(deps);
+
+    await expect(transaction.sendToAgentAccepted('session-1', 'hello', createOpts)).resolves.toMatchObject({
+      accepted: true,
+      outcome: { kind: 'session-dispatch', dispatched: true },
+    });
+
+    expect(failedSession.send).not.toHaveBeenCalled();
+    expect(deps.bootstrapSession).toHaveBeenCalledWith(createOpts);
+    expect(recoveredSession.send).toHaveBeenCalled();
   });
 
   it('lazy-create adopts the DB working_dir when the caller-provided one is stale', async () => {

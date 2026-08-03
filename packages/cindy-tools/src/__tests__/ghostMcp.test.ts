@@ -1066,6 +1066,47 @@ describe("cindy_ghosts · ghost_forge(锻造)", () => {
       errorCode: "MANIFEST_INVALID",
     });
   });
+
+  it("forge_pack 仅在传入时把 icon_source 映射给 host", async () => {
+    const requests: Array<{ dir: string; iconSource?: string }> = [];
+    const deps = fakeDeps({
+      forgePack: async (request) => {
+        requests.push(request);
+        return {
+          ok: true,
+          cindyPath: "/src/my-ghost/my-ghost-1.0.0.cindy",
+          id: "my-ghost",
+          name: "My Ghost",
+          version: "1.0.0",
+          note: "packed",
+        };
+      },
+    });
+
+    await handleForgePack(deps, {
+      dir: "/src/my-ghost",
+      icon_source: `cindy-media://blobs/${"a".repeat(64)}.png`,
+    });
+    await handleForgePack(deps, { dir: "/src/default" });
+
+    expect(requests).toEqual([
+      {
+        dir: "/src/my-ghost",
+        iconSource: `cindy-media://blobs/${"a".repeat(64)}.png`,
+      },
+      { dir: "/src/default" },
+    ]);
+  });
+
+  it("forge_pack 描述明确图片工具结果字段", () => {
+    const server = createCindyGhostsMcpServer(fakeDeps()) as unknown as {
+      _registeredTools: Record<string, { description?: string } | undefined>;
+    };
+    const description = server._registeredTools.ghost_forge_pack?.description ?? "";
+    expect(description).toContain("xdt_image_url");
+    expect(description).toContain("xdt_image_urls");
+    expect(description).toContain("icon_source");
+  });
 });
 
 describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
@@ -1130,6 +1171,11 @@ describe("formatGhostRoster(花名册快照:语义召回数据源)", () => {
     expect(callDesc).not.toContain("id: art");
     // ghost_call 仍保留自身基线描述(去重不等于把描述删空)。
     expect(callDesc).toContain("调用某个插件(Ghost)提供的工具。");
+    // 权限契约必须进入模型可见描述:本地 Full Access 自动交接,远程/降档
+    // 仍 fail closed，且自动交接不伪装成人工永久授权。
+    expect(callDesc).toContain("Full Access(bypassPermissions)");
+    expect(callDesc).toContain("远程会话仍向用户弹确认卡");
+    expect(callDesc).toContain("不写人工永久授权");
   });
 });
 

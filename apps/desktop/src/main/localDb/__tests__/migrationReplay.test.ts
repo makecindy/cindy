@@ -293,6 +293,9 @@ describeMigrationReplay('migration replay', () => {
           'cost_attribution',
         ]),
       );
+      // fixture 故意不建 schedules(最小库 + 各迁移自带守卫的设计):0084 的
+      // 裸 ALTER 靠 runner 的冻结缺陷守卫跳过,迁移链必须能走完而不是中途炸掉。
+      expect(tableExists(db, 'schedules')).toBe(false);
       expect(tableExists(db, 'project_aliases')).toBe(true);
       expect(tableExists(db, 'device_link_ownership')).toBe(true);
       expect(

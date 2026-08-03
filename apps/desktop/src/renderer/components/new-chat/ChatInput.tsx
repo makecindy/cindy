@@ -81,6 +81,7 @@ import {
   type DroppedFileItems,
 } from '@/lib/fileDrop';
 import { shouldOpenTextLightbox } from '@/lib/filePreview';
+import { isDangerousAttachmentName } from '../../../shared/attachmentSafety';
 import {
   getDraft as getComposerDraft,
   saveDraft as saveComposerDraft,
@@ -91,14 +92,19 @@ import {
 import { subscribeSessionLinkInsert } from '@/lib/composerActionsBus';
 import {
   ModelSelector,
+  resolveRemoteModelListStatus,
   resolveModelSelectorAgentIdentity,
   type ModelMemoryAccessors,
 } from './ModelSelector';
 import {
-  createEffortChangeCoordinator,
   enqueueEffortChange,
+  getEffortChangeCoordinator,
   isSessionScopeCurrent,
 } from './effortChangeQueue';
+import {
+  captureComposerSendSnapshot,
+  isComposerSendSnapshotCurrent,
+} from './composerSendSnapshot';
 import { useRemoteSessionConnection } from '@/features/cc-agent/hooks/useRemoteSessionConnection';
 
 import {
@@ -123,13 +129,12 @@ import {
 } from './sourceSwitch';
 import { useConfirmDialog } from '@/components/ui/confirm-dialog-provider';
 import { PermissionSelector } from './PermissionSelector';
-import { ExtraDirsButton } from './ExtraDirsButton';
+import { ExtraDirsButton, type CollaborationMenuConfig } from './ExtraDirsButton';
 import { focusComposerEndNextFrame, placeGhostAtComposerStart } from './ghostComposerPlacement';
 import { NewGoalDialog } from './NewGoalDialog';
 import { PlanModeIndicator } from './PlanModeIndicator';
 import { PendingQueuePanel } from './PendingQueuePanel';
 import { SendButton } from './SendButton';
-import { CollaborationModeToggle, type CollabWorkerKind } from './CollaborationModeToggle';
 import { FolderPickerPopover, addRecentFolder } from './FolderPickerPopover';
 import { SlashCommandPalette } from './SlashCommandPalette';
 import {
@@ -193,6 +198,13 @@ import type { Effort, PermissionMode } from '@/lib/userPreferences.types';
 import { getAppShortcutCombos } from '@/lib/appShortcutStore';
 import { getNextPermissionMode } from '@/lib/permissionModeCycle';
 import { matchesKeyboardEvent } from '../../../shared/appShortcuts';
+import {
+  getComposerSendShortcutPreference,
+  getComposerSendShortcutLabel,
+  hasComposerModifier,
+  resolveComposerEnterIntent,
+  useComposerSendShortcutPreference,
+} from '@/hooks/useComposerSendShortcutPreference';
 import { createLogger } from '@/lib/logger';
 import { createComposerDraftSaveScheduler } from '@/lib/composerDraftSaveScheduler';
 import {
@@ -212,7 +224,12 @@ import { useConnectedSource } from '@/hooks/useConnectedSource';
 import { useProviders } from '@/hooks/useProviders';
 import { useDeviceProviders } from '@/hooks/useDeviceProviders';
 import { chatEligibleSourcesForModel, effectiveSourceIdForModel } from '@cindy/model-providers';
-import { deriveModelsFromProviders, filterChatBridgedCodexProviders, resolveFastSupported } from '@/lib/providerModels';
+import {
+  deriveModelsFromProviders,
+  filterChatBridgedCodexProviders,
+  resolveFastSupported,
+  resolveProviderModelEfforts,
+} from '@/lib/providerModels';
 import {
   getProviderModelEffort,
   setProviderModelChoice,
@@ -273,7 +290,7 @@ const ComposerHardBreak = HardBreak.extend({
 
 // 工具行宽度自适应阈值（input card 像素宽）。低于阈值时自动收紧工具行，避免窄宽
 // 下换行 / 文字溢出，与 doc rail / orca 的显式 compactToolbar / denseToolbar 取 OR。
-// 两档：先 dense（控件字号 / 图标压一档、协同 pill 收成 logo），更窄再 compact
+// 两档：先 dense（控件字号 / 图标压一档），更窄再 compact
 // （左侧 permission 可 truncate 成 "完..."、右侧 shrink-0 防换行）。数值按主会话工具行
 // 自然宽度（permission + model + voice + send 等）估，实测可微调。
 const TOOLBAR_DENSE_MAX_WIDTH = 520;
@@ -500,6 +517,7 @@ interface ChatInputProps {
     consumePendingFileMentions: () => Array<{ type: 'file'; relPath: string; name: string }>;
     removeFile: (id: string) => void;
     updateFile: (id: string, patch: Partial<AttachedFile>) => void;
+    discardFiles: () => void;
     clearFiles: () => void;
   };
   /**
@@ -578,7 +596,7 @@ interface ChatInputProps {
   /** 强制使用紧凑单行工具栏；容器测宽也会自动进入同一状态。 */
   narrowToolbar?: boolean;
   /**
-   * 工具行采用更紧凑的视觉密度 (字号 -1px, 协同 toggle 只剩 logo)。
+   * 工具行采用更紧凑的视觉密度 (字号 -1px)。
    * 用于 doc rail 这种宽度受限的容器,与 compactToolbar (wrap 兜底) 正交:
    *   - dense=true 把控件本身压瘦, 一般就够单行塞下
    *   - compactToolbar 是宽度极端时的 wrap 兜底, split-pane 仍然需要
@@ -598,21 +616,13 @@ interface ChatInputProps {
    */
   topSlot?: React.ReactNode;
   /**
-   * 协同模式开关 (Claude / Codex Lead session 中途 toggle Worker)。
-   * 提供时:底部工具行右侧渲染双人像 pill (CollaborationModeToggle),
-   *        ON 态点击 pill 即触发关闭 (由 parent 决定确认弹窗)。
-   * 不提供时:不渲染 (老调用方零迁移)。
+   * 协同模式入口 (Claude / Codex Lead session 中途 toggle Worker)。
+   * 提供时:与目标模式、计划模式同级渲染在 composer「+」菜单;
+   *        ON 态点击菜单项即触发关闭 (由 parent 决定确认弹窗)。
+   * 不提供时:菜单里不渲染该项。
    * 状态完全由 parent 持有 (controlled);ChatInput 只做展示与事件转发。
    */
-  collaboration?: {
-    enabled: boolean;
-    worker: CollabWorkerKind;
-    onChange: (next: { enabled: boolean; worker: CollabWorkerKind }) => void;
-    onOpenDetails?: () => void;
-    onDisabledActivate?: () => void;
-    disabled?: boolean;
-    disabledReason?: string;
-  };
+  collaboration?: CollaborationMenuConfig;
 }
 
 function vendorKeyToAgentKind(v?: 'cc' | 'codex' | 'pi'): AgentKind | null {
@@ -907,7 +917,12 @@ export function ChatInput({
 }: ChatInputProps) {
   const { t } = useTranslation();
   const navigate = useNavigate();
+  const { preference: composerSendShortcutPreference } = useComposerSendShortcutPreference();
   const resolvedPlaceholder = placeholder ?? t('newChat.chatInput.defaultPlaceholder');
+  const composerSendShortcutLabel = getComposerSendShortcutLabel(
+    composerSendShortcutPreference,
+    window.electronAPI?.platform,
+  );
   const steerShortcutLabel = useMemo(
     () => (window.electronAPI?.platform === 'darwin' ? '⌘↵' : 'Ctrl+Enter'),
     [],
@@ -1081,8 +1096,11 @@ export function ChatInput({
     consumePendingFileMentions,
     removeFile,
     updateFile,
+    discardFiles,
     clearFiles,
   } = attachmentState;
+  const attachmentsRef = useRef(attachments);
+  attachmentsRef.current = attachments;
   // browser-comment-chip:内置浏览器页面评论(结构化,不进草稿文本),渲染为
   // 「N 条注释」胶囊,发送时序列化 + 截图并入 filesToSend。
   const [browserComments, setBrowserComments] = useState<BrowserCommentDraftItem[]>([]);
@@ -1173,7 +1191,6 @@ export function ChatInput({
     () => !!sessionId && hasPendingAgentSendDispatch(sessionId),
     () => false,
   );
-
   useEffect(() => {
     setPendingRemoteSwitch(null);
     setRemoteSwitchInFlight(false);
@@ -1384,11 +1401,25 @@ export function ChatInput({
   // 模型选择器 trigger 化成「连接来源」CTA、Send 禁用。useConnectedSource 仅用于
   // loading 态判定；实际「有没有可发送来源」独立走 sendProviders（已过滤 SSH remote
   // 排除项），两者职责分离以保留 remote guard。
-  // providersLoading 期间不判,避免有缓存的老用户首帧闪 CTA / 禁用态(规则 7)。
-  const { loading: providersLoading } = useConnectedSource(
+  // 本机沿用 useConnectedSource 的加载态；device-link 必须同时等待被控端 capabilities 与
+  // provider 目录，且真实读取失败时 fail closed。只有结构化 unsupported 才允许旧端回退。
+  const { loading: localProvidersLoading } = useConnectedSource(
     currentModelAgentKind,
     activeModel,
   );
+  const remoteModelListStatus = resolveRemoteModelListStatus({
+    deviceId: deviceLinkDeviceId,
+    agentKind: currentModelAgentKind,
+    cc: ccCaps,
+    codex: codexCaps,
+    pi: piCaps,
+    providers: remoteProviders,
+  });
+  const providersLoading = deviceLinkDeviceId
+    ? remoteModelListStatus === 'loading'
+    : localProvidersLoading;
+  const remoteModelListBlocked =
+    !!deviceLinkDeviceId && remoteModelListStatus !== 'ready';
   // chatEligibleSourcesForModel(不是裸 sourcesForModel):非聊天模型即便"存在于某个
   // 已连接来源"也不算有可发送来源(issue #882 第 3 点,2026-07 review)——否则 Send
   // 会对着一个 image/embedding 端点放行,而不是显示这里的"去连接"空态。已建会话
@@ -1401,7 +1432,14 @@ export function ChatInput({
         includeDisabled: !!sessionId,
       }).length > 0
     : false;
-  const noConnectedSource = !!currentModelAgentKind && !providersLoading && !hasConnectedSendSource;
+  const noConnectedSource =
+    !!currentModelAgentKind &&
+    !providersLoading &&
+    !remoteModelListBlocked &&
+    // 老被控端明确不支持 provider:list 时只能依据 capabilities 放行；不能把缺少
+    // provider 镜像误判成权威的「没有已连接来源」。
+    (!deviceLinkDeviceId || !remoteProviders.unsupported) &&
+    !hasConnectedSendSource;
 
   // 会话显式选中的来源已断开(如外部删除订阅 OAuth 凭证):trigger 显示「已断开」错误态 +
   // Send 禁用,不再静默回退默认来源图标(否则界面显示 XD、main 懒创建却按 DB 里的来源报
@@ -1481,6 +1519,13 @@ export function ChatInput({
 
   const folderOpen = folderPickerOpen ?? internalFolderOpen;
   const setFolderOpen = onFolderPickerOpenChange ?? setInternalFolderOpen;
+  // `dispatchSend` 在取发送快照后可能等待 effort runtime 同步。此窗口内继续编辑会让
+  // 成功发送后的清理误删尚未发送的文字或附件，因此 composer 必须作为一个整体短暂只读。
+  // 正常路径没有等待；只有设置同步中的会话最多锁 5 秒（见 dispatchSend 的 preflight）。
+  const [sendDispatchInFlight, setSendDispatchInFlight] = useState(false);
+  const composerEditorLocked = disabled || sendDispatchInFlight;
+  const composerMutationLockedRef = useRef(composerEditorLocked);
+  composerMutationLockedRef.current = composerEditorLocked;
 
   useEffect(() => {
     setWorkingDir(initialWorkingDir ?? null);
@@ -1527,7 +1572,7 @@ export function ChatInput({
     // autofocus would otherwise overwrite routed Plugin/Create end-focus.
     // doc 模式下必须关掉,理由见上方 disableAutofocus prop 注释。
     autofocus: !disableAutofocus && !disabled ? 'end' : false,
-    editable: !disabled,
+    editable: !composerEditorLocked,
     extensions: [
       Document,
       Paragraph,
@@ -1624,6 +1669,7 @@ export function ChatInput({
         return false;
       },
       handlePaste(view, event) {
+        if (composerMutationLockedRef.current) return true;
         // Intercept clipboard file/folder/image. Three sources to handle,
         // matching the onDrop logic below:
         //   1. Folder copied from OS file manager  → addFolderPath (@dir chip)
@@ -2008,42 +2054,36 @@ export function ChatInput({
           return false;
         }
 
-        // Plain Enter keeps the existing queue semantics. Cmd/Ctrl+Enter is
-        // only treated as 插话 while a turn is actually running; otherwise it
-        // falls back to the normal send path so the shortcut never becomes a
-        // "no active turn" footgun on an idle composer.
-        if (event.key === 'Enter' && !event.shiftKey && !event.altKey) {
+        // Resolve the configurable send shortcut after structured list handling.
+        // Native mode keeps Enter available to Tiptap for paragraph breaks and
+        // IME composition; queue/steer modes continue through the existing
+        // send and voice state machines.
+        const enterIntent = resolveComposerEnterIntent(
+          event,
+          getComposerSendShortcutPreference(),
+          { turnRunning: showStopButtonRef.current, platform: window.electronAPI?.platform },
+        );
+        if (enterIntent === 'native') return false;
+        if (enterIntent === 'ignore') {
           event.preventDefault();
+          return true;
+        }
+        if (enterIntent === null) return false;
+
+        event.preventDefault();
+        if (enterIntent === 'queue' || enterIntent === 'steer') {
           const isEditorEnterTarget = event.target instanceof Node && view.dom.contains(event.target);
           if (
             voiceInputStateRef.current === 'listening' &&
             voiceInputCanStopAndSendRef.current &&
             isEditorEnterTarget &&
-            !event.altKey &&
-            !event.repeat &&
-            !event.isComposing &&
             !isVoiceInputShortcutMatch(event, voiceShortcutRef.current)
           ) {
             event.stopPropagation();
-            const deliveryMode =
-              (event.metaKey || event.ctrlKey) &&
-              showStopButtonRef.current &&
-              composerCanSubmitRef.current
-                ? 'steer'
-                : 'queue';
-            void voiceInputStopAndSendRef.current(deliveryMode);
+            void voiceInputStopAndSendRef.current(enterIntent);
             return true;
           }
-          // Do not gate the delivery choice on composerCanSubmitRef here.
-          // Tiptap updates its document synchronously, while that ref mirrors
-          // sendButtonDisabled from a later React effect. A quick Cmd/Ctrl+Enter
-          // after typing could otherwise observe the previous empty state and
-          // incorrectly enqueue instead of steering the running turn.
-          const wantsSteer =
-            (event.metaKey || event.ctrlKey) &&
-            showStopButtonRef.current &&
-            voiceInputStateRef.current !== 'listening';
-          void dispatchSendRef.current(wantsSteer ? 'steer' : 'queue');
+          void dispatchSendRef.current(enterIntent);
           return true;
         }
         return false;
@@ -2199,10 +2239,6 @@ export function ChatInput({
     },
     [editor],
   );
-
-  useEffect(() => {
-    editor?.setEditable(!disabled);
-  }, [disabled, editor]);
 
   // Hold a live ref to the editor for handlers that mount before Tiptap
   // exposes it through React (e.g. the blur handler above).
@@ -2360,6 +2396,11 @@ export function ChatInput({
   );
 
   const voiceInput = useVoiceInput(editor, disabled, messages, voiceInputOptions);
+  const composerMutationLocked = composerEditorLocked || voiceInput.isBusy;
+  composerMutationLockedRef.current = composerMutationLocked;
+  useEffect(() => {
+    editor?.setEditable(!composerMutationLocked);
+  }, [composerMutationLocked, editor]);
   const { settings: voiceInputSettings } = useVoiceInputSettings();
   const voiceInputShortcutLabel = useMemo(
     () => formatVoiceInputShortcut(voiceInputSettings.shortcut),
@@ -2409,7 +2450,7 @@ export function ChatInput({
   const voiceInputCanStopAndSendRef = useRef(false);
   const composerCanSubmitRef = useRef(false);
   const handleVoiceInputStartRef = useRef(handleVoiceInputStart);
-  const disabledRef = useRef(disabled);
+  const disabledRef = useRef(composerMutationLocked);
   const disableAutofocusRef = useRef(disableAutofocus);
   const focusOnStorageKeyChangeRef = useRef(focusOnStorageKeyChange);
   const latestStorageKeyRef = useRef<string | undefined>(storageKey);
@@ -2437,11 +2478,11 @@ export function ChatInput({
     voiceInputStopRef.current = handleVoiceInputStopWithRefinement;
     voiceInputCancelRef.current = voiceInput.cancel;
     handleVoiceInputStartRef.current = handleVoiceInputStart;
-    disabledRef.current = disabled;
+    disabledRef.current = composerMutationLocked;
     disableAutofocusRef.current = disableAutofocus;
     focusOnStorageKeyChangeRef.current = focusOnStorageKeyChange;
   }, [
-    disabled,
+    composerMutationLocked,
     disableAutofocus,
     focusOnStorageKeyChange,
     handleVoiceInputStart,
@@ -2473,6 +2514,7 @@ export function ChatInput({
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const currentState = voiceInputStateRef.current;
+      const platform = window.electronAPI?.platform;
       if (event.key === 'Escape' && !event.repeat && !event.isComposing) {
         if (
           currentState === 'listening' ||
@@ -2487,22 +2529,23 @@ export function ChatInput({
         }
       }
 
+      const enterIntent = resolveComposerEnterIntent(
+        event,
+        getComposerSendShortcutPreference(),
+        { turnRunning: showStopButtonRef.current, platform },
+      );
+      const isModifiedEnter = hasComposerModifier(event, platform);
       if (
-        showStopButtonRef.current &&
         isComposerEnterTarget(event.target) &&
-        event.key === 'Enter' &&
-        (event.metaKey || event.ctrlKey) &&
-        !event.shiftKey &&
-        !event.altKey &&
-        !event.repeat &&
-        !event.isComposing &&
+        isModifiedEnter &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
         currentState !== 'listening'
       ) {
         event.preventDefault();
         event.stopPropagation();
         clearPressTimer();
         voiceShortcutPressRef.current = null;
-        void dispatchSendRef.current('steer');
+        void dispatchSendRef.current(enterIntent);
         return;
       }
 
@@ -2510,24 +2553,14 @@ export function ChatInput({
         currentState === 'listening' &&
         voiceInputCanStopAndSendRef.current &&
         isVoiceInputEnterTarget(event.target) &&
-        event.key === 'Enter' &&
-        !event.shiftKey &&
-        !event.altKey &&
-        !event.repeat &&
-        !event.isComposing &&
+        (enterIntent === 'queue' || enterIntent === 'steer') &&
         !isVoiceInputShortcutMatch(event, voiceShortcutRef.current)
       ) {
         event.preventDefault();
         event.stopPropagation();
         clearPressTimer();
         voiceShortcutPressRef.current = null;
-        const deliveryMode =
-          (event.metaKey || event.ctrlKey) &&
-          showStopButtonRef.current &&
-          composerCanSubmitRef.current
-            ? 'steer'
-            : 'queue';
-        void voiceInputStopAndSendRef.current(deliveryMode);
+        void voiceInputStopAndSendRef.current(enterIntent);
         return;
       }
 
@@ -2737,19 +2770,6 @@ export function ChatInput({
         .finally(releaseInFlight);
     });
   }, []);
-
-  useEffect(() => {
-    if (!editor) return;
-    const nextEditable = !voiceInput.isBusy;
-    if (editor.isEditable !== nextEditable) {
-      editor.setEditable(nextEditable, false);
-    }
-    return () => {
-      if (!editor.isDestroyed && !editor.isEditable) {
-        editor.setEditable(true, false);
-      }
-    };
-  }, [editor, voiceInput.isBusy]);
 
   // While dictation holds the editor read-only the native caret disappears;
   // the decoration renders a mic-shaped caret at the insertion point instead
@@ -3539,8 +3559,6 @@ export function ChatInput({
 
   // ── Send / Stop wiring ─────────────────────────────────────────────
   const dispatchSendInFlightRef = useRef(false);
-  const [localSendDispatchInFlight, setSendDispatchInFlight] = useState(false);
-  const sendDispatchInFlight = localSendDispatchInFlight || agentSendDispatchInFlight;
   const dispatchSendRef = useRef<(deliveryMode?: MessageDeliveryMode) => void | Promise<void>>(
     () => {},
   );
@@ -3559,7 +3577,6 @@ export function ChatInput({
       if (!finishAgentSendDispatch) return;
       draftSaveSchedulerRef.current?.flush();
       dispatchSendInFlightRef.current = true;
-      setSendDispatchInFlight(true);
       try {
         await resolveSessionMessageReferencesForSend(editor);
         // 引用 chip 水合会跨 device-link await；等待期间若旧客户端 / 其他入口登记了切换，
@@ -3581,6 +3598,17 @@ export function ChatInput({
         const text = formatBrowserCommentsForSend(browserCommentsRef.current, editorText);
         // Allow send if there is text OR attachments(纯引用 / 纯评论无输入也可发送)
         if (!text && !hasAttachments) return;
+
+        // device-link 模型清单未结算或真实读取失败时禁止发送。模型选择器会同步显示
+        // loading / error；这里兜住快捷键、语音等间接派发入口，避免旧快照继续路由。
+        if (remoteModelListBlocked) {
+          if (remoteModelListStatus === 'error') {
+            toast.error(t('newChat.modelSelector.remoteLoadFailed'));
+          } else {
+            toast.warning(t('newChat.modelSelector.remoteLoading'));
+          }
+          return;
+        }
 
         // 预检:会话显式选中的来源已断开 → 发送前拦截。main 侧懒创建会从 DB 水合 providerId
         // 直接 LAZY_CREATE_FAILED(renderer 的 sendProviderId=null 救不了已建会话),所以这里
@@ -3607,7 +3635,12 @@ export function ChatInput({
         // currentModelAgentKind 解析不出(罕见:capabilities 未就绪)时不拦,交给下游
         // 处理,不误伤。用 chatEligibleSourcesForModel 而非裸 sourcesForModel:
         // 非聊天来源不该被当成"可以发"放行(issue #882 第 3 点,2026-07 review)。
-        if (currentModelAgentKind) {
+        if (
+          currentModelAgentKind &&
+          // 旧被控端明确不支持 provider:list 时，控制端没有可检查的来源镜像；
+          // 与模型列表一致交给 capabilities + 被控端发送链路做兼容回退。
+          !(deviceLinkDeviceId && remoteProviders.unsupported)
+        ) {
           // 已建会话按实际路由口径判(includeDisabled,与上方 hasConnectedSendSource
           // 同则):运行中会话不因停用打断,最终 preflight 若按准入 rail 判会在全停时
           // 弹「去连接来源」把继续发送挡死(PR #744 review 第十八轮)。草稿保持准入口径。
@@ -3649,6 +3682,11 @@ export function ChatInput({
           ? findGhostByCommand(eligibleGhosts, ghostCommandWord)
           : null;
         const textToSend = expandGhostCommand(text, eligibleGhosts);
+        const sendSnapshot = captureComposerSendSnapshot(
+          editor.getJSON(),
+          attachmentsRef.current,
+          browserCommentsRef.current,
+        );
         let recentUsageMarked = false;
         const markRecentPluginUsage = () => {
           if (!usedGhost || recentUsageMarked) return;
@@ -3660,14 +3698,48 @@ export function ChatInput({
             );
           });
         };
-        dispatchSendInFlightRef.current = true;
-        setSendDispatchInFlight(true);
         let result: boolean | void;
+        let effortForSend = activeEffort;
         try {
+          if (sessionId) {
+            const coordinator = effortChangeCoordinatorRef.current;
+            let runtimeSettled = false;
+            let timeoutId: ReturnType<typeof setTimeout> | undefined;
+            setSendDispatchInFlight(true);
+            try {
+              await Promise.race([
+                coordinator.awaitRuntimeSettled(sessionId).then(() => {
+                  runtimeSettled = true;
+                }),
+                new Promise<void>((resolve) => {
+                  timeoutId = setTimeout(resolve, 5000);
+                }),
+              ]);
+            } finally {
+              if (timeoutId !== undefined) clearTimeout(timeoutId);
+              setSendDispatchInFlight(false);
+            }
+
+            // 不把 timeout 写成全局 dirty：若迟到的是「持久化失败、runtime 尚未触碰」，旧实现
+            // 会永久阻断后续发送。当前这次发送直接失败；下一次会重新等待真实 settle 结果。
+            if (!runtimeSettled) {
+              toast.error(t('newChat.chatInput.effortRuntimeDirty'));
+              return;
+            }
+            // 路由切换后复用的编辑器不能把 A 会话的内容送进 B，也不能清掉 B 的草稿。
+            if (!isSessionScopeCurrent(sessionId, currentSessionIdRef.current)) return;
+            if (coordinator.isRuntimeDirty(sessionId)) {
+              toast.error(t('newChat.chatInput.effortRuntimeDirty'));
+              return;
+            }
+            // 等待 commit 后，闭包里的 activeEffort 可能仍是旧 props；以该 session 已提交的
+            // 选择发送，保证本 turn 与 UI/SQLite 的 effort 相同。
+            effortForSend = coordinator.getCommittedEffort(sessionId) ?? activeEffort;
+          }
           result = await onSend(
             textToSend,
             activeModel,
-            activeEffort,
+            effortForSend,
             activePermissionMode,
             filesToSend,
             mentionsToSend,
@@ -3684,12 +3756,22 @@ export function ChatInput({
         } catch (error) {
           log.warn('send rejected:', error instanceof Error ? error.message : String(error));
           return;
-        } finally {
-          dispatchSendInFlightRef.current = false;
-          setSendDispatchInFlight(false);
         }
         if (result === false) return;
         markRecentPluginUsage();
+        // onSend may wait on auth, commands, a remote device, or attachment work.
+        // Only clear the exact accepted snapshot; if the user changed anything
+        // after dispatch, preserve the whole current draft so no unsent work is lost.
+        if (
+          !isComposerSendSnapshotCurrent(
+            sendSnapshot,
+            editor.getJSON(),
+            attachmentsRef.current,
+            browserCommentsRef.current,
+          )
+        ) {
+          return;
+        }
         // Suppress onUpdate's draft-save during the post-send clearContent so
         // we don't write a transient empty-doc entry that we're about to drop.
         isRestoringRef.current = true;
@@ -3711,7 +3793,6 @@ export function ChatInput({
         }
       } finally {
         dispatchSendInFlightRef.current = false;
-        setSendDispatchInFlight(false);
         finishAgentSendDispatch();
       }
     },
@@ -3731,9 +3812,14 @@ export function ChatInput({
       storageKey,
       t,
       currentModelAgentKind,
+      deviceLinkDeviceId,
       providers,
+      remoteProviders.unsupported,
+      remoteModelListBlocked,
+      remoteModelListStatus,
       confirmDialog,
       navigate,
+      sessionId,
     ],
   );
   useEffect(() => {
@@ -3801,7 +3887,7 @@ export function ChatInput({
   // 跨实例 / 跨重启的持久化由调用方通过 rememberedEffortByModel + onRememberedEffortChange
   // 注入 (NewMakerDraftRoute 走 newMakerDraft store)。
   const effortByModelRef = useRef<Map<string, Effort>>(new Map());
-  const effortChangeCoordinatorRef = useRef(createEffortChangeCoordinator());
+  const effortChangeCoordinatorRef = useRef(getEffortChangeCoordinator());
   const localRuntimeSwitchSeqBySessionRef = useRef(new Map<string, number>());
 
   useLayoutEffect(() => {
@@ -3832,19 +3918,38 @@ export function ChatInput({
     [onRememberedEffortChange],
   );
 
-  // 解析某模型的 effort 档 / 默认档 —— **本地会话走 provider catalog**(deriveModelsFromProviders,
-  // 含自定义供应商模型),而非 getModelById(只懂 maker-core 内置;自定义模型查不到 → 之前 effort
-  // 被错误压成 'low'、记忆无法恢复)。device-link 远程会话仍按被控端能力(getModelById(id, deviceId)),
-  // 行为字节级不变(自定义供应商不经隧道,被控端能力才是权威)。
+  // 解析某模型的 effort 档 / 默认档 —— **本地显式来源按 (provider, agent, model) 精确查目录**。
+  // picker 用的 deriveModelsFromProviders 是跨来源 first-wins，并不适合运行时能力解析：Pi BYOM
+  // 与内置来源复用 model id 时，二者可有不同的显式 effort 子集。没有来源上下文的旧入口才保留
+  // 拍平回退。device-link 远程会话仍按被控端能力(getModelById(id, deviceId))，行为不变。
   const resolveModelEfforts = useCallback(
-    (modelId: string): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
+    (
+      modelId: string,
+      providerId?: string | null,
+      targetAgentKind?: AgentKind,
+    ): { efforts: readonly Effort[]; defaultEffort: Effort | null } => {
       if (deviceLinkDeviceId) {
         const m = getModelById(modelId, deviceLinkDeviceId);
         return { efforts: m?.efforts ?? [], defaultEffort: m?.defaultEffort ?? null };
       }
-      const kinds: readonly AgentKind[] = currentModelAgentKind
-        ? [currentModelAgentKind]
-        : ['claude-code', 'codex', 'pi'];
+      const kinds: readonly AgentKind[] = targetAgentKind
+        ? [targetAgentKind]
+        : currentModelAgentKind
+          ? [currentModelAgentKind]
+          : ['claude-code', 'codex', 'pi'];
+      if (providerId) {
+        for (const kind of kinds) {
+          const scoped = resolveProviderModelEfforts({
+            providers,
+            providerId,
+            modelId,
+            agentKind: kind,
+          });
+          if (scoped) return scoped;
+        }
+        // 显式目标来源却找不到对应条目时 fail closed，不能回退到同 id 的另一来源能力。
+        return { efforts: [], defaultEffort: null };
+      }
       for (const kind of kinds) {
         const found = deriveModelsFromProviders(providers, kind).find((x) => x.id === modelId);
         if (found) return { efforts: found.efforts, defaultEffort: found.defaultEffort ?? null };
@@ -4139,15 +4244,13 @@ export function ChatInput({
       const exclusiveTurn = reserveAgentSwitchExclusive(sourceSessionId);
       try {
         await exclusiveTurn.ready;
-        // effort 档按**目标引擎**目录解析(resolveModelEfforts 锚定当前引擎,
-        // 同 id 模型两家档位可不同、目标独占模型在当前目录里查不到);浏览态
+        // effort 档按**目标引擎 + 目标来源**目录解析（同 id 模型跨来源档位可不同）；浏览态
         // 悬浮面板写下的 per-(目标引擎,来源,模型) 预设在此恢复。
-        const targetCatalog = deriveModelsFromProviders(providers, targetAgentKind).find(
-          (x) => x.id === newModelId,
+        const { efforts, defaultEffort } = resolveModelEfforts(
+          newModelId,
+          providerId,
+          targetAgentKind,
         );
-        const { efforts, defaultEffort } = targetCatalog
-          ? { efforts: targetCatalog.efforts, defaultEffort: targetCatalog.defaultEffort ?? null }
-          : resolveModelEfforts(newModelId);
         const providerEffort =
           modelMemory && providerId
             ? modelMemory.getEffort(targetAgentKind, providerId, newModelId)
@@ -4347,9 +4450,12 @@ export function ChatInput({
         setRememberedEffort(activeModel, committedActiveEffort);
       }
 
-      // effort 档走 catalog(含自定义供应商模型);恢复优先级:
-      // (agent,model) 全局预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
-      const { efforts, defaultEffort } = resolveModelEfforts(newModelId);
+      // model-only 不改变当前生效来源；effort 能力也必须按该来源精确解析，避免同 id 的
+      // 内置模型档位穿进 BYOM。恢复优先级:模型预设 > 旧 per-model 记忆 > 沿用当前 > 模型默认。
+      const { efforts, defaultEffort } = resolveModelEfforts(
+        newModelId,
+        effectiveSourceId,
+      );
       const providerEffort =
         modelMemory && currentModelAgentKind && effectiveSourceId
           ? modelMemory.getEffort(currentModelAgentKind, effectiveSourceId, newModelId)
@@ -4388,7 +4494,7 @@ export function ChatInput({
               const remoteSetModelResult = await remoteMaker.setModel(
                 sessionId,
                 newModelId,
-                undefined,
+                selectedProviderId,
                 expectedAgentSwitchRevision,
                 useAtomicSelection
                   ? { effort: newEffort, fastMode: restoredFast }
@@ -4674,7 +4780,7 @@ export function ChatInput({
   // per-model 记忆 > 沿用当前 > 模型默认。effort 档走 catalog(含自定义供应商模型)。
   const resolveSwitchEffort = useCallback(
     (targetModelId: string, providerId: string | null, preferred?: Effort): Effort => {
-      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId);
+      const { efforts, defaultEffort } = resolveModelEfforts(targetModelId, providerId);
       const providerEffort =
         modelMemory && currentModelAgentKind && providerId
           ? modelMemory.getEffort(currentModelAgentKind, providerId, targetModelId)
@@ -4921,7 +5027,7 @@ export function ChatInput({
         // 同模型只切来源:effort/fast 采用同一份 (agent,model) 全局预设,但仍按新来源 capability
         // 校验;不支持的档位回落模型默认。reconciledEffort(来源切换 hint,当前 picker 不传)
         // 仍受支持时优先。
-        const { efforts, defaultEffort } = resolveModelEfforts(activeModel);
+        const { efforts, defaultEffort } = resolveModelEfforts(activeModel, newProviderId);
         const providerEffort =
           modelMemory && currentModelAgentKind && newProviderId
             ? modelMemory.getEffort(currentModelAgentKind, newProviderId, activeModel)
@@ -5112,6 +5218,9 @@ export function ChatInput({
     noConnectedSource ||
     // 会话显式选中的来源已断开 → Send 禁用(trigger 同步显示「已断开」错误态说明原因)。
     selectedSourceDisconnected ||
+    // device-link 模型目录仍在读取或真实失败 → 禁止旧快照继续发送；旧端明确
+    // unsupported 已由 remoteModelListStatus 归并为 ready，不会误伤兼容回退。
+    remoteModelListBlocked ||
     // host 尚未完成切换意图登记时不能发送，否则 maker:send 可能先被旧引擎消费。
     agentSwitchInFlight ||
     sendDispatchInFlight ||
@@ -5185,7 +5294,7 @@ export function ChatInput({
           root gap-4,让 chip 与输入框间距接近 GoalIndicator 的节奏。 */}
       {planModeEntry && planModeEnabled && (
         <div className="-mb-2 w-full">
-          <PlanModeIndicator onExit={() => void onPlanModeChange?.(false)} disabled={disabled} />
+          <PlanModeIndicator onExit={() => void onPlanModeChange?.(false)} disabled={composerMutationLocked} />
         </div>
       )}
       {/* Voice-input error + attachment rejections (oversize / blocked /
@@ -5355,6 +5464,7 @@ export function ChatInput({
               e.stopPropagation();
               dragCounterRef.current = 0;
               setIsDragOver(false);
+              if (composerMutationLocked) return;
               onComposerDropHandled?.();
               // .cindy / .cshare 已被窗口级 capture 接管(装入 / 导入链路),
               // 这里只清理拖拽 UI 状态,不当附件消费。
@@ -5521,8 +5631,8 @@ export function ChatInput({
             {hasAttachments && (
               <ThumbnailStrip
                 attachments={attachments}
-                onRemove={removeFile}
-                onUpdate={updateFile}
+                onRemove={composerMutationLocked ? () => undefined : removeFile}
+                onUpdate={composerMutationLocked ? () => undefined : updateFile}
               />
             )}
 
@@ -5538,7 +5648,7 @@ export function ChatInput({
                 className={cn(
                   'w-[calc(100%+11px)] -mr-[11px]',
                   // Disabled gets the same visual cue as the old textarea
-                  disabled && 'cursor-not-allowed opacity-60',
+                  composerMutationLocked && 'cursor-not-allowed opacity-60',
                   voiceInput.isBusy && 'cursor-default',
                 )}
                 data-voice-draft-active={voiceInput.draftText ? 'true' : undefined}
@@ -5562,7 +5672,7 @@ export function ChatInput({
                   } finally {
                     isRestoringRef.current = false;
                   }
-                  clearFiles();
+                  discardFiles();
                   // 页面评论走丢弃语义(清 state + 清截图缓存):目标不接管评论截图,
                   // 与发送后清空(消息接管截图,不清缓存)不同,这里不清会留磁盘孤儿。
                   clearBrowserComments();
@@ -5598,14 +5708,17 @@ export function ChatInput({
                   // create-agent 按 Figma 使用 hug-content pills;默认会话页仍保留左侧优先压缩。
                 )}
               >
-                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划模式、
+                {/* composer 「+」菜单(权限左侧):本机会话提供附件入口;目标、计划/协同模式、
                 Plugin、引用目录按各自能力与接线显示。远程会话不能把控制端绝对路径
                 交给远端 agent,因此不接本机文件选择器。 */}
                 <ExtraDirsButton
                   extraDirs={extraDirs ?? []}
                   workingDir={workingDir}
-                  onAddFiles={localAttachmentPickerEnabled ? addFiles : undefined}
+                  onAddFiles={
+                    localAttachmentPickerEnabled && !composerMutationLocked ? addFiles : undefined
+                  }
                   planMode={planModeEntry}
+                  collaboration={collaboration}
                   plugins={pluginsForMenu}
                   pluginAvailableIds={pluginAvailableIds}
                   onPluginSelect={handlePluginSelect}
@@ -5626,7 +5739,7 @@ export function ChatInput({
                         }
                       : undefined
                   }
-                  disabled={disabled}
+                  disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
                 />
@@ -5635,7 +5748,7 @@ export function ChatInput({
                   onPermissionModeChange={handlePermissionModeChange}
                   vendorKey={vendorKey}
                   deviceId={deviceLinkDeviceId}
-                  disabled={disabled}
+                  disabled={composerMutationLocked}
                   dense={effectiveDenseToolbar}
                   iconOnly={useUltraCompactToolbar}
                   visualVariant={isCreateAgentVariant ? 'create-agent' : 'default'}
@@ -5652,34 +5765,13 @@ export function ChatInput({
                         : 'flex min-w-0 shrink items-center justify-end gap-1'
                       : 'flex items-center gap-2',
                   // compact 模式下所有输入框工具行保持单行;权限 / 模型 pill 内部截断承压,
-                  // vendor tab、圆形操作按钮与协同图标按钮保持固定宽,避免控件重叠或掉到第二行。
+                  // vendor tab 与圆形操作按钮保持固定宽,避免控件重叠或掉到第二行。
                 )}
               >
                 {(!useNarrowToolbar || useCompactMiddleToolbar) &&
                   (useCompactMiddleToolbar
                     ? compactMiddleToolbarSlot ?? <>{middleToolbarSlot}</>
                     : <>{middleToolbarSlot}</>)}
-                {collaboration && (
-                  <CollaborationModeToggle
-                    enabled={collaboration.enabled}
-                    worker={collaboration.worker}
-                    onChange={collaboration.onChange}
-                    onOpenDetails={collaboration.onOpenDetails}
-                    onDisabledActivate={
-                      !disabled && collaboration.disabled
-                        ? collaboration.onDisabledActivate
-                        : undefined
-                    }
-                    disabled={disabled || collaboration.disabled}
-                    disabledReason={
-                      !disabled && collaboration.disabled
-                        ? collaboration.disabledReason
-                        : undefined
-                    }
-                    dense={effectiveDenseToolbar}
-                    iconOnly={effectiveDenseToolbar}
-                  />
-                )}
                 <div className={useNarrowToolbar ? 'min-w-0 shrink' : undefined}>
                   <ModelSelector
                     modelId={activeModel}
@@ -5726,6 +5818,9 @@ export function ChatInput({
                     // 意图期显示用户在浏览态选中的来源(null = flat 退化行,跟随默认路由)。
                     currentProviderId={activeProviderId}
                     sourceDisconnected={selectedSourceDisconnected}
+                    // 断开来源回落到默认来源后,面板会高亮同模型的回落行;点击该行必须重新
+                    // 发出来源选择,把显示中的默认来源钉回会话的显式来源。
+                    reselectEmitsChange={selectedSourceDisconnected}
                     // 已建会话按实际路由口径解析当前来源(含停用拷贝,跟真实扣费路由);
                     // 草稿是新路由选择,保持准入口径(PR #744 review 第十轮)。
                     actualRoute={!!sessionId}
@@ -5760,7 +5855,7 @@ export function ChatInput({
                   )}
                   <VoiceInputButton
                     state={voiceInput.state}
-                    disabled={!!disabled || !editor}
+                    disabled={composerMutationLocked || !editor}
                     shortcutLabel={voiceInputShortcutLabel}
                     onStart={handleVoiceInputStart}
                     onStop={handleVoiceInputPlainStop}
@@ -5786,13 +5881,17 @@ export function ChatInput({
                           voiceReleaseToSendActive
                             ? t('newChat.chatInput.voiceInput.releaseToSend')
                             : voiceInput.isListening && !sendButtonDisabled
-                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · Enter`
+                              ? `${t('newChat.chatInput.voiceInput.finishAndSend')} · ${composerSendShortcutLabel}`
                               : showStopButton
-                                ? t('newChat.sendButton.queueTooltip', {
-                                    shortcut: steerShortcutLabel,
-                                  })
+                                ? composerSendShortcutPreference === 'modifier-enter'
+                                  ? t('newChat.sendButton.queueTooltipSendMode', {
+                                      shortcut: composerSendShortcutLabel,
+                                    })
+                                  : t('newChat.sendButton.queueTooltip', {
+                                      shortcut: steerShortcutLabel,
+                                    })
                                 : !sendButtonDisabled
-                                  ? `${t('newChat.sendButton.send')} · Enter`
+                                  ? `${t('newChat.sendButton.send')} · ${composerSendShortcutLabel}`
                                   : selectedSourceDisconnected
                                     ? t('newChat.sourceDisconnected.sendBlocked')
                                     : null
@@ -6308,6 +6407,7 @@ function ThumbnailItem({
   onRemove: (id: string) => void;
   onUpdate: (id: string, patch: Partial<AttachedFile>) => void;
 }) {
+  const { t } = useTranslation();
   const [isHovered, setIsHovered] = useState(false);
   const thumbRef = useRef<HTMLDivElement>(null);
   const [popoverPos, setPopoverPos] = useState<{ top: number; left: number } | null>(null);
@@ -6319,6 +6419,8 @@ function ThumbnailItem({
   // Lightbox state is local to each item so multiple thumbnails don't fight.
   const [lightboxSrc, setLightboxSrc] = useState<string | null>(null);
   const [textLightboxOpen, setTextLightboxOpen] = useState(false);
+  const isDownloadOnly =
+    isDangerousAttachmentName(file.name) || isDangerousAttachmentName(file.path);
 
   // 非图片附件仍使用路径 tooltip；图片定位由共享 ImageHoverPreview 自己负责。
   useLayoutEffect(() => {
@@ -6348,12 +6450,16 @@ function ThumbnailItem({
       if (src) setLightboxSrc(src);
       return;
     }
+    // Historical composer drafts may still contain an executable's original
+    // path from before dangerous attachments were staged as `.bin`. Never pass
+    // those paths to the OS default-app opener from the attachment tray.
+    if (isDownloadOnly) return;
     // Non-image text/code/markdown files preview via TextLightbox. Other
     // supported attachment categories (PDF, etc.) open in the system app.
     if (!file.path) return;
     if (!(await shouldOpenTextLightbox(file.path))) return;
     setTextLightboxOpen(true);
-  }, [file]);
+  }, [file, isDownloadOnly]);
 
   // 图片缩略图恒为 56×56 方块;其余附件走横向文件卡,宽度随文件名自适应
   // (上限 220px)。判定条件必须与下面渲染分支一致——缓存写失败、既无 url 也无
@@ -6385,9 +6491,17 @@ function ThumbnailItem({
       {/* image-local-cache: prefer xdt-image:// url; fall back to base64 (F6). */}
       <button
         type="button"
-        className="h-full w-full cursor-pointer border-0 bg-transparent p-0 text-left"
+        className={cn(
+          'h-full w-full border-0 bg-transparent p-0 text-left',
+          isDownloadOnly ? 'cursor-default' : 'cursor-pointer',
+        )}
         onClick={handleOpenPreview}
-        aria-label={`Preview ${file.name}`}
+        disabled={isDownloadOnly}
+        aria-label={
+          isDownloadOnly
+            ? t('chat.userMessage.attachmentAttachedAria', { name: file.name })
+            : `Preview ${file.name}`
+        }
       >
         {file.category === 'image' && (file.url || file.base64) ? (
           <span className="relative block h-full w-full">

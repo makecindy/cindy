@@ -7,6 +7,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import manifest, {
 	desktopUnitWorkerCount,
+	unitTestShardArgs,
 } from "../test-workspaces.config.mjs";
 import { nodeWebstorageEnabled } from "../shared/node-webstorage.mjs";
 import {
@@ -124,7 +125,7 @@ test("help groups copyable desktop, binary, and Mobile workflows", async () => {
 	const rootScripts = Object.keys(readRootScripts());
 	const documentedWorkflowScripts = rootScripts.filter((name) =>
 		/^(mobile:xcode|mobile:sim:|mobile:build:(ios|android))/.test(name) ||
-		/^(install:(agent-binaries|claude|codex|ripgrep)|update:(vendors|claude|codex|ripgrep))$/.test(name) ||
+		/^(install:(agent-binaries|claude|codex|ripgrep|pi)|update:(vendors|claude|codex|ripgrep|pi))$/.test(name) ||
 		/^release:(claude-code|codex|ripgrep)(:arm64|:x64|:win)?$/.test(name),
 	);
 	assert.deepEqual(
@@ -155,7 +156,7 @@ test("orca workflow unit tier uses its own declared test runner", () => {
 	assert.deepEqual(orcaWorkspace.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--pool=threads", "--maxWorkers=1"],
+		args: ["run", "--pool=threads", "--maxWorkers=1", ...unitTestShardArgs()],
 	});
 });
 
@@ -176,6 +177,7 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		// LaunchServices churn that threads exists to avoid is macOS-only.
 		`--pool=${nodeWebstorageEnabled() || process.platform === "win32" ? "forks" : "threads"}`,
 		`--maxWorkers=${desktopUnitWorkerCount()}`,
+		...unitTestShardArgs(),
 	]);
 	assert.equal(desktopUnitWorkerCount(1), 1);
 	assert.equal(desktopUnitWorkerCount(4), 4);
@@ -186,12 +188,13 @@ test("unit workspace concurrency reserves the full worker budget for heavy works
 		"run",
 		"--pool=threads",
 		"--maxWorkers=4",
+		...unitTestShardArgs(),
 	]);
 	assert.equal(makerCore.tiers.unit.execution, undefined);
 	assert.deepEqual(makerCore.tiers.unit.command, {
 		type: "packageBin",
 		bin: "vitest",
-		args: ["run", "--pool=forks", "--maxWorkers=1"],
+		args: ["run", "--pool=forks", "--maxWorkers=1", ...unitTestShardArgs()],
 	});
 });
 
@@ -459,6 +462,9 @@ test("default desktop unit keeps real Git subprocess coverage to one smoke", () 
 		"apps/desktop/src/main/git-review/__tests__/gitReviewSmoke.test.ts",
 		// This file mocks child_process.spawn and tests the adapter itself.
 		"apps/desktop/src/main/git-review/__tests__/gitRunner.test.ts",
+		// This file mocks child_process.execFile and tests gitExec's timeout
+		// process-tree termination itself; no real Git subprocess is spawned.
+		"apps/desktop/src/main/worktree/__tests__/gitExec.test.ts",
 	]);
 });
 
@@ -830,6 +836,15 @@ test("workspace concurrency defaults to a bounded CPU count and accepts both CLI
 		/requires a positive integer/,
 	);
 	assert.equal(parseCliOptions(["--no-lock"]).noLock, true);
+});
+
+test("unit CI shard arguments cover valid halves and reject malformed input", () => {
+	assert.deepEqual(unitTestShardArgs(""), []);
+	assert.deepEqual(unitTestShardArgs(" 1/2 "), ["--shard=1/2"]);
+	assert.deepEqual(unitTestShardArgs("2/2"), ["--shard=2/2"]);
+	for (const value of ["1", "0/2", "3/2", "1/0", "a/b"]) {
+		assert.throws(() => unitTestShardArgs(value), /XDT_UNIT_TEST_SHARD/);
+	}
 });
 
 test("test gate lock covers heavy local tiers but skips guard, CI, and explicit bypass", () => {
@@ -1803,6 +1818,30 @@ test("buildPnpmArgs rejects selected files outside the workspace", () => {
 				["packages/other/src/foo.test.ts"],
 			),
 		/Selected test file is outside workspace packages\/orca-workflow: packages\/other\/src\/foo\.test\.ts/,
+	);
+});
+
+test("buildPnpmArgs only loosens Vitest sharding for undersized workspaces", () => {
+	const root = "F:/repo";
+	const workspace = { cwd: "packages/example" };
+	const oneSelectedFile = ["packages/example/src/only.test.ts"];
+	const buildShard = (shard, selectedFiles = oneSelectedFile) =>
+		buildPnpmArgs(
+			root,
+			workspace,
+			{ type: "packageBin", bin: "vitest", args: ["run", `--shard=${shard}`] },
+			{},
+			selectedFiles,
+		);
+
+	assert.equal(buildShard("1/2").includes("--passWithNoTests"), true);
+	assert.equal(buildShard("2/2").includes("--passWithNoTests"), true);
+	assert.equal(
+		buildShard("2/2", [
+			"packages/example/src/first.test.ts",
+			"packages/example/src/second.test.ts",
+		]).includes("--passWithNoTests"),
+		false,
 	);
 });
 
