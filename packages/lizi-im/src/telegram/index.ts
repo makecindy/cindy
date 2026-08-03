@@ -239,6 +239,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   private readonly pendingReplyTargets = new Map<string, Array<{ id: string; at: number }>>();
   /** 当前轮的回挂目标(claimTurnReplyTarget 领取; 'first' 用后即耗, 'all' 整轮保留)。 */
   private readonly turnReplyTargets = new Map<string, string>();
+  /**
+   * 当前轮触发消息的 id(**整轮保留, 不随 reply_parameters 被消耗**)。
+   * 私聊授权卡的来源深链只需要"哪条消息触发了这一轮"这个身份, 不能借用回挂状态:
+   * 'first' 档下首条群回复一发出去 turnReplyTargets 就被 consumeReplyParams 清了,
+   * 此后拼深链要么拿到 null(无来源链接), 要么误取队列里下一轮的提问(链到别的问题)。
+   */
+  private readonly turnTriggerIds = new Map<string, string>();
   /** 非 owner 礼貌回应的 per-user 冷却(userId → 上次回应 ts)。 */
   private readonly strangerNoticeAt = new Map<string, number>();
   /** ambient 触发的原生 messageId(`chatId|msgId`) — 表情回应抑制名单(FIFO 512)。 */
@@ -330,6 +337,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.turnTriggerIds.clear();
     await this.stopPolling();
     if (!this.botId) this.botId = botIdFromToken(token);
     this.setStatus({ kind: 'offline', appId: this.botContextId });
@@ -385,6 +393,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     // 回挂配对是连接期内存态 — 换代/断开后旧目标一律作废, 不跨代错配。
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.turnTriggerIds.clear();
     await this.stopPolling();
     // bot 身份是上一个账号的连接期产物: 登出/换账号后必须清干净, 否则下一个
     // 账号在 offline 等拿不到 getMe 的状态下会继承旧账号的 bot 名字。
@@ -664,14 +673,17 @@ export class TelegramIM extends BaseIM implements ChannelIM {
   }
 
   /**
-   * 本轮回挂目标的消息 id(**只读不消耗**, 给私聊授权卡拼触发消息深链用)。
+   * 本轮触发消息的 id(**只读不消耗**, 给私聊授权卡拼来源深链用)。
    *
-   * 待配对队列按 **FIFO** 取队首 —— 与 claimTurnReplyTarget 同序。取 `.at(-1)` 会拿到
-   * **后到**的那条触发消息(群里连发两问时), 深链就指向了另一轮的提问。
+   * 先读整轮保留的 turnTriggerIds —— 回挂状态在 'first' 档会被首条群回复消耗掉, 拿它当
+   * 深链身份会在"先流式回一句、再请求授权"的正常时序下直接失效。本轮还没领过目标时
+   * (授权发生在任何输出之前)才退到待配对队列, 且按 **FIFO** 取队首 —— 与
+   * claimTurnReplyTarget 同序; 取 `.at(-1)` 会拿到**后到**的那条触发消息(群里连发两问
+   * 时), 深链就指向了另一轮的提问。
    */
   private peekReplyTargetId(userId: string): string | null {
     return (
-      this.turnReplyTargets.get(userId) ?? this.pendingReplyTargets.get(userId)?.[0]?.id ?? null
+      this.turnTriggerIds.get(userId) ?? this.pendingReplyTargets.get(userId)?.[0]?.id ?? null
     );
   }
 
@@ -1320,8 +1332,13 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     while (queue && queue.length > 0 && queue[0].at < cutoff) queue.shift();
     const next = queue?.shift();
     if (queue && queue.length === 0) this.pendingReplyTargets.delete(userId);
-    if (next) this.turnReplyTargets.set(userId, next.id);
-    else this.turnReplyTargets.delete(userId);
+    if (next) {
+      this.turnReplyTargets.set(userId, next.id);
+      this.turnTriggerIds.set(userId, next.id);
+    } else {
+      this.turnReplyTargets.delete(userId);
+      this.turnTriggerIds.delete(userId);
+    }
   }
 
   /** 独立输出入口用: 本轮没有已领取目标且队列有货时才领取(不动流式轮的语义)。 */
@@ -1704,6 +1721,7 @@ export class TelegramIM extends BaseIM implements ChannelIM {
     this.clearAllTypingLoops();
     this.pendingReplyTargets.clear();
     this.turnReplyTargets.clear();
+    this.turnTriggerIds.clear();
     await this.stopPolling();
     const latchWritten = this.host.secrets.write(OFFLINE_SECRET_KEY, '1');
     const latchConfirmed = latchWritten && this.offlineFlagState() === 'set';

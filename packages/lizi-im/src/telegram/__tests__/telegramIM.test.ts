@@ -579,6 +579,29 @@ describe('TelegramIM', () => {
     expect(String(card.params.text)).not.toContain('/81');
   });
 
+  it("授权卡深链在本轮已发过群回复后仍然有效('first' 档会消耗回挂目标)", async () => {
+    const events: IMMessageEvent[] = [];
+    im.onMessage((e) => events.push(e));
+    await connect();
+    api.pushUpdates([
+      groupMessage({ text: '改一下配置', fromId: 111, messageId: 90, mentionBot: true }),
+    ]);
+    await vi.waitFor(() => expect(events).toHaveLength(1));
+
+    // 正常时序: agent 先流式回一句, 再请求授权。默认 replyQuoteGroup='first' 下这条
+    // 群回复会把 turnReplyTargets 消耗掉 —— 深链身份不能借用回挂状态。
+    const handle = await im.startStreamingText(events[0].senderId, '我看一下');
+    await handle.finalize('先读配置文件');
+    await im.sendInteractiveCard(
+      events[0].senderId,
+      { title: '需要授权', body: '改文件？', buttons: [{ id: 'allow', label: '允许' }] },
+      { deliverToOwnerDm: true, ownerDmNote: '群聊里的任务需要你授权。' },
+    );
+    const card = api.calls.filter((c) => c.method === 'sendMessage').at(-1)!;
+    expect(card.params.chat_id).toBe('111');
+    expect(String(card.params.text)).toContain('https://t.me/c/200/90');
+  });
+
   it('私聊出站不回挂 reply', async () => {
     const events: IMMessageEvent[] = [];
     im.onMessage((e) => events.push(e));

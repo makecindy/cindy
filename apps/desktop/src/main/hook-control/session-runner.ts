@@ -721,6 +721,12 @@ export function createMakerHookSessionRunner(deps: {
         // listener 由中央 InteractionRouter 持有;这里只准备本 turn 的 handler,
         // 真正的 route 在 beforeProviderStart 屏障内登记。
         const ownInteractionIds = new Set<string>();
+        /**
+         * 待决交互各自的过程区状态行(requestId → notice, 插入序)。agent 可以并行发起
+         * 多个权限请求, 任一个先收口都不能把共享的那一行清掉 —— 否则群里的进度消息又
+         * 变回静止, 而其余交互还要等最长 30 分钟。收口后回落到仍在等的那条(取最早)。
+         */
+        const pendingInteractionNotices = new Map<string, string>();
         let interactionRouteLease: InteractionRouteLease | null = null;
         const headlessTurn = {
           closed: false,
@@ -765,6 +771,7 @@ export function createMakerHookSessionRunner(deps: {
             // 等授权期间没有任何 agent 事件 —— 渠道那条进度消息会彻底静止, 而卡片
             // 可能根本不在这个会话里(Telegram 群里的授权卡改投宿主私聊)。挂一行状态,
             // 收口后摘掉; 全程只改已经在发的那条快照, 不新增群消息。
+            pendingInteractionNotices.set(ireq.requestId, awaitingInteractionNotice(ireq.kind));
             activeObserver?.setNotice(awaitingInteractionNotice(ireq.kind));
             try {
               const decision = await registerHookInteraction({
@@ -775,7 +782,10 @@ export function createMakerHookSessionRunner(deps: {
               ownInteractionIds.delete(ireq.requestId);
               return decision;
             } finally {
-              activeObserver?.setNotice(null);
+              pendingInteractionNotices.delete(ireq.requestId);
+              // 仍有交互待决时保留状态行, 只有最后一个收口才摘掉。回落到**剩余里最新**
+              // 那条 —— 与挂起时"新卡片覆盖状态行"同序(Map 保持插入序)。
+              activeObserver?.setNotice([...pendingInteractionNotices.values()].at(-1) ?? null);
             }
           }
           if (ireq.kind === 'ask_user_question') {
@@ -806,6 +816,8 @@ export function createMakerHookSessionRunner(deps: {
             cancelHookInteraction(iid, '任务已结束, 此交互已失效');
           }
           ownInteractionIds.clear();
+          // 收口后不再有待决交互: 先清空, 各 handler 的 finally 随后只会摘掉状态行。
+          pendingInteractionNotices.clear();
         };
         // 新建会话广播 -> 侧边栏实时出现(复用/接管的会话本来就在列表里, 不用发)
         if (req.isNew) {

@@ -1995,6 +1995,67 @@ describe('交互卡链路(interaction listener 覆盖)', () => {
     }
   });
 
+  it('并发交互: 其中一个收口不摘掉状态行, 最后一个结束才摘', async () => {
+    vi.useFakeTimers();
+    try {
+      fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
+        makeInteractiveSession(opts.id ?? 'sess-x'),
+      );
+      const emitted: string[] = [];
+      const runner = createMakerHookSessionRunner({ log });
+      const p = runner.run(
+        baseReq({
+          onProgress: (t: string) => emitted.push(t),
+          onInteraction: () => {},
+        }),
+      );
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(0);
+
+      // agent 并行发起两个交互: 各自独立挂起, 共用过程区那一行状态。**两者措辞不同**,
+      // 这样"回落到仍在等的那条"表现为文字变化 —— 用 tool_use 逼快照反而不行:
+      // 真实进展本身就会作废状态行(clearNotice), 那条断言对两种实现都成立。
+      const listener = h.interactionListeners.get('sess-new')!;
+      const first = listener({
+        kind: 'permission',
+        requestId: 'int-par-1',
+        toolName: 'file_change',
+        input: {},
+      });
+      const second = listener({
+        kind: 'ask_user_question',
+        requestId: 'int-par-2',
+        questions: [{ question: '继续吗?', options: [{ label: '继续' }] }],
+      });
+      await vi.advanceTimersByTimeAsync(0);
+      // 挂起时新卡片覆盖状态行 —— 最新那条(问答)在上。
+      expect(emitted.at(-1)).toContain('等待回答');
+
+      const { resolveHookInteraction } = await import('../interactions.js');
+      expect(resolveHookInteraction('int-par-2', 'ask:0')).toBe(true);
+      await second;
+      await vi.advanceTimersByTimeAsync(1500);
+      // 权限请求还在等 —— 状态行必须回落到它, 不能整行摘掉: 摘了群里的进度消息又变回
+      // 静止, 而剩下那个交互最长要等 30 分钟。
+      expect(emitted.at(-1)).toContain('等待授权');
+
+      expect(resolveHookInteraction('int-par-1', 'perm:allow')).toBe(true);
+      await first;
+      h.eventCbs.get('sess-new')!({
+        type: 'tool_use',
+        data: { toolUseId: 'after-par', toolName: 'Read', input: { file_path: '/tmp/b.ts' } },
+      });
+      await vi.advanceTimersByTimeAsync(1500);
+      expect(emitted.at(-1)).toContain('读取 b.ts');
+      expect(emitted.at(-1)).not.toContain('等待');
+
+      h.eventCbs.get('sess-new')!({ type: 'done', data: null });
+      await p;
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('ask 请求 -> 中央 Router 发卡 -> 按钮决策回流 resolve; 收口后释放 route', async () => {
     fakeMaker.createSession.mockImplementationOnce(async (opts: { id?: string }) =>
       makeInteractiveSession(opts.id ?? 'sess-x'),
