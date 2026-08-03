@@ -45,6 +45,63 @@ const VALID_PRESET = {
 };
 
 describe('sanitizePresets', () => {
+  it('accepts explicit Pi reasoning metadata and rejects ambiguous capability declarations', () => {
+    const piReasoning = {
+      ...VALID_PRESET,
+      id: 'pi-reasoning',
+      runtimes: {
+        pi: {
+          baseUrl: 'https://example.com/v1',
+          wireProtocol: 'openai-responses',
+          models: [
+            {
+              id: 'reasoner',
+              name: 'Reasoner',
+              reasoning: true,
+              reasoningEfforts: ['low', 'high', 'xhigh'],
+            },
+          ],
+        },
+      },
+    };
+    expect(sanitizePresets([piReasoning])).toEqual([piReasoning]);
+    expect(
+      sanitizePresets([
+        {
+          ...piReasoning,
+          id: 'missing-efforts',
+          runtimes: {
+            pi: {
+              ...piReasoning.runtimes.pi,
+              models: [{ id: 'reasoner', name: 'Reasoner', reasoning: true }],
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+    expect(
+      sanitizePresets([
+        {
+          ...piReasoning,
+          id: 'wrong-runtime',
+          runtimes: {
+            codex: {
+              baseUrl: 'https://example.com/v1',
+              models: [
+                {
+                  id: 'reasoner',
+                  name: 'Reasoner',
+                  reasoning: true,
+                  reasoningEfforts: ['high'],
+                },
+              ],
+            },
+          },
+        },
+      ]),
+    ).toEqual([]);
+  });
+
   it('保留合法条目、丢弃坏条目，不抛错', () => {
     const out = sanitizePresets([
       VALID_PRESET,

@@ -1614,6 +1614,7 @@ interface ElectronAPI {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     } | null>;
     /** 子窗口根组件挂载握手。 */
@@ -1628,6 +1629,7 @@ interface ElectronAPI {
       sessionId: string | null;
       workdir: string | null;
       remoteHostId: string | null;
+      deviceLinkDeviceId?: string | null;
       available: boolean;
     }) => void;
     onStateChanged: (cb: (state: { detached: boolean; open: boolean }) => void) => () => void;
@@ -1636,6 +1638,7 @@ interface ElectronAPI {
         sessionId: string | null;
         workdir: string | null;
         remoteHostId: string | null;
+        deviceLinkDeviceId?: string | null;
         available: boolean;
       }) => void,
     ) => () => void;
@@ -2208,9 +2211,8 @@ interface ElectronAPI {
   openExternal: (url: string) => Promise<{ success: boolean }>;
   openChatGPTApp: () => Promise<{ success: boolean }>;
 
-  // file-chip 右键菜单 "在浏览器中查看": 把本地文件用 file:// 喂给系统
-  // 默认浏览器(或 .html/.pdf/.svg 等扩展名的默认 handler)。
-  openFileInBrowser: (filePath: string) => Promise<{ success: boolean; error?: string }>;
+  // 绝对路径或完整本地 file:// URL;URL 形态用于保留 query/hash 页面状态。
+  openFileInBrowser: (filePathOrUrl: string) => Promise<{ success: true }>;
 
   // ── 系统级通知（CC Agent session 状态变更）──
   /**
@@ -3771,6 +3773,7 @@ interface ElectronAPI {
       getByLeadSession: (leadSessionId: string) => Promise<OrcaTeamRecord | null>;
       getByWorkerSession: (workerSessionId: string) => Promise<OrcaTeamRecord | null>;
       listWorkersByLead: (leadSessionId: string) => Promise<OrcaWorkerRecord[]>;
+      listWorkersByLeads?: (leadSessionIds: string[]) => Promise<Record<string, OrcaWorkerRecord[]>>;
       updateWorkerStatus: (
         workerId: string,
         status: 'idle' | 'running' | 'done' | 'error',
@@ -4929,7 +4932,7 @@ interface ElectronAPI {
       getCodexRateLimits: () => Promise<
         import('@cindy/maker-shared/device-link-contract').MobileCodexRateLimitsResult
       >;
-      /** provider-scoped 模型单价表；XD 价格与 model-access /models 同快照更新。 */
+      /** Cindy AI /models 下发的 XD 原生报价。 */
       getModelPricing: () => Promise<
         import('../shared/regionalMoney').ModelPricingCatalog | null
       >;
@@ -4937,6 +4940,13 @@ interface ElectronAPI {
         cb: (
           pricing: import('../shared/regionalMoney').ModelPricingCatalog | null,
         ) => void,
+      ) => () => void;
+      /** 非 XD Provider 的 Catalog 参考价与用户覆盖。 */
+      getReferenceModelPricing: () => Promise<
+        import('../shared/regionalMoney').ModelPricingCatalog
+      >;
+      onReferenceModelPricingChanged: (
+        cb: (pricing: import('../shared/regionalMoney').ModelPricingCatalog) => void,
       ) => () => void;
       /** 用量历史聚合 (首页仪表盘)。wire 形态与 main/usage/usageHistory.ts 的 UsageHistoryPayload 同形。 */
       getHistory: (

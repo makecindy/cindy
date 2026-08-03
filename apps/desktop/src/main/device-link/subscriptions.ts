@@ -42,6 +42,12 @@ const knownControllerIds = new Set<string>();
  * session push 被错误地补发给只订阅 sessions 或其它 session 的控制端。
  */
 const rememberedTopicsByController = new Map<string, Set<StoredTopic>>();
+/**
+ * link-open/subscribe 协商出的能力也要跨普通断线保留。link-open 会先恢复
+ * controller metadata、再等现代控制端 replay subscribe；这段窗口内不能把
+ * 新控制端误判成 legacy，否则 set-model 的显式 provider null 会被当成占位。
+ */
+const rememberedCapabilitiesByController = new Map<string, Set<string>>();
 
 /**
  * topic 生命周期监听(fs-watch 档消费:订阅驱动被控端文件 watch 启停)。
@@ -103,6 +109,10 @@ function getOrCreate(deviceId: string, name?: string): ControllerEntry {
   return e;
 }
 
+function normalizeCapabilities(capabilities: readonly string[]): Set<string> {
+  return new Set(capabilities.filter((value) => typeof value === 'string'));
+}
+
 /** 订阅:把 topics 并入该控制端(name 可选,subscribe/link-open 携带时更新)。 */
 export function subscribe(
   deviceId: string,
@@ -115,7 +125,8 @@ export function subscribe(
   knownControllerIds.add(deviceId);
   const e = getOrCreate(deviceId, name);
   if (capabilities) {
-    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+    e.capabilities = normalizeCapabilities(capabilities);
+    rememberedCapabilitiesByController.set(deviceId, new Set(e.capabilities));
   }
   for (const t of topics) e.topics.add(t as StoredTopic);
   // Remember the topic contract across ordinary disconnects, but not across explicit revocation.
@@ -133,11 +144,14 @@ export function updateControllerMetadata(
   capabilities?: readonly string[],
 ): void {
   const e = registry.get(deviceId);
-  if (!e) return;
-  e.name = name;
   if (capabilities) {
-    e.capabilities = new Set(capabilities.filter((value) => typeof value === 'string'));
+    const normalized = normalizeCapabilities(capabilities);
+    rememberedCapabilitiesByController.set(deviceId, new Set(normalized));
+    if (e) e.capabilities = normalized;
   }
+  // Do not recreate a topic entry during link-open; modern controllers must still
+  // replay subscribe before their remembered topics become active.
+  if (e) e.name = name;
 }
 
 export function controllerHasTopic(deviceId: string, topic: string): boolean {
@@ -178,6 +192,7 @@ export function forgetKnownController(deviceId: string): void {
   clearController(deviceId);
   knownControllerIds.delete(deviceId);
   rememberedTopicsByController.delete(deviceId);
+  rememberedCapabilitiesByController.delete(deviceId);
 }
 
 /** 清空所有订阅(登出 / 关被控 / 退出)。 */
@@ -187,6 +202,7 @@ export function clearAll(): void {
   registry.clear();
   knownControllerIds.clear();
   rememberedTopicsByController.clear();
+  rememberedCapabilitiesByController.clear();
   held.delete(LEGACY_TOPIC);
   notifyReleased([...held]);
 }
@@ -236,7 +252,8 @@ export function getControllersForTopic(topic: Topic): string[] {
 
 /** 查询 link-open 协商出的控制端能力；未知/已断链控制端一律 false。 */
 export function controllerSupports(deviceId: string, capability: string): boolean {
-  return registry.get(deviceId)?.capabilities.has(capability) === true;
+  return registry.get(deviceId)?.capabilities.has(capability) === true
+    || rememberedCapabilitiesByController.get(deviceId)?.has(capability) === true;
 }
 
 function isControlTopic(t: StoredTopic): boolean {
@@ -274,6 +291,7 @@ export const __testing = {
     registry.clear();
     knownControllerIds.clear();
     rememberedTopicsByController.clear();
+    rememberedCapabilitiesByController.clear();
   },
   /** 测试用:查某控制端当前订阅的 topic 集合。 */
   topicsOf(deviceId: string): string[] {

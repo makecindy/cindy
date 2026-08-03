@@ -132,6 +132,8 @@ export interface DeviceLinkClientOptions {
   getHello(): HelloPayload;
   createWebSocket: WsFactory;
   logger?: DeviceLinkLogger;
+  /** 对端仍发送可靠帧但本地 peer 未 ready 时通知 host 触发一次去重重开。 */
+  onPeerLinkNeedsReopen?: (deviceId: string) => void;
   /** 测试注入:覆盖重连/心跳的时间参数 */
   timing?: Partial<DeviceLinkTiming>;
 }
@@ -350,6 +352,7 @@ export class DeviceLinkClient {
   private readonly opts: DeviceLinkClientOptions;
   private readonly timing: DeviceLinkTiming;
   private readonly log: DeviceLinkLogger;
+  private readonly staleLinkRepairAt = new Map<string, number>();
 
   private ws: WsLike | null = null;
   private status: DeviceLinkStatus = 'stopped';
@@ -430,8 +433,13 @@ export class DeviceLinkClient {
    * 不改默认退避曲线(桌面端断线重连仍走 scheduleReconnect 的 1s→30s)。
    * 已 online 时为空操作,不打断健康连接;stopped 时等价于 start()。
    */
-  connectNow(reason = 'connect-now'): void {
-    if (this.status === 'online') return;
+  connectNow(reason = 'connect-now', options?: { force?: boolean }): void {
+    if (this.status === 'online') {
+      if (!options?.force) return;
+      // force 会更换整条 relay socket；旧 socket 的 close 回调会被 epoch 守卫忽略，
+      // 因此必须在这里主动复位所有 peer 的旧 link 状态。
+      this.resetLinkStateForReconnect();
+    }
     this.stopped = false;
     this.reconnectAttempt = 0;
     if (this.reconnectTimer) {
@@ -1640,6 +1648,18 @@ export class DeviceLinkClient {
       // 光靠沉默丢弃两边会互等(死锁的另一半)。节流通知 host,由控制端
       // 决定是否主动重新 link-open 让双方 stream 重新对齐。
       this.notifyReliableFrameBeforeLink(env.src);
+      if (!peer.explicitlyClosed) {
+        const now = Date.now();
+        const last = this.staleLinkRepairAt.get(env.src) ?? 0;
+        if (now - last >= 5_000) {
+          this.staleLinkRepairAt.set(env.src, now);
+          try {
+            this.opts.onPeerLinkNeedsReopen?.(env.src);
+          } catch (err) {
+            this.log.debug(`peer link reopen callback failed for ${env.src.slice(0, 8)}`, err);
+          }
+        }
+      }
       return { handled: true };
     }
     if (peer.remoteStreamId && peer.remoteStreamId !== parsed.meta.streamId) {

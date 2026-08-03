@@ -28,6 +28,7 @@
     "thinking": "Thinking…",
     "networkReconnecting": "Reconnecting…",
     "modelBusyRetrying": "Model service busy — retrying…",
+    "rateLimitRetrying": "Request rate limited — retrying…",
     "composerSyncing": "Syncing session data; you can send once it finishes.",
     "composerSessionNotSynced": "This session has not finished syncing yet.",
     "composerCreating": "Creating the session; you can keep sending after the first message goes out.",

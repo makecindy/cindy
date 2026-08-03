@@ -23,7 +23,8 @@ import {
 } from '../usage/claudeSubscriptionUsage.js';
 import { createClaudeSubscriptionUsageReader } from '../usage/claudeSubscriptionUsageRefresh.js';
 import { createCodexAccountUsageSnapshotReader } from '../usage/codexAccountUsageRefresh.js';
-import { getModelPricing } from '../usage/modelPricing.js';
+import { getGatewayModelPricing } from '../usage/modelPricing.js';
+import { getReferenceModelPricing } from '../usage/referenceModelPricing.js';
 import {
   CodexWebUsageUnauthorizedError,
   fetchCodexWebUsageSnapshot,
@@ -219,7 +220,8 @@ export function registerMakerUsageIpc(maker: Maker): void {
     readClaudeSubscriptionUsageSnapshot: () => claudeSubscriptionUsageReader.read(),
     readClaudeAccountUsageSnapshot,
     triggerClaudeAccountUsageRefresh,
-    readModelPricing: getModelPricing,
+    readModelPricing: getGatewayModelPricing,
+    readReferenceModelPricing: getReferenceModelPricing,
     readUsageHistory,
     emptyUsageHistory: emptyUsageHistoryPayload,
   });

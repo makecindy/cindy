@@ -1,5 +1,6 @@
 {
   "ipcError": {
+    "INVALID_PARAMS": "Invalid input. Please check and try again.",
     "SESSION_RUNNING": "This session is currently running a task. Please try again shortly.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "Image input is not enabled for the current Pi model. Switch to a model that supports images. For a custom model, enable “Supports image input” in provider settings, then start a new Pi task.",
     "CREDENTIAL_SWITCH_BUSY": "Another Codex task is still running, so this provider switch was not applied (the session keeps its previous provider). Try again after those tasks finish.",
@@ -10,7 +11,8 @@
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "The target model or source needs a different remote route — close and recreate the remote session to apply.",
     "REMOTE_PROVIDER_UPDATING": "Provider credentials are being updated — retry in a moment",
     "REMOTE_PROVIDER_UNSUPPORTED": "This provider is not supported in SSH remote sessions — pick another source",
-    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model"
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai subscription is not connected — connect it first or pick a gateway model",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "The target device is not responding. Check the remote device and try again."
   },
   "providerError": {
     "AUTH_INVALID": "Invalid or expired API key (401). Check the key and try again",
@@ -395,6 +397,7 @@
         "importPartial": "Imported {{name}} ({{themeCount}} variant(s)). {{skipped}} semantic colors stay unchanged per spec, {{unresolved}} values could not be read, and {{derived}} roles were approximated from nearby colors.",
         "importFailed": "Import failed: {{error}}",
         "importUnsupported": "This file is not a recognizable VSCode or Obsidian theme.",
+        "importContrastUnsupported": "The theme colors cannot keep unchecked switches visible. Adjust its background or secondary text colors, then import it again.",
         "importUsesInclude": "This VSCode theme inherits colors via \"include\" and cannot be imported standalone.",
         "importNotAFile": "Select a file, not a folder.",
         "importTooLarge": "File is too large to import as a theme.",
@@ -1321,6 +1324,9 @@
           "modelContextWindowTitle": "Context window in tokens. Leave empty for the conservative 200K default; affects the window display and compaction threshold.",
           "modelSupportsImageInput": "Supports image input",
           "modelSupportsImageInputHelp": "Enable only when the model actually accepts visual input. Start a new Pi task after saving.",
+          "modelSupportsReasoning": "Supports reasoning",
+          "modelSupportsReasoningHelp": "Enable only when the model accepts reasoning effort, then select every supported level. Changes take effect in the next Pi Agent session.",
+          "modelReasoningEfforts": "Supported reasoning effort levels",
           "addModel": "Add model",
           "headers": "Headers (optional)",
           "headerNamePlaceholder": "Header-Name",
@@ -2980,7 +2986,8 @@
           "wechat": "New WeChat conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
           "telegram": "New Telegram conversations use this Agent and model. Send /new in an existing conversation to apply it.",
           "dingtalk": "New DingTalk conversations use this Agent and model. Send /new in an existing conversation to apply it.",
-          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them."
+          "wecom": "New WeCom conversations use this Agent, model, and permission mode. Send /new in an existing chat to apply them.",
+          "officialHook": "New conversations from the official bot use this Agent and model. Telegram and X share this one; Slack keeps its own (configured on the Slack card). Permission mode is set per directory under Workspace mapping above. Send /new in an existing conversation to apply it."
         },
         "agentLabel": "Agent",
         "modelLabel": "Model Configuration",
@@ -3804,16 +3811,9 @@
         "INTERNAL": "Operation failed. Please try again later."
       },
       "guide": {
-        "hint": "Your contacts are empty. Start from any source so it knows your people from day one:",
-        "cta": "Organize with AI",
-        "prompt": "Help me organize my smart contacts: review what is there, add people worth keeping (import from system contacts or vCard, or ask me), and confirm-then-merge any duplicates.",
-        "sources": {
-          "mail": "From Email",
-          "im": "From IM",
-          "import": "Import Contacts"
-        },
-        "mailPrompt": "Help me build my Smart Contacts from email: first check which mail tools I have connected (if none, tell me how to connect one); scan the last 6 months of correspondence and create profiles for real contacts I exchange mail with — confirm high-frequency, clearly-identified people directly, use pending for uncertain ones; skip marketing mail, notification bots, and one-off senders. Report which profiles you created at the end.",
-        "imPrompt": "Help me build my Smart Contacts from chat tools: first check which IMs I have connected (Feishu / Slack / WeChat etc.; if none, tell me how to connect one); organize the people I chat with regularly into contacts, use pending for uncertain ones, and skip group bots and one-off conversations. Report which profiles you created at the end."
+        "hint": "Let AI help add contact profiles, review pending entries, and clean up duplicates.",
+        "cta": "Manage Contacts with AI",
+        "managementPrompt": "Help me manage my Smart Contacts. First check the current state and the tools already available, then guide me through adding useful contacts, reviewing duplicates, and handling pending entries. Ask me before any write, merge, or deletion."
       }
     },
     "remotePermission": {
@@ -5020,8 +5020,7 @@
         "context": "{{value}} context",
         "codexCompatibilityMode": "Codex compatibility mode",
         "price": "{{input}}/{{output}} per 1M",
-        "fastBadge": "Fast",
-        "budgetDiscount": "Special discount"
+        "fastBadge": "Fast"
       },
       "source": {
         "railLabel": "Source",
@@ -5573,6 +5572,7 @@
       "networkAutoRetrying": "Network error — retrying automatically…",
       "networkReconnecting": "Connection interrupted — reconnecting ({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "The model service is busy — retrying automatically ({{attempt}}/{{maxAttempts}})…",
+      "rateLimitRetrying": "Request rate limited — retrying automatically ({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "The model service is busy — the upstream has no capacity right now. Click \"Retry\", or switch to another model.",
       "overloadBusyNoRetry": "The model service is busy — the upstream has no capacity right now. Try again later, or switch to another model.",
       "networkShowRaw": "Show raw error",
@@ -5923,6 +5923,11 @@
       "openInBrowser": "Open in browser",
       "fileCopied": "File copied",
       "pathCopied": "Path copied",
+      "BROWSER_FILE_INVALID_TARGET": "The local page path is invalid",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "This path is not allowed",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "This file type cannot be opened in a browser",
+      "BROWSER_FILE_NOT_FOUND": "The local page was not found",
+      "BROWSER_FILE_OPEN_FAILED": "Failed to open in browser",
       "openInBrowserFailed": "Failed to open in browser",
       "openLinkFailed": "Failed to open link",
       "anchorNotFound": "Heading not found",

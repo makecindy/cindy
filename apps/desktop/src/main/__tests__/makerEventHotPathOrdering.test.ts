@@ -154,7 +154,7 @@ describe('maker:event hot path ordering', () => {
     // 回看窗口要盖住赋值点与所属 if 条件之间的声明/注释(done 分支里 silent-stop
     // 的 isSilentStopDone 判定 + 设计注释就有 ~500 字符),太窄会把仍在正确分支内的
     // 赋值误判成"脱离 done 路径"。
-    const CONTEXT_LOOKBACK = 700;
+    const CONTEXT_LOOKBACK = 1_400;
     const statusContexts = statusIdleAssignments.map((index) =>
       wireSessionSource.slice(Math.max(0, index - CONTEXT_LOOKBACK), index + 'shouldMarkTurnStatusIdleAfterBroadcast = true;'.length),
     );
@@ -560,8 +560,8 @@ describe('maker:event hot path ordering', () => {
     );
     expect(codexDoneSource).toContain('const pricing = isSubscriptionValue');
     expect(codexDoneSource).not.toContain('isSubscriptionValue && !isCodexXaiProviderRoute');
-    expect(codexDoneSource).toContain('? await getModelPricing()');
-    expect(codexDoneSource).toContain("? await getModelPricingForModel('xd', pricingModel)");
+    expect(codexDoneSource).toContain('? getReferenceModelPricing()');
+    expect(codexDoneSource).toContain('? await getGatewayModelPricingForModel()');
     expect(codexDoneSource).toContain('price ?? undefined');
     expect(codexDoneSource).toContain(
       "if (!isSubscriptionValue && money && price?.source === 'gateway')",
@@ -605,10 +605,8 @@ describe('maker:event hot path ordering', () => {
     // 主路径:按真实 provider / billing route 取价，所有 sink 共用区域金额结果。
     expect(claudeDoneSource).toContain('const billingRoute: BillingRoute = session.remoteHostId');
     expect(claudeDoneSource).toContain("billingRoute === 'xd-gateway'");
-    expect(claudeDoneSource).toContain("await getModelPricingForModel(");
-    expect(claudeDoneSource).toContain("'xd',");
-    expect(claudeDoneSource).toContain('normalizeModelIdForPricing(deltas[0]?.model)');
-    expect(claudeDoneSource).toContain(': await getModelPricing();');
+    expect(claudeDoneSource).toContain('await getGatewayModelPricingForModel()');
+    expect(claudeDoneSource).toContain(': getReferenceModelPricing();');
     expect(claudeDoneSource).toContain(
       'const { turnMoney, estimatedTurnMoney, perModel } = resolveClaudeTurnCostSinks(',
     );
@@ -629,6 +627,9 @@ describe('maker:event hot path ordering', () => {
     );
     expect(claudeDoneSource).toContain(
       "m.source === 'subscription' && isSubscriptionDirectModel(m.model)",
+    );
+    expect(claudeDoneSource).toMatch(
+      /estimateClaudeSubscriptionTurnValue\(\s*perModel,\s*currentLedgerCurrency\(\),\s*pricing,\s*\)/,
     );
     // 订阅判定对齐 proxy 路由: 显式选 Anthropic, 或默认路由优先按 observed route, 未观察再回落无网关 key 启发式
     expect(claudeDoneSource).toContain("sessionProviderForBilling === 'anthropic'");

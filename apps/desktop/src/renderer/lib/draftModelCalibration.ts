@@ -13,7 +13,9 @@
 
 import {
   connectedProvidersForAgent,
+  effectiveSourceIdForModel,
   isModelSelectableForNewRoute,
+  nativeDefaultSourceId,
   type AgentKind,
   type CatalogModel,
   type ProviderView,
@@ -165,4 +167,54 @@ export function calibrateDraftModel({
   if (chosenByUser || providersLoading) return { model, providerId: null };
   const picked = pickConnectedModelForAgent(providers, agent, model);
   return picked ?? { model, providerId: null };
+}
+
+export interface DraftSessionProviderResolutionInput {
+  /** main 进程用于默认路由的完整本机来源目录。 */
+  providers: readonly ProviderView[];
+  agent: AgentKind;
+  model: string;
+  /** 用户在草稿里显式选择的来源。 */
+  explicitProviderId: string | null | undefined;
+  /** renderer 已按当前模型与校准结果解析出的生效来源。 */
+  effectiveProviderId: string | null;
+}
+
+/**
+ * 决定新建会话是否必须把 renderer 的生效来源显式带给 main。
+ *
+ * 只有在省略 providerId 后 main 会解析到同一个来源时才允许返回 null；否则必须把来源
+ * 固化在会话上，避免 UI 所见与首条请求的实际路由分叉。
+ */
+export function resolveDraftSessionProviderId({
+  providers,
+  agent,
+  model,
+  explicitProviderId,
+  effectiveProviderId,
+}: DraftSessionProviderResolutionInput): string | null {
+  if (explicitProviderId && explicitProviderId === effectiveProviderId) {
+    return explicitProviderId;
+  }
+  if (!effectiveProviderId) return null;
+  const modelDefaultProviderId = effectiveSourceIdForModel(
+    [...providers],
+    null,
+    model,
+    agent,
+  );
+  // main 收到 providerId=null 后按 agent 的原生来源选择启动链路，而不是只在“提供当前
+  // 模型”的来源里重算。典型分叉：XD 与 Anthropic 都已连接，只有 Anthropic 目录含
+  // claude-opus-5。modelDefault 是 anthropic，但 agentDefault 仍是 xd；若只比较前者
+  // 就会错误地省略 providerId，main 随后拿 gateway key 启动 XD 路由(issue #1196)。
+  const agentDefaultProviderId = nativeDefaultSourceId(
+    // main 的 spawn 默认不读取用户的 suspended 开关；这里必须保留 suspended 来源，
+    // 否则 UI 停用 XD 后会把 agentDefault 错算成 Anthropic，再次把必需的来源省略掉。
+    connectedProvidersForAgent([...providers], agent, { includeSuspended: true }),
+    agent,
+  );
+  return modelDefaultProviderId === effectiveProviderId &&
+    agentDefaultProviderId === effectiveProviderId
+    ? null
+    : effectiveProviderId;
 }

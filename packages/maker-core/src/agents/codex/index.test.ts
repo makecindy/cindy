@@ -5830,6 +5830,27 @@ describe('CodexAgent MCP thread context hooks', () => {
     }
 
     const CAPACITY_MESSAGE = 'Selected model is at capacity. Please try a different model.';
+    const TERMINAL_RATE_LIMIT_MESSAGE =
+      'exceeded retry limit, last status: 429 Too Many Requests';
+
+    async function rejectCurrentTurnForTerminalRateLimit(
+      handle: AgentSessionHandle,
+      handlers: ThreadEventHandlers,
+    ): Promise<void> {
+      const turnId = handle.getCurrentTurnId?.() ?? '';
+      handlers.error?.({
+        threadId: 'start-thread-id',
+        turnId,
+        willRetry: false,
+        error: {
+          message: TERMINAL_RATE_LIMIT_MESSAGE,
+          codexErrorInfo: {
+            responseTooManyFailedAttempts: { httpStatusCode: 429 },
+          },
+        },
+      });
+      await vi.advanceTimersByTimeAsync(40_000);
+    }
 
     function turnStartCount(host: ReturnType<typeof installFakeHost>): number {
       return host.request.mock.calls.filter(([method]) => method === Method.TurnStart).length;
@@ -5903,6 +5924,254 @@ describe('CodexAgent MCP thread context hooks', () => {
         // 退避（首档 2s ±25%）后重投同一份 turnParams。
         await vi.advanceTimersByTimeAsync(3_000);
         expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('retries a zero-output terminal 429 after the daemon exhausts its own retry budget', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-terminal-rate-limit-retry',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: {
+            message: TERMINAL_RATE_LIMIT_MESSAGE,
+            codexErrorInfo: {
+              responseTooManyFailedAttempts: { httpStatusCode: 429 },
+            },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(0);
+
+        const errorEvents = events.filter((event) => event.type === 'error');
+        expect(errorEvents).toHaveLength(1);
+        expect(errorEvents[0].data).toMatchObject({
+          errorStatus: 429,
+          isTerminal: false,
+          willRetry: true,
+        });
+        expect((errorEvents[0].data as { message: string }).message).toContain(
+          'rate-limit-retry 1/2',
+        );
+        expect(errorEvents[0].data).toMatchObject({
+          reason: 'terminal-rate-limit-retry',
+        });
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'status' &&
+              (event.data as { isRunning?: boolean }).isRunning === false,
+          ),
+        ).toBe(false);
+
+        await vi.advanceTimersByTimeAsync(20_000);
+        expect(turnStartCount(host)).toBe(2);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('stops terminal 429 outer retries after two attempts', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-terminal-rate-limit-budget',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        const events: AgentEvent[] = [];
+        void (async () => {
+          for await (const event of handle.events()) events.push(event);
+        })();
+
+        for (let i = 0; i < 3; i += 1) {
+          await rejectCurrentTurnForTerminalRateLimit(handle, handlers);
+        }
+
+        expect(turnStartCount(host)).toBe(1 + 2);
+        expect(
+          events.filter(
+            (event) =>
+              event.type === 'error' &&
+              (event.data as { isTerminal?: boolean }).isTerminal === true,
+          ),
+        ).toHaveLength(1);
+        expect(
+          events.some(
+            (event) =>
+              event.type === 'status' &&
+              (event.data as { isRunning?: boolean }).isRunning === false,
+          ),
+        ).toBe(true);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it.each([
+      {
+        name: 'capacity then terminal rate limit',
+        failures: ['capacity', 'terminal-rate-limit', 'terminal-rate-limit'] as const,
+        expectedTurnStarts: 3,
+      },
+      {
+        name: 'terminal rate limit then capacity',
+        failures: [
+          'terminal-rate-limit',
+          'terminal-rate-limit',
+          'capacity',
+          'capacity',
+          'capacity',
+        ] as const,
+        expectedTurnStarts: 5,
+      },
+    ])(
+      'shares one replay budget across policies: $name',
+      async ({ failures, expectedTurnStarts }) => {
+        vi.useFakeTimers();
+        try {
+          const agent = new CodexAgent(createDeps());
+          const host = installCapacityHost(agent);
+          const handle = await agent.startSession({
+            sessionId: `session-shared-replay-budget-${failures[0]}`,
+            model: 'gpt-5.4',
+            workingDir: '/repo',
+          });
+          await handle.send({ type: 'user', content: 'hello' });
+
+          const handlers = host.getThreadHandlers();
+          if (!handlers?.error) throw new Error('expected error handler');
+          const events: AgentEvent[] = [];
+          void (async () => {
+            for await (const event of handle.events()) events.push(event);
+          })();
+
+          for (const failure of failures) {
+            if (failure === 'capacity') {
+              await rejectCurrentTurnForCapacity(handle, handlers);
+            } else {
+              await rejectCurrentTurnForTerminalRateLimit(handle, handlers);
+            }
+          }
+
+          // 两类错误共享同一 logical send 的 attempt：策略切换不能各自续满预算。
+          // 顺序不同只会选择当前 policy 的上限，绝不会叠成 4 + 2 次外层重投。
+          expect(turnStartCount(host)).toBe(expectedTurnStarts);
+          expect(
+            events.filter(
+              (event) =>
+                event.type === 'error' &&
+                (event.data as { isTerminal?: boolean }).isTerminal === true,
+            ),
+          ).toHaveLength(1);
+
+          await handle.close();
+        } finally {
+          vi.useRealTimers();
+        }
+      },
+    );
+
+    it('does not outer-retry a terminal 429 after the turn produced output', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-terminal-rate-limit-output',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error || !handlers.reasoningTextDelta) {
+          throw new Error('expected handlers');
+        }
+        handlers.reasoningTextDelta({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          delta: 'already working',
+        } as never);
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: {
+            message: TERMINAL_RATE_LIMIT_MESSAGE,
+            codexErrorInfo: {
+              responseTooManyFailedAttempts: { httpStatusCode: 429 },
+            },
+          },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
+
+        await handle.close();
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('does not outer-retry terminal account usage limits even when the text contains 429', async () => {
+      vi.useFakeTimers();
+      try {
+        const agent = new CodexAgent(createDeps());
+        const host = installCapacityHost(agent);
+        const handle = await agent.startSession({
+          sessionId: 'session-terminal-usage-limit',
+          model: 'gpt-5.4',
+          workingDir: '/repo',
+        });
+        await handle.send({ type: 'user', content: 'hello' });
+
+        const handlers = host.getThreadHandlers();
+        if (!handlers?.error) throw new Error('expected error handler');
+        handlers.error({
+          threadId: 'start-thread-id',
+          turnId: 'turn-1',
+          willRetry: false,
+          error: {
+            message: TERMINAL_RATE_LIMIT_MESSAGE,
+            codexErrorInfo: 'usageLimitExceeded',
+          },
+        });
+        await vi.advanceTimersByTimeAsync(40_000);
+
+        expect(turnStartCount(host)).toBe(1);
+        expect(handle.isTurnRunning?.()).toBe(false);
 
         await handle.close();
       } finally {
@@ -6196,7 +6465,7 @@ describe('CodexAgent MCP thread context hooks', () => {
             (e) =>
               e.type === 'error' &&
               (e.data as { isTerminal?: boolean; reason?: string }).isTerminal === true &&
-              (e.data as { reason?: string }).reason === 'codex-overload-retry-aborted',
+              (e.data as { reason?: string }).reason === 'codex-turn-replay-retry-aborted',
           ),
         ).toBe(true);
         expect(
@@ -8036,7 +8305,13 @@ describe('CodexAgent MCP thread context hooks', () => {
         controller.abort();
         await vi.advanceTimersByTimeAsync(0);
         const after = events.slice(before);
-        expect(after.filter((e) => e.type === 'error' && e.data?.isTerminal === true)).toHaveLength(1);
+        const terminalAfterSignal = after.filter(
+          (e) => e.type === 'error' && e.data?.isTerminal === true,
+        );
+        expect(terminalAfterSignal).toHaveLength(1);
+        expect(terminalAfterSignal[0].data).toMatchObject({
+          reason: 'codex-turn-replay-retry-cancelled',
+        });
         expect(after.some((e) => e.type === 'status' && e.data?.isRunning === false)).toBe(true);
         expect(handle.isTurnRunning?.()).toBe(false);
 
@@ -9354,7 +9629,7 @@ describe('CodexAgent MCP thread context hooks', () => {
         );
         expect(terminalAfterAbort).toHaveLength(1);
         expect(terminalAfterAbort[0].data).toMatchObject({
-          reason: 'codex-overload-retry-aborted',
+          reason: 'codex-turn-replay-retry-aborted',
         });
 
         // 随后在途的重投 RPC 失败：**不得**再补第二条 terminal error / Done。

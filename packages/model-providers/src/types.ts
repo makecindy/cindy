@@ -25,6 +25,10 @@ export type AgentKind = 'claude-code' | 'codex' | 'pi';
 /** 推理强度档位 —— 与 maker-core Effort 对齐。 */
 export type Effort = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh' | 'max' | 'ultra';
 
+/** Pi 原生支持的 reasoning/thinking 档位（Pi 不支持 Cindy 的 ultra 档）。 */
+export const PI_REASONING_EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'] as const;
+export type PiReasoningEffort = (typeof PI_REASONING_EFFORTS)[number];
+
 /** Provider runtime 上游实际接受的推理 wire protocol。 */
 export type ProviderWireProtocol =
   | 'anthropic-messages'
@@ -440,6 +444,13 @@ export interface ProviderRuntimeModelConfig {
   defaultEnabled?: boolean;
   /** Pi 自定义模型是否支持原生图片输入；缺省保守视为不支持。 */
   supportsImageInput?: boolean;
+  /** Pi 自定义模型是否支持 reasoning；缺省 / false 均按不支持处理。 */
+  reasoning?: boolean;
+  /**
+   * Pi 自定义模型明确支持的推理强度。仅在 `reasoning: true` 时有效；不从模型名、协议或
+   * provider 类型猜测，避免把 UI 可选档位导出给实际不支持 reasoning 的 BYOM 端点。
+   */
+  reasoningEfforts?: PiReasoningEffort[];
 }
 
 /**

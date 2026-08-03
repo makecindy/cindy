@@ -10,7 +10,44 @@ import {
   overloadFailureNotice,
   overloadRetryNotice,
   terminalErrorText,
+  turnRetryNotice,
 } from '../turnRetryNotice';
+
+describe('turnRetryNotice', () => {
+  it('终态 429 外层重投 → 渠道侧限流进度', () => {
+    expect(
+      turnRetryNotice({
+        message:
+          'exceeded retry limit, last status: 429 Too Many Requests (rate-limit-retry 1/2)',
+        reason: 'terminal-rate-limit-retry',
+      }),
+    ).toBe('请求受到限流，正在自动重试（1/2）…');
+  });
+
+  it('reason 与 marker 必须同时命中，普通 429 仍保持静默', () => {
+    expect(
+      turnRetryNotice({
+        message: 'provider failed (rate-limit-retry 1/2)',
+        reason: 'other-reason',
+      }),
+    ).toBeNull();
+    expect(
+      turnRetryNotice({
+        message: 'HTTP 429 Too Many Requests',
+        reason: 'terminal-rate-limit-retry',
+      }),
+    ).toBeNull();
+    expect(turnRetryNotice({ message: 'rate limit exceeded', errorStatus: 429 })).toBeNull();
+  });
+
+  it('继续覆盖原有过载进度', () => {
+    expect(
+      turnRetryNotice({
+        message: 'Selected model is at capacity. (auto-retry 2/4)',
+      }),
+    ).toBe('模型服务繁忙，正在自动重试（2/4）…');
+  });
+});
 
 describe('overloadRetryNotice', () => {
   it('带次数的 Codex 容量重投 → 带进度的中文提示', () => {

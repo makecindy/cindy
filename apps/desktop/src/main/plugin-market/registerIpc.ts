@@ -21,6 +21,21 @@ function service(): PluginMarketService {
 }
 
 /**
+ * Reuse the market snapshot reconciliation outside the Plugins page so
+ * default-install plugins are provisioned as soon as an app owner is ready.
+ * The Plugins page keeps the same call as a later retry path.
+ */
+export async function syncDefaultMarketPlugins(): Promise<void> {
+  try {
+    await service().snapshot();
+  } catch (error) {
+    log.warn('default plugin startup sync failed', {
+      error: error instanceof Error ? error.message : String(error),
+    });
+  }
+}
+
+/**
  * Preserve stable IPC errors and hide internal/network messages from the
  * renderer. Detailed failures stay in main logs; the renderer localizes by
  * code and uses a generic fallback for INTERNAL.

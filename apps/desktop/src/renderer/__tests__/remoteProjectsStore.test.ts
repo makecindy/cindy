@@ -312,6 +312,17 @@ describe('remoteProjectsStore', () => {
     expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
   });
 
+  it('clears only a superseded bootstrap loading state', () => {
+    remoteProjectsStore.markBootstrapLoading('dev-loading');
+    remoteProjectsStore.clearBootstrapLoading('dev-loading');
+    expect(remoteProjectsStore.getBootstrapLoadingDeviceIds().size).toBe(0);
+    expect(remoteProjectsStore.getBootstrapFailedDeviceIds().size).toBe(0);
+
+    remoteProjectsStore.markBootstrapFailed('dev-failed');
+    remoteProjectsStore.clearBootstrapLoading('dev-failed');
+    expect([...remoteProjectsStore.getBootstrapFailedDeviceIds()]).toEqual(['dev-failed']);
+  });
+
   it('clear resets everything', () => {
     remoteProjectsStore.setDeviceSessions('dev-B', 'B', [mk('s1'), mk('s2')]);
     remoteProjectsStore.clear();

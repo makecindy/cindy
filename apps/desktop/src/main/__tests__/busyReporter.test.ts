@@ -2,7 +2,20 @@
  * busyReporter 单测 —— 被控端 busy presence 的 dedupe 与重连补正(PR #166 review New-F)。
  * 核心:hello 必须报当前真实 busy 并同步 dedupe 基线,否则 turn 进行中重连会让其它设备整轮看成空闲。
  */
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
+
+const logSpies = vi.hoisted(() => ({ warn: vi.fn() }));
+vi.mock('../logger', () => ({
+  createLogger: () => ({
+    trace: vi.fn(),
+    debug: vi.fn(),
+    info: vi.fn(),
+    warn: logSpies.warn,
+    error: vi.fn(),
+    fatal: vi.fn(),
+  }),
+}));
+
 import {
   setBusyProbe,
   currentBusy,
@@ -12,7 +25,10 @@ import {
   __testing,
 } from '../device-link/busyReporter';
 
-beforeEach(() => __testing.reset());
+beforeEach(() => {
+  __testing.reset();
+  logSpies.warn.mockClear();
+});
 
 describe('busyReporter', () => {
   it('无 probe → currentBusy=false', () => {
@@ -76,5 +92,103 @@ describe('busyReporter', () => {
     expect(__testing.getLastReported()).toBe(true);
     resetBusyDedupe();
     expect(__testing.getLastReported()).toBe(false);
+  });
+});
+
+/**
+ * probe 抛错(账号 / owner 边界切换期 maker facade 抛 PRECONDITION_FAILED)。
+ * 修复前:异常从 pollBusyChange 逃到 5s setInterval,成为主进程 uncaughtException →
+ * beginShutdown → exitCode=1,冷启动崩溃循环(issue #1358)。
+ */
+describe('busyReporter · probe 不可用(issue #1358)', () => {
+  const boundaryError = () =>
+    new Error('[PRECONDITION_FAILED] App session is switching; retry after the owner boundary settles.');
+
+  it('pollBusyChange 不外抛,返回 null(不上报)', () => {
+    setBusyProbe(() => {
+      throw boundaryError();
+    });
+    expect(() => pollBusyChange()).not.toThrow();
+    expect(pollBusyChange()).toBeNull();
+  });
+
+  it('probe 抛错时基线保持不动 —— 不退化成「不忙」', () => {
+    // turn 正在跑并已上报过 → 基线 true。
+    let probe: () => boolean = () => true;
+    setBusyProbe(() => probe());
+    expect(pollBusyChange()).toBe(true);
+    expect(__testing.getLastReported()).toBe(true);
+
+    // 边界切换:probe 开始抛错。若把未知当 false,基线会被推成 false,
+    // turn 仍在跑时其它设备整轮把本机看成空闲(同 New-F 那个坑)。
+    probe = () => {
+      throw boundaryError();
+    };
+    expect(pollBusyChange()).toBeNull();
+    expect(__testing.getLastReported()).toBe(true);
+  });
+
+  it('probe 恢复后照常工作:未错过的翻转仍会上报', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    expect(pollBusyChange()).toBeNull(); // 边界期:跳过,基线仍 false
+    expect(__testing.getLastReported()).toBe(false);
+
+    // 边界稳定,期间 turn 已经起来了 → 恢复后第一拍就补报 true。
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true);
+    expect(__testing.getLastReported()).toBe(true);
+  });
+
+  it('同一段连续失败只记一条 warn,probe 恢复后重新武装', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    pollBusyChange();
+    pollBusyChange();
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(1); // 边界期每 5s 一条纯噪音,抑制掉
+
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true); // 恢复 → 抑制解除
+    probe = () => {
+      throw boundaryError();
+    };
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(2); // 新一段失败重新记一条
+  });
+
+  it('换 probe 会重置失败日志抑制 —— 新一段的首条 warn 不被上一段吃掉', () => {
+    const throwing = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(throwing);
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(1);
+
+    // 账号切换后重建 maker 会走「解绑 → 重新注入」;若不在这里重置抑制标志,
+    // 新 probe 仍不可用时的首条 warn 会被上一段的标志静默吃掉。
+    setBusyProbe(null);
+    setBusyProbe(throwing);
+    pollBusyChange();
+    expect(logSpies.warn).toHaveBeenCalledTimes(2);
+  });
+
+  it('currentBusy / helloBusy 在 probe 不可用时按 false,且能自我纠正', () => {
+    let probe: () => boolean = () => {
+      throw boundaryError();
+    };
+    setBusyProbe(() => probe());
+    // hello 帧必须带一个具体值,未知只能按 false 发;基线随之为 false。
+    expect(currentBusy()).toBe(false);
+    expect(helloBusy()).toBe(false);
+    expect(__testing.getLastReported()).toBe(false);
+
+    // 边界稳定后若实际在跑 turn,下一拍轮询就把它补正回 true(不会被 dedupe 压掉)。
+    probe = () => true;
+    expect(pollBusyChange()).toBe(true);
   });
 });

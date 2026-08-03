@@ -37,6 +37,8 @@ const orcaLifecycleServiceSourcePath = resolve(__dirname, '..', 'maker-ipc', 'or
 const orcaLifecycleServiceSource = readFileSync(orcaLifecycleServiceSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useWorkersSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useWorkers.ts');
 const useWorkersSource = readFileSync(useWorkersSourcePath, 'utf8').replace(/\r\n?/g, '\n');
+const workerProjectionStoreSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'workerProjectionStore.ts');
+const workerProjectionStoreSource = readFileSync(workerProjectionStoreSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const preloadSourcePath = resolve(__dirname, '..', '..', 'preload', 'preload.ts');
 const preloadSource = readFileSync(preloadSourcePath, 'utf8').replace(/\r\n?/g, '\n');
 const useOrcaWorkerSelectionSourcePath = resolve(__dirname, '..', '..', 'renderer', 'features', 'cc-agent', 'hooks', 'useOrcaWorkerSelection.ts');
@@ -426,6 +428,7 @@ describe('sendToSession ordering', () => {
     );
     expect(setModelBlock).toContain('if (isDeviceLinkInvoke()) {');
     expect(setModelBlock).toContain('if (atomicSelection) {');
+    expect(setModelBlock).toContain('effort: atomicSelection.effort as');
     expect(setModelBlock).toContain('setSessionEffort(sessionId, atomicSelection.effort);');
     expect(setModelBlock).toContain('setSessionFastMode(sessionId, atomicSelection.fastMode);');
     expect(setModelBlock).toContain('await sess.setEffort(');
@@ -438,6 +441,11 @@ describe('sendToSession ordering', () => {
     expectOrder(
       setModelBlock,
       'applySetModelThenCancelAgentSwitchIntent(',
+      'setSessionEffort(sessionId, atomicSelection.effort);',
+    );
+    expectOrder(
+      setModelBlock,
+      'effort: atomicSelection.effort as',
       'setSessionEffort(sessionId, atomicSelection.effort);',
     );
     expectOrder(
@@ -464,6 +472,22 @@ describe('sendToSession ordering', () => {
       'applyPendingAgentSwitchIfIdle(',
     );
     expectOrder(directSendSwitchBlock, 'applyPendingAgentSwitchIfIdle(', 'return release;');
+  });
+
+  it('仅 Device Link 归一化 SET_MODEL 的 JSON null 可选占位,本地仍走严格校验', () => {
+    const setModelBlock = extractBetween(
+      source,
+      'ipcMain.handle(MAKER_INVOKE.SET_MODEL',
+      'ipcMain.handle(MAKER_INVOKE.SET_EFFORT',
+    );
+    expect(setModelBlock).toContain('normalizeDeviceLinkSetModelWireArgs(');
+    expect(setModelBlock).toContain('isDeviceLinkInvoke(),');
+    expect(setModelBlock).toContain(
+      'expectedAgentSwitchRevision = normalizedWireArgs.expectedAgentSwitchRevision;',
+    );
+    expect(setModelBlock).toContain('selection = normalizedWireArgs.selection;');
+    expect(setModelBlock).toContain('expectedAgentSwitchRevision must be a non-negative integer');
+    expect(setModelBlock).toContain('selection must contain effort + fastMode');
   });
 
   it('publishes Agent Island prompt preview from send intent and wires commit rollback', () => {
@@ -819,9 +843,10 @@ describe('sendToSession ordering', () => {
   });
 
   it('uses active slot occupancy for renderer worker-limit gating', () => {
-    expect(useWorkersSource).toContain('isActiveWorkerStatus');
+    expect(workerProjectionStoreSource).toContain('isActiveWorkerStatus');
     expect(useWorkersSource).not.toContain('isRunningWorkerStatus');
-    expect(useWorkersSource).toContain('const activeWorkerCount = workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
+    expect(useWorkersSource).toContain('const activeWorkerCount = getActiveWorkerCount(workers);');
+    expect(workerProjectionStoreSource).toContain('return workers.filter((w) => isActiveWorkerStatus(w.status)).length;');
   });
 });
 

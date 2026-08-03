@@ -25,6 +25,32 @@
 - 测试只使用明显无效的假凭证，不读取或复制开发者真实的 `HOME`、Agent home、
   Electron userData 或系统凭证目录。
 
+## macOS safeStorage 钥匙串条目
+
+- macOS 上 Electron `safeStorage` 的钥匙串条目名由 `app.name` 派生
+  （service = `<app.name> Safe Storage`）。当前语义（#871）：packaged cn / global 与
+  **共享 userData** 的 dev 共用 `Cindy Safe Storage`；**显式隔离**的 dev 沙箱
+  （`--isolated` / `XDT_ISOLATED=1`）在首启（profile 为空）时选定独立的
+  `CindyDev Safe Storage`，并把身份写入 profile 根的 `keychain-identity` 标记文件、
+  跨重启粘住（见 `apps/desktop/src/main/devKeychainName.ts`；身份不能用「目录是否
+  为空」做持续判据）。隔离沙箱默认目录随之升纪元为 `<userData>-dev2[-<名字>]`：旧
+  `-dev` 目录属 `Cindy` 身份纪元、留给旧 checkout，同名目录被两种身份轮流打开会互毁
+  密文。无标记且已有数据的旧沙箱永久保持默认条目名（存量密文绑定旧
+  条目主密钥，零迁移只对新沙箱成立）；裸设 `XDT_USER_DATA_DIR` 只是目录覆写、不表达
+  隔离意图（devCliFlags 契约），**绝不认领 `CindyDev`**——但打开的目录已带标记时依
+  标记运行（观察模式：身份是 profile 的属性，不随启动旗标切换），标记不可读或内容
+  不可识别同样拒绝启动。空 profile 的身份在两种模式下都经标记文件**原子落定**
+  （隔离启动认领 `CindyDev`，覆写启动认领默认身份 `Cindy`，输家依胜者标记），
+  防并发启动对同一 profile 以两种身份写密文。
+- 钥匙串条目名与 userData profile 的存量密文一一绑定：**不得**在共享既有 profile 的
+  进程里改 `app.name`——换名后新写入的密文对共用该 profile 的其它身份不可解，双向串坏。
+  改动条目名属存量凭证迁移，按上方增量适用原则必须单独设计兼容/回滚/验证方案。
+- 同机装过 cn 与 global 双版的机器上，后启动的版本首次访问 `safeStorage` 会触发系统
+  钥匙串授权弹窗，属 macOS 按预期征求同意；应引导用户点「始终允许」。点「拒绝」后
+  加解密降级失败，authManager 的 safeStorage helpers 会按原因落一次 warn 日志。
+- 不要在启动路径主动调用 `safeStorage.isEncryptionAvailable()` 做探测——macOS 上探测
+  本身可能触发钥匙串授权弹窗，把弹窗时机提前到与用户动作无关的启动期。
+
 ## 路径与生命周期
 
 | 数据性质 | 正确位置 |

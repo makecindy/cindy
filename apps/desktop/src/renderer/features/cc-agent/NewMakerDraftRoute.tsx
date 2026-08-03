@@ -106,7 +106,11 @@ import {
 } from '@/lib/composerDraftStore';
 import type { JSONContent } from '@tiptap/core';
 import { base64ToUint8Array } from '@/lib/fileTypeInference';
-import { calibrateDraftModel, type DraftModelCalibrationResult } from '@/lib/draftModelCalibration';
+import {
+  calibrateDraftModel,
+  resolveDraftSessionProviderId,
+  type DraftModelCalibrationResult,
+} from '@/lib/draftModelCalibration';
 import { showWorktreeError } from '@/lib/worktreeToast';
 import type { CreateWorktreeResp } from '@/lib/worktree.types';
 import * as sessionService from '@/lib/sessionService';
@@ -554,7 +558,11 @@ export function NewMakerDraftRoute() {
     rightSidebarSide?: 'left' | 'right';
     setRightSidebarAvailable?: (available: boolean) => void;
     setRightSidebarSessionId?: (sessionId: string | null) => void;
-    setRightSidebarWorkdir?: (workdir: string, remoteHostId?: string | null) => void;
+    setRightSidebarWorkdir?: (
+      workdir: string,
+      remoteHostId?: string | null,
+      deviceLinkDeviceId?: string | null,
+    ) => void;
   } | null>();
   const rightSidebarCollapsed = outletContext?.rightSidebarCollapsed ?? true;
   const onToggleRightSidebar = outletContext?.onToggleRightSidebar;
@@ -882,12 +890,21 @@ export function NewMakerDraftRoute() {
 
   useLayoutEffect(() => {
     if (draftRightSidebar.workdir) {
-      setRightSidebarWorkdir?.(draftRightSidebar.workdir, draftRightSidebar.remoteHostId);
+      setRightSidebarWorkdir?.(
+        draftRightSidebar.workdir,
+        draftRightSidebar.remoteHostId,
+        draftRightSidebar.deviceLinkDeviceId,
+      );
     } else {
-      setRightSidebarWorkdir?.('');
+      setRightSidebarWorkdir?.('', null, undefined);
     }
-    return () => setRightSidebarWorkdir?.('');
-  }, [draftRightSidebar.workdir, draftRightSidebar.remoteHostId, setRightSidebarWorkdir]);
+    return () => setRightSidebarWorkdir?.('', null, undefined);
+  }, [
+    draftRightSidebar.deviceLinkDeviceId,
+    draftRightSidebar.remoteHostId,
+    draftRightSidebar.workdir,
+    setRightSidebarWorkdir,
+  ]);
 
   // 跨 Agent 工作区迁移弹窗：detect → ask → run → 等关闭 → 才创建会话
   const crossAgentDialog = useCrossAgentMigrationDialog();
@@ -1393,19 +1410,17 @@ export function NewMakerDraftRoute() {
   // **未过滤**的目录,被用户隐藏、被 SSH 订阅直连排除、被 chat-bridge 排除掉的来源在那边
   // 依然是候选。此时 UI 高亮 B、main 却路由到 A,会话就从一个用户看不见的来源发出去。所以
   // 只在默认路由确实落回 effectiveSourceId 时才省略它,不一致时显式带上(PR #548 review)。
+  // 这里的「默认」还必须覆盖 main 的 spawn-aware 语义:Claude OAuth 会话收到 providerId=null
+  // 且存在 Gateway key 时会按 agent 默认走 XD,即使 XD 的动态目录并不提供当前模型。只比较
+  // effectiveSourceIdForModel 的模型级默认会把这种分叉误判成「可安全省略」(issue #1196)。
   const localProviderIdForDraft = useMemo<string | null>(() => {
-    if (chatPrefs.providerId && chatPrefs.providerId === effectiveSourceId) {
-      return chatPrefs.providerId;
-    }
-    if (!effectiveSourceId) return null;
-    // 用与 main 同源的解析函数 + 未过滤目录复算一次默认路由,比较的是同一口径。
-    const defaultRouted = effectiveSourceIdForModel(
-      localProviders,
-      null,
-      calibratedDraftModel,
-      capabilityAgentKind,
-    );
-    return defaultRouted === effectiveSourceId ? null : effectiveSourceId;
+    return resolveDraftSessionProviderId({
+      providers: localProviders,
+      agent: capabilityAgentKind,
+      model: calibratedDraftModel,
+      explicitProviderId: chatPrefs.providerId,
+      effectiveProviderId: effectiveSourceId,
+    });
   }, [
     chatPrefs.providerId,
     effectiveSourceId,

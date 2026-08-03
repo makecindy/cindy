@@ -1,5 +1,6 @@
 {
   "ipcError": {
+    "INVALID_PARAMS": "매개변수가 잘못되었습니다. 확인 후 다시 시도하세요.",
     "SESSION_RUNNING": "이 세션은 현재 작업을 실행 중입니다. 잠시 후 다시 시도해 주세요.",
     "PI_IMAGE_INPUT_UNSUPPORTED": "현재 Pi 모델에는 이미지 입력이 활성화되어 있지 않습니다. 이미지를 지원하는 모델로 전환하세요. 사용자 지정 모델이라면 제공자 설정에서 ‘이미지 입력 지원’을 켠 다음 새 Pi 작업을 시작하세요.",
     "CREDENTIAL_SWITCH_BUSY": "다른 Codex 작업이 실행 중이어서 이번 제공자 전환은 적용되지 않았습니다(세션은 기존 제공자를 유지합니다). 다른 작업이 끝난 후 다시 시도해 주세요.",
@@ -10,7 +11,8 @@
     "REMOTE_MODEL_SWITCH_ROUTE_CHANGE": "대상 모델 또는 소스에 다른 원격 라우트가 필요합니다. 원격 세션을 닫고 다시 생성하세요.",
     "REMOTE_PROVIDER_UPDATING": "제공자 자격 증명을 업데이트하는 중입니다. 잠시 후 다시 시도하세요",
     "REMOTE_PROVIDER_UNSUPPORTED": "이 제공자는 SSH 원격 세션을 지원하지 않습니다. 다른 소스를 선택하세요",
-    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요"
+    "REMOTE_NATIVE_OAUTH_UNAVAILABLE": "Claude.ai 구독이 연결되지 않았습니다. 먼저 연결하거나 게이트웨이 모델을 선택하세요",
+    "DEVICE_LINK_DEVICE_UNRESPONSIVE": "대상 장치가 응답하지 않습니다. 원격 장치를 확인한 후 다시 시도하세요."
   },
   "providerError": {
     "AUTH_INVALID": "API 키가 유효하지 않거나 만료되었습니다(401). 키를 확인한 후 다시 시도하세요",
@@ -395,6 +397,7 @@
         "importPartial": "{{name}}({{themeCount}}개 구성)을 가져왔습니다. 의미가 정해진 색 {{skipped}}개는 규칙대로 그대로 두었고, {{unresolved}}개는 값을 읽을 수 없어 건너뛰었고, {{derived}}개는 인접색에서 추정했습니다.",
         "importFailed": "가져오기에 실패했습니다: {{error}}",
         "importUnsupported": "이 파일은 VSCode 또는 Obsidian 테마로 인식할 수 없습니다.",
+        "importContrastUnsupported": "테마 색상으로는 꺼진 스위치를 선명하게 표시할 수 없습니다. 배경색이나 보조 텍스트 색상을 조정한 뒤 다시 가져오세요.",
         "importUsesInclude": "이 VSCode 테마는 include를 통해 색상을 상속하므로 단독으로 가져올 수 없습니다.",
         "importNotAFile": "폴더가 아닌 파일을 선택해 주세요.",
         "importTooLarge": "파일이 너무 커서 테마로 가져올 수 없습니다.",
@@ -1321,6 +1324,9 @@
           "modelContextWindowTitle": "컨텍스트 윈도우(토큰 수). 비워 두면 보수적 기본값 200K가 적용되며, 윈도우 표시와 압축 임계값에 영향을 줍니다.",
           "modelSupportsImageInput": "이미지 입력 지원",
           "modelSupportsImageInputHelp": "모델이 실제로 시각 입력을 지원할 때만 켜세요. 저장 후 새 Pi 작업부터 적용됩니다.",
+          "modelSupportsReasoning": "추론 지원",
+          "modelSupportsReasoningHelp": "모델이 추론 강도를 허용할 때만 켜고 실제로 지원하는 모든 단계를 선택하세요. 저장 후 다음 Pi Agent 세션부터 적용됩니다.",
+          "modelReasoningEfforts": "지원되는 추론 강도",
           "addModel": "모델 추가",
           "headers": "요청 헤더(선택)",
           "headerNamePlaceholder": "Header-Name",
@@ -2979,7 +2985,8 @@
           "wechat": "새 WeChat 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
           "telegram": "새 Telegram 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
           "dingtalk": "새 DingTalk 대화는 이 Agent와 모델을 사용합니다. 기존 대화에는 /new를 보내 적용하세요.",
-          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요."
+          "wecom": "새 WeCom 대화는 이 Agent, 모델, 권한 모드를 사용합니다. 기존 채팅에는 /new를 보내 적용하세요.",
+          "officialHook": "공식 bot의 새 대화는 이 Agent와 모델을 사용합니다. Telegram과 X가 이 설정을 공유하고, Slack은 자체 설정(Slack 카드에서 설정)을 사용합니다. 권한 모드는 위의 '작업 디렉터리 매핑'에서 디렉터리별로 설정합니다. 기존 대화에는 /new를 보내 적용하세요."
         },
         "agentLabel": "Agent",
         "modelLabel": "모델 설정",
@@ -3802,16 +3809,9 @@
         "INTERNAL": "작업에 실패했습니다. 잠시 후 다시 시도하세요."
       },
       "guide": {
-        "hint": "연락처가 아직 비어 있습니다. 어느 소스에서든 시작해 첫날부터 인맥을 파악하게 하세요:",
-        "cta": "AI로 정리하기",
-        "prompt": "스마트 연락처 정리를 도와주세요. 먼저 현재 상태를 확인하고, 기록할 가치가 있는 사람을 추가한 뒤(시스템 연락처/vCard 가져오기 또는 저에게 질문해도 됩니다), 중복이 있으면 확인 후 병합해 주세요.",
-        "sources": {
-          "mail": "이메일에서 정리",
-          "im": "IM에서 정리",
-          "import": "연락처 가져오기"
-        },
-        "mailPrompt": "이메일에서 스마트 연락처를 만들어 주세요: 먼저 연결된 메일 도구를 확인하고(없다면 연결 방법을 알려 주세요), 최근 6개월간의 주고받은 메일을 스캔해 실제로 왕래하는 연락처를 등록해 주세요 — 빈도가 높고 신원이 명확한 사람은 바로 확정, 불확실한 사람은 pending으로. 마케팅 메일, 알림 봇, 일회성 발신자는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요.",
-        "imPrompt": "채팅 도구에서 스마트 연락처를 만들어 주세요: 먼저 연결된 IM(Feishu / Slack / WeChat 등)을 확인하고(없다면 연결 방법을 알려 주세요), 최근 자주 대화하는 사람들을 연락처로 정리해 주세요. 불확실한 사람은 pending으로, 그룹 봇과 일회성 대화는 건너뜁니다. 마지막에 어떤 프로필을 만들었는지 보고해 주세요."
+        "hint": "AI의 안내로 연락처 프로필을 추가하고, 보류 항목을 검토하며, 중복 정보를 정리하세요.",
+        "cta": "AI로 연락처 관리",
+        "managementPrompt": "스마트 연락처를 관리해 주세요. 먼저 현재 상태와 이미 사용할 수 있는 도구를 확인한 뒤 필요한 연락처 추가, 중복 항목 정리, 보류 항목 검토를 단계별로 안내해 주세요. 쓰기, 병합 또는 삭제 전에는 반드시 제 확인을 받아 주세요."
       }
     },
     "remotePermission": {
@@ -5018,8 +5018,7 @@
         "context": "컨텍스트 {{value}}",
         "codexCompatibilityMode": "Codex 호환 모드",
         "price": "{{input}}/{{output}} / 100만",
-        "fastBadge": "고속",
-        "budgetDiscount": "특별 할인"
+        "fastBadge": "고속"
       },
       "source": {
         "railLabel": "소스",
@@ -5571,6 +5570,7 @@
       "networkAutoRetrying": "네트워크 오류: 자동으로 다시 시도하는 중…",
       "networkReconnecting": "연결이 끊어졌습니다. 다시 연결하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadRetrying": "모델 서비스가 혼잡합니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
+      "rateLimitRetrying": "요청이 속도 제한에 걸렸습니다. 자동으로 다시 시도하는 중({{attempt}}/{{maxAttempts}})…",
       "overloadBusy": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. \"재시도\"를 누르거나 다른 모델로 바꿔 보세요",
       "overloadBusyNoRetry": "모델 서비스가 혼잡합니다. 상위 서비스에 여유 용량이 없습니다. 잠시 후 다시 시도하거나 다른 모델로 바꿔 보세요",
       "networkShowRaw": "원본 오류 보기",
@@ -5921,6 +5921,11 @@
       "openInBrowser": "브라우저에서 열기",
       "fileCopied": "파일이 복사되었습니다",
       "pathCopied": "경로가 복사되었습니다",
+      "BROWSER_FILE_INVALID_TARGET": "로컬 페이지 경로가 올바르지 않습니다",
+      "BROWSER_FILE_PATH_NOT_ALLOWED": "이 경로에는 접근할 수 없습니다",
+      "BROWSER_FILE_UNSUPPORTED_TYPE": "이 파일 형식은 브라우저에서 열 수 없습니다",
+      "BROWSER_FILE_NOT_FOUND": "로컬 페이지를 찾을 수 없습니다",
+      "BROWSER_FILE_OPEN_FAILED": "브라우저에서 열지 못했습니다",
       "openInBrowserFailed": "브라우저에서 열지 못했습니다",
       "openLinkFailed": "링크를 열지 못했습니다",
       "anchorNotFound": "해당 제목을 찾을 수 없습니다",

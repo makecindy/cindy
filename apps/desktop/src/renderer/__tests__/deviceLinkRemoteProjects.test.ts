@@ -36,6 +36,34 @@ describe('startRemoteSessionsReconciler', () => {
     expect(refresh).toHaveBeenCalledTimes(3);
   });
 
+  it('counts one coalesced refresh failure once when periodic ticks overlap', async () => {
+    vi.useFakeTimers();
+    const eligible = new Map([['dev-a', 'Mac A']]);
+    let rejectRefresh!: (error: Error) => void;
+    const pending = new Promise<unknown>((_, reject) => {
+      rejectRefresh = reject;
+    });
+    const refresh = vi.fn(() => pending);
+    const backoff = createReconcileBackoff({
+      baseMs: 1_000,
+      maxMs: 8_000,
+      jitter: (delay) => delay,
+      now: () => Date.now(),
+    });
+    const stop = startRemoteSessionsReconciler(() => eligible, refresh, 1_000, backoff);
+
+    await vi.advanceTimersByTimeAsync(1_000);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(1);
+
+    rejectRefresh(new Error('timeout'));
+    await vi.advanceTimersByTimeAsync(0);
+    await vi.advanceTimersByTimeAsync(1_000);
+    expect(refresh).toHaveBeenCalledTimes(2);
+
+    stop();
+  });
+
   it('连续 gave-up 的设备按指数退避放慢,成功后复位;其它设备不受影响', async () => {
     vi.useFakeTimers();
     const eligible = new Map([

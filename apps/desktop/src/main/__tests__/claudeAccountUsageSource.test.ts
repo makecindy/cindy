@@ -36,4 +36,10 @@ describe('claudeAccountUsage today accounting', () => {
   it('uses a relaxed timeout for background quota refreshes', () => {
     expect(source).toContain('const FETCH_TIMEOUT_MS = 8000;');
   });
+
+  it('exposes LiteLLM quota only to its owning organization or local gateway', () => {
+    expect(source).toContain("auth.user?.membershipKind !== 'org'");
+    expect(source).toContain('snapshotOwnerKey === owner.key');
+    expect(source).toContain('currentQuotaOwner()?.key !== owner.key');
+  });
 });

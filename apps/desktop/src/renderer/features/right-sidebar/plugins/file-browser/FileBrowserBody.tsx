@@ -35,6 +35,7 @@ import { ChevronsDownUp, FolderX, RefreshCw, Search, X as XIcon } from 'lucide-r
 import { cn } from '@/lib/utils';
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { toast } from '@/lib/toast';
+import { mapIpcErrorToI18nKey } from '@/utils/ipcError';
 import { Tip } from '@/components/ui/tooltip';
 import { ImageLightbox } from '@/components/chat/ImageLightbox';
 import {
@@ -391,9 +392,17 @@ function FileBrowserBodyWithWorkdir({
   const handleOpenInBrowser = useCallback(
     async (entry: DirEntry) => {
       const abs = toOsAbsolutePath(workdir, entry.relPath);
-      const res = await window.electronAPI.openFileInBrowser(abs);
-      if (!res.success) {
-        toast.error(res.error ?? t('chat.markdownRenderer.openInBrowserFailed'));
+      try {
+        await window.electronAPI.openFileInBrowser(abs);
+      } catch (error) {
+        toast.error(
+          t(
+            mapIpcErrorToI18nKey(error, {
+              namespace: 'chat.markdownRenderer',
+              fallback: 'chat.markdownRenderer.openInBrowserFailed',
+            }),
+          ),
+        );
       }
     },
     [workdir, t],

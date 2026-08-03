@@ -233,6 +233,39 @@ describe('maker SEND transaction', () => {
     );
   });
 
+  it('persists Orca queue origin without sending the unsupported origin to maker-core', async () => {
+    const { deps, session } = createDeps();
+    const transaction = createMakerSendTransaction(deps);
+    const origin = { kind: 'orca', senderLabel: 'Lead', displayText: 'hello' } as const;
+
+    await transaction.sendToAgentAccepted(
+      'session-1',
+      { type: 'user', content: 'orca prompt' },
+      undefined,
+      {
+        messageUuid: 'message-uuid',
+        persistUserMessage: {
+          clientId: 'client-1',
+          content: 'orca prompt',
+          delivery: 'turn',
+          origin,
+        },
+      },
+    );
+
+    expect(session.send).toHaveBeenCalledWith(
+      { type: 'user', content: 'orca prompt' },
+      expect.not.objectContaining({ origin }),
+    );
+    expect(deps.createDbMessage).toHaveBeenCalledWith(
+      'session-1',
+      expect.objectContaining({
+        agentMeta: expect.objectContaining({ origin }),
+      }),
+      undefined,
+    );
+  });
+
   it('threads the autoResume flag into persisted agentMeta', async () => {
     // 中断自动续跑补发的「继续」经 coordinator drain 透传 autoResume(见
     // AgentInputQueuedMessage.autoResume)。它必须落进 agentMeta:renderer 靠它隐藏气泡,
@@ -246,12 +279,14 @@ describe('maker SEND transaction', () => {
       undefined,
       {
         messageUuid: 'message-uuid',
+        turnAttemptToken: 7,
         persistUserMessage: {
           clientId: 'client-1',
           content: 'continue',
           sdkSessionId: 'sdk-1',
           delivery: 'turn',
           autoResume: true,
+          autoResumeInfo: { attempt: 1, maxAttempts: 5, sessionTotal: 7 },
         },
       },
     );
@@ -263,6 +298,9 @@ describe('maker SEND transaction', () => {
       }),
       undefined,
     );
+    expect(
+      (deps.getSession('session-1')?.send as ReturnType<typeof vi.fn>).mock.calls[0]?.[1],
+    ).toEqual(expect.objectContaining({ turnAttemptToken: 7 }));
   });
 
   it('omits autoResume for ordinary user sends', async () => {

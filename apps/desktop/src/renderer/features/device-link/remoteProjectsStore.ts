@@ -409,6 +409,15 @@ const actions = {
     subs.forEach((fn) => fn());
   },
 
+  /** 清除已被更新请求抢占的 loading 状态；不把它误报成一次终态失败。 */
+  clearBootstrapLoading(deviceId: string): void {
+    if (!bootstrapLoadingDeviceIds.has(deviceId)) return;
+    const next = new Set(bootstrapLoadingDeviceIds);
+    next.delete(deviceId);
+    bootstrapLoadingDeviceIds = next;
+    subs.forEach((fn) => fn());
+  },
+
   /** 只清失败标记的兼容入口；snapshot 成功会由 setDeviceSessions 清掉全部 bootstrap 状态。 */
   clearBootstrapFailure(deviceId: string): void {
     if (!bootstrapFailedDeviceIds.has(deviceId)) return;

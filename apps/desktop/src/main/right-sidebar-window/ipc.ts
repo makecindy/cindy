@@ -29,13 +29,19 @@ function parseContext(raw: unknown): RsbWindowContext {
     if (typeof v !== 'string') throwIpcError('INVALID_PARAMS', `${name} must be string | null`);
     return v;
   };
+  const optionalNullableString = (v: unknown, name: string): string | null | undefined => {
+    if (v === undefined) return undefined;
+    return nullableString(v, name);
+  };
   if (typeof r.available !== 'boolean') {
     throwIpcError('INVALID_PARAMS', 'available must be boolean');
   }
+  const deviceLinkDeviceId = optionalNullableString(r.deviceLinkDeviceId, 'deviceLinkDeviceId');
   return {
     sessionId: nullableString(r.sessionId, 'sessionId'),
     workdir: nullableString(r.workdir, 'workdir'),
     remoteHostId: nullableString(r.remoteHostId, 'remoteHostId'),
+    ...(deviceLinkDeviceId === undefined ? {} : { deviceLinkDeviceId }),
     available: r.available,
   };
 }

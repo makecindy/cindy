@@ -289,8 +289,10 @@ export const MAKER_INVOKE = {
   USAGE_CLAUDE_SUBSCRIPTION: 'maker:usage:claude-subscription',
   // device-link v1 模型单价表:保留 modelId → USD/Mtok 扁平形状,旧控制端继续可读。
   USAGE_MODEL_PRICING: 'maker:usage:model-pricing',
-  // Desktop renderer v2:provider-scoped + currency-aware 模型单价表。
+  // Desktop renderer v2:Cindy AI `/models` 下发的 XD 原生报价。
   USAGE_MODEL_PRICING_V2: 'maker:usage:model-pricing-v2',
+  // 非 XD Provider 的 Catalog 参考价与用户覆盖；只用于 BYOK / 订阅估值。
+  USAGE_REFERENCE_MODEL_PRICING: 'maker:usage:reference-model-pricing',
   // 用量历史聚合 (daily_spend + daily_model_usage, main 侧算好 streak/异常/估算) — 首页仪表盘用
   USAGE_HISTORY: 'maker:usage:history',
   // Memory 控制 — 走 Maker.{getAgentMemoryStatus/setAgentMemory/resetAgentMemory},
@@ -623,7 +625,7 @@ export const MAKER_INVOKE = {
    *  - GET_STATE: renderer 启动期拉 { detached, lastOpen, open }
    *  - OPEN / CLOSE: 幂等开(已开则 focus)/ 关子窗口,写 lastOpen
    *  - SET_DETACHED(boolean): 落盘偏好;true 附带开窗,false 附带关窗;返回新 state
-   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, available }
+   *  - GET_CONTEXT: 子窗口 mount 时拉主窗上报的 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    *  - READY: 子窗口根组件挂载握手(resolve main 侧 ensureOpen 等待)
    *  - SEND_COMMAND: 主窗把命令(如 open-terminal 快捷键)转发给子窗口,必要时先开窗
    */
@@ -701,7 +703,7 @@ export const MAKER_SEND = {
    */
   SYNC_SESSION_MODEL_PREF: 'maker:sync-session-model-pref',
   /**
-   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, available }
+   * 主窗 MainLayout → main:侧边栏渲染上下文 { sessionId, workdir, remoteHostId, deviceLinkDeviceId, available }
    * 变化时无条件推(main 只在 detached 时消费,开偏好瞬间就有 context 可转发)。
    * main 校验 sender 必须是主窗,其它窗口的推送丢弃。fire-and-forget。
    */

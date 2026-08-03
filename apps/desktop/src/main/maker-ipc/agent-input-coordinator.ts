@@ -30,6 +30,7 @@ import { createLogger } from '../logger.js';
 import { createMessage as createDbMessage } from '../localDb/ipc/messages.js';
 import { touchUserSendInDb } from '../localDb/ipc/sessions.js';
 import type { InterruptedTurnErrorSignals } from './interruptedTurnAutoResume.js';
+import type { SuppressedTurnErrorOwner } from './autoResumeBookkeeping.js';
 import type { HostSendFailureCode, HostSendOutcome } from '../maker-host/send-outcome.js';
 import type {
   AgentInputCreateOpts,
@@ -58,6 +59,14 @@ import { attachSessionReferenceMetadata } from '../../shared/sessionReferenceMet
 
 const log = createLogger('maker-input-coordinator');
 const SESSION_RUNNING_RETRY_DELAY_MS = 250;
+/**
+ * Codex 的 reconnect-stalled 清理要等两次 turn/interrupt ACK，每次最多 10s。
+ * 自动续跑仍只允许 3 次 SESSION_RUNNING 派发尝试，但退避必须覆盖这段有界
+ * cleanup 窗口；终态事件先到时 scheduleDrain 仍会立即放行，不会强制等满该间隔。
+ */
+const AUTO_RESUME_SESSION_RUNNING_RETRY_DELAY_MS = 10_000;
+/** 同一自动续跑项撞上 host busy 时的有界派发次数，防止定时器无穷重入。 */
+const MAX_AUTO_RESUME_DISPATCH_ATTEMPTS = 3;
 /**
  * 凭证切换等待的兜底重试间隔。与 SESSION_RUNNING(本会话 µs 级竞态,250ms 静默重试)
  * 不同:挡路的是**其它会话**的长任务,主唤醒靠 onExternalTurnSettled(挡路会话 turn
@@ -158,6 +167,8 @@ export interface AgentInputSendOpts {
   userName?: string;
   throwOnStartFailure?: boolean;
   signal?: AbortSignal;
+  /** 自动续跑的 runtime turn 归属；只进入 AgentEvent，不写入用户可见文本。 */
+  turnAttemptToken?: number;
   /**
    * scheduler 排队消息的来源标记(与 maker-core SendOrigin 的 scheduler 变体同构)。
    * drain 派发时从队列项透传:send 事务把它打到 session.send 的 origin(本轮
@@ -166,6 +177,12 @@ export interface AgentInputSendOpts {
    * 其它路径(用户输入 / orca)不设,行为不变。
    */
   origin?: { kind: 'scheduler'; scheduleId: string; scheduleName: string; runId?: string };
+  /**
+   * 队列项上盖的手机来源(见 AgentInputQueuedMessage.fromMobileClient)。
+   * drain / steer 都在原 invoke 的 async context 之外派发,只能靠这条透传把来源带到
+   * 最终 wire 消息。**由 main 构造,不是 wire 输入。**
+   */
+  fromMobileClient?: boolean;
   persistUserMessage?: {
     clientId: string;
     content: string;
@@ -176,6 +193,12 @@ export interface AgentInputSendOpts {
      * 落库 agentMeta.autoResume:renderer 据此隐藏气泡,充值判据据此排除自动消息。
      */
     autoResume?: boolean;
+    autoResumeInfo?: AutoResumeInfo;
+    /**
+     * 仅写入 user 行的 agentMeta,不传给 maker-core。Orca 等自动队列来源没有
+     * 对应的 SendOrigin 变体,但仍不能被 host 当成真人输入来给 episode 充值。
+     */
+    origin?: AgentInputQueuedMessage['origin'];
     shouldBroadcast?: () => boolean;
     onPersisting?: () => void;
     onPersisted?: () => void | Promise<void>;
@@ -283,12 +306,10 @@ export interface AgentInputCoordinatorDeps {
   /**
    * 一条被 `isAutoResumeDeferred` 按住的 error 最终**没能走到决策**（用户气泡持久化失败等），
    * host 必须把压住的 error 行补落，否则那次中断在历史里彻底消失（不变量 I2）。
-   * `surfaceError` 只在这条 error 本身成为最终用户可见失败时为 true；被新输入或另一条
-   * 技术错误顶替时只补历史，不能再拿旧错误打扰用户。
    */
   onResumableTurnErrorDiscarded?: (
     sessionId: string,
-    options: { surfaceError: boolean },
+    options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
   ) => void;
   /** 在 vendor dispatch 前读取用户选中的本地/在线会话引用。 */
   resolveSessionReferences?: (
@@ -327,21 +348,15 @@ export interface AgentInputCoordinatorDeps {
   beforeDispatchUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
    * Called when a user row crossed the persistence boundary but never reached
-   * vendor dispatch. `cancelled` is an explicit user lifecycle boundary
-   * (Stop/remove/clear/new input); `failed` means the attempted delivery itself
-   * failed and remains user-visible. Hosts use this to finalize retry ownership
-   * and discard turn-start side effects that would otherwise leak into a later turn.
+   * vendor dispatch. `cancelled` is an explicit user lifecycle boundary;
+   * `failed` means the attempted delivery itself failed and remains visible.
    */
   onUndispatchedUserTurn?: (
     sessionId: string,
     item: AgentInputQueuedMessage,
     disposition: 'cancelled' | 'failed',
   ) => void;
-  /**
-   * The delivery pipeline rejected this item for a technical/policy reason
-   * before vendor dispatch. Unlike Stop/remove/clear, this is a real failed
-   * attempt rather than explicit user cancellation.
-   */
+  /** Technical or policy rejection before vendor dispatch. */
   onRejectedUserTurn?: (sessionId: string, item: AgentInputQueuedMessage) => void;
   onAcceptedQueuedMessage?: (sessionId: string, item: AgentInputQueuedMessage) => void | Promise<void>;
   /**
@@ -371,10 +386,14 @@ export interface AgentInputCoordinatorDeps {
    * 克隆重发原文 —— 那条消息文本上与普通用户消息毫无区别, 从文本无法认出重试意图。
    * 只靠文本嗅探会让最需要回流的那类失败恰好没有信号。
    */
-  onUiRetry?: (sessionId: string, clientId: string, source: 'manual' | 'auto') => void;
+  onUiRetry?: (
+    sessionId: string,
+    clientId: string,
+    source: 'manual' | 'auto',
+    attemptToken?: number,
+  ) => void;
   /**
-   * 用户接管了这个会话（新消息 enqueue、steer 回落为普通 turn，或在自动退避中
-   * clearError 以继续既有队列）。
+   * 用户/上游用一条**新**消息接管了这个会话(enqueue 或 steer 回落为普通 turn)。
    *
    * hook-control 用它作废该会话的待续跑记账: 会话已经被别的内容推进, 再把结果接回
    * 渠道那条旧消息只会显示无关输出。判据刻意用**入口**而不是消息文本 ——
@@ -382,6 +401,8 @@ export interface AgentInputCoordinatorDeps {
    * pendingQueue.unshift、不经这两个用户输入入口, 于是不会自我作废。
    */
   onUserEnqueue?: (sessionId: string) => void;
+  /** 自动输入推进了会话，但不构成真人介入，也不能重置自动恢复预算。 */
+  onAutomaticEnqueue?: (sessionId: string) => void;
   /**
    * 派发失败后队列可能已空(项目已从队列移除但未被放回时)回调。
    * host 用它触发 notifyQueueEmptied, 让 AgentIsland 中因队列非空而延迟的完成事件得到补发。
@@ -483,6 +504,8 @@ interface SessionInputState {
    * 是否仍然有效"的唯一判据（`performRetryLastError` 的 auto 路径据此收手）。
    */
   autoResumePending: AutoResumeInfo | null;
+  /** 最新自动接管 attempt；展示态落库后仍保留到 vendor accepted 或明确失败。 */
+  autoResumeAttemptToken: number | null;
   recovery: AgentInputRecovery;
   drainScheduled: boolean;
   drainWakeupGeneration: number;
@@ -503,6 +526,11 @@ interface SessionInputState {
   abortReconcileRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryTimer: ReturnType<typeof setTimeout> | null;
   sessionRunningRetryGeneration: number | null;
+  /** 当前 retry timer 绑定的队首/compact owner；队首变化时必须替换 timer policy。 */
+  sessionRunningRetryOwnerKey: string | null;
+  sessionRunningRetryDelayMs: number | null;
+  /** 保护新 generation 的 timer 不被旧 generation 的迟到 callback 清掉。 */
+  sessionRunningRetryToken: symbol | null;
   /**
    * 发送撞上 CREDENTIAL_SWITCH_BUSY 后的可见等待态:队首保留,挡路会话 turn 结束
    * (onExternalTurnSettled)或兜底定时器触发自动重发。clientId 绑定等待中的那条
@@ -518,6 +546,16 @@ interface SessionInputState {
    */
   recentEnqueuedClientIds: string[];
   generation: number;
+}
+
+interface PendingAutoResumeRecovery {
+  sessionId: string;
+  stateRef: SessionInputState;
+  recovery: Extract<AgentInputRecovery, { kind: 'active-turn' }>;
+  error: string | null;
+  stickyError: string | null;
+  autoResumeInfo: AutoResumeInfo | null;
+  attemptToken: number;
 }
 
 function createInitialInputState(generation = 0): SessionInputState {
@@ -536,6 +574,7 @@ function createInitialInputState(generation = 0): SessionInputState {
     error: null,
     stickyError: null,
     autoResumePending: null,
+    autoResumeAttemptToken: null,
     recovery: null,
     drainScheduled: false,
     drainWakeupGeneration: 0,
@@ -545,6 +584,9 @@ function createInitialInputState(generation = 0): SessionInputState {
     abortReconcileRetryTimer: null,
     sessionRunningRetryTimer: null,
     sessionRunningRetryGeneration: null,
+    sessionRunningRetryOwnerKey: null,
+    sessionRunningRetryDelayMs: null,
+    sessionRunningRetryToken: null,
     credentialSwitchWait: null,
     credentialSwitchRetryTimer: null,
     credentialSwitchRetryGeneration: null,
@@ -664,6 +706,12 @@ function isSchedulerOriginItem(item: AgentInputQueuedMessage | null | undefined)
   return item?.origin?.kind === 'scheduler';
 }
 
+/** Orca and scheduler inputs are automation, not a fresh human intervention. */
+function isAutomaticOriginItem(item: AgentInputQueuedMessage | null | undefined): boolean {
+  const kind = item?.origin?.kind;
+  return kind === 'scheduler' || kind === 'orca';
+}
+
 function isUiContinuationItem(item: AgentInputQueuedMessage): boolean {
   return !isSchedulerOriginItem(item) && item.originalSyntheticTrigger === 'continue';
 }
@@ -719,6 +767,14 @@ export class AgentInputCoordinator {
   private readonly restoreAttempted = new Set<string>();
   private readonly queueRestorePromises = new Map<string, Promise<void>>();
   private readonly lastQueueSnapshotJson = new Map<string, string>();
+  /**
+   * 自动重试项在真正 vendor dispatch 前仍可被 Stop / 新消息 / ghost block 丢弃。
+   * 这段窗口里 `performRetryLastError` 已清掉原 recovery，按 clone clientId 暂存回滚信息，
+   * 并用 stateRef 防止 clearSession 后迟到的旧结果复活新上下文。
+   */
+  private readonly pendingAutoResumeRecoveries = new Map<string, PendingAutoResumeRecovery>();
+  /** transient busy 期间同一 auto item 已尝试过的派发次数。 */
+  private readonly autoResumeDispatchAttempts = new Map<string, number>();
 
   constructor(private readonly deps: AgentInputCoordinatorDeps) {}
 
@@ -1035,16 +1091,19 @@ export class AgentInputCoordinator {
     // 让消费方按 clientId 做权威归属(见 deps.onUiRetry 的说明)。
     // (错误横幅那条走 retryLastError, 压根不经本入口。)
     const schedulerOrigin = isSchedulerOriginItem(item);
+    const automaticOrigin = isAutomaticOriginItem(item);
     if (!schedulerOrigin) {
       // 自动续跑可能已经从 pendingQueue 进入 activeTurn、但仍卡在持久化或其它
       // pre-vendor await。用户此时接管不能只作废 host waiter：那会让隐藏 Continue
       // 继续派发、而新输入排在它后面。复用 Stop 的 generation 取消边界，先确认
       // 旧续跑已被 coordinator 丢弃，再发布用户接管信号。
-      this.cancelPreparedSchedulerAutoResume(sessionId, state);
+      this.cancelPreparedAutoResume(sessionId, state);
     }
     if (isUiContinuationItem(item)) {
       this.deps.onUiRetry?.(sessionId, item.clientId, 'manual');
-    } else if (!schedulerOrigin) {
+    } else if (automaticOrigin && !schedulerOrigin) {
+      this.deps.onAutomaticEnqueue?.(sessionId);
+    } else if (!automaticOrigin) {
       this.deps.onUserEnqueue?.(sessionId);
     }
     if (!schedulerOrigin) {
@@ -1052,6 +1111,7 @@ export class AgentInputCoordinator {
       // Scheduler 只是同一串行队列里的自动输入，不代表用户接手，不能取消正在退避的
       // 自动续跑；它会保持 FIFO，等当前恢复生命周期收口后再派发。
       state.autoResumePending = null;
+      state.autoResumeAttemptToken = null;
       markPendingTerminalSupersededByUser(state.activeTurn);
     }
     // 崩溃恢复暂停队列的死锁解除(2026-07-14):恢复暂停只防"重启后自动替用户
@@ -1092,7 +1152,7 @@ export class AgentInputCoordinator {
     // 入队若 bump 它,接下来 10 分钟内同会话其它心跳会被误当"用户正在远程控制"
     // 而静默顺延(PR #972 review P2)。侧栏排序的 bump 语义保留在派发时刻 ——
     // runner 的 accepted 回调按直发路径同款调 touchUserSendInDb(ctx.firedAt)。
-    if (item.origin?.kind !== 'scheduler') {
+    if (!automaticOrigin) {
       this.touchUserSend(sessionId, opts?.sendAtMs);
     }
     // 视觉连续性: 当这条入队后立即可派发(agent 空闲、队列此前为空、无暂停/锁/恢复
@@ -1117,7 +1177,7 @@ export class AgentInputCoordinator {
     // 手动 /compact 是用户接管，与 composer 新消息同语义。先撤掉尚未跨过
     // vendor dispatch 的隐藏 scheduler 续跑，再让 host 终止对应 run waiter；
     // 否则 compact 自己的 text/done 可能被旧 schedule run 误收。
-    this.cancelPreparedSchedulerAutoResume(sessionId, state);
+    this.cancelPreparedAutoResume(sessionId, state);
     this.deps.onUserEnqueue?.(sessionId);
     // 手动压缩与发送新消息一样,都是用户对失败 turn 的明确后续选择:
     // 放弃 active-turn retry,让 /compact 在真实 dispatch boundary 空闲时立即执行,
@@ -1298,7 +1358,7 @@ export class AgentInputCoordinator {
     }
 
     if (!isSchedulerOriginItem(item)) {
-      this.cancelPreparedSchedulerAutoResume(sessionId, state);
+      this.cancelPreparedAutoResume(sessionId, state);
     }
 
     if (!this.isTurnSteerable(sessionId, state)) {
@@ -1385,7 +1445,13 @@ export class AgentInputCoordinator {
       await this.deps.steerToAgent(
         sessionId,
         buildMakerUserMessage(item, referenceContexts),
-        { messageUuid, userName: item.userName, signal: steerAbort.signal },
+        {
+          messageUuid,
+          userName: item.userName,
+          signal: steerAbort.signal,
+          // 同 drain:steer 投递也在入队时的 async context 之外。
+          ...(item.fromMobileClient ? { fromMobileClient: true } : {}),
+        },
       );
     } catch (err) {
       this.clearSteerAbortController(sessionId, item.clientId);
@@ -1561,6 +1627,14 @@ export class AgentInputCoordinator {
       }
       this.emit(sessionId);
     }
+    // steer accepted/removed may change the queue head while an older
+    // SESSION_RUNNING timer is still armed. Rebind its policy now even though
+    // the accepted steer itself keeps the dispatch boundary busy.
+    if (accepted.pendingQueue.length > 0 || accepted.pendingCompacts.length > 0) {
+      this.scheduleSessionRunningRetry(sessionId, 'steer-accepted');
+    } else {
+      this.clearSessionRunningRetry(accepted);
+    }
     this.scheduleDrain(sessionId, 'steer-accepted');
     return true;
   }
@@ -1568,13 +1642,17 @@ export class AgentInputCoordinator {
   stop(sessionId: string, opts?: { keepQueue?: boolean; pauseQueue?: boolean }): AgentInputProjection {
     const state = this.getState(sessionId);
     const preserveQueue = opts?.keepQueue === true;
+    this.supersedePendingAutoResumeRecoveries(sessionId);
+    this.cancelPreparedAutoResume(sessionId, state);
     this.abortSteerTransactions(sessionId);
     this.clearAbortReconcileRetry(state);
     // Stop 是用户显式收手:凭证切换等待随之取消(保留队列时队首仍在,恢复后会重新进入等待)。
     this.clearCredentialSwitchWait(state);
     if (!preserveQueue) {
       this.clearSessionRunningRetry(state);
-      for (const item of state.pendingQueue) {
+      const droppedQueue = state.pendingQueue;
+      state.pendingQueue = [];
+      for (const item of droppedQueue) {
         if (item.origin?.kind === 'orca') {
           log.warn('dropping queued Orca message on stop', {
             sessionId,
@@ -1585,9 +1663,8 @@ export class AgentInputCoordinator {
         this.deps.onDiscardedQueuedMessage?.(sessionId, item);
       }
       // 整批丢弃的排队消息同样从未派发:从弱网重发幂等窗口遗忘,允许再次入队。
-      const droppedIds = new Set(state.pendingQueue.map((q) => q.clientId));
+      const droppedIds = new Set(droppedQueue.map((q) => q.clientId));
       state.recentEnqueuedClientIds = state.recentEnqueuedClientIds.filter((id) => !droppedIds.has(id));
-      state.pendingQueue = [];
       state.pendingCompacts = [];
       state.queueInteractionLocks = state.queueInteractionLocks.filter((lockId) =>
         state.interactionLocksPreservedOnStop.includes(lockId),
@@ -1681,12 +1758,16 @@ export class AgentInputCoordinator {
    * 路上」）：
    *  - `resumed`：已补发续跑指令。
    *  - `superseded`：目标已消失（用户自己接手 / 清了会话）——他已经在处理，别再弹横幅。
-   *  - `no-progress`：失败 turn 零产出，按设计不自动续跑 —— 这是一次**没被自愈接手的
-   *    真失败**，调用方必须把错误回落成常规呈现（横幅 + 「继续任务」），否则它被静默
-   *    吞掉、用户什么都看不到（copilot review）。
+   *  - `no-progress`：保留给无法构造安全重试项的异常路径（例如 image-only fallback）。
    */
-  async autoRetryLastError(sessionId: string): Promise<AutoRetryOutcome> {
-    const { outcome } = await this.performRetryLastError(sessionId, { auto: true });
+  async autoRetryLastError(
+    sessionId: string,
+    attemptToken: number,
+  ): Promise<AutoRetryOutcome> {
+    const { outcome } = await this.performRetryLastError(sessionId, {
+      auto: true,
+      attemptToken,
+    });
     return outcome;
   }
 
@@ -1695,15 +1776,15 @@ export class AgentInputCoordinator {
    * 三处差别，其余完全共用人工那条已验证过的路径：
    *  - 补发的续跑指令带 `autoResume`（隐藏气泡 / 「已自动继续」分隔线 / 不充值额度，
    *    见 AgentInputQueuedMessage.autoResume）。
-   *  - **零产出的失败不自动重试**：那条路径是「克隆重发用户原文」，自动做等于让用户
-   *    的消息被悄悄重发一遍，而 autoResume 又会把气泡隐藏起来——用户视角是自己的
-   *    消息凭空消失。零产出的 turn 本来什么都没干，手点重试代价很低，留给用户。
+   *  - 零产出时克隆重发用户原文，并带 `autoResume` 标记。它不会给额度守卫充值，
+   *    连续失败次数仍由 host 的 `InterruptedTurnAutoResumeGuard` 负责上限；因此短暂的
+   *    首次 admission / 网络失败可以自动穿过，而持续无产出时仍会在上限处停下。
    *  - 不 `touchUserSend`：那个时间戳的语义是「人最近发过消息」（会话列表 / 陈旧判定
    *    在读它），自动补发不该冒充人类动作。
    */
   private async performRetryLastError(
     sessionId: string,
-    opts?: { auto?: boolean },
+    opts?: { auto?: boolean; attemptToken?: number },
   ): Promise<{ projection: AgentInputProjection; outcome: AutoRetryOutcome }> {
     const state = this.getState(sessionId);
     const recovery = state.recovery;
@@ -1715,7 +1796,10 @@ export class AgentInputCoordinator {
     // 于是定时器到点仍能拿到 recovery,把一条隐藏的续跑指令插到用户那条消息**前面**,
     // 而「重新连接中」提示早就撤了,用户完全看不到这次代发(greptile P1)。
     // 接管态是唯一与用户所见一致的判据:它在 enqueue / clearError 时同步清除。
-    if (opts?.auto && !state.autoResumePending) {
+    if (
+      opts?.auto &&
+      (!state.autoResumePending || state.autoResumeAttemptToken !== opts.attemptToken)
+    ) {
       return { projection: this.getProjection(sessionId), outcome: 'superseded' };
     }
     // active-turn recovery 的续跑判定:失败 turn 若已有 assistant 侧产出,重发
@@ -1724,13 +1808,17 @@ export class AgentInputCoordinator {
     // 续跑指令是共享英文常量(带 [UI_ACTION_TRIGGER] 前缀,renderer 渲染时过滤,
     // 用户只看到任务继续跑,不看到这条合成消息;2026-07-05 产品决策)。
     let continueItem: AgentInputQueuedMessage | null = null;
+    let progressKnown = false;
+    const previousAutoResumeInfo = opts?.auto ? state.autoResumePending : null;
+    const attemptToken = opts?.auto ? opts.attemptToken ?? null : null;
     const continueText = CONTINUE_AFTER_ERROR_PROMPT;
     if (recovery.kind === 'active-turn' && this.deps.hasAssistantProgressAfter) {
       let hasProgress = false;
       try {
         hasProgress = await this.deps.hasAssistantProgressAfter(sessionId, recovery.item.clientId);
+        progressKnown = true;
       } catch {
-        // 判定失败按零产出处理 —— 回退重发原文,语义与未注入 dep 一致。
+        // 自动路径无法确认进度时不重放原文；人工 Retry 保持既有兼容行为。
       }
       // await 期间 turn 事件可能已推进状态(clearError / 新 error / 并发 retry):
       // recovery 不再是同一对象时放弃本次意图,以当前 projection 为准。
@@ -1741,7 +1829,12 @@ export class AgentInputCoordinator {
       // 长到用户在此期间关掉会话 / 自己发消息 —— 而 onSessionClosed 刻意保留 recovery
       // (它是手动重试入口),所以上面那道 recovery 检查放得过去,自动续跑会往一个已经
       // 关掉的会话补发消息、把它重新拉起来(codex P1)。teardown 会清接管态,这里据此收手。
-      if (opts?.auto && !this.getState(sessionId).autoResumePending) {
+      const latestAfterProgress = this.getState(sessionId);
+      if (
+        opts?.auto &&
+        (!latestAfterProgress.autoResumePending ||
+          latestAfterProgress.autoResumeAttemptToken !== attemptToken)
+      ) {
         return { projection: this.getProjection(sessionId), outcome: 'superseded' };
       }
       if (hasProgress) {
@@ -1752,16 +1845,10 @@ export class AgentInputCoordinator {
           text: continueText,
           originalSyntheticTrigger: 'continue',
           persistedContent: continueText,
-          ...(opts?.auto
-            ? {
-                autoResume: true,
-                // 展示信息随消息一起落库,成为「已重新连接」活动行的 param 位与展开
-                // 详情 —— error 行被压住之后,这是中断原因唯一的用户可见出口。
-                ...(state.autoResumePending
-                  ? { autoResumeInfo: state.autoResumePending }
-                  : {}),
-              }
-            : {}),
+          autoResume: opts?.auto ? true : undefined,
+          // 人工 Retry 是新的真人介入周期，不能继承上一轮隐藏自动消息的标记；自动路径
+          // 则把展示信息随消息落库，成为「已重新连接」活动行的 param 位与展开详情。
+          autoResumeInfo: opts?.auto ? previousAutoResumeInfo ?? undefined : undefined,
           // 附件 / mention 属于原始消息,已在失败 turn 里送达过模型,续跑指令不重带。
           files: undefined,
           mentions: undefined,
@@ -1782,12 +1869,22 @@ export class AgentInputCoordinator {
         };
       }
     }
-    // 自动触发只走「续跑」，不走克隆重发（理由见方法注释）。此处提前返回时刻意
-    // 不动 state.error / recovery：横幅与「继续」按钮原样留给用户。
-    if (opts?.auto && !continueItem) {
-      log.debug('auto retry skipped — no assistant progress to continue from', { sessionId });
+    // queue-head recovery 表示消息从未跨过 accepted 边界，自动重发仍然可能重复一条
+    // 尚未确认是否落库的输入；这条路径继续交给用户。active-turn recovery 则已经落库，
+    // 零产出克隆重发是安全的，连续失败次数由 host 守卫负责止损。
+    if (
+      opts?.auto &&
+      (recovery.kind !== 'active-turn' || (!continueItem && !progressKnown))
+    ) {
+      log.debug('auto retry skipped — progress state is not safe to resend', {
+        sessionId,
+        recoveryKind: recovery.kind,
+        progressKnown,
+      });
       return { projection: this.getProjection(sessionId), outcome: 'no-progress' };
     }
+    const previousError = state.error;
+    const previousStickyError = state.stickyError;
     let retryItem = recovery.kind === 'active-turn' ? recovery.item : null;
     if (
       !continueItem
@@ -1807,6 +1904,7 @@ export class AgentInputCoordinator {
     // 接管态在补发这一刻结束:聊天流里的「重新连接中」活动行交棒给落库的
     // autoResume 行(渲染成「已重新连接」活动行,详情同样可展开)。
     state.autoResumePending = null;
+    if (!opts?.auto) state.autoResumeAttemptToken = null;
     state.recovery = null;
     if (recovery.kind === 'active-turn') {
       let item = continueItem;
@@ -1815,17 +1913,28 @@ export class AgentInputCoordinator {
         item = {
           ...(retryItem ?? recovery.item),
           clientId,
-          // retry-supersede:零产出克隆重发 —— 旧 user 行已落库但模型从未收到,
-          // 本条落库成功后 host 把旧行(与其后的 error 行)软删,历史只留这一条。
-          // 显式覆盖而非依赖展开继承:recovery.item 可能带着上一轮已消费的旧值
-          // (连环失败时指向更早的行),窗口必须锚定在本轮被取代的那条上。
-          supersedesUserClientId: recovery.item.clientId,
+          autoResume: opts?.auto ? true : undefined,
+          autoResumeInfo: opts?.auto ? previousAutoResumeInfo ?? undefined : undefined,
+          // 自动 clone 自身会被 renderer 隐藏，不能再软删原始可见 user 行；人工 Retry
+          // 才用可见克隆取代旧行。显式覆盖也避免继承上一轮的隐藏标记。
+          supersedesUserClientId: opts?.auto ? undefined : recovery.item.clientId,
           chatMessage: {
             ...(retryItem ?? recovery.item).chatMessage,
             clientId,
             createdAt: new Date().toISOString(),
           },
         };
+      }
+      if (opts?.auto && attemptToken !== null) {
+        this.pendingAutoResumeRecoveries.set(item.clientId, {
+          sessionId,
+          stateRef: state,
+          recovery,
+          error: previousError,
+          stickyError: previousStickyError,
+          autoResumeInfo: previousAutoResumeInfo,
+          attemptToken,
+        });
       }
       state.pendingQueue.unshift(item);
       this.prependPendingCompactWaitClientId(state, item.clientId);
@@ -1838,7 +1947,12 @@ export class AgentInputCoordinator {
       //
       // 带上这条重试消息的 clientId: 消费方(hook-control)用它做**权威归属** ——
       // 只有 clientId 对得上的那次 dispatch 才是目标续跑轮, 不再靠"首个事件"猜。
-      this.deps.onUiRetry?.(sessionId, item.clientId, opts?.auto ? 'auto' : 'manual');
+      this.deps.onUiRetry?.(
+        sessionId,
+        item.clientId,
+        opts?.auto ? 'auto' : 'manual',
+        attemptToken ?? undefined,
+      );
     }
     if (!opts?.auto) this.touchUserSend(sessionId);
     this.emit(sessionId);
@@ -1849,15 +1963,15 @@ export class AgentInputCoordinator {
 
   clearError(sessionId: string): AgentInputProjection {
     const state = this.getState(sessionId);
-    const shouldDrainTail = state.recovery?.kind === 'active-turn';
-    // clearError can immediately wake an already queued turn. Release the old
-    // backoff owner before that drain, or its Island filter can swallow the new tail.
     if (state.autoResumePending) this.deps.onUserEnqueue?.(sessionId);
+    this.cancelPreparedAutoResume(sessionId, state);
+    const shouldDrainTail = state.recovery?.kind === 'active-turn';
     state.error = null;
     state.stickyError = null;
     // 用户显式收下了这条错误 → 自愈提示也该撤掉(退避到点后的复核会发现 recovery
     // 已清并回滚额度)。
     state.autoResumePending = null;
+    state.autoResumeAttemptToken = null;
     if (state.recovery?.kind !== 'queue-head') {
       state.recovery = null;
     }
@@ -1871,8 +1985,8 @@ export class AgentInputCoordinator {
     if (state.steeringQueueClientIds.includes(clientId)) return this.getProjection(sessionId);
     const before = state.pendingQueue.length;
     const removed = state.pendingQueue.find((q) => q.clientId === clientId);
-    if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
     state.pendingQueue = state.pendingQueue.filter((q) => q.clientId !== clientId);
+    if (removed) this.deps.onDiscardedQueuedMessage?.(sessionId, removed);
     // 显式移除的消息从未派发:该 clientId 允许被合法地重新入队(重排/再发都是
     // 既有产品流),必须从弱网重发幂等窗口里遗忘,否则再入队会被误吞。
     if (removed) {
@@ -2005,6 +2119,9 @@ export class AgentInputCoordinator {
       this.scheduleDrain(sessionId, 'credential-switch-wait-displaced');
     }
     this.emit(sessionId);
+    // 队首变化也可能切换 SESSION_RUNNING retry policy(auto 10s ↔ 普通 250ms)。
+    // 重新评估当前 busy boundary，替换仍绑定旧队首的 timer。
+    this.scheduleExternalTurnRetryIfNeeded(sessionId, state, 'queue-moved');
     return this.getProjection(sessionId);
   }
 
@@ -2072,6 +2189,7 @@ export class AgentInputCoordinator {
   clearSession(sessionId: string, clearedAt: string | number = Date.now()): AgentInputProjection {
     this.deps.noteSessionClearBoundary?.(sessionId, clearedAt);
     const prev = this.getState(sessionId);
+    this.supersedePendingAutoResumeRecoveries(sessionId);
     this.clearAbortReconcileRetry(prev);
     this.clearSessionRunningRetry(prev);
     this.clearCredentialSwitchWait(prev);
@@ -2160,6 +2278,7 @@ export class AgentInputCoordinator {
             : null;
         if (takeover) {
           state.autoResumePending = takeover;
+          state.autoResumeAttemptToken = takeover.sessionTotal;
         } else {
           state.error = message ?? state.error;
           // Schedule 的确定性错误或额度耗尽仍由 runner 收口，不留下脱离 run 记账的
@@ -2294,6 +2413,7 @@ export class AgentInputCoordinator {
 
   onSessionClosed(sessionId: string): void {
     const state = this.getState(sessionId);
+    this.supersedePendingAutoResumeRecoveries(sessionId);
     const releasedAbortLock = state.queueAbortPending;
     this.cancelScheduledDrain(state);
     this.clearAbortReconcileRetry(state);
@@ -2610,7 +2730,12 @@ export class AgentInputCoordinator {
           messageUuid: active.messageUuid,
           userName: head.userName,
           throwOnStartFailure: true,
+          ...(head.autoResume && typeof head.autoResumeInfo?.sessionTotal === 'number'
+            ? { turnAttemptToken: head.autoResumeInfo.sessionTotal }
+            : {}),
           ...(head.origin?.kind === 'scheduler' ? { origin: head.origin } : {}),
+          // 手机来源透传到 send 事务:drain 已脱离入队时的 async context。
+          ...(head.fromMobileClient ? { fromMobileClient: true } : {}),
           persistUserMessage: {
             clientId: head.clientId,
             content: head.persistedContent,
@@ -2620,6 +2745,7 @@ export class AgentInputCoordinator {
             // host 靠它跳过额度充值(见 AgentInputQueuedMessage.autoResume)。
             ...(head.autoResume ? { autoResume: true } : {}),
             ...(head.autoResumeInfo ? { autoResumeInfo: head.autoResumeInfo } : {}),
+            ...(head.origin ? { origin: head.origin } : {}),
             shouldBroadcast: () => this.isTurnGenerationCurrent(sessionId, active),
             onPersisting: () => {
               if (this.isTurnGenerationCurrent(sessionId, active)) {
@@ -2652,7 +2778,7 @@ export class AgentInputCoordinator {
           },
         },
       );
-      if (this.discardOnStaleActiveTurn(sessionId, active)) return;
+      if (this.discardOnStaleActiveTurn(sessionId, active, isSendDispatched(result))) return;
       active.persisting = false;
       if (!isSendDispatched(result)) {
         this.handleSendNotDispatched(sessionId, active, head, result);
@@ -2672,6 +2798,7 @@ export class AgentInputCoordinator {
           error: err instanceof Error ? err.message : String(err),
         });
       }
+      this.commitAutoResumeDispatch(sessionId, head);
       // retry-supersede:克隆重发行既落库又真正派发出去了,被取代的旧 user 行从此
       // 冗余,软删它(连同其后的 error 行)。落在这里而不是 onPersisted 里:落库到
       // 派发之间还夹着 beforeDispatch / onAccepted 两个 hook,期间停止或关闭会话会走
@@ -2712,6 +2839,13 @@ export class AgentInputCoordinator {
       if (!active.persisted) {
         if (isSessionRunningError(err)) {
           this.deferQueueHeadAfterSessionRunning(sessionId, active, head, reason, errorMessage(err));
+          return;
+        }
+        if (head.autoResume) {
+          latest.activeTurn = null;
+          this.discardAutoResumeBeforeDispatch(sessionId, head);
+          this.emit(sessionId);
+          this.deps.onQueueEmptied?.(sessionId);
           return;
         }
         latest.activeTurn = null;
@@ -2779,6 +2913,13 @@ export class AgentInputCoordinator {
       }
       if (isCredentialSwitchBusySendFailure(result)) {
         this.deferQueueHeadForCredentialSwitch(sessionId, active, item, result);
+        return;
+      }
+      if (item.autoResume) {
+        latest.activeTurn = null;
+        this.discardAutoResumeBeforeDispatch(sessionId, item);
+        this.emit(sessionId);
+        this.deps.onQueueEmptied?.(sessionId);
         return;
       }
       latest.activeTurn = null;
@@ -2890,6 +3031,9 @@ export class AgentInputCoordinator {
     const latest = this.getState(sessionId);
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
     latest.activeTurn = null;
+    if (this.abandonAutoResumeAfterTransientFailure(sessionId, latest, item, 'credential-switch-busy')) {
+      return;
+    }
     this.prependQueueHeadIfMissing(latest, item);
     latest.error = null;
     latest.stickyError = null;
@@ -2976,6 +3120,9 @@ export class AgentInputCoordinator {
     const latest = this.getState(sessionId);
     if (!this.isActiveTurnCurrent(sessionId, active)) return;
     latest.activeTurn = null;
+    if (this.abandonAutoResumeAfterTransientFailure(sessionId, latest, item, 'session-running')) {
+      return;
+    }
     this.prependQueueHeadIfMissing(latest, item);
     latest.error = null;
     latest.stickyError = null;
@@ -2996,18 +3143,55 @@ export class AgentInputCoordinator {
     this.prependPendingCompactWaitClientId(state, item.clientId);
   }
 
+  private getSessionRunningRetryPolicy(state: SessionInputState): {
+    ownerKey: string | null;
+    delayMs: number;
+  } {
+    const compact = state.pendingCompacts[0];
+    if (compact && compact.waitForClientIds.length === 0) {
+      return { ownerKey: 'compact', delayMs: SESSION_RUNNING_RETRY_DELAY_MS };
+    }
+    const head = state.pendingQueue[0];
+    return {
+      ownerKey: head ? `queue:${head.clientId}` : null,
+      delayMs: head?.autoResume
+        ? AUTO_RESUME_SESSION_RUNNING_RETRY_DELAY_MS
+        : SESSION_RUNNING_RETRY_DELAY_MS,
+    };
+  }
+
   private scheduleSessionRunningRetry(sessionId: string, reason: string): void {
     const state = this.getState(sessionId);
+    const policy = this.getSessionRunningRetryPolicy(state);
     if (state.sessionRunningRetryTimer) {
-      if (state.sessionRunningRetryGeneration === state.generation) return;
+      if (
+        state.sessionRunningRetryGeneration === state.generation &&
+        state.sessionRunningRetryOwnerKey === policy.ownerKey &&
+        state.sessionRunningRetryDelayMs === policy.delayMs
+      ) {
+        return;
+      }
       this.clearSessionRunningRetry(state);
     }
     const generation = state.generation;
+    const retryToken = Symbol('session-running-retry');
     state.sessionRunningRetryGeneration = generation;
+    state.sessionRunningRetryOwnerKey = policy.ownerKey;
+    state.sessionRunningRetryDelayMs = policy.delayMs;
+    state.sessionRunningRetryToken = retryToken;
     state.sessionRunningRetryTimer = setTimeout(() => {
       const latest = this.getState(sessionId);
+      if (
+        latest.sessionRunningRetryToken !== retryToken ||
+        latest.sessionRunningRetryGeneration !== generation
+      ) {
+        return;
+      }
       latest.sessionRunningRetryTimer = null;
       latest.sessionRunningRetryGeneration = null;
+      latest.sessionRunningRetryOwnerKey = null;
+      latest.sessionRunningRetryDelayMs = null;
+      latest.sessionRunningRetryToken = null;
       if (latest.generation !== generation) return;
       if (latest.pendingQueue.length === 0 && latest.pendingCompacts.length === 0) return;
       if (this.isDispatchBoundaryBusy(sessionId, latest)) {
@@ -3015,7 +3199,7 @@ export class AgentInputCoordinator {
         return;
       }
       this.scheduleDrain(sessionId, `session-running-retry:${reason}`);
-    }, SESSION_RUNNING_RETRY_DELAY_MS);
+    }, policy.delayMs);
   }
 
   private markPendingExternalTerminalDone(sessionId: string, state: SessionInputState): void {
@@ -3054,7 +3238,15 @@ export class AgentInputCoordinator {
     const hasRunnableCompact = Boolean(compact && compact.waitForClientIds.length === 0);
     const hasRunnableQueueHead = Boolean(head && !state.queueEditLocks.includes(head.clientId));
     if (!hasRunnableCompact && !hasRunnableQueueHead) return;
-    if (state.activeTurn !== null) return;
+    if (state.activeTurn !== null) {
+      // A prior busy boundary may have left a fallback timer armed while the
+      // current turn is still active. Rebind it to the newly changed queue
+      // head so a later lost-done fallback does not inherit the old policy.
+      if (state.sessionRunningRetryTimer) {
+        this.scheduleSessionRunningRetry(sessionId, reason);
+      }
+      return;
+    }
     if (state.recovery !== null) return;
     if (state.queuePaused || state.queueAbortPending) return;
     if (state.queueInteractionLocks.length > 0 || state.steeringQueueClientIds.length > 0) return;
@@ -3068,6 +3260,9 @@ export class AgentInputCoordinator {
     }
     state.sessionRunningRetryTimer = null;
     state.sessionRunningRetryGeneration = null;
+    state.sessionRunningRetryOwnerKey = null;
+    state.sessionRunningRetryDelayMs = null;
+    state.sessionRunningRetryToken = null;
   }
 
   /** closed 事件可能早于 sendToAgent 返回；这里先挂起 terminal event，等真实 send outcome 决定 drain 还是 recovery。 */
@@ -3125,6 +3320,10 @@ export class AgentInputCoordinator {
     }
 
     state.activeTurn = null;
+    if (item.autoResume) {
+      this.discardAutoResumeBeforeDispatch(sessionId, item);
+      return;
+    }
     if (!state.pendingQueue.some((q) => q.clientId === item.clientId)) {
       state.pendingQueue = [item, ...state.pendingQueue];
       this.prependPendingCompactWaitClientId(state, item.clientId);
@@ -3164,20 +3363,126 @@ export class AgentInputCoordinator {
     }
   }
 
+  /** 用户动作发生时撤销尚未交给 vendor 的自动续跑项。 */
+  private supersedePendingAutoResumeRecoveries(sessionId: string): void {
+    for (const [clientId, pending] of this.pendingAutoResumeRecoveries) {
+      if (pending.sessionId === sessionId) {
+        this.pendingAutoResumeRecoveries.delete(clientId);
+        this.autoResumeDispatchAttempts.delete(clientId);
+      }
+    }
+    const state = this.states.get(sessionId);
+    if (state) state.autoResumeAttemptToken = null;
+  }
+
   /**
-   * 用户接管时撤销已经离队、但尚未交给 vendor 的隐藏 scheduler 自动续跑。
-   *
-   * 不扩成通用并发机制：普通 scheduler turn 仍按既有串行队列执行；只有 autoResume
-   * 是已被用户后续选择取代的合成 Continue。持久化前走 discard 回调，持久化后走
-   * undispatched 回调，两条既有 host 边界都会同步结清对应 schedule waiter。
+   * 自动续跑项在 pre-vendor 边界被丢弃时恢复原错误入口。
+   * 返回 false 表示它已经被用户动作取代、会话已清空，或已跨过 dispatch 边界。
    */
-  private cancelPreparedSchedulerAutoResume(
+  restoreAutoResumeRecovery(
+    sessionId: string,
+    clientId: string,
+    attemptToken: number,
+  ): boolean {
+    const pending = this.pendingAutoResumeRecoveries.get(clientId);
+    if (!pending) return false;
+    const state = this.states.get(sessionId);
+    if (
+      pending.sessionId !== sessionId ||
+      pending.attemptToken !== attemptToken ||
+      state !== pending.stateRef ||
+      state.autoResumeAttemptToken !== attemptToken
+    ) {
+      return false;
+    }
+    this.pendingAutoResumeRecoveries.delete(clientId);
+    state.error = pending.error;
+    state.stickyError = pending.stickyError;
+    state.recovery = pending.recovery;
+    state.autoResumePending = pending.autoResumeInfo;
+    this.emit(sessionId);
+    return true;
+  }
+
+  private discardAutoResumeBeforeDispatch(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ): void {
+    // This item has already left pendingQueue but never crossed vendor dispatch. Reuse the
+    // existing host cleanup boundary; register owns the single recovery/finalize operation.
+    this.autoResumeDispatchAttempts.delete(item.clientId);
+    this.deps.onDiscardedQueuedMessage?.(sessionId, item);
+  }
+
+  /** 自动续跑项已真正进入 vendor，之后不再需要 pre-vendor 回滚信息。 */
+  private commitAutoResumeDispatch(
+    sessionId: string,
+    item: AgentInputQueuedMessage,
+  ): void {
+    this.pendingAutoResumeRecoveries.delete(item.clientId);
+    this.autoResumeDispatchAttempts.delete(item.clientId);
+    const attemptToken = item.autoResumeInfo?.sessionTotal;
+    const state = this.getState(sessionId);
+    if (
+      item.autoResume &&
+      typeof attemptToken === 'number' &&
+      state.autoResumeAttemptToken === attemptToken
+    ) {
+      state.autoResumeAttemptToken = null;
+    }
+  }
+
+  /**
+   * 记录同一自动续跑项的 transient busy 失败；达到上限时就地放弃并交回原错误。
+   * 普通用户消息仍沿用原有无限等待语义，只有隐藏 auto item 需要硬边界。
+   */
+  private abandonAutoResumeAfterTransientFailure(
+    sessionId: string,
+    state: SessionInputState,
+    item: AgentInputQueuedMessage,
+    reason: string,
+  ): boolean {
+    if (!item.autoResume) return false;
+    const attempts = (this.autoResumeDispatchAttempts.get(item.clientId) ?? 0) + 1;
+    this.autoResumeDispatchAttempts.set(item.clientId, attempts);
+    if (attempts < MAX_AUTO_RESUME_DISPATCH_ATTEMPTS) return false;
+
+    this.autoResumeDispatchAttempts.delete(item.clientId);
+    state.activeTurn = null;
+    state.pendingQueue = state.pendingQueue.filter((queued) => queued.clientId !== item.clientId);
+    this.removePendingCompactWaitClientId(state, item.clientId);
+    this.clearCredentialSwitchWait(state);
+    this.discardAutoResumeBeforeDispatch(sessionId, item);
+    log.warn('auto-resume dispatch budget exhausted while provider stayed busy', {
+      sessionId,
+      clientId: item.clientId,
+      attempts,
+      reason,
+    });
+    this.emit(sessionId);
+    this.deps.onQueueEmptied?.(sessionId);
+    // Exhausting the hidden auto-resume must not strand work queued behind it.
+    // The retry timer has been consumed at this boundary, so wake any FIFO
+    // tail explicitly once the auto item is removed.
+    if (state.pendingQueue.length > 0 || state.pendingCompacts.length > 0) {
+      this.scheduleDrain(sessionId, 'auto-resume-budget-exhausted');
+    }
+    return true;
+  }
+
+  /**
+   * 用户接管时撤销已经离队、但尚未交给 vendor 的隐藏自动续跑。
+   * 持久化前走 discard 回调，持久化后走 undispatched 回调，两条既有 host 边界都会结算
+   * suppressed error 与 guard pending 状态。
+   */
+  private cancelPreparedAutoResume(
     sessionId: string,
     state: SessionInputState,
   ): boolean {
     const queuedClientIds = state.pendingQueue
-      .filter((item) => item.autoResume && isSchedulerOriginItem(item))
+      .filter((item) => item.autoResume)
       .map((item) => item.clientId);
+    this.supersedePendingAutoResumeRecoveries(sessionId);
     for (const clientId of queuedClientIds) this.remove(sessionId, clientId);
 
     const active = state.activeTurn;
@@ -3185,7 +3490,6 @@ export class AgentInputCoordinator {
     if (
       !active ||
       !item?.autoResume ||
-      !isSchedulerOriginItem(item) ||
       !isActiveTurnBeforeVendorDispatch(active)
     ) {
       return queuedClientIds.length > 0;
@@ -3193,8 +3497,8 @@ export class AgentInputCoordinator {
     const persisted = active.persisted;
     this.cancelPreSendActiveTurn(sessionId, state, false);
     this.emit(sessionId);
-    this.scheduleDrain(sessionId, 'scheduler-auto-resume-cancelled');
-    log.info('cancelled prepared scheduler auto-resume', {
+    this.scheduleDrain(sessionId, 'auto-resume-cancelled');
+    log.info('cancelled prepared auto-resume', {
       sessionId,
       clientId: item.clientId,
       runId: item.origin?.kind === 'scheduler' ? item.origin.runId : undefined,
@@ -3210,7 +3514,9 @@ export class AgentInputCoordinator {
     // scheduler 自动续跑退避期间走到这里，必须先同步作废那一轮的 waiter，避免
     // fallback turn 的 text/done 被旧 run 消费。scheduler 自己与 UI Continue 仍保留
     // 各自的续跑归属，不按无关用户输入处理。
-    if (!isSchedulerOriginItem(item) && !isUiContinuationItem(item)) {
+    if (isAutomaticOriginItem(item)) {
+      if (!isSchedulerOriginItem(item)) this.deps.onAutomaticEnqueue?.(sessionId);
+    } else if (!isUiContinuationItem(item)) {
       this.deps.onUserEnqueue?.(sessionId);
     }
     this.abandonActiveTurnRecoveryForUserAction(state);
@@ -3566,6 +3872,25 @@ export class AgentInputCoordinator {
     return this.getState(sessionId).autoResumePending !== null;
   }
 
+  getAutoResumeAttemptToken(sessionId: string): number | null {
+    return this.getState(sessionId).autoResumeAttemptToken;
+  }
+
+  /** Exact owner for a deferred resumable terminal error, before it is decided. */
+  getAutoResumeDeferredOwner(sessionId: string): SuppressedTurnErrorOwner | null {
+    const active = this.getState(sessionId).activeTurn;
+    if (!active?.item) return null;
+    const pending = active.pendingTerminalEvent;
+    if (pending?.type !== 'error' || pending.resumableCandidate !== true) {
+      return null;
+    }
+    return { generation: active.generation, clientId: active.item.clientId };
+  }
+
+  isAutoResumeAttemptCurrent(sessionId: string, attemptToken: number): boolean {
+    return this.getState(sessionId).autoResumeAttemptToken === attemptToken;
+  }
+
   /**
    * 有一条 terminal error 正被「可能接管」按住、还没走到决策（见
    * `isResumableTurnErrorCandidate` 与 `ActiveTurnTerminalEvent.resumableCandidate`）。
@@ -3608,8 +3933,19 @@ export class AgentInputCoordinator {
    *
    * 返回 true 表示"已经不是当前 turn，调用方该早返了"。
    */
-  private discardOnStaleActiveTurn(sessionId: string, active: ActiveTurn): boolean {
+  private discardOnStaleActiveTurn(
+    sessionId: string,
+    active: ActiveTurn,
+    dispatchAccepted = false,
+  ): boolean {
     if (this.isActiveTurnCurrent(sessionId, active)) return false;
+    if (active.item?.autoResume) {
+      if (dispatchAccepted) {
+        this.commitAutoResumeDispatch(sessionId, active.item);
+      } else {
+        this.discardAutoResumeBeforeDispatch(sessionId, active.item);
+      }
+    }
     this.discardDeferredResumableCandidate(sessionId, active, { surfaceError: false });
     return true;
   }
@@ -3621,14 +3957,17 @@ export class AgentInputCoordinator {
   ): void {
     const pending = active.pendingTerminalEvent;
     if (pending?.type !== 'error' || pending.resumableCandidate !== true) return;
+    const owner = active.item
+      ? { generation: active.generation, clientId: active.item.clientId }
+      : null;
     active.pendingTerminalEvent = null;
-    this.notifyResumableTurnErrorDiscarded(sessionId, options);
+    if (owner) this.notifyResumableTurnErrorDiscarded(sessionId, { ...options, owner });
   }
 
-  /** 被按住的 error 没能走到决策 → 通知 host 按最终 disposition 释放它（不变量 I2）。 */
+  /** 被按住的 error 没能走到决策 → 通知 host 补落 error 行（不变量 I2）。 */
   private notifyResumableTurnErrorDiscarded(
     sessionId: string,
-    options: { surfaceError: boolean },
+    options: { surfaceError: boolean; owner: SuppressedTurnErrorOwner },
   ): void {
     try {
       this.deps.onResumableTurnErrorDiscarded?.(sessionId, options);
@@ -3637,14 +3976,25 @@ export class AgentInputCoordinator {
     }
   }
 
-  abandonAutoResume(sessionId: string, message?: string): void {
+  abandonAutoResume(
+    sessionId: string,
+    message?: string,
+    attemptToken?: number,
+  ): void {
     const state = this.getState(sessionId);
+    if (
+      attemptToken !== undefined &&
+      state.autoResumeAttemptToken !== attemptToken
+    ) {
+      return;
+    }
     const hadPendingTakeover = state.autoResumePending !== null;
     state.autoResumePending = null;
-    const cancelledPrepared = this.cancelPreparedSchedulerAutoResume(sessionId, state);
+    state.autoResumeAttemptToken = null;
+    const cancelledPrepared = this.cancelPreparedAutoResume(sessionId, state);
     const surfacedMessage = Boolean(message && state.recovery);
     if (surfacedMessage) state.error = message ?? null;
-    // cancelPreparedSchedulerAutoResume 已为队列 / active 变化 emit；纯退避态仍需
+    // cancelPreparedAutoResume 已为队列 / active 变化 emit；纯退避态仍需
     // 单独投影接管结束。没有任何接管状态时保持既有 no-op 语义。
     if (!cancelledPrepared && (hadPendingTakeover || surfacedMessage)) this.emit(sessionId);
   }
@@ -3765,7 +4115,10 @@ export class AgentInputCoordinator {
       if (outcome === 'dropped-scheduler') {
         state.error = terminalEvent.message ?? state.error;
         if (deferredPersistSuppressed) {
-          this.notifyResumableTurnErrorDiscarded(sessionId, { surfaceError: true });
+          this.notifyResumableTurnErrorDiscarded(sessionId, {
+            surfaceError: true,
+            owner: { generation: active.generation, clientId: active.item!.clientId },
+          });
         }
         // 与 onTurnEvent 的 persisted 分支同款处置:没有 recovery 挡住"紧随的 done",
         // 必须用配对标记吃掉它,否则失败呈现会被 done 擦成"已完成"(第二十一轮 P1)。
@@ -3792,6 +4145,7 @@ export class AgentInputCoordinator {
           : null;
       if (deferredTakeover) {
         state.autoResumePending = deferredTakeover;
+        state.autoResumeAttemptToken = deferredTakeover.sessionTotal;
         // **必须撤掉 error**:候选判定为假时前置分支(active.persisting)照旧设过 state.error,
         // 接管后若不清,renderer 会收到同时带 error 与 autoResumePending 的投影 —— 违反
         // 「接管态为真时 error 必为 null」这条不变量(greptile P1)。候选判定为真时那里本就
@@ -3802,6 +4156,7 @@ export class AgentInputCoordinator {
         if (deferredPersistSuppressed) {
           this.notifyResumableTurnErrorDiscarded(sessionId, {
             surfaceError: terminalEvent.supersededByUser !== true,
+            owner: { generation: active.generation, clientId: active.item!.clientId },
           });
         }
         if (schedulerItem) {

@@ -115,6 +115,61 @@ describe('makerApiFor 路由(完整对等会话级操作)', () => {
     expect(makerSpies.setEffort).not.toHaveBeenCalled();
   });
 
+  it('远程 setModel 压缩 JSON 可选参数,保留中间占位且裁掉尾部 null', async () => {
+    const { invoke } = stubElectron();
+    const { makerApiForDevice } = await import('@/lib/makerTransport');
+    const api = makerApiForDevice('dev-wire');
+    const selection = { effort: 'high', fastMode: true };
+
+    await api.setModel('rs', 'model-only');
+    await api.setModel('rs', 'with-provider', 'provider-a');
+    await api.setModel('rs', 'with-revision', null, 7);
+    await api.setModel('rs', 'with-selection', 'provider-b', undefined, selection);
+
+    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
+      'rs',
+      'model-only',
+    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
+      'rs',
+      'with-provider',
+      'provider-a',
+    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
+      'rs',
+      'with-revision',
+      null,
+      7,
+    ]);
+    expect(invoke).toHaveBeenCalledWith('dev-wire', 'maker:set-model', [
+      'rs',
+      'with-selection',
+      'provider-b',
+      null,
+      selection,
+    ]);
+    const lastArgs = invoke.mock.calls.at(-1)?.[2] as unknown[];
+    expect(lastArgs).toHaveLength(5);
+    expect(lastArgs.at(-1)).toBe(selection);
+  });
+
+  it('远程 setModel 拒绝省略 provider 但携带 revision 或 selection 的歧义调用', async () => {
+    const { invoke } = stubElectron();
+    const { makerApiForDevice } = await import('@/lib/makerTransport');
+    const api = makerApiForDevice('dev-ambiguous');
+
+    await expect(api.setModel('rs', 'with-revision', undefined, 7)).rejects.toThrow(
+      /providerId is required/,
+    );
+    await expect(
+      api.setModel('rs', 'with-selection', undefined, undefined, {
+        effort: 'high',
+        fastMode: true,
+      }),
+    ).rejects.toThrow(/providerId is required/);
+    expect(invoke).not.toHaveBeenCalled();
+  });
+
   it('远程会话 patchMeta(删/归档/改名/置顶)经隧道 local-db:sessions:patch-meta', async () => {
     const { invoke } = stubElectron();
     const { remoteProjectsStore } = await import('@/features/device-link/remoteProjectsStore');

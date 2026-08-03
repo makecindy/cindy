@@ -149,11 +149,15 @@ export type PiNativeApi =
   | 'openai-completions'
   | 'google-generative-ai';
 
+export type PiNativeThinkingLevel = Exclude<Effort, 'ultra'>;
+
 /** BYOM:写进 pi models.json 的一个模型(原生 provider 块内)。 */
 export interface PiNativeModelSpec {
   id: string;
   name?: string;
   reasoning?: boolean;
+  /** Pi models.json 的 provider-specific thinking level 映射；null 明确禁用该档。 */
+  thinkingLevelMap?: Partial<Record<PiNativeThinkingLevel, string | null>>;
   contextWindow?: number;
   maxTokens?: number;
   input?: Array<'text' | 'image'>;
@@ -331,13 +335,21 @@ export interface AgentDeps {
   ) => Promise<PiNativeProvidersResult | null>;
 
   /**
-   * Pi-only:解析已持久化模型的私有运行时描述符(例如恢复已 retired 的会话)。结果只写入
-   * 当前 session 的 models.json,不得进入公开 availableModels 或授予新选择准入。
+   * Pi-only:按实际 provider/model 路由解析运行时描述符。用于启动前校验已持久化 effort，
+   * 以及恢复已 retired 模型时补齐当前 session 的私有 models.json；结果不得进入公开
+   * availableModels 或授予新选择准入。
    */
   resolvePiRuntimeModelDescriptor?: (
     providerId: string | null | undefined,
     modelId: string,
   ) => ModelDescriptor | null;
+
+  /**
+   * Pi-only:为 `cindy` gateway 的 models.json 块解析内置 provider-aware 描述符。
+   * 与上面的续跑私有解析器分开，避免生成 gateway 配置放宽 retired/disabled
+   * 准入或改变新会话的私有解析时机。缺省时 Pi 保留 flat descriptor fallback。
+   */
+  resolvePiGatewayModelDescriptor?: (modelId: string) => ModelDescriptor | null;
 
   /**
    * Host-provided capability descriptor additions.
@@ -983,6 +995,8 @@ export interface SendOptions {
    * 共享 session 下区分自动任务 turn 与用户 turn。agent 子类不消费,透传无害。
    */
   origin?: SendOrigin;
+  /** Host-owned per-turn correlation copied onto every AgentEvent for lifecycle settlement. */
+  turnAttemptToken?: number;
   /**
    * Host-owned, per-turn permission policy. This is deliberately a callback
    * rather than prompt text: providers must enforce it at their pre-execution
@@ -1128,7 +1142,7 @@ export interface AgentSessionHandle {
   setInteractionResolver(resolver: InteractionResolver): void;
 
   /** 运行时切换模型 —— 不支持时抛 NotSupportedError */
-  setModel?(model: string, opts?: { providerId?: string | null }): Promise<void>;
+  setModel?(model: string, opts?: { providerId?: string | null; effort?: Effort }): Promise<void>;
 
   /** 运行时切换 effort */
   setEffort?(effort: Effort): Promise<void>;
