@@ -248,6 +248,33 @@ describe('createSubagentLiveCardTracker', () => {
     expect(tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a', 't-b']))?.status).toBe('failed');
   });
 
+  it('never overwrites a failed spawn terminal state with a running aggregate', () => {
+    // V1 的 spawn 以 status:'failed' 收口时,translator 已推过 failed 帧。此前"已登记就回传
+    // 快照"会补一帧聚合状态,而那时子线程还标着 running → 真实失败被盖回运行中(review)。
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a']));
+    tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'));
+
+    // completed phase 带 status:'failed' → 不补发任何帧。
+    expect(
+      tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a']), status: 'failed' }),
+    ).toBeNull();
+
+    // 且线程已被标成 failed:迟到的子线程通知不会把卡片翻回 running。
+    expect(tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-2'))?.status)
+      .toBe('failed');
+  });
+
+  it('still re-asserts the aggregate when the spawn itself succeeded', () => {
+    const tracker = createSubagentLiveCardTracker({ now: () => 0 });
+    tracker.noteSpawnItem(v1SpawnItem('card-v1', ['t-a']));
+    tracker.handleDescendantNotification('t-a', 'item/started', toolItem('x-1'));
+    // 成功收口仍要重新声明真实聚合(子线程还在跑 → running),否则被合成 completed 盖掉。
+    expect(
+      tracker.noteSpawnItem({ ...v1SpawnItem('card-v1', ['t-a']), status: 'completed' }),
+    ).toMatchObject({ taskId: 'card-v1', status: 'running', toolUses: 1 });
+  });
+
   it('returns null for a fresh spawn with nothing buffered, and for non-spawn items', () => {
     const tracker = createSubagentLiveCardTracker({ now: () => 0 });
     // 全新 spawn 且无早到通知:没有需要重新声明的状态,不发多余帧。

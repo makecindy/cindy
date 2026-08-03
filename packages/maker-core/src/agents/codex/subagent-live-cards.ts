@@ -268,6 +268,20 @@ export function createSubagentLiveCardTracker(opts: {
       if (!registration) return null;
 
       const existing = cards.get(registration.taskId);
+
+      // spawn **本身**收口为失败:translator 已推过 failed 帧,这里绝不能再补一帧聚合快照
+      // —— 那时子线程还标着 running,会把真实的失败终态盖回成运行中(review)。同时把这批
+      // 线程直接标成 failed,后续迟到的子线程通知也不会把卡片翻回 running。
+      if (registration.failed) {
+        if (existing) {
+          for (const childThreadId of registration.childThreadIds) {
+            const thread = existing.threads.get(childThreadId);
+            if (thread) thread.status = 'failed';
+          }
+        }
+        return null;
+      }
+
       // 同一 spawn 的 started/completed 两个 phase 都会走到这里:已登记且线程集合一致
       // 就不重置计数(否则第二个 phase 会把已聚合的用量清零)。但**必须回传当前快照** ——
       // V1 的 spawn 是 collabAgentToolCall,translator 在 completed phase 会无条件推一帧

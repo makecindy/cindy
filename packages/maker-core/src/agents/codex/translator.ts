@@ -1541,6 +1541,12 @@ export function readCodexSubagentSpawnRegistration(item: unknown): {
   taskId: string;
   childThreadIds: string[];
   agentPath?: string;
+  /**
+   * spawn **本身**收口为失败(V1 `collabAgentToolCall.status === 'failed'`)。
+   * translator 此时已推过 failed 帧,聚合器据此不得再用快照(仍是 running)盖回去。
+   * V2 的 subAgentActivity 没有 status 字段,恒为 undefined。
+   */
+  failed?: boolean;
 } | null {
   if (!item || typeof item !== 'object') return null;
   const record = item as Record<string, unknown>;
@@ -1566,7 +1572,11 @@ export function readCodexSubagentSpawnRegistration(item: unknown): {
       ? record.receiverThreadIds.filter((id): id is string => typeof id === 'string' && id.length > 0)
       : [];
     if (receivers.length === 0) return null;
-    return { taskId, childThreadIds: receivers };
+    return {
+      taskId,
+      childThreadIds: receivers,
+      ...(record.status === 'failed' ? { failed: true } : {}),
+    };
   }
 
   return null;
