@@ -17545,4 +17545,74 @@ describe('CodexAgent context window reporting', () => {
 
     await handle.close();
   });
+
+  it('registers the subagent spawn mapping on item/updated, not just started/completed', async () => {
+    // V1 的 spawn 是长跑 item(started → updated* → completed)。started 那帧若没到我们手里
+    // (turn 缓冲、stale turn 丢弃、上游省略),原实现要等到 completed 才建立映射 —— 期间子线程
+    // 的 item / token / 终态全被缓冲,卡片在整个运行期没有实时数据,最后才一次性补上。那正是本
+    // PR 要解决的问题本身(review)。这里**只发 updated**,不发 started。
+    const agent = new CodexAgent(createDeps());
+    const host = installFakeHost(agent);
+    const handle = await agent.startSession({
+      sessionId: 'session-subagent-updated',
+      model: 'gpt-5.4',
+      workingDir: '/repo',
+    });
+    const events: AgentEvent[] = [];
+    void (async () => {
+      for await (const event of handle.events()) events.push(event);
+    })();
+
+    const handlers = host.getThreadHandlers();
+    if (!handlers?.itemUpdated || !handlers.descendantThreadStarted || !handlers.descendantNotification) {
+      throw new Error('expected item/descendant handlers');
+    }
+    handlers.turnStarted?.({ threadId: 'start-thread-id', turn: { id: 'turn-sa' } });
+
+    // 跳过 started,直接发 updated —— 映射必须在这一帧就建立。
+    handlers.itemUpdated({
+      threadId: 'start-thread-id',
+      turnId: 'turn-sa',
+      item: {
+        id: 'spawn-item-1',
+        type: 'collabAgentToolCall',
+        tool: 'spawnAgent',
+        senderThreadId: 'start-thread-id',
+        receiverThreadIds: ['child-thread-1'],
+        status: 'inProgress',
+        agentsStates: [],
+      },
+    });
+
+    // 映射已就位 → 子线程的实时事件应当当场路由成卡片更新,而不是被缓冲到 completed。
+    handlers.descendantThreadStarted({
+      thread: { id: 'child-thread-1', parentThreadId: 'start-thread-id' },
+    });
+    handlers.descendantNotification('child-thread-1', 'item/started', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-1',
+      item: { id: 'child-tool-1', type: 'commandExecution' },
+    });
+    handlers.descendantNotification('child-thread-1', 'thread/tokenUsage/updated', {
+      threadId: 'child-thread-1',
+      turnId: 'child-turn-1',
+      tokenUsage: { total: { totalTokens: 4_242 } },
+    });
+
+    await vi.waitFor(() => {
+      const updates = events.filter((e) => e.type === 'agent_task_update');
+      expect(updates.length).toBeGreaterThan(0);
+    });
+    const updates = events
+      .filter((e) => e.type === 'agent_task_update')
+      .map((e) => e.data as { taskId?: string; status?: string; usage?: { totalTokens?: number; toolUses?: number } });
+    // 运行期就能看到真实聚合(工具数与 token),不是等 completed 才补。
+    expect(updates.some((u) => u.taskId === 'spawn-item-1')).toBe(true);
+    const last = updates.filter((u) => u.taskId === 'spawn-item-1').at(-1);
+    expect(last?.usage?.toolUses).toBe(1);
+    expect(last?.usage?.totalTokens).toBe(4_242);
+    expect(last?.status).toBe('running');
+
+    await handle.close();
+  });
 });

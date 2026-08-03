@@ -7298,6 +7298,12 @@ export class CodexAgent extends BaseAgent {
         if (interceptProposedPlanItem(params.item)) return;
         if (itemRepresentsModelWork(params.item)) producedOutputTurnIds.add(params.turnId);
         noteActiveToolContext(params.item, params.turnId);
+        // updated 也要登记映射,顺序与 started / completed 一致(先登记 → 翻译 → 后发重放帧)。
+        // V1 的 spawn 是长跑 item(started → updated* → completed):started 那帧若没到我们手里
+        // (turn 缓冲、stale turn 丢弃、上游省略),映射就要一直等到 completed 才建立 —— 期间
+        // 子线程的 item / token / turn 终态全被缓冲,卡片在整个运行期(可能好几分钟)没有实时
+        // 数据,最后才一次性补上。那恰好是本 PR 要解决的问题本身(review)。
+        const emitReplayedSubagentUpdateOnUpdated = noteSubagentSpawnItem(params.item);
         translateItemNotification('updated', params, eventQueue, {
           rt: translatorRt,
           log,
@@ -7305,6 +7311,7 @@ export class CodexAgent extends BaseAgent {
             ? { onCompactBoundary: () => memoryFlushController?.onCompactBoundary() }
             : {}),
         });
+        emitReplayedSubagentUpdateOnUpdated?.();
       },
       itemCompleted: (params) => {
         if (enqueueIfBufferedTurn(params.turnId, () => handlers.itemCompleted?.(params), {
