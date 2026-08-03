@@ -1,3 +1,5 @@
+import { piEditReplacements } from './toolUseDescriptor.js';
+
 export type PayloadKind = 'text' | 'diff' | 'media' | 'mermaid' | 'file';
 
 export interface PayloadToolDiffLike {
@@ -252,18 +254,16 @@ export function buildPayloadToolDiff(toolName: string, input: unknown): PayloadT
     const newString = typeof inp.content === 'string' ? inp.content : '';
     return createPayloadToolDiff(filePath, [{ key: 'write:0', oldString: '', newString }]);
   }
-  // pi edit:edits[].oldText/newText(与 MultiEdit 同款多段 diff)。
+  // pi edit:两种入参形态由 piEditReplacements 统一归一化(edits[] + legacy 顶层单段)。
   if (toolName === 'edit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
-    return createPayloadToolDiff(filePath, edits.map((edit, index) => {
-      const record = readPayloadRecord(edit);
-      return {
-        key: `edit:${index}`,
-        oldString: typeof record?.oldText === 'string' ? record.oldText : '',
-        newString: typeof record?.newText === 'string' ? record.newText : '',
-        label: `Edit ${index + 1}/${edits.length}`,
-      };
-    }));
+    const replacements = piEditReplacements(inp);
+    return createPayloadToolDiff(filePath, replacements.map((edit, index) => ({
+      key: `edit:${index}`,
+      oldString: edit.oldText,
+      newString: edit.newText,
+      // 单段时不标 1/1 —— 顶层 legacy 形态就是单段,标号只是噪音。
+      ...(replacements.length > 1 ? { label: `Edit ${index + 1}/${replacements.length}` } : {}),
+    })));
   }
   if (toolName === 'MultiEdit') {
     const edits = Array.isArray(inp.edits) ? inp.edits : [];

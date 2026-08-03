@@ -164,6 +164,44 @@ export type ToolUseDescriptor =
     }
   | { kind: 'generic'; toolName: string; detail?: string };
 
+/** pi `edit` 的一段定向替换。 */
+export interface PiEditReplacement {
+  oldText: string;
+  newText: string;
+}
+
+/**
+ * 归一化 pi `edit` 工具的替换段。
+ *
+ * pi v0.83.0 的 `edit` 有**两种**入参形态，展示层必须都认（`edit.ts` 的
+ * `editSchema` 与 `LegacyEditToolInput` / `normalizeEditInput`）：
+ *  - 声明 schema（模型被要求产出的形态）：`{ path, edits: [{ oldText, newText }] }`；
+ *  - legacy 顶层单段：`{ path, oldText, newText }` —— pi 自己仍接受并归一化。
+ *
+ * 顺序与 pi 的 `normalizeEditInput` 对齐：先取 `edits[]`，再把顶层
+ * `oldText`/`newText`（两者都是字符串才认）作为**最后一段**追加。只认其中之一
+ * 会让另一种形态退化成空 diff 与 `+0 -0`。
+ */
+export function piEditReplacements(input: unknown): PiEditReplacement[] {
+  const inp = readRecord(input);
+  if (!inp) return [];
+  const out: PiEditReplacement[] = [];
+  if (Array.isArray(inp.edits)) {
+    for (const raw of inp.edits) {
+      const rec = readRecord(raw);
+      // 单段内只要有一侧是字符串就成段(另一侧按空串)，纯增/纯删才不会被丢掉。
+      const oldText = typeof rec?.oldText === 'string' ? rec.oldText : undefined;
+      const newText = typeof rec?.newText === 'string' ? rec.newText : undefined;
+      if (oldText === undefined && newText === undefined) continue;
+      out.push({ oldText: oldText ?? '', newText: newText ?? '' });
+    }
+  }
+  if (typeof inp.oldText === 'string' && typeof inp.newText === 'string') {
+    out.push({ oldText: inp.oldText, newText: inp.newText });
+  }
+  return out;
+}
+
 /** 下划线（含双下划线）转空格并收敛连续空白，得到可读的 token。 */
 export function humanizeToolToken(token: string): string {
   return token.replace(/_+/g, ' ').replace(/\s+/g, ' ').trim();

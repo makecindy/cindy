@@ -45,6 +45,7 @@ import { useTranslation } from 'react-i18next';
 import {
   describeToolUse,
   normalizeDisplayCommand,
+  piEditReplacements,
   type CommandIntent,
   type ToolUseDescriptor,
 } from '@cindy/maker-shared';
@@ -69,7 +70,16 @@ import { TextLightbox } from './TextLightbox';
 import { ToolPayloadLightbox, type ToolPayloadMode } from './ToolPayloadLightbox';
 import { useFileChipContextMenu } from './useFileChipContextMenu';
 
-// CC 大写 + pi 小写(pi 内置工具名全小写、文件字段为 path,见 toolUseDescriptor.ts)。
+/**
+ * 点击走「文件类」交互(diff / 文稿 / 图片 lightbox)的工具:CC 大写 + pi 小写
+ * (pi 内置工具名全小写、文件字段为 path,见 toolUseDescriptor.ts)。
+ *
+ * 注意这**不是**「所有 kind='file' 描述符」的集合:pi 的 `ls` 也被归一化成
+ * kind='file'(读取语义)并渲染文件 chip,但**刻意不列入本集合** —— 它的目标是
+ * 目录,开文稿/图片 lightbox 没有意义,因此点击仍走命令类的就地展开路径
+ * (isInlineExpand)。新增工具时按「点击后该看到什么」判断是否入列,别按
+ * 描述符 kind 判断。
+ */
 const FILE_PATH_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'Read', 'edit', 'write', 'read']);
 
 /**
@@ -558,21 +568,20 @@ function buildDiffPayload(
       ],
     };
   }
-  // pi edit:edits[].oldText/newText,与 MultiEdit 同款多段 diff 呈现。
+  // pi edit:声明 schema 的 edits[] 与 legacy 顶层 {oldText,newText} 两种形态,
+  // 由共享的 piEditReplacements 归一化(只认一种会让另一种退化成空 diff)。
   if (toolName === 'edit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
     return {
       kind: 'diff',
       files: [
         {
           key: filePath,
           filePath,
-          diffs: edits.map((e, index) => {
-            const er = e as Record<string, unknown> | null;
-            const o = er && typeof er.oldText === 'string' ? er.oldText : '';
-            const n = er && typeof er.newText === 'string' ? er.newText : '';
-            return { key: `edit:${index}`, oldString: String(o), newString: String(n) };
-          }),
+          diffs: piEditReplacements(inp).map((edit, index) => ({
+            key: `edit:${index}`,
+            oldString: edit.oldText,
+            newString: edit.newText,
+          })),
         },
       ],
     };

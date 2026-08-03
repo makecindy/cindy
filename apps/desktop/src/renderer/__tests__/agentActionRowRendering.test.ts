@@ -302,6 +302,29 @@ describe('AgentActionRow — 行主文案', () => {
     expect(document.body.textContent).toContain('"newString":"new"');
   });
 
+  // pi 0.83.0 的 edit 同时接受 legacy 顶层单段(LegacyEditToolInput);只认 edits[]
+  // 会让这种事件退化成空 diff 与 +0 -0。
+  it('pi edit:legacy 顶层 oldText/newText 也给出真实统计与非空 diff', () => {
+    render(
+      createElement(AgentActionRow, {
+        message: mkTool('t1', 'edit', {
+          path: '/repo/src/app.ts',
+          oldText: 'old A\nold B',
+          newText: 'new A',
+        }),
+      }),
+    );
+    expect(screen.getByText('chat.agentActionRow.verb.edited')).toBeTruthy();
+    expect(screen.getByText('app.ts')).toBeTruthy();
+    expect(screen.getByText('+1')).toBeTruthy();
+    expect(screen.getByText('-2')).toBeTruthy();
+    fireEvent.click(screen.getByRole('button'));
+    expect(document.body.textContent).toContain('"oldString":"old A\\nold B"');
+    expect(document.body.textContent).toContain('"newString":"new A"');
+    // 空 diffs 数组会渲染成 "diffs":[] —— 明确断死它没退化。
+    expect(document.body.textContent).not.toContain('"diffs":[]');
+  });
+
   it('状态图标:running / done 经 aria-label 可达,缺省为 done', () => {
     const { rerender } = render(
       createElement(AgentActionRow, {

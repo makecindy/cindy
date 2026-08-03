@@ -14,6 +14,7 @@
  */
 
 import { diffLines } from 'diff';
+import { piEditReplacements } from '@cindy/maker-shared';
 
 export interface DiffStat {
   add: number;
@@ -77,16 +78,12 @@ export function statsForToolCall(
     return computeDiffStats('', c);
   }
 
-  // pi edit:edits[].oldText/newText,逐条求和(与 MultiEdit 同形态)。
+  // pi edit:两种入参形态(edits[] + legacy 顶层单段)由共享归一化器抹平后逐段求和。
   if (toolName === 'edit') {
-    const edits = Array.isArray(inp.edits) ? inp.edits : [];
     let add = 0;
     let del = 0;
-    for (const e of edits) {
-      const er = e as Record<string, unknown> | null;
-      const o = er && typeof er.oldText === 'string' ? er.oldText : '';
-      const n = er && typeof er.newText === 'string' ? er.newText : '';
-      const s = computeDiffStats(o, n);
+    for (const edit of piEditReplacements(inp)) {
+      const s = computeDiffStats(edit.oldText, edit.newText);
       add += s.add;
       del += s.del;
     }
