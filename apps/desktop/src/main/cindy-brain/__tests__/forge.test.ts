@@ -5,6 +5,7 @@
  * 规则 23:全部路径在 os.tmpdir 下,收尾清理。
  */
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import JSZip from 'jszip';
 import os from 'node:os';
@@ -21,6 +22,7 @@ import {
   type ForgeScaffoldTemplate,
 } from '../forge';
 import { GhostManager } from '../GhostManager';
+import { GHOST_SIGNATURE_FILE, signGhostPackage } from '../ghostSignature';
 import { GHOST_INSTALL_MANIFEST_MAX_BYTES } from '../../../shared/ghost';
 
 const canSymlink = (() => {
@@ -132,6 +134,51 @@ describe('packGhostDir', () => {
     await expect(packGhostDir(dir, { iconPng: Buffer.alloc(512 * 1024 + 1) })).resolves.toMatchObject({
       ok: false,
       errorCode: 'TOO_LARGE',
+    });
+  });
+
+  it('已签名源码使用 iconPng 时拒绝 overlay，避免生成验签必失败的包', async () => {
+    const originalIcon = Buffer.from(
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=',
+      'base64',
+    );
+    const manifest = { ...GOOD_MANIFEST, icon: 'assets/icon.png' };
+    const dir = await makeSrcDir({
+      'ghost.json': JSON.stringify(manifest),
+      'main.js': '// brain',
+    });
+    await fs.promises.mkdir(path.join(dir, 'assets'), { recursive: true });
+    await fs.promises.writeFile(path.join(dir, 'assets/icon.png'), originalIcon);
+
+    const sourceZip = new JSZip();
+    sourceZip.file('ghost.json', JSON.stringify(manifest));
+    sourceZip.file('main.js', '// brain');
+    sourceZip.file('assets/icon.png', originalIcon);
+    const { privateKey } = crypto.generateKeyPairSync('ed25519');
+    const signed = await signGhostPackage(
+      await sourceZip.generateAsync({ type: 'nodebuffer' }),
+      { publisherName: 'Forge Test Publisher', privateKey },
+    );
+    const signedZip = await JSZip.loadAsync(signed);
+    const signatureBytes = await signedZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer');
+    await fs.promises.writeFile(path.join(dir, GHOST_SIGNATURE_FILE), signatureBytes);
+
+    await expect(packGhostDir(dir, { iconPng: Buffer.from('replacement') })).resolves.toMatchObject({
+      ok: false,
+      errorCode: 'MANIFEST_INVALID',
+      message: expect.stringContaining('已签名插件不能使用 AI 图标覆盖'),
+    });
+
+    const fallback = await packGhostDir(dir);
+    expect(fallback.ok, JSON.stringify(fallback)).toBe(true);
+    if (!fallback.ok) return;
+    const fallbackZip = await JSZip.loadAsync(await fs.promises.readFile(fallback.cindyPath));
+    expect(await fallbackZip.file('assets/icon.png')!.async('nodebuffer')).toEqual(originalIcon);
+    expect(await fallbackZip.file(GHOST_SIGNATURE_FILE)!.async('nodebuffer')).toEqual(signatureBytes);
+
+    const manager = new GhostManager({ getRootDir: () => path.join(workDir, 'ghosts') });
+    expect(await manager.inspect(fallback.cindyPath)).toMatchObject({
+      trust: { publisherSigned: true },
     });
   });
 
@@ -891,6 +938,7 @@ describe('FORGE_GUIDE', () => {
       'selectedImageUrl',
       'icon_source: selectedImageUrl',
       'pack 也会自动回退默认图标',
+      'pack 会保留原图标和原签名',
       '跳过与使用默认是同一个选择',
       '不要用 AI 仿制商标',
       '使用官方品牌图标',

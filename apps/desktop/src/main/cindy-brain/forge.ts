@@ -31,6 +31,7 @@ import {
   readBoundedFileNoFollow,
 } from '../utils/readBoundedFile.js';
 import { validateGhostLocaleResourcesInDirectory } from './ghostLocaleFiles.js';
+import { GHOST_SIGNATURE_FILE } from './ghostSignature.js';
 import { checkSkillMdConsistency } from './skillSlot.js';
 
 /** 与 GhostManager 装入侧同一量级的上限(打包侧提前拦,fail fast)。 */
@@ -767,6 +768,18 @@ async function buildGhostPackage(
     };
     const tooLarge = await walk(dir, '');
     if (tooLarge) return tooLarge;
+    // AI icon overlay changes both the manifest snapshot and the icon bytes. A
+    // source tree carrying a publisher/reviewer signature cannot be modified
+    // here without re-signing, so let the host fall back to the original icon
+    // package instead of producing a package that installation must reject.
+    const signatureEntry = files.find((file) => file.rel === GHOST_SIGNATURE_FILE);
+    if (iconPng !== undefined && signatureEntry) {
+      return {
+        ok: false,
+        errorCode: 'MANIFEST_INVALID',
+        message: '已签名插件不能使用 AI 图标覆盖；请保留原图标，或先修改源码图标再由正式发布流水线重新签名',
+      };
+    }
     const foldedAiIconPath = FORGE_AI_ICON_PATH.toLowerCase();
     const iconSourceEntry = files.find((file) => file.rel.toLowerCase() === foldedAiIconPath);
     const iconPathOccupiedByDirectory = [...seenPackPaths].some(
@@ -3057,6 +3070,8 @@ if (r.ok && r.confirmed) {
   仅当它是 \`cindy-media://\` 地址时，才把它原样交给
   \`ghost_forge_pack({ dir, icon_source: selectedImageUrl })\`；主机会转成 1024×1024 PNG 并
   嵌入安装包。icon_source 处理失败时 pack 也会自动回退默认图标，不要再发起第二次生成。
+  如果源码根目录已有 \`cindy-signatures.json\`，pack 会保留原图标和原签名，不做 AI
+  图标覆盖；任何文件变更都必须交给发布流水线重新签名，不能静默降级信任等级。
 - **上传图片**：让用户提供图片，保存到 \`assets/icon.png\` 后继续；不要要求用户先
   把图片处理成圆角，宿主负责最终显示形态。
 - **使用默认图标（跳过）**：立即继续打包；scaffold 项目保留占位图，未使用 scaffold
