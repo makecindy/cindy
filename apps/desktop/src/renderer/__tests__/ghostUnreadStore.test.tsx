@@ -77,6 +77,25 @@ describe('ghostUnreadStore', () => {
     expect(unreadSync).toHaveBeenCalledTimes(1);
   });
 
+  it('首帧就正确:快照必须在**第一次 getSnapshot** 之前就绪,不许晚一帧', async () => {
+    const { useGhostUnread, useGhostUnreadSummary, useAnyGhostUnread } = await loadStore();
+    // 逐次 render 记录快照值:只要出现过一次 false→true 的翻转,就说明绿点是
+    // 晚一帧跳出来的(useSyncExternalStore 订阅后复查才纠正),而不是首帧就对。
+    const frames: string[] = [];
+    function Probe() {
+      frames.push(
+        `${useGhostUnread('inbox')}|${useGhostUnreadSummary('inbox') ?? '-'}|${useAnyGhostUnread()}`,
+      );
+      return null;
+    }
+    render(<Probe />);
+    expect(frames.length).toBeGreaterThan(0);
+    // 第一帧就必须带上 unreadSync 的内容。
+    expect(frames[0]).toBe('true|3 条新工单|true');
+    // 之后每一帧都一样(没有纠正性的第二次 render)。
+    expect(new Set(frames).size).toBe(1);
+  });
+
   it('推送点亮 / 熄灭都反映到订阅者;摘要跟着最新一次点亮走', async () => {
     const { useGhostUnread, useGhostUnreadSummary } = await loadStore();
     function Probe() {

@@ -2786,25 +2786,37 @@ export function validateGhostManifest(raw: unknown): ManifestValidation {
   // 纯工具型 / 对话型意识没有可打开的界面,点亮了也无处可点,给了就是骗点击。
   let notify: GhostNotifyNeeds | undefined;
   if (raw.notify !== undefined) {
-    if (!isPlainObject(raw.notify)) {
-      return { ok: false, reason: 'notify 能力详单必须是对象(如 { "badge": true })' };
-    }
-    const notifyRaw = raw.notify as Record<string, unknown>;
-    const unknownNotifyField = Object.keys(notifyRaw).find((key) => key !== 'badge');
-    if (unknownNotifyField) {
-      return { ok: false, reason: `notify 含不允许的字段 ${JSON.stringify(unknownNotifyField)}` };
-    }
-    if (notifyRaw.badge !== undefined && typeof notifyRaw.badge !== 'boolean') {
-      return { ok: false, reason: 'notify.badge 必须是布尔值' };
-    }
-    if (notifyRaw.badge === true) {
-      if (!slots.includes('panel')) {
-        return {
-          ok: false,
-          reason: 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
-        };
+    /**
+     * **存量兼容(红线,`plugin-security-and-authoring.md` §5)**:`notify` 在本次
+     * 改动之前是个**未登记的顶层字段**,按校验器「宽进严出:忽略未知字段」的总纪律
+     * 被直接忽略——也就是说,任何已装插件的 ghost.json 里如果碰巧有 `notify`
+     * (无论什么形态:`true`、字符串、带别的键的对象),过去都装得进来、跑得起来。
+     *
+     * 现在给它加结构约束,**绝不能把这些老形态判成 invalid**:validateGhostManifest
+     * 返回 ok:false 会让插件从列表与运行时整个消失,用户升级后什么都没做就"插件不见了"
+     * ——§5 明写「新增校验默认必须自带迁移,不是自带拒绝」「未知字段忽略而不是判
+     * invalid,否则用户一旦回退旧版就再炸一次」。
+     *
+     * 所以这里按「解释不了就忽略」处理,只对**本次新增的 `badge` 键本身**保留严格
+     * 校验——那个键在本 PR 之前不可能存在于任何已装插件里,不存在存量面,严格拒能
+     * 给作者明确反馈而不伤任何人。
+     */
+    // 老形态(`true` / 字符串 / 数组…)与不认识的兄弟键:照旧忽略,不解释也不拒装。
+    // 只有「是对象」时才往下解释,且只解释 `badge` 这一个键。
+    if (isPlainObject(raw.notify)) {
+      const notifyRaw = raw.notify as Record<string, unknown>;
+      if (notifyRaw.badge !== undefined && typeof notifyRaw.badge !== 'boolean') {
+        return { ok: false, reason: 'notify.badge 必须是布尔值' };
       }
-      notify = { badge: true };
+      if (notifyRaw.badge === true) {
+        if (!slots.includes('panel')) {
+          return {
+            ok: false,
+            reason: 'notify.badge 需要同时声明 "panel" 卡槽——未读点承诺「点开能看到内容」,没有面板的意识点亮了也无处可点',
+          };
+        }
+        notify = { badge: true };
+      }
     }
   }
 

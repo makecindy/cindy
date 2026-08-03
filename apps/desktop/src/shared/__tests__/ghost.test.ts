@@ -2266,6 +2266,36 @@ describe('ghost · network 详单校验', () => {
     expect(keys).not.toContain('notify');
   });
 
+  it('存量兼容(红线):老包里任何形态的 notify 字段都不得因新校验而装不进来', () => {
+    // `notify` 在本次改动前是**未登记的顶层字段**,按「宽进严出:忽略未知字段」
+    // 被直接忽略——任何已装插件的 ghost.json 里碰巧有它(什么形态都可能),
+    // 过去都装得进来。新增结构约束后若判成 invalid,插件会从列表与运行时整个
+    // 消失:用户升级后什么都没做就"插件不见了",正是 §5 红线禁止的。
+    // 判据一律是「解释不了就忽略」,而不是拒装。
+    const legacyShapes: unknown[] = [
+      true,                                   // 老包写成布尔开关
+      'badge',                                // 写成字符串
+      ['badge'],                              // 写成数组
+      { sound: true },                        // 对象但键是别的扩展
+      { badge: true, sound: true },           // badge 之外还带自定义兄弟键
+      {},                                     // 空对象
+    ];
+    for (const shape of legacyShapes) {
+      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
+      expect(r.ok, `notify: ${JSON.stringify(shape)} 不该被判 invalid`).toBe(true);
+    }
+    // 只有能确切解释成 badge:true 的那一份才拿到权限项;其余一律零能力。
+    const keys = (shape: unknown) => {
+      const r = validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: shape });
+      return r.ok ? ghostPermissionItems(r.manifest).map((i) => i.key) : null;
+    };
+    expect(keys(true)).not.toContain('badge');
+    expect(keys({ sound: true })).not.toContain('badge');
+    expect(keys({})).not.toContain('badge');
+    // 未知兄弟键被忽略,但 badge 本身照常生效(不因为多了个键就吞掉已声明的能力)。
+    expect(keys({ badge: true, sound: true })).toContain('badge');
+  });
+
   it('来源投影丢掉 notify 时,包里的 badge 必须被识别成「未审权限」', () => {
     // 场景:服务端市场那份平行校验器不认识 `notify` 顶层字段,按「宽进严出,
     // 忽略未知字段」把它丢了 → 确认框渲染的 manifest 没有 badge;而下载的 .cindy
@@ -2296,14 +2326,8 @@ describe('ghost · network 详单校验', () => {
     expect(noPanel.ok).toBe(false);
     if (!noPanel.ok) expect(noPanel.reason).toContain('panel');
 
-    // ② 未知字段 / 非布尔值 → 拒(不给作者"写了没生效"的沉默失败)
-    expect(
-      validateGhostManifest({
-        ...goodManifest(),
-        slots: ['panel'],
-        notify: { badge: true, sound: true },
-      }).ok,
-    ).toBe(false);
+    // ② `badge` 是本次新增的键,写错类型直接拒(不给作者"写了没生效"的沉默失败)。
+    //    它在本 PR 之前不可能存在于任何已装插件里,严格拒不伤存量。
     expect(
       validateGhostManifest({ ...goodManifest(), slots: ['panel'], notify: { badge: 'yes' } }).ok,
     ).toBe(false);

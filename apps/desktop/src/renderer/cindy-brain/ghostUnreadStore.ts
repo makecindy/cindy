@@ -21,6 +21,7 @@ interface UnreadEntry {
 const unread = new Map<string, UnreadEntry>();
 const listeners = new Set<() => void>();
 let subscribed = false;
+let seeded = false;
 
 interface UnreadSnapshotEntry {
   ghostId: string;
@@ -45,7 +46,6 @@ function emit(): void {
   for (const cb of [...listeners]) cb();
 }
 
-/** 首次被消费时才取快照 + 挂推送(模块导入零副作用;测试环境无 electronAPI 也安全)。 */
 /** 整表替换(首帧同步读与换账号快照共用一处落位)。 */
 function applySnapshot(entries: UnreadSnapshotEntry[] | undefined): void {
   unread.clear();
@@ -58,15 +58,33 @@ function applySnapshot(entries: UnreadSnapshotEntry[] | undefined): void {
   }
 }
 
+/**
+ * 首帧快照:**必须在第一次 getSnapshot 之前**完成,所以每个 getSnapshot 都先过这里,
+ * 而不是只挂在 subscribe 上。
+ *
+ * useSyncExternalStore 的顺序是 render 期先调 getSnapshot、mount 后才调 subscribe。
+ * 把同步读放在 subscribe 里的话,首帧一定读到空表,要等 React 订阅后复查快照才纠正
+ * ——绿点与摘要**晚一帧跳出来**,恰好抵消了当初做 `unreadSync` 同步读的全部意义
+ * (codex review)。
+ *
+ * 幂等且只读一次;拿不到就按"全无未读"起步,后续推送照常生效(未读是提醒不是内容)。
+ */
+function ensureSeeded(): void {
+  if (seeded) return;
+  seeded = true;
+  try {
+    applySnapshot(api()?.unreadSync?.().entries);
+  } catch {
+    /* 读不到就空表起步 */
+  }
+}
+
+/** 首次被消费时才挂推送(模块导入零副作用;测试环境无 electronAPI 也安全)。 */
 function ensureSubscribed(): void {
+  ensureSeeded();
   if (subscribed) return;
   subscribed = true;
   const ghosts = api();
-  try {
-    applySnapshot(ghosts?.unreadSync?.().entries);
-  } catch {
-    // 未读是提醒不是内容:快照拿不到就按"全无未读"起步,后续推送照常生效。
-  }
   // 换账号:main 在 auth 状态变化后推一份新 owner 的全量快照,这里整表替换。
   // 只订阅增量的话,账号 A 的绿点与摘要会留在账号 B 的界面上(跨账号残留)。
   ghosts?.onUnreadSnapshot?.((payload) => {
@@ -97,7 +115,10 @@ function subscribe(cb: () => void): () => void {
 export function useGhostUnread(ghostId: string): boolean {
   return useSyncExternalStore(
     subscribe,
-    () => unread.has(ghostId),
+    () => {
+      ensureSeeded();
+      return unread.has(ghostId);
+    },
     () => false,
   );
 }
@@ -106,7 +127,10 @@ export function useGhostUnread(ghostId: string): boolean {
 export function useGhostUnreadSummary(ghostId: string): string | undefined {
   return useSyncExternalStore(
     subscribe,
-    () => unread.get(ghostId)?.summary,
+    () => {
+      ensureSeeded();
+      return unread.get(ghostId)?.summary;
+    },
     () => undefined,
   );
 }
@@ -118,7 +142,10 @@ export function useGhostUnreadSummary(ghostId: string): string | undefined {
 export function useAnyGhostUnread(): boolean {
   return useSyncExternalStore(
     subscribe,
-    () => unread.size > 0,
+    () => {
+      ensureSeeded();
+      return unread.size > 0;
+    },
     () => false,
   );
 }
@@ -187,4 +214,5 @@ export function __resetGhostUnreadForTest(): void {
   unread.clear();
   listeners.clear();
   subscribed = false;
+  seeded = false;
 }
