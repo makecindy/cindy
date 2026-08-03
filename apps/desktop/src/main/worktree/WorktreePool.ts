@@ -135,8 +135,10 @@ async function resetWorktree(
   //    (离线)则重试也会再挂满一份预算,把承诺的总等待上限翻倍;仅对未声明的调用方
   //    保留该 fetch,且受限(真超时 + 禁终端凭证提问),失败非致命退 stale ref——池化
   //    复用不允许被网络或凭证 helper 无限卡住。
-  if (!opts?.sourceFetchAlreadyAttempted && sourceBranch.startsWith('origin/')) {
-    const remoteBranch = sourceBranch.slice('origin/'.length);
+  // sourceBranch 可能是完整远端跟踪引用(refs/remotes/origin/x,freshBase 为消除
+  // 与同名本地分支的歧义所产出)或历史短名(origin/x),两种形态都要识别。
+  const remoteBranch = /^(?:refs\/remotes\/)?origin\/(.+)$/.exec(sourceBranch)?.[1];
+  if (!opts?.sourceFetchAlreadyAttempted && remoteBranch !== undefined) {
     try {
       await gitExec(
         ['fetch', 'origin', remoteBranch],

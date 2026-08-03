@@ -12,7 +12,10 @@ import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
-  lsFilesStdout: undefined as string | undefined, // undefined = 查询失败
+  /** baseRepo 索引跟踪清单(ls-files);undefined = 查询失败 */
+  lsFilesStdout: undefined as string | undefined,
+  /** 目标 worktree HEAD 树清单(ls-tree);undefined = 查询失败 */
+  lsTreeStdout: undefined as string | undefined,
 }));
 
 vi.mock('../gitExec', () => ({
@@ -20,6 +23,10 @@ vi.mock('../gitExec', () => ({
     if (args[0] === 'ls-files') {
       if (mocks.lsFilesStdout === undefined) throw new Error('ls-files failed');
       return { stdout: mocks.lsFilesStdout, stderr: '' };
+    }
+    if (args[0] === 'ls-tree') {
+      if (mocks.lsTreeStdout === undefined) throw new Error('ls-tree failed');
+      return { stdout: mocks.lsTreeStdout, stderr: '' };
     }
     throw new Error(`unexpected git call: ${args.join(' ')}`);
   },
@@ -48,6 +55,7 @@ beforeEach(async () => {
   baseRepo = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-cs-base-'));
   worktree = await fs.mkdtemp(path.join(os.tmpdir(), 'copy-cs-wt-'));
   mocks.lsFilesStdout = undefined;
+  mocks.lsTreeStdout = undefined;
 });
 
 afterEach(async () => {
@@ -80,6 +88,19 @@ describe('copyClaudeSiviDirs', () => {
     await copyClaudeSiviDirs(baseRepo, worktree);
 
     expect(await read(worktree, '.claude/removed-on-main.md')).toBeNull();
+  });
+
+  it('baseRepo 未跟踪但 sourceBranch 已开始跟踪 → 本地旧配置不覆盖新基底检出内容', async () => {
+    // 上游给仓库新增了受控的 .claude/team-rule.md;本地 baseRepo 还没拉到
+    // (索引里没有),但用户曾手写过一份同名未跟踪草稿
+    await write(baseRepo, '.claude/team-rule.md', 'my-old-local-draft');
+    await write(worktree, '.claude/team-rule.md', 'now-tracked-on-source-branch');
+    mocks.lsFilesStdout = ''; // baseRepo 索引没有它
+    mocks.lsTreeStdout = '.claude/team-rule.md\0'; // 目标基底 HEAD 树已跟踪
+
+    await copyClaudeSiviDirs(baseRepo, worktree);
+
+    expect(await read(worktree, '.claude/team-rule.md')).toBe('now-tracked-on-source-branch');
   });
 
   it('未跟踪的本地配置照常补复制', async () => {

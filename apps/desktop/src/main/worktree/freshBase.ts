@@ -39,7 +39,8 @@ export function boundedNetworkGitOpts(timeoutMs: number): GitExecOpts {
 }
 
 export interface FreshSourceResolution {
-  /** 建 worktree 用的 sourceBranch(commit-ish,如 `upstream/main`;回退时为 fallback)。 */
+  /** 建 worktree 用的 sourceBranch(commit-ish,如 `refs/remotes/upstream/main`
+   * 完整远端引用,避免与同名本地分支歧义;回退时为 fallback)。 */
   sourceBranch: string;
   /** true = 基于刚 fetch 成功的远端默认分支。 */
   fetched: boolean;
@@ -150,7 +151,11 @@ export async function resolveFreshSourceBranch(
     log.warn(`[freshBase] 网络总预算已耗尽,跳过 fetch ${remote}/${defaultBranch},退用本地已有远端 ref`);
   }
 
-  const remoteRef = `${remote}/${defaultBranch}`;
+  // 完整远端跟踪引用:本地若恰好存在名为 "origin/main" 的**分支**,短名会歧义
+  // (git 会警告并可能解析到 refs/heads/origin/main),worktree 创建可能失败或
+  // 切错基底;refs/remotes/ 全名无歧义,后续 rev-parse/merge-base/worktree add
+  // 全部照常接受。
+  const remoteRef = `refs/remotes/${remote}/${defaultBranch}`;
   if ((await tryGit(['rev-parse', '--verify', `refs/remotes/${remote}/${defaultBranch}`], baseRepo)) !== null) {
     if (fetched) return { sourceBranch: remoteRef, fetched: true };
     // fetch 未成功时 remoteRef 可能陈旧:若它已是 fallback 的祖先(本地分支不落后于

@@ -53,7 +53,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-    expect(res).toEqual({ sourceBranch: 'upstream/main', fetched: true, reason: undefined });
+    expect(res).toEqual({ sourceBranch: 'refs/remotes/upstream/main', fetched: true, reason: undefined });
     // 网络类命令必须带真超时(到点杀子进程,防与后续 createWorktree 抢仓库锁)
     expect(call('ls-remote')?.opts?.timeoutMs).toBeGreaterThan(0);
     expect(call('fetch')?.opts?.timeoutMs).toBeGreaterThan(0);
@@ -74,7 +74,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-    expect(res.sourceBranch).toBe('upstream/trunk');
+    expect(res.sourceBranch).toBe('refs/remotes/upstream/trunk');
     expect(res.fetched).toBe(true);
     // 回归:必须用显式目标 refspec——--single-branch/窄 refspec clone 里裸
     // `fetch <remote> trunk` 只更新 FETCH_HEAD 不建 refs/remotes/<remote>/trunk,
@@ -97,7 +97,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-    expect(res.sourceBranch).toBe('origin/main');
+    expect(res.sourceBranch).toBe('refs/remotes/origin/main');
     expect(res.fetched).toBe(true);
   });
 
@@ -110,7 +110,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-    expect(res.sourceBranch).toBe('origin/main');
+    expect(res.sourceBranch).toBe('refs/remotes/origin/main');
     expect(res.fetched).toBe(true);
   });
 
@@ -125,7 +125,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-    expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+    expect(res).toEqual({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason: 'stale-remote-ref' });
   });
 
   it('fetch 失败且 fallback 已领先 stale ref → 保留 fallback,不丢本地提交', async () => {
@@ -135,7 +135,7 @@ describe('resolveFreshSourceBranch', () => {
       if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
       if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
       // stale origin/main 是 fallback 的祖先(本地 main 有未推送提交)
-      if (key === 'merge-base --is-ancestor origin/main feature-x') return '';
+      if (key === 'merge-base --is-ancestor refs/remotes/origin/main feature-x') return '';
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
@@ -158,7 +158,7 @@ describe('resolveFreshSourceBranch', () => {
         }
         if (key === 'symbolic-ref --short refs/remotes/origin/HEAD') return 'origin/main';
         if (key === 'rev-parse --verify refs/remotes/origin/main') return 'abc123';
-        if (key === 'merge-base --is-ancestor origin/main feature-x') return '';
+        if (key === 'merge-base --is-ancestor refs/remotes/origin/main feature-x') return '';
         return undefined;
       };
       const res = await resolveFreshSourceBranch(REPO, 'feature-x');
@@ -189,7 +189,7 @@ describe('resolveFreshSourceBranch', () => {
         return undefined;
       };
       const res = await resolveFreshSourceBranch(REPO, 'feature-x');
-      expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+      expect(res).toEqual({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason: 'stale-remote-ref' });
       // 预算耗尽后不得以全新预算发起第二次网络操作
       expect(call('fetch')).toBeUndefined();
     } finally {
@@ -237,7 +237,7 @@ describe('resolveFreshSourceBranch', () => {
     const res = await resolveFreshSourceBranch(REPO, 'feature-x');
     // 刻意的 fail-open(行为契约):残留进程若真持锁,后续 git 写操作会以锁错误
     // 显式失败,解析层不把降级环境变成必失败
-    expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+    expect(res).toEqual({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason: 'stale-remote-ref' });
   });
 
   it('总预算 ≤0 → 不发起任何网络操作(0/负数不传给 gitExec),纯本地元数据回退', async () => {
@@ -249,7 +249,7 @@ describe('resolveFreshSourceBranch', () => {
       return undefined;
     };
     const res = await resolveFreshSourceBranch(REPO, 'feature-x', 0);
-    expect(res).toEqual({ sourceBranch: 'origin/main', fetched: false, reason: 'stale-remote-ref' });
+    expect(res).toEqual({ sourceBranch: 'refs/remotes/origin/main', fetched: false, reason: 'stale-remote-ref' });
     expect(call('ls-remote')).toBeUndefined();
     expect(call('fetch')).toBeUndefined();
   });

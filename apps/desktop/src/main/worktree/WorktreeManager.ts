@@ -531,16 +531,35 @@ export async function copyDirIfExists(
 }
 
 /**
- * baseRepo 中 .claude/.sivi 下被 git 跟踪的文件(仓库根相对路径,posix 分隔)。
- * 查询失败(极罕见)返回空集 → 退回全量复制的旧行为,fail-open。
+ * .claude/.sivi 下应受保护(复制时跳过)的受控文件集(仓库根相对路径,posix 分隔),
+ * 取两个来源的**并集**:
+ *  - baseRepo 索引的跟踪文件:上游已删除的也要保护,不把旧文件补回新基底;
+ *  - 目标 worktree HEAD 树(= sourceBranch)的文件:baseRepo 尚未跟踪、sourceBranch
+ *    已开始跟踪的场景必须靠它——否则本地未跟踪的同名旧配置会覆盖新基底刚检出的
+ *    受控内容并立刻 dirty。
+ * 单侧查询失败按空集处理(fail-open,最坏退回全量复制的旧行为)。
  */
-async function listTrackedClaudeSiviPaths(baseRepo: string): Promise<ReadonlySet<string>> {
+async function listProtectedClaudeSiviPaths(
+  baseRepo: string,
+  worktreePath: string,
+): Promise<ReadonlySet<string>> {
+  const out = new Set<string>();
   try {
     const { stdout } = await gitExec(['ls-files', '-z', '--', '.claude', '.sivi'], baseRepo);
-    return new Set(stdout.split('\0').filter(Boolean));
+    for (const p of stdout.split('\0')) if (p) out.add(p);
   } catch {
-    return new Set();
+    /* fail-open */
   }
+  try {
+    const { stdout } = await gitExec(
+      ['ls-tree', '-r', '-z', '--name-only', 'HEAD', '--', '.claude', '.sivi'],
+      worktreePath,
+    );
+    for (const p of stdout.split('\0')) if (p) out.add(p);
+  } catch {
+    /* fail-open */
+  }
+  return out;
 }
 
 export async function copyClaudeSiviDirs(
@@ -553,7 +572,7 @@ export async function copyClaudeSiviDirs(
   // 检出——用 baseRepo 旧 checkout 覆盖会让自动 worktree 带着旧 Agent 配置启动,
   // 且这些文件与新 HEAD 不同时一创建就 dirty(后台完整 checkout 明确排除
   // .claude/.sivi,永远不会修复)。
-  const tracked = await listTrackedClaudeSiviPaths(baseRepo);
+  const tracked = await listProtectedClaudeSiviPaths(baseRepo, worktreePath);
   await copyDirIfExists(path.join(baseRepo, '.claude'), path.join(worktreePath, '.claude'), {
     excludeTopLevelDirs: CLAUDE_COPY_EXCLUDED_TOP_LEVEL_DIRS,
     overwriteExisting: options.overwriteExisting,
