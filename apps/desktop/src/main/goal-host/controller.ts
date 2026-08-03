@@ -359,6 +359,11 @@ export class GoalController {
   private readonly turns = new Map<string, TurnAccumulator>();
   /** 正在派发的 fire 及其 owner；旧代 finally 只能清理自己，不能删掉 Resume 新代。 */
   private readonly firing = new Map<string, object>();
+  /** 尚在 Session.send 派发边界内的 Goal fire；Stop 必须能取消 dispatch 前的异步 gate。 */
+  private readonly goalDispatchAbortControllers = new Map<
+    string,
+    { owner: object; controller: AbortController }
+  >();
   private readonly timers = new Map<string, ReturnType<typeof setTimeout>>();
   /** goal controller 自己发起且尚未收到终止事件的 turn。用于编辑时区分 goal turn / user turn。 */
   private readonly goalTurnsInFlight = new Set<string>();
@@ -1161,6 +1166,11 @@ export class GoalController {
       clearTimeout(timer);
       this.timers.delete(sessionId);
     }
+    const pendingDispatch = this.goalDispatchAbortControllers.get(sessionId);
+    if (pendingDispatch) {
+      this.goalDispatchAbortControllers.delete(sessionId);
+      pendingDispatch.controller.abort();
+    }
     this.firing.delete(sessionId);
     this.goalTurnsInFlight.delete(sessionId);
     this.turns.delete(sessionId);
@@ -1714,6 +1724,11 @@ export class GoalController {
     }
     const firingOwner = {};
     this.firing.set(sessionId, firingOwner);
+    const dispatchAbortController = new AbortController();
+    this.goalDispatchAbortControllers.set(sessionId, {
+      owner: firingOwner,
+      controller: dispatchAbortController,
+    });
     let dispatchBoundary: TurnAccumulator | undefined;
     let dispatchGeneration: number | undefined;
     const isCurrentDispatch = (): boolean =>
@@ -1789,6 +1804,7 @@ export class GoalController {
           onDispatching: () => {
             if (isCurrentDispatch()) this.goalTurnsInFlight.add(sessionId);
           },
+          signal: dispatchAbortController.signal,
         },
       );
       if (pendingHandoff && result.accepted) {
@@ -1822,6 +1838,9 @@ export class GoalController {
       this.deps.logger.warn('[goal] fireTurn send failed', { sessionId, kind, error: String(e) });
     } finally {
       releaseAgentSwitchLock();
+      if (this.goalDispatchAbortControllers.get(sessionId)?.owner === firingOwner) {
+        this.goalDispatchAbortControllers.delete(sessionId);
+      }
       if (this.firing.get(sessionId) === firingOwner) {
         this.firing.delete(sessionId);
       }

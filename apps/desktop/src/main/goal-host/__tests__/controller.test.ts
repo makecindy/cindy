@@ -223,7 +223,7 @@ class FakeSession implements SessionLike {
 
   async send(
     message: { type: 'user'; content: string } | string,
-    opts?: { origin?: { kind?: string }; onDispatching?: () => void },
+    opts?: { origin?: { kind?: string }; onDispatching?: () => void; signal?: AbortSignal },
   ): Promise<SessionSendResult> {
     const content = typeof message === 'string' ? message : message.content;
     this.sends.push({ content, originKind: opts?.origin?.kind });
@@ -1457,6 +1457,7 @@ describe('GoalController', () => {
     const internals = local.controller as unknown as {
       fireTurn(sessionId: string): Promise<void>;
       firing: Map<string, object>;
+      goalDispatchAbortControllers: Map<string, { owner: object; controller: AbortController }>;
     };
 
     const oldFire = internals.fireTurn('s1');
@@ -1466,10 +1467,13 @@ describe('GoalController', () => {
     const resumePromise = local.controller.resumeGoal('s1');
     await vi.waitFor(() => expect(acquireCalls).toBe(3));
     expect(internals.firing.has('s1')).toBe(true);
+    const resumedDispatchCancellation = internals.goalDispatchAbortControllers.get('s1');
+    expect(resumedDispatchCancellation).toBeDefined();
 
     releaseOldAcquire(() => {});
     await oldFire;
     expect(internals.firing.has('s1')).toBe(true);
+    expect(internals.goalDispatchAbortControllers.get('s1')).toBe(resumedDispatchCancellation);
 
     releaseNewAcquire(() => {});
     await resumePromise;
@@ -2255,6 +2259,43 @@ describe('GoalController', () => {
     expect(stopActiveGoalTurn).toHaveBeenCalledOnce();
     releaseSend();
     await setPromise;
+    expect(await local.storage.get('s1')).toBeNull();
+  });
+
+  it('clearGoal cancels a goal send waiting before vendor dispatch', async () => {
+    const stopActiveGoalTurn = vi.fn();
+    const local = makeController({ stopActiveGoalTurn });
+    let releasePreDispatchGate!: () => void;
+    const preDispatchGate = new Promise<void>((resolve) => {
+      releasePreDispatchGate = resolve;
+    });
+    let signal: AbortSignal | undefined;
+    let vendorDispatches = 0;
+    vi.spyOn(local.session, 'send').mockImplementation(async (
+      message: Parameters<FakeSession['send']>[0],
+      opts: Parameters<FakeSession['send']>[1],
+    ): Promise<SessionSendResult> => {
+      const content = typeof message === 'string' ? message : message.content;
+      local.session.sends.push({ content, originKind: opts?.origin?.kind });
+      signal = opts?.signal;
+      await preDispatchGate;
+      if (signal?.aborted) {
+        return { accepted: false, reason: 'cancelled-before-dispatch' };
+      }
+      opts?.onDispatching?.();
+      vendorDispatches += 1;
+      return { accepted: true };
+    });
+
+    const setPromise = startGoal(local);
+    await vi.waitFor(() => expect(local.session.sends).toHaveLength(1));
+    await local.controller.clearGoal('s1');
+    releasePreDispatchGate();
+    await setPromise;
+
+    expect(signal?.aborted).toBe(true);
+    expect(vendorDispatches).toBe(0);
+    expect(stopActiveGoalTurn).not.toHaveBeenCalled();
     expect(await local.storage.get('s1')).toBeNull();
   });
 
