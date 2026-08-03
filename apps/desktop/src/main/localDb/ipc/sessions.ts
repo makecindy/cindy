@@ -109,6 +109,7 @@ function broadcastWorktreeChanged(sessionId: string): void {
  * 时条目仍在 store 里,重拉拿到的就是"徽标还在"这个真实状态,同样是对的。
  */
 function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unknown): void {
+  scheduleSavepointCleanupForStatusChange(sessionId, status);
   if (status !== 'deleted' && status !== 'archived') return;
   void (async () => {
     const [mh, recycle, routeLock] = await Promise.all([
@@ -134,6 +135,23 @@ function scheduleWorktreeRecycleForStatusChange(sessionId: string, status: unkno
     })
     .finally(() => {
       broadcastWorktreeChanged(sessionId);
+    });
+}
+
+/**
+ * 会话删除后的 shadow savepoint 链清理(refs/cindy/savepoints/<sid>)。
+ * 只处理 deleted:归档可恢复,恢复后文件回退仍要可用,归档会话的保存点保留。
+ * fire-and-forget + 动态 import 防环;失败由启动期 reconcile 兜底。
+ */
+function scheduleSavepointCleanupForStatusChange(sessionId: string, status: unknown): void {
+  if (status !== 'deleted') return;
+  void import('../../git-snapshot/savepointCleanup.js')
+    .then((m) => m.cleanupSavepointsForRemovedSession(sessionId))
+    .catch((err) => {
+      log.warn('savepoint cleanup after session delete failed', {
+        sessionId,
+        err: err instanceof Error ? err.message : String(err),
+      });
     });
 }
 

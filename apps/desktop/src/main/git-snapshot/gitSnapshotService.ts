@@ -14,16 +14,24 @@ import { createLogger } from '../logger';
 import { gitExec, GitExecError } from '../worktree/gitExec';
 import {
   buildSnapshotFilePlan,
+  resolveSnapshotGitPath,
   type SnapshotIncludedFile,
   type SnapshotFileFilterOptions,
   type SnapshotSkippedFile,
 } from './snapshotFileFilter';
 import {
+  buildCindyCommitMessage,
   buildCommitMessage,
   parseSnapshotCommit,
   type SnapshotKind,
   type SnapshotMeta,
+  type SnapshotTrailerSource,
 } from './snapshotTrailers';
+import {
+  InvalidSavepointSessionIdError,
+  readSavepointTip,
+  savepointRefForSession,
+} from './savepointRefs';
 
 const log = createLogger('git-snapshot');
 
@@ -104,7 +112,7 @@ export interface CreateSnapshotDetailedResult {
   skippedFiles: SnapshotSkippedFile[];
 }
 
-/** One XDT savepoint parsed from the reachable Git history. */
+/** One savepoint parsed from Git history (HEAD log for legacy, hidden ref chain for shadow). */
 export interface SnapshotEntry {
   commit: string;
   label: string;
@@ -112,8 +120,14 @@ export interface SnapshotEntry {
   sessionId: string;
   time: string;
   parentCount: number;
+  /** Trailer generation the savepoint was written with. */
+  source: SnapshotTrailerSource;
   anchor?: string;
   branch?: string;
+  /** Shadow after-edit only: the turn-start savepoint this delta is based on. */
+  baselineCommit?: string;
+  /** Shadow only: HEAD commit at savepoint time, for audit. */
+  baseHead?: string;
 }
 
 /** Filters applied while reading XDT savepoints from Git history. */
@@ -352,11 +366,321 @@ export async function listSnapshots(
       sessionId: parsed.sessionId,
       time: time.trim(),
       parentCount: parents.length,
+      source: parsed.source,
       ...(parsed.anchor ? { anchor: parsed.anchor } : {}),
       ...(parsed.branch ? { branch: parsed.branch } : {}),
     });
   }
   return entries;
+}
+
+/** Snapshot kinds that appear on a shadow savepoint chain and matter to readers. */
+const SHADOW_LISTABLE_KINDS: ReadonlySet<SnapshotKind> = new Set([
+  'turn-start',
+  'after-edit',
+  'pre-rollback',
+  'rewind-blocked',
+]);
+
+/** Fixed identity for shadow savepoint commits so plumbing never depends on user git config. */
+const SHADOW_IDENTITY_ENV: Record<string, string> = {
+  GIT_AUTHOR_NAME: 'Cindy',
+  GIT_AUTHOR_EMAIL: 'savepoint@cindy.local',
+  GIT_COMMITTER_NAME: 'Cindy',
+  GIT_COMMITTER_EMAIL: 'savepoint@cindy.local',
+};
+
+/** Input for shadow savepoints written to the session's hidden ref chain. */
+export interface CreateShadowSavepointInput {
+  sessionId: string;
+  /** Commit label or a factory used after staging when diff context is needed. */
+  label: string | SnapshotLabelFactory;
+  /** Trailer metadata; sessionId/branch/baseHead are filled in by the kernel. */
+  meta: Omit<SnapshotMeta, 'sessionId' | 'branch' | 'baseHead'>;
+  /**
+   * Skip commit creation when the staged worktree tree equals this commit's
+   * tree (used by after-edit against the turn-start baseline).
+   */
+  skipIfTreeEquals?: string;
+  /** Optional safety filter limit overrides, mainly for tests. */
+  fileFilter?: Partial<SnapshotFileFilterOptions>;
+}
+
+/** Result of a shadow savepoint attempt. */
+export interface ShadowSavepointResult {
+  /** Created commit, or null when skipIfTreeEquals matched. */
+  commit: string | null;
+  /** Tree written from the current worktree state. */
+  tree: string;
+  includedFiles: string[];
+  skippedFiles: SnapshotSkippedFile[];
+}
+
+/**
+ * Creates a shadow savepoint on refs/cindy/savepoints/<sessionId>.
+ *
+ * Uses plumbing only (temporary index + write-tree + commit-tree + update-ref),
+ * so HEAD, the current branch, the user's index and the worktree are never
+ * touched, and no git hooks run.
+ */
+export async function createShadowSavepoint(
+  repoPath: string,
+  input: CreateShadowSavepointInput,
+): Promise<ShadowSavepointResult> {
+  const blockedState = await detectBlockedGitState(repoPath);
+  if (blockedState) {
+    throw new SnapshotBlockedByGitStateError(blockedState);
+  }
+
+  const plan = await buildSnapshotFilePlan(repoPath, input.fileFilter);
+  const skippedFiles = plan.skippedFiles;
+  const conflictedFiles = skippedFiles.filter((file) => file.reason === 'conflict');
+  if (conflictedFiles.length > 0) {
+    throw new SnapshotBlockedByGitStateError({ reason: 'conflict', conflictedFiles });
+  }
+
+  const stagePathspecs = uniquePathspecs(plan.includedFiles.flatMap((file) => file.pathsForPathspec));
+  const commitPathspecs = uniquePathspecs(plan.includedFiles.flatMap(commitPathspecsFor));
+  const renameOldPaths = renameOldPathsToRemove(plan.includedFiles);
+
+  return withTemporaryIndex(repoPath, async (extraEnv) => {
+    if (stagePathspecs.length > 0) {
+      await withPathspecFile(stagePathspecs, (pathspecFile) =>
+        gitExec(
+          ['add', '-A', '--pathspec-from-file', pathspecFile, '--pathspec-file-nul'],
+          repoPath,
+          { extraEnv },
+        ),
+      );
+    }
+    await removeRenameOldPaths(repoPath, renameOldPaths, extraEnv);
+
+    const tree = (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
+
+    if (input.skipIfTreeEquals) {
+      const baselineTree = await resolveTreeOf(repoPath, input.skipIfTreeEquals);
+      if (baselineTree && baselineTree === tree) {
+        log.debug('[createShadowSavepoint] tree unchanged, skip', {
+          sessionId: input.sessionId,
+          baseline: input.skipIfTreeEquals.slice(0, 8),
+        });
+        return {
+          commit: null,
+          tree,
+          includedFiles: plan.includedFiles.map((file) => file.path),
+          skippedFiles,
+        };
+      }
+    }
+
+    const label =
+      typeof input.label === 'function'
+        ? await input.label(
+            // Diff against the turn baseline, not HEAD: the worktree stays
+            // dirty across turns now, so a HEAD-based diff would describe the
+            // cumulative session delta instead of this turn's changes.
+            await collectStagedDiff(repoPath, commitPathspecs, extraEnv, input.skipIfTreeEquals),
+          )
+        : input.label;
+    const [branch, baseHead, parent] = await Promise.all([
+      getCurrentBranch(repoPath).catch(() => undefined),
+      getHead(repoPath).catch(() => undefined),
+      readSavepointTip(repoPath, input.sessionId),
+    ]);
+    const message = buildCindyCommitMessage(label, {
+      ...input.meta,
+      sessionId: input.sessionId,
+      ...(branch ? { branch } : {}),
+      ...(baseHead ? { baseHead } : {}),
+    });
+
+    const commit = await commitTreeToSavepointRef(repoPath, {
+      sessionId: input.sessionId,
+      tree,
+      parent,
+      message,
+    });
+    return {
+      commit,
+      tree,
+      includedFiles: plan.includedFiles.map((file) => file.path),
+      skippedFiles,
+    };
+  });
+}
+
+/** Input for metadata-only shadow markers (gap / rollback records on the chain). */
+export interface CreateShadowMarkerInput {
+  sessionId: string;
+  label: string;
+  meta: Omit<SnapshotMeta, 'sessionId' | 'branch' | 'baseHead'>;
+}
+
+/**
+ * Appends a metadata-only marker to the session's savepoint chain, reusing the
+ * chain tip's tree. Returns null when the chain is still empty (a marker with
+ * no baseline carries no rewind value; readers treat the absence as a gap).
+ */
+export async function createShadowMarker(
+  repoPath: string,
+  input: CreateShadowMarkerInput,
+): Promise<string | null> {
+  const parent = await readSavepointTip(repoPath, input.sessionId);
+  if (!parent) {
+    log.warn('[createShadowMarker] empty savepoint chain, marker skipped', {
+      sessionId: input.sessionId,
+      kind: input.meta.kind,
+    });
+    return null;
+  }
+  const tree = await resolveTreeOf(repoPath, parent);
+  if (!tree) {
+    log.warn('[createShadowMarker] chain tip tree unresolved, marker skipped', {
+      sessionId: input.sessionId,
+    });
+    return null;
+  }
+  const [branch, baseHead] = await Promise.all([
+    getCurrentBranch(repoPath).catch(() => undefined),
+    getHead(repoPath).catch(() => undefined),
+  ]);
+  const message = buildCindyCommitMessage(input.label, {
+    ...input.meta,
+    sessionId: input.sessionId,
+    ...(branch ? { branch } : {}),
+    ...(baseHead ? { baseHead } : {}),
+  });
+  return commitTreeToSavepointRef(repoPath, {
+    sessionId: input.sessionId,
+    tree,
+    parent,
+    message,
+  });
+}
+
+/** Lists the session's shadow savepoint chain newest-first. Missing ref yields []. */
+export async function listShadowSavepoints(
+  repoPath: string,
+  sessionId: string,
+  options: { maxCount?: number } = {},
+): Promise<SnapshotEntry[]> {
+  let ref: string;
+  try {
+    ref = savepointRefForSession(sessionId);
+  } catch (err) {
+    if (err instanceof InvalidSavepointSessionIdError) return [];
+    throw err;
+  }
+
+  let stdout: string;
+  try {
+    const maxCount = normalizeListSnapshotsMaxCount(options.maxCount);
+    ({ stdout } = await gitExec(
+      [
+        'log',
+        `--max-count=${maxCount}`,
+        `--format=%H${FIELD_SEP}%P${FIELD_SEP}%cI${FIELD_SEP}%B${RECORD_SEP}`,
+        ref,
+      ],
+      repoPath,
+    ));
+  } catch (err) {
+    if (err instanceof GitExecError && isUnbornHeadError(err)) return [];
+    throw err;
+  }
+
+  const entries: SnapshotEntry[] = [];
+  for (const record of stdout.split(RECORD_SEP)) {
+    const trimmed = record.replace(/^\s+/, '');
+    if (!trimmed) continue;
+    const [commit, parentsRaw, time, ...bodyParts] = trimmed.split(FIELD_SEP);
+    if (!commit || !time) continue;
+    const parsed = parseSnapshotCommit(bodyParts.join(FIELD_SEP));
+    if (!parsed || parsed.source !== 'cindy' || !SHADOW_LISTABLE_KINDS.has(parsed.kind)) continue;
+    if (parsed.sessionId !== sessionId) continue;
+    const parents = parentsRaw.trim() ? parentsRaw.trim().split(/\s+/) : [];
+    entries.push({
+      commit: commit.trim(),
+      label: parsed.label,
+      kind: parsed.kind,
+      sessionId: parsed.sessionId,
+      time: time.trim(),
+      parentCount: parents.length,
+      source: 'cindy',
+      ...(parsed.anchor ? { anchor: parsed.anchor } : {}),
+      ...(parsed.branch ? { branch: parsed.branch } : {}),
+      ...(parsed.baselineCommit ? { baselineCommit: parsed.baselineCommit } : {}),
+      ...(parsed.baseHead ? { baseHead: parsed.baseHead } : {}),
+    });
+  }
+  return entries;
+}
+
+/**
+ * Writes the current worktree state of the given repo-relative paths into a
+ * tree object (used by restore preview and the restore executor). Paths are
+ * literal file paths, not pathspecs. The dangling tree is gc-collectable.
+ *
+ * Uses update-index instead of `git add` because `git add -- <path>` is fatal
+ * for a path that neither exists in the worktree nor in the index — exactly
+ * the state of a file one turn created and a later turn deleted.
+ */
+export async function writeWorktreeTreeForPaths(
+  repoPath: string,
+  paths: readonly string[],
+): Promise<string> {
+  return withTemporaryIndex(repoPath, async (extraEnv) => {
+    const present: string[] = [];
+    const absent: string[] = [];
+    for (const rawPath of uniqueRawPaths(paths)) {
+      const abs = resolveSnapshotGitPath(repoPath, rawPath);
+      if (!abs) continue;
+      if (await pathExists(abs)) present.push(rawPath);
+      else absent.push(rawPath);
+    }
+    for (const chunk of chunkRawPaths(present)) {
+      await gitExec(['update-index', '--add', '--', ...chunk], repoPath, { extraEnv });
+    }
+    for (const chunk of chunkRawPaths(absent)) {
+      await gitExec(['update-index', '--force-remove', '--', ...chunk], repoPath, { extraEnv });
+    }
+    return (await gitExec(['write-tree'], repoPath, { extraEnv })).stdout.trim();
+  });
+}
+
+async function resolveTreeOf(repoPath: string, commitish: string): Promise<string | null> {
+  try {
+    const { stdout } = await gitExec(['rev-parse', `${commitish}^{tree}`], repoPath);
+    return stdout.trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+async function commitTreeToSavepointRef(
+  repoPath: string,
+  input: { sessionId: string; tree: string; parent: string | null; message: string },
+): Promise<string> {
+  const { stdout } = await gitExec(
+    [
+      '-c',
+      'commit.gpgsign=false',
+      'commit-tree',
+      input.tree,
+      ...(input.parent ? ['-p', input.parent] : []),
+      '-m',
+      input.message,
+    ],
+    repoPath,
+    { extraEnv: SHADOW_IDENTITY_ENV },
+  );
+  const commit = stdout.trim();
+  // CAS on the chain tip: an empty old value means "must not exist yet".
+  await gitExec(
+    ['update-ref', savepointRefForSession(input.sessionId), commit, input.parent ?? ''],
+    repoPath,
+  );
+  return commit;
 }
 
 function normalizeListSnapshotsMaxCount(maxCount: number | undefined): number {
@@ -370,10 +694,12 @@ async function collectStagedDiff(
   repoPath: string,
   pathspecs: readonly string[],
   extraEnv: Record<string, string>,
+  diffBase?: string,
 ): Promise<StagedDiff> {
+  const baseArgs = diffBase ? ['diff', '--cached', diffBase] : ['diff', '--cached'];
   const [diffStat, rawDiffText] = await Promise.all([
-    safeGitStdoutForPathspecs(['diff', '--cached', '--stat'], repoPath, pathspecs, extraEnv),
-    safeGitStdoutForPathspecs(['diff', '--cached'], repoPath, pathspecs, extraEnv),
+    safeGitStdoutForPathspecs([...baseArgs, '--stat'], repoPath, pathspecs, extraEnv),
+    safeGitStdoutForPathspecs([...baseArgs], repoPath, pathspecs, extraEnv),
   ]);
   const diffText =
     rawDiffText.length > STAGED_DIFF_TEXT_MAX_BYTES
@@ -540,7 +866,8 @@ async function resetCommittedPaths(repoPath: string, pathspecs: readonly string[
   }
 }
 
-function chunkPathspecArgs(pathspecs: readonly string[]): string[][] {
+/** Splits literal pathspecs into command-line sized chunks. */
+export function chunkPathspecArgs(pathspecs: readonly string[]): string[][] {
   const unique = uniquePathspecs(pathspecs);
   const chunks: string[][] = [];
   for (let i = 0; i < unique.length; i += PATHSPEC_CHUNK_SIZE) {
@@ -580,7 +907,8 @@ function uniqueRawPaths(paths: readonly (string | undefined)[]): string[] {
   return out;
 }
 
-async function withPathspecFile<T>(
+/** Writes NUL-separated pathspecs to a temp file for --pathspec-from-file. */
+export async function withPathspecFile<T>(
   pathspecs: readonly string[],
   fn: (pathspecFile: string) => Promise<T>,
 ): Promise<T> {

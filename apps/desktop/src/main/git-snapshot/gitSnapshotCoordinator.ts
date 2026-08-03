@@ -9,7 +9,11 @@ import type { AgentKind } from '@cindy/maker-core';
 
 import { createAfterEditLabel } from './gitSnapshotLabeler';
 import { enqueueGitRepoWrite } from './gitRepoWriteQueue';
-import type { CreateSnapshotInput, CreateSnapshotMarkerInput } from './gitSnapshotService';
+import type {
+  CreateShadowMarkerInput,
+  CreateShadowSavepointInput,
+  ShadowSavepointResult,
+} from './gitSnapshotService';
 
 interface CoordinatorLogger {
   info: (msg: string, meta?: Record<string, unknown>) => void;
@@ -35,18 +39,22 @@ export interface GitSnapshotCoordinatorDeps {
     context: GitSnapshotSessionContext,
     opts: { autoSnapshotEnabled: boolean },
   ) => Promise<{ repoRoot?: string | null } | null>;
-  /** Cheap dirty check used before createSnapshot does heavier staging work. */
-  isWorktreeDirty: (repoRoot: string) => Promise<boolean>;
   /** Session lookup used for workingDir detection and label-agent routing. */
   getSessionContext: (sessionId: string) => Promise<GitSnapshotSessionContext | null>;
-  /** Optional message anchor attached to the XDT trailer metadata. */
+  /** Optional message anchor attached to the savepoint trailer metadata. */
   resolveAnchor?: (sessionId: string) => Promise<string | undefined>;
   /** Optional last user prompt, used only as label context. */
   getLastUserPrompt?: (sessionId: string) => Promise<string | undefined>;
-  /** Snapshot kernel dependency, injected for tests. */
-  createSnapshot: (repoPath: string, input: CreateSnapshotInput) => Promise<string | null>;
-  /** Metadata-only snapshot marker dependency, injected for tests. */
-  createSnapshotMarker: (repoPath: string, input: CreateSnapshotMarkerInput) => Promise<string>;
+  /** Shadow savepoint kernel dependency, injected for tests. */
+  createShadowSavepoint: (
+    repoPath: string,
+    input: CreateShadowSavepointInput,
+  ) => Promise<ShadowSavepointResult>;
+  /** Metadata-only chain marker dependency, injected for tests. */
+  createShadowMarker: (
+    repoPath: string,
+    input: CreateShadowMarkerInput,
+  ) => Promise<string | null>;
   /** Out-of-band label generation dependency. */
   oneShot: (agentKind: AgentKind, prompt: string) => Promise<string>;
   logger: CoordinatorLogger;
@@ -59,8 +67,8 @@ interface ResolvedSnapshotSession {
 
 interface TurnStartState {
   repoRoot: string;
-  wasDirty: boolean;
-  beforeEditFailed: boolean;
+  /** Turn-start savepoint on the shadow chain; unset when creation failed. */
+  turnStartCommit: string;
   metadata: TurnStartMetadata;
 }
 
@@ -81,8 +89,8 @@ export class GitSnapshotCoordinator {
   constructor(private readonly deps: GitSnapshotCoordinatorDeps) {}
 
   /**
-   * Turn-start hook. Captures whether the repo was already dirty before the
-   * agent turn and snapshots safe pre-existing work before the agent can edit.
+   * Turn-start hook. Snapshots the current worktree state onto the session's
+   * shadow savepoint chain as the baseline for this turn's file rewind.
    */
   async onTurnStart(sessionId: string): Promise<void> {
     const record: TurnStartRecord = {
@@ -110,24 +118,18 @@ export class GitSnapshotCoordinator {
       }
 
       record.repoRoot = resolved.repoRoot;
-      record.beforeEditFailed = false;
       const metadataPromise = this.resolveTurnStartMetadata(sessionId);
       await enqueueGitRepoWrite(resolved.repoRoot, async () => {
-        const wasDirty = await this.deps.isWorktreeDirty(resolved.repoRoot);
-        record.wasDirty = wasDirty;
-        if (!wasDirty) {
-          return;
-        }
-
         const metadata = await metadataPromise;
         record.metadata = metadata;
-        await this.createBeforeEditSnapshot(sessionId, resolved.repoRoot, metadata);
+        record.turnStartCommit = await this.createTurnStartSavepoint(
+          sessionId,
+          resolved.repoRoot,
+          metadata,
+        );
       });
       record.metadata ??= await metadataPromise;
     } catch (err) {
-      if (record.wasDirty) {
-        record.beforeEditFailed = true;
-      }
       this.deps.logger.warn('[git-snapshot] onTurnStart failed (swallowed)', {
         sessionId,
         error: err instanceof Error ? err.message : String(err),
@@ -204,102 +206,93 @@ export class GitSnapshotCoordinator {
     { repoRoot, agentKind }: ResolvedSnapshotSession,
     turnStart: TurnStartRecord | undefined,
   ): Promise<void> {
-    const hasTurnStartBaseline = turnStart?.repoRoot === repoRoot && typeof turnStart.wasDirty === 'boolean';
-    if (!hasTurnStartBaseline && agentKind === 'codex') {
+    const baseline =
+      turnStart?.repoRoot === repoRoot ? turnStart.turnStartCommit : undefined;
+    if (!baseline) {
       this.deps.logger.debug('[git-snapshot] missing turn-start baseline, skip', {
         sessionId,
         repoRoot,
       });
-      // No baseline means no reliable turn anchor; the planner scopes this marker by history position.
-      await this.createRewindBlockedMarker(
-        sessionId,
-        repoRoot,
-        'Codex rewind unavailable: missing turn-start baseline',
-        '[git-snapshot] missing-baseline rewind marker created',
-        {},
-      );
-      return;
-    }
-
-    if (hasTurnStartBaseline && turnStart.beforeEditFailed) {
-      this.deps.logger.debug('[git-snapshot] before-edit baseline failed, skip', {
-        sessionId,
-        repoRoot,
-      });
-      if (agentKind === 'codex') {
+      // Without a baseline this turn's delta is unrecoverable; append a gap
+      // marker so the file-rewind planner truncates ranges that cross it.
+      // Only codex/pi consume the savepoint chain for file rewind.
+      if (agentKind === 'codex' || agentKind === 'pi') {
         await this.createRewindBlockedMarker(
           sessionId,
           repoRoot,
-          'Codex rewind unavailable: turn-start baseline failed',
-          '[git-snapshot] failed-baseline rewind marker created',
-          turnStart.metadata ?? {},
+          'File rewind gap: turn-start baseline unavailable',
+          '[git-snapshot] rewind gap marker created',
+          turnStart?.metadata ?? {},
         );
       }
       return;
     }
 
-    if (!(await this.deps.isWorktreeDirty(repoRoot))) {
-      this.deps.logger.debug('[git-snapshot] worktree clean, skip', { sessionId, repoRoot });
-      return;
-    }
-
     const metadata = turnStart?.metadata ?? await this.resolveTurnStartMetadata(sessionId);
 
-    const commit = await this.deps.createSnapshot(repoRoot, {
+    // Dirty detection is tree equality against the turn-start baseline: with
+    // shadow savepoints the worktree stays dirty relative to HEAD, so a
+    // status-based check would create an empty after-edit every turn.
+    const result = await this.deps.createShadowSavepoint(repoRoot, {
+      sessionId,
       label: (diff) =>
         createAfterEditLabel(
           { diff, userPrompt: metadata.userPrompt },
           { oneShot: (prompt) => this.deps.oneShot(agentKind, prompt) },
         ),
       meta: {
-        sessionId,
         kind: 'after-edit',
+        baselineCommit: baseline,
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
+      skipIfTreeEquals: baseline,
     });
 
-    if (commit) {
+    if (result.commit) {
       this.deps.logger.info('[git-snapshot] after-edit savepoint created', {
         sessionId,
         repoRoot,
-        commit: commit.slice(0, 8),
+        commit: result.commit.slice(0, 8),
       });
     } else {
-      this.deps.logger.debug('[git-snapshot] no staged changes after add, skip', {
+      this.deps.logger.debug('[git-snapshot] worktree unchanged since turn start, skip', {
         sessionId,
         repoRoot,
       });
     }
   }
 
-  private async createBeforeEditSnapshot(
+  private async createTurnStartSavepoint(
     sessionId: string,
     repoRoot: string,
     metadata: TurnStartMetadata,
-  ): Promise<void> {
-    const commit = await this.deps.createSnapshot(repoRoot, {
-      label: '本轮开始前的未提交改动',
+  ): Promise<string | undefined> {
+    // Always created, dirty or clean, so every turn has a uniform restore
+    // baseline; an unchanged tree costs almost nothing thanks to object reuse.
+    const result = await this.deps.createShadowSavepoint(repoRoot, {
+      sessionId,
+      label: '本轮开始时的工作区基线',
       meta: {
-        sessionId,
-        kind: 'before-edit',
+        kind: 'turn-start',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
 
-    if (commit) {
-      this.deps.logger.info('[git-snapshot] before-edit baseline created', {
+    if (result.commit) {
+      this.deps.logger.info('[git-snapshot] turn-start baseline created', {
         sessionId,
         repoRoot,
-        commit: commit.slice(0, 8),
+        commit: result.commit.slice(0, 8),
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       });
-      return;
+      return result.commit;
     }
 
-    this.deps.logger.debug('[git-snapshot] no staged turn-start changes after add, skip', {
+    this.deps.logger.warn('[git-snapshot] turn-start baseline missing commit', {
       sessionId,
       repoRoot,
     });
+    return undefined;
   }
 
   private async resolveTurnStartMetadata(sessionId: string): Promise<TurnStartMetadata> {
@@ -338,14 +331,19 @@ export class GitSnapshotCoordinator {
     logMessage: string,
     metadata: TurnStartMetadata,
   ): Promise<void> {
-    const commit = await this.deps.createSnapshotMarker(repoRoot, {
+    const commit = await this.deps.createShadowMarker(repoRoot, {
+      sessionId,
       label,
       meta: {
-        sessionId,
         kind: 'rewind-blocked',
         ...(metadata.anchor ? { anchor: metadata.anchor } : {}),
       },
     });
+    if (!commit) {
+      // Empty chain: nothing to truncate, the planner already falls back when
+      // it finds no savepoints for the range.
+      return;
+    }
     this.deps.logger.info(logMessage, {
       sessionId,
       repoRoot,

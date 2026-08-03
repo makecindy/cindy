@@ -5,20 +5,26 @@ import {
   type GitSnapshotCoordinatorDeps,
 } from '../git-snapshot/gitSnapshotCoordinator';
 import { enqueueGitRepoWrite } from '../git-snapshot/gitRepoWriteQueue';
-import type { CreateSnapshotInput } from '../git-snapshot/gitSnapshotService';
+import type {
+  CreateShadowSavepointInput,
+  ShadowSavepointResult,
+} from '../git-snapshot/gitSnapshotService';
 
 const logger = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
+
+function savepointResult(commit: string | null): ShadowSavepointResult {
+  return { commit, tree: 'tree1', includedFiles: [], skippedFiles: [] };
+}
 
 function makeDeps(overrides: Partial<GitSnapshotCoordinatorDeps> = {}): GitSnapshotCoordinatorDeps {
   return {
     readAutoSnapshotEnabled: () => true,
     detectRepoRoot: vi.fn().mockResolvedValue('/repo'),
-    isWorktreeDirty: vi.fn().mockResolvedValue(true),
     getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'claude-code' }),
     resolveAnchor: vi.fn().mockResolvedValue('msg-1'),
     getLastUserPrompt: vi.fn().mockResolvedValue('update login'),
-    createSnapshot: vi.fn().mockResolvedValue('hash1'),
-    createSnapshotMarker: vi.fn().mockResolvedValue('marker1'),
+    createShadowSavepoint: vi.fn().mockResolvedValue(savepointResult('hash1')),
+    createShadowMarker: vi.fn().mockResolvedValue('marker1'),
     oneShot: vi.fn().mockResolvedValue('实现登录校验'),
     logger,
     ...overrides,
@@ -36,46 +42,51 @@ async function waitFor(condition: () => boolean): Promise<void> {
 }
 
 describe('GitSnapshotCoordinator', () => {
-  it('creates an after-edit snapshot for a dirty git repo', async () => {
+  it('creates a turn-start baseline and an after-edit savepoint for a full turn', async () => {
     const deps = makeDeps();
-    await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
+    const coordinator = new GitSnapshotCoordinator(deps);
 
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
-    const [repoPath, input] = vi.mocked(deps.createSnapshot).mock.calls[0] as [
+    await coordinator.onTurnStart('s1');
+    await coordinator.onTurnEnd('s1');
+
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    expect(deps.createShadowSavepoint).toHaveBeenNthCalledWith(1, '/repo', {
+      sessionId: 's1',
+      label: '本轮开始时的工作区基线',
+      meta: { kind: 'turn-start', anchor: 'msg-1' },
+    });
+    const [repoPath, afterEditInput] = vi.mocked(deps.createShadowSavepoint).mock.calls[1] as [
       string,
-      CreateSnapshotInput,
+      CreateShadowSavepointInput,
     ];
     expect(repoPath).toBe('/repo');
-    expect(input.meta).toMatchObject({ sessionId: 's1', kind: 'after-edit', anchor: 'msg-1' });
-    expect(typeof input.label).toBe('function');
+    expect(afterEditInput.sessionId).toBe('s1');
+    expect(afterEditInput.meta).toMatchObject({
+      kind: 'after-edit',
+      anchor: 'msg-1',
+      baselineCommit: 'hash1',
+    });
+    expect(afterEditInput.skipIfTreeEquals).toBe('hash1');
+    expect(typeof afterEditInput.label).toBe('function');
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
-  it('creates a before-edit baseline when the repo is dirty at turn start', async () => {
+  it('unconditionally creates a turn-start baseline even without pending changes', async () => {
+    // Shadow 链上的 turn-start 是每轮统一的恢复基线:clean 工作区也要建。
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValue(true),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshot).toHaveBeenNthCalledWith(1, '/repo', {
-      label: '本轮开始前的未提交改动',
-      meta: { sessionId: 's1', kind: 'before-edit', anchor: 'msg-1' },
-    });
-    const [, afterEditInput] = vi.mocked(deps.createSnapshot).mock.calls[1] as [
-      string,
-      CreateSnapshotInput,
-    ];
-    expect(afterEditInput.meta).toMatchObject({ sessionId: 's1', kind: 'after-edit', anchor: 'msg-1' });
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(2);
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
     expect(deps.resolveAnchor).toHaveBeenCalledOnce();
     expect(deps.getLastUserPrompt).toHaveBeenCalledOnce();
     expect(deps.logger.info).toHaveBeenCalledWith(
-      '[git-snapshot] before-edit baseline created',
+      '[git-snapshot] turn-start baseline created',
       expect.objectContaining({ sessionId: 's1', repoRoot: '/repo', commit: 'hash1', anchor: 'msg-1' }),
     );
   });
@@ -95,7 +106,6 @@ describe('GitSnapshotCoordinator', () => {
         status: 'initialized',
         repoRoot: '/new-project',
       }),
-      isWorktreeDirty: vi.fn().mockResolvedValue(false),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -111,8 +121,13 @@ describe('GitSnapshotCoordinator', () => {
       { autoSnapshotEnabled: true },
     );
     expect(deps.detectRepoRoot).toHaveBeenCalledOnce();
-    expect(deps.isWorktreeDirty).toHaveBeenCalledWith('/new-project');
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).toHaveBeenCalledWith(
+      '/new-project',
+      expect.objectContaining({
+        sessionId: 's1',
+        meta: expect.objectContaining({ kind: 'turn-start' }),
+      }),
+    );
     expect(coordinator.hasPendingTurnStart('s1')).toBe(true);
   });
 
@@ -130,9 +145,8 @@ describe('GitSnapshotCoordinator', () => {
 
     expect(deps.readAutoSnapshotEnabled).toHaveBeenCalledOnce();
     expect(deps.detectRepoRoot).not.toHaveBeenCalled();
-    expect(deps.isWorktreeDirty).not.toHaveBeenCalled();
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
   it('does not retroactively disable after-edit snapshots for a turn that started enabled', async () => {
@@ -140,7 +154,6 @@ describe('GitSnapshotCoordinator', () => {
     const deps = makeDeps({
       readAutoSnapshotEnabled: vi.fn(() => enabled),
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -149,64 +162,61 @@ describe('GitSnapshotCoordinator', () => {
     await coordinator.onTurnEnd('s1');
 
     expect(deps.readAutoSnapshotEnabled).toHaveBeenCalledOnce();
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
-    const [, input] = vi.mocked(deps.createSnapshot).mock.calls[0] as [
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    const [, input] = vi.mocked(deps.createShadowSavepoint).mock.calls[1] as [
       string,
-      CreateSnapshotInput,
+      CreateShadowSavepointInput,
     ];
-    expect(input.meta).toMatchObject({ sessionId: 's1', kind: 'after-edit', anchor: 'msg-1' });
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
+    expect(input.sessionId).toBe('s1');
+    expect(input.meta).toMatchObject({ kind: 'after-edit', anchor: 'msg-1', baselineCommit: 'hash1' });
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
-  it('blocks Codex file rewind when a dirty turn-start baseline fails', async () => {
+  it('appends a rewind gap marker when the Codex turn-start baseline fails', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValue(true),
-      createSnapshot: vi.fn()
+      createShadowSavepoint: vi.fn()
         .mockRejectedValueOnce(new Error('git conflict'))
-        .mockResolvedValueOnce('hash-after'),
+        .mockResolvedValueOnce(savepointResult('hash-after')),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
-    expect(deps.createSnapshotMarker).toHaveBeenCalledWith('/repo', {
-      label: 'Codex rewind unavailable: turn-start baseline failed',
-      meta: { sessionId: 's1', kind: 'rewind-blocked', anchor: 'msg-1' },
+    // turn-start 失败即缺基线:after-edit 不再尝试,只补 gap marker。
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn-start baseline unavailable',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
     });
     expect(deps.logger.debug).toHaveBeenCalledWith(
-      '[git-snapshot] before-edit baseline failed, skip',
+      '[git-snapshot] missing turn-start baseline, skip',
       { sessionId: 's1', repoRoot: '/repo' },
     );
   });
 
-  it('continues when dirty turn-start files are all skipped by the safety filter', async () => {
+  it('treats a turn-start savepoint without a commit as a missing baseline', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValue(true),
-      createSnapshot: vi.fn()
-        .mockResolvedValueOnce(null)
-        .mockResolvedValueOnce('hash-after'),
+      createShadowSavepoint: vi.fn().mockResolvedValue(savepointResult(null)),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
-    const [, afterEditInput] = vi.mocked(deps.createSnapshot).mock.calls[1] as [
-      string,
-      CreateSnapshotInput,
-    ];
-    expect(afterEditInput.meta.kind).toBe('after-edit');
-    expect(deps.logger.debug).toHaveBeenCalledWith(
-      '[git-snapshot] no staged turn-start changes after add, skip',
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
+    expect(deps.logger.warn).toHaveBeenCalledWith(
+      '[git-snapshot] turn-start baseline missing commit',
       { sessionId: 's1', repoRoot: '/repo' },
     );
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn-start baseline unavailable',
+      meta: { kind: 'rewind-blocked', anchor: 'msg-1' },
+    });
   });
 
   it('marks Codex turns as rewind-blocked when the turn-start baseline is missing', async () => {
@@ -216,14 +226,49 @@ describe('GitSnapshotCoordinator', () => {
 
     await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
 
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
-    expect(deps.createSnapshotMarker).toHaveBeenCalledWith('/repo', {
-      label: 'Codex rewind unavailable: missing turn-start baseline',
-      meta: { sessionId: 's1', kind: 'rewind-blocked' },
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn-start baseline unavailable',
+      meta: { kind: 'rewind-blocked' },
     });
-    expect(deps.isWorktreeDirty).not.toHaveBeenCalled();
     expect(deps.resolveAnchor).not.toHaveBeenCalled();
     expect(deps.getLastUserPrompt).not.toHaveBeenCalled();
+    expect(deps.logger.debug).toHaveBeenCalledWith(
+      '[git-snapshot] missing turn-start baseline, skip',
+      { sessionId: 's1', repoRoot: '/repo' },
+    );
+    expect(deps.logger.info).toHaveBeenCalledWith(
+      '[git-snapshot] rewind gap marker created',
+      expect.objectContaining({ sessionId: 's1', repoRoot: '/repo', commit: 'marker1' }),
+    );
+  });
+
+  it('marks pi turns as rewind-blocked when the turn-start baseline is missing', async () => {
+    const deps = makeDeps({
+      getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'pi' }),
+    });
+
+    await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
+
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    expect(deps.createShadowMarker).toHaveBeenCalledWith('/repo', {
+      sessionId: 's1',
+      label: 'File rewind gap: turn-start baseline unavailable',
+      meta: { kind: 'rewind-blocked' },
+    });
+  });
+
+  it('skips the rewind gap marker for agents that do not consume the savepoint chain', async () => {
+    // 默认 agentKind 为 claude-code:缺基线只打 debug 日志,不建 marker,
+    // 也不提前解析可选 metadata。
+    const deps = makeDeps();
+
+    await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
+
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+    expect(deps.resolveAnchor).not.toHaveBeenCalled();
     expect(deps.logger.debug).toHaveBeenCalledWith(
       '[git-snapshot] missing turn-start baseline, skip',
       { sessionId: 's1', repoRoot: '/repo' },
@@ -240,7 +285,6 @@ describe('GitSnapshotCoordinator', () => {
           }),
         )
         .mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValue(true),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -249,32 +293,32 @@ describe('GitSnapshotCoordinator', () => {
     const turnEnd = coordinator.onTurnEnd('s1');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
     releaseContext?.();
     await Promise.all([turnStart, turnEnd]);
 
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(2);
-    const [, afterEditInput] = vi.mocked(deps.createSnapshot).mock.calls[1] as [
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    const [, afterEditInput] = vi.mocked(deps.createShadowSavepoint).mock.calls[1] as [
       string,
-      CreateSnapshotInput,
+      CreateShadowSavepointInput,
     ];
     expect(afterEditInput.meta.kind).toBe('after-edit');
+    expect(afterEditInput.meta.baselineCommit).toBe('hash1');
   });
 
   it('keeps overlapping turn-start baselines isolated by turn order', async () => {
     let releaseFirstBaseline: (() => void) | undefined;
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn()
+      createShadowSavepoint: vi.fn()
         .mockImplementationOnce(() =>
-          new Promise<boolean>((resolve) => {
-            releaseFirstBaseline = () => resolve(false);
+          new Promise<ShadowSavepointResult>((resolve) => {
+            releaseFirstBaseline = () => resolve(savepointResult('hash-t1'));
           }),
         )
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(true),
+        .mockResolvedValueOnce(savepointResult('hash-a1'))
+        .mockResolvedValueOnce(savepointResult('hash-t2'))
+        .mockResolvedValue(savepointResult('hash-a2')),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -284,29 +328,38 @@ describe('GitSnapshotCoordinator', () => {
     const turnStart2 = coordinator.onTurnStart('s1');
 
     await new Promise((resolve) => setTimeout(resolve, 20));
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
+    // 第一轮 turn-start 尚未完成:同 repo 写队列挡住后续所有保存点写入。
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
 
     releaseFirstBaseline?.();
     await Promise.all([turnStart1, turnStart2, turnEnd1]);
 
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(3);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
 
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(3);
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(4);
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(4);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+    const calls = vi.mocked(deps.createShadowSavepoint).mock.calls as unknown as [
+      string,
+      CreateShadowSavepointInput,
+    ][];
+    // 两个 after-edit 各自绑定所属轮次的 turn-start 基线。
+    expect(calls[1][1].meta).toMatchObject({ kind: 'after-edit', baselineCommit: 'hash-t1' });
+    expect(calls[1][1].skipIfTreeEquals).toBe('hash-t1');
+    expect(calls[3][1].meta).toMatchObject({ kind: 'after-edit', baselineCommit: 'hash-t2' });
+    expect(calls[3][1].skipIfTreeEquals).toBe('hash-t2');
   });
 
   it('consumes an aborted turn baseline before the next successful turn', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn()
-        .mockResolvedValueOnce(true)
-        .mockResolvedValueOnce(false)
-        .mockResolvedValueOnce(true),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash-t1'))
+        .mockResolvedValueOnce(savepointResult('hash-t2'))
+        .mockResolvedValue(savepointResult('hash-a')),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -315,23 +368,29 @@ describe('GitSnapshotCoordinator', () => {
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshotMarker).not.toHaveBeenCalled();
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(3);
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(3);
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
+    const [, afterEditInput] = vi.mocked(deps.createShadowSavepoint).mock.calls[2] as [
+      string,
+      CreateShadowSavepointInput,
+    ];
+    // 被中止轮次的基线已消费:after-edit 绑定第二轮的 turn-start。
+    expect(afterEditInput.meta).toMatchObject({ kind: 'after-edit', baselineCommit: 'hash-t2' });
   });
 
-  it('uses the turn-start anchor and prompt for the matching after-edit snapshot', async () => {
+  it('uses the turn-start anchor and prompt for the matching after-edit savepoint', async () => {
     const deps = makeDeps({
       getSessionContext: vi.fn().mockResolvedValue({ workingDir: '/repo', agentKind: 'codex' }),
-      isWorktreeDirty: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
       resolveAnchor: vi.fn().mockResolvedValueOnce('msg-1').mockResolvedValueOnce('msg-2'),
       getLastUserPrompt: vi.fn().mockResolvedValueOnce('first prompt').mockResolvedValueOnce('second prompt'),
-      createSnapshot: vi.fn().mockImplementation(async (_repo: string, input: CreateSnapshotInput) => {
-        if (typeof input.label === 'function') {
-          await input.label({ diffStat: ' a.ts | 1 +', diffText: '+x' });
-        }
-        return 'hash';
-      }),
+      createShadowSavepoint: vi.fn().mockImplementation(
+        async (_repo: string, input: CreateShadowSavepointInput) => {
+          if (typeof input.label === 'function') {
+            await input.label({ diffStat: ' a.ts | 1 +', diffText: '+x' });
+          }
+          return savepointResult('hash');
+        },
+      ),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
@@ -340,34 +399,42 @@ describe('GitSnapshotCoordinator', () => {
 
     expect(deps.resolveAnchor).toHaveBeenCalledOnce();
     expect(deps.getLastUserPrompt).toHaveBeenCalledOnce();
-    const [, input] = vi.mocked(deps.createSnapshot).mock.calls[0] as [
+    const [, afterEditInput] = vi.mocked(deps.createShadowSavepoint).mock.calls[1] as [
       string,
-      CreateSnapshotInput,
+      CreateShadowSavepointInput,
     ];
-    expect(input.meta).toMatchObject({ sessionId: 's1', kind: 'after-edit', anchor: 'msg-1' });
+    expect(afterEditInput.sessionId).toBe('s1');
+    expect(afterEditInput.meta).toMatchObject({ kind: 'after-edit', anchor: 'msg-1' });
     expect(deps.oneShot).toHaveBeenCalledWith('codex', expect.stringContaining('first prompt'));
     expect(deps.oneShot).not.toHaveBeenCalledWith('codex', expect.stringContaining('second prompt'));
   });
 
-  it('creates a snapshot when the repo becomes dirty after a clean turn start', async () => {
+  it('only logs a debug skip when the worktree is unchanged since turn start', async () => {
     const deps = makeDeps({
-      isWorktreeDirty: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true),
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash-t1'))
+        .mockResolvedValueOnce(savepointResult(null)),
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
     await coordinator.onTurnStart('s1');
     await coordinator.onTurnEnd('s1');
 
-    expect(deps.isWorktreeDirty).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
-  });
-
-  it('skips clean repos before resolving optional metadata', async () => {
-    const deps = makeDeps({ isWorktreeDirty: vi.fn().mockResolvedValue(false) });
-    await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
-
-    expect(deps.createSnapshot).not.toHaveBeenCalled();
-    expect(deps.resolveAnchor).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(2);
+    const [, afterEditInput] = vi.mocked(deps.createShadowSavepoint).mock.calls[1] as [
+      string,
+      CreateShadowSavepointInput,
+    ];
+    expect(afterEditInput.skipIfTreeEquals).toBe('hash-t1');
+    expect(deps.logger.debug).toHaveBeenCalledWith(
+      '[git-snapshot] worktree unchanged since turn start, skip',
+      { sessionId: 's1', repoRoot: '/repo' },
+    );
+    expect(deps.logger.info).not.toHaveBeenCalledWith(
+      '[git-snapshot] after-edit savepoint created',
+      expect.anything(),
+    );
+    expect(deps.createShadowMarker).not.toHaveBeenCalled();
   });
 
   it('treats non-git dirs as best-effort no-op and does not cache null roots', async () => {
@@ -376,16 +443,23 @@ describe('GitSnapshotCoordinator', () => {
     });
     const coordinator = new GitSnapshotCoordinator(deps);
 
-    await expect(coordinator.onTurnEnd('s1')).resolves.toBeUndefined();
-    await expect(coordinator.onTurnEnd('s1')).resolves.toBeUndefined();
+    await expect(coordinator.onTurnStart('s1')).resolves.toBeUndefined();
+    await expect(coordinator.onTurnStart('s1')).resolves.toBeUndefined();
 
     expect(deps.detectRepoRoot).toHaveBeenCalledTimes(2);
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
   });
 
-  it('swallows snapshot failures and logs a warning', async () => {
-    const deps = makeDeps({ createSnapshot: vi.fn().mockRejectedValue(new Error('git lock')) });
-    await expect(new GitSnapshotCoordinator(deps).onTurnEnd('s1')).resolves.toBeUndefined();
+  it('swallows savepoint failures and logs a warning', async () => {
+    const deps = makeDeps({
+      createShadowSavepoint: vi.fn()
+        .mockResolvedValueOnce(savepointResult('hash-t1'))
+        .mockRejectedValueOnce(new Error('git lock')),
+    });
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    await expect(coordinator.onTurnEnd('s1')).resolves.toBeUndefined();
 
     expect(deps.logger.warn).toHaveBeenCalledWith(
       '[git-snapshot] onTurnEnd failed (swallowed)',
@@ -393,28 +467,28 @@ describe('GitSnapshotCoordinator', () => {
     );
   });
 
-  it('serializes concurrent snapshots for the same repo', async () => {
+  it('serializes concurrent savepoints for the same repo', async () => {
     let active = 0;
     let maxActive = 0;
     const deps = makeDeps({
-      createSnapshot: vi.fn().mockImplementation(async () => {
+      createShadowSavepoint: vi.fn().mockImplementation(async () => {
         active += 1;
         maxActive = Math.max(maxActive, active);
         await new Promise((resolve) => setTimeout(resolve, 20));
         active -= 1;
-        return 'hash';
+        return savepointResult('hash');
       }),
     });
 
     const coordinator = new GitSnapshotCoordinator(deps);
     await Promise.all([
-      coordinator.onTurnEnd('s1'),
-      coordinator.onTurnEnd('s2'),
-      coordinator.onTurnEnd('s3'),
+      coordinator.onTurnStart('s1'),
+      coordinator.onTurnStart('s2'),
+      coordinator.onTurnStart('s3'),
     ]);
 
     expect(maxActive).toBe(1);
-    expect(deps.createSnapshot).toHaveBeenCalledTimes(3);
+    expect(deps.createShadowSavepoint).toHaveBeenCalledTimes(3);
   });
 
   it('shares the repo write queue with external git write tasks', async () => {
@@ -427,28 +501,35 @@ describe('GitSnapshotCoordinator', () => {
     await waitFor(() => Boolean(release));
 
     const deps = makeDeps();
-    const turnEnd = new GitSnapshotCoordinator(deps).onTurnEnd('s1');
+    const turnStart = new GitSnapshotCoordinator(deps).onTurnStart('s1');
     await new Promise((resolve) => setTimeout(resolve, 20));
 
-    expect(deps.isWorktreeDirty).not.toHaveBeenCalled();
+    expect(deps.createShadowSavepoint).not.toHaveBeenCalled();
     release?.();
-    await Promise.all([blocker, turnEnd]);
-    expect(deps.createSnapshot).toHaveBeenCalledOnce();
+    await Promise.all([blocker, turnStart]);
+    expect(deps.createShadowSavepoint).toHaveBeenCalledOnce();
   });
 
-  it('keeps label generation delayed inside createSnapshot', async () => {
+  it('passes the label factory into createShadowSavepoint without eager evaluation', async () => {
     let label = '';
     const deps = makeDeps({
-      createSnapshot: vi
+      createShadowSavepoint: vi
         .fn()
-        .mockImplementation(async (_repo: string, input: CreateSnapshotInput) => {
-          if (typeof input.label === 'function') {
-            label = await input.label({ diffStat: ' a.ts | 1 +', diffText: '+x' });
+        .mockImplementation(async (_repo: string, input: CreateShadowSavepointInput) => {
+          if (typeof input.label !== 'function') {
+            return savepointResult('hash-t1');
           }
-          return 'hash';
+          // after-edit 的 label 是 factory:oneShot 延迟到内核调用时才发生。
+          expect(deps.oneShot).not.toHaveBeenCalled();
+          label = await input.label({ diffStat: ' a.ts | 1 +', diffText: '+x' });
+          return savepointResult('hash-after');
         }),
     });
-    await new GitSnapshotCoordinator(deps).onTurnEnd('s1');
+    const coordinator = new GitSnapshotCoordinator(deps);
+
+    await coordinator.onTurnStart('s1');
+    expect(deps.oneShot).not.toHaveBeenCalled();
+    await coordinator.onTurnEnd('s1');
 
     expect(label).toBe('实现登录校验');
     expect(deps.oneShot).toHaveBeenCalledWith('claude-code', expect.stringContaining('a.ts'));
