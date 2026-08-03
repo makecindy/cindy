@@ -556,6 +556,32 @@ describe('BrowserTabBody navigation', () => {
     expect(openExternal).not.toHaveBeenCalled();
   });
 
+  it('shows the file opener error when opening a local HTML page fails', async () => {
+    const openFileInBrowser = vi.fn().mockResolvedValue({
+      success: false,
+      error: '文件不存在',
+    });
+    Object.defineProperty(window, 'electronAPI', {
+      configurable: true,
+      value: {
+        platform: 'win32',
+        openExternal: vi.fn().mockResolvedValue({ success: true }),
+        openFileInBrowser,
+        onRsbBrowserFocusUrlBar: vi.fn(() => vi.fn()),
+        onRsbBrowserCommand: vi.fn(() => vi.fn()),
+      },
+    });
+    browserState = makeBrowserState({ url: 'file:///tmp/missing.html' });
+    render(renderBrowserTab('file:///tmp/missing.html'));
+
+    fireEvent.click(
+      screen.getByRole('button', { name: 'rightSidebar.browser.openInSystemBrowser' }),
+    );
+    await Promise.resolve();
+
+    expect(toastMocks.error).toHaveBeenCalledWith('文件不存在');
+  });
+
   it('keeps HTTP pages on the external URL opener', async () => {
     const openExternal = vi.fn().mockResolvedValue({ success: true });
     const openFileInBrowser = vi.fn().mockResolvedValue({ success: true });

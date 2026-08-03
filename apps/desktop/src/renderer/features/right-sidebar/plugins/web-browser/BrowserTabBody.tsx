@@ -414,7 +414,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     if (!url || url === 'about:blank') return;
     const localFileUrl =
       ctx.remoteHostId === null && deviceLinkDeviceId === null && isLocalHtmlFileUrl(url);
-    const openPromise = localFileUrl
+    const openPromise: Promise<{ success: boolean; error?: string }> | null = localFileUrl
       ? window.electronAPI.openFileInBrowser(url)
       : /^https?:\/\//i.test(url)
         ? window.electronAPI.openExternal(url)
@@ -423,7 +423,7 @@ export function BrowserTabBody({ state, ctx, active, shellVisible }: BrowserTabB
     void openPromise
       .then((res) => {
         if (!res?.success) {
-          toast.error(t('chat.markdownRenderer.openInBrowserFailed'));
+          toast.error(res?.error || t('chat.markdownRenderer.openInBrowserFailed'));
         }
       })
       .catch(() => {
