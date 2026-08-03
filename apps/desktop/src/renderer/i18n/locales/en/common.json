@@ -3710,7 +3710,6 @@
         "enabled": "Smart Contacts enabled",
         "disabled": "Smart Contacts disabled",
         "codexRefreshDeferred": "Setting saved, but Codex is busy — it will apply to Codex sessions after the app restarts",
-        "aiUnavailable": "Smart Contacts isn't available in the selected scope. Adjust its settings and try again.",
         "toggleFailed": "Failed to toggle Smart Contacts",
         "created": "Created \"{{name}}\"",
         "createFailed": "Failed to create contact",

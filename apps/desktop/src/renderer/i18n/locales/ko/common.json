@@ -3708,7 +3708,6 @@
         "enabled": "스마트 연락처를 켰습니다",
         "disabled": "스마트 연락처를 껐습니다",
         "codexRefreshDeferred": "설정은 저장되었지만 Codex가 사용 중입니다. Codex 세션에는 앱 재시작 후 적용됩니다",
-        "aiUnavailable": "선택한 범위에서는 스마트 연락처를 사용할 수 없습니다. 설정을 조정한 후 다시 시도하세요.",
         "toggleFailed": "스마트 연락처 전환에 실패했습니다",
         "created": "\"{{name}}\"을(를) 만들었습니다",
         "createFailed": "만들기에 실패했습니다",

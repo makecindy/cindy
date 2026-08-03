@@ -159,15 +159,9 @@ import {
 } from '@/state/pendingFirstMessage';
 import {
   saveDraft as saveComposerDraft,
-  getDraft as getComposerDraft,
   getDraftPresence as getComposerDraftPresence,
   plainTextToTiptapDoc,
 } from '@/lib/composerDraftStore';
-import { contactsService } from '@/lib/contactsService';
-import {
-  checkContactsAiSessionBeforeSend,
-  contactsAiSessionBlockMessageKey,
-} from '@/components/settings/contacts/contactsAiSessionGuard';
 import { setLastWorkingDir } from '@/state/lastWorkingDir';
 import { consumeComposerMentionDrop } from '@/lib/composerDrop';
 import {
@@ -2406,21 +2400,6 @@ export function CCAgentSessionView({
         existingSessionRoute: true,
       });
       if (!proceed) return false;
-
-      // New Maker 可能先把预填内容移交到真实 session composer（SSH 立即建会话、
-      // worktree 失败恢复等）。一次性意图跟随 composer draft，因此这里仍须在已有
-      // session 真正 ensure runtime / dispatch 前按最终 vendor、目录与目标位置重查。
-      const contactsBlockReason = await checkContactsAiSessionBeforeSend({
-        entryIntent: sessionId ? (getComposerDraft(sessionId)?.entryIntent ?? null) : null,
-        vendor: authVendor,
-        workingDir: session?.workingDir ?? undefined,
-        isLocalTarget: !remoteDeviceId && !session?.remoteHostId,
-        readReadiness: contactsService.settingsGet,
-      });
-      if (contactsBlockReason) {
-        toast.warning(t(contactsAiSessionBlockMessageKey(contactsBlockReason)));
-        return false;
-      }
 
       // Popover open → prevent re-entry
       if (folderPickerOpen) return false;

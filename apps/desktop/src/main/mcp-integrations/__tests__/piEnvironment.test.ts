@@ -21,7 +21,6 @@ import type { Logger, McpProvider } from '@cindy/maker-core';
 import {
   getPiExtraSpawnConfig,
   invalidatePiEnvironment,
-  isPiMcpServerReadyForNextSession,
   shutdownPiEnvironment,
 } from '../piEnvironment.js';
 
@@ -171,24 +170,6 @@ describe('piEnvironment per-session identity', () => {
       result: { content: [{ type: 'text', text: 'no-session' }] },
     });
     config!.disposeSessionCtx!();
-  });
-
-  it('reports the frozen server set until invalidation makes the next lazy spawn read live providers', async () => {
-    const oldConfig = await getPiExtraSpawnConfig(
-      [makeProvider('custom_without_contacts')],
-      noopLogger(),
-      {
-        sessionId: 'pi-without-contacts',
-        workingDir: '/repo',
-        vendorOptions: {},
-      },
-    );
-    expect(oldConfig?.mcpBridge).toBeTruthy();
-    expect(isPiMcpServerReadyForNextSession('cindy_contacts')).toBe(false);
-
-    invalidatePiEnvironment();
-    expect(isPiMcpServerReadyForNextSession('cindy_contacts')).toBe(true);
-    oldConfig!.disposeSessionCtx!();
   });
 
   it('keeps the leased old bridge live through invalidation while new sessions use a new generation', async () => {

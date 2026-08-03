@@ -127,8 +127,6 @@ import {
 } from './codex-proxy-host.js';
 import { createDesktopMcpProviders } from '../mcp-integrations/mcp-providers.js';
 import { readContactsSettings } from './contacts-settings-store.js';
-import { resolveCodexContactsMcpReady } from './codex-contacts-readiness.js';
-import { isPiMcpServerReadyForNextSession } from '../mcp-integrations/piEnvironment.js';
 
 /**
  * 最近一次成功构建的 codex spawn 配置里, 通讯录开关的实际取值(null = 尚未
@@ -138,40 +136,6 @@ import { isPiMcpServerReadyForNextSession } from '../mcp-integrations/piEnvironm
  * stale 桥里不存在的工具。在 prepareCodexExtraSpawnConfig 内更新。
  */
 let codexAppliedContactsEnabled: boolean | null = null;
-let codexAppliedContactsOwnerScope: string | null = null;
-
-function clearCodexAppliedContactsSnapshot(): void {
-  codexAppliedContactsEnabled = null;
-  codexAppliedContactsOwnerScope = null;
-}
-
-/**
- * 当前数据所有者的 Codex runtime 是否会为下一条新任务提供 cindy_contacts。
- * 没有当前 owner 的 applied 快照时，下次 lazy spawn 会读取 live 设置，视为就绪；
- * 同 owner 有快照时必须服从实际应用值，避免开关已落盘但旧 app-server 仍无工具。
- */
-export function getContactsAiReadiness(workingDir?: string): {
-  enabled: boolean;
-  pluginEnabled: boolean;
-  codexMcpReady: boolean;
-  piMcpReady: boolean;
-} {
-  const enabled = readContactsSettings().enabled;
-  const pluginEnabled = getPluginRegistry().isEnabled('contacts', workingDir);
-  return {
-    enabled,
-    pluginEnabled,
-    codexMcpReady: resolveCodexContactsMcpReady({
-      contactsEnabled: enabled,
-      pluginEnabled,
-      activeOwnerScope: activeOwnerScopeKey(),
-      appliedOwnerScope: codexAppliedContactsOwnerScope,
-      appliedEnabled: codexAppliedContactsEnabled,
-    }),
-    piMcpReady:
-      enabled && pluginEnabled && isPiMcpServerReadyForNextSession('cindy_contacts'),
-  };
-}
 import {
   registerCustomMcpArrays,
   refreshCustomMcpProviders,
@@ -649,12 +613,7 @@ export function getMaker(): Maker {
     // bridge shutdown 后的远端失效统一折进 shutdownCodexEnvironment 内部
     // (codex-connector R22 P1):插件开关 / custom MCP CRUD / contacts /
     // Slack provider / 账号切换等所有 shutdown 路径自动覆盖, 不靠逐点调用。
-    setCodexEnvironmentShutdownHook(() => {
-      // 所有成功 MCP 重建路径最终都会 shutdown 旧 bridge；清掉 applied 快照后，
-      // 当前 owner 的下一次 lazy spawn 将按 live 设置重建工具面。
-      clearCodexAppliedContactsSnapshot();
-      handleCodexEnvironmentShutdownForRemote();
-    });
+    setCodexEnvironmentShutdownHook(handleCodexEnvironmentShutdownForRemote);
     // bridge token 轮换 (账号切换 secrets 清空) 时同步失效远端 CC query —
     // 旧 Authorization header 在新 bridge 上持续 401;独立于 shutdown 路径
     // (本地 turn 忙时 shutdown 会被跳过, codex-connector R24 P2)。
@@ -1013,12 +972,11 @@ export function getMaker(): Maker {
       // contacts-ipc 折成 codexMcpRefreshed:false)时 stale 桥里没有新工具面,
       // live=开 / applied=关 → unavailable(静默), 直到重建成功快照跟上。
       getContactsPromptState: ({ workingDir }) => {
-        // 与 thread provider gate、发送前 guard 共用同一 workingDir 的有效 override；
-        // 不能先通过项目显式启用，再被无 workingDir 的全局默认值覆盖。
-        const readiness = getContactsAiReadiness(workingDir);
-        if (!readiness.pluginEnabled) return 'unavailable';
-        if (!readiness.enabled) return 'disabled';
-        return readiness.codexMcpReady ? 'enabled' : 'unavailable';
+        if (!getPluginRegistry().isEnabled('contacts', workingDir)) return 'unavailable';
+        const live = readContactsSettings().enabled;
+        if (!live) return 'disabled';
+        const applied = codexAppliedContactsEnabled ?? live;
+        return applied ? 'enabled' : 'unavailable';
       },
       // 模型清单 SSoT = 目录（providers.json，OSS 运行时真源 / bundled 兜底）。maker-core 的
       // CODEX_MODELS 已删、availableModels 起始为空；host 从账号可选目录派生 codex 列表注入
@@ -1082,14 +1040,12 @@ export function getMaker(): Maker {
           // 命中缓存返回的还是 pre-toggle 配置, 此时 live 设置读数会谎报新状态
           // (review: 快照必须等于 applied config, 而非 applied 时刻的旁路读数)。
           codexAppliedContactsEnabled = cfg.bridgeServerNames.includes('cindy_contacts');
-          codexAppliedContactsOwnerScope = activeOwnerScopeKey();
         } catch (err) {
           desktopMakerLogger.error('codex MCP bridge prep failed, continuing without lizi MCP', {
             message: err instanceof Error ? err.message : String(err),
           });
           // bridge 整体缺席 = cindy_contacts 必然不可达
           codexAppliedContactsEnabled = false;
-          codexAppliedContactsOwnerScope = activeOwnerScopeKey();
         }
         // API 模式: 追加 model_provider override, 让 codex app-server 走 AI Gateway
         // 而非 OAuth 订阅后端。每次 createHost 都现读 mode, 切模式后重建即生效。
@@ -1602,10 +1558,6 @@ export async function finalizeCodexAfterAuthModeChange(): Promise<void> {
       } else {
         await agent?.disposeLocalHostForCredentialChange();
       }
-      // app-server 已成功失效后，下一次 lazy spawn 会按 live MCP 设置重建。
-      // 不能只等 shutdownCodexEnvironment hook：bridge 启动失败时 cached 已是 null，
-      // shutdown 会 early-return，但 applied=false 快照仍必须清掉以允许下一次重试。
-      clearCodexAppliedContactsSnapshot();
       clearCodexProxyAuthInjection();
       await broadcastCodexRuntimeRoute();
     } catch (e) {

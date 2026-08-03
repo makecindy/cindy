@@ -15,15 +15,12 @@
  */
 import { plainTextToTiptapDoc, saveDraft } from '@/lib/composerDraftStore';
 import { NEW_MAKER_DRAFT_KEY } from '@/features/cc-agent/NewMakerDraftRoute';
-import { patchDraft, resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
+import { resetDraftWorkspaceTargets } from '@/state/newMakerDraft';
 
 export function prefillContactsAiSessionDraft(promptText: string): void {
   saveDraft(NEW_MAKER_DRAFT_KEY, {
     text: plainTextToTiptapDoc(promptText),
     attachments: [],
-    entryIntent: 'contacts-ai-management',
   });
   resetDraftWorkspaceTargets();
-  // 发送阶段据此按最终 vendor / workingDir 重新校验真实工具面；不能只信入口点击快照。
-  patchDraft({ entryIntent: 'contacts-ai-management' });
 }

@@ -64,13 +64,7 @@ const syncStatus = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mocks.settingsGet.mockResolvedValue({
-    enabled: true,
-    isCustomized: true,
-    pluginEnabled: true,
-    codexMcpReady: true,
-    piMcpReady: true,
-  });
+  mocks.settingsGet.mockResolvedValue({ enabled: true, isCustomized: true });
   mocks.settingsSet.mockResolvedValue({ enabled: true, codexMcpRefreshed: true });
   mocks.syncStatusGet.mockResolvedValue(syncStatus);
   mocks.syncEnabledSet.mockResolvedValue(syncStatus);
@@ -96,87 +90,22 @@ describe('ContactsSection AI 管理入口', () => {
     expect(screen.queryByText('settings.contacts.guide.sources.import')).toBeNull();
   });
 
-  it('点击后写入统一管理意图并进入可选择 vendor / 项目的新任务页', async () => {
+  it('点击后写入统一管理意图并进入新任务页', async () => {
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
     render(<ContactsSection />);
 
     fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
 
-    await waitFor(() =>
-      expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt'),
-    );
-    expect(mocks.settingsGet).toHaveBeenLastCalledWith();
+    expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
     expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new');
   });
 
-  it('功能关闭时不启动拿不到 cindy_contacts 的空任务', async () => {
-    mocks.settingsGet.mockResolvedValue({
-      enabled: false,
-      isCustomized: true,
-      pluginEnabled: false,
-      codexMcpReady: false,
-      piMcpReady: false,
-    });
+  it('功能关闭时隐藏 AI 引导入口', async () => {
+    mocks.settingsGet.mockResolvedValue({ enabled: false, isCustomized: true });
     mocks.stats.mockResolvedValue({ people: 8, orgs: 1, groups: 1, pending: 0 });
     render(<ContactsSection />);
 
     await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalled());
     expect(screen.queryByRole('button', { name: 'settings.contacts.guide.cta' })).toBeNull();
-  });
-
-  it('Codex runtime 延迟时仍进入通用入口，由发送阶段按最终 vendor 决定', async () => {
-    mocks.settingsGet.mockResolvedValue({
-      enabled: true,
-      isCustomized: true,
-      pluginEnabled: true,
-      codexMcpReady: false,
-      piMcpReady: true,
-    });
-    mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
-    render(<ContactsSection />);
-
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
-
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
-    expect(mocks.prefill).toHaveBeenCalledWith('settings.contacts.guide.managementPrompt');
-  });
-
-  it('入口点击仍现查总开关，切换数据所有者并重挂载后不沿用旧 owner 状态', async () => {
-    mocks.settingsGet
-      .mockResolvedValueOnce({
-        enabled: true,
-        isCustomized: true,
-        pluginEnabled: true,
-        codexMcpReady: true,
-        piMcpReady: true,
-      })
-      .mockResolvedValueOnce({
-        enabled: false,
-        isCustomized: true,
-        pluginEnabled: false,
-        codexMcpReady: false,
-        piMcpReady: false,
-      });
-    mocks.stats.mockResolvedValue({ people: 0, orgs: 0, groups: 0, pending: 0 });
-    const view = render(<ContactsSection />);
-    const ownerACta = await screen.findByRole('button', {
-      name: 'settings.contacts.guide.cta',
-    });
-    fireEvent.click(ownerACta);
-    await waitFor(() => expect(mocks.settingsGet).toHaveBeenCalledTimes(2));
-    expect(mocks.navigate).not.toHaveBeenCalled();
-
-    view.unmount();
-    mocks.settingsGet.mockResolvedValue({
-      enabled: true,
-      isCustomized: true,
-      pluginEnabled: true,
-      codexMcpReady: true,
-      piMcpReady: true,
-    });
-    render(<ContactsSection />);
-    fireEvent.click(await screen.findByRole('button', { name: 'settings.contacts.guide.cta' }));
-
-    await waitFor(() => expect(mocks.navigate).toHaveBeenCalledWith('/cc-agent/new'));
   });
 });

@@ -31,18 +31,14 @@ describe('resetDraftWorkspaceTargets', () => {
     expect(getDraft().extraDirs).toEqual([]);
   });
 
-  it('清空工作目录、远程目标与一次性入口意图,并显式消费本次协同选择', () => {
-    patchDraft({
-      workingDir: '/Users/someone/project',
-      entryIntent: 'contacts-ai-management',
-    });
+  it('清空工作目录和远程目标,并显式消费本次协同选择', () => {
+    patchDraft({ workingDir: '/Users/someone/project' });
     patchDraft({ remoteHostId: 'host-1' });
     patchCollab({ enabled: true });
     patchDraft({ workingDir: '/Users/someone/project', deviceLinkDeviceId: 'dev-1' });
 
     resetDraftWorkspaceTargets();
     const draft = getDraft();
-    expect(draft.entryIntent).toBeNull();
     expect(draft.workingDir).toBeNull();
     expect(draft.remoteHostId).toBeNull();
     expect(draft.deviceLinkDeviceId).toBeNull();

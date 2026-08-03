@@ -27,7 +27,6 @@ vi.mock('../../contacts-sync/driver.js', () => ({
 
 import { createContactsIpcHandlers } from '../contacts-ipc.js';
 import { MAKER_INVOKE } from '../channels.js';
-import { resolveCodexContactsMcpReady } from '../../maker-host/codex-contacts-readiness.js';
 
 function noopLogger() {
   const noop = () => {};
@@ -80,135 +79,11 @@ describe('contacts-ipc handlers', () => {
     expect(await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).toEqual({
       enabled: false,
       isCustomized: false,
-      pluginEnabled: false,
-      codexMcpReady: false,
-      piMcpReady: false,
     });
     await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true);
     expect(enabled).toBe(true);
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!('yes')).rejects.toThrow(
       /INVALID_PARAMS/,
-    );
-  });
-
-  it('设置读取每次从 main 现查当前 owner 的 Codex / Pi MCP 就绪状态', async () => {
-    enabled = true;
-    let codexMcpReady = false;
-    let piMcpReady = false;
-    handlers = createContactsIpcHandlers({
-      getManager: () => manager,
-      readSettingsState: () => ({ value: { enabled }, isCustomized: true }),
-      writeEnabled: (value) => {
-        enabled = value;
-      },
-      broadcastChanged: () => {},
-      readAiReadiness: () => ({ pluginEnabled: true, codexMcpReady, piMcpReady }),
-    });
-
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).resolves.toMatchObject({
-      enabled: true,
-      codexMcpReady: false,
-      piMcpReady: false,
-    });
-
-    // 模拟当前 owner 通过账号/插件等其他路径成功重建 agent 环境；不得残留 renderer 锁。
-    codexMcpReady = true;
-    piMcpReady = true;
-    await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!()).resolves.toMatchObject({
-      enabled: true,
-      codexMcpReady: true,
-      piMcpReady: true,
-    });
-  });
-
-  it('设置读取按最终 workingDir 现查项目有效值与当前 owner 的 Codex 快照', async () => {
-    enabled = true;
-    const readAiReadiness = vi.fn((workingDir?: string) => ({
-      pluginEnabled: workingDir === '/project-enabled',
-      codexMcpReady: workingDir === '/project-enabled',
-      piMcpReady: workingDir === '/project-enabled',
-    }));
-    handlers = createContactsIpcHandlers({
-      getManager: () => manager,
-      readSettingsState: () => ({ value: { enabled }, isCustomized: true }),
-      writeEnabled: (value) => {
-        enabled = value;
-      },
-      broadcastChanged: () => {},
-      readAiReadiness,
-    });
-
-    await expect(
-      handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/project-enabled'),
-    ).resolves.toMatchObject({ pluginEnabled: true, codexMcpReady: true });
-    await expect(
-      handlers[MAKER_INVOKE.CONTACTS_SETTINGS_GET]!('/project-disabled'),
-    ).resolves.toMatchObject({ pluginEnabled: false, codexMcpReady: false });
-    expect(readAiReadiness).toHaveBeenNthCalledWith(1, '/project-enabled');
-    expect(readAiReadiness).toHaveBeenNthCalledWith(2, '/project-disabled');
-  });
-
-  it('Codex contacts 就绪判断服从项目有效插件、owner scope 和 applied 快照', () => {
-    const base = {
-      contactsEnabled: true,
-      pluginEnabled: true,
-      activeOwnerScope: 'owner-b',
-      appliedOwnerScope: null,
-      appliedEnabled: null,
-    };
-
-    // 项目显式启用必须覆盖全局默认；master 设置关闭仍然 fail closed。
-    expect(resolveCodexContactsMcpReady(base)).toBe(true);
-    expect(resolveCodexContactsMcpReady({ ...base, contactsEnabled: false })).toBe(false);
-    // 项目有效 override 关闭时，即使当前 owner 还没有 applied 快照也不能放行。
-    expect(resolveCodexContactsMcpReady({ ...base, pluginEnabled: false })).toBe(false);
-    // 其他 owner 的失败快照不能污染当前 owner；当前 owner 的 applied=false 必须保留阻塞。
-    expect(
-      resolveCodexContactsMcpReady({
-        ...base,
-        appliedOwnerScope: 'owner-a',
-        appliedEnabled: false,
-      }),
-    ).toBe(true);
-    expect(
-      resolveCodexContactsMcpReady({
-        ...base,
-        appliedOwnerScope: 'owner-b',
-        appliedEnabled: false,
-      }),
-    ).toBe(false);
-  });
-
-  it('Codex prompt 与 provider gate 共用最终 workingDir 的有效 contacts override', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../../maker-host/index.ts'), 'utf8');
-    const codexPromptStart = source.indexOf('// 通讯录 prompt 段有效状态(codex 版)');
-    const codexPromptEnd = source.indexOf('// 模型清单 SSoT', codexPromptStart);
-    expect(codexPromptStart).toBeGreaterThanOrEqual(0);
-    expect(codexPromptEnd).toBeGreaterThan(codexPromptStart);
-
-    const codexPromptBody = source.slice(codexPromptStart, codexPromptEnd);
-    expect(codexPromptBody).toContain('getContactsAiReadiness(workingDir)');
-    expect(codexPromptBody).not.toContain('getPluginRegistry().isEnabled');
-  });
-
-  it('app-server 成功失效时即使 bridge 已清空也重置 contacts applied 快照', () => {
-    const source = fs.readFileSync(path.resolve(__dirname, '../../maker-host/index.ts'), 'utf8');
-    const finalizeStart = source.indexOf(
-      'export async function finalizeCodexAfterAuthModeChange()',
-    );
-    const finalizeEnd = source.indexOf(
-      'export async function restartCodexAfterAuthModeChange()',
-      finalizeStart,
-    );
-    expect(finalizeStart).toBeGreaterThanOrEqual(0);
-    expect(finalizeEnd).toBeGreaterThan(finalizeStart);
-
-    const finalizeBody = source.slice(finalizeStart, finalizeEnd);
-    expect(finalizeBody).toContain('await guard.finalize();');
-    expect(finalizeBody).toContain('await agent?.disposeLocalHostForCredentialChange();');
-    expect(finalizeBody).toContain('clearCodexAppliedContactsSnapshot();');
-    expect(finalizeBody.indexOf('clearCodexAppliedContactsSnapshot();')).toBeGreaterThan(
-      finalizeBody.indexOf('await agent?.disposeLocalHostForCredentialChange();'),
     );
   });
 
@@ -272,11 +147,10 @@ describe('contacts-ipc handlers', () => {
     await expect(handlers[MAKER_INVOKE.CONTACTS_SYNC_NOW]!()).rejects.toThrow(/\[INTERNAL\]/);
   });
 
-  it('开关变化独立失效 Codex 与 Pi，Codex busy 时仍让下一条 Pi 会话换代', async () => {
-    // 回归:Codex app-server 与 Pi bridge 都冻结 MCP server 集合，但生命周期彼此独立。
-    // Codex busy 拒绝重启时不能提前退出而跳过 Pi invalidation。
+  it('开关值变化时失效 Codex MCP, 同值重写不失效, 失效失败不影响落盘', async () => {
+    // 回归: Codex spawn 配置冻在 codexEnvironment cached 里, 开关变化必须触发失效,
+    // 否则后续 codex 会话直到重启 app 都拿不到(或残留) cindy_contacts。
     const invalidateCodexMcp = vi.fn(async () => {});
-    const invalidatePiMcp = vi.fn(async () => {});
     handlers = createContactsIpcHandlers({
       getManager: () => manager,
       readSettingsState: () => ({ value: { enabled }, isCustomized: enabled }),
@@ -285,7 +159,6 @@ describe('contacts-ipc handlers', () => {
       },
       broadcastChanged: () => {},
       invalidateCodexMcp,
-      invalidatePiMcp,
     });
 
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true)).resolves.toEqual({
@@ -293,20 +166,17 @@ describe('contacts-ipc handlers', () => {
       codexMcpRefreshed: true,
     });
     expect(invalidateCodexMcp).toHaveBeenCalledTimes(1);
-    expect(invalidatePiMcp).toHaveBeenCalledTimes(1);
 
-    // 同值重写: 不再失效(避免无谓的 agent MCP 环境换代)
+    // 同值重写: 不再失效(避免无谓的 codex app-server 重启)
     await expect(handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(true)).resolves.toEqual({
       enabled: true,
       codexMcpRefreshed: true,
     });
     expect(invalidateCodexMcp).toHaveBeenCalledTimes(1);
-    expect(invalidatePiMcp).toHaveBeenCalledTimes(1);
 
     // 关闭方向同样失效(工具残留的镜像问题)
     await handlers[MAKER_INVOKE.CONTACTS_SETTINGS_SET]!(false);
     expect(invalidateCodexMcp).toHaveBeenCalledTimes(2);
-    expect(invalidatePiMcp).toHaveBeenCalledTimes(2);
 
     // 失效抛错(典型: codex 会话正忙) → 开关仍已落盘, handler 不抛, 但把
     // deferred 状态浮给 renderer 提示"对 Codex 延迟生效", 不静默报成功
@@ -317,7 +187,6 @@ describe('contacts-ipc handlers', () => {
     });
     expect(enabled).toBe(true);
     expect(invalidateCodexMcp).toHaveBeenCalledTimes(3);
-    expect(invalidatePiMcp).toHaveBeenCalledTimes(3);
   });
 
   it('CRUD 主路径 + 变更广播(开关关闭时数据通道仍可用)', async () => {

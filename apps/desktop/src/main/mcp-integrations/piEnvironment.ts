@@ -179,16 +179,6 @@ export function invalidatePiEnvironment(): void {
   if (current) retireGeneration(current);
 }
 
-/**
- * 下一条 Pi 会话是否会取得指定 MCP server。没有 active generation 时，下一次 lazy
- * spawn 会按 live providers 新建 bridge，视为就绪；已有 bridge 时必须服从它实际冻结的
- * serverNames，避免设置已开启但旧 Pi bridge 仍不含 cindy_contacts 时误放行。
- */
-export function isPiMcpServerReadyForNextSession(serverName: string): boolean {
-  const current = activeGeneration;
-  return current ? current.serverNames.includes(serverName) : true;
-}
-
 export async function shutdownPiEnvironment(): Promise<void> {
   environmentEpoch += 1;
   const pending = startPromise;

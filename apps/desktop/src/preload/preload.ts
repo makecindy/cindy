@@ -4969,13 +4969,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     // 这里保持 unknown 透传, 类型收敛在 renderer service 层做。
     // 开关只 gate agent 侧 cindy_contacts MCP; 数据通道恒可用。
     contacts: {
-      settingsGet: (workingDir?: string): Promise<{
-        enabled: boolean;
-        isCustomized: boolean;
-        pluginEnabled: boolean;
-        codexMcpReady: boolean;
-        piMcpReady: boolean;
-      }> => ipcRenderer.invoke('maker:contacts:settings:get', workingDir),
+      settingsGet: (): Promise<{ enabled: boolean; isCustomized: boolean }> =>
+        ipcRenderer.invoke('maker:contacts:settings:get'),
       // codexMcpRefreshed:false = 开关已落盘但 Codex 失效失败(会话正忙), 对 Codex 延迟生效
       settingsSet: (enabled: boolean): Promise<{ enabled: boolean; codexMcpRefreshed?: boolean }> =>
         ipcRenderer.invoke('maker:contacts:settings:set', enabled),

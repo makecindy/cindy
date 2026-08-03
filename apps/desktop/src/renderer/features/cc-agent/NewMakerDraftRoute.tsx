@@ -154,11 +154,6 @@ import {
 import { isGlobalDropIntercepted } from '@/lib/globalDropIntercept';
 import { classifyUnclassifiedDroppedItems, getDroppedFileItems } from '@/lib/fileDrop';
 import { createLogger } from '@/lib/logger';
-import { contactsService } from '@/lib/contactsService';
-import {
-  checkContactsAiSessionBeforeSend,
-  contactsAiSessionBlockMessageKey,
-} from '@/components/settings/contacts/contactsAiSessionGuard';
 import { getRemoteWorkingDirErrorMessage } from './remoteWorkingDirErrors';
 import {
   createRemoteSessionWithPrecreatedWorktree,
@@ -2280,17 +2275,6 @@ export function NewMakerDraftRoute() {
       // 改动；若异步块稍后再读 live ref，会把旧 workingDir 与新 baseRepo 拼成一次
       // 混合目标创建。这里与 selectedWorkingDir 同步快照，保证整笔创建目标一致。
       const selectedWorktree = { ...wtRef.current };
-      // 路由预填意图也按 Send 那一帧冻结；校验期间草稿仍可能因 owner 切换被重载。
-      const entryIntentAtSend = getDraft().entryIntent;
-      // 本地 worktree 的有效插件 override 来自 source branch checkout 后的 newDir，不能用
-      // base repo 的当前分支提前裁决。这里只延迟通讯录入口的检查；worktree 创建本身不启动
-      // runtime，拿到真实目录后仍会在 update workingDir / sendMessage 前 fail closed。
-      const deferContactsCheckUntilLocalWorktree =
-        entryIntentAtSend === 'contacts-ai-management' &&
-        !isDeviceLinkDraft &&
-        !effectiveRemoteHostId &&
-        selectedWorktree.enabled &&
-        Boolean(selectedWorktree.baseRepo);
       const dataOwnerAtSend = getDataOwnerGeneration();
       const isCurrentDataOwner = () =>
         dataOwnerAtSend.dataOwnerId === dataOwnerId &&
@@ -2312,24 +2296,6 @@ export function NewMakerDraftRoute() {
           });
           if (isDeviceLinkDraft && !isCurrentDataOwner()) return;
           if (!proceed) return;
-
-          // 鉴权弹窗可能停留任意久；必须在它结束后、真正 createSession 前重读最终项目的
-          // 工具面，不能复用入口点击时或弹窗前的快照。本地 worktree 例外：最终配置来自
-          // source branch 创建出的 newDir，下方拿到真实目录后再检查，避免 base repo 误判。
-          if (!deferContactsCheckUntilLocalWorktree) {
-            const contactsBlockReason = await checkContactsAiSessionBeforeSend({
-              entryIntent: entryIntentAtSend,
-              vendor: authVendor,
-              workingDir: selectedWorkingDir,
-              isLocalTarget: !isDeviceLinkDraft && !effectiveRemoteHostId,
-              readReadiness: contactsService.settingsGet,
-            });
-            if (!isCurrentDataOwner()) return;
-            if (contactsBlockReason) {
-              toast.warning(t(contactsAiSessionBlockMessageKey(contactsBlockReason)));
-              return;
-            }
-          }
 
           // device-link 远程项目:在被控端走校验过的 maker:create-session 建会话(写被控 DB,
           // allowlist 内、非裸写),首条消息经 setPending 交给 SessionView 发送(与本地
@@ -2707,9 +2673,7 @@ export function NewMakerDraftRoute() {
             // unmount cleanup would snapshot the stale text back under this key.
             clearComposerDraftAndNotify(NEW_MAKER_DRAFT_KEY);
             attachmentState.clearFiles();
-            // 通讯录入口 + worktree 要等 source branch 的真实 newDir 通过工具校验后才消费
-            // 一次性意图。其它发送保持既有的同步复位时机，避免后台回调清掉后来新开的草稿。
-            if (!deferContactsCheckUntilLocalWorktree) resetDraftWorkspaceAfterSend();
+            resetDraftWorkspaceAfterSend();
 
             void (async () => {
               // rehome 必须先于 worktreeCreate:失败分支的 restoreFirstMessageDraft
@@ -2722,7 +2686,6 @@ export function NewMakerDraftRoute() {
                 saveComposerDraft(newSession.id, {
                   text: preNavDraftDoc ?? plainTextToTiptapDoc(message),
                   attachments: rehomedFiles ?? [],
-                  ...(entryIntentAtSend ? { entryIntent: entryIntentAtSend } : {}),
                 });
                 // 第一条消息退回草稿 = 它没被交出去,也就永远不会有权威标题回流。
                 // 不撤回的话标题预览会一直盖着 DB 里的哨兵(每次全量刷新后重新盖上),
@@ -2749,33 +2712,6 @@ export function NewMakerDraftRoute() {
                 }
 
                 const newDir = resp.meta.path;
-                // tracked .claude/settings.json 取 source branch 版本；必须按实际 worktree 目录
-                // 重查，不能沿用 base repo 的 selectedWorkingDir。失败时不启动 runtime，也不
-                // 消费通讯录入口意图，保留恢复后的首条消息供用户修好配置后重试。
-                const contactsBlockReason = await checkContactsAiSessionBeforeSend({
-                  entryIntent: entryIntentAtSend,
-                  vendor: authVendor,
-                  workingDir: newDir,
-                  isLocalTarget: true,
-                  readReadiness: contactsService.settingsGet,
-                });
-                if (!isCurrentDataOwner()) return;
-                if (contactsBlockReason) {
-                  worktreeCreationStore.set(newSession.id, {
-                    status: 'failed',
-                    name: branchName,
-                    error: t(contactsAiSessionBlockMessageKey(contactsBlockReason)),
-                  });
-                  restoreFirstMessageDraft();
-                  return;
-                }
-                if (
-                  deferContactsCheckUntilLocalWorktree &&
-                  getDraft().entryIntent === entryIntentAtSend
-                ) {
-                  resetDraftWorkspaceAfterSend();
-                }
-
                 const latestSession = await sessionService.get(newSession.id).catch((err) => {
                   log.warn('[draft worktree send] get latest session failed', err);
                   return null;
@@ -3074,13 +3010,6 @@ export function NewMakerDraftRoute() {
       }
       markSendInFlight(true);
       try {
-        // 与普通 Send 一样按用户开始创建的那一帧冻结入口意图；校验失败会 throw 给
-        // NewGoalDialog 内联展示，因此既不会 create session / runtime，也不会清除意图。
-        const entryIntentAtGoalCreate = getDraft().entryIntent;
-        const dataOwnerAtGoalCreate = getDataOwnerGeneration();
-        const isCurrentGoalDataOwner = () =>
-          dataOwnerAtGoalCreate.dataOwnerId === dataOwnerId &&
-          isDataOwnerGenerationCurrent(dataOwnerAtGoalCreate);
         let policyEnabled = collabPolicy.enabled;
         if (effectiveCollab.enabled && collabPolicyEligible) {
           if (collabPolicy.loading) {
@@ -3124,19 +3053,7 @@ export function NewMakerDraftRoute() {
         const { proceed } = await vendorAuthGate.checkAndConfirm(authVendor, {
           deviceId: effectiveDeviceLinkDeviceId,
         });
-        if (!isCurrentGoalDataOwner()) return;
         if (!proceed) return; // 用户取消授权:弹窗关闭即可,不算错误。
-        const contactsBlockReason = await checkContactsAiSessionBeforeSend({
-          entryIntent: entryIntentAtGoalCreate,
-          vendor: authVendor,
-          workingDir: effectiveWorkingDir?.trim() || undefined,
-          isLocalTarget: !isDeviceLinkDraft && !effectiveRemoteHostId,
-          readReadiness: contactsService.settingsGet,
-        });
-        if (!isCurrentGoalDataOwner()) return;
-        if (contactsBlockReason) {
-          throw new Error(t(contactsAiSessionBlockMessageKey(contactsBlockReason)));
-        }
         if (isDeviceLinkDraft) {
           // partial state 防御:只要 deviceId 就够 —— #807 起「选了设备但没选项目」是合法状态
           // (在对端建 standalone dialogue),不能再要求 workingDir,否则新建目标在远程纯对话下
@@ -3379,7 +3296,6 @@ export function NewMakerDraftRoute() {
       effectiveDeviceLinkDeviceId,
       effectiveDeviceLinkDeviceName,
       effectiveWorkingDir,
-      dataOwnerId,
       createSession,
       persistedAgentKind,
       draftInitialModel,

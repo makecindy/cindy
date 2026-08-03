@@ -31,7 +31,6 @@ export function ContactsSection() {
 
   const [enabled, setEnabled] = useState(false);
   const [togglePending, setTogglePending] = useState(false);
-  const [aiSessionPending, setAiSessionPending] = useState(false);
   const [stats, setStats] = useState<ContactsStats | null>(null);
   const [managerOpen, setManagerOpen] = useState(false);
   const [syncStatus, setSyncStatus] = useState<ContactsDeviceSyncStatus | null>(null);
@@ -73,7 +72,7 @@ export function ContactsSection() {
         const res = await contactsService.settingsSet(next);
         if (res.codexMcpRefreshed === false) {
           // 开关已落盘(Claude 侧下次会话即生效), 但 Codex 正忙软重启失败 —
-          // 明示延迟生效；AI 入口点击时还会向 main 现查当前 owner 的实际工具面。
+          // 明示延迟生效, 不静默报成功(否则用户以为 Codex 也已切换)
           toast.warning(t('settings.contacts.toast.codexRefreshDeferred'));
         } else {
           toast.success(
@@ -91,26 +90,12 @@ export function ContactsSection() {
     [enabled, t],
   );
 
-  /** 常驻 AI 管理入口：这里只确认总开关；最终 vendor / workingDir 在发送阶段实时校验。 */
-  const startAiSession = useCallback(async () => {
-    if (togglePending || aiSessionPending) return;
-    setAiSessionPending(true);
-    try {
-      const settings = await contactsService.settingsGet();
-      if (!settings.enabled) {
-        setEnabled(false);
-        return;
-      }
-      prefillContactsAiSessionDraft(t('settings.contacts.guide.managementPrompt'));
-      setManagerOpen(false);
-      navigate('/cc-agent/new');
-    } catch (err) {
-      log.warn('contacts settingsGet before AI session failed', err);
-      toast.error(t(contactsErrorI18nKey(err)));
-    } finally {
-      setAiSessionPending(false);
-    }
-  }, [aiSessionPending, navigate, t, togglePending]);
+  /** 常驻 AI 管理入口：同一意图按当前库状态推进建库或持续管理。 */
+  const startAiSession = useCallback(() => {
+    prefillContactsAiSessionDraft(t('settings.contacts.guide.managementPrompt'));
+    setManagerOpen(false);
+    navigate('/cc-agent/new');
+  }, [navigate, t]);
 
   const statsLine =
     stats && (stats.people > 0 || stats.orgs > 0 || stats.groups > 0)
@@ -352,11 +337,9 @@ export function ContactsSection() {
             <button
               type="button"
               onClick={startAiSession}
-              disabled={togglePending || aiSessionPending}
               className={cn(
                 'flex shrink-0 select-none items-center gap-1.5 rounded-full px-6 py-2.5 text-13 font-medium transition-colors active:scale-[0.98]',
                 'bg-[var(--accent-cta-bg)] text-[var(--accent-pure-cta-fg)] hover:opacity-90',
-                'disabled:cursor-not-allowed disabled:opacity-50',
               )}
             >
               <Sparkles size={14} />
@@ -366,8 +349,7 @@ export function ContactsSection() {
         </div>
       )}
 
-      {/* "让 AI 管理"入口只在开关开启时提供 — 关着时 cindy_contacts MCP 未注册,
-          引导出的会话拿不到工具, 空跑误导用户 */}
+      {/* 管理浮层仍可复用同一个预填入口。 */}
       <ContactsManagerDialog
         open={managerOpen}
         onOpenChange={setManagerOpen}
