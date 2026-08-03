@@ -58,4 +58,23 @@ describe('market Ghost session boundary', () => {
     expect(leaseIndex).toBeGreaterThan(inspectIndex);
     expect(body).toContain('releaseMutation?.();');
   });
+
+  it('drops late credential rejections throughout the owner boundary', () => {
+    const rejectionStart = source.indexOf(
+      'export function noteGhostCredentialRejected(',
+    );
+    const rejectionEnd = source.indexOf(
+      '\n}\n\n/**\n * Runtime-authoritative setup assessment',
+      rejectionStart,
+    );
+    const body = source.slice(rejectionStart, rejectionEnd);
+
+    expect(body).toContain('isAppSessionBoundaryPending() ||');
+    expect(body).toContain(
+      '(requestOwner && !isSameAppSession(requestOwner, getActiveAppSession()))',
+    );
+    expect(body.indexOf('isAppSessionBoundaryPending()')).toBeLessThan(
+      body.indexOf('ghostCredentialRejections().markRejected'),
+    );
+  });
 });

@@ -2620,7 +2620,10 @@ export function noteGhostCredentialRejected(
   secretKey: string,
   requestOwner?: ActiveAppSession,
 ): void {
-  if (requestOwner && !isSameAppSession(requestOwner, getActiveAppSession())) {
+  if (
+    isAppSessionBoundaryPending() ||
+    (requestOwner && !isSameAppSession(requestOwner, getActiveAppSession()))
+  ) {
     log.info('ghost credential rejection dropped across owner boundary', {
       ghostId,
       secretKey,
